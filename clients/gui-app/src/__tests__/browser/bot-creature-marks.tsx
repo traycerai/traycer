@@ -1,6 +1,6 @@
 import type { ReactElement } from "react";
 import { createRoot } from "react-dom/client";
-import { MemberAvatar, NamedBotAvatar } from "@/components/bots/bot-avatars";
+import { PersonAvatar, NamedBotAvatar } from "@/components/bots/bot-avatars";
 import { cn } from "@/lib/utils";
 import "@/index.css";
 
@@ -8,7 +8,7 @@ import "@/index.css";
  * THE CREATURE MARKS' CONTACT SHEET: bots by real-shaped ids at every
  * avatar size, beside people in their circles, in colour and
  * in grayscale, under the light theme or with `?theme=dark` the dark one.
- * Every picture is the production `NamedBotAvatar` or `MemberAvatar`.
+ * Every picture is the production `NamedBotAvatar` or `PersonAvatar`.
  *
  * The first three ids are real derived main-bot ids (`bot-avatars.test.tsx`
  * says how): the personal Tracy and two "Team Tracy" bots on one hue in its
@@ -92,7 +92,7 @@ export function Sheet(props: { readonly grayscale: boolean }): ReactElement {
         {PEOPLE.map((person) => (
           <div key={person.userId} className="flex w-72 items-start gap-2">
             {SIZES.map((size) => (
-              <MemberAvatar
+              <PersonAvatar
                 key={size}
                 userId={person.userId}
                 name={person.name}

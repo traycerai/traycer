@@ -116,6 +116,7 @@ function idleStatus(version: string) {
     crossHostMessaging: null,
     sessions: null,
     updatesExternallyManaged: null,
+    previousExit: null,
   };
 }
 

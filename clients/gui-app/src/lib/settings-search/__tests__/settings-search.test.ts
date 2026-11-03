@@ -34,6 +34,7 @@ const DESKTOP: SettingsAvailabilityContext = {
   featureSettings: null,
   mobileApp: false,
   phoneLayout: false,
+  soundtrackOffered: false,
 };
 
 /** The installed mobile app: no desktop bridges, push permission present. */
@@ -51,6 +52,7 @@ const MOBILE: SettingsAvailabilityContext = {
   featureSettings: null,
   mobileApp: true,
   phoneLayout: true,
+  soundtrackOffered: false,
 };
 
 /** A desktop feature-settings bridge: only its presence gates Experimental. */
@@ -489,10 +491,10 @@ describe("settings search", () => {
 
     it("offers the phone's push row on mobile and withholds it on desktop", () => {
       expect(labelsFor("push notifications", MOBILE)).toContain(
-        "Push notifications on this phone",
+        "Push notifications",
       );
       expect(labelsFor("push notifications", DESKTOP)).not.toContain(
-        "Push notifications on this phone",
+        "Push notifications",
       );
     });
 

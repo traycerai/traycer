@@ -146,13 +146,6 @@ const CHROME_CASES: ReadonlyArray<ChromeCase> = [
   RIGHT_NONE,
 ];
 
-const SURFACES: ReadonlyArray<{ readonly id: string }> = [
-  { id: "settings" },
-  { id: "empty-landing" },
-  { id: "task-tab" },
-  { id: "tracy-surface" },
-];
-
 /** The app column as `AppShell` composes it, with a stand-in for the surface. */
 function Column(props: {
   readonly chrome: AppColumnChrome;
@@ -226,6 +219,48 @@ beforeEach(() => {
 afterEach(() => {
   cleanup();
   useBotOpenThreadStore.getState().setRail(BOT_ID, null);
+});
+
+describe("the soundtrack's toggle in the window's top row", () => {
+  beforeEach(() => {
+    vi.stubEnv("MODE", "development");
+  });
+
+  afterEach(() => {
+    vi.unstubAllEnvs();
+  });
+
+  it.each(CHROME_CASES)(
+    "has the row to itself in a deployment with no voice, with the $label",
+    ({ chrome, row }) => {
+      renderColumn(chrome, "task-tab");
+
+      expect(
+        within(rowOf(row)).getByRole("button", { name: "Soundtrack" }),
+      ).toBeTruthy();
+      expect(talkButtons()).toHaveLength(0);
+    },
+  );
+
+  it("stays beside the session strip while a session is live", () => {
+    offerVoice();
+    renderColumn(RIGHT_NONE.chrome, "task-tab");
+    act(() => {
+      useVoiceSessionStore.setState({ phase: "live", focus: FOCUS });
+    });
+
+    const row = within(rowOf(RIGHT_NONE.row));
+    expect(row.getByTestId("voice-session-strip")).toBeTruthy();
+    expect(row.getByRole("button", { name: "Soundtrack" })).toBeTruthy();
+  });
+
+  it("is not drawn in the phone layout", () => {
+    viewport.phone = true;
+    renderColumn(RIGHT_NONE.chrome, "task-tab");
+
+    expect(screen.queryByTestId("voice-top-row")).toBeNull();
+    expect(screen.queryByRole("button", { name: "Soundtrack" })).toBeNull();
+  });
 });
 
 describe("Talk in the window's top row", () => {
@@ -358,19 +393,17 @@ describe("Talk in the window's top row", () => {
   );
 
   it.each([TOP_HEADER, RIGHT_NONE])(
-    "keeps exactly one Talk, and the same one, as the surface changes from Settings to the landing, a task and the Tracy surface, with the $label",
+    "keeps exactly one Talk, and the same one, when the surface content is replaced, with the $label",
     ({ chrome }) => {
       offerVoice();
-      const view = renderColumn(chrome, "settings");
+      const view = renderColumn(chrome, "surface-a");
       const first = talkButtons()[0];
       expect(talkButtons()).toHaveLength(1);
 
-      for (const surface of SURFACES) {
-        view.rerender(<Column chrome={chrome} surfaceId={surface.id} />);
-        expect(screen.getByTestId(`surface-${surface.id}`)).toBeTruthy();
-        expect(talkButtons()).toHaveLength(1);
-        expect(talkButtons()[0]).toBe(first);
-      }
+      view.rerender(<Column chrome={chrome} surfaceId="surface-b" />);
+      expect(screen.getByTestId("surface-surface-b")).toBeTruthy();
+      expect(talkButtons()).toHaveLength(1);
+      expect(talkButtons()[0]).toBe(first);
     },
   );
 });

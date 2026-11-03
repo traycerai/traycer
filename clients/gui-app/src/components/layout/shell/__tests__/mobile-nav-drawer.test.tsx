@@ -236,6 +236,7 @@ import { TabBodySelectedContext } from "@/components/epic-canvas/canvas/tab-body
 import { PaneVisibilityContext } from "@/components/epic-tabs/pane-visibility-context";
 import { setMobileApp } from "@/lib/mobile-app";
 import { useAccountContextStore } from "@/stores/auth/account-context-store";
+import { stubImmediateImage } from "@/__tests__/immediate-avatar-image";
 import { useAuthStore } from "@/stores/auth/auth-store";
 import { useDesktopDialogStore } from "@/stores/dialogs/desktop-dialog-store";
 import { useMobileNavStore } from "@/stores/layout/mobile-nav-store";
@@ -1218,6 +1219,32 @@ describe("MobileNavDrawer", () => {
       // The rest of the identity row is untouched.
       expect(screen.queryByTestId("mobile-nav-sign-out")).not.toBeNull();
       expect(screen.queryByTestId("mobile-nav-settings")).not.toBeNull();
+    });
+
+    it("draws the profile's picture under an unverified session", async () => {
+      stubImmediateImage();
+      try {
+        useAuthStore.getState().setUnverifiedSession(
+          {
+            userId: "u1",
+            userName: "devansh",
+            email: "devansh@traycer.ai",
+            avatarUrl: "https://example.com/devansh.png",
+          },
+          { userId: "u1", username: "devansh" },
+        );
+        renderDrawer();
+
+        const avatar = await screen.findByTestId("person-avatar");
+        await waitFor(() => {
+          expect(avatar.querySelector("img")?.getAttribute("src")).toBe(
+            "https://example.com/devansh.png",
+          );
+        });
+      } finally {
+        vi.unstubAllGlobals();
+        useAuthStore.setState(useAuthStore.getInitialState(), true);
+      }
     });
 
     // Notifications live in the header now (`MobileNotificationsButton`), so

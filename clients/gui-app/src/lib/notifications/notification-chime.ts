@@ -1,3 +1,5 @@
+import { z } from "zod";
+import { persistKey, STORE_KEYS } from "@/lib/persist";
 import classicUrl from "./chimes/classic.wav";
 import prismUrl from "./chimes/prism.wav";
 import rippleUrl from "./chimes/ripple.wav";
@@ -186,22 +188,30 @@ export function prepareNotificationChimeAudio(): void {
   }
 }
 
+/**
+ * Runs `run` once, on the person's next press or key anywhere in the window,
+ * which is the moment audio is allowed to start. Answers how to call it off.
+ */
+export function onNextAudioGesture(run: () => void): () => void {
+  const removeListeners = (): void => {
+    window.removeEventListener("pointerdown", runAndRemove, true);
+    window.removeEventListener("keydown", runAndRemove, true);
+  };
+  const runAndRemove = (): void => {
+    run();
+    removeListeners();
+  };
+  window.addEventListener("pointerdown", runAndRemove, true);
+  window.addEventListener("keydown", runAndRemove, true);
+  return removeListeners;
+}
+
 export function installNotificationChimeAudioWarmup(): () => void {
   if (typeof window === "undefined") return () => undefined;
   // HTML media opens its audio backend asynchronously. AudioContext's native
   // constructor can block this thread for 20 seconds on a Mac with no output.
   prepareNotificationChimeAudio();
-  const removeListeners = (): void => {
-    window.removeEventListener("pointerdown", prepareAndRemove, true);
-    window.removeEventListener("keydown", prepareAndRemove, true);
-  };
-  const prepareAndRemove = (): void => {
-    prepareNotificationChimeAudio();
-    removeListeners();
-  };
-  window.addEventListener("pointerdown", prepareAndRemove, true);
-  window.addEventListener("keydown", prepareAndRemove, true);
-  return removeListeners;
+  return onNextAudioGesture(prepareNotificationChimeAudio);
 }
 
 function releaseAudio(audio: HTMLAudioElement): void {
@@ -213,6 +223,42 @@ function releaseAudio(audio: HTMLAudioElement): void {
 export function disposeNotificationChimeAudio(): void {
   for (const { audio } of players.values()) releaseAudio(audio);
   players.clear();
+}
+
+const chimeListeners = new Set<(chimeSeconds: number) => void>();
+
+const CHIME_CHANNEL_NAME = persistKey(STORE_KEYS.notificationChimesChannel);
+const relayedChimeSchema = z.object({ chimeSeconds: z.number() });
+let chimeChannel: BroadcastChannel | null = null;
+
+/**
+ * A chime plays in the window in front, and what follows it may be in another:
+ * the soundtrack plays in one window at a time. A channel delivers to every
+ * window but the sender, which hears its own chime directly, so each window
+ * hears each playback once.
+ */
+function openChimeChannel(): BroadcastChannel | null {
+  if (chimeChannel !== null || typeof BroadcastChannel === "undefined") {
+    return chimeChannel;
+  }
+  chimeChannel = new BroadcastChannel(CHIME_CHANNEL_NAME);
+  chimeChannel.addEventListener("message", (event: MessageEvent<unknown>) => {
+    const chime = relayedChimeSchema.safeParse(event.data);
+    if (!chime.success) return;
+    for (const listener of chimeListeners) listener(chime.data.chimeSeconds);
+  });
+  return chimeChannel;
+}
+
+/**
+ * Hears every chime that starts in any of the app's windows, with how long it
+ * lasts, for good.
+ */
+export function listenToNotificationChimes(
+  listener: (chimeSeconds: number) => void,
+): void {
+  chimeListeners.add(listener);
+  openChimeChannel();
 }
 
 export function playNotificationChimeSound(
@@ -240,7 +286,11 @@ export function playNotificationChimeSound(
     audio.onended = release;
     audio.onerror = release;
     void audio.play().then(() => {
-      if (player.operation === operation) player.warmed = true;
+      if (player.operation !== operation) return;
+      player.warmed = true;
+      // Known by now: an element that has started playing has read its length.
+      for (const listener of chimeListeners) listener(audio.duration);
+      openChimeChannel()?.postMessage({ chimeSeconds: audio.duration });
     }, release);
   } catch {
     // Autoplay and missing devices must not interrupt notification delivery.

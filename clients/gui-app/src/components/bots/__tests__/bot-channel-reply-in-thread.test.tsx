@@ -380,17 +380,17 @@ describe("the box of a listed thread under a row of the bot, opened by its ancho
     expect(await sendEnabledAfterTyping()).toBe(false);
   });
 
-  it("takes a send under a question of the bot on any binding, its row saying it roots a thread everywhere", async () => {
-    const question: Message = {
+  it("takes a send under a proposal of the bot on any binding, its row saying it roots a thread everywhere", async () => {
+    const proposal: Message = {
       ...botReply({
         messageId: "question-1",
         text: "Which release should I watch?",
         timestamp: 4_500,
       }),
-      announcement: { kind: "question", link: null },
+      announcement: { kind: "proposal", link: null },
     };
     mocks.sessions[CHANNEL_ID].store.setState((state) => ({
-      messages: [...state.messages, question],
+      messages: [...state.messages, proposal],
     }));
     mocks.threads = [
       {

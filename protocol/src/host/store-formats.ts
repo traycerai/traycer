@@ -560,8 +560,8 @@ interface TaskStoreFormatEra {
  * | tag(s)                      | reads |
  * | --------------------------- | ----- |
  * | 1.4.0 ... 1.4.2             | 2     |
- * | 1.5.0-rc.1 ... 1.5.2        | 4     |
- * | 1.5.3-rc.1 and later        | 5     |
+ * | 1.5.0-rc.1 ... 1.5.3        | 4     |
+ * | 1.5.4-rc.1 and later        | 5     |
  *
  * The first row starts at `0.0.0` on purpose: 1.3.x and older have no task
  * store at all, so "2 at most" is true of them and is the answer that warns.
@@ -569,12 +569,12 @@ interface TaskStoreFormatEra {
  * Format 5 adds the positioned byte storage tables - execution positions,
  * their four facts, boundary reservations and operation records - which a
  * format-4 host does not read, and whose durable holds it would therefore
- * fold past. Its row names `1.5.3-rc.1`, the LOWEST canonical release that
- * could carry it: 1.5.2 was cut as a safe-point release from a development
- * without this change, so the first line that can carry format 5 is 1.5.3.
+ * fold past. Its row names `1.5.4-rc.1`, the LOWEST canonical release that
+ * could carry it: 1.5.3 shipped as a patch of 1.5.2 from the release branch,
+ * without this change, so the first line that can carry format 5 is 1.5.4.
  * The rc, not the stable, for the reason the format-4 row names
- * `1.5.0-rc.1` - a prerelease sorts BELOW its release, so a row at `1.5.3`
- * would judge every `1.5.3-rc.N` as reading 4 while it in fact writes 5,
+ * `1.5.0-rc.1` - a prerelease sorts BELOW its release, so a row at `1.5.4`
+ * would judge every `1.5.4-rc.N` as reading 4 while it in fact writes 5,
  * and refuse installing an rc over a store its own sibling wrote. That is
  * the wrong refusal the error ranking above puts second. Which release
  * actually carries format 5 is a release-cycle fact bound when the change
@@ -589,7 +589,7 @@ interface TaskStoreFormatEra {
 const TASK_STORE_FORMAT_ERAS = [
   { from: "0.0.0", taskStore: 2 },
   { from: "1.5.0-rc.1", taskStore: 4 },
-  { from: "1.5.3-rc.1", taskStore: 5 },
+  { from: "1.5.4-rc.1", taskStore: 5 },
 ] as const satisfies readonly TaskStoreFormatEra[];
 
 type LastTaskStoreFormatEra<Eras extends readonly TaskStoreFormatEra[]> =

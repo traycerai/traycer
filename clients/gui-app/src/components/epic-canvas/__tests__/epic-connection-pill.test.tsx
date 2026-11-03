@@ -10,6 +10,7 @@ import {
 import { EpicConnectionPill } from "@/components/epic-canvas/panels/epic-connection-pill";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import type {
+  ArtifactSyncReading,
   EpicSyncPillState,
   EpicWriteCommandAlert,
 } from "@/lib/epic-sync-pill-state";
@@ -39,6 +40,7 @@ const mocks = vi.hoisted(() => ({
   },
   commGraphFeedHealth: null as CommGraphFeedHealth | null,
   writeCommandAlert: null as EpicWriteCommandAlert | null,
+  artifactSyncReading: null as ArtifactSyncReading | null,
   // The host's routing truth, fed in as a prop the way the status row does
   // it; `null` is "nothing to say", which is every case written before the
   // plane joined the pill.
@@ -68,6 +70,7 @@ vi.mock("@/lib/epic-selectors", () => ({
   },
   useEpicWriteCommandAlert: () => mocks.writeCommandAlert,
   useEpicHostTransportStatus: () => mocks.hostTransportStatus,
+  useEpicArtifactSyncReading: () => mocks.artifactSyncReading,
 }));
 vi.mock("@/components/epic-canvas/panels/epic-chat-backup-status", () => ({
   useEpicChatBackupStatus: () => mocks.chatBackupStatus,
@@ -155,6 +158,7 @@ describe("<EpicConnectionPill />", () => {
     };
     mocks.commGraphFeedHealth = null;
     mocks.writeCommandAlert = null;
+    mocks.artifactSyncReading = null;
   });
 
   it("renders the synced state icon-only with the claim on the accessible name", () => {
@@ -1242,5 +1246,91 @@ describe("<EpicConnectionPill />", () => {
       expect(pill.innerHTML).not.toContain("bg-amber-500");
       expect(pill.innerHTML).not.toContain("bg-red-500");
     });
+  });
+});
+
+describe("artifact sync in the connection pill", () => {
+  afterEach(() => {
+    cleanup();
+    vi.useRealTimers();
+    mocks.artifactSyncReading = null;
+    mocks.writeCommandAlert = null;
+    vi.clearAllMocks();
+  });
+
+  it("announces the warning and offers its sentence on hover", async () => {
+    vi.useFakeTimers();
+    mocks.artifactSyncReading = {
+      rooms: "stopped",
+      waitingNewArtifacts: 0,
+      pillState: "hostPending",
+    };
+    renderPill("hostPending");
+    act(() => {
+      vi.advanceTimersByTime(15_000);
+    });
+    const sentence =
+      "Your changes are saved on this computer. Your other devices and teammates won’t see them yet.";
+    expect(screen.getByRole<HTMLButtonElement>("button").dataset.source).toBe(
+      "artifact-sync",
+    );
+    expect(screen.getByRole("button").textContent).toContain(
+      "Artifacts not syncing",
+    );
+    expect(screen.getByRole("status").textContent).toContain(sentence);
+    vi.useRealTimers();
+    await expectTooltip(sentence);
+  });
+
+  it("keeps a rejected write above the warning", () => {
+    vi.useFakeTimers();
+    mocks.artifactSyncReading = {
+      rooms: "retrying",
+      waitingNewArtifacts: 0,
+      pillState: "hostPending",
+    };
+    mocks.writeCommandAlert = "rejected";
+    renderPill("hostPending");
+    act(() => {
+      vi.advanceTimersByTime(15_000);
+    });
+    expect(screen.getByRole<HTMLButtonElement>("button").dataset.source).toBe(
+      "write-command",
+    );
+  });
+
+  it("shows recovery over synced and not over a pending pill", () => {
+    vi.useFakeTimers();
+    mocks.artifactSyncReading = {
+      rooms: "retrying",
+      waitingNewArtifacts: 0,
+      pillState: "hostPending",
+    };
+    const { rerender } = renderPill("hostPending");
+    act(() => {
+      vi.advanceTimersByTime(15_000);
+    });
+    mocks.artifactSyncReading = {
+      rooms: "current",
+      waitingNewArtifacts: 0,
+      pillState: "hostPending",
+    };
+    rerender(pillTree());
+    expect(screen.getByRole("button").textContent).not.toContain(
+      "Artifacts synced",
+    );
+    mocks.artifactSyncReading = {
+      rooms: "current",
+      waitingNewArtifacts: 0,
+      pillState: "synced",
+    };
+    mocks.useEpicSyncPillState.mockReturnValue("synced");
+    rerender(pillTree());
+    act(() => {
+      vi.advanceTimersByTime(750);
+    });
+    expect(screen.getByRole("button").textContent).toContain(
+      "Artifacts synced",
+    );
   });
 });

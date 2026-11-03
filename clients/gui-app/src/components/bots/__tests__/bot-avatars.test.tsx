@@ -18,7 +18,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import {
   AvatarStack,
   BotAvatar,
-  MemberAvatar,
+  PersonAvatar,
   NamedBotAvatar,
 } from "@/components/bots/bot-avatars";
 import { BotIdentityContext } from "@/components/bots/bot-identity-context";
@@ -130,7 +130,7 @@ describe("a bot's picture", () => {
   it("is a person's initials in a circle, with no creature", () => {
     render(
       <>
-        <MemberAvatar
+        <PersonAvatar
           userId="user_1"
           name="Ada Lovelace"
           avatarUrl={null}
@@ -153,7 +153,7 @@ describe("a bot's picture", () => {
       </>,
     );
 
-    const people = screen.getAllByTestId("chat-sender-avatar");
+    const people = screen.getAllByTestId("person-avatar");
     expect(people.map((person) => fallbackOf(person).textContent)).toEqual([
       "AL",
       "GH",

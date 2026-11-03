@@ -121,6 +121,10 @@ import {
   type TerminalCloudVerdictLoss,
   type SignedOutCause,
 } from "@/stores/auth/auth-store";
+import {
+  readVerifiedProfile,
+  useVerifiedProfileCacheStore,
+} from "@/stores/auth/verified-profile-cache-store";
 import { normalizeAvatarUrl } from "@/lib/avatar-url";
 import {
   browserChatPartCacheStorage,
@@ -1315,10 +1319,7 @@ export class AuthService {
       // else on this path ever corrected them - `commitSubscriptionStatus`
       // above writes the entitlement alone.
       this.reprojectSameUserIdentity(outcome.user);
-      void writeProvisionalSessionSnapshot(
-        this.runnerHost.secureStorage,
-        outcome.user,
-      );
+      this.cacheValidatedIdentity(outcome.user);
       return;
     }
 
@@ -3629,10 +3630,7 @@ export class AuthService {
         // `reprojectSameUserIdentity`'s notion of "changed" would couple the
         // snapshot's contents to a comparison over the PROJECTED fields, which
         // is a strict subset of what the snapshot stores.
-        void writeProvisionalSessionSnapshot(
-          this.runnerHost.secureStorage,
-          outcome.user,
-        );
+        this.cacheValidatedIdentity(outcome.user);
       }
       return outcome;
     }
@@ -5035,7 +5033,21 @@ export class AuthService {
     // snapshot is current" cannot drift apart. Not awaited and unable to
     // fail - the write swallows its own errors by contract, and the cost of
     // losing one is a boot exactly as slow as it was before.
+    this.cacheValidatedIdentity(user);
+  }
+
+  /**
+   * What a validated identity leaves behind for a later launch: the snapshot
+   * the provisional apply paints with, and the picture and name a restored
+   * session the file cannot name falls back on.
+   */
+  private cacheValidatedIdentity(user: AuthenticatedUser): void {
     void writeProvisionalSessionSnapshot(this.runnerHost.secureStorage, user);
+    const profile = this.profileFromUser(user);
+    useVerifiedProfileCacheStore.getState().remember(profile.userId, {
+      avatarUrl: profile.avatarUrl ?? null,
+      displayName: profile.userName,
+    });
   }
 
   /**
@@ -5228,6 +5240,13 @@ export class AuthService {
     this.setDeviceProgress(null);
     this.setLinkLoginProgress(null);
     this.refreshScheduler.stop();
+    // `retired` means the identity is gone from this machine, so its picture
+    // and name go with it. `attempt-failed` leaves the account where it was.
+    if (cause === "retired" && this.currentProfile !== null) {
+      useVerifiedProfileCacheStore
+        .getState()
+        .forget(this.currentProfile.userId);
+    }
     // COMMIT BEFORE EMIT (see `applySignedIn`). `signOut()` announces the
     // null context synchronously and the runtime refreshes the directory
     // inside that announcement; a bearer still readable here would be sent on
@@ -5801,13 +5820,17 @@ export class AuthService {
     ) {
       return false;
     }
+    // The credentials file carries no avatar, and may carry no name: both come
+    // from the last time this account was verified here, when it has been.
+    const verified = readVerifiedProfile(session.user.id);
     const profile: AuthProfile = {
       userId: session.user.id,
-      userName: session.user.name,
+      userName:
+        session.user.name.length > 0
+          ? session.user.name
+          : (verified?.displayName ?? session.user.name),
       email: session.user.email,
-      // The credentials file carries no avatar. The header falls back to
-      // initials, which `computeInitials` derives from the name we do have.
-      avatarUrl: null,
+      avatarUrl: verified?.avatarUrl ?? null,
     };
     const identity = {
       userId: session.user.id,

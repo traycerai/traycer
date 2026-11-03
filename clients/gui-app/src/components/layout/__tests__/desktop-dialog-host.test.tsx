@@ -555,6 +555,7 @@ function createDirtyEpicHandle(
     durabilityPromotionState: null,
     localProtection: null,
     cloudFreshness: null,
+    artifactSync: null,
     durabilityLegsNegotiated: false,
     durabilityStatusNegotiated: false,
     retainedDurabilityStatus: null,

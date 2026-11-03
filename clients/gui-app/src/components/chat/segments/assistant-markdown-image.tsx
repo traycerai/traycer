@@ -21,8 +21,10 @@ import {
   sanitizeUntrustedSvg,
 } from "@/lib/images/untrusted-svg";
 
-const RASTER_DATA_URL_PATTERN =
-  /^data:(image\/(?:png|jpeg|gif|webp));base64,([a-z\d+/]+={0,2})$/i;
+const RASTER_DATA_URL_PREFIX_PATTERN =
+  /^data:(image\/(?:png|jpeg|gif|webp));base64,/i;
+const NON_BASE64_CHARACTER_PATTERN = /[^a-z\d+/]/i;
+const SVG_DATA_URL_PREFIX_LENGTH = "data:image/svg+xml".length;
 const SVG_DATA_URL_PATTERN = /^data:image\/svg\+xml(?:[;,])/i;
 const URI_SCHEME_PATTERN = /^[a-z][a-z\d+.-]*:/i;
 const WINDOWS_PATH_PATTERN = /^(?:[a-z]:[\\/]|\\\\)/i;
@@ -74,19 +76,19 @@ function classifyAssistantImageSource(src: string): AssistantImageSource {
     return classifySvgDataUrl(trimmed);
   }
   if (/^data:/i.test(trimmed)) {
-    const match = RASTER_DATA_URL_PATTERN.exec(trimmed);
-    if (match === null) {
+    const raster = parseRasterDataUrl(trimmed);
+    if (raster === null) {
       return { kind: "invalid-data", src: trimmed };
     }
-    const byteLength = decodedBase64ByteLength(match[2]);
+    const byteLength = decodedBase64ByteLength(raster.payload);
     if (byteLength === null) return { kind: "invalid-data", src: trimmed };
     if (byteLength > MAX_ARTIFACT_IMAGE_BYTES) {
       return { kind: "data-oversized", src: trimmed };
     }
-    if (!hasRasterMagic(match[1], match[2])) {
+    if (!hasRasterMagic(raster.mimeType, raster.payload)) {
       return { kind: "invalid-data", src: trimmed };
     }
-    const pixelCount = rasterPixelCount(match[1], match[2]);
+    const pixelCount = rasterPixelCount(raster.mimeType, raster.payload);
     if (pixelCount === null || pixelCount > MAX_ASSISTANT_IMAGE_PIXELS) {
       return { kind: "data-oversized", src: trimmed };
     }
@@ -103,11 +105,32 @@ function classifyAssistantImageSource(src: string): AssistantImageSource {
   return { kind: "unsupported", src: trimmed };
 }
 
+/**
+ * A capture group over the payload is what this must not be: a data URL can be
+ * tens of megabytes, and V8 answers a backtracking loop that long with a
+ * `RangeError` thrown out of render instead of a failure chip.
+ */
+function parseRasterDataUrl(
+  src: string,
+): { readonly mimeType: string; readonly payload: string } | null {
+  const prefix = RASTER_DATA_URL_PREFIX_PATTERN.exec(src);
+  if (prefix === null) return null;
+  const payload = src.slice(prefix[0].length);
+  let digitsEnd = payload.length;
+  if (payload.endsWith("=")) digitsEnd -= 1;
+  if (payload.endsWith("==")) digitsEnd -= 1;
+  if (digitsEnd === 0) return null;
+  if (NON_BASE64_CHARACTER_PATTERN.test(payload.slice(0, digitsEnd))) {
+    return null;
+  }
+  return { mimeType: prefix[1], payload };
+}
+
 function classifySvgDataUrl(src: string): AssistantImageSource {
-  const match = /^data:image\/svg\+xml([^,]*),(.*)$/is.exec(src);
-  if (match === null) return { kind: "invalid-data", src };
-  const metadata = match[1];
-  const payload = match[2];
+  const comma = src.indexOf(",");
+  if (comma === -1) return { kind: "invalid-data", src };
+  const metadata = src.slice(SVG_DATA_URL_PREFIX_LENGTH, comma);
+  const payload = src.slice(comma + 1);
   let svgSource: string;
   try {
     if (/(?:^|;)base64(?:;|$)/i.test(metadata)) {

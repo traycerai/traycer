@@ -1,5 +1,5 @@
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import {
   knownField,
@@ -24,6 +24,8 @@ describe("<ErrorSegment />", () => {
   it("renders the error chrome with the code badge and message", () => {
     render(
       <ErrorSegment
+        hostTimestamp={null}
+        reportTurnId={null}
         turnId={null}
         message="Boom went the host"
         code="RUNTIME_THROWN"
@@ -44,6 +46,8 @@ describe("<ErrorSegment />", () => {
   it("omits the code badge when there is no code", () => {
     render(
       <ErrorSegment
+        hostTimestamp={null}
+        reportTurnId={null}
         turnId={null}
         message="Something failed"
         code={null}
@@ -67,6 +71,8 @@ describe("<ErrorSegment />", () => {
     render(
       <TooltipProvider>
         <ErrorSegment
+          hostTimestamp={null}
+          reportTurnId={null}
           turnId={null}
           message="Something failed"
           code={hostileCode}
@@ -100,6 +106,8 @@ describe("<ErrorSegment />", () => {
     render(
       <TooltipProvider>
         <ErrorSegment
+          hostTimestamp={null}
+          reportTurnId={null}
           turnId={null}
           message="Boom went the host"
           code="RUNTIME_THROWN"
@@ -138,6 +146,55 @@ describe("<ErrorSegment />", () => {
     ).toMatch(/^fp:v1:/);
   });
 
+  describe("Host row identity on the report", () => {
+    const HOST_TIMESTAMP = 1_700_000_123_456;
+    const CLICK_TIME = 1_700_000_999_000;
+
+    afterEach(() => {
+      vi.useRealTimers();
+    });
+
+    function clickReport(turnId: string | null, reportTurnId: string | null) {
+      useDesktopDialogStore.setState({ reportIssueAvailable: true });
+      vi.useFakeTimers({ toFake: ["Date"] });
+      vi.setSystemTime(CLICK_TIME);
+      render(
+        <TooltipProvider>
+          <ErrorSegment
+            turnId={turnId}
+            hostTimestamp={HOST_TIMESTAMP}
+            reportTurnId={reportTurnId}
+            message="Boom went the host"
+            code="RUNTIME_THROWN"
+            recoverable={false}
+            findUnitId={null}
+            harnessId={null}
+            failure={null}
+            settledNotice={null}
+            settledNoticeFindUnitId={null}
+          />
+        </TooltipProvider>,
+      );
+      fireEvent.click(screen.getByRole("button", { name: "Report issue" }));
+      return useDesktopDialogStore.getState().reportIssueDraftContext
+        ?.privateDiagnostics.cause;
+    }
+
+    it("carries the row's Host timestamp and turn on a non-anchor row, with timestamp as the click time", () => {
+      const cause = clickReport(null, "turn:abc");
+
+      expect(cause?.hostTimestamp).toBe(HOST_TIMESTAMP);
+      expect(cause?.turnId).toBe("turn:abc");
+      expect(cause?.timestamp).toBe(CLICK_TIME);
+    });
+
+    it("reports reportTurnId, not the rung-anchor turnId prop", () => {
+      const cause = clickReport("turn:anchor", "turn:row");
+
+      expect(cause?.turnId).toBe("turn:row");
+    });
+  });
+
   // The runtime accumulator can replace a same-blockId error's fields while
   // the row stays mounted (blockId is the React key), so the report draft
   // must follow the props, not freeze at mount.
@@ -147,6 +204,8 @@ describe("<ErrorSegment />", () => {
     const { rerender } = render(
       <TooltipProvider>
         <ErrorSegment
+          hostTimestamp={null}
+          reportTurnId={null}
           turnId={null}
           message="First failure"
           code="RUNTIME_THROWN"
@@ -162,6 +221,8 @@ describe("<ErrorSegment />", () => {
     rerender(
       <TooltipProvider>
         <ErrorSegment
+          hostTimestamp={null}
+          reportTurnId={null}
           turnId={null}
           message="Please re-authenticate"
           code="auth"
@@ -206,6 +267,8 @@ describe("<ErrorSegment />", () => {
     render(
       <TooltipProvider>
         <ErrorSegment
+          hostTimestamp={null}
+          reportTurnId={null}
           turnId={null}
           message="Boom went the host"
           code="RUNTIME_THROWN"
@@ -244,6 +307,8 @@ describe("<ErrorSegment />", () => {
       render(
         <TooltipProvider>
           <ErrorSegment
+            hostTimestamp={null}
+            reportTurnId={null}
             turnId={null}
             message="Boom went the host"
             code="RUNTIME_THROWN"
@@ -269,6 +334,8 @@ describe("<ErrorSegment />", () => {
     render(
       <TooltipProvider>
         <ErrorSegment
+          hostTimestamp={null}
+          reportTurnId={null}
           turnId={null}
           message="Please re-authenticate"
           code="auth"
@@ -328,6 +395,8 @@ describe("<ErrorSegment />", () => {
       render(
         <TooltipProvider>
           <ErrorSegment
+            hostTimestamp={null}
+            reportTurnId={null}
             turnId={null}
             message="Rate limited."
             code={hostileCode}
@@ -378,6 +447,8 @@ describe("<ErrorSegment />", () => {
       render(
         <TooltipProvider>
           <ErrorSegment
+            hostTimestamp={null}
+            reportTurnId={null}
             turnId={null}
             message="Rate limited."
             code={null}
@@ -414,6 +485,8 @@ describe("<ErrorSegment />", () => {
     it("deep-links to the turn's own provider Env tab", () => {
       render(
         <ErrorSegment
+          hostTimestamp={null}
+          reportTurnId={null}
           turnId={null}
           message={ENV_CREDENTIAL_MESSAGE}
           code="auth_env_credential"
@@ -442,6 +515,8 @@ describe("<ErrorSegment />", () => {
       // not name an arbitrary provider either.
       render(
         <ErrorSegment
+          hostTimestamp={null}
+          reportTurnId={null}
           turnId={null}
           message={ENV_CREDENTIAL_MESSAGE}
           code="auth_env_credential"
@@ -463,6 +538,8 @@ describe("<ErrorSegment />", () => {
     it("does not offer it on an ordinary error", () => {
       render(
         <ErrorSegment
+          hostTimestamp={null}
+          reportTurnId={null}
           turnId={null}
           message="Boom went the host"
           code="RUNTIME_THROWN"
@@ -486,6 +563,8 @@ describe("<ErrorSegment />", () => {
       // the user to a page with nothing to change.
       render(
         <ErrorSegment
+          hostTimestamp={null}
+          reportTurnId={null}
           turnId={null}
           message="Please re-authenticate"
           code="auth"
@@ -520,6 +599,8 @@ describe("<ErrorSegment /> sandbox refusals", () => {
   }): HTMLElement {
     const { container } = render(
       <ErrorSegment
+        hostTimestamp={null}
+        reportTurnId={null}
         turnId={null}
         message={input.message}
         code={input.code}

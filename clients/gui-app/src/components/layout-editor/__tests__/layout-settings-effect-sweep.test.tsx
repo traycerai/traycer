@@ -1,5 +1,6 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import {
+  advanceSweepTime,
   holdClocksStill,
   MINTED_ID_KINDS,
   normalisedMintedIds,
@@ -84,6 +85,7 @@ const AVAILABILITY: SettingsAvailabilityContext = {
   // Both windows are composed at a desktop width: the phone layout is not
   // drawn, so the rows only it draws (the small-screen footer) have no control.
   phoneLayout: false,
+  soundtrackOffered: false,
 };
 
 const WINDOWS: ReadonlyArray<SweepWindow> = ["sample", "epic"];
@@ -195,12 +197,6 @@ interface WindowRun {
 const IDLE_SETTLES = 12;
 const IDLE_GAP_MS = 25;
 
-function pause(ms: number): Promise<void> {
-  return new Promise<void>((resolve) => {
-    setTimeout(resolve, ms);
-  });
-}
-
 function sweepPlan(): ReadonlyArray<SweepEntry> {
   return buildSweepPlan({
     shipped: shippedLayoutSnapshot(),
@@ -256,7 +252,7 @@ async function sweepWindow(windowKind: SweepWindow): Promise<WindowRun> {
   const idle: string[] = [pristine];
   for (let index = 0; index < IDLE_SETTLES; index += 1) {
     await mount.settle();
-    await pause(IDLE_GAP_MS);
+    await advanceSweepTime(IDLE_GAP_MS);
     idle.push(mount.signature());
   }
 

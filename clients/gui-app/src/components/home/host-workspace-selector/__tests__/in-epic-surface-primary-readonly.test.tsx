@@ -21,6 +21,7 @@ import type {
   WorktreeIntent,
   WorktreeWorkspaceSummaryV15,
 } from "@traycer/protocol/host/worktree-schemas";
+import { mergeWorktreeIntentsForDisplay } from "@/stores/chats/chat-session-store";
 import type { AuthenticatedUser } from "@traycer/protocol/auth";
 import type {
   SandboxCatalogue,
@@ -567,6 +568,34 @@ it("merges a one-folder re-pick over a multi-folder dispatched intent", async ()
 
   expect(branchFor("/repo/alpha")).toContain("feat-alpha-repicked");
   expect(branchFor("/repo/beta")).toContain("feat-beta-dispatched");
+});
+
+it("lets a dispatched entry win its folder over the seed, keeping the seeded sibling", async () => {
+  seedResolvedBindingMetadata();
+  inFlightWorktreeIntent = mergeWorktreeIntentsForDisplay(
+    {
+      entries: [
+        newWorktreeIntent("/repo/alpha", "polite-turtle"),
+        newWorktreeIntent("/repo/beta", "polite-otter"),
+      ],
+    },
+    { entries: [newWorktreeIntent("/repo/alpha", "feat-dispatched")] },
+  );
+
+  renderBoundSurface("chat", true, null, BINDING);
+  fireEvent.click(screen.getByRole("button", { name: /^beta/ }));
+  const rows = await screen.findAllByTestId("folder-row");
+  const branchFor = (workspacePath: string): string | null => {
+    const row = rows.find(
+      (candidate) => candidate.getAttribute("data-path") === workspacePath,
+    );
+    return row === undefined
+      ? null
+      : within(row).getByTestId("folder-branch-trigger").textContent;
+  };
+
+  expect(branchFor("/repo/alpha")).toContain("feat-dispatched");
+  expect(branchFor("/repo/beta")).toContain("polite-otter");
 });
 
 describe.each(["chat", "terminal-agent"] as const)(

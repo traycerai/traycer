@@ -188,6 +188,7 @@ const DOWNLOADING_STATUS: ResponseOfMethod<HostRpcRegistry, "host.status"> = {
   crossHostMessaging: null,
   sessions: null,
   updatesExternallyManaged: null,
+  previousExit: null,
 };
 
 function scopeFrom(

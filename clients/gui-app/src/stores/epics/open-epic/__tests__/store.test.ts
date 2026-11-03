@@ -487,6 +487,7 @@ describe("createOpenEpicStore", () => {
       localProtection: undefined,
       freshness: CURRENT_FRESHNESS,
       peerSpeaksDurabilityLegs: true,
+      artifactSync: undefined,
     });
 
     handle().callbacks.onConnectionStatus("reconnecting", null, true, "held");
@@ -533,6 +534,7 @@ describe("createOpenEpicStore", () => {
       localProtection: undefined,
       freshness: CURRENT_FRESHNESS,
       peerSpeaksDurabilityLegs: true,
+      artifactSync: undefined,
     });
 
     handle().callbacks.onConnectionStatus("reconnecting", null, true, "held");
@@ -670,6 +672,7 @@ describe("createOpenEpicStore", () => {
       localProtection: undefined,
       freshness: undefined,
       peerSpeaksDurabilityLegs: true,
+      artifactSync: undefined,
     });
     expect(opened.store.getState()).toMatchObject({
       durabilityStatus: "paused",
@@ -703,6 +706,7 @@ describe("createOpenEpicStore", () => {
       localProtection: undefined,
       freshness: undefined,
       peerSpeaksDurabilityLegs: false,
+      artifactSync: undefined,
     });
     expect(opened.store.getState().retainedDurabilityStatus).toBe("promoting");
     expect(isLocalHomedEpicHandle(opened)).toBe(true);
@@ -755,6 +759,7 @@ describe("createOpenEpicStore", () => {
       localProtection: undefined,
       freshness: undefined,
       peerSpeaksDurabilityLegs: true,
+      artifactSync: undefined,
     });
     // Non-vacuity: the exemption really was granted off the retained pair
     // before the omitting frame, so the assertion below is a withdrawal and
@@ -764,6 +769,7 @@ describe("createOpenEpicStore", () => {
     handle().callbacks.onCloudSyncStatus("connected", {
       ...NO_CLOUD_SYNC_DURABILITY,
       peerSpeaksDurabilityLegs: true,
+      artifactSync: undefined,
     });
     expect(opened.store.getState()).toMatchObject({
       durabilityStatus: null,
@@ -803,6 +809,7 @@ describe("createOpenEpicStore", () => {
       localProtection: undefined,
       freshness: undefined,
       peerSpeaksDurabilityLegs: true,
+      artifactSync: undefined,
     });
     expect(isLocalHomedEpicHandle(opened)).toBe(true);
 
@@ -839,6 +846,7 @@ describe("createOpenEpicStore", () => {
       localProtection: undefined,
       freshness: undefined,
       peerSpeaksDurabilityLegs: true,
+      artifactSync: undefined,
     });
     expect(opened.store.getState()).toMatchObject({
       durabilityStatus: "promoting",
@@ -852,6 +860,7 @@ describe("createOpenEpicStore", () => {
       localProtection: undefined,
       freshness: undefined,
       peerSpeaksDurabilityLegs: true,
+      artifactSync: undefined,
     });
     expect(opened.store.getState()).toMatchObject({
       durabilityStatus: "promoting",

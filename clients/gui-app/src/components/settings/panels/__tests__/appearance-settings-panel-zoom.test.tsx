@@ -152,6 +152,7 @@ function currentAvailabilityContext(): SettingsAvailabilityContext {
     featureSettings: null,
     mobileApp: false,
     phoneLayout: false,
+    soundtrackOffered: false,
   };
 }
 

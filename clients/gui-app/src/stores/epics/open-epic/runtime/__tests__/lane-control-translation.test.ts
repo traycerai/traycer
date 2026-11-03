@@ -133,6 +133,7 @@ describe("cloud sync status", () => {
       localProtection: "armed",
       freshness: undefined,
       peerSpeaksDurabilityLegs: true,
+      artifactSync: undefined,
     };
     expect(
       legacyControlEventOf({

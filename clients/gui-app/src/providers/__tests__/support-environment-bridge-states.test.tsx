@@ -39,8 +39,12 @@ vi.mock("@/hooks/auto-mode/use-auto-policy-query", () => ({
   useAutoPolicyQuery: () => harness.policy ?? { data: undefined },
 }));
 
+import {
+  advanceLegendListTime,
+  installLegendListTestClock,
+} from "@/components/chat/__tests__/legend-list-test-environment";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { cleanup, render, waitFor } from "@testing-library/react";
+import { act, cleanup, render, waitFor } from "@testing-library/react";
 import type { ReactNode } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
@@ -164,6 +168,7 @@ beforeEach(() => {
 
 afterEach(() => {
   cleanup();
+  vi.useRealTimers();
   __resetSupportContextRegistryForTests();
 });
 
@@ -302,6 +307,7 @@ describe("SupportEnvironmentBridge's states", () => {
   });
 
   it("asks a host that lacks environment.status for nothing else", async () => {
+    installLegendListTestClock();
     harness.methods.add("environment.setup.attempts");
     harness.methods.add("environment.secrets.list");
     let attempts = 0;
@@ -325,7 +331,7 @@ describe("SupportEnvironmentBridge's states", () => {
     await waitFor(() => {
       expect(getSupportEnvironmentSection()).toEqual({ status: "unavailable" });
     });
-    await new Promise((resolve) => setTimeout(resolve, 100));
+    await advanceLegendListTime(100);
     expect(attempts).toBe(0);
     expect(listed).toBe(0);
   });
@@ -523,27 +529,30 @@ describe("SupportEnvironmentBridge's rotation reads", () => {
   it("re-reads a rotation that is still moving", async () => {
     supportAll();
     const host = rotationHost(false);
+    vi.useFakeTimers();
 
     mountBridge(host.client);
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(8_000);
+    });
 
-    await waitFor(
-      () => {
-        expect(host.reads()).toBeGreaterThanOrEqual(2);
-      },
-      { timeout: 8000, interval: 200 },
-    );
-  }, 15000);
+    expect(host.reads()).toBeGreaterThanOrEqual(2);
+  });
 
   it("stops re-reading a rotation once every producer has proved it", async () => {
     supportAll();
     const host = rotationHost(true);
+    vi.useFakeTimers();
 
     mountBridge(host.client);
-
-    await waitFor(() => {
-      expect(host.reads()).toBe(1);
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(0);
     });
-    await new Promise((resolve) => setTimeout(resolve, 4000));
     expect(host.reads()).toBe(1);
-  }, 15000);
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(4_000);
+    });
+    expect(host.reads()).toBe(1);
+  });
 });

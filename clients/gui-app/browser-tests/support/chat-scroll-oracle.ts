@@ -174,6 +174,21 @@ export async function readView(page: Page): Promise<ChatScrollView> {
 }
 
 /**
+ * Resolves once the fixture's transcript is mounted and has had a few frames to
+ * lay out. A cell that needs it at rest goes on to `settle` or `expectAtRest`.
+ */
+export async function transcriptMounted(page: Page): Promise<void> {
+  await page.waitForFunction(
+    () =>
+      "__chatScrollProbe" in window &&
+      window.__chatScrollProbe.geometry() !== null,
+    undefined,
+    { polling: "raf" },
+  );
+  await nextFrames(page, 10);
+}
+
+/**
  * Waits until the transcript is at rest: scrollTop, scrollHeight and the mode
  * unchanged for `stillFrames` consecutive frames (a pending end correction
  * bursts over five two-frame windows, a deferred list command waits up to

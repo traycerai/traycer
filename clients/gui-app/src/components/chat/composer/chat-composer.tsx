@@ -206,8 +206,12 @@ interface ChatComposerProps {
    * longer name is used everywhere this is threaded.
    */
   readonly providerFallback: ChatProviderFallbackState;
+  /**
+   * `true`: sent, the composer clears. `false`: refused, the text stays. A
+   * promise: the tile asks the person first and settles the same way.
+   */
   readonly onSubmitMessage:
-    | ((input: ChatComposerSubmitInput) => boolean)
+    | ((input: ChatComposerSubmitInput) => boolean | Promise<boolean>)
     | null;
   /**
    * Handles a prompt that leads with `/btw` / `/side`
@@ -1379,15 +1383,24 @@ function canSubmitDraft(args: CanSubmitDraftArgs): boolean {
 }
 
 function useFirstTaskSubmit(
-  onSubmit: ((input: ChatComposerSubmitInput) => boolean) | null,
+  onSubmit:
+    | ((input: ChatComposerSubmitInput) => boolean | Promise<boolean>)
+    | null,
   hostId: string | null,
   chatId: string,
-): ((input: ChatComposerSubmitInput) => boolean) | null {
+): ((input: ChatComposerSubmitInput) => boolean | Promise<boolean>) | null {
   const submit = useCallback(
-    (input: ChatComposerSubmitInput): boolean => {
+    (input: ChatComposerSubmitInput): boolean | Promise<boolean> => {
       const accepted = onSubmit?.(input) ?? false;
-      if (accepted)
+      const noteSubmitted = () =>
         useFirstTaskGuideStore.getState().messageSubmitted(hostId, chatId);
+      if (accepted === true) noteSubmitted();
+      else if (accepted !== false) {
+        // Consent asked first: the guide moves on only once the send happens.
+        void accepted.then((confirmed) => {
+          if (confirmed) noteSubmitted();
+        });
+      }
       return accepted;
     },
     [onSubmit, hostId, chatId],

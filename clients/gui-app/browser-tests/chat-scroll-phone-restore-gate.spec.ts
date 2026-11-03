@@ -1,5 +1,6 @@
 import { expect, test, type Page } from "@playwright/test";
 import {
+  transcriptMounted,
   expectAtRest,
   intentOf,
   readView,
@@ -38,6 +39,8 @@ const WHENS: readonly When[] = [
   "500ms",
 ];
 const X = 195;
+/** How far from the tail the last drags of a cell start. */
+const FINGER_STRETCH_PX = 1500;
 
 async function load(page: Page, suppression: Suppression): Promise<void> {
   if (suppression === "no-touchmove") {
@@ -50,7 +53,7 @@ async function load(page: Page, suppression: Suppression): Promise<void> {
     });
   }
   await page.goto(fixture("chat-scroll-model"));
-  await nextFrames(page, 30);
+  await transcriptMounted(page);
 }
 
 /** Free position well away from the tail, at rest. */
@@ -264,7 +267,7 @@ for (const suppression of ["plain", "no-touchmove"] as const) {
         if (typeof method === "function")
           Reflect.apply(method, window.__chatScrollProbe, [true]);
       });
-      await page.waitForTimeout(900);
+      await nextFrames(page, 40);
       const back = await settle(page, 12);
       await soft(problems, "after remount", () =>
         expectAtRest(page, intent, "remount"),
@@ -296,6 +299,21 @@ for (const suppression of ["plain", "no-touchmove"] as const) {
       await reopen(page, when);
       await settle(page, 12);
       // Content toward the tail: the finger moves up.
+      await drag(page, 800, 150);
+      await releaseSynthetic(page);
+      const dragged = await settle(page, 12);
+      // A finger down at the mount leaves the reader where the list opened, up
+      // to 14,000px from the tail. The wheel covers the distance; the finger
+      // makes the last stretch, which is what follows again.
+      if (dragged.fromEnd > FINGER_STRETCH_PX) {
+        await page.mouse.move(X, 400);
+        await wheelsDelivered(
+          page,
+          [{ deltaX: 0, deltaY: dragged.fromEnd - FINGER_STRETCH_PX }],
+          0,
+        );
+        await settle(page, 12);
+      }
       for (let i = 0; i < 40 && (await readView(page)).fromEnd > 1; i += 1) {
         await drag(page, 800, 150);
         await releaseSynthetic(page);
@@ -317,7 +335,7 @@ for (const suppression of ["plain", "no-touchmove"] as const) {
         window.__chatScrollProbe.appendTurn();
         window.__chatScrollProbe.startStream(50);
       });
-      await page.waitForTimeout(700);
+      await nextFrames(page, 30);
       await page.evaluate(() => window.__chatScrollProbe.stopStream());
       const after = await settle(page, 12);
       await soft(problems, "reply followed", () =>

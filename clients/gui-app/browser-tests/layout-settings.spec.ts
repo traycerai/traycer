@@ -822,7 +822,11 @@ async function chooseDetailedReadings(page: Page): Promise<void> {
   }
 }
 
-/** The header's rendered markup, twice in a row the same: nothing mid-transition. */
+/**
+ * The header twice in a row with the same markup and no layout property still
+ * interpolating. Markup alone is not enough: a transition keeps the old box
+ * after the class list has already stopped changing.
+ */
 async function waitUntilHeaderSettled(page: Page): Promise<void> {
   let previous = "";
   await expect
@@ -830,8 +834,29 @@ async function waitUntilHeaderSettled(page: Page): Promise<void> {
       async () => {
         const next = await page
           .locator('[data-testid="app-header"]')
-          .evaluate((node) => node.outerHTML);
-        const settled = next === previous;
+          .evaluate((node) => {
+            const moving = node
+              .getAnimations({ subtree: true })
+              .some((animation) => {
+                if (animation.playState !== "running") return false;
+                const timing = animation.effect?.getComputedTiming();
+                if (timing === undefined || timing.endTime === Infinity) {
+                  return false;
+                }
+                const effect = animation.effect;
+                if (!(effect instanceof KeyframeEffect)) return false;
+                return effect.getKeyframes().some((frame) =>
+                  Object.keys(frame).some((name) => {
+                    if (name.endsWith("Color")) return false;
+                    return /^(flex|padding|margin|width|height|minWidth|maxWidth|minHeight|maxHeight|top|right|bottom|left|inset|gap|transform|translate|scale|rotate|border)/.test(
+                      name,
+                    );
+                  }),
+                );
+              });
+            return `${node.outerHTML}\n${moving ? "moving" : "still"}`;
+          });
+        const settled = next === previous && next.endsWith("\nstill");
         previous = next;
         return settled;
       },

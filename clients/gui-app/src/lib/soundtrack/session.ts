@@ -18,6 +18,10 @@ export interface SoundtrackPorts {
   readonly stems: StemSource;
   /** Takes the whole mix through the low-pass, or out of it. */
   setDimmed(dimmed: boolean): void;
+  /** The soundtrack's level, moved with nothing reopened. */
+  setVolume(volume: number): void;
+  /** Drops the music for as long as a chime of `chimeSeconds` sounds. */
+  duck(chimeSeconds: number): void;
   /** Lets go of the audio device once `afterSeconds` have gone by. */
   close(afterSeconds: number): void;
 }
@@ -110,8 +114,8 @@ function settleEnabledLayers(
  * restatement sets them again.
  */
 export class SoundtrackSession {
+  readonly ports: SoundtrackPorts;
   private readonly manifest: SoundtrackManifest;
-  private readonly ports: SoundtrackPorts;
   private readonly random: RandomSource;
   private readonly resumePositions: ResumePositions;
   private readonly onSounding: (sounding: SoundingMix | null) => void;

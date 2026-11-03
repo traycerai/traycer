@@ -3,6 +3,9 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { spawnSync } from "node:child_process";
+const {
+  GIT_OUTPUT_MAX_BUFFER_BYTES,
+} = require("../../../scripts/git-output-limit.cjs");
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 // Lives outside host-lifecycle/** so this harness may import child_process
@@ -328,7 +331,11 @@ describe("host-lifecycle read-only import boundary", () => {
     const stray = spawnSync(
       "git",
       ["status", "--porcelain", "-uall", "host-lifecycle"],
-      { cwd: SHARED_ROOT, encoding: "utf8" },
+      {
+        maxBuffer: GIT_OUTPUT_MAX_BUFFER_BYTES,
+        cwd: SHARED_ROOT,
+        encoding: "utf8",
+      },
     );
     // This is the one assertion in the file that checks an ABSENCE, so it is
     // the one that passes for free when the subprocess never runs: a `git`

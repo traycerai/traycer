@@ -1,5 +1,8 @@
 import { describe, expect, it } from "vitest";
-import { buildPinnedTodoRenderState } from "@/components/chat/chat-pinned-todos";
+import {
+  buildPinnedTodoRenderState,
+  pinnedTodoSnapshotsEqual,
+} from "@/components/chat/chat-pinned-todos";
 import type { PinnedTodoSnapshot } from "@/components/chat/chat-pinned-todos";
 import type {
   ChatMessage as ChatMessageModel,
@@ -688,6 +691,94 @@ describe("buildPinnedTodoRenderState", () => {
       // and an empty completed assistant row is dropped entirely.
       expect(state.messages).toEqual([]);
     });
+  });
+});
+
+describe("pinnedTodoSnapshotsEqual", () => {
+  function snapshot(): PinnedTodoSnapshot {
+    return {
+      id: "todo-1",
+      items: [
+        {
+          id: "item-1",
+          status: "pending",
+          text: "write it",
+          priority: "high",
+          activeForm: "writing it",
+        },
+      ],
+    };
+  }
+
+  function foldedFromMessages(): PinnedTodoSnapshot | null {
+    return buildPinnedTodoRenderState(
+      [
+        makeAssistantMessage(
+          "turn-1",
+          [todoSegment("todo-1", [todoItem("write it", "pending")])],
+          null,
+        ),
+      ],
+      { kind: "derive" },
+    ).todo;
+  }
+
+  it("compares two snapshots folded separately from the same messages as equal", () => {
+    const first = foldedFromMessages();
+    const second = foldedFromMessages();
+    expect(first).not.toBe(second);
+    expect(pinnedTodoSnapshotsEqual(first, second)).toBe(true);
+  });
+
+  it.each<{
+    readonly field: string;
+    readonly changed: PinnedTodoSnapshot;
+  }>([
+    { field: "snapshot id", changed: { ...snapshot(), id: "todo-2" } },
+    {
+      field: "item id",
+      changed: {
+        ...snapshot(),
+        items: [{ ...snapshot().items[0], id: "item-2" }],
+      },
+    },
+    {
+      field: "item status",
+      changed: {
+        ...snapshot(),
+        items: [{ ...snapshot().items[0], status: "completed" }],
+      },
+    },
+    {
+      field: "item text",
+      changed: {
+        ...snapshot(),
+        items: [{ ...snapshot().items[0], text: "ship it" }],
+      },
+    },
+    {
+      field: "item priority",
+      changed: {
+        ...snapshot(),
+        items: [{ ...snapshot().items[0], priority: null }],
+      },
+    },
+    {
+      field: "item activeForm",
+      changed: {
+        ...snapshot(),
+        items: [{ ...snapshot().items[0], activeForm: null }],
+      },
+    },
+    { field: "item count", changed: { ...snapshot(), items: [] } },
+  ])("compares unequal when only the $field differs", ({ changed }) => {
+    expect(pinnedTodoSnapshotsEqual(snapshot(), changed)).toBe(false);
+  });
+
+  it("treats null as equal to null and unequal to a snapshot", () => {
+    expect(pinnedTodoSnapshotsEqual(null, null)).toBe(true);
+    expect(pinnedTodoSnapshotsEqual(null, snapshot())).toBe(false);
+    expect(pinnedTodoSnapshotsEqual(snapshot(), null)).toBe(false);
   });
 });
 

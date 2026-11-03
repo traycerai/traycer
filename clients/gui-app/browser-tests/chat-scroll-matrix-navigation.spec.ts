@@ -1,6 +1,7 @@
 import { expect, test, type Page } from "@playwright/test";
 import { fixture, nextFrames, wheelsDelivered } from "./support/fixtures";
 import {
+  transcriptMounted,
   expectAtRest,
   intentOf,
   readView,
@@ -21,7 +22,7 @@ import {
 const READING_LINE_PX = 48;
 const TOLERANCE_PX = 8;
 const LAND_WITHIN_MS = 2000;
-const HOLD_MS = 2000;
+const HOLD_FRAMES = 60;
 
 interface Sample {
   readonly t: number;
@@ -89,7 +90,7 @@ for (const intervalMs of [40, 16, 100]) {
     page,
   }) => {
     await page.goto(fixture("chat-scroll-model"));
-    await nextFrames(page, 30);
+    await transcriptMounted(page);
     await expect
       .poll(() => page.evaluate(() => window.__chatScrollProbe.mode()))
       .toBe("following-end");
@@ -115,7 +116,7 @@ for (const intervalMs of [40, 16, 100]) {
       (ms) => window.__chatScrollProbe.startStream(ms),
       intervalMs,
     );
-    await page.waitForTimeout(500);
+    await nextFrames(page, 20);
 
     await startSampling(page, target);
     await page.evaluate((i) => window.__chatScrollProbe.pick(i), pickIndex);
@@ -137,8 +138,14 @@ for (const intervalMs of [40, 16, 100]) {
         () => false,
       );
 
-    // Hold: it stays there while the stream continues.
-    await page.waitForTimeout(HOLD_MS);
+    // Hold: it stays there while the stream continues, past the landing
+    // window, where the drift check below starts reading.
+    await page.waitForFunction(
+      (after) => (window.__samples?.at(-1)?.t ?? 0) > after,
+      LAND_WITHIN_MS,
+      { polling: "raf" },
+    );
+    await nextFrames(page, HOLD_FRAMES);
 
     const final = await page.evaluate((id) => {
       window.__stopSampling?.();
@@ -160,12 +167,14 @@ for (const intervalMs of [40, 16, 100]) {
       Math.abs((final.rowTop ?? 9999) - READING_LINE_PX),
       `left the reading line\n${report}`,
     ).toBeLessThanOrEqual(TOLERANCE_PX);
-    const drifted = final.samples.filter(
+    const held = final.samples.filter((s) => s.t > LAND_WITHIN_MS);
+    expect(held.length, `no samples after landing\n${report}`).toBeGreaterThan(
+      0,
+    );
+    const drifted = held.filter(
       (s) =>
-        s.t > 0 &&
-        (s.rowTop === null ||
-          Math.abs(s.rowTop - READING_LINE_PX) > TOLERANCE_PX) &&
-        s.t > LAND_WITHIN_MS,
+        s.rowTop === null ||
+        Math.abs(s.rowTop - READING_LINE_PX) > TOLERANCE_PX,
     );
     expect(drifted, `drifted off the line after landing\n${report}`).toEqual(
       [],
@@ -197,7 +206,7 @@ for (const mode of STREAM_MODES) {
       page,
     }) => {
       await page.goto(fixture("chat-scroll-model"));
-      await nextFrames(page, 30);
+      await transcriptMounted(page);
       await expect
         .poll(() => page.evaluate(() => window.__chatScrollProbe.mode()))
         .toBe("following-end");
@@ -219,7 +228,7 @@ for (const mode of STREAM_MODES) {
         },
         [mode.start, mode.intervalMs, mode.turnEveryMs] as const,
       );
-      await page.waitForTimeout(500);
+      await nextFrames(page, 20);
 
       await page.evaluate(() => window.__chatScrollProbe.appendTurn());
       await page.waitForTimeout(delayMs);
@@ -242,7 +251,7 @@ for (const mode of STREAM_MODES) {
           () => true,
           () => false,
         );
-      await page.waitForTimeout(HOLD_MS);
+      await nextFrames(page, HOLD_FRAMES);
 
       const final = await page.evaluate((id) => {
         window.__stopSampling?.();
@@ -277,7 +286,7 @@ const STREAM_MS = 40;
 
 async function load(page: Page): Promise<void> {
   await page.goto(fixture("chat-scroll-model"));
-  await nextFrames(page, 30);
+  await transcriptMounted(page);
   await expect
     .poll(() => page.evaluate(() => window.__chatScrollProbe.mode()))
     .toBe("following-end");
@@ -327,10 +336,10 @@ async function idOf(page: Page, index: number): Promise<string> {
   return id;
 }
 
-/** Streams for `ms`, then stops: the step that proves a position is held. */
-async function streamFor(page: Page, ms: number): Promise<void> {
+/** Streams for `frames`, then stops: the step that proves a position is held. */
+async function streamFor(page: Page, frames: number): Promise<void> {
   await startStream(page);
-  await page.waitForTimeout(ms);
+  await nextFrames(page, frames);
   await stopStream(page);
 }
 
@@ -373,7 +382,7 @@ test.describe("C1: following, idle", () => {
     await pick(page, 2);
     const picked: ReaderIntent = { kind: "picked", messageId: id };
     await expectAtRest(page, picked, "after the pick");
-    await streamFor(page, 2000);
+    await streamFor(page, 60);
     await expectAtRest(page, picked, "after 2s of stream");
   });
 });
@@ -426,7 +435,7 @@ test.describe("C4: the last turn", () => {
       await expectAtRest(page, { kind: "tail" }, "after the new turn");
       await pick(page, (await pickItems(page)).length - 1);
       await expectAtRest(page, { kind: "tail" }, "after picking the last turn");
-      await streamFor(page, 2000);
+      await streamFor(page, 60);
       await expectAtRest(page, { kind: "tail" }, "after 2s of stream");
     },
   );
@@ -435,7 +444,7 @@ test.describe("C4: the last turn", () => {
     await detachMidTranscript(page);
     await pick(page, (await pickItems(page)).length - 1);
     await expectAtRest(page, { kind: "tail" }, "after picking the last turn");
-    await streamFor(page, 2000);
+    await streamFor(page, 60);
     await expectAtRest(page, { kind: "tail" }, "after 2s of stream");
   });
 });
@@ -453,9 +462,9 @@ test.describe("C5: the first turn (clamped at the top)", () => {
   scenario("while streaming", async (page) => {
     const id = await idOf(page, 0);
     await startStream(page);
-    await page.waitForTimeout(500);
+    await nextFrames(page, 20);
     await pick(page, 0);
-    await page.waitForTimeout(1500);
+    await nextFrames(page, 60);
     await stopStream(page);
     await expectAtRest(
       page,
@@ -474,12 +483,12 @@ test.describe("C6: two picks in quick succession", () => {
           const second = await idOf(page, 6);
           if (streaming) {
             await startStream(page);
-            await page.waitForTimeout(500);
+            await nextFrames(page, 20);
           }
           await pick(page, 2);
           await page.waitForTimeout(gapMs);
           await pick(page, 6);
-          await page.waitForTimeout(1500);
+          await nextFrames(page, 60);
           await stopStream(page);
           await expectAtRest(
             page,
@@ -505,8 +514,8 @@ test.describe("C7: a pick, then the reader's wheel", () => {
         const intent = intentOf(left);
         await expectAtRest(page, intent, "just after the wheel");
         // Nothing the pick left in flight may move the reader afterwards.
-        await page.waitForTimeout(1500);
-        await expectAtRest(page, intent, "1.5s after the wheel");
+        await nextFrames(page, 60);
+        await expectAtRest(page, intent, "well after the wheel");
         const top = await page.evaluate(
           (row) => window.__chatScrollProbe.rowTop(row),
           id,
@@ -525,15 +534,15 @@ test.describe("C8: the pill", () => {
     await detachMidTranscript(page);
     await pillClick(page);
     await expectAtRest(page, { kind: "tail" }, "after the pill");
-    await streamFor(page, 2000);
+    await streamFor(page, 60);
     await expectAtRest(page, { kind: "tail" }, "after 2s of stream");
   });
   scenario("while streaming", async (page) => {
     await startStream(page);
-    await page.waitForTimeout(300);
+    await nextFrames(page, 12);
     await wheel(page, -3000);
     await pillClick(page);
-    await page.waitForTimeout(2000);
+    await nextFrames(page, 90);
     await stopStream(page);
     await expectAtRest(
       page,
@@ -546,7 +555,7 @@ test.describe("C8: the pill", () => {
     await appendTurn(page);
     await pillClick(page);
     await expectAtRest(page, { kind: "tail" }, "after the pill");
-    await streamFor(page, 2000);
+    await streamFor(page, 60);
     await expectAtRest(page, { kind: "tail" }, "after 2s of stream");
   });
   scenario("right after a new turn, while streaming", async (page) => {
@@ -554,7 +563,7 @@ test.describe("C8: the pill", () => {
     await startStream(page);
     await appendTurn(page);
     await pillClick(page);
-    await page.waitForTimeout(2000);
+    await nextFrames(page, 90);
     await stopStream(page);
     await expectAtRest(
       page,
@@ -571,7 +580,7 @@ test.describe("C9: a pick, then new content", () => {
     const picked: ReaderIntent = { kind: "picked", messageId: id };
     await expectAtRest(page, picked, "after the pick");
     await appendTurn(page);
-    await streamFor(page, 2000);
+    await streamFor(page, 60);
     await expectAtRest(page, picked, "after a new turn and 2s of stream");
   });
 });
@@ -585,7 +594,7 @@ test.describe("C10: keyboard", () => {
         async (page) => {
           if (streaming) {
             await startStream(page);
-            await page.waitForTimeout(300);
+            await nextFrames(page, 12);
           }
           const before = await readView(page);
           await page.keyboard.press(key);
@@ -615,7 +624,7 @@ test.describe("C10: keyboard", () => {
               ? { kind: "tail" }
               : intentOf(after);
           if (streaming) {
-            await page.waitForTimeout(1500);
+            await nextFrames(page, 60);
             await stopStream(page);
           }
           await expectAtRest(page, intent, `after ${key}`);
@@ -627,7 +636,7 @@ test.describe("C10: keyboard", () => {
       async (page) => {
         if (streaming) {
           await startStream(page);
-          await page.waitForTimeout(300);
+          await nextFrames(page, 12);
         }
         await page.keyboard.press("PageUp");
         await nextFrames(page, 3);
@@ -636,7 +645,7 @@ test.describe("C10: keyboard", () => {
         const after = streaming ? await readView(page) : await settle(page, 12);
         const intent = intentOf(after);
         if (streaming) {
-          await page.waitForTimeout(1500);
+          await nextFrames(page, 60);
           await stopStream(page);
         }
         await expectAtRest(page, intent, "after PageUp, PageDown");

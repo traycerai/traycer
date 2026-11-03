@@ -12,7 +12,7 @@ import {
   Settings,
   SquareArrowOutUpRight,
 } from "lucide-react";
-import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
+import { UserMenuAvatar } from "@/components/auth/user-menu";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Sheet, SheetContent, SheetTitle } from "@/components/ui/sheet";
@@ -35,7 +35,6 @@ import "@/components/layout/shell/mobile-shell-touch-targets.css";
 import { MobileNavDrawerSurface } from "@/components/layout/shell/mobile-nav-drawer-surface";
 import { Analytics, AnalyticsEvent } from "@/lib/analytics";
 import { isMobileApp } from "@/lib/mobile-app";
-import { computeInitials } from "@/lib/auth/compute-initials";
 import { usePlatformBillingUrl } from "@/hooks/auth/use-platform-billing-url";
 import { useOpenLink } from "@/lib/links/open-link";
 import { openNewEpicIntent } from "@/lib/commands/actions/new-epic";
@@ -178,14 +177,11 @@ export function MobileNavDrawer(): ReactNode {
             beyond `pb-2` because the `nav` supplies the rest of the gap. */}
       {profile === null ? null : (
         <div className="flex shrink-0 items-center gap-3 px-5 pt-4 pb-2">
-          <Avatar size="sm">
-            {profile.avatarUrl !== null ? (
-              <AvatarImage src={profile.avatarUrl} alt="" />
-            ) : null}
-            <AvatarFallback>
-              {computeInitials(profile.userName, profile.email)}
-            </AvatarFallback>
-          </Avatar>
+          <UserMenuAvatar
+            userName={profile.userName}
+            email={profile.email}
+            avatarUrl={profile.avatarUrl ?? null}
+          />
           <div className="flex min-w-0 flex-1 flex-col pointer-coarse:touch-chrome">
             <span className="truncate text-ui-sm font-medium text-foreground">
               {profile.userName}

@@ -1394,7 +1394,7 @@ describe("the fixed Tracy entry - vertical strip", () => {
     });
   });
 
-  it("joins the strip's edge to its surface's canvas while selected, as a task row does", async () => {
+  it("joins the strip's edge to its channel column in the sidebar's fill while selected, as a task row joins its panel", async () => {
     openEpicTabs(["Alpha"]);
     mountSideStrip("/epics/e-alpha/e-alpha");
 
@@ -1409,13 +1409,13 @@ describe("the fixed Tracy entry - vertical strip", () => {
     });
 
     expect(entry.getAttribute("data-sheet-joined")).toBe("left");
-    expect(entry.getAttribute("data-join-pane")).toBe("canvas");
+    expect(entry.getAttribute("data-join-pane")).toBe("panel");
     expect(alpha.hasAttribute("data-sheet-joined")).toBe(false);
     expect(
       document
         .querySelector('[data-sheet-join-bridge="left"]')
         ?.getAttribute("data-join-pane"),
-    ).toBe("canvas");
+    ).toBe("panel");
   });
 
   it("draws no Talk under the entry or in the collapsed rail when voice is available", async () => {

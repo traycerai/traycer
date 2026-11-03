@@ -1,4 +1,5 @@
 import { expect, test, type Page } from "@playwright/test";
+import { streamRuns } from "./support/chat-send-follow.ts";
 import { fixture, nextFrames, wheelsDelivered } from "./support/fixtures.ts";
 
 // A free reader reaches the strict bottom while the structural commit of a
@@ -219,12 +220,11 @@ for (const { variant, runs } of RUNS) {
       await mark(page, "reach");
       await wheelToBottom(page);
       await mark(page, "after");
-      await page.waitForTimeout(4500);
+      await streamRuns(page, 30);
       await page.evaluate(() => {
         window.__followDriver?.host.stopReply();
       });
-      await nextFrames(page, 30);
-      await page.waitForTimeout(400);
+      await nextFrames(page, 45);
       const frames: ChatFollowFrame[] = await page.evaluate(() => {
         window.__followStop?.();
         return [...(window.__followFrames ?? [])];

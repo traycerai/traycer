@@ -15,6 +15,7 @@
  * store, which is what finally breaks the projector's circular import.
  */
 import type { EpicAdapterArm } from "./epic-adapter-selection";
+import type { EpicArtifactSync } from "@traycer/protocol/host/epic/status-subscribe";
 import type { PermissionRole } from "@traycer/protocol/host/epic/unary-schemas";
 import type {
   EpicCloudFreshness,
@@ -344,6 +345,11 @@ export interface EpicControlProjection {
    */
   readonly cloudFreshness: EpicCloudFreshness | null;
   /**
+   * Whether this task's artifacts are reaching the cloud
+   * (`epic.status.subscribe@1.2`). `null` means the host did not say.
+   */
+  readonly artifactSync: EpicArtifactSync | null;
+  /**
    * Whether the peer serving this stream negotiated the `@1.6` minor that
    * carries the three legs above - `s5-status-truthfulness`.
    *
@@ -433,6 +439,7 @@ export const INITIAL_CONTROL_PROJECTION: EpicControlProjection = Object.freeze({
   durabilityPromotionState: null,
   localProtection: null,
   cloudFreshness: null,
+  artifactSync: null,
   durabilityLegsNegotiated: false,
   durabilityStatusNegotiated: false,
   retainedDurabilityStatus: null,

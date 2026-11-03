@@ -1,4 +1,4 @@
-import type { ReactNode } from "react";
+import type { ComponentProps, ReactNode } from "react";
 import type { SandboxCatalogue } from "@traycer/protocol/host/sandbox-control";
 import { TestRouterProvider } from "@/__tests__/with-test-router";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -282,6 +282,36 @@ vi.mock(
   },
 );
 
+// Spy on the sanitising markup parser every file icon runs on render, so a
+// test can count how many rows re-rendered without reading component internals.
+const trustedMarkupSpy = vi.hoisted(() => ({ calls: 0 }));
+vi.mock("@/lib/trusted-markup", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@/lib/trusted-markup")>();
+  return {
+    ...actual,
+    trustedMarkupToReactNodes: (
+      ...args: Parameters<typeof actual.trustedMarkupToReactNodes>
+    ) => {
+      trustedMarkupSpy.calls += 1;
+      return actual.trustedMarkupToReactNodes(...args);
+    },
+  };
+});
+
+// Same idea for the dock's todo rows: they draw one pending-status icon each.
+const pendingTodoIconSpy = vi.hoisted(() => ({ renders: 0 }));
+vi.mock("lucide-react", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("lucide-react")>();
+  const ActualCircleDashed = actual.CircleDashed;
+  return {
+    ...actual,
+    CircleDashed: (props: ComponentProps<typeof ActualCircleDashed>) => {
+      pendingTodoIconSpy.renders += 1;
+      return <ActualCircleDashed {...props} />;
+    },
+  };
+});
+
 vi.mock("@/lib/host", () => ({
   useHostBinding: () => null,
   useOptionalHostClient: () => null,
@@ -552,6 +582,7 @@ import { useAuthStore } from "@/stores/auth/auth-store";
 import { TestEpicSessionWrapper } from "./test-epic-session";
 import { createEpicSessionTestHarness } from "./test-epic-session-harness";
 import type { ChatStreamCallbacks } from "@traycer-clients/shared/host-transport/chat-stream-client";
+import type { ChatAccumulatedFileChange } from "@traycer/protocol/host/agent/gui/subscribe";
 import type {
   ChatSessionStoreHandle,
   ChatStreamClientHandle,
@@ -575,6 +606,7 @@ import type {
   WorktreeFolderIntent,
   WorktreeIntent,
 } from "@traycer/protocol/host/worktree-schemas";
+import type { ChatMessageDeliveryV142 } from "@traycer/protocol/host/agent/gui/message-delivery";
 import {
   readStagedWorktreeIntent,
   useWorktreeIntentStagingStore,
@@ -878,9 +910,12 @@ function emitChatSnapshotWithMessages(input: {
   readonly settings: ChatRunSettings | null;
   readonly messages: ReadonlyArray<Message>;
   readonly events?: ReadonlyArray<ChatEvent>;
+  readonly accumulatedFileChanges?: ReadonlyArray<ChatAccumulatedFileChange>;
   readonly activeTurn: ChatActiveTurn | null;
   readonly pendingInterviews?: ReadonlyArray<ChatPendingInterviewState>;
   readonly managedCommands?: ReadonlyArray<ManagedCommand>;
+  readonly messageDelivery?: ChatMessageDeliveryV142 | null;
+  readonly worktreeBinding?: WorktreeBinding | null;
 }): void {
   input.callbacks.onSnapshot({
     kind: "snapshot",
@@ -916,13 +951,17 @@ function emitChatSnapshotWithMessages(input: {
       activeTurn: input.activeTurn,
       pendingApprovals: [],
       pendingInterviews: [...(input.pendingInterviews ?? [])],
-      worktreeBinding: testWorktreeBinding(),
+      worktreeBinding:
+        input.worktreeBinding === undefined
+          ? testWorktreeBinding()
+          : input.worktreeBinding,
       missingWorktreePaths: [],
       pendingFileEditApprovals: [],
-      accumulatedFileChanges: [],
+      accumulatedFileChanges: [...(input.accumulatedFileChanges ?? [])],
       managedCommands: [...(input.managedCommands ?? [])],
       heldUpdates: [],
       portForwards: [],
+      messageDelivery: input.messageDelivery,
     },
   });
 }
@@ -1766,6 +1805,53 @@ function registerWaitingChatHandoff(): void {
   });
   store.markChatCreated(scope, CHAT_ARTIFACT.id);
   store.markWaitingChat(scope);
+}
+
+function streamingAssistantMessage(): Message {
+  return {
+    role: "assistant",
+    messageId: "assistant-live",
+    startedAt: 2,
+    sender: {
+      type: "agent",
+      harnessId: "codex",
+      agentId: "codex",
+      displayName: "Codex",
+      reply: { expectsReply: false },
+      inReplyTo: null,
+    },
+    blocks: [
+      {
+        type: "reasoning",
+        blockId: "think-live",
+        status: "streaming",
+        timestamp: 3,
+        content: "Weighing the options.",
+        startedAt: 3,
+      },
+    ],
+    timestamp: 3,
+    turnId: "turn-active",
+    usage: null,
+    reasoningEffort: null,
+    serviceTier: null,
+    envCredentialVar: null,
+    imageResolutions: [],
+  };
+}
+
+function deliverBlockEvent(
+  event: Parameters<ChatStreamCallbacks["onBlockDelta"]>[0]["event"],
+): void {
+  act(() => {
+    chatHarness.callbacks().onBlockDelta({
+      kind: "blockDelta",
+      hasBinaryPayload: false,
+      epicId: EPIC_ID,
+      chatId: CHAT_ARTIFACT.id,
+      event,
+    });
+  });
 }
 
 describe("<ChatTile />", () => {
@@ -2840,6 +2926,7 @@ describe("<ChatTile />", () => {
           messageId: "message-1",
           revision: 1,
           state: { phase: "preparing" },
+          worktreeIntent: null,
         },
       });
     });
@@ -6673,6 +6760,98 @@ describe("<ChatTile />", () => {
     expect(chatHarness.sent[0]?.kind).toBe("send");
   });
 
+  // The composer's own text through the dialog: kept while it asks, cleared
+  // by the confirmed send (which used to leave it behind as a duplicate of
+  // the queued message), kept by a dismiss.
+  it("clears the composer once Send and switch dispatches its send", async () => {
+    stageChatWorktreeDraft("/wt/a");
+    await loadBusyChatWithShell();
+
+    submitComposerWithEnter();
+
+    expect(await screen.findByTestId("teardown-commit-dialog")).toBeTruthy();
+    expect(chatHarness.sent).toHaveLength(0);
+    expect(
+      useComposerDraftStore.getState().drafts[CHAT_ARTIFACT.id]?.content,
+    ).toEqual(PENDING_DRAFT_CONTENT);
+
+    fireEvent.click(screen.getByTestId("teardown-commit-immediate"));
+
+    await waitFor(() => {
+      expect(chatHarness.sent).toHaveLength(1);
+    });
+    const frame = chatHarness.sent[0];
+    if (frame.kind !== "send") throw new Error("expected send frame");
+    expect(frame.worktreeIntent?.entries[0]).toMatchObject({
+      kind: "import",
+      worktreePath: "/wt/a",
+    });
+    await waitFor(() => {
+      expect(
+        useComposerDraftStore.getState().drafts[CHAT_ARTIFACT.id]?.content,
+      ).toEqual({ type: "doc", content: [{ type: "paragraph" }] });
+    });
+  });
+
+  it("refuses a second gated send while the folder dialog asks about the first", async () => {
+    stageChatWorktreeDraft("/wt/a");
+    renderChatTile();
+    await waitForChatTileLoaded();
+    act(() => {
+      emitChatSnapshotWithMessages({
+        callbacks: chatHarness.callbacks(),
+        access: "owner",
+        queueItems: [],
+        settings: SESSION_SETTINGS,
+        messages: [hostUserMessage(), nextStepsAssistantMessage()],
+        activeTurn: runningActiveTurn(),
+        managedCommands: [runningShellOnProject()],
+      });
+    });
+
+    submitComposerWithEnter();
+    expect(await screen.findByTestId("teardown-commit-dialog")).toBeTruthy();
+
+    // A next-step send arriving under the dialog must not replace the
+    // composer send the dialog is about.
+    fireEvent.click(getButtonContainingText("/implementation-validation all"));
+    expect(chatHarness.sent).toHaveLength(0);
+    expect(screen.getByTestId("teardown-commit-dialog")).toBeTruthy();
+
+    fireEvent.click(screen.getByTestId("teardown-commit-immediate"));
+    await waitFor(() => {
+      expect(chatHarness.sent).toHaveLength(1);
+    });
+    const frame = chatHarness.sent[0];
+    if (frame.kind !== "send") throw new Error("expected send frame");
+    expect(JSON.stringify(frame.content)).not.toContain(
+      "/implementation-validation",
+    );
+    await waitFor(() => {
+      expect(
+        useComposerDraftStore.getState().drafts[CHAT_ARTIFACT.id]?.content,
+      ).toEqual({ type: "doc", content: [{ type: "paragraph" }] });
+    });
+  });
+
+  it("keeps the composer text when the folder dialog is dismissed", async () => {
+    stageChatWorktreeDraft("/wt/a");
+    await loadBusyChatWithShell();
+
+    submitComposerWithEnter();
+    expect(await screen.findByTestId("teardown-commit-dialog")).toBeTruthy();
+
+    fireEvent.click(screen.getByTestId("teardown-commit-cancel"));
+
+    await waitFor(() => {
+      expect(screen.queryByTestId("teardown-commit-dialog")).toBeNull();
+    });
+    expect(chatHarness.sent).toHaveLength(0);
+    expect(
+      useComposerDraftStore.getState().drafts[CHAT_ARTIFACT.id]?.content,
+    ).toEqual(PENDING_DRAFT_CONTENT);
+  });
+
   it("gates a next-step click on a staged rebind with the teardown dialog", async () => {
     stageChatWorktreeDraft("/wt/a");
     renderChatTile();
@@ -6709,6 +6888,239 @@ describe("<ChatTile />", () => {
       expect(workspaceSelectorTestState.inFlightWorktreeIntent).toEqual(
         frame.worktreeIntent,
       );
+    });
+  });
+
+  describe("the seeded worktree overlay", () => {
+    const PROJECT = "/Users/test/project";
+    const SIBLING = "/Users/test/sibling";
+
+    function seededWorktree(
+      workspacePath: string,
+      branchName: string,
+    ): WorktreeFolderIntent {
+      return {
+        kind: "worktree",
+        workspacePath,
+        repoIdentifier: null,
+        isPrimary: workspacePath === PROJECT,
+        branch: {
+          type: "new",
+          name: branchName,
+          source: "main",
+          carryUncommittedChanges: false,
+        },
+        scripts: null,
+      };
+    }
+
+    const PROJECT_SEED = seededWorktree(PROJECT, "polite-turtle");
+    const SIBLING_SEED = seededWorktree(SIBLING, "polite-otter");
+
+    function seededDelivery(
+      state: ChatMessageDeliveryV142["state"],
+      entries: ReadonlyArray<WorktreeFolderIntent>,
+    ): ChatMessageDeliveryV142 {
+      return {
+        messageId: "message-1",
+        revision: 1,
+        state,
+        worktreeIntent: { entries: [...entries] },
+      };
+    }
+
+    function emitSeededSnapshot(
+      messageDelivery: ChatMessageDeliveryV142 | null,
+      worktreeBinding: WorktreeBinding | null,
+    ): void {
+      act(() => {
+        emitChatSnapshotWithMessages({
+          callbacks: chatHarness.callbacks(),
+          access: "owner",
+          queueItems: [],
+          settings: SESSION_SETTINGS,
+          messages: [hostUserMessage()],
+          activeTurn: null,
+          messageDelivery,
+          worktreeBinding,
+        });
+      });
+    }
+
+    function emitDeliveryChanged(delivery: ChatMessageDeliveryV142): void {
+      act(() => {
+        chatHarness.callbacks().onMessageDeliveryChanged({
+          kind: "messageDeliveryChanged",
+          hasBinaryPayload: false,
+          epicId: EPIC_ID,
+          chatId: CHAT_ARTIFACT.id,
+          delivery,
+        });
+      });
+    }
+
+    it.each([
+      ["the placeholder local binding", testWorktreeBinding()],
+      ["no binding yet", null],
+    ])(
+      "shows only the worktree entries from a pending snapshot over %s",
+      async (_label, binding) => {
+        renderChatTile();
+        await waitForChatTileLoaded();
+
+        emitSeededSnapshot(
+          seededDelivery({ phase: "pending" }, [
+            PROJECT_SEED,
+            {
+              kind: "local",
+              workspacePath: SIBLING,
+              repoIdentifier: null,
+              isPrimary: false,
+            },
+          ]),
+          binding,
+        );
+
+        await waitFor(() => {
+          expect(workspaceSelectorTestState.inFlightWorktreeIntent).toEqual({
+            entries: [PROJECT_SEED],
+          });
+        });
+      },
+    );
+
+    it.each<[string, ChatMessageDeliveryV142["state"]]>([
+      [
+        "started",
+        { phase: "started", turnId: "turn-1", assistantMessageId: "reply-1" },
+      ],
+      [
+        "withdrawn",
+        {
+          phase: "withdrawn",
+          code: "WORKTREE_SETUP_FAILED",
+          reason: "The worktree could not be created.",
+          missingHashes: [],
+          restore: null,
+          restoreClaimed: false,
+        },
+      ],
+    ])(
+      "holds through preparing, then gives way to the binding at %s though the intent is still set",
+      async (_label, terminalState) => {
+        renderChatTile();
+        await waitForChatTileLoaded();
+        const entries = [PROJECT_SEED];
+        emitSeededSnapshot(
+          seededDelivery({ phase: "pending" }, entries),
+          testWorktreeBinding(),
+        );
+
+        emitDeliveryChanged(seededDelivery({ phase: "preparing" }, entries));
+        await waitFor(() => {
+          expect(workspaceSelectorTestState.inFlightWorktreeIntent).toEqual({
+            entries,
+          });
+        });
+
+        emitDeliveryChanged(seededDelivery(terminalState, entries));
+        await waitFor(() => {
+          expect(workspaceSelectorTestState.inFlightWorktreeIntent).toBeNull();
+        });
+      },
+    );
+
+    it("retires the overlay when the host nulls the intent during preparing", async () => {
+      renderChatTile();
+      await waitForChatTileLoaded();
+      emitSeededSnapshot(
+        seededDelivery({ phase: "preparing" }, [PROJECT_SEED]),
+        testWorktreeBinding(),
+      );
+      await waitFor(() => {
+        expect(workspaceSelectorTestState.inFlightWorktreeIntent).toEqual({
+          entries: [PROJECT_SEED],
+        });
+      });
+
+      emitDeliveryChanged({
+        messageId: "message-1",
+        revision: 2,
+        state: { phase: "preparing" },
+        worktreeIntent: null,
+      });
+      await waitFor(() => {
+        expect(workspaceSelectorTestState.inFlightWorktreeIntent).toBeNull();
+      });
+    });
+
+    it("drops a landed folder and keeps its pending sibling", async () => {
+      renderChatTile();
+      await waitForChatTileLoaded();
+      const delivery = seededDelivery({ phase: "preparing" }, [
+        PROJECT_SEED,
+        SIBLING_SEED,
+      ]);
+      emitSeededSnapshot(delivery, testWorktreeBinding());
+      await waitFor(() => {
+        expect(workspaceSelectorTestState.inFlightWorktreeIntent).toEqual({
+          entries: [PROJECT_SEED, SIBLING_SEED],
+        });
+      });
+
+      emitSeededSnapshot(delivery, {
+        entries: testWorktreeBinding().entries.map((entry) => ({
+          ...entry,
+          mode: "worktree",
+          worktreePath: "/wt/polite-turtle",
+          branch: "polite-turtle",
+        })),
+      });
+
+      await waitFor(() => {
+        expect(workspaceSelectorTestState.inFlightWorktreeIntent).toEqual({
+          entries: [SIBLING_SEED],
+        });
+      });
+    });
+
+    it("puts a newer dispatched intent after the seed, which is what lets it win that folder", async () => {
+      stageChatWorktreeDraft("/wt/a");
+      renderChatTile();
+      await waitForChatTileLoaded();
+      act(() => {
+        emitChatSnapshotWithMessages({
+          callbacks: chatHarness.callbacks(),
+          access: "owner",
+          queueItems: [],
+          settings: SESSION_SETTINGS,
+          messages: [hostUserMessage(), nextStepsAssistantMessage()],
+          activeTurn: null,
+          managedCommands: [runningShellOnProject()],
+          messageDelivery: seededDelivery({ phase: "preparing" }, [
+            PROJECT_SEED,
+            SIBLING_SEED,
+          ]),
+        });
+      });
+
+      fireEvent.click(
+        getButtonContainingText("/implementation-validation all"),
+      );
+      fireEvent.click(await screen.findByTestId("teardown-commit-immediate"));
+      await waitFor(() => {
+        expect(chatHarness.sent).toHaveLength(1);
+      });
+      const frame = chatHarness.sent[0];
+      if (frame.kind !== "send") throw new Error("expected send frame");
+      const dispatched = frame.worktreeIntent?.entries ?? [];
+      expect(dispatched).toHaveLength(1);
+
+      await waitFor(() => {
+        expect(workspaceSelectorTestState.inFlightWorktreeIntent).toEqual({
+          entries: [PROJECT_SEED, SIBLING_SEED, ...dispatched],
+        });
+      });
     });
   });
 
@@ -7478,6 +7890,258 @@ describe("<ChatTile />", () => {
       handle.store.setState({ opencodeLineHeld: undefined });
     });
     expect(screen.queryByTestId("chat-composer-opencode-line-held")).toBeNull();
+  });
+
+  describe("the accumulated-changes panel while a turn streams", () => {
+    const HOST_FILE_COUNT = 200;
+    const LIVE_FILE = "src/live-only-file.ts";
+
+    function hostChange(index: number): ChatAccumulatedFileChange {
+      return {
+        filePath: `src/host/file-${String(index).padStart(3, "0")}.ts`,
+        operation: "edit",
+        diffSource: "snapshot",
+        beforeContent: "const a = 1;\n",
+        afterContent: "const a = 2;\nconst b = 3;\n",
+        reason: "snapshot",
+        undoable: true,
+        artifact: null,
+      };
+    }
+
+    async function openPanelOverStreamingTurn(): Promise<void> {
+      renderChatTile();
+      await waitForChatTileLoaded();
+      act(() => {
+        emitChatSnapshotWithMessages({
+          callbacks: chatHarness.callbacks(),
+          access: "owner",
+          queueItems: [],
+          settings: null,
+          messages: [hostUserMessage(), streamingAssistantMessage()],
+          accumulatedFileChanges: Array.from(
+            { length: HOST_FILE_COUNT },
+            (_, index) => hostChange(index),
+          ),
+          activeTurn: runningActiveTurn(),
+        });
+      });
+      await waitFor(() => {
+        expect(
+          screen.getByTestId("accumulated-changes-summary"),
+        ).not.toBeNull();
+      });
+      fireEvent.click(screen.getByTestId("accumulated-changes-summary"));
+      await waitFor(() => {
+        expect(
+          screen.getByText("file-199.ts", { exact: false }),
+        ).not.toBeNull();
+      });
+    }
+
+    it("does not re-render any row when a reasoning delta streams in", async () => {
+      await openPanelOverStreamingTurn();
+      await advanceLegendListTime(500);
+      trustedMarkupSpy.calls = 0;
+      // Idle time alone repaints nothing, so a count after the delta is the delta's.
+      await advanceLegendListTime(500);
+      expect(trustedMarkupSpy.calls).toBe(0);
+
+      deliverBlockEvent({
+        type: "reasoning.delta",
+        blockId: "think-live",
+        timestamp: 4,
+        delta: " Picking the cheaper path.",
+      });
+      // The delta rides the flush coordinator, so it is on screen only once the
+      // coordinator has applied it.
+      await waitFor(() => {
+        expect(
+          screen.getByText("Picking the cheaper path.", { exact: false }),
+        ).not.toBeNull();
+      });
+      await advanceLegendListTime(500);
+
+      expect(trustedMarkupSpy.calls).toBe(0);
+    });
+
+    it("re-renders no panel row on a reasoning delta while the turn has its own file row", async () => {
+      await openPanelOverStreamingTurn();
+      deliverBlockEvent({
+        type: "file_change.completed",
+        blockId: "edit-live",
+        timestamp: 4,
+        filePath: LIVE_FILE,
+        operation: "edit",
+        diffSource: "snapshot",
+        beforeHash: "a".repeat(64),
+        afterHash: "b".repeat(64),
+        additions: 3,
+        deletions: 1,
+        reason: "snapshot",
+      });
+      const panel = () => screen.getByTestId("accumulated-changes-panel");
+      await waitFor(() => {
+        expect(
+          within(panel()).queryByLabelText(`Undo changes to ${LIVE_FILE}`),
+        ).not.toBeNull();
+      });
+      const streamOneDelta = async (
+        delta: string,
+        timestamp: number,
+      ): Promise<number> => {
+        await advanceLegendListTime(500);
+        trustedMarkupSpy.calls = 0;
+        // Idle time alone repaints nothing, so a count after the delta is the delta's.
+        await advanceLegendListTime(500);
+        expect(trustedMarkupSpy.calls).toBe(0);
+        deliverBlockEvent({
+          type: "reasoning.delta",
+          blockId: "think-live",
+          timestamp,
+          delta,
+        });
+        await waitFor(() => {
+          expect(
+            screen.getByText(delta.trim(), { exact: false }),
+          ).not.toBeNull();
+        });
+        await advanceLegendListTime(500);
+        return trustedMarkupSpy.calls;
+      };
+
+      // The live file also has a card in the transcript, which re-renders with
+      // its message on every delta and draws the same icon. Fold the panel away
+      // to measure that alone, then the panel open must add nothing to it.
+      fireEvent.click(screen.getByTestId("accumulated-changes-summary"));
+      await waitFor(() => {
+        expect(
+          within(panel()).queryByLabelText(`Undo changes to ${LIVE_FILE}`),
+        ).toBeNull();
+      });
+      const transcriptOnly = await streamOneDelta(" First thought.", 5);
+
+      fireEvent.click(screen.getByTestId("accumulated-changes-summary"));
+      await waitFor(() => {
+        expect(
+          within(panel()).queryByLabelText(`Undo changes to ${LIVE_FILE}`),
+        ).not.toBeNull();
+      });
+      expect(await streamOneDelta(" Second thought.", 6)).toBe(transcriptOnly);
+    });
+
+    it("lists a file only the active turn wrote, and moves its counts on a later edit", async () => {
+      await openPanelOverStreamingTurn();
+      const rowText = (): string | null => {
+        const undo = within(
+          screen.getByTestId("accumulated-changes-panel"),
+        ).queryByLabelText(`Undo changes to ${LIVE_FILE}`);
+        return undo?.closest(".group")?.textContent ?? null;
+      };
+
+      deliverBlockEvent({
+        type: "file_change.completed",
+        blockId: "edit-1",
+        timestamp: 4,
+        filePath: LIVE_FILE,
+        operation: "edit",
+        diffSource: "snapshot",
+        beforeHash: "a".repeat(64),
+        afterHash: "b".repeat(64),
+        additions: 3,
+        deletions: 1,
+        reason: "snapshot",
+      });
+      await waitFor(() => {
+        expect(rowText()).toMatch(/\+3\u22121$/);
+      });
+
+      deliverBlockEvent({
+        type: "file_change.completed",
+        blockId: "edit-2",
+        timestamp: 5,
+        filePath: LIVE_FILE,
+        operation: "edit",
+        diffSource: "snapshot",
+        beforeHash: "b".repeat(64),
+        afterHash: "c".repeat(64),
+        additions: 2,
+        deletions: 0,
+        reason: "snapshot",
+      });
+      await waitFor(() => {
+        expect(rowText()).toMatch(/\+5\u22121$/);
+      });
+    });
+  });
+
+  describe("the pinned todo list while a turn streams", () => {
+    it("re-renders no todo row on a reasoning delta", async () => {
+      renderChatTile();
+      await waitForChatTileLoaded();
+      act(() => {
+        emitChatSnapshotWithMessages({
+          callbacks: chatHarness.callbacks(),
+          access: "owner",
+          queueItems: [],
+          settings: null,
+          messages: [hostUserMessage(), streamingAssistantMessage()],
+          activeTurn: runningActiveTurn(),
+        });
+      });
+      deliverBlockEvent({
+        type: "todo.updated",
+        blockId: "todo-live",
+        timestamp: 4,
+        items: [
+          { id: "todo-a", text: "Draft the plan", status: "pending" },
+          { id: "todo-b", text: "Ship the fix", status: "pending" },
+        ],
+      });
+      const panel = () => screen.getByTestId("pinned-todo-panel");
+      await waitFor(() => {
+        expect(panel()).not.toBeNull();
+      });
+      const toggle = () => within(panel()).getByRole("button");
+      const streamOneDelta = async (
+        delta: string,
+        timestamp: number,
+      ): Promise<number> => {
+        await advanceLegendListTime(500);
+        pendingTodoIconSpy.renders = 0;
+        // Idle time alone repaints nothing, so a count after the delta is the delta's.
+        await advanceLegendListTime(500);
+        expect(pendingTodoIconSpy.renders).toBe(0);
+        deliverBlockEvent({
+          type: "reasoning.delta",
+          blockId: "think-live",
+          timestamp,
+          delta,
+        });
+        await waitFor(() => {
+          expect(
+            screen.getByText(delta.trim(), { exact: false }),
+          ).not.toBeNull();
+        });
+        await advanceLegendListTime(500);
+        return pendingTodoIconSpy.renders;
+      };
+
+      // The same checklist may also be drawn in the transcript, and that card
+      // re-renders with its message on every delta. Measure it alone with the
+      // dock's list folded; opening the list must then add nothing to it.
+      expect(screen.queryByTestId("pinned-todo-list")).toBeNull();
+      const transcriptOnly = await streamOneDelta(" First thought.", 5);
+
+      fireEvent.click(toggle());
+      await waitFor(() => {
+        expect(
+          screen.getByText("Ship the fix", { selector: "span" }),
+        ).not.toBeNull();
+        expect(screen.getByTestId("pinned-todo-list")).not.toBeNull();
+      });
+      expect(await streamOneDelta(" Second thought.", 6)).toBe(transcriptOnly);
+    });
   });
 
   // The composer render-count proof lives in `chat-tile-composer-rerender.test.tsx`
