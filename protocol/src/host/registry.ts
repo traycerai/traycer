@@ -809,6 +809,10 @@ import {
   chatMcpAppUpdateModelContextV10,
 } from "@traycer/protocol/host/chat/mcp-app";
 import {
+  chatFeedbackDraftDecideV10,
+  chatFeedbackDraftPreviewV10,
+} from "@traycer/protocol/host/chat/feedback-draft";
+import {
   epicBatchDeleteUpgradeV10ToV11,
   epicBatchDeleteV10,
   epicBatchDeleteV11,
@@ -10634,6 +10638,34 @@ const HOST_RPC_REGISTRY_BASE_TAIL_DEFINITION = {
       versions: {
         0: {
           contract: chatMcpAppUpdateModelContextV10,
+          upgradeFromPreviousVersion: null,
+        },
+      },
+      downgradePathsFromLatest: {},
+    },
+    degrade: { kind: "unsupported" },
+  },
+  // The feedback-draft card (`chat/feedback-draft.ts`). A host without them
+  // leaves the card read-only.
+  "chat.feedbackDraft.decide": {
+    1: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: chatFeedbackDraftDecideV10,
+          upgradeFromPreviousVersion: null,
+        },
+      },
+      downgradePathsFromLatest: {},
+    },
+    degrade: { kind: "unsupported" },
+  },
+  "chat.feedbackDraft.preview": {
+    1: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: chatFeedbackDraftPreviewV10,
           upgradeFromPreviousVersion: null,
         },
       },

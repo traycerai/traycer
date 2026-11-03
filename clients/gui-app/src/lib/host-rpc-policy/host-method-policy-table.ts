@@ -1593,6 +1593,14 @@ export const HOST_METHOD_POLL_TABLE = {
     joinResponseTimeoutMs: null,
     poll: null,
   },
+  // A feedback draft's preview is read when the user opens "View"; the
+  // decision is a click that may send, so each one runs, in order.
+  "chat.feedbackDraft.preview": { ...LATEST_SCHEDULING, poll: null },
+  "chat.feedbackDraft.decide": {
+    mode: "fifo",
+    joinResponseTimeoutMs: null,
+    poll: null,
+  },
   // Not polled, and this is a deliberate freshness choice rather than a copy of
   // the row above it. The answer is "which cloud row does this local chat
   // publish into", which changes exactly once in a chat's life - when a fork
