@@ -1220,6 +1220,9 @@ function agentStalledStatus(
     // an older host simply renders the generic status below.
     case "fallback_pending":
       return "Trying a fallback provider";
+    // Open text as well: a client that predates this arm reads "Stalled".
+    case "long_turn":
+      return "Running longer than the time you set";
     default:
       return "Stalled";
   }

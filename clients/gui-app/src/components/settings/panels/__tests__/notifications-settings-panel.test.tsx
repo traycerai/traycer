@@ -14,9 +14,10 @@ import { HostClient } from "@traycer-clients/shared/host-client/host-client";
 import { mockLocalHostEntry } from "@traycer-clients/shared/host-client/mock/mock-host-directory";
 import { MockHostMessenger } from "@traycer-clients/shared/host-client/mock/mock-host-messenger";
 import { createRequestContextFixture } from "@traycer-clients/shared/test-fixtures/request-context";
-import type {
-  RequestOfMethod,
-  ResponseOfMethod,
+import {
+  HostRpcError,
+  type RequestOfMethod,
+  type ResponseOfMethod,
 } from "@traycer-clients/shared/host-transport/host-messenger";
 import {
   NotificationsSettingsPanel,
@@ -1127,3 +1128,183 @@ function credentialConfiguredAfterWrite(
   if (write.kind === "leaveUnchanged") return previous;
   return write.kind === "set";
 }
+
+const LONG_TURN_ALERT_LABEL = "Alert when a turn runs longer than";
+const HOUR_MS = 3_600_000;
+
+type LongTurnAlertSetRequest = RequestOfMethod<
+  HostRpcRegistry,
+  "host.notifications.setLongTurnAlert"
+>;
+
+function renderLongTurnAlert(host: {
+  readonly supportsAlert: boolean;
+  readonly initialThresholdMs: number | null;
+}): { readonly setRequests: LongTurnAlertSetRequest[] } {
+  const setRequests: LongTurnAlertSetRequest[] = [];
+  let thresholdMs = host.initialThresholdMs;
+  const unsupported = (method: string): HostRpcError =>
+    new HostRpcError({
+      code: "E_HOST_UNSUPPORTED",
+      message: `The host does not serve '${method}'`,
+      requestId: "req-1",
+      method,
+      fatalDetails: null,
+    });
+  const spine = new HostClient<HostRpcRegistry>({
+    registry: hostRpcRegistry,
+    invalidator: { invalidateHostScope: () => undefined },
+    findHostById: (hostId) =>
+      hostId === mockLocalHostEntry.hostId ? mockLocalHostEntry : null,
+    messenger: new MockHostMessenger<HostRpcRegistry>({
+      registry: hostRpcRegistry,
+      requestId: () => "req-1",
+      handlers: {
+        "host.notifications.getConfig": () => makeNotificationConfig(),
+        "host.notificationHooks.status": () => makeHooksStatus(undefined),
+        "host.notifications.getLongTurnAlert": () => {
+          if (!host.supportsAlert) {
+            throw unsupported("host.notifications.getLongTurnAlert");
+          }
+          return { thresholdMs };
+        },
+        "host.notifications.setLongTurnAlert": (params) => {
+          setRequests.push(params);
+          thresholdMs = params.thresholdMs;
+          return { thresholdMs };
+        },
+      },
+    }),
+  });
+  spine.setRequestContext(
+    createRequestContextFixture({ origin: "renderer", bearerToken: "tok-1" }),
+  );
+  const client = spine.createRequester(mockLocalHostEntry);
+  const queryClient = new QueryClient({
+    defaultOptions: {
+      queries: { retry: false },
+      mutations: { retry: false },
+    },
+  });
+  render(<NotificationsSettingsPanelForClient client={client} />, {
+    wrapper: (props: { readonly children: ReactNode }): ReactNode => (
+      <Providers queryClient={queryClient}>{props.children}</Providers>
+    ),
+  });
+  return { setRequests };
+}
+
+function amountField(): HTMLInputElement {
+  const field = screen.getByLabelText("Turn alert duration");
+  if (!(field instanceof HTMLInputElement)) {
+    throw new Error("Expected the duration amount to be an input");
+  }
+  return field;
+}
+
+describe("<NotificationsSettingsPanel /> long-turn alert", () => {
+  it("is off by default, with no duration fields", async () => {
+    renderLongTurnAlert({ supportsAlert: true, initialThresholdMs: null });
+
+    const toggle = await screen.findByRole("switch", {
+      name: LONG_TURN_ALERT_LABEL,
+    });
+    expect(toggle.getAttribute("data-state")).toBe("unchecked");
+    expect(screen.queryByLabelText("Turn alert duration")).toBeNull();
+  });
+
+  it("switches on at four hours and off with null", async () => {
+    const { setRequests } = renderLongTurnAlert({
+      supportsAlert: true,
+      initialThresholdMs: null,
+    });
+
+    fireEvent.click(
+      await screen.findByRole("switch", { name: LONG_TURN_ALERT_LABEL }),
+    );
+    await waitFor(() => {
+      expect(amountField().value).toBe("4");
+    });
+    expect(setRequests).toEqual([{ thresholdMs: 4 * HOUR_MS }]);
+    expect(
+      screen.getByRole("combobox", { name: "Turn alert duration unit" })
+        .textContent,
+    ).toBe("hours");
+
+    fireEvent.click(
+      screen.getByRole("switch", { name: LONG_TURN_ALERT_LABEL }),
+    );
+    await waitFor(() => {
+      expect(screen.queryByLabelText("Turn alert duration")).toBeNull();
+    });
+    expect(setRequests).toEqual([
+      { thresholdMs: 4 * HOUR_MS },
+      { thresholdMs: null },
+    ]);
+  });
+
+  it("sends the new milliseconds when the amount or the unit is edited", async () => {
+    const { setRequests } = renderLongTurnAlert({
+      supportsAlert: true,
+      initialThresholdMs: 4 * HOUR_MS,
+    });
+    await waitFor(() => {
+      expect(amountField().value).toBe("4");
+    });
+
+    fireEvent.change(amountField(), { target: { value: "6" } });
+    fireEvent.keyDown(amountField(), { key: "Enter" });
+    await waitFor(() => {
+      expect(setRequests).toEqual([{ thresholdMs: 6 * HOUR_MS }]);
+    });
+
+    await waitFor(() => {
+      expect(amountField().value).toBe("6");
+    });
+    fireEvent.keyDown(
+      screen.getByRole("combobox", { name: "Turn alert duration unit" }),
+      { key: "ArrowDown" },
+    );
+    const days = screen.getByRole("option", { name: "days" });
+    fireEvent.focus(days);
+    fireEvent.keyDown(days, { key: "Enter" });
+    await waitFor(() => {
+      expect(setRequests).toEqual([
+        { thresholdMs: 6 * HOUR_MS },
+        { thresholdMs: 6 * 86_400_000 },
+      ]);
+    });
+  });
+
+  it("restores the value and sends nothing for an amount that is not a positive whole duration", async () => {
+    const { setRequests } = renderLongTurnAlert({
+      supportsAlert: true,
+      initialThresholdMs: 4 * HOUR_MS,
+    });
+    await waitFor(() => {
+      expect(amountField().value).toBe("4");
+    });
+
+    for (const invalid of ["0", "-3", "", "1.0000000000001"]) {
+      fireEvent.change(amountField(), { target: { value: invalid } });
+      fireEvent.keyDown(amountField(), { key: "Enter" });
+      await waitFor(() => {
+        expect(amountField().value).toBe("4");
+      });
+    }
+    expect(setRequests).toEqual([]);
+  });
+
+  it("draws no row for a host that answers E_HOST_UNSUPPORTED, and the rest of the panel stays", async () => {
+    renderLongTurnAlert({ supportsAlert: false, initialThresholdMs: null });
+
+    await screen.findByRole("switch", {
+      name: "Needs action In-app notifications",
+    });
+    await waitFor(() => {
+      expect(
+        screen.queryByRole("switch", { name: LONG_TURN_ALERT_LABEL }),
+      ).toBeNull();
+    });
+  });
+});

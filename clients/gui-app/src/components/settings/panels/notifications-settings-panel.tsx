@@ -20,6 +20,12 @@ import { Switch } from "@/components/ui/switch";
 import { useHostNotificationsConfigForClient } from "@/hooks/host/use-host-notifications-config-query";
 import { useHostNotificationsSetConfigForClient } from "@/hooks/host/use-host-notifications-set-config-mutation";
 import {
+  useHostLongTurnAlertForClient,
+  useHostSetLongTurnAlertForClient,
+  type LongTurnAlertQuery,
+  type SetLongTurnAlertMutation,
+} from "@/hooks/host/use-host-notifications-long-turn-alert";
+import {
   useNotificationHooksSaveForClient,
   useNotificationHooksStatusForClient,
   useNotificationHooksTestForClient,
@@ -28,6 +34,7 @@ import {
   type NotificationHooksTestMutation,
 } from "@/hooks/host/use-notification-hooks-query";
 import { NotificationHooksSection } from "@/components/settings/panels/notification-hooks-section";
+import { NotificationLongTurnAlertRow } from "@/components/settings/panels/notification-long-turn-alert-row";
 import {
   HostScopeConnecting,
   HostScopeGate,
@@ -92,6 +99,8 @@ export function NotificationsSettingsPanel() {
       scope={scope}
       configQuery={useHostNotificationsConfigForClient(scope.client)}
       setConfig={useHostNotificationsSetConfigForClient(scope.client)}
+      longTurnAlertQuery={useHostLongTurnAlertForClient(scope.client)}
+      setLongTurnAlert={useHostSetLongTurnAlertForClient(scope.client)}
       hooksStatusQuery={useNotificationHooksStatusForClient(scope.client)}
       testHook={useNotificationHooksTestForClient(scope.client)}
       saveHooks={useNotificationHooksSaveForClient(scope.client)}
@@ -107,6 +116,8 @@ export function NotificationsSettingsPanelForClient(props: {
       scope={null}
       configQuery={useHostNotificationsConfigForClient(props.client)}
       setConfig={useHostNotificationsSetConfigForClient(props.client)}
+      longTurnAlertQuery={useHostLongTurnAlertForClient(props.client)}
+      setLongTurnAlert={useHostSetLongTurnAlertForClient(props.client)}
       hooksStatusQuery={useNotificationHooksStatusForClient(props.client)}
       testHook={useNotificationHooksTestForClient(props.client)}
       saveHooks={useNotificationHooksSaveForClient(props.client)}
@@ -119,6 +130,8 @@ function NotificationsSettingsPanelContent(props: {
   readonly scope: HostScope | null;
   readonly configQuery: UseQueryResult<NotificationConfig, HostRpcError>;
   readonly setConfig: NotificationSetConfigMutation;
+  readonly longTurnAlertQuery: LongTurnAlertQuery;
+  readonly setLongTurnAlert: SetLongTurnAlertMutation;
   readonly hooksStatusQuery: NotificationHooksStatusQuery;
   readonly testHook: NotificationHooksTestMutation;
   readonly saveHooks: NotificationHooksSaveMutation;
@@ -143,6 +156,10 @@ function NotificationsSettingsPanelContent(props: {
         fill={false}
       >
         {renderNotificationsSettingsContent(props.configQuery, props.setConfig)}
+        <NotificationLongTurnAlertRow
+          query={props.longTurnAlertQuery}
+          setAlert={props.setLongTurnAlert}
+        />
       </SettingsGroup>
       <div className="min-h-0 flex-1">
         {/* Keyed by host. The editor below holds an open hook draft and an
