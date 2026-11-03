@@ -494,11 +494,18 @@ describe("a job that narrows a push run compares against the last green push", (
     const save = job.steps.find((step) =>
       String(step.uses ?? "").startsWith("actions/cache/save@"),
     );
-    expect(save.if).toBe(
-      "matrix.lane != 'build' && github.event_name == 'push'",
-    );
+    expect(save.if).toBe("github.event_name == 'push'");
+    expect(restore.with.path).toBe("${{ matrix.cache }}");
     expect(save.with.path).toBe(restore.with.path);
-    expect(save.with.path.split("\n")).toContain(job.env.NX_CACHE_DIRECTORY);
+    const lanes = Object.fromEntries(
+      job.strategy.matrix.include.map(({ lane, cache }) => [
+        lane,
+        cache.trim().split("\n"),
+      ]),
+    );
+    expect(lanes.lint).toContain(job.env.NX_CACHE_DIRECTORY);
+    expect(lanes.compile).toContain(job.env.NX_CACHE_DIRECTORY);
+    expect(lanes.build).toEqual([".nx/react-compiler-cache"]);
   });
 
   it("browser-regressions.yml: the filter reads the answer from the step's output", () => {

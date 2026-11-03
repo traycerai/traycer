@@ -96,7 +96,22 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        lane: [lint, compile, build]
+        # What each lane carries from the last green push. `build` keeps the
+        # renderer's compiled modules, not Nx's record of the build: that record
+        # holds the whole 285 MB `dist` of every build, and a desktop build that
+        # finds its modules compiled takes about 28 s anyway.
+        include:
+          - lane: lint
+            cache: |
+              .nx/cache
+              .nx/workspace-data/*.db
+              clients/gui-app/.eslintcache
+          - lane: compile
+            cache: |
+              .nx/cache
+              .nx/workspace-data/*.db
+          - lane: build
+            cache: .nx/react-compiler-cache
     # `actions: read` lets the push step below list this workflow's earlier runs.
     permissions:
       contents: read
@@ -157,20 +172,15 @@ jobs:
           package-manager-cache: false
           node-version: "24.20.0"
       # Keyed on what the cached results depend on outside the files they name:
-      # dependency versions for both lanes, and for lint the rule code, the
+      # dependency versions for every lane, and for lint the rule code, the
       # runner, and the files gui-app's design-system rules read
       # (`components.json` and the stylesheets), which ESLint's cache does not
-      # hash. `build` keeps
-      # no cache: its outputs are 60 MB a merge and a changed source misses anyway.
+      # hash.
       - name: Restore the Nx cache
         id: nx-cache
-        if: matrix.lane != 'build'
         uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
         with:
-          path: |
-            .nx/cache
-            .nx/workspace-data/*.db
-            clients/gui-app/.eslintcache
+          path: ${{ matrix.cache }}
           key: ${{ runner.os }}-nx-${{ matrix.lane }}-${{ hashFiles('bun.lock', 'eslint/**', 'clients/gui-app/eslint.config.mjs', 'clients/gui-app/components.json', 'clients/gui-app/scripts/lint-files.mjs', 'clients/gui-app/src/**/*.css') }}-${{ github.sha }}
           restore-keys: |
             ${{ runner.os }}-nx-${{ matrix.lane }}-${{ hashFiles('bun.lock', 'eslint/**', 'clients/gui-app/eslint.config.mjs', 'clients/gui-app/components.json', 'clients/gui-app/scripts/lint-files.mjs', 'clients/gui-app/src/**/*.css') }}-
@@ -180,20 +190,29 @@ jobs:
         env:
           CI: "true"
           WORKSPACE_CHECK_LANE: ${{ matrix.lane }}
-        run: scripts/pre_commit_workspace_checks.sh
+          TRAYCER_REACT_COMPILER_CACHE_DIR: ${{ matrix.lane == 'build' && format('{0}/.nx/react-compiler-cache', github.workspace) || '' }}
+        run: |
+          touch "$RUNNER_TEMP/build-start"
+          scripts/pre_commit_workspace_checks.sh
+      # The build prunes the compiled modules it did not use, so the cache holds
+      # one build's worth. A run that built no renderer used none and keeps all.
+      - name: Keep only the compiled modules this build used
+        if: matrix.lane == 'build' && github.event_name == 'push'
+        run: |
+          cache=.nx/react-compiler-cache
+          if [ -n "$(find "$cache" -type f -newer "$RUNNER_TEMP/build-start" -print -quit 2>/dev/null)" ]; then
+            find "$cache" -type f ! -newer "$RUNNER_TEMP/build-start" -delete
+          fi
       # Only a push saves, so a pull request's run starts from the last `main`
       # entry and adds nothing to the repository's cache quota. Only a job that
       # passed saves: when `--fix` repairs a violation Nx records the lint task as
       # passed and the job fails on the dirty tree, and that record, restored by
       # the re-run of the failed job, would turn the commit green.
       - name: Save the Nx cache
-        if: matrix.lane != 'build' && github.event_name == 'push'
+        if: github.event_name == 'push'
         uses: actions/cache/save@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
         with:
-          path: |
-            .nx/cache
-            .nx/workspace-data/*.db
-            clients/gui-app/.eslintcache
+          path: ${{ matrix.cache }}
           key: ${{ steps.nx-cache.outputs.cache-primary-key }}
 
   pre-commit:
