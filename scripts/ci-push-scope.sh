@@ -123,7 +123,7 @@ case "${workflow}" in
   # brings a jar and a `gradlew` with it.
   #
   # It matches generously on purpose, because the pinned action
-  # (`gradle/actions@3f5f9ad`, `sources/src/wrapper-validation/find.ts`) selects
+  # (`gradle/actions/wrapper-validation`, `sources/src/wrapper-validation/find.ts`) selects
   # a jar by `unhomoglyph(name).endsWith("gradle-wrapper.jar")` - a lookalike
   # character can hide every token below, and the action's own fixtures include
   # one. So any path that is not plain ASCII runs the validation too. The build
