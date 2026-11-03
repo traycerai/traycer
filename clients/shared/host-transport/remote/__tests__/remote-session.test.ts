@@ -4491,8 +4491,10 @@ describe("RemoteSession wake", () => {
   it("wakes once the parked request has PROVABLY failed pre-send - the caller-Retry path", async () => {
     // Jitter at its ceiling makes both waits exact: the third failure arms the
     // 4s rung, and a wake collapses it to 1s. The claim is about which of the
-    // two the fourth dial waited for, so it is timed to that dial; the Noise
-    // handshake after it runs on real crypto and a loaded runner's CPU.
+    // two the fourth dial waited for, so it is timed to the moment that dial
+    // starts: its grant request, which comes before any Noise work. Everything
+    // after it, the handshake and the open the relay records, runs on real
+    // crypto and a loaded runner's CPU.
     const jitterPin = vi.spyOn(Math, "random").mockReturnValue(1);
     const relay = new FakeRelayHost();
     relay.floorRpcManifest = { "host.status": { major: 1, minor: 0 } };
@@ -4504,8 +4506,14 @@ describe("RemoteSession wake", () => {
       openIndex < 3
         ? { kind: "fatal", details: retryableDropDetails() }
         : { kind: "ack" };
+    const options = buildSessionOptions(relay, lease, null);
+    const dialStartedAt: number[] = [];
     const session = new RemoteSession({
-      ...buildSessionOptions(relay, lease, null),
+      ...options,
+      grantProvider: () => {
+        dialStartedAt.push(Date.now());
+        return options.grantProvider();
+      },
       rpcRegistry: statusRpcRegistry(),
     });
     try {
@@ -4532,11 +4540,12 @@ describe("RemoteSession wake", () => {
       // failure it just proved has accelerated the NEXT redial rather than
       // leaving it on the tier that failure escalated to.
       const rejectedAt = Date.now();
-      await vi.waitFor(() => expect(relay.openBearers).toHaveLength(4), {
+      await vi.waitFor(() => expect(dialStartedAt).toHaveLength(4), {
         timeout: 3_000,
         interval: 20,
       });
-      expect(Date.now() - rejectedAt).toBeLessThan(3_000);
+      const fourthDialAt = dialStartedAt.at(-1) ?? Number.POSITIVE_INFINITY;
+      expect(fourthDialAt - rejectedAt).toBeLessThan(3_000);
       await vi.waitFor(() => expect(session.isReady()).toBe(true), WAIT);
       expect(relay.openBearers).toHaveLength(4);
       expect(relay.errors).toEqual([]);

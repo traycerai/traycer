@@ -297,7 +297,7 @@ describe("useComposerHashPasteAdapter - F1: a completed hash survives while a ba
         throw new Error("actual putImage was never captured");
       }
       const hash = await actual(bytes);
-      if (!isSlowFile) fastPutResolved = true;
+      if (bytesEqual(bytes, FAST_BYTES)) fastPutResolved = true;
       return hash;
     });
 
