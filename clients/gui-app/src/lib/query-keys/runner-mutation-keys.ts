@@ -130,6 +130,7 @@ export const runnerMutationKeys = {
   // Settings → Alerts, the push rows. Both act on the ONE device this
   // renderer runs on, so a static key is the whole scope - there is no second
   // OS permission to hold a separate entry for.
+  pushRegistrationRetry: () => ["runner.pushRegistration.retry"] as const,
   pushPermissionRequest: () => ["runner.pushPermission.request"] as const,
   pushPermissionOpenSettings: () =>
     ["runner.pushPermission.openSettings"] as const,

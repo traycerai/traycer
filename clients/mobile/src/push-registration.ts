@@ -5,7 +5,8 @@
  * Everything here is BEST-EFFORT around the login session: a denied
  * permission or a failed HTTP call costs pushes, not notifications (the
  * in-app feed and its poll are unaffected). Accordingly the lifecycle paths
- * below never throw into a caller; failures are logged and swallowed.
+ * below never throw into a caller; registration failures update Settings and
+ * report a fixed failure category through the existing mobile Sentry channel.
  *
  * The permission methods behind `IRunnerHost.pushPermission` propagate plugin
  * failures, and `setMutedSeverities()` propagates storage failures. A muted-set
@@ -32,9 +33,11 @@
  * and replayed on subscribe.
  */
 import type { PluginListenerHandle } from "@capacitor/core";
+import { captureMessage, withScope } from "@sentry/browser";
 import { hostNotificationSeveritySchema } from "@traycer/protocol/host/notifications/host-notifications";
 import type {
   PushPermissionState,
+  PushRegistrationState,
   PushSeverity,
   StoredCredentials,
   SystemResumeEvent,
@@ -57,6 +60,10 @@ import type {
  * states in between.
  */
 const SCHEDULED_REGISTRATION_DELAY_MS = 1_000;
+const PROVIDER_REGISTRATION_TIMEOUT_MS = 20_000;
+// Four routine refreshes/hour per device leave room in the account's 20/hour
+// budget for sign-ins and preference changes. The first resume always refreshes.
+const RESUME_REVALIDATION_INTERVAL_MS = 15 * 60_000;
 
 /** Capacitor's PermissionState, spelled out (no type dep on the plugin). */
 export type CapacitorPushPermissionState =
@@ -132,14 +139,7 @@ export interface PushTokenSource {
   subscribe(listener: (change: TokenStoreChange) => void): Disposable;
 }
 
-/**
- * The shell's foreground-resume edge (`IRunnerHost.onSystemResumed`, which
- * `MobileRunnerHost` satisfies structurally). Registration follows it for ONE
- * reason: a person who tapped "Don't Allow" and later flipped Traycer on in
- * the OS Settings app comes back to the SAME running app - iOS does not
- * restart it - and without a resume hook nothing would notice until the next
- * cold start or sign-in.
- */
+/** Foreground resume rechecks permission and periodically repairs registration. */
 export interface SystemResumeSource {
   onSystemResumed(handler: (event: SystemResumeEvent) => void): Disposable;
 }
@@ -190,8 +190,16 @@ export interface MobilePushRegistrationOptions {
 
 export class MobilePushRegistration {
   private started = false;
+  private state: PushRegistrationState = "pending";
+  private readonly registrationHandlers = new Set<() => void>();
+  private providerRegistrationTimer: number | null = null;
+  private registrationRevision = 0;
+  private lastResumeRevalidationAt: number | null = null;
   /** Provider token from the plugin's `registration` event. */
   private deviceToken: string | null = null;
+  // A refresh can fail before returning an address. Sign-out must still remove
+  // the last address we registered: plain sign-out does not revoke its family.
+  private cleanupToken: string | null = null;
   /**
    * Latest access token seen while signed in. Retained IN MEMORY ONLY so the
    * sign-out unregister has a bearer to send - the token-store change event
@@ -201,12 +209,13 @@ export class MobilePushRegistration {
    */
   private bearerToken: string | null = null;
   /**
-   * `userId:deviceToken:<sorted muted set>` the server is KNOWN to hold (see
+   * `userId:deviceToken:<sorted muted set>` last accepted by the server (see
    * `registrationKey`), or `null` when that is not known. A routine bearer
    * rotation (which also fires the token-store change event) leaves all
    * three unchanged, so it re-sends nothing; a provider-token rotation or a
    * muted-set change is a mismatch, and every path that compares the key
-   * sends again. Cleared while a request is on the wire and set only on an
+   * sends again. Resume periodically bypasses this key because the server can
+   * prune a row without notifying the app. Cleared while a request is on the wire and set only on an
    * accepted response, so a failed or lost request stays a mismatch for the
    * next edge to retry (see `registerCurrentToken`).
    */
@@ -241,18 +250,17 @@ export class MobilePushRegistration {
 
     void this.options.plugin
       .addListener("registration", (token) => {
+        this.clearProviderRegistrationTimer();
         this.deviceToken = token.value;
+        this.cleanupToken = token.value;
         void this.registerCurrentToken();
       })
-      .catch(logPushFailure("attach registration listener"));
+      .catch(() => this.failProviderRegistration("listener-error"));
     void this.options.plugin
-      .addListener("registrationError", (error) => {
-        // iOS: missing entitlement/provisioning, or APNs unreachable. Android:
-        // Firebase reached but refused to mint a token. The app works without
-        // pushes; say why once instead of failing anything.
-        console.warn("[push] registration failed", error.error);
+      .addListener("registrationError", () => {
+        this.failProviderRegistration("provider-error");
       })
-      .catch(logPushFailure("attach registrationError listener"));
+      .catch(() => this.failProviderRegistration("listener-error"));
     void this.options.plugin
       .addListener("pushNotificationActionPerformed", (action) => {
         this.emitClick(activationPayloadFromPushData(action.notification.data));
@@ -268,10 +276,8 @@ export class MobilePushRegistration {
     });
     // App start while already signed in: same path as a sign-in event.
     void this.ensureRegistered(tokenStore);
-    // Foreground resume: the narrow late-grant path, NOT a re-run of the
-    // sign-in path (see `registerIfGranted`).
     systemResume.onSystemResumed(() => {
-      void this.registerIfGranted(false);
+      void this.revalidateOnResume();
     });
   }
 
@@ -283,6 +289,85 @@ export class MobilePushRegistration {
   async permissionState(): Promise<PushPermissionState> {
     const permission = await this.options.plugin.checkPermissions();
     return toPushPermissionState(permission.receive);
+  }
+
+  registrationState(): PushRegistrationState {
+    if (
+      this.state === "registered" &&
+      this.wantedRegistrationKey() !== this.lastRegisteredKey
+    ) {
+      return "pending";
+    }
+    return this.state;
+  }
+
+  onRegistrationChange(handler: () => void): Disposable {
+    this.registrationHandlers.add(handler);
+    return { dispose: () => this.registrationHandlers.delete(handler) };
+  }
+
+  async retryRegistration(): Promise<void> {
+    await this.registerIfGranted(false, true);
+  }
+
+  private async revalidateOnResume(): Promise<void> {
+    // A denied/signed-out resume must not spend the next late-grant repair.
+    try {
+      if (this.tokenSource === null || (await this.tokenSource.get()) === null)
+        return;
+      if ((await this.permissionState()) !== "granted") return;
+    } catch {
+      this.setRegistrationState("failed");
+      reportPushRegistrationFailure("registration-error");
+      return;
+    }
+    if (this.providerRegistrationTimer !== null) return;
+    const now = Date.now();
+    if (
+      this.lastResumeRevalidationAt !== null &&
+      now - this.lastResumeRevalidationAt < RESUME_REVALIDATION_INTERVAL_MS
+    )
+      return;
+    this.lastResumeRevalidationAt = now;
+    await this.registerIfGranted(true, true);
+  }
+
+  private setRegistrationState(state: PushRegistrationState): void {
+    if (this.state === state) return;
+    this.state = state;
+    for (const handler of this.registrationHandlers) handler();
+  }
+
+  private clearProviderRegistrationTimer(): void {
+    if (this.providerRegistrationTimer === null) return;
+    window.clearTimeout(this.providerRegistrationTimer);
+    this.providerRegistrationTimer = null;
+  }
+
+  private failProviderRegistration(reason: PushRegistrationFailure): void {
+    this.clearProviderRegistrationTimer();
+    this.registrationRevision += 1;
+    this.deviceToken = null;
+    this.lastRegisteredKey = null;
+    this.setRegistrationState("failed");
+    reportPushRegistrationFailure(reason);
+  }
+
+  private async registerWithProvider(): Promise<void> {
+    // Do not spend another provider request while its callback is pending.
+    if (this.providerRegistrationTimer !== null) return;
+    this.registrationRevision += 1;
+    this.lastRegisteredKey = null;
+    this.deviceToken = null;
+    this.setRegistrationState("pending");
+    this.providerRegistrationTimer = window.setTimeout(() => {
+      this.failProviderRegistration("provider-timeout");
+    }, PROVIDER_REGISTRATION_TIMEOUT_MS);
+    try {
+      await this.options.plugin.register();
+    } catch {
+      this.failProviderRegistration("provider-error");
+    }
   }
 
   /**
@@ -299,7 +384,7 @@ export class MobilePushRegistration {
     const permission = await this.options.plugin.requestPermissions();
     const state = toPushPermissionState(permission.receive);
     if (state === "granted") {
-      await this.registerIfGranted(true);
+      await this.registerIfGranted(true, true);
     }
     return state;
   }
@@ -391,44 +476,31 @@ export class MobilePushRegistration {
       // Android build with no `google-services.json` gives up: Firebase never
       // initialized, so the call REJECTS rather than reporting through
       // `registrationError`, and the catch below logs it.
-      await this.options.plugin.register();
-      await this.registerCurrentToken();
-    } catch (error) {
-      logPushFailure("ensure registration")(error);
+      if (this.deviceToken === null) {
+        await this.registerWithProvider();
+      } else {
+        await this.registerCurrentToken();
+      }
+    } catch {
+      this.setRegistrationState("failed");
+      reportPushRegistrationFailure("registration-error");
     }
   }
 
   /**
-   * The late-grant path, shared by BOTH ways a permission can turn on after
-   * the sign-in prompt was refused: the person enabled Traycer in the OS
-   * Settings app and came back to the same running app (the foreground-resume
-   * edge), or they tapped Enable on the Settings row and granted the prompt.
-   * The same path also sends a muted-set change (`setMutedSeverities`), and
-   * the resume edge is that send's retry when it failed.
-   *
-   * Deliberately narrower than `ensureRegistered`, cheapest gate first, so a
-   * resume is free for everyone it does not concern:
-   *
-   *   1. registered as it is now -> in-memory and local-storage reads, stop
-   *                                 (the common case)
-   *   2. never started           -> no token source to read, stop
-   *   3. signed out              -> local credential read, stop
-   *   4. permission not granted  -> local OS read, stop (still refused)
-   *   5. register once           -> APNs/FCM when no provider token is known
-   *                                 yet, + one authn call; the key set by
-   *                                 `registerCurrentToken` then makes every
-   *                                 later resume stop at (1)
-   *
-   * `requestPermissions` is never called from here: a resume must not raise
-   * the OS prompt (and on iOS it cannot after a refusal anyway). The one
-   * caller that DID prompt passes `permissionKnownGranted` so gate (4) is not
-   * re-asked of the OS immediately after it just answered.
+   * Resume refreshes bypass the local registration key: the server may have
+   * pruned the row or its old family may no longer be live. The existing upsert
+   * rebinds it to the credential we hold now; a revoked credential still fails
+   * authorization and is shown as a failure, never as a repaired registration.
+   * No resume or retry raises an OS permission prompt.
    */
   private async registerIfGranted(
     permissionKnownGranted: boolean,
+    refresh: boolean,
   ): Promise<void> {
     const wantedKey = this.wantedRegistrationKey();
-    if (wantedKey !== null && wantedKey === this.lastRegisteredKey) return;
+    if (!refresh && wantedKey !== null && wantedKey === this.lastRegisteredKey)
+      return;
     const tokenStore = this.tokenSource;
     if (tokenStore === null) return;
     try {
@@ -440,15 +512,16 @@ export class MobilePushRegistration {
       }
       this.bearerToken = credentials.token;
       this.userId = credentials.user.id;
-      // With a provider token already in hand only the key's other segments
-      // moved. Asking the OS again would hand the same token back through
-      // the `registration` event, whose own send would race this one.
-      if (this.deviceToken === null) {
-        await this.options.plugin.register();
+      // A repair asks the provider again too: an address pruned after
+      // BadDeviceToken may need replacing, not just uploading again.
+      if (refresh || this.deviceToken === null) {
+        await this.registerWithProvider();
+      } else {
+        await this.registerCurrentToken();
       }
-      await this.registerCurrentToken();
-    } catch (error) {
-      logPushFailure("register after permission grant")(error);
+    } catch {
+      this.setRegistrationState("failed");
+      reportPushRegistrationFailure("registration-error");
     }
   }
 
@@ -478,7 +551,9 @@ export class MobilePushRegistration {
     const mutedSeverities = readMutedSeverities(userId);
     const key = registrationKey(userId, token, mutedSeverities);
     if (this.lastRegisteredKey === key) return;
+    const revision = this.registrationRevision;
     this.lastRegisteredKey = null;
+    this.setRegistrationState("pending");
     this.registrationInFlight = true;
     let result: PushTokenFetchResult;
     try {
@@ -492,22 +567,45 @@ export class MobilePushRegistration {
           mutedSeverities,
         },
       );
-    } catch (error) {
-      logPushFailure("register token")(error);
+    } catch {
+      if (
+        this.bearerToken === bearer &&
+        revision === this.registrationRevision
+      ) {
+        this.setRegistrationState("failed");
+      }
+      reportPushRegistrationFailure("upload-error");
       return;
     } finally {
       this.registrationInFlight = false;
+      const wantedKey = this.wantedRegistrationKey();
+      if (
+        wantedKey !== null &&
+        (wantedKey !== key ||
+          this.bearerToken !== bearer ||
+          revision !== this.registrationRevision)
+      ) {
+        this.scheduleRegistration();
+      }
     }
     if (result.kind !== "ok") {
-      console.warn("[push] token registration was not accepted", result.kind);
+      if (
+        this.bearerToken === bearer &&
+        revision === this.registrationRevision
+      ) {
+        this.setRegistrationState("failed");
+      }
+      reportPushRegistrationFailure(result.kind);
       return;
     }
     // Record the key only if this login is still the current one: a sign-out
     // that landed during the HTTP round trip already cleared the guard, and
     // restoring it here would make the NEXT sign-in of this same user skip
     // registering a row the sign-out just removed.
-    if (this.bearerToken === bearer) {
+    if (this.bearerToken === bearer && revision === this.registrationRevision) {
       this.lastRegisteredKey = key;
+      if (this.wantedRegistrationKey() === key)
+        this.setRegistrationState("registered");
     }
     const wantedKey = this.wantedRegistrationKey();
     if (wantedKey !== null && wantedKey !== this.lastRegisteredKey) {
@@ -541,7 +639,7 @@ export class MobilePushRegistration {
     this.cancelScheduledRegistration();
     this.scheduledRegistrationTimer = window.setTimeout(() => {
       this.scheduledRegistrationTimer = null;
-      void this.registerIfGranted(false);
+      void this.registerIfGranted(false, false);
     }, SCHEDULED_REGISTRATION_DELAY_MS);
   }
 
@@ -553,7 +651,11 @@ export class MobilePushRegistration {
 
   private async unregisterAfterSignOut(): Promise<void> {
     const bearer = this.bearerToken;
-    const token = this.deviceToken;
+    const token = this.cleanupToken;
+    this.registrationRevision += 1;
+    this.clearProviderRegistrationTimer();
+    this.lastResumeRevalidationAt = null;
+    this.setRegistrationState("pending");
     this.bearerToken = null;
     this.userId = null;
     this.lastRegisteredKey = null;
@@ -583,6 +685,35 @@ export class MobilePushRegistration {
       logPushFailure("unregister token")(error);
     }
   }
+}
+
+type PushRegistrationFailure =
+  | "provider-error"
+  | "provider-timeout"
+  | "listener-error"
+  | "registration-error"
+  | "upload-error"
+  | "unauthorized"
+  | "rejected"
+  | "network-error";
+
+function reportPushRegistrationFailure(reason: PushRegistrationFailure): void {
+  // Native/HTTP errors can contain credentials or addresses. Only this closed
+  // vocabulary leaves the process, without inherited user data or breadcrumbs.
+  withScope((scope) => {
+    scope.clear();
+    scope.addEventProcessor((event) => ({
+      event_id: event.event_id,
+      timestamp: event.timestamp,
+      platform: event.platform,
+      release: event.release,
+      environment: event.environment,
+      level: "error",
+      message: "Mobile push registration failed",
+      tags: { "push.failure": reason },
+    }));
+    captureMessage("Mobile push registration failed", "error");
+  });
 }
 
 function logPushFailure(context: string): (error: unknown) => void {
