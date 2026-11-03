@@ -67,7 +67,7 @@ export function SwitcherTerminalsList(props: SwitcherListProps) {
   );
 
   return (
-    <div className="flex min-h-0 flex-1 flex-col gap-0.5 overflow-x-hidden overflow-y-auto overscroll-contain p-1 pb-safe-bottom">
+    <div className="flex min-h-0 flex-1 flex-col gap-0.5 overflow-x-hidden overflow-y-auto overscroll-contain will-change-transform p-1 pb-safe-bottom">
       {/* Editor-gated: a viewer's create is server-rejected, so an ungated row
           would only lead to a dead end. Inside the scroll region and above the
           items, so it is the first thing in the list either way. */}
