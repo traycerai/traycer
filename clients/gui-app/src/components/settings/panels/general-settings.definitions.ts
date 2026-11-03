@@ -177,9 +177,9 @@ export const GENERAL = defineSettingsSection("general", {
     kind: "row",
     group: "agents",
     search: { anchor: "general-agent-feedback" },
-    label: "Agent feedback",
+    label: "Let agents draft feedback for you to review",
     description:
-      "Let agents send Traycer's maintainers problems and suggestions about Traycer. Agents are told to describe the need in general terms, not your work, and reports carry no account or chat ids.",
+      "Agents can draft problems and suggestions about Traycer for its maintainers. Nothing is sent until you review a draft and press Send.",
     availableWhen: isAgentRolesRowAvailable,
     keywords: ["feedback", "suggestions", "telemetry", "privacy", "sentry"],
   },

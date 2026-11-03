@@ -5302,6 +5302,14 @@ function toolCallMcpAppStamp(
   return mcpApp === undefined ? null : block.mcpApp;
 }
 
+/** A tool call's feedback draft, or `null`, normalizing older records that omit the field. */
+function toolCallFeedbackDraftStamp(
+  block: Extract<OpenContentBlock, { type: "tool_call" }>,
+): Extract<OpenContentBlock, { type: "tool_call" }>["feedbackDraft"] {
+  const feedbackDraft: unknown = block.feedbackDraft;
+  return feedbackDraft === undefined ? null : block.feedbackDraft;
+}
+
 const BLOCK_HANDLERS: {
   [K in OpenContentBlock["type"]]: (
     block: Extract<OpenContentBlock, { type: K }>,
@@ -5380,6 +5388,7 @@ const BLOCK_HANDLERS: {
     imageResults: block.imageResults,
     artifact: toolCallArtifactStamp(block),
     mcpApp: toolCallMcpAppStamp(block),
+    feedbackDraft: toolCallFeedbackDraftStamp(block),
   }),
   file_change: (block) => ({
     kind: "file_change",

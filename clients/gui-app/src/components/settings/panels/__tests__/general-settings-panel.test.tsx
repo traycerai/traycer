@@ -352,7 +352,7 @@ describe("GeneralSettingsPanel", () => {
 
     renderPanel();
 
-    const toggle = screen.getByRole("switch", { name: "Agent feedback" });
+    const toggle = screen.getByRole("switch", { name: "Let agents draft feedback for you to review" });
     await waitFor(() => expect(toggle.hasAttribute("disabled")).toBe(false));
     expect(toggle.getAttribute("aria-checked")).toBe("true");
     fireEvent.click(toggle);

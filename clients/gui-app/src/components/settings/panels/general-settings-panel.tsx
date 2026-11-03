@@ -160,7 +160,7 @@ export function GeneralSettingsPanel() {
                   onCheckedChange={(enabled) => {
                     setAgentFeedback.mutate(enabled);
                   }}
-                  aria-label="Agent feedback"
+                  aria-label="Let agents draft feedback for you to review"
                 />
               }
             />
