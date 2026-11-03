@@ -528,6 +528,58 @@ describe("a job that narrows a push run compares against the last green push", (
     expect(lanes.build).toEqual([".nx/react-compiler-cache"]);
   });
 
+  // A fresh checkout gives every file a new mtime, so an ESLint cache on the
+  // default strategy reads as all stale, and a cache the lane does not carry
+  // starts empty: either way the project is linted cold on every push.
+  it("pre-commit.yml: the lint lane carries every ESLint cache, keyed by content", () => {
+    const { workflow } = workflows.find(
+      ({ file }) => file === "pre-commit.yml",
+    );
+    const lint = workflow.jobs["workspace-checks"].strategy.matrix.include
+      .find(({ lane }) => lane === "lint")
+      .cache.trim()
+      .split("\n");
+    const { workspaces } = JSON.parse(
+      readFileSync(join(REPO_ROOT, "package.json"), "utf8"),
+    );
+    const projects = workspaces.flatMap((pattern) =>
+      pattern.endsWith("/*")
+        ? readdirSync(join(REPO_ROOT, pattern.slice(0, -2)), {
+            withFileTypes: true,
+          })
+            .filter((entry) => entry.isDirectory())
+            .map((entry) => `${pattern.slice(0, -2)}/${entry.name}`)
+        : [pattern],
+    );
+    const cached = [];
+    for (const project of projects) {
+      let manifest;
+      try {
+        manifest = readFileSync(
+          join(REPO_ROOT, project, "package.json"),
+          "utf8",
+        );
+      } catch {
+        continue;
+      }
+      const script = JSON.parse(manifest).scripts?.["lint:files"] ?? "";
+      // gui-app runs its linters from a script, which `lint:files` names.
+      const runner = /^bun (scripts\/\S+\.mjs)$/.exec(script);
+      const command = runner
+        ? readFileSync(join(REPO_ROOT, project, runner[1]), "utf8")
+        : script;
+      if (!/eslint/.test(command) || !/["\s]--cache["\s]/.test(command)) {
+        continue;
+      }
+      cached.push(project);
+      expect(command, project).toMatch(/--cache-strategy["',\s]+content/);
+      expect(lint, project).toContain(`${project}/.eslintcache`);
+    }
+    expect(cached).toEqual(
+      expect.arrayContaining(["protocol", "clients/gui-app"]),
+    );
+  });
+
   it("browser-regressions.yml: the filter reads the answer from the step's output", () => {
     const { workflow } = workflows.find(
       ({ file }) => file === "browser-regressions.yml",

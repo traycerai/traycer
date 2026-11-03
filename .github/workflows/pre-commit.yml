@@ -114,6 +114,8 @@ jobs:
               .nx/cache
               .nx/workspace-data/*.db
               clients/gui-app/.eslintcache
+              protocol/.eslintcache
+              packages/html-source/.eslintcache
           - lane: compile
             cache: |
               .nx/cache
