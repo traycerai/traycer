@@ -59,6 +59,19 @@ const NEGATIONS: ReadonlyArray<string> = [
 ];
 
 /**
+ * Phrases that also turn up in instructions ("use ty to check the stubs",
+ * "a pixel perfect layout", "I'd love it if you added tests"). They count
+ * only in a message of at most {@link SHORT_MESSAGE_WORDS} words.
+ */
+const SHORT_ONLY_PHRASES: ReadonlySet<string> = new Set([
+  "ty",
+  "perfect",
+  "love it",
+  "love this",
+]);
+const SHORT_MESSAGE_WORDS = 4;
+
+/**
  * A long message is a new instruction that happens to open with "thanks";
  * the prompt is for a message that is mostly the thank-you itself.
  */
@@ -87,7 +100,9 @@ export function matchGratitude(text: string): GratitudeMatchKey | null {
   if (NEGATIONS.some((phrase) => containsPhrase(normalised, phrase))) {
     return null;
   }
+  const short = normalised.split(" ").length <= SHORT_MESSAGE_WORDS;
   for (const [key, phrase] of PHRASES) {
+    if (!short && SHORT_ONLY_PHRASES.has(phrase)) continue;
     if (containsPhrase(normalised, phrase)) return key;
   }
   return null;

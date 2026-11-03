@@ -38,7 +38,8 @@ import {
 } from "@/lib/analytics";
 import { useRegisteredEpicTitle } from "@/lib/epic-selectors";
 import { copyImageBlobPromiseToClipboard } from "@/lib/images/copy-image-to-clipboard";
-import { useOpenLink } from "@/lib/links/open-link";
+import { isMac } from "@/lib/keybindings/platform";
+import { useOpenLinkWithPending } from "@/lib/links/open-link";
 import { cn } from "@/lib/utils";
 import { useShareOnXNudgeStore } from "@/stores/settings/share-on-x-nudge-store";
 
@@ -97,6 +98,10 @@ function shuffled<T>(items: ReadonlyArray<T>): ReadonlyArray<T> {
   return copy;
 }
 
+function pasteShortcut(): string {
+  return isMac() ? "⌘V" : "Ctrl+V";
+}
+
 function ShareOnXDialogContent(props: ShareOnXDialogProps): ReactNode {
   const { epicId, hostId, screenCapture, onClose } = props;
   const [lines] = useState(() => shuffled(SHARE_ON_X_LINES));
@@ -109,10 +114,7 @@ function ShareOnXDialogContent(props: ShareOnXDialogProps): ReactNode {
   const [images, setImages] = useState<
     Readonly<Partial<Record<AnalyticsShareImage, ShareImage>>>
   >(() => (screenCapture === null ? {} : { screen: screenCapture }));
-  const [failed, setFailed] = useState<ReadonlySet<AnalyticsShareImage>>(
-    () => new Set(),
-  );
-  const openLink = useOpenLink();
+  const { openLink, isPending: opening } = useOpenLinkWithPending();
   const recordPosted = useShareOnXNudgeStore((state) => state.recordPosted);
   const recordOptOut = useShareOnXNudgeStore((state) => state.recordOptOut);
   const recordDialogAbandoned = useShareOnXNudgeStore(
@@ -164,7 +166,7 @@ function ShareOnXDialogContent(props: ShareOnXDialogProps): ReactNode {
       : null;
 
   const availableImages = IMAGE_ORDER.filter(
-    (image) => images[image] !== undefined && !failed.has(image),
+    (image) => images[image] !== undefined,
   );
   const chosenImage =
     selectedImage !== null && availableImages.includes(selectedImage)
@@ -214,7 +216,7 @@ function ShareOnXDialogContent(props: ShareOnXDialogProps): ReactNode {
     );
   }
 
-  function postOnX(): void {
+  async function postOnX(): Promise<void> {
     const blob = chosenImage === null ? undefined : images[chosenImage]?.blob;
     // Started inside the click, while the page still holds the person's
     // gesture: the clipboard refuses an image write after it lapses.
@@ -222,7 +224,13 @@ function ShareOnXDialogContent(props: ShareOnXDialogProps): ReactNode {
       blob === undefined
         ? null
         : copyImageBlobPromiseToClipboard(Promise.resolve(blob));
-    void openLink(xPostIntentUrl(text), "app", null);
+    try {
+      await openLink(xPostIntentUrl(text), "app", null);
+    } catch {
+      // X never opened, and the link open has already said so. Nothing was
+      // shared: the dialog stays up and no post is recorded.
+      return;
+    }
     Analytics.getInstance().track(AnalyticsEvent.ShareXOpened, {
       line_id: selectedLine.id,
       edited,
@@ -236,7 +244,7 @@ function ShareOnXDialogContent(props: ShareOnXDialogProps): ReactNode {
       imageCopy.then(
         () => {
           toast.success("Image copied", {
-            description: "Paste it into your post on X with ⌘V.",
+            description: `Paste it into your post on X with ${pasteShortcut()}.`,
           });
         },
         () => {
@@ -355,11 +363,13 @@ function ShareOnXDialogContent(props: ShareOnXDialogProps): ReactNode {
             size="sm"
             variant="ghost"
             className="self-start"
-            onClick={() =>
-              setPageStart(
-                (current) => (current + LINES_PER_PAGE) % lines.length,
-              )
-            }
+            onClick={() => {
+              // The selection moves with the page, so the post on screen is
+              // always the one "Post on X" sends.
+              const next = (pageStart + LINES_PER_PAGE) % lines.length;
+              setPageStart(next);
+              setSelectedId(lines[next].id);
+            }}
           >
             Show {String(LINES_PER_PAGE)} others
           </Button>
@@ -416,12 +426,18 @@ function ShareOnXDialogContent(props: ShareOnXDialogProps): ReactNode {
         <span className="ml-auto hidden text-ui-xs text-muted-foreground md:inline">
           {chosenImage === null
             ? null
-            : "The image is copied when you post. Paste it into X with ⌘V."}
+            : `The image is copied when you post. Paste it into X with ${pasteShortcut()}.`}
         </span>
         <Button type="button" variant="outline" onClick={() => close(false)}>
           Not now
         </Button>
-        <Button type="button" onClick={postOnX}>
+        <Button
+          type="button"
+          disabled={opening}
+          onClick={() => {
+            void postOnX();
+          }}
+        >
           <XLogo className="size-3.5" />
           Post on X
         </Button>
@@ -437,7 +453,10 @@ function ShareOnXDialogContent(props: ShareOnXDialogProps): ReactNode {
           setImages((current) => ({ ...current, [image]: captured }))
         }
         onFailed={(image) =>
-          setFailed((current) => new Set([...current, image]))
+          setImages((current) => {
+            const { [image]: _dropped, ...rest } = current;
+            return rest;
+          })
         }
       />
     </DialogContent>

@@ -36,6 +36,20 @@ describe("matchGratitude", () => {
     expect(matchGratitude(text)).toBeNull();
   });
 
+  it.each([
+    "use ty to check the stubs",
+    "make the pixel perfect layout",
+    "I'd love it if you also added tests",
+  ])("ignores an instruction-like phrase in a longer message: %j", (text) => {
+    expect(matchGratitude(text)).toBeNull();
+  });
+
+  it("matches the same phrases in a short message", () => {
+    expect(matchGratitude("ty")).toBe("thank_you");
+    expect(matchGratitude("that's perfect!")).toBe("perfect");
+    expect(matchGratitude("love this")).toBe("love_it");
+  });
+
   it("ignores a message over 200 characters", () => {
     const body = "x".repeat(200 - "thanks ".length);
     expect(matchGratitude(`thanks ${body}`)).toBe("thank_you");
