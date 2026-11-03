@@ -891,12 +891,12 @@ describe("a tile's find registration", () => {
   async function mountedScope() {
     const task = openTaskTab();
     useTabsStore.setState(stripOf([task.ref], task.ref));
-    const mounted = mount("/", { enabled: true, palette: false });
+    mount("/", { enabled: true, palette: false });
     const agentScope = render(
       <Scope tile={AGENT} task={task} adapter={adapterFor(AGENT)} />,
     );
     await act(() => Promise.resolve());
-    return { task, mounted, agentScope };
+    return { task, agentScope };
   }
 
   it("keeps the generation when the tile replaces its adapter, as a diff refresh does", async () => {

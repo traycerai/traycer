@@ -263,8 +263,8 @@ jobs:
           # The formula needs both macOS descriptors (required) and the Linux
           # descriptors (optional - Linuxbrew). Download whichever exist.
           for platform_key in darwin-arm64 darwin-x64 linux-arm64 linux-x64; do
-            if gh release view "cli-v${VERSION}" --repo "$RELEASE_REPO" --json assets \
-              --jq ".assets[] | select(.name == \"cli-descriptor-${platform_key}.json\") | .url" | grep -q .; then
+            if grep -q . <<<"$(gh release view "cli-v${VERSION}" --repo "$RELEASE_REPO" --json assets \
+              --jq ".assets[] | select(.name == \"cli-descriptor-${platform_key}.json\") | .url")"; then
               gh release download "cli-v${VERSION}" --repo "$RELEASE_REPO" \
                 --pattern "cli-descriptor-${platform_key}.json" \
                 --dir descriptors --clobber

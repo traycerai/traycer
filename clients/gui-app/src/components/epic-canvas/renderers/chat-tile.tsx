@@ -176,7 +176,9 @@ import type { StagedSandboxTarget } from "@/stores/composer/staged-sandbox-store
 import {
   dispatchedWorktreeIntentForDisplay,
   isWindowedTranscript,
+  mergeWorktreeIntentsForDisplay,
   projectQueueWithPendingCancellations,
+  seededWorktreeIntentForDisplay,
   unconfirmedSendActionIdsOf,
   withdrawnMessageDeliveryId,
   type ChatSessionState,
@@ -2442,10 +2444,25 @@ function useChatTileSessionViewModel(
       s.consumedForDispatchByKey[chatWorktreeStagingKeyId]?.clientActionId ??
       null,
   );
-  const inFlightChatWorktreeIntent = dispatchedWorktreeIntentForDisplay(
+  const dispatchedChatWorktreeIntent = dispatchedWorktreeIntentForDisplay(
     state.pendingActions,
     state.acceptedActions,
     consumedWorktreeIntentClientActionId,
+  );
+  const inFlightChatWorktreeIntent = useMemo(
+    () =>
+      mergeWorktreeIntentsForDisplay(
+        seededWorktreeIntentForDisplay(
+          state.messageDelivery,
+          state.worktreeBinding,
+        ),
+        dispatchedChatWorktreeIntent,
+      ),
+    [
+      state.messageDelivery,
+      state.worktreeBinding,
+      dispatchedChatWorktreeIntent,
+    ],
   );
   const stagedChatWorkspacePaths = useMemo<ReadonlySet<string>>(() => {
     if (stagedChatWorktreeIntent === undefined) {
