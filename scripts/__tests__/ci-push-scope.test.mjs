@@ -349,22 +349,26 @@ it("compares a pull request against the merge base, not the base branch's tip", 
 
 // ONE `[[ ]]` test of `$1` against a pattern, and nothing else on the line.
 //
-// The inside is held to a CLOSED WHITELIST of characters rather than to a list
-// of banned openers, because the banned list kept being one shape short: first
-// `$(cmd)`, then `[[ a ]] || cmd || [[ b ]]`, which ends in `]]` like a single
-// test, then `[[ -e <(cmd) ]]`, where process substitution runs a command with
-// no `$(` in sight. A whitelist rejects the shape nobody has thought of yet
-// instead of waiting for it to be found. `<`, `>`, a backtick, `;`, `&`, `{`
-// and both quotes are all outside it, so none of those expansions can be
-// written at all. `[` and `]` have to be inside it for a bracket expression, so
-// `[[` and `]]` are excluded separately: either would end this test and start
-// another, with room for a command between them.
+// The whole form is whitelisted, not a list of banned openers, because the
+// banned list kept being one shape short: first `$(cmd)`; then
+// `[[ a ]] || cmd || [[ b ]]`, which ends in `]]` like a single test; then
+// `[[ -e <(cmd) ]]`, where process substitution runs a command with no `$(` in
+// sight; then `[[ $1 -eq 0 ]]`, where an arithmetic comparison evaluates its
+// operand recursively, so the path `a[$(cmd)]` runs `cmd` with nothing
+// suspicious in the source line at all. Each of those was a real execution
+// under bash 3.2.
+//
+// So the operator must be `=~` or `==` - a pattern match, which evaluates
+// nothing - the left side must be `$1` or `! $1`, and the pattern itself may
+// hold no space, which is what stops a second test and a command being written
+// after the first. `$(` is rejected on top of that, because `$` and `(` both
+// belong to a pattern.
 const BRACKET_TEST = (line) => {
   if (!/^\[\[ .* \]\]$/.test(line)) return false;
   const inside = line.slice("[[ ".length, -" ]]".length);
   return (
-    /^[A-Za-z0-9 !$=~^|()/.,_+*[\]-]*$/.test(inside) &&
-    !/\[\[|\]\]|\$\(/.test(inside)
+    /^(! )?\$1 (=~|==) [A-Za-z0-9^|()/.,_+*[\]$-]+$/.test(inside) &&
+    !inside.includes("$(")
   );
 };
 
@@ -428,6 +432,10 @@ it("rejects every bracket-test line that would run a command", () => {
     "[[ -e >(false) ]]",
     "[[ $1 =~ ^protocol/ ]] && /usr/bin/true",
     "[[ -n ${x:=$(false)} ]]",
+    // An arithmetic comparison evaluates its operand recursively, so the path
+    // `a[$(cmd)]` runs `cmd` - with nothing suspicious in this line at all.
+    "[[ $1 -eq 0 ]]",
+    "[[ $1 =~ $(printf '^a') ]]",
   ]) {
     expect(BRACKET_TEST(line), `${line} would run something`).toBe(false);
   }
