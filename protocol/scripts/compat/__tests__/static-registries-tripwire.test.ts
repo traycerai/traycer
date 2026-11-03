@@ -580,7 +580,8 @@ function wholeHostRegistryValidationLines(
     seen: ReadonlySet<ts.Symbol>,
   ): boolean => {
     const node = unwrapped(expression);
-    if (ts.isElementAccessExpression(node)) return isList(node.expression, seen);
+    if (ts.isElementAccessExpression(node))
+      return isList(node.expression, seen);
     if (ts.isPropertyAccessExpression(node)) {
       return (
         node.name.text === "registry" && isListEntry(node.expression, seen)
