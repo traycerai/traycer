@@ -9,10 +9,7 @@
  */
 import type { TaskHostRow } from "@traycer/protocol/host/task-host-summary";
 import { useSyncExternalStore } from "react";
-import {
-  installLegendListTestClock,
-  restoreLegendListTestClock,
-} from "@/components/chat/__tests__/legend-list-test-environment";
+import { installLegendListTestClock } from "@/components/chat/__tests__/legend-list-test-environment";
 import { TabHostContext } from "@/components/epic-canvas/hooks/use-tab-host-id";
 import { useComposerDraftStore } from "@/stores/composer/composer-draft-store";
 import type { ChatSessionStoreHandle } from "@/stores/chats/chat-session-store";
@@ -10615,22 +10612,32 @@ describe("an owner that takes up each kind of retry request", () => {
     restoreLocks();
   });
 
+  /**
+   * Records every acknowledgement the stage carries. A wake or a readiness
+   * Retry can deliver within the same turn, and delivery clears the stage, so
+   * a later read of `retryHandledId` can find nothing however fast it looks.
+   */
   async function requestAndMount(
     action: "retry-stage" | "retry-creation" | "keep-waiting",
-  ): Promise<string> {
+  ): Promise<{ readonly id: string; readonly handled: readonly string[] }> {
+    const handled: string[] = [];
+    onTestFinished(
+      useStagedSandboxStore.subscribe((state) => {
+        const handledId = state.bySurface[SURFACE]?.retryHandledId;
+        if (handledId !== undefined && handled.at(-1) !== handledId)
+          handled.push(handledId);
+      }),
+    );
     const id = await useStagedSandboxStore
       .getState()
       .requestRetry(SURFACE, "user-1", action);
     if (id === null) throw new Error("the request was not recorded");
     mount();
-    if (vi.isFakeTimers()) await settleAsyncWork();
-    return id;
+    await settleAsyncWork();
+    return { id, handled };
   }
 
   it("runs a wake Retry as one wake of the same sandbox, acknowledges it and settles to one delivery", async () => {
-    // On the real clock: under the fake one this retry is never acknowledged,
-    // however far it is advanced. It waits on the store's outcome, not on time.
-    restoreLegendListTestClock();
     seed({ ...SEEDED, phase: "creating", created: true });
     useStagedSandboxStore.getState().report(SURFACE, {
       failure: { kind: "failed", code: "wake", step: "booting" },
@@ -10645,11 +10652,9 @@ describe("an owner that takes up each kind of retry request", () => {
         }),
       ]),
     );
-    const id = await requestAndMount("retry-stage");
+    const { id, handled } = await requestAndMount("retry-stage");
 
-    await waitFor(() => {
-      expect(readStagedSandbox(SURFACE)?.retryHandledId).toBe(id);
-    });
+    expect(handled).toEqual([id]);
     // The wake's run ends in the ordinary delivery; nothing outlives the case.
     await waitForCreateChats(1);
     await waitFor(() => {
@@ -10660,18 +10665,13 @@ describe("an owner that takes up each kind of retry request", () => {
   });
 
   it("takes a refusal Retry as the readiness plan, acknowledges it and creates no other sandbox", async () => {
-    // On the real clock: under the fake one this retry is never acknowledged,
-    // however far it is advanced. It waits on the store's outcome, not on time.
-    restoreLegendListTestClock();
     seed(SEEDED);
     useStagedSandboxStore.getState().report(SURFACE, {
       failure: { kind: "unverified" },
     });
-    const id = await requestAndMount("retry-stage");
+    const { id, handled } = await requestAndMount("retry-stage");
 
-    await waitFor(() => {
-      expect(readStagedSandbox(SURFACE)?.retryHandledId).toBe(id);
-    });
+    expect(handled).toEqual([id]);
     expect(mocks.createSandbox).not.toHaveBeenCalled();
     expect(mocks.wake).not.toHaveBeenCalled();
     expect(usePendingSandboxSendStore.getState().sends[SEND_ID]).toBeDefined();
@@ -10689,11 +10689,9 @@ describe("an owner that takes up each kind of retry request", () => {
       failure: { kind: "failed", code: "create", step: "creating" },
     });
     const before = readStagedSandbox(SURFACE)?.clientRequestId;
-    const id = await requestAndMount("retry-creation");
+    const { id, handled } = await requestAndMount("retry-creation");
 
-    await waitFor(() => {
-      expect(readStagedSandbox(SURFACE)?.retryHandledId).toBe(id);
-    });
+    expect(handled).toEqual([id]);
     await waitFor(() => {
       expect(mocks.createSandbox).toHaveBeenCalledTimes(1);
     });
@@ -10716,11 +10714,9 @@ describe("an owner that takes up each kind of retry request", () => {
       failure: { kind: "timed-out", step: "creating" },
     });
     const before = readStagedSandbox(SURFACE)?.clientRequestId;
-    const id = await requestAndMount("keep-waiting");
+    const { id, handled } = await requestAndMount("keep-waiting");
 
-    await waitFor(() => {
-      expect(readStagedSandbox(SURFACE)?.retryHandledId).toBe(id);
-    });
+    expect(handled).toEqual([id]);
     await waitFor(() => {
       expect(mocks.createSandbox).toHaveBeenCalledTimes(1);
     });
