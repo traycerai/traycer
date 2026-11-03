@@ -98,7 +98,11 @@ jobs:
               echo "A $EVENT run always runs the model."
               exit 0 ;;
           esac
-          relevant=$(git diff --name-only "$range" | awk '
+          # `-z`, so a path that is not plain ASCII arrives as its raw bytes
+          # rather than in git's display quoting, which every match below
+          # would fail on. `--no-renames`, so a listed file moved away is
+          # still reported at its old path.
+          relevant=$(git diff -z --name-only --no-renames "$range" | tr '\0' '\n' | awk '
             /\.md$/ { next }
             /^clients\/gui-app\/formal\// ||
             /^clients\/gui-app\/src\/components\/chat\/chat-timeline-follow-latch\.ts$/ ||
