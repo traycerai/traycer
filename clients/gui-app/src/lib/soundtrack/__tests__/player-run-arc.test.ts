@@ -96,6 +96,22 @@ function makePlayer(
   });
 }
 
+/** As `makePlayer`, but a random of 0 opens every run in the first state. */
+function makeFirstStatePlayer(
+  output: FakeOutput,
+  stems: StemSource,
+  track: VariableTrack,
+): TrackPlayer {
+  return new TrackPlayer({
+    track,
+    output,
+    stems,
+    random: () => 0,
+    silenceSeconds: [5, 5],
+    resumeAt: 0,
+  });
+}
+
 /** Two layers that stay enabled; "storm" follows "calm" after 5 s over 6 s. */
 const STORM_PHASE: Phase = {
   afterSeconds: [5, 5],
@@ -318,6 +334,93 @@ describe("TrackPlayer run arc", () => {
     expect(output.plays("bus0/0")[0].when - introPlays[0].when).toBeCloseTo(
       3,
       6,
+    );
+  });
+
+  it("keeps the layers waiting for the intro's end when the state moves while it sounds", async () => {
+    const output = new FakeOutput();
+    const layersProperties = [properties(null, 0, 4, null)];
+    const track = buildTrack({
+      lengthSeconds: 60,
+      layers: [layerOf("A", 2, null)],
+      states: [
+        stateOf("first", layersProperties, 1),
+        stateOf("second", layersProperties, 1),
+      ],
+      intro: { name: "I", variants: 1, pan: null },
+      outro: null,
+      phases: [],
+    });
+    const player = makeFirstStatePlayer(
+      output,
+      stemsOfLength(
+        new Map([
+          ["I", 10],
+          ["A", 1],
+        ]),
+      ),
+      track,
+    );
+    player.start(0, 0.1);
+    await vi.advanceTimersByTimeAsync(1000);
+    player.enterState("second");
+    await vi.advanceTimersByTimeAsync(10_000);
+
+    const intro = output.plays("bus0/1");
+    expect(intro).toHaveLength(1);
+    expect(intro[0].when).toBeCloseTo(START_LEAD_SECONDS, 6);
+    expect(output.plays("bus0/0")[0].when).toBeCloseTo(intro[0].when + 10, 6);
+  });
+
+  it("keeps a run's plays when the state is chosen while stopped", async () => {
+    const output = new FakeOutput();
+    const layersProperties = [properties(null, 0, 4, 1)];
+    const track = buildTrack({
+      lengthSeconds: 60,
+      layers: [layerOf("A", 2, null)],
+      states: [
+        stateOf("first", layersProperties, 1),
+        stateOf("second", layersProperties, 1),
+      ],
+      intro: null,
+      outro: null,
+      phases: [],
+    });
+    const player = makeFirstStatePlayer(output, new FakeStems(1), track);
+    player.start(0, 0.1);
+    await vi.advanceTimersByTimeAsync(2000);
+    player.stop(0.1);
+    player.enterState("second");
+    await vi.advanceTimersByTimeAsync(3000);
+    player.start(player.elapsed(), 0.1);
+    await vi.advanceTimersByTimeAsync(10_000);
+
+    expect(player.currentState()?.name).toBe("second");
+    expect(output.plays("bus0/0")).toHaveLength(1);
+  });
+
+  it("lets a layer play after a resume when its capped play was cut before it sounded", async () => {
+    const output = new FakeOutput();
+    const track = buildTrack({
+      lengthSeconds: 60,
+      layers: [layerOf("A", 2, null)],
+      states: [stateOf("only", [properties(null, 1, 4, 1)], 1)],
+      intro: null,
+      outro: null,
+      phases: [],
+    });
+    const player = makePlayer(output, new FakeStems(1), track, 0);
+    player.start(0, 0.1);
+    // The 0.48 s tick hands the output the play due at 1.05 s.
+    await vi.advanceTimersByTimeAsync(600);
+    expect(output.plays("bus0/0")).toHaveLength(1);
+    player.stop(0.1);
+    await vi.advanceTimersByTimeAsync(4400);
+    player.start(player.elapsed(), 0.1);
+    await vi.advanceTimersByTimeAsync(3000);
+
+    expect(output.plays("bus0/0").filter((play) => play.at >= 5)).toHaveLength(
+      1,
     );
   });
 

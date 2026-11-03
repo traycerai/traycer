@@ -254,3 +254,42 @@ describe("TrackScheduler pause table", () => {
     }).toThrow("no row to pick");
   });
 });
+
+describe("TrackScheduler restart", () => {
+  const grouped: GroupedLayer = {
+    name: "G",
+    groups: [
+      { name: "X", variants: 1 },
+      { name: "Y", variants: 1 },
+    ],
+    sequence: ["X", "Y"],
+    sublayers: 1,
+    sublayerStartingOffset: null,
+    pan: null,
+  };
+
+  // The first play, X (variant 1), starts at 3 s. A restart before it takes it
+  // back, as a stop cut it before it sounded; one after it keeps its turn.
+  it.each([
+    { restartAt: 1, nextVariant: 1 },
+    { restartAt: 3.5, nextVariant: 2 },
+  ])(
+    "after a restart at $restartAt s the layer's next group turn is variant $nextVariant",
+    ({ restartAt, nextVariant }) => {
+      const state = stateOf(
+        "only",
+        [{ ...properties(null, [0, 0]), startPause: [3, 3] }],
+        1,
+      );
+      const scheduler = schedulerFor(trackOf([grouped], [state]), () => 0.5);
+      const [first] = scheduler.advance(3);
+      expect(first.variant).toBe(1);
+      expect(scheduler.confirm(first, 1, 0)).toBe(3);
+
+      scheduler.restartAt(restartAt);
+      expect(scheduler.advance(20).map((play) => play.variant)).toEqual([
+        nextVariant,
+      ]);
+    },
+  );
+});
