@@ -184,36 +184,52 @@ function pipelinesOf(source) {
     const groups = input === null ? [] : [{ ...input, closer: null }];
     const inherited = () => groups.at(-1) ?? { input: null, loop: null };
     // `loop` is the innermost loop open. A loop keeps the pipelines of its
-    // condition until `do`, and a `break`, `exit` or `return` that leaves it
-    // marks it as one that may stop reading early.
+    // condition until `do`, and each `break`, `exit` or `return` that leaves
+    // it. A group is `forked` when it runs in its own process: a `( )`
+    // subshell, or a stage of a pipeline or background job.
     function openGroup(opener, stage) {
       const outer = inherited();
       const group = {
         closer: GROUP_CLOSERS.get(opener) ?? ")",
         input: stage ?? outer.input,
         loop: outer.loop,
+        opensLoop: LOOPS.has(opener),
+        forked: opener === "(" || stage !== null,
       };
-      if (LOOPS.has(opener)) {
+      if (group.opensLoop) {
         group.loop = {
           kind: opener,
           stage,
           stops: false,
           inCondition: true,
           conditions: [],
+          leaves: [],
         };
       }
       if (stage !== null) stage.loop = group.loop;
       groups.push(group);
     }
-    // The loops this list can leave, innermost last; a substitution's loops
-    // are its own.
+    // The groups this list can leave, outermost first; a substitution's
+    // groups are its own.
+    const ownGroups = () => (input === null ? groups : groups.slice(1));
     function enclosingLoops() {
-      const own = input === null ? groups : groups.slice(1);
-      return [...new Set(own.map((group) => group.loop).filter(Boolean))];
+      return [
+        ...new Set(
+          ownGroups()
+            .map((group) => group.loop)
+            .filter(Boolean),
+        ),
+      ];
     }
+    // The group the last command closed, which a following `|` or `&` runs
+    // in its own process.
+    let justClosed = null;
     function closeGroup(closer) {
       const at = groups.findLastIndex((group) => group.closer === closer);
-      if (at !== -1) groups.splice(at);
+      if (at !== -1) {
+        justClosed = groups[at];
+        groups.splice(at);
+      }
     }
     let pipeline = null;
     let command = null;
@@ -299,22 +315,33 @@ function pipelinesOf(source) {
       if (pipeline === null) {
         // A pipeline inside a group fed by a pipe reads that pipe first.
         const { input: groupInput, loop } = inherited();
-        const [leave, count] = current.words;
-        if (["break", "exit", "return"].includes(leave)) {
-          const loops = enclosingLoops();
-          const left =
-            leave === "break"
-              ? Number.parseInt(count ?? "1", 10) || 1
-              : loops.length;
-          for (const each of loops.slice(-left)) each.stops = true;
-        }
         pipeline = {
           commands: [],
           discarded: false,
           tested: listTested || openConditions > 0,
           groupInput,
           loop,
+          forked: false,
         };
+        // A `break`, `exit` or `return` leaves each loop it names, with the
+        // groups it crosses on the way; `stopsEarly` drops a leave that a
+        // process boundary contains.
+        const [leave, count] = current.words;
+        if (["break", "exit", "return"].includes(leave)) {
+          let left =
+            leave === "break"
+              ? Number.parseInt(count ?? "1", 10) || 1
+              : Number.POSITIVE_INFINITY;
+          const crossed = [];
+          for (const group of ownGroups().toReversed()) {
+            if (left === 0) break;
+            if (group.opensLoop) {
+              group.loop.leaves.push({ pipeline, crossed: [...crossed] });
+              left -= 1;
+            }
+            crossed.push(group);
+          }
+        }
       }
       pipeline.commands.push(current);
       const assignmentOnly =
@@ -323,9 +350,14 @@ function pipelinesOf(source) {
       if (!assignmentOnly) current.substitutions.forEach(discardAll);
     }
     function endPipeline(operator) {
+      justClosed = null;
       endCommand();
+      if (operator === "&" && justClosed !== null) justClosed.forked = true;
       const andOr = operator === "&&" || operator === "||";
       if (pipeline !== null) {
+        if (operator === "&" || pipeline.commands.length > 1) {
+          pipeline.forked = true;
+        }
         const [only] = pipeline.commands;
         if (
           lastOperator === "||" &&
@@ -685,7 +717,9 @@ function pipelinesOf(source) {
         continue;
       }
       if (char === "|") {
+        justClosed = null;
         endCommand();
+        if (justClosed !== null) justClosed.forked = true;
         lastOperator = "|";
         index += next === "&" ? 2 : 1;
         continue;
@@ -901,14 +935,44 @@ function readsStandardInput(stage) {
 }
 
 /**
+ * The index past a bracket expression that opens at `start` (`[^]/]`,
+ * `[[:alpha:]/]`), where a regular expression's delimiter is data, or
+ * `start + 1` when it never closes. In awk a backslash escapes inside it too.
+ */
+function bracketEnd(text, start, backslashEscapes) {
+  let at = start + 1;
+  if (text[at] === "^") at += 1;
+  if (text[at] === "]") at += 1;
+  while (at < text.length && text[at] !== "]") {
+    const named = /^\[([:.=])/.exec(text.slice(at, at + 2));
+    if (named !== null) {
+      const close = text.indexOf(`${named[1]}]`, at + 2);
+      if (close === -1) return start + 1;
+      at = close + 2;
+    } else {
+      at += backslashEscapes && text[at] === "\\" ? 2 : 1;
+    }
+  }
+  return at < text.length ? at + 1 : start + 1;
+}
+
+/**
  * Whether a sed script has a `q` or `Q` command: read command by command,
- * past each address (`\#re#` included) and each `s` and `y` argument.
+ * past each address (`\#re#` included) and each `s` and `y` argument, with
+ * the bracket expressions in their regular expressions.
  */
 function sedQuits(script) {
   let at = 0;
   const skipTo = (delimiter) => {
     while (at < script.length && script[at] !== delimiter) {
       at += script[at] === "\\" ? 2 : 1;
+    }
+    at += 1;
+  };
+  const skipRegex = (delimiter) => {
+    while (at < script.length && script[at] !== delimiter) {
+      if (script[at] === "[") at = bracketEnd(script, at, false);
+      else at += script[at] === "\\" ? 2 : 1;
     }
     at += 1;
   };
@@ -926,7 +990,7 @@ function sedQuits(script) {
       if (char === "\\") at += 1;
       const delimiter = script[at];
       at += 1;
-      skipTo(delimiter);
+      skipRegex(delimiter);
       while (/[IM]/.test(script[at] ?? "")) at += 1;
     } else {
       return false;
@@ -951,7 +1015,8 @@ function sedQuits(script) {
     if (command === "s" || command === "y") {
       const delimiter = script[at];
       at += 1;
-      skipTo(delimiter);
+      if (command === "s") skipRegex(delimiter);
+      else skipTo(delimiter);
       skipTo(delimiter);
       while (/[gpiImMe\d]/.test(script[at] ?? "")) at += 1;
       if (script[at] === "w") skipLine();
@@ -964,28 +1029,59 @@ function sedQuits(script) {
   return false;
 }
 
+// The awk keywords an expression follows, so a `/` after them opens a
+// regular expression: `print /re/`, `return /re/`.
+const AWK_EXPRESSION_KEYWORDS = new Set([
+  "case",
+  "do",
+  "else",
+  "print",
+  "printf",
+  "return",
+]);
+
 /**
  * Whether an awk program can exit before its input ends: an `exit` outside
- * strings, regular expressions, comments and `END` actions.
+ * strings, regular expressions, comments and `END` actions. A `/` divides
+ * after an operand (a name, a number, a string or regex, `)`, `]`, `$` or a
+ * postfix `++`/`--`) and opens a regular expression anywhere else.
  */
 function awkExitsEarly(program) {
   let code = "";
   let regexAllowed = true;
   for (let at = 0; at < program.length; at += 1) {
     const char = program[at];
+    const name = /^[A-Za-z_]\w*/.exec(program.slice(at))?.[0];
+    const number = /^\.?\d[\w.]*/.exec(program.slice(at))?.[0];
     if (char === "#") {
       const end = program.indexOf("\n", at);
       at = end === -1 ? program.length : end - 1;
     } else if (char === '"' || (char === "/" && regexAllowed)) {
       for (at += 1; at < program.length && program[at] !== char; at += 1) {
-        if (program[at] === "\\") at += 1;
+        if (char === "/" && program[at] === "[") {
+          at = bracketEnd(program, at, true) - 1;
+        } else if (program[at] === "\\") {
+          at += 1;
+        }
       }
       code += " ";
+      regexAllowed = false;
+    } else if (name !== undefined) {
+      code += name;
+      at += name.length - 1;
+      regexAllowed = AWK_EXPRESSION_KEYWORDS.has(name);
+    } else if (number !== undefined) {
+      code += number;
+      at += number.length - 1;
+      regexAllowed = false;
+    } else if ((char === "+" || char === "-") && program[at + 1] === char) {
+      code += char + char;
+      at += 1;
       regexAllowed = false;
     } else {
       code += char;
       if (char === "\n") regexAllowed = true;
-      else if (!/\s/.test(char)) regexAllowed = "(,~!{};&|?:=".includes(char);
+      else if (!/\s/.test(char)) regexAllowed = !")]$".includes(char);
     }
   }
   let rest = code;
@@ -1065,12 +1161,28 @@ function earlyExitReaderOf(stage) {
 }
 
 /**
+ * Whether a loop may stop before its input ends: an and-or list in its
+ * condition, or a `break`, `exit` or `return` that leaves it in its own
+ * process. A `( )` subshell, a pipeline stage or a background job between them
+ * ends only its own process.
+ */
+function stopsEarly(loop) {
+  return (
+    loop.stops ||
+    loop.leaves.some(
+      ({ pipeline, crossed }) =>
+        !pipeline.forked && !crossed.some((group) => group.forked),
+    )
+  );
+}
+
+/**
  * Whether a loop reads its input to the end: a `while` loop whose whole
  * condition is one `read`, which nothing in its body leaves early. An `until`
  * loop ends on the first line read, and a `for` loop reads no line itself.
  */
 function drains(loop) {
-  if (loop === null || loop.kind !== "while" || loop.stops) return false;
+  if (loop === null || loop.kind !== "while" || stopsEarly(loop)) return false;
   const isRead = (words) => commandOf(words).name === "read";
   if (loop.stage !== null) {
     return loop.conditions.length === 0 && isRead(loop.stage.words.slice(1));
@@ -1420,6 +1532,30 @@ describe("an early-exit reader never reads a streaming producer through a pipe u
       "a pipeline after a test with a bracket pattern",
       "[[ '[' == [[] ]] && seq 10 | head -n 1",
     ],
+    [
+      "a sed quit after an address whose bracket holds its delimiter",
+      "seq 10 | sed -n '/[1/]/q'",
+    ],
+    [
+      "a sed quit after a substitution whose bracket holds its delimiter",
+      "seq 10 | sed -n 's/[/]/x/;q'",
+    ],
+    [
+      "an awk exit after a regex whose bracket holds a slash",
+      "seq 10 | awk '/[/]/ { next } { exit }'",
+    ],
+    [
+      "an awk exit between two divisions",
+      "seq 10 | awk '{ x = (NR) / 2; if (x > 3) exit; y = x / 2 }'",
+    ],
+    [
+      "a read loop left by an exit in a brace group",
+      "seq 10 | while read -r x; do { exit 0; }; done",
+    ],
+    [
+      "a read loop left by an exit after a subshell",
+      "seq 10 | while read -r x; do (cd /tmp); exit 0; done",
+    ],
   ])("flags the reader in %s", (_, body) => {
     expect(pipefail(body)).toHaveLength(1);
   });
@@ -1511,6 +1647,31 @@ describe("an early-exit reader never reads a streaming producer through a pipe u
     [
       "a case pattern holding a pipe",
       'case "$v" in a|b) echo "$(seq 10 | head -n 1)" ;; esac',
+    ],
+    ["an awk print of a regex naming exit", "seq 10 | awk '{ print /exit/ }'"],
+    [
+      "an awk function returning a regex naming exit",
+      "seq 10 | awk 'function f() { return /exit/ } { print f() }'",
+    ],
+    [
+      "an exit in a subshell in a read loop",
+      "seq 10 | while read -r x; do (exit 0); done",
+    ],
+    [
+      "an exit in a piped brace group in a read loop",
+      "seq 10 | while read -r x; do { exit 0; } | cat; done",
+    ],
+    [
+      "an exit piped in a read loop",
+      "seq 10 | while read -r x; do exit 0 | cat; done",
+    ],
+    [
+      "a backgrounded exit in a read loop",
+      "seq 10 | while read -r x; do exit 0 & done",
+    ],
+    [
+      "a numbered break in a piped inner loop",
+      "seq 10 | while read -r x; do while :; do break 2; done | cat; done",
     ],
   ])("passes %s", (_, body) => {
     expect(pipefail(body)).toEqual([]);
