@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useRef, useState } from "react";
 import { HOST_NOTIFICATIONS } from "@/components/settings/panels/notifications-settings.definitions";
 import { SettingsRow } from "@/components/settings/settings-row";
 import { Input } from "@/components/ui/input";
@@ -79,22 +79,45 @@ function LongTurnAlertDuration(props: {
   readonly setAlert: SetLongTurnAlertMutation;
 }) {
   const initialUnit = largestWholeUnit(props.thresholdMs);
+  const initialAmount = String(props.thresholdMs / UNIT_MS[initialUnit]);
   const [unit, setUnit] = useState<DurationUnit>(initialUnit);
-  const [amount, setAmount] = useState(
-    String(props.thresholdMs / UNIT_MS[initialUnit]),
-  );
+  const [amount, setAmount] = useState(initialAmount);
+  const [unitMenuOpen, setUnitMenuOpen] = useState(false);
+  // The menu reports a pick and then its close in one handler, before a render.
+  const pickedUnit = useRef(initialUnit);
+  const restore = (): void => {
+    pickedUnit.current = initialUnit;
+    setUnit(initialUnit);
+    setAmount(initialAmount);
+  };
   const commit = (nextAmount: string, nextUnit: DurationUnit): void => {
-    const thresholdMs = Number(nextAmount) * UNIT_MS[nextUnit];
-    if (!Number.isSafeInteger(thresholdMs) || thresholdMs <= 0) {
-      setUnit(initialUnit);
-      setAmount(String(props.thresholdMs / UNIT_MS[initialUnit]));
+    const wholeAmount = Number(nextAmount);
+    const thresholdMs = wholeAmount * UNIT_MS[nextUnit];
+    if (
+      !Number.isInteger(wholeAmount) ||
+      !Number.isSafeInteger(thresholdMs) ||
+      thresholdMs <= 0
+    ) {
+      restore();
       return;
     }
     if (thresholdMs === props.thresholdMs) return;
-    props.setAlert.mutate({ thresholdMs });
+    props.setAlert.mutate({ thresholdMs }, { onError: restore });
   };
+  const unitSuffix = Number(amount) === 1 ? "" : "s";
   return (
-    <div className="flex flex-wrap items-center gap-2">
+    // The amount and the unit are one value: saving when focus moves between
+    // them would save the new amount in the old unit, and a running turn already
+    // past that value would spend its one alert on it.
+    <div
+      className="flex flex-wrap items-center gap-2"
+      onBlur={(event) => {
+        if (unitMenuOpen) return;
+        const next = event.relatedTarget;
+        if (next instanceof Node && event.currentTarget.contains(next)) return;
+        commit(amount, unit);
+      }}
+    >
       <Input
         type="number"
         inputMode="numeric"
@@ -105,26 +128,30 @@ function LongTurnAlertDuration(props: {
         data-testid="notifications-long-turn-alert-amount"
         className="w-24"
         onChange={(event) => setAmount(event.target.value)}
-        onBlur={() => commit(amount, unit)}
         onKeyDown={(event) => {
           if (event.key === "Enter") commit(amount, unit);
         }}
       />
       <Select
         value={unit}
+        open={unitMenuOpen}
+        onOpenChange={(open) => {
+          setUnitMenuOpen(open);
+          if (!open) commit(amount, pickedUnit.current);
+        }}
         onValueChange={(value) => {
           if (!isDurationUnit(value)) return;
+          pickedUnit.current = value;
           setUnit(value);
-          commit(amount, value);
         }}
       >
         <SelectTrigger aria-label="Turn alert duration unit">
           <SelectValue />
         </SelectTrigger>
         <SelectContent>
-          <SelectItem value="minutes">minutes</SelectItem>
-          <SelectItem value="hours">hours</SelectItem>
-          <SelectItem value="days">days</SelectItem>
+          <SelectItem value="minutes">{`minute${unitSuffix}`}</SelectItem>
+          <SelectItem value="hours">{`hour${unitSuffix}`}</SelectItem>
+          <SelectItem value="days">{`day${unitSuffix}`}</SelectItem>
         </SelectContent>
       </Select>
     </div>

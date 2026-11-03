@@ -1131,22 +1131,28 @@ function credentialConfiguredAfterWrite(
 
 const LONG_TURN_ALERT_LABEL = "Alert when a turn runs longer than";
 const HOUR_MS = 3_600_000;
+const DAY_MS = 24 * HOUR_MS;
 
 type LongTurnAlertSetRequest = RequestOfMethod<
   HostRpcRegistry,
   "host.notifications.setLongTurnAlert"
 >;
 
-function renderLongTurnAlert(host: {
+function longTurnAlertClient(host: {
   readonly supportsAlert: boolean;
   readonly initialThresholdMs: number | null;
-}): { readonly setRequests: LongTurnAlertSetRequest[] } {
+  readonly failsSave: boolean;
+}): {
+  readonly client: HostClient<HostRpcRegistry>;
+  readonly setRequests: LongTurnAlertSetRequest[];
+  readonly wrapper: (props: { readonly children: ReactNode }) => ReactNode;
+} {
   const setRequests: LongTurnAlertSetRequest[] = [];
   let thresholdMs = host.initialThresholdMs;
-  const unsupported = (method: string): HostRpcError =>
+  const rejected = (method: string, code: "E_HOST_UNSUPPORTED" | "RPC_ERROR") =>
     new HostRpcError({
-      code: "E_HOST_UNSUPPORTED",
-      message: `The host does not serve '${method}'`,
+      code,
+      message: `The host refused '${method}'`,
       requestId: "req-1",
       method,
       fatalDetails: null,
@@ -1164,12 +1170,18 @@ function renderLongTurnAlert(host: {
         "host.notificationHooks.status": () => makeHooksStatus(undefined),
         "host.notifications.getLongTurnAlert": () => {
           if (!host.supportsAlert) {
-            throw unsupported("host.notifications.getLongTurnAlert");
+            throw rejected(
+              "host.notifications.getLongTurnAlert",
+              "E_HOST_UNSUPPORTED",
+            );
           }
           return { thresholdMs };
         },
         "host.notifications.setLongTurnAlert": (params) => {
           setRequests.push(params);
+          if (host.failsSave) {
+            throw rejected("host.notifications.setLongTurnAlert", "RPC_ERROR");
+          }
           thresholdMs = params.thresholdMs;
           return { thresholdMs };
         },
@@ -1179,19 +1191,31 @@ function renderLongTurnAlert(host: {
   spine.setRequestContext(
     createRequestContextFixture({ origin: "renderer", bearerToken: "tok-1" }),
   );
-  const client = spine.createRequester(mockLocalHostEntry);
   const queryClient = new QueryClient({
     defaultOptions: {
       queries: { retry: false },
       mutations: { retry: false },
     },
   });
-  render(<NotificationsSettingsPanelForClient client={client} />, {
+  return {
+    client: spine.createRequester(mockLocalHostEntry),
+    setRequests,
     wrapper: (props: { readonly children: ReactNode }): ReactNode => (
       <Providers queryClient={queryClient}>{props.children}</Providers>
     ),
+  };
+}
+
+function renderLongTurnAlert(host: {
+  readonly supportsAlert: boolean;
+  readonly initialThresholdMs: number | null;
+  readonly failsSave: boolean;
+}): { readonly setRequests: LongTurnAlertSetRequest[] } {
+  const rig = longTurnAlertClient(host);
+  render(<NotificationsSettingsPanelForClient client={rig.client} />, {
+    wrapper: rig.wrapper,
   });
-  return { setRequests };
+  return { setRequests: rig.setRequests };
 }
 
 function amountField(): HTMLInputElement {
@@ -1202,9 +1226,41 @@ function amountField(): HTMLInputElement {
   return field;
 }
 
+function unitTrigger(): HTMLElement {
+  return screen.getByRole("combobox", { name: "Turn alert duration unit" });
+}
+
+/** Radix's select: open with the keyboard, then commit the named option. */
+function openUnitMenu(): void {
+  fireEvent.keyDown(unitTrigger(), { key: "ArrowDown" });
+}
+
+function chooseUnit(name: string): void {
+  const item = screen.getByRole("option", { name });
+  fireEvent.focus(item);
+  fireEvent.keyDown(item, { key: "Enter" });
+}
+
+async function amountShows(value: string): Promise<void> {
+  await waitFor(() => {
+    expect(amountField().value).toBe(value);
+  });
+}
+
+/** Lets a request the code under test would have sent have been sent. */
+async function settle(): Promise<void> {
+  await act(async () => {
+    await Promise.resolve();
+  });
+}
+
 describe("<NotificationsSettingsPanel /> long-turn alert", () => {
   it("is off by default, with no duration fields", async () => {
-    renderLongTurnAlert({ supportsAlert: true, initialThresholdMs: null });
+    renderLongTurnAlert({
+      supportsAlert: true,
+      initialThresholdMs: null,
+      failsSave: false,
+    });
 
     const toggle = await screen.findByRole("switch", {
       name: LONG_TURN_ALERT_LABEL,
@@ -1217,19 +1273,15 @@ describe("<NotificationsSettingsPanel /> long-turn alert", () => {
     const { setRequests } = renderLongTurnAlert({
       supportsAlert: true,
       initialThresholdMs: null,
+      failsSave: false,
     });
 
     fireEvent.click(
       await screen.findByRole("switch", { name: LONG_TURN_ALERT_LABEL }),
     );
-    await waitFor(() => {
-      expect(amountField().value).toBe("4");
-    });
+    await amountShows("4");
     expect(setRequests).toEqual([{ thresholdMs: 4 * HOUR_MS }]);
-    expect(
-      screen.getByRole("combobox", { name: "Turn alert duration unit" })
-        .textContent,
-    ).toBe("hours");
+    expect(unitTrigger().textContent).toBe("hours");
 
     fireEvent.click(
       screen.getByRole("switch", { name: LONG_TURN_ALERT_LABEL }),
@@ -1243,60 +1295,155 @@ describe("<NotificationsSettingsPanel /> long-turn alert", () => {
     ]);
   });
 
-  it("sends the new milliseconds when the amount or the unit is edited", async () => {
+  it("sends the edited amount on Enter", async () => {
     const { setRequests } = renderLongTurnAlert({
       supportsAlert: true,
       initialThresholdMs: 4 * HOUR_MS,
+      failsSave: false,
     });
-    await waitFor(() => {
-      expect(amountField().value).toBe("4");
-    });
+    await amountShows("4");
 
     fireEvent.change(amountField(), { target: { value: "6" } });
     fireEvent.keyDown(amountField(), { key: "Enter" });
+
     await waitFor(() => {
       expect(setRequests).toEqual([{ thresholdMs: 6 * HOUR_MS }]);
     });
-
-    await waitFor(() => {
-      expect(amountField().value).toBe("6");
-    });
-    fireEvent.keyDown(
-      screen.getByRole("combobox", { name: "Turn alert duration unit" }),
-      { key: "ArrowDown" },
-    );
-    const days = screen.getByRole("option", { name: "days" });
-    fireEvent.focus(days);
-    fireEvent.keyDown(days, { key: "Enter" });
-    await waitFor(() => {
-      expect(setRequests).toEqual([
-        { thresholdMs: 6 * HOUR_MS },
-        { thresholdMs: 6 * 86_400_000 },
-      ]);
-    });
   });
 
-  it("restores the value and sends nothing for an amount that is not a positive whole duration", async () => {
+  it("sends one request, the new amount in the new unit, when the unit is picked after typing", async () => {
     const { setRequests } = renderLongTurnAlert({
       supportsAlert: true,
       initialThresholdMs: 4 * HOUR_MS,
+      failsSave: false,
     });
-    await waitFor(() => {
-      expect(amountField().value).toBe("4");
-    });
+    await amountShows("4");
 
-    for (const invalid of ["0", "-3", "", "1.0000000000001"]) {
+    fireEvent.change(amountField(), { target: { value: "3" } });
+    // Focus moves to the unit and its menu opens and closes on a pick.
+    fireEvent.blur(amountField(), { relatedTarget: unitTrigger() });
+    openUnitMenu();
+    chooseUnit("days");
+
+    await waitFor(() => {
+      expect(setRequests).toEqual([{ thresholdMs: 3 * DAY_MS }]);
+    });
+    await settle();
+    expect(setRequests).toHaveLength(1);
+  });
+
+  it("sends nothing while focus moves from the amount to the unit, and the value when focus leaves both", async () => {
+    const { setRequests } = renderLongTurnAlert({
+      supportsAlert: true,
+      initialThresholdMs: 4 * HOUR_MS,
+      failsSave: false,
+    });
+    await amountShows("4");
+
+    fireEvent.change(amountField(), { target: { value: "6" } });
+    fireEvent.blur(amountField(), { relatedTarget: unitTrigger() });
+    await settle();
+    expect(setRequests).toEqual([]);
+
+    fireEvent.blur(unitTrigger(), { relatedTarget: null });
+    await waitFor(() => {
+      expect(setRequests).toEqual([{ thresholdMs: 6 * HOUR_MS }]);
+    });
+  });
+
+  it("sends the edited amount in the current unit when the unit menu closes without a pick", async () => {
+    const { setRequests } = renderLongTurnAlert({
+      supportsAlert: true,
+      initialThresholdMs: 4 * HOUR_MS,
+      failsSave: false,
+    });
+    await amountShows("4");
+
+    fireEvent.change(amountField(), { target: { value: "5" } });
+    openUnitMenu();
+    fireEvent.keyDown(screen.getByRole("listbox"), { key: "Escape" });
+
+    await waitFor(() => {
+      expect(setRequests).toEqual([{ thresholdMs: 5 * HOUR_MS }]);
+    });
+  });
+
+  it("restores the host's value when a save fails", async () => {
+    const { setRequests } = renderLongTurnAlert({
+      supportsAlert: true,
+      initialThresholdMs: 4 * HOUR_MS,
+      failsSave: true,
+    });
+    await amountShows("4");
+
+    fireEvent.change(amountField(), { target: { value: "6" } });
+    fireEvent.keyDown(amountField(), { key: "Enter" });
+
+    await waitFor(() => {
+      expect(setRequests).toEqual([{ thresholdMs: 6 * HOUR_MS }]);
+    });
+    await amountShows("4");
+  });
+
+  it("restores the value and sends nothing for an amount that is not a positive whole number", async () => {
+    const { setRequests } = renderLongTurnAlert({
+      supportsAlert: true,
+      initialThresholdMs: 4 * HOUR_MS,
+      failsSave: false,
+    });
+    await amountShows("4");
+
+    for (const invalid of ["0", "-3", "", "0.5", "1.5"]) {
       fireEvent.change(amountField(), { target: { value: invalid } });
       fireEvent.keyDown(amountField(), { key: "Enter" });
-      await waitFor(() => {
-        expect(amountField().value).toBe("4");
-      });
+      await amountShows("4");
     }
     expect(setRequests).toEqual([]);
   });
 
+  it("reads one as a singular unit and the rest as plural", async () => {
+    renderLongTurnAlert({
+      supportsAlert: true,
+      initialThresholdMs: 4 * HOUR_MS,
+      failsSave: false,
+    });
+    await amountShows("4");
+    expect(unitTrigger().textContent).toBe("hours");
+
+    fireEvent.change(amountField(), { target: { value: "1" } });
+    expect(unitTrigger().textContent).toBe("hour");
+  });
+
+  it("destroys the draft when the host changes, and sends nothing for it", async () => {
+    const rig = longTurnAlertClient({
+      supportsAlert: true,
+      initialThresholdMs: 4 * HOUR_MS,
+      failsSave: false,
+    });
+    hostScopeMocks.client = rig.client;
+    hostScopeMocks.hostId = "host-a";
+    const { rerender } = render(<NotificationsSettingsPanel />, {
+      wrapper: rig.wrapper,
+    });
+    await amountShows("4");
+    fireEvent.change(amountField(), { target: { value: "9" } });
+    expect(amountField().value).toBe("9");
+
+    hostScopeMocks.hostId = "host-b";
+    rerender(<NotificationsSettingsPanel />);
+
+    await amountShows("4");
+    fireEvent.blur(amountField(), { relatedTarget: null });
+    await settle();
+    expect(rig.setRequests).toEqual([]);
+  });
+
   it("draws no row for a host that answers E_HOST_UNSUPPORTED, and the rest of the panel stays", async () => {
-    renderLongTurnAlert({ supportsAlert: false, initialThresholdMs: null });
+    renderLongTurnAlert({
+      supportsAlert: false,
+      initialThresholdMs: null,
+      failsSave: false,
+    });
 
     await screen.findByRole("switch", {
       name: "Needs action In-app notifications",

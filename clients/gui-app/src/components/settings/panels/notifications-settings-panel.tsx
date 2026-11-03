@@ -157,6 +157,7 @@ function NotificationsSettingsPanelContent(props: {
       >
         {renderNotificationsSettingsContent(props.configQuery, props.setConfig)}
         <NotificationLongTurnAlertRow
+          key={scope?.hostId}
           query={props.longTurnAlertQuery}
           setAlert={props.setLongTurnAlert}
         />
