@@ -208,6 +208,8 @@ useSettingsStore.subscribe((state, previous) => {
   }
 });
 
+// Any window's chime arrives here, and only the window holding the session has
+// anything to duck.
 listenToNotificationChimes((chimeSeconds) => {
   useSoundtrackStore.getState().duck(chimeSeconds);
 });

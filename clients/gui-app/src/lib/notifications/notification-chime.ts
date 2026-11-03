@@ -1,3 +1,5 @@
+import { z } from "zod";
+import { persistKey, STORE_KEYS } from "@/lib/persist";
 import classicUrl from "./chimes/classic.wav";
 import prismUrl from "./chimes/prism.wav";
 import rippleUrl from "./chimes/ripple.wav";
@@ -225,11 +227,38 @@ export function disposeNotificationChimeAudio(): void {
 
 const chimeListeners = new Set<(chimeSeconds: number) => void>();
 
-/** Hears every chime that starts, with how long it lasts, for good. */
+const CHIME_CHANNEL_NAME = persistKey(STORE_KEYS.notificationChimesChannel);
+const relayedChimeSchema = z.object({ chimeSeconds: z.number() });
+let chimeChannel: BroadcastChannel | null = null;
+
+/**
+ * A chime plays in the window in front, and what follows it may be in another:
+ * the soundtrack plays in one window at a time. A channel delivers to every
+ * window but the sender, which hears its own chime directly, so each window
+ * hears each playback once.
+ */
+function openChimeChannel(): BroadcastChannel | null {
+  if (chimeChannel !== null || typeof BroadcastChannel === "undefined") {
+    return chimeChannel;
+  }
+  chimeChannel = new BroadcastChannel(CHIME_CHANNEL_NAME);
+  chimeChannel.addEventListener("message", (event: MessageEvent<unknown>) => {
+    const chime = relayedChimeSchema.safeParse(event.data);
+    if (!chime.success) return;
+    for (const listener of chimeListeners) listener(chime.data.chimeSeconds);
+  });
+  return chimeChannel;
+}
+
+/**
+ * Hears every chime that starts in any of the app's windows, with how long it
+ * lasts, for good.
+ */
 export function listenToNotificationChimes(
   listener: (chimeSeconds: number) => void,
 ): void {
   chimeListeners.add(listener);
+  openChimeChannel();
 }
 
 export function playNotificationChimeSound(
@@ -261,6 +290,7 @@ export function playNotificationChimeSound(
       player.warmed = true;
       // Known by now: an element that has started playing has read its length.
       for (const listener of chimeListeners) listener(audio.duration);
+      openChimeChannel()?.postMessage({ chimeSeconds: audio.duration });
     }, release);
   } catch {
     // Autoplay and missing devices must not interrupt notification delivery.

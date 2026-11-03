@@ -543,6 +543,12 @@ export const PERSIST_STORES = [
     leaf: "live-chat-completion-acknowledgements:v1",
     kind: "channel",
   },
+  // Each chime that starts, for a window other than the one playing it.
+  {
+    camelName: "notificationChimesChannel",
+    leaf: "notification-chimes:v1",
+    kind: "channel",
+  },
   // One monotonic key per displayed app-local notification version. Separate
   // keys prevent an unrelated full-snapshot Zustand write in another window
   // from erasing a receipt.

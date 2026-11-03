@@ -5,6 +5,7 @@
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { appLogger } from "@/lib/logger";
+import { FakeLockManager } from "@/lib/soundtrack/__tests__/fake-locks";
 import {
   openedFakePorts,
   openFakePorts,
@@ -17,27 +18,6 @@ import {
 import type { SoundtrackPorts } from "@/lib/soundtrack/session";
 import type { StemManifest } from "@/lib/soundtrack/stems";
 import { createSoundtrackStore } from "../soundtrack-store";
-
-/** The one exclusive, first-come lock `holdSoundtrackSessionLock` asks for. */
-class FakeLockManager {
-  private held = false;
-  private readonly waiting: Array<() => void> = [];
-
-  request(_name: string, granted: () => Promise<void>): Promise<void> {
-    return new Promise((resolve) => {
-      const grant = (): void => {
-        this.held = true;
-        void granted().then(() => {
-          this.held = false;
-          this.waiting.shift()?.();
-          resolve();
-        });
-      };
-      if (this.held) this.waiting.push(grant);
-      else grant();
-    });
-  }
-}
 
 type ReadManifest = () => SoundtrackManifest | Promise<SoundtrackManifest>;
 
