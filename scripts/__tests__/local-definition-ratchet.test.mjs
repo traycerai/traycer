@@ -14,6 +14,7 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { GIT_OUTPUT_MAX_BUFFER_BYTES } from "../git-output-limit.cjs";
 import {
   ACCEPT_INCREASE_FLAG,
   nextBaseline,
@@ -368,7 +369,11 @@ describe("CLI", () => {
   }
 
   function git(...args) {
-    const result = spawnSync("git", args, { cwd: repoDir, encoding: "utf8" });
+    const result = spawnSync("git", args, {
+      cwd: repoDir,
+      encoding: "utf8",
+      maxBuffer: GIT_OUTPUT_MAX_BUFFER_BYTES,
+    });
     if (result.status !== 0) {
       throw new Error(`git ${args.join(" ")} failed: ${result.stderr}`);
     }
