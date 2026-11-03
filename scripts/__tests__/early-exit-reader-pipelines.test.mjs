@@ -138,9 +138,14 @@ const GITHUB_EXPRESSION = /\$\{\{[\s\S]*?\}\}/g;
  * close, so a source it misreads fails instead of hiding a site.
  */
 function pipelinesOf(source) {
-  const text = source.replace(GITHUB_EXPRESSION, "GITHUB_EXPRESSION");
+  // An `eval` swaps its operand in as the text being scanned.
+  let text = source.replace(GITHUB_EXPRESSION, "GITHUB_EXPRESSION");
   const pipelines = [];
   const problems = [];
+  // Each command ends at the next `order`; a loop's `end` is the order at its
+  // `done`. `timeouts` are the commands that set TMOUT.
+  let order = 0;
+  const timeouts = [];
   const pendingHeredocs = [];
   let index = 0;
   let line = 1;
@@ -148,6 +153,7 @@ function pipelinesOf(source) {
   function discardSubstitutions(pipeline) {
     for (const command of pipeline.commands) {
       command.substitutions.forEach(discardAll);
+      command.evaluated.forEach(discardAll);
     }
   }
   // A pipeline whose status picks a branch keeps it wherever it runs.
@@ -174,15 +180,23 @@ function pipelinesOf(source) {
   }
 
   // Scans a list of pipelines up to `terminator`: ")" ends a `$( )`, "`" a
-  // backtick substitution, null the source. Returns the list's pipelines;
-  // a top-level list also adds them to `pipelines`, a substitution's are
-  // added by the command that holds it, once its context is known.
-  // `input` is the piped stage whose input a substitution inherits, or null.
-  function scanList(terminator, input) {
+  // backtick substitution, null the text. Returns the list's pipelines; the
+  // source's list also adds them to `pipelines`, and a substitution's or an
+  // eval's are added by the command that holds it, once its context is known.
+  // `context` is where the list runs:
+  // - `groups`: the groups open around it. A substitution's first one holds
+  //   the piped stage whose input it inherits; an eval's are its host's own.
+  // - `offset`: how many of them belong to another process.
+  // - `prefix`: the groups and substitutions of the processes around it.
+  // - `hosts`: the pipelines of the evals that run it.
+  // - `evaluated`: whether it is an eval's operand.
+  function scanList(terminator, context) {
     const list = [];
     // Open groups and compound commands, innermost last: the word that
     // closes each, and the piped stage whose input its commands read.
-    const groups = input === null ? [] : [{ ...input, closer: null }];
+    const groups = [...context.groups];
+    // A list closes only the groups it opens.
+    const base = groups.length;
     const inherited = () => groups.at(-1) ?? { input: null, loop: null };
     // `loop` is the innermost loop open on the group's input; a group a pipe
     // feeds starts a new input, and its loops' `parent` chain ends there. A
@@ -207,14 +221,19 @@ function pipelinesOf(source) {
           inCondition: true,
           conditions: [],
           leaves: [],
+          path: [],
+          end: Number.POSITIVE_INFINITY,
         };
       }
       if (stage !== null) stage.loop = group.loop;
       groups.push(group);
+      if (group.opensLoop) group.loop.path = fullPath();
     }
     // The groups this list can leave, outermost first; a substitution's
     // groups are its own.
-    const ownGroups = () => (input === null ? groups : groups.slice(1));
+    const ownGroups = () => groups.slice(context.offset);
+    // Every group and substitution around the current command.
+    const fullPath = () => [...context.prefix, ...ownGroups()];
     function enclosingLoops() {
       return [
         ...new Set(
@@ -229,9 +248,11 @@ function pipelinesOf(source) {
     let justClosed = null;
     function closeGroup(closer) {
       const at = groups.findLastIndex((group) => group.closer === closer);
-      if (at !== -1) {
+      if (at >= base) {
         justClosed = groups[at];
-        groups.splice(at);
+        for (const closed of groups.splice(at)) {
+          if (closed.opensLoop) closed.loop.end = order;
+        }
       }
     }
     let pipeline = null;
@@ -248,7 +269,13 @@ function pipelinesOf(source) {
 
     function ensureCommand(compound) {
       if (command === null)
-        command = { words: [], line, substitutions: [], compound };
+        command = {
+          words: [],
+          line,
+          substitutions: [],
+          evaluated: [],
+          compound,
+        };
     }
     function startWord() {
       ensureCommand(false);
@@ -283,8 +310,19 @@ function pipelinesOf(source) {
     }
     function substitution(closing) {
       startWord();
-      command.substitutions.push(...scanList(closing, inherited()));
+      command.substitutions.push(...scanList(closing, substitutionContext()));
       word += "$(…)";
+    }
+    // A substitution runs in its own process, on the input of the group
+    // around it.
+    function substitutionContext() {
+      return {
+        groups: [{ ...inherited(), closer: null }],
+        offset: 1,
+        prefix: [...fullPath(), { forked: true }],
+        hosts: [],
+        evaluated: false,
+      };
     }
     function endCommand() {
       endWord();
@@ -315,6 +353,7 @@ function pipelinesOf(source) {
         if (current.words.length === 0 && current.substitutions.length === 0)
           return;
       }
+      order += 1;
       if (pipeline === null) {
         // A pipeline inside a group fed by a pipe reads that pipe first.
         const { input: groupInput, loop } = inherited();
@@ -337,7 +376,10 @@ function pipelinesOf(source) {
           for (const group of ownGroups().toReversed()) {
             if (left === 0) break;
             if (group.opensLoop) {
-              group.loop.leaves.push({ pipeline, crossed: [...crossed] });
+              group.loop.leaves.push({
+                pipelines: [...context.hosts, pipeline],
+                crossed: [...crossed],
+              });
               left -= 1;
             }
             crossed.push(group);
@@ -345,6 +387,29 @@ function pipelinesOf(source) {
         }
       }
       pipeline.commands.push(current);
+      if (assignsTimeout(current.words)) {
+        timeouts.push({
+          order,
+          path: fullPath(),
+          pipelines: [...context.hosts, pipeline],
+        });
+      }
+      // An eval runs its operand here, in this list's groups and process.
+      const evaluated = builtinOf(current.words);
+      if (evaluated.name === "eval") {
+        const host = { text, index, line };
+        text = evaluated.args.join(" ");
+        index = 0;
+        line = current.line;
+        current.evaluated = scanList(null, {
+          groups,
+          offset: context.offset,
+          prefix: context.prefix,
+          hosts: [...context.hosts, pipeline],
+          evaluated: true,
+        });
+        ({ text, index, line } = host);
+      }
       const assignmentOnly =
         current.words.length > 0 &&
         current.words.every((each) => ASSIGNMENT.test(each));
@@ -485,7 +550,10 @@ function pipelinesOf(source) {
       const flat = [];
       const add = (each) => {
         flat.push(each);
-        for (const command of each.commands) command.substitutions.forEach(add);
+        for (const command of each.commands) {
+          command.substitutions.forEach(add);
+          command.evaluated.forEach(add);
+        }
       };
       list.forEach(add);
       return flat;
@@ -584,7 +652,7 @@ function pipelinesOf(source) {
         // A process substitution: bash keeps no status for it.
         index += 2;
         startWord();
-        const nested = scanList(")", inherited());
+        const nested = scanList(")", substitutionContext());
         nested.forEach(discardAll);
         command.substitutions.push(...nested);
         word += `${char}(…)`;
@@ -780,13 +848,21 @@ function pipelinesOf(source) {
       index += 1;
     }
     endPipeline(null);
-    if (terminator === null) pipelines.push(...collect());
+    if (terminator === null && !context.evaluated) {
+      pipelines.push(...collect());
+    }
     return list;
   }
 
-  scanList(null, null);
+  scanList(null, {
+    groups: [],
+    offset: 0,
+    prefix: [],
+    hosts: [],
+    evaluated: false,
+  });
   skipHeredocBodies();
-  return { pipelines, problems };
+  return { pipelines, problems, timeouts };
 }
 
 const nameOf = (word) => word.split("/").at(-1);
@@ -818,29 +894,48 @@ function builtinOf(stageWords) {
 /**
  * The loops a command leaves: `break N` and `exit` or `return` (all), and
  * `continue N` the N - 1 inside the one it continues, run directly or through
- * `builtin`, `command` or `eval`. An `exec` with a command replaces the shell,
- * so it leaves them all; an `exec` with only redirections leaves none.
+ * `builtin` or `command`. An `exec` with a command replaces the shell, so it
+ * leaves them all; an `exec` with only redirections leaves none. An `eval`'s
+ * operand is scanned as commands of its own.
  */
-function leaveOf(stageWords) {
-  let words = stageWords;
-  for (;;) {
-    const { name, args } = builtinOf(words);
-    if (name === "eval") {
-      words = splitStringWords(args.join(" "));
-      continue;
-    }
-    if (["break", "continue", "exit", "return"].includes(name)) {
-      return { name, count: Number.parseInt(args[0] ?? "1", 10) || 1 };
-    }
-    if (name !== "exec") return null;
-    let at = 0;
-    while (/^-./.test(args[at] ?? "")) {
-      at += 1;
-      if (args[at - 1] === "--") break;
-      if (args[at - 1].endsWith("a")) at += 1;
-    }
-    return at < args.length ? { name: "exit", count: 1 } : null;
+function leaveOf(words) {
+  const { name, args } = builtinOf(words);
+  if (["break", "continue", "exit", "return"].includes(name)) {
+    return { name, count: Number.parseInt(args[0] ?? "1", 10) || 1 };
   }
+  if (name !== "exec") return null;
+  let at = 0;
+  while (/^-./.test(args[at] ?? "")) {
+    at += 1;
+    if (args[at - 1] === "--") break;
+    if (args[at - 1].endsWith("a")) at += 1;
+  }
+  return at < args.length ? { name: "exit", count: 1 } : null;
+}
+
+// A TMOUT assignment that turns read timeouts on.
+const TIMEOUT = /^TMOUT\+?=(?!0*$)/;
+
+/**
+ * Whether a command sets TMOUT in its shell: an assignment alone, through a
+ * declaration builtin, or `printf -v TMOUT`. An assignment before another
+ * command sets it for that command only.
+ */
+function assignsTimeout(words) {
+  if (words.length > 0 && words.every((word) => ASSIGNMENT.test(word))) {
+    return words.some((word) => TIMEOUT.test(word));
+  }
+  const { name, args } = builtinOf(words);
+  if (["declare", "export", "local", "readonly", "typeset"].includes(name)) {
+    return args.some((arg) => TIMEOUT.test(arg));
+  }
+  return (
+    name === "printf" &&
+    args.some(
+      (arg, at) =>
+        arg === "-vTMOUT" || (arg === "-v" && args[at + 1] === "TMOUT"),
+    )
+  );
 }
 
 /**
@@ -1243,8 +1338,9 @@ function stopsEarly(loop) {
   return (
     loop.stops ||
     loop.leaves.some(
-      ({ pipeline, crossed }) =>
-        !pipeline.forked && !crossed.some((group) => group.forked),
+      ({ pipelines, crossed }) =>
+        !pipelines.some((pipeline) => pipeline.forked) &&
+        !crossed.some((group) => group.forked),
     )
   );
 }
@@ -1254,24 +1350,37 @@ function stopsEarly(loop) {
  * condition is one `read` of its standard input with no timeout, which nothing
  * in its body leaves early. An `until` loop ends on the first line read, and
  * a `for` loop reads no line itself. A loop inside one that drains the same
- * input may stop early: the outer loop reads on. `timed` is a source that sets
- * TMOUT, which times out every `read`.
+ * input may stop early: the outer loop reads on.
  */
-function drains(loop, timed) {
+function drains(loop, timeouts) {
   for (let each = loop; each !== null; each = each.parent) {
-    if (drainsItself(each, timed)) return true;
+    if (drainsItself(each, timeouts)) return true;
   }
   return false;
 }
 
-function drainsItself(loop, timed) {
+/**
+ * Whether a TMOUT assignment reaches a loop's `read`: it runs before the loop
+ * ends, in the loop's own process or one the loop's is forked from.
+ */
+function timesOut(loop, timeouts) {
+  return timeouts.some(
+    ({ order, path, pipelines }) =>
+      order <= loop.end &&
+      !pipelines.some((pipeline) => pipeline.forked) &&
+      !path.some((group) => group.forked && !loop.path.includes(group)),
+  );
+}
+
+function drainsItself(loop, timeouts) {
   if (loop.kind !== "while" || stopsEarly(loop)) return false;
   const reads = (command) => {
     const { name, args } = commandOf(command.words);
     return (
       name === "read" &&
-      !timed &&
       !readTimesOut(args) &&
+      !command.words.some((word) => TIMEOUT.test(word)) &&
+      !timesOut(loop, timeouts) &&
       readsStandardInput(command)
     );
   };
@@ -1337,14 +1446,8 @@ function setsPipefail(source) {
  * what the scan could not read.
  */
 function findingsIn(source) {
-  const { pipelines, problems } = pipelinesOf(source);
+  const { pipelines, problems, timeouts } = pipelinesOf(source);
   const findings = [...problems];
-  // A non-zero TMOUT anywhere times out every `read` after it.
-  const timed = pipelines.some((pipeline) =>
-    pipeline.commands.some(({ words }) =>
-      words.some((word) => /^TMOUT=(?!0*$)/.test(word)),
-    ),
-  );
   // A reader that a group's pipeline starts with reads the group's pipe; a
   // loop's `read` reads it a line per pass.
   const groupReaders = new Map();
@@ -1354,7 +1457,7 @@ function findingsIn(source) {
       pipeline.groupInput &&
       (first.compound || readsStandardInput(first)) &&
       earlyExitReaderOf(first);
-    if (!reader || (reader === "read" && drains(pipeline.loop, timed))) {
+    if (!reader || (reader === "read" && drains(pipeline.loop, timeouts))) {
       continue;
     }
     if (!groupReaders.has(pipeline.groupInput)) {
@@ -1364,7 +1467,7 @@ function findingsIn(source) {
   const ownReader = (stage) => {
     // A loop that may stop early reads its `while read` condition's line and
     // closes the pipe.
-    if (stage.compound && stage.loop && !drains(stage.loop, timed)) {
+    if (stage.compound && stage.loop && !drains(stage.loop, timeouts)) {
       const condition = { words: stage.words.slice(1), compound: false };
       if (readsStandardInput(condition)) return earlyExitReaderOf(condition);
     }
@@ -1705,6 +1808,39 @@ describe("an early-exit reader never reads a streaming producer through a pipe u
       "seq 10 | while read -r x; do eval 'break'; done",
     ],
     [
+      "a read loop left by an evaluated break ending in a semicolon",
+      "seq 10 | while read -r x; do eval 'break;'; done",
+    ],
+    [
+      "a read loop left by the second command of an eval",
+      "seq 10 | while read -r x; do eval ':; break'; done",
+    ],
+    [
+      "a read loop left by an evaluated or-list",
+      "seq 10 | while read -r x; do eval 'false || break'; done",
+    ],
+    ["an evaluated pipeline", "eval 'seq 10 | head -n 1'"],
+    [
+      "an evaluated reader in a read loop",
+      "seq 10 | while read -r x; do eval 'head -n 1'; done",
+    ],
+    [
+      "a read loop under an exported TMOUT",
+      "export TMOUT=5\nseq 10 | while read -r x; do :; done",
+    ],
+    [
+      "a read loop under a TMOUT printf sets",
+      "printf -v TMOUT 5\nseq 10 | while read -r x; do :; done",
+    ],
+    [
+      "a read loop whose body sets TMOUT",
+      "seq 10 | while read -r x; do TMOUT=5; done",
+    ],
+    [
+      "a read loop whose read has a TMOUT prefix",
+      "seq 10 | while TMOUT=5 read -r x; do :; done",
+    ],
+    [
       "a read loop replaced by exec",
       "seq 10 | while read -r x; do exec true; done",
     ],
@@ -1849,6 +1985,35 @@ describe("an early-exit reader never reads a streaming producer through a pipe u
       "a redirection-only exec in a read loop",
       "seq 10 | while read -r x; do exec 3>&1; done",
     ],
+    [
+      "an evaluated break in a subshell in a read loop",
+      "seq 10 | while read -r x; do eval '(break)'; done",
+    ],
+    [
+      "a piped eval of break in a read loop",
+      "seq 10 | while read -r x; do eval break | cat; done",
+    ],
+    [
+      "an evaluated pipeline followed by || true",
+      "eval 'seq 10 | head -n 1' || true",
+    ],
+    [
+      "TMOUT=… as printf's data before a read loop",
+      "printf '%s\\n' TMOUT=5 >/dev/null\nseq 10 | while read -r x; do :; done",
+    ],
+    [
+      "TMOUT set in a subshell before a read loop",
+      "(TMOUT=5; :)\nseq 10 | while read -r x; do :; done",
+    ],
+    [
+      "TMOUT set for another command before a read loop",
+      "TMOUT=5 true\nseq 10 | while read -r x; do :; done",
+    ],
+    [
+      "TMOUT set after a read loop ends",
+      "seq 10 | while read -r x; do :; done\nTMOUT=5",
+    ],
+    ["TMOUT set to zero", "TMOUT=0\nseq 10 | while read -r x; do :; done"],
   ])("passes %s", (_, body) => {
     expect(pipefail(body)).toEqual([]);
   });
@@ -1861,6 +2026,7 @@ describe("an early-exit reader never reads a streaming producer through a pipe u
     expect(setsPipefail("set -- bash -euo pipefail\n")).toBe(false);
     expect(setsPipefail("set -e run -o pipefail\n")).toBe(false);
     expect(setsPipefail("set +o pipefail\n")).toBe(false);
+    expect(setsPipefail("eval 'set -o pipefail'\n")).toBe(true);
     expect(
       setsPipefail(
         "set -eu\n# Do not set -o pipefail here.\nseq 10 | head -n 1\n",
