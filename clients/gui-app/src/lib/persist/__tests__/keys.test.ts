@@ -131,6 +131,10 @@ describe("persist key builders — output-preserving against current source", ()
     expect(persistKey("notifications-filter")).toBe(
       "traycer-gui-app:notifications-filter",
     );
+    // Source: src/stores/auth/verified-profile-cache-store.ts
+    expect(persistKey("verified-profile-cache")).toBe(
+      "traycer-gui-app:verified-profile-cache",
+    );
     // Source: src/stores/settings/feature-announcements-store.ts
     expect(persistKey("feature-announcements")).toBe(
       "traycer-gui-app:feature-announcements",

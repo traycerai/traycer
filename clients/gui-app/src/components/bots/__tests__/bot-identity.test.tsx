@@ -234,9 +234,9 @@ describe("a bot channel's rows", () => {
     expect(avatarShape(within(botRow).getByTestId("bot-avatar"))).toBe(
       "squircle",
     );
-    expect(
-      avatarShape(within(memberRow).getByTestId("chat-sender-avatar")),
-    ).toBe("circle");
+    expect(avatarShape(within(memberRow).getByTestId("person-avatar"))).toBe(
+      "circle",
+    );
     // The bot is its own creature mark, at the message row's 40 px.
     expect(
       within(botRow)

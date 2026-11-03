@@ -121,7 +121,7 @@ import {
   UNRESOLVED_BOT_MEMBERS,
   type BotMemberResolver,
 } from "@/lib/bots/bot-member-names";
-import { MemberAvatar } from "@/components/bots/bot-avatars";
+import { PersonAvatar } from "@/components/bots/bot-avatars";
 import type { ChatBotThreadLine } from "@/components/chat/chat-bot-presentation-context";
 
 const BOT_ID = "bot_01ARZ3NDEKTSV4RRFFQ69G5FAV";
@@ -432,14 +432,14 @@ describe("<BotChatTranscript /> a bot that answers posts in the channel", () => 
         '[data-testid="bot-member-row"]',
       ) ?? document.body,
     )
-      .getByTestId("chat-sender-avatar")
+      .getByTestId("person-avatar")
       .querySelector<HTMLElement>('[data-slot="avatar-fallback"]')
       ?.style.getPropertyValue("--swatch");
     cleanup();
 
     // The thread line's stack and the thread's anchor draw the member by id.
     render(
-      <MemberAvatar
+      <PersonAvatar
         userId="owner-1"
         name="Someone"
         avatarUrl={null}
@@ -447,7 +447,7 @@ describe("<BotChatTranscript /> a bot that answers posts in the channel", () => 
       />,
     );
     const byId = screen
-      .getByTestId("chat-sender-avatar")
+      .getByTestId("person-avatar")
       .querySelector<HTMLElement>('[data-slot="avatar-fallback"]')
       ?.style.getPropertyValue("--swatch");
     expect(rowSwatch).toBeTruthy();
