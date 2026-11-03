@@ -263,6 +263,15 @@ export interface SandboxSummary {
    * catalogue gives it; `null` from a server before the field.
    */
   readonly regionLabel: string | null;
+  /**
+   * When this sandbox stops running (epoch milliseconds), because the
+   * control plane no longer runs sandboxes of its kind after that date;
+   * `null` on every ordinary row and from a server before the field. While
+   * it is set the row has no resting deadline (`destroyAt` is `null`),
+   * because the control plane does not end a withdrawn row for resting
+   * while this date stands. This date is what the row is ended by.
+   */
+  readonly withdrawalEndsAt: number | null;
 }
 
 /**
@@ -474,6 +483,7 @@ export const sandboxSummarySchema: z.ZodType<SandboxSummary> = lazySchema(() =>
     // fail the row, and with it the whole sandbox list.
     operation: sandboxOperationSchema.nullable().default(null).catch(null),
     regionLabel: z.string().nullable().default(null),
+    withdrawalEndsAt: z.number().nullable().default(null),
   }),
 );
 
@@ -856,7 +866,9 @@ export type SandboxCreditSource = "personal" | "team-allowance" | "team";
  *    (`os-not-offered`, `region-not-offered`, `cpus-out-of-range`,
  *    `memory-out-of-range`, `memory-per-cpu-out-of-range`, `disk-out-of-range`,
  *    `provider-plan-too-small`: the account's plan cannot create any shape
- *    of the provider, see `SandboxCatalogueProvider.creatable`).
+ *    of the provider, see `SandboxCatalogueProvider.creatable`;
+ *    `provider-withdrawn`: no new sandbox of that operating system is made
+ *    any more, and the rows already on it carry `withdrawalEndsAt`).
  *  - `insufficient_credit` (`402`): the create gate refused; `reason`
  *    (`denied`, `unverified`, `unsupported-subscription`), the shortfall
  *    (`null` when the balance is unknown) and the burn it was computed from.

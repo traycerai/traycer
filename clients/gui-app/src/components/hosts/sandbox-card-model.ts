@@ -149,6 +149,19 @@ export function sandboxFrozenLine(frozenAt: number | null): string {
 }
 
 /**
+ * The withdrawal notice: when this sandbox stops running, and what the person
+ * keeps when it does. `null` until a withdrawal is announced for the row's
+ * kind of sandbox, which is every row today.
+ *
+ * The date and what survives it are the two things the person can act on, so
+ * the sentence carries both and nothing else.
+ */
+export function sandboxWithdrawalLine(endsAt: number | null): string | null {
+  if (endsAt === null) return null;
+  return `This sandbox stops running on ${formatSandboxDay(endsAt)} and is rebuilt from your environment. Files outside the repository are lost.`;
+}
+
+/**
  * Who made a team sandbox, or `null` when the server does not
  * say (a personal sandbox, or a server before the field).
  */

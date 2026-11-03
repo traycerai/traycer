@@ -390,6 +390,18 @@ describe("<SandboxCard /> per state", () => {
     ).toBeNull();
   });
 
+  it("shows the withdrawal notice with its date only when the server announces one", () => {
+    const endsAt = new Date(2026, 11, 1).getTime();
+    renderCard(sandboxOf("stopped", false, { withdrawalEndsAt: endsAt }));
+    expect(screen.getByTestId("sandbox-card-withdrawal").textContent).toContain(
+      "stops running",
+    );
+    cleanup();
+
+    renderCard(sandboxOf("stopped", false, { withdrawalEndsAt: null }));
+    expect(screen.queryByTestId("sandbox-card-withdrawal")).toBeNull();
+  });
+
   it("names the region by the server's label, never its id", () => {
     renderCard(
       sandboxOf("awake", false, {

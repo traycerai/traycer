@@ -1162,6 +1162,22 @@ describe("<SandboxesSettingsPanel />", () => {
     });
   });
 
+  it("shows a row's withdrawal notice with its date only when the server announces one", () => {
+    const endsAt = new Date(2026, 11, 1).getTime();
+    renderPanel([
+      row("withdrawn", { withdrawalEndsAt: endsAt }),
+      row("plain", { withdrawalEndsAt: null }),
+    ]);
+
+    expect(
+      within(rowOf("withdrawn")).getByTestId("sandboxes-row-withdrawal")
+        .textContent,
+    ).toContain("stops running");
+    expect(
+      within(rowOf("plain")).queryByTestId("sandboxes-row-withdrawal"),
+    ).toBeNull();
+  });
+
   it("narrows the list by the search and by the state filter, with a count badge", () => {
     renderPanel([
       row("alpha", { state: "awake" }),

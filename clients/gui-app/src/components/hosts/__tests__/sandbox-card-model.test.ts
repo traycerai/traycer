@@ -6,6 +6,7 @@ import {
 import type { SandboxSummary } from "@traycer/protocol/host/sandbox-control";
 import { formatSandboxDate } from "@/lib/sandboxes/sandbox-row-lines";
 import {
+  formatSandboxDay,
   sandboxCardActions,
   sandboxFrozenLine,
   sandboxGuestConfigFailure,
@@ -14,6 +15,7 @@ import {
   sandboxStateLine,
   sandboxSuspendKeepsLine,
   sandboxTileOverlay,
+  sandboxWithdrawalLine,
   type SandboxCardAction,
 } from "@/components/hosts/sandbox-card-model";
 import {
@@ -69,6 +71,7 @@ function summaryOf(overrides: Partial<SandboxSummary>): SandboxSummary {
     keptAt: null,
     operation: null,
     regionLabel: null,
+    withdrawalEndsAt: null,
     ...overrides,
   };
 }
@@ -312,6 +315,20 @@ describe("sandboxFrozenLine", () => {
     // Thirty days on, to the minute: the date carries its time.
     expect(formatSandboxDate(frozenDestroyAt(frozenAt), true)).toBe(
       formatSandboxDate(new Date(2026, 10, 8, 12, 0, 0).getTime(), true),
+    );
+  });
+});
+
+describe("sandboxWithdrawalLine", () => {
+  it("is null while no withdrawal is announced", () => {
+    expect(sandboxWithdrawalLine(null)).toBeNull();
+  });
+
+  it("names the day the sandbox stops running once a withdrawal is announced", () => {
+    const endsAt = new Date(2026, 11, 1, 0, 0, 0).getTime();
+
+    expect(sandboxWithdrawalLine(endsAt)).toBe(
+      `This sandbox stops running on ${formatSandboxDay(endsAt)} and is rebuilt from your environment. Files outside the repository are lost.`,
     );
   });
 });
