@@ -3,7 +3,10 @@ import type { ChatAccumulatedFileChange } from "@traycer/protocol/host/agent/gui
 import type { ChatAccumulatedFileChangeSummary } from "@traycer/protocol/host/agent/gui/subscribe-windowed";
 import type { CheckpointArtifactTag } from "@traycer/protocol/persistence/epic/checkpoint-manifests";
 import {
-  accumulatedChangeRows,
+  type AccumulatedChangeRow,
+  accumulatedChangeRowListsEqual,
+  activeTurnChangeRows,
+  mergeAccumulatedChangeRows,
   hostAccumulatedChangeRows,
   rowFromAccumulatedChange,
   rowFromAccumulatedChangeSummary,
@@ -17,30 +20,32 @@ import type {
   MessageSegment,
 } from "@/stores/composer/chat-store";
 
-describe("accumulatedChangeRows", () => {
+describe("mergeAccumulatedChangeRows over activeTurnChangeRows", () => {
   it("emits the client's own row for an active-turn file no host version names", () => {
     // The host recomputes its accumulated set at turn boundaries, so a file the
     // running turn just created is not in it. The client's row stands in until
     // the recompute lands, carrying the per-edit magnitude so the panel moves.
-    const changes = accumulatedChangeRows(
-      [
-        assistantMessage({
-          id: "assistant:turn-1",
-          runState: "running",
-          segments: [
-            fileChangeSegment({
-              id: "change-1",
-              filePath: "/repo/src/app.ts",
-              beforeHash: "a".repeat(64),
-              afterHash: "b".repeat(64),
-              additions: 1,
-              deletions: 1,
-            }),
-          ],
-        }),
-      ],
+    const changes = mergeAccumulatedChangeRows(
       [],
-      "turn-1",
+      activeTurnChangeRows(
+        [
+          assistantMessage({
+            id: "assistant:turn-1",
+            runState: "running",
+            segments: [
+              fileChangeSegment({
+                id: "change-1",
+                filePath: "/repo/src/app.ts",
+                beforeHash: "a".repeat(64),
+                afterHash: "b".repeat(64),
+                additions: 1,
+                deletions: 1,
+              }),
+            ],
+          }),
+        ],
+        "turn-1",
+      ),
     );
 
     expect(changes).toEqual([
@@ -72,23 +77,7 @@ describe("accumulatedChangeRows", () => {
     // The host's row is authoritative and used wholesale. Mid-turn its counts
     // are one turn stale, which is deliberate: a stale number that means the
     // same thing as every other row beats a per-edit number that does not.
-    const changes = accumulatedChangeRows(
-      [
-        assistantMessage({
-          id: "assistant:turn-2",
-          runState: "running",
-          segments: [
-            fileChangeSegment({
-              id: "change-2",
-              filePath: "/repo/src/app.ts",
-              beforeHash: "c".repeat(64),
-              afterHash: "d".repeat(64),
-              additions: 1,
-              deletions: 1,
-            }),
-          ],
-        }),
-      ],
+    const changes = mergeAccumulatedChangeRows(
       [
         rowFromAccumulatedChangeSummary(
           summary({
@@ -97,7 +86,25 @@ describe("accumulatedChangeRows", () => {
           }),
         ),
       ],
-      "turn-2",
+      activeTurnChangeRows(
+        [
+          assistantMessage({
+            id: "assistant:turn-2",
+            runState: "running",
+            segments: [
+              fileChangeSegment({
+                id: "change-2",
+                filePath: "/repo/src/app.ts",
+                beforeHash: "c".repeat(64),
+                afterHash: "d".repeat(64),
+                additions: 1,
+                deletions: 1,
+              }),
+            ],
+          }),
+        ],
+        "turn-2",
+      ),
     );
 
     // The host's counts, not the segment's +1/-1, and the host's digest with
@@ -114,25 +121,27 @@ describe("accumulatedChangeRows", () => {
   it("suppresses an active-turn net no-op (equal endpoints) with no host row", () => {
     // Edited back to the original within the turn ⇒ equal content-addressed
     // endpoints ⇒ nothing to show.
-    const changes = accumulatedChangeRows(
-      [
-        assistantMessage({
-          id: "assistant:turn-3",
-          runState: "running",
-          segments: [
-            fileChangeSegment({
-              id: "change-3",
-              filePath: "/repo/src/app.ts",
-              beforeHash: "e".repeat(64),
-              afterHash: "e".repeat(64),
-              additions: 1,
-              deletions: 1,
-            }),
-          ],
-        }),
-      ],
+    const changes = mergeAccumulatedChangeRows(
       [],
-      "turn-3",
+      activeTurnChangeRows(
+        [
+          assistantMessage({
+            id: "assistant:turn-3",
+            runState: "running",
+            segments: [
+              fileChangeSegment({
+                id: "change-3",
+                filePath: "/repo/src/app.ts",
+                beforeHash: "e".repeat(64),
+                afterHash: "e".repeat(64),
+                additions: 1,
+                deletions: 1,
+              }),
+            ],
+          }),
+        ],
+        "turn-3",
+      ),
     );
 
     expect(changes).toEqual([]);
@@ -144,33 +153,35 @@ describe("accumulatedChangeRows", () => {
     // pinned panel's `+/-` grows on every edit instead of snapping at turn end.
     // Distinct before/after hashes (a→b, b→c) keep the merged endpoints
     // unequal so the row is not suppressed as a net no-op.
-    const changes = accumulatedChangeRows(
-      [
-        assistantMessage({
-          id: "assistant:turn-4",
-          runState: "running",
-          segments: [
-            fileChangeSegment({
-              id: "change-4a",
-              filePath: "/repo/src/app.ts",
-              beforeHash: "a".repeat(64),
-              afterHash: "b".repeat(64),
-              additions: 3,
-              deletions: 1,
-            }),
-            fileChangeSegment({
-              id: "change-4b",
-              filePath: "/repo/src/app.ts",
-              beforeHash: "b".repeat(64),
-              afterHash: "c".repeat(64),
-              additions: 2,
-              deletions: 4,
-            }),
-          ],
-        }),
-      ],
+    const changes = mergeAccumulatedChangeRows(
       [],
-      "turn-4",
+      activeTurnChangeRows(
+        [
+          assistantMessage({
+            id: "assistant:turn-4",
+            runState: "running",
+            segments: [
+              fileChangeSegment({
+                id: "change-4a",
+                filePath: "/repo/src/app.ts",
+                beforeHash: "a".repeat(64),
+                afterHash: "b".repeat(64),
+                additions: 3,
+                deletions: 1,
+              }),
+              fileChangeSegment({
+                id: "change-4b",
+                filePath: "/repo/src/app.ts",
+                beforeHash: "b".repeat(64),
+                afterHash: "c".repeat(64),
+                additions: 2,
+                deletions: 4,
+              }),
+            ],
+          }),
+        ],
+        "turn-4",
+      ),
     );
 
     expect(changes).toMatchObject([
@@ -187,31 +198,7 @@ describe("accumulatedChangeRows", () => {
       //
       // Here the host says `old.ts` was touched first; the only hydrated
       // message mentions `recent.ts` first. The host wins.
-      const changes = accumulatedChangeRows(
-        [
-          assistantMessage({
-            id: "assistant:turn-5",
-            runState: null,
-            segments: [
-              fileChangeSegment({
-                id: "change-5a",
-                filePath: "/repo/src/recent.ts",
-                beforeHash: "a".repeat(64),
-                afterHash: "b".repeat(64),
-                additions: 1,
-                deletions: 0,
-              }),
-              fileChangeSegment({
-                id: "change-5b",
-                filePath: "/repo/src/old.ts",
-                beforeHash: "c".repeat(64),
-                afterHash: "d".repeat(64),
-                additions: 1,
-                deletions: 0,
-              }),
-            ],
-          }),
-        ],
+      const changes = mergeAccumulatedChangeRows(
         [
           rowFromAccumulatedChangeSummary(
             summary({ filePath: "/repo/src/old.ts", counts: null }),
@@ -220,7 +207,33 @@ describe("accumulatedChangeRows", () => {
             summary({ filePath: "/repo/src/recent.ts", counts: null }),
           ),
         ],
-        null,
+        activeTurnChangeRows(
+          [
+            assistantMessage({
+              id: "assistant:turn-5",
+              runState: null,
+              segments: [
+                fileChangeSegment({
+                  id: "change-5a",
+                  filePath: "/repo/src/recent.ts",
+                  beforeHash: "a".repeat(64),
+                  afterHash: "b".repeat(64),
+                  additions: 1,
+                  deletions: 0,
+                }),
+                fileChangeSegment({
+                  id: "change-5b",
+                  filePath: "/repo/src/old.ts",
+                  beforeHash: "c".repeat(64),
+                  afterHash: "d".repeat(64),
+                  additions: 1,
+                  deletions: 0,
+                }),
+              ],
+            }),
+          ],
+          null,
+        ),
       );
 
       expect(changes.map((row) => row.filePath)).toEqual([
@@ -233,23 +246,7 @@ describe("accumulatedChangeRows", () => {
       // A path no host row names has not been touched by any completed turn,
       // so the running turn is its first toucher and it sorts last - after
       // every file the host knows, whether or not any of them are hydrated.
-      const changes = accumulatedChangeRows(
-        [
-          assistantMessage({
-            id: "assistant:turn-6",
-            runState: "running",
-            segments: [
-              fileChangeSegment({
-                id: "change-6",
-                filePath: "/repo/src/brand-new.ts",
-                beforeHash: null,
-                afterHash: "f".repeat(64),
-                additions: 7,
-                deletions: 0,
-              }),
-            ],
-          }),
-        ],
+      const changes = mergeAccumulatedChangeRows(
         [
           rowFromAccumulatedChangeSummary(
             summary({ filePath: "/repo/src/first.ts", counts: null }),
@@ -258,7 +255,25 @@ describe("accumulatedChangeRows", () => {
             summary({ filePath: "/repo/src/second.ts", counts: null }),
           ),
         ],
-        "turn-6",
+        activeTurnChangeRows(
+          [
+            assistantMessage({
+              id: "assistant:turn-6",
+              runState: "running",
+              segments: [
+                fileChangeSegment({
+                  id: "change-6",
+                  filePath: "/repo/src/brand-new.ts",
+                  beforeHash: null,
+                  afterHash: "f".repeat(64),
+                  additions: 7,
+                  deletions: 0,
+                }),
+              ],
+            }),
+          ],
+          "turn-6",
+        ),
       );
 
       expect(changes.map((row) => row.filePath)).toEqual([
@@ -272,23 +287,7 @@ describe("accumulatedChangeRows", () => {
       // The host's row wins wholesale where one exists, and that includes its
       // POSITION: an active-turn edit to a long-known file must not lift it to
       // the front of the panel.
-      const changes = accumulatedChangeRows(
-        [
-          assistantMessage({
-            id: "assistant:turn-7",
-            runState: "running",
-            segments: [
-              fileChangeSegment({
-                id: "change-7",
-                filePath: "/repo/src/second.ts",
-                beforeHash: "a".repeat(64),
-                afterHash: "b".repeat(64),
-                additions: 2,
-                deletions: 0,
-              }),
-            ],
-          }),
-        ],
+      const changes = mergeAccumulatedChangeRows(
         [
           rowFromAccumulatedChangeSummary(
             summary({ filePath: "/repo/src/first.ts", counts: null }),
@@ -297,7 +296,25 @@ describe("accumulatedChangeRows", () => {
             summary({ filePath: "/repo/src/second.ts", counts: null }),
           ),
         ],
-        "turn-7",
+        activeTurnChangeRows(
+          [
+            assistantMessage({
+              id: "assistant:turn-7",
+              runState: "running",
+              segments: [
+                fileChangeSegment({
+                  id: "change-7",
+                  filePath: "/repo/src/second.ts",
+                  beforeHash: "a".repeat(64),
+                  afterHash: "b".repeat(64),
+                  additions: 2,
+                  deletions: 0,
+                }),
+              ],
+            }),
+          ],
+          "turn-7",
+        ),
       );
 
       expect(changes.map((row) => row.filePath)).toEqual([
@@ -738,5 +755,90 @@ describe("accumulatedSummarySetComplete", () => {
         deliveredSummaryCount: 5,
       }),
     ).toBe(0);
+  });
+});
+
+describe("accumulatedChangeRowListsEqual", () => {
+  function baseRow(): AccumulatedChangeRow {
+    return {
+      filePath: "/repo/src/app.ts",
+      operation: "edit",
+      diffSource: "snapshot",
+      reason: "snapshot",
+      undoable: true,
+      artifact: { artifactId: "artifact-1", kind: null, title: "Plan" },
+      counts: { additions: 2, deletions: 1 },
+      hasContents: true,
+      digest: "digest-1",
+      liveDiff: {
+        sourceBlockIds: ["block-1"],
+        beforeHash: "a".repeat(64),
+        afterHash: "b".repeat(64),
+      },
+    };
+  }
+
+  it("compares lists built separately from the same values as equal", () => {
+    expect(
+      accumulatedChangeRowListsEqual(
+        [baseRow(), { ...baseRow(), filePath: "/repo/src/other.ts" }],
+        [baseRow(), { ...baseRow(), filePath: "/repo/src/other.ts" }],
+      ),
+    ).toBe(true);
+  });
+
+  it.each<{
+    readonly field: string;
+    readonly changed: AccumulatedChangeRow;
+  }>([
+    { field: "filePath", changed: { ...baseRow(), filePath: "/repo/b.ts" } },
+    { field: "operation", changed: { ...baseRow(), operation: "create" } },
+    { field: "diffSource", changed: { ...baseRow(), diffSource: "none" } },
+    { field: "reason", changed: { ...baseRow(), reason: "denied" } },
+    { field: "undoable", changed: { ...baseRow(), undoable: false } },
+    {
+      field: "artifact id",
+      changed: {
+        ...baseRow(),
+        artifact: { artifactId: "artifact-2", kind: null, title: "Plan" },
+      },
+    },
+    { field: "artifact null", changed: { ...baseRow(), artifact: null } },
+    {
+      field: "counts",
+      changed: { ...baseRow(), counts: { additions: 2, deletions: 2 } },
+    },
+    { field: "counts null", changed: { ...baseRow(), counts: null } },
+    { field: "hasContents", changed: { ...baseRow(), hasContents: false } },
+    { field: "digest", changed: { ...baseRow(), digest: "digest-2" } },
+    { field: "liveDiff null", changed: { ...baseRow(), liveDiff: null } },
+    {
+      field: "liveDiff afterHash",
+      changed: {
+        ...baseRow(),
+        liveDiff: {
+          sourceBlockIds: ["block-1"],
+          beforeHash: "a".repeat(64),
+          afterHash: "c".repeat(64),
+        },
+      },
+    },
+    {
+      field: "liveDiff sourceBlockIds",
+      changed: {
+        ...baseRow(),
+        liveDiff: {
+          sourceBlockIds: ["block-1", "block-2"],
+          beforeHash: "a".repeat(64),
+          afterHash: "b".repeat(64),
+        },
+      },
+    },
+  ])("compares a list unequal when only $field differs", ({ changed }) => {
+    expect(accumulatedChangeRowListsEqual([baseRow()], [changed])).toBe(false);
+  });
+
+  it("compares lists of different length unequal", () => {
+    expect(accumulatedChangeRowListsEqual([baseRow()], [])).toBe(false);
   });
 });

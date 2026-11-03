@@ -60,6 +60,10 @@ import {
 import { buildPublicDraftFields } from "./support-public-draft";
 import { deepScrubSupportValue, scrubSupportText } from "./support-scrubber";
 import {
+  earlierHostLogRecords,
+  earlierHostLogSection,
+} from "./support-host-log-evidence";
+import {
   REPORT_LOG_TAIL_MAX_BYTES,
   reportImageMediaTypeForMimeType,
 } from "@traycer-clients/shared/support/image-attachment-guards";
@@ -980,10 +984,11 @@ async function captureFrozenEvidence(
 ): Promise<FrozenEvidence> {
   const [desktop, host, browserTelemetry, browserTrace] = await Promise.all([
     captureLogTail(desktopLogPath, LOG_TAIL_LINES, LOG_ATTACHMENT_MAX_BYTES),
-    captureLogTail(
+    captureHostLogTail(
       hostLayout.logFile,
       LOG_TAIL_LINES,
       LOG_ATTACHMENT_MAX_BYTES,
+      Date.now(),
     ),
     captureBrowserLogTail(
       hostLayout.browserTelemetryRotatedFile,
@@ -1012,7 +1017,94 @@ async function captureLogTail(
   maxBytes: number,
 ): Promise<FrozenLogTail> {
   const content = await readFile(path, "utf-8").catch(() => "");
+  return tailOfLines(splitLogLines(content), lines, maxBytes);
+}
+
+/**
+ * The share of the host log attachment the earlier-records section may take
+ * from the tail ({@link captureHostLogTail}).
+ */
+const EARLIER_HOST_LOG_SECTION_MAX_BYTES = Math.floor(
+  LOG_ATTACHMENT_MAX_BYTES / 4,
+);
+
+/**
+ * `host.log`'s tail, as {@link captureLogTail}, followed by a marked section
+ * of the evidence records from the 15 minutes before the report that fall
+ * before the tail (`support-host-log-evidence.ts`): on a busy host the
+ * 500-line tail can begin after the stall the report is about. Both fit in
+ * `maxBytes` together: the section takes at most a quarter, the tail the
+ * rest, and the section is scrubbed before it is measured, like the tail.
+ *
+ * "Before the tail" means before the lines the tail actually KEEPS, not
+ * before its nominal 500: the byte cap can drop the tail's oldest lines, and
+ * a record there must stay eligible for the section rather than be lost from
+ * both. So the boundary is taken from a tail sized with the section's whole
+ * reservation; the tail is then re-sized to the section it got, and a
+ * record the larger tail now holds is left out of the section.
+ */
+async function captureHostLogTail(
+  path: string,
+  lines: number,
+  maxBytes: number,
+  nowMs: number,
+): Promise<FrozenLogTail> {
+  const content = await readFile(path, "utf-8").catch(() => "");
   const allLines = splitLogLines(content);
+  const reservation = Math.min(EARLIER_HOST_LOG_SECTION_MAX_BYTES, maxBytes);
+  const reserved = tailOfLines(
+    allLines,
+    lines,
+    Math.max(0, maxBytes - reservation - 1),
+  );
+  const reservedStart = retainedTailStart(allLines, reserved.content);
+  const section = earlierHostLogSection(
+    earlierHostLogRecords(allLines.slice(0, reservedStart), nowMs),
+    reservation,
+    scrubSupportText,
+  );
+  if (section === "") return tailOfLines(allLines, lines, maxBytes);
+  const tail = tailOfLines(
+    allLines,
+    lines,
+    Math.max(0, maxBytes - Buffer.byteLength(section, "utf8") - 1),
+  );
+  const tailStart = retainedTailStart(allLines, tail.content);
+  // Bounded by the bytes `section` measured, not by the reservation: the
+  // tail was sized against `section`, and a rebuild from the reservation can
+  // admit a record the first section dropped for size and overrun the cap.
+  const kept =
+    tailStart < reservedStart
+      ? earlierHostLogSection(
+          earlierHostLogRecords(allLines.slice(0, tailStart), nowMs),
+          Buffer.byteLength(section, "utf8"),
+          scrubSupportText,
+        )
+      : section;
+  if (kept === "") return tail;
+  return {
+    content: tail.content === "" ? kept : `${tail.content}\n${kept}`,
+    truncated: tail.truncated,
+  };
+}
+
+/**
+ * The index in `allLines` of the first line a tail's `content` kept. The
+ * scrubber maps line to line, so the kept line count locates it.
+ */
+function retainedTailStart(
+  allLines: readonly string[],
+  content: string,
+): number {
+  const kept = content === "" ? 0 : content.split("\n").length;
+  return Math.max(0, allLines.length - kept);
+}
+
+function tailOfLines(
+  allLines: readonly string[],
+  lines: number,
+  maxBytes: number,
+): FrozenLogTail {
   const truncatedByLineCount = allLines.length > lines;
   const tail = allLines.slice(-lines).join("\n");
   // Scrub BEFORE the byte cap below, never after: `host.log` is written with

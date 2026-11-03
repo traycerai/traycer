@@ -17,17 +17,19 @@ Model routing settings belong to one host, and to your account on that host. Cho
 - The gear on a chat's [routing card](/agents-and-models/usage-limits-and-routing#the-routing-card) opens this page for that chat's host.
 - Your changes save as you make them. A tier name saves when you leave the field or press Enter.
 
+To keep one chat on its current provider, account and model, right-click its tab and choose **On a usage limit or error → Wait it out here**. That chat can wait for a usage-limit reset even when **Route automatically** is off, within this host’s longest-wait limit. See [Per-chat routing](/agents-and-models/usage-limits-and-routing#keep-one-chat-on-its-account).
+
 ## Route Automatically
 
 **Route automatically** is the switch at the top of the page. It is **off** by default.
 
-When it is on and a chat's turn is blocked, Traycer works through your [plan](#plan) until a step works or it reaches **Notify me**. When it is off, a blocked turn stops with an error, and you choose what to do from the chat.
+For chats set to **Follow the device routing**, turning this on lets Traycer work through your [plan](#plan) when a turn is blocked, until a step works or it reaches **Notify me**. With it off, those chats stop with an error and you choose what to do. A chat set to **Wait it out here** can still wait for a usage-limit reset and retry on its current account while the switch is off.
 
-Turning it off stops Traycer starting new switches or waits. Chats that are already switching or waiting carry on; stop those from the card in the chat. While any are in progress, the row shows how many, for example "2 in progress right now."
+Turning it off stops new switches and waits for chats that follow device routing. It does not stop a chat set to **Wait it out here** from starting a wait. Chats that are already switching or waiting carry on; stop those from the card in the chat. While any are in progress, the row shows how many, for example "2 in progress right now."
 
 The switch covers only Traycer's routing. Your coding agent's own retries are separate and keep working either way.
 
-While the switch is off, you can still edit everything below it. The page says "Off - these settings take effect when you turn on Route automatically."
+While the switch is off, you can still edit everything below it. Chats following device routing use your plan once you turn it on. **Wait it out here** still uses the host’s cancellation countdown and longest-wait limit while the switch is off.
 
 The rest of the page has three tabs: **Plan**, **Equivalent models** and **Overrides**.
 

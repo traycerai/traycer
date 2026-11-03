@@ -118,7 +118,7 @@ for (const stream of STREAMS) {
         },
         [stream.start, stream.intervalMs] as const,
       );
-      await page.waitForTimeout(300);
+      await nextFrames(page, 12);
     }
     await page.mouse.move(195, 350);
     await wheelsDelivered(
@@ -127,14 +127,13 @@ for (const stream of STREAMS) {
       2,
     );
     await nextFrames(page, 2);
-    await page.waitForTimeout(300);
     await expect
       .poll(() => page.evaluate(() => window.__chatScrollProbe.pillShown()))
       .toBe(true);
 
     await startFrames(page);
     await page.locator('[aria-label="Scroll to end"]').click();
-    await page.waitForTimeout(stream.start === null ? 1500 : 3000);
+    await nextFrames(page, stream.start === null ? 60 : 120);
     await page.evaluate(() => {
       window.__chatScrollProbe.stopStream();
     });

@@ -3,7 +3,6 @@ import {
   upgradeResponseToVersion,
   validateVersionedRpcRegistry,
 } from "@traycer/protocol/framework/index";
-import { validateVersionedStreamRpcRegistry } from "@traycer/protocol/framework/versioned-stream-rpc";
 import {
   hostRpcRegistry,
   hostStreamRpcRegistry,
@@ -40,9 +39,8 @@ import { providerCliStateSchema } from "@traycer/protocol/host/provider-schemas"
  * installed `latestMinor`, upgrade paths between consecutive minors, downgrades
  * anchored at each major's latest, per-lane additivity, and the
  * `responseGrowthProjectionGated` / `semanticMajorBreakFromPreviousMajor`
- * annotations being both valid AND load-bearing - is the explicit
- * `validateVersionedRpcRegistry` / `validateVersionedStreamRpcRegistry` call
- * below. A compile cannot see a runtime throw; CI also holds every static
+ * annotations being both valid AND load-bearing - runs below on the line this
+ * file guards. A compile cannot see a runtime throw; CI holds every static
  * registry to the same pass via `protocol/scripts/compat/static-registries.ts`.
  *
  * `agent.gui.listHarnesses@9.1` is the annotation this guards today. It grows
@@ -70,10 +68,11 @@ function providerStateFixture(): Record<string, unknown> {
 }
 
 describe("auto-mode protocol change", () => {
-  it("constructs both host registries (the annotations parse)", () => {
-    expect(() => validateVersionedRpcRegistry(hostRpcRegistry)).not.toThrow();
+  it("constructs both host registries (the annotation parses)", () => {
     expect(() =>
-      validateVersionedStreamRpcRegistry(hostStreamRpcRegistry),
+      validateVersionedRpcRegistry({
+        "agent.gui.listHarnesses": hostRpcRegistry["agent.gui.listHarnesses"],
+      }),
     ).not.toThrow();
     expect(Object.keys(hostRpcRegistry).length).toBeGreaterThan(0);
     expect(Object.keys(hostStreamRpcRegistry).length).toBeGreaterThan(0);

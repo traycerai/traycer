@@ -43,6 +43,7 @@ The composer is the prompt area for an agent on the Chat interface. See [Compose
 | **Permissions**          | Decide what the agent can do before asking. See [Permissions](#permissions).                             |
 | **Thinking effort**      | Choose reasoning depth when the selected model supports it.                                              |
 | **Fast mode**            | Use a faster service tier when the selected model offers one.                                            |
+| **Ultracode**            | Request Claude Code's multi-agent mode for this chat, where offered. See [Ultracode](#ultracode). |
 | **Attach image**         | Attach images. Add files and folders with `@` mentions, drag and drop, or paste. See [Attachments and voice](#attachments-and-voice). |
 | **Skills and commands**  | Type `/` or `$` to use the coding agent's commands and skills. See [Artifact workflow](/concepts/artifact-workflow) for Traycer's planning skills. |
 | **Voice**                | Dictate a prompt instead of typing.                                                                      |
@@ -51,7 +52,7 @@ The composer is the prompt area for an agent on the Chat interface. See [Compose
 ### Changing Settings During A Turn
 
 - **Permissions** apply to the running turn right away. See [Permissions](#permissions).
-- **Model, thinking effort, fast mode, and provider profile** apply from the next turn. If you change one of them and then steer a message into the running turn, Traycer asks **End the current turn to send with new settings?**. **End turn & send** ends the turn and resends your message with the new settings. See [Message queue](/panels/agents/message-queue#steering-after-changing-settings).
+- **Model, thinking effort, fast mode, provider profile, and Ultracode** apply from the next turn. If you change one of them and then steer a message into the running turn, Traycer asks **End the current turn to send with new settings?**. **End turn & send** ends the turn and resends your message with the new settings. See [Message queue](/panels/agents/message-queue#steering-after-changing-settings).
 
 When a provider reports a usage limit, see [Usage limits and model routing](/agents-and-models/usage-limits-and-routing).
 
@@ -109,6 +110,14 @@ Both live in the footer of the model picker: drag the **Thinking effort** slider
 
 <FeatureVideo src="https://assets.traycer.ai/docs/videos/thinking-effort-fast-mode.mp4" label="Raise the thinking effort and turn on fast mode" />
 
+### Ultracode
+
+For a Claude Code chat, open the model picker and turn on **Ultracode** at the bottom. It requests Claude Code's multi-agent mode and uses more of your Claude usage limits. It is separate from fast mode and thinking effort.
+
+The switch is enabled only when the selected model offers Ultracode and the chat's host supports it. It needs Claude Code 2.1.284 or later. If the model does not offer it, the picker says **Not offered for** that model.
+
+The choice belongs to this chat, not to every new chat. Changes apply from the next turn, not to a turn already running. The chat shows whether Claude Code accepted the request; if it refuses or cannot confirm, that turn may run without Ultracode. Likewise, if turning it off is not confirmed, it may still be on.
+
 ## Attachments And Voice
 
 The **Attach image** button attaches images only. Pasting or dropping an image on the composer attaches it too. If the selected model can't read images, the composer says so; remove the images or switch models.
@@ -137,11 +146,9 @@ Answer structured questions inline or compare an alternative answer in a fork. S
 
 ## Interactive Pages
 
-An agent can show an interactive page inside its reply. While it prepares the page, the chat shows **Building page**. Pages also appear in the Task’s **Files** panel and are visible to everyone in the Task, including pages created in private chats.
+Agents can show an [HTML artifact](/panels/artifacts/html) inline in chat. Use **Expand** to open the captured version in its own panel, or **Download ZIP** to save its files. The saved artifact also appears in **Artifacts**, where you can open the latest version and request further changes.
 
-Hover the page to choose **Expand** to open it in a separate panel, or **Download HTML** to save an HTML copy. On a phone, open **Page actions** (⋯) and choose **Open full screen** or **Download HTML**.
-
-If a page stops responding, choose **Reload** to run it again. When an updated page includes an **Updated from an earlier page** link, use it to return to the earlier version.
+Connected MCP servers can also return interactive apps in chat; use **Open full screen** for more room.
 
 ## Message Actions
 
@@ -162,6 +169,12 @@ When you edit a message and that turn or a later one changed files, Traycer asks
 - **Don't revert** keeps the files as they are.
 
 Either way, the messages after the edited one are cleared and the edited message is sent. To roll back one turn's files without changing the conversation, see [Undo a turn](/panels/agents/undo-a-turn).
+
+### Read Replies Aloud
+
+Use the speaker button below a reply, next to **Copy**, to **Read reply aloud**. Press **Stop reading** to stop playback. Playback uses only voices installed on your device; reply text is not sent to a speech service. The button is hidden if your device has no supported speech engine or on-device voice. It is not available in the Android app.
+
+Reading skips code blocks and diagrams. Only one reply plays at a time; starting another stops the first. Playback also stops when you switch away from or close the chat, a new reply arrives in it, or the voice becomes unavailable.
 
 ## Forking
 
@@ -206,12 +219,6 @@ Stopping an agent that has sub-agents running asks **Also stop N sub-agents?**. 
 To fold any of these panels into a small chip, use [Layout](/settings/layout) › **Composer**.
 
 When a reply ends with suggested next steps, each one is a button. Click it to send that suggestion as your next message, or use its copy icon to copy the text.
-
-### Read Replies Aloud
-
-Use the speaker button below a reply, next to **Copy**, to **Read reply aloud**. Press **Stop reading** to stop playback. The button appears only when your device has an available on-device voice.
-
-Reading skips code blocks and diagrams. Only one reply plays at a time; starting another stops the first. Playback also stops when you switch away from the chat or a new reply arrives in it.
 
 ## The Terminal Interface
 

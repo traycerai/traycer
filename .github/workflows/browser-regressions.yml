@@ -17,6 +17,10 @@ name: Browser regressions
 # always reports, so a PR that skips the suite is not held waiting for it,
 # and it fails when any job that ran failed. The shard jobs themselves are
 # not required, so the shard count can change freely. No secrets.
+#
+# Each shard takes a share of whole spec files cut by measured time and serves
+# the fixture pages bundled; a test over the per-test budget fails its shard.
+# `clients/gui-app/browser-tests/README.md`, "Time".
 
 on:
   pull_request:
@@ -54,9 +58,13 @@ jobs:
     outputs:
       run: ${{ steps.filter.outputs.run }}
     steps:
+      # Every commit, for the range below, but no file contents: the diff reads
+      # trees only, and the job's one file is `scripts/ci-last-green-sha.sh`.
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
         with:
           fetch-depth: 0
+          filter: blob:none
+          sparse-checkout: scripts
           persist-credentials: false
       # A push run is compared with the last push this workflow PASSED on, not
       # with the push before it. A team PR is not tested before it merges, so a
@@ -106,7 +114,9 @@ jobs:
               echo "A $EVENT run always runs the suite."
               exit 0 ;;
           esac
-          relevant=$(git diff --name-only "$range" | awk '
+          # `--no-renames`: rename detection would fetch the contents the
+          # blobless clone left out, and a rename lists both paths this way.
+          relevant=$(git diff --name-only --no-renames "$range" | awk '
             /\.md$/ || /\.test\.tsx?$/ { next }
             /^clients\/gui-app\// || /^clients\/shared\// || /^protocol\// ||
             /^packages\/html-source\// ||
@@ -159,20 +169,40 @@ jobs:
         with:
           package-manager-cache: false
           node-version: "24.20.0"
-      - name: Cache bun global install cache
-        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
-        with:
-          path: ~/.bun/install/cache
-          key: bun-${{ runner.os }}-${{ hashFiles('bun.lock') }}
-          restore-keys: |
-            bun-${{ runner.os }}-
+      # No package cache: restoring the shared 1.2 GB one took 31 to 60 s a
+      # shard, and an install from the registry takes 8 to 10 s.
       - run: bun install --frozen-lockfile
       - name: Browser regressions
         working-directory: clients/gui-app
         env:
           SHARD: ${{ matrix.shard }}/${{ strategy.job-total }}
-        run: bun run test:browser --shard="$SHARD"
-      # The HTML report carries a trace of every failed attempt: open it with
+          # Serve the fixture pages bundled: `vite.browser-tests.config.ts`.
+          BROWSER_TESTS_BUNDLE: "1"
+        # Whole files, cut by measured time (the script says why), not `--shard`.
+        run: |
+          set -euo pipefail
+          # Not `mapfile < <(...)`: a planner that fails there leaves an empty
+          # list, and an empty list runs every spec in every shard.
+          plan="$(node scripts/browser-test-shard-plan.ts "$SHARD")"
+          mapfile -t files <<< "$plan"
+          if [ -z "$plan" ] || [ "${#files[@]}" -eq 0 ]; then
+            echo "The shard plan gave shard $SHARD no spec files."
+            exit 1
+          fi
+          bun run test:browser "${files[@]}"
+      - name: Every test is within the per-test budget
+        working-directory: clients/gui-app
+        run: node scripts/browser-test-budget.ts test-results.json
+      # Whatever the result: the timings refresh reads these, and a red run's
+      # times say what a budget failure or a timeout was waiting on.
+      - name: Upload the JSON report
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: browser-results-${{ matrix.shard }}
+          path: clients/gui-app/test-results.json
+          retention-days: 14
+      # The HTML report carries a trace of each red test's retry: open it with
       # `bunx playwright show-report <dir>` after downloading.
       - name: Upload the Playwright report
         if: failure()

@@ -53,16 +53,22 @@ later merge never cancels an earlier merge's run.
   summary. It sends nothing anywhere: a failed `trunk-red` run is the signal,
   and the one thing an alert has to watch.
 - A merge run that narrows to what changed (`nx affected` in `pre-commit.yml`,
-  the `changes` jobs of `browser-regressions.yml` and `formal-regressions.yml`)
+  the `changes` jobs of `browser-regressions.yml` and `formal-regressions.yml`,
+  `macos-packaging-changes` in `test.yml`)
   compares against the last push its own workflow passed on (`scripts/ci-last-green-sha.sh`), not the
   push before. So the next merge's range still holds a break, and `main`
   stays red until a run covering everything since the last green push passes.
+- A protocol test file over 10 s fails the `test (@traycer/protocol)` leg
+  unless `protocol/test-budget-allowlist.json` names it with a reason. It runs
+  once more alone first, because a file's time on the runner moves by half
+  between runs. A suite sized by case count runs the rest of its cases in
+  `measurements.yml`, once a night, behind `HOST_MEASUREMENT_FULL`; nothing but
+  that workflow's own run reports a failure there.
 - The internal repository's nightly staging train and its promotion to
   production both refuse a pinned commit of this repository whose push checks
   are not all green.
-- Each gui-app shard holds its test files to 10 s
-  (`scripts/ci-gui-test-budget.mjs`, on the shard's JUnit report). A file over
-  it runs once more alone, and only a second reading over 10 s fails, unless
-  `clients/gui-app/test-budget-allowlist.json` names the file with a reason.
-- A time or size measurement too long for that budget is a `*.measure.ts` file
-  and runs nightly in `measurements.yml`, not on the merge run.
+- Each gui-app shard holds its test files to the same 10 s, through the same
+  script (`protocol/scripts/test-budget.ts --project clients/gui-app`, on the
+  shard's JUnit report), unless `clients/gui-app/test-budget-allowlist.json`
+  names the file with a reason. A gui-app time or size measurement too long for
+  that budget is a `*.measure.ts` file, run by the same nightly workflow.

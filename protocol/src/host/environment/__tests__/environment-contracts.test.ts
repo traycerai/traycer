@@ -115,7 +115,11 @@ describe("environment.list protocol contract", () => {
   });
 
   it("registers off the released floor with unsupported degrade", () => {
-    expect(() => validateVersionedRpcRegistry(hostRpcRegistry)).not.toThrow();
+    expect(() =>
+      validateVersionedRpcRegistry({
+        "environment.list": hostRpcRegistry["environment.list"],
+      }),
+    ).not.toThrow();
     expect(RELEASED_FLOOR_METHOD_NAMES).not.toContain("environment.list");
     const entry = hostRpcRegistry["environment.list"];
     expect(entry.degrade).toEqual({ kind: "unsupported" });
@@ -342,7 +346,6 @@ describe("environment.setMainBot protocol contract", () => {
   });
 
   it("registers off the released floor with unsupported degrade", () => {
-    expect(() => validateVersionedRpcRegistry(hostRpcRegistry)).not.toThrow();
     expect(RELEASED_FLOOR_METHOD_NAMES).not.toContain("environment.setMainBot");
     const entry = hostRpcRegistry["environment.setMainBot"];
     expect(entry.degrade).toEqual({ kind: "unsupported" });

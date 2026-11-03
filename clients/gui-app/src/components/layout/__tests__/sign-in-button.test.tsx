@@ -87,6 +87,7 @@ function makeMessengerFactory(): (args: {
             crossHostMessaging: null,
             sessions: null,
             updatesExternallyManaged: null,
+            previousExit: null,
           }),
       },
     });

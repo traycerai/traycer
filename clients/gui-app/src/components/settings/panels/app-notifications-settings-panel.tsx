@@ -5,7 +5,7 @@ export function AppNotificationsSettingsPanel() {
   return (
     <SettingsPanelShell
       title="Sounds"
-      description="Which chime plays for each kind of alert, across hosts."
+      description="Which chime plays for each kind of alert."
       bodyClassName="overflow-visible rounded-none border-none bg-transparent"
     >
       <NotificationChimeSettingsSection />

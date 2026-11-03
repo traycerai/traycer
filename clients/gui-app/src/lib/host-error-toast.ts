@@ -660,6 +660,14 @@ export const OWNER_ACCESS_DENIED_PHRASE = "does not have owner access";
 export const TEAM_PLAN_REQUIRED_PHRASE = "requires a paid team plan";
 
 /**
+ * What an `E_HOST_UNSUPPORTED` rejection says: the active host predates the
+ * method. Exported so a surface that renders the verdict inline (the
+ * Providers card) says the same sentence as the toast.
+ */
+export const HOST_UNSUPPORTED_MESSAGE =
+  "This needs a newer Traycer host. Update the host to continue.";
+
+/**
  * The host's epic role gates (`defineEditorResolver` / `defineOwnerResolver`)
  * state the missing role in a fixed phrase, so - like the AGENT_BUSY branches
  * below - the phrase is what we branch on. The copy is rewritten rather than
@@ -719,7 +727,7 @@ function hostErrorToastMessage(error: HostRpcError, fallback: string) {
   // unsupported`). This is a version gap, not a failed operation, so the copy
   // points at the fix rather than restating the operation name.
   if (error.code === "E_HOST_UNSUPPORTED") {
-    return "This needs a newer Traycer host. Update the host to continue.";
+    return HOST_UNSUPPORTED_MESSAGE;
   }
   // BEFORE the `FORBIDDEN` arm, and that ordering is the fix -
   // `s5-status-truthfulness` instance 5. An owner's refused share used to

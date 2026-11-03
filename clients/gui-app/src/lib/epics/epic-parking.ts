@@ -113,7 +113,7 @@ import {
   subscribeEpicSurfaceVisibility,
 } from "@/lib/browser-view/tiles/surface-host-opened-tab";
 import {
-  isDocumentVisible,
+  isWindowOnScreen,
   subscribeDocumentVisibility,
 } from "@/lib/dom/document-visibility";
 import { subscribeEpicDraftGuard } from "@/lib/epics/epic-draft-guard";
@@ -192,15 +192,16 @@ function notify(epicId: string): void {
  * REPORT - `cross-window-epic-visibility.ts` sends the empty set while hidden -
  * so a hidden window withdraws its claim here and there in one move.
  *
- * "Hidden" here is what `lib/dom/document-visibility.ts` answers: the Page
- * Visibility API (which the desktop also hides on, covered windows included
- * on macOS only), AND-ed with the shell's own minimised/hidden answer
- * pushed in through `desktop-window-visibility.ts` for the window a WebRTC
- * video plane keeps rendering unseen (#1613).
+ * "Hidden" here is `isWindowOnScreen()` from `lib/dom/document-visibility.ts`:
+ * on the desktop, main's own minimised/hidden answer pushed in through
+ * `desktop-window-visibility.ts`, and the Page Visibility API only where no
+ * shell reports. NOT `isDocumentVisible()`, which also goes hidden for a macOS
+ * window that is merely covered: parking that window would make every switch
+ * back to the app re-open its tasks on the host.
  */
 function isEpicVisibleAnywhere(epicId: string): boolean {
   return (
-    (isDocumentVisible() && isEpicSurfaceVisible(epicId)) ||
+    (isWindowOnScreen() && isEpicSurfaceVisible(epicId)) ||
     isEpicVisibleInAnotherWindow(epicId)
   );
 }

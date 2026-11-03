@@ -79,7 +79,7 @@ export PATH="$HOME/.traycer/cli/bin:$PATH"
 | `traycer link-phone` | Sign in the [Traycer mobile app](/account/mobile-app) by scanning a code. Needs an existing sign-in and an interactive terminal. It waits until you approve or reject the phone that scanned the code. |
 | `traycer link-phone --no-qr` | Print only the code to type, for terminals that garble the QR code. |
 
-CLI credentials are stored in `~/.traycer/cli/credentials`, which Traycer Desktop shares.
+CLI credentials are stored in `cli/credentials` inside the [data folder](#data-folder), which Traycer Desktop shares.
 
 ## Host Commands
 
@@ -117,7 +117,7 @@ The host is the background process that runs agents, terminals, and Tasks on a m
 | `traycer host uninstall` | Ask the running host to stop, then remove the installed and staged host files. The OS service stays registered. |
 | `traycer host uninstall --all` | Deregister the OS service, ask the host to stop, then remove the host files. On Windows the host is stopped straight away, even when it is busy. |
 
-Neither form of `host uninstall` touches your data or credentials under `~/.traycer`. If the host does not stop, the command fails and keeps the install. `--force` works with or without `--all`: it forces the stop and removes the install even if the host remains running. Running terminal sessions and in-flight agent work are killed.
+Neither form of `host uninstall` touches your data folder or credentials. If the host does not stop, the command fails and keeps the install. `--force` works with or without `--all`: it forces the stop and removes the install even if the host remains running. Running terminal sessions and in-flight agent work are killed.
 
 Options for these commands:
 
@@ -132,7 +132,7 @@ Options for these commands:
 | `--no-linger` | `install`, `ensure`, `host service install` | Linux only: skip `loginctl enable-linger`. |
 | `--accept-store-format-loss` | `install`, `ensure`, `update`, `apply` | Install a host even though chats or local tasks on this machine were saved in a newer format than it can read. Those chats and local tasks are unavailable while that host is installed. |
 
-The CLI reads the host's connection details from `~/.traycer/host/`.
+The CLI reads the host's connection details from `host/` inside the selected data folder.
 
 ### Background Service
 
@@ -166,9 +166,38 @@ In particular, `set none` leaves a running host alone and switches Desktop to re
 | `traycer cli upgrade --target <version> --allow-downgrade` | Install `<version>` even though it is older than the one you have. Both flags are needed, so a plain upgrade never moves you backwards. |
 | `traycer cli re-anchor --binary-path <path> --installed-version <version>` | Point upgrade tracking at a CLI binary you installed or moved by hand. Use it when `cli upgrade` reports that there is no recorded install. |
 
+## Data Folder
+
+On Windows, choose a new data folder or move an existing installation to a fixed local NTFS drive. Use a new or empty folder that is not inside, or a parent of, the current data folder. Network drives, removable drives, links, junctions, and FAT/exFAT volumes are refused.
+
+| Command | Purpose |
+| --- | --- |
+| `traycer data status` | Show the selected folder, any move in progress, and what to do next. Changes nothing. |
+| `traycer data init --to <folder>` | Windows only: choose the folder before a new installation has any Traycer data. |
+| `traycer data migrate --to <folder> --dry-run` | Preview the paths, space, and installed-version checks without moving anything. |
+| `traycer data migrate --to <folder>` | Windows only: stop the Hosts, copy and verify the data, and switch to the new folder. |
+| `traycer data recover` | Continue an interrupted move. |
+| `traycer data recover --rollback` | Return to the old folder before the move has taken effect. |
+| `traycer data cleanup <migration-id>` | Permanently delete the unused copy after a successful move or rollback. |
+
+Status, dry-run, recovery, and cleanup commands work on all platforms. Each command accepts `--json`. Commands that change data ask for confirmation; `--yes` skips that question.
+
+### Move Existing Data on Windows
+
+1. Preview with `traycer data migrate --to "D:\TraycerData" --dry-run`.
+2. Quit Desktop, finish other Traycer commands, and close shells or editors using Traycer-managed worktrees.
+3. Run `traycer data migrate --to "D:\TraycerData"`. Review the session-impact report before confirming. Some agents may need a new provider session or be held; native provider-only state does not always carry over. A dry-run cannot check session impact.
+4. Reopen Traycer and check your work. The old copy still uses disk space until you run `traycer data cleanup <migration-id>`. Cleanup refuses if recorded source content has changed.
+
+In scripts, if session impact needs acceptance, rerun with the report's `--accept-session-impact <digest>`; `--yes` alone does not accept it.
+
+Do not manually move the folder or run an older Traycer version after moving it: older versions can use the old copy and repeat queued work. The app, Desktop caches, and provider folders outside Traycer (such as `~/.claude`) do not move. Windows read-only and hidden file attributes are not preserved.
+
+The selected location is recorded in `~/.traycer-bootstrap/location.json`, which stays in your home folder. If the selected drive is missing, reconnect it; Traycer does not fall back to the default folder. For interrupted moves, see [data folder recovery](/reference/troubleshooting#data-folder-recovery).
+
 ## Config Commands
 
-The shell and environment settings apply when Traycer starts the host and opens terminals. They are the same settings as [Settings › Shell](/settings/shell), stored in `~/.traycer/cli/config.json`.
+The shell and environment settings apply when Traycer starts the host and opens terminals. They are the same settings as [Settings › Shell](/settings/shell), stored in `cli/config.json` inside the selected data folder.
 
 | Command | Purpose |
 | --- | --- |
@@ -251,7 +280,7 @@ These commands need [agent context](#agent-context).
 | --- | --- |
 | `traycer task create --message <text> --harness <id> --model <id>` | Start a Task on this machine and send its first message. The first agent starts working at once and uses your provider plan. Prints the Task id and the first agent's id. See [Task Create Options](#task-create-options). |
 
-`task create` runs as the person signed in with `traycer login`, on this machine's host, so the host must be running (`traycer host ensure`). The Task is yours and appears in your Task list like one you started in the app. It needs no [agent context](#agent-context) and is refused inside an agent session; an agent starts a Task with its `traycer_create_task` tool.
+`task create` runs as the person signed in with `traycer login`, on this machine's host, so the host must be running (`traycer host ensure`). The Task is yours and appears in your Task list like one you started in the app. It needs no [agent context](#agent-context) and is refused inside an agent session.
 
 Exit code 0 means the Task and its first agent exist and the host accepted the message, not that the first turn has started. With `--json`, the result is `{ "taskId", "agentId", "alreadyCreated" }`.
 
@@ -425,7 +454,7 @@ For example, an agent command run outside an agent ends with:
 | `~/.traycer/host/host.log` | The host log, which `traycer host logs` prints. Older logs are kept as `host.log.1` and `host.log.2`. |
 | `~/.traycer/worktrees/` | Worktrees that Traycer creates. |
 
-On Windows, the same paths are under `%USERPROFILE%\.traycer\`.
+These are the default paths. On Windows they are under `%USERPROFILE%\.traycer\`. After a [data-folder move](#data-folder), the same relative paths are inside the selected folder; `traycer data status` shows it.
 
 To change how much the CLI and the host log, use **CLI log level** and **Host log level** in [Settings › Host › Diagnostics](/settings/host-diagnostics).
 
@@ -439,7 +468,8 @@ To change how much the CLI and the host log, use **CLI log level** and **Host lo
 | `CI`, `TRAYCER_NONINTERACTIVE` | Any value other than empty, `0`, or `false` turns on non-interactive mode: no progress output and no prompts. |
 | `HTTP_PROXY`, `HTTPS_PROXY`, `NO_PROXY` | Proxy settings for the CLI's network requests. The lowercase names work too. |
 | `NO_COLOR` | Turn off colored output. |
-| `HOME` / `USERPROFILE` | Where the CLI finds `~/.traycer`. |
+| `HOME` / `USERPROFILE` | Home folder containing the default data folder and `~/.traycer-bootstrap` location record. |
+| `TRAYCER_DATA_DIR` | Default destination for `data init` and `data migrate` only. `--to` takes precedence. Setting it does not change the folder used at runtime. |
 
 Provider API keys and model credentials belong in [Settings › Providers](/settings/providers), not in the CLI's environment.
 
