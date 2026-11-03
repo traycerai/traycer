@@ -678,10 +678,15 @@ export function sandboxRetentionIsWithdrawn(summary: SandboxSummary): boolean {
  * whose announced date decides that instead of its resting policy.
  *
  * The three readings are one decision about one row, so they are made here
- * rather than at each surface that draws them. The two negative readings are
- * what makes that worth centralising: the burst sentence on a withdrawn row
- * would promise the files are lost at an idle timeout that is not coming, and
- * the resting clause would promise a deadline the withdrawal has suspended.
+ * rather than at each surface that draws them. What makes that worth
+ * centralising is how easily a withdrawn row takes the wrong one: the resting
+ * clause would promise a deadline the withdrawal holds, and a withdrawn
+ * NON-burst row routed through the burst sentence would promise its files are
+ * lost at an idle timeout it does not have.
+ *
+ * A burst row keeps its burst sentence once withdrawn, which is why `burst`
+ * is answered before the withdrawal below. The burst idle destroy is its own
+ * policy and is outside the resting hold, so that sentence stays true.
  */
 export function sandboxIdlePolicyLine(summary: SandboxSummary): string {
   const idleMinutes = idleMinutesOf(summary);
