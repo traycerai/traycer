@@ -390,7 +390,10 @@ describe("<SandboxCard /> per state", () => {
     ).toBeNull();
   });
 
-  it("shows the withdrawal notice with its date only when the server announces one", () => {
+  // The day the notice names is pinned where it is formatted, against both
+  // call sites of the UTC formatter; this case is the card's own contract,
+  // that the notice appears exactly when the server announces a withdrawal.
+  it("shows the withdrawal notice only when the server announces one", () => {
     const endsAt = new Date(2026, 11, 1).getTime();
     renderCard(sandboxOf("stopped", false, { withdrawalEndsAt: endsAt }));
     expect(screen.getByTestId("sandbox-card-withdrawal").textContent).toContain(

@@ -1,6 +1,6 @@
 import "@/components/settings/details/environment-details-providers";
 import { QueryClient, queryOptions } from "@tanstack/react-query";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type {
   SandboxCost,
   SandboxHistoryEntry,
@@ -23,6 +23,10 @@ import { useAuthStore } from "@/stores/auth/auth-store";
 const NOW = 1_791_100_000_000;
 
 describe("sandboxDetailsEntry", () => {
+  afterEach(() => {
+    vi.unstubAllEnvs();
+  });
+
   it("exports the sandbox id as the support reference", () => {
     const summary = sandboxSummaryFixture({ id: "sbx_support_42" });
     const exported = sandboxDetailsEntry({
@@ -215,7 +219,19 @@ describe("sandboxDetailsEntry", () => {
     expect(entry.export().status.Resting).toBeUndefined();
   });
 
+  // The announced day is read in UTC whatever zone the runtime is in, so the
+  // zone is PINNED to one that is not UTC: left to the runner's own zone this
+  // case is vacuous on a UTC runner, where a local reading and a UTC reading
+  // name the same day. The sibling pin on `sandboxWithdrawalLine` covers the
+  // card's sentence; this one covers the Details row, which is a second call
+  // site of the same formatter and could regress on its own.
   it('gives a withdrawn row no Resting row, an Idle row, and a Destroyed-on row naming the announced day with no "unless used"', () => {
+    vi.stubEnv("TZ", "America/Los_Angeles");
+    // The pin itself has to take, or the case proves nothing.
+    expect(Intl.DateTimeFormat().resolvedOptions().timeZone).toBe(
+      "America/Los_Angeles",
+    );
+
     const endsAt = Date.UTC(2026, 11, 1);
     const entry = sandboxDetailsEntry({
       summary: sandboxSummaryFixture({
@@ -236,14 +252,22 @@ describe("sandboxDetailsEntry", () => {
     // Computed, not written out: the formatter renders in the runtime's own
     // default locale, so a literal `Dec 1, 2026` would fail under any other
     // one while the UTC day was named correctly.
-    expect(status["Destroyed on"]).toBe(
-      new Date(endsAt).toLocaleDateString(undefined, {
-        month: "short",
-        day: "numeric",
-        year: "numeric",
-        timeZone: "UTC",
-      }),
-    );
+    const dayOptions: Intl.DateTimeFormatOptions = {
+      month: "short",
+      day: "numeric",
+      year: "numeric",
+    };
+    const utcDay = new Date(endsAt).toLocaleDateString(undefined, {
+      ...dayOptions,
+      timeZone: "UTC",
+    });
+    const localDay = new Date(endsAt).toLocaleDateString(undefined, dayOptions);
+    // The pin only proves anything if the two readings actually diverge for
+    // this instant and zone; a runner where they coincide would pass this
+    // case for the wrong reason.
+    expect(utcDay).not.toBe(localDay);
+    expect(status["Destroyed on"]).toBe(utcDay);
+    expect(status["Destroyed on"]).not.toContain(localDay);
     expect(status["Destroyed on"]).not.toContain("unless used");
   });
 
