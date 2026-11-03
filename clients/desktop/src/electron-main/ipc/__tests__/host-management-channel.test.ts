@@ -99,15 +99,27 @@ afterEach(() => {
   } else {
     process.env.USERPROFILE = ORIGINAL_USERPROFILE;
   }
-  // A handler that commits a mutation (install, apply) refreshes the registry
-  // cache without awaiting it, so that write can still be creating its
-  // directory under this home while the test has already returned. A plain
-  // recursive remove then fails with ENOTEMPTY (seen on Linux and macOS CI);
-  // the retries let the write land first.
-  rmSync(workHome, { recursive: true, force: true, maxRetries: 5 });
+  rmSync(workHome, { recursive: true, force: true });
   vi.restoreAllMocks();
   vi.doUnmock("../../cli/traycer-cli");
 });
+
+// A committed install or apply refreshes the registry cache without awaiting
+// it (`host-management-ipc.ts`). A test that fires one waits here for that
+// write, so it can neither race this file's cleanup nor, once HOME has moved
+// on, land in the next test's home.
+async function awaitRegistryCacheWrite(
+  environment: "production" | "dev",
+): Promise<void> {
+  const name =
+    environment === "production"
+      ? "registry-update-cache.json"
+      : `registry-update-cache-${environment}.json`;
+  const path = join(workHome, ".traycer", "desktop", name);
+  await vi.waitFor(() => {
+    JSON.parse(readFileSync(path, "utf8"));
+  });
+}
 
 function writeInstallRecord(
   environment: "production" | "dev",
@@ -703,6 +715,7 @@ describe("host-management IPC - CLI subprocess argv carries NO --environment (CL
         force: false,
       }),
     ).resolves.toEqual(bridge.options.hostController.applyStagedResult);
+    await awaitRegistryCacheWrite("production");
   });
 
   it("returns installVersion's committed ok outcome when its post-pin registry projection rejects", async () => {
@@ -726,6 +739,7 @@ describe("host-management IPC - CLI subprocess argv carries NO --environment (CL
         force: false,
       }),
     ).resolves.toEqual(bridge.options.hostController.installVersionResult);
+    await awaitRegistryCacheWrite("production");
   });
 
   it("passes applyStaged's busy continuation through unchanged", async () => {
@@ -933,6 +947,7 @@ describe("host-management IPC - CLI subprocess argv carries NO --environment (CL
       null,
       { pin: "latest", force: true },
     );
+    await awaitRegistryCacheWrite("dev");
     await bridge.handlers.get(RunnerHostInvoke.traycerHostUninstall)!(null, {
       all: true,
     });
