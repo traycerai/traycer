@@ -88,10 +88,12 @@ export default defineConfig({
     // event (the old CDP drivers saw this on CI runners) fails here, rather
     // than spending the whole test timeout.
     navigationTimeout: 60_000,
-    // Every test records a trace and a red one keeps it: with no retry, the
-    // failing attempt is the only one there is. The workflow uploads the
-    // report for a red shard.
-    trace: "retain-on-failure",
+    // Recording a trace for every test cost 23% of CI's test time and put
+    // three tests over the budget (November 2026), so CI keeps a screenshot of
+    // each red test instead, in the report the workflow uploads for a red
+    // shard. Locally a red test keeps its trace.
+    trace: isCi ? "off" : "retain-on-failure",
+    screenshot: "only-on-failure",
   },
   webServer: {
     command: serverCommand(),

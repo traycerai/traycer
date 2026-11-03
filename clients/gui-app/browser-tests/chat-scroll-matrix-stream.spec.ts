@@ -365,7 +365,13 @@ for (const line of ["legacy", "windowed"] as const) {
         const card = page.locator(CARD);
         await card.click();
         await expectAtRest(page, TAIL, "after opening the card");
-        await card.click();
+        // At the tail, the open card's toggle is above the viewport. A pointer
+        // click would first scroll the transcript up to it, which is the
+        // reader leaving the tail, not a card changing height. The toggle is
+        // pressed where it is, as a card that collapses on its own would.
+        await card.evaluate((button: HTMLElement) => {
+          button.click();
+        });
         await expectAtRest(page, TAIL, "after closing the card");
       });
     });

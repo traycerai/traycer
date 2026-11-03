@@ -18,7 +18,7 @@ CI runs them in `.github/workflows/browser-regressions.yml`, sharded across
 parallel jobs, on every PR and push that touches what they depend on (the
 workflow's `changes` job lists it). Its `browser regressions` job is a
 required check on `main`, so a red shard blocks a merge. A failed shard
-uploads the Playwright report, with a trace for each failed test. There is
+uploads the Playwright report, with a screenshot of each failed test. There is
 no retry: a test passes on its first attempt, and one that fails and then
 passes on a re-run is a defect to fix at its cause.
 
