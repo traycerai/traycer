@@ -52,6 +52,12 @@ const BASH_PRELUDE = [
   '    printf "%s" "origin/main"',
   "    return 0",
   "  fi",
+  // `git diff --exit-code`, the CI lint lane's check that --fix changed nothing.
+  '  if [ "${1-}" = "diff" ]; then',
+  '    printf "%s\\0" "$#" >> "$WORKSPACE_CHECK_CALLS"',
+  '    for argument do printf "%s\\0" "$argument" >> "$WORKSPACE_CHECK_CALLS"; done',
+  '    return "${WORKSPACE_CHECK_DIRTY:-0}"',
+  "  fi",
   "  return 1",
   "}",
   'source "$1"',
@@ -72,7 +78,7 @@ function createStub(name, body) {
 
 // `githubActions` unset follows `ci`: a real runner sets both, and an agent's
 // laptop shell may set CI alone.
-function runHook({ ci, githubActions, base, head, affected }) {
+function runHook({ ci, githubActions, base, head, affected, lane, dirty }) {
   const fixture = mkdtempSync(join(tmpdir(), "oss-workspace-checks-root-"));
   const slotDir = mkdtempSync(join(tmpdir(), "oss-workspace-checks-slot-"));
   const callsFile = join(fixture, "calls.bin");
@@ -88,6 +94,10 @@ function runHook({ ci, githubActions, base, head, affected }) {
   };
   if (affected !== undefined) env.WORKSPACE_CHECK_AFFECTED = affected;
   else delete env.WORKSPACE_CHECK_AFFECTED;
+  if (lane === undefined) delete env.WORKSPACE_CHECK_LANE;
+  else env.WORKSPACE_CHECK_LANE = lane;
+  if (dirty) env.WORKSPACE_CHECK_DIRTY = "1";
+  else delete env.WORKSPACE_CHECK_DIRTY;
   if (ci) env.CI = "true";
   else delete env.CI;
   if (githubActions ?? ci) env.GITHUB_ACTIONS = "true";
@@ -232,6 +242,44 @@ describe("pre_commit_workspace_checks.sh (OSS, local lane)", () => {
 
     // CI never sources machine-slot.sh, so no lock file is created.
     expect(slotLockFiles).toEqual([]);
+  });
+
+  it("CI lint lane lints the affected projects, then checks the tree, and does nothing else", () => {
+    const { result, calls } = runHook({
+      ci: true,
+      base: "base-sha",
+      head: "head-sha",
+      lane: "lint",
+    });
+
+    expect(result.status, result.stderr).toBe(0);
+    expect(calls).toEqual([
+      [
+        "x",
+        "nx",
+        "affected",
+        "--target=lint",
+        "--base=base-sha",
+        "--head=head-sha",
+        "--tui=false",
+        "--parallel=8",
+      ],
+      ["diff", "--exit-code"],
+    ]);
+  });
+
+  // The linters run with --fix. Under pre-commit a hook that changes a file
+  // fails; this job has no pre-commit around it, so the lane has to.
+  it("CI lint lane fails when --fix changed a file", () => {
+    expect(() =>
+      runHook({
+        ci: true,
+        base: "base-sha",
+        head: "head-sha",
+        lane: "lint",
+        dirty: true,
+      }),
+    ).toThrow(/hook harness failed \(1\)/);
   });
 
   it("takes the local path when CI is set without GITHUB_ACTIONS", () => {

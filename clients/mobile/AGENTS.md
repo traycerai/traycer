@@ -151,8 +151,11 @@ Gradle files embed install-layout hashes that go stale.
   denies without ever prompting.
 - Below WebView 140 Capacitor's `SystemBars` pads the WebView's parent view
   natively, so the system-bar bands show that view, not the page.
-  `src/window-background.ts` paints it through `WindowBackgroundPlugin.java`
-  and sets the bar icon style from the current theme or full-bleed surface.
+  `src/window-background.ts` reads the colour at the page's top and bottom
+  edges, paints the status bar's band and the others through
+  `WindowBackgroundPlugin.java`, and sets the bar icon style from the top one.
+  From WebView 140 the page runs edge to edge and `#root` pads for the bars, so
+  the same read paints `#root`'s side strips instead.
 - `proguard-rules.pro` strips `Activity.setRequestedOrientation` so no plugin
   activity can lock the rotation Play checks for. A new orientation lock in
   native code is removed in release builds the same way.

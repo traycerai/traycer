@@ -577,3 +577,45 @@ describe("lint-changed-files.mjs end-to-end against a fixture git repo", () => {
     expect(status).toBe(1);
   });
 });
+
+// CI replays a cached lint result as a pass, so a target whose inputs miss a
+// source the linters read passes a commit that changes only that source.
+// `planLint` lints every extension LINTABLE_SOURCE accepts; each project's
+// `lint` target must name every such extension it holds.
+describe("the Nx lint target hashes every source the linters read", () => {
+  const root = fileURLToPath(new URL("../..", import.meta.url));
+  const readJson = (path) => JSON.parse(readFileSync(join(root, path), "utf8"));
+  const defaults = readJson("nx.json").targetDefaults.lint.inputs;
+  const tracked = spawnSync("git", ["ls-files"], {
+    cwd: root,
+    encoding: "utf8",
+  }).stdout.split("\n");
+  const projects = tracked
+    .filter((path) => path.endsWith("/package.json"))
+    .map((path) => path.slice(0, -"/package.json".length))
+    .filter((dir) => readJson(`${dir}/package.json`).scripts?.lint);
+
+  it("finds the linted projects", () => {
+    expect(projects).toContain("clients/gui-app");
+    expect(projects).toContain("protocol");
+  });
+
+  for (const dir of projects) {
+    it(dir, () => {
+      const projectFile = `${dir}/project.json`;
+      const inputs = existsSync(join(root, projectFile))
+        ? (readJson(projectFile).targets?.lint?.inputs ?? defaults)
+        : defaults;
+      const extensions = new Set(
+        tracked
+          .filter((path) => path.startsWith(`${dir}/`))
+          .map((path) => /\.([cm]?[jt]sx?)$/.exec(path)?.[1])
+          .filter((extension) => extension !== undefined),
+      );
+      const missing = [...extensions].filter(
+        (extension) => !inputs.includes(`{projectRoot}/**/*.${extension}`),
+      );
+      expect(missing).toEqual([]);
+    });
+  }
+});

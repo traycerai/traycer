@@ -50,13 +50,13 @@ repos:
         language: script
         stages: [commit-msg]
 
-  # Project checks — lint / format / compile locally, plus build in CI
-  # (nx affected for speed).
+  # Project checks — lint / format / compile locally (nx affected for speed).
+  # CI skips this hook and runs each as its own job in pre-commit.yml.
   # Tests run in their own workflow (.github/workflows/test.yml).
   - repo: local
     hooks:
       - id: workspace-checks
-        name: lint · format · compile (nx affected; CI also builds)
+        name: lint · format · compile (nx affected)
         entry: scripts/pre_commit_workspace_checks.sh
         language: script
         pass_filenames: false

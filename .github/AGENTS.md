@@ -44,8 +44,9 @@ github.event_name != 'pull_request'
 
 ## The merge run
 
-The full suite runs once on the merged commit, on every push to `main`, and a
-later merge never cancels an earlier merge's run.
+Every push to `main` starts a run of every workflow, each running what the
+merged commit reaches, once, and a later merge never cancels an earlier merge's
+run.
 
 - A failed merge run is re-run once (`trunk-red.yml`, failed jobs only,
   because the test suites have known flakes). If the re-run fails too, the
@@ -53,11 +54,49 @@ later merge never cancels an earlier merge's run.
   summary. It sends nothing anywhere: a failed `trunk-red` run is the signal,
   and the one thing an alert has to watch.
 - A merge run that narrows to what changed (`nx affected` in `pre-commit.yml`,
-  the `changes` jobs of `browser-regressions.yml` and `formal-regressions.yml`,
+  the `changes` jobs of `browser-regressions.yml`, `formal-regressions.yml`,
+  `protocol-compat.yml`, `real-supervisor.yml` and `gradle-wrapper.yml`,
   `macos-packaging-changes` in `test.yml`)
   compares against the last push its own workflow passed on (`scripts/ci-last-green-sha.sh`), not the
   push before. So the next merge's range still holds a break, and `main`
   stays red until a run covering everything since the last green push passes.
+  The four rules that keep narrowing a gate are in the root `AGENTS.md`,
+  "When CI runs", and in the header of `scripts/ci-push-scope.sh`.
+- A path list a CI decision reads from `git diff` is read with `-z` and
+  `--no-renames`. `--name-only` alone applies git's display quoting to a path
+  that is not plain ASCII, so the record arrives as
+  `"protocol/src/caf\303\251.ts"`, quotes included, and every anchored match
+  fails on it; rename detection prints only the new path, so a file moved out of
+  a listed path escapes. Either way a suite is skipped on a change to a file it
+  reads. `ci-pull-request-gate.test.mjs` holds every such site to both flags.
+- Narrowing is a job-level skip, never a `paths:` filter on the trigger. Two
+  readers outside this repository depend on the run existing at all: the
+  internal release gate judges a pushed commit by every workflow's latest push
+  run and refuses a commit whose own push started none, and Scorecard's
+  Binary-Artifacts check exempts a committed `gradle-wrapper.jar` only while the
+  latest commit has a successful run of `gradle-wrapper.yml`. A `changes` job
+  that skips the rest of its workflow still leaves a run that concludes
+  `success`, because the `changes` job itself passed.
+- A job gated on a `changes` job carries `!cancelled()` and
+  `needs.<changes>.result != 'success' || needs.<changes>.outputs.run != 'false'`
+  in its `if`. Without `!cancelled()` GitHub skips a job whose dependency
+  failed, and a skipped job satisfies a required check - so a failed detection
+  would pass the gate instead of running it. The answer is tested for `'false'`
+  rather than for `'true'`, so a missing or malformed output runs the job too.
+  An explicitly cancelled run starts no job either way, and the release gate
+  refuses a cancelled run.
+- `pre-commit.yml`'s `lint` and `compile` jobs restore a cache only a passing
+  push saves, so every run starts from the last green `main` entry. It holds
+  `NX_CACHE_DIRECTORY`, the Nx database and gui-app's ESLint cache. A cached
+  result replays as a pass, so a target's `inputs` must name everything its
+  answer depends on: `lint` is type-aware and lists `^production`, and lists
+  every source extension the linters read. A rule that reads another file
+  (`components.json`, a stylesheet) goes in the cache key too, because ESLint
+  hashes only the file it lints. `build` keeps the desktop renderer's
+  React-compiled modules instead (`TRAYCER_REACT_COMPILER_CACHE_DIR`, read by
+  `clients/desktop/scripts/react-compiler-plugin.ts`), keyed on each module's
+  code, the compiler options and `bun.lock`, so a renderer change recompiles
+  only the modules it changed. A failed compile is never stored.
 - A protocol test file over 10 s fails the `test (@traycer/protocol)` leg
   unless `protocol/test-budget-allowlist.json` names it with a reason. It runs
   once more alone first, because a file's time on the runner moves by half

@@ -53,7 +53,7 @@ import { MobileSystemBack } from "../system-back";
 import { MobileVoiceAudio, VoiceAudio } from "../voice-audio";
 import {
   WindowBackground,
-  cssColorToHex,
+  cssLayersToHex,
   startWindowBackgroundSync,
 } from "../window-background";
 import {
@@ -244,8 +244,8 @@ function bootstrap(): void {
   if (nativePlatform === "android") {
     startWindowBackgroundSync({
       document,
-      setBackground: (color) => {
-        void WindowBackground.set({ color });
+      setBackground: (bands) => {
+        void WindowBackground.set(bands);
       },
       setBarStyle: (style) => {
         void SystemBars.setStyle({
@@ -253,7 +253,7 @@ function bootstrap(): void {
             style === "DARK" ? SystemBarsStyle.Dark : SystemBarsStyle.Light,
         });
       },
-      toHex: (cssColor) => cssColorToHex(cssColor, document),
+      toHex: (layers) => cssLayersToHex(layers, document),
     });
   }
   // APNs addressing follows code signing, not the backend set: staging and

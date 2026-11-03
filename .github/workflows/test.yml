@@ -535,8 +535,11 @@ jobs:
       # (`package.json`, `bun.lock`), the one patch in the pack's own toolchain
       # (`app-builder-lib`), and this workflow.
       # `clients/desktop/scripts/__tests__/macos-ci-job.test.ts` holds the
-      # imports to this list. `--no-renames` reports a moved file at both its old path and its
-      # new one, so a file moved out of a listed path still counts.
+      # imports to this list. `-z`, so a path that is not plain ASCII arrives
+      # as its raw bytes rather than in git's display quoting, which every
+      # match would fail on. `--no-renames` reports a moved file at both its
+      # old path and its new one, so a file moved out of a listed path still
+      # counts.
       #
       # The rest of `protocol/`, `clients/gui-app/` and the other patches are
       # deliberately absent. The pack bundles them, and the only thing this job
@@ -570,7 +573,7 @@ jobs:
               echo "A $EVENT run always runs the macOS job."
               exit 0 ;;
           esac
-          relevant=$(git diff --name-only --no-renames "$range" | awk '
+          relevant=$(git diff -z --name-only --no-renames "$range" | tr '\0' '\n' | awk '
             /^clients\/desktop\// || /^clients\/scripts\// ||
             /^clients\/shared\// ||
             /^protocol\/src\/(auth|config|framework)\// ||
