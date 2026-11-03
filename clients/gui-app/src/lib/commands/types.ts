@@ -12,9 +12,10 @@ import type { KeybindingRouter } from "@/lib/keybindings/dispatch";
 /**
  * Scopes narrow the palette to a subset of items. A leading prefix
  * character in the input (`>`, `#`, `@`, `?` - see `./scopes.ts`)
- * activates a scope; `null` means "show everything".
+ * activates a scope; `null` means "show everything". `bots` has no
+ * prefix: its rows show only while no scope is active.
  */
-export type CommandScope = "actions" | "epics" | "workspaces" | "help";
+export type CommandScope = "actions" | "epics" | "workspaces" | "help" | "bots";
 
 /**
  * Groups map 1:1 to the visual buckets rendered in the palette list.
@@ -28,6 +29,7 @@ export type CommandGroupId =
   | "actions"
   | "navigation"
   | "epics"
+  | "bots"
   | "theme"
   | "help"
   // "open" backs the open-into-target opener categories. These items are only
