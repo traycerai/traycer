@@ -202,17 +202,21 @@ function endSandbox(): void {
 // A committed install or apply refreshes the registry cache without awaiting
 // it (`host-management-ipc.ts`). A test that fires one waits here for that
 // write, so it can neither race this file's cleanup nor, once HOME has moved
-// on, land in the next test's home.
-async function awaitRegistryCacheWrite(
-  environment: "production" | "dev",
-): Promise<void> {
-  const name =
-    environment === "production"
-      ? "registry-update-cache.json"
-      : `registry-update-cache-${environment}.json`;
-  const path = join(workHome, ".traycer", "desktop", name);
+// on, land in the next test's home. The fake CLI answers the forced probe with
+// no manifest, so the refresh writes an unreachable entry; waiting for that,
+// not for any file that parses, also outlasts a cache a test seeded itself.
+async function awaitRegistryCacheWrite(): Promise<void> {
+  const path = join(
+    workHome,
+    ".traycer",
+    "desktop",
+    "registry-update-cache.json",
+  );
   await vi.waitFor(() => {
-    JSON.parse(readFileSync(path, "utf8"));
+    const cache = JSON.parse(readFileSync(path, "utf8")) as {
+      readonly reachable: boolean;
+    };
+    expect(cache.reachable).toBe(false);
   });
 }
 
@@ -1120,7 +1124,7 @@ describe("maintenanceInstallVersion IPC", () => {
     await vi.waitFor(() => {
       expect(bundledCliCalls).toContainEqual(["host", "available", "--json"]);
     });
-    await awaitRegistryCacheWrite("production");
+    await awaitRegistryCacheWrite();
   });
 
   it("re-probes the registry after a successful dispatch even when the cache is fresh", async () => {
@@ -1158,7 +1162,7 @@ describe("maintenanceInstallVersion IPC", () => {
     await vi.waitFor(() => {
       expect(bundledCliCalls).toContainEqual(["host", "available", "--json"]);
     });
-    await awaitRegistryCacheWrite("production");
+    await awaitRegistryCacheWrite();
   });
 
   it("returns the committed dispatch when the post-install registry projection rejects", async () => {
@@ -1184,7 +1188,7 @@ describe("maintenanceInstallVersion IPC", () => {
     await vi.waitFor(() => {
       expect(bundledCliCalls).toContainEqual(["host", "available", "--json"]);
     });
-    await awaitRegistryCacheWrite("production");
+    await awaitRegistryCacheWrite();
   });
 
   it("reads admission before submitting — occupying the lane inside installVersion still dispatches", async () => {
@@ -1233,7 +1237,7 @@ describe("maintenanceInstallVersion IPC", () => {
     await vi.waitFor(() => {
       expect(bundledCliCalls).toContainEqual(["host", "available", "--json"]);
     });
-    await awaitRegistryCacheWrite("production");
+    await awaitRegistryCacheWrite();
   });
 });
 
@@ -1540,7 +1544,7 @@ describe("maintenance identity + doctorRepairIfIdle IPC", () => {
     await vi.waitFor(() => {
       expect(bundledCliCalls).toContainEqual(["host", "available", "--json"]);
     });
-    await awaitRegistryCacheWrite("production");
+    await awaitRegistryCacheWrite();
   });
 
   it("refuses when the enrollment record exists but is unreadable, without calling installVersion", async () => {

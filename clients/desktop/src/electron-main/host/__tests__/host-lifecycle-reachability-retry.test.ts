@@ -36,8 +36,8 @@ import type { HostFsLayout } from "../host-paths";
 // about that pid. Left to the real reader, the verdict depends on the machine:
 // a CI runner where pid 18841 happened to be alive published the host as busy.
 // Most scenarios model the indeterminate branch, where the handshake stays
-// authoritative. A dead process is the only verdict that leaves a parsed,
-// unreachable file unpublished, which is what arms the ladder.
+// authoritative. A dead process is the only verdict that keeps a parsed,
+// unreachable file unpublished while the ladder retries it.
 function useProcessLiveness(
   verdictOf: () => ProcessLivenessVerdict,
 ): () => void {

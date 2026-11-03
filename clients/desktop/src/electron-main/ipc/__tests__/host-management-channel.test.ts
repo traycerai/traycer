@@ -107,7 +107,9 @@ afterEach(() => {
 // A committed install or apply refreshes the registry cache without awaiting
 // it (`host-management-ipc.ts`). A test that fires one waits here for that
 // write, so it can neither race this file's cleanup nor, once HOME has moved
-// on, land in the next test's home.
+// on, land in the next test's home. The fake CLI answers the forced probe with
+// no manifest, so the refresh writes an unreachable entry; waiting for that,
+// not for any file that parses, also outlasts a cache a test seeded itself.
 async function awaitRegistryCacheWrite(
   environment: "production" | "dev",
 ): Promise<void> {
@@ -117,7 +119,10 @@ async function awaitRegistryCacheWrite(
       : `registry-update-cache-${environment}.json`;
   const path = join(workHome, ".traycer", "desktop", name);
   await vi.waitFor(() => {
-    JSON.parse(readFileSync(path, "utf8"));
+    const cache = JSON.parse(readFileSync(path, "utf8")) as {
+      readonly reachable: boolean;
+    };
+    expect(cache.reachable).toBe(false);
   });
 }
 
