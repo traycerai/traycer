@@ -345,14 +345,39 @@ function escapeArtifactText(
   inLink: boolean,
   inTableCell: boolean,
 ): string {
-  let out = "";
+  const out = new MarkdownChunks();
+  let copiedThrough = 0;
   for (let i = 0; i < text.length; i++) {
-    const char = text[i];
-    out += escapesArtifactChar(text, i, inLink, inTableCell)
-      ? `\\${char}`
-      : char;
+    if (escapesArtifactChar(text, i, inLink, inTableCell)) {
+      out.append(text.slice(copiedThrough, i));
+      out.append("\\");
+      copiedThrough = i;
+    }
   }
-  return out;
+  out.append(text.slice(copiedThrough));
+  return out.finish();
+}
+
+// Joining bounded batches flattens their strings. Keeping one concatenation
+// per character retains a V8 cons-string node per character until the next
+// pass flattens it, so a multi-megabyte artifact can exhaust the host heap.
+class MarkdownChunks {
+  private readonly chunks: string[] = [];
+  private readonly pending: string[] = [];
+
+  append(value: string): void {
+    if (value.length === 0) return;
+    this.pending.push(value);
+    if (this.pending.length >= 1024) {
+      this.chunks.push(this.pending.join(""));
+      this.pending.length = 0;
+    }
+  }
+
+  finish(): string {
+    this.chunks.push(this.pending.join(""));
+    return this.chunks.join("");
+  }
 }
 
 // Characters that can open markup wherever they stand.
@@ -470,7 +495,8 @@ function escapeParagraphLineStarts(
   rendered: string,
   inListItem: boolean,
 ): string {
-  let out = "";
+  const out = new MarkdownChunks();
+  let copiedThrough = 0;
   let codeRun = 0;
   let insertAt = -1;
   for (let i = 0; i < rendered.length;) {
@@ -489,9 +515,12 @@ function escapeParagraphLineStarts(
       if (INDENTED_CODE_START.test(rendered.slice(i, i + 4))) {
         if (firstLine) {
           while (rendered[i] === " " || rendered[i] === "\t") i++;
+          copiedThrough = i;
           if (i >= rendered.length) break;
         } else if (inListItem) {
-          out += LIST_CONTINUATION_DEDENT;
+          out.append(rendered.slice(copiedThrough, i));
+          out.append(LIST_CONTINUATION_DEDENT);
+          copiedThrough = i;
         }
       }
       const newline = rendered.indexOf("\n", i);
@@ -503,12 +532,13 @@ function escapeParagraphLineStarts(
       insertAt = offset === -1 ? -1 : i + offset;
     }
     if (i === insertAt) {
-      out += "\\";
+      out.append(rendered.slice(copiedThrough, i));
+      out.append("\\");
+      copiedThrough = i;
       insertAt = -1;
     }
     const char = rendered[i];
     if (char === "\\" && codeRun === 0) {
-      out += rendered.slice(i, i + 2);
       i += 2;
       continue;
     }
@@ -517,14 +547,13 @@ function escapeParagraphLineStarts(
       while (rendered[i + run] === "`") run++;
       if (codeRun === 0) codeRun = run;
       else if (run === codeRun) codeRun = 0;
-      out += rendered.slice(i, i + run);
       i += run;
       continue;
     }
-    out += char;
     i++;
   }
-  return out;
+  out.append(rendered.slice(copiedThrough));
+  return out.finish();
 }
 
 const INDENTED_CODE_START = /^(?: {4}| {0,3}\t)/;
