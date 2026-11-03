@@ -647,11 +647,18 @@ export function sandboxFrozenClock(frozenAt: number | null): string | null {
  *   the period is still set on a withdrawn row and still reads as a promise:
  *   the resting and idle-policy clauses, the Resting detail row, and the
  *   Stop, Keep and resting-setting dialogs;
- * - a surface gated on `destroyAt` needs nothing, because the server sends a
- *   withdrawn row none, so `sandboxGiveAnotherLabel` offers nothing to extend.
- *   The `Destroyed on` detail row is the one place that then states the
- *   withdrawal's own day instead, because a row that says when a sandbox ends
- *   has an answer for a withdrawn one and would otherwise go silent.
+ * - a surface gated on `destroyAt` needs nothing, because the server holds a
+ *   withdrawn row's resting deadline and sends none. The `Destroyed on`
+ *   detail row is the one place that then states the withdrawal's own day
+ *   instead, because a row that says when a sandbox ends has an answer for a
+ *   withdrawn one and would otherwise go silent.
+ *
+ *   The exception is a FROZEN row, which keeps its day-30 deadline through a
+ *   withdrawal — its own approved policy, decided ahead of the withdrawal in
+ *   `destroyAtOf` — so a frozen withdrawn row carries BOTH, and a surface
+ *   holding both must prefer `destroyAt`: it is the day the server acts on.
+ *   `sandboxGiveAnotherLabel` is unaffected either way, since it excludes a
+ *   frozen row for its own reasons.
  *
  * A surface that describes the POLICY rather than a row — a catalogue default,
  * a shape being picked — asks neither, because no row's withdrawal bears on

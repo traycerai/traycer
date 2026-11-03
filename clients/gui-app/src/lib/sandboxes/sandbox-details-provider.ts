@@ -196,20 +196,28 @@ function statusRows(input: SandboxDetailsInput): SandboxDetailsRow[] {
     });
   }
   rows.push(...idleRows(summary));
-  // A withdrawn row ends on its announced day, so that is what this row
-  // says, and it says it without `unless used`: nothing the person does
-  // postpones a withdrawal, unlike a resting deadline a wake resets. The
-  // server sends such a row no `destroyAt`, so the two cases cannot both
-  // hold.
-  if (summary.withdrawalEndsAt !== null) {
-    rows.push({
-      label: "Destroyed on",
-      value: formatSandboxUtcDay(summary.withdrawalEndsAt),
-    });
-  } else if (summary.destroyAt !== null) {
+  // `destroyAt` wins wherever the server sends one, because it is the day the
+  // server will actually act on. A withdrawal does not suppress every
+  // `destroyAt`: a FROZEN row keeps its day-30 deadline, which is its own
+  // approved policy and is decided before the withdrawal is consulted
+  // (`destroyAtOf`), so a frozen withdrawn row carries both. Reading the
+  // withdrawal first there would name the later day while the Frozen row
+  // just below named the earlier one, and the server destroyed on the
+  // earlier one.
+  //
+  // The announced day answers only when there is no `destroyAt` to state,
+  // which is the ordinary withdrawn row: unfrozen, its resting deadline
+  // held. It carries no `unless used`, because nothing the person does
+  // postpones a withdrawal, unlike a resting deadline a wake resets.
+  if (summary.destroyAt !== null) {
     rows.push({
       label: "Destroyed on",
       value: `${formatSandboxDate(summary.destroyAt, true)} unless used`,
+    });
+  } else if (summary.withdrawalEndsAt !== null) {
+    rows.push({
+      label: "Destroyed on",
+      value: formatSandboxUtcDay(summary.withdrawalEndsAt),
     });
   }
   if (summary.frozen && summary.frozenAt !== null) {

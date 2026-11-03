@@ -10,7 +10,12 @@ import { sandboxSummaryFixture } from "@/hooks/sandboxes/__tests__/sandbox-fixtu
 import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
 import type { HostRpcRegistry } from "@/lib/host";
 import { sandboxQueryKeys } from "@/lib/query-keys";
+import { frozenDestroyAt } from "@/lib/sandboxes/sandbox-balance";
 import { sandboxDetailsEntry } from "@/lib/sandboxes/sandbox-details-provider";
+import {
+  formatSandboxDate,
+  formatSandboxUtcDay,
+} from "@/lib/sandboxes/sandbox-row-lines";
 import { SANDBOX_LIST_FAILED } from "@/lib/sandboxes/sandbox-strings";
 import { getDetailsProvider } from "@/lib/settings-details-entry";
 import { useAuthStore } from "@/stores/auth/auth-store";
@@ -240,6 +245,37 @@ describe("sandboxDetailsEntry", () => {
       }),
     );
     expect(status["Destroyed on"]).not.toContain("unless used");
+  });
+
+  it("names the frozen day-30 deadline, never the later withdrawal date, for a frozen row that carries both", () => {
+    const frozenAt = Date.UTC(2026, 10, 1);
+    const destroyAt = frozenDestroyAt(frozenAt);
+    const withdrawalEndsAt = Date.UTC(2026, 11, 15);
+    const entry = sandboxDetailsEntry({
+      summary: sandboxSummaryFixture({
+        burst: false,
+        destroyAfterRestingMinutes: null,
+        frozen: true,
+        frozenAt,
+        destroyAt,
+        withdrawalEndsAt,
+      }),
+      cost: null,
+      wakeString: null,
+      viewerUserId: null,
+      personal: false,
+      now: NOW,
+    });
+    const status = entry.export().status;
+    // Computed, not written out, for the same locale reason as the case
+    // above; the withdrawal day is asserted absent, not merely that the
+    // destroy day is present, because the bug this guards against produced a
+    // well-formed row with the wrong day in it.
+    const destroyDay = formatSandboxDate(destroyAt, true);
+    const withdrawalDay = formatSandboxUtcDay(withdrawalEndsAt);
+    expect(destroyDay).not.toBe(withdrawalDay);
+    expect(status["Destroyed on"]).toBe(`${destroyDay} unless used`);
+    expect(status["Destroyed on"]).not.toContain(withdrawalDay);
   });
 });
 
