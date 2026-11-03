@@ -81,11 +81,32 @@ else runs on the merge. Dispatch a workflow on a branch
 actually needed before the merge and no local check covers it, and name the
 reason in the pull request.
 
-The full suite runs once on every push to `main`. `trunk-red.yml` re-runs
-failed jobs once; a failed `trunk-red` run means `main` is really red, a break
-to fix or revert, not a flake. A red merge stays red until a run covering it
-passes, and a red `main` blocks the internal repository's staging train and
-promotion.
+**Every push to `main` starts a run of every workflow, and each runs what the
+push reaches.** `pre-commit.yml` narrows with `nx affected`;
+`protocol-compat.yml`, `real-supervisor.yml` and `gradle-wrapper.yml` have a
+`changes` job that calls `scripts/ci-push-scope.sh`, which holds their
+relevance lists; `browser-regressions.yml` and `formal-regressions.yml` carry
+their own. `codeql.yml`, `secret-scan.yml` and `scorecard.yml` scan the whole
+tree on every push: a secret or a vulnerable pattern can land in any file.
+
+Four rules keep that selection a gate rather than a hole:
+
+1. A change to a workflow file runs that workflow in full.
+2. A change to the root `package.json`, the lockfile, `nx.json` or a root
+   tsconfig runs everything.
+3. A failure of change detection runs everything, and never skips.
+4. A push that skips a suite inherits the last green result for it, which is
+   correct only because the range starts at the last push **that workflow**
+   passed on (`scripts/ci-last-green-sha.sh`), not at the push before it.
+
+No workflow filters its own push trigger by path. Narrowing is always a
+job-level skip inside a run that happened, because the internal repository's
+release gate refuses a commit whose own push started no run.
+
+`trunk-red.yml` re-runs failed jobs once; a failed `trunk-red` run means `main`
+is really red, a break to fix or revert, not a flake. A red merge stays red
+until a run covering it passes, and a red `main` blocks the internal
+repository's staging train and promotion.
 
 How the gate works and how a new workflow carries it:
 [`.github/AGENTS.md`](.github/AGENTS.md).
