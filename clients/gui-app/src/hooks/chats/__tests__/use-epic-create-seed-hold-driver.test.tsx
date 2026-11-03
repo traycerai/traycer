@@ -2,7 +2,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import { act, renderHook } from "@testing-library/react";
 import type { ChatEvent } from "@traycer/protocol/persistence/epic/schemas";
 import type {
-  ChatMessageDelivery,
+  ChatMessageDeliveryV142,
   ChatMessageDeliveryState,
 } from "@traycer/protocol/host/agent/gui/message-delivery";
 import type {
@@ -145,8 +145,8 @@ function delivery(
   messageId: string,
   revision: number,
   state: ChatMessageDeliveryState,
-): ChatMessageDelivery {
-  return { messageId, revision, state };
+): ChatMessageDeliveryV142 {
+  return { messageId, revision, state, worktreeIntent: null };
 }
 
 describe("useEpicCreateSeedHoldDriver", () => {

@@ -18,7 +18,7 @@ import {
   epicGetChatRunSettingsBatchUpgradeV20ToV21,
   epicGetChatRunSettingsBatchDowngradeV21ToV10,
 } from "./epic/contracts";
-import { chatSubscribeV141 } from "./agent/gui/subscribe";
+import { chatSubscribeV141, chatSubscribeV142 } from "./agent/gui/subscribe";
 import type { RequiredHostMethodVersion } from "../host-transport/remote/rpc-types";
 import { chatPrestartRuntimeV10 } from "./agent/gui/prestart-runtime";
 import { PROFILE_SYNC_LINK_RPC_METHODS } from "./profile-sync-link-contracts";
@@ -15969,7 +15969,7 @@ const HOST_STREAM_RPC_REGISTRY_DEFINITION = {
   ...HOST_STREAM_RPC_REGISTRY_OTHER_DEFINITION,
   "chat.subscribe": {
     1: {
-      latestMinor: 41,
+      latestMinor: 42,
       versions: {
         0: {
           contract: chatSubscribeV10,
@@ -16184,6 +16184,9 @@ const HOST_STREAM_RPC_REGISTRY_DEFINITION = {
         // names its causes (`actionAck.steerRestartReasons`, stripped below).
         40: { contract: chatSubscribeV140 },
         41: { contract: chatSubscribeV141 },
+        // @1.42: the delivery carries the opening's `worktreeIntent`, on the
+        // snapshot and `messageDeliveryChanged` (stripped below).
+        42: { contract: chatSubscribeV142 },
       },
     },
   },

@@ -606,6 +606,7 @@ import type {
   WorktreeFolderIntent,
   WorktreeIntent,
 } from "@traycer/protocol/host/worktree-schemas";
+import type { ChatMessageDeliveryV142 } from "@traycer/protocol/host/agent/gui/message-delivery";
 import {
   readStagedWorktreeIntent,
   useWorktreeIntentStagingStore,
@@ -913,6 +914,8 @@ function emitChatSnapshotWithMessages(input: {
   readonly activeTurn: ChatActiveTurn | null;
   readonly pendingInterviews?: ReadonlyArray<ChatPendingInterviewState>;
   readonly managedCommands?: ReadonlyArray<ManagedCommand>;
+  readonly messageDelivery?: ChatMessageDeliveryV142 | null;
+  readonly worktreeBinding?: WorktreeBinding | null;
 }): void {
   input.callbacks.onSnapshot({
     kind: "snapshot",
@@ -948,13 +951,17 @@ function emitChatSnapshotWithMessages(input: {
       activeTurn: input.activeTurn,
       pendingApprovals: [],
       pendingInterviews: [...(input.pendingInterviews ?? [])],
-      worktreeBinding: testWorktreeBinding(),
+      worktreeBinding:
+        input.worktreeBinding === undefined
+          ? testWorktreeBinding()
+          : input.worktreeBinding,
       missingWorktreePaths: [],
       pendingFileEditApprovals: [],
       accumulatedFileChanges: [...(input.accumulatedFileChanges ?? [])],
       managedCommands: [...(input.managedCommands ?? [])],
       heldUpdates: [],
       portForwards: [],
+      messageDelivery: input.messageDelivery,
     },
   });
 }
@@ -2919,6 +2926,7 @@ describe("<ChatTile />", () => {
           messageId: "message-1",
           revision: 1,
           state: { phase: "preparing" },
+          worktreeIntent: null,
         },
       });
     });
@@ -6788,6 +6796,239 @@ describe("<ChatTile />", () => {
       expect(workspaceSelectorTestState.inFlightWorktreeIntent).toEqual(
         frame.worktreeIntent,
       );
+    });
+  });
+
+  describe("the seeded worktree overlay", () => {
+    const PROJECT = "/Users/test/project";
+    const SIBLING = "/Users/test/sibling";
+
+    function seededWorktree(
+      workspacePath: string,
+      branchName: string,
+    ): WorktreeFolderIntent {
+      return {
+        kind: "worktree",
+        workspacePath,
+        repoIdentifier: null,
+        isPrimary: workspacePath === PROJECT,
+        branch: {
+          type: "new",
+          name: branchName,
+          source: "main",
+          carryUncommittedChanges: false,
+        },
+        scripts: null,
+      };
+    }
+
+    const PROJECT_SEED = seededWorktree(PROJECT, "polite-turtle");
+    const SIBLING_SEED = seededWorktree(SIBLING, "polite-otter");
+
+    function seededDelivery(
+      state: ChatMessageDeliveryV142["state"],
+      entries: ReadonlyArray<WorktreeFolderIntent>,
+    ): ChatMessageDeliveryV142 {
+      return {
+        messageId: "message-1",
+        revision: 1,
+        state,
+        worktreeIntent: { entries: [...entries] },
+      };
+    }
+
+    function emitSeededSnapshot(
+      messageDelivery: ChatMessageDeliveryV142 | null,
+      worktreeBinding: WorktreeBinding | null,
+    ): void {
+      act(() => {
+        emitChatSnapshotWithMessages({
+          callbacks: chatHarness.callbacks(),
+          access: "owner",
+          queueItems: [],
+          settings: SESSION_SETTINGS,
+          messages: [hostUserMessage()],
+          activeTurn: null,
+          messageDelivery,
+          worktreeBinding,
+        });
+      });
+    }
+
+    function emitDeliveryChanged(delivery: ChatMessageDeliveryV142): void {
+      act(() => {
+        chatHarness.callbacks().onMessageDeliveryChanged({
+          kind: "messageDeliveryChanged",
+          hasBinaryPayload: false,
+          epicId: EPIC_ID,
+          chatId: CHAT_ARTIFACT.id,
+          delivery,
+        });
+      });
+    }
+
+    it.each([
+      ["the placeholder local binding", testWorktreeBinding()],
+      ["no binding yet", null],
+    ])(
+      "shows only the worktree entries from a pending snapshot over %s",
+      async (_label, binding) => {
+        renderChatTile();
+        await waitForChatTileLoaded();
+
+        emitSeededSnapshot(
+          seededDelivery({ phase: "pending" }, [
+            PROJECT_SEED,
+            {
+              kind: "local",
+              workspacePath: SIBLING,
+              repoIdentifier: null,
+              isPrimary: false,
+            },
+          ]),
+          binding,
+        );
+
+        await waitFor(() => {
+          expect(workspaceSelectorTestState.inFlightWorktreeIntent).toEqual({
+            entries: [PROJECT_SEED],
+          });
+        });
+      },
+    );
+
+    it.each<[string, ChatMessageDeliveryV142["state"]]>([
+      [
+        "started",
+        { phase: "started", turnId: "turn-1", assistantMessageId: "reply-1" },
+      ],
+      [
+        "withdrawn",
+        {
+          phase: "withdrawn",
+          code: "WORKTREE_SETUP_FAILED",
+          reason: "The worktree could not be created.",
+          missingHashes: [],
+          restore: null,
+          restoreClaimed: false,
+        },
+      ],
+    ])(
+      "holds through preparing, then gives way to the binding at %s though the intent is still set",
+      async (_label, terminalState) => {
+        renderChatTile();
+        await waitForChatTileLoaded();
+        const entries = [PROJECT_SEED];
+        emitSeededSnapshot(
+          seededDelivery({ phase: "pending" }, entries),
+          testWorktreeBinding(),
+        );
+
+        emitDeliveryChanged(seededDelivery({ phase: "preparing" }, entries));
+        await waitFor(() => {
+          expect(workspaceSelectorTestState.inFlightWorktreeIntent).toEqual({
+            entries,
+          });
+        });
+
+        emitDeliveryChanged(seededDelivery(terminalState, entries));
+        await waitFor(() => {
+          expect(workspaceSelectorTestState.inFlightWorktreeIntent).toBeNull();
+        });
+      },
+    );
+
+    it("retires the overlay when the host nulls the intent during preparing", async () => {
+      renderChatTile();
+      await waitForChatTileLoaded();
+      emitSeededSnapshot(
+        seededDelivery({ phase: "preparing" }, [PROJECT_SEED]),
+        testWorktreeBinding(),
+      );
+      await waitFor(() => {
+        expect(workspaceSelectorTestState.inFlightWorktreeIntent).toEqual({
+          entries: [PROJECT_SEED],
+        });
+      });
+
+      emitDeliveryChanged({
+        messageId: "message-1",
+        revision: 2,
+        state: { phase: "preparing" },
+        worktreeIntent: null,
+      });
+      await waitFor(() => {
+        expect(workspaceSelectorTestState.inFlightWorktreeIntent).toBeNull();
+      });
+    });
+
+    it("drops a landed folder and keeps its pending sibling", async () => {
+      renderChatTile();
+      await waitForChatTileLoaded();
+      const delivery = seededDelivery({ phase: "preparing" }, [
+        PROJECT_SEED,
+        SIBLING_SEED,
+      ]);
+      emitSeededSnapshot(delivery, testWorktreeBinding());
+      await waitFor(() => {
+        expect(workspaceSelectorTestState.inFlightWorktreeIntent).toEqual({
+          entries: [PROJECT_SEED, SIBLING_SEED],
+        });
+      });
+
+      emitSeededSnapshot(delivery, {
+        entries: testWorktreeBinding().entries.map((entry) => ({
+          ...entry,
+          mode: "worktree",
+          worktreePath: "/wt/polite-turtle",
+          branch: "polite-turtle",
+        })),
+      });
+
+      await waitFor(() => {
+        expect(workspaceSelectorTestState.inFlightWorktreeIntent).toEqual({
+          entries: [SIBLING_SEED],
+        });
+      });
+    });
+
+    it("puts a newer dispatched intent after the seed, which is what lets it win that folder", async () => {
+      stageChatWorktreeDraft("/wt/a");
+      renderChatTile();
+      await waitForChatTileLoaded();
+      act(() => {
+        emitChatSnapshotWithMessages({
+          callbacks: chatHarness.callbacks(),
+          access: "owner",
+          queueItems: [],
+          settings: SESSION_SETTINGS,
+          messages: [hostUserMessage(), nextStepsAssistantMessage()],
+          activeTurn: null,
+          managedCommands: [runningShellOnProject()],
+          messageDelivery: seededDelivery({ phase: "preparing" }, [
+            PROJECT_SEED,
+            SIBLING_SEED,
+          ]),
+        });
+      });
+
+      fireEvent.click(
+        getButtonContainingText("/implementation-validation all"),
+      );
+      fireEvent.click(await screen.findByTestId("teardown-commit-immediate"));
+      await waitFor(() => {
+        expect(chatHarness.sent).toHaveLength(1);
+      });
+      const frame = chatHarness.sent[0];
+      if (frame.kind !== "send") throw new Error("expected send frame");
+      const dispatched = frame.worktreeIntent?.entries ?? [];
+      expect(dispatched).toHaveLength(1);
+
+      await waitFor(() => {
+        expect(workspaceSelectorTestState.inFlightWorktreeIntent).toEqual({
+          entries: [PROJECT_SEED, SIBLING_SEED, ...dispatched],
+        });
+      });
     });
   });
 

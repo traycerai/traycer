@@ -103,7 +103,10 @@ export {
   type ChatQueueSteerMode,
 } from "@traycer/protocol/host/agent/gui/agent-runtime";
 import { z } from "zod";
-import { chatMessageDeliverySchema } from "./message-delivery";
+import {
+  chatMessageDeliverySchema,
+  chatMessageDeliverySchemaV142,
+} from "./message-delivery";
 import { chatPortForwardSchema } from "@traycer/protocol/host/port-forward";
 import {
   guiHarnessIdSchema,
@@ -8747,11 +8750,18 @@ const ultracodeFallbackFields = {
   pendingReturn: lazySchema(() => pendingReturnSchema.optional()),
   lastFailedAttempt: lazySchema(() => lastFailedAttemptSchema.optional()),
 };
+// The delivery with its worktree obligation (`chat.subscribe@1.42`).
+const deliveryWorktreeIntentFields = {
+  messageDelivery: lazySchema(() =>
+    chatMessageDeliverySchemaV142.nullable().optional(),
+  ),
+};
 export const chatSnapshotSchema = lazySchema(() =>
   chatSnapshotSchemaPreUltracode.extend({
     chat: chatSchemaLive,
     queue: chatQueueStateSchema,
     ...ultracodeFallbackFields,
+    ...deliveryWorktreeIntentFields,
   }),
 );
 export const openChatSnapshotSchema = lazySchema(() =>
@@ -8759,6 +8769,7 @@ export const openChatSnapshotSchema = lazySchema(() =>
     chat: openChatSchemaLive,
     queue: openChatQueueStateSchema,
     ...ultracodeFallbackFields,
+    ...deliveryWorktreeIntentFields,
   }),
 );
 export const chatWindowedSnapshotSchema = lazySchema(() =>
@@ -8766,14 +8777,18 @@ export const chatWindowedSnapshotSchema = lazySchema(() =>
     chat: chatRecordSchemaLive,
     queue: chatQueueStateSchema,
     ...ultracodeFallbackFields,
+    ...deliveryWorktreeIntentFields,
   }),
 );
-export const openChatWindowedSnapshotSchema = lazySchema(() =>
+const openChatWindowedSnapshotSchemaV141 = lazySchema(() =>
   openChatWindowedSnapshotSchemaPreUltracode.extend({
     chat: chatRecordSchemaLive,
     queue: openChatQueueStateSchema,
     ...ultracodeFallbackFields,
   }),
+);
+export const openChatWindowedSnapshotSchema = lazySchema(() =>
+  openChatWindowedSnapshotSchemaV141.extend(deliveryWorktreeIntentFields),
 );
 const chatSubscribeCommonServerFrameSchemasOpenHarnessV141 =
   buildChatSubscribeCommonServerFrameSchemas({
@@ -8799,10 +8814,10 @@ const chatSubscribeTurnStateChangedServerFrameSchemaV141 = lazySchema(() =>
     ultracodeFallbackFields,
   ),
 );
-export const openChatSubscribeWindowedServerFrameSchema = lazySchema(() =>
+const openChatSubscribeWindowedServerFrameSchemaV141 = lazySchema(() =>
   z.discriminatedUnion("kind", [
     chatSubscribeWindowedSnapshotServerFrameSchemaOpenHarnessV139.extend({
-      snapshot: openChatWindowedSnapshotSchema,
+      snapshot: openChatWindowedSnapshotSchemaV141,
     }),
     chatSubscribeSkeletonChunkServerFrameSchemaV119,
     chatSubscribeAccumulatedChangesServerFrameSchema,
@@ -8818,6 +8833,30 @@ export const openChatSubscribeWindowedServerFrameSchema = lazySchema(() =>
     blockDeltaServerFrameSchema(openRuntimeEventSchema),
   ]),
 );
+const messageDeliveryChangedServerFrameSchemaV142 = lazySchema(() =>
+  messageDeliveryChangedServerFrameSchema.extend({
+    delivery: chatMessageDeliverySchemaV142.nullable(),
+  }),
+);
+export const openChatSubscribeWindowedServerFrameSchema = lazySchema(() =>
+  z.discriminatedUnion("kind", [
+    chatSubscribeWindowedSnapshotServerFrameSchemaOpenHarnessV139.extend({
+      snapshot: openChatWindowedSnapshotSchema,
+    }),
+    chatSubscribeSkeletonChunkServerFrameSchemaV119,
+    chatSubscribeAccumulatedChangesServerFrameSchema,
+    chatSubscribeIndexChangedServerFrameSchema,
+    chatSubscribeRangeServerFrameSchemaOpenHarnessV137,
+    chatSubscribeTurnStateChangedServerFrameSchemaV141,
+    chatSubscribeManagedCommandsChangedServerFrameSchema,
+    chatSubscribePortForwardsChangedServerFrameSchema,
+    chatSubscribeHeldUpdatesChangedServerFrameSchema,
+    chatSubscribeThinkingTokensServerFrameSchema,
+    messageDeliveryChangedServerFrameSchemaV142,
+    ...chatSubscribeCommonServerFrameSchemasOpenHarnessV141,
+    blockDeltaServerFrameSchema(openRuntimeEventSchema),
+  ]),
+);
 export const chatSubscribeServerFrameSchema = lazySchema(() =>
   z.discriminatedUnion("kind", [
     chatSubscribeSnapshotServerFrameSchema.extend({
@@ -8828,7 +8867,7 @@ export const chatSubscribeServerFrameSchema = lazySchema(() =>
     chatSubscribePortForwardsChangedServerFrameSchema,
     chatSubscribeHeldUpdatesChangedServerFrameSchema,
     chatSubscribeThinkingTokensServerFrameSchema,
-    messageDeliveryChangedServerFrameSchema,
+    messageDeliveryChangedServerFrameSchemaV142,
     ...chatSubscribeCommonServerFrameSchemasV141,
     blockDeltaServerFrameSchema(runtimeEventSchema),
   ]),
@@ -8897,8 +8936,23 @@ export const chatSubscribeV141 = defineStreamRpcContract({
   method: "chat.subscribe",
   schemaVersion: { major: 1, minor: 41 } as const,
   openRequestSchema: chatSubscribeV140.openRequestSchema,
-  serverFrameSchema: openChatSubscribeWindowedServerFrameSchema,
+  serverFrameSchema: openChatSubscribeWindowedServerFrameSchemaV141,
   clientFrameSchema: chatSubscribeWindowedClientFrameSchema,
+});
+
+/**
+ * 1.42: the delivery carries the opening's worktree obligation
+ * (`worktreeIntent`), on both the snapshot and `messageDeliveryChanged`, so the
+ * directory picker can show the worktree a seeded chat is waiting for. The host
+ * strips it below 1.42 (`CHAT_SUBSCRIBE_DELIVERY_INTENT_MINOR`). A host below
+ * 1.42 omits it, which parses to null: the picker shows the binding it has.
+ */
+export const chatSubscribeV142 = defineStreamRpcContract({
+  method: "chat.subscribe",
+  schemaVersion: { major: 1, minor: 42 } as const,
+  openRequestSchema: chatSubscribeV141.openRequestSchema,
+  serverFrameSchema: openChatSubscribeWindowedServerFrameSchema,
+  clientFrameSchema: chatSubscribeV141.clientFrameSchema,
 });
 
 const chatSubscribeCommonServerFrameSchemasV141 =
@@ -8934,7 +8988,7 @@ export const chatSubscribeWindowedServerFrameSchema = lazySchema(() =>
     chatSubscribePortForwardsChangedServerFrameSchema,
     chatSubscribeHeldUpdatesChangedServerFrameSchema,
     chatSubscribeThinkingTokensServerFrameSchema,
-    messageDeliveryChangedServerFrameSchema,
+    messageDeliveryChangedServerFrameSchemaV142,
     ...chatSubscribeCommonServerFrameSchemasV141,
     blockDeltaServerFrameSchema(runtimeEventSchema),
   ]),

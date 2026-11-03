@@ -21,6 +21,7 @@ const SEND_WOULD_QUEUE_MINOR = 34;
 const MEMORY_CURATION_MINOR = 35;
 const NOT_APPLIED_MINOR = 37;
 const ULTRACODE_MINOR = 41;
+const LATEST_MINOR = 42;
 
 const envelope = {
   hasBinaryPayload: false,
@@ -198,11 +199,11 @@ function parsed(minor: number): {
 }
 
 describe("chat.subscribe binding reachability for the Ultracode request", () => {
-  it("registers every minor from 1.0 through the 1.41 head", () => {
+  it("registers every minor from 1.0 through the 1.42 head", () => {
     expect(MINORS).toEqual(
-      Array.from({ length: ULTRACODE_MINOR + 1 }, (_, minor) => minor),
+      Array.from({ length: LATEST_MINOR + 1 }, (_, minor) => minor),
     );
-    expect(line.latestMinor).toBe(ULTRACODE_MINOR);
+    expect(line.latestMinor).toBe(LATEST_MINOR);
   });
 
   it.each(MINORS.filter((minor) => minor < ULTRACODE_MINOR))(
