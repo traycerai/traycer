@@ -111,6 +111,7 @@ const LONG_WITH_VALUE = new Set([
   "--line-length",
   "--lines",
   "--max-count",
+  "--exec",
   "--max-depth",
   "--source",
   "--before-context",
@@ -127,7 +128,6 @@ const LONG_WITH_VALUE = new Set([
   "--label",
   "--regexp",
 ]);
-const SETS_PIPEFAIL = /\bset\s+[^\n#]*\bpipefail\b/;
 const GITHUB_EXPRESSION = /\$\{\{[\s\S]*?\}\}/g;
 
 /**
@@ -183,8 +183,9 @@ function pipelinesOf(source) {
     // closes each, and the piped stage whose input its commands read.
     const groups = input === null ? [] : [{ ...input, closer: null }];
     const inherited = () => groups.at(-1) ?? { input: null, loop: null };
-    // `loop` is the innermost loop open, which a `break`, `exit` or `return`
-    // in its body marks as one that may stop reading early.
+    // `loop` is the innermost loop open. A loop keeps the pipelines of its
+    // condition until `do`, and a `break`, `exit` or `return` that leaves it
+    // marks it as one that may stop reading early.
     function openGroup(opener, stage) {
       const outer = inherited();
       const group = {
@@ -193,10 +194,22 @@ function pipelinesOf(source) {
         loop: outer.loop,
       };
       if (LOOPS.has(opener)) {
-        group.loop = { kind: opener, stops: false, inCondition: true };
+        group.loop = {
+          kind: opener,
+          stage,
+          stops: false,
+          inCondition: true,
+          conditions: [],
+        };
       }
       if (stage !== null) stage.loop = group.loop;
       groups.push(group);
+    }
+    // The loops this list can leave, innermost last; a substitution's loops
+    // are its own.
+    function enclosingLoops() {
+      const own = input === null ? groups : groups.slice(1);
+      return [...new Set(own.map((group) => group.loop).filter(Boolean))];
     }
     function closeGroup(closer) {
       const at = groups.findLastIndex((group) => group.closer === closer);
@@ -286,8 +299,14 @@ function pipelinesOf(source) {
       if (pipeline === null) {
         // A pipeline inside a group fed by a pipe reads that pipe first.
         const { input: groupInput, loop } = inherited();
-        if (["break", "exit", "return"].includes(current.words[0]) && loop) {
-          loop.stops = true;
+        const [leave, count] = current.words;
+        if (["break", "exit", "return"].includes(leave)) {
+          const loops = enclosingLoops();
+          const left =
+            leave === "break"
+              ? Number.parseInt(count ?? "1", 10) || 1
+              : loops.length;
+          for (const each of loops.slice(-left)) each.stops = true;
         }
         pipeline = {
           commands: [],
@@ -322,7 +341,11 @@ function pipelinesOf(source) {
         if (andOr) pipeline.tested = true;
         // A loop condition with another predicate (`read -r x && [ -n "$x" ]`)
         // can end the loop before its input does.
-        const loop = inherited().loop;
+        // Only this list's own loops: a substitution runs no loop condition.
+        const loop = enclosingLoops().at(-1);
+        if (loop?.inCondition && !pipeline.commands.includes(loop.stage)) {
+          loop.conditions.push(pipeline);
+        }
         if (andOr && loop?.inCondition) loop.stops = true;
         list.push(pipeline);
         pipeline = null;
@@ -735,6 +758,38 @@ const nameOf = (word) => word.split("/").at(-1);
 const GREPS = new Set(["grep", "egrep", "fgrep", "zgrep", "rg"]);
 const AWKS = new Set(["awk", "gawk", "mawk", "nawk"]);
 
+/** The words of an `env -S` string, with its quotes and backslashes read. */
+function splitStringWords(text) {
+  const words = [];
+  let word = null;
+  for (let at = 0; at < text.length; at += 1) {
+    const char = text[at];
+    if (/\s/.test(char)) {
+      if (word !== null) words.push(word);
+      word = null;
+      continue;
+    }
+    word ??= "";
+    if (char === "'") {
+      const end = text.indexOf("'", at + 1);
+      word += text.slice(at + 1, end === -1 ? text.length : end);
+      at = end === -1 ? text.length : end;
+    } else if (char === '"') {
+      for (at += 1; at < text.length && text[at] !== '"'; at += 1) {
+        if (text[at] === "\\") at += 1;
+        word += text[at] ?? "";
+      }
+    } else if (char === "\\") {
+      at += 1;
+      word += text[at] ?? "";
+    } else {
+      word += char;
+    }
+  }
+  if (word !== null) words.push(word);
+  return words;
+}
+
 /**
  * The command a stage runs and its arguments: past assignments and wrappers,
  * with each wrapper's own options and their values (`sudo -u user`,
@@ -760,7 +815,7 @@ function commandOf(stageWords) {
         const attached = split[1] === "=" || split[2] !== "";
         const command = attached ? split[2] : (words[at + 1] ?? "");
         words = [
-          ...command.trim().split(/\s+/),
+          ...splitStringWords(command),
           ...words.slice(at + (attached ? 1 : 2)),
         ];
         at = 0;
@@ -778,20 +833,19 @@ function commandOf(stageWords) {
 }
 
 /**
- * Whether a reader takes standard input: no `<` redirection and no file
- * operand. A grep's first operand is its pattern, and a sed's or awk's its
+ * A reader's operands, read by its own syntax: its files, the programs (sed
+ * and awk scripts, grep patterns) given inline, and whether one comes from a
+ * file. A grep's first operand is its pattern, and a sed's or awk's its
  * program, unless an option gave one.
  */
-function readsStandardInput(stage) {
-  if (stage.stdinRedirected) return false;
-  const { name, args } = commandOf(stage.words);
-  if (name === "read") return !args.some((arg) => /^-[A-Za-z]*u/.test(arg));
+function operandsOf(name, args) {
   let valued = "nc";
   if (GREPS.has(name)) valued = "efABCdDm";
   else if (name === "sed") valued = "efl";
-  else if (AWKS.has(name)) valued = "fvF";
+  else if (AWKS.has(name)) valued = "fvFilE";
   const operands = [];
-  let programGiven = false;
+  const programs = [];
+  let programFile = false;
   for (let at = 0; at < args.length; at += 1) {
     const arg = args[at];
     if (arg === "--") {
@@ -799,29 +853,156 @@ function readsStandardInput(stage) {
       break;
     }
     if (arg.startsWith("--")) {
-      if (/^--(?:regexp|file|expression|source)\b/.test(arg)) {
-        programGiven = true;
+      const [option, attached] = arg.split(/=(.*)/s);
+      let value = attached;
+      if (value === undefined && LONG_WITH_VALUE.has(option)) {
+        at += 1;
+        value = args[at] ?? "";
       }
-      if (LONG_WITH_VALUE.has(arg)) at += 1;
-    } else if (/^-./.test(arg)) {
+      if (/^--(?:regexp|expression|source)$/.test(option)) programs.push(value);
+      if (option === "--file" || option === "--exec") programFile = true;
+    } else if (/^-./.test(arg) && name !== "read") {
       for (let position = 1; position < arg.length; position += 1) {
         const option = arg[position];
-        if (name !== "head" && (option === "e" || option === "f")) {
-          programGiven = true;
+        if (!valued.includes(option)) continue;
+        let value = arg.slice(position + 1);
+        if (value === "") {
+          at += 1;
+          value = args[at] ?? "";
         }
-        if (valued.includes(option)) {
-          if (position === arg.length - 1) at += 1;
-          break;
+        if (name !== "head" && option === "e") programs.push(value);
+        if (name !== "head" && (option === "f" || option === "E")) {
+          programFile = true;
         }
+        break;
       }
     } else {
       operands.push(arg);
     }
   }
-  const files = (
-    name === "head" || programGiven ? operands : operands.slice(1)
-  ).filter((operand) => !(AWKS.has(name) && ASSIGNMENT.test(operand)));
+  const inline = name !== "head" && programs.length === 0 && !programFile;
+  if (inline && operands.length > 0) programs.push(operands.shift());
+  const files = operands.filter(
+    (operand) => !(AWKS.has(name) && ASSIGNMENT.test(operand)),
+  );
+  return { files, programs, programFile };
+}
+
+/**
+ * Whether a reader takes standard input: no `<` redirection, and no file
+ * operand but one that names standard input.
+ */
+function readsStandardInput(stage) {
+  if (stage.stdinRedirected) return false;
+  const { name, args } = commandOf(stage.words);
+  if (name === "read") return !args.some((arg) => /^-[A-Za-z]*u/.test(arg));
+  const { files } = operandsOf(name, args);
   return files.length === 0 || files.some((file) => STANDARD_INPUT.has(file));
+}
+
+/**
+ * Whether a sed script has a `q` or `Q` command: read command by command,
+ * past each address (`\#re#` included) and each `s` and `y` argument.
+ */
+function sedQuits(script) {
+  let at = 0;
+  const skipTo = (delimiter) => {
+    while (at < script.length && script[at] !== delimiter) {
+      at += script[at] === "\\" ? 2 : 1;
+    }
+    at += 1;
+  };
+  const skipLine = () => {
+    while (at < script.length && script[at] !== "\n") {
+      at += script[at] === "\\" ? 2 : 1;
+    }
+  };
+  const skipAddress = () => {
+    const char = script[at];
+    if (char === undefined) return false;
+    if (/[\d$]/.test(char)) {
+      while (/[\d$~]/.test(script[at] ?? "")) at += 1;
+    } else if (char === "/" || char === "\\") {
+      if (char === "\\") at += 1;
+      const delimiter = script[at];
+      at += 1;
+      skipTo(delimiter);
+      while (/[IM]/.test(script[at] ?? "")) at += 1;
+    } else {
+      return false;
+    }
+    return true;
+  };
+  while (at < script.length) {
+    while (/[\s;{}]/.test(script[at] ?? "")) at += 1;
+    if (at >= script.length) break;
+    if (skipAddress()) {
+      while (/\s/.test(script[at] ?? "")) at += 1;
+      if (script[at] === ",") {
+        at += 1;
+        while (/\s/.test(script[at] ?? "")) at += 1;
+        if (!skipAddress()) while (/[+~\d]/.test(script[at] ?? "")) at += 1;
+      }
+      while (/[\s!]/.test(script[at] ?? "")) at += 1;
+    }
+    const command = script[at];
+    at += 1;
+    if (command === "q" || command === "Q") return true;
+    if (command === "s" || command === "y") {
+      const delimiter = script[at];
+      at += 1;
+      skipTo(delimiter);
+      skipTo(delimiter);
+      while (/[gpiImMe\d]/.test(script[at] ?? "")) at += 1;
+      if (script[at] === "w") skipLine();
+    } else if ("aicrRwWe#".includes(command ?? "")) {
+      skipLine();
+    } else if ("btT:".includes(command ?? "")) {
+      while (at < script.length && !/[;\n]/.test(script[at])) at += 1;
+    }
+  }
+  return false;
+}
+
+/**
+ * Whether an awk program can exit before its input ends: an `exit` outside
+ * strings, regular expressions, comments and `END` actions.
+ */
+function awkExitsEarly(program) {
+  let code = "";
+  let regexAllowed = true;
+  for (let at = 0; at < program.length; at += 1) {
+    const char = program[at];
+    if (char === "#") {
+      const end = program.indexOf("\n", at);
+      at = end === -1 ? program.length : end - 1;
+    } else if (char === '"' || (char === "/" && regexAllowed)) {
+      for (at += 1; at < program.length && program[at] !== char; at += 1) {
+        if (program[at] === "\\") at += 1;
+      }
+      code += " ";
+      regexAllowed = false;
+    } else {
+      code += char;
+      if (char === "\n") regexAllowed = true;
+      else if (!/\s/.test(char)) regexAllowed = "(,~!{};&|?:=".includes(char);
+    }
+  }
+  let rest = code;
+  for (
+    let end = rest.search(/\bEND\s*\{/);
+    end !== -1;
+    end = rest.search(/\bEND\s*\{/)
+  ) {
+    let depth = 0;
+    let close = rest.indexOf("{", end);
+    for (; close < rest.length; close += 1) {
+      if (rest[close] === "{") depth += 1;
+      if (rest[close] === "}" && --depth === 0) break;
+    }
+    rest = rest.slice(0, end) + rest.slice(close + 1);
+  }
+  return /\bexit\b/.test(rest);
 }
 
 /** The reader a pipeline stage is, when it stops before its input ends. */
@@ -873,38 +1054,53 @@ function earlyExitReaderOf(stage) {
       ? null
       : "head";
   }
-  // A program read from a file may stop early; the scan cannot read it. The
-  // file may follow `-f`, be attached to it, or end a cluster (`sed -nf`).
-  const readsProgramFile = (arg) =>
-    arg.startsWith("--file") ||
-    (name === "sed"
-      ? /^-[nrsuzE]*f/.test(arg)
-      : AWKS.has(name) && arg.startsWith("-f"));
+  // A program read from a file may stop early; the scan cannot read it.
   if (name === "sed" || AWKS.has(name)) {
-    if (args.some(readsProgramFile)) return `${name} -f`;
-  }
-  if (name === "sed") {
-    return args.some((arg) =>
-      /(?:^|[;{}\s\d$/])[qQ]\s*\d*\s*(?:$|[;}])/m.test(arg),
-    )
-      ? "sed q"
-      : null;
-  }
-  if (AWKS.has(name)) {
-    return args.some((arg) => /\bexit\b/.test(arg)) ? "awk exit" : null;
+    const { programs, programFile } = operandsOf(name, args);
+    if (programFile) return `${name} -f`;
+    if (name === "sed") return programs.some(sedQuits) ? "sed q" : null;
+    return programs.some(awkExitsEarly) ? "awk exit" : null;
   }
   return name === "read" ? "read" : null;
 }
 
 /**
- * Whether a loop reads its input to the end: a `while` or `until` loop with no
- * `break`, `exit` or `return` in its body. A `for` loop reads no line itself.
+ * Whether a loop reads its input to the end: a `while` loop whose whole
+ * condition is one `read`, which nothing in its body leaves early. An `until`
+ * loop ends on the first line read, and a `for` loop reads no line itself.
  */
 function drains(loop) {
+  if (loop === null || loop.kind !== "while" || loop.stops) return false;
+  const isRead = (words) => commandOf(words).name === "read";
+  if (loop.stage !== null) {
+    return loop.conditions.length === 0 && isRead(loop.stage.words.slice(1));
+  }
+  const [condition, ...more] = loop.conditions;
   return (
-    loop !== null &&
-    (loop.kind === "while" || loop.kind === "until") &&
-    !loop.stops
+    condition !== undefined &&
+    more.length === 0 &&
+    condition.commands.length === 1 &&
+    !condition.commands[0].compound &&
+    isRead(condition.commands[0].words)
+  );
+}
+
+/** Whether shell source runs a `set` command that turns pipefail on. */
+function setsPipefail(source) {
+  const { pipelines, problems } = pipelinesOf(source);
+  // A source the scan cannot read stays in scope, so the test reports it.
+  return (
+    problems.length > 0 ||
+    pipelines.some((pipeline) =>
+      pipeline.commands.some(
+        ({ words }) =>
+          words[0] === "set" &&
+          words.some(
+            (word, at) =>
+              word === "pipefail" && /^-[A-Za-z]*o$/.test(words[at - 1] ?? ""),
+          ),
+      ),
+    )
   );
 }
 
@@ -984,7 +1180,7 @@ function pipefailStepsOf(text) {
       const pipefail =
         effective === "bash" ||
         /pipefail/.test(effective ?? "") ||
-        SETS_PIPEFAIL.test(node.value);
+        setsPipefail(node.value);
       if (!pipefail) return;
       const startLine = lineCounter.linePos(node.range[0]).line;
       const block =
@@ -1062,7 +1258,7 @@ function repositoryFindings() {
   };
   const findings = [];
   for (const { path, text } of shells) {
-    if (!SETS_PIPEFAIL.test(text) && !isSourced(path)) continue;
+    if (!setsPipefail(text) && !isSourced(path)) continue;
     for (const finding of findingsIn(text)) findings.push(`${path}:${finding}`);
   }
   for (const path of workflows) {
@@ -1198,6 +1394,21 @@ describe("an early-exit reader never reads a streaming producer through a pipe u
       'seq 10 | while IFS= read -r line && [ -n "$line" ]; do :; done',
     ],
     [
+      "a while read loop whose condition list ends in a test",
+      'seq 10 | while read -r x; [ "$x" -lt 3 ]; do :; done',
+    ],
+    ["an until read loop", "seq 10 | until read -r x; do :; done"],
+    [
+      "a read loop left by a numbered break",
+      "seq 10 | while read -r x; do for y in a; do break 2; done; done",
+    ],
+    [
+      "a sed quit after an alternate-delimiter address",
+      "seq 10 | sed -n '\\#1#q'",
+    ],
+    ["a quoted command in env's split string", `seq 10 | env -S '"head" -n 1'`],
+    ["an awk exit in a BEGIN action", "seq 10 | awk 'BEGIN { exit }'"],
+    [
       "a bounded while read loop",
       'seq 10 | while read -r x && [ "$x" -lt 3 ]; do :; done',
     ],
@@ -1270,6 +1481,15 @@ describe("an early-exit reader never reads a streaming producer through a pipe u
       "a loop that reads every line",
       "seq 10 | while read -r a; do read -r b; done",
     ],
+    ["an awk exit in its END action", "seq 10 | awk 'END { exit 0 }'"],
+    ["an awk regex naming exit", "seq 10 | awk '/exit/ { print }' >/dev/null"],
+    ["an awk string naming exit", `seq 10 | awk '{ print "exit" }'`],
+    ["a sed substitution with q in it", "seq 10 | sed 's/q/x/'"],
+    ["a sed transliteration with q in it", "seq 10 | sed -n 'y/q/x/;p'"],
+    [
+      "an exit inside a substitution in a read loop",
+      "seq 10 | while read -r l; do v=$(false || exit 1); done",
+    ],
     [
       "a loop with an and-list in its body",
       'seq 10 | while read -r x; do if [ -n "$x" ] && [ "$x" ]; then :; fi; done',
@@ -1294,6 +1514,16 @@ describe("an early-exit reader never reads a streaming producer through a pipe u
     ],
   ])("passes %s", (_, body) => {
     expect(pipefail(body)).toEqual([]);
+  });
+
+  it("takes a script into scope only when it runs a set that turns pipefail on", () => {
+    expect(setsPipefail("set -euo pipefail\nseq 10 | head -n 1\n")).toBe(true);
+    expect(setsPipefail("set -o errexit -o pipefail\n")).toBe(true);
+    expect(
+      setsPipefail(
+        "set -eu\n# Do not set -o pipefail here.\nseq 10 | head -n 1\n",
+      ),
+    ).toBe(false);
   });
 
   it("reports a heredoc it cannot close instead of passing what follows", () => {
