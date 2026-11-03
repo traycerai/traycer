@@ -87,6 +87,7 @@ export function HtmlArtifactCommentSurface(props: {
   readonly viewTabId: string;
   readonly source: ArtifactSource;
   readonly toolbarControls: ReactNode;
+  readonly menuItems: ReactNode;
 }) {
   return (
     <CanvasSelectionProvider
@@ -101,6 +102,7 @@ export function HtmlArtifactCommentSurface(props: {
         source={props.source}
         title={props.artifactTitle}
         toolbarControls={props.toolbarControls}
+        menuItems={props.menuItems}
       />
     </CanvasSelectionProvider>
   );
@@ -110,6 +112,7 @@ interface CommentFrameProps {
   readonly source: ArtifactSource;
   readonly title: string;
   readonly toolbarControls: ReactNode;
+  readonly menuItems: ReactNode;
 }
 
 function ProvidedCommentFrame(props: CommentFrameProps) {
@@ -200,6 +203,7 @@ function HtmlArtifactCommentFrame(
             {commentsEnabled ? events.renderToolbarControls?.() : null}
           </>
         }
+        menuItems={props.menuItems}
       />
       {events.renderCommentDraft?.()}
     </>

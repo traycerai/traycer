@@ -14,6 +14,7 @@ import {
 import type { SandboxBridgeHost } from "@/lib/sandbox/bridge-host";
 import { artifactContentPolicy } from "@/lib/sandbox/mcp-csp";
 import { sandboxLoaderBaseUrl } from "@/lib/sandbox/sandbox-url";
+import { PAGE_INSET_TOP_VARIABLE } from "@/lib/sandbox/theme-map";
 import {
   buildArtifactAddress,
   type ArtifactManifest,
@@ -161,6 +162,7 @@ function artifactFrame(options: {
   readonly source: SandboxSource;
   readonly title: string;
   readonly onBridge: ((bridge: SandboxBridgeHost | null) => void) | null;
+  readonly pageInsetTop?: number;
 }) {
   return (
     <SandboxFrame
@@ -179,6 +181,7 @@ function artifactFrame(options: {
       onRequestTeardown={() => undefined}
       displayMode="inline"
       pageNavigation={null}
+      pageInsetTop={options.pageInsetTop}
       onBridge={options.onBridge}
       ref={null}
     />
@@ -490,6 +493,41 @@ describe("<SandboxFrame /> artifact source, with a runner host that serves artif
       }),
     );
   });
+});
+
+describe("<SandboxFrame /> artifact source, with room kept for floating controls", () => {
+  async function servedThemeVariables(
+    pageInsetTop: number | undefined,
+  ): Promise<Readonly<Record<string, string>> | undefined> {
+    render(
+      <RunnerHostContext.Provider value={hostWith(desktopFakeBridge())}>
+        {artifactFrame({
+          source: artifactSource("myart", "", "index.html"),
+          title: "Artifact page",
+          onBridge: null,
+          pageInsetTop,
+        })}
+      </RunnerHostContext.Provider>,
+    );
+    await screen.findByTitle("Artifact page");
+    return artifactServerCalls.at(-1)?.document.theme.variables;
+  }
+
+  it("serves the page a theme that carries the room as a variable", async () => {
+    const variables = await servedThemeVariables(44);
+
+    expect(variables?.[PAGE_INSET_TOP_VARIABLE]).toBe("44px");
+  });
+
+  it.each([undefined, 0])(
+    "serves no variable when the room is %s",
+    async (pageInsetTop) => {
+      const variables = await servedThemeVariables(pageInsetTop);
+
+      expect(variables).toBeDefined();
+      expect(variables?.[PAGE_INSET_TOP_VARIABLE]).toBeUndefined();
+    },
+  );
 });
 
 describe("<SandboxFrame /> artifact source, served over iOS's own scheme", () => {

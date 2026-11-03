@@ -97,6 +97,7 @@ function tree(source: SandboxSource & { kind: "artifact" }) {
           viewTabId="tab-1"
           source={source}
           toolbarControls={null}
+          menuItems={null}
         />
       </TooltipProvider>
     </QueryClientProvider>
