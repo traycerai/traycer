@@ -6697,6 +6697,12 @@ printf '%s\\n' "$@" > ${JSON.stringify(newArgs)}
       // after the host's whole exit wait plus a margin of poll intervals, with
       // `result` null: a wait that outlasts its bound fails the caller's
       // assertion instead of hanging the suite.
+      //
+      // The clock moves only while the retire has a timer pending. Until it
+      // arms one it is on real I/O (the launchctl fakes, the manifest
+      // removal), and a clock moved then would spend the exit wait's budget
+      // before the wait had begun: on a slow runner that ran the whole
+      // allowance out and answered null.
       async function retireOnFakeClock(calls: RecordedCall[]) {
         vi.useFakeTimers({
           toFake: ["setTimeout", "clearTimeout", "Date", "performance"],
@@ -6719,6 +6725,7 @@ printf '%s\\n' "$@" > ${JSON.stringify(newArgs)}
         // clock.
         while (!settled && elapsedMs < limitMs) {
           await realSleep(5);
+          if (vi.getTimerCount() === 0) continue;
           await vi.advanceTimersByTimeAsync(sliceMs);
           elapsedMs += sliceMs;
         }
