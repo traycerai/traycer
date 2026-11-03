@@ -2,6 +2,10 @@ import { afterEach, describe, expect, it } from "vitest";
 import { act, renderHook } from "@testing-library/react";
 import type { ChatEvent } from "@traycer/protocol/persistence/epic/schemas";
 import type {
+  ChatMessageDelivery,
+  ChatMessageDeliveryState,
+} from "@traycer/protocol/host/agent/gui/message-delivery";
+import type {
   ChatQueuedPromptItem,
   ChatRunSettings,
 } from "@traycer/protocol/host/agent/gui/subscribe";
@@ -129,6 +133,20 @@ function creatingEvent(
     },
     timestamp,
   );
+}
+
+const STARTED: ChatMessageDeliveryState = {
+  phase: "started",
+  turnId: "turn-1",
+  assistantMessageId: "assistant-1",
+};
+
+function delivery(
+  messageId: string,
+  revision: number,
+  state: ChatMessageDeliveryState,
+): ChatMessageDelivery {
+  return { messageId, revision, state };
 }
 
 describe("useEpicCreateSeedHoldDriver", () => {
@@ -306,7 +324,7 @@ describe("useEpicCreateSeedHoldDriver", () => {
     }
   });
 
-  it("releases when the seeded row has left the queue", () => {
+  it("with no delivery record, falls back to the queue and releases when the seeded row has left it", () => {
     const handle = createHandle(CHAT_ID);
     const released: number[] = [];
     markEpicCreateSeedPending(EPIC_ID, CHAT_ID, {
@@ -500,5 +518,159 @@ describe("useEpicCreateSeedHoldDriver", () => {
 
     renderHook(() => useEpicCreateSeedHoldDriver({ handle: owner }));
     expect(released).toEqual(["owner"]);
+  });
+
+  describe("when the delivery record names the seeded message", () => {
+    function markHeldSeed(): number[] {
+      const released: number[] = [];
+      markEpicCreateSeedPending(EPIC_ID, CHAT_ID, {
+        hostId: "host-a",
+        seededMessageId: SEEDED_MESSAGE_ID,
+        seedRows: true,
+        heldForDeferredCreate: true,
+        release: () => {
+          released.push(1);
+        },
+      });
+      return released;
+    }
+
+    it("holds through pending and preparing with an empty queue, and releases at started", () => {
+      const handle = createHandle(CHAT_ID);
+      const released = markHeldSeed();
+      act(() => {
+        handle.store.setState({
+          snapshotLoaded: true,
+          messageDelivery: delivery(SEEDED_MESSAGE_ID, 1, { phase: "pending" }),
+        });
+      });
+      renderHook(() => useEpicCreateSeedHoldDriver({ handle }));
+      expect(released).toEqual([]);
+
+      act(() => {
+        handle.store.setState({
+          messageDelivery: delivery(SEEDED_MESSAGE_ID, 2, {
+            phase: "preparing",
+          }),
+          events: [creatingEvent(SEEDED_MESSAGE_ID, 1)],
+        });
+      });
+      expect(released).toEqual([]);
+
+      act(() => {
+        handle.store.setState({
+          messageDelivery: delivery(SEEDED_MESSAGE_ID, 3, STARTED),
+        });
+      });
+      expect(released).toEqual([1]);
+    });
+
+    it("releases on withdrawn", () => {
+      const handle = createHandle(CHAT_ID);
+      const released = markHeldSeed();
+      act(() => {
+        handle.store.setState({
+          snapshotLoaded: true,
+          messageDelivery: delivery(SEEDED_MESSAGE_ID, 1, {
+            phase: "preparing",
+          }),
+          events: [creatingEvent(SEEDED_MESSAGE_ID, 1)],
+        });
+      });
+      renderHook(() => useEpicCreateSeedHoldDriver({ handle }));
+      expect(released).toEqual([]);
+
+      act(() => {
+        handle.store.setState({
+          messageDelivery: delivery(SEEDED_MESSAGE_ID, 2, {
+            phase: "withdrawn",
+            code: "WORKTREE_SETUP_FAILED",
+            reason: "git worktree add failed",
+            missingHashes: [],
+            restore: null,
+            restoreClaimed: false,
+          }),
+        });
+      });
+      expect(released).toEqual([1]);
+    });
+
+    it("releases during preparing once the card row reaches setting-up, because the add is done", () => {
+      const handle = createHandle(CHAT_ID);
+      const released = markHeldSeed();
+      act(() => {
+        handle.store.setState({
+          snapshotLoaded: true,
+          messageDelivery: delivery(SEEDED_MESSAGE_ID, 1, {
+            phase: "preparing",
+          }),
+          events: [creatingEvent(SEEDED_MESSAGE_ID, 1)],
+        });
+      });
+      renderHook(() => useEpicCreateSeedHoldDriver({ handle }));
+      expect(released).toEqual([]);
+
+      act(() => {
+        handle.store.setState({
+          events: [
+            creatingEvent(SEEDED_MESSAGE_ID, 1),
+            setupEvent(
+              "setup.running",
+              { workspacePath: "/repo", terminalSessionId: "t1" },
+              2,
+            ),
+          ],
+        });
+      });
+      expect(released).toEqual([1]);
+    });
+
+    it("outranks a queue item carrying the same message: started releases while it is still queued", () => {
+      const handle = createHandle(CHAT_ID);
+      const released = markHeldSeed();
+      act(() => {
+        handle.store.setState({
+          snapshotLoaded: true,
+          messageDelivery: delivery(SEEDED_MESSAGE_ID, 1, STARTED),
+          queue: {
+            status: "running",
+            items: [promptItem(SEEDED_MESSAGE_ID, "pending")],
+          },
+        });
+      });
+      renderHook(() => useEpicCreateSeedHoldDriver({ handle }));
+      expect(released).toEqual([1]);
+    });
+  });
+
+  it("a delivery naming a different message falls back to the queue: holds while queued, releases once it has left", () => {
+    const handle = createHandle(CHAT_ID);
+    const released: number[] = [];
+    markEpicCreateSeedPending(EPIC_ID, CHAT_ID, {
+      hostId: "host-a",
+      seededMessageId: SEEDED_MESSAGE_ID,
+      seedRows: true,
+      heldForDeferredCreate: true,
+      release: () => {
+        released.push(1);
+      },
+    });
+    act(() => {
+      handle.store.setState({
+        snapshotLoaded: true,
+        messageDelivery: delivery("msg-other", 1, STARTED),
+        queue: {
+          status: "running",
+          items: [promptItem(SEEDED_MESSAGE_ID, "pending")],
+        },
+      });
+    });
+    renderHook(() => useEpicCreateSeedHoldDriver({ handle }));
+    expect(released).toEqual([]);
+
+    act(() => {
+      handle.store.setState({ queue: { status: "idle", items: [] } });
+    });
+    expect(released).toEqual([1]);
   });
 });
