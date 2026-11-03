@@ -16,6 +16,7 @@ import {
   existsSync,
   mkdirSync,
   mkdtempSync,
+  readFileSync,
   rmSync,
   writeFileSync,
 } from "node:fs";
@@ -344,6 +345,60 @@ it("compares a pull request against the merge base, not the base branch's tip", 
   expect(
     script("protocol-compat.yml", "pull_request", movedBase, "").stdout.trim(),
   ).toBe("false");
+});
+
+// Every per-workflow `reaches` is called as the condition of an `if`, and bash
+// suspends `errexit` for the whole body of a function called there. A command
+// that failed inside one would not abort the script: it would leave its
+// variable empty, the tests after it would read that empty value, and the
+// answer could be `false` on a path the workflow reads - which is rule 3
+// inverted. So a `reaches` may only match patterns.
+it("decides every path by pattern alone, with nothing in it that can fail", () => {
+  const lines = readFileSync(SCRIPT, "utf8").split("\n");
+  const bodies = [];
+  for (let index = 0; index < lines.length; index += 1) {
+    if (!/^\s*reaches\(\) \{$/.test(lines[index])) continue;
+    const indent = /^\s*/.exec(lines[index])[0];
+    const end = lines.findIndex(
+      (line, at) => at > index && line === `${indent}}`,
+    );
+    expect(end).toBeGreaterThan(index);
+    bodies.push(lines.slice(index + 1, end).join("\n"));
+  }
+
+  // The forms a pattern test is made of, and nothing else. A command
+  // substitution is not the only hazard: a bare external command used as the
+  // condition returns 127 when it is missing, which reads as `false` too.
+  const ALLOWED = [
+    /^case "\$1" in$/,
+    /^esac$/,
+    /^return [01]$/,
+    /^;;$/,
+    // A `[[ ]]` test, which cannot hold a pipe at all, as long as it runs
+    // nothing: a command substitution is how a failed command's output would
+    // reach the match.
+    (line) =>
+      /^\[\[ .* \]\]$/.test(line) &&
+      !line.includes("$(") &&
+      !line.includes("`"),
+    // A `case` pattern - globs, bracket expressions and alternation only -
+    // alone, or with its whole body on the same line.
+    /^[A-Za-z0-9*.[\]/| -]+\)$/,
+    /^[A-Za-z0-9*.[\]/| -]+\) return [01] ;;$/,
+  ];
+
+  expect(bodies).toHaveLength(WORKFLOWS.length);
+  for (const body of bodies) {
+    for (const line of body.split("\n").map((text) => text.trim())) {
+      if (line.length === 0) continue;
+      expect(
+        ALLOWED.some((form) =>
+          typeof form === "function" ? form(line) : form.test(line),
+        ),
+        `${line} is not a pattern test`,
+      ).toBe(true);
+    }
+  }
 });
 
 describe("usage", () => {

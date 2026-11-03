@@ -74,6 +74,15 @@ is_root_file() {
 # of `browser-regressions.yml` follows: a package's exports reach past `src/`
 # (`@traycer/protocol/utils/*` is `protocol/utils/`), so a subdirectory list
 # goes stale the moment an export moves.
+#
+# A `reaches` RUNS NO COMMAND: no command substitution, no pipe, no external
+# tool. It is called as the condition of an `if`, and bash suspends `errexit`
+# for the whole body of a function called there - so a command that failed
+# inside one would not abort the script. It would leave its variable empty, the
+# tests below would read that empty value, and the answer could be `false` on a
+# path the workflow reads. Rule 3 says a failure runs everything; a `reaches`
+# keeps that rule by having nothing in it that can fail. Pattern matching only.
+# `scripts/__tests__/ci-push-scope.test.mjs` holds every definition to it.
 case "${workflow}" in
   # The released-peer compatibility gate dumps THIS tree's protocol surface,
   # checks it against every released baseline, and then drives the real client
@@ -87,7 +96,9 @@ case "${workflow}" in
   # Nothing either job runs reads a Markdown file.
   protocol-compat.yml)
     reaches() {
-      case "$1" in *.md) return 1 ;; esac
+      case "$1" in
+        *.md) return 1 ;;
+      esac
       [[ $1 =~ ^(protocol|clients/shared)/ ]]
     }
     ;;
@@ -100,7 +111,9 @@ case "${workflow}" in
   # Nothing the suite runs reads a Markdown file.
   real-supervisor.yml)
     reaches() {
-      case "$1" in *.md) return 1 ;; esac
+      case "$1" in
+        *.md) return 1 ;;
+      esac
       [[ $1 =~ ^(protocol|clients/shared|clients/traycer-cli)/ ]]
     }
     ;;
@@ -118,10 +131,10 @@ case "${workflow}" in
   # their name, not because the action reads them.
   gradle-wrapper.yml)
     reaches() {
-      local lower
-      lower=$(printf '%s' "$1" | tr '[:upper:]' '[:lower:]')
-      case "${lower}" in
-        *jar* | *gradle* | *wrapper*) return 0 ;;
+      case "$1" in
+        *[Jj][Aa][Rr]* | *[Gg][Rr][Aa][Dd][Ll][Ee]* | *[Ww][Rr][Aa][Pp][Pp][Ee][Rr]*)
+          return 0
+          ;;
       esac
       [[ ! $1 =~ ^[A-Za-z0-9._/+-]+$ ]]
     }
