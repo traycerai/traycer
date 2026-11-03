@@ -2,6 +2,7 @@ import { useMemo } from "react";
 import { useIsMobileViewport } from "@/hooks/ui/use-mobile-viewport";
 import { getFeatureSettingsBridge } from "@/lib/desktop-feature-settings";
 import { isMobileApp } from "@/lib/mobile-app";
+import { soundtrackOffered } from "@/lib/soundtrack/manifest";
 import type { SettingsAvailabilityContext } from "@/lib/settings/settings-availability";
 import { useRunnerHostOrNull } from "@/providers/use-runner-host";
 
@@ -22,8 +23,15 @@ export function useSettingsAvailabilityContext(): SettingsAvailabilityContext {
   const featureSettings = getFeatureSettingsBridge();
   const mobileApp = isMobileApp();
   const phoneLayout = useIsMobileViewport();
+  const offered = soundtrackOffered();
   return useMemo(
-    () => ({ runnerHost, featureSettings, mobileApp, phoneLayout }),
-    [runnerHost, featureSettings, mobileApp, phoneLayout],
+    () => ({
+      runnerHost,
+      featureSettings,
+      mobileApp,
+      phoneLayout,
+      soundtrackOffered: offered,
+    }),
+    [runnerHost, featureSettings, mobileApp, phoneLayout, offered],
   );
 }

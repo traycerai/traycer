@@ -1,4 +1,9 @@
-import { WebAudioDimFilter, WebAudioOutput } from "@/lib/soundtrack/output";
+import {
+  WebAudioDimFilter,
+  WebAudioLevel,
+  WebAudioOutput,
+} from "@/lib/soundtrack/output";
+import { MIX_TUNING } from "@/lib/soundtrack/mix-tuning";
 
 /**
  * Browser fixture for what the soundtrack's Web Audio port puts in the output.
@@ -162,13 +167,81 @@ async function renderDim(request: DimRequest): Promise<DimRendered> {
   return { peaks, rms };
 }
 
+interface LevelRequest {
+  readonly seconds: number;
+  readonly volume: number;
+  /** Each runs on the render quantum its time falls in. */
+  readonly steps: readonly {
+    readonly kind: "volume" | "duck";
+    readonly at: number;
+    readonly value: number;
+  }[];
+  readonly readAt: readonly number[];
+}
+
+interface LevelRendered {
+  readonly readings: readonly number[];
+  /** The biggest jump between neighbouring samples from the first step on. */
+  readonly biggestStep: number;
+}
+
+/** A constant 1 through `WebAudioLevel`: a sample reads as the level itself. */
+async function renderLevel(request: LevelRequest): Promise<LevelRendered> {
+  const context = new OfflineAudioContext(
+    1,
+    Math.ceil(request.seconds * SAMPLE_RATE),
+    SAMPLE_RATE,
+  );
+  const constantOne = context.createBuffer(
+    1,
+    context.length,
+    context.sampleRate,
+  );
+  constantOne.getChannelData(0).fill(1);
+  const level = new WebAudioLevel(context, context.destination, request.volume);
+  const source = context.createBufferSource();
+  source.buffer = constantOne;
+  source.connect(level.input);
+  source.start(0);
+  for (const step of request.steps) {
+    void context.suspend(step.at).then(() => {
+      if (step.kind === "volume") level.setVolume(step.value);
+      else level.duck(step.value);
+      return context.resume();
+    });
+  }
+
+  const samples = (await context.startRendering()).getChannelData(0);
+  const firstStep = Math.round(request.steps[0].at * SAMPLE_RATE) + 1;
+  let biggestStep = 0;
+  for (let index = firstStep; index < samples.length; index += 1) {
+    biggestStep = Math.max(
+      biggestStep,
+      Math.abs(samples[index] - samples[index - 1]),
+    );
+  }
+  return {
+    readings: request.readAt.map(
+      (time) => samples[Math.round(time * SAMPLE_RATE)],
+    ),
+    biggestStep,
+  };
+}
+
 declare global {
   interface Window {
     __soundtrackOutputProbe: {
       readonly render: typeof render;
       readonly renderDim: typeof renderDim;
+      readonly renderLevel: typeof renderLevel;
+      readonly duckTuning: typeof MIX_TUNING.duck;
     };
   }
 }
 
-window.__soundtrackOutputProbe = { render, renderDim };
+window.__soundtrackOutputProbe = {
+  render,
+  renderDim,
+  renderLevel,
+  duckTuning: MIX_TUNING.duck,
+};

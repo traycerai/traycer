@@ -27,6 +27,7 @@ function contextWith(values: LayoutFormContext["values"]): LayoutFormContext {
       featureSettings: null,
       mobileApp: false,
       phoneLayout: false,
+      soundtrackOffered: false,
     },
     facts: { voiceInputEnabled: true },
   };

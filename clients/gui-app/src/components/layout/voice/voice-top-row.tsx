@@ -18,12 +18,19 @@ import { useVoiceSessionStore } from "@/stores/voice/voice-session-store";
  * moves, and the soundtrack's toggle beside it. The dynamic action registry is
  * single-handler and this is Talk's only desktop mount; each chrome kind draws
  * exactly one of these.
+ *
+ * Three columns, so that the middle one stays on the row's middle with the
+ * toggle in the last. The empty first column is as wide as the toggle's until
+ * room runs out, and then it is the first thing to give way. The middle column
+ * keeps its floor, which is what stops the row taking a control from the strip.
  */
 export function VoiceTopRowControl(): ReactNode {
   const showStrip = useVoiceSessionStore(voiceStripDrawn);
   return (
-    <div className="flex min-w-0 items-center gap-1 self-stretch">
-      {showStrip ? <VoiceSessionStrip /> : <TalkControl form="label" />}
+    <div className="grid min-w-0 grid-cols-[1fr_auto_1fr] items-center self-stretch">
+      <div className="col-start-2 flex items-center self-stretch">
+        {showStrip ? <VoiceSessionStrip /> : <TalkControl form="label" />}
+      </div>
       <SoundtrackControl />
     </div>
   );

@@ -228,6 +228,48 @@ afterEach(() => {
   useBotOpenThreadStore.getState().setRail(BOT_ID, null);
 });
 
+describe("the soundtrack's toggle in the window's top row", () => {
+  beforeEach(() => {
+    vi.stubEnv("MODE", "development");
+  });
+
+  afterEach(() => {
+    vi.unstubAllEnvs();
+  });
+
+  it.each(CHROME_CASES)(
+    "has the row to itself in a deployment with no voice, with the $label",
+    ({ chrome, row }) => {
+      renderColumn(chrome, "task-tab");
+
+      expect(
+        within(rowOf(row)).getByRole("button", { name: "Soundtrack" }),
+      ).toBeTruthy();
+      expect(talkButtons()).toHaveLength(0);
+    },
+  );
+
+  it("stays beside the session strip while a session is live", () => {
+    offerVoice();
+    renderColumn(RIGHT_NONE.chrome, "task-tab");
+    act(() => {
+      useVoiceSessionStore.setState({ phase: "live", focus: FOCUS });
+    });
+
+    const row = within(rowOf(RIGHT_NONE.row));
+    expect(row.getByTestId("voice-session-strip")).toBeTruthy();
+    expect(row.getByRole("button", { name: "Soundtrack" })).toBeTruthy();
+  });
+
+  it("is not drawn in the phone layout", () => {
+    viewport.phone = true;
+    renderColumn(RIGHT_NONE.chrome, "task-tab");
+
+    expect(screen.queryByTestId("voice-top-row")).toBeNull();
+    expect(screen.queryByRole("button", { name: "Soundtrack" })).toBeNull();
+  });
+});
+
 describe("Talk in the window's top row", () => {
   it.each(CHROME_CASES)(
     "is mounted exactly once, in the top row, with the $label",

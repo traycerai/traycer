@@ -34,6 +34,7 @@ const DESKTOP: SettingsAvailabilityContext = {
   featureSettings: null,
   mobileApp: false,
   phoneLayout: false,
+  soundtrackOffered: false,
 };
 
 /** The installed mobile app: no desktop bridges, push permission present. */
@@ -51,6 +52,7 @@ const MOBILE: SettingsAvailabilityContext = {
   featureSettings: null,
   mobileApp: true,
   phoneLayout: true,
+  soundtrackOffered: false,
 };
 
 /** A desktop feature-settings bridge: only its presence gates Experimental. */

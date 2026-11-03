@@ -692,6 +692,7 @@ describe("<AppDiagnosticsSettingsPanel />", () => {
         featureSettings: null,
         mobileApp: false,
         phoneLayout: false,
+        soundtrackOffered: false,
       },
       document.body,
     );
@@ -711,6 +712,7 @@ describe("<AppDiagnosticsSettingsPanel />", () => {
         featureSettings: null,
         mobileApp: false,
         phoneLayout: false,
+        soundtrackOffered: false,
       },
       document.body,
     );

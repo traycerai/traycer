@@ -34,8 +34,9 @@ export function SoundtrackShortcutBridge(): ReactNode {
 }
 
 /**
- * The soundtrack's toggle, beside Talk in the window's top row. Not drawn in a
- * build with nothing to play.
+ * The soundtrack's toggle, beside Talk in the window's top row: the glyph alone,
+ * because a zoomed window has no room left for a second name there. Not drawn in
+ * a build with nothing to play.
  */
 export function SoundtrackControl(): ReactNode {
   const on = useSettingsStore((state) => state.soundtrackEnabled);
@@ -50,15 +51,14 @@ export function SoundtrackControl(): ReactNode {
       <Button
         type="button"
         variant={on ? "success-ghost" : "ghost"}
-        size="xs"
+        size="icon-xs"
         aria-label={SOUNDTRACK_CONTROL_LABEL}
         aria-pressed={on}
         data-testid="soundtrack-control"
         onClick={toggleSoundtrack}
-        className="shrink-0 self-center [-webkit-app-region:no-drag]"
+        className="ml-1 shrink-0 justify-self-start [-webkit-app-region:no-drag]"
       >
         <Music aria-hidden="true" />
-        {SOUNDTRACK_CONTROL_LABEL}
       </Button>
     </TooltipWrapper>
   );

@@ -21,6 +21,10 @@ import type { SoundtrackPorts } from "@/lib/soundtrack/session";
 import type { MixSignals } from "@/lib/soundtrack/signals";
 import type { VariableTrack } from "@/lib/soundtrack/variable-sound";
 import {
+  openFakePorts,
+  resetFakePorts,
+} from "@/lib/soundtrack/__tests__/fake-ports";
+import {
   FakeOutput,
   FakeStems,
   isRamp,
@@ -92,6 +96,8 @@ interface OpenedPorts {
   readonly ports: SoundtrackPorts;
   readonly setDimmed: Mock<(dimmed: boolean) => void>;
   readonly close: Mock<(afterSeconds: number) => void>;
+  readonly setVolume: Mock<(volume: number) => void>;
+  readonly duck: Mock<(chimeSeconds: number) => void>;
 }
 
 function signalsOf(overrides: Partial<MixSignals>): MixSignals {
@@ -111,15 +117,17 @@ function harness(manifest: SoundtrackManifest, random: () => number) {
     const output = new FakeOutput();
     const setDimmed = vi.fn<(dimmed: boolean) => void>();
     const close = vi.fn<(afterSeconds: number) => void>();
+    const setVolume = vi.fn<(volume: number) => void>();
+    const duck = vi.fn<(chimeSeconds: number) => void>();
     const ports = {
       output,
       stems: new FakeStems(SAMPLE_SECONDS),
       setDimmed,
-      setVolume: vi.fn<(volume: number) => void>(),
-      duck: vi.fn<(chimeSeconds: number) => void>(),
+      setVolume,
+      duck,
       close,
     };
-    opened.push({ output, ports, setDimmed, close });
+    opened.push({ output, ports, setDimmed, close, setVolume, duck });
     return ports;
   });
   const store = createSoundtrackStore({
@@ -477,5 +485,111 @@ describe("soundtrack store: directors", () => {
     );
     expect(layerTargets(opened[0].output, "bus0")).toEqual(targetsBefore);
     expect(store.getState().lastPlan).toEqual(planBefore);
+  });
+});
+
+describe("soundtrack store: reading the manifest and the volume", () => {
+  const manifest = manifestOf(SINGLE_TRACKS, SINGLE_VIEWS);
+
+  /** A store whose manifest reads arrive when the test says so, oldest first. */
+  function deferredHarness() {
+    const reads: ((read: SoundtrackManifest) => void)[] = [];
+    const readManifest = vi.fn(
+      () =>
+        new Promise<SoundtrackManifest>((resolve) => {
+          reads.push(resolve);
+        }),
+    );
+    resetFakePorts();
+    const store = createSoundtrackStore({
+      readManifest,
+      openPorts: openFakePorts,
+      random: seededRandom(1),
+    });
+    return {
+      store,
+      readManifest,
+      openPorts: openFakePorts,
+      finishReads: () => {
+        for (const finish of reads) finish(manifest);
+      },
+    };
+  }
+
+  it("opens once a promised manifest resolves, not before", async () => {
+    const { store, openPorts, finishReads } = deferredHarness();
+    store.getState().enable();
+    await advance(1);
+    expect(openPorts).not.toHaveBeenCalled();
+    expect(store.getState().enabled).toBe(false);
+
+    finishReads();
+    await advance(0);
+
+    expect(openPorts).toHaveBeenCalledTimes(1);
+    expect(store.getState().enabled).toBe(true);
+  });
+
+  it("opens nothing when disabled while the read is in flight", async () => {
+    const { store, openPorts, finishReads } = deferredHarness();
+    store.getState().enable();
+
+    store.getState().disable();
+    finishReads();
+    await advance(0);
+
+    expect(openPorts).not.toHaveBeenCalled();
+    expect(store.getState().enabled).toBe(false);
+  });
+
+  it("does not read twice for a second enable while the read is in flight", async () => {
+    const { store, readManifest, openPorts, finishReads } = deferredHarness();
+    store.getState().enable();
+    store.getState().enable();
+    finishReads();
+    await advance(0);
+
+    expect(readManifest).toHaveBeenCalledTimes(1);
+    expect(openPorts).toHaveBeenCalledTimes(1);
+  });
+
+  it("opens once, from the later read, when enabled again after a disable during a read", async () => {
+    const { store, readManifest, openPorts, finishReads } = deferredHarness();
+    store.getState().enable();
+    store.getState().disable();
+    store.getState().enable();
+    finishReads();
+    await advance(0);
+
+    expect(readManifest).toHaveBeenCalledTimes(2);
+    expect(openPorts).toHaveBeenCalledTimes(1);
+  });
+
+  it("moves the open port's volume while on", () => {
+    const { store, opened } = singleTrackHarness(seededRandom(1));
+    store.getState().enable();
+
+    store.getState().setVolume(0.3);
+
+    expect(store.getState().volume).toBe(0.3);
+    expect(opened[0].setVolume).toHaveBeenCalledExactlyOnceWith(0.3);
+  });
+
+  it("opens the ports at the volume set before it was on", () => {
+    const { store, openPorts } = singleTrackHarness(seededRandom(1));
+
+    store.getState().setVolume(0.9);
+    store.getState().enable();
+
+    expect(openPorts).toHaveBeenCalledWith(manifest.stems, 0.9);
+  });
+
+  it("ducks the open ports and ignores a chime while off", () => {
+    const { store, opened } = singleTrackHarness(seededRandom(1));
+    store.getState().duck(0.4);
+    store.getState().enable();
+    store.getState().duck(0.5);
+
+    expect(opened[0].duck).toHaveBeenCalledExactlyOnceWith(0.5);
   });
 });

@@ -31,7 +31,6 @@
  */
 import type { IRunnerHost } from "@traycer-clients/shared/platform/runner-host";
 import type { FeatureSettingsBridge } from "@/lib/desktop-feature-settings";
-import { soundtrackOffered } from "@/lib/soundtrack/manifest";
 import { resolveDesktopZoomBridge } from "@/lib/windows/desktop-capabilities";
 
 export interface SettingsAvailabilityContext {
@@ -58,6 +57,11 @@ export interface SettingsAvailabilityContext {
    * the surface it describes must agree), and search has to agree with both.
    */
   readonly phoneLayout: boolean;
+  /**
+   * `soundtrackOffered()`, read by the caller at call time: whether this build
+   * has anything to play, which is a fact of the build and not a preference.
+   */
+  readonly soundtrackOffered: boolean;
 }
 
 /** Rendered in every shell. */
@@ -106,7 +110,7 @@ export function isLinkOpenRowAvailable(
 export function isSoundtrackRowAvailable(
   context: SettingsAvailabilityContext,
 ): boolean {
-  return !context.mobileApp && soundtrackOffered();
+  return !context.mobileApp && context.soundtrackOffered;
 }
 
 /**

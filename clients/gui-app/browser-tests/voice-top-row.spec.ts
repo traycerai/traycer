@@ -22,6 +22,10 @@ test.use({ viewport: { width: 1400, height: 800 }, deviceScaleFactor: 1 });
 const talk = (page: Page): Locator =>
   page.getByRole("button", { name: "Talk" });
 
+// Drawn because this fixture is a development build, which has a soundtrack.
+const soundtrack = (page: Page): Locator =>
+  page.getByRole("button", { name: "Soundtrack" });
+
 async function open(page: Page, query: string): Promise<void> {
   await page.addInitScript(() => {
     window.__voiceTopRowErrors = [];
@@ -321,4 +325,68 @@ test("with room to spare Waiting keeps its name", async ({ page }) => {
     .toBe(true);
   await nextFrames(page, 3);
   await expect.poll(() => page.getByRole("tooltip").count()).toBe(0);
+});
+
+async function expectTakesThePointer(control: Locator): Promise<void> {
+  const box = await boxOf(control);
+  const hit = await control.evaluate(
+    (node, [x, y]) => node.contains(document.elementFromPoint(x, y)),
+    [box.x + box.width / 2, box.y + box.height / 2],
+  );
+  expect(hit).toBe(true);
+}
+
+test("the soundtrack's toggle is beside Talk, on its line, and Talk keeps the middle", async ({
+  page,
+}) => {
+  await open(page, "placement=top");
+  await expect
+    .poll(() => middleOf(talk(page)))
+    .toBeCloseTo(await middleOf(page.locator("main")), 0);
+  const talkBox = await boxOf(talk(page));
+  const toggleBox = await boxOf(soundtrack(page));
+  expect(toggleBox.x).toBeGreaterThanOrEqual(rightOf(talkBox));
+  expect(toggleBox.x - rightOf(talkBox)).toBeLessThanOrEqual(8);
+  expect(toggleBox.y + toggleBox.height / 2).toBeCloseTo(
+    talkBox.y + talkBox.height / 2,
+    0,
+  );
+  await expectTakesThePointer(soundtrack(page));
+});
+
+test("in a zoomed Windows window the toggle stays clear of Talk and of the header's controls", async ({
+  page,
+}) => {
+  await page.setViewportSize({ width: 560, height: 800 });
+  await open(page, "placement=top&wco=win&account=1");
+  await page.evaluate(() => window.__voiceTopRowProbe?.openTabs(12));
+  await page
+    .getByTestId("header-tab-strip-scroll")
+    .waitFor({ state: "attached" });
+  await expectHeaderControlsInWindow(page, 560);
+  const toggleBox = await boxOf(soundtrack(page));
+  expect(toggleBox.x).toBeGreaterThanOrEqual(rightOf(await boxOf(talk(page))));
+  expect(rightOf(toggleBox)).toBeLessThanOrEqual(
+    rightOf(await boxOf(page.getByTestId("app-header-centre-zone"))),
+  );
+  await expectTakesThePointer(talk(page));
+  await expectTakesThePointer(soundtrack(page));
+});
+
+test("the toggle stays beside the strip with 12 tabs, and every control takes the pointer", async ({
+  page,
+}) => {
+  await page.setViewportSize({ width: 768, height: 800 });
+  await open(page, "placement=top&account=1");
+  await page.evaluate(() => window.__voiceTopRowProbe?.openTabs(12));
+  await page.getByTestId("header-tab-strip-scroll").waitFor();
+  await page.evaluate(() => window.__voiceTopRowProbe?.goLive());
+  const end = page.getByTestId("voice-strip-end");
+  await end.waitFor();
+  await expect
+    .poll(async () => (await boxOf(soundtrack(page))).x)
+    .toBeGreaterThanOrEqual(rightOf(await boxOf(end)));
+  await expectTakesThePointer(end);
+  await expectTakesThePointer(soundtrack(page));
+  await expectHeaderControlsInWindow(page, 768);
 });

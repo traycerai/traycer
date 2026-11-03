@@ -4,6 +4,8 @@ import {
   NOTIFICATION_CHIME_SOUNDS,
   disposeNotificationChimeAudio,
   installNotificationChimeAudioWarmup,
+  listenToNotificationChimes,
+  onNextAudioGesture,
   notificationChimeEventTypeForSeverities,
   playNotificationChimeSound,
   prepareNotificationChimeAudio,
@@ -27,6 +29,7 @@ class FakeAudio {
   readonly played: string[] = [];
   readonly pending: PendingPlay[] = [];
   preload = "";
+  duration = 0.4;
   currentTime = 0;
   onended: (() => void) | null = null;
   onerror: (() => void) | null = null;
@@ -260,5 +263,73 @@ describe("notificationChimeEventTypeForSeverities", () => {
         "needs_action",
       ]),
     ).toBe("needs_action");
+  });
+});
+
+describe("notification chime listeners", () => {
+  const heard = vi.fn<(chimeSeconds: number) => void>();
+  // A listener is for good, so one is registered for the file.
+  listenToNotificationChimes((chimeSeconds) => {
+    heard(chimeSeconds);
+  });
+
+  beforeEach(() => {
+    heard.mockClear();
+  });
+
+  it("hears the element's duration once the chime has started", async () => {
+    playNotificationChimeSound("ripple");
+    cachedAudioFor("ripple").duration = 0.435;
+    // play() has been called but its promise has not yet answered.
+    expect(heard).not.toHaveBeenCalled();
+
+    await settle();
+
+    expect(heard).toHaveBeenCalledExactlyOnceWith(0.435);
+  });
+
+  it("hears nothing for the none sound", async () => {
+    playNotificationChimeSound("none");
+    await settle();
+    expect(heard).not.toHaveBeenCalled();
+  });
+
+  it("hears nothing when play() is refused", async () => {
+    playMode = "block";
+    playNotificationChimeSound("ripple");
+    await settle();
+    expect(heard).not.toHaveBeenCalled();
+  });
+
+  it("hears only the play that was not superseded", async () => {
+    playMode = "manual";
+    playNotificationChimeSound("classic");
+    playNotificationChimeSound("classic");
+    const [first, second] = cachedAudioFor("classic").pending;
+
+    first.resolve();
+    await settle();
+    expect(heard).not.toHaveBeenCalled();
+
+    second.resolve();
+    await settle();
+    expect(heard).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("onNextAudioGesture", () => {
+  it("runs once on the first press or key and no more, and can be called off", () => {
+    const run = vi.fn<() => void>();
+    onNextAudioGesture(run);
+    expect(run).not.toHaveBeenCalled();
+
+    window.dispatchEvent(new KeyboardEvent("keydown", { key: "a" }));
+    window.dispatchEvent(new Event("pointerdown", { bubbles: true }));
+    expect(run).toHaveBeenCalledTimes(1);
+
+    const calledOff = vi.fn<() => void>();
+    onNextAudioGesture(calledOff)();
+    window.dispatchEvent(new Event("pointerdown", { bubbles: true }));
+    expect(calledOff).not.toHaveBeenCalled();
   });
 });

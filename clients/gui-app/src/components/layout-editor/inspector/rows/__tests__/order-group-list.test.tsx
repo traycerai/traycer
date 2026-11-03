@@ -80,7 +80,12 @@ function formContext(
   return {
     values: values(),
     arrangement: arrangementValue,
-    shell: { runnerHost: null, featureSettings: null, ...shell },
+    shell: {
+      runnerHost: null,
+      featureSettings: null,
+      soundtrackOffered: false,
+      ...shell,
+    },
     facts: { voiceInputEnabled: true },
   };
 }
