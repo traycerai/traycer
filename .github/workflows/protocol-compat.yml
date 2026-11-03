@@ -36,7 +36,8 @@ name: Protocol Compatibility
 # below answers that from `scripts/ci-push-scope.sh`, against the last push this
 # workflow passed on. A skipped `protocol-compat` satisfies its required check
 # the same way the team-pull-request gate's skip does, and a `changes` job that
-# fails runs it anyway (its `if` carries `needs.changes.result != 'success'`).
+# fails runs it anyway, and so does one that somehow published no answer: its
+# `if` skips only on an explicit `false`.
 
 on:
   pull_request:
@@ -129,7 +130,8 @@ jobs:
     #
     # `!cancelled()` is what lets this job run when `changes` did not succeed:
     # without it GitHub skips a job whose dependency failed, and a skipped
-    # required check would pass. A failed detection runs the gate.
+    # required check would pass. A failed detection runs the gate, and so does
+    # an answer that is anything but an explicit `false`.
     if: >-
       (
         github.event_name != 'pull_request'
@@ -139,7 +141,7 @@ jobs:
       )
       && (github.event_name != 'pull_request' || github.event.action != 'labeled')
       && !cancelled()
-      && (needs.changes.result != 'success' || needs.changes.outputs.run == 'true')
+      && (needs.changes.result != 'success' || needs.changes.outputs.run != 'false')
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
         with:
@@ -283,10 +285,12 @@ jobs:
           protocol/src/host/__tests__/__fixtures__/released-method-names.ts
           protocol/src/host/__tests__/__fixtures__/host-v1.1.5-mutation-v20.ts
           .github/workflows/protocol-compat.yml'
+          # `-z` and `--no-renames`, so a guarded file whose path git would
+          # quote, or that was renamed away, is still reported at its old path.
           # --diff-filter=MD: only files that already existed and were modified
           # or deleted. A PR that *adds* one of these (e.g. this gate's own
           # rollout) is not weakening anything and must not trip.
-          changed=$(git diff --name-only --diff-filter=MD "$BASE_REF"...HEAD)
+          changed=$(git diff -z --name-only --no-renames --diff-filter=MD "$BASE_REF"...HEAD | tr '\0' '\n')
           hits=$(grep -Fxf <(echo "$guarded") <(echo "$changed") || true)
           if [ -n "$hits" ] && [ "$HAS_OVERRIDE_LABEL" != "true" ]; then
             echo "The following protocol-compat governance files changed without the 'protocol-compat-override' label:"

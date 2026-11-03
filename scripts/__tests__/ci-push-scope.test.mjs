@@ -3,11 +3,13 @@
 // repository, so the range it builds and the diff it reads are the ones a
 // runner gets, not a stub's idea of them.
 //
-// Every case states a rule rather than a path list: the four rules in the
+// Every case states a rule rather than a path list: rules 1 to 3 of the
 // script's header (a workflow file runs its own workflow, the root files run
-// everything, a failed detection runs everything, a skipped suite inherits the
-// last green push), and for each workflow one change it must run on and one it
-// must skip.
+// everything, a failed detection runs everything), and for each workflow one
+// change it must run on and one it must skip. Rule 4 is not here and cannot be:
+// "a skipped suite inherits the last green result" is a property of the base the
+// `changes` job hands this script, which is `ci-last-green-sha.sh`'s answer, and
+// `ci-last-green-sha.test.mjs` is where that is pinned.
 
 import { spawnSync } from "node:child_process";
 import {
@@ -244,11 +246,67 @@ describe("gradle-wrapper.yml reaches the wrapper files the action validates", ()
     ).toBe("true");
   });
 
-  it("skips a change to a build script the action does not read", () => {
+  // The pinned action selects a jar by
+  // `unhomoglyph(name).endsWith("gradle-wrapper.jar")`, and its own fixtures
+  // include a jar whose `e` is Cyrillic. A test keyed on the literal name would
+  // skip the validation of a jar the action finds and checksums.
+  it("runs on a jar whose name hides a lookalike character", () => {
+    expect(
+      pushTouching("gradle-wrapper.yml", ["tools/gradlе-wrapper.jar"]),
+    ).toBe("true");
+  });
+
+  it("runs on any path that is not plain ASCII, because a lookalike can hide every token", () => {
+    expect(pushTouching("gradle-wrapper.yml", ["tools/café/w.bin"])).toBe(
+      "true",
+    );
+  });
+
+  it("skips a change confined to the GUI", () => {
+    expect(
+      pushTouching("gradle-wrapper.yml", ["clients/gui-app/src/main.tsx"]),
+    ).toBe("false");
+  });
+
+  // A build script matches on its name, not because the action reads it: the
+  // name test is what keeps a renamed or lookalike wrapper in scope, and the
+  // job is 19 s.
+  it("runs on a build script, which its name test cannot tell from a wrapper", () => {
     expect(
       pushTouching("gradle-wrapper.yml", [
         "clients/mobile/android/build.gradle",
       ]),
+    ).toBe("true");
+  });
+});
+
+// `git diff --name-only` applies `core.quotePath` to a path that is not plain
+// ASCII: the record becomes `"protocol/src/caf\303\251.ts"`, quotes included,
+// and every anchored test fails on it — a suite skipped on a change to a file
+// it reads. The diff is read NUL-delimited instead, which also carries a path
+// holding a quote or a newline intact.
+describe("a path git would quote in its display output", () => {
+  it("still reaches the package it is in", () => {
+    expect(pushTouching("protocol-compat.yml", ["protocol/src/café.ts"])).toBe(
+      "true",
+    );
+    expect(
+      pushTouching("real-supervisor.yml", ["clients/shared/src/café.ts"]),
+    ).toBe("true");
+  });
+
+  it("still reaches it when the name holds a quote or a newline", () => {
+    expect(
+      pushTouching("protocol-compat.yml", ['protocol/src/say "hi".ts']),
+    ).toBe("true");
+    expect(
+      pushTouching("protocol-compat.yml", ["protocol/src/two\nlines.ts"]),
+    ).toBe("true");
+  });
+
+  it("still skips when it is in no package the workflow reads", () => {
+    expect(
+      pushTouching("protocol-compat.yml", ["clients/gui-app/src/café.tsx"]),
     ).toBe("false");
   });
 });

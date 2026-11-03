@@ -550,11 +550,67 @@ describe("no workflow filters its own push trigger by path", () => {
   }
 });
 
+// A CI decision that reads a path list from `git diff` reads it NUL-delimited,
+// with rename detection off. `--name-only` alone applies git's display quoting
+// (`core.quotePath`) to a path that is not plain ASCII: the record becomes
+// `"protocol/src/caf\303\251.ts"`, quotes included, every anchored match fails
+// on it, and the suite is skipped on a change to a file it reads. Rename
+// detection prints only the new path, so a file moved OUT of a listed path
+// escapes the same way.
+describe("every path list a CI decision reads from git diff", () => {
+  // A comment may name the command it explains, so only real statements count.
+  const PATH_LIST_DIFF = /git diff[^|)]*--name-only/;
+  const isStatement = (line) =>
+    PATH_LIST_DIFF.test(line) && !line.trim().startsWith("#");
+  const sites = [];
+  for (const { file, workflow } of workflows) {
+    for (const [jobId, job] of Object.entries(workflow.jobs)) {
+      for (const step of job.steps ?? []) {
+        for (const line of String(step.run ?? "").split("\n")) {
+          if (isStatement(line)) {
+            sites.push({ where: `${file}/${jobId}`, line: line.trim() });
+          }
+        }
+      }
+    }
+  }
+  for (const name of readdirSync(join(REPO_ROOT, "scripts"))) {
+    if (!name.endsWith(".sh")) continue;
+    for (const line of readFileSync(
+      join(REPO_ROOT, "scripts", name),
+      "utf8",
+    ).split("\n")) {
+      if (isStatement(line)) {
+        sites.push({ where: `scripts/${name}`, line: line.trim() });
+      }
+    }
+  }
+
+  it("finds the five that decide a workflow's scope today", () => {
+    expect(sites.map(({ where }) => where).sort()).toEqual([
+      "browser-regressions.yml/changes",
+      "formal-regressions.yml/changes",
+      "protocol-compat.yml/guarded-files-tripwire",
+      "scripts/ci-push-scope.sh",
+      "test.yml/macos-packaging-changes",
+    ]);
+  });
+
+  for (const { where, line } of sites) {
+    it(`${where} reads it NUL-delimited, with renames off`, () => {
+      expect(line).toContain("git diff -z ");
+      expect(line).toContain("--no-renames");
+    });
+  }
+});
+
 // What keeps a scoped workflow a gate: its own relevance list in
 // `ci-push-scope.sh`, and a gated job that runs when the decision could not be
 // made. Without `!cancelled()` GitHub skips a job whose dependency failed, and
 // a skipped job satisfies a required check - so a failed `changes` job would
-// pass the gate instead of running it.
+// pass the gate instead of running it. The answer is tested with `!= 'false'`
+// rather than `== 'true'`, so an output that is missing or malformed runs the
+// job too; only an explicit `false` skips it.
 describe("a workflow whose push run decides inside itself", () => {
   it("covers the three workflows the design names", () => {
     expect(SCOPED.map(({ file }) => file).sort()).toEqual([
@@ -589,7 +645,7 @@ describe("a workflow whose push run decides inside itself", () => {
           expect(workflow.jobs[jobId].needs).toBe(changes);
           expect(condition).toContain("!cancelled()");
           expect(condition).toContain(
-            `(needs.${changes}.result != 'success' || needs.${changes}.outputs.run == 'true')`,
+            `(needs.${changes}.result != 'success' || needs.${changes}.outputs.run != 'false')`,
           );
         });
       }

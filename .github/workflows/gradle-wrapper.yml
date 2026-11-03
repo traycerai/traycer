@@ -84,7 +84,8 @@ jobs:
     #
     # `!cancelled()` is what lets this job run when `changes` did not succeed:
     # without it GitHub skips a job whose dependency failed, and a tampered jar
-    # would go unvalidated on a failed read. A failed detection validates.
+    # would go unvalidated on a failed read. A failed detection validates, and so
+    # does an answer that is anything but an explicit `false`.
     if: >-
       (
         github.event_name != 'pull_request'
@@ -93,7 +94,7 @@ jobs:
         || github.event.pull_request.user.type == 'Bot'
       )
       && !cancelled()
-      && (needs.changes.result != 'success' || needs.changes.outputs.run == 'true')
+      && (needs.changes.result != 'success' || needs.changes.outputs.run != 'false')
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4

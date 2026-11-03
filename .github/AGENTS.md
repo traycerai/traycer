@@ -62,6 +62,13 @@ run.
   stays red until a run covering everything since the last green push passes.
   The four rules that keep narrowing a gate are in the root `AGENTS.md`,
   "When CI runs", and in the header of `scripts/ci-push-scope.sh`.
+- A path list a CI decision reads from `git diff` is read with `-z` and
+  `--no-renames`. `--name-only` alone applies git's display quoting to a path
+  that is not plain ASCII, so the record arrives as
+  `"protocol/src/caf\303\251.ts"`, quotes included, and every anchored match
+  fails on it; rename detection prints only the new path, so a file moved out of
+  a listed path escapes. Either way a suite is skipped on a change to a file it
+  reads. `ci-pull-request-gate.test.mjs` holds every such site to both flags.
 - Narrowing is a job-level skip, never a `paths:` filter on the trigger. Two
   readers outside this repository depend on the run existing at all: the
   internal release gate judges a pushed commit by every workflow's latest push
@@ -71,9 +78,13 @@ run.
   that skips the rest of its workflow still leaves a run that concludes
   `success`, because the `changes` job itself passed.
 - A job gated on a `changes` job carries `!cancelled()` and
-  `needs.<changes>.result != 'success'` in its `if`. Without them GitHub skips
-  a job whose dependency failed, and a skipped job satisfies a required check -
-  so a failed detection would pass the gate instead of running it.
+  `needs.<changes>.result != 'success' || needs.<changes>.outputs.run != 'false'`
+  in its `if`. Without `!cancelled()` GitHub skips a job whose dependency
+  failed, and a skipped job satisfies a required check - so a failed detection
+  would pass the gate instead of running it. The answer is tested for `'false'`
+  rather than for `'true'`, so a missing or malformed output runs the job too.
+  An explicitly cancelled run starts no job either way, and the release gate
+  refuses a cancelled run.
 - `pre-commit.yml`'s `lint` and `compile` jobs restore a cache only a passing
   push saves, so every run starts from the last green `main` entry. It holds
   `NX_CACHE_DIRECTORY`, the Nx database and gui-app's ESLint cache. A cached
