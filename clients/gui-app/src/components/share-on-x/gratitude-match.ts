@@ -85,6 +85,14 @@ function normaliseMessage(text: string): string {
     .trim();
 }
 
+/**
+ * Words as the person typed them: whitespace-separated runs holding a letter
+ * or digit, so "that's" is one word and a lone "-" is none.
+ */
+function countWords(text: string): number {
+  return text.split(/\s+/u).filter((word) => /[\p{L}\p{N}]/u.test(word)).length;
+}
+
 function containsPhrase(normalised: string, phrase: string): boolean {
   return ` ${normalised} `.includes(` ${phrase} `);
 }
@@ -100,7 +108,7 @@ export function matchGratitude(text: string): GratitudeMatchKey | null {
   if (NEGATIONS.some((phrase) => containsPhrase(normalised, phrase))) {
     return null;
   }
-  const short = normalised.split(" ").length <= SHORT_MESSAGE_WORDS;
+  const short = countWords(text) <= SHORT_MESSAGE_WORDS;
   for (const [key, phrase] of PHRASES) {
     if (!short && SHORT_ONLY_PHRASES.has(phrase)) continue;
     if (containsPhrase(normalised, phrase)) return key;

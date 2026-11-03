@@ -29,6 +29,20 @@ describe("reportSentChatMessage", () => {
     expect(after).toHaveBeenCalledTimes(2);
   });
 
+  it("keeps the send accepted when a listener throws a value with no prototype", () => {
+    const after = vi.fn();
+    unsubscribes.push(
+      subscribeSentChatMessages(() => {
+        const thrown: unknown = Object.create(null);
+        throw thrown;
+      }),
+      subscribeSentChatMessages(after),
+    );
+
+    expect(reportSentChatMessage(true, MESSAGE)).toBe(true);
+    expect(after).toHaveBeenCalledTimes(1);
+  });
+
   it("reports nothing for a refused send", async () => {
     const listener = vi.fn();
     unsubscribes.push(subscribeSentChatMessages(listener));

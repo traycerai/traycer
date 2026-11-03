@@ -52,8 +52,13 @@ function notify(message: SentChatMessage): void {
     try {
       listener(message);
     } catch (error: unknown) {
+      // Only an Error is described: the describer stringifies, and a thrown
+      // value with no prototype cannot be.
       appLogger.warn("[share-on-x] sent-message listener failed", {
-        error: describeLogErrorSummary(error),
+        error:
+          error instanceof Error
+            ? describeLogErrorSummary(error)
+            : "non-Error value thrown",
       });
     }
   }

@@ -48,6 +48,8 @@ describe("matchGratitude", () => {
     expect(matchGratitude("ty")).toBe("thank_you");
     expect(matchGratitude("that's perfect!")).toBe("perfect");
     expect(matchGratitude("love this")).toBe("love_it");
+    // "that's" is one word, as typed.
+    expect(matchGratitude("that's just so perfect")).toBe("perfect");
   });
 
   it("ignores a message over 200 characters", () => {

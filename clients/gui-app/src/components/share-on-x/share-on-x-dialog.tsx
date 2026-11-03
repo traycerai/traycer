@@ -220,10 +220,15 @@ function ShareOnXDialogContent(props: ShareOnXDialogProps): ReactNode {
     const blob = chosenImage === null ? undefined : images[chosenImage]?.blob;
     // Started inside the click, while the page still holds the person's
     // gesture: the clipboard refuses an image write after it lapses.
-    const imageCopy =
+    // Settled to a flag at once, so a failed copy is never left unhandled
+    // whichever way the open below goes.
+    const imageCopied: Promise<boolean> | null =
       blob === undefined
         ? null
-        : copyImageBlobPromiseToClipboard(Promise.resolve(blob));
+        : copyImageBlobPromiseToClipboard(Promise.resolve(blob)).then(
+            () => true,
+            () => false,
+          );
     try {
       await openLink(xPostIntentUrl(text), "app", null);
     } catch {
@@ -238,21 +243,18 @@ function ShareOnXDialogContent(props: ShareOnXDialogProps): ReactNode {
       char_count: length,
     });
     recordPosted(Date.now());
-    if (imageCopy === null) {
+    if (imageCopied === null) {
       toast.success("Thanks for sharing Traycer");
     } else {
-      imageCopy.then(
-        () => {
+      void imageCopied.then((copied) => {
+        if (copied) {
           toast.success("Image copied", {
             description: `Paste it into your post on X with ${pasteShortcut()}.`,
           });
-        },
-        () => {
-          toast.error("Couldn't copy the image", {
-            description: "Use Copy on the image in the share dialog instead.",
-          });
-        },
-      );
+        } else {
+          toast.error("Couldn't copy the image");
+        }
+      });
     }
     close(true);
   }
@@ -275,7 +277,8 @@ function ShareOnXDialogContent(props: ShareOnXDialogProps): ReactNode {
       onInteractOutside={(event) => event.preventDefault()}
       onEscapeKeyDown={(event) => {
         event.preventDefault();
-        close(false);
+        // While X is opening, the post is decided; `postOnX` closes.
+        if (!opening) close(false);
       }}
     >
       <DialogHeader>
@@ -314,6 +317,7 @@ function ShareOnXDialogContent(props: ShareOnXDialogProps): ReactNode {
                   <Textarea
                     aria-label="Post text"
                     value={text}
+                    readOnly={opening}
                     rows={4}
                     onChange={(event) => {
                       const value = event.target.value;
@@ -428,7 +432,12 @@ function ShareOnXDialogContent(props: ShareOnXDialogProps): ReactNode {
             ? null
             : `The image is copied when you post. Paste it into X with ${pasteShortcut()}.`}
         </span>
-        <Button type="button" variant="outline" onClick={() => close(false)}>
+        <Button
+          type="button"
+          variant="outline"
+          disabled={opening}
+          onClick={() => close(false)}
+        >
           Not now
         </Button>
         <Button
