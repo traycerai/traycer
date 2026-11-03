@@ -32,13 +32,13 @@ import type { DesktopLocalHostSnapshot } from "../../../ipc-contracts/host-types
 import type { HostFsLayout } from "../host-paths";
 
 // The retry scenarios use a stable synthetic pid while the test controls the
-// endpoint probe. A platform liveness probe has no positive result for that
-// pid, so model the indeterminate branch locally: the handshake remains
-// authoritative while a positively dead/recycled pid is rejected elsewhere.
-function useIndeterminateProcessLiveness(): () => void {
-  const restore = __setAsyncProcessLivenessReaderForTest(
-    async () => "indeterminate",
-  );
+// endpoint probe, so every scenario that reads it also sets what the OS says
+// about that pid. Left to the real reader, the verdict depends on the machine:
+// a CI runner where pid 18841 happened to be alive published the host as busy.
+// Most scenarios model the indeterminate branch (the handshake stays
+// authoritative); the ones about a stopped host model a dead process.
+function useProcessLiveness(verdict: ProcessLivenessVerdict): () => void {
+  const restore = __setAsyncProcessLivenessReaderForTest(async () => verdict);
   return () => __setAsyncProcessLivenessReaderForTest(restore);
 }
 
@@ -175,7 +175,7 @@ describe("HostLifecycle reachability retry ladder", () => {
           return probeResult;
         },
       });
-      const restoreLiveness = useIndeterminateProcessLiveness();
+      const restoreLiveness = useProcessLiveness("indeterminate");
       const changes: (DesktopLocalHostSnapshot | null)[] = [];
       lifecycle.on("change", (snapshot: DesktopLocalHostSnapshot | null) => {
         changes.push(snapshot);
@@ -249,6 +249,7 @@ describe("HostLifecycle reachability retry ladder", () => {
       changes.push(snapshot);
     });
     lifecycle.on("error", () => {});
+    const restoreLiveness = useProcessLiveness("dead");
 
     try {
       // pid.json is present but the endpoint refuses: bootstrap times out and
@@ -269,6 +270,7 @@ describe("HostLifecycle reachability retry ladder", () => {
       expect(lifecycle.getSnapshot()).toBeNull();
       expect(changes.every((snapshot) => snapshot === null)).toBe(true);
     } finally {
+      restoreLiveness();
       lifecycle.dispose();
       await rm(dir, { recursive: true, force: true });
     }
@@ -297,7 +299,7 @@ describe("HostLifecycle reachability retry ladder (predicate, no bootstrap)", ()
         return true;
       },
     });
-    const restoreLiveness = useIndeterminateProcessLiveness();
+    const restoreLiveness = useProcessLiveness("indeterminate");
     try {
       // Malformed: present but INDETERMINATE, not absent - the ladder must
       // arm without ever reaching the probe (there is no URL to probe yet).
@@ -337,6 +339,7 @@ describe("HostLifecycle reachability retry ladder (predicate, no bootstrap)", ()
         return reachable;
       },
     });
+    const restoreLiveness = useProcessLiveness("dead");
     try {
       // Parsed but unreachable: arms the ladder.
       await writeFile(layout.pidMetadataFile, PID_METADATA, "utf8");
@@ -359,6 +362,7 @@ describe("HostLifecycle reachability retry ladder (predicate, no bootstrap)", ()
       await sleep(1_500);
       expect(lifecycle.getSnapshot()).toBeNull();
     } finally {
+      restoreLiveness();
       lifecycle.dispose();
       await rm(dir, { recursive: true, force: true });
     }
@@ -711,7 +715,7 @@ describe("HostLifecycle pid.json read outcomes", () => {
       readyTimeoutMs: 300,
       reachabilityProbe: () => Promise.resolve(true),
     });
-    const restoreLiveness = useIndeterminateProcessLiveness();
+    const restoreLiveness = useProcessLiveness("indeterminate");
     const changes: (DesktopLocalHostSnapshot | null)[] = [];
     lifecycle.on("change", (snapshot: DesktopLocalHostSnapshot | null) => {
       changes.push(snapshot);
@@ -757,7 +761,7 @@ describe("HostLifecycle pid.json read outcomes", () => {
       readyTimeoutMs: 300,
       reachabilityProbe: () => Promise.resolve(true),
     });
-    const restoreLiveness = useIndeterminateProcessLiveness();
+    const restoreLiveness = useProcessLiveness("indeterminate");
     const changes: (DesktopLocalHostSnapshot | null)[] = [];
     lifecycle.on("change", (snapshot: DesktopLocalHostSnapshot | null) => {
       changes.push(snapshot);
@@ -806,7 +810,7 @@ describe("HostLifecycle respawn re-arm", () => {
         return Promise.resolve(false);
       },
     });
-    const restoreLiveness = useIndeterminateProcessLiveness();
+    const restoreLiveness = useProcessLiveness("indeterminate");
 
     try {
       await writeFile(layout.pidMetadataFile, PID_METADATA, "utf8");

@@ -188,7 +188,12 @@ function endSandbox(): void {
   } else {
     process.env.USERPROFILE = ORIGINAL_USERPROFILE;
   }
-  rmSync(workHome, { recursive: true, force: true });
+  // A handler that commits a mutation (install, apply) refreshes the registry
+  // cache without awaiting it, so that write can still be creating its
+  // directory under this home while the test has already returned. A plain
+  // recursive remove then fails with ENOTEMPTY (seen on Linux and macOS CI);
+  // the retries let the write land first.
+  rmSync(workHome, { recursive: true, force: true, maxRetries: 5 });
   vi.restoreAllMocks();
   vi.doUnmock("../../cli/traycer-cli");
 }
