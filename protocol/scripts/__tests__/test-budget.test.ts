@@ -6,6 +6,7 @@ import {
   evaluateTestBudget,
   junitFileDurationsMs,
   parseTestBudgetAllowlist,
+  parseTestBudgetArgs,
   secondRunDurationsMs,
 } from "../test-budget";
 
@@ -163,5 +164,30 @@ describe("describeBudgetReading", () => {
         "over",
       ),
     ).toBe("budget src/a.test.ts first=12.3s second=none verdict=over");
+  });
+});
+
+describe("parseTestBudgetArgs", () => {
+  it("reads a bare report as the protocol leg's and --project as another project's", () => {
+    expect(parseTestBudgetArgs(["protocol/test-results/junit.xml"])).toEqual({
+      project: "protocol",
+      report: "protocol/test-results/junit.xml",
+    });
+    expect(
+      parseTestBudgetArgs(["--project", "clients/gui-app", "test-junit.xml"]),
+    ).toEqual({ project: "clients/gui-app", report: "test-junit.xml" });
+  });
+
+  it("refuses a flag in a report's place, a missing argument and a stray one", () => {
+    expect(
+      parseTestBudgetArgs(["--project=clients/gui-app", "test-junit.xml"]),
+    ).toBeNull();
+    expect(parseTestBudgetArgs(["--project=clients/gui-app"])).toBeNull();
+    expect(parseTestBudgetArgs(["--project", "clients/gui-app"])).toBeNull();
+    expect(parseTestBudgetArgs(["a.xml", "b.xml"])).toBeNull();
+    expect(
+      parseTestBudgetArgs(["--project", "clients/gui-app", "a.xml", "b.xml"]),
+    ).toBeNull();
+    expect(parseTestBudgetArgs([])).toBeNull();
   });
 });

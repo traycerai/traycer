@@ -53,6 +53,46 @@ describe("what one test file leaves for the next", () => {
     expect(fired).not.toHaveBeenCalled();
   });
 
+  it("restores a constructor's static and console, whether replaced or added", () => {
+    const hadCreateObjectURL = Reflect.has(URL, "createObjectURL");
+    const realCreateObjectURL: unknown = Reflect.get(URL, "createObjectURL");
+    const realError = console.error;
+    URL.createObjectURL = vi.fn(() => "blob:leaked");
+    console.error = () => undefined;
+
+    resetTestFileState();
+
+    expect(Reflect.has(URL, "createObjectURL")).toBe(hadCreateObjectURL);
+    expect(Reflect.get(URL, "createObjectURL")).toBe(realCreateObjectURL);
+    expect(console.error).toBe(realError);
+  });
+
+  it("cancels an immediate the file left queued", async () => {
+    const fired = vi.fn<() => void>();
+    setImmediate(fired);
+
+    resetTestFileState();
+    // Real on purpose: a real immediate left queued is the thing under test.
+    await new Promise((resolve) => setTimeout(resolve, 5));
+
+    expect(fired).not.toHaveBeenCalled();
+  });
+
+  it("closes a broadcast channel the file left open", async () => {
+    const heard = vi.fn<() => void>();
+    const left = new BroadcastChannel(KEY);
+    left.onmessage = heard;
+
+    resetTestFileState();
+    const next = new BroadcastChannel(KEY);
+    next.postMessage("next file");
+    // Real on purpose: Node delivers channel messages on its own event loop.
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    next.close();
+
+    expect(heard).not.toHaveBeenCalled();
+  });
+
   it("removes a listener on the window and the document", () => {
     const heard = vi.fn<() => void>();
     window.addEventListener("resize", heard);

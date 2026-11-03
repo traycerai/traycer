@@ -24,6 +24,5 @@
   "src/__tests__/worktree-selection-key-census.test.ts": "parses every production source file under gui-app and shared with the TypeScript compiler; 6.0 to 11.3 s across five runs",
   "src/components/home/host-workspace-selector/__tests__/in-epic-surface-primary-readonly.test.tsx": "44 cases mounting the in-task surface with its host and workspace selector; 6.1 to 11.1 s across five runs",
   "src/components/epics/__tests__/history-scope-integration.test.tsx": "76 cases on the full task history with its scope filters; 7.2 to 10.8 s across five runs",
-  "src/components/layout/tabs/__tests__/side-tab-strip.test.tsx": "138 cases on the full side tab strip; 5.5 to 10.2 s across five runs",
-  "src/components/home/terminal-panel/__tests__/landing-terminal-panel.test.tsx": "154 cases on the full Start Page terminal panel; 6.0 to 9.3 s across five runs"
+  "src/components/layout/tabs/__tests__/side-tab-strip.test.tsx": "138 cases on the full side tab strip; 5.5 to 10.2 s across five runs"
 }

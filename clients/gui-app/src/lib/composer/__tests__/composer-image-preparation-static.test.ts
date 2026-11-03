@@ -206,6 +206,7 @@ describe("composer image preparation: static codecs and compression", () => {
       // Identity, not `toHaveBeenCalledWith`: deep-equalling these 5 MiB took 10 s.
       expect(decode).toHaveBeenCalledTimes(1);
       const decodeArgs = decode.mock.calls[0][0];
+      expect(Object.keys(decodeArgs).sort()).toEqual(["bytes", "mimeType"]);
       expect(decodeArgs.bytes).toBe(bytes);
       expect(decodeArgs.mimeType).toBe("image/gif");
       expect(encodeCalls).toHaveLength(0);

@@ -198,39 +198,42 @@ function propertyKeyName(name: ts.PropertyName): string | null {
   return null;
 }
 
-/** Both censuses walk the same files, so each is read and parsed once. */
-const parsedSources = new Map<string, ts.SourceFile>();
-function parsedSource(file: string): ts.SourceFile {
-  const parsed = parsedSources.get(file);
-  if (parsed !== undefined) return parsed;
+/** What each census looks for: the property, and the literal that is always allowed. */
+const CENSUSED_PROPERTIES: ReadonlyMap<string, ts.SyntaxKind> = new Map([
+  ["activityPaths", ts.SyntaxKind.NullKeyword],
+  ["includeActivity", ts.SyntaxKind.FalseKeyword],
+]);
+
+/**
+ * Both censuses walk the same files, so each file is parsed once and walked
+ * once for both properties, and its tree is dropped before the next file.
+ */
+function findPropertySites(
+  root: ScanRoot,
+  file: string,
+): ReadonlyMap<string, readonly Site[]> {
+  const sites = new Map<string, Site[]>(
+    [...CENSUSED_PROPERTIES.keys()].map((name) => [name, []]),
+  );
+  if (!isFile(file)) return sites;
+  const source = readFileSync(file, "utf8");
   const sourceFile = ts.createSourceFile(
     file,
-    readFileSync(file, "utf8"),
+    source,
     ts.ScriptTarget.Latest,
     true,
     file.endsWith(".tsx") ? ts.ScriptKind.TSX : ts.ScriptKind.TS,
   );
-  parsedSources.set(file, sourceFile);
-  return sourceFile;
-}
-
-function findPropertySites(
-  root: ScanRoot,
-  file: string,
-  propertyName: string,
-  allowedLiteralKind: ts.SyntaxKind,
-): readonly Site[] {
-  if (!isFile(file)) return [];
-  const sourceFile = parsedSource(file);
-  const sites: Site[] = [];
   const visit = (node: ts.Node): void => {
     if (ts.isPropertyAssignment(node)) {
       const name = propertyKeyName(node.name);
-      if (name === propertyName) {
+      const allowedLiteralKind =
+        name === null ? undefined : CENSUSED_PROPERTIES.get(name);
+      if (name !== null && allowedLiteralKind !== undefined) {
         const { line } = sourceFile.getLineAndCharacterOfPosition(
           node.getStart(),
         );
-        sites.push({
+        sites.get(name)?.push({
           relativeFile: toRelative(root, file),
           line: line + 1,
           isAllowedLiteral: node.initializer.kind === allowedLiteralKind,
@@ -239,7 +242,7 @@ function findPropertySites(
       }
     } else if (
       ts.isShorthandPropertyAssignment(node) &&
-      node.name.text === propertyName
+      CENSUSED_PROPERTIES.has(node.name.text)
     ) {
       const { line } = sourceFile.getLineAndCharacterOfPosition(
         node.getStart(),
@@ -247,11 +250,11 @@ function findPropertySites(
       // A shorthand `{ propertyName }` can never spell the allowed literal -
       // it always carries a variable's value - so it is always a non-allowed
       // site and must clear the same allowlist bar.
-      sites.push({
+      sites.get(node.name.text)?.push({
         relativeFile: toRelative(root, file),
         line: line + 1,
         isAllowedLiteral: false,
-        initializerText: propertyName,
+        initializerText: node.name.text,
       });
     }
     ts.forEachChild(node, visit);
@@ -260,15 +263,22 @@ function findPropertySites(
   return sites;
 }
 
-function scanAllRoots(
-  propertyName: string,
-  allowedLiteralKind: ts.SyntaxKind,
-): readonly Site[] {
-  return ROOTS.flatMap((root) =>
-    collectProductionFiles(root.dir).flatMap((file) =>
-      findPropertySites(root, file, propertyName, allowedLiteralKind),
-    ),
-  );
+let memoisedSites: ReadonlyMap<string, readonly Site[]> | null = null;
+function sitesByProperty(): ReadonlyMap<string, readonly Site[]> {
+  if (memoisedSites === null) {
+    const all = new Map<string, Site[]>(
+      [...CENSUSED_PROPERTIES.keys()].map((name) => [name, []]),
+    );
+    for (const root of ROOTS) {
+      for (const file of collectProductionFiles(root.dir)) {
+        for (const [name, sites] of findPropertySites(root, file)) {
+          all.get(name)?.push(...sites);
+        }
+      }
+    }
+    memoisedSites = all;
+  }
+  return memoisedSites;
 }
 
 interface Census {
@@ -277,11 +287,8 @@ interface Census {
   readonly nonAllowedSites: readonly Site[];
 }
 
-function censusOf(
-  propertyName: string,
-  allowedLiteralKind: ts.SyntaxKind,
-): Census {
-  const allSites = scanAllRoots(propertyName, allowedLiteralKind);
+function censusOf(propertyName: string): Census {
+  const allSites = sitesByProperty().get(propertyName) ?? [];
   return {
     allSites,
     allowedSites: allSites.filter((site) => site.isAllowedLiteral),
@@ -289,26 +296,12 @@ function censusOf(
   };
 }
 
-let memoisedActivityPaths: Census | null = null;
 function activityPathsCensus(): Census {
-  if (memoisedActivityPaths === null) {
-    memoisedActivityPaths = censusOf(
-      "activityPaths",
-      ts.SyntaxKind.NullKeyword,
-    );
-  }
-  return memoisedActivityPaths;
+  return censusOf("activityPaths");
 }
 
-let memoisedIncludeActivity: Census | null = null;
 function includeActivityCensus(): Census {
-  if (memoisedIncludeActivity === null) {
-    memoisedIncludeActivity = censusOf(
-      "includeActivity",
-      ts.SyntaxKind.FalseKeyword,
-    );
-  }
-  return memoisedIncludeActivity;
+  return censusOf("includeActivity");
 }
 
 /**

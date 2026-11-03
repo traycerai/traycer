@@ -189,16 +189,37 @@ export function describeBudgetReading(
   return `budget ${path} first=${seconds(firstMs)} second=${second} verdict=${verdict}`;
 }
 
+/**
+ * `<report>` for the protocol leg, `--project <directory> <report>` for another
+ * project. Anything else, an `--option=value` spelling or a stray argument
+ * included, is `null`: a guard must not read a flag as its report.
+ */
+export function parseTestBudgetArgs(
+  args: readonly string[],
+): { readonly project: string; readonly report: string } | null {
+  if (args.length === 1 && !args[0].startsWith("-")) {
+    return { project: "protocol", report: args[0] };
+  }
+  if (
+    args.length === 3 &&
+    args[0] === "--project" &&
+    !args[1].startsWith("-") &&
+    !args[2].startsWith("-")
+  ) {
+    return { project: args[1], report: args[2] };
+  }
+  return null;
+}
+
 function main(args: readonly string[]): void {
-  const named = args[0] === "--project";
-  const project = named ? args[1] : "protocol";
-  const report = named ? args[2] : args[0];
-  if (project === undefined || report === undefined) {
+  const parsed = parseTestBudgetArgs(args);
+  if (parsed === null) {
     console.error(
       "usage: test-budget.ts [--project <directory>] <JUnit report>",
     );
     process.exit(2);
   }
+  const { project, report } = parsed;
   const projectDirectory = join(REPOSITORY_ROOT, project);
   const allowlistName = join(project, ALLOWLIST_FILE);
   const allowlistJson: unknown = JSON.parse(

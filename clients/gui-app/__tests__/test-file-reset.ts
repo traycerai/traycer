@@ -44,8 +44,11 @@ interface OwnProperties {
 
 interface WorkerBaseline {
   properties: readonly OwnProperties[];
+  /** Node's `Timeout` objects at run time: Node's timers stay global under jsdom. */
   readonly timers: Set<number>;
+  readonly immediates: Set<NodeJS.Immediate>;
   readonly frames: Set<number>;
+  readonly channels: Set<BroadcastChannel>;
   readonly listeners: TrackedListener[];
   /** A global's value where Vitest keeps it behind an accessor: `window.innerWidth = 400` changes no descriptor. */
   globalValues: ReadonlyMap<string, unknown>;
@@ -66,9 +69,16 @@ function readOwnProperties(owner: object): OwnProperties {
   return { owner, descriptors };
 }
 
-/** `globalThis`, the long-lived nodes, and the prototype of every constructor (`HTMLElement`, `Range`, ...). */
+/**
+ * `globalThis`, `console`, the long-lived nodes, and every constructor and
+ * namespace (`URL.createObjectURL`, `Date.now`, `JSON`) with its prototype
+ * (`HTMLElement`, `Range`, ...).
+ */
 function readPatchableOwners(): readonly OwnProperties[] {
-  const owners: OwnProperties[] = [readOwnProperties(globalThis)];
+  const owners: OwnProperties[] = [
+    readOwnProperties(globalThis),
+    readOwnProperties(console),
+  ];
   // The long-lived nodes carry expandos beside their listeners: React's
   // `_reactListening*` marker says "my delegated listeners are already here", so
   // removing the listeners and keeping the marker leaves every later portal deaf.
@@ -84,7 +94,15 @@ function readPatchableOwners(): readonly OwnProperties[] {
   for (const key of Object.getOwnPropertyNames(globalThis)) {
     if (!/^[A-Z]/.test(key)) continue;
     const value: unknown = Reflect.get(globalThis, key);
+    if (typeof value === "object" && value !== null && !seen.has(value)) {
+      seen.add(value);
+      owners.push(readOwnProperties(value));
+    }
     if (typeof value !== "function") continue;
+    if (!seen.has(value)) {
+      seen.add(value);
+      owners.push(readOwnProperties(value));
+    }
     const prototype: unknown = Reflect.get(value, "prototype");
     if (typeof prototype !== "object" || prototype === null) continue;
     if (seen.has(prototype)) continue;
@@ -132,7 +150,10 @@ function restoreOwnProperties({ owner, descriptors }: OwnProperties): void {
   }
 }
 
-/** Timers and frames a file left running would otherwise fire inside the next file. */
+/**
+ * Timers, immediates and frames a file left running would otherwise fire inside
+ * the next file. A timeout that fired is dropped from the set.
+ */
 function trackTimers(baseline: WorkerBaseline): void {
   const realSetTimeout = globalThis.setTimeout;
   const realSetInterval = globalThis.setInterval;
@@ -142,7 +163,16 @@ function trackTimers(baseline: WorkerBaseline): void {
       timeout: number | undefined,
       ...args: unknown[]
     ) => {
-      const timer = realSetTimeout(handler, timeout, ...args);
+      const timer = realSetTimeout(
+        typeof handler === "function"
+          ? (...handlerArgs: unknown[]): void => {
+              baseline.timers.delete(timer);
+              Reflect.apply(handler, undefined, handlerArgs);
+            }
+          : handler,
+        timeout,
+        ...args,
+      );
       baseline.timers.add(timer);
       return timer;
     },
@@ -160,6 +190,21 @@ function trackTimers(baseline: WorkerBaseline): void {
     },
     Object.getOwnPropertyDescriptors(realSetInterval),
   ) as typeof setInterval;
+  const realSetImmediate = globalThis.setImmediate;
+  globalThis.setImmediate = Object.defineProperties(
+    (callback: (...callbackArgs: unknown[]) => void, ...args: unknown[]) => {
+      const immediate = realSetImmediate(
+        (...callbackArgs: unknown[]) => {
+          baseline.immediates.delete(immediate);
+          callback(...callbackArgs);
+        },
+        ...args,
+      );
+      baseline.immediates.add(immediate);
+      return immediate;
+    },
+    Object.getOwnPropertyDescriptors(realSetImmediate),
+  ) as typeof setImmediate;
   if (typeof globalThis.requestAnimationFrame === "function") {
     const realRequestFrame = globalThis.requestAnimationFrame;
     globalThis.requestAnimationFrame = (callback) => {
@@ -168,6 +213,23 @@ function trackTimers(baseline: WorkerBaseline): void {
       return frame;
     };
   }
+}
+
+/**
+ * Node delivers a `BroadcastChannel` message to every open channel of that name
+ * in the process, so a channel a file left open would hear the next file's.
+ */
+function trackChannels(baseline: WorkerBaseline): void {
+  if (typeof BroadcastChannel !== "function") return;
+  const RealBroadcastChannel = BroadcastChannel;
+  globalThis.BroadcastChannel = class TrackedBroadcastChannel extends (
+    RealBroadcastChannel
+  ) {
+    constructor(name: string) {
+      super(name);
+      baseline.channels.add(this);
+    }
+  };
 }
 
 /**
@@ -261,7 +323,9 @@ function readBaseline(): WorkerBaseline {
   const created: WorkerBaseline = {
     properties: [],
     timers: new Set(),
+    immediates: new Set(),
     frames: new Set(),
+    channels: new Set(),
     listeners: [],
     globalValues: new Map(),
     focusedInThisFile: false,
@@ -270,6 +334,7 @@ function readBaseline(): WorkerBaseline {
   // Before the tracking: this listener is the worker's, not a file's to remove.
   scopeHasFocusToFile(created);
   trackTimers(created);
+  trackChannels(created);
   trackListeners(created);
   created.properties = readPatchableOwners();
   created.globalValues = readAccessorGlobals();
@@ -329,6 +394,10 @@ export function resetTestFileState(): void {
   cleanup();
   for (const timer of baseline.timers) clearTimeout(timer);
   baseline.timers.clear();
+  for (const immediate of baseline.immediates) clearImmediate(immediate);
+  baseline.immediates.clear();
+  for (const channel of baseline.channels) channel.close();
+  baseline.channels.clear();
   if (typeof globalThis.cancelAnimationFrame === "function") {
     for (const frame of baseline.frames) globalThis.cancelAnimationFrame(frame);
   }
