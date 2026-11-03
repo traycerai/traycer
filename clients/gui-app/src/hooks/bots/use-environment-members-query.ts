@@ -84,6 +84,29 @@ export function useEnvironmentMemberDirectory(
   environmentId: string | null,
   enabled: boolean,
 ): EnvironmentMemberDirectory {
+  return useMemberPages(client, environmentId, enabled, enabled);
+}
+
+/**
+ * The members of an environment as far as another surface has already loaded
+ * them: the same pages under the same keys, observed with fetching off, so
+ * this sends no request of its own. `readable` is the caller's cloud verdict;
+ * while it is false nobody resolves, whatever the cache holds.
+ */
+export function useLoadedEnvironmentMembers(
+  client: HostClient<HostRpcRegistry> | null,
+  environmentId: string | null,
+  readable: boolean,
+): BotMemberResolver {
+  return useMemberPages(client, environmentId, false, readable).resolve;
+}
+
+function useMemberPages(
+  client: HostClient<HostRpcRegistry> | null,
+  environmentId: string | null,
+  fetchPages: boolean,
+  readable: boolean,
+): EnvironmentMemberDirectory {
   const servingClient = usePoolTierHostClient(client);
   const queryClient = useQueryClient();
   // The same host id the batch below keys its queries with.
@@ -128,7 +151,7 @@ export function useEnvironmentMemberDirectory(
     requests,
     cacheKeyIdentity: undefined,
     options: {
-      enabled: enabled && environmentId !== null,
+      enabled: fetchPages && environmentId !== null,
       refetchOnWindowFocus: false,
     },
     combine,
@@ -144,7 +167,7 @@ export function useEnvironmentMemberDirectory(
   return useMemo((): EnvironmentMemberDirectory => {
     // A host that cannot answer now names nobody, whatever it answered
     // before: the gate, not the cache, decides.
-    if (!enabled) return { resolve: UNRESOLVED_BOT_MEMBERS, members: null };
+    if (!readable) return { resolve: UNRESOLVED_BOT_MEMBERS, members: null };
     const byUserId = new Map<string, BotMember>();
     const members: EnvironmentMember[] = [];
     for (const page of pages) {
@@ -167,7 +190,7 @@ export function useEnvironmentMemberDirectory(
           : (userId) => byUserId.get(userId) ?? null,
       members: complete ? members : null,
     };
-  }, [enabled, pages]);
+  }, [readable, pages]);
 }
 
 /**

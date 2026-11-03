@@ -23,6 +23,7 @@
  */
 import { createHash } from "node:crypto";
 import { spawnSync } from "node:child_process";
+import { GIT_OUTPUT_MAX_BUFFER_BYTES } from "../../scripts/git-output-limit.cjs";
 import {
   mkdirSync,
   mkdtempSync,
@@ -104,7 +105,7 @@ export function gitShow(repoRoot: string, revPath: string): string {
   const result = spawnSync("git", ["show", revPath], {
     cwd: repoRoot,
     encoding: "utf8",
-    maxBuffer: 16 * 1024 * 1024,
+    maxBuffer: GIT_OUTPUT_MAX_BUFFER_BYTES,
     env: gitEnv(),
   });
   if (result.status !== 0) {

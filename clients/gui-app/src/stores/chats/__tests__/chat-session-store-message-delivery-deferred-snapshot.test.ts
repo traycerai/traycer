@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import type { Message } from "@traycer/protocol/persistence/epic/schemas";
 import type { JsonContent } from "@traycer/protocol/common/registry";
 import type { ChatStreamCallbacks } from "@traycer-clients/shared/host-transport/chat-stream-client";
-import type { ChatMessageDelivery } from "@traycer/protocol/host/agent/gui/message-delivery";
+import type { ChatMessageDeliveryV142 } from "@traycer/protocol/host/agent/gui/message-delivery";
 import type { ChatRunSettings } from "@traycer/protocol/host/agent/gui/subscribe";
 import type {
   ChatLoadRangeRequest,
@@ -56,8 +56,8 @@ function delivery(
   messageId: string,
   revision: number,
   phase: "pending" | "preparing",
-): ChatMessageDelivery {
-  return { messageId, revision, state: { phase } };
+): ChatMessageDeliveryV142 {
+  return { messageId, revision, state: { phase }, worktreeIntent: null };
 }
 
 const DELIVERY_A = delivery("message-1", 1, "pending");
@@ -125,7 +125,7 @@ function createWindowedHarness(): WindowedHarness {
 
 function emitMessageDeliveryChanged(
   callbacks: ChatStreamCallbacks,
-  value: ChatMessageDelivery | null,
+  value: ChatMessageDeliveryV142 | null,
 ): void {
   callbacks.onMessageDeliveryChanged({
     kind: "messageDeliveryChanged",
@@ -148,7 +148,7 @@ const WINDOWED_DERIVED: ChatTranscriptDerived = {
 };
 
 function deferredWindowedSnapshot(
-  value: ChatMessageDelivery | null,
+  value: ChatMessageDeliveryV142 | null,
 ): Parameters<ChatStreamCallbacks["onWindowedSnapshot"]>[0] {
   return {
     kind: "snapshot",
@@ -374,7 +374,7 @@ describe("chat-session-store messageDelivery: deferred-windowed-snapshot superse
         ),
       ).toBe(true);
 
-      const withdrawal: ChatMessageDelivery = {
+      const withdrawal: ChatMessageDeliveryV142 = {
         messageId: sent.messageId,
         revision: 1,
         state: {
@@ -385,6 +385,7 @@ describe("chat-session-store messageDelivery: deferred-windowed-snapshot superse
           restore: { content: CONTENT },
           restoreClaimed: false,
         },
+        worktreeIntent: null,
       };
       callbacks.onWindowedSnapshot(deferredWindowedSnapshot(withdrawal));
 

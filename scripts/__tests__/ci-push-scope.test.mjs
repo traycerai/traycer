@@ -12,6 +12,7 @@
 // `ci-last-green-sha.test.mjs` is where that is pinned.
 
 import { spawnSync } from "node:child_process";
+import { GIT_OUTPUT_MAX_BUFFER_BYTES } from "../git-output-limit.cjs";
 import {
   existsSync,
   mkdirSync,
@@ -60,6 +61,7 @@ let base;
 
 const git = (...args) => {
   const result = spawnSync("git", args, {
+    maxBuffer: GIT_OUTPUT_MAX_BUFFER_BYTES,
     cwd: repo,
     encoding: "utf8",
     env: {

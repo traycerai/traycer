@@ -1,5 +1,5 @@
 import { useColumnOverlayPlacement } from "@/components/layout/column-edge-context";
-import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
+import { PersonAvatar } from "@/components/bots/bot-avatars";
 import { Button } from "@/components/ui/button";
 import {
   DropdownMenu,
@@ -28,8 +28,8 @@ import { useHostBinding } from "@/lib/host";
 import { TooltipWrapper } from "@/components/ui/tooltip-wrapper";
 import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
 import { useIsTextTruncated } from "@/hooks/ui/use-is-text-truncated";
-import { computeInitials } from "@/lib/auth/compute-initials";
 import { usePlatformBillingUrl } from "@/hooks/auth/use-platform-billing-url";
+import { useAuthStore } from "@/stores/auth/auth-store";
 import { useSignOutConfirmStore } from "@/stores/auth/sign-out-confirm-store";
 import { useTitleBarDragSuppression } from "@/stores/layout/title-bar-drag-store";
 import { getSystemTabModalApi } from "@/stores/tabs/system-tab-modal-bridge";
@@ -68,15 +68,14 @@ export function UserMenuAvatar(props: {
   readonly email: string;
   readonly avatarUrl: string | null;
 }) {
+  const userId = useAuthStore((state) => state.profile?.userId ?? null);
   return (
-    <Avatar size="sm">
-      {props.avatarUrl !== null ? (
-        <AvatarImage src={props.avatarUrl} alt="" />
-      ) : null}
-      <AvatarFallback>
-        {computeInitials(props.userName, props.email)}
-      </AvatarFallback>
-    </Avatar>
+    <PersonAvatar
+      userId={userId}
+      name={props.userName.trim().length > 0 ? props.userName : props.email}
+      avatarUrl={props.avatarUrl}
+      size="sm"
+    />
   );
 }
 

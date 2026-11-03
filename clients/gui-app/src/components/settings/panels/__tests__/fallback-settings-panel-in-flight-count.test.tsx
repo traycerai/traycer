@@ -4,7 +4,6 @@ import {
   fireEvent,
   render,
   screen,
-  waitFor,
   type RenderResult,
 } from "@testing-library/react";
 import { QueryClientProvider, type QueryClient } from "@tanstack/react-query";
@@ -304,6 +303,17 @@ function dataUpdateCountOf(
   return queryClient.getQueryState(queryKey)?.dataUpdateCount ?? 0;
 }
 
+/**
+ * Two of the table's 5 s poll periods in one `act`: under fake timers a repeated
+ * interval refetch updates the cache at once and repaints only on the next one.
+ */
+async function advancePoll(): Promise<void> {
+  await act(async () => {
+    await vi.advanceTimersByTimeAsync(5_000);
+    await vi.advanceTimersByTimeAsync(5_000);
+  });
+}
+
 afterEach(() => {
   cleanup();
   vi.useRealTimers();
@@ -311,21 +321,8 @@ afterEach(() => {
 });
 
 describe("FallbackSettingsPanel - the polled in-flight count", () => {
-  // REAL timers, deliberately, unlike the read-once describe below.
-  // TanStack's `refetchInterval` for this entry re-arms its own
-  // `setInterval` on every successful fetch (through `timeoutManager`'s
-  // call-time wrapper around the global `setInterval`), and observed
-  // empirically: under `vi.useFakeTimers()`, a
-  // SECOND interval-driven refetch updates the cache correctly (confirmed via
-  // `queryClient.getQueryState` and the query cache's own
-  // `observerResultsUpdated` event) but the mounted `<FallbackSettingsPanel>`
-  // does not repaint from it inside the same `act()` window - a
-  // commit-timing gap specific to a REPEATED interval refetch under fake
-  // timers, not a fact about production (the read-once describe below
-  // proves the polling and caching side of this same mechanism directly,
-  // under fake timers, with no such gap). `waitFor` polling on real
-  // wall-clock time sidesteps it entirely.
   it("tracks the host while the page stays open, independent of the once-read policy", async () => {
+    vi.useFakeTimers();
     const fixture = createFixture({
       policy: policy({}),
       storedPolicyUnreadable: false,
@@ -333,36 +330,25 @@ describe("FallbackSettingsPanel - the polled in-flight count", () => {
     });
     renderPanel(fixture);
 
-    await waitFor(() => {
-      expect(masterToggleDescriptionText()).toBe(
-        `${MASTER_TOGGLE_DESCRIPTION} 1 in progress right now.`,
-      );
-    });
+    await advancePoll();
+    expect(masterToggleDescriptionText()).toBe(
+      `${MASTER_TOGGLE_DESCRIPTION} 1 in progress right now.`,
+    );
 
     fixture.setInFlightCount(0);
     // Falsification: disable the table's poll entry, or drop `poll: true`
     // from `useFallbackInFlightCountQuery` - this never satisfies, since
-    // nothing ever re-reads the count, and the assertion times out instead
-    // of going red on a value - an ablation reads that timeout as the
-    // falsifier firing.
-    await waitFor(
-      () => {
-        expect(masterToggleDescriptionText()).toBe(MASTER_TOGGLE_DESCRIPTION);
-      },
-      { timeout: 8_000 },
-    );
+    // nothing ever re-reads the count, and the description keeps reading 1.
+    await advancePoll();
+    expect(masterToggleDescriptionText()).toBe(MASTER_TOGGLE_DESCRIPTION);
     expect(masterToggleDescriptionText()).not.toMatch(/in progress right now/);
 
     fixture.setInFlightCount(2);
-    await waitFor(
-      () => {
-        expect(masterToggleDescriptionText()).toBe(
-          `${MASTER_TOGGLE_DESCRIPTION} 2 in progress right now.`,
-        );
-      },
-      { timeout: 8_000 },
+    await advancePoll();
+    expect(masterToggleDescriptionText()).toBe(
+      `${MASTER_TOGGLE_DESCRIPTION} 2 in progress right now.`,
     );
-  }, 20_000);
+  });
 });
 
 describe("FallbackSettingsPanel - the policy read stays read-once while the count polls", () => {
@@ -425,14 +411,8 @@ describe("FallbackSettingsPanel - the policy read stays read-once while the coun
 });
 
 describe("FallbackSettingsPanel - a save keeps the polled count a NUMBER (control)", () => {
-  // REAL timers, like the polled-count describe and for the same reason:
-  // proving the panel tracks
-  // a SECOND interval-driven refetch (the divergence step below) needs a
-  // DOM read, and a DOM read of a repeated poll's result does not reliably
-  // repaint inside one `act()` window under fake timers (see the polled-count
-  // describe's comment).
-  // `waitFor` on real wall-clock time sidesteps it.
   it("leaves the description reading the LIVE polled count after a real save, never [object Object] or the read-once value", async () => {
+    vi.useFakeTimers();
     const fixture = createFixture({
       policy: policy({}),
       storedPolicyUnreadable: false,
@@ -444,11 +424,10 @@ describe("FallbackSettingsPanel - a save keeps the polled count a NUMBER (contro
     });
     renderPanel(fixture);
 
-    await waitFor(() => {
-      expect(masterToggleDescriptionText()).toBe(
-        `${MASTER_TOGGLE_DESCRIPTION} 2 in progress right now.`,
-      );
-    });
+    await advancePoll();
+    expect(masterToggleDescriptionText()).toBe(
+      `${MASTER_TOGGLE_DESCRIPTION} 2 in progress right now.`,
+    );
 
     // Diverge the two sources BEFORE the save: the host's count moves to
     // 5, and a poll interval lands. The read-once policy entry never sees
@@ -457,13 +436,9 @@ describe("FallbackSettingsPanel - a save keeps the polled count a NUMBER (contro
     // a fallback the polled entry's shape no longer satisfies - this
     // assertion would still see 2, not 5.
     fixture.setInFlightCount(5);
-    await waitFor(
-      () => {
-        expect(masterToggleDescriptionText()).toBe(
-          `${MASTER_TOGGLE_DESCRIPTION} 5 in progress right now.`,
-        );
-      },
-      { timeout: 8_000 },
+    await advancePoll();
+    expect(masterToggleDescriptionText()).toBe(
+      `${MASTER_TOGGLE_DESCRIPTION} 5 in progress right now.`,
     );
 
     // A REAL save through the UI: the master switch is the one
@@ -476,9 +451,8 @@ describe("FallbackSettingsPanel - a save keeps the polled count a NUMBER (contro
     fireEvent.click(
       screen.getByRole("switch", { name: "Route automatically" }),
     );
-    await waitFor(() => {
-      expect(fixture.setCallCount()).toBe(1);
-    });
+    await advancePoll();
+    expect(fixture.setCallCount()).toBe(1);
 
     // Falsification A: cache the count query's response as a bare number
     // via `mapResponse` instead of the whole
@@ -497,13 +471,8 @@ describe("FallbackSettingsPanel - a save keeps the polled count a NUMBER (contro
     // now.", the STALE mount value, since 2 is the one number the
     // read-once entry ever saw. Diverging the two sources above is what
     // makes that distinguishable from this pin's expected 5.
-    await waitFor(
-      () => {
-        expect(masterToggleDescriptionText()).toBe(
-          `${MASTER_TOGGLE_DESCRIPTION} 5 in progress right now.`,
-        );
-      },
-      { timeout: 8_000 },
+    expect(masterToggleDescriptionText()).toBe(
+      `${MASTER_TOGGLE_DESCRIPTION} 5 in progress right now.`,
     );
     expect(masterToggleDescriptionText()).not.toContain("[object Object]");
 
@@ -517,5 +486,5 @@ describe("FallbackSettingsPanel - a save keeps the polled count a NUMBER (contro
     }
     expect(typeof cached.inFlightCount).toBe("number");
     expect(cached.inFlightCount).toBe(5);
-  }, 20_000);
+  });
 });

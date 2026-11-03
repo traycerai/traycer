@@ -78,6 +78,9 @@ const MAX_TEST_WORKERS = Math.min(
 //   a row stayed on "Checking", a restored row stayed locked, a title or a
 //   rename never showed, a theme switch never re-primed highlighting.
 // - `composer.source`: the palette kept the model the composer had left.
+// - `command-palette`: a palette opened after a route change kept the path
+//   of an earlier opening, so it hid the row of the channel it had left and
+//   listed the one it was on.
 // - `top-level-tab-host`: a tab locked mid-drag kept its drop ring.
 // - `use-comm-graph-jump` with `comm-graph-agent-detail-surface`: a row kept
 //   its open-agent links after the host went offline.
@@ -101,7 +104,7 @@ const MAX_TEST_WORKERS = Math.min(
 // `sidebar-artwork` and `dock-modes` read the same kind of source and are
 // correct as they stand; their cases hold that once they run compiled.
 const REACT_COMPILER_REGRESSION_FILES =
-  /[/\\](?:composer-prompt-editor|use-workspace-file-list-subscription|shared-stream-subscription|use-header-tabs|use-pr-(?:list|detail)-subscription|auth-brand-splash|auth-landing-page|use-auth-splash-cover|relative-time|routing-card|use-environment-members-query|use-git-list-changed-files-subscription|workspace-file-tile|worktrees-enrichment|use-worktree-task-titles|teardown-agent-names|resource-monitor-popover|use-comm-graph-jump|comm-graph-agent-detail-surface|top-level-tab-host|split-slot-chooser|landing-terminal-tile|use-terminal-tile-bootstrap|use-host-terminal-bootstrap|terminal-tile|use-diff-highlight-ready|composer\.source|sidebar-artwork|dock-modes|use-host-client-for|use-host-stream-client-for|use-providers-login-ownership|epic-tab-existence-reconciler|chat-routing-menu|tab-appearance-menu|chat-accumulated-changes-panel|chat-pinned-stack|react-compiler-harness-probe|chat-serving-witness|sandbox-tile-state-frame|use-chat-search-coverage)\.(?:ts|tsx)$/;
+  /[/\\](?:composer-prompt-editor|use-workspace-file-list-subscription|shared-stream-subscription|use-header-tabs|use-pr-(?:list|detail)-subscription|auth-brand-splash|auth-landing-page|use-auth-splash-cover|relative-time|routing-card|use-environment-members-query|use-git-list-changed-files-subscription|workspace-file-tile|worktrees-enrichment|use-worktree-task-titles|teardown-agent-names|resource-monitor-popover|use-comm-graph-jump|comm-graph-agent-detail-surface|top-level-tab-host|split-slot-chooser|landing-terminal-tile|use-terminal-tile-bootstrap|use-host-terminal-bootstrap|terminal-tile|use-diff-highlight-ready|composer\.source|command-palette|sidebar-artwork|dock-modes|use-host-client-for|use-host-stream-client-for|use-providers-login-ownership|epic-tab-existence-reconciler|chat-routing-menu|tab-appearance-menu|chat-accumulated-changes-panel|chat-pinned-stack|react-compiler-harness-probe|chat-serving-witness|sandbox-tile-state-frame|use-chat-search-coverage)\.(?:ts|tsx)$/;
 
 // The compiler runs after the JSX transform, and the suite's transform is the
 // development one: `jsxDEV(..., this)` passes `this`, the compiler bails on
@@ -211,9 +214,24 @@ export default defineConfig({
     // CONTAIN "zod" (`zod-to-json-schema`, `@hookform/resolvers/zod`) are
     // not dragged in. Full rationale for the workaround itself lives in
     // `clients/desktop/vitest.shared.ts`.
-    server: { deps: { inline: [/[\\/]node_modules[\\/]zod[\\/]/] } },
+    //
+    // `sonner` is inlined for what it keeps: its toast queue is module state, and
+    // with `isolate: false` a module Node loaded natively is shared by every file
+    // a worker runs, so one file's toasts would render in the next file's Toaster.
+    server: {
+      deps: {
+        inline: [
+          /[\\/]node_modules[\\/]zod[\\/]/,
+          /[\\/]node_modules[\\/]sonner[\\/]/,
+        ],
+      },
+    },
     environment: "jsdom",
-    setupFiles: ["./__tests__/test-browser-apis.ts"],
+    setupFiles: [
+      "./__tests__/test-file-reset.ts",
+      "./__tests__/test-browser-apis.ts",
+    ],
+    sequence: { setupFiles: "list" },
     include: [
       "__tests__/**/*.test.ts",
       "__tests__/**/*.test.tsx",
@@ -222,6 +240,7 @@ export default defineConfig({
     ],
     globals: false,
     pool: "forks",
+    isolate: false,
     // A few suites advance large fake-timer windows. Limiting concurrently
     // running files keeps those timers responsive on CI's shared runners.
     maxWorkers: MAX_TEST_WORKERS,

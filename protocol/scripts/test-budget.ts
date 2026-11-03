@@ -1,12 +1,17 @@
 /**
- * Fails the protocol test leg when a test file took more than
- * {@link TEST_FILE_BUDGET_MS} and `test-budget-allowlist.json` does not name it
- * with a reason. The reading is the JUnit report's: a file's hooks and tests,
+ * Fails a test leg when a test file took more than
+ * {@link TEST_FILE_BUDGET_MS} and the project's `test-budget-allowlist.json`
+ * does not name it with a reason. The reading is the JUnit report's: a file's hooks and tests,
  * not its import, which the report does not carry.
  *
  * `test.yml` runs this after `Test`, on the report that run wrote:
  *
  *   bun protocol/scripts/test-budget.ts protocol/test-results/junit.xml
+ *
+ * Another project names its directory first, and the paths in its report and
+ * its allowlist are relative to that directory:
+ *
+ *   bun protocol/scripts/test-budget.ts --project clients/gui-app test-junit.xml
  *
  * One reading is not enough to fail on, because a file's time on the shared
  * runner moves by half between runs of the same commit. So a file over the
@@ -20,7 +25,11 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 const PROTOCOL_DIRECTORY = join(import.meta.dirname, "..");
-const ALLOWLIST_PATH = join(PROTOCOL_DIRECTORY, "test-budget-allowlist.json");
+const REPOSITORY_ROOT = join(PROTOCOL_DIRECTORY, "..");
+const ALLOWLIST_FILE = "test-budget-allowlist.json";
+
+/** The suite vitest's JUnit reporter records unhandled errors under. */
+const UNHANDLED_ERRORS_SUITE = "vitest unhandled errors";
 
 /** A test file's budget on the merge run. */
 export const TEST_FILE_BUDGET_MS = 10_000;
@@ -68,7 +77,7 @@ export function junitFileDurationsMs(xml: string): ReadonlyMap<string, number> {
 
 /**
  * Reads `test-budget-allowlist.json`'s parsed content, a map from a test file's
- * path under `protocol/` to the reason it may exceed the budget. Returns `null`
+ * path under its project to the reason it may exceed the budget. Returns `null`
  * for anything else, because a guard that cannot read its allowlist must not
  * guess at it.
  */
@@ -126,20 +135,26 @@ export function evaluateTestBudget(
  * What a second run measured. A run that did not exit cleanly measured nothing,
  * whatever its report says: a killed fork or a failed import still writes a
  * report, with the file at about zero, and that must not read as a fast file.
+ * A project that ignores unhandled errors (gui-app) exits 0 after a fork dies,
+ * so a report that records any unhandled error measured nothing either.
  */
 export function secondRunDurationsMs(
   exitStatus: number | null,
   reportXml: string | null,
 ): ReadonlyMap<string, number> {
   if (exitStatus !== 0 || reportXml === null) return new Map<string, number>();
+  if (reportXml.includes(`name="${UNHANDLED_ERRORS_SUITE}"`)) {
+    return new Map<string, number>();
+  }
   return junitFileDurationsMs(reportXml);
 }
 
 /** Runs `paths` one worker at a time and reads what they took from their own report. */
 function remeasureAloneMs(
+  projectDirectory: string,
   paths: readonly string[],
 ): ReadonlyMap<string, number> {
-  const directory = mkdtempSync(join(tmpdir(), "protocol-test-budget-"));
+  const directory = mkdtempSync(join(tmpdir(), "test-budget-"));
   try {
     const report = join(directory, "report.xml");
     const { status } = spawnSync(
@@ -154,7 +169,7 @@ function remeasureAloneMs(
         "--reporter=junit",
         `--outputFile.junit=${report}`,
       ],
-      { cwd: PROTOCOL_DIRECTORY, stdio: "inherit" },
+      { cwd: projectDirectory, stdio: "inherit" },
     );
     return secondRunDurationsMs(
       status,
@@ -182,18 +197,46 @@ export function describeBudgetReading(
   return `budget ${path} first=${seconds(firstMs)} second=${second} verdict=${verdict}`;
 }
 
-function main(report: string | undefined): void {
-  if (report === undefined) {
-    console.error("usage: test-budget.ts <JUnit report>");
+/**
+ * `<report>` for the protocol leg, `--project <directory> <report>` for another
+ * project. Anything else, an `--option=value` spelling or a stray argument
+ * included, is `null`: a guard must not read a flag as its report.
+ */
+export function parseTestBudgetArgs(
+  args: readonly string[],
+): { readonly project: string; readonly report: string } | null {
+  if (args.length === 1 && !args[0].startsWith("-")) {
+    return { project: "protocol", report: args[0] };
+  }
+  if (
+    args.length === 3 &&
+    args[0] === "--project" &&
+    !args[1].startsWith("-") &&
+    !args[2].startsWith("-")
+  ) {
+    return { project: args[1], report: args[2] };
+  }
+  return null;
+}
+
+function main(args: readonly string[]): void {
+  const parsed = parseTestBudgetArgs(args);
+  if (parsed === null) {
+    console.error(
+      "usage: test-budget.ts [--project <directory>] <JUnit report>",
+    );
     process.exit(2);
   }
+  const { project, report } = parsed;
+  const projectDirectory = join(REPOSITORY_ROOT, project);
+  const allowlistName = join(project, ALLOWLIST_FILE);
   const allowlistJson: unknown = JSON.parse(
-    readFileSync(ALLOWLIST_PATH, "utf8"),
+    readFileSync(join(projectDirectory, ALLOWLIST_FILE), "utf8"),
   );
   const allowlist = parseTestBudgetAllowlist(allowlistJson);
   if (allowlist === null) {
     console.error(
-      `${ALLOWLIST_PATH} is not a map from a test file to a reason.`,
+      `${allowlistName} is not a map from a test file to a reason.`,
     );
     process.exit(1);
   }
@@ -210,7 +253,7 @@ function main(report: string | undefined): void {
   const { overBudget, spikes, allowlistedOver } = evaluateTestBudget(
     durationsMs,
     allowlist,
-    remeasureAloneMs,
+    (paths) => remeasureAloneMs(projectDirectory, paths),
   );
   console.log(
     `${String(durationsMs.size)} files measured against ${seconds(TEST_FILE_BUDGET_MS)}; ${String(allowlistedOver)} over it on the allowlist.`,
@@ -223,12 +266,12 @@ function main(report: string | undefined): void {
       console.error(describeBudgetReading(file, "over"));
     }
     console.error(
-      "Make each file marked over fast, or name it in protocol/test-budget-allowlist.json with a reason. second=none means the second run failed, and its output is above; every file it was running reads none.",
+      `Make each file marked over fast, or name it in ${allowlistName} with a reason. second=none means the second run failed, and its output is above; every file it was running reads none.`,
     );
     process.exit(1);
   }
 }
 
 if (import.meta.main) {
-  main(process.argv[2]);
+  main(process.argv.slice(2));
 }

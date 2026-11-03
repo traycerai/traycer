@@ -33,6 +33,8 @@ import { transcriptListRows } from "@/stores/chats/transcript-list-rows";
 import type { ChatMessage as ChatMessageModel } from "@/stores/composer/chat-store";
 import { makeMessage, makeMessages } from "./chat-message-fixtures";
 import {
+  advanceLegendListFrames,
+  installLegendListTestClock,
   installLegendListViewportMetrics,
   setLegendListMessageRowHeightOverrides,
   setLegendListScrollContainerScrollHeightOverride,
@@ -106,11 +108,7 @@ function detachReader(node: HTMLElement, scrollTop: number): number {
 }
 
 async function settleOneFrame(): Promise<void> {
-  await act(async () => {
-    await new Promise<void>((resolve) => {
-      requestAnimationFrame(() => resolve());
-    });
-  });
+  await advanceLegendListFrames(1);
 }
 
 function expectPixelStable(node: HTMLElement, parked: number): void {
@@ -364,6 +362,7 @@ describe("ChatTimeline follow-latch real-LegendList integration", () => {
   beforeEach(() => {
     installControllableResizeObserver();
     installLegendListViewportMetrics();
+    installLegendListTestClock();
   });
 
   afterEach(() => {

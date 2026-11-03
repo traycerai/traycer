@@ -9,6 +9,7 @@
  */
 import type { TaskHostRow } from "@traycer/protocol/host/task-host-summary";
 import { useSyncExternalStore } from "react";
+import { installLegendListTestClock } from "@/components/chat/__tests__/legend-list-test-environment";
 import { TabHostContext } from "@/components/epic-canvas/hooks/use-tab-host-id";
 import { useComposerDraftStore } from "@/stores/composer/composer-draft-store";
 import type { ChatSessionStoreHandle } from "@/stores/chats/chat-session-store";
@@ -1295,7 +1296,30 @@ function userSignedIn(): void {
     );
 }
 
+/**
+ * Lets chains of async work settle. `waitFor` and `findBy*` advance this clock
+ * synchronously and give promises only a few turns; `advanceTimersByTimeAsync`
+ * yields to the event loop between timers.
+ */
+async function settleAsyncWork(): Promise<void> {
+  await act(async () => {
+    await vi.advanceTimersByTimeAsync(1_000);
+  });
+}
+
+// Declared first, so it runs last: a run a case started is asleep on this clock
+// between polls, and has to wake once to see its stage is gone, or it holds the
+// shared surface against the next case.
+afterEach(async () => {
+  cleanup();
+  if (!vi.isFakeTimers()) return;
+  await act(async () => {
+    await vi.advanceTimersByTimeAsync(2_100);
+  });
+});
+
 beforeEach(() => {
+  installLegendListTestClock();
   localStorage.clear();
   userSignedIn();
   useAccountContextStore.setState({ accountContext: { type: "PERSONAL" } });
@@ -3006,30 +3030,25 @@ describe("a send at its handoff whose sandbox is gone", () => {
   });
 
   it("reads the list again on the poll tick while it waits for the agent", async () => {
-    vi.useFakeTimers();
+    seed({ ...SEEDED, phase: "handoff", created: true });
+    answerHost(SANDBOX_HOST, CODEX_DOWNLOADING);
+    mount();
+    // The driver mounts its work once it holds the send: await that grant.
+    const ownership = holdPendingSandboxSendOwnership(SEND_ID);
     try {
-      seed({ ...SEEDED, phase: "handoff", created: true });
-      answerHost(SANDBOX_HOST, CODEX_DOWNLOADING);
-      mount();
-      // The driver mounts its work once it holds the send: await that grant.
-      const ownership = holdPendingSandboxSendOwnership(SEND_ID);
-      try {
-        await act(async () => {
-          await ownership.ready;
-        });
-      } finally {
-        ownership.release();
-      }
-      mocks.refetchSandboxes.mockClear();
-
-      act(() => {
-        vi.advanceTimersByTime(2_100);
+      await act(async () => {
+        await ownership.ready;
       });
-
-      expect(mocks.refetchSandboxes).toHaveBeenCalled();
     } finally {
-      vi.useRealTimers();
+      ownership.release();
     }
+    mocks.refetchSandboxes.mockClear();
+
+    act(() => {
+      vi.advanceTimersByTime(2_100);
+    });
+
+    expect(mocks.refetchSandboxes).toHaveBeenCalled();
   });
 });
 
@@ -6118,6 +6137,7 @@ describe("a send whose sandbox left awake on its own after the create timed out"
     answerHost(SANDBOX_HOST, CODEX_READY);
     mount();
     await screen.findByTestId("sandbox-setup-line");
+    await settleAsyncWork();
     expect(document.body.textContent).toContain("compute is charged");
   }
 
@@ -6466,6 +6486,7 @@ describe("a send held on settings that didn't apply, once its sandbox leaves awa
     answerSandboxRows([rowIn("awake")], FRESH);
     answerHost(SANDBOX_HOST, CODEX_READY);
     mount();
+    await settleAsyncWork();
     await screen.findByTestId("pending-sandbox-sends");
     act(() => {
       useStagedSandboxStore.getState().report(SURFACE, {
@@ -8602,6 +8623,7 @@ describe("choosing Stop on an unclaimed send", () => {
       .report(SURFACE, { step: "applying", stepAt: Date.now() });
     answerHost(SANDBOX_HOST, CODEX_DOWNLOADING);
     mount();
+    await settleAsyncWork();
 
     const line = await screen.findByTestId("sandbox-setup-line");
     expect(
@@ -8754,6 +8776,7 @@ describe("choosing Stop on an unclaimed send", () => {
     mocks.verbAnswer = retryAnswer.promise;
     answerHost(SANDBOX_HOST, CODEX_DOWNLOADING);
     mount();
+    await settleAsyncWork();
 
     const line = await screen.findByTestId("sandbox-setup-line");
     const retry = within(line).getByRole("button", { name: "Retry" });
@@ -10095,7 +10118,7 @@ describe("choosing Stop on an unclaimed send", () => {
       recordMapStorageKey(persistKey(STORE_KEYS.pendingSandboxSend), SEND_ID),
     );
     // One turn of the event loop, where an unhandled rejection surfaces.
-    await new Promise<void>((resolve) => setTimeout(resolve, 0));
+    await vi.advanceTimersByTimeAsync(0);
 
     expect(raised).toEqual([]);
     expect(mocks.stopSandbox).not.toHaveBeenCalled();
@@ -10116,7 +10139,7 @@ describe("choosing Stop on an unclaimed send", () => {
     await waitFor(() => {
       expect(usePendingSandboxSendStore.getState().sends).toEqual({});
     });
-    await new Promise<void>((resolve) => setTimeout(resolve, 0));
+    await vi.advanceTimersByTimeAsync(0);
     expect(raised).toEqual([]);
     expect(mocks.stopSandbox).toHaveBeenCalledTimes(1);
     expect(mocks.stopSandbox).toHaveBeenCalledWith("stop");
@@ -10589,15 +10612,29 @@ describe("an owner that takes up each kind of retry request", () => {
     restoreLocks();
   });
 
+  /**
+   * Records every acknowledgement the stage carries. A wake or a readiness
+   * Retry can deliver within the same turn, and delivery clears the stage, so
+   * a later read of `retryHandledId` can find nothing however fast it looks.
+   */
   async function requestAndMount(
     action: "retry-stage" | "retry-creation" | "keep-waiting",
-  ): Promise<string> {
+  ): Promise<{ readonly id: string; readonly handled: readonly string[] }> {
+    const handled: string[] = [];
+    onTestFinished(
+      useStagedSandboxStore.subscribe((state) => {
+        const handledId = state.bySurface[SURFACE]?.retryHandledId;
+        if (handledId !== undefined && handled.at(-1) !== handledId)
+          handled.push(handledId);
+      }),
+    );
     const id = await useStagedSandboxStore
       .getState()
       .requestRetry(SURFACE, "user-1", action);
     if (id === null) throw new Error("the request was not recorded");
     mount();
-    return id;
+    await settleAsyncWork();
+    return { id, handled };
   }
 
   it("runs a wake Retry as one wake of the same sandbox, acknowledges it and settles to one delivery", async () => {
@@ -10615,11 +10652,9 @@ describe("an owner that takes up each kind of retry request", () => {
         }),
       ]),
     );
-    const id = await requestAndMount("retry-stage");
+    const { id, handled } = await requestAndMount("retry-stage");
 
-    await waitFor(() => {
-      expect(readStagedSandbox(SURFACE)?.retryHandledId).toBe(id);
-    });
+    expect(handled).toEqual([id]);
     // The wake's run ends in the ordinary delivery; nothing outlives the case.
     await waitForCreateChats(1);
     await waitFor(() => {
@@ -10634,11 +10669,9 @@ describe("an owner that takes up each kind of retry request", () => {
     useStagedSandboxStore.getState().report(SURFACE, {
       failure: { kind: "unverified" },
     });
-    const id = await requestAndMount("retry-stage");
+    const { id, handled } = await requestAndMount("retry-stage");
 
-    await waitFor(() => {
-      expect(readStagedSandbox(SURFACE)?.retryHandledId).toBe(id);
-    });
+    expect(handled).toEqual([id]);
     expect(mocks.createSandbox).not.toHaveBeenCalled();
     expect(mocks.wake).not.toHaveBeenCalled();
     expect(usePendingSandboxSendStore.getState().sends[SEND_ID]).toBeDefined();
@@ -10656,11 +10689,9 @@ describe("an owner that takes up each kind of retry request", () => {
       failure: { kind: "failed", code: "create", step: "creating" },
     });
     const before = readStagedSandbox(SURFACE)?.clientRequestId;
-    const id = await requestAndMount("retry-creation");
+    const { id, handled } = await requestAndMount("retry-creation");
 
-    await waitFor(() => {
-      expect(readStagedSandbox(SURFACE)?.retryHandledId).toBe(id);
-    });
+    expect(handled).toEqual([id]);
     await waitFor(() => {
       expect(mocks.createSandbox).toHaveBeenCalledTimes(1);
     });
@@ -10683,11 +10714,9 @@ describe("an owner that takes up each kind of retry request", () => {
       failure: { kind: "timed-out", step: "creating" },
     });
     const before = readStagedSandbox(SURFACE)?.clientRequestId;
-    const id = await requestAndMount("keep-waiting");
+    const { id, handled } = await requestAndMount("keep-waiting");
 
-    await waitFor(() => {
-      expect(readStagedSandbox(SURFACE)?.retryHandledId).toBe(id);
-    });
+    expect(handled).toEqual([id]);
     await waitFor(() => {
       expect(mocks.createSandbox).toHaveBeenCalledTimes(1);
     });

@@ -48,20 +48,3 @@ export function useStableCollaboratorRef(
   }, [collaborators]);
   return useMemo(() => ref, []);
 }
-
-/**
- * Two-letter initials fallback for the avatar circle. We intentionally use
- * the display name (not email) as the source so renaming a user changes
- * the initials immediately, matching how Views renders collaborator chips.
- */
-export function deriveInitials(displayName: string): string {
-  const trimmed = displayName.trim();
-  if (trimmed.length === 0) return "?";
-  const parts = trimmed.split(/\s+/);
-  if (parts.length === 1) {
-    return parts[0].slice(0, 2).toUpperCase();
-  }
-  const first = parts[0].charAt(0);
-  const last = parts[parts.length - 1].charAt(0);
-  return `${first}${last}`.toUpperCase();
-}

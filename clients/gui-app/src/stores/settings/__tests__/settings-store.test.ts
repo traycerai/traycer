@@ -1178,3 +1178,67 @@ describe("useSettingsStore", () => {
     expect(useSettingsStore.getState().showGreeting).toBe(false);
   });
 });
+
+describe("soundtrack settings", () => {
+  beforeEach(resetSettingsStore);
+  afterEach(resetSettingsStore);
+
+  it("round-trips the wish, the director and the volume through storage", async () => {
+    const settings = useSettingsStore.getState();
+    settings.setSoundtrackEnabled(true);
+    settings.setSoundtrackDirector("rules");
+    settings.setSoundtrackVolume(0.7);
+    const stored = window.localStorage.getItem("traycer-gui-app:settings");
+    useSettingsStore.setState(useSettingsStore.getInitialState(), true);
+    expect(useSettingsStore.getState().soundtrackEnabled).toBe(false);
+    if (stored !== null) {
+      window.localStorage.setItem("traycer-gui-app:settings", stored);
+    }
+
+    await useSettingsStore.persist.rehydrate();
+
+    expect(useSettingsStore.getState()).toMatchObject({
+      soundtrackEnabled: true,
+      soundtrackDirector: "rules",
+      soundtrackVolume: 0.7,
+    });
+  });
+
+  it("falls back to the default director for one it does not know", async () => {
+    await rehydrateFrom({ soundtrackDirector: "jazz" });
+    expect(useSettingsStore.getState().soundtrackDirector).toBe("static");
+  });
+
+  it.each([
+    ["above range", 7, 1],
+    ["below range", -3, 0],
+  ])("clamps a persisted volume %s", async (_label, stored, expected) => {
+    await rehydrateFrom({ soundtrackVolume: stored });
+    expect(useSettingsStore.getState().soundtrackVolume).toBe(expected);
+  });
+
+  it.each([
+    ["a string", "loud"],
+    ["NaN", Number.NaN],
+  ])(
+    "reads a persisted volume of %s as the initial one",
+    async (_l, stored) => {
+      await rehydrateFrom({ soundtrackVolume: stored });
+      expect(useSettingsStore.getState().soundtrackVolume).toBe(0.5);
+    },
+  );
+
+  it.each([
+    ["a string", "true"],
+    ["a number", 1],
+  ])("reads a persisted wish of %s as off", async (_label, stored) => {
+    useSettingsStore.setState({ soundtrackEnabled: true });
+    await rehydrateFrom({ soundtrackEnabled: stored });
+    expect(useSettingsStore.getState().soundtrackEnabled).toBe(false);
+  });
+
+  it("clamps a volume set in the app", () => {
+    useSettingsStore.getState().setSoundtrackVolume(4);
+    expect(useSettingsStore.getState().soundtrackVolume).toBe(1);
+  });
+});

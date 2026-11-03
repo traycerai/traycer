@@ -18,6 +18,7 @@
  * so editing this fixture cannot fool CI.
  */
 import { spawnSync } from "node:child_process";
+import { GIT_OUTPUT_MAX_BUFFER_BYTES } from "../../../scripts/git-output-limit.cjs";
 import {
   mkdirSync,
   mkdtempSync,
@@ -99,7 +100,7 @@ type Candidate = {
 const lsRemote = spawnSync("git", ["ls-remote", "--tags", remote], {
   encoding: "utf8",
   timeout: 30_000,
-  maxBuffer: 16 * 1024 * 1024,
+  maxBuffer: GIT_OUTPUT_MAX_BUFFER_BYTES,
 });
 if (lsRemote.error !== undefined) {
   console.error(`Failed to spawn 'git ls-remote': ${lsRemote.error.message}`);

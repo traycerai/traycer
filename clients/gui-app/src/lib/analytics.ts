@@ -90,6 +90,7 @@ export type AnalyticsCommand =
   | "history_back"
   | "history_forward"
   | "open_artifact"
+  | "open_bot"
   | "open_chat"
   | "open_diff"
   | "open_file"
@@ -1285,6 +1286,7 @@ const ANALYTICS_COMMANDS = new Set<string>([
   "history_forward",
   "install_host_update",
   "open_artifact",
+  "open_bot",
   "open_chat",
   "open_diff",
   "open_file",

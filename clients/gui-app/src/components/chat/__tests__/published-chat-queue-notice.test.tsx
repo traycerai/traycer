@@ -67,6 +67,7 @@ const QUEUE_NOTICE_MESSAGE =
 const QUEUE_NOTICE: MessageSegment = {
   id: "queue-paused:published",
   kind: "error",
+  hostTimestamp: null,
   message: QUEUE_NOTICE_MESSAGE,
   recoverable: true,
   code: QUEUE_PAUSED_AFTER_ERROR_CODE,

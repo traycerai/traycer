@@ -4,6 +4,7 @@
 // (main()) supplies one backed by package.json scans.
 
 import { spawnSync } from "node:child_process";
+import { GIT_OUTPUT_MAX_BUFFER_BYTES } from "../git-output-limit.cjs";
 import {
   chmodSync,
   existsSync,
@@ -396,7 +397,11 @@ const SCRIPT_PATH = fileURLToPath(
 );
 
 function git(cwd, args) {
-  const result = spawnSync("git", args, { cwd, encoding: "utf8" });
+  const result = spawnSync("git", args, {
+    maxBuffer: GIT_OUTPUT_MAX_BUFFER_BYTES,
+    cwd,
+    encoding: "utf8",
+  });
   if (result.status !== 0) {
     throw new Error(`git ${args.join(" ")} failed: ${result.stderr}`);
   }
@@ -587,6 +592,7 @@ describe("the Nx lint target hashes every source the linters read", () => {
   const readJson = (path) => JSON.parse(readFileSync(join(root, path), "utf8"));
   const defaults = readJson("nx.json").targetDefaults.lint.inputs;
   const tracked = spawnSync("git", ["ls-files"], {
+    maxBuffer: GIT_OUTPUT_MAX_BUFFER_BYTES,
     cwd: root,
     encoding: "utf8",
   }).stdout.split("\n");
