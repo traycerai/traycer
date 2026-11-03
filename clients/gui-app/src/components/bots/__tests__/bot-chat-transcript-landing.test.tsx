@@ -127,6 +127,7 @@ import {
   type BotTranscriptSurface,
 } from "@/components/bots/bot-chat-transcript";
 import {
+  installLegendListTestClock,
   installLegendListViewportMetrics,
   settleLegendList,
 } from "@/components/chat/__tests__/legend-list-test-environment";
@@ -305,6 +306,7 @@ function mountTranscript(
 }
 
 beforeEach(() => {
+  installLegendListTestClock();
   vi.clearAllMocks();
   installLegendListViewportMetrics();
   landing = null;

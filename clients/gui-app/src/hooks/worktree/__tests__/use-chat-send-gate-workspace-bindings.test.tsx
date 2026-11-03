@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   focusManager,
   onlineManager,
@@ -25,6 +25,24 @@ import {
 } from "@/hooks/worktree/use-worktree-list-bindings-for-epic-query";
 
 const RETRY_SETTLE_TIMEOUT_MS = 5_000;
+
+beforeEach(() => {
+  // DOM Testing Library only advances a fake clock when a Jest-compatible
+  // one is present; Vitest does not expose the `jest` facade, so bridge the
+  // one method `waitFor` needs. The query client's retry backoff then elapses
+  // on the fake clock instead of in real time.
+  vi.stubGlobal("jest", {
+    advanceTimersByTime: (milliseconds: number): void => {
+      vi.advanceTimersByTime(milliseconds);
+    },
+  });
+  vi.useFakeTimers();
+});
+
+afterEach(() => {
+  vi.useRealTimers();
+  vi.unstubAllGlobals();
+});
 
 interface BindingsFixture {
   readonly client: HostClient<HostRpcRegistry>;
@@ -108,9 +126,7 @@ async function flush(): Promise<void> {
     await Promise.resolve();
   });
   await act(async () => {
-    await new Promise<void>((resolve) => {
-      setTimeout(resolve, 50);
-    });
+    await vi.advanceTimersByTimeAsync(50);
   });
 }
 
@@ -310,11 +326,9 @@ describe("useChatSendGateWorkspaceBindingsForClient on a plain window focus", ()
 
     focusWindowWithoutVisibilityChange();
 
-    await waitFor(() => {
-      expect(first.result.current.isSuccess).toBe(true);
-      expect(second.result.current.isSuccess).toBe(true);
-    });
     await flush();
+    expect(first.result.current.isSuccess).toBe(true);
+    expect(second.result.current.isSuccess).toBe(true);
     expect(fixture.callCount()).toBe(settledCalls + 1);
   });
 });

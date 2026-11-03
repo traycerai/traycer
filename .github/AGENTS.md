@@ -106,3 +106,8 @@ run.
 - The internal repository's nightly staging train and its promotion to
   production both refuse a pinned commit of this repository whose push checks
   are not all green.
+- Each gui-app shard holds its test files to the same 10 s, through the same
+  script (`protocol/scripts/test-budget.ts --project clients/gui-app`, on the
+  shard's JUnit report), unless `clients/gui-app/test-budget-allowlist.json`
+  names the file with a reason. A gui-app time or size measurement too long for
+  that budget is a `*.measure.ts` file, run by the same nightly workflow.

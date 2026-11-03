@@ -34,7 +34,10 @@ import { useComposerHarnessMemoryStore } from "@/stores/composer/composer-harnes
 import { useSettingsStore } from "@/stores/settings/settings-store";
 import { resetFocusedComposerControlsForTests } from "@/lib/commands/composer-controls-registry";
 import {
+  advanceLegendListFrames,
+  advanceLegendListTime,
   enableLegendListBrowserScrollEvents,
+  installLegendListTestClock,
   installLegendListViewportMetrics,
   setLegendListScrollContainerScrollHeightOverride,
   settleLegendList,
@@ -631,6 +634,7 @@ function resetSurfaceHostModules(): void {
 
 beforeEach(() => {
   installLegendListViewportMetrics();
+  installLegendListTestClock();
   window.localStorage.clear();
   useAuthStore.setState({
     status: "signed-in",
@@ -956,11 +960,7 @@ async function waitForPillVisible(
   container: HTMLElement,
   instanceId: string,
 ): Promise<void> {
-  await act(async () => {
-    await new Promise<void>((resolve) => {
-      setTimeout(resolve, PILL_SHOW_DEBOUNCE_MS + 40);
-    });
-  });
+  await advanceLegendListTime(PILL_SHOW_DEBOUNCE_MS + 40);
   await waitFor(() => {
     expect(isScrollToEndPillVisible(container, instanceId)).toBe(true);
   });
@@ -1029,11 +1029,7 @@ async function raceTrueBottomPastInFlightFreeRestore(
       scrollNode.scrollTop = maxScrollTopFor(scrollNode);
     });
     // eslint-disable-next-line no-await-in-loop
-    await act(async () => {
-      await new Promise<void>((resolve) =>
-        requestAnimationFrame(() => resolve()),
-      );
-    });
+    await advanceLegendListFrames(1);
     if (scrollNode.dataset.scrollMode === "following-end") break;
   }
   await settleLegendList();
@@ -2040,11 +2036,7 @@ describe("StableTileSurfaceHost permanent lifecycle matrix (real store/coordinat
           trackedScroll.scrollHeight - trackedScroll.clientHeight;
       });
       // eslint-disable-next-line no-await-in-loop
-      await act(async () => {
-        await new Promise<void>((resolve) =>
-          requestAnimationFrame(() => resolve()),
-        );
-      });
+      await advanceLegendListFrames(1);
       if (trackedScroll.dataset.scrollMode === "following-end") break;
     }
     await settleLegendList();
