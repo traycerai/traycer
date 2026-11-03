@@ -88,9 +88,10 @@ const setsUpBefore = (job, step, action) =>
 // The runner's implicit shell, `bash -e`, fails the step when any line's
 // command fails, but not a command in a pipeline (no pipefail), in an `&&` or
 // `||` list, or in the background. So a step runs a hook only on a line that is
-// exactly the command pre-commit runs: its entry, then its `args`. Another
-// argument can change what it checks (the ratchet's `--write` rewrites its
-// baseline), and an `echo` of it, a comment or a quoted copy is another line.
+// exactly the command pre-commit runs: its entry, then its `args`, with no
+// filenames (a skipped hook passes none). Another argument can change what it
+// checks (the ratchet's `--write` rewrites its baseline), and an `echo` of it, a
+// comment or a quoted copy is another line.
 const commandOf = (hook) =>
   normalize([hook.entry, ...(hook.args ?? [])].join(" "));
 const runsCommand = (run, command) =>
@@ -98,6 +99,19 @@ const runsCommand = (run, command) =>
     .split("\n")
     .map(normalize)
     .includes(command);
+
+// A step whose failure fails the required check on every run that runs the
+// hooks: no `if` or `continue-on-error` of its own, the implicit shell, and a
+// job that runs whenever static does and that the required check needs.
+function expectFailsRequiredCheck({ job, step }) {
+  expect(job.id).not.toBe(hookJob.id);
+  expect(job.if).toBe(hookJob.if);
+  expect(job.continueOnError).toBeUndefined();
+  expect(required).toContain(job.id);
+  expect(step.if).toBeUndefined();
+  expect(step["continue-on-error"]).toBeUndefined();
+  expect(step.shell ?? job.shell).toBeUndefined();
+}
 
 // The job and step that run a skipped hook.
 function runnerOf(hook) {
@@ -147,7 +161,7 @@ describe("every pre-commit hook runs in a pre-commit.yml job that can execute it
     const hook = hooks.find(({ id }) => id === "workspace-checks");
     const runner = runnerOf(hook);
     expect(runner.step.env?.WORKSPACE_CHECK_LANE).toBe("${{ matrix.lane }}");
-    const script = readFileSync(join(REPO_ROOT, commandOf(hook)), "utf8");
+    const script = readFileSync(join(REPO_ROOT, normalize(hook.entry)), "utf8");
     const affected = script.slice(script.indexOf("\nrun_affected() {"));
     const lanes = [
       ...affected
@@ -160,30 +174,25 @@ describe("every pre-commit hook runs in a pre-commit.yml job that can execute it
       ({ lane }) => lane,
     );
     expect([...matrix].sort()).toEqual([...lanes].sort());
-    const format = jobs.find((job) =>
-      job.steps.some(
-        (step) =>
-          step.if === undefined &&
-          runsCommand(step.run, "bun run format:check"),
-      ),
+    const formatJob = jobs.find((job) =>
+      job.steps.some((step) => runsCommand(step.run, "bun run format:check")),
     );
-    expect(format?.if).toBe(hookJob.if);
-    expect(required).toContain(format.id);
+    expect(formatJob, "no step runs: bun run format:check").toBeDefined();
+    expectFailsRequiredCheck({
+      job: formatJob,
+      step: formatJob.steps.find((step) =>
+        runsCommand(step.run, "bun run format:check"),
+      ),
+    });
   });
 
   for (const hook of preCommitHooks.filter((hook) => skipped.has(hook.id))) {
     describe(hook.id, () => {
-      it("runs as its own entry, and fails a job that runs whenever static does", () => {
+      it("runs as exactly its command, and its failure fails the required check", () => {
         const runner = runnerOf(hook);
         expect(runner, `no step runs: ${commandOf(hook)}`).toBeDefined();
-        expect(runner.job.id).not.toBe(hookJob.id);
-        expect(runner.job.if).toBe(hookJob.if);
-        expect(runner.step.if).toBeUndefined();
-        // Its failure fails the job.
-        expect(runner.step["continue-on-error"]).toBeUndefined();
-        expect(runner.job.continueOnError).toBeUndefined();
-        expect(required).toContain(runner.job.id);
-        expect(runner.step.shell ?? runner.job.shell).toBeUndefined();
+        expect(hook.pass_filenames).toBe(false);
+        expectFailsRequiredCheck(runner);
       });
 
       if (hook.local && SYSTEM.has(hook.language)) {
