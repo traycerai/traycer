@@ -1,0 +1,493 @@
+import { useEffect, useId, useMemo, useState, type ReactNode } from "react";
+import { toast } from "sonner";
+import { Button } from "@/components/ui/button";
+import { Checkbox } from "@/components/ui/checkbox";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
+import { Textarea } from "@/components/ui/textarea";
+import { ShareImageSources } from "@/components/share-on-x/share-image-sources";
+import {
+  SHARE_ON_X_LINES,
+  type ShareOnXLine,
+} from "@/components/share-on-x/share-on-x-lines";
+import {
+  X_POST_LIMIT,
+  xPostIntentUrl,
+  xPostLength,
+} from "@/components/share-on-x/post-length";
+import { setUpHarnesses } from "@/components/share-on-x/set-up-harnesses";
+import type { ShareImage } from "@/components/share-on-x/share-images";
+import { XLogo } from "@/components/share-on-x/x-logo";
+import { useHostClientForHostId } from "@/hooks/host/use-host-client-for-host-id";
+import { useProvidersList } from "@/hooks/providers/use-providers-list-query";
+import { useClipboardCopy } from "@/hooks/ui/use-clipboard-copy";
+import {
+  buildUsageSummaryRequest,
+  useUsageSummaryForClient,
+} from "@/hooks/usage-analytics/use-usage-summary-query";
+import {
+  Analytics,
+  AnalyticsEvent,
+  type AnalyticsShareImage,
+} from "@/lib/analytics";
+import { useRegisteredEpicTitle } from "@/lib/epic-selectors";
+import { copyImageBlobPromiseToClipboard } from "@/lib/images/copy-image-to-clipboard";
+import { useOpenLink } from "@/lib/links/open-link";
+import { cn } from "@/lib/utils";
+import { useShareOnXNudgeStore } from "@/stores/settings/share-on-x-nudge-store";
+
+/** Posts shown at once; "Show 4 others" moves to the next group. */
+const LINES_PER_PAGE = 4;
+
+const IMAGE_ORDER: ReadonlyArray<AnalyticsShareImage> = [
+  "setup",
+  "screen",
+  "usage",
+  "card",
+];
+
+const IMAGE_LABELS: Record<AnalyticsShareImage, string> = {
+  setup: "Your setup",
+  screen: "This screen",
+  usage: "Task usage",
+  card: "Task card",
+};
+
+export interface ShareOnXDialogProps {
+  readonly open: boolean;
+  readonly onClose: () => void;
+  readonly epicId: string;
+  /** The host the thanked chat runs on, for reading the task's usage. */
+  readonly hostId: string | null;
+  /** The app window, captured as the dialog opened; `null` when it could not be. */
+  readonly screenCapture: ShareImage | null;
+}
+
+/**
+ * Lets the person pick one of the ready-made posts (editing it if they like),
+ * pick an image, and open X with the post filled in. X's post link cannot
+ * carry an image, so the chosen image goes to the clipboard first and the
+ * person pastes it.
+ */
+export function ShareOnXDialog(props: ShareOnXDialogProps): ReactNode {
+  return (
+    <Dialog
+      open={props.open}
+      onOpenChange={(open) => {
+        if (!open) props.onClose();
+      }}
+    >
+      {props.open ? <ShareOnXDialogContent {...props} /> : null}
+    </Dialog>
+  );
+}
+
+function shuffled<T>(items: ReadonlyArray<T>): ReadonlyArray<T> {
+  const copy = [...items];
+  for (let index = copy.length - 1; index > 0; index -= 1) {
+    const swap = Math.floor(Math.random() * (index + 1));
+    [copy[index], copy[swap]] = [copy[swap], copy[index]];
+  }
+  return copy;
+}
+
+function ShareOnXDialogContent(props: ShareOnXDialogProps): ReactNode {
+  const { epicId, hostId, screenCapture, onClose } = props;
+  const [lines] = useState(() => shuffled(SHARE_ON_X_LINES));
+  const [pageStart, setPageStart] = useState(0);
+  const [selectedId, setSelectedId] = useState(lines[0].id);
+  const [edits, setEdits] = useState<Readonly<Record<string, string>>>({});
+  const [dontAskAgain, setDontAskAgain] = useState(false);
+  const [selectedImage, setSelectedImage] =
+    useState<AnalyticsShareImage | null>("setup");
+  const [images, setImages] = useState<
+    Readonly<Partial<Record<AnalyticsShareImage, ShareImage>>>
+  >(() => (screenCapture === null ? {} : { screen: screenCapture }));
+  const [failed, setFailed] = useState<ReadonlySet<AnalyticsShareImage>>(
+    () => new Set(),
+  );
+  const openLink = useOpenLink();
+  const recordPosted = useShareOnXNudgeStore((state) => state.recordPosted);
+  const recordOptOut = useShareOnXNudgeStore((state) => state.recordOptOut);
+  const recordDialogAbandoned = useShareOnXNudgeStore(
+    (state) => state.recordDialogAbandoned,
+  );
+  const checkboxId = useId();
+
+  const selectedLine: ShareOnXLine =
+    lines.find((line) => line.id === selectedId) ?? lines[0];
+  const text = edits[selectedLine.id] ?? selectedLine.text;
+  const edited = text !== selectedLine.text;
+  const length = xPostLength(text);
+
+  const textCopy = useClipboardCopy({
+    resetMs: 1_500,
+    onSuccess: () => {
+      Analytics.getInstance().track(AnalyticsEvent.ShareTextCopied, {
+        line_id: selectedLine.id,
+        edited,
+      });
+    },
+    onError: () => {
+      toast.error("Couldn't copy the post");
+    },
+  });
+
+  // Sources for the generated images.
+  const providers = useProvidersList({ enabled: true, subscribed: false });
+  const harnesses = useMemo(
+    () => setUpHarnesses(providers.data?.providers ?? []),
+    [providers.data],
+  );
+  const taskTitle = useRegisteredEpicTitle(epicId);
+  const usageClient = useHostClientForHostId(hostId);
+  const usageRequest = useMemo(
+    () => buildUsageSummaryRequest({ windowDays: 7, epicId, plane: null }),
+    [epicId],
+  );
+  const usageQuery = useUsageSummaryForClient(
+    usageClient,
+    usageRequest,
+    true,
+    false,
+  );
+  const usage =
+    usageQuery.data !== undefined &&
+    usageQuery.data.summary.totals.factCount > 0
+      ? usageQuery.data
+      : null;
+
+  const availableImages = IMAGE_ORDER.filter(
+    (image) => images[image] !== undefined && !failed.has(image),
+  );
+  const chosenImage =
+    selectedImage !== null && availableImages.includes(selectedImage)
+      ? selectedImage
+      : null;
+
+  useEffect(() => {
+    Analytics.getInstance().track(AnalyticsEvent.ShareDialogOpened, {
+      source: "toast",
+      screen_captured: screenCapture !== null,
+    });
+  }, [screenCapture]);
+
+  function close(posted: boolean): void {
+    const now = Date.now();
+    if (!posted) recordDialogAbandoned(now);
+    if (dontAskAgain) {
+      recordOptOut();
+      Analytics.getInstance().track(AnalyticsEvent.ShareOptedOut, {
+        from: "dialog",
+      });
+    }
+    onClose();
+  }
+
+  function selectLine(line: ShareOnXLine, position: number): void {
+    setSelectedId(line.id);
+    Analytics.getInstance().track(AnalyticsEvent.ShareLineSelected, {
+      line_id: line.id,
+      position,
+    });
+  }
+
+  function copyImage(image: AnalyticsShareImage): void {
+    const captured = images[image];
+    if (captured === undefined) return;
+    copyImageBlobPromiseToClipboard(Promise.resolve(captured.blob)).then(
+      () => {
+        toast.success("Image copied");
+        Analytics.getInstance().track(AnalyticsEvent.ShareImageCopied, {
+          image,
+        });
+      },
+      () => {
+        toast.error("Couldn't copy the image");
+      },
+    );
+  }
+
+  function postOnX(): void {
+    const blob = chosenImage === null ? undefined : images[chosenImage]?.blob;
+    // Started inside the click, while the page still holds the person's
+    // gesture: the clipboard refuses an image write after it lapses.
+    const imageCopy =
+      blob === undefined
+        ? null
+        : copyImageBlobPromiseToClipboard(Promise.resolve(blob));
+    void openLink(xPostIntentUrl(text), "app", null);
+    Analytics.getInstance().track(AnalyticsEvent.ShareXOpened, {
+      line_id: selectedLine.id,
+      edited,
+      image: chosenImage ?? "none",
+      char_count: length,
+    });
+    recordPosted(Date.now());
+    if (imageCopy === null) {
+      toast.success("Thanks for sharing Traycer");
+    } else {
+      imageCopy.then(
+        () => {
+          toast.success("Image copied", {
+            description: "Paste it into your post on X with ⌘V.",
+          });
+        },
+        () => {
+          toast.error("Couldn't copy the image", {
+            description: "Use Copy on the image in the share dialog instead.",
+          });
+        },
+      );
+    }
+    close(true);
+  }
+
+  const page = Array.from(
+    { length: Math.min(LINES_PER_PAGE, lines.length) },
+    (_, offset) => {
+      const position = (pageStart + offset) % lines.length;
+      return { line: lines[position], position: position + 1 };
+    },
+  );
+
+  return (
+    <DialogContent
+      layout="banded"
+      // Every way out goes through `close`, which records the outcome; the
+      // primitive's corner button would close without it.
+      showCloseButton={false}
+      className="w-[min(94vw,62rem)] sm:max-w-5xl"
+      onInteractOutside={(event) => event.preventDefault()}
+      onEscapeKeyDown={(event) => {
+        event.preventDefault();
+        close(false);
+      }}
+    >
+      <DialogHeader>
+        <DialogTitle className="flex items-center gap-2">
+          <XLogo className="size-4" />
+          Share Traycer on X
+        </DialogTitle>
+        <DialogDescription>
+          Pick a post and an image. Nothing is posted until you post it on X.
+        </DialogDescription>
+      </DialogHeader>
+
+      <div className="grid min-w-0 grid-cols-1 gap-5 px-5 py-4 md:grid-cols-[minmax(0,1.1fr)_minmax(0,1fr)]">
+        <section className="flex min-w-0 flex-col gap-2.5">
+          <div className="flex items-baseline gap-2 text-ui-xs font-medium text-muted-foreground">
+            <span>1 · Pick a post</span>
+            <span className="ml-auto font-normal">
+              {String(LINES_PER_PAGE)} of {String(lines.length)} · edit any of
+              them
+            </span>
+          </div>
+          <div
+            role="radiogroup"
+            aria-label="Post"
+            className="flex flex-col gap-2"
+          >
+            {page.map(({ line, position }) =>
+              line.id === selectedLine.id ? (
+                <div
+                  key={line.id}
+                  role="radio"
+                  aria-checked="true"
+                  aria-label={`Post ${String(position)}`}
+                  className="flex flex-col gap-2 rounded-lg border border-primary p-3 ring-1 ring-primary"
+                >
+                  <Textarea
+                    aria-label="Post text"
+                    value={text}
+                    rows={4}
+                    onChange={(event) => {
+                      const value = event.target.value;
+                      setEdits((current) => ({ ...current, [line.id]: value }));
+                    }}
+                  />
+                  <div className="flex items-center gap-2">
+                    <Button
+                      type="button"
+                      size="sm"
+                      variant="outline"
+                      onClick={() => textCopy.copy(text)}
+                    >
+                      {textCopy.copied ? "Copied" : "Copy text"}
+                    </Button>
+                    <span
+                      className={cn(
+                        "ml-auto text-ui-xs tabular-nums",
+                        length > X_POST_LIMIT
+                          ? "text-destructive"
+                          : "text-muted-foreground",
+                      )}
+                    >
+                      {String(length)} / {String(X_POST_LIMIT)}
+                    </span>
+                  </div>
+                </div>
+              ) : (
+                <button
+                  key={line.id}
+                  type="button"
+                  role="radio"
+                  aria-checked="false"
+                  aria-label={`Post ${String(position)}`}
+                  onClick={() => selectLine(line, position)}
+                  className="rounded-lg border border-border p-3 text-left text-ui-sm text-muted-foreground transition-colors hover:bg-foreground/5 hover:text-foreground focus-visible:ring-3 focus-visible:ring-ring/50 focus-visible:outline-none"
+                >
+                  <span className="line-clamp-2">
+                    {edits[line.id] ?? line.text}
+                  </span>
+                </button>
+              ),
+            )}
+          </div>
+          <Button
+            type="button"
+            size="sm"
+            variant="ghost"
+            className="self-start"
+            onClick={() =>
+              setPageStart(
+                (current) => (current + LINES_PER_PAGE) % lines.length,
+              )
+            }
+          >
+            Show {String(LINES_PER_PAGE)} others
+          </Button>
+        </section>
+
+        <section className="flex min-w-0 flex-col gap-2.5">
+          <div className="flex items-baseline gap-2 text-ui-xs font-medium text-muted-foreground">
+            <span>2 · Add an image</span>
+            <span className="ml-auto font-normal">optional</span>
+          </div>
+          {availableImages.length === 0 ? (
+            <p className="text-ui-sm text-muted-foreground">
+              Preparing images…
+            </p>
+          ) : (
+            <div
+              role="radiogroup"
+              aria-label="Image"
+              className="grid grid-cols-2 gap-2.5"
+            >
+              {availableImages.map((image) => (
+                <ShareImageTile
+                  key={image}
+                  image={image}
+                  src={images[image]?.src ?? null}
+                  selected={chosenImage === image}
+                  onSelect={() =>
+                    setSelectedImage((current) =>
+                      current === image ? null : image,
+                    )
+                  }
+                  onCopy={() => copyImage(image)}
+                />
+              ))}
+            </div>
+          )}
+        </section>
+      </div>
+
+      <DialogFooter className="flex-row items-center sm:justify-start">
+        <div className="flex items-center gap-2">
+          <Checkbox
+            id={checkboxId}
+            checked={dontAskAgain}
+            onCheckedChange={(checked) => setDontAskAgain(checked === true)}
+          />
+          <label
+            htmlFor={checkboxId}
+            className="text-ui-sm text-muted-foreground"
+          >
+            Don't ask me again
+          </label>
+        </div>
+        <span className="ml-auto hidden text-ui-xs text-muted-foreground md:inline">
+          {chosenImage === null
+            ? null
+            : "The image is copied when you post. Paste it into X with ⌘V."}
+        </span>
+        <Button type="button" variant="outline" onClick={() => close(false)}>
+          Not now
+        </Button>
+        <Button type="button" onClick={postOnX}>
+          <XLogo className="size-3.5" />
+          Post on X
+        </Button>
+      </DialogFooter>
+
+      <ShareImageSources
+        setUpHarnesses={harnesses}
+        taskTitle={
+          taskTitle === null || taskTitle.length === 0 ? null : taskTitle
+        }
+        usage={usage}
+        onCaptured={(image, captured) =>
+          setImages((current) => ({ ...current, [image]: captured }))
+        }
+        onFailed={(image) =>
+          setFailed((current) => new Set([...current, image]))
+        }
+      />
+    </DialogContent>
+  );
+}
+
+function ShareImageTile(props: {
+  readonly image: AnalyticsShareImage;
+  readonly src: string | null;
+  readonly selected: boolean;
+  readonly onSelect: () => void;
+  readonly onCopy: () => void;
+}): ReactNode {
+  const label = IMAGE_LABELS[props.image];
+  return (
+    <div
+      className={cn(
+        "flex min-w-0 flex-col gap-1.5 rounded-lg border p-1.5",
+        props.selected ? "border-primary ring-1 ring-primary" : "border-border",
+      )}
+    >
+      <button
+        type="button"
+        role="radio"
+        aria-checked={props.selected}
+        aria-label={label}
+        onClick={props.onSelect}
+        className="overflow-hidden rounded-md bg-foreground/5 focus-visible:ring-3 focus-visible:ring-ring/50 focus-visible:outline-none"
+      >
+        {props.src === null ? null : (
+          <img
+            src={props.src}
+            alt=""
+            className="aspect-video w-full object-cover object-top"
+          />
+        )}
+      </button>
+      <div className="flex items-center gap-1.5 px-0.5">
+        <span className="text-ui-xs font-medium">{label}</span>
+        <Button
+          type="button"
+          size="xs"
+          variant="ghost"
+          className="ml-auto"
+          aria-label={`Copy ${label}`}
+          onClick={props.onCopy}
+        >
+          Copy
+        </Button>
+      </div>
+    </div>
+  );
+}

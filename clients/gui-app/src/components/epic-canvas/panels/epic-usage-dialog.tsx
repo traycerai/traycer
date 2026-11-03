@@ -304,7 +304,7 @@ function EpicUsageEmptyState(props: {
   );
 }
 
-function EpicUsageLoadedBody(props: {
+export function EpicUsageLoadedBody(props: {
   readonly data: UsageSummaryResponse;
   readonly chartGroupBy: UsageChartGroupBy;
   readonly onChartGroupByChange: (groupBy: UsageChartGroupBy) => void;
