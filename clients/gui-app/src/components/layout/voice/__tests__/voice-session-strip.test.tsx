@@ -118,6 +118,7 @@ beforeEach(() => {
 
 afterEach(() => {
   cleanup();
+  vi.unstubAllGlobals();
   useBotOpenThreadStore.getState().setRail(BOT_ID, null);
 });
 
@@ -268,7 +269,6 @@ describe("VoiceSessionStrip", () => {
     setLineWidth(0);
     await screen.findByRole("tooltip");
     expect(screen.getByRole("status")).toBe(status);
-    vi.unstubAllGlobals();
   });
 
   it("does not carry a shown focus line over to the next session's, which lays out to nothing", async () => {
@@ -303,7 +303,6 @@ describe("VoiceSessionStrip", () => {
     await userEvent.hover(screen.getByRole("status"));
     const tooltip = await screen.findByRole("tooltip");
     expect(tooltip.textContent).toContain("Personal › Tracy");
-    vi.unstubAllGlobals();
   });
 
   it("mutes through the driver, then reads Muted and Unmute", async () => {

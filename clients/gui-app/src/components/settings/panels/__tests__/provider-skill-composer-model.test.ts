@@ -643,16 +643,9 @@ describe("composerErrorMessage", () => {
 });
 
 describe("skillAudiences", () => {
-  const offered = (args: {
-    readonly hostRunsEnvironments: boolean | null;
-    readonly environmentAvailable: boolean;
-    readonly canProviderScope: boolean;
-    readonly effectiveScope: ProviderNativeScope;
-  }) => skillAudiences(args);
-
   it("keeps a host without environments on the choice it always had", () => {
     expect(
-      offered({
+      skillAudiences({
         hostRunsEnvironments: false,
         environmentAvailable: false,
         canProviderScope: true,
@@ -663,7 +656,7 @@ describe("skillAudiences", () => {
 
   it("offers a host that runs environments the provider's folder first, then the environment, and never the shared folder", () => {
     expect(
-      offered({
+      skillAudiences({
         hostRunsEnvironments: true,
         environmentAvailable: true,
         canProviderScope: true,
@@ -679,7 +672,7 @@ describe("skillAudiences", () => {
     "offers a host not yet known only the provider's own folder, when it can scope: %s",
     (canProviderScope, audiences) => {
       expect(
-        offered({
+        skillAudiences({
           hostRunsEnvironments: null,
           environmentAvailable: false,
           canProviderScope,
@@ -691,7 +684,7 @@ describe("skillAudiences", () => {
 
   it("offers no environment to a host not yet known, even with one cached", () => {
     expect(
-      offered({
+      skillAudiences({
         hostRunsEnvironments: null,
         environmentAvailable: true,
         canProviderScope: true,
@@ -702,7 +695,7 @@ describe("skillAudiences", () => {
 
   it("offers no environment at project scope or before it is known", () => {
     expect(
-      offered({
+      skillAudiences({
         hostRunsEnvironments: true,
         environmentAvailable: true,
         canProviderScope: true,
@@ -710,7 +703,7 @@ describe("skillAudiences", () => {
       }),
     ).toEqual(["provider"]);
     expect(
-      offered({
+      skillAudiences({
         hostRunsEnvironments: true,
         environmentAvailable: false,
         canProviderScope: true,

@@ -16,7 +16,6 @@ import { fileURLToPath } from "node:url";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { GIT_OUTPUT_MAX_BUFFER_BYTES } from "../git-output-limit.cjs";
 import {
-  ACCEPT_INCREASE_FLAG,
   nextBaseline,
   ratchetDiff,
   scanSource,
@@ -411,7 +410,7 @@ describe("CLI", () => {
     expect(refused.status).toBe(1);
     expect(readFileSync(configPath, "utf8")).toBe(before);
 
-    const accepted = run("--write", ACCEPT_INCREASE_FLAG);
+    const accepted = run("--write", "--accept-increase");
     expect(accepted.status).toBe(0);
     expect(JSON.parse(readFileSync(configPath, "utf8")).baseline.sleep).toEqual(
       {

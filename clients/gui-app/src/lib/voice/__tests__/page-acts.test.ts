@@ -120,7 +120,7 @@ const ACTIVE_TURN: ChatActiveTurn = {
   sameTurnSteeringSupported: true,
 };
 
-/** The turn that starts after {@link ACTIVE_TURN} ended. */
+/** {@link ACTIVE_TURN} under a different turn id; every other field is unchanged. */
 const TURN_B: ChatActiveTurn = { ...ACTIVE_TURN, turnId: "turn-2" };
 
 /** A chat bound to one folder, run in place. */

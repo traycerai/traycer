@@ -1138,13 +1138,6 @@ export function ChatTreePanelBody(props: ChatTreePanelBodyProps) {
     },
     [tabId, panelId, expandedIdsStore, expandAction, collapseAction],
   );
-  const ensureExpanded = useCallback(
-    (id: string) => {
-      expandAction(tabId, panelId, id);
-    },
-    [tabId, panelId, expandAction],
-  );
-
   useLayoutEffect(() => {
     if (revealRequest === null) return;
     const region = treeRegionRef.current;
@@ -1176,9 +1169,8 @@ export function ChatTreePanelBody(props: ChatTreePanelBodyProps) {
       subscribe: expandedIdsStore.subscribe,
       isExpanded,
       toggleExpanded,
-      ensureExpanded,
     }),
-    [expandedIdsStore, isExpanded, toggleExpanded, ensureExpanded],
+    [expandedIdsStore, isExpanded, toggleExpanded],
   );
   // The content clock each LOCAL chat sorts by - the same value its idle-time
   // chip renders, so the order and the chip cannot disagree (see

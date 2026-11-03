@@ -379,7 +379,6 @@ describe("reportVoiceMiss", () => {
           captureMessage.mock.calls,
         ).map(shippedTarget);
         expect(shippedListed[field]).toBe(Object.values(listed)[0]);
-        expect(shippedUnlisted[field]).toBe("unlisted");
         expect(shippedUnlisted).toEqual({
           environmentId: null,
           botId: null,

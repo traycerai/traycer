@@ -16,7 +16,7 @@ import type { ServedSkillEnvironment } from "./provider-skill-composer-model";
 
 const WRITE_FAILED = "Couldn't add this skill.";
 
-export interface SkillEnvironmentRoute {
+interface SkillEnvironmentRoute {
   /**
    * The host answers `environment.status`, which a build without environments
    * never does. Such a host only reads the shared folder; one without it still

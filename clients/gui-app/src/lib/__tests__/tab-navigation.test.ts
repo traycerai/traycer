@@ -359,9 +359,9 @@ describe("a landing draft minted by navigation on a pinned surface", () => {
   beforeEach(async () => {
     resetStores();
     __resetTabSyncCoordinatorForTesting();
-    installTabSyncCoordinator({ readyPromise: Promise.resolve() });
-    await Promise.resolve();
-    await Promise.resolve();
+    const readyPromise = Promise.resolve();
+    installTabSyncCoordinator({ readyPromise });
+    await readyPromise;
     useComposerRunSettingsStore.getState().resetForTests();
     useComposerRunSettingsStore
       .getState()

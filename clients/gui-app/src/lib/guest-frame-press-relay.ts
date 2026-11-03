@@ -17,12 +17,10 @@
  *   outright, and the element itself receives a `focus` event, which the
  *   document sees in its capture phase.
  *
- * On either signal this replays the press as a `pointerdown` followed by a
- * `click` on the frame element, the pair Radix's dismissable layer needs:
- * it defers its outside-pointerdown dismissal to the gesture's click, and a
- * pointerdown with no click would leave the dismissal armed until the next
- * click anywhere. Both events bubble like the real ones would, so document
- * listeners of every kind see one ordinary outside press.
+ * On either signal this replays `pointerdown`, `pointerup`, then `click` on
+ * the frame element. The pointerup settles the primary focus coordinator's
+ * interaction, and the click completes Radix's deferred outside dismissal.
+ * All three bubble so document listeners see one complete outside press.
  *
  * A blur while the document has no focus is the application losing focus
  * to another window, not a press, and relays nothing. (Chrome delivers that
