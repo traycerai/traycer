@@ -86,7 +86,8 @@
     ],
     "sharedGlobals": [
       "{workspaceRoot}/package.json",
-      "{workspaceRoot}/scripts/tsrs.mjs"
+      "{workspaceRoot}/scripts/tsrs.mjs",
+      "{workspaceRoot}/scripts/git-output-limit.cjs"
     ]
   },
   "analytics": false
