@@ -10,6 +10,7 @@ import {
   writeFileSync,
 } from "node:fs";
 import { join } from "node:path";
+import { fileURLToPath } from "node:url";
 import type { Plugin } from "vite";
 
 interface ReactCompilerPluginInput {
@@ -33,7 +34,8 @@ interface ReactCompilerPluginInput {
  * compiled output so a build compiles only the modules that changed.
  *
  * An entry is keyed on the module's code and path, the environment and module
- * type the hook is given, the compiler options and the content of `keyFiles`.
+ * type the hook is given, the compiler options, this file's own source and the
+ * content of `keyFiles`.
  * Babel reads no configuration file here (`@rolldown/plugin-babel` passes
  * `babelrc: false` and `configFile: false`), and the compiler reads one module
  * at a time, so nothing else reaches the output. Only a compile that returns
@@ -57,7 +59,9 @@ export async function reactCompilerPlugin(
   const salt = createHash("sha256").update(
     JSON.stringify(input.compilerOptions),
   );
-  for (const file of input.keyFiles) {
+  // This module decides how the compiler is configured, so its own source is
+  // part of every key.
+  for (const file of [fileURLToPath(import.meta.url), ...input.keyFiles]) {
     salt.update("\0").update(readFileSync(file));
   }
   const saltHex = salt.digest("hex");
