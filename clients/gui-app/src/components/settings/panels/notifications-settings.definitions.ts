@@ -73,6 +73,16 @@ export const HOST_NOTIFICATIONS = defineSettingsSection("notifications", {
     availableWhen: alwaysAvailable,
     keywords: [],
   },
+  longTurnAlert: {
+    kind: "row",
+    group: "inAppNotifications",
+    search: { contributesTo: "page" },
+    label: "Alert when a turn runs longer than",
+    description:
+      "Notifies you once per turn. Time waiting on your approval or answer doesn't count.",
+    availableWhen: alwaysAvailable,
+    keywords: ["long", "running", "stuck", "duration", "turn"],
+  },
   notificationHooks: {
     kind: "group",
     search: { contributesTo: "page" },
