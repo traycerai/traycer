@@ -121,6 +121,10 @@ import {
   type MockInstance,
 } from "vitest";
 import * as Y from "yjs";
+import {
+  advanceLegendListTime,
+  installLegendListTestClock,
+} from "@/components/chat/__tests__/legend-list-test-environment";
 import { CommGraphTile } from "@/components/epic-canvas/renderers/comm-graph-tile";
 import * as commGraphCanvasModule from "@/components/epic-canvas/comm-graph/comm-graph-canvas";
 import * as officeCanvasModule from "@/components/epic-canvas/comm-graph/office/comm-graph-office-canvas";
@@ -1313,6 +1317,7 @@ describe("CommGraphTile", () => {
     });
 
     it("writes the resolved view into the record when the office camera actually pans", async () => {
+      installLegendListTestClock();
       // The read-side cases above all pass even if the write side never
       // fires a non-null value - this is the one that makes the field real:
       // a pan through the office's OWN camera path must land the view it
@@ -1323,11 +1328,8 @@ describe("CommGraphTile", () => {
         deltaX: 80,
         deltaY: 90,
       });
-      // The write is debounced (150ms); real time, since this suite runs no
-      // fake timers.
-      await act(async () => {
-        await new Promise((resolve) => window.setTimeout(resolve, 180));
-      });
+      // The write is debounced (150ms).
+      await advanceLegendListTime(180);
 
       expect(storedView()?.officeCameraView).toBe("floor");
       expect(storedView()?.officeCamera).not.toBeNull();
@@ -1345,6 +1347,7 @@ describe("CommGraphTile", () => {
     it.each(["mounted", "unmounted"] as const)(
       "resets the actual runtime camera for a %s default change",
       async (kind) => {
+        installLegendListTestClock();
         const { step } = installCanvas();
         const frames = vi.spyOn(OfficeScene.prototype, "frame");
         const sync = vi.spyOn(OfficeScene.prototype, "sync");
@@ -1407,9 +1410,7 @@ describe("CommGraphTile", () => {
           deltaY: 30,
         });
         step();
-        await act(async () => {
-          await new Promise((resolve) => window.setTimeout(resolve, 180));
-        });
+        await advanceLegendListTime(180);
         expect(storedView()?.officeCameraView).toBe("building");
       },
     );
@@ -1455,6 +1456,7 @@ describe("CommGraphTile", () => {
     // reads x/y/zoom exactly once at construction and an effect's write
     // always lands one commit after the canvas that needed it.
     it("resets the actual runtime camera for a live default change with no framing record at all", async () => {
+      installLegendListTestClock();
       // Seeded through `officeCamera` - the camera under test is the
       // office's, and the top-level fields are the graph's now.
       const { step } = installCanvas();
@@ -1520,9 +1522,7 @@ describe("CommGraphTile", () => {
         deltaY: 30,
       });
       step();
-      await act(async () => {
-        await new Promise((resolve) => window.setTimeout(resolve, 180));
-      });
+      await advanceLegendListTime(180);
       expect(storedView()).toMatchObject({ officeCameraView: "building" });
       // The persisted-relative-to-neutral claim reads `officeCamera`
       // now, not the top-level fields.
@@ -1593,6 +1593,7 @@ describe("CommGraphTile", () => {
     });
 
     it("stops overriding the camera it hands the canvas once the reset has landed", async () => {
+      installLegendListTestClock();
       // `useWitnessedOfficeViewMove` clears `owed` at render, once the
       // store's record catches up with the resolved view. Without that
       // clear the latch never lets go: the tile keeps handing the canvas a
@@ -1640,9 +1641,7 @@ describe("CommGraphTile", () => {
         deltaY: 30,
       });
       step();
-      await act(async () => {
-        await new Promise((resolve) => window.setTimeout(resolve, 180));
-      });
+      await advanceLegendListTime(180);
 
       const handedCamera = lastCanvasCamera(office);
       if (handedCamera === null) {
@@ -2476,6 +2475,7 @@ describe("CommGraphTile", () => {
     });
 
     it("adopts every offered view with exactly one canvas, never a stale second one (F7)", async () => {
+      installLegendListTestClock();
       const sync = vi.spyOn(OfficeScene.prototype, "sync");
       await reachFloor();
       let beforeId: OfficeViewChoice = "floor";
@@ -2499,9 +2499,7 @@ describe("CommGraphTile", () => {
 
         // The old canvas's debounced wheel-pan, if it survived the remount,
         // would land here - the exact write this case exists to catch.
-        await act(async () => {
-          await new Promise((resolve) => window.setTimeout(resolve, 180));
-        });
+        await advanceLegendListTime(180);
         expect(storedView()?.officeView).toBe(id);
         if (id !== beforeId) {
           expect(storedView()).toMatchObject({ x: 0, y: 0, zoom: 1 });
@@ -2536,7 +2534,7 @@ describe("CommGraphTile", () => {
    * its cap" are not observable from a tile in this environment, and are
    * pinned where they are observable instead (`office-static-layer.test.ts`
    * for the layer's own budget and release, `views/__tests__/
-   * office-plan-perf.test.ts` for the sprite working set). What survives the
+   * office-plan-perf.measure.ts` for the sprite working set). What survives the
    * missing context is the scene: it is built and synced by an effect that
    * needs no context at all, so how many scenes a tile has, and which of them
    * are still live, is exactly answerable - and it is the half of the rule

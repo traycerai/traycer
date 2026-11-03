@@ -108,6 +108,7 @@ import {
   textDoc,
 } from "@/components/bots/__tests__/bot-turn-test-support";
 import {
+  installLegendListTestClock,
   installLegendListViewportMetrics,
   settleLegendList,
 } from "@/components/chat/__tests__/legend-list-test-environment";
@@ -188,6 +189,7 @@ function view(): HTMLElement {
 }
 
 beforeEach(() => {
+  installLegendListTestClock();
   vi.clearAllMocks();
   mocks.peerQueries = [];
   mocks.peer = null;
@@ -225,9 +227,9 @@ describe("a bot's session holding an inbound agent message (no task open)", () =
     mountTrunk();
     await settleLegendList();
 
-    await userEvent.click(
-      within(view()).getByRole("button", { name: "Pool Image Agent" }),
-    );
+    await userEvent
+      .setup({ advanceTimers: vi.advanceTimersByTime })
+      .click(within(view()).getByRole("button", { name: "Pool Image Agent" }));
 
     expect(mocks.activateTabIntent).toHaveBeenCalledTimes(1);
     const [navigate, intent] = mocks.activateTabIntent.mock.calls[0] ?? [];

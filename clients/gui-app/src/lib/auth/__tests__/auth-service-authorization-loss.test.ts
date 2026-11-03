@@ -412,6 +412,19 @@ class ScriptedStreamSocket implements StreamWebSocketLike {
 
 const trackedServices: AuthService[] = [];
 
+/**
+ * Starts the service and lets its startup validation's whole retry budget
+ * elapse on the fake clock, so an unreachable authn settles without real time.
+ * Needs `vi.useFakeTimers()` first.
+ */
+async function startWithRetriesElapsed(service: AuthService): Promise<void> {
+  const start = service.start();
+  for (let retry = 1; retry < AUTH_FETCH_MAX_ATTEMPTS; retry += 1) {
+    await vi.advanceTimersByTimeAsync(authRetryDelayMs(retry));
+  }
+  await start;
+}
+
 describe("AuthService authorization-loss remote-session sweep", () => {
   let restoreFetch: () => void = () => undefined;
 
@@ -514,6 +527,7 @@ describe("AuthService authorization-loss remote-session sweep", () => {
   });
 
   it("does NOT close a held remote session when a session that never held a verdict lands unverified (cold start, network error)", async () => {
+    vi.useFakeTimers();
     // Same setup: a held remote session sitting in the cache before the auth
     // transition runs.
     const identity = freshIdentity();
@@ -544,7 +558,7 @@ describe("AuthService authorization-loss remote-session sweep", () => {
       Promise.reject(new Error("authn unreachable")),
     );
 
-    await service.start();
+    await startWithRetriesElapsed(service);
     expect(useAuthStore.getState().status).toBe("unverified");
     // Non-vacuity: the session really does hold a bearer read off disk, so
     // this is a genuine `applyUnverifiedSession` landing and not merely
@@ -1525,6 +1539,7 @@ describe("AuthService cloudAuthorized verdict propagation on in-place transition
    */
   describe("the unverified projection requires a local plane to serve", () => {
     it("declines the startup projection on a shell with no local host", async () => {
+      vi.useFakeTimers();
       // The exact path Codex named (`auth-service.ts`, the startup
       // `network-error` arm): stored credentials on disk, authn unreachable.
       // On desktop this is the whole point of `unverified` - hold the app open
@@ -1540,7 +1555,7 @@ describe("AuthService cloudAuthorized verdict propagation on in-place transition
         Promise.reject(new TypeError("fetch failed")),
       );
 
-      await service.start();
+      await startWithRetriesElapsed(service);
 
       // Not admitted: `admitsLocalPlane` would have said yes on status alone,
       // and every consumer of it would have mounted around a plane that does
@@ -1551,6 +1566,7 @@ describe("AuthService cloudAuthorized verdict propagation on in-place transition
     });
 
     it("still projects unverified on a shell that HAS a local host (non-vacuity)", async () => {
+      vi.useFakeTimers();
       // The control, and it is what makes the assertion above mean anything:
       // same stored credentials, same unreachable authn, same code path - one
       // property different. Without it, a service that simply never reached
@@ -1566,7 +1582,7 @@ describe("AuthService cloudAuthorized verdict propagation on in-place transition
         Promise.reject(new TypeError("fetch failed")),
       );
 
-      await service.start();
+      await startWithRetriesElapsed(service);
 
       expect(useAuthStore.getState().status).toBe("unverified");
       expect(service.getCurrentSessionSnapshot().token).toBe("desktop-stored");
