@@ -78,7 +78,7 @@ export const botConversationSendRequestSchema = lazySchema(() =>
     threadId: z.string().min(1).max(36).nullable().default(null),
     /**
      * A reply under a row of `conversationId` that roots a thread: a
-     * `question` or `proposal` announcement (decision 55), a member's post
+     * bot's question card or `proposal` announcement (decision 55), a member's post
      * its bot answered at the top level (a `direct` post), the bot's
      * direct answer to such a post (decision 114), whose thread is its own
      * and not the post's, or any other row of the bot. The message opens, or joins, the thread hung off
