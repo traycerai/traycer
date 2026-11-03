@@ -1604,11 +1604,12 @@ function findingsIn(source) {
 }
 
 /**
- * Whether a job may run on a Windows runner: a `runs-on` label naming one,
- * directly or through a `matrix` value (its own or an `include` entry's), or
- * an expression the workflow alone cannot resolve.
+ * The kinds of runner a job may run on, `posix` and `windows`: each `runs-on`
+ * label, with a `matrix` value resolved from the job's matrix (its own values
+ * and its `include` entries'). An expression the workflow alone cannot
+ * resolve may be either.
  */
-function mayRunOnWindows(job) {
+function runnerKinds(job) {
   const runsOn = JSON.stringify(job?.["runs-on"] ?? "");
   const matrix = job?.strategy?.matrix;
   const valuesAt = (value, keys) =>
@@ -1619,28 +1620,53 @@ function mayRunOnWindows(job) {
         ),
       [value],
     );
+  const kinds = { posix: false, windows: false };
+  const add = (label) => {
+    if (/\$\{\{/.test(label)) {
+      kinds.posix = true;
+      kinds.windows = true;
+    } else if (/windows/i.test(label)) kinds.windows = true;
+    else kinds.posix = true;
+  };
+  const literal = runsOn.replace(/\$\{\{.*?\}\}/g, "");
+  if (/windows/i.test(literal)) kinds.windows = true;
   const expressions = [...runsOn.matchAll(/\$\{\{(.*?)\}\}/g)].map((match) =>
     match[1].trim(),
   );
+  if (expressions.length === 0 && !kinds.windows) kinds.posix = true;
+  for (const expression of expressions) {
+    const path = /^matrix\.([\w-]+(?:\.[\w-]+)*)$/.exec(expression);
+    const keys = path === null ? [] : path[1].split(".");
+    const values =
+      path === null || typeof matrix !== "object" || matrix === null
+        ? []
+        : [
+            ...valuesAt(matrix[keys[0]], keys.slice(1)),
+            ...valuesAt(matrix.include ?? [], keys),
+          ]
+            .flat()
+            .filter((value) => value !== undefined);
+    if (values.length === 0) add("${{ }}");
+    for (const value of values) add(JSON.stringify(value));
+  }
+  return kinds;
+}
+
+/**
+ * Whether a step's `if:` runs it only on Windows: an and-list (no `||`) with
+ * `runner.os == 'Windows'`, or a matrix value equal to, starting with or
+ * containing a Windows runner's name.
+ */
+function windowsOnly(condition) {
+  if (typeof condition !== "string" || condition.includes("||")) return false;
   return (
-    /windows/i.test(runsOn.replace(/\$\{\{.*?\}\}/g, "")) ||
-    expressions.some((expression) => {
-      const path = /^matrix\.([\w-]+(?:\.[\w-]+)*)$/.exec(expression);
-      if (path === null || typeof matrix !== "object" || matrix === null) {
-        return true;
-      }
-      const [first, ...rest] = path[1].split(".");
-      const values = [
-        ...valuesAt(matrix[first], rest),
-        ...valuesAt(matrix.include ?? [], path[1].split(".")),
-      ]
-        .flat()
-        .filter((value) => value !== undefined);
-      return (
-        values.length === 0 ||
-        values.some((value) => /windows|\$\{\{/i.test(JSON.stringify(value)))
-      );
-    })
+    /runner\.os\s*==\s*'windows'|'windows'\s*==\s*runner\.os/i.test(
+      condition,
+    ) ||
+    /matrix\.[\w.-]+\s*==\s*'[^']*windows[^']*'/i.test(condition) ||
+    /(?<!!)\b(?:startsWith|contains)\(\s*matrix\.[\w.-]+\s*,\s*'[^']*windows[^']*'\s*\)/i.test(
+      condition,
+    )
   );
 }
 
@@ -1655,23 +1681,30 @@ function pipefailStepsOf(text) {
       path: ["jobs", jobName, "steps"],
       shell: job?.defaults?.run?.shell ?? workflow.defaults?.run?.shell,
       // GitHub's default shell is bash, and pwsh on a Windows runner.
-      windows: mayRunOnWindows(job),
+      kinds: runnerKinds(job),
     });
   }
   if (Array.isArray(workflow.runs?.steps))
-    lists.push({ path: ["runs", "steps"], shell: undefined, windows: false });
+    lists.push({
+      path: ["runs", "steps"],
+      shell: undefined,
+      kinds: { posix: true, windows: false },
+    });
   const steps = [];
-  for (const { path, shell, windows } of lists) {
+  for (const { path, shell, kinds } of lists) {
     const items = document.getIn(path, true)?.items ?? [];
     items.forEach((_, position) => {
       const node = document.getIn([...path, position, "run"], true);
       if (typeof node?.value !== "string") return;
       const effective = document.getIn([...path, position, "shell"]) ?? shell;
       // Only a POSIX shell's script is read as shell: a Python, PowerShell,
-      // Node or cmd step holds none.
+      // Node or cmd step holds none. A default-shell step runs under bash on
+      // any POSIX runner the job may take, unless its `if:` keeps it to
+      // Windows.
       const posixShell =
         effective === undefined
-          ? !windows
+          ? kinds.posix &&
+            !windowsOnly(document.getIn([...path, position, "if"]))
           : /^(?:\S*\/)?(?:ba|da|k|z)?sh\b/.test(effective);
       const pipefail =
         effective === "bash" ||
@@ -2352,55 +2385,115 @@ describe("an early-exit reader never reads a streaming producer through a pipe u
     expect(findingsInWorkflow(workflow)).toEqual([]);
   });
 
-  it.each([
+  // A job with a default-shell step: `strategy` lines, its `runs-on`, the
+  // step's `if:` (or none) and its script.
+  const defaultShellJob = (strategy, runsOn, condition, script) =>
     [
-      "a matrix list",
-      ["      matrix:", "        os: [windows-latest]"],
-      "${{ matrix.os }}",
-    ],
-    [
-      "a matrix include entry",
-      ["      matrix:", "        include:", "          - runner: windows-2022"],
-      "${{ matrix.runner }}",
-    ],
-    ["an expression the workflow cannot resolve", [], "${{ inputs.runner }}"],
-  ])(
-    "reads no default-shell step whose runner may be Windows through %s",
-    (_, matrix, runsOn) => {
-      const workflow = [
-        "on: push",
-        "jobs:",
-        "  test:",
-        "    strategy:",
-        ...(matrix.length > 0 ? matrix : ["      fail-fast: false"]),
-        `    runs-on: ${runsOn}`,
-        "    steps:",
-        "      - run: |",
-        "          Get-ChildItem -Path . `",
-        "            -Recurse",
-      ].join("\n");
-      expect(findingsInWorkflow(workflow)).toEqual([]);
-    },
-  );
-
-  it("reads a default-shell step whose matrix runners are all POSIX", () => {
-    const workflow = [
       "on: push",
       "jobs:",
       "  test:",
       "    strategy:",
-      "      matrix:",
-      "        include:",
-      "          - runner: ubuntu-24.04",
-      "          - runner: macos-15",
-      "    runs-on: ${{ matrix.runner }}",
+      ...strategy,
+      `    runs-on: ${runsOn}`,
       "    steps:",
-      "      - run: |",
-      "          set -o pipefail",
-      "          seq 10 | head -n 1",
+      ...(condition === null
+        ? ["      - run: |"]
+        : [`      - if: ${condition}`, "        run: |"]),
+      ...script.map((line) => `          ${line}`),
     ].join("\n");
-    expect(findingsInWorkflow(workflow)).toEqual(["13: head after `seq 10`"]);
-  });
+  const MIXED = [
+    "      matrix:",
+    "        os: [ubuntu-latest, windows-latest]",
+  ];
+  const POWERSHELL = ["Get-ChildItem -Path . `", "  -Recurse"];
+  const BASH = ["set -o pipefail", "seq 10 | head -n 1"];
+
+  it.each([
+    [
+      "a matrix list of Windows runners",
+      ["      matrix:", "        os: [windows-latest]"],
+      "${{ matrix.os }}",
+      null,
+    ],
+    [
+      "a matrix include entry naming a Windows runner",
+      ["      matrix:", "        include:", "          - runner: windows-2022"],
+      "${{ matrix.runner }}",
+      null,
+    ],
+    [
+      "a runner.os condition on a mixed matrix",
+      MIXED,
+      "${{ matrix.os }}",
+      "runner.os == 'Windows'",
+    ],
+    [
+      "a matrix condition on a mixed matrix",
+      MIXED,
+      "${{ matrix.os }}",
+      "matrix.os == 'windows-latest'",
+    ],
+    [
+      "a runner.os condition under a runner the workflow cannot resolve",
+      ["      fail-fast: false"],
+      "${{ inputs.runner }}",
+      "runner.os == 'Windows'",
+    ],
+  ])(
+    "reads no default-shell step that only Windows runs: %s",
+    (_, strategy, runsOn, condition) => {
+      expect(
+        findingsInWorkflow(
+          defaultShellJob(strategy, runsOn, condition, POWERSHELL),
+        ),
+      ).toEqual([]);
+    },
+  );
+
+  it.each([
+    [
+      "an include matrix of POSIX runners",
+      [
+        "      matrix:",
+        "        include:",
+        "          - runner: ubuntu-24.04",
+        "          - runner: macos-15",
+      ],
+      "${{ matrix.runner }}",
+      null,
+    ],
+    [
+      "a Linux-only step on a mixed matrix",
+      MIXED,
+      "${{ matrix.os }}",
+      "runner.os == 'Linux'",
+    ],
+    [
+      "an unconditioned step on a mixed matrix",
+      MIXED,
+      "${{ matrix.os }}",
+      null,
+    ],
+    [
+      "a runner the workflow cannot resolve",
+      ["      fail-fast: false"],
+      "${{ inputs.runner }}",
+      null,
+    ],
+    [
+      "an or-condition that names Windows",
+      MIXED,
+      "${{ matrix.os }}",
+      "runner.os == 'Windows' || runner.os == 'Linux'",
+    ],
+  ])(
+    "reads a default-shell step a POSIX runner may run: %s",
+    (_, strategy, runsOn, condition) => {
+      expect(
+        findingsInWorkflow(defaultShellJob(strategy, runsOn, condition, BASH)),
+      ).toEqual([expect.stringMatching(/^\d+: head after `seq 10`$/)]);
+    },
+  );
 
   it("applies a workflow's default bash shell to every step, composite actions included", () => {
     const workflow = [
