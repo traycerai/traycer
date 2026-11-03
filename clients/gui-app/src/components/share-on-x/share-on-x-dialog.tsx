@@ -329,6 +329,7 @@ function ShareOnXDialogContent(props: ShareOnXDialogProps): ReactNode {
                       type="button"
                       size="sm"
                       variant="outline"
+                      disabled={opening}
                       onClick={() => textCopy.copy(text)}
                     >
                       {textCopy.copied ? "Copied" : "Copy text"}
@@ -480,7 +481,10 @@ function ShareImageTile(props: {
   readonly image: AnalyticsShareImage;
   readonly src: string | null;
   readonly selected: boolean;
-  /** Choosing is held while X opens: the post is already decided. */
+  /**
+   * Choosing and copying are held while X opens: the post is decided, and
+   * its image may be on its way to the clipboard.
+   */
   readonly disabled: boolean;
   readonly onSelect: () => void;
   readonly onCopy: () => void;
@@ -518,6 +522,7 @@ function ShareImageTile(props: {
           variant="ghost"
           className="ml-auto"
           aria-label={`Copy ${label}`}
+          disabled={props.disabled}
           onClick={props.onCopy}
         >
           Copy
