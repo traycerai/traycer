@@ -374,13 +374,15 @@ it("decides every path by pattern alone, with nothing in it that can fail", () =
     /^esac$/,
     /^return [01]$/,
     /^;;$/,
-    // A `[[ ]]` test, which cannot hold a pipe at all, as long as it runs
-    // nothing: a command substitution is how a failed command's output would
-    // reach the match.
-    (line) =>
-      /^\[\[ .* \]\]$/.test(line) &&
-      !line.includes("$(") &&
-      !line.includes("`"),
+    // ONE `[[ ]]` test and nothing else on the line. Anchoring on the first
+    // `[[` and the last `]]` is not enough: `[[ a ]] || cmd || [[ b ]]` ends in
+    // `]]` and would run `cmd` between the two tests. So the inside must hold
+    // no further `[[` or `]]`, and no command substitution either.
+    (line) => {
+      if (!/^\[\[ .* \]\]$/.test(line)) return false;
+      const inside = line.slice("[[ ".length, -" ]]".length);
+      return !/\[\[|\]\]|\$\(|`/.test(inside);
+    },
     // A `case` pattern - globs, bracket expressions and alternation only -
     // alone, or with its whole body on the same line.
     /^[A-Za-z0-9*.[\]/| -]+\)$/,
