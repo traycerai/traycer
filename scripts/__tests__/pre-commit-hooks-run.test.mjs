@@ -1,12 +1,15 @@
-// Every hook .pre-commit-config.yaml declares runs on every push to `main`,
-// through pre-commit.yml, and every job that runs one can execute it.
+// Every pre-commit-stage hook .pre-commit-config.yaml declares runs in
+// pre-commit.yml, in a job that can execute it, on every run that runs the
+// hooks.
 //
-// The `static` job runs the hooks through `pre-commit/action` and skips the
-// ones named in its `SKIP`; a skipped hook must then run in another job of the
-// same workflow, as its own `entry` in a step's `run`. A `language: system`
-// hook calls an executable on the runner's PATH, so the job that runs it must
-// set that executable up. Hooks that run at another stage (the DCO sign-off at
-// `commit-msg`) are not run by `pre-commit/action`; dco.yml checks those.
+// The `static` job runs the hooks through `pre-commit/action`. It provisions
+// only Python, from which pre-commit builds the remote hooks' environments
+// itself; it has no bun and no node_modules. So a local hook that runs a
+// program from the runner (`language: system` or `script`) is skipped there and
+// runs as its own `entry` in a step of another job, one that runs whenever
+// `static` does and sets up the executable a `system` hook calls. Hooks at
+// other stages (`dco-signoff`, at `commit-msg`) are outside `pre-commit/action`
+// and this test.
 
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
@@ -42,40 +45,46 @@ const hooks = config.repos.flatMap((repo) =>
 const preCommitHooks = hooks.filter((hook) =>
   (hook.stages ?? defaultStages).includes("pre-commit"),
 );
+const runsRunnerProgram = (hook) =>
+  hook.local && (hook.language === "system" || hook.language === "script");
 
 const jobs = Object.entries(workflow.jobs).map(([id, job]) => ({
   id,
+  if: normalize(job.if ?? ""),
   steps: job.steps ?? [],
 }));
-const hookJob = jobs.find((job) =>
-  job.steps.some((step) =>
-    String(step.uses ?? "").startsWith("pre-commit/action@"),
-  ),
-);
-const hookStep = hookJob.steps.find((step) =>
-  String(step.uses ?? "").startsWith("pre-commit/action@"),
-);
+const isHookStep = (step) =>
+  String(step.uses ?? "").startsWith("pre-commit/action@");
+const hookJob = jobs.find((job) => job.steps.some(isHookStep));
 const skipped = new Set(
-  String(hookStep.env?.SKIP ?? "")
+  String(hookJob.steps.find(isHookStep).env?.SKIP ?? "")
     .split(",")
     .map((id) => id.trim())
     .filter((id) => id !== ""),
 );
 
+// A step with its own `if` may not run when the job does: `static` sets node up
+// only for pull requests.
 const setsUp = (job, action) =>
-  job.steps.some((step) => String(step.uses ?? "").startsWith(action));
-
-// The job that runs `hook`: the hook job unless it is skipped there, else the
-// job with a step whose `run` holds the hook's own entry.
-function jobRunning(hook) {
-  if (!skipped.has(hook.id)) return hookJob;
-  const entry = normalize(hook.entry);
-  return jobs.find((job) =>
-    job.steps.some((step) => normalize(step.run ?? "").includes(entry)),
+  job.steps.some(
+    (step) =>
+      step.if === undefined && String(step.uses ?? "").startsWith(action),
   );
+
+// The job and step that run a skipped hook: the step whose `run` holds the
+// hook's own entry.
+function runnerOf(hook) {
+  const entry = normalize(hook.entry);
+  for (const job of jobs) {
+    const step = job.steps.find((candidate) =>
+      normalize(candidate.run ?? "").includes(entry),
+    );
+    if (step !== undefined) return { job, step };
+  }
+  return undefined;
 }
 
-describe("every hook .pre-commit-config.yaml declares runs in pre-commit.yml", () => {
+describe("every pre-commit hook runs in a pre-commit.yml job that can execute it", () => {
   it("finds the hook job and the hooks", () => {
     expect(hookJob.id).toBe("static");
     expect(preCommitHooks.map((hook) => hook.id)).toContain("workspace-checks");
@@ -86,10 +95,21 @@ describe("every hook .pre-commit-config.yaml declares runs in pre-commit.yml", (
     expect([...skipped].filter((id) => !declared.has(id))).toEqual([]);
   });
 
-  for (const hook of preCommitHooks) {
+  it("skips every local hook that runs a program from the runner", () => {
+    const run = preCommitHooks.filter(
+      (hook) => runsRunnerProgram(hook) && !skipped.has(hook.id),
+    );
+    expect(run.map((hook) => hook.id)).toEqual([]);
+  });
+
+  for (const hook of preCommitHooks.filter((hook) => skipped.has(hook.id))) {
     describe(hook.id, () => {
-      it("runs in some job", () => {
-        expect(jobRunning(hook)?.id).toBeDefined();
+      it("runs as its own entry in a step of a job that runs whenever static does", () => {
+        const runner = runnerOf(hook);
+        expect(runner, `no step runs: ${normalize(hook.entry)}`).toBeDefined();
+        expect(runner.job.id).not.toBe(hookJob.id);
+        expect(runner.job.if).toBe(hookJob.if);
+        expect(runner.step.if).toBeUndefined();
       });
 
       if (hook.local && hook.language === "system") {
@@ -100,10 +120,10 @@ describe("every hook .pre-commit-config.yaml declares runs in pre-commit.yml", (
             action,
             `no setup action known for ${executable}`,
           ).toBeDefined();
-          const job = jobRunning(hook);
+          const runner = runnerOf(hook);
           expect(
-            job && setsUp(job, action),
-            `${job?.id} sets up ${executable}`,
+            runner !== undefined && setsUp(runner.job, action),
+            `${runner?.job.id} sets up ${executable}`,
           ).toBe(true);
         });
       }
