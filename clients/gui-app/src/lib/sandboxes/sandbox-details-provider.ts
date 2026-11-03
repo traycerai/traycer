@@ -26,6 +26,7 @@ import {
   sandboxPublicState,
   sandboxRegionLabel,
   sandboxReportedAt,
+  sandboxRetentionIsWithdrawn,
   sandboxShapeLine,
   sandboxSupportReferenceLine,
 } from "@/lib/sandboxes/sandbox-row-lines";
@@ -125,6 +126,10 @@ function starter(input: SandboxDetailsInput): string | null {
 /**
  * Idle, then Resting; an agent's sandbox never rests, it destroys itself,
  * and Automations never rests either: it is released, its files kept.
+ *
+ * A withdrawn row gets no Resting row: its announced date decides how long it
+ * is kept, so a resting promise here would contradict it, and this surface
+ * carries no withdrawal notice of its own to read it against.
  */
 function idleRows(summary: SandboxSummary): SandboxDetailsRow[] {
   const idle = summary.idleMinutes ?? SANDBOX_DEFAULT_IDLE_MINUTES;
@@ -136,8 +141,10 @@ function idleRows(summary: SandboxSummary): SandboxDetailsRow[] {
   if (summary.burst) {
     return [{ label: "Idle", value: `destroys itself after ${idle} idle min` }];
   }
+  const idleRow = { label: "Idle", value: `suspends after ${idle} idle min` };
+  if (sandboxRetentionIsWithdrawn(summary)) return [idleRow];
   return [
-    { label: "Idle", value: `suspends after ${idle} idle min` },
+    idleRow,
     {
       label: "Resting",
       value:

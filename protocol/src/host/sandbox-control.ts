@@ -264,12 +264,19 @@ export interface SandboxSummary {
    */
   readonly regionLabel: string | null;
   /**
-   * When this sandbox stops running (epoch milliseconds), because the
-   * control plane no longer runs sandboxes of its kind after that date;
-   * `null` on every ordinary row and from a server before the field. While
-   * it is set the row has no resting deadline (`destroyAt` is `null`),
-   * because the control plane does not end a withdrawn row for resting
-   * while this date stands. This date is what the row is ended by.
+   * When this sandbox stops running, because the control plane no longer
+   * runs sandboxes of its kind after that date; `null` on every ordinary row
+   * and from a server before the field. While it is set the row has no
+   * resting deadline (`destroyAt` is `null`), because the control plane does
+   * not end a withdrawn row for resting while this date stands. This date is
+   * what the row is ended by.
+   *
+   * It is an **announced calendar day in UTC**, carried as epoch
+   * milliseconds at that day's UTC start, not an instant anything acts on:
+   * nothing compares it to the clock, and the drain it announces is
+   * operational. So render the UTC day and no clock time — reading it in the
+   * reader's own zone names the day before for every reader west of UTC, and
+   * names two different days to two readers of one announcement.
    */
   readonly withdrawalEndsAt: number | null;
 }

@@ -6,7 +6,6 @@ import {
 import type { SandboxSummary } from "@traycer/protocol/host/sandbox-control";
 import { formatSandboxDate } from "@/lib/sandboxes/sandbox-row-lines";
 import {
-  formatSandboxDay,
   sandboxCardActions,
   sandboxFrozenLine,
   sandboxGuestConfigFailure,
@@ -324,11 +323,18 @@ describe("sandboxWithdrawalLine", () => {
     expect(sandboxWithdrawalLine(null)).toBeNull();
   });
 
-  it("names the day the sandbox stops running once a withdrawal is announced", () => {
-    const endsAt = new Date(2026, 11, 1, 0, 0, 0).getTime();
-
+  // `withdrawalEndsAt` is an announced UTC calendar day, not an instant: the
+  // server never sends a local midnight. Both ends of the UTC day are
+  // checked, each against the day a LOCAL read would get wrong in a
+  // different direction, so the case fails on any non-UTC runner if the UTC
+  // reading is ever lost, in either direction, and holds trivially on a UTC
+  // one.
+  it.each([
+    ["the day's first instant, which a western zone would read as the day before", Date.UTC(2026, 11, 1)],
+    ["the day's last instant, which an eastern zone would read as the day after", Date.UTC(2026, 11, 1, 23, 59)],
+  ])("names December 1 for %s, read in UTC rather than the runner's own zone", (_label, endsAt) => {
     expect(sandboxWithdrawalLine(endsAt)).toBe(
-      `This sandbox stops running on ${formatSandboxDay(endsAt)} and is rebuilt from your environment. Files outside the repository are lost.`,
+      "This sandbox stops running on Dec 1, 2026 and is rebuilt from your environment. Files outside the repository are lost.",
     );
   });
 });

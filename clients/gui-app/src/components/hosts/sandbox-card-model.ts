@@ -127,12 +127,29 @@ const STATE_LINE: Record<HostSandboxState, string> = {
   released: "Suspended, files kept. The next shell starts it.",
 };
 
-/** "Nov 7, 2026". */
+/** "Nov 7, 2026", in the reader's own zone: for an instant that happened. */
 export function formatSandboxDay(at: number): string {
   return new Date(at).toLocaleDateString(undefined, {
     month: "short",
     day: "numeric",
     year: "numeric",
+  });
+}
+
+/**
+ * "Nov 7, 2026" for a date announced as a UTC calendar day, read in UTC.
+ *
+ * An announced day is one day for everyone, so it cannot be read in the
+ * reader's zone: midnight UTC shown locally is the day before for every
+ * reader west of it, which would show a date the announcement never named
+ * and a different date to two readers of the same notice.
+ */
+function formatSandboxUtcDay(at: number): string {
+  return new Date(at).toLocaleDateString(undefined, {
+    month: "short",
+    day: "numeric",
+    year: "numeric",
+    timeZone: "UTC",
   });
 }
 
@@ -154,11 +171,13 @@ export function sandboxFrozenLine(frozenAt: number | null): string {
  * kind of sandbox, which is every row today.
  *
  * The date and what survives it are the two things the person can act on, so
- * the sentence carries both and nothing else.
+ * the sentence carries both and nothing else. The day is the announced one,
+ * read in UTC: no clock time, because nothing ends the row at an instant —
+ * the date is what was announced, and the drain is operational.
  */
 export function sandboxWithdrawalLine(endsAt: number | null): string | null {
   if (endsAt === null) return null;
-  return `This sandbox stops running on ${formatSandboxDay(endsAt)} and is rebuilt from your environment. Files outside the repository are lost.`;
+  return `This sandbox stops running on ${formatSandboxUtcDay(endsAt)} and is rebuilt from your environment. Files outside the repository are lost.`;
 }
 
 /**

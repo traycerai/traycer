@@ -304,11 +304,20 @@ export function idleAndRestingLine(
   idleMinutes: number,
   destroyAfterRestingMinutes: number | null,
 ): string {
-  const idle = `Suspends after ${idleMinutes} idle min`;
+  const idle = idleLine(idleMinutes);
   // `0` is never, as the server spells it.
   return destroyAfterRestingMinutes === null || destroyAfterRestingMinutes === 0
     ? `${idle} · ${KEPT_UNTIL_YOU_DESTROY_IT}`
     : `${idle} · destroyed after ${restingPeriodLabel(destroyAfterRestingMinutes)}`;
+}
+
+/**
+ * `Suspends after 30 idle min`: the idle half alone, for a row whose resting
+ * policy says nothing about how long it is kept, as a withdrawn row's does
+ * not. The two share this clause so they cannot drift apart.
+ */
+export function idleLine(idleMinutes: number): string {
+  return `Suspends after ${idleMinutes} idle min`;
 }
 
 /** `7 resting days`, `12 resting hours`, `45 resting minutes`. */

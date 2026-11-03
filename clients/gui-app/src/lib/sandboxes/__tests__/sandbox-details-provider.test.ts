@@ -209,6 +209,23 @@ describe("sandboxDetailsEntry", () => {
     expect(entry.export().status.Idle).toMatch(/destroys itself/);
     expect(entry.export().status.Resting).toBeUndefined();
   });
+
+  it("gives a withdrawn row no Resting row beside its own Idle row, even when it rests forever", () => {
+    const entry = sandboxDetailsEntry({
+      summary: sandboxSummaryFixture({
+        burst: false,
+        destroyAfterRestingMinutes: null,
+        withdrawalEndsAt: Date.UTC(2026, 11, 1),
+      }),
+      cost: null,
+      wakeString: null,
+      viewerUserId: null,
+      personal: false,
+      now: NOW,
+    });
+    expect(entry.export().status.Idle).toMatch(/suspends after/);
+    expect(entry.export().status.Resting).toBeUndefined();
+  });
 });
 
 /**
