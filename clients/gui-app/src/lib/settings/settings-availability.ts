@@ -57,6 +57,11 @@ export interface SettingsAvailabilityContext {
    * the surface it describes must agree), and search has to agree with both.
    */
   readonly phoneLayout: boolean;
+  /**
+   * `soundtrackOffered()`, read by the caller at call time: whether this build
+   * has anything to play, which is a fact of the build and not a preference.
+   */
+  readonly soundtrackOffered: boolean;
 }
 
 /** Rendered in every shell. */
@@ -96,6 +101,16 @@ export function isLinkOpenRowAvailable(
   context: SettingsAvailabilityContext,
 ): boolean {
   return !context.mobileApp;
+}
+
+/**
+ * Sounds › Soundtrack — a build with nothing to play has nothing to set, and on
+ * the phone its background audio and autoplay are still to be settled.
+ */
+export function isSoundtrackRowAvailable(
+  context: SettingsAvailabilityContext,
+): boolean {
+  return !context.mobileApp && context.soundtrackOffered;
 }
 
 /**

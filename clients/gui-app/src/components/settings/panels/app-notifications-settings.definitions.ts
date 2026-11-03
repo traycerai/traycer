@@ -1,4 +1,7 @@
-import { alwaysAvailable } from "@/lib/settings/settings-availability";
+import {
+  alwaysAvailable,
+  isSoundtrackRowAvailable,
+} from "@/lib/settings/settings-availability";
 import { defineSettingsSection } from "@/lib/settings-search/settings-definitions";
 
 // The Sounds page. Its id still says notifications because ids are a
@@ -57,5 +60,32 @@ export const APP_NOTIFICATIONS = defineSettingsSection("app-notifications", {
       "Sharing, comments, access changes, and other informational notifications.",
     availableWhen: alwaysAvailable,
     keywords: [],
+  },
+  soundtrack: {
+    kind: "group",
+    search: { anchor: "sounds-soundtrack" },
+    label: "Soundtrack",
+    description: null,
+    breadcrumb: null,
+    availableWhen: isSoundtrackRowAvailable,
+    keywords: ["music", "ambient"],
+  },
+  soundtrackVolume: {
+    kind: "row",
+    group: "soundtrack",
+    search: { anchor: "sounds-soundtrack-volume" },
+    label: "Volume",
+    description: "How loud the music plays.",
+    availableWhen: isSoundtrackRowAvailable,
+    keywords: ["music", "loudness"],
+  },
+  soundtrackDirector: {
+    kind: "row",
+    group: "soundtrack",
+    search: { anchor: "sounds-soundtrack-director" },
+    label: "Follows",
+    description: "What the music changes with.",
+    availableWhen: isSoundtrackRowAvailable,
+    keywords: ["music", "activity"],
   },
 });
