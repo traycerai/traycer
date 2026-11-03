@@ -214,6 +214,7 @@
       "clients/traycer-cli/src/host/lifecycle-probe.ts": 1,
       "clients/traycer-cli/src/runner/sentry-repeat-gate.ts": 1,
       "protocol/src/config/data-root-target.ts": 1,
+      "protocol/src/config/host-previous-exit.ts": 1,
       "protocol/src/framework/__tests__/lazy-schema-force-check.ts": 1,
       "protocol/src/framework/lazy-schema.ts": 1,
       "protocol/src/host-transport/chunking.ts": 1,
