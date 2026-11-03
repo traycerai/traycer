@@ -23,6 +23,7 @@
 // `lint` target inputs in nx.json.
 
 import { spawnSync } from "node:child_process";
+import { GIT_OUTPUT_MAX_BUFFER_BYTES } from "./git-output-limit.cjs";
 import { existsSync, readFileSync } from "node:fs";
 import { join, posix } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -104,7 +105,11 @@ export function planLint({ changedPaths, projectOf, lintsFiles, exists }) {
 }
 
 function git(root, args) {
-  const result = spawnSync("git", args, { cwd: root, encoding: "utf8" });
+  const result = spawnSync("git", args, {
+    maxBuffer: GIT_OUTPUT_MAX_BUFFER_BYTES,
+    cwd: root,
+    encoding: "utf8",
+  });
   if (result.status !== 0) {
     throw new Error(`git ${args.join(" ")} failed: ${result.stderr.trim()}`);
   }

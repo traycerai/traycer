@@ -1,5 +1,6 @@
 import { beforeAll, describe, expect, it } from "vitest";
 import { execFileSync } from "node:child_process";
+import { GIT_OUTPUT_MAX_BUFFER_BYTES } from "../../../../scripts/git-output-limit.cjs";
 import { existsSync, readFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -77,7 +78,11 @@ function collectProtocolSrcFiles(): string[] {
       "--",
       "*.ts",
     ],
-    { cwd: PROTOCOL_SRC, encoding: "utf8" },
+    {
+      maxBuffer: GIT_OUTPUT_MAX_BUFFER_BYTES,
+      cwd: PROTOCOL_SRC,
+      encoding: "utf8",
+    },
   );
   const files: string[] = [];
   for (const relative of listing.split("\0")) {

@@ -1,5 +1,6 @@
 import { beforeAll, describe, expect, it } from "vitest";
 import { execFileSync } from "node:child_process";
+import { GIT_OUTPUT_MAX_BUFFER_BYTES } from "../../../../scripts/git-output-limit.cjs";
 import { existsSync, readFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -131,7 +132,7 @@ function collectTypeScriptFiles(gitRoot: string): string[] {
       "--",
       ...LIST_GLOBS,
     ],
-    { cwd: gitRoot, encoding: "utf8" },
+    { maxBuffer: GIT_OUTPUT_MAX_BUFFER_BYTES, cwd: gitRoot, encoding: "utf8" },
   );
   const files: string[] = [];
   for (const relative of listing.split("\0")) {
@@ -703,7 +704,11 @@ describe("the one whole-registry validation", () => {
         "--",
         "*.test.ts",
       ],
-      { cwd: PROTOCOL_ROOT, encoding: "utf8" },
+      {
+        maxBuffer: GIT_OUTPUT_MAX_BUFFER_BYTES,
+        cwd: PROTOCOL_ROOT,
+        encoding: "utf8",
+      },
     );
     const found: string[] = [];
     let homeWalks = 0;
