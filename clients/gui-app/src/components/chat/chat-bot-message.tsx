@@ -11,10 +11,11 @@ import {
   Pencil,
   RotateCcw,
 } from "lucide-react";
-import type {
-  BotAnnouncement,
-  BotAnnouncementKind,
-  BotQuestion,
+import {
+  botQuestionsText,
+  type BotAnnouncement,
+  type BotAnnouncementKind,
+  type BotQuestion,
 } from "@traycer/protocol/persistence/epic/messages";
 import { BOT_THREAD_ANCHOR_ANSWER } from "@traycer/protocol/host/bot/conversation-schemas";
 import { UnreadCountBadge } from "@/components/notifications/unread-count-badge";
@@ -81,8 +82,9 @@ import { TextSegment } from "./segments/text-segment";
  * on a coloured bar, as Slack draws an app's attachment. A question or a
  * proposal carries the line of the thread a member answers it in, and a
  * reply that asks carries its options as buttons. A row that asks without
- * waiting (decision 121) draws the question card in place of its text and
- * options, and carries its thread's line as a question does. A post that
+ * waiting (decision 121) draws the question card in place of its options,
+ * under any text beyond its questions' own, and carries its thread's line as a
+ * question does. A post that
  * points into a task (T89) draws the surface's card under its text. A bot that
  * answers posts itself (reply mode `direct`) replies in the channel, as a
  * plain row.
@@ -355,11 +357,12 @@ function BotRow(props: {
       longPress={sheet.longPress}
     >
       {question !== null && questions !== null ? (
-        <BotQuestionCard
-          messageId={message.persistentMessageId}
+        <BotAskingBody
+          message={message}
           question={question}
-          botTitle={presentation.botTitle}
           questions={questions}
+          botTitle={presentation.botTitle}
+          text={<BotRowBody announcement={announcement} body={body} />}
         />
       ) : (
         <BotRowBody announcement={announcement} body={body} />
@@ -470,6 +473,28 @@ function BotRowBody(props: {
   );
 }
 
+/** A row that asks: the card, under its text when that says more than its questions. */
+function BotAskingBody(props: {
+  readonly message: ChatMessageModel;
+  readonly question: BotQuestion;
+  readonly questions: ChatBotQuestions;
+  readonly botTitle: string;
+  readonly text: ReactNode;
+}): ReactElement {
+  const { message, question, questions, botTitle, text } = props;
+  return (
+    <>
+      {message.content === botQuestionsText(question.questions) ? null : text}
+      <BotQuestionCard
+        messageId={message.persistentMessageId}
+        question={question}
+        botTitle={botTitle}
+        questions={questions}
+      />
+    </>
+  );
+}
+
 /**
  * The card of the questions a bot's row asks, each settlement named as this
  * surface names its members, and the person's own answers kept under the bot
@@ -496,6 +521,9 @@ function BotQuestionCard(props: {
       text: item.text,
       options: item.options,
       allowFreeText: item.allowFreeText,
+      // A question that takes the person's own words takes several of its
+      // options too: the host holds such an answer to no one option.
+      several: item.allowFreeText,
       settlement: botQuestionCardSettlement(
         item.settlement,
         memberName,
@@ -515,7 +543,8 @@ function BotQuestionCard(props: {
           .filter(
             (item) =>
               drafts?.[answerDraftKey(messageId, item.index)] !== undefined &&
-              questionCardView(item.settlement, item.draft).kind === "settled",
+              questionCardView(item.settlement, item.draft, item.several)
+                .kind === "settled",
           )
           .map((item) => answerDraftKey(messageId, item.index))
           .join("\n");

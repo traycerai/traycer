@@ -477,6 +477,19 @@ export const botQuestionSchema = lazySchema(() =>
 export type BotQuestion = z.infer<typeof botQuestionSchema>;
 
 /**
+ * The text a question row carries when the asker wrote nothing above its
+ * questions: a reader that draws the card shows any other text above it.
+ */
+export function botQuestionsText(
+  questions: ReadonlyArray<{ readonly text: string }>,
+): string {
+  if (questions.length === 1) return questions[0]?.text ?? "";
+  return questions
+    .map((question, index) => `${index + 1}. ${question.text}`)
+    .join("\n");
+}
+
+/**
  * Which question a member's message answers: the bot's row by its message
  * id, the question's index on it, and whether the member skipped it (the
  * message's text is then not an answer).
