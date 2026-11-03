@@ -12,11 +12,12 @@ import {
   mkdtempSync,
   readFileSync,
   rmSync,
+  watch,
   writeFileSync,
 } from "node:fs";
 import { createHash } from "node:crypto";
 import { tmpdir } from "node:os";
-import { dirname, join } from "node:path";
+import { basename, dirname, join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { sandboxHome } from "../../__tests__/sandbox-home";
 import { cliCredentialsPath } from "@traycer/protocol/config/paths";
@@ -55,9 +56,9 @@ const WATCHER_DELIVERY_TIMEOUT_MS = 10_000;
  * Per-test timeouts below are `N * WATCHER_DELIVERY_TIMEOUT_MS +
  * TEST_TIMEOUT_BUFFER_MS`, not a bare sum: the enclosing Vitest timer starts
  * before the `signIn`/`rotate`/write calls that precede each `vi.waitFor`,
- * so a sum-only budget leaves zero room for those calls, their assertions,
- * or (for the debounce test) the extra 120 ms post-wait sleep. Sized well
- * above that fixed overhead rather than tuned to the minimum that passes.
+ * so a sum-only budget leaves zero room for those calls or their
+ * assertions. Sized well above that fixed overhead rather than tuned to the
+ * minimum that passes.
  */
 const TEST_TIMEOUT_BUFFER_MS = 5_000;
 
@@ -160,6 +161,7 @@ describe("FileTokenStore (real fs + lock/WAL)", () => {
       store.dispose();
     }
     stores.length = 0;
+    vi.useRealTimers();
     restoreFetch();
     if (previousHome === undefined) {
       delete process.env.HOME;
@@ -657,43 +659,56 @@ describe("FileTokenStore (real fs + lock/WAL)", () => {
     it(
       "debounce coalesces a burst of external writes into one emit",
       async () => {
-        const store = makeStore();
+        // The debounce runs on a fake clock and the test delivers the watch
+        // events itself, so the whole burst lands inside one debounce window
+        // however long each write's real I/O takes. Through a real watcher a
+        // slow runner delivered the three writes' events more than a window
+        // apart, and each one emitted. Real watcher delivery is covered by the
+        // cases above. Only `setTimeout` is faked: the writes stamp real mtimes.
+        vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+        const watchListeners: Array<
+          (event: string, filename: string | Buffer | null) => void
+        > = [];
+        const store = new FileTokenStore({
+          environment: ENVIRONMENT,
+          authnBaseUrl: AUTHN_BASE_URL,
+          watchImpl: (dir, listener) => {
+            watchListeners.push(listener);
+            return watch(dir, () => undefined);
+          },
+        });
+        stores.push(store);
+        expect(watchListeners).toHaveLength(1);
+        const [deliverWatchEvent] = watchListeners;
         const changes: TokenStoreChange[] = [];
         const dispose = store.subscribe((change) => {
           changes.push(change);
         });
 
-        // Burst of rapid renames through the protocol write primitive.
-        await Promise.all([
-          writeCredentialsFile(
+        // A burst of rapid renames through the protocol write primitive, each
+        // followed by the event the watcher reports for it.
+        for (const token of ["burst-1", "burst-2", "burst-3"]) {
+          await writeCredentialsFile(
             credentialsPath(),
-            { ...EXTERNAL, token: "burst-1" },
+            { ...EXTERNAL, token },
             0,
-          ),
-          writeCredentialsFile(
-            credentialsPath(),
-            { ...EXTERNAL, token: "burst-2" },
-            0,
-          ),
-          writeCredentialsFile(
-            credentialsPath(),
-            { ...EXTERNAL, token: "burst-3" },
-            0,
-          ),
-        ]);
+          );
+          deliverWatchEvent("rename", basename(credentialsPath()));
+        }
+        expect(changes).toHaveLength(0);
 
+        // Well past one debounce window: the coalesced emit's read is real I/O,
+        // so wait for it rather than for the clock.
+        await vi.advanceTimersByTimeAsync(1_000);
         await vi.waitFor(
           () => {
             expect(changes.length).toBeGreaterThanOrEqual(1);
           },
           { timeout: WATCHER_DELIVERY_TIMEOUT_MS },
         );
-        // Give the debounce window a little more time to prove no late extras.
-        await new Promise<void>((resolve) => setTimeout(resolve, 120));
-        // A burst must not produce one event per write; coalesce toward one.
-        expect(changes.length).toBeLessThan(3);
-        expect(changes.at(-1)?.present).toBe(true);
-        expect(changes.at(-1)?.userId).toBe(IDENTITY.id);
+        expect(changes).toEqual([
+          { present: true, userId: IDENTITY.id, revision: 1 },
+        ]);
         dispose();
       },
       WATCHER_DELIVERY_TIMEOUT_MS + TEST_TIMEOUT_BUFFER_MS,
