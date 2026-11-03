@@ -497,7 +497,7 @@ describe("<DocumentPreviewToolbar />", () => {
       expect(onZoomTo).not.toHaveBeenCalled();
     });
 
-    it.each(["abc", "0", "-5", ""])(
+    it.each(["abc", "175abc", "175%%", "0", "-5", ""])(
       "commits nothing for %j and shows the live level again",
       (text) => {
         const onZoomTo = vi.fn();
@@ -511,15 +511,19 @@ describe("<DocumentPreviewToolbar />", () => {
       },
     );
 
-    it("commits nothing when the reader types the level the surface is already at", () => {
+    it("leaves an input method's Enter to the input method and commits the Enter after it", () => {
       const onZoomTo = vi.fn();
       renderToolbar({ zoom: baseZoom({ onZoomTo, scalePercent: 125 }) });
 
-      type("125");
-      fireEvent.keyDown(zoomField(), { key: "Enter" });
+      type("175");
+      fireEvent.keyDown(zoomField(), { key: "Enter", isComposing: true });
 
       expect(onZoomTo).not.toHaveBeenCalled();
-      expect(zoomField().value).toBe("125%");
+      expect(zoomField().value).toBe("175");
+
+      fireEvent.keyDown(zoomField(), { key: "Enter" });
+
+      expect(onZoomTo).toHaveBeenCalledExactlyOnceWith(175);
     });
 
     it("follows the live level once the draft is gone, and says it in a status region", () => {

@@ -200,7 +200,9 @@ export function ZoomControls(props: ZoomControlsProps): ReactNode {
  * field shows their draft; otherwise it follows every zoom the surface makes.
  * Enter, or leaving the field, hands the number to the surface, which holds
  * it to its own range. Escape, or anything that is not a number, puts the
- * level back. "175" and "175%" both read as 175%.
+ * level back. "175" and "175%" both read as 175%. The level the surface is
+ * already at is handed over too: on a fitted document it is what turns the
+ * fit into a level that holds through a resize.
  */
 export function ZoomLevelField(props: {
   readonly ready: boolean;
@@ -213,9 +215,10 @@ export function ZoomLevelField(props: {
   const commit = (): void => {
     if (draft === null) return;
     setDraft(null);
-    const percent = Math.round(Number.parseFloat(draft.replace("%", "")));
+    // `Number`, not `parseFloat`: "175abc" is not a level, it is a typo.
+    const percent = Math.round(Number(draft.trim().replace(/%$/, "")));
     if (!Number.isFinite(percent) || percent <= 0) return;
-    if (percent !== props.scalePercent) props.onZoomTo(percent);
+    props.onZoomTo(percent);
   };
 
   const level = props.scalePercent === null ? "–" : `${props.scalePercent}%`;
@@ -229,6 +232,9 @@ export function ZoomLevelField(props: {
         onFocus={(event) => event.currentTarget.select()}
         onBlur={commit}
         onKeyDown={(event) => {
+          // An input method's Enter or Escape confirms or cancels its own
+          // composition, not the level.
+          if (event.nativeEvent.isComposing) return;
           if (event.key === "Enter") commit();
           if (event.key === "Escape") setDraft(null);
         }}

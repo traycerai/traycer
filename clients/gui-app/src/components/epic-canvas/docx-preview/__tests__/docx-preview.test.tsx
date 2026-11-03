@@ -412,21 +412,25 @@ describe("<DocxPreview />", () => {
     expect(zoomLevel.value).toBe("150%");
   });
 
-  it("treats a typed zoom level as a manual zoom, so a later resize does not re-fit", async () => {
+  it("treats even the level the fit already shows as a manual zoom, so a later resize does not re-fit", async () => {
     mockRenderAsyncWith([{ widthPx: 400, paragraphs: [["Page one"]] }]);
 
     render(<DocxPreview {...baseProps({})} />);
     setScrollContainerWidth(832);
     await waitForReady(1);
     const zoomLevel = screen.getByLabelText<HTMLInputElement>("Zoom level");
+    const fittedPercent = zoomLevel.value.replace("%", "");
 
-    fireEvent.change(zoomLevel, { target: { value: "150" } });
+    fireEvent.change(zoomLevel, { target: { value: fittedPercent } });
     fireEvent.keyDown(zoomLevel, { key: "Enter" });
+    // A fit that survived the typing would follow this narrower container down
+    // to 150%.
+    setScrollContainerWidth(632);
     act(() => {
       resizeObservers[0]?.trigger();
     });
 
-    expect(zoomLevel.value).toBe("150%");
+    expect(zoomLevel.value).toBe(`${fittedPercent}%`);
   });
 
   it("shows 100% in the Zoom level readout and marks Actual size pressed after clicking it", async () => {
