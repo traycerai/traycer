@@ -210,13 +210,14 @@ describe("sandboxDetailsEntry", () => {
     expect(entry.export().status.Resting).toBeUndefined();
   });
 
-  it("gives a withdrawn row no Resting row, an Idle row, and a Destroyed-on row naming the announced day with no \"unless used\"", () => {
+  it('gives a withdrawn row no Resting row, an Idle row, and a Destroyed-on row naming the announced day with no "unless used"', () => {
+    const endsAt = Date.UTC(2026, 11, 1);
     const entry = sandboxDetailsEntry({
       summary: sandboxSummaryFixture({
         burst: false,
         destroyAfterRestingMinutes: null,
         destroyAt: null,
-        withdrawalEndsAt: Date.UTC(2026, 11, 1),
+        withdrawalEndsAt: endsAt,
       }),
       cost: null,
       wakeString: null,
@@ -227,7 +228,17 @@ describe("sandboxDetailsEntry", () => {
     const status = entry.export().status;
     expect(status.Idle).toMatch(/suspends after/);
     expect(status.Resting).toBeUndefined();
-    expect(status["Destroyed on"]).toBe("Dec 1, 2026");
+    // Computed, not written out: the formatter renders in the runtime's own
+    // default locale, so a literal `Dec 1, 2026` would fail under any other
+    // one while the UTC day was named correctly.
+    expect(status["Destroyed on"]).toBe(
+      new Date(endsAt).toLocaleDateString(undefined, {
+        month: "short",
+        day: "numeric",
+        year: "numeric",
+        timeZone: "UTC",
+      }),
+    );
     expect(status["Destroyed on"]).not.toContain("unless used");
   });
 });
