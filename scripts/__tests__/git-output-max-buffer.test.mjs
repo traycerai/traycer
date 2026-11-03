@@ -17,7 +17,8 @@ import { GIT_OUTPUT_MAX_BUFFER_BYTES } from "../git-output-limit.cjs";
 // The rule sees calls, through a runner or any alias of one, whose command is
 // the literal `git`, or a command string or template that starts with it; a
 // word it cannot read for certain (a substitution, a quote) counts as not a
-// literal. A helper that takes the command itself as a parameter is outside
+// literal, and so does the subcommand of a command string that can run a
+// second command (`&&`, `;`, a pipe). A helper that takes the command itself as a parameter is outside
 // it. A `stdio` that sends stdout away exempts only the
 // sync runners: `exec` and `execFile` buffer stdout whatever it says.
 
@@ -61,6 +62,9 @@ const SOURCE_EXTENSIONS = new Set([
   ".mjs",
   ".cjs",
 ]);
+// A command string with one of these can run a later git command that its
+// first subcommand says nothing about.
+const SHELL_SEPARATOR = /[;&|`\n]|\$\(/u;
 const MAY_RUN_GIT = /\b(execFileSync|execSync|spawnSync|execFile|exec)\b/;
 
 /**
@@ -118,6 +122,13 @@ function gitSubcommand(call) {
   }
   const words = commandWords(command);
   if (words[0] !== "git") return undefined;
+  const fixedText = ts.isStringLiteralLike(command)
+    ? command.text
+    : [
+        command.head.text,
+        ...command.templateSpans.map((span) => span.literal.text),
+      ].join("");
+  if (SHELL_SEPARATOR.test(fixedText)) return null;
   return subcommandOf(words.slice(1));
 }
 
@@ -300,6 +311,16 @@ describe("git calls that keep their output", () => {
       [1],
     ],
     ["a command string", 'execSync("git status --porcelain", { cwd });', [1]],
+    [
+      "a compound command string with a later listing",
+      'execSync("git rev-parse HEAD && git ls-files", { cwd });',
+      [1],
+    ],
+    [
+      "a compound template with a later listing",
+      "execSync(`git rev-parse ${ref}; git ls-files`, { cwd });",
+      [1],
+    ],
     [
       "a promisified binding",
       'const run = promisify(execFile);\nawait run("git", ["ls-tree", "-r", "HEAD"], { cwd });',
