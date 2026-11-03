@@ -32,7 +32,7 @@ import {
 } from "./lazy-schema-thunk-rules-scanner";
 
 /**
- * AST scan of every `lazySchema(` thunk in protocol/src and clients/. The
+ * AST scan of every `lazySchema` call in protocol/src and clients/. The
  * scanner is `lazy-schema-thunk-rules-scanner.ts`, shared with the host twin
  * (`traycer-host/src/__tests__/lazy-schema-thunk-rules-scan.test.ts`); every
  * planted control lives here, once.
@@ -1009,6 +1009,22 @@ describe("lazySchema thunk rules scan", () => {
     expect(hitsOf(result, "R5", "historical").map((hit) => hit.kind)).toContain(
       "S4 mutator",
     );
+  });
+
+  it("reaches a generic call and a spaced call", () => {
+    const formsAbs = path.join(PLANTED_DIR, "marker-forms.ts");
+    const forms = `const list: string[] = [];
+export const genericCall = lazySchema<{ readonly _zod: object }>(() => { list.push("g"); return 1; });
+export const spacedCall = lazySchema (() => { list.push("s"); return 1; });
+`;
+    const result = scanOverlay([formsAbs], new Map([[formsAbs, forms]]));
+    expect(result.thunkCount).toBe(2);
+    expect(hitsOf(result, "R5", "genericCall").map((hit) => hit.kind)).toEqual([
+      "S4 mutator",
+    ]);
+    expect(hitsOf(result, "R5", "spacedCall").map((hit) => hit.kind)).toEqual([
+      "S4 mutator",
+    ]);
   });
 
   it("production protocol and OSS client sources have zero R1-R6 hits, unanalysed calls exactly the allow-list, and at least 3000 thunks", () => {

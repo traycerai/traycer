@@ -10,7 +10,8 @@ import ts from "typescript";
  * both scans. Every root and prefix is a parameter of `scanThunkRules` and
  * `gitListedFiles`; nothing here names a repo.
  *
- * It parses every `lazySchema(` thunk and reports:
+ * It parses every `lazySchema` call, including `lazySchema<T>(` and
+ * `lazySchema (`, and reports:
  *
  * R1 outermost `.describe(`/`.meta(`/`.register(` of a returned expression
  * R2 outermost `z.instanceof(`
@@ -261,11 +262,6 @@ export type ScanInput = {
   readonly protoSrc: string;
   readonly commonSrc: string;
   readonly contentRoot: string;
-};
-
-type LoadedFile = {
-  readonly sf: ts.SourceFile;
-  readonly text: string;
 };
 
 type ImportBinding = {
@@ -1045,13 +1041,13 @@ function factoryReturnedFunctions(
 }
 
 export function scanThunkRules(input: ScanInput): ThunkScanResult {
-  const loadCache = new Map<string, LoadedFile>();
+  const loadCache = new Map<string, ts.SourceFile>();
   const declCache = new Map<string, TopDecls>();
   const localsCache = new Map<ts.SignatureDeclaration, Set<string>>();
   const fnMemo = new Map<ts.Node, WalkResult>();
   const inProgress = new Set<ts.Node>();
 
-  const remember = (abs: string, text: string): LoadedFile => {
+  const remember = (abs: string, text: string): ts.SourceFile => {
     const cached = loadCache.get(abs);
     if (cached !== undefined) {
       return cached;
@@ -1063,9 +1059,8 @@ export function scanThunkRules(input: ScanInput): ThunkScanResult {
       true,
       abs.endsWith("x") ? ts.ScriptKind.TSX : ts.ScriptKind.TS,
     );
-    const loaded = { sf, text };
-    loadCache.set(abs, loaded);
-    return loaded;
+    loadCache.set(abs, sf);
+    return sf;
   };
 
   const readText = (abs: string): string | undefined => {
@@ -1079,7 +1074,7 @@ export function scanThunkRules(input: ScanInput): ThunkScanResult {
     return readFileSync(abs, "utf8");
   };
 
-  const load = (abs: string): LoadedFile | undefined => {
+  const load = (abs: string): ts.SourceFile | undefined => {
     const cached = loadCache.get(abs);
     if (cached !== undefined) {
       return cached;
@@ -1092,24 +1087,19 @@ export function scanThunkRules(input: ScanInput): ThunkScanResult {
   };
 
   const lineOf = (abs: string, node: ts.Node): number => {
-    const loaded = load(abs);
-    if (loaded === undefined) {
+    const sf = load(abs);
+    if (sf === undefined) {
       return 0;
     }
-    return (
-      loaded.sf.getLineAndCharacterOfPosition(node.getStart(loaded.sf)).line + 1
-    );
+    return sf.getLineAndCharacterOfPosition(node.getStart(sf)).line + 1;
   };
 
   const columnOf = (abs: string, node: ts.Node): number => {
-    const loaded = load(abs);
-    if (loaded === undefined) {
+    const sf = load(abs);
+    if (sf === undefined) {
       return 0;
     }
-    return (
-      loaded.sf.getLineAndCharacterOfPosition(node.getStart(loaded.sf))
-        .character + 1
-    );
+    return sf.getLineAndCharacterOfPosition(node.getStart(sf)).character + 1;
   };
 
   const rel = (abs: string): string => {
@@ -1194,11 +1184,11 @@ export function scanThunkRules(input: ScanInput): ThunkScanResult {
       star: [],
     };
     declCache.set(abs, out);
-    const loaded = load(abs);
-    if (loaded === undefined) {
+    const sf = load(abs);
+    if (sf === undefined) {
       return out;
     }
-    for (const st of loaded.sf.statements) {
+    for (const st of sf.statements) {
       if (ts.isFunctionDeclaration(st) && st.name !== undefined) {
         out.decls.set(st.name.text, st);
       } else if (ts.isClassDeclaration(st) && st.name !== undefined) {
@@ -2550,14 +2540,15 @@ export function scanThunkRules(input: ScanInput): ThunkScanResult {
   const thunkFns: ThunkFn[] = [];
   let thunkCount = 0;
   for (const abs of input.files) {
-    // The walk only reads a call site, so a file whose text has no
-    // `lazySchema(` is skipped here. Import resolution still calls load
-    // for a helper that does not contain the marker.
+    // A call may carry a type argument (`lazySchema<T>(`) or a space
+    // before `(`. A file that only imports the name has neither, so it
+    // is skipped here. Import resolution still calls load for a helper
+    // that does not contain the marker.
     const markerText = readText(abs);
-    if (markerText === undefined || !markerText.includes("lazySchema(")) {
+    if (markerText === undefined || !/\blazySchema\s*(<|\()/.test(markerText)) {
       continue;
     }
-    const loaded = remember(abs, markerText);
+    const sf = remember(abs, markerText);
     const visit = (node: ts.Node): void => {
       if (
         ts.isCallExpression(node) &&
@@ -2611,7 +2602,7 @@ export function scanThunkRules(input: ScanInput): ThunkScanResult {
       }
       ts.forEachChild(node, visit);
     };
-    visit(loaded.sf);
+    visit(sf);
   }
 
   const hits: ThunkRuleHit[] = [];
