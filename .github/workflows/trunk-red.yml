@@ -20,8 +20,9 @@ name: Trunk red
 # Every conclusion other than success, skipped and cancelled is answered, so
 # one nobody thought to list cannot leave `main` red in silence. A cancelled
 # run is ignored: a person cancelled it. A `startup_failure` (a broken
-# workflow file) is reported with its conclusion. Attempt 1 only: a person's
-# re-run of a reported run is not reported again.
+# workflow file) is reported with its conclusion. Only attempt 1 is judged: a
+# later attempt is a person's re-run, so a re-run of a reported run is not
+# reported again.
 #
 # Only push runs count. A pull-request run is its author's to read, a schedule
 # run (CodeQL's weekly scan) has no commit to blame, and a manual run is

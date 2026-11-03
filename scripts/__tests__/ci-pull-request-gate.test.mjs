@@ -712,8 +712,7 @@ describe("trunk-red.yml", () => {
   it("acts only on a first-attempt push run", () => {
     const condition = normalize(Object.values(workflow.jobs)[0].if);
     expect(condition).toContain("github.event.workflow_run.event == 'push'");
-    // A later attempt is a person's re-run of a run whose attempt 1 was
-    // already reported.
+    // A later attempt is a person's re-run; only attempt 1 is judged.
     expect(condition).toContain("github.event.workflow_run.run_attempt == 1");
   });
 
