@@ -32,10 +32,10 @@ import type {
   DevicePushPlatform,
   PushTokenFetchResult,
 } from "@traycer-clients/shared/auth/push-token-fetcher";
+import { isPlainRecord } from "@traycer/protocol/utils/text/sentry-scrub";
 import {
   MobilePushRegistration,
   activationPayloadFromPushData,
-  isRecord,
   pushRegistrationTarget,
   toPushPermissionState,
   type CapacitorPushPermissionState,
@@ -1627,7 +1627,7 @@ describe("MobilePushRegistration failure and refresh", () => {
     if (payload instanceof Uint8Array) {
       return recordFromPayload(new TextDecoder().decode(payload));
     }
-    return isRecord(payload) && !Array.isArray(payload) ? payload : null;
+    return isPlainRecord(payload) ? payload : null;
   }
 
   function readTag(
@@ -1635,7 +1635,7 @@ describe("MobilePushRegistration failure and refresh", () => {
     name: string,
   ): string | null {
     const tags = event["tags"];
-    if (!isRecord(tags) || Array.isArray(tags) || !(name in tags)) return null;
+    if (!isPlainRecord(tags) || !(name in tags)) return null;
     const value = tags[name];
     return typeof value === "string" ? value : null;
   }
@@ -1670,7 +1670,7 @@ describe("MobilePushRegistration failure and refresh", () => {
         continue;
       }
       const header: unknown = parseJson(headerLine);
-      if (!isRecord(header) || Array.isArray(header)) {
+      if (!isPlainRecord(header)) {
         break;
       }
       const length = header["length"];
@@ -1948,7 +1948,7 @@ describe("MobilePushRegistration failure and refresh", () => {
         // The SDK attaches its own trace after the allowlist. The seeded
         // context must not survive that.
         const contexts = event["contexts"];
-        if (isRecord(contexts) && !Array.isArray(contexts)) {
+        if (isPlainRecord(contexts)) {
           expect(contexts).not.toHaveProperty("secret");
         }
         const text = JSON.stringify(event);
