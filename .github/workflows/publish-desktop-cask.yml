@@ -113,8 +113,8 @@ jobs:
             test -f "desktop-artifacts/$asset"
           done
           linux_appimage="traycer-desktop-linux-x86_64.AppImage"
-          if gh release view "desktop-v${VERSION}" --repo "$RELEASE_REPO" --json assets \
-            --jq '.assets[].name' | grep -Fxq "$linux_appimage"; then
+          if grep -Fxq "$linux_appimage" <<<"$(gh release view "desktop-v${VERSION}" --repo "$RELEASE_REPO" --json assets \
+            --jq '.assets[].name')"; then
             gh release download "desktop-v${VERSION}" \
               --repo "$RELEASE_REPO" \
               --pattern "$linux_appimage" \
