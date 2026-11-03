@@ -83,8 +83,13 @@ describe("pre-commit build lane", () => {
     expect(tasks).toEqual(["@traycer-clients/desktop:build"]);
   }, 60_000);
 
-  it("a protocol input change still builds protocol", async () => {
+  it("a protocol manifest change still builds protocol", async () => {
     const tasks = await scheduledBuilds(["protocol/package.json"]);
+    expect(tasks).toContain("@traycer/protocol:build");
+  }, 60_000);
+
+  it("a protocol source change still builds protocol", async () => {
+    const tasks = await scheduledBuilds(["protocol/src/index.ts"]);
     expect(tasks).toContain("@traycer/protocol:build");
   }, 60_000);
 
