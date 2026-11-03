@@ -25,7 +25,7 @@ const mocks = vi.hoisted(() => {
   const botRows: Record<
     string,
     {
-      readonly announcement?: { kind: "question" | "automation"; link: null };
+      readonly announcement?: { kind: "proposal" | "automation"; link: null };
       readonly repliesTo?: string;
     }
   > = {};
@@ -358,10 +358,10 @@ describe("<BotTaskList /> in the bot's view: where a task came from", () => {
     });
   });
 
-  it("names and opens the thread that a reply under the bot's question opened, as the question's own row opens it", async () => {
+  it("names and opens the thread that a reply under the bot's proposal opened, as the proposal's own row opens it", async () => {
     const user = userEvent.setup();
     mocks.state.botRows["question-1"] = {
-      announcement: { kind: "question", link: null },
+      announcement: { kind: "proposal", link: null },
     };
     loadChannel([["question-1", "Which release should I watch?"]]);
     mount(

@@ -151,11 +151,7 @@ export function botRowThreadAnchorKind(input: {
   readonly repliesToPost: boolean;
 }): string | null {
   const { announcementKind, asksQuestion, repliesToPost } = input;
-  if (
-    announcementKind === "question" ||
-    announcementKind === "proposal" ||
-    asksQuestion
-  ) {
+  if (announcementKind === "proposal" || asksQuestion) {
     return null;
   }
   return announcementKind === null && repliesToPost

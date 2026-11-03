@@ -716,11 +716,11 @@ export type AssistantTurnProfile = z.infer<typeof assistantTurnProfileSchema>;
 
 /**
  * What a bot announces at its channel's top level (Tracy Bots, decision 41).
- * `question` is the trunk's ask of a person (decisions 55, 56): an
- * automation's question the trunk could not settle itself.
+ * An announcement only informs: a bot asks a person with a question card
+ * (`traycer_ask`), never an announcement.
  */
 export const botAnnouncementKindSchema = lazySchema(() =>
-  z.enum(["proposal", "automation", "bot-created", "policy", "question"]),
+  z.enum(["proposal", "automation", "bot-created", "policy"]),
 );
 export type BotAnnouncementKind = z.infer<typeof botAnnouncementKindSchema>;
 
