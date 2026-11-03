@@ -14,6 +14,10 @@ import {
 import { MIX_TUNING } from "@/lib/soundtrack/mix-tuning";
 import type { RandomSource } from "@/lib/soundtrack/scheduler";
 import {
+  holdSoundtrackSessionLock,
+  type SoundtrackSessionLock,
+} from "@/lib/soundtrack/session-lock";
+import {
   SoundtrackSession,
   type ResumePositions,
   type SoundtrackPorts,
@@ -42,7 +46,8 @@ interface SoundtrackState {
   readonly resumePositions: ResumePositions;
   /**
    * Turns the soundtrack on and opens the audio device: call it from a gesture
-   * of the person's. Stays off where the device will not open.
+   * of the person's. Stays off where the device will not open, and until its
+   * turn while another window's session is playing.
    */
   readonly enable: () => void;
   /** Turns it off and lets go of the device and every decoded stem. */
@@ -69,6 +74,12 @@ export function createSoundtrackStore(
   let session: SoundtrackSession | null = null;
   // A read still on its way; `disable()` drops it so that it opens nothing.
   let reading: Promise<SoundtrackManifest> | null = null;
+  // Set from `enable()` until `disable()`, or until the device refuses.
+  let lock: SoundtrackSessionLock | null = null;
+  const releaseLock = (): void => {
+    lock?.release();
+    lock = null;
+  };
   return create<SoundtrackState>()((set, get) => {
     const open = (manifest: SoundtrackManifest): void => {
       let ports: SoundtrackPorts;
@@ -78,6 +89,7 @@ export function createSoundtrackStore(
         appLogger.warn("[soundtrack] could not open the audio device", {
           error: describeLogError(error),
         });
+        releaseLock();
         return;
       }
       session = new SoundtrackSession({
@@ -96,6 +108,19 @@ export function createSoundtrackStore(
       });
       set({ enabled: true });
     };
+    const start = (): void => {
+      const manifest = readManifest();
+      if (!(manifest instanceof Promise)) {
+        open(manifest);
+        return;
+      }
+      reading = manifest;
+      void manifest.then((read) => {
+        if (reading !== manifest) return;
+        reading = null;
+        open(read);
+      });
+    };
     return {
       enabled: false,
       directorId: DEFAULT_MIX_DIRECTOR,
@@ -104,21 +129,20 @@ export function createSoundtrackStore(
       lastPlan: null,
       resumePositions: {},
       enable: () => {
-        if (session !== null || reading !== null) return;
-        const manifest = readManifest();
-        if (!(manifest instanceof Promise)) {
-          open(manifest);
+        if (lock !== null) return;
+        const taken = holdSoundtrackSessionLock();
+        lock = taken;
+        if (taken.held === null) {
+          start();
           return;
         }
-        reading = manifest;
-        void manifest.then((read) => {
-          if (reading !== manifest) return;
-          reading = null;
-          open(read);
+        void taken.held.then(() => {
+          if (lock === taken) start();
         });
       },
       disable: () => {
         reading = null;
+        releaseLock();
         if (session === null) return;
         const resumePositions = session.end();
         session = null;
