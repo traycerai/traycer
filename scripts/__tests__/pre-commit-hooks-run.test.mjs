@@ -56,6 +56,8 @@ const runsRunnerProgram = (hook) =>
 const jobs = Object.entries(workflow.jobs).map(([id, job]) => ({
   id,
   if: normalize(job.if ?? ""),
+  continueOnError: job["continue-on-error"],
+  shell: job.defaults?.run?.shell ?? workflow.defaults?.run?.shell,
   steps: job.steps ?? [],
 }));
 const isHookStep = (step) =>
@@ -77,25 +79,26 @@ const setsUp = (job, action) =>
       step.if === undefined && String(step.uses ?? "").startsWith(action),
   );
 
-// The commands a step's `run` executes: each line, split at `&&`, `||` and
-// `;`. An entry runs only where a command starts with it, so an `echo` of it,
-// a comment or a quoted copy does not count.
-const commandsOf = (run) =>
+// The runner's implicit shell, `bash -e`, fails the step when any line's
+// command fails, but not a command in a pipeline (no pipefail), in an `&&` or
+// `||` list, or in the background. So a step runs a hook only on a line that is
+// the hook's entry alone, or with further arguments, and holds none of `|`, `&`
+// or `;`. An `echo` of it, a comment or a quoted copy starts with something
+// else.
+const runsEntry = (run, entry) =>
   String(run ?? "")
     .split("\n")
-    .flatMap((line) => line.split(/&&|\|\||;/))
-    .map(normalize);
+    .map(normalize)
+    .some(
+      (line) =>
+        !/[|&;]/.test(line) && (line === entry || line.startsWith(`${entry} `)),
+    );
 
-// The job and step that run a skipped hook: the step with a command that is the
-// hook's own entry, followed by nothing or by further arguments.
+// The job and step that run a skipped hook.
 function runnerOf(hook) {
   const entry = normalize(hook.entry);
   for (const job of jobs) {
-    const step = job.steps.find((candidate) =>
-      commandsOf(candidate.run).some(
-        (command) => command === entry || command.startsWith(`${entry} `),
-      ),
-    );
+    const step = job.steps.find((candidate) => runsEntry(candidate.run, entry));
     if (step !== undefined) return { job, step };
   }
   return undefined;
@@ -107,15 +110,15 @@ describe("every pre-commit hook runs in a pre-commit.yml job that can execute it
     expect(preCommitHooks.map((hook) => hook.id)).toContain("workspace-checks");
   });
 
-  // `extra_args` defaults to `--all-files`; a hook id there would run that hook
-  // alone.
+  // `extra_args` defaults to `--all-files`; a hook id or another stage there
+  // would run other hooks than these.
   it("runs every hook on every run of static", () => {
     expect(hookStep.if).toBeUndefined();
-    const args = normalize(hookStep.with?.extra_args ?? "--all-files").split(
-      " ",
+    expect(hookStep["continue-on-error"]).toBeUndefined();
+    expect(hookJob.continueOnError).toBeUndefined();
+    expect(normalize(hookStep.with?.extra_args ?? "--all-files")).toBe(
+      "--all-files",
     );
-    expect(args).toContain("--all-files");
-    expect(args.filter((arg) => !arg.startsWith("--"))).toEqual([]);
   });
 
   it("skips only hooks the config declares", () => {
@@ -132,12 +135,16 @@ describe("every pre-commit hook runs in a pre-commit.yml job that can execute it
 
   for (const hook of preCommitHooks.filter((hook) => skipped.has(hook.id))) {
     describe(hook.id, () => {
-      it("runs as its own entry in a step of a job that runs whenever static does", () => {
+      it("runs as its own entry, and fails a job that runs whenever static does", () => {
         const runner = runnerOf(hook);
         expect(runner, `no step runs: ${normalize(hook.entry)}`).toBeDefined();
         expect(runner.job.id).not.toBe(hookJob.id);
         expect(runner.job.if).toBe(hookJob.if);
         expect(runner.step.if).toBeUndefined();
+        // Its failure fails the job.
+        expect(runner.step["continue-on-error"]).toBeUndefined();
+        expect(runner.job.continueOnError).toBeUndefined();
+        expect(runner.step.shell ?? runner.job.shell).toBeUndefined();
       });
 
       if (hook.local && SYSTEM.has(hook.language)) {
