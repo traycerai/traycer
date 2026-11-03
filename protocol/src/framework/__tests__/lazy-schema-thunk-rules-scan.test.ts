@@ -1012,12 +1012,21 @@ describe("lazySchema thunk rules scan", () => {
   });
 
   it("reaches a generic call and a spaced call", () => {
-    const formsAbs = path.join(PLANTED_DIR, "marker-forms.ts");
-    const forms = `const list: string[] = [];
+    const genericAbs = path.join(PLANTED_DIR, "marker-generic.ts");
+    const spacedAbs = path.join(PLANTED_DIR, "marker-spaced.ts");
+    const generic = `const list: string[] = [];
 export const genericCall = lazySchema<{ readonly _zod: object }>(() => { list.push("g"); return 1; });
+`;
+    const spaced = `const list: string[] = [];
 export const spacedCall = lazySchema (() => { list.push("s"); return 1; });
 `;
-    const result = scanOverlay([formsAbs], new Map([[formsAbs, forms]]));
+    const result = scanOverlay(
+      [genericAbs, spacedAbs],
+      new Map([
+        [genericAbs, generic],
+        [spacedAbs, spaced],
+      ]),
+    );
     expect(result.thunkCount).toBe(2);
     expect(hitsOf(result, "R5", "genericCall").map((hit) => hit.kind)).toEqual([
       "S4 mutator",

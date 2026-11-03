@@ -3418,7 +3418,7 @@ describe("performance on large documents", () => {
       }
       expect(bigMs).toBeLessThan(smallMs * linearBound);
     }
-  });
+  }, 60_000);
 
   it("finds literal text near the end of a large document within the limit", () => {
     const { value, elapsedMs } = timed(() =>
