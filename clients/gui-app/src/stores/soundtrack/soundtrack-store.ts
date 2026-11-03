@@ -46,8 +46,8 @@ interface SoundtrackState {
   readonly resumePositions: ResumePositions;
   /**
    * Turns the soundtrack on and opens the audio device: call it from a gesture
-   * of the person's. Stays off where the device will not open, and until its
-   * turn while another window's session is playing.
+   * of the person's. Stays off where the manifest cannot be read or the device
+   * will not open, and until its turn while another window's session is playing.
    */
   readonly enable: () => void;
   /** Turns it off and lets go of the device and every decoded stem. */
@@ -72,9 +72,10 @@ export function createSoundtrackStore(
 ): UseBoundStore<StoreApi<SoundtrackState>> {
   const { readManifest, openPorts, random } = dependencies;
   let session: SoundtrackSession | null = null;
-  // A read still on its way; `disable()` drops it so that it opens nothing.
+  // A read still on its way; `disable()` drops it so that it opens nothing, and
+  // so that its failing late cannot let go of a lock a newer read now holds.
   let reading: Promise<SoundtrackManifest> | null = null;
-  // Set from `enable()` until `disable()`, or until the device refuses.
+  // Set from `enable()` until `disable()`, or until the read or device fails.
   let lock: SoundtrackSessionLock | null = null;
   const releaseLock = (): void => {
     lock?.release();
@@ -115,11 +116,21 @@ export function createSoundtrackStore(
         return;
       }
       reading = manifest;
-      void manifest.then((read) => {
-        if (reading !== manifest) return;
-        reading = null;
-        open(read);
-      });
+      void manifest.then(
+        (read) => {
+          if (reading !== manifest) return;
+          reading = null;
+          open(read);
+        },
+        (error: unknown) => {
+          if (reading !== manifest) return;
+          reading = null;
+          appLogger.warn("[soundtrack] could not read the manifest", {
+            error: describeLogError(error),
+          });
+          releaseLock();
+        },
+      );
     };
     return {
       enabled: false,

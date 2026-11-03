@@ -33,7 +33,8 @@ export function soundtrackOffered(): boolean {
 /**
  * The manifest for a session about to open. A production build reads the bundled
  * one and nothing else: this branch and its import fall out of the bundle. Only
- * a development build answers with a promise, which never rejects.
+ * a development build answers with a promise. A failed fetch still answers the
+ * bundled manifest, but the promise rejects if the chunk itself will not load.
  */
 export function readSoundtrackManifest():
   | SoundtrackManifest

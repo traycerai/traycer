@@ -10,7 +10,10 @@ import {
   openFakePorts,
   resetFakePorts,
 } from "@/lib/soundtrack/__tests__/fake-ports";
-import { SOUNDTRACK_MANIFEST } from "@/lib/soundtrack/manifest";
+import {
+  SOUNDTRACK_MANIFEST,
+  type SoundtrackManifest,
+} from "@/lib/soundtrack/manifest";
 import type { SoundtrackPorts } from "@/lib/soundtrack/session";
 import type { StemManifest } from "@/lib/soundtrack/stems";
 import { createSoundtrackStore } from "../soundtrack-store";
@@ -36,14 +39,37 @@ class FakeLockManager {
   }
 }
 
+type ReadManifest = () => SoundtrackManifest | Promise<SoundtrackManifest>;
+
+const readBundled: ReadManifest = () => SOUNDTRACK_MANIFEST;
+
 function openWindow(
   openPorts: (stems: StemManifest, volume: number) => SoundtrackPorts,
+  readManifest: ReadManifest,
 ) {
   return createSoundtrackStore({
-    readManifest: () => SOUNDTRACK_MANIFEST,
+    readManifest,
     openPorts,
     random: () => 0.5,
   }).getState;
+}
+
+/** A first read that fails when told to, and every later one that succeeds. */
+function failingFirstRead(): {
+  readonly readManifest: ReadManifest;
+  readonly fail: () => void;
+} {
+  let fail: () => void = () => undefined;
+  const first = new Promise<SoundtrackManifest>((_resolve, reject) => {
+    fail = () => {
+      reject(new Error("the chunk did not load"));
+    };
+  });
+  const readManifest = vi
+    .fn<ReadManifest>()
+    .mockReturnValueOnce(first)
+    .mockReturnValue(SOUNDTRACK_MANIFEST);
+  return { readManifest, fail };
 }
 
 /** Lets every turn already due happen, past which nothing else will. */
@@ -68,8 +94,8 @@ afterEach(() => {
 
 describe("the soundtrack across windows", () => {
   it("keeps a second window silent while the first plays, and hands over when it ends", async () => {
-    const first = openWindow(openFakePorts);
-    const second = openWindow(openFakePorts);
+    const first = openWindow(openFakePorts, readBundled);
+    const second = openWindow(openFakePorts, readBundled);
 
     first().enable();
     await settle();
@@ -91,8 +117,8 @@ describe("the soundtrack across windows", () => {
   });
 
   it("opens nothing for a window that turned off while waiting", async () => {
-    const first = openWindow(openFakePorts);
-    const second = openWindow(openFakePorts);
+    const first = openWindow(openFakePorts, readBundled);
+    const second = openWindow(openFakePorts, readBundled);
 
     first().enable();
     await settle();
@@ -107,8 +133,8 @@ describe("the soundtrack across windows", () => {
   });
 
   it("opens nothing for a turn that arrives after the window turned off, and leaves the lock free", async () => {
-    const first = openWindow(openFakePorts);
-    const second = openWindow(openFakePorts);
+    const first = openWindow(openFakePorts, readBundled);
+    const second = openWindow(openFakePorts, readBundled);
 
     first().enable();
     first().disable();
@@ -126,8 +152,8 @@ describe("the soundtrack across windows", () => {
     vi.spyOn(appLogger, "warn").mockImplementation(() => undefined);
     const refused = openWindow(() => {
       throw new Error("no output device");
-    });
-    const second = openWindow(openFakePorts);
+    }, readBundled);
+    const second = openWindow(openFakePorts, readBundled);
 
     refused().enable();
     await settle();
@@ -138,5 +164,60 @@ describe("the soundtrack across windows", () => {
     expect(second().enabled).toBe(true);
 
     second().disable();
+  });
+
+  it("lets the queued window play, and this one try again, when its manifest read fails", async () => {
+    vi.spyOn(appLogger, "warn").mockImplementation(() => undefined);
+    const { readManifest, fail } = failingFirstRead();
+    const failing = openWindow(openFakePorts, readManifest);
+    const queued = openWindow(openFakePorts, readBundled);
+
+    failing().enable();
+    await settle();
+    queued().enable();
+    await settle();
+    expect(openedFakePorts).toHaveLength(0);
+
+    fail();
+    await settle();
+
+    expect(failing().enabled).toBe(false);
+    expect(queued().enabled).toBe(true);
+
+    queued().disable();
+    await settle();
+    failing().enable();
+    await settle();
+    expect(failing().enabled).toBe(true);
+
+    failing().disable();
+  });
+
+  it("keeps a newer session's lock when a read it dropped fails late", async () => {
+    vi.spyOn(appLogger, "warn").mockImplementation(() => undefined);
+    const { readManifest, fail } = failingFirstRead();
+    const playing = openWindow(openFakePorts, readManifest);
+    const queued = openWindow(openFakePorts, readBundled);
+
+    playing().enable();
+    await settle();
+    playing().disable();
+    playing().enable();
+    await settle();
+    expect(playing().enabled).toBe(true);
+    queued().enable();
+    await settle();
+
+    fail();
+    await settle();
+
+    expect(playing().enabled).toBe(true);
+    expect(queued().enabled).toBe(false);
+
+    playing().disable();
+    await settle();
+    expect(queued().enabled).toBe(true);
+
+    queued().disable();
   });
 });
