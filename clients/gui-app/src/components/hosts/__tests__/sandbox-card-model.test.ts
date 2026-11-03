@@ -359,10 +359,7 @@ describe("sandboxWithdrawalLine", () => {
       ...dayOptions,
       timeZone: "UTC",
     });
-    const localDay = new Date(endsAt).toLocaleDateString(
-      undefined,
-      dayOptions,
-    );
+    const localDay = new Date(endsAt).toLocaleDateString(undefined, dayOptions);
     // The pin only proves anything if the two readings actually diverge for
     // this instant and zone; a runner where they coincide would pass this
     // case for the wrong reason.
