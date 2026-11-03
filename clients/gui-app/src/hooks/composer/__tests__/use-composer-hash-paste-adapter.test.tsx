@@ -288,6 +288,7 @@ describe("useComposerHashPasteAdapter - F1: a completed hash survives while a ba
     const gate = new Promise<void>((resolve) => {
       releaseSlow = resolve;
     });
+    let fastPutResolved = false;
     landingImageStoreMocks.putImage.mockImplementation(async (bytes) => {
       const isSlowFile = bytesEqual(bytes, SLOW_BYTES);
       if (isSlowFile) await gate;
@@ -295,7 +296,9 @@ describe("useComposerHashPasteAdapter - F1: a completed hash survives while a ba
       if (actual === null) {
         throw new Error("actual putImage was never captured");
       }
-      return actual(bytes);
+      const hash = await actual(bytes);
+      if (!isSlowFile) fastPutResolved = true;
+      return hash;
     });
 
     const fastHash = await sha256Hex(new Uint8Array(FAST_BYTES));
@@ -312,12 +315,16 @@ describe("useComposerHashPasteAdapter - F1: a completed hash survives while a ba
     });
 
     // Wait until the fast file's `putImage` has actually resolved (its bytes
-    // are durably stored) while the slow sibling is still gated - the exact
-    // window F1 exists to cover. The batch itself has NOT inserted anything
-    // yet (it waits for both files), so nothing but the pending-ingest root
-    // hold can be keeping the fast hash alive right now.
-    await waitFor(async () => {
-      expect(await getImageBytes(fastHash)).toBeDefined();
+    // are durably stored) and the adapter has taken its pending-ingest hold,
+    // while the slow sibling is still gated - the exact window F1 exists to
+    // cover. Readable bytes alone are too early: `putImage` seeds the session
+    // cache before its durable write, so a sweep driven then raced both the
+    // write and the hold. The batch itself has NOT inserted anything yet (it
+    // waits for both files), so nothing but that hold can be keeping the fast
+    // hash alive right now.
+    await waitFor(() => {
+      expect(fastPutResolved).toBe(true);
+      expect(pendingIngestImageHashRoots()).toContain(fastHash);
     });
     expect(inserted).toHaveLength(0);
 
