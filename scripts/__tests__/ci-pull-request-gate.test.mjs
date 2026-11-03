@@ -8,7 +8,7 @@
 // against the last GREEN push (scripts/ci-last-green-sha.sh), and trunk-red
 // watches every push workflow.
 
-import { readdirSync, readFileSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
@@ -526,6 +526,76 @@ describe("a job that narrows a push run compares against the last green push", (
     expect(lanes.lint).toContain(job.env.NX_CACHE_DIRECTORY);
     expect(lanes.compile).toContain(job.env.NX_CACHE_DIRECTORY);
     expect(lanes.build).toEqual([".nx/react-compiler-cache"]);
+  });
+
+  // A fresh checkout gives every file a new mtime, so an ESLint cache on the
+  // default strategy reads as all stale, and a cache the lane does not carry
+  // starts empty: either way the project is linted cold on every push.
+  it("pre-commit.yml: the lint lane carries every ESLint cache, keyed by content", () => {
+    const { workflow } = workflows.find(
+      ({ file }) => file === "pre-commit.yml",
+    );
+    const lint = workflow.jobs["workspace-checks"].strategy.matrix.include
+      .find(({ lane }) => lane === "lint")
+      .cache.trim()
+      .split("\n");
+    const { workspaces } = JSON.parse(
+      readFileSync(join(REPO_ROOT, "package.json"), "utf8"),
+    );
+    // A `dir/*` workspace pattern names every directory under `dir` that holds
+    // a manifest; any other glob would need a matcher this test does not have.
+    const projects = workspaces.flatMap((pattern) => {
+      if (!pattern.endsWith("/*")) {
+        expect(pattern, "workspace pattern").not.toMatch(/[*?[{]/);
+        return [pattern];
+      }
+      const parent = pattern.slice(0, -2);
+      return readdirSync(join(REPO_ROOT, parent), { withFileTypes: true })
+        .filter((entry) => entry.isDirectory())
+        .map((entry) => `${parent}/${entry.name}`)
+        .filter((dir) => existsSync(join(REPO_ROOT, dir, "package.json")));
+    });
+    const cached = [];
+    for (const project of projects) {
+      const manifest = JSON.parse(
+        readFileSync(join(REPO_ROOT, project, "package.json"), "utf8"),
+      );
+      // `lint` runs ESLint itself or through `lint:files`.
+      const script = ["lint", "lint:files"]
+        .map((name) => manifest.scripts?.[name] ?? "")
+        .join("\n");
+      // A project that runs its linters from a script (gui-app's
+      // `scripts/lint-files.mjs`) passes the flags there, so the command
+      // includes every file of the project the script names.
+      const command = [
+        script,
+        ...script
+          .split(/\s+/)
+          .filter((token) => /\.[cm]?[jt]s$/.test(token))
+          .map((token) => join(REPO_ROOT, project, token))
+          .filter((path) => existsSync(path))
+          .map((path) => readFileSync(path, "utf8")),
+      ].join("\n");
+      if (
+        !/eslint/.test(command) ||
+        !/(?:^|["'\s])--cache(?=$|["'\s])/m.test(command)
+      ) {
+        continue;
+      }
+      cached.push(project);
+      expect(command, project).toMatch(/--cache-strategy(?:["',\s]+|=)content/);
+      // The lane carries the file ESLint writes by default; `--cache-location`
+      // and the deprecated `--cache-file` move it.
+      expect(command, project).not.toMatch(/--cache-(?:location|file)/);
+      expect(lint, project).toContain(`${project}/.eslintcache`);
+    }
+    expect(cached).toEqual(
+      expect.arrayContaining([
+        "protocol",
+        "clients/gui-app",
+        "packages/html-source",
+      ]),
+    );
   });
 
   it("browser-regressions.yml: the filter reads the answer from the step's output", () => {

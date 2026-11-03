@@ -20,6 +20,10 @@
         "{workspaceRoot}/.github/workflows/*.yml",
         "{workspaceRoot}/.github/workflows/*.yaml",
         "{workspaceRoot}/.pre-commit-config.yaml",
+        "{workspaceRoot}/nx.json",
+        "{workspaceRoot}/**/package.json",
+        "{workspaceRoot}/**/project.json",
+        "{workspaceRoot}/clients/gui-app/scripts/lint-files.mjs",
         "sharedGlobals"
       ]
     }
