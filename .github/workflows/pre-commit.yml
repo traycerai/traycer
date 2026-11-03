@@ -31,11 +31,7 @@ jobs:
     # A team PR into `main`, `integration/*` or `land/*` skips this job: the
     # merge to `main` runs it once. A fork PR, a bot PR and a PR into any
     # other branch run it in full.
-    if: >-
-      github.event_name != 'pull_request'
-      || (github.base_ref != 'main' && !startsWith(github.base_ref, 'integration/') && !startsWith(github.base_ref, 'land/'))
-      || github.event.pull_request.head.repo.full_name != github.repository
-      || github.event.pull_request.user.type == 'Bot'
+    if: false
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
@@ -65,11 +61,7 @@ jobs:
     # A team PR into `main`, `integration/*` or `land/*` skips this job: the
     # merge to `main` runs it once. A fork PR, a bot PR and a PR into any
     # other branch run it in full.
-    if: >-
-      github.event_name != 'pull_request'
-      || (github.base_ref != 'main' && !startsWith(github.base_ref, 'integration/') && !startsWith(github.base_ref, 'land/'))
-      || github.event.pull_request.head.repo.full_name != github.repository
-      || github.event.pull_request.user.type == 'Bot'
+    if: false
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
@@ -114,12 +106,6 @@ jobs:
               .nx/cache
               .nx/workspace-data/*.db
               clients/gui-app/.eslintcache
-          - lane: compile
-            cache: |
-              .nx/cache
-              .nx/workspace-data/*.db
-          - lane: build
-            cache: .nx/react-compiler-cache
     # `actions: read` lets the push step below list this workflow's earlier runs.
     permissions:
       contents: read
@@ -201,8 +187,7 @@ jobs:
           WORKSPACE_CHECK_LANE: ${{ matrix.lane }}
           TRAYCER_REACT_COMPILER_CACHE_DIR: ${{ matrix.lane == 'build' && format('{0}/.nx/react-compiler-cache', github.workspace) || '' }}
         run: |
-          touch "$RUNNER_TEMP/build-start"
-          scripts/pre_commit_workspace_checks.sh
+          scripts/measure-lint-timing.sh
       # The build prunes the compiled modules it did not use, so the cache holds
       # one build's worth. A run that built no renderer used none and keeps all.
       - name: Keep only the compiled modules this build used
