@@ -1,4 +1,5 @@
 import { execFileSync } from "node:child_process";
+import { GIT_OUTPUT_MAX_BUFFER_BYTES } from "../../../../scripts/git-output-limit.cjs";
 import { readFileSync } from "node:fs";
 import { join, relative } from "node:path";
 import { describe, expect, it } from "vitest";
@@ -117,7 +118,11 @@ function discoveredCallers(): readonly string[] {
   const out = execFileSync(
     "git",
     ["grep", "-l", "--untracked", "encodeInstallGeneration(", "--", "clients"],
-    { cwd: REPO_ROOT, encoding: "utf8" },
+    {
+      maxBuffer: GIT_OUTPUT_MAX_BUFFER_BYTES,
+      cwd: REPO_ROOT,
+      encoding: "utf8",
+    },
   );
   return (
     out

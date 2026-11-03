@@ -147,6 +147,7 @@ import {
   writeHostInstallRecord,
 } from "../../manifest/host-install";
 import * as paths from "../../store/paths";
+import { GIT_OUTPUT_MAX_BUFFER_BYTES } from "../../../../../scripts/git-output-limit.cjs";
 import type { AttemptRecoveryEvidenceObservation } from "../update-recovery-evidence";
 
 const roots: string[] = [];
@@ -4289,7 +4290,7 @@ describe("update-executor.ts - shadow fence source boundary (structural)", () =>
           "--",
           ":(exclude)*/__tests__/*",
         ],
-        { cwd: cliSrcDir },
+        { maxBuffer: GIT_OUTPUT_MAX_BUFFER_BYTES, cwd: cliSrcDir },
       );
       throw new Error(
         "found a reference to the removed __setUpdateExecutorCohortEnabledForTest seam",
@@ -4326,7 +4327,7 @@ describe("update-executor.ts - shadow fence source boundary (structural)", () =>
             "--",
             ":(exclude)*/__tests__/*",
           ],
-          { cwd: cliSrcDir },
+          { maxBuffer: GIT_OUTPUT_MAX_BUFFER_BYTES, cwd: cliSrcDir },
         );
         throw new Error(`found a CLI reference to private "${removedSymbol}"`);
       } catch (error) {
@@ -4352,7 +4353,7 @@ describe("update-executor.ts - shadow fence source boundary (structural)", () =>
         "--",
         ":(exclude)*/__tests__/*",
       ],
-      { cwd: cliSrcDir },
+      { maxBuffer: GIT_OUTPUT_MAX_BUFFER_BYTES, cwd: cliSrcDir },
     );
     const importers = stdout.trim().split("\n").filter(Boolean);
     expect(new Set(importers)).toEqual(new Set(["host/update-executor.ts"]));
@@ -4378,7 +4379,7 @@ describe("update-executor.ts - shadow fence source boundary (structural)", () =>
             "--",
             ":(exclude)*/__tests__/*",
           ],
-          { cwd: cliSrcDir },
+          { maxBuffer: GIT_OUTPUT_MAX_BUFFER_BYTES, cwd: cliSrcDir },
         );
         throw new Error(`found a CLI reference to removed "${removedSymbol}"`);
       } catch (error) {

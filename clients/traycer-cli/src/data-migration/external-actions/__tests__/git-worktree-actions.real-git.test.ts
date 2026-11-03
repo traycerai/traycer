@@ -1,4 +1,5 @@
 import { execFileSync } from "node:child_process";
+import { GIT_OUTPUT_MAX_BUFFER_BYTES } from "../../../../../../scripts/git-output-limit.cjs";
 import { createHash } from "node:crypto";
 import {
   cp,
@@ -72,7 +73,12 @@ function git(cwd: string, ...args: string[]): string {
       "commit.gpgsign=false",
       ...args,
     ],
-    { cwd, env: gitEnv(), encoding: "utf8" },
+    {
+      maxBuffer: GIT_OUTPUT_MAX_BUFFER_BYTES,
+      cwd,
+      env: gitEnv(),
+      encoding: "utf8",
+    },
   );
 }
 
