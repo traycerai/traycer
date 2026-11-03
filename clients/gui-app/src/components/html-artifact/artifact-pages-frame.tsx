@@ -130,6 +130,8 @@ function ArtifactPageControls(props: {
     toolbarControls,
     menuItems,
   } = props;
+  const anythingAfterPages =
+    zoom !== null || toolbarControls !== undefined || menuItems !== undefined;
   return (
     <div
       ref={onElement}
@@ -186,7 +188,9 @@ function ArtifactPageControls(props: {
                 </Button>
               </span>
             </TooltipWrapper>
-            <Separator orientation="vertical" className="mx-0.5 h-4" />
+            {anythingAfterPages ? (
+              <Separator orientation="vertical" className="mx-0.5 h-4" />
+            ) : null}
           </>
         )}
         {zoom === null ? null : (

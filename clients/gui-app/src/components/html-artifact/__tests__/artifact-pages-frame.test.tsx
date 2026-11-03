@@ -290,9 +290,11 @@ describe("the More actions menu", () => {
   it("offers neither zoom nor a menu in the chat, where the row has a fixed height", () => {
     renderPages({ pages: TWO_PAGES, height: 240, pageZoom: true });
 
-    expect(
-      screen.getByRole("toolbar", { name: "HTML artifact controls" }),
-    ).toBeTruthy();
+    const toolbar = screen.getByRole("toolbar", {
+      name: "HTML artifact controls",
+    });
+    // Back and Home end the chip, with no divider left hanging after them.
+    expect(toolbar.querySelector('[data-slot="separator"]')).toBeNull();
     expect(screen.queryByRole("button", { name: "More actions" })).toBeNull();
     expect(screen.queryByRole("button", { name: "Zoom in" })).toBeNull();
     expect(screen.queryByRole("button", { name: "Zoom out" })).toBeNull();
