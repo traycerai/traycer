@@ -20,9 +20,17 @@ workflow's `changes` job lists it). Its `browser regressions` job is a
 required check on `main`, so a red shard blocks a merge. A failed shard
 uploads the Playwright report, with a trace for each failed test.
 
+CI serves the fixture pages bundled (`vite build` and `vite preview`), where a
+local run uses the dev server; it also runs two workers per shard, writes a
+JSON report and traces only a retry. On the dev server a heavy fixture fetches thousands of modules in every test's
+fresh context; bundled, the same load takes about a third of the time.
+`BROWSER_TESTS_BUNDLE=1 bun run test:browser <file>` runs a spec the way CI
+does, and is the first thing to try when a spec is red on CI and green locally.
+
 ## How the pieces fit
 
-- `playwright.config.ts` starts ONE Vite dev server for the whole run with
+- `playwright.config.ts` starts ONE Vite server for the whole run (the dev
+  server locally, the bundled pages on CI) with
   `vite.browser-tests.config.ts` (the app's config, which also compiles
   Tailwind for the fixtures), and drives the machine's own Google Chrome
   (`channel: "chrome"`; `CHROME_BIN` overrides it). Nothing downloads a
@@ -37,13 +45,32 @@ uploads the Playwright report, with a trace for each failed test.
   `centreOf`, `nextFrames` (the wait for "laid out and painted") and
   `chromeLaunchOptions` (extra Chrome flags that keep `CHROME_BIN`).
 
+## Time
+
+Every shard reports its tests' times as JSON (`browser-results-<shard>` on the
+run), and two things read them:
+
+- **A per-test budget of 20 seconds** (`scripts/browser-test-budget.ts`). A test
+  over it fails its shard. Cut what it waits on first. If the time is the claim,
+  name the test in `test-budget-allowlist.json` with the reason.
+- **The shard plan** (`scripts/browser-test-shard-plan.ts`), which deals whole
+  spec files out by `test-timings.json`, so the shards finish together. When a
+  run's slowest shard is well above its median one, refresh the timings;
+  `scripts/browser-test-timings.ts` says how. A stale file costs balance, never
+  coverage.
+
 ## Writing a test
 
 - **Wait for a condition, never for time.** Use `expect(locator).toHave…`,
   `expect.poll`, or `page.waitForFunction`. A fixed sleep is either too short
   on a loaded runner or wasted everywhere else. When a negative claim needs a
   window ("nothing happens"), wait for the positive event that proves the
-  gesture landed, then assert the negative.
+  gesture landed, then assert the negative; with no such event, count frames
+  (`nextFrames`). `page.waitForTimeout` is for a pause that is itself the claim:
+  a wheel 100ms after a send, a finger's pace.
+- **A module a spec imports in the page** (`import("/src/stores/tabs/store.ts")`)
+  is found by its literal path and built as an entry of the bundle, sharing the
+  page's instance. Write the path as a literal, or the bundle will not have it.
 - **Real input by coordinates when hit testing is the claim.** `page.mouse` and
   `page.keyboard` dispatch trusted input through Chrome. A locator `.click()`
   first waits until the element itself is the hit target, which is wrong when

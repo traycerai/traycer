@@ -71,6 +71,7 @@ import {
   type BrowserViewEntryKey,
 } from "./manager/browser-view-entry-registry";
 import { BrowserViewFind } from "./manager/browser-view-find";
+import { BrowserViewDrawHolds } from "./manager/browser-view-draw-holds";
 import { BrowserViewPipCapture } from "./manager/browser-view-pip-capture";
 import { BrowserViewPopups } from "./manager/browser-view-popups";
 import {
@@ -227,6 +228,7 @@ export class BrowserViewManager {
   readonly chords: BrowserViewChords;
   readonly pip: BrowserViewPipCapture;
   readonly viewport: BrowserViewViewport;
+  readonly drawHolds: BrowserViewDrawHolds;
 
   constructor(options: BrowserViewManagerOptions) {
     this.createDevToolsWindow = options.createDevToolsWindow;
@@ -241,10 +243,12 @@ export class BrowserViewManager {
       },
       isOnScreen: (entry) => this.isEntryOnScreen(entry),
     });
+    this.drawHolds = new BrowserViewDrawHolds(options.send);
     this.annotations = new BrowserViewAnnotationHost({
       entries: this.entries,
       send: options.send,
       debugSessions: this.debugSessions,
+      drawHolds: this.drawHolds,
     });
     this.viewport = new BrowserViewViewport(
       this.entries,
@@ -273,7 +277,7 @@ export class BrowserViewManager {
         void this.closeEntry(entry);
       },
     });
-    this.pip = new BrowserViewPipCapture();
+    this.pip = new BrowserViewPipCapture(this.drawHolds);
     this.popups = new BrowserViewPopups({
       createPopupWindowOptions: options.createPopupWindowOptions,
       createPopupWindow: options.createPopupWindow,
@@ -568,7 +572,9 @@ export class BrowserViewManager {
     if (entry.webContents.isDestroyed()) {
       throw new Error("Browser view tile is not available for capture");
     }
-    const image = await entry.webContents.capturePage();
+    const image = await this.drawHolds.withHold(entry, () =>
+      entry.webContents.capturePage(),
+    );
     if (image.isEmpty()) {
       throw new Error("Browser view tile is not available for capture");
     }
@@ -645,6 +651,13 @@ export class BrowserViewManager {
     // frame routes that sequence resolved.
     entry.agentCdpLease ??= debugSession.acquire();
     await entry.agentCdpLease.ready().catch(() => undefined);
+    // A screenshot completes only on a drawn frame, and an unshown guest is
+    // parked undrawn: hold it drawn for this command (#2375).
+    if (input.command.kind === "cdpCaptureScreenshot") {
+      return this.drawHolds.withHold(entry, () =>
+        debugSession.dispatch(input.target, input.command),
+      );
+    }
     return debugSession.dispatch(input.target, input.command);
   }
 
@@ -1231,6 +1244,7 @@ export class BrowserViewManager {
     });
     entry.annotationSession = null;
     step("pip", () => this.pip.forget(entry));
+    step("draw-holds", () => this.drawHolds.forget(entry));
     // Disposing the session ends every lease this guest handed out; the fields
     // go with it so nothing can release into the next incarnation's session.
     entry.seedLease = null;

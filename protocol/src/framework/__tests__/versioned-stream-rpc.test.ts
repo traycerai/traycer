@@ -101,16 +101,13 @@ const MULTI_MAJOR_STREAM_REGISTRY = defineVersionedStreamRpcRegistry({
 
 /**
  * Structural and schema-compatibility tests for the versioned streaming-RPC
- * framework plus a smoke test that `defineVersionedStreamRpcRegistry`
- * accepts the real combined registry shipped from
- * `@traycer/protocol/host/registry`.
+ * framework. The real combined registry shipped from
+ * `@traycer/protocol/host/registry` is validated in
+ * `scripts/compat/__tests__/static-registries.test.ts`.
  */
 
 describe("validateVersionedStreamRpcRegistry", () => {
-  it("accepts the combined hostStreamRpcRegistry", () => {
-    expect(() => {
-      validateVersionedStreamRpcRegistry(hostStreamRpcRegistry);
-    }).not.toThrow();
+  it("pins the latest minor of every line in hostStreamRpcRegistry", () => {
     // This branch's three status minors re-minted ABOVE the mainline's
     // delta-seed minor (@1.3): durability @1.4, promotion @1.5, s5 pass @1.6.
     // Mainline's own `epic.subscribe` work landed as a new MAJOR (@2.0), so it
@@ -143,7 +140,7 @@ describe("validateVersionedStreamRpcRegistry", () => {
     // RESTATED rather than derived, deliberately: this file is the
     // change-detector for the line set, so deriving it from the registry would
     // assert the registry against itself.
-    expect(hostStreamRpcRegistry["chat.subscribe"][1].latestMinor).toBe(41);
+    expect(hostStreamRpcRegistry["chat.subscribe"][1].latestMinor).toBe(42);
     // @1.6 added the `viewer` intent on the open request; @1.7 added the
     // `viewer` client frame that restates it on a live stream.
     expect(hostStreamRpcRegistry["terminal.subscribe"][1].latestMinor).toBe(7);

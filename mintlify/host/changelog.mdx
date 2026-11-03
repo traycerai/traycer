@@ -5,6 +5,19 @@ description: "Track the latest updates and improvements to the Traycer Host."
 rss: true
 ---
 
+<Update label="v1.5.2">
+Richer artifacts, mobile simulators, and more reliable long-running agents and Host restarts.
+
+* **Artifacts** - create and share HTML, canvas, and regular file artifacts alongside Markdown. Agents can render artifacts inline in chat and preview HTML output before sharing it.
+* **Mobile simulators** - run iOS simulators and Android emulators from Traycer, with agent access, separate instances, and automatic idle shutdown. Installing missing platform tools can be detected without restarting the Host.
+* **Windows data folder** - move Traycer's local data to another fixed local NTFS drive with the [data folder commands](/cli/commands#data-folder), including a session-impact review and recovery for interrupted moves.
+* **Long-running chats** - chats using Traycer Inference keep working when your Traycer sign-in is refreshed during a long turn.
+* **Host restarts** - an agent turn stopped by a Host shutdown is reported as interrupted, not as a provider failure. Send a message to continue.
+* **Cursor on Windows** - long workspace paths use a shorter session-storage path when needed, reducing database-open failures.
+
+See the [GitHub release](https://github.com/traycerai/traycer/releases/tag/host-v1.5.2).
+</Update>
+
 <Update label="v1.5.1">
 **Model list timeout** settings apply to subsequent provider model probes without restarting the Host. Providers can use a shared timeout or their own value; a provider adapter's longer timeout is preserved.
 

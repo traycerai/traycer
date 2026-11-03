@@ -89,7 +89,6 @@ function seededRandom(seed: number): () => number {
 
 interface OpenedPorts {
   readonly output: FakeOutput;
-  readonly ports: SoundtrackPorts;
   readonly setDimmed: Mock<(dimmed: boolean) => void>;
   readonly close: Mock<(afterSeconds: number) => void>;
 }
@@ -117,7 +116,7 @@ function harness(manifest: SoundtrackManifest, random: () => number) {
       setDimmed,
       close,
     };
-    opened.push({ output, ports, setDimmed, close });
+    opened.push({ output, setDimmed, close });
     return ports;
   });
   const store = createSoundtrackStore({ manifest, openPorts, random });

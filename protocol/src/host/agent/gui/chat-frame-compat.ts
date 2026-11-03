@@ -1746,11 +1746,51 @@ export function projectChatClientFrameForVersion(
     : omitChatClientFrameUltracode(projected);
 }
 
+/**
+ * The first minor whose delivery carries the opening's `worktreeIntent`, on the
+ * snapshot's `messageDelivery` and on `messageDeliveryChanged.delivery`. A lower
+ * peer's bytes stay what they were.
+ */
+export const CHAT_SUBSCRIBE_DELIVERY_INTENT_MINOR = 42;
+
+function omitDeliveryWorktreeIntent(delivery: unknown): unknown {
+  if (!isRecord(delivery) || !("worktreeIntent" in delivery)) return delivery;
+  const { worktreeIntent: _worktreeIntent, ...rest } = delivery;
+  return rest;
+}
+
+function projectDeliveryWorktreeIntent(
+  frame: ProjectedChatSubscribeServerFrame,
+  negotiated: SchemaVersion | null,
+): ProjectedChatSubscribeServerFrame {
+  if (
+    negotiated !== null &&
+    negotiated.major === 1 &&
+    negotiated.minor >= CHAT_SUBSCRIBE_DELIVERY_INTENT_MINOR
+  ) {
+    return frame;
+  }
+  if (frame.kind === "messageDeliveryChanged") {
+    const delivery = omitDeliveryWorktreeIntent(frame.delivery);
+    return delivery === frame.delivery ? frame : { ...frame, delivery };
+  }
+  if (frame.kind !== "snapshot" || !isRecord(frame.snapshot)) return frame;
+  const messageDelivery = omitDeliveryWorktreeIntent(
+    frame.snapshot.messageDelivery,
+  );
+  return messageDelivery === frame.snapshot.messageDelivery
+    ? frame
+    : { ...frame, snapshot: { ...frame.snapshot, messageDelivery } };
+}
+
 export function projectChatServerFrameForVersion(
   frame: ProjectedChatSubscribeServerFrame,
   negotiated: SchemaVersion | null,
 ): ProjectedChatSubscribeServerFrame {
-  const projected = projectChatServerFrameBeforeUltracode(frame, negotiated);
+  const projected = projectChatServerFrameBeforeUltracode(
+    projectDeliveryWorktreeIntent(frame, negotiated),
+    negotiated,
+  );
   if (chatLineCarriesUltracode(negotiated)) return projected;
   if (projected.kind === "snapshot" && isRecord(projected.snapshot)) {
     const snapshot = projectUltracodeContainers(projected.snapshot);

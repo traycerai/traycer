@@ -125,6 +125,48 @@ function filteredMessagesChanged(
 }
 
 /**
+ * Whether two pinned todos show the same checklist.
+ *
+ * The fold builds a new snapshot on every call, and it runs on every streamed
+ * flush, so a todo that did not move still arrives with a new identity about
+ * thirty times a second, and the dock's todo chip and list re-render with it.
+ * Compared item by item, field by field, it keeps the identity it had.
+ */
+export function pinnedTodoSnapshotsEqual(
+  left: PinnedTodoSnapshot | null,
+  right: PinnedTodoSnapshot | null,
+): boolean {
+  if (left === null || right === null) return left === right;
+  return (
+    left.id === right.id &&
+    left.items.length === right.items.length &&
+    // `noUncheckedIndexedAccess` is off, and the lengths already match, so
+    // this index is a value rather than a value-or-undefined.
+    left.items.every((item, index) => todoItemsEqual(item, right.items[index]))
+  );
+}
+
+function todoItemsEqual(
+  left: SegmentTodoItem,
+  right: SegmentTodoItem,
+): boolean {
+  if (left === right) return true;
+  const { id, status, text, priority, activeForm, ...unlisted } = left;
+  // A field added to the item and not compared below is never trusted equal:
+  // this assignment stops compiling, and an item carrying one at runtime
+  // reads as changed.
+  const uncompared: Readonly<Record<PropertyKey, never>> = unlisted;
+  return (
+    Object.keys(uncompared).length === 0 &&
+    id === right.id &&
+    status === right.status &&
+    text === right.text &&
+    priority === right.priority &&
+    activeForm === right.activeForm
+  );
+}
+
+/**
  * Whether this row is part of the turn running right now.
  *
  * Turn MEMBERSHIP, not `runState !== null`, and the difference is a whole

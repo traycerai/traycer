@@ -7,6 +7,10 @@ import {
   waitFor,
   within,
 } from "@testing-library/react";
+import {
+  advanceLegendListTime,
+  installLegendListTestClock,
+} from "@/components/chat/__tests__/legend-list-test-environment";
 import { Editor, type Content } from "@tiptap/core";
 import Collaboration from "@tiptap/extension-collaboration";
 import { EditorContent, useEditor } from "@tiptap/react";
@@ -1442,6 +1446,7 @@ describe("ArtifactLinkPopover", () => {
   });
 
   it("ignores stale positioning work after unmount and editor teardown", async () => {
+    installLegendListTestClock();
     const editor = makeEditor(LINK_CONTENT);
     const rejections: unknown[] = [];
     const handleRejection = (event: PromiseRejectionEvent): void => {
@@ -1454,7 +1459,7 @@ describe("ArtifactLinkPopover", () => {
 
     rendered.unmount();
     editor.destroy();
-    await new Promise((resolve) => window.setTimeout(resolve, 20));
+    await advanceLegendListTime(20);
     window.removeEventListener("unhandledrejection", handleRejection);
 
     expect(rejections).toEqual([]);

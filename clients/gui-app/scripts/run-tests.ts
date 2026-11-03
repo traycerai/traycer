@@ -57,6 +57,32 @@ function resolveVitestEntry(): string {
   return path.resolve(path.dirname(manifestPath), manifest.bin.vitest);
 }
 
+/**
+ * The arguments that record what a run did rather than choose what it runs:
+ * the reporters, the JUnit destination and per-file heap. CI passes them in
+ * the `=` form. The follow-up runs below take these and nothing else, each
+ * with its own JUnit file, so a dead fork in one of them is on record the
+ * same way as one in the main run (`dangerouslyIgnoreUnhandledErrors` lets
+ * vitest exit 0 after it).
+ */
+const JUNIT_OUTPUT_FLAG = "--outputFile.junit=";
+const EVIDENCE_ARGS = testArgs.filter(
+  (arg) =>
+    arg === "--logHeapUsage" ||
+    arg.startsWith("--reporter=") ||
+    arg.startsWith(JUNIT_OUTPUT_FLAG),
+);
+
+function followUpEvidenceArgs(runName: string): string[] {
+  return EVIDENCE_ARGS.map((arg) => {
+    if (!arg.startsWith(JUNIT_OUTPUT_FLAG)) {
+      return arg;
+    }
+    const target = arg.slice(JUNIT_OUTPUT_FLAG.length).replace(/\.xml$/, "");
+    return `${JUNIT_OUTPUT_FLAG}${target}-${runName}.xml`;
+  });
+}
+
 function runVitest(configPath: string, filePath: string | undefined): number {
   const args = [resolveVitestEntry(), "run", "--config", configPath];
   if (filePath !== undefined) {
@@ -65,6 +91,8 @@ function runVitest(configPath: string, filePath: string | undefined): number {
 
   if (configPath === "vitest.config.ts") {
     args.push(...testArgs);
+  } else if (filePath !== undefined) {
+    args.push(...followUpEvidenceArgs(path.basename(filePath).split(".")[0]));
   }
 
   const result = spawnSync("node", args, { stdio: "inherit" });

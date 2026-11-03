@@ -1,4 +1,5 @@
 import { expect, test, type Page } from "@playwright/test";
+import { streamRuns } from "./support/chat-send-follow.ts";
 import { fixture, nextFrames } from "./support/fixtures.ts";
 
 // The reader is at the bottom of a long chat and sends a prompt. The
@@ -310,16 +311,16 @@ for (const c of CASES) {
     page,
   }) => {
     await openScenario(page, c.kind);
-    if (c.earlierStreaming) {
-      await page.evaluate(() => {
-        window.__followDriver?.host.streamRich("earlier", 8, 40);
-      });
-      await page.waitForTimeout(600);
-    }
     const dockBefore = (await probe(page)).dockHeight;
     await typePrompt(page, c.lines);
     await nextFrames(page, 5);
     const dockTyped = (await probe(page)).dockHeight;
+    if (c.earlierStreaming) {
+      await page.evaluate(() => {
+        window.__followDriver?.host.streamRich("earlier", 8, 40);
+      });
+      await streamRuns(page, 15);
+    }
     await startWatching(page);
     await mark(page, "enter");
     await page.keyboard.press("Enter");
@@ -352,10 +353,10 @@ for (const c of CASES) {
     await mark(page, "stream");
     await page.evaluate((reply) => {
       if (reply === "rich")
-        window.__followDriver?.host.streamRich("reply", 5, 40);
+        window.__followDriver?.host.streamRich("reply", 2, 20);
       else window.__followDriver?.host.streamReply(100, 40);
     }, c.reply);
-    await page.waitForTimeout(c.reply === "rich" ? 6000 : 2000);
+    await streamRuns(page, c.reply === "rich" ? 60 : 30);
     await mark(page, "after");
     await page.evaluate(() => {
       window.__followDriver?.host.stopReply();

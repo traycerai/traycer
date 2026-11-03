@@ -25,6 +25,8 @@ import { fixture, nextFrames } from "./support/fixtures";
 const SCROLL = '[data-testid="chat-messages-scroll"]';
 /** Frames the view must hold still, once, for a path to be at rest. */
 const REST_FRAMES = 40;
+/** Frames a pick holds still before the next: the longest cell makes 37 of them. */
+const PICK_REST_FRAMES = 12;
 /** Evict-and-rehydrate cycles of the longest cell. */
 const EVICT_CYCLES = 12;
 
@@ -113,7 +115,7 @@ async function pickAndRest(page: Page, turn: number): Promise<void> {
       message: `the pick of turn ${String(turn)} moves the view`,
     })
     .not.toBe(before);
-  await settle(page, REST_FRAMES);
+  await settle(page, PICK_REST_FRAMES);
 }
 
 /** Runs `body` under the per-frame watch and asserts what a reader would see

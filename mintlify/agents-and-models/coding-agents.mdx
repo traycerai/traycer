@@ -85,6 +85,8 @@ In the composer's model picker:
 - A coding agent with two or more profiles shows a profile dropdown. ⌘⇧1–9 / Ctrl+Shift+1–9 switches profile.
 - Thinking effort appears only when the selected model supports reasoning levels. ⌥1–9 / Alt+1–9 sets it.
 - Fast mode appears only when the selected Claude Code, Codex, or Cursor model has a fast tier. ⌥0 / Alt+0 toggles it.
+- Cursor choices available only in **Max Mode** carry a **Max Mode** label. The label follows the selected model, thinking effort, and fast tier; it is not a separate toggle. Max Mode uses a larger context window and costs more on legacy request-based Cursor plans.
+- For Claude Code, the **Ultracode** switch appears at the bottom of the picker. See [Ultracode](/panels/agents#ultracode).
 - Models that are being retired carry a **Deprecated** badge.
 - **Refresh providers & models** reloads the list, and **Provider CLI settings** opens [Providers](/settings/providers).
 - ⌃⌥M / Alt+Shift+M opens and closes the picker.
@@ -103,6 +105,8 @@ When a coding agent hits a usage limit, Traycer can offer another profile or swi
 ## Provider Setup
 
 Configure credentials, environment variables, CLI binaries, profiles, and default Terminal interface CLI arguments in [Settings > Providers](/settings/providers).
+
+For OpenCode 2, choose **Managed 2.x** in **CLI & Args**. This also changes existing chats from their next message when they can switch safely. See [OpenCode versions](/settings/providers#opencode-versions).
 
 Claude Code, Codex, Grok, and Antigravity support multiple managed profiles. What a profile shares with your default login, and how Grok keeps its profiles separate, is in [Managed Profiles](/settings/providers#managed-profiles).
 

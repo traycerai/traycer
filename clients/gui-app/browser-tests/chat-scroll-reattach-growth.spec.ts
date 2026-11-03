@@ -254,7 +254,7 @@ for (const line of ["legacy", "windowed"] as const) {
         if (button === null) throw new Error("card button missing");
         button.click();
       }, CARD);
-      await page.waitForTimeout(1000);
+      await nextFrames(page, 40);
       const result = await page.evaluate(() => {
         const hook = window.__growthHook;
         if (hook === undefined) throw new Error("hook missing");
@@ -324,7 +324,7 @@ for (const line of ["legacy", "windowed"] as const) {
     await page.evaluate((card) => {
       document.querySelector<HTMLElement>(card)?.click();
     }, CARD);
-    await page.waitForTimeout(1000);
+    await nextFrames(page, 40);
     const grown = await readView(page);
     // On the fixed tree the reader is still free here; on the unfixed tree
     // the growth may already have pulled them to the tail.

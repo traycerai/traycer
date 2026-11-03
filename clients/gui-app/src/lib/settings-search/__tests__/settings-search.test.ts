@@ -489,10 +489,10 @@ describe("settings search", () => {
 
     it("offers the phone's push row on mobile and withholds it on desktop", () => {
       expect(labelsFor("push notifications", MOBILE)).toContain(
-        "Push notifications on this phone",
+        "Push notifications",
       );
       expect(labelsFor("push notifications", DESKTOP)).not.toContain(
-        "Push notifications on this phone",
+        "Push notifications",
       );
     });
 

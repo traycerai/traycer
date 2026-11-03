@@ -7,7 +7,7 @@ export const APP_NOTIFICATIONS = defineSettingsSection("app-notifications", {
   page: {
     availableWhen: alwaysAvailable,
     label: "Sounds",
-    description: "Which chime plays for each kind of alert, across hosts.",
+    description: "Which chime plays for each kind of alert.",
     keywords: ["sound", "chime", "audio", "beep", "volume", "mute", "ding"],
   },
   // The chime card shows no heading — the page already names it — so it is not

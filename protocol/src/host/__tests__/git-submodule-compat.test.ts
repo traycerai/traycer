@@ -104,7 +104,13 @@ const v10Response: GitListChangedFilesResponse = {
 
 describe("git.*@1.1 registry", () => {
   it("validates: only listChangedFiles bumps to v1.1; diff methods stay v1.0-only", () => {
-    expect(() => validateVersionedRpcRegistry(hostRpcRegistry)).not.toThrow();
+    expect(() =>
+      validateVersionedRpcRegistry({
+        "git.listChangedFiles": hostRpcRegistry["git.listChangedFiles"],
+        "git.getFileDiff": hostRpcRegistry["git.getFileDiff"],
+        "git.getFileDiffs": hostRpcRegistry["git.getFileDiffs"],
+      }),
+    ).not.toThrow();
 
     // listChangedFiles is the sole minor bump - v1.1 carries the nested snapshot.
     const listLine = hostRpcRegistry["git.listChangedFiles"][1];

@@ -60,13 +60,13 @@ export interface VoiceView {
   readonly generation: number;
 }
 
-/** The palette's items by the place each takes in the view's order. */
 /**
  * `frozen`: it would try to wake, and be refused. `unknown`: the account's hosts
  * haven't answered yet, and if this one turns out to rest, the open wakes it then.
  */
 export type HostWake = "none" | "wakes" | "frozen" | "unknown";
 
+/** The palette's items by the place each takes in the view's order. */
 export interface VoicePaletteItems {
   /** The active task's agents and artifacts, as the opener lists them. */
   readonly tiles: ReadonlyArray<CommandItem>;

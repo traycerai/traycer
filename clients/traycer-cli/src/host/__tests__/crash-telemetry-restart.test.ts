@@ -8,6 +8,7 @@ import {
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { NO_REPORT_MEMORY } from "../crash-diagnostics";
 import type { HostCrashTelemetry } from "../crash-telemetry";
 
 // A crash-looping host under a service manager: the supervisor relaunches the
@@ -135,7 +136,7 @@ function crash(attemptId: string, exitCode: number): HostCrashTelemetry {
     stopRequested: false,
     stderrEmpty: true,
     stderrFatal: "none",
-    reportMemory: { heapLimitBytes: null, heapUsedBytes: null, rssBytes: null },
+    reportMemory: NO_REPORT_MEMORY,
   };
 }
 

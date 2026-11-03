@@ -9,6 +9,7 @@ import type {
 import type { BrowserViewTileKey } from "@traycer-clients/shared/platform/browser-view";
 import { BrowserAnnotationSession } from "../annotation/browser-annotation-session";
 import type { BrowserViewDebugSessions } from "./debug-session-for";
+import type { BrowserViewDrawHolds } from "./browser-view-draw-holds";
 import {
   requireSurface,
   toTileKey,
@@ -30,6 +31,7 @@ interface BrowserViewAnnotationHostOptions {
   readonly entries: BrowserViewEntryRegistry<BrowserViewEntry>;
   readonly send: BrowserViewSend;
   readonly debugSessions: BrowserViewDebugSessions;
+  readonly drawHolds: BrowserViewDrawHolds;
 }
 
 /**
@@ -41,6 +43,7 @@ export class BrowserViewAnnotationHost {
   private readonly entries: BrowserViewEntryRegistry<BrowserViewEntry>;
   private readonly send: BrowserViewSend;
   private readonly debugSessions: BrowserViewDebugSessions;
+  private readonly drawHolds: BrowserViewDrawHolds;
   private readonly pendingAttachResults = new Map<
     string,
     PendingAnnotationAttachResult
@@ -50,6 +53,7 @@ export class BrowserViewAnnotationHost {
     this.entries = options.entries;
     this.send = options.send;
     this.debugSessions = options.debugSessions;
+    this.drawHolds = options.drawHolds;
   }
 
   setTargetChatLabel(
@@ -76,8 +80,16 @@ export class BrowserViewAnnotationHost {
     }
     this.end(entry, "replaced");
     const surface = requireSurface(entry);
+    const guest = entry.webContents;
     const session = new BrowserAnnotationSession({
-      webContents: entry.webContents,
+      // The attach reads the guest's pixels, which needs a drawn frame.
+      webContents: {
+        id: guest.id,
+        getURL: () => guest.getURL(),
+        getTitle: () => guest.getTitle(),
+        capturePage: () =>
+          this.drawHolds.withHold(entry, () => guest.capturePage()),
+      },
       debugSession: this.debugSessions.ensure(entry),
       theme: input.theme,
       identity: {

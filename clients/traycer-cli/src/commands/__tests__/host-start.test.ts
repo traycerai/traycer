@@ -38,7 +38,13 @@ import type { HostInstallRecord } from "../../manifest/host-install";
 import type { ILogger } from "../../logger";
 import type { Layer0FrameRead } from "../../host/lifecycle-probe";
 import {
+  parseHostPreviousExit,
+  type HostPreviousExit,
+} from "@traycer/protocol/config/host-previous-exit";
+import {
   CRASH_REPORT_SPAWN_SLACK_MS,
+  NO_HEAP_SPACE_USED_BYTES,
+  NO_REPORT_MEMORY,
   STDERR_HEAD_MAX_BYTES,
   STDERR_TAIL_MAX_BYTES,
   StderrCaptureBuffer,
@@ -327,6 +333,8 @@ interface Recorded {
   // Fleet crash telemetry (`deps.reportHostCrash`) observations. Injected so
   // suites never touch a real Sentry client or a real pid.json.
   readonly crashReports: HostCrashTelemetry[];
+  /** Previous-exit records the supervisor asked to write, in order. */
+  readonly previousExits: HostPreviousExit[];
   /** Environments the supervisor asked to resume crash-report state for. */
   readonly resumedCrashReports: Environment[];
   /** Service-definition refreshes a service-manager start asked for. */
@@ -419,6 +427,7 @@ function makeRunStubs(
     findCrashReportHangs: false,
     findCrashReportRejects: false,
     crashReports: [],
+    previousExits: [],
     resumedCrashReports: [],
     refreshedDefinitions: [],
     reportHostCrashHangs: false,
@@ -567,6 +576,10 @@ function makeRunStubs(
         phase,
         fields: { ...fields } as Record<string, unknown>,
       });
+    },
+    writePreviousExit: (_environment, record) => {
+      recorded.sequence.push("previous-exit");
+      recorded.previousExits.push(record);
     },
     // The real supervisor calls process.exit which never returns. In
     // tests we record the requested code and resolve any pending waiter
@@ -1421,10 +1434,12 @@ describe("runHostStart - signal/exit propagation", () => {
     recorded.findCrashReportResult = {
       filename: "report.oom.json",
       summary: "event=Allocation failed trigger=FatalError",
+      heapOutOfMemory: false,
       memory: {
         heapLimitBytes: 4831838208,
         heapUsedBytes: 4100000000,
         rssBytes: 4750000000,
+        heapSpaceUsedBytes: NO_HEAP_SPACE_USED_BYTES,
       },
     };
 
@@ -1502,6 +1517,7 @@ describe("runHostStart - signal/exit propagation", () => {
       heapLimitBytes: 4831838208,
       heapUsedBytes: 4100000000,
       rssBytes: 4750000000,
+      heapSpaceUsedBytes: NO_HEAP_SPACE_USED_BYTES,
     });
     expect(report.hostVersion).toBe(sampleRecord(exec).version);
     expect(report.attemptId).toBe(crashed?.fields.attemptId);
@@ -1537,7 +1553,8 @@ describe("runHostStart - signal/exit propagation", () => {
       recorded.findCrashReportResult = {
         filename: "report.abrt.json",
         summary: "event=FatalError",
-        memory: { heapLimitBytes: null, heapUsedBytes: null, rssBytes: null },
+        heapOutOfMemory: false,
+        memory: NO_REPORT_MEMORY,
       };
       const originalSpawn = deps.spawn;
       if (originalSpawn === undefined) {
@@ -9421,5 +9438,306 @@ describe("runHostStart - a proof published during a slow presence probe (settlin
     ).toBe(false);
     expect(recorded.spawnCalls).toHaveLength(1);
     expect(consumeCalls).toBe(2);
+  });
+});
+
+describe("runHostStart - previous-exit record", () => {
+  const exec = "/opt/traycer/host/install/traycer-host";
+  const heapLimitBytes = 4831838208;
+  const heapUsedBytes = 4100000000;
+  const heapFatalLine =
+    "FATAL ERROR: Ineffective mark-compacts near heap limit Allocation failed - JavaScript heap out of memory\n";
+
+  /** Every record the supervisor wrote must be one the host's parser accepts. */
+  function expectEveryRecordParses(recorded: Recorded): void {
+    for (const record of recorded.previousExits) {
+      expect(parseHostPreviousExit(record)).toEqual(record);
+    }
+  }
+
+  async function runExit(options: {
+    readonly code: number | null;
+    readonly signal: NodeJS.Signals | null;
+    readonly stderrText: string | null;
+    readonly report: CrashReportMatch | null;
+    /** Deps layered over the stubs; given the run's recorder. */
+    readonly overrides: (
+      recorded: Recorded,
+      base: Partial<RunHostStartDeps>,
+    ) => Partial<RunHostStartDeps>;
+  }): Promise<Recorded> {
+    const { child, recorded, deps } = makeRunStubs(sampleRecord(exec), null);
+    const stderr = new PassThrough();
+    Object.assign(child, { stderr });
+    recorded.findCrashReportResult = options.report;
+    const originalSpawn = deps.spawn;
+    if (originalSpawn === undefined) {
+      throw new Error("test spawn dependency missing");
+    }
+    await runUntilExit(
+      () =>
+        runHostStart(
+          { environment: "production", cwd: null },
+          {
+            ...deps,
+            ...options.overrides(recorded, deps),
+            spawn: (command, args, spawnOptions) => {
+              const spawned = originalSpawn(command, args, spawnOptions);
+              setImmediate(() => {
+                if (options.stderrText !== null) {
+                  stderr.write(Buffer.from(options.stderrText));
+                }
+                stderr.end();
+                child.emit("exit", options.code, options.signal);
+              });
+              return spawned;
+            },
+          },
+        ),
+      recorded,
+    );
+    return recorded;
+  }
+
+  const oomReport: CrashReportMatch = {
+    filename: "report.oom.json",
+    summary: "event=Allocation failed trigger=OOMError",
+    memory: {
+      heapLimitBytes,
+      heapUsedBytes,
+      rssBytes: null,
+      heapSpaceUsedBytes: NO_HEAP_SPACE_USED_BYTES,
+    },
+    heapOutOfMemory: true,
+  };
+
+  it("records out-of-memory with this attempt's id and the report's heap numbers when a SIGABRT death printed the heap fatal line", async () => {
+    const recorded = await runExit({
+      code: null,
+      signal: "SIGABRT",
+      stderrText: heapFatalLine,
+      report: oomReport,
+      overrides: () => ({}),
+    });
+    expectEveryRecordParses(recorded);
+    const marker = recorded.markers.find((m) => m.phase === "killed");
+    expect(recorded.previousExits).toHaveLength(1);
+    expect(recorded.previousExits[0]).toMatchObject({
+      v: 1,
+      kind: "out-of-memory",
+      attemptId: marker?.fields.attemptId,
+      signal: "SIGABRT",
+      exitCode: null,
+      heapLimitBytes,
+      heapUsedBytes,
+    });
+    expect(recorded.sequence.indexOf("previous-exit")).toBeGreaterThan(
+      recorded.sequence.indexOf("terminal-marker:killed"),
+    );
+  });
+
+  it("records out-of-memory from the report's flag alone on a nonzero exit", async () => {
+    const recorded = await runExit({
+      code: 134,
+      signal: null,
+      stderrText: null,
+      report: oomReport,
+      overrides: () => ({}),
+    });
+    expectEveryRecordParses(recorded);
+    expect(recorded.previousExits).toHaveLength(1);
+    expect(recorded.previousExits[0]?.kind).toBe("out-of-memory");
+    expect(recorded.previousExits[0]?.exitCode).toBe(134);
+    expect(recorded.previousExits[0]?.heapLimitBytes).toBe(heapLimitBytes);
+  });
+
+  it("records out-of-memory from the stderr fatal line alone, with null heap numbers", async () => {
+    const recorded = await runExit({
+      code: 134,
+      signal: null,
+      stderrText: heapFatalLine,
+      report: null,
+      overrides: () => ({}),
+    });
+    expectEveryRecordParses(recorded);
+    expect(recorded.previousExits).toHaveLength(1);
+    expect(recorded.previousExits[0]).toMatchObject({
+      kind: "out-of-memory",
+      heapLimitBytes: null,
+      heapUsedBytes: null,
+    });
+  });
+
+  it("records crashed for a plain nonzero exit with no out-of-memory evidence", async () => {
+    const recorded = await runExit({
+      code: 7,
+      signal: null,
+      stderrText: null,
+      report: null,
+      overrides: () => ({}),
+    });
+    expectEveryRecordParses(recorded);
+    expect(recorded.previousExits).toHaveLength(1);
+    expect(recorded.previousExits[0]?.kind).toBe("crashed");
+    expect(recorded.previousExits[0]?.exitCode).toBe(7);
+  });
+
+  it("records crashed for an unsolicited SIGKILL, which no stop asked for", async () => {
+    const recorded = await runExit({
+      code: null,
+      signal: "SIGKILL",
+      stderrText: null,
+      report: null,
+      overrides: () => ({ maxRelaunches: 0 }),
+    });
+    expectEveryRecordParses(recorded);
+    expect(recorded.previousExits).toHaveLength(1);
+    expect(recorded.previousExits[0]).toMatchObject({
+      kind: "crashed",
+      signal: "SIGKILL",
+      exitCode: null,
+    });
+  });
+
+  it("records stopped for a SIGKILL while a stop was requested", async () => {
+    // The stop lands while the child runs; true from the start would end the
+    // run at the spawn-boundary guard before any child existed.
+    const recorded = await runExit({
+      code: null,
+      signal: "SIGKILL",
+      stderrText: null,
+      report: null,
+      overrides: (run) => ({
+        maxRelaunches: 0,
+        hasStopIntent: async () => (run.spawnCalls.length > 0 ? "stop" : null),
+      }),
+    });
+    expectEveryRecordParses(recorded);
+    expect(recorded.previousExits).toHaveLength(1);
+    expect(recorded.previousExits[0]).toMatchObject({
+      kind: "stopped",
+      signal: "SIGKILL",
+    });
+  });
+
+  it("records a requested restart as stopped for the first attempt, before the second spawns", async () => {
+    const { recorded, deps } = makeRunStubs(sampleRecord(exec), null);
+    const scripted = withScriptedAttempts(deps, [
+      { code: RESTART_EXIT_CODE, signal: null },
+      { code: 0, signal: null },
+    ]);
+    await runUntilExit(
+      () =>
+        runHostStart(
+          { environment: "production", cwd: null },
+          { ...scripted.deps, maxRelaunches: 5 },
+        ),
+      recorded,
+    );
+    expectEveryRecordParses(recorded);
+    const firstAttempt = recorded.markers.find((m) => m.phase === "starting");
+    expect(recorded.previousExits[0]).toMatchObject({
+      kind: "stopped",
+      exitCode: RESTART_EXIT_CODE,
+      signal: null,
+      attemptId: firstAttempt?.fields.attemptId,
+    });
+    const spawns = recorded.sequence
+      .map((label, index) => (label === "spawn" ? index : -1))
+      .filter((index) => index >= 0);
+    expect(spawns).toHaveLength(2);
+    expect(recorded.sequence.indexOf("previous-exit")).toBeLessThan(spawns[1]);
+  });
+
+  it("writes a parseable record for a forced shutdown (recorded as stopped)", async () => {
+    const recorded = await runExit({
+      code: 0,
+      signal: null,
+      stderrText:
+        "host-shutdown-forced reason=watchdog pending=host close (30000ms)\n",
+      report: null,
+      overrides: () => ({}),
+    });
+    expect(recorded.previousExits).toHaveLength(1);
+    expect(recorded.previousExits[0]).toMatchObject({
+      kind: "stopped",
+      exitCode: 0,
+      signal: null,
+    });
+    expectEveryRecordParses(recorded);
+  });
+
+  it("writes a parseable record for a Windows requested kill (recorded as stopped)", async () => {
+    const recorded = await runExit({
+      code: 0xffffffff,
+      signal: null,
+      stderrText: null,
+      report: null,
+      overrides: (run, base) => ({
+        ...withLifecyclePlatform(base, "win32"),
+        maxRelaunches: 0,
+        hasStopIntent: async () => (run.spawnCalls.length > 0 ? "stop" : null),
+      }),
+    });
+    expect(recorded.previousExits).toHaveLength(1);
+    expect(recorded.previousExits[0]).toMatchObject({
+      kind: "stopped",
+      exitCode: 0xffffffff,
+      signal: null,
+    });
+    expectEveryRecordParses(recorded);
+  });
+
+  it("writes a parseable record for a Windows session end (recorded as stopped)", async () => {
+    const recorded = await runExit({
+      code: 0xc000026b,
+      signal: null,
+      stderrText: null,
+      report: null,
+      overrides: (_run, base) => ({
+        ...withLifecyclePlatform(base, "win32"),
+        maxRelaunches: 0,
+      }),
+    });
+    expect(recorded.previousExits).toHaveLength(1);
+    expect(recorded.previousExits[0]).toMatchObject({
+      kind: "stopped",
+      exitCode: 0xc000026b,
+      signal: null,
+    });
+    expectEveryRecordParses(recorded);
+  });
+
+  it("records exited for a clean exit", async () => {
+    const recorded = await runExit({
+      code: 0,
+      signal: null,
+      stderrText: null,
+      report: null,
+      overrides: () => ({}),
+    });
+    expectEveryRecordParses(recorded);
+    expect(recorded.previousExits).toHaveLength(1);
+    expect(recorded.previousExits[0]?.kind).toBe("exited");
+  });
+
+  it("keeps the exit outcome and the marker when the record cannot be written", async () => {
+    const attempts: string[] = [];
+    const recorded = await runExit({
+      code: 7,
+      signal: null,
+      stderrText: null,
+      report: null,
+      overrides: () => ({
+        writePreviousExit: () => {
+          attempts.push("write");
+          throw new Error("disk full");
+        },
+      }),
+    });
+    expectEveryRecordParses(recorded);
+    expect(attempts).toEqual(["write"]);
+    expect(recorded.exited).toBe(7);
+    expect(recorded.markers.some((m) => m.phase === "crashed")).toBe(true);
   });
 });

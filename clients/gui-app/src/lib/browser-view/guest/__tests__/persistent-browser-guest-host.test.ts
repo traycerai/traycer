@@ -229,6 +229,44 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
+/**
+ * The parked posture: off screen and undrawn, so a parked page with an
+ * animation loop costs the compositor nothing.
+ */
+function expectParkedPosture(wrapper: HTMLElement): void {
+  expect(wrapper.style.position).toBe("fixed");
+  expect(wrapper.style.insetInlineStart).toBe("-10000px");
+  expect(wrapper.style.insetBlockStart).toBe("0px");
+  expect(wrapper.style.width).toBe("1280px");
+  expect(wrapper.style.height).toBe("800px");
+  expect(wrapper.style.opacity).toBe("0");
+  expect(wrapper.style.transform).toBe("");
+  expect(wrapper.style.filter).toBe("");
+  expect(wrapper.style.pointerEvents).toBe("none");
+  expect(wrapper.style.display).toBe("block");
+}
+
+/**
+ * The posture of an unshown guest main is reading: at the window's origin
+ * at full size, shrunk to a speck by a transform and made invisible by a
+ * filter. The plain `opacity` stays unset because opacity:0 stops the
+ * compositor drawing the guest, and a capture completes only on a drawn
+ * frame.
+ */
+function expectDrawHeldPosture(wrapper: HTMLElement): void {
+  expect(wrapper.style.position).toBe("fixed");
+  expect(wrapper.style.insetInlineStart).toBe("0px");
+  expect(wrapper.style.insetBlockStart).toBe("0px");
+  expect(wrapper.style.width).toBe("1280px");
+  expect(wrapper.style.height).toBe("800px");
+  expect(wrapper.style.transform).toBe("scale(0.02)");
+  expect(wrapper.style.transformOrigin).toBe("top left");
+  expect(wrapper.style.filter).toBe("opacity(0)");
+  expect(wrapper.style.opacity).toBe("");
+  expect(wrapper.style.pointerEvents).toBe("none");
+  expect(wrapper.style.display).toBe("block");
+}
+
 describe("browserGuestCssAnchorName", () => {
   it("prefixes the registration id as a dashed-ident", () => {
     expect(browserGuestCssAnchorName(REGISTRATION_A)).toBe(ANCHOR_A);
@@ -970,26 +1008,6 @@ describe("persistent browser guest host", () => {
   });
 
   describe("presentation states", () => {
-    /**
-     * The parked posture: laid out at the window's origin at full size, shrunk
-     * to a speck by a transform and made invisible by a filter. The plain
-     * `opacity` stays unset because opacity:0 stops the compositor drawing the
-     * guest, and a guest nobody draws cannot be captured.
-     */
-    function expectParkedPosture(wrapper: HTMLElement): void {
-      expect(wrapper.style.position).toBe("fixed");
-      expect(wrapper.style.insetInlineStart).toBe("0px");
-      expect(wrapper.style.insetBlockStart).toBe("0px");
-      expect(wrapper.style.width).toBe("1280px");
-      expect(wrapper.style.height).toBe("800px");
-      expect(wrapper.style.transform).toBe("scale(0.02)");
-      expect(wrapper.style.transformOrigin).toBe("top left");
-      expect(wrapper.style.filter).toBe("opacity(0)");
-      expect(wrapper.style.opacity).toBe("");
-      expect(wrapper.style.pointerEvents).toBe("none");
-      expect(wrapper.style.display).toBe("block");
-    }
-
     it("maps presented, retained, and unbound onto visibility and interactivity", () => {
       const bridge = new FakeBrowserViewBridge({});
       startHost(bridge, NOOP_ACTIVATE);
@@ -1137,6 +1155,215 @@ describe("persistent browser guest host", () => {
       expect(wrapper.getAttribute("data-browser-guest-state")).toBe("retained");
       expect(webview.style.width).toBe("797px");
       expect(webview.style.height).toBe("877px");
+    });
+  });
+
+  describe("draw holds", () => {
+    function placement(presented: boolean): BrowserGuestTilePlacement {
+      return {
+        registrationId: REGISTRATION_A,
+        instanceId: INSTANCE_A,
+        viewTabId: "view-1",
+        paneId: "pane-1",
+        presented,
+        viewport: null,
+      };
+    }
+
+    /** Frames run only when the test fires them, so the count is observable. */
+    function controlAnimationFrames(): { readonly fire: () => void } {
+      const queued: FrameRequestCallback[] = [];
+      vi.stubGlobal(
+        "requestAnimationFrame",
+        (callback: FrameRequestCallback) => {
+          queued.push(callback);
+          return queued.length;
+        },
+      );
+      return {
+        fire: () => {
+          const batch = queued.splice(0);
+          for (const callback of batch) callback(0);
+        },
+      };
+    }
+
+    /** Lets the host's promise chain deliver an acknowledgement. */
+    async function flushAcknowledgement(): Promise<void> {
+      await act(async () => {
+        await Promise.resolve();
+        await Promise.resolve();
+        await Promise.resolve();
+      });
+    }
+
+    it("parks an unbound and a retained guest off screen and undrawn", () => {
+      const bridge = new FakeBrowserViewBridge({});
+      startHost(bridge, NOOP_ACTIVATE);
+      bridge.emitGuestMountRequested(mountRequest(REGISTRATION_A, PARTITION_A));
+      const { wrapper } = guestNodes(REGISTRATION_A);
+      expectParkedPosture(wrapper);
+
+      setOwnedPlacement(Symbol("tile"), placement(false));
+      expect(wrapper.getAttribute("data-browser-guest-state")).toBe("retained");
+      expectParkedPosture(wrapper);
+    });
+
+    it("draws an unbound guest for a hold, acknowledging only after two frames, and parks it on release", async () => {
+      const frames = controlAnimationFrames();
+      const bridge = new FakeBrowserViewBridge({});
+      startHost(bridge, NOOP_ACTIVATE);
+      bridge.emitGuestMountRequested(mountRequest(REGISTRATION_A, PARTITION_A));
+      const { wrapper } = guestNodes(REGISTRATION_A);
+
+      bridge.emitGuestDrawHoldRequested({
+        holdId: "hold-1",
+        registrationId: REGISTRATION_A,
+      });
+      expectDrawHeldPosture(wrapper);
+      await flushAcknowledgement();
+      expect(bridge.guestDrawHoldAppliedCalls).toEqual([]);
+
+      frames.fire();
+      await flushAcknowledgement();
+      expect(bridge.guestDrawHoldAppliedCalls).toEqual([]);
+
+      frames.fire();
+      await flushAcknowledgement();
+      expect(bridge.guestDrawHoldAppliedCalls).toEqual([
+        { holdId: "hold-1", registrationId: REGISTRATION_A, applied: true },
+      ]);
+
+      bridge.emitGuestDrawHoldReleased({
+        holdId: "hold-1",
+        registrationId: REGISTRATION_A,
+      });
+      expectParkedPosture(wrapper);
+    });
+
+    it("draws a retained guest for a hold and parks it on release", () => {
+      controlAnimationFrames();
+      const bridge = new FakeBrowserViewBridge({});
+      startHost(bridge, NOOP_ACTIVATE);
+      bridge.emitGuestMountRequested(mountRequest(REGISTRATION_A, PARTITION_A));
+      const { wrapper } = guestNodes(REGISTRATION_A);
+      setOwnedPlacement(Symbol("tile"), placement(false));
+
+      bridge.emitGuestDrawHoldRequested({
+        holdId: "hold-1",
+        registrationId: REGISTRATION_A,
+      });
+      expect(wrapper.getAttribute("data-browser-guest-state")).toBe("retained");
+      expectDrawHeldPosture(wrapper);
+
+      bridge.emitGuestDrawHoldReleased({
+        holdId: "hold-1",
+        registrationId: REGISTRATION_A,
+      });
+      expect(wrapper.getAttribute("data-browser-guest-state")).toBe("retained");
+      expectParkedPosture(wrapper);
+    });
+
+    it("ignores a release carrying a stale holdId", () => {
+      controlAnimationFrames();
+      const bridge = new FakeBrowserViewBridge({});
+      startHost(bridge, NOOP_ACTIVATE);
+      bridge.emitGuestMountRequested(mountRequest(REGISTRATION_A, PARTITION_A));
+      const { wrapper } = guestNodes(REGISTRATION_A);
+      bridge.emitGuestDrawHoldRequested({
+        holdId: "hold-2",
+        registrationId: REGISTRATION_A,
+      });
+
+      bridge.emitGuestDrawHoldReleased({
+        holdId: "hold-1",
+        registrationId: REGISTRATION_A,
+      });
+      expectDrawHeldPosture(wrapper);
+
+      bridge.emitGuestDrawHoldReleased({
+        holdId: "hold-2",
+        registrationId: REGISTRATION_A,
+      });
+      expectParkedPosture(wrapper);
+    });
+
+    it("acknowledges a hold for an unknown registration as not applied", async () => {
+      const bridge = new FakeBrowserViewBridge({});
+      startHost(bridge, NOOP_ACTIVATE);
+
+      bridge.emitGuestDrawHoldRequested({
+        holdId: "hold-1",
+        registrationId: "reg-unknown",
+      });
+      await flushAcknowledgement();
+
+      expect(bridge.guestDrawHoldAppliedCalls).toEqual([
+        { holdId: "hold-1", registrationId: "reg-unknown", applied: false },
+      ]);
+    });
+
+    it("keeps a presented guest presented under a hold, and draws it held once its tile goes away", () => {
+      controlAnimationFrames();
+      const bridge = new FakeBrowserViewBridge({});
+      startHost(bridge, NOOP_ACTIVATE);
+      bridge.emitGuestMountRequested(mountRequest(REGISTRATION_A, PARTITION_A));
+      const { wrapper } = guestNodes(REGISTRATION_A);
+      const owner = Symbol("tile");
+      setOwnedPlacement(owner, placement(true));
+
+      bridge.emitGuestDrawHoldRequested({
+        holdId: "hold-1",
+        registrationId: REGISTRATION_A,
+      });
+      expect(wrapper.getAttribute("data-browser-guest-state")).toBe(
+        "presented",
+      );
+      expect(wrapper.style.opacity).toBe("1");
+      expect(wrapper.style.transform).toBe("");
+
+      bridge.emitGuestDrawHoldReleased({
+        holdId: "hold-1",
+        registrationId: REGISTRATION_A,
+      });
+      expect(wrapper.getAttribute("data-browser-guest-state")).toBe(
+        "presented",
+      );
+      expect(wrapper.style.opacity).toBe("1");
+
+      bridge.emitGuestDrawHoldRequested({
+        holdId: "hold-2",
+        registrationId: REGISTRATION_A,
+      });
+      setOwnedPlacement(owner, placement(false));
+      expect(wrapper.getAttribute("data-browser-guest-state")).toBe("retained");
+      expectDrawHeldPosture(wrapper);
+
+      bridge.emitGuestDrawHoldReleased({
+        holdId: "hold-2",
+        registrationId: REGISTRATION_A,
+      });
+      expectParkedPosture(wrapper);
+    });
+
+    it("drops a held guest with its removal and treats a later release as a no-op", () => {
+      controlAnimationFrames();
+      const bridge = new FakeBrowserViewBridge({});
+      startHost(bridge, NOOP_ACTIVATE);
+      bridge.emitGuestMountRequested(mountRequest(REGISTRATION_A, PARTITION_A));
+      bridge.emitGuestDrawHoldRequested({
+        holdId: "hold-1",
+        registrationId: REGISTRATION_A,
+      });
+
+      bridge.emitGuestReleaseRequested({ registrationId: REGISTRATION_A });
+      expect(queryWrapper(REGISTRATION_A)).toBeNull();
+
+      bridge.emitGuestDrawHoldReleased({
+        holdId: "hold-1",
+        registrationId: REGISTRATION_A,
+      });
+      expect(queryWrapper(REGISTRATION_A)).toBeNull();
     });
   });
 

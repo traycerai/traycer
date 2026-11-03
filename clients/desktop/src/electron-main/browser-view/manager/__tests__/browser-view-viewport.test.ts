@@ -14,6 +14,7 @@ import {
   type BrowserViewEntryKey,
 } from "../browser-view-entry-registry";
 import { BrowserViewDebugSessions } from "../debug-session-for";
+import { BrowserViewDrawHolds } from "../browser-view-draw-holds";
 import { NativeBrowserViewLifecycle } from "../native-browser-view-lifecycle";
 import { BrowserViewViewport } from "../browser-view-viewport";
 
@@ -164,6 +165,7 @@ function createUnacknowledgedViewport(
       isOnScreen: () => false,
     }),
     send: () => false,
+    drawHolds: new BrowserViewDrawHolds(() => false),
   });
   const presentedIntents: unknown[] = [];
   const viewport = new BrowserViewViewport(
@@ -200,6 +202,7 @@ function createFitRefusingViewport(readback: BrowserViewportGeometry): {
       isOnScreen: () => false,
     }),
     send: () => false,
+    drawHolds: new BrowserViewDrawHolds(() => false),
   });
   const presentedIntents: unknown[] = [];
   let viewport: BrowserViewViewport;
@@ -255,6 +258,7 @@ describe("BrowserViewViewport", () => {
       entries,
       debugSessions,
       send: () => false,
+      drawHolds: new BrowserViewDrawHolds(() => false),
     });
     const viewport = new BrowserViewViewport(
       entries,
@@ -280,6 +284,7 @@ describe("BrowserViewViewport", () => {
       entries,
       debugSessions,
       send: () => false,
+      drawHolds: new BrowserViewDrawHolds(() => false),
     });
     const readback: BrowserViewportGeometry = {
       width: 412,
@@ -325,6 +330,7 @@ describe("BrowserViewViewport", () => {
         isOnScreen: () => false,
       }),
       send: () => false,
+      drawHolds: new BrowserViewDrawHolds(() => false),
     });
     const readback: BrowserViewportGeometry = {
       width: 800,

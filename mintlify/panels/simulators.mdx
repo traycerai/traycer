@@ -1,0 +1,70 @@
+---
+title: "Mobile Simulators"
+description: "Run iOS simulators and Android emulators inside Traycer, interact with your app, and watch agents test it."
+keywords: ['mobile simulators', 'iOS', 'Android', 'emulator', 'Xcode', 'Android SDK']
+---
+
+Open a mobile simulator alongside your agents, terminals and files. You can use the device yourself or watch an agent install an app, tap, type and read the screen.
+
+## Before You Start
+
+Install the mobile development tools on the **host that will run the simulator**, even if you use Traycer from another computer.
+
+- **iOS:** An Apple silicon Mac with Xcode and an iOS simulator set up. The standalone Xcode Command Line Tools are not enough.
+- **Android:** The Android SDK with **Android SDK Platform-Tools**, **Android Emulator** and **Android SDK Command-line Tools (latest)**, plus an Android virtual device. You can install these with Android Studio's SDK Manager and set up the device in its Device Manager. If Traycer cannot find your SDK, set `ANDROID_HOME` to its directory on that host.
+
+Mobile simulators are not supported on Intel Macs.
+
+## Enable Mobile Simulators
+
+1. Open **Settings** and choose the host in the [host picker](/settings#host-picker).
+2. Go to **Overview → Mobile simulators**.
+3. Turn on **Use mobile simulators**.
+4. Wait for **Simulator tools** to finish downloading.
+
+This setting lets you and agents use that host's simulators. There is no separate switch for agent access.
+
+**Platforms** shows which platforms the host can run and explains any missing prerequisites. After installing Xcode or the Android SDK tools, click **Check again**. If the simulator tools download fails, use **Try again**.
+
+## Open A Simulator
+
+In a Task, open the **Mobile simulators** sidebar panel and click **Add simulator** (+).
+
+1. Choose the **Machine** that will run the device.
+2. Use **Search devices** to find a device.
+3. Choose an action:
+   - **Boot** starts a device under **Not running**.
+   - **Open** opens a running device. If an agent is using it, the button says **Watch** instead.
+   - **Boot another** starts a separate copy of a running device.
+
+If mobile simulators are off on the selected machine, the picker offers **Turn on**.
+
+The sidebar groups the Task's open simulators by machine. Click a device row to open its screen. An **Agent** badge shows when an agent is using it.
+
+## Use The Device
+
+Click the device screen to tap, drag to swipe, and type while the screen has focus. The toolbar offers the device's navigation buttons, **Rotate**, **Save a screenshot** and **Simulator settings**, where supported.
+
+Ask an agent to open a simulator and test your app. Simulators it opens appear in the same sidebar panel, so you can click the row to watch or interact with the device. When another agent is already using a device, the agent can open a separate copy instead.
+
+A chat agent can also ask you to enable mobile simulators when they are off. You decide whether to turn them on.
+
+## Close Or Power Off
+
+Closing a view, ending a Task's sessions and powering off a device have different effects:
+
+- **Close** in the device toolbar closes your view and ends your viewing session. It does not end an agent's separate session.
+- **Close** on the sidebar row ends the Task's sessions on that device, including agent sessions.
+- **Power off** shuts down the device and ends every Task's sessions on it. A separate copy is deleted when it powers off.
+
+A separate copy is also powered off and deleted when its last session ends. Closing a session on an original device does not delete that device.
+
+### Idle Devices
+
+Under **Settings → host → Overview → Mobile simulators**, **Running now** lists the host's running devices. Use **Power off** to stop one, or **Keep running** to prevent idle shutdown for a device Traycer started.
+
+**Power off when idle** sets how many minutes a device Traycer started can remain unused before it shuts down. Watching its screen or having an agent actively use it keeps it in use. Devices you started outside Traycer are not shut down by this idle rule.
+
+**Keep running** does not preserve a separate copy after its last session ends.
+
+Turning off **Use mobile simulators** ends the host's simulator sessions and removes the separate copies Traycer created. Downloaded simulator tools stay on the host; use **Remove** under **Simulator tools** while the setting is off to delete them.

@@ -1722,9 +1722,9 @@ means the drain UI renders NOTHING - never a zero, which would offer to end
   group, **Notifications** (anchor `alerts-notifications`), where the alerts
   themselves are configured. **OS notifications** on a desktop with the
   system-settings bridge (`system-notification-settings-section.tsx`),
-  **Push notifications on this phone** and its four severity switches in the
-  phone app (`push-permission-section.tsx`; "this phone", never "this
-  device", which is the UI word for a host), and **Notification events**, a
+  **Push notifications** and its four severity switches in the phone app
+  (`push-permission-section.tsx`; no "on this device" qualifier, since
+  "device" is the UI word for a host), and **Notification events**, a
   pointer to the selected host's Notifications page, in every shell. It was
   the Sounds page's second group; it moved because push is not a sound.
 - `Opening behavior` (`panels/opening-behavior-panel.tsx`,

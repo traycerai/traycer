@@ -14,6 +14,9 @@ import type {
   BrowserViewOpenTileRequest,
   BrowserViewAttachSurface,
   BrowserViewDetachSurface,
+  BrowserViewGuestDrawHoldApplied,
+  BrowserViewGuestDrawHoldReleased,
+  BrowserViewGuestDrawHoldRequested,
   BrowserViewGuestMountRequested,
   BrowserViewGuestReleaseRequested,
   BrowserViewGuestViewportRequested,
@@ -50,6 +53,13 @@ export class FakeBrowserViewBridge implements BrowserViewBridge {
   readonly closeSessionsStreamCalls: BrowserSessionsStreamKey[] = [];
   readonly sendSessionsFrameCalls: BrowserSessionsStreamSend[] = [];
   readonly guestViewportResultCalls: BrowserViewGuestViewportResult[] = [];
+  readonly guestDrawHoldAppliedCalls: BrowserViewGuestDrawHoldApplied[] = [];
+  private readonly guestDrawHoldRequestedHandlers = new Set<
+    (request: BrowserViewGuestDrawHoldRequested) => void
+  >();
+  private readonly guestDrawHoldReleasedHandlers = new Set<
+    (request: BrowserViewGuestDrawHoldReleased) => void
+  >();
   private sessionsStreamEventHandler:
     | ((envelope: BrowserSessionsStreamEventEnvelope) => void)
     | null = null;
@@ -382,6 +392,43 @@ export class FakeBrowserViewBridge implements BrowserViewBridge {
   ): Promise<void> {
     this.guestViewportResultCalls.push(input);
     return Promise.resolve();
+  }
+
+  onGuestDrawHoldRequested(
+    handler: (request: BrowserViewGuestDrawHoldRequested) => void,
+  ): { dispose: () => void } {
+    this.guestDrawHoldRequestedHandlers.add(handler);
+    return {
+      dispose: () => {
+        this.guestDrawHoldRequestedHandlers.delete(handler);
+      },
+    };
+  }
+
+  onGuestDrawHoldReleased(
+    handler: (request: BrowserViewGuestDrawHoldReleased) => void,
+  ): { dispose: () => void } {
+    this.guestDrawHoldReleasedHandlers.add(handler);
+    return {
+      dispose: () => {
+        this.guestDrawHoldReleasedHandlers.delete(handler);
+      },
+    };
+  }
+
+  reportGuestDrawHoldApplied(
+    input: BrowserViewGuestDrawHoldApplied,
+  ): Promise<void> {
+    this.guestDrawHoldAppliedCalls.push(input);
+    return Promise.resolve();
+  }
+
+  emitGuestDrawHoldRequested(request: BrowserViewGuestDrawHoldRequested): void {
+    for (const handler of this.guestDrawHoldRequestedHandlers) handler(request);
+  }
+
+  emitGuestDrawHoldReleased(request: BrowserViewGuestDrawHoldReleased): void {
+    for (const handler of this.guestDrawHoldReleasedHandlers) handler(request);
   }
 
   emitGuestMountRequested(request: BrowserViewGuestMountRequested): void {

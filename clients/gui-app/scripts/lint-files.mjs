@@ -55,10 +55,14 @@ run(
   ],
   oxlintEnv(),
 );
+// By content, because a fresh checkout gives every file a new modification
+// time: the default strategy reads a restored cache as all stale.
 run(
   [
     "eslint",
     "--cache",
+    "--cache-strategy",
+    "content",
     "--fix",
     "--max-warnings",
     "0",

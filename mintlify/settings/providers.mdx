@@ -44,11 +44,10 @@ Tabs depend on the provider. A provider opens on its first tab.
 
 | Tab                   | What it holds                                                                                          | Shown for                                                                     |
 | --------------------- | ------------------------------------------------------------------------------------------------------ | ----------------------------------------------------------------------------- |
-| **General** | The [session name template](#claude-code-session-names). | Claude Code |
 | **Account**           | The provider's [API key](#account).                                                                    | Cursor, Kiro, Droid, OpenRouter, Hugging Face, Amp                            |
 | **Profiles & Limits** | [Managed profiles](#managed-profiles) and their usage limits.                                          | Claude Code, Codex, Grok, Antigravity                                         |
 | **Usage limits**      | The provider's usage limits, or your Traycer subscription for Traycer Inference.                       | OpenCode, Traycer Inference, Cursor, OpenRouter, Kilo Code, Hugging Face, Kimi |
-| **CLI & Args**        | The [CLI binary and its versions](#cli-binary-and-arguments), and Terminal interface CLI arguments.    | Every provider                                                                |
+| **CLI & Args**        | The [CLI binary and its versions](#cli-binary-and-arguments), Terminal interface CLI arguments, [native subagents](#native-subagents), and Claude Code [session names](#claude-code-session-names).    | Every provider                                                                |
 | **Env**               | [Environment variables](#environment-variables) for that provider.                                     | Every provider                                                                |
 | **Permissions**       | Who reviews that provider's commands in Auto mode.                                                     | Every provider                                                                |
 | **Model Providers**   | The [upstream model providers](#model-providers) OpenCode can reach.                                   | OpenCode                                                                      |
@@ -60,7 +59,7 @@ Usage limits and the banners that appear when a limit is reached are covered in 
 
 ## Claude Code Session Names
 
-In **Providers → Claude Code → General**, the **Session name** group controls the names of new Claude Code sessions on the **Terminal** interface. It applies to the host selected in Settings.
+In **Providers → Claude Code → CLI & Args**, the **Session name** group controls the names of new Claude Code sessions on the **Terminal** interface. It applies to the host selected in Settings.
 
 Edit **Name template**, check the sample preview, then press Enter or leave the field to save. **Reset** restores `Traycer · {project} · {date}`.
 
@@ -165,9 +164,15 @@ Traycer does not manage the Amp, Hermes Agent, or Command Code CLIs; install the
 
 For Claude Code, Codex, and OpenCode, this tab also has **Terminal interface CLI arguments**. They are appended to the CLI when you start an agent on the Terminal interface, and they pre-fill the launch picker, where you can change them for one launch. Use bypass or auto-approval flags deliberately. Codex permission flags such as `--approve-for-me`, `--ask-for-approval`, and `--sandbox` apply when a session starts; when Traycer reopens or forks a Codex session, the session keeps its own permissions, so Traycer leaves those flags out.
 
+### OpenCode Versions
+
+In **Providers → OpenCode → CLI & Args**, choose **Managed 2.x** to use OpenCode 2, or **Managed 1.x** to use OpenCode 1. The same OpenCode binary choice is shared by Traycer Inference, OpenRouter, and Hugging Face.
+
+Your choice also applies to existing chats from their next message, not to a turn already running. A chat keeps its current version while background work is running, the selected binary is not ready, or the other version cannot run that message with its selected model, attachments, or commands. The composer explains why it has stayed on its current version.
+
 ### Native Subagents
 
-On **CLI & Args**, **Allow native subagents** is on by default. Turn it off to direct this provider's agents to delegate through [Traycer agents](/panels/agents) instead of the provider's built-in subagents. The setting applies to the host selected in Settings. If the switch is missing, update that host to a version that supports it.
+On **CLI & Args**, **Allow native subagents** is on by default. Turn it off to direct this provider's agents to delegate through [Traycer agents](/panels/agents) instead of the provider's built-in subagents. Each provider has its own setting on the host selected in Settings. If the switch is missing, update that host to a version that supports it.
 
 Traycer disables the built-in subagent tools where the provider supports it. For other providers, the agent receives instructions to use Traycer agents instead; this is not a tool-level restriction.
 

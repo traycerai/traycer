@@ -8,7 +8,7 @@ import type { SandboxVerbGesture } from "@traycer/protocol/host/sandbox-control"
 import { renderTile } from "@/components/epic-canvas/renderers/tile-render";
 import type { EpicCanvasTileRef } from "@/stores/epics/canvas/types";
 
-export interface WakeProps {
+interface WakeProps {
   readonly gesture: SandboxVerbGesture | null;
   readonly hostId: string;
 }

@@ -76,6 +76,7 @@
               },
               "panels/terminals",
               "panels/browsers",
+              "panels/simulators",
               {
                 "group": "Artifacts",
                 "pages": [
@@ -83,6 +84,9 @@
                   "panels/artifacts/editing",
                   "panels/artifacts/diagrams",
                   "panels/artifacts/wireframes",
+                  "panels/artifacts/html",
+                  "panels/artifacts/canvases",
+                  "panels/artifacts/file-artifacts",
                   "panels/artifacts/version-history",
                   "panels/artifacts/export"
                 ]

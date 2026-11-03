@@ -190,6 +190,9 @@ const KEYBOARD_KEY_READS: Readonly<Record<string, number>> = {
   "gui-app/src/components/settings/controls/chord-capture-core.tsx": 2,
   "gui-app/src/components/worktree/worktree-pr-state-icons.tsx": 2,
   "gui-app/src/editor-core/links/artifact-link-popover.tsx": 3,
+  // Track the named Control modifier to distinguish held Ctrl+wheel from a
+  // trackpad pinch; this does not resolve a registered shortcut.
+  "gui-app/src/hooks/ui/use-wheel-zoom.ts": 1,
   "gui-app/src/hooks/use-primary-action-shortcut.ts": 1,
   "gui-app/src/lib/browser-view/sessions/screencast-controller.ts": 2,
   "gui-app/src/lib/browser-view/sessions/screencast-input-encoding.ts": 4,
