@@ -1636,21 +1636,27 @@ function matrixLegs(matrix) {
         ),
       ),
   );
+  // An include entry extends only the original combinations, and never
+  // changes their axis values; a value an earlier entry added may change. A
+  // leg an entry adds takes no later entry.
   const axisKeys = new Set(axes.map(([key]) => key));
   const original = legs.map((leg) => ({ ...leg }));
+  const added = [];
   for (const entry of Array.isArray(matrix.include) ? matrix.include : []) {
-    const matched = legs.filter((_, at) =>
-      Object.entries(entry ?? {}).every(
-        ([key, value]) => !axisKeys.has(key) || same(original[at][key], value),
-      ),
-    );
+    const matched = original
+      .map((values, at) => ({ values, leg: legs[at] }))
+      .filter(({ values }) =>
+        Object.entries(entry ?? {}).every(
+          ([key, value]) => !axisKeys.has(key) || same(values[key], value),
+        ),
+      );
     if (axes.length > 0 && matched.length > 0) {
-      for (const leg of matched) Object.assign(leg, entry);
+      for (const { leg } of matched) Object.assign(leg, entry);
     } else {
-      legs.push({ ...entry });
-      original.push({ ...entry });
+      added.push({ ...entry });
     }
   }
+  legs.push(...added);
   return legs.length > 0 ? legs : [{}];
 }
 
@@ -1679,17 +1685,52 @@ function posixRunnerOs(runsOn, leg) {
   return /mac/i.test(label) ? ["macOS"] : ["Linux"];
 }
 
+/** Whether a known expression value is falsy: `false`, `0`, `-0`, `''`, `null` or NaN. */
+const isFalsy = (value) =>
+  value === false ||
+  value === null ||
+  value === 0 ||
+  value === "" ||
+  Number.isNaN(value);
+
+/**
+ * GitHub's `==`: strings compare ignoring case, and values of different types
+ * compare as numbers (`null` 0, booleans 1 and 0, a string its number or NaN).
+ * Arrays and objects equal only themselves.
+ */
+function looselyEqual(left, right) {
+  if (typeof left === "string" && typeof right === "string") {
+    return left.toLowerCase() === right.toLowerCase();
+  }
+  if (typeof left === typeof right || left === null || right === null) {
+    if (left === right) return true;
+  }
+  const number = (value) => {
+    if (value === null) return 0;
+    if (typeof value === "boolean") return value ? 1 : 0;
+    if (typeof value === "number") return value;
+    if (typeof value === "string")
+      return value.trim() === "" ? 0 : Number(value);
+    return Number.NaN;
+  };
+  if (typeof left === "object" || typeof right === "object") {
+    return left === right;
+  }
+  return number(left) === number(right);
+}
+
 /**
  * The value of a GitHub Actions expression for one leg on one runner, or
  * UNKNOWN: literals, `matrix.*` and `runner.os`, `== != ! && ||`,
- * parentheses, and `contains`, `startsWith` and `endsWith`. Any other
- * context or function, and any syntax it does not read, is UNKNOWN.
+ * parentheses, `contains`, `startsWith` and `endsWith`, and `always()`. Any
+ * other context or function (the outcome of earlier steps included), and any
+ * syntax it does not read, is UNKNOWN.
  */
 function expressionValue(source, leg, os) {
   const text = source.replace(/\$\{\{|\}\}/g, " ");
   const tokens = [];
   const pattern =
-    /\s*(?:('(?:[^']|'')*')|(\d+(?:\.\d+)?)|([A-Za-z_][\w-]*(?:\.[\w-]+|\[\d+\]|\.\*)*)|(==|!=|<=|>=|&&|\|\||[!<>(),]))/y;
+    /\s*(?:('(?:[^']|'')*')|(-?(?:0x[\da-f]+|\d+(?:\.\d+)?(?:e[+-]?\d+)?))|([A-Za-z_][\w-]*(?:\.[\w-]+|\[\d+\]|\.\*)*)|(==|!=|<=|>=|&&|\|\||[!<>(),]))/y;
   for (let cursor = 0; ;) {
     if (/^\s*$/.test(text.slice(cursor))) break;
     pattern.lastIndex = cursor;
@@ -1698,17 +1739,15 @@ function expressionValue(source, leg, os) {
     cursor = pattern.lastIndex;
     if (match[1] !== undefined) {
       tokens.push({ value: match[1].slice(1, -1).replaceAll("''", "'") });
-    } else if (match[2] !== undefined) tokens.push({ value: Number(match[2]) });
-    else if (match[3] !== undefined) tokens.push({ name: match[3] });
+    } else if (match[2] !== undefined) {
+      const negative = match[2].startsWith("-");
+      const magnitude = Number(negative ? match[2].slice(1) : match[2]);
+      tokens.push({ value: negative ? -magnitude : magnitude });
+    } else if (match[3] !== undefined) tokens.push({ name: match[3] });
     else tokens.push({ operator: match[4] });
   }
   let at = 0;
-  const truthy = (value) =>
-    value === UNKNOWN
-      ? UNKNOWN
-      : !(value === false || value === null || value === 0 || value === "");
-  const fold = (value) =>
-    typeof value === "string" ? value.toLowerCase() : value;
+  const truthy = (value) => (value === UNKNOWN ? UNKNOWN : !isFalsy(value));
   const lookUp = (name) => {
     if (name === "true" || name === "false") return name === "true";
     if (name === "null") return null;
@@ -1719,14 +1758,15 @@ function expressionValue(source, leg, os) {
       value = value?.[key];
     }
     if (typeof value === "string" && value.includes("${{")) return UNKNOWN;
-    return value ?? null;
+    // A property the matrix does not have reads as an empty string.
+    return value ?? "";
   };
   const call = (name, args) => {
     if (args.includes(UNKNOWN)) return UNKNOWN;
     const [haystack, needle] = args;
     if (name === "contains") {
       return Array.isArray(haystack)
-        ? haystack.some((each) => fold(each) === fold(needle))
+        ? haystack.some((each) => looselyEqual(each, needle))
         : String(haystack ?? "")
             .toLowerCase()
             .includes(String(needle ?? "").toLowerCase());
@@ -1736,7 +1776,7 @@ function expressionValue(source, leg, os) {
     );
     if (name === "startsWith") return whole.startsWith(part);
     if (name === "endsWith") return whole.endsWith(part);
-    return ["success", "always"].includes(name) ? true : UNKNOWN;
+    return name === "always" ? true : UNKNOWN;
   };
   const primary = () => {
     const token = tokens[at];
@@ -1780,7 +1820,7 @@ function expressionValue(source, leg, os) {
       ) {
         value = UNKNOWN;
       } else {
-        value = (fold(value) === fold(right)) === (operator === "==");
+        value = looselyEqual(value, right) === (operator === "==");
       }
     }
     return value;
@@ -1825,7 +1865,7 @@ function mayRunUnderBash(job, condition) {
       if (condition === undefined || condition === null) return true;
       if (typeof condition === "boolean") return condition;
       const value = expressionValue(String(condition), leg, os);
-      return value === UNKNOWN || ![false, null, 0, ""].includes(value);
+      return value === UNKNOWN || !isFalsy(value);
     }),
   );
 }
@@ -2610,6 +2650,17 @@ describe("an early-exit reader never reads a streaming producer through a pipe u
       "matrix.target == 'win'",
     ],
     ["a step that never runs", MIXED, "${{ matrix.os }}", "false"],
+    [
+      "a negative number naming the Windows leg",
+      [
+        "      matrix:",
+        "        include:",
+        "          - { os: windows-latest, level: -1 }",
+        "          - { os: ubuntu-latest, level: 1 }",
+      ],
+      "${{ matrix.os }}",
+      "matrix.level == -1",
+    ],
   ])(
     "reads no default-shell step that only Windows runs: %s",
     (_, strategy, runsOn, condition) => {
@@ -2680,6 +2731,31 @@ describe("an early-exit reader never reads a streaming producer through a pipe u
       MIXED,
       "${{ matrix.os }}",
       "github.event_name == 'push'",
+    ],
+    [
+      "a numeric axis compared with a quoted number",
+      ["      matrix:", "        node: [20, 22]"],
+      "ubuntu-latest",
+      "matrix.node == '20'",
+    ],
+    [
+      "an extra include leg beside a later one",
+      [
+        "      matrix:",
+        "        target: [base]",
+        "        include:",
+        "          - { target: base, os: windows-latest }",
+        "          - { target: extra, os: ubuntu-latest }",
+        "          - { target: extra, os: windows-latest }",
+      ],
+      "${{ matrix.os }}",
+      "runner.os == 'Linux'",
+    ],
+    [
+      "a step that runs after a failure",
+      ["      fail-fast: false"],
+      "ubuntu-latest",
+      "${{ !success() }}",
     ],
   ])(
     "reads a default-shell step a POSIX runner may run: %s",
