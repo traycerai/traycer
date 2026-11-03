@@ -1,4 +1,5 @@
 import { execFileSync } from "node:child_process";
+import { GIT_OUTPUT_MAX_BUFFER_BYTES } from "../../../../scripts/git-output-limit.cjs";
 import { existsSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
@@ -43,7 +44,11 @@ function listProductionModules(): string[] {
       "--",
       "src/*.ts",
     ],
-    { cwd: PROTOCOL_ROOT, encoding: "utf8" },
+    {
+      maxBuffer: GIT_OUTPUT_MAX_BUFFER_BYTES,
+      cwd: PROTOCOL_ROOT,
+      encoding: "utf8",
+    },
   );
   const files: string[] = [];
   for (const relative of listing.split("\0")) {
