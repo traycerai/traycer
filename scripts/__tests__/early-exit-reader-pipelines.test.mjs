@@ -164,9 +164,14 @@ function pipelinesOf(source) {
     discardSubstitutions(pipeline);
   }
 
-  function skipHeredocBodies() {
-    while (pendingHeredocs.length > 0) {
-      const { delimiter, stripTabs } = pendingHeredocs.shift();
+  // Reads the bodies of the heredocs opened on the line just ended. A body
+  // whose delimiter is unquoted expands its `$( )` and backtick substitutions
+  // as the shell runs them: `scanSubstitution` scans each, and its status is
+  // discarded as an argument's is unless a branch tests it. A quoted body is
+  // literal text.
+  function skipHeredocBodies(scanSubstitution) {
+    for (const heredoc of pendingHeredocs.splice(0)) {
+      const { delimiter, stripTabs, expands, owner } = heredoc;
       for (;;) {
         if (index >= text.length) {
           problems.push(`the heredoc ending at ${delimiter} is never closed`);
@@ -174,9 +179,44 @@ function pipelinesOf(source) {
         }
         const end = text.indexOf("\n", index);
         const raw = text.slice(index, end === -1 ? text.length : end);
-        index = end === -1 ? text.length : end + 1;
-        line += 1;
-        if ((stripTabs ? raw.replace(/^\t+/, "") : raw) === delimiter) break;
+        if (
+          (stripTabs ? raw.replace(/^\t+/, "") : raw) === delimiter ||
+          !expands ||
+          scanSubstitution === null
+        ) {
+          index = end === -1 ? text.length : end + 1;
+          line += 1;
+          if ((stripTabs ? raw.replace(/^\t+/, "") : raw) === delimiter) break;
+          continue;
+        }
+        while (index < text.length && text[index] !== "\n") {
+          const char = text[index];
+          let nested = null;
+          if (char === "\\") {
+            if (text[index + 1] === "\n") line += 1;
+            index += 2;
+          } else if (
+            char === "$" &&
+            text[index + 1] === "(" &&
+            text[index + 2] !== "("
+          ) {
+            index += 2;
+            nested = scanSubstitution(")");
+          } else if (char === "`") {
+            index += 1;
+            nested = scanSubstitution("`");
+          } else {
+            index += 1;
+          }
+          if (nested !== null) {
+            nested.forEach(discardAll);
+            owner.substitutions.push(...nested);
+          }
+        }
+        if (index < text.length) {
+          index += 1;
+          line += 1;
+        }
       }
     }
   }
@@ -735,8 +775,11 @@ function pipelinesOf(source) {
         if (stripTabs) cursor += 1;
         while (text[cursor] === " " || text[cursor] === "\t") cursor += 1;
         let delimiter = "";
+        // Any quoting in the delimiter keeps the body literal.
+        let expands = true;
         while (cursor < text.length && !/[\s;|&<>()]/.test(text[cursor])) {
           const quote = text[cursor];
+          if (quote === "'" || quote === '"' || quote === "\\") expands = false;
           if (quote === "'" || quote === '"') {
             const end = text.indexOf(quote, cursor + 1);
             delimiter += text.slice(cursor + 1, end);
@@ -749,8 +792,8 @@ function pipelinesOf(source) {
             cursor += 1;
           }
         }
-        pendingHeredocs.push({ delimiter, stripTabs });
         ensureCommand(false);
+        pendingHeredocs.push({ delimiter, stripTabs, expands, owner: command });
         command.stdinRedirected = true;
         index = cursor;
         continue;
@@ -792,7 +835,9 @@ function pipelinesOf(source) {
         endWord();
         index += 1;
         line += 1;
-        skipHeredocBodies();
+        skipHeredocBodies((closing) =>
+          scanList(closing, substitutionContext()),
+        );
         const continues =
           lastOperator === "|" ||
           lastOperator === "&&" ||
@@ -913,7 +958,7 @@ function pipelinesOf(source) {
     hosts: [],
     evaluated: false,
   });
-  skipHeredocBodies();
+  skipHeredocBodies(null);
   return { pipelines, problems, timeouts };
 }
 
@@ -2034,6 +2079,14 @@ describe("an early-exit reader never reads a streaming producer through a pipe u
       "a group producer before a loop that breaks",
       "{ seq 10; } | while read -r x; do break; done",
     ],
+    [
+      "a branch test in an unquoted heredoc's substitution",
+      "cat <<EOF\nstatus=$(if seq 10 | grep -q 1; then printf present; fi)\nEOF",
+    ],
+    [
+      "a branch test in an unquoted heredoc's backtick substitution",
+      "cat <<EOF\nstatus=`if seq 10 | grep -q 1; then printf present; fi`\nEOF",
+    ],
     ["a negated grep in an if stage", "seq 10 | if ! grep -q 5; then :; fi"],
     ["an if inside a group stage", "seq 10 | { if grep -q 5; then :; fi; }"],
     ["a timed group stage", "seq 10 | { time -p head -n 1; }"],
@@ -2081,6 +2134,18 @@ describe("an early-exit reader never reads a streaming producer through a pipe u
     ["head with a negative count", "seq 10 | head -n -2"],
     ["a while loop stage", "seq 10 | while read -r line; do :; done"],
     ["a heredoc body", "cat <<-EOF\n\tseq 10 | head -n 1\n\tEOF"],
+    [
+      "a quoted heredoc's literal substitution",
+      "cat <<'EOF'\n$(if seq 10 | grep -q 1; then :; fi)\nEOF",
+    ],
+    [
+      "an escaped substitution in an unquoted heredoc",
+      "cat <<EOF\n\\$(if seq 10 | grep -q 1; then :; fi)\nEOF",
+    ],
+    [
+      "an untested substitution in an unquoted heredoc",
+      "cat <<EOF\n$(seq 10 | head -n 1)\nEOF",
+    ],
     ["a comment", "# seq 10 | head -n 1"],
     ["a single-quoted script", "sh -c 'seq 10 | head -n 1'"],
     ["a process substitution", "diff <(seq 10 | head -n 1) <(seq 3)"],
