@@ -31,7 +31,7 @@ while :; do
   wait "$pid" 2>/dev/null || true
   # TLC keeps every run's state queue on disk (gigabytes for a long pass).
   rm -rf "$here/states/$config.run"
-  violated="$(sed -n 's/^Error: Invariant \([A-Za-z0-9_]*\) is violated\.$/\1/p' "$out" | head -1)"
+  violated="$(sed -n 's/^Error: Invariant \([A-Za-z0-9_]*\) is violated\.$/\1/p' "$out" | awk 'NR == 1')"
   if [ -z "$violated" ]; then
     if grep -q "Model checking completed. No error has been found" "$out"; then
       mv "$out" "$here/results/$config.ok.out"

@@ -6,7 +6,7 @@ import {
 } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { JsonContent } from "@traycer/protocol/common/registry";
-import type { ChatMessageDelivery } from "@traycer/protocol/host/agent/gui/message-delivery";
+import type { ChatMessageDeliveryV142 } from "@traycer/protocol/host/agent/gui/message-delivery";
 import type { ChatSubscribeClientFrame } from "@traycer/protocol/host/agent/gui/subscribe";
 import type { ChatStreamCallbacks } from "@traycer-clients/shared/host-transport/chat-stream-client";
 import type { Chat } from "@traycer/protocol/persistence/epic/schemas";
@@ -129,7 +129,7 @@ function withdrawnDelivery(
   messageId: string,
   revision: number,
   options: { readonly restore: JsonContent },
-): ChatMessageDelivery {
+): ChatMessageDeliveryV142 {
   return {
     messageId,
     revision,
@@ -141,13 +141,14 @@ function withdrawnDelivery(
       restore: { content: options.restore },
       restoreClaimed: false,
     },
+    worktreeIntent: null,
   };
 }
 
 function emitSnapshot(
   callbacks: ChatStreamCallbacks,
   options: {
-    readonly messageDelivery?: ChatMessageDelivery | null;
+    readonly messageDelivery?: ChatMessageDeliveryV142 | null;
     readonly canAct?: boolean;
   },
 ): void {

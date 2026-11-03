@@ -17,8 +17,9 @@ import { useTabRecoveryHistory } from "@/lib/tab-recovery/history";
  *     entry would be inert; toggling it is the mic button's job);
  *   - `composer.suggestion.accept` (no `dispatchAction` handler either - the
  *     chat composer matches it in its own editor while a suggestion shows);
- *   - `desktopOnly` actions in the installed mobile app (the surface they
- *     act on is never drawn there);
+ *   - actions this app cannot run (`isActionAvailable`): `desktopOnly` ones in
+ *     the installed mobile app, where the surface they act on is never drawn,
+ *     and the soundtrack's in a build with nothing to play;
  *   - `app.home.open` while the Home tab setting is off;
  *   - `voice.talk.toggle` while Talk would do nothing: neither start a
  *     session (voice offered, a bot to talk to) nor end a running one;
@@ -28,11 +29,11 @@ import { useMemo } from "react";
 import {
   ACTION_IDS,
   ACTION_META,
+  isActionAvailable,
   type ActionId,
   type ActionMeta,
 } from "@/lib/keybindings/actions";
 import { useTabStripPlacement } from "@/components/layout/tabs/use-tab-strip-placement";
-import { isMobileApp } from "@/lib/mobile-app";
 import { useKeybindingStore } from "@/stores/settings/keybinding-store";
 import { isHomeTabEnabled } from "@/stores/layout/layout-store";
 import {
@@ -77,11 +78,11 @@ function isPaletteEligible(
   stripCollapsible: boolean,
 ): boolean {
   if (meta.kind !== "chord") return false;
-  // The installed mobile app never draws the surface a desktop-only action
-  // acts on, and nothing there registers its handler - so the row would offer
-  // a command that cannot run. `isMobileApp()` is fixed before the first
-  // render, so reading it inside the memo is stable for the app's lifetime.
-  if (meta.desktopOnly && isMobileApp()) return false;
+  // Nothing registers the handler of an action this app cannot run, so the row
+  // would offer a command that does nothing. Both of its facts are fixed before
+  // the first render, so reading it inside the memo is stable for the app's
+  // lifetime.
+  if (!isActionAvailable(meta.id)) return false;
   // Its handler no-ops while the Home tab is off, and a palette row that does
   // nothing is worse than no row.
   if (meta.id === "app.home.open" && !homeTabEnabled) return false;

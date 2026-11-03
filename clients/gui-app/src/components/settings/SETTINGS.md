@@ -1713,11 +1713,13 @@ means the drain UI renders NOTHING - never a zero, which would offer to end
       bridge's `forgetLogins()` directly and therefore speaks for every host
       with a live browser stream; main owns both native destructive confirms.
 - `Sounds` (`panels/app-notifications-settings-panel.tsx`,
-  `/settings/app-notifications`): one group, **Chimes**
+  `/settings/app-notifications`): **Chimes**
   (`panels/notification-chime-settings-section.tsx`), one dropdown per kind
-  of alert. Untitled, because the page is already named for it. The id still
-  says notifications: the OS and push rows moved to Alerts, and ids do not
-  change.
+  of alert, untitled because the page is already named for it; and, in a build
+  with something to play, **Soundtrack**
+  (`panels/soundtrack-settings-section.tsx`), its volume and what it follows.
+  Its on and off is the toggle in the top row. The id still says notifications:
+  the OS and push rows moved to Alerts, and ids do not change.
 - `Alerts` (`panels/alerts-settings-panel.tsx`, `/settings/alerts`): one
   group, **Notifications** (anchor `alerts-notifications`), where the alerts
   themselves are configured. **OS notifications** on a desktop with the

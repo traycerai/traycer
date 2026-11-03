@@ -50,9 +50,9 @@ export interface EpicCreateSeedEntry {
   readonly hostId: string;
   /**
    * The initial message's id, when this create seeded one. The tile-level
-   * driver looks the queued row and the setup card up by it. `null` for the
-   * terminal-agent landing create (`chat: null`), whose pair the driver never
-   * owns anyway.
+   * driver matches the delivery record, the queued row and the setup card
+   * against it. `null` for the terminal-agent landing create (`chat: null`),
+   * whose pair the driver never owns anyway.
    */
   readonly seededMessageId: string | null;
   readonly seedRows: boolean;

@@ -50,7 +50,7 @@ failure_count=0
 
 # Iterate every regular file (including nested) under the CLI directory.
 while IFS= read -r -d '' candidate; do
-  if ! file -b "${candidate}" | grep -q "Mach-O"; then
+  if ! grep -q "Mach-O" <<<"$(file -b "${candidate}")"; then
     echo "${PREFIX} skipping non-Mach-O file: ${candidate}"
     continue
   fi
@@ -67,7 +67,7 @@ while IFS= read -r -d '' candidate; do
 
   # 2. Team identifier match against APPLE_TEAM_ID.
   requirements_output=$(codesign --display --requirements - --verbose=4 "${candidate}" 2>&1 || true)
-  if ! echo "${requirements_output}" | grep -q "TeamIdentifier=${APPLE_TEAM_ID}"; then
+  if ! grep -q "TeamIdentifier=${APPLE_TEAM_ID}" <<<"${requirements_output}"; then
     echo "::error::${PREFIX} team identifier mismatch for '${candidate}'. Expected TeamIdentifier=${APPLE_TEAM_ID}. codesign output follows:"
     echo "${requirements_output}"
     failure_count=$((failure_count + 1))

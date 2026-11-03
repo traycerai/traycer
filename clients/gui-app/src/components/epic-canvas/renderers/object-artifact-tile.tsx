@@ -4,7 +4,9 @@ import { useEpicViewTabId } from "@/components/epic-canvas/view-tab-context";
 import { useTabHostId } from "@/components/epic-canvas/hooks/use-tab-host-id";
 import type { ArtifactProjection } from "@/stores/epics/open-epic/types";
 import { CanvasArtifactSurface } from "@/components/canvas-artifact/canvas-artifact-surface";
-import { HtmlArtifactDownloadButton } from "@/components/html-artifact/html-artifact-download-button";
+import { HtmlArtifactDownloadMenuItem } from "@/components/html-artifact/html-artifact-download-button";
+import { FrameCommentsUnavailable } from "@/components/comments/frame-comments";
+import { useFrameCommentsEnabled } from "@/hooks/comments/use-frame-comments-enabled";
 import { HtmlArtifactVersionPicker } from "@/components/html-artifact/html-artifact-version-picker";
 import { useEpicHtmlArtifactVersion } from "@/hooks/epic/use-epic-html-artifact-version";
 import { HtmlArtifactFrame } from "@/components/html-artifact/html-artifact-frame";
@@ -121,15 +123,13 @@ export function ObjectArtifactTile(props: {
     );
   }
   if (source?.kind === "artifact") {
-    const toolbarControls = (
-      <>
-        <HtmlArtifactVersionPicker version={version} />
-        <HtmlArtifactDownloadButton
-          source={source}
-          title={artifact.title}
-          hostId={hostId}
-        />
-      </>
+    const toolbarControls = <HtmlArtifactVersionPicker version={version} />;
+    const menuItems = (
+      <HtmlArtifactDownloadMenuItem
+        source={source}
+        title={artifact.title}
+        hostId={hostId}
+      />
     );
     // Comments anchor to the live page: an older version is read-only here.
     if (viewTabId === null || !latest)
@@ -138,7 +138,13 @@ export function ObjectArtifactTile(props: {
           key={artifact.id}
           source={source}
           title={artifact.title}
-          toolbarControls={toolbarControls}
+          toolbarControls={
+            <>
+              {toolbarControls}
+              <OlderVersionComments viewTabId={viewTabId} />
+            </>
+          }
+          menuItems={menuItems}
         />
       );
     return (
@@ -151,10 +157,23 @@ export function ObjectArtifactTile(props: {
         viewTabId={viewTabId}
         source={source}
         toolbarControls={toolbarControls}
+        menuItems={menuItems}
       />
     );
   }
   return <ArtifactMetadata artifact={artifact} />;
+}
+
+/**
+ * Comments anchor to the live page, so an older version cannot take one. The
+ * toggle stays in its place, unavailable, so the controls around it hold still.
+ */
+function OlderVersionComments(props: { readonly viewTabId: string | null }) {
+  const commentsEnabled = useFrameCommentsEnabled();
+  if (props.viewTabId === null || !commentsEnabled) return null;
+  return (
+    <FrameCommentsUnavailable reason="Comments are on the latest version" />
+  );
 }
 
 function ArtifactMetadata({
