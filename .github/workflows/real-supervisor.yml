@@ -52,8 +52,14 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  macos:
-    name: CLI real-launchd rows (macOS)
+  # Decides whether the macOS job below has anything to drive. It is the only
+  # job in this workflow and the scarce runner in the repository, and a push to
+  # a client that is not the CLI reaches none of what it executes.
+  # `scripts/ci-push-scope.sh` holds the list and the four rules that keep the
+  # decision a gate; the range starts at the last push this workflow PASSED on,
+  # so a red merge is not forgotten by the next one.
+  changes:
+    name: CLI real-launchd rows (changes)
     # A team PR into `main`, `integration/*` or `land/*` skips this job: the
     # merge to `main` runs it once. A fork PR, a bot PR and a PR into any
     # other branch run it in full.
@@ -62,6 +68,65 @@ jobs:
       || (github.base_ref != 'main' && !startsWith(github.base_ref, 'integration/') && !startsWith(github.base_ref, 'land/'))
       || github.event.pull_request.head.repo.full_name != github.repository
       || github.event.pull_request.user.type == 'Bot'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    # `actions: read` lets the push step below list this workflow's earlier runs.
+    permissions:
+      contents: read
+      actions: read
+    outputs:
+      run: ${{ steps.filter.outputs.run }}
+    steps:
+      # Every commit, for the range below, but no file contents: the diff reads
+      # trees only, and the job's two files are both in `scripts/`.
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          fetch-depth: 0
+          filter: blob:none
+          sparse-checkout: scripts
+          persist-credentials: false
+      - name: Find the last green push to compare against
+        id: base
+        if: github.event_name == 'push'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          BEFORE: ${{ github.event.before }}
+          BRANCH: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          base="$(scripts/ci-last-green-sha.sh real-supervisor.yml "$BRANCH" "$BEFORE")"
+          echo "sha=${base}" >> "$GITHUB_OUTPUT"
+      - name: Does this change reach the CLI's launchd rows?
+        id: filter
+        env:
+          EVENT: ${{ github.event_name }}
+          PR_BASE: ${{ github.event.pull_request.base.sha }}
+          PUSH_BASE: ${{ steps.base.outputs.sha }}
+        run: |
+          set -euo pipefail
+          run="$(scripts/ci-push-scope.sh real-supervisor.yml "$EVENT" "$PR_BASE" "$PUSH_BASE")"
+          echo "run=${run}" >> "$GITHUB_OUTPUT"
+
+  macos:
+    name: CLI real-launchd rows (macOS)
+    needs: changes
+    # A team PR into `main`, `integration/*` or `land/*` skips this job: the
+    # merge to `main` runs it once. A fork PR, a bot PR and a PR into any
+    # other branch run it in full.
+    #
+    # `!cancelled()` is what lets this job run when `changes` did not succeed:
+    # without it GitHub skips a job whose dependency failed, and a gate that
+    # skips on a failed read is not a gate. A failed detection runs the rows,
+    # and so does an answer that is anything but an explicit `false`.
+    if: >-
+      (
+        github.event_name != 'pull_request'
+        || (github.base_ref != 'main' && !startsWith(github.base_ref, 'integration/') && !startsWith(github.base_ref, 'land/'))
+        || github.event.pull_request.head.repo.full_name != github.repository
+        || github.event.pull_request.user.type == 'Bot'
+      )
+      && !cancelled()
+      && (needs.changes.result != 'success' || needs.changes.outputs.run != 'false')
     runs-on: macos-latest
     # These rows drive real launchd and wait on readiness. Without a bound, a
     # wedged `launchctl` sits until the 6-hour default on a 10x-billed macOS
