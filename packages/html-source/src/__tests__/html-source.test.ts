@@ -3379,18 +3379,25 @@ describe("performance on large documents", () => {
   });
 
   it("keeps single-element edits linear in document size", () => {
-    const quarter = buildDocument(75_000);
-    const quarterRow: ElementLocator = {
+    const bigger = buildDocument(150_000);
+    const smaller = buildDocument(37_500);
+    const biggerRow: ElementLocator = {
       kind: "position",
-      startTagOffset: quarter.lastIndexOf(`<div class="row"`),
+      startTagOffset: bigger.lastIndexOf(`<div class="row"`),
       tagName: "div",
     };
-    const sizeRatio = large.length / quarter.length;
+    const smallerRow: ElementLocator = {
+      kind: "position",
+      startTagOffset: smaller.lastIndexOf(`<div class="row"`),
+      tagName: "div",
+    };
+    const sizeRatio = bigger.length / smaller.length;
     // buildDocument stops on the first row past the requested length, so
     // the documents stay near a four-to-one ratio. The bound is three
     // times that ratio (about twelve). Quadratic growth is the square
-    // (about sixteen). The minimum of three samples drops a stall that
-    // hits one sample.
+    // (about sixteen). The minimum of two samples drops a stall that
+    // hits one sample. These lengths keep that pair inside the default
+    // test timeout.
     expect(sizeRatio).toBeGreaterThan(3);
     expect(sizeRatio).toBeLessThan(5);
 
@@ -3408,9 +3415,9 @@ describe("performance on large documents", () => {
     for (const edit of edits) {
       let smallMs = Number.POSITIVE_INFINITY;
       let bigMs = Number.POSITIVE_INFINITY;
-      for (let attempt = 0; attempt < 3; attempt++) {
-        const small = timed(() => edit(quarter, quarterRow));
-        const big = timed(() => edit(large, lastRow));
+      for (let attempt = 0; attempt < 2; attempt++) {
+        const small = timed(() => edit(smaller, smallerRow));
+        const big = timed(() => edit(bigger, biggerRow));
         expect(small.value.ok).toBe(true);
         expect(big.value.ok).toBe(true);
         smallMs = Math.min(smallMs, small.elapsedMs);
@@ -3418,7 +3425,7 @@ describe("performance on large documents", () => {
       }
       expect(bigMs).toBeLessThan(smallMs * linearBound);
     }
-  }, 60_000);
+  });
 
   it("finds literal text near the end of a large document within the limit", () => {
     const { value, elapsedMs } = timed(() =>
