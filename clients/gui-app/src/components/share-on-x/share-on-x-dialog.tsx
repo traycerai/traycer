@@ -302,7 +302,7 @@ function ShareOnXDialogContent(props: ShareOnXDialogProps): ReactNode {
           </div>
           <div
             role="radiogroup"
-            aria-label="Post"
+            aria-label="Post to share"
             className="flex flex-col gap-2"
           >
             {page.map(({ line, position }) =>
@@ -394,7 +394,7 @@ function ShareOnXDialogContent(props: ShareOnXDialogProps): ReactNode {
           ) : (
             <div
               role="radiogroup"
-              aria-label="Image"
+              aria-label="Image to attach"
               className="grid grid-cols-2 gap-2.5"
             >
               {availableImages.map((image) => (
@@ -468,8 +468,9 @@ function ShareOnXDialogContent(props: ShareOnXDialogProps): ReactNode {
         }
         onFailed={(image) =>
           setImages((current) => {
-            const { [image]: _dropped, ...rest } = current;
-            return rest;
+            const next = { ...current };
+            delete next[image];
+            return next;
           })
         }
       />
