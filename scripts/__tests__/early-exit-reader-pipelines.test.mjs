@@ -194,6 +194,9 @@ function pipelinesOf(source) {
   // - `evaluated`: whether it is an eval's operand.
   function scanList(terminator, context) {
     const list = [];
+    // A substitution must reach its terminator; the text's own list ends.
+    const opened = line;
+    let closed = terminator === null;
     // Open groups and compound commands, innermost last: the word that
     // closes each, and the piped stage whose input its commands read.
     const groups = [...context.groups];
@@ -617,6 +620,7 @@ function pipelinesOf(source) {
       }
       if (terminator === "`" && char === "`") {
         index += 1;
+        closed = true;
         break;
       }
       if (char === "\\") {
@@ -644,12 +648,15 @@ function pipelinesOf(source) {
         let end = index + 2;
         while (end < text.length && text[end] !== "'")
           end += text[end] === "\\" ? 2 : 1;
+        if (end >= text.length)
+          problems.push(`a quote opened on line ${line} is never closed`);
         word += text.slice(index + 2, end);
         index = end + 1;
         continue;
       }
       if (char === '"') {
         startWord();
+        const opened = line;
         index += 1;
         while (index < text.length && text[index] !== '"') {
           const inner = text[index];
@@ -673,6 +680,8 @@ function pipelinesOf(source) {
             index += 1;
           }
         }
+        if (index >= text.length)
+          problems.push(`a quote opened on line ${opened} is never closed`);
         index += 1;
         continue;
       }
@@ -873,7 +882,10 @@ function pipelinesOf(source) {
           closeGroup(")");
           continue;
         }
-        if (terminator === ")") break;
+        if (terminator === ")") {
+          closed = true;
+          break;
+        }
         continue;
       }
       // `(` inside a word: an array value or a function's `()`.
@@ -883,6 +895,11 @@ function pipelinesOf(source) {
       index += 1;
     }
     endPipeline(null);
+    if (!closed) {
+      problems.push(
+        `a ${terminator === ")" ? "$(" : "`"} opened on line ${opened} is never closed`,
+      );
+    }
     if (terminator === null && !context.evaluated) {
       pipelines.push(...collect());
     }
@@ -1338,13 +1355,21 @@ function awkExitsEarly(text) {
 /** The reader a pipeline stage is, when it stops before its input ends. */
 function earlyExitReaderOf(stage) {
   if (stage.compound) {
-    // A group or `if` runs its first command on the piped input; a loop is
-    // taken to read it all.
-    const [opener] = stage.words;
-    if (["while", "until", "for", "case", "select"].includes(opener))
+    // A group or `if` runs its first command on the piped input, past every
+    // opener and prefix before it (`{ if !`, `time -p`); a loop is taken to
+    // read it all.
+    let at = 0;
+    while (["{", "if", "!", "time"].includes(stage.words[at] ?? "")) {
+      at += stage.words[at] === "time" && stage.words[at + 1] === "-p" ? 2 : 1;
+    }
+    if (
+      ["while", "until", "for", "case", "select"].includes(
+        stage.words[at] ?? "",
+      )
+    )
       return null;
     const first = {
-      words: stage.words.slice(["{", "if", "!"].includes(opener) ? 1 : 0),
+      words: stage.words.slice(at),
       compound: false,
       stdinRedirected: stage.stdinRedirected,
     };
@@ -1505,11 +1530,18 @@ function turnsPipefailOn(words) {
   );
 }
 
-/** Whether shell source runs a command that turns pipefail on. */
+/**
+ * Whether shell source turns pipefail on: in its shebang's options
+ * (`#!/usr/bin/env -S bash -euo pipefail`) or by running a command.
+ */
 function setsPipefail(source) {
+  const shebang = /^#!.*\s-[A-Za-z]*o\s+pipefail\b/.test(
+    source.split("\n", 1)[0],
+  );
   const { pipelines, problems } = pipelinesOf(source);
   // A source the scan cannot read stays in scope, so the test reports it.
   return (
+    shebang ||
     problems.length > 0 ||
     pipelines.some((pipeline) =>
       pipeline.commands.some(({ words }) => turnsPipefailOn(words)),
@@ -1581,21 +1613,29 @@ function pipefailStepsOf(text) {
     lists.push({
       path: ["jobs", jobName, "steps"],
       shell: job?.defaults?.run?.shell ?? workflow.defaults?.run?.shell,
+      // GitHub's default shell is bash, and pwsh on a Windows runner.
+      windows: /windows/i.test(JSON.stringify(job?.["runs-on"] ?? "")),
     });
   }
   if (Array.isArray(workflow.runs?.steps))
-    lists.push({ path: ["runs", "steps"], shell: undefined });
+    lists.push({ path: ["runs", "steps"], shell: undefined, windows: false });
   const steps = [];
-  for (const { path, shell } of lists) {
+  for (const { path, shell, windows } of lists) {
     const items = document.getIn(path, true)?.items ?? [];
     items.forEach((_, position) => {
       const node = document.getIn([...path, position, "run"], true);
       if (typeof node?.value !== "string") return;
       const effective = document.getIn([...path, position, "shell"]) ?? shell;
+      // Only a POSIX shell's script is read as shell: a Python, PowerShell,
+      // Node or cmd step holds none.
+      const posixShell =
+        effective === undefined
+          ? !windows
+          : /^(?:\S*\/)?(?:ba|da|k|z)?sh\b/.test(effective);
       const pipefail =
         effective === "bash" ||
-        /pipefail/.test(effective ?? "") ||
-        setsPipefail(node.value);
+        (posixShell &&
+          (/pipefail/.test(effective ?? "") || setsPipefail(node.value)));
       if (!pipefail) return;
       const startLine = lineCounter.linePos(node.range[0]).line;
       const block =
@@ -1644,7 +1684,8 @@ function repositoryFindings() {
   ]);
   const shellCandidates = new Set([
     ...trackedPaths(["ls-files", "-z", "--", "*.sh", "*.bash"]),
-    ...trackedPaths(["grep", "-lzIP", "^#!.*\\b(ba)?sh\\b", "--"]),
+    // A broad ERE keeps this portable; the first-line check below is exact.
+    ...trackedPaths(["grep", "-lzIE", "^#!.*sh", "--"]),
   ]);
   const shells = [];
   for (const path of shellCandidates) {
@@ -1945,6 +1986,9 @@ describe("an early-exit reader never reads a streaming producer through a pipe u
       "a group producer before a loop that breaks",
       "{ seq 10; } | while read -r x; do break; done",
     ],
+    ["a negated grep in an if stage", "seq 10 | if ! grep -q 5; then :; fi"],
+    ["an if inside a group stage", "seq 10 | { if grep -q 5; then :; fi; }"],
+    ["a timed group stage", "seq 10 | { time -p head -n 1; }"],
     [
       "a tested eval in an argument's substitution",
       `echo "$(if eval 'seq 10 | grep -q 1'; then printf yes; fi)"`,
@@ -2179,6 +2223,12 @@ describe("an early-exit reader never reads a streaming producer through a pipe u
     expect(setsPipefail("eval 'set -o pipefail'\n")).toBe(true);
     expect(
       setsPipefail(
+        "#!/usr/bin/env -S bash -euo pipefail\nseq 10 | head -n 1\n",
+      ),
+    ).toBe(true);
+    expect(setsPipefail("#!/bin/bash -e\n# pipefail\n")).toBe(false);
+    expect(
+      setsPipefail(
         "set -eu\n# Do not set -o pipefail here.\nseq 10 | head -n 1\n",
       ),
     ).toBe(false);
@@ -2188,6 +2238,31 @@ describe("an early-exit reader never reads a streaming producer through a pipe u
     expect(findingsIn("cat <<EOF\nseq 10 | head -n 1\n")).toEqual([
       "the heredoc ending at EOF is never closed",
     ]);
+  });
+
+  it.each([
+    [
+      "a double quote",
+      'echo "it\nseq 10 | head -n 1\n',
+      "a quote opened on line 1",
+    ],
+    [
+      "an ANSI-C quote",
+      "echo $'it\nseq 10 | head -n 1\n",
+      "a quote opened on line 1",
+    ],
+    [
+      "a backtick substitution",
+      "echo `it\nseq 10 | head -n 1\n",
+      "a ` opened on line 1",
+    ],
+    [
+      "a command substitution",
+      "echo $(it\nseq 10 | head -n 1\n",
+      "a $( opened on line 1",
+    ],
+  ])("reports %s it cannot close", (_, source, problem) => {
+    expect(findingsIn(source)).toContain(`${problem} is never closed`);
   });
 
   it("flags a bash workflow step at its file line and leaves default-shell steps alone", () => {
@@ -2213,6 +2288,27 @@ describe("an early-exit reader never reads a streaming producer through a pipe u
       "12: head after `seq 10`",
       "16: grep -q after `seq 10`",
     ]);
+  });
+
+  it("reads no step whose shell is not a POSIX shell, a Windows runner's default included", () => {
+    const workflow = [
+      "on: push",
+      "jobs:",
+      "  python:",
+      "    runs-on: ubuntu-latest",
+      "    steps:",
+      "      - shell: python",
+      "        run: |",
+      "          x = 1 << 3",
+      "          print('pipefail')",
+      "  windows:",
+      "    runs-on: windows-latest",
+      "    steps:",
+      "      - run: |",
+      "          Get-ChildItem -Path . `",
+      "            -Recurse",
+    ].join("\n");
+    expect(findingsInWorkflow(workflow)).toEqual([]);
   });
 
   it("applies a workflow's default bash shell to every step, composite actions included", () => {

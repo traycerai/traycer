@@ -113,8 +113,12 @@ jobs:
             test -f "desktop-artifacts/$asset"
           done
           linux_appimage="traycer-desktop-linux-x86_64.AppImage"
-          if grep -Fxq "$linux_appimage" <<<"$(gh release view "desktop-v${VERSION}" --repo "$RELEASE_REPO" --json assets \
+          if ! release_assets="$(gh release view "desktop-v${VERSION}" --repo "$RELEASE_REPO" --json assets \
             --jq '.assets[].name')"; then
+            echo "::error::Failed to list assets for desktop-v${VERSION}."
+            exit 1
+          fi
+          if grep -Fxq "$linux_appimage" <<<"$release_assets"; then
             gh release download "desktop-v${VERSION}" \
               --repo "$RELEASE_REPO" \
               --pattern "$linux_appimage" \
