@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   cleanup,
   fireEvent,
@@ -15,9 +15,11 @@ import {
 import { sandboxSettingsStepsLine } from "@traycer/protocol/host/sandbox-settings";
 import type { StageConfiguration } from "@/lib/sandboxes/sandbox-stage-model";
 import {
+  CANCEL_AND_KEEP_THE_DRAFT,
   STARTING_SANDBOX,
   STARTING_TAKING_LONGER,
 } from "@/lib/sandboxes/sandbox-strings";
+import { formatMessageTimeWithSeconds } from "@/lib/relative-time";
 import type {
   StagedSandbox,
   StagedSandboxFailure,
@@ -702,6 +704,78 @@ describe("SandboxProgressLine's queued state", () => {
     const line = screen.getByTestId("sandbox-setup-line");
     expect(line.textContent).not.toContain("Queued");
     expect(line.textContent).toContain(STARTING_SANDBOX);
+  });
+
+  it("stays Queued past the elapsed threshold, and expanding it by hand still offers Cancel and keep the draft and Choose another host", () => {
+    const onCancel = vi.fn();
+    const onChooseAnotherHost = vi.fn();
+    render(
+      <SandboxSetupLine
+        stage={{
+          ...created(),
+          startedAt: PAST_THRESHOLD_STARTED_AT,
+          rateLimit: { limited: true, retryAfterAt: NOW + 30_000 },
+        }}
+        name="api-refactor"
+        facts={NOT_STOPPABLE}
+        actions={{ ...ACTIONS, onCancel, onChooseAnotherHost }}
+      />,
+    );
+
+    const line = screen.getByTestId("sandbox-setup-line");
+    expect(line.textContent).toContain("Queued");
+    expect(line.textContent).not.toContain(STARTING_TAKING_LONGER);
+
+    fireEvent.click(screen.getByTestId("sandbox-setup-line-toggle"));
+    const detail = screen.getByTestId("sandbox-setup-line-detail");
+    fireEvent.click(
+      within(detail).getByRole("button", { name: CANCEL_AND_KEEP_THE_DRAFT }),
+    );
+    expect(onCancel).toHaveBeenCalledTimes(1);
+    fireEvent.click(
+      within(detail).getByRole("button", {
+        name: ACTIONS.chooseAnotherHostLabel,
+      }),
+    );
+    expect(onChooseAnotherHost).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("SandboxProgressLine's queued retry label across a local midnight", () => {
+  // A fixed instant, not `Date.now()`: the retry time must land on the NEXT
+  // local day relative to it, which only a controlled clock can guarantee
+  // regardless of when this suite happens to run.
+  const FIXED_NOW = new Date(2026, 0, 15, 23, 0, 0).getTime();
+  const NEXT_LOCAL_DAY_RETRY = new Date(2026, 0, 16, 0, 30, 0).getTime();
+  const NOT_STOPPABLE = { ...facts(false), sandboxStoppable: false };
+
+  beforeEach(() => {
+    vi.useFakeTimers();
+    vi.setSystemTime(FIXED_NOW);
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it("includes the date, not only the time, when the recorded retry falls on a different local day", () => {
+    render(
+      <SandboxSetupLine
+        stage={{
+          ...created(),
+          startedAt: FIXED_NOW,
+          rateLimit: { limited: true, retryAfterAt: NEXT_LOCAL_DAY_RETRY },
+        }}
+        name="api-refactor"
+        facts={NOT_STOPPABLE}
+        actions={ACTIONS}
+      />,
+    );
+
+    const expectedLabel = `Retrying at ${formatMessageTimeWithSeconds(NEXT_LOCAL_DAY_RETRY, FIXED_NOW)}`;
+    expect(screen.getByTestId("sandbox-setup-line").textContent).toContain(
+      expectedLabel,
+    );
   });
 });
 

@@ -7,6 +7,7 @@ import { useConfigurationBillingUrl } from "@/hooks/sandboxes/use-configuration-
 import { useClipboardCopy } from "@/hooks/ui/use-clipboard-copy";
 import { useElapsedSeconds } from "@/hooks/use-elapsed-seconds";
 import { formatStopwatch } from "@/lib/format-duration";
+import { formatMessageTimeWithSeconds } from "@/lib/relative-time";
 import { useOpenLink } from "@/lib/links/open-link";
 import { STAGED_TAKING_LONGER_MS } from "@/lib/sandboxes/staged-sandbox-run";
 import { stageConfigurationCopy } from "@/lib/sandboxes/sandbox-stage-model";
@@ -568,7 +569,12 @@ function SandboxProgressLine(props: {
         />
       }
       head={
-        <ProgressHead view={view} name={name} elapsedSeconds={elapsedSeconds} />
+        <ProgressHead
+          view={view}
+          name={name}
+          elapsedSeconds={elapsedSeconds}
+          now={now}
+        />
       }
     >
       {expanded ? (
@@ -637,6 +643,7 @@ function ProgressHead(props: {
   readonly view: ProgressView;
   readonly name: string;
   readonly elapsedSeconds: number;
+  readonly now: number;
 }): ReactNode {
   const { failure } = props.view;
   const waiting = stillWaiting(failure);
@@ -670,7 +677,7 @@ function ProgressHead(props: {
       retryAfterAt !== null &&
       retryAfterAt !== undefined ? (
         <HeadPart
-          text={`Retrying at ${new Date(retryAfterAt).toLocaleTimeString()}`}
+          text={`Retrying at ${formatMessageTimeWithSeconds(retryAfterAt, props.now)}`}
         />
       ) : null}
       {waiting ? (
@@ -849,7 +856,7 @@ function ProgressBranchButtons(props: {
       </>
     );
   }
-  if (!props.view.takingLonger) return null;
+  if (!props.view.takingLonger && !props.view.queued) return null;
   return (
     <>
       <LineButton
