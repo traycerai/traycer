@@ -101,7 +101,8 @@ export interface LayerProperties {
    * How many sequences the layer plays in one run of the track, at most; with
    * a `sequenceLength` of `[1, 1]`, how many samples. Once it has, the layer
    * waits for the next run, whatever state comes. A run resumed after a stop is
-   * the same run. Null: no limit.
+   * the same run, and a sample the stop cut before it was heard does not count.
+   * Null: no limit.
    */
   readonly playsPerRun: number | null;
 }
@@ -148,9 +149,10 @@ export interface VariableTrack {
   readonly layers: readonly Layer[];
   readonly states: readonly State[];
   /**
-   * Plays on a run's first grid tick, and the layers start from its end. A run
-   * resumed past track time 0 skips it, unless a stop cut it short: then it
-   * plays again from the resumed position.
+   * Plays on a run's first grid tick, and the layers start from its end, even
+   * when the state changes while it sounds. A run resumed past track time 0
+   * skips it, unless a stop cut it short: then it plays again from the resumed
+   * position.
    */
   readonly intro: Bookend | null;
   /**

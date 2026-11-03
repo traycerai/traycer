@@ -41,14 +41,24 @@ interface LayerStart {
  * Which sublayer a cursor is for, and what it has done in this run, which a
  * state move or a resume keeps.
  */
-interface CursorOrigin {
+interface CursorOrigin extends RunProgress {
   readonly layer: Layer;
   readonly layerIndex: number;
   readonly sublayerIndex: number;
+}
+
+/** What a sublayer has done in this run. */
+interface RunProgress {
   /** Sequences it has started, which `playsPerRun` caps. */
   readonly sequencesStarted: number;
   /** Its place in the layer's turns of groups. */
   readonly turn: number;
+}
+
+/** A play counted when it was reported, and the run as it was before it. */
+interface CountedPlay {
+  readonly startAt: number;
+  readonly before: RunProgress;
 }
 
 interface SublayerCursor {
@@ -65,6 +75,11 @@ interface SublayerCursor {
   inSequence: boolean;
   sequencesStarted: number;
   turn: number;
+  /**
+   * The plays it has reported that may not have started yet, oldest first: a
+   * restart from before one of them takes back what they counted.
+   */
+  counted: readonly CountedPlay[];
   /** Decided and handed out, its duration not back yet. */
   pending: ScheduledPlay | null;
   /** The variant it last started, so not a draw that was skipped or sent back. */
@@ -207,6 +222,8 @@ export class TrackScheduler {
   private enabled: boolean[];
   private pauseMultiplier: number;
   private cursors: SublayerCursor[] = [];
+  /** Where the last restart put the layers, which a move never goes before. */
+  private restartedFrom = 0;
   /**
    * Per layer, the starts confirmed so far, in which no variant is ever beside
    * itself. Rule 2 is about what is heard, and a pending play may yet move or be
@@ -227,32 +244,41 @@ export class TrackScheduler {
 
   /**
    * Starts every sublayer over from `trackTime` with fresh start pauses, as a
-   * resume does. The state and the enabled flags stand, and so does what the
-   * run has played: a layer that has had its `playsPerRun` stays quiet, and a
-   * grouped layer goes on with the group that was due. A play still awaiting
-   * its report is forgotten, and reporting it later does nothing.
+   * resume does, and no later move starts one earlier. The state and the
+   * enabled flags stand, and so does what the run has played: a layer that has
+   * had its `playsPerRun` stays quiet, and a grouped layer goes on with the
+   * group that was due. A play reported to start at or after `trackTime` was cut
+   * before it sounded, so it counts for neither. A play still awaiting its
+   * report is forgotten, and reporting it later does nothing.
    */
   restartAt(trackTime: number): void {
     this.outgoing = null;
+    this.restartedFrom = trackTime;
     this.confirmedByLayer = this.track.layers.map(() => []);
     const previous = this.cursors;
     this.cursors = this.track.layers.flatMap((layer, layerIndex) =>
-      Array.from({ length: layer.sublayers }, (_, sublayerIndex) =>
-        this.createCursor(
-          previous.find(
-            (cursor) =>
-              cursor.layerIndex === layerIndex &&
-              cursor.sublayerIndex === sublayerIndex,
-          ) ?? {
+      Array.from({ length: layer.sublayers }, (_, sublayerIndex) => {
+        const cursor = previous.find(
+          (candidate) =>
+            candidate.layerIndex === layerIndex &&
+            candidate.sublayerIndex === sublayerIndex,
+        );
+        const progress =
+          cursor === undefined
+            ? { sequencesStarted: 0, turn: 0 }
+            : (cursor.counted.find((play) => play.startAt >= trackTime)
+                ?.before ?? cursor);
+        return this.createCursor(
+          {
             layer,
             layerIndex,
             sublayerIndex,
-            sequencesStarted: 0,
-            turn: 0,
+            sequencesStarted: progress.sequencesStarted,
+            turn: progress.turn,
           },
           trackTime,
-        ),
-      ),
+        );
+      }),
     );
   }
 
@@ -260,10 +286,11 @@ export class TrackScheduler {
    * Moves to `state` on the next grid tick after `trackTime`, as a state start:
    * enabled layers are rolled now, so the caller can override them right after,
    * and every sublayer waits a fresh start pause. It waits from that tick, or
-   * from the end of the sample it has sounding, which plays out. No sublayer
-   * sits out a pause drawn from the old state, and none overlaps itself. A play
-   * still awaiting its report is forgotten, as in `restartAt`; one already
-   * decided and reported still starts, within the player's lookahead.
+   * from the end of the sample it has sounding, which plays out, and never from
+   * before where the last restart put it. No sublayer sits out a pause drawn
+   * from the old state, and none overlaps itself. A play still awaiting its
+   * report is forgotten, as in `restartAt`; one already decided and reported
+   * still starts, within the player's lookahead.
    */
   enterState(state: State, trackTime: number): void {
     assertStateFitsTrack(this.track, state);
@@ -272,10 +299,14 @@ export class TrackScheduler {
     this.state = state;
     this.enabled = rollEnabledLayers(state, this.random);
     this.cursors = this.cursors.map((cursor) => ({
-      ...this.createCursor(cursor, Math.max(landsAt, cursor.soundingUntil)),
+      ...this.createCursor(
+        cursor,
+        Math.max(landsAt, cursor.soundingUntil, this.restartedFrom),
+      ),
       // The samples either side of the move are still back to back.
       lastVariant: cursor.lastVariant,
       soundingUntil: cursor.soundingUntil,
+      counted: cursor.counted,
     }));
   }
 
@@ -386,6 +417,10 @@ export class TrackScheduler {
     });
     cursor.lastVariant = play.variant;
     cursor.soundingUntil = startAt + durationSeconds;
+    // What started before now has been heard, and no restart takes it back.
+    cursor.counted = cursor.counted.filter(
+      (counted) => counted.startAt >= notBeforeTrackTime,
+    );
     this.placeNext(cursor, startAt, durationSeconds);
     return startAt;
   }
@@ -428,6 +463,7 @@ export class TrackScheduler {
       inSequence: false,
       sequencesStarted: origin.sequencesStarted,
       turn: origin.turn,
+      counted: [],
       pending: null,
       lastVariant: null,
       soundingUntil: 0,
@@ -501,6 +537,16 @@ export class TrackScheduler {
       cursor,
     ];
     const { properties } = cursor;
+    cursor.counted = [
+      ...cursor.counted,
+      {
+        startAt,
+        before: {
+          sequencesStarted: cursor.sequencesStarted,
+          turn: cursor.turn,
+        },
+      },
+    ];
     cursor.turn = (cursor.turn + 1) % cursor.turns.length;
     if (!cursor.inSequence) {
       cursor.inSequence = true;

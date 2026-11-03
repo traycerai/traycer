@@ -236,7 +236,9 @@ export class TrackPlayer {
    * again. While playing, the move lands on the next grid tick and cuts nothing.
    * Enabled layers are rolled and their gains ramp at once, so call
    * `setLayerEnabled` after this, not before. Otherwise the next play takes it,
-   * which is the next start or the end of the silence. Choosing the state already
+   * which is the next start, going on with the same run and what it has played,
+   * or the end of the silence. While the intro sounds, the layers still wait for
+   * its end. Choosing the state already
    * in force changes nothing, so a plan can restate it freely. A phase of the
    * track moves the state the same way, its gains taking the phase's fade.
    */
@@ -256,6 +258,18 @@ export class TrackPlayer {
   /** Per layer; empty when there is no state. */
   enabledLayers(): readonly boolean[] {
     return this.scheduler === null ? [] : this.scheduler.enabledLayers();
+  }
+
+  /**
+   * Per layer, whether the state fixes it on or off, which `setLayerEnabled`
+   * cannot change; empty when there is no state.
+   */
+  fixedLayers(): readonly boolean[] {
+    return this.scheduler === null
+      ? []
+      : this.scheduler
+          .decidingState()
+          .layersProperties.map((properties) => properties.enabled !== null);
   }
 
   /**
@@ -334,10 +348,12 @@ export class TrackPlayer {
       };
     }
     const { run } = this;
-    const scheduler =
-      this.chosenState === null && this.scheduler !== null
-        ? this.scheduler
-        : this.rollScheduler(opening);
+    const scheduler = this.scheduler ?? this.rollScheduler(opening);
+    // A state chosen while stopped moves the run on, keeping what it has played.
+    if (this.chosenState !== null) {
+      scheduler.enterState(this.chosenState, fromElapsed);
+      this.chosenState = null;
+    }
     scheduler.restartAt(fromElapsed);
     this.scheduler = scheduler;
     // Due on a run's start, or again when a stop cut it short.

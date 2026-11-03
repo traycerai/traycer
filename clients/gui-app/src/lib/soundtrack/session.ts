@@ -74,7 +74,8 @@ function pickRandom<T>(
 /**
  * Moves the layers on by no more than the plan asks: held layers on, then the
  * count made up or trimmed at random, so the engine's roll stands wherever the
- * plan does not need to touch it and a restated plan changes nothing.
+ * plan does not need to touch it and a restated plan changes nothing. A layer
+ * the state fixes on or off stays so, and counts as it is.
  */
 function settleEnabledLayers(
   player: TrackPlayer,
@@ -84,14 +85,20 @@ function settleEnabledLayers(
   const current = player.enabledLayers();
   // In the silence there are none to move; the next restatement sets them.
   if (current.length === 0) return;
+  const fixed = player.fixedLayers();
   const enabled = [...current];
-  for (const layerIndex of plan.heldLayers) enabled[layerIndex] = true;
+  for (const layerIndex of plan.heldLayers) {
+    if (!fixed[layerIndex]) enabled[layerIndex] = true;
+  }
   if (plan.enabledLayerCount !== null) {
     const indices = enabled.map((_, layerIndex) => layerIndex);
     const on = indices.filter((layerIndex) => enabled[layerIndex]);
-    const off = indices.filter((layerIndex) => !enabled[layerIndex]);
+    const off = indices.filter(
+      (layerIndex) => !enabled[layerIndex] && !fixed[layerIndex],
+    );
     const trimmable = on.filter(
-      (layerIndex) => !plan.heldLayers.includes(layerIndex),
+      (layerIndex) =>
+        !plan.heldLayers.includes(layerIndex) && !fixed[layerIndex],
     );
     const missing = plan.enabledLayerCount - on.length;
     for (const layerIndex of pickRandom(off, missing, random)) {
