@@ -9,6 +9,7 @@ import { RateLimitIconButton } from "@/components/layout/header/rate-limit-icon"
 import { ResourceMonitorPopover } from "@/components/resources/resource-monitor-popover";
 import { MobileNotificationsButton } from "@/components/notifications/mobile-notifications-button";
 import { MobileEpicHeaderTitle } from "@/components/epic-canvas/mobile/epic-mobile-header-actions";
+import { MobileArtifactSyncControl } from "@/components/layout/header/mobile-artifact-sync-control";
 import { useKeyboardFocusOwner } from "@/hooks/ui/use-keyboard-focus-layout";
 import "@/components/layout/shell/mobile-shell-touch-targets.css";
 import { useRegisteredEpicTitle } from "@/lib/epic-selectors";
@@ -112,6 +113,9 @@ export function MobileAppHeader(): ReactNode {
         {/* Last of the global controls, matching the desktop header's order
             (rate limit -> resource monitor -> bell). */}
         <MobileNotificationsButton />
+        {epicId === null ? null : (
+          <MobileArtifactSyncControl key={epicId} epicId={epicId} />
+        )}
         {rightActions}
       </div>
     </header>
