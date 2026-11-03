@@ -3389,7 +3389,8 @@ describe("performance on large documents", () => {
     // buildDocument stops on the first row past the requested length, so
     // the documents stay near a four-to-one ratio. The bound is three
     // times that ratio (about twelve). Quadratic growth is the square
-    // (about sixteen). Both samples slow together when the runner is busy.
+    // (about sixteen). The minimum of three samples drops a stall that
+    // hits one sample.
     expect(sizeRatio).toBeGreaterThan(3);
     expect(sizeRatio).toBeLessThan(5);
 
@@ -3405,12 +3406,17 @@ describe("performance on large documents", () => {
     ];
     const linearBound = sizeRatio * 3;
     for (const edit of edits) {
-      const small = timed(() => edit(quarter, quarterRow));
-      const big = timed(() => edit(large, lastRow));
-      expect(small.value.ok).toBe(true);
-      expect(big.value.ok).toBe(true);
-      expect(small.elapsedMs).toBeGreaterThan(0);
-      expect(big.elapsedMs).toBeLessThan(small.elapsedMs * linearBound);
+      let smallMs = Number.POSITIVE_INFINITY;
+      let bigMs = Number.POSITIVE_INFINITY;
+      for (let attempt = 0; attempt < 3; attempt++) {
+        const small = timed(() => edit(quarter, quarterRow));
+        const big = timed(() => edit(large, lastRow));
+        expect(small.value.ok).toBe(true);
+        expect(big.value.ok).toBe(true);
+        smallMs = Math.min(smallMs, small.elapsedMs);
+        bigMs = Math.min(bigMs, big.elapsedMs);
+      }
+      expect(bigMs).toBeLessThan(smallMs * linearBound);
     }
   });
 

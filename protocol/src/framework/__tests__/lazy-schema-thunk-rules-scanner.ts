@@ -1068,19 +1068,27 @@ export function scanThunkRules(input: ScanInput): ThunkScanResult {
     return loaded;
   };
 
+  const readText = (abs: string): string | undefined => {
+    const overlayText = input.overlay.get(abs);
+    if (overlayText !== undefined) {
+      return overlayText;
+    }
+    if (!existsSync(abs)) {
+      return undefined;
+    }
+    return readFileSync(abs, "utf8");
+  };
+
   const load = (abs: string): LoadedFile | undefined => {
     const cached = loadCache.get(abs);
     if (cached !== undefined) {
       return cached;
     }
-    const overlayText = input.overlay.get(abs);
-    if (overlayText !== undefined) {
-      return remember(abs, overlayText);
-    }
-    if (!existsSync(abs)) {
+    const text = readText(abs);
+    if (text === undefined) {
       return undefined;
     }
-    return remember(abs, readFileSync(abs, "utf8"));
+    return remember(abs, text);
   };
 
   const lineOf = (abs: string, node: ts.Node): number => {
@@ -2542,17 +2550,10 @@ export function scanThunkRules(input: ScanInput): ThunkScanResult {
   const thunkFns: ThunkFn[] = [];
   let thunkCount = 0;
   for (const abs of input.files) {
-    // createSourceFile of every listed file was most of this scan. The
-    // walk only reads a call site, so a file whose text has no
+    // The walk only reads a call site, so a file whose text has no
     // `lazySchema(` is skipped here. Import resolution still calls load
     // for a helper that does not contain the marker.
-    const overlayText = input.overlay.get(abs);
-    const markerText =
-      overlayText !== undefined
-        ? overlayText
-        : existsSync(abs)
-          ? readFileSync(abs, "utf8")
-          : undefined;
+    const markerText = readText(abs);
     if (markerText === undefined || !markerText.includes("lazySchema(")) {
       continue;
     }
