@@ -437,7 +437,10 @@ describe("TrackScheduler", () => {
       for (let seed = 1; seed <= 10; seed += 1) {
         const placed = runToEnd(makeScheduler(track, seed, 1), track, () => 3);
         track.layers.forEach((trackLayer, layerIndex) => {
-          const variants = trackLayer.variants ?? 0;
+          const { variants } = trackLayer;
+          if (variants === undefined) {
+            throw new Error("aquilo-1 has pooled layers only");
+          }
           const ofLayer = placed.filter(
             ({ play }) => play.layerIndex === layerIndex,
           );
