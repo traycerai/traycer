@@ -581,6 +581,8 @@ describe("a job that narrows a push run compares against the last green push", (
       }
       cached.push(project);
       expect(command, project).toMatch(/--cache-strategy(?:["',\s]+|=)content/);
+      // The lane carries the file ESLint writes by default.
+      expect(command, project).not.toMatch(/--cache-location/);
       expect(lint, project).toContain(`${project}/.eslintcache`);
     }
     expect(cached).toEqual(
