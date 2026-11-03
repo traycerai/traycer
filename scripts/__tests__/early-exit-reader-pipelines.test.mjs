@@ -153,7 +153,9 @@ function pipelinesOf(source) {
   function discardSubstitutions(pipeline) {
     for (const command of pipeline.commands) {
       command.substitutions.forEach(discardAll);
-      command.evaluated.forEach(discardAll);
+      // An eval's pipelines give their status to the eval: a tested eval
+      // keeps them, and only a discarded one drops them.
+      if (pipeline.discarded) command.evaluated.forEach(discardAll);
     }
   }
   // A pipeline whose status picks a branch keeps it wherever it runs.
@@ -222,6 +224,7 @@ function pipelinesOf(source) {
           conditions: [],
           leaves: [],
           path: [],
+          start: order,
           end: Number.POSITIVE_INFINITY,
         };
       }
@@ -387,9 +390,11 @@ function pipelinesOf(source) {
         }
       }
       pipeline.commands.push(current);
-      if (assignsTimeout(current.words)) {
+      const timeout = timeoutOf(current.words);
+      if (timeout !== null) {
         timeouts.push({
           order,
+          on: timeout,
           path: fullPath(),
           pipelines: [...context.hosts, pipeline],
         });
@@ -913,29 +918,52 @@ function leaveOf(words) {
   return at < args.length ? { name: "exit", count: 1 } : null;
 }
 
-// A TMOUT assignment that turns read timeouts on.
-const TIMEOUT = /^TMOUT\+?=(?!0*$)/;
+/**
+ * Whether the last TMOUT assignment among some words turns read timeouts on,
+ * or null when none assigns it. Zero or empty turns them off; `+=` may append
+ * to a timeout already set, and a value the scan cannot see may be one.
+ */
+function timeoutAssigned(words) {
+  let on = null;
+  for (const word of words) {
+    const assignment = /^TMOUT(\+?)=(.*)$/s.exec(word);
+    if (assignment !== null) {
+      on = assignment[1] === "+" || !/^0*$/.test(assignment[2]);
+    }
+  }
+  return on;
+}
 
 /**
- * Whether a command sets TMOUT in its shell: an assignment alone, through a
- * declaration builtin, or `printf -v TMOUT`. An assignment before another
- * command sets it for that command only.
+ * Whether a command turns read timeouts on (true) or off (false) in its
+ * shell, or null when it leaves TMOUT alone: an assignment alone or through a
+ * declaration builtin, `printf -v TMOUT`, or `unset TMOUT`. An assignment
+ * before another command sets TMOUT for that command only.
  */
-function assignsTimeout(words) {
+function timeoutOf(words) {
   if (words.length > 0 && words.every((word) => ASSIGNMENT.test(word))) {
-    return words.some((word) => TIMEOUT.test(word));
+    return timeoutAssigned(words);
   }
   const { name, args } = builtinOf(words);
   if (["declare", "export", "local", "readonly", "typeset"].includes(name)) {
-    return args.some((arg) => TIMEOUT.test(arg));
+    return timeoutAssigned(args);
   }
-  return (
-    name === "printf" &&
-    args.some(
-      (arg, at) =>
-        arg === "-vTMOUT" || (arg === "-v" && args[at + 1] === "TMOUT"),
-    )
+  if (name === "unset") {
+    return args.includes("TMOUT") && !args.includes("-f") ? false : null;
+  }
+  if (name !== "printf") return null;
+  const at = args.findIndex(
+    (arg, position) =>
+      arg === "-vTMOUT" || (arg === "-v" && args[position + 1] === "TMOUT"),
   );
+  if (at === -1) return null;
+  const [format = "", ...values] = args.slice(at + (args[at] === "-v" ? 2 : 1));
+  // A format with no conversion prints itself, and `%s` or `%d` its first
+  // argument; any other format may print a timeout.
+  let printed = null;
+  if (/^%[sd]$/.test(format)) printed = values[0] ?? "";
+  else if (!format.includes("%") && !format.includes("\\")) printed = format;
+  return printed === null || !/^0*$/.test(printed);
 }
 
 /**
@@ -1360,27 +1388,38 @@ function drains(loop, timeouts) {
 }
 
 /**
- * Whether a TMOUT assignment reaches a loop's `read`: it runs before the loop
- * ends, in the loop's own process or one the loop's is forked from.
+ * Whether TMOUT may time out a loop's `read`: the last TMOUT change before the
+ * loop starts turned timeouts on, or one in the loop turns them on for a later
+ * pass. A change counts in the loop's own process or one the loop's is forked
+ * from.
  */
 function timesOut(loop, timeouts) {
-  return timeouts.some(
-    ({ order, path, pipelines }) =>
+  let before = null;
+  for (const timeout of timeouts) {
+    const { order, on, path, pipelines } = timeout;
+    const reaches =
       order <= loop.end &&
       !pipelines.some((pipeline) => pipeline.forked) &&
-      !path.some((group) => group.forked && !loop.path.includes(group)),
-  );
+      !path.some((group) => group.forked && !loop.path.includes(group));
+    if (!reaches) continue;
+    if (order > loop.start && on) return true;
+    if (order <= loop.start && (before === null || order > before.order)) {
+      before = timeout;
+    }
+  }
+  return before !== null && before.on;
 }
 
 function drainsItself(loop, timeouts) {
   if (loop.kind !== "while" || stopsEarly(loop)) return false;
   const reads = (command) => {
     const { name, args } = commandOf(command.words);
+    // A TMOUT prefix on the `read` decides for it alone.
+    const prefix = timeoutAssigned(command.words);
     return (
       name === "read" &&
       !readTimesOut(args) &&
-      !command.words.some((word) => TIMEOUT.test(word)) &&
-      !timesOut(loop, timeouts) &&
+      !(prefix ?? timesOut(loop, timeouts)) &&
       readsStandardInput(command)
     );
   };
@@ -1841,6 +1880,26 @@ describe("an early-exit reader never reads a streaming producer through a pipe u
       "seq 10 | while TMOUT=5 read -r x; do :; done",
     ],
     [
+      "a read loop under a TMOUT set again after a clear",
+      "TMOUT=0\nTMOUT=5\nseq 10 | while read -r x; do :; done",
+    ],
+    [
+      "a read loop whose body clears a TMOUT set before it",
+      "TMOUT=5\nseq 10 | while read -r x; do TMOUT=0; done",
+    ],
+    [
+      "a read loop under a TMOUT printf formats",
+      "printf -v TMOUT %s 5\nseq 10 | while read -r x; do :; done",
+    ],
+    [
+      "a tested eval in an argument's substitution",
+      `echo "$(if eval 'seq 10 | grep -q 1'; then printf yes; fi)"`,
+    ],
+    [
+      "an and-listed eval in an argument's substitution",
+      `echo "$(eval 'seq 10 | grep -q 1' && printf yes)"`,
+    ],
+    [
       "a read loop replaced by exec",
       "seq 10 | while read -r x; do exec true; done",
     ],
@@ -2014,6 +2073,26 @@ describe("an early-exit reader never reads a streaming producer through a pipe u
       "seq 10 | while read -r x; do :; done\nTMOUT=5",
     ],
     ["TMOUT set to zero", "TMOUT=0\nseq 10 | while read -r x; do :; done"],
+    [
+      "TMOUT cleared before a read loop",
+      "TMOUT=5\nTMOUT=0\nseq 10 | while read -r x; do :; done",
+    ],
+    [
+      "TMOUT unset before a read loop",
+      "TMOUT=5\nunset TMOUT\nseq 10 | while read -r x; do :; done",
+    ],
+    [
+      "TMOUT printf sets to zero",
+      "printf -v TMOUT %s 0\nseq 10 | while read -r x; do :; done",
+    ],
+    [
+      "a read with a zero TMOUT prefix under a TMOUT",
+      "TMOUT=5\nseq 10 | while TMOUT=0 read -r x; do :; done",
+    ],
+    [
+      "an untested eval in an argument's substitution",
+      `echo "$(eval 'seq 10 | grep -q 1')"`,
+    ],
   ])("passes %s", (_, body) => {
     expect(pipefail(body)).toEqual([]);
   });
