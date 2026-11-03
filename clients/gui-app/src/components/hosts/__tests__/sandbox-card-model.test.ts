@@ -324,7 +324,25 @@ describe("sandboxWithdrawalLine", () => {
   });
 
   it("is null while no withdrawal is announced", () => {
-    expect(sandboxWithdrawalLine(null)).toBeNull();
+    expect(sandboxWithdrawalLine(null, null)).toBeNull();
+  });
+
+  // `destroyAt` is the day the row actually ends, so it wins the sentence:
+  // the announced day goes unnamed rather than contradicting it. The two
+  // cases share every other word, which is what makes the date the only
+  // thing under test.
+  it("names no day once the row carries a destroy deadline of its own, keeping the rest of the sentence", () => {
+    const endsAt = Date.UTC(2026, 11, 1);
+    const withDeadline = sandboxWithdrawalLine(endsAt, Date.UTC(2026, 10, 8));
+
+    expect(withDeadline).toBe(
+      "This sandbox stops running and is rebuilt from your environment. Files outside the repository are lost.",
+    );
+    // Same row, no deadline of its own: the day is named. Which day, and in
+    // which zone, is pinned by the case below.
+    expect(sandboxWithdrawalLine(endsAt, null)).toContain(
+      "stops running on ",
+    );
   });
 
   // `withdrawalEndsAt` is an announced UTC calendar day, and the sentence has
@@ -365,7 +383,7 @@ describe("sandboxWithdrawalLine", () => {
     // case for the wrong reason.
     expect(utcDay).not.toBe(localDay);
 
-    const line = sandboxWithdrawalLine(endsAt);
+    const line = sandboxWithdrawalLine(endsAt, null);
     expect(line).toContain(utcDay);
     expect(line).not.toContain(localDay);
   });

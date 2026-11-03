@@ -21,7 +21,10 @@ import type {
   SandboxCost,
   UserSandboxCost,
 } from "@traycer/protocol/host/sandbox-control";
-import type { SandboxRunwayWarning } from "@/lib/sandboxes/sandbox-balance";
+import {
+  frozenDestroyAt,
+  type SandboxRunwayWarning,
+} from "@/lib/sandboxes/sandbox-balance";
 import {
   createFakeSandboxBinding,
   refusal,
@@ -403,6 +406,29 @@ describe("<SandboxCard /> per state", () => {
 
     renderCard(sandboxOf("stopped", false, { withdrawalEndsAt: null }));
     expect(screen.queryByTestId("sandbox-card-withdrawal")).toBeNull();
+  });
+
+  // A frozen row ends on its own day-30 deadline, which the state line above
+  // already names, and that day can fall well BEFORE the announced one — it
+  // does here by more than three weeks. A notice naming the announced day
+  // beside it would put two stop dates on one card and let the person read
+  // the later, wrong one as how long the row has left.
+  it("drops the announced day from a frozen row's notice, leaving the state line's day-30 date the only one on the card", () => {
+    const frozenAt = Date.UTC(2026, 9, 9);
+    renderCard(
+      sandboxOf("suspended", true, {
+        frozenAt,
+        destroyAt: frozenDestroyAt(frozenAt),
+        withdrawalEndsAt: Date.UTC(2026, 11, 1),
+      }),
+    );
+
+    expect(screen.getByTestId("sandbox-card-withdrawal").textContent).toBe(
+      "This sandbox stops running and is rebuilt from your environment. Files outside the repository are lost.",
+    );
+    expect(screen.getByTestId("sandbox-card-state-line").textContent).toMatch(
+      /Destroyed on /,
+    );
   });
 
   it("names the region by the server's label, never its id", () => {

@@ -1036,12 +1036,16 @@ function SandboxListRow(props: {
  * withdrawing. It sits under the clock line because it replaces what that
  * line would say: an unfrozen withdrawn row carries no resting deadline while
  * this date stands. A frozen one keeps its own day-30 deadline and states it
- * through the clock line, so both lines show, each naming its own date.
+ * through the clock line, so both lines show — and this one drops its date
+ * then, rather than contradict the day the clock line names.
  */
 function SandboxRowWithdrawal(props: {
   readonly summary: SandboxSummary;
 }): ReactNode {
-  const line = sandboxWithdrawalLine(props.summary.withdrawalEndsAt);
+  const line = sandboxWithdrawalLine(
+    props.summary.withdrawalEndsAt,
+    props.summary.destroyAt,
+  );
   if (line === null) return null;
   return (
     <p

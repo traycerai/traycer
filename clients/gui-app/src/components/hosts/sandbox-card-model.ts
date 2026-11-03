@@ -154,14 +154,31 @@ export function sandboxFrozenLine(frozenAt: number | null): string {
  * keeps when it does. `null` until a withdrawal is announced for the row's
  * kind of sandbox, which is every row today.
  *
- * The date and what survives it are the two things the person can act on, so
- * the sentence carries both and nothing else. The day is the announced one,
- * read in UTC: no clock time, because nothing ends the row at an instant —
- * the date is what was announced, and the drain is operational.
+ * What survives the withdrawal is what the person can act on, so the sentence
+ * always carries it. The DATE is carried only when nothing else decides when
+ * this row ends: `destroyAt` wins wherever it is set, because the row then
+ * ends on that day rather than on the announced one. A frozen withdrawn row
+ * is the case that makes the difference — it keeps its own day-30
+ * `destroyAt`, which can fall well before the announced day, so naming the
+ * announced day here would tell the person the row lasts longer than it
+ * does.
+ *
+ * The day, where it is named, is the announced one read in UTC: no clock
+ * time, because nothing ends the row at an instant — the date is what was
+ * announced, and the drain is operational.
  */
-export function sandboxWithdrawalLine(endsAt: number | null): string | null {
+export function sandboxWithdrawalLine(
+  endsAt: number | null,
+  destroyAt: number | null,
+): string | null {
   if (endsAt === null) return null;
-  return `This sandbox stops running on ${formatSandboxUtcDay(endsAt)} and is rebuilt from your environment. Files outside the repository are lost.`;
+  // The half the person acts on, the same either way: whether the announced
+  // day is named is the only difference between the two sentences.
+  const rebuilt =
+    "is rebuilt from your environment. Files outside the repository are lost.";
+  return destroyAt === null
+    ? `This sandbox stops running on ${formatSandboxUtcDay(endsAt)} and ${rebuilt}`
+    : `This sandbox stops running and ${rebuilt}`;
 }
 
 /**

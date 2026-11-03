@@ -450,13 +450,16 @@ function SandboxSecretsReadinessLine(props: {
 /**
  * When this sandbox stops running, on a row whose kind the control plane is
  * withdrawing. Nothing is broken and nothing is lost yet, so it is a
- * warning: the date is ahead and the person can still move what they want to
+ * warning: the end is ahead and the person can still move what they want to
  * keep.
  */
 function SandboxWithdrawalNotice(props: {
   readonly summary: SandboxSummary;
 }): ReactNode {
-  const line = sandboxWithdrawalLine(props.summary.withdrawalEndsAt);
+  const line = sandboxWithdrawalLine(
+    props.summary.withdrawalEndsAt,
+    props.summary.destroyAt,
+  );
   if (line === null) return null;
   return (
     <p
