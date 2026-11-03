@@ -25,6 +25,7 @@
  * runtime is what sequences planes against each other, which is exactly the
  * split the shared contract asks for.
  */
+import type { EpicArtifactSync } from "@traycer/protocol/host/epic/status-subscribe";
 import type { PermissionRole } from "@traycer/protocol/host/epic/unary-schemas";
 import type {
   EpicCloudFreshness,
@@ -316,6 +317,7 @@ export function createEpicControlReplica(
   let durabilityPromotionState: EpicPromotionState | null = null;
   let localProtection: EpicLocalProtection | null = null;
   let cloudFreshness: EpicCloudFreshness | null = null;
+  let artifactSync: EpicArtifactSync | null = null;
   let durabilityLegsNegotiated = false;
   let durabilityStatusNegotiated = false;
   /**
@@ -375,6 +377,7 @@ export function createEpicControlReplica(
     | "durabilityPromotionState"
     | "localProtection"
     | "cloudFreshness"
+    | "artifactSync"
     | "durabilityLegsNegotiated"
     | "durabilityStatusNegotiated"
     | "retainedDurabilityStatus"
@@ -392,6 +395,7 @@ export function createEpicControlReplica(
       durabilityPromotionState,
       localProtection,
       cloudFreshness,
+      artifactSync,
       durabilityLegsNegotiated,
       durabilityStatusNegotiated,
       retainedDurabilityStatus,
@@ -524,6 +528,7 @@ export function createEpicControlReplica(
     // cycle's document is up to date on the strength of the previous one's
     // reconciliation.
     cloudFreshness = null;
+    artifactSync = null;
     // A re-subscribe can renegotiate onto a different host incarnation, so
     // the previous cycle's answer is not evidence about this one's peer.
     durabilityLegsNegotiated = false;
@@ -664,6 +669,7 @@ export function createEpicControlReplica(
     durabilityPromotionState = durable.promotionState ?? null;
     localProtection = durable.localProtection ?? null;
     cloudFreshness = durable.freshness ?? null;
+    artifactSync = durable.artifactSync ?? null;
     // Recorded from the SAME frame the legs came on, so the reading "this
     // peer omitted a leg it speaks" is made against the peer that actually
     // omitted it rather than against whatever the handshake looks like by the
@@ -901,6 +907,7 @@ export function createEpicControlReplica(
       durabilityPromotionState = null;
       localProtection = null;
       cloudFreshness = null;
+      artifactSync = null;
       durabilityLegsNegotiated = false;
       durabilityStatusNegotiated = false;
       retainedDurabilityStatus = null;
@@ -955,6 +962,7 @@ export function createEpicControlReplica(
       durabilityPromotionState = null;
       localProtection = null;
       cloudFreshness = null;
+      artifactSync = null;
       durabilityLegsNegotiated = false;
       durabilityStatusNegotiated = false;
       // Cleared HERE and not on an ordinary cycle reset: a re-subscribe is

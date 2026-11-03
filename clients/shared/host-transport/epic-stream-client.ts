@@ -1,3 +1,4 @@
+import type { EpicArtifactSync } from "@traycer/protocol/host/epic/status-subscribe";
 import type { PermissionRole } from "@traycer/protocol/host/epic/unary-schemas";
 import {
   epicSubscribeServerFrameSchema,
@@ -345,6 +346,12 @@ export type EpicCloudSyncDurability = {
    * conservative default a pre-handshake caller already had.
    */
   readonly peerSpeaksDurabilityLegs: boolean;
+  /**
+   * Whether this task's artifacts are reaching the cloud
+   * (`epic.status.subscribe@1.2`). `undefined` is a host that did not say, and
+   * a surface keeps what it showed before that minor.
+   */
+  readonly artifactSync: EpicArtifactSync | undefined;
 };
 
 /**
@@ -362,6 +369,7 @@ export const NO_CLOUD_SYNC_DURABILITY: EpicCloudSyncDurability = {
   localProtection: undefined,
   freshness: undefined,
   peerSpeaksDurabilityLegs: false,
+  artifactSync: undefined,
 };
 
 export class EpicStreamClient {
@@ -619,6 +627,7 @@ export class EpicStreamClient {
               "localProtection" in frame ? frame.localProtection : undefined,
             freshness: "freshness" in frame ? frame.freshness : undefined,
             peerSpeaksDurabilityLegs: this.peerSpeaksDurabilityLegs(),
+            artifactSync: undefined,
           },
         );
         return;
