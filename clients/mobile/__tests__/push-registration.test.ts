@@ -9,8 +9,19 @@
  * push becomes the GUI's activation envelope - buffered across cold start.
  */
 import { afterEach, describe, expect, it, vi, type Mock } from "vitest";
+import type { Event } from "@sentry/browser";
+import {
+  close,
+  createTransport,
+  flush,
+  getCurrentScope,
+  getGlobalScope,
+  getIsolationScope,
+  init,
+} from "@sentry/browser";
 import type { PluginListenerHandle } from "@capacitor/core";
 import type {
+  PushRegistrationState,
   StoredCredentials,
   SystemResumeEvent,
   TokenStoreChange,
@@ -24,6 +35,7 @@ import type {
 import {
   MobilePushRegistration,
   activationPayloadFromPushData,
+  isRecord,
   pushRegistrationTarget,
   toPushPermissionState,
   type CapacitorPushPermissionState,
@@ -143,7 +155,14 @@ type PushPluginEvent =
  */
 class FakePlugin implements PushNotificationsPluginSlice {
   private registration: ((token: PushRegistrationToken) => void) | null = null;
+  private registrationError: ((error: PushRegistrationError) => void) | null =
+    null;
   private action: ((action: PushNotificationAction) => void) | null = null;
+  /**
+   * Reject `addListener` for this event. That is a failed attach, which is
+   * distinct from the provider's `registrationError` event.
+   */
+  rejectListener: "registration" | "registrationError" | null = null;
 
   readonly requestPermissions: Mock<() => Promise<PermissionResult>>;
   /**
@@ -196,8 +215,15 @@ class FakePlugin implements PushNotificationsPluginSlice {
       | ((error: PushRegistrationError) => void)
       | ((action: PushNotificationAction) => void),
   ): Promise<PluginListenerHandle> {
+    if (this.rejectListener === eventName) {
+      throw new Error("listener-attach-secret");
+    }
     if (eventName === "registration") {
       this.registration = listener as (token: PushRegistrationToken) => void;
+    } else if (eventName === "registrationError") {
+      this.registrationError = listener as (
+        error: PushRegistrationError,
+      ) => void;
     } else if (eventName === "pushNotificationActionPerformed") {
       this.action = listener as (action: PushNotificationAction) => void;
     }
@@ -206,6 +232,10 @@ class FakePlugin implements PushNotificationsPluginSlice {
 
   emitRegistration(token: string): void {
     this.registration?.({ value: token });
+  }
+
+  emitRegistrationError(error: string): void {
+    this.registrationError?.({ error });
   }
 
   emitAction(data: unknown): void {
@@ -453,10 +483,12 @@ describe("MobilePushRegistration", () => {
     await drain();
     expect(plugin.register).not.toHaveBeenCalled();
 
-    // Still refused: a resume reads the OS answer and stops. No prompt, no
-    // APNs, no HTTP.
+    // Still refused: each resume reads the OS answer and stops. No prompt,
+    // no APNs, no HTTP, and none of those resumes spend the later refresh.
     await resume.resume();
-    expect(plugin.checkPermissions).toHaveBeenCalledTimes(2);
+    await resume.resume();
+    await resume.resume();
+    expect(plugin.checkPermissions).toHaveBeenCalledTimes(4);
     expect(plugin.requestPermissions).not.toHaveBeenCalled();
     expect(plugin.register).not.toHaveBeenCalled();
     expect(calls.registered).toEqual([]);
@@ -479,35 +511,88 @@ describe("MobilePushRegistration", () => {
     ]);
   });
 
-  it("a resume while already registered is free: no OS read, no APNs, no HTTP", async () => {
+  it("restores a missing server row on the first resume, then waits fifteen minutes", async () => {
+    vi.useFakeTimers();
     const plugin = fakePlugin({
       permission: "granted",
       afterRequest: "granted",
     });
-    const { push, calls } = controller({
+    const registry = new Map<string, { bearer: string; token: string }>();
+    const calls: FetchCalls = { registered: [], removed: [] };
+    const push = new MobilePushRegistration({
       plugin,
-      registerResult: OK,
-      removeResult: OK,
+      authnBaseUrl: AUTHN_URL,
+      platform: "ios",
+      environment: "sandbox",
+      registerToken: async (authnBaseUrl, bearer, body) => {
+        expect(authnBaseUrl).toBe(AUTHN_URL);
+        calls.registered.push({ bearer, ...body });
+        registry.set(body.token, { bearer, token: body.token });
+        return OK;
+      },
+      removeToken: async () => OK,
     });
     const source = new FakeTokenSource();
     const resume = new FakeSystemResume();
+    const tokenReads = observeTokenReads(source);
+    const { permissionChecks, pluginRegisters } = observePluginCalls(plugin);
     await source.setSignedIn(credentials("user-1", "bearer-1"));
 
+    const startupRegister = pluginRegisters.count;
     push.start(source, resume);
-    await drain();
+    await completed(pluginRegisters, startupRegister);
     plugin.emitRegistration("apns-token-1");
     await drain();
     expect(calls.registered).toHaveLength(1);
-    const checksAfterStart = plugin.checkPermissions.mock.calls.length;
+    expect(registry.get("apns-token-1")?.bearer).toBe("bearer-1");
 
-    // The common case - every foreground resume of a working install - must
-    // stop at the in-memory guard before touching the OS, APNs, or authn.
-    await resume.resume();
-    await resume.resume();
-    await resume.resume();
-    expect(plugin.checkPermissions).toHaveBeenCalledTimes(checksAfterStart);
-    expect(plugin.register).toHaveBeenCalledTimes(1);
+    // The server dropped the row. A bearer refresh leaves the key unchanged,
+    // so only the resume refresh upserts the credential we hold now.
+    registry.delete("apns-token-1");
+    await source.setSignedIn(credentials("user-1", "bearer-2"));
     expect(calls.registered).toHaveLength(1);
+    expect(registry.has("apns-token-1")).toBe(false);
+
+    const refreshRegister = pluginRegisters.count;
+    resume.emitResume();
+    await completed(pluginRegisters, refreshRegister);
+    plugin.emitRegistration("apns-token-1");
+    await drain();
+    expect(calls.registered).toHaveLength(2);
+    expect(calls.registered[1].bearer).toBe("bearer-2");
+    expect(calls.registered[1].token).toBe("apns-token-1");
+    expect(registry.get("apns-token-1")).toEqual({
+      bearer: "bearer-2",
+      token: "apns-token-1",
+    });
+    expect(plugin.requestPermissions).not.toHaveBeenCalled();
+
+    const registersAfterRefresh = pluginRegisters.count;
+    const readsAfterRefresh = tokenReads.count;
+    const checksAfterRefresh = permissionChecks.count;
+    resume.emitResume();
+    await completed(tokenReads, readsAfterRefresh);
+    await completed(permissionChecks, checksAfterRefresh);
+    expect(pluginRegisters.count).toBe(registersAfterRefresh);
+    expect(calls.registered).toHaveLength(2);
+
+    await vi.advanceTimersByTimeAsync(15 * 60_000 - 1);
+    const readsBeforeBoundary = tokenReads.count;
+    const checksBeforeBoundary = permissionChecks.count;
+    resume.emitResume();
+    await completed(tokenReads, readsBeforeBoundary);
+    await completed(permissionChecks, checksBeforeBoundary);
+    expect(pluginRegisters.count).toBe(registersAfterRefresh);
+
+    await vi.advanceTimersByTimeAsync(1);
+    const dueRegister = pluginRegisters.count;
+    resume.emitResume();
+    await completed(pluginRegisters, dueRegister);
+    plugin.emitRegistration("apns-token-1");
+    await drain();
+    expect(calls.registered).toHaveLength(3);
+    expect(calls.registered[2].bearer).toBe("bearer-2");
+    expect(plugin.requestPermissions).not.toHaveBeenCalled();
   });
 
   it("a resume while signed out never reaches the OS permission read", async () => {
@@ -526,10 +611,27 @@ describe("MobilePushRegistration", () => {
     push.start(source, resume);
     await drain();
     await resume.resume();
+    await resume.resume();
 
     expect(plugin.checkPermissions).not.toHaveBeenCalled();
     expect(plugin.register).not.toHaveBeenCalled();
     expect(calls.registered).toEqual([]);
+
+    // Those resumes did not spend the refresh window: the first granted
+    // resume after sign-in still asks the provider.
+    await source.setSignedIn(credentials("user-1", "bearer-1"));
+    plugin.emitRegistration("apns-token-1");
+    await drain();
+    expect(calls.registered).toHaveLength(1);
+    expect(plugin.register).toHaveBeenCalledTimes(1);
+
+    await resume.resume();
+    expect(plugin.register).toHaveBeenCalledTimes(2);
+    expect(plugin.requestPermissions).not.toHaveBeenCalled();
+    plugin.emitRegistration("apns-token-1");
+    await drain();
+    expect(calls.registered).toHaveLength(2);
+    expect(calls.registered[1].bearer).toBe("bearer-1");
   });
 
   it("unregisters with the retained bearer on sign-out and re-registers on the next sign-in", async () => {
@@ -567,8 +669,7 @@ describe("MobilePushRegistration", () => {
     });
   });
 
-  it("swallows registration HTTP failures and retries on the next store change", async () => {
-    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+  it("keeps a failed registration failed and retries on the next store change", async () => {
     const plugin = fakePlugin({
       permission: "granted",
       afterRequest: "granted",
@@ -586,11 +687,14 @@ describe("MobilePushRegistration", () => {
     await drain();
 
     expect(calls.registered).toHaveLength(1);
-    expect(warn).toHaveBeenCalled();
+    expect(push.registrationState()).toBe("failed");
 
     // Not marked registered, so the next change retries rather than skipping.
     await source.setSignedIn(credentials("user-1", "bearer-2"));
     expect(calls.registered).toHaveLength(2);
+    expect(calls.registered[1].bearer).toBe("bearer-2");
+    // The fixture keeps returning a network error, so the retry stays failed.
+    expect(push.registrationState()).toBe("failed");
   });
 
   it("a register still in flight at sign-out cannot resurrect the dedupe guard", async () => {
@@ -629,12 +733,18 @@ describe("MobilePushRegistration", () => {
     // it resolve ok. The late success must not mark the pair as registered -
     // the sign-out's remove just deleted (or will delete) that row.
     await source.setSignedOut();
+    expect(push.registrationState()).toBe("pending");
     releaseRegister.fn?.();
     await drain();
+    expect(push.registrationState()).not.toBe("registered");
 
     await source.setSignedIn(credentials("user-1", "bearer-2"));
     expect(calls.registered).toHaveLength(2);
     expect(calls.registered[1].bearer).toBe("bearer-2");
+    expect(push.registrationState()).toBe("pending");
+    releaseRegister.fn?.();
+    await drain();
+    expect(push.registrationState()).toBe("registered");
   });
 
   it("buffers a cold-start tap and replays it to the first click subscriber", async () => {
@@ -708,7 +818,7 @@ describe("MobilePushRegistration permission surface", () => {
     expect(plugin.requestPermissions).not.toHaveBeenCalled();
   });
 
-  it("registers exactly once when the person grants from the Settings row", async () => {
+  it("registers when the person grants from the Settings row, and Enable asks again", async () => {
     const plugin = fakePlugin({
       permission: "denied",
       afterRequest: "granted",
@@ -740,11 +850,15 @@ describe("MobilePushRegistration permission surface", () => {
       },
     ]);
 
-    // The guard the grant just set makes a second Enable (or any later resume)
-    // stop before touching APNs or authn.
+    // Enable forces a provider refresh. A second grant asks APNs again and
+    // upserts once that callback arrives, even though the key matches.
     await expect(push.requestPermission()).resolves.toBe("granted");
-    expect(plugin.register).toHaveBeenCalledTimes(1);
-    expect(calls.registered).toHaveLength(1);
+    expect(plugin.register).toHaveBeenCalledTimes(2);
+    plugin.emitRegistration("apns-token-1");
+    await drain();
+    expect(calls.registered).toHaveLength(2);
+    expect(calls.registered[1].token).toBe("apns-token-1");
+    expect(push.registrationState()).toBe("registered");
   });
 
   it("registers nothing when the person refuses the prompt", async () => {
@@ -851,6 +965,7 @@ describe("MobilePushRegistration muted severities", () => {
     result: { current: PushTokenFetchResult };
     registrations: DependencyCalls<PushTokenFetchResult>;
     tokenReads: DependencyCalls<StoredCredentials | null>;
+    permissionChecks: DependencyCalls<PermissionResult>;
     pluginRegisters: DependencyCalls<void>;
   }> {
     const plugin = fakePlugin({
@@ -861,11 +976,11 @@ describe("MobilePushRegistration muted severities", () => {
     const { push, calls, registrations } = mutedPhone({ plugin, result });
     const source = new FakeTokenSource();
     const tokenReads = observeTokenReads(source);
-    const { pluginRegisters } = observePluginCalls(plugin);
+    const { permissionChecks, pluginRegisters } = observePluginCalls(plugin);
     source.emitSignedIn(credentials("user-1", "bearer-1"));
 
-    // No device token yet: once plugin.register settles, the startup path
-    // returns at registerCurrentToken's missing-token guard.
+    // No device token yet: startup asks the provider and returns when
+    // register() settles. The token event is what uploads.
     const startupRegister = pluginRegisters.count;
     push.start(source, resume);
     await completed(pluginRegisters, startupRegister);
@@ -882,36 +997,41 @@ describe("MobilePushRegistration muted severities", () => {
       result,
       registrations,
       tokenReads,
+      permissionChecks,
       pluginRegisters,
     };
   }
 
   it("keeps the set per account across a reload, and reads [] for a new account", async () => {
     vi.useFakeTimers();
-    const { push, source, plugin, registrations, pluginRegisters } =
+    const { push, calls, source, plugin, registrations, pluginRegisters } =
       await registeredPhone(NO_RESUME);
     await expect(push.getMutedSeverities()).resolves.toEqual([]);
 
     await push.setMutedSeverities(["done"]);
 
     // A reload: a fresh registration object over the same storage and login.
-    // It shares the plugin but holds no device token, so startup stops at
-    // registerCurrentToken's missing-token guard once register settles.
+    // It holds no device token, so startup asks the provider and returns
+    // once register() settles. The token event is what would upload.
     const reloaded = mutedPhone({ plugin, result: { current: OK } });
     const reloadRegister = pluginRegisters.count;
     reloaded.push.start(source, NO_RESUME);
     await completed(pluginRegisters, reloadRegister);
     await expect(reloaded.push.getMutedSeverities()).resolves.toEqual(["done"]);
 
-    // Both objects follow the shared source. Settle the work the switch
-    // starts in each of them, without assigning register calls to owners: the
-    // old phone, which holds the device token, is the one that sends.
-    const accountRegister = pluginRegisters.count;
+    // That startup callback is still pending, so the sign-in does not ask
+    // the provider again. The phone that already holds the token uploads
+    // the new account without asking.
+    const registersBefore = pluginRegisters.count;
     const accountRequest = registrations.count;
     source.emitSignedIn(credentials("user-2", "bearer-9"));
-    await completed(pluginRegisters, accountRegister);
-    await completed(pluginRegisters, accountRegister + 1);
     await completed(registrations, accountRequest);
+    expect(pluginRegisters.count).toBe(registersBefore);
+    expect(calls.registered).toHaveLength(2);
+    expect(calls.registered[1]).toMatchObject({
+      bearer: "bearer-9",
+      token: "apns-token-1",
+    });
     await expect(reloaded.push.getMutedSeverities()).resolves.toEqual([]);
   });
 
@@ -951,10 +1071,17 @@ describe("MobilePushRegistration muted severities", () => {
 
   it("retries a failed send on the next resume, once", async () => {
     vi.useFakeTimers();
-    vi.spyOn(console, "warn").mockImplementation(() => {});
     const resume = new FakeSystemResume();
-    const { push, calls, result, registrations, tokenReads } =
-      await registeredPhone(resume);
+    const {
+      push,
+      calls,
+      plugin,
+      result,
+      registrations,
+      tokenReads,
+      permissionChecks,
+      pluginRegisters,
+    } = await registeredPhone(resume);
 
     result.current = { kind: "network-error" };
     await push.setMutedSeverities(["done"]);
@@ -962,20 +1089,29 @@ describe("MobilePushRegistration muted severities", () => {
     await vi.advanceTimersByTimeAsync(1000);
     await completed(registrations, failedRequest);
     expect(calls.registered).toHaveLength(2);
+    expect(push.registrationState()).toBe("failed");
 
     result.current = OK;
+    const retryRegister = pluginRegisters.count;
     const retryRequest = registrations.count;
     resume.emitResume();
+    await completed(pluginRegisters, retryRegister);
+    plugin.emitRegistration("apns-token-1");
     await completed(registrations, retryRequest);
     expect(calls.registered).toHaveLength(3);
     expect(calls.registered[2].mutedSeverities).toEqual(["done"]);
+    expect(push.registrationState()).toBe("registered");
 
-    // The accepted key now matches what is wanted, so a resume stops before
-    // it reads the login or sends anything.
+    // Inside the window a resume re-reads the login and the permission, and
+    // does not ask the provider or upload again.
     const readsBefore = tokenReads.count;
+    const checksBefore = permissionChecks.count;
+    const registersBefore = pluginRegisters.count;
     const sendsBefore = registrations.count;
     resume.emitResume();
-    expect(tokenReads.count).toBe(readsBefore);
+    await completed(tokenReads, readsBefore);
+    await completed(permissionChecks, checksBefore);
+    expect(pluginRegisters.count).toBe(registersBefore);
     expect(registrations.count).toBe(sendsBefore);
     expect(calls.registered).toHaveLength(3);
   });
@@ -1015,22 +1151,28 @@ describe("MobilePushRegistration muted severities", () => {
 
   it("a bearer rotation or the same token again re-sends nothing; a set change sends once", async () => {
     vi.useFakeTimers();
-    const { push, calls, plugin, source, registrations, pluginRegisters } =
-      await registeredPhone(NO_RESUME);
+    const {
+      push,
+      calls,
+      source,
+      registrations,
+      permissionChecks,
+      pluginRegisters,
+    } = await registeredPhone(NO_RESUME);
     await push.setMutedSeverities(["done"]);
     const firstSend = registrations.count;
     await vi.advanceTimersByTimeAsync(1000);
     await completed(registrations, firstSend);
     expect(calls.registered).toHaveLength(2);
 
-    // The rotation re-reads the login and the permission, then registers with
-    // the OS; once that settles its registerCurrentToken stops at the
-    // accepted-key guard, so the unchanged request count would catch a missing
-    // guard.
+    // A bearer refresh re-reads the login and the permission. The device
+    // token is already in hand and the registration key ignores the bearer,
+    // so this does not ask the provider or upload.
+    const rotationCheck = permissionChecks.count;
     const rotationRegister = pluginRegisters.count;
     source.emitSignedIn(credentials("user-1", "bearer-2"));
-    await completed(pluginRegisters, rotationRegister);
-    plugin.emitRegistration("apns-token-1");
+    await completed(permissionChecks, rotationCheck);
+    expect(pluginRegisters.count).toBe(rotationRegister);
     expect(calls.registered).toHaveLength(2);
 
     await push.setMutedSeverities(["done", "info"]);
@@ -1072,11 +1214,13 @@ describe("MobilePushRegistration muted severities", () => {
 describe("MobilePushRegistration with a registration in flight", () => {
   async function heldPhone(): Promise<{
     push: MobilePushRegistration;
+    plugin: FakePlugin;
     resume: FakeSystemResume;
     sent: Array<readonly string[]>;
     requests: DependencyCalls<PushTokenFetchResult>;
     tokenReads: DependencyCalls<StoredCredentials | null>;
     permissionChecks: DependencyCalls<PermissionResult>;
+    pluginRegisters: DependencyCalls<void>;
     settle: (index: number, result: PushTokenFetchResult) => Promise<void>;
   }> {
     const plugin = fakePlugin({
@@ -1129,11 +1273,13 @@ describe("MobilePushRegistration with a registration in flight", () => {
     expect(sent).toEqual([[]]);
     return {
       push,
+      plugin,
       resume,
       sent,
       requests,
       tokenReads,
       permissionChecks,
+      pluginRegisters,
       settle,
     };
   }
@@ -1142,11 +1288,12 @@ describe("MobilePushRegistration with a registration in flight", () => {
     vi.useFakeTimers();
     const {
       push,
+      plugin,
       resume,
       sent,
       requests,
-      tokenReads,
       permissionChecks,
+      pluginRegisters,
       settle,
     } = await heldPhone();
 
@@ -1170,16 +1317,19 @@ describe("MobilePushRegistration with a registration in flight", () => {
     await settle(2, OK);
 
     await expect(push.getMutedSeverities()).resolves.toEqual(sent[2]);
-    const readsBefore = tokenReads.count;
+    // The first resume refreshes the provider and upserts the current set.
+    const refreshRegister = pluginRegisters.count;
+    const refreshRequest = requests.count;
     resume.emitResume();
-    expect(tokenReads.count).toBe(readsBefore);
-    expect(sent).toHaveLength(3);
+    await completed(pluginRegisters, refreshRegister);
+    plugin.emitRegistration("apns-token-1");
+    await requests.at(refreshRequest);
+    expect(sent[refreshRequest]).toEqual([]);
   });
 
-  it("keeps a send with a lost response dirty, so the reverted set goes out on the next resume", async () => {
+  it("sends the reverted set once a lost response settles, without waiting for a resume", async () => {
     vi.useFakeTimers();
-    vi.spyOn(console, "warn").mockImplementation(() => {});
-    const { push, resume, sent, requests, permissionChecks, settle } =
+    const { push, sent, requests, permissionChecks, settle } =
       await heldPhone();
 
     await push.setMutedSeverities(["done"]);
@@ -1192,13 +1342,17 @@ describe("MobilePushRegistration with a registration in flight", () => {
     expect(sent).toHaveLength(2);
 
     await settle(1, { kind: "network-error" });
-    await vi.advanceTimersByTimeAsync(1000);
+    expect(push.registrationState()).toBe("failed");
+    const repair = requests.count;
+    await vi.advanceTimersByTimeAsync(999);
     expect(sent).toHaveLength(2);
-
-    resume.emitResume();
-    await requests.at(2);
-    expect(sent).toEqual([[], ["done"], []]);
-    await expect(push.getMutedSeverities()).resolves.toEqual(sent[2]);
+    await vi.advanceTimersByTimeAsync(1);
+    await requests.at(repair);
+    expect(sent[repair]).toEqual([]);
+    expect(push.registrationState()).toBe("pending");
+    await settle(repair, OK);
+    expect(push.registrationState()).toBe("registered");
+    await expect(push.getMutedSeverities()).resolves.toEqual(sent[repair]);
   });
 });
 
@@ -1289,7 +1443,6 @@ describe("MobilePushRegistration on Android", () => {
   });
 
   it("survives a build with no google-services.json: register() rejects, nothing else breaks", async () => {
-    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
     const plugin = fakePlugin({
       permission: "granted",
       afterRequest: "granted",
@@ -1306,12 +1459,13 @@ describe("MobilePushRegistration on Android", () => {
 
     expect(plugin.register).toHaveBeenCalledTimes(1);
     expect(calls.registered).toEqual([]);
-    expect(warn).toHaveBeenCalled();
+    expect(push.registrationState()).toBe("failed");
 
     // And a later signed-in app that DOES have the config still registers -
     // the failure left no latch behind.
     plugin.registerError = null;
     await source.setSignedIn(credentials("user-1", "bearer-2"));
+    expect(plugin.register).toHaveBeenCalledTimes(2);
     plugin.emitRegistration("fcm-token-1");
     await drain();
     expect(calls.registered).toEqual([
@@ -1323,6 +1477,7 @@ describe("MobilePushRegistration on Android", () => {
         mutedSeverities: [],
       },
     ]);
+    expect(push.registrationState()).toBe("registered");
   });
 
   it("re-registers when FCM rotates the token", async () => {
@@ -1345,6 +1500,464 @@ describe("MobilePushRegistration on Android", () => {
       "fcm-token-1",
       "fcm-token-2",
     ]);
+  });
+});
+
+describe("MobilePushRegistration failure and refresh", () => {
+  async function registeredAddress(): Promise<{
+    push: MobilePushRegistration;
+    plugin: FakePlugin;
+    source: FakeTokenSource;
+    resume: FakeSystemResume;
+    calls: FetchCalls;
+    tokenReads: DependencyCalls<StoredCredentials | null>;
+    permissionChecks: DependencyCalls<PermissionResult>;
+    pluginRegisters: DependencyCalls<void>;
+  }> {
+    const plugin = fakePlugin({
+      permission: "granted",
+      afterRequest: "granted",
+    });
+    const { push, calls } = controller({
+      plugin,
+      registerResult: OK,
+      removeResult: OK,
+    });
+    const source = new FakeTokenSource();
+    const resume = new FakeSystemResume();
+    const tokenReads = observeTokenReads(source);
+    const { permissionChecks, pluginRegisters } = observePluginCalls(plugin);
+    await source.setSignedIn(credentials("user-1", "bearer-1"));
+    const startup = pluginRegisters.count;
+    push.start(source, resume);
+    await completed(pluginRegisters, startup);
+    plugin.emitRegistration("apns-token-1");
+    await drain();
+    expect(calls.registered).toHaveLength(1);
+    expect(calls.removed).toEqual([]);
+    expect(push.registrationState()).toBe("registered");
+    return {
+      push,
+      plugin,
+      source,
+      resume,
+      calls,
+      tokenReads,
+      permissionChecks,
+      pluginRegisters,
+    };
+  }
+
+  /** A granted resume that asks the provider and waits for its callback. */
+  async function beginRefresh(phone: {
+    readonly resume: FakeSystemResume;
+    readonly plugin: FakePlugin;
+    readonly pluginRegisters: DependencyCalls<void>;
+  }): Promise<void> {
+    const next = phone.pluginRegisters.count;
+    phone.resume.emitResume();
+    await completed(phone.pluginRegisters, next);
+    expect(phone.plugin.requestPermissions).not.toHaveBeenCalled();
+  }
+
+  async function holdingPhone(): Promise<{
+    push: MobilePushRegistration;
+    plugin: FakePlugin;
+    sent: string[];
+    requests: DependencyCalls<PushTokenFetchResult>;
+    pluginRegisters: DependencyCalls<void>;
+    settle: (index: number, result: PushTokenFetchResult) => Promise<void>;
+  }> {
+    const plugin = fakePlugin({
+      permission: "granted",
+      afterRequest: "granted",
+    });
+    const { pluginRegisters } = observePluginCalls(plugin);
+    const sent: string[] = [];
+    const requests = new DependencyCalls<PushTokenFetchResult>();
+    const held: Array<{
+      readonly response: Promise<PushTokenFetchResult>;
+      readonly release: (result: PushTokenFetchResult) => void;
+    }> = [];
+    const push = new MobilePushRegistration({
+      plugin,
+      authnBaseUrl: AUTHN_URL,
+      platform: "ios",
+      environment: "sandbox",
+      registerToken: (_authnBaseUrl, _bearer, body) => {
+        sent.push(body.token);
+        let release: (result: PushTokenFetchResult) => void = () => undefined;
+        const response = new Promise<PushTokenFetchResult>((resolve) => {
+          release = resolve;
+        });
+        held.push({ response, release });
+        return requests.record(response);
+      },
+      removeToken: async () => OK,
+    });
+    const settle = async (
+      index: number,
+      result: PushTokenFetchResult,
+    ): Promise<void> => {
+      await requests.at(index);
+      held[index].release(result);
+      await held[index].response;
+    };
+    const source = new FakeTokenSource();
+    await source.setSignedIn(credentials("user-1", "bearer-1"));
+    const startup = pluginRegisters.count;
+    push.start(source, NO_RESUME);
+    await completed(pluginRegisters, startup);
+    return { push, plugin, sent, requests, pluginRegisters, settle };
+  }
+
+  function parseJson(text: string): unknown {
+    const value: unknown = JSON.parse(text);
+    return value;
+  }
+
+  function recordFromPayload(payload: unknown): Record<string, unknown> | null {
+    if (typeof payload === "string") {
+      try {
+        return recordFromPayload(parseJson(payload));
+      } catch {
+        return null;
+      }
+    }
+    if (payload instanceof Uint8Array) {
+      return recordFromPayload(new TextDecoder().decode(payload));
+    }
+    return isRecord(payload) && !Array.isArray(payload) ? payload : null;
+  }
+
+  function readTag(
+    event: Record<string, unknown>,
+    name: string,
+  ): string | null {
+    const tags = event["tags"];
+    if (!isRecord(tags) || Array.isArray(tags) || !(name in tags)) return null;
+    const value = tags[name];
+    return typeof value === "string" ? value : null;
+  }
+
+  /**
+   * The mobile package depends on `@sentry/browser`, which does not export
+   * the envelope decoder. This reads the same length-prefixed items the
+   * transport sends.
+   */
+  function envelopeItems(
+    body: string | Uint8Array,
+  ): Array<[Record<string, unknown>, string]> {
+    const bytes =
+      typeof body === "string" ? new TextEncoder().encode(body) : body.slice();
+    let offset = 0;
+    const readLine = (): string => {
+      const start = offset;
+      while (offset < bytes.length && bytes[offset] !== 10) {
+        offset += 1;
+      }
+      const line = new TextDecoder().decode(bytes.slice(start, offset));
+      if (bytes[offset] === 10) {
+        offset += 1;
+      }
+      return line;
+    };
+    readLine();
+    const items: Array<[Record<string, unknown>, string]> = [];
+    while (offset < bytes.length) {
+      const headerLine = readLine();
+      if (headerLine.length === 0) {
+        continue;
+      }
+      const header: unknown = parseJson(headerLine);
+      if (!isRecord(header) || Array.isArray(header)) {
+        break;
+      }
+      const length = header["length"];
+      let payload: string;
+      if (typeof length === "number") {
+        const end = offset + length;
+        payload = new TextDecoder().decode(bytes.slice(offset, end));
+        offset = end;
+        if (bytes[offset] === 10) {
+          offset += 1;
+        }
+      } else {
+        payload = readLine();
+      }
+      items.push([header, payload]);
+    }
+    return items;
+  }
+
+  function failureEvents(
+    bodies: ReadonlyArray<string | Uint8Array>,
+  ): Record<string, unknown>[] {
+    const events: Record<string, unknown>[] = [];
+    for (const body of bodies) {
+      for (const item of envelopeItems(body)) {
+        const record = recordFromPayload(item[1]);
+        if (record?.["message"] === "Mobile push registration failed") {
+          events.push(record);
+        }
+      }
+    }
+    return events;
+  }
+
+  it("removes the last native address when sign-out arrives during a refresh", async () => {
+    const phone = await registeredAddress();
+    await beginRefresh(phone);
+    expect(phone.push.registrationState()).toBe("pending");
+    expect(phone.calls.registered).toHaveLength(1);
+
+    await phone.source.setSignedOut();
+    expect(phone.calls.removed).toEqual([
+      { bearer: "bearer-1", token: "apns-token-1" },
+    ]);
+    phone.plugin.emitRegistration("apns-token-2");
+    await drain();
+    expect(phone.calls.registered).toHaveLength(1);
+    expect(phone.calls.removed).toEqual([
+      { bearer: "bearer-1", token: "apns-token-1" },
+    ]);
+    expect(phone.push.registrationState()).not.toBe("registered");
+    expect(phone.plugin.requestPermissions).not.toHaveBeenCalled();
+  });
+
+  it("removes the last native address after a provider failure during a refresh", async () => {
+    const phone = await registeredAddress();
+    await beginRefresh(phone);
+    phone.plugin.emitRegistrationError("native-provider-secret");
+    await drain();
+    expect(phone.push.registrationState()).toBe("failed");
+    expect(phone.calls.registered).toHaveLength(1);
+
+    await phone.source.setSignedOut();
+    expect(phone.calls.removed).toEqual([
+      { bearer: "bearer-1", token: "apns-token-1" },
+    ]);
+    expect(phone.push.registrationState()).toBe("pending");
+    expect(phone.plugin.requestPermissions).not.toHaveBeenCalled();
+  });
+
+  it("removes the last native address after the provider callback times out", async () => {
+    vi.useFakeTimers();
+    const phone = await registeredAddress();
+    await beginRefresh(phone);
+    await vi.advanceTimersByTimeAsync(19_999);
+    expect(phone.push.registrationState()).toBe("pending");
+    expect(phone.calls.registered).toHaveLength(1);
+    expect(phone.calls.removed).toEqual([]);
+
+    await vi.advanceTimersByTimeAsync(1);
+    expect(phone.push.registrationState()).toBe("failed");
+    await phone.source.setSignedOut();
+    expect(phone.calls.removed).toEqual([
+      { bearer: "bearer-1", token: "apns-token-1" },
+    ]);
+    expect(phone.plugin.requestPermissions).not.toHaveBeenCalled();
+  });
+
+  it("lets Retry bypass the resume window and dedupes while the callback is pending", async () => {
+    const phone = await registeredAddress();
+    const refresh = phone.pluginRegisters.count;
+    phone.resume.emitResume();
+    await completed(phone.pluginRegisters, refresh);
+    phone.plugin.emitRegistration("apns-token-1");
+    await drain();
+    expect(phone.calls.registered).toHaveLength(2);
+    expect(phone.push.registrationState()).toBe("registered");
+
+    const reads = phone.tokenReads.count;
+    const checks = phone.permissionChecks.count;
+    const registers = phone.pluginRegisters.count;
+    phone.resume.emitResume();
+    await completed(phone.tokenReads, reads);
+    await completed(phone.permissionChecks, checks);
+    expect(phone.pluginRegisters.count).toBe(registers);
+    expect(phone.calls.registered).toHaveLength(2);
+
+    await phone.push.retryRegistration();
+    expect(phone.pluginRegisters.count).toBe(registers + 1);
+    await phone.push.retryRegistration();
+    expect(phone.pluginRegisters.count).toBe(registers + 1);
+
+    phone.plugin.emitRegistration("apns-token-1");
+    await drain();
+    expect(phone.calls.registered).toHaveLength(3);
+    expect(phone.calls.registered[2]).toEqual({
+      bearer: "bearer-1",
+      token: "apns-token-1",
+      platform: "ios",
+      environment: "sandbox",
+      mutedSeverities: [],
+    });
+    expect(phone.push.registrationState()).toBe("registered");
+    expect(phone.plugin.requestPermissions).not.toHaveBeenCalled();
+  });
+
+  it("tells subscribers when a failure and a retry change registration", async () => {
+    const phone = await registeredAddress();
+    const seen: PushRegistrationState[] = [];
+    const subscription = phone.push.onRegistrationChange(() => {
+      seen.push(phone.push.registrationState());
+    });
+    phone.plugin.emitRegistrationError("plugin-raw-secret");
+    expect(phone.push.registrationState()).toBe("failed");
+    expect(seen).toEqual(["failed"]);
+
+    await phone.push.retryRegistration();
+    expect(seen).toEqual(["failed", "pending"]);
+    expect(phone.push.registrationState()).toBe("pending");
+    subscription.dispose();
+
+    phone.plugin.emitRegistrationError("plugin-raw-secret-again");
+    expect(phone.push.registrationState()).toBe("failed");
+    expect(seen).toEqual(["failed", "pending"]);
+  });
+
+  it("a listener that fails to attach is a failed registration", async () => {
+    const plugin = fakePlugin({
+      permission: "granted",
+      afterRequest: "granted",
+    });
+    plugin.rejectListener = "registration";
+    const { push, calls } = controller({
+      plugin,
+      registerResult: OK,
+      removeResult: OK,
+    });
+    push.start(new FakeTokenSource(), NO_RESUME);
+    await drain();
+
+    expect(push.registrationState()).toBe("failed");
+    expect(plugin.register).not.toHaveBeenCalled();
+    expect(calls.registered).toEqual([]);
+    expect(plugin.requestPermissions).not.toHaveBeenCalled();
+  });
+
+  it("keeps a native failure when an in-flight upload later succeeds", async () => {
+    const phone = await holdingPhone();
+    phone.plugin.emitRegistration("apns-token-1");
+    await phone.requests.at(0);
+    phone.plugin.emitRegistrationError("native-provider-secret");
+    expect(phone.push.registrationState()).toBe("failed");
+
+    await phone.settle(0, OK);
+    expect(phone.push.registrationState()).toBe("failed");
+    expect(phone.sent).toEqual(["apns-token-1"]);
+  });
+
+  it("uploads a token that arrived during a failed send", async () => {
+    vi.useFakeTimers();
+    const phone = await holdingPhone();
+    phone.plugin.emitRegistration("apns-token-1");
+    await phone.requests.at(0);
+    phone.plugin.emitRegistration("apns-token-2");
+    await phone.settle(0, { kind: "network-error" });
+    expect(phone.push.registrationState()).toBe("failed");
+    expect(phone.sent).toEqual(["apns-token-1"]);
+
+    await vi.advanceTimersByTimeAsync(999);
+    expect(phone.sent).toEqual(["apns-token-1"]);
+    await vi.advanceTimersByTimeAsync(1);
+    await phone.requests.at(1);
+    expect(phone.sent).toEqual(["apns-token-1", "apns-token-2"]);
+    expect(phone.push.registrationState()).toBe("pending");
+    await phone.settle(1, OK);
+    expect(phone.push.registrationState()).toBe("registered");
+  });
+
+  it("sends a sanitized registration failure and drops raw plugin and network text", async () => {
+    const bodies: Array<string | Uint8Array> = [];
+    init({
+      dsn: "https://public@o0.ingest.sentry.io/0",
+      defaultIntegrations: false,
+      integrations: [],
+      transport: (options) =>
+        createTransport(
+          options,
+          (request: { readonly body: string | Uint8Array }) => {
+            bodies.push(request.body);
+            return Promise.resolve({
+              statusCode: 200,
+              headers: {
+                "x-sentry-rate-limits": null,
+                "retry-after": null,
+              },
+            });
+          },
+        ),
+    });
+    try {
+      getGlobalScope().setUser({
+        id: "user-secret-id",
+        email: "secret-user@example.com",
+      });
+      getIsolationScope().setContext("account", {
+        token: "isolation-context-secret",
+      });
+      getCurrentScope().setExtra("plugin", "current-scope-extra-secret");
+      getCurrentScope().addBreadcrumb({ message: "breadcrumb-secret" });
+      getGlobalScope().addEventProcessor((event: Event) => {
+        event.user = { email: "processor-secret@example.com" };
+        event.request = { url: "https://secret.example/raw-plugin-token" };
+        event.breadcrumbs = [{ message: "processor-breadcrumb-secret" }];
+        event.contexts = { secret: { value: "context-secret" } };
+        event.extra = { raw: "network-body-secret" };
+        return event;
+      });
+
+      const plugin = fakePlugin({
+        permission: "granted",
+        afterRequest: "granted",
+      });
+      const push = new MobilePushRegistration({
+        plugin,
+        authnBaseUrl: AUTHN_URL,
+        platform: "ios",
+        environment: "sandbox",
+        registerToken: async () => {
+          throw new Error("upload-threw-bearer-SECRET");
+        },
+        removeToken: async () => OK,
+      });
+      const source = new FakeTokenSource();
+      await source.setSignedIn(credentials("user-1", "bearer-1"));
+      push.start(source, NO_RESUME);
+      await drain();
+      plugin.emitRegistrationError("plugin-says-SECRET-apns");
+      await drain();
+      plugin.emitRegistration("apns-token-1");
+      await drain();
+      expect(push.registrationState()).toBe("failed");
+      await flush(2_000);
+
+      const events = failureEvents(bodies);
+      expect(
+        events.map((event) => readTag(event, "push.failure")).sort(),
+      ).toEqual(["provider-error", "upload-error"]);
+      for (const event of events) {
+        expect(event["message"]).toBe("Mobile push registration failed");
+        expect(event["level"]).toBe("error");
+        expect(event).not.toHaveProperty("user");
+        expect(event).not.toHaveProperty("breadcrumbs");
+        expect(event).not.toHaveProperty("extra");
+        expect(event).not.toHaveProperty("request");
+        // The SDK attaches its own trace after the allowlist. The seeded
+        // context must not survive that.
+        const contexts = event["contexts"];
+        if (isRecord(contexts) && !Array.isArray(contexts)) {
+          expect(contexts).not.toHaveProperty("secret");
+        }
+        const text = JSON.stringify(event);
+        expect(text).not.toContain("secret");
+        expect(text).not.toContain("SECRET");
+      }
+    } finally {
+      await close();
+    }
   });
 });
 

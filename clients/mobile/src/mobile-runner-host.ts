@@ -93,6 +93,7 @@ import type {
   MicrophoneAccessStatus,
   NotificationShowOutcome,
   PushPermissionState,
+  PushRegistrationState,
   PushSeverity,
   RegisteredHostsChange,
   StoredAuthTokens,
@@ -1724,6 +1725,14 @@ class MobilePushPermissionHost implements IPushPermissionHost {
     return this.registration.permissionState();
   }
 
+  getRegistrationState(): PushRegistrationState {
+    return this.registration.registrationState();
+  }
+
+  retryRegistration(): Promise<void> {
+    return this.registration.retryRegistration();
+  }
+
   async request(): Promise<PushPermissionState> {
     const state = await this.registration.requestPermission();
     // The prompt has settled (either way) - tell subscribers to re-read rather
@@ -1756,6 +1765,8 @@ class MobilePushPermissionHost implements IPushPermissionHost {
 
   onChange(handler: () => void): Disposable {
     const resumeSubscription = this.systemResume.subscribe(handler);
+    const registrationSubscription =
+      this.registration.onRegistrationChange(handler);
     const sessionSubscription = this.tokenStore.subscribe(() => {
       handler();
     });
@@ -1763,6 +1774,7 @@ class MobilePushPermissionHost implements IPushPermissionHost {
     return {
       dispose: () => {
         resumeSubscription.dispose();
+        registrationSubscription.dispose();
         sessionSubscription.dispose();
         this.handlers.delete(handler);
       },

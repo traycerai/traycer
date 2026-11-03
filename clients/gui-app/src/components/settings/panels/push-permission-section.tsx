@@ -1,6 +1,7 @@
 import type { ReactNode } from "react";
 import type {
   PushPermissionState,
+  PushRegistrationState,
   PushSeverity,
 } from "@traycer-clients/shared/platform/runner-host";
 import { ALERTS } from "@/components/settings/panels/alerts-settings.definitions";
@@ -22,6 +23,7 @@ import {
   usePushPermissionRequestMutation,
   type PushPermissionRequestMutation,
 } from "@/hooks/runner/use-push-permission-request-mutation";
+import { usePushRegistrationRetryMutation } from "@/hooks/runner/use-push-registration-retry-mutation";
 import { useSettingsAvailabilityContext } from "@/hooks/settings/use-settings-availability-context";
 import type { SettingsRowDefinition } from "@/lib/settings-search/settings-definitions";
 import { useAuthStore } from "@/stores/auth/auth-store";
@@ -29,14 +31,16 @@ import { useAuthStore } from "@/stores/auth/auth-store";
 type PushPermissionView =
   | { readonly kind: "loading" }
   | { readonly kind: "error"; readonly message: string }
-  | { readonly kind: PushPermissionState };
+  | {
+      readonly kind:
+        | Exclude<PushPermissionState, "granted">
+        | PushRegistrationState;
+    };
 
-// Which events exist at all is each host's choice (Notification events, the
-// row below); the status stays silent about that and describes only the OS
-// permission and the switches under it. "Only ... are sent" narrows and never
-// promises: a kind a host does not create is not sent either.
-const STATE_DESCRIPTIONS: { readonly [K in PushPermissionState]: string } = {
-  granted: "Only the kinds turned on below are sent.",
+const STATE_DESCRIPTIONS = {
+  registered: "Only the kinds turned on below are sent.",
+  pending: "Setting up push notifications…",
+  failed: "Push notifications couldn’t be set up. Try again.",
   denied: "Turned off for Traycer in system Settings.",
   prompt: "Allow Traycer to send push notifications.",
 };
@@ -58,7 +62,7 @@ const SEVERITY_ROWS: ReadonlyArray<{
 ];
 
 /**
- * The OS push permission of the phone this renderer runs on, and under it the
+ * The OS permission and last registration result for this app, and under it the
  * severities that phone is pushed for. They belong under Application → Alerts
  * because they never vary with the selected host.
  *
@@ -92,7 +96,7 @@ function PushPermissionRows(): ReactNode {
   return (
     <>
       <PushPermissionRow view={view} />
-      <PushSeverityRows granted={view.kind === "granted"} />
+      <PushSeverityRows granted={view.kind === "registered"} />
     </>
   );
 }
@@ -130,6 +134,7 @@ function PushPermissionControl(props: {
   readonly openSettings: PushPermissionOpenSettingsMutation;
 }): ReactNode {
   const { kind, request, openSettings } = props;
+  const retry = usePushRegistrationRetryMutation();
   if (kind === "loading") {
     return (
       <AgentSpinningDots
@@ -140,9 +145,26 @@ function PushPermissionControl(props: {
       />
     );
   }
-  // Granted needs no control - there is nothing left to do here, and a button
-  // that only ever leads back to the OS would invite people to go turn it off.
-  if (kind === "granted") {
+  if (kind === "pending") {
+    return (
+      <AgentSpinningDots
+        className={undefined}
+        testId="push-registration-pending"
+        variant={undefined}
+        tone="muted"
+      />
+    );
+  }
+  if (kind === "failed") {
+    return (
+      <PushPermissionAction
+        label="Retry"
+        pending={retry.isPending}
+        onClick={() => retry.mutate()}
+      />
+    );
+  }
+  if (kind === "registered") {
     return <span className="text-ui-xs text-muted-foreground">On</span>;
   }
   if (kind === "denied") {
@@ -263,13 +285,16 @@ function nextMutedSeverities(
 }
 
 /**
- * A last-known state outranks a failed REFETCH. The row's job is to report the
- * OS switch, and a stale-but-real answer with its working button beats
+ * A last-known state outranks a failed REFETCH. The row reports the OS
+ * permission and local registration result, and a stale-but-real answer with its working button beats
  * replacing both with an apology; the error copy is for the case that has
  * nothing to show, which is the first read failing.
  */
 function pushPermissionView(query: PushPermissionQuery): PushPermissionView {
-  if (query.data !== undefined) return { kind: query.data };
+  if (query.data !== undefined) {
+    const { permission, registration } = query.data;
+    return { kind: permission === "granted" ? registration : permission };
+  }
   if (query.error !== null) {
     return { kind: "error", message: query.error.message };
   }

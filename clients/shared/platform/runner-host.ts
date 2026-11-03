@@ -1260,6 +1260,9 @@ export interface IStatusBarTapHost {
  */
 export type PushPermissionState = "prompt" | "granted" | "denied";
 
+/** Last registration attempt; an accepted registration does not prove delivery. */
+export type PushRegistrationState = "pending" | "registered" | "failed";
+
 /**
  * A severity a phone can stop being pushed for: the host's own notification
  * severity, so the vocabulary has one owner.
@@ -1267,13 +1270,17 @@ export type PushPermissionState = "prompt" | "granted" | "denied";
 export type PushSeverity = HostNotificationSeverity;
 
 /**
- * Read/repair surface for the device's OS push permission, backing the
- * Settings → Alerts push rows, plus which severities this phone is pushed
+ * Read/repair surface for this app's OS permission and push registration,
+ * backing Settings → Alerts, plus which severities this app is pushed
  * for. Only reachable where `IRunnerHost.pushPermission` is non-null.
  */
 export interface IPushPermissionHost {
   /** Local OS read; never prompts. */
   get(): Promise<PushPermissionState>;
+  /** Local registration status, independent of OS permission. */
+  getRegistrationState(): PushRegistrationState;
+  /** Retry registration without raising the OS prompt. */
+  retryRegistration(): Promise<void>;
   /**
    * Raises the OS prompt if the OS still allows one (before the first ask, or
    * Android's single rationale retry) and resolves the resulting state. A
@@ -1301,9 +1308,9 @@ export interface IPushPermissionHost {
   /**
    * Fires when the state MAY have changed - a foreground resume (the person
    * may have just changed it in OS Settings), a completed `request()`, a
-   * completed `setMutedSeverities()`, or a change of login session (the muted
-   * set is kept per account). Subscribers re-read via `get()` and
-   * `getMutedSeverities()`; the signal carries no state itself.
+   * completed `setMutedSeverities()`, a registration transition, or a change of
+   * login session (the muted set is kept per account). Subscribers re-read
+   * permission, registration and muted severities; the signal carries no state.
    */
   onChange(handler: () => void): Disposable;
 }

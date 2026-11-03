@@ -8,10 +8,11 @@ import {
 } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { act } from "@testing-library/react";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type {
   IPushPermissionHost,
   PushPermissionState,
+  PushRegistrationState,
   PushSeverity,
 } from "@traycer-clients/shared/platform/runner-host";
 import { PushPermissionSection } from "@/components/settings/panels/push-permission-section";
@@ -19,6 +20,12 @@ import { createAppQueryClient } from "@/lib/query-client";
 import { RunnerHostProvider } from "@/providers/runner-host-provider";
 import { useAuthStore } from "@/stores/auth/auth-store";
 import { createFakeRunnerHost } from "../../../../../__tests__/create-fake-runner-host";
+import {
+  MobilePushRegistration,
+  type CapacitorPushPermissionState,
+  type PushNotificationsPluginSlice,
+  type PushRegistrationToken,
+} from "../../../../../../mobile/src/push-registration";
 
 interface PushPermissionDouble {
   readonly host: IPushPermissionHost;
@@ -26,11 +33,16 @@ interface PushPermissionDouble {
     get: number;
     request: number;
     openSettings: number;
+    retry: number;
   };
   /** Move the OS's answer without telling the GUI - as the OS itself does. */
   readonly setState: (next: PushPermissionState) => void;
+  /** Move the registration result the row reads beside the OS permission. */
+  readonly setRegistration: (next: PushRegistrationState) => void;
   /** The host's "this MAY have changed, re-read it" edge. */
   readonly fireChange: () => void;
+  /** Finishes a Retry that was held pending, as the phone's upload settling. */
+  readonly finishRetry: (next: PushRegistrationState) => void;
   /** Lets a deferred `openSettings()` finish, ending the pending state. */
   readonly resolveOpenSettings: () => void;
   /** Each `setMutedSeverities` call's set, in call order. */
@@ -63,10 +75,22 @@ function createPushPermissionDouble(options: {
    * pending UX actually shows up.
    */
   readonly deferOpenSettings: boolean;
+  /**
+   * What the phone reports for the registration beside the OS permission.
+   * Omitted: a granted permission is already registered, and every other
+   * permission has not registered.
+   */
+  readonly registration?: PushRegistrationState;
+  /** Hold `retryRegistration()` until `finishRetry()`, so the row can be read mid-retry. */
+  readonly holdRetry?: boolean;
 }): PushPermissionDouble {
-  const calls = { get: 0, request: 0, openSettings: 0 };
+  const calls = { get: 0, request: 0, openSettings: 0, retry: 0 };
   const handlers = new Set<() => void>();
   let state = options.initial;
+  let registration: PushRegistrationState =
+    options.registration ??
+    (options.initial === "granted" ? "registered" : "pending");
+  let finishHeldRetry: (next: PushRegistrationState) => void = () => undefined;
   let releaseOpenSettings: () => void = () => undefined;
   const openSettingsGate = new Promise<void>((resolve) => {
     releaseOpenSettings = resolve;
@@ -86,9 +110,28 @@ function createPushPermissionDouble(options: {
       }
       return Promise.resolve(state);
     },
+    getRegistrationState: () => registration,
+    retryRegistration: () => {
+      calls.retry += 1;
+      if (options.holdRetry === true) {
+        registration = "pending";
+        notify();
+        return new Promise<void>((resolve) => {
+          finishHeldRetry = (next) => {
+            registration = next;
+            notify();
+            resolve();
+          };
+        });
+      }
+      registration = "registered";
+      notify();
+      return Promise.resolve();
+    },
     request: () => {
       calls.request += 1;
       state = options.requestResolvesWith;
+      if (state === "granted") registration = "registered";
       return Promise.resolve(state);
     },
     openSettings: () => {
@@ -117,14 +160,23 @@ function createPushPermissionDouble(options: {
       };
     },
   };
+  function notify(): void {
+    for (const handler of Array.from(handlers)) handler();
+  }
   return {
     host,
     calls,
     setState: (next) => {
       state = next;
     },
+    setRegistration: (next) => {
+      registration = next;
+    },
     fireChange: () => {
-      for (const handler of handlers) handler();
+      notify();
+    },
+    finishRetry: (next) => {
+      finishHeldRetry(next);
     },
     resolveOpenSettings: () => {
       releaseOpenSettings();
@@ -226,7 +278,7 @@ describe("<PushPermissionSection />", () => {
       screen.getByText("Only the kinds turned on below are sent."),
     ).toBeTruthy();
     expect(screen.getByTestId("push-permission-state").dataset.state).toBe(
-      "granted",
+      "registered",
     );
     expect(screen.queryByTestId("push-permission-action")).toBeNull();
   });
@@ -314,7 +366,7 @@ describe("<PushPermissionSection />", () => {
     });
     expect(await screen.findByText("On")).toBeTruthy();
     expect(screen.getByTestId("push-permission-state").dataset.state).toBe(
-      "granted",
+      "registered",
     );
     expect(screen.queryByTestId("push-permission-action")).toBeNull();
   });
@@ -333,11 +385,12 @@ describe("<PushPermissionSection />", () => {
     });
 
     permission.setState("granted");
+    permission.setRegistration("registered");
     permission.fireChange();
 
     expect(await screen.findByText("On")).toBeTruthy();
     expect(screen.getByTestId("push-permission-state").dataset.state).toBe(
-      "granted",
+      "registered",
     );
   });
 
@@ -360,7 +413,9 @@ describe("<PushPermissionSection />", () => {
     first.unmount();
 
     // The OS moves with no one listening, and nothing fires `onChange`.
+    // Registration has caught up by the time Alerts is opened again.
     permission.setState("granted");
+    permission.setRegistration("registered");
     const readsBeforeRemount = permission.calls.get;
 
     renderSectionWith(permission.host, queryClient);
@@ -403,6 +458,70 @@ describe("<PushPermissionSection />", () => {
       ).toBe(false);
     });
     expect(screen.queryByTestId("push-permission-action-spinner")).toBeNull();
+  });
+
+  it("shows the setup spinner while registration is still pending", async () => {
+    const permission = createPushPermissionDouble({
+      initial: "granted",
+      requestResolvesWith: "granted",
+      getRejectsWith: null,
+      deferOpenSettings: false,
+      registration: "pending",
+    });
+    renderSection(permission.host);
+
+    expect(await screen.findByTestId("push-registration-pending")).toBeTruthy();
+    expect(
+      screen.getByText("Setting up push notifications\u2026"),
+    ).toBeTruthy();
+    expect(screen.getByTestId("push-permission-state").dataset.state).toBe(
+      "pending",
+    );
+    expect(screen.queryByRole("button", { name: "Retry" })).toBeNull();
+    expect(screen.queryByText("On")).toBeNull();
+  });
+
+  it("shows a failed registration and Retry, then the spinner while Retry is in flight", async () => {
+    const permission = createPushPermissionDouble({
+      initial: "granted",
+      requestResolvesWith: "granted",
+      getRejectsWith: null,
+      deferOpenSettings: false,
+      registration: "failed",
+      holdRetry: true,
+    });
+    renderSection(permission.host);
+
+    expect(
+      await screen.findByText(
+        "Push notifications couldn\u2019t be set up. Try again.",
+      ),
+    ).toBeTruthy();
+    expect(screen.getByTestId("push-permission-state").dataset.state).toBe(
+      "failed",
+    );
+    expect(screen.getByTestId("push-permission-action").textContent).toContain(
+      "Retry",
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Retry" }));
+
+    expect(await screen.findByTestId("push-registration-pending")).toBeTruthy();
+    expect(
+      screen.getByText("Setting up push notifications\u2026"),
+    ).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "Retry" })).toBeNull();
+    expect(permission.calls.retry).toBe(1);
+
+    act(() => {
+      permission.finishRetry("registered");
+    });
+
+    expect(await screen.findByText("On")).toBeTruthy();
+    expect(screen.getByTestId("push-permission-state").dataset.state).toBe(
+      "registered",
+    );
+    expect(screen.queryByTestId("push-permission-action")).toBeNull();
   });
 });
 
@@ -636,7 +755,7 @@ describe("<PushPermissionSection /> severity switches", () => {
 
     await waitFor(() => {
       expect(screen.getByTestId("push-permission-state").dataset.state).toBe(
-        "granted",
+        "registered",
       );
     });
     for (const element of allSwitches()) {
@@ -653,5 +772,181 @@ describe("<PushPermissionSection /> severity switches", () => {
     for (const element of allSwitches()) {
       expect(isChecked(element)).toBe(true);
     }
+  });
+});
+
+/**
+ * The slice the row's phone stands in for. `register()` can be held so the
+ * row is readable while Retry has asked the provider and is waiting for the
+ * token callback.
+ */
+class RowRegistrationPlugin implements PushNotificationsPluginSlice {
+  permission: CapacitorPushPermissionState = "granted";
+  private registration: ((token: PushRegistrationToken) => void) | null = null;
+  private holdRegister = false;
+  private releaseRegister: () => void = () => undefined;
+
+  readonly checkPermissions = vi.fn(() =>
+    Promise.resolve({
+      receive: this.permission,
+    }),
+  );
+  readonly requestPermissions = vi.fn(() =>
+    Promise.resolve({
+      receive: this.permission,
+    }),
+  );
+  readonly register = vi.fn(async () => {
+    if (!this.holdRegister) return;
+    await new Promise<void>((resolve) => {
+      this.releaseRegister = resolve;
+    });
+  });
+
+  holdNextRegister(): void {
+    this.holdRegister = true;
+  }
+
+  releaseRegisterHold(): void {
+    this.holdRegister = false;
+    this.releaseRegister();
+  }
+
+  emitRegistration(token: string): void {
+    this.registration?.({ value: token });
+  }
+
+  addListener(
+    eventName: "registration",
+    listener: (token: PushRegistrationToken) => void,
+  ): Promise<{ remove: () => Promise<void> }>;
+  addListener(
+    eventName: "registrationError",
+    listener: (error: { readonly error: string }) => void,
+  ): Promise<{ remove: () => Promise<void> }>;
+  addListener(
+    eventName: "pushNotificationActionPerformed",
+    listener: (action: {
+      readonly actionId: string;
+      readonly notification: { readonly data: unknown };
+    }) => void,
+  ): Promise<{ remove: () => Promise<void> }>;
+  addListener(
+    eventName: string,
+    listener:
+      | ((token: PushRegistrationToken) => void)
+      | ((error: { readonly error: string }) => void)
+      | ((action: {
+          readonly actionId: string;
+          readonly notification: { readonly data: unknown };
+        }) => void),
+  ): Promise<{ remove: () => Promise<void> }> {
+    if (eventName === "registration") {
+      this.registration = listener as (token: PushRegistrationToken) => void;
+    }
+    return Promise.resolve({ remove: () => Promise.resolve() });
+  }
+}
+
+function hostForRegistration(
+  push: MobilePushRegistration,
+): IPushPermissionHost {
+  return {
+    get: () => push.permissionState(),
+    getRegistrationState: () => push.registrationState(),
+    retryRegistration: () => push.retryRegistration(),
+    request: () => push.requestPermission(),
+    openSettings: () => Promise.resolve(),
+    getMutedSeverities: () => push.getMutedSeverities(),
+    setMutedSeverities: (set) => push.setMutedSeverities(set),
+    onChange: (handler) => {
+      const registration = push.onRegistrationChange(handler);
+      return {
+        dispose: () => {
+          registration.dispose();
+        },
+      };
+    },
+  };
+}
+
+async function drain(): Promise<void> {
+  for (let i = 0; i < 8; i += 1) {
+    await Promise.resolve();
+  }
+}
+
+describe("PushPermissionSection wired to MobilePushRegistration", () => {
+  afterEach(() => {
+    useAuthStore.getState().setSignedOut();
+  });
+
+  it("shows a failed registration, and Retry reaches On after the token is accepted", async () => {
+    signInAs("user-1");
+    const plugin = new RowRegistrationPlugin();
+    let uploads = 0;
+    const push = new MobilePushRegistration({
+      plugin,
+      authnBaseUrl: "http://localhost:32350",
+      platform: "ios",
+      environment: "sandbox",
+      registerToken: () => {
+        uploads += 1;
+        return Promise.resolve(
+          uploads === 1 ? { kind: "network-error" } : { kind: "ok" },
+        );
+      },
+      removeToken: () => Promise.resolve({ kind: "ok" }),
+    });
+    push.start(
+      {
+        get: () =>
+          Promise.resolve({
+            token: "bearer-1",
+            refreshToken: "refresh-1",
+            savedAt: "2026-08-05T00:00:00.000Z",
+            user: { id: "user-1", email: "dev@traycer.ai", name: "Dev" },
+          }),
+        subscribe: () => ({ dispose: () => undefined }),
+      },
+      { onSystemResumed: () => ({ dispose: () => undefined }) },
+    );
+    await drain();
+    plugin.emitRegistration("apns-token-1");
+    await drain();
+    expect(push.registrationState()).toBe("failed");
+
+    renderSection(hostForRegistration(push));
+
+    expect(
+      await screen.findByText(
+        "Push notifications couldn\u2019t be set up. Try again.",
+      ),
+    ).toBeTruthy();
+    expect(screen.getByTestId("push-permission-state").dataset.state).toBe(
+      "failed",
+    );
+    expect(severitySwitch("Failure").hasAttribute("disabled")).toBe(true);
+
+    plugin.holdNextRegister();
+    fireEvent.click(screen.getByRole("button", { name: "Retry" }));
+    expect(await screen.findByTestId("push-registration-pending")).toBeTruthy();
+    expect(
+      screen.getByText("Setting up push notifications\u2026"),
+    ).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "Retry" })).toBeNull();
+
+    plugin.releaseRegisterHold();
+    plugin.emitRegistration("apns-token-1");
+
+    expect(await screen.findByText("On")).toBeTruthy();
+    expect(screen.getByTestId("push-permission-state").dataset.state).toBe(
+      "registered",
+    );
+    await waitFor(() => {
+      expect(severitySwitch("Failure").hasAttribute("disabled")).toBe(false);
+    });
+    expect(uploads).toBe(2);
+    expect(plugin.requestPermissions).not.toHaveBeenCalled();
   });
 });
