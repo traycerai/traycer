@@ -87,7 +87,9 @@ run.
   refuses a cancelled run.
 - `pre-commit.yml`'s `lint` and `compile` jobs restore a cache only a passing
   push saves, so every run starts from the last green `main` entry. It holds
-  `NX_CACHE_DIRECTORY`, the Nx database and gui-app's ESLint cache. A cached
+  `NX_CACHE_DIRECTORY`, the Nx database and the ESLint cache of every project
+  that lints with ESLint. Each uses `--cache-strategy content`, because a fresh
+  checkout gives every file a new mtime. A cached
   result replays as a pass, so a target's `inputs` must name everything its
   answer depends on: `lint` is type-aware and lists `^production`, and lists
   every source extension the linters read. A rule that reads another file
