@@ -69,14 +69,20 @@ export function useBotFollowedThreads(
   const supported = listSupported && followSupported;
   const viewerUserId = useCloudChatViewerId();
   const viewerKnown = viewerUserId.length > 0;
+  // The follow, read-cursor and level reads take `{ botId }` alone; only the
+  // thread list carries the page bound.
   const byBot = useMemo(
-    () => bots.map((bot) => botThreadListParams(bot.botId)),
+    () => bots.map((bot) => ({ botId: bot.botId })),
     [bots],
   );
   const lists = useHostQueries<HostRpcRegistry, "bot.thread.list">({
     client,
     requests: useMemo(
-      () => byBot.map((params) => ({ method: "bot.thread.list", params })),
+      () =>
+        byBot.map(({ botId }) => ({
+          method: "bot.thread.list",
+          params: botThreadListParams(botId),
+        })),
       [byBot],
     ),
     cacheKeyIdentity: undefined,
