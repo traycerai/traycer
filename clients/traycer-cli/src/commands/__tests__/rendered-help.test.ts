@@ -1158,7 +1158,9 @@ const EXPECTED_PUBLIC_SURFACE: readonly ExpectedSurfaceEntry[] = [
   {
     path: "bot threads",
     options: [
+      { flags: "--cursor <cursor>", mandatory: false },
       { flags: "--json", mandatory: false },
+      { flags: "--limit <count>", mandatory: false },
       { flags: "--no-progress", mandatory: false },
       { flags: "--quiet", mandatory: false },
     ],
