@@ -49,7 +49,15 @@ export function TabSwitcherSheet(props: TabSwitcherSheetProps) {
         data-mobile-shell-touch-scope=""
         data-testid="mobile-tab-switcher-sheet"
         data-theme={themePreset}
-        className={cn(resolvedTheme === "dark" && "dark", "h-[70dvh]")}
+        // The installed iOS app overlays its keyboard on a window that keeps
+        // its height and publishes the covered strip as `--keyboard-inset`
+        // (0 everywhere else). The sheet stands on the keyboard rather than
+        // under it, and gives up height above the 70dvh it would take where
+        // the keyboard leaves less, so the list's search results stay in reach.
+        className={cn(
+          resolvedTheme === "dark" && "dark",
+          "bottom-(--keyboard-inset)! h-[min(70dvh,calc(100dvh-var(--keyboard-inset)))]",
+        )}
       >
         {/* Inside the drawer content so it runs only while the sheet is open. */}
         {/* No `DrawerHeader`: vaul/Radix requires a title for screen readers,
