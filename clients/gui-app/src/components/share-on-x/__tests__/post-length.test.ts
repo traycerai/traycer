@@ -27,6 +27,14 @@ describe("xPostLength", () => {
     expect(xPostLength("index.tsx")).toBe(9);
   });
 
+  it("counts punctuation after a link as text", () => {
+    expect(xPostLength("see http://twitter.com/.")).toBe(4 + 23 + 1);
+    expect(xPostLength("(https://x.com/a)!")).toBe(1 + 23 + 2);
+    expect(
+      xPostLength("https://en.wikipedia.org/wiki/Rust_(programming_language)."),
+    ).toBe(23 + 1);
+  });
+
   it("adds the surrounding text to the link weight", () => {
     expect(xPostLength("try traycer.ai now")).toBe(4 + 23 + 4);
   });

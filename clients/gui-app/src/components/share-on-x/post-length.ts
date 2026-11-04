@@ -15,6 +15,30 @@ const LINK_PATTERN =
   /\bhttps?:\/\/[^\s]+|\b(?:[a-z0-9-]+\.)+([a-z]{2,63})\b(?:\/[^\s]*)?/giu;
 
 /**
+ * Characters a link cannot end with: X leaves trailing punctuation out of the
+ * link and counts it as text ("see https://x.com." links "https://x.com").
+ */
+const TRAILING_PUNCTUATION = /[.,;:!?'"\u2019\u201D\]}>)]+$/u;
+
+/**
+ * A link and the punctuation after it, which X counts as text. A closing
+ * parenthesis stays with the link while it balances one inside it, as in a
+ * Wikipedia URL.
+ */
+function splitTrailing(match: string): readonly [string, string] {
+  let link = match.replace(TRAILING_PUNCTUATION, "");
+  let rest = match.slice(link.length);
+  while (rest.startsWith(")")) {
+    const opens = link.split("(").length - 1;
+    const closes = link.split(")").length - 1;
+    if (opens <= closes) break;
+    link += ")";
+    rest = rest.slice(1);
+  }
+  return [link, rest];
+}
+
+/**
  * The code point ranges X weighs as one character; everything else (CJK,
  * most emoji) weighs two. Taken from X's own counting configuration.
  */
@@ -64,7 +88,8 @@ export function xPostLength(text: string): number {
         return match;
       }
       links += 1;
-      return "";
+      // The punctuation after a link stays in the text it is counted with.
+      return splitTrailing(match)[1];
     });
   let weight = links * LINK_WEIGHT;
   const plain = rest.replace(EMOJI_PATTERN, (emoji) => {
