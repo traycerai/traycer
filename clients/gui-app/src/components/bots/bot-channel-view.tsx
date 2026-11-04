@@ -107,10 +107,9 @@ import {
   type BotMemberResolver,
 } from "@/lib/bots/bot-member-names";
 import {
-  isDocumentVisible,
-  subscribeDocumentVisibility,
-} from "@/lib/dom/document-visibility";
-import { isDocumentFocused } from "@/lib/notifications/notification-presence";
+  isDocumentFocused,
+  subscribeHostNotificationPresence,
+} from "@/lib/notifications/notification-presence";
 import { useBotDraftsStore } from "@/stores/bots/bot-drafts-store";
 import { useKeptBoxDraft } from "@/hooks/bots/use-kept-box-draft";
 import type {
@@ -129,25 +128,6 @@ import { cn } from "@/lib/utils";
 const EMPTY_THREADS: ReadonlyArray<BotThreadSummary> = [];
 const NO_EXCHANGES: ReadonlyArray<BotExchange> = [];
 const NO_EPIC_IDS: ReadonlyArray<string> = [];
-
-/**
- * Whether the person is in this window: it is on screen and has focus, the
- * same foreground the notification plane reads for a focused chat.
- */
-function readWindowForeground(): boolean {
-  return isDocumentVisible() && isDocumentFocused();
-}
-
-function subscribeWindowForeground(listener: () => void): () => void {
-  const stopVisibility = subscribeDocumentVisibility(listener);
-  window.addEventListener("focus", listener);
-  window.addEventListener("blur", listener);
-  return () => {
-    stopVisibility();
-    window.removeEventListener("focus", listener);
-    window.removeEventListener("blur", listener);
-  };
-}
 
 /**
  * The failed message the channel's box is editing, which belongs to the
@@ -1407,8 +1387,8 @@ function useChannelRow(input: {
 function usePresented(shown: boolean): boolean {
   const paneVisible = usePaneVisible();
   const windowForeground = useSyncExternalStore(
-    subscribeWindowForeground,
-    readWindowForeground,
+    subscribeHostNotificationPresence,
+    isDocumentFocused,
   );
   return shown && paneVisible && windowForeground;
 }
