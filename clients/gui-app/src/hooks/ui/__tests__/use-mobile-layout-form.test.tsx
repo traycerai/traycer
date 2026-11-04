@@ -2,13 +2,15 @@ import { act, cleanup, render, screen } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useMobileLayoutForm } from "@/hooks/ui/use-mobile-layout-form";
 import type { MobileTileCount } from "@/lib/layout/mobile-layout-form";
+import { setMobileAppPlatform } from "@/lib/mobile-app";
 import { useSideTabStripStore } from "@/stores/layout/side-tab-strip-store";
 
 /**
  * The real store and the real inset read; only the browser's measurements are
  * fake. The media query shim evaluates the query the hook actually asked, so
  * the phone-portrait limit is held by what it answers on a viewport, and the
- * viewport and the screen move independently, as they do under a keyboard.
+ * viewport and the screen move independently, as they do under a keyboard on
+ * Android and through a turn on iOS.
  */
 const resizeObservers = new Set<() => void>();
 const orientationListeners = new Set<() => void>();
@@ -88,19 +90,6 @@ function rotateScreen(type: OrientationType): void {
   });
 }
 
-/** A browser with no `screen.orientation`, left with the screen's dimensions. */
-function setScreenWithoutOrientation(width: number, height: number): void {
-  Reflect.deleteProperty(window.screen, "orientation");
-  Object.defineProperty(window.screen, "width", {
-    configurable: true,
-    value: width,
-  });
-  Object.defineProperty(window.screen, "height", {
-    configurable: true,
-    value: height,
-  });
-}
-
 let root: HTMLElement;
 
 /** The window at a size, with the side inset the OS reserves in that posture. */
@@ -163,8 +152,7 @@ afterEach(() => {
   resizeObservers.clear();
   orientationListeners.clear();
   Reflect.deleteProperty(window.screen, "orientation");
-  Reflect.deleteProperty(window.screen, "width");
-  Reflect.deleteProperty(window.screen, "height");
+  setMobileAppPlatform(null);
   document.documentElement.style.removeProperty("--safe-area-inset-left");
   document.documentElement.style.removeProperty("--safe-area-inset-right");
   window.dispatchEvent(new Event("resize"));
@@ -207,7 +195,9 @@ describe("useMobileLayoutForm", () => {
     expect(renderedForm()).toEqual(RAIL_AND_MENU);
   });
 
-  it("keeps the bar when a keyboard shortens the viewport past its width", () => {
+  // Android resizes the viewport for the keyboard, so only the screen can tell.
+  it("keeps the bar on Android when a keyboard shortens the viewport past its width", () => {
+    setMobileAppPlatform("android");
     setScreenOrientation("portrait-primary");
     setViewport(450, 800, { left: 0, right: 0 });
     render(<Probe openTiles={1} />);
@@ -217,7 +207,8 @@ describe("useMobileLayoutForm", () => {
     expect(renderedForm()).toEqual(PHONE_PORTRAIT);
   });
 
-  it("re-answers when the screen turns, at the same width", () => {
+  it("re-answers on Android when the screen turns, at the same width", () => {
+    setMobileAppPlatform("android");
     setScreenOrientation("portrait-primary");
     setViewport(450, 800, { left: 0, right: 0 });
     render(<Probe openTiles={1} />);
@@ -235,10 +226,12 @@ describe("useMobileLayoutForm", () => {
     expect(renderedForm()).toEqual(RAIL_AND_MENU);
   });
 
-  // iOS before 16.4: no `screen.orientation`, and `screen` stays
-  // portrait-ordered on its side, so only the viewport's shape can tell.
-  it("falls back to the viewport's shape without screen.orientation, not the screen's dimensions", () => {
-    setScreenWithoutOrientation(450, 800);
+  // iOS overlays its keyboard, so the viewport's shape is the device's, and
+  // it is what moves with the layout: through a turn `screen.orientation`
+  // trails the viewport by hundreds of milliseconds.
+  it("reads the viewport's shape on iOS, whatever the screen says", () => {
+    setMobileAppPlatform("ios");
+    setScreenOrientation("portrait-primary");
     setViewport(450, 800, { left: 0, right: 0 });
     render(<Probe openTiles={1} />);
     expect(renderedForm()).toEqual(PHONE_PORTRAIT);
@@ -247,14 +240,22 @@ describe("useMobileLayoutForm", () => {
     expect(renderedForm()).toEqual(RAIL_AND_MENU);
   });
 
-  it("shows two tiles on a side-turned tablet without screen.orientation", () => {
-    setScreenWithoutOrientation(834, 1194);
-    setViewport(1194, 834, { left: 0, right: 0 });
+  it("folds an iPad's second tile the moment the viewport turns upright, before the screen does", () => {
+    setMobileAppPlatform("ios");
+    setScreenOrientation("landscape-primary");
+    setViewport(1210, 834, { left: 0, right: 0 });
     render(<Probe openTiles={2} />);
     expect(renderedForm()).toMatchObject({ tiles: 2 });
 
-    setViewport(834, 1194, { left: 0, right: 0 });
+    // 834 would fit two tiles beside the rail; only the shape folds them.
+    setViewport(834, 1210, { left: 0, right: 0 });
     expect(renderedForm()).toMatchObject({ tiles: 1 });
+
+    rotateScreen("portrait-primary");
+    expect(renderedForm()).toMatchObject({ tiles: 1 });
+
+    setViewport(1210, 834, { left: 0, right: 0 });
+    expect(renderedForm()).toMatchObject({ tiles: 2 });
   });
 
   it("re-answers when the person's strip choice changes", () => {
