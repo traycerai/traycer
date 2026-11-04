@@ -410,6 +410,40 @@ describe("@legendapp/list web patch", () => {
       );
     });
 
+    // A downward adjustment past the content's current end pads that end so
+    // the write is not clamped, and the next frame takes the pad away. Twice
+    // the shortfall leaves the shortfall itself scrollable on the frame the
+    // pad is visible. Browser job 126446321582 painted that: content 16658,
+    // viewport 700, the adjustment at 15972, 12px off the padded end after
+    // the content box shrank 2px. One shortfall puts the padded end on the
+    // adjustment.
+    it(`${file} sizes the temporary end pad to the shortfall once`, () => {
+      const source = readFileSync(join(packageDir, file), "utf8");
+      const match =
+        /const pad = (nextScroll \+ viewportSize - totalSize(?: \* 2)?);/.exec(
+          source,
+        );
+      if (match === null) {
+        throw new Error("temporary end pad is not in the installed build");
+      }
+      const compute: unknown = runInNewContext(
+        `(function (nextScroll, viewportSize, totalSize) { return ${match[1]}; })`,
+      );
+      if (typeof compute !== "function") {
+        throw new Error("temporary end pad did not evaluate");
+      }
+      const nextScroll = 15972;
+      const viewportSize = 700;
+      const totalSize = 16658;
+      const pad: unknown = Reflect.apply(compute, undefined, [
+        nextScroll,
+        viewportSize,
+        totalSize,
+      ]);
+      if (typeof pad !== "number") throw new Error("pad was not a number");
+      expect(totalSize + pad - viewportSize).toBe(nextScroll);
+    });
+
     // The restore cannot be sliced out of the build on its own (it closes
     // over `resetPaddingRafRef`/`contentNode`/`axis`), so this pins the call
     // site instead: the restore's write goes through the announced helper,

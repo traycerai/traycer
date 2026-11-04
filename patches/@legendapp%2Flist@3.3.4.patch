@@ -642,7 +642,19 @@ index ea0348877ff08eb9962ff97efebf2cc19cffad11..f84f068551d683000d9d613a41037094
  }
  function ScrollAdjust() {
    const ctx = useStateContext();
-@@ -6436,7 +6827,13 @@ function ScrollAdjust() {
+@@ -6426,7 +6817,10 @@ function ScrollAdjust() {
+           if (needsTemporaryPadding) {
+             const previousPaddingEnd = (_a3 = resetPaddingBaselineRef.current) != null ? _a3 : contentNode.style[axis.paddingEndProp];
+             resetPaddingBaselineRef.current = previousPaddingEnd;
+-            const pad = (nextScroll + viewportSize - totalSize) * 2;
++            // The shortfall once. Twice that is still scrollable on the frame
++            // this pad is visible, so a follow already at the end paints that
++            // far short of it. The next frame removes the pad.
++            const pad = nextScroll + viewportSize - totalSize;
+             contentNode.style[axis.paddingEndProp] = `${pad}px`;
+             void contentNode.offsetHeight;
+             scrollBy();
+@@ -6436,7 +6830,13 @@ function ScrollAdjust() {
              resetPaddingRafRef.current = requestAnimationFrame(() => {
                resetPaddingRafRef.current = void 0;
                resetPaddingBaselineRef.current = void 0;
@@ -1365,7 +1377,19 @@ index c96345be154d77f66c26ea42cea15a18e22f5dfa..453752a247583b7987614ffdcd83d1bf
  }
  function ScrollAdjust() {
    const ctx = useStateContext();
-@@ -6415,7 +6806,13 @@ function ScrollAdjust() {
+@@ -6405,7 +6796,10 @@ function ScrollAdjust() {
+           if (needsTemporaryPadding) {
+             const previousPaddingEnd = (_a3 = resetPaddingBaselineRef.current) != null ? _a3 : contentNode.style[axis.paddingEndProp];
+             resetPaddingBaselineRef.current = previousPaddingEnd;
+-            const pad = (nextScroll + viewportSize - totalSize) * 2;
++            // The shortfall once. Twice that is still scrollable on the frame
++            // this pad is visible, so a follow already at the end paints that
++            // far short of it. The next frame removes the pad.
++            const pad = nextScroll + viewportSize - totalSize;
+             contentNode.style[axis.paddingEndProp] = `${pad}px`;
+             void contentNode.offsetHeight;
+             scrollBy();
+@@ -6415,7 +6809,13 @@ function ScrollAdjust() {
              resetPaddingRafRef.current = requestAnimationFrame(() => {
                resetPaddingRafRef.current = void 0;
                resetPaddingBaselineRef.current = void 0;
@@ -2358,7 +2382,19 @@ index ea0348877ff08eb9962ff97efebf2cc19cffad11..53e513148b127db962a4bdb18ef4aa66
  }
  function ScrollAdjust() {
    const ctx = useStateContext();
-@@ -6436,7 +6913,13 @@ function ScrollAdjust() {
+@@ -6426,7 +6903,10 @@ function ScrollAdjust() {
+           if (needsTemporaryPadding) {
+             const previousPaddingEnd = (_a3 = resetPaddingBaselineRef.current) != null ? _a3 : contentNode.style[axis.paddingEndProp];
+             resetPaddingBaselineRef.current = previousPaddingEnd;
+-            const pad = (nextScroll + viewportSize - totalSize) * 2;
++            // The shortfall once. Twice that is still scrollable on the frame
++            // this pad is visible, so a follow already at the end paints that
++            // far short of it. The next frame removes the pad.
++            const pad = nextScroll + viewportSize - totalSize;
+             contentNode.style[axis.paddingEndProp] = `${pad}px`;
+             void contentNode.offsetHeight;
+             scrollBy();
+@@ -6436,7 +6916,13 @@ function ScrollAdjust() {
              resetPaddingRafRef.current = requestAnimationFrame(() => {
                resetPaddingRafRef.current = void 0;
                resetPaddingBaselineRef.current = void 0;
@@ -3300,7 +3336,19 @@ index c96345be154d77f66c26ea42cea15a18e22f5dfa..734469842c53e85c60a3f101d2ff1bd6
  }
  function ScrollAdjust() {
    const ctx = useStateContext();
-@@ -6415,7 +6892,13 @@ function ScrollAdjust() {
+@@ -6405,7 +6882,10 @@ function ScrollAdjust() {
+           if (needsTemporaryPadding) {
+             const previousPaddingEnd = (_a3 = resetPaddingBaselineRef.current) != null ? _a3 : contentNode.style[axis.paddingEndProp];
+             resetPaddingBaselineRef.current = previousPaddingEnd;
+-            const pad = (nextScroll + viewportSize - totalSize) * 2;
++            // The shortfall once. Twice that is still scrollable on the frame
++            // this pad is visible, so a follow already at the end paints that
++            // far short of it. The next frame removes the pad.
++            const pad = nextScroll + viewportSize - totalSize;
+             contentNode.style[axis.paddingEndProp] = `${pad}px`;
+             void contentNode.offsetHeight;
+             scrollBy();
+@@ -6415,7 +6895,13 @@ function ScrollAdjust() {
              resetPaddingRafRef.current = requestAnimationFrame(() => {
                resetPaddingRafRef.current = void 0;
                resetPaddingBaselineRef.current = void 0;
