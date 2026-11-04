@@ -35,14 +35,9 @@ describe("MobileArtifactSyncControl", () => {
     act(() => {
       vi.advanceTimersByTime(15_000);
     });
-    fireEvent.click(
-      screen.getByRole("button", { name: "1 new artifact waiting" }),
-    );
-    expect(screen.getByRole("dialog").textContent).toContain(
-      "1 new artifact waiting",
-    );
-    expect(screen.getByRole("dialog").textContent).toContain(
-      "It’s saved on this computer and will appear here when sync is back.",
+    fireEvent.click(screen.getByRole("button", { name: "Syncing…" }));
+    expect(screen.getByRole("dialog").textContent).toBe(
+      "Syncing…1 new artifact waiting. It’s saved on this computer and will appear here when sync is back.",
     );
     state.reading = {
       rooms: "current",
