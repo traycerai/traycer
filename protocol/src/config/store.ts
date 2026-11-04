@@ -1149,7 +1149,7 @@ export async function setAgentRolesEnabled(enabled: boolean): Promise<void> {
 }
 
 /**
- * Best-effort synchronous read for the gates on `traycer_send_feedback`. No
+ * Best-effort synchronous read for the gates on `traycer_draft_feedback`. No
  * config file is the unset case, so it reads on. A file that cannot be read or
  * parsed fails CLOSED, unlike `readBrowserConfigSync`: this switch stops data
  * leaving the machine, and that file may hold the user's `false`.

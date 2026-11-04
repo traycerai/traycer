@@ -92,6 +92,7 @@ export { mentionQueryKeys } from "@/lib/query-keys/mention-query-keys";
 export { imageMutationKeys } from "@/lib/query-keys/image-mutation-keys";
 export { appearanceQueryKeys } from "@/lib/query-keys/appearance-query-keys";
 export { appearanceMutationKeys } from "@/lib/query-keys/appearance-mutation-keys";
+export { soundtrackQueryKeys } from "@/lib/query-keys/soundtrack-query-keys";
 
 export const queryKeys = {
   hostBase: hostQueryKeys.base,

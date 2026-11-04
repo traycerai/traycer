@@ -943,7 +943,7 @@ export type ToolCallFeedbackDraftState = z.infer<
 /**
  * Feedback about Traycer an agent drafted with `traycer_draft_feedback`,
  * stamped on that call's `tool_call` block. Nothing is sent until the user
- * presses Send on the card (`chat.feedbackDraftDecide`); the stamp is the
+ * presses Send on the card (`chat.feedbackDraft.decide`); the stamp is the
  * draft's only record and the source of truth for its state.
  *
  * - `category` is an open string (the tool offers `tool_problem`,

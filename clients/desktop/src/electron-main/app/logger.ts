@@ -88,6 +88,8 @@ function installSanitizingHook(): void {
   });
 }
 
+const LOG_CONTINUATION_INDENT = "  ";
+
 /**
  * Indent every line after the first of a string argument. electron-log writes
  * a string as itself, so a line break followed by `[<timestamp>] [info]` would
@@ -98,8 +100,6 @@ function installSanitizingHook(): void {
  * Objects and Errors need nothing: electron-log renders them with
  * `util.inspect`, which escapes the line breaks inside their strings.
  */
-const LOG_CONTINUATION_INDENT = "  ";
-
 function renderLogString(value: string): string {
   return /[\r\n]/.test(value)
     ? value.replace(/\r\n|\r|\n/g, `\n${LOG_CONTINUATION_INDENT}`)

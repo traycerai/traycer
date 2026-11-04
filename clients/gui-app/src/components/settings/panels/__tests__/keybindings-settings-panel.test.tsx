@@ -113,6 +113,12 @@ describe("KeybindingsSettingsPanel - flag-gated actions", () => {
   });
 
   it("omits Collapse vertical tabs while the tabs are at the top", () => {
+    useLayoutStore.setState({
+      arrangement: {
+        ...useLayoutStore.getState().arrangement,
+        tabStripPlacement: "top",
+      },
+    });
     renderPanel();
 
     expect(screen.queryByText("Collapse vertical tabs")).toBeNull();

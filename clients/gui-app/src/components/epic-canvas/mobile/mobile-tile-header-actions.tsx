@@ -1,5 +1,5 @@
 import type { ReactNode } from "react";
-import { ChevronLeft, X } from "lucide-react";
+import { ChevronLeft, SquareSplitHorizontal, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import type { MobileTileSelection } from "@/components/epic-canvas/mobile/mobile-tile-selection";
 import { useOpenBotChannel } from "@/hooks/bots/use-open-bot-channel";
@@ -47,6 +47,29 @@ function OriginCrumbButton(props: {
     >
       <ChevronLeft aria-hidden="true" />
       <span className="min-w-0 truncate">{TRACY_TAB_LABEL}</span>
+    </Button>
+  );
+}
+
+/**
+ * Opens the second pane with the task's list in it, for the person to choose
+ * what reads beside this tile. Drawn only while one tile shows and a second
+ * would fit.
+ */
+export function MobileTileSplitButton(props: {
+  readonly onSplit: () => void;
+}): ReactNode {
+  return (
+    <Button
+      type="button"
+      variant="ghost"
+      size="icon-sm"
+      aria-label="Open a second tile"
+      data-testid="mobile-tile-split"
+      className="shrink-0"
+      onClick={props.onSplit}
+    >
+      <SquareSplitHorizontal aria-hidden="true" />
     </Button>
   );
 }

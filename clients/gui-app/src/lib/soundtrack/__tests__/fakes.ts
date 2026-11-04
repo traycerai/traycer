@@ -1,3 +1,4 @@
+import type { RandomSource } from "../scheduler";
 import type { OutputGain, OutputVoice, SoundtrackOutput } from "../output";
 import type { StemSource } from "../stems";
 import type { Layer, VariableTrack } from "../variable-sound";
@@ -25,6 +26,17 @@ interface RampCall {
   readonly at: number;
 }
 type PortCall = PlayCall | CutCall | RampCall;
+
+/** mulberry32: the same draws on every run; each call owns its own state. */
+export function mulberry32(seed: number): RandomSource {
+  let state = seed;
+  return () => {
+    state = (state + 0x6d2b79f5) | 0;
+    let t = Math.imul(state ^ (state >>> 15), 1 | state);
+    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+}
 
 function isPlay(call: PortCall): call is PlayCall {
   return call.kind === "play";

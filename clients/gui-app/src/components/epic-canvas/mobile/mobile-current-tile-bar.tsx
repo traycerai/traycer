@@ -12,8 +12,8 @@ import {
 } from "@/components/epic-canvas/canvas/browser-tab-presentation";
 import { TabHostProvider } from "@/components/epic-canvas/tab-host-provider";
 import { ContentMinimapButton } from "@/components/minimap/content-minimap-button";
-import { MobileLevel2MenuTrigger } from "@/components/layout/shell/mobile-level2";
-import type { MobileLevel2Form } from "@/lib/layout/mobile-layout-form";
+import { Button } from "@/components/ui/button";
+import { SquareStack } from "lucide-react";
 import { useChatStreamSyncState } from "@/hooks/chats/use-chat-stream-sync-state";
 import { usePublishSurfaceSync } from "@/hooks/sync/use-publish-surface-sync";
 import { useStreamSyncingSpell } from "@/hooks/sync/use-stream-syncing-spell";
@@ -34,9 +34,12 @@ import type {
 interface MobileCurrentTileBarProps {
   readonly epicId: string;
   readonly tile: EpicCanvasTileRef;
-  readonly level2: MobileLevel2Form;
-  /** What the pane's header leads with, before the tile's name: the column's fold control, else nothing. */
-  readonly leading: ReactNode;
+  /**
+   * Opens the task's list for this tile, from the Switch tab control and from
+   * the tile's name. `null` in the phone's `bar` form, where the app header's
+   * trigger opens it and the bar is a label.
+   */
+  readonly onSwitch: (() => void) | null;
   /** What the pane's header carries past the tile's own controls. */
   readonly trailing: ReactNode;
 }
@@ -53,8 +56,8 @@ interface MobileCurrentTileBarProps {
  * on this bar is almost always a reach for the tile below it. Renaming a tile
  * lives in the switcher row's actions menu.
  *
- * Beside the column it is the pane's header and still a label. In the `menu`
- * form the icon and title are the trigger of the `MobileTileMenu` around it.
+ * Everywhere wider it is the pane's header, and the sheet is opened from here:
+ * a Switch tab control past the minimap, and the name itself.
  *
  * Icon + title reuse the exact desktop tab-strip resolution (`TabIcon`,
  * `useEpicTabDisplayTitle`), including the terminal bound-host client so a
@@ -129,7 +132,7 @@ function MobileCurrentTileBarBody(
     readonly terminalControl: TerminalTabControl | null;
   },
 ) {
-  const { epicId, tile, level2, leading, trailing } = props;
+  const { epicId, tile, onSwitch, trailing } = props;
   const { browserPresentation, terminalControl } = props;
   const isTerminal = tile.type === "terminal";
   // Terminal titles resolve against the tab's bound host; `null` for every
@@ -228,28 +231,47 @@ function MobileCurrentTileBarBody(
     >
       <div
         data-testid={
-          level2 === "bar"
+          onSwitch === null
             ? "mobile-current-tile-bar"
             : "mobile-tile-pane-header"
         }
         className="flex min-h-11 w-full items-center gap-2 px-3"
       >
-        {leading}
-        {level2 === "menu" ? (
-          <MobileLevel2MenuTrigger
-            testId="mobile-tile-menu-trigger"
-            className="mr-auto"
-          >
-            {icon}
-            {title}
-          </MobileLevel2MenuTrigger>
-        ) : (
+        {onSwitch === null ? (
           <>
             {icon}
             {title}
           </>
+        ) : (
+          <Button
+            type="button"
+            variant="ghost"
+            size="sm"
+            data-testid="mobile-tile-title-trigger"
+            // `shrink` undoes the button's own `shrink-0`, and the cap gives a
+            // long name a width to truncate at, so what trails it stays in the
+            // row.
+            className="mr-auto min-w-0 max-w-full shrink justify-start"
+            onClick={onSwitch}
+          >
+            {icon}
+            {title}
+          </Button>
         )}
         <ContentMinimapButton tileInstanceId={tile.instanceId} />
+        {onSwitch === null ? null : (
+          <Button
+            type="button"
+            variant="ghost"
+            size="icon-sm"
+            aria-label="Switch tab"
+            data-testid="mobile-tile-switch-button"
+            className="shrink-0"
+            onClick={onSwitch}
+          >
+            <SquareStack aria-hidden="true" />
+          </Button>
+        )}
         {trailing}
       </div>
     </div>
