@@ -53,6 +53,24 @@ export function useCommGraphSnapshot(
   hostIds: ReadonlyArray<string>,
   tabHostId: string | null,
 ): CommGraphSnapshot {
+  return useCommGraphComposition(epicId, hostIds, tabHostId).snapshot;
+}
+
+/**
+ * The task's graph as `useCommGraphSnapshot` reads it, and whether every
+ * source's history is in: the viewer feed's initial history and each team
+ * environment arm's. The graph's own readiness is the viewer feed's alone, so
+ * an arm that never answers cannot hold it; a reader that must not draw from
+ * part of the history waits on `historyComplete`.
+ */
+export function useCommGraphComposition(
+  epicId: string,
+  hostIds: ReadonlyArray<string>,
+  tabHostId: string | null,
+): {
+  readonly snapshot: CommGraphSnapshot;
+  readonly historyComplete: boolean;
+} {
   const hostDirectory = useHostDirectoryList();
   // Stable for this component's lifetime, and reads every host dependency live
   // on each dial - but only while this component is mounted to keep refreshing
@@ -253,9 +271,14 @@ export function useCommGraphSnapshot(
 
   // The task's team environments' events, which only the pool serves to a
   // member (`COMM_GRAPH_COMPOSED_VIEW`).
-  const armEvents = useEnvironmentArmGraphEvents(epicId);
+  const arm = useEnvironmentArmGraphEvents(epicId);
+  const snapshot = useMemo(
+    () => withEnvironmentArmGraphEvents(cloudSnapshot, arm.events),
+    [arm.events, cloudSnapshot],
+  );
+  const historyComplete = snapshot.initialHistoryCaughtUp && arm.historySettled;
   return useMemo(
-    () => withEnvironmentArmGraphEvents(cloudSnapshot, armEvents),
-    [armEvents, cloudSnapshot],
+    () => ({ snapshot, historyComplete }),
+    [historyComplete, snapshot],
   );
 }

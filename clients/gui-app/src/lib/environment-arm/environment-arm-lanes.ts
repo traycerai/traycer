@@ -35,6 +35,12 @@ export interface EnvironmentArmLaneSpec<State, Frame> {
   /** What it holds once it has ended (see `endsTheArm`). */
   readonly ended: State;
   /**
+   * What an ended arm holds once `reopen` gives it a fresh stream, until that
+   * stream's first frame: the stream reads from `readState` again, so a state
+   * that claims more than `ended` holds would outlive the end it described.
+   */
+  readonly reopenedFromEnd: State;
+  /**
    * Opens the stream. A stream that resumes reads where from `readState` on
    * every (re)subscribe, so a transport redial continues from what was
    * applied.
@@ -116,6 +122,7 @@ function openLane<State, Frame>(
       const previous = session;
       session = null;
       previous?.close();
+      if (lane.state === spec.ended) publish(spec.reopenedFromEnd);
       openSession();
     },
   };

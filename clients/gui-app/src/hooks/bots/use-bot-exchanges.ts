@@ -1,5 +1,5 @@
 import { useMemo } from "react";
-import { useCommGraphSnapshot } from "@/components/epic-canvas/comm-graph/use-comm-graph-snapshot";
+import { useCommGraphComposition } from "@/components/epic-canvas/comm-graph/use-comm-graph-snapshot";
 import { botExchangesOf, type BotExchange } from "@/lib/bots/bot-exchanges";
 
 const NO_HOSTS: ReadonlyArray<string> = [];
@@ -38,13 +38,14 @@ export function useBotExchanges(input: {
     () => (boundHostId === null ? NO_HOSTS : [boundHostId]),
     [boundHostId],
   );
-  const snapshot = useCommGraphSnapshot(botId, originHostIds, hostId);
+  const { snapshot, historyComplete } = useCommGraphComposition(
+    botId,
+    originHostIds,
+    hostId,
+  );
   const all = useMemo(
-    () =>
-      snapshot.initialHistoryCaughtUp
-        ? botExchangesOf(snapshot.events, botId)
-        : null,
-    [botId, snapshot.events, snapshot.initialHistoryCaughtUp],
+    () => (historyComplete ? botExchangesOf(snapshot.events, botId) : null),
+    [botId, historyComplete, snapshot.events],
   );
   return useMemo(() => {
     const bySession = new Map<string, BotExchange[]>();

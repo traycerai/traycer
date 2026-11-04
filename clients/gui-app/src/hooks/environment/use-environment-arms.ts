@@ -225,6 +225,7 @@ export function useEnvironmentArmChats(
               client: scope.client,
               initial: NO_CHATS,
               ended: ENDED_CHATS,
+              reopenedFromEnd: ENDED_CHATS,
               open: (client) =>
                 client.subscribe("environment.chats.subscribe", {
                   environmentId,
@@ -328,6 +329,7 @@ export function useEnvironmentArmTerminals(
               client: scope.client,
               initial: NO_TERMINALS,
               ended: NO_TERMINALS,
+              reopenedFromEnd: NO_TERMINALS,
               open: (client) =>
                 client.subscribe("environment.plainTerminals.subscribe", {
                   environmentId,
@@ -367,8 +369,12 @@ export function useEnvironmentArmTerminals(
 interface GraphState {
   readonly events: readonly HostCommunicationGraphCloudFeedEvent[];
   readonly cursor: HostCommunicationGraphCloudFeedCursor | null;
-  /** Some frame has reached the head the server read when the arm opened. */
-  readonly caughtUp: boolean;
+  /**
+   * `complete` once a frame of a stream that started from scratch, or resumed
+   * from a cursor this state holds, reached the head the server read;
+   * `ended` once the arm ended and holds nothing.
+   */
+  readonly history: "pending" | "complete" | "ended";
 }
 interface GraphFrame {
   readonly events: readonly HostCommunicationGraphCloudFeedEvent[];
@@ -378,13 +384,15 @@ interface GraphFrame {
 const NO_GRAPH: GraphState = Object.freeze({
   events: Object.freeze([]),
   cursor: null,
-  caughtUp: false,
+  history: "pending",
 });
-// An ended arm has nothing more to hand over, so it holds no one's history.
+// An ended arm has nothing to hand over: it holds no one's history, and waits
+// for none. Reopened, it starts over from `NO_GRAPH`, since its stream then
+// reads the whole graph again.
 const ENDED_GRAPH: GraphState = Object.freeze({
   events: Object.freeze([]),
   cursor: null,
-  caughtUp: true,
+  history: "ended",
 });
 const graphLanes = createEnvironmentArmLanes<GraphState, GraphFrame>();
 
@@ -417,6 +425,7 @@ export function useEnvironmentArmGraphEvents(
               client: scope.client,
               initial: NO_GRAPH,
               ended: ENDED_GRAPH,
+              reopenedFromEnd: NO_GRAPH,
               open: (client, readState) =>
                 client.subscribeWithParamsProvider(
                   "environment.communicationGraph.subscribe",
@@ -452,20 +461,23 @@ export function useEnvironmentArmGraphEvents(
                   (event) => !seen.has(event.eventId),
                 );
                 const cursor = frame.cursor ?? state.cursor;
-                // Once caught up, a redial's backlog is only the gap since the
-                // cursor, so the arm stays caught up through it.
-                const caughtUp = state.caughtUp || frame.caughtUp;
+                // A complete history resumes from its own cursor, so a
+                // redial's backlog is only the gap since then: still complete.
+                const history =
+                  state.history === "complete" || frame.caughtUp
+                    ? "complete"
+                    : "pending";
                 if (
                   fresh.length === 0 &&
                   cursor === state.cursor &&
-                  caughtUp === state.caughtUp
+                  history === state.history
                 ) {
                   return state;
                 }
                 return {
                   events: [...state.events, ...fresh],
                   cursor,
-                  caughtUp,
+                  history,
                 };
               },
             }),
@@ -476,7 +488,7 @@ export function useEnvironmentArmGraphEvents(
   return useMemo(
     () => ({
       events: states.flatMap((state) => state.events),
-      caughtUp: states.every((state) => state.caughtUp),
+      historySettled: states.every((state) => state.history !== "pending"),
     }),
     [states],
   );

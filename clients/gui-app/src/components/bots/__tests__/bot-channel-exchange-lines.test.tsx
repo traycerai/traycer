@@ -7,7 +7,14 @@
  * replaced, by a stub that runs the list builder on the exchanges the view
  * provides and draws each row through the real `<ChatMessage>`.
  */
-import { act, cleanup, render, waitFor, within } from "@testing-library/react";
+import {
+  act,
+  cleanup,
+  render,
+  renderHook,
+  waitFor,
+  within,
+} from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -193,6 +200,12 @@ import { __setCommGraphDataCommitWindowMsForTests } from "@/lib/comm-graph/comm-
 import type { CommGraphCloudSubscriptionRequest } from "@/lib/comm-graph/comm-graph-cloud-subscription";
 import { useCommGraphTimelineStore } from "@/stores/epics/comm-graph-timeline-store";
 import { useAuthStore } from "@/stores/auth/auth-store";
+import { useCommGraphSnapshot } from "@/components/epic-canvas/comm-graph/use-comm-graph-snapshot";
+import { publishEnvironmentArmScope } from "@/hooks/environment/use-environment-arms";
+import {
+  PoolArmClient,
+  eventsFrame,
+} from "@/hooks/environment/__tests__/arm-pool-test-support";
 
 const BOUND_HOST_ID = "host-runs-bot";
 const DOCS_BOT_ID = "bot_01ARZ3NDEKTSV4RRFFQ69G5FAX";
@@ -353,6 +366,7 @@ beforeEach(() => {
 
 afterEach(() => {
   cleanup();
+  publishEnvironmentArmScope(null);
   useAuthStore.getState().setSignedOut();
   __setCommGraphCloudSubscriptionOpenerForTests(null);
   __resetCommGraphCloudRegistryForTests();
@@ -510,6 +524,43 @@ describe("a bot's channel with its messages to other bots", () => {
     act(() =>
       request.handlers.onCaughtUp({ ingestVersion: 4, eventId: "event-4" }, 4),
     );
+    await within(channel).findByTestId("bot-exchange-line");
+  });
+
+  it("draws no line while a team environment's arm has not answered, though the graph's own readiness is the viewer feed's", async () => {
+    const pool = new PoolArmClient();
+    publishEnvironmentArmScope({
+      poolHostId: "pool-host-id",
+      client: pool,
+      viewerId: "viewer-1",
+      environmentIds: ["env-team"],
+      environmentIdByTeamId: new Map(),
+      supported: new Set(["environment.communicationGraph.subscribe"]),
+    });
+    mount(NO_EXCHANGE_OPEN);
+    // What the office canvas and the detail panel read, over the same feed.
+    const graph = renderHook(() =>
+      useCommGraphSnapshot(BOT_ID, [BOUND_HOST_ID], HOST_ID),
+    );
+    await feedHolds([ASKED, ANSWERED], { caughtUp: true });
+    const channel = list(`bot-channel:${BOT_ID}`);
+
+    expect(pool.armSessions).toHaveLength(1);
+    expect(graph.result.current.initialHistoryCaughtUp).toBe(true);
+    expect(within(channel).queryByTestId("bot-exchange-line")).toBeNull();
+
+    act(() => {
+      pool.armSessions[0].emit(
+        eventsFrame({
+          epicId: BOT_ID,
+          generation: 0,
+          events: [],
+          caughtUp: true,
+        }),
+        null,
+      );
+    });
+
     await within(channel).findByTestId("bot-exchange-line");
   });
 
