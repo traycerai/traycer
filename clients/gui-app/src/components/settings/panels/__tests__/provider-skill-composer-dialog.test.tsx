@@ -13,7 +13,11 @@ import {
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { ProviderSkillComposerDialog } from "@/components/settings/panels/provider-skill-composer-dialog";
-import type { SkillAuthoring } from "@/components/settings/panels/provider-skill-composer-model";
+import type {
+  ServedSkillEnvironment,
+  SkillAudience,
+  SkillAuthoring,
+} from "@/components/settings/panels/provider-skill-composer-model";
 import {
   ProviderNativeRpcError,
   type SkillsMutateData,
@@ -74,12 +78,19 @@ function inspectData(
   };
 }
 
+const PERSONAL: ServedSkillEnvironment = {
+  environmentId: "env_me",
+  name: "Personal",
+  team: false,
+};
+
 function renderDialog(
   overrides: Partial<{
     authoring: SkillAuthoring;
     listScope: ProviderNativeScope;
     providerRoot: string | null;
-    canProviderScope: boolean;
+    audiences: readonly SkillAudience[];
+    environment: ServedSkillEnvironment;
     pending: boolean;
   }>,
 ) {
@@ -89,6 +100,15 @@ function renderDialog(
     >();
   onMutate.mockResolvedValue({ kind: "skills", skills: [] });
   const onClose = vi.fn<() => void>();
+  const onEnvironmentWrite =
+    vi.fn<
+      (skill: {
+        readonly name: string;
+        readonly markdown: string;
+      }) => Promise<string | null>
+    >();
+  onEnvironmentWrite.mockResolvedValue(null);
+  const onEnvironmentImport = vi.fn<(source: string) => void>();
   render(
     <ProviderSkillComposerDialog
       providerLabel="Codex"
@@ -97,13 +117,16 @@ function renderDialog(
       providerRoot={
         overrides.providerRoot === undefined ? null : overrides.providerRoot
       }
-      canProviderScope={overrides.canProviderScope ?? true}
+      audiences={overrides.audiences ?? ["shared", "provider"]}
+      environment={overrides.environment ?? PERSONAL}
+      onEnvironmentWrite={onEnvironmentWrite}
+      onEnvironmentImport={onEnvironmentImport}
       pending={overrides.pending ?? false}
       onMutate={onMutate}
       onClose={onClose}
     />,
   );
-  return { onMutate, onClose };
+  return { onMutate, onClose, onEnvironmentWrite, onEnvironmentImport };
 }
 
 function fillSource(value: string): void {
@@ -386,7 +409,7 @@ describe("<ProviderSkillComposerDialog />", () => {
     const user = userEvent.setup();
     const { onMutate, onClose } = renderDialog({
       authoring: BOTH,
-      canProviderScope: true,
+      audiences: ["shared", "provider"],
       providerRoot: "/Users/dev/.codex/skills",
     });
     onMutate.mockImplementation((mutation) => {
@@ -477,7 +500,7 @@ describe("<ProviderSkillComposerDialog />", () => {
     const user = userEvent.setup();
     const { onMutate } = renderDialog({
       authoring: BOTH,
-      canProviderScope: true,
+      audiences: ["shared", "provider"],
       providerRoot: "/Users/dev/.codex/skills",
     });
     onMutate.mockImplementation((mutation) => {
@@ -569,10 +592,140 @@ describe("<ProviderSkillComposerDialog />", () => {
     });
   });
 
+  describe("on a host that runs environments", () => {
+    const ENVIRONMENT_HOST: readonly SkillAudience[] = [
+      "provider",
+      "environment",
+    ];
+
+    it("offers the provider's own folder, selected, and the served environment by name, and no Every provider", () => {
+      renderDialog({ authoring: BOTH, audiences: ENVIRONMENT_HOST });
+
+      const own = screen.getByLabelText<HTMLInputElement>(/Codex only/);
+      expect(own.checked).toBe(true);
+      expect(screen.getByLabelText<HTMLInputElement>(/^Personal/).checked).toBe(
+        false,
+      );
+      expect(screen.queryByLabelText(/Every provider/)).toBeNull();
+    });
+
+    it("sends a written skill to the environment, not the provider's mutate, and closes", async () => {
+      const user = userEvent.setup();
+      const { onMutate, onClose, onEnvironmentWrite } = renderDialog({
+        authoring: BOTH,
+        audiences: ENVIRONMENT_HOST,
+      });
+
+      await user.click(
+        screen.getByRole("button", { name: "or write one from scratch" }),
+      );
+      await user.click(screen.getByLabelText(/^Personal/));
+      fireEvent.change(screen.getByLabelText("Name"), {
+        target: { value: "review-pr" },
+      });
+      fireEvent.change(screen.getByRole("textbox", { name: "Description" }), {
+        target: { value: "Reviews a pull request." },
+      });
+      await user.click(screen.getByRole("button", { name: "Create skill" }));
+
+      await waitFor(() => {
+        expect(onClose).toHaveBeenCalledTimes(1);
+      });
+      expect(onMutate).not.toHaveBeenCalled();
+      const [sent] = onEnvironmentWrite.mock.calls[0];
+      expect(sent.name).toBe("review-pr");
+      expect(sent.markdown).toContain("name: review-pr");
+      expect(sent.markdown).toContain("Reviews a pull request.");
+    });
+
+    it("keeps the draft and shows the refusal when the environment takes no write", async () => {
+      const user = userEvent.setup();
+      const { onClose, onEnvironmentWrite } = renderDialog({
+        authoring: BOTH,
+        audiences: ENVIRONMENT_HOST,
+      });
+      onEnvironmentWrite.mockResolvedValue("This host isn't running it yet.");
+
+      await user.click(
+        screen.getByRole("button", { name: "or write one from scratch" }),
+      );
+      await user.click(screen.getByLabelText(/^Personal/));
+      fireEvent.change(screen.getByLabelText("Name"), {
+        target: { value: "review-pr" },
+      });
+      fireEvent.change(screen.getByRole("textbox", { name: "Description" }), {
+        target: { value: "Reviews a pull request." },
+      });
+      await user.click(screen.getByRole("button", { name: "Create skill" }));
+
+      expect(
+        await screen.findByText("This host isn't running it yet."),
+      ).toBeDefined();
+      expect(onClose).not.toHaveBeenCalled();
+    });
+
+    it("hands an import's source to the environment's import, without reading it here", async () => {
+      const user = userEvent.setup();
+      const { onMutate, onEnvironmentImport } = renderDialog({
+        authoring: BOTH,
+        audiences: ENVIRONMENT_HOST,
+      });
+
+      await user.click(screen.getByLabelText(/^Personal/));
+      fillSource(" owner/repo ");
+      await user.click(screen.getByRole("button", { name: "Add skill" }));
+
+      expect(onEnvironmentImport).toHaveBeenCalledWith("owner/repo");
+      expect(onMutate).not.toHaveBeenCalled();
+    });
+
+    it("names a team the host serves and says whose hosts its skills reach", () => {
+      renderDialog({
+        authoring: BOTH,
+        audiences: ENVIRONMENT_HOST,
+        environment: { environmentId: "env_acme", name: "Acme", team: true },
+      });
+
+      const choice = screen.getByLabelText<HTMLInputElement>(/^Acme/);
+      expect(choice.closest("label")?.textContent).toContain(
+        "every member's hosts",
+      );
+      expect(screen.queryByLabelText(/^Personal/)).toBeNull();
+    });
+
+    it("sends a provider-only write as provider-scoped", async () => {
+      const user = userEvent.setup();
+      const { onMutate, onEnvironmentWrite } = renderDialog({
+        authoring: BOTH,
+        audiences: ENVIRONMENT_HOST,
+      });
+
+      await user.click(
+        screen.getByRole("button", { name: "or write one from scratch" }),
+      );
+      fireEvent.change(screen.getByLabelText("Name"), {
+        target: { value: "review-pr" },
+      });
+      fireEvent.change(screen.getByRole("textbox", { name: "Description" }), {
+        target: { value: "Reviews a pull request." },
+      });
+      await user.click(screen.getByRole("button", { name: "Create skill" }));
+
+      await waitFor(() => {
+        expect(onMutate).toHaveBeenCalledTimes(1);
+      });
+      expect(onMutate.mock.calls[0]?.[0]).toMatchObject({
+        action: "create",
+        providerScoped: true,
+      });
+      expect(onEnvironmentWrite).not.toHaveBeenCalled();
+    });
+  });
+
   it("hides Available to when neither create nor import advertises the scope", () => {
     renderDialog({
       authoring: BOTH,
-      canProviderScope: false,
+      audiences: ["shared"],
       providerRoot: null,
     });
 
@@ -585,7 +738,7 @@ describe("<ProviderSkillComposerDialog />", () => {
     const user = userEvent.setup();
     renderDialog({
       authoring: BOTH,
-      canProviderScope: true,
+      audiences: ["shared", "provider"],
       providerRoot: null,
     });
 
@@ -603,7 +756,7 @@ describe("<ProviderSkillComposerDialog />", () => {
     const user = userEvent.setup();
     renderDialog({
       authoring: BOTH,
-      canProviderScope: true,
+      audiences: ["shared", "provider"],
       providerRoot: "/Users/dev/.codex/skills",
     });
 

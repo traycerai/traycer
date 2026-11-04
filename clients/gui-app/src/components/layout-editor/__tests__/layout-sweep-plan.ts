@@ -1473,6 +1473,35 @@ function toolbarStyleEntries(
   }));
 }
 
+/**
+ * The Sidebar's "Collapsed in new tasks" switch: the sample task has no
+ * collapse record of its own, so the write folds its sidebar to the rail.
+ */
+function sidebarStartCollapsedEntries(
+  context: LayoutFormContext,
+  given: ReadonlyArray<SweepStep>,
+): ReadonlyArray<SweepEntry> {
+  const label = LAYOUT.definitions.sidebarStartCollapsed.label;
+  return [
+    {
+      id: "surface-row:sidebarStartCollapsed",
+      source: "surface-row",
+      mirrors: null,
+      given,
+      write: arrangementFieldStep(
+        `${label}: ${context.arrangement.sidebarStartCollapsed ? "off" : "on"}`,
+        "sidebarStartCollapsed",
+        !context.arrangement.sidebarStartCollapsed,
+      ),
+      covers: [
+        "definition:sidebarStartCollapsed",
+        "arrangement:sidebarStartCollapsed",
+      ],
+      controls: [switchControl(NO_ROW, label)],
+    },
+  ];
+}
+
 function mobileFooterEntries(
   context: LayoutFormContext,
   given: ReadonlyArray<SweepStep>,
@@ -1554,6 +1583,8 @@ function areaRowEntries(
       });
     case "sidebarSide":
       return sidebarSideEntries(arrangement, given);
+    case "sidebarStartCollapsed":
+      return sidebarStartCollapsedEntries(context, given);
     case "resourceReadings":
       return resourceReadingsEntries(context, given);
     case "readingWidth":

@@ -5,7 +5,7 @@ import {
   queueWithDrainingPrompts,
   type PendingTurn,
 } from "@/stores/chats/chat-send-state";
-import type { ChatMessageDelivery } from "@traycer/protocol/host/agent/gui/message-delivery";
+import type { ChatMessageDeliveryV142 } from "@traycer/protocol/host/agent/gui/message-delivery";
 import {
   addAcceptedAction,
   confirmAcceptedSendByMessageId,
@@ -1355,7 +1355,7 @@ export interface ChatSessionState {
    * composer is the view's own `restore`, through
    * `takeMessageDeliveryRestoration`.
    */
-  readonly messageDelivery: ChatMessageDelivery | null;
+  readonly messageDelivery: ChatMessageDeliveryV142 | null;
   /**
    * A withdrawn opening this client put back in its composer and has not yet
    * told the host about (`messageDeliveryRestored`). Kept until that action is
@@ -1380,6 +1380,12 @@ export interface ChatSessionState {
    */
   readonly runStatus: ChatRunStatus;
   readonly activeTurn: ChatActiveTurn | null;
+  /**
+   * What a running turn's earlier ids became, while it runs: the host renames a
+   * turn in place on a steer restart, a provider id backfill or a recovery.
+   * Emptied when the turn settles.
+   */
+  readonly renamedTurnIds: ReadonlyMap<string, string>;
   /** Counts observed turn boundaries, including separate ID-less activations. */
   readonly turnLifecycleRevision: number;
   /**
@@ -2961,13 +2967,13 @@ function rejectionRestoration(input: {
  */
 function snapshotMessageDelivery(
   snapshot: ChatSnapshotFrame["snapshot"],
-): ChatMessageDelivery | null {
+): ChatMessageDeliveryV142 | null {
   return snapshot.messageDelivery ?? null;
 }
 
 /** The message a delivery view names, or `null` without one. */
 function deliveryMessageIdOf(
-  delivery: ChatMessageDelivery | null,
+  delivery: ChatMessageDeliveryV142 | null,
 ): string | null {
   return delivery === null ? null : delivery.messageId;
 }
@@ -3052,7 +3058,7 @@ function rejectionSurfaces(input: {
  * {@link ChatSessionState.messageDelivery}.
  */
 function messageDeliveryNames(
-  delivery: ChatMessageDelivery | null,
+  delivery: ChatMessageDeliveryV142 | null,
   messageId: string | null,
 ): boolean {
   return delivery !== null && delivery.messageId === messageId;
@@ -3065,7 +3071,7 @@ function messageDeliveryNames(
  * and a resnapshot later.
  */
 export function withdrawnMessageDeliveryId(
-  delivery: ChatMessageDelivery | null,
+  delivery: ChatMessageDeliveryV142 | null,
 ): string | null {
   return delivery?.state.phase === "withdrawn" ? delivery.messageId : null;
 }
@@ -3077,7 +3083,7 @@ export function withdrawnMessageDeliveryId(
  * a composer has claimed it, an acknowledgement changes nothing.
  */
 function deliveryAwaitsRestoreAck(
-  delivery: ChatMessageDelivery,
+  delivery: ChatMessageDeliveryV142,
   messageId: string,
 ): boolean {
   if (delivery.messageId !== messageId) return false;
@@ -3115,7 +3121,7 @@ type OpeningCopySlices = Pick<
  */
 function withoutWithdrawnOpeningCopies(
   slices: OpeningCopySlices,
-  delivery: ChatMessageDelivery | null,
+  delivery: ChatMessageDeliveryV142 | null,
 ): Partial<OpeningCopySlices> {
   const messageId = withdrawnMessageDeliveryId(delivery);
   if (messageId === null) return {};
@@ -5038,6 +5044,11 @@ export function createChatSessionStoreWithNotificationDependencies(
           lastSendSnapshotRevision: (state.sendHostFrameRevision ?? 0) + 1,
           runStatus: frame.snapshot.runStatus,
           activeTurn: frame.snapshot.activeTurn,
+          renamedTurnIds: nextRenamedTurnIds(
+            state.renamedTurnIds,
+            state.activeTurn,
+            frame.snapshot.activeTurn,
+          ),
           turnInProgress: frame.snapshot.turnInProgress,
           turnLifecycleRevision: nextTurnLifecycleRevision(state, {
             activeTurn: frame.snapshot.activeTurn,
@@ -7193,7 +7204,7 @@ export function createChatSessionStoreWithNotificationDependencies(
      * and the view restores the prompt without it.
      */
     const noteMessageDelivery = (
-      delivery: ChatMessageDelivery | null,
+      delivery: ChatMessageDeliveryV142 | null,
     ): void => {
       if (delivery === null) return;
       const phase = delivery.state.phase;
@@ -9557,6 +9568,11 @@ export function createChatSessionStoreWithNotificationDependencies(
             sendHostFrameRevision: (state.sendHostFrameRevision ?? 0) + 1,
             runStatus: frame.runStatus,
             activeTurn: frame.activeTurn,
+            renamedTurnIds: nextRenamedTurnIds(
+              state.renamedTurnIds,
+              state.activeTurn,
+              frame.activeTurn,
+            ),
             turnInProgress: frame.turnInProgress ?? state.turnInProgress,
             turnLifecycleRevision: nextTurnLifecycleRevision(state, {
               activeTurn: frame.activeTurn,
@@ -10270,6 +10286,8 @@ export function createChatSessionStoreWithNotificationDependencies(
             connectionStatus: status,
             runStatus: status === "closed" ? "idle" : state.runStatus,
             activeTurn: status === "closed" ? null : state.activeTurn,
+            renamedTurnIds:
+              status === "closed" ? NO_RENAMED_TURN_IDS : state.renamedTurnIds,
             turnLifecycleRevision: nextTurnLifecycleRevision(state, {
               activeTurn: status === "closed" ? null : state.activeTurn,
               turnInProgress: state.turnInProgress,
@@ -10548,6 +10566,7 @@ export function createChatSessionStoreWithNotificationDependencies(
           : { ...inheritedDeliveryRestoreAck, clientActionId: null },
       runStatus: "idle",
       activeTurn: null,
+      renamedTurnIds: NO_RENAMED_TURN_IDS,
       turnLifecycleRevision: 0,
       steerProtocolSupported: false,
       draftBlobBridgeSupported: false,
@@ -13519,6 +13538,53 @@ export function dispatchedWorktreeIntentForDisplay(
   return action?.displayWorktreeIntent ?? null;
 }
 
+/**
+ * The worktrees a seeded opening is still waiting for, which the picker shows
+ * in place of the placeholder binding a deferred `epic.create` opens against.
+ * Render-only, like the dispatched overlay above.
+ *
+ * Only while the delivery is `pending` or `preparing`. The host keeps the intent
+ * after a withdrawal because the obligation is still the chat's, but by then the
+ * picker should show the real binding and the setup card carries the failure.
+ *
+ * Per folder: an entry drops out once the binding has a worktree for its path,
+ * so one landed folder never hides a sibling still pending. Other kinds are
+ * skipped, because the placeholder binding already shows a local folder.
+ */
+export function seededWorktreeIntentForDisplay(
+  delivery: ChatMessageDeliveryV142 | null,
+  binding: WorktreeBinding | null,
+): WorktreeIntent | null {
+  if (delivery === null || delivery.worktreeIntent === null) return null;
+  const { phase } = delivery.state;
+  if (phase !== "pending" && phase !== "preparing") return null;
+  const entries = delivery.worktreeIntent.entries.filter(
+    (entry) =>
+      entry.kind === "worktree" &&
+      !(binding?.entries ?? []).some(
+        (bound) =>
+          bound.workspacePath === entry.workspacePath &&
+          bound.mode === "worktree",
+      ),
+  );
+  return entries.length === 0 ? null : { entries };
+}
+
+/**
+ * The picker's in-flight overlay. Seeded entries come first because the picker
+ * lets a later entry for the same path win, so a newer send that re-targets a
+ * folder replaces the seed for that folder only. Returns a lone overlay as is,
+ * which keeps its identity stable for the picker's memos.
+ */
+export function mergeWorktreeIntentsForDisplay(
+  seeded: WorktreeIntent | null,
+  dispatched: WorktreeIntent | null,
+): WorktreeIntent | null {
+  if (seeded === null) return dispatched;
+  if (dispatched === null) return seeded;
+  return { entries: [...seeded.entries, ...dispatched.entries] };
+}
+
 function releasePendingWorktreeIntentDisplayByMessageId(
   pendingActions: Readonly<Record<string, PendingChatAction>>,
   messageId: string,
@@ -15968,6 +16034,50 @@ function turnRemapFor(turnIds: {
     message.role === "assistant" && message.turnId === previousTurnId
       ? { ...message, turnId: nextTurnId }
       : message;
+}
+
+const NO_RENAMED_TURN_IDS: ReadonlyMap<string, string> = new Map();
+
+/**
+ * The older ids of the turn still running, kept for a caller holding one. The
+ * same start and the same user message mean the same execution under a new id,
+ * whether a frame names the change or a snapshot reports only where the turn
+ * ended up; anything else is another turn, and the old ids go with the old turn.
+ * The turn's current id never has an entry of its own, so every chain ends at it.
+ */
+function nextRenamedTurnIds(
+  renamed: ReadonlyMap<string, string>,
+  previousTurn: ChatActiveTurn | null,
+  nextTurn: ChatActiveTurn | null,
+): ReadonlyMap<string, string> {
+  if (
+    previousTurn === null ||
+    nextTurn === null ||
+    previousTurn.startedAt !== nextTurn.startedAt ||
+    previousTurn.userMessageId !== nextTurn.userMessageId
+  ) {
+    return NO_RENAMED_TURN_IDS;
+  }
+  if (previousTurn.turnId === nextTurn.turnId) return renamed;
+  const next = new Map(renamed);
+  next.delete(nextTurn.turnId);
+  return next.set(previousTurn.turnId, nextTurn.turnId);
+}
+
+/** The id `turnId` goes by now, following the renames of the turn still running. */
+export function currentTurnIdOf(
+  state: Pick<ChatSessionState, "renamedTurnIds">,
+  turnId: string,
+): string {
+  let current = turnId;
+  for (
+    let next = state.renamedTurnIds.get(current);
+    next !== undefined;
+    next = state.renamedTurnIds.get(current)
+  ) {
+    current = next;
+  }
+  return current;
 }
 
 function messagesForTurnStateChange(

@@ -1,0 +1,32 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Global stylesheet rules browser fixture</title>
+  </head>
+  <body>
+    <div style="position: relative; height: 200px">
+      <div
+        id="plain"
+        style="position: absolute; top: 0; left: 0; width: 10px; height: 10px"
+      ></div>
+      <div
+        id="declared"
+        class="transition-probe"
+        style="
+          position: absolute;
+          top: 0;
+          left: 20px;
+          width: 10px;
+          height: 10px;
+          transition: top 200ms linear;
+        "
+      ></div>
+    </div>
+    <ol data-sonner-toaster id="toaster">
+      <li>toast</li>
+    </ol>
+    <script type="module" src="./global-css-rules.ts"></script>
+  </body>
+</html>

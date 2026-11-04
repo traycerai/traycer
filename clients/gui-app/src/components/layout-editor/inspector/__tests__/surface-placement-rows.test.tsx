@@ -14,6 +14,7 @@ import {
   ReadingWidthRow,
   ResourceReadingsRow,
   SidebarSideRow,
+  SidebarStartCollapsedRow,
   SideStripViewRow,
   SurfaceAreaRows,
   TabOverflowRow,
@@ -399,6 +400,57 @@ describe("<SideStripViewRow /> (D8)", () => {
         name: "Reset side tab view to default: Tabs only",
       }),
     ).toBeNull();
+  });
+});
+
+describe("<SidebarStartCollapsedRow />", () => {
+  const SWITCH = { name: "Collapsed in new tasks" };
+  const REVERT = {
+    name: "Reset sidebar collapsed in new tasks to default: Off",
+  };
+
+  it("writes the store at rest, and offers a revert only while on", () => {
+    render(<SidebarStartCollapsedRow {...LIVE_ROW} />);
+    expect(
+      screen.getByRole("switch", SWITCH).getAttribute("aria-checked"),
+    ).toBe("false");
+    expect(screen.queryByRole("button", REVERT)).toBeNull();
+
+    fireEvent.click(screen.getByRole("switch", SWITCH));
+
+    expect(useLayoutStore.getState().arrangement.sidebarStartCollapsed).toBe(
+      true,
+    );
+    expect(historyDepth()).toBe(0);
+
+    fireEvent.click(screen.getByRole("button", REVERT));
+    expect(useLayoutStore.getState().arrangement.sidebarStartCollapsed).toBe(
+      false,
+    );
+    expect(screen.queryByRole("button", REVERT)).toBeNull();
+  });
+
+  it("is one undo step in a session, and Discard puts it back", () => {
+    beginSession();
+    render(<SidebarStartCollapsedRow {...LIVE_ROW} />);
+
+    fireEvent.click(screen.getByRole("switch", SWITCH));
+    expect(historyDepth()).toBe(1);
+
+    useLayoutEditorStore.getState().undo();
+    expect(useLayoutStore.getState().arrangement.sidebarStartCollapsed).toBe(
+      false,
+    );
+
+    useLayoutEditorStore.getState().redo();
+    expect(useLayoutStore.getState().arrangement.sidebarStartCollapsed).toBe(
+      true,
+    );
+
+    useLayoutEditorStore.getState().discard();
+    expect(useLayoutStore.getState().arrangement.sidebarStartCollapsed).toBe(
+      false,
+    );
   });
 });
 
@@ -1004,6 +1056,7 @@ describe("in the installed mobile app", () => {
         "Placement",
         "Tab overflow",
         "Side",
+        "Collapsed in new tasks",
         "Readings on agent rows",
         "Reading width",
       ]) {

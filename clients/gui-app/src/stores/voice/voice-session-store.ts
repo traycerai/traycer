@@ -1,5 +1,6 @@
 import { create } from "zustand";
 import type { VoiceEngine } from "@/lib/voice/engine";
+import type { RouteSeen } from "@/lib/voice/miss-report";
 import type { QueueVerb, QueueVerbOutcome } from "@/lib/voice/queue-verbs";
 import type { SpeechActivity } from "@/lib/voice/scheduler";
 
@@ -155,15 +156,17 @@ export interface VoiceTargetTuple {
 }
 
 /**
- * A routed post the voice confirms before sending: the router was unsure of
- * the destination, or it is a team's channel other than the focus. The words
- * stay the action's; the person's next answer is consumed by it (yes posts
- * them, anything else drops them) and is never posted itself.
+ * A routed decision the voice confirms before carrying it out: a post whose
+ * destination the router was unsure of or that is a team's channel other than
+ * the focus, or a page action that costs or cannot be undone. The words stay
+ * the action's; the person's next answer is consumed by it (yes carries it
+ * out, anything else drops it) and is never posted itself.
  */
 export interface ConfirmingAction {
   readonly kind: "confirming";
-  readonly target: VoiceTargetTuple;
-  /** The words that post on a yes, verbatim. */
+  /** Where a post goes; `null` for a page action, which goes to no bot. */
+  readonly target: VoiceTargetTuple | null;
+  /** The words a yes passes on, verbatim; empty for an action that takes none. */
   readonly text: string;
   /** The delegation of the request being confirmed. */
   readonly delegationId: string;
@@ -328,7 +331,9 @@ export type VoiceEndReason =
   /** A call or another app took the sound while the session was live. */
   | "interrupted"
   /** The voice's sound could not be played, so nothing could be heard. */
-  | "playback";
+  | "playback"
+  /** Another account took over the window; the session was the outgoing one's. */
+  | "account";
 
 /** Why a session never began; nothing ended, so this is not a `VoiceEndReason`. */
 export type VoiceRefusal =
@@ -417,6 +422,12 @@ export interface VoiceSessionState {
   readonly pendingAction: PendingAction | null;
   /** The one card the voice is reading back and acting on; `null` for none. */
   readonly activeCard: ActiveCard | null;
+  /**
+   * The route of the last page action the voice carried out, while the strip
+   * offers Not what I meant for it: until the person's next request, their
+   * press, or the session's end.
+   */
+  readonly executedAct: RouteSeen | null;
   readonly captions: boolean;
   readonly captionLines: ReadonlyArray<CaptionLine>;
   /**
@@ -521,6 +532,7 @@ export interface VoiceSessionState {
   readonly setQueue: (queue: ReadonlyArray<QueueItem>) => void;
   readonly setPendingAction: (action: PendingAction | null) => void;
   readonly setActiveCard: (card: ActiveCard | null) => void;
+  readonly setExecutedAct: (seen: RouteSeen | null) => void;
   readonly setCaptions: (on: boolean) => void;
   readonly pushCaptionLine: (line: CaptionDelta) => void;
   readonly acquireDictationHold: (owner: string) => void;
@@ -576,6 +588,7 @@ function idleSession(state: VoiceSessionState): Partial<VoiceSessionState> {
     queue: NO_QUEUE,
     pendingAction: null,
     activeCard: null,
+    executedAct: null,
     captionLines: NO_CAPTIONS,
     muted: false,
     pushToTalk: false,
@@ -603,6 +616,7 @@ export const useVoiceSessionStore = create<VoiceSessionState>()((set, get) => ({
   queue: NO_QUEUE,
   pendingAction: null,
   activeCard: null,
+  executedAct: null,
   captions: false,
   captionLines: NO_CAPTIONS,
   pausedForDictation: false,
@@ -731,6 +745,10 @@ export const useVoiceSessionStore = create<VoiceSessionState>()((set, get) => ({
   setQueue: (queue) => set({ queue }),
   setPendingAction: (pendingAction) => set({ pendingAction }),
   setActiveCard: (activeCard) => set({ activeCard }),
+  setExecutedAct: (executedAct) => {
+    if (get().executedAct === executedAct) return;
+    set({ executedAct });
+  },
   setCaptions: (captions) =>
     set({
       captions,

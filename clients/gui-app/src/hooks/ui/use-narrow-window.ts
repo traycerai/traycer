@@ -1,4 +1,5 @@
 import * as React from "react";
+import { isPhoneLayoutOnly } from "@/lib/mobile-app";
 
 /**
  * WIDTH signal, and only width: "is the window narrower than the mobile
@@ -42,6 +43,7 @@ export function subscribeToMobileQuery(onChange: () => void): () => void {
  * six rotations delivered `change` against a stale width.
  */
 export function readIsNarrowWindowSnapshot(): boolean {
+  if (isPhoneLayoutOnly()) return true;
   return window.matchMedia(MOBILE_QUERY).matches;
 }
 

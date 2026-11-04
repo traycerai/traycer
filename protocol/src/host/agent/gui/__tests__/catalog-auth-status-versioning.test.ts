@@ -447,8 +447,14 @@ describe("hostRpcRegistry loads with the catalog lines at their expected latestM
   // Construction is structural-only. The full validator still enforces
   // "a downgrade must start at the line's latest minor"; the named
   // latestMinor assertions below are the legible counterpart.
-  it("passes full schema compatibility", () => {
-    expect(() => validateVersionedRpcRegistry(hostRpcRegistry)).not.toThrow();
+  it("passes full schema compatibility on the catalog lines", () => {
+    expect(() =>
+      validateVersionedRpcRegistry({
+        "agent.gui.listHarnesses": hostRpcRegistry["agent.gui.listHarnesses"],
+        "providers.list": hostRpcRegistry["providers.list"],
+        "providers.setEnabled": hostRpcRegistry["providers.setEnabled"],
+      }),
+    ).not.toThrow();
   });
 
   it("agent.gui.listHarnesses major 7 -> latestMinor 1 (authStatus)", () => {

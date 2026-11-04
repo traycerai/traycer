@@ -278,7 +278,7 @@ function ComposerEditorFrame(props: {
       data-layout-passive
       className={cn(
         focusRow
-          ? "relative min-w-0 flex-1 px-3 [&_[data-composer-editor]]:max-h-10 [&_[data-composer-editor]]:py-2"
+          ? "relative min-w-0 flex-1 px-3 [&_[data-composer-editor]]:max-h-10 [&_[data-composer-editor]]:py-2 [&_[data-composer-editor]]:no-scrollbar"
           : "px-4 pt-4",
         expanded &&
           "min-h-0 flex-1 overflow-y-auto overscroll-y-contain [&_[data-composer-editor]]:max-h-none",
@@ -294,6 +294,28 @@ function ComposerEditorFrame(props: {
       {focusRow ? props.draftGrabber : null}
     </div>
   );
+}
+
+let containerTrapsFixed: boolean | null = null;
+
+/**
+ * Whether this engine's size containers are containing blocks for `fixed` boxes,
+ * which Chromium stopped doing after WebView 113 and an un-updated Android image
+ * still does. The open sheet's slot would size against the card and collapse, so
+ * there the card stops being a container while the sheet is open.
+ */
+function containerTrapsFixedBoxes(): boolean {
+  if (containerTrapsFixed !== null) return containerTrapsFixed;
+  const container = document.createElement("div");
+  container.style.cssText =
+    "container-type:inline-size;position:absolute;width:1px;height:1px;visibility:hidden";
+  const fixed = document.createElement("div");
+  fixed.style.cssText = "position:fixed;left:0;right:0";
+  container.append(fixed);
+  document.body.append(container);
+  containerTrapsFixed = fixed.getBoundingClientRect().width === 1;
+  container.remove();
+  return containerTrapsFixed;
 }
 
 export interface ComposerAreaProps {
@@ -467,7 +489,11 @@ function ComposerShellImpl(props: ComposerShellProps) {
     <ComposerNarrowProvider isNarrow={isNarrow}>
       <div
         ref={narrowRef}
-        className="@container"
+        className={cn(
+          "@container",
+          containerTrapsFixedBoxes() &&
+            "has-[[data-composer-expanded]]:[container-type:normal]",
+        )}
         onDragOver={onDragOver}
         onDrop={onDrop}
         onDragEnter={onDragEnter}

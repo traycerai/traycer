@@ -13,7 +13,6 @@ export {
 export {
   filterCollaborators,
   useStableCollaboratorRef,
-  deriveInitials,
   type FilterCollaboratorsOptions,
 } from "./mention-utils";
 

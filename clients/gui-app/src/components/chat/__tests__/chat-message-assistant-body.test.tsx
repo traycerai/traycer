@@ -19,6 +19,8 @@ import {
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { formatMessageTimeWithSeconds } from "@/lib/relative-time";
 import type { AutonomousResumeTrigger } from "@traycer/protocol/persistence/epic/content-blocks";
+import { useSubagentOpenStore } from "@/stores/chats/subagent-open-store";
+import { useDesktopDialogStore } from "@/stores/dialogs/desktop-dialog-store";
 import type {
   AssistantTurnMeta,
   ChatMessageRunState,
@@ -46,6 +48,9 @@ afterEach(() => {
   restoreClipboardMock();
   restoreClipboardMock = () => undefined;
   cleanup();
+  useDesktopDialogStore.getState().close();
+  useSubagentOpenStore.getState().reset("assistant-body-test-tile");
+  useDesktopDialogStore.setState({ reportIssueAvailable: false });
 });
 
 interface ClipboardMock {
@@ -116,6 +121,7 @@ const MCP_FAILED_RESUME_SEGMENT: MessageSegment = {
 const ERROR_SEGMENT: MessageSegment = {
   id: "seg-2",
   kind: "error",
+  hostTimestamp: null,
   message: "The provider stream ended unexpectedly.",
   recoverable: true,
   code: "PROVIDER_STREAM_ERROR",
@@ -641,6 +647,74 @@ describe("AssistantMessageBody stopped turn rendering", () => {
     );
 
     expect(screen.queryByTestId("assistant-elapsed-footer")).toBeNull();
+  });
+
+  it("hands its row's turn to a non-anchor error segment's report", () => {
+    useDesktopDialogStore.setState({ reportIssueAvailable: true });
+    render(
+      <AssistantMessageBody
+        turnId="turn:x"
+        {...bodyProps({
+          segments: [
+            {
+              id: "seg-host-row",
+              kind: "error",
+              message: "Boom",
+              recoverable: false,
+              code: null,
+              failure: null,
+              hostTimestamp: 1_700_000_123_456,
+            },
+          ],
+        })}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Report issue" }));
+    const cause =
+      useDesktopDialogStore.getState().reportIssueDraftContext
+        ?.privateDiagnostics.cause;
+
+    expect(cause?.turnId).toBe("turn:x");
+    expect(cause?.hostTimestamp).toBe(1_700_000_123_456);
+  });
+
+  it("hands its row's turn to an error nested inside a subagent card's conversation", () => {
+    useDesktopDialogStore.setState({ reportIssueAvailable: true });
+    render(
+      <AssistantMessageBody
+        turnId="turn:x"
+        {...bodyProps({
+          segments: [
+            {
+              ...PROMOTED_SUBAGENT_SEGMENT,
+              children: [
+                {
+                  id: "nested-error",
+                  kind: "error",
+                  message: "Nested boom",
+                  recoverable: false,
+                  code: null,
+                  failure: null,
+                  hostTimestamp: 1_700_000_456_789,
+                  parentId: PROMOTED_SUBAGENT_SEGMENT.id,
+                },
+              ],
+            },
+          ],
+        })}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Subagent" }));
+    fireEvent.click(screen.getByRole("button", { name: "Report issue" }));
+    const cause =
+      useDesktopDialogStore.getState().reportIssueDraftContext
+        ?.privateDiagnostics.cause;
+
+    expect(cause?.message).toBe("Nested boom");
+    expect(cause?.turnId).toBe("turn:x");
+    expect(cause?.hostTimestamp).toBe(1_700_000_456_789);
   });
 
   it("surfaces the stop reason and time in the elapsed footer's tooltip", async () => {

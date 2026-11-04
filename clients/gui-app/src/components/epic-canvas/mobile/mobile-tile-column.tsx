@@ -1,3 +1,4 @@
+import { MobileTileColumnToggle } from "@/components/epic-canvas/mobile/mobile-tile-column-toggle";
 import { TileSwitcherList } from "@/components/epic-canvas/mobile/tile-switcher-list";
 import { MobileLevel2Column } from "@/components/layout/shell/mobile-level2";
 import { useEpicTitle } from "@/lib/epic-selectors";
@@ -8,7 +9,8 @@ function stayOpen(): void {}
 
 /**
  * The task's tiles beside the content, at the width the resolver answered, and
- * nothing in a form that has no column.
+ * nothing in a form that has no column. Its category row ends in the control
+ * that folds it into the menu.
  */
 export function MobileTileColumn(props: {
   readonly epicId: string;
@@ -36,7 +38,12 @@ function MobileTileColumnBody(props: {
         data-mobile-shell-touch-scope=""
         className="flex min-h-0 flex-1 flex-col"
       >
-        <TileSwitcherList epicId={epicId} tabId={tabId} onClose={stayOpen} />
+        <TileSwitcherList
+          epicId={epicId}
+          tabId={tabId}
+          onClose={stayOpen}
+          trailing={<MobileTileColumnToggle offered />}
+        />
       </nav>
     </MobileLevel2Column>
   );

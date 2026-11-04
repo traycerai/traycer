@@ -375,20 +375,27 @@ describe("R6F1: the cross-account identity teardown drops the outgoing account's
       </EpicSessionLifecycleBridge>,
     );
 
-    act(() => {
-      resetAuth("signed-out", null, null);
-    });
+    // Installed BEFORE the transition: the handoff arms its resolution
+    // deadline during it, so that timer must already be a fake one.
+    vi.useFakeTimers();
+    try {
+      act(() => {
+        resetAuth("signed-out", null, null);
+      });
 
-    // Immediately after the transition: not present.
-    expect(draftsContainText(TEXT)).toBe(false);
+      // Immediately after the transition: not present.
+      expect(draftsContainText(TEXT)).toBe(false);
 
-    // AND it stays absent past the handoff's own resolution window - the
-    // handoff is async/fire-and-forget, so a check right after the
-    // transition alone would not catch a leak that lands seconds later.
-    await new Promise((resolve) =>
-      setTimeout(resolve, HANDOFF_IMAGE_RESOLUTION_TIMEOUT_MS + 500),
-    );
-    expect(draftsContainText(TEXT)).toBe(false);
+      // AND it stays absent past the handoff's own resolution window - the
+      // handoff is async/fire-and-forget, so a check right after the
+      // transition alone would not catch a leak that lands seconds later.
+      await vi.advanceTimersByTimeAsync(
+        HANDOFF_IMAGE_RESOLUTION_TIMEOUT_MS + 500,
+      );
+      expect(draftsContainText(TEXT)).toBe(false);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("a user-switch never installs the outgoing account's prompt as a draft, even after the handoff's own timeout (DRIVE RED)", async () => {
@@ -419,14 +426,19 @@ describe("R6F1: the cross-account identity teardown drops the outgoing account's
       </EpicSessionLifecycleBridge>,
     );
 
-    act(() => {
-      resetAuth("signed-in", "bob@example.com", "user-bob-r6f1");
-    });
+    vi.useFakeTimers();
+    try {
+      act(() => {
+        resetAuth("signed-in", "bob@example.com", "user-bob-r6f1");
+      });
 
-    await new Promise((resolve) =>
-      setTimeout(resolve, HANDOFF_IMAGE_RESOLUTION_TIMEOUT_MS + 500),
-    );
-    expect(draftsContainText(TEXT)).toBe(false);
+      await vi.advanceTimersByTimeAsync(
+        HANDOFF_IMAGE_RESOLUTION_TIMEOUT_MS + 500,
+      );
+      expect(draftsContainText(TEXT)).toBe(false);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("positive control: an ORDINARY disposal (not an identity transition) still installs the prompt normally", async () => {
@@ -447,14 +459,16 @@ describe("R6F1: the cross-account identity teardown drops the outgoing account's
 
     // No bridge, no identity transition - a bare disposal, exactly like a
     // warm-cap eviction or an idle-expiry teardown.
-    harness.handle.dispose();
-
-    await vi.waitFor(
-      () => {
+    vi.useFakeTimers();
+    try {
+      harness.handle.dispose();
+      await vi.advanceTimersByTimeAsync(HANDOFF_IMAGE_RESOLUTION_TIMEOUT_MS);
+      await vi.waitFor(() => {
         expect(draftsContainText(TEXT)).toBe(true);
-      },
-      { timeout: HANDOFF_IMAGE_RESOLUTION_TIMEOUT_MS * 2 + 2_000 },
-    );
+      });
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });
 
@@ -489,23 +503,29 @@ describe("R7F1: a capture already in flight when the account changes is fenced b
     // ORDINARY disposal - a closed tab, NOT an identity teardown. The
     // synchronous flag is false throughout, which is the whole point: this is
     // the case it cannot see.
-    imageResolver.hold = true;
-    harness.handle.dispose();
-    await waitForHeldRead();
+    // Installed BEFORE the disposal, which arms the handoff's deadline.
+    vi.useFakeTimers();
+    try {
+      imageResolver.hold = true;
+      harness.handle.dispose();
+      await waitForHeldRead();
 
-    // The account changes while that read is still outstanding.
-    act(() => {
-      resetAuth("signed-out", null, null);
-    });
+      // The account changes while that read is still outstanding.
+      act(() => {
+        resetAuth("signed-out", null, null);
+      });
 
-    // Only now does the read return, and the save would run under the NEW
-    // identity with the OLD account's prompt in hand.
-    imageResolver.deferred?.resolve();
-    await new Promise((resolve) =>
-      setTimeout(resolve, HANDOFF_IMAGE_RESOLUTION_TIMEOUT_MS + 500),
-    );
+      // Only now does the read return, and the save would run under the NEW
+      // identity with the OLD account's prompt in hand.
+      imageResolver.deferred?.resolve();
+      await vi.advanceTimersByTimeAsync(
+        HANDOFF_IMAGE_RESOLUTION_TIMEOUT_MS + 500,
+      );
 
-    expect(draftsContainText(TEXT)).toBe(false);
+      expect(draftsContainText(TEXT)).toBe(false);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("positive control: the same in-flight capture DOES install when no identity change happens", async () => {

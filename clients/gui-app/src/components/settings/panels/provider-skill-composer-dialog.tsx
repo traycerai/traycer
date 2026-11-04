@@ -24,12 +24,15 @@ import type { SkillsMutateData } from "@/hooks/providers/native-response-map";
 import { cn } from "@/lib/utils";
 import { submitComposer } from "./provider-skill-composer-flow";
 import {
+  previewSkillMd,
   skillBodyScaffold,
   skillDestination,
   skillFilePath,
   skillNameError,
   skillSubmitBlocker,
   SKILL_DESCRIPTION_SOFT_LIMIT,
+  type ServedSkillEnvironment,
+  type SkillAudience,
   type SkillAuthoring,
   type SkillComposerStep,
 } from "./provider-skill-composer-model";
@@ -51,11 +54,21 @@ export function ProviderSkillComposerDialog(props: {
   readonly listScope: ProviderNativeScope;
   /** The provider's own skills root, when the listing has revealed it. */
   readonly providerRoot: string | null;
-  readonly canProviderScope: boolean;
+  /** What "Available to" offers, the default first. */
+  readonly audiences: readonly SkillAudience[];
+  /** What the "environment" audience writes to; `null` where none is offered. */
+  readonly environment: ServedSkillEnvironment | null;
   readonly pending: boolean;
   readonly onMutate: (
     mutation: ProvidersSkillsMutateAction,
   ) => Promise<SkillsMutateData>;
+  /** A written skill into the environment; the refusal to show, or `null`. */
+  readonly onEnvironmentWrite: (skill: {
+    readonly name: string;
+    readonly markdown: string;
+  }) => Promise<string | null>;
+  /** Hands this source to the environment's import, which reads it from here. */
+  readonly onEnvironmentImport: (source: string) => void;
   readonly onClose: () => void;
 }): ReactNode {
   const draft = useComposerDraft(props);
@@ -152,9 +165,11 @@ export function ProviderSkillComposerDialog(props: {
           {draft.showScope ? (
             <SkillScopeFieldset
               providerLabel={props.providerLabel}
-              providerScoped={draft.effectiveProviderScoped}
+              audiences={props.audiences}
+              environment={props.environment}
+              audience={draft.effectiveAudience}
               disabled={props.pending}
-              onChange={draft.setProviderScoped}
+              onChange={draft.setAudience}
             />
           ) : null}
         </div>
@@ -211,11 +226,17 @@ function useComposerDraft(props: {
   readonly listScope: ProviderNativeScope;
   readonly providerLabel: string;
   readonly providerRoot: string | null;
-  readonly canProviderScope: boolean;
+  readonly audiences: readonly SkillAudience[];
+  readonly environment: ServedSkillEnvironment | null;
   readonly pending: boolean;
   readonly onMutate: (
     mutation: ProvidersSkillsMutateAction,
   ) => Promise<SkillsMutateData>;
+  readonly onEnvironmentWrite: (skill: {
+    readonly name: string;
+    readonly markdown: string;
+  }) => Promise<string | null>;
+  readonly onEnvironmentImport: (source: string) => void;
   readonly onClose: () => void;
 }) {
   const [mode, setMode] = useState<"import" | "write">(
@@ -225,7 +246,7 @@ function useComposerDraft(props: {
   const [description, setDescription] = useState("");
   const [body, setBody] = useState(skillBodyScaffold);
   const [source, setSource] = useState("");
-  const [providerScoped, setProviderScoped] = useState(false);
+  const [audience, setAudience] = useState<SkillAudience | null>(null);
   const [inspectSession, setInspectSession] = useState<{
     readonly token: string;
     readonly candidates: readonly ProviderSkillInspectCandidate[];
@@ -235,7 +256,12 @@ function useComposerDraft(props: {
   const [error, setError] = useState<string | null>(null);
 
   const step: SkillComposerStep = inspectSession !== null ? "picker" : mode;
-  const effectiveProviderScoped = props.canProviderScope && providerScoped;
+  // The picked audience while it is on offer: the list of what is offered can
+  // change under an open composer as the host's answers arrive.
+  const effectiveAudience: SkillAudience =
+    audience !== null && props.audiences.includes(audience)
+      ? audience
+      : (props.audiences[0] ?? "provider");
   const nameError = useMemo(() => skillNameError(name), [name]);
   const blocker = skillSubmitBlocker({
     step,
@@ -245,13 +271,32 @@ function useComposerDraft(props: {
     selectedNames,
   });
   const destination = skillDestination({
-    providerScoped: effectiveProviderScoped,
+    audience: effectiveAudience,
     providerLabel: props.providerLabel,
     providerRoot: props.providerRoot,
+    environmentName: props.environment?.name ?? null,
   });
-  const showScope = step !== "picker" && props.canProviderScope;
+  const showScope = step !== "picker" && props.audiences.length > 1;
 
   function onSubmit(): void {
+    if (effectiveAudience === "environment") {
+      if (props.pending || blocker !== null) return;
+      if (step === "import") {
+        props.onEnvironmentImport(source.trim());
+        return;
+      }
+      setError(null);
+      void props
+        .onEnvironmentWrite({
+          name: name.trim(),
+          markdown: previewSkillMd({ name, description, body }),
+        })
+        .then((refusal) => {
+          if (refusal === null) props.onClose();
+          else setError(refusal);
+        });
+      return;
+    }
     void submitComposer({
       step,
       pending: props.pending,
@@ -261,7 +306,7 @@ function useComposerDraft(props: {
         name,
         description,
         body,
-        providerScoped: effectiveProviderScoped,
+        providerScoped: effectiveAudience === "provider",
         selectedNames,
         inspectSession,
         canInspect: props.authoring.canInspect,
@@ -301,8 +346,8 @@ function useComposerDraft(props: {
     pickerNote,
     error,
     step,
-    effectiveProviderScoped,
-    setProviderScoped,
+    effectiveAudience,
+    setAudience,
     destination,
     showScope,
     blocker,
@@ -710,65 +755,83 @@ function DestinationLine({
   );
 }
 
+/** The words of one "Available to" choice. */
+function audienceCopy(
+  audience: SkillAudience,
+  providerLabel: string,
+  environment: ServedSkillEnvironment | null,
+): { readonly title: string; readonly detail: string } | null {
+  switch (audience) {
+    case "shared":
+      return {
+        title: "Every provider",
+        detail:
+          "Stored once in the shared skills folder and picked up by any agent that reads it.",
+      };
+    case "provider":
+      return {
+        title: `${providerLabel} only`,
+        detail: `Stored in ${providerLabel}'s own skills folder.`,
+      };
+    case "environment":
+      if (environment === null) return null;
+      return {
+        title: environment.name,
+        detail: `Stored in ${environment.name} and reaches every provider on ${
+          environment.team ? "every member's hosts" : "every host of yours"
+        }.`,
+      };
+  }
+}
+
 function SkillScopeFieldset({
   providerLabel,
-  providerScoped,
+  audiences,
+  environment,
+  audience,
   disabled,
   onChange,
 }: {
   readonly providerLabel: string;
-  readonly providerScoped: boolean;
+  readonly audiences: readonly SkillAudience[];
+  readonly environment: ServedSkillEnvironment | null;
+  readonly audience: SkillAudience;
   readonly disabled: boolean;
-  readonly onChange: (providerScoped: boolean) => void;
+  readonly onChange: (audience: SkillAudience) => void;
 }): ReactNode {
   return (
     <fieldset className="flex flex-col gap-1.5">
       <legend className="text-ui-sm font-medium text-foreground">
         Available to
       </legend>
-      <label
-        className={cn(
-          "flex items-start gap-2 text-ui-sm text-foreground",
-          disabled ? "opacity-60" : null,
-        )}
-      >
-        <input
-          type="radio"
-          name="skill-composer-scope"
-          className="mt-1"
-          checked={!providerScoped}
-          onChange={() => onChange(false)}
-          disabled={disabled}
-        />
-        <span className="min-w-0">
-          Every provider
-          <span className="block text-ui-xs text-muted-foreground">
-            Stored once in the shared skills folder and picked up by any agent
-            that reads it.
-          </span>
-        </span>
-      </label>
-      <label
-        className={cn(
-          "flex items-start gap-2 text-ui-sm text-foreground",
-          disabled ? "opacity-60" : null,
-        )}
-      >
-        <input
-          type="radio"
-          name="skill-composer-scope"
-          className="mt-1"
-          checked={providerScoped}
-          onChange={() => onChange(true)}
-          disabled={disabled}
-        />
-        <span className="min-w-0">
-          {providerLabel} only
-          <span className="block text-ui-xs text-muted-foreground">
-            Stored in {providerLabel}&apos;s own skills folder.
-          </span>
-        </span>
-      </label>
+      {audiences.map((choice) => {
+        const copy = audienceCopy(choice, providerLabel, environment);
+        if (copy === null) return null;
+        return (
+          <label
+            key={choice}
+            className={cn(
+              "flex items-start gap-2 text-ui-sm text-foreground",
+              disabled ? "opacity-60" : null,
+            )}
+          >
+            <input
+              type="radio"
+              name="skill-composer-scope"
+              className="mt-1"
+              checked={audience === choice}
+              onChange={() => onChange(choice)}
+              disabled={disabled}
+            />
+            <span className="min-w-0">
+              {copy.title}
+              <span className="block text-ui-xs text-muted-foreground">
+                {copy.detail}
+              </span>
+            </span>
+          </label>
+        );
+      })}
     </fieldset>
   );
 }

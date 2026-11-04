@@ -253,7 +253,8 @@
     "@tiptap/extension-list@3.30.1": "patches/@tiptap%2Fextension-list@3.30.1.patch",
     "@tiptap/core@3.30.1": "patches/@tiptap%2Fcore@3.30.1.patch",
     "@tiptap/markdown@3.30.1": "patches/@tiptap%2Fmarkdown@3.30.1.patch",
-    "@tiptap/extension-code-block@3.30.1": "patches/@tiptap%2Fextension-code-block@3.30.1.patch"
+    "@tiptap/extension-code-block@3.30.1": "patches/@tiptap%2Fextension-code-block@3.30.1.patch",
+    "@capacitor/push-notifications@8.1.2": "patches/@capacitor%2Fpush-notifications@8.1.2.patch"
   },
   "trustedDependencies": [
     "electron"

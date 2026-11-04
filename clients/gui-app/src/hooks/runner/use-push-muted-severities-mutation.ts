@@ -54,7 +54,7 @@ export function usePushMutedSeveritiesMutation(): PushMutedSeveritiesMutation {
       }),
     onError: (error, change) => {
       if (signedInUserId() !== change.userId) return;
-      toastFromRunnerError(error, "Couldn't change this phone's notifications");
+      toastFromRunnerError(error, "Couldn't change push notifications");
     },
   });
 }

@@ -1,0 +1,3 @@
+{
+  "browser-tests/chat-scroll-overlap.spec.ts › picking the same turns across evict-and-rehydrate cycles keeps every row apart": "The bug is cumulative: each evict-and-rehydrate cycle pulled the list's running size average down by about a turn's height until it reached zero, so the 12 cycles are the claim, and the watch samples every row on every frame of them."
+}

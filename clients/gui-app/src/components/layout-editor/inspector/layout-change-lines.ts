@@ -394,6 +394,7 @@ const FIELD_LABELS: Readonly<Record<ArrangementField, string>> = {
   readingWidth: "Reading width",
   wideReadingWidthPx: "Wide column width",
   sidebarSide: "Sidebar side",
+  sidebarStartCollapsed: "Sidebar collapsed in new tasks",
   minimapSide: "Minimap side",
   usageHost: "Usage limits location",
   usageSide: "Usage limits alignment",
@@ -413,6 +414,7 @@ const FIELD_OPTIONS: Readonly<
   // rather than looking it up here.
   wideReadingWidthPx: [],
   sidebarSide: EDGE_SIDE_OPTIONS,
+  sidebarStartCollapsed: [],
   minimapSide: EDGE_SIDE_OPTIONS,
   usageHost: BAR_HOST_OPTIONS,
   usageSide: EDGE_SIDE_OPTIONS,

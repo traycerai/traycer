@@ -22,6 +22,7 @@ import {
   bundledBuildReloadClient,
   resolveBundledDevelopment,
 } from "./scripts/bundled-build-reload";
+import { phoneTiersAtEveryWidth } from "./scripts/phone-tier-css";
 import { sentryDsnFromEnv } from "./scripts/sentry-dsn";
 
 // Dev-server endpoint that re-reads the host's pid.json on every request. The
@@ -480,6 +481,7 @@ export default defineConfig(async (): Promise<UserConfig> => {
         generatedRouteTree: resolve(guiAppRoot, "src", "routeTree.gen.ts"),
       }),
       react(),
+      phoneTiersAtEveryWidth(),
       tailwindcss(),
       pdfjsAssets(),
       sandboxAssets(),

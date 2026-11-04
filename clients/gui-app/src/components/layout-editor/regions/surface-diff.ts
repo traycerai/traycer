@@ -123,7 +123,9 @@ const SURFACE_FIELDS_CHANGED: Readonly<
     sideStripViewChanged(arrangement, DEFAULT_ARRANGEMENT) ||
     arrangement.taskTabLayout !== DEFAULT_ARRANGEMENT.taskTabLayout,
   sidebar: (arrangement) =>
-    sidebarSideChanged(arrangement, DEFAULT_ARRANGEMENT),
+    sidebarSideChanged(arrangement, DEFAULT_ARRANGEMENT) ||
+    arrangement.sidebarStartCollapsed !==
+      DEFAULT_ARRANGEMENT.sidebarStartCollapsed,
   chat: (arrangement) =>
     arrangement.minimapSide !== DEFAULT_ARRANGEMENT.minimapSide ||
     arrangement.readingWidth !== DEFAULT_ARRANGEMENT.readingWidth ||

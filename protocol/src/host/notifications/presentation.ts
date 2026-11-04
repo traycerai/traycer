@@ -3,6 +3,7 @@ import {
   type HostNotificationOutcome,
 } from "@traycer/protocol/host/notifications/host-notifications";
 import {
+  HOST_NOTIFICATION_LONG_TURN_REASON,
   deriveHostNotificationStoppedReason,
   parseHostOperationCommonPayload,
   parseKnownHostNotificationPayloadForKind,
@@ -1233,6 +1234,9 @@ function agentStalledStatus(
     // an older host simply renders the generic status below.
     case "fallback_pending":
       return "Trying a fallback provider";
+    // Open text as well: a client that predates this arm reads "Stalled".
+    case HOST_NOTIFICATION_LONG_TURN_REASON:
+      return "Running longer than the time you set";
     default:
       return "Stalled";
   }

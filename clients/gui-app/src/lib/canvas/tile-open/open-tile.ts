@@ -21,7 +21,11 @@ import { useSettingsStore } from "@/stores/settings/settings-store";
 import type { PipOrigin } from "@/lib/browser-view/pip/pip-store";
 import { executeTileOpen } from "./execute-tile-open";
 import type { EpicCanvasState } from "@/stores/epics/canvas/types";
-import type { MobileTileOpenSlots, TileOpenIntent } from "./intent";
+import {
+  defaultMobileTileSlot,
+  type MobileTileOpenSlots,
+  type TileOpenIntent,
+} from "./intent";
 import type { MobileTileOpenTarget } from "./mobile-tile-open-target-context";
 import { resolveTileOpen } from "./resolve-tile-open";
 import { markTileOpenRequested } from "./tile-open-provenance";
@@ -68,11 +72,14 @@ export const MANUAL_TILE_OPEN: OpenTileOptions = {
 /**
  * The slots, where two tiles fit, of the task on screen: an open into a task
  * behind another tab has to bring its tile forward there, and has no pair on
- * screen to keep. A surface's target speaks for its own task's canvas only.
+ * screen to keep. A surface's target speaks for its own task's canvas only;
+ * an open from anywhere else (the task's list, a palette) lands where the
+ * tile's kind says.
  */
 function mobileSlotsForOpen(
   canvas: EpicCanvasState,
   tabId: string,
+  intent: TileOpenIntent,
   mobileTarget: MobileTileOpenTarget | null,
 ): MobileTileOpenSlots | null {
   const store = useEpicCanvasStore.getState();
@@ -84,7 +91,10 @@ function mobileSlotsForOpen(
     primary,
   );
   return {
-    target: mobileTarget?.tabId === tabId ? mobileTarget.slot : "primary",
+    target:
+      mobileTarget?.tabId === tabId
+        ? mobileTarget.slot
+        : defaultMobileTileSlot(intent.node),
     primaryInstanceId: primary?.ref.instanceId ?? null,
     secondaryInstanceId: secondary?.ref.instanceId ?? null,
   };
@@ -116,7 +126,12 @@ export function openTileWithNavigation(
     // Imperative reads: a placement decision is command-time, so it must not
     // pin this call to a viewport snapshot.
     singleTileViewport: isMobileViewport(),
-    mobileSlots: mobileSlotsForOpen(canvas, tabId, options.mobileTarget),
+    mobileSlots: mobileSlotsForOpen(
+      canvas,
+      tabId,
+      intent,
+      options.mobileTarget,
+    ),
   });
   // And the tile the open actually LANDS ON, which for a dedupe hit is not the
   // one the intent named. Every caller mints a fresh instance id per intent,
@@ -126,8 +141,8 @@ export function openTileWithNavigation(
   // that does mount reads `false` - an explicit Open of a sleeping agent that
   // leaves it asleep.
   //
-  // Marked IN ADDITION to the line above rather than instead of it: for every
-  // other plan kind the intent's instance is the one that mounts. `noop` (a
+  // Marked IN ADDITION to the line above rather than instead of it: for most
+  // other plan kinds the intent's instance is the one that mounts. `noop` (a
   // BACKGROUND open of an already-open tile) deliberately gets neither - it
   // changes nothing on the canvas by contract, and waking an agent is a
   // change.
@@ -140,7 +155,7 @@ export function openTileWithNavigation(
   ) {
     markTileOpenRequested(plan.existingInstanceId);
   }
-  return executeTileOpen({
+  const target = executeTileOpen({
     plan,
     node: intent.node,
     source: intent.source,
@@ -149,6 +164,12 @@ export function openTileWithNavigation(
     epicId: store.tabsById[tabId]?.epicId ?? null,
     pipOrigin: options.pipOrigin,
   });
+  // And again on the id it landed under: into a pane, the canvas mints one of
+  // its own, because a row's ref outlives one open.
+  if (target?.tileInstanceId !== undefined) {
+    markTileOpenRequested(target.tileInstanceId);
+  }
+  return target;
 }
 
 function resolveHeaderTabId(

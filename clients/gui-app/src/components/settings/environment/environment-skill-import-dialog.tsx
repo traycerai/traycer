@@ -111,12 +111,14 @@ export function EnvironmentSkillImportDialog(props: {
   readonly hostClient: HostClient<HostRpcRegistry> | null;
   /** The viewing host searches the public skills directory. */
   readonly searchable: boolean;
+  /** The source the dialog opens with, carried from another form. */
+  readonly initialSource: string;
   readonly onClose: () => void;
 }): ReactNode {
   const source = useConfigurationSource();
   const configuration = useConfigurationName();
   const { importSkills } = useEnvironmentSkillHostMutations(props.hostClient);
-  const [text, setText] = useState("");
+  const [text, setText] = useState(props.initialSource);
   const [inspected, setInspected] = useState<Inspected | null>(null);
   const [selected, setSelected] = useState<readonly string[]>([]);
   const [problem, setProblem] = useState<string | null>(null);

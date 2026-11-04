@@ -22,7 +22,11 @@ import {
   buildEnvironmentClient,
   environmentStatusFixture,
 } from "@/lib/environment/__tests__/environment-test-support";
-import { retireOnboardingReminder } from "@/lib/toast/onboarding-reminder-toast";
+import { setPhoneLayoutOnly } from "@/lib/mobile-app";
+import {
+  moveInvitationIsOutstanding,
+  retireOnboardingReminder,
+} from "@/lib/toast/onboarding-reminder-toast";
 import { useMoveSheetStore } from "@/stores/settings/move-sheet-store";
 import { useRetrospectiveSheetStore } from "@/stores/settings/retrospective-sheet-store";
 import { FirstTaskLandingGuide } from "@/components/onboarding/first-task-guide";
@@ -43,6 +47,7 @@ interface ToastOptions {
   readonly action: ToastButton | undefined;
   readonly cancel: ToastButton | undefined;
   readonly onDismiss: (() => void) | undefined;
+  readonly onAutoClose: (() => void) | undefined;
 }
 
 const toastState = vi.hoisted(() => {
@@ -390,6 +395,105 @@ describe("FirstTaskLandingGuide getting-started toast", () => {
     expect(useMoveSheetStore.getState().target).toEqual({
       hostId: "old",
       hostName: "Old laptop",
+    });
+  });
+
+  describe("on a phone on its side", () => {
+    const stubShortLandscape = (shortLandscape: boolean): void => {
+      vi.stubGlobal(
+        "matchMedia",
+        (
+          query: string,
+        ): Pick<
+          MediaQueryList,
+          "matches" | "addEventListener" | "removeEventListener"
+        > => ({
+          matches: query.includes("orientation: landscape") && shortLandscape,
+          addEventListener: () => undefined,
+          removeEventListener: () => undefined,
+        }),
+      );
+    };
+    const moveStatus = () =>
+      environmentStatusFixture({
+        planes: { records: "local", broker: "local", room: "local" },
+        consent: null,
+        pendingUploads: [],
+      });
+
+    beforeEach(() => {
+      setPhoneLayoutOnly(true);
+    });
+
+    afterEach(() => {
+      setPhoneLayoutOnly(false);
+      vi.unstubAllGlobals();
+    });
+
+    it("keeps the move invitation waiting in a short window on the desktop layout", async () => {
+      setPhoneLayoutOnly(false);
+      stubShortLandscape(true);
+      computerWithStatus(moveStatus());
+      renderGuide();
+
+      await waitFor(() =>
+        expect(toastState).toHaveBeenCalledWith(
+          "This computer's settings aren't in Personal.",
+          expect.objectContaining({ duration: Infinity }),
+        ),
+      );
+    });
+
+    it.each([
+      { shortLandscape: true, duration: 8000 },
+      { shortLandscape: false, duration: Infinity },
+    ])(
+      "gives the move invitation a duration of $duration when short landscape is $shortLandscape",
+      async ({ shortLandscape, duration }) => {
+        stubShortLandscape(shortLandscape);
+        computerWithStatus(moveStatus());
+        renderGuide();
+
+        await waitFor(() =>
+          expect(toastState).toHaveBeenCalledWith(
+            "This computer's settings aren't in Personal.",
+            expect.objectContaining({ duration }),
+          ),
+        );
+      },
+    );
+
+    it.each([
+      { shortLandscape: true, duration: 8000 },
+      { shortLandscape: false, duration: Infinity },
+    ])(
+      "gives the setup reminder a duration of $duration when short landscape is $shortLandscape",
+      async ({ shortLandscape, duration }) => {
+        stubShortLandscape(shortLandscape);
+        computerWithStatus(environmentStatusFixture({}));
+        renderGuide();
+
+        await waitFor(() =>
+          expect(toastState).toHaveBeenCalledWith(
+            "You're all set",
+            expect.objectContaining({ duration }),
+          ),
+        );
+      },
+    );
+
+    it("stops an expired invitation holding the reminder back, and records no answer", async () => {
+      stubShortLandscape(true);
+      computerWithStatus(moveStatus());
+      renderGuide();
+      await waitFor(() => expect(moveInvitationIsOutstanding()).toBe(true));
+      const [, options] =
+        toastState.mock.calls[toastState.mock.calls.length - 1];
+
+      act(() => options.onAutoClose?.());
+
+      expect(moveInvitationIsOutstanding()).toBe(false);
+      expect(useOnboardingStore.getState().setupReminderDismissed).toBe(false);
     });
   });
 

@@ -14,8 +14,10 @@ import { MobileTerminalKeyBar } from "@/components/epic-canvas/mobile/mobile-ter
 import { MobileEmptyPaneLevel2 } from "@/components/epic-canvas/mobile/mobile-empty-pane-level2";
 import { MobileTabSwitcherMount } from "@/components/epic-canvas/mobile/mobile-tab-switcher-mount";
 import { MobileTileColumn } from "@/components/epic-canvas/mobile/mobile-tile-column";
+import { MobileTileColumnToggle } from "@/components/epic-canvas/mobile/mobile-tile-column-toggle";
 import { MobileTileMenu } from "@/components/epic-canvas/mobile/mobile-tile-menu";
 import {
+  MobilePrimaryTileClose,
   MobileSecondaryTileClose,
   MobileTileOriginCrumb,
 } from "@/components/epic-canvas/mobile/mobile-tile-header-actions";
@@ -80,7 +82,7 @@ export function MobileEpicTileView(props: MobileEpicTileViewProps) {
   const { epicId, tabId } = props;
   const canvas = useEpicCanvas(tabId);
   const reading = useMobileTileReading(tabId);
-  const { level2, primary: selection } = reading;
+  const { level2, columnOffered, primary: selection } = reading;
   // A second tile the width has no room for keeps its slot: it comes back with
   // the width, and the list names it meanwhile.
   const secondary = reading.tiles === 2 ? reading.secondary : null;
@@ -187,7 +189,16 @@ export function MobileEpicTileView(props: MobileEpicTileViewProps) {
         keyboardOpen={keyboardOpen}
         engaged={secondary === null || engagedSlot === "primary"}
         onEngage={setEngagedSlot}
-        trailing={<MobileTileOriginCrumb tabId={tabId} />}
+        leading={
+          <FoldedColumnToggle level2={level2} columnOffered={columnOffered} />
+        }
+        trailing={
+          <PrimaryTileTrailing
+            epicId={epicId}
+            tabId={tabId}
+            secondary={secondary}
+          />
+        }
       >
         <MobileDrawerTaskPaintReporter ready={tileChromePainted} />
         {/* No bar here. The Epic's stream reports upward and the app shell renders
@@ -212,6 +223,7 @@ export function MobileEpicTileView(props: MobileEpicTileViewProps) {
           keyboardOpen={keyboardOpen}
           engaged={engagedSlot === "secondary"}
           onEngage={setEngagedSlot}
+          leading={null}
           trailing={<MobileSecondaryTileClose tabId={tabId} />}
         >
           {null}
@@ -257,6 +269,42 @@ function useHostedTileEngagement(args: {
   }, [twoTiles]);
 }
 
+/**
+ * The column's fold control at the head of the first pane while the column is
+ * folded into the menu; while the column draws, it carries its own.
+ */
+function FoldedColumnToggle(props: {
+  readonly level2: MobileLevel2Form;
+  readonly columnOffered: boolean;
+}): ReactNode {
+  if (props.level2 !== "menu") return null;
+  return <MobileTileColumnToggle offered={props.columnOffered} />;
+}
+
+/**
+ * What ends the first tile's header: the way back to Tracy, and, while a
+ * second tile shows, the close that leaves the second alone on screen.
+ */
+function PrimaryTileTrailing(props: {
+  readonly epicId: string;
+  readonly tabId: string;
+  readonly secondary: MobileTileSelection | null;
+}): ReactNode {
+  const { epicId, tabId, secondary } = props;
+  return (
+    <>
+      <MobileTileOriginCrumb tabId={tabId} />
+      {secondary === null ? null : (
+        <MobilePrimaryTileClose
+          epicId={epicId}
+          tabId={tabId}
+          secondary={secondary}
+        />
+      )}
+    </>
+  );
+}
+
 /** What an open from inside each slot's tile lands in: the other one. */
 const OTHER_SLOT: Record<MobileTileSlot, MobileTileSlot> = {
   primary: "secondary",
@@ -277,11 +325,12 @@ function MobileTilePane(props: {
   readonly keyboardOpen: boolean;
   readonly engaged: boolean;
   readonly onEngage: (slot: MobileTileSlot) => void;
+  readonly leading: ReactNode;
   readonly trailing: ReactNode;
   readonly children: ReactNode;
 }) {
   const { epicId, tabId, slot, selection, level2, engaged, onEngage } = props;
-  const { keyboardInset, keyboardOpen, trailing, children } = props;
+  const { keyboardInset, keyboardOpen, leading, trailing, children } = props;
   const isTerminalTile =
     selection.ref.type === "terminal" ||
     selection.ref.type === "terminal-agent";
@@ -325,6 +374,7 @@ function MobileTilePane(props: {
           epicId={epicId}
           tile={selection.ref}
           level2={level2}
+          leading={leading}
           trailing={trailing}
         />
       </MobileTileMenu>

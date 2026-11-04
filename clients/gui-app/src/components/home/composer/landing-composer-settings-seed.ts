@@ -7,7 +7,9 @@ export function landingComposerSettingsSeedForDraft(
   draftSettings: ChatRunSettings | null,
   globalLastRunSettings: ChatRunSettings | null,
 ): ChatRunSettings | null {
-  if (draftId !== null) return draftSettings;
+  // A draft with no settings was edited before its host resolved, so it was
+  // never seeded and has nothing of its own to show.
+  if (draftId !== null && draftSettings !== null) return draftSettings;
   return globalLastRunSettings === null
     ? null
     : { ...globalLastRunSettings, ultracode: false };

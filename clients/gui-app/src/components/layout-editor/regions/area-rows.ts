@@ -36,6 +36,7 @@ export type AreaRowId =
   | "taskTabLayout"
   | "sideStripView"
   | "sidebarSide"
+  | "sidebarStartCollapsed"
   | "resourceReadings"
   | "readingWidth"
   | "wideReadingWidth"
@@ -97,6 +98,12 @@ export const AREA_ROWS: ReadonlyArray<AreaRow> = [
   },
   {
     id: "sidebarSide",
+    surface: "sidebar",
+    place: "leading",
+    depends: DESKTOP_LAYOUT_ROW,
+  },
+  {
+    id: "sidebarStartCollapsed",
     surface: "sidebar",
     place: "leading",
     depends: DESKTOP_LAYOUT_ROW,

@@ -94,6 +94,11 @@ export const githubMentionFiltersKey = (identity: string | null): string =>
 export const lastLocalHostIdKey = (): string =>
   persistKey("last-local-host-id");
 
+// The installed mobile app's window identity (browser-tab-identity.ts).
+// Identity-free like the key above: it names the device, not who is signed in,
+// the way a desktop window's bridge id does.
+export const mobileWindowIdKey = (): string => persistKey("mobile-window");
+
 export const appLocalNotificationsKey = (userId: string | null): string =>
   scopedPersistKey("app-local-notifications", scopeBucket(userId));
 
@@ -384,6 +389,9 @@ export const PERSIST_STORES = [
   // Global across windows and kept outside the layout arrangement, so a drag
   // of the handle is not a layout change.
   { camelName: "sideTabStrip", leaf: "side-tab-strip", kind: "static" },
+  // The phone shell's level-2 task column, folded into the menu under the
+  // tile's name by the person's choice. Global across windows, as the strip.
+  { camelName: "mobileTileColumn", leaf: "mobile-tile-column", kind: "static" },
   // When this device last sent the `layout_snapshot` analytics event. Read and
   // written as one synchronous compare-and-set, so two windows launching
   // together cannot both count the same device (L-54).
@@ -475,6 +483,14 @@ export const PERSIST_STORES = [
     leaf: "sandbox-shape-memory",
     kind: "static",
   },
+  // The last verified picture and name of each account signed in here, for a
+  // restored session the credentials file cannot name
+  // (`verified-profile-cache-store.ts`).
+  {
+    camelName: "verifiedProfileCache",
+    leaf: "verified-profile-cache",
+    kind: "static",
+  },
   // The teams whose "Continue on a <team> host" caution each person has
   // confirmed (`team-continue-caution-seen-store.ts`).
   {
@@ -512,6 +528,8 @@ export const PERSIST_STORES = [
   { camelName: "lastRoute", leaf: "last-route", kind: "static" },
   // This machine's own local host id (host-directory-service.ts).
   { camelName: "lastLocalHostId", leaf: "last-local-host-id", kind: "static" },
+  // The installed mobile app's per-install window id (browser-tab-identity.ts).
+  { camelName: "mobileWindow", leaf: "mobile-window", kind: "static" },
   // `consumed-initial-route:<windowId>:<route>` — sessionStorage guard.
   {
     camelName: "consumedInitialRoute",
@@ -534,6 +552,12 @@ export const PERSIST_STORES = [
   {
     camelName: "liveChatCompletionAcknowledgementsChannel",
     leaf: "live-chat-completion-acknowledgements:v1",
+    kind: "channel",
+  },
+  // Each chime that starts, for a window other than the one playing it.
+  {
+    camelName: "notificationChimesChannel",
+    leaf: "notification-chimes:v1",
     kind: "channel",
   },
   // One monotonic key per displayed app-local notification version. Separate

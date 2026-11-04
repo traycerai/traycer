@@ -22,6 +22,10 @@ import { useBotConversationSendMutation } from "@/hooks/bots/use-bot-mutations";
 import { useBotThreadListQuery } from "@/hooks/bots/use-bot-thread-list-query";
 import { usePersonalEnvironment } from "@/hooks/environment/use-addressed-environment";
 import { dictationCaptureConstraints } from "@/hooks/composer/dictation-capture-constraints";
+import {
+  useAuthIdentityTransition,
+  type AuthIdentityTransition,
+} from "@/hooks/auth/use-auth-identity-transition";
 import { useEffectiveHostId } from "@/hooks/host/use-effective-host-id";
 import { useHostClientForHostId } from "@/hooks/host/use-host-client-for-host-id";
 import { useHostMethodSupport } from "@/hooks/host/use-host-supports-method";
@@ -73,12 +77,13 @@ import {
   type ReplyWatchMemory,
 } from "@/lib/voice/focused-replies";
 import { createBrowserGptLiveEngine } from "@/lib/voice/gpt-live-engine";
+import { offeredIdsOf } from "@/lib/voice/miss-report";
+import { executePageAct } from "@/lib/voice/page-acts";
 import {
   parseRouterResponse,
   resolveRoute,
   routerRequestBody,
   type ControlVerb,
-  type RoutedDecision,
 } from "@/lib/voice/router";
 import {
   createSayLoop,
@@ -86,6 +91,7 @@ import {
   type ReplyPlace,
   type ReplyPlacement,
   type RouteRequest,
+  type Routed,
   type SayLoop,
 } from "@/lib/voice/say-loop";
 import {
@@ -173,6 +179,19 @@ interface Attempt {
   /** What the mint refused with, so a pre-start failure keeps its reason. */
   failure: "credits" | "unavailable" | null;
   cancelled: boolean;
+  /** The account signed in when the attempt began. */
+  readonly account: string | null;
+}
+
+/**
+ * Whether the end route can answer for this attempt: it goes out under whoever
+ * is signed in now, and the server knows a session only to the account that
+ * minted it. After a switch the vendor's close is what ends the session, and the
+ * server's sideband settles its row.
+ */
+function endRouteAnswers(attempt: Attempt): boolean {
+  const current = useAuthStore.getState().contextMetadata?.userId ?? null;
+  return current === null || current === attempt.account;
 }
 
 /**
@@ -430,14 +449,20 @@ export function VoiceSessionController(): ReactNode {
   );
   const view = useVoiceView(phase !== "idle");
   const { mutateAsync: routeAsync } = useVoiceRouteMutation();
-  const decideRef = useRef<(request: RouteRequest) => Promise<RoutedDecision>>(
-    () => Promise.resolve({ kind: "refused", reason: "unavailable" }),
+  const decideRef = useRef<(request: RouteRequest) => Promise<Routed>>(() =>
+    Promise.resolve({
+      decision: { kind: "refused", reason: "unavailable" },
+      seen: null,
+    }),
   );
   const recheckRef = useRef(directory.current);
+  const viewRef = useRef(view);
   useEffect(() => {
     recheckRef.current = directory.current;
+    viewRef.current = view;
     decideRef.current = async (request) => {
-      let snapshot = directory.current();
+      const shown = directory.current();
+      let snapshot = shown;
       const viewSnapshot = view.current();
       const answer = await routeAsync(
         routerRequestBody(
@@ -453,7 +478,10 @@ export function VoiceSessionController(): ReactNode {
       );
       if (answer.kind !== "ok") {
         appLogger.warn("[voice] route did not answer", { kind: answer.kind });
-        return { kind: "refused", reason: "unavailable" };
+        return {
+          decision: { kind: "refused", reason: "unavailable" },
+          seen: null,
+        };
       }
       const result = parseRouterResponse(answer.body);
       const namedThread = result?.target.threadId ?? null;
@@ -467,12 +495,28 @@ export function VoiceSessionController(): ReactNode {
       ) {
         snapshot = await directory.refresh();
       }
-      return resolveRoute(
+      const decision = resolveRoute(
         result,
         snapshot,
         viewSnapshot,
         request.segments.length,
       );
+      return {
+        decision,
+        seen:
+          result === null
+            ? null
+            : {
+                route: result,
+                viewKind: viewSnapshot.page.kind,
+                rowIds: viewSnapshot.rows.map((row) => row.action),
+                offered: offeredIdsOf([shown, snapshot], viewSnapshot),
+                pageTakesWords: viewSnapshot.rows.some((row) => row.takesWords),
+                actTakesWords:
+                  decision.kind === "act" && decision.row.takesWords,
+                segments: request.segments,
+              },
+      };
     };
   }, [directory, routeAsync, view]);
 
@@ -598,6 +642,9 @@ export function VoiceSessionController(): ReactNode {
         }
       },
       control: (verb) => controlRef.current(verb),
+      view: () => viewRef.current.current(),
+      act: (row, text, turnId) =>
+        executePageAct({ row, text, turnId, reads: viewRef.current }),
       schedule: (fn, ms) => {
         const handle = window.setTimeout(fn, ms);
         return () => window.clearTimeout(handle);
@@ -792,7 +839,8 @@ export function VoiceSessionController(): ReactNode {
   /**
    * The vendor side of an attempt that is no longer the controller's: the
    * peer's close (confirmed or timed out) and then the server's end route,
-   * for every attempt that was minted, started or not.
+   * for every attempt that was minted, started or not, unless another account
+   * has taken over the window since.
    */
   const settleAttempt = useCallback(
     async (attempt: Attempt): Promise<void> => {
@@ -803,7 +851,7 @@ export function VoiceSessionController(): ReactNode {
           error: describeLogError(error),
         });
       }
-      if (attempt.sessionId === null) return;
+      if (attempt.sessionId === null || !endRouteAnswers(attempt)) return;
       // Best effort: the session is over for the person either way, and the
       // server finalizes an unended row from its sideband. A refusal is
       // the result's kind; a shell whose bridge throws (the desktop's main
@@ -898,6 +946,7 @@ export function VoiceSessionController(): ReactNode {
         startedAt: 0,
         failure: null,
         cancelled: false,
+        account: useAuthStore.getState().contextMetadata?.userId ?? null,
       };
       attemptRef.current = attempt;
       const owns = (): boolean =>
@@ -922,13 +971,15 @@ export function VoiceSessionController(): ReactNode {
                 attempt.sessionId = result.session.voiceSessionId;
                 attempt.expiresAt = result.session.expiresAt;
                 if (!owns()) {
-                  void endAsync(result.session.voiceSessionId).catch(
-                    (error: unknown) => {
-                      appLogger.warn("[voice] end route failed", {
-                        error: describeLogError(error),
-                      });
-                    },
-                  );
+                  if (endRouteAnswers(attempt)) {
+                    void endAsync(result.session.voiceSessionId).catch(
+                      (error: unknown) => {
+                        appLogger.warn("[voice] end route failed", {
+                          error: describeLogError(error),
+                        });
+                      },
+                    );
+                  }
                   throw closedBeforeStart();
                 }
                 return result.session.answerSdp;
@@ -1344,6 +1395,21 @@ export function VoiceSessionController(): ReactNode {
       window.removeEventListener("pagehide", onPageHide);
     };
   }, [end, runnerHost]);
+
+  // A session is minted and billed under one account. A sign-out takes the
+  // shell, and this controller with it; a switch leaves both standing, so the
+  // switch ends the session here, before it can hear or act for the next account.
+  const authStatus = useAuthStore((state) => state.status);
+  const authUserId = useAuthStore(
+    (state) => state.contextMetadata?.userId ?? null,
+  );
+  const onIdentityTransition = useCallback(
+    (transition: AuthIdentityTransition) => {
+      if (transition.kind === "userSwitched") end("account");
+    },
+    [end],
+  );
+  useAuthIdentityTransition(authStatus, authUserId, onIdentityTransition);
 
   // Unmount ends everything; the microphone never outlives the controller.
   // Through a ref, so a new `end` identity never ends a live session by

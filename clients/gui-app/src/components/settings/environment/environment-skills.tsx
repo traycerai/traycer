@@ -418,6 +418,7 @@ function AddSkill(props: {
         <EnvironmentSkillImportDialog
           hostClient={props.hostClient}
           searchable={props.searchable}
+          initialSource=""
           onClose={() => setImporting(false)}
         />
       ) : null}

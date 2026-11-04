@@ -231,6 +231,19 @@ export function tileCategoryOf(node: EpicCanvasTileRef): TileCategory {
 }
 
 /**
+ * The slot an open that no tile's body placed lands in, where two tiles fit: a
+ * conversation takes the first tile, and anything else is read beside it, so
+ * choosing an artifact or a terminal from the task's list splits the view and
+ * leaves the chat where it is. A chat's own opens name the other slot instead
+ * (`MobileTileOpenTargetContext`).
+ */
+export function defaultMobileTileSlot(node: EpicCanvasTileRef): MobileTileSlot {
+  return node.type === "chat" || node.type === "terminal-agent"
+    ? "primary"
+    : "secondary";
+}
+
+/**
  * The modifier triple behind a real click. Takes the structural shape
  * rather than `React.MouseEvent` so a native `MouseEvent` and a synthetic one
  * both fit, and so a test can hand it a literal.

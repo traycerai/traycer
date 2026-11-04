@@ -246,7 +246,10 @@ function assertInvariants(cfg: CliConfig, entryPathsBefore: Set<string>): void {
 }
 
 describe("adversarial: property-style op-sequence fuzz vs reference model", () => {
-  const SEEDS = Array.from({ length: 30 }, (_, i) => i * 1013 + 7);
+  // A seed is about a second of real file writes on CI. Every push runs six;
+  // the nightly `measurements.yml` runs all thirty.
+  const SEED_COUNT = process.env.HOST_MEASUREMENT_FULL === "1" ? 30 : 6;
+  const SEEDS = Array.from({ length: SEED_COUNT }, (_, i) => i * 1013 + 7);
   const OPS_PER_SEED = 500;
   // Correctness-only test: the timeout exists to catch hangs, not to assert
   // speed. 500 ops typically finish in <1s, but a contended 2-core CI runner

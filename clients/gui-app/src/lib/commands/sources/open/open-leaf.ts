@@ -118,5 +118,6 @@ export function openerExistingLeaf(
         navigateNestedFocus: ctx.router.navigateNestedFocus,
       }),
   });
-  return hostBadge === null ? leaf : { ...leaf, hostBadge };
+  const located = { ...leaf, tileHostId: ref.hostId };
+  return hostBadge === null ? located : { ...located, hostBadge };
 }

@@ -112,6 +112,15 @@ export function MobileNavDrawerSurface(
     animationDurationRef.current = animationDuration;
   });
 
+  // The toaster lives under the app root, outside this portal, so the document
+  // carries the fact `index.css` hides toasts on.
+  useEffect(() => {
+    if (!settledOpen) return undefined;
+    const root = document.documentElement;
+    root.setAttribute("data-mobile-menu-open", "");
+    return () => root.removeAttribute("data-mobile-menu-open");
+  }, [settledOpen]);
+
   // Written through eagerly rather than left to the next render pass, so a
   // resize arriving before that commit still parks the panel on the right side.
   const commitSettled = useCallback((next: boolean): void => {
@@ -439,7 +448,7 @@ export function MobileNavDrawerSurface(
           whole width and comes to rest clear of the inset. */}
       <div
         ref={parkRef}
-        className="absolute top-safe-top bottom-0 left-0 box-content w-3/4 -translate-x-full pl-safe-left sm:max-w-sm"
+        className="absolute top-safe-top bottom-0 left-0 box-content w-3/4 max-w-sm -translate-x-full pl-safe-left"
       >
         <m.div
           ref={panelRef}

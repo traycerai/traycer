@@ -42,6 +42,7 @@ import {
   titleWarmEpic,
   warmEpic,
 } from "@/components/layout/tabs/side-strip/__tests__/warm-epic-fixture";
+import { MobileStripFormContext } from "@/components/layout/tabs/mobile-strip-form-context";
 import { SheetJoinScope } from "@/components/layout/tabs/sheet-join";
 import {
   SIDE_STRIP_RAIL_WIDTH_PX,
@@ -55,6 +56,7 @@ import { TooltipProvider } from "@/components/ui/tooltip";
 import type { EpicWaitingReason } from "@/hooks/epic/use-epic-activity-status";
 import type { TaskPinnedState } from "@/hooks/epic/use-epic-task-pinned-states-query";
 import { formatChordForDisplay } from "@/lib/keybindings/chord";
+import { setPhoneLayoutOnly } from "@/lib/mobile-app";
 import { getDefaultBindings, type ActionId } from "@/lib/keybindings/actions";
 import {
   dispatchAction,
@@ -352,12 +354,15 @@ interface StripOptions {
   readonly edge: EdgeSide;
   readonly ownsTitleBar: boolean;
   readonly hydrated: boolean;
+  /** The phone shell's form around the strip; `null` for a desktop window. */
+  readonly phoneForm: "expanded" | "rail" | null;
 }
 
 const LEFT_STRIP: StripOptions = {
   edge: "left",
   ownsTitleBar: false,
   hydrated: true,
+  phoneForm: null,
 };
 
 function buildRouter(
@@ -373,10 +378,12 @@ function buildRouter(
             value={{ bridge: null, hasHydrated: strip.hydrated }}
           >
             <SheetJoinScope>
-              <SideTabStrip
-                edge={strip.edge}
-                ownsTitleBar={strip.ownsTitleBar}
-              />
+              <MobileStripFormContext.Provider value={strip.phoneForm}>
+                <SideTabStrip
+                  edge={strip.edge}
+                  ownsTitleBar={strip.ownsTitleBar}
+                />
+              </MobileStripFormContext.Provider>
             </SheetJoinScope>
           </WindowsBridgeContext.Provider>
         </TooltipProvider>
@@ -1184,6 +1191,30 @@ describe("<SideTabStrip />", () => {
       expect(agentIds(screen.getByTestId("strip-agent-group"))).toEqual([
         "strip-agent-c-wait",
       ]);
+    });
+
+    it("is the installed app's one view, whatever the arrangement stores, since it offers no row or editor to choose another", async () => {
+      setSideStripView("layered");
+      setPhoneLayoutOnly(true);
+      try {
+        openEpicTabs(["Alpha"]);
+        warmEpic("e-alpha", [
+          chatProjection("c-run", { title: "Runs", updatedAt: 1 }),
+        ]);
+        busy("e-alpha", ["c-run"]);
+        await renderStrip("/elsewhere", {
+          ...LEFT_STRIP,
+          phoneForm: "expanded",
+        });
+
+        const group = screen.getByTestId("strip-agent-group");
+        expect(group.getAttribute("aria-labelledby")).toBe(
+          screen.getByTestId("tab-epic-e-alpha").id,
+        );
+        expect(agentIds(group)).toEqual(["strip-agent-c-run"]);
+      } finally {
+        setPhoneLayoutOnly(false);
+      }
     });
 
     it("names an agent titled like its task by its own title, in normal text", async () => {

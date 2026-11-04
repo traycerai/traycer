@@ -338,6 +338,7 @@ function runnerWithSandboxReason(
 class FakePushPlugin implements PushNotificationsPluginSlice {
   permission: CapacitorPushPermissionState = "denied";
   afterRequest: CapacitorPushPermissionState = "granted";
+  private registration: ((token: PushRegistrationToken) => void) | null = null;
 
   readonly checkPermissions = vi.fn(async () => ({ receive: this.permission }));
   readonly requestPermissions = vi.fn(async () => ({
@@ -364,9 +365,14 @@ class FakePushPlugin implements PushNotificationsPluginSlice {
       | ((error: PushRegistrationError) => void)
       | ((action: PushNotificationAction) => void),
   ): Promise<PluginListenerHandle> {
-    void eventName;
-    void listener;
+    if (eventName === "registration") {
+      this.registration = listener as (token: PushRegistrationToken) => void;
+    }
     return { remove: async () => {} };
+  }
+
+  emitRegistration(token: string): void {
+    this.registration?.({ value: token });
   }
 }
 
@@ -2272,6 +2278,73 @@ describe("MobileRunnerHost", () => {
         { id: "user-2", email: "user2@example.com", name: "User2" },
       );
       await second;
+      expect(changes).toEqual([1]);
+    });
+
+    it("reports pending registration until start, and registered once the token is accepted", async () => {
+      const plugin = new FakePushPlugin();
+      const unstarted = phoneRunner({
+        plugin,
+        openPushSettings: OPEN_SETTINGS,
+      }).pushPermission;
+      expect(unstarted).not.toBeNull();
+      if (unstarted === null) return;
+      expect(unstarted.getRegistrationState()).toBe("pending");
+      await expect(unstarted.retryRegistration()).resolves.toBeUndefined();
+      expect(plugin.register).not.toHaveBeenCalled();
+
+      const startedPlugin = new FakePushPlugin();
+      startedPlugin.permission = "granted";
+      const uploaded: string[] = [];
+      const registration = new MobilePushRegistration({
+        plugin: startedPlugin,
+        authnBaseUrl: "http://localhost:32350",
+        platform: "ios",
+        environment: "sandbox",
+        registerToken: async (_authnBaseUrl, _bearer, body) => {
+          uploaded.push(body.token);
+          return { kind: "ok" };
+        },
+        removeToken: async () => ({ kind: "ok" }),
+      });
+      const pushPermission = runnerAround(
+        registration,
+        OPEN_SETTINGS,
+      ).pushPermission;
+      expect(pushPermission).not.toBeNull();
+      if (pushPermission === null) return;
+      const changes: number[] = [];
+      const subscription = pushPermission.onChange(() => changes.push(1));
+      expect(pushPermission.getRegistrationState()).toBe("pending");
+
+      registration.start(
+        {
+          get: async () => ({
+            token: "bearer-1",
+            refreshToken: "refresh-1",
+            savedAt: "2026-08-05T00:00:00.000Z",
+            user: { id: "user-1", email: "dev@traycer.ai", name: "Dev" },
+          }),
+          subscribe: () => ({ dispose: () => {} }),
+        },
+        { onSystemResumed: () => ({ dispose: () => {} }) },
+      );
+      await vi.waitFor(() => {
+        expect(startedPlugin.register).toHaveBeenCalledTimes(1);
+      });
+      startedPlugin.emitRegistration("apns-token-1");
+      await vi.waitFor(() => {
+        expect(pushPermission.getRegistrationState()).toBe("registered");
+      });
+      expect(uploaded).toEqual(["apns-token-1"]);
+      expect(changes).toEqual([1]);
+      expect(startedPlugin.requestPermissions).not.toHaveBeenCalled();
+
+      subscription.dispose();
+      startedPlugin.emitRegistration("apns-token-2");
+      await vi.waitFor(() => {
+        expect(uploaded).toEqual(["apns-token-1", "apns-token-2"]);
+      });
       expect(changes).toEqual([1]);
     });
 

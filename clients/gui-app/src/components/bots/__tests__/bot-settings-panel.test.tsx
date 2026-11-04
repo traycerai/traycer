@@ -14,6 +14,7 @@ import { StrictMode, useState, type ReactNode } from "react";
 import {
   act,
   cleanup,
+  fireEvent,
   render,
   screen,
   waitFor,
@@ -410,6 +411,7 @@ beforeEach(() => {
 
 afterEach(() => {
   cleanup();
+  vi.useRealTimers();
   queryClient.clear();
   useAuthStore.setState({
     status: "signed-out",
@@ -417,6 +419,13 @@ afterEach(() => {
     contextMetadata: null,
   });
 });
+
+/** Lets `ms` of the fake clock pass, settling the render and the reads in it. */
+async function elapse(ms: number): Promise<void> {
+  await act(async () => {
+    await vi.advanceTimersByTimeAsync(ms);
+  });
+}
 
 describe("<BotChannelSettingsPanel /> model", () => {
   it("seeds the picker with what the bot runs and leaves Apply disabled", () => {
@@ -1357,25 +1366,23 @@ describe("<BotChannelSettingsPanel /> Slack", () => {
   });
 
   it("opens the install page from Install to workspace, waits for Slack, then shows the connected workspace", async () => {
-    const user = userEvent.setup();
     await seedRegisteredApp();
+    vi.useFakeTimers();
     mountSlackPanel();
+    await elapse(0);
 
-    await user.click(
-      await screen.findByRole("button", { name: "Install to workspace" }),
+    fireEvent.click(
+      screen.getByRole("button", { name: "Install to workspace" }),
     );
+    await elapse(0);
 
     // The mock's consent lands as the link opens, but the panel only learns
     // of it from its next read: the wait shows until the 2 s poll sees it.
-    expect(
-      await screen.findByTestId("bot-settings-slack-waiting"),
-    ).toBeTruthy();
+    expect(screen.getByTestId("bot-settings-slack-waiting")).toBeTruthy();
     expect(slackHost.openedExternalLinks).toHaveLength(1);
-    const connected = await screen.findByTestId(
-      "bot-settings-slack-connected",
-      {},
-      { timeout: 6_000 },
-    );
+    // Within two periods of the poll, the budget the wait is given.
+    await elapse(4_000);
+    const connected = screen.getByTestId("bot-settings-slack-connected");
     expect(within(connected).getByText("Mock workspace")).toBeTruthy();
     expect(within(connected).getByText(CREDENTIALS.appId)).toBeTruthy();
     expect(screen.queryByTestId("bot-settings-slack-waiting")).toBeNull();
@@ -1449,17 +1456,19 @@ describe("<BotChannelSettingsPanel /> Slack", () => {
 
   it("keeps the last-read app and says the read failed when a later read cannot reach the server", async () => {
     await seedInstalledApp();
+    vi.useFakeTimers();
     mountSlackPanel();
-    await screen.findByTestId("bot-settings-slack-connected");
+    await elapse(0);
+    expect(screen.getByTestId("bot-settings-slack-connected")).toBeTruthy();
 
     slackOverrides.read = { kind: "network-error", detail: "x" };
     // The hook retries a transport failure twice, on the query client's own
     // backoff (1 s, then 2 s): the failure shows once those are spent.
-    await queryClient.invalidateQueries();
+    const refetch = queryClient.invalidateQueries();
+    await elapse(10_000);
+    await refetch;
 
-    const refusal = await within(slackGroup()).findByTestId(
-      "bot-settings-refusal",
-    );
+    const refusal = within(slackGroup()).getByTestId("bot-settings-refusal");
     expect(refusal.textContent).toBe(
       "Couldn't read this bot's Slack settings.",
     );

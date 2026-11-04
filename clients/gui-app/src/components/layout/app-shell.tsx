@@ -36,6 +36,7 @@ import { TopLevelSurfaceActivationProvider } from "@/components/layout/top-level
 import { HostScopeReady } from "@/components/layout/host-readiness-controller";
 import { MigrationRunController } from "@/components/migration/migration-run-controller";
 import { TracyEntryController } from "@/components/layout/tabs/tracy-entry-controller";
+import { SoundtrackShortcutBridge } from "@/components/layout/soundtrack/soundtrack-control";
 import { TalkShortcutBridge } from "@/components/layout/voice/talk-control";
 import { VoiceSessionController } from "@/components/layout/voice/voice-session-controller";
 import { VoiceSessionChrome } from "@/components/layout/voice/voice-session-chrome";
@@ -232,6 +233,7 @@ function AppShellBody(props: AppShellProps) {
                     top row and the phone's channel header. */}
                   <VoiceSessionController />
                   <TalkShortcutBridge />
+                  <SoundtrackShortcutBridge />
                   <MigrationRunController />
                   <MigrationBlockingModalHost />
                   {/* Above the drawer's mount gate: a rotation that replaces

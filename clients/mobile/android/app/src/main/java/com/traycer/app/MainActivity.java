@@ -1,6 +1,7 @@
 package com.traycer.app;
 
 import android.os.Bundle;
+import androidx.activity.EdgeToEdge;
 import com.getcapacitor.BridgeActivity;
 
 public class MainActivity extends BridgeActivity {
@@ -11,6 +12,8 @@ public class MainActivity extends BridgeActivity {
         registerPlugin(AuthSessionPlugin.class);
         registerPlugin(SandboxArtifactsPlugin.class);
         registerPlugin(VoiceAudioPlugin.class);
+        registerPlugin(WindowBackgroundPlugin.class);
         super.onCreate(savedInstanceState);
+        EdgeToEdge.enable(this);
     }
 }

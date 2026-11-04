@@ -414,6 +414,7 @@ async function startTarget(
   useStagedSandboxStore.getState().report(surfaceKey, {
     createdSandboxId: sandboxId,
     createdHostId: hostId,
+    rateLimit: result.accepted.sandbox.rateLimit ?? null,
     step: "booting",
     stepAt: deps.now(),
   });
@@ -573,6 +574,11 @@ async function settleRow(
   row: SandboxSummary | null | undefined,
 ): Promise<"waiting" | "finished"> {
   const { surfaceKey, clientRequestId, started, deps } = input;
+  if (row !== undefined) {
+    useStagedSandboxStore
+      .getState()
+      .report(surfaceKey, { rateLimit: row?.rateLimit ?? null });
+  }
   if (row?.state === "suspended" || row?.state === "stopped") {
     // A run wakes once, for the person's action that started it: only at
     // `creating` has it not woken anything yet, which is how Cancel retains

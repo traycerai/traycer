@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { ManifestStemSource, type StemManifest } from "../stems";
-import { AQUILO_1 } from "../variable-sound";
+import { AQUILO_1, type GroupedLayer } from "../variable-sound";
 import { makeAudioBuffer } from "./audio-buffer";
 
 const LAYER_C = AQUILO_1.layers[2];
@@ -131,5 +131,43 @@ describe("ManifestStemSource", () => {
     await source.load(AQUILO_1, LAYER_C, 2);
     expect(fetched.urls()).toHaveLength(6);
     expect(fetched.urls()[5]).toBe("c2.ogg");
+  });
+
+  it("loads a grouped layer's variant from its group's files", async () => {
+    const fetched = stubFetch(() => 200);
+    const grouped: GroupedLayer = {
+      name: "G",
+      groups: [
+        { name: "EA1", variants: 3 },
+        { name: "EA2", variants: 2 },
+      ],
+      sequence: ["EA1", "EA2"],
+      sublayers: 1,
+      sublayerStartingOffset: null,
+      pan: null,
+    };
+    const source = new ManifestStemSource(
+      {
+        tracks: [
+          {
+            name: "aquilo-1",
+            layers: [
+              {
+                name: "G",
+                groups: [
+                  { name: "EA1", files: ["a1.ogg", "a2.ogg", "a3.ogg"] },
+                  { name: "EA2", files: ["b1.ogg", "b2.ogg"] },
+                ],
+              },
+            ],
+          },
+        ],
+      },
+      makeDecoder(10),
+    );
+    await source.load(AQUILO_1, grouped, 2);
+    await source.load(AQUILO_1, grouped, 4);
+    await source.load(AQUILO_1, grouped, 5);
+    expect(fetched.urls()).toEqual(["a2.ogg", "b1.ogg", "b2.ogg"]);
   });
 });

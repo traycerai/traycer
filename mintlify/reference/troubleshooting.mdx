@@ -90,6 +90,19 @@ A Task missing from Home hasn't been deleted. To check a machine, see its [statu
 
 If you restart or update a busy host, a **Host is busy** dialog names what is still running. Choose **Defer** to wait, or **Force restart** / **Force update** to end that work now.
 
+Run `traycer host status` to see the last update result and any process currently holding the update lock. If another updater is active, `traycer host update` identifies it and waits up to 30 seconds; let it finish before trying again. An `applied` result means the files were installed, not that the Host answered; check status or run `traycer host update` to verify it comes back.
+
+## Data Folder Recovery
+
+Run `traycer data status` if Traycer will not start during or after a data-folder move. It shows the selected folder, the move's state, and the recovery command.
+
+- **Interrupted move:** run `traycer data recover` to continue. Before the location switch takes effect, `traycer data recover --rollback` can return to the old folder. After the switch, finish recovery; returning to the old location requires a new move.
+- **Missing drive:** reconnect the selected drive. Traycer does not silently use the default folder instead.
+- **Agents held after a move:** check the session-impact report. Start a new agent to keep working if the original cannot resume. If the Host's relocation record cannot be read, run `traycer data status`.
+- **Old copy still using space:** after checking Traycer works from the new folder, use `traycer data cleanup <migration-id>`. It deletes the unused copy permanently and refuses if recorded content has changed.
+
+See [data folder commands](/cli/commands#data-folder). Do not delete or edit the move records in `~/.traycer-bootstrap` or launch an older Traycer version against the backup.
+
 ## Doctor
 
 Doctor checks a host's installation, service, port and credentials. Run it from **Settings › Host › Overview › ⋯ › Run doctor**, or with `traycer host doctor` on the host's machine. The fix buttons are described in [Overview](/settings/host#doctor).
@@ -108,6 +121,7 @@ Common issues:
 | **Host service is failing to start** | Linux only. The card gives a `journalctl` command that prints why the service failed. |
 | **Host rejected the stored credentials** | Run `traycer login`. |
 | **Host credential needs re-authorization** | While the host is running, run `traycer login` as the host's owner, or open Traycer Desktop signed in as the host's owner and let it connect. Either replaces the credential. |
+| **Another Traycer CLI comes first on PATH** | Follow the paths and versions in `traycer host doctor`: upgrade the package-manager copy or put the managed CLI first on PATH. If your shell runs an old CLI without this check, run the current managed CLI by its full path. |
 | **Service managed by Traycer Desktop** | Not a problem. Traycer Desktop manages this host's startup on macOS. |
 
 ## Logs

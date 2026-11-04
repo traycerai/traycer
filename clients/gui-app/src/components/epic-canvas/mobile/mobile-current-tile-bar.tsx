@@ -35,6 +35,8 @@ interface MobileCurrentTileBarProps {
   readonly epicId: string;
   readonly tile: EpicCanvasTileRef;
   readonly level2: MobileLevel2Form;
+  /** What the pane's header leads with, before the tile's name: the column's fold control, else nothing. */
+  readonly leading: ReactNode;
   /** What the pane's header carries past the tile's own controls. */
   readonly trailing: ReactNode;
 }
@@ -127,7 +129,7 @@ function MobileCurrentTileBarBody(
     readonly terminalControl: TerminalTabControl | null;
   },
 ) {
-  const { epicId, tile, level2, trailing } = props;
+  const { epicId, tile, level2, leading, trailing } = props;
   const { browserPresentation, terminalControl } = props;
   const isTerminal = tile.type === "terminal";
   // Terminal titles resolve against the tab's bound host; `null` for every
@@ -232,6 +234,7 @@ function MobileCurrentTileBarBody(
         }
         className="flex min-h-11 w-full items-center gap-2 px-3"
       >
+        {leading}
         {level2 === "menu" ? (
           <MobileLevel2MenuTrigger
             testId="mobile-tile-menu-trigger"

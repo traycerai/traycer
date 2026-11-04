@@ -21,6 +21,7 @@ import {
 } from "@/stores/epics/canvas/__tests__/canvas-test-fixtures";
 import type { TilePlacementSettings } from "@/stores/settings/settings-store";
 import {
+  defaultMobileTileSlot,
   tileCategoryOf,
   tileIntent,
   type MobileTileOpenSlots,
@@ -1176,6 +1177,23 @@ describe("mobile second tile", () => {
     ).toMatchObject({ kind: "open-in-pane", mode: "background" });
   });
 
+  it("seeds the empty canvas with a plain open instead of the second slot", () => {
+    expect(
+      resolveTileOpen({
+        intent: intentFor(SPEC_B, {}),
+        settings: DEFAULT_SETTINGS,
+        canvas: canvasOf({ root: null, activePaneId: null, tiles: [] }),
+        resolveTargetTabForEpic: (epicId) => `tab-for-${epicId}`,
+        singleTileViewport: true,
+        mobileSlots: {
+          target: "secondary",
+          primaryInstanceId: null,
+          secondaryInstanceId: null,
+        },
+      }),
+    ).toMatchObject({ kind: "open-in-pane", paneId: null });
+  });
+
   it("routes a beside placement to the second slot", () => {
     expect(
       resolveMobile(
@@ -1211,5 +1229,22 @@ describe("tileCategoryOf", () => {
         hostId: TEST_HOST_ID,
       }),
     ).toBe("content");
+  });
+});
+
+describe("defaultMobileTileSlot", () => {
+  it("gives a conversation the first tile and reads everything else beside it", () => {
+    expect(defaultMobileTileSlot(CHAT_A)).toBe("primary");
+    expect(
+      defaultMobileTileSlot({
+        id: "tui-1",
+        instanceId: "inst-tui-1",
+        type: "terminal-agent",
+        name: "Codex",
+        hostId: TEST_HOST_ID,
+      }),
+    ).toBe("primary");
+    expect(defaultMobileTileSlot(SPEC_A)).toBe("secondary");
+    expect(defaultMobileTileSlot(BROWSER_A)).toBe("secondary");
   });
 });

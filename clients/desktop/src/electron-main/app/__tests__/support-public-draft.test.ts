@@ -39,6 +39,8 @@ function makeCause(
     errorCode: null,
     sourceAction: null,
     timestamp: 0,
+    hostTimestamp: null,
+    turnId: null,
     ...overrides,
   };
 }

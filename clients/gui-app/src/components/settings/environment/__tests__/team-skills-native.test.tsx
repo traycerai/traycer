@@ -75,8 +75,8 @@ afterEach(() => {
 const SKILL: ProviderSkill = {
   name: "find-skills",
   description: "Discover skills.",
-  path: "/Users/dev/.agents/skills/find-skills",
-  source: "shared",
+  path: "/Users/dev/.codex/skills/find-skills",
+  source: "provider",
 };
 
 const REMOVE: ProvidersSkillsMutateAction = {
@@ -298,7 +298,9 @@ function skillsState(): ProviderCliState {
 
 async function openSkill(): Promise<void> {
   await userEvent.click(
-    await screen.findByRole("button", { name: "Open find-skills (Shared)" }),
+    await screen.findByRole("button", {
+      name: "Open find-skills (Codex only)",
+    }),
   );
 }
 

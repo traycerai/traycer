@@ -9,7 +9,9 @@ import { cn } from "@/lib/utils";
 /**
  * What a task's tile list and Tracy's bots list share when level 2 draws beside
  * the content or under the current item's name. The width is the resolver's
- * answer in CSS pixels, never a choice made here.
+ * answer in CSS pixels, never a choice made here. It paints the sidebar's
+ * fill, as the task's panel and Tracy's desktop column do, so a side strip's
+ * row runs into it in that fill (`surfaceJoinPane`).
  */
 export function MobileLevel2Column(props: {
   readonly width: number;
@@ -20,7 +22,7 @@ export function MobileLevel2Column(props: {
     <div
       data-testid={props.testId}
       style={{ width: props.width }}
-      className="flex min-h-0 shrink-0 flex-col border-r border-canvas-border/70"
+      className="flex min-h-0 shrink-0 flex-col border-r border-canvas-border/70 bg-(--sidebar)"
     >
       {props.children}
     </div>

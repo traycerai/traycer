@@ -1,8 +1,9 @@
 import type { ReactNode } from "react";
 import { MobileTabSwitcherMount } from "@/components/epic-canvas/mobile/mobile-tab-switcher-mount";
 import { MobileTileColumn } from "@/components/epic-canvas/mobile/mobile-tile-column";
+import { MobileTileColumnToggle } from "@/components/epic-canvas/mobile/mobile-tile-column-toggle";
 import { MobileTileMenu } from "@/components/epic-canvas/mobile/mobile-tile-menu";
-import { useMobileTileLevel2Form } from "@/components/epic-canvas/mobile/use-mobile-tile-level2-form";
+import { useMobileTileReading } from "@/components/epic-canvas/mobile/use-mobile-tile-level2-form";
 import { MobileLevel2MenuTrigger } from "@/components/layout/shell/mobile-level2";
 
 /**
@@ -16,7 +17,7 @@ export function MobileEmptyPaneLevel2(props: {
   readonly children: ReactNode;
 }): ReactNode {
   const { epicId, tabId, children } = props;
-  const level2 = useMobileTileLevel2Form(tabId);
+  const { level2, columnOffered } = useMobileTileReading(tabId);
   if (level2 === "bar") {
     return (
       <>
@@ -33,8 +34,9 @@ export function MobileEmptyPaneLevel2(props: {
           <MobileTileMenu epicId={epicId} tabId={tabId} slot="primary" drawn>
             <div
               data-mobile-shell-touch-scope=""
-              className="flex min-h-11 shrink-0 items-center border-b border-canvas-border/70 px-3"
+              className="flex min-h-11 shrink-0 items-center gap-2 border-b border-canvas-border/70 px-3"
             >
+              <MobileTileColumnToggle offered={columnOffered} />
               <MobileLevel2MenuTrigger
                 testId="mobile-tile-menu-trigger"
                 className={undefined}

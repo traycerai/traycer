@@ -2,6 +2,7 @@ import { z } from "zod";
 import { lazySchema } from "@traycer/protocol/framework/lazy-schema";
 import { getRecordSchema } from "@traycer/protocol/framework/index";
 import { commonRecordRegistry } from "@traycer/protocol/common/registry";
+import { worktreeIntentSchema } from "@traycer/protocol/host/worktree-schemas";
 
 /**
  * The prompt a withdrawn opening hands back to its composer.
@@ -76,3 +77,25 @@ export const chatMessageDeliverySchema = lazySchema(() =>
   }),
 );
 export type ChatMessageDelivery = z.infer<typeof chatMessageDeliverySchema>;
+
+/**
+ * The delivery as `chat.subscribe@1.42` publishes it: the frozen shape above
+ * plus the worktree obligation the opening still carries, so a client can show
+ * the worktree a seeded chat is waiting for.
+ *
+ * Non-null from a deferred `epic.create` until the add lands or a send with its
+ * own intent discharges it. It survives a withdrawal, because the obligation
+ * belongs to the chat; deciding what to show from it, by phase, is the reader's
+ * job. Display only: nothing dispatches from this field.
+ *
+ * A sibling rather than a widening, because every line from `1.15` to `1.41`
+ * binds the schema above directly.
+ */
+export const chatMessageDeliverySchemaV142 = lazySchema(() =>
+  chatMessageDeliverySchema.extend({
+    worktreeIntent: worktreeIntentSchema.nullable().default(null),
+  }),
+);
+export type ChatMessageDeliveryV142 = z.infer<
+  typeof chatMessageDeliverySchemaV142
+>;

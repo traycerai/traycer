@@ -7,6 +7,7 @@
 // the workflow so the same test can exercise a different revision of it.
 
 import { execFileSync, spawnSync } from "node:child_process";
+import { GIT_OUTPUT_MAX_BUFFER_BYTES } from "../git-output-limit.cjs";
 import { mkdirSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -58,6 +59,7 @@ const git = (args, { input, env } = {}) =>
     "git",
     ["-c", "commit.gpgsign=false", "-c", "core.hooksPath=/dev/null", ...args],
     {
+      maxBuffer: GIT_OUTPUT_MAX_BUFFER_BYTES,
       cwd: repo,
       env: { ...gitEnv, ...env },
       input,

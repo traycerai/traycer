@@ -605,7 +605,7 @@ to join.
   browser tile only views a host's browser and carries none of the user's
   sign-ins, so "In Traycer" vs "In default browser" would decide nothing. The
   modifier legend under the page goes with it. Tile placement stays.
-- **Layout rows the desktop layout alone draws** - the Tabs card's Placement, Tab overflow and Side tab view, the Sidebar's Side and Readings on agent rows, Chat's Reading width and Wide column width, a reading's Location, Model's Style and the Minimap (`isDesktopLayoutRowAvailable = !mobileApp`).
+- **Layout rows the desktop layout alone draws** - the Tabs card's Placement, Tab overflow and Side tab view, the Sidebar's Side, Collapsed in new tasks and Readings on agent rows, Chat's Reading width and Wide column width, a reading's Location, Model's Style and the Minimap (`isDesktopLayoutRowAvailable = !mobileApp`).
   The installed mobile app is the phone layout at every width, so nothing can make them apply there.
   A narrow BROWSER tab keeps them, live, with the note "Applies on wider windows." (the Minimap's: "Shows on wider windows with a mouse."), because widening the window is the way back - the layout form's shell rule (Layout, below).
 - **The exception: Layout's "Status bar on small screens" ROW is keyed on the phone LAYOUT, not the build** (`isMobileFooterRowAvailable = phoneLayout`, L-51, U1).
@@ -1713,18 +1713,20 @@ means the drain UI renders NOTHING - never a zero, which would offer to end
       bridge's `forgetLogins()` directly and therefore speaks for every host
       with a live browser stream; main owns both native destructive confirms.
 - `Sounds` (`panels/app-notifications-settings-panel.tsx`,
-  `/settings/app-notifications`): one group, **Chimes**
+  `/settings/app-notifications`): **Chimes**
   (`panels/notification-chime-settings-section.tsx`), one dropdown per kind
-  of alert. Untitled, because the page is already named for it. The id still
-  says notifications: the OS and push rows moved to Alerts, and ids do not
-  change.
+  of alert, untitled because the page is already named for it; and, in a build
+  with something to play, **Soundtrack**
+  (`panels/soundtrack-settings-section.tsx`), its volume and what it follows.
+  Its on and off is the toggle in the top row. The id still says notifications:
+  the OS and push rows moved to Alerts, and ids do not change.
 - `Alerts` (`panels/alerts-settings-panel.tsx`, `/settings/alerts`): one
   group, **Notifications** (anchor `alerts-notifications`), where the alerts
   themselves are configured. **OS notifications** on a desktop with the
   system-settings bridge (`system-notification-settings-section.tsx`),
-  **Push notifications on this phone** and its four severity switches in the
-  phone app (`push-permission-section.tsx`; "this phone", never "this
-  device", which is the UI word for a host), and **Notification events**, a
+  **Push notifications** and its four severity switches in the phone app
+  (`push-permission-section.tsx`; no "on this device" qualifier, since
+  "device" is the UI word for a host), and **Notification events**, a
   pointer to the selected host's Notifications page, in every shell. It was
   the Sounds page's second group; it moved because push is not a sound.
 - `Opening behavior` (`panels/opening-behavior-panel.tsx`,
@@ -2075,7 +2077,7 @@ codeFontSize` in muted styling while `null`; any tick/type pins an
     `Side tab view` picks between two pictures of the strip drawn from the real rows and the sample agents, one with the open task's live agents under its tab and one without.
     It is disabled while the tabs are at the top - "Set Placement to Left or Right to use this.", which the canvas chip says too - and `Tab overflow` is disabled while they sit at a side - "Set Placement to Top to use this."; each stored value is kept.
     In the editor its canvas part is the live agents list under the sample tab: hovering or pressing the row lights or rings that list (ghosted while the value is Tabs only), a press on the list selects the row, and with no room for the list the canvas chip on the strip says why.
-    The Sidebar card opens with **`Side`** (`arrangement.sidebarSide`: Left or Right) and ends with **`Readings on agent rows`**.
+    The Sidebar card opens with **`Side`** (`arrangement.sidebarSide`: Left or Right), then **`Collapsed in new tasks`** (`arrangement.sidebarStartCollapsed`, off by default: what a task tab with no collapse record of its own opens with; a tab the user has collapsed or expanded keeps its own `mainCollapsedByTabId` entry, so the switch never moves a tab already arranged), and ends with **`Readings on agent rows`**.
     Chat opens with **`Reading width`** and, under it, **`Wide column width`**, which stays in place while Comfortable, disabled with "Set Reading width to Wide to use this." (C5); the column is never wider than the pane it is in.
     Composer opens with **`Toolbar style`** (`model.toolbarStyle`, Flat or Bordered, drawn as the real buttons): it styles every toolbar button, so it is an area row rather than a detail of the Model region it is stored on (C3).
     Usage and resources opens with **`Status bar on small screens`** where the phone layout is drawn (see Responsive Behavior).
@@ -3546,6 +3548,26 @@ window`, recorded in the type as `coverage.browsersAreMountedOnly` -
         must not touch the create/import draft fields; failure closes only the
         confirmation and renders inside the skill dialog, since the tab's own
         error banner sits behind it and would be invisible.
+    - **The shared folder is read, not written, on a host that runs
+      environments.** The capability's scopes are `global`/`project` and carry no
+      shared destination, so `useSkillEnvironmentRoute` tells the two kinds of host
+      apart by `environment.status`, which a build without environments never
+      answers (`null` until the manifest arrives: no shared-folder action and no
+      refusal yet). That host writes to `~/.agents/skills` as it always did: the
+      composer offers "Every provider", and a shared row keeps Edit and Remove. A
+      host that answers refuses those writes (`unsupported_scope` for a
+      create or import, `unsupported_action` for an edit, update or remove),
+      so the composer offers "<provider> only" and the served environment, and a
+      row directly in a `.agents/skills` folder (`isSharedFolderSkill`) keeps its
+      Shared badge with "Add to <name>" (global scope, the one
+      `promoteToPersonal` takes) in place of Edit and Remove. A folder under the
+      served root the room has not captured also lists as `shared` and is not
+      that row: it stays editable. The environment option is the
+      environment this host serves, named by its name ("Personal", or the
+      team's), since its views are what reach this host's harnesses: a written
+      skill goes up as the archive
+      `environment.configuration.skills.upload` takes (`provider-skill-archive.ts`),
+      an import hands its source to `EnvironmentSkillImportDialog`.
   - **Model Providers is the visual layer of `opencode auth login`**
     (`provider-model-providers-tab.tsx` +
     `provider-model-provider-connect-dialog.tsx`): the UPSTREAM LLM credentials
@@ -4799,8 +4821,9 @@ min`): "The judge didn't finish in time, so it's asking you instead."
     fallback at all. The chat surfaces link in here from another host's chat
     (through `carryViewedHostIntoSettingsScope`), which is precisely when a
     panel that said nothing would be editing the wrong machine.
-  - **Groups**: Fallback (the `Automatic fallback` master switch, off by
-    default, and the `Try these in order` step editor), Behavior, Equivalent
+  - **Groups**: Fallback (the `Automatic fallback` master switch, on for a user
+    with no saved row and off over a row the host cannot read or after a reset,
+    and the `Try these in order` step editor), Behavior, Equivalent
     models, Advanced per-failure overrides, and a Danger Zone. Every policy
     field is compared by `fallbackPolicyValuesEqual`; a field missing from that
     function is equal to itself by omission, so an edit to it alone would
@@ -5331,8 +5354,8 @@ wrap`). Each row names the account its first usable match runs on, the
     change where an armed traversal can hop to. It says "keep the steps and
     timings they started with" and claims nothing more.
   - **Reset re-reads and remounts; restore writes in place.** The asymmetry is
-    the seed marker. `reset` clears it, so the default policy it returns is
-    stale the moment the next read re-seeds - writing that response into the
+    the seed marker. `reset` clears it, so the policy it returns is
+    stale the moment the next read re-seeds the groups - writing that response into the
     cache would show an empty model-group list while the engine resolves against
     a full seeded set. So the panel performs its own `refetchPolicy()` after the
     reset and remounts the editor (a `resetGeneration` in its key) onto what
@@ -5503,8 +5526,8 @@ wrap`). Each row names the account its first usable match runs on, the
     there. Both facts, or no in-force claim.
     The same rule bounds what may be said about the HOST's values at all. A
     reset that succeeded proves the host wrote something; it does not prove the
-    result differs from what is on screen - resetting an already-default policy
-    yields identical values back, and the follow-up read that would have shown
+    result differs from what is on screen - resetting a policy that already
+    matches what a reset writes yields identical values back, and the follow-up read that would have shown
     that is the request that failed. So the copy hedges ("may not be what this
     host is using now") instead of asserting an inequality no client can know.
     And a claim about DISPATCH comes from the request's own state - pending,
@@ -5556,7 +5579,7 @@ wrap`). Each row names the account its first usable match runs on, the
     itself, so the local check cannot drift from the host's - and this module
     only turns the failing path into a sentence.
   - **`storedPolicyUnreadable`** is surfaced, never swallowed. The host answers
-    a corrupt row with the default policy plus that flag instead of throwing,
+    a corrupt row with routing off, plus that flag, instead of throwing,
     so that this page still renders and a save can replace the bad row; the
     notice says what is on screen is not what is stored.
   - **`inFlightCount`** is rendered as a plain number in the master toggle's

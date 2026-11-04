@@ -61,10 +61,14 @@ export function surfaceJoinPane(
       return draftJoinPane(landing.get(tab.id) ?? null, edge);
     case "settings":
       return edge === "left" ? "panel" : "surface";
-    // The Tracy surface paints its own surface edge to edge, like a draft: a header
-    // band on top and the conversation below it, no canvas showing through.
+    // The Tracy surface's header band runs along its top in `--background`.
+    // Its channel column stands at its start edge in the sidebar's fill, as a
+    // task's panel does (`BotChannelColumn`), and the content pane fills the
+    // rest in canvas. The column is drawn only from the tab's `@3xl` width;
+    // narrower, the left edge shows the canvas and the join stays the panel.
     case "tracy":
-      return "surface";
+      if (edge === "top") return "surface";
+      return edge === "left" ? "panel" : "canvas";
     case "home":
     case "history":
     case "sample-workspace":

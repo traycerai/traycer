@@ -211,6 +211,7 @@ export type ArrangementField =
   | "readingWidth"
   | "wideReadingWidthPx"
   | "sidebarSide"
+  | "sidebarStartCollapsed"
   | "minimapSide"
   | "usageHost"
   | "usageSide"
@@ -225,6 +226,7 @@ const ARRANGEMENT_FIELDS: ReadonlyArray<ArrangementField> = [
   "readingWidth",
   "wideReadingWidthPx",
   "sidebarSide",
+  "sidebarStartCollapsed",
   "minimapSide",
   "usageHost",
   "usageSide",

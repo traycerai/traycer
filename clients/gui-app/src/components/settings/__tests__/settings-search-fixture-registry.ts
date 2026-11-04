@@ -61,6 +61,8 @@ const DESKTOP_ZOOM: DesktopZoomBridge = {
 
 const PUSH_PERMISSION: IPushPermissionHost = {
   get: () => Promise.resolve("granted"),
+  getRegistrationState: () => "registered",
+  retryRegistration: () => Promise.resolve(),
   request: () => Promise.resolve("granted"),
   openSettings: () => Promise.resolve(),
   getMutedSeverities: () => Promise.resolve([]),
@@ -104,6 +106,7 @@ function notificationsHost(options: {
     featureSettings: null,
     mobileApp: false,
     phoneLayout: false,
+    soundtrackOffered: false,
   };
 }
 
@@ -112,6 +115,7 @@ const NO_BRIDGES: SettingsAvailabilityContext = {
   featureSettings: null,
   mobileApp: false,
   phoneLayout: false,
+  soundtrackOffered: false,
 };
 
 export const SETTINGS_SEARCH_FIXTURES = [
@@ -250,6 +254,28 @@ export const SETTINGS_SEARCH_FIXTURES = [
       {
         name: "both bridges",
         context: notificationsHost({ system: true, push: true }),
+      },
+    ],
+  },
+  // Sounds: the soundtrack's rows exist only in a build with something to play,
+  // and not yet on the phone.
+  {
+    section: "app-notifications",
+    hostScope: null,
+    shells: [
+      { name: "a build with nothing to play", context: NO_BRIDGES },
+      {
+        name: "a build with something to play",
+        context: { ...NO_BRIDGES, soundtrackOffered: true },
+      },
+      {
+        name: "the installed app, in a build with something to play",
+        context: {
+          ...NO_BRIDGES,
+          mobileApp: true,
+          phoneLayout: true,
+          soundtrackOffered: true,
+        },
       },
     ],
   },

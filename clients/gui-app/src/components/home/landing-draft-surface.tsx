@@ -173,7 +173,7 @@ export function LandingDraftSurface() {
       <div
         ref={appearanceSurfaceRef}
         className={cn(
-          "landing-appearance-surface relative isolate grid min-h-0 min-w-0 flex-1 grid-cols-[minmax(0,1fr)] overflow-hidden",
+          "landing-appearance-surface relative isolate grid min-h-0 min-w-0 flex-1 grid-cols-[minmax(0,1fr)] overflow-hidden max-md:short-landscape:content-start max-md:short-landscape:overflow-y-auto",
           layout.rows,
         )}
       >
@@ -184,7 +184,7 @@ export function LandingDraftSurface() {
 
         <section
           className={cn(
-            "relative mx-auto flex w-full max-w-3xl items-end justify-center px-6 pb-10 pt-3 max-md:px-4 max-md:pb-6",
+            "relative mx-auto flex w-full max-w-3xl items-end justify-center px-6 pb-10 pt-3 max-md:px-4 max-md:pb-6 max-md:short-landscape:h-0 max-md:short-landscape:overflow-hidden max-md:short-landscape:p-0",
             !showGreeting && "invisible",
             layout.hero,
           )}
@@ -298,13 +298,13 @@ function startPageLayout(
 } {
   return showGreeting || showRecentHistory
     ? {
-        rows: "grid-rows-[auto_minmax(0,1fr)_minmax(0,1fr)] max-md:grid-rows-[auto_minmax(0,1fr)_minmax(0,1.4fr)]",
+        rows: "grid-rows-[auto_minmax(0,1fr)_minmax(0,1fr)] max-md:grid-rows-[auto_minmax(0,1fr)_minmax(0,1.4fr)] max-md:short-landscape:grid-rows-[auto_0_auto]",
         hero: "",
         composer: "",
         placement: "top",
       }
     : {
-        rows: "grid-rows-[auto_minmax(0,0fr)_minmax(0,1fr)]",
+        rows: "grid-rows-[auto_minmax(0,0fr)_minmax(0,1fr)] max-md:short-landscape:grid-rows-[auto_0_auto]",
         hero: "h-0 overflow-hidden",
         composer: "justify-center",
         placement: "centered",

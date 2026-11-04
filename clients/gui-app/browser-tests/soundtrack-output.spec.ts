@@ -53,6 +53,25 @@ interface Rendered {
   readonly readings: readonly number[];
 }
 
+interface DimRequest {
+  readonly seconds: number;
+  readonly toneHz: number;
+  readonly amplitude: number;
+  readonly steps: readonly { readonly at: number; readonly dimmed: boolean }[];
+  readonly windows: readonly { readonly from: number; readonly to: number }[];
+}
+
+interface DimRendered {
+  readonly peaks: readonly number[];
+  readonly rms: readonly number[];
+}
+
+function renderDim(page: Page, request: DimRequest): Promise<DimRendered> {
+  return page.evaluate<DimRendered>(
+    `window.__soundtrackOutputProbe.renderDim(${JSON.stringify(request)})`,
+  );
+}
+
 function render(page: Page, request: RenderRequest): Promise<Rendered> {
   return page.evaluate<Rendered>(
     `window.__soundtrackOutputProbe.render(${JSON.stringify(request)})`,
@@ -211,4 +230,154 @@ test("a cut inside a voice's 10 ms fade-in goes down from where it had reached",
     expect(peak, label).toBeCloseTo(reached, 1);
     expect(readings, label).toEqual([0]);
   }
+});
+
+// A tone far above the dimmed cutoff (900 Hz), so the low-pass has to take it.
+const TONE_HZ = 6000;
+
+test("the dim filter takes a tone above its cutoff down once dimmed, and back once undimmed", async ({
+  page,
+}) => {
+  // Dimmed at 0.5 s, its 1.2 s ramp over by 1.7 s; undimmed at 2.5 s, over by 3.7 s.
+  const { rms } = await renderDim(page, {
+    seconds: 4.2,
+    toneHz: TONE_HZ,
+    amplitude: 0.5,
+    steps: [
+      { at: 0.5, dimmed: true },
+      { at: 2.5, dimmed: false },
+    ],
+    windows: [
+      { from: 0.2, to: 0.4 },
+      { from: 2.2, to: 2.4 },
+      { from: 4, to: 4.2 },
+    ],
+  });
+  const [open, dimmed, reopened] = rms;
+  // Open, the tone passes: without a filter in the way its RMS is amplitude / sqrt 2.
+  expect(open).toBeGreaterThan(0.2);
+  expect(dimmed).toBeLessThan(open * 0.1);
+  expect(reopened).toBeCloseTo(open, 2);
+});
+
+test("a dim ramp turned round goes on from where the cutoff had got to", async ({
+  page,
+}) => {
+  // The cutoff falls from 20 kHz for 0.6 s, to about 4 kHz, where this tone is
+  // still heard at a fraction of its open level. A turn that fell back to the
+  // open cutoff would bring it up to a multiple of that within a quantum.
+  const dimAt = 0.3;
+  const turnFrom = 0.9;
+  for (let quanta = 0; quanta < 8; quanta += 1) {
+    const turnAt = turnFrom + quanta * QUANTUM_SECONDS;
+    const { peaks } = await renderDim(page, {
+      seconds: 1.5,
+      toneHz: TONE_HZ,
+      amplitude: 0.5,
+      steps: [
+        { at: dimAt, dimmed: true },
+        { at: turnAt, dimmed: false },
+      ],
+      windows: [
+        { from: turnAt - 0.004, to: turnAt },
+        { from: turnAt + 0.004, to: turnAt + 0.024 },
+      ],
+    });
+    const [beforeTurn, afterTurn] = peaks;
+    const label = `turned after ${String(quanta)} quanta`;
+    // It was well under the open level, so the ratio below is a turn and not a flat line.
+    expect(beforeTurn, label).toBeLessThan(0.3);
+    expect(afterTurn / beforeTurn, label).toBeLessThan(1.3);
+  }
+});
+
+interface LevelRequest {
+  readonly seconds: number;
+  readonly volume: number;
+  readonly steps: readonly {
+    readonly kind: "volume" | "duck";
+    readonly at: number;
+    readonly value: number;
+  }[];
+  readonly readAt: readonly number[];
+}
+
+interface LevelRendered {
+  readonly readings: readonly number[];
+  readonly biggestStep: number;
+}
+
+interface DuckTuning {
+  readonly gain: number;
+  readonly attackSeconds: number;
+  readonly releaseSeconds: number;
+}
+
+function renderLevel(
+  page: Page,
+  request: LevelRequest,
+): Promise<LevelRendered> {
+  return page.evaluate<LevelRendered>(
+    `window.__soundtrackOutputProbe.renderLevel(${JSON.stringify(request)})`,
+  );
+}
+
+function duckTuning(page: Page): Promise<DuckTuning> {
+  return page.evaluate<DuckTuning>("window.__soundtrackOutputProbe.duckTuning");
+}
+
+// The person's volume and a chime's duck are two gains in a row: the volume
+// scales the music, the duck drops it under a chime, and neither disturbs the
+// other. A rendered sample is the product of both.
+test("the level is the volume, ducked under a chime and back once it is over", async ({
+  page,
+}) => {
+  const { gain, attackSeconds, releaseSeconds } = await duckTuning(page);
+  const duckAt = 0.5;
+  const chimeSeconds = 0.4;
+  const { readings, biggestStep } = await renderLevel(page, {
+    seconds: 3,
+    volume: 0.6,
+    steps: [{ kind: "duck", at: duckAt, value: chimeSeconds }],
+    readAt: [
+      0.3,
+      duckAt + attackSeconds + 0.05,
+      duckAt + chimeSeconds - 0.02,
+      duckAt + chimeSeconds + releaseSeconds + 0.1,
+    ],
+  });
+  const [before, held, endOfChime, after] = readings;
+  expect(before).toBeCloseTo(0.6, 3);
+  expect(held).toBeCloseTo(0.6 * gain, 3);
+  expect(endOfChime).toBeCloseTo(0.6 * gain, 3);
+  expect(after).toBeCloseTo(0.6, 3);
+  // Down over its attack and back over its release, never a jump.
+  expect(biggestStep).toBeLessThan(0.002);
+});
+
+test("a volume moved during a chime's duck leaves the duck alone", async ({
+  page,
+}) => {
+  const { gain, attackSeconds, releaseSeconds } = await duckTuning(page);
+  const duckAt = 0.5;
+  const chimeSeconds = 0.6;
+  const volumeAt = duckAt + 0.3;
+  const { readings, biggestStep } = await renderLevel(page, {
+    seconds: 3,
+    volume: 0.5,
+    steps: [
+      { kind: "duck", at: duckAt, value: chimeSeconds },
+      { kind: "volume", at: volumeAt, value: 0.9 },
+    ],
+    readAt: [
+      duckAt + attackSeconds + 0.05,
+      volumeAt + 0.2,
+      duckAt + chimeSeconds + releaseSeconds + 0.1,
+    ],
+  });
+  const [ducked, duckedLouder, released] = readings;
+  expect(ducked).toBeCloseTo(0.5 * gain, 3);
+  expect(duckedLouder).toBeCloseTo(0.9 * gain, 3);
+  expect(released).toBeCloseTo(0.9, 3);
+  expect(biggestStep).toBeLessThan(0.02);
 });

@@ -136,6 +136,7 @@ export function TileBarSurface(): React.ReactElement {
         epicId={EPIC_ID}
         tile={TILE}
         level2="menu"
+        leading={null}
         trailing={null}
       />
     </MobileTileMenu>

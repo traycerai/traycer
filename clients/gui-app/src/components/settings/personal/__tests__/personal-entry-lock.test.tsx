@@ -75,6 +75,17 @@ vi.mock("@/hooks/providers/use-providers-mcp-list-query", () => ({
     isFetching: false,
   }),
 }));
+// A host that runs environments, the one the Personal lock is drawn on.
+vi.mock("@/components/settings/panels/use-skill-environment-route", () => ({
+  useSkillEnvironmentRoute: () => ({
+    hostRunsEnvironments: true,
+    served: { environmentId: "env_me", name: "Personal", team: false },
+    hostClient: null,
+    writing: false,
+    write: () => Promise.resolve(null),
+  }),
+}));
+
 vi.mock("@/hooks/providers/use-providers-skills-list-query", () => ({
   useProvidersSkillsList: () => ({
     data: { skills: listMock.skills },
@@ -238,6 +249,15 @@ function skill(name: string): ProviderSkill {
     path: `/Users/dev/.agents/skills/${name}`,
     source: "shared",
     origin: "owner/repo",
+  };
+}
+
+/** A provider's own skill: a shared folder's stays out of Traycer's writes. */
+function localSkill(name: string): ProviderSkill {
+  return {
+    ...skill(name),
+    path: `/Users/dev/.claude/skills/${name}`,
+    source: "provider",
   };
 }
 
@@ -681,7 +701,7 @@ describe("A Personal skill", () => {
 
 describe("A local skill", () => {
   it("opens with Edit and Update from source where advertised, and no note", async () => {
-    listMock.skills = [skill("deploy")];
+    listMock.skills = [localSkill("deploy")];
     listMock.skillFile = skillMarkdown("deploy");
     // The host applied a DIFFERENT skill of the person's.
     renderPage("providers", skillsPage(), [appliedSkill("other")]);
@@ -702,7 +722,7 @@ describe("A local skill", () => {
   });
 
   it("is not locked by an MCP server of the same name", async () => {
-    listMock.skills = [skill("deploy")];
+    listMock.skills = [localSkill("deploy")];
     listMock.skillFile = skillMarkdown("deploy");
     renderPage("providers", skillsPage(), [appliedMcp("deploy")]);
 
@@ -718,7 +738,7 @@ describe("A local skill", () => {
   });
 
   it("the remove confirmation keeps the disk text", async () => {
-    listMock.skills = [skill("deploy")];
+    listMock.skills = [localSkill("deploy")];
     listMock.skillFile = skillMarkdown("deploy");
     renderPage("providers", skillsPage(), [appliedSkill("other")]);
 

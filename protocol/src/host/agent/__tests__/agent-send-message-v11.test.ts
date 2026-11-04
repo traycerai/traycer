@@ -24,7 +24,11 @@ const request = {
 
 describe("agent.sendMessage@1.1 registry", () => {
   it("validates, and registers 1.1 with its upgrade path", () => {
-    expect(() => validateVersionedRpcRegistry(hostRpcRegistry)).not.toThrow();
+    expect(() =>
+      validateVersionedRpcRegistry({
+        "agent.sendMessage": hostRpcRegistry["agent.sendMessage"],
+      }),
+    ).not.toThrow();
     const line = hostRpcRegistry["agent.sendMessage"][1];
     expect(line.latestMinor).toBe(1);
     expect(line.versions[0].contract).toBe(agentSendMessageV10);

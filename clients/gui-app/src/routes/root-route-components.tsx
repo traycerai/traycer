@@ -18,6 +18,10 @@ import { useDesktopMenuBarActive } from "@/components/layout/header/use-desktop-
 import { MenuCommandListener } from "@/components/layout/bridges/menu-command-listener";
 import { ChatSessionWakeRetryController } from "@/components/layout/bridges/chat-session-wake-retry-controller";
 import { PreventSleepController } from "@/components/layout/bridges/prevent-sleep-controller";
+import {
+  SoundtrackSignalsBridge,
+  SoundtrackWarmupBridge,
+} from "@/components/layout/bridges/soundtrack-signals-bridge";
 import { NotificationEmissionController } from "@/components/layout/bridges/notification-emission-controller";
 import { NotificationFocusBridge } from "@/components/layout/bridges/notification-focus-bridge";
 import { SystemTabModalHost } from "@/components/layout/dialogs/system-tab-modal-host";
@@ -157,6 +161,8 @@ export function RootComponent() {
           <FirstTaskImportBridge />
           <HostScopeReady scope="default-host">
             <PreventSleepController />
+            <SoundtrackSignalsBridge />
+            <SoundtrackWarmupBridge />
             <TrayOpenEpicBridge />
             <NotificationFocusBridge />
             <EpicAccessCoordinator />

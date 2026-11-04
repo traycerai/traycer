@@ -9,7 +9,7 @@ export const ALERTS = defineSettingsSection("alerts", {
   page: {
     availableWhen: alwaysAvailable,
     label: "Alerts",
-    description: "How this app alerts you across hosts.",
+    description: "How this app alerts you.",
     keywords: ["notifications", "alerts", "banner", "push"],
   },
   // Where the alerts themselves are configured: the OS (or, in the phone app,
@@ -30,18 +30,18 @@ export const ALERTS = defineSettingsSection("alerts", {
     group: "notifications",
     search: { anchor: "alerts-os" },
     label: "OS notifications",
-    description:
-      "Banners, badges, and delivery are managed by your operating system.",
+    description: "Banners and badges are set in your operating system.",
     availableWhen: isSystemNotificationsRowAvailable,
     keywords: ["os", "native", "banner", "badge", "macos", "windows", "system"],
   },
-  // "On this phone", never "on this device": in this GUI "device" is the UI
-  // word for a HOST, and this row is about the phone in the person's hand.
+  // No "on this device" qualifier: in this GUI "device" is the UI word for a
+  // HOST, and "phone" is wrong on a tablet. The row only exists in the mobile
+  // app, so the bare label already names the thing in the person's hand.
   pushNotifications: {
     kind: "row",
     group: "notifications",
     search: { anchor: "alerts-push" },
-    label: "Push notifications on this phone",
+    label: "Push notifications",
     // The sentence reports the OS permission state, so it is the row's status.
     description: null,
     availableWhen: isPushPermissionRowAvailable,
@@ -101,8 +101,7 @@ export const ALERTS = defineSettingsSection("alerts", {
     group: "notifications",
     search: { anchor: "alerts-notification-events" },
     label: "Notification events",
-    description:
-      "Choose which events alert you for the host selected in Settings.",
+    description: "Which events create a notification. Set per host.",
     availableWhen: alwaysAvailable,
     keywords: [
       "events",

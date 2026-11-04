@@ -30,6 +30,7 @@ import {
   PROVIDER_SETTINGS_UNREADABLE_COPY,
   PROVIDER_SETTINGS_UNREADABLE_MESSAGE_PREFIX,
 } from "@/lib/providers/provider-settings-unreadable-error";
+import { HOST_UNSUPPORTED_MESSAGE } from "@/lib/host-error-toast";
 import type { HostScopeStatus } from "@/components/settings/host-scope/host-scope-status";
 import type { HostScopeOption } from "@/components/settings/host-scope/host-scope-model";
 import { hostScopeOptionFixture } from "@/components/settings/host-scope/host-scope-fixture";
@@ -2083,11 +2084,11 @@ describe("<ProvidersSettingsPanel />", () => {
     );
 
     expect(screen.getByText("Connecting to the remote host…")).toBeDefined();
-    expect(screen.queryByText(/may need to be updated/)).toBeNull();
+    expect(screen.queryByText(/Couldn't reach the host/)).toBeNull();
     expect(screen.queryByText(/Couldn't load provider state/)).toBeNull();
   });
 
-  it("keeps an actionable failure card for an EXHAUSTED local transport failure", () => {
+  it("shows a reach-failure card with Retry for an EXHAUSTED local transport failure", () => {
     // A spinner is a promise that something will refetch, and on a local host
     // nothing can keep it. The remote path has the messenger's own binding,
     // whose ready boundary invalidates this query; a local host has no such
@@ -2095,7 +2096,12 @@ describe("<ProvidersSettingsPanel />", () => {
     // surfaces the retry wrapper has already spent its budget - its final
     // attempt rethrows unchanged, so the class says what the failure WAS, not
     // that anything is still retrying. Showing "Reconnecting…" here parked the
-    // panel on a permanent spinner with no way to report the fault.
+    // panel on a permanent spinner. The card says the host could not be
+    // reached, never that it is out of date, and offers Retry; a reach failure
+    // is not a defect in the app, so it offers no Report issue.
+    act(() => {
+      useDesktopDialogStore.setState({ reportIssueAvailable: true });
+    });
     providerMocks.listResult.isError = true;
     providerMocks.listResult.error = new RetryableTransportError({
       replaySafetyFromKey: false,
@@ -2114,16 +2120,24 @@ describe("<ProvidersSettingsPanel />", () => {
 
     expect(screen.queryByText("Reconnecting to the host…")).toBeNull();
     expect(screen.queryByText("Connecting to the remote host…")).toBeNull();
-    expect(screen.getByText(/Couldn't load provider state/)).toBeDefined();
+    expect(screen.getByText(/Couldn't reach the host/)).toBeDefined();
+    expect(screen.queryByText(/Couldn't load provider state/)).toBeNull();
+    expect(screen.queryByText(/The host may need to be updated/)).toBeNull();
+    expect(screen.queryByRole("button", { name: "Report issue" })).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "Retry" }));
+    expect(providerMocks.listResult.refetch).toHaveBeenCalledTimes(1);
   });
 
-  it("keeps an actionable failure card for an AMBIGUOUS post-send transport drop", () => {
+  it("shows a reach-failure card with Retry for an AMBIGUOUS post-send transport drop", () => {
     providerMocks.listResult.isError = true;
     // The base class, not the retryable subclass: the request frame WAS on the
     // wire when the socket died, so nothing may assume it resolves itself.
     // `useHostQuery` pins `retry: false` and no recovery event is owed, so
-    // showing this as "connecting" parks the panel on a spinner forever and
-    // hides the report-issue affordance.
+    // showing this as "connecting" parks the panel on a spinner forever. It
+    // gets the same reach-failure card and Retry as the exhausted case.
+    act(() => {
+      useDesktopDialogStore.setState({ reportIssueAvailable: true });
+    });
     providerMocks.listResult.error = new HostTransportFailureError({
       code: "RPC_ERROR",
       message: "The connection dropped before a response arrived",
@@ -2140,7 +2154,12 @@ describe("<ProvidersSettingsPanel />", () => {
 
     expect(screen.queryByText("Reconnecting to the host…")).toBeNull();
     expect(screen.queryByText("Connecting to the remote host…")).toBeNull();
-    expect(screen.getByText(/Couldn't load provider state/)).toBeDefined();
+    expect(screen.getByText(/Couldn't reach the host/)).toBeDefined();
+    expect(screen.queryByText(/Couldn't load provider state/)).toBeNull();
+    expect(screen.queryByText(/The host may need to be updated/)).toBeNull();
+    expect(screen.queryByRole("button", { name: "Report issue" })).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "Retry" }));
+    expect(providerMocks.listResult.refetch).toHaveBeenCalledTimes(1);
   });
 
   it("shows the read-fault copy and a Retry action instead of the generic card on a provider-settings-unreadable rejection (H9)", () => {
@@ -2157,7 +2176,8 @@ describe("<ProvidersSettingsPanel />", () => {
     );
 
     expect(screen.getByText(PROVIDER_SETTINGS_UNREADABLE_COPY)).toBeDefined();
-    expect(screen.queryByText(/may need to be updated/)).toBeNull();
+    expect(screen.queryByText(/Couldn't load provider state/)).toBeNull();
+    expect(screen.queryByText(/Couldn't reach the host/)).toBeNull();
     const retryButton = screen.getByRole("button", { name: "Retry" });
     expect(retryButton).toBeDefined();
 
@@ -2165,7 +2185,10 @@ describe("<ProvidersSettingsPanel />", () => {
     expect(providerMocks.listResult.refetch).toHaveBeenCalled();
   });
 
-  it("still shows the generic 'host may need to be updated' card for an unrelated providers.list rejection", () => {
+  it("shows the generic load-failure card with Retry and Report issue for an unrelated providers.list rejection", () => {
+    act(() => {
+      useDesktopDialogStore.setState({ reportIssueAvailable: true });
+    });
     providerMocks.listResult.isError = true;
     providerMocks.listResult.error = {
       message: "secret-token-should-never-render",
@@ -2180,7 +2203,35 @@ describe("<ProvidersSettingsPanel />", () => {
 
     expect(screen.getByText(/Couldn't load provider state/)).toBeDefined();
     expect(screen.queryByText(PROVIDER_SETTINGS_UNREADABLE_COPY)).toBeNull();
+    expect(screen.queryByText(/Couldn't reach the host/)).toBeNull();
+    expect(screen.queryByText(/The host may need to be updated/)).toBeNull();
+    expect(screen.getByRole("button", { name: "Report issue" })).toBeDefined();
+    fireEvent.click(screen.getByRole("button", { name: "Retry" }));
+    expect(providerMocks.listResult.refetch).toHaveBeenCalledTimes(1);
+  });
+
+  it("shows only the host-update message for E_HOST_UNSUPPORTED, with no Retry and no Report issue", () => {
+    act(() => {
+      useDesktopDialogStore.setState({ reportIssueAvailable: true });
+    });
+    providerMocks.listResult.isError = true;
+    providerMocks.listResult.error = {
+      message: "providers.list is unsupported by this host",
+      code: "E_HOST_UNSUPPORTED",
+    };
+
+    render(
+      <TooltipProvider>
+        <ProvidersSettingsPanel />
+      </TooltipProvider>,
+    );
+
+    expect(screen.getByText(HOST_UNSUPPORTED_MESSAGE)).toBeDefined();
+    expect(screen.queryByText(/Couldn't load provider state/)).toBeNull();
+    expect(screen.queryByText(/Couldn't reach the host/)).toBeNull();
+    expect(screen.queryByText(/The host may need to be updated/)).toBeNull();
     expect(screen.queryByRole("button", { name: "Retry" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Report issue" })).toBeNull();
   });
 
   describe("Reset provider settings", () => {

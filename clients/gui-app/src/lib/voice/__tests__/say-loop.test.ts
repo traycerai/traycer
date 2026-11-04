@@ -4,14 +4,20 @@ import {
   useVoiceSessionStore,
   type VoiceFocus,
 } from "@/stores/voice/voice-session-store";
+import type { VerbOutcome } from "../deferred-verbs";
 import { requestIdAnsweredIn, type ReplyRow } from "../focused-replies";
+import type { RouteSeen } from "../miss-report";
 import type { RoutedDecision } from "../router";
+import type { VoiceViewRow } from "../view";
+import { EMPTY_VIEW } from "./fixtures/empty-view";
+import { NO_OFFERED_IDS } from "./fixtures/filed-misses";
 import {
   MOVED_ASK_TEXT,
   createSayLoop,
   type AcceptedRequest,
   type AskOutcome,
   type ReplyPlace,
+  type Routed,
   type SayLoop,
 } from "../say-loop";
 
@@ -83,7 +89,7 @@ function harness(): Harness {
     resolve: (value: BotConversationSendResponse) => void;
     reject: (reason: Error) => void;
   }> = [];
-  const routes: Array<Promise<RoutedDecision>> = [];
+  const routes: Array<Promise<Routed>> = [];
   const loop = createSayLoop({
     store: useVoiceSessionStore,
     send: (focus, text) => {
@@ -104,6 +110,8 @@ function harness(): Harness {
     openThread: (_focus, answer) => opened.push(answer),
     botTitle: () => "Tracy",
     onAccepted: (request) => accepted.push(request),
+    view: () => EMPTY_VIEW,
+    act: () => Promise.resolve({ kind: "executed" }),
     decide: (request) => {
       const focus = useVoiceSessionStore.getState().focus ?? FOCUS;
       const decision: RoutedDecision = {
@@ -125,7 +133,7 @@ function harness(): Harness {
         span: { from: 0, to: request.segments.length - 1 },
         confirm: null,
       };
-      const route = Promise.resolve(decision);
+      const route = Promise.resolve({ decision, seen: null });
       routes.push(route);
       return route;
     },
@@ -966,6 +974,233 @@ describe("placementFor fallbacks", () => {
     });
     expect(h.loop.placementFor({ ...unnamed, requestId: "r-a" })).toEqual({
       kind: "pending",
+    });
+  });
+});
+
+describe("the act Not what I meant is offered for", () => {
+  const ROW: VoiceViewRow = {
+    action: "action:tab.next",
+    label: "Next tab",
+    takesWords: false,
+    confirm: false,
+  };
+
+  /** What the router was shown for the words `said`: distinct per request. */
+  function seenFor(said: string): RouteSeen {
+    return {
+      route: {
+        action: "act",
+        target: {
+          environmentId: null,
+          botId: null,
+          threadId: null,
+          itemId: null,
+          actionId: ROW.action,
+          agentId: null,
+        },
+        span: { fromSegment: 0, toSegment: 0 },
+        uncertain: false,
+        question: null,
+        control: null,
+        choice: null,
+      },
+      viewKind: "home",
+      rowIds: [ROW.action],
+      offered: NO_OFFERED_IDS,
+      pageTakesWords: false,
+      actTakesWords: false,
+      segments: [said],
+    };
+  }
+
+  function actRouted(said: string): Routed {
+    return {
+      decision: {
+        kind: "act",
+        row: ROW,
+        span: { from: 0, to: 0 },
+        generation: EMPTY_VIEW.generation,
+        turnId: null,
+        confirm: false,
+      },
+      seen: seenFor(said),
+    };
+  }
+
+  const MISSING: Routed = {
+    decision: { kind: "missing", span: { from: 0, to: 0 } },
+    seen: seenFor("missing"),
+  };
+  const FRAGMENT: Routed = {
+    decision: { kind: "fragment" },
+    seen: seenFor("fragment"),
+  };
+
+  /**
+   * The loop with each route and each act held until the test settles it:
+   * `answer` settles the route of the n-th request, `acts` the acts that ran.
+   */
+  function actHarness() {
+    const routes: Array<(routed: Routed) => void> = [];
+    const acts: Array<(outcome: VerbOutcome) => void> = [];
+    const loop = createSayLoop({
+      store: useVoiceSessionStore,
+      send: () => Promise.reject(new Error("no post expected")),
+      notify: () => undefined,
+      ask: () => () => undefined,
+      openThread: () => undefined,
+      botTitle: () => "Tracy",
+      onAccepted: () => undefined,
+      view: () => EMPTY_VIEW,
+      act: () =>
+        new Promise<VerbOutcome>((resolve) => {
+          acts.push(resolve);
+        }),
+      decide: () =>
+        new Promise<Routed>((resolve) => {
+          routes.push(resolve);
+        }),
+      recheck: () => true,
+      navigate: () => Promise.resolve(true),
+      think: () => undefined,
+      control: () => undefined,
+      canSend: () => true,
+      schedule: () => () => undefined,
+    });
+    return {
+      loop,
+      acts,
+      /** Settles the route of the request asked `index`-th, once it is out. */
+      answer: async (index: number, routed: Routed): Promise<void> => {
+        await vi.waitFor(() => expect(routes.length).toBeGreaterThan(index));
+        routes[index]?.(routed);
+      },
+    };
+  }
+
+  function say(text: string, at: number): void {
+    useVoiceSessionStore.getState().appendInputSegment(text, at);
+  }
+
+  const executedAct = () => useVoiceSessionStore.getState().executedAct;
+
+  it("is dropped when a later request is routed while it ran, and the act finishing does not bring it back", async () => {
+    const h = actHarness();
+
+    const older = h.loop.onDelegationCreated("d-older");
+    await h.answer(0, actRouted("older"));
+    await vi.waitFor(() => expect(h.acts).toHaveLength(1));
+
+    say(" something no page action serves", 10);
+    const newer = h.loop.onDelegationCreated("d-newer");
+    await h.answer(1, MISSING);
+    await newer;
+    expect(executedAct()).toBeNull();
+
+    h.acts[0]?.({ kind: "executed" });
+    await older;
+
+    expect(executedAct()).toBeNull();
+  });
+
+  it("is the newer act's when that one ran first: the older act finishing does not overwrite it", async () => {
+    const h = actHarness();
+
+    const older = h.loop.onDelegationCreated("d-older");
+    await h.answer(0, actRouted("older"));
+    await vi.waitFor(() => expect(h.acts).toHaveLength(1));
+
+    say(" now the next one", 10);
+    const newer = h.loop.onDelegationCreated("d-newer");
+    await h.answer(1, actRouted("newer"));
+    await vi.waitFor(() => expect(h.acts).toHaveLength(2));
+    h.acts[1]?.({ kind: "executed" });
+    await newer;
+    expect(executedAct()).toEqual(seenFor("newer"));
+
+    h.acts[0]?.({ kind: "executed" });
+    await older;
+
+    expect(executedAct()).toEqual(seenFor("newer"));
+  });
+
+  it("is kept for an act that ran while only a fragment was routed, since a fragment is not a new request", async () => {
+    const h = actHarness();
+
+    const older = h.loop.onDelegationCreated("d-older");
+    await h.answer(0, actRouted("older"));
+    await vi.waitFor(() => expect(h.acts).toHaveLength(1));
+
+    say(" um", 10);
+    const fragment = h.loop.onDelegationCreated("d-fragment");
+    await h.answer(1, FRAGMENT);
+    await fragment;
+
+    h.acts[0]?.({ kind: "executed" });
+    await older;
+
+    expect(executedAct()).toEqual(seenFor("older"));
+  });
+
+  describe("with two requests out at once", () => {
+    it("stays the act of the request said later, when the one said first is routed after it and serves nothing", async () => {
+      const h = actHarness();
+
+      const first = h.loop.onDelegationCreated("d-first");
+      say(" the second request", 10);
+      const second = h.loop.onDelegationCreated("d-second");
+
+      await h.answer(1, actRouted("second"));
+      await vi.waitFor(() => expect(h.acts).toHaveLength(1));
+      h.acts[0]?.({ kind: "executed" });
+      await second;
+      expect(executedAct()).toEqual(seenFor("second"));
+
+      await h.answer(0, MISSING);
+      await first;
+
+      expect(executedAct()).toEqual(seenFor("second"));
+    });
+
+    it("is the act of the request said later, when the one said first was routed before it", async () => {
+      const h = actHarness();
+
+      const first = h.loop.onDelegationCreated("d-first");
+      say(" the second request", 10);
+      const second = h.loop.onDelegationCreated("d-second");
+
+      await h.answer(0, MISSING);
+      await first;
+      await h.answer(1, actRouted("second"));
+      await vi.waitFor(() => expect(h.acts).toHaveLength(1));
+      h.acts[0]?.({ kind: "executed" });
+      await second;
+
+      expect(executedAct()).toEqual(seenFor("second"));
+    });
+
+    it("counts a request that took back words handed back by a fragment as said after the one routed between", async () => {
+      const h = actHarness();
+
+      const first = h.loop.onDelegationCreated("d-first");
+      say(" the second request", 10);
+      const second = h.loop.onDelegationCreated("d-second");
+
+      await h.answer(0, FRAGMENT);
+      await first;
+      await h.answer(1, MISSING);
+      await second;
+      expect(executedAct()).toBeNull();
+
+      say(" and the third", 20);
+      const third = h.loop.onDelegationCreated("d-third");
+      await h.answer(2, actRouted("third"));
+      await vi.waitFor(() => expect(h.acts).toHaveLength(1));
+      h.acts[0]?.({ kind: "executed" });
+      await third;
+
+      expect(executedAct()).toEqual(seenFor("third"));
     });
   });
 });

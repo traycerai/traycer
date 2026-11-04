@@ -1151,7 +1151,7 @@ function renderBanners(
   const result = render(
     <QueryClientProvider client={queryClient}>
       <TabHostProvider hostId={HOST_ID}>
-        <ChatComposerBannerPortalProvider>
+        <ChatComposerBannerPortalProvider hidden={false}>
           <ChatComposerFallbackBanners
             topBannerKind="fallback"
             fallback={{ pending, pendingReturn: undefined }}
@@ -1172,7 +1172,7 @@ function renderBanners(
       result.rerender(
         <QueryClientProvider client={queryClient}>
           <TabHostProvider hostId={HOST_ID}>
-            <ChatComposerBannerPortalProvider>
+            <ChatComposerBannerPortalProvider hidden={false}>
               <ChatComposerFallbackBanners
                 topBannerKind="fallback"
                 fallback={{ pending: nextPending, pendingReturn: undefined }}

@@ -1,3 +1,5 @@
+import type { HostDirectoryEntry } from "@traycer-clients/shared/host-client/host-directory";
+import { isRemoteHostDirectoryEntry } from "@traycer-clients/shared/host-client/remote-fetcher";
 import { useRouter } from "@tanstack/react-router";
 import { useCallback, useEffect, useMemo, useRef } from "react";
 import { useCommandPaletteRouter } from "@/components/command-palette/command-palette-context";
@@ -13,12 +15,22 @@ import { useAgentsOpenerItems } from "@/lib/commands/sources/open/agents-subpage
 import { useArtifactsOpenerItems } from "@/lib/commands/sources/open/artifacts-subpage";
 import { THEME_SUBPAGE_ITEMS } from "@/lib/commands/sources/theme.source";
 import type { CommandContext } from "@/lib/commands/types";
+import { hostEntryNeedsWake } from "@/hooks/sandboxes/use-sandbox-wake-on-tile-open";
+import { composerSendStateFor } from "@/lib/chats/composer-send-gates";
+import { useHostDirectory } from "@/lib/host";
 import { getChatSessionRegistry } from "@/lib/registries/chat-session-registry";
 import { SETTINGS_SECTIONS } from "@/lib/settings-sections";
+import type {
+  PageActReads,
+  VoiceAgentSession,
+  VoicePaletteRow,
+} from "@/lib/voice/page-acts";
 import {
   approvalSummary,
+  itemHostWake,
   composeVoiceView,
   NO_PALETTE_ITEMS,
+  type HostWake,
   type VoicePage,
   type VoicePaletteItems,
   type VoiceView,
@@ -44,14 +56,15 @@ import {
 import { useTileFindStore } from "@/stores/tile-find";
 import { useVoiceSessionStore } from "@/stores/voice/voice-session-store";
 
-/** The view the router is shown, read when a route is made. */
-export interface VoiceViewHandle {
+/** The view the router is shown, read when a route is made and when it runs. */
+export interface VoiceViewHandle extends PageActReads {
   /** The snapshot from what the app holds now. */
   readonly current: () => VoiceView;
   /** What {@link VoiceViewPaletteItems} hands over, and the context it composed them for. */
   readonly setPaletteItems: (
     items: VoicePaletteItems,
     composedFor: string | null,
+    ctx: CommandContext | null,
   ) => void;
 }
 
@@ -131,35 +144,79 @@ function readPage(pathname: string, focused: TabRef | null): VoicePage {
 interface AgentRead {
   readonly agent: VoiceViewAgent | null;
   readonly turnRunning: boolean;
+  readonly asleep: boolean;
   readonly approvals: ReadonlyArray<VoiceViewApproval>;
 }
 
 const NO_AGENT: AgentRead = {
   agent: null,
   turnRunning: false,
+  asleep: false,
   approvals: [],
 };
 
-/** The chat in the task's active tile and what it is doing, peeked, never opened. */
-function readAgent(
+/** The chat session in the task's active tile, peeked, never opened. */
+function readAgentSession(
   tabId: string | null,
   owner: ActiveTileOwner | null,
-): AgentRead {
+): VoiceAgentSession | null {
   if (tabId === null || owner === null || owner.viewTabId !== tabId) {
-    return NO_AGENT;
+    return null;
   }
   const ref =
     useEpicCanvasStore.getState().canvasByTabId[tabId]?.tilesByInstanceId[
       owner.tileInstanceId
     ];
-  if (ref?.type !== "chat") return NO_AGENT;
+  if (ref?.type !== "chat") return null;
   const handle = getChatSessionRegistry().peek(
     owner.epicId,
     ref.id,
     ref.hostId,
   );
-  if (handle === null) return NO_AGENT;
-  const chat = handle.store.getState();
+  if (handle === null) return null;
+  return {
+    handle,
+    chatId: ref.id,
+    epicId: owner.epicId,
+    hostId: ref.hostId,
+    tileInstanceId: owner.tileInstanceId,
+    title: ref.name,
+  };
+}
+
+/** A frozen sandbox can't be woken, so there is no question to put about it. */
+function composerAsksToWake(session: VoiceAgentSession): boolean {
+  const composer = composerSendStateFor(
+    session.hostId,
+    session.chatId,
+    session.tileInstanceId,
+  );
+  return composer?.restingSandbox === true && !composer.sandboxFrozen;
+}
+
+/**
+ * A host missing before the account's listing has answered may still turn out
+ * to rest. Missing after it, it isn't the person's to wake.
+ */
+function hostWakeOf(
+  entry: HostDirectoryEntry | null,
+  listingAnswered: boolean,
+): HostWake {
+  if (entry === null) return listingAnswered ? "none" : "unknown";
+  if (!hostEntryNeedsWake(entry)) return "none";
+  return isRemoteHostDirectoryEntry(entry) && entry.sandbox?.frozen === true
+    ? "frozen"
+    : "wakes";
+}
+
+/** What the chat in the task's active tile is doing. */
+function readAgent(
+  tabId: string | null,
+  owner: ActiveTileOwner | null,
+): AgentRead {
+  const session = readAgentSession(tabId, owner);
+  if (session === null) return NO_AGENT;
+  const chat = session.handle.store.getState();
   const approvals = humanActionableApprovals(chat.pendingApprovals).map(
     (approval) => ({
       id: approval.approvalId,
@@ -175,14 +232,18 @@ function readAgent(
   );
   return {
     agent: {
-      chatId: ref.id,
-      title: ref.name,
+      chatId: session.chatId,
+      title: session.title,
       state: waiting
         ? "waiting"
         : activityStateOf(turnStatus, chatActivityIndicator(chat)),
       waitingOn: waiting ? "approval" : null,
+      turnId: chat.activeTurn?.turnId ?? null,
     },
-    turnRunning: turnStatus === "running",
+    // A send that has not started its turn reads as running too, and there is
+    // no turn yet for a stop to be asked of.
+    turnRunning: turnStatus === "running" && chat.activeTurn !== null,
+    asleep: composerAsksToWake(session),
     approvals,
   };
 }
@@ -206,6 +267,7 @@ function readVoiceView(
     page,
     agent: read.agent,
     agentTurnRunning: read.turnRunning,
+    agentAsleep: read.asleep,
     approvals: read.approvals,
     palette,
     generation: useVoiceSessionStore.getState().viewGeneration,
@@ -254,12 +316,31 @@ function livePaletteContextKey(pathname: string): string {
 interface PublishedPalette {
   readonly items: VoicePaletteItems;
   readonly composedFor: string | null;
+  readonly ctx: CommandContext | null;
 }
 
 const NO_PALETTE: PublishedPalette = {
   items: NO_PALETTE_ITEMS,
   composedFor: null,
+  ctx: null,
 };
+
+/** The item behind a row, while the palette still offers it as something to run. */
+function offeredItem(
+  items: VoicePaletteItems,
+  action: string,
+): VoicePaletteRow["item"] | null {
+  const item = [
+    ...items.tiles,
+    ...items.sections,
+    ...items.tasks,
+    ...items.themes,
+    ...items.commands,
+  ].find((candidate) => candidate.id === action);
+  return item === undefined || item.subpage !== null || item.disabled === true
+    ? null
+    : item;
+}
 
 /**
  * The page the voice router sees (Tracy Bots voice, VT9), beside its
@@ -332,15 +413,47 @@ export function useVoiceView(enabled: boolean): VoiceViewHandle {
     );
   }, [router]);
   const setPaletteItems = useCallback(
-    (items: VoicePaletteItems, composedFor: string | null): void => {
-      paletteRef.current = { items, composedFor };
+    (
+      items: VoicePaletteItems,
+      composedFor: string | null,
+      ctx: CommandContext | null,
+    ): void => {
+      paletteRef.current = { items, composedFor, ctx };
     },
     [],
   );
-  return useMemo(
-    () => ({ current, setPaletteItems }),
-    [current, setPaletteItems],
+  const paletteRow = useCallback(
+    (action: string): VoicePaletteRow | null => {
+      const { items, composedFor, ctx } = paletteRef.current;
+      if (
+        ctx === null ||
+        composedFor !== livePaletteContextKey(router.history.location.pathname)
+      ) {
+        return null;
+      }
+      const item = offeredItem(items, action);
+      return item === null
+        ? null
+        : { item, ctx, hostWake: itemHostWake(item, items) };
+    },
+    [router],
   );
+  return useMemo(
+    () => ({ current, setPaletteItems, agentSession, paletteRow }),
+    [current, setPaletteItems, paletteRow],
+  );
+}
+
+/** The chat on the page in front; with an id, only while it is that chat. */
+function agentSession(chatId: string | null): VoiceAgentSession | null {
+  const focused = selectHostFocusedRef(useTabsStore.getState());
+  const session = readAgentSession(
+    focusedTaskTabId(focused),
+    getActiveTileOwner(),
+  );
+  return session === null || (chatId !== null && session.chatId !== chatId)
+    ? null
+    : session;
 }
 
 /**
@@ -387,10 +500,7 @@ function useVoiceCommandContext(): {
  * idle voice.
  */
 export function VoiceViewPaletteItems(props: {
-  readonly onItems: (
-    items: VoicePaletteItems,
-    composedFor: string | null,
-  ) => void;
+  readonly onItems: VoiceViewHandle["setPaletteItems"];
 }): null {
   const { onItems } = props;
   const { ctx, composedFor } = useVoiceCommandContext();
@@ -400,6 +510,7 @@ export function VoiceViewPaletteItems(props: {
   const taskItems = epicsSource.useItems(ctx);
   const agentItems = useAgentsOpenerItems(ctx);
   const artifactItems = useArtifactsOpenerItems(ctx);
+  const directory = useHostDirectory();
 
   useEffect(() => {
     onItems(
@@ -413,19 +524,25 @@ export function VoiceViewPaletteItems(props: {
         tasks: taskItems,
         themes: THEME_SUBPAGE_ITEMS,
         commands: [...navItems, ...actionItems],
+        // Read when asked: a sandbox sleeps without moving anything above.
+        hostWake: (hostId) =>
+          hostWakeOf(directory.findById(hostId), directory.hasSettledFleet()),
       },
       composedFor,
+      ctx,
     );
   }, [
     actionItems,
     agentItems,
     artifactItems,
     composedFor,
+    ctx,
+    directory,
     navItems,
     onItems,
     sectionItems,
     taskItems,
   ]);
-  useEffect(() => () => onItems(NO_PALETTE_ITEMS, null), [onItems]);
+  useEffect(() => () => onItems(NO_PALETTE_ITEMS, null, null), [onItems]);
   return null;
 }

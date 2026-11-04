@@ -258,18 +258,23 @@ vi.mock(
       await importOriginal<
         typeof import("@/hooks/host/use-host-directory-list-query")
       >();
+    const useHostDirectoryList = () => {
+      const real = actual.useHostDirectoryList();
+      return realDirectory.entries === null
+        ? real
+        : {
+            ...real,
+            data: realDirectory.entries,
+            fetchStatus: "idle" as const,
+          };
+    };
+    // The reachability hook reads the directory through
+    // `useHostDirectoryReading`, which calls `useHostDirectoryListQuery`, so
+    // the handed-in directory must answer both exports.
     return {
       ...actual,
-      useHostDirectoryList: () => {
-        const real = actual.useHostDirectoryList();
-        return realDirectory.entries === null
-          ? real
-          : {
-              ...real,
-              data: realDirectory.entries,
-              fetchStatus: "idle" as const,
-            };
-      },
+      useHostDirectoryList,
+      useHostDirectoryListQuery: useHostDirectoryList,
     };
   },
 );
@@ -695,6 +700,7 @@ beforeEach(() => {
         crossHostMessaging: null,
         sessions: null,
         updatesExternallyManaged: null,
+        previousExit: null,
       }),
       "environment.host.list": ({ environmentId }) => ({
         hosts: appHost.hostsByEnvironmentId.get(environmentId) ?? [],

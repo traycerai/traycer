@@ -1,4 +1,5 @@
 import { execFileSync } from "node:child_process";
+import { GIT_OUTPUT_MAX_BUFFER_BYTES } from "../../../../scripts/git-output-limit.cjs";
 import { existsSync, readFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -106,6 +107,8 @@ function expectEveryCounterZero(spies: FingerprintSpies): void {
 }
 
 describe("importing a registry module walks no schema", () => {
+  // The validator's half of each host test only proves the spies see a walk, so
+  // that the zero counts before it mean something. One line shows that.
   it("host/registry: import is silent; full validators walk the seam", async () => {
     vi.resetModules();
     const spies = await loadFingerprintSpies();
@@ -113,13 +116,17 @@ describe("importing a registry module walks no schema", () => {
     const mod = await import("@traycer/protocol/host/registry");
     expectEveryCounterZero(spies);
 
-    validateVersionedRpcRegistry(mod.hostRpcRegistry);
+    validateVersionedRpcRegistry({
+      "agent.sendMessage": mod.hostRpcRegistry["agent.sendMessage"],
+    });
     expect(spies.toJsonSchemaFingerprint.mock.calls.length).toBeGreaterThan(0);
     expect(spies.toUnknownKeyTree.mock.calls.length).toBeGreaterThan(0);
 
     const streamCallsBefore =
       spies.toStreamFieldJsonSchemaText.mock.calls.length;
-    validateVersionedStreamRpcRegistry(mod.hostStreamRpcRegistry);
+    validateVersionedStreamRpcRegistry({
+      "epic.subscribe": mod.hostStreamRpcRegistry["epic.subscribe"],
+    });
     expect(spies.toStreamFieldJsonSchemaText.mock.calls.length).toBeGreaterThan(
       streamCallsBefore,
     );
@@ -132,11 +139,15 @@ describe("importing a registry module walks no schema", () => {
     const mod = await import("@traycer/protocol/host/index");
     expectEveryCounterZero(spies);
 
-    validateVersionedRpcRegistry(mod.hostRpcRegistry);
+    validateVersionedRpcRegistry({
+      "agent.sendMessage": mod.hostRpcRegistry["agent.sendMessage"],
+    });
     expect(spies.toJsonSchemaFingerprint.mock.calls.length).toBeGreaterThan(0);
     const streamCallsBefore =
       spies.toStreamFieldJsonSchemaText.mock.calls.length;
-    validateVersionedStreamRpcRegistry(mod.hostStreamRpcRegistry);
+    validateVersionedStreamRpcRegistry({
+      "epic.subscribe": mod.hostStreamRpcRegistry["epic.subscribe"],
+    });
     expect(spies.toStreamFieldJsonSchemaText.mock.calls.length).toBeGreaterThan(
       streamCallsBefore,
     );
@@ -374,7 +385,11 @@ function listProductionProtocolSrcFiles(): string[] {
       "--",
       "src/*.ts",
     ],
-    { cwd: PROTOCOL_ROOT, encoding: "utf8" },
+    {
+      maxBuffer: GIT_OUTPUT_MAX_BUFFER_BYTES,
+      cwd: PROTOCOL_ROOT,
+      encoding: "utf8",
+    },
   );
   const files: string[] = [];
   for (const relative of listing.split("\0")) {

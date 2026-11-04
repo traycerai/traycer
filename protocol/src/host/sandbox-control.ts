@@ -132,6 +132,12 @@ export const sandboxRouteReadinessSchema: z.ZodType<SandboxRouteReadiness> =
  * create and destroy answers carry it (the server's `SandboxView`). The list
  * excludes destroyed rows.
  */
+/** A create waiting for quota; an absent field preserves older servers' behavior. */
+export interface SandboxRateLimit {
+  readonly limited: true;
+  readonly retryAfterAt: number | null;
+}
+
 export interface SandboxSummary {
   /** The sandbox id: the path segment of every `/api/sandboxes/:id` verb. */
   readonly id: string;
@@ -150,6 +156,7 @@ export interface SandboxSummary {
   readonly frozen: boolean;
   /** The vendor's or the lifecycle's code on a `failed` row, else `null`. */
   readonly failureCode: string | null;
+  readonly rateLimit?: SandboxRateLimit;
   /** `null` = the default idle period (30 minutes). */
   readonly idleMinutes: number | null;
   /** Created by an agent for one task; offered in no picker. */
@@ -429,6 +436,12 @@ export const sandboxSummarySchema: z.ZodType<SandboxSummary> = lazySchema(() =>
     state: z.enum(HOST_SANDBOX_STATES),
     frozen: z.boolean(),
     failureCode: z.string().nullable(),
+    rateLimit: z
+      .object({
+        limited: z.literal(true),
+        retryAfterAt: z.number().finite().nullable(),
+      })
+      .optional(),
     idleMinutes: z.number().int().positive().nullable(),
     burst: z.boolean(),
     createdByHostId: z.string().nullable(),

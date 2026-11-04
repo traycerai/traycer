@@ -21,6 +21,7 @@ const GROUP_LABELS: Readonly<Record<CommandGroupId, string>> = {
   actions: "Actions",
   navigation: "Navigation",
   epics: "Tasks",
+  bots: "Tracy",
   theme: "Theme",
   help: "Help",
   open: "Open into pane",
@@ -29,6 +30,7 @@ const GROUP_LABELS: Readonly<Record<CommandGroupId, string>> = {
 const DEFAULT_GROUP_ORDER: ReadonlyArray<CommandGroupId> = [
   "suggested",
   "epics",
+  "bots",
   "actions",
   "navigation",
   "theme",

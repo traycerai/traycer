@@ -4,6 +4,7 @@ import { composeVoiceView, NO_PALETTE_ITEMS } from "../../view";
 export const EMPTY_VIEW = composeVoiceView({
   page: { kind: "home" },
   agent: null,
+  agentAsleep: false,
   agentTurnRunning: false,
   approvals: [],
   palette: NO_PALETTE_ITEMS,

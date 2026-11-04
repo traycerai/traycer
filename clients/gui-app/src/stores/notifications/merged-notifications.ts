@@ -79,12 +79,14 @@ import {
 } from "@/lib/notifications/notification-feed-mode";
 import { useNotificationsPopoverStore } from "@/stores/notifications/notifications-popover-store";
 import {
+  useNotificationAttentionCount,
   useNotificationEntries,
   useNotificationEntryById,
   useNotificationEntryIds,
   useNotificationUnreadCount,
   useNotificationsStore,
 } from "@/stores/notifications/notifications-store";
+import { severityForGlobalEvent } from "@/lib/notifications/global-notification-severity";
 import {
   formatHostNotificationPresentation,
   isBotConversationAttention,
@@ -140,6 +142,9 @@ export interface MergedNotificationRow {
    * row that mentions them: Attention's last class while unread. Absent or
    * `false` on every other row. */
   readonly botAnswer?: boolean;
+  /** The member who wrote the bot conversation row this notice is about.
+   * Absent or `null` on the bot's own rows and on every other row. */
+  readonly botAuthorUserId?: string | null;
   readonly hostKind: HostNotificationFeedEntry["kind"] | null;
   readonly appLocalKind: AppLocalNotificationEntry["kind"] | null;
   readonly globalEntry: NotificationEntry | null;
@@ -446,8 +451,8 @@ interface AttentionOrderEntry {
   readonly tier: NotificationAttentionTier;
 }
 
-/** Attention, blocking-first, then failures, then answers, newest first
- * within each tier.
+/** Attention, blocking-first, then failures, answers and invitations, newest
+ * first within each tier.
  * Never filtered - Attention is complete and filter-invariant by design. */
 export function useAttentionNotificationIds(): ReadonlyArray<string> {
   const rows = useMergedNotificationRows();
@@ -724,6 +729,12 @@ export type NotificationBellState =
  * number, per the "never present a stale/understated count as exact"
  * invariant.
  *
+ * Attention is every lane's count of what needs the person: the hosts'
+ * summaries, renderer-local failures, and the Notifications room's unread
+ * invitations (`severityForGlobalEvent`) - a task shared with them that
+ * nothing else announces. Every other collaboration row is unread activity,
+ * the quiet dot.
+ *
  * `unknown` RENDERS DISTINGUISHABLY from `clear` - `s5-parity-gaps` gap 3,
  * and `s5-status-truthfulness`'s class rule.
  *
@@ -749,13 +760,17 @@ export function useNotificationBellState(): NotificationBellState {
   // unread-failure count - no extra filter needed to fold it into attention.
   const appLocalUnread = useAppLocalNotificationUnreadCount();
   const globalUnread = useNotificationUnreadCount();
+  const globalAttention = useNotificationAttentionCount();
   const cloudSummary = useCloudNotificationsStore((state) => state.summary);
   if (feedMode === "cloud") {
     if (hostSummary === null || cloudSummary === null) {
       return { kind: "unknown" };
     }
     const attention =
-      hostSummary.attentionCount + cloudSummary.attentionCount + appLocalUnread;
+      hostSummary.attentionCount +
+      cloudSummary.attentionCount +
+      appLocalUnread +
+      globalAttention;
     if (attention > 0) {
       return { kind: "attention", count: attention };
     }
@@ -769,7 +784,8 @@ export function useNotificationBellState(): NotificationBellState {
   }
   if (feedMode === "upgrade-required") return { kind: "clear" };
   if (hostSummary === null) return { kind: "unknown" };
-  const attention = hostSummary.attentionCount + appLocalUnread;
+  const attention =
+    hostSummary.attentionCount + appLocalUnread + globalAttention;
   if (attention > 0) return { kind: "attention", count: attention };
   const unread = mergedUnreadCount({
     hostUnread: hostSummary.unreadCount,
@@ -2101,6 +2117,7 @@ function rowFromHostEntryForOrigin(
     agentSurface: agentSurfaceFromHostEntry(entry),
     secrets: secretsNotificationDetail(entry.kind, entry.payload),
     botAnswer: isBotAttention(entry),
+    botAuthorUserId: botConversationAuthorUserId(entry),
     hostKind: entry.kind,
     appLocalKind: null,
     globalEntry: null,
@@ -2152,7 +2169,7 @@ export function rowFromGlobalEntry(
     hostKind: null,
     appLocalKind: null,
     globalEntry: entry,
-    severity: "info",
+    severity: severityForGlobalEvent(entry.event),
     outcome: null,
     resolvedAt: null,
     sourceRef: null,
@@ -2182,6 +2199,7 @@ export function rowFromCloudFeedRow(
     agentSurface: agentSurfaceFromHostEntry(row.entry),
     secrets: secretsNotificationDetail(row.entry.kind, row.entry.payload),
     botAnswer: isBotAttention(row.entry),
+    botAuthorUserId: botConversationAuthorUserId(row.entry),
     hostKind: row.entry.kind,
     appLocalKind: null,
     globalEntry: null,
@@ -2493,6 +2511,17 @@ function navigationPayloadForChatStopped(
     eventId: includeTranscriptAnchor ? known.eventId : undefined,
     ...(scrollToEnd ? { scrollToEnd: true as const } : {}),
   };
+}
+
+function botConversationAuthorUserId(entry: {
+  readonly kind: HostNotificationFeedEntry["kind"];
+  readonly payload: HostNotificationFeedEntry["payload"];
+}): string | null {
+  const known = parseKnownHostNotificationPayloadForKind(
+    entry.kind,
+    entry.payload,
+  );
+  return known?.kind === "bot_conversation" ? known.authorUserId : null;
 }
 
 const HOST_PAGE_LIMIT = 50;

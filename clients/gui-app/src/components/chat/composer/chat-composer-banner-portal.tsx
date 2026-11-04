@@ -6,15 +6,22 @@ const ChatComposerBannerPortalContext = createContext<HTMLDivElement | null>(
 );
 
 export function ChatComposerBannerPortalProvider({
+  hidden,
   children,
 }: {
+  /** Out of the layout, still mounted, so a banner keeps its state. */
+  readonly hidden: boolean;
   readonly children: ReactNode;
 }): ReactNode {
   const [container, setContainer] = useState<HTMLDivElement | null>(null);
 
   return (
     <>
-      <div ref={setContainer} data-testid="chat-composer-banner-host" />
+      <div
+        ref={setContainer}
+        hidden={hidden}
+        data-testid="chat-composer-banner-host"
+      />
       <ChatComposerBannerPortalContext.Provider value={container}>
         {children}
       </ChatComposerBannerPortalContext.Provider>

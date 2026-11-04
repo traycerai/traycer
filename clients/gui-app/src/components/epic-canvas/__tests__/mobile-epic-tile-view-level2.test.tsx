@@ -8,6 +8,7 @@ import { MobileEmptyPaneLevel2 } from "@/components/epic-canvas/mobile/mobile-em
 import { setPhoneLayoutOnly } from "@/lib/mobile-app";
 import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
 import { useMobileSwitcherStore } from "@/stores/epics/mobile-switcher-store";
+import { useMobileTileColumnStore } from "@/stores/epics/mobile-tile-column-store";
 import { useLeftPanelStore } from "@/stores/epics/left-panel-store";
 import { useSurfaceSyncStore } from "@/stores/sync/surface-sync-store";
 import { useTileMinimapStore } from "@/stores/tile-minimap";
@@ -20,6 +21,7 @@ import {
   installShellForm,
   SHELL_WIDTH_COLUMN_256,
   SHELL_WIDTH_MENU,
+  SHELL_WIDTH_TWO_TILES,
   type ShellFormHarness,
 } from "../../../../__tests__/mobile-level2-form-harness";
 
@@ -308,6 +310,7 @@ describe("<MobileEpicTileView /> level 2 forms", () => {
     shell.dispose();
     useEpicCanvasStore.setState(useEpicCanvasStore.getInitialState(), true);
     useMobileSwitcherStore.setState({ openTabId: null, mountCountByTabId: {} });
+    useMobileTileColumnStore.setState({ collapsed: false });
     useLeftPanelStore.setState({
       activePanelIdByTabId: {},
       commentsPanelRevealedByTabId: {},
@@ -340,6 +343,51 @@ describe("<MobileEpicTileView /> level 2 forms", () => {
     });
   });
 
+  describe("folding the column", () => {
+    it("folds into the menu from the column's own control, and unfolds from the pane's header", async () => {
+      const user = userEvent.setup();
+      renderView();
+      const column = screen.getByTestId("mobile-tile-column");
+      await user.click(
+        within(column).getByRole("button", { name: "Hide sidebar" }),
+      );
+
+      expect(screen.queryByTestId("mobile-tile-column")).toBeNull();
+      expect(useMobileTileColumnStore.getState().collapsed).toBe(true);
+      const header = screen.getByTestId("mobile-tile-pane-header");
+      expect(
+        within(header).getByTestId("mobile-tile-menu-trigger"),
+      ).not.toBeNull();
+
+      await user.click(
+        within(header).getByRole("button", { name: "Show sidebar" }),
+      );
+
+      expect(screen.getByTestId("mobile-tile-column")).not.toBeNull();
+      expect(screen.queryByTestId("mobile-tile-menu-trigger")).toBeNull();
+      expect(useMobileTileColumnStore.getState().collapsed).toBe(false);
+    });
+
+    it("keeps the fold where the column would fit again, and the tile body mounted across it", () => {
+      useMobileTileColumnStore.setState({ collapsed: true });
+      renderView();
+      expect(screen.queryByTestId("mobile-tile-column")).toBeNull();
+      expect(screen.getByTestId("mobile-tile-menu-trigger")).not.toBeNull();
+
+      act(() => useMobileTileColumnStore.getState().setCollapsed(false));
+      expect(screen.getByTestId("mobile-tile-column")).not.toBeNull();
+      expect(bodyMounts.mounted).toBe(1);
+      expect(bodyMounts.unmounted).toBe(0);
+    });
+
+    it("offers no fold where the width draws the menu of its own accord", () => {
+      shell.set({ width: SHELL_WIDTH_MENU, portrait: false });
+      renderView();
+      expect(screen.queryByTestId("mobile-tile-column-toggle")).toBeNull();
+      expect(screen.getByTestId("mobile-tile-menu-trigger")).not.toBeNull();
+    });
+  });
+
   describe("the menu", () => {
     beforeEach(() => shell.set({ width: SHELL_WIDTH_MENU, portrait: false }));
 
@@ -368,6 +416,21 @@ describe("<MobileEpicTileView /> level 2 forms", () => {
       renderView();
       await openMenu();
       showTile("inst-file");
+      expect(screen.queryByTestId("mobile-tile-menu")).toBeNull();
+    });
+
+    it("closes when a tile from an embedded panel is shown beside the first, where two fit", async () => {
+      shell.set({ width: SHELL_WIDTH_TWO_TILES, portrait: false });
+      useMobileTileColumnStore.setState({ collapsed: true });
+      renderView();
+      await openMenu();
+      act(() => {
+        useEpicCanvasStore.getState().setMobileSecondaryTile(TAB_ID, {
+          instanceId: "inst-file",
+          transient: false,
+        });
+      });
+      expect(screen.getByTestId("mobile-epic-second-tile")).not.toBeNull();
       expect(screen.queryByTestId("mobile-tile-menu")).toBeNull();
     });
 
@@ -433,6 +496,16 @@ describe("<MobileEpicTileView /> level 2 forms", () => {
       renderEmpty();
       expect(screen.getByTestId("mobile-tile-column")).not.toBeNull();
       expect(screen.getByTestId("child")).not.toBeNull();
+    });
+
+    it("unfolds a folded column from beside its Switch tab trigger", async () => {
+      useMobileTileColumnStore.setState({ collapsed: true });
+      renderEmpty();
+      expect(screen.queryByTestId("mobile-tile-column")).toBeNull();
+      const user = userEvent.setup();
+      await user.click(screen.getByRole("button", { name: "Show sidebar" }));
+      expect(screen.getByTestId("mobile-tile-column")).not.toBeNull();
+      expect(screen.queryByRole("button", { name: "Switch tab" })).toBeNull();
     });
 
     it("draws a Switch tab trigger in the menu form", async () => {

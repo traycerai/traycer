@@ -1,4 +1,9 @@
-import { WebAudioOutput } from "@/lib/soundtrack/output";
+import {
+  WebAudioDimFilter,
+  WebAudioLevel,
+  WebAudioOutput,
+} from "@/lib/soundtrack/output";
+import { MIX_TUNING } from "@/lib/soundtrack/mix-tuning";
 
 /**
  * Browser fixture for what the soundtrack's Web Audio port puts in the output.
@@ -7,9 +12,9 @@ import { WebAudioOutput } from "@/lib/soundtrack/output";
  * no audio: only a browser's own automation timeline says what a gain reads on
  * each frame. See `browser-tests/soundtrack-output.spec.ts`.
  *
- * WHAT IS REAL: `WebAudioOutput` and the browser's `OfflineAudioContext`. Every
- * voice plays a constant 1, so with one voice sounding a rendered sample IS the
- * gain on that frame.
+ * WHAT IS REAL: `WebAudioOutput`, `WebAudioDimFilter` and the browser's
+ * `OfflineAudioContext`. In `render`, every voice plays a constant 1, so with
+ * one voice sounding a rendered sample IS the gain on that frame.
  */
 
 const SAMPLE_RATE = 48_000;
@@ -103,10 +108,140 @@ async function render(request: RenderRequest): Promise<Rendered> {
   };
 }
 
+interface DimRequest {
+  readonly seconds: number;
+  readonly toneHz: number;
+  readonly amplitude: number;
+  /** Each runs on the render quantum its time falls in. */
+  readonly steps: readonly { readonly at: number; readonly dimmed: boolean }[];
+  /** Peak and RMS of the samples in each window, in seconds. */
+  readonly windows: readonly { readonly from: number; readonly to: number }[];
+}
+
+interface DimRendered {
+  readonly peaks: readonly number[];
+  readonly rms: readonly number[];
+}
+
+/** A steady tone through `WebAudioDimFilter`, dimmed and undimmed on cue. */
+async function renderDim(request: DimRequest): Promise<DimRendered> {
+  const context = new OfflineAudioContext(
+    1,
+    Math.ceil(request.seconds * SAMPLE_RATE),
+    SAMPLE_RATE,
+  );
+  const tone = context.createBuffer(1, context.length, context.sampleRate);
+  const channel = tone.getChannelData(0);
+  for (let index = 0; index < channel.length; index += 1) {
+    channel[index] =
+      request.amplitude *
+      Math.sin((2 * Math.PI * request.toneHz * index) / SAMPLE_RATE);
+  }
+  const filter = new WebAudioDimFilter(context, context.destination);
+  const source = context.createBufferSource();
+  source.buffer = tone;
+  source.connect(filter.input);
+  source.start(0);
+  for (const step of request.steps) {
+    void context.suspend(step.at).then(() => {
+      filter.setDimmed(step.dimmed);
+      return context.resume();
+    });
+  }
+
+  const samples = (await context.startRendering()).getChannelData(0);
+  const peaks: number[] = [];
+  const rms: number[] = [];
+  for (const { from, to } of request.windows) {
+    const first = Math.round(from * SAMPLE_RATE);
+    const last = Math.round(to * SAMPLE_RATE);
+    let peak = 0;
+    let sumOfSquares = 0;
+    for (let index = first; index < last; index += 1) {
+      peak = Math.max(peak, Math.abs(samples[index]));
+      sumOfSquares += samples[index] * samples[index];
+    }
+    peaks.push(peak);
+    rms.push(Math.sqrt(sumOfSquares / (last - first)));
+  }
+  return { peaks, rms };
+}
+
+interface LevelRequest {
+  readonly seconds: number;
+  readonly volume: number;
+  /** Each runs on the render quantum its time falls in. */
+  readonly steps: readonly {
+    readonly kind: "volume" | "duck";
+    readonly at: number;
+    readonly value: number;
+  }[];
+  readonly readAt: readonly number[];
+}
+
+interface LevelRendered {
+  readonly readings: readonly number[];
+  /** The biggest jump between neighbouring samples from the first step on. */
+  readonly biggestStep: number;
+}
+
+/** A constant 1 through `WebAudioLevel`: a sample reads as the level itself. */
+async function renderLevel(request: LevelRequest): Promise<LevelRendered> {
+  const context = new OfflineAudioContext(
+    1,
+    Math.ceil(request.seconds * SAMPLE_RATE),
+    SAMPLE_RATE,
+  );
+  const constantOne = context.createBuffer(
+    1,
+    context.length,
+    context.sampleRate,
+  );
+  constantOne.getChannelData(0).fill(1);
+  const level = new WebAudioLevel(context, context.destination, request.volume);
+  const source = context.createBufferSource();
+  source.buffer = constantOne;
+  source.connect(level.input);
+  source.start(0);
+  for (const step of request.steps) {
+    void context.suspend(step.at).then(() => {
+      if (step.kind === "volume") level.setVolume(step.value);
+      else level.duck(step.value);
+      return context.resume();
+    });
+  }
+
+  const samples = (await context.startRendering()).getChannelData(0);
+  const firstStep = Math.round(request.steps[0].at * SAMPLE_RATE) + 1;
+  let biggestStep = 0;
+  for (let index = firstStep; index < samples.length; index += 1) {
+    biggestStep = Math.max(
+      biggestStep,
+      Math.abs(samples[index] - samples[index - 1]),
+    );
+  }
+  return {
+    readings: request.readAt.map(
+      (time) => samples[Math.round(time * SAMPLE_RATE)],
+    ),
+    biggestStep,
+  };
+}
+
 declare global {
   interface Window {
-    __soundtrackOutputProbe: { readonly render: typeof render };
+    __soundtrackOutputProbe: {
+      readonly render: typeof render;
+      readonly renderDim: typeof renderDim;
+      readonly renderLevel: typeof renderLevel;
+      readonly duckTuning: typeof MIX_TUNING.duck;
+    };
   }
 }
 
-window.__soundtrackOutputProbe = { render };
+window.__soundtrackOutputProbe = {
+  render,
+  renderDim,
+  renderLevel,
+  duckTuning: MIX_TUNING.duck,
+};

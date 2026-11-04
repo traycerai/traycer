@@ -36,11 +36,29 @@ move together or the app half-changes shell:
   imports it and pushes every Tailwind breakpoint out of reach, so `md:` and
   `lg:` utilities cannot paint desktop controls over the phone shell at tablet
   widths. The comment there explains why it is a sentinel value and not
-  `--breakpoint-*: initial`. **Raw `@media` rules outside Tailwind do not get
-  this for free** — a hand-written `max-width: 767px` tier is phone styling
-  that silently stops applying on a tablet running the phone shell. Either key
-  it on the resolved layout, or override it in `index.native.css`, which is
-  what the first-task coachmark's type scale does.
+  `--breakpoint-*: initial`. Raw `@media` rules outside Tailwind are reached
+  by `scripts/phone-tier-css.ts`: it repeats a line-anchored
+  `@media (max-width: 767px)` or `@media (pointer: coarse)` block under
+  `.traycer-phone-layout-only`, the class `main.tsx` puts on `<html>`, so
+  those tiers apply at every width. Any other raw query is not reached: key it
+  on the resolved layout, or override it in `index.native.css`.
+
+The phone shell is the same at every width; what the width earns is read by
+one rule, `lib/layout/mobile-layout-form.ts`: level 1 (the tasks and Tracy) as
+the drawer, the desktop strip's rail or the expanded strip; level 2 (a task's
+tiles, Tracy's bots) as the bottom sheet, a menu under the current item's name
+or a column beside the content; and one or two content tiles. Where a task's
+column fits, the person can fold it into the menu and back
+(`mobile-tile-column-store.ts`), as they collapse the strip. Text and page
+width caps from the desktop layout are lifted in `index.native.css`. A touch
+stylus makes the emulator and pen phones report `(pointer: fine)`, so the
+installed app treats its pointer as coarse by decision (`use-coarse-pointer.ts`,
+the `pointer-*` variants in `index.native.css`).
+
+A window under 560px tall in landscape has room for little else, so the
+`max-md:short-landscape:` variant keeps the chat transcript and the home composer
+visible there: the composer draws its one-row form at rest and the stacked
+surfaces above it give way.
 
 Both platforms rotate freely, tablets as well as phones. iOS lists all four
 orientations in **both** `Info.plist` and `Info-Dev.plist` (Debug builds use the
@@ -135,6 +153,16 @@ Gradle files embed install-layout hashes that go stale.
   default (build succeeds, push registration rejects and is swallowed).
 - `POST_NOTIFICATIONS` must stay declared in the app manifest or Android 13+
   denies without ever prompting.
+- Below WebView 140 Capacitor's `SystemBars` pads the WebView's parent view
+  natively, so the system-bar bands show that view, not the page.
+  `src/window-background.ts` reads the colour at the page's top and bottom
+  edges, paints the status bar's band and the others through
+  `WindowBackgroundPlugin.java`, and sets the bar icon style from the top one.
+  From WebView 140 the page runs edge to edge and `#root` pads for the bars, so
+  the same read paints `#root`'s side strips instead.
+- `proguard-rules.pro` strips `Activity.setRequestedOrientation` so no plugin
+  activity can lock the rotation Play checks for. A new orientation lock in
+  native code is removed in release builds the same way.
 
 ## Working rules
 

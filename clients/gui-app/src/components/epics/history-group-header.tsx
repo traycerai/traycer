@@ -32,7 +32,7 @@ export function HistoryGroupHeader(props: {
     <div
       ref={setElement}
       className={cn(
-        "sticky top-0 z-10 flex min-h-12 items-center gap-2 bg-[var(--history-surface,var(--canvas))] px-3.5 py-1.5",
+        "sticky top-0 z-10 flex min-h-12 items-center gap-2 bg-[var(--history-surface,var(--canvas))] px-3.5 py-1.5 max-md:[@media(max-height:240px)]:hidden",
         messages && "z-20 border-t border-border",
         props.pinBottom && "bottom-0",
       )}

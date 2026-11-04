@@ -10,9 +10,11 @@ import {
   matchesChatOwnershipFilter,
   useLeftPanelStore,
   useChatArchiveVisibility,
+  useMainPanelCollapsed,
   type ArtifactFilter,
   type ChatFilter,
 } from "../left-panel-store";
+import { writeArrangementField } from "@/lib/layout/arrangement-gestures";
 import type {
   LeftPanelId,
   PanelVisibilityOverrideById,
@@ -296,10 +298,77 @@ describe("useLeftPanelStore", () => {
 
     expect(useLeftPanelStore.getState().isMainCollapsed("tab-a")).toBe(true);
 
+    // Expanding is a decision too, kept so the layout's "Collapsed in new
+    // tasks" fallback cannot fold this tab back after a refresh.
     useLeftPanelStore.getState().setMainCollapsed("tab-a", false);
-    expect(readPersistedLeftPanelState().state.mainCollapsedByTabId).toEqual(
-      {},
-    );
+    expect(readPersistedLeftPanelState().state.mainCollapsedByTabId).toEqual({
+      "tab-a": false,
+    });
+
+    // And that record survives a refresh with the fallback on: the tab the
+    // user expanded comes back expanded while an untouched one collapses.
+    act(() => {
+      writeArrangementField("sidebarStartCollapsed", true);
+    });
+    const persistedAfterExpand =
+      window.localStorage.getItem(PERSIST_KEY) ?? "{}";
+    useLeftPanelStore.setState({ mainCollapsedByTabId: {} });
+    window.localStorage.setItem(PERSIST_KEY, persistedAfterExpand);
+    await useLeftPanelStore.persist.rehydrate();
+
+    expect(useLeftPanelStore.getState().isMainCollapsed("tab-a")).toBe(false);
+    expect(useLeftPanelStore.getState().isMainCollapsed("tab-b")).toBe(true);
+  });
+
+  it("copies the collapse RECORD to a derived tab, even when it equals the Collapsed in new tasks fallback", () => {
+    act(() => {
+      writeArrangementField("sidebarStartCollapsed", true);
+    });
+    useLeftPanelStore.getState().setMainCollapsed("tab-a", false);
+    useLeftPanelStore.getState().setMainCollapsed("tab-a", true);
+
+    useLeftPanelStore.getState().copyTabState("tab-a", "tab-b");
+    // And a source with no record hands the duplicate none, so a stale
+    // record on the target does not outlive the copy.
+    useLeftPanelStore.getState().setMainCollapsed("tab-d", false);
+    useLeftPanelStore.getState().copyTabState("tab-c", "tab-d");
+
+    act(() => {
+      writeArrangementField("sidebarStartCollapsed", false);
+    });
+    expect(useLeftPanelStore.getState().isMainCollapsed("tab-a")).toBe(true);
+    expect(useLeftPanelStore.getState().isMainCollapsed("tab-b")).toBe(true);
+    expect(useLeftPanelStore.getState().isMainCollapsed("tab-d")).toBe(false);
+    expect(
+      Object.hasOwn(useLeftPanelStore.getState().mainCollapsedByTabId, "tab-d"),
+    ).toBe(false);
+  });
+
+  it("opens a tab with no collapse record of its own as the layout's Collapsed in new tasks says", () => {
+    const { result } = renderHook(() => useMainPanelCollapsed("tab-a"));
+    expect(useLeftPanelStore.getState().isMainCollapsed("tab-a")).toBe(false);
+    expect(result.current).toBe(false);
+
+    act(() => {
+      writeArrangementField("sidebarStartCollapsed", true);
+    });
+
+    expect(useLeftPanelStore.getState().isMainCollapsed("tab-a")).toBe(true);
+    expect(result.current).toBe(true);
+
+    // A tab the user expanded keeps that, whatever the fallback says; a tab
+    // never touched keeps following it.
+    act(() => {
+      useLeftPanelStore.getState().toggleMainCollapsed("tab-a");
+    });
+    expect(result.current).toBe(false);
+    expect(useLeftPanelStore.getState().isMainCollapsed("tab-b")).toBe(true);
+
+    act(() => {
+      writeArrangementField("sidebarStartCollapsed", false);
+    });
+    expect(result.current).toBe(false);
+    expect(useLeftPanelStore.getState().isMainCollapsed("tab-b")).toBe(false);
   });
 
   it("restores a persisted sidebar width", async () => {

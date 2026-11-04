@@ -180,6 +180,6 @@ describe("officeTileRectOf", () => {
   });
 
   // THAT THE SIX REGISTERED VIEWS ARE ALL AFFINE - the assumption everything
-  // above rests on - is pinned in `views/__tests__/office-plan-perf.test.ts`,
+  // above rests on - is pinned in `views/__tests__/office-plan-perf.measure.ts`,
   // where the plan machinery to build their real layouts already lives.
 });

@@ -104,6 +104,28 @@ afterEach(() => {
   vi.doUnmock("../../cli/traycer-cli");
 });
 
+// A committed install or apply refreshes the registry cache without awaiting
+// it (`host-management-ipc.ts`). A test that fires one waits here for that
+// write, so it can neither race this file's cleanup nor, once HOME has moved
+// on, land in the next test's home. The fake CLI answers the forced probe with
+// no manifest, so the refresh writes an unreachable entry; waiting for that,
+// not for any file that parses, also outlasts a cache a test seeded itself.
+async function awaitRegistryCacheWrite(
+  environment: "production" | "dev",
+): Promise<void> {
+  const name =
+    environment === "production"
+      ? "registry-update-cache.json"
+      : `registry-update-cache-${environment}.json`;
+  const path = join(workHome, ".traycer", "desktop", name);
+  await vi.waitFor(() => {
+    const cache = JSON.parse(readFileSync(path, "utf8")) as {
+      readonly reachable: boolean;
+    };
+    expect(cache.reachable).toBe(false);
+  });
+}
+
 function writeInstallRecord(
   environment: "production" | "dev",
   body: Record<string, unknown>,
@@ -698,6 +720,7 @@ describe("host-management IPC - CLI subprocess argv carries NO --environment (CL
         force: false,
       }),
     ).resolves.toEqual(bridge.options.hostController.applyStagedResult);
+    await awaitRegistryCacheWrite("production");
   });
 
   it("returns installVersion's committed ok outcome when its post-pin registry projection rejects", async () => {
@@ -721,6 +744,7 @@ describe("host-management IPC - CLI subprocess argv carries NO --environment (CL
         force: false,
       }),
     ).resolves.toEqual(bridge.options.hostController.installVersionResult);
+    await awaitRegistryCacheWrite("production");
   });
 
   it("passes applyStaged's busy continuation through unchanged", async () => {
@@ -928,6 +952,7 @@ describe("host-management IPC - CLI subprocess argv carries NO --environment (CL
       null,
       { pin: "latest", force: true },
     );
+    await awaitRegistryCacheWrite("dev");
     await bridge.handlers.get(RunnerHostInvoke.traycerHostUninstall)!(null, {
       all: true,
     });

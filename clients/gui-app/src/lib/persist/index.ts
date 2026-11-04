@@ -20,6 +20,7 @@ export {
   interviewDraftKey,
   interviewDraftKeyPrefix,
   landingTerminalsKey,
+  mobileWindowIdKey,
   readingPositionKeyPrefix,
   openEpicKey,
   persistKey,

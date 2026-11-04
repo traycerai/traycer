@@ -241,6 +241,14 @@ export interface LayoutArrangement {
    * of the tab strip's own placement.
    */
   readonly sidebarSide: EdgeSide;
+  /**
+   * Whether a task tab the user has not collapsed or expanded by hand opens
+   * with the sidebar collapsed to its rail. The per-tab state itself stays in
+   * the left panel store (`mainCollapsedByTabId`); this is only what a tab
+   * with no record of its own reads. Arrangement rather than a value: it says
+   * how much of the window the canvas takes, not how much a region says.
+   */
+  readonly sidebarStartCollapsed: boolean;
   /** What the vertical strip shows; ignored while the tabs are at the top. */
   readonly sideStripView: SideStripView;
   /** Tab overflow: scroll the tabs, or shrink them to fit. */
@@ -369,6 +377,7 @@ export const DEFAULT_ARRANGEMENT: LayoutArrangement = {
   dividerSeq: DEFAULT_RAIL_DIVIDER_SEQ,
   tabStripPlacement: "top",
   sidebarSide: "left",
+  sidebarStartCollapsed: false,
   sideStripView: "layered",
   taskTabLayout: "scroll",
   readingWidth: "comfortable",

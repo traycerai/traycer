@@ -61,6 +61,8 @@ export interface MobileLayoutFormInput {
   /** The shell's box after the safe-area insets. */
   readonly contentWidth: number;
   readonly phonePortrait: boolean;
+  /** The screen held upright, whatever its width. */
+  readonly portrait: boolean;
   readonly stripPreference: MobileStripPreference;
   /** How many tiles the person has open; `tiles` answers how many of them show. */
   readonly openTiles: MobileTileCount;
@@ -99,11 +101,17 @@ function level2BesideOneTile(contentWidth: number): MobileLevel2Form {
  * the column makes way for it at every width: while two tiles show, level 2 is
  * the menu. Below the rail and one pane nothing fits beside the content, which
  * is phone portrait's form whatever the orientation.
+ *
+ * Upright, one tile shows whatever the width: the second keeps its slot for
+ * the turn back onto the side, and the person reads the first alone meanwhile.
+ * The one place orientation, not width, decides; a tablet on its side in Split
+ * View still gets what its width earns.
  */
 export function resolveMobileLayoutForm(
   input: MobileLayoutFormInput,
 ): MobileLayoutForm {
-  const { contentWidth, phonePortrait, stripPreference, openTiles } = input;
+  const { contentWidth, phonePortrait, portrait, stripPreference, openTiles } =
+    input;
   if (
     phonePortrait ||
     contentWidth < MOBILE_RAIL_WIDTH_PX + MOBILE_PANE_MIN_WIDTH_PX
@@ -120,6 +128,7 @@ export function resolveMobileLayoutForm(
       : MOBILE_RAIL_WIDTH_PX;
   if (
     openTiles === 2 &&
+    !portrait &&
     contentWidth >= level1Width + 2 * MOBILE_PANE_MIN_WIDTH_PX
   ) {
     return { level1, level2: "menu", tiles: 2 };

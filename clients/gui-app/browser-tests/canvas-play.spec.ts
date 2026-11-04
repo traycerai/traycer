@@ -69,6 +69,51 @@ async function open(page: Page): Promise<void> {
   await expect(board(page, "B").locator('[data-tid="name"]')).toHaveText("B");
 }
 
+/** How long one click may take to focus the board before it is treated as
+ *  having hit the previous frame. Focusing the iframe is the hit test's
+ *  result: the parent document's element at the point can already be the new
+ *  board while Chrome still routes the click to the previous frame. */
+const BOARD_HIT_WAIT_MS = 300;
+
+/**
+ * Click the centre of the board until that click focuses its frame. Chrome
+ * routes the click from the last compositor frame, so a parent animation
+ * frame can leave the previous board owning the point after the step has
+ * painted the new board into the DOM. A click that focused the previous
+ * frame is not the press under test; the one that focuses this frame is.
+ */
+async function clickWhenBoardOwnsPoint(
+  page: Page,
+  title: string,
+): Promise<void> {
+  const iframe = page.locator(`iframe[title="${title}"]`);
+  await expect
+    .poll(
+      async () => {
+        const box = await iframe.boundingBox();
+        if (box === null) return "no-box";
+        await page.mouse.click(box.x + box.width / 2, box.y + box.height / 2);
+        try {
+          await page.waitForFunction(
+            (frameTitle) =>
+              document.activeElement?.getAttribute("title") === frameTitle,
+            title,
+            { timeout: BOARD_HIT_WAIT_MS },
+          );
+        } catch {
+          // The click focused another frame. The compositor has not caught up.
+          return "stale";
+        }
+        return "owned";
+      },
+      {
+        message:
+          "no click was delivered to the step's frame, so the press would still hit the previous board",
+      },
+    )
+    .toBe("owned");
+}
+
 test.describe("fullscreen keeps the same running board", () => {
   test("entering and leaving fullscreen never reloads the board", async ({
     page,
@@ -138,18 +183,10 @@ test.describe("fullscreen steps through the reading order", () => {
 
     // Click into the running board so its document owns the keyboard, then
     // step from there. By coordinates: the fullscreen frame is scaled, and
-    // the claim is that a real press inside it reaches the app.
-    const frame = await page.locator('iframe[title="A"]').boundingBox();
-    if (frame === null) throw new Error("the fullscreen board has no box");
-    await page.mouse.click(
-      frame.x + frame.width / 2,
-      frame.y + frame.height / 2,
-    );
-    await expect
-      .poll(() =>
-        page.evaluate(() => document.activeElement?.getAttribute("title")),
-      )
-      .toBe("A");
+    // the claim is that a real press inside it reaches the app. The click
+    // is repeated until it focuses A's frame: that focus is the hit test
+    // the press used, and a parent frame can leave B owning the point.
+    await clickWhenBoardOwnsPoint(page, "A");
     await page.keyboard.press("ArrowRight");
     await expect(fullscreenBoardChoice(page)).toHaveText("B");
     await expect(canvasSurface(page)).toHaveAttribute(

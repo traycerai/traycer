@@ -45,6 +45,8 @@ describe("released floor production module", () => {
       "host.notifications.clearAll": { major: 1, minor: 1 },
       "host.notifications.getConfig": { major: 1, minor: 0 },
       "host.notifications.setConfig": { major: 1, minor: 0 },
+      "host.notifications.getLongTurnAlert": { major: 1, minor: 0 },
+      "host.notifications.setLongTurnAlert": { major: 1, minor: 0 },
       // `@1.2`: each entity's `unreadCount`, and whether the answer is the
       // host's whole origin.
       "host.notifications.indicatorState": { major: 1, minor: 2 },

@@ -1,4 +1,4 @@
-import type { KeyboardEvent, ReactNode } from "react";
+import { useState, type KeyboardEvent, type ReactNode } from "react";
 import { labelWithUnreadCount } from "@/lib/notifications/unread-count";
 import type { TracyStripEntry } from "../tab-strip-controller";
 import {
@@ -16,6 +16,7 @@ import {
   type SideTabRowProps,
   type SideTabRowVariant,
 } from "./side-tab-row";
+import { joinedAttribute, useSideTabJoin } from "./side-tab-join";
 import { NO_LIVE_AGENTS } from "./side-tab-live-agents";
 import { StripElapsedTime } from "./strip-elapsed-time";
 
@@ -34,16 +35,21 @@ function tileBadgeOf(signals: TracyEntrySignals): SideTabRowProps["badge"] {
  * wearing the bot's unread count (on the rail, the tile's corner badge, or
  * its unread badge where the host does not count) and the label bold while
  * unread, and the working time as the row's trailing status. Like Home, no
- * drag, no close and no Alt-digit.
+ * drag, no close and no Alt-digit; unlike Home it is a real tab, so like a
+ * task row it joins its surface's sheet while selected.
  */
 export function SideTracyRow(props: {
   readonly variant: SideTabRowVariant;
   readonly entry: TracyStripEntry;
 }): ReactNode {
   const { variant } = props;
-  const { isActive, onActivate } = props.entry;
+  const { tab, isActive, onActivate } = props.entry;
   const signals = useTracyEntrySignals();
+  const [rowNode, setRowNode] = useState<HTMLDivElement | null>(null);
+  const joined = useSideTabJoin(isActive, rowNode, tab);
   const frame: SideRowFrame = {
+    ref: setRowNode,
+    ...joinedAttribute(joined),
     role: "tab",
     tabIndex: 0,
     "aria-selected": isActive,

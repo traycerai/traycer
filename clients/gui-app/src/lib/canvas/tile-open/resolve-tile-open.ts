@@ -401,8 +401,12 @@ export function resolveTileOpen(input: {
   // Where two tiles fit, the slot takes what no caller placed (a pane's own
   // opener and a drop did), and a side chat is beside its conversation by
   // being in the other tile. Never a second view (`dedupe` off): that is the
-  // opener's, which names its pane.
-  if (opensIntoMobileSecondary(intent, mode, mobileSlots)) {
+  // opener's, which names its pane. Never onto an empty canvas either: there
+  // is no first tile to be beside, and the plain open seeds the root pane.
+  if (
+    canvas.root !== null &&
+    opensIntoMobileSecondary(intent, mode, mobileSlots)
+  ) {
     return {
       kind: "show-in-mobile-secondary",
       tabId,

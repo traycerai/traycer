@@ -2280,6 +2280,21 @@ export type HostNotificationsConfigResponse = z.infer<
   typeof hostNotificationsConfigResponseSchema
 >;
 
+/**
+ * How long a turn may run on this host before its person is alerted, in
+ * milliseconds; `null` is off. A method pair of its own rather than a field on
+ * `setConfig`: that request replaces the whole config, so a client that
+ * predates the field would turn the alert off with every severity toggle.
+ */
+export const hostNotificationsLongTurnAlertSchema = lazySchema(() =>
+  z.object({
+    thresholdMs: z.number().int().positive().nullable(),
+  }),
+);
+export type HostNotificationsLongTurnAlert = z.infer<
+  typeof hostNotificationsLongTurnAlertSchema
+>;
+
 export const hostNotificationsListV10 = defineRpcContract({
   method: "host.notifications.list",
   schemaVersion: { major: 1, minor: 0 } as const,
@@ -3449,6 +3464,20 @@ export const hostNotificationsSetConfig = defineRpcContract({
   schemaVersion: { major: 1, minor: 0 } as const,
   requestSchema: hostNotificationsSetConfigRequestSchema,
   responseSchema: hostNotificationsConfigResponseSchema,
+});
+
+export const hostNotificationsGetLongTurnAlert = defineRpcContract({
+  method: "host.notifications.getLongTurnAlert",
+  schemaVersion: { major: 1, minor: 0 } as const,
+  requestSchema: hostNotificationsConfigRequestSchema,
+  responseSchema: hostNotificationsLongTurnAlertSchema,
+});
+
+export const hostNotificationsSetLongTurnAlert = defineRpcContract({
+  method: "host.notifications.setLongTurnAlert",
+  schemaVersion: { major: 1, minor: 0 } as const,
+  requestSchema: hostNotificationsLongTurnAlertSchema,
+  responseSchema: hostNotificationsLongTurnAlertSchema,
 });
 
 export const hostNotificationsIndicatorStateV10 = defineRpcContract({

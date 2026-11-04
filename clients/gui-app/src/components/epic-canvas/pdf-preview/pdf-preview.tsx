@@ -37,6 +37,7 @@ import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
 import { appLogger } from "@/lib/logger";
 import { useOpenLink } from "@/lib/links/open-link";
 import { usePinchZoom } from "@/hooks/ui/use-pinch-zoom";
+import { useWheelZoom } from "@/hooks/ui/use-wheel-zoom";
 import type { DocumentViewerProps } from "@/components/epic-canvas/document-preview/lazy-document-viewer";
 import { DocumentSearchBar } from "@/components/epic-canvas/document-preview/document-search-bar";
 import { DocumentPreviewToolbar } from "@/components/epic-canvas/document-preview/document-preview-toolbar";
@@ -471,21 +472,8 @@ function PdfDocument(props: PdfPreviewProps): ReactNode {
   }, []);
 
   // Desktop zoom affordance beyond the buttons (touch has the pinch above).
-  // A NATIVE non-passive listener, because React registers `wheel` passively - its
-  // preventDefault is a no-op there, letting the browser's own ctrl+wheel
-  // page zoom run alongside the viewer's.
   const wheelZoneRef = useRef<HTMLDivElement | null>(null);
-  useEffect(() => {
-    const zone = wheelZoneRef.current;
-    if (zone === null) return;
-    const handleWheel = (event: WheelEvent): void => {
-      if (!event.ctrlKey && !event.metaKey) return;
-      event.preventDefault();
-      zoomBy(event.deltaY < 0 ? ZOOM_STEP : 1 / ZOOM_STEP);
-    };
-    zone.addEventListener("wheel", handleWheel, { passive: false });
-    return () => zone.removeEventListener("wheel", handleWheel);
-  }, [zoomBy]);
+  useWheelZoom(wheelZoneRef, zoomBy);
 
   const hasOutline = outline.length > 0;
   const handleZoomIn = useCallback(() => zoomBy(ZOOM_STEP), [zoomBy]);

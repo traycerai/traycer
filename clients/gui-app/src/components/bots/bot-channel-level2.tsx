@@ -19,7 +19,9 @@ function stayOpen(): void {}
  * The bots list beside a bot tab's channel. In the installed app it is the
  * column at the resolver's width, or nothing where the form has no column.
  * `level2` is `null` everywhere else, where the tab's own container decides and
- * the person drags the width.
+ * the person drags the width. It paints the sidebar's fill, as a task's panel
+ * does, so a side strip's Tracy row runs into it in that fill
+ * (`surfaceJoinPane`).
  */
 export function BotChannelColumn(props: {
   readonly level2: MobileLevel2Form | null;
@@ -44,7 +46,7 @@ export function BotChannelColumn(props: {
         pane="sidebar"
         edge="right"
         label="Resize channels"
-        className="hidden min-h-0 w-(--bot-pane-width) max-w-[40%] shrink-0 flex-col border-r border-canvas-border/70 @3xl:flex"
+        className="hidden min-h-0 w-(--bot-pane-width) max-w-[40%] shrink-0 flex-col border-r border-canvas-border/70 bg-(--sidebar) @3xl:flex"
         handleClassName=""
         testId="bot-channel-sidebar-pane"
       >

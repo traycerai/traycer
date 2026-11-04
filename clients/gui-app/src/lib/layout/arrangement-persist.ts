@@ -148,6 +148,7 @@ const ARRANGEMENT_FIELDS: ReadonlyArray<keyof LayoutArrangement> = [
   "dividerSeq",
   "tabStripPlacement",
   "sidebarSide",
+  "sidebarStartCollapsed",
   "sideStripView",
   "taskTabLayout",
   "readingWidth",
@@ -241,6 +242,10 @@ export function resolvePersistedArrangement(value: unknown): LayoutArrangement {
       stored.sidebarSide,
       DEFAULT_ARRANGEMENT.sidebarSide,
     ),
+    sidebarStartCollapsed:
+      typeof stored.sidebarStartCollapsed === "boolean"
+        ? stored.sidebarStartCollapsed
+        : DEFAULT_ARRANGEMENT.sidebarStartCollapsed,
     sideStripView: persistedSideStripView(
       stored.sideStripView,
       DEFAULT_ARRANGEMENT.sideStripView,

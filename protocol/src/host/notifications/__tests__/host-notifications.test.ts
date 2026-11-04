@@ -23,7 +23,10 @@ import {
   hostNotificationsListDowngradeV26ToV10,
   hostNotificationsMarkAllRead,
   hostNotificationsMarkRead,
+  hostNotificationsGetLongTurnAlert,
+  hostNotificationsLongTurnAlertSchema,
   hostNotificationsSetConfig,
+  hostNotificationsSetLongTurnAlert,
   hostNotificationsSubscribeV10,
   hostNotificationsFeedSubscribeV10,
   hostNotificationsCloudFeedSubscribeV10,
@@ -1106,6 +1109,14 @@ describe("host.notifications registry membership", () => {
       hostRpcRegistry["host.notifications.setConfig"][1].versions[0].contract,
     ).toBe(hostNotificationsSetConfig);
     expect(
+      hostRpcRegistry["host.notifications.getLongTurnAlert"][1].versions[0]
+        .contract,
+    ).toBe(hostNotificationsGetLongTurnAlert);
+    expect(
+      hostRpcRegistry["host.notifications.setLongTurnAlert"][1].versions[0]
+        .contract,
+    ).toBe(hostNotificationsSetLongTurnAlert);
+    expect(
       hostRpcRegistry["host.notifications.markRead"][1].versions[0].contract,
     ).toBe(hostNotificationsMarkRead);
     expect(
@@ -1299,5 +1310,23 @@ describe("browser.human.needed stays off every released contract", () => {
         "browser.human.needed",
       );
     }
+  });
+});
+
+describe("hostNotificationsLongTurnAlertSchema", () => {
+  it("takes off or a positive whole number of milliseconds", () => {
+    const parse = (thresholdMs: unknown): boolean =>
+      hostNotificationsLongTurnAlertSchema.safeParse({ thresholdMs }).success;
+
+    expect(parse(null)).toBe(true);
+    expect(parse(1)).toBe(true);
+    expect(parse(14_400_000)).toBe(true);
+    expect(parse(0)).toBe(false);
+    expect(parse(-1)).toBe(false);
+    expect(parse(1.5)).toBe(false);
+    expect(parse("60000")).toBe(false);
+    expect(hostNotificationsLongTurnAlertSchema.safeParse({}).success).toBe(
+      false,
+    );
   });
 });
