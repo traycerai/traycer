@@ -116,7 +116,12 @@ export function ShareNudgeToastContent(props: {
           />
           <span className="relative flex items-center gap-1.5">
             Remind me later
-            <span className="min-w-[2.5ch] text-right text-muted-foreground tabular-nums">
+            {/* Seen, not spoken: the toast sits in a live region, which would
+                read every tick aloud. Focus pauses the countdown anyway. */}
+            <span
+              aria-hidden="true"
+              className="min-w-[2.5ch] text-right text-muted-foreground tabular-nums"
+            >
               {String(seconds)}s
             </span>
           </span>

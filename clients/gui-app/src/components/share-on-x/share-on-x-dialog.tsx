@@ -301,7 +301,7 @@ function ShareOnXDialogContent(props: ShareOnXDialogProps): ReactNode {
             </span>
           </div>
           <div
-            role="radiogroup"
+            role="group"
             aria-label="Post to share"
             className="flex flex-col gap-2"
           >
@@ -309,9 +309,9 @@ function ShareOnXDialogContent(props: ShareOnXDialogProps): ReactNode {
               line.id === selectedLine.id ? (
                 <div
                   key={line.id}
-                  role="radio"
-                  aria-checked="true"
-                  aria-label={`Post ${String(position)}`}
+                  role="group"
+                  aria-current="true"
+                  aria-label={`Post ${String(position)}, selected`}
                   className="flex flex-col gap-2 rounded-lg border border-primary p-3 ring-1 ring-primary"
                 >
                   <Textarea
@@ -350,9 +350,6 @@ function ShareOnXDialogContent(props: ShareOnXDialogProps): ReactNode {
                 <button
                   key={line.id}
                   type="button"
-                  role="radio"
-                  aria-checked="false"
-                  aria-label={`Post ${String(position)}`}
                   disabled={opening}
                   onClick={() => selectLine(line, position)}
                   className="rounded-lg border border-border p-3 text-left text-ui-sm text-muted-foreground transition-colors hover:bg-foreground/5 hover:text-foreground focus-visible:ring-3 focus-visible:ring-ring/50 focus-visible:outline-none disabled:pointer-events-none disabled:opacity-50"
@@ -393,7 +390,7 @@ function ShareOnXDialogContent(props: ShareOnXDialogProps): ReactNode {
             </p>
           ) : (
             <div
-              role="radiogroup"
+              role="group"
               aria-label="Image to attach"
               className="grid grid-cols-2 gap-2.5"
             >
@@ -500,8 +497,7 @@ function ShareImageTile(props: {
     >
       <button
         type="button"
-        role="radio"
-        aria-checked={props.selected}
+        aria-pressed={props.selected}
         aria-label={label}
         disabled={props.disabled}
         onClick={props.onSelect}
