@@ -78,7 +78,7 @@ describe("<EpicDurabilityRemedies /> export-as-recovery-archive", () => {
       format: "markdown",
       archive: true,
       archiveTitle: "My Epic",
-      includeNested: true,
+      includeNested: false,
     });
   });
 });

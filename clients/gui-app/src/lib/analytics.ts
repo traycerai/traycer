@@ -970,6 +970,7 @@ export interface AnalyticsEventProperties {
   readonly [AnalyticsEvent.ArtifactExported]: {
     readonly format: "markdown" | "pdf";
     readonly artifact_count: number;
+    readonly include_nested: boolean;
   };
   readonly [AnalyticsEvent.UsageImageExported]: {
     readonly action: "copy" | "download" | "share";
@@ -1925,7 +1926,7 @@ const EVENT_PROPERTY_KEYS = new Map<AnalyticsEvent, ReadonlyArray<string>>([
   ),
   ...eventKeyEntries(
     [AnalyticsEvent.ArtifactExported],
-    ["format", "artifact_count"],
+    ["format", "artifact_count", "include_nested"],
   ),
   ...eventKeyEntries([AnalyticsEvent.UsageImageExported], ["action", "source"]),
   ...eventKeyEntries(
@@ -2571,6 +2572,7 @@ const BOOLEAN_PROPERTY_KEYS = new Set<string>([
   "had_text",
   "has_mention",
   "include_history",
+  "include_nested",
   "layout_dock_reordered",
   "layout_toolbar_left_reordered",
   "layout_toolbar_right_reordered",

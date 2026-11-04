@@ -2032,8 +2032,8 @@ function useArtifactRowMenuEntries(
             id: `export-nested-${format}`,
             label:
               format === "markdown"
-                ? "Export with nested as Markdown ZIP"
-                : "Export with nested as PDF ZIP",
+                ? "Export with nested artifacts as Markdown ZIP"
+                : "Export with nested artifacts as PDF ZIP",
             icon: exportIcon,
             disabled: exportPending,
             disabledTooltip: null,

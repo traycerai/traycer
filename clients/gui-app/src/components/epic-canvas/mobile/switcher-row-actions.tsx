@@ -69,8 +69,8 @@ const EXPORT_LABELS: Record<ArtifactExportFormat, string> = {
 };
 
 const EXPORT_NESTED_LABELS: Record<ArtifactExportFormat, string> = {
-  markdown: "Export with nested as Markdown ZIP",
-  pdf: "Export with nested as PDF ZIP",
+  markdown: "Export with nested artifacts as Markdown ZIP",
+  pdf: "Export with nested artifacts as PDF ZIP",
 };
 
 interface RowMenuInput {

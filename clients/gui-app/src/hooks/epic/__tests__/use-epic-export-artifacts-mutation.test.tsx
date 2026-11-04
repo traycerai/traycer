@@ -17,6 +17,20 @@ vi.mock("@/lib/runner-error-toast", () => ({
   toastFromRunnerError: vi.fn(),
 }));
 
+vi.mock("@/lib/files/saved-file-toast", () => ({
+  toastSavedFile: vi.fn(),
+}));
+
+const track = vi.hoisted(() => vi.fn());
+
+vi.mock("@/lib/analytics", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@/lib/analytics")>();
+  return {
+    ...actual,
+    Analytics: { getInstance: () => ({ track }) },
+  };
+});
+
 const acquireResidentArtifactBodyLease = vi.hoisted(() => vi.fn());
 const getArtifactFragment = vi.hoisted(() => vi.fn());
 const createArtifactExport = vi.hoisted(() => vi.fn());
@@ -65,6 +79,7 @@ vi.mock("@/providers/use-open-epic-handle", () => ({
   }),
 }));
 
+import { AnalyticsEvent } from "@/lib/analytics";
 import { useEpicExportArtifacts } from "@/hooks/epic/use-epic-export-artifacts-mutation";
 
 function makeWrapper(): ({ children }: { children: ReactNode }) => ReactNode {
@@ -81,6 +96,7 @@ describe("useEpicExportArtifacts", () => {
     artifactTree.current = { rootIds: [], childrenByParent: {}, nodeById: {} };
     saveBlobToDisk.mockReset();
     saveBlobToDisk.mockResolvedValue(null);
+    track.mockReset();
     acquireResidentArtifactBodyLease.mockReset();
     getArtifactFragment.mockReset();
     createArtifactExport.mockReset();
@@ -248,6 +264,7 @@ describe("useEpicExportArtifacts", () => {
       ticket: { kind: "ticket", title: "Ticket" },
     };
     serializeArtifactMarkdown.mockImplementation(() => "# body");
+    saveBlobToDisk.mockResolvedValue({ name: "Spec.zip", path: null });
     const { result } = renderHook(() => useEpicExportArtifacts(), {
       wrapper: makeWrapper(),
     });
@@ -286,5 +303,83 @@ describe("useEpicExportArtifacts", () => {
       archive: true,
       archiveTitle: "Spec",
     });
+    // One pick, two files: the event counts what the archive holds.
+    expect(track).toHaveBeenCalledExactlyOnceWith(
+      AnalyticsEvent.ArtifactExported,
+      { format: "pdf", artifact_count: 2, include_nested: true },
+    );
+  });
+
+  it("exports only the picked artifacts without nesting, laid out as the tree", async () => {
+    artifactRecords.current = {
+      spec: { kind: "spec", title: "Spec" },
+      story: { kind: "story", title: "Story" },
+      ticket: { kind: "ticket", title: "Ticket" },
+    };
+    artifactTree.current = {
+      rootIds: ["spec"],
+      childrenByParent: { spec: ["story"], story: ["ticket"] },
+      nodeById: {
+        spec: { parentId: null },
+        story: { parentId: "spec" },
+        ticket: { parentId: "story" },
+      },
+    };
+    const { result } = renderHook(() => useEpicExportArtifacts(), {
+      wrapper: makeWrapper(),
+    });
+
+    await result.current.mutateAsync({
+      artifacts: [
+        { id: "spec", title: "Spec" },
+        { id: "ticket", title: "Ticket" },
+      ],
+      format: "markdown",
+      archive: true,
+      archiveTitle: "Epic",
+      includeNested: false,
+    });
+
+    expect(acquireResidentArtifactBodyLease).not.toHaveBeenCalledWith(
+      "story",
+      "immediate",
+    );
+    expect(createArtifactExport).toHaveBeenCalledWith({
+      artifacts: [
+        { id: "spec", title: "Spec", parentId: null, markdown: "# body" },
+        { id: "ticket", title: "Ticket", parentId: "spec", markdown: "# body" },
+      ],
+      format: "markdown",
+      archive: true,
+      archiveTitle: "Epic",
+    });
+  });
+
+  it("names the parent of a nested artifact that cannot be loaded", async () => {
+    artifactRecords.current = {
+      spec: { kind: "spec", title: "Spec" },
+      ticket: { kind: "ticket", title: "Ticket" },
+    };
+    artifactTree.current = {
+      rootIds: ["spec"],
+      childrenByParent: { spec: ["ticket"] },
+      nodeById: { spec: { parentId: null }, ticket: { parentId: "spec" } },
+    };
+    getArtifactFragment.mockImplementation((artifactId: string) =>
+      artifactId === "ticket" ? null : new Y.Doc().getXmlFragment("body"),
+    );
+    const { result } = renderHook(() => useEpicExportArtifacts(), {
+      wrapper: makeWrapper(),
+    });
+
+    await expect(
+      result.current.mutateAsync({
+        artifacts: [{ id: "spec", title: "Spec" }],
+        format: "markdown",
+        archive: true,
+        archiveTitle: "Spec",
+        includeNested: true,
+      }),
+    ).rejects.toThrow("“Ticket”, nested under “Spec”, is still loading.");
   });
 });

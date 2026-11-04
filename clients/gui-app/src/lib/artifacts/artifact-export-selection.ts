@@ -2,7 +2,7 @@ import { displayTitle } from "@/lib/display-title";
 import { isMarkdownArtifactKind } from "@/lib/artifacts/node-display";
 import type { ArtifactsSlice, TreeSlice } from "@/stores/epics/open-epic/types";
 
-/** The two projected slices a nested export walks. */
+/** The two projected slices an export walks to lay itself out as the tree. */
 export interface ArtifactExportTree {
   readonly artifacts: ArtifactsSlice;
   readonly tree: TreeSlice;
@@ -13,8 +13,8 @@ export interface ArtifactExportPick {
   readonly title: string;
 }
 
-export interface NestedArtifactExportEntry extends ArtifactExportPick {
-  /** Nearest exported ancestor in this selection, or `null` for a root. */
+export interface ArtifactExportEntry extends ArtifactExportPick {
+  /** Nearest exported ancestor in this export, or `null` for a root. */
   readonly parentId: string | null;
 }
 
@@ -50,30 +50,43 @@ function hasPickedAncestor(
 }
 
 /**
- * The picked artifacts plus every Markdown artifact nested under them, in tree
- * order, each linked to its nearest exported ancestor.
+ * What an export writes, in tree order, each entry linked to its nearest
+ * exported ancestor so the archive unpacks as the tree.
  *
- * A pick nested under another pick is reached from that ancestor instead of
- * standing as its own root, so it exports once and in place. A non-Markdown
- * artifact in between (an HTML page, a file) has no document body and is left
- * out, but the walk continues through it: its Markdown children attach to the
- * nearest ancestor that IS exported. Chats and agents in the tree are not
- * artifacts and are not walked. A pick the tree does not hold yet exports on
- * its own, as it would without nesting.
+ * Every pick exports once. A pick nested under another pick is reached from
+ * that ancestor instead of standing as its own root, so it lands in place.
+ * `includeNested` also exports every Markdown artifact under a pick; without
+ * it only the picks are written, and an unpicked artifact between two picks
+ * links the lower one to the upper. A non-Markdown artifact (an HTML page, a
+ * file) is never added - it has no document body - but the walk continues
+ * through it. Chats and agents in the tree are not artifacts and are not
+ * walked. A pick the tree does not hold yet exports on its own.
  */
-export function expandNestedArtifactExport(
+export function arrangeArtifactExport(
   tree: ArtifactExportTree,
   picks: ReadonlyArray<ArtifactExportPick>,
-): NestedArtifactExportEntry[] {
-  const pickedIds = new Set(picks.map((pick) => pick.id));
-  const entries: NestedArtifactExportEntry[] = [];
+  includeNested: boolean,
+): ArtifactExportEntry[] {
+  const pickById = new Map(picks.map((pick) => [pick.id, pick]));
+  const pickedIds = new Set(pickById.keys());
+  const entries: ArtifactExportEntry[] = [];
   const visited = new Set<string>();
   const walkChildren = (id: string, exportedParentId: string): void => {
     for (const childId of artifactChildIds(tree, id)) {
       if (visited.has(childId)) continue;
       visited.add(childId);
+      const pick = pickById.get(childId);
       const child = tree.artifacts.byId[childId];
-      if (isMarkdownArtifactKind(child.kind)) {
+      // A pick is written whatever its kind, so the caller's Markdown check
+      // refuses a stale non-Markdown pick instead of it silently vanishing.
+      if (pick !== undefined) {
+        entries.push({
+          id: pick.id,
+          title: pick.title,
+          parentId: exportedParentId,
+        });
+        walkChildren(childId, childId);
+      } else if (includeNested && isMarkdownArtifactKind(child.kind)) {
         entries.push({
           id: childId,
           title: displayTitle(child.title, child.kind),
@@ -93,9 +106,9 @@ export function expandNestedArtifactExport(
     entries.push({ id: pick.id, title: pick.title, parentId: null });
     walkChildren(pick.id, pick.id);
   }
-  // A pick whose picked ancestor's walk never reached it (the ancestor was a
-  // non-Markdown artifact the caller filtered out, or the chain runs through
-  // a chat) would otherwise be dropped; it exports at the top level instead.
+  // A pick whose picked ancestor's walk never reached it (the chain between
+  // them runs through a chat, or through an artifact whose record has not
+  // arrived) would otherwise be dropped; it exports at the top level instead.
   for (const pick of picks) {
     if (visited.has(pick.id)) continue;
     visited.add(pick.id);

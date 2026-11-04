@@ -90,7 +90,7 @@ function safeFileStem(title: string): string {
  * unpacked into, so this leaves 60 units for it.
  */
 const ARCHIVE_PATH_BUDGET = 200;
-/** Room kept for a ` (n)` collision suffix. */
+/** Room kept on every name in a path for a ` (n)` collision suffix. */
 const COLLISION_SUFFIX_RESERVE = 6;
 /** Below this a stem stops being recognizable; deeper paths may then exceed the budget. */
 const MIN_BUDGETED_STEM = 12;
@@ -140,9 +140,11 @@ function claimEntry(
  * they actually take on disk.
  *
  * Stems shrink with depth so every path stays within `ARCHIVE_PATH_BUDGET`. A
- * leaf may take whatever its directory leaves; a folder's stem appears twice in
- * its own file's path and must leave room for its children, so it takes a third.
- * Shallow exports keep the 120-character stems a flat export has always had.
+ * leaf may take whatever its directory leaves. A folder must leave room for
+ * the deepest path beneath it, which carries one name per folder level below
+ * plus a file name, so the room left is shared equally among those names: a
+ * folder holding only files takes half, one with two levels of folders under
+ * it a quarter. A short name leaves its unused share to the names below it.
  */
 function archivePaths(
   artifacts: ReadonlyArray<ArtifactExportSource>,
@@ -165,6 +167,25 @@ function archivePaths(
     }
   });
 
+  // Folder levels from `id` down, itself included: 0 for a file, 1 for a
+  // folder holding only files. A cycle's back edge counts as a file, which is
+  // what `place` makes of it.
+  const levels = new Map<string, number>();
+  const onPath = new Set<string>();
+  const folderLevels = (id: string): number => {
+    const known = levels.get(id);
+    if (known !== undefined) return known;
+    if (onPath.has(id)) return 0;
+    onPath.add(id);
+    let deepest = 0;
+    for (const child of childrenByParent.get(id) ?? []) {
+      deepest = Math.max(deepest, 1 + folderLevels(artifacts[child].id));
+    }
+    onPath.delete(id);
+    levels.set(id, deepest);
+    return deepest;
+  };
+
   // Every placed path is non-empty, so "" doubles as "not placed yet".
   const paths = artifacts.map(() => "");
   const foldered = new Set<string>();
@@ -186,14 +207,15 @@ function archivePaths(
       foldered.add(artifact.id);
       const fileSuffix = `.${extension}`;
       const available =
-        ARCHIVE_PATH_BUDGET -
-        directory.length -
-        fileSuffix.length -
-        COLLISION_SUFFIX_RESERVE;
+        ARCHIVE_PATH_BUDGET - directory.length - fileSuffix.length;
       const isFolder = children.length > 0;
+      // `depth` folder names and one file name share what is left, less the
+      // `depth` slashes between them; each keeps room for a collision suffix.
+      const depth = isFolder ? folderLevels(artifact.id) : 0;
       const stemBudget = Math.max(
         MIN_BUDGETED_STEM,
-        isFolder ? Math.floor((available - 1) / 3) : available,
+        Math.floor((available - depth) / (depth + 1)) -
+          COLLISION_SUFFIX_RESERVE,
       );
       const baseStem = truncateStem(safeFileStem(artifact.title), stemBudget);
       if (!isFolder) {
@@ -578,7 +600,11 @@ export async function createArtifactExport(
     throw new Error("Individual export requires exactly one artifact.");
   }
   const extension = request.format === "markdown" ? "md" : "pdf";
-  const filenames = archivePaths(request.artifacts, extension);
+  // The path budget is about unpacking an archive; a single file goes through
+  // a save dialog and keeps the name it has always had.
+  const filenames = request.archive
+    ? archivePaths(request.artifacts, extension)
+    : [`${safeFileStem(request.artifacts[0].title)}.${extension}`];
   const markdownFiles = request.artifacts.map((artifact) =>
     requireAvailableMarkdown(artifact),
   );

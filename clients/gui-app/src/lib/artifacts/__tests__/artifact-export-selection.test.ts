@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
-  expandNestedArtifactExport,
+  arrangeArtifactExport,
   hasNestedMarkdownArtifacts,
   type ArtifactExportTree,
 } from "@/lib/artifacts/artifact-export-selection";
@@ -84,10 +84,14 @@ function exportTree(): ArtifactExportTree {
   };
 }
 
-describe("expandNestedArtifactExport", () => {
+describe("arrangeArtifactExport", () => {
   it("adds every Markdown descendant, linked to its nearest exported ancestor", () => {
     expect(
-      expandNestedArtifactExport(exportTree(), [{ id: "spec", title: "Spec" }]),
+      arrangeArtifactExport(
+        exportTree(),
+        [{ id: "spec", title: "Spec" }],
+        true,
+      ),
     ).toEqual([
       { id: "spec", title: "Spec", parentId: null },
       { id: "story", title: "Story", parentId: "spec" },
@@ -98,13 +102,34 @@ describe("expandNestedArtifactExport", () => {
     ]);
   });
 
+  it("without nesting, writes only the picks, linked through what lies between", () => {
+    expect(
+      arrangeArtifactExport(
+        exportTree(),
+        [
+          { id: "ticket", title: "Ticket" },
+          { id: "spec", title: "Spec" },
+        ],
+        false,
+      ),
+    ).toEqual([
+      { id: "spec", title: "Spec", parentId: null },
+      // The unpicked story is left out; the ticket under it attaches to the spec.
+      { id: "ticket", title: "Ticket", parentId: "spec" },
+    ]);
+  });
+
   it("exports a pick nested under another pick once, in place", () => {
     expect(
-      expandNestedArtifactExport(exportTree(), [
-        { id: "ticket", title: "Ticket" },
-        { id: "spec", title: "Spec" },
-        { id: "other", title: "Other" },
-      ]).map((entry) => [entry.id, entry.parentId]),
+      arrangeArtifactExport(
+        exportTree(),
+        [
+          { id: "ticket", title: "Ticket" },
+          { id: "spec", title: "Spec" },
+          { id: "other", title: "Other" },
+        ],
+        true,
+      ).map((entry) => [entry.id, entry.parentId]),
     ).toEqual([
       ["spec", null],
       ["story", "spec"],
@@ -116,18 +141,24 @@ describe("expandNestedArtifactExport", () => {
 
   it("keeps a pick its picked ancestor's walk cannot reach", () => {
     expect(
-      expandNestedArtifactExport(exportTree(), [
-        { id: "spec", title: "Spec" },
-        { id: "chat-spec", title: "Chat spec" },
-      ]).at(-1),
+      arrangeArtifactExport(
+        exportTree(),
+        [
+          { id: "spec", title: "Spec" },
+          { id: "chat-spec", title: "Chat spec" },
+        ],
+        true,
+      ).at(-1),
     ).toEqual({ id: "chat-spec", title: "Chat spec", parentId: null });
   });
 
   it("exports a pick the tree does not hold yet on its own", () => {
     expect(
-      expandNestedArtifactExport(exportTree(), [
-        { id: "unresolved", title: "Pending" },
-      ]),
+      arrangeArtifactExport(
+        exportTree(),
+        [{ id: "unresolved", title: "Pending" }],
+        true,
+      ),
     ).toEqual([{ id: "unresolved", title: "Pending", parentId: null }]);
   });
 });

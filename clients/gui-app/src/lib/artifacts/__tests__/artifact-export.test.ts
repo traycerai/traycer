@@ -228,6 +228,25 @@ describe("createArtifactExport", () => {
     expect(flat.suggestedName).toBe(`${"Level 0 " + "x".repeat(112)}.md`);
   });
 
+  it("keeps a long parent title whole when only files sit under it", async () => {
+    const title = `Parent ${"p".repeat(83)}`;
+    const result = await createArtifactExport({
+      artifacts: [
+        { id: "parent", title, parentId: null, markdown: "# p" },
+        { id: "kid", title: "Kid", parentId: "parent", markdown: "# k" },
+      ],
+      format: "markdown",
+      archive: true,
+      archiveTitle: "Epic",
+    });
+
+    const entries = unzipSync(new Uint8Array(await result.blob.arrayBuffer()));
+    expect(Object.keys(entries).sort()).toEqual([
+      `${title}/Kid.md`,
+      `${title}/${title}.md`,
+    ]);
+  });
+
   it("preserves complete Unicode code points in exported filenames", async () => {
     const result = await createArtifactExport({
       artifacts: [
@@ -244,6 +263,23 @@ describe("createArtifactExport", () => {
     });
 
     expect(result.suggestedName).toBe(`${"a".repeat(119)}🐇.md`);
+
+    // 120 code points, not 120 UTF-16 units: a single file is not held to
+    // the archive path budget.
+    const astral = await createArtifactExport({
+      artifacts: [
+        {
+          id: "astral",
+          title: "🐇".repeat(130),
+          markdown: createBody("Astral"),
+          parentId: null,
+        },
+      ],
+      format: "markdown",
+      archive: false,
+      archiveTitle: "ignored",
+    });
+    expect(astral.suggestedName).toBe(`${"🐇".repeat(120)}.md`);
   });
 
   it("exports a PDF Blob with a valid PDF signature", async () => {

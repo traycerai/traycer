@@ -3029,16 +3029,13 @@ describe("epic sidebar selection mode", () => {
     render(<EpicLeftPanelHost epicId={EPIC_ID} tabId={TAB_ID} />);
 
     fireEvent.click(screen.getByRole("menuitem", { name: "Select artifacts" }));
-    fireEvent.click(screen.getByTestId("epic-sidebar-select-ticket-child"));
-    // A lone leaf has its own row export; an archive adds nothing.
+    fireEvent.click(screen.getByTestId("epic-sidebar-select-spec-root"));
     expect(
       screen
         .getByTestId("epic-sidebar-export-selected-markdown")
         .matches(":disabled"),
     ).toBe(true);
     fireEvent.click(screen.getByTestId("epic-sidebar-select-ticket-child"));
-    fireEvent.click(screen.getByTestId("epic-sidebar-select-spec-root"));
-    // A lone parent carries its nested artifacts, so it is worth an archive.
     expect(
       screen
         .getByTestId("epic-sidebar-export-selected-markdown")
@@ -3051,9 +3048,12 @@ describe("epic sidebar selection mode", () => {
     expect(testState.exportArtifactsMutate).toHaveBeenCalledWith({
       archive: true,
       archiveTitle: "Test epic",
-      artifacts: [{ id: "spec-root", title: "Root spec" }],
+      artifacts: [
+        { id: "spec-root", title: "Root spec" },
+        { id: "ticket-child", title: "Child ticket" },
+      ],
       format: "markdown",
-      includeNested: true,
+      includeNested: false,
     });
     expect(
       screen
