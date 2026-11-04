@@ -496,8 +496,8 @@ declare global {
   }
 }
 
-// After the shipped Agents/Artifacts stack, before Terminals.
-const RAIL_DIVIDER_INDEX = 3;
+// After Artifacts, before Terminals, on the shipped (unstacked) rail.
+const RAIL_DIVIDER_INDEX = 2;
 
 function readVariant(): CanvasVariant {
   const params = new URLSearchParams(window.location.search);

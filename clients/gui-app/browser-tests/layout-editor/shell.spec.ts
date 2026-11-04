@@ -1792,6 +1792,10 @@ async function assertGroupIconAndKeys(page: Page): Promise<void> {
     dock: "right",
     session: true,
   });
+  // The shipped rail carries no stack (L-166), so the pair is made here
+  // through the rail's own stack writer: Artifacts joins Agents' stack, below
+  // it. The next test's `restoreLoadState` puts the shipped rail back.
+  await probe(page, 'stackPanelInto("artifacts", "chats")');
   // Opens the Sidebar area (the two-level form) with no row selected, so
   // the Panels list exists in the document to be read.
   await probe(page, 'openAreaOf("railAgents")');

@@ -18,6 +18,7 @@ import {
 } from "@traycer/protocol/host/environment/arm-streams";
 import type { HostStreamRpcRegistry } from "@traycer/protocol/host/registry";
 import type { PlainTerminalRecord } from "@traycer/protocol/host/terminal/plain-schemas";
+import type { EnvironmentArmGraph } from "@/lib/comm-graph/compose-comm-graph-events";
 import {
   createEnvironmentArmLanes,
   type EnvironmentArmLaneSpec,
@@ -224,6 +225,7 @@ export function useEnvironmentArmChats(
               client: scope.client,
               initial: NO_CHATS,
               ended: ENDED_CHATS,
+              reopenedFromEnd: ENDED_CHATS,
               open: (client) =>
                 client.subscribe("environment.chats.subscribe", {
                   environmentId,
@@ -293,6 +295,7 @@ export function useEnvironmentArmTerminals(
               client: scope.client,
               initial: NO_TERMINALS,
               ended: NO_TERMINALS,
+              reopenedFromEnd: NO_TERMINALS,
               open: (client) =>
                 client.subscribe("environment.plainTerminals.subscribe", {
                   environmentId,
@@ -332,14 +335,30 @@ export function useEnvironmentArmTerminals(
 interface GraphState {
   readonly events: readonly HostCommunicationGraphCloudFeedEvent[];
   readonly cursor: HostCommunicationGraphCloudFeedCursor | null;
+  /**
+   * `complete` once a frame of a stream that started from scratch, or resumed
+   * from a cursor this state holds, reached the head the server read;
+   * `ended` once the arm ended and holds nothing.
+   */
+  readonly history: "pending" | "complete" | "ended";
 }
 interface GraphFrame {
   readonly events: readonly HostCommunicationGraphCloudFeedEvent[];
   readonly cursor: HostCommunicationGraphCloudFeedCursor | null;
+  readonly caughtUp: boolean;
 }
 const NO_GRAPH: GraphState = Object.freeze({
   events: Object.freeze([]),
   cursor: null,
+  history: "pending",
+});
+// An ended arm has nothing to hand over: it holds no one's history, and waits
+// for none. Reopened, it starts over from `NO_GRAPH`, since its stream then
+// reads the whole graph again.
+const ENDED_GRAPH: GraphState = Object.freeze({
+  events: Object.freeze([]),
+  cursor: null,
+  history: "ended",
 });
 const graphLanes = createEnvironmentArmLanes<GraphState, GraphFrame>();
 
@@ -350,7 +369,7 @@ const graphLanes = createEnvironmentArmLanes<GraphState, GraphFrame>();
  */
 export function useEnvironmentArmGraphEvents(
   epicId: string,
-): readonly HostCommunicationGraphCloudFeedEvent[] {
+): EnvironmentArmGraph {
   const scope = useEnvironmentArmScope(
     "environment.communicationGraph.subscribe",
   );
@@ -371,7 +390,8 @@ export function useEnvironmentArmGraphEvents(
               poolHostId: scope.poolHostId,
               client: scope.client,
               initial: NO_GRAPH,
-              ended: NO_GRAPH,
+              ended: ENDED_GRAPH,
+              reopenedFromEnd: NO_GRAPH,
               open: (client, readState) =>
                 client.subscribeWithParamsProvider(
                   "environment.communicationGraph.subscribe",
@@ -395,6 +415,7 @@ export function useEnvironmentArmGraphEvents(
                       frame: {
                         events: parsed.data.events,
                         cursor: parsed.data.cursor,
+                        caughtUp: parsed.data.caughtUp,
                       },
                     };
               },
@@ -406,13 +427,35 @@ export function useEnvironmentArmGraphEvents(
                   (event) => !seen.has(event.eventId),
                 );
                 const cursor = frame.cursor ?? state.cursor;
-                if (fresh.length === 0 && cursor === state.cursor) return state;
-                return { events: [...state.events, ...fresh], cursor };
+                // A complete history resumes from its own cursor, so a
+                // redial's backlog is only the gap since then: still complete.
+                const history =
+                  state.history === "complete" || frame.caughtUp
+                    ? "complete"
+                    : "pending";
+                if (
+                  fresh.length === 0 &&
+                  cursor === state.cursor &&
+                  history === state.history
+                ) {
+                  return state;
+                }
+                return {
+                  events: [...state.events, ...fresh],
+                  cursor,
+                  history,
+                };
               },
             }),
           ),
     [scope, epicId],
   );
   const states = useEnvironmentArmStates(graphLanes, specs, NO_GRAPH);
-  return useMemo(() => states.flatMap((state) => state.events), [states]);
+  return useMemo(
+    () => ({
+      events: states.flatMap((state) => state.events),
+      historySettled: states.every((state) => state.history !== "pending"),
+    }),
+    [states],
+  );
 }
