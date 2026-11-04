@@ -150,11 +150,13 @@ export function useEvictedChatSend(input: {
         {
           onSuccess: () => {
             if (parkedRef.current === null) return;
-            releaseHoldRef.current ??= holdChatOnItsHost({
-              hostId,
-              epicId,
-              chatId,
-            });
+            if (releaseHoldRef.current === null) {
+              releaseHoldRef.current = holdChatOnItsHost({
+                hostId,
+                epicId,
+                chatId,
+              });
+            }
             setAskFirst(false);
             setPhase("ready");
           },
