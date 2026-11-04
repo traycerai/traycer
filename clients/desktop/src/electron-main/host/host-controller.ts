@@ -6,7 +6,7 @@ import { dirname, join } from "node:path";
 import { encodeStageFingerprint } from "@traycer-clients/shared/host-version/stage-fingerprint";
 import { DESKTOP_RELEASE_CHANNEL } from "../../config";
 import { log } from "../app/logger";
-import { scrubSupportText } from "../app/support-scrubber";
+import { scrubSupportText } from "@traycer/protocol/utils/text/support-scrub";
 import { prereleaseUpdatesEnabled } from "../app/update-preferences";
 import {
   hasUnappliedPendingLoginItemRevision,

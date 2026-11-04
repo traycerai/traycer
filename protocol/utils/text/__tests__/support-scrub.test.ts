@@ -1,5 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { deepScrubSupportValue, scrubSupportText } from "../support-scrubber";
+import {
+  deepScrubSupportValue,
+  scrubLogTail,
+  scrubSupportText,
+} from "../support-scrub";
 
 describe("scrubSupportText", () => {
   it("redacts a Bearer token", () => {
@@ -473,6 +477,54 @@ describe("scrubSupportText session cookies", () => {
     );
     expect(scrubSupportText("csrftoken: 'AbC123xyz'")).toBe(
       "csrftoken: <redacted>",
+    );
+  });
+});
+
+describe("scrubLogTail", () => {
+  const at = (level: string, text: string): string =>
+    `[2026-11-03 10:00:00.000] [${level}] ${text}`;
+
+  it("drops a DEBUG entry with its continuation lines and keeps the others", () => {
+    const tail = [
+      at("INFO", "started"),
+      at("DEBUG", "account acct_123 for user usr_456"),
+      "  at stack frame",
+      "raw worker output",
+      at("WARN", "slow"),
+      "  warn continuation",
+    ].join("\n");
+    expect(scrubLogTail(tail)).toBe(
+      [at("INFO", "started"), at("WARN", "slow"), "  warn continuation"].join(
+        "\n",
+      ),
+    );
+  });
+
+  it("matches electron-log's lowercase level", () => {
+    expect(
+      scrubLogTail([at("debug", "secret id"), at("info", "kept")].join("\n")),
+    ).toBe(at("info", "kept"));
+  });
+
+  it("drops lines before the first header, whose level the tail cut off", () => {
+    expect(
+      scrubLogTail(["  orphan continuation", at("ERROR", "boom")].join("\n")),
+    ).toBe(at("ERROR", "boom"));
+  });
+
+  it("scrubs what it keeps, with one pseudonym per path across lines", () => {
+    expect(
+      scrubLogTail(
+        [
+          at("INFO", "open /Users/anurag/project/a.ts"),
+          at("ERROR", "Bearer abc123 at /Users/anurag/project/a.ts"),
+        ].join("\n"),
+      ),
+    ).toBe(
+      [at("INFO", "open <path-1>"), at("ERROR", "Bearer <redacted> at <path-1>")].join(
+        "\n",
+      ),
     );
   });
 });
