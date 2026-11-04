@@ -1,6 +1,6 @@
 import { isMarkdownArtifactKind } from "@/lib/artifacts/node-display";
 import { useArtifactById } from "@/lib/epic-selectors";
-import { useCallback, useState } from "react";
+import { useCallback, useState, type ReactElement } from "react";
 import { useShallow } from "zustand/react/shallow";
 import { FileDown, MoreHorizontal, Pencil, Trash2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -20,6 +20,7 @@ import {
   type SwitcherRowKind,
 } from "@/components/epic-canvas/mobile/use-switcher-rename";
 import { useEpicPermissionRole, useEpicNodeHostId } from "@/lib/epic-selectors";
+import { useSidebarRowDropdownMount } from "@/components/epic-canvas/sidebar/use-sidebar-row-dropdown-mount";
 import { isEditableRole } from "@/lib/epic-permissions";
 import {
   describeTreeDeleteDisclosure,
@@ -171,51 +172,65 @@ export function SwitcherRowActions(props: SwitcherRowActionsProps) {
  * The "…" alone until it is pressed. The body behind it is a menu root, two
  * dialogs and every mutation hook a row might need, and a list draws one of
  * these per row: on a task with a thousand artifacts that is what the switcher
- * spent most of its seconds mounting. A press mounts the body with its menu
- * already open, so the first tap behaves as the trigger would have.
+ * spent most of its seconds mounting. The sidebar's first-use mount hook opens
+ * the body on the press itself and replays a keyboard open on the mounted
+ * trigger, so the first press behaves as the trigger would have, focus on the
+ * first item included.
  */
 function SwitcherRowActionsGate(
   props: SwitcherRowActionsProps & { readonly canMutate: boolean },
 ) {
-  const [armed, setArmed] = useState(false);
-  if (armed) return <SwitcherRowActionsBody {...props} />;
-  return (
-    // The same control the body's menu trigger is - label, test id, size -
-    // so the press lands on the one "…" the row has had all along.
+  const {
+    mounted,
+    open,
+    setOpen,
+    triggerIdProps,
+    triggerRef,
+    onPointerDown,
+    onKeyDown,
+    onClick,
+  } = useSidebarRowDropdownMount(false);
+  const trigger = (
     <Button
       type="button"
       variant="muted"
       size="icon-sm"
+      ref={triggerRef}
+      {...triggerIdProps}
       aria-label={`Actions for ${props.name}`}
       aria-haspopup="menu"
-      aria-expanded={false}
+      aria-expanded={open}
+      data-state={open ? "open" : "closed"}
+      data-slot="dropdown-menu-trigger"
       data-testid={`switcher-more-${props.nodeId}`}
       className="shrink-0"
-      onPointerDown={(event) => {
-        // The gesture the menu's own trigger opens on.
-        if (event.button === 0 && !event.ctrlKey) setArmed(true);
-      }}
-      onKeyDown={(event) => {
-        if (
-          event.key === "Enter" ||
-          event.key === " " ||
-          event.key === "ArrowDown"
-        ) {
-          event.preventDefault();
-          setArmed(true);
-        }
-      }}
-      onClick={() => setArmed(true)}
+      onPointerDown={onPointerDown}
+      onKeyDown={onKeyDown}
+      onClick={onClick}
     >
       <MoreHorizontal className="size-4" />
     </Button>
   );
+  if (!mounted) return trigger;
+  return (
+    <SwitcherRowActionsBody
+      {...props}
+      trigger={trigger}
+      open={open}
+      onOpenChange={setOpen}
+    />
+  );
 }
 
 function SwitcherRowActionsBody(
-  props: SwitcherRowActionsProps & { readonly canMutate: boolean },
+  props: SwitcherRowActionsProps & {
+    readonly canMutate: boolean;
+    readonly trigger: ReactElement;
+    readonly open: boolean;
+    readonly onOpenChange: (open: boolean) => void;
+  },
 ) {
-  const { epicId, tabId, kind, nodeId, name, canMutate } = props;
+  const { epicId, tabId, kind, nodeId, name, canMutate, trigger, open } = props;
   const [renameOpen, setRenameOpen] = useState(false);
   const [confirmOpen, setConfirmOpen] = useState(false);
 
@@ -363,20 +378,8 @@ function SwitcherRowActionsBody(
 
   return (
     <>
-      {/* Open on mount: the body exists because the "…" was just pressed. */}
-      <DropdownMenu defaultOpen>
-        <DropdownMenuTrigger asChild>
-          <Button
-            type="button"
-            variant="muted"
-            size="icon-sm"
-            aria-label={`Actions for ${name}`}
-            data-testid={`switcher-more-${nodeId}`}
-            className="shrink-0"
-          >
-            <MoreHorizontal className="size-4" />
-          </Button>
-        </DropdownMenuTrigger>
+      <DropdownMenu open={open} onOpenChange={props.onOpenChange}>
+        <DropdownMenuTrigger asChild>{trigger}</DropdownMenuTrigger>
         <DropdownMenuContent align="end" className="w-max">
           <SidebarDropdownMenuItems entries={entries} />
         </DropdownMenuContent>

@@ -380,6 +380,28 @@ describe("artifact export", () => {
     ).toBeDefined();
   });
 
+  it("puts focus on the first item when the … is opened from the keyboard", () => {
+    // The menu's own trigger focuses the first item on Enter; the menu here
+    // mounts after that keydown and never saw it, so it has to do so itself
+    // or a keyboard user presses ArrowDown twice to reach the first item.
+    render(
+      <SwitcherRowActions
+        epicId={EPIC_ID}
+        tabId={tabId}
+        kind="artifact"
+        nodeId={ARTIFACT_NODE_ID}
+        name="Artifact One"
+      />,
+      { wrapper: Wrapper },
+    );
+    const more = screen.getByTestId(`switcher-more-${ARTIFACT_NODE_ID}`);
+    more.focus();
+    fireEvent.keyDown(more, { key: "Enter" });
+
+    const items = screen.getAllByRole("menuitem");
+    expect(document.activeElement).toBe(items[0]);
+  });
+
   it("has no export items on a terminal-agent row", () => {
     render(
       <SwitcherRowActions
