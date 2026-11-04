@@ -811,6 +811,10 @@ import {
   chatMcpAppUpdateModelContextV10,
 } from "@traycer/protocol/host/chat/mcp-app";
 import {
+  chatFeedbackDraftDecideV10,
+  chatFeedbackDraftPreviewV10,
+} from "@traycer/protocol/host/chat/feedback-draft";
+import {
   epicBatchDeleteUpgradeV10ToV11,
   epicBatchDeleteV10,
   epicBatchDeleteV11,
@@ -1214,7 +1218,9 @@ import {
   hostNotificationsListV24,
   hostNotificationsListV25,
   hostNotificationsListUpgradeV24ToV25,
-  hostNotificationsListDowngradeV25ToV10,
+  hostNotificationsListV26,
+  hostNotificationsListUpgradeV25ToV26,
+  hostNotificationsListDowngradeV26ToV10,
   hostNotificationsMarkAllRead,
   hostNotificationsMarkAllReadUpgradeV10ToV11,
   hostNotificationsMarkAllReadV11,
@@ -1230,6 +1236,7 @@ import {
   hostNotificationsFeedSubscribeV15,
   hostNotificationsFeedSubscribeV16,
   hostNotificationsFeedSubscribeV17,
+  hostNotificationsFeedSubscribeV18,
   hostNotificationsCloudFeedSubscribeV10,
   hostNotificationsCloudFeedSubscribeV11,
   hostNotificationsCloudFeedSubscribeV12,
@@ -1237,6 +1244,7 @@ import {
   hostNotificationsCloudFeedSubscribeV14,
   hostNotificationsCloudFeedSubscribeV15,
   hostNotificationsCloudFeedSubscribeV16,
+  hostNotificationsCloudFeedSubscribeV17,
   hostNotificationsCloudFeedMarkRead,
   hostNotificationsCloudFeedMarkAllRead,
   hostNotificationsCloudFeedResolve,
@@ -10672,6 +10680,34 @@ const HOST_RPC_REGISTRY_BASE_TAIL_DEFINITION = {
     },
     degrade: { kind: "unsupported" },
   },
+  // The feedback-draft card (`chat/feedback-draft.ts`). A host without them
+  // leaves the card read-only.
+  "chat.feedbackDraft.decide": {
+    1: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: chatFeedbackDraftDecideV10,
+          upgradeFromPreviousVersion: null,
+        },
+      },
+      downgradePathsFromLatest: {},
+    },
+    degrade: { kind: "unsupported" },
+  },
+  "chat.feedbackDraft.preview": {
+    1: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: chatFeedbackDraftPreviewV10,
+          upgradeFromPreviousVersion: null,
+        },
+      },
+      downgradePathsFromLatest: {},
+    },
+    degrade: { kind: "unsupported" },
+  },
   // Artifact attachment bytes still live in the root-doc attachment map, but
   // @2 does not replicate that map to clients. This optional read keeps the
   // artifact/epic authorization subject on the request; a hash alone is never
@@ -12383,7 +12419,7 @@ const HOST_RPC_NOTIFICATION_METHODS = {
       downgradePathsFromLatest: {},
     },
     2: {
-      latestMinor: 5,
+      latestMinor: 6,
       versions: {
         0: {
           contract: hostNotificationsListV20,
@@ -12432,9 +12468,16 @@ const HOST_RPC_NOTIFICATION_METHODS = {
           upgradeFromPreviousVersion: hostNotificationsListUpgradeV24ToV25,
           responseGrowthProjectionGated: true,
         },
+        // 2.6 adds `feedback.drafted` under the same projection gate. A new
+        // minor rather than a widening of 2.5 because 2.5 is on staging hosts.
+        6: {
+          contract: hostNotificationsListV26,
+          upgradeFromPreviousVersion: hostNotificationsListUpgradeV25ToV26,
+          responseGrowthProjectionGated: true,
+        },
       },
       downgradePathsFromLatest: {
-        1: hostNotificationsListDowngradeV25ToV10,
+        1: hostNotificationsListDowngradeV26ToV10,
       },
     },
   },
@@ -14585,7 +14628,7 @@ type HostRpcNotificationMethodMap = {
       readonly downgradePathsFromLatest: Record<never, never>;
     };
     readonly 2: {
-      readonly latestMinor: 5;
+      readonly latestMinor: 6;
       readonly versions: {
         readonly 0: {
           readonly contract: typeof hostNotificationsListV20;
@@ -14614,9 +14657,14 @@ type HostRpcNotificationMethodMap = {
           readonly upgradeFromPreviousVersion: typeof hostNotificationsListUpgradeV24ToV25;
           readonly responseGrowthProjectionGated: true;
         };
+        readonly 6: {
+          readonly contract: typeof hostNotificationsListV26;
+          readonly upgradeFromPreviousVersion: typeof hostNotificationsListUpgradeV25ToV26;
+          readonly responseGrowthProjectionGated: true;
+        };
       };
       readonly downgradePathsFromLatest: {
-        readonly 1: typeof hostNotificationsListDowngradeV25ToV10;
+        readonly 1: typeof hostNotificationsListDowngradeV26ToV10;
       };
     };
   };
@@ -14937,7 +14985,7 @@ const HOST_STREAM_RPC_REGISTRY_NOTIFICATIONS_DEFINITION = {
   // on the negotiated minor rather than assuming tolerance.
   "host.notifications.feed.subscribe": {
     1: {
-      latestMinor: 7,
+      latestMinor: 8,
       versions: {
         0: {
           contract: hostNotificationsFeedSubscribeV10,
@@ -14968,12 +15016,13 @@ const HOST_STREAM_RPC_REGISTRY_NOTIFICATIONS_DEFINITION = {
           contract: hostNotificationsFeedSubscribeV16,
         },
         7: { contract: hostNotificationsFeedSubscribeV17 },
+        8: { contract: hostNotificationsFeedSubscribeV18 },
       },
     },
   },
   "host.notifications.cloudFeed.subscribe": {
     1: {
-      latestMinor: 6,
+      latestMinor: 7,
       versions: {
         0: {
           contract: hostNotificationsCloudFeedSubscribeV10,
@@ -14998,6 +15047,7 @@ const HOST_STREAM_RPC_REGISTRY_NOTIFICATIONS_DEFINITION = {
           contract: hostNotificationsCloudFeedSubscribeV15,
         },
         6: { contract: hostNotificationsCloudFeedSubscribeV16 },
+        7: { contract: hostNotificationsCloudFeedSubscribeV17 },
       },
     },
   },

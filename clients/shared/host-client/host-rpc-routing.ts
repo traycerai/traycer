@@ -368,6 +368,8 @@ export const HOST_UNARY_RPC_ROUTES = {
   "chat.fallback.proceed": "target-host",
   "chat.fallback.returnToPreferred": "target-host",
   "chat.fallback.runManualRung": "target-host",
+  "chat.feedbackDraft.decide": "target-host",
+  "chat.feedbackDraft.preview": "target-host",
   "chat.locateRow": "target-host-live-pool-at-rest",
   "chat.mcpApp.callTool": "target-host",
   "chat.mcpApp.describeTool": "target-host",

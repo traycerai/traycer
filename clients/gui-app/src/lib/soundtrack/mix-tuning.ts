@@ -1,7 +1,7 @@
 /**
- * Every number the directors and the session mix by, to be tuned by ear. Their
- * source is the soundtrack plan page's Signals section and its prototype's
- * `rulesPlan`, `applyPlan` and `direct`; none of them is a spec.
+ * Every number the directors, the session and a run's end mix by, to be tuned
+ * by ear. Their source is the soundtrack plan page's Signals section and its
+ * prototype's `rulesPlan`, `applyPlan` and `direct`; none of them is a spec.
  */
 export const MIX_TUNING = {
   /** How often a plan is restated with no signal having changed. */
@@ -34,6 +34,8 @@ export const MIX_TUNING = {
   dim: { openHz: 20_000, dimmedHz: 900, q: 0.3, rampSeconds: 1.2 },
   /** The silence between two plays of a track. */
   silenceSeconds: [8, 20],
+  /** What still sounds when a track's outro ends fades out over this long. */
+  outroRingOutSeconds: 4,
   /** The first track of a session, or one after a view with none. */
   fadeInSeconds: 0.5,
   /** Turning the soundtrack off. */

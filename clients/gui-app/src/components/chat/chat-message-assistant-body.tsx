@@ -1606,6 +1606,7 @@ export function AssistantSegment({
           imageResults={segment.imageResults}
           artifact={segment.artifact}
           mcpApp={segment.mcpApp}
+          feedbackDraft={segment.feedbackDraft}
           variant="card"
           headerFindUnitId={
             segment.agentMessageSend === null ? findUnitId : null

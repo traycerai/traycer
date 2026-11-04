@@ -49,6 +49,7 @@ import type {
   ProviderNoticeTone,
   ToolCallManagedCommand,
   ToolCallMcpAppStamp,
+  ToolCallFeedbackDraftStamp,
   ToolCallArtifactStamp,
   ToolInputDetail,
   WorkflowMeta,
@@ -206,6 +207,9 @@ export interface ToolSegment {
   // The MCP App the call rendered, stamped by the host (`chat.subscribe@1.22`).
   // Null for every other call, and on a harness without app support.
   mcpApp: ToolCallMcpAppStamp | null;
+  // Feedback the call drafted for the reader to send or skip (null for every
+  // other call). Routes the call to the draft's card.
+  feedbackDraft: ToolCallFeedbackDraftStamp | null;
 }
 
 // Recursive: a subagent's own children can themselves be nested subagent

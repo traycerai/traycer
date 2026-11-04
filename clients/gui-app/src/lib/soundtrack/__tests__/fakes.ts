@@ -39,6 +39,8 @@ export function isRamp(call: PortCall): call is RampCall {
 /** A port whose clock is the fake timers' clock, so ticks and time agree. */
 export class FakeOutput implements SoundtrackOutput {
   readonly calls: PortCall[] = [];
+  /** Each child gain's stereo position, by its name; null is the centre. */
+  readonly pans = new Map<string, number | null>();
   private readonly base = Date.now();
   private buses = 0;
 
@@ -86,13 +88,11 @@ class FakeGain implements OutputGain {
     });
   }
 
-  createChild(): OutputGain {
-    const child = new FakeGain(
-      `${this.name}/${String(this.children)}`,
-      this.output,
-    );
+  createChild(_initial: number, pan: number | null): OutputGain {
+    const name = `${this.name}/${String(this.children)}`;
+    this.output.pans.set(name, pan);
     this.children += 1;
-    return child;
+    return new FakeGain(name, this.output);
   }
 
   play(buffer: AudioBuffer, when: number, fadeInSeconds: number): OutputVoice {

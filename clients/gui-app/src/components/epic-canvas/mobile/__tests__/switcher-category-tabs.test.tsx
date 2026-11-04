@@ -59,6 +59,7 @@ function renderCategoryBar(): { list: HTMLElement; trigger: HTMLElement } {
         categories={{ bar: LEFT_PANEL_DEFINITIONS, more: [] }}
         activeCategory="chats"
         onSelect={() => {}}
+        trailing={null}
       />
     </Tabs>,
   );
