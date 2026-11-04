@@ -20,16 +20,21 @@ const MAX_TEST_WORKERS = IS_CI
   ? 2
   : Math.min(2, Math.max(1, Math.floor(availableParallelism / 2)));
 
-// `isolate: false` failed 112 tests in these 15 files. They share the
-// once-per-process data root, or they need a fresh module graph. Every other
+// These fixtures share the once-per-process data root, mock filesystem or
+// platform imports, or need a fresh module graph. Every other
 // file shares a worker. Vite concatenates `include` arrays when a project
 // extends this file, so the root sets no include and each project lists its own.
 const FRESH_MODULE_FILES = [
   "**/src/config/__tests__/adversarial-store-fuzz.test.ts",
+  "**/src/config/__tests__/adversarial-hostile-config.test.ts",
   "**/src/config/__tests__/adversarial-detect-shells.test.ts",
   "**/src/config/__tests__/apply-env-overrides.test.ts",
   "**/src/config/__tests__/data-root.test.ts",
   "**/src/config/__tests__/data-root-consumers.test.ts",
+  "**/src/config/__tests__/data-root-target-transient.test.ts",
+  "**/src/config/__tests__/detect-shells.test.ts",
+  "**/src/config/__tests__/store.test.ts",
+  "**/src/config/__tests__/store-windows-rename-retry.test.ts",
   "**/src/config/__tests__/store-concurrent-writes.test.ts",
   "**/src/config/__tests__/store-lock-breakers.test.ts",
   "**/src/config/__tests__/store-lock-deadlines.test.ts",
@@ -56,9 +61,9 @@ const freshIsolateFiles = FRESH_MODULE_FILES.filter(
 const lockClockFiles = FRESH_MODULE_FILES.filter((file) =>
   LOCK_CLOCK_FILES.has(file),
 );
-if (freshIsolateFiles.length !== 12 || lockClockFiles.length !== 3) {
+if (freshIsolateFiles.length !== 17 || lockClockFiles.length !== 3) {
   throw new Error(
-    `protocol vitest projects expected 12 fresh-isolate files and 3 lock-clock files, got ${freshIsolateFiles.length} and ${lockClockFiles.length}`,
+    `protocol vitest projects expected 17 fresh-isolate files and 3 lock-clock files, got ${freshIsolateFiles.length} and ${lockClockFiles.length}`,
   );
 }
 
