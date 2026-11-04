@@ -19,82 +19,82 @@ function line(id: AnalyticsShareLineId, body: string): ShareOnXLine {
 export const SHARE_ON_X_LINES: ReadonlyArray<ShareOnXLine> = [
   line(
     "line_01",
-    "Had Claude Code and Codex working the same bug side by side in @traycerai today. One fixed it, the other reviewed it, and I just watched.",
+    "Claude Code wrote it. Codex reviewed it. I read the diff and merged.\n\nBoth agents in one task with @traycerai, and I'm not going back.",
   ),
   line(
     "line_02",
-    "I stopped picking one coding agent. @traycerai runs Claude Code and Codex on the same task and I keep whichever is right.",
+    "I stopped picking a favorite coding agent. Now I use all of them on the same task, with the same context, in @traycerai.",
   ),
   line(
     "line_03",
-    "Plan in one agent, build in another, review in a third. @traycerai keeps them all in the same task.",
+    "My agents can finally talk to each other. One plans, one builds, one reviews, and @traycerai keeps them in the same room.",
   ),
   line(
     "line_04",
-    "My coding agents finally share a desk. Chats, terminals and diffs for a task all in one place with @traycerai.",
+    "Bring your own agents. Bring your own subscriptions. @traycerai makes them work together.",
   ),
   line(
     "line_05",
-    "Just shipped a fix without leaving @traycerai. Agent wrote it, second agent reviewed it, I read the diff and merged.",
+    "My terminal used to be nine tabs of agents I'd lost track of. Now it's one task in @traycerai: every chat, diff and terminal in one place.",
   ),
   line(
     "line_06",
-    "The best part of @traycerai: I can start a task on my laptop and check on the agents from my phone.",
+    "Gave @traycerai a half-formed idea this morning. Got back a plan, tickets, and agents already working through them.",
   ),
   line(
     "line_07",
-    "Running a few coding agents at once used to mean a wall of terminal tabs. Now it's one task in @traycerai.",
+    "Asked Claude Code and Codex the same question side by side in @traycerai. Second opinions are underrated for code too.",
   ),
   line(
     "line_08",
-    "Gave @traycerai a fuzzy idea and got back a plan, tickets and the agents to work through them.",
+    "Started a task on my laptop, checked on the agents from my phone, merged when I got back. @traycerai",
   ),
   line(
     "line_09",
-    "Asked two agents the same question in @traycerai and compared the answers. Turns out a second opinion is great for code too.",
+    "If you're juggling more than one coding agent, try @traycerai. One workspace, shared context, and the subscriptions you already pay for.",
   ),
   line(
     "line_10",
-    "My agents just closed out a whole task while I was in meetings. @traycerai is how I work now.",
+    "Spent today reviewing instead of typing. The agents in @traycerai did the typing.",
   ),
   line(
     "line_11",
-    "If you use more than one coding agent, try @traycerai. It keeps every agent's work for a task in one place.",
+    "The future isn't one perfect coding agent. It's a team of them. @traycerai is where mine work together.",
   ),
   line(
     "line_12",
-    "I keep coming back to @traycerai for the review step: one agent builds, another checks the work before I do.",
+    "Put a planner, a builder and a reviewer on one bug in @traycerai. The bug did not stand a chance.",
   ),
   line(
     "line_13",
-    "Today's workflow: describe the change, let the agents in @traycerai plan and build it, read the diff, ship.",
+    "Thanked my coding agent out loud today. In my defense, it was running in @traycerai and it earned it.",
   ),
   line(
     "line_14",
-    "Thanked my coding agent out loud today. It was running in @traycerai and it earned it.",
-  ),
-  line(
-    "line_15",
-    "Bring your own agents, keep your own subscriptions, and let @traycerai do the coordinating.",
-  ),
-  line(
-    "line_16",
-    "Spent the afternoon reviewing instead of typing. My agents in @traycerai did the typing.",
-  ),
-  line(
-    "line_17",
     "@traycerai turned a bug report into a fix, a review and a clean diff while I made coffee.",
   ),
   line(
-    "line_18",
-    "Every coding agent has its strengths. @traycerai lets me use the right one for each part of the task.",
+    "line_15",
+    "Every agent has its thing. One for the big refactor, one for the review, and @traycerai to keep them on the same page.",
   ),
   line(
-    "line_19",
+    "line_16",
     "Watching two agents hand work to each other in @traycerai never gets old.",
   ),
   line(
+    "line_17",
+    "Plans, chats, terminals and diffs, all in one task. @traycerai is the nerve center for my coding agents.",
+  ),
+  line(
+    "line_18",
+    "Small team, lots of agents. @traycerai is how we see what every one of them is doing.",
+  ),
+  line(
+    "line_19",
+    "No more copy-pasting context between agents. In @traycerai they share the task, so the next one picks up where the last one stopped.",
+  ),
+  line(
     "line_20",
-    "Small team, lots of agents. @traycerai is how we keep track of what each one is doing.",
+    "Shipped a feature today where I wrote zero lines and read every one. Agents in @traycerai, review on me.",
   ),
 ];

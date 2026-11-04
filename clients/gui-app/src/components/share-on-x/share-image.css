@@ -1,0 +1,431 @@
+/* The "share on X" pictures.
+   They are images, not app surfaces: each is drawn at X's 16:9 card size in
+   CSS pixels and rasterised, so their geometry is in pixels and their palette
+   is Traycer's social palette rather than the app theme - the same in every
+   appearance and at every zoom. */
+
+/* The pixel face ships with the app, and only these pictures set it. */
+@font-face {
+  font-family: "Geist Pixel Square";
+  src: url("../../assets/fonts/GeistPixel-Square.woff2") format("woff2");
+  font-display: block;
+}
+
+.share-image {
+  --share-aqua: #9eebf2;
+  --share-ink: #e0ebe8;
+  --share-eyebrow: rgb(217 255 255 / 0.72);
+  --share-line: rgb(224 235 232 / 0.14);
+  --share-node-fill: rgb(11 24 24 / 0.74);
+  --share-node-border: rgb(215 255 255 / 0.14);
+  --share-node-shadow:
+    0 0 16px rgb(110 234 242 / 0.08), 0 8px 12px rgb(0 0 0 / 0.22);
+  position: relative;
+  width: 1200px;
+  height: 675px;
+  overflow: hidden;
+  background: #0b1616;
+  color: #fff;
+  font-family: var(--font-sans);
+}
+
+/* The brand photo, softened: its film grain would make every PNG several
+   megabytes, and the bloom is all the picture needs from it. */
+.share-image__backdrop {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  opacity: 0.6;
+  filter: blur(3px);
+}
+
+.share-image__wash {
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(
+    100deg,
+    rgb(11 22 22 / 0.95) 0%,
+    rgb(11 22 22 / 0.84) 48%,
+    rgb(11 22 22 / 0.6) 100%
+  );
+}
+
+.share-image__lockup {
+  position: absolute;
+  top: 54px;
+  left: 72px;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  font-size: 30px;
+  font-weight: 600;
+  line-height: 1;
+  letter-spacing: -0.03em;
+}
+
+.share-image__lockup-mark {
+  width: 30px;
+  height: 30px;
+}
+
+.share-image__tag {
+  overflow: hidden;
+  color: var(--share-aqua);
+  font-family: var(--font-mono);
+  font-size: 15px;
+  letter-spacing: 0.16em;
+  text-overflow: ellipsis;
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+
+.share-image__tag--header {
+  position: absolute;
+  top: 60px;
+  right: 72px;
+}
+
+.share-image__rule {
+  position: absolute;
+  right: 72px;
+  bottom: 84px;
+  left: 72px;
+  height: 1px;
+  background: var(--share-line);
+}
+
+.share-image__footer {
+  position: absolute;
+  right: 72px;
+  bottom: 0;
+  left: 72px;
+  display: flex;
+  height: 84px;
+  align-items: center;
+  justify-content: space-between;
+  gap: 24px;
+}
+
+.share-image__site {
+  color: rgb(255 255 255 / 0.6);
+  font-size: 20px;
+  font-weight: 500;
+}
+
+/* The band between the lockup and the footer rule, where content sits. */
+.share-image__body {
+  position: absolute;
+  top: 118px;
+  bottom: 84px;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+}
+
+.share-image__eyebrow {
+  color: var(--share-eyebrow);
+  font-family: var(--font-mono);
+  font-size: 15px;
+  font-weight: 500;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+}
+
+.share-image__headline {
+  font-size: 58px;
+  font-weight: 300;
+  line-height: 1.08;
+  letter-spacing: -0.025em;
+}
+
+.share-image__pixel {
+  color: var(--share-aqua);
+  font-family: "Geist Pixel Square", var(--font-mono);
+  font-size: 1.06em;
+  font-weight: 400;
+  letter-spacing: 0;
+}
+
+.share-image__subcopy {
+  max-width: 470px;
+  color: rgb(224 235 232 / 0.8);
+  font-size: 22px;
+  line-height: 1.45;
+}
+
+/* The setup diagram. */
+
+.share-image__setup-copy {
+  left: 72px;
+  width: 560px;
+  gap: 24px;
+}
+
+.share-image__diagram {
+  position: absolute;
+  top: 118px;
+  right: 72px;
+  bottom: 84px;
+  left: 680px;
+}
+
+.share-image__wires {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  stroke: rgb(158 235 242 / 0.42);
+  stroke-width: 1.5;
+}
+
+.share-image__node {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid var(--share-node-border);
+  border-radius: 9999px;
+  background: var(--share-node-fill);
+  box-shadow: var(--share-node-shadow);
+}
+
+.share-image__hub {
+  position: absolute;
+  left: 0;
+  width: 76px;
+  height: 76px;
+  transform: translateY(-50%);
+  border-color: rgb(215 255 255 / 0.22);
+  background: rgb(11 24 24 / 0.92);
+  box-shadow:
+    0 0 36px rgb(110 234 242 / 0.2),
+    0 8px 12px rgb(0 0 0 / 0.3);
+}
+
+.share-image__hub-mark {
+  width: 34px;
+  height: 34px;
+}
+
+.share-image__hub-label {
+  position: absolute;
+  left: 38px;
+  transform: translateX(-50%);
+  color: var(--share-aqua);
+  font-family: var(--font-mono);
+  font-size: 12px;
+  letter-spacing: 0.12em;
+  opacity: 0.75;
+  white-space: nowrap;
+}
+
+.share-image__row {
+  position: absolute;
+  display: flex;
+  align-items: center;
+  gap: 18px;
+  transform: translateY(-50%);
+}
+
+.share-image__row-name {
+  max-width: 230px;
+  overflow: hidden;
+  font-family: var(--font-mono);
+  font-size: 24px;
+  font-weight: 600;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.share-image__more {
+  font-family: var(--font-mono);
+  font-size: 18px;
+  font-weight: 600;
+}
+
+/* The task card. */
+
+.share-image__ghost {
+  position: absolute;
+  top: 70px;
+  right: -90px;
+  width: 540px;
+  height: 540px;
+  opacity: 0.035;
+}
+
+.share-image__card-copy {
+  right: 72px;
+  left: 72px;
+  gap: 30px;
+}
+
+.share-image__title {
+  display: -webkit-box;
+  max-width: 980px;
+  overflow: hidden;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 3;
+  font-size: 64px;
+  font-weight: 300;
+  line-height: 1.08;
+  letter-spacing: -0.025em;
+}
+
+.share-image__chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+}
+
+.share-image__chip {
+  display: flex;
+  height: 52px;
+  align-items: center;
+  gap: 12px;
+  padding: 0 20px;
+  border: 1px solid var(--share-node-border);
+  border-radius: 26px;
+  background: var(--share-node-fill);
+  box-shadow: var(--share-node-shadow);
+  color: rgb(248 255 255 / 0.93);
+  font-size: 20px;
+  font-weight: 500;
+}
+
+.share-image__chip-icon {
+  width: 24px;
+  height: 24px;
+}
+
+/* The usage summary. */
+
+.share-image__usage-copy {
+  left: 72px;
+  width: 520px;
+  gap: 20px;
+}
+
+.share-image__figure {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.share-image__number {
+  color: var(--share-aqua);
+  font-family: "Geist Pixel Square", var(--font-mono);
+  font-size: 112px;
+  line-height: 0.95;
+}
+
+.share-image__number-label {
+  color: rgb(255 255 255 / 0.9);
+  font-size: 26px;
+  font-weight: 300;
+  line-height: 1.3;
+}
+
+.share-image__split {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding-top: 6px;
+}
+
+.share-image__split-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.share-image__split-icon {
+  width: 22px;
+  height: 22px;
+}
+
+.share-image__split-name {
+  width: 160px;
+  overflow: hidden;
+  color: var(--share-ink);
+  font-size: 19px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.share-image__split-track {
+  height: 6px;
+  flex: 1;
+  overflow: hidden;
+  border-radius: 9999px;
+  background: rgb(255 255 255 / 0.1);
+}
+
+.share-image__split-fill {
+  display: block;
+  height: 100%;
+  border-radius: 9999px;
+  background: var(--share-aqua);
+}
+
+.share-image__split-share {
+  width: 52px;
+  color: rgb(255 255 255 / 0.7);
+  font-family: var(--font-mono);
+  font-size: 15px;
+  text-align: right;
+}
+
+.share-image__chart {
+  right: 72px;
+  gap: 16px;
+}
+
+.share-image__plot {
+  color: var(--share-aqua);
+}
+
+.share-image__plot-axis {
+  stroke: var(--share-line);
+}
+
+.share-image__chart-label {
+  color: var(--share-aqua);
+  font-family: var(--font-mono);
+  font-size: 13px;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+}
+
+.share-image__chart-ticks {
+  display: flex;
+  justify-content: space-between;
+  color: var(--share-aqua);
+  font-family: var(--font-mono);
+  font-size: 12px;
+  letter-spacing: 0.12em;
+  opacity: 0.75;
+  text-transform: uppercase;
+}
+
+/* The framed screen. */
+
+.share-image__window {
+  position: absolute;
+  top: 124px;
+  right: 72px;
+  left: 72px;
+  overflow: hidden;
+  border: 1px solid rgb(215 255 255 / 0.16);
+  border-bottom: 0;
+  border-radius: 14px 14px 0 0;
+  box-shadow:
+    0 0 48px rgb(110 234 242 / 0.14),
+    0 24px 64px rgb(0 0 0 / 0.55);
+}
+
+.share-image__window img {
+  display: block;
+  width: 100%;
+}

@@ -23,6 +23,7 @@ import {
 } from "@/components/share-on-x/post-length";
 import { setUpHarnesses } from "@/components/share-on-x/set-up-harnesses";
 import type { ShareImage } from "@/components/share-on-x/share-images";
+import { shareUsageFacts } from "@/components/share-on-x/share-usage-facts";
 import { XLogo } from "@/components/share-on-x/x-logo";
 import { useHostClientForHostId } from "@/hooks/host/use-host-client-for-host-id";
 import { useProvidersList } from "@/hooks/providers/use-providers-list-query";
@@ -159,11 +160,14 @@ function ShareOnXDialogContent(props: ShareOnXDialogProps): ReactNode {
     true,
     false,
   );
-  const usage =
-    usageQuery.data !== undefined &&
-    usageQuery.data.summary.totals.factCount > 0
-      ? usageQuery.data
-      : null;
+  const usage = useMemo(
+    () =>
+      usageQuery.data !== undefined &&
+      usageQuery.data.summary.totals.factCount > 0
+        ? shareUsageFacts(usageQuery.data)
+        : null,
+    [usageQuery.data],
+  );
 
   const availableImages = IMAGE_ORDER.filter(
     (image) => images[image] !== undefined,
@@ -350,6 +354,12 @@ function ShareOnXDialogContent(props: ShareOnXDialogProps): ReactNode {
                 <button
                   key={line.id}
                   type="button"
+                  // A post emptied by an edit still needs a name to be found.
+                  aria-label={
+                    (edits[line.id] ?? line.text).trim().length === 0
+                      ? `Post ${String(position)}, empty`
+                      : undefined
+                  }
                   disabled={opening}
                   onClick={() => selectLine(line, position)}
                   className="rounded-lg border border-border p-3 text-left text-ui-sm text-muted-foreground transition-colors hover:bg-foreground/5 hover:text-foreground focus-visible:ring-3 focus-visible:ring-ring/50 focus-visible:outline-none disabled:pointer-events-none disabled:opacity-50"
@@ -460,16 +470,19 @@ function ShareOnXDialogContent(props: ShareOnXDialogProps): ReactNode {
           taskTitle === null || taskTitle.length === 0 ? null : taskTitle
         }
         usage={usage}
+        screenCapture={screenCapture}
         onCaptured={(image, captured) =>
           setImages((current) => ({ ...current, [image]: captured }))
         }
-        onFailed={(image) =>
+        onFailed={(image) => {
+          // A screen that could not be framed is still offered as captured.
+          if (image === "screen") return;
           setImages((current) => {
             const next = { ...current };
             delete next[image];
             return next;
-          })
-        }
+          });
+        }}
       />
     </DialogContent>
   );

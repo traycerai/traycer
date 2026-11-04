@@ -74,38 +74,3 @@ export async function renderShareImage(node: HTMLElement): Promise<Blob> {
   if (blob === null) throw new Error("share image capture produced no image");
   return blob;
 }
-
-/**
- * Resolve once `node`'s subtree has stopped changing for `quietMs`, or after
- * `maxMs` at most. A chart animates its first draw by rewriting its SVG every
- * frame, so a capture taken before it settles shows half-drawn bars; the
- * mutations themselves say when the drawing is done.
- */
-export function waitForDomToSettle(
-  node: HTMLElement,
-  quietMs: number,
-  maxMs: number,
-): Promise<void> {
-  return new Promise((resolve) => {
-    let quietTimer: number | null = null;
-    const finish = (): void => {
-      observer.disconnect();
-      if (quietTimer !== null) window.clearTimeout(quietTimer);
-      window.clearTimeout(maxTimer);
-      resolve();
-    };
-    const armQuiet = (): void => {
-      if (quietTimer !== null) window.clearTimeout(quietTimer);
-      quietTimer = window.setTimeout(finish, quietMs);
-    };
-    const observer = new MutationObserver(armQuiet);
-    observer.observe(node, {
-      subtree: true,
-      childList: true,
-      attributes: true,
-      characterData: true,
-    });
-    const maxTimer = window.setTimeout(finish, maxMs);
-    armQuiet();
-  });
-}
