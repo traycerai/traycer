@@ -130,11 +130,49 @@ export const botConversationSendRequestSchema = lazySchema(() =>
       })
       .nullable()
       .default(null),
+    /**
+     * `bot.conversation.send@1.3`: what a new top-level post opens. `"call"`
+     * opens a call's thread, whatever the bot's reply mode is. Read only for
+     * a new top-level post; a message into an existing thread leaves that
+     * thread's origin as it was. A new top-level post with it has to say
+     * `spoken: true`, or it is refused. Absent otherwise.
+     */
+    origin: z.literal("call").optional(),
+    /**
+     * `bot.conversation.send@1.3`: the words were spoken. The bound host marks
+     * the member's row with it. A new top-level post that says so has to name
+     * `origin: "call"`, or it is refused. Absent or `false` for a typed message.
+     */
+    spoken: z.boolean().optional(),
   }),
 );
 export type BotConversationSendRequest = z.infer<
   typeof botConversationSendRequestSchema
 >;
+
+/** The 1.2 request, frozen by hand: without `origin` and `spoken`. */
+export const botConversationSendRequestSchemaV12 = lazySchema(() =>
+  z.object({
+    botId: botIdSchema,
+    conversationId: z.string().min(1).max(255),
+    text: z.string().min(1).max(100_000),
+    threadId: z.string().min(1).max(36).nullable().default(null),
+    announcementId: z.string().min(1).max(255).nullable().default(null),
+    redeliver: z
+      .object({ requestId: z.string().min(1).max(255) })
+      .nullable()
+      .default(null),
+    supersedes: z.string().min(1).max(255).nullable().default(null),
+    answer: z
+      .object({
+        questionMessageId: z.string().min(1).max(255),
+        questionIndex: z.number().int().min(0),
+        skipped: z.boolean(),
+      })
+      .nullable()
+      .default(null),
+  }),
+);
 
 /** The 1.1 request, frozen by hand: without `answer`. */
 export const botConversationSendRequestSchemaV11 = lazySchema(() =>
@@ -371,6 +409,12 @@ export const botThreadSummarySchema = lazySchema(() =>
      * member's turns; `null` when this host cannot say.
      */
     costUsd: z.number().nonnegative().nullable(),
+    /**
+     * `bot.thread.list@1.2`: what kind of thread it is, when it is not a plain
+     * one. `"call"` for a thread a call opened. Absent otherwise, as from a
+     * host that predates it.
+     */
+    kind: z.literal("call").optional(),
   }),
 );
 export type BotThreadSummary = z.infer<typeof botThreadSummarySchema>;

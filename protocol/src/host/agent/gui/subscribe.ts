@@ -9070,6 +9070,10 @@ export const chatSubscribeV142 = defineStreamRpcContract({
  * for a peer below `1.43` as the plain user message it degrades to
  * (`chat-frame-compat.ts`). The open request and the client frames are
  * `1.42`'s, unchanged.
+ *
+ * A user row may also say `spoken`, a member's message spoken on a call.
+ * Optional, so a peer below 1.43 strips it on decode and reads the row as the
+ * plain message it is.
  */
 export const chatSubscribeV143 = defineStreamRpcContract({
   method: "chat.subscribe",

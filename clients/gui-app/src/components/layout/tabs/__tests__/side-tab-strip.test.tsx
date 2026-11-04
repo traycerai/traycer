@@ -447,8 +447,20 @@ async function renderStrip(
   return screen.findByTestId("side-tab-strip");
 }
 
+/**
+ * The shipped layout with the sidebar open in a new tab: the join cases read
+ * which pane a tab meets, and a collapsed rail is one of the two answers.
+ */
+const OPEN_SIDEBAR_SNAPSHOT = {
+  ...DEFAULT_LAYOUT_SNAPSHOT,
+  arrangement: {
+    ...DEFAULT_LAYOUT_SNAPSHOT.arrangement,
+    sidebarStartCollapsed: false,
+  },
+};
+
 function setHomeTabEnabled(enabled: boolean): void {
-  useLayoutStore.setState({ ...DEFAULT_LAYOUT_SNAPSHOT });
+  useLayoutStore.setState({ ...OPEN_SIDEBAR_SNAPSHOT });
   useLayoutStore
     .getState()
     .setRegionValues("homeTab", { shown: enabled ? "shown" : "hidden" });
@@ -1067,7 +1079,7 @@ describe("<SideTabStrip />", () => {
       __resetHostNotificationsStoreForTests();
       useStripDisclosureStore.setState({ expanded: {} });
       indicatorState.value = { epics: {}, chats: {} };
-      useLayoutStore.setState({ ...DEFAULT_LAYOUT_SNAPSHOT });
+      useLayoutStore.setState({ ...OPEN_SIDEBAR_SNAPSHOT });
       useChatTranscriptJumpStore.setState({ requestsByChatId: {} });
       usePaneEmphasisStore.setState({ outlinedInstanceId: null, flash: null });
     });
@@ -2011,7 +2023,7 @@ describe("<SideTabStrip />", () => {
       __resetHostNotificationsStoreForTests();
       useStripDisclosureStore.setState({ expanded: {} });
       indicatorState.value = { epics: {}, chats: {} };
-      useLayoutStore.setState({ ...DEFAULT_LAYOUT_SNAPSHOT });
+      useLayoutStore.setState({ ...OPEN_SIDEBAR_SNAPSHOT });
     });
 
     /**
@@ -3377,7 +3389,7 @@ describe("<SideTabStrip />", () => {
       __resetAgentActivityStoreForTests();
       useAppLocalNotificationsStore.setState({ byId: {} });
       indicatorState.value = { epics: {}, chats: {} };
-      useLayoutStore.setState({ ...DEFAULT_LAYOUT_SNAPSHOT });
+      useLayoutStore.setState({ ...OPEN_SIDEBAR_SNAPSHOT });
     });
 
     function setBeta(input: Omit<StatusCase, "name" | "shows">): void {

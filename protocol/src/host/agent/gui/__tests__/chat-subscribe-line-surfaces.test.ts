@@ -116,7 +116,8 @@ const CLAUDE_PARITY_MINOR = 20;
 // adds the Ultracode request on live settings tuples; older lines project that
 // field away. `1.42` adds the delivery's `worktreeIntent` (pinned by
 // `chat-subscribe-delivery-intent-v142.test.ts`). `1.43` adds the `slack` user
-// message, which older lines receive as a plain user row. Every threshold
+// message, which older lines receive as a plain user row, and lets a user row
+// say `spoken` (pinned by `chat-subscribe-spoken-v143.test.ts`). Every threshold
 // above still reads `>=` against the live line.
 const LIVE_MINOR = 43;
 // `1.40`: `queueSteerNow.restartConfirmed` on the client frames and

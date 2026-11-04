@@ -46,6 +46,16 @@ export function legacyLeftPanelRecord(): Record<string, unknown> {
   return LEFT_PANEL_RECORD ?? {};
 }
 
+/**
+ * Whether this launch found either record at all. Every build before the
+ * layout store wrote both on its first launch, so with no layout record
+ * (version 0) this is what tells an install that ran one of those builds from
+ * a fresh install, which has nothing anywhere.
+ */
+export function legacyRecordsPresent(): boolean {
+  return SETTINGS_RECORD !== null || LEFT_PANEL_RECORD !== null;
+}
+
 /** One persisted record's `state` object, or `null` if it is not readable. */
 function readPersistedState(name: string): Record<string, unknown> | null {
   try {
