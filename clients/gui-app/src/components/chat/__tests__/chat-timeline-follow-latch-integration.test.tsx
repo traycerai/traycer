@@ -29,7 +29,10 @@ import {
   moveChatTimelineScroller,
   type ChatTimelineFollowLatch,
 } from "@/components/chat/chat-timeline-follow-latch";
-import { transcriptListRows } from "@/stores/chats/transcript-list-rows";
+import {
+  transcriptListRows,
+  type TranscriptListRow,
+} from "@/stores/chats/transcript-list-rows";
 import type { ChatMessage as ChatMessageModel } from "@/stores/composer/chat-store";
 import { makeMessage, makeMessages } from "./chat-message-fixtures";
 import {
@@ -1498,6 +1501,202 @@ describe("ChatTimeline follow-latch real-LegendList integration", () => {
         intended: end,
         cause: "offset",
       });
+    });
+  });
+  describe("a send's layout hold keeps the latch's end writes out of its frames", () => {
+    const ROW_COUNT = 12;
+
+    function rowsOf(
+      messages: ReadonlyArray<ChatMessageModel>,
+    ): ReadonlyArray<TranscriptListRow> {
+      return transcriptListRows({
+        window: null,
+        rendered: messages,
+        splitLongTurns: true,
+      });
+    }
+
+    function timelineOf(
+      listRef: RefObject<LegendListRef | null>,
+      rows: ReadonlyArray<TranscriptListRow>,
+      isTranscriptWindowInvalidated: boolean,
+      onFollowIntentChange: (isFollowing: boolean) => void,
+    ): ReactNode {
+      return (
+        <div style={{ height: VIEWPORT_HEIGHT_PX, width: VIEWPORT_WIDTH_PX }}>
+          <ChatTimeline
+            rows={rows}
+            taskTitle="layout hold"
+            backgroundToolBlockIds={new Set()}
+            getMessageActions={() => null}
+            nextStepActions={null}
+            listRef={listRef}
+            isTranscriptWindowInvalidated={isTranscriptWindowInvalidated}
+            className="h-full"
+            onFollowIntentChange={onFollowIntentChange}
+          />
+        </div>
+      );
+    }
+
+    /** A following reader parked at the end of a settled transcript. One
+     *  list ref serves every commit: the committed row shape is cached per
+     *  ref. `scrollToEnd` is the latch's queued end command, spied on the
+     *  handle; the list's own writes never go through it. */
+    async function mountFollowing(messages: ReadonlyArray<ChatMessageModel>) {
+      setLegendListScrollContainerScrollHeightOverride(
+        contentHeightForRowCount(messages.length),
+      );
+      const listRef = createRef<LegendListRef | null>();
+      const onFollowIntentChange = vi.fn<(isFollowing: boolean) => void>();
+      const view = render(
+        timelineOf(listRef, rowsOf(messages), false, onFollowIntentChange),
+      );
+      await settleLegendList();
+      const node = requireScrollNode(listRef);
+      parkAtStrictBottom(node);
+      const list = listRef.current;
+      if (!list) throw new Error("LegendList ref not mounted");
+      const scrollToEnd = vi
+        .spyOn(list, "scrollToEnd")
+        .mockImplementation((): Promise<void> => Promise.resolve());
+      const commit = (
+        next: ReadonlyArray<ChatMessageModel>,
+        isTranscriptWindowInvalidated: boolean,
+      ): void => {
+        setLegendListScrollContainerScrollHeightOverride(
+          contentHeightForRowCount(next.length),
+        );
+        act(() => {
+          view.rerender(
+            timelineOf(
+              listRef,
+              rowsOf(next),
+              isTranscriptWindowInvalidated,
+              onFollowIntentChange,
+            ),
+          );
+        });
+      };
+      return { node, scrollToEnd, commit, onFollowIntentChange };
+    }
+
+    it("a row-shape commit writes nothing in its frame and issues one correction in the next", async () => {
+      const messages = makeMessages(ROW_COUNT);
+      const { node, scrollToEnd, commit, onFollowIntentChange } =
+        await mountFollowing(messages);
+      const parked = node.scrollTop;
+
+      commit(appendAssistantRows(messages, 1, "sent"), false);
+
+      // The commit's frame: its maintenance and its frame hold their writes.
+      expect(scrollToEnd).not.toHaveBeenCalled();
+      expect(node.scrollTop).toBe(parked);
+      await advanceLegendListFrames(1);
+      expect(scrollToEnd).not.toHaveBeenCalled();
+      expect(node.scrollTop).toBe(parked);
+
+      // The next frame: the one correction the hold kept back.
+      await advanceLegendListFrames(1);
+      expect(scrollToEnd).toHaveBeenCalledTimes(1);
+      expectAtTrueEnd(node);
+      expect(onFollowIntentChange).not.toHaveBeenCalledWith(false);
+    });
+
+    it("a placeholder replaced by its hydrated row under the same key holds the same way", async () => {
+      const messages = makeMessages(ROW_COUNT);
+      const hydrated = rowsOf(messages);
+      const placeholder = hydrated.map((row, index): TranscriptListRow =>
+        index === 2
+          ? {
+              kind: "placeholder",
+              key: row.key,
+              ordinal: index,
+              entry: null,
+              provenance: "index",
+            }
+          : row,
+      );
+      setLegendListScrollContainerScrollHeightOverride(
+        contentHeightForRowCount(ROW_COUNT),
+      );
+      const listRef = createRef<LegendListRef | null>();
+      const onFollowIntentChange = vi.fn<(isFollowing: boolean) => void>();
+      const view = render(
+        timelineOf(listRef, placeholder, false, onFollowIntentChange),
+      );
+      await settleLegendList();
+      const node = requireScrollNode(listRef);
+      parkAtStrictBottom(node);
+      const list = listRef.current;
+      if (!list) throw new Error("LegendList ref not mounted");
+      const scrollToEnd = vi
+        .spyOn(list, "scrollToEnd")
+        .mockImplementation((): Promise<void> => Promise.resolve());
+
+      // The hydrated row is taller than its placeholder was.
+      setLegendListScrollContainerScrollHeightOverride(
+        contentHeightForRowCount(ROW_COUNT) + 200,
+      );
+      act(() => {
+        view.rerender(
+          timelineOf(listRef, hydrated, false, onFollowIntentChange),
+        );
+      });
+      // The list re-anchors on a hydration by itself, so only the latch's own
+      // command tells its write from the list's.
+      expect(scrollToEnd).not.toHaveBeenCalled();
+      await advanceLegendListFrames(1);
+      expect(scrollToEnd).not.toHaveBeenCalled();
+
+      await advanceLegendListFrames(1);
+      expect(scrollToEnd).toHaveBeenCalledTimes(1);
+      expectAtTrueEnd(node);
+    });
+
+    it("a streaming token with no row-shape change is corrected in its own frame", async () => {
+      const messages = makeMessages(ROW_COUNT);
+      const { node, scrollToEnd, commit } = await mountFollowing(messages);
+      const parked = node.scrollTop;
+
+      const last = messages[messages.length - 1];
+      const streamed = [
+        ...messages.slice(0, -1),
+        { ...last, content: `${last.content} more` },
+      ];
+      commit(streamed, false);
+      setLegendListScrollContainerScrollHeightOverride(
+        contentHeightForRowCount(messages.length) + 120,
+      );
+      await advanceLegendListFrames(1);
+
+      expect(scrollToEnd).toHaveBeenCalled();
+      expect(node.scrollTop).toBeGreaterThan(parked);
+    });
+
+    it("a snapshot that lands in a commit which also reshapes the rows is corrected once, in the frame after", async () => {
+      const messages = makeMessages(ROW_COUNT);
+      const { node, scrollToEnd, commit, onFollowIntentChange } =
+        await mountFollowing(messages);
+      const parked = node.scrollTop;
+
+      // The void: the window bit holds, the reader is owed a correction.
+      commit(messages, true);
+      await advanceLegendListFrames(2);
+      expect(scrollToEnd).not.toHaveBeenCalled();
+
+      // The index returns in the commit that re-keys the rows: the window
+      // bit clears as the structural bit opens, so nothing flushes here.
+      commit(appendAssistantRows(messages, 1, "snapshot"), false);
+      expect(scrollToEnd).not.toHaveBeenCalled();
+      expect(node.scrollTop).toBe(parked);
+      await advanceLegendListFrames(1);
+      expect(scrollToEnd).not.toHaveBeenCalled();
+
+      await advanceLegendListFrames(1);
+      expect(scrollToEnd).toHaveBeenCalledTimes(1);
+      expectAtTrueEnd(node);
+      expect(onFollowIntentChange).not.toHaveBeenCalledWith(false);
     });
   });
 });

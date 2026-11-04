@@ -11303,4 +11303,77 @@ describe("ChatMessages scroll policy", () => {
       expect(readingOwnerId()).toBe("reply-row-1");
     });
   });
+  describe("a recovery that ends in a row-reshaping commit", () => {
+    it("re-grants follow to a detached reader the recovery left at the strict bottom, through the layout hold", async () => {
+      const rowCount = 12;
+      const messages = makeTranscript(rowCount);
+      const skeleton = messages.map((message, ordinal) => ({
+        rowId: message.id,
+        createdAt: ordinal,
+        role: message.role,
+        byteLength: 80,
+        bodyDigest: `digest-${ordinal}`,
+      }));
+      const baseWindow: TranscriptWindow = {
+        ...emptyTranscriptWindow(),
+        epoch: 1,
+        rowCount,
+        skeleton,
+        skeletonRevision: 1,
+        skeletonComplete: true,
+        skeletonStreamCoveredThrough: rowCount,
+        indexRevision: 1,
+        indexRevisionRebuilding: false,
+      };
+      const hydratedWindow: TranscriptWindow = {
+        ...baseWindow,
+        spans: [
+          {
+            fromOrdinal: 0,
+            rowIds: messages.map((message) => message.id),
+            rowContext: {},
+            messageIds: [],
+            eventIds: [],
+            contextBytes: 0,
+          },
+        ],
+      };
+      // The void: every row is a placeholder until the index returns.
+      const voidedWindow: TranscriptWindow = {
+        ...baseWindow,
+        invalidated: true,
+        spans: [],
+      };
+      setLegendListScrollContainerScrollHeightOverride(
+        LEGEND_LIST_HEADER_PX + rowCount * 90 + 40,
+      );
+      tileLiveness.live = true;
+      const view = renderChatMessages({
+        messages,
+        transcriptWindow: hydratedWindow,
+      });
+      await settleLegendList();
+
+      await enterFreeScrollingAwayFromEnd();
+      await waitForPillVisible();
+
+      // The recovery clamps the detached reader to the end; it holds
+      // reattachment off, so they stay detached.
+      view.rerenderWith({ transcriptWindow: voidedWindow });
+      await settleLegendList();
+      await fireScrollTopAndFlush(maxScrollTopFor(getScrollNode()));
+      expect(isJumpPillVisible()).toBe(true);
+
+      // The index returns in the commit that re-keys the rows back to their
+      // hydrated bodies: the layout hold opens in the same commit as the
+      // reconcile, and the reconcile still reaches the reader.
+      view.rerenderWith({ transcriptWindow: hydratedWindow });
+      await settleLegendList();
+
+      await waitFor(() => {
+        expect(isJumpPillVisible()).toBe(false);
+      });
+      view.unmount();
+    });
+  });
 });

@@ -177,6 +177,71 @@ test.describe("wheel", () => {
   });
 });
 
+test.describe("a following reader", () => {
+  test.use({ viewport: { width: 390, height: 700 } });
+
+  // The latch's own writes are not observable from the page (the list makes
+  // writes of its own in the same frames), so this holds what is: the reader
+  // is following in every frame of the send, the jump pill never shows, and
+  // the send ends at the end.
+  test("stays following through a send and never shows the jump pill", async ({
+    page,
+  }) => {
+    await loadAfterTwoSendsAtTheEnd(page);
+
+    const samples = await page.evaluate(async () => {
+      const frames: Array<{
+        readonly following: string | undefined;
+        readonly pillShown: boolean;
+      }> = [];
+      const sample = (): void => {
+        const pill = document.querySelector(
+          'button[aria-label="Scroll to end"]',
+        );
+        frames.push({
+          following: document.body.dataset.following,
+          pillShown:
+            pill !== null &&
+            pill.classList.contains("opacity-100") &&
+            !pill.classList.contains("opacity-0"),
+        });
+      };
+      const progress = { done: false };
+      const send = window.__sendThroughVoid?.().then(() => {
+        progress.done = true;
+      });
+      if (send === undefined) throw new Error("no send driver");
+      let previousScrollTop = Number.NaN;
+      let previousScrollHeight = Number.NaN;
+      let stillFrames = 0;
+      while (!progress.done || stillFrames < 10) {
+        await new Promise((resolve) => {
+          requestAnimationFrame(resolve);
+        });
+        sample();
+        const at = window.__geometry?.();
+        const still =
+          at !== null &&
+          at !== undefined &&
+          at.scrollTop === previousScrollTop &&
+          at.scrollHeight === previousScrollHeight;
+        stillFrames = still ? stillFrames + 1 : 0;
+        previousScrollTop = at?.scrollTop ?? Number.NaN;
+        previousScrollHeight = at?.scrollHeight ?? Number.NaN;
+      }
+      await send;
+      return frames;
+    });
+
+    expect(samples.length).toBeGreaterThan(10);
+    expect(samples.map((frame) => frame.following)).toEqual(
+      samples.map(() => "true"),
+    );
+    expect(samples.some((frame) => frame.pillShown)).toBe(false);
+    expect(distanceFromEnd(await geometry(page))).toBeLessThanOrEqual(1);
+  });
+});
+
 /** One finger, from `from` to `to`, as real touch input through Chrome. */
 async function swipe(
   page: Page,
