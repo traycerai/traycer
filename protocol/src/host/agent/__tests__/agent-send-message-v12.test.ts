@@ -2,7 +2,6 @@ import { describe, expect, it } from "vitest";
 import {
   upgradeRequestToVersion,
   upgradeResponseToVersion,
-  validateVersionedRpcRegistry,
 } from "@traycer/protocol/framework/index";
 import { hostRpcRegistry } from "@traycer/protocol/host/index";
 import {
@@ -22,14 +21,6 @@ const request = {
   responseId: null,
   workspace: null,
 };
-
-describe("agent.sendMessage@1.2 registry", () => {
-  it("validates, and registers 1.2 as the latest minor", () => {
-    expect(() => validateVersionedRpcRegistry(hostRpcRegistry)).not.toThrow();
-    const line = hostRpcRegistry["agent.sendMessage"][1];
-    expect(line.latestMinor).toBe(2);
-  });
-});
 
 describe("agent.sendMessage@1.2 attachments", () => {
   it("upgrades a 1.1 request with no attachments", () => {

@@ -176,9 +176,7 @@ describe("a Slack message row", () => {
         },
       ),
     );
-    const [row] = result.current;
-    if (row === undefined) throw new Error("no row rendered");
-    render(<UserMessageBody actions={null} message={row} />);
+    render(<UserMessageBody actions={null} message={result.current[0]} />);
 
     expect(screen.getByText("Priya")).not.toBeNull();
     expect(screen.getByText("why is the nightly red?")).not.toBeNull();
