@@ -3,9 +3,15 @@ import type { MixDirector } from "../directors";
 import type { SoundtrackManifest } from "../manifest";
 import { MIX_TUNING } from "../mix-tuning";
 import { CROSSFADE_SECONDS } from "../player";
-import { SoundtrackSession, type SoundtrackPorts } from "../session";
+import {
+  SoundtrackSession,
+  type ResumePositions,
+  type SoundtrackPorts,
+} from "../session";
 import type { MixSignals, SoundtrackView } from "../signals";
+import type { StemSource } from "../stems";
 import type { VariableTrack } from "../variable-sound";
+import { makeAudioBuffer } from "./audio-buffer";
 import { FakeOutput, FakeStems } from "./fakes";
 
 const HOME: MixSignals = {
@@ -51,30 +57,34 @@ function trackOf(name: string): VariableTrack {
   };
 }
 
-function open(
-  views: SoundtrackManifest["views"],
-  tracks: readonly string[],
-  heldLayers: readonly number[],
-) {
+interface SessionConfig {
+  readonly views: SoundtrackManifest["views"];
+  readonly tracks: readonly VariableTrack[];
+  readonly stems: StemSource;
+  readonly heldLayers: readonly number[];
+  readonly resumePositions: ResumePositions;
+}
+
+function openWith(config: SessionConfig) {
   const output = new FakeOutput();
   const ports: SoundtrackPorts = {
     output,
-    stems: new FakeStems(2.2),
+    stems: config.stems,
     setDimmed: vi.fn<(dimmed: boolean) => void>(),
     setVolume: vi.fn<(volume: number) => void>(),
     duck: vi.fn<(chimeSeconds: number) => void>(),
     close: vi.fn<(afterSeconds: number) => void>(),
   };
   const manifest: SoundtrackManifest = {
-    tracks: tracks.map(trackOf),
-    views,
+    tracks: config.tracks,
+    views: config.views,
     stems: { tracks: [] },
   };
   const director: MixDirector = {
     plan: (_signals, context) => ({
       state: null,
       enabledLayerCount: null,
-      heldLayers,
+      heldLayers: config.heldLayers,
       pauseMultiplier: 1,
       layerGains: context.track.layers.map(() => 1),
       dim: false,
@@ -87,10 +97,25 @@ function open(
     ports,
     random: () => 0,
     director,
-    resumePositions: {},
+    resumePositions: config.resumePositions,
     onSounding,
   });
   return { session, output, onSounding };
+}
+
+/** Tracks of 10 s whose samples last 2.2 s. */
+function open(
+  views: SoundtrackManifest["views"],
+  tracks: readonly string[],
+  heldLayers: readonly number[],
+) {
+  return openWith({
+    views,
+    tracks: tracks.map(trackOf),
+    stems: new FakeStems(2.2),
+    heldLayers,
+    resumePositions: {},
+  });
 }
 
 const EMPTY_VIEWS: SoundtrackManifest["views"] = {
@@ -280,6 +305,108 @@ describe("SoundtrackSession track pools", () => {
     );
     expect(output.ramps("bus1").every((ramp) => ramp.target > 0)).toBe(true);
     expect(session.end().task?.trackName).toBe("two");
+  });
+
+  it("restarts a track another view left partway as a fresh run, with its intro and the plan restated", async () => {
+    // B has a 2 s intro and layers of 2.2 s; its layers wait for the intro.
+    const lengths = new Map([
+      ["I", 2],
+      ["A", 2.2],
+      ["B", 2.2],
+    ]);
+    const stems: StemSource = {
+      load: (_track, layer) =>
+        Promise.resolve(makeAudioBuffer(lengths.get(layer.name) ?? 2.2, 10)),
+    };
+    const introTrack: VariableTrack = {
+      ...trackOf("B"),
+      lengthSeconds: 40,
+      intro: { name: "I", variants: 1, pan: null },
+    };
+    const { session, output } = openWith({
+      views: { ...EMPTY_VIEWS, task: ["B"], home: ["A", "B"] },
+      tracks: [trackOf("A"), introTrack],
+      stems,
+      heldLayers: [1],
+      resumePositions: {},
+    });
+    session.setSignals({ ...HOME, view: "task" });
+    await advance(3);
+    // B (bus0) fades out over 2 s and is stopped at 5 s, 4.99 s into its
+    // track. A (bus1) began at 3 s and ends at about 13.1 s; B follows 8 s
+    // later, at about 21.1 s.
+    session.setSignals(HOME);
+    await advance(19);
+
+    const restart = output.ramps("bus0").at(-1);
+    expect(restart).toMatchObject({
+      target: 1,
+      seconds: MIX_TUNING.fadeInSeconds,
+    });
+    expect(restart?.at).toBeGreaterThan(21);
+    expect(output.plays("bus0/2").filter((play) => play.at > 21)).toHaveLength(
+      1,
+    );
+    // The fresh roll leaves layer 1 off, and the plan held it on at the start.
+    expect(output.ramps("bus0/1").at(-1)).toMatchObject({
+      target: 1,
+      seconds: 1.5,
+      at: restart?.at,
+    });
+
+    // At 22 s a start from the top is under 1 s in; a resume would be near 6 s.
+    const position = session.end().home;
+    expect(position?.trackName).toBe("B");
+    expect(position?.elapsedSeconds).toBeGreaterThan(0.5);
+    expect(position?.elapsedSeconds).toBeLessThan(1.5);
+  });
+
+  describe("when the track a rotation picks is still fading out from the previous view", () => {
+    /**
+     * Task plays B from 0; at 9 s home resumes A at 9.5 s and B fades out until
+     * 11 s. A ends at about 9.6 s and the rotation picks B, which would end its
+     * own run at 10.08 s if it were still playing; its start is due at 17.6 s.
+     */
+    async function openFadingRotation() {
+      const opened = openWith({
+        views: {
+          ...EMPTY_VIEWS,
+          home: ["A", "B"],
+          task: ["B"],
+          settings: ["C"],
+        },
+        tracks: [trackOf("A"), trackOf("B"), trackOf("C")],
+        stems: new FakeStems(2.2),
+        heldLayers: [],
+        resumePositions: { home: { trackName: "A", elapsedSeconds: 9.5 } },
+      });
+      opened.session.setSignals({ ...HOME, view: "task" });
+      await advance(9);
+      opened.session.setSignals(HOME);
+      await advance(2);
+      return opened;
+    }
+
+    it("starts nothing after the session ends", async () => {
+      const { session, output } = await openFadingRotation();
+      session.end();
+      const callsAtEnd = output.calls.length;
+      await advance(20);
+
+      expect(output.calls.slice(callsAtEnd)).toEqual([]);
+    });
+
+    it("does not start it while another view's track is in front", async () => {
+      const { session, output } = await openFadingRotation();
+      session.setSignals({ ...HOME, view: "settings" });
+      await advance(20);
+
+      expect(
+        output.ramps("bus0").filter((ramp) => ramp.at > 11 && ramp.target > 0),
+      ).toEqual([]);
+      expect(output.plays("bus0/0").filter((play) => play.at > 11)).toEqual([]);
+      session.end();
+    });
   });
 
   it("starts nothing after the session ends during the silence", async () => {

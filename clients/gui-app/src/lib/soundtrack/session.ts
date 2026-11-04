@@ -282,8 +282,12 @@ export class SoundtrackSession {
       track,
       player: this.trackPlayer(track, 0),
     };
+    // A fresh run from the top, whatever another view left it at. One still
+    // fading out stops here, so the run it was in cannot end and move on again.
+    next.player.rewind(CROSSFADE_SECONDS);
     this.players.set(next.view, next);
     this.inFront = next;
+    this.cancelPendingStart();
     this.pendingStart = window.setTimeout(() => {
       this.pendingStart = null;
       next.player.start(next.player.elapsed(), MIX_TUNING.fadeInSeconds);

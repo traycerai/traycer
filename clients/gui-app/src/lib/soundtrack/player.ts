@@ -234,6 +234,17 @@ export class TrackPlayer {
   }
 
   /**
+   * Stops the player as `stop` does and forgets the run it was in, so the next
+   * start opens a fresh run from the track's top.
+   */
+  rewind(fadeSeconds: number): void {
+    this.stop(fadeSeconds);
+    this.scheduler = null;
+    this.run = null;
+    this.position = 0;
+  }
+
+  /**
    * Takes the player's gain down over `seconds`, then stops it. It keeps
    * playing under the fade, and `start` called meanwhile takes it back up.
    */
