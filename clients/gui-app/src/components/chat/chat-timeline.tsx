@@ -476,20 +476,25 @@ export const ChatTimeline = memo(function ChatTimeline({
   // sees the flag. A later structural commit restarts the wait; one that
   // changes no key and no kind leaves it running.
   //
-  // The same commit opens the latch's structural hold: no automatic
-  // correction is issued in this commit's frame or the next. An end written
-  // while the reshaped rows stand at estimates meets a scrollable size the
-  // browser is about to change, and iOS WebKit reverts or clamps it. The
-  // first frame requested here runs before this commit paints, so the hold
-  // closes in the second, once that commit has rendered, and issues there
-  // the one correction it kept back.
+  // A row-shape commit that overlaps a void or replaces its window also opens
+  // the latch's structural hold. An end written while those rows stand at
+  // estimates meets a scrollable size WebKit can revert or clamp. Ordinary
+  // appends must be corrected in their own commit, before the prompt paints.
+  // The first requested frame runs before this commit paints; the hold closes
+  // in the second, after the replacement has rendered.
   const structuralSettleFrameRef = useRef<number | null>(null);
+  const previousWindowInvalidatedRef = useRef(isTranscriptWindowInvalidated);
   useLayoutEffect(() => {
     if (!keySequenceChanged) return;
     if (structuralSettleFrameRef.current !== null) {
       cancelAnimationFrame(structuralSettleFrameRef.current);
     }
-    followLatch.openStructuralHold();
+    // An ordinary append can be followed before its first paint. Only a
+    // voided window's replacement needs the extra frame: clearing the window
+    // bit in this same commit must not flush into estimated replacement rows.
+    const holdForRekey =
+      previousWindowInvalidatedRef.current || isTranscriptWindowInvalidated;
+    if (holdForRekey) followLatch.openStructuralHold();
     structuralCommitUnsettledRef.current = true;
     const readScrollHeight = (): number | null => {
       const node = listRef.current?.getScrollableNode();
@@ -501,7 +506,9 @@ export const ChatTimeline = memo(function ChatTimeline({
     let framesChecked = 0;
     const checkSettled = (): void => {
       framesChecked += 1;
-      if (framesChecked === 2) followLatch.closeStructuralHold();
+      if (framesChecked === 2 && holdForRekey) {
+        followLatch.closeStructuralHold();
+      }
       const scrollHeight = readScrollHeight();
       stillFrames =
         scrollHeight === previousScrollHeight &&
@@ -518,7 +525,13 @@ export const ChatTimeline = memo(function ChatTimeline({
       followLatch.followEndIfPermitted();
     };
     structuralSettleFrameRef.current = requestAnimationFrame(checkSettled);
-  }, [followLatch, keySequenceChanged, listRef, rows]);
+  }, [
+    followLatch,
+    isTranscriptWindowInvalidated,
+    keySequenceChanged,
+    listRef,
+    rows,
+  ]);
 
   // The voided window holds automatic correction too, from the void until its
   // index returns. After the structural settle above: a commit that ends the
@@ -527,6 +540,7 @@ export const ChatTimeline = memo(function ChatTimeline({
   // close. Before the maintain effect below, which this commit's bits gate.
   useLayoutEffect(() => {
     followLatch.setWindowInvalidated(isTranscriptWindowInvalidated);
+    previousWindowInvalidatedRef.current = isTranscriptWindowInvalidated;
   }, [followLatch, isTranscriptWindowInvalidated]);
 
   useLayoutEffect(() => {

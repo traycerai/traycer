@@ -1581,7 +1581,7 @@ describe("ChatTimeline follow-latch real-LegendList integration", () => {
       return { node, scrollToEnd, commit, onFollowIntentChange };
     }
 
-    it("a row-shape commit writes nothing in its frame and issues one correction in the next", async () => {
+    it("an ordinary row-shape commit corrects before its first paint", async () => {
       const messages = makeMessages(ROW_COUNT);
       const { node, scrollToEnd, commit, onFollowIntentChange } =
         await mountFollowing(messages);
@@ -1589,21 +1589,14 @@ describe("ChatTimeline follow-latch real-LegendList integration", () => {
 
       commit(appendAssistantRows(messages, 1, "sent"), false);
 
-      // The commit's frame: its maintenance and its frame hold their writes.
-      expect(scrollToEnd).not.toHaveBeenCalled();
-      expect(node.scrollTop).toBe(parked);
-      await advanceLegendListFrames(1);
-      expect(scrollToEnd).not.toHaveBeenCalled();
-      expect(node.scrollTop).toBe(parked);
-
-      // The next frame: the one correction the hold kept back.
-      await advanceLegendListFrames(1);
+      // No void occurred, so the prompt can be followed in this commit.
+      expect(node.scrollTop).toBeGreaterThan(parked);
       expect(scrollToEnd).toHaveBeenCalledTimes(1);
       expectAtTrueEnd(node);
       expect(onFollowIntentChange).not.toHaveBeenCalledWith(false);
     });
 
-    it("a placeholder replaced by its hydrated row under the same key holds the same way", async () => {
+    it("a placeholder replaced by its hydrated row follows without a void", async () => {
       const messages = makeMessages(ROW_COUNT);
       const hydrated = rowsOf(messages);
       const placeholder = hydrated.map((row, index): TranscriptListRow =>
@@ -1645,12 +1638,8 @@ describe("ChatTimeline follow-latch real-LegendList integration", () => {
       });
       // The list re-anchors on a hydration by itself, so only the latch's own
       // command tells its write from the list's.
-      expect(scrollToEnd).not.toHaveBeenCalled();
-      await advanceLegendListFrames(1);
-      expect(scrollToEnd).not.toHaveBeenCalled();
-
-      await advanceLegendListFrames(1);
       expect(scrollToEnd).toHaveBeenCalledTimes(1);
+      await advanceLegendListFrames(2);
       expectAtTrueEnd(node);
     });
 
