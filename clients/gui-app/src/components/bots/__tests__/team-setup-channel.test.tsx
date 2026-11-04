@@ -135,6 +135,7 @@ vi.mock("@/components/bots/bot-settings-panel", () => ({
 
 import { BotTabSurface } from "@/components/bots/bot-tab-surface";
 import { TeamHostInstallTokenLifecycleBridge } from "@/providers/team-host-install-token-lifecycle-bridge";
+import { teamHostMutationKeys } from "@/lib/query-keys";
 import { useAuthStore } from "@/stores/auth/auth-store";
 import { useTeamCloudCreateStore } from "@/stores/bots/team-cloud-create-store";
 
@@ -613,7 +614,7 @@ describe("<BotTabSurface /> a team's main bot still to be set up", () => {
         await expectFreshCard();
         expect(
           queryClient.getMutationCache().findAll({
-            mutationKey: ["teamHost.installToken"],
+            mutationKey: teamHostMutationKeys.installTokenAll(),
           }),
         ).toEqual([]);
         expect(auth().mintTeamHostInstallToken).toHaveBeenCalledTimes(1);
@@ -648,7 +649,7 @@ describe("<BotTabSurface /> a team's main bot still to be set up", () => {
         await expectFreshCard();
         expect(
           queryClient.getMutationCache().findAll({
-            mutationKey: ["teamHost.installToken"],
+            mutationKey: teamHostMutationKeys.installTokenAll(),
           }),
         ).toEqual([]);
         expect(auth().mintTeamHostInstallToken).toHaveBeenCalledTimes(1);
