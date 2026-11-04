@@ -7,7 +7,7 @@
  * Real hook over two hosts' mock messengers sharing one query client.
  */
 import type { ReactNode } from "react";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { act, renderHook } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import {
@@ -218,96 +218,136 @@ describe("useBotConversationSendMutation", () => {
   });
 });
 
-describe("useBotCallSendMutation", () => {
-  it("sends each of a call's words to the host named with it, and makes only that host's thread list stale", async () => {
-    const queryClient = new QueryClient();
-    let seq = 0;
-    const messenger = new MockHostMessenger<HostRpcRegistry>({
-      registry: hostRpcRegistry,
-      requestId: () => `call-${String(++seq)}`,
-      handlers: {
-        "bot.conversation.send": () => ({
-          messageId: "message-1",
-          requestId: "request-1",
-          delivery: "written",
-          threadId: "thread-1",
-        }),
+const CALL: BotConversationSendRequest = {
+  ...SEND,
+  spoken: true,
+  origin: "call",
+};
+
+/** The call-send hook over two hosts of one spine, signed in as `user-alice`. */
+function mountCallSend(): {
+  readonly send: (
+    hostId: string,
+    account: string | null,
+    text: string,
+  ) => Promise<void>;
+  readonly messenger: MockHostMessenger<HostRpcRegistry>;
+  readonly isStale: (hostId: string) => boolean;
+} {
+  const queryClient = new QueryClient();
+  let seq = 0;
+  const messenger = new MockHostMessenger<HostRpcRegistry>({
+    registry: hostRpcRegistry,
+    requestId: () => `call-${String(++seq)}`,
+    handlers: {
+      "bot.conversation.send": () => ({
+        messageId: "message-1",
+        requestId: "request-1",
+        delivery: "written",
+        threadId: "thread-1",
+      }),
+    },
+  });
+  const spine = new HostClient<HostRpcRegistry>({
+    registry: hostRpcRegistry,
+    invalidator: createHostQueryInvalidator(queryClient),
+    findHostById: (hostId) =>
+      [mockRemoteHostEntry, mockLocalHostEntry].find(
+        (entry) => entry.hostId === hostId,
+      ) ?? null,
+    messenger,
+  });
+  spine.setRequestContext(
+    createRequestContextFixture({
+      origin: "renderer",
+      identity: {
+        userId: "user-alice",
+        username: "alice",
+        providerHandle: null,
       },
-    });
-    const spine = new HostClient<HostRpcRegistry>({
-      registry: hostRpcRegistry,
-      invalidator: createHostQueryInvalidator(queryClient),
-      findHostById: (hostId) =>
-        [mockRemoteHostEntry, mockLocalHostEntry].find(
-          (entry) => entry.hostId === hostId,
-        ) ?? null,
-      messenger,
-    });
-    spine.setRequestContext(
-      createRequestContextFixture({ origin: "renderer", bearerToken: "tok-1" }),
+      bearerToken: "tok-1",
+    }),
+  );
+  binding.current = { hostClient: spine };
+  for (const hostId of [SENDING_HOST_ID, OTHER_HOST_ID]) {
+    queryClient.setQueryData(
+      hostQueryKeys.method<HostRpcRegistry, "bot.thread.list">(
+        hostId,
+        "bot.thread.list",
+        { botId: BOT_ID },
+      ),
+      { threads: [] },
     );
-    binding.current = { hostClient: spine };
-    for (const hostId of [SENDING_HOST_ID, OTHER_HOST_ID]) {
-      queryClient.setQueryData(
-        hostQueryKeys.method<HostRpcRegistry, "bot.thread.list">(
+  }
+  const wrapper = (props: { readonly children: ReactNode }): ReactNode => (
+    <QueryClientProvider client={queryClient}>
+      {props.children}
+    </QueryClientProvider>
+  );
+  const { result } = renderHook(() => useBotCallSendMutation(), { wrapper });
+  return {
+    send: async (hostId, account, text) => {
+      await act(async () => {
+        await result.current.mutateAsync({
           hostId,
-          "bot.thread.list",
-          { botId: BOT_ID },
-        ),
-        { threads: [] },
-      );
-    }
-    const wrapper = (props: { readonly children: ReactNode }): ReactNode => (
-      <QueryClientProvider client={queryClient}>
-        {props.children}
-      </QueryClientProvider>
+          account,
+          request: { ...CALL, text },
+        });
+      });
+    },
+    messenger,
+    isStale: (hostId) =>
+      queryClient
+        .getQueryCache()
+        .findAll({
+          queryKey: hostQueryKeys.methodScope(hostId, "bot.thread.list"),
+        })
+        .some((query) => query.state.isInvalidated),
+  };
+}
+
+describe("useBotCallSendMutation", () => {
+  afterEach(() => {
+    binding.current = null;
+  });
+
+  it("sends each of a call's words to the host named with it, and makes only that host's thread list stale", async () => {
+    const mounted = mountCallSend();
+
+    await mounted.send(
+      SENDING_HOST_ID,
+      "user-alice",
+      "First call's last words",
     );
-    try {
-      const { result } = renderHook(() => useBotCallSendMutation(), {
-        wrapper,
-      });
-      const call: BotConversationSendRequest = {
-        ...SEND,
-        spoken: true,
-        origin: "call",
-      };
+    expect(mounted.isStale(SENDING_HOST_ID)).toBe(true);
+    expect(mounted.isStale(OTHER_HOST_ID)).toBe(false);
 
-      await act(async () => {
-        await result.current.mutateAsync({
-          hostId: SENDING_HOST_ID,
-          request: { ...call, text: "First call's last words" },
-        });
-      });
-      const isStale = (hostId: string): boolean =>
-        queryClient
-          .getQueryCache()
-          .findAll({
-            queryKey: hostQueryKeys.methodScope(hostId, "bot.thread.list"),
-          })
-          .some((query) => query.state.isInvalidated);
-      expect(isStale(SENDING_HOST_ID)).toBe(true);
-      expect(isStale(OTHER_HOST_ID)).toBe(false);
+    await mounted.send(OTHER_HOST_ID, "user-alice", "Second call's words");
 
-      await act(async () => {
-        await result.current.mutateAsync({
-          hostId: OTHER_HOST_ID,
-          request: { ...call, text: "Second call's words" },
-        });
-      });
+    expect(
+      mounted.messenger.calls.map((sent) => [
+        sent.authority.endpoint.hostId,
+        sent.params,
+      ]),
+    ).toEqual([
+      [SENDING_HOST_ID, { ...CALL, text: "First call's last words" }],
+      [OTHER_HOST_ID, { ...CALL, text: "Second call's words" }],
+    ]);
+    expect(mounted.isStale(OTHER_HOST_ID)).toBe(true);
+  });
 
-      expect(
-        messenger.calls.map((sent) => [
-          sent.authority.endpoint.hostId,
-          sent.params,
-        ]),
-      ).toEqual([
-        [SENDING_HOST_ID, { ...call, text: "First call's last words" }],
-        [OTHER_HOST_ID, { ...call, text: "Second call's words" }],
-      ]);
-      expect(isStale(OTHER_HOST_ID)).toBe(true);
-    } finally {
-      binding.current = null;
-    }
+  it("refuses, before it reaches the host, a send whose call is another account's or no account's", async () => {
+    const mounted = mountCallSend();
+
+    await expect(
+      mounted.send(SENDING_HOST_ID, "user-bob", "Bob's words"),
+    ).rejects.toThrow("The call's account is no longer signed in.");
+    await expect(
+      mounted.send(SENDING_HOST_ID, null, "Nobody's words"),
+    ).rejects.toThrow("The call's account is no longer signed in.");
+
+    expect(mounted.messenger.calls).toEqual([]);
+    expect(mounted.isStale(SENDING_HOST_ID)).toBe(false);
   });
 });
 

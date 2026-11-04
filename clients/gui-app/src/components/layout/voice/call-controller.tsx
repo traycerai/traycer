@@ -359,6 +359,11 @@ export function CallController(): ReactNode {
    * a time: the first opens the call's thread, and the next needs its id.
    */
   const outboxRef = useRef<string[]>([]);
+  /**
+   * The account signed in when the call started, carried on every send it
+   * makes, live or last: only that account's sends may leave.
+   */
+  const callAccountRef = useRef<string | null>(null);
   /** The call (its token) whose send is out; `null` with none out. */
   const sendingRef = useRef<number | null>(null);
   /**
@@ -398,6 +403,7 @@ export function CallController(): ReactNode {
     };
     const sent = sendRef.current({
       hostId: known.hostId,
+      account: callAccountRef.current,
       request: callSendRequest(known, threadId, text),
     });
     inFlightRef.current = sent.then(
@@ -629,10 +635,12 @@ export function CallController(): ReactNode {
    * is nothing or only an end phrase. They go one at a time after the send
    * that is out, into the thread it opened if the call had none, and to the
    * call's own host whatever call has started since. The end route waits
-   * for them, or for the send that is out when nothing is left. Nothing is
-   * sent once the account has switched, at the end or at any point after:
-   * the words were another person's. (A call closing on a queued send let
-   * its words go when the microphone went off.)
+   * for them, or for the send that is out when nothing is left. They go
+   * only under the account the call started under, which each send carries
+   * to its dispatch: once another account is signed in, at the end or at
+   * any point after, nothing more is sent, since the words were another
+   * person's. The check here only stops early. (A call closing on a queued
+   * send let its words go when the microphone went off.)
    */
   const takeLastWords = useCallback(
     (reason: VoiceEndReason | null): (() => Promise<void>) | null => {
@@ -657,7 +665,7 @@ export function CallController(): ReactNode {
         });
         return waitForSend;
       }
-      const account = signedInAccount();
+      const account = callAccountRef.current;
       return async () => {
         const opened = inFlight === null ? null : await inFlight;
         let threadId = call.threadId ?? opened;
@@ -666,6 +674,7 @@ export function CallController(): ReactNode {
           try {
             const response = await sendRef.current({
               hostId: known.hostId,
+              account,
               request: callSendRequest(known, threadId, text),
             });
             threadId = threadId ?? response.threadId;
@@ -1166,6 +1175,7 @@ export function CallController(): ReactNode {
         threadId: target.threadId,
       };
       store.sessionConnecting(call, namesRef.current.botTitle(target.botId));
+      callAccountRef.current = signedInAccount();
       firstOpeningRef.current = true;
       shortSessionsRef.current = 0;
       closingRef.current = false;

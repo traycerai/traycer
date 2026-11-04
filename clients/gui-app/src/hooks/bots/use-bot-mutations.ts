@@ -228,9 +228,11 @@ export function useBotConversationSendMutation(
   });
 }
 
-/** A call's send and the host it goes to, named with each send. */
+/** A call's send, the host it goes to and the account whose call it is. */
 export interface BotCallSendVariables {
   readonly hostId: string;
+  /** The account signed in when the call started; `null` owns no call. */
+  readonly account: string | null;
   readonly request: BotConversationSendRequest;
 }
 
@@ -238,6 +240,12 @@ export interface BotCallSendVariables {
  * A call's words (Call Tracy), each to the host named with it rather than
  * to a host the hook follows: a call's last words still go to its own host
  * after another call has started on a different one.
+ *
+ * A send leaves only under the account whose call it is. The check runs in
+ * the client resolver, in the same synchronous step as the dispatch (no
+ * `prepareRequest` stands between them), against the request context that
+ * dispatch carries; a switch after it aborts the captured authority in
+ * HostClient. Any other account, or none, refuses the send.
  */
 export function useBotCallSendMutation(): UseMutationResult<
   BotConversationSendResponse,
@@ -253,7 +261,17 @@ export function useBotCallSendMutation(): UseMutationResult<
     BotConversationSendContext,
     BotCallSendVariables
   >({
-    client: (variables) => resolveNamedHostClient(binding, variables.hostId),
+    client: (variables) => {
+      const client = resolveNamedHostClient(binding, variables.hostId);
+      if (
+        client !== null &&
+        (variables.account === null ||
+          client.getRequestContextUserId() !== variables.account)
+      ) {
+        throw new Error("The call's account is no longer signed in.");
+      }
+      return client;
+    },
     method: "bot.conversation.send",
     requiredHostMethodVersion: (variables) =>
       conversationSendVersion(variables.request),
