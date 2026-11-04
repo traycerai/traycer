@@ -26,6 +26,7 @@ import {
   type TeamPageHarness,
 } from "@/components/settings/environment/__tests__/team-configuration-test-support";
 import userEvent from "@testing-library/user-event";
+import { frozenDestroyAt } from "@/lib/sandboxes/sandbox-balance";
 import type { ReactElement } from "react";
 import type {
   SandboxVerbFetchResult,
@@ -1160,6 +1161,49 @@ describe("<SandboxesSettingsPanel />", () => {
       renderUi(<SandboxesSettingsPanel />);
       expect(names()).toEqual(["older", "newer"]);
     });
+  });
+
+  it("shows a row's withdrawal notice only when the server announces one", () => {
+    const endsAt = new Date(2026, 11, 1).getTime();
+    renderPanel([
+      row("withdrawn", { withdrawalEndsAt: endsAt }),
+      row("plain", { withdrawalEndsAt: null }),
+    ]);
+
+    expect(
+      within(rowOf("withdrawn")).getByTestId("sandboxes-row-withdrawal")
+        .textContent,
+    ).toContain("stops running");
+    expect(
+      within(rowOf("plain")).queryByTestId("sandboxes-row-withdrawal"),
+    ).toBeNull();
+  });
+
+  // The second production call site of the withdrawal sentence. Its card
+  // twin is covered in `sandbox-card.test.tsx`; without this case, dropping
+  // `destroyAt` at THIS call site would put the announced day back beside
+  // the clock line's day-30 and no test would notice.
+  it("drops the announced day from a frozen withdrawn row's notice, where the clock line names the day-30 one", () => {
+    const frozenAt = Date.UTC(2026, 9, 9);
+    renderPanel([
+      row("frozen", {
+        state: "suspended",
+        frozen: true,
+        frozenAt,
+        destroyAt: frozenDestroyAt(frozenAt),
+        withdrawalEndsAt: Date.UTC(2026, 11, 1),
+      }),
+    ]);
+
+    expect(
+      within(rowOf("frozen")).getByTestId("sandboxes-row-withdrawal")
+        .textContent,
+    ).toBe(
+      "This sandbox stops running and is rebuilt from your environment. Files outside the repository are lost.",
+    );
+    expect(
+      within(rowOf("frozen")).getByTestId("sandboxes-row-clock").textContent,
+    ).toContain("destroyed on");
   });
 
   it("narrows the list by the search and by the state filter, with a count badge", () => {

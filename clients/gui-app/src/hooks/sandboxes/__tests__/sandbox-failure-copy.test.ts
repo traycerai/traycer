@@ -153,6 +153,19 @@ describe("sandboxFailureMessage", () => {
     ).toBe("This account's sandbox plan can't run a sandbox yet.");
   });
 
+  it("words a withdrawn operating system's own sentence, never the generic fallback", () => {
+    const message = sandboxFailureMessage(
+      refused("shape_not_offered", {
+        reason: "provider-withdrawn",
+        shortfallMc: null,
+      }),
+    );
+    expect(message).toBe(
+      "That operating system isn't offered for new sandboxes any more.",
+    );
+    expect(message).not.toBe("Traycer refused that request.");
+  });
+
   it("shows a full team's server sentence verbatim, and a fallback when it sends none", () => {
     const sentence = "Every pod of Alpha is full. Ask an admin to add one.";
     expect(

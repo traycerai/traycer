@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   HOST_SANDBOX_STATES,
   type HostSandboxState,
@@ -14,6 +14,7 @@ import {
   sandboxStateLine,
   sandboxSuspendKeepsLine,
   sandboxTileOverlay,
+  sandboxWithdrawalLine,
   type SandboxCardAction,
 } from "@/components/hosts/sandbox-card-model";
 import {
@@ -69,6 +70,7 @@ function summaryOf(overrides: Partial<SandboxSummary>): SandboxSummary {
     keptAt: null,
     operation: null,
     regionLabel: null,
+    withdrawalEndsAt: null,
     ...overrides,
   };
 }
@@ -313,6 +315,75 @@ describe("sandboxFrozenLine", () => {
     expect(formatSandboxDate(frozenDestroyAt(frozenAt), true)).toBe(
       formatSandboxDate(new Date(2026, 10, 8, 12, 0, 0).getTime(), true),
     );
+  });
+});
+
+describe("sandboxWithdrawalLine", () => {
+  afterEach(() => {
+    vi.unstubAllEnvs();
+  });
+
+  it("is null while no withdrawal is announced", () => {
+    expect(sandboxWithdrawalLine(null, null)).toBeNull();
+  });
+
+  // `destroyAt` is the day the row actually ends, so it wins the sentence:
+  // the announced day goes unnamed rather than contradicting it. The two
+  // cases share every other word, which is what makes the date the only
+  // thing under test.
+  it("names no day once the row carries a destroy deadline of its own, keeping the rest of the sentence", () => {
+    const endsAt = Date.UTC(2026, 11, 1);
+    const withDeadline = sandboxWithdrawalLine(endsAt, Date.UTC(2026, 10, 8));
+
+    expect(withDeadline).toBe(
+      "This sandbox stops running and is rebuilt from your environment. Files outside the repository are lost.",
+    );
+    // Same row, no deadline of its own: the day is named. Which day, and in
+    // which zone, is pinned by the case below.
+    expect(sandboxWithdrawalLine(endsAt, null)).toContain("stops running on ");
+  });
+
+  // `withdrawalEndsAt` is an announced UTC calendar day, and the sentence has
+  // to read it in UTC whatever zone the runtime is in. Two things make that a
+  // real pin rather than a passing case:
+  //
+  // - the zone is PINNED to one that is not UTC. Left to the runner's own
+  //   zone, the case is vacuous on a UTC runner, where a local read and a UTC
+  //   read name the same day, and nothing in this repository pins a non-UTC
+  //   zone for tests;
+  // - the expected day is COMPUTED, in the runtime's own default locale,
+  //   rather than written out. `formatSandboxUtcDay` formats in that default
+  //   locale, so a literal `Dec 1, 2026` would fail under any other one while
+  //   the UTC reading was perfectly correct.
+  //
+  // Lose the UTC reading and the line carries the local rendering, a day
+  // earlier in this zone, failing both assertions on any runner.
+  it("names the UTC day, never the runtime's own zone's day, pinned to a zone that is not UTC", () => {
+    vi.stubEnv("TZ", "America/Los_Angeles");
+    // The pin itself has to take, or the case proves nothing.
+    expect(Intl.DateTimeFormat().resolvedOptions().timeZone).toBe(
+      "America/Los_Angeles",
+    );
+
+    const endsAt = Date.UTC(2026, 11, 1);
+    const dayOptions: Intl.DateTimeFormatOptions = {
+      month: "short",
+      day: "numeric",
+      year: "numeric",
+    };
+    const utcDay = new Date(endsAt).toLocaleDateString(undefined, {
+      ...dayOptions,
+      timeZone: "UTC",
+    });
+    const localDay = new Date(endsAt).toLocaleDateString(undefined, dayOptions);
+    // The pin only proves anything if the two readings actually diverge for
+    // this instant and zone; a runner where they coincide would pass this
+    // case for the wrong reason.
+    expect(utcDay).not.toBe(localDay);
+
+    const line = sandboxWithdrawalLine(endsAt, null);
+    expect(line).toContain(utcDay);
+    expect(line).not.toContain(localDay);
   });
 });
 

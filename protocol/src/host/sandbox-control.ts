@@ -270,6 +270,28 @@ export interface SandboxSummary {
    * catalogue gives it; `null` from a server before the field.
    */
   readonly regionLabel: string | null;
+  /**
+   * When this sandbox stops running, because the control plane no longer
+   * runs sandboxes of its kind after that date; `null` on every ordinary row
+   * and from a server before the field.
+   *
+   * On an UNFROZEN row this comes with no resting deadline (`destroyAt` is
+   * `null`), because the control plane does not end a withdrawn row for
+   * resting while this date stands. A FROZEN row is the exception: it keeps
+   * its own day-30 `destroyAt`, which is decided ahead of the withdrawal, so
+   * a frozen withdrawn row carries BOTH fields. A surface that names one
+   * deadline must prefer `destroyAt` wherever it is set — that is the day the
+   * control plane acts on — and read this date only when it is `null`.
+   *
+   * What it marks is an **announced calendar day in UTC**. The instant
+   * inside that day carries no meaning — nothing compares this value to the
+   * clock, and the drain it announces is operational — so render its UTC day
+   * and no clock time. Reading it in the reader's own zone names the day
+   * before for every reader west of UTC, and names two different days to two
+   * readers of one announcement; a clock time would promise a cutoff that
+   * nothing enforces.
+   */
+  readonly withdrawalEndsAt: number | null;
 }
 
 /**
@@ -487,6 +509,7 @@ export const sandboxSummarySchema: z.ZodType<SandboxSummary> = lazySchema(() =>
     // fail the row, and with it the whole sandbox list.
     operation: sandboxOperationSchema.nullable().default(null).catch(null),
     regionLabel: z.string().nullable().default(null),
+    withdrawalEndsAt: z.number().nullable().default(null),
   }),
 );
 
@@ -869,7 +892,9 @@ export type SandboxCreditSource = "personal" | "team-allowance" | "team";
  *    (`os-not-offered`, `region-not-offered`, `cpus-out-of-range`,
  *    `memory-out-of-range`, `memory-per-cpu-out-of-range`, `disk-out-of-range`,
  *    `provider-plan-too-small`: the account's plan cannot create any shape
- *    of the provider, see `SandboxCatalogueProvider.creatable`).
+ *    of the provider, see `SandboxCatalogueProvider.creatable`;
+ *    `provider-withdrawn`: no new sandbox of that operating system is made
+ *    any more, and the rows already on it carry `withdrawalEndsAt`).
  *  - `insufficient_credit` (`402`): the create gate refused; `reason`
  *    (`denied`, `unverified`, `unsupported-subscription`), the shortfall
  *    (`null` when the balance is unknown) and the burn it was computed from.

@@ -691,6 +691,22 @@ describe("sandbox confirm dialogs", () => {
       },
     );
 
+    it("gives the Stop dialog no destroy date for a withdrawn row, even one with a resting period that would otherwise show one", () => {
+      render(
+        <SandboxStopDialog
+          sandbox={sandboxSummaryFixture({
+            displayName: NAME,
+            destroyAfterRestingMinutes: 60,
+            withdrawalEndsAt: Date.UTC(2026, 11, 1),
+          })}
+          open
+          onOpenChange={vi.fn()}
+        />,
+      );
+      const text = screen.getByTestId("sandbox-confirm-stop").textContent;
+      expect(text).not.toContain("Destroyed on");
+    });
+
     it("gives the Keep preview its date with a time", () => {
       render(
         <SandboxKeepDialog sandbox={SANDBOX} open onOpenChange={vi.fn()} />,
@@ -698,6 +714,24 @@ describe("sandbox confirm dialogs", () => {
       expect(screen.getByTestId("sandbox-confirm-keep").textContent).toContain(
         "on Nov 1 at 10:36 if it rests from now.",
       );
+    });
+
+    it("drops only the resting sentence from the Keep preview for a withdrawn row, keeping the two sentences that are still true", () => {
+      render(
+        <SandboxKeepDialog
+          sandbox={sandboxSummaryFixture({
+            displayName: NAME,
+            withdrawalEndsAt: Date.UTC(2026, 11, 1),
+          })}
+          open
+          onOpenChange={vi.fn()}
+        />,
+      );
+      const text = screen.getByTestId("sandbox-confirm-keep").textContent;
+      expect(text).toContain("Stops deleting itself when idle.");
+      expect(text).toContain("Paid by you while awake.");
+      expect(text).not.toContain("resting days");
+      expect(text).not.toContain("Destroyed after");
     });
   });
 
@@ -723,6 +757,27 @@ describe("sandbox confirm dialogs", () => {
     ).toBe(
       "Kept until you destroy it. Never applies to idle cleanup. Out-of-credit sandboxes are deleted after 30 days frozen.",
     );
+  });
+
+  it("gives a withdrawn row's idle settings form no resting preview at all, even once the resting value is changed", () => {
+    render(
+      <SandboxIdleSettingsDialog
+        sandbox={sandboxSummaryFixture({
+          displayName: NAME,
+          destroyAfterRestingMinutes: 10_080,
+          withdrawalEndsAt: Date.UTC(2026, 11, 1),
+        })}
+        open
+        onOpenChange={vi.fn()}
+      />,
+    );
+    fireEvent.change(
+      screen.getByTestId("sandbox-idle-settings-resting-value"),
+      {
+        target: { value: "" },
+      },
+    );
+    expect(screen.queryByTestId("sandbox-idle-settings-preview")).toBeNull();
   });
 
   it("keeps the confirmed set in Destroy all idle once the list drops the destroyed rows", () => {
