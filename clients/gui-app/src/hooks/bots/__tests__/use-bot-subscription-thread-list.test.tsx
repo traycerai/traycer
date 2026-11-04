@@ -29,7 +29,10 @@ import {
   __resetBotSubscriptionsForTesting,
   useBotSubscriptionForClient,
 } from "@/hooks/bots/use-bot-subscription";
-import { useBotThreadListQuery } from "@/hooks/bots/use-bot-thread-list-query";
+import {
+  botThreadListParams,
+  useBotThreadListQuery,
+} from "@/hooks/bots/use-bot-thread-list-query";
 import { useBotThreadFollowsQuery } from "@/hooks/bots/use-bot-thread-follow";
 import { useBotReadCursorQuery } from "@/hooks/bots/use-bot-read-cursor";
 import { StubHostStreamClient, StubSession } from "./bot-subscribe-stub-stream";
@@ -184,7 +187,7 @@ function fixture(watchReadCursors: boolean): {
     threadListKey: hostQueryKeys.method<HostRpcRegistry, "bot.thread.list">(
       HOST_ID,
       "bot.thread.list",
-      { botId: BOT_ID },
+      botThreadListParams(BOT_ID),
     ),
     render: () => {
       render(
@@ -213,6 +216,8 @@ describe("the bot's thread listing follows its subscription", () => {
         threads: [],
         trunkCostUsd: 0,
         threadAnchors: null,
+        nextCursor: null,
+        total: 0,
       }),
     );
     await waitFor(() => expect(world.queryClient.isFetching()).toBe(0));
@@ -240,6 +245,8 @@ describe("the bot's thread listing follows its subscription", () => {
         threads: [],
         trunkCostUsd: 0,
         threadAnchors: null,
+        nextCursor: null,
+        total: 0,
       }),
     );
     await waitFor(() => expect(world.queryClient.isFetching()).toBe(0));
@@ -274,11 +281,15 @@ describe("the bot's thread listing follows its subscription", () => {
         threads: [],
         trunkCostUsd: 1.5,
         threadAnchors: null,
+        nextCursor: null,
+        total: 0,
       });
       world.pendingReads[0]?.({
         threads: [],
         trunkCostUsd: 0,
         threadAnchors: null,
+        nextCursor: null,
+        total: 0,
       });
     });
 
@@ -293,6 +304,8 @@ describe("the bot's thread listing follows its subscription", () => {
       threads: [],
       trunkCostUsd: 1.5,
       threadAnchors: null,
+      nextCursor: null,
+      total: 0,
     });
   });
 
@@ -311,11 +324,15 @@ describe("the bot's thread listing follows its subscription", () => {
       threads: [],
       trunkCostUsd: 0,
       threadAnchors: { hostId: HOST_ID, epoch: 0, kinds: ["answer"] },
+      nextCursor: null,
+      total: 0,
     };
     const after: BotThreadListResponse = {
       threads: [],
       trunkCostUsd: 0,
       threadAnchors: null,
+      nextCursor: null,
+      total: 0,
     };
     act(() => {
       world.pendingReads[1]?.(after);
