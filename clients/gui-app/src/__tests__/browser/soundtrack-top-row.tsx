@@ -17,7 +17,7 @@ import {
   appColumnChrome,
   type AppColumnChromeInput,
 } from "@/components/layout/header/app-title-band-kind";
-import { VoiceColumnTopRow } from "@/components/layout/voice/voice-top-row";
+import { SoundtrackColumnTopRow } from "@/components/layout/soundtrack/soundtrack-top-row";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import {
   HostRuntimeProvider,
@@ -33,25 +33,24 @@ import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
 import { tabItemId, type StripItem } from "@/stores/tabs/layout";
 import { useTabsStore } from "@/stores/tabs/store";
 import type { TabRef } from "@/stores/tabs/types";
-import { useVoiceSessionStore } from "@/stores/voice/voice-session-store";
 import "@/lib/theme-applier";
 import "@/index.css";
 
 /**
- * The real column frame, header and voice row, because where the call strip
- * lands is a layout claim jsdom cannot decide. `?placement=top|left|right` picks the
- * placement and `?wco=mac|win` stands in for the frameless desktop preload, as
- * `sheet-shell-guest-clip.tsx` does: the real `appColumnChrome()` then decides
- * the title band. `?account=1` signs in, which draws the bell and the user menu.
- * Until `__voiceTopRowProbe.openTabs` the tab strip is empty;
- * `__voiceTopRowProbe.fillTabs` stands in for tabs of a given natural width.
+ * The real column frame, header and soundtrack row, because where the
+ * soundtrack's toggle lands is a layout claim jsdom cannot decide.
+ * `?placement=top|left|right` picks the placement and `?wco=mac|win` stands in
+ * for the frameless desktop preload, as `sheet-shell-guest-clip.tsx` does: the
+ * real `appColumnChrome()` then decides the title band. `?account=1` signs in,
+ * which draws the bell and the user menu. Until
+ * `__soundtrackTopRowProbe.openTabs` the tab strip is empty;
+ * `__soundtrackTopRowProbe.fillTabs` stands in for tabs of a given natural
+ * width.
  */
 declare global {
   interface Window {
-    __voiceTopRowProbe?: {
+    __soundtrackTopRowProbe?: {
       readonly fillTabs: (width: number) => void;
-      readonly startCall: () => void;
-      readonly showCaptions: () => void;
       readonly openTabs: (count: number) => void;
     };
   }
@@ -120,7 +119,7 @@ let requestCounter = 0;
 const messengerFactory: MessengerFactory<HostRpcRegistry> = ({ registry }) =>
   new MockHostMessenger<HostRpcRegistry>({
     registry,
-    requestId: () => `voice-top-row-${String(++requestCounter)}`,
+    requestId: () => `soundtrack-top-row-${String(++requestCounter)}`,
     handlers: {
       "host.status": () => ({
         ready: true,
@@ -149,7 +148,7 @@ const messengerFactory: MessengerFactory<HostRpcRegistry> = ({ registry }) =>
     },
   });
 
-window.__voiceTopRowProbe = {
+window.__soundtrackTopRowProbe = {
   fillTabs: (width) => {
     const box = document.querySelector(
       "[data-testid='app-header-centre-gap']",
@@ -160,26 +159,6 @@ window.__voiceTopRowProbe = {
     tabs.style.width = `${String(width)}px`;
     tabs.style.flex = "0 1 auto";
     box.append(tabs);
-  },
-  startCall: () => {
-    useVoiceSessionStore.setState({
-      availability: "live",
-      phase: "live",
-      callTitle: "Fixture bot",
-      focus: {
-        botId: "fixture-bot",
-        hostId: "fixture-host",
-        threadId: null,
-      },
-      driver: {
-        start: () => undefined,
-        end: () => undefined,
-        setMuted: () => undefined,
-      },
-    });
-  },
-  showCaptions: () => {
-    useVoiceSessionStore.setState({ captions: true });
   },
   openTabs: (count) => {
     const refs: TabRef[] = [];
@@ -209,9 +188,9 @@ export function Fixture(): ReactNode {
       {...CHROME}
       columnRef={() => undefined}
       header={<AppHeader variant="app" />}
-      voiceTopRow={
+      soundtrackTopRow={
         CHROME.titleBand === "header" ? null : (
-          <VoiceColumnTopRow titleBand={CHROME.titleBand} />
+          <SoundtrackColumnTopRow titleBand={CHROME.titleBand} />
         )
       }
       strip={<nav data-fixture-strip className="w-60 shrink-0" />}

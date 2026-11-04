@@ -24,7 +24,7 @@ export interface CallFocus {
 }
 
 /**
- * What a Call control or the dial asks for: the bot, and the thread the call
+ * What a message box's Call or the dial asks for: the bot, and the thread the call
  * continues (`null` opens a new one with the first thing said). The host is
  * the controller's: the one that serves the bot surface.
  */
@@ -131,6 +131,12 @@ export interface VoiceSessionState {
    * `null` while no dial is up. Nothing is minted until the person dials.
    */
   readonly dial: CallTarget | null;
+  /**
+   * Where the call was placed from: the bot and the thread (`null` for the
+   * channel) of the message box whose Call started it. Its box draws the call
+   * bar. Kept after the end, as `callTitle` is, for the line about it.
+   */
+  readonly placedFrom: CallTarget | null;
   /** What the person said since the last utterance boundary, as transcribed. */
   readonly openSpan: string;
   /**
@@ -265,6 +271,7 @@ export const useVoiceSessionStore = create<VoiceSessionState>()((set, get) => ({
   focus: null,
   callTitle: null,
   dial: null,
+  placedFrom: null,
   openSpan: "",
   inputHeard: 0,
   openSpanStart: 0,
@@ -291,6 +298,7 @@ export const useVoiceSessionStore = create<VoiceSessionState>()((set, get) => ({
       focus,
       callTitle: title,
       dial: null,
+      placedFrom: { botId: focus.botId, threadId: focus.threadId },
       openSpan: "",
       inputHeard: 0,
       openSpanStart: 0,
@@ -443,7 +451,7 @@ export const useVoiceSessionStore = create<VoiceSessionState>()((set, get) => ({
 }));
 
 /**
- * What the call's toggle (the Call control and the shortcut on a bot surface)
+ * What the call's toggle (the shortcut on a bot's message box)
  * would do now: end a call that is connecting or live, start one when none
  * runs and voice is offered, or nothing (no call owner mounted, or a call
  * already ending).

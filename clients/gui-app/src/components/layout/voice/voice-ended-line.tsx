@@ -13,17 +13,17 @@ import {
 } from "@/stores/voice/voice-session-store";
 
 /**
- * Where the line is drawn: `row` in the window's top row, on the row's own
- * surface; `bar` as a band of its own under the phone's header; `view` in the
- * phone's call view, its ended state.
+ * Where the line is drawn: `composer` in the message box the call was placed
+ * from, in place of its field; `bar` as a band of its own under the phone's
+ * header; `view` in the phone's call view, its ended state.
  */
-export type VoiceOutcomeLineSurface = "row" | "bar" | "view";
+export type VoiceOutcomeLineSurface = "composer" | "bar" | "view";
 
 /**
  * The one line about how the last call went, with Dismiss: why it ended, or
  * that it never began, which is not an ending. What the person can do about
- * it sits beside the words. Drawn by the strip on desktop and by the call view
- * and the bar on the phone, where a call that ended in the background says so
+ * it sits beside the words. Drawn by the message box's call bar on desktop and
+ * by the call view and the bar on the phone, where a call that ended in the background says so
  * on return.
  */
 export function VoiceOutcomeLine(props: {
@@ -74,11 +74,11 @@ function OutcomeFrame(props: {
 }): ReactNode {
   return (
     <output
-      data-testid="voice-session-strip"
+      data-testid="voice-outcome"
       data-state={props.state}
       className={cn(
         "flex items-center gap-2 text-ui-xs text-muted-foreground",
-        props.surface === "row" && "min-w-0",
+        props.surface === "composer" && "w-full min-w-0",
         props.surface === "bar" &&
           "w-full border-b border-border bg-background px-3 py-1.5",
         props.surface === "view" && "w-full text-ui-sm",
@@ -86,7 +86,7 @@ function OutcomeFrame(props: {
     >
       <span
         className={cn("min-w-0 flex-1", props.surface !== "view" && "truncate")}
-        data-testid="voice-strip-state"
+        data-testid="voice-outcome-line"
       >
         {props.line}
       </span>
@@ -96,7 +96,7 @@ function OutcomeFrame(props: {
         variant="ghost"
         size="icon-xs"
         aria-label="Dismiss"
-        data-testid="voice-strip-dismiss"
+        data-testid="voice-outcome-dismiss"
         onClick={props.onDismiss}
       >
         <X aria-hidden="true" />
@@ -114,7 +114,7 @@ function GetCreditsButton(): ReactNode {
       type="button"
       variant="outline"
       size="xs"
-      data-testid="voice-strip-get-credits"
+      data-testid="voice-outcome-get-credits"
       onClick={(event) => void openLink(billingUrl, "account", event)}
     >
       Get credits
@@ -130,7 +130,7 @@ function MicrophoneSettingsButton(): ReactNode {
       type="button"
       variant="outline"
       size="xs"
-      data-testid="voice-strip-microphone-settings"
+      data-testid="voice-outcome-microphone-settings"
       disabled={openSettings.isPending}
       onClick={() => openSettings.mutate()}
     >

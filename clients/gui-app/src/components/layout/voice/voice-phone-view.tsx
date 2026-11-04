@@ -1,15 +1,19 @@
-import { useEffect, type KeyboardEvent, type ReactNode } from "react";
-import { AudioLines, Captions, Mic, MicOff, X } from "lucide-react";
+import { useEffect, useState, type KeyboardEvent, type ReactNode } from "react";
+import { AudioLines, Captions, Mic, MicOff, Phone, X } from "lucide-react";
 import { useShallow } from "zustand/react/shallow";
 import { Button } from "@/components/ui/button";
+import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
 import { Sheet, SheetContent, SheetTitle } from "@/components/ui/sheet";
-import { CallDial } from "@/components/layout/voice/call-control";
+import { ResumeAfterDictation } from "@/components/layout/voice/composer-call";
 import { VoiceOutcomeLine } from "@/components/layout/voice/voice-ended-line";
-import { ResumeAfterDictation } from "@/components/layout/voice/voice-session-strip";
+import { useHostClientForHostId } from "@/hooks/host/use-host-client-for-host-id";
+import { useVoiceDirectory } from "@/hooks/voice/use-voice-directory";
 import { cn } from "@/lib/utils";
 import { captionSpeaker } from "@/lib/voice/call";
+import { useTracySurfaceStore } from "@/stores/bots/tracy-surface-store";
 import {
   useVoiceSessionStore,
+  type CallTarget,
   type VoicePhase,
   type VoiceSessionState,
 } from "@/stores/voice/voice-session-store";
@@ -27,7 +31,8 @@ function callViewState(state: VoiceSessionState): CallViewState | null {
 
 /**
  * The phone's call view (Call Tracy, VC3), full screen over the bot surface,
- * in three states. The dial: the bot whose header was tapped preselected,
+ * in three states. The dial: the bot whose message box's Call was tapped
+ * preselected,
  * every bot the person can call listed, and Call. The call: the bot's name
  * (tap it to see the channel behind, with the call still live), the talk
  * button (with the open microphone, the default, it mutes and unmutes:
@@ -36,7 +41,7 @@ function callViewState(state: VoiceSessionState): CallViewState | null {
  * captions toggle. The end: why the call ended, until dismissed. No running
  * transcript is drawn unless the person turns captions on.
  *
- * The phone layout only; the desktop has the strip.
+ * The phone layout only; on the desktop the call is in its message box.
  */
 export function VoicePhoneView(): ReactNode {
   const view = useVoiceSessionStore(callViewState);
@@ -409,4 +414,84 @@ function talkLine(
   if (state.pausedForDictation) return "Call paused for dictation";
   if (state.pushToTalk) return state.talkHeld ? "Listening" : "Hold to talk";
   return state.muted ? "Muted · tap to listen" : "Listening · tap to mute";
+}
+
+/**
+ * The phone's dial (Call Tracy, P11): the bot whose box the dial came from is
+ * preselected, and every bot the person can call is listed to pick another.
+ * Call places it; a bot other than the preselected one gets a new thread.
+ */
+function CallDial(props: {
+  readonly preselected: CallTarget;
+  readonly preselectedTitle: string;
+  readonly onDialed: () => void;
+}): ReactNode {
+  const { preselected, preselectedTitle, onDialed } = props;
+  const surfaceHostId = useTracySurfaceStore((state) =>
+    state.open ? state.hostId : null,
+  );
+  const client = useHostClientForHostId(surfaceHostId);
+  const listed = useVoiceDirectory(client, surfaceHostId, true);
+  const bots =
+    listed.length > 0
+      ? listed
+      : [
+          {
+            botId: preselected.botId,
+            title: preselectedTitle,
+            environmentId: "",
+            environmentLabel: "",
+          },
+        ];
+  const [selected, setSelected] = useState(preselected.botId);
+  const driver = useVoiceSessionStore((state) => state.driver);
+  const phase = useVoiceSessionStore((state) => state.phase);
+  return (
+    <div className="flex w-full flex-col gap-3" data-testid="call-dial">
+      <RadioGroup
+        aria-label="Bot to call"
+        value={selected}
+        onValueChange={setSelected}
+      >
+        {bots.map((bot) => (
+          <label
+            key={bot.botId}
+            data-testid="call-dial-bot"
+            data-selected={bot.botId === selected ? "" : undefined}
+            className={cn(
+              "flex min-w-0 items-center gap-2 rounded-md px-2 py-1.5 text-ui-sm",
+              bot.botId === selected && "bg-foreground/8",
+            )}
+          >
+            <RadioGroupItem value={bot.botId} />
+            <span className="min-w-0 flex-1 truncate text-foreground">
+              {bot.title}
+            </span>
+            {bot.environmentLabel.length === 0 ? null : (
+              <span className="shrink-0 truncate text-ui-xs text-muted-foreground">
+                {bot.environmentLabel}
+              </span>
+            )}
+          </label>
+        ))}
+      </RadioGroup>
+      <Button
+        type="button"
+        size="sm"
+        data-testid="call-dial-call"
+        disabled={driver === null || phase !== "idle"}
+        onClick={() => {
+          driver?.start({
+            botId: selected,
+            threadId:
+              selected === preselected.botId ? preselected.threadId : null,
+          });
+          onDialed();
+        }}
+      >
+        <Phone aria-hidden="true" />
+        Call
+      </Button>
+    </div>
+  );
 }

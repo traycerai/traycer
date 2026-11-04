@@ -28,8 +28,6 @@ import {
   type VoiceSessionDriver,
 } from "@/stores/voice/voice-session-store";
 import { VoiceSessionChrome } from "../voice-session-chrome";
-import { useVoiceTopRowDrawn } from "../use-voice-top-row-drawn";
-import { VoiceTopRowControl } from "../voice-top-row";
 
 const BOT_ID = "bot-1";
 const FOCUS: CallFocus = {
@@ -53,8 +51,8 @@ const DIRECTORY: ReadonlyArray<DirectoryBot> = [
   },
 ];
 
-// The dial's list is the directory suite's subject (call-control.test.tsx);
-// here it is the list the dial draws.
+// The dial's list is the directory's own subject; here it is the list the
+// dial draws.
 const directory = vi.hoisted(() => ({
   bots: [] as ReadonlyArray<DirectoryBot>,
 }));
@@ -90,24 +88,9 @@ function makeDriver(): FakeDriver {
   };
 }
 
-/**
- * The session's chrome as the app mounts it: the phone's view and bar from
- * `VoiceSessionChrome`, and on desktop the top row's control, which the frame
- * draws only where the row is.
- */
-function Chrome() {
-  const topRowDrawn = useVoiceTopRowDrawn();
-  return (
-    <>
-      <VoiceSessionChrome />
-      {topRowDrawn ? <VoiceTopRowControl /> : null}
-    </>
-  );
-}
-
 /** The outcome line reaches TanStack Query, so the chrome mounts under a client. */
 function renderChrome() {
-  return render(<Chrome />, { wrapper: WithTestQueryClient });
+  return render(<VoiceSessionChrome />, { wrapper: WithTestQueryClient });
 }
 
 /** A call that has gone live with Tracy, its view up. */
@@ -183,7 +166,7 @@ afterEach(() => {
 });
 
 describe("the phone call view, dialling", () => {
-  it("lists the directory's bots with the one whose header was tapped selected", () => {
+  it("lists the directory's bots with the bot whose message box was tapped selected", () => {
     goDial(makeDriver());
 
     expect(viewState()).toBe("dial");
@@ -444,7 +427,7 @@ describe("the phone call view, after the call", () => {
     expect(viewState()).toBe("ended");
     expect(
       within(screen.getByTestId("voice-phone-ended")).getByTestId(
-        "voice-strip-state",
+        "voice-outcome-line",
       ).textContent,
     ).toBe("Call ended: Tracy can't be reached right now.");
 
@@ -479,7 +462,7 @@ describe("the phone call view, after the call", () => {
     act(() => useVoiceSessionStore.getState().sessionEnded("background"));
 
     expect(screen.queryByTestId("voice-phone-view")).toBeNull();
-    expect(screen.getByTestId("voice-strip-state").textContent).toBe(
+    expect(screen.getByTestId("voice-outcome-line").textContent).toBe(
       "Call ended when you left the app.",
     );
     expect(screen.queryByRole("button", { name: "Open Settings" })).toBeNull();
@@ -494,7 +477,7 @@ describe("the phone call view, after the call", () => {
     );
 
     expect(viewState()).toBe("ended");
-    expect(screen.getByTestId("voice-strip-state").textContent).toBe(
+    expect(screen.getByTestId("voice-outcome-line").textContent).toBe(
       "Tracy is paused until Friday.",
     );
   });
@@ -505,7 +488,7 @@ describe("the phone call view, after the call", () => {
       useVoiceSessionStore.getState().sessionRefused("microphone-denied", null),
     );
 
-    expect(screen.getByTestId("voice-strip-state").textContent).toBe(
+    expect(screen.getByTestId("voice-outcome-line").textContent).toBe(
       "Calls need the microphone. Allow it in Settings.",
     );
     await userEvent.click(
@@ -577,19 +560,15 @@ describe("the desktop layout", () => {
     markLive(makeDriver());
     const { rerender } = renderChrome();
     await userEvent.click(screen.getByRole("button", { name: "Push to talk" }));
-    expect(screen.queryByTestId("voice-strip-mute")).toBeNull();
 
     setPhoneLayoutOnly(false);
-    rerender(<Chrome />);
+    rerender(<VoiceSessionChrome />);
 
     expect(useVoiceSessionStore.getState()).toMatchObject({
       pushToTalk: false,
       talkHeld: false,
       muted: true,
     });
-    expect(screen.getByTestId("voice-strip-mute").textContent).toContain(
-      "Unmute",
-    );
     expect(screen.queryByTestId("voice-phone-view")).toBeNull();
   });
 
@@ -598,32 +577,17 @@ describe("the desktop layout", () => {
     const { rerender } = renderChrome();
 
     setPhoneLayoutOnly(false);
-    rerender(<Chrome />);
+    rerender(<VoiceSessionChrome />);
 
     expect(useVoiceSessionStore.getState().muted).toBe(false);
-    expect(screen.getByTestId("voice-strip-mute").textContent).toContain(
-      "Mute",
-    );
-    expect(screen.getByTestId("voice-strip-mute").textContent).not.toContain(
-      "Unmute",
-    );
   });
 
-  it("is the strip, not the phone view, on the desktop layout", () => {
-    setPhoneLayoutOnly(false);
-    goLive(makeDriver());
-
-    expect(screen.getByTestId("voice-strip-mute")).toBeTruthy();
-    expect(screen.queryByTestId("voice-phone-view")).toBeNull();
-    expect(screen.queryByTestId("voice-phone-bar")).toBeNull();
-  });
-
-  it("draws nothing of its own on the desktop layout, whose strip is in the top row", () => {
+  it("draws no phone view and no bar on the desktop layout, where the call is in its message box", () => {
     setPhoneLayoutOnly(false);
     markLive(makeDriver());
-    render(<VoiceSessionChrome />, { wrapper: WithTestQueryClient });
+    renderChrome();
 
-    expect(screen.queryByTestId("voice-session-strip")).toBeNull();
+    expect(screen.queryByTestId("voice-phone-view")).toBeNull();
     expect(screen.queryByTestId("voice-phone-bar")).toBeNull();
   });
 });

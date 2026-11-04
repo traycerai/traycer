@@ -189,6 +189,70 @@ describe("sessionRefused", () => {
   });
 });
 
+describe("placedFrom", () => {
+  it("is the bot and thread of the message box that placed the call, with no host", () => {
+    useVoiceSessionStore
+      .getState()
+      .sessionConnecting({ ...FOCUS, threadId: "thread-1" }, "Tracy");
+
+    expect(useVoiceSessionStore.getState().placedFrom).toEqual({
+      botId: "bot-1",
+      threadId: "thread-1",
+    });
+  });
+
+  it("stays with the channel when the call's first send opens a thread", () => {
+    const store = useVoiceSessionStore.getState();
+    store.sessionConnecting(FOCUS, "Tracy");
+
+    store.bindThread("thread-1");
+
+    expect(useVoiceSessionStore.getState().placedFrom).toEqual({
+      botId: "bot-1",
+      threadId: null,
+    });
+  });
+
+  it.each([
+    {
+      how: "ends",
+      finish: () => useVoiceSessionStore.getState().sessionEnded("ended"),
+    },
+    {
+      how: "is refused",
+      finish: () =>
+        useVoiceSessionStore.getState().sessionRefused("credits", null),
+    },
+  ])("is kept after the call $how, for the line about it", ({ finish }) => {
+    useVoiceSessionStore
+      .getState()
+      .sessionConnecting({ ...FOCUS, threadId: "thread-1" }, "Tracy");
+
+    finish();
+
+    expect(useVoiceSessionStore.getState().placedFrom).toEqual({
+      botId: "bot-1",
+      threadId: "thread-1",
+    });
+  });
+
+  it("is replaced by the next call", () => {
+    const store = useVoiceSessionStore.getState();
+    store.sessionConnecting({ ...FOCUS, threadId: "thread-1" }, "Tracy");
+    store.sessionEnded("ended");
+
+    store.sessionConnecting(
+      { botId: "bot-2", hostId: "host-1", threadId: null },
+      "Scout",
+    );
+
+    expect(useVoiceSessionStore.getState().placedFrom).toEqual({
+      botId: "bot-2",
+      threadId: null,
+    });
+  });
+});
+
 describe("bindThread", () => {
   it("binds the call's thread once it opens, keeping the rest of the focus", () => {
     const store = useVoiceSessionStore.getState();

@@ -788,6 +788,7 @@ export function BotChannelView(props: {
               />
               <BotMessageComposer
                 botId={botId}
+                botTitle={botTitle}
                 conversationId={channel.conversationId}
                 threadId={null}
                 announcementId={null}

@@ -1,5 +1,11 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { act, cleanup, render } from "@testing-library/react";
+import {
+  act,
+  cleanup,
+  fireEvent,
+  render,
+  screen,
+} from "@testing-library/react";
 import {
   afterEach,
   beforeEach,
@@ -23,7 +29,10 @@ import type {
   BotRecord,
   BotSessionActivity,
 } from "@traycer/protocol/host/bot/schemas";
+import { BotMessageComposer } from "@/components/bots/bot-message-composer";
 import { botPausedCopy } from "@/components/bots/bot-tab-open-state";
+import { TooltipProvider } from "@/components/ui/tooltip";
+import type { BotSendFailure } from "@/hooks/bots/use-bot-send-failure";
 import {
   CALL_HOLD_DELAY_MS,
   CALL_HOLD_LINE,
@@ -177,7 +186,11 @@ const fake = vi.hoisted(() => {
   };
 });
 
+vi.mock("@/hooks/host/use-tab-host-client", () => ({
+  useTabHostClient: () => ({ stub: "tab-host-client" }),
+}));
 vi.mock("@/providers/use-runner-host", () => ({
+  useRunnerHostOrNull: () => null,
   useRunnerHost: () => ({
     requestMicrophoneAccess: fake.requestMicrophoneAccess,
     onSystemSuspended: () => ({ dispose: () => undefined }),
@@ -2660,5 +2673,75 @@ describe("what a call leaves unsent at its end", () => {
     ]);
     expect(useVoiceSessionStore.getState().phase).toBe("idle");
     expect(fake.endVoiceSession.mock.calls).toEqual([["vs1"]]);
+  });
+});
+
+describe("a call dialled from a message box", () => {
+  const FAILURE: BotSendFailure = {
+    failed: false,
+    fail: () => undefined,
+    clear: () => undefined,
+  };
+
+  /** The real message box beside the controller, as a bot's surface mounts it. */
+  function mountBox(threadId: string | null, testId: string): void {
+    render(
+      <QueryClientProvider client={new QueryClient()}>
+        <TooltipProvider>
+          <BotMessageComposer
+            botId={BOT_ID}
+            botTitle={BOT_TITLE}
+            conversationId={CHANNEL_ID}
+            threadId={threadId}
+            announcementId={null}
+            sendable
+            placeholder="Message"
+            label="Message"
+            testId={testId}
+            failure={FAILURE}
+            edit={null}
+            onEditEnd={() => undefined}
+            seed={null}
+            keptDraft={null}
+            quote={null}
+            onSent={() => false}
+          />
+        </TooltipProvider>
+      </QueryClientProvider>,
+    );
+  }
+
+  it("sends the first thing said into the thread the box is in, with no origin", async () => {
+    addChat("t-open", loaded([]));
+    mountBox("t-open", "bot-thread-composer");
+
+    fireEvent.click(screen.getByTestId("bot-thread-composer-call"));
+    await settle();
+    expect(useVoiceSessionStore.getState().phase).toBe("live");
+    await say("Pick this up.");
+
+    expect(fake.sendMock).toHaveBeenCalledTimes(1);
+    const request = fake.sendMock.mock.calls[0][0];
+    expect(request.threadId).toBe("t-open");
+    expect(request.text).toBe("Pick this up.");
+    expect("origin" in request).toBe(false);
+  });
+
+  it("sends the first thing said from the channel's box as a call that opens a thread", async () => {
+    mountBox(null, "bot-channel-composer");
+
+    fireEvent.click(screen.getByTestId("bot-channel-composer-call"));
+    await settle();
+    expect(useVoiceSessionStore.getState().phase).toBe("live");
+    await say("Start something.");
+
+    expect(fake.sendMock).toHaveBeenCalledTimes(1);
+    const request = fake.sendMock.mock.calls[0][0];
+    expect(request.threadId).toBeNull();
+    expect(request.text).toBe("Start something.");
+    expect(request.origin).toBe("call");
+    // The bar is the channel's: the thread this send opened is not the box's.
+    expect(useVoiceSessionStore.getState().placedFrom).toEqual(CHANNEL_CALL);
+    expect(screen.getByTestId("bot-channel-composer-call-bar")).toBeTruthy();
   });
 });

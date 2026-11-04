@@ -15,7 +15,7 @@ import { useRunnerHost } from "@/providers/use-runner-host";
  * `POST /api/voice/sessions`: mints a voice session for the offer. The
  * route's refusals (dormant, credits, unavailable) come back as the result's
  * `kind`, not as errors: the controller ends the attempt with the matching
- * reason and the strip says it, so nothing is toasted here.
+ * reason and the call says it, so nothing is toasted here.
  */
 export function useVoiceSessionMintMutation(): UseMutationResult<
   VoiceSessionMintFetchResult,

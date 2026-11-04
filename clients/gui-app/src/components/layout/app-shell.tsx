@@ -39,7 +39,7 @@ import { TracyEntryController } from "@/components/layout/tabs/tracy-entry-contr
 import { SoundtrackShortcutBridge } from "@/components/layout/soundtrack/soundtrack-control";
 import { CallController } from "@/components/layout/voice/call-controller";
 import { VoiceSessionChrome } from "@/components/layout/voice/voice-session-chrome";
-import { VoiceColumnTopRow } from "@/components/layout/voice/voice-top-row";
+import { SoundtrackColumnTopRow } from "@/components/layout/soundtrack/soundtrack-top-row";
 import { LandingTerminalHost } from "@/components/home/terminal-panel/landing-terminal-host";
 import { OpenFolderDialog } from "@/components/open-folder-dialog";
 import { RemoteFolderPickerDialog } from "@/components/remote-folder-picker-dialog";
@@ -136,7 +136,9 @@ function AppShellBody(props: AppShellProps) {
               columnRef={setAppColumn}
               {...chrome}
               header={<AppHeader variant="app" />}
-              voiceTopRow={<VoiceColumnTopRow titleBand={chrome.titleBand} />}
+              soundtrackTopRow={
+                <SoundtrackColumnTopRow titleBand={chrome.titleBand} />
+              }
               strip={
                 stripEdge === null ? null : (
                   <SideTabStrip

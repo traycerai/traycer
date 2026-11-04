@@ -96,6 +96,7 @@ function composer(
   return (
     <BotMessageComposer
       botId="bot-1"
+      botTitle="Tracy"
       conversationId="conversation-channel"
       threadId={null}
       announcementId={null}

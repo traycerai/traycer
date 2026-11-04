@@ -55,8 +55,6 @@ import type {
 } from "@/components/chat/chat-bot-presentation-context";
 import type { BotMemberResolver } from "@/lib/bots/bot-member-names";
 import { threadOriginRow } from "@/lib/bots/reply-row";
-import { CallControl } from "@/components/layout/voice/call-control";
-import { useMobileHeaderActive } from "@/components/layout/header/use-mobile-header-active";
 import { useAuthStore } from "@/stores/auth/auth-store";
 import { useBotDraftsStore } from "@/stores/bots/bot-drafts-store";
 import { useKeptBoxDraft } from "@/hooks/bots/use-kept-box-draft";
@@ -222,11 +220,6 @@ export function BotThreadPanel(props: {
               postedByViewer={postedByViewer}
             />
           )}
-          <ThreadCallControl
-            botId={props.botId}
-            threadId={threadId}
-            botTitle={botTitle}
-          />
           {thread === null ? null : (
             <Button
               type="button"
@@ -279,26 +272,6 @@ export function BotThreadPanel(props: {
       )}
       <ThreadPanelBody {...props} sendFailure={sendFailure} />
     </section>
-  );
-}
-
-/**
- * Call, for a thread the panel knows by its id: the call continues the
- * thread. Nothing for a thread not opened yet.
- */
-function ThreadCallControl(props: {
-  readonly botId: string;
-  readonly threadId: string | null;
-  readonly botTitle: string;
-}): ReactNode {
-  const phoneLayout = useMobileHeaderActive();
-  if (props.threadId === null) return null;
-  return (
-    <CallControl
-      target={{ botId: props.botId, threadId: props.threadId }}
-      botTitle={props.botTitle}
-      form={phoneLayout ? "touch" : "label"}
-    />
   );
 }
 
@@ -697,6 +670,7 @@ function ThreadPanelBody(props: ThreadPanelBodyProps): ReactNode {
       />
       <BotMessageComposer
         botId={props.botId}
+        botTitle={props.botTitle}
         conversationId={box.conversationId}
         threadId={box.threadId}
         announcementId={box.announcementId}

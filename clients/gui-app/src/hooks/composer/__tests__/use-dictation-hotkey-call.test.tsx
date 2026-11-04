@@ -1,7 +1,7 @@
 import { cleanup, fireEvent, render } from "@testing-library/react";
 import type { ReactNode } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { CallControl } from "@/components/layout/voice/call-control";
+import { useComposerCall } from "@/components/layout/voice/use-composer-call";
 import { useDictationHotkey } from "@/hooks/composer/use-dictation-hotkey";
 import { KeyboardOwnerContext } from "@/hooks/use-primary-action-shortcut";
 import {
@@ -36,8 +36,14 @@ function OwnsKeyboard(props: { readonly children: ReactNode }): ReactNode {
   return <KeyboardOwnerContext value>{props.children}</KeyboardOwnerContext>;
 }
 
-function callControl(target: CallTarget): ReactNode {
-  return <CallControl target={target} botTitle="CI bot" form="touch" />;
+/** A bot's message box, as far as the chord is concerned. */
+function BotBox(props: { readonly target: CallTarget }): ReactNode {
+  useComposerCall(props.target.botId, props.target.threadId, null);
+  return null;
+}
+
+function botBox(target: CallTarget): ReactNode {
+  return <BotBox target={target} />;
 }
 
 function tap(): void {
@@ -58,7 +64,7 @@ afterEach(cleanup);
 
 describe("the dictation chord on a bot surface", () => {
   it("starts a call with the thread's target from a bot thread", () => {
-    render(<OwnsKeyboard>{callControl(THREAD)}</OwnsKeyboard>);
+    render(<OwnsKeyboard>{botBox(THREAD)}</OwnsKeyboard>);
 
     tap();
 
@@ -71,7 +77,7 @@ describe("the dictation chord on a bot surface", () => {
     render(
       <OwnsKeyboard>
         <DictationComposer start={dictate} />
-        {callControl(THREAD)}
+        {botBox(THREAD)}
       </OwnsKeyboard>,
     );
 
@@ -86,7 +92,7 @@ describe("the dictation chord on a bot surface", () => {
     const view = render(
       <OwnsKeyboard>
         <DictationComposer start={dictate} />
-        {callControl(THREAD)}
+        {botBox(THREAD)}
       </OwnsKeyboard>,
     );
     view.rerender(
@@ -121,7 +127,7 @@ describe("the dictation chord on a bot surface", () => {
       phase: "live",
       focus: { botId: "bot-1", hostId: "host-a", threadId: "t-1" },
     });
-    render(<OwnsKeyboard>{callControl(THREAD)}</OwnsKeyboard>);
+    render(<OwnsKeyboard>{botBox(THREAD)}</OwnsKeyboard>);
 
     tap();
 
@@ -132,8 +138,8 @@ describe("the dictation chord on a bot surface", () => {
   it("calls the thread's target when the channel shows first and the thread after", () => {
     render(
       <OwnsKeyboard>
-        {callControl(CHANNEL)}
-        {callControl(THREAD)}
+        {botBox(CHANNEL)}
+        {botBox(THREAD)}
       </OwnsKeyboard>,
     );
 
@@ -145,8 +151,8 @@ describe("the dictation chord on a bot surface", () => {
   it("calls the thread's target when the thread shows first and the channel after", () => {
     render(
       <OwnsKeyboard>
-        {callControl(THREAD)}
-        {callControl(CHANNEL)}
+        {botBox(THREAD)}
+        {botBox(CHANNEL)}
       </OwnsKeyboard>,
     );
 
@@ -156,7 +162,7 @@ describe("the dictation chord on a bot surface", () => {
   });
 
   it("toggles once for a held chord, however many times the key repeats", () => {
-    render(<OwnsKeyboard>{callControl(THREAD)}</OwnsKeyboard>);
+    render(<OwnsKeyboard>{botBox(THREAD)}</OwnsKeyboard>);
 
     fireEvent.keyDown(window, CHORD);
     fireEvent.keyDown(window, { ...CHORD, repeat: true });
@@ -174,7 +180,7 @@ describe("the dictation chord on a bot surface", () => {
     render(
       <OwnsKeyboard>
         <DictationComposer start={dictate} />
-        {callControl(THREAD)}
+        {botBox(THREAD)}
       </OwnsKeyboard>,
     );
 
@@ -192,7 +198,7 @@ describe("the dictation chord on a bot surface", () => {
           <DictationComposer start={dictate} />
         </OwnsKeyboard>
         <KeyboardOwnerContext value={false}>
-          {callControl(THREAD)}
+          {botBox(THREAD)}
         </KeyboardOwnerContext>
       </>,
     );

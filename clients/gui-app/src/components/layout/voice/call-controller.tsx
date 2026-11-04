@@ -170,8 +170,8 @@ function endRouteAnswers(attempt: Attempt): boolean {
 /**
  * Owns the call for this window (Call Tracy, VC3): the microphone, the engine
  * behind the seam, the speech scheduler, the call's sends and the watch on
- * its thread. Mounted once, app-wide; the Call controls, the strip, the phone
- * view and the shortcut reach it through the store's `driver`.
+ * its thread. Mounted once, app-wide; a message box's Call and call bar, the
+ * phone view and the shortcut reach it through the store's `driver`.
  *
  * A call is a thread of one bot. Each thing the person says, closed by the
  * voice's acknowledgement (one of the lines the mint names), is one
@@ -1251,7 +1251,7 @@ export function CallController(): ReactNode {
   }, [end, setMuted, start]);
 
   // The shell's voice item, shown while this window is away: its Mute or
-  // Unmute and its End act on this window's call as the strip's do.
+  // Unmute and its End act on this window's call as the call bar's do.
   useEffect(() => {
     const subscription = runnerHost.onVoiceTrayAction((action) => {
       if (action.kind === "end") {

@@ -3,34 +3,24 @@ import { APP_HEADER_HEIGHT_CLASS } from "@/components/layout/header/app-header-h
 import type { AppTitleBandKind } from "@/components/layout/header/app-title-band-kind";
 import { isFramelessDesktop } from "@/components/layout/header/title-bar-drag";
 import { SoundtrackControl } from "@/components/layout/soundtrack/soundtrack-control";
-import { VoiceSessionStrip } from "@/components/layout/voice/voice-session-strip";
-import {
-  useVoiceTopRowDrawn,
-  voiceStripDrawn,
-} from "@/components/layout/voice/use-voice-top-row-drawn";
+import { useSoundtrackTopRowDrawn } from "@/components/layout/soundtrack/use-soundtrack-top-row-drawn";
 import { cn } from "@/lib/utils";
 import { useTitleBarDraggingSuppressed } from "@/stores/layout/title-bar-drag-store";
-import { useVoiceSessionStore } from "@/stores/voice/voice-session-store";
 
 /**
- * What the top row carries: the call strip while a call runs or its line
- * shows, and the soundtrack's toggle beside it. A call is placed from a bot
- * surface's Call control; the row only follows it across every tab. Each
- * chrome kind draws exactly one of these.
+ * What the top row carries: the soundtrack's toggle. Each chrome kind draws
+ * exactly one of these.
  *
- * Three columns, so that the middle one stays on the row's middle with the
- * toggle in the last. The empty first column is as wide as the toggle's until
- * room runs out, and then it is the first thing to give way. The middle column
- * keeps its floor, which is what stops the row taking a control from the strip.
+ * Three columns, the toggle in the last, so it sits right of the row's middle.
+ * The empty first column is as wide as the toggle's until room runs out, and
+ * then it is the first thing to give way.
  */
-export function VoiceTopRowControl(): ReactNode {
-  const showStrip = useVoiceSessionStore(voiceStripDrawn);
+export function SoundtrackTopRowControl(): ReactNode {
   return (
     <div className="grid min-w-0 grid-cols-[1fr_auto_1fr] items-center self-stretch">
-      <div className="col-start-2 flex items-center self-stretch">
-        {showStrip ? <VoiceSessionStrip /> : null}
+      <div className="col-start-3 flex items-center self-stretch">
+        <SoundtrackControl />
       </div>
-      <SoundtrackControl />
     </div>
   );
 }
@@ -41,22 +31,22 @@ export function VoiceTopRowControl(): ReactNode {
  * rises into it from the column instead of adding height. With no band the row
  * is drawn, as tall as the band, and stays a drag region outside the control.
  */
-export function VoiceColumnTopRow(props: {
+export function SoundtrackColumnTopRow(props: {
   readonly titleBand: AppTitleBandKind;
 }): ReactNode {
-  const drawn = useVoiceTopRowDrawn();
+  const drawn = useSoundtrackTopRowDrawn();
   const dragSuppressed = useTitleBarDraggingSuppressed();
   // The header carries its own (`DesktopAppHeader`).
   if (!drawn || props.titleBand === "header") return null;
   if (props.titleBand === "band") {
     return (
       <div
-        data-testid="voice-top-row"
+        data-testid="soundtrack-top-row"
         data-title-band="band"
         className="pointer-events-none absolute inset-x-0 bottom-full z-20 flex h-[var(--app-title-band-height)] items-center justify-center"
       >
         <div className="pointer-events-auto flex min-w-0 items-center self-stretch [-webkit-app-region:no-drag]">
-          <VoiceTopRowControl />
+          <SoundtrackTopRowControl />
         </div>
       </div>
     );
@@ -64,7 +54,7 @@ export function VoiceColumnTopRow(props: {
   const frameless = isFramelessDesktop();
   return (
     <div
-      data-testid="voice-top-row"
+      data-testid="soundtrack-top-row"
       data-title-band="none"
       className={cn(
         "relative z-20 flex shrink-0 items-center justify-center px-3",
@@ -73,7 +63,7 @@ export function VoiceColumnTopRow(props: {
       )}
     >
       <div className="flex min-w-0 items-center self-stretch [-webkit-app-region:no-drag]">
-        <VoiceTopRowControl />
+        <SoundtrackTopRowControl />
       </div>
     </div>
   );
