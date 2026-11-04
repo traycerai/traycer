@@ -34,9 +34,9 @@ describe("tool_call.feedbackDraft", () => {
       ...block,
       feedbackDraft: { ...draft, category: "future_kind" },
     });
-    expect(
-      parsed.type === "tool_call" && parsed.feedbackDraft?.category,
-    ).toBe("future_kind");
+    expect(parsed.type === "tool_call" && parsed.feedbackDraft?.category).toBe(
+      "future_kind",
+    );
   });
 
   it("reads a state this reader has not heard of as unknown, not as a failed block", () => {

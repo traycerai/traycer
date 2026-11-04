@@ -522,9 +522,10 @@ describe("scrubLogTail", () => {
         ].join("\n"),
       ),
     ).toBe(
-      [at("INFO", "open <path-1>"), at("ERROR", "Bearer <redacted> at <path-1>")].join(
-        "\n",
-      ),
+      [
+        at("INFO", "open <path-1>"),
+        at("ERROR", "Bearer <redacted> at <path-1>"),
+      ].join("\n"),
     );
   });
 });

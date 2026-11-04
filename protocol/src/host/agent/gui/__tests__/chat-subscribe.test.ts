@@ -1932,6 +1932,7 @@ describe("chat.subscribe@1.6 (image generation)", () => {
     imageResults: [imageResultA, imageResultB],
     artifact: null,
     mcpApp: null,
+    feedbackDraft: null,
   };
 
   const resolutionStates = imageResolutionStateSchema.options;

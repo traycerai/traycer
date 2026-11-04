@@ -104,7 +104,9 @@ describe("FeedbackDraftCard", () => {
     renderCard(PENDING, SCOPE);
 
     expect(
-      screen.getByText("Feedback for Traycer · Tool problem · traycer_run_shell"),
+      screen.getByText(
+        "Feedback for Traycer · Tool problem · traycer_run_shell",
+      ),
     ).toBeTruthy();
     expect(screen.getByText(PENDING.goal)).toBeTruthy();
     expect(screen.getByText(PENDING.observed)).toBeTruthy();
@@ -208,7 +210,9 @@ describe("FeedbackDraftCard", () => {
       SCOPE,
     );
 
-    expect(screen.getByText("Not sent: offline. You can try again.")).toBeTruthy();
+    expect(
+      screen.getByText("Not sent: offline. You can try again."),
+    ).toBeTruthy();
     expect(screen.getByRole("button", { name: "Send" })).toBeTruthy();
   });
 });

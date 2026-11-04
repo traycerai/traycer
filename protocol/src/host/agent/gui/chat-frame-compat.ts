@@ -1783,12 +1783,74 @@ function projectDeliveryWorktreeIntent(
     : { ...frame, snapshot: { ...frame.snapshot, messageDelivery } };
 }
 
+/**
+ * Older peers receive an agent's tool row without the feedback it drafted
+ * (`tool_call.feedbackDraft`). It rides the unreleased `1.42`.
+ */
+export const CHAT_SUBSCRIBE_FEEDBACK_DRAFT_MINOR = 42;
+
+function supportsFeedbackDrafts(negotiated: SchemaVersion | null): boolean {
+  return (
+    negotiated !== null &&
+    negotiated.major === 1 &&
+    negotiated.minor >= CHAT_SUBSCRIBE_FEEDBACK_DRAFT_MINOR
+  );
+}
+
+function stripFeedbackDraftStamp(block: unknown): unknown {
+  if (!isRecord(block) || !("feedbackDraft" in block)) return block;
+  const { feedbackDraft: _feedbackDraft, ...rest } = block;
+  return rest;
+}
+
+function projectFeedbackDraftRow(row: unknown): unknown {
+  if (!isRecord(row) || row.role !== "assistant" || !Array.isArray(row.blocks))
+    return row;
+  const original = row.blocks;
+  const blocks = original.map(stripFeedbackDraftStamp);
+  return blocks.every((block, index) => block === original[index])
+    ? row
+    : { ...row, blocks };
+}
+
+function projectFeedbackDraftContainer(value: unknown): unknown {
+  if (!isRecord(value) || !Array.isArray(value.messages)) return value;
+  const original = value.messages;
+  const messages = original.map(projectFeedbackDraftRow);
+  return messages.every((message, index) => message === original[index])
+    ? value
+    : { ...value, messages };
+}
+
+function projectFeedbackDraftFrame(
+  frame: ProjectedChatSubscribeServerFrame,
+  negotiated: SchemaVersion | null,
+): ProjectedChatSubscribeServerFrame {
+  if (supportsFeedbackDrafts(negotiated)) return frame;
+  if (frame.kind === "range") {
+    const range = projectFeedbackDraftContainer(frame.range);
+    return range === frame.range ? frame : { ...frame, range };
+  }
+  if (frame.kind !== "snapshot" || !isRecord(frame.snapshot)) return frame;
+  const original = frame.snapshot;
+  const chat = projectFeedbackDraftContainer(original.chat);
+  const tail = projectFeedbackDraftContainer(original.tail);
+  if (chat === original.chat && tail === original.tail) return frame;
+  const snapshot = { ...original };
+  if (chat !== original.chat) snapshot.chat = chat;
+  if (tail !== original.tail) snapshot.tail = tail;
+  return { ...frame, snapshot };
+}
+
 export function projectChatServerFrameForVersion(
   frame: ProjectedChatSubscribeServerFrame,
   negotiated: SchemaVersion | null,
 ): ProjectedChatSubscribeServerFrame {
   const projected = projectChatServerFrameBeforeUltracode(
-    projectDeliveryWorktreeIntent(frame, negotiated),
+    projectDeliveryWorktreeIntent(
+      projectFeedbackDraftFrame(frame, negotiated),
+      negotiated,
+    ),
     negotiated,
   );
   if (chatLineCarriesUltracode(negotiated)) return projected;
