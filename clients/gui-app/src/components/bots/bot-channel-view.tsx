@@ -901,6 +901,7 @@ export function BotChannelView(props: {
               )}
             />
             <ChannelExchangePane
+              tiles={tiles}
               exchange={openExchange}
               render={(exchange) => (
                 <BotExchangeLog
@@ -1042,17 +1043,18 @@ function railHolds(
 
 /** A pair's log open in the rail; nothing for none (`null`). */
 function ChannelExchangePane(props: {
+  readonly tiles: MobileTileCount | null;
   readonly exchange: BotOpenExchange | null;
   readonly render: (exchange: BotOpenExchange) => ReactNode;
 }): ReactNode {
-  const { exchange, render } = props;
+  const { tiles, exchange, render } = props;
   if (exchange === null) return null;
   return (
     <BotResizablePane
       pane="thread"
       edge="left"
       label="Resize panel"
-      {...railPanePlacement()}
+      {...railPanePlacement(tiles)}
       testId="bot-exchange-pane"
     >
       {render(exchange)}

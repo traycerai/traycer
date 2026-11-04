@@ -399,6 +399,7 @@ function Channel(
             hostId={HOST_ID}
             boundHostId={BOUND_HOST_ID}
             boundHostEpoch={1}
+            tiles={null}
             botTitle="Release Bot"
             directive={null}
             appConversationChatId={CHANNEL_ID}
