@@ -59,6 +59,7 @@ import {
   botConversationSendRequestSchemaV12,
   botConversationSendResponseSchema,
   botThreadListRequestSchema,
+  botThreadListRequestSchemaV10,
   botTurnLocateRequestSchema,
   botTurnLocateResponseSchema,
   botThreadListResponseSchema,
@@ -349,7 +350,7 @@ export const botConversationSendUpgradeV12ToV13 = defineUpgradePath<
 export const botThreadListV10 = defineRpcContract({
   method: "bot.thread.list",
   schemaVersion: { major: 1, minor: 0 } as const,
-  requestSchema: botThreadListRequestSchema,
+  requestSchema: botThreadListRequestSchemaV10,
   responseSchema: botThreadListResponseSchemaV10,
 });
 
@@ -361,7 +362,7 @@ export const botThreadListV10 = defineRpcContract({
 export const botThreadListV11 = defineRpcContract({
   method: "bot.thread.list",
   schemaVersion: { major: 1, minor: 1 } as const,
-  requestSchema: botThreadListRequestSchema,
+  requestSchema: botThreadListRequestSchemaV10,
   responseSchema: botThreadListResponseSchemaV11,
 });
 export const botThreadListUpgradeV10ToV11 = defineUpgradePath<
@@ -378,6 +379,9 @@ export const botThreadListUpgradeV10ToV11 = defineUpgradePath<
  * `bot.thread.list@1.2` (voice VT3b): each anchor carries its post's excerpt
  * (`anchor.excerpt`), so a client names a thread it has not loaded. A 1.1
  * host holds none. A thread a call opened says so (`kind`, Call Tracy VC1).
+ * The list is paged (T142): a request names a `limit` and a `cursor`, and the
+ * response the `nextCursor` and the `total`. A 1.1 request lists every
+ * thread, and a 1.1 host answers every thread on one page.
  */
 export const botThreadListV12 = defineRpcContract({
   method: "bot.thread.list",
@@ -391,7 +395,7 @@ export const botThreadListUpgradeV11ToV12 = defineUpgradePath<
 >({
   from: botThreadListV11.schemaVersion,
   to: botThreadListV12.schemaVersion,
-  upgradeRequest: (request) => request,
+  upgradeRequest: (request) => ({ ...request, limit: null, cursor: null }),
   upgradeResponse: (response) => ({
     ...response,
     threads: response.threads.map((thread) => ({
@@ -399,6 +403,8 @@ export const botThreadListUpgradeV11ToV12 = defineUpgradePath<
       anchor:
         thread.anchor === null ? null : { ...thread.anchor, excerpt: null },
     })),
+    nextCursor: null,
+    total: response.threads.length,
   }),
 });
 

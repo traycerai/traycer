@@ -21,6 +21,7 @@ import { isReadCursorReadOf } from "@/hooks/bots/use-bot-read-cursor";
 import { isFollowReadOf } from "@/hooks/bots/use-bot-thread-follow";
 import { useWsStreamClient } from "@/lib/host/stream-runtime-context";
 import { useStreamAuthRevalidator } from "@/lib/host/stream-auth-revalidator";
+import { botThreadListParams } from "@/hooks/bots/use-bot-thread-list-query";
 import { useHostDirectoryEntry } from "@/hooks/host/use-host-directory-entry";
 import { useHostStreamClientFor } from "@/hooks/host/use-host-stream-client-for";
 import {
@@ -346,7 +347,7 @@ function createSharedSubscription(
       const queryKey = hostQueryKeys.method<HostRpcRegistry, "bot.thread.list">(
         args.hostId,
         "bot.thread.list",
-        { botId: args.botId },
+        botThreadListParams(args.botId),
       );
       void queryClient
         .cancelQueries({ queryKey })

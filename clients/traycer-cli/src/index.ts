@@ -3870,13 +3870,33 @@ function registerBotCommands(program: Command): void {
     bot
       .command("threads")
       .description(
-        "List a bot's threads with the post each answers, its replies, open requests and cost. Works only on the host the bot runs on.",
+        "List a bot's threads with the post each answers, its replies, open requests and cost, most recent activity first. Works only on the host the bot runs on.",
       )
-      .argument("<bot>", botArgument),
-    (_opts, args) =>
-      buildBotThreadsCommand({
+      .argument("<bot>", botArgument)
+      .option("--limit <count>", "List at most this many threads")
+      .option(
+        "--cursor <cursor>",
+        "Continue after the page a listing ended, with the cursor it printed",
+      ),
+    (opts, args) => {
+      const limit =
+        typeof opts.limit === "string"
+          ? parsePositiveIntegerArg(opts.limit)
+          : null;
+      if (typeof opts.limit === "string" && limit === null) {
+        throw cliError({
+          code: CLI_ERROR_CODES.INVALID_ARGUMENT,
+          message: "bot threads: --limit must be a positive whole number",
+          details: { limit: opts.limit },
+          exitCode: 1,
+        });
+      }
+      return buildBotThreadsCommand({
         bot: expectRequiredPositional(args[0], "bot"),
-      }),
+        limit,
+        cursor: typeof opts.cursor === "string" ? opts.cursor : null,
+      });
+    },
   );
 
   withRunner(

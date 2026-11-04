@@ -17,6 +17,7 @@ import {
   type DirectorySources,
   type VoiceDirectory,
 } from "@/lib/voice/directory";
+import { botThreadListParams } from "@/hooks/bots/use-bot-thread-list-query";
 import { useAuthStore } from "@/stores/auth/auth-store";
 import { useBotOpenThreadStore } from "@/stores/bots/bot-open-thread-store";
 import { tracySurfaceHostId } from "@/stores/bots/tracy-surface-store";
@@ -67,7 +68,7 @@ export function useVoiceDirectory(
       () =>
         bots.map((bot) => ({
           method: "bot.thread.list",
-          params: { botId: bot.botId },
+          params: botThreadListParams(bot.botId),
         })),
       [bots],
     ),

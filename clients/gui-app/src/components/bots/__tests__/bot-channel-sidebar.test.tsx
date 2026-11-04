@@ -192,6 +192,8 @@ vi.mock("@/hooks/host/use-host-queries", () => ({
             threads: reads.threads,
             trunkCostUsd: null,
             threadAnchors: null,
+            nextCursor: null,
+            total: reads.threads.length,
           },
           "bot.threadFollow.read": { follows: reads.follows },
           "bot.readCursor.read": reads.cursors,
