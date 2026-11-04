@@ -5066,6 +5066,9 @@ function ChatMessagesInner(props: ChatMessagesInnerProps) {
                   isFollowCorrectionSuppressed={isFollowCorrectionSuppressed}
                   resolveSuppressedEndLanding={resolveSuppressedEndLanding}
                   isReattachSuppressed={isReattachSuppressed}
+                  isTranscriptWindowInvalidated={
+                    transcriptWindow?.invalidated === true
+                  }
                   navigationHighlightedMessageId={
                     navigationHighlight?.messageId ?? null
                   }

@@ -17,10 +17,13 @@ import {
   AGENT_SANDBOX,
   KEPT_UNTIL_YOU_DESTROY_IT,
   LESS_THAN_A_CENT_SO_FAR,
+  burstIdleLine,
   configurationLabel,
   costLine,
   formatSandboxCost,
   formatSandboxDollars,
+  idleAndRestingLine,
+  idleLine,
   keptByLine,
   paidByLine,
   startedByLine,
@@ -463,6 +466,25 @@ export function formatSandboxDuration(ms: number): string {
   return rest === 0 ? `${hours} h` : `${hours} h ${rest} min`;
 }
 
+/**
+ * `Nov 7, 2026` for a date announced as a UTC calendar day, read in UTC.
+ *
+ * An announced day is one day for everyone, so it cannot be read in the
+ * reader's zone: midnight UTC shown locally is the day before for every
+ * reader west of it, which would show a date the announcement never named and
+ * a different date to two readers of the same notice. Its sibling
+ * `formatSandboxDate` stays local, because every other date here is an
+ * instant that happened rather than a day that was announced.
+ */
+export function formatSandboxUtcDay(at: number): string {
+  return new Date(at).toLocaleDateString(undefined, {
+    month: "short",
+    day: "numeric",
+    year: "numeric",
+    timeZone: "UTC",
+  });
+}
+
 /** `Oct 31`, `Oct 31 at 23:40` with a time. */
 export function formatSandboxDate(at: number, withTime: boolean): string {
   const date = new Date(at);
@@ -609,14 +631,84 @@ export function sandboxFrozenClock(frozenAt: number | null): string | null {
 }
 
 /**
+ * Whether a withdrawal, not the resting policy, is what decides how long this
+ * row is kept.
+ *
+ * A withdrawn row is ended by its own `destroyAt` where it has one and by its
+ * announced date otherwise, and the server sends an unfrozen one no resting
+ * deadline (a frozen row keeps the day-30 deadline that its `destroyAt` is;
+ * see the exception below). So the resting policy is no longer a claim about
+ * this row,
+ * and a surface that states one says something the withdrawal contradicts —
+ * `kept until you destroy it` above a notice giving the day it stops being
+ * the worst of them.
+ *
+ * Two mechanisms keep that out, and which one covers a surface depends on
+ * what the surface reads:
+ *
+ * - a surface that states a retention from the row's PERIOD asks this, because
+ *   the period is still set on a withdrawn row and still reads as a promise:
+ *   the resting and idle-policy clauses, the Resting detail row, and the
+ *   Stop, Keep and resting-setting dialogs;
+ * - a surface gated on `destroyAt` needs nothing, because the server holds a
+ *   withdrawn row's resting deadline and sends none. The `Destroyed on`
+ *   detail row is the one place that then states the withdrawal's own day
+ *   instead, because a row that says when a sandbox ends has an answer for a
+ *   withdrawn one and would otherwise go silent.
+ *
+ *   The exception is a FROZEN row, which keeps its day-30 deadline through a
+ *   withdrawal — its own approved policy, decided ahead of the withdrawal in
+ *   `destroyAtOf` — so a frozen withdrawn row carries BOTH, and a surface
+ *   holding both must prefer `destroyAt`: it is the day the server acts on.
+ *   `sandboxGiveAnotherLabel` is unaffected either way, since it excludes a
+ *   frozen row for its own reasons.
+ *
+ * A surface that describes the POLICY rather than a row — a catalogue default,
+ * a shape being picked — asks neither, because no row's withdrawal bears on
+ * what a new sandbox would do.
+ */
+export function sandboxRetentionIsWithdrawn(summary: SandboxSummary): boolean {
+  return summary.withdrawalEndsAt !== null;
+}
+
+/**
+ * What this row does when it goes idle, and what decides how long it is then
+ * kept: `destroys itself after 30 idle minutes · files on it are lost then`
+ * for a burst row, `Suspends after 30 idle min · destroyed after 7 resting
+ * days` for an ordinary one, and the idle clause alone for a withdrawn row,
+ * where that is decided by its own `destroyAt` if it has one and by the
+ * announced date otherwise, never by its resting policy.
+ *
+ * The three readings are one decision about one row, so they are made here
+ * rather than at each surface that draws them. What makes that worth
+ * centralising is how easily a withdrawn row takes the wrong one: the resting
+ * clause would promise a deadline the withdrawal holds, and a withdrawn
+ * NON-burst row routed through the burst sentence would promise its files are
+ * lost at an idle timeout it does not have.
+ *
+ * A burst row keeps its burst sentence once withdrawn, which is why `burst`
+ * is answered before the withdrawal below. The burst idle destroy is its own
+ * policy and is outside the resting hold, so that sentence stays true.
+ */
+export function sandboxIdlePolicyLine(summary: SandboxSummary): string {
+  const idleMinutes = idleMinutesOf(summary);
+  if (summary.burst) return burstIdleLine(idleMinutes);
+  if (sandboxRetentionIsWithdrawn(summary)) return idleLine(idleMinutes);
+  return idleAndRestingLine(idleMinutes, summary.destroyAfterRestingMinutes);
+}
+
+/**
  * `destroyed Nov 1 at 09:49 unless used`, or `kept until you destroy it` on
  * a row that rests forever. `null` while a period is set but its date has not
- * arrived yet: a default drawn before the value would flash the wrong claim.
+ * arrived yet: a default drawn before the value would flash the wrong claim,
+ * and `null` on a withdrawn row, whose retention the resting policy no longer
+ * decides (`sandboxRetentionIsWithdrawn`).
  */
 function restingDestroyClause(
   summary: SandboxSummary,
   verb: string,
 ): string | null {
+  if (sandboxRetentionIsWithdrawn(summary)) return null;
   if (summary.destroyAt !== null) {
     return `destroyed ${formatSandboxDate(summary.destroyAt, true)} unless ${verb}`;
   }
