@@ -439,8 +439,8 @@ describe("the receipt under the other rows a turn of the bot wrote", () => {
 });
 
 describe("the receipt under the bot's own post a thread opens on", () => {
-  it("is drawn on the origin row of a thread whose post is the bot's announcement, and opens the turn landed on the announcement", async () => {
-    const user = userEvent.setup();
+  /** The bot's announcement in the channel, with the turn that wrote it known to the host. */
+  function announcementPosted(): void {
     scene.knownTurns = [...scene.knownTurns, ANNOUNCEMENT_TURN];
     scene.channel.setState({
       messages: [
@@ -452,18 +452,25 @@ describe("the receipt under the bot's own post a thread opens on", () => {
         }),
       ],
     });
+  }
+
+  const ANNOUNCEMENT_RAIL: BotOpenThread = {
+    anchorMessageId: ANNOUNCEMENT_ID,
+    announcement: true,
+    anchorKind: "message",
+    sent: null,
+  };
+
+  it("is drawn on the origin row of a thread whose post is the bot's announcement, and opens the turn landed on the announcement", async () => {
+    const user = userEvent.setup();
+    announcementPosted();
     mocks.threads = [...scene.threads, announcementThread()];
     mocks.sessions = {
       ...scene.sessions,
       [ANNOUNCEMENT_THREAD_ID]: scriptedSession(ANNOUNCEMENT_THREAD_ID, [])
         .handle,
     };
-    mountChannel({
-      anchorMessageId: ANNOUNCEMENT_ID,
-      announcement: true,
-      anchorKind: "message",
-      sent: null,
-    });
+    mountChannel(ANNOUNCEMENT_RAIL);
 
     const receipt = await within(
       await screen.findByTestId("bot-thread-anchor"),
@@ -483,6 +490,19 @@ describe("the receipt under the bot's own post a thread opens on", () => {
         sendPostId: ANNOUNCEMENT_ID,
       },
     ]);
+  });
+
+  it("is drawn on the origin row before anyone has replied, while the thread list has no thread for the announcement", async () => {
+    announcementPosted();
+    mountChannel(ANNOUNCEMENT_RAIL);
+
+    // Unopened: the box starts the thread.
+    await screen.findByRole("textbox", { name: "Reply in a new thread" });
+    const receipt = await within(
+      await screen.findByTestId("bot-thread-anchor"),
+    ).findByTestId("bot-turn-receipt");
+
+    expect(receipt.textContent).toBe(`${SUMMARY} · ${TOOK}`);
   });
 });
 

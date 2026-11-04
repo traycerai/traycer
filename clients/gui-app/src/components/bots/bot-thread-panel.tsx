@@ -54,7 +54,7 @@ import type {
   ChatBotTurnReceipt,
 } from "@/components/chat/chat-bot-presentation-context";
 import type { BotMemberResolver } from "@/lib/bots/bot-member-names";
-import { threadOriginRow } from "@/lib/bots/reply-row";
+import { threadOriginRow, type ThreadOriginRow } from "@/lib/bots/reply-row";
 import { useAuthStore } from "@/stores/auth/auth-store";
 import { useBotDraftsStore } from "@/stores/bots/bot-drafts-store";
 import { useKeptBoxDraft } from "@/hooks/bots/use-kept-box-draft";
@@ -306,7 +306,57 @@ type ThreadPanelBodyProps = {
  * sent from here nor listed.
  */
 function ThreadOrigin(props: ThreadPanelBodyProps): ReactNode {
+  const { originMessageId, sent, anchorSenderLabel, resolveMember } = props;
+  const anchor =
+    props.thread.kind === "listed" ? props.thread.thread.anchor : null;
+  const senderAvatarUrl = useCallback(
+    (senderUserId: string) => resolveMember(senderUserId)?.avatarUrl ?? null,
+    [resolveMember],
+  );
+  return (
+    <ChannelPost
+      botId={props.botId}
+      hostId={props.hostId}
+      conversationId={props.conversationId}
+      messageId={originMessageId}
+      fetchCold
+    >
+      {(post) => {
+        const origin = threadOriginRow({
+          messageId: originMessageId,
+          post,
+          sent,
+          anchor,
+          senderLabel: anchorSenderLabel,
+          senderAvatarUrl,
+        });
+        return origin === null ? null : (
+          <ThreadOriginPost
+            {...props}
+            origin={origin}
+            queued={post === null && sent?.delivery === "queued"}
+          />
+        );
+      }}
+    </ChannelPost>
+  );
+}
+
+/**
+ * The post the thread opens on (`origin`) and the turns behind it: the bot's
+ * post asks for the turn that wrote it whether or not anyone has replied in
+ * the thread yet, since the row says who wrote it. `queued` while a send the
+ * host queued has no row yet.
+ */
+function ThreadOriginPost(
+  props: ThreadPanelBodyProps & {
+    readonly origin: ThreadOriginRow;
+    readonly queued: boolean;
+  },
+): ReactNode {
   const {
+    origin,
+    queued,
     botId,
     hostId,
     boundHostId,
@@ -315,7 +365,6 @@ function ThreadOrigin(props: ThreadPanelBodyProps): ReactNode {
     originMessageId,
     sent,
     anchorSenderLabel,
-    resolveMember,
     onEditPost,
     onOpenTurn,
     sendFailure,
@@ -326,18 +375,18 @@ function ThreadOrigin(props: ThreadPanelBodyProps): ReactNode {
     (requestId: string) => failedOnRequest(activity, requestId),
     [activity],
   );
+  const listed = props.thread.kind === "listed" ? props.thread.thread : null;
   // The turn behind the post: the bot's post draws the receipt of the turn
   // that wrote it, as in the channel; a member's post, while the bot failed
   // to answer it, the receipt of the turn that took it, and the agent chat's
   // reason and actions where the thread's session names that turn as its
   // last failed attempt.
-  const listed = props.thread.kind === "listed" ? props.thread.thread : null;
   const originRequestId = listed?.anchor?.requestId ?? sent?.requestId ?? null;
   const failedOrigin =
     originRequestId !== null && failedOnPost(originRequestId) !== null
       ? [originRequestId]
       : NO_IDS;
-  const botOrigin = listed?.anchor?.senderUserId === null;
+  const botOrigin = origin.row.role === "assistant";
   const located = useBotTurnLocateQuery({
     client,
     hostId,
@@ -437,51 +486,23 @@ function ThreadOrigin(props: ThreadPanelBodyProps): ReactNode {
       ),
     [botTitle, failedRequest, questions, turns],
   );
-  const anchor =
-    props.thread.kind === "listed" ? props.thread.thread.anchor : null;
-  const senderAvatarUrl = useCallback(
-    (senderUserId: string) => resolveMember(senderUserId)?.avatarUrl ?? null,
-    [resolveMember],
-  );
   return (
-    <ChannelPost
-      botId={botId}
-      hostId={hostId}
-      conversationId={conversationId}
-      messageId={originMessageId}
-      fetchCold
+    <div
+      className="px-2"
+      data-testid="bot-thread-anchor"
+      data-loaded={origin.loaded ? "true" : "false"}
     >
-      {(post) => {
-        const origin = threadOriginRow({
-          messageId: originMessageId,
-          post,
-          sent,
-          anchor,
-          senderLabel: anchorSenderLabel,
-          senderAvatarUrl,
-        });
-        return origin === null ? null : (
-          <div
-            className="px-2"
-            data-testid="bot-thread-anchor"
-            data-loaded={origin.loaded ? "true" : "false"}
-          >
-            <ChatBotMessage
-              message={origin.row}
-              presentation={
-                origin.loaded ? loadedPresentation : unloadedPresentation
-              }
-              hoverActions={false}
-            />
-            {post === null && sent?.delivery === "queued" ? (
-              <div className="px-3">
-                <BotQueuedNotice testId="bot-thread-queued" />
-              </div>
-            ) : null}
-          </div>
-        );
-      }}
-    </ChannelPost>
+      <ChatBotMessage
+        message={origin.row}
+        presentation={origin.loaded ? loadedPresentation : unloadedPresentation}
+        hoverActions={false}
+      />
+      {queued ? (
+        <div className="px-3">
+          <BotQueuedNotice testId="bot-thread-queued" />
+        </div>
+      ) : null}
+    </div>
   );
 }
 
