@@ -140,6 +140,7 @@ export {
   openMessageSchemaPreCanvas,
   openMessageSchemaPreHtml,
   openMessageSchemaPreArtifact,
+  openMessageSchemaPreFeedbackDraft,
   openMessageSchemaPreConversation,
   openMessageSchemaPreDelivery,
   openPlanBlockSchema,

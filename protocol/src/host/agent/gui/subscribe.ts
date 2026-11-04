@@ -160,6 +160,7 @@ import {
   chatTranscriptWindowSchema,
   chatTranscriptWindowSchemaPreMessageDelivery,
   openChatRangeResponseSchema,
+  openChatRangeResponseSchemaPreFeedbackDraft,
   openChatRangeResponseSchemaPreNotApplied,
   openChatRangeResponseSchemaPreCanvas,
   openChatRangeResponseSchemaPreDelivery,
@@ -170,6 +171,7 @@ import {
   openChatTranscriptWindowSchemaPreConversation,
   openChatTranscriptWindowSchemaPreMcpApp,
   openChatTranscriptWindowSchema,
+  openChatTranscriptWindowSchemaPreFeedbackDraft,
   openChatTranscriptWindowSchemaPreNotApplied,
   openChatTranscriptWindowSchemaPreCanvas,
   openChatTranscriptWindowSchemaPreDelivery,
@@ -6523,7 +6525,7 @@ const openChatWindowedSnapshotSchemaPreNotApplied = lazySchema(() =>
 const openChatWindowedSnapshotSchemaPreLineHeld = lazySchema(() =>
   chatWindowedSnapshotSchemaPreUltracode.extend({
     queue: openChatQueueStateSchemaPreNotificationDigest,
-    tail: openChatTranscriptWindowSchema,
+    tail: openChatTranscriptWindowSchemaPreFeedbackDraft,
   }),
 );
 
@@ -6768,6 +6770,13 @@ const chatSubscribeRangeServerFrameSchemaOpenHarnessV137 = lazySchema(() =>
     kind: z.literal("range"),
     ...textFrameFields,
     ...chatReferenceFields,
+    range: openChatRangeResponseSchemaPreFeedbackDraft,
+  }),
+);
+
+// The range frame `chat.subscribe@1.42` ships: rows carry `feedbackDraft`.
+const chatSubscribeRangeServerFrameSchemaOpenHarnessV142 = lazySchema(() =>
+  chatSubscribeRangeServerFrameSchemaOpenHarnessV137.extend({
     range: openChatRangeResponseSchema,
   }),
 );
@@ -8788,7 +8797,10 @@ const openChatWindowedSnapshotSchemaV141 = lazySchema(() =>
   }),
 );
 export const openChatWindowedSnapshotSchema = lazySchema(() =>
-  openChatWindowedSnapshotSchemaV141.extend(deliveryWorktreeIntentFields),
+  openChatWindowedSnapshotSchemaV141.extend({
+    tail: openChatTranscriptWindowSchema,
+    ...deliveryWorktreeIntentFields,
+  }),
 );
 const chatSubscribeCommonServerFrameSchemasOpenHarnessV141 =
   buildChatSubscribeCommonServerFrameSchemas({
@@ -8846,7 +8858,7 @@ export const openChatSubscribeWindowedServerFrameSchema = lazySchema(() =>
     chatSubscribeSkeletonChunkServerFrameSchemaV119,
     chatSubscribeAccumulatedChangesServerFrameSchema,
     chatSubscribeIndexChangedServerFrameSchema,
-    chatSubscribeRangeServerFrameSchemaOpenHarnessV137,
+    chatSubscribeRangeServerFrameSchemaOpenHarnessV142,
     chatSubscribeTurnStateChangedServerFrameSchemaV141,
     chatSubscribeManagedCommandsChangedServerFrameSchema,
     chatSubscribePortForwardsChangedServerFrameSchema,
@@ -8946,6 +8958,8 @@ export const chatSubscribeV141 = defineStreamRpcContract({
  * directory picker can show the worktree a seeded chat is waiting for. The host
  * strips it below 1.42 (`CHAT_SUBSCRIBE_DELIVERY_INTENT_MINOR`). A host below
  * 1.42 omits it, which parses to null: the picker shows the binding it has.
+ * 1.42 also carries `tool_call.feedbackDraft` on the tail and range rows;
+ * earlier lines bind the frozen block without it.
  */
 export const chatSubscribeV142 = defineStreamRpcContract({
   method: "chat.subscribe",

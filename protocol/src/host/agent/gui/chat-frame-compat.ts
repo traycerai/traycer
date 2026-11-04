@@ -1753,6 +1753,13 @@ export function projectChatClientFrameForVersion(
  */
 export const CHAT_SUBSCRIBE_DELIVERY_INTENT_MINOR = 42;
 
+/**
+ * The first minor whose tail and range rows carry `tool_call.feedbackDraft`.
+ * Lines 1.37 through 1.41 bind the frozen block without it; the host deletes
+ * the key below this minor.
+ */
+export const CHAT_SUBSCRIBE_FEEDBACK_DRAFT_MINOR = 42;
+
 function omitDeliveryWorktreeIntent(delivery: unknown): unknown {
   if (!isRecord(delivery) || !("worktreeIntent" in delivery)) return delivery;
   const { worktreeIntent: _worktreeIntent, ...rest } = delivery;

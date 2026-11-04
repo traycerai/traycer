@@ -1071,6 +1071,36 @@ export const toolCallBlockSchema = lazySchema(() =>
     feedbackDraft: toolCallFeedbackDraftStampSchema.nullable().default(null),
   }),
 );
+// Wire-freeze copy of `toolCallBlockSchema` as `chat.subscribe@1.36` through
+// `@1.41` ship it (via `openContentBlockSchemaPreFeedbackDraft`): the live
+// block without the `feedbackDraft` stamp `1.42` added. Hand-frozen, NOT
+// `.omit()`-derived; keys keep the live order.
+export const toolCallBlockSchemaPreFeedbackDraft = lazySchema(() =>
+  z.object({
+    ...baseBlockFields,
+    status: actionBlockStatus,
+    type: z.literal("tool_call"),
+    toolName: z.string(),
+    inputSummary: z.string().nullable().default(null),
+    inputDetail: toolInputDetailSchema.nullable().default(null),
+    taskTodoItems: z.array(parsedTaskTodoSchema).nullable().default(null),
+    error: z.string().nullable(),
+    agentMessageSend: agentMessageSendSchema.nullable().default(null),
+    agentMessageReceipt: agentMessageReceiptSchema.nullable().default(null),
+    agentMessageDelivery: agentMessageDeliverySchema.nullable().default(null),
+    botSendReceipt: botSendReceiptSchema.nullable().default(null),
+    managedCommand: toolCallManagedCommandSchema.nullable().default(null),
+    progress: z.string().nullable().default(null),
+    backgroundOutput: backgroundTaskOutputSchema.nullable().default(null),
+    startedAt: z.number().nullable().default(null),
+    endedAt: z.number().nullable().default(null),
+    backgroundTask: z.boolean().nullable().default(false),
+    stopped: z.boolean().default(false),
+    imageResults: z.array(imageGenerationResultSchema).default([]),
+    artifact: toolCallArtifactStampSchema.nullable().default(null),
+    mcpApp: toolCallMcpAppStampSchema.nullable().default(null),
+  }),
+);
 // Frozen through chat.subscribe@1.30: keep the artifact stamp off older lines.
 export const toolCallBlockSchemaPreArtifact = lazySchema(() =>
   z.object({
