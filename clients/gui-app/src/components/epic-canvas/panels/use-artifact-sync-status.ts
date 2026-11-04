@@ -10,23 +10,17 @@ import {
 export type ArtifactSyncStatus =
   | { readonly kind: "calm" }
   | {
-      readonly kind: "warning";
-      readonly label: string;
+      /**
+       * `retrying` while the host is still trying; `stopped` once it has
+       * given up. `title` is the phone sheet's heading only. The pill shows
+       * no text for either kind.
+       */
+      readonly kind: "retrying" | "stopped";
+      readonly title: string;
       readonly sentence: string;
-    }
-  | { readonly kind: "recovered"; readonly label: string };
+    };
 
 const CALM: ArtifactSyncStatus = { kind: "calm" };
-const RECOVERED: ArtifactSyncStatus = {
-  kind: "recovered",
-  label: "Artifacts synced",
-};
-
-/** Every warning reads the same in the pill; what is wrong is in the sentence. */
-const SYNCING_LABEL = "Syncing…";
-
-/** How long "Artifacts synced" stays up after a warning clears. */
-export const ARTIFACT_SYNC_RECOVERED_MS = 5_000;
 
 /**
  * The verdicts this plane speaks beside. Every other one is a link or local
@@ -36,41 +30,44 @@ export const ARTIFACT_SYNC_RECOVERED_MS = 5_000;
 const CLOUD_UP_STATES: ReadonlySet<EpicSyncPillState> =
   new Set<EpicSyncPillState>(["synced", "syncing", "hostPending", "connected"]);
 
-function warningFor(
-  rooms: EpicArtifactSync["rooms"],
-  waiting: number,
-): Extract<ArtifactSyncStatus, { readonly kind: "warning" }> {
-  // `stopped` drops the promise: nothing on the host is trying again.
-  const retry = rooms === "stopped" ? "" : " Retrying on its own.";
+/** The sheet heading. The pill never prints it. */
+function sheetTitle(waiting: number): string {
+  if (waiting === 0) return "Artifacts not syncing";
+  if (waiting === 1) return "1 new artifact waiting";
+  return `${String(waiting)} new artifacts waiting`;
+}
+
+function sentenceFor(waiting: number, retry: string): string {
   if (waiting === 0) {
-    return {
-      kind: "warning",
-      label: SYNCING_LABEL,
-      sentence: `Artifacts not syncing. Your changes are saved on this computer. Your other devices and teammates won’t see them yet.${retry}`,
-    };
+    return `Artifacts not syncing. Your changes are saved on this computer. Your other devices and teammates won’t see them yet.${retry}`;
   }
   if (waiting === 1) {
-    return {
-      kind: "warning",
-      label: SYNCING_LABEL,
-      sentence: `1 new artifact waiting. It’s saved on this computer and will appear here when sync is back.${retry}`,
-    };
+    return `1 new artifact waiting. It’s saved on this computer and will appear here when sync is back.${retry}`;
   }
+  return `${String(waiting)} new artifacts waiting. They’re saved on this computer and will appear here when sync is back.${retry}`;
+}
+
+function reportFor(
+  rooms: EpicArtifactSync["rooms"],
+  waiting: number,
+): Exclude<ArtifactSyncStatus, { readonly kind: "calm" }> {
+  // `stopped` drops the promise: nothing on the host is trying again.
+  const retry = rooms === "stopped" ? "" : " Retrying on its own.";
   return {
-    kind: "warning",
-    label: SYNCING_LABEL,
-    sentence: `${String(waiting)} new artifacts waiting. They’re saved on this computer and will appear here when sync is back.${retry}`,
+    kind: rooms === "stopped" ? "stopped" : "retrying",
+    title: sheetTitle(waiting),
+    sentence: sentenceFor(waiting, retry),
   };
 }
 
 /**
  * The artifact plane: quiet for {@link CLOUD_LINK_GRACE_MS}, the same window a
  * cloud drop gets because a room re-dials inside it for the same reason, then
- * a warning, then "Artifacts synced" for {@link ARTIFACT_SYNC_RECOVERED_MS} if
- * a warning was actually shown.
+ * a report. Catching up is ordinary saving, so the plane goes straight back
+ * to calm when it clears. There is no "Artifacts synced" flash.
  *
  * The clock runs on whether anything is outstanding at all, not on which
- * warning it is, so a room falling behind while an artifact waits does not
+ * report it is, so a room falling behind while an artifact waits does not
  * start the grace again.
  */
 export function useArtifactSyncStatus(
@@ -90,13 +87,8 @@ export function useArtifactSyncStatus(
     CLOUD_UP_STATES.has(pillState) &&
     artifactSyncOutstanding({ rooms, waitingNewArtifacts: waiting });
   const [warned, setWarned] = useState(false);
-  const [recovered, setRecovered] = useState(false);
-  if (outstanding && recovered) {
-    setRecovered(false);
-  }
   if (!outstanding && warned) {
     setWarned(false);
-    setRecovered(true);
   }
   useEffect(() => {
     if (!outstanding) return undefined;
@@ -107,20 +99,6 @@ export function useArtifactSyncStatus(
       window.clearTimeout(timer);
     };
   }, [outstanding]);
-  useEffect(() => {
-    if (!recovered) return undefined;
-    const timer = window.setTimeout(() => {
-      setRecovered(false);
-    }, ARTIFACT_SYNC_RECOVERED_MS);
-    return () => {
-      window.clearTimeout(timer);
-    };
-  }, [recovered]);
-  if (outstanding && warned) return warningFor(rooms, waiting);
-  // A warning cleared by the link going down is not a recovery, and only a
-  // standing `synced` says the artifacts arrived.
-  if (recovered && pillState === "synced" && rooms === "current") {
-    return RECOVERED;
-  }
+  if (outstanding && warned) return reportFor(rooms, waiting);
   return CALM;
 }

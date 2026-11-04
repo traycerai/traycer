@@ -14,9 +14,10 @@ import { cn } from "@/lib/utils";
 import "@/components/layout/shell/mobile-shell-touch-targets.css";
 
 /**
- * The phone's artifact sync control. The desktop pill's status row is not
- * drawn at this width, so this says the same thing as a dot in the header, and
- * a tap opens the sentence. Nothing at all while there is nothing to say.
+ * The phone's artifact sync control. While rooms are still retrying, desktop
+ * shows only the quiet saving dot, and this header has no saving dot, so the
+ * phone stays quiet too. When the host has stopped retrying, an amber dot
+ * opens the sentence. Nothing once the plane is calm.
  */
 export function MobileArtifactSyncControl(props: {
   readonly epicId: string;
@@ -28,22 +29,10 @@ export function MobileArtifactSyncControl(props: {
   // The drawer portals to <body>; re-assert the theme there, as every sheet
   // does.
   const { resolvedTheme, themePreset } = useResolvedTheme();
-  if (status.kind !== "warning" && open) {
+  if (status.kind !== "stopped" && open) {
     setOpen(false);
   }
-  if (status.kind === "calm") return null;
-  if (status.kind === "recovered") {
-    return (
-      <span
-        role="status"
-        aria-label={status.label}
-        data-testid="mobile-artifact-sync-recovered"
-        className="flex size-10 shrink-0 items-center justify-center"
-      >
-        <span className="size-2 rounded-full bg-success" aria-hidden />
-      </span>
-    );
-  }
+  if (status.kind !== "stopped") return null;
   return (
     <Drawer direction="bottom" open={open} onOpenChange={setOpen}>
       <DrawerTrigger asChild>
@@ -51,7 +40,7 @@ export function MobileArtifactSyncControl(props: {
           type="button"
           variant="muted"
           size="icon-touch"
-          aria-label={status.label}
+          aria-label={status.sentence}
           data-testid="mobile-artifact-sync-trigger"
           className="shrink-0"
         >
@@ -65,7 +54,7 @@ export function MobileArtifactSyncControl(props: {
         className={cn(resolvedTheme === "dark" && "dark")}
       >
         <div className="min-w-0 break-words p-4 pb-safe-bottom-gutter">
-          <DrawerTitle>{status.label}</DrawerTitle>
+          <DrawerTitle>{status.title}</DrawerTitle>
           <DrawerDescription>{status.sentence}</DrawerDescription>
         </div>
       </DrawerContent>

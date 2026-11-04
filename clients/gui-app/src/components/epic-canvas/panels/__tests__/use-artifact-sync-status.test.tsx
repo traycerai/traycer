@@ -39,7 +39,7 @@ describe("useArtifactSyncStatus", () => {
     expect(result.current).toEqual({ kind: "calm" });
   });
 
-  it("warns after 15 seconds and shows recovery for five seconds", () => {
+  it("warns after 15 seconds and returns to calm as soon as it clears", () => {
     const { result, rerender } = renderHook(
       (reading: ArtifactSyncReading | null) => useArtifactSyncStatus(reading),
       { initialProps: retrying },
@@ -48,16 +48,13 @@ describe("useArtifactSyncStatus", () => {
     expect(result.current).toEqual({ kind: "calm" });
     advance(1);
     expect(result.current).toEqual({
-      kind: "warning",
-      label: "Syncing…",
+      kind: "retrying",
+      title: "Artifacts not syncing",
       sentence:
         "Artifacts not syncing. Your changes are saved on this computer. Your other devices and teammates won’t see them yet. Retrying on its own.",
     });
     rerender(current);
-    expect(result.current).toEqual({
-      kind: "recovered",
-      label: "Artifacts synced",
-    });
+    expect(result.current).toEqual({ kind: "calm" });
     advance(5_000);
     expect(result.current).toEqual({ kind: "calm" });
   });
@@ -76,7 +73,7 @@ describe("useArtifactSyncStatus", () => {
         ArtifactSyncReading | null
       >((value) => useArtifactSyncStatus(value), { initialProps: retrying });
       advance(15_000);
-      expect(result.current.kind).toBe("warning");
+      expect(result.current.kind).toBe("retrying");
       rerender(reading);
       expect(result.current).toEqual({ kind: "calm" });
     },
@@ -109,48 +106,54 @@ describe("useArtifactSyncStatus", () => {
     {
       rooms: "retrying",
       waiting: 0,
-      label: "Syncing…",
+      kind: "retrying",
+      title: "Artifacts not syncing",
       sentence:
         "Artifacts not syncing. Your changes are saved on this computer. Your other devices and teammates won’t see them yet. Retrying on its own.",
     },
     {
       rooms: "stopped",
       waiting: 0,
-      label: "Syncing…",
+      kind: "stopped",
+      title: "Artifacts not syncing",
       sentence:
         "Artifacts not syncing. Your changes are saved on this computer. Your other devices and teammates won’t see them yet.",
     },
     {
       rooms: "retrying",
       waiting: 1,
-      label: "Syncing…",
+      kind: "retrying",
+      title: "1 new artifact waiting",
       sentence:
         "1 new artifact waiting. It’s saved on this computer and will appear here when sync is back. Retrying on its own.",
     },
     {
       rooms: "stopped",
       waiting: 1,
-      label: "Syncing…",
+      kind: "stopped",
+      title: "1 new artifact waiting",
       sentence:
         "1 new artifact waiting. It’s saved on this computer and will appear here when sync is back.",
     },
     {
       rooms: "retrying",
       waiting: 2,
-      label: "Syncing…",
+      kind: "retrying",
+      title: "2 new artifacts waiting",
       sentence:
         "2 new artifacts waiting. They’re saved on this computer and will appear here when sync is back. Retrying on its own.",
     },
     {
       rooms: "stopped",
       waiting: 2,
-      label: "Syncing…",
+      kind: "stopped",
+      title: "2 new artifacts waiting",
       sentence:
         "2 new artifacts waiting. They’re saved on this computer and will appear here when sync is back.",
     },
   ] as const)(
     "shows the correct warning for $rooms and $waiting waiting",
-    ({ rooms, waiting, label, sentence }) => {
+    ({ rooms, waiting, kind, title, sentence }) => {
       const { result } = renderHook(() =>
         useArtifactSyncStatus({
           rooms,
@@ -159,7 +162,7 @@ describe("useArtifactSyncStatus", () => {
         }),
       );
       advance(15_000);
-      expect(result.current).toEqual({ kind: "warning", label, sentence });
+      expect(result.current).toEqual({ kind, title, sentence });
     },
   );
 
@@ -171,6 +174,6 @@ describe("useArtifactSyncStatus", () => {
     advance(10_000);
     rerender({ ...retrying, waitingNewArtifacts: 1 });
     advance(5_000);
-    expect(result.current.kind).toBe("warning");
+    expect(result.current.kind).toBe("retrying");
   });
 });

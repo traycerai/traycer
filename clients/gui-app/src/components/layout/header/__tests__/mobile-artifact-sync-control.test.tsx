@@ -25,20 +25,46 @@ describe("MobileArtifactSyncControl", () => {
     expect(container.childElementCount).toBe(0);
   });
 
-  it("opens the warning sheet and closes it when the warning clears", () => {
+  it("renders nothing while rooms are still retrying", () => {
+    state.reading = {
+      rooms: "retrying",
+      waitingNewArtifacts: 1,
+      pillState: "hostPending",
+    };
+    const { container } = render(<MobileArtifactSyncControl epicId="epic" />);
+    act(() => {
+      vi.advanceTimersByTime(15_000);
+    });
+    expect(container.childElementCount).toBe(0);
+    expect(screen.queryByRole("button")).toBeNull();
+  });
+
+  it("opens the stopped sheet and renders nothing once the warning clears", () => {
+    const sentence =
+      "1 new artifact waiting. It’s saved on this computer and will appear here when sync is back.";
     state.reading = {
       rooms: "stopped",
       waitingNewArtifacts: 1,
       pillState: "hostPending",
     };
-    const { rerender } = render(<MobileArtifactSyncControl epicId="epic" />);
+    const { container, rerender } = render(
+      <MobileArtifactSyncControl epicId="epic" />,
+    );
     act(() => {
       vi.advanceTimersByTime(15_000);
     });
-    fireEvent.click(screen.getByRole("button", { name: "Syncing…" }));
-    expect(screen.getByRole("dialog").textContent).toBe(
-      "Syncing…1 new artifact waiting. It’s saved on this computer and will appear here when sync is back.",
+    const button = screen.getByRole("button", { name: sentence });
+    expect(button.textContent).not.toContain("Syncing…");
+    expect(button.querySelector("span")?.className).toContain("bg-warning");
+    fireEvent.click(button);
+    const dialog = screen.getByRole("dialog");
+    expect(dialog.querySelector("[data-slot='drawer-title']")?.textContent).toBe(
+      "1 new artifact waiting",
     );
+    expect(
+      dialog.querySelector("[data-slot='drawer-description']")?.textContent,
+    ).toBe(sentence);
+    expect(dialog.textContent).not.toContain("Syncing…");
     state.reading = {
       rooms: "current",
       waitingNewArtifacts: 0,
@@ -46,8 +72,7 @@ describe("MobileArtifactSyncControl", () => {
     };
     rerender(<MobileArtifactSyncControl epicId="epic" />);
     expect(screen.queryByRole("dialog")).toBeNull();
-    expect(
-      screen.getByRole("status", { name: "Artifacts synced" }),
-    ).not.toBeNull();
+    expect(screen.queryByText("Artifacts synced")).toBeNull();
+    expect(container.childElementCount).toBe(0);
   });
 });
