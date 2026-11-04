@@ -1,35 +1,29 @@
-import { useEffect, useState, type ReactNode } from "react";
+import type { ReactNode } from "react";
 import { Captions, Mic, MicOff } from "lucide-react";
 import { useShallow } from "zustand/react/shallow";
 import { Button } from "@/components/ui/button";
-import { TooltipWrapper } from "@/components/ui/tooltip-wrapper";
-import { useVoiceFocusLabel } from "@/hooks/voice/use-voice-focus-label";
 import { VoiceOutcomeLine } from "@/components/layout/voice/voice-ended-line";
-import { VoiceWaitingControl } from "@/components/layout/voice/voice-waiting-control";
-import { useOpenBotChannel } from "@/hooks/bots/use-open-bot-channel";
 import { cn } from "@/lib/utils";
-import { reportVoiceMiss } from "@/lib/voice/miss-report";
+import { captionSpeaker } from "@/lib/voice/call";
 import {
   useVoiceSessionStore,
-  type VoiceFocus,
   type VoicePhase,
 } from "@/stores/voice/voice-session-store";
 
 /**
- * The session strip (V6): where Talk is in the window's top row, across every
- * tab, while a voice session is live. It says the listening or muted state,
- * the destination the next post goes to with Change, the Waiting control, Mute,
- * End and the captions toggle, and Not what I meant after a page action ran.
- * No running transcript is ever drawn: captions, off by default, show the
- * last few lines said and heard, under the row and over the content, and
- * nothing is kept when they are off or the session ends. After a session the
- * strip stays one line to say how it went, then leaves.
+ * The call strip (Call Tracy, VC3): in the window's top row, across every
+ * tab, while a call runs. It says who the call is with and whether the
+ * microphone is listening, with Mute, End and the captions toggle. No running
+ * transcript is ever drawn: captions, off by default, show the last few lines
+ * said and heard, under the row and over the content, and nothing is kept when
+ * they are off or the call ends. After a call the strip stays one line to say
+ * how it went, then leaves.
  */
 export function VoiceSessionStrip(): ReactNode {
   const state = useVoiceSessionStore(
     useShallow((s) => ({
       phase: s.phase,
-      focus: s.focus,
+      callTitle: s.callTitle,
       muted: s.muted,
       pausedForDictation: s.pausedForDictation,
       captions: s.captions,
@@ -40,12 +34,10 @@ export function VoiceSessionStrip(): ReactNode {
   );
   const setCaptions = useVoiceSessionStore((s) => s.setCaptions);
 
-  const [focusLine, setFocusLine] = useState<HTMLElement | null>(null);
-  const focusLineShown = useHasWidth(focusLine);
-
   if (state.phase === "idle") return <VoiceOutcomeLine surface="row" />;
 
   const driver = state.driver;
+  const botTitle = state.callTitle ?? "the bot";
   const listening =
     state.phase === "live" && !state.muted && !state.pausedForDictation;
   // Only the state word is a live region: the strip holds the controls and
@@ -53,15 +45,15 @@ export function VoiceSessionStrip(): ReactNode {
   // re-announced whole from a live container.
   return (
     <section
-      aria-label="Voice session"
+      aria-label="Call"
       data-testid="voice-session-strip"
       data-state={state.phase}
       className="relative flex min-w-0 self-stretch text-ui-xs text-muted-foreground"
     >
-      {/* The middle column has no floor, so the state and the controls are this
-          grid's minimum width, with Waiting's glyph: the top row can take the focus
-          line and Waiting's name away, and never a control. */}
-      <div className="grid min-w-0 grid-cols-[auto_minmax(0,max-content)_auto_auto] items-center">
+      {/* The bot's name has no floor, so the state and the controls are this
+          row's minimum width: the top row can take the name away, never a
+          control. */}
+      <div className="grid min-w-0 grid-cols-[auto_minmax(0,max-content)_auto] items-center">
         <div className="flex items-center gap-3">
           <span
             aria-hidden="true"
@@ -72,27 +64,27 @@ export function VoiceSessionStrip(): ReactNode {
               listening && state.inputActive && "animate-pulse",
             )}
           />
-          <StateWord
-            word={stateLabel(
+          <span
+            role="status"
+            data-testid="voice-strip-state"
+            className="shrink-0 font-medium text-foreground"
+          >
+            {stateLabel(
               state.phase,
               state.muted,
               state.pausedForDictation,
+              botTitle,
             )}
-            focus={state.focus}
-            focusLineShown={focusLineShown}
-          />
+          </span>
           <ResumeAfterDictation />
         </div>
-        <div className="flex min-w-0 items-center gap-3 overflow-hidden not-empty:pl-3">
-          {state.focus === null ? null : (
-            <FocusLine focus={state.focus} lineNode={setFocusLine} />
-          )}
-        </div>
-        <div className="grid items-center not-empty:pl-3">
-          <VoiceWaitingControl />
-        </div>
+        <span
+          data-testid="voice-strip-bot"
+          className="min-w-0 truncate pl-3 text-foreground"
+        >
+          {state.phase === "connecting" ? null : botTitle}
+        </span>
         <div className="flex items-center gap-3 pl-3">
-          <NotWhatIMeant />
           <Button
             type="button"
             variant="ghost"
@@ -150,7 +142,7 @@ export function VoiceSessionStrip(): ReactNode {
                   line.direction === "output" && "text-foreground",
                 )}
               >
-                {line.direction === "input" ? "You: " : "Tracy: "}
+                {captionSpeaker(line.direction, botTitle)}
                 {line.text}
               </li>
             ))
@@ -162,34 +154,8 @@ export function VoiceSessionStrip(): ReactNode {
 }
 
 /**
- * After a page action the voice carried out, until the person's next request:
- * files that action as not what they meant, and goes. Nothing is said and
- * nothing is undone.
- */
-function NotWhatIMeant(): ReactNode {
-  const executedAct = useVoiceSessionStore((s) => s.executedAct);
-  const setExecutedAct = useVoiceSessionStore((s) => s.setExecutedAct);
-  if (executedAct === null) return null;
-  return (
-    <Button
-      type="button"
-      variant="ghost"
-      size="xs"
-      data-testid="voice-strip-not-meant"
-      onClick={() => {
-        reportVoiceMiss("not-meant", "chosen-act", executedAct, null);
-        setExecutedAct(null);
-      }}
-    >
-      Not what I meant
-    </Button>
-  );
-}
-
-/**
- * Resume, while the voice is paused for dictation. Explicit: dictation
- * ending never resumes the voice. Disabled while dictation still holds the
- * microphone.
+ * Resume, while the call is paused for dictation. Explicit: dictation ending
+ * never resumes the call. Disabled while dictation still holds the microphone.
  */
 export function ResumeAfterDictation(): ReactNode {
   const paused = useVoiceSessionStore((s) => s.pausedForDictation);
@@ -214,140 +180,10 @@ function stateLabel(
   phase: VoicePhase,
   muted: boolean,
   pausedForDictation: boolean,
-): string {
-  if (phase === "connecting") return "Connecting…";
-  if (phase === "ending") return "Ending…";
-  if (pausedForDictation) return "Voice paused for dictation";
-  return muted ? "Muted" : "Listening";
-}
-
-/** Whether the element takes any width. Only a state read, so it moves no layout. */
-function useHasWidth(element: HTMLElement | null): boolean {
-  const [hasWidth, setHasWidth] = useState(false);
-  useEffect(() => {
-    if (element === null) return undefined;
-    const read = (): void => {
-      setHasWidth(element.getBoundingClientRect().width > 0);
-    };
-    // A box that lays out to nothing gets no first delivery, so the answer is
-    // read here and never inherited from the element before it.
-    read();
-    const observer = new ResizeObserver(read);
-    observer.observe(element);
-    return () => {
-      observer.disconnect();
-      setHasWidth(false);
-    };
-  }, [element]);
-  return element !== null && hasWidth;
-}
-
-function destinationLine(
-  environmentLabel: string | null,
   botTitle: string,
-  threadLabel: string | null,
 ): string {
-  return [environmentLabel, botTitle, threadLabel]
-    .filter((part) => part !== null)
-    .join(" › ");
-}
-
-/**
- * The state word. While the focus line is hidden, the first thing the top row
- * takes away, its tooltip keeps the destination reachable. The tooltip is always
- * mounted and only its opening is gated: this span is the strip's live region,
- * and a new node would be announced again.
- */
-function StateWord(props: {
-  readonly word: string;
-  readonly focus: VoiceFocus | null;
-  readonly focusLineShown: boolean;
-}): ReactNode {
-  const { focus } = props;
-  const [wantsOpen, setWantsOpen] = useState(false);
-  const open = wantsOpen && focus !== null && !props.focusLineShown;
-  return (
-    <TooltipWrapper
-      label={<DestinationLabel focus={focus} />}
-      side="bottom"
-      sideOffset={undefined}
-      align={undefined}
-      open={open}
-      onOpenChange={setWantsOpen}
-    >
-      <span
-        role="status"
-        data-testid="voice-strip-state"
-        className="shrink-0 font-medium text-foreground"
-      >
-        {props.word}
-      </span>
-    </TooltipWrapper>
-  );
-}
-
-function DestinationLabel(props: {
-  readonly focus: VoiceFocus | null;
-}): ReactNode {
-  return props.focus === null ? null : <FocusDestination focus={props.focus} />;
-}
-
-function FocusDestination(props: { readonly focus: VoiceFocus }): ReactNode {
-  const { environmentLabel, botTitle, threadLabel } = useVoiceFocusLabel(
-    props.focus,
-  );
-  return destinationLine(environmentLabel, botTitle, threadLabel);
-}
-
-/**
- * Where the next post goes: environment › bot › thread, with Change, which
- * opens the bot's tab so the person can pick another channel or thread.
- */
-function FocusLine(props: {
-  readonly focus: VoiceFocus;
-  readonly lineNode: (node: HTMLElement | null) => void;
-}): ReactNode {
-  const { focus, lineNode } = props;
-  const openBotChannel = useOpenBotChannel();
-  const { environmentLabel, botTitle, threadLabel } = useVoiceFocusLabel(focus);
-  // The first thing the strip gives up when the top row is short of room, so
-  // the tabs keep theirs; the tooltip still names the whole destination.
-  const destination = destinationLine(environmentLabel, botTitle, threadLabel);
-  return (
-    <TooltipWrapper
-      label={destination}
-      side="bottom"
-      sideOffset={undefined}
-      align={undefined}
-    >
-      <span
-        ref={lineNode}
-        data-testid="voice-strip-focus"
-        className="flex min-w-0 items-center gap-1 truncate"
-      >
-        {environmentLabel === null ? null : (
-          <>
-            <span className="truncate">{environmentLabel}</span>
-            <span aria-hidden="true">›</span>
-          </>
-        )}
-        <span className="truncate text-foreground">{botTitle}</span>
-        {threadLabel === null ? null : (
-          <>
-            <span aria-hidden="true">›</span>
-            <span className="truncate text-foreground">{threadLabel}</span>
-          </>
-        )}
-        <Button
-          type="button"
-          variant="link"
-          size="inline"
-          data-testid="voice-strip-change"
-          onClick={() => openBotChannel(focus.botId, null)}
-        >
-          Change
-        </Button>
-      </span>
-    </TooltipWrapper>
-  );
+  if (phase === "connecting") return `Calling ${botTitle}…`;
+  if (phase === "ending") return "Ending…";
+  if (pausedForDictation) return "Call paused for dictation";
+  return muted ? "Muted" : "Listening";
 }

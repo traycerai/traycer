@@ -184,6 +184,15 @@ function thread(
   };
 }
 
+/** A thread a call opened. */
+function callThread(
+  botId: string,
+  threadId: string,
+  lastReplyAt: number | null,
+): BotThreadSummary {
+  return { ...thread(botId, threadId, lastReplyAt), kind: "call" };
+}
+
 function script(
   threads: BotThreadSummary[],
   follows: Record<string, BotThreadFollow>,
@@ -360,6 +369,22 @@ describe("<BotThreadsView />", () => {
     ).toBeNull();
     expect(
       within(tracy).queryByTestId("bot-thread-row-unread-count"),
+    ).toBeNull();
+  });
+
+  it("marks a thread a call opened with a phone, and draws none on a plain thread", async () => {
+    mocks.hosted[TEAM] = script(
+      [callThread(TEAM, "team-call", 4_000), thread(TEAM, "team-new", 3_000)],
+      { "team-call": FOLLOWING, "team-new": FOLLOWING },
+    );
+    mount();
+    await waitFor(() => expect(listed()).toContain("team-call"));
+
+    const phone = within(item("team-call")).getByTestId("bot-thread-row-call");
+    expect(phone.getAttribute("role")).toBe("img");
+    expect(phone.getAttribute("aria-label")).toBe("Call");
+    expect(
+      within(item("team-new")).queryByTestId("bot-thread-row-call"),
     ).toBeNull();
   });
 

@@ -13,7 +13,7 @@ export interface AppColumnFrameSlots {
   /** Drawn only when `titleBand` is `"header"`. */
   readonly header: ReactNode;
   /**
-   * Talk's row when no header carries it: first in the content column, which
+   * The call strip's row when no header carries it: first in the content column, which
    * is what it centres on. Empty when `titleBand` is `"header"`.
    */
   readonly voiceTopRow: ReactNode;

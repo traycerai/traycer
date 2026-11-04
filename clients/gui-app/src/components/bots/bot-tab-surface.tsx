@@ -20,7 +20,7 @@ import type {
 import type { EnvironmentListResponseV11 } from "@traycer/protocol/host/environment/contracts";
 import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
 import { Button } from "@/components/ui/button";
-import { TalkControl } from "@/components/layout/voice/talk-control";
+import { CallControl } from "@/components/layout/voice/call-control";
 import { useInstalledAppTileForm } from "@/hooks/ui/use-installed-app-level2-form";
 import { useKeyboardFocusOwnerWithin } from "@/hooks/ui/use-keyboard-focus-layout";
 import { useMobileHeaderActive } from "@/components/layout/header/use-mobile-header-active";
@@ -1764,13 +1764,14 @@ function BotChannelHeader(props: {
         {props.isMain ? (
           <MainBotBadge testId="bot-tab-main" tone="muted" />
         ) : null}
-        {phoneLayout ? (
-          <>
-            {/* Takes the free space, so Talk sits beside the ⋮. */}
-            <span className="min-w-0 flex-1" />
-            <TalkControl form="touch" />
-          </>
-        ) : null}
+        {/* Takes the free space, so Call sits beside the ⋮. A call from the
+            channel opens a new thread with the first thing said. */}
+        <span className="min-w-0 flex-1" />
+        <CallControl
+          target={{ botId: props.botId, threadId: null }}
+          botTitle={props.title}
+          form={phoneLayout ? "touch" : "label"}
+        />
         <Button
           ref={settingsButtonRef}
           type="button"

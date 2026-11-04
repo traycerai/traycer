@@ -14,17 +14,17 @@ import {
   render,
   screen,
   waitFor,
+  within,
 } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { toast } from "sonner";
 import { WithTestQueryClient } from "@/__tests__/with-test-query-client";
+import type { DirectoryBot } from "@/lib/voice/directory";
 import { setPhoneLayoutOnly } from "@/lib/mobile-app";
-import { botTabIntent } from "@/lib/tab-navigation/intents";
-import { useBotOpenThreadStore } from "@/stores/bots/bot-open-thread-store";
 import { useTracySurfaceStore } from "@/stores/bots/tracy-surface-store";
 import {
   useVoiceSessionStore,
-  type VoiceFocus,
+  type CallFocus,
   type VoiceSessionDriver,
 } from "@/stores/voice/voice-session-store";
 import { VoiceSessionChrome } from "../voice-session-chrome";
@@ -32,51 +32,47 @@ import { useVoiceTopRowDrawn } from "../use-voice-top-row-drawn";
 import { VoiceTopRowControl } from "../voice-top-row";
 
 const BOT_ID = "bot-1";
-const FOCUS: VoiceFocus = {
+const FOCUS: CallFocus = {
   botId: BOT_ID,
   hostId: "host-a",
   threadId: null,
-  anchorMessageId: null,
-  anchorThread: null,
 };
 
-const navigation = vi.hoisted(() => ({
-  activateTabIntent: vi.fn<(intent: unknown) => void>(),
-}));
-vi.mock("@tanstack/react-router", () => ({ useNavigate: () => vi.fn() }));
-vi.mock("@/lib/tab-navigation", () => ({
-  activateTabIntent: (_navigate: unknown, intent: unknown) => {
-    navigation.activateTabIntent(intent);
-    return true;
+const DIRECTORY: ReadonlyArray<DirectoryBot> = [
+  {
+    botId: "bot-1",
+    title: "Tracy",
+    environmentId: "env-1",
+    environmentLabel: "Personal",
   },
+  {
+    botId: "bot-2",
+    title: "Scout",
+    environmentId: "env-2",
+    environmentLabel: "Acme",
+  },
+];
+
+// The dial's list is the directory suite's subject (call-control.test.tsx);
+// here it is the list the dial draws.
+const directory = vi.hoisted(() => ({
+  bots: [] as ReadonlyArray<DirectoryBot>,
 }));
-vi.mock("@/hooks/host/use-connectable-host-ids", () => ({
-  useConnectableHostIds: () => ({ hostIds: ["host-a"], resolved: true }),
+vi.mock("@/hooks/voice/use-voice-directory", () => ({
+  useVoiceDirectory: () => directory.bots,
 }));
-vi.mock("@/hooks/host/use-effective-host-id", () => ({
-  useEffectiveHostId: () => "host-a",
+vi.mock("@/hooks/host/use-host-client-for-host-id", () => ({
+  useHostClientForHostId: () => null,
 }));
-vi.mock("@/hooks/host/use-host-supports-method", () => ({
-  useHostMethodSupport: () => true,
+const runnerHost = vi.hoisted(() => ({
+  openMicrophoneSettings: vi.fn(),
+  signInUrl: "https://platform.test/sign-in",
 }));
-vi.mock("@/lib/host", () => ({ useHostClient: () => null }));
-const runnerHost = vi.hoisted(() => ({ openMicrophoneSettings: vi.fn() }));
 vi.mock("@/providers/use-runner-host", () => ({
   useRunnerHostOrNull: () => null,
   useRunnerHost: () => runnerHost,
 }));
-vi.mock("@/hooks/bots/use-bot-list-query", () => ({
-  useBotListQuery: () => ({
-    data: {
-      bots: [{ botId: "bot-1", title: "Tracy", environmentId: "env-1" }],
-    },
-  }),
-}));
-vi.mock("@/hooks/bots/use-environment-list-query", () => ({
-  useEnvironmentListQuery: () => ({
-    data: { environments: [{ environmentId: "env-1", label: "Personal" }] },
-  }),
-}));
+vi.mock("@/lib/links/open-link", () => ({ useOpenLink: () => vi.fn() }));
 
 const initial = useVoiceSessionStore.getState();
 
@@ -114,24 +110,39 @@ function renderChrome() {
   return render(<Chrome />, { wrapper: WithTestQueryClient });
 }
 
-/** A session that has gone live on the channel, not yet drawn. */
+/** A call that has gone live with Tracy, its view up. */
 function markLive(driver: FakeDriver): FakeDriver {
   act(() => {
-    useVoiceSessionStore.getState().sessionConnecting();
-    useVoiceSessionStore.setState({ phase: "live", focus: FOCUS, driver });
+    useVoiceSessionStore.getState().sessionConnecting(FOCUS, "Tracy");
+    useVoiceSessionStore.setState({ phase: "live", driver });
   });
   return driver;
 }
 
-/** A session that has gone live on the channel, drawn in the current layout. */
 function goLive(driver: FakeDriver): FakeDriver {
   markLive(driver);
   renderChrome();
   return driver;
 }
 
+/** The phone's dial up for Tracy, a thread of hers continued. */
+function goDial(driver: FakeDriver): FakeDriver {
+  act(() => {
+    useVoiceSessionStore.setState({ driver, availability: "live" });
+    useVoiceSessionStore
+      .getState()
+      .openDial({ botId: BOT_ID, threadId: "thread-1" }, "Tracy");
+  });
+  renderChrome();
+  return driver;
+}
+
 function talkState(): string | null {
   return screen.getByTestId("voice-phone-talk-state").textContent;
+}
+
+function viewState(): string | null {
+  return screen.getByTestId("voice-phone-view").getAttribute("data-view");
 }
 
 // jsdom has no pointer capture; the talk button takes it on press.
@@ -142,7 +153,7 @@ const pointerCapture = Object.getOwnPropertyDescriptor(
 
 beforeEach(() => {
   useVoiceSessionStore.setState(initial, true);
-  navigation.activateTabIntent.mockReset();
+  directory.bots = DIRECTORY;
   runnerHost.openMicrophoneSettings.mockReset();
   runnerHost.openMicrophoneSettings.mockResolvedValue(undefined);
   setPhoneLayoutOnly(true);
@@ -169,18 +180,124 @@ afterEach(() => {
       pointerCapture,
     );
   }
-  useBotOpenThreadStore.getState().setRail(BOT_ID, null);
 });
 
-describe("the phone voice view", () => {
-  it("opens on the open microphone, and a tap on the talk button mutes it", async () => {
+describe("the phone call view, dialling", () => {
+  it("lists the directory's bots with the one whose header was tapped selected", () => {
+    goDial(makeDriver());
+
+    expect(viewState()).toBe("dial");
+    const bots = screen.getAllByRole("radio");
+    expect(bots.map((bot) => bot.closest("label")?.textContent)).toEqual([
+      "TracyPersonal",
+      "ScoutAcme",
+    ]);
+    expect(bots.map((bot) => bot.getAttribute("aria-checked"))).toEqual([
+      "true",
+      "false",
+    ]);
+  });
+
+  it("calls the preselected bot into the thread the dial came from", async () => {
+    const driver = goDial(makeDriver());
+
+    await userEvent.click(screen.getByRole("button", { name: "Call" }));
+
+    expect(driver.start).toHaveBeenCalledTimes(1);
+    expect(driver.start).toHaveBeenCalledWith({
+      botId: BOT_ID,
+      threadId: "thread-1",
+    });
+  });
+
+  it("calls another bot into a new thread", async () => {
+    const driver = goDial(makeDriver());
+
+    await userEvent.click(screen.getByRole("radio", { name: /Scout/ }));
+    await userEvent.click(screen.getByRole("button", { name: "Call" }));
+
+    expect(driver.start).toHaveBeenCalledTimes(1);
+    expect(driver.start).toHaveBeenCalledWith({
+      botId: "bot-2",
+      threadId: null,
+    });
+  });
+
+  it("lists the preselected bot alone while the directory is not read yet", async () => {
+    directory.bots = [];
+    const driver = goDial(makeDriver());
+
+    expect(screen.getAllByRole("radio")).toHaveLength(1);
+    await userEvent.click(screen.getByRole("button", { name: "Call" }));
+    expect(driver.start).toHaveBeenCalledWith({
+      botId: BOT_ID,
+      threadId: "thread-1",
+    });
+  });
+
+  it("places nothing until Call is pressed, and Close lowers the dial and the view", async () => {
+    const driver = goDial(makeDriver());
+    expect(driver.start).not.toHaveBeenCalled();
+
+    await userEvent.click(screen.getByRole("button", { name: "Close" }));
+
+    await waitFor(() =>
+      expect(screen.queryByTestId("voice-phone-view")).toBeNull(),
+    );
+    expect(useVoiceSessionStore.getState()).toMatchObject({
+      dial: null,
+      phoneViewOpen: false,
+    });
+    expect(driver.start).not.toHaveBeenCalled();
+  });
+
+  it("lowers the dial on the back gesture", async () => {
+    goDial(makeDriver());
+
+    await userEvent.keyboard("{Escape}");
+
+    await waitFor(() =>
+      expect(screen.queryByTestId("voice-phone-view")).toBeNull(),
+    );
+    expect(useVoiceSessionStore.getState().dial).toBeNull();
+  });
+
+  it("gives way to the call once it is placed", () => {
+    goDial(makeDriver());
+    expect(viewState()).toBe("dial");
+
+    act(() =>
+      useVoiceSessionStore.getState().sessionConnecting(FOCUS, "Tracy"),
+    );
+
+    expect(viewState()).toBe("call");
+    expect(screen.queryByTestId("call-dial")).toBeNull();
+  });
+});
+
+describe("the phone call view, on a call", () => {
+  it("names the bot, opens on the open microphone, and a tap on the talk button mutes it", async () => {
     const driver = goLive(makeDriver());
 
+    expect(viewState()).toBe("call");
+    expect(screen.getByTestId("voice-phone-bot").textContent).toBe("Tracy");
     expect(talkState()).toBe("Listening · tap to mute");
     await userEvent.click(screen.getByRole("button", { name: "Mute" }));
 
     expect(driver.setMuted).toHaveBeenCalledTimes(1);
     expect(driver.setMuted).toHaveBeenCalledWith(true);
+  });
+
+  it("says Calling the bot while connecting, with the talk button unavailable", () => {
+    useVoiceSessionStore.getState().sessionConnecting(FOCUS, "Tracy");
+    useVoiceSessionStore.setState({ driver: makeDriver() });
+    renderChrome();
+
+    expect(talkState()).toBe("Calling Tracy…");
+    expect(screen.getByTestId("voice-phone-talk")).toHaveProperty(
+      "disabled",
+      true,
+    );
   });
 
   it("holds the microphone open only while the talk button is held under push-to-talk, and the open microphone returns on the switch back", async () => {
@@ -213,7 +330,7 @@ describe("the phone voice view", () => {
     expect(talkState()).toBe("Listening · tap to mute");
   });
 
-  it("draws no captions until they are turned on, then the empty line, then each speaker's words", async () => {
+  it("draws no captions until they are turned on, then the empty line, then each speaker's words by name", async () => {
     goLive(makeDriver());
     act(() => {
       useVoiceSessionStore
@@ -236,7 +353,7 @@ describe("the phone voice view", () => {
     expect(lines.textContent).not.toContain("never kept");
   });
 
-  it("ends the session from the cross", async () => {
+  it("ends the call from the cross", async () => {
     const driver = goLive(makeDriver());
 
     await userEvent.click(screen.getByTestId("voice-phone-end"));
@@ -244,71 +361,39 @@ describe("the phone voice view", () => {
     expect(driver.end).toHaveBeenCalledTimes(1);
   });
 
-  it("puts the view down on the focus line, keeps the session in the bar, and the bar brings the view back or ends the session", async () => {
+  it("puts the view down on the bot's name, keeps the call in the bar, and the bar brings the view back or ends the call", async () => {
     const driver = goLive(makeDriver());
     expect(screen.queryByTestId("voice-phone-bar")).toBeNull();
-    expect(screen.getByTestId("voice-phone-focus").textContent).toContain(
-      "Tracy",
-    );
 
-    await userEvent.click(screen.getByTestId("voice-phone-focus"));
+    await userEvent.click(screen.getByTestId("voice-phone-bot"));
 
     await waitFor(() =>
       expect(screen.queryByTestId("voice-phone-view")).toBeNull(),
     );
     expect(useVoiceSessionStore.getState().phase).toBe("live");
-    expect(navigation.activateTabIntent).toHaveBeenCalledWith(
-      botTabIntent(BOT_ID),
-    );
     expect(screen.getByTestId("voice-phone-bar-state").textContent).toBe(
       "Listening · tap to mute",
+    );
+    expect(screen.getByTestId("voice-phone-bar").textContent).toContain(
+      "Tracy",
     );
 
     await userEvent.click(screen.getByTestId("voice-phone-bar-open"));
     await screen.findByTestId("voice-phone-view");
     expect(screen.queryByTestId("voice-phone-bar")).toBeNull();
 
-    await userEvent.click(screen.getByTestId("voice-phone-focus"));
+    await userEvent.click(screen.getByTestId("voice-phone-bot"));
     await screen.findByTestId("voice-phone-bar");
     await userEvent.click(screen.getByTestId("voice-phone-bar-end"));
     expect(driver.end).toHaveBeenCalledTimes(1);
   });
 
-  it("says on return that the session ended in the background", () => {
-    act(() => useVoiceSessionStore.getState().sessionEnded("background"));
-    renderChrome();
-
-    expect(screen.getByTestId("voice-strip-state").textContent).toBe(
-      "Voice ended when you left the app.",
-    );
-    expect(screen.queryByTestId("voice-phone-view")).toBeNull();
-    expect(screen.queryByRole("button", { name: "Open Settings" })).toBeNull();
-  });
-
-  it("sends a refused microphone to the OS settings page", async () => {
-    act(() =>
-      useVoiceSessionStore.getState().sessionRefused("microphone-denied"),
-    );
-    renderChrome();
-
-    expect(screen.getByTestId("voice-strip-state").textContent).toBe(
-      "Voice needs the microphone. Allow it in Settings.",
-    );
-    await userEvent.click(
-      screen.getByRole("button", { name: "Open Settings" }),
-    );
-
-    expect(runnerHost.openMicrophoneSettings).toHaveBeenCalledTimes(1);
-  });
-
-  it("lets go of a held talk button when Escape puts the view down, with no release sent", async () => {
+  it("lets go of a held talk button when Escape puts the view down, with the call still live", async () => {
     goLive(makeDriver());
     await userEvent.click(screen.getByRole("button", { name: "Push to talk" }));
     fireEvent.pointerDown(
       screen.getByRole("button", { name: "Hold to talk" }),
-      {
-        pointerId: 1,
-      },
+      { pointerId: 1 },
     );
     expect(useVoiceSessionStore.getState().talkHeld).toBe(true);
 
@@ -329,9 +414,7 @@ describe("the phone voice view", () => {
     await userEvent.click(screen.getByRole("button", { name: "Push to talk" }));
     fireEvent.pointerDown(
       screen.getByRole("button", { name: "Hold to talk" }),
-      {
-        pointerId: 1,
-      },
+      { pointerId: 1 },
     );
     expect(useVoiceSessionStore.getState().talkHeld).toBe(true);
 
@@ -340,50 +423,106 @@ describe("the phone voice view", () => {
     expect(useVoiceSessionStore.getState().talkHeld).toBe(false);
   });
 
-  it("leaves push-to-talk with the microphone closed when the layout widens to the desktop one", async () => {
-    markLive(makeDriver());
-    const { rerender } = renderChrome();
-    await userEvent.click(screen.getByRole("button", { name: "Push to talk" }));
-    expect(screen.queryByTestId("voice-strip-mute")).toBeNull();
+  it("reads Call paused for dictation, with Resume and the talk button unavailable", () => {
+    goLive(makeDriver());
+    act(() => useVoiceSessionStore.getState().acquireDictationHold("composer"));
 
-    setPhoneLayoutOnly(false);
-    rerender(<Chrome />);
-
-    expect(useVoiceSessionStore.getState()).toMatchObject({
-      pushToTalk: false,
-      talkHeld: false,
-      muted: true,
-    });
-    expect(screen.getByTestId("voice-strip-mute").textContent).toContain(
-      "Unmute",
+    expect(talkState()).toBe("Call paused for dictation");
+    expect(screen.getByTestId("voice-phone-talk")).toHaveProperty(
+      "disabled",
+      true,
     );
-    expect(screen.queryByTestId("voice-phone-view")).toBeNull();
+    expect(screen.getByRole("button", { name: "Resume" })).toBeTruthy();
+  });
+});
+
+describe("the phone call view, after the call", () => {
+  it("keeps the view up with how the call ended, naming the bot, until it is dismissed", async () => {
+    goLive(makeDriver());
+    act(() => useVoiceSessionStore.getState().sessionEnded("unreachable"));
+
+    expect(viewState()).toBe("ended");
+    expect(
+      within(screen.getByTestId("voice-phone-ended")).getByTestId(
+        "voice-strip-state",
+      ).textContent,
+    ).toBe("Call ended: Tracy can't be reached right now.");
+
+    await userEvent.click(screen.getByRole("button", { name: "Dismiss" }));
+
+    await waitFor(() =>
+      expect(screen.queryByTestId("voice-phone-view")).toBeNull(),
+    );
+    expect(useVoiceSessionStore.getState()).toMatchObject({
+      endReason: null,
+      phoneViewOpen: false,
+    });
   });
 
-  it("never mutes an open-microphone session when the layout widens", () => {
-    markLive(makeDriver());
-    const { rerender } = renderChrome();
+  it("puts the line away on the back gesture", async () => {
+    goLive(makeDriver());
+    act(() => useVoiceSessionStore.getState().sessionEnded("ended"));
 
-    setPhoneLayoutOnly(false);
-    rerender(<Chrome />);
+    await userEvent.keyboard("{Escape}");
 
-    expect(useVoiceSessionStore.getState().muted).toBe(false);
-    expect(screen.getByTestId("voice-strip-mute").textContent).toContain(
-      "Mute",
+    await waitFor(() =>
+      expect(screen.queryByTestId("voice-phone-view")).toBeNull(),
     );
-    expect(screen.getByTestId("voice-strip-mute").textContent).not.toContain(
-      "Unmute",
+    expect(useVoiceSessionStore.getState().endReason).toBeNull();
+  });
+
+  it("says in the bar that a call ended in the background when the view was down", async () => {
+    goLive(makeDriver());
+    await userEvent.click(screen.getByTestId("voice-phone-bot"));
+    await screen.findByTestId("voice-phone-bar");
+
+    act(() => useVoiceSessionStore.getState().sessionEnded("background"));
+
+    expect(screen.queryByTestId("voice-phone-view")).toBeNull();
+    expect(screen.getByTestId("voice-strip-state").textContent).toBe(
+      "Call ended when you left the app.",
     );
+    expect(screen.queryByRole("button", { name: "Open Settings" })).toBeNull();
+  });
+
+  it("shows a paused bot's own line for a refused dial", () => {
+    goDial(makeDriver());
+    act(() =>
+      useVoiceSessionStore
+        .getState()
+        .sessionRefused("paused", "Tracy is paused until Friday."),
+    );
+
+    expect(viewState()).toBe("ended");
+    expect(screen.getByTestId("voice-strip-state").textContent).toBe(
+      "Tracy is paused until Friday.",
+    );
+  });
+
+  it("sends a refused microphone to the OS settings page", async () => {
+    goDial(makeDriver());
+    act(() =>
+      useVoiceSessionStore.getState().sessionRefused("microphone-denied", null),
+    );
+
+    expect(screen.getByTestId("voice-strip-state").textContent).toBe(
+      "Calls need the microphone. Allow it in Settings.",
+    );
+    await userEvent.click(
+      screen.getByRole("button", { name: "Open Settings" }),
+    );
+
+    expect(runnerHost.openMicrophoneSettings).toHaveBeenCalledTimes(1);
   });
 
   it("tells the person when the settings page could not be opened", async () => {
     runnerHost.openMicrophoneSettings.mockRejectedValue(
       new Error("no settings app"),
     );
+    goDial(makeDriver());
     act(() =>
-      useVoiceSessionStore.getState().sessionRefused("microphone-denied"),
+      useVoiceSessionStore.getState().sessionRefused("microphone-denied", null),
     );
-    renderChrome();
 
     await userEvent.click(
       screen.getByRole("button", { name: "Open Settings" }),
@@ -409,10 +548,10 @@ describe("the phone voice view", () => {
         finish = resolve;
       }),
     );
+    goDial(makeDriver());
     act(() =>
-      useVoiceSessionStore.getState().sessionRefused("microphone-denied"),
+      useVoiceSessionStore.getState().sessionRefused("microphone-denied", null),
     );
-    renderChrome();
 
     await userEvent.click(
       screen.getByRole("button", { name: "Open Settings" }),
@@ -430,6 +569,44 @@ describe("the phone voice view", () => {
       ).toHaveProperty("disabled", false),
     );
     expect(runnerHost.openMicrophoneSettings).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("the desktop layout", () => {
+  it("leaves push-to-talk with the microphone closed when the layout widens to the desktop one", async () => {
+    markLive(makeDriver());
+    const { rerender } = renderChrome();
+    await userEvent.click(screen.getByRole("button", { name: "Push to talk" }));
+    expect(screen.queryByTestId("voice-strip-mute")).toBeNull();
+
+    setPhoneLayoutOnly(false);
+    rerender(<Chrome />);
+
+    expect(useVoiceSessionStore.getState()).toMatchObject({
+      pushToTalk: false,
+      talkHeld: false,
+      muted: true,
+    });
+    expect(screen.getByTestId("voice-strip-mute").textContent).toContain(
+      "Unmute",
+    );
+    expect(screen.queryByTestId("voice-phone-view")).toBeNull();
+  });
+
+  it("never mutes an open-microphone call when the layout widens", () => {
+    markLive(makeDriver());
+    const { rerender } = renderChrome();
+
+    setPhoneLayoutOnly(false);
+    rerender(<Chrome />);
+
+    expect(useVoiceSessionStore.getState().muted).toBe(false);
+    expect(screen.getByTestId("voice-strip-mute").textContent).toContain(
+      "Mute",
+    );
+    expect(screen.getByTestId("voice-strip-mute").textContent).not.toContain(
+      "Unmute",
+    );
   });
 
   it("is the strip, not the phone view, on the desktop layout", () => {

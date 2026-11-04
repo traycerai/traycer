@@ -12,19 +12,17 @@ import { useBotOpenThreadStore } from "@/stores/bots/bot-open-thread-store";
 import { useTracySurfaceStore } from "@/stores/bots/tracy-surface-store";
 import {
   useVoiceSessionStore,
-  type VoiceFocus,
+  type CallFocus,
   type VoiceSessionDriver,
 } from "@/stores/voice/voice-session-store";
 import { VoiceSessionChrome } from "@/components/layout/voice/voice-session-chrome";
 import { VoiceColumnTopRow } from "../voice-top-row";
 
 const BOT_ID = "bot-1";
-const FOCUS: VoiceFocus = {
+const FOCUS: CallFocus = {
   botId: BOT_ID,
   hostId: "host-a",
   threadId: null,
-  anchorMessageId: null,
-  anchorThread: null,
 };
 
 const viewport = vi.hoisted(() => ({ phone: false }));
@@ -73,22 +71,7 @@ vi.mock("@/components/resources/resource-monitor-popover", () => ({
   ResourceMonitorPopover: () => null,
 }));
 
-// The strip's own boundaries, as the strip suite stands them.
-vi.mock("@tanstack/react-router", () => ({ useNavigate: () => vi.fn() }));
-vi.mock("@/lib/tab-navigation", () => ({ activateTabIntent: () => true }));
-vi.mock("@/hooks/host/use-connectable-host-ids", () => ({
-  useConnectableHostIds: () => ({ hostIds: ["host-a"], resolved: true }),
-}));
-vi.mock("@/hooks/host/use-effective-host-id", () => ({
-  useEffectiveHostId: () => "host-a",
-}));
-vi.mock("@/hooks/host/use-host-supports-method", () => ({
-  useHostMethodSupport: () => true,
-}));
-vi.mock("@/lib/host", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("@/lib/host")>()),
-  useHostClient: () => null,
-}));
+// The strip's own boundary: its ended line reads the billing account.
 vi.mock("@/providers/use-runner-host", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/providers/use-runner-host")>()),
   useRunnerHost: () => ({
@@ -96,23 +79,11 @@ vi.mock("@/providers/use-runner-host", async (importOriginal) => ({
     signInUrl: "https://platform.test/sign-in",
   }),
 }));
-vi.mock("@/hooks/bots/use-bot-list-query", () => ({
-  useBotListQuery: () => ({
-    data: {
-      bots: [{ botId: "bot-1", title: "Tracy", environmentId: "env-1" }],
-    },
-  }),
-}));
-vi.mock("@/hooks/bots/use-environment-list-query", () => ({
-  useEnvironmentListQuery: () => ({
-    data: { environments: [{ environmentId: "env-1", label: "Personal" }] },
-  }),
-}));
 
 interface ChromeCase {
   readonly label: string;
   readonly chrome: AppColumnChrome;
-  /** The test id of the element Talk is drawn in for this chrome. */
+  /** The test id of the element the strip is drawn in for this chrome. */
   readonly row: "app-header-centre-zone" | "voice-top-row";
 }
 
@@ -190,17 +161,11 @@ function makeDriver(): VoiceSessionDriver {
   };
 }
 
-function offerVoice(): void {
+function startCall(): void {
   act(() => {
-    useVoiceSessionStore.setState({
-      availability: "live",
-      driver: makeDriver(),
-    });
+    useVoiceSessionStore.getState().sessionConnecting(FOCUS, "Tracy");
+    useVoiceSessionStore.setState({ phase: "live", driver: makeDriver() });
   });
-}
-
-function talkButtons(): ReadonlyArray<HTMLElement> {
-  return screen.queryAllByRole("button", { name: "Talk" });
 }
 
 function rowOf(testId: ChromeCase["row"]): HTMLElement {
@@ -231,23 +196,20 @@ describe("the soundtrack's toggle in the window's top row", () => {
   });
 
   it.each(CHROME_CASES)(
-    "has the row to itself in a deployment with no voice, with the $label",
+    "has the row to itself while no call runs, with the $label",
     ({ chrome, row }) => {
       renderColumn(chrome, "task-tab");
 
       expect(
         within(rowOf(row)).getByRole("button", { name: "Soundtrack" }),
       ).toBeTruthy();
-      expect(talkButtons()).toHaveLength(0);
+      expect(screen.queryByTestId("voice-session-strip")).toBeNull();
     },
   );
 
-  it("stays beside the session strip while a session is live", () => {
-    offerVoice();
+  it("stays beside the call strip while a call is live", () => {
     renderColumn(RIGHT_NONE.chrome, "task-tab");
-    act(() => {
-      useVoiceSessionStore.setState({ phase: "live", focus: FOCUS });
-    });
+    startCall();
 
     const row = within(rowOf(RIGHT_NONE.row));
     expect(row.getByTestId("voice-session-strip")).toBeTruthy();
@@ -263,16 +225,16 @@ describe("the soundtrack's toggle in the window's top row", () => {
   });
 });
 
-describe("Talk in the window's top row", () => {
+describe("the call strip in the window's top row", () => {
   it.each(CHROME_CASES)(
-    "is mounted exactly once, in the top row, with the $label",
+    "is mounted exactly once, in the top row, while a call runs, with the $label",
     ({ chrome, row }) => {
-      offerVoice();
+      startCall();
       renderColumn(chrome, "task-tab");
 
-      const talk = talkButtons();
-      expect(talk).toHaveLength(1);
-      expect(rowOf(row).contains(talk[0] ?? null)).toBe(true);
+      const strips = screen.getAllByRole("region", { name: "Call" });
+      expect(strips).toHaveLength(1);
+      expect(rowOf(row).contains(strips[0] ?? null)).toBe(true);
       if (chrome.titleBand === "header") {
         // The header carries it, beside the tabs; the frame adds no row.
         expect(screen.queryByTestId("voice-top-row")).toBeNull();
@@ -288,44 +250,35 @@ describe("Talk in the window's top row", () => {
   );
 
   it.each(CHROME_CASES)(
-    "draws no row, and takes no height, while voice is dormant or unknown, with the $label",
+    "draws no row, and takes no height, with no call and nothing else to carry, with the $label",
     ({ chrome, row }) => {
-      offerVoice();
       renderColumn(chrome, "task-tab");
-      expect(screen.queryByTestId(row)).not.toBeNull();
 
-      act(() => useVoiceSessionStore.getState().setAvailability("dormant"));
       expect(screen.queryByTestId(row)).toBeNull();
       expect(screen.queryByTestId("app-header-centre-gap")).toBeNull();
-      expect(talkButtons()).toHaveLength(0);
-
-      act(() => useVoiceSessionStore.getState().setAvailability("unknown"));
-      expect(screen.queryByTestId(row)).toBeNull();
-      expect(screen.queryByTestId("app-header-centre-gap")).toBeNull();
-      expect(talkButtons()).toHaveLength(0);
+      expect(screen.queryByRole("region", { name: "Call" })).toBeNull();
     },
   );
 
-  it("stays in a desktop window zoomed under the phone breakpoint, whose header stays the desktop one", () => {
+  it.each(CHROME_CASES)(
+    "needs no offer from the server to draw a call that runs, with the $label",
+    ({ chrome, row }) => {
+      // Voice availability gates where a call is placed, never the strip of
+      // one that already runs.
+      useVoiceSessionStore.getState().setAvailability("dormant");
+      startCall();
+      renderColumn(chrome, "task-tab");
+
+      expect(
+        within(rowOf(row)).getByRole("button", { name: "End" }),
+      ).toBeTruthy();
+    },
+  );
+
+  it("stays in a desktop window zoomed under the phone breakpoint, whose header stays the desktop one, with no phone chrome", () => {
     viewport.phone = true;
     desktopMenus.active = true;
-    offerVoice();
-    renderColumn({ placement: "top", titleBand: "header" }, "zoomed");
-
-    expect(
-      within(screen.getByTestId("app-header-centre-zone")).getAllByRole(
-        "button",
-        { name: "Talk" },
-      ),
-    ).toHaveLength(1);
-    expect(screen.getAllByRole("button", { name: "Talk" })).toHaveLength(1);
-  });
-
-  it("draws the strip and no phone chrome for a live session in that window", () => {
-    viewport.phone = true;
-    desktopMenus.active = true;
-    offerVoice();
-    useVoiceSessionStore.setState({ phase: "live" });
+    startCall();
     renderColumn({ placement: "top", titleBand: "header" }, "zoomed");
     render(<VoiceSessionChrome />);
 
@@ -338,38 +291,23 @@ describe("Talk in the window's top row", () => {
     expect(screen.queryByTestId("voice-phone-view")).toBeNull();
   });
 
-  it("is not drawn in the phone layout, whatever the session is doing", () => {
+  it("is not drawn in the phone layout, whatever the call is doing", () => {
     viewport.phone = true;
-    offerVoice();
     renderColumn({ placement: "left", titleBand: "none" }, "task-tab");
 
     expect(screen.queryByTestId("voice-top-row")).toBeNull();
-    expect(talkButtons()).toHaveLength(0);
 
-    act(() => {
-      useVoiceSessionStore.setState({ phase: "live", focus: FOCUS });
-    });
+    startCall();
     expect(screen.queryByTestId("voice-top-row")).toBeNull();
     expect(screen.queryByTestId("voice-session-strip")).toBeNull();
   });
 
   it.each(CHROME_CASES)(
-    "gives the row to the session strip while it is live, and gets it back after Dismiss, with the $label",
+    "holds the row for the line about the end until Dismiss, then gives it back, with the $label",
     async ({ chrome, row }) => {
-      offerVoice();
       renderColumn(chrome, "task-tab");
+      startCall();
       const rowElement = rowOf(row);
-      expect(rowElement.contains(talkButtons()[0] ?? null)).toBe(true);
-
-      act(() => {
-        useVoiceSessionStore.getState().sessionConnecting();
-        useVoiceSessionStore.setState({ phase: "live", focus: FOCUS });
-      });
-
-      expect(talkButtons()).toHaveLength(0);
-      const strip = screen.getByRole("region", { name: "Voice session" });
-      expect(rowOf(row)).toBe(rowElement);
-      expect(rowElement.contains(strip)).toBe(true);
       expect(
         within(rowElement).getByRole("button", { name: "End" }),
       ).toBeTruthy();
@@ -377,33 +315,30 @@ describe("Talk in the window's top row", () => {
       act(() => useVoiceSessionStore.getState().sessionEnded("ended"));
 
       // The line about the end stays in the same row until it is dismissed.
-      expect(talkButtons()).toHaveLength(0);
+      expect(rowOf(row)).toBe(rowElement);
       expect(
         within(rowElement).getByTestId("voice-strip-state").textContent,
-      ).toBe("Voice ended.");
+      ).toBe("Call ended.");
       await userEvent.click(
         within(rowElement).getByRole("button", { name: "Dismiss" }),
       );
 
-      expect(rowOf(row)).toBe(rowElement);
-      expect(talkButtons()).toHaveLength(1);
-      expect(rowElement.contains(talkButtons()[0] ?? null)).toBe(true);
+      expect(screen.queryByTestId(row)).toBeNull();
       expect(screen.queryByTestId("voice-session-strip")).toBeNull();
     },
   );
 
   it.each([TOP_HEADER, RIGHT_NONE])(
-    "keeps exactly one Talk, and the same one, when the surface content is replaced, with the $label",
+    "keeps exactly one strip, and the same one, when the surface content is replaced, with the $label",
     ({ chrome }) => {
-      offerVoice();
+      startCall();
       const view = renderColumn(chrome, "surface-a");
-      const first = talkButtons()[0];
-      expect(talkButtons()).toHaveLength(1);
+      const first = screen.getByRole("region", { name: "Call" });
 
       view.rerender(<Column chrome={chrome} surfaceId="surface-b" />);
       expect(screen.getByTestId("surface-surface-b")).toBeTruthy();
-      expect(talkButtons()).toHaveLength(1);
-      expect(talkButtons()[0]).toBe(first);
+      expect(screen.getAllByRole("region", { name: "Call" })).toHaveLength(1);
+      expect(screen.getByRole("region", { name: "Call" })).toBe(first);
     },
   );
 });

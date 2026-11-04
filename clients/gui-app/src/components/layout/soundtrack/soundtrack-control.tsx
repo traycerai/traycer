@@ -34,7 +34,7 @@ export function SoundtrackShortcutBridge(): ReactNode {
 }
 
 /**
- * The soundtrack's toggle, beside Talk in the window's top row: the glyph alone,
+ * The soundtrack's toggle, beside the call strip in the window's top row: the glyph alone,
  * because a zoomed window has no room left for a second name there. Not drawn in
  * a build with nothing to play.
  */

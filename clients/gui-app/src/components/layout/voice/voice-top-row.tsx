@@ -3,7 +3,6 @@ import { APP_HEADER_HEIGHT_CLASS } from "@/components/layout/header/app-header-h
 import type { AppTitleBandKind } from "@/components/layout/header/app-title-band-kind";
 import { isFramelessDesktop } from "@/components/layout/header/title-bar-drag";
 import { SoundtrackControl } from "@/components/layout/soundtrack/soundtrack-control";
-import { TalkControl } from "@/components/layout/voice/talk-control";
 import { VoiceSessionStrip } from "@/components/layout/voice/voice-session-strip";
 import {
   useVoiceTopRowDrawn,
@@ -14,10 +13,10 @@ import { useTitleBarDraggingSuppressed } from "@/stores/layout/title-bar-drag-st
 import { useVoiceSessionStore } from "@/stores/voice/voice-session-store";
 
 /**
- * What the top row carries: Talk, or the strip in its place, so the eye never
- * moves, and the soundtrack's toggle beside it. The dynamic action registry is
- * single-handler and this is Talk's only desktop mount; each chrome kind draws
- * exactly one of these.
+ * What the top row carries: the call strip while a call runs or its line
+ * shows, and the soundtrack's toggle beside it. A call is placed from a bot
+ * surface's Call control; the row only follows it across every tab. Each
+ * chrome kind draws exactly one of these.
  *
  * Three columns, so that the middle one stays on the row's middle with the
  * toggle in the last. The empty first column is as wide as the toggle's until
@@ -29,7 +28,7 @@ export function VoiceTopRowControl(): ReactNode {
   return (
     <div className="grid min-w-0 grid-cols-[1fr_auto_1fr] items-center self-stretch">
       <div className="col-start-2 flex items-center self-stretch">
-        {showStrip ? <VoiceSessionStrip /> : <TalkControl form="label" />}
+        {showStrip ? <VoiceSessionStrip /> : null}
       </div>
       <SoundtrackControl />
     </div>

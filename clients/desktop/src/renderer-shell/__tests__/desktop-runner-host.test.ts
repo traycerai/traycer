@@ -161,10 +161,6 @@ function buildFakeBridge(
       kind: "network-error" as const,
       detail: "test",
     }),
-    routeVoiceUtterance: async () => ({
-      kind: "network-error" as const,
-      detail: "test",
-    }),
     setVoiceSessionLive: async () => undefined,
     setVoiceSessionIndicator: async () => undefined,
     createSandbox: async () => ({

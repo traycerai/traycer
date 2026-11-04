@@ -7,26 +7,29 @@ declare global {
     __voiceTopRowErrors?: string[];
     __voiceTopRowProbe?: {
       readonly fillTabs: (width: number) => void;
-      readonly offerVoice: () => void;
-      readonly goLive: () => void;
+      readonly startCall: () => void;
+      readonly showCaptions: () => void;
       readonly openTabs: (count: number) => void;
     };
   }
 }
 
-// Where Talk and the session strip land is real layout: the middle of the
-// content column, in the window's top row, whatever draws that row.
+// Where the call strip lands is real layout: the middle of the content column,
+// in the window's top row, whatever draws that row.
 
 test.use({ viewport: { width: 1400, height: 800 }, deviceScaleFactor: 1 });
 
-const talk = (page: Page): Locator =>
-  page.getByRole("button", { name: "Talk" });
+const strip = (page: Page): Locator => page.getByTestId("voice-session-strip");
 
 // Drawn because this fixture is a development build, which has a soundtrack.
 const soundtrack = (page: Page): Locator =>
   page.getByRole("button", { name: "Soundtrack" });
 
-async function open(page: Page, query: string): Promise<void> {
+async function open(
+  page: Page,
+  query: string,
+  withCall: boolean,
+): Promise<void> {
   await page.addInitScript(() => {
     window.__voiceTopRowErrors = [];
     window.addEventListener("error", (event) => {
@@ -36,8 +39,9 @@ async function open(page: Page, query: string): Promise<void> {
   await page.goto(`${fixture("voice-top-row")}?${query}`);
   await page.waitForFunction(() => window.__voiceTopRowProbe !== undefined);
   await page.locator("main").waitFor();
-  await page.evaluate(() => window.__voiceTopRowProbe?.offerVoice());
-  await talk(page).waitFor();
+  if (!withCall) return;
+  await page.evaluate(() => window.__voiceTopRowProbe?.startCall());
+  await strip(page).waitFor();
 }
 
 interface Box {
@@ -107,29 +111,33 @@ async function expectFixedTabControlsClearOfZone(page: Page): Promise<void> {
   expect(hit).toBe(true);
 }
 
-test("Talk is on the middle of the header with the tabs at the top", async ({
+test("the strip is on the middle of the header with the tabs at the top", async ({
   page,
 }) => {
-  await open(page, "placement=top");
+  await open(page, "placement=top", true);
+  const main = await middleOf(page.locator("main"));
   await expect
-    .poll(() => middleOf(talk(page)))
-    .toBeCloseTo(await middleOf(page.locator("main")), 0);
-  const talkBox = await talk(page).boundingBox();
-  const headerBox = await page.getByTestId("app-header").boundingBox();
-  expect(talkBox?.y).toBeGreaterThanOrEqual(headerBox?.y ?? Infinity);
-  expect((talkBox?.y ?? 0) + (talkBox?.height ?? 0)).toBeLessThanOrEqual(
-    (headerBox?.y ?? 0) + (headerBox?.height ?? 0),
+    .poll(async () => {
+      const zone = await boxOf(page.getByTestId("app-header-centre-zone"));
+      return Math.abs(zone.x + zone.width / 2 - main);
+    })
+    .toBeLessThan(1);
+  const stripBox = await boxOf(strip(page));
+  const headerBox = await boxOf(page.getByTestId("app-header"));
+  expect(stripBox.y).toBeGreaterThanOrEqual(headerBox.y);
+  expect(stripBox.y + stripBox.height).toBeLessThanOrEqual(
+    headerBox.y + headerBox.height,
   );
 });
 
-test("long tabs push Talk right and give up only the room it needs", async ({
+test("long tabs push the strip right and give up only the room it needs", async ({
   page,
 }) => {
-  await open(page, "placement=top");
+  await open(page, "placement=top", true);
   await page.evaluate(() => window.__voiceTopRowProbe?.fillTabs(900));
   const tabs = page.locator("[data-fixture-tabs]");
   await expect
-    .poll(async () => (await talk(page).boundingBox())?.x ?? 0)
+    .poll(async () => (await strip(page).boundingBox())?.x ?? 0)
     .toBeGreaterThan(900);
   await expect.poll(async () => (await boxOf(tabs)).width).toBe(900);
   const header = await page.getByTestId("app-header").boundingBox();
@@ -139,29 +147,29 @@ test("long tabs push Talk right and give up only the room it needs", async ({
   );
 });
 
-test("Talk rises into the title band, on the column's middle, adding no height", async ({
+test("the strip rises into the title band, on the column's middle, adding no height", async ({
   page,
 }) => {
-  await open(page, "placement=right&wco=mac");
+  await open(page, "placement=right&wco=mac", true);
   const row = page.getByTestId("voice-top-row");
   await expect(row).toHaveAttribute("data-title-band", "band");
-  expect(await middleOf(talk(page))).toBeCloseTo(
+  expect(await middleOf(strip(page))).toBeCloseTo(
     await middleOf(page.locator("main")),
     0,
   );
   const band = await page.getByTestId("app-title-band").boundingBox();
   const main = await page.locator("main").boundingBox();
   expect(main?.y).toBe((band?.y ?? 0) + (band?.height ?? 0));
-  expect((await talk(page).boundingBox())?.y).toBeLessThan(band?.height ?? 0);
+  expect((await strip(page).boundingBox())?.y).toBeLessThan(band?.height ?? 0);
 });
 
-test("with no band a row carries Talk, as tall as the band, beside the strip", async ({
+test("with no band a row carries the strip, as tall as the band, beside the strip of tabs", async ({
   page,
 }) => {
-  await open(page, "placement=left&wco=mac");
+  await open(page, "placement=left&wco=mac", true);
   const row = page.getByTestId("voice-top-row");
   await expect(row).toHaveAttribute("data-title-band", "none");
-  expect(await middleOf(talk(page))).toBeCloseTo(
+  expect(await middleOf(strip(page))).toBeCloseTo(
     await middleOf(page.locator("main")),
     0,
   );
@@ -172,23 +180,18 @@ test("with no band a row carries Talk, as tall as the band, beside the strip", a
   expect((await page.locator("[data-fixture-strip]").boundingBox())?.y).toBe(0);
 });
 
-test("the strip takes Talk's place, and captions hang over the content", async ({
-  page,
-}) => {
-  await open(page, "placement=left");
+test("captions hang over the content without moving it", async ({ page }) => {
+  await open(page, "placement=left", true);
   const before = await page.locator("main").boundingBox();
-  await page.evaluate(() => window.__voiceTopRowProbe?.goLive());
-  const strip = page.getByTestId("voice-session-strip");
-  await strip.waitFor();
-  await expect(talk(page)).toHaveCount(0);
-  expect(await middleOf(strip)).toBeCloseTo(
+  expect(await middleOf(strip(page))).toBeCloseTo(
     await middleOf(page.locator("main")),
     0,
   );
+  await page.evaluate(() => window.__voiceTopRowProbe?.showCaptions());
+  const lines = page.getByTestId("voice-strip-captions-lines");
+  await lines.waitFor();
   expect(await page.locator("main").boundingBox()).toEqual(before);
-  const captions = await page
-    .getByTestId("voice-strip-captions-lines")
-    .boundingBox();
+  const captions = await lines.boundingBox();
   if (captions === null || before === null) throw new Error("no box");
   expect(captions.y).toBe(before.y);
   // Outside the captions' own box the content below takes the pointer.
@@ -202,14 +205,14 @@ test("the strip takes Talk's place, and captions hang over the content", async (
 });
 
 for (const width of [1400, 1100, 900, 800, 768]) {
-  test(`with 12 real tabs at ${String(width)}px every control of a live session is on screen`, async ({
+  test(`with 12 real tabs at ${String(width)}px every control of a live call is on screen`, async ({
     page,
   }) => {
     await page.setViewportSize({ width, height: 800 });
-    await open(page, "placement=top&account=1");
+    await open(page, "placement=top&account=1", false);
     await page.evaluate(() => window.__voiceTopRowProbe?.openTabs(12));
     await page.getByTestId("header-tab-strip-scroll").waitFor();
-    await page.evaluate(() => window.__voiceTopRowProbe?.goLive());
+    await page.evaluate(() => window.__voiceTopRowProbe?.startCall());
     const end = page.getByTestId("voice-strip-end");
     await end.waitFor();
     for (const control of [
@@ -223,20 +226,9 @@ for (const width of [1400, 1100, 900, 800, 768]) {
         .toBeLessThanOrEqual(width);
       expect((await boxOf(control)).x).toBeGreaterThanOrEqual(0);
     }
-    // Tabs fill the row, so Waiting is its glyph: the name is gone, not cut.
-    const waiting = await boxOf(page.getByTestId("voice-strip-waiting"));
-    expect(rightOf(waiting)).toBeLessThanOrEqual(width);
-    const nameBox = await boxOf(page.getByTestId("voice-strip-waiting-box"));
-    const name = await boxOf(page.getByTestId("voice-strip-waiting-name"));
-    expect(name.y).toBeGreaterThanOrEqual(nameBox.y + nameBox.height);
     // Each control takes the pointer: nothing lies over it.
     for (const control of [page.getByTestId("voice-strip-mute"), end]) {
-      const box = await boxOf(control);
-      const hit = await control.evaluate(
-        (node, [x, y]) => node.contains(document.elementFromPoint(x, y)),
-        [box.x + box.width / 2, box.y + box.height / 2],
-      );
-      expect(hit).toBe(true);
+      await expectTakesThePointer(control);
     }
     // The tabs stop before the zone and the header's own controls fit after it.
     const zone = await boxOf(page.getByTestId("app-header-centre-zone"));
@@ -250,58 +242,56 @@ for (const width of [1400, 1100, 900, 800, 768]) {
     expect(actions.x).toBeGreaterThanOrEqual(rightOf(zone));
     await nextFrames(page, 3);
     expect(await page.evaluate(() => window.__voiceTopRowErrors)).toEqual([]);
-    // The focus line is gone, so the state word's tooltip names the destination.
-    await page.getByTestId("voice-strip-state").hover();
-    await expect(page.getByRole("tooltip")).toHaveCount(1);
   });
 }
 
 for (const width of [1400, 1100, 900, 800, 768]) {
-  test(`with 12 real tabs at ${String(width)}px and no session the window does not scroll sideways`, async ({
+  test(`with 12 real tabs at ${String(width)}px and no call the window does not scroll sideways`, async ({
     page,
   }) => {
     await page.setViewportSize({ width, height: 800 });
-    await open(page, "placement=top&account=1");
+    await open(page, "placement=top&account=1", false);
     await page.evaluate(() => window.__voiceTopRowProbe?.openTabs(12));
     await page.getByTestId("header-tab-strip-scroll").waitFor();
+    await expect(strip(page)).toHaveCount(0);
     await expectHeaderControlsInWindow(page, width);
     await expectFixedTabControlsClearOfZone(page);
     await expect
-      .poll(async () => rightOf(await boxOf(talk(page))))
+      .poll(async () => rightOf(await boxOf(soundtrack(page))))
       .toBeLessThanOrEqual(width);
   });
 }
 
 // Windows and Linux keep the desktop header in a zoomed window, below the width
 // where every other platform changes to the phone header, and at this one the
-// row has no room for everything. Talk and the header's own controls stay; the
-// window does not scroll.
-test("in a zoomed Windows window with no room left the window does not scroll sideways", async ({
+// row has no room for everything. With no call the toggle and the header's own
+// controls stay; the window does not scroll. (A live call's strip does not fit
+// here: its controls are wider than the room, and the header's own controls
+// leave the window. The widths that matter for a call are the loop's above.)
+test("in a zoomed Windows window with no room left and no call the window does not scroll sideways", async ({
   page,
 }) => {
   await page.setViewportSize({ width: 560, height: 800 });
-  await open(page, "placement=top&wco=win&account=1");
+  await open(page, "placement=top&wco=win&account=1", false);
   await page.evaluate(() => window.__voiceTopRowProbe?.openTabs(12));
   // The scroller has given up all its room: present, not visible.
   await page
     .getByTestId("header-tab-strip-scroll")
     .waitFor({ state: "attached" });
   await expectHeaderControlsInWindow(page, 560);
-  const box = await boxOf(talk(page));
-  const hit = await talk(page).evaluate(
-    (node, [x, y]) => node.contains(document.elementFromPoint(x, y)),
-    [box.x + box.width / 2, box.y + box.height / 2],
-  );
-  expect(hit).toBe(true);
+  await expectTakesThePointer(soundtrack(page));
 });
 
-test("with room to spare Waiting keeps its name", async ({ page }) => {
-  await open(page, "placement=top");
-  await page.evaluate(() => window.__voiceTopRowProbe?.goLive());
-  const nameBox = await boxOf(page.getByTestId("voice-strip-waiting-box"));
-  const name = await boxOf(page.getByTestId("voice-strip-waiting-name"));
-  expect(name.y).toBe(nameBox.y);
-  expect(rightOf(name)).toBeLessThanOrEqual(rightOf(nameBox));
+test("with room to spare the strip shows the bot's name whole, and is centred", async ({
+  page,
+}) => {
+  await open(page, "placement=top", true);
+  const bot = page.getByTestId("voice-strip-bot");
+  await expect(bot).toHaveText("Fixture bot");
+  // Whole, not cut with an ellipsis.
+  expect(
+    await bot.evaluate((node) => node.scrollWidth <= node.clientWidth),
+  ).toBe(true);
   // The whole strip fits, and it is centred once the gap has settled.
   const main = await middleOf(page.locator("main"));
   await expect
@@ -310,21 +300,6 @@ test("with room to spare Waiting keeps its name", async ({ page }) => {
       return Math.abs(zone.x + zone.width / 2 - main);
     })
     .toBeLessThan(1);
-  // The focus line shows the destination, so the state word opens no tooltip.
-  // Waiting's tooltip shows tooltips open here; right after it, the state word's
-  // would open at once, so its absence is not a matter of timing.
-  await page.getByTestId("voice-strip-waiting").hover();
-  await expect(page.getByRole("tooltip")).toHaveCount(1);
-  await page.locator("main").hover();
-  await page.locator("main").hover({ position: { x: 8, y: 8 } });
-  await expect(page.getByRole("tooltip")).toHaveCount(0);
-  const state = page.getByTestId("voice-strip-state");
-  await state.hover();
-  await expect
-    .poll(() => state.evaluate((node) => node.matches(":hover")))
-    .toBe(true);
-  await nextFrames(page, 3);
-  await expect.poll(() => page.getByRole("tooltip").count()).toBe(0);
 });
 
 async function expectTakesThePointer(control: Locator): Promise<void> {
@@ -336,40 +311,38 @@ async function expectTakesThePointer(control: Locator): Promise<void> {
   expect(hit).toBe(true);
 }
 
-test("the soundtrack's toggle is beside Talk, on its line, and Talk keeps the middle", async ({
+test("the soundtrack's toggle is beside the strip, on its line, and the strip keeps the middle", async ({
   page,
 }) => {
-  await open(page, "placement=top");
+  await open(page, "placement=left&wco=mac", true);
   await expect
-    .poll(() => middleOf(talk(page)))
+    .poll(() => middleOf(strip(page)))
     .toBeCloseTo(await middleOf(page.locator("main")), 0);
-  const talkBox = await boxOf(talk(page));
+  const stripBox = await boxOf(strip(page));
   const toggleBox = await boxOf(soundtrack(page));
-  expect(toggleBox.x).toBeGreaterThanOrEqual(rightOf(talkBox));
-  expect(toggleBox.x - rightOf(talkBox)).toBeLessThanOrEqual(8);
+  expect(toggleBox.x).toBeGreaterThanOrEqual(rightOf(stripBox));
+  expect(toggleBox.x - rightOf(stripBox)).toBeLessThanOrEqual(8);
   expect(toggleBox.y + toggleBox.height / 2).toBeCloseTo(
-    talkBox.y + talkBox.height / 2,
+    stripBox.y + stripBox.height / 2,
     0,
   );
   await expectTakesThePointer(soundtrack(page));
 });
 
-test("in a zoomed Windows window the toggle stays clear of Talk and of the header's controls", async ({
+test("in a zoomed Windows window the toggle stays clear of the header's controls", async ({
   page,
 }) => {
   await page.setViewportSize({ width: 560, height: 800 });
-  await open(page, "placement=top&wco=win&account=1");
+  await open(page, "placement=top&wco=win&account=1", false);
   await page.evaluate(() => window.__voiceTopRowProbe?.openTabs(12));
   await page
     .getByTestId("header-tab-strip-scroll")
     .waitFor({ state: "attached" });
   await expectHeaderControlsInWindow(page, 560);
   const toggleBox = await boxOf(soundtrack(page));
-  expect(toggleBox.x).toBeGreaterThanOrEqual(rightOf(await boxOf(talk(page))));
   expect(rightOf(toggleBox)).toBeLessThanOrEqual(
     rightOf(await boxOf(page.getByTestId("app-header-centre-zone"))),
   );
-  await expectTakesThePointer(talk(page));
   await expectTakesThePointer(soundtrack(page));
 });
 
@@ -377,10 +350,10 @@ test("the toggle stays beside the strip with 12 tabs, and every control takes th
   page,
 }) => {
   await page.setViewportSize({ width: 768, height: 800 });
-  await open(page, "placement=top&account=1");
+  await open(page, "placement=top&account=1", false);
   await page.evaluate(() => window.__voiceTopRowProbe?.openTabs(12));
   await page.getByTestId("header-tab-strip-scroll").waitFor();
-  await page.evaluate(() => window.__voiceTopRowProbe?.goLive());
+  await page.evaluate(() => window.__voiceTopRowProbe?.startCall());
   const end = page.getByTestId("voice-strip-end");
   await end.waitFor();
   await expect

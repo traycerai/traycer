@@ -18,7 +18,6 @@ import { toast } from "sonner";
 
 import { appLogger } from "@/lib/logger";
 import { QueuedMessageStagesContext } from "@/components/chat/queued-message-stages";
-import { TileMinimapContext } from "@/components/epic-canvas/tile-minimap/tile-minimap-context";
 import { reportableErrorToast } from "@/lib/reportable-error-toast";
 import {
   appendImageAttachmentAtoms,
@@ -53,11 +52,9 @@ import {
   extractPlainTextFromComposerJSONContent,
 } from "@/lib/composer/tiptap-json-content";
 import { buildChatRunSettings } from "@/lib/composer/chat-run-settings";
-import type { RestingChatSandbox } from "@/lib/sandboxes/chat-sandbox-state";
 import {
   composerModelUnresolved,
   composerSendRefusal,
-  publishComposerSendState,
 } from "@/lib/chats/composer-send-gates";
 import { decideSteerSettings } from "@/lib/chats/decide-steer-settings";
 import {
@@ -154,8 +151,6 @@ interface UseChatComposerSubmitArgs {
    * hash-only image node's bytes.
    */
   readonly targetHostId: string | null;
-  /** The chat's sandbox rests: a send wakes it, through `onSubmitMessage`. */
-  readonly restingSandbox: RestingChatSandbox | null;
   /**
    * The queued prompt this composer is currently editing, or `null` for an
    * ordinary send. Part of the submit INTENT: `onSubmitMessage`'s destination
@@ -249,7 +244,6 @@ export function useChatComposerSubmit(
     onSubmitMessage,
     onSideChat,
     targetHostId,
-    restingSandbox,
     queueEditTargetId,
     getDraftBlobBridgeSupported,
     getQueuedSteerRestartConfirmationSupported,
@@ -461,44 +455,6 @@ export function useChatComposerSubmit(
       workspaceBlocked,
     ],
   );
-
-  // The voice sends to a chat with no composer of its own, and takes the same
-  // answer this one gives. Layout-timed for the reason `submitBlockedRef` is.
-  const tileInstanceId = use(TileMinimapContext);
-  useLayoutEffect(() => {
-    if (targetHostId === null || tileInstanceId === null) return undefined;
-    return publishComposerSendState(targetHostId, taskId, tileInstanceId, {
-      sendDisabled,
-      workspaceBlocked,
-      imagesUnsupported,
-      attachmentPreparationPending,
-      restingSandbox: restingSandbox !== null,
-      sandboxFrozen: restingSandbox?.sandbox.frozen === true,
-      submit: (input) => onSubmitMessage?.(input) ?? false,
-      modelSlug: () => toolbarStore.getState().selection.modelSlug,
-      runSettings: () => {
-        const toolbar = toolbarStore.getState();
-        return buildChatRunSettings({
-          selection: toolbar.selection,
-          permission: toolbar.permission,
-          reasoning: toolbar.reasoning,
-          serviceTier: toolbar.serviceTier,
-          ultracode: toolbar.ultracode,
-        });
-      },
-    });
-  }, [
-    attachmentPreparationPending,
-    imagesUnsupported,
-    onSubmitMessage,
-    restingSandbox,
-    sendDisabled,
-    targetHostId,
-    taskId,
-    tileInstanceId,
-    toolbarStore,
-    workspaceBlocked,
-  ]);
 
   // The LIVE blocking predicate, for the deferred confirmation's continuation.
   // `submitBlocked` is rebuilt per render from props; a continuation holds the

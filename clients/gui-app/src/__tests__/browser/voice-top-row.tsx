@@ -38,8 +38,8 @@ import "@/lib/theme-applier";
 import "@/index.css";
 
 /**
- * The real column frame, header and voice row, because where Talk lands is a
- * layout claim jsdom cannot decide. `?placement=top|left|right` picks the
+ * The real column frame, header and voice row, because where the call strip
+ * lands is a layout claim jsdom cannot decide. `?placement=top|left|right` picks the
  * placement and `?wco=mac|win` stands in for the frameless desktop preload, as
  * `sheet-shell-guest-clip.tsx` does: the real `appColumnChrome()` then decides
  * the title band. `?account=1` signs in, which draws the bell and the user menu.
@@ -50,8 +50,8 @@ declare global {
   interface Window {
     __voiceTopRowProbe?: {
       readonly fillTabs: (width: number) => void;
-      readonly offerVoice: () => void;
-      readonly goLive: () => void;
+      readonly startCall: () => void;
+      readonly showCaptions: () => void;
       readonly openTabs: (count: number) => void;
     };
   }
@@ -161,9 +161,16 @@ window.__voiceTopRowProbe = {
     tabs.style.flex = "0 1 auto";
     box.append(tabs);
   },
-  offerVoice: () => {
+  startCall: () => {
     useVoiceSessionStore.setState({
       availability: "live",
+      phase: "live",
+      callTitle: "Fixture bot",
+      focus: {
+        botId: "fixture-bot",
+        hostId: "fixture-host",
+        threadId: null,
+      },
       driver: {
         start: () => undefined,
         end: () => undefined,
@@ -171,35 +178,8 @@ window.__voiceTopRowProbe = {
       },
     });
   },
-  goLive: () => {
-    useVoiceSessionStore.setState({
-      phase: "live",
-      captions: true,
-      focus: {
-        botId: "fixture-bot",
-        hostId: "fixture-host",
-        threadId: null,
-        anchorMessageId: null,
-        anchorThread: null,
-      },
-      queue: [
-        {
-          id: "fixture-waiting",
-          kind: "reply",
-          botId: "fixture-bot",
-          hostId: "fixture-host",
-          threadId: null,
-          chatId: "fixture-chat",
-          messageId: null,
-          surfaceId: null,
-          title: "A reply",
-          author: null,
-          line: "A reply",
-          at: 0,
-          state: "queued",
-        },
-      ],
-    });
+  showCaptions: () => {
+    useVoiceSessionStore.setState({ captions: true });
   },
   openTabs: (count) => {
     const refs: TabRef[] = [];

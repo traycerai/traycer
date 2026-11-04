@@ -280,9 +280,12 @@ class FakeResizeObserver implements ResizeObserver {
   }
 }
 
-function offerVoice(): void {
+function startCall(): void {
   useVoiceSessionStore.setState({
     availability: "live",
+    phase: "live",
+    focus: { botId: "bot-1", hostId: "host-a", threadId: null },
+    callTitle: "Tracy",
     driver: {
       start: vi.fn<VoiceSessionDriver["start"]>(),
       end: vi.fn<VoiceSessionDriver["end"]>(),
@@ -306,22 +309,24 @@ function tabsBox(): HTMLElement {
   return box;
 }
 
-describe("the header's centre zone for Talk", () => {
-  it("draws neither the zone nor its gap with no voice drawn, and the tabs keep the free width", () => {
+describe("the header's centre zone for the call strip", () => {
+  it("draws neither the zone nor its gap with no call running, and the tabs keep the free width", () => {
     renderHeader();
 
     expect(screen.queryByTestId("app-header-centre-gap")).toBeNull();
     expect(screen.queryByTestId("app-header-centre-zone")).toBeNull();
-    expect(screen.queryByRole("button", { name: "Talk" })).toBeNull();
     expect(tabsBox().classList.contains("flex-1")).toBe(true);
   });
 
-  it("draws Talk in the zone with voice drawn, and the tabs give up the free width", () => {
-    offerVoice();
+  it("draws the call strip in the zone while a call runs, and the tabs give up the free width", () => {
+    startCall();
     renderHeader();
 
     const zone = screen.getByTestId("app-header-centre-zone");
-    expect(zone.contains(screen.getByRole("button", { name: "Talk" }))).toBe(
+    expect(zone.contains(screen.getByRole("region", { name: "Call" }))).toBe(
+      true,
+    );
+    expect(zone.contains(screen.getByRole("button", { name: "End" }))).toBe(
       true,
     );
     expect(zone.parentElement).toBe(screen.getByTestId("app-header"));
@@ -336,7 +341,7 @@ describe("the header's centre zone for Talk", () => {
   it("puts the zone's middle on the header's middle through the observer, and drops the gap to nothing when the tabs reach past it", () => {
     vi.stubGlobal("ResizeObserver", FakeResizeObserver);
     resizeObservers.length = 0;
-    offerVoice();
+    startCall();
     renderHeader();
     vi.spyOn(
       screen.getByTestId("app-header"),

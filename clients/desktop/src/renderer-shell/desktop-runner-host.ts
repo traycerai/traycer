@@ -162,7 +162,6 @@ import type {
   VoiceSessionMintRequest,
   VoiceTrayAction,
 } from "@traycer-clients/shared/host-client/voice-sessions";
-import type { VoiceRouteFetchResult } from "@traycer-clients/shared/host-client/voice-router";
 import type {
   EnvironmentProvidersFetchResult,
   SandboxGrantsFetchResult,
@@ -266,11 +265,6 @@ export interface DesktopPreloadBridge {
     bearerToken: string,
     voiceSessionId: string,
   ): Promise<VoiceSessionEndFetchResult>;
-  // The voice router's model call, opaque JSON in and out.
-  routeVoiceUtterance(
-    bearerToken: string,
-    requestBody: string,
-  ): Promise<VoiceRouteFetchResult>;
   setVoiceSessionLive(live: boolean): Promise<void>;
   setVoiceSessionIndicator(indicator: VoiceSessionIndicator): Promise<void>;
   createSandbox(
@@ -1310,13 +1304,6 @@ export class DesktopRunnerHost implements IRunnerHost {
     voiceSessionId: string,
   ): Promise<VoiceSessionEndFetchResult> {
     return this.bridge.endVoiceSession(bearerToken, voiceSessionId);
-  }
-
-  routeVoiceUtterance(
-    bearerToken: string,
-    requestBody: string,
-  ): Promise<VoiceRouteFetchResult> {
-    return this.bridge.routeVoiceUtterance(bearerToken, requestBody);
   }
 
   setVoiceSessionLive(live: boolean): Promise<void> {

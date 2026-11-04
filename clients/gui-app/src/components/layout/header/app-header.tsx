@@ -192,12 +192,12 @@ function trailingSpacerClass(
 }
 
 /**
- * Talk, or the session strip, centred on the header. The gap before it is what
- * puts the zone's middle on the header's middle, and it closes as the tabs reach
- * the zone, so a long strip of tabs pushes the zone right rather than losing
- * width to it. The zone starts at its minimum (Talk, or the strip's controls)
- * and grows to the whole strip with the room left over, so the tabs keep their
- * width before the focus line and Waiting keep theirs. Its grow weight only says
+ * The call strip, centred on the header. The gap before it is what puts the
+ * zone's middle on the header's middle, and it closes as the tabs reach the
+ * zone, so a long strip of tabs pushes the zone right rather than losing width
+ * to it. The zone starts at its minimum (the strip's controls) and grows to the
+ * whole strip with the room left over, so the tabs keep their width before the
+ * bot's name keeps its. Its grow weight only says
  * it fills before the trailing drag spacer, which takes what its cap leaves.
  * Measured because that gap depends on how wide the tabs are, which CSS cannot
  * subtract from half the header. The gap's shrink weight matches the tab box's:

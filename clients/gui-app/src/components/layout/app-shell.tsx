@@ -37,8 +37,7 @@ import { HostScopeReady } from "@/components/layout/host-readiness-controller";
 import { MigrationRunController } from "@/components/migration/migration-run-controller";
 import { TracyEntryController } from "@/components/layout/tabs/tracy-entry-controller";
 import { SoundtrackShortcutBridge } from "@/components/layout/soundtrack/soundtrack-control";
-import { TalkShortcutBridge } from "@/components/layout/voice/talk-control";
-import { VoiceSessionController } from "@/components/layout/voice/voice-session-controller";
+import { CallController } from "@/components/layout/voice/call-controller";
 import { VoiceSessionChrome } from "@/components/layout/voice/voice-session-chrome";
 import { VoiceColumnTopRow } from "@/components/layout/voice/voice-top-row";
 import { LandingTerminalHost } from "@/components/home/terminal-panel/landing-terminal-host";
@@ -227,12 +226,10 @@ function AppShellBody(props: AppShellProps) {
                   {/* Once per window, for every strip placement: the fixed
                     Tracy entry's tab, its lock and its place first. */}
                   <TracyEntryController />
-                  {/* Once per window: the voice session's owner (the
-                    microphone, the engine, the scheduler), which the Talk
-                    control and the strip drive through the store, from the
-                    top row and the phone's channel header. */}
-                  <VoiceSessionController />
-                  <TalkShortcutBridge />
+                  {/* Once per window: the call's owner (the microphone, the
+                    engine, the scheduler), which the Call controls, the strip
+                    and the phone's call view drive through the store. */}
+                  <CallController />
                   <SoundtrackShortcutBridge />
                   <MigrationRunController />
                   <MigrationBlockingModalHost />
