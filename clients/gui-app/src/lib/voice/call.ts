@@ -60,39 +60,68 @@ function spokenWords(text: string): string {
 }
 
 /**
- * The sentence of the voice's output transcript being heard, as the deltas
- * that brought its letters: each with how much the person had said (an input
- * position) when it came. The vendor marks no turn, so what the voice says is
- * told sentence by sentence, against the acknowledgement lines the mint named.
+ * The acknowledgement lines a sentence can be held to, as their letters and
+ * digits (lowercased), from the lines a mint named. Computed once per mint.
+ * A line counts when it has letters and is one sentence: a line with a
+ * terminal mark inside it would be heard as two sentences, neither of them
+ * the line. None usable means no utterance could ever close.
+ */
+export function acknowledgementForms(
+  lines: ReadonlyArray<string>,
+): ReadonlyArray<string> {
+  return lines
+    .filter(
+      (line) =>
+        sentencePieces(line).filter((piece) => spokenLetters(piece).length > 0)
+          .length === 1,
+    )
+    .map(spokenLetters);
+}
+
+/**
+ * The sentence of the voice's output transcript being heard: its text so
+ * far, and its letters as the deltas that brought them, each with how much
+ * the person had said (an input position) when it came and whether it began
+ * a word. The vendor marks no turn, so what the voice says is told sentence
+ * by sentence, against the acknowledgement lines the mint named.
  */
 export interface OutputSentence {
+  readonly text: string;
   readonly parts: ReadonlyArray<SentencePart>;
 }
 
 interface SentencePart {
   readonly letters: string;
   readonly began: number;
+  /**
+   * The text before its first letter or digit does not end in one, or that
+   * first letter is a capital: a word, not the rest of one.
+   */
+  readonly opensWord: boolean;
 }
 
-export const NO_OUTPUT_SENTENCE: OutputSentence = { parts: [] };
+export const NO_OUTPUT_SENTENCE: OutputSentence = { text: "", parts: [] };
 
 /**
  * Hears one output transcript delta, `said` being how much the person has
- * said so far (an input position), `lines` the acknowledgement lines the
- * mint named. Returns the sentence after it, and, for each acknowledgement the
- * delta ends, the input position it began at: the person's words before it are
- * one utterance, and words that came while it was said belong to the next.
+ * said so far (an input position), `forms` the acknowledgement lines'
+ * letters ({@link acknowledgementForms}). Returns the sentence after it,
+ * and, for each acknowledgement the delta ends, the input position it began
+ * at: the person's words before it are one utterance, and words that came
+ * while it was said belong to the next.
  *
  * A sentence ends at a terminal mark and may span deltas. It is an
- * acknowledgement when, from the start of the sentence or of one of its
- * deltas, its letters and digits are one of the lines': a reading the person
- * cut short, which ends without a mark, runs into the acknowledgement that
- * follows it. Every other sentence (a reading of a reply, or noise) closes
+ * acknowledgement when its letters and digits are one of the lines', from
+ * its start or from the start of one of its deltas that begins a word: a
+ * reading the person cut short, which ends without a mark, runs into the
+ * acknowledgement that follows it, a separate output of the vendor's and so a
+ * separate delta, which may come with no space before it but then opens with
+ * a capital. Every other sentence (a reading of a reply, or noise) closes
  * nothing.
  */
 export function hearOutput(
   sentence: OutputSentence,
-  lines: ReadonlyArray<string>,
+  forms: ReadonlyArray<string>,
   delta: string,
   said: number,
 ): {
@@ -100,34 +129,55 @@ export function hearOutput(
   readonly closes: ReadonlyArray<number>;
 } {
   const closes: number[] = [];
-  let parts = sentence.parts;
-  for (const piece of delta.match(/[^.!?]*[.!?]+|[^.!?]+/g) ?? []) {
-    const letters = spokenLetters(piece);
-    if (letters.length > 0) parts = [...parts, { letters, began: said }];
+  let { text, parts } = sentence;
+  for (const piece of sentencePieces(delta)) {
+    const first = piece.search(/[\p{L}\p{N}]/u);
+    if (first !== -1) {
+      const before = text + piece.slice(0, first);
+      parts = [
+        ...parts,
+        {
+          letters: spokenLetters(piece),
+          began: said,
+          opensWord:
+            !/[\p{L}\p{N}]$/u.test(before) ||
+            /\p{Lu}/u.test(piece.charAt(first)),
+        },
+      ];
+    }
+    text += piece;
     if (!/[.!?]$/.test(piece)) continue;
-    const began = acknowledgementStart(parts, lines);
+    const began = acknowledgementStart(parts, forms);
     if (began !== null) closes.push(began);
+    text = "";
     parts = [];
   }
-  return { sentence: { parts }, closes };
+  return { sentence: { text, parts }, closes };
+}
+
+/** A text split after each run of terminal marks. */
+function sentencePieces(text: string): ReadonlyArray<string> {
+  return text.match(/[^.!?]*[.!?]+|[^.!?]+/g) ?? [];
 }
 
 /**
  * Where the acknowledgement that ends a sentence began: the earliest of its
- * parts from which the rest is one of the lines. `null` for none.
+ * parts that begins a word and from which the rest is one of the lines.
+ * `null` for none.
  */
 function acknowledgementStart(
   parts: ReadonlyArray<SentencePart>,
-  lines: ReadonlyArray<string>,
+  forms: ReadonlyArray<string>,
 ): number | null {
-  const known = lines.map(spokenLetters);
-  const start = parts.findIndex((_part, index) =>
-    known.includes(
-      parts
-        .slice(index)
-        .map((part) => part.letters)
-        .join(""),
-    ),
+  const start = parts.findIndex(
+    (part, index) =>
+      part.opensWord &&
+      forms.includes(
+        parts
+          .slice(index)
+          .map((rest) => rest.letters)
+          .join(""),
+      ),
   );
   return parts[start]?.began ?? null;
 }

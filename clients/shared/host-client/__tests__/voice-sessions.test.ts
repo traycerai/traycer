@@ -92,17 +92,22 @@ describe("voiceSessionsMintViaHttp", () => {
     );
   });
 
-  it("reads a session whose body names no acknowledgement lines as one with none", async () => {
-    stubFetch(async () =>
-      jsonResponse(200, {
-        voiceSessionId: MINTED.voiceSessionId,
-        answerSdp: MINTED.answerSdp,
-        expiresAt: MINTED.expiresAt,
-      }),
-    );
+  it.each([
+    ["missing", undefined],
+    ["null", null],
+    ["a string", "Okay."],
+    ["an object", {}],
+    ["an array with a non-string", ["Okay.", 2]],
+  ])(
+    "reads a session whose acknowledgement lines are %s as one with none, keeping its id",
+    async (_name, lines) => {
+      stubFetch(async () =>
+        jsonResponse(200, { ...MINTED, acknowledgementLines: lines }),
+      );
 
-    expect(await voiceSessionsMintViaHttp(BASE, BEARER, null, REQUEST)).toEqual(
-      {
+      expect(
+        await voiceSessionsMintViaHttp(BASE, BEARER, null, REQUEST),
+      ).toEqual({
         kind: "ok",
         session: {
           voiceSessionId: MINTED.voiceSessionId,
@@ -110,23 +115,7 @@ describe("voiceSessionsMintViaHttp", () => {
           expiresAt: MINTED.expiresAt,
           acknowledgementLines: null,
         },
-      },
-    );
-  });
-
-  it.each([
-    ["a string", "Okay."],
-    ["an array with a non-string", ["Okay.", 2]],
-  ])(
-    "reads acknowledgement lines that are %s as a contract mismatch",
-    async (_name, lines) => {
-      stubFetch(async () =>
-        jsonResponse(200, { ...MINTED, acknowledgementLines: lines }),
-      );
-
-      expect(
-        (await voiceSessionsMintViaHttp(BASE, BEARER, null, REQUEST)).kind,
-      ).toBe("network-error");
+      });
     },
   );
 

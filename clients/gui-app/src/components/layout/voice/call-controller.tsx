@@ -60,6 +60,7 @@ import {
   REMINT_CONTEXT_USAGE_RATIO,
   NO_OUTPUT_SENTENCE,
   SHORT_SESSION_MS,
+  acknowledgementForms,
   callFailureLine,
   callUnreachableLine,
   channelConversation,
@@ -113,7 +114,10 @@ interface Attempt {
   cancelled: boolean;
   /** The account signed in when the attempt began. */
   readonly account: string | null;
-  /** The acknowledgement lines the mint named: the voice's own, which close an utterance. */
+  /**
+   * The acknowledgement lines the mint named, as `acknowledgementForms`: the
+   * voice's own, which close an utterance.
+   */
   acknowledgements: ReadonlyArray<string>;
   /** The sentence of this engine's output transcript being heard. */
   sentence: OutputSentence;
@@ -729,19 +733,19 @@ export function CallController(): ReactNode {
                 }
                 throw closedBeforeStart();
               }
-              // Without the lines no utterance would ever close: a server
-              // that does not name them cannot carry a call.
-              if (
-                result.session.acknowledgementLines === null ||
-                result.session.acknowledgementLines.length === 0
-              ) {
+              // Without a line a sentence can match, no utterance would ever
+              // close: a session that names none cannot carry a call, and
+              // the id just owned is ended with the attempt.
+              attempt.acknowledgements = acknowledgementForms(
+                result.session.acknowledgementLines ?? [],
+              );
+              if (attempt.acknowledgements.length === 0) {
                 attempt.failure = "unavailable";
                 throw new VoiceEngineError(
                   "EXCHANGE_FAILED",
-                  "voice session mint named no acknowledgement lines",
+                  "voice session mint named no usable acknowledgement lines",
                 );
               }
-              attempt.acknowledgements = result.session.acknowledgementLines;
               return result.session.answerSdp;
             case "dormant":
               // The fallback when the availability read was wrong or stale:

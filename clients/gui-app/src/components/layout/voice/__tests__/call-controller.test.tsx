@@ -42,6 +42,7 @@ import {
   useVoiceSessionStore,
   type CallTarget,
 } from "@/stores/voice/voice-session-store";
+import { voiceSessionsMintViaHttp } from "@traycer-clients/shared/host-client/voice-sessions";
 import { CallController } from "../call-controller";
 
 interface ChatState {
@@ -467,6 +468,37 @@ async function joinOpenThread(
 
 function land(chat: StoreApi<ChatState>, rows: ReadonlyArray<ReplyRow>): void {
   act(() => chat.setState(loaded(rows)));
+}
+
+function mintFromHttp(lines: unknown, id: string): void {
+  vi.stubGlobal(
+    "fetch",
+    vi.fn(() =>
+      Promise.resolve(
+        new Response(
+          JSON.stringify({
+            voiceSessionId: id,
+            answerSdp: "answer",
+            expiresAt: Date.now() + 7_200_000,
+            acknowledgementLines: lines,
+          }),
+          { status: 200, headers: { "Content-Type": "application/json" } },
+        ),
+      ),
+    ),
+  );
+  fake.mint.mockImplementation((request) =>
+    voiceSessionsMintViaHttp(
+      "https://voice.invalid/",
+      "test-bearer",
+      null,
+      request,
+    ),
+  );
+}
+
+function sentTexts(): ReadonlyArray<string> {
+  return fake.sendMock.mock.calls.map(([request]) => request.text);
 }
 
 beforeEach(() => {
@@ -1807,7 +1839,7 @@ describe("ending the call", () => {
   });
 });
 
-describe("round 5 classification and position probes", () => {
+describe("acknowledgement boundaries and input positions", () => {
   it.each([
     ["I", "I will check the deployment."],
     ["proper noun", "Maya will check the deployment."],
@@ -2060,58 +2092,6 @@ describe("the acknowledgement lines the mint names", () => {
     ]);
   });
 
-  it.each([
-    ["absent", null],
-    ["empty", []],
-  ])(
-    "refuses the dial as unavailable when the mint's lines are %s, ending the minted session",
-    async (_label, lines) => {
-      fake.mint.mockImplementation(() =>
-        Promise.resolve({
-          kind: "ok",
-          session: {
-            voiceSessionId: "vs-no-lines",
-            answerSdp: "answer",
-            expiresAt: Date.now() + 7_200_000,
-            acknowledgementLines: lines,
-          },
-        }),
-      );
-
-      await dial(CHANNEL_CALL);
-
-      const state = useVoiceSessionStore.getState();
-      expect(state.phase).toBe("idle");
-      expect(state.refusal).toBe("unavailable");
-      expect(state.endReason).toBeNull();
-      expect(fake.endVoiceSession.mock.calls).toEqual([["vs-no-lines"]]);
-    },
-  );
-
-  it("ends a live call as a lost connection when a replacement session names no lines", async () => {
-    await dialLive(CHANNEL_CALL);
-    fake.mint.mockImplementation(() =>
-      Promise.resolve({
-        kind: "ok",
-        session: {
-          voiceSessionId: "vs2",
-          answerSdp: "answer",
-          expiresAt: Date.now() + 7_200_000,
-          acknowledgementLines: null,
-        },
-      }),
-    );
-
-    act(() => events().onClosed("connection"));
-    await settle();
-
-    const state = useVoiceSessionStore.getState();
-    expect(state.phase).toBe("idle");
-    expect(state.endReason).toBe("connection");
-    expect(state.refusal).toBeNull();
-    expect(fake.endVoiceSession.mock.calls).toEqual([["vs1"], ["vs2"]]);
-  });
-
   it("closes the person's words early when the voice reads a reply that is exactly a line (a known limit)", async () => {
     const chat = await joinOpenThread([]);
     land(chat, [botRow("r1", "Okay.", 200)]);
@@ -2171,4 +2151,244 @@ describe("the acknowledgement lines the mint names", () => {
       ]);
     },
   );
+});
+
+describe("acknowledgement deltas across engines and calls", () => {
+  it("starts a three-delta acknowledgement after a cut-off reading at the acknowledgement's own input position", async () => {
+    const chat = await joinOpenThread([]);
+    land(chat, [botRow("r1", "The deployment passed all checks.", 200)]);
+    await settle();
+    voiceSays("The deployment");
+    speak("First request.");
+    voiceSays(" O");
+    speak("end the call");
+    voiceSays("ka");
+    voiceSays("y.");
+    await settle();
+    expect(sentTexts()).toEqual(["First request."]);
+    expect(useVoiceSessionStore.getState().phase).toBe("live");
+    speak(" with the vendor tomorrow.");
+    voiceSays("Got it.");
+    await settle();
+    expect(sentTexts()).toEqual([
+      "First request.",
+      "end the call with the vendor tomorrow.",
+    ]);
+  });
+
+  it("keeps an acknowledgement and a reading start in the same delta distinct", async () => {
+    await dialLive(CHANNEL_CALL);
+    speak("First request.");
+    voiceSays("Okay. The deployment");
+    speak("end the call");
+    voiceSays(" passed all checks.");
+    speak(" with the vendor tomorrow.");
+    voiceSays("One moment.");
+    await settle();
+    expect(useVoiceSessionStore.getState().phase).toBe("live");
+    expect(sentTexts()).toEqual([
+      "First request.",
+      "end the call with the vendor tomorrow.",
+    ]);
+  });
+
+  it("documents the accepted final-words delta collision, including its end-phrase consequence", async () => {
+    const chat = await joinOpenThread([]);
+    land(chat, [botRow("r1", "I asked for the report and I got it.", 200)]);
+    await settle();
+    voiceSays("I asked for the report and I");
+    speak("end the call");
+    voiceSays(" got it.");
+    await settle();
+    expect(useVoiceSessionStore.getState().phase).toBe("idle");
+    expect(fake.sendMock).not.toHaveBeenCalled();
+  });
+
+  it("does not carry a partial output sentence across engine replacement", async () => {
+    await dialLive(CHANNEL_CALL);
+    speak("Cancel that.");
+    voiceSays("O");
+    const old = events();
+    act(() => old.onClosed("connection"));
+    await settle();
+    expect(fake.engines).toHaveLength(2);
+    old.onOutputTranscriptDelta("kay.");
+    voiceSays("kay.");
+    await settle();
+    expect(fake.sendMock).not.toHaveBeenCalled();
+    voiceSays("Okay.");
+    await settle();
+    expect(sentTexts()).toEqual(["Cancel that."]);
+  });
+
+  it("uses replacement mint lines and a fresh sentence while preserving the open input", async () => {
+    await dialLive(CHANNEL_CALL);
+    speak("Cancel that.");
+    voiceSays("Sure");
+    mintFromHttp(["Sure thing."], "vs2");
+    act(() => events().onClosed("connection"));
+    await settle();
+    expect(useVoiceSessionStore.getState().phase).toBe("live");
+    voiceSays(" thing.");
+    voiceSays("Okay.");
+    await settle();
+    expect(fake.sendMock).not.toHaveBeenCalled();
+    voiceSays("Sure thing.");
+    await settle();
+    expect(sentTexts()).toEqual(["Cancel that."]);
+    expect(fake.endVoiceSession.mock.calls).toEqual([["vs1"]]);
+  });
+
+  it("does not carry a partial sentence or old mint lines into a second call", async () => {
+    mintFromHttp(["Sure thing."], "first");
+    await dialLive(CHANNEL_CALL);
+    speak("old input");
+    voiceSays("Sure");
+    act(() => driverOf().end());
+    await settle();
+    mintFromHttp(["Okay."], "second");
+    await dialLive(CHANNEL_CALL);
+    speak("New input.");
+    voiceSays(" thing.");
+    voiceSays("Sure thing.");
+    await settle();
+    expect(fake.sendMock).not.toHaveBeenCalled();
+    voiceSays("Okay.");
+    await settle();
+    expect(sentTexts()).toEqual(["New input."]);
+  });
+
+  it("allows delivery confirmation to consume reply content without making it an utterance boundary", async () => {
+    const chat = await joinOpenThread([]);
+    land(chat, [botRow("r1", "The deployment passed all checks.", 200)]);
+    await settle();
+    expect(appendedTexts()).toEqual(["The deployment passed all checks."]);
+    speak("Cancel that.");
+    voiceSays("The deployment passed all checks.");
+    await advance(30_000);
+    expect(appendedTexts()).toEqual(["The deployment passed all checks."]);
+    expect(fake.markRead).toHaveBeenCalled();
+    expect(fake.sendMock).not.toHaveBeenCalled();
+    voiceSays("Okay.");
+    await settle();
+    expect(sentTexts()).toEqual(["Cancel that."]);
+  });
+
+  it("does not close on an acknowledgement that begins inside a word of the reading", async () => {
+    const chat = await joinOpenThread([]);
+    land(chat, [botRow("r1", "I forgot it.", 200)]);
+    await settle();
+    voiceSays("I for");
+    speak("end the call");
+    voiceSays("got it.");
+    await settle();
+    expect(useVoiceSessionStore.getState().phase).toBe("live");
+    expect(fake.sendMock).not.toHaveBeenCalled();
+    expect(useVoiceSessionStore.getState().openSpan).toBe("end the call");
+  });
+
+  it("closes on an acknowledgement whose delta begins a word right after a reading's words (a known limit)", async () => {
+    const chat = await joinOpenThread([]);
+    land(chat, [botRow("r1", "I forgot it.", 200)]);
+    await settle();
+    voiceSays("I ");
+    speak("end the call");
+    voiceSays("got it.");
+    await settle();
+    expect(useVoiceSessionStore.getState().phase).toBe("idle");
+    expect(fake.sendMock).not.toHaveBeenCalled();
+  });
+});
+
+describe("the mint's acknowledgement lines, through the HTTP parser", () => {
+  it.each([
+    ["missing", undefined],
+    ["empty array", []],
+    ["explicit null", null],
+    ["a string", "Okay."],
+    ["mixed array", ["Okay.", 2]],
+  ])(
+    "refuses %s lines at dial and ends the valid minted id",
+    async (_label, lines) => {
+      mintFromHttp(lines, "rejected-dial");
+      await dial(CHANNEL_CALL);
+      expect(useVoiceSessionStore.getState().phase).toBe("idle");
+      expect(useVoiceSessionStore.getState().refusal).toBe("unavailable");
+      expect(fake.track.stop).toHaveBeenCalledOnce();
+      expect(fake.endVoiceSession.mock.calls).toEqual([["rejected-dial"]]);
+    },
+  );
+
+  it.each([
+    ["missing", undefined],
+    ["empty array", []],
+    ["explicit null", null],
+    ["a string", "Okay."],
+    ["mixed array", ["Okay.", 2]],
+  ])(
+    "refuses %s lines at re-mint and ends both valid minted ids",
+    async (_label, lines) => {
+      await dialLive(CHANNEL_CALL);
+      mintFromHttp(lines, "rejected-remint");
+      act(() => events().onClosed("connection"));
+      await settle();
+      expect(useVoiceSessionStore.getState().phase).toBe("idle");
+      expect(useVoiceSessionStore.getState().endReason).toBe("connection");
+      expect(fake.track.stop).toHaveBeenCalledOnce();
+      expect(fake.endVoiceSession.mock.calls).toEqual([
+        ["vs1"],
+        ["rejected-remint"],
+      ]);
+    },
+  );
+
+  it.each([
+    ["empty string", [""]],
+    ["whitespace", ["   "]],
+    ["punctuation only", ["..."]],
+    ["internal terminal mark", ["Okay. One moment."]],
+  ])(
+    "does not open a live microphone on unusable %s lines",
+    async (_label, lines) => {
+      mintFromHttp(lines, "unusable");
+      await dial(CHANNEL_CALL);
+      // Admission is the regression: demonstrate its consequence before the
+      // refusal assertion, through the production boundary and send consumer.
+      if (useVoiceSessionStore.getState().phase === "live") {
+        speak("Cancel that.");
+        voiceSays("Okay.");
+        voiceSays("One moment.");
+        voiceSays("Got it.");
+        await advance(10_000);
+        expect(fake.sendMock).not.toHaveBeenCalled();
+        expect(useVoiceSessionStore.getState().openSpan).toBe("Cancel that.");
+        expect(fake.track.enabled).toBe(true);
+      }
+      expect(useVoiceSessionStore.getState().phase).toBe("idle");
+      expect(useVoiceSessionStore.getState().refusal).toBe("unavailable");
+      expect(fake.endVoiceSession.mock.calls).toEqual([["unusable"]]);
+    },
+  );
+
+  it("does not continue a live call when replacement lines contain no matchable letters", async () => {
+    await dialLive(CHANNEL_CALL);
+    mintFromHttp(["   "], "unusable-remint");
+    act(() => events().onClosed("connection"));
+    await settle();
+    expect(useVoiceSessionStore.getState().phase).toBe("idle");
+    expect(useVoiceSessionStore.getState().endReason).toBe("connection");
+    expect(fake.endVoiceSession.mock.calls).toEqual([
+      ["vs1"],
+      ["unusable-remint"],
+    ]);
+  });
+
+  it("goes live on a list with an unusable line among usable ones, and closes on the usable one", async () => {
+    mintFromHttp(["...", "Sure thing."], "mixed");
+    await dialLive(CHANNEL_CALL);
+    speak("Cancel that.");
+    voiceSays("Sure thing.");
+    await settle();
+    expect(sentTexts()).toEqual(["Cancel that."]);
+  });
 });

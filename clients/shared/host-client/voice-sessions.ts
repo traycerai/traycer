@@ -48,7 +48,8 @@ export interface VoiceSessionMinted {
   /**
    * The lines the voice says, word for word, when the person finishes
    * speaking: what tells the app an utterance ended. `null` from a server
-   * that does not name them.
+   * that does not name them, or names them as anything but a list of
+   * strings: the session itself still parses, so the app can end it.
    */
   readonly acknowledgementLines: ReadonlyArray<string> | null;
 }
@@ -57,7 +58,10 @@ const voiceSessionMintedSchema = z.object({
   voiceSessionId: z.string().min(1),
   answerSdp: z.string().min(1),
   expiresAt: z.number(),
-  acknowledgementLines: z.array(z.string()).optional(),
+});
+
+const acknowledgementLinesSchema = z.object({
+  acknowledgementLines: z.array(z.string()),
 });
 
 const voiceSessionEndedSchema = z.object({
@@ -269,13 +273,14 @@ export async function voiceSessionsMintViaHttp(
       detail: "the minted voice session did not match the contract",
     };
   }
+  const lines = acknowledgementLinesSchema.safeParse(raw.body);
   return {
     kind: "ok",
     session: {
-      voiceSessionId: parsed.data.voiceSessionId,
-      answerSdp: parsed.data.answerSdp,
-      expiresAt: parsed.data.expiresAt,
-      acknowledgementLines: parsed.data.acknowledgementLines ?? null,
+      ...parsed.data,
+      acknowledgementLines: lines.success
+        ? lines.data.acknowledgementLines
+        : null,
     },
   };
 }
