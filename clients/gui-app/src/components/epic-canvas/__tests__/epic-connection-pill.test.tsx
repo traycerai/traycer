@@ -1270,13 +1270,11 @@ describe("artifact sync in the connection pill", () => {
       vi.advanceTimersByTime(15_000);
     });
     const sentence =
-      "Your changes are saved on this computer. Your other devices and teammates won’t see them yet.";
+      "Artifacts not syncing. Your changes are saved on this computer. Your other devices and teammates won’t see them yet.";
     expect(screen.getByRole<HTMLButtonElement>("button").dataset.source).toBe(
       "artifact-sync",
     );
-    expect(screen.getByRole("button").textContent).toContain(
-      "Artifacts not syncing",
-    );
+    expect(screen.getByRole("button").textContent).toBe("Syncing…");
     expect(screen.getByRole("status").textContent).toContain(sentence);
     vi.useRealTimers();
     await expectTooltip(sentence);
