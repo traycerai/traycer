@@ -16,6 +16,7 @@ BASE = dict(
     Flings=0, Minimaps=0, PhonePicks=0, Pills=0, Hides=0, Remounts=0, Jumps=0, NestedWheels=0,
     UnscrolledWheels=0, Pads=0, TurnEnds=0, Relayouts=0, IdleShrinks=0, IdleClamp="FALSE", Cycles=0, AboveTailGrows=0, TailRemounts=0, Viewports=0, AppWrites=0, TailHead='"p"',
     WheelDirs='{"toward-end", "away-from-end"}', WheelsApart="FALSE", ReportBeforeGrowth="FALSE",
+    DirtyFrameWrites="FALSE", Sends=0,
 )
 
 # iOS WebKit in the Capacitor shell: no wheel or scrollbar, no `scrollend`.
@@ -87,6 +88,10 @@ CONFIGS = {
                         dict(PHONE, Grows=2, Touches=2, Flings=1, TurnEnds=1)),
     "phone_restore": ("Phone: a restored position, touched while it converges, then hidden.",
                       dict(PHONE, StartMode='"saved-free"', Touches=1, Hides=1, Grows=1)),
+    # A send voids the window while the reader's finger is on the transcript:
+    # the layout hold must stop writes, never the reader's departure.
+    "phone_send": ("Phone: a send voids the window while following, a finger on the transcript.",
+                   dict(PHONE, R=4, Sends=1, Grows=1, Touches=1)),
     # Estimates: an unmeasured row above the reader goes stale (the type's
     # average jumps) and the next pass that lays it out re-estimates it.
     "teleport": ("A wheel up off the end of a streaming reply while a row above goes stale.",
@@ -204,10 +209,11 @@ VARIANTS = {
     "partial": ["noevidence"],
     "teleport": EVERY_RULE + ["noevidence"],
     "teleport_pill": EVERY_RULE + ["noevidence"],
-    "touch_end": EVERY_RULE + ["nosupersede", "noobsarm", "nomomstill"],
+    "touch_end": EVERY_RULE + ["nosupersede", "noobsarm", "nomomstill", "withlayouthold"],
     "stream_f2": ["noevidence", "nodepart", "notranslate"],
     "phone_read": ["nofling", "noledger", "noliftledger", "nomomhybrid_notailblock"],
     "phone_above_tail": ["notailblock", "nounreadsize"],
+    "phone_send": ["withlayouthold"],
     "phone_viewport": ["noviewcarry"],
     "phone_pad_range": ["noviewcarry"],
     "armless_viewport": ["noviewcarry"],
@@ -318,4 +324,21 @@ for delivery, first_only in (("", "FALSE"), ("first_", "TRUE")):
               dict(BASE, **overrides, TouchMoveFirstOnly=first_only, Fixes=fixes), "ReplaySpec", True,
               ["I_NamedPreconditions", "I_MomentumPairEndpointNotReached"])
         names.append(name)
+
+# Send 6: a burst of the latch's and the list's writes in a frame whose
+# scrollable size changed, inside the send's void, on a WebKit that does not
+# honour them. Before: the shipped switches. After: the proposed layout hold.
+# Nowindow: the hold's structural bit alone, which the plan rejected.
+# Closepad: the hold, and the pad opening as the close correction's queued
+# scrollToEnd runs.
+SEND6 = dict(PHONE, R=4, Sends=1, Grows=2, Pads=1, DirtyFrameWrites="TRUE")
+for lane, variant, pad_after in (("before", None, "FALSE"), ("after", "withlayouthold", "FALSE"),
+                                 ("nowindow", "withlayouthold_withholdnowindow", "FALSE"),
+                                 ("closepad", "withlayouthold", "TRUE")):
+    name = f"SendHold_{lane}"
+    write(name, f"Send 6 inside the send's void; {lane} control.",
+          dict(BASE, **SEND6, PadAfter=pad_after,
+               Fixes=FIXED if variant is None else variant_fixes(variant)),
+          "ReplaySpec", True, ["I_NamedPreconditions", "I_SendHoldEndpointNotReached"])
+    names.append(name)
 print(" ".join(f"ChatScroll_{n}" for n in names))
