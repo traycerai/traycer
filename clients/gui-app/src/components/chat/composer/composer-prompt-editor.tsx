@@ -69,6 +69,39 @@ const composerEditorIncarnations = new WeakMap<
   ComposerEditorIncarnation
 >();
 
+function focusComposerAtEnd(
+  editor: Editor,
+  scroll: "reveal-caret" | "hold-view",
+): void {
+  const dom = editor.view.dom;
+  editor.view.dispatch(
+    editor.state.tr.setSelection(Selection.atEnd(editor.state.doc)),
+  );
+  if (scroll === "hold-view") {
+    // Tiptap's own focus scrolls every scroller holding the editor: a
+    // frame later to the caret, and at once on phones (no
+    // `preventScroll`). ProseMirror's own focus never scrolls.
+    editor.view.focus();
+    return;
+  }
+  // Keep the in-gesture focus that opens a phone keyboard, and scroll the
+  // caret on a later frame. Tiptap's focus command also queues a second
+  // `view.focus()` on a frame it never cancels, so a Tab that has already
+  // left the composer is pulled back.
+  if (isiOS() || isAndroid()) {
+    dom.focus();
+  } else if (isSafari()) {
+    dom.focus({ preventScroll: true });
+  }
+  editor.view.focus();
+  window.requestAnimationFrame(() => {
+    if (editor.isDestroyed) return;
+    const active = document.activeElement;
+    if (active !== dom && (active === null || !dom.contains(active))) return;
+    editor.commands.scrollIntoView();
+  });
+}
+
 function incarnationForEditor(editor: Editor): ComposerEditorIncarnation {
   const existing = composerEditorIncarnations.get(editor);
   if (existing !== undefined) return existing;
@@ -582,17 +615,7 @@ function ComposerPromptEditorImpl(props: ComposerPromptEditorProps) {
   const focusAtEnd = useCallback(
     (scroll: "reveal-caret" | "hold-view") => {
       if (editor === null) return;
-      if (scroll === "reveal-caret") {
-        editor.commands.focus("end");
-        return;
-      }
-      // Tiptap's own focus scrolls every scroller holding the editor: a
-      // frame later to the caret, and at once on phones (no
-      // `preventScroll`). ProseMirror's own focus never scrolls.
-      editor.view.dispatch(
-        editor.state.tr.setSelection(Selection.atEnd(editor.state.doc)),
-      );
-      editor.view.focus();
+      focusComposerAtEnd(editor, scroll);
     },
     [editor],
   );
@@ -649,7 +672,7 @@ function ComposerPromptEditorImpl(props: ComposerPromptEditorProps) {
           to: normalized.selection.to,
         });
       } else {
-        editor.commands.focus("end");
+        focusComposerAtEnd(editor, "reveal-caret");
       }
     },
     [editor],

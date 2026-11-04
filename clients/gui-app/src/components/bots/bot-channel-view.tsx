@@ -150,6 +150,27 @@ function subscribeWindowForeground(listener: () => void): () => void {
 }
 
 /**
+ * The failed message the channel's box is editing, which belongs to the
+ * channel's conversation: a channel the view resolves to anew (a host that
+ * names it late, or names none and lists an earlier one) starts the box
+ * without it.
+ */
+function useChannelBoxEdit(channelId: string | null): {
+  readonly edit: BotComposerEdit | null;
+  readonly setEdit: (edit: BotComposerEdit | null) => void;
+  readonly endEdit: () => void;
+} {
+  const [edit, setEdit] = useState<BotComposerEdit | null>(null);
+  const endEdit = useCallback(() => setEdit(null), []);
+  const [editChannelId, setEditChannelId] = useState(channelId);
+  if (channelId !== editChannelId) {
+    setEditChannelId(channelId);
+    setEdit(null);
+  }
+  return { edit, setEdit, endEdit };
+}
+
+/**
  * The bot's channel among its conversations: the one the bot record names.
  * A host can file other conversations under the bot with any timestamp, so
  * none of their order says which is the channel. Only a host that names none
@@ -362,11 +383,13 @@ export function BotChannelView(props: {
       ),
     [appConversationChatId, conversations.data],
   );
+  const channelId = channel?.conversationId ?? null;
   // What the channel's box holds unsent, kept under the bot by the channel's
-  // conversation, so it outlives the pane when another channel is shown.
+  // conversation, so it outlives the pane when another channel is shown: the
+  // one the box sends to, which a host naming no channel leaves to the list.
   const { seed: channelSeed, keptDraft: channelKeptDraft } = useKeptBoxDraft(
     botId,
-    appConversationChatId,
+    channelId,
   );
 
   const {
@@ -398,7 +421,6 @@ export function BotChannelView(props: {
   } = useBotConversationSendMutation(client);
   const sendFailure = useBotSendFailure();
   const { fail: failSend, clear: clearSendFailure } = sendFailure;
-  const channelId = channel?.conversationId ?? null;
   const chooseOption = useCallback(
     (choice: string) => {
       if (channelId === null) return;
@@ -414,7 +436,7 @@ export function BotChannelView(props: {
           supersedes: null,
           answer: null,
         },
-        { onError: failSend },
+        { onError: () => failSend(null) },
       );
     },
     [botId, channelId, clearSendFailure, failSend, send],
@@ -444,7 +466,7 @@ export function BotChannelView(props: {
             skipped: given.skipped,
           },
         },
-        { onError: failSend },
+        { onError: () => failSend(null) },
       );
     },
     [botId, channelId, clearSendFailure, failSend, sendAsync],
@@ -453,8 +475,7 @@ export function BotChannelView(props: {
   // A post the bot failed to answer, in a thread or at the top level, is
   // retried as it is or edited in the channel's box, which posts its
   // replacement.
-  const [edit, setEdit] = useState<BotComposerEdit | null>(null);
-  const endEdit = useCallback(() => setEdit(null), []);
+  const { edit, setEdit, endEdit } = useChannelBoxEdit(channelId);
   const failedOnChannel = useCallback(
     (requestId: string) => failedOnRequest(activity, requestId),
     [activity],
@@ -475,7 +496,7 @@ export function BotChannelView(props: {
       onOpenThread(null);
       setEdit(postEdit);
     },
-    [onOpenThread],
+    [onOpenThread, setEdit],
   );
 
   // A direct post or a row of the bot with no thread yet shows a box whose
@@ -827,6 +848,8 @@ export function BotChannelView(props: {
                 sessionChatId={trunkChatId}
               />
               <BotMessageComposer
+                // Its draft is the conversation's, kept by it (`channelKeptDraft`).
+                key={channel.conversationId}
                 botId={botId}
                 conversationId={channel.conversationId}
                 threadId={null}
@@ -838,6 +861,7 @@ export function BotChannelView(props: {
                 failure={sendFailure}
                 edit={edit}
                 onEditEnd={endEdit}
+                onEditResume={setEdit}
                 seed={channelSeed}
                 keptDraft={channelKeptDraft}
                 quote={quoteFor(null)}

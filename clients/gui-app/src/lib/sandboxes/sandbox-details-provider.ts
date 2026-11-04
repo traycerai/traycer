@@ -20,12 +20,14 @@ import {
   SANDBOX_PUBLIC_STATE_LABEL,
   formatSandboxAge,
   formatSandboxDate,
+  formatSandboxUtcDay,
   sandboxFailedToStart,
   sandboxMemberName,
   sandboxPeriodLabel,
   sandboxPublicState,
   sandboxRegionLabel,
   sandboxReportedAt,
+  sandboxRetentionIsWithdrawn,
   sandboxShapeLine,
   sandboxSupportReferenceLine,
 } from "@/lib/sandboxes/sandbox-row-lines";
@@ -125,6 +127,12 @@ function starter(input: SandboxDetailsInput): string | null {
 /**
  * Idle, then Resting; an agent's sandbox never rests, it destroys itself,
  * and Automations never rests either: it is released, its files kept.
+ *
+ * A withdrawn row gets no Resting row: how long it is kept is decided by its
+ * own `destroyAt` where one is set and by the announced date otherwise, never
+ * by its resting policy, so a resting promise here would contradict it either
+ * way — and this surface carries no withdrawal notice of its own to read it
+ * against.
  */
 function idleRows(summary: SandboxSummary): SandboxDetailsRow[] {
   const idle = summary.idleMinutes ?? SANDBOX_DEFAULT_IDLE_MINUTES;
@@ -136,8 +144,10 @@ function idleRows(summary: SandboxSummary): SandboxDetailsRow[] {
   if (summary.burst) {
     return [{ label: "Idle", value: `destroys itself after ${idle} idle min` }];
   }
+  const idleRow = { label: "Idle", value: `suspends after ${idle} idle min` };
+  if (sandboxRetentionIsWithdrawn(summary)) return [idleRow];
   return [
-    { label: "Idle", value: `suspends after ${idle} idle min` },
+    idleRow,
     {
       label: "Resting",
       value:
@@ -188,10 +198,41 @@ function statusRows(input: SandboxDetailsInput): SandboxDetailsRow[] {
     });
   }
   rows.push(...idleRows(summary));
+  // `destroyAt` wins wherever the server sends one, because it is the day the
+  // server will actually act on. A withdrawal does not suppress every
+  // `destroyAt`: a FROZEN row keeps its day-30 deadline, which is its own
+  // approved policy and is decided before the withdrawal is consulted
+  // (`destroyAtOf`), so a frozen withdrawn row carries both. Reading the
+  // withdrawal first there would name the later day while the Frozen row
+  // just below named the earlier one, and the server destroyed on the
+  // earlier one.
+  //
+  // The announced day answers only when there is no `destroyAt` to state,
+  // which is the ordinary withdrawn row: unfrozen, its resting deadline
+  // held.
+  //
+  // `unless used` belongs to ONE of these days: the resting deadline, which
+  // a wake really does reset — landing awake clears `restingSince`, so the
+  // clock starts over. It is false on the other two, for different reasons.
+  //
+  // Nothing the person does postpones a withdrawal. And a frozen row's
+  // day-30 day belongs to the freeze EPISODE, counted from its `frozenAt`:
+  // nothing moves that day later. What can remove it — a top-up, or, on a
+  // team row, a wake its payer's gate admits (`thawForWake`) — ENDS the
+  // episode and the deadline with it rather than deferring the day. So
+  // there is no postponement to offer: use either leaves this date exactly
+  // where it is or clears it outright, and the row states the bare day here
+  // exactly as the Frozen row below states it.
   if (summary.destroyAt !== null) {
+    const day = formatSandboxDate(summary.destroyAt, true);
     rows.push({
       label: "Destroyed on",
-      value: `${formatSandboxDate(summary.destroyAt, true)} unless used`,
+      value: summary.frozen ? day : `${day} unless used`,
+    });
+  } else if (summary.withdrawalEndsAt !== null) {
+    rows.push({
+      label: "Destroyed on",
+      value: formatSandboxUtcDay(summary.withdrawalEndsAt),
     });
   }
   if (summary.frozen && summary.frozenAt !== null) {

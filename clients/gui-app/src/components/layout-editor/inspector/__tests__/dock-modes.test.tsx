@@ -12,7 +12,10 @@ import {
 } from "@/components/layout-editor/inspector/dock-modes";
 import { useLayoutEditorStore } from "@/stores/layout/layout-editor-store";
 
-const VIEWPORT = { width: 1400, height: 900 };
+/** A window with no band drawn: the floor is the 28px chrome inset. */
+const VIEWPORT = { width: 1400, height: 900, top: 28 };
+/** The same window under a 40px title band (`--app-title-band-height`). */
+const BANDED_VIEWPORT = { ...VIEWPORT, top: 40 };
 
 /**
  * jsdom has no pointer capture, which is a browser input facility rather than
@@ -85,6 +88,9 @@ describe("float geometry (5.4, section 6)", () => {
       y: 28,
     });
     expect(clampFloatPosition({ x: 10, y: 0 }, VIEWPORT).y).toBe(28);
+    // Under a title band the floor is the band: on Windows and Linux the
+    // native window controls paint over its trailing end, above the panel.
+    expect(clampFloatPosition({ x: 10, y: 0 }, BANDED_VIEWPORT).y).toBe(40);
     expect(clampFloatPosition({ x: 9000, y: 9000 }, VIEWPORT)).toEqual({
       x: VIEWPORT.width - FLOAT_DOCK_WIDTH,
       y: VIEWPORT.height - floatDockHeight(VIEWPORT.height),
@@ -101,7 +107,9 @@ describe("float geometry (5.4, section 6)", () => {
       VIEWPORT.width - FLOAT_DOCK_WIDTH,
     );
     // Narrower than the panel: the default is flush left rather than negative.
-    expect(defaultFloatPosition({ width: 240, height: 300 }).x).toBe(0);
+    expect(defaultFloatPosition({ width: 240, height: 300, top: 28 }).x).toBe(
+      0,
+    );
   });
 
   it("opens a remembered float where it is floating, never on a dock's band (LV2-17)", () => {
@@ -222,7 +230,7 @@ describe("dragging the panel by its header (L-38)", () => {
     const { result } = renderHook(() => useFloatingDock(null));
     expect(result.current).toEqual(defaultFloatPosition(VIEWPORT));
 
-    const narrower = { width: 700, height: 600 };
+    const narrower = { width: 700, height: 600, top: 28 };
     Object.defineProperty(window, "innerWidth", {
       configurable: true,
       writable: true,
@@ -238,5 +246,23 @@ describe("dragging the panel by its header (L-38)", () => {
     });
 
     expect(result.current).toEqual(defaultFloatPosition(narrower));
+  });
+
+  it("opens a remembered float no higher than the title band's bottom edge", () => {
+    const band = document.createElement("div");
+    band.setAttribute("data-app-title-band-surface", "");
+    band.getBoundingClientRect = () =>
+      new DOMRect(0, 0, VIEWPORT.width, BANDED_VIEWPORT.top);
+    document.body.append(band);
+    useLayoutEditorStore.setState({
+      dockMode: "right",
+      floatPosition: { x: 500, y: 10 },
+    });
+    const { result } = renderHook(() => useFloatingDock(null));
+    act(() => {
+      useLayoutEditorStore.setState({ dockMode: "float" });
+    });
+
+    expect(result.current).toEqual({ x: 500, y: BANDED_VIEWPORT.top });
   });
 });
