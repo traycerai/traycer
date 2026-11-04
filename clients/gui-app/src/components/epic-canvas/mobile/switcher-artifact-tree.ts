@@ -68,3 +68,40 @@ export function buildSwitcherArtifactTree(
   );
   return stranded.length === 0 ? roots : [...roots, ...stranded];
 }
+
+/**
+ * One row of the list the tree is drawn as: the node and where it sits, in
+ * the terms a flat `role="tree"` announces (WAI-ARIA's `aria-level`,
+ * `aria-posinset`, `aria-setsize`). The list windows its rows, so a parent
+ * and its children are siblings in the DOM and the nesting has to be said
+ * per row rather than built from `role="group"` containment.
+ */
+export interface SwitcherArtifactTreeRow {
+  readonly record: EpicTreeRecord;
+  readonly depth: number;
+  readonly branch: boolean;
+  /** 1-based position among its siblings. */
+  readonly posInSet: number;
+  readonly setSize: number;
+}
+
+/** Pre-order, the order the tree reads top to bottom. */
+export function flattenSwitcherArtifactTree(
+  roots: ReadonlyArray<SwitcherTreeNode>,
+): ReadonlyArray<SwitcherArtifactTreeRow> {
+  const rows: SwitcherArtifactTreeRow[] = [];
+  function walk(nodes: ReadonlyArray<SwitcherTreeNode>, depth: number): void {
+    nodes.forEach((node, index) => {
+      rows.push({
+        record: node.record,
+        depth,
+        branch: node.children.length > 0,
+        posInSet: index + 1,
+        setSize: nodes.length,
+      });
+      walk(node.children, depth + 1);
+    });
+  }
+  walk(roots, 0);
+  return rows;
+}
