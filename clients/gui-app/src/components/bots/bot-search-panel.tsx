@@ -283,6 +283,8 @@ export function BotSearchPanel(props: {
           loadingMore={search.loadingMore}
           hasMore={search.hasMore}
           onLoadMore={search.loadMore}
+          moreFailed={search.moreFailed}
+          onRetryMore={search.retryMore}
           failed={search.error !== null && pages.length === 0}
           onRetry={search.retry}
           query={search.query}
@@ -514,6 +516,8 @@ function BotSearchResultList(props: {
   readonly loadingMore: boolean;
   readonly hasMore: boolean;
   readonly onLoadMore: () => void;
+  readonly moreFailed: boolean;
+  readonly onRetryMore: () => void;
   readonly failed: boolean;
   readonly onRetry: () => void;
   readonly query: string;
@@ -535,7 +539,7 @@ function BotSearchResultList(props: {
   }, []);
   const loadMoreNearTheEnd = (): void => {
     const list = listRef.current;
-    if (list === null || !hasMore || loadingMore) return;
+    if (list === null || !hasMore || loadingMore || props.moreFailed) return;
     const left = list.scrollHeight - list.clientHeight - list.scrollTop;
     if (left < NEXT_PAGE_MARGIN_PX) onLoadMore();
   };
@@ -660,6 +664,15 @@ function BotSearchResultList(props: {
             );
           })}
         </ul>
+        {props.moreFailed ? (
+          <div className="px-4 py-3">
+            <BotReadFailure
+              message="Couldn't load more results."
+              onRetry={props.onRetryMore}
+              testId="bot-search-more-error"
+            />
+          </div>
+        ) : null}
         {loadingMore ? (
           <div
             className="flex justify-center py-3 text-muted-foreground"

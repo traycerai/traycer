@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import type {
+  BotConversationSearchHit,
   BotConversationSearchResponse,
   BotConversationSearchUnreachable,
 } from "@traycer/protocol/host/bot/conversation-schemas";
@@ -25,6 +26,8 @@ const TAB_SOURCE: BotSearchSource = {
   hostId: null,
   scope: { kind: "all" },
   cursor: null,
+  started: false,
+  pending: [],
 };
 
 const OTHER_OWNER_B: BotConversationSearchUnreachable = {
@@ -101,6 +104,8 @@ describe("botSearchFirstSource", () => {
       hostId: B_HOST,
       scope: { kind: "bot", botId: SEARCH_BOT_B },
       cursor: null,
+      started: false,
+      pending: [],
     });
     expect(
       botSearchFirstSource({ kind: "bot", botId: SEARCH_BOT_A }, reachableOnlyB)
@@ -113,54 +118,75 @@ describe("botSearchFirstSource", () => {
 });
 
 describe("fetchBotSearchPage", () => {
-  it("orders the hits by score for relevance and by time for newest, and passes the cursor back as the host named it", async () => {
-    const answer = searchResponse({
-      hits: [
-        searchHit({ messageId: "old-strong", createdAt: 1_000, score: 9 }),
-        searchHit({ messageId: "new-weak", createdAt: 3_000, score: 2 }),
-        searchHit({ messageId: "mid", createdAt: 2_000, score: 5 }),
-      ],
-      nextCursor: "opaque/cursor==?x=1",
-      total: 3,
+  it("joins the hosts' hits by score for relevance and by time for newest, and passes the cursor back as the host named it", async () => {
+    const strong = searchHit({
+      messageId: "a-strong",
+      createdAt: 1_000,
+      score: 9,
     });
-    const ask = vi.fn(() => Promise.resolve(answer));
+    const weak = searchHit({ messageId: "a-weak", createdAt: 3_000, score: 2 });
+    const mid = searchHit({
+      botId: SEARCH_BOT_B,
+      messageId: "b-mid",
+      createdAt: 2_000,
+      score: 5,
+    });
+    // Each host answers best first in the order it was asked for.
+    const askFor =
+      (sort: "relevance" | "newest") =>
+      (source: BotSearchSource): Promise<BotConversationSearchResponse> =>
+        Promise.resolve(
+          source.hostId === null
+            ? searchResponse({
+                hits: sort === "relevance" ? [strong, weak] : [weak, strong],
+                nextCursor: "opaque/cursor==?x=1",
+                total: 2,
+              })
+            : searchResponse({ hits: [mid], total: 1 }),
+        );
+    const directB: BotSearchSource = {
+      hostId: B_HOST,
+      scope: { kind: "bot", botId: SEARCH_BOT_B },
+      cursor: null,
+      started: false,
+      pending: [],
+    };
 
-    const relevance = await fetchBotSearchPage({
-      sources: [TAB_SOURCE],
-      sort: "relevance",
-      ask,
-      reachableHostOf: nobodyReachable,
-    });
-    const newest = await fetchBotSearchPage({
-      sources: [TAB_SOURCE],
-      sort: "newest",
-      ask,
-      reachableHostOf: nobodyReachable,
-    });
+    const [relevance, newest] = await Promise.all(
+      (["relevance", "newest"] as const).map((sort) =>
+        fetchBotSearchPage({
+          sources: [TAB_SOURCE, directB],
+          sort,
+          ask: askFor(sort),
+          reachableHostOf: nobodyReachable,
+        }),
+      ),
+    );
 
     expect(relevance.hits.map((hit) => hit.messageId)).toEqual([
-      "old-strong",
-      "mid",
-      "new-weak",
+      "a-strong",
+      "b-mid",
+      "a-weak",
     ]);
     expect(newest.hits.map((hit) => hit.messageId)).toEqual([
-      "new-weak",
-      "mid",
-      "old-strong",
+      "a-weak",
+      "b-mid",
+      "a-strong",
     ]);
     expect(relevance.next).toEqual([
-      { ...TAB_SOURCE, cursor: "opaque/cursor==?x=1" },
+      { ...TAB_SOURCE, cursor: "opaque/cursor==?x=1", started: true },
     ]);
     expect(relevance.total).toBe(3);
   });
 
-  it("asks a team's bot directly where this client can dial its host, and joins its hits to the page by score", async () => {
+  it("asks a team's bot directly where this client can dial its host, and joins it as a source of its own", async () => {
+    const aLow = searchHit({ messageId: "a-low", score: 1 });
     const ask = vi.fn(
       (source: BotSearchSource): Promise<BotConversationSearchResponse> => {
         if (source.hostId === null) {
           return Promise.resolve(
             searchResponse({
-              hits: [searchHit({ messageId: "a-low", score: 1 })],
+              hits: [aLow],
               nextCursor: "tab-next",
               total: 1,
               unreachable: [OTHER_OWNER_B],
@@ -191,16 +217,22 @@ describe("fetchBotSearchPage", () => {
       hostId: B_HOST,
       scope: { kind: "bot", botId: SEARCH_BOT_B },
       cursor: null,
+      started: false,
+      pending: [],
     });
-    expect(page.hits.map((hit) => hit.messageId)).toEqual(["b-high", "a-low"]);
+    // B has nothing left to compare past its one hit, so the page stops there
+    // and the tab's lower hit waits.
+    expect(page.hits.map((hit) => hit.messageId)).toEqual(["b-high"]);
     expect(page.total).toBe(5);
     expect(page.unreachable).toEqual([]);
     expect(page.next).toEqual([
-      { ...TAB_SOURCE, cursor: "tab-next" },
+      { ...TAB_SOURCE, cursor: "tab-next", started: true, pending: [aLow] },
       {
         hostId: B_HOST,
         scope: { kind: "bot", botId: SEARCH_BOT_B },
         cursor: "b-next",
+        started: true,
+        pending: [],
       },
     ]);
   });
@@ -279,51 +311,61 @@ describe("fetchBotSearchPage", () => {
     ).rejects.toBe(failure);
   });
 
-  it("fails a later page whose direct host no longer holds the search, where the same answer to a first page only costs the bot", async () => {
-    const refused = hostFailure("E_INVALID_ARGUMENT");
-    const directB: BotSearchSource = {
-      hostId: B_HOST,
-      scope: { kind: "bot", botId: SEARCH_BOT_B },
-      cursor: null,
-    };
-    const ask = (
-      source: BotSearchSource,
-    ): Promise<BotConversationSearchResponse> =>
-      source.hostId === B_HOST
-        ? Promise.reject(refused)
-        : Promise.resolve(
-            searchResponse({
-              hits: [searchHit({ messageId: "a-1" })],
-              total: 1,
-            }),
-          );
+  it.each(["E_INVALID_ARGUMENT", "RPC_ERROR"] as const)(
+    "fails a later page whose direct host answers %s, where the same answer to a first page only costs the bot",
+    async (code) => {
+      const refused = hostFailure(code);
+      const directB: BotSearchSource = {
+        hostId: B_HOST,
+        scope: { kind: "bot", botId: SEARCH_BOT_B },
+        cursor: null,
+        started: false,
+        pending: [],
+      };
+      const ask = (
+        source: BotSearchSource,
+      ): Promise<BotConversationSearchResponse> =>
+        source.hostId === B_HOST
+          ? Promise.reject(refused)
+          : Promise.resolve(
+              searchResponse({
+                hits: [searchHit({ messageId: "a-1" })],
+                total: 1,
+              }),
+            );
 
-    const first = await fetchBotSearchPage({
-      sources: [TAB_SOURCE, directB],
-      sort: "relevance",
-      ask,
-      reachableHostOf: reachableOnlyB,
-    });
-
-    expect(first.hits.map((hit) => hit.messageId)).toEqual(["a-1"]);
-    expect(first.unreachable).toEqual([
-      { botId: SEARCH_BOT_B, reason: "offline" },
-    ]);
-    await expect(
-      fetchBotSearchPage({
-        sources: [TAB_SOURCE, { ...directB, cursor: "b-next" }],
+      const first = await fetchBotSearchPage({
+        sources: [TAB_SOURCE, directB],
         sort: "relevance",
         ask,
         reachableHostOf: reachableOnlyB,
-      }),
-    ).rejects.toBe(refused);
-  });
+      });
+
+      expect(first.hits.map((hit) => hit.messageId)).toEqual(["a-1"]);
+      expect(first.unreachable).toEqual([
+        { botId: SEARCH_BOT_B, reason: "offline" },
+      ]);
+      await expect(
+        fetchBotSearchPage({
+          sources: [
+            TAB_SOURCE,
+            { ...directB, cursor: "b-next", started: true },
+          ],
+          sort: "relevance",
+          ask,
+          reachableHostOf: reachableOnlyB,
+        }),
+      ).rejects.toBe(refused);
+    },
+  );
 
   it("asks no follow-up on a later page, where the bot already has a source of its own", async () => {
     const directB: BotSearchSource = {
       hostId: B_HOST,
       scope: { kind: "bot", botId: SEARCH_BOT_B },
       cursor: "b-next",
+      started: true,
+      pending: [],
     };
     const ask = vi.fn(
       (source: BotSearchSource): Promise<BotConversationSearchResponse> =>
@@ -348,7 +390,7 @@ describe("fetchBotSearchPage", () => {
     );
 
     const page = await fetchBotSearchPage({
-      sources: [{ ...TAB_SOURCE, cursor: "tab-next" }, directB],
+      sources: [{ ...TAB_SOURCE, cursor: "tab-next", started: true }, directB],
       sort: "relevance",
       ask,
       reachableHostOf: reachableOnlyB,
@@ -368,6 +410,8 @@ describe("fetchBotSearchPage", () => {
       hostId: B_HOST,
       scope: { kind: "bot", botId: SEARCH_BOT_B },
       cursor: null,
+      started: false,
+      pending: [],
     };
     const askWith =
       (directState: "complete" | "partial") =>
@@ -393,6 +437,171 @@ describe("fetchBotSearchPage", () => {
 
     expect(partial.indexState).toBe("partial");
     expect(complete.indexState).toBe("complete");
+  });
+});
+
+/** A host's pages of hits, best first: the answer to the cursor it named. */
+function pagedHost(
+  cursorPrefix: string,
+  pages: ReadonlyArray<ReadonlyArray<BotConversationSearchHit>>,
+): (cursor: string | null) => BotConversationSearchResponse {
+  return (cursor) => {
+    const at = cursor === null ? 0 : Number(cursor.slice(cursorPrefix.length));
+    return searchResponse({
+      hits: [...pages[at]],
+      nextCursor:
+        at + 1 < pages.length ? `${cursorPrefix}${String(at + 1)}` : null,
+    });
+  };
+}
+
+/** Hits of `botId` with these ranks, which are also their ids. */
+function rankedHits(
+  botId: string,
+  ranks: ReadonlyArray<number>,
+  sort: "relevance" | "newest",
+): BotConversationSearchHit[] {
+  return ranks.map((rank) =>
+    searchHit({
+      botId,
+      messageId: `${botId}/${String(rank)}`,
+      // The field the other order reads runs the other way.
+      score: sort === "relevance" ? rank : 1_000 - rank,
+      createdAt: sort === "newest" ? rank : 1_000 - rank,
+    }),
+  );
+}
+
+/** Whole numbers from `from` down to `to`. */
+function countdown(from: number, to: number): number[] {
+  return Array.from({ length: from - to + 1 }, (_unused, at) => from - at);
+}
+
+const DIRECT_B: BotSearchSource = {
+  hostId: B_HOST,
+  scope: { kind: "bot", botId: SEARCH_BOT_B },
+  cursor: null,
+  started: false,
+  pending: [],
+};
+
+describe("paging hosts that rank at their own pace", () => {
+  it.each(["relevance", "newest"] as const)(
+    "lists every hit in rank order across pages and hosts when one host's first pages run above the other's, and asks a host again only once it runs short, with its own cursor (%s)",
+    async (sort) => {
+      const hostA = pagedHost("a-", [
+        rankedHits(SEARCH_BOT_A, countdown(200, 181), sort),
+        rankedHits(SEARCH_BOT_A, countdown(180, 161), sort),
+        rankedHits(SEARCH_BOT_A, countdown(160, 155), sort),
+      ]);
+      const hostB = pagedHost("b-", [
+        rankedHits(SEARCH_BOT_B, [150, 140, 130, ...countdown(20, 4)], sort),
+        rankedHits(SEARCH_BOT_B, [3, 2, 1], sort),
+      ]);
+      const asked: string[] = [];
+      const ask = (
+        source: BotSearchSource,
+      ): Promise<BotConversationSearchResponse> => {
+        asked.push(`${source.hostId ?? "tab"}:${source.cursor ?? "first"}`);
+        return Promise.resolve(
+          source.hostId === null ? hostA(source.cursor) : hostB(source.cursor),
+        );
+      };
+
+      const pages: BotSearchPage[] = [];
+      let sources: ReadonlyArray<BotSearchSource> = [TAB_SOURCE, DIRECT_B];
+      while (sources.length > 0) {
+        const page = await fetchBotSearchPage({
+          sources,
+          sort,
+          ask,
+          reachableHostOf: nobodyReachable,
+        });
+        pages.push(page);
+        sources = page.next;
+      }
+
+      const everyRank = [
+        ...countdown(200, 155),
+        150,
+        140,
+        130,
+        ...countdown(20, 1),
+      ];
+      expect(botSearchHitsOf(pages).map((hit) => hit.messageId)).toEqual(
+        everyRank.map((rank) =>
+          rank >= 155 && rank <= 200
+            ? `${SEARCH_BOT_A}/${String(rank)}`
+            : `${SEARCH_BOT_B}/${String(rank)}`,
+        ),
+      );
+      expect(pages.map((page) => page.hits.length)).toEqual([20, 20, 20, 9]);
+      // B's first page holds 20 hits from the start, so it is not asked again
+      // until the tab's pages have used them up.
+      expect(asked).toEqual([
+        "tab:first",
+        "host-b:first",
+        "tab:a-1",
+        "tab:a-2",
+        "host-b:b-1",
+      ]);
+    },
+  );
+
+  it("stops a page where a host with more to give has none left, and asks only that host for the next", async () => {
+    const hostA = pagedHost("a-", [
+      rankedHits(SEARCH_BOT_A, [100, 90], "relevance"),
+      rankedHits(SEARCH_BOT_A, [85], "relevance"),
+    ]);
+    const hostB = pagedHost("b-", [
+      rankedHits(SEARCH_BOT_B, [95, 80, 70], "relevance"),
+    ]);
+    const asked: string[] = [];
+    const ask = (
+      source: BotSearchSource,
+    ): Promise<BotConversationSearchResponse> => {
+      asked.push(`${source.hostId ?? "tab"}:${source.cursor ?? "first"}`);
+      return Promise.resolve(
+        source.hostId === null ? hostA(source.cursor) : hostB(source.cursor),
+      );
+    };
+
+    const first = await fetchBotSearchPage({
+      sources: [TAB_SOURCE, DIRECT_B],
+      sort: "relevance",
+      ask,
+      reachableHostOf: nobodyReachable,
+    });
+
+    // A's next hit is unknown, so nothing below 90 is placed yet.
+    expect(first.hits.map((hit) => hit.messageId)).toEqual([
+      `${SEARCH_BOT_A}/100`,
+      `${SEARCH_BOT_B}/95`,
+      `${SEARCH_BOT_A}/90`,
+    ]);
+    expect(first.next).toEqual([
+      { ...TAB_SOURCE, cursor: "a-1", started: true },
+      {
+        ...DIRECT_B,
+        started: true,
+        pending: rankedHits(SEARCH_BOT_B, [80, 70], "relevance"),
+      },
+    ]);
+
+    const second = await fetchBotSearchPage({
+      sources: first.next,
+      sort: "relevance",
+      ask,
+      reachableHostOf: nobodyReachable,
+    });
+
+    expect(asked).toEqual(["tab:first", "host-b:first", "tab:a-1"]);
+    expect(second.hits.map((hit) => hit.messageId)).toEqual([
+      `${SEARCH_BOT_A}/85`,
+      `${SEARCH_BOT_B}/80`,
+      `${SEARCH_BOT_B}/70`,
+    ]);
+    expect(second.next).toEqual([]);
   });
 });
 

@@ -82,7 +82,11 @@ export interface BotSearchSource {
   /** A host named directly; `null` for the host serving the tab. */
   readonly hostId: string | null;
   readonly scope: BotConversationSearchRequest["scope"];
+  /** Its next page; `null` before its first and past its last. */
   readonly cursor: string | null;
+  readonly started: boolean;
+  /** Its hits fetched and not on a page yet, best first. */
+  readonly pending: ReadonlyArray<BotConversationSearchHit>;
 }
 
 /** One page of a search, from every host it reached. */
@@ -109,18 +113,9 @@ export function botSearchFirstSource(
     hostId: scope.kind === "bot" ? reachableHostOf(scope.botId) : null,
     scope,
     cursor: null,
+    started: false,
+    pending: [],
   };
-}
-
-function ranked(
-  hits: ReadonlyArray<BotConversationSearchHit>,
-  sort: BotConversationSearchRequest["sort"],
-): ReadonlyArray<BotConversationSearchHit> {
-  return [...hits].sort((left, right) =>
-    sort === "newest"
-      ? right.createdAt - left.createdAt
-      : right.score - left.score,
-  );
 }
 
 /** What one source answered; `null` from a host asked directly that failed. */
@@ -149,13 +144,16 @@ function unreachableOf(
 }
 
 /**
- * Asks each source for its page. The tab's host cannot dial a host under
+ * A page of the sources' hits by rank, each asked for its next page once it
+ * runs short, and what it has left carried to the page after, so the list
+ * stays in rank order across pages and hosts. The tab's host cannot dial a host under
  * another owner and says so (`other-owner`), so a team's bot searched from a
  * person's host, or theirs from a team's, is asked of directly where this
- * client reaches it, and joins the page by rank. A host asked directly that
- * fails costs its bot, named in `unreachable`; the tab's host failing fails
- * the page, as does a host that no longer holds the search, which then starts
- * again from its first page.
+ * client reaches it, and joins as a source. A host asked directly that fails
+ * its first page costs its bot, named in `unreachable`. Every other failure
+ * fails the page: the tab's host, and any host on a later page, whose hits
+ * are already on screen and which a retry can go on from. A cursor its host
+ * no longer holds is one of these, and the search starts again.
  */
 export async function fetchBotSearchPage(input: {
   readonly sources: ReadonlyArray<BotSearchSource>;
@@ -166,20 +164,19 @@ export async function fetchBotSearchPage(input: {
   readonly reachableHostOf: (botId: string) => string | null;
 }): Promise<BotSearchPage> {
   const { sources, sort, ask, reachableHostOf } = input;
-  const firstPage = sources.every((source) => source.cursor === null);
+  const firstPage = sources.every((source) => !source.started);
   const unreachable: Array<BotConversationSearchUnreachable> = [];
   const askOne = (source: BotSearchSource): Promise<BotSearchAnswer> =>
     ask(source).then(
       (answer) => ({ source, answer }),
       (error: HostRpcError) => {
-        if (source.hostId === null || botSearchIsGone(source, error)) {
-          throw error;
-        }
+        if (source.hostId === null || source.cursor !== null) throw error;
         unreachable.push(...unreachableOf(source, error));
         return { source, answer: null };
       },
     );
-  const first = await Promise.all(sources.map(askOne));
+  // A source with hits on hand is not asked: its next page waits for them.
+  const first = await Promise.all(sources.map(answerOf(askOne)));
   const followUps: BotSearchSource[] = [];
   for (const entry of first.flatMap(reportedUnreachable)) {
     const hostId =
@@ -191,6 +188,8 @@ export async function fetchBotSearchPage(input: {
         hostId,
         scope: { kind: "bot", botId: entry.botId },
         cursor: null,
+        started: false,
+        pending: [],
       });
     }
   }
@@ -198,16 +197,23 @@ export async function fetchBotSearchPage(input: {
   unreachable.push(...followed.flatMap(reportedUnreachable));
   const answers = [...first, ...followed];
   const totals = answers.map(({ answer }) => answer?.total ?? null);
+  const streams = answers.map(streamOf);
+  const taken = merged(streams, sort);
   return {
-    hits: ranked(
-      answers.flatMap(({ answer }) => answer?.hits ?? []),
-      sort,
-    ),
-    next: answers.flatMap(({ source, answer }) =>
-      answer === null || answer.nextCursor === null
+    hits: taken.hits,
+    next: streams.flatMap((stream, index) => {
+      const pending = stream.hits.slice(taken.counts[index]);
+      return pending.length === 0 && stream.cursor === null
         ? []
-        : [{ ...source, cursor: answer.nextCursor }],
-    ),
+        : [
+            {
+              ...stream.source,
+              cursor: stream.cursor,
+              started: true,
+              pending,
+            },
+          ];
+    }),
     indexState: answers.some(({ answer }) => answer?.indexState === "partial")
       ? "partial"
       : "complete",
@@ -218,12 +224,80 @@ export async function fetchBotSearchPage(input: {
   };
 }
 
-/** A cursor is refused once its host no longer holds the search. */
-function botSearchIsGone(
-  source: BotSearchSource,
-  error: HostRpcError,
-): boolean {
-  return source.cursor !== null && error.code === "E_INVALID_ARGUMENT";
+/** Asks a source that is short of a page, and passes over one that is not. */
+function answerOf(
+  askOne: (source: BotSearchSource) => Promise<BotSearchAnswer>,
+): (source: BotSearchSource) => Promise<BotSearchAnswer> {
+  return (source) =>
+    !source.started ||
+    (source.cursor !== null && source.pending.length < BOT_SEARCH_PAGE_SIZE)
+      ? askOne(source)
+      : Promise.resolve({
+          source,
+          answer: {
+            hits: [],
+            nextCursor: source.cursor,
+            indexState: "complete",
+            total: 0,
+            unreachable: [],
+          },
+        });
+}
+
+/** One source's hits on hand, best first, and its page past them. */
+interface BotSearchStream {
+  readonly source: BotSearchSource;
+  readonly hits: ReadonlyArray<BotConversationSearchHit>;
+  readonly cursor: string | null;
+}
+
+function streamOf({ source, answer }: BotSearchAnswer): BotSearchStream {
+  return {
+    source,
+    hits: [...source.pending, ...(answer?.hits ?? [])],
+    cursor: answer === null ? null : answer.nextCursor,
+  };
+}
+
+function rankOf(
+  hit: BotConversationSearchHit,
+  sort: BotConversationSearchRequest["sort"],
+): number {
+  return sort === "newest" ? hit.createdAt : hit.score;
+}
+
+/**
+ * A page of the streams' best hits. Each stream is best first, and a hit is
+ * only known to outrank a stream with a page to come while that stream has a
+ * hit to compare, so a page stops where one runs out; the next page asks it.
+ */
+function merged(
+  streams: ReadonlyArray<BotSearchStream>,
+  sort: BotConversationSearchRequest["sort"],
+): {
+  readonly hits: ReadonlyArray<BotConversationSearchHit>;
+  readonly counts: ReadonlyArray<number>;
+} {
+  const counts = streams.map(() => 0);
+  const hits: BotConversationSearchHit[] = [];
+  while (hits.length < BOT_SEARCH_PAGE_SIZE) {
+    let best: number | null = null;
+    for (const [index, stream] of streams.entries()) {
+      const head = stream.hits.at(counts[index]);
+      if (head === undefined) {
+        if (stream.cursor !== null) return { hits, counts };
+      } else if (
+        best === null ||
+        rankOf(head, sort) > rankOf(streams[best].hits[counts[best]], sort)
+      ) {
+        best = index;
+      }
+    }
+    if (best === null) break;
+    hits.push(streams[best].hits[counts[best]]);
+    counts[best] += 1;
+  }
+  return { hits, counts };
 }
 
 /** The bots no page reached, each once. */

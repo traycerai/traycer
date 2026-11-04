@@ -1,4 +1,4 @@
-import { useCallback, useMemo } from "react";
+import { useCallback, useMemo, useRef } from "react";
 import {
   infiniteQueryOptions,
   useInfiniteQuery,
@@ -42,6 +42,9 @@ export interface BotConversationSearchResults {
   readonly hasMore: boolean;
   readonly loadingMore: boolean;
   readonly loadMore: () => void;
+  /** The last page asked for failed; paging waits for {@link retryMore}. */
+  readonly moreFailed: boolean;
+  readonly retryMore: () => void;
   readonly retry: () => void;
 }
 
@@ -139,12 +142,15 @@ export function useBotConversationSearch(): BotConversationSearchResults {
   );
   const { fetchNextPage, refetch } = results;
   // A later page is refused once its host no longer holds the search, after a
-  // restart or a long pause: the search starts again from its first page.
-  const loadMore = async (): Promise<void> => {
+  // restart or a long pause: the search starts again from its first page, once
+  // by itself for a search, so a host that goes on refusing asks for the person.
+  const restartedFor = useRef<typeof base>(null);
+  const loadMore = async (restartAgain: boolean): Promise<void> => {
     const next = await fetchNextPage();
-    if (next.error?.code === "E_INVALID_ARGUMENT") {
-      await queryClient.resetQueries({ queryKey, exact: true });
-    }
+    if (next.error?.code !== "E_INVALID_ARGUMENT") return;
+    if (!restartAgain && restartedFor.current === base) return;
+    restartedFor.current = base;
+    await queryClient.resetQueries({ queryKey, exact: true });
   };
   return {
     query,
@@ -153,7 +159,9 @@ export function useBotConversationSearch(): BotConversationSearchResults {
     loading: base !== null && results.isPending,
     hasMore: results.hasNextPage,
     loadingMore: results.isFetchingNextPage,
-    loadMore: () => void loadMore(),
+    loadMore: () => void loadMore(false),
+    moreFailed: results.isFetchNextPageError,
+    retryMore: () => void loadMore(true),
     retry: () => void refetch(),
   };
 }
