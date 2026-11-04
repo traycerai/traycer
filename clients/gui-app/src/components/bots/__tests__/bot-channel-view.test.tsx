@@ -1561,6 +1561,50 @@ describe("<BotChannelView tiles={null} /> focused notification presence", () => 
     });
   });
 
+  it("keeps each channel's box draft to its own conversation when the channel switches", async () => {
+    mocks.state.realComposer = true;
+    // The other channel already holds a draft of its own, which every typed
+    // draft's seed (`seedId` 0) shares with the one typed below.
+    useBotDraftsStore
+      .getState()
+      .typeThreadBox(BOT_ID, "conversation-later", "Draft for B");
+    const held = Promise.withResolvers<BotConversationSendResponse>();
+    mocks.sendAsync.mockImplementationOnce(() => held.promise);
+    const user = userEvent.setup();
+    const { rerender } = mount({ openThreadPostId: null });
+    const channelBox = (): HTMLTextAreaElement => {
+      const box = within(screen.getByTestId("bot-channel-composer")).getByRole(
+        "textbox",
+      );
+      if (!(box instanceof HTMLTextAreaElement)) throw new Error("no box");
+      return box;
+    };
+
+    await user.type(channelBox(), "Draft for A");
+    mocks.state.appConversationChatId = "conversation-later";
+    rerender();
+    expect(channelBox().value).toBe("Draft for B");
+
+    await user.click(
+      within(screen.getByTestId("bot-channel-composer")).getByRole("button", {
+        name: "Send",
+      }),
+    );
+    expect(mocks.sendAsync).toHaveBeenCalledTimes(1);
+    expect(mocks.sendAsync.mock.calls[0]?.[0].conversationId).toBe(
+      "conversation-later",
+    );
+    expect(mocks.sendAsync.mock.calls[0]?.[0].text).toBe("Draft for B");
+    await act(async () => {
+      held.resolve(mocks.sendResponse);
+      await held.promise;
+    });
+
+    mocks.state.appConversationChatId = "conversation-channel";
+    rerender();
+    expect(channelBox().value).toBe("Draft for A");
+  });
+
   it("leaves presence to the focused partner while its pane is the unfocused side of a split", () => {
     render(
       <PaneSurfaceActivityContext.Provider
