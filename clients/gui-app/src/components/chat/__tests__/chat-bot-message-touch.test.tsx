@@ -1,9 +1,10 @@
 /**
- * On a touch screen a bot channel's rows draw no hover actions (Tracy Bots,
- * decision 176): a long press on a member's post opens a sheet instead,
- * offering "Reply in thread" and, on a message the bot failed to answer,
- * Retry and Edit. Driven through the real `<ChatMessage>` with a coarse
- * pointer emulated by `window.matchMedia`.
+ * On a touch screen a bot channel's rows show no actions at rest (Tracy Bots,
+ * decision 176): a long press of a finger or a pen on a member's post opens
+ * a sheet instead, offering "Reply in thread" and, on a message the bot
+ * failed to answer, Retry and Edit. Driven through the real `<ChatMessage>`.
+ * That the floating actions neither show nor take a tap on a touch screen is
+ * computed style, held by `browser-tests/bot-channel-row-actions.spec.ts`.
  */
 import { StrictMode, type ReactNode } from "react";
 import {
@@ -16,7 +17,7 @@ import {
   within,
 } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import type { ConversationRequest } from "@traycer/protocol/persistence/epic/messages";
 import { ChatExpansionTestProviders } from "@/components/chat/__tests__/chat-expansion-test-providers";
 import { makeMessage } from "@/components/chat/__tests__/chat-message-fixtures";
@@ -46,39 +47,9 @@ const OPEN_REQUEST: ConversationRequest = {
   resolvedByMessageId: null,
 };
 
-const originalMatchMedia = Object.getOwnPropertyDescriptor(
-  window,
-  "matchMedia",
-);
-
-function emulateCoarsePointer(): void {
-  Object.defineProperty(window, "matchMedia", {
-    configurable: true,
-    writable: true,
-    value: (query: string) => ({
-      matches: query === "(pointer: coarse)",
-      media: query,
-      onchange: null,
-      addEventListener: () => undefined,
-      removeEventListener: () => undefined,
-      addListener: () => undefined,
-      removeListener: () => undefined,
-      dispatchEvent: () => false,
-    }),
-  });
-}
-
-beforeEach(() => {
-  vi.clearAllMocks();
-  emulateCoarsePointer();
-});
-
 afterEach(() => {
   cleanup();
   vi.useRealTimers();
-  if (originalMatchMedia !== undefined) {
-    Object.defineProperty(window, "matchMedia", originalMatchMedia);
-  }
 });
 
 function presentation(
@@ -187,12 +158,12 @@ function renderRow(
   return screen.getByTestId("bot-member-row");
 }
 
-/** A finger held on the row past the long-press delay. */
-function longPress(row: HTMLElement): void {
+/** A finger, or a pen, held on the row past the long-press delay. */
+function longPress(row: HTMLElement, pointerType: "touch" | "pen"): void {
   vi.useFakeTimers();
   fireEvent.pointerDown(row, {
     pointerId: 1,
-    pointerType: "touch",
+    pointerType,
     isPrimary: true,
     button: 0,
     clientX: 10,
@@ -205,12 +176,11 @@ function longPress(row: HTMLElement): void {
 }
 
 describe("<ChatMessage /> a member's post in a bot channel on a touch screen", () => {
-  it("draws no hover actions and opens no sheet on a tap", async () => {
+  it("opens no sheet on a tap", async () => {
     const user = userEvent.setup();
     const openThread = vi.fn<(postMessageId: string) => void>();
     const row = renderRow(memberPost(undefined), plain(openThread));
 
-    expect(screen.queryByTestId("bot-message-actions")).toBeNull();
     await user.click(row);
 
     expect(screen.queryByTestId("bot-reply-sheet")).toBeNull();
@@ -222,7 +192,7 @@ describe("<ChatMessage /> a member's post in a bot channel on a touch screen", (
     const openThread = vi.fn<(postMessageId: string) => void>();
     const row = renderRow(memberPost(undefined), plain(openThread));
 
-    longPress(row);
+    longPress(row, "touch");
 
     const choice = await screen.findByTestId("bot-reply-sheet-reply-in-thread");
     expect(choice.textContent).toBe("Reply in thread");
@@ -236,6 +206,16 @@ describe("<ChatMessage /> a member's post in a bot channel on a touch screen", (
       expect(screen.queryByTestId("bot-reply-sheet")).toBeNull();
     });
   });
+
+  it("opens the sheet on a pen's long press as on a finger's", async () => {
+    const row = renderRow(memberPost(undefined), plain(vi.fn()));
+
+    longPress(row, "pen");
+
+    expect(
+      await screen.findByTestId("bot-reply-sheet-reply-in-thread"),
+    ).toBeTruthy();
+  });
 });
 
 describe("<ChatMessage /> a message the bot failed to answer on a touch screen", () => {
@@ -248,7 +228,7 @@ describe("<ChatMessage /> a message the bot failed to answer on a touch screen",
       failing(failedRequestOf(retry, false, edit), vi.fn()),
     );
 
-    longPress(row);
+    longPress(row, "touch");
     await user.click(await screen.findByTestId("bot-reply-sheet-retry"));
 
     expect(retry).toHaveBeenCalledTimes(1);
@@ -258,7 +238,7 @@ describe("<ChatMessage /> a message the bot failed to answer on a touch screen",
       expect(screen.queryByTestId("bot-reply-sheet")).toBeNull();
     });
 
-    longPress(row);
+    longPress(row, "touch");
     await user.click(await screen.findByTestId("bot-reply-sheet-edit"));
 
     expect(edit).toHaveBeenCalledTimes(1);
@@ -273,7 +253,7 @@ describe("<ChatMessage /> a message the bot failed to answer on a touch screen",
       failing(failedRequestOf(retry, true, vi.fn()), vi.fn()),
     );
 
-    longPress(row);
+    longPress(row, "touch");
 
     const choice = await screen.findByTestId("bot-reply-sheet-retry");
     expect(choice.hasAttribute("disabled")).toBe(true);
@@ -286,7 +266,7 @@ describe("<ChatMessage /> a message the bot failed to answer on a touch screen",
       failing(failedRequestOf(vi.fn(), false, vi.fn()), null),
     );
 
-    longPress(row);
+    longPress(row, "touch");
 
     const sheet = await screen.findByTestId("bot-reply-sheet");
     expect(within(sheet).getByTestId("bot-reply-sheet-retry")).toBeTruthy();

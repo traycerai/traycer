@@ -39,7 +39,6 @@ import {
 } from "@/lib/bots/bot-trunk-model";
 import { turnReceiptLabel } from "@/lib/bots/bot-turn-receipt";
 import { useElapsedSeconds } from "@/hooks/use-elapsed-seconds";
-import { useCoarsePointer } from "@/hooks/ui/use-coarse-pointer";
 import { useLongPress, type LongPress } from "@/hooks/ui/use-long-press";
 import { useResolvedTheme } from "@/providers/use-resolved-theme";
 import { cn } from "@/lib/utils";
@@ -422,7 +421,7 @@ function BotRow(props: {
 
 /**
  * A touch screen has no hover to reveal a row's actions with: a long press
- * on the row offers them in a sheet. `longPress` is `null` where the row
+ * of a finger or a pen on the row offers them in a sheet. `longPress` is `null` where the row
  * offers none (`enabled` false). `shown` holds from the first long press
  * on, so a channel mounts a sheet only for the rows someone pressed.
  */
@@ -441,6 +440,7 @@ function useRowSheet(enabled: boolean): {
     },
     disabled: !enabled,
     acceptsMouse: false,
+    acceptsPen: true,
   });
   return {
     open,
@@ -664,7 +664,6 @@ function BotMessageFrame(props: {
   // A bot's card needs the surface's bot; outside one the row is plain.
   const identity = useBotIdentity();
   const carded = props.bot && identity !== null;
-  const coarsePointer = useCoarsePointer();
   const { longPress } = props;
   return (
     <div
@@ -725,7 +724,6 @@ function BotMessageFrame(props: {
         {props.children}
       </div>
       {!props.hoverActions ||
-      coarsePointer ||
       (props.replyInThread === null &&
         (props.failed?.onRetry ?? null) === null) ? null : (
         <MessageActions
@@ -1023,8 +1021,8 @@ function RowSheet(props: {
 
 /**
  * Slack's message actions, floating at the row's top right while it is
- * hovered or one of them has keyboard focus. A touch screen draws none: its
- * rows offer their actions on a long press.
+ * hovered or one of them has keyboard focus. A touch screen has no hover,
+ * so its rows show no actions at rest and offer them on a long press.
  */
 function MessageActions(props: {
   readonly onReplyInThread: (() => void) | null;
