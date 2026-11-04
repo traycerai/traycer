@@ -13,6 +13,7 @@ import {
   ROOT_MENTION_STEP,
 } from "../providers";
 import type {
+  BotMentionEntry,
   BrowserTabMentionEntry,
   EpicChatMentionEntry,
   EpicTerminalAgentMentionEntry,
@@ -34,6 +35,7 @@ function context(
     agentEntries: [],
     terminalEntries: [],
     browserTabEntries: [],
+    botEntries: [],
     epicAttachedRoots: new Set(),
     github: {
       pullRequests: EMPTY_GITHUB_SECTION_CONTEXT,
@@ -145,6 +147,18 @@ function browserTab(fields: {
     hostLabel: "Chat host",
     coordinatorKey: "coordinator-chat-host",
     contextOnly: false,
+  };
+}
+
+function bot(botId: string, label: string, group: string): BotMentionEntry {
+  return {
+    kind: "bot",
+    id: `bot:${botId}`,
+    botId,
+    trunkChatId: `trunk-${botId}`,
+    label,
+    description: group,
+    keywords: [label, group, "tracy", "bot"],
   };
 }
 
@@ -1845,6 +1859,115 @@ describe("Browser mention category", () => {
       tabId: "tab-1",
       sessionId: "session-1",
       url: "https://example.com",
+    });
+  });
+});
+
+describe("Tracy mention category", () => {
+  const botEntries = [
+    bot("bot-me", "Tracy", "Personal"),
+    bot("bot-team", "Tracy · traycerai", "traycerai"),
+  ];
+
+  it("sits right after Agents at the root of an open Task", () => {
+    expect(
+      labels(
+        mentionProviderRegistry.entries(
+          ROOT_MENTION_STEP,
+          context({
+            currentEpicId: "epic-1",
+            agentEntries: [chatAgent("chat-1", "Kickoff chat", 10)],
+            botEntries,
+          }),
+        ),
+      ),
+    ).toEqual([
+      "Files",
+      "Folders",
+      "Worktrees",
+      "Git",
+      "Pull requests",
+      "Issues",
+      "Task",
+      "Agents",
+      "Tracy",
+      "Terminals",
+      "Artifacts",
+    ]);
+  });
+
+  it("is listed with no Task open", () => {
+    expect(
+      labels(
+        mentionProviderRegistry.entries(
+          ROOT_MENTION_STEP,
+          context({ currentEpicId: null, botEntries }),
+        ),
+      ),
+    ).toContain("Tracy");
+  });
+
+  it("is absent while the directory holds no bot", () => {
+    expect(
+      labels(
+        mentionProviderRegistry.entries(
+          ROOT_MENTION_STEP,
+          context({ currentEpicId: "epic-1", botEntries: [] }),
+        ),
+      ),
+    ).not.toContain("Tracy");
+  });
+
+  it("lists the bots under their standalone names", () => {
+    const root = mentionProviderRegistry.entries(
+      ROOT_MENTION_STEP,
+      context({ currentEpicId: "epic-1", botEntries }),
+    );
+    const step = navigateEntry(entryByLabel(root, "Tracy"));
+
+    const rows = mentionProviderRegistry.entries(
+      step,
+      context({ currentEpicId: "epic-1", botEntries }),
+    );
+
+    expect(labels(rows)).toEqual(["Back", "Tracy", "Tracy · traycerai"]);
+    expect(mentionProviderRegistry.menuCopy(step)).toEqual({
+      header: "Tracy",
+      empty: "No bots available",
+    });
+  });
+
+  it("finds a bot by its name from the root search, with no category step", () => {
+    const rows = mentionProviderRegistry.entries(
+      ROOT_MENTION_STEP,
+      context({ currentEpicId: "epic-1", query: "traycerai", botEntries }),
+    );
+
+    expect(labels(rows)).toEqual(["Tracy · traycerai"]);
+    expect(rows[0].action.kind).toBe("complete");
+  });
+
+  it("completes a row into a mention carrying the bot id and its trunk agent", () => {
+    const rows = mentionProviderRegistry.entries(
+      {
+        kind: "provider",
+        providerId: "bots",
+        stepId: "root",
+        workspacePath: null,
+      },
+      context({ currentEpicId: null, botEntries }),
+    );
+
+    expect(
+      completeEntry(entryByLabel(rows, "Tracy · traycerai")),
+    ).toMatchObject({
+      contextType: "bot",
+      path: "bot:bot-team",
+      epicId: "bot-team",
+      botId: "bot-team",
+      botTrunkChatId: "trunk-bot-team",
+      label: "Tracy · traycerai",
+      description: "traycerai",
     });
   });
 });
