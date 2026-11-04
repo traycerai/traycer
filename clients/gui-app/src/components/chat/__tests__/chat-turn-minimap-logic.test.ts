@@ -427,6 +427,50 @@ describe("chatTurnMinimapItems labels", () => {
       "a new question",
     ]);
   });
+
+  it("follows a member's name resolving late, on the same window and keys, and still keeps a token's derive", () => {
+    const window = windowWith([
+      skeletonEntry("r-0", "user", "first question"),
+      skeletonEntry("r-1", "assistant", null),
+    ]);
+    // r-0 is placed and hydrated: the label the bot's member directory gives
+    // its sender is all that changes between the reads below.
+    function rowsWith(senderLabel: string, assistantContent: string) {
+      const [, assistant] = listRowsFor(window, assistantContent);
+      const post: TranscriptListRow = {
+        kind: "hydrated",
+        key: "r-0",
+        ordinal: 0,
+        model: member("r-0", senderLabel, "first question"),
+        part: null,
+      };
+      return [post, assistant];
+    }
+
+    const unresolved = chatTurnMinimapItems({
+      rows: rowsWith("Member", "the reply so f"),
+      window,
+      senderFirst: true,
+    });
+    const nextToken = chatTurnMinimapItems({
+      rows: rowsWith("Member", "the reply so far"),
+      window,
+      senderFirst: true,
+    });
+    const resolved = chatTurnMinimapItems({
+      rows: rowsWith("Ada Lovelace", "the reply so far"),
+      window,
+      senderFirst: true,
+    });
+
+    expect(nextToken).toBe(unresolved);
+    expect(unresolved.map((item) => item.label)).toEqual([
+      "Member: first question",
+    ]);
+    expect(resolved.map((item) => item.label)).toEqual([
+      "Ada Lovelace: first question",
+    ]);
+  });
 });
 
 /**

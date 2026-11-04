@@ -331,16 +331,37 @@ function chatTurnMinimapRowLabel(
   return sender === null ? preview : `${sender}: ${preview}`;
 }
 
+/**
+ * The sender each hydrated item was labelled with, when the labels lead with
+ * one. Cold items carry none: their label is the skeleton's preview alone, and
+ * a cold row hydrates only in a range response, which rebuilds the window.
+ */
+type ChatTurnMinimapSenders = ReadonlyArray<{
+  readonly rowIndex: number;
+  readonly sender: string | null;
+}>;
+
+interface ChatTurnMinimapDerive {
+  readonly items: ReadonlyArray<ChatTurnMinimapItem>;
+  readonly senders: ChatTurnMinimapSenders;
+}
+
 function deriveChatTurnMinimapItems(
   rows: ReadonlyArray<TranscriptListRow>,
   senderFirst: boolean,
-): ReadonlyArray<ChatTurnMinimapItem> {
+): ChatTurnMinimapDerive {
   const humanRows: number[] = [];
+  const senders: Array<{ rowIndex: number; sender: string | null }> = [];
   for (let index = 0; index < rows.length; index += 1) {
-    if (isHumanUserRow(rows[index])) humanRows.push(index);
+    const row = rows[index];
+    if (!isHumanUserRow(row)) continue;
+    humanRows.push(index);
+    if (senderFirst && row.kind === "hydrated") {
+      senders.push({ rowIndex: index, sender: row.model.senderLabel });
+    }
   }
 
-  return humanRows.map((rowIndex, index) => {
+  const items = humanRows.map((rowIndex, index): ChatTurnMinimapItem => {
     const row = rows[rowIndex];
     return {
       key: row.key,
@@ -351,6 +372,26 @@ function deriveChatTurnMinimapItems(
       endRowIndex: (humanRows[index + 1] ?? rows.length) - 1,
     };
   });
+  return { items, senders };
+}
+
+/**
+ * Whether a hydrated item's sender changed since the derive: a bot resolves a
+ * member's name after the row first rendered, and that refresh re-renders
+ * `messages` while the window keeps its identity. Bounded by the hydrated
+ * member posts, and allocation-free, so it can run per token.
+ */
+function sendersMoved(
+  rows: ReadonlyArray<TranscriptListRow>,
+  senders: ChatTurnMinimapSenders,
+): boolean {
+  for (const { rowIndex, sender } of senders) {
+    const row = rows[rowIndex];
+    if (row.kind !== "hydrated" || row.model.senderLabel !== sender) {
+      return true;
+    }
+  }
+  return false;
 }
 
 /**
@@ -401,7 +442,7 @@ function unplacedRowKeys(rows: ReadonlyArray<TranscriptListRow>): string {
  * `WeakMap`s, and one slot inside the windowed one, for the same reason
  * `transcript-list-rows.ts` caches placeholders per skeleton: the value is a
  * pure function of the key, it dies with the object it describes, and it needs
- * no invalidation. One slot rather than a map because the key it guards moves
+ * no invalidation beyond the senders `sendersMoved` re-checks. One slot rather than a map because the key it guards moves
  * only when an unplaced row is added or removed, which is not a churn pattern
  * worth retaining alternatives for.
  *
@@ -412,7 +453,7 @@ function unplacedRowKeys(rows: ReadonlyArray<TranscriptListRow>): string {
 interface ChatTurnMinimapDeriveCaches {
   readonly byWindow: WeakMap<
     object,
-    { readonly key: string; readonly items: ReadonlyArray<ChatTurnMinimapItem> }
+    { readonly key: string; readonly derive: ChatTurnMinimapDerive }
   >;
   readonly byRows: WeakMap<object, ReadonlyArray<ChatTurnMinimapItem>>;
 }
@@ -462,6 +503,11 @@ const senderFirstDeriveCaches: ChatTurnMinimapDeriveCaches = {
  * from `rows` outright by the pinned-todo pass, which reads the live turn and
  * therefore moves per token. `deriveCacheKey` carries both.
  *
+ * A third escapes it in a bot's channel and threads only: the sender a label
+ * leads with is resolved from the bot's member directory as `messages` render,
+ * so a name that resolves late re-labels a row the window still holds.
+ * `sendersMoved` re-checks the hydrated items' senders on every hit.
+ *
  * The legacy line has no window and no ordinals, so it keys on the `rows` array
  * itself - which is exactly the memo this replaced, and bounded there because
  * that line hydrates the whole transcript anyway.
@@ -479,14 +525,20 @@ export function chatTurnMinimapItems(input: {
   if (window === null) {
     const cached = caches.byRows.get(rows);
     if (cached !== undefined) return cached;
-    const items = deriveChatTurnMinimapItems(rows, senderFirst);
+    const { items } = deriveChatTurnMinimapItems(rows, senderFirst);
     caches.byRows.set(rows, items);
     return items;
   }
   const key = deriveCacheKey(rows);
   const cached = caches.byWindow.get(window);
-  if (cached !== undefined && cached.key === key) return cached.items;
-  const items = deriveChatTurnMinimapItems(rows, senderFirst);
-  caches.byWindow.set(window, { key, items });
-  return items;
+  if (
+    cached !== undefined &&
+    cached.key === key &&
+    !sendersMoved(rows, cached.derive.senders)
+  ) {
+    return cached.derive.items;
+  }
+  const derive = deriveChatTurnMinimapItems(rows, senderFirst);
+  caches.byWindow.set(window, { key, derive });
+  return derive.items;
 }
