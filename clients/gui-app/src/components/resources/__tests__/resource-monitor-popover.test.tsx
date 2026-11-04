@@ -4231,7 +4231,16 @@ describe("ResourceMonitorPopover · CPU as a share of the machine", () => {
     const cell = within(ownerRowButton()).getByText("6.3%");
     fireEvent.pointerMove(cell);
 
-    expect(await screen.findAllByText(/1\.0 of 16 cores/)).not.toHaveLength(0);
+    // One tooltip, the row's Self and Tree lines: the CPU cell does not open
+    // a second, cores-only tooltip of its own on top of it.
+    const tooltips = await screen.findAllByRole("tooltip");
+    expect(tooltips).toHaveLength(1);
+    expect(tooltips[0]?.textContent).toMatch(
+      /Self: 6\.3% CPU \(1\.0 of 16 cores\)/,
+    );
+    expect(tooltips[0]?.textContent).toMatch(
+      /Tree: 6\.3% CPU \(1\.0 of 16 cores\)/,
+    );
   });
 
   it("names the cores behind the share on a row with no children to expand", async () => {

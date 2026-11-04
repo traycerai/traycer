@@ -1903,6 +1903,7 @@ function DesktopAppResourceSection(props: {
         </div>
         <div className="flex items-center">
           <MetricPair
+            cpuTooltip
             cpuPercent={props.app.cpuPercent}
             memoryBytes={props.app.rssBytes}
             className="text-ui-sm text-foreground"
@@ -1931,6 +1932,7 @@ function DesktopAppProcessGroupRow(props: {
         <span className="min-w-0 truncate text-ui-xs">{props.label}</span>
       </div>
       <MetricPair
+        cpuTooltip
         cpuPercent={props.usage.cpuPercent}
         memoryBytes={props.usage.rssBytes}
         className="text-ui-xs text-muted-foreground/80"
@@ -1959,6 +1961,7 @@ function HostAppResourceSection(props: {
         </div>
         <div className="flex items-center">
           <MetricPair
+            cpuTooltip
             cpuPercent={props.app.cpuPercent}
             memoryBytes={resourceMemoryBytes(props.app, props.memoryMetric)}
             className="text-ui-sm text-foreground"
@@ -2217,6 +2220,7 @@ function TaskResourceSection(props: {
         </span>
         <div className="flex items-center">
           <MetricPair
+            cpuTooltip
             cpuPercent={props.task.cpuPercent}
             memoryBytes={props.task.memoryBytes}
             className="text-ui-sm text-foreground/90"
@@ -2329,6 +2333,7 @@ function OtherResourceSection(props: {
         </button>
         <div className="flex items-center">
           <MetricPair
+            cpuTooltip
             cpuPercent={processRows.treeCpuPercent}
             memoryBytes={processRows.treeMemoryBytes}
             className="text-ui-sm text-foreground/90"
@@ -2372,6 +2377,7 @@ function RestrictedResourceSection(props: {
         </div>
         <div className="flex items-center">
           <MetricPair
+            cpuTooltip
             cpuPercent={props.usage.cpuPercent}
             memoryBytes={resourceMemoryBytes(props.usage, props.memoryMetric)}
             className="text-ui-sm text-foreground/90"
@@ -3115,6 +3121,7 @@ function OwnerRowMetrics(props: {
     if (props.expanded) return <MetricSpacer />;
     return (
       <MetricPair
+        cpuTooltip
         cpuPercent={props.row.treeCpuPercent}
         memoryBytes={props.row.treeMemoryBytes}
         className="text-ui-sm text-foreground/90"
@@ -3439,6 +3446,7 @@ function ProcessMetricPair(props: {
   const treeCores = hostCpuCoresLabel(props.treeCpuPercent, app);
   const metrics = (
     <MetricPair
+      cpuTooltip={!props.hasDescendants}
       cpuPercent={props.cpuPercent}
       memoryBytes={props.memoryBytes}
       className={props.className}
@@ -3477,6 +3485,7 @@ function ProcessMetricPair(props: {
 }
 
 function MetricPair(props: {
+  readonly cpuTooltip: boolean;
   readonly cpuPercent: number;
   readonly memoryBytes: number | null;
   readonly className: string;
@@ -3488,8 +3497,10 @@ function MetricPair(props: {
     <div className={cn(METRIC_COLS, props.className)}>
       <TooltipWrapper
         label={
-          cores ??
-          "This host doesn't report how many processors it has, so there is no total to take a CPU share of."
+          props.cpuTooltip
+            ? (cores ??
+              "This host doesn't report how many processors it has, so there is no total to take a CPU share of.")
+            : null
         }
         side="left"
         sideOffset={6}
