@@ -415,6 +415,7 @@ function MobileNavTracyButton(props: {
         className={undefined}
         unreadCount={signals.unreadCount}
         muted={signals.muted}
+        ground="drawer"
       />
       <span
         className={cn(

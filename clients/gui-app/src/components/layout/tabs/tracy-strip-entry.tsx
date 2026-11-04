@@ -24,17 +24,32 @@ import {
 export const TRACY_ENTRY_LABEL = "Tracy";
 
 /**
+ * Where the count sits: up and to the right of the glyph, clear of it, as the
+ * bell's mark sits, ringed in the colour of the ground the entry stands on so
+ * it reads as cut out of it.
+ */
+const COUNT_SEAT_CLASS = {
+  strip: cn(SIDE_STRIP_NAV_TILE_COUNT_CLASS, "-top-3.5 right-auto left-3.5"),
+  drawer: cn(
+    SIDE_STRIP_NAV_TILE_COUNT_CLASS,
+    "-top-3.5 right-auto left-3.5 ring-popover md:ring-popover",
+  ),
+} as const;
+
+/**
  * The entry's glyph, in every strip placement, wearing the bot's unread count
- * on its top-right corner (the rail tile passes none: its row draws the count)
+ * off its top-right corner (the rail tile passes none: its row draws the count)
  * and the muted mark on its bottom-right while the person set the channel to
  * Nothing; the bare glyph at zero, and where the host does not count.
+ * `ground` is what the entry stands on: the strip's, or the phone drawer's.
  */
 export function TracyEntryIcon(props: {
   readonly className: string | undefined;
   readonly unreadCount: number | null;
   readonly muted: boolean;
+  readonly ground: "strip" | "drawer";
 }): ReactNode {
-  const { className, unreadCount, muted } = props;
+  const { className, unreadCount, muted, ground } = props;
   const mutedMark = muted ? (
     <BotMutedGlyph
       className="absolute right-0 bottom-0 translate-x-1/2 translate-y-1/4 rounded-full bg-background"
@@ -63,10 +78,7 @@ export function TracyEntryIcon(props: {
           count={unreadCount}
           size="xs"
           testId="tracy-entry-unread-count"
-          corner={cn(
-            SIDE_STRIP_NAV_TILE_COUNT_CLASS,
-            "translate-x-1/2 -translate-y-1/2",
-          )}
+          corner={COUNT_SEAT_CLASS[ground]}
         />
       )}
     </span>
@@ -146,6 +158,7 @@ export function TracyStripSlot(props: {
             className="relative z-20"
             unreadCount={signals.unreadCount}
             muted={signals.muted}
+            ground="strip"
           />
           <span
             className={cn(
