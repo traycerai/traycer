@@ -1,5 +1,5 @@
 import type {
-  HostNotificationCloudEntryV26,
+  HostNotificationCloudEntryV27,
   HostNotificationsEntityRef,
   HostNotificationsPresenceEntity,
 } from "@traycer/protocol/host/notifications/contracts";
@@ -13,7 +13,7 @@ import type {
  * only, whose payloads are renderer-typed.
  */
 export function notificationEntityFromHostEntry(
-  entry: HostNotificationCloudEntryV26,
+  entry: HostNotificationCloudEntryV27,
 ): HostNotificationsEntityRef | null {
   if (entry.epicId === null) return null;
   return entry.chatId === null

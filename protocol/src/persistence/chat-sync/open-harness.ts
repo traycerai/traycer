@@ -19,7 +19,10 @@ import {
 } from "@traycer/protocol/persistence/epic/content-blocks";
 import { chatEventSchema } from "@traycer/protocol/persistence/epic/chat-events";
 import { chatRunSettingsSchema } from "@traycer/protocol/persistence/epic/foundation";
-import { userMessageSchema } from "@traycer/protocol/persistence/epic/messages";
+import {
+  userMessageSchema,
+  userMessageSenderTypeFor,
+} from "@traycer/protocol/persistence/epic/messages";
 import {
   agentSenderSchema,
   userSenderSchema,
@@ -250,7 +253,8 @@ export type SnapshotContentBlock = z.infer<typeof snapshotContentBlockSchema>;
 // ---- Messages + events ------------------------------------------------- //
 
 // Derived from the base's live shape for the same reason as the provider
-// notice above; the `sender.type === message.kind` invariant is re-applied.
+// notice above; the sender-matches-kind invariant is re-applied, a Slack
+// message's `user` sender included (`userMessageSenderTypeFor`).
 export const snapshotUserMessageSchema = lazySchema(() => {
   // `sessionAnchor` is dropped from the base shape, not widened: it is
   // session-chain state, which belongs in the opaque `hostPrivate` section
@@ -265,7 +269,10 @@ export const snapshotUserMessageSchema = lazySchema(() => {
       sender: snapshotUserMessageSenderSchema,
     })
     .superRefine((message, ctx) => {
-      if (message.sender.type === message.message.kind) return;
+      if (
+        message.sender.type === userMessageSenderTypeFor(message.message.kind)
+      )
+        return;
       ctx.addIssue({
         code: z.ZodIssueCode.custom,
         path: ["message", "kind"],

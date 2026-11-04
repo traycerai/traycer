@@ -63,6 +63,7 @@ import { useA2AMessagePeer } from "@/hooks/agent/use-a2a-message-peer";
 import { useStandaloneBotName } from "@/hooks/bots/use-standalone-bot-name";
 import { useChatTranscriptJumpStore } from "@/stores/chats/chat-transcript-jump-store";
 import { cn } from "@/lib/utils";
+import { SlackMark } from "@/components/icons/slack-mark";
 import { collapseToSingleLine } from "@/lib/text/format-single-line";
 import { deriveA2AReceivedCollapsibleKey } from "@/components/chat/chat-collapsible-key";
 import { moveChatTimelineScroller } from "@/components/chat/chat-timeline-follow-latch";
@@ -190,6 +191,24 @@ export function UserMessageBody({
 
   if (editing !== null) {
     return <InlineUserMessageEditor editing={editing} />;
+  }
+
+  if (message.slackMessage !== undefined) {
+    return (
+      <>
+        <UserMessageAttachmentGallery
+          attachments={message.attachments}
+          browserAnnotations={message.browserAnnotations}
+          align="end"
+        />
+        <SlackMessageDisplayView
+          messageId={message.id}
+          messageText={message.content}
+          slackMessage={message.slackMessage}
+          sentAt={message.sentAt ?? message.createdAt}
+        />
+      </>
+    );
   }
 
   if (message.agentSenderInfo !== null) {
@@ -352,6 +371,56 @@ function AgentMessageDisplayView({
         bodyFindUnitId={null}
         className={undefined}
       />
+    </div>
+  );
+}
+
+/**
+ * Display variant for a Slack message delivered to a bot's session: who wrote
+ * it in Slack, when, its text, and the files it did not carry. The images it
+ * did carry sit above it like any user row's.
+ */
+function SlackMessageDisplayView({
+  messageId,
+  messageText,
+  slackMessage,
+  sentAt,
+}: {
+  messageId: string;
+  messageText: string;
+  slackMessage: NonNullable<ChatMessageModel["slackMessage"]>;
+  sentAt: number;
+}): ReactNode {
+  const displayName = slackMessage.author.displayName?.trim() ?? "";
+  const name = displayName.length > 0 ? displayName : "Slack user";
+  return (
+    <div className="flex w-full flex-col gap-1.5 rounded-lg border border-border/40 px-4 py-3">
+      <div className="flex min-w-0 items-center gap-1.5 text-ui-sm">
+        <SlackMark className="size-3.5 shrink-0 text-muted-foreground" />
+        <span className="sr-only">Slack message from</span>
+        <span className="min-w-0 flex-1 truncate font-medium text-foreground">
+          {name}
+        </span>
+        <ChatMessageTimestamp
+          timestamp={sentAt}
+          separated={false}
+          instanceId={messageId}
+        />
+      </div>
+      {messageText.length > 0 ? (
+        <div
+          data-chat-find-unit={chatFindMessageContentUnitId(messageId)}
+          className="text-ui leading-7 break-words whitespace-pre-wrap"
+        >
+          {messageText}
+        </div>
+      ) : null}
+      {slackMessage.omitted.length > 0 ? (
+        <p className="m-0 text-ui-sm text-muted-foreground">
+          Not carried:{" "}
+          {slackMessage.omitted.map((file) => file.fileName).join(", ")}
+        </p>
+      ) : null}
     </div>
   );
 }

@@ -52,7 +52,7 @@ export function subscribeToPhonePortrait(onChange: () => void): () => void {
  * shape is the read: iOS overlays its keyboard rather than resizing the
  * viewport, so the shape is the device's, and Android never reaches this line.
  */
-export function readScreenPortrait(): boolean {
+function readScreenPortrait(): boolean {
   const orientation = readScreenOrientation();
   if (orientation !== null) return orientation.type.startsWith("portrait");
   return !window.matchMedia("(orientation: landscape)").matches;
