@@ -93,13 +93,13 @@ describe("<MobileTabSwitcherMount />", () => {
       expect(screen.queryByTestId("sheet")).not.toBeNull();
     });
 
-    it("clears an open request in the column form, so a later flip to bar does not pop the sheet", () => {
+    it("leaves an open request alone in the pane form, where the tile's own sheet answers it, and a flip to bar keeps it open", () => {
       render(<MobileTabSwitcherMount epicId="epic-1" tabId="tab-1" />);
       act(() => useMobileSwitcherStore.getState().setOpen("tab-1", true));
-      expect(useMobileSwitcherStore.getState().openTabId).toBeNull();
+      expect(useMobileSwitcherStore.getState().openTabId).toBe("tab-1");
       shell.set({ width: SHELL_WIDTH_MENU, portrait: true });
       expect(screen.getByTestId("sheet").getAttribute("data-open")).toBe(
-        "false",
+        "true",
       );
     });
 
