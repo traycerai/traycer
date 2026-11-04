@@ -3473,6 +3473,12 @@ function ProcessMetricPair(props: {
             CPU{treeCores === null ? "" : ` (${treeCores})`} ·{" "}
             {formatMemoryBytesOrUnavailable(props.treeMemoryBytes)} memory
           </div>
+          {selfShare === null ? (
+            <div>
+              This host doesn't report how many processors it has, so there is
+              no total to take a CPU share of.
+            </div>
+          ) : null}
         </div>
       }
       side="left"

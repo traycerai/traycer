@@ -4339,6 +4339,23 @@ describe("ResourceMonitorPopover · CPU as a share of the machine", () => {
       expect(row.textContent).not.toContain("%");
     });
 
+    it("explains the missing host count in a parent row's CPU tooltip", async () => {
+      openWith({
+        app: appCountOnly(undefined),
+        owners: [ownerWithChild(100)],
+      });
+
+      const cpuDash = within(ownerRowButton()).getByText("—");
+      fireEvent.pointerMove(cpuDash);
+
+      const tooltips = await screen.findAllByRole("tooltip");
+      expect(tooltips).toHaveLength(1);
+      const tooltip = tooltips[0]?.textContent ?? "";
+      expect(tooltip).toContain(NO_COUNT_SENTENCE);
+      expect(tooltip).toMatch(/Self: —\s+CPU/);
+      expect(tooltip).toMatch(/Tree: —\s+CPU/);
+    });
+
     it("keeps Electron's native share visible when the host count is missing", async () => {
       installDesktopMetricsBridge(() =>
         Promise.resolve({
