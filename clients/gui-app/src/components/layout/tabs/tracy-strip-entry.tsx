@@ -2,12 +2,9 @@ import type { ReactNode } from "react";
 import { Bot } from "lucide-react";
 import { BotMutedGlyph } from "@/components/bots/bot-muted-glyph";
 import { useEpicDndStore } from "@/components/epic-canvas/dnd/dnd-store";
-import { Badge } from "@/components/ui/badge";
+import { UnreadCountBadge } from "@/components/notifications/unread-count-badge";
 import { HoverCard } from "@/components/ui/hover-card";
-import {
-  formatUnreadCount,
-  labelWithUnreadCount,
-} from "@/lib/notifications/unread-count";
+import { labelWithUnreadCount } from "@/lib/notifications/unread-count";
 import { cn } from "@/lib/utils";
 import { TabChrome } from "./header-tab-visual";
 import { useSurfaceJoinPane } from "./surface-join-pane";
@@ -61,19 +58,16 @@ export function TracyEntryIcon(props: {
         data-testid="tracy-entry-icon"
       />
       {mutedMark}
-      {unreadCount === null || unreadCount <= 0 ? null : (
-        <Badge
-          variant="destructive"
+      {unreadCount === null ? null : (
+        <UnreadCountBadge
+          count={unreadCount}
           size="xs"
-          aria-hidden
-          data-testid="tracy-entry-unread-count"
-          className={cn(
+          testId="tracy-entry-unread-count"
+          corner={cn(
             SIDE_STRIP_NAV_TILE_COUNT_CLASS,
-            "translate-x-1/2 -translate-y-1/2 tabular-nums",
+            "translate-x-1/2 -translate-y-1/2",
           )}
-        >
-          {formatUnreadCount(unreadCount)}
-        </Badge>
+        />
       )}
     </span>
   );

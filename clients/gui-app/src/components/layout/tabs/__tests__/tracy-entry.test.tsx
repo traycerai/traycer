@@ -1167,6 +1167,21 @@ describe("the fixed Tracy entry - signals", () => {
       },
     );
 
+    it.each(PLACEMENTS)(
+      "wears the solid primary tone in the $placement",
+      async ({ countTestId, mountEntry }) => {
+        tracyIndicators({ unreadDone: true, unreadCount: 3 });
+        mountEntry();
+
+        const entry = await screen.findByTestId("tab-tracy");
+        const count = within(entry).getByTestId(countTestId);
+        expect(count.getAttribute("data-slot")).toBe("badge");
+        expect(count.getAttribute("data-variant")).toBe("default");
+        expect(count.classList.contains("bg-primary")).toBe(true);
+        expect(count.classList.contains("text-primary-foreground")).toBe(true);
+      },
+    );
+
     it("reads 99+ past ninety-nine", async () => {
       tracyIndicators({ unreadDone: true, unreadCount: 120 });
       mountTopStrip("/");

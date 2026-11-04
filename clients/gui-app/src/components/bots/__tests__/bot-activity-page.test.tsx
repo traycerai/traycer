@@ -509,6 +509,7 @@ describe("<BotActivityPage /> running now", () => {
 
     const stopped = screen.getAllByTestId("bot-activity-stopped");
     expect(stopped).toHaveLength(2);
+    expect(stopped[0].className).toContain("text-destructive");
     expect(stopped[0].textContent).toContain("In the channel");
     expect(stopped[0].textContent).toContain("Rate limit reached");
     expect(stopped[0].textContent).not.toContain("429");

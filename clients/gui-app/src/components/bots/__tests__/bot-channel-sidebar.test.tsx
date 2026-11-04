@@ -527,6 +527,11 @@ describe("<BotChannelSidebar /> sections", () => {
         within(row("bot-triage")).getByTestId("bot-channel-row-unread-count"),
       ).getByText("3"),
     ).toBeTruthy();
+    expect(
+      within(row("bot-triage"))
+        .getByTestId("bot-channel-row-unread-count")
+        .getAttribute("data-variant"),
+    ).toBe("accent");
     expect(row("bot-triage").getAttribute("data-unread")).toBe("true");
     expect(
       within(row("bot-release")).queryByTestId("bot-channel-row-unread-count"),
