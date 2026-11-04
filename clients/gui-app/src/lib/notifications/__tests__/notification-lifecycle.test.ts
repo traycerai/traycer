@@ -56,7 +56,7 @@ describe("classifyNotificationLifecycle", () => {
   it("places unread app-local failures in attention as failure tier", () => {
     expect(
       classifyNotificationLifecycle(
-        input({ source: "host", severity: "failure", readAt: null }),
+        input({ source: "app-local", severity: "failure", readAt: null }),
       ),
     ).toEqual({ section: "attention", tier: "failure" });
   });
@@ -64,7 +64,7 @@ describe("classifyNotificationLifecycle", () => {
   it("moves read app-local failures to recent", () => {
     expect(
       classifyNotificationLifecycle(
-        input({ source: "host", severity: "failure", readAt: 99 }),
+        input({ source: "app-local", severity: "failure", readAt: 99 }),
       ),
     ).toEqual({ section: "recent" });
   });
