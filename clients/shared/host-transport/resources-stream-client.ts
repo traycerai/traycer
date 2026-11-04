@@ -2,6 +2,7 @@ import {
   resourcesSubscribeServerFrameSchema,
   type AppResourceSnapshotWire,
   type AppResourceSnapshotWireV15,
+  type AppResourceSnapshotWireV16,
   type EpicResourceSnapshotWire,
   type EpicResourceSnapshotWireV15,
   type HostTreeResourceSnapshotWire,
@@ -19,10 +20,12 @@ import {
   type ResourcesSubscribeServerFrameV13,
   type ResourcesSubscribeServerFrameV14,
   type ResourcesSubscribeServerFrameV15,
+  type ResourcesSubscribeServerFrameV16,
   resourcesSubscribeServerFrameSchemaV12,
   resourcesSubscribeServerFrameSchemaV13,
   resourcesSubscribeServerFrameSchemaV14,
   resourcesSubscribeServerFrameSchemaV15,
+  resourcesSubscribeServerFrameSchemaV16,
 } from "@traycer/protocol/host/resources/subscribe";
 import type { HostStreamRpcRegistry } from "@traycer/protocol/host/registry";
 import type { SchemaVersion } from "@traycer/protocol/framework/versioned-stream-rpc";
@@ -44,7 +47,12 @@ import type { IStreamClient } from "./i-stream-client";
 export interface ResourcesProjectionPayload {
   readonly epicId: string;
   readonly sampledAt: number;
-  readonly app: AppResourceSnapshotWireV15 | null;
+  readonly app:
+    | (AppResourceSnapshotWireV15 & {
+        /** Absent when the connected host negotiated resources.subscribe < 1.6. */
+        readonly hostCpuCount?: number;
+      })
+    | null;
   // Owners always carry `harnessId` and `managedCommand` downstream: a host on
   // `@1.3`/`@1.4` sends them; an older host has them backfilled to `null` in
   // `toPayload`. A host below `@1.4` never reports a managed-command owner at
@@ -339,7 +347,8 @@ export class ResourcesStreamClient {
       | ResourcesSubscribeServerFrameV12
       | ResourcesSubscribeServerFrameV13
       | ResourcesSubscribeServerFrameV14
-      | ResourcesSubscribeServerFrameV15 = parsed.data;
+      | ResourcesSubscribeServerFrameV15
+      | ResourcesSubscribeServerFrameV16 = parsed.data;
     switch (frame.kind) {
       case "snapshot": {
         this.callbacks.onSnapshot(toPayload(frame));
@@ -357,8 +366,11 @@ export class ResourcesStreamClient {
   }
 }
 
-/** The one schema the negotiated minor promises; `@1.5+` reads as `@1.5`. */
+/** The one schema the negotiated minor promises; `@1.6+` reads as `@1.6`. */
 function parseAtMinor(envelope: StreamFrameEnvelope, minor: number) {
+  if (minor >= 6) {
+    return resourcesSubscribeServerFrameSchemaV16.safeParse(envelope);
+  }
   if (minor >= 5) {
     return resourcesSubscribeServerFrameSchemaV15.safeParse(envelope);
   }
@@ -376,6 +388,8 @@ function parseAtMinor(envelope: StreamFrameEnvelope, minor: number) {
 
 /** Only for a frame that beats its own handshake - see `handleServerFrame`. */
 function parseNewestFirst(envelope: StreamFrameEnvelope) {
+  const v16 = resourcesSubscribeServerFrameSchemaV16.safeParse(envelope);
+  if (v16.success) return v16;
   const v15 = resourcesSubscribeServerFrameSchemaV15.safeParse(envelope);
   if (v15.success) return v15;
   const v14 = resourcesSubscribeServerFrameSchemaV14.safeParse(envelope);
@@ -393,7 +407,8 @@ function toPayload(
     | ResourcesSubscribeServerFrameV12
     | ResourcesSubscribeServerFrameV13
     | ResourcesSubscribeServerFrameV14
-    | ResourcesSubscribeServerFrameV15,
+    | ResourcesSubscribeServerFrameV15
+    | ResourcesSubscribeServerFrameV16,
     { kind: "snapshot" | "update" }
   >,
 ): ResourcesProjectionPayload {
@@ -456,8 +471,11 @@ function memoryDetailsOrNull(value: {
 }
 
 function normalizeApp(
-  app: AppResourceSnapshotWire | AppResourceSnapshotWireV15,
-): AppResourceSnapshotWireV15 {
+  app:
+    | AppResourceSnapshotWire
+    | AppResourceSnapshotWireV15
+    | AppResourceSnapshotWireV16,
+): AppResourceSnapshotWireV15 | AppResourceSnapshotWireV16 {
   return {
     ...app,
     ...memoryDetailsOrNull(app),

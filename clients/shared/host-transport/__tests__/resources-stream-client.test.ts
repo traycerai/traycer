@@ -193,7 +193,7 @@ function parseText(raw: string): Record<string, unknown> {
   return value as Record<string, unknown>;
 }
 
-// Fixtures carry the `@1.5` shape. A test that simulates an older host says so
+// Fixtures carry the `@1.6` shape. A test that simulates an older host says so
 // by negotiating that minor - whose schema strips these keys on parse, which is
 // exactly the backfill path `toPayload` exists for.
 const NULL_DETAIL = { pssBytes: null, privateBytes: null } as const;
@@ -243,6 +243,7 @@ const EPIC = {
 const APP = {
   sampledAt: 1_000,
   hostTotalMemoryBytes: 16_000,
+  hostCpuCount: 8,
   process: {
     pid: 10,
     parentPid: null,
@@ -312,7 +313,7 @@ describe("ResourcesStreamClient", () => {
     expect(parseText(sockets[0].textSent[1])).toEqual({
       kind: "subscribe",
       method: "resources.subscribe",
-      schemaVersion: { major: 1, minor: 5 },
+      schemaVersion: { major: 1, minor: 6 },
       params: {
         epicId: "epic-1",
         scope: { kind: "epic", epicId: "epic-1" },
@@ -349,6 +350,7 @@ describe("ResourcesStreamClient", () => {
 
     expect(snapshots).toHaveLength(1);
     expect(snapshots[0].app?.process?.name).toBe("traycer-host");
+    expect(snapshots[0].app?.hostCpuCount).toBe(8);
     expect(snapshots[0].owners[0].owner.ownerId).toBe("s1");
     expect(snapshots[0].owners[0].harnessId).toBeNull();
     expect(snapshots[0].owners[0].pssBytes).toBeNull();
@@ -361,6 +363,7 @@ describe("ResourcesStreamClient", () => {
     expect(updates).toHaveLength(1);
     expect(updates[0].owners[0].cpuPercent).toBe(55);
     expect(updates[0].sampledAt).toBe(2_000);
+    expect(updates[0].app?.hostCpuCount).toBe(8);
     expect(updates[0].hostTree?.cpuPercent).toBe(60);
 
     client.close();
@@ -434,6 +437,94 @@ describe("ResourcesStreamClient", () => {
       privateBytes: 700,
     });
     client.close();
+  });
+
+  describe("host CPU count", () => {
+    function startAtMinor(minor: 5 | 6): {
+      readonly sockets: StubStreamWebSocket[];
+      readonly snapshots: ResourcesProjectionPayload[];
+      readonly client: ResourcesStreamClient;
+    } {
+      const { factory, sockets } = makeFactory();
+      const snapshots: ResourcesProjectionPayload[] = [];
+      const client = new ResourcesStreamClient({
+        wsStreamClient: makeWsStreamClient(factory),
+        scope: { kind: "global" },
+        callbacks: {
+          onSnapshot: (payload) => snapshots.push(payload),
+          onUpdate: () => undefined,
+          onConnectionStatus: () => undefined,
+          onScopeSupport: () => undefined,
+        },
+      });
+      completeHandshakeAt(sockets[0], { major: 1, minor });
+      return { sockets, snapshots, client };
+    }
+
+    function appSnapshot(app: unknown): StreamFrameEnvelope {
+      return {
+        kind: "snapshot",
+        hasBinaryPayload: false,
+        epicId: "epic-1",
+        sampledAt: 1_000,
+        app,
+        owners: [],
+        epic: null,
+        hostTree: null,
+        other: null,
+        restricted: null,
+      };
+    }
+
+    it("forwards an @1.5 host's app exactly, without inventing hostCpuCount", () => {
+      const { hostCpuCount: _count, ...appWithoutCount } = APP;
+      const { sockets, snapshots, client } = startAtMinor(5);
+
+      expect(parseText(sockets[0].textSent[1]).schemaVersion).toEqual({
+        major: 1,
+        minor: 5,
+      });
+      sockets[0].fireText(appSnapshot(appWithoutCount));
+
+      expect(snapshots[0]?.app).toEqual(appWithoutCount);
+      client.close();
+    });
+
+    it("drops a negotiated @1.6 frame carrying an invalid count", () => {
+      const { sockets, snapshots, client } = startAtMinor(6);
+      const errors = vi.spyOn(console, "error").mockImplementation(() => {});
+      try {
+        expect(parseText(sockets[0].textSent[1]).schemaVersion).toEqual({
+          major: 1,
+          minor: 6,
+        });
+        sockets[0].fireText(appSnapshot({ ...APP, hostCpuCount: 0 }));
+
+        expect(snapshots).toHaveLength(0);
+        expect(errors).toHaveBeenCalledTimes(1);
+      } finally {
+        errors.mockRestore();
+        client.close();
+      }
+    });
+
+    it("keeps the count on a frame that arrives before the handshake settles", () => {
+      const fake = new FakeStreamClient(true);
+      const snapshots: ResourcesProjectionPayload[] = [];
+      const client = new ResourcesStreamClient({
+        wsStreamClient: fake,
+        scope: { kind: "global" },
+        callbacks: {
+          ...trackScopeSupport().callbacks,
+          onSnapshot: (payload) => snapshots.push(payload),
+        },
+      });
+
+      fake.sessions[0].emit(appSnapshot(APP), null);
+
+      expect(snapshots[0].app?.hostCpuCount).toBe(8);
+      client.close();
+    });
   });
 
   it("publishes visibility demand only to an @1.5 host", () => {
