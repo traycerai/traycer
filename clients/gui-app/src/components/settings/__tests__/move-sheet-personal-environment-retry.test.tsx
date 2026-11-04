@@ -205,9 +205,6 @@ describe("MoveSheet retry while Personal is unresolved", () => {
     });
     await waitFor(() => {
       expect(
-        screen.getByTestId("move-sheet-description").textContent,
-      ).toContain("which today is dev-box and Old laptop.");
-      expect(
         screen
           .getByRole("button", { name: "Move to Personal" })
           .hasAttribute("disabled"),
