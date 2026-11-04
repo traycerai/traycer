@@ -1,7 +1,4 @@
-import {
-  redactSensitiveText,
-  SENSITIVE_KEY_PATTERN,
-} from "./redaction";
+import { redactSensitiveText, SENSITIVE_KEY_PATTERN } from "./redaction";
 
 /**
  * The support-specific scrubber (ticket 09 / tech-plan T6): applied at

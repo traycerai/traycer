@@ -52,6 +52,7 @@ import {
   toolCallBlockSchema,
   toolCallBlockSchemaPreArtifact,
   toolCallBlockSchemaPreBotSendReceipt,
+  toolCallBlockSchemaPreFeedbackDraft,
   toolCallBlockSchemaPreDelivery,
 } from "@traycer/protocol/persistence/epic/content-blocks";
 import {
@@ -232,6 +233,27 @@ export const openContentBlockSchema = lazySchema(() =>
 );
 export type OpenContentBlock = z.infer<typeof openContentBlockSchema>;
 
+/** Open blocks through `chat.subscribe@1.41`, before the feedback-draft stamp. */
+export const openContentBlockSchemaPreFeedbackDraft = lazySchema(() =>
+  z.discriminatedUnion("type", [
+    openTextBlockSchema,
+    reasoningBlockSchema,
+    toolCallBlockSchemaPreFeedbackDraft,
+    fileChangeBlockSchema,
+    commandBlockSchema,
+    subAgentBlockSchema,
+    approvalBlockSchema,
+    todoBlockSchema,
+    openPlanBlockSchema,
+    errorBlockSchema,
+    compactionBlockSchema,
+    autonomousResumeBlockSchema,
+    openSteerBlockSchema,
+    interviewBlockSchema,
+    artifactOperationBlockSchema,
+  ]),
+);
+
 /**
  * The open content-block union as `chat.subscribe@1.23` through `@1.28` ship
  * it: the tool block without `1.29`'s `agentMessageDelivery` stamp. Listed
@@ -331,6 +353,14 @@ export const openAssistantMessageSchema = lazySchema(() =>
 );
 export type OpenAssistantMessage = z.infer<typeof openAssistantMessageSchema>;
 
+/** The open assistant row `chat.subscribe@1.37` through `@1.41` ship. */
+export const openAssistantMessageSchemaPreFeedbackDraft = lazySchema(() =>
+  assistantMessageSchema.extend({
+    sender: openAgentSenderSchema,
+    blocks: z.array(openContentBlockSchemaPreFeedbackDraft),
+  }),
+);
+
 /** The open assistant row `chat.subscribe@1.23` through `@1.28` ship. */
 export const openAssistantMessageSchemaPreDelivery = lazySchema(() =>
   assistantMessageSchema.extend({
@@ -351,6 +381,13 @@ export const openMessageSchema = lazySchema(() =>
   z.discriminatedUnion("role", [
     openUserMessageSchema,
     openAssistantMessageSchema,
+  ]),
+);
+/** The open row `chat.subscribe@1.37` through `@1.41` ship. */
+export const openMessageSchemaPreFeedbackDraft = lazySchema(() =>
+  z.discriminatedUnion("role", [
+    openUserMessageSchema,
+    openAssistantMessageSchemaPreFeedbackDraft,
   ]),
 );
 export const openMessageSchemaPreCanvas = lazySchema(() =>

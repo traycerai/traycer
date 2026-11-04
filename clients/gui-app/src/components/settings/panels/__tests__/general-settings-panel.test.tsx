@@ -338,7 +338,9 @@ describe("GeneralSettingsPanel", () => {
 
   it("reflects Agent feedback and calls setAgentFeedbackEnabled when toggled", async () => {
     const bridge: TestFeatureSettingsBridge = {
-      get: vi.fn(() => Promise.resolve({ agentRoles: false, agentFeedback: true })),
+      get: vi.fn(() =>
+        Promise.resolve({ agentRoles: false, agentFeedback: true }),
+      ),
       setAgentRolesEnabled: vi.fn((enabled) =>
         Promise.resolve({ agentRoles: enabled, agentFeedback: true }),
       ),
@@ -352,7 +354,9 @@ describe("GeneralSettingsPanel", () => {
 
     renderPanel();
 
-    const toggle = screen.getByRole("switch", { name: "Let agents draft feedback for you to review" });
+    const toggle = screen.getByRole("switch", {
+      name: "Let agents draft feedback for you to review",
+    });
     await waitFor(() => expect(toggle.hasAttribute("disabled")).toBe(false));
     expect(toggle.getAttribute("aria-checked")).toBe("true");
     fireEvent.click(toggle);
@@ -366,7 +370,7 @@ describe("GeneralSettingsPanel", () => {
     const bridge: TestFeatureSettingsBridge = {
       get: vi.fn(() => Promise.reject(new Error("invalid config"))),
       setAgentRolesEnabled: vi.fn((enabled) =>
-        Promise.resolve({ agentRoles: enabled , agentFeedback: true }),
+        Promise.resolve({ agentRoles: enabled, agentFeedback: true }),
       ),
       setAgentFeedbackEnabled: vi.fn((enabled) =>
         Promise.resolve({ agentRoles: false, agentFeedback: enabled }),
@@ -391,7 +395,9 @@ describe("GeneralSettingsPanel", () => {
 
   it("preserves the Agent roles value when the settings write fails", async () => {
     const bridge: TestFeatureSettingsBridge = {
-      get: vi.fn(() => Promise.resolve({ agentRoles: false, agentFeedback: true })),
+      get: vi.fn(() =>
+        Promise.resolve({ agentRoles: false, agentFeedback: true }),
+      ),
       setAgentRolesEnabled: vi.fn(() =>
         Promise.reject(new Error("write failed")),
       ),
@@ -736,9 +742,11 @@ describe("GeneralSettingsPanel", () => {
 
   it("puts the four Agents rows in order, badges Agent roles as Experimental, and draws no old group headings or radios", () => {
     const featureSettings: TestFeatureSettingsBridge = {
-      get: vi.fn(() => Promise.resolve({ agentRoles: false, agentFeedback: true })),
+      get: vi.fn(() =>
+        Promise.resolve({ agentRoles: false, agentFeedback: true }),
+      ),
       setAgentRolesEnabled: vi.fn((enabled: boolean) =>
-        Promise.resolve({ agentRoles: enabled , agentFeedback: true }),
+        Promise.resolve({ agentRoles: enabled, agentFeedback: true }),
       ),
       setAgentFeedbackEnabled: vi.fn((enabled) =>
         Promise.resolve({ agentRoles: false, agentFeedback: enabled }),
@@ -836,9 +844,11 @@ describe("GeneralSettingsPanel", () => {
 
     it("matches the index with only the feature-settings bridge", () => {
       const featureSettings: TestFeatureSettingsBridge = {
-        get: vi.fn(() => Promise.resolve({ agentRoles: false, agentFeedback: true })),
+        get: vi.fn(() =>
+          Promise.resolve({ agentRoles: false, agentFeedback: true }),
+        ),
         setAgentRolesEnabled: vi.fn((enabled: boolean) =>
-          Promise.resolve({ agentRoles: enabled , agentFeedback: true }),
+          Promise.resolve({ agentRoles: enabled, agentFeedback: true }),
         ),
         setAgentFeedbackEnabled: vi.fn((enabled) =>
           Promise.resolve({ agentRoles: false, agentFeedback: enabled }),
