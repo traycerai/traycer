@@ -61,7 +61,7 @@ interface SoundtrackState {
 }
 
 interface SoundtrackStoreDependencies {
-  /** Read at each `enable()`; only a development build answers with a promise. */
+  /** Read at each `enable()`; a read over the network answers with a promise. */
   readonly readManifest: () => SoundtrackManifest | Promise<SoundtrackManifest>;
   readonly openPorts: (stems: StemManifest, volume: number) => SoundtrackPorts;
   readonly random: RandomSource;

@@ -22,6 +22,10 @@ import {
   MIN_SIDEBAR_WIDTH_PX,
   useLeftPanelStore,
 } from "@/stores/epics/left-panel-store";
+import {
+  DEFAULT_LAYOUT_SNAPSHOT,
+  useLayoutStore,
+} from "@/stores/layout/layout-store";
 import { type EpicStreamClientFactory } from "@/stores/epics/open-epic/store";
 import {
   openStoreForTest,
@@ -194,11 +198,26 @@ function seedTabColor(ref: TabRef, color: string): void {
   useTabsStore.getState().repair();
 }
 
+/**
+ * The shipped layout collapses the sidebar in a new tab; these cases are about
+ * the open column, so a tab with no record of its own opens expanded here.
+ */
+function openSidebarInNewTabs(): void {
+  useLayoutStore.setState({
+    ...DEFAULT_LAYOUT_SNAPSHOT,
+    arrangement: {
+      ...DEFAULT_LAYOUT_SNAPSHOT.arrangement,
+      sidebarStartCollapsed: false,
+    },
+  });
+}
+
 describe("<EpicSidebarColumn />", () => {
   beforeEach(() => {
     window.localStorage.clear();
     sidebarRenderCounts.liveHost = 0;
     sidebarRenderCounts.loadingHost = 0;
+    openSidebarInNewTabs();
     useLeftPanelStore.setState({
       mainCollapsedByTabId: {},
       sidebarWidthPx: DEFAULT_SIDEBAR_WIDTH_PX,
@@ -607,6 +626,7 @@ describe("<EpicSidebarColumn />", () => {
 describe("<EpicSidebarColumn /> panel task header", () => {
   beforeEach(() => {
     window.localStorage.clear();
+    openSidebarInNewTabs();
     useLeftPanelStore.setState({
       mainCollapsedByTabId: {},
       sidebarWidthPx: DEFAULT_SIDEBAR_WIDTH_PX,

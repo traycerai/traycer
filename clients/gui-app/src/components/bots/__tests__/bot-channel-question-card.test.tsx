@@ -218,6 +218,18 @@ function hold(settlement: BotQuestionSettlement | null): BotQuestionItem {
   return { text: HOLD, options: [], allowFreeText: true, settlement };
 }
 
+const WATCH = "What should I watch for you?";
+
+/** Options and the person's own words: the card takes several of the options. */
+function watch(settlement: BotQuestionSettlement | null): BotQuestionItem {
+  return {
+    text: WATCH,
+    options: ["Agents waiting on me", "Sandboxes and credits", "Nothing yet"],
+    allowFreeText: true,
+    settlement,
+  };
+}
+
 function byPerson(
   userId: string,
   answer: string | null,
@@ -1169,6 +1181,104 @@ describe("<BotChannelView tiles={null} /> what a member has not sent, across the
     view.reopen(QUESTION_THREAD);
 
     expect(questionThreadBox().value).toBe("Now");
+  });
+});
+
+describe("<BotChannelView tiles={null} /> a row's text above its question card", () => {
+  it("shows the row's text above the card when it says more than its questions", () => {
+    session(CHANNEL_ID, [
+      botRow(
+        QUESTION_ID,
+        "I'm your bot. Two questions to start.",
+        [deploy(null)],
+        null,
+      ),
+    ]);
+    mountChannel(null);
+
+    const channel = screen.getByTestId("bot-channel");
+    expect(
+      within(channel).getByText("I'm your bot. Two questions to start."),
+    ).toBeTruthy();
+    expect(
+      within(channelCard()).getByRole("region", { name: DEPLOY }),
+    ).toBeTruthy();
+  });
+
+  it("shows the card alone, with no copy of the question, when the row's text is just its questions", () => {
+    session(CHANNEL_ID, [questionRow([deploy(null)])]);
+    mountChannel(null);
+
+    expect(
+      within(screen.getByTestId("bot-channel")).getAllByText(DEPLOY),
+    ).toHaveLength(1);
+  });
+});
+
+describe("<BotChannelView tiles={null} /> a question that takes options and the person's own words", () => {
+  it("toggles several options, and Submit sends them joined in option order with the typed words after them", async () => {
+    const user = userEvent.setup();
+    session(CHANNEL_ID, [questionRow([watch(null)])]);
+    mountChannel(null);
+
+    const question = cardQuestion(channelCard(), WATCH);
+    await user.click(
+      within(question).getByRole("button", { name: "Sandboxes and credits" }),
+    );
+    await user.click(
+      within(question).getByRole("button", { name: "Agents waiting on me" }),
+    );
+    await user.type(
+      within(question).getByRole("textbox", { name: "Your answer" }),
+      "the build farm",
+    );
+    await user.click(within(question).getByRole("button", { name: "Submit" }));
+
+    expect(sent.map((request) => request.text)).toEqual([
+      "Agents waiting on me, Sandboxes and credits, the build farm",
+    ]);
+  });
+
+  it("takes a pick back when it is toggled off", async () => {
+    const user = userEvent.setup();
+    session(CHANNEL_ID, [questionRow([watch(null)])]);
+    mountChannel(null);
+
+    const question = cardQuestion(channelCard(), WATCH);
+    await user.click(
+      within(question).getByRole("button", { name: "Agents waiting on me" }),
+    );
+    await user.click(
+      within(question).getByRole("button", { name: "Sandboxes and credits" }),
+    );
+    await user.click(
+      within(question).getByRole("button", { name: "Agents waiting on me" }),
+    );
+
+    expect(
+      within(question)
+        .getByRole("button", { name: "Agents waiting on me" })
+        .getAttribute("aria-pressed"),
+    ).toBe("false");
+    await user.click(within(question).getByRole("button", { name: "Submit" }));
+    expect(sent.map((request) => request.text)).toEqual([
+      "Sandboxes and credits",
+    ]);
+  });
+
+  it("stays single-choice on a question without free text: a second pick replaces the first", async () => {
+    const user = userEvent.setup();
+    session(CHANNEL_ID, [questionRow([deploy(null)])]);
+    mountChannel(null);
+
+    const question = cardQuestion(channelCard(), DEPLOY);
+    await user.click(within(question).getByRole("button", { name: "Now" }));
+    await user.click(
+      within(question).getByRole("button", { name: "After the train" }),
+    );
+    await user.click(within(question).getByRole("button", { name: "Submit" }));
+
+    expect(sent.map((request) => request.text)).toEqual(["After the train"]);
   });
 });
 

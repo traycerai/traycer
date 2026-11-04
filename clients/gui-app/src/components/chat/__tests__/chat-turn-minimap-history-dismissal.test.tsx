@@ -119,6 +119,7 @@ function renderMinimap() {
           rendered: makeTranscript(12),
         })}
         transcriptWindow={null}
+        senderFirst={false}
         onSelect={vi.fn<(messageId: string) => void>()}
         side="right"
         topOffsetAdjustmentRef={{ current: 0 }}

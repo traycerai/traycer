@@ -2,7 +2,7 @@ import { useCallback, useEffect, type ReactNode } from "react";
 import { SquareStack } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { InlineTitleField } from "@/components/epic-canvas/mobile/inline-title-field";
-import { useMobileTileLevel2Form } from "@/components/epic-canvas/mobile/use-mobile-tile-level2-form";
+import { useMobileTileListForm } from "@/components/epic-canvas/mobile/use-mobile-tile-level2-form";
 import { useIsMobileViewport } from "@/hooks/ui/use-mobile-viewport";
 import {
   epicTabRightActionsKey,
@@ -57,15 +57,15 @@ import {
  * gets the same trigger. The create actions inside the sheet carry their own
  * editor gate.
  *
- * Drawn only in the `bar` form: in the others the list has a place of its own
- * and there is no sheet for this to open.
+ * Drawn only in the `bar` form: in the `pane` form each tile's own header
+ * opens the sheet.
  */
 export function EpicMobileSwitcherTrigger(props: { readonly tabId: string }) {
   const { tabId } = props;
   const setOpen = useMobileSwitcherStore((state) => state.setOpen);
   const mounted = useIsMobileSwitcherMounted(tabId);
-  const level2 = useMobileTileLevel2Form(tabId);
-  if (level2 !== "bar") return null;
+  const form = useMobileTileListForm(tabId);
+  if (form !== "bar") return null;
   return (
     <Button
       type="button"

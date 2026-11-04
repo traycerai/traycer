@@ -36,27 +36,7 @@ const noopEpicStreamClientFactory: EpicStreamClientFactory = () => ({
   close: () => undefined,
 });
 
-/** A direct collaborator as `epic.listCollaborators` puts them on the wire. */
-export function collaboratorEntry(
-  userId: string,
-  profile: {
-    readonly displayName: string;
-    readonly avatarUrl: string;
-  } | null,
-): CollaboratorEntry {
-  return {
-    role: "editor",
-    accessType: "direct",
-    environmentId: null,
-    grantedAt: 1,
-    grantedBy: "owner",
-    user: {
-      userId,
-      profile: profile === null ? null : { ...profile, email: "", handle: "" },
-    },
-    team: null,
-  };
-}
+export { collaboratorEntry } from "@/lib/identity/__tests__/collaborator-fixture";
 
 export function collaboratorsResponse(
   collaborators: ReadonlyArray<CollaboratorEntry>,

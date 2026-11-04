@@ -7,6 +7,7 @@ import { cleanup, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { SoundtrackSettingsSection } from "@/components/settings/panels/soundtrack-settings-section";
 import { setMobileApp } from "@/lib/mobile-app";
+import { AQUILO_1 } from "@/lib/soundtrack/__tests__/aquilo-1";
 import {
   openedFakePorts,
   resetFakePorts,
@@ -20,10 +21,30 @@ vi.mock("@/lib/soundtrack/web-audio-ports", async () => {
   return { openWebAudioPorts: openFakePorts };
 });
 
+/** One stem path per variant, as the v1 schema requires of every layer. */
+function files(layer: string, count: number): string[] {
+  return Array.from(
+    { length: count },
+    (_, index) => `stems/aquilo-1/${layer}-${String(index + 1)}.ogg`,
+  );
+}
+
 const DEV_MANIFEST = {
-  trackNames: ["aquilo-1"],
+  version: 1,
+  tracks: [AQUILO_1],
   views: { home: ["aquilo-1"], task: [], bot: [], settings: [] },
-  stems: { tracks: [] },
+  stems: {
+    tracks: [
+      {
+        name: "aquilo-1",
+        // Every aquilo-1 layer is pooled, so each has a variant count.
+        layers: AQUILO_1.layers.map((layer) => ({
+          name: layer.name,
+          files: files(layer.name, layer.variants ?? 0),
+        })),
+      },
+    ],
+  },
 };
 
 beforeEach(() => {

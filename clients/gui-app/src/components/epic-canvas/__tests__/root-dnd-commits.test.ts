@@ -14,15 +14,26 @@ import {
   useLayoutStore,
 } from "@/stores/layout/layout-store";
 import { currentLayoutArrangement } from "@/lib/layout/rail-view";
+import { visibleRailPanelIds, type RailEntry } from "@/lib/layout/rail";
 import {
-  DEFAULT_RAIL,
-  visibleRailPanelIds,
-  type RailEntry,
-} from "@/lib/layout/rail";
-import { DEFAULT_ARRANGEMENT } from "@/lib/layout/layout-arrangement";
+  DEFAULT_ARRANGEMENT,
+  stackRailPanels,
+} from "@/lib/layout/layout-arrangement";
 import { useEpicSidebarExpansionStore } from "@/stores/epics/epic-sidebar-expansion-store";
 import { makeGitFileDiffTile } from "@/lib/git/git-diff-tile";
 import type { NavigateNestedFocus } from "@/lib/epic-nested-focus-navigation";
+
+/**
+ * The shipped rail with Agents stacked on Artifacts: the pair earlier builds
+ * shipped, and the one every stack case below is written about. The shipped
+ * rail itself holds no stack.
+ */
+const STACKED_ARRANGEMENT = stackRailPanels(
+  DEFAULT_ARRANGEMENT,
+  "artifacts",
+  "chats",
+  "panel",
+);
 
 const TILE_SOURCE = {
   kind: "artifact-tab",
@@ -283,7 +294,10 @@ function resetStores(): void {
     vi.fn<(viewTabId: string, args: TabStripMoveArgs) => void>();
   testState.canvasStore.splitPaneWithTab =
     vi.fn<(viewTabId: string, args: TabSplitArgs) => void>();
-  useLayoutStore.setState({ ...DEFAULT_LAYOUT_SNAPSHOT });
+  useLayoutStore.setState({
+    ...DEFAULT_LAYOUT_SNAPSHOT,
+    arrangement: STACKED_ARRANGEMENT,
+  });
   useLeftPanelStore.setState({
     activePanelIdByTabId: {},
     mainCollapsedByTabId: {},
@@ -519,7 +533,7 @@ describe("root dnd commits - left panel", () => {
     ];
     useLayoutStore.setState({
       ...DEFAULT_LAYOUT_SNAPSHOT,
-      arrangement: { ...DEFAULT_ARRANGEMENT, rail: fourMember },
+      arrangement: { ...STACKED_ARRANGEMENT, rail: fourMember },
     });
     const source = railSource("git-diff", "rail");
     const target = { kind: "left-panel-body", panelId: "chats" } as const;
@@ -592,7 +606,7 @@ describe("root dnd commits - left panel", () => {
     ];
     useLayoutStore.setState({
       ...DEFAULT_LAYOUT_SNAPSHOT,
-      arrangement: { ...DEFAULT_ARRANGEMENT, rail },
+      arrangement: { ...STACKED_ARRANGEMENT, rail },
     });
     const source = railSource("terminals", "rail");
     const target = { kind: "left-panel-body", panelId: "chats" } as const;
@@ -673,7 +687,7 @@ describe("root dnd commits - left panel drop resolver", () => {
       resolveRailForDrop(
         railSource("artifacts", "panel-section"),
         { kind: "left-panel-rail", panelId: "chats", position: "before" },
-        DEFAULT_ARRANGEMENT,
+        STACKED_ARRANGEMENT,
       ),
     ).toEqual([
       { kind: "panel", id: "railArtifacts" },
@@ -698,9 +712,9 @@ describe("root dnd commits - left panel drop resolver", () => {
       resolveRailForDrop(
         railSource("artifacts", "rail"),
         { kind: "left-panel-rail", panelId: "chats", position: "before" },
-        DEFAULT_ARRANGEMENT,
+        STACKED_ARRANGEMENT,
       ),
-    ).toEqual(DEFAULT_RAIL);
+    ).toEqual(STACKED_ARRANGEMENT.rail);
   });
 
   it("moves a section-origin drop beside another panel", () => {
@@ -708,7 +722,7 @@ describe("root dnd commits - left panel drop resolver", () => {
       resolveRailForDrop(
         railSource("artifacts", "panel-section"),
         { kind: "left-panel-rail", panelId: "git-diff", position: "after" },
-        DEFAULT_ARRANGEMENT,
+        STACKED_ARRANGEMENT,
       ),
     ).toEqual([
       { kind: "panel", id: "railAgents" },
@@ -729,9 +743,9 @@ describe("root dnd commits - left panel drop resolver", () => {
       resolveRailForDrop(
         railSource("artifacts", "panel-section"),
         { kind: "left-panel-rail", panelId: "chats", position: "after" },
-        DEFAULT_ARRANGEMENT,
+        STACKED_ARRANGEMENT,
       ),
-    ).toEqual(DEFAULT_RAIL);
+    ).toEqual(STACKED_ARRANGEMENT.rail);
   });
 
   it("moves the WHOLE stack to the rail's end via its icon, or ONE panel via its section header (L-181)", () => {
@@ -740,7 +754,7 @@ describe("root dnd commits - left panel drop resolver", () => {
       resolveRailForDrop(
         railSource("artifacts", "rail"),
         { kind: "left-panel-rail-list" },
-        DEFAULT_ARRANGEMENT,
+        STACKED_ARRANGEMENT,
       ),
     ).toEqual([
       { kind: "panel", id: "railTerminals" },
@@ -760,7 +774,7 @@ describe("root dnd commits - left panel drop resolver", () => {
       resolveRailForDrop(
         railSource("artifacts", "panel-section"),
         { kind: "left-panel-rail-list" },
-        DEFAULT_ARRANGEMENT,
+        STACKED_ARRANGEMENT,
       ),
     ).toEqual([
       { kind: "panel", id: "railAgents" },
@@ -785,7 +799,7 @@ describe("root dnd commits - left panel drop resolver", () => {
           panelId: "browsers",
           position: "combine",
         },
-        DEFAULT_ARRANGEMENT,
+        STACKED_ARRANGEMENT,
       ),
     ).toEqual([
       { kind: "panel", id: "railAgents" },
@@ -807,7 +821,7 @@ describe("root dnd commits - left panel drop resolver", () => {
     const after = resolveRailForDrop(
       railSource("terminals", "rail"),
       { kind: "left-panel-rail", panelId: "browsers", position: "after" },
-      DEFAULT_ARRANGEMENT,
+      STACKED_ARRANGEMENT,
     );
 
     expect(after).not.toBeNull();
@@ -828,7 +842,7 @@ describe("root dnd commits - left panel drop resolver", () => {
     const next = resolveRailForDrop(
       railSource("chats", "rail"),
       { kind: "left-panel-rail", panelId: "terminals", position: "combine" },
-      DEFAULT_ARRANGEMENT,
+      STACKED_ARRANGEMENT,
     );
 
     expect(next?.map((entry) => entry.id)).toEqual([
@@ -853,7 +867,7 @@ describe("root dnd commits - left panel drop resolver", () => {
     const next = resolveRailForDrop(
       railSource("chats", "panel-section"),
       { kind: "left-panel-rail", panelId: "terminals", position: "combine" },
-      DEFAULT_ARRANGEMENT,
+      STACKED_ARRANGEMENT,
     );
 
     expect(next?.map((entry) => entry.id)).toEqual([
@@ -883,7 +897,7 @@ describe("root dnd commits - left panel drop resolver", () => {
           panelId: "artifacts",
           position: "combine",
         },
-        DEFAULT_ARRANGEMENT,
+        STACKED_ARRANGEMENT,
       ),
     ).toEqual([
       { kind: "panel", id: "railAgents" },
@@ -905,14 +919,14 @@ describe("root dnd commits - left panel drop resolver", () => {
       resolveRailForDrop(
         railSource("artifacts", "rail"),
         { kind: "empty-shell" },
-        DEFAULT_ARRANGEMENT,
+        STACKED_ARRANGEMENT,
       ),
     ).toBeNull();
     expect(
       resolveRailForDrop(
         railSource("artifacts", "rail"),
         { kind: "artifact-tab-strip", groupId: "group-a", index: 0 },
-        DEFAULT_ARRANGEMENT,
+        STACKED_ARRANGEMENT,
       ),
     ).toBeNull();
   });

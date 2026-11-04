@@ -8,7 +8,6 @@ import { MobileEmptyPaneLevel2 } from "@/components/epic-canvas/mobile/mobile-em
 import { setPhoneLayoutOnly } from "@/lib/mobile-app";
 import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
 import { useMobileSwitcherStore } from "@/stores/epics/mobile-switcher-store";
-import { useMobileTileColumnStore } from "@/stores/epics/mobile-tile-column-store";
 import { useLeftPanelStore } from "@/stores/epics/left-panel-store";
 import { useSurfaceSyncStore } from "@/stores/sync/surface-sync-store";
 import { useTileMinimapStore } from "@/stores/tile-minimap";
@@ -20,7 +19,6 @@ import type {
 import {
   installShellForm,
   SHELL_WIDTH_COLUMN_256,
-  SHELL_WIDTH_MENU,
   SHELL_WIDTH_TWO_TILES,
   type ShellFormHarness,
 } from "../../../../__tests__/mobile-level2-form-harness";
@@ -258,6 +256,8 @@ function seed(
   useEpicCanvasStore.setState({
     tabsById: { [TAB_ID]: { tabId: TAB_ID, epicId: EPIC_ID, name: "Epic 1" } },
     canvasByTabId: { [TAB_ID]: canvas },
+    // The open pipeline places into the task on screen only.
+    activeTabId: TAB_ID,
   });
 }
 
@@ -277,6 +277,10 @@ function categoryTabs(scope: HTMLElement): ReadonlyArray<string | null> {
 
 function renderView() {
   return render(<MobileEpicTileView epicId={EPIC_ID} tabId={TAB_ID} />);
+}
+
+function sheetOpen(): boolean {
+  return useMobileSwitcherStore.getState().openTabId === TAB_ID;
 }
 
 const MINIMAP_SNAPSHOT = {
@@ -310,7 +314,6 @@ describe("<MobileEpicTileView /> level 2 forms", () => {
     shell.dispose();
     useEpicCanvasStore.setState(useEpicCanvasStore.getInitialState(), true);
     useMobileSwitcherStore.setState({ openTabId: null, mountCountByTabId: {} });
-    useMobileTileColumnStore.setState({ collapsed: false });
     useLeftPanelStore.setState({
       activePanelIdByTabId: {},
       commentsPanelRevealedByTabId: {},
@@ -322,150 +325,109 @@ describe("<MobileEpicTileView /> level 2 forms", () => {
     });
   });
 
-  describe("the column", () => {
-    it("lists the categories, and a row changes the tile and leaves the column on screen", async () => {
+  describe("the pane header", () => {
+    it("opens the sheet from Switch tab with the categories, and a row changes the tile and closes it", async () => {
       const user = userEvent.setup();
       renderView();
-      const column = screen.getByRole("navigation", { name: "Release train" });
-      expect(
-        column.closest('[data-testid="mobile-tile-column"]'),
-      ).not.toBeNull();
-      expect(categoryTabs(column)).toEqual(CATEGORY_TABS);
-      expect(screen.getByTestId("tile-spec-1")).not.toBeNull();
+      const header = screen.getByTestId("mobile-tile-pane-header");
+      expect(screen.queryByTestId("mobile-tab-switcher-sheet")).toBeNull();
+      await user.click(
+        within(header).getByRole("button", { name: "Switch tab" }),
+      );
+      const sheet = await screen.findByTestId("mobile-tab-switcher-sheet");
+      expect(categoryTabs(sheet)).toEqual(CATEGORY_TABS);
 
       await user.click(
-        within(column).getByRole("button", { name: "Open Spec 2" }),
+        within(sheet).getByRole("button", { name: "Open Spec 2" }),
       );
 
       expect(screen.getByTestId("tile-spec-2")).not.toBeNull();
       expect(screen.queryByTestId("tile-spec-1")).toBeNull();
-      expect(screen.getByTestId("mobile-tile-column")).not.toBeNull();
+      expect(sheetOpen()).toBe(false);
     });
-  });
 
-  describe("folding the column", () => {
-    it("folds into the menu from the column's own control, and unfolds from the pane's header", async () => {
+    it("opens the sheet from the tile's name too", async () => {
       const user = userEvent.setup();
       renderView();
-      const column = screen.getByTestId("mobile-tile-column");
-      await user.click(
-        within(column).getByRole("button", { name: "Hide sidebar" }),
-      );
-
-      expect(screen.queryByTestId("mobile-tile-column")).toBeNull();
-      expect(useMobileTileColumnStore.getState().collapsed).toBe(true);
-      const header = screen.getByTestId("mobile-tile-pane-header");
+      await user.click(screen.getByTestId("mobile-tile-title-trigger"));
+      expect(sheetOpen()).toBe(true);
       expect(
-        within(header).getByTestId("mobile-tile-menu-trigger"),
-      ).not.toBeNull();
-
-      await user.click(
-        within(header).getByRole("button", { name: "Show sidebar" }),
-      );
-
-      expect(screen.getByTestId("mobile-tile-column")).not.toBeNull();
-      expect(screen.queryByTestId("mobile-tile-menu-trigger")).toBeNull();
-      expect(useMobileTileColumnStore.getState().collapsed).toBe(false);
+        categoryTabs(await screen.findByTestId("mobile-tab-switcher-sheet")),
+      ).toEqual(CATEGORY_TABS);
     });
 
-    it("keeps the fold where the column would fit again, and the tile body mounted across it", () => {
-      useMobileTileColumnStore.setState({ collapsed: true });
-      renderView();
-      expect(screen.queryByTestId("mobile-tile-column")).toBeNull();
-      expect(screen.getByTestId("mobile-tile-menu-trigger")).not.toBeNull();
-
-      act(() => useMobileTileColumnStore.getState().setCollapsed(false));
-      expect(screen.getByTestId("mobile-tile-column")).not.toBeNull();
-      expect(bodyMounts.mounted).toBe(1);
-      expect(bodyMounts.unmounted).toBe(0);
-    });
-
-    it("offers no fold where the width draws the menu of its own accord", () => {
-      shell.set({ width: SHELL_WIDTH_MENU, portrait: false });
-      renderView();
-      expect(screen.queryByTestId("mobile-tile-column-toggle")).toBeNull();
-      expect(screen.getByTestId("mobile-tile-menu-trigger")).not.toBeNull();
-    });
-  });
-
-  describe("the menu", () => {
-    beforeEach(() => shell.set({ width: SHELL_WIDTH_MENU, portrait: false }));
-
-    async function openMenu() {
+    it("closes the sheet when a tile from an embedded panel is shown, and keeps it when a chat opens in the background", async () => {
       const user = userEvent.setup();
-      await user.click(screen.getByTestId("mobile-tile-menu-trigger"));
-      return { user, menu: await screen.findByTestId("mobile-tile-menu") };
-    }
-
-    it("opens from the tile's name with the same categories, and a row changes the tile and closes it", async () => {
       renderView();
-      expect(screen.queryByTestId("mobile-tile-column")).toBeNull();
-      expect(screen.queryByTestId("mobile-tile-menu")).toBeNull();
-      const { user, menu } = await openMenu();
-      expect(categoryTabs(menu)).toEqual(CATEGORY_TABS);
+      await user.click(screen.getByRole("button", { name: "Switch tab" }));
+      showTile("inst-chat");
+      expect(sheetOpen()).toBe(true);
+      showTile("inst-file");
+      expect(sheetOpen()).toBe(false);
+    });
+
+    it("offers no Split where a second tile has no room", () => {
+      renderView();
+      expect(screen.queryByTestId("mobile-tile-split")).toBeNull();
+    });
+  });
+
+  describe("the Split", () => {
+    beforeEach(() =>
+      shell.set({ width: SHELL_WIDTH_TWO_TILES, portrait: false }),
+    );
+
+    it("fills the second pane with the list, and a row reads beside the first and ends it", async () => {
+      const user = userEvent.setup();
+      renderView();
+      await user.click(screen.getByTestId("mobile-tile-split"));
+      const chooser = screen.getByTestId("mobile-tile-chooser");
+      expect(within(chooser).getByText("Choose a tile")).not.toBeNull();
+      expect(categoryTabs(chooser)).toEqual(CATEGORY_TABS);
+      expect(screen.queryByTestId("mobile-tile-split")).toBeNull();
 
       await user.click(
-        within(menu).getByRole("button", { name: "Open Spec 2" }),
+        within(chooser).getByRole("button", { name: "Open Spec 2" }),
       );
 
-      expect(screen.getByTestId("tile-spec-2")).not.toBeNull();
-      expect(screen.queryByTestId("mobile-tile-menu")).toBeNull();
+      const second = screen.getByTestId("mobile-epic-second-tile");
+      expect(within(second).getByTestId("tile-spec-2")).not.toBeNull();
+      expect(
+        within(screen.getByTestId("mobile-epic-tile-view")).getByTestId(
+          "tile-spec-1",
+        ),
+      ).not.toBeNull();
+      expect(screen.queryByTestId("mobile-tile-chooser")).toBeNull();
     });
 
-    it("closes when a tile from an embedded panel is shown", async () => {
+    it("closes from its header without a pick", async () => {
+      const user = userEvent.setup();
       renderView();
-      await openMenu();
-      showTile("inst-file");
-      expect(screen.queryByTestId("mobile-tile-menu")).toBeNull();
-    });
-
-    it("closes when a tile from an embedded panel is shown beside the first, where two fit", async () => {
-      shell.set({ width: SHELL_WIDTH_TWO_TILES, portrait: false });
-      useMobileTileColumnStore.setState({ collapsed: true });
-      renderView();
-      await openMenu();
-      act(() => {
-        useEpicCanvasStore.getState().setMobileSecondaryTile(TAB_ID, {
-          instanceId: "inst-file",
-          transient: false,
-        });
-      });
-      expect(screen.getByTestId("mobile-epic-second-tile")).not.toBeNull();
-      expect(screen.queryByTestId("mobile-tile-menu")).toBeNull();
-    });
-
-    it("stays open when a chat opens in the background", async () => {
-      renderView();
-      await openMenu();
-      showTile("inst-chat");
-      expect(screen.getByTestId("mobile-tile-menu")).not.toBeNull();
+      await user.click(screen.getByTestId("mobile-tile-split"));
+      await user.click(screen.getByRole("button", { name: "Close this side" }));
+      expect(screen.queryByTestId("mobile-tile-chooser")).toBeNull();
+      expect(screen.queryByTestId("mobile-epic-second-tile")).toBeNull();
+      expect(screen.getByTestId("mobile-tile-split")).not.toBeNull();
     });
   });
 
-  describe("the tile bar", () => {
-    it.each([
-      ["column", SHELL_WIDTH_COLUMN_256],
-      ["menu", SHELL_WIDTH_MENU],
-    ])(
-      "keeps the minimap button and the chat stream's report in the %s form",
-      (_form, width) => {
-        shell.set({ width, portrait: false });
-        seed([SPEC_1, CHAT], "inst-chat");
-        registerMinimap("inst-chat");
-        renderView();
-        expect(screen.getByTestId("content-minimap-button")).not.toBeNull();
-        const published = Object.values(
-          useSurfaceSyncStore.getState().entries,
-        ).find((entry) => entry.key === "chat:host-A:chat-1");
-        expect(published?.spell.syncing).toBe(true);
-      },
-    );
-  });
-
-  it("keeps one mount of the tile body across a column, menu and bar flip", () => {
+  it("keeps the minimap button and the chat stream's report in the pane form", () => {
+    seed([SPEC_1, CHAT], "inst-chat");
+    registerMinimap("inst-chat");
     renderView();
-    shell.set({ width: SHELL_WIDTH_MENU, portrait: false });
-    shell.set({ width: SHELL_WIDTH_MENU, portrait: true });
+    expect(screen.getByTestId("content-minimap-button")).not.toBeNull();
+    const published = Object.values(
+      useSurfaceSyncStore.getState().entries,
+    ).find((entry) => entry.key === "chat:host-A:chat-1");
+    expect(published?.spell.syncing).toBe(true);
+  });
+
+  it("keeps one mount of the tile body across a pane and bar flip", () => {
+    renderView();
+    expect(screen.getByTestId("mobile-tile-pane-header")).not.toBeNull();
+    shell.set({ width: SHELL_WIDTH_COLUMN_256, portrait: true });
+    expect(screen.getByTestId("mobile-current-tile-bar")).not.toBeNull();
+    shell.set({ width: SHELL_WIDTH_COLUMN_256, portrait: false });
     expect(bodyMounts.mounted).toBe(1);
     expect(bodyMounts.unmounted).toBe(0);
     expect(screen.getByTestId("tile-spec-1")).not.toBeNull();
@@ -476,8 +438,8 @@ describe("<MobileEpicTileView /> level 2 forms", () => {
       setPhoneLayoutOnly(false);
       renderView();
       expect(screen.getByTestId("mobile-current-tile-bar")).not.toBeNull();
-      expect(screen.queryByTestId("mobile-tile-column")).toBeNull();
-      expect(screen.queryByTestId("mobile-tile-menu-trigger")).toBeNull();
+      expect(screen.queryByTestId("mobile-tile-pane-header")).toBeNull();
+      expect(screen.queryByTestId("mobile-tile-split")).toBeNull();
       act(() => useMobileSwitcherStore.getState().setOpen(TAB_ID, true));
       expect(categoryTabs(document.body)).toEqual(CATEGORY_TABS);
     });
@@ -492,39 +454,23 @@ describe("<MobileEpicTileView /> level 2 forms", () => {
       );
     }
 
-    it("draws the column beside its children", () => {
+    it("fills the pane with the list, with nothing to close, in place of its children", () => {
       renderEmpty();
-      expect(screen.getByTestId("mobile-tile-column")).not.toBeNull();
-      expect(screen.getByTestId("child")).not.toBeNull();
-    });
-
-    it("unfolds a folded column from beside its Switch tab trigger", async () => {
-      useMobileTileColumnStore.setState({ collapsed: true });
-      renderEmpty();
-      expect(screen.queryByTestId("mobile-tile-column")).toBeNull();
-      const user = userEvent.setup();
-      await user.click(screen.getByRole("button", { name: "Show sidebar" }));
-      expect(screen.getByTestId("mobile-tile-column")).not.toBeNull();
-      expect(screen.queryByRole("button", { name: "Switch tab" })).toBeNull();
-    });
-
-    it("draws a Switch tab trigger in the menu form", async () => {
-      shell.set({ width: SHELL_WIDTH_MENU, portrait: false });
-      renderEmpty();
-      expect(screen.queryByTestId("mobile-tile-column")).toBeNull();
-      const user = userEvent.setup();
-      await user.click(screen.getByRole("button", { name: "Switch tab" }));
+      const chooser = screen.getByTestId("mobile-tile-chooser");
+      expect(categoryTabs(chooser)).toEqual(CATEGORY_TABS);
+      expect(screen.queryByTestId("child")).toBeNull();
       expect(
-        categoryTabs(await screen.findByTestId("mobile-tile-menu")),
-      ).toEqual(CATEGORY_TABS);
+        screen.queryByRole("button", { name: "Close this side" }),
+      ).toBeNull();
     });
 
     it("renders just the children and the sheet at bar", () => {
       shell.set({ width: SHELL_WIDTH_COLUMN_256, portrait: true });
       const { container } = renderEmpty();
       expect(screen.getByTestId("child").parentElement).toBe(container);
-      expect(screen.queryByTestId("mobile-tile-column")).toBeNull();
-      expect(screen.queryByRole("button", { name: "Switch tab" })).toBeNull();
+      expect(screen.queryByTestId("mobile-tile-chooser")).toBeNull();
+      act(() => useMobileSwitcherStore.getState().setOpen(TAB_ID, true));
+      expect(categoryTabs(document.body)).toEqual(CATEGORY_TABS);
     });
   });
 });

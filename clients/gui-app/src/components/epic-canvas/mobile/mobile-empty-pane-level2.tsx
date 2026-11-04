@@ -1,15 +1,13 @@
 import type { ReactNode } from "react";
 import { MobileTabSwitcherMount } from "@/components/epic-canvas/mobile/mobile-tab-switcher-mount";
-import { MobileTileColumn } from "@/components/epic-canvas/mobile/mobile-tile-column";
-import { MobileTileColumnToggle } from "@/components/epic-canvas/mobile/mobile-tile-column-toggle";
-import { MobileTileMenu } from "@/components/epic-canvas/mobile/mobile-tile-menu";
-import { useMobileTileReading } from "@/components/epic-canvas/mobile/use-mobile-tile-level2-form";
-import { MobileLevel2MenuTrigger } from "@/components/layout/shell/mobile-level2";
+import { MobileTileChooserPane } from "@/components/epic-canvas/mobile/mobile-tile-chooser-pane";
+import { useMobileTileListForm } from "@/components/epic-canvas/mobile/use-mobile-tile-level2-form";
 
 /**
- * Level 2 around a task with no tile on screen. The list is how the person gets
- * a tile back, so every form still offers it; the menu has no tile's name to sit
- * under and is named for what it does.
+ * Level 2 around a task with no tile on screen. On a phone the opener in
+ * `children` draws, with the sheet behind the header's trigger to get a tile
+ * back from; everywhere wider the list fills the pane itself, as it does in a
+ * pane a Split opened, and the pick is what ends it.
  */
 export function MobileEmptyPaneLevel2(props: {
   readonly epicId: string;
@@ -17,8 +15,7 @@ export function MobileEmptyPaneLevel2(props: {
   readonly children: ReactNode;
 }): ReactNode {
   const { epicId, tabId, children } = props;
-  const { level2, columnOffered } = useMobileTileReading(tabId);
-  if (level2 === "bar") {
+  if (useMobileTileListForm(tabId) === "bar") {
     return (
       <>
         {children}
@@ -27,28 +24,11 @@ export function MobileEmptyPaneLevel2(props: {
     );
   }
   return (
-    <div className="flex h-full min-h-0 w-full bg-canvas">
-      <MobileTileColumn epicId={epicId} tabId={tabId} level2={level2} />
-      <div className="flex min-h-0 min-w-0 flex-1 flex-col">
-        {level2 === "menu" ? (
-          <MobileTileMenu epicId={epicId} tabId={tabId} slot="primary" drawn>
-            <div
-              data-mobile-shell-touch-scope=""
-              className="flex min-h-11 shrink-0 items-center gap-2 border-b border-canvas-border/70 px-3"
-            >
-              <MobileTileColumnToggle offered={columnOffered} />
-              <MobileLevel2MenuTrigger
-                testId="mobile-tile-menu-trigger"
-                className={undefined}
-              >
-                Switch tab
-              </MobileLevel2MenuTrigger>
-            </div>
-          </MobileTileMenu>
-        ) : null}
-        <div className="min-h-0 flex-1">{children}</div>
-      </div>
-      <MobileTabSwitcherMount epicId={epicId} tabId={tabId} />
-    </div>
+    <MobileTileChooserPane
+      epicId={epicId}
+      tabId={tabId}
+      slot="primary"
+      onClose={null}
+    />
   );
 }
