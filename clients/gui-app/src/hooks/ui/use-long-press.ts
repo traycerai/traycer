@@ -66,11 +66,17 @@ export interface LongPressArgs {
    * task title, which a narrow desktop window renders too).
    */
   readonly acceptsMouse: boolean;
+  /**
+   * Also recognize a held pen. Only for a control whose hold is its one way
+   * in on a touch screen, where a stylus stands in for the finger (a bot
+   * channel's row and its sheet).
+   */
+  readonly acceptsPen: boolean;
 }
 
 /**
- * Press-and-hold on a touch pointer, and on a mouse when `acceptsMouse` says
- * so.
+ * Press-and-hold on a touch pointer, and on a mouse or a pen when
+ * `acceptsMouse` or `acceptsPen` says so.
  *
  * Touch only by default, because a mouse already has a right-click and a long
  * left-click there is an interrupted drag rather than an intent. The iOS
@@ -81,7 +87,7 @@ export interface LongPressArgs {
  * with.
  */
 export function useLongPress(args: LongPressArgs): LongPress {
-  const { onLongPress, disabled, acceptsMouse } = args;
+  const { onLongPress, disabled, acceptsMouse, acceptsPen } = args;
   const trackingRef = useRef<LongPressTracking | null>(null);
   const firedRef = useRef(false);
   // Read at fire time so a re-render between press and timeout cannot fire a
@@ -113,8 +119,15 @@ export function useLongPress(args: LongPressArgs): LongPress {
       firedRef.current = false;
       if (disabled) return;
       const isMouse = event.pointerType === "mouse";
-      if (event.pointerType !== "touch" && !(acceptsMouse && isMouse)) return;
-      if (isMouse && event.button !== 0) return;
+      const isPen = event.pointerType === "pen";
+      if (
+        event.pointerType !== "touch" &&
+        !(acceptsMouse && isMouse) &&
+        !(acceptsPen && isPen)
+      ) {
+        return;
+      }
+      if ((isMouse || isPen) && event.button !== 0) return;
       if (!event.isPrimary) return;
       const pointerId = event.pointerId;
       const timer = window.setTimeout(() => {
@@ -129,7 +142,7 @@ export function useLongPress(args: LongPressArgs): LongPress {
         timer,
       };
     },
-    [acceptsMouse, cancel, disabled],
+    [acceptsMouse, acceptsPen, cancel, disabled],
   );
 
   const onPointerMove = useCallback(
