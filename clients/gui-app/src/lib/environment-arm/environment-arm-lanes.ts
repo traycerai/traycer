@@ -190,13 +190,6 @@ export interface EnvironmentArmLanes<State, Frame> {
    * closing, so a reader may subscribe before the lane exists.
    */
   readonly subscribe: (key: string, listener: () => void) => () => void;
-  /** Every lane someone holds, by key: what this client has in hand now. */
-  readonly held: () => ReadonlyArray<readonly [string, State]>;
-  /**
-   * Hears every change of any lane, including its opening and closing: what
-   * a reader of {@link held} subscribes to, since it names no one key.
-   */
-  readonly subscribeHeld: (listener: () => void) => () => void;
 }
 
 /** One kind of arm's lanes: chats, plain terminals or graph events. */
@@ -206,10 +199,8 @@ export function createEnvironmentArmLanes<State, Frame>(): EnvironmentArmLanes<
 > {
   const lanes = new Map<string, Lane<State>>();
   const listenersByKey = new Map<string, Set<() => void>>();
-  const heldListeners = new Set<() => void>();
   const notify = (key: string): void => {
     for (const listener of [...(listenersByKey.get(key) ?? [])]) listener();
-    for (const listener of [...heldListeners]) listener();
   };
   return {
     acquire: (spec) => {
@@ -218,7 +209,7 @@ export function createEnvironmentArmLanes<State, Frame>(): EnvironmentArmLanes<
         lane = openLane(spec, () => notify(spec.key));
         lanes.set(spec.key, lane);
         // A stream can end while it opens (a close replayed synchronously),
-        // publishing before the lane is in `held()`: told again once it is.
+        // publishing before `read` can see the lane: told again once it can.
         if (lane.state !== spec.initial) notify(spec.key);
       }
       lane.refs += 1;
@@ -238,13 +229,6 @@ export function createEnvironmentArmLanes<State, Frame>(): EnvironmentArmLanes<
       lanes.get(key)?.replaceSession();
     },
     read: (key, initial) => lanes.get(key)?.state ?? initial,
-    held: () => [...lanes].map(([key, lane]) => [key, lane.state] as const),
-    subscribeHeld: (listener) => {
-      heldListeners.add(listener);
-      return () => {
-        heldListeners.delete(listener);
-      };
-    },
     subscribe: (key, listener) => {
       const listeners = listenersByKey.get(key) ?? new Set<() => void>();
       listeners.add(listener);
