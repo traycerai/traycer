@@ -363,7 +363,7 @@ describe("legacy traycer-* reference components", () => {
     expect(screen.getByText("No Epic")).toBeTruthy();
   });
 
-  it("renders plain text when there is no open-epic session context", () => {
+  it("navigates to the epic and focuses the node when there is no open-epic session context", () => {
     mockHandle = null;
     render(
       <TraycerSpecReference data-epic-id={OPEN_EPIC_ID} data-spec-id="spec-1">
@@ -371,8 +371,25 @@ describe("legacy traycer-* reference components", () => {
       </TraycerSpecReference>,
     );
 
+    clickRef("Detached Spec");
+
+    expect(openTile).not.toHaveBeenCalled();
+    expect(navigateToTabIntent).toHaveBeenCalledTimes(1);
+    const arg = openOrFocusEpicIntent.mock.calls[0][0];
+    expect(arg.epicId).toBe(OPEN_EPIC_ID);
+    expect(arg.focus).toMatchObject({ focusArtifactId: "spec-1" });
+  });
+
+  it("renders plain text with no open-epic session context when the node id is missing", () => {
+    mockHandle = null;
+    render(
+      <TraycerSpecReference data-epic-id={OPEN_EPIC_ID}>
+        Detached Bare
+      </TraycerSpecReference>,
+    );
+
     expect(screen.queryByRole("button")).toBeNull();
-    expect(screen.getByText("Detached Spec")).toBeTruthy();
+    expect(screen.getByText("Detached Bare")).toBeTruthy();
   });
 
   it("renders plain text when a same-epic node does not resolve", () => {
