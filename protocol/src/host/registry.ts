@@ -681,6 +681,7 @@ import {
 import {
   botClaimAuthorityV10,
   botConversationListV10,
+  botConversationSearchV10,
   botConversationSendV10,
   botConversationSendV11,
   botConversationSendUpgradeV10ToV11,
@@ -9495,6 +9496,20 @@ const HOST_RPC_REGISTRY_BASE_TAIL_DEFINITION = {
       versions: {
         0: {
           contract: botConversationListV10,
+          upgradeFromPreviousVersion: null,
+        },
+      },
+      downgradePathsFromLatest: {},
+    },
+  },
+  // Text search over a bot's channel and threads (T139). Same optional posture.
+  "bot.conversation.search": {
+    degrade: { kind: "unsupported" },
+    1: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: botConversationSearchV10,
           upgradeFromPreviousVersion: null,
         },
       },

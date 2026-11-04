@@ -6,6 +6,7 @@ import {
   MessagesSquare,
   Plus,
 } from "lucide-react";
+import { BOT_CONVERSATION_SEARCH_MAX_QUERY_CHARS } from "@traycer/protocol/host/bot/conversation-schemas";
 import type { BotRecord } from "@traycer/protocol/host/bot/schemas";
 import type { EnvironmentDescriptor } from "@traycer/protocol/host/environment/contracts";
 import { NamedBotAvatar } from "@/components/bots/bot-avatars";
@@ -22,6 +23,7 @@ import {
   type NewBotTarget,
 } from "@/components/bots/new-bot-dialog";
 import { Badge } from "@/components/ui/badge";
+import { Input } from "@/components/ui/input";
 import {
   ContextMenu,
   ContextMenuContent,
@@ -51,6 +53,7 @@ import { useBotFollowedThreads } from "@/hooks/bots/use-bot-followed-threads";
 import { useOpenBotChannel } from "@/hooks/bots/use-open-bot-channel";
 import { useArrangedBotsModel } from "@/hooks/bots/use-arranged-bots-model";
 import { useBotColumnLayoutStore } from "@/stores/bots/bot-column-layout-store";
+import { openBotSearch } from "@/stores/bots/bot-search-store";
 import { BotMutedGlyph } from "@/components/bots/bot-muted-glyph";
 import { UnreadCountBadge } from "@/components/notifications/unread-count-badge";
 import { indicatorHasUnread } from "@/stores/notifications/notification-indicator-state";
@@ -192,6 +195,12 @@ export function BotChannelSidebar(props: {
       data-testid="bot-channel-sidebar"
       className="flex min-h-0 flex-col gap-3 overflow-y-auto px-2 py-3"
     >
+      <SearchAllBotsBox
+        hostId={hostId}
+        bots={botList}
+        activeBotId={activeBotId}
+        onOpened={onChannelOpened}
+      />
       {threadsView === null ? null : (
         <ThreadsRow hostId={hostId} bots={botList} view={threadsView} />
       )}
@@ -235,6 +244,43 @@ export function BotChannelSidebar(props: {
         onClose={() => setNewBot(null)}
       />
     </nav>
+  );
+}
+
+/**
+ * Search across every bot, at the top of the column where Slack's box is:
+ * pressing it, or typing, opens the results beside the channel in view and
+ * carries the typing there. No channel to open them beside, or a host without
+ * the search, offers none.
+ */
+function SearchAllBotsBox(props: {
+  readonly hostId: string;
+  readonly bots: ReadonlyArray<BotRecord>;
+  readonly activeBotId: string | null;
+  /** The results opened; the picker's menu closes on it. */
+  readonly onOpened: () => void;
+}): ReactNode {
+  const { activeBotId, onOpened } = props;
+  const supported =
+    useHostMethodSupport(props.hostId, "bot.conversation.search") === true;
+  const listed = props.bots.some((bot) => bot.botId === activeBotId);
+  if (!supported || activeBotId === null || !listed) return null;
+  const open = (query: string | null): void => {
+    openBotSearch(activeBotId, { kind: "all" }, query);
+    onOpened();
+  };
+  return (
+    <Input
+      type="text"
+      size="xs"
+      aria-label="Search all bots"
+      placeholder="Search all bots"
+      data-testid="bot-column-search"
+      maxLength={BOT_CONVERSATION_SEARCH_MAX_QUERY_CHARS}
+      value=""
+      onClick={() => open(null)}
+      onChange={(event) => open(event.target.value)}
+    />
   );
 }
 
