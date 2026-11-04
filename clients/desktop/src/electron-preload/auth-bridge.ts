@@ -62,6 +62,7 @@ import type {
   DesktopAuthVerificationRevoked,
   DesktopLocalAuthSessionRestoreResult,
 } from "../ipc-contracts/window-types";
+import type { SoundtrackSetReadResult } from "../ipc-contracts/soundtrack-types";
 import { subscribe, type Disposable, type Listener } from "./subscribe";
 
 /**
@@ -137,6 +138,7 @@ export interface AuthBridgeSurface {
     bearerToken: string,
     hostId: string,
   ): Promise<DeregisterHostFetchResult>;
+  readSoundtrackSet(): Promise<SoundtrackSetReadResult>;
   listSandboxes(bearerToken: string): Promise<SandboxListFetchResult>;
   getSandboxCosts(bearerToken: string): Promise<SandboxCostsFetchResult>;
   getSandboxCatalogue(
@@ -310,6 +312,11 @@ export function buildAuthBridge(): AuthBridgeSurface {
         bearerToken,
         hostId,
       ) as Promise<DeregisterHostFetchResult>,
+
+    readSoundtrackSet: () =>
+      ipcRenderer.invoke(
+        RunnerHostInvoke.readSoundtrackSet,
+      ) as Promise<SoundtrackSetReadResult>,
 
     listSandboxes: (bearerToken) =>
       ipcRenderer.invoke(

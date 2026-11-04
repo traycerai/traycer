@@ -101,6 +101,7 @@ function renderSheet(open: boolean, onOpenChange: (open: boolean) => void) {
       tabId={TAB_ID}
       open={open}
       onOpenChange={onOpenChange}
+      target={null}
     />,
   );
 }

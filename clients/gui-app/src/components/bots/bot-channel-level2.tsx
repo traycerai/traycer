@@ -166,11 +166,7 @@ function BotChannelPicker(props: {
       >
         <span className="min-w-0 truncate">{name}</span>
       </MobileLevel2MenuTrigger>
-      <MobileLevel2MenuContent
-        label="Channels"
-        testId="bot-channel-picker"
-        tall={false}
-      >
+      <MobileLevel2MenuContent label="Channels" testId="bot-channel-picker">
         <BotChannelSidebar
           activeBotId={activeBotId}
           hostId={hostId}

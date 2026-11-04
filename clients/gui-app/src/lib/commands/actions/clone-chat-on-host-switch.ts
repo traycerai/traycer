@@ -246,6 +246,7 @@ export function cloneChatOnHostSwitch(
           : openCreatedChatWhenProjectedWithNavigation({
               intent,
               navigateNestedFocus: args.navigateNestedFocus,
+              mobileTarget: null,
             });
       },
     });

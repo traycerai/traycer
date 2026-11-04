@@ -453,6 +453,7 @@ describe("<BotThreadsView /> before the bots are listed", () => {
 
     const failure = screen.getByTestId("bot-threads-error");
     expect(failure.textContent).toContain("Couldn't load your threads.");
+    expect(failure.className).toContain("text-destructive");
     expect(screen.queryByText("No threads yet.")).toBeNull();
     await user.click(within(failure).getByRole("button", { name: "Retry" }));
 

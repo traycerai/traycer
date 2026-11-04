@@ -90,8 +90,16 @@ function panelIds(entries: ReadonlyArray<RailEntry>): ReadonlyArray<string> {
 
 beforeEach(() => {
   window.localStorage.clear();
+  // Agents stacked on Artifacts - the pair earlier builds shipped and the one
+  // every case here is written about. The shipped rail itself holds no stack.
   useLayoutStore.setState({
     ...DEFAULT_LAYOUT_SNAPSHOT,
+    arrangement: stackRailPanels(
+      DEFAULT_ARRANGEMENT,
+      "artifacts",
+      "chats",
+      "panel",
+    ),
   });
   useLeftPanelStore.setState({
     panelSectionCollapsedByPanelId: {},
@@ -426,6 +434,8 @@ describe("the stack row while the rail does not draw the stack (T3)", () => {
 
 describe("the rail list's own header revert (R3-11)", () => {
   it("shows a revert on the group header only once its order has moved", () => {
+    // On the shipped rail itself: the pair the file seeds is already a change.
+    useLayoutStore.setState({ ...DEFAULT_LAYOUT_SNAPSHOT });
     render(section("railAgents", vi.fn()));
 
     expect(
@@ -439,7 +449,7 @@ describe("the rail list's own header revert (R3-11)", () => {
     ).toBeDefined();
   });
 
-  it("is the only revert after one panel moved: no member row shows one, and it puts back the order, the dividers and the stacks (T2)", () => {
+  it("is the only revert after one panel moved: no member row shows one, and it puts back the shipped order with no divider and no stack (T2)", () => {
     render(section("railAgents", vi.fn()));
     fireEvent.keyDown(row("railTerminals"), { key: "ArrowUp", altKey: true });
     act(() => {
