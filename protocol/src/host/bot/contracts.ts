@@ -57,6 +57,8 @@ import {
   botConversationSendRequestSchemaV10,
   botConversationSendRequestSchemaV11,
   botConversationSendResponseSchema,
+  botConversationSearchRequestSchema,
+  botConversationSearchResponseSchema,
   botThreadListRequestSchema,
   botTurnLocateRequestSchema,
   botTurnLocateResponseSchema,
@@ -314,6 +316,20 @@ export const botConversationSendUpgradeV11ToV12 = defineUpgradePath<
   to: botConversationSendV12.schemaVersion,
   upgradeRequest: (request) => ({ ...request, answer: null }),
   upgradeResponse: (response) => response,
+});
+
+/**
+ * `bot.conversation.search@1.0` (T139): text search over a bot's channel and
+ * threads, or over those of every bot the caller can see. Its own method
+ * rather than a mode of `chat.search`, whose admission and scope are a
+ * task's: this one's are a bot's. Same optional posture as the namespace: a
+ * host without it offers no search.
+ */
+export const botConversationSearchV10 = defineRpcContract({
+  method: "bot.conversation.search",
+  schemaVersion: { major: 1, minor: 0 } as const,
+  requestSchema: botConversationSearchRequestSchema,
+  responseSchema: botConversationSearchResponseSchema,
 });
 
 /**

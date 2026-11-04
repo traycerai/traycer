@@ -327,6 +327,7 @@ export const HOST_UNARY_RPC_ROUTES = {
   "autoPolicy.set": "pool-only",
   "bot.claimAuthority": "target-host",
   "bot.conversation.list": "target-host",
+  "bot.conversation.search": "target-host",
   "bot.conversation.send": "target-host",
   "bot.create": "target-host",
   "bot.delete": "target-host",
