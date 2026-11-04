@@ -167,6 +167,7 @@ const DIRECTORY: BotMentionDirectory = {
   person: (userId) => (Object.hasOwn(MEMBERS, userId) ? MEMBERS[userId] : null),
   bots: [{ id: TRIAGE_BOT, name: "Triage" }],
   tasks: [{ id: RELEASE_TASK, name: "Release notes" }],
+  tasksAnswered: true,
 };
 
 function body(markdown: string) {

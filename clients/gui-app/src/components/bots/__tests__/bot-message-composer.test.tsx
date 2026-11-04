@@ -881,6 +881,7 @@ describe("<BotMessageComposer /> @ mentions of bots and tasks", () => {
       { id: RELEASE_TASK, name: "Release notes" },
       { id: ROADMAP_TASK, name: "Roadmap" },
     ],
+    tasksAnswered: true,
   };
 
   function mountWith(
@@ -983,6 +984,7 @@ describe("<BotMessageComposer /> @ mentions of bots and tasks", () => {
           { id: NOTES_BOT, name: "Weekly roadmap" },
         ],
         tasks: [{ id: ROADMAP_TASK, name: "Roadmap" }],
+        tasksAnswered: true,
       },
       null,
     );
@@ -1090,6 +1092,110 @@ describe("<BotMessageComposer /> @ mentions of bots and tasks", () => {
     expect(mentionMenu()).toBeNull();
   });
 
+  describe("a search while a source of names has not answered", () => {
+    function tree(owner: BotOwner, directory: BotMentionDirectory): ReactNode {
+      return (
+        <BotIdentityContext value={{ botId: OWN_BOT, title: "Tracy", owner }}>
+          <BotMentionsContext value={directory}>
+            {composer(null, null)}
+          </BotMentionsContext>
+        </BotIdentityContext>
+      );
+    }
+
+    it("keeps the menu open on a task not listed yet, and lists it for a pick once the tasks have answered", async () => {
+      const user = userEvent.setup();
+      const loading: BotMentionDirectory = {
+        person: () => null,
+        bots: [
+          { id: OWN_BOT, name: "Tracy" },
+          { id: TRIAGE_BOT, name: "Triage" },
+        ],
+        tasks: [],
+        tasksAnswered: false,
+      };
+      const view = render(tree(PERSON, loading));
+
+      await user.type(box(), "@Roadmap");
+      expect(mentionMenu()).not.toBeNull();
+      expect(menuLabels()).toEqual([]);
+
+      view.rerender(
+        tree(PERSON, {
+          ...loading,
+          tasks: [{ id: ROADMAP_TASK, name: "Roadmap" }],
+          tasksAnswered: true,
+        }),
+      );
+
+      expect(menuLabels()).toEqual(["Roadmap"]);
+      await user.keyboard("{Enter}");
+      expect(box().value).toBe("@Roadmap ");
+      expect(await sentText(user)).toBe(`<~${ROADMAP_TASK}>`);
+    });
+
+    it("keeps the menu open on a member not listed yet while the team's members are unread, and lists them once read", async () => {
+      const user = userEvent.setup();
+      const answered: BotMentionDirectory = {
+        person: () => null,
+        bots: [
+          { id: OWN_BOT, name: "Tracy" },
+          { id: TRIAGE_BOT, name: "Triage" },
+        ],
+        tasks: [],
+        tasksAnswered: true,
+      };
+      const unread: BotOwner = { kind: "team", name: "Acme", members: null };
+      const view = render(tree(unread, answered));
+
+      await user.type(box(), "@Zoe");
+      expect(mentionMenu()).not.toBeNull();
+      expect(menuLabels()).toEqual([]);
+
+      view.rerender(
+        tree(
+          {
+            kind: "team",
+            name: "Acme",
+            members: [
+              { userId: "u-zoe", displayName: "Zoe Park", avatarUrl: null },
+            ],
+          },
+          answered,
+        ),
+      );
+
+      expect(menuLabels()).toEqual(["Zoe Park"]);
+    });
+  });
+
+  it("finds a bot by a run of its id when its title has none of those letters, and picks it", async () => {
+    const user = userEvent.setup();
+    const ID_ONLY_BOT = "bot_01JD5X8Q2M4N6P8R0S2T4V6W8Y";
+    mountWith(
+      PERSON,
+      {
+        person: () => null,
+        bots: [
+          { id: OWN_BOT, name: "Tracy" },
+          { id: ID_ONLY_BOT, name: "Weekly sync" },
+        ],
+        tasks: [{ id: ROADMAP_TASK, name: "Roadmap" }],
+        tasksAnswered: true,
+      },
+      null,
+    );
+
+    await user.type(box(), "@6W8Y");
+
+    // Only the bot's id holds the run: neither its title, nor the other
+    // names, nor their ids, do.
+    expect(menuLabels()).toEqual(["Weekly sync"]);
+    await user.keyboard("{Enter}");
+    expect(box().value).toBe("@Weekly sync ");
+    expect(await sentText(user)).toBe(`<#${ID_ONLY_BOT}>`);
+  });
+
   it("keeps each row's kind glyph in a category step: a person's avatar, a bot's avatar, the task icon", async () => {
     const user = userEvent.setup();
     mountWith(TEAM, DIRECTORY, null);
@@ -1150,6 +1256,7 @@ describe("<BotMessageComposer /> @ mentions of bots and tasks", () => {
         { id: TRIAGE_BOT, name: "Roadmap" },
       ],
       tasks: [{ id: ROADMAP_TASK, name: "Roadmap" }],
+      tasksAnswered: true,
     };
 
     it("sends the one picked", async () => {
@@ -1184,7 +1291,7 @@ describe("<BotMessageComposer /> @ mentions of bots and tasks", () => {
     const gone = `<#${NOTES_BOT}> and <~${ROADMAP_TASK}>`;
     mountWith(
       PERSON,
-      { person: () => null, bots: [], tasks: [] },
+      { person: () => null, bots: [], tasks: [], tasksAnswered: true },
       { requestId: "request-failed", text: gone },
     );
 

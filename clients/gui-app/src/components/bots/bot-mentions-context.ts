@@ -37,6 +37,11 @@ export interface BotMentionDirectory {
    * lacks is unknown, never removed.
    */
   readonly tasks: ReadonlyArray<BotMentionTarget>;
+  /**
+   * Both reads behind `tasks` have answered, neither with an error: only then
+   * can a search of the names conclude that nothing matched.
+   */
+  readonly tasksAnswered: boolean;
 }
 
 export const BotMentionsContext = createContext<BotMentionDirectory | null>(

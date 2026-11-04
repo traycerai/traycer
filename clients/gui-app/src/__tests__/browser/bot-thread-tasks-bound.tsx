@@ -318,6 +318,7 @@ const directory: BotMentionDirectory | null =
             name: "Rotate the staging keys",
           },
         ],
+        tasksAnswered: true,
       };
 
 export function Pane(): ReactElement {

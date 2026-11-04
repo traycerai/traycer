@@ -36,6 +36,14 @@ const mocks = vi.hoisted(() => ({
   tabClient: { stub: "tab-host-client" },
   /** `epic.getTaskContexts`' found rows by id on the TAB's host. */
   contexts: new Map<string, ListTaskLight>(),
+  /** What the TAB host's two task reads report: both answered, unless a case says otherwise. */
+  tabRead: {
+    contextsPending: false,
+    contextsError: null as Error | null,
+    homeCached: false,
+    homePending: false,
+    homeError: null as Error | null,
+  },
   /** The ids each render asked it for. */
   asked: [] as Array<ReadonlyArray<string>>,
   /** Home's `epic.listTasks` rows on the TAB's host. */
@@ -63,19 +71,25 @@ vi.mock("@/hooks/epic/use-epic-get-task-contexts-query", () => ({
     ids: ReadonlyArray<string>,
   ) => {
     mocks.asked.push(ids);
+    const tab = client === mocks.tabClient;
     return {
-      tasksById:
-        client === mocks.tabClient ? mocks.contexts : mocks.otherContexts,
-      isPending: false,
-      error: null,
+      tasksById: tab ? mocks.contexts : mocks.otherContexts,
+      isPending: tab ? mocks.tabRead.contextsPending : false,
+      error: tab ? mocks.tabRead.contextsError : null,
     };
   },
 }));
 vi.mock("@/hooks/epics/use-cloud-epic-tasks-query", () => ({
   useCloudEpicTasksQuery: () => ({ tasks: mocks.activeHomeTasks }),
-  useCloudEpicTasksQueryForClient: (client: object | null) => ({
-    tasks: client === mocks.tabClient ? mocks.homeTasks : mocks.otherHomeTasks,
-  }),
+  useCloudEpicTasksQueryForClient: (client: object | null) => {
+    const tab = client === mocks.tabClient;
+    return {
+      tasks: tab ? mocks.homeTasks : mocks.otherHomeTasks,
+      presentsCachedPage: tab ? mocks.tabRead.homeCached : false,
+      firstPagePending: tab ? mocks.tabRead.homePending : false,
+      firstPageError: tab ? mocks.tabRead.homeError : null,
+    };
+  },
 }));
 
 const ENVIRONMENTS: ReadonlyArray<EnvironmentDescriptor> = [
@@ -201,6 +215,11 @@ beforeEach(() => {
   mocks.contexts = new Map();
   mocks.asked = [];
   mocks.homeTasks = [];
+  mocks.tabRead.contextsPending = false;
+  mocks.tabRead.contextsError = null;
+  mocks.tabRead.homeCached = false;
+  mocks.tabRead.homePending = false;
+  mocks.tabRead.homeError = null;
   mocks.activeContexts = new Map();
   mocks.activeHomeTasks = [];
   mocks.otherContexts = new Map();
@@ -347,6 +366,53 @@ describe("useBotMentionTargets tasks", () => {
     expect(targetsOf(TEAM_ENV, [], false).result.current.tasks).toEqual([
       { id: HOME_TASK, name: "Untitled task" },
     ]);
+  });
+});
+
+describe("useBotMentionTargets tasksAnswered", () => {
+  it("is true once both task reads have answered without an error", () => {
+    expect(targetsOf(TEAM_ENV, [], false).result.current.tasksAnswered).toBe(
+      true,
+    );
+  });
+
+  it.each([
+    {
+      source: "the stream's task contexts are pending",
+      set: () => {
+        mocks.tabRead.contextsPending = true;
+      },
+    },
+    {
+      source: "the stream's task contexts failed",
+      set: () => {
+        mocks.tabRead.contextsError = new Error("host unreachable");
+      },
+    },
+    {
+      source: "Home presents a cached page",
+      set: () => {
+        mocks.tabRead.homeCached = true;
+      },
+    },
+    {
+      source: "Home's first page is pending",
+      set: () => {
+        mocks.tabRead.homePending = true;
+      },
+    },
+    {
+      source: "Home's first page failed",
+      set: () => {
+        mocks.tabRead.homeError = new Error("cloud down");
+      },
+    },
+  ])("is false while $source", ({ set }) => {
+    set();
+
+    expect(targetsOf(TEAM_ENV, [], false).result.current.tasksAnswered).toBe(
+      false,
+    );
   });
 });
 

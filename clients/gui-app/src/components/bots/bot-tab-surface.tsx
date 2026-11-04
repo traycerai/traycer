@@ -1523,8 +1523,15 @@ function BotTabContent(props: {
       person,
       bots: mentionTargets.bots,
       tasks: mentionTargets.tasks,
+      tasksAnswered: mentionTargets.tasksAnswered,
     };
-  }, [mentionTargets.bots, mentionTargets.tasks, resolveMember, viewer]);
+  }, [
+    mentionTargets.bots,
+    mentionTargets.tasks,
+    mentionTargets.tasksAnswered,
+    resolveMember,
+    viewer,
+  ]);
 
   return (
     <BotMentionsContext value={mentioned}>

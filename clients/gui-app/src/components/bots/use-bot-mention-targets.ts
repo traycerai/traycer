@@ -22,6 +22,8 @@ export interface BotMentionTargets {
    */
   readonly bots: ReadonlyArray<BotMentionTarget> | null;
   readonly tasks: ReadonlyArray<BotMentionTarget>;
+  /** Both task reads have answered, neither with an error. */
+  readonly tasksAnswered: boolean;
 }
 
 /**
@@ -130,5 +132,12 @@ export function useBotMentionTargets(input: {
     streamTaskIds,
   ]);
 
-  return { bots, tasks: taskTargets };
+  const tasksAnswered =
+    !contexts.isPending &&
+    contexts.error === null &&
+    !home.presentsCachedPage &&
+    !home.firstPagePending &&
+    home.firstPageError === null;
+
+  return { bots, tasks: taskTargets, tasksAnswered };
 }

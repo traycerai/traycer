@@ -242,7 +242,8 @@ export function useBotMentionCompletion(args: {
     query,
     debouncedQuery: query,
     matchedCount: listed.matchedCount,
-    loading: directory?.bots === null,
+    // A name not seen yet is not a name that does not match.
+    loading: !namesAnswered(identity, directory),
     fetching: false,
     sourcesErrored: false,
     referenceQuery: false,
@@ -573,7 +574,9 @@ function candidateEntry(candidate: BotMentionCandidate): MentionMenuEntry {
     label: candidate.name,
     detail: "",
     description: "",
-    searchText: null,
+    // `matching` finds a name by its id too; the root ranking must as well,
+    // or a row found by its id counts as no match.
+    searchText: candidate.id,
     disabledReason: null,
     icon: mentionGlyph(candidate),
     action: { kind: "select" },
@@ -617,6 +620,25 @@ function mentionCandidatesOf(
     ...named("task", directory?.tasks ?? []),
   ];
   return all.length === 0 ? NO_CANDIDATES : all;
+}
+
+/**
+ * Every source of names has answered, none with an error: the team's member
+ * directory, the environment's bots and both reads of its tasks. Outside a
+ * bot's tab there are no bots or tasks to wait for.
+ */
+function namesAnswered(
+  identity: BotIdentity | null,
+  directory: BotMentionDirectory | null,
+): boolean {
+  const owner = identity === null ? null : identity.owner;
+  const peopleAnswered =
+    identity === null ||
+    (owner !== null && (owner.kind === "person" || owner.members !== null));
+  return (
+    peopleAnswered &&
+    (directory === null || (directory.bots !== null && directory.tasksAnswered))
+  );
 }
 
 /** What the menu offers: not the viewer, nor the bot whose box this is. */
