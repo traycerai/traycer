@@ -183,7 +183,7 @@ function timeline(frames: readonly ChatFollowFrame[]): string {
     if (!changed || shown >= 70) return;
     shown += 1;
     rows.push(
-      `t=${String(f.t).padStart(5)} ${f.step.padEnd(7)} dist=${f.distance.toFixed(1).padStart(7)} top=${f.scrollTop.toFixed(0)} sh=${String(f.scrollHeight)} ch=${String(f.clientHeight)} dock=${f.dockHeight.toFixed(0)} mode=${f.mode} pill=${String(f.pill)} prompt=${f.promptTop?.toFixed(0) ?? "-"}..${f.promptBottom?.toFixed(0) ?? "-"} rows=${String(f.rows)} last=${f.lastRowKey}`,
+      `t=${String(f.t).padStart(5)} ${f.step.padEnd(7)} dist=${f.distance.toFixed(1).padStart(7)} top=${f.scrollTop.toFixed(0)} sh=${String(f.scrollHeight)} ch=${String(f.clientHeight)} dock=${f.dockHeight.toFixed(0)} mode=${f.mode} pill=${String(f.pill)} prompt=${f.promptTop?.toFixed(0) ?? "-"}..${f.promptBottom?.toFixed(0) ?? "-"} rows=${String(f.rows)} last=${f.lastRowKey} keys=${f.rowKeys}`,
     );
   });
   return [
@@ -420,15 +420,23 @@ for (const c of CASES) {
       .toBeGreaterThan(0);
     // A rich reply commits new rows as it streams, and each such commit is a
     // frame the layout hold leaves unwritten: it may paint off the end, and
-    // the frame after it carries the correction and must be at the end. Two
-    // consecutive off-end frames mean the view is not following.
-    const offEndRuns = streaming.filter(
-      (f, i) => f.distance > 1 && (streaming[i + 1]?.distance ?? 0) > 1,
+    // the frame after it carries the correction and must be at the end. A
+    // token growing an existing row opens no hold, so an off-end paint there
+    // is a missed correction, as are two consecutive off-end frames.
+    const heldCommit = (f: ChatFollowFrame): boolean => {
+      const i = frames.indexOf(f);
+      const prev = frames.at(i - 1);
+      const next = frames.at(i + 1);
+      if (i === 0 || prev === undefined || next === undefined) return false;
+      return prev.rowKeys !== f.rowKeys && next.distance <= 1;
+    };
+    const offEndStreaming = streaming.filter(
+      (f) => f.distance > 1 && !heldCommit(f),
     );
     expect
       .soft(
-        offEndRuns.length,
-        `consecutive painted frames off the end while the reply streams\n${report}`,
+        offEndStreaming.length,
+        `painted frames off the end while the reply streams, outside a row-shape commit\n${report}`,
       )
       .toBe(0);
     const lastStreaming = streaming.at(-1);
