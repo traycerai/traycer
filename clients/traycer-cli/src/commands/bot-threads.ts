@@ -9,8 +9,61 @@ import {
   refuseUnlessSomeHostRuns,
   toBotCliError,
 } from "../internal/bot-host";
-import { callHostRpc, parseCanonicalHostResponse } from "../internal/host-rpc";
+import { HostMethodVersionUnsatisfiedError } from "../../../shared/host-transport/host-messenger";
+import {
+  callHostRpc,
+  callHostRpcWithDispatch,
+  parseCanonicalHostResponse,
+  PLAIN_DISPATCH,
+  type HostRpcDispatch,
+} from "../internal/host-rpc";
+import { cliError, CLI_ERROR_CODES } from "../runner/errors";
 import type { CommandFn } from "../runner/runner";
+
+/**
+ * A paged listing rides `bot.thread.list@1.2`. Below it `limit` and `cursor`
+ * are stripped and the host answers every thread on one page, so a page that
+ * names either requires 1.2, and an older host refuses it before anything is
+ * sent.
+ */
+const PAGED_THREAD_LIST_DISPATCH: HostRpcDispatch = {
+  ...PLAIN_DISPATCH,
+  requiredHostMethodVersion: {
+    method: "bot.thread.list",
+    version: { major: 1, minor: 2 },
+  },
+};
+
+/** The thread list as asked: unpaged on any host, paged only where the host pages. */
+async function listThreads(params: {
+  readonly botId: string;
+  readonly limit: number | null;
+  readonly cursor: string | null;
+}): Promise<unknown> {
+  if (params.limit === null && params.cursor === null) {
+    return await toBotCliError(callHostRpc("bot.thread.list", params));
+  }
+  // Refused before the version is mapped: the general mapping reads it as a
+  // host the CLI cannot talk to, where this one only cannot page.
+  return await toBotCliError(
+    callHostRpcWithDispatch(
+      "bot.thread.list",
+      params,
+      PAGED_THREAD_LIST_DISPATCH,
+    ).catch((error: unknown) => {
+      if (error instanceof HostMethodVersionUnsatisfiedError) {
+        throw cliError({
+          code: CLI_ERROR_CODES.HOST_INCOMPATIBLE,
+          message:
+            "traycer: this host lists a bot's threads only all at once - run `traycer host update` to page them, or leave out --limit and --cursor.",
+          details: { hostShouldUpgrade: true },
+          exitCode: 1,
+        });
+      }
+      throw error;
+    }),
+  );
+}
 
 /**
  * `traycer bot threads <bot>` - the threads of a bot's channel, most recent
@@ -31,13 +84,11 @@ export function buildBotThreadsCommand(opts: {
     const { threads, nextCursor, total } = parseCanonicalHostResponse(
       "bot.thread.list",
       botThreadListResponseSchema,
-      await toBotCliError(
-        callHostRpc("bot.thread.list", {
-          botId: bot.botId,
-          limit: opts.limit,
-          cursor: opts.cursor,
-        }),
-      ),
+      await listThreads({
+        botId: bot.botId,
+        limit: opts.limit,
+        cursor: opts.cursor,
+      }),
     );
     return {
       data: { botId: bot.botId, threads, nextCursor, total },
