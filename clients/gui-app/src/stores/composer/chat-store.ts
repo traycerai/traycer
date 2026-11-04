@@ -565,7 +565,7 @@ export type MessageSegment =
       /**
        * A run of a bot's messages with other bots, drawn as one line between
        * a bot channel's rows (Tracy Bots, decision 174). Synthesized by
-       * `withBotExchangeLines` from the bot's Communication Graph feed, never
+       * `createBotExchangeLineCollator` from the bot's Communication Graph feed, never
        * persisted: one entry per other bot, in the order the run first
        * reached it, with how many messages of the run it took part in.
        */

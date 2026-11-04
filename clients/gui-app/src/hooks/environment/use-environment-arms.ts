@@ -18,6 +18,7 @@ import {
 } from "@traycer/protocol/host/environment/arm-streams";
 import type { HostStreamRpcRegistry } from "@traycer/protocol/host/registry";
 import type { PlainTerminalRecord } from "@traycer/protocol/host/terminal/plain-schemas";
+import type { EnvironmentArmGraph } from "@/lib/comm-graph/compose-comm-graph-events";
 import {
   createEnvironmentArmLanes,
   type EnvironmentArmLaneSpec,
@@ -366,14 +367,24 @@ export function useEnvironmentArmTerminals(
 interface GraphState {
   readonly events: readonly HostCommunicationGraphCloudFeedEvent[];
   readonly cursor: HostCommunicationGraphCloudFeedCursor | null;
+  /** Some frame has reached the head the server read when the arm opened. */
+  readonly caughtUp: boolean;
 }
 interface GraphFrame {
   readonly events: readonly HostCommunicationGraphCloudFeedEvent[];
   readonly cursor: HostCommunicationGraphCloudFeedCursor | null;
+  readonly caughtUp: boolean;
 }
 const NO_GRAPH: GraphState = Object.freeze({
   events: Object.freeze([]),
   cursor: null,
+  caughtUp: false,
+});
+// An ended arm has nothing more to hand over, so it holds no one's history.
+const ENDED_GRAPH: GraphState = Object.freeze({
+  events: Object.freeze([]),
+  cursor: null,
+  caughtUp: true,
 });
 const graphLanes = createEnvironmentArmLanes<GraphState, GraphFrame>();
 
@@ -384,7 +395,7 @@ const graphLanes = createEnvironmentArmLanes<GraphState, GraphFrame>();
  */
 export function useEnvironmentArmGraphEvents(
   epicId: string,
-): readonly HostCommunicationGraphCloudFeedEvent[] {
+): EnvironmentArmGraph {
   const scope = useEnvironmentArmScope(
     "environment.communicationGraph.subscribe",
   );
@@ -405,7 +416,7 @@ export function useEnvironmentArmGraphEvents(
               poolHostId: scope.poolHostId,
               client: scope.client,
               initial: NO_GRAPH,
-              ended: NO_GRAPH,
+              ended: ENDED_GRAPH,
               open: (client, readState) =>
                 client.subscribeWithParamsProvider(
                   "environment.communicationGraph.subscribe",
@@ -429,6 +440,7 @@ export function useEnvironmentArmGraphEvents(
                       frame: {
                         events: parsed.data.events,
                         cursor: parsed.data.cursor,
+                        caughtUp: parsed.data.caughtUp,
                       },
                     };
               },
@@ -440,13 +452,32 @@ export function useEnvironmentArmGraphEvents(
                   (event) => !seen.has(event.eventId),
                 );
                 const cursor = frame.cursor ?? state.cursor;
-                if (fresh.length === 0 && cursor === state.cursor) return state;
-                return { events: [...state.events, ...fresh], cursor };
+                // Once caught up, a redial's backlog is only the gap since the
+                // cursor, so the arm stays caught up through it.
+                const caughtUp = state.caughtUp || frame.caughtUp;
+                if (
+                  fresh.length === 0 &&
+                  cursor === state.cursor &&
+                  caughtUp === state.caughtUp
+                ) {
+                  return state;
+                }
+                return {
+                  events: [...state.events, ...fresh],
+                  cursor,
+                  caughtUp,
+                };
               },
             }),
           ),
     [scope, epicId],
   );
   const states = useEnvironmentArmStates(graphLanes, specs, NO_GRAPH);
-  return useMemo(() => states.flatMap((state) => state.events), [states]);
+  return useMemo(
+    () => ({
+      events: states.flatMap((state) => state.events),
+      caughtUp: states.every((state) => state.caughtUp),
+    }),
+    [states],
+  );
 }

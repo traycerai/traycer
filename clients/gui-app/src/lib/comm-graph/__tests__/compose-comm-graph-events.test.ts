@@ -4,7 +4,10 @@ import {
   type CommGraphEvent,
   type CommGraphSnapshot,
 } from "../comm-graph-events";
-import { withEnvironmentArmGraphEvents } from "../compose-comm-graph-events";
+import {
+  withEnvironmentArmGraphEvents,
+  type EnvironmentArmGraph,
+} from "../compose-comm-graph-events";
 
 function viewerEvent(eventId: string, timestamp: number): CommGraphEvent {
   return {
@@ -62,26 +65,35 @@ function snapshotOf(events: readonly CommGraphEvent[]): CommGraphSnapshot {
   };
 }
 
-describe("withEnvironmentArmGraphEvents", () => {
-  it("returns the same snapshot for an empty arm", () => {
-    const snapshot = snapshotOf([viewerEvent("a", 1)]);
-    expect(withEnvironmentArmGraphEvents(snapshot, [])).toBe(snapshot);
-  });
+function armOf(
+  events: readonly HostCommunicationGraphCloudFeedEvent[],
+  caughtUp: boolean,
+): EnvironmentArmGraph {
+  return { events, caughtUp };
+}
 
-  it("returns the same snapshot when the arm holds nothing new", () => {
+describe("withEnvironmentArmGraphEvents", () => {
+  it("returns the same snapshot for an empty arm that is caught up", () => {
     const snapshot = snapshotOf([viewerEvent("a", 1)]);
-    expect(withEnvironmentArmGraphEvents(snapshot, [armEvent("a", 1)])).toBe(
+    expect(withEnvironmentArmGraphEvents(snapshot, armOf([], true))).toBe(
       snapshot,
     );
   });
 
-  it("normalizes events not held by eventId, merges in graph order, and keeps the viewer's accounting", () => {
+  it("returns the same snapshot when the arm holds nothing new and is caught up", () => {
+    const snapshot = snapshotOf([viewerEvent("a", 1)]);
+    expect(
+      withEnvironmentArmGraphEvents(snapshot, armOf([armEvent("a", 1)], true)),
+    ).toBe(snapshot);
+  });
+
+  it("normalizes events not held by eventId and merges them in graph order, keeping the viewer's arrival and hosts", () => {
     const snapshot = snapshotOf([viewerEvent("a", 10), viewerEvent("c", 30)]);
 
-    const composed = withEnvironmentArmGraphEvents(snapshot, [
-      armEvent("a", 10),
-      armEvent("b", 20),
-    ]);
+    const composed = withEnvironmentArmGraphEvents(
+      snapshot,
+      armOf([armEvent("a", 10), armEvent("b", 20)], true),
+    );
 
     expect(composed.events.map((event) => event.eventId)).toEqual([
       "a",
@@ -93,10 +105,31 @@ describe("withEnvironmentArmGraphEvents", () => {
       timestamp: 20,
       messageText: "b",
     });
-    expect(composed.initialHistoryCaughtUp).toBe(
-      snapshot.initialHistoryCaughtUp,
-    );
+    expect(composed.initialHistoryCaughtUp).toBe(true);
     expect(composed.lastArrival).toBe(snapshot.lastArrival);
     expect(composed.hosts).toBe(snapshot.hosts);
+  });
+
+  it("is not caught up while an arm has not handed over its history, though its events are merged", () => {
+    const snapshot = snapshotOf([viewerEvent("a", 10)]);
+
+    const composed = withEnvironmentArmGraphEvents(
+      snapshot,
+      armOf([armEvent("b", 20)], false),
+    );
+
+    expect(composed.initialHistoryCaughtUp).toBe(false);
+    expect(composed.events.map((event) => event.eventId)).toEqual(["a", "b"]);
+    expect(composed.lastArrival).toBe(snapshot.lastArrival);
+    expect(composed.hosts).toBe(snapshot.hosts);
+  });
+
+  it("is not caught up while the viewer feed has not, whatever the arm", () => {
+    const snapshot = { ...snapshotOf([]), initialHistoryCaughtUp: false };
+
+    expect(
+      withEnvironmentArmGraphEvents(snapshot, armOf([], true))
+        .initialHistoryCaughtUp,
+    ).toBe(false);
   });
 });

@@ -84,7 +84,7 @@ import {
 } from "@/components/chat/chat-turn-minimap-logic";
 import { ChatBotPresentationContext } from "@/components/chat/chat-bot-presentation-context";
 import { BotExchangeLinesContext } from "@/components/chat/bot-exchange-lines-context";
-import { withBotExchangeLines } from "@/stores/chats/transcript-exchange-lines";
+import { createBotExchangeLineCollator } from "@/stores/chats/transcript-exchange-lines";
 import type { BotExchange } from "@/lib/bots/bot-exchanges";
 import { useStopReadingOnNewReply } from "@/hooks/ui/use-read-aloud";
 import { useIsMobileViewport } from "@/hooks/ui/use-mobile-viewport";
@@ -2206,10 +2206,13 @@ function ChatMessagesInner(props: ChatMessagesInnerProps) {
 
   // A bot's channel or thread draws its bot's messages with other bots as
   // lines between its rows (Tracy Bots, decision 174).
+  // The collator remembers its last placement, so a streamed token re-reads
+  // no message and rebuilds no line.
   const exchanges = use(BotExchangeLinesContext)?.exchanges ?? NO_EXCHANGES;
+  const [collateExchangeLines] = useState(createBotExchangeLineCollator);
   const listRows = useMemo(
     () =>
-      withBotExchangeLines(
+      collateExchangeLines(
         transcriptListRows({
           window: transcriptWindow,
           rendered: messages,
@@ -2217,7 +2220,13 @@ function ChatMessagesInner(props: ChatMessagesInnerProps) {
         }),
         exchanges,
       ),
-    [exchanges, splitLongTurns, transcriptWindow, messages],
+    [
+      collateExchangeLines,
+      exchanges,
+      splitLongTurns,
+      transcriptWindow,
+      messages,
+    ],
   );
 
   // Restore the persisted reading position once, on mount (tries

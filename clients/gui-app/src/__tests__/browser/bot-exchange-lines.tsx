@@ -62,9 +62,16 @@ function feedRow(input: {
     expectReply: input.inReplyTo === null,
     messageText: input.text,
     noticeReason: input.kind === "a2a_notice" ? "turn-ended" : null,
-    originKind: "gui_block",
-    originChatId: input.sender,
-    originRefId: null,
+    // As the host writes each side: Tracy's received copy is promoted from
+    // the delivery onto the receiving session; a message Tracy sent is the
+    // sending task's mirror, with no origin.
+    ...(input.receiver === TRUNK
+      ? {
+          originKind: "gui_message",
+          originChatId: input.receiver,
+          originRefId: `receipt-${input.id}`,
+        }
+      : { originKind: null, originChatId: null, originRefId: null }),
     peerEpicId: input.peerEpicId,
   });
   return { ...event, hostId: "host-1" };
@@ -161,7 +168,7 @@ const FEED: ReadonlyArray<CommGraphEvent> = [
   }),
 ];
 
-const EXCHANGES = botExchangesOf(FEED, BOT_ID, new Set([TRUNK]));
+const EXCHANGES = botExchangesOf(FEED, BOT_ID);
 
 const NAMES: Readonly<Record<string, string>> = {
   [RELEASE_BOT_ID]: "Release Bot",

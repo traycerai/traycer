@@ -11,15 +11,17 @@ import {
   FEED_HOST_ID,
   RELEASE_BOT_ID,
   THREAD_SESSION_ID,
+  SENT_MIRROR,
   TRUNK_CHAT_ID,
   feedEvent,
+  receivedBy,
+  type FeedOrigin,
 } from "@/lib/bots/__tests__/bot-exchange-test-support";
 
-const OWN_SESSIONS: ReadonlySet<string> = new Set([
-  TRUNK_CHAT_ID,
-  THREAD_SESSION_ID,
-]);
-
+/**
+ * A message row as the host writes each side: the receiving task's row names
+ * the receiving session as its origin chat; the sending task's mirror has none.
+ */
 function message(input: {
   readonly id: number;
   readonly timestamp: number;
@@ -28,8 +30,10 @@ function message(input: {
   readonly peer: string | null;
   readonly responseId: string | null;
   readonly inReplyTo: string | null;
+  readonly side: "sent" | "received";
 }) {
   return feedEvent({
+    origin: originOf(input),
     id: input.id,
     kind: "a2a_message",
     timestamp: input.timestamp,
@@ -40,6 +44,16 @@ function message(input: {
     inReplyTo: input.inReplyTo,
     peerEpicId: input.peer,
   });
+}
+
+function originOf(input: {
+  readonly id: number;
+  readonly receiver: string;
+  readonly side: "sent" | "received";
+}): FeedOrigin {
+  return input.side === "sent"
+    ? SENT_MIRROR
+    : receivedBy(input.receiver, `receipt-${input.id}`);
 }
 
 describe("botExchangesOf", () => {
@@ -53,6 +67,7 @@ describe("botExchangesOf", () => {
         peer: RELEASE_BOT_ID,
         responseId: "r-1",
         inReplyTo: null,
+        side: "sent",
       }),
       // A same-task row has no far end at all.
       message({
@@ -63,6 +78,7 @@ describe("botExchangesOf", () => {
         peer: null,
         responseId: "r-2",
         inReplyTo: null,
+        side: "sent",
       }),
       // A task's id is not a bot's: an agent of another task.
       message({
@@ -73,6 +89,7 @@ describe("botExchangesOf", () => {
         peer: "epic-7f3a",
         responseId: "r-3",
         inReplyTo: null,
+        side: "sent",
       }),
       // Looks like a bot id but is not the shape of one.
       message({
@@ -83,6 +100,7 @@ describe("botExchangesOf", () => {
         peer: "bot_short",
         responseId: "r-4",
         inReplyTo: null,
+        side: "sent",
       }),
       // The bot's own id as the far end is the bot talking to itself.
       message({
@@ -93,6 +111,7 @@ describe("botExchangesOf", () => {
         peer: BOT_ID,
         responseId: "r-5",
         inReplyTo: null,
+        side: "sent",
       }),
       // A broker notice about an exchange is not a message of it.
       feedEvent({
@@ -105,6 +124,7 @@ describe("botExchangesOf", () => {
         responseId: "r-1",
         inReplyTo: null,
         peerEpicId: RELEASE_BOT_ID,
+        origin: receivedBy(TRUNK_CHAT_ID, "receipt-6"),
       }),
       message({
         id: 7,
@@ -114,11 +134,12 @@ describe("botExchangesOf", () => {
         peer: DOCS_BOT_ID,
         responseId: "r-7",
         inReplyTo: null,
+        side: "received",
       }),
     ];
 
     expect(
-      botExchangesOf(events, BOT_ID, OWN_SESSIONS).map((exchange) => [
+      botExchangesOf(events, BOT_ID).map((exchange) => [
         exchange.peerBotId,
         exchange.text,
       ]),
@@ -128,7 +149,7 @@ describe("botExchangesOf", () => {
     ]);
   });
 
-  it("reads the direction from which side's session sent the message", () => {
+  it("reads the direction and the bot's own session from the row's origin", () => {
     const events = [
       message({
         id: 1,
@@ -138,6 +159,7 @@ describe("botExchangesOf", () => {
         peer: RELEASE_BOT_ID,
         responseId: "r-1",
         inReplyTo: null,
+        side: "sent",
       }),
       message({
         id: 2,
@@ -147,6 +169,7 @@ describe("botExchangesOf", () => {
         peer: RELEASE_BOT_ID,
         responseId: "r-2",
         inReplyTo: null,
+        side: "sent",
       }),
       message({
         id: 3,
@@ -156,11 +179,29 @@ describe("botExchangesOf", () => {
         peer: RELEASE_BOT_ID,
         responseId: "r-2",
         inReplyTo: "r-2",
+        side: "received",
+      }),
+      // A terminal session receives a message the same way a chat does.
+      feedEvent({
+        id: 4,
+        kind: "a2a_message",
+        timestamp: 130,
+        sender: "trunk-docs",
+        receiver: "terminal-session",
+        text: "message 4",
+        responseId: "r-4",
+        inReplyTo: null,
+        peerEpicId: DOCS_BOT_ID,
+        origin: {
+          originKind: "tui_session",
+          originChatId: "terminal-session",
+          originRefId: "receipt-4",
+        },
       }),
     ];
 
     expect(
-      botExchangesOf(events, BOT_ID, OWN_SESSIONS).map((exchange) => [
+      botExchangesOf(events, BOT_ID).map((exchange) => [
         exchange.direction,
         exchange.ownAgentId,
       ]),
@@ -168,7 +209,68 @@ describe("botExchangesOf", () => {
       ["sent", TRUNK_CHAT_ID],
       ["sent", THREAD_SESSION_ID],
       ["received", THREAD_SESSION_ID],
+      ["received", "terminal-session"],
     ]);
+  });
+
+  it("keeps a sent mirror from a session the GUI does not know as sent from that session", () => {
+    const [exchange] = botExchangesOf(
+      [
+        message({
+          id: 1,
+          timestamp: 100,
+          sender: "session-of-a-resumed-thread",
+          receiver: "trunk-release",
+          peer: RELEASE_BOT_ID,
+          responseId: "r-1",
+          inReplyTo: null,
+          side: "sent",
+        }),
+      ],
+      BOT_ID,
+    );
+
+    expect(exchange).toMatchObject({
+      direction: "sent",
+      ownAgentId: "session-of-a-resumed-thread",
+    });
+  });
+
+  it("leaves out a row whose origin is neither side's, rather than guessing", () => {
+    const wrongKind = feedEvent({
+      id: 1,
+      kind: "a2a_message",
+      timestamp: 100,
+      sender: TRUNK_CHAT_ID,
+      receiver: "trunk-release",
+      text: "message 1",
+      responseId: "r-1",
+      inReplyTo: null,
+      peerEpicId: RELEASE_BOT_ID,
+      origin: {
+        originKind: "gui_block",
+        originChatId: TRUNK_CHAT_ID,
+        originRefId: null,
+      },
+    });
+    const otherChat = feedEvent({
+      id: 2,
+      kind: "a2a_message",
+      timestamp: 110,
+      sender: "trunk-release",
+      receiver: TRUNK_CHAT_ID,
+      text: "message 2",
+      responseId: "r-2",
+      inReplyTo: null,
+      peerEpicId: RELEASE_BOT_ID,
+      origin: {
+        originKind: "gui_message",
+        originChatId: THREAD_SESSION_ID,
+        originRefId: "receipt-2",
+      },
+    });
+
+    expect(botExchangesOf([wrongKind, otherChat], BOT_ID)).toEqual([]);
   });
 
   it("keys a row by its cloud id, or by its host and row id before it has one", () => {
@@ -180,13 +282,12 @@ describe("botExchangesOf", () => {
       peer: RELEASE_BOT_ID,
       responseId: null,
       inReplyTo: null,
+      side: "sent",
     });
     const cloud = { ...plain, id: 13, eventId: "cloud-event-13" };
 
     expect(
-      botExchangesOf([plain, cloud], BOT_ID, OWN_SESSIONS).map(
-        (exchange) => exchange.key,
-      ),
+      botExchangesOf([plain, cloud], BOT_ID).map((exchange) => exchange.key),
     ).toEqual([`${FEED_HOST_ID}:12`, "cloud-event-13"]);
   });
 });

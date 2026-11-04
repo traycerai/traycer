@@ -659,7 +659,6 @@ export function BotChannelView(props: {
     hostId,
     boundHostId,
     trunkChatId,
-    threadList: threadList.data,
     environmentBots,
     botTitle,
     openPair: exchangeRail.open,
@@ -1061,8 +1060,6 @@ function useExchangeLines(input: {
   readonly hostId: string;
   readonly boundHostId: string | null;
   readonly trunkChatId: string;
-  /** The bot's threads as listed; `undefined` until listed. */
-  readonly threadList: BotThreadListResponse | undefined;
   readonly environmentBots: ReadonlyArray<BotRecord> | null;
   readonly botTitle: string;
   readonly openPair: (peerBotId: string) => void;
@@ -1079,12 +1076,11 @@ function useExchangeLines(input: {
 } {
   const { environmentBots, botTitle, openPair } = input;
   const openThreadSession = input.openThread?.sessionChatId ?? null;
-  const { all, channel, ofThread } = useBotExchanges({
+  const { all, channel, ofSession } = useBotExchanges({
     botId: input.botId,
     hostId: input.hostId,
     boundHostId: input.boundHostId,
     trunkChatId: input.trunkChatId,
-    threads: input.threadList?.threads ?? EMPTY_THREADS,
   });
   const peerName = useCallback(
     (peerBotId: string): string | null =>
@@ -1102,8 +1098,8 @@ function useExchangeLines(input: {
   const channelLines = useMemo(() => linesOf(channel), [channel, linesOf]);
   const threadLines = useMemo(
     () =>
-      openThreadSession === null ? null : linesOf(ofThread(openThreadSession)),
-    [linesOf, ofThread, openThreadSession],
+      openThreadSession === null ? null : linesOf(ofSession(openThreadSession)),
+    [linesOf, ofSession, openThreadSession],
   );
   const logOf = useCallback(
     (peerBotId: string) => exchangeLogOf(all ?? NO_EXCHANGES, peerBotId),

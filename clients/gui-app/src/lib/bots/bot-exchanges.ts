@@ -34,31 +34,55 @@ function eventKey(event: CommGraphEvent): string {
 }
 
 /**
+ * Which end of a message the bot's feed row is, from the row's origin, which
+ * the host writes for each side: the receiving task's row is promoted from the
+ * delivery with the receiving session as its origin chat, and the sending
+ * task's mirror has no origin at all. A row of any other shape is left out
+ * rather than guessed at.
+ */
+function directionOf(event: CommGraphEvent): "sent" | "received" | null {
+  if (
+    event.originKind === null &&
+    event.originChatId === null &&
+    event.originRefId === null
+  ) {
+    return "sent";
+  }
+  if (
+    (event.originKind === "gui_message" ||
+      event.originKind === "tui_session") &&
+    event.originChatId !== null &&
+    event.originChatId === event.receiverAgentId
+  ) {
+    return "received";
+  }
+  return null;
+}
+
+/**
  * The bot's messages with other bots, oldest first: each message row of its
  * feed whose far end is another bot. A bot's id has its own shape, so a bot
  * the environment no longer lists is still one; a task's agent, a notice and
- * a row inside the bot's own task are not. A row this bot's session
- * (`ownAgentIds`: its trunk and its threads' sessions) sent is `sent`; any
- * other row is the other bot's, received.
+ * a row inside the bot's own task are not.
  */
 export function botExchangesOf(
   events: ReadonlyArray<CommGraphEvent>,
   botId: string,
-  ownAgentIds: ReadonlySet<string>,
 ): ReadonlyArray<BotExchange> {
   const exchanges: BotExchange[] = [];
   for (const event of events) {
     if (event.kind !== "a2a_message") continue;
     const peer = event.peerEpicId;
     if (peer === null || peer === botId || !isBotId(peer)) continue;
-    const sent =
-      event.senderAgentId !== null && ownAgentIds.has(event.senderAgentId);
+    const direction = directionOf(event);
+    if (direction === null) continue;
     exchanges.push({
       key: eventKey(event),
       timestamp: event.timestamp,
       peerBotId: peer,
-      direction: sent ? "sent" : "received",
-      ownAgentId: sent ? event.senderAgentId : event.receiverAgentId,
+      direction,
+      ownAgentId:
+        direction === "sent" ? event.senderAgentId : event.receiverAgentId,
       senderAgentId: event.senderAgentId,
       text: event.messageText ?? "",
       responseId: event.responseId,

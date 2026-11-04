@@ -11,6 +11,32 @@ export const TRUNK_CHAT_ID = "trunk-tracy";
 export const THREAD_SESSION_ID = "session-thread-1";
 export const FEED_HOST_ID = "host-1";
 
+/** The origin fields of a feed row. */
+export interface FeedOrigin {
+  readonly originKind: EpicCommunicationGraphEvent["originKind"];
+  readonly originChatId: string | null;
+  readonly originRefId: string | null;
+}
+
+/** The sending task's mirror of a message: the host writes it with no origin. */
+export const SENT_MIRROR: FeedOrigin = {
+  originKind: null,
+  originChatId: null,
+  originRefId: null,
+};
+
+/**
+ * The receiving task's row, promoted from the delivery: the receiving session
+ * is its origin chat, and a receipt key its ref.
+ */
+export function receivedBy(receiver: string, receipt: string): FeedOrigin {
+  return {
+    originKind: "gui_message",
+    originChatId: receiver,
+    originRefId: receipt,
+  };
+}
+
 interface WireEventInput {
   readonly id: number;
   readonly kind: EpicCommunicationGraphEvent["kind"];
@@ -21,6 +47,7 @@ interface WireEventInput {
   readonly responseId: string | null;
   readonly inReplyTo: string | null;
   readonly peerEpicId: string | null;
+  readonly origin: FeedOrigin;
 }
 
 /**
@@ -40,9 +67,9 @@ export function feedEvent(input: WireEventInput): CommGraphEvent {
     expectReply: input.inReplyTo === null,
     messageText: input.text,
     noticeReason: input.kind === "a2a_notice" ? "turn-ended" : null,
-    originKind: "gui_block",
-    originChatId: input.sender,
-    originRefId: null,
+    originKind: input.origin.originKind,
+    originChatId: input.origin.originChatId,
+    originRefId: input.origin.originRefId,
     peerEpicId: input.peerEpicId,
   });
   return { ...event, hostId: FEED_HOST_ID };

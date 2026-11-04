@@ -124,11 +124,11 @@ vi.mock("@/hooks/host/use-host-directory-list-query", () => ({
 vi.mock("@/components/chat/chat-messages", async () => {
   const { ChatExpansionTestProviders: Providers } =
     await import("@/components/chat/__tests__/chat-expansion-test-providers");
-  const { use } = await import("react");
+  const { use, useState } = await import("react");
   const { ChatMessage } = await import("@/components/chat/chat-message");
   const { BotExchangeLinesContext } =
     await import("@/components/chat/bot-exchange-lines-context");
-  const { withBotExchangeLines } =
+  const { createBotExchangeLineCollator } =
     await import("@/stores/chats/transcript-exchange-lines");
   const { transcriptListRows } =
     await import("@/stores/chats/transcript-list-rows");
@@ -138,7 +138,8 @@ vi.mock("@/components/chat/chat-messages", async () => {
       messages: ReadonlyArray<ChatMessageModel>;
       instanceId: string;
     }) => {
-      const rows = withBotExchangeLines(
+      const [collateExchangeLines] = useState(createBotExchangeLineCollator);
+      const rows = collateExchangeLines(
         transcriptListRows({
           window: null,
           rendered: props.messages,
@@ -227,15 +228,23 @@ function botRecord(botId: string, title: string): BotRecord {
 const AUDIT_BOT = botRecord(OTHER_BOT_ID, OTHER_BOT_TITLE);
 const ENVIRONMENT_BOTS: ReadonlyArray<BotRecord> = [AUDIT_BOT];
 
+/**
+ * A feed row as the host writes each side of a message. `sent`: the bot's
+ * `session` wrote it, and the mirror has no origin. `received`: the other
+ * bot's session wrote it to the bot's `session`, and the row is promoted from
+ * the delivery with that session as its origin chat.
+ */
 function feedRow(input: {
   readonly version: number;
   readonly at: number;
-  readonly sender: string;
+  readonly session: string;
+  readonly direction: "sent" | "received";
   readonly peer: string;
   readonly text: string;
   readonly responseId: string;
   readonly inReplyTo: string | null;
 }): HostCommunicationGraphCloudFeedEvent {
+  const sent = input.direction === "sent";
   return {
     eventId: `event-${String(input.version)}`,
     originHostId: BOUND_HOST_ID,
@@ -243,16 +252,20 @@ function feedRow(input: {
     ingestVersion: input.version,
     kind: "a2a_message",
     capturedAt: input.at,
-    senderAgentId: input.sender,
-    receiverAgentId: `receiver-${String(input.version)}`,
+    senderAgentId: sent
+      ? input.session
+      : `peer-session-${String(input.version)}`,
+    receiverAgentId: sent
+      ? `peer-session-${String(input.version)}`
+      : input.session,
     responseId: input.responseId,
     inReplyTo: input.inReplyTo,
     expectReply: input.inReplyTo === null,
     messageText: input.text,
     noticeReason: null,
-    originKind: null,
-    originChatId: null,
-    originRefId: null,
+    originKind: sent ? null : "gui_message",
+    originChatId: sent ? null : input.session,
+    originRefId: sent ? null : `receipt-${String(input.version)}`,
     peerEpicId: input.peer,
     historicalUpload: false,
   };
@@ -262,7 +275,8 @@ function feedRow(input: {
 const ASKED = feedRow({
   version: 1,
   at: 1_500,
-  sender: TRUNK_ID,
+  session: TRUNK_ID,
+  direction: "sent",
   peer: OTHER_BOT_ID,
   text: "Is the **nightly** red?",
   responseId: "r-1",
@@ -271,7 +285,8 @@ const ASKED = feedRow({
 const ANSWERED = feedRow({
   version: 2,
   at: 1_600,
-  sender: "trunk-audit",
+  session: TRUNK_ID,
+  direction: "received",
   peer: OTHER_BOT_ID,
   text: "Yes, lint failed.",
   responseId: "r-1",
@@ -281,7 +296,8 @@ const ANSWERED = feedRow({
 const DOCS_ASKED = feedRow({
   version: 3,
   at: 2_500,
-  sender: TRUNK_ID,
+  session: TRUNK_ID,
+  direction: "sent",
   peer: DOCS_BOT_ID,
   text: "Docs check, please.",
   responseId: "r-2",
@@ -291,10 +307,26 @@ const DOCS_ASKED = feedRow({
 const THREAD_ASKED = feedRow({
   version: 4,
   at: 3_500,
-  sender: THREAD_SESSION_ID,
+  session: THREAD_SESSION_ID,
+  direction: "sent",
   peer: OTHER_BOT_ID,
   text: "Thread question for audit.",
   responseId: "r-3",
+  inReplyTo: null,
+});
+
+/**
+ * Sent by a session that is neither the trunk nor the open thread's (a
+ * thread's earlier session, before it was resumed), among the trunk's rows.
+ */
+const EARLIER_SESSION_ASKED = feedRow({
+  version: 6,
+  at: 1_550,
+  session: "session-before-resume",
+  direction: "sent",
+  peer: OTHER_BOT_ID,
+  text: "Question from a session no surface shows.",
+  responseId: "r-6",
   inReplyTo: null,
 });
 
@@ -503,7 +535,8 @@ describe("a bot's channel with its messages to other bots", () => {
         feedRow({
           version: 5,
           at: 2_600,
-          sender: "trunk-docs",
+          session: TRUNK_ID,
+          direction: "received",
           peer: DOCS_BOT_ID,
           text: "On it.",
           responseId: "r-2",
@@ -516,9 +549,11 @@ describe("a bot's channel with its messages to other bots", () => {
     expect(within(channel).getAllByTestId("bot-exchange-line")).toHaveLength(1);
   });
 
-  it("draws a thread session's messages in the open thread and not in the channel", async () => {
+  it("draws each session's messages on its own surface, and a session shown by neither on neither", async () => {
     mount({ ...NO_EXCHANGE_OPEN, openThread: THREAD_OPEN });
-    await feedHolds([ASKED, THREAD_ASKED], { caughtUp: true });
+    await feedHolds([ASKED, THREAD_ASKED, EARLIER_SESSION_ASKED], {
+      caughtUp: true,
+    });
 
     const thread = await within(list(`bot-thread:${THREAD_ID}`)).findByTestId(
       "bot-exchange-pair",
@@ -559,6 +594,27 @@ describe("the log of a pair, open in the rail", () => {
     expect(within(rows[0]).getByText("nightly").tagName).toBe("STRONG");
     expect(rows[1].textContent).toContain("Audit Bot");
     expect(rows[1].textContent).toContain("Yes, lint failed.");
+  });
+
+  it("lists a message of a session that neither the channel nor a thread shows", async () => {
+    mount({
+      ...NO_EXCHANGE_OPEN,
+      openExchange: { peerBotId: OTHER_BOT_ID, back: null },
+    });
+    await feedHolds([ASKED, EARLIER_SESSION_ASKED], { caughtUp: true });
+
+    const rows = await within(await screenLog()).findAllByTestId(
+      "bot-exchange-log-row",
+    );
+
+    expect(rows.map((row) => row.textContent)).toEqual([
+      expect.stringContaining("Is the nightly red?"),
+      expect.stringContaining("Question from a session no surface shows."),
+    ]);
+    expect(
+      within(list(`bot-channel:${BOT_ID}`)).getByTestId("bot-exchange-pair")
+        .textContent,
+    ).toBe("Release Bot ↔ Audit Bot · 1 message");
   });
 
   it("shows another pair's messages in its place when another pair is chosen", async () => {

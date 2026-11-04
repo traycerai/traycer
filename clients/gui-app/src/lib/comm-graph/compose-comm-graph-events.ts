@@ -2,6 +2,7 @@ import type { HostCommunicationGraphCloudFeedEvent } from "@traycer/protocol/hos
 import { normalizeCloudEvent } from "@/lib/comm-graph/comm-graph-cloud-subscription";
 import {
   compareCommGraphEvents,
+  type CommGraphEvent,
   type CommGraphSnapshot,
 } from "@/lib/comm-graph/comm-graph-events";
 import { defineComposedView } from "@/lib/view-composition/composed-view";
@@ -24,24 +25,52 @@ export const COMM_GRAPH_COMPOSED_VIEW = defineComposedView("comm-graph", [
   },
 ]);
 
+/** What the task's environment arms have handed over so far. */
+export interface EnvironmentArmGraph {
+  readonly events: readonly HostCommunicationGraphCloudFeedEvent[];
+  /**
+   * Every arm the task reads has handed over its history up to the head the
+   * server read when it opened (or has ended). True with no arm to read.
+   */
+  readonly caughtUp: boolean;
+}
+
 /**
  * The snapshot with each arm event it does not already hold, by `eventId`,
- * in the graph's own order. Only the rows move: the arm's history accounting
- * is its own, so `initialHistoryCaughtUp` and `lastArrival` stay the viewer
- * feed's.
+ * in the graph's own order. The initial history is caught up only once the
+ * viewer feed and every arm have each handed over theirs; `lastArrival` stays
+ * the viewer feed's.
  */
 export function withEnvironmentArmGraphEvents(
   snapshot: CommGraphSnapshot,
-  arm: readonly HostCommunicationGraphCloudFeedEvent[],
+  arm: EnvironmentArmGraph,
 ): CommGraphSnapshot {
-  if (arm.length === 0) return snapshot;
-  const seen = new Set(snapshot.events.map((event) => event.eventId));
-  const added = arm
-    .filter((event) => !seen.has(event.eventId))
-    .map(normalizeCloudEvent);
-  if (added.length === 0) return snapshot;
+  const initialHistoryCaughtUp =
+    snapshot.initialHistoryCaughtUp && arm.caughtUp;
+  const added = newArmEvents(snapshot, arm.events);
+  if (
+    added.length === 0 &&
+    initialHistoryCaughtUp === snapshot.initialHistoryCaughtUp
+  ) {
+    return snapshot;
+  }
   return {
     ...snapshot,
-    events: [...snapshot.events, ...added].sort(compareCommGraphEvents),
+    initialHistoryCaughtUp,
+    events:
+      added.length === 0
+        ? snapshot.events
+        : [...snapshot.events, ...added].sort(compareCommGraphEvents),
   };
+}
+
+function newArmEvents(
+  snapshot: CommGraphSnapshot,
+  arm: readonly HostCommunicationGraphCloudFeedEvent[],
+): CommGraphEvent[] {
+  if (arm.length === 0) return [];
+  const seen = new Set(snapshot.events.map((event) => event.eventId));
+  return arm
+    .filter((event) => !seen.has(event.eventId))
+    .map(normalizeCloudEvent);
 }

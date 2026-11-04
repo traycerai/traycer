@@ -5,11 +5,12 @@ import {
   BOT_ID,
   DOCS_BOT_ID,
   RELEASE_BOT_ID,
+  SENT_MIRROR,
   TRUNK_CHAT_ID,
   feedEvent,
 } from "@/lib/bots/__tests__/bot-exchange-test-support";
 import { makeMessageAt } from "@/components/chat/__tests__/chat-message-fixtures";
-import { withBotExchangeLines } from "@/stores/chats/transcript-exchange-lines";
+import { createBotExchangeLineCollator } from "@/stores/chats/transcript-exchange-lines";
 import {
   transcriptListRows,
   type TranscriptListRow,
@@ -48,10 +49,10 @@ function exchangesWith(
         responseId: `r-${index}`,
         inReplyTo: null,
         peerEpicId: peer,
+        origin: SENT_MIRROR,
       }),
     ),
     BOT_ID,
-    new Set([TRUNK_CHAT_ID]),
   );
 }
 
@@ -69,7 +70,7 @@ function lineOf(row: TranscriptListRow) {
   return { row, segment };
 }
 
-describe("withBotExchangeLines", () => {
+describe("createBotExchangeLineCollator", () => {
   it("draws a run of exchanges with no row between them as one line placed among the rows", () => {
     const rows = channelRows(100, 400);
     const exchanges = exchangesWith(
@@ -78,7 +79,7 @@ describe("withBotExchangeLines", () => {
       [RELEASE_BOT_ID, 300],
     );
 
-    const merged = withBotExchangeLines(rows, exchanges);
+    const merged = createBotExchangeLineCollator()(rows, exchanges);
 
     expect(layout(merged)).toEqual([
       "message-0",
@@ -100,7 +101,7 @@ describe("withBotExchangeLines", () => {
       [DOCS_BOT_ID, 450],
     );
 
-    const merged = withBotExchangeLines(rows, exchanges);
+    const merged = createBotExchangeLineCollator()(rows, exchanges);
 
     expect(layout(merged)).toEqual([
       "message-0",
@@ -127,8 +128,9 @@ describe("withBotExchangeLines", () => {
       [RELEASE_BOT_ID, 220],
     );
 
-    const first = withBotExchangeLines(rows, before);
-    const second = withBotExchangeLines(rows, after);
+    const collate = createBotExchangeLineCollator();
+    const first = collate(rows, before);
+    const second = collate(rows, after);
 
     expect(layout(first)).toEqual([
       "message-0",
@@ -152,7 +154,7 @@ describe("withBotExchangeLines", () => {
     const rows = channelRows(300);
     const exchanges = exchangesWith([DOCS_BOT_ID, 100]);
 
-    expect(layout(withBotExchangeLines(rows, exchanges))).toEqual([
+    expect(layout(createBotExchangeLineCollator()(rows, exchanges))).toEqual([
       `bot-exchanges:${exchanges[0].key}`,
       "message-0",
     ]);
@@ -161,7 +163,138 @@ describe("withBotExchangeLines", () => {
   it("returns the same rows when the feed has no exchange", () => {
     const rows = channelRows(100, 200);
 
-    expect(withBotExchangeLines(rows, [])).toBe(rows);
+    expect(createBotExchangeLineCollator()(rows, [])).toBe(rows);
+  });
+});
+
+/** `exchanges`, and how many of its elements have been read through the proxy. */
+function countingReads(exchanges: ReadonlyArray<BotExchange>): {
+  readonly exchanges: ReadonlyArray<BotExchange>;
+  readonly reads: () => number;
+  readonly reset: () => void;
+} {
+  let reads = 0;
+  const proxy = new Proxy(exchanges, {
+    get(target, property, receiver) {
+      if (typeof property === "string" && /^\d+$/.test(property)) reads += 1;
+      const element: unknown = Reflect.get(target, property, receiver);
+      return element;
+    },
+  });
+  return {
+    exchanges: proxy,
+    reads: () => reads,
+    reset: () => {
+      reads = 0;
+    },
+  };
+}
+
+function withContent(
+  rows: readonly TranscriptListRow[],
+  index: number,
+  content: string,
+): readonly TranscriptListRow[] {
+  return rows.map((row, at) =>
+    at === index && row.kind === "hydrated"
+      ? { ...row, model: { ...row.model, content } }
+      : row,
+  );
+}
+
+describe("createBotExchangeLineCollator across updates", () => {
+  it("lays the lines it has among rows whose body alone changed, reading no message", () => {
+    const rows = channelRows(100, 400);
+    const counted = countingReads(
+      exchangesWith([RELEASE_BOT_ID, 200], [DOCS_BOT_ID, 250]),
+    );
+    const collate = createBotExchangeLineCollator();
+    const first = collate(rows, counted.exchanges);
+    expect(counted.reads()).toBeGreaterThan(0);
+    counted.reset();
+
+    const streamed = collate(
+      withContent(rows, 1, "a longer body"),
+      counted.exchanges,
+    );
+
+    expect(counted.reads()).toBe(0);
+    expect(layout(streamed)).toEqual(layout(first));
+    expect(streamed[1]).toBe(first[1]);
+    expect(streamed[2]).toMatchObject({ model: { content: "a longer body" } });
+  });
+
+  it("places the lines again when the rows move with their count unchanged, as a window sliding by one does", () => {
+    const exchanges = exchangesWith([RELEASE_BOT_ID, 300]);
+    const collate = createBotExchangeLineCollator();
+    const line = `bot-exchanges:${exchanges[0].key}`;
+    expect(layout(collate(channelRows(100, 400), exchanges))).toEqual([
+      "message-0",
+      line,
+      "message-1",
+    ]);
+
+    const slid = transcriptListRows({
+      window: null,
+      rendered: [makeMessageAt(1, "user", 400), makeMessageAt(2, "user", 500)],
+      splitLongTurns: false,
+    });
+
+    expect(layout(collate(slid, exchanges))).toEqual([
+      line,
+      "message-1",
+      "message-2",
+    ]);
+  });
+
+  it("redraws only the line whose run changed when a new exchange lands in a later run", () => {
+    const rows = channelRows(100, 300, 500);
+    const before = exchangesWith([RELEASE_BOT_ID, 200], [RELEASE_BOT_ID, 400]);
+    const after = exchangesWith(
+      [RELEASE_BOT_ID, 200],
+      [RELEASE_BOT_ID, 400],
+      [RELEASE_BOT_ID, 450],
+    );
+    const collate = createBotExchangeLineCollator();
+    const first = collate(rows, before);
+
+    const second = collate(rows, after);
+
+    expect(layout(second)).toEqual(layout(first));
+    expect(second[1]).toBe(first[1]);
+    expect(second[3]).not.toBe(first[3]);
+    expect(lineOf(first[3]).segment.pairs).toEqual([
+      { peerBotId: RELEASE_BOT_ID, count: 1 },
+    ]);
+    expect(lineOf(second[3]).segment.pairs).toEqual([
+      { peerBotId: RELEASE_BOT_ID, count: 2 },
+    ]);
+  });
+
+  it("keeps the earlier lines when a row arrives after the trailing run and closes it", () => {
+    const exchanges = exchangesWith(
+      [DOCS_BOT_ID, 50],
+      [RELEASE_BOT_ID, 200],
+      [RELEASE_BOT_ID, 210],
+    );
+    const collate = createBotExchangeLineCollator();
+    const first = collate(channelRows(100), exchanges);
+
+    const second = collate(channelRows(100, 300), exchanges);
+
+    expect(layout(first)).toEqual([
+      `bot-exchanges:${exchanges[0].key}`,
+      "message-0",
+      `bot-exchanges:${exchanges[1].key}`,
+    ]);
+    expect(layout(second)).toEqual([
+      `bot-exchanges:${exchanges[0].key}`,
+      "message-0",
+      `bot-exchanges:${exchanges[1].key}`,
+      "message-1",
+    ]);
+    expect(second[0]).toBe(first[0]);
+    expect(second[2]).toBe(first[2]);
   });
 });
 
@@ -211,7 +344,7 @@ function windowedRows(
   });
 }
 
-describe("withBotExchangeLines over a windowed transcript", () => {
+describe("createBotExchangeLineCollator over a windowed transcript", () => {
   it("withholds exchanges whose place is hidden by a placeholder, until the rows around them hydrate", () => {
     // Rows at 100 and 500 are served; the row between them, at 300, is not.
     const exchanges = exchangesWith(
@@ -221,8 +354,14 @@ describe("withBotExchangeLines over a windowed transcript", () => {
       [DOCS_BOT_ID, 600],
     );
 
-    const withheld = withBotExchangeLines(windowedRows([0, 2]), exchanges);
-    const hydrated = withBotExchangeLines(windowedRows([0, 1, 2]), exchanges);
+    const withheld = createBotExchangeLineCollator()(
+      windowedRows([0, 2]),
+      exchanges,
+    );
+    const hydrated = createBotExchangeLineCollator()(
+      windowedRows([0, 1, 2]),
+      exchanges,
+    );
 
     expect(layout(withheld)).toEqual([
       `bot-exchanges:${exchanges[0].key}`,
@@ -246,6 +385,8 @@ describe("withBotExchangeLines over a windowed transcript", () => {
     const rows = windowedRows([0]);
     const exchanges = exchangesWith([RELEASE_BOT_ID, 700]);
 
-    expect(layout(withBotExchangeLines(rows, exchanges))).toEqual(layout(rows));
+    expect(layout(createBotExchangeLineCollator()(rows, exchanges))).toEqual(
+      layout(rows),
+    );
   });
 });
