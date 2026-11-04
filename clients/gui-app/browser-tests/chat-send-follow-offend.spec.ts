@@ -384,7 +384,38 @@ for (const [reply, runs] of [
         "every stream frame has both readings",
       ).toBe(0);
       const aOff = stream.filter((f) => (f.A?.dist ?? 0) > 1);
-      const bOff = stream.filter((f) => (f.B?.dist ?? 0) > 1);
+      // The send's layout hold issues no end write in a frame whose commit
+      // changes the row set (a row appended, removed or re-keyed), so that
+      // frame may paint off the end; the correction lands in the next frame,
+      // which must paint at the end. Off-end paints anywhere else are real.
+      // A recorded row is `<message id>=<height>`; the id alone names the
+      // row set, so a row growing with a streamed token is not a commit.
+      const rowIds = (r: Reading): string =>
+        r.rows.map((row) => row.slice(0, row.lastIndexOf("="))).join("|");
+      // Both neighbours are read from every recorded frame, not the stream
+      // step alone: the first stream frame's predecessor is the last frame
+      // before it, whatever its step.
+      const rowsChangedIn = (i: number): boolean => {
+        const prev =
+          data.frames.at(data.frames.indexOf(stream[i]) - 1)?.B ?? null;
+        const b = stream[i]?.B ?? null;
+        if (prev === null || b === null) return false;
+        return rowIds(prev) !== rowIds(b);
+      };
+      // A commit in the last stream frame corrects in the first frame after
+      // it, and a frame with no painted reading proves nothing.
+      const heldCommit = (i: number): boolean => {
+        const next = data.frames.at(data.frames.indexOf(stream[i]) + 1)?.B;
+        return (
+          rowsChangedIn(i) &&
+          next !== undefined &&
+          next !== null &&
+          next.dist <= 1
+        );
+      };
+      const bOff = stream.filter(
+        (f, i) => (f.B?.dist ?? 0) > 1 && !heldCommit(i),
+      );
       // The first growth of the stream is the reply's first appearance.
       const firstGrowth = stream.findIndex(
         (f, i) => i > 0 && (f.A?.sh ?? 0) > (stream[0].A?.sh ?? 0),
