@@ -26,7 +26,10 @@ const serializeArtifactMarkdown = vi.hoisted(() => vi.fn());
 // before this session has resolved the record) must not throw, only one
 // whose KIND is known and non-Markdown must.
 const artifactRecords = vi.hoisted(() => ({
-  current: {} as Record<string, { readonly kind: string; readonly title: string }>,
+  current: {} as Record<
+    string,
+    { readonly kind: string; readonly title: string }
+  >,
 }));
 const artifactTree = vi.hoisted(() => ({
   current: {

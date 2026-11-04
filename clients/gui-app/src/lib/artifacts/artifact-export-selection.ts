@@ -1,9 +1,6 @@
 import { displayTitle } from "@/lib/display-title";
 import { isMarkdownArtifactKind } from "@/lib/artifacts/node-display";
-import type {
-  ArtifactsSlice,
-  TreeSlice,
-} from "@/stores/epics/open-epic/types";
+import type { ArtifactsSlice, TreeSlice } from "@/stores/epics/open-epic/types";
 
 /** The two projected slices a nested export walks. */
 export interface ArtifactExportTree {

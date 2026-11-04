@@ -2027,25 +2027,23 @@ function useArtifactRowMenuEntries(
         onSelect: () => exportOne("pdf"),
       },
       ...(nested
-        ? (["markdown", "pdf"] as const).map(
-            (format): SidebarRowMenuEntry => ({
-              kind: "item",
-              id: `export-nested-${format}`,
-              label:
-                format === "markdown"
-                  ? "Export with nested as Markdown ZIP"
-                  : "Export with nested as PDF ZIP",
-              icon: exportIcon,
-              disabled: exportPending,
-              disabledTooltip: null,
-              variant: "default",
-              testIds: {
-                dropdown: `epic-sidebar-export-nested-${format}-${nodeId}`,
-                context: `epic-sidebar-context-export-nested-${format}-${nodeId}`,
-              },
-              onSelect: () => exportNested(format),
-            }),
-          )
+        ? (["markdown", "pdf"] as const).map((format): SidebarRowMenuEntry => ({
+            kind: "item",
+            id: `export-nested-${format}`,
+            label:
+              format === "markdown"
+                ? "Export with nested as Markdown ZIP"
+                : "Export with nested as PDF ZIP",
+            icon: exportIcon,
+            disabled: exportPending,
+            disabledTooltip: null,
+            variant: "default",
+            testIds: {
+              dropdown: `epic-sidebar-export-nested-${format}-${nodeId}`,
+              context: `epic-sidebar-context-export-nested-${format}-${nodeId}`,
+            },
+            onSelect: () => exportNested(format),
+          }))
         : []),
       { kind: "separator", id: "after-export" },
       {
