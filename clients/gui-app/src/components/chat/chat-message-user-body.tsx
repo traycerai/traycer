@@ -411,7 +411,7 @@ function SlackMessageDisplayView({
         />
       </div>
       {messageText.length > 0 ? (
-        <div className="text-ui leading-7">
+        <div className="text-ui leading-7 break-words whitespace-pre-wrap">
           <ChatUserMessageContent
             content={messageText}
             attachments={attachments}
