@@ -144,6 +144,80 @@ describe("ComposerPromptEditor autofocus vs the mobile app", () => {
     expect(mounted.viewFocus).toHaveBeenCalled();
   });
 
+  it("does not take focus back on the frame after the caret was revealed", async () => {
+    setMobileApp(false);
+    const mounted = await mountComposer(true);
+    const handle = readyHandle(mounted);
+    const frames: FrameRequestCallback[] = [];
+    vi.spyOn(globalThis, "requestAnimationFrame").mockImplementation(
+      (callback) => {
+        frames.push(callback);
+        return frames.length;
+      },
+    );
+    const scrollIntoView = vi.spyOn(Transaction.prototype, "scrollIntoView");
+    const button = document.createElement("button");
+    document.body.append(button);
+
+    mounted.viewFocus.mockClear();
+    act(() => {
+      handle.focusAtEnd("reveal-caret");
+    });
+    expect(mounted.viewFocus).toHaveBeenCalledTimes(1);
+
+    button.focus();
+    expect(document.activeElement).toBe(button);
+    mounted.viewFocus.mockClear();
+    scrollIntoView.mockClear();
+    act(() => {
+      while (frames.length > 0) frames.shift()?.(performance.now());
+    });
+
+    expect(mounted.viewFocus).not.toHaveBeenCalled();
+    expect(scrollIntoView).not.toHaveBeenCalled();
+    button.remove();
+  });
+
+  it("does not take focus back after a fill that places the caret at the end", async () => {
+    setMobileApp(false);
+    const mounted = await mountComposer(true);
+    const handle = readyHandle(mounted);
+    const frames: FrameRequestCallback[] = [];
+    vi.spyOn(globalThis, "requestAnimationFrame").mockImplementation(
+      (callback) => {
+        frames.push(callback);
+        return frames.length;
+      },
+    );
+    const button = document.createElement("button");
+    document.body.append(button);
+    const filled: JsonContent = {
+      type: "doc",
+      content: [
+        {
+          type: "paragraph",
+          content: [{ type: "text", text: "Add a test for the new endpoint" }],
+        },
+      ],
+    };
+
+    mounted.viewFocus.mockClear();
+    act(() => {
+      handle.setContent(filled, null);
+    });
+    expect(mounted.viewFocus).toHaveBeenCalled();
+
+    button.focus();
+    expect(document.activeElement).toBe(button);
+    mounted.viewFocus.mockClear();
+    act(() => {
+      while (frames.length > 0) frames.shift()?.(performance.now());
+    });
+
+    expect(mounted.viewFocus).not.toHaveBeenCalled();
+    button.remove();
+  });
+
   it("leaves an inactive composer alone off the mobile app too", async () => {
     setMobileApp(false);
     const mounted = await mountComposer(false);
