@@ -29,7 +29,10 @@ function invoke(fn: unknown, self: object, args: readonly unknown[]): void {
   Reflect.apply(fn, self, args);
 }
 
+const queuedFrames: FrameRequestCallback[] = [];
+
 afterEach(() => {
+  queuedFrames.length = 0;
   cleanup();
   vi.restoreAllMocks();
   setMobileApp(false);
@@ -83,23 +86,32 @@ interface MountedComposer {
   readonly viewFocus: MockInstance;
 }
 
-// Tiptap defers the actual `view.focus()` to an animation frame, so settling
-// the editor means letting frames run, not just draining microtasks.
-async function settleEditor(): Promise<void> {
-  for (let i = 0; i < 3; i += 1) {
-    await act(async () => {
-      await new Promise((resolve) => setTimeout(resolve, 20));
-    });
-  }
+// Mount autofocus queues `view.focus()` on an animation frame. The queue is
+// flushed here, so the wait is the frame the editor scheduled, not a timer.
+function flushQueuedFrames(): void {
+  act(() => {
+    for (let pass = 0; pass < 3 && queuedFrames.length > 0; pass += 1) {
+      const pending = queuedFrames.splice(0, queuedFrames.length);
+      for (const frame of pending) frame(performance.now());
+    }
+  });
 }
 
-async function mountComposer(isActive: boolean): Promise<MountedComposer> {
+function settleEditor(): void {
+  flushQueuedFrames();
+}
+
+function mountComposer(isActive: boolean): MountedComposer {
+  vi.spyOn(window, "requestAnimationFrame").mockImplementation((callback) => {
+    queuedFrames.push(callback);
+    return queuedFrames.length;
+  });
   const viewFocus = vi.spyOn(EditorView.prototype, "focus");
   const handleRef: { current: ComposerPromptEditorHandle | null } = {
     current: null,
   };
   render(<Harness handleRef={handleRef} isActive={isActive} />);
-  await settleEditor();
+  settleEditor();
   return { handleRef, viewFocus };
 }
 
@@ -111,25 +123,25 @@ function readyHandle(mounted: MountedComposer): ComposerPromptEditorHandle {
 }
 
 describe("ComposerPromptEditor autofocus vs the mobile app", () => {
-  it("takes the caret on mount when active off the mobile app", async () => {
+  it("takes the caret on mount when active off the mobile app", () => {
     setMobileApp(false);
-    const mounted = await mountComposer(true);
+    const mounted = mountComposer(true);
 
     readyHandle(mounted);
     expect(mounted.viewFocus).toHaveBeenCalled();
   });
 
-  it("leaves the caret alone on mount when active on the mobile app", async () => {
+  it("leaves the caret alone on mount when active on the mobile app", () => {
     setMobileApp(true);
-    const mounted = await mountComposer(true);
+    const mounted = mountComposer(true);
 
     readyHandle(mounted);
     expect(mounted.viewFocus).not.toHaveBeenCalled();
   });
 
-  it("still focuses on the mobile app when the user asks for it", async () => {
+  it("still focuses on the mobile app when the user asks for it", () => {
     setMobileApp(true);
-    const mounted = await mountComposer(true);
+    const mounted = mountComposer(true);
     const handle = readyHandle(mounted);
 
     // Cleared so the assertion pins the explicit request itself - without
@@ -139,14 +151,14 @@ describe("ComposerPromptEditor autofocus vs the mobile app", () => {
     act(() => {
       handle.focusAtEnd("reveal-caret");
     });
-    await settleEditor();
+    settleEditor();
 
     expect(mounted.viewFocus).toHaveBeenCalled();
   });
 
-  it("does not take focus back on the frame after the caret was revealed", async () => {
+  it("does not take focus back on the frame after the caret was revealed", () => {
     setMobileApp(false);
-    const mounted = await mountComposer(true);
+    const mounted = mountComposer(true);
     const handle = readyHandle(mounted);
     const frames: FrameRequestCallback[] = [];
     vi.spyOn(globalThis, "requestAnimationFrame").mockImplementation(
@@ -178,9 +190,9 @@ describe("ComposerPromptEditor autofocus vs the mobile app", () => {
     button.remove();
   });
 
-  it("does not take focus back after a fill that places the caret at the end", async () => {
+  it("does not take focus back after a fill that places the caret at the end", () => {
     setMobileApp(false);
-    const mounted = await mountComposer(true);
+    const mounted = mountComposer(true);
     const handle = readyHandle(mounted);
     const frames: FrameRequestCallback[] = [];
     vi.spyOn(globalThis, "requestAnimationFrame").mockImplementation(
@@ -218,9 +230,9 @@ describe("ComposerPromptEditor autofocus vs the mobile app", () => {
     button.remove();
   });
 
-  it("leaves an inactive composer alone off the mobile app too", async () => {
+  it("leaves an inactive composer alone off the mobile app too", () => {
     setMobileApp(false);
-    const mounted = await mountComposer(false);
+    const mounted = mountComposer(false);
 
     readyHandle(mounted);
     expect(mounted.viewFocus).not.toHaveBeenCalled();
@@ -235,9 +247,9 @@ describe("ComposerPromptEditor autofocus vs the mobile app", () => {
 
     // Runs the request, then every animation frame it (or Tiptap) queued, so
     // a scroll deferred to a frame has happened before the caller asserts.
-    async function holdViewOnIos(): Promise<HoldViewRun> {
+    function holdViewOnIos(): HoldViewRun {
       setMobileApp(true);
-      const mounted = await mountComposer(true);
+      const mounted = mountComposer(true);
       const handle = readyHandle(mounted);
 
       vi.spyOn(navigator, "platform", "get").mockReturnValue("iPhone");
@@ -267,8 +279,8 @@ describe("ComposerPromptEditor autofocus vs the mobile app", () => {
       return { preventScrollPerFocus, scrollIntoView, view };
     }
 
-    it("focuses the editor with preventScroll on every focus call", async () => {
-      const run = await holdViewOnIos();
+    it("focuses the editor with preventScroll on every focus call", () => {
+      const run = holdViewOnIos();
 
       expect(run.preventScrollPerFocus.length).toBeGreaterThan(0);
       expect(run.preventScrollPerFocus.every((value) => value === true)).toBe(
@@ -276,14 +288,14 @@ describe("ComposerPromptEditor autofocus vs the mobile app", () => {
       );
     });
 
-    it("scrolls nothing into view, not even in a later frame", async () => {
-      const run = await holdViewOnIos();
+    it("scrolls nothing into view, not even in a later frame", () => {
+      const run = holdViewOnIos();
 
       expect(run.scrollIntoView).not.toHaveBeenCalled();
     });
 
-    it("leaves the caret at the end of the document", async () => {
-      const run = await holdViewOnIos();
+    it("leaves the caret at the end of the document", () => {
+      const run = holdViewOnIos();
 
       expect(run.view.state.selection.empty).toBe(true);
       expect(run.view.state.selection.from).toBe(
