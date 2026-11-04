@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { cleanup, renderHook } from "@testing-library/react";
 import type { ReactNode } from "react";
-import type { HostNotificationsCloudFeedRowV16 } from "@traycer/protocol/host/notifications/contracts";
+import type { HostNotificationsCloudFeedRowV17 } from "@traycer/protocol/host/notifications/contracts";
 import type { NotificationShowOutcome } from "@traycer-clients/shared/platform/runner-host";
 import { projectNotificationFeedDisplay } from "@traycer-clients/shared/notifications/feed-delivery";
 import type { NotificationShowRequest } from "@/hooks/notifications/use-notifications";
@@ -60,7 +60,7 @@ const PRESENTATION = { epicTitle: "Epic", chatTitle: "Chat" } as const;
 
 function cloudRow(
   entry: HostNotificationFeedEntry,
-): HostNotificationsCloudFeedRowV16 {
+): HostNotificationsCloudFeedRowV17 {
   return {
     entryId: entry.id,
     originHostId: "host-cloud",
