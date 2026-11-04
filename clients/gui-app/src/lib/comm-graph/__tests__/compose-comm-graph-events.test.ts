@@ -99,4 +99,13 @@ describe("withEnvironmentArmGraphEvents", () => {
     expect(composed.lastArrival).toBe(snapshot.lastArrival);
     expect(composed.hosts).toBe(snapshot.hosts);
   });
+
+  it("leaves the viewer feed's readiness as it is when the viewer feed has not caught up", () => {
+    const snapshot = { ...snapshotOf([]), initialHistoryCaughtUp: false };
+
+    expect(
+      withEnvironmentArmGraphEvents(snapshot, [armEvent("b", 20)])
+        .initialHistoryCaughtUp,
+    ).toBe(false);
+  });
 });
