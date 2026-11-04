@@ -53,10 +53,12 @@ export function TabSwitcherSheet(props: TabSwitcherSheetProps) {
         // its height and publishes the covered strip as `--keyboard-inset`
         // (0 everywhere else). The sheet stands on the keyboard rather than
         // under it, and gives up height above the 70dvh it would take where
-        // the keyboard leaves less, so the list's search results stay in reach.
+        // the keyboard leaves less, so the list's search results stay in
+        // reach. The cap is the safe height - below the status bar's strip as
+        // well as above the keyboard - so the handle never rises into it.
         className={cn(
           resolvedTheme === "dark" && "dark",
-          "bottom-(--keyboard-inset)! h-[min(70dvh,calc(100dvh-var(--keyboard-inset)))]",
+          "bottom-(--keyboard-inset)! h-[min(70dvh,var(--spacing-safe-dvh))]",
         )}
       >
         {/* Inside the drawer content so it runs only while the sheet is open. */}
