@@ -10,7 +10,7 @@ import {
   readSafeAreaInsets,
   subscribeToSafeAreaInsets,
 } from "@/lib/safe-area-insets";
-import { isPhoneLayoutOnly } from "@/lib/mobile-app";
+import { getMobileAppPlatform, isPhoneLayoutOnly } from "@/lib/mobile-app";
 import {
   useSideStripCollapsed,
   useSideTabStripStore,
@@ -42,18 +42,24 @@ export function subscribeToPhonePortrait(onChange: () => void): () => void {
 }
 
 /**
- * The SCREEN, not the viewport's shape: Android resizes the viewport for the
- * keyboard, so `(orientation: portrait)` would flip a portrait phone to
- * landscape while the person types, moving the navigation under them.
+ * The SCREEN, not the viewport's shape, wherever the viewport resizes for the
+ * keyboard: Android does, and so does a browser tab under
+ * `interactive-widget=resizes-content`, so `(orientation: portrait)` would
+ * flip a portrait phone to landscape while the person types, moving the
+ * navigation under them.
  *
- * iOS before 16.4 has no `screen.orientation`, and its `screen` keeps its
- * portrait dimensions in every orientation, so the dimensions would read
- * portrait throughout and never show a second tile. There the viewport's
- * shape is the read: iOS overlays its keyboard rather than resizing the
- * viewport, so the shape is the device's, and Android never reaches this line.
+ * On iOS the viewport's shape. iOS overlays its keyboard rather than resizing
+ * the viewport, so the shape is the device's, and the shape is what moves WITH
+ * the layout: measured in the installed app on an iPad, a turn to portrait
+ * narrows `#root` about 400ms before `screen.orientation` turns, and a width
+ * rule reading the screen drew two tiles squeezed into the portrait box for
+ * that long before snapping to one. iOS before 16.4 has no
+ * `screen.orientation` at all, and its `screen` keeps its portrait dimensions
+ * in every orientation, so the shape was already the read there.
  */
 function readScreenPortrait(): boolean {
-  const orientation = readScreenOrientation();
+  const orientation =
+    getMobileAppPlatform() === "ios" ? null : readScreenOrientation();
   if (orientation !== null) return orientation.type.startsWith("portrait");
   return !window.matchMedia("(orientation: landscape)").matches;
 }
@@ -120,7 +126,7 @@ export function useMobileLayoutForm(
     readPhonePortrait,
     readPhonePortraitServerSnapshot,
   );
-  // The same subscription: it already follows the screen's orientation.
+  // The same subscription: it already follows the viewport and the screen.
   const portrait = React.useSyncExternalStore(
     subscribeToPhonePortrait,
     readScreenPortrait,
