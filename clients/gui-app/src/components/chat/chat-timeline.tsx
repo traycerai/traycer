@@ -506,9 +506,11 @@ export const ChatTimeline = memo(function ChatTimeline({
     let framesChecked = 0;
     const checkSettled = (): void => {
       framesChecked += 1;
-      if (framesChecked === 2 && holdForRekey) {
-        followLatch.closeStructuralHold();
-      }
+      // A later ordinary row-shape commit can cancel the replacement's loop.
+      // The hold belongs to the latch, so its restarted loop must close it
+      // even though that later commit did not open one. The close is a no-op
+      // when no hold is open.
+      if (framesChecked === 2) followLatch.closeStructuralHold();
       const scrollHeight = readScrollHeight();
       stillFrames =
         scrollHeight === previousScrollHeight &&
