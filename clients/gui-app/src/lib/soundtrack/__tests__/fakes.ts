@@ -1,3 +1,4 @@
+import type { RandomSource } from "../scheduler";
 import type { OutputGain, OutputVoice, SoundtrackOutput } from "../output";
 import type { StemSource } from "../stems";
 import type { Layer, VariableTrack } from "../variable-sound";
@@ -26,6 +27,17 @@ interface RampCall {
 }
 type PortCall = PlayCall | CutCall | RampCall;
 
+/** mulberry32: the same draws on every run; each call owns its own state. */
+export function mulberry32(seed: number): RandomSource {
+  let state = seed;
+  return () => {
+    state = (state + 0x6d2b79f5) | 0;
+    let t = Math.imul(state ^ (state >>> 15), 1 | state);
+    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+}
+
 function isPlay(call: PortCall): call is PlayCall {
   return call.kind === "play";
 }
@@ -39,6 +51,8 @@ export function isRamp(call: PortCall): call is RampCall {
 /** A port whose clock is the fake timers' clock, so ticks and time agree. */
 export class FakeOutput implements SoundtrackOutput {
   readonly calls: PortCall[] = [];
+  /** Each child gain's stereo position, by its name; null is the centre. */
+  readonly pans = new Map<string, number | null>();
   private readonly base = Date.now();
   private buses = 0;
 
@@ -86,13 +100,11 @@ class FakeGain implements OutputGain {
     });
   }
 
-  createChild(): OutputGain {
-    const child = new FakeGain(
-      `${this.name}/${String(this.children)}`,
-      this.output,
-    );
+  createChild(_initial: number, pan: number | null): OutputGain {
+    const name = `${this.name}/${String(this.children)}`;
+    this.output.pans.set(name, pan);
     this.children += 1;
-    return child;
+    return new FakeGain(name, this.output);
   }
 
   play(buffer: AudioBuffer, when: number, fadeInSeconds: number): OutputVoice {

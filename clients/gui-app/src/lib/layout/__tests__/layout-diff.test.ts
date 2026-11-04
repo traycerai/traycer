@@ -122,9 +122,9 @@ describe("what the page can see as changed", () => {
       { mobileFooter: true },
       { hiddenProviders: [PROVIDER] },
       { dock: [...DEFAULT_ARRANGEMENT.dock].reverse() },
-      { tabStripPlacement: "left" },
+      { tabStripPlacement: "top" },
       { sidebarSide: "right" },
-      { sideStripView: "activity" },
+      { sideStripView: "layered" },
       { taskTabLayout: "shrink" },
       { readingWidth: "wide" },
       { wideReadingWidthPx: 1600 },
@@ -216,7 +216,7 @@ describe("Reset layout (L-20)", () => {
         tabStripPlacement: "right",
         sidebarSide: "right",
         // And the vertical strip's view.
-        sideStripView: "activity",
+        sideStripView: "layered",
         wideReadingWidthPx: 1600,
       },
     };
@@ -227,9 +227,9 @@ describe("Reset layout (L-20)", () => {
     expect(after.overrides).toEqual({});
     expect(layoutModified(after)).toBe(false);
     expect(resetWouldChange(after)).toBe(false);
-    expect(after.arrangement.tabStripPlacement).toBe("top");
+    expect(after.arrangement.tabStripPlacement).toBe("left");
     expect(after.arrangement.sidebarSide).toBe("left");
-    expect(after.arrangement.sideStripView).toBe("layered");
+    expect(after.arrangement.sideStripView).toBe("activity");
     expect(after.arrangement.wideReadingWidthPx).toBe(
       DEFAULT_ARRANGEMENT.wideReadingWidthPx,
     );

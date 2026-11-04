@@ -804,9 +804,11 @@ function useTranscriptTurns(input: {
 const NO_TURN_KEYS: ReadonlyArray<{ chatId: string; turnId: string }> = [];
 
 /**
- * What to ask the host about a list's rows: every reply of the bot (not an
- * announcement), by each record its row carries, and every post the bot
- * failed to answer, by its request.
+ * What to ask the host about a list's rows: every row of the bot (a reply,
+ * a question or an announcement), by each record its row carries, and every
+ * post the bot failed to answer, by its request. A row no turn wrote (an
+ * announcement the host posts itself) is asked too, and the host names no
+ * turn for it.
  */
 function turnLocateKeysOf(
   messages: ReadonlyArray<ChatMessage>,
@@ -819,7 +821,6 @@ function turnLocateKeysOf(
   const requestIds: string[] = [];
   for (const message of messages) {
     if (message.role === "assistant") {
-      if (message.announcement !== undefined) continue;
       if (message.persistentMessageId !== null) {
         messageIds.push(message.persistentMessageId);
       }

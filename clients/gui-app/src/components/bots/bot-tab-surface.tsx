@@ -21,8 +21,13 @@ import type { EnvironmentListResponseV11 } from "@traycer/protocol/host/environm
 import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
 import { Button } from "@/components/ui/button";
 import { TalkControl } from "@/components/layout/voice/talk-control";
+import { useInstalledAppTileForm } from "@/hooks/ui/use-installed-app-level2-form";
 import { useKeyboardFocusOwnerWithin } from "@/hooks/ui/use-keyboard-focus-layout";
 import { useMobileHeaderActive } from "@/components/layout/header/use-mobile-header-active";
+import type {
+  MobileLevel2Form,
+  MobileTileCount,
+} from "@/lib/layout/mobile-layout-form";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { TabHostProvider } from "@/components/epic-canvas/tab-host-provider";
 import { usePaneVisible } from "@/components/epic-tabs/pane-visibility-context";
@@ -74,10 +79,13 @@ import {
   type BotChannelLanding,
 } from "@/components/bots/bot-channel-view";
 import {
+  exchangeRailOver,
   memoryRailOver,
   sessionTargetOfTurn,
   useBotOpenThreadStore,
   useBotRail,
+  type BotExchangeRail,
+  type BotOpenExchange,
   type BotOpenMemory,
   type BotOpenThread,
   type BotSessionOpen,
@@ -230,6 +238,7 @@ function TracySurfaceShell(props: {
     [leaveThreads, threadsShown],
   );
 
+  const { level2, tiles, onRailDrawn } = useSurfaceTileForm();
   const shown = usePaneVisible();
   const select = useCallback(
     (next: string | null) => selectTracyChannel(navigate, next, shown),
@@ -256,6 +265,7 @@ function TracySurfaceShell(props: {
   return (
     <div className="@container flex h-full min-h-0" data-testid="bot-tab">
       <BotChannelColumn
+        level2={level2}
         activeBotId={botId}
         hostId={hostId}
         threadsView={threadsView}
@@ -271,10 +281,12 @@ function TracySurfaceShell(props: {
             hostId={hostId}
             channelTitle={channelTitle}
             onBack={leaveThreads}
+            level2={level2}
           />
         ) : null}
         {botId === null && !threadsShown ? (
           <BotUnselectedLevel2Pane
+            level2={level2}
             title={TRACY_TAB_LABEL}
             hostId={hostId}
             threadsView={threadsView}
@@ -294,6 +306,9 @@ function TracySurfaceShell(props: {
             key={botId}
             botId={botId}
             hostId={hostId}
+            level2={level2}
+            tiles={tiles}
+            onRailDrawn={onRailDrawn}
             threadsView={threadsView}
             onGone={forgetChannel}
           />
@@ -301,6 +316,25 @@ function TracySurfaceShell(props: {
       </div>
     </div>
   );
+}
+
+/**
+ * The installed app's form for the surface, both halves `null` everywhere else.
+ * The second tile is the rail the channel draws beside itself, and only the
+ * channel's pane knows it is drawn, so the pane says.
+ */
+function useSurfaceTileForm(): {
+  readonly level2: MobileLevel2Form | null;
+  readonly tiles: MobileTileCount | null;
+  readonly onRailDrawn: (drawn: boolean) => void;
+} {
+  const [railDrawn, setRailDrawn] = useState(false);
+  const form = useInstalledAppTileForm(railDrawn ? 2 : 1);
+  return {
+    level2: form?.level2 ?? null,
+    tiles: form?.tiles ?? null,
+    onRailDrawn: setRailDrawn,
+  };
 }
 
 /**
@@ -574,11 +608,16 @@ function useChannelRoute(
 function TracyChannelPane(props: {
   readonly botId: string;
   readonly hostId: string;
+  /** The shell's level-2 form, which the channel's title follows. */
+  readonly level2: MobileLevel2Form | null;
+  /** The shell's tile count, which places the rail beside the channel. */
+  readonly tiles: MobileTileCount | null;
+  readonly onRailDrawn: (drawn: boolean) => void;
   /** The shell's Threads, shown in place of the channel's views. */
   readonly threadsView: BotThreadsViewState;
   readonly onGone: (botId: string) => void;
 }): ReactNode {
-  const { botId, hostId, threadsView } = props;
+  const { botId, hostId, level2, threadsView } = props;
   const threadsShown = threadsView.shown;
   const client = useTabHostClient();
   // The channel shows: it is visited. Before any passive effect of the
@@ -605,6 +644,7 @@ function TracyChannelPane(props: {
         setup={route.setup}
         client={client}
         hostId={hostId}
+        level2={level2}
         threadsView={threadsView}
       />
     );
@@ -624,6 +664,9 @@ function TracyChannelPane(props: {
       hostId={hostId}
       listedBots={botList.data?.bots}
       mainBotIds={botList.data?.mainBotIds}
+      level2={level2}
+      tiles={props.tiles}
+      onRailDrawn={props.onRailDrawn}
       threadsView={threadsView}
       onGone={props.onGone}
     />
@@ -636,6 +679,9 @@ function BotTabBody(props: {
   /** `bot.list`'s bots; `undefined` until the list answers. */
   readonly listedBots: ReadonlyArray<BotRecord> | undefined;
   readonly mainBotIds: MainBotIds | undefined;
+  readonly level2: MobileLevel2Form | null;
+  readonly tiles: MobileTileCount | null;
+  readonly onRailDrawn: (drawn: boolean) => void;
   readonly threadsView: BotThreadsViewState;
   readonly onGone: (botId: string) => void;
 }): ReactNode {
@@ -782,6 +828,9 @@ function BotTabBody(props: {
       onRetry={resubscribe}
       view={view}
       onViewChange={changeView}
+      level2={props.level2}
+      tiles={props.tiles}
+      onRailDrawn={props.onRailDrawn}
       threadsView={threadsView}
       onDeleted={deleted}
       mainBotIds={props.mainBotIds}
@@ -805,11 +854,23 @@ function useBotTabRail(
   readonly setOpenMemory: (open: BotOpenMemory | null) => void;
   readonly openPostInChannel: (open: BotOpenThread) => void;
   readonly openMemoryInChannel: () => void;
+  readonly openExchange: BotOpenExchange | null;
+  readonly exchanges: BotExchangeRail;
 } {
   const rail = useBotRail(botId);
   const setRail = useBotOpenThreadStore((s) => s.setRail);
   const openThread = rail?.kind === "thread" ? rail : null;
   const openMemory = rail?.kind === "memory" ? rail : null;
+  const openExchange = rail?.kind === "exchange" ? rail : null;
+  // A pair's log takes the slot over whatever it holds; closing it brings
+  // that back.
+  const exchanges = useMemo(
+    (): BotExchangeRail => ({
+      open: (peerBotId) => setRail(botId, exchangeRailOver(rail, peerBotId)),
+      close: () => setRail(botId, rail?.kind === "exchange" ? rail.back : rail),
+    }),
+    [botId, rail, setRail],
+  );
   const setOpenMemory = useCallback(
     (open: BotOpenMemory | null) =>
       setRail(botId, open === null ? null : { kind: "memory", ...open }),
@@ -840,6 +901,8 @@ function useBotTabRail(
     setOpenMemory,
     openPostInChannel,
     openMemoryInChannel,
+    openExchange,
+    exchanges,
   };
 }
 
@@ -1202,6 +1265,27 @@ function useChannelSetupHistory(input: {
   );
 }
 
+/**
+ * Says whether the rail is drawn beside the channel, before the paint it would
+ * otherwise be a frame late for. The rail draws only under Messages.
+ */
+function useRailDrawnReport(
+  place: BotTabPlace,
+  threadListSupported: boolean,
+  onRailDrawn: (drawn: boolean) => void,
+): void {
+  const railDrawn =
+    place.view === "messages" &&
+    place.session === null &&
+    !place.threadsShown &&
+    (place.openMemory !== null ||
+      (threadListSupported && place.openThread !== null));
+  useLayoutEffect(() => {
+    onRailDrawn(railDrawn);
+    return () => onRailDrawn(false);
+  }, [onRailDrawn, railDrawn]);
+}
+
 function BotTabContent(props: {
   readonly botId: string;
   readonly hostId: string;
@@ -1215,6 +1299,11 @@ function BotTabContent(props: {
   readonly onRetry: () => void;
   readonly view: BotTabView;
   readonly onViewChange: (view: BotTabView) => void;
+  /** The shell's level-2 form, which the channel's title follows. */
+  readonly level2: MobileLevel2Form | null;
+  /** The shell's tile count, which places the rail beside the channel. */
+  readonly tiles: MobileTileCount | null;
+  readonly onRailDrawn: (drawn: boolean) => void;
   /** Threads, from the column, shows in place of the channel's views. */
   readonly threadsView: BotThreadsViewState;
   /** The bot was deleted from its settings. */
@@ -1233,6 +1322,9 @@ function BotTabContent(props: {
     onRetry,
     view,
     onViewChange,
+    level2,
+    tiles,
+    onRailDrawn,
     threadsView,
     onDeleted,
     mainBotIds,
@@ -1281,6 +1373,8 @@ function BotTabContent(props: {
     setOpenMemory,
     openPostInChannel,
     openMemoryInChannel,
+    openExchange,
+    exchanges: exchangeRail,
   } = useBotTabRail(botId, onViewChange);
   const memoryAccess = useMemo(
     (): BotMemoryAccess => ({
@@ -1341,6 +1435,7 @@ function BotTabContent(props: {
     openSession,
     onViewChange,
   });
+  useRailDrawnReport(place, threadListSupported, onRailDrawn);
   const openActivity = useCallback(() => changeView("activity"), [changeView]);
   const activitySummary = useBotActivitySummary({
     botId,
@@ -1433,6 +1528,7 @@ function BotTabContent(props: {
                   className="flex min-h-0 min-w-0 flex-1 flex-col gap-0"
                 >
                   <BotChannelHeader
+                    level2={level2}
                     botId={botId}
                     hostId={hostId}
                     threadsView={threadsView}
@@ -1494,8 +1590,12 @@ function BotTabContent(props: {
                       onOpenMemory={setOpenMemory}
                       environmentId={snapshot.bot.environmentId}
                       botNameOf={botNameOf}
+                      environmentBots={environmentBots}
+                      openExchange={openExchange}
+                      exchangeRail={exchangeRail}
                       onOpenActivity={openActivity}
                       setupHistory={setupHistory}
+                      tiles={tiles}
                     />
                   </TabsContent>
                   <TabsContent
@@ -1622,6 +1722,7 @@ function ErrorNotice(props: {
  * and first, what runs and the tasks it tracks.
  */
 function BotChannelHeader(props: {
+  readonly level2: MobileLevel2Form | null;
   readonly botId: string;
   readonly hostId: string;
   readonly threadsView: BotThreadsViewState;
@@ -1676,6 +1777,7 @@ function BotChannelHeader(props: {
           </button>
         </BotIdentityTrigger>
         <BotChannelTitle
+          level2={props.level2}
           title={props.title}
           activeBotId={props.botId}
           hostId={props.hostId}

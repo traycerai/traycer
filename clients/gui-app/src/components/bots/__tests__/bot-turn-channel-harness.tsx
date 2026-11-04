@@ -49,6 +49,7 @@ function Channel(): ReactNode {
   const openMemory = rail?.kind === "memory" ? rail : null;
   return (
     <BotChannelView
+      tiles={null}
       botId={BOT_ID}
       hostId={HOST_ID}
       boundHostId="host-runs-bot"
@@ -77,6 +78,9 @@ function Channel(): ReactNode {
       }
       environmentId={ENVIRONMENT_ID}
       botNameOf={(botId) => (botId === OTHER_BOT_ID ? OTHER_BOT_TITLE : null)}
+      environmentBots={null}
+      openExchange={null}
+      exchangeRail={{ open: () => undefined, close: () => undefined }}
       onOpenActivity={vi.fn()}
       setupHistory={null}
     />

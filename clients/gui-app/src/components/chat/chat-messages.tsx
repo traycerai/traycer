@@ -83,6 +83,9 @@ import {
   shouldMountChatTurnMinimap,
 } from "@/components/chat/chat-turn-minimap-logic";
 import { ChatBotPresentationContext } from "@/components/chat/chat-bot-presentation-context";
+import { BotExchangeLinesContext } from "@/components/chat/bot-exchange-lines-context";
+import { createBotExchangeLineCollator } from "@/stores/chats/transcript-exchange-lines";
+import type { BotExchange } from "@/lib/bots/bot-exchanges";
 import { useStopReadingOnNewReply } from "@/hooks/ui/use-read-aloud";
 import { useIsMobileViewport } from "@/hooks/ui/use-mobile-viewport";
 import { buildChatActivityTimeline } from "@/components/chat/chat-activity-groups";
@@ -368,6 +371,8 @@ export const CHAT_TIMELINE_ANCHOR_SCROLL_PROMISE_TIMEOUT_MS = 2_600;
  *  navigation whose landing is off by more than this is treated as a real
  *  undershoot, not float/rounding noise. */
 const CHAT_TIMELINE_NAVIGATION_LANDING_EPSILON_PX = 1;
+
+const NO_EXCHANGES: ReadonlyArray<BotExchange> = [];
 /** Bounded retry count for the settle/re-issue loop (at most 2-3) - the
  *  upper end, since the field bug this fixes needed
  *  multiple manual pill re-clicks to converge and the goal is to absorb that
@@ -2192,21 +2197,37 @@ function ChatMessagesInner(props: ChatMessagesInnerProps) {
   // nothing else (`ChatBotMessage` -> `BotMessageText`): no activity groups,
   // no tool cards - so the DOM that makes a long turn expensive to mount does
   // not exist there, and the layout it does draw is one framed, sender-lined
-  // message per row, which a part cannot be half of.
+  // message per row, which a part cannot be half of. It also puts the sender
+  // first in the minimap's labels, since several people post there.
   const botChannel = use(ChatBotPresentationContext) !== null;
   // ONE decision, read by all three things that derive a part key: the rows
   // below, find's projection and `chatTimelineRowKeyForBlock`. A reader that
   // split differently from the list would name rows the list never built.
   const splitLongTurns = !botChannel;
 
+  // A bot's channel or thread draws its bot's messages with other bots as
+  // lines between its rows (Tracy Bots, decision 174).
+  // The collator remembers its last placement, so a streamed token re-reads
+  // no message and rebuilds no line.
+  const exchanges = use(BotExchangeLinesContext)?.exchanges ?? NO_EXCHANGES;
+  const [collateExchangeLines] = useState(createBotExchangeLineCollator);
   const listRows = useMemo(
     () =>
-      transcriptListRows({
-        window: transcriptWindow,
-        rendered: messages,
-        splitLongTurns,
-      }),
-    [splitLongTurns, transcriptWindow, messages],
+      collateExchangeLines(
+        transcriptListRows({
+          window: transcriptWindow,
+          rendered: messages,
+          splitLongTurns,
+        }),
+        exchanges,
+      ),
+    [
+      collateExchangeLines,
+      exchanges,
+      splitLongTurns,
+      transcriptWindow,
+      messages,
+    ],
   );
 
   // Restore the persisted reading position once, on mount (tries
@@ -3311,8 +3332,6 @@ function ChatMessagesInner(props: ChatMessagesInnerProps) {
   // (L-14). It is a pure view over rows the transcript already has, so
   // drawing one costs nothing the chat was not already paying.
   const minimapShown = useRegionShown("minimap") || minimapGhost;
-  // A bot channel draws no rail (`shouldMountChatTurnMinimap`); the region
-  // stays registered so the layout editor still lists it for agent chats.
   const quoteEnabled =
     quoteReplyEnabled && visible && !systemOverlayActive && quoteSink !== null;
   const quoteSelection = useQuoteSelection({
@@ -4993,7 +5012,6 @@ function ChatMessagesInner(props: ChatMessagesInnerProps) {
       hasContent,
       shown: minimapShown,
       mobileViewport: isMobileViewport,
-      botChannel,
     });
 
   return (
@@ -5048,6 +5066,9 @@ function ChatMessagesInner(props: ChatMessagesInnerProps) {
                   isFollowCorrectionSuppressed={isFollowCorrectionSuppressed}
                   resolveSuppressedEndLanding={resolveSuppressedEndLanding}
                   isReattachSuppressed={isReattachSuppressed}
+                  isTranscriptWindowInvalidated={
+                    transcriptWindow?.invalidated === true
+                  }
                   navigationHighlightedMessageId={
                     navigationHighlight?.messageId ?? null
                   }
@@ -5072,6 +5093,7 @@ function ChatMessagesInner(props: ChatMessagesInnerProps) {
                       ref={minimapHotspotRef}
                       rows={listRows}
                       transcriptWindow={transcriptWindow}
+                      senderFirst={botChannel}
                       inViewRefreshRef={minimapInViewRefreshRef}
                       listRef={chatTimelineRef}
                       topOffsetAdjustmentRef={listTopOffsetAdjustmentRef}

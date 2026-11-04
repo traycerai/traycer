@@ -1118,6 +1118,7 @@ function ChatForkDialogBody(props: ChatForkDialogProps) {
                 source: "direct_ui",
               },
               navigateNestedFocus,
+              mobileTarget: null,
             });
             const openCancels = openCancelsRef.current;
             if (openCancels === null) {

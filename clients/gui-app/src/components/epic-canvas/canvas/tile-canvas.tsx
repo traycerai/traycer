@@ -33,7 +33,7 @@ import { useEmptyShellDropActive } from "@/components/epic-canvas/dnd/dnd-store"
 import { MobileEpicTileView } from "@/components/epic-canvas/mobile/mobile-epic-tile-view";
 import { MobileDrawerTaskPaintReporter } from "@/components/layout/shell/mobile-drawer-history-gate";
 import { usePaneVisible } from "@/components/epic-tabs/pane-visibility-context";
-import { MobileTabSwitcherMount } from "@/components/epic-canvas/mobile/mobile-tab-switcher-mount";
+import { MobileEmptyPaneLevel2 } from "@/components/epic-canvas/mobile/mobile-empty-pane-level2";
 import { useIsMobileViewport } from "@/hooks/ui/use-mobile-viewport";
 import { PendingSandboxSendStrip } from "@/components/sandboxes/pending-sandbox-sends";
 import { remeasureTileSurfaceGeometry } from "@/components/epic-canvas/surface-host/tile-surface-geometry-coordinator";
@@ -187,8 +187,9 @@ function TileCanvasLive(
       return (
         <>
           <MobileDrawerTaskPaintReporter ready={paneVisible} />
-          <EmptyShell epicId={epicId} tabId={tabId} />
-          <MobileTabSwitcherMount epicId={epicId} tabId={tabId} />
+          <MobileEmptyPaneLevel2 epicId={epicId} tabId={tabId}>
+            <EmptyShell epicId={epicId} tabId={tabId} />
+          </MobileEmptyPaneLevel2>
         </>
       );
     }

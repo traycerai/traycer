@@ -10,6 +10,7 @@ import {
   resolvePersistedArrangement,
 } from "@/lib/layout/arrangement-persist";
 import {
+  DEFAULT_RAIL,
   normalizeRail,
   RAIL_REGION_BY_PANEL,
   railPanelEntriesFromIds,
@@ -38,6 +39,7 @@ import {
 } from "@/lib/layout/layout-values-persist";
 import {
   legacyLeftPanelRecord,
+  legacyRecordsPresent,
   legacySettingsRecord,
 } from "@/lib/layout/legacy-layout-records";
 import type {
@@ -96,16 +98,47 @@ const LAYOUT_PERSIST_KEY = persistKey(STORE_KEYS.layout);
  * - 0: no layout record at all. Not a version anyone wrote: it is seeded
  *   (`seedMissingLayoutRecord`) so a fresh install and an install from before
  *   the layout store take the same migrate-and-write-back path as everyone
- *   else, rather than an implicit fallback.
- * - 1: the one version that shipped (desktop-v1.4.0), `{ statusBar, composer }`.
- * - 7: this shape. 2 to 6 were written only by pre-release builds of this
- *   store and are deliberately NOT reused: zustand skips `migrate` when the
- *   stored version equals the current one, so reusing one would load a
- *   development record as-is.
+ *   else, rather than an implicit fallback. Which of the two it is, the
+ *   legacy records tell (`legacyRecordsPresent`).
+ * - 1: desktop-v1.4.0's record, `{ statusBar, composer }`.
+ * - 7: desktop-v1.5.0 to v1.5.3: this store's shape without
+ *   `sidebarStartCollapsed`, and with the earlier shipped defaults.
+ * - 8: this shape, which changed two shipped defaults for a NEW install
+ *   (tabs at the left edge, the sidebar collapsed in a new task). Every
+ *   earlier version reads what its record does not say against the EARLIER
+ *   defaults, so an install that exists keeps the layout it had. The side
+ *   strip's view (`activity` for a new install) changed later without a new
+ *   version: every record from 7 on names it, so only a 0 or 1 record reads
+ *   it against the earlier default.
+ *
+ * 2 to 6 were written only by pre-release builds of this store and are
+ * deliberately NOT reused: zustand skips `migrate` when the stored version
+ * equals the current one, so reusing one would load a development record
+ * as-is.
  */
 const MISSING_LAYOUT_VERSION = 0;
 const SHIPPED_LAYOUT_VERSION = 1;
-const LAYOUT_PERSIST_VERSION = 7;
+const EARLIER_DEFAULTS_LAYOUT_VERSION = 7;
+const LAYOUT_PERSIST_VERSION = 8;
+
+/**
+ * The fields whose shipped default changed after a release wrote records, as
+ * every build before the change shipped them: what an install from one of
+ * those builds was looking at wherever its record says nothing. A record at
+ * version 7 says nothing about `sidebarStartCollapsed` (the field did not
+ * exist); a record at 0 or 1 says nothing about any of the three.
+ *
+ * `DEFAULT_ARRANGEMENT` speaks for a new install only, and every reader of
+ * an earlier record falls back here instead.
+ */
+const EARLIER_INSTALL_ARRANGEMENT: Pick<
+  LayoutArrangement,
+  "tabStripPlacement" | "sidebarStartCollapsed" | "sideStripView"
+> = {
+  tabStripPlacement: "top",
+  sidebarStartCollapsed: false,
+  sideStripView: "layered",
+};
 
 seedMissingLayoutRecord();
 
@@ -313,23 +346,56 @@ function seedMissingLayoutRecord(): void {
 /**
  * One translation per stored version, straight to this build's shape.
  *
- * 0 and 1 are the same translation: a missing record is a shipped record
+ * A version-0 launch with no legacy record either is a fresh install, and
+ * the only launch that gets the shipped defaults as they are. 0 with a legacy
+ * record and 1 are the same translation: a missing record is a v1.4.0 record
  * with no layout data in it, and both take the values that shipped in the
- * settings and sidebar records alongside. Anything else - a pre-release 2 to
- * 6, or a newer build's record after a downgrade - resets to the defaults
- * rather than guessing at a shape this build never defined.
+ * settings and sidebar records alongside. 7 is this store's own record from
+ * before `sidebarStartCollapsed`. Anything else - a pre-release 2 to 6, or a
+ * newer build's record after a downgrade - resets to the defaults rather
+ * than guessing at a shape this build never defined.
  */
 function migrateLayoutPersistedState(
   persistedState: unknown,
   version: number,
 ): LayoutSnapshot {
+  const stored = isRecord(persistedState) ? persistedState : {};
+  if (version === MISSING_LAYOUT_VERSION && !legacyRecordsPresent()) {
+    return DEFAULT_LAYOUT_SNAPSHOT;
+  }
   if (
     version === MISSING_LAYOUT_VERSION ||
     version === SHIPPED_LAYOUT_VERSION
   ) {
-    return fromShippedRecords(isRecord(persistedState) ? persistedState : {});
+    return fromShippedRecords(stored);
+  }
+  if (version === EARLIER_DEFAULTS_LAYOUT_VERSION) {
+    return fromEarlierDefaultsRecord(stored);
   }
   return DEFAULT_LAYOUT_SNAPSHOT;
+}
+
+/**
+ * A desktop-v1.5.x record, field for field, with the one field it could not
+ * have written read as that build drew it: the sidebar open in a new task.
+ * Its `tabStripPlacement` and `sideStripView` are its own - every v1.5.x
+ * build wrote both - and read verbatim by the same resolvers a rehydrate
+ * runs.
+ */
+function fromEarlierDefaultsRecord(
+  stored: Record<string, unknown>,
+): LayoutSnapshot {
+  const basePreset = isLayoutPresetId(stored.basePreset)
+    ? stored.basePreset
+    : DEFAULT_LAYOUT_SNAPSHOT.basePreset;
+  return {
+    basePreset,
+    overrides: resolvePersistedRecordOverrides(stored.overrides, basePreset),
+    arrangement: resolvePersistedArrangement({
+      ...EARLIER_INSTALL_ARRANGEMENT,
+      ...recordOrEmpty(stored.arrangement),
+    }),
+  };
 }
 
 /**
@@ -343,6 +409,10 @@ function migrateLayoutPersistedState(
  * the shipped Default (`withoutShippedDefaults`): the old records hold every
  * field whether or not anyone touched it, and the delta is the user's own
  * picks (L-133).
+ *
+ * The fields v1.4.0 had no setting for read as v1.4.0 drew them
+ * (`EARLIER_INSTALL_ARRANGEMENT`): this is an install that exists, and the
+ * layout it had is the one it keeps.
  *
  * Two things do not survive, deliberately:
  * - A provider on Automatic AND explicit limits keeps only the explicit keys.
@@ -402,6 +472,9 @@ function fromShippedRecords(layout: Record<string, unknown>): LayoutSnapshot {
       minimapSide: settings.chatTurnMinimapSide,
       rail: carriedRail(leftPanel.panelGroups),
       taskTabLayout: settings.taskTabLayout,
+      tabStripPlacement: EARLIER_INSTALL_ARRANGEMENT.tabStripPlacement,
+      sidebarStartCollapsed: EARLIER_INSTALL_ARRANGEMENT.sidebarStartCollapsed,
+      sideStripView: EARLIER_INSTALL_ARRANGEMENT.sideStripView,
     }),
   };
 }
@@ -574,7 +647,7 @@ function carriedRailVisibility(value: unknown): Record<string, unknown> {
  * the shipped groups had no cap, and neither has a stack.
  */
 function carriedRail(value: unknown): ReadonlyArray<RailEntry> {
-  if (!Array.isArray(value)) return DEFAULT_ARRANGEMENT.rail;
+  if (!Array.isArray(value)) return DEFAULT_RAIL;
   const groups = value.flatMap(
     (group): ReadonlyArray<ReadonlyArray<string>> => {
       if (!isRecord(group) || !Array.isArray(group.panelIds)) return [];
@@ -586,7 +659,7 @@ function carriedRail(value: unknown): ReadonlyArray<RailEntry> {
     },
   );
   const panelIds = groups.flat();
-  if (panelIds.length === 0) return DEFAULT_ARRANGEMENT.rail;
+  if (panelIds.length === 0) return DEFAULT_RAIL;
   const rail = railPanelEntriesFromIds(panelIds);
   const links = groups.flatMap((group): RailEntry[] => {
     const members = group.flatMap((panelId) => {

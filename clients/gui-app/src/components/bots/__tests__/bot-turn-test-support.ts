@@ -15,6 +15,7 @@ import type {
 } from "@traycer/protocol/host/bot/conversation-schemas";
 import type {
   AgentSender,
+  BotQuestionItem,
   ContentBlock,
   Message,
 } from "@traycer/protocol/persistence/epic/schemas";
@@ -61,6 +62,14 @@ export const POST_FIRST_LINE = "Is CI green?";
 export const POST_SECOND_LINE = "The nightly looks red to me.";
 export const REPLY_ID = "reply-1";
 export const THREAD_REPLY_ID = "thread-reply-1";
+/** An announcement a turn of the trunk wrote (`traycer_announce`). */
+export const ANNOUNCEMENT_ID = "announcement-1";
+/** A question a turn of the trunk asked (`traycer_ask`). */
+export const QUESTION_ID = "question-1";
+/** An announcement the host posted itself: no turn wrote it. */
+export const HOST_ANNOUNCEMENT_ID = "announcement-host";
+/** The thread the bot's announcement opened. */
+export const ANNOUNCEMENT_THREAD_ID = "thread-announcement";
 
 const BOT_SENDER: AgentSender = {
   type: "agent",
@@ -141,6 +150,34 @@ export function botReply(input: {
   };
 }
 
+/** One of the bot's announcements in the channel: a reply row that carries an announcement. */
+export function botAnnouncement(input: {
+  readonly messageId: string;
+  readonly text: string;
+  readonly timestamp: number;
+}): Extract<Message, { role: "assistant" }> {
+  return {
+    ...botReply(input),
+    announcement: { kind: "automation", link: null },
+  };
+}
+
+/** One of the bot's questions in the channel: a reply row that asks `item`. */
+export function botQuestion(input: {
+  readonly messageId: string;
+  readonly timestamp: number;
+  readonly item: BotQuestionItem;
+}): Extract<Message, { role: "assistant" }> {
+  return {
+    ...botReply({
+      messageId: input.messageId,
+      text: input.item.text,
+      timestamp: input.timestamp,
+    }),
+    question: { requestId: "req-question", questions: [input.item] },
+  };
+}
+
 /** The message that started a turn in a session chat. */
 export function sessionPrompt(
   messageId: string,
@@ -188,6 +225,7 @@ function toolCallBlock(input: ToolCallInput): ContentBlock {
     botSendReceipt: null,
     artifact: null,
     mcpApp: null,
+    feedbackDraft: null,
     progress: null,
     backgroundOutput: null,
     backgroundTask: false,
@@ -457,6 +495,10 @@ export const REPLY_TURN_ID = "turn-reply";
 export const REPLY_PROMPT_ID = "prompt-reply";
 export const THREAD_TURN_ID = "turn-thread";
 export const THREAD_PROMPT_ID = "prompt-thread";
+const ANNOUNCEMENT_TURN_ID = "turn-announcement";
+export const ANNOUNCEMENT_PROMPT_ID = "prompt-announcement";
+const QUESTION_TURN_ID = "turn-question";
+const QUESTION_PROMPT_ID = "prompt-question";
 export const COST_USD = 0.0123;
 /** The turns took 1m 20s. */
 export const STARTED_AT = 100_000;
@@ -475,6 +517,53 @@ export const CHANNEL_REPLY_TURN: BotTurnRef = turnRef({
   messageIds: [REPLY_ID],
   requestIds: [],
 });
+
+/** The turn of the trunk that wrote `ANNOUNCEMENT_ID`. */
+export const ANNOUNCEMENT_TURN: BotTurnRef = turnRef({
+  chatId: TRUNK_ID,
+  turnId: ANNOUNCEMENT_TURN_ID,
+  userMessageId: ANNOUNCEMENT_PROMPT_ID,
+  threadId: null,
+  startedAt: STARTED_AT,
+  endedAt: ENDED_AT,
+  summary: SUMMARY,
+  messageIds: [ANNOUNCEMENT_ID],
+  requestIds: [],
+});
+
+/** The turn of the trunk that wrote `QUESTION_ID`. */
+export const QUESTION_TURN: BotTurnRef = turnRef({
+  chatId: TRUNK_ID,
+  turnId: QUESTION_TURN_ID,
+  userMessageId: QUESTION_PROMPT_ID,
+  threadId: null,
+  startedAt: STARTED_AT,
+  endedAt: ENDED_AT,
+  summary: SUMMARY,
+  messageIds: [QUESTION_ID],
+  requestIds: [],
+});
+
+/** The thread under `ANNOUNCEMENT_ID`: the bot's own post is its anchor. */
+export function announcementThread(): BotThreadSummary {
+  return {
+    threadId: ANNOUNCEMENT_THREAD_ID,
+    conversationId: CHANNEL_ID,
+    sessionChatId: "session-announcement",
+    anchor: {
+      messageId: ANNOUNCEMENT_ID,
+      requestId: "req-announcement",
+      senderUserId: null,
+      sentAt: 1_500,
+      resolvedAt: null,
+      excerpt: null,
+    },
+    replyCount: 0,
+    lastReplyAt: null,
+    openRequestCount: 0,
+    costUsd: null,
+  };
+}
 
 /** The turn of the thread's session that wrote `THREAD_REPLY_ID`. */
 export const THREAD_REPLY_TURN: BotTurnRef = turnRef({

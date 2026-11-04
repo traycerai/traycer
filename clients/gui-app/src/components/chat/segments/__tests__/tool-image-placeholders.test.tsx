@@ -71,6 +71,7 @@ function renderEval(imageResult: ImageGenerationResult) {
           imageResults={[imageResult]}
           artifact={null}
           mcpApp={null}
+          feedbackDraft={null}
           error={null}
           agentMessageSend={null}
           managedCommand={null}

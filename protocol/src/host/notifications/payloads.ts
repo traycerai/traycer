@@ -187,6 +187,14 @@ export type HostNotificationEpicStoppedPayload = z.infer<
 >;
 
 /**
+ * `agent.stalled`'s `reason` for a turn that ran past the time its person set.
+ * The row says a turn is still going, not how one ended, so it stays out of the
+ * Error and Done glyphs on every plane; it reaches the person through the
+ * notification center and the push.
+ */
+export const HOST_NOTIFICATION_LONG_TURN_REASON = "long_turn";
+
+/**
  * `agent.stalled` payload. `agentName` carries the chat title. `reason` is
  * deliberately an open string (not a closed enum) so a future stall reason
  * degrades to generic copy instead of failing the parse.
@@ -273,6 +281,27 @@ export const hostNotificationInterviewPayloadSchema = lazySchema(() =>
 );
 export type HostNotificationInterviewPayload = z.infer<
   typeof hostNotificationInterviewPayloadSchema
+>;
+
+/**
+ * `feedback.drafted` payload: the chat whose agent drafted feedback and the
+ * `tool_call` block that carries the draft. The draft's text stays on the
+ * block, not here: this row also reaches email and hooks.
+ */
+export const hostNotificationFeedbackDraftPayloadSchema = lazySchema(() =>
+  z
+    .object({
+      kind: z.literal("feedback_draft"),
+      epicId: idSchema,
+      chatId: idSchema,
+      chatTitle: z.string(),
+      taskTitle: z.string(),
+      blockId: idSchema,
+    })
+    .catchall(z.unknown()),
+);
+export type HostNotificationFeedbackDraftPayload = z.infer<
+  typeof hostNotificationFeedbackDraftPayloadSchema
 >;
 
 /**
@@ -1137,6 +1166,7 @@ export const hostNotificationKnownPayloadSchema = lazySchema(() =>
     hostNotificationSecretRemovedPayloadSchema,
     hostNotificationSandboxNoticePayloadSchema,
     hostNotificationHooksRemovedPayloadSchema,
+    hostNotificationFeedbackDraftPayloadSchema,
   ]),
 );
 export type HostNotificationKnownPayload = z.infer<
@@ -1241,5 +1271,7 @@ function payloadKindMatchesNotificationKind(
       return payloadKind === "sandbox_notice";
     case "notification.hooks.removed":
       return payloadKind === "notification_hooks_removed";
+    case "feedback.drafted":
+      return payloadKind === "feedback_draft";
   }
 }

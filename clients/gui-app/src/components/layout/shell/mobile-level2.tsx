@@ -4,13 +4,35 @@ import { Button } from "@/components/ui/button";
 import { PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { useSafeAreaCollisionPadding } from "@/components/ui/safe-area-collision-padding";
 import { useKeyboardOverlayInset } from "@/hooks/ui/use-keyboard-focus-layout";
+import { cn } from "@/lib/utils";
 
 /**
- * The current item's name as the control that opens the menu under it, as the
- * bots picker draws it at the head of a channel.
+ * Tracy's bots list when level 2 draws beside the content or under the current
+ * item's name (a task's tile list is the sheet in every form). The width is
+ * the resolver's answer in CSS pixels, never a choice made here. It paints the
+ * sidebar's fill, as the task's panel and Tracy's desktop column do, so a side
+ * strip's row runs into it in that fill (`surfaceJoinPane`).
  */
+export function MobileLevel2Column(props: {
+  readonly width: number;
+  readonly testId: string;
+  readonly children: ReactNode;
+}): ReactNode {
+  return (
+    <div
+      data-testid={props.testId}
+      style={{ width: props.width }}
+      className="flex min-h-0 shrink-0 flex-col border-r border-canvas-border/70 bg-(--sidebar)"
+    >
+      {props.children}
+    </div>
+  );
+}
+
+/** The current item's name as the control that opens the menu under it. */
 export function MobileLevel2MenuTrigger(props: {
   readonly testId: string;
+  readonly className: string | undefined;
   readonly children: ReactNode;
 }): ReactNode {
   return (
@@ -22,7 +44,10 @@ export function MobileLevel2MenuTrigger(props: {
         data-testid={props.testId}
         // `shrink` undoes the button's own `shrink-0`, and the cap gives a long
         // name a width to truncate at, so what trails it stays in the row.
-        className="min-w-0 max-w-full shrink justify-start"
+        className={cn(
+          "min-w-0 max-w-full shrink justify-start",
+          props.className,
+        )}
       >
         {props.children}
         <ChevronDown aria-hidden="true" />

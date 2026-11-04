@@ -11,11 +11,11 @@ import {
   hostNotificationsFeedSubscribeV15,
   hostNotificationsSubscribeClientFrameSchema,
   hostNotificationsSubscribeClientFrameSchemaV15,
-  hostNotificationsSubscribeServerFrameSchemaV17,
-  type HostNotificationCloudEntryV26,
+  hostNotificationsSubscribeServerFrameSchemaV18,
+  type HostNotificationCloudEntryV27,
   type HostNotificationsAttentionCursor,
   type HostNotificationsChronologicalCursor,
-  type HostNotificationsSubscribeServerFrameV17,
+  type HostNotificationsSubscribeServerFrameV18,
   type HostNotificationsSummary,
 } from "@traycer/protocol/host/notifications/contracts";
 import type { HostStreamRpcRegistry } from "@traycer/protocol/host/registry";
@@ -53,10 +53,10 @@ export const HOST_NOTIFICATIONS_PRESENCE_HEARTBEAT_MS = 5_000;
  * negotiated version drops back, and every older minor's frames are strict
  * subsets of this union and still parse.
  */
-export type HostNotificationFeedEntry = HostNotificationCloudEntryV26;
+export type HostNotificationFeedEntry = HostNotificationCloudEntryV27;
 
 export type HostNotificationsFeedFrame = Extract<
-  HostNotificationsSubscribeServerFrameV17,
+  HostNotificationsSubscribeServerFrameV18,
   | { readonly kind: "snapshot" }
   | { readonly kind: "partitionSnapshot" }
   | { readonly kind: "upserted" }
@@ -655,7 +655,7 @@ export function openHostNotificationsStream(
       // `partitionSnapshot` frame too. The superset parses every minor the
       // client can be served.
       const parsed =
-        hostNotificationsSubscribeServerFrameSchemaV17.safeParse(envelope);
+        hostNotificationsSubscribeServerFrameSchemaV18.safeParse(envelope);
       if (!parsed.success) {
         reconnect();
         return;

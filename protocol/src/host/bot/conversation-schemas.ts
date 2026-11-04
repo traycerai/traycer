@@ -78,7 +78,7 @@ export const botConversationSendRequestSchema = lazySchema(() =>
     threadId: z.string().min(1).max(36).nullable().default(null),
     /**
      * A reply under a row of `conversationId` that roots a thread: a
-     * `question` or `proposal` announcement (decision 55), a member's post
+     * bot's question card or `proposal` announcement (decision 55), a member's post
      * its bot answered at the top level (a `direct` post), the bot's
      * direct answer to such a post (decision 114), whose thread is its own
      * and not the post's, or any other row of the bot. The message opens, or joins, the thread hung off
@@ -109,10 +109,12 @@ export const botConversationSendRequestSchema = lazySchema(() =>
     supersedes: z.string().min(1).max(255).nullable().default(null),
     /**
      * `bot.conversation.send@1.2`: an answer or Skip from a bot's question
-     * card (decision 121): the
-     * question it settles, on the record the question is on - its thread
-     * (`threadId`), or the channel's top level (`null`), where the answer
-     * goes to the bot itself and opens no thread. `text` is the answer, or
+     * card (decision 121): the question it settles, on the record the
+     * question is on - its thread (`threadId`), or the channel's top level
+     * (`null`). A top-level answer goes to the bot's trunk when the bot
+     * answers posts itself (reply mode `direct`), and opens no thread;
+     * otherwise it settles the card and opens a thread under it, whose
+     * session takes it up with the member. `text` is the answer, or
      * the Skip's line. The bound host refuses an answer to a question already
      * settled with `QUESTION_ALREADY_SETTLED`, and writes nothing. `null` (or
      * absent) otherwise; never set with `announcementId`, `redeliver` or
@@ -128,11 +130,49 @@ export const botConversationSendRequestSchema = lazySchema(() =>
       })
       .nullable()
       .default(null),
+    /**
+     * `bot.conversation.send@1.3`: what a new top-level post opens. `"call"`
+     * opens a call's thread, whatever the bot's reply mode is. Read only for
+     * a new top-level post; a message into an existing thread leaves that
+     * thread's origin as it was. A new top-level post with it has to say
+     * `spoken: true`, or it is refused. Absent otherwise.
+     */
+    origin: z.literal("call").optional(),
+    /**
+     * `bot.conversation.send@1.3`: the words were spoken. The bound host marks
+     * the member's row with it. A new top-level post that says so has to name
+     * `origin: "call"`, or it is refused. Absent or `false` for a typed message.
+     */
+    spoken: z.boolean().optional(),
   }),
 );
 export type BotConversationSendRequest = z.infer<
   typeof botConversationSendRequestSchema
 >;
+
+/** The 1.2 request, frozen by hand: without `origin` and `spoken`. */
+export const botConversationSendRequestSchemaV12 = lazySchema(() =>
+  z.object({
+    botId: botIdSchema,
+    conversationId: z.string().min(1).max(255),
+    text: z.string().min(1).max(100_000),
+    threadId: z.string().min(1).max(36).nullable().default(null),
+    announcementId: z.string().min(1).max(255).nullable().default(null),
+    redeliver: z
+      .object({ requestId: z.string().min(1).max(255) })
+      .nullable()
+      .default(null),
+    supersedes: z.string().min(1).max(255).nullable().default(null),
+    answer: z
+      .object({
+        questionMessageId: z.string().min(1).max(255),
+        questionIndex: z.number().int().min(0),
+        skipped: z.boolean(),
+      })
+      .nullable()
+      .default(null),
+  }),
+);
 
 /** The 1.1 request, frozen by hand: without `answer`. */
 export const botConversationSendRequestSchemaV11 = lazySchema(() =>
@@ -176,9 +216,10 @@ export const botConversationSendResponseSchema = lazySchema(() =>
     /**
      * The thread the message is in: the request's own thread when it was a
      * top-level post (derived from the message, so it is known even while
-     * the message waits in the mailbox), the named one otherwise. `null` for
-     * a top-level post the bot answers itself (reply mode `direct`): its
-     * answer lands on the channel, and no thread opens.
+     * the message waits in the mailbox), the card's thread for a top-level
+     * answer to a card, the named one otherwise. `null` for a top-level post
+     * or answer the bot answers itself (reply mode `direct`): its answer
+     * lands on the channel, and no thread opens.
      */
     threadId: z.string().min(1).nullable(),
   }),
@@ -368,6 +409,12 @@ export const botThreadSummarySchema = lazySchema(() =>
      * member's turns; `null` when this host cannot say.
      */
     costUsd: z.number().nonnegative().nullable(),
+    /**
+     * `bot.thread.list@1.2`: what kind of thread it is, when it is not a plain
+     * one. `"call"` for a thread a call opened. Absent otherwise, as from a
+     * host that predates it.
+     */
+    kind: z.literal("call").optional(),
   }),
 );
 export type BotThreadSummary = z.infer<typeof botThreadSummarySchema>;
@@ -463,7 +510,7 @@ export type BotTurnKey = z.infer<typeof botTurnKeySchema>;
 
 /**
  * What a reader asks the bound host of a bot's turns: the turns behind the
- * replies it shows (`messageIds`), the turns that took the posts it shows as
+ * bot's rows it shows (`messageIds`), the turns that took the posts it shows as
  * not answered (`requestIds`), and turns it already knows (`turns`: a
  * check-in's). Any host answers: the bound one from its own record, any
  * other from what the bound host keeps in the bot's environment room.

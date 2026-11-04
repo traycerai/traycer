@@ -258,7 +258,15 @@ function resetLeftPanelStore(): void {
   window.localStorage.clear();
   canvasHostState.id = HOST_ID;
   useSurfaceHostSelectionStore.setState({ selections: {} });
-  useLayoutStore.setState({ ...DEFAULT_LAYOUT_SNAPSHOT });
+  // The sidebar open in a new tab, which is what the rail cases click from;
+  // the shipped default starts it collapsed.
+  useLayoutStore.setState({
+    ...DEFAULT_LAYOUT_SNAPSHOT,
+    arrangement: {
+      ...DEFAULT_LAYOUT_SNAPSHOT.arrangement,
+      sidebarStartCollapsed: false,
+    },
+  });
   useLeftPanelStore.setState({
     activePanelIdByTabId: {},
     mainCollapsedByTabId: {},

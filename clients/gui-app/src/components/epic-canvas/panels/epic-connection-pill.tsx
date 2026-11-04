@@ -2,6 +2,7 @@ import { useEffect, useState, type ReactNode } from "react";
 import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
 import { LivePulse } from "@/components/ui/live-pulse";
 import {
+  useEpicArtifactSyncReading,
   useEpicHasFreshCloudSyncStatus,
   useEpicHostTransportStatus,
   useEpicSyncPillState,
@@ -9,6 +10,10 @@ import {
 } from "@/lib/epic-selectors";
 import { useLinkDownTooLong } from "@/components/epic-canvas/panels/use-link-down-too-long";
 import { useCloudLinkGrace } from "@/components/epic-canvas/panels/use-cloud-link-grace";
+import {
+  useArtifactSyncStatus,
+  type ArtifactSyncStatus,
+} from "@/components/epic-canvas/panels/use-artifact-sync-status";
 import type { EpicDurabilityPlane } from "@/components/epic-canvas/panels/epic-durability-plane";
 import type {
   EpicSyncPillState,
@@ -54,6 +59,9 @@ import { UNKNOWN_HOST_PLACEHOLDER } from "@/lib/host/constants";
  * synced": (i) the GUI↔host transport, (ii) the control lane's cloud-sync
  * status and its per-cycle freshness, (iii) the control lane's aggregate dirty
  * bit, (iv) runtime-local divergence, and (v) refused or superseded writes.
+ * Whether artifact rooms are behind is a sixth input that gates `synced` and,
+ * past its own grace, takes the light as its own plane
+ * (`use-artifact-sync-status.ts`).
  *
  * (i)-(iv) arrive as {@link EpicSyncPillState}; (v) arrives BESIDE it as
  * {@link EpicWriteCommandAlert} and is weighed as its own plane here. Folding
@@ -125,10 +133,12 @@ export function EpicConnectionPill(props: EpicConnectionPillProps) {
   // entirely: the settle hold exists to stop routine save churn from strobing,
   // and a terminal write outcome is neither routine nor transient.
   const writeCommandAlert = useEpicWriteCommandAlert();
+  const artifactSync = useArtifactSyncStatus(useEpicArtifactSyncReading());
   // Visuals use the settled state to avoid strobing; the tooltip uses the raw
   // verdict so it can truthfully say synced during the positive settle hold.
   const secondarySignals = {
     writeCommandAlert,
+    artifactSync,
     durability: props.durability,
     chatBackupStatus,
     terminalCatalogUnavailable,
@@ -168,7 +178,7 @@ export function EpicConnectionPill(props: EpicConnectionPillProps) {
           data-testid="epic-connection-pill"
           data-status={state}
           data-source={selected.source}
-          aria-label={accessibleNameFor(rawSelected)}
+          aria-label={buttonNameFor(indicator.label, rawSelected)}
           className={cn(
             "inline-flex items-center gap-1 text-ui-xs font-medium text-current focus:outline-none focus-visible:ring-1 focus-visible:ring-ring",
             indicator.containerClassName,
@@ -288,6 +298,7 @@ interface PillIndicator {
 type PillSource =
   | "artifact"
   | "write-command"
+  | "artifact-sync"
   | "durability"
   | "chat-backup"
   | "terminal-catalog"
@@ -343,6 +354,21 @@ function accessibleNameFor(selected: SelectedIndicator): string {
     selected.indicator.ariaLabel,
     ...selected.alsoReported.map((other) => other.ariaLabel),
   ].join(" ");
+}
+
+/**
+ * The button's name starts with the label it shows, so a person can say the
+ * label they see to click the pill (WCAG 2.5.3, label in name).
+ */
+function buttonNameFor(
+  visibleLabel: string | null,
+  selected: SelectedIndicator,
+): string {
+  const name = accessibleNameFor(selected);
+  if (visibleLabel === null || name.startsWith(visibleLabel)) return name;
+  // "Syncing…" already ends its sentence; "Offline" does not.
+  const separator = visibleLabel.endsWith("…") ? " " : ". ";
+  return `${visibleLabel}${separator}${name}`;
 }
 
 function ConnectionPillDot(props: { indicator: PillIndicator }) {
@@ -449,6 +475,7 @@ const SEVERITY_RANK: Record<PillIndicator["severity"], number> = {
 interface PillSignals {
   readonly artifactIndicator: PillIndicator;
   readonly writeCommandAlert: EpicWriteCommandAlert | null;
+  readonly artifactSync: ArtifactSyncStatus;
   readonly durability: EpicDurabilityPlane | null;
   readonly chatBackupStatus: EpicChatBackupStatus | null;
   readonly terminalCatalogUnavailable: boolean;
@@ -483,7 +510,13 @@ function highestSeverityIndicator(signals: PillSignals): SelectedIndicator {
       indicator: indicatorForWriteCommandAlert(signals.writeCommandAlert),
     });
   }
-  // Second: it is about the user's DATA (where the epic lives, whether this
+  if (signals.artifactSync.kind !== "calm") {
+    secondary.push({
+      source: "artifact-sync",
+      indicator: indicatorForArtifactSync(signals.artifactSync),
+    });
+  }
+  // Next: it is about the user's DATA (where the epic lives, whether this
   // session's edits are held anywhere) where every plane below is about a
   // feed that heals by itself.
   if (signals.durability !== null) {
@@ -596,6 +629,42 @@ function indicatorForWriteCommandAlert(
     pulse: null,
     tooltip: copy.message,
     ariaLabel: copy.message,
+  };
+}
+
+/**
+ * Carries a label like the write alerts, because an artifact other people
+ * cannot see yet is not discoverable by hovering a light. `recovered` ranks as
+ * `activity`, which beats only a steady `synced`, so the label never covers
+ * another plane's report.
+ */
+function indicatorForArtifactSync(
+  status: Exclude<ArtifactSyncStatus, { readonly kind: "calm" }>,
+): PillIndicator {
+  if (status.kind === "recovered") {
+    return {
+      severity: "activity",
+      containerClassName:
+        "rounded-md bg-success/10 px-2 py-0.5 text-success-foreground",
+      dotClassName: "",
+      label: status.label,
+      showAgentSpinner: false,
+      pulse: "active",
+      tooltip: null,
+      ariaLabel: status.label,
+    };
+  }
+  return {
+    severity: "warning",
+    containerClassName:
+      "rounded-md bg-warning/10 px-2 py-0.5 text-warning-foreground",
+    dotClassName: "bg-warning",
+    label: status.label,
+    showAgentSpinner: false,
+    pulse: null,
+    tooltip: status.sentence,
+    // The sentence leads with what is wrong; "Syncing…" in front says nothing.
+    ariaLabel: status.sentence,
   };
 }
 

@@ -42,14 +42,15 @@ export type BarHost = "status-bar" | "header";
 export type EdgeSide = "left" | "right";
 
 /**
- * Where the header task tabs draw: horizontal at the top (today's layout), or
- * a vertical strip at either edge.
+ * Where the header task tabs draw: horizontal at the top, or a vertical strip
+ * at either edge. A new install starts with the strip at the left edge.
  */
 export type TabStripPlacement = "top" | EdgeSide;
 
 /**
  * What the vertical strip shows: `layered` keeps it to tabs, `activity`
- * also lists the active task's live agents under its row.
+ * also lists the active task's live agents under its row. A new install
+ * starts in `activity`.
  */
 export type SideStripView = "layered" | "activity";
 
@@ -228,7 +229,9 @@ export interface LayoutArrangement {
   readonly dividerSeq: number;
   /**
    * Where the header task tabs draw, on every desktop window at once:
-   * top, or a vertical strip at the left or right edge.
+   * top, or a vertical strip at the left or right edge. Shipped at the left;
+   * an install from before that default was `top` keeps `top`
+   * (`layout-store.ts`).
    *
    * The EFFECTIVE placement this window draws with also depends on whether
    * the mobile header stands in its place - `useTabStripPlacement` is the one
@@ -247,9 +250,15 @@ export interface LayoutArrangement {
    * the left panel store (`mainCollapsedByTabId`); this is only what a tab
    * with no record of its own reads. Arrangement rather than a value: it says
    * how much of the window the canvas takes, not how much a region says.
+   * Shipped on; an install from before that default was off keeps it off
+   * (`layout-store.ts`).
    */
   readonly sidebarStartCollapsed: boolean;
-  /** What the vertical strip shows; ignored while the tabs are at the top. */
+  /**
+   * What the vertical strip shows; ignored while the tabs are at the top.
+   * Shipped as `activity`; an install from before that default was
+   * `layered` keeps `layered` (`layout-store.ts`).
+   */
   readonly sideStripView: SideStripView;
   /** Tab overflow: scroll the tabs, or shrink them to fit. */
   readonly taskTabLayout: TaskTabLayout;
@@ -375,10 +384,10 @@ export const DEFAULT_ARRANGEMENT: LayoutArrangement = {
   pinnedContextFieldOrder: CONTEXT_USAGE_ROW_KEYS,
   mobileFooter: false,
   dividerSeq: DEFAULT_RAIL_DIVIDER_SEQ,
-  tabStripPlacement: "top",
+  tabStripPlacement: "left",
   sidebarSide: "left",
-  sidebarStartCollapsed: false,
-  sideStripView: "layered",
+  sidebarStartCollapsed: true,
+  sideStripView: "activity",
   taskTabLayout: "scroll",
   readingWidth: "comfortable",
   wideReadingWidthPx: WIDE_READING_WIDTH_MIN_PX,
@@ -643,7 +652,7 @@ export function liveAgentsInStrip(
 
 /**
  * The palette's "Toggle vertical tabs" command: `top` becomes `left`,
- * the default side for a vertical strip; either side becomes `top`.
+ * the shipped side for a vertical strip; either side becomes `top`.
  */
 export function toggleVerticalTabs(
   placement: TabStripPlacement,

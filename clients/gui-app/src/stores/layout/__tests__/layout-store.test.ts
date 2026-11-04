@@ -21,7 +21,7 @@ const LAYOUT_KEY = persistKey(STORE_KEYS.layout);
 const SETTINGS_KEY = persistKey(STORE_KEYS.settings);
 const LEFT_PANEL_KEY = persistKey(STORE_KEYS.leftPanel);
 /** The version this build writes (`LAYOUT_PERSIST_VERSION` in `layout-store.ts`). */
-const LAYOUT_VERSION = 7;
+const LAYOUT_VERSION = 8;
 
 /** The number of Styles lines on the change list - what `changeCount` used to return. */
 function changeCount(snapshot: LayoutSnapshot): number {
@@ -836,12 +836,12 @@ describe("migrating a version-1 launch (the shipped desktop-v1.4.0-rc.1 record)"
     ]);
   }
 
-  it("carries every preservable v1 field into the version-7 snapshot, one-shot", async () => {
+  it("carries every preservable v1 field into the version-8 snapshot, one-shot", async () => {
     seedFullV1Records();
 
     const first = await relaunchStore();
     expectFullyCarried(first.state());
-    expect(storedLayoutVersion()).toBe(7);
+    expect(storedLayoutVersion()).toBe(8);
 
     // Simulate the settings store's own module load rewriting its record
     // through today's `partialize`, which no longer carries these fields
@@ -849,11 +849,11 @@ describe("migrating a version-1 launch (the shipped desktop-v1.4.0-rc.1 record)"
     writeSettingsRecord({});
 
     const second = await relaunchStore();
-    // Version 7 now equals the current version, so zustand's `persist` skips
+    // Version 8 now equals the current version, so zustand's `persist` skips
     // `migrate` entirely and the legacy records are never consulted again -
     // proving the carry is one-shot and its result is what persists.
     expect(second.state()).toEqual(first.state());
-    expect(storedLayoutVersion()).toBe(7);
+    expect(storedLayoutVersion()).toBe(8);
   });
 
   it("takes both Shown switches from the strip's own slice when the readings lived in the strip", async () => {
@@ -1086,12 +1086,143 @@ describe("migrating an unrecognized version resets to the defaults", () => {
       },
     },
   ])(
-    "resets a version-$version record to the defaults without throwing, and rewrites it at version 7",
+    "resets a version-$version record to the defaults without throwing, and rewrites it at version 8",
     async ({ version, state }) => {
       await rehydrateFromVersion(state, version);
 
       expect(getLayoutSnapshot()).toEqual(DEFAULT_LAYOUT_SNAPSHOT);
-      expect(storedLayoutVersion()).toBe(7);
+      expect(storedLayoutVersion()).toBe(8);
     },
   );
+});
+
+/**
+ * Version 8 changed two shipped defaults - tabs at the left edge, the
+ * sidebar collapsed in a new task - for a NEW install only, and the side
+ * strip's view (agents under the tab) followed the same way. An install that exists is told apart by what it left behind:
+ * a layout record at an earlier version, or, with none, a legacy settings or
+ * sidebar record from a build before the layout store. Each of those reads
+ * what its record does not say against the EARLIER defaults.
+ */
+describe("the defaults that changed for a new install only", () => {
+  beforeEach(reset);
+  afterEach(reset);
+
+  /** Every field a v1.5.x record wrote: this build's shape minus `sidebarStartCollapsed`. */
+  function v15Arrangement(
+    patch: Partial<LayoutSnapshot["arrangement"]>,
+  ): Record<string, unknown> {
+    const arrangement: Record<string, unknown> = {
+      ...DEFAULT_ARRANGEMENT,
+      tabStripPlacement: "top",
+      sideStripView: "layered",
+      ...patch,
+    };
+    delete arrangement.sidebarStartCollapsed;
+    return arrangement;
+  }
+
+  it("gives a fresh install - no layout record, no legacy record - the shipped defaults", async () => {
+    const { state } = await relaunchStore();
+
+    expect(state()).toEqual(DEFAULT_LAYOUT_SNAPSHOT);
+    expect(state().arrangement).toMatchObject({
+      tabStripPlacement: "left",
+      sidebarStartCollapsed: true,
+      sideStripView: "activity",
+    });
+    expect(storedLayoutVersion()).toBe(8);
+  });
+
+  it.each([
+    {
+      name: "a version-0 launch beside a legacy settings record",
+      seed: () => {
+        writeSettingsRecord({});
+      },
+    },
+    {
+      name: "a version-0 launch beside a legacy sidebar record",
+      seed: () => {
+        writeLeftPanelRecord({});
+      },
+    },
+    {
+      name: "a version-1 record",
+      seed: () => {
+        writeLayoutRecordAtVersion({ statusBar: {}, composer: {} }, 1);
+      },
+    },
+  ])(
+    "keeps $name on tabs at the top, tabs only in the strip and the sidebar open",
+    async ({ seed }) => {
+      seed();
+
+      const { state } = await relaunchStore();
+
+      expect(state().arrangement).toMatchObject({
+        tabStripPlacement: "top",
+        sidebarStartCollapsed: false,
+        sideStripView: "layered",
+      });
+      expect(storedLayoutVersion()).toBe(8);
+    },
+  );
+
+  it("reads a version-7 record's absent sidebarStartCollapsed as off, and the rest of it as written", async () => {
+    writeLayoutRecordAtVersion(
+      {
+        basePreset: "compact",
+        overrides: { model: { style: "bars" } },
+        arrangement: v15Arrangement({ minimapSide: "left" }),
+      },
+      7,
+    );
+
+    const { state } = await relaunchStore();
+
+    expect(state().basePreset).toBe("compact");
+    expect(state().overrides).toEqual({ model: { style: "bars" } });
+    expect(state().arrangement).toMatchObject({
+      tabStripPlacement: "top",
+      sidebarStartCollapsed: false,
+      sideStripView: "layered",
+      minimapSide: "left",
+    });
+    expect(storedLayoutVersion()).toBe(8);
+  });
+
+  it("keeps a version-7 record's own picks: a vertical strip at the right listing its agents, the pair unstacked", async () => {
+    writeLayoutRecordAtVersion(
+      {
+        basePreset: "default",
+        overrides: {},
+        arrangement: v15Arrangement({
+          tabStripPlacement: "right",
+          sideStripView: "activity",
+          rail: DEFAULT_ARRANGEMENT.rail.filter(
+            (entry) => entry.kind === "panel",
+          ),
+        }),
+      },
+      7,
+    );
+
+    const { state } = await relaunchStore();
+
+    expect(state().arrangement.tabStripPlacement).toBe("right");
+    expect(state().arrangement.sidebarStartCollapsed).toBe(false);
+    expect(state().arrangement.sideStripView).toBe("activity");
+    expect(railStacks(state().arrangement.rail)).toEqual([]);
+  });
+
+  it("keeps a current record's own sidebarStartCollapsed, whichever way it says", async () => {
+    await rehydrateFrom({
+      basePreset: "default",
+      overrides: {},
+      arrangement: { ...DEFAULT_ARRANGEMENT, sidebarStartCollapsed: false },
+    });
+
+    expect(getLayoutSnapshot().arrangement.sidebarStartCollapsed).toBe(false);
+  });
 });

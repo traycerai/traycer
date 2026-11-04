@@ -140,7 +140,7 @@ export function useBotFailedRequest(args: {
                     supersedes: null,
                     answer: null,
                   },
-                  { onError: fail },
+                  { onError: () => fail(null) },
                 );
               },
         retrying: retryingId === requestId,

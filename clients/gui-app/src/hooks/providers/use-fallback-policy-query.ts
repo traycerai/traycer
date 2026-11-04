@@ -20,8 +20,8 @@ const FALLBACK_POLICY_PARAMS = {};
  *
  * The response carries two things beside the policy: `storedPolicyUnreadable`,
  * which the panel must surface rather than swallow (the host deliberately
- * returns a default policy instead of throwing, precisely so the user can
- * overwrite a corrupt row), and `inFlightCount`, which is derived per read and
+ * returns the default settings with routing off instead of throwing, precisely
+ * so the user can overwrite a corrupt row), and `inFlightCount`, which is derived per read and
  * so is only as fresh as the last one. The panel shows the polled count from
  * `useFallbackInFlightCountQuery` instead, and this one only until that
  * answers.

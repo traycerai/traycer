@@ -85,7 +85,8 @@ import { EPIC_STATUS_LANE_ID } from "./lane-events";
  * claims the host answered a question it was never asked.
  */
 function durabilityLegsOf(
-  frame: EpicStatusDurabilityLegs,
+  frame: EpicStatusDurabilityLegs &
+    Pick<EpicStatusSnapshotFrame, "artifactSync">,
   peerServesDurabilityLegs: boolean,
 ): EpicCloudSyncDurability {
   return {
@@ -95,6 +96,7 @@ function durabilityLegsOf(
     localProtection: frame.localProtection,
     freshness: frame.freshness,
     peerSpeaksDurabilityLegs: peerServesDurabilityLegs,
+    artifactSync: frame.artifactSync,
   };
 }
 

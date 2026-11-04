@@ -148,24 +148,8 @@ function readyStatus(
   return {
     kind: "ready",
     messages,
-    indexState: "complete",
     expansionBase: EXPANSION_BASE,
     showMore,
-    loadingMore: false,
-    loadMoreError: null,
-  };
-}
-
-/** The same answer from a host whose startup sweep has not finished. */
-function partialReadyStatus(
-  messages: ReadonlyArray<ChatSearchMessageMatch>,
-): ChatSearchMessageHitsStatus {
-  return {
-    kind: "ready",
-    messages,
-    indexState: "partial",
-    expansionBase: EXPANSION_BASE,
-    showMore: null,
     loadingMore: false,
     loadMoreError: null,
   };
@@ -320,11 +304,6 @@ describe("messageHitsTreeState: what the tree is told", () => {
     expect(showsMessageHitsSection("empty")).toBe(false);
   });
 
-  it("keeps a section for an empty answer from a half-built index", () => {
-    expect(messageHitsTreeState(partialReadyStatus([]))).toBe("indexing");
-    expect(showsMessageHitsSection("indexing")).toBe(true);
-  });
-
   it("keeps a section for an empty page that still has somewhere to page to", () => {
     const status = readyStatus([], () => undefined);
 
@@ -395,18 +374,6 @@ describe("EpicSidebarMessageHits", () => {
     expect(store.open).toBe(true);
     expect(store.initialQuery).toBe("webview");
     expect(store.scope).toBe("all-accessible-tasks");
-  });
-
-  it("keeps the still-indexing caveat when a half-built index found nothing", () => {
-    render(
-      <EpicSidebarMessageHits state={sectionState(partialReadyStatus([]))} />,
-    );
-
-    expect(screen.getByLabelText("In messages")).not.toBeNull();
-    expect(screen.getByRole("status").textContent).toBe(
-      "Still indexing chats on this host. Some results may be missing.",
-    );
-    expect(screen.queryByText("· 0 agents", { exact: false })).toBeNull();
   });
 
   it("parks the jump on the searched host when the app is pointed elsewhere", async () => {

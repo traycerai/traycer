@@ -638,8 +638,14 @@ export const HOST_METHOD_POLL_TABLE = {
     poll: null,
   },
   "host.notifications.getConfig": { ...LATEST_SCHEDULING, poll: null },
+  "host.notifications.getLongTurnAlert": { ...LATEST_SCHEDULING, poll: null },
   // Setting notification configuration persists user intent.
   "host.notifications.setConfig": {
+    mode: "fifo",
+    joinResponseTimeoutMs: null,
+    poll: null,
+  },
+  "host.notifications.setLongTurnAlert": {
     mode: "fifo",
     joinResponseTimeoutMs: null,
     poll: null,
@@ -1589,6 +1595,14 @@ export const HOST_METHOD_POLL_TABLE = {
     poll: null,
   },
   "chat.mcpApp.updateModelContext": {
+    mode: "fifo",
+    joinResponseTimeoutMs: null,
+    poll: null,
+  },
+  // A feedback draft's preview is read when the user opens "View"; the
+  // decision is a click that may send, so each one runs, in order.
+  "chat.feedbackDraft.preview": { ...LATEST_SCHEDULING, poll: null },
+  "chat.feedbackDraft.decide": {
     mode: "fifo",
     joinResponseTimeoutMs: null,
     poll: null,

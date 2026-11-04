@@ -2128,7 +2128,7 @@ describe("resolvePersistedArrangement: the enum fields (L-133)", () => {
   }>([
     {
       field: "tabStripPlacement",
-      fallback: "top",
+      fallback: "left",
       valid: ["top", "left", "right"],
       junk: [1, "TOP", null, {}, "sideways"],
     },
@@ -2146,7 +2146,7 @@ describe("resolvePersistedArrangement: the enum fields (L-133)", () => {
     },
     {
       field: "sideStripView",
-      fallback: "layered",
+      fallback: "activity",
       valid: ["layered", "activity"],
       junk: [1, "ACTIVITY", null, {}, "focused"],
     },

@@ -136,12 +136,14 @@ export {
   openContentBlockSchema,
   openHarnessIdSchema,
   openMessageSchema,
+  openMessageSchemaPreFeedbackDraft,
   openMessageSchemaPreNotApplied,
   openMessageSchemaPreCanvas,
   openMessageSchemaPreHtml,
   openMessageSchemaPreArtifact,
   openMessageSchemaPreConversation,
   openMessageSchemaPreDelivery,
+  openMessageSchemaPreSlack,
   openPlanBlockSchema,
   openPlanSourceSchema,
   openProviderNoticeMetadataSchema,
@@ -150,6 +152,7 @@ export {
   openUserMessageSchema,
   openUserMessageSchemaPreCanvas,
   openUserMessageSchemaPreConversation,
+  openUserMessageSchemaPreSlack,
   openUserMessageSenderSchema,
 } from "@traycer/protocol/persistence/epic/open-harness-records";
 export type {

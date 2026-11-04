@@ -324,10 +324,15 @@ describe("side strip: sheet join and the header-overlay portal under a real drag
     // (`useTabStripPlacement`), not from this harness's `ColumnEdgeContext` -
     // that context only reaches the strip's own rows. Match the strip's
     // "left" edge here too, or the overlay's `useSideTabJoin` sees a null
-    // edge and never joins regardless of active state.
+    // edge and never joins regardless of active state. Tabs only: the join
+    // cases drag the plain task rows, not the Activity view's.
     useLayoutStore.setState({
       ...DEFAULT_LAYOUT_SNAPSHOT,
-      arrangement: { ...DEFAULT_ARRANGEMENT, tabStripPlacement: "left" },
+      arrangement: {
+        ...DEFAULT_ARRANGEMENT,
+        tabStripPlacement: "left",
+        sideStripView: "layered",
+      },
     });
     seedTabs();
   });

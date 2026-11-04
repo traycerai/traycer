@@ -37,6 +37,7 @@ export function useWorkspaceFolderPreviewReveal(): WorkspaceFolderPreviewReveal 
     onLongPress: () => setOpen(true),
     disabled: false,
     acceptsMouse: false,
+    acceptsPen: false,
   });
   const close = useCallback(() => setOpen(false), []);
   return {

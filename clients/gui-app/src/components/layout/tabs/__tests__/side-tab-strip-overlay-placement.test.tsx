@@ -282,7 +282,12 @@ function resetSharedState(): void {
   useLandingDraftStore.setState({ drafts: [], activeDraftId: null });
   useTabsStore.setState(useTabsStore.getInitialState(), true);
   useSideTabStripStore.setState({ widthPx: 240, collapsed: false });
-  useLayoutStore.setState({ ...DEFAULT_LAYOUT_SNAPSHOT });
+  // Tabs only, the view the task-row cases are written about; the shipped
+  // strip lists the agents too, and `setSideStripView` picks that one.
+  useLayoutStore.setState({
+    ...DEFAULT_LAYOUT_SNAPSHOT,
+    arrangement: { ...DEFAULT_ARRANGEMENT, sideStripView: "layered" },
+  });
   useLayoutStore.getState().setRegionValues("homeTab", { shown: "hidden" });
   useTitleBarDragStore.setState({ suppressors: new Set() });
   useNotificationsPopoverStore.getState().setOpen(false);

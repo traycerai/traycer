@@ -11,10 +11,12 @@ import { FakeOutput, FakeStems, isRamp } from "./fakes";
 // every 6.2 s, which the 0.5 s grid snaps to 6.5.
 function makeTrack(lengthSeconds: number, variantsOfA: number): VariableTrack {
   const properties = (startPause: number) => ({
+    enabled: null,
     startPause: [startPause, startPause] as const,
     sequenceLength: [1, 1] as const,
     pauseBetweenSamples: [0, 0] as const,
     pauseBetweenRepetitions: [4, 4] as const,
+    playsPerRun: null,
   });
   return {
     name: "test",
@@ -27,8 +29,15 @@ function makeTrack(lengthSeconds: number, variantsOfA: number): VariableTrack {
         variants: variantsOfA,
         sublayers: 1,
         sublayerStartingOffset: null,
+        pan: null,
       },
-      { name: "B", variants: 2, sublayers: 1, sublayerStartingOffset: null },
+      {
+        name: "B",
+        variants: 2,
+        sublayers: 1,
+        sublayerStartingOffset: null,
+        pan: null,
+      },
     ],
     states: [
       {
@@ -37,6 +46,9 @@ function makeTrack(lengthSeconds: number, variantsOfA: number): VariableTrack {
         numberOfEnabledLayers: [2, 2],
       },
     ],
+    intro: null,
+    outro: null,
+    phases: [],
   };
 }
 
@@ -48,10 +60,12 @@ function makeStatesTrack(lengthSeconds: number): VariableTrack {
     startPause: number,
     pauseBetweenRepetitions: number,
   ): LayerProperties => ({
+    enabled: null,
     startPause: [startPause, startPause],
     sequenceLength: [1, 1],
     pauseBetweenSamples: [0, 0],
     pauseBetweenRepetitions: [pauseBetweenRepetitions, pauseBetweenRepetitions],
+    playsPerRun: null,
   });
   return {
     name: "states",
@@ -59,8 +73,20 @@ function makeStatesTrack(lengthSeconds: number): VariableTrack {
     lengthSeconds,
     alignmentSeconds: 0.5,
     layers: [
-      { name: "A", variants: 2, sublayers: 1, sublayerStartingOffset: null },
-      { name: "B", variants: 2, sublayers: 1, sublayerStartingOffset: null },
+      {
+        name: "A",
+        variants: 2,
+        sublayers: 1,
+        sublayerStartingOffset: null,
+        pan: null,
+      },
+      {
+        name: "B",
+        variants: 2,
+        sublayers: 1,
+        sublayerStartingOffset: null,
+        pan: null,
+      },
     ],
     states: [
       {
@@ -74,6 +100,9 @@ function makeStatesTrack(lengthSeconds: number): VariableTrack {
         numberOfEnabledLayers: [1, 1],
       },
     ],
+    intro: null,
+    outro: null,
+    phases: [],
   };
 }
 
@@ -94,6 +123,8 @@ function makePlayerWithRandom(
     random,
     silenceSeconds: [5, 5],
     resumeAt: 0,
+    onRunStart: () => undefined,
+    onRunEnd: () => undefined,
   });
 }
 
@@ -110,6 +141,8 @@ function makePlayer(
     random: () => 0.5,
     silenceSeconds: [silenceSeconds, silenceSeconds],
     resumeAt: 0,
+    onRunStart: () => undefined,
+    onRunEnd: () => undefined,
   });
 }
 
@@ -125,20 +158,31 @@ function makeSingleLayerTrack(
     lengthSeconds: 60,
     alignmentSeconds: 0.5,
     layers: [
-      { name: "A", variants: 2, sublayers: 1, sublayerStartingOffset: null },
+      {
+        name: "A",
+        variants: 2,
+        sublayers: 1,
+        sublayerStartingOffset: null,
+        pan: null,
+      },
     ],
     states: stateNames.map((name) => ({
       name,
       layersProperties: [
         {
+          enabled: null,
           startPause: [startPause, startPause],
           sequenceLength: [1, 1],
           pauseBetweenSamples: [0, 0],
           pauseBetweenRepetitions: [4, 4],
+          playsPerRun: null,
         },
       ],
       numberOfEnabledLayers: [1, 1],
     })),
+    intro: null,
+    outro: null,
+    phases: [],
   };
 }
 
@@ -165,6 +209,8 @@ describe("TrackPlayer scheduling", () => {
       random: () => 0.5,
       silenceSeconds: [5, 5],
       resumeAt: 20,
+      onRunStart: () => undefined,
+      onRunEnd: () => undefined,
     });
     expect(player.elapsed()).toBe(20);
 
@@ -788,10 +834,12 @@ describe("TrackPlayer scheduling inside one lookahead window", () => {
     enabledLayers: number,
   ): VariableTrack {
     const properties: LayerProperties = {
+      enabled: null,
       startPause: [0, 0],
       sequenceLength: [1, 1],
       pauseBetweenSamples: [0, 0],
       pauseBetweenRepetitions: [0, 0],
+      playsPerRun: null,
     };
     return {
       name: "window",
@@ -804,6 +852,7 @@ describe("TrackPlayer scheduling inside one lookahead window", () => {
           variants: 2,
           sublayers,
           sublayerStartingOffset: [offset, offset],
+          pan: null,
         },
       ],
       states: ["first", "second"].map((name) => ({
@@ -811,6 +860,9 @@ describe("TrackPlayer scheduling inside one lookahead window", () => {
         layersProperties: [properties],
         numberOfEnabledLayers: [enabledLayers, enabledLayers],
       })),
+      intro: null,
+      outro: null,
+      phases: [],
     };
   }
 
@@ -877,6 +929,7 @@ describe("TrackPlayer scheduling inside one lookahead window", () => {
           variants: 2,
           sublayers: 3,
           sublayerStartingOffset: [0.1, 0.2],
+          pan: null,
         },
       ],
     };

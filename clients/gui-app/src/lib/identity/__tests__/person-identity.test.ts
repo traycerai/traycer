@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { CollaboratorEntry } from "@traycer/protocol/host/epic/unary-schemas";
 import { flattenCollaborators } from "@/hooks/epics/use-epic-collaborators-query";
+import { collaboratorEntry } from "@/lib/identity/__tests__/collaborator-fixture";
 import {
   UNRESOLVED_BOT_MEMBERS,
   type BotMemberResolver,
@@ -10,27 +11,6 @@ import {
   type PersonIdentitySources,
 } from "@/lib/identity/person-identity";
 import type { AuthProfile } from "@/stores/auth/auth-store";
-
-function collaboratorRow(
-  userId: string,
-  profile: {
-    readonly displayName: string;
-    readonly avatarUrl: string;
-  } | null,
-): CollaboratorEntry {
-  return {
-    role: "editor",
-    accessType: "direct",
-    environmentId: null,
-    grantedAt: 1,
-    grantedBy: "owner",
-    user: {
-      userId,
-      profile: profile === null ? null : { ...profile, email: "", handle: "" },
-    },
-    team: null,
-  };
-}
 
 function sources(args: {
   readonly viewer: AuthProfile | null;
@@ -62,7 +42,7 @@ describe("resolvePersonIdentity", () => {
       sources({
         viewer: VIEWER,
         collaborators: [
-          collaboratorRow("user-1", {
+          collaboratorEntry("user-1", {
             displayName: "Collaborator Name",
             avatarUrl: "https://example.com/collaborator.png",
           }),
@@ -84,7 +64,7 @@ describe("resolvePersonIdentity", () => {
       sources({
         viewer: VIEWER,
         collaborators: [
-          collaboratorRow("user-2", {
+          collaboratorEntry("user-2", {
             displayName: "Collaborator Name",
             avatarUrl: "https://example.com/collaborator.png",
           }),
@@ -136,7 +116,7 @@ describe("resolvePersonIdentity", () => {
       sources({
         viewer: null,
         collaborators: [
-          collaboratorRow("user-2", {
+          collaboratorEntry("user-2", {
             displayName: "No Picture",
             avatarUrl: "",
           }),
@@ -177,7 +157,7 @@ describe("resolvePersonIdentity", () => {
     const resolved = resolvePersonIdentity(
       sources({
         viewer: null,
-        collaborators: [collaboratorRow("user-2", null)],
+        collaborators: [collaboratorEntry("user-2", null)],
         resolveMember: everyoneKnown,
       }),
       "user-2",

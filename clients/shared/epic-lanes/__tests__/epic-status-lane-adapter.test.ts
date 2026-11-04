@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   epicStatusSubscribeServerFrameSchemaV11,
+  epicStatusSubscribeServerFrameSchemaV12,
   type EpicStatusDurabilityLegs,
 } from "@traycer/protocol/host/epic/status-subscribe";
 import type {
@@ -1221,5 +1222,41 @@ describe("createEpicStatusLaneAdapter - generation guard", () => {
     expect(
       cloudSync.map((event) => event.durability.peerSpeaksDurabilityLegs),
     ).toEqual([true]);
+  });
+});
+
+describe("artifact sync status", () => {
+  it("preserves the @1.2 field from snapshots and transitions in control events", () => {
+    const { factory, latest } = createFakeStreamClientFactory();
+    const adapter = createEpicStatusLaneAdapter(
+      createSources(factory, undefined),
+    );
+    const { host, log } = createRecordingHost();
+    adapter.attach(host);
+    const artifactSync = { rooms: "stopped", waitingNewArtifacts: 2 } as const;
+    const snapshot = epicStatusSubscribeServerFrameSchemaV12.parse({
+      ...snapshotFrame({}),
+      artifactSync,
+    });
+    if (snapshot.kind !== "snapshot") throw new Error("expected snapshot");
+    latest().callbacks.onSnapshot(snapshot, true);
+    const transition = epicStatusSubscribeServerFrameSchemaV12.parse({
+      ...cloudSyncStatusFrame("epoch-1", "connected"),
+      artifactSync,
+    });
+    if (transition.kind !== "cloudSyncStatus")
+      throw new Error("expected cloud status");
+    latest().callbacks.onTransition(transition, true);
+    const events = emittedEvents(log).filter(
+      (event) => event.kind === "cloud-sync-status",
+    );
+    expect(events).toHaveLength(2);
+    expect(
+      events.map((event) =>
+        event.kind === "cloud-sync-status"
+          ? event.durability.artifactSync
+          : null,
+      ),
+    ).toEqual([artifactSync, artifactSync]);
   });
 });

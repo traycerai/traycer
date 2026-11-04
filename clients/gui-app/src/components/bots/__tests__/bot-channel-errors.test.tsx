@@ -231,6 +231,7 @@ function mount(openThread: BotOpenThread | null): void {
       <TooltipProvider>
         <ChatExpansionTestProviders tileInstanceId="tile-1">
           <BotChannelView
+            tiles={null}
             botId={BOT_ID}
             hostId={HOST_ID}
             boundHostId={HOST_ID}
@@ -246,6 +247,9 @@ function mount(openThread: BotOpenThread | null): void {
             onOpenMemory={vi.fn()}
             environmentId="env-1"
             botNameOf={() => null}
+            environmentBots={null}
+            openExchange={null}
+            exchangeRail={{ open: () => undefined, close: () => undefined }}
             resolveMember={resolveMember}
             tasks={[]}
             surfaceActions={null}
@@ -311,6 +315,7 @@ describe("<BotChannelView tiles={null} /> a message the host refuses", () => {
 
     const notice = screen.getByTestId("bot-channel-composer-send-failed");
     expect(notice.getAttribute("role")).toBe("alert");
+    expect(notice.className).toContain("text-destructive");
     expect(notice.textContent).toBe(SEND_FAILED);
     expect((box as HTMLTextAreaElement).value).toBe("Ship it");
     expect(mocks.toastFromHostError).not.toHaveBeenCalled();

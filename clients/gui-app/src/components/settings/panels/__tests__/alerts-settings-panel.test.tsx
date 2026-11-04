@@ -156,6 +156,9 @@ function Providers(props: {
 function fakePushPermission(state: PushPermissionState): IPushPermissionHost {
   return {
     get: () => Promise.resolve(state),
+    getRegistrationState: () =>
+      state === "granted" ? "registered" : "pending",
+    retryRegistration: () => Promise.resolve(),
     request: () => Promise.resolve(state),
     openSettings: () => Promise.resolve(),
     getMutedSeverities: () => Promise.resolve([]),
