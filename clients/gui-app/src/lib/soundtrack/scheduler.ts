@@ -41,24 +41,14 @@ interface LayerStart {
  * Which sublayer a cursor is for, and what it has done in this run, which a
  * state move or a resume keeps.
  */
-interface CursorOrigin extends RunProgress {
+interface CursorOrigin {
   readonly layer: Layer;
   readonly layerIndex: number;
   readonly sublayerIndex: number;
-}
-
-/** What a sublayer has done in this run. */
-interface RunProgress {
   /** Sequences it has started, which `playsPerRun` caps. */
   readonly sequencesStarted: number;
   /** Its place in the layer's turns of groups. */
   readonly turn: number;
-}
-
-/** A play counted when it was reported, and the run as it was before it. */
-interface CountedPlay {
-  readonly startAt: number;
-  readonly before: RunProgress;
 }
 
 interface SublayerCursor {
@@ -75,16 +65,14 @@ interface SublayerCursor {
   inSequence: boolean;
   sequencesStarted: number;
   turn: number;
-  /**
-   * The plays it has reported that may not have started yet, oldest first: a
-   * restart from before one of them takes back what they counted.
-   */
-  counted: readonly CountedPlay[];
   /** Decided and handed out, its duration not back yet. */
   pending: ScheduledPlay | null;
   /** The variant it last started, so not a draw that was skipped or sent back. */
   lastVariant: number | null;
-  /** When its last started sample ends; a state entered meanwhile waits for it. */
+  /**
+   * When its last reported sample ends, a skipped one ending where it starts;
+   * a state entered meanwhile waits for it.
+   */
   soundingUntil: number;
 }
 
@@ -230,6 +218,8 @@ export class TrackScheduler {
    * skipped, so it never separates two of these.
    */
   private confirmedByLayer: LayerStart[][] = [];
+  /** Each play reported, and whether it opened a sequence, for `takeBack`. */
+  private readonly counted = new WeakMap<ScheduledPlay, boolean>();
 
   constructor(options: TrackSchedulerOptions) {
     const { track, state } = options;
@@ -245,11 +235,11 @@ export class TrackScheduler {
   /**
    * Starts every sublayer over from `trackTime` with fresh start pauses, as a
    * resume does, and no later move starts one earlier. The state and the
-   * enabled flags stand, and so does what the run has played: a layer that has
-   * had its `playsPerRun` stays quiet, and a grouped layer goes on with the
-   * group that was due. A play reported to start at or after `trackTime` was cut
-   * before it sounded, so it counts for neither. A play still awaiting its
-   * report is forgotten, and reporting it later does nothing.
+   * enabled flags stand, and so does what the run has played, whatever
+   * `trackTime` is: a layer that has had its `playsPerRun` stays quiet, and a
+   * grouped layer goes on with the group that was due. Only `takeBack` gives a
+   * play back. A play still awaiting its report is forgotten, and reporting it
+   * later does nothing.
    */
   restartAt(trackTime: number): void {
     this.outgoing = null;
@@ -263,23 +253,43 @@ export class TrackScheduler {
             candidate.layerIndex === layerIndex &&
             candidate.sublayerIndex === sublayerIndex,
         );
-        const progress =
-          cursor === undefined
-            ? { sequencesStarted: 0, turn: 0 }
-            : (cursor.counted.find((play) => play.startAt >= trackTime)
-                ?.before ?? cursor);
         return this.createCursor(
           {
             layer,
             layerIndex,
             sublayerIndex,
-            sequencesStarted: progress.sequencesStarted,
-            turn: progress.turn,
+            sequencesStarted: cursor?.sequencesStarted ?? 0,
+            turn: cursor?.turn ?? 0,
           },
           trackTime,
         );
       }),
     );
+  }
+
+  /**
+   * A stop cut these plays before they sounded, so each gives back what it
+   * counted: its turn of the groups, and the sequence it opened, if it did. The
+   * plays the stop let sound stand for the rest of the run. Pass every play the
+   * stop cut and no other; one this scheduler did not count, or has taken back
+   * already, changes nothing. The sublayers go on from the next `restartAt`.
+   */
+  takeBack(plays: readonly ScheduledPlay[]): void {
+    for (const play of plays) {
+      const opened = this.counted.get(play);
+      const cursor = this.cursors.find(
+        (candidate) =>
+          candidate.layerIndex === play.layerIndex &&
+          candidate.sublayerIndex === play.sublayerIndex,
+      );
+      if (opened === undefined || cursor === undefined) continue;
+      this.counted.delete(play);
+      // A sublayer's plays start in the order it reports them, so the ones a
+      // stop cut are its latest, and a step back for each lands on the first.
+      cursor.turn =
+        (cursor.turn + cursor.turns.length - 1) % cursor.turns.length;
+      if (opened) cursor.sequencesStarted -= 1;
+    }
   }
 
   /**
@@ -306,7 +316,6 @@ export class TrackScheduler {
       // The samples either side of the move are still back to back.
       lastVariant: cursor.lastVariant,
       soundingUntil: cursor.soundingUntil,
-      counted: cursor.counted,
     }));
   }
 
@@ -417,11 +426,7 @@ export class TrackScheduler {
     });
     cursor.lastVariant = play.variant;
     cursor.soundingUntil = startAt + durationSeconds;
-    // What started before now has been heard, and no restart takes it back.
-    cursor.counted = cursor.counted.filter(
-      (counted) => counted.startAt >= notBeforeTrackTime,
-    );
-    this.placeNext(cursor, startAt, durationSeconds);
+    this.placeNext(cursor, play, startAt, durationSeconds);
     return startAt;
   }
 
@@ -431,7 +436,10 @@ export class TrackScheduler {
    */
   skip(play: ScheduledPlay): void {
     const cursor = this.claimPending(play);
-    if (cursor !== null) this.placeNext(cursor, play.startAt, 0);
+    if (cursor === null) return;
+    // A move still waits for the hole, so no later report starts before it.
+    cursor.soundingUntil = play.startAt;
+    this.placeNext(cursor, play, play.startAt, 0);
   }
 
   private createCursor(
@@ -463,7 +471,6 @@ export class TrackScheduler {
       inSequence: false,
       sequencesStarted: origin.sequencesStarted,
       turn: origin.turn,
-      counted: [],
       pending: null,
       lastVariant: null,
       soundingUntil: 0,
@@ -526,6 +533,7 @@ export class TrackScheduler {
 
   private placeNext(
     cursor: SublayerCursor,
+    play: ScheduledPlay,
     startAt: number,
     durationSeconds: number,
   ): void {
@@ -537,17 +545,8 @@ export class TrackScheduler {
       cursor,
     ];
     const { properties } = cursor;
-    cursor.counted = [
-      ...cursor.counted,
-      {
-        startAt,
-        before: {
-          sequencesStarted: cursor.sequencesStarted,
-          turn: cursor.turn,
-        },
-      },
-    ];
     cursor.turn = (cursor.turn + 1) % cursor.turns.length;
+    this.counted.set(play, !cursor.inSequence);
     if (!cursor.inSequence) {
       cursor.inSequence = true;
       cursor.sequencesStarted += 1;

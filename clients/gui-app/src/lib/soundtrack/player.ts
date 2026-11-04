@@ -67,6 +67,14 @@ interface PlayingPhase {
   outroAsked: boolean;
   /** Clock time the outro ends, and the run with it; null until placed. */
   endsAt: number | null;
+  /** The plays the scheduler counted since this start, played or skipped. */
+  readonly placed: PlacedPlay[];
+}
+
+/** A play the scheduler counted, at the track time it starts. */
+interface PlacedPlay {
+  readonly play: ScheduledPlay;
+  readonly startAt: number;
 }
 
 type PlayerPhase =
@@ -184,15 +192,23 @@ export class TrackPlayer {
 
   /**
    * Cuts every sample over `fadeSeconds` and remembers the position. Every cut
-   * takes at least the 10 ms fade, whatever the caller asks, so none clicks.
+   * takes at least the 10 ms fade, whatever the caller asks, so none clicks. A
+   * sample cut before it started has not been played, and the run still owes
+   * it; one that started has, wherever the next start resumes.
    */
   stop(fadeSeconds: number): void {
     if (this.phase.kind === "stopped") return;
     const fade = Math.max(fadeSeconds, SAMPLE_FADE_SECONDS);
-    this.position = this.elapsed();
-    // A phase due since the last tick belongs to the run a resume goes on with.
+    const position = this.elapsed();
+    this.position = position;
     if (this.phase.kind === "playing") {
-      this.takePhasesDue(this.phase, this.position);
+      this.phase.scheduler.takeBack(
+        this.phase.placed
+          .filter((placed) => placed.startAt >= position)
+          .map((placed) => placed.play),
+      );
+      // A phase due since the last tick belongs to the run a resume goes on with.
+      this.takePhasesDue(this.phase, position);
     }
     this.phase = { kind: "stopped" };
     this.fadeOutEndsAt = null;
@@ -369,6 +385,7 @@ export class TrackPlayer {
       fromElapsed,
       outroAsked: false,
       endsAt: null,
+      placed: [],
     };
     this.phase = phase;
     this.layerGains.forEach((_, layerIndex) => {
@@ -473,6 +490,7 @@ export class TrackPlayer {
         this.output.currentTime() - phase.trackStart,
       );
       if (startAt !== null) {
+        phase.placed.push({ play, startAt });
         this.startVoice(
           this.layerGains[play.layerIndex],
           buffer,
@@ -483,6 +501,7 @@ export class TrackPlayer {
       if (this.phase !== phase) return;
       this.reportMissing(layer, play.variant, error);
       phase.scheduler.skip(play);
+      phase.placed.push({ play, startAt: play.startAt });
     }
     this.lookAhead(phase, this.output.currentTime());
   }
