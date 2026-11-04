@@ -3,6 +3,8 @@ import { afterEach, describe, expect, it } from "vitest";
 import type { ReactNode } from "react";
 import type { SlackUserMessage } from "@traycer/protocol/persistence/epic/messages";
 import { ChatExpansionTestProviders } from "@/components/chat/__tests__/chat-expansion-test-providers";
+import { queryMountedChatFindUnit } from "@/components/chat/chat-find-highlighter";
+import { chatFindMessageContentUnitId } from "@/components/chat/chat-find-projection";
 import { UserMessageBody } from "@/components/chat/chat-message-user-body";
 import { TabHostProvider } from "@/components/epic-canvas/tab-host-provider";
 import { TooltipProvider } from "@/components/ui/tooltip";
@@ -90,6 +92,20 @@ describe("a Slack message row", () => {
     expect(screen.getByText("why is the nightly red?")).not.toBeNull();
     expect(screen.getByLabelText(/shot\.png/)).not.toBeNull();
     expect(screen.queryByText(/Not carried/)).toBeNull();
+  });
+
+  it("is a unit transcript find can highlight", () => {
+    const message = slackRow(
+      slackMessage({ displayName: "Priya", omitted: [] }),
+      [],
+    );
+    render(<UserMessageBody actions={null} message={message} />);
+
+    const unit = queryMountedChatFindUnit(
+      document.body,
+      chatFindMessageContentUnitId(message.id),
+    );
+    expect(unit?.textContent).toBe("why is the nightly red?");
   });
 
   it("names an author Slack gave no name for as a Slack user", () => {
