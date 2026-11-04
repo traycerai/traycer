@@ -291,6 +291,7 @@ function renderTimeline(
         getMessageActions={() => null}
         nextStepActions={null}
         listRef={listRef}
+        isTranscriptWindowInvalidated={false}
         className="h-full"
         initialScrollAtEnd={initialScrollAtEnd}
         contentInsetEndAdjustment={contentInsetEndAdjustment}
@@ -491,6 +492,9 @@ describe("ChatTimeline follow-latch real-LegendList integration", () => {
       contentInsetEndAdjustment: composerInset + 120,
       initialScrollAtEnd: undefined,
     });
+    // The appends reshaped the rows, so the whole burst sits in the layout
+    // hold: its one correction is issued in the frame after the commit's.
+    await advanceLegendListFrames(2);
 
     expect(ownedUnderLanding).toHaveBeenCalled();
     expect(onFollowIntentChange).not.toHaveBeenCalledWith(false);
