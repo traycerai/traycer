@@ -153,6 +153,7 @@ function startCard(): ReactNode {
       imageResults={[]}
       artifact={null}
       mcpApp={null}
+      feedbackDraft={null}
       variant="card"
       headerFindUnitId={null}
     />
@@ -194,6 +195,7 @@ function restartCard(): ReactNode {
       imageResults={[]}
       artifact={null}
       mcpApp={null}
+      feedbackDraft={null}
       variant="card"
       headerFindUnitId={null}
     />

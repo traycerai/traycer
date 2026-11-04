@@ -37,6 +37,7 @@ function erroredBrowserToolSegment(
     imageResults: [],
     artifact: null,
     mcpApp: null,
+    feedbackDraft: null,
     startedAt: 0,
     durationMs: null,
     parentId: null,

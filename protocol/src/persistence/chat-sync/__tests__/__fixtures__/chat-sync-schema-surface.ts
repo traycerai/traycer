@@ -15,7 +15,7 @@ export const chatSyncSchemaSurfaceBaseline = {
             },
             "minor": {
               "type": "number",
-              "const": 12
+              "const": 13
             }
           },
           "required": [
@@ -457,7 +457,7 @@ export const chatSyncSchemaSurfaceBaseline = {
             },
             "minor": {
               "type": "number",
-              "const": 12
+              "const": 13
             }
           },
           "required": [
@@ -1215,7 +1215,7 @@ export const chatSyncSchemaSurfaceBaseline = {
             },
             "minor": {
               "type": "number",
-              "const": 12
+              "const": 13
             }
           },
           "required": [
@@ -1290,7 +1290,7 @@ export const chatSyncSchemaSurfaceBaseline = {
             },
             "minor": {
               "type": "number",
-              "const": 12
+              "const": 13
             }
           },
           "required": [
@@ -2138,6 +2138,105 @@ export const chatSyncSchemaSurfaceBaseline = {
                                   "reply"
                                 ],
                                 "additionalProperties": false
+                              },
+                              {
+                                "type": "object",
+                                "properties": {
+                                  "kind": {
+                                    "type": "string",
+                                    "const": "slack"
+                                  },
+                                  "content": {
+                                    "$ref": "#/$defs/__schema0"
+                                  },
+                                  "author": {
+                                    "type": "object",
+                                    "properties": {
+                                      "displayName": {
+                                        "anyOf": [
+                                          {
+                                            "type": "string"
+                                          },
+                                          {
+                                            "type": "null"
+                                          }
+                                        ]
+                                      },
+                                      "slackUserId": {
+                                        "type": "string",
+                                        "minLength": 1
+                                      },
+                                      "traycerUserId": {
+                                        "anyOf": [
+                                          {
+                                            "type": "string",
+                                            "minLength": 1
+                                          },
+                                          {
+                                            "type": "null"
+                                          }
+                                        ]
+                                      }
+                                    },
+                                    "required": [
+                                      "displayName",
+                                      "slackUserId",
+                                      "traycerUserId"
+                                    ],
+                                    "additionalProperties": false
+                                  },
+                                  "ts": {
+                                    "type": "string",
+                                    "minLength": 1
+                                  },
+                                  "trigger": {
+                                    "type": "string",
+                                    "enum": [
+                                      "mention",
+                                      "thread",
+                                      "dm"
+                                    ]
+                                  },
+                                  "followUp": {
+                                    "type": "boolean"
+                                  },
+                                  "omitted": {
+                                    "type": "array",
+                                    "items": {
+                                      "type": "object",
+                                      "properties": {
+                                        "fileName": {
+                                          "type": "string"
+                                        },
+                                        "reason": {
+                                          "type": "string",
+                                          "enum": [
+                                            "unsupported_type",
+                                            "too_large",
+                                            "missing_scope",
+                                            "download_failed",
+                                            "not_retrieved"
+                                          ]
+                                        }
+                                      },
+                                      "required": [
+                                        "fileName",
+                                        "reason"
+                                      ],
+                                      "additionalProperties": false
+                                    }
+                                  }
+                                },
+                                "required": [
+                                  "kind",
+                                  "content",
+                                  "author",
+                                  "ts",
+                                  "trigger",
+                                  "followUp",
+                                  "omitted"
+                                ],
+                                "additionalProperties": false
                               }
                             ]
                           },
@@ -2209,6 +2308,10 @@ export const chatSyncSchemaSurfaceBaseline = {
                               "skipped"
                             ],
                             "additionalProperties": false
+                          },
+                          "spoken": {
+                            "type": "boolean",
+                            "const": true
                           }
                         },
                         "required": [
@@ -3736,6 +3839,96 @@ export const chatSyncSchemaSurfaceBaseline = {
                                                   "type": "null"
                                                 }
                                               ]
+                                            },
+                                            "feedbackDraft": {
+                                              "default": null,
+                                              "anyOf": [
+                                                {
+                                                  "type": "object",
+                                                  "properties": {
+                                                    "category": {
+                                                      "type": "string",
+                                                      "minLength": 1
+                                                    },
+                                                    "toolName": {
+                                                      "anyOf": [
+                                                        {
+                                                          "type": "string",
+                                                          "minLength": 1
+                                                        },
+                                                        {
+                                                          "type": "null"
+                                                        }
+                                                      ]
+                                                    },
+                                                    "goal": {
+                                                      "type": "string"
+                                                    },
+                                                    "observed": {
+                                                      "type": "string"
+                                                    },
+                                                    "suggestion": {
+                                                      "anyOf": [
+                                                        {
+                                                          "type": "string"
+                                                        },
+                                                        {
+                                                          "type": "null"
+                                                        }
+                                                      ]
+                                                    },
+                                                    "suggestDiagnostics": {
+                                                      "type": "boolean"
+                                                    },
+                                                    "state": {
+                                                      "default": "unknown",
+                                                      "type": "string",
+                                                      "enum": [
+                                                        "pending",
+                                                        "sent",
+                                                        "skipped",
+                                                        "failed",
+                                                        "unknown"
+                                                      ]
+                                                    },
+                                                    "decidedAt": {
+                                                      "anyOf": [
+                                                        {
+                                                          "type": "number"
+                                                        },
+                                                        {
+                                                          "type": "null"
+                                                        }
+                                                      ]
+                                                    },
+                                                    "failureReason": {
+                                                      "anyOf": [
+                                                        {
+                                                          "type": "string"
+                                                        },
+                                                        {
+                                                          "type": "null"
+                                                        }
+                                                      ]
+                                                    }
+                                                  },
+                                                  "required": [
+                                                    "category",
+                                                    "toolName",
+                                                    "goal",
+                                                    "observed",
+                                                    "suggestion",
+                                                    "suggestDiagnostics",
+                                                    "state",
+                                                    "decidedAt",
+                                                    "failureReason"
+                                                  ],
+                                                  "additionalProperties": false
+                                                },
+                                                {
+                                                  "type": "null"
+                                                }
+                                              ]
                                             }
                                           },
                                           "required": [
@@ -3761,7 +3954,8 @@ export const chatSyncSchemaSurfaceBaseline = {
                                             "stopped",
                                             "imageResults",
                                             "artifact",
-                                            "mcpApp"
+                                            "mcpApp",
+                                            "feedbackDraft"
                                           ],
                                           "additionalProperties": false
                                         },

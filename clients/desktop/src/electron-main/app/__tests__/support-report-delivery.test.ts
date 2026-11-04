@@ -613,6 +613,9 @@ async function writeOfflineQueueFixture(
 
 let defaultFakeClient: FakeSentryClient;
 
+/** A log entry header as `host.log` and electron-log write it. */
+const LOG_HEADER = "[2026-11-03 10:00:00.000] [INFO]";
+
 beforeEach(async () => {
   hostEnsureFailure = null;
   hostEnsureFailureReader = null;
@@ -620,8 +623,12 @@ beforeEach(async () => {
   loggerMock.desktopLogPath = join(tempDir, "traycer-desktop.log");
   hostLogPath = join(tempDir, "host.log");
   electronMock.userDataPath = join(tempDir, "userdata");
-  await writeFile(loggerMock.desktopLogPath, "desktop log line\n", "utf8");
-  await writeFile(hostLogPath, "host log line\n", "utf8");
+  await writeFile(
+    loggerMock.desktopLogPath,
+    `${LOG_HEADER} desktop log line\n`,
+    "utf8",
+  );
+  await writeFile(hostLogPath, `${LOG_HEADER} host log line\n`, "utf8");
   sentryMock.isInitialized.mockReturnValue(true);
   // Default happy path: a real observed 2xx on OUR event, not the bare
   // `flush` boolean. `resolveDeliveryOutcome` now requires an explicit 2xx
@@ -2126,6 +2133,30 @@ describe("DesktopSupportService - evidence freeze semantics", () => {
     expect(hostAttachment?.data).not.toContain("line written after freeze");
   });
 
+  it("leaves DEBUG entries, and their continuation lines, out of the shipped tail", async () => {
+    await writeFile(
+      hostLogPath,
+      [
+        `${LOG_HEADER} kept before`,
+        "[2026-11-03 10:00:01.000] [DEBUG] account acct_123 resolved",
+        "  continuation of the debug entry",
+        `${LOG_HEADER} kept after`,
+      ].join("\n"),
+      "utf8",
+    );
+    const service = buildService(null);
+    await service.freezeEvidence(KEY, null);
+
+    await service.submitReport(FORM, KEY);
+
+    const hostAttachment = lastHint().attachments.find(
+      (a) => a.filename === "local-host.log",
+    );
+    expect(hostAttachment?.data).toBe(
+      `${LOG_HEADER} kept before\n${LOG_HEADER} kept after`,
+    );
+  });
+
   it("drops the frozen evidence on discard, so a later submit fails honestly", async () => {
     const service = buildService(null);
     await service.freezeEvidence(KEY, null);
@@ -2160,7 +2191,7 @@ describe("DesktopSupportService - evidence freeze semantics", () => {
 
     const tail = await service.readFrozenLogTail(KEY, "host");
 
-    expect(tail.lines).toEqual(["host log line"]);
+    expect(tail.lines).toEqual([`${LOG_HEADER} host log line`]);
   });
 
   it("returns an empty tail from readFrozenLogTail once discarded", async () => {
@@ -2184,7 +2215,7 @@ describe("DesktopSupportService - evidence freeze semantics", () => {
     // is otherwise accepted.
     const fatLog = Array.from(
       { length: 100 },
-      (_, i) => `line-${i}-${"x".repeat(20_000)}`,
+      (_, i) => `${LOG_HEADER} line-${i}-${"x".repeat(20_000)}`,
     ).join("\n");
     await writeFile(hostLogPath, fatLog, "utf8");
 
@@ -2509,12 +2540,12 @@ describe("DesktopSupportService.saveDiagnosticBundle", () => {
     // Seed real log content with a path/token so freeze captures scrubbed tails.
     await writeFile(
       loggerMock.desktopLogPath,
-      "desktop saw Bearer desktopsecret at /Users/anurag/desktop-leak.ts\n",
+      `${LOG_HEADER} desktop saw Bearer desktopsecret at /Users/anurag/desktop-leak.ts\n`,
       "utf8",
     );
     await writeFile(
       hostLogPath,
-      "host saw password: hostsecret near /Users/anurag/host-leak.ts\n",
+      `${LOG_HEADER} host saw password: hostsecret near /Users/anurag/host-leak.ts\n`,
       "utf8",
     );
 

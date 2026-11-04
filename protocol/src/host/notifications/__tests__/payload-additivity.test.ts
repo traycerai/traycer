@@ -31,6 +31,7 @@ import {
   hostNotificationSecretRemovedPayloadSchema,
   hostNotificationSandboxNoticePayloadSchema,
   hostNotificationHooksRemovedPayloadSchema,
+  hostNotificationFeedbackDraftPayloadSchema,
   hostNotificationTeamPolicyAuthorityExpiredPayloadSchema,
   hostNotificationTeamPolicyUnappliedPayloadSchema,
   hostNotificationWorkspaceOperationFailedPayloadSchema,
@@ -84,6 +85,7 @@ const LIVE_PAYLOAD_SCHEMAS: Record<
   secret_removed: hostNotificationSecretRemovedPayloadSchema,
   sandbox_notice: hostNotificationSandboxNoticePayloadSchema,
   notification_hooks_removed: hostNotificationHooksRemovedPayloadSchema,
+  feedback_draft: hostNotificationFeedbackDraftPayloadSchema,
 };
 
 const KINDS = [
@@ -116,6 +118,7 @@ const KINDS = [
   "secret_removed",
   "sandbox_notice",
   "notification_hooks_removed",
+  "feedback_draft",
 ] as const satisfies readonly HostNotificationKnownPayloadKind[];
 
 describe("host notification payload additivity", () => {

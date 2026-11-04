@@ -123,6 +123,8 @@ export const runnerMutationKeys = {
   logLevelsSet: () => ["runner.logLevels.set"] as const,
   agentRolesEnabledSet: () =>
     ["runner.featureSettings.agentRoles.set"] as const,
+  agentFeedbackEnabledSet: () =>
+    ["runner.featureSettings.agentFeedback.set"] as const,
   setAllowPrereleaseUpdates: () =>
     ["runner.appUpdates.setAllowPrerelease"] as const,
   globalShortcutsSet: (id: GlobalShortcutId) =>

@@ -51,6 +51,7 @@ function inputProps(toolName: string, input: unknown) {
     imageResults: [],
     artifact: null,
     mcpApp: null,
+    feedbackDraft: null,
   };
 }
 
