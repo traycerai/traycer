@@ -20,12 +20,12 @@ const GIB = 1024 * 1024 * 1024;
 /** This computer's Electron shell, as the diagnostics bridge samples it. */
 const DESKTOP_APP: DesktopAppResourceUsage = {
   sampledAt: 1,
-  cpuPercent: 3,
+  cpuSharePercent: 3,
   rssBytes: GIB / 2,
   processCount: 6,
-  main: { cpuPercent: 1, rssBytes: GIB / 8, processCount: 1 },
-  renderer: { cpuPercent: 2, rssBytes: GIB / 4, processCount: 2 },
-  other: { cpuPercent: 0, rssBytes: GIB / 8, processCount: 3 },
+  main: { cpuSharePercent: 1, rssBytes: GIB / 8, processCount: 1 },
+  renderer: { cpuSharePercent: 2, rssBytes: GIB / 4, processCount: 2 },
+  other: { cpuSharePercent: 0, rssBytes: GIB / 8, processCount: 3 },
 };
 
 function appSnapshot(overrides: Partial<AppResourceUsage>): AppResourceUsage {
@@ -140,26 +140,23 @@ describe("statusBarResourceReading", () => {
       DESKTOP_APP,
     );
 
-    expect(reading.cpuPercent).toBeCloseTo(15 / 16, 5);
+    expect(reading.cpuPercent).toBeCloseTo(3.75, 5);
     expect(reading.memoryBytes).toBe(GIB + GIB / 2);
     expect(reading.processCount).toBe(20);
     expect(reading.ramSharePercent).toBeCloseTo(9.375, 5);
   });
 
-  it("divides the host and the shell together by the host's processor count", () => {
-    // Both numerators are per-core, so they add first and divide once: the
-    // shell's contribution must reach the cores figure too, or the label would
-    // describe the host alone beside a share that includes the shell.
+  it("adds the host and desktop shares and expresses both in the cores detail", () => {
     const reading = statusBarResourceReading(
       projection({
         hostTree: hostTreeSnapshot({ cpuPercent: 100 }),
         app: appSnapshot({}),
       }),
-      { ...DESKTOP_APP, cpuPercent: 40 },
+      { ...DESKTOP_APP, cpuSharePercent: 6.25 },
     );
 
-    expect(reading.cpuPercent).toBeCloseTo(140 / 16, 5);
-    expect(reading.cpuCoresLabel).toBe("1.4 of 16 cores");
+    expect(reading.cpuPercent).toBeCloseTo(12.5, 5);
+    expect(reading.cpuCoresLabel).toBe("2.0 of 16 cores");
   });
 
   it("reads one busy core on a 16-processor host as 6.25% and names the core", () => {
@@ -216,7 +213,7 @@ describe("statusBarResourceReading", () => {
       DESKTOP_APP,
     );
 
-    expect(reading.cpuPercent).toBeCloseTo(15 / 16, 5);
+    expect(reading.cpuPercent).toBeCloseTo(3.75, 5);
     expect(reading.processCount).toBe(20);
     expect(reading.memoryBytes).toBeNull();
     expect(reading.ramSharePercent).toBeNull();

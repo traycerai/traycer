@@ -1219,7 +1219,7 @@ function watchesNamedHost(scope: HostScope, hasExplicitPick: boolean): boolean {
   return hasExplicitPick && !scope.isViewingActive;
 }
 
-// One watched-machine denominator for every row, including the local desktop.
+// Host CPU denominator; desktop rows retain their explicitly named native share.
 const ResourceCpuAppContext = createContext<AppResourceUsage | null>(null);
 
 /**
@@ -1870,7 +1870,7 @@ function DesktopAppResourceSection(props: {
   readonly searchQuery: string;
 }) {
   const showOther =
-    props.app.other.cpuPercent > 0 ||
+    props.app.other.cpuSharePercent > 0 ||
     props.app.other.rssBytes > 0 ||
     props.app.other.processCount > 0;
   const groups = sortDesktopProcessGroups(
@@ -1904,7 +1904,7 @@ function DesktopAppResourceSection(props: {
         <div className="flex items-center">
           <MetricPair
             cpuTooltip
-            cpuPercent={props.app.cpuPercent}
+            cpu={{ sharePercent: props.app.cpuSharePercent }}
             memoryBytes={props.app.rssBytes}
             className="text-ui-sm text-foreground"
           />
@@ -1933,7 +1933,7 @@ function DesktopAppProcessGroupRow(props: {
       </div>
       <MetricPair
         cpuTooltip
-        cpuPercent={props.usage.cpuPercent}
+        cpu={{ sharePercent: props.usage.cpuSharePercent }}
         memoryBytes={props.usage.rssBytes}
         className="text-ui-xs text-muted-foreground/80"
       />
@@ -1962,7 +1962,7 @@ function HostAppResourceSection(props: {
         <div className="flex items-center">
           <MetricPair
             cpuTooltip
-            cpuPercent={props.app.cpuPercent}
+            cpu={{ perCorePercent: props.app.cpuPercent }}
             memoryBytes={resourceMemoryBytes(props.app, props.memoryMetric)}
             className="text-ui-sm text-foreground"
           />
@@ -2025,7 +2025,7 @@ function HostCpuShareMetric(props: {
   readonly app: AppResourceUsage | null;
   readonly summary: HeadlineResourceSummary;
 }) {
-  const percent = hostCpuSharePercent(props.summary.cpuPercent, props.app);
+  const percent = props.summary.cpuSharePercent;
   return (
     <MetricBlock
       label="CPU"
@@ -2221,7 +2221,7 @@ function TaskResourceSection(props: {
         <div className="flex items-center">
           <MetricPair
             cpuTooltip
-            cpuPercent={props.task.cpuPercent}
+            cpu={{ perCorePercent: props.task.cpuPercent }}
             memoryBytes={props.task.memoryBytes}
             className="text-ui-sm text-foreground/90"
           />
@@ -2334,7 +2334,7 @@ function OtherResourceSection(props: {
         <div className="flex items-center">
           <MetricPair
             cpuTooltip
-            cpuPercent={processRows.treeCpuPercent}
+            cpu={{ perCorePercent: processRows.treeCpuPercent }}
             memoryBytes={processRows.treeMemoryBytes}
             className="text-ui-sm text-foreground/90"
           />
@@ -2378,7 +2378,7 @@ function RestrictedResourceSection(props: {
         <div className="flex items-center">
           <MetricPair
             cpuTooltip
-            cpuPercent={props.usage.cpuPercent}
+            cpu={{ perCorePercent: props.usage.cpuPercent }}
             memoryBytes={resourceMemoryBytes(props.usage, props.memoryMetric)}
             className="text-ui-sm text-foreground/90"
           />
@@ -3122,7 +3122,7 @@ function OwnerRowMetrics(props: {
     return (
       <MetricPair
         cpuTooltip
-        cpuPercent={props.row.treeCpuPercent}
+        cpu={{ perCorePercent: props.row.treeCpuPercent }}
         memoryBytes={props.row.treeMemoryBytes}
         className="text-ui-sm text-foreground/90"
       />
@@ -3447,7 +3447,7 @@ function ProcessMetricPair(props: {
   const metrics = (
     <MetricPair
       cpuTooltip={!props.hasDescendants}
-      cpuPercent={props.cpuPercent}
+      cpu={{ perCorePercent: props.cpuPercent }}
       memoryBytes={props.memoryBytes}
       className={props.className}
     />
@@ -3486,20 +3486,31 @@ function ProcessMetricPair(props: {
 
 function MetricPair(props: {
   readonly cpuTooltip: boolean;
-  readonly cpuPercent: number;
+  readonly cpu:
+    | { readonly perCorePercent: number }
+    | { readonly sharePercent: number };
   readonly memoryBytes: number | null;
   readonly className: string;
 }) {
   const app = use(ResourceCpuAppContext);
-  const share = hostCpuSharePercent(props.cpuPercent, app);
-  const cores = hostCpuCoresLabel(props.cpuPercent, app);
+  const share =
+    "perCorePercent" in props.cpu
+      ? hostCpuSharePercent(props.cpu.perCorePercent, app)
+      : props.cpu.sharePercent;
+  const perCore =
+    "perCorePercent" in props.cpu
+      ? props.cpu.perCorePercent
+      : props.cpu.sharePercent * (app?.hostCpuCount ?? 0);
+  const cores = hostCpuCoresLabel(perCore, app);
   return (
     <div className={cn(METRIC_COLS, props.className)}>
       <TooltipWrapper
         label={
           props.cpuTooltip
             ? (cores ??
-              "This host doesn't report how many processors it has, so there is no total to take a CPU share of.")
+              ("sharePercent" in props.cpu
+                ? "Core count unavailable."
+                : "This host doesn't report how many processors it has, so there is no total to take a CPU share of."))
             : null
         }
         side="left"
@@ -4184,7 +4195,7 @@ function desktopAppMatchesSearch(
     return true;
   }
   const showOther =
-    app.other.cpuPercent > 0 ||
+    app.other.cpuSharePercent > 0 ||
     app.other.rssBytes > 0 ||
     app.other.processCount > 0;
   return (
@@ -4583,7 +4594,7 @@ function sortDesktopProcessGroups(
       sorted.sort((a, b) => b.usage.rssBytes - a.usage.rssBytes);
       break;
     case "cpu":
-      sorted.sort((a, b) => b.usage.cpuPercent - a.usage.cpuPercent);
+      sorted.sort((a, b) => b.usage.cpuSharePercent - a.usage.cpuSharePercent);
       break;
     case "name":
       sorted.sort((a, b) => a.label.localeCompare(b.label));

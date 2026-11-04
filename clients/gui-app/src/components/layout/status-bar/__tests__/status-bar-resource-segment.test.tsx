@@ -65,12 +65,12 @@ const GIB = 1024 * 1024 * 1024;
 
 const DESKTOP_APP: DesktopAppResourceUsage = {
   sampledAt: 1,
-  cpuPercent: 3,
+  cpuSharePercent: 3,
   rssBytes: GIB / 2,
   processCount: 6,
-  main: { cpuPercent: 1, rssBytes: GIB / 8, processCount: 1 },
-  renderer: { cpuPercent: 2, rssBytes: GIB / 4, processCount: 2 },
-  other: { cpuPercent: 0, rssBytes: GIB / 8, processCount: 3 },
+  main: { cpuSharePercent: 1, rssBytes: GIB / 8, processCount: 1 },
+  renderer: { cpuSharePercent: 2, rssBytes: GIB / 4, processCount: 2 },
+  other: { cpuSharePercent: 0, rssBytes: GIB / 8, processCount: 3 },
 };
 
 function liveProjection(hostId: string | null): GlobalResourceProjection {
@@ -160,7 +160,7 @@ describe("<StatusBarResourceSegment />", () => {
       renderSegment({ hasExplicitPick: true, watchesThisMachine: true });
 
       expect(metricText("memory")).toBe("mem1.5 GB");
-      expect(metricText("cpu")).toBe("cpu0.94%");
+      expect(metricText("cpu")).toBe("cpu3.8%");
       expect(metricText("processes")).toBe("procs20");
       expect(metricText("ramShare")).toBe("ram9.4%");
     });
@@ -427,6 +427,32 @@ describe("<StatusBarResourceSegment />", () => {
         .getByTestId("status-bar-resource-segment")
         .getAttribute("aria-label"),
     ).toContain("cpu 6.3% (1.0 of 16 cores)");
+  });
+
+  it("adds Electron's native CPU share to the host share and names both in cores", () => {
+    registry.projection = {
+      ...liveProjection("host-b"),
+      hostTree: {
+        sampledAt: 1,
+        processCount: 14,
+        cpuPercent: 100,
+        rssBytes: GIB,
+        pssBytes: null,
+        privateBytes: null,
+      },
+    };
+    desktopSampler.usage = { ...DESKTOP_APP, cpuSharePercent: 6.25 };
+
+    renderSegment({ hasExplicitPick: true, watchesThisMachine: true });
+
+    const segment = screen.getByTestId("status-bar-resource-segment");
+    expect(
+      screen.getByTestId("status-bar-resource-metric-cpu").lastElementChild
+        ?.textContent,
+    ).toBe("13%");
+    expect(segment.getAttribute("aria-label")).toContain(
+      "cpu 13% (2.0 of 16 cores)",
+    );
   });
 
   it("names the cores behind the CPU share on hover", async () => {

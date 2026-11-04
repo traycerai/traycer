@@ -102,9 +102,14 @@ export function statusBarResourceReading(
   // thrown away for one missing field.
   const memoryBytes =
     base.rssBytes === null ? null : base.rssBytes + (desktopApp?.rssBytes ?? 0);
-  const perCore = base.cpuPercent + (desktopApp?.cpuPercent ?? 0);
+  // As in the headline, Desktop belongs only to a reading of this machine.
+  // Its native share is added directly; the count is used only for cores detail.
+  const desktopShare = desktopApp?.cpuSharePercent ?? 0;
+  const perCore =
+    base.cpuPercent + desktopShare * (projection.app?.hostCpuCount ?? 0);
+  const hostShare = hostCpuSharePercent(base.cpuPercent, projection.app);
   return {
-    cpuPercent: hostCpuSharePercent(perCore, projection.app),
+    cpuPercent: hostShare === null ? null : hostShare + desktopShare,
     cpuCoresLabel: hostCpuCoresLabel(perCore, projection.app),
     memoryBytes,
     processCount: base.processCount + (desktopApp?.processCount ?? 0),
