@@ -1,4 +1,5 @@
 import { useCallback, useMemo, useState } from "react";
+import type { BotUnsentMessage } from "@/stores/bots/bot-drafts-store";
 
 /**
  * Whether the person's last send in one channel or thread failed before the
@@ -8,7 +9,9 @@ import { useCallback, useMemo, useState } from "react";
  *
  * A box's send that failed after the person began a newer draft keeps what
  * it sent here (`unsent`), for the failure line to put back, and says it
- * until they put it back or send again.
+ * until they put it back or send again. A box whose draft is kept outside it
+ * offers it back from there instead (`BotKeptDraft.unsent`), which outlives
+ * the box and this.
  */
 export interface BotSendFailure {
   readonly failed: boolean;
@@ -16,16 +19,6 @@ export interface BotSendFailure {
   readonly unsent: BotUnsentMessage | null;
   readonly fail: (unsent: BotUnsentMessage | null) => void;
   readonly clear: () => void;
-}
-
-/** A message the box sent that never reached the conversation. */
-export interface BotUnsentMessage {
-  /** As the box showed it. */
-  readonly text: string;
-  /** As it was sent: each mention as its member's token. */
-  readonly wire: string;
-  /** The failed message it was to replace; `null` for a new message. */
-  readonly supersedes: string | null;
 }
 
 const NOT_FAILED = { failed: false, unsent: null } as const;

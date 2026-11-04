@@ -36,6 +36,16 @@ export interface BotThreadBoxDraft {
   readonly revision: number;
 }
 
+/** A message a box sent that never reached the conversation. */
+export interface BotUnsentMessage {
+  /** As the box showed it. */
+  readonly text: string;
+  /** As it was sent: each mention as its member's token. */
+  readonly wire: string;
+  /** The failed message it was to replace; `null` for a new message. */
+  readonly supersedes: string | null;
+}
+
 /** A lookup misses for a bot or key with nothing kept. */
 type ByBot<T> = Readonly<
   Partial<Record<string, Readonly<Partial<Record<string, T>>>>>
@@ -49,6 +59,11 @@ interface BotDraftsState {
    * conversation for the channel's own box.
    */
   readonly threadBoxes: ByBot<BotThreadBoxDraft>;
+  /**
+   * A box's send that failed while the box held a newer draft, or after the
+   * box was gone, offered back beside that draft; keyed as `threadBoxes`.
+   */
+  readonly unsentBoxes: ByBot<BotUnsentMessage>;
   /** Keeps a card's draft; `null` drops it. */
   readonly setAnswer: (
     botId: string,
@@ -66,6 +81,12 @@ interface BotDraftsState {
     botId: string,
     anchorMessageId: string,
     text: string,
+  ) => void;
+  /** Offers `unsent` back in that box; `null` takes the offer away. */
+  readonly offerUnsent: (
+    botId: string,
+    anchorMessageId: string,
+    unsent: BotUnsentMessage | null,
   ) => void;
   /** Drops every draft of the bot: its tab closed. */
   readonly forgetBot: (botId: string) => void;
@@ -111,6 +132,7 @@ function nextRevision(): number {
 export const useBotDraftsStore = create<BotDraftsState>()((set) => ({
   answers: {},
   threadBoxes: {},
+  unsentBoxes: {},
   setAnswer: (botId, key, draft) =>
     set((state) => ({ answers: withEntry(state.answers, botId, key, draft) })),
   seedThreadBox: (botId, anchorMessageId, text) =>
@@ -140,12 +162,28 @@ export const useBotDraftsStore = create<BotDraftsState>()((set) => ({
         ),
       };
     }),
+  offerUnsent: (botId, anchorMessageId, unsent) =>
+    set((state) =>
+      unsent === null &&
+      state.unsentBoxes[botId]?.[anchorMessageId] === undefined
+        ? state
+        : {
+            unsentBoxes: withEntry(
+              state.unsentBoxes,
+              botId,
+              anchorMessageId,
+              unsent,
+            ),
+          },
+    ),
   forgetBot: (botId) =>
     set((state) => {
       const answers = { ...state.answers };
       const threadBoxes = { ...state.threadBoxes };
+      const unsentBoxes = { ...state.unsentBoxes };
       delete answers[botId];
       delete threadBoxes[botId];
-      return { answers, threadBoxes };
+      delete unsentBoxes[botId];
+      return { answers, threadBoxes, unsentBoxes };
     }),
 }));

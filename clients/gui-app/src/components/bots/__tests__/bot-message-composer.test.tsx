@@ -220,7 +220,7 @@ afterEach(() => {
   onSent.mockReset();
   onEditEnd.mockReset();
   onEditResume.mockReset();
-  useBotDraftsStore.setState({ answers: {}, threadBoxes: {} });
+  useBotDraftsStore.setState({ answers: {}, threadBoxes: {}, unsentBoxes: {} });
 });
 
 describe("<BotMessageComposer /> reporting a send", () => {
@@ -473,6 +473,29 @@ describe("<BotMessageComposer /> clearing at the send", () => {
     );
 
     expect(box().value).toBe("Is CI green?");
+  });
+
+  it("takes back the failed text it offered once the newer draft is sent", async () => {
+    const user = userEvent.setup();
+    render(<Harness initialEdit={null} keepDraft />);
+    await user.type(box(), "Is CI green?{Enter}");
+    await user.type(box(), "And the nightly?");
+    await settleSend(lastSend(), refuse);
+    expect(
+      screen.getByTestId("bot-channel-composer-send-failed-restore"),
+    ).toBeTruthy();
+
+    await user.type(box(), "{Enter}");
+
+    expect(screen.queryByTestId("bot-channel-composer-send-failed")).toBeNull();
+    expect(
+      useBotDraftsStore.getState().unsentBoxes["bot-1"]?.[
+        "conversation-channel"
+      ],
+    ).toBeUndefined();
+    await settleSend(lastSend(), (callbacks) =>
+      callbacks.onSuccess?.(RESPONSE),
+    );
   });
 
   it("does not say a queued send was saved once the person has typed a newer draft", async () => {

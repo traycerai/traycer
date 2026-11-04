@@ -353,15 +353,20 @@ let sent: ReadonlyArray<BotConversationSendRequest>;
 let refuseSends: boolean;
 /** How the host takes each send: `queued` while the bot's host is away. */
 let delivery: BotConversationSendDelivery;
-/** A send the host holds until the case lands it. */
+/** A send the host holds until the case lands or refuses it. */
 interface HeldSend {
   readonly land: () => void;
-  /** The host's answer, once landed. */
+  readonly refuse: () => void;
+  /** The host's answer, once landed or refused. */
   readonly answered: Promise<BotConversationSendResponse>;
 }
-/** While set, each send waits here until the case lands it. */
+/** While set, each send waits here until the case lands or refuses it. */
 let heldSends: HeldSend[] | null;
 const onOpenThread = vi.fn<(open: BotOpenThread | null) => void>();
+
+function settledRefusal(): Error {
+  return new Error("QUESTION_ALREADY_SETTLED: the question is settled");
+}
 
 function hostClientRecordingSends(): HostRequester<HostRpcRegistry> {
   const queryClient = new QueryClient();
@@ -373,9 +378,7 @@ function hostClientRecordingSends(): HostRequester<HostRpcRegistry> {
       "bot.conversation.send": (params) => {
         sent = [...sent, params];
         if (refuseSends) {
-          return Promise.reject(
-            new Error("QUESTION_ALREADY_SETTLED: the question is settled"),
-          );
+          return Promise.reject(settledRefusal());
         }
         const response: BotConversationSendResponse = {
           messageId: "message-new",
@@ -384,9 +387,13 @@ function hostClientRecordingSends(): HostRequester<HostRpcRegistry> {
           threadId: null,
         };
         if (heldSends === null) return Promise.resolve(response);
-        const { promise, resolve } =
+        const { promise, resolve, reject } =
           Promise.withResolvers<BotConversationSendResponse>();
-        heldSends.push({ land: () => resolve(response), answered: promise });
+        heldSends.push({
+          land: () => resolve(response),
+          refuse: () => reject(settledRefusal()),
+          answered: promise,
+        });
         return promise;
       },
     },
@@ -411,6 +418,16 @@ async function land(): Promise<void> {
   await act(async () => {
     next.land();
     await next.answered;
+  });
+}
+
+/** The host refuses the oldest send held. */
+async function refuse(): Promise<void> {
+  const next = heldSends?.shift();
+  if (next === undefined) throw new Error("no send is held");
+  await act(async () => {
+    next.refuse();
+    await next.answered.catch(() => undefined);
   });
 }
 
@@ -1096,6 +1113,30 @@ describe("<BotChannelView tiles={null} /> what a member has not sent, across the
     view.reopen(QUESTION_THREAD);
 
     expect(questionThreadBox().value).toBe("");
+  });
+
+  it("offers the refused send's text back beside a newer draft, in the thread opened again after the send was refused with its thread closed", async () => {
+    const user = userEvent.setup();
+    heldSends = [];
+    const view = await overtakenBoth("Hold the migration");
+    await discuss(HOLD);
+    view.reopen(QUESTION_THREAD);
+    await user.click(screen.getByTestId("bot-thread-composer-send"));
+    await user.type(questionThreadBox(), "Hold off today");
+
+    view.reopen(null);
+    await refuse();
+    view.reopen(QUESTION_THREAD);
+
+    expect(questionThreadBox().value).toBe("Hold off today");
+    expect(
+      screen.getByTestId("bot-thread-composer-send-failed").textContent,
+    ).toContain("Hold the migration");
+    await user.click(
+      screen.getByTestId("bot-thread-composer-send-failed-restore"),
+    );
+    expect(questionThreadBox().value).toBe("Hold the migration");
+    expect(screen.queryByTestId("bot-thread-composer-send-failed")).toBeNull();
   });
 
   /**

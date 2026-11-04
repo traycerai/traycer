@@ -23,10 +23,8 @@ import {
   useKeyboardFocusLayoutWithin,
 } from "@/hooks/ui/use-keyboard-focus-layout";
 import { useBotConversationSendMutation } from "@/hooks/bots/use-bot-mutations";
-import type {
-  BotSendFailure,
-  BotUnsentMessage,
-} from "@/hooks/bots/use-bot-send-failure";
+import type { BotSendFailure } from "@/hooks/bots/use-bot-send-failure";
+import type { BotUnsentMessage } from "@/stores/bots/bot-drafts-store";
 import {
   BotQueuedNotice,
   BotSendFailedNotice,
@@ -83,9 +81,10 @@ const BOX_ONE_ROW = {
  * box as a draft of a new message, unsent: the answer a member had for a
  * question someone else settled first, taken to its discussion. A box whose
  * draft is kept outside it (`keptDraft`) reports what it holds, so the draft
- * outlives the box, and so holds nothing once the box sends it; a send that
- * fails after the box is gone keeps it there again, or offers it back where
- * a newer one is.
+ * outlives the box, and so holds nothing once the box sends it. A send that
+ * fails after the box is gone keeps it there again; one that fails over a
+ * newer draft, whether or not the box is still there, is offered back from
+ * there beside it, so the offer outlives the box too.
  *
  * A send that lands is reported, and says it was queued only while the box
  * is still empty.
@@ -241,6 +240,7 @@ export function BotMessageComposer(props: {
   const submit = (): void => {
     if (!canSend) return;
     failure.clear();
+    keptDraft?.offer(null);
     const unsent: BotUnsentMessage = {
       text: trimmed,
       wire: mentions.toWire(trimmed),
@@ -276,20 +276,23 @@ export function BotMessageComposer(props: {
         },
         () => {
           // Back where the draft is, while nothing newer is there: the box,
-          // or the draft kept outside a box that is gone. Else offered back.
+          // or the draft kept outside a box that is gone. Else offered back,
+          // beside the draft kept outside the box where there is one.
           if (mountedRef.current && emptyRef.current) {
             putBack(unsent);
             failure.fail(null);
+          } else if (keptDraft === null) {
+            failure.fail(unsent);
           } else if (
             !mountedRef.current &&
             unsent.supersedes === null &&
-            keptDraft !== null &&
             keptDraft.revision() === null
           ) {
             keptDraft.keep(unsent.text);
             failure.fail(null);
           } else {
-            failure.fail(unsent);
+            keptDraft.offer(unsent);
+            failure.fail(null);
           }
         },
       );
@@ -404,10 +407,12 @@ export function BotMessageComposer(props: {
       </div>
       <ComposerStatus
         failure={failure}
+        keptDraft={keptDraft}
         queued={lastDelivery === "queued"}
         testId={testId}
         onRestore={(unsent) => {
           failure.clear();
+          keptDraft?.offer(null);
           putBack(unsent);
           inputRef.current?.focus();
         }}
@@ -520,15 +525,21 @@ function useBoxQuote(args: {
   }, [inputRef, quote, takenQuoteId]);
 }
 
+/**
+ * What the box says under it: a failed send offered back (from the draft
+ * kept outside the box, else from the failure), a failed send whose text is
+ * in the box, or a queued send.
+ */
 function ComposerStatus(props: {
   readonly failure: BotSendFailure;
+  readonly keptDraft: BotKeptDraft | null;
   readonly queued: boolean;
   readonly testId: string;
   readonly onRestore: (unsent: BotUnsentMessage) => void;
 }): ReactNode {
   const { failure, onRestore } = props;
-  if (failure.failed) {
-    const { unsent } = failure;
+  const unsent = props.keptDraft?.unsent ?? failure.unsent;
+  if (unsent !== null || failure.failed) {
     return (
       <BotSendFailedNotice
         testId={`${props.testId}-send-failed`}
@@ -557,6 +568,10 @@ export type BotKeptDraft = {
   readonly keep: (text: string) => void;
   /** Which revision of the draft is kept now; `null` while none is. */
   readonly revision: () => number | null;
+  /** A failed send of the box offered back beside the draft; `null` for none. */
+  readonly unsent: BotUnsentMessage | null;
+  /** Offers a failed send back; `null` takes the offer away. */
+  readonly offer: (unsent: BotUnsentMessage | null) => void;
 };
 
 /** Quotes of selections, for the box to add to what it shows. */
