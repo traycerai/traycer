@@ -31,7 +31,9 @@ import {
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuItem,
+  DropdownMenuLabel,
   DropdownMenuRadioGroup,
+  DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import {
@@ -45,6 +47,7 @@ import { navigateToSettingsSection } from "@/lib/settings-navigation";
 import type { SettingsSectionId } from "@/lib/settings-sections";
 import { useSettingsEnvironmentPickStore } from "@/stores/settings/settings-environment-pick-store";
 import { useSettingsHostScopeStore } from "@/stores/settings/settings-host-scope-store";
+import { useAddHostDialogStore } from "@/stores/settings/add-host-dialog-store";
 import {
   useMoveSheetStore,
   type MoveSheetTarget,
@@ -79,9 +82,9 @@ function useEnvironmentPickerModel(scope: HostScope): EnvironmentPickerModel {
 }
 
 /**
- * Settings ▸ Environment's dropdown, at the head of the group: Personal, a
- * Local row under it for each computer whose own settings have not moved,
- * and the team rows. The pick decides what every page below it
+ * Settings ▸ Environment's dropdown: Personal, teams and invitations, then
+ * computers running their own settings, each a sibling group.
+ * The pick decides what every page below it
  * shows; it never changes which host this window works on.
  */
 export function EnvironmentPicker(props: {
@@ -91,6 +94,7 @@ export function EnvironmentPicker(props: {
 }): ReactNode {
   const model = useEnvironmentPickerModel(props.scope);
   const running = useHostsRunningPersonal(true);
+  const openAddHost = useAddHostDialogStore((state) => state.openDialog);
   const pick = useSettingsEnvironmentPickStore(
     (state) => state.pick ?? state.defaultPick,
   );
@@ -150,6 +154,20 @@ export function EnvironmentPicker(props: {
                 onRename={openHostOverview}
               />
             ))}
+            <TeamRows
+              pick={pick}
+              onPick={choose}
+              onReview={setReviewing}
+              onConnectComputer={() =>
+                openAddHost(props.scope.hosts.map((host) => host.hostId))
+              }
+            />
+            {model.localRows.length > 0 ? (
+              <>
+                <DropdownMenuSeparator />
+                <DropdownMenuLabel>Runs its own settings</DropdownMenuLabel>
+              </>
+            ) : null}
             {model.localRows.map((row) => (
               <EnvironmentPickerRow
                 key={row.hostId}
@@ -159,10 +177,10 @@ export function EnvironmentPicker(props: {
                   hostName: row.name,
                 })}
                 label={row.name}
-                badge="Local"
-                badgeTooltip={LOCAL_BADGE_TOOLTIP}
+                badge={null}
+                badgeTooltip={null}
                 subtitle={row.subtitle}
-                nested
+                nested={false}
                 disabled={row.needsUpdate}
                 testId={`environment-picker-local-${row.hostId}`}
                 onSelect={() =>
@@ -175,7 +193,6 @@ export function EnvironmentPicker(props: {
                 verb={localRowVerb(row, openMoveSheet, openHostOverview)}
               />
             ))}
-            <TeamRows pick={pick} onPick={choose} onReview={setReviewing} />
           </DropdownMenuRadioGroup>
         </DropdownMenuContent>
       </DropdownMenu>
@@ -294,7 +311,7 @@ function EnvironmentPickerTrigger(props: {
               align={undefined}
             >
               <Badge variant="secondary" size="xs">
-                Local
+                Runs its own settings
               </Badge>
             </TooltipWrapper>
           ) : null}

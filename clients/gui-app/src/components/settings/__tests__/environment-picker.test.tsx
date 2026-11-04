@@ -241,7 +241,7 @@ afterEach(() => {
 });
 
 describe("<EnvironmentPicker />", () => {
-  it("draws an awaiting_consent host as a Local row and opens the move sheet from its verb", () => {
+  it("draws an awaiting_consent host under its own-settings group and opens the move sheet", () => {
     answer("mac", running, V11);
     answer("dev", running, V11);
     answer("old", awaiting, V11);
@@ -251,7 +251,6 @@ describe("<EnvironmentPicker />", () => {
 
     const row = screen.getByTestId("environment-picker-local-old");
     expect(row.textContent).toContain("Old laptop");
-    expect(row.textContent).toContain("Local");
     expect(row.textContent).toContain("its own settings, not in Personal yet");
     expect(screen.getByTestId("environment-picker-personal").textContent).toBe(
       "Personalyour settings · on MacBook Pro, dev-box",
@@ -276,29 +275,25 @@ describe("<EnvironmentPicker />", () => {
     expect(verb.querySelector("[aria-hidden]")?.textContent).toContain("·");
   });
 
-  it("explains the Local badge on hover, in its row", async () => {
+  it("groups its own-settings computer as an unindented row without a badge", () => {
     answer("mac", running, V11);
     answer("old", awaiting, V11);
     renderPicker("mac");
     openMenu();
 
-    const badge = within(
-      screen.getByTestId("environment-picker-local-old"),
-    ).getByText("Local");
-    await userEvent.hover(badge);
-
-    expect((await screen.findByRole("tooltip")).textContent).toBe(
-      "Settings on this computer only",
-    );
+    const row = screen.getByTestId("environment-picker-local-old");
+    expect(screen.getByText("Runs its own settings")).toBeTruthy();
+    expect(row.getAttribute("data-inset")).not.toBe("true");
+    expect(row.textContent).not.toContain("Local");
   });
 
-  it("explains the Local badge on the trigger when the pick is Local", async () => {
+  it("labels the trigger with the own-settings badge when the pick is local", async () => {
     answer("old", awaiting, V11);
     renderPicker("old");
 
     await userEvent.hover(
       within(screen.getByTestId("environment-picker-trigger")).getByText(
-        "Local",
+        "Runs its own settings",
       ),
     );
 
@@ -357,7 +352,7 @@ describe("<EnvironmentPicker />", () => {
       hostName: "Old laptop",
     });
     expect(screen.getByTestId("environment-picker-trigger").textContent).toBe(
-      "Old laptopLocal",
+      "Old laptopRuns its own settings",
     );
     cleanup();
 
@@ -570,13 +565,15 @@ describe("<EnvironmentPicker />", () => {
       openMenu();
     }
 
-    it("is drawn as an invited row that cannot be picked, with Review", () => {
+    it("shows the invitation subtitle and Review as a separate action", () => {
       inviteTo("env-beta", "Beta");
 
       const row = screen.getByTestId("environment-invitation-env-beta");
       expect(row.textContent).toContain("Beta");
-      expect(row.textContent).toContain("invited");
-      expect(row.getAttribute("aria-disabled")).toBe("true");
+      expect(row.textContent).toContain(
+        "Invited you · not yours to edit until you accept",
+      );
+      expect(row.getAttribute("aria-disabled")).toBeNull();
       expect(
         screen.getByTestId("environment-invitation-review-env-beta"),
       ).toBeTruthy();
