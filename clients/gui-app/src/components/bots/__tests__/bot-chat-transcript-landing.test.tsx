@@ -135,6 +135,7 @@ import {
   UNRESOLVED_BOT_MEMBERS,
   type BotMemberResolver,
 } from "@/lib/bots/bot-member-names";
+import { useBotSearchStore } from "@/stores/bots/bot-search-store";
 
 const BOT_ID = "bot_01ARZ3NDEKTSV4RRFFQ69G5FAV";
 const CHAT_ID = "conversation-app";
@@ -319,6 +320,8 @@ beforeEach(() => {
 afterEach(() => {
   cleanup();
   mocks.handle = null;
+  vi.unstubAllGlobals();
+  useBotSearchStore.getState().clearMarks();
 });
 
 function flashing(messageId: string): boolean {
@@ -356,5 +359,54 @@ describe("a transcript asked to land on a post", () => {
     expect(flashing("ask-1")).toBe(true);
     await waitFor(() => expect(mocks.settled).toHaveLength(2));
     expect(mocks.settled[1]?.outcome).toBe("landed");
+  });
+
+  it("marks the words a search result matched on the row it lands on, in the find colours", async () => {
+    const painted = new Map<string, { readonly ranges: readonly Range[] }>();
+    vi.stubGlobal("CSS", {
+      highlights: {
+        set: (name: string, highlight: { readonly ranges: readonly Range[] }) =>
+          painted.set(name, highlight),
+        delete: (name: string) => painted.delete(name),
+      },
+    });
+    vi.stubGlobal(
+      "Highlight",
+      class PaintedHighlight {
+        readonly ranges: readonly Range[];
+        constructor(...ranges: readonly Range[]) {
+          this.ranges = ranges;
+        }
+      },
+    );
+    useBotSearchStore.setState({
+      marks: { chatId: CHAT_ID, messageId: "ask-1", words: ["review"] },
+    });
+    const view = mountTranscript(
+      [resolvedUserMessage(), otherUserMessage(), reply()],
+      THREAD_SURFACE,
+    );
+    await settleLegendList();
+    landing = { messageId: "ask-1", sendPostId: null, visit: 1 };
+    view.rerender();
+    await settleLegendList();
+
+    const markedRows = [...painted.values()].flatMap((highlight) =>
+      highlight.ranges.map(
+        (range) =>
+          range.startContainer.parentElement?.closest<HTMLElement>(
+            "[data-message-id]",
+          )?.dataset.messageId,
+      ),
+    );
+    const markedWords = [...painted.values()].flatMap((highlight) =>
+      highlight.ranges.map((range) => range.toString()),
+    );
+    expect(markedWords).toEqual(["review"]);
+    expect(markedRows).toEqual(["ask-1"]);
+    expect(flashing("ask-1")).toBe(true);
+
+    cleanup();
+    expect(painted.size).toBe(0);
   });
 });
