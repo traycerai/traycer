@@ -857,7 +857,7 @@ export const environmentSecretSchema = lazySchema(() =>
     kind: z.string().min(1).max(32),
     protocol: z.string().min(1).max(32).nullable(),
     destinations: z.array(z.string().min(1)),
-    /** Known: brokered, exposed. */
+    /** Known: brokered. */
     mode: z.string().min(1).max(32),
     /** Known: live, pending_review. */
     state: z.string().min(1).max(32),
@@ -936,8 +936,6 @@ export const environmentSecretsCreateRequestSchema = lazySchema(() =>
         }),
       )
       .max(16),
-    /** Known: none, presigned_url, short_lived_credentials. */
-    exportPolicy: z.string().min(1).max(32).nullable(),
     /** "Sandboxes get it": granted to every live and future sandbox. */
     sandboxesByDefault: z.boolean(),
     plaintextConsent: z

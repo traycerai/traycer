@@ -232,7 +232,7 @@ describe("The MCP server dialog", () => {
           secret("acme-key", {}),
           secret("revoked-key", { revoked: true }),
           secret("pending-key", { state: "pending_review" }),
-          secret("exposed-key", { mode: "exposed" }),
+          secret("unknown-mode-key", { mode: "tunnelled" }),
           secret("elsewhere-key", { destinations: ["other.test:443"] }),
         ],
         answer: SAVED,

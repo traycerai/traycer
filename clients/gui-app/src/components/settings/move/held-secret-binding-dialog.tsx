@@ -98,8 +98,7 @@ function HeldSecretBindingBody(props: {
   const problem = heldSecretBindingProblem(form);
   const protocols = secretKindProtocols(form.kind);
   const engine: SandboxRouteProtocol = form.protocol;
-  const showConsent =
-    form.mode === "brokered" && isSandboxDatabaseEngine(engine);
+  const showConsent = isSandboxDatabaseEngine(engine);
 
   return (
     <DialogContent

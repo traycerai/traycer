@@ -1,7 +1,6 @@
 import type { SandboxRouteReadiness } from "@traycer/protocol/host/sandbox-control";
 import {
   SANDBOX_GRANT_MODE_BROKERED,
-  SANDBOX_GRANT_MODE_EXPOSED,
   SANDBOX_ROUTE_UNREADY_CONNECTOR_OFFLINE,
   type SandboxGitHubAccess,
   type SandboxGrant,
@@ -36,9 +35,8 @@ export interface SandboxGrantRouteView {
 
 export interface SandboxGrantView {
   readonly secretName: string;
-  /** "postgres · brokered", "https · exposed, readable on the sandbox". */
+  /** "postgres · brokered". */
   readonly modeLine: string;
-  readonly exposed: boolean;
   /** "through connector office-vpc", or `null`. */
   readonly via: string | null;
   /** Why this sandbox has it, or `null` for a source this build has no word for. */
@@ -76,9 +74,6 @@ const SOURCE_WORDS: Readonly<Record<string, string>> = {
 
 function modeWords(mode: string): string {
   if (mode === SANDBOX_GRANT_MODE_BROKERED) return "brokered";
-  if (mode === SANDBOX_GRANT_MODE_EXPOSED) {
-    return "exposed, readable on the sandbox";
-  }
   return mode;
 }
 
@@ -163,7 +158,6 @@ export function sandboxGrantViews(
       grant.protocol.length === 0
         ? modeWords(grant.mode)
         : `${grant.protocol} · ${modeWords(grant.mode)}`,
-    exposed: grant.mode === SANDBOX_GRANT_MODE_EXPOSED,
     via:
       grant.connectorName === null
         ? null

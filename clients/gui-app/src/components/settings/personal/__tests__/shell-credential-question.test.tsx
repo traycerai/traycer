@@ -786,7 +786,7 @@ describe("a variable a secret sets on the Personal page", () => {
     kind: "api_key",
     protocol: "https",
     destinations: ["api.example.com"],
-    mode: "exposed",
+    mode: "brokered",
     state: "live",
     currentVersionId: "ver-1",
     revoked: false,

@@ -715,7 +715,6 @@ describe("saving a secret", () => {
         portOverride: false,
         swapSites: ["header"],
         variables: [],
-        exportPolicy: null,
         sandboxesByDefault: true,
         plaintextConsent: null,
         environmentId: PERSONAL_ENV,
@@ -894,20 +893,19 @@ describe("the add form's words", () => {
     expect(screen.queryByText(/Where this key is sent/)).toBeNull();
   });
 
-  it("says in plain words what each mode does, and warns only on the one that exposes the value", async () => {
+  it("says in plain words what a sandbox holds, and offers no way to hand over the value", async () => {
     renderPage(buildSecretsHost({ secrets: [] }));
     await openApiKeyForm();
 
     const dialog = screen.getByTestId("add-secret-dialog");
-    expect(
-      within(dialog).getByLabelText(
-        "Agents use it without seeing it (recommended)",
-      ),
-    ).toBeTruthy();
-    expect(within(dialog).getByLabelText("Agents can read it")).toBeTruthy();
     expect(dialog.textContent).toContain(
-      "On a sandbox, any process can read it, and revoking it does not stop a copy already made.",
+      "Agents use it without seeing it: the sandbox holds a stand-in and the real value is attached as a request leaves it.",
     );
+    // No mode to choose: the radio is gone with the mode that fed it.
+    expect(
+      within(dialog).queryByTestId("secret-form-mode-brokered"),
+    ).toBeNull();
+    expect(dialog.textContent).not.toContain("Agents can read it");
     expect(dialog.textContent).not.toContain(
       "agents can use it and never read it",
     );

@@ -1,7 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
   SANDBOX_GRANT_MODE_BROKERED,
-  SANDBOX_GRANT_MODE_EXPOSED,
   SECRET_REQUEST_CODE_SECRET_REQUIRED,
   SECRET_REQUEST_DECISIONS,
   SECRET_REQUEST_STATUSES,
@@ -31,11 +30,12 @@ const BROKERED_GRANT = {
   routes: [ROUTE],
 };
 
-const EXPOSED_GRANT = {
+/** A mode this build has no word for: read tolerantly, routes as the broker sent them. */
+const UNKNOWN_MODE_GRANT = {
   secretName: "STRIPE_KEY",
   kind: "api_key",
   protocol: "https",
-  mode: "exposed",
+  mode: "a-mode-this-build-does-not-know",
   source: "default",
   connectorName: null,
   rotation: null,
@@ -44,7 +44,7 @@ const EXPOSED_GRANT = {
 
 const SUMMARY = {
   version: 7,
-  grants: [BROKERED_GRANT, EXPOSED_GRANT],
+  grants: [BROKERED_GRANT, UNKNOWN_MODE_GRANT],
   github: {
     linked: true,
     installations: [
@@ -154,9 +154,13 @@ describe("sandboxGrantsSummarySchema", () => {
     expect(parsed.github?.installations[0].repositorySelection).toBe("none");
   });
 
-  it("keeps the two known modes as the strings the broker sends", () => {
+  it("keeps the one known mode as the string the broker sends, and parses any other", () => {
     expect(SANDBOX_GRANT_MODE_BROKERED).toBe("brokered");
-    expect(SANDBOX_GRANT_MODE_EXPOSED).toBe("exposed");
+    const parsed = sandboxGrantsSummarySchema.parse(SUMMARY);
+    expect(parsed.grants.map((grant) => grant.mode)).toEqual([
+      "brokered",
+      "a-mode-this-build-does-not-know",
+    ]);
   });
 
   it("rejects a summary without a grants list", () => {
@@ -206,7 +210,7 @@ describe("sandboxGrantSchema", () => {
       secretName: "TOKEN",
       kind: "token",
       protocol: "https",
-      mode: "exposed",
+      mode: "brokered",
       source: "inherited",
     });
     expect(parsed.connectorName).toBeNull();

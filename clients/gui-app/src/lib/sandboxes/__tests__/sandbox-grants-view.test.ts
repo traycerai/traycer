@@ -58,7 +58,6 @@ describe("sandboxGrantViews", () => {
     expect(view).toEqual({
       secretName: "DB_PASSWORD",
       modeLine: "postgres · brokered",
-      exposed: false,
       via: null,
       source: "approved for this sandbox",
       routes: [
@@ -285,18 +284,6 @@ describe("sandboxGrantViews", () => {
     expect(view.routes[0].address).toBe("api.example.com");
   });
 
-  it("marks an exposed grant and gives it no routes", () => {
-    const [view] = sandboxGrantViews(
-      summary([grant({ mode: "exposed", protocol: "https", routes: [] })]),
-      [readiness("route-1", "ready", null)],
-    );
-    expect(view).toMatchObject({
-      exposed: true,
-      modeLine: "https · exposed, readable on the sandbox",
-      routes: [],
-    });
-  });
-
   it("carries the connector name as a via line", () => {
     const [view] = sandboxGrantViews(
       summary([grant({ connectorName: "office-vpc" })]),
@@ -316,7 +303,6 @@ describe("sandboxGrantViews", () => {
       null,
     );
     expect(view.modeLine).toBe("postgres · tunnelled");
-    expect(view.exposed).toBe(false);
   });
 
   it.each([
@@ -417,17 +403,17 @@ describe("the stand-in clause", () => {
   it("applies when any grant is brokered", () => {
     expect(
       sandboxHasBrokeredGrant(
-        summary([grant({ mode: "exposed", routes: [] }), grant({})]),
+        summary([grant({ mode: "tunnelled", routes: [] }), grant({})]),
       ),
     ).toBe(true);
   });
 
-  it("does not apply when every grant is exposed, or there are none", () => {
+  it("does not apply when no grant is brokered, or there are none", () => {
     expect(
       sandboxHasBrokeredGrant(
         summary([
-          grant({ mode: "exposed", routes: [] }),
-          grant({ mode: "exposed", routes: [] }),
+          grant({ mode: "tunnelled", routes: [] }),
+          grant({ mode: "tunnelled", routes: [] }),
         ]),
       ),
     ).toBe(false);
@@ -467,7 +453,7 @@ describe("sandboxRouteAddresses", () => {
             },
           ],
         }),
-        grant({ mode: "exposed", routes: [] }),
+        grant({ mode: "tunnelled", routes: [] }),
       ]),
     );
     expect([...addresses.entries()]).toEqual([

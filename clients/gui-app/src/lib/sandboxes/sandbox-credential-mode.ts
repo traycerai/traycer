@@ -30,11 +30,6 @@ export function sandboxCredentialLine(
             ? "Uses Traycer's key on this sandbox. Agents can use it but never see it."
             : "On this sandbox its credential stays with Traycer: agents can use it, never read it",
       };
-    case "process-scoped":
-      return {
-        tone: "caution",
-        text: "Runs with its own credential on this sandbox, readable by agents",
-      };
     case "unsupported": {
       const mechanism = note === null || note === undefined ? "" : note.trim();
       return {

@@ -180,7 +180,6 @@ const createOptions = {
   portOverride: false,
   swapSites: ["header"],
   variables: [{ name: "DATABASE_URL", dialect: "postgres_url" }],
-  exportPolicy: null,
   sandboxesByDefault: false,
   plaintextConsent: null,
 };
@@ -1675,7 +1674,6 @@ describe("secret versions, Undo, Destroy, rotation and consent shapes, field for
       }),
     ).toBe(false);
     expect(accepts(schema, { ...database, variables: [] })).toBe(true);
-    expect(accepts(schema, { ...database, exportPolicy: "none" })).toBe(true);
     expect(accepts(schema, { ...database, portOverride: "yes" })).toBe(false);
     expect(
       accepts(schema, { ...database, sandboxesByDefault: undefined }),

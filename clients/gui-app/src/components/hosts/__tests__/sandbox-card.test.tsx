@@ -1590,12 +1590,12 @@ describe("<SandboxCard /> grants list", () => {
     expect(route.textContent).toBe("db.internal:5432");
   });
 
-  it("shows an exposed grant without routes", () => {
+  it("shows a grant whose mode this build does not know, without routes", () => {
     mocks.grantsData = grantsOf(
       [
         grantOf({
           secretName: "API_TOKEN",
-          mode: "exposed",
+          mode: "tunnelled",
           protocol: "https",
           routes: [],
         }),
@@ -1607,9 +1607,7 @@ describe("<SandboxCard /> grants list", () => {
 
     const grant = screen.getByTestId("sandbox-card-grant");
     expect(grant.textContent).toContain("API_TOKEN");
-    expect(grant.textContent).toContain(
-      "https · exposed, readable on the sandbox",
-    );
+    expect(grant.textContent).toContain("https · tunnelled");
     expect(within(grant).queryByTestId("sandbox-card-grant-route")).toBeNull();
   });
 
@@ -1628,7 +1626,7 @@ describe("<SandboxCard /> grants list", () => {
 
   it("says agents see a stand-in when a grant is brokered", () => {
     mocks.grantsData = grantsOf(
-      [grantOf({ mode: "exposed", routes: [] }), grantOf({})],
+      [grantOf({ mode: "tunnelled", routes: [] }), grantOf({})],
       null,
     );
 
@@ -1639,11 +1637,11 @@ describe("<SandboxCard /> grants list", () => {
     );
   });
 
-  it("says nothing of a stand-in when every grant is exposed", () => {
+  it("says nothing of a stand-in when no grant is brokered", () => {
     mocks.grantsData = grantsOf(
       [
-        grantOf({ secretName: "API_TOKEN", mode: "exposed", routes: [] }),
-        grantOf({ secretName: "OTHER", mode: "exposed", routes: [] }),
+        grantOf({ secretName: "API_TOKEN", mode: "tunnelled", routes: [] }),
+        grantOf({ secretName: "OTHER", mode: "tunnelled", routes: [] }),
       ],
       null,
     );

@@ -17,9 +17,12 @@ import { lazySchema } from "@traycer/protocol/framework/lazy-schema";
 
 // ─── `GET /api/v3/environments/:environmentId/secrets/hosts/:hostId/grants` ─
 
-/** How a sandbox holds a secret. Anything else is shown as its own word. */
+/**
+ * How a sandbox holds a secret: a placeholder the gateway swaps on the wire,
+ * which is the only way. Anything else a broker reports is shown as its own
+ * word.
+ */
 export const SANDBOX_GRANT_MODE_BROKERED = "brokered";
-export const SANDBOX_GRANT_MODE_EXPOSED = "exposed";
 
 /**
  * One destination a granted secret is brokered to. `route` is the id that
@@ -54,9 +57,9 @@ export const sandboxGrantRouteSchema: z.ZodType<SandboxGrantRoute> = lazySchema(
 );
 
 /**
- * One secret a sandbox may use. `routes` is empty for an exposed secret: its
- * value is on the sandbox and nothing is brokered. `connectorName` is set
- * when its destinations sit behind a private connector.
+ * One secret a sandbox may use. `routes` names the destinations it is
+ * brokered to, as the broker reports them. `connectorName` is set when those
+ * destinations sit behind a private connector.
  */
 export interface SandboxGrant {
   readonly secretName: string;
