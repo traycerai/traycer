@@ -154,6 +154,7 @@ const CHAT_MESSAGE_FIELD_UNCHANGED: {
   // message, so a resolve arrives as a new object and identity is enough.
   conversationRequest: (a, b) =>
     a.conversationRequest === b.conversationRequest,
+  slackMessage: (a, b) => a.slackMessage === b.slackMessage,
   announcement: (a, b) => a.announcement === b.announcement,
   options: (a, b) => a.options === b.options,
   // A settlement arrives as a new question object on the same row.
