@@ -78,12 +78,14 @@ describe("createEnvironmentArmLanes", () => {
   let lanes = createEnvironmentArmLanes<State, Frame>();
 
   function spec(key: string): EnvironmentArmLaneSpec<State, Frame> {
+    const ended: State = ["ended"];
     return {
       key,
       poolHostId: "pool-host",
       client: new FakeStreamClient(true),
       initial: [],
-      ended: ["ended"],
+      ended,
+      reopenedFromEnd: ended,
       open: (_client, readState) => {
         readStates.push(readState());
         const session = new ArmSession();
@@ -233,6 +235,31 @@ describe("createEnvironmentArmLanes", () => {
 
     expect(sessions).toHaveLength(2);
     expect(lanes.read("k", [])).toEqual(["ended", "a"]);
+  });
+
+  it("starts an ended arm over from what its spec says when asked to reopen it, before the fresh stream's first frame", () => {
+    lanes.acquire({ ...spec("k"), reopenedFromEnd: ["reopened"] });
+    sessions[0]?.closeWith(fatal("FORBIDDEN"));
+    expect(lanes.read("k", [])).toEqual(["ended"]);
+
+    lanes.reopen("k");
+
+    expect(lanes.read("k", [])).toEqual(["reopened"]);
+    expect(readStates).toEqual([[], ["reopened"]]);
+    sessions[1]?.emit(frameEnvelope(0, "a"), null);
+    expect(lanes.read("k", [])).toEqual(["reopened", "a"]);
+  });
+
+  it("keeps what a live arm holds when asked to reopen it, so a resumption continues from it", () => {
+    lanes.acquire({ ...spec("k"), reopenedFromEnd: ["reopened"] });
+    sessions[0]?.emit(frameEnvelope(1, "a"), null);
+
+    lanes.reopen("k");
+
+    expect(lanes.read("k", [])).toEqual(["a"]);
+    expect(readStates).toEqual([[], ["a"]]);
+    sessions[1]?.emit(frameEnvelope(0, "b"), null);
+    expect(lanes.read("k", [])).toEqual(["a", "b"]);
   });
 
   it("keeps the replacement open when a reopen scheduled for the stream it replaced comes due", async () => {
