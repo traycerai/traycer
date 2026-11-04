@@ -155,6 +155,7 @@ describe("subscribeStreamWakeReconnect", () => {
     // probe redials immediately.
     runnerHost.emitSystemResumed({
       backgroundedForMs: WAKE_FORCE_RECONNECT_AFTER_BACKGROUND_MS - 1,
+      screenLocked: false,
     });
     expect(reconnectAll).toHaveBeenLastCalledWith("wake-resume", {
       probeFirst: true,
@@ -169,6 +170,7 @@ describe("subscribeStreamWakeReconnect", () => {
     // collapses them into one reading and this pair fails.
     runnerHost.emitSystemResumed({
       backgroundedForMs: WAKE_FORCE_RECONNECT_AFTER_BACKGROUND_MS,
+      screenLocked: false,
     });
     expect(reconnectAll).toHaveBeenLastCalledWith("wake-resume", {
       probeFirst: false,
@@ -186,7 +188,10 @@ describe("subscribeStreamWakeReconnect", () => {
 
     // Desktop/web resume (no measured dwell): byte-identical to the old
     // behavior - default probe, default deadline.
-    runnerHost.emitSystemResumed({ backgroundedForMs: null });
+    runnerHost.emitSystemResumed({
+      backgroundedForMs: null,
+      screenLocked: false,
+    });
     expect(reconnectAll).toHaveBeenLastCalledWith("wake-resume", {
       probeFirst: true,
       wakeProbe: null,

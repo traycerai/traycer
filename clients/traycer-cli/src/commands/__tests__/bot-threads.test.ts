@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { BotRecord } from "@traycer/protocol/host/bot/schemas";
+import { HostMethodVersionUnsatisfiedError } from "@traycer/protocol/host-transport/remote/rpc-types";
 import { BOT_HOST_UPDATE_MESSAGE } from "../../internal/bot-host";
 import { CLI_ERROR_CODES, CliError } from "../../runner/errors";
 import type { CommandResult } from "../../runner/runner";
@@ -30,6 +31,7 @@ vi.mock("../../logger", () => ({
 
 const hoisted = vi.hoisted(() => ({
   callHostRpc: vi.fn(),
+  callHostRpcWithDispatch: vi.fn(),
   resolveEndpoint: vi.fn(),
 }));
 
@@ -40,6 +42,7 @@ vi.mock("../../internal/host-rpc", async () => {
   return {
     ...actual,
     callHostRpc: hoisted.callHostRpc,
+    callHostRpcWithDispatch: hoisted.callHostRpcWithDispatch,
     resolveEndpoint: hoisted.resolveEndpoint,
   };
 });
@@ -87,17 +90,22 @@ function stage(input: {
   readonly bot: BotRecord;
   readonly threads: () => unknown;
 }): void {
-  hoisted.callHostRpc.mockImplementation(
-    routeRpc({
-      "bot.list": () => ({ bots: [input.bot], mainBotIds: null }),
-      "bot.thread.list": () => input.threads(),
-    }),
-  );
+  const routes = routeRpc({
+    "bot.list": () => ({ bots: [input.bot], mainBotIds: null }),
+    "bot.thread.list": () => input.threads(),
+  });
+  hoisted.callHostRpc.mockImplementation(routes);
+  hoisted.callHostRpcWithDispatch.mockImplementation(routes);
 }
 
-function threads(bot: string): Promise<CommandResult> {
-  return buildBotThreadsCommand({ bot })(makeCtx());
+function threads(
+  bot: string,
+  page: { readonly limit: number | null; readonly cursor: string | null },
+): Promise<CommandResult> {
+  return buildBotThreadsCommand({ bot, ...page })(makeCtx());
 }
+
+const UNPAGED = { limit: null, cursor: null } as const;
 
 async function rejection(run: Promise<CommandResult>): Promise<CliError> {
   const error: unknown = await run.then(
@@ -111,7 +119,10 @@ async function rejection(run: Promise<CommandResult>): Promise<CliError> {
 }
 
 function threadListCalls(): unknown[] {
-  return hoisted.callHostRpc.mock.calls
+  return [
+    ...hoisted.callHostRpc.mock.calls,
+    ...hoisted.callHostRpcWithDispatch.mock.calls,
+  ]
     .filter((call) => call[0] === "bot.thread.list")
     .map((call) => call[1]);
 }
@@ -126,12 +137,16 @@ describe("bot threads", () => {
         threads: THREADS,
         trunkCostUsd: null,
         threadAnchors: null,
+        nextCursor: null,
+        total: THREADS.length,
       }),
     });
 
-    const result = await threads("tracy");
+    const result = await threads("tracy", UNPAGED);
 
-    expect(threadListCalls()).toEqual([{ botId: BOT_ID_A }]);
+    expect(threadListCalls()).toEqual([
+      { botId: BOT_ID_A, limit: null, cursor: null },
+    ]);
     expect(result.human).toBe(
       [
         "Tracy",
@@ -139,17 +154,114 @@ describe("bot threads", () => {
         "  thread-1  (post removed)  no replies  1 open request  cost unknown",
       ].join("\n"),
     );
-    expect(result.data).toEqual({ botId: BOT_ID_A, threads: THREADS });
+    expect(result.data).toEqual({
+      botId: BOT_ID_A,
+      threads: THREADS,
+      nextCursor: null,
+      total: THREADS.length,
+    });
     expect(result.exitCode).toBe(0);
   });
+
+  it("passes --limit and --cursor on, and prints how many of the total a page holds and the cursor for the next", async () => {
+    stage({
+      bot: tracy,
+      threads: () => ({
+        threads: [THREADS[0]],
+        trunkCostUsd: null,
+        threadAnchors: null,
+        nextCursor: "t1.next-page",
+        total: 5,
+      }),
+    });
+
+    const result = await threads("tracy", { limit: 1, cursor: "t1.this-page" });
+
+    expect(threadListCalls()).toEqual([
+      { botId: BOT_ID_A, limit: 1, cursor: "t1.this-page" },
+    ]);
+    // A paged call requires the 1.2 line, which a 1.1 host does not page.
+    expect(hoisted.callHostRpcWithDispatch).toHaveBeenCalledWith(
+      "bot.thread.list",
+      { botId: BOT_ID_A, limit: 1, cursor: "t1.this-page" },
+      expect.objectContaining({
+        requiredHostMethodVersion: {
+          method: "bot.thread.list",
+          version: { major: 1, minor: 2 },
+        },
+      }),
+    );
+    expect(result.human).toBe(
+      [
+        "Tracy (1 of 5)",
+        "  thread-2  post 2026-10-23T13:58:00Z  3 replies, last 2026-10-23T14:02:11Z  2 open requests  $0.42",
+        "More: --cursor t1.next-page",
+      ].join("\n"),
+    );
+    expect(result.data).toMatchObject({ nextCursor: "t1.next-page", total: 5 });
+  });
+
+  it("lists an unpaged call through the plain call, which any host answers", async () => {
+    stage({
+      bot: tracy,
+      threads: () => ({
+        threads: THREADS,
+        trunkCostUsd: null,
+        threadAnchors: null,
+        nextCursor: null,
+        total: THREADS.length,
+      }),
+    });
+
+    await threads("tracy", UNPAGED);
+
+    expect(hoisted.callHostRpcWithDispatch).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ["--limit", { limit: 1, cursor: null }],
+    ["--cursor", { limit: null, cursor: "t1.this-page" }],
+  ])(
+    "refuses %s on a host that lists threads only all at once, telling the person to update",
+    async (_flag, page) => {
+      stage({
+        bot: tracy,
+        threads: () => {
+          throw new HostMethodVersionUnsatisfiedError({
+            requirement: {
+              method: "bot.thread.list",
+              version: { major: 1, minor: 2 },
+            },
+            negotiated: { major: 1, minor: 1 },
+            requestId: "req-1",
+            method: "bot.thread.list",
+            hostId: THIS_HOST_ID,
+          });
+        },
+      });
+
+      const error = await rejection(threads("tracy", page));
+
+      expect(error.code).toBe(CLI_ERROR_CODES.HOST_INCOMPATIBLE);
+      expect(error.message).toBe(
+        "traycer: this host lists a bot's threads only all at once - run `traycer host update` to page them, or leave out --limit and --cursor.",
+      );
+    },
+  );
 
   it("says when the bot has no threads", async () => {
     stage({
       bot: tracy,
-      threads: () => ({ threads: [], trunkCostUsd: null, threadAnchors: null }),
+      threads: () => ({
+        threads: [],
+        trunkCostUsd: null,
+        threadAnchors: null,
+        nextCursor: null,
+        total: 0,
+      }),
     });
 
-    const result = await threads(BOT_ID_A);
+    const result = await threads(BOT_ID_A, UNPAGED);
 
     expect(result.human).toBe("Tracy has no threads yet.");
     expect(result.exitCode).toBe(0);
@@ -162,10 +274,12 @@ describe("bot threads", () => {
         threads: [{ ...THREADS[0], openRequestCount: -1 }],
         trunkCostUsd: null,
         threadAnchors: null,
+        nextCursor: null,
+        total: 1,
       }),
     });
 
-    const error = await rejection(threads(BOT_ID_A));
+    const error = await rejection(threads(BOT_ID_A, UNPAGED));
 
     expect(error.code).toBe(CLI_ERROR_CODES.HOST_INCOMPATIBLE);
   });
@@ -177,13 +291,17 @@ describe("bot threads", () => {
         threads: THREADS,
         trunkCostUsd: null,
         threadAnchors: null,
+        nextCursor: null,
+        total: THREADS.length,
       }),
     });
 
-    const result = await threads(BOT_ID_A);
+    const result = await threads(BOT_ID_A, UNPAGED);
 
     expect(result.exitCode).toBe(0);
-    expect(threadListCalls()).toEqual([{ botId: BOT_ID_A }]);
+    expect(threadListCalls()).toEqual([
+      { botId: BOT_ID_A, limit: null, cursor: null },
+    ]);
   });
 
   it("refuses a bot no host runs", async () => {
@@ -193,10 +311,12 @@ describe("bot threads", () => {
         threads: THREADS,
         trunkCostUsd: null,
         threadAnchors: null,
+        nextCursor: null,
+        total: THREADS.length,
       }),
     });
 
-    const error = await rejection(threads(BOT_ID_A));
+    const error = await rejection(threads(BOT_ID_A, UNPAGED));
 
     expect(error.message).toBe(
       "traycer: no host runs Tracy; move it to a host first.",
@@ -221,7 +341,7 @@ describe("bot threads on a host without them", () => {
         }),
       );
 
-      const error = await rejection(threads(BOT_ID_A));
+      const error = await rejection(threads(BOT_ID_A, UNPAGED));
 
       expect(error.message).toBe(BOT_HOST_UPDATE_MESSAGE);
       expect(error.code).toBe(CLI_ERROR_CODES.HOST_UNSUPPORTED);

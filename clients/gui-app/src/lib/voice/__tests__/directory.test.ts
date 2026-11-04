@@ -281,6 +281,8 @@ describe("a 1.2 host's excerpt of a quoted first sentence", () => {
       ],
       trunkCostUsd: null,
       threadAnchors: null,
+      nextCursor: null,
+      total: 1,
     });
 
     const directory = composeVoiceDirectory({

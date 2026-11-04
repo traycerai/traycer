@@ -2,6 +2,7 @@ import type { WindowCaptureRect } from "../ipc-contracts/window-capture-types";
 import type { SandboxArtifactBridge } from "@traycer-clients/shared/platform/sandbox-artifacts";
 import type { NotificationFeedOccurrence } from "@traycer-clients/shared/notifications/feed-delivery";
 import type { DesktopMenuSnapshot } from "../ipc-contracts/window-types";
+import type { DesktopSystemWake } from "../ipc-contracts/host-types";
 import type {
   ActivateInstalledOk,
   ApplyStagedOk,
@@ -411,7 +412,9 @@ export interface DesktopPreloadBridge {
   onLocalHostUnresponsive(
     handler: (state: LocalHostUnresponsive | null) => void,
   ): { dispose: () => void };
-  onSystemResumed(handler: () => void): { dispose: () => void };
+  onSystemResumed(handler: (wake: DesktopSystemWake) => void): {
+    dispose: () => void;
+  };
   onSystemSuspended(handler: () => void): { dispose: () => void };
   onVoiceTrayAction(handler: (action: VoiceTrayAction) => void): {
     dispose: () => void;
@@ -1003,11 +1006,11 @@ export class DesktopRunnerHost implements IRunnerHost {
           handler(snapshot);
         }
       }),
-      this.bridge.onSystemResumed(() => {
+      this.bridge.onSystemResumed((wake) => {
         for (const handler of this.systemResumedHandlers) {
           // `powerMonitor` reports no sleep duration, so this shell cannot
           // measure how long the runtime was actually suspended.
-          handler({ backgroundedForMs: null });
+          handler({ backgroundedForMs: null, screenLocked: wake.screenLocked });
         }
       }),
     );
