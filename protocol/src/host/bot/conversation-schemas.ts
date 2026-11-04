@@ -527,7 +527,7 @@ export type BotTurnLocateResponse = z.infer<typeof botTurnLocateResponseSchema>;
 export const BOT_CONVERSATION_SEARCH_MAX_QUERY_CHARS = 200;
 export const BOT_CONVERSATION_SEARCH_MAX_PAGE_SIZE = 50;
 /** A search over every bot pages each bot apart, so its cursor names them. */
-const BOT_CONVERSATION_SEARCH_MAX_CURSOR_CHARS = 16_384;
+export const BOT_CONVERSATION_SEARCH_MAX_CURSOR_CHARS = 16_384;
 
 const botConversationSearchCursorSchema = lazySchema(() =>
   z.string().max(BOT_CONVERSATION_SEARCH_MAX_CURSOR_CHARS).nullable(),
@@ -580,6 +580,10 @@ export type BotConversationSearchSort = z.infer<
  * `chat.search`'s, with the same refusal: `substring` over `all` answers
  * `E_INVALID_ARGUMENT`, because the scan over every bot exceeds the host's
  * event-loop stall budget.
+ *
+ * `newest` pages every match. `relevance` pages the best 1,000 by relevance,
+ * and `total` is `null` where more than those match; the last page of such a
+ * search is not the last match.
  */
 export const botConversationSearchRequestSchema = lazySchema(() =>
   z.object({
@@ -591,7 +595,11 @@ export const botConversationSearchRequestSchema = lazySchema(() =>
     /** Epoch ms, inclusive; `null` for any time. */
     since: z.number().int().nullable(),
     where: botConversationSearchWhereSchema,
-    /** Opaque; pass back the previous page's `nextCursor`, `null` to start. */
+    /**
+     * Opaque; pass back the previous page's `nextCursor`, `null` to start.
+     * Good only for the search that issued it, on the host that issued it,
+     * by the same caller; anything else answers `E_INVALID_ARGUMENT`.
+     */
     cursor: botConversationSearchCursorSchema,
     limit: z.number().int().min(1).max(BOT_CONVERSATION_SEARCH_MAX_PAGE_SIZE),
   }),
