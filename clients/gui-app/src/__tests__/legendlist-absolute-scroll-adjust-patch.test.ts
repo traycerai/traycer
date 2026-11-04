@@ -174,6 +174,49 @@ function loadMoveScrollerByRangeAnnounced(
   };
 }
 
+/**
+ * The installed end-pad expression. `totalSize` is the content node's
+ * scroll height, which already includes `paddingEnd`. A second adjustment
+ * before the reset frame therefore has to add its shortfall to that pad.
+ */
+function loadEndPad(
+  source: string,
+): (input: {
+  nextScroll: number;
+  viewportSize: number;
+  totalSize: number;
+  paddingEnd: string;
+}) => number {
+  const match =
+    /const appliedPad = Number\.parseFloat\(contentNode\.style\[axis\.paddingEndProp\]\);\s*const pad = \(Number\.isFinite\(appliedPad\) \? appliedPad : 0\) \+ \(nextScroll \+ viewportSize - totalSize\);/.exec(
+      source,
+    );
+  if (match === null) {
+    throw new Error("temporary end pad is not in the installed build");
+  }
+  const compute: unknown = runInNewContext(
+    `(function (nextScroll, viewportSize, totalSize, paddingEnd) {
+      const contentNode = { style: { paddingBottom: paddingEnd, paddingRight: paddingEnd } };
+      const axis = { paddingEndProp: "paddingBottom" };
+      ${match[0]}
+      return pad;
+    })`,
+  );
+  if (typeof compute !== "function") {
+    throw new Error("temporary end pad did not evaluate");
+  }
+  return (input) => {
+    const pad: unknown = Reflect.apply(compute, undefined, [
+      input.nextScroll,
+      input.viewportSize,
+      input.totalSize,
+      input.paddingEnd,
+    ]);
+    if (typeof pad !== "number") throw new Error("pad was not a number");
+    return pad;
+  };
+}
+
 /** A list of two rows, `a` and `k`, whose `k` changes item type as the chat's
  *  transcript does when a placeholder hydrates. */
 function twoRowList() {
@@ -408,6 +451,39 @@ describe("@legendapp/list web patch", () => {
       expect(source).not.toContain(
         "announceScrollerMove(target, from, fromEnd, target.scrollTop, intendedTop);",
       );
+    });
+
+    // A downward adjustment past the content's current end pads that end so
+    // the write is not clamped, and the next frame takes the pad away. Twice
+    // the shortfall leaves the shortfall itself scrollable on the frame the
+    // pad is visible. Browser job 126446321582 painted that: content 16658,
+    // viewport 700, the adjustment at 15972, 12px off the padded end after
+    // the content box shrank 2px. One shortfall puts the padded end on the
+    // adjustment.
+    it(`${file} sizes the temporary end pad to the shortfall once`, () => {
+      const source = readFileSync(join(packageDir, file), "utf8");
+      const pad = loadEndPad(source)({
+        nextScroll: 15972,
+        viewportSize: 700,
+        totalSize: 16658,
+        paddingEnd: "",
+      });
+      expect(16658 + pad - 700).toBe(15972);
+    });
+
+    // The reset frame is cancelled and rescheduled when another adjustment
+    // arrives first. The content height then includes the pad, so a new
+    // shortfall of 3px on top of the 14px already applied has to leave 17px.
+    // Assigning 3px would drop the end from 15972 to 15961.
+    it(`${file} adds a later adjustment's shortfall to the pad still applied`, () => {
+      const source = readFileSync(join(packageDir, file), "utf8");
+      const pad = loadEndPad(source)({
+        nextScroll: 15975,
+        viewportSize: 700,
+        totalSize: 16672,
+        paddingEnd: "14px",
+      });
+      expect(16658 + pad - 700).toBe(15975);
     });
 
     // The restore cannot be sliced out of the build on its own (it closes
