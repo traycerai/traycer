@@ -38,7 +38,7 @@ import {
   buildHostLifecycleBridge,
   readLocalHostCapability,
 } from "./host-lifecycle-bridge";
-import { readSyncString } from "./sync-bootstrap";
+import { readSyncBoolean, readSyncString } from "./sync-bootstrap";
 
 /**
  * Preload script exposing an `IRunnerHost`-shaped bridge through
@@ -101,6 +101,10 @@ contextBridge.exposeInMainWorld("runnerHost", {
   // runs no local host): the lifecycle mode must stay changeable there.
   hostLifecycle: buildHostLifecycleBridge(),
   localHostCapability: readLocalHostCapability(),
+  soundtrackSourceAvailable: readSyncBoolean(
+    RunnerHostSync.soundtrackSourceAvailable,
+    false,
+  ),
   hostTray: buildHostTrayCommandSubscriber(),
   hostControllerStatus: buildHostControllerStatusSubscriber(),
 });

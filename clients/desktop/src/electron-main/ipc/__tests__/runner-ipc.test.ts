@@ -771,6 +771,7 @@ describe("RunnerIpcBridge", () => {
       const channels = Array.from(ipcMainState.handlers.keys()).sort();
       expect(channels).toEqual(
         [
+          RunnerHostInvoke.readSoundtrackSet,
           RunnerHostInvoke.sandboxArtifactRegister,
           RunnerHostInvoke.sandboxArtifactUnregister,
           RunnerHostInvoke.sandboxArtifactRespond,
