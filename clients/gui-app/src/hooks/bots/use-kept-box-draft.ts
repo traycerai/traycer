@@ -11,7 +11,7 @@ import {
 /**
  * A message box's unsent draft, kept under the bot (`useBotDraftsStore`) by
  * `key` so it outlives the box: what it held loads back into it as a seed,
- * and the box keeps and spends it through `keptDraft`. `key` is the message
+ * and the box keeps it through `keptDraft`. `key` is the message
  * a thread hangs off, or the channel's own conversation; `null` keeps
  * nothing.
  */
@@ -27,7 +27,6 @@ export function useKeptBoxDraft(
     key === null ? null : (state.threadBoxes[botId]?.[key] ?? null),
   );
   const typeThreadBox = useBotDraftsStore((state) => state.typeThreadBox);
-  const spendThreadBox = useBotDraftsStore((state) => state.spendThreadBox);
   const keptDraft = useMemo<BotKeptDraft | null>(
     () =>
       key === null
@@ -37,9 +36,8 @@ export function useKeptBoxDraft(
             revision: () =>
               useBotDraftsStore.getState().threadBoxes[botId]?.[key]
                 ?.revision ?? null,
-            spend: (revision) => spendThreadBox(botId, key, revision),
           },
-    [botId, key, spendThreadBox, typeThreadBox],
+    [botId, key, typeThreadBox],
   );
   return {
     kept,

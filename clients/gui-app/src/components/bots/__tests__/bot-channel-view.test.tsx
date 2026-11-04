@@ -322,7 +322,10 @@ vi.mock("@/components/bots/bot-message-composer", async (importOriginal) => {
           data-placeholder={props.placeholder}
         >
           {props.failure.failed ? (
-            <BotSendFailedNotice testId={`${props.testId}-send-failed`} />
+            <BotSendFailedNotice
+              testId={`${props.testId}-send-failed`}
+              restore={null}
+            />
           ) : null}
           {/* The host accepting what the box sent, answering `mocks.sendResponse`. */}
           <button

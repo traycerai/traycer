@@ -31,8 +31,7 @@ export interface BotThreadBoxDraft {
   readonly seedId: number;
   /**
    * Which draft this is, new on every change to it, typed or put there, and
-   * never reused: a send spends the revision it carried and nothing newer,
-   * even one with the same text.
+   * never reused.
    */
   readonly revision: number;
 }
@@ -67,16 +66,6 @@ interface BotDraftsState {
     botId: string,
     anchorMessageId: string,
     text: string,
-  ) => void;
-  /**
-   * The draft at `revision` was sent from that box: dropped while the box
-   * still holds it, and kept when a newer draft took its place before the
-   * send landed.
-   */
-  readonly spendThreadBox: (
-    botId: string,
-    anchorMessageId: string,
-    revision: number,
   ) => void;
   /** Drops every draft of the bot: its tab closed. */
   readonly forgetBot: (botId: string) => void;
@@ -151,19 +140,6 @@ export const useBotDraftsStore = create<BotDraftsState>()((set) => ({
         ),
       };
     }),
-  spendThreadBox: (botId, anchorMessageId, revision) =>
-    set((state) =>
-      state.threadBoxes[botId]?.[anchorMessageId]?.revision === revision
-        ? {
-            threadBoxes: withEntry(
-              state.threadBoxes,
-              botId,
-              anchorMessageId,
-              null,
-            ),
-          }
-        : state,
-    ),
   forgetBot: (botId) =>
     set((state) => {
       const answers = { ...state.answers };

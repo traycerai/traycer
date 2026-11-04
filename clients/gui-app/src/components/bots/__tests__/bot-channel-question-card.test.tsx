@@ -1098,7 +1098,11 @@ describe("<BotChannelView tiles={null} /> what a member has not sent, across the
     expect(questionThreadBox().value).toBe("");
   });
 
-  /** The Discuss draft sent from the question's thread, the thread closed and opened again while the send is held. */
+  /**
+   * The Discuss draft sent from the question's thread, the thread closed and
+   * opened again while the send is held: the draft went with the send, so the
+   * box opens empty.
+   */
   async function sentThenReopened(): Promise<void> {
     const user = userEvent.setup();
     heldSends = [];
@@ -1108,10 +1112,10 @@ describe("<BotChannelView tiles={null} /> what a member has not sent, across the
     await user.click(screen.getByTestId("bot-thread-composer-send"));
     view.reopen(null);
     view.reopen(QUESTION_THREAD);
-    expect(questionThreadBox().value).toBe("Hold the migration");
+    expect(questionThreadBox().value).toBe("");
   }
 
-  it("empties the box opened again while the send was in flight once it lands, so the sent draft is not offered twice", async () => {
+  it("does not offer the sent draft again in the box opened while the send was in flight, once it lands", async () => {
     await sentThenReopened();
 
     await land();
@@ -1126,11 +1130,11 @@ describe("<BotChannelView tiles={null} /> what a member has not sent, across the
   it("keeps what was typed in the box opened again after the send left, when the send lands", async () => {
     const user = userEvent.setup();
     await sentThenReopened();
-    await user.type(questionThreadBox(), " today");
+    await user.type(questionThreadBox(), "Hold off today");
 
     await land();
 
-    expect(questionThreadBox().value).toBe("Hold the migration today");
+    expect(questionThreadBox().value).toBe("Hold off today");
   });
 
   it("keeps a draft Discuss puts in the thread's open box while an earlier send from it is in flight", async () => {

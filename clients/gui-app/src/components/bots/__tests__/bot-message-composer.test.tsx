@@ -1,10 +1,11 @@
 /**
- * The bot message box's report of an accepted send (`onSent`), through the
- * REAL `BotMessageComposer`: the send mutation is scripted, and each case
- * answers the send through the callbacks the box handed it, as the host's
- * answer or refusal would land.
+ * The bot message box through the REAL `BotMessageComposer`: its report of an
+ * accepted send (`onSent`), the box emptying at the send, and a failed send
+ * putting the text back. The send mutation is scripted, and each case answers
+ * the send through the callbacks the box handed it, as the host's answer or
+ * refusal would land.
  */
-import type { ReactNode } from "react";
+import { useState, type ReactNode } from "react";
 import {
   act,
   cleanup,
@@ -18,7 +19,12 @@ import type {
   BotConversationSendRequest,
   BotConversationSendResponse,
 } from "@traycer/protocol/host/bot/conversation-schemas";
-import type { BotSendFailure } from "@/hooks/bots/use-bot-send-failure";
+import {
+  useBotSendFailure,
+  type BotSendFailure,
+} from "@/hooks/bots/use-bot-send-failure";
+import { useKeptBoxDraft } from "@/hooks/bots/use-kept-box-draft";
+import { useBotDraftsStore } from "@/stores/bots/bot-drafts-store";
 
 /** What the box hands the send mutation for its send. */
 interface SendCallbacks {
@@ -34,6 +40,8 @@ const mocks = vi.hoisted(() => ({
   >(),
   /** Each send's callbacks, to the send settling once the box has taken its outcome. */
   settled: new WeakMap<SendCallbacks, Promise<void>>(),
+  /** Whether a send is on its way: set at the send, cleared when it settles. */
+  pending: false,
 }));
 
 vi.mock("@/hooks/host/use-tab-host-client", () => ({
@@ -44,6 +52,7 @@ vi.mock("@/hooks/bots/use-bot-mutations", () => ({
   // through the callbacks the promise is built on.
   useBotConversationSendMutation: () => ({
     mutateAsync: (variables: BotConversationSendRequest) => {
+      mocks.pending = true;
       const { promise, resolve, reject } =
         Promise.withResolvers<BotConversationSendResponse>();
       const callbacks: SendCallbacks = { onSuccess: resolve, onError: reject };
@@ -57,7 +66,7 @@ vi.mock("@/hooks/bots/use-bot-mutations", () => ({
       mocks.send(variables, callbacks);
       return promise;
     },
-    isPending: false,
+    isPending: mocks.pending,
   }),
 }));
 
@@ -81,6 +90,7 @@ const RESPONSE: BotConversationSendResponse = {
 
 const FAILURE: BotSendFailure = {
   failed: false,
+  unsent: null,
   fail: () => undefined,
   clear: () => undefined,
 };
@@ -88,6 +98,7 @@ const FAILURE: BotSendFailure = {
 const onSent =
   vi.fn<(response: BotConversationSendResponse, text: string) => boolean>();
 const onEditEnd = vi.fn<() => void>();
+const onEditResume = vi.fn<(edit: BotComposerEdit) => void>();
 
 function composer(
   edit: BotComposerEdit | null,
@@ -106,11 +117,64 @@ function composer(
       failure={FAILURE}
       edit={edit}
       onEditEnd={onEditEnd}
+      onEditResume={onEditResume}
       seed={null}
       keptDraft={null}
       quote={quote}
       onSent={onSent}
     />
+  );
+}
+
+/**
+ * The box with the owner's own state: the real failure line, an edit that
+ * ends and resumes as the box says, and optionally the real kept draft.
+ */
+function Harness(props: {
+  readonly initialEdit: BotComposerEdit | null;
+  readonly keepDraft: boolean;
+}): ReactNode {
+  const failure = useBotSendFailure();
+  const [edit, setEdit] = useState<BotComposerEdit | null>(props.initialEdit);
+  const kept = useKeptBoxDraft("bot-1", "conversation-channel");
+  // Opening the box again replaces it, as a channel closed and reopened does,
+  // while the failure line, the edit and the kept draft stay with the owner.
+  const [boxGeneration, setBoxGeneration] = useState(0);
+  return (
+    <>
+      <button
+        type="button"
+        data-testid="reopen-box"
+        onClick={() => setBoxGeneration((generation) => generation + 1)}
+      >
+        Reopen
+      </button>
+      <BotMessageComposer
+        key={boxGeneration}
+        botId="bot-1"
+        conversationId="conversation-channel"
+        threadId={null}
+        announcementId={null}
+        sendable
+        placeholder="Message Tracy"
+        label="Message Tracy"
+        testId="bot-channel-composer"
+        failure={failure}
+        edit={edit}
+        onEditEnd={() => {
+          onEditEnd();
+          setEdit(null);
+        }}
+        onEditResume={(resumed) => {
+          onEditResume(resumed);
+          setEdit(resumed);
+        }}
+        seed={props.keepDraft ? kept.seed : null}
+        keptDraft={props.keepDraft ? kept.keptDraft : null}
+        quote={null}
+        onSent={onSent}
+      />
+    </>
   );
 }
 
@@ -133,6 +197,7 @@ async function settleSend(
   outcome: (callbacks: SendCallbacks) => void,
 ): Promise<void> {
   await act(async () => {
+    mocks.pending = false;
     outcome(callbacks);
     await mocks.settled.get(callbacks);
   });
@@ -143,11 +208,19 @@ beforeEach(() => {
   onSent.mockReturnValue(false);
 });
 
+/** The host refusing the post. */
+function refuse(callbacks: SendCallbacks): void {
+  callbacks.onError?.(new Error("host refused the post"));
+}
+
 afterEach(() => {
   cleanup();
   mocks.send.mockReset();
+  mocks.pending = false;
   onSent.mockReset();
   onEditEnd.mockReset();
+  onEditResume.mockReset();
+  useBotDraftsStore.setState({ answers: {}, threadBoxes: {} });
 });
 
 describe("<BotMessageComposer /> reporting a send", () => {
@@ -193,20 +266,6 @@ describe("<BotMessageComposer /> reporting a send", () => {
     expect(box().value).toBe("");
   });
 
-  it("reports nothing for a send the host refused, and keeps the text", async () => {
-    const user = userEvent.setup();
-    render(composer(null, null));
-    await user.type(box(), "Is CI green?");
-    await user.click(screen.getByTestId("bot-channel-composer-send"));
-
-    await settleSend(lastSend(), (callbacks) =>
-      callbacks.onError?.(new Error("host refused the post")),
-    );
-
-    expect(onSent).not.toHaveBeenCalled();
-    expect(box().value).toBe("Is CI green?");
-  });
-
   it("reports the send that replaced a failed message, as it ends the edit", async () => {
     const user = userEvent.setup();
     render(
@@ -239,13 +298,204 @@ describe("<BotMessageComposer /> reporting a send", () => {
     await settleSend(callbacks, (sent) => sent.onSuccess?.(RESPONSE));
 
     expect(onSent).toHaveBeenCalledWith(RESPONSE, "Is CI green?");
-    expect(onEditEnd).not.toHaveBeenCalled();
+    expect(onEditEnd).toHaveBeenCalledTimes(1);
     expect(box().value).toBe("Is the nightly green?");
   });
 });
 
+describe("<BotMessageComposer /> clearing at the send", () => {
+  const FAILED_ID = "bot-channel-composer-send-failed";
+  const RESTORE_ID = "bot-channel-composer-send-failed-restore";
+  const EDITING_ID = "bot-channel-composer-editing";
+  /** What the channel's box keeps outside it. */
+  const kept = (): string | undefined =>
+    useBotDraftsStore.getState().threadBoxes["bot-1"]?.["conversation-channel"]
+      ?.text;
+
+  it("empties the box at the send and takes the next message while it is on its way", async () => {
+    const user = userEvent.setup();
+    render(<Harness initialEdit={null} keepDraft={false} />);
+
+    await user.type(box(), "Is CI green?{Enter}");
+
+    expect(box().value).toBe("");
+    expect(box().disabled).toBe(false);
+
+    await user.type(box(), "And the nightly?");
+
+    expect(box().value).toBe("And the nightly?");
+    const send = screen.getByTestId("bot-channel-composer-send");
+    expect(send instanceof HTMLButtonElement && send.disabled).toBe(true);
+    await settleSend(lastSend(), (callbacks) =>
+      callbacks.onSuccess?.(RESPONSE),
+    );
+  });
+
+  it("puts the text back in the emptied box when the host refuses the send", async () => {
+    const user = userEvent.setup();
+    render(<Harness initialEdit={null} keepDraft={false} />);
+    await user.type(box(), "Is CI green?{Enter}");
+
+    await settleSend(lastSend(), refuse);
+
+    expect(onSent).not.toHaveBeenCalled();
+    expect(box().value).toBe("Is CI green?");
+    expect(screen.getByTestId(FAILED_ID).textContent).toBe(
+      "Couldn't send. Try again.",
+    );
+    expect(screen.queryByTestId(RESTORE_ID)).toBeNull();
+
+    await user.type(box(), "!");
+
+    expect(screen.queryByTestId(FAILED_ID)).toBeNull();
+  });
+
+  it("resumes the edit with the text it sent when the host refuses an edit's send", async () => {
+    const user = userEvent.setup();
+    render(
+      <Harness
+        initialEdit={{ requestId: "request-failed", text: "Is CI green?" }}
+        keepDraft={false}
+      />,
+    );
+    await user.type(box(), " today{Enter}");
+    expect(screen.queryByTestId(EDITING_ID)).toBeNull();
+    expect(box().value).toBe("");
+
+    await settleSend(lastSend(), refuse);
+
+    expect(onEditResume).toHaveBeenCalledWith({
+      requestId: "request-failed",
+      text: "Is CI green? today",
+    });
+    expect(screen.getByTestId(EDITING_ID).textContent).toContain(
+      "Sending replaces your message that failed.",
+    );
+    expect(box().value).toBe("Is CI green? today");
+    expect(screen.getByTestId(FAILED_ID).textContent).toBe(
+      "Couldn't send. Try again.",
+    );
+  });
+
+  it("leaves a newer draft and offers the failed text back, until it is restored over the draft", async () => {
+    const user = userEvent.setup();
+    render(<Harness initialEdit={null} keepDraft={false} />);
+    await user.type(box(), "Is CI green?{Enter}");
+    await user.type(box(), "And the nightly?");
+
+    await settleSend(lastSend(), refuse);
+
+    expect(box().value).toBe("And the nightly?");
+    expect(screen.getByTestId(FAILED_ID).textContent).toContain(
+      "Couldn't send:Is CI green?",
+    );
+
+    await user.type(box(), " Please.");
+
+    expect(box().value).toBe("And the nightly? Please.");
+    expect(screen.getByTestId(RESTORE_ID)).toBeTruthy();
+
+    await user.click(screen.getByTestId(RESTORE_ID));
+
+    expect(box().value).toBe("Is CI green?");
+    expect(screen.queryByTestId(FAILED_ID)).toBeNull();
+  });
+
+  it("resumes an edit that failed when its text is restored over a newer draft", async () => {
+    const user = userEvent.setup();
+    render(
+      <Harness
+        initialEdit={{ requestId: "request-failed", text: "Is CI green?" }}
+        keepDraft={false}
+      />,
+    );
+    await user.type(box(), "{Enter}");
+    await user.type(box(), "Something else");
+    await settleSend(lastSend(), refuse);
+    expect(screen.queryByTestId(EDITING_ID)).toBeNull();
+
+    await user.click(screen.getByTestId(RESTORE_ID));
+
+    expect(onEditResume).toHaveBeenCalledWith({
+      requestId: "request-failed",
+      text: "Is CI green?",
+    });
+    expect(screen.getByTestId(EDITING_ID)).toBeTruthy();
+    expect(box().value).toBe("Is CI green?");
+  });
+
+  it("spends the kept draft at the send, and keeps it again when the send fails", async () => {
+    const user = userEvent.setup();
+    render(<Harness initialEdit={null} keepDraft />);
+    await user.type(box(), "Is CI green?");
+    expect(kept()).toBe("Is CI green?");
+
+    await user.keyboard("{Enter}");
+
+    expect(kept()).toBeUndefined();
+
+    await settleSend(lastSend(), refuse);
+
+    expect(box().value).toBe("Is CI green?");
+    expect(kept()).toBe("Is CI green?");
+  });
+
+  it("keeps the draft outside the box again when the send fails after the box is gone", async () => {
+    const user = userEvent.setup();
+    const view = render(<Harness initialEdit={null} keepDraft />);
+    await user.type(box(), "Is CI green?{Enter}");
+    const callbacks = lastSend();
+    view.unmount();
+
+    await settleSend(callbacks, refuse);
+
+    expect(kept()).toBe("Is CI green?");
+  });
+
+  it("leaves a newer kept draft alone and offers the failed text back when the send fails after its box is gone", async () => {
+    const user = userEvent.setup();
+    render(<Harness initialEdit={null} keepDraft />);
+    await user.type(box(), "Is CI green?{Enter}");
+    const callbacks = lastSend();
+    await user.click(screen.getByTestId("reopen-box"));
+    await user.type(box(), "And the nightly?");
+
+    await settleSend(callbacks, refuse);
+
+    expect(kept()).toBe("And the nightly?");
+    expect(box().value).toBe("And the nightly?");
+    expect(
+      screen.getByTestId("bot-channel-composer-send-failed").textContent,
+    ).toContain("Couldn't send:Is CI green?");
+
+    await user.click(
+      screen.getByTestId("bot-channel-composer-send-failed-restore"),
+    );
+
+    expect(box().value).toBe("Is CI green?");
+  });
+
+  it("does not say a queued send was saved once the person has typed a newer draft", async () => {
+    const user = userEvent.setup();
+    render(<Harness initialEdit={null} keepDraft={false} />);
+    await user.type(box(), "Is CI green?{Enter}");
+    await user.type(box(), "And the nightly?");
+
+    await settleSend(lastSend(), (callbacks) =>
+      callbacks.onSuccess?.({ ...RESPONSE, delivery: "queued" }),
+    );
+
+    expect(onSent).toHaveBeenCalledWith(
+      { ...RESPONSE, delivery: "queued" },
+      "Is CI green?",
+    );
+    expect(screen.queryByTestId("bot-channel-composer-queued")).toBeNull();
+    expect(box().value).toBe("And the nightly?");
+  });
+});
+
 describe("<BotMessageComposer /> quoting", () => {
-  it("keeps a quote added while a send is in flight when the send lands, and reports the send", async () => {
+  it("keeps a quote added to the emptied box while a send is in flight when the send lands, and reports the send", async () => {
     const user = userEvent.setup();
     const view = render(composer(null, null));
     await user.type(box(), "Is CI green?");
@@ -259,10 +509,10 @@ describe("<BotMessageComposer /> quoting", () => {
         taken: vi.fn(),
       }),
     );
-    expect(box().value).toBe("Is CI green?\n\n> quoted\n\n");
+    expect(box().value).toBe("> quoted\n\n");
     await settleSend(callbacks, (sent) => sent.onSuccess?.(RESPONSE));
 
-    expect(box().value).toBe("Is CI green?\n\n> quoted\n\n");
+    expect(box().value).toBe("> quoted\n\n");
     expect(onSent).toHaveBeenCalledWith(RESPONSE, "Is CI green?");
   });
 });

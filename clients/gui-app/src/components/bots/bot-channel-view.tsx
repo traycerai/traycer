@@ -388,7 +388,7 @@ export function BotChannelView(props: {
           supersedes: null,
           answer: null,
         },
-        { onError: failSend },
+        { onError: () => failSend(null) },
       );
     },
     [botId, channelId, clearSendFailure, failSend, send],
@@ -418,7 +418,7 @@ export function BotChannelView(props: {
             skipped: given.skipped,
           },
         },
-        { onError: failSend },
+        { onError: () => failSend(null) },
       );
     },
     [botId, channelId, clearSendFailure, failSend, sendAsync],
@@ -798,6 +798,7 @@ export function BotChannelView(props: {
                 failure={sendFailure}
                 edit={edit}
                 onEditEnd={endEdit}
+                onEditResume={setEdit}
                 seed={channelSeed}
                 keptDraft={channelKeptDraft}
                 quote={quoteFor(null)}
