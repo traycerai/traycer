@@ -4,6 +4,7 @@ import { TrackPlayer } from "../player";
 import type { StemSource } from "../stems";
 import type {
   Bookend,
+  GroupedLayer,
   Layer,
   LayerProperties,
   Phase,
@@ -422,6 +423,87 @@ describe("TrackPlayer run arc", () => {
     expect(output.plays("bus0/0").filter((play) => play.at >= 5)).toHaveLength(
       1,
     );
+  });
+
+  it("gives back a skipped sample and the one a state move placed after it when a stop cuts both, so a resume plays each group once", async () => {
+    const output = new FakeOutput();
+    const layer: GroupedLayer = {
+      name: "G",
+      groups: [
+        { name: "X", variants: 1 },
+        { name: "Y", variants: 1 },
+      ],
+      sequence: ["X", "Y"],
+      sublayers: 1,
+      sublayerStartingOffset: null,
+      pan: null,
+    };
+    const track: VariableTrack = {
+      ...buildTrack({
+        lengthSeconds: 60,
+        layers: [layer],
+        states: [
+          stateOf("first", [properties(null, 0.75, 0, 2)], 1),
+          stateOf("second", [properties(null, 0, 0, 2)], 1),
+        ],
+        intro: null,
+        outro: null,
+        phases: [],
+      }),
+      alignmentSeconds: 0.25,
+    };
+    // X is variant 1 and Y variant 2; the first load of X fails once.
+    let xLoads = 0;
+    const stems: StemSource = {
+      load: (_track, _layer, variant) => {
+        if (variant === 1) {
+          xLoads += 1;
+          if (xLoads === 1) return Promise.reject(new Error("transient"));
+        }
+        return Promise.resolve(makeAudioBuffer(variant === 1 ? 0.1 : 0.2, 10));
+      },
+    };
+    const player = makeFirstStatePlayer(output, stems, track);
+    player.start(0, 0.1);
+    await vi.advanceTimersByTimeAsync(250);
+    player.enterState("second");
+    await vi.advanceTimersByTimeAsync(470);
+    // The stop is at clock 0.72, before the sample reported for 0.80 sounds.
+    player.stop(0.1);
+    await vi.advanceTimersByTimeAsync(4280);
+    expect(output.plays("bus0/0").every((play) => play.when > 0.72)).toBe(true);
+
+    player.start(player.elapsed(), 0.1);
+    await vi.advanceTimersByTimeAsync(8000);
+    expect(
+      output
+        .plays("bus0/0")
+        .filter((play) => play.at >= 5)
+        .map((play) => play.duration),
+    ).toEqual([0.1, 0.2]);
+  });
+
+  it("does not play a capped layer again when a start resumes from before a sample that sounded", async () => {
+    const output = new FakeOutput();
+    const track = buildTrack({
+      lengthSeconds: 60,
+      layers: [layerOf("A", 2, null)],
+      states: [stateOf("only", [properties(null, 1, 4, 1)], 1)],
+      intro: null,
+      outro: null,
+      phases: [],
+    });
+    const player = makePlayer(output, new FakeStems(1), track, 0);
+    player.start(0, 0.1);
+    // The 0.48 s tick hands the output the play due at 1.05 s, which sounds.
+    await vi.advanceTimersByTimeAsync(2000);
+    expect(output.plays("bus0/0")).toHaveLength(1);
+    player.stop(0.1);
+    await vi.advanceTimersByTimeAsync(3000);
+    player.start(0.5, 0.1);
+    await vi.advanceTimersByTimeAsync(8000);
+
+    expect(output.plays("bus0/0")).toHaveLength(1);
   });
 
   it("keeps a long fade's end when a layer's target is restated and ramps a changed target over 1.5 s", async () => {

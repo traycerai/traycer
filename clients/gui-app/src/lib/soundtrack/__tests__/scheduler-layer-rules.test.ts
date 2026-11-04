@@ -1,5 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { TrackScheduler, type RandomSource } from "../scheduler";
+import {
+  TrackScheduler,
+  type RandomSource,
+  type ScheduledPlay,
+} from "../scheduler";
 import type {
   GroupedLayer,
   Layer,
@@ -268,28 +272,93 @@ describe("TrackScheduler restart", () => {
     pan: null,
   };
 
-  // The first play, X (variant 1), starts at 3 s. A restart before it takes it
-  // back, as a stop cut it before it sounded; one after it keeps its turn.
-  it.each([
-    { restartAt: 1, nextVariant: 1 },
-    { restartAt: 3.5, nextVariant: 2 },
-  ])(
-    "after a restart at $restartAt s the layer's next group turn is variant $nextVariant",
-    ({ restartAt, nextVariant }) => {
-      const state = stateOf(
-        "only",
-        [{ ...properties(null, [0, 0]), startPause: [3, 3] }],
-        1,
-      );
-      const scheduler = schedulerFor(trackOf([grouped], [state]), () => 0.5);
-      const [first] = scheduler.advance(3);
-      expect(first.variant).toBe(1);
-      expect(scheduler.confirm(first, 1, 0)).toBe(3);
+  const gappedState = stateOf(
+    "only",
+    [{ ...properties(null, [0, 0]), startPause: [3, 3] }],
+    1,
+  );
 
-      scheduler.restartAt(restartAt);
+  function confirmedFirst(): {
+    scheduler: TrackScheduler;
+    first: ScheduledPlay;
+  } {
+    const scheduler = schedulerFor(
+      trackOf([grouped], [gappedState]),
+      () => 0.5,
+    );
+    const [first] = scheduler.advance(3);
+    expect(first.variant).toBe(1);
+    expect(scheduler.confirm(first, 1, 0)).toBe(3);
+    return { scheduler, first };
+  }
+
+  // The first play, X (variant 1), starts at 3 s. A stop that cut it before it
+  // sounded gives its turn back; one that let it sound does not, wherever the
+  // next start resumes, even from before the play.
+  it.each([
+    { takenBack: true, nextVariant: 1 },
+    { takenBack: false, nextVariant: 2 },
+  ])(
+    "restarting at 1 s with the first play taken back: $takenBack goes on with variant $nextVariant",
+    ({ takenBack, nextVariant }) => {
+      const { scheduler, first } = confirmedFirst();
+      if (takenBack) scheduler.takeBack([first]);
+
+      scheduler.restartAt(1);
       expect(scheduler.advance(20).map((play) => play.variant)).toEqual([
         nextVariant,
       ]);
     },
   );
+
+  it("gives a play back once, however many times a stop reports it", () => {
+    const { scheduler, first } = confirmedFirst();
+    scheduler.takeBack([first]);
+    scheduler.takeBack([first]);
+
+    scheduler.restartAt(1);
+    expect(scheduler.advance(20).map((play) => play.variant)).toEqual([1]);
+  });
+
+  it("changes nothing for a play a state move forgot before it reported", () => {
+    const other = { ...gappedState, name: "other" };
+    const scheduler = schedulerFor(
+      trackOf([grouped], [gappedState, other]),
+      () => 0.5,
+    );
+    const [forgotten] = scheduler.advance(3);
+    scheduler.enterState(other, 3);
+    scheduler.skip(forgotten);
+    scheduler.takeBack([forgotten]);
+
+    expect(scheduler.advance(30).map((play) => play.variant)).toEqual([1]);
+  });
+});
+
+describe("TrackScheduler takeBack of a sequence", () => {
+  it("keeps the sequence a cut play did not open, so a capped layer stays parked", () => {
+    const state = stateOf(
+      "only",
+      [
+        {
+          ...properties(null, [0, 0]),
+          sequenceLength: [2, 2],
+          playsPerRun: 1,
+        },
+      ],
+      1,
+    );
+    const scheduler = schedulerFor(
+      trackOf([pooledLayer("A")], [state]),
+      () => 0.5,
+    );
+    const [first] = scheduler.advance(0);
+    expect(scheduler.confirm(first, 1, 0)).toBe(0);
+    const [second] = scheduler.advance(1);
+    expect(scheduler.confirm(second, 1, 0)).toBe(1);
+
+    scheduler.takeBack([second]);
+    scheduler.restartAt(1);
+    expect(scheduler.advance(100)).toEqual([]);
+  });
 });
