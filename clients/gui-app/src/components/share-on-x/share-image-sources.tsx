@@ -3,7 +3,7 @@ import {
   ScreenImage,
   SetUpImage,
   SHARE_PIXEL_FONT_FAMILY,
-  TaskCardImage,
+  TeamImage,
   UsageImage,
 } from "@/components/share-on-x/share-image-cards";
 import {
@@ -18,7 +18,6 @@ import { appLogger, describeLogErrorSummary } from "@/lib/logger";
 
 export interface ShareImageSourcesProps {
   readonly setUpHarnesses: ReadonlyArray<SetUpHarness>;
-  readonly taskTitle: string | null;
   readonly usage: ShareUsageFacts | null;
   /** The window as captured when the dialog opened, to frame. */
   readonly screenCapture: ShareImage | null;
@@ -31,18 +30,11 @@ export interface ShareImageSourcesProps {
 
 /**
  * Draws the dialog's images offscreen and rasterises each once it has data:
- * the setup, the framed screen, the task's usage and the task card. Nothing
+ * the setup, the framed screen, the task's usage and its agent team. Nothing
  * here is visible or reachable; the dialog shows the resulting PNGs.
  */
 export function ShareImageSources(props: ShareImageSourcesProps): ReactNode {
-  const {
-    setUpHarnesses,
-    taskTitle,
-    usage,
-    screenCapture,
-    onCaptured,
-    onFailed,
-  } = props;
+  const { setUpHarnesses, usage, screenCapture, onCaptured, onFailed } = props;
   return (
     <div
       aria-hidden="true"
@@ -80,19 +72,17 @@ export function ShareImageSources(props: ShareImageSourcesProps): ReactNode {
           <UsageImage facts={usage} />
         </OffscreenCapture>
       )}
-      {taskTitle === null ? null : (
+      {usage === null || usage.chatCount < 2 ? null : (
         <OffscreenCapture
-          // Drawn again when the usage arrives or changes: it names the
-          // task's agents and counts its chats.
           captureKey={JSON.stringify([
-            taskTitle,
-            usage?.agents,
-            usage?.chatCount,
+            usage.chatCount,
+            usage.machineCount,
+            usage.agents.map((agent) => agent.id),
           ])}
-          onCaptured={(captured) => onCaptured("card", captured)}
-          onFailed={() => onFailed("card")}
+          onCaptured={(captured) => onCaptured("team", captured)}
+          onFailed={() => onFailed("team")}
         >
-          <TaskCardImage title={taskTitle} facts={usage} />
+          <TeamImage facts={usage} />
         </OffscreenCapture>
       )}
     </div>

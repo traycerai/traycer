@@ -236,26 +236,104 @@ function AgentChips(props: {
   );
 }
 
-/** The task's title, and the agents that worked on it this week. */
-export function TaskCardImage(props: {
-  readonly title: string;
-  readonly facts: ShareUsageFacts | null;
+/** Most agents the team picture draws before it folds the rest into "+N". */
+const MAX_DRAWN_AGENTS = 12;
+
+/** The orbit box, `.share-image__orbit`: 448 × 473. */
+const ORBIT_CENTER_X = 224;
+const ORBIT_CENTER_Y = 236;
+const ORBIT_RADIUS = 172;
+
+interface OrbitNode {
+  readonly key: string;
+  readonly x: number;
+  readonly y: number;
+  /** The "+N" count of the agents left undrawn, on the last node. */
+  readonly more: number | null;
+}
+
+function orbitNodes(agentCount: number): OrbitNode[] {
+  const fitsAll = agentCount <= MAX_DRAWN_AGENTS;
+  const drawn = fitsAll ? agentCount : MAX_DRAWN_AGENTS;
+  return Array.from({ length: drawn }, (_, index) => {
+    // From the top, clockwise.
+    const angle = (index / drawn) * Math.PI * 2 - Math.PI / 2;
+    const last = index === drawn - 1;
+    return {
+      key: `agent-${String(index)}`,
+      x: ORBIT_CENTER_X + Math.cos(angle) * ORBIT_RADIUS,
+      y: ORBIT_CENTER_Y + Math.sin(angle) * ORBIT_RADIUS,
+      more: !fitsAll && last ? agentCount - (MAX_DRAWN_AGENTS - 1) : null,
+    };
+  });
+}
+
+/**
+ * How many agents worked on one task in the last 7 days, on which coding agents, and
+ * across how many machines when more than one. Nothing about what the task
+ * is.
+ */
+export function TeamImage(props: {
+  readonly facts: ShareUsageFacts;
 }): ReactNode {
   const { facts } = props;
-  const named = facts !== null && facts.agents.length > 0;
-  const tag = named
-    ? `${plural(facts.agents.length, "agent", "agents")} · ${plural(facts.chatCount, "chat", "chats")} this week`
-    : "The nerve center for agentic coding";
+  const machines = facts.machineCount >= 2 ? facts.machineCount : null;
+  const nodes = orbitNodes(facts.chatCount);
   return (
-    <ShareImageFrame tag={tag} tagPlacement="footer">
-      <TraycerIcon
-        aria-hidden="true"
-        className="share-image__ghost text-white"
-      />
-      <div className="share-image__body share-image__card-copy">
-        <p className="share-image__eyebrow">Now building</p>
-        <h2 className="share-image__title">{props.title}</h2>
-        {named ? <AgentChips agents={facts.agents} /> : null}
+    <ShareImageFrame tag="Shared context" tagPlacement="footer">
+      <div className="share-image__body share-image__setup-copy">
+        <p className="share-image__eyebrow">One task · last 7 days</p>
+        <h2 className="share-image__headline">
+          {machines === null
+            ? `${String(facts.chatCount)} agents.`
+            : `${String(facts.chatCount)} agents, ${String(machines)} machines.`}
+          <br />
+          <span className="share-image__pixel">One</span> task.
+        </h2>
+        <AgentChips agents={facts.agents} />
+      </div>
+      <div className="share-image__orbit">
+        <svg
+          aria-hidden="true"
+          className="share-image__wires"
+          viewBox="0 0 448 473"
+          fill="none"
+        >
+          <circle
+            className="share-image__orbit-ring"
+            cx={ORBIT_CENTER_X}
+            cy={ORBIT_CENTER_Y}
+            r={ORBIT_RADIUS}
+          />
+          {nodes.map((node) => (
+            <line
+              key={node.key}
+              x1={ORBIT_CENTER_X}
+              y1={ORBIT_CENTER_Y}
+              x2={node.x}
+              y2={node.y}
+            />
+          ))}
+        </svg>
+        <span
+          className="share-image__node share-image__hub share-image__orbit-hub"
+          style={{ left: ORBIT_CENTER_X, top: ORBIT_CENTER_Y }}
+        >
+          <TraycerIcon aria-hidden="true" className="share-image__hub-mark" />
+        </span>
+        {nodes.map((node) => (
+          <span
+            key={node.key}
+            className="share-image__node share-image__agent"
+            style={{ left: node.x, top: node.y }}
+          >
+            {node.more === null ? (
+              <span className="share-image__agent-dot" />
+            ) : (
+              <span className="share-image__more">+{String(node.more)}</span>
+            )}
+          </span>
+        ))}
       </div>
     </ShareImageFrame>
   );

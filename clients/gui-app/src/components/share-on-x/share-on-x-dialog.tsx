@@ -13,8 +13,9 @@ import {
 import { Textarea } from "@/components/ui/textarea";
 import { ShareImageSources } from "@/components/share-on-x/share-image-sources";
 import {
-  SHARE_ON_X_LINES,
+  shuffledShareOnXLines,
   type ShareOnXLine,
+  type ShareOnXLineContext,
 } from "@/components/share-on-x/share-on-x-lines";
 import {
   X_POST_LIMIT,
@@ -37,7 +38,6 @@ import {
   AnalyticsEvent,
   type AnalyticsShareImage,
 } from "@/lib/analytics";
-import { useRegisteredEpicTitle } from "@/lib/epic-selectors";
 import { copyImageBlobPromiseToClipboard } from "@/lib/images/copy-image-to-clipboard";
 import { isMac } from "@/lib/keybindings/platform";
 import { useOpenLinkWithPending } from "@/lib/links/open-link";
@@ -51,14 +51,14 @@ const IMAGE_ORDER: ReadonlyArray<AnalyticsShareImage> = [
   "setup",
   "screen",
   "usage",
-  "card",
+  "team",
 ];
 
 const IMAGE_LABELS: Record<AnalyticsShareImage, string> = {
   setup: "Your setup",
   screen: "This screen",
   usage: "Task usage",
-  card: "Task card",
+  team: "Agent team",
 };
 
 export interface ShareOnXDialogProps {
@@ -90,24 +90,15 @@ export function ShareOnXDialog(props: ShareOnXDialogProps): ReactNode {
   );
 }
 
-function shuffled<T>(items: ReadonlyArray<T>): ReadonlyArray<T> {
-  const copy = [...items];
-  for (let index = copy.length - 1; index > 0; index -= 1) {
-    const swap = Math.floor(Math.random() * (index + 1));
-    [copy[index], copy[swap]] = [copy[swap], copy[index]];
-  }
-  return copy;
-}
-
 function pasteShortcut(): string {
   return isMac() ? "⌘V" : "Ctrl+V";
 }
 
 function ShareOnXDialogContent(props: ShareOnXDialogProps): ReactNode {
   const { epicId, hostId, screenCapture, onClose } = props;
-  const [lines] = useState(() => shuffled(SHARE_ON_X_LINES));
+  const [sources] = useState(shuffledShareOnXLines);
   const [pageStart, setPageStart] = useState(0);
-  const [selectedId, setSelectedId] = useState(lines[0].id);
+  const [selectedId, setSelectedId] = useState(sources[0].id);
   const [edits, setEdits] = useState<Readonly<Record<string, string>>>({});
   const [dontAskAgain, setDontAskAgain] = useState(false);
   const [selectedImage, setSelectedImage] =
@@ -123,32 +114,12 @@ function ShareOnXDialogContent(props: ShareOnXDialogProps): ReactNode {
   );
   const checkboxId = useId();
 
-  const selectedLine: ShareOnXLine =
-    lines.find((line) => line.id === selectedId) ?? lines[0];
-  const text = edits[selectedLine.id] ?? selectedLine.text;
-  const edited = text !== selectedLine.text;
-  const length = xPostLength(text);
-
-  const textCopy = useClipboardCopy({
-    resetMs: 1_500,
-    onSuccess: () => {
-      Analytics.getInstance().track(AnalyticsEvent.ShareTextCopied, {
-        line_id: selectedLine.id,
-        edited,
-      });
-    },
-    onError: () => {
-      toast.error("Couldn't copy the post");
-    },
-  });
-
   // Sources for the generated images.
   const providers = useProvidersList({ enabled: true, subscribed: false });
   const harnesses = useMemo(
     () => setUpHarnesses(providers.data?.providers ?? []),
     [providers.data],
   );
-  const taskTitle = useRegisteredEpicTitle(epicId);
   const usageClient = useHostClientForHostId(hostId);
   const usageRequest = useMemo(
     () => buildUsageSummaryRequest({ windowDays: 7, epicId, plane: null }),
@@ -168,6 +139,45 @@ function ShareOnXDialogContent(props: ShareOnXDialogProps): ReactNode {
         : null,
     [usageQuery.data],
   );
+
+  // Written from the person's own setup and usage, so a post can quote them
+  // once they load.
+  const lines = useMemo((): ReadonlyArray<ShareOnXLine> => {
+    const context: ShareOnXLineContext = {
+      setUpAgents: harnesses.map((harness) => harness.name),
+      task:
+        usage === null
+          ? null
+          : {
+              agentCount: usage.chatCount,
+              harnesses: usage.agents.map((agent) => agent.name),
+              tokens: usage.totalTokens,
+              machineCount: usage.machineCount,
+            },
+    };
+    return sources.map((source) => ({
+      id: source.id,
+      text: source.write(context),
+    }));
+  }, [sources, harnesses, usage]);
+  const selectedLine: ShareOnXLine =
+    lines.find((line) => line.id === selectedId) ?? lines[0];
+  const text = edits[selectedLine.id] ?? selectedLine.text;
+  const edited = text !== selectedLine.text;
+  const length = xPostLength(text);
+
+  const textCopy = useClipboardCopy({
+    resetMs: 1_500,
+    onSuccess: () => {
+      Analytics.getInstance().track(AnalyticsEvent.ShareTextCopied, {
+        line_id: selectedLine.id,
+        edited,
+      });
+    },
+    onError: () => {
+      toast.error("Couldn't copy the post");
+    },
+  });
 
   const availableImages = IMAGE_ORDER.filter(
     (image) => images[image] !== undefined,
@@ -466,9 +476,6 @@ function ShareOnXDialogContent(props: ShareOnXDialogProps): ReactNode {
 
       <ShareImageSources
         setUpHarnesses={harnesses}
-        taskTitle={
-          taskTitle === null || taskTitle.length === 0 ? null : taskTitle
-        }
         usage={usage}
         screenCapture={screenCapture}
         onCaptured={(image, captured) =>

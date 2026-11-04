@@ -156,7 +156,7 @@ export type AnalyticsArtifactKind =
 export type AnalyticsUsageImageExportSource = "epic_dialog" | "settings";
 
 /** The images the "share on X" dialog offers. */
-export type AnalyticsShareImage = "setup" | "screen" | "usage" | "card";
+export type AnalyticsShareImage = "setup" | "screen" | "usage" | "team";
 
 /** The fixed phrase family a thank-you matched (`gratitude-match.ts`). */
 export type AnalyticsShareMatchKey =
@@ -2451,12 +2451,12 @@ const EVENT_EXACT_PROPERTY_VALUES = new Map<string, ReadonlySet<string>>([
   ...eventValueEntries(
     [AnalyticsEvent.ShareImageCopied],
     "image",
-    new Set(["setup", "screen", "usage", "card"]),
+    new Set(["setup", "screen", "usage", "team"]),
   ),
   ...eventValueEntries(
     [AnalyticsEvent.ShareXOpened],
     "image",
-    new Set(["setup", "screen", "usage", "card", "none"]),
+    new Set(["setup", "screen", "usage", "team", "none"]),
   ),
   ...eventValueEntries(
     [

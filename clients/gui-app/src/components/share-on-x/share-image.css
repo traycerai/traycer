@@ -244,33 +244,38 @@
   font-weight: 600;
 }
 
-/* The task card. */
+/* The agent team. */
 
-.share-image__ghost {
+.share-image__orbit {
   position: absolute;
-  top: 70px;
-  right: -90px;
-  width: 540px;
-  height: 540px;
-  opacity: 0.035;
-}
-
-.share-image__card-copy {
+  top: 118px;
   right: 72px;
-  left: 72px;
-  gap: 30px;
+  bottom: 84px;
+  left: 680px;
 }
 
-.share-image__title {
-  display: -webkit-box;
-  max-width: 980px;
-  overflow: hidden;
-  -webkit-box-orient: vertical;
-  -webkit-line-clamp: 3;
-  font-size: 64px;
-  font-weight: 300;
-  line-height: 1.08;
-  letter-spacing: -0.025em;
+.share-image__orbit-ring {
+  stroke: rgb(158 235 242 / 0.16);
+  stroke-dasharray: 3 7;
+}
+
+.share-image__orbit-hub {
+  transform: translate(-50%, -50%);
+}
+
+.share-image__agent {
+  position: absolute;
+  width: 52px;
+  height: 52px;
+  transform: translate(-50%, -50%);
+}
+
+.share-image__agent-dot {
+  width: 12px;
+  height: 12px;
+  border-radius: 9999px;
+  background: var(--share-aqua);
+  box-shadow: 0 0 14px rgb(158 235 242 / 0.7);
 }
 
 .share-image__chips {

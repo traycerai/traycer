@@ -22,6 +22,8 @@ export interface ShareUsageFacts {
   readonly rangeLabel: string;
   readonly totalTokens: number;
   readonly chatCount: number;
+  /** Machines the task's work ran on. */
+  readonly machineCount: number;
   /** Every day of the window, oldest first, with the tokens spent on it. */
   readonly days: ReadonlyArray<{
     readonly day: string;
@@ -84,6 +86,7 @@ export function shareUsageFacts(
     rangeLabel: formatDateRangeLabel(days),
     totalTokens,
     chatCount: summary.distinctChatCount,
+    machineCount: summary.hostBuckets.length,
     days: days.map((day) => ({ day, tokens: tokensByDay.get(day) ?? 0 })),
     agents: [...tokensByAgent.entries()]
       .map(([id, tokens]) => ({

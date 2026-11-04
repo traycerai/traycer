@@ -3,6 +3,7 @@ import { shareUsageFacts } from "@/components/share-on-x/share-usage-facts";
 import type { UsageSummaryResponse } from "@/hooks/usage-analytics/use-usage-summary-query";
 
 type Bucket = UsageSummaryResponse["summary"]["buckets"][number];
+type HostBucket = UsageSummaryResponse["summary"]["hostBuckets"][number];
 
 function bucket(day: string, harnessId: string, tokens: number): Bucket {
   return {
@@ -23,7 +24,27 @@ function bucket(day: string, harnessId: string, tokens: number): Bucket {
   };
 }
 
-function response(buckets: Bucket[]): UsageSummaryResponse {
+function host(hostId: string): HostBucket {
+  return {
+    hostId,
+    factCount: 1,
+    tokens: {
+      uncachedInputTokens: 0,
+      cacheReadInputTokens: 0,
+      cacheCreationTokens: 0,
+      outputTokens: 0,
+    },
+    knownCostUsd: 0,
+    knownCacheSavingsUsd: 0,
+    knownReasoningTokens: 0,
+    costProvenance: "modelPriced",
+  };
+}
+
+function response(
+  buckets: Bucket[],
+  hostBuckets: HostBucket[],
+): UsageSummaryResponse {
   const empty = { costUsd: 0, factCount: 0, tokenCount: 0 };
   return {
     servedBy: "local",
@@ -57,7 +78,7 @@ function response(buckets: Bucket[]): UsageSummaryResponse {
       },
       buckets,
       chatBuckets: [],
-      hostBuckets: [],
+      hostBuckets,
       distinctEpicCount: 1,
       distinctChatCount: 4,
       outcomeBreakdown: {
@@ -82,18 +103,22 @@ function response(buckets: Bucket[]): UsageSummaryResponse {
 describe("shareUsageFacts", () => {
   it("folds the buckets into days and agents, most tokens first", () => {
     const facts = shareUsageFacts(
-      response([
-        bucket("2026-11-02", "codex", 100),
-        bucket("2026-11-04", "claude", 300),
-        bucket("2026-11-04", "codex", 100),
-        bucket("2026-11-04", "some-new-agent", 500),
-      ]),
+      response(
+        [
+          bucket("2026-11-02", "codex", 100),
+          bucket("2026-11-04", "claude", 300),
+          bucket("2026-11-04", "codex", 100),
+          bucket("2026-11-04", "some-new-agent", 500),
+        ],
+        [host("host-a"), host("host-b")],
+      ),
     );
 
     expect(facts).toEqual({
       rangeLabel: "Nov 2 – Nov 4, 2026",
       totalTokens: 1_000,
       chatCount: 4,
+      machineCount: 2,
       days: [
         { day: "2026-11-02", tokens: 100 },
         { day: "2026-11-03", tokens: 0 },
