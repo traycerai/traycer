@@ -10,6 +10,7 @@ import {
   type SandboxDefaultsEnvironment,
 } from "@/hooks/sandboxes/use-sandbox-defaults";
 import { useHostClient, type HostRpcRegistry } from "@/lib/host";
+import type { EnvironmentPick } from "@/lib/settings-environment-pages";
 import { cloudVerdictPreflight } from "@/lib/host/cloud-verdict-preflight";
 import {
   authorizesCloudCapability,
@@ -53,18 +54,37 @@ function storagePolicyOf(
 }
 
 /**
- * One configuration's storage policy, by `personal` or team id: its
- * environment (`null` when it has none, so there is nothing to set) and the
- * read of its `storage_policy` item, with the sandbox defaults' road
- * (`useConfigurationSandboxDefaults`): the configuration's environment from
- * the account's list, its items on the viewer's session.
+ * The picked configuration's environment: Personal's, or the team's the pick
+ * names. `null` for a Local row, and while the account's list has not
+ * answered.
  */
-export function useConfigurationStoragePolicy(configurationKey: string): {
+function environmentOfPick(
+  environments: ReadonlyMap<string, SandboxDefaultsEnvironment>,
+  pick: EnvironmentPick,
+): SandboxDefaultsEnvironment | null {
+  if (pick.kind === "personal") return environments.get("personal") ?? null;
+  if (pick.kind === "local") return null;
+  for (const environment of environments.values()) {
+    if (environment.environmentId === pick.environmentId) return environment;
+  }
+  return null;
+}
+
+/**
+ * The picked configuration's storage policy: its environment (`null` when
+ * there is none, so there is nothing to set) and the read of its
+ * `storage_policy` item, with the sandbox defaults' road
+ * (`useConfigurationSandboxDefaults`): the environment from the account's
+ * list, its items on the viewer's session.
+ */
+export function useConfigurationStoragePolicy(pick: EnvironmentPick): {
   readonly environment: SandboxDefaultsEnvironment | null;
   readonly read: UseQueryResult<ConfigurationStoragePolicy, HostRpcError>;
 } {
-  const environment =
-    useSandboxDefaultsEnvironments(true).get(configurationKey) ?? null;
+  const environment = environmentOfPick(
+    useSandboxDefaultsEnvironments(true),
+    pick,
+  );
   const client = usePoolTierHostClient(useHostClient());
   const viewerId = useCloudChatViewerId();
   const authorized = useAuthStore((state) =>

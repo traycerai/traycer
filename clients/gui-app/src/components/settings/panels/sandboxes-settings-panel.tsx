@@ -106,7 +106,6 @@ import { useStagedSandboxStore } from "@/stores/composer/staged-sandbox-store";
 import { useSandboxShapeMemoryStore } from "@/stores/composer/sandbox-shape-memory-store";
 import { useConfigurationSandboxDefaults } from "@/hooks/sandboxes/use-sandbox-defaults";
 import { SandboxDefaultsSection } from "@/components/settings/panels/sandbox-defaults-section";
-import { StoragePolicySection } from "@/components/settings/panels/storage-policy-section";
 import { useRunnerHost } from "@/providers/use-runner-host";
 import { useAuthStore } from "@/stores/auth/auth-store";
 import { useSystemTabModalActions } from "@/stores/tabs/use-system-tab-modal";
@@ -165,10 +164,6 @@ export function SandboxesSettingsPanel(): ReactNode {
         // A configuration's form and save outcome are its own: two can share a
         // revision, so the form's own key does not tell them apart.
         key={`defaults:${configurationKey(configuration)}`}
-        configuration={configuration}
-      />
-      <StoragePolicySection
-        key={`storage:${configurationKey(configuration)}`}
         configuration={configuration}
       />
       <SandboxListSection

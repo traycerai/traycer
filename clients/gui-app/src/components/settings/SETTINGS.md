@@ -894,8 +894,8 @@ Account; the rest is the app itself.
   through the picker.
 - **Environment** (group id `personal`) - Providers, MCP servers, Skills,
   Permissions, Agents (id `agents`: tabs Selection guide and Definitions),
-  Model routing, Variables & shells (id `shell`), Secrets, Sandboxes, and
-  Members on a team; a Local row shows only Providers, Permissions, Agents,
+  Model routing, Variables & shells (id `shell`), Secrets, Sandboxes,
+  Storage, and Members on a team; a Local row shows only Providers, Permissions, Agents,
   Model routing, Variables & shells and Secrets. Browser agent access is the
   Browser tab of Permissions (a region below the policy on a team, whose page
   has no tabs). `agent-definitions`,
@@ -5608,20 +5608,23 @@ wrap`). Each row names the account its first usable match runs on, the
   - **No per-chat and no per-task control exists anywhere in the app**, by
     decision. The harness/model picker and the composer gain nothing from this
     feature; per-chat intervention is the actions on the cards themselves.
-- `Sandboxes` (Environment, `panels/sandboxes-settings-panel.tsx`). Only its
-  **Storage** section is described here.
-  - **Storage** (`panels/storage-policy-section.tsx`,
-    `data-testid="sandboxes-storage"`, between the defaults and the sandbox
-    list): one row, **Free up space on this computer**, "Keep chats and
-    artifacts of tasks you haven't used lately in the cloud instead of on
-    disk. Applies on every host in this environment." With the switch on, a
-    line under it reads "Runs only when the disk is getting full. A chat
-    comes back when an agent continues it."
+- `Storage` (Environment, section id `storage`, route `/settings/storage`,
+  `environment/storage-settings-panel.tsx`): what the picked configuration's
+  hosts keep on disk. It is offered for Personal and teams, and not on a
+  Local row (`PAGES_HIDDEN_BY_PICK`), since its one setting is an environment
+  item. Later storage rows go here too.
+  - **Free up space on this computer** (`panels/storage-policy-section.tsx`,
+    `data-testid="storage-free-up-space"`): "Keep chats and artifacts of
+    tasks you haven't used lately in the cloud instead of on disk. Applies
+    on every host in this environment." With the switch on, a line under it
+    reads "Runs only when the disk is getting full. A chat comes back when
+    an agent continues it."
     - It is the configuration's `storage_policy` item (key `storage`, value
       `{ freeUpSpace }`, `hooks/environment/use-storage-policy.ts`), read
-      through the pool tier like the sandbox defaults. **No item reads on**,
-      and an item whose value does not parse reads off, because the hosts
-      then free up nothing.
+      through the pool tier like the sandbox defaults. The pick names the
+      environment: Personal's own, or the team's. **No item reads on**, and
+      an item whose value does not parse reads off, because the hosts then
+      free up nothing.
     - The switch writes `environment.configuration.items.put` with the
       revision it read (`null` creates the item). While the write is pending,
       the switch shows the value being saved and a spinner beside it. A
@@ -5629,12 +5632,15 @@ wrap`). Each row names the account its first usable match runs on, the
       toast says why. A stale or refused outcome shows
       `ConfigurationWriteFeedback` under the row. A viewer of a team
       configuration sees the switch disabled.
-    - The section draws nothing on a host that does not advertise the item
-      write (`useHostSupportsMethod`). It is keyed by the viewer, like the
-      auto-archive row, so a pending save never outlives an account switch.
-    - The item changes nothing a host reports (`UNREPORTED_ITEM_KINDS`), so it
-      adds nothing to a status chip. Search folds the row into the Sandboxes
-      page entry (`contributesTo: "page"`).
+    - The row draws nothing on a host that does not advertise the item write
+      (`useHostSupportsMethod`, asked of the host the write goes through).
+      It is keyed by the viewer, like the auto-archive row, so a pending save
+      never outlives an account switch.
+    - The item changes nothing a host reports (`UNREPORTED_ITEM_KINDS`), so
+      the page carries no status chip, like Sandboxes. Search folds the row
+      into the Storage page entry (`contributesTo: "page"`): the row is gated
+      on the host, which no search shell can decide, so it is not an
+      anchored entry and has no search fixture.
 - `Keybindings` Keyboard shortcut customization.
 - `Shell` Shell binary + args used for every terminal PTY
   (`TerminalSessionManager` reads the effective config per spawn, file-watched,

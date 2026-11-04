@@ -12,7 +12,7 @@ const ADDITIONAL_PAGE_KINDS: Readonly<
 /**
  * Kinds no chip and no count reports: a configuration's sandbox defaults and
  * storage policy change nothing on a host (every host answers them applied),
- * and Sandboxes, where both are set, carries no chip.
+ * and neither Sandboxes nor Storage, where they are set, carries a chip.
  */
 const UNREPORTED_ITEM_KINDS: ReadonlySet<string> = new Set([
   "sandbox_defaults",

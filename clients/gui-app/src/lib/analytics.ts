@@ -136,6 +136,7 @@ export type AnalyticsSettingsSection =
   | "sandboxes"
   | "secrets"
   | "shell"
+  | "storage"
   | "usage"
   | "worktrees";
 
@@ -1431,6 +1432,7 @@ const ANALYTICS_SETTINGS_SECTIONS = new Set<string>(
     members: true,
     secrets: true,
     shell: true,
+    storage: true,
     usage: true,
     credits: true,
     worktrees: true,

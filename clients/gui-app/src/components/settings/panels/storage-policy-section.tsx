@@ -1,9 +1,9 @@
 /**
- * Docs: see ../SETTINGS.md (Environment ▸ Sandboxes ▸ Storage).
+ * Docs: see ../SETTINGS.md (Environment ▸ Storage).
  * Update that file whenever this settings surface changes.
  */
 import type { ReactNode } from "react";
-import { SANDBOXES } from "@/components/settings/environment/sandboxes-page.definitions";
+import { STORAGE } from "@/components/settings/environment/storage-page.definitions";
 import { configurationWriteIssue } from "@/components/settings/environment/configuration-write-issue";
 import { ConfigurationWriteFeedback } from "@/components/settings/environment/configuration-write-feedback";
 import { SettingsRow } from "@/components/settings/settings-row";
@@ -22,13 +22,13 @@ import { useHostSupportsMethod } from "@/hooks/host/use-host-supports-method";
 import { useReactiveHostReadiness } from "@/hooks/host/use-reactive-host-readiness";
 import { trackSettingChanged } from "@/lib/analytics";
 import { useHostClient } from "@/lib/host";
-import type { SandboxPageConfiguration } from "@/lib/sandboxes/sandbox-row-lines";
+import type { EnvironmentPick } from "@/lib/settings-environment-pages";
 
 const FREE_UP_SPACE_FOOTNOTE =
   "Runs only when the disk is getting full. A chat comes back when an agent continues it.";
 
 /**
- * Environment ▸ Sandboxes ▸ "Free up space on this computer": the
+ * Environment ▸ Storage ▸ "Free up space on this computer": the picked
  * configuration's `storage_policy` item, on while none is set.
  *
  * Rendered only when the surface's host advertises the item write
@@ -40,7 +40,7 @@ const FREE_UP_SPACE_FOOTNOTE =
  * row over instead of showing the outgoing account's save.
  */
 export function StoragePolicySection(props: {
-  readonly configuration: SandboxPageConfiguration;
+  readonly pick: EnvironmentPick;
 }): ReactNode {
   const writeSupported = useHostSupportsMethod(
     useReactiveHostReadiness(useHostClient()).hostId,
@@ -48,21 +48,13 @@ export function StoragePolicySection(props: {
   );
   const viewerUserId = useCloudChatViewerId();
   if (!writeSupported) return null;
-  return (
-    <StoragePolicySectionBody
-      key={viewerUserId}
-      configuration={props.configuration}
-    />
-  );
+  return <StoragePolicySectionBody key={viewerUserId} pick={props.pick} />;
 }
 
 function StoragePolicySectionBody(props: {
-  readonly configuration: SandboxPageConfiguration;
+  readonly pick: EnvironmentPick;
 }): ReactNode {
-  const { configuration } = props;
-  const { environment, read } = useConfigurationStoragePolicy(
-    configuration.kind === "team" ? configuration.teamId : "personal",
-  );
+  const { environment, read } = useConfigurationStoragePolicy(props.pick);
   const { put } = useConfigurationItemMutations();
   const issue =
     put.data === undefined ? null : configurationWriteIssue(put.data);
@@ -85,14 +77,14 @@ function StoragePolicySectionBody(props: {
     <section
       aria-label="Storage"
       className="flex flex-col border-b border-border/60"
-      data-testid="sandboxes-storage"
+      data-testid="storage-free-up-space"
     >
       <SettingsRow
-        row={SANDBOXES.definitions.freeUpSpace}
+        row={STORAGE.definitions.freeUpSpace}
         status={
           read.isError ? (
             <div className="flex flex-col gap-1">
-              <p>{SANDBOXES.definitions.freeUpSpace.description}</p>
+              <p>{STORAGE.definitions.freeUpSpace.description}</p>
               <div className="flex flex-wrap items-center gap-2">
                 <p role="status">Couldn&apos;t read this setting.</p>
                 <Button
@@ -114,17 +106,17 @@ function StoragePolicySectionBody(props: {
             {put.isPending ? (
               <AgentSpinningDots
                 className={undefined}
-                testId="sandboxes-storage-saving"
+                testId="storage-free-up-space-saving"
                 variant={undefined}
               />
             ) : null}
             <Switch
               checked={shown}
               disabled={disabled}
-              aria-label={SANDBOXES.definitions.freeUpSpace.label}
+              aria-label={STORAGE.definitions.freeUpSpace.label}
               onCheckedChange={(freeUpSpace) => {
                 if (environment === null || policy === undefined) return;
-                trackSettingChanged("sandboxes", "freeUpSpace");
+                trackSettingChanged("storage", "freeUpSpace");
                 put.mutate({
                   environmentId: environment.environmentId,
                   kind: STORAGE_POLICY_KIND,
