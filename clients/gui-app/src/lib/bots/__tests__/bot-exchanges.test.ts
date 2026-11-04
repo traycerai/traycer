@@ -302,7 +302,6 @@ function exchange(
     timestamp: Number(key.slice(1)),
     peerBotId,
     ownAgentId: TRUNK_CHAT_ID,
-    senderAgentId: fields.direction === "sent" ? TRUNK_CHAT_ID : "trunk-peer",
     text: key,
     ...fields,
   };

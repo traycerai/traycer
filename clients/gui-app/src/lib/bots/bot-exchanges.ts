@@ -17,7 +17,6 @@ export interface BotExchange {
   readonly direction: "sent" | "received";
   /** This bot's session at its end of the message. */
   readonly ownAgentId: string | null;
-  readonly senderAgentId: string | null;
   readonly text: string;
   /** The broker thread the message rides. */
   readonly responseId: string | null;
@@ -83,7 +82,6 @@ export function botExchangesOf(
       direction,
       ownAgentId:
         direction === "sent" ? event.senderAgentId : event.receiverAgentId,
-      senderAgentId: event.senderAgentId,
       text: event.messageText ?? "",
       responseId: event.responseId,
       inReplyTo: event.inReplyTo,
