@@ -25,6 +25,10 @@ import { BrowserSessionsContext } from "@/components/epic-canvas/renderers/brows
 import { handleHostIds } from "@/lib/registries/epic-session-registry";
 import { usePanePortalContainer } from "@/components/epic-tabs/pane-visibility-context";
 import {
+  MobileTileOpenTargetContext,
+  type MobileTileOpenTarget,
+} from "@/lib/canvas/tile-open/mobile-tile-open-target-context";
+import {
   usePaneActivationFocusIntent,
   type PaneActivationFocusIntent,
 } from "@/components/epic-canvas/pane-activation";
@@ -58,6 +62,7 @@ interface CaptureState {
   lastOpenEpicHandle: OpenEpicStoreHandle | null;
   lastPanePortalContainer: HTMLElement | null;
   lastPaneActivationFocusIntent: PaneActivationFocusIntent | null;
+  lastMobileOpenTarget: MobileTileOpenTarget | null;
 }
 
 const capture = vi.hoisted((): CaptureState => ({
@@ -70,6 +75,7 @@ const capture = vi.hoisted((): CaptureState => ({
   lastOpenEpicHandle: null,
   lastPanePortalContainer: null,
   lastPaneActivationFocusIntent: null,
+  lastMobileOpenTarget: null,
 }));
 
 interface PermissionRoleState {
@@ -157,6 +163,7 @@ vi.mock("@/components/epic-canvas/renderers/tile-render", () => ({
       capture.lastOpenEpicHandle = useOpenEpicHandle();
       capture.lastPanePortalContainer = usePanePortalContainer();
       capture.lastPaneActivationFocusIntent = usePaneActivationFocusIntent();
+      capture.lastMobileOpenTarget = use(MobileTileOpenTargetContext);
       return (
         <div
           data-testid="hosted-bridge-probe"
@@ -217,6 +224,7 @@ function buildEnvironment(
       geometryAnchorElement: document.createElement("div"),
       panePortalContainer: null,
       isPaneFocusedNow: () => false,
+      mobileOpenTarget: null,
     },
     ...overrides,
   });
@@ -232,6 +240,7 @@ function resetCapture(): void {
   capture.lastOpenEpicHandle = null;
   capture.lastPanePortalContainer = null;
   capture.lastPaneActivationFocusIntent = null;
+  capture.lastMobileOpenTarget = null;
   permissionRole.role = "owner";
 }
 
@@ -312,6 +321,27 @@ describe("HostedChatSurfaceContextBridge", () => {
     );
   });
 
+  it("re-provides the phone shell's open target the slot published, so an open from the hosted chat lands in the other tile", () => {
+    const mobileOpenTarget: MobileTileOpenTarget = {
+      tabId: VIEW_TAB_ID,
+      slot: "secondary",
+    };
+    const environment = buildEnvironment({
+      canvasActivity: { tabSelected: true, canvasPaneActive: true },
+      services: {
+        openEpicHandle: OPEN_EPIC_HANDLE,
+        hostClient: HOST_CLIENT,
+        geometryAnchorElement: document.createElement("div"),
+        panePortalContainer: null,
+        isPaneFocusedNow: () => false,
+        mobileOpenTarget,
+      },
+    });
+    render(<HostedChatSurfaceContextBridge environment={environment} />);
+
+    expect(capture.lastMobileOpenTarget).toBe(mobileOpenTarget);
+  });
+
   it("computes isActive = role!==null && tabSelected && canvasPaneActive (true case)", () => {
     permissionRole.role = "owner";
     const environment = buildEnvironment({
@@ -359,6 +389,7 @@ describe("HostedChatSurfaceContextBridge", () => {
         geometryAnchorElement: geometryAnchor,
         panePortalContainer: realPortalHost,
         isPaneFocusedNow: () => false,
+        mobileOpenTarget: null,
       },
     });
     render(<HostedChatSurfaceContextBridge environment={environment} />);
