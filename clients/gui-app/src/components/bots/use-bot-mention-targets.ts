@@ -22,7 +22,10 @@ export interface BotMentionTargets {
    */
   readonly bots: ReadonlyArray<BotMentionTarget> | null;
   readonly tasks: ReadonlyArray<BotMentionTarget>;
-  /** Both task reads have answered, neither with an error. */
+  /**
+   * Both task reads have answered, neither with an error, or cannot run
+   * (a viewer not signed in, a refused Home read).
+   */
   readonly tasksAnswered: boolean;
 }
 
@@ -92,11 +95,14 @@ export function useBotMentionTargets(input: {
   // The tab's own host, which the bot's tasks are read from, whichever host
   // the app has active.
   const client = useTabHostClient();
+  // The read runs only for a signed-in viewer with titles to ask for; one
+  // that cannot run will never add a name.
+  const contextsRun = cloud && userId !== null && streamTaskIds.length > 0;
   const contexts = useEpicGetTaskContextsForClient(
     client,
     streamTaskIds,
     userId,
-    { enabled: cloud },
+    { enabled: contextsRun },
   );
   const home = useCloudEpicTasksQueryForClient(client, undefined, {
     enabled: true,
@@ -132,12 +138,14 @@ export function useBotMentionTargets(input: {
     streamTaskIds,
   ]);
 
+  // A read that cannot run counts as answered: it will never add a name.
+  // Home's cached page is no answer while its read may still run.
   const tasksAnswered =
-    !contexts.isPending &&
-    contexts.error === null &&
-    !home.presentsCachedPage &&
-    !home.firstPagePending &&
-    home.firstPageError === null;
+    (!contextsRun || (!contexts.isPending && contexts.error === null)) &&
+    (home.initialLegRefused ||
+      (!home.presentsCachedPage &&
+        !home.firstPagePending &&
+        home.firstPageError === null));
 
   return { bots, tasks: taskTargets, tasksAnswered };
 }

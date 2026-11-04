@@ -16,6 +16,7 @@
  */
 import { useAuthStore } from "@/stores/auth/auth-store";
 import { BotMentionsContext } from "@/components/bots/bot-mentions-context";
+import { useBotMentionCompletion } from "@/components/bots/bot-mention-completion";
 import { buildHomeBotsModel } from "@/lib/home-bots/bots-model";
 import { EMPTY_DIRECTORY_STATE } from "@/lib/home-bots/__tests__/standalone-bots-fixtures";
 import { useStandaloneBotsStore } from "@/stores/bots/standalone-bots-store";
@@ -35,7 +36,13 @@ import {
   SHELL_WIDTH_TWO_TILES,
   type ShellFormHarness,
 } from "../../../../__tests__/mobile-level2-form-harness";
-import { StrictMode, useContext, type ReactNode } from "react";
+import {
+  StrictMode,
+  useContext,
+  useRef,
+  useState,
+  type ReactNode,
+} from "react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import {
   act,
@@ -177,6 +184,12 @@ const mocks = vi.hoisted(() => ({
   taskContexts: new Map<string, ListTaskLight>(),
   /** Home's `epic.listTasks` rows. */
   homeTasks: [] as ListTaskLight[],
+  /** How far the tab's two task reads have got; answered unless a case says otherwise. */
+  taskReads: {
+    contextsPending: false,
+    homePending: false,
+    homeRefused: false,
+  },
   membersQueries: [] as Array<{
     environmentId: string | null;
     enabled: boolean;
@@ -267,7 +280,7 @@ vi.mock("@/lib/tab-navigation", async (importOriginal) => {
 vi.mock("@/hooks/epic/use-epic-get-task-contexts-query", () => {
   const read = () => ({
     tasksById: mocks.taskContexts,
-    isPending: false,
+    isPending: mocks.taskReads.contextsPending,
     error: null,
   });
   return {
@@ -280,7 +293,13 @@ vi.mock("@/hooks/epics/use-cloud-epic-tasks-query", async (importOriginal) => ({
     typeof import("@/hooks/epics/use-cloud-epic-tasks-query")
   >()),
   useCloudEpicTasksQuery: () => ({ tasks: mocks.homeTasks }),
-  useCloudEpicTasksQueryForClient: () => ({ tasks: mocks.homeTasks }),
+  useCloudEpicTasksQueryForClient: () => ({
+    tasks: mocks.homeTasks,
+    presentsCachedPage: false,
+    firstPagePending: mocks.taskReads.homePending,
+    firstPageError: null,
+    initialLegRefused: mocks.taskReads.homeRefused,
+  }),
 }));
 vi.mock("@/hooks/host/use-host-supports-method", () => ({
   useHostMethodSupport: (hostId: string | null, method: string) => {
@@ -499,20 +518,56 @@ vi.mock("@/components/bots/bot-channel-sidebar", () => ({
     </div>
   ),
 }));
+/**
+ * A message box on the real `@` completion, over what the tab hands its
+ * content: the tab's directory decides when a search that matched nothing
+ * closes the menu.
+ */
+function MentionBox(): ReactNode {
+  const [text, setText] = useState("");
+  const inputRef = useRef<HTMLTextAreaElement | null>(null);
+  const mentions = useBotMentionCompletion({
+    text,
+    setText,
+    inputRef,
+    replyRow: null,
+  });
+  return (
+    <>
+      {mentions.menu}
+      <textarea
+        ref={inputRef}
+        aria-label="Stub message box"
+        value={text}
+        {...mentions.inputAria}
+        onChange={(event) => setText(event.target.value)}
+        onInput={(event) => mentions.onInput(event.currentTarget)}
+        onSelect={(event) =>
+          mentions.onCaret(event.currentTarget.selectionStart)
+        }
+        onKeyDown={mentions.onKeyDown}
+      />
+    </>
+  );
+}
+
 /** What the tab hands its content to mention (`BotMentionsContext`), as the stub channel sees it. */
 function MentionsProbe(): ReactNode {
   const mentionable = useContext(BotMentionsContext);
   if (mentionable === null) return null;
   return (
-    <output
-      data-testid="stub-mentionable"
-      data-bots={
-        mentionable.bots === null
-          ? "unread"
-          : mentionable.bots.map((target) => target.name).join("|")
-      }
-      data-tasks={mentionable.tasks.map((target) => target.name).join("|")}
-    />
+    <>
+      <MentionBox />
+      <output
+        data-testid="stub-mentionable"
+        data-bots={
+          mentionable.bots === null
+            ? "unread"
+            : mentionable.bots.map((target) => target.name).join("|")
+        }
+        data-tasks={mentionable.tasks.map((target) => target.name).join("|")}
+      />
+    </>
   );
 }
 
@@ -956,6 +1011,9 @@ beforeEach(() => {
   mocks.supportQueries.length = 0;
   mocks.taskContexts = new Map();
   mocks.homeTasks = [];
+  mocks.taskReads.contextsPending = false;
+  mocks.taskReads.homePending = false;
+  mocks.taskReads.homeRefused = false;
   mocks.membersQueries.length = 0;
   mocks.state.membersSupport = true;
   mocks.state.snapshot = snapshot();
@@ -2955,6 +3013,111 @@ describe("<BotTabSurface /> views", () => {
         expect(
           screen.getByTestId("stub-mentionable").getAttribute("data-tasks"),
         ).toBe("");
+      });
+    });
+
+    describe("a search for a name nothing has", () => {
+      const VIEWER = "user-viewer";
+      const mentionMenu = (): Element | null =>
+        document.querySelector('[data-slot="composer-menu"]');
+
+      beforeEach(() => {
+        useAuthStore.setState({
+          status: "signed-in",
+          profile: {
+            userId: VIEWER,
+            userName: "Olive Owner",
+            email: "olive@example.com",
+            avatarUrl: null,
+          },
+        });
+        // A personal bot: the viewer is its one member, so there are no
+        // members to wait for.
+        mocks.state.environments = [
+          {
+            environmentId: "env-team",
+            label: "Olive Owner",
+            ownerKind: "user",
+          },
+        ];
+        useStandaloneBotsStore.setState({
+          directory: {
+            model: buildHomeBotsModel({
+              environments: [
+                {
+                  environmentId: "env-team",
+                  label: "Olive Owner",
+                  ownerKind: "user",
+                  ownerId: VIEWER,
+                  roomId: "room-team",
+                },
+              ],
+              bots: [
+                BOT,
+                {
+                  ...BOT,
+                  botId: "bot_01HZY8V6K3Q9W2E4R5T6Y7V8M1",
+                  title: "Triage",
+                },
+              ],
+              mainBotIds: {},
+            }),
+            setups: [],
+          },
+          settled: true,
+          botsListed: true,
+        });
+        mocks.state.snapshot = {
+          ...snapshot(),
+          tasks: [trackingTask(TASK_STREAM)],
+        };
+        mocks.taskContexts.set(
+          TASK_STREAM,
+          taskRow(TASK_STREAM, "Release notes", "env-team"),
+        );
+      });
+
+      async function typeNoMatch(): Promise<void> {
+        const user = userEvent.setup();
+        render(surface());
+        await user.type(
+          screen.getByRole("textbox", { name: "Stub message box" }),
+          "@zzzz",
+        );
+      }
+
+      it("closes the menu once Home's initial read is refused, though its first page is pending", async () => {
+        mocks.taskReads.homeRefused = true;
+        mocks.taskReads.homePending = true;
+
+        await typeNoMatch();
+
+        expect(mentionMenu()).toBeNull();
+      });
+
+      it("keeps the menu open while Home's first page is pending and its read may still run", async () => {
+        mocks.taskReads.homePending = true;
+
+        await typeNoMatch();
+
+        expect(mentionMenu()).not.toBeNull();
+      });
+
+      it("closes the menu for a viewer who is not signed in, though the stream's task contexts never answer", async () => {
+        useAuthStore.setState({ status: "unverified" });
+        mocks.taskReads.contextsPending = true;
+
+        await typeNoMatch();
+
+        expect(mentionMenu()).toBeNull();
+      });
+
+      it("keeps the menu open for a signed-in viewer while the stream's task contexts are pending", async () => {
+        mocks.taskReads.contextsPending = true;
+
+        await typeNoMatch();
+
+        expect(mentionMenu()).not.toBeNull();
       });
     });
 

@@ -38,8 +38,9 @@ export interface BotMentionDirectory {
    */
   readonly tasks: ReadonlyArray<BotMentionTarget>;
   /**
-   * Both reads behind `tasks` have answered, neither with an error: only then
-   * can a search of the names conclude that nothing matched.
+   * Both reads behind `tasks` have answered, neither with an error, or cannot
+   * run at all: only then can a search of the names conclude that nothing
+   * matched.
    */
   readonly tasksAnswered: boolean;
 }

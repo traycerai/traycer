@@ -43,6 +43,8 @@ const mocks = vi.hoisted(() => ({
     homeCached: false,
     homePending: false,
     homeError: null as Error | null,
+    /** Home's initial leg is refused: its read will not run. */
+    homeRefused: false,
   },
   /** The ids each render asked it for. */
   asked: [] as Array<ReadonlyArray<string>>,
@@ -88,6 +90,7 @@ vi.mock("@/hooks/epics/use-cloud-epic-tasks-query", () => ({
       presentsCachedPage: tab ? mocks.tabRead.homeCached : false,
       firstPagePending: tab ? mocks.tabRead.homePending : false,
       firstPageError: tab ? mocks.tabRead.homeError : null,
+      initialLegRefused: tab ? mocks.tabRead.homeRefused : false,
     };
   },
 }));
@@ -220,11 +223,13 @@ beforeEach(() => {
   mocks.tabRead.homeCached = false;
   mocks.tabRead.homePending = false;
   mocks.tabRead.homeError = null;
+  mocks.tabRead.homeRefused = false;
   mocks.activeContexts = new Map();
   mocks.activeHomeTasks = [];
   mocks.otherContexts = new Map();
   mocks.otherHomeTasks = [];
   useAuthStore.setState({
+    status: "signed-in",
     profile: {
       userId: "user-1",
       userName: "U",
@@ -234,9 +239,11 @@ beforeEach(() => {
   });
 });
 
+const AUTH_STATUS_AT_START = useAuthStore.getState().status;
+
 afterEach(() => {
   cleanup();
-  useAuthStore.setState({ profile: null });
+  useAuthStore.setState({ status: AUTH_STATUS_AT_START, profile: null });
   useStandaloneBotsStore.setState({
     directory: { model: { groups: [], botCount: 0 }, setups: [] },
     settled: false,
@@ -389,6 +396,19 @@ describe("useBotMentionTargets tasksAnswered", () => {
         mocks.tabRead.contextsError = new Error("host unreachable");
       },
     },
+  ])(
+    "is false while $source for a signed-in viewer with stream tasks",
+    ({ set }) => {
+      set();
+
+      expect(
+        targetsOf(TEAM_ENV, [streamTask(STREAM_TASK)], false).result.current
+          .tasksAnswered,
+      ).toBe(false);
+    },
+  );
+
+  it.each([
     {
       source: "Home presents a cached page",
       set: () => {
@@ -413,6 +433,55 @@ describe("useBotMentionTargets tasksAnswered", () => {
     expect(targetsOf(TEAM_ENV, [], false).result.current.tasksAnswered).toBe(
       false,
     );
+  });
+
+  describe("a read that cannot run counts as answered", () => {
+    it("is true for a viewer who is not signed in, though the stream's contexts stay pending", () => {
+      useAuthStore.setState({ status: "unverified" });
+      mocks.tabRead.contextsPending = true;
+
+      expect(
+        targetsOf(TEAM_ENV, [streamTask(STREAM_TASK)], false).result.current
+          .tasksAnswered,
+      ).toBe(true);
+    });
+
+    it("is true when no user id is known, though the stream's contexts stay pending", () => {
+      useAuthStore.setState({ profile: null });
+      mocks.tabRead.contextsPending = true;
+
+      expect(
+        targetsOf(TEAM_ENV, [streamTask(STREAM_TASK)], false).result.current
+          .tasksAnswered,
+      ).toBe(true);
+    });
+
+    it("is true when the stream lists no task, though the contexts read stays pending", () => {
+      mocks.tabRead.contextsPending = true;
+
+      expect(targetsOf(TEAM_ENV, [], false).result.current.tasksAnswered).toBe(
+        true,
+      );
+    });
+
+    it("is true when Home's initial leg is refused, though its first page is pending", () => {
+      mocks.tabRead.homeRefused = true;
+      mocks.tabRead.homePending = true;
+
+      expect(targetsOf(TEAM_ENV, [], false).result.current.tasksAnswered).toBe(
+        true,
+      );
+    });
+
+    it("is true when Home's initial leg is refused, though it presents a cached page", () => {
+      mocks.tabRead.homeRefused = true;
+      mocks.tabRead.homeCached = true;
+      mocks.homeTasks = [taskLight(HOME_TASK, "Roadmap", TEAM_ENV)];
+
+      expect(targetsOf(TEAM_ENV, [], false).result.current.tasksAnswered).toBe(
+        true,
+      );
+    });
   });
 });
 
