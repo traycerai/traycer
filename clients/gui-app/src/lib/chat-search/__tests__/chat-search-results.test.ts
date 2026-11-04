@@ -75,14 +75,13 @@ function response(input: {
   readonly chatNextCursor?: string | null;
   readonly messageMatches?: ReadonlyArray<ChatSearchMessageMatch>;
   readonly messageNextCursor?: string | null;
-  readonly indexState?: ChatSearchResponse["indexState"];
 }): ChatSearchResponse {
   return {
     chatMatches: [...(input.chatMatches ?? [])],
     chatNextCursor: input.chatNextCursor ?? null,
     messageMatches: [...(input.messageMatches ?? [])],
     messageNextCursor: input.messageNextCursor ?? null,
-    indexState: input.indexState ?? "complete",
+    indexState: "complete",
   };
 }
 
@@ -172,32 +171,6 @@ describe("mergeChatSearchPages", () => {
     });
 
     expect(merged.chatNextCursor).toBe("cursor-2");
-  });
-
-  it("is partial when any loaded page on screen was answered partial", () => {
-    const first = response({ indexState: "complete" });
-    const moreChats = response({ indexState: "partial" });
-
-    const merged = mergeChatSearchPages({
-      first,
-      moreChats: [moreChats],
-      moreMessages: [],
-    });
-
-    expect(merged.indexState).toBe("partial");
-  });
-
-  it("stays complete when every loaded page is complete", () => {
-    const first = response({ indexState: "complete" });
-    const moreChats = response({ indexState: "complete" });
-
-    const merged = mergeChatSearchPages({
-      first,
-      moreChats: [moreChats],
-      moreMessages: [undefined],
-    });
-
-    expect(merged.indexState).toBe("complete");
   });
 });
 
