@@ -53,10 +53,11 @@ interface TileSwitcherListProps {
   readonly tabId: string;
   /**
    * The list's surface gets out of the way of a tile just opened from it: the
-   * sheet and the menu close. A column stays where it is and passes a no-op.
+   * sheet and a Split's pane close. A pane with nothing to go back to passes a
+   * no-op.
    */
   readonly onClose: () => void;
-  /** What ends the category row: the column's fold control, else nothing. */
+  /** What ends the category row, else nothing. */
   readonly trailing: ReactNode;
 }
 
@@ -105,7 +106,7 @@ function isEmbedOriginatedTileRef(ref: EpicCanvasTileRef): boolean {
  * owns the kind, not a list-level control.
  *
  * It has no box of its own beyond filling its parent, and whichever form level 2
- * takes supplies one: `TabSwitcherSheet`, `MobileTileColumn`, `MobileTileMenu`.
+ * takes supplies one: `TabSwitcherSheet`, `MobileTileChooserPane`.
  */
 export function TileSwitcherList(props: TileSwitcherListProps) {
   const { epicId, tabId, onClose, trailing } = props;
@@ -141,9 +142,9 @@ export function TileSwitcherList(props: TileSwitcherListProps) {
   // shown tile, but must NOT close the surface under the user mid-browse - those
   // row opens close via their own `onClose`.
   //
-  // The tiles this list chooses for: a slot's own menu watches that slot, and
-  // a list that places by kind (the column, the sheet, the first tile's menu:
-  // no target) watches both, since its embed open lands beside the chat.
+  // The tiles this list chooses for: a slot's own sheet or pane watches that
+  // slot, and the phone's sheet (no target) watches both, since an open from
+  // the first tile's body lands beside it.
   const reading = useMobileTileReading(tabId);
   const target = use(MobileTileOpenTargetContext)?.slot ?? null;
   const primaryTile =

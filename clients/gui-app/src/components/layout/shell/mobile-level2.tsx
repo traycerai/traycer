@@ -7,11 +7,11 @@ import { useKeyboardOverlayInset } from "@/hooks/ui/use-keyboard-focus-layout";
 import { cn } from "@/lib/utils";
 
 /**
- * What a task's tile list and Tracy's bots list share when level 2 draws beside
- * the content or under the current item's name. The width is the resolver's
- * answer in CSS pixels, never a choice made here. It paints the sidebar's
- * fill, as the task's panel and Tracy's desktop column do, so a side strip's
- * row runs into it in that fill (`surfaceJoinPane`).
+ * Tracy's bots list when level 2 draws beside the content or under the current
+ * item's name (a task's tile list is the sheet in every form). The width is
+ * the resolver's answer in CSS pixels, never a choice made here. It paints the
+ * sidebar's fill, as the task's panel and Tracy's desktop column do, so a side
+ * strip's row runs into it in that fill (`surfaceJoinPane`).
  */
 export function MobileLevel2Column(props: {
   readonly width: number;
@@ -58,16 +58,13 @@ export function MobileLevel2MenuTrigger(props: {
 
 /**
  * The menu's plate, within the height left between its trigger and the
- * keyboard. `tall` is for a list that scrolls inside itself and so has no
- * height of its own to size the plate by: the sheet's height, which it
- * replaces. Opening does not move focus: the first control in a list is a
+ * keyboard. Opening does not move focus: the first control in a list is a
  * search field, and focusing it raises the keyboard over the list the person
  * just asked to see.
  */
 export function MobileLevel2MenuContent(props: {
   readonly label: string;
   readonly testId: string;
-  readonly tall: boolean;
   readonly children: ReactNode;
 }): ReactNode {
   // The installed iOS app's keyboard covers a window that keeps its height, so
@@ -86,10 +83,7 @@ export function MobileLevel2MenuContent(props: {
       }}
       aria-label={props.label}
       data-testid={props.testId}
-      className={cn(
-        "max-h-(--radix-popover-content-available-height)",
-        props.tall && "h-[70dvh]",
-      )}
+      className="max-h-(--radix-popover-content-available-height)"
       onOpenAutoFocus={(event) => event.preventDefault()}
     >
       {props.children}
