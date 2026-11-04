@@ -2839,6 +2839,13 @@ describe("<BotTabSurface /> views", () => {
     const badge = within(activityTab()).getByTestId("bot-tab-activity-count");
     expect(badge.textContent).toContain(String(shown?.length));
     expect(visibleTabText()).toBe(`Activity${String(shown?.length)}`);
+    // jsdom joins the name's parts without the spaces a browser puts in.
+    expect(
+      screen.getByRole("tab", {
+        name: new RegExp(`^Activity\\s*${String(shown?.length)}\\s*active$`),
+      }),
+    ).toBe(activityTab());
+    expect(screen.queryByRole("tab", { name: /unread/ })).toBeNull();
   });
 
   it("rule 6: shows no count when no task is active", () => {

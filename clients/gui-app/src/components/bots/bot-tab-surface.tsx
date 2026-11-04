@@ -1787,6 +1787,7 @@ function BotChannelHeader(props: {
             size="xs"
             testId="bot-tab-activity-count"
             corner={null}
+            noun="active"
           />
         </TabsTrigger>
       </TabsList>

@@ -704,6 +704,7 @@ function ChannelRow(props: {
           size="sm"
           testId="bot-channel-row-unread-count"
           corner={null}
+          noun="unread"
         />
       )}
     </button>

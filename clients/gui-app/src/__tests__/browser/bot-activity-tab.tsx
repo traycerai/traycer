@@ -438,6 +438,7 @@ export function ActivityTab(): ReactElement {
               size="xs"
               testId="bot-tab-activity-count"
               corner={null}
+              noun="active"
             />
           </TabsTrigger>
         </TabsList>

@@ -1374,6 +1374,7 @@ function ThreadLineCount(props: {
           size="xs"
           testId="bot-thread-unread-count"
           corner={null}
+          noun="unread"
         />
       )}
       {replies === 0 ? null : (
