@@ -2,6 +2,7 @@ import type { AuthenticatedUser } from "@traycer/protocol/auth";
 import type {
   SandboxCatalogue,
   SandboxCataloguePricing,
+  SandboxCatalogueRegion,
   SandboxCatalogueProvider,
   SandboxOs,
   SandboxShapeRung,
@@ -324,8 +325,9 @@ export function rememberedOrConfigurationStageShape(
 }
 
 /**
- * The hourly price a stage is shown at: the shape's own, computed from the
- * region's per-unit rates. A server without them prices only each region's
+ * The hourly price a stage is shown at: the exact shape price when supplied,
+ * otherwise computed from the region's per-unit rates. A server without
+ * either prices only each region's
  * SMALLEST shape, so the figure is then exact for that shape and a lower
  * bound (`exact: false`, read as "from") for any larger one.
  */
@@ -350,6 +352,24 @@ function ratedAwakeMcPerHour(
   );
 }
 
+function exactShapePrice(
+  region: SandboxCatalogueRegion,
+  shape: {
+    readonly cpus: number;
+    readonly memoryMb: number;
+    readonly diskMb: number;
+  },
+): number | null {
+  return (
+    region.shapePrices?.find(
+      (entry) =>
+        entry.cpus === shape.cpus &&
+        entry.memoryMb === shape.memoryMb &&
+        entry.diskMb === shape.diskMb,
+    )?.priceMcPerHour.awakeMc ?? null
+  );
+}
+
 /** A provider's smallest listed shape: fewest vCPU, then memory, then disk. */
 function smallestShapeRung(
   shapes: readonly SandboxShapeRung[],
@@ -366,9 +386,8 @@ function smallestShapeRung(
 
 /**
  * The region's smallest shape: its price, and whether `shape` is it, by its
- * cpus, memory and disk (an unset disk is the provider's default). Of a
- * provider that lists its shapes, the smallest listed one, priced from the
- * region's rates when it has them.
+ * cpus, memory and disk (an unset disk is the provider's default). A listed
+ * smallest rung uses its exact price before the region's unit rates.
  */
 export function stageSmallestShape(
   catalogue: SandboxCatalogue,
@@ -385,9 +404,10 @@ export function stageSmallestShape(
     return {
       isStaged: stageSizeIsRung(provider, smallestRung, shape),
       awakeMcPerHour:
-        region.pricing === null
+        exactShapePrice(region, smallestRung) ??
+        (region.pricing === null
           ? region.fromPriceMcPerHour.awakeMc
-          : ratedAwakeMcPerHour(region.pricing, smallestRung),
+          : ratedAwakeMcPerHour(region.pricing, smallestRung)),
     };
   }
   const bounds = provider.shape;
@@ -414,6 +434,12 @@ export function stagePrice(
     null;
   const smallest = stageSmallestShape(catalogue, shape);
   if (provider === null || region === null || smallest === null) return null;
+  const exact = exactShapePrice(region, {
+    cpus: shape.cpus,
+    memoryMb: shape.memoryMb,
+    diskMb: shape.diskMb ?? provider.shape.diskDefaultMb,
+  });
+  if (exact !== null) return { awakeMcPerHour: exact, exact: true };
   const rates = region.pricing;
   if (rates === null) {
     return {
