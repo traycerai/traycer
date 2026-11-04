@@ -689,7 +689,10 @@ export const botConversationSearchHitSchema = lazySchema(() =>
       .nullable(),
     /**
      * Where the hit stands in its search, higher first: comparable across
-     * the pages and bots of one search, and with nothing else.
+     * the pages and bots of one search, and with nothing else. Scores of the
+     * same query and mode from different hosts are interleaved as a
+     * best-effort ranking, not a cross-host guarantee; hits of one source keep
+     * their own order.
      */
     score: z.number(),
   }),
