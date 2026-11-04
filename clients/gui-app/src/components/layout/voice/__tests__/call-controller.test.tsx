@@ -124,6 +124,7 @@ const CONVERSATION_LIST = {
 
 const fake = vi.hoisted(() => {
   const order: string[] = [];
+  const sendHosts: string[] = [];
   // A track is an event target, as the real one is: the controller listens
   // for the OS taking the microphone away.
   const track = Object.assign(new EventTarget(), {
@@ -161,6 +162,7 @@ const fake = vi.hoisted(() => {
   const handles = new Map<string, { store: StoreApi<ChatState> }>();
   return {
     order,
+    sendHosts,
     track,
     stream,
     remote,
@@ -209,6 +211,16 @@ vi.mock("@/lib/host", async (importOriginal) => ({
 }));
 vi.mock("@/hooks/bots/use-bot-mutations", () => ({
   useBotConversationSendMutation: () => ({ mutateAsync: fake.sendMock }),
+  // A call's send names its host; the host each went to is kept in order.
+  useBotCallSendMutation: () => ({
+    mutateAsync: (variables: {
+      readonly hostId: string;
+      readonly request: BotConversationSendRequest;
+    }) => {
+      fake.sendHosts.push(variables.hostId);
+      return fake.sendMock(variables.request);
+    },
+  }),
   useBotOpenMutation: () => ({ mutateAsync: fake.openMock }),
 }));
 // The real activity hook runs over this stream: a host answers only the
@@ -518,6 +530,7 @@ function sentTexts(): ReadonlyArray<string> {
 beforeEach(() => {
   vi.useFakeTimers();
   fake.order.length = 0;
+  fake.sendHosts.length = 0;
   fake.engines.length = 0;
   fake.handles.clear();
   fake.activity.set(null);
@@ -2467,6 +2480,40 @@ describe("a lowercase acknowledgement after an unspaced cut-off, which no bounda
   });
 });
 
+/** A send that answers when the test says: the next one the controller makes. */
+function deferredSend(): {
+  readonly answer: (response: BotConversationSendResponse) => void;
+  readonly fail: (error: Error) => void;
+} {
+  let answer: (response: BotConversationSendResponse) => void = () => {
+    throw new Error("the send was never made");
+  };
+  let fail: (error: Error) => void = () => {
+    throw new Error("the send was never made");
+  };
+  fake.sendMock.mockImplementationOnce(
+    () =>
+      new Promise<BotConversationSendResponse>((resolve, reject) => {
+        answer = resolve;
+        fail = reject;
+      }),
+  );
+  return {
+    answer: (response) => answer(response),
+    fail: (error) => fail(error),
+  };
+}
+
+function signIn(userId: string): void {
+  act(() =>
+    useAuthStore.setState({
+      status: "signed-in",
+      profile: { userId, userName: userId, email: `${userId}@example.com` },
+      contextMetadata: { userId, username: userId },
+    }),
+  );
+}
+
 describe("what a call leaves unsent at its end", () => {
   it("sends the open span after the microphone stops and before the end route", async () => {
     fake.sendMock.mockImplementation(() => {
@@ -2621,17 +2668,12 @@ describe("what a call leaves unsent at its end", () => {
   });
 
   it("sends nothing of what an account switch leaves unsaid, and ends the call for the account", async () => {
-    const identity = (userId: string) => ({
-      status: "signed-in" as const,
-      profile: { userId, userName: userId, email: `${userId}@example.com` },
-      contextMetadata: { userId, username: userId },
-    });
     try {
-      act(() => useAuthStore.setState(identity("user-alice")));
+      signIn("user-alice");
       await dialLive(CHANNEL_CALL);
       speak("Hold the build");
 
-      act(() => useAuthStore.setState(identity("user-bob")));
+      signIn("user-bob");
       await settle();
 
       const state = useVoiceSessionStore.getState();
@@ -2673,6 +2715,202 @@ describe("what a call leaves unsent at its end", () => {
     ]);
     expect(useVoiceSessionStore.getState().phase).toBe("idle");
     expect(fake.endVoiceSession.mock.calls).toEqual([["vs1"]]);
+  });
+  it("sends an open thread's last words only after the send that is out, and ends after them", async () => {
+    const first = deferredSend();
+    await joinOpenThread([]);
+    await say("First instruction.");
+    speak("Final instruction.");
+
+    act(() => driverOf().end());
+    await settle();
+    expect(sentTexts()).toEqual(["First instruction."]);
+    expect(fake.endVoiceSession).not.toHaveBeenCalled();
+
+    first.answer({ ...WRITTEN, threadId: "t-open" });
+    await settle();
+    expect(sentTexts()).toEqual(["First instruction.", "Final instruction."]);
+    expect(fake.sendMock.mock.calls[1][0].threadId).toBe("t-open");
+    expect(fake.endVoiceSession.mock.calls).toEqual([["vs1"]]);
+  });
+
+  it("ends only after the send that is out when nothing is left unsaid", async () => {
+    const first = deferredSend();
+    await dialLive(CHANNEL_CALL);
+    await say("Only instruction.");
+
+    act(() => driverOf().end());
+    await settle();
+    expect(fake.endVoiceSession).not.toHaveBeenCalled();
+
+    first.answer(WRITTEN);
+    await settle();
+    expect(sentTexts()).toEqual(["Only instruction."]);
+    expect(fake.endVoiceSession.mock.calls).toEqual([["vs1"]]);
+  });
+
+  it("opens a new call's own thread, never the one the previous call's send opens late", async () => {
+    const first = deferredSend();
+    await dialLive(CHANNEL_CALL);
+    await say("Old call instruction.");
+    act(() => driverOf().end());
+    await settle();
+
+    await dialLive(CHANNEL_CALL);
+    speak("New call instruction.");
+    act(() => driverOf().end());
+    await settle();
+    first.answer({ ...WRITTEN, threadId: "old-call-thread" });
+    await settle();
+
+    expect(sentTexts()).toEqual([
+      "Old call instruction.",
+      "New call instruction.",
+    ]);
+    expect(fake.sendMock.mock.calls[1][0]).toMatchObject({
+      threadId: null,
+      origin: "call",
+    });
+  });
+
+  it("sends nothing more once the account switches while End waits for the send that is out", async () => {
+    try {
+      signIn("user-alice");
+      const first = deferredSend();
+      await dialLive(CHANNEL_CALL);
+      await say("Alice first.");
+      speak("Alice private tail.");
+      act(() => driverOf().end());
+      await settle();
+
+      signIn("user-bob");
+      await settle();
+      first.answer(WRITTEN);
+      await settle();
+
+      expect(sentTexts()).toEqual(["Alice first."]);
+    } finally {
+      act(() => useAuthStore.setState(useAuthStore.getInitialState(), true));
+    }
+  });
+
+  it("starts no further last word once the account switches midway through them", async () => {
+    try {
+      signIn("user-alice");
+      const first = deferredSend();
+      const second = deferredSend();
+      await dialLive(CHANNEL_CALL);
+      await say("First.");
+      await say("Second.");
+      speak("Third private instruction.");
+      act(() => driverOf().end());
+      first.answer(WRITTEN);
+      await settle();
+      expect(sentTexts()).toEqual(["First.", "Second."]);
+
+      signIn("user-bob");
+      await settle();
+      second.answer(WRITTEN);
+      await settle();
+
+      expect(sentTexts()).toEqual(["First.", "Second."]);
+    } finally {
+      act(() => useAuthStore.setState(useAuthStore.getInitialState(), true));
+    }
+  });
+
+  it("sends a call's last words to its own host after a call starts on another, which neither waits nor cancels", async () => {
+    const first = deferredSend();
+    await dialLive(CHANNEL_CALL);
+    await say("Old host first.");
+    speak("Old host final.");
+    act(() => driverOf().end());
+    await settle();
+
+    act(() => useTracySurfaceStore.getState().openSurface("host-b"));
+    await settle();
+    await dialLive(CHANNEL_CALL);
+    await say("New host first.");
+    expect(sentTexts()).toEqual(["Old host first.", "New host first."]);
+
+    first.answer({ ...WRITTEN, threadId: "old-host-thread" });
+    await settle();
+
+    expect(sentTexts()).toEqual([
+      "Old host first.",
+      "New host first.",
+      "Old host final.",
+    ]);
+    expect(fake.sendHosts).toEqual([HOST_ID, "host-b", HOST_ID]);
+    expect(fake.sendMock.mock.calls[2][0].threadId).toBe("old-host-thread");
+    expect(useVoiceSessionStore.getState().phase).toBe("live");
+  });
+
+  it("sends the last words once when End is pressed twice, and again while they are out", async () => {
+    const tail = deferredSend();
+    await dialLive(CHANNEL_CALL);
+    speak("One final instruction.");
+
+    act(() => {
+      driverOf().end();
+      driverOf().end();
+    });
+    await settle();
+    act(() => driverOf().end());
+    expect(sentTexts()).toEqual(["One final instruction."]);
+    expect(fake.endVoiceSession).not.toHaveBeenCalled();
+
+    tail.answer(WRITTEN);
+    await settle();
+    expect(sentTexts()).toEqual(["One final instruction."]);
+    expect(fake.endVoiceSession.mock.calls).toEqual([["vs1"]]);
+  });
+
+  it("still opens a thread for the last words when the send that is out fails after the microphone is taken", async () => {
+    const first = deferredSend();
+    await dialLive(CHANNEL_CALL);
+    await say("First.");
+    speak("Final.");
+
+    act(() => {
+      fake.track.dispatchEvent(new Event("ended"));
+    });
+    await settle();
+    expect(sentTexts()).toEqual(["First."]);
+
+    first.fail(new Error("offline"));
+    await settle();
+    expect(fake.sendMock.mock.calls[1][0]).toMatchObject({
+      text: "Final.",
+      threadId: null,
+      origin: "call",
+    });
+    expect(fake.endVoiceSession.mock.calls).toEqual([["vs1"]]);
+  });
+
+  it("sends the open words after capture stops when a re-mint is refused for credits", async () => {
+    await dialLive(CHANNEL_CALL);
+    speak("One final instruction before credits end.");
+    fake.order.length = 0;
+    fake.sendMock.mockImplementation(() => {
+      fake.order.push("send");
+      return Promise.resolve(WRITTEN);
+    });
+    fake.mint.mockResolvedValueOnce({ kind: "credits-exhausted" });
+
+    act(() => events().onClosed("connection"));
+    await settle();
+
+    expect(useVoiceSessionStore.getState().endReason).toBe("credits");
+    expect(sentTexts()).toEqual(["One final instruction before credits end."]);
+    expect(fake.order.indexOf("mic.stop")).toBeLessThan(
+      fake.order.indexOf("send"),
+    );
+    expect(fake.sendMock.mock.calls[0][0]).toMatchObject({
+      threadId: null,
+      origin: "call",
+      spoken: true,
+    });
   });
 });
 

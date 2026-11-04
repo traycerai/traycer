@@ -19,7 +19,7 @@ import { useBotActivityForHost } from "@/hooks/bots/use-bot-activity";
 import { useBotConversationListQuery } from "@/hooks/bots/use-bot-conversation-list-query";
 import { useBotListQuery } from "@/hooks/bots/use-bot-list-query";
 import {
-  useBotConversationSendMutation,
+  useBotCallSendMutation,
   useBotOpenMutation,
 } from "@/hooks/bots/use-bot-mutations";
 import { useEnvironmentListQuery } from "@/hooks/bots/use-environment-list-query";
@@ -163,8 +163,13 @@ function callSendRequest(
  * the server's sideband settles its row.
  */
 function endRouteAnswers(attempt: Attempt): boolean {
-  const current = useAuthStore.getState().contextMetadata?.userId ?? null;
+  const current = signedInAccount();
   return current === null || current === attempt.account;
+}
+
+/** The account signed in now; `null` signed out. */
+function signedInAccount(): string | null {
+  return useAuthStore.getState().contextMetadata?.userId ?? null;
 }
 
 /**
@@ -251,16 +256,6 @@ export function CallController(): ReactNode {
   const phase = useVoiceSessionStore((state) => state.phase);
   const focus = useVoiceSessionStore((state) => state.focus);
   const focusClient = useHostClientForHostId(focus?.hostId ?? null);
-  // The host the last call sent to, kept after it ends: the words a call
-  // leaves unsent at its end still go there.
-  const [sendHostId, setSendHostId] = useState<string | null>(null);
-  if (focus !== null && focus.hostId !== sendHostId) {
-    setSendHostId(focus.hostId);
-  }
-  const sendHostRef = useRef(sendHostId);
-  useEffect(() => {
-    sendHostRef.current = sendHostId;
-  }, [sendHostId]);
 
   // One scheduler per window, built at the first call and reset at each
   // call's end. Held twice: the ref for the engine's events, which run
@@ -329,9 +324,9 @@ export function CallController(): ReactNode {
   );
 
   // ---- Sending ---------------------------------------------------------- //
-  const { mutateAsync: sendAsync } = useBotConversationSendMutation(
-    useHostClientForHostId(sendHostId),
-  );
+  // Each send names its call's host: a call's last words still go there
+  // after another call has started on a different host.
+  const { mutateAsync: sendAsync } = useBotCallSendMutation();
   const sendRef = useRef(sendAsync);
   useEffect(() => {
     sendRef.current = sendAsync;
@@ -366,7 +361,10 @@ export function CallController(): ReactNode {
   const outboxRef = useRef<string[]>([]);
   /** The call (its token) whose send is out; `null` with none out. */
   const sendingRef = useRef<number | null>(null);
-  /** The send out now, as the thread it opened: a call's last words wait for it. */
+  /**
+   * This call's send out now, as the thread it opened: a call's last words
+   * and its end route wait for it. A new call starts with none.
+   */
   const inFlightRef = useRef<Promise<string | null> | null>(null);
   /**
    * The call is closing on a queued send: the microphone is off, nothing more
@@ -398,7 +396,10 @@ export function CallController(): ReactNode {
       }
       return useVoiceSessionStore.getState().sessionToken === token;
     };
-    const sent = sendRef.current(callSendRequest(known, threadId, text));
+    const sent = sendRef.current({
+      hostId: known.hostId,
+      request: callSendRequest(known, threadId, text),
+    });
     inFlightRef.current = sent.then(
       (response) => response.threadId,
       () => null,
@@ -626,10 +627,12 @@ export function CallController(): ReactNode {
    * What a call that ends leaves unsent, sent as its last words: the sends
    * still waiting, then what was said since the last boundary, unless that
    * is nothing or only an end phrase. They go one at a time after the send
-   * that is out, into the thread it opened if the call had none. Nothing is
-   * sent for a call ended by an account switch: the words were another
-   * person's. (A call closing on a queued send let its words go when the
-   * microphone went off.)
+   * that is out, into the thread it opened if the call had none, and to the
+   * call's own host whatever call has started since. The end route waits
+   * for them, or for the send that is out when nothing is left. Nothing is
+   * sent once the account has switched, at the end or at any point after:
+   * the words were another person's. (A call closing on a queued send let
+   * its words go when the microphone went off.)
    */
   const takeLastWords = useCallback(
     (reason: VoiceEndReason | null): (() => Promise<void>) | null => {
@@ -637,27 +640,34 @@ export function CallController(): ReactNode {
       const store = useVoiceSessionStore.getState();
       const call = store.focus;
       const known = channelRef.current;
+      const inFlight = inFlightRef.current;
       const open = store.takeOpenSpanTo(store.inputHeard);
       const words = [...outboxRef.current];
       if (open !== null && !isCallEndPhrase(open)) words.push(open);
-      if (words.length === 0) return null;
+      const waitForSend =
+        inFlight === null
+          ? null
+          : async (): Promise<void> => {
+              await inFlight;
+            };
+      if (words.length === 0) return waitForSend;
       if (call === null || known === null || known.botId !== call.botId) {
         appLogger.warn("[voice] last words had no channel to go to", {
           words: words.length,
         });
-        return null;
+        return waitForSend;
       }
-      const inFlight = inFlightRef.current;
+      const account = signedInAccount();
       return async () => {
-        let threadId = call.threadId;
-        if (inFlight !== null) threadId = threadId ?? (await inFlight);
+        const opened = inFlight === null ? null : await inFlight;
+        let threadId = call.threadId ?? opened;
         for (const text of words) {
-          // A new call on another host has its own sends now.
-          if (sendHostRef.current !== known.hostId) return;
+          if (signedInAccount() !== account) return;
           try {
-            const response = await sendRef.current(
-              callSendRequest(known, threadId, text),
-            );
+            const response = await sendRef.current({
+              hostId: known.hostId,
+              request: callSendRequest(known, threadId, text),
+            });
             threadId = threadId ?? response.threadId;
           } catch (error) {
             appLogger.warn("[voice] call's last words failed", {
@@ -789,7 +799,7 @@ export function CallController(): ReactNode {
       startedAt: 0,
       failure: null,
       cancelled: false,
-      account: useAuthStore.getState().contextMetadata?.userId ?? null,
+      account: signedInAccount(),
       acknowledgements: [],
       sentence: NO_OUTPUT_SENTENCE,
     };
@@ -1161,6 +1171,7 @@ export function CallController(): ReactNode {
       closingRef.current = false;
       outboxRef.current = [];
       sendingRef.current = null;
+      inFlightRef.current = null;
       setOpenedThreadId(null);
       const { sessionToken: token, engineGeneration: generation } =
         useVoiceSessionStore.getState();

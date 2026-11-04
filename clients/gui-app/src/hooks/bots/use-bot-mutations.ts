@@ -19,9 +19,13 @@ import type {
   BotConversationSendRequest,
   BotConversationSendResponse,
 } from "@traycer/protocol/host/bot/conversation-schemas";
-import type { HostRpcError } from "@traycer-clients/shared/host-transport/host-messenger";
+import type {
+  HostRpcError,
+  RequiredHostMethodVersion,
+} from "@traycer-clients/shared/host-transport/host-messenger";
 import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
-import type { HostRpcRegistry } from "@/lib/host";
+import { useHostBinding, type HostRpcRegistry } from "@/lib/host";
+import { resolveNamedHostClient } from "@/lib/host/binding-host-client";
 import { useHostMutation } from "@/hooks/host/use-host-query";
 import {
   BOT_CONVERSATION_ANSWER_VERSION,
@@ -208,43 +212,101 @@ export function useBotConversationSendMutation(
   >({
     client,
     method: "bot.conversation.send",
-    requiredHostMethodVersion: (variables) => {
-      if (variables.spoken === true || variables.origin !== undefined) {
-        return {
-          method: "bot.conversation.send",
-          version: BOT_CONVERSATION_CALL_VERSION,
-        };
-      }
-      if (variables.answer !== null) {
-        return {
-          method: "bot.conversation.send",
-          version: BOT_CONVERSATION_ANSWER_VERSION,
-        };
-      }
-      return variables.redeliver === null && variables.supersedes === null
-        ? null
-        : {
-            method: "bot.conversation.send",
-            version: BOT_CONVERSATION_RETRY_VERSION,
-          };
-    },
+    requiredHostMethodVersion: conversationSendVersion,
     mapVariables: (variables) => variables,
     options: {
       mutationKey: botMutationKeys.conversationSend(),
       onMutate: () => ({ hostId: client?.getActiveHostId() ?? null }),
       onSuccess: (_response, variables, context) => {
-        // The send follows the person to its thread (decision 137).
-        void queryClient.invalidateQueries({
-          predicate: (query) => isFollowReadOf(query.queryKey, variables.botId),
-        });
-        if (context.hostId === null) return;
-        void queryClient.invalidateQueries({
-          queryKey: hostQueryKeys.methodScope(
-            context.hostId,
-            "bot.thread.list",
-          ),
-        });
+        invalidateAfterConversationSend(
+          queryClient,
+          variables.botId,
+          context.hostId,
+        );
       },
     },
+  });
+}
+
+/** A call's send and the host it goes to, named with each send. */
+export interface BotCallSendVariables {
+  readonly hostId: string;
+  readonly request: BotConversationSendRequest;
+}
+
+/**
+ * A call's words (Call Tracy), each to the host named with it rather than
+ * to a host the hook follows: a call's last words still go to its own host
+ * after another call has started on a different one.
+ */
+export function useBotCallSendMutation(): UseMutationResult<
+  BotConversationSendResponse,
+  HostRpcError,
+  BotCallSendVariables,
+  BotConversationSendContext
+> {
+  const queryClient = useQueryClient();
+  const binding = useHostBinding();
+  return useHostMutation<
+    HostRpcRegistry,
+    "bot.conversation.send",
+    BotConversationSendContext,
+    BotCallSendVariables
+  >({
+    client: (variables) => resolveNamedHostClient(binding, variables.hostId),
+    method: "bot.conversation.send",
+    requiredHostMethodVersion: (variables) =>
+      conversationSendVersion(variables.request),
+    mapVariables: (variables) => variables.request,
+    options: {
+      mutationKey: botMutationKeys.conversationSend(),
+      onMutate: (variables) => ({ hostId: variables.hostId }),
+      onSuccess: (_response, variables, context) => {
+        invalidateAfterConversationSend(
+          queryClient,
+          variables.request.botId,
+          context.hostId,
+        );
+      },
+    },
+  });
+}
+
+/** The send line a request needs: a retry, an answer and a call's words came later. */
+function conversationSendVersion(
+  variables: BotConversationSendRequest,
+): RequiredHostMethodVersion | null {
+  if (variables.spoken === true || variables.origin !== undefined) {
+    return {
+      method: "bot.conversation.send",
+      version: BOT_CONVERSATION_CALL_VERSION,
+    };
+  }
+  if (variables.answer !== null) {
+    return {
+      method: "bot.conversation.send",
+      version: BOT_CONVERSATION_ANSWER_VERSION,
+    };
+  }
+  return variables.redeliver === null && variables.supersedes === null
+    ? null
+    : {
+        method: "bot.conversation.send",
+        version: BOT_CONVERSATION_RETRY_VERSION,
+      };
+}
+
+function invalidateAfterConversationSend(
+  queryClient: QueryClient,
+  botId: string,
+  hostId: string | null,
+): void {
+  // The send follows the person to its thread (decision 137).
+  void queryClient.invalidateQueries({
+    predicate: (query) => isFollowReadOf(query.queryKey, botId),
+  });
+  if (hostId === null) return;
+  void queryClient.invalidateQueries({
+    queryKey: hostQueryKeys.methodScope(hostId, "bot.thread.list"),
   });
 }

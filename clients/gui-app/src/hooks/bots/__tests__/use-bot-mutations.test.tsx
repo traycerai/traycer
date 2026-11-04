@@ -30,8 +30,22 @@ import type { BotConversationSendRequest } from "@traycer/protocol/host/bot/conv
 import { hostRpcRegistry, type HostRpcRegistry } from "@/lib/host";
 import { createHostQueryInvalidator } from "@/lib/host/query-invalidator";
 import { FloorEnforcingMessenger } from "@/hooks/config/__tests__/floor-enforcing-messenger";
-import { useBotConversationSendMutation } from "@/hooks/bots/use-bot-mutations";
+import {
+  useBotCallSendMutation,
+  useBotConversationSendMutation,
+} from "@/hooks/bots/use-bot-mutations";
 import { hostQueryKeys } from "@/lib/query-keys";
+
+// The app's binding, which a call's send resolves its named host through.
+const binding = vi.hoisted(
+  (): {
+    current: { readonly hostClient: HostClient<HostRpcRegistry> } | null;
+  } => ({ current: null }),
+);
+vi.mock("@/lib/host/runtime", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/lib/host/runtime")>()),
+  useHostBinding: () => binding.current,
+}));
 
 vi.mock("@/hooks/host/use-reactive-host-readiness", () => ({
   useReactiveHostReadiness: (client: HostRequester<HostRpcRegistry> | null) => {
@@ -201,6 +215,99 @@ describe("useBotConversationSendMutation", () => {
     await mounted.send();
 
     expect(mounted.isStale(SENDING_HOST_ID, "bot.thread.list")).toBe(false);
+  });
+});
+
+describe("useBotCallSendMutation", () => {
+  it("sends each of a call's words to the host named with it, and makes only that host's thread list stale", async () => {
+    const queryClient = new QueryClient();
+    let seq = 0;
+    const messenger = new MockHostMessenger<HostRpcRegistry>({
+      registry: hostRpcRegistry,
+      requestId: () => `call-${String(++seq)}`,
+      handlers: {
+        "bot.conversation.send": () => ({
+          messageId: "message-1",
+          requestId: "request-1",
+          delivery: "written",
+          threadId: "thread-1",
+        }),
+      },
+    });
+    const spine = new HostClient<HostRpcRegistry>({
+      registry: hostRpcRegistry,
+      invalidator: createHostQueryInvalidator(queryClient),
+      findHostById: (hostId) =>
+        [mockRemoteHostEntry, mockLocalHostEntry].find(
+          (entry) => entry.hostId === hostId,
+        ) ?? null,
+      messenger,
+    });
+    spine.setRequestContext(
+      createRequestContextFixture({ origin: "renderer", bearerToken: "tok-1" }),
+    );
+    binding.current = { hostClient: spine };
+    for (const hostId of [SENDING_HOST_ID, OTHER_HOST_ID]) {
+      queryClient.setQueryData(
+        hostQueryKeys.method<HostRpcRegistry, "bot.thread.list">(
+          hostId,
+          "bot.thread.list",
+          { botId: BOT_ID },
+        ),
+        { threads: [] },
+      );
+    }
+    const wrapper = (props: { readonly children: ReactNode }): ReactNode => (
+      <QueryClientProvider client={queryClient}>
+        {props.children}
+      </QueryClientProvider>
+    );
+    try {
+      const { result } = renderHook(() => useBotCallSendMutation(), {
+        wrapper,
+      });
+      const call: BotConversationSendRequest = {
+        ...SEND,
+        spoken: true,
+        origin: "call",
+      };
+
+      await act(async () => {
+        await result.current.mutateAsync({
+          hostId: SENDING_HOST_ID,
+          request: { ...call, text: "First call's last words" },
+        });
+      });
+      const isStale = (hostId: string): boolean =>
+        queryClient
+          .getQueryCache()
+          .findAll({
+            queryKey: hostQueryKeys.methodScope(hostId, "bot.thread.list"),
+          })
+          .some((query) => query.state.isInvalidated);
+      expect(isStale(SENDING_HOST_ID)).toBe(true);
+      expect(isStale(OTHER_HOST_ID)).toBe(false);
+
+      await act(async () => {
+        await result.current.mutateAsync({
+          hostId: OTHER_HOST_ID,
+          request: { ...call, text: "Second call's words" },
+        });
+      });
+
+      expect(
+        messenger.calls.map((sent) => [
+          sent.authority.endpoint.hostId,
+          sent.params,
+        ]),
+      ).toEqual([
+        [SENDING_HOST_ID, { ...call, text: "First call's last words" }],
+        [OTHER_HOST_ID, { ...call, text: "Second call's words" }],
+      ]);
+      expect(isStale(OTHER_HOST_ID)).toBe(true);
+    } finally {
+      binding.current = null;
+    }
   });
 });
 
