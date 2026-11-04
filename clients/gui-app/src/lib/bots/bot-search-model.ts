@@ -149,11 +149,12 @@ function unreachableOf(
  * stays in rank order across pages and hosts. The tab's host cannot dial a host under
  * another owner and says so (`other-owner`), so a team's bot searched from a
  * person's host, or theirs from a team's, is asked of directly where this
- * client reaches it, and joins as a source. A host asked directly that fails
- * its first page costs its bot, named in `unreachable`. Every other failure
- * fails the page: the tab's host, and any host on a later page, whose hits
- * are already on screen and which a retry can go on from. A cursor its host
- * no longer holds is one of these, and the search starts again.
+ * client reaches it, and joins as a source. A host asked directly that does
+ * not answer its first page costs its bot, named in `unreachable`. Every other
+ * failure fails the page: the tab's host, any host on a later page, whose hits
+ * are already on screen and which a retry can go on from, and a host that
+ * refuses the request, which did answer. A cursor its host no longer holds is
+ * one of these, and the search starts again.
  */
 export async function fetchBotSearchPage(input: {
   readonly sources: ReadonlyArray<BotSearchSource>;
@@ -170,7 +171,13 @@ export async function fetchBotSearchPage(input: {
     ask(source).then(
       (answer) => ({ source, answer }),
       (error: HostRpcError) => {
-        if (source.hostId === null || source.cursor !== null) throw error;
+        if (
+          source.hostId === null ||
+          source.cursor !== null ||
+          error.code === "E_INVALID_ARGUMENT"
+        ) {
+          throw error;
+        }
         unreachable.push(...unreachableOf(source, error));
         return { source, answer: null };
       },

@@ -36,6 +36,30 @@ import {
 
 installSearchSurfaceLifecycle();
 
+/** Both ways in to a search: the column's box asks the tab's host about every bot, the header's button asks the one bot's own host. */
+const SEARCH_ROUTES = [
+  [
+    "every bot, of the tab's host",
+    TAB_HOST,
+    async (): Promise<void> => {
+      fireEvent.change(screen.getByTestId("bot-column-search"), {
+        target: { value: "ship" },
+      });
+      await settle();
+    },
+  ],
+  [
+    "one bot, of its own host",
+    HOST_A,
+    async (): Promise<void> => {
+      fireEvent.click(
+        screen.getByRole("button", { name: "Search in Release Bot" }),
+      );
+      await typeIntoPanel("ship");
+    },
+  ],
+] as const;
+
 describe("the filters", () => {
   /** Filters, one at a time from the column box's All bots, each in the request. */
   it.each([
@@ -227,19 +251,33 @@ describe("a search its host no longer holds", () => {
     expect(screen.queryByText("Couldn't search.")).toBeNull();
   });
 
-  it("does not start again when the first page is the one refused, and offers the retry", async () => {
-    mocks.state.answer = () => refusal();
-    render(<Surface />);
+  it.each(SEARCH_ROUTES)(
+    "does not start again when the first page of a search of %s is refused, says it could not search, and asks again only on Retry",
+    async (_route, askedHost, openSearch) => {
+      mocks.state.answer = () => refusal();
+      render(<Surface />);
+      await openSearch();
+      // Past the retry delays a failed page would be asked again after.
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(10_000);
+      });
 
-    fireEvent.change(screen.getByTestId("bot-column-search"), {
-      target: { value: "ship" },
-    });
-    await settle();
+      expect(mocks.asked).toHaveLength(1);
+      const failure = screen.getByTestId("bot-search-error");
+      expect(within(failure).getByText("Couldn't search.")).toBeTruthy();
+      expect(screen.queryByTestId("bot-search-no-results")).toBeNull();
+      expect(screen.queryByTestId("bot-search-unreachable")).toBeNull();
 
-    expect(mocks.asked).toHaveLength(1);
-    expect(screen.getByTestId("bot-search-error")).toBeTruthy();
-    expect(screen.getByText("Couldn't search.")).toBeTruthy();
-  });
+      fireEvent.click(within(failure).getByRole("button", { name: "Retry" }));
+      await settle();
+
+      expect(mocks.asked).toHaveLength(2);
+      expect(mocks.asked.map((entry) => entry.hostId)).toEqual([
+        askedHost,
+        askedHost,
+      ]);
+    },
+  );
 
   /** A short list with one hit, whose page 2 the host refuses every time. */
   function refusePageTwo(): void {
@@ -351,29 +389,7 @@ describe("a later page that fails without being refused", () => {
     });
   }
 
-  /** Both ways in to a search: the column's box asks the tab's host about every bot, the header's button asks the one bot's own host. */
-  it.each([
-    [
-      "every bot, of the tab's host",
-      TAB_HOST,
-      async (): Promise<void> => {
-        fireEvent.change(screen.getByTestId("bot-column-search"), {
-          target: { value: "ship" },
-        });
-        await settle();
-      },
-    ],
-    [
-      "one bot, of its own host",
-      HOST_A,
-      async (): Promise<void> => {
-        fireEvent.click(
-          screen.getByRole("button", { name: "Search in Release Bot" }),
-        );
-        await typeIntoPanel("ship");
-      },
-    ],
-  ] as const)(
+  it.each(SEARCH_ROUTES)(
     "keeps the pages it has when a later page of a search of %s fails, says it could not load more, asks nothing more until Retry, and goes on from the page Retry asks again",
     async (_route, askedHost, openSearch) => {
       let page2Works = false;

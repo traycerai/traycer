@@ -311,48 +311,67 @@ describe("fetchBotSearchPage", () => {
     ).rejects.toBe(failure);
   });
 
-  it.each(["E_INVALID_ARGUMENT", "RPC_ERROR"] as const)(
-    "fails a later page whose direct host answers %s, where the same answer to a first page only costs the bot",
-    async (code) => {
-      const refused = hostFailure(code);
-      const directB: BotSearchSource = {
-        hostId: B_HOST,
-        scope: { kind: "bot", botId: SEARCH_BOT_B },
-        cursor: null,
-        started: false,
-        pending: [],
-      };
-      const ask = (
-        source: BotSearchSource,
-      ): Promise<BotConversationSearchResponse> =>
-        source.hostId === B_HOST
-          ? Promise.reject(refused)
-          : Promise.resolve(
-              searchResponse({
-                hits: [searchHit({ messageId: "a-1" })],
-                total: 1,
-              }),
-            );
+  it("fails a later page whose direct host does not answer it, where the same failure on a first page only costs the bot", async () => {
+    const failure = hostFailure("RPC_ERROR");
+    const directB: BotSearchSource = {
+      hostId: B_HOST,
+      scope: { kind: "bot", botId: SEARCH_BOT_B },
+      cursor: null,
+      started: false,
+      pending: [],
+    };
+    const ask = (
+      source: BotSearchSource,
+    ): Promise<BotConversationSearchResponse> =>
+      source.hostId === B_HOST
+        ? Promise.reject(failure)
+        : Promise.resolve(
+            searchResponse({
+              hits: [searchHit({ messageId: "a-1" })],
+              total: 1,
+            }),
+          );
 
-      const first = await fetchBotSearchPage({
-        sources: [TAB_SOURCE, directB],
+    const first = await fetchBotSearchPage({
+      sources: [TAB_SOURCE, directB],
+      sort: "relevance",
+      ask,
+      reachableHostOf: reachableOnlyB,
+    });
+
+    expect(first.hits.map((hit) => hit.messageId)).toEqual(["a-1"]);
+    expect(first.unreachable).toEqual([
+      { botId: SEARCH_BOT_B, reason: "offline" },
+    ]);
+    await expect(
+      fetchBotSearchPage({
+        sources: [TAB_SOURCE, { ...directB, cursor: "b-next", started: true }],
         sort: "relevance",
         ask,
         reachableHostOf: reachableOnlyB,
-      });
+      }),
+    ).rejects.toBe(failure);
+  });
 
-      expect(first.hits.map((hit) => hit.messageId)).toEqual(["a-1"]);
-      expect(first.unreachable).toEqual([
-        { botId: SEARCH_BOT_B, reason: "offline" },
-      ]);
+  it.each([
+    ["a first page", { cursor: null, started: false }],
+    ["a later page", { cursor: "b-next", started: true }],
+  ] as const)(
+    "fails the page when a direct host refuses %s with E_INVALID_ARGUMENT, and names no bot unreachable",
+    async (_page, where) => {
+      const refused = hostFailure("E_INVALID_ARGUMENT");
+      const directB: BotSearchSource = {
+        hostId: B_HOST,
+        scope: { kind: "bot", botId: SEARCH_BOT_B },
+        pending: [],
+        ...where,
+      };
+
       await expect(
         fetchBotSearchPage({
-          sources: [
-            TAB_SOURCE,
-            { ...directB, cursor: "b-next", started: true },
-          ],
+          sources: [directB],
           sort: "relevance",
-          ask,
+          ask: () => Promise.reject(refused),
           reachableHostOf: reachableOnlyB,
         }),
       ).rejects.toBe(refused);
