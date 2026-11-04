@@ -390,6 +390,7 @@ function respond(
     policy: policyValue,
     storedPolicyUnreadable: false,
     inFlightCount: 0,
+    source: "own",
   };
 }
 
