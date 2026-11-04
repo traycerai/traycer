@@ -18,17 +18,15 @@ import type { TranscriptWindow } from "@/stores/chats/transcript-window";
  * outline it registers and that button deliberately ignores the region's
  * `shown` value.
  *
- * A bot channel never mounts it: the rail is an outline of an agent's turns,
- * and a channel is people's posts and a bot's replies, which the outline has
- * no vocabulary for. The region setting still governs every agent chat.
+ * A bot's channel and its threads mount it under the same rule: there the rail
+ * lists the members' messages, the same human rows it lists in an agent chat.
  */
 export function shouldMountChatTurnMinimap(input: {
   readonly hasContent: boolean;
   readonly shown: boolean;
   readonly mobileViewport: boolean;
-  readonly botChannel: boolean;
 }): boolean {
-  if (!input.hasContent || input.botChannel) return false;
+  if (!input.hasContent) return false;
   return input.shown || input.mobileViewport;
 }
 
@@ -316,14 +314,26 @@ function isHumanUserRow(row: TranscriptListRow): boolean {
   );
 }
 
-function chatTurnMinimapRowLabel(row: TranscriptListRow): string {
+/**
+ * A row's rail label. With `senderFirst` (a bot's channel or thread, where
+ * several people post) a hydrated row leads with its sender's name; a cold row
+ * keeps the preview alone, because the skeleton carries no sender.
+ */
+function chatTurnMinimapRowLabel(
+  row: TranscriptListRow,
+  senderFirst: boolean,
+): string {
   const text =
     row.kind === "hydrated" ? row.model.content : (row.entry?.preview ?? "");
-  return compactChatTurnMinimapPreview(text) ?? "Untitled message";
+  const preview = compactChatTurnMinimapPreview(text) ?? "Untitled message";
+  const sender =
+    senderFirst && row.kind === "hydrated" ? row.model.senderLabel : null;
+  return sender === null ? preview : `${sender}: ${preview}`;
 }
 
 function deriveChatTurnMinimapItems(
   rows: ReadonlyArray<TranscriptListRow>,
+  senderFirst: boolean,
 ): ReadonlyArray<ChatTurnMinimapItem> {
   const humanRows: number[] = [];
   for (let index = 0; index < rows.length; index += 1) {
@@ -334,7 +344,7 @@ function deriveChatTurnMinimapItems(
     const row = rows[rowIndex];
     return {
       key: row.key,
-      label: chatTurnMinimapRowLabel(row),
+      label: chatTurnMinimapRowLabel(row, senderFirst),
       level: 1,
       messageId: row.key,
       rowIndex,
@@ -394,15 +404,27 @@ function unplacedRowKeys(rows: ReadonlyArray<TranscriptListRow>): string {
  * no invalidation. One slot rather than a map because the key it guards moves
  * only when an unplaced row is added or removed, which is not a churn pattern
  * worth retaining alternatives for.
+ *
+ * One pair per label mode: a bot's channel and its session view can read the
+ * same transcript with different labels, and a shared slot would make each
+ * evict the other on every token.
  */
-const lastDeriveByWindow = new WeakMap<
-  object,
-  { readonly key: string; readonly items: ReadonlyArray<ChatTurnMinimapItem> }
->();
-const lastDeriveByRows = new WeakMap<
-  object,
-  ReadonlyArray<ChatTurnMinimapItem>
->();
+interface ChatTurnMinimapDeriveCaches {
+  readonly byWindow: WeakMap<
+    object,
+    { readonly key: string; readonly items: ReadonlyArray<ChatTurnMinimapItem> }
+  >;
+  readonly byRows: WeakMap<object, ReadonlyArray<ChatTurnMinimapItem>>;
+}
+
+const previewDeriveCaches: ChatTurnMinimapDeriveCaches = {
+  byWindow: new WeakMap(),
+  byRows: new WeakMap(),
+};
+const senderFirstDeriveCaches: ChatTurnMinimapDeriveCaches = {
+  byWindow: new WeakMap(),
+  byRows: new WeakMap(),
+};
 
 /**
  * The rail's turn list, derived at most once per structural change.
@@ -443,23 +465,28 @@ const lastDeriveByRows = new WeakMap<
  * The legacy line has no window and no ordinals, so it keys on the `rows` array
  * itself - which is exactly the memo this replaced, and bounded there because
  * that line hydrates the whole transcript anyway.
+ *
+ * `senderFirst` labels each item `<sender>: <preview>` (see
+ * `chatTurnMinimapRowLabel`).
  */
 export function chatTurnMinimapItems(input: {
   readonly rows: ReadonlyArray<TranscriptListRow>;
   readonly window: TranscriptWindow | null;
+  readonly senderFirst: boolean;
 }): ReadonlyArray<ChatTurnMinimapItem> {
-  const { rows, window } = input;
+  const { rows, window, senderFirst } = input;
+  const caches = senderFirst ? senderFirstDeriveCaches : previewDeriveCaches;
   if (window === null) {
-    const cached = lastDeriveByRows.get(rows);
+    const cached = caches.byRows.get(rows);
     if (cached !== undefined) return cached;
-    const items = deriveChatTurnMinimapItems(rows);
-    lastDeriveByRows.set(rows, items);
+    const items = deriveChatTurnMinimapItems(rows, senderFirst);
+    caches.byRows.set(rows, items);
     return items;
   }
   const key = deriveCacheKey(rows);
-  const cached = lastDeriveByWindow.get(window);
+  const cached = caches.byWindow.get(window);
   if (cached !== undefined && cached.key === key) return cached.items;
-  const items = deriveChatTurnMinimapItems(rows);
-  lastDeriveByWindow.set(window, { key, items });
+  const items = deriveChatTurnMinimapItems(rows, senderFirst);
+  caches.byWindow.set(window, { key, items });
   return items;
 }

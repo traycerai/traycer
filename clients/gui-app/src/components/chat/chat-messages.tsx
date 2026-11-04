@@ -2192,7 +2192,8 @@ function ChatMessagesInner(props: ChatMessagesInnerProps) {
   // nothing else (`ChatBotMessage` -> `BotMessageText`): no activity groups,
   // no tool cards - so the DOM that makes a long turn expensive to mount does
   // not exist there, and the layout it does draw is one framed, sender-lined
-  // message per row, which a part cannot be half of.
+  // message per row, which a part cannot be half of. It also puts the sender
+  // first in the minimap's labels, since several people post there.
   const botChannel = use(ChatBotPresentationContext) !== null;
   // ONE decision, read by all three things that derive a part key: the rows
   // below, find's projection and `chatTimelineRowKeyForBlock`. A reader that
@@ -3311,8 +3312,6 @@ function ChatMessagesInner(props: ChatMessagesInnerProps) {
   // (L-14). It is a pure view over rows the transcript already has, so
   // drawing one costs nothing the chat was not already paying.
   const minimapShown = useRegionShown("minimap") || minimapGhost;
-  // A bot channel draws no rail (`shouldMountChatTurnMinimap`); the region
-  // stays registered so the layout editor still lists it for agent chats.
   const quoteEnabled =
     quoteReplyEnabled && visible && !systemOverlayActive && quoteSink !== null;
   const quoteSelection = useQuoteSelection({
@@ -4993,7 +4992,6 @@ function ChatMessagesInner(props: ChatMessagesInnerProps) {
       hasContent,
       shown: minimapShown,
       mobileViewport: isMobileViewport,
-      botChannel,
     });
 
   return (
@@ -5072,6 +5070,7 @@ function ChatMessagesInner(props: ChatMessagesInnerProps) {
                       ref={minimapHotspotRef}
                       rows={listRows}
                       transcriptWindow={transcriptWindow}
+                      senderFirst={botChannel}
                       inViewRefreshRef={minimapInViewRefreshRef}
                       listRef={chatTimelineRef}
                       topOffsetAdjustmentRef={listTopOffsetAdjustmentRef}
