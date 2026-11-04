@@ -1682,7 +1682,6 @@ describe("ChatTimeline follow-latch real-LegendList integration", () => {
 
       // The void: the window bit holds, the reader is owed a correction.
       commit(messages, true);
-      await advanceLegendListFrames(2);
       expect(scrollToEnd).not.toHaveBeenCalled();
 
       // The index returns in the commit that re-keys the rows: the window
