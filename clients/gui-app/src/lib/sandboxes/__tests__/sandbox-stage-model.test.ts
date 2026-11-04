@@ -16,6 +16,7 @@ import type {
   SandboxCataloguePricing,
   SandboxOs,
 } from "@traycer/protocol/host/sandbox-control";
+import { sandboxCatalogueSchema } from "@traycer/protocol/host/sandbox-control";
 
 const PERSONAL = { kind: "personal" } as const;
 const ACME = { kind: "team", teamId: "team-acme", teamName: "Acme" } as const;
@@ -345,6 +346,54 @@ describe("listed shapes", () => {
     idleMinutes: 30,
     destroyAfterRestingMinutes: null,
   } as const;
+
+  it("uses parsed exact rung prices for both staged and smallest quotes even when unit rates disagree", () => {
+    const parsed = sandboxCatalogueSchema.parse({
+      ...listed(RATES),
+      providers: listed(RATES).providers.map((provider) => ({
+        ...provider,
+        regions: provider.regions.map((region) => ({
+          ...region,
+          shapePrices: [
+            {
+              ...LARGE,
+              priceMcPerHour: { awakeMc: 1200, suspendedMc: 7, stoppedMc: 3 },
+            },
+            {
+              ...MIDDLE,
+              priceMcPerHour: { awakeMc: 1000, suspendedMc: 6, stoppedMc: 2 },
+            },
+            {
+              ...SMALLEST,
+              priceMcPerHour: { awakeMc: 901, suspendedMc: 5, stoppedMc: 1 },
+            },
+          ],
+        })),
+      })),
+    });
+
+    expect(stagePrice(parsed, STAGED)).toEqual({
+      awakeMcPerHour: 901,
+      exact: true,
+    });
+    expect(stageSmallestShape(parsed, STAGED)).toEqual({
+      isStaged: true,
+      awakeMcPerHour: 901,
+    });
+  });
+
+  it("keeps older parsed catalogues on their existing unit-price fallback", () => {
+    const legacy = sandboxCatalogueSchema.parse(listed(RATES));
+
+    expect(stagePrice(legacy, STAGED)).toEqual({
+      awakeMcPerHour: 40,
+      exact: true,
+    });
+    expect(stageSmallestShape(legacy, STAGED)).toEqual({
+      isStaged: true,
+      awakeMcPerHour: 40,
+    });
+  });
 
   function listed(pricing: SandboxCataloguePricing | null): SandboxCatalogue {
     const [provider] = catalogue(pricing, "linux").providers;
