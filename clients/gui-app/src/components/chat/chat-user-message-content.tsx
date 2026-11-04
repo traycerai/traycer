@@ -31,6 +31,7 @@ import {
 } from "@/components/epic-canvas/epic-node-tab-icon";
 
 const MENTION_ICON_CLASS = "size-3.5 shrink-0 text-muted-foreground";
+// muted-fill-ok: transcript chip on bg-background, bordered besides
 const SENT_CHIP_CLASS =
   "mx-px inline-flex items-center gap-1 rounded-md border border-border/60 bg-muted/60 px-1.5 py-0.5 align-baseline text-ui-sm font-medium text-foreground/90";
 const NODE_MENTION_ICON_CLASS = "size-3.5 shrink-0";
@@ -140,7 +141,6 @@ function ChatUserMessageMentionChipImpl({
       sideOffset={undefined}
       align={undefined}
     >
-      {/* muted-fill-ok: transcript chip on bg-background, bordered besides */}
       <span className={SENT_CHIP_CLASS} data-composer-chip="mention">
         <MentionChipIcon
           mention={mention}
@@ -171,7 +171,6 @@ function BotMentionChip({
       sideOffset={undefined}
       align={undefined}
     >
-      {/* muted-fill-ok: transcript chip on bg-background, bordered besides */}
       <button
         type="button"
         className={cn(SENT_CHIP_CLASS, "cursor-pointer hover:bg-foreground/8")}
