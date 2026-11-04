@@ -126,7 +126,7 @@ function clockSetTimeout(
   handler: TimerHandler,
   timeoutMs: number | undefined,
   ...args: unknown[]
-): ReturnType<typeof setTimeout> {
+) {
   if (typeof handler !== "function") {
     return realSetTimeout(handler, timeoutMs, ...args);
   }
@@ -163,7 +163,7 @@ function clockSetTimeout(
   };
   handles.add(handle);
   armPump();
-  return handle as ReturnType<typeof setTimeout>;
+  return handle;
 }
 
 function clockClearTimeout(
@@ -184,8 +184,11 @@ function install(): void {
   timers = [];
   nextId = 1;
   Date.now = () => current();
-  globalThis.setTimeout = clockSetTimeout as typeof globalThis.setTimeout;
-  globalThis.clearTimeout = clockClearTimeout as typeof globalThis.clearTimeout;
+  // The global timer signatures are the DOM overloads (a numeric id). Node's
+  // runtime returns an object, and so does the clock. Reflect.set keeps that
+  // object without a cast through `unknown`.
+  Reflect.set(globalThis, "setTimeout", clockSetTimeout);
+  Reflect.set(globalThis, "clearTimeout", clockClearTimeout);
 }
 
 function restore(): void {
