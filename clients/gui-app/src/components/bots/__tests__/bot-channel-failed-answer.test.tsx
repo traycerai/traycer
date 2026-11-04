@@ -136,7 +136,11 @@ vi.mock("@/components/epic-tabs/pane-visibility-context", () => ({
 }));
 vi.mock("@/hooks/bots/use-bot-conversation-list-query", () => ({
   useBotConversationListQuery: () => ({
-    data: { conversations: [{ conversationId: CHANNEL_ID }] },
+    data: {
+      conversations: listedConversationIds.map((conversationId) => ({
+        conversationId,
+      })),
+    },
     isError: false,
     refetch: vi.fn(),
   }),
@@ -404,6 +408,10 @@ function hostClientRecordingSends(): HostRequester<HostRpcRegistry> {
 /** What the bot's host was asked to update, in order. */
 let ensured: ReadonlyArray<string>;
 
+/** The conversations the bot lists, and the one its record names as the channel. */
+let listedConversationIds: ReadonlyArray<string> = [CHANNEL_ID];
+let namedConversationId: string = CHANNEL_ID;
+
 /** The bot's host's client, over a messenger whose `providers.ensurePack` records the provider. */
 function boundHostClientRecordingUpdates(): HostRequester<HostRpcRegistry> {
   const messenger = new MockHostMessenger<HostRpcRegistry>({
@@ -456,7 +464,7 @@ function mountChannelWith(
               boundHostEpoch={1}
               botTitle="Release Bot"
               directive={null}
-              appConversationChatId={CHANNEL_ID}
+              appConversationChatId={namedConversationId}
               trunkChatId="trunk-chat"
               onOpenTurn={vi.fn()}
               onOpenSession={vi.fn()}
@@ -492,6 +500,8 @@ function channelBox(): HTMLTextAreaElement {
 }
 
 beforeEach(() => {
+  listedConversationIds = [CHANNEL_ID];
+  namedConversationId = CHANNEL_ID;
   sent = [];
   boundHostId = BOUND_HOST_ID;
   heldSends = null;
@@ -822,6 +832,26 @@ describe("<BotChannelView tiles={null} /> Edit on a post the bot failed to answe
       expect(screen.queryByTestId("bot-channel-composer-editing")).toBeNull();
     });
     expect(box.value).toBe("");
+  });
+
+  it("drops the edit of a failed message when the channel resolves to another conversation", async () => {
+    const user = userEvent.setup();
+    activityStore.setState({ activity: trunkFailedOn(POST_REQUEST) });
+    const rerender = mountChannelWith(null, [memberPost(VIEWER_USER_ID)]);
+    await user.click(
+      within(screen.getByTestId("bot-member-row")).getByTestId(
+        "bot-message-edit",
+      ),
+    );
+    expect(screen.getByTestId("bot-channel-composer-editing")).toBeTruthy();
+    expect(channelBox().value).toBe(POST_TEXT);
+
+    listedConversationIds = [CHANNEL_ID, "conversation-later"];
+    namedConversationId = "conversation-later";
+    rerender();
+
+    expect(screen.queryByTestId("bot-channel-composer-editing")).toBeNull();
+    expect(channelBox().value).toBe("");
   });
 
   it("keeps an edit of a message in the open thread, its text and the message it replaces, while the channel's session goes and comes back", async () => {

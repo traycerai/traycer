@@ -261,7 +261,7 @@ export function SideStripViewRow(props: AreaRowPlacement): ReactNode {
             }
           : null
       }
-      revertLabel="Reset side tab view to default: Tabs only"
+      revertLabel="Reset side tab view to default: Tabs and agents"
       description={SIDE_STRIP_VIEW_ROW.description}
       stacked
       selected={selected}

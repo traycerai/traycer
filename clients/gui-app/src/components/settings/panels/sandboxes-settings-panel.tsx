@@ -91,6 +91,7 @@ import {
   type SandboxStarterFilter,
   type SandboxStateFilter,
 } from "@/lib/sandboxes/sandbox-row-lines";
+import { sandboxWithdrawalLine } from "@/components/hosts/sandbox-card-model";
 import {
   SANDBOX_LIST_FAILED,
   wakeString,
@@ -996,6 +997,7 @@ function SandboxListRow(props: {
               })}
             </span>
           </p>
+          <SandboxRowWithdrawal summary={summary} />
           {awake && (settingsFailed || summary.guestConfigured === false) ? (
             <div className="text-ui-xs text-muted-foreground">
               <p>Compute is charged while it is awake.</p>
@@ -1026,6 +1028,32 @@ function SandboxListRow(props: {
         settingsFailed={settingsFailed}
       />
     </li>
+  );
+}
+
+/**
+ * When this sandbox stops running, on a row whose kind the control plane is
+ * withdrawing. It sits under the clock line because it replaces what that
+ * line would say: an unfrozen withdrawn row carries no resting deadline while
+ * this date stands. A frozen one that carries its own day-30 deadline states
+ * it through the clock line, so both lines show — and this one drops its date
+ * then, rather than contradict the day the clock line names.
+ */
+function SandboxRowWithdrawal(props: {
+  readonly summary: SandboxSummary;
+}): ReactNode {
+  const line = sandboxWithdrawalLine(
+    props.summary.withdrawalEndsAt,
+    props.summary.destroyAt,
+  );
+  if (line === null) return null;
+  return (
+    <p
+      className="rounded-md border border-warning/30 bg-warning/10 px-2 py-1.5 text-ui-xs leading-snug wrap-anywhere text-warning-foreground"
+      data-testid="sandboxes-row-withdrawal"
+    >
+      {line}
+    </p>
   );
 }
 
