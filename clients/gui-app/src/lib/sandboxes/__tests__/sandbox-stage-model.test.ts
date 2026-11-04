@@ -360,7 +360,7 @@ describe("listed shapes", () => {
   } as const;
 
   it("uses the exact price of a non-smallest staged rung over conflicting unit rates", () => {
-    const parsed = exactCatalogue();
+    const parsed = exactCatalogue(RATES);
 
     expect(
       stagePrice(parsed, {
@@ -376,7 +376,7 @@ describe("listed shapes", () => {
   });
 
   it("matches all dimensions for stagePrice and preserves a zero exact price", () => {
-    const parsed = exactCatalogue();
+    const parsed = exactCatalogue(RATES);
 
     expect(stagePrice(parsed, STAGED)).toEqual({
       awakeMcPerHour: 0,
@@ -385,8 +385,28 @@ describe("listed shapes", () => {
   });
 
   it("matches all dimensions for stageSmallestShape and preserves a zero exact price", () => {
-    const parsed = exactCatalogue();
+    const parsed = exactCatalogue(RATES);
 
+    expect(stageSmallestShape(parsed, STAGED)).toEqual({
+      isStaged: true,
+      awakeMcPerHour: 0,
+    });
+  });
+
+  it("uses exact shape prices when the region has no unit rates", () => {
+    const parsed = exactCatalogue(null);
+
+    expect(
+      stagePrice(parsed, {
+        ...STAGED,
+        cpus: MIDDLE.cpus,
+        memoryMb: MIDDLE.memoryMb,
+        diskMb: MIDDLE.diskMb,
+      }),
+    ).toEqual({
+      awakeMcPerHour: 1000,
+      exact: true,
+    });
     expect(stageSmallestShape(parsed, STAGED)).toEqual({
       isStaged: true,
       awakeMcPerHour: 0,
@@ -418,7 +438,9 @@ describe("listed shapes", () => {
     };
   }
 
-  function exactCatalogue(): SandboxCatalogue {
+  function exactCatalogue(
+    pricing: SandboxCataloguePricing | null,
+  ): SandboxCatalogue {
     const shapePrices = [
       {
         cpus: LARGE.cpus,
@@ -451,7 +473,7 @@ describe("listed shapes", () => {
         priceMcPerHour: { awakeMc: 0, suspendedMc: 5, stoppedMc: 1 },
       },
     ];
-    const base = listed(RATES);
+    const base = listed(pricing);
     return sandboxCatalogueSchema.parse({
       ...base,
       providers: base.providers.map((provider) => ({
