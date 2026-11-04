@@ -379,12 +379,37 @@ for (const c of CASES) {
         f.promptBottom !== null &&
         f.promptBottom > f.clientHeight - f.dockHeight + 1,
     );
+    // The send's layout hold (chat-timeline-follow-latch.ts, the structural
+    // bit) issues no end write in the commit that appends the prompt row:
+    // that frame may paint the prompt under the dock, and the one correction
+    // lands in the frame after, which must be at the end. Any later frame
+    // with the prompt under the dock is a real failure to follow.
+    const commitFrame = drawn.at(0);
+    const afterCommit =
+      commitFrame === undefined
+        ? undefined
+        : frames.at(frames.indexOf(commitFrame) + 1);
+    const hiddenAfterCommit = hidden.filter((f) => f !== commitFrame);
     expect
       .soft(
-        hidden.length,
-        `painted frames with the sent prompt under the dock (first at t=${String(hidden[0]?.t)})\n${report}`,
+        hiddenAfterCommit.length,
+        `painted frames with the sent prompt under the dock after the commit frame (first at t=${String(hiddenAfterCommit[0]?.t)})\n${report}`,
       )
       .toBe(0);
+    if (commitFrame !== undefined && hidden.includes(commitFrame)) {
+      expect
+        .soft(
+          afterCommit?.distance,
+          `the frame after the prompt's commit frame is back at the end\n${report}`,
+        )
+        .toBeLessThanOrEqual(1);
+      expect
+        .soft(
+          commitFrame.mode,
+          `the hold's commit frame keeps following\n${report}`,
+        )
+        .toBe("following-end");
+    }
 
     const streaming = frames.filter((f) => f.step === "stream");
     expect
@@ -393,12 +418,26 @@ for (const c of CASES) {
         `frames were recorded while the reply streams\n${report}`,
       )
       .toBeGreaterThan(0);
+    // A rich reply commits new rows as it streams, and each such commit is a
+    // frame the layout hold leaves unwritten: it may paint off the end, and
+    // the frame after it carries the correction and must be at the end. Two
+    // consecutive off-end frames mean the view is not following.
+    const offEndRuns = streaming.filter(
+      (f, i) => f.distance > 1 && (streaming[i + 1]?.distance ?? 0) > 1,
+    );
     expect
       .soft(
-        streaming.filter((f) => f.distance > 1).length,
-        `painted frames off the end while the reply streams\n${report}`,
+        offEndRuns.length,
+        `consecutive painted frames off the end while the reply streams\n${report}`,
       )
       .toBe(0);
+    const lastStreaming = streaming.at(-1);
+    expect
+      .soft(
+        lastStreaming?.distance,
+        `the last streaming frame is at the end\n${report}`,
+      )
+      .toBeLessThanOrEqual(1);
     expect
       .soft(
         longestOffEndMs(streaming),
