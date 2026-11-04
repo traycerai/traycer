@@ -26,7 +26,10 @@ import { CHAT_NAVIGATION_HIGHLIGHT_CLASSNAME } from "@/components/chat/chat-navi
 import { PANEL_RESIZE_VISIBLE_ROW_ATTRIBUTE } from "@/components/chat/chat-timeline-panel-resize-snapshot";
 import type { NextStepActionHandler } from "@/components/chat/segments/next-steps-action-group";
 import { beginPanelResizeInteraction } from "@/lib/layout/panel-resizing-class";
-import { transcriptListRows } from "@/stores/chats/transcript-list-rows";
+import {
+  transcriptListRows,
+  type TranscriptListRow,
+} from "@/stores/chats/transcript-list-rows";
 import type { ChatMessage as ChatMessageModel } from "@/stores/composer/chat-store";
 import { makeMessage, makeMessages } from "./chat-message-fixtures";
 import {
@@ -1315,8 +1318,8 @@ describe("ChatTimeline LegendList strict-edge policy config", () => {
     await settleLegendList();
     expect(legendListPolicyProps.last).not.toBeNull();
     expect(legendListPolicyProps.last?.maintainScrollAtEndThreshold).toBe(0);
-    // MVCP's size channel is unconditional; the data channel rides the key
-    // sequence and is off for a settled transcript - see the prop's own
+    // MVCP's size channel is unconditional; the data channel rides the row
+    // shape and is off for a settled transcript - see the prop's own
     // comment, and the two cases below for each arm.
     expect(legendListPolicyProps.last?.maintainVisibleContentPosition).toEqual({
       data: false,
@@ -1357,6 +1360,52 @@ describe("ChatTimeline LegendList strict-edge policy config", () => {
     const withRowRemoved = messages.filter((_, index) => index !== 1);
     act(() => {
       rerenderMessages(withRowRemoved, undefined, undefined);
+    });
+
+    expect(legendListPolicyProps.last?.maintainVisibleContentPosition).toEqual({
+      data: true,
+      size: true,
+    });
+  });
+
+  it("turns the MVCP data channel on when a placeholder is replaced by its hydrated row under the same key", async () => {
+    const hydratedRows = transcriptListRows({
+      window: null,
+      rendered: makeMessages(6),
+      splitLongTurns: true,
+    });
+    // The same rows in the same order; only row 2 is still a placeholder.
+    const placeholderRows = hydratedRows.map((row, index): TranscriptListRow =>
+      index === 2
+        ? {
+            kind: "placeholder",
+            key: row.key,
+            ordinal: index,
+            entry: null,
+            provenance: "index",
+          }
+        : row,
+    );
+    // One ref for both commits: the committed row shape is cached per ref.
+    const listRef = createRef<LegendListRef | null>();
+    const timeline = (rows: ReadonlyArray<TranscriptListRow>): ReactElement => (
+      <div style={{ height: VIEWPORT_HEIGHT_PX, width: VIEWPORT_WIDTH_PX }}>
+        <ChatTimeline
+          rows={rows}
+          taskTitle="Test transcript"
+          backgroundToolBlockIds={new Set<string>()}
+          getMessageActions={() => null}
+          nextStepActions={null}
+          listRef={listRef}
+          className="h-full"
+        />
+      </div>
+    );
+    const { rerender } = render(timeline(placeholderRows));
+    await settleLegendList();
+
+    act(() => {
+      rerender(timeline(hydratedRows));
     });
 
     expect(legendListPolicyProps.last?.maintainVisibleContentPosition).toEqual({
