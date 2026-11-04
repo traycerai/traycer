@@ -204,7 +204,6 @@ export function UserMessageBody({
         <SlackMessageDisplayView
           messageId={message.id}
           messageText={message.content}
-          attachments={message.attachments}
           slackMessage={message.slackMessage}
           sentAt={message.sentAt ?? message.createdAt}
         />
@@ -384,13 +383,11 @@ function AgentMessageDisplayView({
 function SlackMessageDisplayView({
   messageId,
   messageText,
-  attachments,
   slackMessage,
   sentAt,
 }: {
   messageId: string;
   messageText: string;
-  attachments: ChatMessageModel["attachments"];
   slackMessage: NonNullable<ChatMessageModel["slackMessage"]>;
   sentAt: number;
 }): ReactNode {
@@ -415,10 +412,7 @@ function SlackMessageDisplayView({
           data-chat-find-unit={chatFindMessageContentUnitId(messageId)}
           className="text-ui leading-7 break-words whitespace-pre-wrap"
         >
-          <ChatUserMessageContent
-            content={messageText}
-            attachments={attachments}
-          />
+          {messageText}
         </div>
       ) : null}
       {slackMessage.omitted.length > 0 ? (
