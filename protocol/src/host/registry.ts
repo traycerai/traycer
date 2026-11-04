@@ -893,10 +893,12 @@ import {
   epicListChatRecordsUpgradeV10ToV11,
   epicListChatRecordsUpgradeV11ToV12,
   epicListChatRecordsUpgradeV12ToV13,
+  epicListChatRecordsUpgradeV13ToV14,
   epicListChatRecordsV10,
   epicListChatRecordsV11,
   epicListChatRecordsV12,
   epicListChatRecordsV13,
+  epicListChatRecordsV14,
   epicGetChatRunSettingsDowngradeV20ToV10,
   epicGetChatRunSettingsDowngradeV30ToV10,
   epicGetChatRunSettingsDowngradeV30ToV20,
@@ -10455,9 +10457,12 @@ const HOST_RPC_REGISTRY_BASE_TAIL_DEFINITION = {
   // poll that has nothing to report costs a few hundred bytes instead of the
   // re-encoded registry. @1.2 stays installed and its callers keep receiving
   // the unconditional snapshot.
+  // @1.4 says on each row whether this host has dropped the chat's records
+  // (`evicted`). One added key under the snapshot's `chats[]`; a @1.3 peer's
+  // rows upgrade with `false`, which is what every older host's chats are.
   "epic.listChatRecords": {
     1: {
-      latestMinor: 3,
+      latestMinor: 4,
       versions: {
         0: {
           contract: epicListChatRecordsV10,
@@ -10525,6 +10530,13 @@ const HOST_RPC_REGISTRY_BASE_TAIL_DEFINITION = {
           // sends `null` is served a snapshot too - and neither replaces the
           // other.
           responseGrowthProjectionGated: true,
+        },
+        4: {
+          contract: epicListChatRecordsV14,
+          upgradeFromPreviousVersion: epicListChatRecordsUpgradeV13ToV14,
+          // No `responseGrowthProjectionGated`: `evicted` is a plain added
+          // key on the `snapshot` arm's rows, which zod strips for a 1.3
+          // peer, and the root union is 1.3's unchanged.
         },
       },
       downgradePathsFromLatest: {},
