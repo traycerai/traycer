@@ -1,5 +1,7 @@
 import { useReadingWidthStyle } from "@/lib/layout-overrides";
 import { TeamEpicPersonalLine } from "@/components/chat/composer/team-epic-personal-line";
+import { EvictedChatLine } from "@/components/chat/composer/evicted-chat-line";
+import type { EvictedChatLineKind } from "@/hooks/chats/use-evicted-chat-send";
 import {
   memo,
   useCallback,
@@ -156,6 +158,12 @@ export interface ChatLowerAccessState {
    * one for it.
    */
   readonly restingSandbox?: RestingChatSandbox;
+  /**
+   * Set when the chat's host dropped the chat's records: a message is parked
+   * while the host brings them back (`useEvictedChatSend`), so the composer
+   * takes one even from the pool's session, which takes none itself.
+   */
+  readonly evictedChat?: EvictedChatComposerState;
   /** The serving host has a copy, not authority over the owner's workspace. */
   readonly isCopy: boolean;
   readonly isViewer: boolean;
@@ -172,6 +180,14 @@ export interface ChatLowerAccessState {
    * sends them looking for a permission to ask for.
    */
   readonly readOnlyNotice: string | null;
+}
+
+export interface EvictedChatComposerState {
+  /** Whether a message is parked and the host asked for the chat first. */
+  readonly parks: boolean;
+  readonly line: EvictedChatLineKind | null;
+  /** The chat's owner, for the published copy the head-moved line opens. */
+  readonly ownerUserId: string | null;
 }
 
 /**
@@ -863,7 +879,11 @@ function ComposerSurface(props: {
       </ComposerSlotShell>
     );
   }
-  if (model.access.isViewer && model.access.restingSandbox === undefined) {
+  if (
+    model.access.isViewer &&
+    model.access.restingSandbox === undefined &&
+    model.access.evictedChat?.parks !== true
+  ) {
     return <ViewerComposerSurface model={model} layout={layout} />;
   }
   // The escape hatch stacks ABOVE the card/composer rather than replacing
@@ -978,6 +998,34 @@ function ViewerComposerSurface(props: {
   );
 }
 
+/**
+ * Whether the composer's send is blocked, and the tooltip saying why. A
+ * resting sandbox's message and an evicted chat's parked one are taken even
+ * though the serving session cannot act; an evicted chat's line holds the
+ * send while the host brings the chat back, and after it could not reach the
+ * cloud, until the draft is edited or the host's connection returns.
+ */
+function composerSendGate(model: ComposerSurfaceModel): {
+  readonly disabled: boolean;
+  readonly hint: string | null;
+} {
+  const editing = model.queue.editingItem !== null;
+  const restingMessage = model.access.restingSandbox !== undefined && !editing;
+  const evicted = model.access.evictedChat;
+  const evictedMessage = evicted?.parks === true && !editing;
+  const evictedHold =
+    evicted?.line === "hydrating" || evicted?.line === "unreachable";
+  return {
+    disabled:
+      evictedHold ||
+      (!model.access.canAct && !restingMessage && !evictedMessage),
+    hint:
+      restingMessage || evictedMessage || evictedHold
+        ? null
+        : chatSendDisabledHint(model.access),
+  };
+}
+
 function LiveChatComposer(props: {
   readonly model: ComposerSurfaceModel;
   readonly topSpacing: ChatLowerSurfaceTopSpacing;
@@ -987,18 +1035,15 @@ function LiveChatComposer(props: {
   const tabHostId = useTabHostId();
   const sandboxSays = useContext(ChatSandboxLineContext);
   const focusLayout = useContext(ComposerFocusLayoutContext);
-  const restingMessage =
-    model.access.restingSandbox !== undefined &&
-    model.queue.editingItem === null;
+  const sendGate = composerSendGate(model);
+  const evicted = model.access.evictedChat;
   return (
     <ChatComposer
       key={model.queue.editingItem?.queueItemId}
       taskId={model.composer.nodeId}
       isActive={model.composer.isActive}
-      sendDisabled={!model.access.canAct && !restingMessage}
-      sendDisabledHint={
-        restingMessage ? null : chatSendDisabledHint(model.access)
-      }
+      sendDisabled={sendGate.disabled}
+      sendDisabledHint={sendGate.hint}
       mentionRoots={model.composer.mentionRoots}
       fallbackToGlobalMentionRoots={model.composer.fallbackToGlobalMentionRoots}
       currentEpicId={model.composer.currentEpicId}
@@ -1044,6 +1089,14 @@ function LiveChatComposer(props: {
               onContinue={model.composer.onContinueOnTeamHosts}
             />
           </div>
+          <EvictedChatLine
+            line={evicted?.line ?? null}
+            epicId={model.composer.currentEpicId}
+            chatId={model.composer.nodeId}
+            ownerHostId={tabHostId}
+            ownerUserId={evicted?.ownerUserId ?? null}
+            tabId={model.viewTabId}
+          />
           <ChatComposerDeliveryStatus hideReconnecting={sandboxSays} />
           <ChatComposerOpencodeLineHeld />
         </>

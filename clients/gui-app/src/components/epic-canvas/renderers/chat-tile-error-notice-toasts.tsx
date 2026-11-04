@@ -8,6 +8,7 @@ import {
   type ChatSessionStoreHandle,
   type DeliveredNoticeTracker,
 } from "@/stores/chats/chat-session-store";
+import { evictedChatRefusalOfCode } from "@/lib/chats/evicted-chat-refusal";
 import { createReportIssueContext } from "@/lib/report-issue-context";
 import {
   forgetRetainedDraftToast,
@@ -63,6 +64,7 @@ export function ChatTileErrorNoticeToasts(
       // append resurrects, all of them at once. Muting is this pass's job;
       // the poisoning is fixed by the tracker's KEY instead.
       if (!rememberErrorNotice(notice, tracker)) return;
+      if (composerLineSays(notice)) return;
       if (notice.severity !== "error" && !noticeMustSurviveUnfocus(notice)) {
         return;
       }
@@ -74,7 +76,8 @@ export function ChatTileErrorNoticeToasts(
       if (state.errorNotices === previousState.errorNotices) return;
       state.errorNotices.forEach((notice) => {
         if (!rememberErrorNotice(notice, tracker)) return;
-        showErrorNoticeToast(notice);
+        // Said by the composer's line, which counts as reaching the person.
+        if (!composerLineSays(notice)) showErrorNoticeToast(notice);
         markDelivered(handle, notice);
       });
     });
@@ -82,6 +85,16 @@ export function ChatTileErrorNoticeToasts(
   useActivePaneEffect(syncErrorNotices);
 
   return null;
+}
+
+/**
+ * A host's refusal to bring back a chat it dropped the records of. The
+ * composer's line above the input says it (`useEvictedSendAckRefusals`), so
+ * it is never a toast. A notice that inlines the message's only copy has its
+ * own code, so it is not one of these and still toasts.
+ */
+function composerLineSays(notice: ChatErrorNotice): boolean {
+  return evictedChatRefusalOfCode(notice.code) !== null;
 }
 
 /**
