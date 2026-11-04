@@ -1,4 +1,5 @@
-import { useCallback, useMemo, useState } from "react";
+import { useCallback, useMemo, useRef, useState } from "react";
+import { useVirtualizer } from "@tanstack/react-virtual";
 import { v4 as uuidv4 } from "uuid";
 import {
   SwitcherListHeader,
@@ -10,7 +11,8 @@ import { useSwitcherActivate } from "@/components/epic-canvas/mobile/use-switche
 import { useNarrowedSwitcherRecords } from "@/components/epic-canvas/mobile/switcher-record-order";
 import {
   buildSwitcherArtifactTree,
-  type SwitcherTreeNode,
+  flattenSwitcherArtifactTree,
+  type SwitcherArtifactTreeRow,
 } from "@/components/epic-canvas/mobile/switcher-artifact-tree";
 import { SwitcherArtifactsViewMenu } from "@/components/epic-canvas/mobile/switcher-view-menu";
 import { SwitcherSearchField } from "@/components/epic-canvas/mobile/switcher-search-field";
@@ -177,10 +179,39 @@ export function SwitcherArtifactsList(props: SwitcherListProps) {
 }
 
 /**
+ * A row is the shared `SwitcherListRow`'s `min-h-11` (2.75rem) and nothing
+ * taller: its label truncates to one line. The estimate seeds a row's place
+ * before it is drawn; each drawn row is then measured, because the root font
+ * size is the person's UI font size setting and a row grows with it.
+ */
+const ARTIFACT_ROW_HEIGHT_REM = 2.75;
+/** The `space-y-0.5` (0.125rem) the rows had as a plain list. */
+const ARTIFACT_ROW_GAP_REM = 0.125;
+const FALLBACK_ROOT_FONT_SIZE_PX = 16;
+
+function readRootFontSizePx(): number {
+  const size = Number.parseFloat(
+    window.getComputedStyle(document.documentElement).fontSize,
+  );
+  return Number.isFinite(size) && size > 0 ? size : FALLBACK_ROOT_FONT_SIZE_PX;
+}
+/**
+ * Rows drawn beyond the viewport at either end, so a flick has rows ready
+ * before the scroller shows the gap. A big task has a thousand rows; drawing
+ * them all is what made the category take seconds to open.
+ */
+const ARTIFACT_ROW_OVERSCAN = 12;
+
+/**
  * The category's ordinary list: every artifact surviving the facet filters, in
  * the epic's sort order, each child grouped under whichever of its ancestors
  * survived with it. Search replaces this wholesale rather than narrowing it,
  * because the host ranks its own hits and that ranking is the answer.
+ *
+ * Only the rows in and around the viewport are mounted. A big task has
+ * hundreds of artifacts and each row is a button, an icon and an actions
+ * button, so drawing every row cost seconds of layout on an iPad before the
+ * category showed; the window keeps that proportional to the screen.
  */
 function SwitcherArtifactBrowseList(props: {
   readonly artifacts: ReadonlyArray<EpicTreeRecord>;
@@ -190,12 +221,12 @@ function SwitcherArtifactBrowseList(props: {
   readonly tabId: string;
   readonly onClose: () => void;
 }) {
-  const { artifacts, epicId, tabId, onClose } = props;
-  const roots = useMemo(
-    () => buildSwitcherArtifactTree(artifacts),
+  const { artifacts } = props;
+  const rows = useMemo(
+    () => flattenSwitcherArtifactTree(buildSwitcherArtifactTree(artifacts)),
     [artifacts],
   );
-  if (roots.length === 0) {
+  if (rows.length === 0) {
     return (
       <SwitcherArtifactsEmpty
         hasAnyArtifacts={props.hasAnyArtifacts}
@@ -203,71 +234,103 @@ function SwitcherArtifactBrowseList(props: {
       />
     );
   }
+  return <SwitcherArtifactWindow {...props} rows={rows} />;
+}
+
+function SwitcherArtifactWindow(props: {
+  readonly rows: ReadonlyArray<SwitcherArtifactTreeRow>;
+  readonly epicId: string;
+  readonly tabId: string;
+  readonly onClose: () => void;
+}) {
+  const { rows, epicId, tabId, onClose } = props;
+  const scroller = useRef<HTMLDivElement>(null);
+  // Read once per mount: the chooser is remounted when the person reopens
+  // it, and a font size changed while it is open is caught by the per-row
+  // measurement below.
+  const [rootFontSizePx] = useState(readRootFontSizePx);
+  // Measurements are read on each render, never passed through memoized
+  // children - the same arrangement as the canvas layers tree.
+  // eslint-disable-next-line react-hooks/incompatible-library
+  const virtualizer = useVirtualizer({
+    count: rows.length,
+    getScrollElement: () => scroller.current,
+    estimateSize: () => ARTIFACT_ROW_HEIGHT_REM * rootFontSizePx,
+    gap: ARTIFACT_ROW_GAP_REM * rootFontSizePx,
+    overscan: ARTIFACT_ROW_OVERSCAN,
+  });
   return (
-    <div className="flex min-h-0 flex-1 flex-col overflow-x-hidden overflow-y-auto overscroll-contain will-change-transform p-1 pb-safe-bottom">
-      {/* The desktop artifact tree's roles, for the same reason it carries
-          them: indentation is a sighted reader's only cue, and a screen
-          reader that is handed a flat run of buttons is told nothing at all
-          about what contains what. Level comes from the nesting itself
-          (`role="group"`), exactly as it does on the sidebar. */}
-      <ul role="tree" aria-label="Epic artifacts tree" className="space-y-0.5">
-        {roots.map((node) => (
-          <SwitcherArtifactNode
-            key={node.record.id}
-            node={node}
-            depth={0}
+    // The desktop artifact tree's roles, for the same reason it carries them:
+    // indentation is a sighted reader's only cue, and a screen reader that is
+    // handed a flat run of buttons is told nothing at all about what contains
+    // what. Windowed rows are DOM siblings, so each says its own level and
+    // position (`aria-level`, `aria-posinset`, `aria-setsize`) instead of the
+    // sidebar's `role="group"` containment.
+    <div
+      ref={scroller}
+      role="tree"
+      aria-label="Epic artifacts tree"
+      className="min-h-0 flex-1 overflow-x-hidden overflow-y-auto overscroll-contain will-change-transform p-1 pb-safe-bottom"
+    >
+      <div
+        className="relative w-full"
+        style={{ height: virtualizer.getTotalSize() }}
+      >
+        {virtualizer.getVirtualItems().map((item) => (
+          <SwitcherArtifactTreeItem
+            key={rows[item.index].record.id}
+            row={rows[item.index]}
+            index={item.index}
+            measure={virtualizer.measureElement}
+            top={item.start}
             epicId={epicId}
             tabId={tabId}
             onClose={onClose}
           />
         ))}
-      </ul>
+      </div>
     </div>
   );
 }
 
-function SwitcherArtifactNode(props: {
-  readonly node: SwitcherTreeNode;
-  readonly depth: number;
+function SwitcherArtifactTreeItem(props: {
+  readonly row: SwitcherArtifactTreeRow;
+  readonly index: number;
+  readonly measure: (element: HTMLDivElement | null) => void;
+  readonly top: number;
   readonly epicId: string;
   readonly tabId: string;
   readonly onClose: () => void;
 }) {
-  const { node, depth, epicId, tabId, onClose } = props;
-  const isActive = useIsActiveEpicArtifact(tabId, node.record.id);
+  const { row, index, measure, top, epicId, tabId, onClose } = props;
+  const isActive = useIsActiveEpicArtifact(tabId, row.record.id);
   return (
     // A tree that never collapses still owes its branches an expansion state:
-    // with none, a parent is announced as a leaf and the group under it reads
+    // with none, a parent is announced as a leaf and the rows under it read
     // as unrelated. Leaves omit the attribute entirely - that omission is what
     // marks them as leaves, so it must not be `false`.
-    <li
+    // `data-index` is how the measured element is matched back to its row.
+    <div
+      ref={measure}
+      data-index={index}
       role="treeitem"
+      aria-level={row.depth + 1}
+      aria-posinset={row.posInSet}
+      aria-setsize={row.setSize}
       aria-selected={isActive}
-      aria-expanded={node.children.length > 0 ? true : undefined}
+      aria-expanded={row.branch ? true : undefined}
+      className="absolute top-0 left-0 w-full"
+      style={{ transform: `translateY(${top}px)` }}
     >
       <SwitcherArtifactRow
-        record={node.record}
-        depth={depth}
+        record={row.record}
+        depth={row.depth}
         active={isActive}
         epicId={epicId}
         tabId={tabId}
         onClose={onClose}
       />
-      {node.children.length === 0 ? null : (
-        <ul role="group" className="mt-0.5 space-y-0.5">
-          {node.children.map((child) => (
-            <SwitcherArtifactNode
-              key={child.record.id}
-              node={child}
-              depth={depth + 1}
-              epicId={epicId}
-              tabId={tabId}
-              onClose={onClose}
-            />
-          ))}
-        </ul>
-      )}
-    </li>
+    </div>
   );
 }
 
