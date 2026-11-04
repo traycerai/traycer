@@ -271,14 +271,19 @@ describe("sandboxDetailsEntry", () => {
     expect(status["Destroyed on"]).not.toContain("unless used");
   });
 
-  it("names the frozen day-30 deadline, never the later withdrawal date, for a frozen row that carries both", () => {
+  it("names the frozen day-30 deadline bare, never the later withdrawal date and never with 'unless used', for a frozen row that carries both", () => {
     const frozenAt = Date.UTC(2026, 10, 1);
     const destroyAt = frozenDestroyAt(frozenAt);
     const withdrawalEndsAt = Date.UTC(2026, 11, 15);
     const entry = sandboxDetailsEntry({
       summary: sandboxSummaryFixture({
         burst: false,
-        destroyAfterRestingMinutes: null,
+        // A resting policy is set as well, so the row carries both a freeze
+        // and a retention policy at once. It does not make a resting reading
+        // of THIS deadline available — the server answers a frozen row's
+        // `destroyAt` from its freeze — so the pair that proves `frozen` is
+        // the discriminator is the case below, not this one.
+        destroyAfterRestingMinutes: 7 * 24 * 60,
         frozen: true,
         frozenAt,
         destroyAt,
@@ -292,14 +297,55 @@ describe("sandboxDetailsEntry", () => {
     });
     const status = entry.export().status;
     // Computed, not written out, for the same locale reason as the case
-    // above; the withdrawal day is asserted absent, not merely that the
-    // destroy day is present, because the bug this guards against produced a
-    // well-formed row with the wrong day in it.
+    // above. The row is matched EXACTLY: the bug this guards against
+    // produced a well-formed row carrying the wrong day, and an exact match
+    // is what rules out both that day and a trailing `unless used`.
     const destroyDay = formatSandboxDate(destroyAt, true);
     const withdrawalDay = formatSandboxUtcDay(withdrawalEndsAt);
     expect(destroyDay).not.toBe(withdrawalDay);
-    expect(status["Destroyed on"]).toBe(`${destroyDay} unless used`);
-    expect(status["Destroyed on"]).not.toContain(withdrawalDay);
+    expect(status["Destroyed on"]).toBe(destroyDay);
+    // The same day, stated the same way, by the row beside it — the
+    // agreement that makes the bare day right rather than merely shorter.
+    expect(status["Frozen"]).toContain(`destroyed on ${destroyDay}`);
+  });
+
+  // Both arms of that branch, on ONE pair of inputs that differs in `frozen`
+  // and nothing else: the same `destroyAt`, neither row withdrawn. That is
+  // what makes `frozen` the proven discriminator — the case above pairs a
+  // frozen row with an unfrozen one that is also withdrawn, so a branch on
+  // the withdrawal's presence would satisfy it too.
+  //
+  // Both directions are needed: without the clause case the clause could be
+  // deleted from the row outright, and without the bare case it could be
+  // appended to every row, with half the rule still passing either way.
+  it("states the day bare for a frozen row and with 'unless used' for an unfrozen one, on the same deadline", () => {
+    const frozenAt = Date.UTC(2026, 9, 9);
+    const destroyAt = frozenDestroyAt(frozenAt);
+    const day = formatSandboxDate(destroyAt, true);
+    const rowFor = (
+      frozen: boolean,
+    ): Record<string, string> =>
+      sandboxDetailsEntry({
+        summary: sandboxSummaryFixture({
+          burst: false,
+          destroyAfterRestingMinutes: 7 * 24 * 60,
+          frozen,
+          frozenAt: frozen ? frozenAt : null,
+          destroyAt,
+          withdrawalEndsAt: null,
+        }),
+        cost: null,
+        wakeString: null,
+        viewerUserId: null,
+        personal: false,
+        now: NOW,
+      })
+        .export()
+        .status;
+
+    expect(rowFor(true)["Destroyed on"]).toBe(day);
+    // A wake really does reset a resting deadline, so this row keeps saying so.
+    expect(rowFor(false)["Destroyed on"]).toBe(`${day} unless used`);
   });
 });
 

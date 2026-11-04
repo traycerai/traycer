@@ -209,12 +209,25 @@ function statusRows(input: SandboxDetailsInput): SandboxDetailsRow[] {
   //
   // The announced day answers only when there is no `destroyAt` to state,
   // which is the ordinary withdrawn row: unfrozen, its resting deadline
-  // held. It carries no `unless used`, because nothing the person does
-  // postpones a withdrawal, unlike a resting deadline a wake resets.
+  // held.
+  //
+  // `unless used` belongs to ONE of these days: the resting deadline, which
+  // a wake really does reset — landing awake clears `restingSince`, so the
+  // clock starts over. It is false on the other two, for different reasons.
+  //
+  // Nothing the person does postpones a withdrawal. And a frozen row's
+  // day-30 day belongs to the freeze EPISODE, counted from its `frozenAt`:
+  // nothing moves that day later. What can remove it — a top-up, or, on a
+  // team row, a wake its payer's gate admits (`thawForWake`) — ENDS the
+  // episode and the deadline with it rather than deferring the day. So
+  // there is no postponement to offer: use either leaves this date exactly
+  // where it is or clears it outright, and the row states the bare day here
+  // exactly as the Frozen row below states it.
   if (summary.destroyAt !== null) {
+    const day = formatSandboxDate(summary.destroyAt, true);
     rows.push({
       label: "Destroyed on",
-      value: `${formatSandboxDate(summary.destroyAt, true)} unless used`,
+      value: summary.frozen ? day : `${day} unless used`,
     });
   } else if (summary.withdrawalEndsAt !== null) {
     rows.push({

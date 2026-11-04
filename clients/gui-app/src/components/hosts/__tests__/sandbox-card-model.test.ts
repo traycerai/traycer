@@ -340,9 +340,7 @@ describe("sandboxWithdrawalLine", () => {
     );
     // Same row, no deadline of its own: the day is named. Which day, and in
     // which zone, is pinned by the case below.
-    expect(sandboxWithdrawalLine(endsAt, null)).toContain(
-      "stops running on ",
-    );
+    expect(sandboxWithdrawalLine(endsAt, null)).toContain("stops running on ");
   });
 
   // `withdrawalEndsAt` is an announced UTC calendar day, and the sentence has
