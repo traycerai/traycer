@@ -388,11 +388,15 @@ for (const [reply, runs] of [
       // changes the row set (a row appended, removed or re-keyed), so that
       // frame may paint off the end; the correction lands in the next frame,
       // which must paint at the end. Off-end paints anywhere else are real.
+      // A recorded row is `<message id>=<height>`; the id alone names the
+      // row set, so a row growing with a streamed token is not a commit.
+      const rowIds = (r: Reading): string =>
+        r.rows.map((row) => row.slice(0, row.lastIndexOf("="))).join("|");
       const rowsChangedIn = (i: number): boolean => {
         const prev = stream[i - 1]?.B ?? null;
         const b = stream[i]?.B ?? null;
         if (prev === null || b === null) return false;
-        return prev.rows.join("|") !== b.rows.join("|");
+        return rowIds(prev) !== rowIds(b);
       };
       const heldCommit = (i: number): boolean =>
         rowsChangedIn(i) && (stream[i + 1]?.B?.dist ?? 0) <= 1;
