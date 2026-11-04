@@ -154,7 +154,12 @@ const CUSTOM = policy({
 const RATE_LIMIT_MESSAGE = "Rate limit reached now follows the main plan.";
 
 function respond(value: FallbackPolicy): ProvidersFallbackPolicyGetResponse {
-  return { policy: value, storedPolicyUnreadable: false, inFlightCount: 0 };
+  return {
+    policy: value,
+    storedPolicyUnreadable: false,
+    inFlightCount: 0,
+    source: "own",
+  };
 }
 
 function deferredSave(): {

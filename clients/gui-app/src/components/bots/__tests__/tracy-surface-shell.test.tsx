@@ -212,6 +212,8 @@ vi.mock("@/hooks/host/use-host-queries", () => ({
           threads: [],
           trunkCostUsd: null,
           threadAnchors: null,
+          nextCursor: null,
+          total: 0,
         },
         "bot.threadFollow.read": { follows: {} },
         "bot.readCursor.read": { cursors: {}, latest: {} },
@@ -238,6 +240,11 @@ vi.mock("@/hooks/host/use-host-query", async (importOriginal) => ({
   },
 }));
 vi.mock("@/hooks/bots/use-bot-thread-list-query", () => ({
+  botThreadListParams: (botId: string) => ({
+    botId,
+    limit: null,
+    cursor: null,
+  }),
   useBotThreadListQuery: (_client: unknown, botId: string) => {
     const lists = useSyncExternalStore(
       script.subscribe,

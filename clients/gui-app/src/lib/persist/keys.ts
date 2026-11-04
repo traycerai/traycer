@@ -527,6 +527,13 @@ export const PERSIST_STORES = [
     leaf: "bot-column-layout",
     kind: "static",
   },
+  // The last searches of the Tracy surface, one list per device
+  // (`bot-search-store.ts`).
+  {
+    camelName: "botSearchRecents",
+    leaf: "bot-search-recents",
+    kind: "static",
+  },
 
   // ── Non-zustand keys ─────────────────────────────────────────────────────
   // `last-route:<windowId>` — per-window router history (persistent-history.ts).

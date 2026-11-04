@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   exchangeRailOver,
   memoryRailOver,
+  searchRailOver,
   type BotRail,
 } from "@/stores/bots/bot-open-thread-store";
 
@@ -44,6 +45,20 @@ describe("exchangeRailOver", () => {
 describe("memoryRailOver a pair's log", () => {
   it("returns to the thread the log displaced, not to the log", () => {
     const log = exchangeRailOver(THREAD, RELEASE_BOT_ID);
+
+    expect(memoryRailOver(log)).toEqual({
+      kind: "memory",
+      back: {
+        anchorMessageId: "post-1",
+        announcement: false,
+        anchorKind: null,
+        sent: null,
+      },
+    });
+  });
+
+  it("returns to the thread under a search the log displaced, not to the results or the log", () => {
+    const log = exchangeRailOver(searchRailOver(THREAD), RELEASE_BOT_ID);
 
     expect(memoryRailOver(log)).toEqual({
       kind: "memory",

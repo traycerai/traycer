@@ -192,6 +192,8 @@ vi.mock("@/hooks/host/use-host-queries", () => ({
             threads: reads.threads,
             trunkCostUsd: null,
             threadAnchors: null,
+            nextCursor: null,
+            total: reads.threads.length,
           },
           "bot.threadFollow.read": { follows: reads.follows },
           "bot.readCursor.read": reads.cursors,
@@ -921,8 +923,11 @@ describe("<BotChannelSidebar /> Threads", () => {
     };
     mount("bot-release", view(false));
 
+    // The search box stands first in the column; Threads is the first row.
     const nav = screen.getByTestId("bot-channel-sidebar");
-    expect(nav.firstElementChild).toBe(threadsRow());
+    const searchBox = screen.getByTestId("bot-column-search");
+    expect(nav.firstElementChild).toBe(searchBox);
+    expect(threadsRow().previousElementSibling).toBe(searchBox);
     expect(threadsRow().textContent).toBe("Threads2 with new replies");
     expect(threadsRow().getAttribute("aria-current")).toBeNull();
     expect(row("bot-release").getAttribute("aria-current")).toBe("page");
