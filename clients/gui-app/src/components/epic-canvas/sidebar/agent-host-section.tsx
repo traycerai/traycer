@@ -30,7 +30,6 @@ import { tileIntent } from "@/lib/canvas/tile-open/intent";
 import { useSampledNow } from "@/lib/relative-time";
 import {
   AGENT_SANDBOX,
-  burstIdleLine,
   DETAILS,
   FILES,
   HOST_LABEL,
@@ -42,7 +41,6 @@ import {
   hoverTaskConfiguration,
   hoverTodayCost,
   KEEP_THIS_SANDBOX,
-  idleAndRestingLine,
   OPEN_TERMINAL,
   reachSentence,
   REACH_UNNAMED_HOSTS,
@@ -52,11 +50,11 @@ import {
   wakeString,
 } from "@/lib/sandboxes/sandbox-strings";
 import {
-  SANDBOX_DEFAULT_IDLE_MINUTES,
   SANDBOX_PUBLIC_STATE_LABEL,
   sandboxMemberName,
   sandboxHostActivityLine,
   sandboxPublicState,
+  sandboxIdlePolicyLine,
   sandboxSessionKinds,
   sandboxShapeLine,
 } from "@/lib/sandboxes/sandbox-row-lines";
@@ -419,13 +417,9 @@ function HostIdlePolicy(props: {
   )?.suspendFidelity;
   const wake = fidelity === undefined ? null : wakeString(fidelity);
   if (props.sandbox.frozen || props.sandbox.state === "destroyed") return null;
-  const idleMinutes = props.sandbox.idleMinutes ?? SANDBOX_DEFAULT_IDLE_MINUTES;
-  const policy = props.sandbox.burst
-    ? burstIdleLine(idleMinutes)
-    : idleAndRestingLine(idleMinutes, props.sandbox.destroyAfterRestingMinutes);
   return (
     <p className="text-muted-foreground">
-      {policy}
+      {sandboxIdlePolicyLine(props.sandbox)}
       {!props.sandbox.burst && wake !== null ? ` · ${wake}` : ""}
     </p>
   );

@@ -166,6 +166,7 @@ describe("chat scrollbar + lower composer overlay pointer isolation", () => {
             getMessageActions={() => null}
             nextStepActions={null}
             listRef={listRef}
+            isTranscriptWindowInvalidated={false}
             className="h-full"
             data-testid="chat-timeline-overlay"
           />
