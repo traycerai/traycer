@@ -271,7 +271,13 @@ describe("<MobileCurrentTileBar trailing={null} />", () => {
 
   it("shows the current tile title and icon", () => {
     render(
-      <MobileCurrentTileBar epicId="epic-1" tile={SPEC_TILE} trailing={null} />,
+      <MobileCurrentTileBar
+        epicId="epic-1"
+        tile={SPEC_TILE}
+        level2="bar"
+        leading={null}
+        trailing={null}
+      />,
     );
     const bar = screen.getByTestId("mobile-current-tile-bar");
     expect(bar.textContent).toContain("Life Philosophy");
@@ -280,7 +286,13 @@ describe("<MobileCurrentTileBar trailing={null} />", () => {
 
   it("renders the title as a plain label that a tap never turns into an editor", () => {
     render(
-      <MobileCurrentTileBar epicId="epic-1" tile={CHAT_TILE} trailing={null} />,
+      <MobileCurrentTileBar
+        epicId="epic-1"
+        tile={CHAT_TILE}
+        level2="bar"
+        leading={null}
+        trailing={null}
+      />,
     );
     const title = screen.getByTestId("mobile-current-tile-title");
     expect(title.tagName).toBe("SPAN");
@@ -305,6 +317,8 @@ describe("<MobileCurrentTileBar trailing={null} />", () => {
         <MobileCurrentTileBar
           epicId="epic-1"
           tile={TERMINAL_TILE}
+          level2="bar"
+          leading={null}
           trailing={null}
         />,
       );
@@ -321,6 +335,8 @@ describe("<MobileCurrentTileBar trailing={null} />", () => {
         <MobileCurrentTileBar
           epicId="epic-1"
           tile={TERMINAL_TILE}
+          level2="bar"
+          leading={null}
           trailing={null}
         />,
       );
@@ -339,6 +355,8 @@ describe("<MobileCurrentTileBar trailing={null} />", () => {
         <MobileCurrentTileBar
           epicId="epic-1"
           tile={TERMINAL_TILE}
+          level2="bar"
+          leading={null}
           trailing={null}
         />,
       );
@@ -355,6 +373,8 @@ describe("<MobileCurrentTileBar trailing={null} />", () => {
         <MobileCurrentTileBar
           epicId="epic-1"
           tile={TERMINAL_TILE}
+          level2="bar"
+          leading={null}
           trailing={null}
         />,
       );
@@ -390,6 +410,8 @@ describe("<MobileCurrentTileBar trailing={null} />", () => {
           epicId="epic-1"
 
           tile={input.tile}
+          level2="bar"
+          leading={null}
           trailing={null}
         />,
       );
@@ -485,6 +507,8 @@ describe("<MobileCurrentTileBar trailing={null} />", () => {
         <MobileCurrentTileBar
           epicId="epic-1"
           tile={CHAT_TILE}
+          level2="bar"
+          leading={null}
           trailing={null}
         />,
       );
@@ -508,7 +532,13 @@ describe("<MobileCurrentTileBar trailing={null} />", () => {
           wake: chatWakeSpy,
         };
         const view = render(
-          <MobileCurrentTileBar epicId="epic-1" tile={aTile} trailing={null} />,
+          <MobileCurrentTileBar
+            epicId="epic-1"
+            tile={aTile}
+            level2="bar"
+            leading={null}
+            trailing={null}
+          />,
         );
         act(() => {
           vi.advanceTimersByTime(LINK_DOWN_ESCALATION_MS);
@@ -518,7 +548,13 @@ describe("<MobileCurrentTileBar trailing={null} />", () => {
         ).toBe(true);
 
         view.rerender(
-          <MobileCurrentTileBar epicId="epic-1" tile={bTile} trailing={null} />,
+          <MobileCurrentTileBar
+            epicId="epic-1"
+            tile={bTile}
+            level2="bar"
+            leading={null}
+            trailing={null}
+          />,
         );
         expect(publishedFor(`chat:host-A:${CHAT_TILE.id}`)).toBeUndefined();
         const bEntry = publishedFor(`chat:host-B:${CHAT_TILE.id}`);

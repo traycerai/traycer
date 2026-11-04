@@ -38,10 +38,12 @@ const LAYER_NAMES = ["A", "B", "C", "D"] as const;
 // comes round every 6.2 s. Which layers are on at the start is the random roll.
 function makeTrack(name: string, lengthSeconds: number): VariableTrack {
   const properties = {
+    enabled: null,
     startPause: [0, 0],
     sequenceLength: [1, 1],
     pauseBetweenSamples: [0, 0],
     pauseBetweenRepetitions: [4, 4],
+    playsPerRun: null,
   } as const;
   return {
     name,
@@ -53,6 +55,7 @@ function makeTrack(name: string, lengthSeconds: number): VariableTrack {
       variants: 1,
       sublayers: 1,
       sublayerStartingOffset: null,
+      pan: null,
     })),
     states: [
       {
@@ -61,6 +64,9 @@ function makeTrack(name: string, lengthSeconds: number): VariableTrack {
         numberOfEnabledLayers: [1, 4],
       },
     ],
+    intro: null,
+    outro: null,
+    phases: [],
   };
 }
 

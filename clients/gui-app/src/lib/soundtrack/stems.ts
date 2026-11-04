@@ -1,3 +1,4 @@
+import { spanOf } from "./variant-groups";
 import type { Layer, VariableTrack } from "./variable-sound";
 
 export interface StemSource {
@@ -13,14 +14,33 @@ export interface StemDecoder {
   decode(bytes: ArrayBuffer): Promise<AudioBuffer>;
 }
 
+/** One url per variant: `files[0]` is variant 1. */
+type StemFiles = readonly string[];
+
+/**
+ * A layer's stems, or an intro's or outro's under its name: one list for a
+ * pooled layer, one per group for a grouped one, so that a grouped variant is
+ * found as `<layer>/<group>/<variant>`.
+ */
+type StemManifestLayer =
+  | {
+      readonly name: string;
+      readonly files: StemFiles;
+      readonly groups?: never;
+    }
+  | {
+      readonly name: string;
+      readonly files?: never;
+      readonly groups: readonly {
+        readonly name: string;
+        readonly files: StemFiles;
+      }[];
+    };
+
 export interface StemManifest {
   readonly tracks: readonly {
     readonly name: string;
-    readonly layers: readonly {
-      readonly name: string;
-      /** One url per variant: `files[0]` is variant 1. */
-      readonly files: readonly string[];
-    }[];
+    readonly layers: readonly StemManifestLayer[];
   }[];
 }
 
@@ -38,15 +58,23 @@ function decodedBytes(buffer: AudioBuffer): number {
 function stemUrl(
   manifest: StemManifest,
   trackName: string,
-  layerName: string,
+  layer: Layer,
   variant: number,
 ): string {
-  const url = manifest.tracks
+  const entry = manifest.tracks
     .find((track) => track.name === trackName)
-    ?.layers.find((layer) => layer.name === layerName)?.files[variant - 1];
+    ?.layers.find((candidate) => candidate.name === layer.name);
+  const { group, first } = spanOf(layer, variant);
+  const files =
+    group === null
+      ? entry?.files
+      : entry?.groups?.find((candidate) => candidate.name === group)?.files;
+  const inFiles = variant - first + 1;
+  const url = files?.[inFiles - 1];
   if (url === undefined) {
+    const path = [trackName, layer.name, group, String(inFiles)];
     throw new Error(
-      `The stem manifest has no file for ${trackName}/${layerName}/${String(variant)}`,
+      `The stem manifest has no file for ${path.filter((part) => part !== null).join("/")}`,
     );
   }
   return url;
@@ -74,7 +102,7 @@ export class ManifestStemSource implements StemSource {
     layer: Layer,
     variant: number,
   ): Promise<AudioBuffer> {
-    const url = stemUrl(this.manifest, track.name, layer.name, variant);
+    const url = stemUrl(this.manifest, track.name, layer, variant);
     const cached = this.decoded.get(url);
     if (cached !== undefined) {
       this.decoded.delete(url);
