@@ -183,6 +183,24 @@ export function hostMemorySharePercent(
   return (memoryBytes / app.hostTotalMemoryBytes) * 100;
 }
 
+/** Share of the watched machine; the wire and desktop metrics stay per-core. */
+export function hostCpuSharePercent(
+  perCore: number | null,
+  app: Pick<AppResourceUsage, "hostCpuCount"> | null,
+): number | null {
+  if (perCore === null || app?.hostCpuCount === undefined) return null;
+  return perCore / app.hostCpuCount;
+}
+
+/** The busy cores behind the share, for hover and accessible detail. */
+export function hostCpuCoresLabel(
+  perCore: number | null,
+  app: Pick<AppResourceUsage, "hostCpuCount"> | null,
+): string | null {
+  if (perCore === null || app?.hostCpuCount === undefined) return null;
+  return `${(perCore / 100).toFixed(1)} of ${app.hostCpuCount} cores`;
+}
+
 export function combineHeadlineResourceSummary(input: {
   readonly hostTree: HostTreeResourceSnapshotWireV15 | null;
   readonly app: AppResourceUsage | null;

@@ -588,6 +588,15 @@ export function useOwnerResourceUsage(
   });
 }
 
+/** The machine totals from the same stream as an epic's chips. */
+export function useEpicAppResourceUsage(
+  epicId: string,
+): AppResourceUsage | null {
+  const handle = useResourcesHandle(epicId);
+  const store = handle === null ? emptyResourcesStore : handle.store;
+  return useStore(store, (state) => state.app);
+}
+
 /** Live epic-aggregate use, or `null` when the epic has no tracked owners. */
 export function useEpicResourceUsage(epicId: string): EpicResourceUsage | null {
   const handle = useResourcesHandle(epicId);
