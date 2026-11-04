@@ -71,7 +71,9 @@ export function ShareImageSources(props: ShareImageSourcesProps): ReactNode {
       )}
       {usage === null ? null : (
         <OffscreenCapture
-          captureKey="usage"
+          // Drawn again whenever newer figures arrive, so the image offered
+          // is always the current one.
+          captureKey={JSON.stringify(usage)}
           onCaptured={(captured) => onCaptured("usage", captured)}
           onFailed={() => onFailed("usage")}
         >
@@ -80,8 +82,13 @@ export function ShareImageSources(props: ShareImageSourcesProps): ReactNode {
       )}
       {taskTitle === null ? null : (
         <OffscreenCapture
-          // Drawn again once the usage arrives, to name the task's agents.
-          captureKey={`${taskTitle}\n${usage === null ? "" : "usage"}`}
+          // Drawn again when the usage arrives or changes: it names the
+          // task's agents and counts its chats.
+          captureKey={JSON.stringify([
+            taskTitle,
+            usage?.agents,
+            usage?.chatCount,
+          ])}
           onCaptured={(captured) => onCaptured("card", captured)}
           onFailed={() => onFailed("card")}
         >

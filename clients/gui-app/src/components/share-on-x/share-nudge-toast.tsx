@@ -98,7 +98,8 @@ export function ShareNudgeToastContent(props: {
           it.
         </div>
       </div>
-      <div className="flex items-center gap-1.5">
+      {/* Wraps rather than clips when large text outgrows the toast. */}
+      <div className="flex flex-wrap items-center gap-1.5">
         <Button
           type="button"
           size="sm"
