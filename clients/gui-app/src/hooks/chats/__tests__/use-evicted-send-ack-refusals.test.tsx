@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { act, cleanup, render } from "@testing-library/react";
+import { act, cleanup, render, screen } from "@testing-library/react";
 import type { ReactNode } from "react";
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import type { ChatStreamCallbacks } from "@traycer-clients/shared/host-transport/chat-stream-client";
 import type { JsonContent } from "@traycer/protocol/common/registry";
 
@@ -15,8 +16,21 @@ vi.mock("sonner", () => ({
   }),
   __esModule: true,
 }));
+vi.mock("@/hooks/agent/use-host-reachability", () => ({
+  useHostReachability: () => ({
+    status: "reachable",
+    hostLabel: "Laptop",
+    unavailability: null,
+    basis: "directory",
+    hostKind: "remote",
+  }),
+}));
+vi.mock("@/hooks/host/use-host-client-for-host-id", () => ({
+  useHostClientForHostId: () => null,
+}));
 
 import { ChatTileErrorNoticeToasts } from "@/components/epic-canvas/renderers/chat-tile-error-notice-toasts";
+import { useEvictedChatSend } from "@/hooks/chats/use-evicted-chat-send";
 import { useEvictedSendAckRefusals } from "@/hooks/chats/use-evicted-send-ack-refusals";
 import type { EvictedChatRefusal } from "@/lib/chats/evicted-chat-refusal";
 import {
@@ -26,6 +40,7 @@ import {
 import { IMMEDIATE_STREAM_FLUSH_COORDINATOR } from "@/stores/chats/stream-flush-coordinator";
 import { CHAT_STORE_TEST_ENVIRONMENT } from "@/stores/chats/test-support/chat-store-test-environment";
 import { buildAttachmentsFromJSONContent } from "@/lib/composer/tiptap-json-content";
+import { useComposerDraftStore } from "@/stores/composer/composer-draft-store";
 
 const EPIC_ID = "epic-x";
 const CHAT_ID = "chat-x";
@@ -157,6 +172,28 @@ function reject(harness: Harness, clientActionId: string, code: string): void {
   });
 }
 
+/** The host's own notice, which follows its ack for the same action. */
+function hostNotice(
+  harness: Harness,
+  clientActionId: string | null,
+  code: string,
+): void {
+  act(() => {
+    harness.callbacks().onErrorNotice({
+      kind: "errorNotice",
+      hasBinaryPayload: false,
+      epicId: EPIC_ID,
+      chatId: CHAT_ID,
+      notice: {
+        code,
+        message: "The cloud copy could not be reached.",
+        severity: "error",
+        clientActionId,
+      },
+    });
+  });
+}
+
 const refuse = vi.fn<(refusal: EvictedChatRefusal) => void>();
 
 function Tile(props: { readonly handle: ChatSessionStoreHandle }): ReactNode {
@@ -184,20 +221,7 @@ describe("a rejected send's ack that carries a CHAT_EVICTED code", () => {
     const harness = createHarness();
     render(<Tile handle={harness.handle} />);
 
-    act(() => {
-      harness.callbacks().onErrorNotice({
-        kind: "errorNotice",
-        hasBinaryPayload: false,
-        epicId: EPIC_ID,
-        chatId: CHAT_ID,
-        notice: {
-          code: "CHAT_EVICTED_UNREACHABLE",
-          message: "The cloud copy could not be reached.",
-          severity: "error",
-          clientActionId: null,
-        },
-      });
-    });
+    hostNotice(harness, null, "CHAT_EVICTED_UNREACHABLE");
 
     expect(refuse.mock.calls).toEqual([["unreachable"]]);
     expect(toastCount()).toBe(0);
@@ -242,5 +266,104 @@ describe("a rejected send's ack that carries a CHAT_EVICTED code", () => {
 
     expect(refuse.mock.calls).toEqual([["head-moved"]]);
     expect(toastCount()).toBe(0);
+  });
+});
+
+describe("the host's own notice for an action its ack already answered", () => {
+  it("does not refuse the action a second time", () => {
+    const harness = createHarness();
+    render(<Tile handle={harness.handle} />);
+    const clientActionId = send(harness);
+    reject(harness, clientActionId, "CHAT_EVICTED_UNREACHABLE");
+    act(() => {
+      harness.handle.store.getState().ackFailedSendRestoration(clientActionId);
+    });
+
+    hostNotice(harness, clientActionId, "CHAT_EVICTED_UNREACHABLE");
+
+    expect(refuse.mock.calls).toEqual([["unreachable"]]);
+  });
+
+  it("refuses nothing for a send displaced into SEND_NOT_RECORDED", () => {
+    const harness = createHarness();
+    render(<Tile handle={harness.handle} />);
+    const first = send(harness);
+    const second = send(harness);
+    reject(harness, first, "SEND_REJECTED");
+    reject(harness, second, "CHAT_EVICTED_UNREACHABLE");
+    expect(
+      harness.handle.store
+        .getState()
+        .errorNotices.some(
+          (notice) =>
+            notice.code === "SEND_NOT_RECORDED" &&
+            notice.clientActionId === second,
+        ),
+    ).toBe(true);
+
+    hostNotice(harness, second, "CHAT_EVICTED_UNREACHABLE");
+
+    expect(refuse).not.toHaveBeenCalled();
+  });
+
+  it("drops the hand-over when the composer declines the message it waited on", () => {
+    const harness = createHarness();
+    render(<Tile handle={harness.handle} />);
+    const clientActionId = send(harness);
+    reject(harness, clientActionId, "CHAT_EVICTED_HEAD_MOVED");
+
+    act(() => {
+      harness.handle.store
+        .getState()
+        .stateFailedSendRestoration(clientActionId);
+    });
+    hostNotice(harness, clientActionId, "CHAT_EVICTED_HEAD_MOVED");
+
+    expect(refuse).not.toHaveBeenCalled();
+  });
+
+  it("leaves the line ended by an edit made after the refusal", () => {
+    useComposerDraftStore.setState({ drafts: {} });
+    const harness = createHarness();
+    function Line(): ReactNode {
+      const evicted = useEvictedChatSend({
+        epicId: EPIC_ID,
+        chatId: CHAT_ID,
+        hostId: "host-a",
+        served: false,
+        held: false,
+      });
+      useEvictedSendAckRefusals(harness.handle, evicted.refuse);
+      return <output>{evicted.line ?? "none"}</output>;
+    }
+    render(
+      <QueryClientProvider client={new QueryClient()}>
+        <Line />
+      </QueryClientProvider>,
+    );
+    const clientActionId = send(harness);
+    reject(harness, clientActionId, "CHAT_EVICTED_UNREACHABLE");
+    act(() => {
+      useComposerDraftStore.getState().setSnapshot(CHAT_ID, MESSAGE, null);
+      harness.handle.store.getState().ackFailedSendRestoration(clientActionId);
+    });
+    expect(screen.getByRole("status").textContent).toBe("unreachable");
+    act(() => {
+      useComposerDraftStore.getState().setSnapshot(
+        CHAT_ID,
+        {
+          type: "doc",
+          content: [
+            { type: "paragraph", content: [{ type: "text", text: "new" }] },
+          ],
+        },
+        null,
+      );
+    });
+    expect(screen.getByRole("status").textContent).toBe("none");
+
+    hostNotice(harness, clientActionId, "CHAT_EVICTED_UNREACHABLE");
+
+    expect(screen.getByRole("status").textContent).toBe("none");
   });
 });
