@@ -1,12 +1,26 @@
 /**
  * Chat-interface half of the opener's unified **Agents** sub-page (see
  * `agents-subpage.ts`): the "New agent (Chat)" creation leaf plus the Task's
- * existing chat-interface Agents from the live projection (each opens a fresh
- * instance into the bound target group).
+ * existing chat-interface Agents (each opens a fresh instance into the bound
+ * target group).
+ *
+ * Existing Agents come from TWO sources, the same two the sidebar's tree
+ * merges (`epic-sidebar-chat-tree.tsx`):
+ *
+ * - the live projection's chats (`existing`), the rows this device's record
+ *   table holds;
+ * - the cloud chat list's rows that fold into NO local chat (`cloudOnly`): a
+ *   chat created on another machine that the polled record list has not
+ *   carried here yet, or one on a host this device cannot reach. The sidebar
+ *   shows those at once as cloud rows; the palette used to show them only once
+ *   the record landed, up to one record poll later, so a chat just started
+ *   elsewhere was in the sidebar and not in the opener.
  *
  * Returns the creation leaf SEPARATELY from the records so the merged sub-page
  * can group both interfaces' creation entries at the top instead of
- * interleaving them - which would read as two entity collections again.
+ * interleaving them - which would read as two entity collections again - and
+ * the cloud-only rows separately from `existing` because they have no node in
+ * the projection's tree, which is what the merged page walks.
  *
  * The `open:chats:*` leaf ids are load-bearing beyond routing: the palette maps
  * that prefix to the `open_chat` analytics command
@@ -14,7 +28,18 @@
  */
 import { useMemo } from "react";
 import { v4 as uuidv4 } from "uuid";
+import type { CloudChatSummary } from "@traycer/protocol/host/epic/cloud-chat";
 import { useHostDirectoryList } from "@/hooks/host/use-host-directory-list-query";
+import { useHostClientForHostId } from "@/hooks/host/use-host-client-for-host-id";
+import { useCloudChatList } from "@/hooks/chats/use-cloud-chat-queries";
+import {
+  publicationTargetMap,
+  useChatPublicationTargets,
+} from "@/hooks/chats/use-chat-publication-targets";
+import {
+  cloudChatLastActiveAt,
+  selectUnfoldedCloudChats,
+} from "@/lib/chats/unified-chat-list";
 import { displayTitle } from "@/lib/display-title";
 import { UNKNOWN_HOST_PLACEHOLDER } from "@/lib/host/constants";
 import { useNewConversationModalStore } from "@/stores/epics/new-conversation-modal-store";
@@ -28,10 +53,32 @@ import {
   useActiveEpicProjection,
 } from "@/lib/commands/sources/open/use-active-epic-projection";
 import type { OpenerInterfaceItems } from "@/lib/commands/sources/open/agents-subpage";
-import type { CommandContext } from "@/lib/commands/types";
+import type { CommandContext, CommandItem } from "@/lib/commands/types";
 import { hostNameFromLabel } from "@/hooks/agent/use-host-reachability";
 
-export function useChatsOpenerItems(ctx: CommandContext): OpenerInterfaceItems {
+const EMPTY_IDS: ReadonlyArray<string> = [];
+const EMPTY_CLOUD_CHATS: ReadonlyArray<CloudChatSummary> = [];
+
+export interface ChatsOpenerItems extends OpenerInterfaceItems {
+  /**
+   * The task's chats the cloud lists and this device's tree does not hold:
+   * no projection node, so the merged Agents page appends them after the tree
+   * rather than finding them in it. Most recently active first.
+   */
+  readonly cloudOnly: ReadonlyArray<CommandItem>;
+}
+
+/**
+ * The node id a cloud-only row carries in the merged Agents tree (the merged
+ * page reads it back off the leaf id). Keyed on the owner as well as the chat
+ * id: two owners can hold chats with the same host-minted id under one task
+ * (a fork leaves exactly that behind).
+ */
+function cloudOnlyChatNodeId(chat: CloudChatSummary): string {
+  return `cloud:${chat.identity.ownerUserId}:${chat.identity.chatId}`;
+}
+
+export function useChatsOpenerItems(ctx: CommandContext): ChatsOpenerItems {
   // The host serving the active epic's projection: the fallback a chat with
   // no recorded host binds to, and the reference a cross-host badge is judged
   // against. Not the app-wide host - see `useActiveEpicHostId`.
@@ -45,7 +92,45 @@ export function useChatsOpenerItems(ctx: CommandContext): OpenerInterfaceItems {
     );
   }, [directoryList.data]);
 
-  return useMemo<OpenerInterfaceItems>(() => {
+  // The cloud read is a byte pipe any reachable host can serve; it rides the
+  // epic's own serving host, the same client the sidebar reads the list on,
+  // so the TanStack cache entry is shared with it rather than split. Disabled
+  // until that host is resolved: a `null` id would follow the app-wide host
+  // and mint a second cache entry the sidebar never refreshes.
+  const epicId = ctx.activeEpicId ?? "";
+  const cloudReadsEnabled = epicId.length > 0 && activeHostId !== null;
+  const sessionHostClient = useHostClientForHostId(activeHostId);
+  const cloudChats = useCloudChatList({
+    client: sessionHostClient,
+    taskId: epicId,
+    enabled: cloudReadsEnabled,
+  });
+  const localChatIds = projection?.chats.allIds ?? EMPTY_IDS;
+  const sortedLocalChatIds = useMemo(
+    () => [...localChatIds].sort(),
+    [localChatIds],
+  );
+  const publicationTargets = useChatPublicationTargets({
+    client: sessionHostClient,
+    epicId,
+    chatIds: sortedLocalChatIds,
+    enabled: cloudReadsEnabled,
+  });
+  const cloudOnlyChats = useMemo(
+    () =>
+      [
+        ...selectUnfoldedCloudChats({
+          chats: cloudChats.data?.chats ?? EMPTY_CLOUD_CHATS,
+          localChatIds,
+          publicationChatIdByChatId: publicationTargetMap(
+            publicationTargets.data,
+          ),
+        }),
+      ].sort((a, b) => cloudChatLastActiveAt(b) - cloudChatLastActiveAt(a)),
+    [cloudChats.data, localChatIds, publicationTargets.data],
+  );
+
+  return useMemo<ChatsOpenerItems>(() => {
     const newChat = openerActionLeaf({
       id: "open:chats:new",
       label: "New agent (Chat)",
@@ -65,21 +150,21 @@ export function useChatsOpenerItems(ctx: CommandContext): OpenerInterfaceItems {
         });
       },
     });
-    if (projection === null) return { create: newChat, existing: [] };
+    // A chat with no recorded hostId falls back to (and thus matches) the
+    // epic's host, so only a real, differing hostId ever earns a badge.
+    // Requires `activeHostId` to be genuinely resolved first - while it's
+    // still `null` (boot, host reconnect window) `defaultHostId` would be
+    // the `UNKNOWN_HOST_PLACEHOLDER` sentinel, which no real hostId can
+    // ever equal, false-badging every chat as cross-host.
+    const badgeFor = (hostId: string | null): string | null =>
+      activeHostId !== null && hostId !== null && hostId !== activeHostId
+        ? chatHostBadgeLabel(hostLabelById, hostId)
+        : null;
+    if (projection === null) {
+      return { create: newChat, existing: [], cloudOnly: [] };
+    }
     const existing = projection.chats.allIds.map((id) => {
       const chat = projection.chats.byId[id];
-      // A chat with no recorded hostId falls back to (and thus matches) the
-      // epic's host, so only a real, differing hostId ever earns a badge.
-      // Requires `activeHostId` to be genuinely resolved first - while it's
-      // still `null` (boot, host reconnect window) `defaultHostId` would be
-      // the `UNKNOWN_HOST_PLACEHOLDER` sentinel, which no real hostId can
-      // ever equal, false-badging every chat as cross-host.
-      const hostBadge =
-        activeHostId !== null &&
-        chat.hostId !== null &&
-        chat.hostId !== activeHostId
-          ? chatHostBadgeLabel(hostLabelById, chat.hostId)
-          : null;
       return openerExistingLeaf(
         "chats",
         ctx,
@@ -92,11 +177,41 @@ export function useChatsOpenerItems(ctx: CommandContext): OpenerInterfaceItems {
           name: displayTitle(chat.title, "agent"),
           hostId: chat.hostId ?? defaultHostId,
         },
-        hostBadge,
+        badgeFor(chat.hostId),
       );
     });
-    return { create: newChat, existing };
-  }, [ctx, projection, activeHostId, defaultHostId, hostLabelById]);
+    // The ordinary live chat ref bound to the OWNER host - what the palette
+    // opens for a projected chat on another host, and what the sidebar's
+    // cloud row opens for a reachable owner. The tile subscribes against that
+    // host directly and does not need the chat in this device's projection;
+    // an owner that is not reachable surfaces in the tile's own dead-tile
+    // banner, with its Clone offer, rather than being hidden from the list.
+    const cloudOnly = cloudOnlyChats.map((chat) => {
+      const leaf = openerExistingLeaf(
+        "chats",
+        ctx,
+        {
+          id: chat.identity.chatId,
+          instanceId: uuidv4(),
+          type: "chat",
+          name: displayTitle(chat.title ?? "", "agent"),
+          hostId: chat.ownerHostId,
+        },
+        badgeFor(chat.ownerHostId),
+      );
+      // Re-keyed on the owner too: `open:chats:<chatId>` is a LOCAL row's id,
+      // and a cloud row can share a host-minted chat id with one.
+      return { ...leaf, id: `open:chats:${cloudOnlyChatNodeId(chat)}` };
+    });
+    return { create: newChat, existing, cloudOnly };
+  }, [
+    ctx,
+    projection,
+    cloudOnlyChats,
+    activeHostId,
+    defaultHostId,
+    hostLabelById,
+  ]);
 }
 
 /** "the host" when the directory has no (or a blank) label for it - never its id. */

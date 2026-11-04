@@ -6,6 +6,7 @@ import type {
   WorktreeIntent,
 } from "@traycer/protocol/host/worktree-schemas";
 import type { BrowserSessionInfo } from "@traycer/protocol/host/browser/contracts";
+import type { CloudChatSummary } from "@traycer/protocol/host/epic/cloud-chat";
 import type { HostListItem } from "@traycer/protocol/host/host-status";
 import type { SandboxSummary } from "@traycer/protocol/host/sandbox-control";
 import type { HostDirectoryEntry } from "@traycer-clients/shared/host-client/host-directory";
@@ -346,6 +347,58 @@ vi.mock("@/lib/commands/actions", () => ({
   openTileIntoTargetGroup: spies.openTileIntoTargetGroup,
   openCreatedChatWhenProjected: vi.fn(),
 }));
+// The cloud chat list the Agents sub-page folds against the projection, as
+// the sidebar does. Whole `CloudChatSummary` rows, so the next field a
+// consumer starts reading fails `compile` here rather than reading
+// `undefined`; the publication map is empty, so the fold is `chatId`
+// equality.
+const cloudChatsMock = vi.hoisted<{ current: CloudChatSummary[] }>(() => ({
+  current: [],
+}));
+vi.mock("@/hooks/chats/use-cloud-chat-queries", () => ({
+  useCloudChatList: () => ({ data: { chats: cloudChatsMock.current } }),
+}));
+vi.mock(
+  "@/hooks/chats/use-chat-publication-targets",
+  async (importOriginal) => {
+    const actual =
+      await importOriginal<
+        typeof import("@/hooks/chats/use-chat-publication-targets")
+      >();
+    return {
+      ...actual,
+      useChatPublicationTargets: () => ({ data: undefined }),
+    };
+  },
+);
+function cloudChat(args: {
+  readonly chatId: string;
+  readonly ownerUserId: string;
+  readonly ownerHostId: string;
+  readonly title: string | null;
+  readonly publishedAt: number | null;
+}): CloudChatSummary {
+  return {
+    identity: {
+      taskId: "epic-1",
+      chatId: args.chatId,
+      ownerUserId: args.ownerUserId,
+    },
+    ownerHostId: args.ownerHostId,
+    createdAt: 1,
+    visibility: "task",
+    title: args.title,
+    isTitleEditedByUser: false,
+    parentChatId: null,
+    isArchived: false,
+    runSettingsSummary: null,
+    metadataUpdatedAt: 1,
+    headSha256: null,
+    publishedAt: args.publishedAt,
+    throughRecordSeq: null,
+    isOwnedByViewer: args.ownerUserId === "user-test",
+  };
+}
 vi.mock("@/lib/commands/sources/open/use-active-epic-projection", () => ({
   useActiveEpicProjection: () => activeEpicProjectionMock.current,
   // The host serving the active epic's projection - what the opener stamps
@@ -701,6 +754,7 @@ function launchedTerminalCwd(
 afterEach(() => {
   cleanup();
   vi.clearAllMocks();
+  cloudChatsMock.current = [];
   activeHostIdMock.current = "default-host";
   browserHostIdMock.current = "default-host";
   browserPinSelectionMock.current = null;
@@ -773,6 +827,62 @@ describe("Agents opener sub-page", () => {
       hasChildren: false,
       interface: "chat",
       activity: "idle",
+    });
+  });
+
+  // The sidebar shows a chat the cloud lists before this device's record
+  // table holds it; the opener lists the same rows, after the tree, so a chat
+  // started on another machine is not in one surface and missing from the
+  // other for a record poll.
+  it("lists the cloud's chats that fold into no local chat, newest first, bound to their owner host", () => {
+    cloudChatsMock.current = [
+      cloudChat({
+        chatId: "older-remote",
+        ownerUserId: "user-test",
+        ownerHostId: "chat-host",
+        title: null,
+        publishedAt: 10,
+      }),
+      // Folds into local `c1` by chatId: not a second row.
+      cloudChat({
+        chatId: "c1",
+        ownerUserId: "user-test",
+        ownerHostId: "chat-host",
+        title: "Chat One",
+        publishedAt: 50,
+      }),
+      cloudChat({
+        chatId: "newer-remote",
+        ownerUserId: "collaborator-1",
+        ownerHostId: "default-host",
+        title: "Remote chat",
+        publishedAt: 20,
+      }),
+    ];
+    const items = renderItems(useAgentsOpenerItems);
+    const ids = items.map((i) => i.id);
+    const newer = "open:chats:cloud:collaborator-1:newer-remote";
+    const older = "open:chats:cloud:user-test:older-remote";
+    expect(ids.filter((id) => id.endsWith(":c1"))).toEqual(["open:chats:c1"]);
+    expect(ids.indexOf(newer)).toBeGreaterThan(ids.indexOf("open:chats:c3"));
+    expect(ids.indexOf(older)).toBeGreaterThan(ids.indexOf(newer));
+    const olderItem = items.find((i) => i.id === older);
+    expect(olderItem?.label).toBe("Untitled agent");
+    expect(olderItem?.hostBadge).toBe("Other Mac");
+    expect(olderItem?.agentTreeRow).toMatchObject({
+      nodeId: "cloud:user-test:older-remote",
+      depth: 0,
+      interface: "chat",
+    });
+    expect(items.find((i) => i.id === newer)?.hostBadge).toBeUndefined();
+
+    runById(items, older);
+    const opened = lastTileOpen();
+    expect(opened.groupId).toBe("group-1");
+    expect(opened.ref).toMatchObject({
+      id: "older-remote",
+      type: "chat",
+      hostId: "chat-host",
     });
   });
 

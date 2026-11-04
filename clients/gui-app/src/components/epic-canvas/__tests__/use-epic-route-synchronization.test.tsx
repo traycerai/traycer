@@ -1334,6 +1334,75 @@ describe("useEpicRouteSynchronization", () => {
     });
   });
 
+  // A task opened for the first time on this machine: the snapshot lands with
+  // no chat records (they come later, from the polled record list), so the
+  // canvas seeds its empty opener pane first. That seeded pane is not a layout
+  // to keep - the records' arrival still opens the auto-open target into it.
+  it("auto-opens the target when the records arrive after the empty opener pane was seeded", async () => {
+    testState.records = [];
+    setSinglePaneCanvas("pane-opener", [], null);
+    const intent: EpicRouteFocusIntent = {
+      epicId: EPIC_ID,
+      tabId: TAB_ID,
+      focusedAt: undefined,
+      focusArtifactId: undefined,
+      focusThreadId: undefined,
+      focusPaneId: undefined,
+      focusTileInstanceId: undefined,
+    };
+    const hook = renderHook(
+      (props: EpicRouteFocusIntent) => useEpicRouteSynchronization(props),
+      { initialProps: intent },
+    );
+    expect(tileNavigationMocks.openTile).not.toHaveBeenCalled();
+
+    testState.records = [{ id: "artifact-1" }];
+    hook.rerender(intent);
+
+    await waitFor(() => {
+      expect(tileNavigationMocks.openTile).toHaveBeenCalledWith(
+        expect.objectContaining({
+          target: { tabId: TAB_ID },
+          source: "deep_link",
+          node: expect.objectContaining({
+            id: "artifact-1",
+          }) as EpicCanvasTileRef,
+        }),
+      );
+    });
+    expect(tileNavigationMocks.openTile).toHaveBeenCalledTimes(1);
+  });
+
+  it("leaves a canvas that already shows a tile alone when the records arrive", async () => {
+    testState.records = [];
+    setSinglePaneCanvas(
+      "pane-current",
+      [specTile("artifact-current", "tile-current", "Current artifact")],
+      "tile-current",
+    );
+    const intent: EpicRouteFocusIntent = {
+      epicId: EPIC_ID,
+      tabId: TAB_ID,
+      focusedAt: undefined,
+      focusArtifactId: undefined,
+      focusThreadId: undefined,
+      focusPaneId: undefined,
+      focusTileInstanceId: undefined,
+    };
+    const hook = renderHook(
+      (props: EpicRouteFocusIntent) => useEpicRouteSynchronization(props),
+      { initialProps: intent },
+    );
+
+    testState.records = [{ id: "artifact-1" }, { id: "artifact-current" }];
+    hook.rerender(intent);
+
+    await act(async () => {
+      await Promise.resolve();
+    });
+    expect(tileNavigationMocks.openTile).not.toHaveBeenCalled();
+  });
+
   it("closes removed record-backed tiles by tab instance id while preserving local git diff tiles", async () => {
     testState.autoOpenTarget = null;
     testState.records = [{ id: "live-artifact" }];
