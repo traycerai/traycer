@@ -1,6 +1,5 @@
 import { StrictMode, useMemo, type ReactNode } from "react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { vi } from "vitest";
 import {
   BOT_ID,
   CHANNEL_ID,
@@ -78,7 +77,6 @@ function Channel(): ReactNode {
       }
       environmentId={ENVIRONMENT_ID}
       botNameOf={(botId) => (botId === OTHER_BOT_ID ? OTHER_BOT_TITLE : null)}
-      onOpenActivity={vi.fn()}
       setupHistory={null}
     />
   );

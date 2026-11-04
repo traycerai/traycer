@@ -478,7 +478,6 @@ function panelTree(thread: BotThreadPanelThread): ReactNode {
               }
               resolveMember={resolveMember}
               onClose={vi.fn()}
-              onOpenActivity={vi.fn()}
               onEditPost={onEditPost}
               onOpenTurn={vi.fn()}
               onOpenSession={vi.fn()}
@@ -1312,6 +1311,13 @@ describe("<BotThreadPanel /> the anchor", () => {
     expect(channel.textContent).not.toContain("#");
     expect(within(channel).getByTestId("bot-avatar")).toBeTruthy();
     expect(screen.getByRole("heading", { name: "Thread" })).toBeTruthy();
+  });
+
+  it("rule 8: has no Activity button on a listed thread", () => {
+    mountPanel(listed("user-teammate"), [botReply(null)]);
+
+    expect(screen.queryByTestId("bot-thread-activity")).toBeNull();
+    expect(screen.queryByRole("button", { name: "Activity" })).toBeNull();
   });
 
   it("shows the anchor without text while the channel has no row for it, and its text once the channel's row is there", () => {
@@ -2184,7 +2190,6 @@ describe("<BotThreadPanel /> on a short viewport under the keyboard", () => {
 
     await user.type(box, "Not yet");
     expect(composerForm().getAttribute("data-box-form")).toBe("one-row");
-    expect(shown("bot-thread-activity")).toBe(false);
     expect(shown("bot-thread-session")).toBe(false);
     expect(shown("bot-thread-close")).toBe(true);
     expect(shown("bot-thread-composer-send")).toBe(true);
@@ -2196,7 +2201,6 @@ describe("<BotThreadPanel /> on a short viewport under the keyboard", () => {
 
     lowerNativeKeyboard();
     expect(composerForm().getAttribute("data-box-form")).toBe("full");
-    expect(shown("bot-thread-activity")).toBe(true);
     expect(shown("bot-thread-session")).toBe(true);
   });
 });

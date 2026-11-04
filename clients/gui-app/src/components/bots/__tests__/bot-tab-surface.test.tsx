@@ -11,8 +11,9 @@
  * runs the real sandbox reads and create over a scripted control plane.
  * The three views and the bot's session view are replaced by stubs
  * that expose their props, so what the surface PASSES them is what is
- * asserted. The tab strip's Activity label
- * reads the real summary hook over the real agent-activity store.
+ * asserted. The tab strip's Activity count reads the real
+ * `useBotActiveTasks` over the real agent-activity store and the real
+ * notification-indicator hooks (the host answers `indicatorState`).
  */
 import { useAuthStore } from "@/stores/auth/auth-store";
 import { setPhoneLayoutOnly } from "@/lib/mobile-app";
@@ -168,6 +169,13 @@ const mocks = vi.hoisted(() => ({
   /** The environment list query's `refetch`. */
   environmentsRefetch: vi.fn<() => void>(),
   supportQueries: [] as Array<{ hostId: string | null; method: string }>,
+  /**
+   * What the host's `indicatorState` read answers per task: the tasks whose
+   * result the person has not seen. One answer object per request set, as a
+   * query cache holds it.
+   */
+  unreadTaskIds: new Set<string>(),
+  indicatorAnswers: new Map<string, unknown>(),
   membersQueries: [] as Array<{
     environmentId: string | null;
     enabled: boolean;
@@ -266,18 +274,69 @@ vi.mock("@/hooks/host/use-host-supports-method", () => ({
     return true;
   },
 }));
+// The Activity count reads the notification indicators through the notification
+// host; the query transport below answers them.
+vi.mock("@/hooks/notifications/use-notification-host", () => ({
+  useNotificationResolveHostId: () => "host-notifications",
+}));
+vi.mock("@/hooks/host/use-host-client-for-host-id", () => ({
+  useHostClientForHostId: () => null,
+}));
 // The host RPC boundary: `bot.onboarding.read` answers what the test
 // scripted, and a query that is not enabled reads as pending, or as what it
 // answered before when that is cached (`readsCached`), as TanStack's does.
 vi.mock("@/hooks/host/use-host-queries", () => ({
   useHostQueries: (args: {
-    requests: ReadonlyArray<{ params: { environmentId: string } }>;
+    requests: ReadonlyArray<{
+      params: { environmentId?: string; epicIds?: ReadonlyArray<string> };
+    }>;
     options: { enabled?: boolean } | null;
-  }) =>
-    args.requests.map((request) => {
+    combine?: (results: ReadonlyArray<unknown>) => unknown;
+  }) => {
+    if (args.combine !== undefined) {
+      // `host.notifications.indicatorState` for the Activity count.
+      const combine = args.combine;
+      const enabled = args.options?.enabled === true;
+      const epicIds = args.requests.flatMap((r) => r.params.epicIds ?? []);
+      const key = JSON.stringify([enabled, epicIds]);
+      if (!mocks.indicatorAnswers.has(key)) {
+        const unread = {
+          pendingFork: false,
+          pendingApproval: false,
+          pendingInterview: false,
+          unreadFailure: false,
+          unreadDone: true,
+          unreadCount: 1,
+        };
+        mocks.indicatorAnswers.set(
+          key,
+          combine(
+            args.requests.map(() => ({
+              data: enabled
+                ? {
+                    epics: Object.fromEntries(
+                      epicIds
+                        .filter((id) => mocks.unreadTaskIds.has(id))
+                        .map((id) => [id, unread]),
+                    ),
+                    chats: {},
+                    complete: true,
+                  }
+                : undefined,
+              isPending: false,
+              isFetching: false,
+              error: null,
+              refetch: () => Promise.resolve(),
+            })),
+          ),
+        );
+      }
+      return mocks.indicatorAnswers.get(key);
+    }
+    return args.requests.map((request) => {
       const script =
         args.options?.enabled === true || mocks.state.readsCached
-          ? mocks.reads[request.params.environmentId]
+          ? mocks.reads[request.params.environmentId ?? ""]
           : undefined;
       const pending = {
         status: "pending",
@@ -293,7 +352,8 @@ vi.mock("@/hooks/host/use-host-queries", () => ({
         data: script,
         dataUpdatedAt: mocks.state.readAt,
       };
-    }),
+    });
+  },
 }));
 vi.mock("@/lib/host", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/lib/host")>()),
@@ -482,7 +542,6 @@ vi.mock("@/components/bots/bot-channel-view", () => ({
     trunkChatId: string;
     openMemory: BotOpenMemory | null;
     onOpenMemory: (open: BotOpenMemory | null) => void;
-    onOpenActivity: () => void;
     onOpenTurn: BotTurnOpen;
     onOpenSession: BotSessionOpen;
     resolveMember: (
@@ -507,11 +566,6 @@ vi.mock("@/components/bots/bot-channel-view", () => ({
         props.resolveMember("user-teammate")?.displayName ?? "unresolved"
       }
     >
-      <button
-        type="button"
-        data-testid="stub-channel-open-activity"
-        onClick={props.onOpenActivity}
-      />
       <button
         type="button"
         data-testid="stub-channel-open-memory"
@@ -592,52 +646,18 @@ vi.mock("@/components/bots/bot-session-view", () => ({
     </div>
   ),
 }));
-// The Activity page takes the bot's bound host, which says where its
-// background work can be read, whether or not this host serves the tab.
+// The Activity page takes whether this host runs the bot, and the list the
+// tab's count is read from: its rows are what the page would draw.
 vi.mock("@/components/bots/bot-activity-page", () => ({
   BotActivityPage: (props: {
-    boundHost: { hostId: string | null; isThisHost: boolean };
-    onOpenPost: (open: BotOpenThread) => void;
-    onOpenTurn: BotTurnOpen;
+    boundHere: boolean;
+    active: { rows: ReadonlyArray<{ task: { taskId: string } }> };
   }) => (
     <div
       data-testid="stub-activity"
-      data-bound-host-id={props.boundHost.hostId ?? "none"}
-      data-is-this-host={String(props.boundHost.isThisHost)}
-    >
-      <button
-        type="button"
-        data-testid="stub-activity-open-post"
-        onClick={() =>
-          props.onOpenPost({
-            anchorMessageId: "post-1",
-            announcement: false,
-            anchorKind: null,
-            sent: null,
-          })
-        }
-      />
-      <button
-        type="button"
-        data-testid="stub-activity-open-turn"
-        onClick={() =>
-          props.onOpenTurn(
-            {
-              chatId: "trunk-1",
-              turnIds: ["turn-checkin"],
-              userMessageId: "prompt-checkin",
-              threadId: null,
-              startedAt: 1_000,
-              endedAt: 2_000,
-              summary: null,
-              messageIds: [],
-              requestIds: [],
-            },
-            null,
-          )
-        }
-      />
-    </div>
+      data-is-this-host={String(props.boundHere)}
+      data-row-ids={props.active.rows.map((row) => row.task.taskId).join(",")}
+    />
   ),
 }));
 vi.mock("@/components/bots/bot-threads-view", () => ({
@@ -950,6 +970,8 @@ beforeEach(() => {
   useBotOpenThreadStore.setState({ byBotId: {} });
   useTeamCloudCreateStore.setState({ byEnvironmentId: {} });
   __resetAgentActivityStoreForTests();
+  mocks.unreadTaskIds.clear();
+  mocks.indicatorAnswers.clear();
   openSurfaceOn(BOT_ID);
 });
 
@@ -2379,7 +2401,7 @@ describe("<BotTabSurface /> paused", () => {
     ).toBe("unresolved");
   });
 
-  it("hands the Activity page the bound host, paused or not", async () => {
+  it("hands the Activity page whether this host runs the bot, paused or not", async () => {
     const user = userEvent.setup();
     mocks.state.openResult = answer({
       kind: "paused",
@@ -2389,7 +2411,6 @@ describe("<BotTabSurface /> paused", () => {
 
     await user.click(screen.getByTestId("bot-tab-view-activity"));
     const page = screen.getByTestId("stub-activity");
-    expect(page.getAttribute("data-bound-host-id")).toBe(BOUND_HOST);
     expect(page.getAttribute("data-is-this-host")).toBe("false");
   });
 
@@ -2746,54 +2767,91 @@ describe("<BotTabSurface /> views", () => {
       screen.getByTestId("bot-tab-view-messages").getAttribute("aria-selected"),
     ).toBe("true");
     expect(screen.getByTestId("stub-channel")).toBeTruthy();
-    expect(
-      activityTab().querySelector("[data-testid^='bot-tab-activity-']"),
-    ).toBeNull();
+    expect(screen.queryByTestId("bot-tab-activity-count")).toBeNull();
   });
 
-  it("counts what stopped, in red and first, what runs and the tasks the bot tracks, leaving out a zero", () => {
+  /** The tab's words as a sighted person reads them: no screen-reader text. */
+  function visibleTabText(): string {
+    const copy = activityTab().cloneNode(true);
+    if (!(copy instanceof HTMLElement))
+      throw new Error("tab is not an element");
+    for (const hidden of copy.querySelectorAll(".sr-only")) hidden.remove();
+    return copy.textContent;
+  }
+
+  it("rule 6: counts the rows the Activity list shows, one number and no words, whatever puts a task there", async () => {
+    const user = userEvent.setup();
+    useAuthStore.setState({
+      status: "signed-in",
+      profile: {
+        userId: "user-ada",
+        userName: "Ada",
+        email: "ada@example.com",
+      },
+      contextMetadata: { userId: "user-ada", username: "ada" },
+    });
+    mocks.unreadTaskIds.add("task-unseen");
     mocks.state.snapshot = {
       ...snapshot(),
-      tasks: [trackingTask("task-1"), trackingTask("task-2")],
-      activity: {
-        trunk: {
-          state: "failed",
-          startedAt: null,
-          step: null,
-          requestId: "req-1",
-          reason: null,
+      tasks: [
+        { ...trackingTask("task-working"), cadence: { kind: "on-completion" } },
+        {
+          ...trackingTask("task-asking"),
+          cadence: { kind: "on-completion" },
+          inputNeeded: [
+            {
+              hostId: "host-agents",
+              hostName: "Studio Mac",
+              agentChatId: "agent-asking",
+              surfaceId: "surface-1",
+              surface: {
+                kind: "approval",
+                approvalId: "approval-1",
+                tool: "gh pr merge",
+                summary: "Merge the release PR",
+                tier: null,
+                requiresPerson: true,
+                askedAt: 1_000,
+              },
+              reportedAt: 1_000,
+              acceptsActions: true,
+            },
+          ],
         },
-        threads: {},
-      },
+        { ...trackingTask("task-unseen"), cadence: { kind: "on-completion" } },
+        trackingTask("task-periodic"),
+        { ...trackingTask("task-quiet"), cadence: { kind: "on-completion" } },
+      ],
     };
     __setAgentActivityStateForTests(
-      { "task-1": { working: ["agent-1"], turn: [] } },
+      { "task-working": { working: ["agent-1"], turn: ["agent-1"] } },
       "local",
       null,
     );
     render(surface());
+    await user.click(activityTab());
 
-    expect(activityTab().textContent).toBe(
-      "Activity · 1 stopped · 1 running · 2 tasks",
-    );
-    const parts = within(activityTab()).getAllByTestId(/^bot-tab-activity-/);
-    expect(parts.map((part) => part.dataset.testid)).toEqual([
-      "bot-tab-activity-stopped",
-      "bot-tab-activity-running",
-      "bot-tab-activity-tasks",
-    ]);
-    expect(parts[0].className).toContain("text-destructive");
-    expect(parts[1].className).not.toContain("text-destructive");
+    const shown = screen
+      .getByTestId("stub-activity")
+      .dataset.rowIds?.split(",");
+    expect(shown).toHaveLength(4);
+    expect(shown).not.toContain("task-quiet");
+    const badge = within(activityTab()).getByTestId("bot-tab-activity-count");
+    expect(badge.textContent).toContain(String(shown?.length));
+    expect(visibleTabText()).toBe(`Activity${String(shown?.length)}`);
   });
 
-  it("leaves out the stopped and running counts when nothing has stopped or runs", () => {
+  it("rule 6: shows no count when no task is active", () => {
     mocks.state.snapshot = {
       ...snapshot(),
-      tasks: [trackingTask("task-1")],
+      tasks: [
+        { ...trackingTask("task-quiet"), cadence: { kind: "on-completion" } },
+      ],
     };
     render(surface());
 
-    expect(activityTab().textContent).toBe("Activity · 1 task");
+    expect(screen.queryByTestId("bot-tab-activity-count")).toBeNull();
+    expect(visibleTabText()).toBe("Activity");
   });
 
   it("shows Threads from the column in place of the channel and its views, through the tab's host, and its own channel row lands back where it was", async () => {
@@ -2907,59 +2965,12 @@ describe("<BotTabSurface /> views", () => {
     ).toBe("false");
     expect(useBotTabLandingStore.getState().byBotId).toEqual({});
   });
-
-  it("switches to Activity from the open thread's Activity link", async () => {
-    const user = userEvent.setup();
-    render(surface());
-
-    await user.click(screen.getByTestId("stub-channel-open-activity"));
-
-    expect(activityTab().getAttribute("aria-selected")).toBe("true");
-    expect(screen.getByTestId("stub-activity")).toBeTruthy();
-    expect(screen.queryByTestId("stub-channel")).toBeNull();
-  });
-
-  it("returns to Messages with the thread open when Activity opens a post", async () => {
-    const user = userEvent.setup();
-    render(surface());
-    await user.click(activityTab());
-
-    await user.click(screen.getByTestId("stub-activity-open-post"));
-
-    expect(
-      screen.getByTestId("bot-tab-view-messages").getAttribute("aria-selected"),
-    ).toBe("true");
-    expect(
-      screen.getByTestId("stub-channel").getAttribute("data-open-thread"),
-    ).toBe("post-1");
-  });
 });
 
 describe("<BotTabSurface /> a bot's session in place of its channel", () => {
   function sessionShown(): HTMLElement {
     return screen.getByTestId("stub-session");
   }
-
-  it("opens a check-in's turn from Activity as the trunk session landed on it, in place of the views, and back returns to Activity", async () => {
-    const user = userEvent.setup();
-    render(surface());
-    await user.click(screen.getByTestId("bot-tab-view-activity"));
-
-    await user.click(screen.getByTestId("stub-activity-open-turn"));
-
-    expect(sessionShown().dataset.chatId).toBe("trunk-1");
-    expect(sessionShown().dataset.threadId).toBe("none");
-    expect(sessionShown().dataset.landOn).toBe("prompt-checkin");
-    expect(screen.queryByRole("tablist")).toBeNull();
-    expect(screen.queryByTestId("stub-activity")).toBeNull();
-
-    await user.click(screen.getByTestId("stub-session-back"));
-
-    expect(screen.queryByTestId("stub-session")).toBeNull();
-    expect(
-      screen.getByTestId("bot-tab-view-activity").getAttribute("aria-selected"),
-    ).toBe("true");
-  });
 
   it("opens a reply's turn from the channel, each open a new visit, and its channel link brings Messages back where the channel was", async () => {
     const user = userEvent.setup();
@@ -2980,11 +2991,10 @@ describe("<BotTabSurface /> a bot's session in place of its channel", () => {
     ).toBe("none");
   });
 
-  it("shows the channel on the post a send followed, from Activity too, and the next session's back leaves it where it was", async () => {
+  it("shows the channel on the post a send followed, and the next session's back leaves it where it was", async () => {
     const user = userEvent.setup();
     render(surface());
-    await user.click(screen.getByTestId("bot-tab-view-activity"));
-    await user.click(screen.getByTestId("stub-activity-open-turn"));
+    await user.click(screen.getByTestId("stub-channel-open-turn"));
 
     await user.click(screen.getByTestId("stub-session-post"));
 
@@ -3003,32 +3013,23 @@ describe("<BotTabSurface /> a bot's session in place of its channel", () => {
     ).toBe("none");
   });
 
-  it.each([
-    { leaveBy: "the Activity tab", leave: "bot-tab-view-activity" },
-    {
-      leaveBy: "the channel's Activity link",
-      leave: "stub-channel-open-activity",
-    },
-  ])(
-    "lands the channel on a send's post once: leaving Messages by $leaveBy and coming back does not land again",
-    async ({ leave }) => {
-      const user = userEvent.setup();
-      render(surface());
-      await user.click(screen.getByTestId("stub-channel-open-turn"));
-      await user.click(screen.getByTestId("stub-session-post"));
-      expect(
-        screen.getByTestId("stub-channel").getAttribute("data-land-on"),
-      ).toBe("post-1");
+  it("lands the channel on a send's post once: leaving Messages by the Activity tab and coming back does not land again", async () => {
+    const user = userEvent.setup();
+    render(surface());
+    await user.click(screen.getByTestId("stub-channel-open-turn"));
+    await user.click(screen.getByTestId("stub-session-post"));
+    expect(
+      screen.getByTestId("stub-channel").getAttribute("data-land-on"),
+    ).toBe("post-1");
 
-      await user.click(screen.getByTestId(leave));
-      expect(screen.queryByTestId("stub-channel")).toBeNull();
-      await user.click(screen.getByTestId("bot-tab-view-messages"));
+    await user.click(screen.getByTestId("bot-tab-view-activity"));
+    expect(screen.queryByTestId("stub-channel")).toBeNull();
+    await user.click(screen.getByTestId("bot-tab-view-messages"));
 
-      expect(
-        screen.getByTestId("stub-channel").getAttribute("data-land-on"),
-      ).toBe("none");
-    },
-  );
+    expect(
+      screen.getByTestId("stub-channel").getAttribute("data-land-on"),
+    ).toBe("none");
+  });
 
   it("opens a thread's session from its panel, and shows that thread beside the channel by its post from the session", async () => {
     const user = userEvent.setup();

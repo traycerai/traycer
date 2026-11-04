@@ -293,8 +293,6 @@ export function BotChannelView(props: {
   readonly environmentId: string;
   /** Another bot of the environment by its id, for a shared memory's writer. */
   readonly botNameOf: (botId: string) => string | null;
-  /** Opens the bot's Activity tab, from the open thread's header. */
-  readonly onOpenActivity: () => void;
   /** A live team main bot's setup history at the top of the channel (T67b); `null` for none. */
   readonly setupHistory: ReactNode;
   /** How many tiles the installed app shows; `null` where the container decides. */
@@ -320,7 +318,6 @@ export function BotChannelView(props: {
     onOpenMemory,
     environmentId,
     botNameOf,
-    onOpenActivity,
     setupHistory,
     tiles,
   } = props;
@@ -850,7 +847,6 @@ export function BotChannelView(props: {
                     threadLanding.spend();
                     onOpenThread(null);
                   }}
-                  onOpenActivity={onOpenActivity}
                   onEditPost={editPostFromThread}
                   onOpenTurn={onOpenTurn}
                   onOpenSession={onOpenSession}

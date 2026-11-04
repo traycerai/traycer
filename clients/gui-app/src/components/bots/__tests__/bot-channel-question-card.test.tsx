@@ -468,7 +468,6 @@ function mountChannel(openThread: BotOpenThread | null): {
               surfaceActions={null}
               openThread={open}
               onOpenThread={onOpenThread}
-              onOpenActivity={vi.fn()}
               setupHistory={null}
             />
           </ChatExpansionTestProviders>

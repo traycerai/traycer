@@ -417,7 +417,6 @@ function VoiceBotStatusReader(props: {
     botId: request.botId,
     trunkChatId: snapshot?.bot.trunkChatId ?? "",
     tasks,
-    activity,
     threads: null,
   });
   const client = useHostClientForHostId(request.hostId);

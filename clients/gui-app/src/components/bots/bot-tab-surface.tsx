@@ -102,11 +102,8 @@ import {
 import { BotActivityPage } from "@/components/bots/bot-activity-page";
 import { BotThreadsView } from "@/components/bots/bot-threads-view";
 import { useBotThreadListQuery } from "@/hooks/bots/use-bot-thread-list-query";
-import { useBotActivitySummary } from "@/hooks/bots/use-bot-activity-summary";
-import {
-  activityLabelParts,
-  type BotActivityLabelPart,
-} from "@/lib/bots/bot-activity-model";
+import { useBotActiveTasks } from "@/hooks/bots/use-bot-active-tasks";
+import { UnreadCountBadge } from "@/components/notifications/unread-count-badge";
 import { BotChannelSettingsPanel } from "@/components/bots/bot-settings-panel";
 import {
   BotIdentityContext,
@@ -849,7 +846,6 @@ function useBotTabRail(
   readonly openMemory: BotOpenMemory | null;
   readonly setOpenThread: (open: BotOpenThread | null) => void;
   readonly setOpenMemory: (open: BotOpenMemory | null) => void;
-  readonly openPostInChannel: (open: BotOpenThread) => void;
   readonly openMemoryInChannel: () => void;
 } {
   const rail = useBotRail(botId);
@@ -871,20 +867,11 @@ function useBotTabRail(
       setRail(botId, open === null ? null : { kind: "thread", ...open }),
     [botId, setRail],
   );
-  // A post or a thread, from Activity: its thread opens beside the channel.
-  const openPostInChannel = useCallback(
-    (open: BotOpenThread) => {
-      setOpenThread(open);
-      onViewChange("messages");
-    },
-    [onViewChange, setOpenThread],
-  );
   return {
     openThread,
     openMemory,
     setOpenThread,
     setOpenMemory,
-    openPostInChannel,
     openMemoryInChannel,
   };
 }
@@ -1354,7 +1341,6 @@ function BotTabContent(props: {
     openMemory,
     setOpenThread,
     setOpenMemory,
-    openPostInChannel,
     openMemoryInChannel,
   } = useBotTabRail(botId, onViewChange);
   const memoryAccess = useMemo(
@@ -1417,14 +1403,7 @@ function BotTabContent(props: {
     onViewChange,
   });
   useRailDrawnReport(place, threadListSupported, onRailDrawn);
-  const openActivity = useCallback(() => changeView("activity"), [changeView]);
-  const activitySummary = useBotActivitySummary({
-    botId,
-    trunkChatId: snapshot.bot.trunkChatId,
-    tasks: snapshot.tasks,
-    activity: snapshot.activity,
-    threads,
-  });
+  const activeTasks = useBotActiveTasks(snapshot.tasks);
   // The channel's settings open beside it from the header's ⋮.
   const [settingsOpen, setSettingsOpen] = useState(false);
   const toggleSettings = useCallback(
@@ -1517,11 +1496,7 @@ function BotTabContent(props: {
                     isMain={isMain === true}
                     settingsOpen={settingsOpen}
                     onToggleSettings={toggleSettings}
-                    activityLabel={activityLabelParts({
-                      stopped: activitySummary.stopped.length,
-                      running: activitySummary.running.length,
-                      tasks: activitySummary.tasks,
-                    })}
+                    activityCount={activeTasks.rows.length}
                   />
                   {streamError === null ? null : (
                     // A fatal close AFTER a snapshot: the last reading stays on
@@ -1571,7 +1546,6 @@ function BotTabContent(props: {
                       onOpenMemory={setOpenMemory}
                       environmentId={snapshot.bot.environmentId}
                       botNameOf={botNameOf}
-                      onOpenActivity={openActivity}
                       setupHistory={setupHistory}
                       tiles={tiles}
                     />
@@ -1583,20 +1557,11 @@ function BotTabContent(props: {
                     <BotActivityPage
                       botId={botId}
                       hostId={hostId}
-                      boundHost={snapshot.boundHost}
-                      channelId={snapshot.bot.appConversationChatId}
-                      tasks={snapshot.tasks}
-                      notificationSubscriptions={
-                        snapshot.notificationSubscriptions
-                      }
-                      stoppedNotificationWatches={
-                        snapshot.stoppedNotificationWatches
-                      }
+                      botTitle={snapshot.bot.title}
+                      boundHere={snapshot.boundHost.isThisHost}
+                      active={activeTasks}
                       resolveMember={resolveMember}
-                      summary={activitySummary}
                       threads={threads}
-                      onOpenPost={openPostInChannel}
-                      onOpenTurn={openTurn}
                     />
                   </TabsContent>
                 </Tabs>
@@ -1696,8 +1661,7 @@ function ErrorNotice(props: {
  * its name with the main bot's star, the ⋮ that opens the channel's settings,
  * and the channel's views under it. What the bot is for is the top of its channel; nothing else
  * sits here but, on the phone, Talk. A session started here is focused on
- * this channel. Activity's label is the bot's indicator: what stopped, in red
- * and first, what runs and the tasks it tracks.
+ * this channel. Activity's count is the tasks its list shows.
  */
 function BotChannelHeader(props: {
   readonly level2: MobileLevel2Form | null;
@@ -1708,7 +1672,8 @@ function BotChannelHeader(props: {
   readonly isMain: boolean;
   readonly settingsOpen: boolean;
   readonly onToggleSettings: () => void;
-  readonly activityLabel: ReadonlyArray<BotActivityLabelPart>;
+  /** How many tasks the Activity list shows. */
+  readonly activityCount: number;
 }): ReactNode {
   const { settingsOpen } = props;
   // Asked as the top row asks it, so a window has one Talk or the other.
@@ -1795,20 +1760,12 @@ function BotChannelHeader(props: {
         </TabsTrigger>
         <TabsTrigger value="activity" data-testid="bot-tab-view-activity">
           Activity
-          {props.activityLabel.map((part) => (
-            <span
-              key={part.kind}
-              data-testid={`bot-tab-activity-${part.kind}`}
-              className={cn(
-                "font-normal",
-                part.kind === "stopped"
-                  ? "text-destructive"
-                  : "text-muted-foreground",
-              )}
-            >
-              {` · ${part.text}`}
-            </span>
-          ))}
+          <UnreadCountBadge
+            count={props.activityCount}
+            size="xs"
+            testId="bot-tab-activity-count"
+            corner={null}
+          />
         </TabsTrigger>
       </TabsList>
     </header>

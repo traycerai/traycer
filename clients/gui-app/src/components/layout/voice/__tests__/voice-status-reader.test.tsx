@@ -50,7 +50,7 @@ vi.mock(
   }),
 );
 vi.mock("@/hooks/bots/use-bot-activity-summary", () => ({
-  useBotActivitySummary: () => ({ stopped: [], running: [] }),
+  useBotActivitySummary: () => ({ running: [] }),
 }));
 
 const BOT: BotRecord = {

@@ -513,14 +513,12 @@ let mountTiles: MobileTileCount | null = null;
 
 function mount(options: MountOptions): {
   readonly onOpenThread: Mock<(open: BotOpenThread | null) => void>;
-  readonly onOpenActivity: Mock<() => void>;
   /** Renders the same view again, reading the mocks' current state. */
   readonly rerender: () => void;
   /** Renders the view again with the tab's open-thread selection changed. */
   readonly reopen: (openThread: BotOpenThread | null) => void;
 } {
   const onOpenThread = vi.fn<(open: BotOpenThread | null) => void>();
-  const onOpenActivity = vi.fn<() => void>();
   const queryClient = new QueryClient();
   const tree = (openThread: BotOpenThread | null): ReactNode => (
     <QueryClientProvider client={queryClient}>
@@ -548,7 +546,6 @@ function mount(options: MountOptions): {
             surfaceActions={null}
             openThread={openThread}
             onOpenThread={onOpenThread}
-            onOpenActivity={onOpenActivity}
             setupHistory={null}
           />
         </ChatExpansionTestProviders>
@@ -567,7 +564,6 @@ function mount(options: MountOptions): {
   const result = render(tree(current));
   return {
     onOpenThread,
-    onOpenActivity,
     rerender: () => result.rerender(tree(current)),
     reopen: (openThread) => {
       current = openThread;
@@ -2048,15 +2044,6 @@ describe("<BotChannelView tiles={null} /> open thread", () => {
     const panel = screen.getByTestId("bot-thread-panel");
     expect(within(panel).queryByTestId("bot-thread-cost")).toBeNull();
     expect(panel.textContent).not.toContain("$0.42");
-  });
-
-  it("opens the bot's Activity from the thread's header", async () => {
-    const user = userEvent.setup();
-    const { onOpenActivity } = mount({ openThreadPostId: "post-a" });
-
-    await user.click(screen.getByRole("button", { name: "Activity" }));
-
-    expect(onOpenActivity).toHaveBeenCalledTimes(1);
   });
 
   it("closes the thread from its header", async () => {
