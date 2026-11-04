@@ -506,6 +506,38 @@ describe("TrackPlayer run arc", () => {
     expect(output.plays("bus0/0")).toHaveLength(1);
   });
 
+  it("lets a capped layer play after a resume when a stop cut its late-loaded play before the start it moved to", async () => {
+    const output = new FakeOutput();
+    const track = buildTrack({
+      lengthSeconds: 60,
+      layers: [layerOf("A", 2, null)],
+      states: [stateOf("only", [properties(null, 1, 4, 1)], 1)],
+      intro: null,
+      outro: null,
+      phases: [],
+    });
+    const stems = new FakeStems(1);
+    stems.holdLayer("A");
+    const player = makePlayer(output, stems, track, 0);
+    player.start(0, 0.1);
+    // The play decided for track 1.0 waits for its audio, which arrives at
+    // track 1.25, so it moves to 1.5 (clock 1.55).
+    await vi.advanceTimersByTimeAsync(1300);
+    stems.releaseLayer("A");
+    await vi.advanceTimersByTimeAsync(100);
+    player.stop(0.1);
+    await vi.advanceTimersByTimeAsync(3600);
+    expect(output.plays("bus0/0").map((play) => play.when)).toEqual([
+      expect.closeTo(1.55, 6),
+    ]);
+
+    player.start(player.elapsed(), 0.1);
+    await vi.advanceTimersByTimeAsync(4000);
+    expect(output.plays("bus0/0").filter((play) => play.at >= 5)).toHaveLength(
+      1,
+    );
+  });
+
   it("keeps a long fade's end when a layer's target is restated and ramps a changed target over 1.5 s", async () => {
     const output = new FakeOutput();
     const player = makePlayer(
