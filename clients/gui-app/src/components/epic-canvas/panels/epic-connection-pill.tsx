@@ -178,7 +178,7 @@ export function EpicConnectionPill(props: EpicConnectionPillProps) {
           data-testid="epic-connection-pill"
           data-status={state}
           data-source={selected.source}
-          aria-label={accessibleNameFor(rawSelected)}
+          aria-label={buttonNameFor(indicator.label, rawSelected)}
           className={cn(
             "inline-flex items-center gap-1 text-ui-xs font-medium text-current focus:outline-none focus-visible:ring-1 focus-visible:ring-ring",
             indicator.containerClassName,
@@ -354,6 +354,21 @@ function accessibleNameFor(selected: SelectedIndicator): string {
     selected.indicator.ariaLabel,
     ...selected.alsoReported.map((other) => other.ariaLabel),
   ].join(" ");
+}
+
+/**
+ * The button's name starts with the label it shows, so a person can say the
+ * label they see to click the pill (WCAG 2.5.3, label in name).
+ */
+function buttonNameFor(
+  visibleLabel: string | null,
+  selected: SelectedIndicator,
+): string {
+  const name = accessibleNameFor(selected);
+  if (visibleLabel === null || name.startsWith(visibleLabel)) return name;
+  // "Syncing…" already ends its sentence; "Offline" does not.
+  const separator = visibleLabel.endsWith("…") ? " " : ". ";
+  return `${visibleLabel}${separator}${name}`;
 }
 
 function ConnectionPillDot(props: { indicator: PillIndicator }) {
@@ -648,7 +663,8 @@ function indicatorForArtifactSync(
     showAgentSpinner: false,
     pulse: null,
     tooltip: status.sentence,
-    ariaLabel: `${status.label}. ${status.sentence}`,
+    // The sentence leads with what is wrong; "Syncing…" in front says nothing.
+    ariaLabel: status.sentence,
   };
 }
 
