@@ -473,9 +473,8 @@ describe("the receipt under the bot's own post a thread opens on", () => {
     mountChannel(ANNOUNCEMENT_RAIL);
 
     const receipt = await within(
-      await screen.findByTestId("bot-thread-anchor"),
-    ).findByTestId("bot-turn-receipt");
-    expect(receipt.textContent).toBe(`${SUMMARY} · ${TOOK}`);
+      await screen.findByRole("region", { name: "Thread" }),
+    ).findByRole("button", { name: `${SUMMARY} · ${TOOK}` });
     expect(
       asked.some((request) => request.messageIds.includes(ANNOUNCEMENT_ID)),
     ).toBe(true);
