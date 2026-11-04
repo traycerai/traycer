@@ -126,6 +126,13 @@ export type SystemResumeEvent = {
    * conservative desktop-calibrated behavior.
    */
   readonly backgroundedForMs: number | null;
+  /**
+   * The machine woke behind its lock screen: the shell is running again, but
+   * the person is not back until the unlock, which the shell reports as a wake
+   * of its own. Only the desktop sees a lock screen; a mobile app is not in
+   * the foreground behind one.
+   */
+  readonly screenLocked: boolean;
 };
 
 /**

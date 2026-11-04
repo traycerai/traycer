@@ -124,7 +124,7 @@ class FakeSystemResume implements SystemResumeSource {
 
   emitResume(): void {
     for (const handler of this.handlers) {
-      handler({ backgroundedForMs: null });
+      handler({ backgroundedForMs: null, screenLocked: false });
     }
   }
 

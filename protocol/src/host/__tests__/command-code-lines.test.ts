@@ -708,6 +708,7 @@ describe("parse-or-refuse bridges", () => {
             policy: policyWithCandidate(representable ? "claude" : NEW_ID),
             storedPolicyUnreadable: false,
             inFlightCount: 0,
+            source: "own",
           }),
         ),
     },
@@ -963,6 +964,7 @@ describe("every new frozen response schema rejects commandcode while its live co
         policy: policyWithCandidate(id),
         storedPolicyUnreadable: false,
         inFlightCount: 0,
+        source: "own",
       }),
     },
     {
