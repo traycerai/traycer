@@ -535,7 +535,6 @@ function seedMessageHits(
   testState.chatSearchHits = {
     kind: "ready",
     messages,
-    indexState: "complete",
     expansionBase: {
       query: "matching",
       scope: { kind: "all-accessible-tasks" },
