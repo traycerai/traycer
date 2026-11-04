@@ -40,8 +40,8 @@ import { worktreeListAllForHostResponseSchemaV16 } from "@traycer/protocol/host"
 import { listTerminalsResponseSchemaV23 } from "@traycer/protocol/host/terminal/unary-schemas";
 import { worktreeDeleteByPathServerFrameSchemaV13 } from "@traycer/protocol/host/worktree-delete-stream";
 import {
-  hostNotificationsCloudFeedSubscribeServerFrameSchemaV16,
-  hostNotificationsSubscribeServerFrameSchemaV17,
+  hostNotificationsCloudFeedSubscribeServerFrameSchemaV17,
+  hostNotificationsSubscribeServerFrameSchemaV18,
 } from "@traycer/protocol/host/notifications/host-notifications";
 import {
   simulatorSessionsServerFrameSchemaV11,
@@ -998,19 +998,19 @@ describe("canonical stream frame pairing (simulator streams)", () => {
 });
 
 describe("canonical stream frame pairing (notification feeds)", () => {
-  it("hostNotificationsSubscribeServerFrameSchemaV17 is the canonical serverFrameSchema for host.notifications.feed.subscribe", () => {
+  it("hostNotificationsSubscribeServerFrameSchemaV18 is the canonical serverFrameSchema for host.notifications.feed.subscribe", () => {
     expect(
       latestStreamServerFrameSchema(
         hostStreamRpcRegistry["host.notifications.feed.subscribe"],
       ),
-    ).toBe(hostNotificationsSubscribeServerFrameSchemaV17);
+    ).toBe(hostNotificationsSubscribeServerFrameSchemaV18);
   });
 
-  it("hostNotificationsCloudFeedSubscribeServerFrameSchemaV16 is the canonical serverFrameSchema for host.notifications.cloudFeed.subscribe", () => {
+  it("hostNotificationsCloudFeedSubscribeServerFrameSchemaV17 is the canonical serverFrameSchema for host.notifications.cloudFeed.subscribe", () => {
     expect(
       latestStreamServerFrameSchema(
         hostStreamRpcRegistry["host.notifications.cloudFeed.subscribe"],
       ),
-    ).toBe(hostNotificationsCloudFeedSubscribeServerFrameSchemaV16);
+    ).toBe(hostNotificationsCloudFeedSubscribeServerFrameSchemaV17);
   });
 });

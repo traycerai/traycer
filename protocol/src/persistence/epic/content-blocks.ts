@@ -926,6 +926,58 @@ export const toolCallMcpAppStampSchema = lazySchema(() =>
 );
 export type ToolCallMcpAppStamp = z.infer<typeof toolCallMcpAppStampSchema>;
 
+/**
+ * Where a feedback draft stands. `pending` until the user decides; `sent`
+ * and `skipped` are the user's decisions; `failed` is a send that did not
+ * reach Traycer and can be tried again. `unknown` is never written: it is
+ * what a state this reader has not heard of parses as, so a newer writer's
+ * state cannot fail the block, and a reader treats it as settled.
+ */
+export const toolCallFeedbackDraftStateSchema = lazySchema(() =>
+  z
+    .enum(["pending", "sent", "skipped", "failed", "unknown"])
+    .catch("unknown"),
+);
+export type ToolCallFeedbackDraftState = z.infer<
+  typeof toolCallFeedbackDraftStateSchema
+>;
+
+/**
+ * Feedback about Traycer an agent drafted with `traycer_draft_feedback`,
+ * stamped on that call's `tool_call` block. Nothing is sent until the user
+ * presses Send on the card (`chat.feedbackDraftDecide`); the stamp is the
+ * draft's only record and the source of truth for its state.
+ *
+ * - `category` is an open string (the tool offers `tool_problem`,
+ *   `missing_capability`, `unmet_user_expectation`, `suggestion`): this block
+ *   is published, and a category a reader has not heard of must not fail the
+ *   record. A reader renders an unknown one with a generic label.
+ * - `toolName` is the `traycer_*` tool the feedback is about, or `null`.
+ * - `suggestDiagnostics` is the agent's suggestion to attach diagnostics; the
+ *   card pre-ticks the box from it, and the user decides.
+ * - `decidedAt` is when the user pressed Send or Skip, `null` while pending.
+ * - `failureReason` is a short reason a send failed, `null` otherwise.
+ *
+ * No account or user id is stored: who decided is not needed to render or
+ * settle the draft, and the block is published with the chat.
+ */
+export const toolCallFeedbackDraftStampSchema = lazySchema(() =>
+  z.object({
+    category: z.string().min(1),
+    toolName: z.string().min(1).nullable(),
+    goal: z.string(),
+    observed: z.string(),
+    suggestion: z.string().nullable(),
+    suggestDiagnostics: z.boolean(),
+    state: toolCallFeedbackDraftStateSchema,
+    decidedAt: z.number().nullable(),
+    failureReason: z.string().nullable(),
+  }),
+);
+export type ToolCallFeedbackDraftStamp = z.infer<
+  typeof toolCallFeedbackDraftStampSchema
+>;
+
 export const toolCallBlockSchema = lazySchema(() =>
   z.object({
     ...baseBlockFields,
@@ -1013,6 +1065,10 @@ export const toolCallBlockSchema = lazySchema(() =>
     artifact: toolCallArtifactStampSchema.nullable().default(null),
     // The MCP App this call rendered (`chat.subscribe@1.23`).
     mcpApp: toolCallMcpAppStampSchema.nullable().default(null),
+    // The feedback draft this call wrote - see
+    // `toolCallFeedbackDraftStampSchema`. Null for every other tool call and
+    // for blocks persisted before this field.
+    feedbackDraft: toolCallFeedbackDraftStampSchema.nullable().default(null),
   }),
 );
 // Frozen through chat.subscribe@1.30: keep the artifact stamp off older lines.

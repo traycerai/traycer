@@ -1,5 +1,5 @@
 import {
-  type HostNotificationCloudEntryV26,
+  type HostNotificationCloudEntryV27,
   type HostNotificationOutcome,
 } from "@traycer/protocol/host/notifications/host-notifications";
 import {
@@ -39,7 +39,7 @@ export interface HostNotificationPresentation {
  * generic copy instead of throwing or exposing untrusted raw error text.
  */
 export function formatHostNotificationPresentation(
-  entry: HostNotificationCloudEntryV26,
+  entry: HostNotificationCloudEntryV27,
 ): HostNotificationPresentation {
   const known = parseKnownHostNotificationPayloadForKind(
     entry.kind,
@@ -85,6 +85,11 @@ export function formatHostNotificationPresentation(
       return {
         title,
         body: `${agentContext} • ${resolvableRequestStatus(entry.resolvedAt, "Question waiting", "Question resolved")}`,
+      };
+    case "feedback.drafted":
+      return {
+        title,
+        body: `${agentContext} • ${resolvableRequestStatus(entry.resolvedAt, "Feedback draft to review", "Feedback draft reviewed")}`,
       };
     case "host.operation.finished":
       return hostOperationFinishedPresentation(
@@ -672,6 +677,7 @@ export function hostOperationKnownCopy(
     case "agent_stalled":
     case "approval":
     case "interview":
+    case "feedback_draft":
     case "workspace_operation_failed":
     // The browser park row's copy is composed above from the entry itself, not
     // from the payload arm: `reason` is the body's context, never a title.
@@ -776,6 +782,7 @@ function knownTaskTitle(payload: HostNotificationKnownPayload): string | null {
     case "agent_stalled":
     case "approval":
     case "interview":
+    case "feedback_draft":
     case "workspace_operation_failed":
       return payload.taskTitle;
     case "worktree_deletion":
@@ -814,6 +821,7 @@ function knownAgentName(payload: HostNotificationKnownPayload): string | null {
       return payload.agentName;
     case "approval":
     case "interview":
+    case "feedback_draft":
     case "workspace_operation_failed":
     case "worktree_deletion":
     case "worktree_auto_cleanup":
@@ -846,6 +854,7 @@ function knownChatTitle(payload: HostNotificationKnownPayload): string | null {
   switch (payload.kind) {
     case "approval":
     case "interview":
+    case "feedback_draft":
     case "workspace_operation_failed":
       return payload.chatTitle;
     case "chat":
@@ -891,6 +900,7 @@ function knownStoppedReason(
     case "agent_stalled":
     case "approval":
     case "interview":
+    case "feedback_draft":
     case "workspace_operation_failed":
     case "worktree_deletion":
     case "worktree_auto_cleanup":
@@ -931,6 +941,7 @@ function knownProviderId(
     case "agent_stalled":
     case "approval":
     case "interview":
+    case "feedback_draft":
     case "workspace_operation_failed":
     case "worktree_deletion":
     case "worktree_auto_cleanup":
@@ -983,6 +994,7 @@ function knownUnverified(payload: HostNotificationKnownPayload): boolean {
     case "agent_stalled":
     case "approval":
     case "interview":
+    case "feedback_draft":
     case "workspace_operation_failed":
     case "worktree_deletion":
     case "worktree_auto_cleanup":
@@ -1021,6 +1033,7 @@ function knownBackgroundWorkRunning(
     case "agent_stalled":
     case "approval":
     case "interview":
+    case "feedback_draft":
     case "workspace_operation_failed":
     case "worktree_deletion":
     case "worktree_auto_cleanup":

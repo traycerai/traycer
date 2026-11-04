@@ -324,6 +324,7 @@ export const RunnerHostInvoke = {
   hostQuitAcknowledge: "runnerHost:hostQuit:acknowledge",
   featureSettingsGet: "runnerHost:featureSettings:get",
   agentRolesEnabledSet: "runnerHost:featureSettings:agentRoles:set",
+  agentFeedbackEnabledSet: "runnerHost:featureSettings:agentFeedback:set",
   // Enumerates fonts installed on this machine for the Appearance font
   // pickers (Settings → Appearance → UI/Code/Terminal font).
   fontsList: "runnerHost:fonts:list",

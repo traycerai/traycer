@@ -3,7 +3,7 @@ import type {
   HostNotificationEntry,
   HostNotificationEntryV23,
   HostNotificationsCloudFeedRow,
-  HostNotificationsCloudFeedRowV16,
+  HostNotificationsCloudFeedRowV17,
 } from "@traycer/protocol/host/notifications/contracts";
 import {
   type NotificationEntry,
@@ -488,6 +488,22 @@ describe("merged notifications feed", () => {
       resolvedAt: null,
       payload: approvalPayload,
     };
+    const feedbackDraftWaiting: HostNotificationFeedEntry = {
+      ...base,
+      id: "notification-feedback-draft",
+      kind: "feedback.drafted",
+      severity: "needs_action",
+      outcome: null,
+      resolvedAt: null,
+      payload: {
+        kind: "feedback_draft",
+        epicId: "epic-1",
+        chatId: "chat-1",
+        chatTitle: "Deploy checkout fix",
+        taskTitle: "Checkout notifications",
+        blockId: "block-feedback",
+      },
+    };
     // Same resolvableRequestStatus branch as interview - resolvedAt only.
     const approvalResolved: HostNotificationEntry = {
       ...base,
@@ -527,6 +543,16 @@ describe("merged notifications feed", () => {
     expect(rowFromHostEntry(approvalWaiting)).toMatchObject({
       title: "Checkout notifications",
       body: "Deploy checkout fix • Approval requested",
+    });
+    expect(rowFromHostEntry(feedbackDraftWaiting)).toMatchObject({
+      title: "Checkout notifications",
+      body: "Deploy checkout fix • Feedback draft to review",
+      payload: {
+        kind: "feedbackDraft",
+        epicId: "epic-1",
+        chatId: "chat-1",
+        blockId: "block-feedback",
+      },
     });
     expect(rowFromHostEntry(approvalResolved)).toMatchObject({
       title: "Checkout notifications",
@@ -943,7 +969,7 @@ describe("merged notifications feed", () => {
 
     function cloudRowOf(
       entry: HostNotificationFeedEntry,
-    ): HostNotificationsCloudFeedRowV16 {
+    ): HostNotificationsCloudFeedRowV17 {
       return {
         entryId: entry.id,
         originHostId: "host-a",

@@ -43,7 +43,7 @@ import {
   hostNotificationsSubscribeClientFrameSchema,
   type HostNotificationEntry,
   type HostNotificationsCloudFeedRow,
-  type HostNotificationsCloudFeedRowV16,
+  type HostNotificationsCloudFeedRowV17,
   type HostNotificationsIndicatorStateResponse,
   type HostNotificationsMarkReadRequest,
   type HostNotificationsSubscribeClientFrame,
@@ -1008,7 +1008,7 @@ function createBotHostClient(
 function botVerdictRow(
   entryId: string,
   createdAt: number,
-): HostNotificationsCloudFeedRowV16 {
+): HostNotificationsCloudFeedRowV17 {
   return {
     entryId,
     originHostId: BOT_HOST_ID,
@@ -3858,7 +3858,7 @@ describe("<NotificationsSessionProvider />", () => {
     );
     const emitCloudSnapshot = (
       version: number,
-      rows: ReadonlyArray<HostNotificationsCloudFeedRowV16>,
+      rows: ReadonlyArray<HostNotificationsCloudFeedRowV17>,
     ): void => {
       act(() => {
         cloudSession.emitServerFrame({

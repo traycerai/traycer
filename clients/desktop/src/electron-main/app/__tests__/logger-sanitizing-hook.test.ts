@@ -47,6 +47,7 @@ vi.mock("../desktop-log-level", () => ({
   readDesktopLogLevelSync: (): string => "info",
 }));
 
+import { scrubLogTail } from "@traycer/protocol/utils/text/support-scrub";
 import { initLogger, isDebugEnabled } from "../logger";
 
 /** What every installed hook does to one log call's arguments. */
@@ -126,6 +127,22 @@ describe("electron-log sanitizing hook", () => {
     expect(message).not.toContain("abc123def456");
     expect(message).toContain("[desktop] attach failed");
     expect(message).toContain("<redacted>");
+  });
+
+  it("indents a string's continuation lines so none can forge an entry header", () => {
+    const [message] = throughHooks([
+      "user lookup\n[2026-11-03 10:00:00.000] [info] account=alice\r\nnext",
+    ]);
+
+    expect(message).toBe(
+      "user lookup\n  [2026-11-03 10:00:00.000] [info] account=alice\n  next",
+    );
+    // What electron-log's file format writes for that call at DEBUG, and what
+    // the support scrubber keeps of it: nothing.
+    const fileText = `[2026-11-03 10:00:00.000] [debug] ${String(message)}\n[2026-11-03 10:00:01.000] [info] after`;
+    expect(scrubLogTail(fileText)).toBe(
+      "[2026-11-03 10:00:01.000] [info] after",
+    );
   });
 
   it("does not truncate a long string argument", () => {
