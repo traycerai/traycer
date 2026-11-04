@@ -1159,7 +1159,14 @@ export function readAgentFeedbackConfigSync(): AgentFeedbackConfig {
     const raw = readFileSync(cliConfigPath(), "utf8");
     const parsed: unknown = JSON.parse(raw);
     const result = agentFeedbackOnlyConfigSchema.safeParse(parsed);
-    if (result.success && parseCliConfig(parsed).success) {
+    // Migration rewrites a version it cannot read to the oldest one, which
+    // would let a corrupt `"version": "999"` read as a valid file.
+    const versionReadable =
+      typeof parsed !== "object" ||
+      parsed === null ||
+      !("version" in parsed) ||
+      typeof parsed.version === "number";
+    if (versionReadable && result.success && parseCliConfig(parsed).success) {
       return result.data.agentFeedback;
     }
   } catch (error) {

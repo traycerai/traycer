@@ -375,6 +375,10 @@ describe("cli config store", () => {
     );
     expect(readAgentFeedbackConfigSync()).toEqual({ enabled: false });
     await writeRaw(
+      JSON.stringify({ version: "999", agentFeedback: { enabled: true } }),
+    );
+    expect(readAgentFeedbackConfigSync()).toEqual({ enabled: false });
+    await writeRaw(
       JSON.stringify({
         version: 1,
         features: { agentRoles: "no" },
