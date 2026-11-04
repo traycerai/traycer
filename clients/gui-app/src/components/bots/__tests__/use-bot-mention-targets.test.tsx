@@ -15,6 +15,7 @@ import type { EnvironmentDescriptor } from "@traycer/protocol/host/environment/c
 import type {
   ListTaskLight,
   ListTasksCompleteness,
+  PermissionDto,
 } from "@traycer/protocol/host/epic/unary-schemas";
 import { useBotMentionTargets } from "@/components/bots/use-bot-mention-targets";
 import { buildHomeBotsModel } from "@/lib/home-bots/bots-model";
@@ -22,6 +23,7 @@ import { tracyRecord } from "@/lib/home-bots/__tests__/standalone-bots-fixtures"
 import { useAuthStore } from "@/stores/auth/auth-store";
 import { useStandaloneBotsStore } from "@/stores/bots/standalone-bots-store";
 
+const VIEWER = "user-1";
 const TEAM_ENV = "env-team";
 const PERSONAL_ENV = "env-me";
 const STREAM_TASK = "6f1c2a7e-3b4d-4e5f-8a9b-0c1d2e3f4a5b";
@@ -122,6 +124,31 @@ function taskLight(
   };
 }
 
+/** A Home row with no owner environment, carrying the viewer's `permission` on it. */
+function rowWithPermission(
+  id: string,
+  title: string,
+  permission: PermissionDto,
+): ListTaskLight {
+  const base = taskLight(id, title, undefined);
+  const epic = base.epic;
+  if (epic === null || epic === undefined) {
+    throw new Error("the fixture row is an epic");
+  }
+  return { ...base, epic: { ...epic, permission } };
+}
+
+function permissionOf(overrides: Partial<PermissionDto>): PermissionDto {
+  return {
+    role: "owner",
+    accessType: "direct",
+    userId: VIEWER,
+    grantedBy: VIEWER,
+    grantedAt: 0,
+    ...overrides,
+  };
+}
+
 function streamTask(taskId: string): BotTaskEntry {
   return {
     taskId,
@@ -190,8 +217,14 @@ afterEach(() => {
   });
 });
 
-function targetsOf(environmentId: string, tasks: ReadonlyArray<BotTaskEntry>) {
-  return renderHook(() => useBotMentionTargets({ environmentId, tasks }));
+function targetsOf(
+  environmentId: string,
+  tasks: ReadonlyArray<BotTaskEntry>,
+  personal: boolean | null,
+) {
+  return renderHook(() =>
+    useBotMentionTargets({ environmentId, tasks, personal }),
+  );
 }
 
 describe("useBotMentionTargets bots", () => {
@@ -205,14 +238,14 @@ describe("useBotMentionTargets bots", () => {
       true,
     );
 
-    expect(targetsOf(TEAM_ENV, []).result.current.bots).toEqual([
+    expect(targetsOf(TEAM_ENV, [], false).result.current.bots).toEqual([
       { id: "bot_01HZY8V6K3Q9W2E4R5T6Y7V8M0", name: "Tracy" },
       { id: "bot_01HZY8V6K3Q9W2E4R5T6Y7V8M1", name: "Triage" },
     ]);
   });
 
   it("has none until the directory answered, and an empty list once it did with nothing for the environment", () => {
-    const { result } = targetsOf("env-unlisted", []);
+    const { result } = targetsOf("env-unlisted", [], false);
     expect(result.current.bots).toBeNull();
 
     settleBots([], true);
@@ -235,7 +268,7 @@ describe("useBotMentionTargets tasks", () => {
       taskLight(STREAM_TASK, "Release notes", TEAM_ENV),
     ];
 
-    const { result } = targetsOf(TEAM_ENV, [streamTask(STREAM_TASK)]);
+    const { result } = targetsOf(TEAM_ENV, [streamTask(STREAM_TASK)], false);
 
     expect(result.current.tasks).toEqual([
       { id: STREAM_TASK, name: "Release notes" },
@@ -250,10 +283,11 @@ describe("useBotMentionTargets tasks", () => {
     );
     mocks.homeTasks = [taskLight(HOME_TASK, "Roadmap", TEAM_ENV)];
 
-    const { result } = targetsOf(TEAM_ENV, [
-      streamTask(STREAM_TASK),
-      streamTask(UNTITLED_STREAM_TASK),
-    ]);
+    const { result } = targetsOf(
+      TEAM_ENV,
+      [streamTask(STREAM_TASK), streamTask(UNTITLED_STREAM_TASK)],
+      false,
+    );
 
     expect(mocks.asked.at(-1)).toEqual([STREAM_TASK, UNTITLED_STREAM_TASK]);
     expect(result.current.tasks.map((task) => task.id)).toEqual([
@@ -265,14 +299,14 @@ describe("useBotMentionTargets tasks", () => {
   it("names a task with no title as an untitled task", () => {
     mocks.homeTasks = [taskLight(HOME_TASK, "", TEAM_ENV)];
 
-    expect(targetsOf(TEAM_ENV, []).result.current.tasks).toEqual([
+    expect(targetsOf(TEAM_ENV, [], false).result.current.tasks).toEqual([
       { id: HOME_TASK, name: "Untitled task" },
     ]);
   });
 
   it("is unsettled while Home's first page is pending, and settled once it answered with no cached page, pending cloud half or completeness reported", () => {
     mocks.homePending = true;
-    const { result, rerender } = targetsOf(TEAM_ENV, []);
+    const { result, rerender } = targetsOf(TEAM_ENV, [], false);
 
     expect(result.current.tasksSettled).toBe(false);
 
@@ -284,7 +318,11 @@ describe("useBotMentionTargets tasks", () => {
 
   it("is unsettled while the stream's task contexts are pending, and when either read failed", () => {
     mocks.contextsPending = true;
-    const { result, rerender } = targetsOf(TEAM_ENV, [streamTask(STREAM_TASK)]);
+    const { result, rerender } = targetsOf(
+      TEAM_ENV,
+      [streamTask(STREAM_TASK)],
+      false,
+    );
     expect(result.current.tasksSettled).toBe(false);
 
     mocks.contextsPending = false;
@@ -301,13 +339,17 @@ describe("useBotMentionTargets tasks", () => {
   it("is unsettled while Home presents a cached page, whose cloud half has not answered", () => {
     mocks.homeCached = true;
 
-    expect(targetsOf(TEAM_ENV, []).result.current.tasksSettled).toBe(false);
+    expect(targetsOf(TEAM_ENV, [], false).result.current.tasksSettled).toBe(
+      false,
+    );
   });
 
   it("is unsettled while a local-first snapshot waits on the cloud's half", () => {
     mocks.homeCloudPending = true;
 
-    expect(targetsOf(TEAM_ENV, []).result.current.tasksSettled).toBe(false);
+    expect(targetsOf(TEAM_ENV, [], false).result.current.tasksSettled).toBe(
+      false,
+    );
   });
 
   it("is unsettled when the cloud's page is unavailable, and settled when it settled", () => {
@@ -317,7 +359,7 @@ describe("useBotMentionTargets tasks", () => {
       localRows: "none",
       sort: "server",
     };
-    const { result, rerender } = targetsOf(TEAM_ENV, []);
+    const { result, rerender } = targetsOf(TEAM_ENV, [], false);
     expect(result.current.tasksSettled).toBe(false);
 
     mocks.homeCompleteness = {
@@ -328,5 +370,66 @@ describe("useBotMentionTargets tasks", () => {
     };
     rerender();
     expect(result.current.tasksSettled).toBe(true);
+  });
+
+  it("is unsettled until the environment list has said whose environment this is", () => {
+    const UNREAD_ENVIRONMENT: { readonly personal: boolean | null } = {
+      personal: null,
+    };
+    const { result, rerender } = renderHook(
+      (props: { readonly personal: boolean | null }) =>
+        useBotMentionTargets({
+          environmentId: TEAM_ENV,
+          tasks: [],
+          personal: props.personal,
+        }),
+      { initialProps: UNREAD_ENVIRONMENT },
+    );
+    expect(result.current.tasksSettled).toBe(false);
+
+    rerender({ personal: false });
+    expect(result.current.tasksSettled).toBe(true);
+  });
+});
+
+describe("useBotMentionTargets tasks of a personal environment", () => {
+  it("lists a Home row the viewer owns directly, which names no owner environment", () => {
+    mocks.homeTasks = [
+      rowWithPermission(HOME_TASK, "Roadmap", permissionOf({})),
+    ];
+
+    expect(targetsOf(PERSONAL_ENV, [], true).result.current.tasks).toEqual([
+      { id: HOME_TASK, name: "Roadmap" },
+    ]);
+  });
+
+  it("lists no such row for a team bot", () => {
+    mocks.homeTasks = [
+      rowWithPermission(HOME_TASK, "Roadmap", permissionOf({})),
+    ];
+
+    expect(targetsOf(TEAM_ENV, [], false).result.current.tasks).toEqual([]);
+  });
+
+  it("lists no row the viewer does not own directly: another person's, an organization's, or an editor's", () => {
+    mocks.homeTasks = [
+      rowWithPermission(
+        OTHER_ENV_TASK,
+        "Theirs",
+        permissionOf({ userId: "user-2" }),
+      ),
+      rowWithPermission(
+        UNOWNED_TASK,
+        "Org's",
+        permissionOf({ accessType: "organization" }),
+      ),
+      rowWithPermission(
+        UNTITLED_STREAM_TASK,
+        "Shared with me",
+        permissionOf({ role: "editor" }),
+      ),
+    ];
+
+    expect(targetsOf(PERSONAL_ENV, [], true).result.current.tasks).toEqual([]);
   });
 });

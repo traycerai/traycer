@@ -1204,6 +1204,19 @@ function useChannelSetupHistory(input: {
   );
 }
 
+/**
+ * Whether a bot's environment is the viewer's personal one; `null` while the
+ * environment list has not answered. The list holds only the viewer's own
+ * environments, so its one personal entry is theirs.
+ */
+function viewerOwnsEnvironment(
+  unread: boolean,
+  environment: EnvironmentListResponseV11["environments"][number] | null,
+): boolean | null {
+  if (unread) return null;
+  return environment !== null && environment.ownerKind === "user";
+}
+
 function BotTabContent(props: {
   readonly botId: string;
   readonly hostId: string;
@@ -1394,6 +1407,10 @@ function BotTabContent(props: {
   const mentionTargets = useBotMentionTargets({
     environmentId: snapshot.bot.environmentId,
     tasks: snapshot.tasks,
+    personal: viewerOwnsEnvironment(
+      environments.data === undefined,
+      environment,
+    ),
   });
   const mentioned = useMemo((): BotMentionDirectory => {
     const person = (userId: string): BotMentioned | null => {

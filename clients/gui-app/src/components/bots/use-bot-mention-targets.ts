@@ -1,5 +1,6 @@
 import { useMemo } from "react";
 import type { BotTaskEntry } from "@traycer/protocol/host/bot/schemas";
+import type { ListTaskLight } from "@traycer/protocol/host/epic/unary-schemas";
 import type { BotMentionTarget } from "@/components/bots/bot-mentions-context";
 import { useEpicGetTaskContexts } from "@/hooks/epic/use-epic-get-task-contexts-query";
 import { useCloudEpicTasksQuery } from "@/hooks/epics/use-cloud-epic-tasks-query";
@@ -22,6 +23,29 @@ export interface BotMentionTargets {
 }
 
 /**
+ * A Home row as one of the environment's tasks: one the environment owns,
+ * or, for the viewer's personal environment, one the viewer owns directly
+ * (that environment's one member owns its tasks), read off the viewer's own
+ * owner permission on the row.
+ */
+function isEnvironmentTask(
+  row: ListTaskLight,
+  environmentId: string,
+  personalOwnerId: string | null,
+): boolean {
+  if (row.ownerEnvironmentId === environmentId) return true;
+  const permission = row.epic?.permission ?? null;
+  return (
+    personalOwnerId !== null &&
+    row.ownerEnvironmentId === undefined &&
+    permission !== null &&
+    permission.role === "owner" &&
+    permission.accessType === "direct" &&
+    permission.userId === personalOwnerId
+  );
+}
+
+/**
  * What a bot's channel can name besides its people, from the bot's own
  * environment only:
  *
@@ -31,14 +55,19 @@ export interface BotMentionTargets {
  * - its tasks: the ones the bot's stream lists (`tasks`), titled by their
  *   contexts as the bot's task list titles them, then the tasks on Home's
  *   task list (`epic.listTasks`' first page, the cache Home and the agent
- *   composer's `@` read) that the environment owns (`ownerEnvironmentId`).
- *   A task with no title read yet is left out.
+ *   composer's `@` read) that the environment owns (`ownerEnvironmentId`),
+ *   or, in the viewer's personal environment, that the viewer owns
+ *   directly. A task with no title read yet is left out.
+ *
+ * `personal` says whether the bot's environment is the viewer's personal
+ * one, `null` while the environment list has not answered.
  */
 export function useBotMentionTargets(input: {
   readonly environmentId: string;
   readonly tasks: ReadonlyArray<BotTaskEntry>;
+  readonly personal: boolean | null;
 }): BotMentionTargets {
-  const { environmentId, tasks } = input;
+  const { environmentId, tasks, personal } = input;
   const directory = useStandaloneBotsStore((state) => state.directory);
   const settled = useStandaloneBotsStore((state) => state.settled);
   const bots = useMemo((): ReadonlyArray<BotMentionTarget> | null => {
@@ -59,6 +88,7 @@ export function useBotMentionTargets(input: {
     enabled: cloud,
   });
   const home = useCloudEpicTasksQuery(undefined, { enabled: true });
+  const personalOwnerId = personal === true ? userId : null;
   const taskTargets = useMemo((): ReadonlyArray<BotMentionTarget> => {
     const seen = new Set<string>();
     const targets: BotMentionTarget[] = [];
@@ -72,7 +102,7 @@ export function useBotMentionTargets(input: {
       const light = row.epic?.light ?? null;
       if (
         light === null ||
-        row.ownerEnvironmentId !== environmentId ||
+        !isEnvironmentTask(row, environmentId, personalOwnerId) ||
         seen.has(light.id)
       ) {
         continue;
@@ -81,13 +111,21 @@ export function useBotMentionTargets(input: {
       targets.push({ id: light.id, name: taskMentionDisplayTitle(light) });
     }
     return targets;
-  }, [contexts.tasksById, environmentId, home.tasks, streamTaskIds]);
+  }, [
+    contexts.tasksById,
+    environmentId,
+    home.tasks,
+    personalOwnerId,
+    streamTaskIds,
+  ]);
 
   // Settled only on the cloud's own first page: a cached page or a local
   // snapshot whose cloud half is pending may lack a task the cloud lists, and
   // one whose cloud half is unavailable, or a read that failed, will not
-  // bring it. Until then a task the directory lacks stays as written.
+  // bring it. Nor before the environment list says whose environment this
+  // is. Until then a task the directory lacks stays as written.
   const tasksSettled =
+    personal !== null &&
     !home.firstPagePending &&
     home.firstPageError === null &&
     !home.presentsCachedPage &&

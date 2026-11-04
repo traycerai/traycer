@@ -2763,6 +2763,80 @@ describe("<BotTabSurface /> views", () => {
       );
     });
 
+    describe("Home tasks the viewer owns directly", () => {
+      const VIEWER = "user-viewer";
+
+      /** A Home row naming no owner environment, on which the viewer holds the owner permission directly. */
+      function ownedDirectly(id: string, title: string): ListTaskLight {
+        const { ownerEnvironmentId: _unowned, ...base } = taskRow(
+          id,
+          title,
+          "unused",
+        );
+        const epic = base.epic;
+        if (epic === null || epic === undefined) {
+          throw new Error("the fixture row is an epic");
+        }
+        return {
+          ...base,
+          epic: {
+            ...epic,
+            permission: {
+              role: "owner",
+              accessType: "direct",
+              userId: VIEWER,
+              grantedBy: VIEWER,
+              grantedAt: 0,
+            },
+          },
+        };
+      }
+
+      beforeEach(() => {
+        useAuthStore.setState({
+          profile: {
+            userId: VIEWER,
+            userName: "Olive Owner",
+            email: "olive@example.com",
+            avatarUrl: null,
+          },
+        });
+        mocks.homeTasks = [ownedDirectly(TASK_HOME, "Roadmap")];
+      });
+
+      it("are the tasks a personal bot's channel can mention, in the viewer's own environment", () => {
+        mocks.state.environments = [
+          {
+            environmentId: "env-team",
+            label: "Olive Owner",
+            ownerKind: "user",
+          },
+        ];
+
+        render(surface());
+
+        expect(
+          screen.getByTestId("stub-mentionable").getAttribute("data-tasks"),
+        ).toBe("Roadmap");
+      });
+
+      it("are not the tasks of a team bot's channel", () => {
+        mocks.state.environments = [
+          {
+            environmentId: "env-team",
+            label: "Acme",
+            ownerKind: "organization",
+          },
+        ];
+
+        render(surface());
+
+        expect(
+          screen.getByTestId("stub-mentionable").getAttribute("data-tasks"),
+        ).toBe("");
+      });
+    });
+
     it("hands the channel its tasks as unsettled while Home's first page is pending, and settled once it answered", () => {
       mocks.homeFirstPagePending = true;
       const { rerender } = render(surface());
