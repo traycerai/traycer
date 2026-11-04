@@ -304,7 +304,37 @@ function EpicUsageEmptyState(props: {
   );
 }
 
-export function EpicUsageLoadedBody(props: {
+function EpicUsageLoadedBody(props: {
+  readonly data: UsageSummaryResponse;
+  readonly chartGroupBy: UsageChartGroupBy;
+  readonly onChartGroupByChange: (groupBy: UsageChartGroupBy) => void;
+}): ReactNode {
+  return (
+    // `usage-chart-root` scopes the series and harness palettes over BOTH
+    // consumers - the chart and its sibling harness split - the same
+    // reason Settings hangs it on their common ancestor.
+    <div className="usage-chart-root flex flex-col gap-5">
+      <EpicUsageExportRegion
+        data={props.data}
+        chartGroupBy={props.chartGroupBy}
+        onChartGroupByChange={props.onChartGroupByChange}
+      />
+      <div>
+        <h3 className="mb-2 text-ui-sm font-medium text-foreground">
+          By chat / agent
+        </h3>
+        <UsageChatBreakdown rows={props.data.summary.chatBuckets} />
+      </div>
+    </div>
+  );
+}
+
+/**
+ * The summary hero and trend chart: the part of the loaded body that the
+ * image export captures. Renders under a `usage-chart-root` ancestor, which
+ * scopes the palettes its chart and harness split read.
+ */
+export function EpicUsageExportRegion(props: {
   readonly data: UsageSummaryResponse;
   readonly chartGroupBy: UsageChartGroupBy;
   readonly onChartGroupByChange: (groupBy: UsageChartGroupBy) => void;
@@ -343,90 +373,76 @@ export function EpicUsageLoadedBody(props: {
   );
   const dateRangeLabel = formatDateRangeLabel(days);
 
+  // The image-export capture region: summary hero + trend chart, and
+  // deliberately not the by-chat table - "what did this cost" shares fine,
+  // an unbounded row list doesn't. Rendered inside `usage-chart-root` so the
+  // chart's `var(...)` palette resolves in the capture's computed styles.
   return (
-    // `usage-chart-root` scopes the series and harness palettes over BOTH
-    // consumers - the chart and its sibling harness split - the same
-    // reason Settings hangs it on their common ancestor.
-    <div className="usage-chart-root flex flex-col gap-5">
-      {/* The image-export capture region: summary hero + trend chart, and
-          deliberately not the by-chat table below - "what did this cost"
-          shares fine, an unbounded row list doesn't. Inside
-          `usage-chart-root` so the chart's `var(...)` palette resolves in
-          the capture's computed styles. */}
+    <div
+      className="flex flex-col gap-5"
+      data-usage-export-region=""
+      data-testid="epic-usage-export-region"
+    >
       <div
-        className="flex flex-col gap-5"
-        data-usage-export-region=""
-        data-testid="epic-usage-export-region"
+        className="grid grid-cols-1 gap-4 @min-[40rem]:grid-cols-[minmax(0,1.15fr)_minmax(0,1fr)]"
+        data-testid="epic-usage-hero"
       >
-        <div
-          className="grid grid-cols-1 gap-4 @min-[40rem]:grid-cols-[minmax(0,1.15fr)_minmax(0,1fr)]"
-          data-testid="epic-usage-hero"
-        >
-          <div className="flex min-w-0 flex-col gap-3">
-            <div className="flex flex-col gap-0.5">
-              <UsageCostFigure
-                totals={summary.totals}
-                coverage={coverage}
-                servedBy={servedBy}
-                // The host dimension is irrelevant at this scope: an epic's
-                // (or a chat's) work is the same work wherever it ran.
-                hostScopeName={null}
-                size="display"
-              />
-              <span
-                className="text-ui-xs text-muted-foreground"
-                data-testid="usage-date-range-label"
-              >
-                {dateRangeLabel}
-              </span>
-            </div>
-            <UsageHarnessSplit
-              rows={harnessRows}
-              scale={scale}
-              showTokens={false}
+        <div className="flex min-w-0 flex-col gap-3">
+          <div className="flex flex-col gap-0.5">
+            <UsageCostFigure
+              totals={summary.totals}
+              coverage={coverage}
+              servedBy={servedBy}
+              // The host dimension is irrelevant at this scope: an epic's
+              // (or a chat's) work is the same work wherever it ran.
+              hostScopeName={null}
+              size="display"
             />
+            <span
+              className="text-ui-xs text-muted-foreground"
+              data-testid="usage-date-range-label"
+            >
+              {dateRangeLabel}
+            </span>
           </div>
-          <div className="flex flex-col gap-1.5">
-            <UsageStatTiles tiles={statTiles} variant="curated" />
-            {absentNote === null ? null : (
-              <p
-                className="text-ui-xs text-muted-foreground/80"
-                data-testid="usage-stat-tiles-absent-note"
-              >
-                {absentNote}
-              </p>
-            )}
-          </div>
-        </div>
-        <div className="flex flex-col gap-2 rounded-lg border border-border/60 bg-card/40 p-3">
-          <div className="flex flex-wrap items-center justify-between gap-2">
-            <h3 className="text-ui-sm font-medium text-foreground">
-              Daily cost
-            </h3>
-            <UsageChartGroupByToggle
-              groupBy={chartGroupBy}
-              onChange={props.onChartGroupByChange}
-              triggerClassName={COARSE_POINTER_TRIGGER}
-            />
-          </div>
-          {/* `key` per the prop's contract: the legend's hidden-series set is
-            keyed by the current grouping's series keys, so a switch
-            remounts rather than letting stale harness keys filter model
-            bands. */}
-          <UsageDailyChart
-            key={chartGroupBy}
-            columns={columns}
-            scale={chartScale}
-            metric="cost"
-            groupBy={chartGroupBy}
+          <UsageHarnessSplit
+            rows={harnessRows}
+            scale={scale}
+            showTokens={false}
           />
         </div>
+        <div className="flex flex-col gap-1.5">
+          <UsageStatTiles tiles={statTiles} variant="curated" />
+          {absentNote === null ? null : (
+            <p
+              className="text-ui-xs text-muted-foreground/80"
+              data-testid="usage-stat-tiles-absent-note"
+            >
+              {absentNote}
+            </p>
+          )}
+        </div>
       </div>
-      <div>
-        <h3 className="mb-2 text-ui-sm font-medium text-foreground">
-          By chat / agent
-        </h3>
-        <UsageChatBreakdown rows={summary.chatBuckets} />
+      <div className="flex flex-col gap-2 rounded-lg border border-border/60 bg-card/40 p-3">
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          <h3 className="text-ui-sm font-medium text-foreground">Daily cost</h3>
+          <UsageChartGroupByToggle
+            groupBy={chartGroupBy}
+            onChange={props.onChartGroupByChange}
+            triggerClassName={COARSE_POINTER_TRIGGER}
+          />
+        </div>
+        {/* `key` per the prop's contract: the legend's hidden-series set is
+          keyed by the current grouping's series keys, so a switch
+          remounts rather than letting stale harness keys filter model
+          bands. */}
+        <UsageDailyChart
+          key={chartGroupBy}
+          columns={columns}
+          scale={chartScale}
+          metric="cost"
+          groupBy={chartGroupBy}
+        />
       </div>
     </div>
   );

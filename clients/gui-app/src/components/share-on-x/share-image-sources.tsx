@@ -1,5 +1,5 @@
 import { useEffect, useEffectEvent, useRef, type ReactNode } from "react";
-import { EpicUsageLoadedBody } from "@/components/epic-canvas/panels/epic-usage-dialog";
+import { EpicUsageExportRegion } from "@/components/epic-canvas/panels/epic-usage-dialog";
 import {
   SetUpImage,
   TaskCardImage,
@@ -88,9 +88,11 @@ export function ShareImageSources(props: ShareImageSourcesProps): ReactNode {
           onFailed={() => onFailed("usage")}
         >
           {/* The width the usage dialog lays this summary out at, so the
-              picture matches what the person sees there. */}
-          <div className="@container w-[48rem] bg-background p-4">
-            <EpicUsageLoadedBody
+              picture matches what the person sees there. Only the summary
+              and chart: the per-chat table needs an open task and names
+              chats, which have no place in a public post. */}
+          <div className="usage-chart-root @container w-[48rem] bg-background p-4">
+            <EpicUsageExportRegion
               data={usage}
               chartGroupBy="harness"
               onChartGroupByChange={noop}
