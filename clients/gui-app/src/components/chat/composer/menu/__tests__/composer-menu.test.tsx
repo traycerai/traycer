@@ -8,7 +8,10 @@ import {
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { isWithinTextEntryPopup } from "@/components/layout/shell/shell-gestures";
-import type { MentionFlowStep } from "@/lib/composer/mentions";
+import {
+  mentionProviderRegistry,
+  type MentionFlowStep,
+} from "@/lib/composer/mentions";
 import { setNativeKeyboardState } from "@/lib/native-keyboard";
 
 import {
@@ -73,7 +76,13 @@ describe("ComposerMenu slash load failure", () => {
     openSlashPicker(store);
     setSlashItems(store, { loadFailed: true, retryLoad });
 
-    render(<ComposerMenu pickerStore={store} replyRow={null} />);
+    render(
+      <ComposerMenu
+        pickerStore={store}
+        replyRow={null}
+        menuCopy={mentionProviderRegistry.menuCopy}
+      />,
+    );
     await flush();
 
     expect(screen.getByText("Couldn't load commands")).toBeTruthy();
@@ -88,7 +97,13 @@ describe("ComposerMenu slash load failure", () => {
     openSlashPicker(store);
     setSlashItems(store, { loadFailed: false, retryLoad: null });
 
-    render(<ComposerMenu pickerStore={store} replyRow={null} />);
+    render(
+      <ComposerMenu
+        pickerStore={store}
+        replyRow={null}
+        menuCopy={mentionProviderRegistry.menuCopy}
+      />,
+    );
     await flush();
 
     expect(screen.getByText("No matching commands")).toBeTruthy();
@@ -163,7 +178,13 @@ describe("ComposerMenu preview panel viewport gate", () => {
     const store = createComposerPickerStore();
     openSlashPickerWithItems(store, [describedSlashItem("take")]);
 
-    render(<ComposerMenu pickerStore={store} replyRow={null} />);
+    render(
+      <ComposerMenu
+        pickerStore={store}
+        replyRow={null}
+        menuCopy={mentionProviderRegistry.menuCopy}
+      />,
+    );
     await flush();
 
     expect(
@@ -182,7 +203,13 @@ describe("ComposerMenu preview panel viewport gate", () => {
     const store = createComposerPickerStore();
     openSlashPickerWithItems(store, [describedSlashItem("take")]);
 
-    render(<ComposerMenu pickerStore={store} replyRow={null} />);
+    render(
+      <ComposerMenu
+        pickerStore={store}
+        replyRow={null}
+        menuCopy={mentionProviderRegistry.menuCopy}
+      />,
+    );
     await flush();
 
     expect(
@@ -213,7 +240,13 @@ describe("ComposerMenu as its editor's popup", () => {
     const store = createComposerPickerStore();
     openSlashPickerWithItems(store, [describedSlashItem("take")]);
 
-    render(<ComposerMenu pickerStore={store} replyRow={null} />);
+    render(
+      <ComposerMenu
+        pickerStore={store}
+        replyRow={null}
+        menuCopy={mentionProviderRegistry.menuCopy}
+      />,
+    );
     await flush();
 
     expect(isWithinTextEntryPopup(screen.getByRole("option"))).toBe(true);
@@ -226,7 +259,13 @@ describe("ComposerMenu as its editor's popup", () => {
     const store = createComposerPickerStore();
     openSlashPickerWithItems(store, [describedSlashItem("take")]);
 
-    render(<ComposerMenu pickerStore={store} replyRow={null} />);
+    render(
+      <ComposerMenu
+        pickerStore={store}
+        replyRow={null}
+        menuCopy={mentionProviderRegistry.menuCopy}
+      />,
+    );
     await flush();
 
     const panel = document.querySelector('[data-slot="mention-preview-panel"]');
@@ -341,7 +380,13 @@ describe("ComposerMenu and the software keyboard", () => {
       const clientRect = vi.fn(() => new DOMRect(20, 300, 0, 20));
       shape.open(store, clientRect);
 
-      render(<ComposerMenu pickerStore={store} replyRow={null} />);
+      render(
+        <ComposerMenu
+          pickerStore={store}
+          replyRow={null}
+          menuCopy={mentionProviderRegistry.menuCopy}
+        />,
+      );
       await flush();
       const passesBeforeOpen = clientRect.mock.calls.length;
       expect(passesBeforeOpen).toBeGreaterThan(0);

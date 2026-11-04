@@ -2,7 +2,6 @@ import { describe, expect, it } from "vitest";
 import {
   BOT_MENTION_TOKEN,
   activeMentionQuery,
-  matchMentionCandidates,
   mentionOfToken,
   mentionsToDisplay,
   mentionsToWire,
@@ -343,23 +342,25 @@ describe("activeMentionQuery", () => {
     expect(activeMentionQuery("hi @", 4)).toEqual({ start: 3, query: "" });
   });
 
-  it("finds none inside a word, past a space, or when the caret is before it", () => {
+  it("runs the query on through a single space, as the agent composer's does", () => {
+    expect(activeMentionQuery("@an bob", 7)).toEqual({
+      start: 0,
+      query: "an bob",
+    });
+  });
+
+  it("stops the query at a newline and at a later ' @'", () => {
+    expect(activeMentionQuery("@an\nbob", 7)).toBeNull();
+    expect(activeMentionQuery("@an\n@bo", 7)).toEqual({
+      start: 4,
+      query: "bo",
+    });
+    expect(activeMentionQuery("@an @bo", 7)).toEqual({ start: 4, query: "bo" });
+  });
+
+  it("finds none inside a word, or when the caret is before it", () => {
     expect(activeMentionQuery("a@b", 3)).toBeNull();
-    expect(activeMentionQuery("@an bob", 7)).toBeNull();
     expect(activeMentionQuery("hi @an", 2)).toBeNull();
-  });
-});
-
-describe("matchMentionCandidates", () => {
-  it("matches the start of any word of a name, case-insensitively", () => {
-    const lee = member("u-lee", "Mary Lee");
-    expect(matchMentionCandidates([ANN, BOB, lee], "le")).toEqual([lee]);
-    expect(matchMentionCandidates([ANN, BOB, lee], "AN")).toEqual([ANN]);
-    expect(matchMentionCandidates([lee], "mary l")).toEqual([lee]);
-  });
-
-  it("lists everyone for an empty query", () => {
-    expect(matchMentionCandidates([ANN, BOB], "")).toEqual([ANN, BOB]);
   });
 });
 
@@ -454,22 +455,5 @@ describe("mentions of a bot and a task", () => {
     const text = `<#include> <#bot_01HZY8V6K3Q9W2E4R5T6Y7U8M0> <~not-a-uuid> <#${TRACY.id}>`;
 
     expect(text.match(BOT_MENTION_TOKEN)).toEqual([`<#${TRACY.id}>`]);
-  });
-});
-
-describe("matchMentionCandidates across kinds", () => {
-  it("lists a name that starts with the query before one that only has a word that does", () => {
-    const weekly = task(
-      "0b9d7c1e-2a3f-4b5c-8d6e-7f8091a2b3c4",
-      "Weekly Lee review",
-    );
-    const leeBot = bot("bot_01HZY8V6K3Q9W2E4R5T6Y7V8M1", "Lee bot");
-    const leeMember = member("u-lee", "Lee Park");
-
-    expect(matchMentionCandidates([weekly, leeBot, leeMember], "lee")).toEqual([
-      leeBot,
-      leeMember,
-      weekly,
-    ]);
   });
 });

@@ -159,12 +159,12 @@ export function BotMessageComposer(props: {
   const inputRef = useRef<HTMLTextAreaElement>(null);
   const [form, setForm] = useState<HTMLFormElement | null>(null);
   const box = useKeyboardFocusLayoutWithin(form) ? BOX_ONE_ROW : BOX_FULL;
-  const mentionListId = useId();
+  const frameRef = useRef<HTMLDivElement>(null);
   const mentions = useBotMentionCompletion({
     text,
     setText,
     inputRef,
-    listId: mentionListId,
+    replyRow: box === BOX_ONE_ROW ? frameRef : null,
   });
   // Which draft the box holds: each edit or seed loaded is a new one, and a
   // send owns the one it started with.
@@ -293,12 +293,13 @@ export function BotMessageComposer(props: {
       }}
     >
       <div
+        ref={frameRef}
         className={cn(
           "relative rounded-lg border border-border bg-background transition-colors focus-within:border-ring",
           box.frame,
         )}
       >
-        {mentions.list}
+        {mentions.menu}
         <label htmlFor={inputId} className="sr-only">
           {label}
         </label>
@@ -336,9 +337,6 @@ export function BotMessageComposer(props: {
           maxLength={MESSAGE_MAX}
           className={cn("min-h-10", box.input)}
           data-testid={`${testId}-input`}
-          aria-autocomplete="list"
-          aria-controls={mentions.listOpen ? mentionListId : undefined}
-          aria-activedescendant={mentions.activeOptionId ?? undefined}
           onSelect={(event) =>
             mentions.onCaret(event.currentTarget.selectionStart)
           }

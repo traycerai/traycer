@@ -391,45 +391,18 @@ export function mentionsToDisplay(
 }
 
 /**
- * The `@` being typed at `caret`: where it starts and what follows it, or
- * `null` when the caret is not in one. An `@` starts a mention at the start
- * of the text or after a space.
+ * The `@` being typed at `caret`: where it starts and what follows it on its
+ * line, or `null` when the caret is not in one. As in the agent composer, an
+ * `@` starts a mention at the start of a line or after a space, and what
+ * follows it runs on through spaces, to the next such `@`.
  */
 export function activeMentionQuery(
   text: string,
   caret: number,
 ): { readonly start: number; readonly query: string } | null {
   const head = text.slice(0, caret);
-  const match = /(?:^|\s)@([^\s@]*)$/.exec(head);
+  const match = /(?:^|\s)@((?:(?!\s@)[^\n])*)$/.exec(head);
   if (match === null) return null;
   const query = match[1];
   return { start: caret - query.length - 1, query };
-}
-
-/**
- * The candidates whose name starts a word with `query`, case-insensitively:
- * those whose whole name starts with it first, each group in the order
- * given.
- */
-export function matchMentionCandidates(
-  candidates: ReadonlyArray<BotMentionCandidate>,
-  query: string,
-): ReadonlyArray<BotMentionCandidate> {
-  const needle = query.toLowerCase();
-  const whole: BotMentionCandidate[] = [];
-  const word: BotMentionCandidate[] = [];
-  for (const candidate of candidates) {
-    const name = candidate.name.toLowerCase();
-    if (name.startsWith(needle)) {
-      whole.push(candidate);
-      continue;
-    }
-    const words = name.split(/\s+/);
-    if (
-      words.some((_, index) => words.slice(index).join(" ").startsWith(needle))
-    ) {
-      word.push(candidate);
-    }
-  }
-  return [...whole, ...word];
 }

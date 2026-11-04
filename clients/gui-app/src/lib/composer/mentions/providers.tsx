@@ -80,7 +80,12 @@ export type MentionProviderId =
   | "chat"
   | "browser-tab"
   | "terminals"
-  | "artifacts";
+  | "artifacts"
+  // A bot channel's box (`bot-mention-completion.tsx`) lists the people and
+  // bots of the bot's environment in these two steps, and its tasks in an
+  // `epic` step; the registry has no provider for either.
+  | "members"
+  | "bots";
 
 export interface MentionMenuCopy {
   readonly header: string;
@@ -100,6 +105,11 @@ export type MentionMenuAction =
   | { readonly kind: "navigate"; readonly step: MentionFlowStep }
   | { readonly kind: "back" }
   | { readonly kind: "complete"; readonly mention: MentionAttachment }
+  /**
+   * A row whose picker resolves it by its id: what it inserts is no prompt
+   * attachment. A bot channel's box lists its names this way.
+   */
+  | { readonly kind: "select" }
   /**
    * A tab on another host: attach snapshot context (text line + screenshot)
    * rather than a mention the agent could try to drive.
@@ -1355,12 +1365,13 @@ class MentionProviderRegistry {
     return this.provider(step.providerId).epicRequests(step, context);
   }
 
-  menuCopy(step: MentionFlowStep): MentionMenuCopy {
+  // A property, so the menu can take it as its copy unbound.
+  readonly menuCopy = (step: MentionFlowStep): MentionMenuCopy => {
     if (step.kind === "root") {
       return { header: "Mentions", empty: "No matching mentions" };
     }
     return this.provider(step.providerId).menuCopy(step);
-  }
+  };
 
   stepChromeCapability(step: MentionFlowStep): MentionStepChromeCapability {
     if (step.kind === "root") return NO_STEP_CHROME_CAPABILITY;
@@ -1424,7 +1435,7 @@ function navigateEntry(args: NavigateEntryArgs): MentionMenuEntry {
   };
 }
 
-function backEntry(description: string): MentionMenuEntry {
+export function backEntry(description: string): MentionMenuEntry {
   return {
     id: "mention-back",
     labelPrefix: null,
@@ -1678,7 +1689,11 @@ function rankByLabelAndId<Entry extends RankableMentionEntry>(
     .slice(0, limit);
 }
 
-function scoreLabelAndId(
+/**
+ * How well `normalizedQuery` (trimmed, lower case) names a row by its label
+ * or durable id, lower being better; `null` when it does not.
+ */
+export function scoreLabelAndId(
   rawLabel: string,
   rawId: string,
   normalizedQuery: string,

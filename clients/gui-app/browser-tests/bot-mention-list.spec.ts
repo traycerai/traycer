@@ -3,20 +3,20 @@ import { z } from "zod";
 
 import { fixture } from "./support/fixtures.ts";
 
-// A bot's box completes `@` with one list of the environment's people, bots
-// and tasks (decision 177), and a sent row draws each mention as a chip in
-// its line. At a phone's width the list has to stay inside the pane above
-// the box, each name on one row however long, and a chip has to sit in the
-// line of text it is in rather than break the line around it.
+// A bot's box completes `@` with the agent composer's two-level menu
+// (decision 177): People, Bots and Tasks first, each a step of names, and a
+// sent row draws each mention as a chip in its line. At a phone's width the
+// menu has to stay inside the viewport, each row on one line however long,
+// and a chip has to sit in the line of text it is in rather than break the
+// line around it.
 //
-// jsdom lays nothing out, so neither the list's box nor a chip's line box is
+// jsdom lays nothing out, so neither the menu's box nor a chip's line box is
 // something it can answer. This renders the production thread panel, its
 // post naming a bot, a task and a member, against the real stylesheet.
 
-const PANE = '[data-testid="thread-pane"]';
 const INPUT = '[data-testid="bot-thread-composer-input"]';
-const LIST = '[data-testid="bot-mention-list"]';
-const OPTION = '[data-testid="bot-mention-option"]';
+const MENU = '[data-slot="composer-menu"]';
+const OPTION = `${MENU} [role="option"]`;
 const ANCHOR = '[data-testid="bot-thread-anchor"]';
 const CHIPS = [
   '[data-testid="bot-mention-bot"]',
@@ -24,7 +24,8 @@ const CHIPS = [
   '[data-testid="bot-mention"]',
 ] as const;
 
-test.use({ viewport: { width: 390, height: 760 } });
+const VIEWPORT = { width: 390, height: 760 };
+test.use({ viewport: VIEWPORT });
 
 const BoxSchema = z.object({
   top: z.number(),
@@ -47,30 +48,29 @@ async function boxOf(page: Page, selector: string): Promise<Box> {
   });
 }
 
-test("the mention list opens above the box inside the pane, one row per name", async ({
+test("the mention menu opens inside the viewport with a category row for People, Bots and Tasks", async ({
   page,
 }) => {
   await page.goto(
     `${fixture("bot-thread-tasks-bound")}?mentions=team&tasks=none&post=short`,
   );
-  const input = page.locator(INPUT);
-  await input.click();
+  await page.locator(INPUT).click();
   await page.keyboard.type("@");
-  await expect(page.locator(OPTION)).toHaveCount(6);
-  const kinds = await page
+  await expect(page.locator(OPTION)).toHaveCount(3);
+  const labels = await page
     .locator(OPTION)
     .evaluateAll((options) =>
-      options.map((option) => option.getAttribute("data-kind")),
+      options.map(
+        (option) => option.querySelector("span.font-medium")?.textContent,
+      ),
     );
-  expect(kinds).toEqual(["person", "person", "bot", "bot", "task", "task"]);
+  expect(labels).toEqual(["People", "Bots", "Tasks"]);
 
-  const pane = await boxOf(page, PANE);
-  const list = await boxOf(page, LIST);
-  const box = await boxOf(page, INPUT);
-  expect(list.bottom).toBeLessThanOrEqual(box.top + 1);
-  expect(list.top).toBeGreaterThanOrEqual(pane.top);
-  expect(list.left).toBeGreaterThanOrEqual(pane.left);
-  expect(list.right).toBeLessThanOrEqual(pane.right);
+  const menu = await boxOf(page, MENU);
+  expect(menu.top).toBeGreaterThanOrEqual(0);
+  expect(menu.left).toBeGreaterThanOrEqual(0);
+  expect(menu.right).toBeLessThanOrEqual(VIEWPORT.width);
+  expect(menu.bottom).toBeLessThanOrEqual(VIEWPORT.height);
 
   const rows = await page.locator(OPTION).evaluateAll((options) =>
     options.map((option) => ({
@@ -83,6 +83,32 @@ test("the mention list opens above the box inside the pane, one row per name", a
     expect(row.overflows).toBe(false);
     expect(row.height).toBeCloseTo(first, 0);
   }
+});
+
+test("a category step stays inside the viewport at a phone's width, Back first", async ({
+  page,
+}) => {
+  await page.goto(
+    `${fixture("bot-thread-tasks-bound")}?mentions=team&tasks=none&post=short`,
+  );
+  await page.locator(INPUT).click();
+  await page.keyboard.type("@");
+  await page.locator(OPTION).filter({ hasText: "Tasks" }).click();
+
+  const labels = await page
+    .locator(OPTION)
+    .evaluateAll((options) =>
+      options.map(
+        (option) => option.querySelector("span.font-medium")?.textContent,
+      ),
+    );
+  expect(labels[0]).toBe("Back");
+  expect(labels.length).toBeGreaterThan(1);
+  const menu = await boxOf(page, MENU);
+  expect(menu.top).toBeGreaterThanOrEqual(0);
+  expect(menu.left).toBeGreaterThanOrEqual(0);
+  expect(menu.right).toBeLessThanOrEqual(VIEWPORT.width);
+  expect(menu.bottom).toBeLessThanOrEqual(VIEWPORT.height);
 });
 
 test("a sent row's bot, task and member chips sit in its line of text", async ({
