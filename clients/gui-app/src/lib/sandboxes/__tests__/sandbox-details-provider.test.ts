@@ -322,9 +322,7 @@ describe("sandboxDetailsEntry", () => {
     const frozenAt = Date.UTC(2026, 9, 9);
     const destroyAt = frozenDestroyAt(frozenAt);
     const day = formatSandboxDate(destroyAt, true);
-    const rowFor = (
-      frozen: boolean,
-    ): Record<string, string> =>
+    const rowFor = (frozen: boolean): Record<string, string> =>
       sandboxDetailsEntry({
         summary: sandboxSummaryFixture({
           burst: false,
@@ -339,9 +337,7 @@ describe("sandboxDetailsEntry", () => {
         viewerUserId: null,
         personal: false,
         now: NOW,
-      })
-        .export()
-        .status;
+      }).export().status;
 
     expect(rowFor(true)["Destroyed on"]).toBe(day);
     // A wake really does reset a resting deadline, so this row keeps saying so.
