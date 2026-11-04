@@ -3,6 +3,7 @@ import type { TeamHostInstallTokenResult } from "@traycer-clients/shared/host-cl
 import { useMutationStateOf } from "@/hooks/use-mutation-state-of";
 import { useHostBinding } from "@/lib/host";
 import { teamHostMutationKeys } from "@/lib/query-keys";
+import { useAuthStore } from "@/stores/auth/auth-store";
 
 /** A team machine's one-time install token, as the card shows it once. */
 export interface TeamHostInstallToken {
@@ -49,14 +50,17 @@ const MINTED_TOKEN_KEPT_MS = 30 * 60_000;
  * never persisted and never logged; it outlives the card that sent it for
  * its window (`MINTED_TOKEN_KEPT_MS`), so the card shows the mint in flight
  * or its token again after it remounts ({@link useTeamHostInstallTokenLatest}).
- * A refusal is drawn in place.
+ * Keyed by the signed-in account, and dropped when it signs out or another
+ * takes over (`TeamHostInstallTokenLifecycleBridge`), so no other account on
+ * this app reads it. A refusal is drawn in place.
  */
 export function useTeamHostInstallTokenMutation(
   environmentId: string,
 ): UseMutationResult<TeamHostInstallToken, Error, void> {
   const binding = useHostBinding();
+  const userId = useSignedInUserId();
   return useMutation({
-    mutationKey: teamHostMutationKeys.installToken(environmentId),
+    mutationKey: teamHostMutationKeys.installToken(userId, environmentId),
     mutationFn: async () => {
       if (binding === null) {
         throw new Error(failureLine({ kind: "unauthorized" }));
@@ -88,16 +92,22 @@ function isInstallToken(value: unknown): value is TeamHostInstallToken {
   );
 }
 
+/** The signed-in account's canonical id, `null` while signed out. */
+function useSignedInUserId(): string | null {
+  return useAuthStore((state) => state.contextMetadata?.userId ?? null);
+}
+
 /**
- * The environment's newest install-token mint as the mutation cache holds
- * it: the card reads it so a mint sent before it unmounted is still in
- * flight, or shown, when it comes back.
+ * The environment's newest install-token mint by the signed-in account, as
+ * the mutation cache holds it: the card reads it so a mint sent before it
+ * unmounted is still in flight, or shown, when it comes back.
  */
 export function useTeamHostInstallTokenLatest(
   environmentId: string,
 ): TeamHostInstallTokenLatest {
+  const userId = useSignedInUserId();
   const states = useMutationStateOf(
-    { mutationKey: teamHostMutationKeys.installToken(environmentId) },
+    { mutationKey: teamHostMutationKeys.installToken(userId, environmentId) },
     (mutation) => ({
       status: mutation.state.status,
       data: mutation.state.data,

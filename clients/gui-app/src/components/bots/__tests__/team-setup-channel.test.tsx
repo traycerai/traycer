@@ -134,6 +134,8 @@ vi.mock("@/components/bots/bot-settings-panel", () => ({
 }));
 
 import { BotTabSurface } from "@/components/bots/bot-tab-surface";
+import { TeamHostInstallTokenLifecycleBridge } from "@/providers/team-host-install-token-lifecycle-bridge";
+import { useAuthStore } from "@/stores/auth/auth-store";
 import { useTeamCloudCreateStore } from "@/stores/bots/team-cloud-create-store";
 
 let queryClient = new QueryClient();
@@ -142,6 +144,18 @@ function surfaceFor(botId: string | null): ReactNode {
   return (
     <StrictMode>
       <QueryClientProvider client={queryClient}>
+        <BotTabSurface botId={botId} hostId={TAB_HOST} />
+      </QueryClientProvider>
+    </StrictMode>
+  );
+}
+
+/** The surface beside the real bridge that drops a mint when the account changes. */
+function surfaceWithTokenBridge(botId: string | null): ReactNode {
+  return (
+    <StrictMode>
+      <QueryClientProvider client={queryClient}>
+        <TeamHostInstallTokenLifecycleBridge />
         <BotTabSurface botId={botId} hostId={TAB_HOST} />
       </QueryClientProvider>
     </StrictMode>
@@ -504,6 +518,141 @@ describe("<BotTabSurface /> a team's main bot still to be set up", () => {
           .textContent,
       ).toBe(JOIN_COMMAND);
       expect(auth().mintTeamHostInstallToken).toHaveBeenCalledTimes(1);
+    });
+
+    describe("when another account takes over this app", () => {
+      const MACHINE_JOINING_NOTE = "A machine is joining the team.";
+
+      function switchToAccountB(): void {
+        act(() => {
+          useAuthStore.setState({
+            contextMetadata: { userId: "user-other", username: "bea" },
+          });
+        });
+      }
+
+      function enableCloudButton(): HTMLElement {
+        return within(screen.getByTestId("team-host-option-cloud")).getByRole(
+          "button",
+          { name: "Enable cloud" },
+        );
+      }
+
+      /**
+       * The card as a first visit draws it. Enable cloud waits for the new
+       * account's own sandbox list, then is pressable and unheld by any mint.
+       */
+      async function expectFreshCard(): Promise<void> {
+        await sandboxListRead();
+        expect(
+          screen.queryByTestId("team-host-option-machine-command"),
+        ).toBeNull();
+        expect(
+          screen.queryByTestId("team-host-option-machine-expired"),
+        ).toBeNull();
+        expect(createButton()).toHaveProperty("disabled", false);
+        expect(enableCloudButton()).toHaveProperty("disabled", false);
+        expect(screen.queryByTestId("team-host-option-cloud-note")).toBeNull();
+        expect(document.body.innerHTML).not.toContain(TOKEN);
+      }
+
+      it("never shows the first account's token to the account that takes over", async () => {
+        const user = userEvent.setup();
+        auth().mintTeamHostInstallToken.mockResolvedValue(MINTED);
+        render(surfaceWithTokenBridge(SETUP_BOT_ID));
+        await sandboxListRead();
+        await user.click(createButton());
+        await screen.findByTestId("team-host-option-machine-command");
+
+        switchToAccountB();
+
+        await waitFor(() =>
+          expect(
+            screen.queryByTestId("team-host-option-machine-command"),
+          ).toBeNull(),
+        );
+        await expectFreshCard();
+        expect(auth().mintTeamHostInstallToken).toHaveBeenCalledTimes(1);
+      });
+
+      it("drops a mint that settles after the account changed, and holds nothing for the account that took over meanwhile", async () => {
+        const user = userEvent.setup();
+        let answer: (result: TeamHostInstallTokenResult) => void = () =>
+          undefined;
+        auth().mintTeamHostInstallToken.mockImplementation(
+          () =>
+            new Promise((resolve) => {
+              answer = resolve;
+            }),
+        );
+        render(surfaceWithTokenBridge(SETUP_BOT_ID));
+        await sandboxListRead();
+        await user.click(createButton());
+        await waitFor(() =>
+          expect(createButton()).toHaveProperty("disabled", true),
+        );
+        expect(enableCloudButton()).toHaveProperty("disabled", true);
+        expect(
+          document.getElementById(
+            enableCloudButton().getAttribute("aria-describedby") ?? "",
+          )?.textContent,
+        ).toBe(MACHINE_JOINING_NOTE);
+
+        switchToAccountB();
+
+        await waitFor(() =>
+          expect(createButton()).toHaveProperty("disabled", false),
+        );
+        await expectFreshCard();
+
+        await act(async () => {
+          answer(MINTED);
+          await Promise.resolve();
+        });
+
+        await expectFreshCard();
+        expect(
+          queryClient.getMutationCache().findAll({
+            mutationKey: ["teamHost.installToken"],
+          }),
+        ).toEqual([]);
+        expect(auth().mintTeamHostInstallToken).toHaveBeenCalledTimes(1);
+      });
+
+      it("drops the token when the account signs out, so signing the same account back in shows no token", async () => {
+        const user = userEvent.setup();
+        auth().mintTeamHostInstallToken.mockResolvedValue(MINTED);
+        render(surfaceWithTokenBridge(SETUP_BOT_ID));
+        await sandboxListRead();
+        await user.click(createButton());
+        await screen.findByTestId("team-host-option-machine-command");
+
+        act(() => {
+          useAuthStore.setState({
+            status: "signed-out",
+            contextMetadata: null,
+          });
+        });
+        act(() => {
+          useAuthStore.setState({
+            status: "signed-in",
+            contextMetadata: { userId: "user-viewer", username: "olive" },
+          });
+        });
+
+        await waitFor(() =>
+          expect(
+            screen.queryByTestId("team-host-option-machine-command"),
+          ).toBeNull(),
+        );
+        await expectFreshCard();
+        expect(
+          queryClient.getMutationCache().findAll({
+            mutationKey: ["teamHost.installToken"],
+          }),
+        ).toEqual([]);
+        expect(auth().mintTeamHostInstallToken).toHaveBeenCalledTimes(1);
+      });
     });
 
     describe("once the token lapses before the machine joins", () => {

@@ -33,6 +33,7 @@ import { readDesktopWindowId } from "@/lib/windows/desktop-window-id";
 import { EpicSessionLifecycleBridge } from "@/providers/auth-lifecycle-bridge";
 import { AuthSessionExpiredToastBridge } from "@/providers/auth-session-expired-toast-bridge";
 import { VoiceAvailabilityLifecycleBridge } from "@/providers/voice-availability-lifecycle-bridge";
+import { TeamHostInstallTokenLifecycleBridge } from "@/providers/team-host-install-token-lifecycle-bridge";
 import { HostTrustAlertBridge } from "@/providers/host-trust-alert-bridge";
 import { MobileStripFormScope } from "@/components/layout/tabs/mobile-strip-form-scope";
 import { CommandPaletteProvider } from "@/providers/command-palette-provider";
@@ -282,6 +283,7 @@ function TraycerAuthenticatedRuntime(props: TraycerAuthenticatedRuntimeProps) {
         <WindowsBridgeAuthSessionBridge>
           <AuthSessionExpiredToastBridge />
           <VoiceAvailabilityLifecycleBridge />
+          <TeamHostInstallTokenLifecycleBridge />
           <HostTrustAlertBridge />
           <HostCredentialProvisionProvider>
             <EpicSessionLifecycleBridge>

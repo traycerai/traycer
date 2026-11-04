@@ -280,7 +280,7 @@ export function resetBotTabSurfaceMocks(): void {
   mocks.subscribed.length = 0;
   for (const key of Object.keys(mocks.reads)) delete mocks.reads[key];
   useSelectionAuthorityStore.setState({ effectiveHostId: TAB_HOST });
-  useBotDraftsStore.setState({ answers: {}, threadBoxes: {} });
+  useBotDraftsStore.setState({ answers: {}, threadBoxes: {}, unsentBoxes: {} });
   useBotOpenThreadStore.setState({ byBotId: {} });
   useTeamCloudCreateStore.setState({ byEnvironmentId: {} });
   __resetAgentActivityStoreForTests();
