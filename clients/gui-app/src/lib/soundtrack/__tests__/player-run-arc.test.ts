@@ -877,5 +877,13 @@ describe("TrackPlayer run events", () => {
     expect(output.allPlays()).toHaveLength(playsBefore);
     expect(onRunStart).toHaveBeenCalledTimes(1);
     expect(onRunEnd).toHaveBeenCalledTimes(1);
+
+    // Stopped in its silence, it holds the top of the track and starts a new
+    // run from there.
+    expect(player.elapsed()).toBe(0);
+    player.start(player.elapsed(), 0.1);
+    expect(onRunStart).toHaveBeenCalledTimes(2);
+    await vi.advanceTimersByTimeAsync(3000);
+    expect(output.allPlays().length).toBeGreaterThan(playsBefore);
   });
 });

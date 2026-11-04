@@ -159,6 +159,9 @@ describe("SoundtrackSession track pools", () => {
     expect(output.calls.some((call) => call.gain.startsWith("bus2"))).toBe(
       false,
     );
+    expect(
+      output.plays("bus0/0").filter((play) => play.at >= 36),
+    ).not.toHaveLength(0);
 
     expect(session.end().home).toMatchObject({ trackName: "one" });
   });
@@ -256,6 +259,27 @@ describe("SoundtrackSession track pools", () => {
       expect.objectContaining({ target: 1, seconds: CROSSFADE_SECONDS }),
     ]);
     session.end();
+  });
+
+  it("leaves the view on its track when a player fading out reaches its own run end", async () => {
+    const { session, output } = open(
+      { ...EMPTY_VIEWS, home: ["one"], task: ["two", "three"] },
+      ["one", "two", "three"],
+      [],
+    );
+    session.setSignals(HOME);
+    // "one" fades out over 2 s from 9 s, and its run ends at 10.08 s inside the
+    // fade. "two" began at 9 s and ends at about 19.1 s, so by 18.5 s a rotation
+    // by "one" would have started "three" (10.08 s + 8 s) on a third bus.
+    await advance(9);
+    session.setSignals({ ...HOME, view: "task" });
+    await advance(9.5);
+
+    expect(output.calls.some((call) => call.gain.startsWith("bus2"))).toBe(
+      false,
+    );
+    expect(output.ramps("bus1").every((ramp) => ramp.target > 0)).toBe(true);
+    expect(session.end().task?.trackName).toBe("two");
   });
 
   it("starts nothing after the session ends during the silence", async () => {
