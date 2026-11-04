@@ -685,6 +685,12 @@ export const userMessageSchema = lazySchema(() =>
     .object({
       ...userMessageSchemaPreCanvas.shape,
       message: userMessagePayloadSchema,
+      /**
+       * `true` on a member's message whose words were spoken on a call
+       * (`chat.subscribe@1.43`). Absent on every other row, and optional for
+       * `conversationRequest`'s reason.
+       */
+      spoken: z.literal(true).optional(),
     })
     .superRefine(userMessageSenderKindRefine),
 );

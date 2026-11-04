@@ -2308,6 +2308,10 @@ export const chatSyncSchemaSurfaceBaseline = {
                               "skipped"
                             ],
                             "additionalProperties": false
+                          },
+                          "spoken": {
+                            "type": "boolean",
+                            "const": true
                           }
                         },
                         "required": [
