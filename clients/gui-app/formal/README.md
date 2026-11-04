@@ -10,8 +10,9 @@ within small budgets and checks what a reader would notice.
 
 `SHIPPED` models pinned OSS main `8636d3252`, including K (#3110),
 PressKey (#3135), Rule A (#3138), and the away-input follow guard (#3128).
-The generator contains the original 189 exploration configs and sixteen paired
-landed-input controls. CI selects measured configurations explicitly in
+The generator contains 193 exploration configs (the original 189,
+`phone_send` with its two variants, and `touch_end_fixed_withlayouthold`),
+sixteen paired landed-input controls and the four `SendHold_*` controls. CI selects measured configurations explicitly in
 `expected.py`; it does not claim a full matrix verdict. Passing cases and
 known failing controls remain distinct.
 
@@ -175,7 +176,9 @@ announces a pad clamp before any observer can see regrowth.
 ### Recorded selected runs
 
 [landed-inputs-results.csv](landed-inputs-results.csv) records each pass for
-the 37 selected configs: 35 historical passes for the original 25, 35 fresh
+37 of the 48 selected configs. The `MomentumPair_*` and `SendHold_*`
+controls, `phone_send_fixed` and the two layout-hold variants came later; until the CSV is regenerated, their
+results are the ones recorded in `expected.py`. The 37: 35 historical passes for the original 25, 35 fresh
 passes for those same names and bounds, 41 switched-control passes and five
 focused PressKey passes. Generated and distinct counts belong to individual
 passes; they are never added as unique states. A completed graph can exhaust
