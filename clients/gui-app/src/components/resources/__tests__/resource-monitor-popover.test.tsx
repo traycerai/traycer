@@ -124,8 +124,8 @@ const hostScopeMock = vi.hoisted(() => ({
   streamBinding: null as StreamRuntimeBinding | null,
 }));
 
-vi.mock("@/hooks/resources/use-resource-monitor-host-scope", () => ({
-  useResourceMonitorHostScope: () => ({
+vi.mock("@/hooks/host-scope/use-watch-host-scope", () => ({
+  useWatchHostScope: () => ({
     scope: hostScopeMock.scope ?? SINGLE_HOST_SCOPE,
     hasExplicitPick: hostScopeMock.hasExplicitPick,
   }),
