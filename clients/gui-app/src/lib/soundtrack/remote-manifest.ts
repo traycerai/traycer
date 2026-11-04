@@ -14,6 +14,10 @@ import type { SoundtrackManifest } from "./manifest";
  */
 
 const name = z.string().min(1);
+/** What finds a stem, and so never carries the slash that joins a stem's path. */
+const stemName = z
+  .string()
+  .regex(/^[A-Za-z0-9._-]+$/, "A name may hold only A-Z a-z 0-9 . _ -");
 const seconds = z.number().nonnegative();
 const count = z.number().int().nonnegative();
 const positiveCount = z.number().int().positive();
@@ -28,7 +32,7 @@ const secondsRange = rangeOf(seconds);
 const pan = z.number().min(-1).max(1).nullable();
 
 const layerFields = {
-  name,
+  name: stemName,
   sublayers: positiveCount,
   sublayerStartingOffset: secondsRange.nullable(),
   pan,
@@ -38,7 +42,9 @@ const pooledLayer = z.strictObject({ ...layerFields, variants: positiveCount });
 
 const groupedLayer = z.strictObject({
   ...layerFields,
-  groups: z.array(z.strictObject({ name, variants: positiveCount })).min(1),
+  groups: z
+    .array(z.strictObject({ name: stemName, variants: positiveCount }))
+    .min(1),
   sequence: z.array(name).min(1),
 });
 
@@ -71,10 +77,14 @@ const phase = z.strictObject({
   fadeSeconds: seconds,
 });
 
-const bookend = z.strictObject({ name, variants: positiveCount, pan });
+const bookend = z.strictObject({
+  name: stemName,
+  variants: positiveCount,
+  pan,
+});
 
 const trackShape = z.strictObject({
-  name,
+  name: stemName,
   title: z.string(),
   lengthSeconds: z.number().positive(),
   alignmentSeconds: z.number().positive(),
@@ -135,15 +145,20 @@ const track = trackShape.superRefine((parsed, context) => {
   }
 });
 
-const stemFiles = z.strictObject({ name, files: z.array(z.string().min(1)) });
+const stemFiles = z.strictObject({
+  name: stemName,
+  files: z.array(z.string().min(1)),
+});
 
 const stemLayer = z.union([
   stemFiles,
-  z.strictObject({ name, groups: z.array(stemFiles) }),
+  z.strictObject({ name: stemName, groups: z.array(stemFiles) }),
 ]);
 
 const stemManifest = z.strictObject({
-  tracks: z.array(z.strictObject({ name, layers: z.array(stemLayer) })),
+  tracks: z.array(
+    z.strictObject({ name: stemName, layers: z.array(stemLayer) }),
+  ),
 });
 
 type ParsedStemTrack = z.infer<typeof stemManifest>["tracks"][number];

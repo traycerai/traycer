@@ -121,6 +121,7 @@ export function createSoundtrackSource(
       `https://storage.googleapis.com/${BUCKET}/sets/${set}/${MANIFEST_OBJECT}`,
       {
         headers: { Authorization: `Bearer ${token}` },
+        cache: "no-store",
         signal: AbortSignal.timeout(MANIFEST_TIMEOUT_MS),
       },
     );

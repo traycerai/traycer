@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { appLogger } from "@/lib/logger";
 import {
   ManifestStemSource,
   type StemManifest,
@@ -29,7 +30,7 @@ const MANIFEST: StemManifest = {
 const BIG_STEM_FRAMES = 32 * 1024 * 1024;
 
 function stubFetch(status: (call: number) => number) {
-  const fetchMock = vi.fn((_url: string) =>
+  const fetchMock = vi.fn((_url: string, _init: RequestInit) =>
     Promise.resolve(
       new Response(new ArrayBuffer(4), {
         status: status(fetchMock.mock.calls.length),
@@ -39,11 +40,13 @@ function stubFetch(status: (call: number) => number) {
   vi.stubGlobal("fetch", fetchMock);
   return {
     urls: () => fetchMock.mock.calls.map(([url]) => url),
+    inits: () => fetchMock.mock.calls.map(([, init]) => init),
   };
 }
 
 const noReissue: StemReissue = () => Promise.resolve(null);
 
+/** The same stems as `MANIFEST`, re-signed: only the query differs. */
 const FRESH: StemManifest = {
   tracks: [
     {
@@ -51,7 +54,13 @@ const FRESH: StemManifest = {
       layers: [
         {
           name: "C",
-          files: ["fresh/c1.ogg", "fresh/c2.ogg", "fresh/c3.ogg"],
+          files: [
+            "c1.ogg?fresh",
+            "c2.ogg?fresh",
+            "c3.ogg?fresh",
+            "c4.ogg?fresh",
+            "c5.ogg?fresh",
+          ],
         },
       ],
     },
@@ -60,12 +69,13 @@ const FRESH: StemManifest = {
 
 /** Answers by the url asked for, so a stale link and a fresh one differ. */
 function stubFetchByUrl(status: (url: string) => number) {
-  const fetchMock = vi.fn((url: string) =>
+  const fetchMock = vi.fn((url: string, _init: RequestInit) =>
     Promise.resolve(new Response(new ArrayBuffer(4), { status: status(url) })),
   );
   vi.stubGlobal("fetch", fetchMock);
   return {
     urls: () => fetchMock.mock.calls.map(([url]) => url),
+    inits: () => fetchMock.mock.calls.map(([, init]) => init),
   };
 }
 
@@ -77,6 +87,7 @@ function makeDecoder(frames: number) {
 
 afterEach(() => {
   vi.unstubAllGlobals();
+  vi.restoreAllMocks();
 });
 
 describe("ManifestStemSource", () => {
@@ -210,7 +221,7 @@ describe("ManifestStemSource", () => {
       "answered %i asks again once and retries the sample on the fresh url",
       async (refused) => {
         const fetched = stubFetchByUrl((url) =>
-          url.startsWith("fresh/") ? 200 : refused,
+          url.endsWith("?fresh") ? 200 : refused,
         );
         const reissue = vi.fn<StemReissue>(() => Promise.resolve(FRESH));
         const decoder = makeDecoder(10);
@@ -219,7 +230,7 @@ describe("ManifestStemSource", () => {
         await source.load(AQUILO_1, LAYER_C, 2);
 
         expect(reissue).toHaveBeenCalledTimes(1);
-        expect(fetched.urls()).toEqual(["c2.ogg", "fresh/c2.ogg"]);
+        expect(fetched.urls()).toEqual(["c2.ogg", "c2.ogg?fresh"]);
         expect(decoder.decode).toHaveBeenCalledTimes(1);
       },
     );
@@ -256,12 +267,12 @@ describe("ManifestStemSource", () => {
       await expect(source.load(AQUILO_1, LAYER_C, 1)).rejects.toThrow("400");
 
       expect(reissue).toHaveBeenCalledTimes(1);
-      expect(fetched.urls()).toEqual(["c1.ogg", "fresh/c1.ogg"]);
+      expect(fetched.urls()).toEqual(["c1.ogg", "c1.ogg?fresh"]);
     });
 
     it("shares one re-ask between stems refused together", async () => {
       const fetched = stubFetchByUrl((url) =>
-        url.startsWith("fresh/") ? 200 : 403,
+        url.endsWith("?fresh") ? 200 : 403,
       );
       const reissue = vi.fn<StemReissue>(() => Promise.resolve(FRESH));
       const source = new ManifestStemSource(MANIFEST, makeDecoder(10), reissue);
@@ -271,10 +282,10 @@ describe("ManifestStemSource", () => {
       );
 
       expect(reissue).toHaveBeenCalledTimes(1);
-      expect(fetched.urls().filter((url) => url.startsWith("fresh/"))).toEqual([
-        "fresh/c1.ogg",
-        "fresh/c2.ogg",
-        "fresh/c3.ogg",
+      expect(fetched.urls().filter((url) => url.endsWith("?fresh"))).toEqual([
+        "c1.ogg?fresh",
+        "c2.ogg?fresh",
+        "c3.ogg?fresh",
       ]);
     });
 
@@ -288,7 +299,7 @@ describe("ManifestStemSource", () => {
       const again = await source.load(AQUILO_1, LAYER_C, 1);
 
       expect(again).toBe(first);
-      expect(fetched.urls()).toEqual(["c1.ogg", "c2.ogg", "fresh/c2.ogg"]);
+      expect(fetched.urls()).toEqual(["c1.ogg", "c2.ogg", "c2.ogg?fresh"]);
     });
 
     it("names the stem in a rejection and never the url", async () => {
@@ -314,5 +325,208 @@ describe("ManifestStemSource", () => {
       expect(message).not.toContain("secret");
       expect(message).not.toContain("bucket.test");
     });
+  });
+});
+
+function cOnly(files: readonly string[]): StemManifest {
+  return {
+    tracks: [{ name: "aquilo-1", layers: [{ name: "C", files }] }],
+  };
+}
+
+describe("a re-ask that answers a different set", () => {
+  const CHANGED_MESSAGE =
+    "[soundtrack] the published set changed; restart the soundtrack to hear it";
+
+  it("rejects with the status, not a missing file, and keeps what was decoded", async () => {
+    const fetched = stubFetchByUrl((url) => (url === "c2.ogg" ? 403 : 200));
+    const reissue = vi.fn<StemReissue>(() =>
+      Promise.resolve(cOnly(["c1.ogg?fresh"])),
+    );
+    vi.spyOn(appLogger, "warn").mockImplementation(() => {});
+    const source = new ManifestStemSource(
+      cOnly(["c1.ogg", "c2.ogg"]),
+      makeDecoder(10),
+      reissue,
+    );
+    const first = await source.load(AQUILO_1, LAYER_C, 1);
+
+    await expect(source.load(AQUILO_1, LAYER_C, 2)).rejects.toThrow(
+      "Fetching the stem aquilo-1/C/2 answered 403",
+    );
+
+    await expect(source.load(AQUILO_1, LAYER_C, 1)).resolves.toBe(first);
+    expect(fetched.urls()).toEqual(["c1.ogg", "c2.ogg"]);
+  });
+
+  it("logs once, asks no more, and names neither a url nor a stem", async () => {
+    stubFetchByUrl((url) => (url.startsWith("c1") ? 200 : 403));
+    const reissue = vi.fn<StemReissue>(() =>
+      Promise.resolve(cOnly(["c1.ogg?fresh"])),
+    );
+    const warn = vi.spyOn(appLogger, "warn").mockImplementation(() => {});
+    const source = new ManifestStemSource(
+      cOnly(["c1.ogg", "c2.ogg", "c3.ogg"]),
+      makeDecoder(10),
+      reissue,
+    );
+
+    await expect(source.load(AQUILO_1, LAYER_C, 2)).rejects.toThrow("403");
+    await expect(source.load(AQUILO_1, LAYER_C, 3)).rejects.toThrow("403");
+
+    expect(reissue).toHaveBeenCalledTimes(1);
+    expect(warn.mock.calls).toEqual([[CHANGED_MESSAGE, {}]]);
+  });
+
+  it("treats one changed blob path of the same shape as a changed set", async () => {
+    stubFetchByUrl(() => 403);
+    const reissue = vi.fn<StemReissue>(() =>
+      Promise.resolve(cOnly(["c1.ogg?fresh", "c2-new.ogg?fresh", "c3.ogg"])),
+    );
+    const warn = vi.spyOn(appLogger, "warn").mockImplementation(() => {});
+    const source = new ManifestStemSource(
+      cOnly(["c1.ogg", "c2.ogg", "c3.ogg"]),
+      makeDecoder(10),
+      reissue,
+    );
+
+    await expect(source.load(AQUILO_1, LAYER_C, 1)).rejects.toThrow("403");
+
+    expect(warn.mock.calls).toEqual([[CHANGED_MESSAGE, {}]]);
+  });
+});
+
+describe("a refusal that lands after another stem's re-ask", () => {
+  it("fetches the fresh link without asking again", async () => {
+    const stale: { url: string; refuse: () => void }[] = [];
+    const fetchMock = vi.fn((url: string, _init: RequestInit) =>
+      url.endsWith("?fresh")
+        ? Promise.resolve(new Response(new ArrayBuffer(4)))
+        : new Promise<Response>((resolve) => {
+            stale.push({
+              url,
+              refuse: () => {
+                resolve(new Response(null, { status: 403 }));
+              },
+            });
+          }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+    const reissue = vi
+      .fn<StemReissue>()
+      .mockResolvedValueOnce(FRESH)
+      .mockResolvedValue(null);
+    const source = new ManifestStemSource(MANIFEST, makeDecoder(10), reissue);
+    const a = source.load(AQUILO_1, LAYER_C, 1);
+    const b = source.load(AQUILO_1, LAYER_C, 2);
+
+    stale[0].refuse();
+    await a;
+    stale[1].refuse();
+    await b;
+
+    expect(reissue).toHaveBeenCalledTimes(1);
+    expect(fetchMock.mock.calls.map(([url]) => url)).toEqual([
+      "c1.ogg",
+      "c2.ogg",
+      "c1.ogg?fresh",
+      "c2.ogg?fresh",
+    ]);
+  });
+});
+
+describe("distinct stems", () => {
+  const base = { sublayers: 1, sublayerStartingOffset: null, pan: null };
+
+  it("do not share a cache entry across the groups of a layer", async () => {
+    const fetched = stubFetch(() => 200);
+    const layer: GroupedLayer = {
+      ...base,
+      name: "G",
+      groups: [
+        { name: "x", variants: 1 },
+        { name: "y", variants: 1 },
+      ],
+      sequence: ["x", "y"],
+    };
+    const source = new ManifestStemSource(
+      {
+        tracks: [
+          {
+            name: "aquilo-1",
+            layers: [
+              {
+                name: "G",
+                groups: [
+                  { name: "x", files: ["x1.ogg"] },
+                  { name: "y", files: ["y1.ogg"] },
+                ],
+              },
+            ],
+          },
+        ],
+      },
+      makeDecoder(10),
+      noReissue,
+    );
+
+    const x = await source.load(AQUILO_1, layer, 1);
+    const y = await source.load(AQUILO_1, layer, 2);
+
+    expect(y).not.toBe(x);
+    expect(fetched.urls()).toEqual(["x1.ogg", "y1.ogg"]);
+  });
+
+  it("do not share a cache entry when their readable paths collide", async () => {
+    const fetched = stubFetch(() => 200);
+    const pooled = { ...base, name: "G/x", variants: 1 };
+    const grouped: GroupedLayer = {
+      ...base,
+      name: "G",
+      groups: [{ name: "x", variants: 1 }],
+      sequence: ["x"],
+    };
+    const source = new ManifestStemSource(
+      {
+        tracks: [
+          {
+            name: "aquilo-1",
+            layers: [
+              { name: "G/x", files: ["pooled.ogg"] },
+              { name: "G", groups: [{ name: "x", files: ["grouped.ogg"] }] },
+            ],
+          },
+        ],
+      },
+      makeDecoder(10),
+      noReissue,
+    );
+
+    const first = await source.load(AQUILO_1, pooled, 1);
+    const second = await source.load(AQUILO_1, grouped, 1);
+
+    expect(second).not.toBe(first);
+    expect(fetched.urls()).toEqual(["pooled.ogg", "grouped.ogg"]);
+    await expect(source.load(AQUILO_1, pooled, 1)).resolves.toBe(first);
+    expect(fetched.urls()).toHaveLength(2);
+  });
+});
+
+describe("what a stem fetch asks for", () => {
+  it("is never stored by the browser, first fetch and retry alike", async () => {
+    const fetched = stubFetchByUrl((url) =>
+      url.endsWith("?fresh") ? 200 : 403,
+    );
+    const source = new ManifestStemSource(MANIFEST, makeDecoder(10), () =>
+      Promise.resolve(FRESH),
+    );
+
+    await source.load(AQUILO_1, LAYER_C, 1);
+
+    expect(fetched.urls()).toEqual(["c1.ogg", "c1.ogg?fresh"]);
+    expect(fetched.inits()).toEqual([
+      { cache: "no-store" },
+      { cache: "no-store" },
+    ]);
   });
 });

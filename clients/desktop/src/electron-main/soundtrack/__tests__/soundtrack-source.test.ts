@@ -186,7 +186,7 @@ describe("read", () => {
     expect(claims).not.toHaveProperty("target_audience");
   });
 
-  it("fetches the manifest with the bearer", async () => {
+  it("fetches the manifest with the bearer, and never from the browser cache", async () => {
     routes({ token: grantsToken, manifest: answers(POOLED_AND_GROUPED) });
 
     await readerOf({}).read();
@@ -197,6 +197,7 @@ describe("read", () => {
     expect(manifestCall?.[1]?.headers).toEqual({
       Authorization: `Bearer ${ACCESS_TOKEN}`,
     });
+    expect(manifestCall?.[1]?.cache).toBe("no-store");
   });
 
   it("mints one token for two reads", async () => {

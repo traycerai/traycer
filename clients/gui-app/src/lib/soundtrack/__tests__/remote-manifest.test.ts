@@ -15,6 +15,8 @@ function files(prefix: string, count: number): string[] {
   );
 }
 
+const SLASH = "A name may hold only A-Z a-z 0-9 . _ -";
+
 const EMPTY_VIEWS = { home: [], task: [], bot: [], settings: [] };
 
 function aquiloStems() {
@@ -144,6 +146,53 @@ describe("parseRemoteManifest", () => {
     const { version: _version, ...expected } = suiteManifest();
 
     expect(parseRemoteManifest(suiteManifest())).toEqual(expected);
+  });
+
+  it("accepts dots, underscores and dashes in a track and a layer name", () => {
+    const manifest = suiteManifest();
+    const renamed = {
+      ...manifest,
+      tracks: [
+        {
+          ...SUITE,
+          name: "A.b_c-1",
+          layers: [{ ...SUITE.layers[0], name: "L.b_c-1" }, SUITE.layers[1]],
+        },
+      ],
+      views: { ...EMPTY_VIEWS, task: ["A.b_c-1"] },
+      stems: {
+        tracks: [
+          {
+            ...manifest.stems.tracks[0],
+            name: "A.b_c-1",
+            layers: [
+              { name: "L.b_c-1", files: files("suite/pool", 2) },
+              ...manifest.stems.tracks[0].layers.slice(1),
+            ],
+          },
+        ],
+      },
+    };
+
+    expect(parseRemoteManifest(renamed).tracks[0].layers[0].name).toBe(
+      "L.b_c-1",
+    );
+  });
+
+  it("accepts a space in a state name, which no stem path carries", () => {
+    const manifest = {
+      ...suiteManifest(),
+      tracks: [
+        {
+          ...SUITE,
+          states: [{ ...SUITE.states[0], name: "late night" }, SUITE.states[1]],
+        },
+      ],
+    };
+
+    expect(parseRemoteManifest(manifest).tracks[0].states[0].name).toBe(
+      "late night",
+    );
   });
 
   const refused: readonly (readonly [string, string, () => unknown])[] = [
@@ -300,6 +349,72 @@ describe("parseRemoteManifest", () => {
             ...SUITE,
             layers: [SUITE.layers[0], { ...SUITE.layers[1], variants: 3 }],
           },
+        ],
+      }),
+    ],
+    [
+      "a slash in a layer name beside a group that would join to the same path",
+      SLASH,
+      () => ({
+        ...suiteManifest(),
+        tracks: [
+          {
+            ...SUITE,
+            layers: [
+              { ...SUITE.layers[0], name: "set/x" },
+              {
+                ...SUITE.layers[1],
+                name: "set",
+                groups: [{ name: "x", variants: 1 }],
+                sequence: ["x"],
+              },
+            ],
+          },
+        ],
+      }),
+    ],
+    [
+      "a slash in a track name",
+      SLASH,
+      () => ({ ...suiteManifest(), tracks: [{ ...SUITE, name: "su/ite" }] }),
+    ],
+    [
+      "a slash in a group name",
+      SLASH,
+      () => ({
+        ...suiteManifest(),
+        tracks: [
+          {
+            ...SUITE,
+            layers: [
+              SUITE.layers[0],
+              {
+                ...SUITE.layers[1],
+                groups: [{ name: "x/y", variants: 2 }],
+                sequence: ["x/y"],
+              },
+            ],
+          },
+        ],
+      }),
+    ],
+    [
+      "a slash in an intro name",
+      SLASH,
+      () => ({
+        ...suiteManifest(),
+        tracks: [
+          { ...SUITE, intro: { name: "in/tro", variants: 2, pan: null } },
+        ],
+      }),
+    ],
+    [
+      "a slash in an outro name",
+      SLASH,
+      () => ({
+        ...suiteManifest(),
+        tracks: [
+          { ...SUITE, outro: { name: "out/ro", variants: 1, pan: null } },
         ],
       }),
     ],
