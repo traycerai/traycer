@@ -726,6 +726,7 @@ function ThreadPanelBody(props: ThreadPanelBodyProps): ReactNode {
         failure={props.sendFailure}
         edit={edit}
         onEditEnd={endEdit}
+        onEditResume={setEdit}
         seed={seed}
         keptDraft={keptDraft}
         quote={props.quote}
@@ -897,7 +898,7 @@ function KnownThread(
             skipped: given.skipped,
           },
         },
-        { onError: failSend },
+        { onError: () => failSend(null) },
       );
     },
     [botId, clearSendFailure, conversationId, failSend, sendAsync, threadId],
@@ -924,7 +925,7 @@ function KnownThread(
                   supersedes: null,
                   answer: null,
                 },
-                { onError: failSend },
+                { onError: () => failSend(null) },
               );
             },
       answerQuestion: sendable && answersTaken ? answerQuestion : null,
@@ -1036,7 +1037,7 @@ function UnlistedThread(props: {
 }): ReactNode {
   const sendFailed = props.sendFailure.failed ? (
     <div className="shrink-0 px-4 pt-2">
-      <BotSendFailedNotice testId="bot-thread-send-failed" />
+      <BotSendFailedNotice testId="bot-thread-send-failed" restore={null} />
     </div>
   ) : null;
   if (props.thread.kind === "failed") {
