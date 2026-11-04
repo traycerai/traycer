@@ -358,8 +358,9 @@
     "electron",
   ],
   "patchedDependencies": {
-    "@tiptap/extension-code-block@3.30.1": "patches/@tiptap%2Fextension-code-block@3.30.1.patch",
+    "@capacitor/keyboard@8.0.5": "patches/@capacitor%2Fkeyboard@8.0.5.patch",
     "@xterm/addon-canvas@0.7.0": "patches/@xterm%2Faddon-canvas@0.7.0.patch",
+    "@tiptap/extension-code-block@3.30.1": "patches/@tiptap%2Fextension-code-block@3.30.1.patch",
     "@tiptap/extension-list@3.30.1": "patches/@tiptap%2Fextension-list@3.30.1.patch",
     "@capacitor/android@8.4.2": "patches/@capacitor%2Fandroid@8.4.2.patch",
     "@xterm/addon-unicode-graphemes@0.5.0-beta.292": "patches/@xterm%2Faddon-unicode-graphemes@0.5.0-beta.292.patch",
