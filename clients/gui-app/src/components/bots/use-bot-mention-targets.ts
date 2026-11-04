@@ -2,8 +2,9 @@ import { useMemo } from "react";
 import type { BotTaskEntry } from "@traycer/protocol/host/bot/schemas";
 import type { ListTaskLight } from "@traycer/protocol/host/epic/unary-schemas";
 import type { BotMentionTarget } from "@/components/bots/bot-mentions-context";
-import { useEpicGetTaskContexts } from "@/hooks/epic/use-epic-get-task-contexts-query";
-import { useCloudEpicTasksQuery } from "@/hooks/epics/use-cloud-epic-tasks-query";
+import { useEpicGetTaskContextsForClient } from "@/hooks/epic/use-epic-get-task-contexts-query";
+import { useCloudEpicTasksQueryForClient } from "@/hooks/epics/use-cloud-epic-tasks-query";
+import { useTabHostClient } from "@/hooks/host/use-tab-host-client";
 import { taskMentionDisplayTitle } from "@/lib/composer/mentions/task-mention-helpers";
 import {
   authorizesCloudCapability,
@@ -86,10 +87,18 @@ export function useBotMentionTargets(input: {
     () => (tasks.length === 0 ? NO_TASK_IDS : tasks.map((t) => t.taskId)),
     [tasks],
   );
-  const contexts = useEpicGetTaskContexts(streamTaskIds, userId, {
-    enabled: cloud,
+  // The tab's own host, which the bot's tasks are read from, whichever host
+  // the app has active.
+  const client = useTabHostClient();
+  const contexts = useEpicGetTaskContextsForClient(
+    client,
+    streamTaskIds,
+    userId,
+    { enabled: cloud },
+  );
+  const home = useCloudEpicTasksQueryForClient(client, undefined, {
+    enabled: true,
   });
-  const home = useCloudEpicTasksQuery(undefined, { enabled: true });
   const personalOwnerId = personal === true ? userId : null;
   const taskTargets = useMemo((): ReadonlyArray<BotMentionTarget> => {
     const seen = new Set<string>();

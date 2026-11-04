@@ -52,6 +52,7 @@ import {
   initialComposerMenuPlacement,
   readComposerMenuReservedEdges,
 } from "./composer-menu-middleware";
+import { composerMenuOptionId } from "./composer-menu-option-id";
 import { SlashMenuItem } from "./slash-menu-item";
 import { ZERO_DOM_RECT } from "./zero-dom-rect";
 
@@ -106,10 +107,15 @@ export interface ComposerMenuProps {
   readonly replyRow: RefObject<HTMLElement | null> | null;
   /** A mention step's header and empty line: the prompt's are `mentionProviderRegistry.menuCopy`. */
   readonly menuCopy: (step: MentionFlowStep) => MentionMenuCopy;
+  /**
+   * The listbox's id, for an editor that points at it and at its rows
+   * (`composerMenuOptionId`); `null` lets the menu name its own.
+   */
+  readonly listboxId: string | null;
 }
 
 export function ComposerMenu(props: ComposerMenuProps) {
-  const { pickerStore, replyRow, menuCopy } = props;
+  const { pickerStore, replyRow, menuCopy, listboxId } = props;
   const slice = useStore(pickerStore, useShallow(selectMenuSlice));
   const {
     open,
@@ -126,7 +132,7 @@ export function ComposerMenu(props: ComposerMenuProps) {
   const paneFocused = usePaneFocused();
 
   const baseMenuId = useId();
-  const menuId = `${baseMenuId}-menu`;
+  const menuId = listboxId ?? `${baseMenuId}-menu`;
 
   if (!open || !paneFocused) return null;
   if (typeof document === "undefined") return null;
@@ -489,7 +495,7 @@ function renderPickerItem(
   trigger: ComposerSlashTrigger,
 ): RenderedItem {
   return {
-    id: `${menuId}-item-${index}`,
+    id: composerMenuOptionId(menuId, index),
     node:
       item.kind === "mention" ? (
         <MentionMenuItem entry={item.entry} />

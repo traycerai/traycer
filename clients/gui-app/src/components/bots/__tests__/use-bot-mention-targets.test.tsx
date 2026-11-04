@@ -32,22 +32,50 @@ const OTHER_ENV_TASK = "9a8b7c6d-5e4f-4a3b-9c2d-1e0f9a8b7c6d";
 const UNOWNED_TASK = "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee";
 
 const mocks = vi.hoisted(() => ({
-  /** `epic.getTaskContexts`' found rows by id. */
+  /** The tab host's client: what `useTabHostClient()` answers. */
+  tabClient: { stub: "tab-host-client" },
+  /** `epic.getTaskContexts`' found rows by id on the TAB's host. */
   contexts: new Map<string, ListTaskLight>(),
   /** The ids each render asked it for. */
   asked: [] as Array<ReadonlyArray<string>>,
-  /** Home's `epic.listTasks` rows. */
+  /** Home's `epic.listTasks` rows on the TAB's host. */
   homeTasks: [] as ListTaskLight[],
+  /** The same reads on the host the app has active, which `useHostClient()` stands for. */
+  activeContexts: new Map<string, ListTaskLight>(),
+  activeHomeTasks: [] as ListTaskLight[],
+  /** The same reads on any host that is neither the tab's nor the active one. */
+  otherContexts: new Map<string, ListTaskLight>(),
+  otherHomeTasks: [] as ListTaskLight[],
 }));
 
+vi.mock("@/hooks/host/use-tab-host-client", () => ({
+  useTabHostClient: () => mocks.tabClient,
+}));
 vi.mock("@/hooks/epic/use-epic-get-task-contexts-query", () => ({
-  useEpicGetTaskContexts: (ids: ReadonlyArray<string>) => {
+  // The app's active host.
+  useEpicGetTaskContexts: () => ({
+    tasksById: mocks.activeContexts,
+    isPending: false,
+    error: null,
+  }),
+  useEpicGetTaskContextsForClient: (
+    client: object | null,
+    ids: ReadonlyArray<string>,
+  ) => {
     mocks.asked.push(ids);
-    return { tasksById: mocks.contexts, isPending: false, error: null };
+    return {
+      tasksById:
+        client === mocks.tabClient ? mocks.contexts : mocks.otherContexts,
+      isPending: false,
+      error: null,
+    };
   },
 }));
 vi.mock("@/hooks/epics/use-cloud-epic-tasks-query", () => ({
-  useCloudEpicTasksQuery: () => ({ tasks: mocks.homeTasks }),
+  useCloudEpicTasksQuery: () => ({ tasks: mocks.activeHomeTasks }),
+  useCloudEpicTasksQueryForClient: (client: object | null) => ({
+    tasks: client === mocks.tabClient ? mocks.homeTasks : mocks.otherHomeTasks,
+  }),
 }));
 
 const ENVIRONMENTS: ReadonlyArray<EnvironmentDescriptor> = [
@@ -173,6 +201,10 @@ beforeEach(() => {
   mocks.contexts = new Map();
   mocks.asked = [];
   mocks.homeTasks = [];
+  mocks.activeContexts = new Map();
+  mocks.activeHomeTasks = [];
+  mocks.otherContexts = new Map();
+  mocks.otherHomeTasks = [];
   useAuthStore.setState({
     profile: {
       userId: "user-1",
@@ -277,6 +309,35 @@ describe("useBotMentionTargets tasks", () => {
     expect(result.current.tasks.map((task) => task.id)).toEqual([
       STREAM_TASK,
       HOME_TASK,
+    ]);
+  });
+
+  it("reads its tasks from the tab's host, not from the host the app has active or any other", () => {
+    mocks.contexts.set(
+      STREAM_TASK,
+      taskLight(STREAM_TASK, "Tab host stream task", undefined),
+    );
+    mocks.homeTasks = [taskLight(HOME_TASK, "Tab host Home task", TEAM_ENV)];
+    mocks.activeContexts.set(
+      STREAM_TASK,
+      taskLight(STREAM_TASK, "Active host stream task", undefined),
+    );
+    mocks.activeHomeTasks = [
+      taskLight(OTHER_ENV_TASK, "Active host Home task", TEAM_ENV),
+    ];
+    mocks.otherContexts.set(
+      STREAM_TASK,
+      taskLight(STREAM_TASK, "Other host stream task", undefined),
+    );
+    mocks.otherHomeTasks = [
+      taskLight(UNOWNED_TASK, "Other host Home task", TEAM_ENV),
+    ];
+
+    const { result } = targetsOf(TEAM_ENV, [streamTask(STREAM_TASK)], false);
+
+    expect(result.current.tasks).toEqual([
+      { id: STREAM_TASK, name: "Tab host stream task" },
+      { id: HOME_TASK, name: "Tab host Home task" },
     ]);
   });
 

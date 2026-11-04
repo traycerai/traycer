@@ -1,6 +1,7 @@
 import {
   useContext,
   useEffect,
+  useId,
   useLayoutEffect,
   useMemo,
   useRef,
@@ -23,6 +24,8 @@ import {
   type BotMentionTarget,
 } from "@/components/bots/bot-mentions-context";
 import { ComposerMenu } from "@/components/chat/composer/menu/composer-menu";
+import { composerMenuOptionId } from "@/components/chat/composer/menu/composer-menu-option-id";
+import { usePaneFocused } from "@/components/epic-tabs/pane-visibility-context";
 import {
   createComposerPickerStore,
   type ComposerPickerItem,
@@ -71,6 +74,8 @@ const NO_CANDIDATES: ReadonlyArray<BotMentionCandidate> = [];
 export interface BotMentionCompletion {
   /** The agent composer's mention menu, open while an `@` is being typed. */
   readonly menu: ReactNode;
+  /** What the box says about the menu: the listbox and its highlighted row while it shows. */
+  readonly inputAria: BotMentionInputAria;
   /** Handles a key the open menu takes (moving, picking, closing); `true` when it did. */
   readonly onKeyDown: (event: KeyboardEvent<HTMLTextAreaElement>) => boolean;
   /** The caret moved: what follows it decides the menu. */
@@ -84,6 +89,13 @@ export interface BotMentionCompletion {
   readonly toWire: (text: string) => string;
   /** A sent text as the box shows it: each token the box can name as its name. */
   readonly toDisplay: (text: string) => string;
+}
+
+/** The box's half of the menu's accessibility: it completes from a list. */
+export interface BotMentionInputAria {
+  readonly "aria-autocomplete": "list";
+  readonly "aria-controls": string | undefined;
+  readonly "aria-activedescendant": string | undefined;
 }
 
 /** One category of the menu's first level, in its order. */
@@ -156,6 +168,13 @@ export function useBotMentionCompletion(args: {
   );
   const [pickerStore] = useState(createComposerPickerStore);
   const step = useStore(pickerStore, (state) => state.step);
+  const listboxId = useId();
+  // The menu draws while it is open in a focused pane (`ComposerMenu`).
+  const menuOpen = useStore(pickerStore, (state) => state.open);
+  const paneFocused = usePaneFocused();
+  const menuShown = menuOpen && paneFocused;
+  const activeIndex = useStore(pickerStore, (state) => state.activeIndex);
+  const rowCount = useStore(pickerStore, (state) => state.items.length);
   const [caret, setCaret] = useState(0);
   // Where the caret goes once a pick is in the box.
   const placeCaret = useRef<number | null>(null);
@@ -373,8 +392,17 @@ export function useBotMentionCompletion(args: {
         pickerStore={pickerStore}
         replyRow={replyRow}
         menuCopy={botMentionMenuCopy}
+        listboxId={listboxId}
       />
     ),
+    inputAria: {
+      "aria-autocomplete": "list",
+      "aria-controls": menuShown ? listboxId : undefined,
+      "aria-activedescendant":
+        menuShown && activeIndex < rowCount
+          ? composerMenuOptionId(listboxId, activeIndex)
+          : undefined,
+    },
     onKeyDown: (event) => {
       const current = session.current;
       if (current === null || event.nativeEvent.isComposing) return false;

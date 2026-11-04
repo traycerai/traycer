@@ -1341,6 +1341,43 @@ describe("the mention menu's highlight and attributes", () => {
     expect(highlightedLabel()).toBe("Ann Lee");
   });
 
+  it("points the box at the open menu: aria-controls is the listbox's id, aria-activedescendant the highlighted row's and follows the arrows, aria-autocomplete is list", async () => {
+    const user = userEvent.setup();
+    await user.type(box(), "@an");
+    const listbox = openMenu().querySelector('[role="listbox"]');
+    const selectedRowId = (): string | null =>
+      menuRows().find((row) => row.getAttribute("aria-selected") === "true")
+        ?.id ?? null;
+
+    expect(listbox?.id).toBeTruthy();
+    expect(box().getAttribute("aria-controls")).toBe(listbox?.id);
+    expect(box().getAttribute("aria-activedescendant")).toBe(selectedRowId());
+    expect(box().getAttribute("aria-autocomplete")).toBe("list");
+
+    const first = selectedRowId();
+    await user.keyboard("{ArrowDown}");
+
+    expect(selectedRowId()).not.toBe(first);
+    expect(box().getAttribute("aria-activedescendant")).toBe(selectedRowId());
+  });
+
+  it("leaves aria-controls and aria-activedescendant off the box while the menu is closed, before typing and after Escape, but not aria-autocomplete", async () => {
+    const user = userEvent.setup();
+    const expectClosed = (): void => {
+      expect(box().hasAttribute("aria-controls")).toBe(false);
+      expect(box().hasAttribute("aria-activedescendant")).toBe(false);
+      expect(box().getAttribute("aria-autocomplete")).toBe("list");
+    };
+    expectClosed();
+
+    await user.type(box(), "@an");
+    expect(box().hasAttribute("aria-controls")).toBe(true);
+    await user.keyboard("{Escape}");
+
+    expect(mentionMenu()).toBeNull();
+    expectClosed();
+  });
+
   it("carries only attributes a multiline box allows, with valid values, while the menu shows", async () => {
     const user = userEvent.setup();
     await user.type(box(), "@an");

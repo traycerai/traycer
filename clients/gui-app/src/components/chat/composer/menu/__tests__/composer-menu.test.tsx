@@ -81,6 +81,7 @@ describe("ComposerMenu slash load failure", () => {
         pickerStore={store}
         replyRow={null}
         menuCopy={mentionProviderRegistry.menuCopy}
+        listboxId={null}
       />,
     );
     await flush();
@@ -102,6 +103,7 @@ describe("ComposerMenu slash load failure", () => {
         pickerStore={store}
         replyRow={null}
         menuCopy={mentionProviderRegistry.menuCopy}
+        listboxId={null}
       />,
     );
     await flush();
@@ -183,6 +185,7 @@ describe("ComposerMenu preview panel viewport gate", () => {
         pickerStore={store}
         replyRow={null}
         menuCopy={mentionProviderRegistry.menuCopy}
+        listboxId={null}
       />,
     );
     await flush();
@@ -208,6 +211,7 @@ describe("ComposerMenu preview panel viewport gate", () => {
         pickerStore={store}
         replyRow={null}
         menuCopy={mentionProviderRegistry.menuCopy}
+        listboxId={null}
       />,
     );
     await flush();
@@ -245,6 +249,7 @@ describe("ComposerMenu as its editor's popup", () => {
         pickerStore={store}
         replyRow={null}
         menuCopy={mentionProviderRegistry.menuCopy}
+        listboxId={null}
       />,
     );
     await flush();
@@ -264,6 +269,7 @@ describe("ComposerMenu as its editor's popup", () => {
         pickerStore={store}
         replyRow={null}
         menuCopy={mentionProviderRegistry.menuCopy}
+        listboxId={null}
       />,
     );
     await flush();
@@ -385,6 +391,7 @@ describe("ComposerMenu and the software keyboard", () => {
           pickerStore={store}
           replyRow={null}
           menuCopy={mentionProviderRegistry.menuCopy}
+          listboxId={null}
         />,
       );
       await flush();

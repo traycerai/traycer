@@ -163,6 +163,7 @@ describe("<ComposerMenu /> disabled rows", () => {
           pickerStore={store}
           replyRow={null}
           menuCopy={mentionProviderRegistry.menuCopy}
+          listboxId={null}
         />,
       );
     });
@@ -183,6 +184,7 @@ describe("<ComposerMenu /> disabled rows", () => {
           pickerStore={store}
           replyRow={null}
           menuCopy={mentionProviderRegistry.menuCopy}
+          listboxId={null}
         />,
       );
     });
@@ -207,6 +209,7 @@ describe("<ComposerMenu /> disabled rows", () => {
           pickerStore={store}
           replyRow={null}
           menuCopy={mentionProviderRegistry.menuCopy}
+          listboxId={null}
         />,
       );
     });
@@ -229,6 +232,7 @@ describe("<ComposerMenu /> disabled rows", () => {
           pickerStore={store}
           replyRow={null}
           menuCopy={mentionProviderRegistry.menuCopy}
+          listboxId={null}
         />,
       );
     });
@@ -254,6 +258,7 @@ describe("<ComposerMenu /> trigger echo", () => {
           pickerStore={store}
           replyRow={null}
           menuCopy={mentionProviderRegistry.menuCopy}
+          listboxId={null}
         />,
       );
     });
@@ -277,6 +282,7 @@ describe("<ComposerMenu /> trigger echo", () => {
           pickerStore={store}
           replyRow={null}
           menuCopy={mentionProviderRegistry.menuCopy}
+          listboxId={null}
         />,
       );
     });
@@ -297,6 +303,7 @@ describe("<ComposerMenu /> trigger echo", () => {
           pickerStore={store}
           replyRow={null}
           menuCopy={mentionProviderRegistry.menuCopy}
+          listboxId={null}
         />,
       );
     });

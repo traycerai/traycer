@@ -205,9 +205,9 @@ function localFirstRevalidationQueryOptions(
 
 function registerCloudEpicTasksClientIfAvailable(
   hostId: string | null,
-  client: HostClient<HostRpcRegistry>,
+  client: HostClient<HostRpcRegistry> | null,
 ): void {
-  if (hostId === null) return;
+  if (hostId === null || client === null) return;
   registerCloudEpicTasksClient(hostId, client);
 }
 
@@ -255,9 +255,20 @@ export function useCloudEpicTasksQuery(
   request: ListCloudTasksRequest | undefined,
   options: { readonly enabled: boolean },
 ): CloudEpicTasksQueryResult {
+  return useCloudEpicTasksQueryForClient(useHostClient(), request, options);
+}
+
+/**
+ * {@link useCloudEpicTasksQuery} on `client`'s host: a tab reads through its
+ * own host's client (`useTabHostClient`), not the app's.
+ */
+export function useCloudEpicTasksQueryForClient(
+  client: HostClient<HostRpcRegistry> | null,
+  request: ListCloudTasksRequest | undefined,
+  options: { readonly enabled: boolean },
+): CloudEpicTasksQueryResult {
   const effectiveRequest = request ?? LIST_CLOUD_TASKS_REQUEST;
   const queryClient = useQueryClient();
-  const client = useHostClient();
   const readiness = useReactiveHostReadiness(client);
   const hostId = readiness.hostId;
   const authIdentity = useAuthIdentity();

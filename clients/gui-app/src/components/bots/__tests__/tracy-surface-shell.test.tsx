@@ -155,12 +155,10 @@ function useListScript(): ListScript {
 // cases do not drive: neither knows any task.
 vi.mock("@/hooks/epic/use-epic-get-task-contexts-query", () => {
   const tasksById = new Map<string, never>();
+  const read = () => ({ tasksById, isPending: false, error: null });
   return {
-    useEpicGetTaskContexts: () => ({
-      tasksById,
-      isPending: false,
-      error: null,
-    }),
+    useEpicGetTaskContexts: read,
+    useEpicGetTaskContextsForClient: read,
   };
 });
 vi.mock("@/hooks/epics/use-cloud-epic-tasks-query", async (importOriginal) => {
@@ -170,6 +168,7 @@ vi.mock("@/hooks/epics/use-cloud-epic-tasks-query", async (importOriginal) => {
       typeof import("@/hooks/epics/use-cloud-epic-tasks-query")
     >()),
     useCloudEpicTasksQuery: () => ({ tasks }),
+    useCloudEpicTasksQueryForClient: () => ({ tasks }),
   };
 });
 vi.mock("@/hooks/host/use-host-supports-method", () => ({

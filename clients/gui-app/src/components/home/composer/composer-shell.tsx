@@ -361,6 +361,7 @@ function ComposerAreaImpl({
         pickerStore={pickerStore}
         replyRow={focusRow ? sheetRef : null}
         menuCopy={mentionProviderRegistry.menuCopy}
+        listboxId={null}
       />
       {/* The dim behind the sheet. A sibling rather than the sheet's own
           pseudo-element: a negative-z child paints above its parent's

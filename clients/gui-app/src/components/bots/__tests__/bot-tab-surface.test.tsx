@@ -264,18 +264,23 @@ vi.mock("@/lib/tab-navigation", async (importOriginal) => {
 });
 // The tasks a bot's channel can name come from two host reads, scripted here:
 // the titles of the stream's tasks, and Home's task list.
-vi.mock("@/hooks/epic/use-epic-get-task-contexts-query", () => ({
-  useEpicGetTaskContexts: () => ({
+vi.mock("@/hooks/epic/use-epic-get-task-contexts-query", () => {
+  const read = () => ({
     tasksById: mocks.taskContexts,
     isPending: false,
     error: null,
-  }),
-}));
+  });
+  return {
+    useEpicGetTaskContexts: read,
+    useEpicGetTaskContextsForClient: read,
+  };
+});
 vi.mock("@/hooks/epics/use-cloud-epic-tasks-query", async (importOriginal) => ({
   ...(await importOriginal<
     typeof import("@/hooks/epics/use-cloud-epic-tasks-query")
   >()),
   useCloudEpicTasksQuery: () => ({ tasks: mocks.homeTasks }),
+  useCloudEpicTasksQueryForClient: () => ({ tasks: mocks.homeTasks }),
 }));
 vi.mock("@/hooks/host/use-host-supports-method", () => ({
   useHostMethodSupport: (hostId: string | null, method: string) => {

@@ -337,6 +337,7 @@ export function BotMessageComposer(props: {
           maxLength={MESSAGE_MAX}
           className={cn("min-h-10", box.input)}
           data-testid={`${testId}-input`}
+          {...mentions.inputAria}
           onSelect={(event) =>
             mentions.onCaret(event.currentTarget.selectionStart)
           }
