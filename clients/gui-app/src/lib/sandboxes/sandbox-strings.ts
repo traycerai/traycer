@@ -304,11 +304,20 @@ export function idleAndRestingLine(
   idleMinutes: number,
   destroyAfterRestingMinutes: number | null,
 ): string {
-  const idle = `Suspends after ${idleMinutes} idle min`;
+  const idle = idleLine(idleMinutes);
   // `0` is never, as the server spells it.
   return destroyAfterRestingMinutes === null || destroyAfterRestingMinutes === 0
     ? `${idle} · ${KEPT_UNTIL_YOU_DESTROY_IT}`
     : `${idle} · destroyed after ${restingPeriodLabel(destroyAfterRestingMinutes)}`;
+}
+
+/**
+ * `Suspends after 30 idle min`: the idle half alone, for a row whose resting
+ * policy says nothing about how long it is kept, as a withdrawn row's does
+ * not. The two share this clause so they cannot drift apart.
+ */
+export function idleLine(idleMinutes: number): string {
+  return `Suspends after ${idleMinutes} idle min`;
 }
 
 /** `7 resting days`, `12 resting hours`, `45 resting minutes`. */
@@ -682,9 +691,20 @@ export const FILES_NOT_RECOVERABLE =
   "Files on this sandbox cannot be recovered; published chats stay readable.";
 
 /** Keep's preview before it acts. */
+const KEEP_STOPS_DELETING = "Stops deleting itself when idle.";
+const KEEP_PAID_WHILE_AWAKE = "Paid by you while awake.";
+
 export function keepPreviewLine(restingDays: number, date: string): string {
-  return `Stops deleting itself when idle. Destroyed after ${restingDays} resting days instead, on ${date} if it rests from now. Paid by you while awake.`;
+  return `${KEEP_STOPS_DELETING} Destroyed after ${restingDays} resting days instead, on ${date} if it rests from now. ${KEEP_PAID_WHILE_AWAKE}`;
 }
+
+/**
+ * The Keep preview for a row whose withdrawal, not its resting policy,
+ * decides how long it is kept: the resting sentence is left out rather than
+ * naming a destroy the resting pass will not perform. Both forms are built
+ * from the same two clauses so they cannot drift.
+ */
+export const KEEP_PREVIEW_WITHDRAWN = `${KEEP_STOPS_DELETING} ${KEEP_PAID_WHILE_AWAKE}`;
 
 export function alreadyDestroyedLine(name: string): string {
   return `${name} was already destroyed`;
