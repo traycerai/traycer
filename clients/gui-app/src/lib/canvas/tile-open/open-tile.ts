@@ -21,11 +21,7 @@ import { useSettingsStore } from "@/stores/settings/settings-store";
 import type { PipOrigin } from "@/lib/browser-view/pip/pip-store";
 import { executeTileOpen } from "./execute-tile-open";
 import type { EpicCanvasState } from "@/stores/epics/canvas/types";
-import {
-  defaultMobileTileSlot,
-  type MobileTileOpenSlots,
-  type TileOpenIntent,
-} from "./intent";
+import type { MobileTileOpenSlots, TileOpenIntent } from "./intent";
 import type { MobileTileOpenTarget } from "./mobile-tile-open-target-context";
 import { resolveTileOpen } from "./resolve-tile-open";
 import { markTileOpenRequested } from "./tile-open-provenance";
@@ -73,13 +69,12 @@ export const MANUAL_TILE_OPEN: OpenTileOptions = {
  * The slots, where two tiles fit, of the task on screen: an open into a task
  * behind another tab has to bring its tile forward there, and has no pair on
  * screen to keep. A surface's target speaks for its own task's canvas only;
- * an open from anywhere else (the task's list, a palette) lands where the
- * tile's kind says.
+ * an open from anywhere else (the phone's sheet, a palette) takes the first
+ * tile, as it always has.
  */
 function mobileSlotsForOpen(
   canvas: EpicCanvasState,
   tabId: string,
-  intent: TileOpenIntent,
   mobileTarget: MobileTileOpenTarget | null,
 ): MobileTileOpenSlots | null {
   const store = useEpicCanvasStore.getState();
@@ -91,10 +86,7 @@ function mobileSlotsForOpen(
     primary,
   );
   return {
-    target:
-      mobileTarget?.tabId === tabId
-        ? mobileTarget.slot
-        : defaultMobileTileSlot(intent.node),
+    target: mobileTarget?.tabId === tabId ? mobileTarget.slot : "primary",
     primaryInstanceId: primary?.ref.instanceId ?? null,
     secondaryInstanceId: secondary?.ref.instanceId ?? null,
   };
@@ -126,12 +118,7 @@ export function openTileWithNavigation(
     // Imperative reads: a placement decision is command-time, so it must not
     // pin this call to a viewport snapshot.
     singleTileViewport: isMobileViewport(),
-    mobileSlots: mobileSlotsForOpen(
-      canvas,
-      tabId,
-      intent,
-      options.mobileTarget,
-    ),
+    mobileSlots: mobileSlotsForOpen(canvas, tabId, options.mobileTarget),
   });
   // And the tile the open actually LANDS ON, which for a dedupe hit is not the
   // one the intent named. Every caller mints a fresh instance id per intent,
