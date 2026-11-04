@@ -1,7 +1,5 @@
-import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { userEvent } from "@testing-library/user-event";
-import { useState, type ReactNode } from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { pinShortDateLocale } from "@/components/chat-search/__tests__/pin-short-date-locale";
 import { CHAT_SEARCH_MAX_QUERY_CHARS } from "@traycer/protocol/host/chat-search/schemas";
@@ -19,14 +17,6 @@ import type {
 } from "@/hooks/chats/use-chat-search-query";
 import type { ChatSearchMergedResults } from "@/lib/chat-search/chat-search-results";
 import { useChatSearchStore } from "@/stores/chat-search/chat-search-store";
-
-// The coverage line reads the query cache, so the panel renders inside a client.
-function QueryWrapper(props: { readonly children: ReactNode }) {
-  const [client] = useState(() => new QueryClient());
-  return (
-    <QueryClientProvider client={client}>{props.children}</QueryClientProvider>
-  );
-}
 
 const navigateMock = vi.hoisted(() => vi.fn());
 vi.mock("@tanstack/react-router", () => ({
@@ -153,7 +143,6 @@ function results(
     messageMatches: [],
     chatNextCursor: null,
     messageNextCursor: null,
-    indexState: "complete",
     ...input,
   };
 }
@@ -197,9 +186,7 @@ describe("ChatSearchPanel: host reachability", () => {
     setReachable(false);
 
     const user = userEvent.setup();
-    const { rerender } = render(<ChatSearchPanel onClose={vi.fn()} />, {
-      wrapper: QueryWrapper,
-    });
+    const { rerender } = render(<ChatSearchPanel onClose={vi.fn()} />);
 
     await user.type(
       screen.getByRole("searchbox", { name: "Search chats" }),
@@ -225,7 +212,7 @@ describe("ChatSearchPanel: query cap", () => {
   it("caps the request query at CHAT_SEARCH_MAX_QUERY_CHARS", () => {
     useChatSearchResultsMock.mockReturnValue(idleStatus());
 
-    render(<ChatSearchPanel onClose={vi.fn()} />, { wrapper: QueryWrapper });
+    render(<ChatSearchPanel onClose={vi.fn()} />);
 
     const input = screen.getByRole("searchbox", { name: "Search chats" });
     expect(input.getAttribute("maxlength")).toBe(
@@ -261,7 +248,7 @@ describe("ChatSearchPanel: results view keyed by request", () => {
     });
 
     const user = userEvent.setup();
-    render(<ChatSearchPanel onClose={vi.fn()} />, { wrapper: QueryWrapper });
+    render(<ChatSearchPanel onClose={vi.fn()} />);
 
     const toggle = screen.getByRole("button", { name: "3 matches" });
     await user.click(toggle);
@@ -280,7 +267,7 @@ describe("ChatSearchPanel: count line and filter vocabulary", () => {
     // Always mounted, so it exists before there is anything to count.
     const line = screen
       .getAllByRole("status")
-      .find((element) => element.classList.contains("tabular-nums"));
+      .find((element) => element.classList.contains("sr-only"));
     if (line === undefined) throw new Error("expected the count line");
     return line;
   }
@@ -288,7 +275,7 @@ describe("ChatSearchPanel: count line and filter vocabulary", () => {
   it("is mounted and empty before a search has run", () => {
     useChatSearchResultsMock.mockReturnValue(idleStatus());
 
-    render(<ChatSearchPanel onClose={vi.fn()} />, { wrapper: QueryWrapper });
+    render(<ChatSearchPanel onClose={vi.fn()} />);
 
     expect(countLine().textContent).toBe("");
   });
@@ -296,7 +283,7 @@ describe("ChatSearchPanel: count line and filter vocabulary", () => {
   it("says the search is running while it loads", () => {
     useChatSearchResultsMock.mockReturnValue({ kind: "loading" });
 
-    render(<ChatSearchPanel onClose={vi.fn()} />, { wrapper: QueryWrapper });
+    render(<ChatSearchPanel onClose={vi.fn()} />);
 
     expect(countLine().textContent).toBe("Searching chats…");
   });
@@ -315,7 +302,7 @@ describe("ChatSearchPanel: count line and filter vocabulary", () => {
     });
 
     const user = userEvent.setup();
-    render(<ChatSearchPanel onClose={vi.fn()} />, { wrapper: QueryWrapper });
+    render(<ChatSearchPanel onClose={vi.fn()} />);
     // Message search starts at two characters, and only then is it counted.
     await user.type(
       screen.getByRole("searchbox", { name: "Search chats" }),
@@ -336,7 +323,7 @@ describe("ChatSearchPanel: count line and filter vocabulary", () => {
     });
 
     const user = userEvent.setup();
-    render(<ChatSearchPanel onClose={vi.fn()} />, { wrapper: QueryWrapper });
+    render(<ChatSearchPanel onClose={vi.fn()} />);
     const input = screen.getByRole("searchbox", { name: "Search chats" });
     const line = countLine();
 
@@ -358,16 +345,14 @@ describe("ChatSearchPanel: count line and filter vocabulary", () => {
   it("labels the message filter with the same role words the rows use", () => {
     useChatSearchResultsMock.mockReturnValue(idleStatus());
     useChatSearchStore.getState().setRoleFilter("human");
-    const { unmount } = render(<ChatSearchPanel onClose={vi.fn()} />, {
-      wrapper: QueryWrapper,
-    });
+    const { unmount } = render(<ChatSearchPanel onClose={vi.fn()} />);
     expect(
       screen.getByRole("combobox", { name: "Message filter" }).textContent,
     ).toBe("You");
     unmount();
 
     useChatSearchStore.getState().setRoleFilter("assistant");
-    render(<ChatSearchPanel onClose={vi.fn()} />, { wrapper: QueryWrapper });
+    render(<ChatSearchPanel onClose={vi.fn()} />);
     expect(
       screen.getByRole("combobox", { name: "Message filter" }).textContent,
     ).toBe("Agent reply");
@@ -450,9 +435,7 @@ describe("ChatSearchPanel: an expanded message hit", () => {
 
   /** Renders the panel with a real query typed, which the expansion needs. */
   function renderSearching(onClose: () => void) {
-    const view = render(<ChatSearchPanel onClose={onClose} />, {
-      wrapper: QueryWrapper,
-    });
+    const view = render(<ChatSearchPanel onClose={onClose} />);
     fireEvent.change(screen.getByRole("searchbox", { name: "Search chats" }), {
       target: { value: "needle" },
     });
