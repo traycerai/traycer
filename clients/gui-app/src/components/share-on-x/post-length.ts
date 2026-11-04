@@ -1,3 +1,5 @@
+import { LINK_TOP_LEVEL_DOMAINS } from "@/components/share-on-x/link-top-level-domains";
+
 /** X's limit for a post from a standard account. */
 export const X_POST_LIMIT = 280;
 
@@ -5,11 +7,12 @@ export const X_POST_LIMIT = 280;
 const LINK_WEIGHT = 23;
 
 /**
- * Links X turns into t.co links: explicit http(s) URLs, and bare domains on
- * the top-level domains our ready-made lines and most edits use.
+ * What X may turn into a t.co link: an explicit http(s) URL, or a bare domain
+ * (its last label captured), which is a link only when that label is a real
+ * top-level domain.
  */
 const LINK_PATTERN =
-  /\bhttps?:\/\/[^\s]+|\b(?:[a-z0-9-]+\.)+(?:ai|app|co|com|dev|io|net|org|sh)\b(?:\/[^\s]*)?/giu;
+  /\bhttps?:\/\/[^\s]+|\b(?:[a-z0-9-]+\.)+([a-z]{2,63})\b(?:\/[^\s]*)?/giu;
 
 /**
  * The code point ranges X weighs as one character; everything else (CJK,
@@ -51,10 +54,18 @@ function textWeight(text: string): number {
 /** How long X will count `text` as, out of {@link X_POST_LIMIT}. */
 export function xPostLength(text: string): number {
   let links = 0;
-  const rest = text.normalize("NFC").replace(LINK_PATTERN, () => {
-    links += 1;
-    return "";
-  });
+  const rest = text
+    .normalize("NFC")
+    .replace(LINK_PATTERN, (match, topLevel: string | undefined) => {
+      if (
+        topLevel !== undefined &&
+        !LINK_TOP_LEVEL_DOMAINS.has(topLevel.toLowerCase())
+      ) {
+        return match;
+      }
+      links += 1;
+      return "";
+    });
   let weight = links * LINK_WEIGHT;
   const plain = rest.replace(EMOJI_PATTERN, (emoji) => {
     // A lone code point keeps its own weight, so a symbol such as "©"

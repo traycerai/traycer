@@ -19,6 +19,14 @@ describe("xPostLength", () => {
     ).toBe(23);
   });
 
+  it("counts a bare domain on any real top-level domain as a link", () => {
+    expect(xPostLength("mit.edu nasa.gov bbc.co.uk")).toBe(23 * 3 + 2);
+  });
+
+  it("leaves a dotted word on no real top-level domain as text", () => {
+    expect(xPostLength("index.tsx")).toBe(9);
+  });
+
   it("adds the surrounding text to the link weight", () => {
     expect(xPostLength("try traycer.ai now")).toBe(4 + 23 + 4);
   });
