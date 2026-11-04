@@ -10,8 +10,11 @@ export interface OutputVoice {
 export interface OutputGain {
   /** Moves linearly from the current value to `target` over `seconds`. */
   ramp(target: number, seconds: number): void;
-  /** A gain that feeds this one. */
-  createChild(initial: number): OutputGain;
+  /**
+   * A gain that feeds this one, through a fixed stereo position from -1 (left)
+   * to 1 (right); null feeds it straight, in the centre.
+   */
+  createChild(initial: number, pan: number | null): OutputGain;
   /** Starts `buffer` at clock time `when`, fading in, feeding this gain. */
   play(buffer: AudioBuffer, when: number, fadeInSeconds: number): OutputVoice;
 }
@@ -80,8 +83,12 @@ class WebAudioGain implements OutputGain {
     rampParam(this.node.gain, this.context.currentTime, target, seconds);
   }
 
-  createChild(initial: number): OutputGain {
-    return new WebAudioGain(this.context, this.node, initial);
+  createChild(initial: number, pan: number | null): OutputGain {
+    if (pan === null) return new WebAudioGain(this.context, this.node, initial);
+    const panner = this.context.createStereoPanner();
+    panner.pan.value = pan;
+    panner.connect(this.node);
+    return new WebAudioGain(this.context, panner, initial);
   }
 
   play(buffer: AudioBuffer, when: number, fadeInSeconds: number): OutputVoice {
