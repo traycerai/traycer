@@ -22,6 +22,9 @@ const RECOVERED: ArtifactSyncStatus = {
   label: "Artifacts synced",
 };
 
+/** Every warning reads the same in the pill; what is wrong is in the sentence. */
+const SYNCING_LABEL = "Syncing…";
+
 /** How long "Artifacts synced" stays up after a warning clears. */
 export const ARTIFACT_SYNC_RECOVERED_MS = 5_000;
 
@@ -42,21 +45,21 @@ function warningFor(
   if (waiting === 0) {
     return {
       kind: "warning",
-      label: "Artifacts not syncing",
-      sentence: `Your changes are saved on this computer. Your other devices and teammates won’t see them yet.${retry}`,
+      label: SYNCING_LABEL,
+      sentence: `Artifacts not syncing. Your changes are saved on this computer. Your other devices and teammates won’t see them yet.${retry}`,
     };
   }
   if (waiting === 1) {
     return {
       kind: "warning",
-      label: "1 new artifact waiting",
-      sentence: `It’s saved on this computer and will appear here when sync is back.${retry}`,
+      label: SYNCING_LABEL,
+      sentence: `1 new artifact waiting. It’s saved on this computer and will appear here when sync is back.${retry}`,
     };
   }
   return {
     kind: "warning",
-    label: `${String(waiting)} new artifacts waiting`,
-    sentence: `They’re saved on this computer and will appear here when sync is back.${retry}`,
+    label: SYNCING_LABEL,
+    sentence: `${String(waiting)} new artifacts waiting. They’re saved on this computer and will appear here when sync is back.${retry}`,
   };
 }
 

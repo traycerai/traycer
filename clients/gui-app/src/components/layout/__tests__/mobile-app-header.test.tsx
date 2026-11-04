@@ -268,29 +268,21 @@ describe("MobileAppHeader", () => {
     act(() => {
       vi.advanceTimersByTime(15_000);
     });
-    fireEvent.click(
-      screen.getByRole("button", { name: "Artifacts not syncing" }),
-    );
+    fireEvent.click(screen.getByRole("button", { name: "Syncing…" }));
     expect(screen.getByRole("dialog")).not.toBeNull();
     act(() => {
       presentEpicTab("t2", "e2", "Two");
     });
     expect(screen.queryByRole("dialog")).toBeNull();
-    expect(
-      screen.queryByRole("button", { name: "Artifacts not syncing" }),
-    ).toBeNull();
+    expect(screen.queryByRole("button", { name: "Syncing…" })).toBeNull();
     act(() => {
       vi.advanceTimersByTime(14_999);
     });
-    expect(
-      screen.queryByRole("button", { name: "Artifacts not syncing" }),
-    ).toBeNull();
+    expect(screen.queryByRole("button", { name: "Syncing…" })).toBeNull();
     act(() => {
       vi.advanceTimersByTime(1);
     });
-    expect(
-      screen.getByRole("button", { name: "Artifacts not syncing" }),
-    ).not.toBeNull();
+    expect(screen.getByRole("button", { name: "Syncing…" })).not.toBeNull();
   });
 
   it("renders the hamburger menu trigger", async () => {

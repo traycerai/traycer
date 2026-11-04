@@ -19,9 +19,8 @@ import {
   SAMPLE_SIDEBAR_ARTIFACTS,
 } from "@/components/sample-workspace/sample-workspace-scene";
 import {
-  DEFAULT_ARRANGEMENT,
   insertRailDivider,
-  stackRailPanels,
+  unstackRail,
 } from "@/lib/layout/layout-arrangement";
 import { leftPanelIdForRailRegion } from "@/lib/layout/rail";
 import {
@@ -79,13 +78,12 @@ function addDivider(index: number): void {
     .setArrangement(insertRailDivider(arrangement, index));
 }
 
-/** Agents stacked on Artifacts, for the one-icon-per-stack case (G3). */
-function stackAgentsWithArtifacts(): void {
+/** The rail with its one shipped stack taken apart, for a flat-rail case. */
+function unstackShippedPair(): void {
+  const { arrangement } = useLayoutStore.getState();
   useLayoutStore
     .getState()
-    .setArrangement(
-      stackRailPanels(DEFAULT_ARRANGEMENT, "artifacts", "chats", "panel"),
-    );
+    .setArrangement(unstackRail(arrangement, "stack:railAgents+railArtifacts"));
 }
 
 function hidePanel(railRegion: "railBrowsers"): void {
@@ -101,18 +99,10 @@ describe("the sample sidebar's icon rail", () => {
   it("is nine icons and nothing else by default (L-155, L-166, L-181)", () => {
     render(<SampleWorkspaceSidebar />);
 
-    // Nine panels, nine icons: the shipped rail holds no stack and no divider.
-    expect(railEntries()).toHaveLength(9);
-    expect(screen.queryAllByTestId("epic-rail-stack")).toHaveLength(0);
-    expect(toolbar().querySelectorAll("[data-layout-region]")).toHaveLength(9);
-    expect(screen.queryAllByTestId("epic-rail-divider")).toHaveLength(0);
-  });
-
-  it("draws a stacked pair as ONE group icon (G3)", () => {
-    stackAgentsWithArtifacts();
-    render(<SampleWorkspaceSidebar />);
-
-    expect(railEntries()).toHaveLength(8);
+    const nodes = railEntries();
+    // Eight things in the toolbar, because the shipped stack draws as ONE
+    // group icon (G3) - nine panels all the same.
+    expect(nodes).toHaveLength(8);
     expect(screen.getAllByTestId("epic-rail-stack")).toHaveLength(1);
     expect(
       screen
@@ -120,9 +110,11 @@ describe("the sample sidebar's icon rail", () => {
         .querySelectorAll("[data-layout-region]"),
     ).toHaveLength(1);
     expect(toolbar().querySelectorAll("[data-layout-region]")).toHaveLength(8);
+    expect(screen.queryAllByTestId("epic-rail-divider")).toHaveLength(0);
   });
 
   it("draws a divider the user added as a gap at rest, and its panels in order", () => {
+    unstackShippedPair();
     addDivider(2);
     render(<SampleWorkspaceSidebar />);
 
@@ -268,7 +260,7 @@ describe("the sample sidebar's body", () => {
     expect(screen.getByLabelText("Comments")).not.toBeNull();
   });
 
-  it("shows the Agents panel for the default selection", () => {
+  it("shows the Agents+Artifacts stack for the default selection, agents first", () => {
     render(<SampleWorkspaceSidebar />);
 
     const body = within(sidebarBody());
@@ -340,8 +332,7 @@ describe("the sample sidebar's body", () => {
     }
   });
 
-  it("shows both members of a stack when the stacked member is selected", () => {
-    stackAgentsWithArtifacts();
+  it("shows the Agents+Artifacts stack when the stacked member is selected", () => {
     render(<SampleWorkspaceSidebar />);
 
     act(() => {
