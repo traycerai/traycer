@@ -1,4 +1,5 @@
 import {
+  useContext,
   useEffect,
   useMemo,
   useRef,
@@ -7,8 +8,17 @@ import {
   type ReactNode,
   type RefObject,
 } from "react";
-import { PersonAvatar } from "@/components/bots/bot-avatars";
-import { useBotIdentity } from "@/components/bots/bot-identity-context";
+import { Layers } from "lucide-react";
+import { NamedBotAvatar, PersonAvatar } from "@/components/bots/bot-avatars";
+import {
+  useBotIdentity,
+  type BotIdentity,
+} from "@/components/bots/bot-identity-context";
+import {
+  BotMentionsContext,
+  type BotMentionDirectory,
+  type BotMentionTarget,
+} from "@/components/bots/bot-mentions-context";
 import {
   activeMentionQuery,
   matchMentionCandidates,
@@ -18,6 +28,7 @@ import {
   spliceMentionPicks,
   type BotMentionCandidate,
   type BotMentionEdit,
+  type BotMentionKind,
   type BotMentionTextRange,
   type BotMentionPick,
 } from "@/lib/bots/bot-mentions";
@@ -27,12 +38,12 @@ import { cn } from "@/lib/utils";
 const MATCHES_MAX = 8;
 const NO_CANDIDATES: ReadonlyArray<BotMentionCandidate> = [];
 
-/** What a message box needs to complete `@` with the environment's members. */
+/** What a message box needs to complete `@` with what the environment can name. */
 export interface BotMentionCompletion {
   /** The list under an `@` being typed; `null` while none shows. */
   readonly list: ReactNode;
   readonly listOpen: boolean;
-  /** The id of the member the list has highlighted; `null` while none shows. */
+  /** The id of the option the list has highlighted; `null` while none shows. */
   readonly activeOptionId: string | null;
   /** Handles a key the list takes (moving, picking, closing); `true` when it did. */
   readonly onKeyDown: (event: KeyboardEvent<HTMLTextAreaElement>) => boolean;
@@ -43,19 +54,21 @@ export interface BotMentionCompletion {
    * `input` is the box after it.
    */
   readonly onInput: (input: HTMLTextAreaElement) => void;
-  /** The text as sent: each completed name as its member's token. */
+  /** The text as sent: each completed name as its token. */
   readonly toWire: (text: string) => string;
-  /** A sent text as the box shows it: each member's token as their name. */
+  /** A sent text as the box shows it: each token the box can name as its name. */
   readonly toDisplay: (text: string) => string;
 }
 
 /**
- * `@` completion for a bot channel's box (decision 137): the current members
- * of a team's environment other than the viewer, by name and picture, as the
- * team's member directory lists them. A personal environment's bot has no
- * one else to name, and a member with no name cannot be named. Picking one
- * writes `@Name` in the box, which the send turns into that member's token,
- * even where another member has the same name.
+ * `@` completion for a bot channel's box (decisions 137, 177), one list of
+ * what the bot's own environment can name: the current members of a team's
+ * environment other than the viewer, by name and picture, as the team's
+ * member directory lists them; the environment's other bots, by their
+ * picture; and its tasks (`BotMentionsContext`). A personal environment's bot
+ * has no one else to name, and a member with no name cannot be named.
+ * Picking one writes `@Name` in the box, which the send turns into its
+ * token, even where another has the same name.
  */
 export function useBotMentionCompletion(args: {
   readonly text: string;
@@ -64,26 +77,16 @@ export function useBotMentionCompletion(args: {
   readonly listId: string;
 }): BotMentionCompletion {
   const { text, setText, inputRef, listId } = args;
-  const owner = useBotIdentity()?.owner ?? null;
+  const identity = useBotIdentity();
+  const directory = useContext(BotMentionsContext);
   const viewerUserId = useAuthStore((s) => s.profile?.userId ?? null);
-  const members = owner?.kind === "team" ? owner.members : null;
-  const everyone = useMemo((): ReadonlyArray<BotMentionCandidate> => {
-    if (members === null) return NO_CANDIDATES;
-    return members.flatMap((member) =>
-      member.displayName === null
-        ? []
-        : [
-            {
-              userId: member.userId,
-              name: member.displayName,
-              avatarUrl: member.avatarUrl,
-            },
-          ],
-    );
-  }, [members]);
+  const everyone = useMemo(
+    () => mentionCandidatesOf(identity, directory),
+    [directory, identity],
+  );
   const candidates = useMemo(
-    () => everyone.filter((member) => member.userId !== viewerUserId),
-    [everyone, viewerUserId],
+    () => offeredCandidates(everyone, identity, viewerUserId),
+    [everyone, identity, viewerUserId],
   );
   const [caret, setCaret] = useState(0);
   const [highlight, setHighlight] = useState(0);
@@ -91,9 +94,9 @@ export function useBotMentionCompletion(args: {
   const [dismissedAt, setDismissedAt] = useState<number | null>(null);
   // Where the caret goes once a pick is in the box.
   const placeCaret = useRef<number | null>(null);
-  // The members picked into the box, by where each `@Name` sits in the text
-  // they were read against: a name two members share is sent as the one
-  // picked (`mentionsToWire`). Each change of the text moves them with it,
+  // What was picked into the box, by where each `@Name` sits in the text it
+  // was read against: a name two share is sent as the one picked
+  // (`mentionsToWire`). Each change of the text moves them with it,
   // and drops the ones it touched.
   const [anchored, setAnchored] = useState<{
     readonly text: string;
@@ -165,7 +168,8 @@ export function useBotMentionCompletion(args: {
         {
           start: mention.start,
           end: mention.start + 1 + candidate.name.length,
-          userId: candidate.userId,
+          kind: candidate.kind,
+          id: candidate.id,
         },
       ],
     });
@@ -203,18 +207,19 @@ export function useBotMentionCompletion(args: {
     <ul
       id={listId}
       role="listbox"
-      aria-label="Members"
+      aria-label="Mentions"
       data-testid="bot-mention-list"
       className="absolute inset-x-2 bottom-full z-20 mb-1 flex max-w-xs flex-col gap-0.5 rounded-md border border-border bg-popover p-1 shadow-md"
     >
       {matches.map((candidate, index) => (
         <li
-          key={candidate.userId}
+          key={`${candidate.kind}:${candidate.id}`}
           id={optionId(listId, index)}
           role="option"
           aria-selected={index === active}
           data-testid="bot-mention-option"
-          data-user-id={candidate.userId}
+          data-kind={candidate.kind}
+          data-id={candidate.id}
           // Picked on press, before the box loses focus.
           onMouseDown={(event) => {
             event.preventDefault();
@@ -225,20 +230,16 @@ export function useBotMentionCompletion(args: {
             index === active && "bg-foreground/8",
           )}
         >
-          <PersonAvatar
-            userId={candidate.userId}
-            name={candidate.name}
-            avatarUrl={candidate.avatarUrl}
-            size="xs"
-          />
+          {mentionGlyph(candidate)}
           <span className="truncate">{candidate.name}</span>
         </li>
       ))}
     </ul>
   ) : null;
 
-  const nameOf = (userId: string): string | null =>
-    everyone.find((member) => member.userId === userId)?.name ?? null;
+  const nameOf = (kind: BotMentionKind, id: string): string | null =>
+    everyone.find((candidate) => candidate.kind === kind && candidate.id === id)
+      ?.name ?? null;
 
   return {
     list,
@@ -278,13 +279,87 @@ export function useBotMentionCompletion(args: {
       return mentionsToWire(sent, everyone, picks);
     },
     // A sent text's tokens are its picks again, so an edit sends each
-    // mention to the member it named.
+    // mention to what it named.
     toDisplay: (sent) => {
       const display = mentionsToDisplay(sent, nameOf);
       setAnchored(display);
       return display.text;
     },
   };
+}
+
+/**
+ * Everything the box can name, in the list's order: the members with a
+ * name, then the bots, then the tasks.
+ */
+function mentionCandidatesOf(
+  identity: BotIdentity | null,
+  directory: BotMentionDirectory | null,
+): ReadonlyArray<BotMentionCandidate> {
+  const owner = identity?.owner ?? null;
+  const members = owner?.kind === "team" ? owner.members : null;
+  const people: BotMentionCandidate[] = (members ?? []).flatMap((member) =>
+    member.displayName === null
+      ? []
+      : [
+          {
+            kind: "person" as const,
+            id: member.userId,
+            name: member.displayName,
+            avatarUrl: member.avatarUrl,
+          },
+        ],
+  );
+  const named = (
+    kind: BotMentionKind,
+    targets: ReadonlyArray<BotMentionTarget>,
+  ): BotMentionCandidate[] =>
+    targets.map((target) => ({ kind, ...target, avatarUrl: null }));
+  const all = [
+    ...people,
+    ...named("bot", directory?.bots ?? []),
+    ...named("task", directory?.tasks ?? []),
+  ];
+  return all.length === 0 ? NO_CANDIDATES : all;
+}
+
+/** What the list offers: not the viewer, nor the bot whose box this is. */
+function offeredCandidates(
+  everyone: ReadonlyArray<BotMentionCandidate>,
+  identity: BotIdentity | null,
+  viewerUserId: string | null,
+): ReadonlyArray<BotMentionCandidate> {
+  const ownBotId = identity?.botId ?? null;
+  return everyone.filter(
+    (candidate) =>
+      !(candidate.kind === "person" && candidate.id === viewerUserId) &&
+      !(candidate.kind === "bot" && candidate.id === ownBotId),
+  );
+}
+
+/** A row's kind at a glance: the person's picture, the bot's, or the task icon. */
+function mentionGlyph(candidate: BotMentionCandidate): ReactNode {
+  switch (candidate.kind) {
+    case "person":
+      return (
+        <PersonAvatar
+          userId={candidate.id}
+          name={candidate.name}
+          avatarUrl={candidate.avatarUrl}
+          size="xs"
+        />
+      );
+    case "bot":
+      return <NamedBotAvatar botId={candidate.id} size="xs" />;
+    case "task":
+      return (
+        <Layers
+          aria-hidden="true"
+          data-testid="bot-mention-task-glyph"
+          className="size-4 shrink-0 text-muted-foreground"
+        />
+      );
+  }
 }
 
 function optionId(listId: string, index: number): string {

@@ -1,27 +1,179 @@
 /**
  * A bot channel's message text through the REAL markdown path
  * (`AgentReferenceMarkdown` over `TraycerMarkdown`): a `<@userId>` token is
- * the member's chip where `BotMentionsContext` names them, and the token as
- * written otherwise.
+ * the member's chip where `BotMentionsContext` names them, `<#botId>` the
+ * bot's chip that opens its channel, and `<~epicId>` the task's chip that
+ * opens the task, titled from the directory or by a real
+ * `epic.getTaskContexts` read answered by a stub host. A token nothing names
+ * stays as written, or says the bot or task is removed once the read
+ * answered without it.
  */
-import { cleanup, render, screen } from "@testing-library/react";
-import { afterEach, describe, expect, it } from "vitest";
+import type { ReactNode } from "react";
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import {
+  cleanup,
+  fireEvent,
+  render,
+  screen,
+  waitFor,
+} from "@testing-library/react";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type {
+  GetTaskContextsResponse,
+  ListTaskLight,
+} from "@traycer/protocol/host/epic/unary-schemas";
 import {
   BotMentionsContext,
+  type BotMentionDirectory,
   type BotMentioned,
 } from "@/components/bots/bot-mentions-context";
 import { AgentReferenceMarkdown } from "@/components/chat/segments/agent-reference-markdown";
+import { openEpicFromListIntent } from "@/lib/tab-navigation/intents";
+import { useAuthStore } from "@/stores/auth/auth-store";
 
 const VIEWER = "0f1e2d3c-4b5a-6978-8796-a5b4c3d2e1f0";
 const ANN = "user-ann";
 const STRANGER = "user-stranger";
+const TRIAGE_BOT = "bot_01HZY8V6K3Q9W2E4R5T6Y7V8M1";
+const REMOVED_BOT = "bot_01HZY8V6K3Q9W2E4R5T6Y7V8M2";
+const RELEASE_TASK = "6f1c2a7e-3b4d-4e5f-8a9b-0c1d2e3f4a5b";
+const READ_TASK = "0b9d7c1e-2a3f-4b5c-8d6e-7f8091a2b3c4";
+const GONE_TASK = "9a8b7c6d-5e4f-4a3b-9c2d-1e0f9a8b7c6d";
+const USER_ID = "user-test";
 
 const MEMBERS: Record<string, BotMentioned> = {
   [VIEWER]: { name: "Olive", self: true },
   [ANN]: { name: "Ann", self: false },
 };
 
-afterEach(cleanup);
+const mocks = vi.hoisted(() => {
+  const request =
+    vi.fn<(method: string, params: unknown) => Promise<unknown>>();
+  return {
+    request,
+    client: {
+      getActiveHostId: () => "host-test",
+      getRequestContextUserId: () => "user-test",
+      onChange: () => () => undefined,
+      request,
+      requestWithSignal: request,
+    },
+    navigate: vi.fn<() => void>(),
+    openBotChannel:
+      vi.fn<(navigate: unknown, botId: string, options: unknown) => boolean>(),
+    navigateToTabIntent:
+      vi.fn<(navigate: unknown, intent: unknown, options: unknown) => void>(),
+  };
+});
+
+vi.mock("@tanstack/react-router", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@tanstack/react-router")>()),
+  useNavigate: () => mocks.navigate,
+}));
+vi.mock("@/lib/host", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/lib/host")>()),
+  useHostClient: () => mocks.client,
+}));
+vi.mock("@/hooks/host/use-reactive-host-readiness", () => ({
+  useReactiveHostReadiness: () => ({
+    hostId: "host-test",
+    isReady: true,
+    hasRpcEndpoint: true,
+    canExecute: true,
+    requestContextUserId: "user-test",
+  }),
+}));
+vi.mock("@/hooks/host/use-connectable-host-ids", () => ({
+  useConnectableHostIds: () => ({ resolved: false, hostIds: [] }),
+}));
+vi.mock("@/lib/bots/open-bot-channel", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/lib/bots/open-bot-channel")>()),
+  openBotChannel: mocks.openBotChannel,
+}));
+vi.mock("@/lib/tab-navigation", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/lib/tab-navigation")>()),
+  navigateToTabIntent: mocks.navigateToTabIntent,
+}));
+
+let queryClient: QueryClient;
+
+beforeEach(() => {
+  queryClient = new QueryClient({
+    defaultOptions: { queries: { retry: false } },
+  });
+  useAuthStore
+    .getState()
+    .setSignedIn(
+      { userId: USER_ID, userName: "U", email: "u@example.com" },
+      { userId: USER_ID, username: "U" },
+      [],
+    );
+});
+
+afterEach(() => {
+  cleanup();
+  vi.clearAllMocks();
+  mocks.request.mockReset();
+  useAuthStore.getState().setSignedOut();
+});
+
+function taskLight(id: string, title: string): ListTaskLight {
+  return {
+    epic: {
+      light: {
+        id,
+        title,
+        initialUserPrompt: "",
+        ticketCount: 0,
+        specCount: 0,
+        storyCount: 0,
+        reviewCount: 0,
+        status: "draft",
+        createdAt: 0,
+        updatedAt: 0,
+        createdBy: USER_ID,
+        version: "1.0.0",
+      },
+      permission: null,
+      repos: [],
+      workspaces: [],
+      roomInfo: null,
+    },
+    pinned: false,
+  };
+}
+
+/** The host names each asked id from `titles`, and finds no other. */
+function answerLookups(titles: Readonly<Record<string, string>>): void {
+  mocks.request.mockImplementation((method, params) => {
+    if (method !== "epic.getTaskContexts") {
+      return Promise.reject(new Error(`unexpected method: ${method}`));
+    }
+    const { taskIds } = params as { readonly taskIds: readonly string[] };
+    const tasks: GetTaskContextsResponse["tasks"] = {};
+    for (const id of taskIds) {
+      tasks[id] = Object.hasOwn(titles, id)
+        ? { status: "found", task: taskLight(id, titles[id]) }
+        : { status: "confirmed-absent" };
+    }
+    const response: GetTaskContextsResponse = { tasks };
+    return Promise.resolve(response);
+  });
+}
+
+function askedTaskIds(): ReadonlyArray<string> {
+  return mocks.request.mock.calls.flatMap(([method, params]) =>
+    method === "epic.getTaskContexts"
+      ? (params as { readonly taskIds: readonly string[] }).taskIds
+      : [],
+  );
+}
+
+const DIRECTORY: BotMentionDirectory = {
+  person: (userId) => (Object.hasOwn(MEMBERS, userId) ? MEMBERS[userId] : null),
+  bots: [{ id: TRIAGE_BOT, name: "Triage" }],
+  tasks: [{ id: RELEASE_TASK, name: "Release notes" }],
+};
 
 function body(markdown: string) {
   return (
@@ -35,22 +187,28 @@ function body(markdown: string) {
   );
 }
 
-function renderIn(markdown: string): HTMLElement {
+function Providers(props: { readonly children: ReactNode }): ReactNode {
+  return (
+    <QueryClientProvider client={queryClient}>
+      {props.children}
+    </QueryClientProvider>
+  );
+}
+
+function renderIn(
+  markdown: string,
+  directory: BotMentionDirectory,
+): HTMLElement {
   const { container } = render(
-    <BotMentionsContext
-      value={(userId) =>
-        Object.hasOwn(MEMBERS, userId) ? MEMBERS[userId] : null
-      }
-    >
-      {body(markdown)}
-    </BotMentionsContext>,
+    <BotMentionsContext value={directory}>{body(markdown)}</BotMentionsContext>,
+    { wrapper: Providers },
   );
   return container;
 }
 
 describe("a bot message's mentions", () => {
   it("draws a member's token as their chip, marked for the viewer", () => {
-    renderIn(`<@${ANN}> and <@${VIEWER}> please look`);
+    renderIn(`<@${ANN}> and <@${VIEWER}> please look`, DIRECTORY);
 
     const chips = screen.getAllByTestId("bot-mention");
     expect(chips.map((chip) => chip.textContent)).toEqual(["@Ann", "@Olive"]);
@@ -61,16 +219,140 @@ describe("a bot message's mentions", () => {
   });
 
   it("leaves the token as written for someone who is not a member", () => {
-    const container = renderIn(`hello <@${STRANGER}>`);
+    const container = renderIn(`hello <@${STRANGER}>`, DIRECTORY);
 
     expect(screen.queryByTestId("bot-mention")).toBeNull();
     expect(container.textContent).toContain(`<@${STRANGER}>`);
   });
 
-  it("leaves the token as written outside any provider", () => {
-    const { container } = render(body(`hello <@${ANN}>`));
+  it("leaves every kind of token as written outside any provider", () => {
+    const { container } = render(
+      body(`hello <@${ANN}> <#${TRIAGE_BOT}> <~${RELEASE_TASK}>`),
+      { wrapper: Providers },
+    );
 
     expect(screen.queryByTestId("bot-mention")).toBeNull();
-    expect(container.textContent).toContain(`<@${ANN}>`);
+    expect(screen.queryByTestId("bot-mention-bot")).toBeNull();
+    expect(screen.queryByTestId("bot-mention-task")).toBeNull();
+    expect(container.textContent).toContain(
+      `<@${ANN}> <#${TRIAGE_BOT}> <~${RELEASE_TASK}>`,
+    );
+  });
+
+  it("draws a person, a bot and a task in one row as three chips", () => {
+    renderIn(
+      `<@${ANN}> asked <#${TRIAGE_BOT}> about <~${RELEASE_TASK}>`,
+      DIRECTORY,
+    );
+
+    expect(screen.getByTestId("bot-mention").textContent).toBe("@Ann");
+    expect(screen.getByTestId("bot-mention-bot").textContent).toBe("@Triage");
+    expect(screen.getByTestId("bot-mention-task").textContent).toBe(
+      "@Release notes",
+    );
+  });
+});
+
+describe("a bot's chip", () => {
+  it("opens that bot's channel", () => {
+    renderIn(`ask <#${TRIAGE_BOT}>`, DIRECTORY);
+
+    fireEvent.click(screen.getByTestId("bot-mention-bot"));
+
+    expect(mocks.openBotChannel).toHaveBeenCalledTimes(1);
+    expect(mocks.openBotChannel).toHaveBeenCalledWith(
+      mocks.navigate,
+      TRIAGE_BOT,
+      { landing: null, isConnectable: null, onRejected: null },
+    );
+  });
+
+  it("says a removed bot for one the environment's bots do not list", () => {
+    renderIn(`ask <#${REMOVED_BOT}>`, DIRECTORY);
+
+    expect(screen.getByTestId("bot-mention-bot-removed").textContent).toBe(
+      "a removed bot",
+    );
+    expect(screen.queryByTestId("bot-mention-bot")).toBeNull();
+  });
+
+  it("leaves the token as written while the environment's bots are unread", () => {
+    const container = renderIn(`ask <#${TRIAGE_BOT}>`, {
+      ...DIRECTORY,
+      bots: null,
+    });
+
+    expect(screen.queryByTestId("bot-mention-bot")).toBeNull();
+    expect(screen.queryByTestId("bot-mention-bot-removed")).toBeNull();
+    expect(container.textContent).toContain(`<#${TRIAGE_BOT}>`);
+  });
+});
+
+describe("a task's chip", () => {
+  it("is titled from the directory without a read, and opens the task", () => {
+    renderIn(`see <~${RELEASE_TASK}>`, DIRECTORY);
+
+    const chip = screen.getByTestId("bot-mention-task");
+    expect(chip.textContent).toBe("@Release notes");
+    fireEvent.click(chip);
+
+    expect(mocks.navigateToTabIntent).toHaveBeenCalledTimes(1);
+    expect(mocks.navigateToTabIntent).toHaveBeenCalledWith(
+      mocks.navigate,
+      openEpicFromListIntent({
+        epicId: RELEASE_TASK,
+        focus: undefined,
+        name: "Release notes",
+        replaceEmptyDraftId: null,
+      }),
+      undefined,
+    );
+    expect(askedTaskIds()).toEqual([]);
+  });
+
+  it("is titled by the host's read for a task the directory does not list, and opens it", async () => {
+    answerLookups({ [READ_TASK]: "Quarterly plan" });
+    renderIn(`see <~${READ_TASK}>`, DIRECTORY);
+
+    const chip = await screen.findByTestId("bot-mention-task");
+    expect(chip.textContent).toBe("@Quarterly plan");
+    fireEvent.click(chip);
+
+    expect(askedTaskIds()).toEqual([READ_TASK]);
+    expect(mocks.navigateToTabIntent).toHaveBeenCalledWith(
+      mocks.navigate,
+      openEpicFromListIntent({
+        epicId: READ_TASK,
+        focus: undefined,
+        name: "Quarterly plan",
+        replaceEmptyDraftId: null,
+      }),
+      undefined,
+    );
+  });
+
+  it("says a removed task once the read answered without it", async () => {
+    answerLookups({});
+    renderIn(`see <~${GONE_TASK}>`, DIRECTORY);
+
+    expect(
+      (await screen.findByTestId("bot-mention-task-removed")).textContent,
+    ).toBe("a removed task");
+    expect(screen.queryByTestId("bot-mention-task")).toBeNull();
+  });
+
+  it("leaves the token as written while the read has not answered, and when it failed", async () => {
+    const pending = Promise.withResolvers<never>();
+    mocks.request.mockImplementation(() => pending.promise);
+    const container = renderIn(`see <~${GONE_TASK}>`, DIRECTORY);
+
+    await waitFor(() => expect(askedTaskIds()).toEqual([GONE_TASK]));
+    expect(screen.queryByTestId("bot-mention-task-removed")).toBeNull();
+    expect(container.textContent).toContain(`<~${GONE_TASK}>`);
+
+    pending.reject(new Error("host unreachable"));
+    await waitFor(() => expect(queryClient.isFetching()).toBe(0));
+    expect(screen.queryByTestId("bot-mention-task-removed")).toBeNull();
+    expect(container.textContent).toContain(`<~${GONE_TASK}>`);
   });
 });

@@ -120,8 +120,10 @@ import { botMemberName } from "@/lib/bots/bot-member-names";
 import { useAuthStore } from "@/stores/auth/auth-store";
 import {
   BotMentionsContext,
+  type BotMentionDirectory,
   type BotMentioned,
 } from "@/components/bots/bot-mentions-context";
+import { useBotMentionTargets } from "@/components/bots/use-bot-mention-targets";
 import { isMainBot, type MainBotIds } from "@/lib/bots/bot-main";
 import {
   botPausedCopy,
@@ -1387,9 +1389,14 @@ function BotTabContent(props: {
     [botId, owner, snapshot.bot.title],
   );
   // A mention names the viewer, or a member the directory lists; anyone
-  // else's token stays as written.
-  const mentioned = useCallback(
-    (userId: string): BotMentioned | null => {
+  // else's token stays as written. A bot or a task is one of the
+  // environment's (decision 177).
+  const mentionTargets = useBotMentionTargets({
+    environmentId: snapshot.bot.environmentId,
+    tasks: snapshot.tasks,
+  });
+  const mentioned = useMemo((): BotMentionDirectory => {
+    const person = (userId: string): BotMentioned | null => {
       if (viewer !== null && viewer.userId === userId) {
         return {
           name: botMemberName(userId, viewer, resolveMember),
@@ -1399,9 +1406,13 @@ function BotTabContent(props: {
       const member = resolveMember(userId);
       if (member === null) return null;
       return { name: member.displayName ?? "member", self: false };
-    },
-    [resolveMember, viewer],
-  );
+    };
+    return {
+      person,
+      bots: mentionTargets.bots,
+      tasks: mentionTargets.tasks,
+    };
+  }, [mentionTargets.bots, mentionTargets.tasks, resolveMember, viewer]);
 
   return (
     <BotMentionsContext value={mentioned}>

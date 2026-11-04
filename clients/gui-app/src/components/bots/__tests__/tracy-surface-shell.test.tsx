@@ -151,6 +151,27 @@ function useListScript(): ListScript {
   );
 }
 
+// The tasks a bot's channel can name come from two host reads that these
+// cases do not drive: neither knows any task.
+vi.mock("@/hooks/epic/use-epic-get-task-contexts-query", () => {
+  const tasksById = new Map<string, never>();
+  return {
+    useEpicGetTaskContexts: () => ({
+      tasksById,
+      isPending: false,
+      error: null,
+    }),
+  };
+});
+vi.mock("@/hooks/epics/use-cloud-epic-tasks-query", async (importOriginal) => {
+  const tasks: never[] = [];
+  return {
+    ...(await importOriginal<
+      typeof import("@/hooks/epics/use-cloud-epic-tasks-query")
+    >()),
+    useCloudEpicTasksQuery: () => ({ tasks }),
+  };
+});
 vi.mock("@/hooks/host/use-host-supports-method", () => ({
   useHostMethodSupport: () => true,
   useHostMethodSchemaVersion: () => ({ major: 1, minor: 1 }),

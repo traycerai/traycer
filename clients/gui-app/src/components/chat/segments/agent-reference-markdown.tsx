@@ -8,14 +8,18 @@ import {
   TRAYCER_MENTION_TAG,
 } from "@/markdown/plugins/const";
 import { rehypeBotMentions } from "@/markdown/plugins/rehype-bot-mentions";
-import { BotMentionChip } from "@/components/bots/bot-mention-chip";
+import {
+  BotChannelMentionChip,
+  BotMentionChip,
+  TaskMentionChip,
+} from "@/components/bots/bot-mention-chip";
 import {
   isUuidReferenceCandidate,
   rehypeTraycerAgentReferences,
 } from "@/markdown/plugins/rehype-traycer-agent-references";
 
-// Mentions first: a member's token holds their id, which the agent-reference
-// pass would otherwise read as an id to chip.
+// Mentions first: a token holds an id, which the agent-reference pass would
+// otherwise read as an id to chip.
 const AGENT_REFERENCE_REHYPE_PLUGINS = [
   rehypeBotMentions,
   rehypeTraycerAgentReferences,
@@ -105,11 +109,22 @@ function AgentReferenceMarkdownNode(props: Record<string, unknown>) {
 }
 
 function MentionMarkdownNode(props: Record<string, unknown>) {
-  const userId =
-    typeof props["data-user-id"] === "string" ? props["data-user-id"] : null;
   const children = props.children as ReactNode;
-  if (userId === null) return <>{children}</>;
-  return <BotMentionChip userId={userId}>{children}</BotMentionChip>;
+  const userId = props["data-user-id"];
+  if (typeof userId === "string") {
+    return <BotMentionChip userId={userId}>{children}</BotMentionChip>;
+  }
+  const botId = props["data-bot-id"];
+  if (typeof botId === "string") {
+    return (
+      <BotChannelMentionChip botId={botId}>{children}</BotChannelMentionChip>
+    );
+  }
+  const taskId = props["data-task-id"];
+  if (typeof taskId === "string") {
+    return <TaskMentionChip taskId={taskId}>{children}</TaskMentionChip>;
+  }
+  return <>{children}</>;
 }
 
 function AgentAwareCodeBlock(props: Record<string, unknown>) {

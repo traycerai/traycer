@@ -7,11 +7,35 @@ export interface BotMentioned {
   readonly self: boolean;
 }
 
+/** A bot or a task of the environment, by the name the channel shows. */
+export interface BotMentionTarget {
+  readonly id: string;
+  readonly name: string;
+}
+
 /**
- * Who a `<@userId>` in a bot channel's text names: a current member of the
- * bot's environment, or `null` for anyone else, whose token stays plain
- * text. Absent outside a bot's tab.
+ * What a bot channel's text can name (decisions 137, 177), from the bot's
+ * own environment only. Absent outside a bot's tab, where every token stays
+ * plain text.
  */
-export const BotMentionsContext = createContext<
-  ((userId: string) => BotMentioned | null) | null
->(null);
+export interface BotMentionDirectory {
+  /**
+   * Who a `<@userId>` names: a current member of the environment, or `null`
+   * for anyone else, whose token stays plain text.
+   */
+  readonly person: (userId: string) => BotMentioned | null;
+  /**
+   * The environment's live bots, this one included, by title as Home's
+   * group lists them; `null` while that list has not answered.
+   */
+  readonly bots: ReadonlyArray<BotMentionTarget> | null;
+  /**
+   * The environment's tasks the tab knows by title: the ones the bot's
+   * stream lists, then the environment's on Home's task list.
+   */
+  readonly tasks: ReadonlyArray<BotMentionTarget>;
+}
+
+export const BotMentionsContext = createContext<BotMentionDirectory | null>(
+  null,
+);

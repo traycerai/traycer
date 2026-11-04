@@ -42,7 +42,7 @@ const TRAYCER_TAG_ATTRIBUTES: Schema["attributes"] = {
   [TRAYCER_TICKET_TAG]: ["data-epic-id", "data-ticket-id", "data-title"],
   [TRAYCER_MERMAID_TAG]: ["data-code"],
   [TRAYCER_WIREFRAME_TAG]: ["data-code"],
-  [TRAYCER_MENTION_TAG]: ["data-user-id"],
+  [TRAYCER_MENTION_TAG]: ["data-user-id", "data-bot-id", "data-task-id"],
 };
 
 /**

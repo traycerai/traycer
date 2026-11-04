@@ -65,6 +65,10 @@ import {
   BotIdentityContext,
   type BotOwner,
 } from "@/components/bots/bot-identity-context";
+import {
+  BotMentionsContext,
+  type BotMentionDirectory,
+} from "@/components/bots/bot-mentions-context";
 import { useAuthStore } from "@/stores/auth/auth-store";
 import {
   BotMessageComposer,
@@ -294,10 +298,10 @@ describe("<BotMessageComposer /> @ mentions", () => {
     );
   }
 
-  function optionNames(): string[] {
+  function optionIds(): string[] {
     return screen
       .getAllByTestId("bot-mention-option")
-      .map((option) => option.getAttribute("data-user-id") ?? "");
+      .map((option) => option.getAttribute("data-id") ?? "");
   }
 
   beforeEach(() => {
@@ -321,7 +325,7 @@ describe("<BotMessageComposer /> @ mentions", () => {
 
     await user.type(box(), "@an");
 
-    expect(optionNames()).toEqual(["u-ann", "u-anders"]);
+    expect(optionIds()).toEqual(["u-ann", "u-anders"]);
   });
 
   it("picks the highlighted member with the arrows and Enter, shows @Name, and sends the token", async () => {
@@ -775,6 +779,226 @@ describe("<BotMessageComposer /> @ mentions", () => {
 
     await user.click(screen.getByTestId("bot-channel-composer-send"));
     expect(mocks.send.mock.calls[0][0].text).toBe("@an");
+  });
+});
+
+describe("<BotMessageComposer /> @ mentions of bots and tasks", () => {
+  const OWN_BOT = "bot_01HZY8V6K3Q9W2E4R5T6Y7V8M0";
+  const TRIAGE_BOT = "bot_01HZY8V6K3Q9W2E4R5T6Y7V8M1";
+  const NOTES_BOT = "bot_01HZY8V6K3Q9W2E4R5T6Y7V8M2";
+  const RELEASE_TASK = "6f1c2a7e-3b4d-4e5f-8a9b-0c1d2e3f4a5b";
+  const ROADMAP_TASK = "0b9d7c1e-2a3f-4b5c-8d6e-7f8091a2b3c4";
+  const TEAM: BotOwner = {
+    kind: "team",
+    name: "Acme",
+    members: [
+      { userId: "u-viewer", displayName: "Andy Viewer", avatarUrl: null },
+      { userId: "u-ann", displayName: "Ann Lee", avatarUrl: null },
+      { userId: "u-anon", displayName: null, avatarUrl: null },
+    ],
+  };
+  const PERSON: BotOwner = {
+    kind: "person",
+    userId: "u-viewer",
+    name: "Andy Viewer",
+    avatarUrl: null,
+  };
+  const DIRECTORY: BotMentionDirectory = {
+    person: () => null,
+    bots: [
+      { id: OWN_BOT, name: "Tracy" },
+      { id: TRIAGE_BOT, name: "Triage" },
+      { id: NOTES_BOT, name: "Release bot" },
+    ],
+    tasks: [
+      { id: RELEASE_TASK, name: "Release notes" },
+      { id: ROADMAP_TASK, name: "Roadmap" },
+    ],
+  };
+
+  function mountWith(
+    owner: BotOwner,
+    directory: BotMentionDirectory,
+    edit: BotComposerEdit | null,
+  ): void {
+    render(
+      <BotIdentityContext value={{ botId: OWN_BOT, title: "Tracy", owner }}>
+        <BotMentionsContext value={directory}>
+          {composer(edit, null)}
+        </BotMentionsContext>
+      </BotIdentityContext>,
+    );
+  }
+
+  function options(): string[] {
+    return screen
+      .getAllByTestId("bot-mention-option")
+      .map(
+        (option) =>
+          `${option.getAttribute("data-kind") ?? ""}:${option.getAttribute("data-id") ?? ""}`,
+      );
+  }
+
+  async function sentText(user: UserEvent): Promise<string> {
+    await user.click(screen.getByTestId("bot-channel-composer-send"));
+    return mocks.send.mock.calls.at(-1)?.[0].text ?? "";
+  }
+
+  beforeEach(() => {
+    useAuthStore.setState({
+      profile: {
+        userId: "u-viewer",
+        userName: "Andy Viewer",
+        email: "andy@example.com",
+        avatarUrl: null,
+      },
+    });
+  });
+
+  afterEach(() => {
+    useAuthStore.setState({ profile: null });
+  });
+
+  it("lists a team's people, bots and tasks in one list with a glyph per kind, leaving out the viewer, a member without a name and the box's own bot", async () => {
+    const user = userEvent.setup();
+    mountWith(TEAM, DIRECTORY, null);
+
+    await user.type(box(), "@");
+
+    expect(screen.getByRole("listbox", { name: "Mentions" })).toBeTruthy();
+    expect(options()).toEqual([
+      "person:u-ann",
+      `bot:${TRIAGE_BOT}`,
+      `bot:${NOTES_BOT}`,
+      `task:${RELEASE_TASK}`,
+      `task:${ROADMAP_TASK}`,
+    ]);
+    const glyphs = screen
+      .getAllByTestId("bot-mention-option")
+      .map((option) => [
+        option.querySelector('[data-testid="person-avatar"]') !== null,
+        option.querySelector('[data-testid="bot-avatar"]') !== null,
+        option.querySelector('[data-testid="bot-mention-task-glyph"]') !== null,
+      ]);
+    expect(glyphs).toEqual([
+      [true, false, false],
+      [false, true, false],
+      [false, true, false],
+      [false, false, true],
+      [false, false, true],
+    ]);
+  });
+
+  it("lists a personal bot's bots and tasks and no one else", async () => {
+    const user = userEvent.setup();
+    mountWith(PERSON, DIRECTORY, null);
+
+    await user.type(box(), "@");
+
+    expect(options()).toEqual([
+      `bot:${TRIAGE_BOT}`,
+      `bot:${NOTES_BOT}`,
+      `task:${RELEASE_TASK}`,
+      `task:${ROADMAP_TASK}`,
+    ]);
+  });
+
+  it("lists a name that starts with what was typed before one that only has a word that does", async () => {
+    const user = userEvent.setup();
+    mountWith(
+      PERSON,
+      {
+        person: () => null,
+        bots: [
+          { id: OWN_BOT, name: "Tracy" },
+          { id: NOTES_BOT, name: "Weekly triage" },
+          { id: TRIAGE_BOT, name: "Triage" },
+        ],
+        tasks: [],
+      },
+      null,
+    );
+
+    await user.type(box(), "@tri");
+
+    expect(options()).toEqual([`bot:${TRIAGE_BOT}`, `bot:${NOTES_BOT}`]);
+  });
+
+  it("shows @Name for a pick of each kind and sends each as its own token", async () => {
+    const user = userEvent.setup();
+    mountWith(TEAM, DIRECTORY, null);
+
+    await user.type(box(), "ask @ann");
+    await user.keyboard("{Enter}");
+    await user.type(box(), "@tri");
+    await user.keyboard("{Enter}");
+    await user.type(box(), "about @notes");
+    await user.keyboard("{Enter}");
+
+    expect(box().value).toBe("ask @Ann Lee @Triage about @Release notes ");
+    expect(await sentText(user)).toBe(
+      `ask <@u-ann> <#${TRIAGE_BOT}> about <~${RELEASE_TASK}>`,
+    );
+  });
+
+  it("sends a bot's or a task's name typed plainly as its token, and an @ naming neither as typed", async () => {
+    const user = userEvent.setup();
+    mountWith(PERSON, DIRECTORY, null);
+    await user.type(box(), "@Triage see @Release notes and @nobody");
+
+    expect(await sentText(user)).toBe(
+      `<#${TRIAGE_BOT}> see <~${RELEASE_TASK}> and @nobody`,
+    );
+  });
+
+  describe("a bot and a task with the same name", () => {
+    const SHARED: BotMentionDirectory = {
+      person: () => null,
+      bots: [
+        { id: OWN_BOT, name: "Tracy" },
+        { id: TRIAGE_BOT, name: "Roadmap" },
+      ],
+      tasks: [{ id: ROADMAP_TASK, name: "Roadmap" }],
+    };
+
+    it("sends the one picked", async () => {
+      const user = userEvent.setup();
+      mountWith(PERSON, SHARED, null);
+      await user.type(box(), "@road");
+      await user.keyboard("{ArrowDown}{Enter}");
+
+      expect(await sentText(user)).toBe(`<~${ROADMAP_TASK}>`);
+    });
+
+    it("sends the name as typed when none was picked", async () => {
+      const user = userEvent.setup();
+      mountWith(PERSON, SHARED, null);
+      await user.type(box(), "@Roadmap");
+
+      expect(await sentText(user)).toBe("@Roadmap");
+    });
+  });
+
+  it("shows an edited message's three tokens as names and sends them back as the same tokens", async () => {
+    const user = userEvent.setup();
+    const wire = `<@u-ann> asked <#${TRIAGE_BOT}> about <~${RELEASE_TASK}>`;
+    mountWith(TEAM, DIRECTORY, { requestId: "request-failed", text: wire });
+
+    expect(box().value).toBe("@Ann Lee asked @Triage about @Release notes");
+    expect(await sentText(user)).toBe(wire);
+  });
+
+  it("shows an edited message's token that nothing names as it was written", async () => {
+    const user = userEvent.setup();
+    const gone = `<#${NOTES_BOT}> and <~${ROADMAP_TASK}>`;
+    mountWith(
+      PERSON,
+      { person: () => null, bots: [], tasks: [] },
+      { requestId: "request-failed", text: gone },
+    );
+
+    expect(box().value).toBe(gone);
+    expect(await sentText(user)).toBe(gone);
   });
 });
 

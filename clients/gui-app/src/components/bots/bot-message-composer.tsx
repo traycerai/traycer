@@ -86,9 +86,9 @@ const BOX_ONE_ROW = {
  * the box shows, as markdown quote lines - an edit in progress included,
  * which stays an edit - and the box takes the focus with the caret after it.
  *
- * `@` completes a member of the team's environment (decision 137); the box
- * shows their name and the send writes their token, so the bot's host knows
- * who was mentioned.
+ * `@` completes a member of the team's environment (decision 137), or a bot
+ * or a task of the bot's environment (decision 177); the box shows the name
+ * and the send writes its token, so the bot's host knows what was named.
  *
  * With the keyboard up on a short viewport the box is one row, the field beside
  * Send, and a longer draft scrolls inside the field. The same elements restyle,

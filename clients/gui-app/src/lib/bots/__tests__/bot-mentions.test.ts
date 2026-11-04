@@ -1,17 +1,33 @@
 import { describe, expect, it } from "vitest";
 import {
+  BOT_MENTION_TOKEN,
   activeMentionQuery,
   matchMentionCandidates,
+  mentionOfToken,
   mentionsToDisplay,
   mentionsToWire,
   shiftMentionPicks,
   spliceMentionPicks,
   type BotMentionCandidate,
+  type BotMentionKind,
   type BotMentionPick,
 } from "@/lib/bots/bot-mentions";
 
-const member = (userId: string, name: string): BotMentionCandidate => ({
-  userId,
+const member = (id: string, name: string): BotMentionCandidate => ({
+  kind: "person",
+  id,
+  name,
+  avatarUrl: null,
+});
+const bot = (id: string, name: string): BotMentionCandidate => ({
+  kind: "bot",
+  id,
+  name,
+  avatarUrl: null,
+});
+const task = (id: string, name: string): BotMentionCandidate => ({
+  kind: "task",
+  id,
   name,
   avatarUrl: null,
 });
@@ -22,10 +38,11 @@ const BOB = member("u-bob", "Bob");
 const BOB_1 = member("u-bob-1", "Bob");
 const BOB_2 = member("u-bob-2", "Bob");
 
-const pick = (start: number, end: number, userId: string): BotMentionPick => ({
+const pick = (start: number, end: number, id: string): BotMentionPick => ({
   start,
   end,
-  userId,
+  kind: "person",
+  id,
 });
 
 describe("mentionsToWire", () => {
@@ -130,22 +147,24 @@ describe("mentionsToWire", () => {
 
 describe("mentionsToDisplay", () => {
   it("shows a known member's token as @Name and leaves any other token as it is", () => {
-    const nameOf = (id: string): string | null =>
-      id === "u-bob" ? "Bob" : null;
+    const nameOf = (kind: BotMentionKind, id: string): string | null =>
+      kind === "person" && id === "u-bob" ? "Bob" : null;
     expect(mentionsToDisplay("hi <@u-bob> and <@u-zed>", nameOf).text).toBe(
       "hi @Bob and <@u-zed>",
     );
   });
 
   it("holds each shown token as a pick of its member, over the text as shown", () => {
-    const nameOf = (id: string): string | null =>
-      id === "u-ann" || id === "u-ann-2" ? "Ann Lee" : null;
+    const nameOf = (kind: BotMentionKind, id: string): string | null =>
+      kind === "person" && (id === "u-ann" || id === "u-ann-2")
+        ? "Ann Lee"
+        : null;
     const shown = mentionsToDisplay("hi <@u-ann> and <@u-ann-2>!", nameOf);
 
     expect(shown.text).toBe("hi @Ann Lee and @Ann Lee!");
     expect(shown.picks).toEqual([
-      { start: 3, end: 11, userId: "u-ann" },
-      { start: 16, end: 24, userId: "u-ann-2" },
+      { start: 3, end: 11, kind: "person", id: "u-ann" },
+      { start: 16, end: 24, kind: "person", id: "u-ann-2" },
     ]);
     // Read back, each pick goes to the member it named.
     expect(
@@ -341,5 +360,116 @@ describe("matchMentionCandidates", () => {
 
   it("lists everyone for an empty query", () => {
     expect(matchMentionCandidates([ANN, BOB], "")).toEqual([ANN, BOB]);
+  });
+});
+
+const TRACY = bot("bot_01HZY8V6K3Q9W2E4R5T6Y7V8M0", "Tracy");
+const RELEASE = task("6f1c2a7e-3b4d-4e5f-8a9b-0c1d2e3f4a5b", "Release notes");
+
+describe("mentions of a bot and a task", () => {
+  it("writes <#botId> for a bot's @Name and <~epicId> for a task's, whoever else is named", () => {
+    expect(
+      mentionsToWire(
+        "ask @Tracy about @Release notes, @Bob",
+        [BOB, TRACY, RELEASE],
+        [],
+      ),
+    ).toBe(
+      "ask <#bot_01HZY8V6K3Q9W2E4R5T6Y7V8M0> about <~6f1c2a7e-3b4d-4e5f-8a9b-0c1d2e3f4a5b>, <@u-bob>",
+    );
+  });
+
+  describe("a name two kinds share", () => {
+    const BOT_ROADMAP = bot("bot_01HZY8V6K3Q9W2E4R5T6Y7V8M1", "Roadmap");
+    const TASK_ROADMAP = task(
+      "0b9d7c1e-2a3f-4b5c-8d6e-7f8091a2b3c4",
+      "Roadmap",
+    );
+
+    it("stays as typed with no pick, rather than going to one of the two", () => {
+      expect(
+        mentionsToWire("see @Roadmap", [BOT_ROADMAP, TASK_ROADMAP], []),
+      ).toBe("see @Roadmap");
+    });
+
+    it("goes to the kind its pick names", () => {
+      expect(
+        mentionsToWire(
+          "see @Roadmap",
+          [BOT_ROADMAP, TASK_ROADMAP],
+          [{ start: 4, end: 12, kind: "task", id: TASK_ROADMAP.id }],
+        ),
+      ).toBe(`see <~${TASK_ROADMAP.id}>`);
+    });
+
+    it("is not given to a pick that has the other kind's id", () => {
+      expect(
+        mentionsToWire(
+          "see @Roadmap",
+          [BOT_ROADMAP, TASK_ROADMAP],
+          [{ start: 4, end: 12, kind: "person", id: TASK_ROADMAP.id }],
+        ),
+      ).toBe("see @Roadmap");
+    });
+  });
+
+  it("shows each kind's token as @Name and writes the same text back", () => {
+    const wire = `<@u-bob> asked <#${TRACY.id}> about <~${RELEASE.id}>`;
+    const named = [BOB, TRACY, RELEASE];
+    const shown = mentionsToDisplay(wire, (kind, id) => {
+      return (
+        named.find((entry) => entry.kind === kind && entry.id === id)?.name ??
+        null
+      );
+    });
+
+    expect(shown.text).toBe("@Bob asked @Tracy about @Release notes");
+    expect(shown.picks.map((entry) => entry.kind)).toEqual([
+      "person",
+      "bot",
+      "task",
+    ]);
+    expect(mentionsToWire(shown.text, named, shown.picks)).toBe(wire);
+  });
+
+  it("shows a bot or task token nothing names as it was written", () => {
+    const wire = `<#${TRACY.id}> and <~${RELEASE.id}>`;
+
+    expect(mentionsToDisplay(wire, () => null).text).toBe(wire);
+  });
+
+  it("reads a token's kind from its head", () => {
+    expect(mentionOfToken("<@u-bob>")).toEqual({ kind: "person", id: "u-bob" });
+    expect(mentionOfToken(`<#${TRACY.id}>`)).toEqual({
+      kind: "bot",
+      id: TRACY.id,
+    });
+    expect(mentionOfToken(`<~${RELEASE.id}>`)).toEqual({
+      kind: "task",
+      id: RELEASE.id,
+    });
+  });
+
+  it("reads only a bot id and a task id in their shapes as a token, so <#include> stays text", () => {
+    const text = `<#include> <#bot_01HZY8V6K3Q9W2E4R5T6Y7U8M0> <~not-a-uuid> <#${TRACY.id}>`;
+
+    expect(text.match(BOT_MENTION_TOKEN)).toEqual([`<#${TRACY.id}>`]);
+  });
+});
+
+describe("matchMentionCandidates across kinds", () => {
+  it("lists a name that starts with the query before one that only has a word that does", () => {
+    const weekly = task(
+      "0b9d7c1e-2a3f-4b5c-8d6e-7f8091a2b3c4",
+      "Weekly Lee review",
+    );
+    const leeBot = bot("bot_01HZY8V6K3Q9W2E4R5T6Y7V8M1", "Lee bot");
+    const leeMember = member("u-lee", "Lee Park");
+
+    expect(matchMentionCandidates([weekly, leeBot, leeMember], "lee")).toEqual([
+      leeBot,
+      leeMember,
+      weekly,
+    ]);
   });
 });
