@@ -15,6 +15,23 @@ describe("matchGratitude", () => {
     ["That's perfect", "perfect"],
     ["love it", "love_it"],
     ["you're a legend", "legend"],
+    ["thnx!!", "thank_you"],
+    ["gracias", "thank_you"],
+    ["shukriya bhai", "thank_you"],
+    ["kudos", "great_job"],
+    ["bahut badhiya", "great_job"],
+    ["awesome!", "amazing"],
+    ["works like a charm, ty", "nailed_it"],
+    ["crushed it", "nailed_it"],
+    ["chef's kiss", "perfect"],
+    ["you rock", "legend"],
+    ["goated", "legend"],
+    ["legend", "legend"],
+    ["LFG", "hype"],
+    ["this is fire", "hype"],
+    ["W", "hype"],
+    ["🙏", "emoji"],
+    ["🔥🔥🔥", "emoji"],
   ])("matches %j as %s", (text, key) => {
     expect(matchGratitude(text)).toBe(key);
   });
@@ -32,6 +49,8 @@ describe("matchGratitude", () => {
     "thank you but that is wrong",
     "this is not perfect",
     "far from perfect",
+    "not great",
+    "still broken, thanks",
   ])("ignores a negated thank-you: %j", (text) => {
     expect(matchGratitude(text)).toBeNull();
   });
@@ -41,7 +60,13 @@ describe("matchGratitude", () => {
     "make the pixel perfect layout",
     "I'd love it if you also added tests",
     "run ty/ruff on project",
-  ])("ignores an instruction-like phrase in a longer message: %j", (text) => {
+    "fire the event",
+    "add a legend",
+    "use w",
+    "make it nice",
+    "make it perfect",
+    "lets go with option b then and also add docs",
+  ])("ignores an instruction-like phrase: %j", (text) => {
     expect(matchGratitude(text)).toBeNull();
   });
 

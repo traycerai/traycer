@@ -163,10 +163,13 @@ export type AnalyticsShareMatchKey =
   | "thank_you"
   | "appreciate"
   | "great_job"
+  | "amazing"
   | "nailed_it"
   | "perfect"
   | "love_it"
-  | "legend";
+  | "legend"
+  | "hype"
+  | "emoji";
 
 /** The ready-made post lines' ids (`share-on-x-lines.ts`). */
 export type AnalyticsShareLineId =
@@ -2417,10 +2420,13 @@ const EVENT_EXACT_PROPERTY_VALUES = new Map<string, ReadonlySet<string>>([
       "thank_you",
       "appreciate",
       "great_job",
+      "amazing",
       "nailed_it",
       "perfect",
       "love_it",
       "legend",
+      "hype",
+      "emoji",
     ]),
   ),
   ...eventValueEntries(

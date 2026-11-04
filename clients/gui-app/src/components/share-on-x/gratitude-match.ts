@@ -7,46 +7,253 @@ export type GratitudeMatchKey =
   | "thank_you"
   | "appreciate"
   | "great_job"
+  | "amazing"
   | "nailed_it"
   | "perfect"
   | "love_it"
-  | "legend";
+  | "legend"
+  | "hype"
+  | "emoji";
+
+type Phrases = ReadonlyArray<
+  readonly [GratitudeMatchKey, ReadonlyArray<string>]
+>;
 
 /**
  * Phrases per key, in the normalised form {@link normaliseMessage} produces:
- * lowercase words separated by single spaces. A phrase matches only on whole
- * words, so "ty" never matches inside "type".
+ * lowercase words separated by single spaces ("you're" becomes "you re"). A
+ * phrase matches only on whole words, so "ty" never matches inside "type".
  */
-const PHRASES: ReadonlyArray<readonly [GratitudeMatchKey, string]> = [
-  ["thank_you", "thank you"],
-  ["thank_you", "thanks"],
-  ["thank_you", "thank u"],
-  ["thank_you", "thx"],
-  ["thank_you", "ty"],
-  ["thank_you", "tysm"],
-  ["thank_you", "tyvm"],
-  ["appreciate", "appreciate it"],
-  ["appreciate", "much appreciated"],
-  ["appreciate", "really appreciate"],
-  ["great_job", "great job"],
-  ["great_job", "great work"],
-  ["great_job", "nice work"],
-  ["great_job", "nice job"],
-  ["great_job", "good job"],
-  ["great_job", "well done"],
-  ["nailed_it", "nailed it"],
-  ["perfect", "perfect"],
-  ["love_it", "love it"],
-  ["love_it", "love this"],
-  ["legend", "you re a legend"],
-  ["legend", "youre a legend"],
-  ["legend", "you re the best"],
-  ["legend", "youre the best"],
+const PHRASES: Phrases = [
+  [
+    "thank_you",
+    [
+      "thank you",
+      "thanks",
+      "thank u",
+      "thanku",
+      "thankyou",
+      "thx",
+      "thnx",
+      "thanx",
+      "thnks",
+      "ty",
+      "tysm",
+      "tyvm",
+      "tyty",
+      "tqsm",
+      "many thanks",
+      "gracias",
+      "merci",
+      "danke",
+      "grazie",
+      "obrigado",
+      "obrigada",
+      "arigato",
+      "arigatou",
+      "shukriya",
+      "dhanyavad",
+      "dhanyawad",
+    ],
+  ],
+  [
+    "appreciate",
+    [
+      "appreciate it",
+      "appreciate you",
+      "appreciate that",
+      "appreciate this",
+      "much appreciated",
+      "really appreciate",
+      "greatly appreciated",
+      "much obliged",
+      "so grateful",
+      "really grateful",
+    ],
+  ],
+  [
+    "great_job",
+    [
+      "great job",
+      "great work",
+      "great stuff",
+      "great going",
+      "nice work",
+      "nice job",
+      "nice one",
+      "nicely done",
+      "good job",
+      "good work",
+      "good stuff",
+      "solid work",
+      "amazing work",
+      "awesome work",
+      "excellent work",
+      "brilliant work",
+      "fantastic work",
+      "well done",
+      "very well done",
+      "bravo",
+      "kudos",
+      "props",
+      "hats off",
+      "keep it up",
+      "bahut badhiya",
+      "badhiya",
+      "shabash",
+      "zabardast",
+      "kamaal",
+    ],
+  ],
+  [
+    "amazing",
+    [
+      "amazing",
+      "awesome",
+      "brilliant",
+      "fantastic",
+      "excellent",
+      "superb",
+      "incredible",
+      "outstanding",
+      "wonderful",
+      "impressive",
+      "phenomenal",
+      "stellar",
+      "beautiful",
+      "nice",
+    ],
+  ],
+  [
+    "nailed_it",
+    [
+      "nailed it",
+      "crushed it",
+      "killed it",
+      "smashed it",
+      "aced it",
+      "knocked it out of the park",
+      "works like a charm",
+      "worked like a charm",
+      "works perfectly",
+      "worked perfectly",
+      "works great",
+      "worked great",
+      "spot on",
+      "bang on",
+      "flawless",
+    ],
+  ],
+  [
+    "perfect",
+    [
+      "perfect",
+      "exactly what i wanted",
+      "exactly what i needed",
+      "just what i needed",
+      "chef s kiss",
+      "chefs kiss",
+      "10 10",
+    ],
+  ],
+  [
+    "love_it",
+    ["love it", "love this", "love that", "loved it", "love you", "ily"],
+  ],
+  [
+    "legend",
+    [
+      "you re a legend",
+      "youre a legend",
+      "ur a legend",
+      "absolute legend",
+      "legend",
+      "you re the best",
+      "youre the best",
+      "ur the best",
+      "you rock",
+      "you re awesome",
+      "youre awesome",
+      "you re amazing",
+      "youre amazing",
+      "you saved me",
+      "saved my life",
+      "lifesaver",
+      "life saver",
+      "goat",
+      "goated",
+      "the goat",
+      "mvp",
+      "genius",
+      "my hero",
+      "rockstar",
+      "wizard",
+      "champ",
+      "king",
+      "beast",
+    ],
+  ],
+  [
+    "hype",
+    [
+      "lfg",
+      "let s go",
+      "lets go",
+      "letsgo",
+      "lets goo",
+      "lets gooo",
+      "sheesh",
+      "fire",
+      "this is fire",
+      "that s fire",
+      "thats fire",
+      "so fire",
+      "banger",
+      "w",
+      "w agent",
+      "big w",
+      "huge w",
+      "massive w",
+      "slaps",
+      "bussin",
+      "dope",
+      "sick",
+      "this is sick",
+      "that s sick",
+      "so sick",
+      "lit",
+      "clutch",
+      "cracked",
+      "insane",
+      "that s insane",
+      "thats insane",
+      "op",
+      "so op",
+      "mast",
+      "jhakaas",
+    ],
+  ],
+];
+
+/** Emoji that thank or cheer on their own, matched on the message as typed. */
+const EMOJI = [
+  "🙏",
+  "🐐",
+  "🔥",
+  "👏",
+  "🙌",
+  "💯",
+  "🫶",
+  "❤️",
+  "😍",
+  "🥰",
+  "🤩",
 ];
 
 /**
- * Phrases that contain a match but say the opposite. Checked on the same
- * normalised text, before any match is accepted.
+ * Phrases that contain a match but say the opposite, or open an instruction
+ * ("make it perfect"). Checked on the same normalised text, before any match
+ * is accepted.
  */
 const NEGATIONS: ReadonlyArray<string> = [
   "no thanks",
@@ -56,20 +263,105 @@ const NEGATIONS: ReadonlyArray<string> = [
   "not perfect",
   "not quite perfect",
   "far from perfect",
+  "not great",
+  "not good",
+  "not amazing",
+  "not awesome",
+  "not nice",
+  "not fire",
+  "not working",
+  "not what i wanted",
+  "not what i needed",
+  "doesn t work",
+  "doesnt work",
+  "didn t work",
+  "didnt work",
+  "still broken",
+  "still failing",
+  "make it",
+  "make this",
+  "make that",
+  "make them",
+  "should be",
+  "needs to be",
+  "need it to be",
 ];
 
 /**
  * Phrases that also turn up in instructions ("use ty to check the stubs",
  * "a pixel perfect layout", "I'd love it if you added tests"). They count
- * only in a message of at most {@link SHORT_MESSAGE_WORDS} words.
+ * only in a message of at most {@link SHORT_MESSAGE_WORDS} words, as do the
+ * emoji.
  */
 const SHORT_ONLY_PHRASES: ReadonlySet<string> = new Set([
   "ty",
   "perfect",
   "love it",
   "love this",
+  "love that",
+  "amazing",
+  "awesome",
+  "brilliant",
+  "fantastic",
+  "excellent",
+  "superb",
+  "incredible",
+  "outstanding",
+  "wonderful",
+  "impressive",
+  "phenomenal",
+  "stellar",
+  "beautiful",
+  "flawless",
+  "the goat",
+  "my hero",
+  "let s go",
+  "lets go",
+  "this is fire",
+  "that s fire",
+  "thats fire",
+  "so fire",
+  "banger",
+  "big w",
+  "huge w",
+  "massive w",
+  "slaps",
+  "this is sick",
+  "that s sick",
+  "so sick",
+  "that s insane",
+  "thats insane",
+  "so op",
+  "10 10",
 ]);
 const SHORT_MESSAGE_WORDS = 4;
+
+/**
+ * Words that name ordinary things in a short instruction too ("fire the
+ * event", "add a legend", "use w"). They count only as the whole message.
+ */
+const WHOLE_MESSAGE_PHRASES: ReadonlySet<string> = new Set([
+  "w",
+  "nice",
+  "props",
+  "legend",
+  "goat",
+  "mvp",
+  "genius",
+  "wizard",
+  "champ",
+  "king",
+  "beast",
+  "fire",
+  "sick",
+  "lit",
+  "dope",
+  "clutch",
+  "cracked",
+  "insane",
+  "op",
+  "mast",
+]);
 
 /**
  * A long message is a new instruction that happens to open with "thanks";
@@ -107,14 +399,20 @@ function containsPhrase(normalised: string, phrase: string): boolean {
 export function matchGratitude(text: string): GratitudeMatchKey | null {
   if (text.length > MAX_MESSAGE_LENGTH) return null;
   const normalised = normaliseMessage(text);
-  if (normalised.length === 0) return null;
   if (NEGATIONS.some((phrase) => containsPhrase(normalised, phrase))) {
     return null;
   }
   const short = countWords(text) <= SHORT_MESSAGE_WORDS;
-  for (const [key, phrase] of PHRASES) {
-    if (!short && SHORT_ONLY_PHRASES.has(phrase)) continue;
-    if (containsPhrase(normalised, phrase)) return key;
+  for (const [key, phrases] of PHRASES) {
+    for (const phrase of phrases) {
+      if (WHOLE_MESSAGE_PHRASES.has(phrase)) {
+        if (normalised === phrase) return key;
+        continue;
+      }
+      if (!short && SHORT_ONLY_PHRASES.has(phrase)) continue;
+      if (containsPhrase(normalised, phrase)) return key;
+    }
   }
+  if (short && EMOJI.some((emoji) => text.includes(emoji))) return "emoji";
   return null;
 }
