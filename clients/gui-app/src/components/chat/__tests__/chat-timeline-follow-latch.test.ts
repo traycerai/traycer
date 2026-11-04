@@ -9606,4 +9606,101 @@ describe("useChatTimelineFollowLatch", () => {
       expect(node.scrollTop).toBe(467);
     });
   });
+  describe("the layout hold", () => {
+    it("holds a layout-owned report's correction and issues it once at the close", () => {
+      const { node, listRef, result } = mountHeldFollowing();
+
+      result.current.openStructuralHold();
+      // The tail grows under the reader and the list reports it: layout's
+      // report, no reader input, off the end.
+      shim.setGeometry(node, { scrollHeight: 1700 });
+      fireNativeScroll(node);
+      expect(listRef.scrollToEnd).not.toHaveBeenCalled();
+      expect(node.scrollTop).toBe(1000);
+
+      result.current.closeStructuralHold();
+      expect(listRef.scrollToEnd).toHaveBeenCalledTimes(1);
+      expect(node.scrollTop).toBe(1200);
+    });
+
+    it("retires the queued end command when the hold opens after a strict-bottom report ended the correction", () => {
+      const { node, listRef, result } = mountHeldFollowing();
+
+      shim.setGeometry(node, { scrollHeight: 1700 });
+      result.current.followEndIfPermitted();
+      expect(listRef.scrollToEnd).toHaveBeenCalledTimes(1);
+      // The write reaches the end and is reported: the correction ends, the
+      // list still holds its command.
+      fireNativeScroll(node);
+      expect(listRef.cancelPendingScroll).not.toHaveBeenCalled();
+
+      result.current.openStructuralHold();
+      expect(listRef.cancelPendingScroll).toHaveBeenCalledTimes(1);
+
+      // The retired command does not land in the held frames.
+      shim.setGeometry(node, { scrollHeight: 1900 });
+      listRef.settle();
+      expect(node.scrollTop).toBe(1200);
+    });
+
+    it("retires a correction in flight when the window is voided and owes it once", () => {
+      const { node, listRef, result } = mountHeldFollowing();
+
+      shim.setGeometry(node, { scrollHeight: 1700 });
+      result.current.followEndIfPermitted();
+      expect(listRef.scrollToEnd).toHaveBeenCalledTimes(1);
+      expect(animationFrameCallbacks.size).toBe(1);
+
+      result.current.setWindowInvalidated(true);
+      expect(listRef.cancelPendingScroll).toHaveBeenCalledTimes(1);
+      expect(animationFrameCallbacks.size).toBe(0);
+
+      shim.setGeometry(node, { scrollHeight: 1900 });
+      flushAnimationFrame();
+      flushAnimationFrame();
+      expect(listRef.scrollToEnd).toHaveBeenCalledTimes(1);
+      expect(node.scrollTop).toBe(1200);
+
+      result.current.setWindowInvalidated(false);
+      expect(listRef.scrollToEnd).toHaveBeenCalledTimes(2);
+      expect(node.scrollTop).toBe(1400);
+      flushAnimationFrame();
+      flushAnimationFrame();
+      expect(listRef.scrollToEnd).toHaveBeenCalledTimes(2);
+    });
+
+    it("drops the owed correction when a strict-bottom report arrives during the hold", () => {
+      const { node, listRef, result } = mountHeldFollowing();
+
+      result.current.openStructuralHold();
+      fireNativeScroll(node);
+      // The tail grows after that report with no trigger of its own.
+      shim.setGeometry(node, { scrollHeight: 1700 });
+
+      result.current.closeStructuralHold();
+      expect(listRef.scrollToEnd).not.toHaveBeenCalled();
+      expect(node.scrollTop).toBe(1000);
+    });
+
+    it("still judges the reader during the hold: a scroll the reader made publishes departure", () => {
+      const { node, listRef, result, onFollowIntentChange } =
+        mountHeldFollowing();
+
+      shim.setGeometry(node, { scrollHeight: 1700 });
+      result.current.followEndIfPermitted();
+      // The write's own report: the correction is done, the ledger expects
+      // the view at the end the latch wrote.
+      fireNativeScroll(node);
+      result.current.openStructuralHold();
+      onFollowIntentChange.mockClear();
+
+      // A scroll below where the latch's own write left the view, which no
+      // write of the app or the list announced.
+      shim.setGeometry(node, { scrollTop: 900 });
+      fireNativeScroll(node);
+
+      expect(onFollowIntentChange).toHaveBeenLastCalledWith(false);
+      expect(listRef.scrollToEnd).toHaveBeenCalledTimes(1);
+    });
+  });
 });
