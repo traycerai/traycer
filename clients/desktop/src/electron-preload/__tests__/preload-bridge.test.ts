@@ -243,6 +243,8 @@ interface PreloadBridge {
     onQuitState(handler: (event: unknown) => void): { dispose: () => void };
   };
   readonly localHostCapability: "managed" | "none";
+  readonly soundtrackSourceAvailable: boolean;
+  readSoundtrackSet(): Promise<unknown>;
 }
 
 interface LoadPreloadOptions {
@@ -1452,5 +1454,56 @@ describe("preload exposes the host-lifecycle surface", () => {
     expect(typeof bridge.hostLifecycle).toBe("object");
     expect(typeof bridge.hostLifecycle.get).toBe("function");
     expect(typeof bridge.hostLifecycle.set).toBe("function");
+  });
+});
+
+describe("preload exposes the soundtrack source", () => {
+  afterEach(() => {
+    fakeElectron.reset();
+    vi.unstubAllGlobals();
+  });
+
+  async function load(options: {
+    flag: unknown;
+    invokeFn: InvokeFn | undefined;
+  }): Promise<PreloadBridge> {
+    return loadPreload({
+      authnApiUrl: undefined,
+      desktopDev: undefined,
+      initialRouteArg: undefined,
+      invokeFn: options.invokeFn,
+      sendSyncFn: (channel: string) =>
+        channel === RunnerHostSync.soundtrackSourceAvailable
+          ? options.flag
+          : null,
+    });
+  }
+
+  it("reports no source when main answers null, as it does an untrusted sender", async () => {
+    const bridge = await load({ flag: null, invokeFn: undefined });
+
+    expect(bridge.soundtrackSourceAvailable).toBe(false);
+  });
+
+  it("reports a source when main says there is one", async () => {
+    const bridge = await load({ flag: true, invokeFn: undefined });
+
+    expect(bridge.soundtrackSourceAvailable).toBe(true);
+  });
+
+  it("reads the set through its own invoke channel", async () => {
+    const invoked: string[] = [];
+    const bridge = await load({
+      flag: true,
+      invokeFn: (channel) => {
+        invoked.push(channel);
+        return Promise.resolve({ kind: "unavailable" });
+      },
+    });
+
+    await expect(bridge.readSoundtrackSet()).resolves.toEqual({
+      kind: "unavailable",
+    });
+    expect(invoked).toEqual([RunnerHostInvoke.readSoundtrackSet]);
   });
 });

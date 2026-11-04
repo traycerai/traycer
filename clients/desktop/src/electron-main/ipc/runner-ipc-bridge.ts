@@ -3,7 +3,9 @@ import { registerSandboxArtifactIpc } from "./sandbox-artifact-ipc";
 import type { BrowserDesktopControl } from "../browser-sessions/browser-desktop-control";
 import { ipcMain, type IpcMainEvent, type IpcMainInvokeEvent } from "electron";
 import { randomUUID } from "node:crypto";
+import { config } from "../../config";
 import { describeLogError, log } from "../app/logger";
+import { resolveIapKeyFilePath } from "../auth/iap-proxy-token";
 import type { DesktopTrayController } from "../tray/tray";
 import {
   RunnerHostEvent,
@@ -111,6 +113,7 @@ import {
 } from "./platform-ipc";
 import type { LocalHostCapability } from "../../ipc-contracts/host-lifecycle-types";
 import { registerPowerIpc } from "./power-ipc";
+import { registerSoundtrackIpc } from "./soundtrack-ipc";
 import { registerAppUpdateIpc } from "./app-update-ipc";
 import { registerGlobalShortcutsIpc } from "./global-shortcuts-ipc";
 import { registerZoomIpc } from "./zoom-ipc";
@@ -771,6 +774,15 @@ export class RunnerIpcBridge {
     // Power IPC (renderer-driven sleep prevention) registers a `disposeFn`
     // that releases the OS power-save blocker on teardown.
     registerPowerIpc(this);
+    // The key that crosses IAP on a staging build also reads the track set.
+    registerSoundtrackIpc(this, {
+      keyFilePath: resolveIapKeyFilePath(process.resourcesPath),
+      audience: config.iapAudience,
+      set: "team",
+      fetch: globalThis.fetch,
+      now: Date.now,
+      warn: (message) => log.warn(message),
+    });
   }
 
   /**
