@@ -305,8 +305,8 @@ export function showBotSearchResults(botId: string): void {
 /**
  * Sends a result to the channel that shows it. `fromBotId` is the channel the
  * search is open on: a result in another bot moves the rail there with it, so
- * the results are beside the channel the person is taken to. Says whether the
- * surface has to change channel.
+ * the results are beside the channel the person is taken to, over whatever
+ * that bot's rail held. Says whether the surface has to change channel.
  */
 export function jumpToBotSearchHit(
   fromBotId: string,
@@ -319,6 +319,6 @@ export function jumpToBotSearchHit(
   const back = rail?.kind === "search" ? rail.back : null;
   const { setRail } = useBotOpenThreadStore.getState();
   setRail(fromBotId, back);
-  setRail(hit.botId, searchRailOver(null));
+  setRail(hit.botId, searchRailOver(railOf(hit.botId)));
   return true;
 }

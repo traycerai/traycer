@@ -441,6 +441,28 @@ describe("a result on its way to the channel or thread that shows it", () => {
     expect(useBotSearchStore.getState().query).toBe("ship");
   });
 
+  it("moves the search over the thread the other bot has open, and closing the results there gives that thread back", () => {
+    const threadInB: BotRail = {
+      kind: "thread",
+      ...OPEN_THREAD,
+      anchorMessageId: "post-in-b",
+    };
+    useBotOpenThreadStore.getState().setRail(SEARCH_BOT_B, threadInB);
+    openBotSearch(SEARCH_BOT_A, ALL, "ship");
+
+    jumpToBotSearchHit(SEARCH_BOT_A, searchHit({ botId: SEARCH_BOT_B }), false);
+
+    expect(railOf(SEARCH_BOT_B)).toEqual({
+      kind: "search",
+      back: threadInB,
+      showing: { kind: "results" },
+    });
+
+    closeBotSearch(SEARCH_BOT_B);
+
+    expect(railOf(SEARCH_BOT_B)).toEqual(threadInB);
+  });
+
   it("drops the selection, the scroll and a missed thread when the query, scope or a filter changes", () => {
     const store = useBotSearchStore;
     const hit = searchHit({ threadId: "thread-1" });

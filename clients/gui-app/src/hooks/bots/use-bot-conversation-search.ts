@@ -54,7 +54,9 @@ export interface BotConversationSearchResults {
  * waits out the keystrokes after it, as Search chats does.
  *
  * It starts at the bot's own host where this client reaches one, and at the
- * tab's otherwise; `fetchBotSearchPage` says what happens from there.
+ * tab's otherwise; `fetchBotSearchPage` says what happens from there. That is
+ * known once the bot list and the host directory have answered, so it waits
+ * for both, and a change in what this client reaches is a new search.
  */
 export function useBotConversationSearch(): BotConversationSearchResults {
   const client = useTabHostClient();
@@ -65,17 +67,24 @@ export function useBotConversationSearch(): BotConversationSearchResults {
   const filters = useBotSearchStore((state) => state.filters);
   const debounced = useDebouncedValue(typed, CHAT_SEARCH_DEBOUNCE_MS);
   const query = botSearchableQuery(debounced);
-  const bots = useBotListQuery(client, true).data?.bots;
+  const botList = useBotListQuery(client, true);
+  const bots = botList.data?.bots;
   const connectable = useConnectableHostIds();
-  const reachableHostOf = useCallback(
-    (botId: string): string | null => {
-      const hostId =
-        bots?.find((bot) => bot.botId === botId)?.boundHostId ?? null;
-      return hostId !== null && connectable.hostIds.includes(hostId)
-        ? hostId
-        : null;
-    },
+  const reachableHosts = useMemo(
+    () =>
+      (bots ?? [])
+        .flatMap(({ botId, boundHostId }) =>
+          boundHostId !== null && connectable.hostIds.includes(boundHostId)
+            ? [{ botId, hostId: boundHostId }]
+            : [],
+        )
+        .sort((a, b) => a.botId.localeCompare(b.botId)),
     [bots, connectable.hostIds],
+  );
+  const reachableHostOf = useCallback(
+    (botId: string): string | null =>
+      reachableHosts.find((entry) => entry.botId === botId)?.hostId ?? null,
+    [reachableHosts],
   );
   // Local midnights: the same base request through the day.
   const base = useMemo(
@@ -116,6 +125,7 @@ export function useBotConversationSearch(): BotConversationSearchResults {
   const queryKey = [
     ...hostQueryKeys.methodScope(readiness.hostId, METHOD),
     base,
+    reachableHosts,
   ];
   const results = useInfiniteQuery(
     infiniteQueryOptions<
@@ -130,7 +140,12 @@ export function useBotConversationSearch(): BotConversationSearchResults {
       initialPageParam: [botSearchFirstSource(scope, reachableHostOf)],
       getNextPageParam: (lastPage) =>
         lastPage.next.length === 0 ? undefined : lastPage.next,
-      enabled: base !== null && client !== null && readiness.isReady,
+      enabled:
+        base !== null &&
+        client !== null &&
+        readiness.isReady &&
+        !botList.isPending &&
+        connectable.resolved,
       refetchOnWindowFocus: false,
       // A refused request is refused again, and a host without the index stays so.
       retry: (failureCount, error) =>

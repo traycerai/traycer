@@ -26,12 +26,24 @@ export function botSearchHitKey(hit: BotConversationSearchHit): string {
   return JSON.stringify([hit.botId, hit.threadId, hit.messageId]);
 }
 
+/**
+ * `text` in lower case, a character at a time, so an offset into the answer is
+ * an offset into `text`: a character whose lower case is longer, as İ's is,
+ * stays as it is.
+ */
+export function foldBotSearchText(text: string): string {
+  return Array.from(text, (character) => {
+    const lower = character.toLowerCase();
+    return lower.length === character.length ? lower : character;
+  }).join("");
+}
+
 /** The words the index matched, as the snippet's highlights name them. */
 export function botSearchWordsOf(
   hit: BotConversationSearchHit,
 ): readonly string[] {
   const words = hit.snippet.highlights.map(({ start, end }) =>
-    hit.snippet.text.slice(start, end).toLowerCase(),
+    foldBotSearchText(hit.snippet.text.slice(start, end)),
   );
   return [...new Set(words)].filter((word) => word.length > 0);
 }

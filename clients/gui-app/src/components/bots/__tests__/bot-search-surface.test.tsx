@@ -362,6 +362,41 @@ describe("jumping to a result", () => {
     expect(paintedWords()).toEqual([]);
   });
 
+  it.each([
+    ["is the word the highlight names", "İzmir", { start: 0, end: 5 }, "İzmir"],
+    [
+      "comes after the capital İ in the same text",
+      "İzmir ankara",
+      { start: 6, end: 12 },
+      "ankara",
+    ],
+  ] as const)(
+    "marks exactly the word on a row whose text %s",
+    async (_where, text, highlight, marked) => {
+      mocks.state.rows = new Map([
+        [conversationOf(SEARCH_BOT_A), [{ messageId: "post-1", text }]],
+      ]);
+      mocks.state.answer = answerWith(
+        searchResponse({
+          hits: [
+            searchHit({
+              messageId: "post-1",
+              snippet: { text, highlights: [highlight] },
+              score: 5,
+            }),
+          ],
+          total: 1,
+        }),
+      );
+      await openWithResults("izmir");
+
+      fireEvent.click(hitRows()[0]);
+      await settle();
+
+      expect(paintedWords()).toEqual([marked]);
+    },
+  );
+
   it("opens a thread's result in the rail at the reply, and the back link brings the results back with the query, filters and scroll", async () => {
     mocks.state.threads = [thread("thread-1", "post-7")];
     mocks.state.answer = answerWith(

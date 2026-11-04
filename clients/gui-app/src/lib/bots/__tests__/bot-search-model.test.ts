@@ -7,6 +7,7 @@ import type {
 import { HostRpcError } from "@traycer-clients/shared/host-transport/host-messenger";
 import {
   botSearchFirstSource,
+  foldBotSearchText,
   botSearchHitsOf,
   botSearchSince,
   botSearchUnreachableOf,
@@ -621,6 +622,18 @@ describe("paging hosts that rank at their own pace", () => {
       `${SEARCH_BOT_B}/70`,
     ]);
     expect(second.next).toEqual([]);
+  });
+});
+
+describe("foldBotSearchText", () => {
+  it("lower-cases a character at a time, and keeps one whose lower case is longer, so its offsets are the text's", () => {
+    const text = "İzmir ANKARA 𐐀";
+
+    const folded = foldBotSearchText(text);
+
+    // İ lower-cases to two units and stays; 𐐀 (two units) lower-cases to 𐐨.
+    expect(folded).toBe("İzmir ankara 𐐨");
+    expect(folded.length).toBe(text.length);
   });
 });
 

@@ -4,7 +4,7 @@
  * and the lifecycle each suite installs. It registers the module mocks, so
  * a suite imports it before anything of the surface.
  */
-import type { ReactNode } from "react";
+import { useSyncExternalStore, type ReactNode } from "react";
 import { QueryClient } from "@tanstack/react-query";
 import { act, cleanup, fireEvent, screen } from "@testing-library/react";
 import { afterEach, beforeEach, vi } from "vitest";
@@ -66,11 +66,38 @@ const mocks = vi.hoisted(() => ({
     threads: [] as BotThreadSummary[],
     /** Host ids this client can dial. */
     connectable: [] as string[],
+    /** Whether the directory has said which hosts those are yet. */
+    connectableResolved: true,
+    /** How the bot list stands: loaded, still loading, or failed. */
+    botListState: "ready",
     searchSupported: true,
     /** The transcript stub's rows, by chat id. */
     rows: new Map<string, ReadonlyArray<TranscriptRow>>(),
   },
+  /** The lists above are read by hooks: a change in them re-renders the readers. */
+  lists: {
+    version: 0,
+    listeners: new Set<() => void>(),
+  },
 }));
+
+function subscribeToLists(listener: () => void): () => void {
+  mocks.lists.listeners.add(listener);
+  return () => mocks.lists.listeners.delete(listener);
+}
+
+function listsVersion(): number {
+  return mocks.lists.version;
+}
+
+/** Changes what the bot list and the connectable hosts answer, and re-renders their readers. */
+export function changeLists(update: () => void): void {
+  act(() => {
+    update();
+    mocks.lists.version += 1;
+    for (const listener of mocks.lists.listeners) listener();
+  });
+}
 
 /** What the surface asks of a host's client: the readiness it reports, and `request`. */
 interface FakeHostClient {
@@ -181,24 +208,36 @@ vi.mock("@/lib/host", async (importOriginal) => ({
   }),
 }));
 vi.mock("@/hooks/host/use-connectable-host-ids", () => ({
-  useConnectableHostIds: () => ({
-    hostIds: mocks.state.connectable,
-    resolved: true,
-  }),
+  useConnectableHostIds: () => {
+    useSyncExternalStore(subscribeToLists, listsVersion);
+    return {
+      hostIds: mocks.state.connectable,
+      resolved: mocks.state.connectableResolved,
+    };
+  },
 }));
 vi.mock("@/hooks/host/use-host-directory-list-query", () => ({
   useHostDirectoryList: () => ({ data: [] }),
 }));
 vi.mock("@/hooks/bots/use-bot-list-query", () => ({
-  useBotListQuery: () => ({
-    status: "success",
-    data: { bots: mocks.state.bots, mainBotIds: null },
-    dataUpdatedAt: 1_000,
-    errorUpdatedAt: 0,
-    isFetchedAfterMount: true,
-    isFetching: false,
-    refetch: vi.fn(),
-  }),
+  useBotListQuery: () => {
+    useSyncExternalStore(subscribeToLists, listsVersion);
+    const state = mocks.state.botListState;
+    return {
+      status: state === "ready" ? "success" : state,
+      data:
+        state === "ready"
+          ? { bots: mocks.state.bots, mainBotIds: null }
+          : undefined,
+      isPending: state === "pending",
+      isError: state === "error",
+      dataUpdatedAt: state === "ready" ? 1_000 : 0,
+      errorUpdatedAt: 0,
+      isFetchedAfterMount: true,
+      isFetching: false,
+      refetch: vi.fn(),
+    };
+  },
 }));
 vi.mock("@/hooks/bots/use-environment-list-query", () => ({
   useEnvironmentListQuery: () => ({
@@ -534,6 +573,8 @@ export function installSearchSurfaceLifecycle(): void {
     mocks.state.bots = BOTS;
     mocks.state.threads = [];
     mocks.state.connectable = [TAB_HOST, HOST_A, HOST_B];
+    mocks.state.connectableResolved = true;
+    mocks.state.botListState = "ready";
     mocks.state.searchSupported = true;
     mocks.state.rows = new Map([
       [

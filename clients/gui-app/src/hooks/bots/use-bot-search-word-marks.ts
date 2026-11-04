@@ -1,10 +1,11 @@
 import { useEffect, type RefObject } from "react";
 import { CHAT_NAVIGATION_HIGHLIGHT_DURATION_MS } from "@/components/chat/chat-navigation-highlight";
 import { queryMountedChatMessageRoots } from "@/components/chat/chat-find-highlighter";
+import { foldBotSearchText } from "@/lib/bots/bot-search-model";
 import { RangeHighlighter } from "@/lib/find-engine/range-highlighter";
 import { useBotSearchStore } from "@/stores/bots/bot-search-store";
 
-/** Every place one of `words`, lower-cased, stands in the text under `root`. */
+/** Every place one of `words`, folded, stands in the text under `root`. */
 function wordRanges(root: HTMLElement, words: readonly string[]): Range[] {
   const ranges: Range[] = [];
   const walker = root.ownerDocument.createTreeWalker(
@@ -12,7 +13,7 @@ function wordRanges(root: HTMLElement, words: readonly string[]): Range[] {
     NodeFilter.SHOW_TEXT,
   );
   for (let node = walker.nextNode(); node !== null; node = walker.nextNode()) {
-    const text = (node.nodeValue ?? "").toLowerCase();
+    const text = foldBotSearchText(node.nodeValue ?? "");
     for (const word of words) {
       for (
         let at = text.indexOf(word);
