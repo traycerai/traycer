@@ -506,7 +506,9 @@ import {
   providersFallbackPolicyGetV11,
   providersFallbackPolicyGetV20,
   providersFallbackPolicyGetUpgradeV11ToV20,
-  providersFallbackPolicyGetDowngradeV20ToV11,
+  providersFallbackPolicyGetV21,
+  providersFallbackPolicyGetUpgradeV20ToV21,
+  providersFallbackPolicyGetDowngradeV21ToV11,
   providersFallbackPolicyPreviewTierGroupsUpgradeV10ToV11,
   providersFallbackPolicyPreviewTierGroupsV10,
   providersFallbackPolicyPreviewTierGroupsV11,
@@ -679,6 +681,7 @@ import {
 import {
   botClaimAuthorityV10,
   botConversationListV10,
+  botConversationSearchV10,
   botConversationSendV10,
   botConversationSendV11,
   botConversationSendUpgradeV10ToV11,
@@ -9496,6 +9499,20 @@ const HOST_RPC_REGISTRY_BASE_TAIL_DEFINITION = {
       downgradePathsFromLatest: {},
     },
   },
+  // Text search over a bot's channel and threads (T139). Same optional posture.
+  "bot.conversation.search": {
+    degrade: { kind: "unsupported" },
+    1: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: botConversationSearchV10,
+          upgradeFromPreviousVersion: null,
+        },
+      },
+      downgradePathsFromLatest: {},
+    },
+  },
   "bot.conversation.send": {
     degrade: { kind: "unsupported" },
     1: {
@@ -13848,15 +13865,19 @@ const HOST_RPC_ID_CARRYING_REGISTRY_DEFINITION = {
       downgradePathsFromLatest: {},
     },
     2: {
-      latestMinor: 0,
+      latestMinor: 1,
       versions: {
         0: {
           contract: providersFallbackPolicyGetV20,
           upgradeFromPreviousVersion: providersFallbackPolicyGetUpgradeV11ToV20,
         },
+        1: {
+          contract: providersFallbackPolicyGetV21,
+          upgradeFromPreviousVersion: providersFallbackPolicyGetUpgradeV20ToV21,
+        },
       },
       downgradePathsFromLatest: {
-        1: providersFallbackPolicyGetDowngradeV20ToV11,
+        1: providersFallbackPolicyGetDowngradeV21ToV11,
       },
     },
   },

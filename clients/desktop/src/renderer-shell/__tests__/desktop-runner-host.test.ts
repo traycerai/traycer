@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
+import type { DesktopSystemWake } from "../../ipc-contracts/host-types";
 import type {
   HostControllerStatus,
   HostLifecycleSetRequest,
@@ -92,7 +93,7 @@ interface FakeBridgeHandle {
     readonly bytes: ArrayBuffer;
   }>;
   emit(snapshot: LocalHostSnapshot | null): void;
-  emitSystemResumed(): void;
+  emitSystemResumed(wake: DesktopSystemWake): void;
   systemResumedBridgeSubscriptionCount(): number;
   emitSystemSuspended(): void;
 }
@@ -106,7 +107,7 @@ function buildFakeBridge(
   const registeredHostsHandlers = new Set<
     (push: RegisteredHostsChange) => void
   >();
-  const systemResumedHandlers = new Set<() => void>();
+  const systemResumedHandlers = new Set<(wake: DesktopSystemWake) => void>();
   const systemSuspendedHandlers = new Set<() => void>();
 
   const tokenSlot = { value: null as string | null };
@@ -325,7 +326,7 @@ function buildFakeBridge(
       };
     },
     onLocalHostUnresponsive: () => ({ dispose: () => undefined }),
-    onSystemResumed: (handler: () => void) => {
+    onSystemResumed: (handler: (wake: DesktopSystemWake) => void) => {
       systemResumedHandlers.add(handler);
       return {
         dispose: () => {
@@ -924,9 +925,9 @@ function buildFakeBridge(
         handler(snapshot);
       }
     },
-    emitSystemResumed(): void {
+    emitSystemResumed(wake: DesktopSystemWake): void {
       for (const handler of systemResumedHandlers) {
-        handler();
+        handler(wake);
       }
     },
     systemResumedBridgeSubscriptionCount(): number {
@@ -1666,17 +1667,20 @@ describe("DesktopRunnerHost.onSystemResumed", () => {
     const subscriptions = calls.map((handler) => host.onSystemResumed(handler));
 
     expect(fake.systemResumedBridgeSubscriptionCount()).toBe(1);
-    fake.emitSystemResumed();
+    fake.emitSystemResumed({ screenLocked: false });
     for (const handler of calls) {
       expect(handler).toHaveBeenCalledTimes(1);
       // Desktop cannot measure sleep duration (`powerMonitor` reports none),
       // so its resume event must say so - a number here would put every
       // desktop wake through the mobile duration gate.
-      expect(handler).toHaveBeenCalledWith({ backgroundedForMs: null });
+      expect(handler).toHaveBeenCalledWith({
+        backgroundedForMs: null,
+        screenLocked: false,
+      });
     }
 
     subscriptions[0]?.dispose();
-    fake.emitSystemResumed();
+    fake.emitSystemResumed({ screenLocked: false });
     expect(calls[0]).toHaveBeenCalledTimes(1);
     for (const handler of calls.slice(1)) {
       expect(handler).toHaveBeenCalledTimes(2);
@@ -1684,10 +1688,30 @@ describe("DesktopRunnerHost.onSystemResumed", () => {
 
     host.dispose();
     expect(fake.systemResumedBridgeSubscriptionCount()).toBe(0);
-    fake.emitSystemResumed();
+    fake.emitSystemResumed({ screenLocked: false });
     for (const handler of calls.slice(1)) {
       expect(handler).toHaveBeenCalledTimes(2);
     }
+  });
+});
+
+describe("DesktopRunnerHost.onSystemResumed screen lock", () => {
+  it("carries a wake behind the lock screen through as still locked", () => {
+    const fake = buildFakeBridge(null);
+    const host = new DesktopRunnerHost({
+      bridge: fake.bridge,
+      signInUrl: "https://auth.example.invalid/sign-in",
+    });
+    const handler = vi.fn();
+    host.onSystemResumed(handler);
+
+    fake.emitSystemResumed({ screenLocked: true });
+
+    expect(handler).toHaveBeenCalledWith({
+      backgroundedForMs: null,
+      screenLocked: true,
+    });
+    host.dispose();
   });
 });
 

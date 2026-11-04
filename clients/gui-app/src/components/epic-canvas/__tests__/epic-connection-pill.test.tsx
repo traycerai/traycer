@@ -1264,7 +1264,7 @@ describe("artifact sync in the connection pill", () => {
     vi.clearAllMocks();
   });
 
-  it("announces the warning and offers its sentence on hover", async () => {
+  it("announces a stopped warning as a dot whose name is the sentence", async () => {
     vi.useFakeTimers();
     mocks.artifactSyncReading = {
       rooms: "stopped",
@@ -1277,14 +1277,38 @@ describe("artifact sync in the connection pill", () => {
     });
     const sentence =
       "Artifacts not syncing. Your changes are saved on this computer. Your other devices and teammates won’t see them yet.";
-    expect(screen.getByRole<HTMLButtonElement>("button").dataset.source).toBe(
-      "artifact-sync",
-    );
-    expect(screen.getByRole("button").textContent).toBe("Syncing…");
-    expect(screen.getByRole("button").getAttribute("aria-label")).toBe(
-      `Syncing… ${sentence}`,
+    const pill = screen.getByRole<HTMLButtonElement>("button");
+    expect(pill.dataset.source).toBe("artifact-sync");
+    expect(pill.textContent).toBe("");
+    expect(pill.getAttribute("aria-label")).toBe(sentence);
+    expect(screen.getByTestId("epic-connection-pill-dot").className).toContain(
+      "bg-warning",
     );
     expect(screen.getByRole("status").textContent).toContain(sentence);
+    vi.useRealTimers();
+    await expectTooltip(sentence);
+  });
+
+  it("renders a retrying warning as the quiet saving dot with the sentence as its name", async () => {
+    vi.useFakeTimers();
+    mocks.artifactSyncReading = {
+      rooms: "retrying",
+      waitingNewArtifacts: 0,
+      pillState: "hostPending",
+    };
+    renderPill("hostPending");
+    act(() => {
+      vi.advanceTimersByTime(15_000);
+    });
+    const sentence =
+      "Artifacts not syncing. Your changes are saved on this computer. Your other devices and teammates won’t see them yet. Retrying on its own.";
+    const pill = screen.getByRole<HTMLButtonElement>("button");
+    expect(pill.dataset.source).toBe("artifact-sync");
+    expect(pill.textContent).toBe("");
+    expect(pill.getAttribute("aria-label")).toBe(sentence);
+    expect(pill.className).toContain("h-5");
+    expect(pill.innerHTML).toContain("bg-muted-foreground/50");
+    expect(pill.innerHTML).not.toContain("bg-warning");
     vi.useRealTimers();
     await expectTooltip(sentence);
   });
@@ -1306,7 +1330,7 @@ describe("artifact sync in the connection pill", () => {
     );
   });
 
-  it("shows recovery over synced and not over a pending pill", () => {
+  it("returns to the synced claim with no recovery flash", () => {
     vi.useFakeTimers();
     mocks.artifactSyncReading = {
       rooms: "retrying",
@@ -1333,11 +1357,14 @@ describe("artifact sync in the connection pill", () => {
     };
     mocks.useEpicSyncPillState.mockReturnValue("synced");
     rerender(pillTree());
+    expect(screen.getByRole("button").textContent).not.toContain(
+      "Artifacts synced",
+    );
     act(() => {
       vi.advanceTimersByTime(750);
     });
-    expect(screen.getByRole("button").textContent).toContain(
-      "Artifacts synced",
-    );
+    const pill = screen.getByRole("button");
+    expect(pill.textContent).not.toContain("Artifacts synced");
+    expect(pill.getAttribute("aria-label")).toBe("All changes synced");
   });
 });

@@ -183,7 +183,7 @@ function timeline(frames: readonly ChatFollowFrame[]): string {
     if (!changed || shown >= 70) return;
     shown += 1;
     rows.push(
-      `t=${String(f.t).padStart(5)} ${f.step.padEnd(7)} dist=${f.distance.toFixed(1).padStart(7)} top=${f.scrollTop.toFixed(0)} sh=${String(f.scrollHeight)} ch=${String(f.clientHeight)} dock=${f.dockHeight.toFixed(0)} mode=${f.mode} pill=${String(f.pill)} prompt=${f.promptTop?.toFixed(0) ?? "-"}..${f.promptBottom?.toFixed(0) ?? "-"} rows=${String(f.rows)} last=${f.lastRowKey}`,
+      `t=${String(f.t).padStart(5)} ${f.step.padEnd(7)} dist=${f.distance.toFixed(1).padStart(7)} top=${f.scrollTop.toFixed(0)} sh=${String(f.scrollHeight)} ch=${String(f.clientHeight)} dock=${f.dockHeight.toFixed(0)} mode=${f.mode} pill=${String(f.pill)} prompt=${f.promptTop?.toFixed(0) ?? "-"}..${f.promptBottom?.toFixed(0) ?? "-"} rows=${String(f.rows)} last=${f.lastRowKey} keys=${f.rowKeys}`,
     );
   });
   return [
@@ -379,12 +379,37 @@ for (const c of CASES) {
         f.promptBottom !== null &&
         f.promptBottom > f.clientHeight - f.dockHeight + 1,
     );
+    // The send's layout hold (chat-timeline-follow-latch.ts, the structural
+    // bit) issues no end write in the commit that appends the prompt row:
+    // that frame may paint the prompt under the dock, and the one correction
+    // lands in the frame after, which must be at the end. Any later frame
+    // with the prompt under the dock is a real failure to follow.
+    const commitFrame = drawn.at(0);
+    const afterCommit =
+      commitFrame === undefined
+        ? undefined
+        : frames.at(frames.indexOf(commitFrame) + 1);
+    const hiddenAfterCommit = hidden.filter((f) => f !== commitFrame);
     expect
       .soft(
-        hidden.length,
-        `painted frames with the sent prompt under the dock (first at t=${String(hidden[0]?.t)})\n${report}`,
+        hiddenAfterCommit.length,
+        `painted frames with the sent prompt under the dock after the commit frame (first at t=${String(hiddenAfterCommit[0]?.t)})\n${report}`,
       )
       .toBe(0);
+    if (commitFrame !== undefined && hidden.includes(commitFrame)) {
+      expect
+        .soft(
+          afterCommit?.distance,
+          `the frame after the prompt's commit frame is back at the end\n${report}`,
+        )
+        .toBeLessThanOrEqual(1);
+      expect
+        .soft(
+          commitFrame.mode,
+          `the hold's commit frame keeps following\n${report}`,
+        )
+        .toBe("following-end");
+    }
 
     const streaming = frames.filter((f) => f.step === "stream");
     expect
@@ -393,12 +418,48 @@ for (const c of CASES) {
         `frames were recorded while the reply streams\n${report}`,
       )
       .toBeGreaterThan(0);
+    // A rich reply commits new rows as it streams, and each such commit is a
+    // frame the layout hold leaves unwritten: it may paint off the end, and
+    // the frame after it carries the correction and must be at the end. A
+    // token growing an existing row opens no hold, so an off-end paint there
+    // is a missed correction, as are two consecutive off-end frames. The one
+    // other frame excused is a height spike the next frame takes back: the
+    // latch's write landed, the content then grew within the frame and
+    // shrank again, so no correction could have followed it.
+    const heldCommit = (f: ChatFollowFrame): boolean => {
+      const i = frames.indexOf(f);
+      const prev = frames.at(i - 1);
+      const next = frames.at(i + 1);
+      if (i === 0 || prev === undefined || next === undefined) return false;
+      const rowShapeCommit = prev.rowKeys !== f.rowKeys;
+      const heightSpike =
+        f.scrollHeight > prev.scrollHeight &&
+        next.scrollHeight < f.scrollHeight;
+      return (rowShapeCommit || heightSpike) && next.distance <= 1;
+    };
+    const offEndStreaming = streaming.filter(
+      (f) => f.distance > 1 && !heldCommit(f),
+    );
     expect
       .soft(
-        streaming.filter((f) => f.distance > 1).length,
-        `painted frames off the end while the reply streams\n${report}`,
+        offEndStreaming.length,
+        `painted frames off the end while the reply streams, outside a row-shape commit or a reverted height spike\n${report}`,
       )
       .toBe(0);
+    // The stream step ends when the deltas have been delivered, which can
+    // fall between a held commit and its correction: then the first frame
+    // after the step carries the end reading.
+    const lastStreaming = streaming.at(-1);
+    const endReading = (f: ChatFollowFrame): number | undefined =>
+      heldCommit(f) ? frames.at(frames.indexOf(f) + 1)?.distance : f.distance;
+    const streamEnd =
+      lastStreaming === undefined ? undefined : endReading(lastStreaming);
+    expect
+      .soft(
+        streamEnd,
+        `the last streaming frame, or its held commit's correction, is at the end\n${report}`,
+      )
+      .toBeLessThanOrEqual(1);
     expect
       .soft(
         longestOffEndMs(streaming),

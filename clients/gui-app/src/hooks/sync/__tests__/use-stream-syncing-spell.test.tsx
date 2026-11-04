@@ -245,7 +245,10 @@ describe("useStreamSyncingSpell", () => {
         vi.advanceTimersByTime(LINK_DOWN_ESCALATION_MS * 0.7);
       });
       act(() => {
-        host.emitSystemResumed({ backgroundedForMs: 180_000 });
+        host.emitSystemResumed({
+          backgroundedForMs: 180_000,
+          screenLocked: false,
+        });
       });
       // 0.7 + 0.7 = 1.4 intervals since the drop, but only 0.7 since resume.
       act(() => {
@@ -273,7 +276,10 @@ describe("useStreamSyncingSpell", () => {
       expect(result.current.escalated).toBe(true);
 
       act(() => {
-        host.emitSystemResumed({ backgroundedForMs: 180_000 });
+        host.emitSystemResumed({
+          backgroundedForMs: 180_000,
+          screenLocked: false,
+        });
       });
       expect(result.current.escalated).toBe(false);
 
@@ -303,7 +309,10 @@ describe("useStreamSyncingSpell", () => {
         vi.advanceTimersByTime(LINK_DOWN_ESCALATION_MS - 1);
       });
       act(() => {
-        host.emitSystemResumed({ backgroundedForMs: 180_000 });
+        host.emitSystemResumed({
+          backgroundedForMs: 180_000,
+          screenLocked: false,
+        });
         vi.advanceTimersByTime(1);
       });
       expect(result.current.escalated).toBe(false);
@@ -332,7 +341,10 @@ describe("useStreamSyncingSpell", () => {
       });
       expect(result.current.escalated).toBe(true);
       act(() => {
-        host.emitSystemResumed({ backgroundedForMs: null });
+        host.emitSystemResumed({
+          backgroundedForMs: null,
+          screenLocked: false,
+        });
       });
       expect(result.current.escalated).toBe(false);
     });
@@ -347,7 +359,10 @@ describe("useStreamSyncingSpell", () => {
       );
       expect(subscribers.live()).toBe(0);
       act(() => {
-        host.emitSystemResumed({ backgroundedForMs: 5_000 });
+        host.emitSystemResumed({
+          backgroundedForMs: 5_000,
+          screenLocked: false,
+        });
       });
       expect(result.current).toEqual({ syncing: false, escalated: false });
     });
