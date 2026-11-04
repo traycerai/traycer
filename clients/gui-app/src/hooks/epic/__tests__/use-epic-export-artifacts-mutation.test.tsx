@@ -244,15 +244,17 @@ describe("useEpicExportArtifacts", () => {
       spec: { kind: "spec", title: "Spec" },
       ticket: { kind: "ticket", title: "Ticket" },
     };
+    serializeArtifactMarkdown.mockImplementation(() => "# body");
+    const { result } = renderHook(() => useEpicExportArtifacts(), {
+      wrapper: makeWrapper(),
+    });
+    // The child lands only after the hook rendered: the export must read the
+    // tree when it runs, not a copy taken at render.
     artifactTree.current = {
       rootIds: ["spec"],
       childrenByParent: { spec: ["ticket"] },
       nodeById: { spec: { parentId: null }, ticket: { parentId: "spec" } },
     };
-    serializeArtifactMarkdown.mockImplementation(() => "# body");
-    const { result } = renderHook(() => useEpicExportArtifacts(), {
-      wrapper: makeWrapper(),
-    });
 
     await result.current.mutateAsync({
       artifacts: [{ id: "spec", title: "Spec" }],

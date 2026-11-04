@@ -342,6 +342,12 @@ describe("artifact export", () => {
         Node.DOCUMENT_POSITION_FOLLOWING,
     ).not.toBe(0);
 
+    // A leaf has nothing nested to carry. Checked while the menu is open:
+    // selecting an item closes it, after which every item is absent.
+    expect(
+      screen.queryByTestId(`switcher-export-nested-pdf-${ARTIFACT_NODE_ID}`),
+    ).toBeNull();
+
     fireEvent.click(pdfItem);
 
     expect(exportMutate).toHaveBeenCalledExactlyOnceWith({
@@ -351,10 +357,6 @@ describe("artifact export", () => {
       archiveTitle: null,
       includeNested: false,
     });
-    // A leaf has nothing nested to carry.
-    expect(
-      screen.queryByTestId(`switcher-export-nested-pdf-${ARTIFACT_NODE_ID}`),
-    ).toBeNull();
   });
 
   it("offers a nested export on a row with Markdown artifacts under it", () => {

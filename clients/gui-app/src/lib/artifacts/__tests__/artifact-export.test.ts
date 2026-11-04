@@ -168,6 +168,66 @@ describe("createArtifactExport", () => {
     });
   });
 
+  it("never gives a folder and a file the same archive path", async () => {
+    const result = await createArtifactExport({
+      artifacts: [
+        { id: "parent", title: "Plan.md", parentId: null, markdown: "# p" },
+        { id: "kid", title: "Kid", parentId: "parent", markdown: "# k" },
+        // Written `Plan.md`, which is the folder's name above.
+        { id: "leaf", title: "Plan", parentId: null, markdown: "# l" },
+        // Written `Spec.md`: a different name from the folder `Spec/` - kept.
+        { id: "spec", title: "Spec", parentId: null, markdown: "# s" },
+        { id: "spec-kid", title: "Kid", parentId: "spec", markdown: "# sk" },
+        { id: "spec-twin", title: "Spec", parentId: null, markdown: "# st" },
+      ],
+      format: "markdown",
+      archive: true,
+      archiveTitle: "Epic",
+    });
+
+    const entries = unzipSync(new Uint8Array(await result.blob.arrayBuffer()));
+    expect(Object.keys(entries).sort()).toEqual([
+      "Plan (2).md",
+      "Plan.md/Kid.md",
+      "Plan.md/Plan.md.md",
+      "Spec.md",
+      "Spec/Kid.md",
+      "Spec/Spec.md",
+    ]);
+  });
+
+  it("keeps deeply nested paths within the Windows path budget", async () => {
+    const longTitle = (label: string): string => `${label} ${"x".repeat(150)}`;
+    const chain = Array.from({ length: 6 }, (_, depth) => ({
+      id: `level-${depth}`,
+      title: longTitle(`Level ${depth}`),
+      parentId: depth === 0 ? null : `level-${depth - 1}`,
+      markdown: `# ${depth}`,
+    }));
+    const result = await createArtifactExport({
+      artifacts: chain,
+      format: "pdf",
+      archive: true,
+      archiveTitle: "Deep",
+    });
+
+    const paths = Object.keys(
+      unzipSync(new Uint8Array(await result.blob.arrayBuffer())),
+    );
+    expect(paths).toHaveLength(chain.length);
+    for (const path of paths) {
+      expect(path.length).toBeLessThanOrEqual(200);
+    }
+    // A flat export keeps its full-length stems.
+    const flat = await createArtifactExport({
+      artifacts: [{ ...chain[0], parentId: null }],
+      format: "markdown",
+      archive: false,
+      archiveTitle: "ignored",
+    });
+    expect(flat.suggestedName).toBe(`${"Level 0 " + "x".repeat(112)}.md`);
+  });
+
   it("preserves complete Unicode code points in exported filenames", async () => {
     const result = await createArtifactExport({
       artifacts: [

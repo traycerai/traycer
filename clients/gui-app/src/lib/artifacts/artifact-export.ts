@@ -83,15 +83,49 @@ function safeFileStem(title: string): string {
   return WINDOWS_RESERVED_FILENAME.test(stem) ? `_${stem}` : stem;
 }
 
-/** Claims `stem` in one directory, suffixing ` (2)`, ` (3)`... on a clash. */
-function claimStem(stem: string, used: Set<string>): string {
+/**
+ * The longest archive path an entry may take, in UTF-16 code units (what
+ * Windows counts). Extraction tools that are not long-path aware refuse a path
+ * over MAX_PATH (260), and that count includes the folder the archive is
+ * unpacked into, so this leaves 60 units for it.
+ */
+const ARCHIVE_PATH_BUDGET = 200;
+/** Room kept for a ` (n)` collision suffix. */
+const COLLISION_SUFFIX_RESERVE = 6;
+/** Below this a stem stops being recognizable; deeper paths may then exceed the budget. */
+const MIN_BUDGETED_STEM = 12;
+
+/** `stem` cut to at most `maxUnits` UTF-16 units, on a code-point boundary. */
+function truncateStem(stem: string, maxUnits: number): string {
+  if (stem.length <= maxUnits) return stem;
+  let truncated = "";
+  for (const character of stem) {
+    if (truncated.length + character.length > maxUnits) break;
+    truncated += character;
+  }
+  return truncated.replace(/[. ]+$/g, "") || "artifact";
+}
+
+/**
+ * Claims an entry in one directory and returns its stem, suffixing ` (2)`,
+ * ` (3)`... on a clash. `used` holds the directory's ACTUAL entry names,
+ * lower-cased: a folder is its stem, a file its stem plus `entrySuffix`. So a
+ * folder titled `Plan.md` and a file titled `Plan` (written `Plan.md`) clash,
+ * while a folder `Plan/` and a file `Plan.md` - different names on disk - do
+ * not.
+ */
+function claimEntry(
+  stem: string,
+  entrySuffix: string,
+  used: Set<string>,
+): string {
   let candidate = stem;
   let suffix = 2;
-  while (used.has(candidate.toLocaleLowerCase("en-US"))) {
+  while (used.has(`${candidate}${entrySuffix}`.toLocaleLowerCase("en-US"))) {
     candidate = `${stem} (${suffix})`;
     suffix += 1;
   }
-  used.add(candidate.toLocaleLowerCase("en-US"));
+  used.add(`${candidate}${entrySuffix}`.toLocaleLowerCase("en-US"));
   return candidate;
 }
 
@@ -100,10 +134,15 @@ function claimStem(stem: string, used: Set<string>): string {
  *
  * A leaf is `<stem>.<ext>` in its parent's directory. A source with children
  * becomes a folder `<stem>/` holding its own `<stem>.<ext>` and its children,
- * so the parent travels with what is nested under it. Names are unique per
- * directory, case-insensitively, files and folders alike: a folder and a file
- * of the same stem would collide on the case-insensitive filesystems most
- * archives are unpacked onto.
+ * so the parent travels with what is nested under it. Entry names are unique
+ * per directory, case-insensitively, since most archives are unpacked onto
+ * case-insensitive filesystems; a folder and a file are compared by the names
+ * they actually take on disk.
+ *
+ * Stems shrink with depth so every path stays within `ARCHIVE_PATH_BUDGET`. A
+ * leaf may take whatever its directory leaves; a folder's stem appears twice in
+ * its own file's path and must leave room for its children, so it takes a third.
+ * Shallow exports keep the 120-character stems a flat export has always had.
  */
 function archivePaths(
   artifacts: ReadonlyArray<ArtifactExportSource>,
@@ -137,7 +176,6 @@ function archivePaths(
     for (const index of indexes) {
       if (paths[index] !== "") continue;
       const artifact = artifacts[index];
-      const stem = claimStem(safeFileStem(artifact.title), used);
       // A repeated id is one artifact: its children go under the first copy.
       // A child already placed (the far end of a cycle) earns no folder.
       const children = foldered.has(artifact.id)
@@ -146,13 +184,31 @@ function archivePaths(
             (child) => child !== index && paths[child] === "",
           );
       foldered.add(artifact.id);
-      if (children.length === 0) {
-        paths[index] = `${directory}${stem}.${extension}`;
+      const fileSuffix = `.${extension}`;
+      const available =
+        ARCHIVE_PATH_BUDGET -
+        directory.length -
+        fileSuffix.length -
+        COLLISION_SUFFIX_RESERVE;
+      const isFolder = children.length > 0;
+      const stemBudget = Math.max(
+        MIN_BUDGETED_STEM,
+        isFolder ? Math.floor((available - 1) / 3) : available,
+      );
+      const baseStem = truncateStem(safeFileStem(artifact.title), stemBudget);
+      if (!isFolder) {
+        const stem = claimEntry(baseStem, fileSuffix, used);
+        paths[index] = `${directory}${stem}${fileSuffix}`;
         continue;
       }
+      const stem = claimEntry(baseStem, "", used);
       const folder = `${directory}${stem}/`;
-      paths[index] = `${folder}${stem}.${extension}`;
-      place(children, folder, new Set([stem.toLocaleLowerCase("en-US")]));
+      paths[index] = `${folder}${stem}${fileSuffix}`;
+      place(
+        children,
+        folder,
+        new Set([`${stem}${fileSuffix}`.toLocaleLowerCase("en-US")]),
+      );
     }
   };
   const rootNames = new Set<string>();
@@ -526,9 +582,13 @@ export async function createArtifactExport(
   const markdownFiles = request.artifacts.map((artifact) =>
     requireAvailableMarkdown(artifact),
   );
-  const fileBytes = await Promise.all(
-    markdownFiles.map((markdown) => exportFileBytes(request.format, markdown)),
-  );
+  // One conversion at a time: a nested export has no cap on its size, and
+  // starting every PDF build together would make the whole selection's layout
+  // work concurrent.
+  const fileBytes: Uint8Array<ArrayBuffer>[] = [];
+  for (const markdown of markdownFiles) {
+    fileBytes.push(await exportFileBytes(request.format, markdown));
+  }
   if (request.archive) {
     const { zipSync } = await import("fflate");
     const entries = fileBytes.reduce<Record<string, Uint8Array<ArrayBuffer>>>(
