@@ -40,6 +40,8 @@ import { useAuthStore } from "@/stores/auth/auth-store";
 import type { EpicStreamClientFactory } from "@/stores/epics/open-epic/store";
 import { openStoreForTest } from "@/stores/epics/open-epic/test-support/open-store-for-test";
 import type { ChatProjection, TreeNode } from "@/stores/epics/open-epic/types";
+import { useSettingsStore } from "@/stores/settings/settings-store";
+import "@/lib/theme-applier";
 import "@/index.css";
 
 /**
@@ -54,7 +56,8 @@ import "@/index.css";
  * its agents fold under a chevron), a periodic task with agents working, a
  * finished task whose result is unseen, a periodic task with nothing going
  * on, and a quiet, seen task that the list leaves out. `?empty=1` lists
- * nothing; `?theme=dark` the dark theme.
+ * nothing; `?theme=dark` the dark theme, set as the app sets it, through the
+ * settings store the theme applier follows.
  */
 const HOST_ID = "bot-activity-tab-host";
 const BOT_ID = "bot-activity-tab-bot";
@@ -63,9 +66,9 @@ const NOW = Date.now();
 const MINUTE = 60_000;
 
 const params = new URLSearchParams(window.location.search);
-if (params.get("theme") === "dark") {
-  document.documentElement.classList.add("dark");
-}
+useSettingsStore
+  .getState()
+  .setTheme(params.get("theme") === "dark" ? "dark" : "light");
 const empty = params.get("empty") === "1";
 
 const localHost = {
