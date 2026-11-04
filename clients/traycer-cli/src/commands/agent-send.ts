@@ -1,6 +1,6 @@
 import path from "node:path";
 import {
-  sendAgentMessageRequestSchemaV11,
+  sendAgentMessageRequestSchemaV12,
   sendAgentMessageResponseSchema,
 } from "@traycer/protocol/host/agent/shared";
 import {
@@ -79,7 +79,7 @@ export function buildAgentSendCommand(opts: {
   return async () => {
     const workspace =
       opts.workspace === null ? null : requireWorkspacePath(opts.workspace);
-    const request = parseUserInput(sendAgentMessageRequestSchemaV11, {
+    const request = parseUserInput(sendAgentMessageRequestSchemaV12, {
       senderAgentId: resolveSenderAgentId(opts.senderAgentId),
       epicId: resolveEpicId(opts.epicId),
       receiverAgentId: opts.to,

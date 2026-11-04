@@ -19,12 +19,12 @@ export interface QuestionCardSettlement {
 }
 
 /**
- * The person's own answer to a question as they are making it - the option
- * they picked and what they typed - and the answer they sent, which the card
- * holds until the question shows settled.
+ * The person's own answer to a question as they are making it - the options
+ * they picked, in the question's order, and what they typed - and the answer
+ * they sent, which the card holds until the question shows settled.
  */
 export interface QuestionCardDraft {
-  readonly chosen: string | null;
+  readonly chosen: ReadonlyArray<string>;
   readonly typed: string;
   readonly sent: {
     readonly text: string;
@@ -55,7 +55,7 @@ export function botQuestionCardSettlement(
 
 /** A question nobody has answered here yet. */
 export const EMPTY_QUESTION_CARD_DRAFT: QuestionCardDraft = {
-  chosen: null,
+  chosen: [],
   typed: "",
   sent: null,
 };
@@ -75,16 +75,40 @@ export type QuestionCardView =
       readonly draft: string;
     };
 
-/** The person's own answer, as Submit would send it: what they typed, else the option they picked. */
-export function draftText(draft: QuestionCardDraft): string | null {
+/**
+ * The person's own answer, as Submit would send it. Where a question takes
+ * several options: each one picked, then what they typed. Otherwise what they
+ * typed, else the option they picked.
+ */
+export function draftText(
+  draft: QuestionCardDraft,
+  several: boolean,
+): string | null {
   const typed = draft.typed.trim();
-  return typed.length > 0 ? typed : draft.chosen;
+  if (!several) return typed.length > 0 ? typed : (draft.chosen[0] ?? null);
+  const parts = typed.length > 0 ? [...draft.chosen, typed] : draft.chosen;
+  return parts.length > 0 ? parts.join(", ") : null;
+}
+
+/** The options picked once `option` is pressed: toggled among them, or the only one. */
+export function chosenAfterPress(
+  options: ReadonlyArray<string>,
+  chosen: ReadonlyArray<string>,
+  option: string,
+  several: boolean,
+): ReadonlyArray<string> {
+  const picked = chosen.includes(option);
+  if (!several) return picked ? [] : [option];
+  return options.filter((item) =>
+    item === option ? !picked : chosen.includes(item),
+  );
 }
 
 /** What one question shows, from how it was settled and the person's own answer to it. */
 export function questionCardView(
   settlement: QuestionCardSettlement | null,
   draft: QuestionCardDraft,
+  several: boolean,
 ): QuestionCardView {
   if (settlement === null) {
     return draft.sent === null ? { kind: "open" } : { kind: "sent" };
@@ -99,7 +123,7 @@ export function questionCardView(
     settlement.by.viewer &&
     settlement.skipped === sent.skipped &&
     (sent.skipped || settlement.answer === sent.text);
-  const own = draftText(draft);
+  const own = draftText(draft, several);
   if (theirs || own === null) return { kind: "settled", settlement };
   return { kind: "overtaken", settlement, draft: own };
 }

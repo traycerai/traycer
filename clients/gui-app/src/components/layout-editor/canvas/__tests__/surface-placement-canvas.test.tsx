@@ -363,7 +363,9 @@ describe("dragging a selected surface to an edge writes the placement as one ges
     expect(historyDepth()).toBe(1);
 
     useLayoutEditorStore.getState().undo();
-    expect(useLayoutStore.getState().arrangement.tabStripPlacement).toBe("top");
+    expect(useLayoutStore.getState().arrangement.tabStripPlacement).toBe(
+      "left",
+    );
   });
 
   it("drags the sidebar to the right edge, writing sidebarSide once, undoably", () => {
@@ -437,6 +439,10 @@ describe("Side tab view's own part on the canvas (D9, item B)", () => {
   });
 
   it("with no part registered (top placement), the chip goes on the topBar surface and names the reason", () => {
+    useLayoutStore.getState().setArrangement({
+      ...useLayoutStore.getState().arrangement,
+      tabStripPlacement: "top",
+    });
     openSession();
     render(<SurfaceCanvas />);
 

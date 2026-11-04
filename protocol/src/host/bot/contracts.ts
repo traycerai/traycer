@@ -56,6 +56,7 @@ import {
   botConversationSendRequestSchema,
   botConversationSendRequestSchemaV10,
   botConversationSendRequestSchemaV11,
+  botConversationSendRequestSchemaV12,
   botConversationSendResponseSchema,
   botConversationSearchRequestSchema,
   botConversationSearchResponseSchema,
@@ -305,7 +306,7 @@ export const botConversationSendUpgradeV10ToV11 = defineUpgradePath<
 export const botConversationSendV12 = defineRpcContract({
   method: "bot.conversation.send",
   schemaVersion: { major: 1, minor: 2 } as const,
-  requestSchema: botConversationSendRequestSchema,
+  requestSchema: botConversationSendRequestSchemaV12,
   responseSchema: botConversationSendResponseSchema,
 });
 export const botConversationSendUpgradeV11ToV12 = defineUpgradePath<
@@ -330,6 +331,27 @@ export const botConversationSearchV10 = defineRpcContract({
   schemaVersion: { major: 1, minor: 0 } as const,
   requestSchema: botConversationSearchRequestSchema,
   responseSchema: botConversationSearchResponseSchema,
+});
+
+/**
+ * `bot.conversation.send@1.3` (Call Tracy VC1): a send may open a call's
+ * thread (`origin`) and say its words were spoken (`spoken`). A 1.2 request
+ * does neither.
+ */
+export const botConversationSendV13 = defineRpcContract({
+  method: "bot.conversation.send",
+  schemaVersion: { major: 1, minor: 3 } as const,
+  requestSchema: botConversationSendRequestSchema,
+  responseSchema: botConversationSendResponseSchema,
+});
+export const botConversationSendUpgradeV12ToV13 = defineUpgradePath<
+  typeof botConversationSendV12,
+  typeof botConversationSendV13
+>({
+  from: botConversationSendV12.schemaVersion,
+  to: botConversationSendV13.schemaVersion,
+  upgradeRequest: (request) => request,
+  upgradeResponse: (response) => response,
 });
 
 /**
@@ -370,7 +392,7 @@ export const botThreadListUpgradeV10ToV11 = defineUpgradePath<
 /**
  * `bot.thread.list@1.2` (voice VT3b): each anchor carries its post's excerpt
  * (`anchor.excerpt`), so a client names a thread it has not loaded. A 1.1
- * host holds none.
+ * host holds none. A thread a call opened says so (`kind`, Call Tracy VC1).
  */
 export const botThreadListV12 = defineRpcContract({
   method: "bot.thread.list",
