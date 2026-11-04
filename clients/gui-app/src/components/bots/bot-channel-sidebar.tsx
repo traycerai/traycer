@@ -6,6 +6,7 @@ import {
   MessagesSquare,
   Plus,
 } from "lucide-react";
+import { BOT_CONVERSATION_SEARCH_MAX_QUERY_CHARS } from "@traycer/protocol/host/bot/conversation-schemas";
 import type { BotRecord } from "@traycer/protocol/host/bot/schemas";
 import type { EnvironmentDescriptor } from "@traycer/protocol/host/environment/contracts";
 import { NamedBotAvatar } from "@/components/bots/bot-avatars";
@@ -275,6 +276,7 @@ function SearchAllBotsBox(props: {
       aria-label="Search all bots"
       placeholder="Search all bots"
       data-testid="bot-column-search"
+      maxLength={BOT_CONVERSATION_SEARCH_MAX_QUERY_CHARS}
       value=""
       onClick={() => open(null)}
       onChange={(event) => open(event.target.value)}

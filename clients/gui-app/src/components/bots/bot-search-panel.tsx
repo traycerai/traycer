@@ -14,9 +14,10 @@ import {
   Search,
   X,
 } from "lucide-react";
-import type {
-  BotConversationSearchHit,
-  BotConversationSearchUnreachable,
+import {
+  BOT_CONVERSATION_SEARCH_MAX_QUERY_CHARS,
+  type BotConversationSearchHit,
+  type BotConversationSearchUnreachable,
 } from "@traycer/protocol/host/bot/conversation-schemas";
 import type { BotRecord } from "@traycer/protocol/host/bot/schemas";
 import { BotReadFailure } from "@/components/bots/bot-read-failure";
@@ -95,14 +96,19 @@ interface FilterOption<Value extends string> {
   readonly label: string;
 }
 
-/** The host's count, or the rows so far where it has none and more follow. */
+/**
+ * The host's count, or the rows so far where it has none and more follow;
+ * nothing while none have come, since the search has not said there are none.
+ */
 function resultCountLabel(input: {
   readonly total: number | null;
   readonly loaded: number;
   readonly hasMore: boolean;
 }): string {
   const count = input.total ?? input.loaded;
-  if (input.total === null && input.hasMore) return `${count}+ results`;
+  if (input.total === null && input.hasMore) {
+    return count === 0 ? "" : `${count}+ results`;
+  }
   return count === 1 ? "1 result" : `${count} results`;
 }
 
@@ -240,6 +246,7 @@ export function BotSearchPanel(props: {
             aria-label="Search"
             placeholder={scopeTitle === null ? "Search all bots" : "Search"}
             data-testid="bot-search-input"
+            maxLength={BOT_CONVERSATION_SEARCH_MAX_QUERY_CHARS}
             value={typed}
             onChange={(event) => setQuery(event.target.value)}
             onKeyDown={onInputKeyDown}
@@ -600,7 +607,10 @@ function BotSearchResultList(props: {
       ))}
     </>
   );
-  if (hits.length === 0) {
+  // A page may hold no hits and still carry a cursor: only the end of the
+  // search says there are none. Until then the list is what asks for the next
+  // page, and a page the host refuses, its session spent, stops it.
+  if (hits.length === 0 && !hasMore) {
     return (
       <div className="flex min-h-0 flex-1 flex-col overflow-y-auto">
         <BotSearchNoResults query={props.query} scopeTitle={props.scopeTitle} />

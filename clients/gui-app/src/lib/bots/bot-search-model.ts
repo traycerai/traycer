@@ -1,8 +1,9 @@
-import type {
-  BotConversationSearchHit,
-  BotConversationSearchRequest,
-  BotConversationSearchResponse,
-  BotConversationSearchUnreachable,
+import {
+  BOT_CONVERSATION_SEARCH_MAX_QUERY_CHARS,
+  type BotConversationSearchHit,
+  type BotConversationSearchRequest,
+  type BotConversationSearchResponse,
+  type BotConversationSearchUnreachable,
 } from "@traycer/protocol/host/bot/conversation-schemas";
 import type { HostRpcError } from "@traycer-clients/shared/host-transport/host-messenger";
 import { CHAT_SEARCH_BODY_MIN_QUERY_CHARS } from "@/lib/chat-search/chat-search-results";
@@ -48,9 +49,11 @@ export function botSearchWordsOf(
   return [...new Set(words)].filter((word) => word.length > 0);
 }
 
-/** The query as it is sent; `null` while it is too short to search. */
+/** The query as it is sent, within the host's limit; `null` while too short. */
 export function botSearchableQuery(query: string): string | null {
-  const trimmed = query.trim();
+  const trimmed = query
+    .trim()
+    .slice(0, BOT_CONVERSATION_SEARCH_MAX_QUERY_CHARS);
   return trimmed.length < CHAT_SEARCH_BODY_MIN_QUERY_CHARS ? null : trimmed;
 }
 

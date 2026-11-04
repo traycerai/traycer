@@ -8,11 +8,12 @@ import { useSyncExternalStore, type ReactNode } from "react";
 import { QueryClient } from "@tanstack/react-query";
 import { act, cleanup, fireEvent, screen } from "@testing-library/react";
 import { afterEach, beforeEach, vi } from "vitest";
-import type {
-  BotConversationSearchHit,
-  BotConversationSearchRequest,
-  BotConversationSearchResponse,
-  BotThreadSummary,
+import {
+  botConversationSearchRequestSchema,
+  type BotConversationSearchHit,
+  type BotConversationSearchRequest,
+  type BotConversationSearchResponse,
+  type BotThreadSummary,
 } from "@traycer/protocol/host/bot/conversation-schemas";
 import type { BotRecord } from "@traycer/protocol/host/bot/schemas";
 import { HostRpcError } from "@traycer-clients/shared/host-transport/host-messenger";
@@ -39,7 +40,10 @@ import { useSelectionAuthorityStore } from "@/stores/host/selection-authority-st
 type SearchAnswer = (
   hostId: string,
   request: BotConversationSearchRequest,
-) => BotConversationSearchResponse | HostRpcError;
+) =>
+  | BotConversationSearchResponse
+  | HostRpcError
+  | Promise<BotConversationSearchResponse>;
 
 /** A row the transcript stub draws. */
 interface TranscriptRow {
@@ -126,6 +130,19 @@ function newFakeClient(hostId: string): FakeHostClient {
         return Promise.reject(new Error(`unscripted request ${method}`));
       }
       mocks.asked.push({ hostId, request });
+      // The host checks the request against its schema before it answers.
+      const valid = botConversationSearchRequestSchema.safeParse(request);
+      if (!valid.success) {
+        return Promise.reject(
+          new HostRpcError({
+            code: "E_INVALID_ARGUMENT",
+            message: valid.error.message,
+            requestId: "request-invalid",
+            method,
+            fatalDetails: null,
+          }),
+        );
+      }
       const answered = mocks.state.answer?.(hostId, request);
       if (answered === undefined) {
         return Promise.reject(new Error("no answer scripted"));
