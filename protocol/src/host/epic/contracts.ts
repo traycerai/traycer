@@ -10,6 +10,10 @@ import {
   getChatRunSettingsBatchResponseSchemaV21,
 } from "./chat-records";
 import {
+  hydrateChatRequestSchema,
+  hydrateChatResponseSchema,
+} from "./chat-hydration";
+import {
   defineDowngradePath,
   defineRpcContract,
   defineUpgradePath,
@@ -2029,6 +2033,16 @@ export const epicListChatRecordsUpgradeV13ToV14 = defineUpgradePath<
           ...response,
           chats: response.chats.map((row) => ({ ...row, evicted: false })),
         },
+});
+
+// Brings an evicted chat's records back onto its host before a message is
+// sent to it (`chat-hydration.ts`). Optional and off the released floor: a
+// host that predates it does not evict chats.
+export const epicHydrateChatV10 = defineRpcContract({
+  method: "epic.hydrateChat",
+  schemaVersion: { major: 1, minor: 0 } as const,
+  requestSchema: hydrateChatRequestSchema,
+  responseSchema: hydrateChatResponseSchema,
 });
 
 // One chat image attachment's bytes, resolved by the VIEWER's tab host (local

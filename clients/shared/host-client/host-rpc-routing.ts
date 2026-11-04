@@ -545,6 +545,8 @@ export const HOST_UNARY_RPC_ROUTES = {
   "epic.getTaskContexts": "target-host",
   "epic.getWorkspaceContext": "target-host",
   "epic.grantAccess": "target-host",
+  // On the chat's own host: the pool holds the copy, never the records.
+  "epic.hydrateChat": "target-host",
   "epic.listChatPublicationTargets": "target-host",
   "epic.listChatRecords": "target-host",
   "epic.listCloudChatPayloads": "target-host",

@@ -1624,6 +1624,13 @@ export const HOST_METHOD_POLL_TABLE = {
   // One-shot read: the doc content of an unreachable owner's chat cannot
   // change while its owner is away.
   "epic.chatReplicaRead": { ...LATEST_SCHEDULING, poll: null },
+  // A write the person's send waits on: each call runs, in order, and a
+  // second one for a chat already back answers `not-evicted` at once.
+  "epic.hydrateChat": {
+    mode: "fifo",
+    joinResponseTimeoutMs: null,
+    poll: null,
+  },
   // The store-backed chat RECORD channel.
   //
   // POLLED, at a cadence, and the reason is that there is no invalidation edge
