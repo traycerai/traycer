@@ -29,14 +29,12 @@ import {
   useChatSearchKeyboardNav,
 } from "@/components/chat-search/chat-search-keyboard-nav";
 import {
-  ChatSearchCoverageNote,
   ChatSearchResultsView,
   type ChatSearchExpansionTarget,
   type ChatSearchOpenTarget,
 } from "@/components/chat-search/chat-search-results-view";
 import { useEffectiveHostId } from "@/hooks/host/use-effective-host-id";
 import { useChatSearchHost } from "@/hooks/chats/use-chat-search-host";
-import { useChatSearchCoverage } from "@/hooks/chats/use-chat-search-coverage";
 import {
   useChatSearchResults,
   type ChatSearchBaseRequest,
@@ -197,10 +195,6 @@ export function ChatSearchPanel(props: { readonly onClose: () => void }) {
     chatCursors: currentPaging.chatCursors,
     messageCursors: currentPaging.messageCursors,
   });
-  const coverage = useChatSearchCoverage(
-    hostId,
-    currentTaskScoped ? activeEpicId : null,
-  );
   const unsupported = methodUnsupported || status.kind === "unsupported";
   const awaitingHost =
     !unsupported && debouncedQuery.length > 0 && !hostReachable;
@@ -364,10 +358,7 @@ export function ChatSearchPanel(props: { readonly onClose: () => void }) {
           </SelectContent>
         </Select>
       </div>
-      <p
-        role="status"
-        className="px-3 pt-2 pb-1 text-ui-xs text-muted-foreground tabular-nums"
-      >
+      <p role="status" className="sr-only">
         {resultCountLabel(status, messagesSearched)}
       </p>
       <div ref={resultsRef} className="min-h-0 flex-1 overflow-y-auto">
@@ -395,7 +386,6 @@ export function ChatSearchPanel(props: { readonly onClose: () => void }) {
         ) : null}
         {!unsupported && status.kind === "ready" ? (
           <ChatSearchNavProvider value={onResultKeyDown}>
-            <ChatSearchCoverageNote coverage={coverage} />
             {/* Keyed by the request: a new search starts with every group
                 collapsed, so no expansion carries the previous request's
                 cursors into this one. */}
