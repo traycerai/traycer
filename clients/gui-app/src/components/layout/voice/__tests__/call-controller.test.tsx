@@ -657,14 +657,14 @@ describe("what the person says", () => {
     speak("First request.");
     voiceSays("One");
     await settle();
-    expect(fake.sendMock.mock.calls.map(([request]) => request.text)).toEqual([
-      "First request.",
-    ]);
+    expect(fake.sendMock).not.toHaveBeenCalled();
 
     speak("Actually cancel");
     voiceSays(" moment.");
     await settle();
-    expect(fake.sendMock).toHaveBeenCalledTimes(1);
+    expect(fake.sendMock.mock.calls.map(([request]) => request.text)).toEqual([
+      "First request.",
+    ]);
     speak(" the release.");
     await acknowledge();
 
@@ -1004,6 +1004,213 @@ describe("the utterance boundary, told by the voice's own text", () => {
     expect(useVoiceSessionStore.getState().phase).toBe("live");
     expect(fake.sendMock.mock.calls.map(([r]) => r.text)).toEqual([
       "Cancel that",
+      "end the call with the vendor tomorrow.",
+    ]);
+  });
+
+  it("does not hang up when an own acknowledgement shares the pending reply prefix", async () => {
+    const chat = await joinOpenThread([]);
+    land(chat, [botRow("r1", "One deployment is still running.", 200)]);
+    await settle();
+    expect(appendedTexts()).toEqual(["One deployment is still running."]);
+    speak("First request.");
+    voiceSays("One");
+    await settle();
+    speak("end the call");
+    voiceSays(" moment.");
+    speak(" with the vendor tomorrow.");
+    await acknowledge();
+    expect(useVoiceSessionStore.getState().phase).toBe("live");
+    expect(fake.sendMock.mock.calls.map(([r]) => r.text)).toEqual([
+      "First request.",
+      "end the call with the vendor tomorrow.",
+    ]);
+  });
+
+  it("keeps a merged acknowledgement tail and reading prefix from creating a false boundary", async () => {
+    const chat = await joinOpenThread([]);
+    land(chat, [
+      botRow("r1", "The build passed. The deployment is still running.", 200),
+    ]);
+    await settle();
+    speak("First request.");
+    voiceSays("One");
+    await settle();
+    voiceSays(" moment. The build passed.");
+    speak("end the call");
+    voiceSays(" The deployment is still running.");
+    speak(" with the vendor tomorrow.");
+    await acknowledge();
+    expect(useVoiceSessionStore.getState().phase).toBe("live");
+    expect(fake.sendMock.mock.calls.map(([r]) => r.text)).toEqual([
+      "First request.",
+      "end the call with the vendor tomorrow.",
+    ]);
+  });
+
+  it("does not treat the first known reading delta as acknowledgement of unfinished input", async () => {
+    const chat = await joinOpenThread([]);
+    land(chat, [botRow("r1", "The build passed.", 200)]);
+    await settle();
+    expect(appendedTexts()).toEqual(["The build passed."]);
+    await advance(500);
+    speak("end the call");
+    await advance(100);
+    voiceSays("The build");
+    speak(" with the vendor tomorrow.");
+    await acknowledge();
+    expect(useVoiceSessionStore.getState().phase).toBe("live");
+    expect(fake.sendMock.mock.calls.map(([r]) => r.text)).toEqual([
+      "end the call with the vendor tomorrow.",
+    ]);
+  });
+
+  it("handles a given reply which is itself an acknowledgement", async () => {
+    const chat = await joinOpenThread([]);
+    land(chat, [botRow("r1", "One moment.", 200)]);
+    await settle();
+    voiceSays("One");
+    speak("end the call");
+    voiceSays(" moment.");
+    speak(" with the vendor tomorrow.");
+    await acknowledge();
+    expect(useVoiceSessionStore.getState().phase).toBe("live");
+    expect(fake.sendMock.mock.calls.map(([r]) => r.text)).toEqual([
+      "end the call with the vendor tomorrow.",
+    ]);
+  });
+
+  it("retries a cut-off reply through the real scheduler and retains its thread row", async () => {
+    const chat = await joinOpenThread([]);
+    const row = botRow(
+      "r1",
+      "The build passed and the deployment is running.",
+      200,
+    );
+    land(chat, [row]);
+    await settle();
+    voiceSays("The");
+    speak("Cancel it.");
+    await acknowledge();
+    expect(fake.markRead).not.toHaveBeenCalled();
+    await advance(8_000);
+    expect(appendedTexts()).toEqual([
+      "The build passed and the deployment is running.",
+      "The build passed and the deployment is running.",
+    ]);
+    voiceSays("The build passed and the deployment is running.");
+    await untilQuiet();
+    expect(fake.markRead).toHaveBeenCalledTimes(1);
+    expect(chat.getState().messages).toEqual([row]);
+  });
+
+  it("stops retrying a cut-off reply at the existing bound and retains its thread row", async () => {
+    const chat = await joinOpenThread([]);
+    const row = botRow(
+      "r1",
+      "The build passed and the deployment is running.",
+      200,
+    );
+    land(chat, [row]);
+    await settle();
+    voiceSays("The");
+    speak("Cancel it.");
+    await acknowledge();
+    expect(fake.markRead).not.toHaveBeenCalled();
+    await advance(40_000);
+    expect(appendedTexts()).toEqual([
+      "The build passed and the deployment is running.",
+      "The build passed and the deployment is running.",
+      "The build passed and the deployment is running.",
+    ]);
+    expect(fake.markRead).not.toHaveBeenCalled();
+    expect(chat.getState().messages).toEqual([row]);
+    expect(useVoiceSessionStore.getState().phase).toBe("live");
+  });
+
+  it("resets the read latch on engine replacement and restores a pending reply", async () => {
+    const chat = await joinOpenThread([]);
+    const first = botRow("r1", "The build passed.", 200);
+    land(chat, [first]);
+    await settle();
+    voiceSays("The build passed.");
+    await untilQuiet();
+    land(chat, [first, botRow("r2", "The deployment is still running.", 300)]);
+    await settle();
+    act(() => events().onClosed("connection"));
+    await settle();
+    expect(fake.engines).toHaveLength(2);
+    expect(useVoiceSessionStore.getState().phase).toBe("live");
+    expect(appendedTexts()).toEqual(["The deployment is still running."]);
+    voiceSays("The deployment");
+    speak("end the call");
+    voiceSays(" is still running.");
+    speak(" with the vendor tomorrow.");
+    await acknowledge();
+    expect(useVoiceSessionStore.getState().phase).toBe("live");
+    expect(fake.sendMock.mock.calls.map(([r]) => r.text)).toEqual([
+      "end the call with the vendor tomorrow.",
+    ]);
+  });
+
+  it("resets the read latch before a second call", async () => {
+    const chat = await joinOpenThread([]);
+    const first = botRow("r1", "The build passed.", 200);
+    land(chat, [first]);
+    await settle();
+    voiceSays("The build passed.");
+    await untilQuiet();
+    act(() => driverOf().end());
+    await settle();
+    await dialLive(OPEN_THREAD_CALL);
+    land(chat, [first, botRow("r2", "The deployment is still running.", 300)]);
+    await settle();
+    voiceSays("The deployment");
+    speak("end the call");
+    voiceSays(" is still running.");
+    speak(" with the vendor tomorrow.");
+    await acknowledge();
+    expect(useVoiceSessionStore.getState().phase).toBe("live");
+    expect(fake.sendMock.mock.calls.map(([r]) => r.text)).toEqual([
+      "end the call with the vendor tomorrow.",
+    ]);
+  });
+
+  it("sends the person's words when the voice is cut off in the second chunk of a reply it had read the first of whole", async () => {
+    const chat = await joinOpenThread([]);
+    const reply =
+      "The release summary starts with " +
+      "deployment status remains healthy ".repeat(80) +
+      "and the rollout is complete.";
+    land(chat, [botRow("r1", reply, 200)]);
+    await settle();
+    const chunks = appendedTexts();
+    expect(chunks.length).toBeGreaterThan(1);
+
+    voiceSays(chunks[0]);
+    voiceSays(chunks[1].slice(0, 40));
+    speak("Cancel the rollout.");
+    await acknowledge();
+
+    expect(useVoiceSessionStore.getState().phase).toBe("live");
+    expect(fake.sendMock.mock.calls.map(([r]) => r.text)).toEqual([
+      "Cancel the rollout.",
+    ]);
+  });
+
+  it("does not hang up when the voice reads a whole reply after the person's unfinished words began", async () => {
+    const chat = await joinOpenThread([]);
+    land(chat, [botRow("r1", "The build passed.", 200)]);
+    await settle();
+    expect(appendedTexts()).toEqual(["The build passed."]);
+
+    speak("end the call");
+    voiceSays("The build passed.");
+    speak(" with the vendor tomorrow.");
+    await acknowledge();
+
+    expect(useVoiceSessionStore.getState().phase).toBe("live");
+    expect(fake.sendMock.mock.calls.map(([r]) => r.text)).toEqual([
       "end the call with the vendor tomorrow.",
     ]);
   });

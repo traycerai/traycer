@@ -794,22 +794,24 @@ export function CallController(): ReactNode {
           onOutputTranscriptDelta: (text) => {
             if (!owns()) return;
             const current = useVoiceSessionStore.getState();
-            // The utterance boundary (VC0): a new output turn begins, which
-            // is the voice's acknowledgement of what the person said since the
-            // last one. The vendor marks no turn, so it is told by text
-            // (`hearOutput`): a fragment that goes on with an unfinished line,
-            // or with the texts the voice was given, continues it and closes
-            // nothing. A tail of the person's words transcribed after the next
-            // acknowledgement began joins the next utterance: one mis-split,
-            // never a loss.
-            const heard = hearOutput(attempt.output, text);
+            // The utterance boundary (VC0): the voice's own line after what
+            // the person said, its acknowledgement. The vendor marks no turn,
+            // so it is told by text (`hearOutput`): once the line has ended,
+            // what the person said before it began is one message; a reading
+            // of the texts the voice was given closes nothing. A tail of the
+            // person's words transcribed after the acknowledgement began
+            // joins the next utterance: one mis-split, never a loss.
+            const heard = hearOutput(attempt.output, text, current.inputHeard);
             attempt.output = heard.turns;
-            const newTurn = heard.newTurn;
             current.pushCaptionLine({ direction: "output", text });
             ensureSpeech().noteOutputTranscript(text);
-            if (!attempt.started || !newTurn) return;
-            const said = current.takeOpenSpan();
-            if (said !== null) utteranceRef.current(said);
+            if (!attempt.started) return;
+            for (const began of heard.closes) {
+              const said = useVoiceSessionStore
+                .getState()
+                .takeOpenSpanTo(began);
+              if (said !== null) utteranceRef.current(said);
+            }
           },
           // The persona never needs a delegation answered, and the app
           // never answers one: replies are appended under none (VC0).

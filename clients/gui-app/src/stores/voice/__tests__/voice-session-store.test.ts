@@ -251,31 +251,85 @@ describe("the dial", () => {
 });
 
 describe("what the person said", () => {
-  it("takeOpenSpan joins the deltas as they arrived, trims only the ends, and empties the span", () => {
+  it("takeOpenSpanTo joins the deltas as they arrived and trims only the ends", () => {
     const store = useVoiceSessionStore.getState();
     store.appendInput(" Check ");
     store.appendInput("/src/");
     store.appendInput("voice.ts now. ");
 
-    expect(store.takeOpenSpan()).toBe("Check /src/voice.ts now.");
+    expect(
+      store.takeOpenSpanTo(useVoiceSessionStore.getState().inputHeard),
+    ).toBe("Check /src/voice.ts now.");
     expect(useVoiceSessionStore.getState().openSpan).toBe("");
   });
 
-  it("takeOpenSpan returns null with nothing said, or only blanks, and empties the blanks", () => {
+  it("takeOpenSpanTo takes what was said before the position only and leaves the rest for the next take", () => {
     const store = useVoiceSessionStore.getState();
-    expect(store.takeOpenSpan()).toBeNull();
+    store.appendInput("First request.");
+    const acknowledged = useVoiceSessionStore.getState().inputHeard;
+    store.appendInput(" Then more.");
 
+    expect(store.takeOpenSpanTo(acknowledged)).toBe("First request.");
+    expect(useVoiceSessionStore.getState().openSpan).toBe(" Then more.");
+    expect(
+      store.takeOpenSpanTo(useVoiceSessionStore.getState().inputHeard),
+    ).toBe("Then more.");
+  });
+
+  it("takeOpenSpanTo returns null, taking nothing, when nothing was said before the position", () => {
+    const store = useVoiceSessionStore.getState();
+    expect(store.takeOpenSpanTo(0)).toBeNull();
+
+    store.appendInput("abc");
+    expect(store.takeOpenSpanTo(0)).toBeNull();
+    expect(useVoiceSessionStore.getState().openSpan).toBe("abc");
+  });
+
+  it("takeOpenSpanTo returns null for only blanks, and lets the blanks go", () => {
+    const store = useVoiceSessionStore.getState();
     store.appendInput("   ");
-    expect(store.takeOpenSpan()).toBeNull();
+
+    expect(store.takeOpenSpanTo(3)).toBeNull();
     expect(useVoiceSessionStore.getState().openSpan).toBe("");
   });
 
-  it("dropOpenSpan lets what was said go", () => {
+  it("keeps counting positions across a take", () => {
+    const store = useVoiceSessionStore.getState();
+    store.appendInput("one two");
+    expect(store.takeOpenSpanTo(7)).toBe("one two");
+
+    store.appendInput(" three four");
+    expect(store.takeOpenSpanTo(13)).toBe("three");
+    expect(store.takeOpenSpanTo(18)).toBe("four");
+  });
+
+  it("dropOpenSpan lets what was said go, and a later take is not shifted by it", () => {
     const store = useVoiceSessionStore.getState();
     store.appendInput("never mind");
     store.dropOpenSpan();
     expect(useVoiceSessionStore.getState().openSpan).toBe("");
-    expect(store.takeOpenSpan()).toBeNull();
+
+    store.appendInput("go ahead now");
+
+    expect(store.takeOpenSpanTo(18)).toBe("go ahead");
+  });
+
+  it.each([
+    [
+      "a new call begins",
+      () => useVoiceSessionStore.getState().sessionConnecting(FOCUS, "Tracy"),
+    ],
+    ["the call ends", () => useVoiceSessionStore.getState().sessionEnded(null)],
+  ])("starts counting positions from nothing again when %s", (_when, reset) => {
+    const store = useVoiceSessionStore.getState();
+    store.appendInput("stale words");
+    expect(store.takeOpenSpanTo(5)).toBe("stale");
+
+    reset();
+    expect(useVoiceSessionStore.getState().openSpan).toBe("");
+    store.appendInput("fresh");
+
+    expect(store.takeOpenSpanTo(5)).toBe("fresh");
   });
 });
 

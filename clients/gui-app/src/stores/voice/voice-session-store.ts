@@ -133,6 +133,13 @@ export interface VoiceSessionState {
   readonly dial: CallTarget | null;
   /** What the person said since the last utterance boundary, as transcribed. */
   readonly openSpan: string;
+  /**
+   * How much the person has said on this call, in transcript characters: a
+   * position in what was said, which an utterance boundary can name.
+   */
+  readonly inputHeard: number;
+  /** The position where `openSpan` begins. */
+  readonly openSpanStart: number;
   readonly activity: SpeechActivity;
   readonly captions: boolean;
   readonly captionLines: ReadonlyArray<CaptionLine>;
@@ -184,8 +191,11 @@ export interface VoiceSessionState {
   readonly openDial: (target: CallTarget, title: string) => void;
   readonly closeDial: () => void;
   readonly appendInput: (text: string) => void;
-  /** Takes what was said since the last boundary; `null` with nothing said. */
-  readonly takeOpenSpan: () => string | null;
+  /**
+   * Takes what was said since the last boundary up to `position` (an
+   * `inputHeard` reading); `null` with nothing said there.
+   */
+  readonly takeOpenSpanTo: (position: number) => string | null;
   /** Lets what was said since the last boundary go. */
   readonly dropOpenSpan: () => void;
   readonly setActivity: (activity: SpeechActivity) => void;
@@ -231,6 +241,8 @@ function idleSession(state: VoiceSessionState): Partial<VoiceSessionState> {
     focus: null,
     dial: null,
     openSpan: "",
+    inputHeard: 0,
+    openSpanStart: 0,
     activity: CLEAR_ACTIVITY,
     captionLines: NO_CAPTIONS,
     muted: false,
@@ -254,6 +266,8 @@ export const useVoiceSessionStore = create<VoiceSessionState>()((set, get) => ({
   callTitle: null,
   dial: null,
   openSpan: "",
+  inputHeard: 0,
+  openSpanStart: 0,
   activity: CLEAR_ACTIVITY,
   captions: false,
   captionLines: NO_CAPTIONS,
@@ -278,6 +292,8 @@ export const useVoiceSessionStore = create<VoiceSessionState>()((set, get) => ({
       callTitle: title,
       dial: null,
       openSpan: "",
+      inputHeard: 0,
+      openSpanStart: 0,
       sessionToken: get().sessionToken + 1,
       engineGeneration: get().engineGeneration + 1,
       // Started while dictation records: paused until the person resumes.
@@ -336,18 +352,24 @@ export const useVoiceSessionStore = create<VoiceSessionState>()((set, get) => ({
   },
   appendInput: (text) => {
     if (text.length === 0) return;
-    set({ openSpan: get().openSpan + text });
+    set({
+      openSpan: get().openSpan + text,
+      inputHeard: get().inputHeard + text.length,
+    });
   },
-  takeOpenSpan: () => {
+  takeOpenSpanTo: (position) => {
+    const { openSpan, openSpanStart } = get();
+    const length = position - openSpanStart;
+    if (length <= 0) return null;
     // The deltas carry their own spacing: joined as they arrived, only the
     // ends trimmed.
-    const said = get().openSpan.trim();
-    if (get().openSpan.length > 0) set({ openSpan: "" });
+    const said = openSpan.slice(0, length).trim();
+    set({ openSpan: openSpan.slice(length), openSpanStart: position });
     return said.length === 0 ? null : said;
   },
   dropOpenSpan: () => {
     if (get().openSpan.length === 0) return;
-    set({ openSpan: "" });
+    set({ openSpan: "", openSpanStart: get().inputHeard });
   },
   setActivity: (activity) => {
     const current = get().activity;
