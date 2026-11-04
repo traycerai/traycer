@@ -199,8 +199,9 @@ export interface ChatBotPresentation {
     | ((requestId: string) => ChatBotFailedRecovery | null)
     | null;
   /**
-   * The turn behind a reply of the bot, by the message ids its row carries;
-   * `null` where the host does not say, and the row draws no receipt.
+   * The turn behind a row of the bot (a reply, a question or an
+   * announcement), by the message ids its row carries; `null` where the host
+   * does not say, and the row draws no receipt.
    */
   readonly replyReceipt:
     | ((messageIds: ReadonlyArray<string>) => ChatBotTurnReceipt | null)

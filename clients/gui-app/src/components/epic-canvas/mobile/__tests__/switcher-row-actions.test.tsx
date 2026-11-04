@@ -50,15 +50,25 @@ const {
   deleteChatMutate,
   deleteArtifactMutate,
   exportMutate,
-} = vi.hoisted(() => ({
-  deleteTuiAgentMutate: vi.fn(),
-  deleteChatMutate: vi.fn(),
-  deleteArtifactMutate: vi.fn(),
-  exportMutate: vi.fn(),
-}));
+  useEpicExportArtifacts,
+} = vi.hoisted(() => {
+  const exportMutate = vi.fn();
+  return {
+    deleteTuiAgentMutate: vi.fn(),
+    deleteChatMutate: vi.fn(),
+    deleteArtifactMutate: vi.fn(),
+    exportMutate,
+    // A hook the row's menu body calls on mount, so its call count says
+    // whether the body is mounted.
+    useEpicExportArtifacts: vi.fn(() => ({
+      mutate: exportMutate,
+      isPending: false,
+    })),
+  };
+});
 
 vi.mock("@/hooks/epic/use-epic-export-artifacts-mutation", () => ({
-  useEpicExportArtifacts: () => ({ mutate: exportMutate, isPending: false }),
+  useEpicExportArtifacts,
 }));
 
 vi.mock("@/hooks/epic/use-epic-chat-mutations", () => ({
@@ -340,6 +350,56 @@ describe("artifact export", () => {
       archive: false,
       archiveTitle: null,
     });
+  });
+
+  it("mounts the menu, its dialogs and their hooks only once the row's … is pressed", () => {
+    // A list draws one of these per row, a thousand on a big task: until a
+    // row is pressed it owes the screen nothing but the button.
+    useEpicExportArtifacts.mockClear();
+    render(
+      <SwitcherRowActions
+        epicId={EPIC_ID}
+        tabId={tabId}
+        kind="artifact"
+        nodeId={ARTIFACT_NODE_ID}
+        name="Artifact One"
+      />,
+      { wrapper: Wrapper },
+    );
+    const more = screen.getByTestId(`switcher-more-${ARTIFACT_NODE_ID}`);
+    expect(more.getAttribute("aria-haspopup")).toBe("menu");
+    expect(useEpicExportArtifacts).not.toHaveBeenCalled();
+    expect(screen.queryByRole("menu")).toBeNull();
+
+    fireEvent.pointerDown(more, { button: 0 });
+
+    expect(useEpicExportArtifacts).toHaveBeenCalled();
+    expect(screen.getByRole("menu")).toBeDefined();
+    expect(
+      screen.getByTestId(`switcher-export-markdown-${ARTIFACT_NODE_ID}`),
+    ).toBeDefined();
+  });
+
+  it("puts focus on the first item when the … is opened from the keyboard", () => {
+    // The menu's own trigger focuses the first item on Enter; the menu here
+    // mounts after that keydown and never saw it, so it has to do so itself
+    // or a keyboard user presses ArrowDown twice to reach the first item.
+    render(
+      <SwitcherRowActions
+        epicId={EPIC_ID}
+        tabId={tabId}
+        kind="artifact"
+        nodeId={ARTIFACT_NODE_ID}
+        name="Artifact One"
+      />,
+      { wrapper: Wrapper },
+    );
+    const more = screen.getByTestId(`switcher-more-${ARTIFACT_NODE_ID}`);
+    more.focus();
+    fireEvent.keyDown(more, { key: "Enter" });
+
+    const items = screen.getAllByRole("menuitem");
+    expect(document.activeElement).toBe(items[0]);
   });
 
   it("has no export items on a terminal-agent row", () => {
