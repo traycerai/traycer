@@ -177,8 +177,6 @@ const mocks = vi.hoisted(() => ({
   taskContexts: new Map<string, ListTaskLight>(),
   /** Home's `epic.listTasks` rows. */
   homeTasks: [] as ListTaskLight[],
-  /** Whether Home's first page of tasks is still pending. */
-  homeFirstPagePending: false,
   membersQueries: [] as Array<{
     environmentId: string | null;
     enabled: boolean;
@@ -277,14 +275,7 @@ vi.mock("@/hooks/epics/use-cloud-epic-tasks-query", async (importOriginal) => ({
   ...(await importOriginal<
     typeof import("@/hooks/epics/use-cloud-epic-tasks-query")
   >()),
-  useCloudEpicTasksQuery: () => ({
-    tasks: mocks.homeTasks,
-    firstPagePending: mocks.homeFirstPagePending,
-    firstPageError: null,
-    presentsCachedPage: false,
-    isCloudPagePending: false,
-    completeness: null,
-  }),
+  useCloudEpicTasksQuery: () => ({ tasks: mocks.homeTasks }),
 }));
 vi.mock("@/hooks/host/use-host-supports-method", () => ({
   useHostMethodSupport: (hostId: string | null, method: string) => {
@@ -516,7 +507,6 @@ function MentionsProbe(): ReactNode {
           : mentionable.bots.map((target) => target.name).join("|")
       }
       data-tasks={mentionable.tasks.map((target) => target.name).join("|")}
-      data-tasks-settled={String(mentionable.tasksSettled)}
     />
   );
 }
@@ -961,7 +951,6 @@ beforeEach(() => {
   mocks.supportQueries.length = 0;
   mocks.taskContexts = new Map();
   mocks.homeTasks = [];
-  mocks.homeFirstPagePending = false;
   mocks.membersQueries.length = 0;
   mocks.state.membersSupport = true;
   mocks.state.snapshot = snapshot();
@@ -2866,6 +2855,7 @@ describe("<BotTabSurface /> views", () => {
           setups: [],
         },
         settled: true,
+        botsListed: true,
       });
       mocks.state.snapshot = {
         ...snapshot(),
@@ -2963,24 +2953,33 @@ describe("<BotTabSurface /> views", () => {
       });
     });
 
-    it("hands the channel its tasks as unsettled while Home's first page is pending, and settled once it answered", () => {
-      mocks.homeFirstPagePending = true;
-      const { rerender } = render(surface());
+    it("hands the channel no bots while the bot list has not answered, though the environment's group is in the directory", () => {
+      useStandaloneBotsStore.setState({
+        directory: {
+          model: buildHomeBotsModel({
+            environments: [
+              {
+                environmentId: "env-team",
+                label: "Acme",
+                ownerKind: "organization",
+                ownerId: "org-1",
+                roomId: "room-team",
+              },
+            ],
+            bots: [],
+            mainBotIds: {},
+          }),
+          setups: [],
+        },
+        settled: true,
+        botsListed: false,
+      });
+
+      render(surface());
 
       expect(
-        screen
-          .getByTestId("stub-mentionable")
-          .getAttribute("data-tasks-settled"),
-      ).toBe("false");
-
-      mocks.homeFirstPagePending = false;
-      rerender(surface());
-
-      expect(
-        screen
-          .getByTestId("stub-mentionable")
-          .getAttribute("data-tasks-settled"),
-      ).toBe("true");
+        screen.getByTestId("stub-mentionable").getAttribute("data-bots"),
+      ).toBe("unread");
     });
 
     it("hands the channel no bots while the bots directory has not answered", () => {

@@ -13,7 +13,8 @@ const TARGET_CHIP_CLASS = cn(
   CHIP_CLASS,
   "inline-block max-w-full cursor-pointer truncate bg-info/10 align-bottom text-info-foreground hover:underline focus-visible:outline-2 focus-visible:outline-ring",
 );
-const REMOVED_CHIP_CLASS = cn(CHIP_CLASS, "text-muted-foreground");
+// A name the tab cannot show: a bot known to be gone, or a task it does not list.
+const MUTED_CHIP_CLASS = cn(CHIP_CLASS, "text-muted-foreground");
 
 /**
  * A mention in a message: the member's name as a chip, highlighted when it
@@ -60,10 +61,7 @@ export function BotChannelMentionChip(props: {
   const bot = directory.bots.find((entry) => entry.id === props.botId);
   if (bot === undefined) {
     return (
-      <span
-        data-testid="bot-mention-bot-removed"
-        className={REMOVED_CHIP_CLASS}
-      >
+      <span data-testid="bot-mention-bot-removed" className={MUTED_CHIP_CLASS}>
         a removed bot
       </span>
     );
@@ -84,10 +82,10 @@ export function BotChannelMentionChip(props: {
 /**
  * A task of the bot's environment named in a message (decision 177): its
  * title as a chip that opens the task, for a task the tab's directory lists.
- * Any other id is "a removed task", even one the viewer can open: it may be
- * another environment's, which this channel never names. The token as
- * written outside a bot's tab and while the directory's reads have not
- * answered.
+ * Any other id is "a task", even one the viewer can open: it may be another
+ * environment's, which this channel never names, or one of this
+ * environment's the directory does not hold, which is not a sign it is gone.
+ * The token as written outside a bot's tab.
  */
 export function TaskMentionChip(props: {
   readonly taskId: string;
@@ -99,13 +97,13 @@ export function TaskMentionChip(props: {
   const title =
     directory.tasks.find((entry) => entry.id === props.taskId)?.name ?? null;
   if (title === null) {
-    if (!directory.tasksSettled) return <>{props.children}</>;
     return (
       <span
-        data-testid="bot-mention-task-removed"
-        className={REMOVED_CHIP_CLASS}
+        data-testid="bot-mention-task-unlisted"
+        data-task-id={props.taskId}
+        className={MUTED_CHIP_CLASS}
       >
-        a removed task
+        a task
       </span>
     );
   }

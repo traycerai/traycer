@@ -26,17 +26,17 @@ export interface BotMentionDirectory {
   readonly person: (userId: string) => BotMentioned | null;
   /**
    * The environment's live bots, this one included, by title as Home's
-   * group lists them; `null` while that list has not answered.
+   * group lists them; `null` until the bot list itself has answered.
    */
   readonly bots: ReadonlyArray<BotMentionTarget> | null;
   /**
    * The environment's tasks the tab knows by title: the ones the bot's
    * stream lists, then the environment's on Home's task list. Only these are
-   * named: a task id outside them may be another environment's.
+   * named: a task id outside them may be another environment's. Not a
+   * complete listing (Home's first page is not every task), so a task it
+   * lacks is unknown, never removed.
    */
   readonly tasks: ReadonlyArray<BotMentionTarget>;
-  /** The reads behind `tasks` have answered, so a task it lacks is not one it will list. */
-  readonly tasksSettled: boolean;
 }
 
 export const BotMentionsContext = createContext<BotMentionDirectory | null>(

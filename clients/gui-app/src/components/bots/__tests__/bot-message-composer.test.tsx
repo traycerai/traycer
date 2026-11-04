@@ -814,7 +814,6 @@ describe("<BotMessageComposer /> @ mentions of bots and tasks", () => {
       { id: RELEASE_TASK, name: "Release notes" },
       { id: ROADMAP_TASK, name: "Roadmap" },
     ],
-    tasksSettled: true,
   };
 
   function mountWith(
@@ -916,7 +915,6 @@ describe("<BotMessageComposer /> @ mentions of bots and tasks", () => {
           { id: TRIAGE_BOT, name: "Triage" },
         ],
         tasks: [],
-        tasksSettled: true,
       },
       null,
     );
@@ -961,7 +959,6 @@ describe("<BotMessageComposer /> @ mentions of bots and tasks", () => {
         { id: TRIAGE_BOT, name: "Roadmap" },
       ],
       tasks: [{ id: ROADMAP_TASK, name: "Roadmap" }],
-      tasksSettled: true,
     };
 
     it("sends the one picked", async () => {
@@ -996,7 +993,7 @@ describe("<BotMessageComposer /> @ mentions of bots and tasks", () => {
     const gone = `<#${NOTES_BOT}> and <~${ROADMAP_TASK}>`;
     mountWith(
       PERSON,
-      { person: () => null, bots: [], tasks: [], tasksSettled: true },
+      { person: () => null, bots: [], tasks: [] },
       { requestId: "request-failed", text: gone },
     );
 

@@ -15,11 +15,12 @@ const NO_TASK_IDS: ReadonlyArray<string> = [];
 
 /** The bots and tasks a bot's channel can name (decision 177). */
 export interface BotMentionTargets {
-  /** `null` while the bots directory has not answered. */
+  /**
+   * `null` until the bot list has answered and the environment's group is
+   * listed: before that a bot the list lacks is not known to be gone.
+   */
   readonly bots: ReadonlyArray<BotMentionTarget> | null;
   readonly tasks: ReadonlyArray<BotMentionTarget>;
-  /** The cloud's own first page of Home and the stream's task contexts have answered. */
-  readonly tasksSettled: boolean;
 }
 
 /**
@@ -69,14 +70,15 @@ export function useBotMentionTargets(input: {
 }): BotMentionTargets {
   const { environmentId, tasks, personal } = input;
   const directory = useStandaloneBotsStore((state) => state.directory);
-  const settled = useStandaloneBotsStore((state) => state.settled);
+  const botsListed = useStandaloneBotsStore((state) => state.botsListed);
   const bots = useMemo((): ReadonlyArray<BotMentionTarget> | null => {
+    if (!botsListed) return null;
     const group = directory.model.groups.find(
       (candidate) => candidate.environmentId === environmentId,
     );
-    if (group === undefined) return settled ? [] : null;
+    if (group === undefined) return null;
     return group.bots.map((bot) => ({ id: bot.botId, name: bot.title }));
-  }, [directory, environmentId, settled]);
+  }, [botsListed, directory, environmentId]);
 
   const userId = useAuthStore((s) => s.profile?.userId ?? null);
   const cloud = useAuthStore((s) => authorizesCloudCapability(s.status));
@@ -119,20 +121,5 @@ export function useBotMentionTargets(input: {
     streamTaskIds,
   ]);
 
-  // Settled only on the cloud's own first page: a cached page or a local
-  // snapshot whose cloud half is pending may lack a task the cloud lists, and
-  // one whose cloud half is unavailable, or a read that failed, will not
-  // bring it. Nor before the environment list says whose environment this
-  // is. Until then a task the directory lacks stays as written.
-  const tasksSettled =
-    personal !== null &&
-    !home.firstPagePending &&
-    home.firstPageError === null &&
-    !home.presentsCachedPage &&
-    !home.isCloudPagePending &&
-    home.completeness?.cloudPage !== "unavailable" &&
-    !contexts.isPending &&
-    contexts.error === null;
-
-  return { bots, tasks: taskTargets, tasksSettled };
+  return { bots, tasks: taskTargets };
 }

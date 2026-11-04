@@ -3,10 +3,11 @@
  * (`AgentReferenceMarkdown` over `TraycerMarkdown`): a `<@userId>` token is
  * the member's chip where `BotMentionsContext` names them, `<#botId>` the
  * bot's chip that opens its channel, and `<~epicId>` the task's chip that
- * opens the task, titled only from the directory's task list. A token
- * nothing names stays as written, or says the bot or task is removed once the
- * directory's reads have answered without it; a task outside the directory is
- * never read by id, so another environment's is never named.
+ * opens the task, titled only from the directory's task list. A bot token
+ * nothing names stays as written, or says the bot is removed once the bots
+ * directory lacks it; a task outside the directory is never read by id and
+ * never called removed (the listing is not complete), so another
+ * environment's is never named and the id stays on the unlisted chip.
  */
 import type { ReactNode } from "react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
@@ -166,7 +167,6 @@ const DIRECTORY: BotMentionDirectory = {
   person: (userId) => (Object.hasOwn(MEMBERS, userId) ? MEMBERS[userId] : null),
   bots: [{ id: TRIAGE_BOT, name: "Triage" }],
   tasks: [{ id: RELEASE_TASK, name: "Release notes" }],
-  tasksSettled: true,
 };
 
 function body(markdown: string) {
@@ -304,28 +304,18 @@ describe("a task's chip", () => {
     expect(askedTaskIds()).toEqual([]);
   });
 
-  it("says a removed task for one the directory does not list, even one the host would title, and reads nothing", () => {
+  it("says only 'a task' for one the directory does not list, even one the host would title, keeping its id: a task that fell off Home's first page stays unresolved, never removed", () => {
     answerLookups({ [FOREIGN_TASK]: "Another team's roadmap" });
     const container = renderIn(`see <~${FOREIGN_TASK}>`, DIRECTORY);
 
-    expect(screen.getByTestId("bot-mention-task-removed").textContent).toBe(
-      "a removed task",
-    );
+    const unlisted = screen.getByTestId("bot-mention-task-unlisted");
+    expect(unlisted.textContent).toBe("a task");
+    expect(unlisted.getAttribute("data-task-id")).toBe(FOREIGN_TASK);
+    expect(unlisted.tagName).toBe("SPAN");
+    expect(screen.queryByRole("button")).toBeNull();
     expect(screen.queryByTestId("bot-mention-task")).toBeNull();
+    expect(container.textContent).not.toContain("removed");
     expect(container.textContent).not.toContain("Another team's roadmap");
-    expect(askedTaskIds()).toEqual([]);
-  });
-
-  it("leaves the token as written for an unlisted task until the directory's reads have settled", () => {
-    answerLookups({ [FOREIGN_TASK]: "Another team's roadmap" });
-    const container = renderIn(`see <~${FOREIGN_TASK}>`, {
-      ...DIRECTORY,
-      tasksSettled: false,
-    });
-
-    expect(screen.queryByTestId("bot-mention-task-removed")).toBeNull();
-    expect(screen.queryByTestId("bot-mention-task")).toBeNull();
-    expect(container.textContent).toContain(`<~${FOREIGN_TASK}>`);
     expect(askedTaskIds()).toEqual([]);
   });
 });

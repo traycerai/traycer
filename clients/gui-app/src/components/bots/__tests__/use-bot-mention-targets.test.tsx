@@ -14,7 +14,6 @@ import type {
 import type { EnvironmentDescriptor } from "@traycer/protocol/host/environment/contracts";
 import type {
   ListTaskLight,
-  ListTasksCompleteness,
   PermissionDto,
 } from "@traycer/protocol/host/epic/unary-schemas";
 import { useBotMentionTargets } from "@/components/bots/use-bot-mention-targets";
@@ -39,37 +38,16 @@ const mocks = vi.hoisted(() => ({
   asked: [] as Array<ReadonlyArray<string>>,
   /** Home's `epic.listTasks` rows. */
   homeTasks: [] as ListTaskLight[],
-  /** Whether Home's first page is still pending, and the error it failed with. */
-  homePending: false,
-  homeError: null as Error | null,
-  /** Whether Home presents a cached page, and whether its cloud half is pending. */
-  homeCached: false,
-  homeCloudPending: false,
-  homeCompleteness: null as ListTasksCompleteness | null,
-  /** The stream task contexts read's pending flag and error. */
-  contextsPending: false,
-  contextsError: null as Error | null,
 }));
 
 vi.mock("@/hooks/epic/use-epic-get-task-contexts-query", () => ({
   useEpicGetTaskContexts: (ids: ReadonlyArray<string>) => {
     mocks.asked.push(ids);
-    return {
-      tasksById: mocks.contexts,
-      isPending: mocks.contextsPending,
-      error: mocks.contextsError,
-    };
+    return { tasksById: mocks.contexts, isPending: false, error: null };
   },
 }));
 vi.mock("@/hooks/epics/use-cloud-epic-tasks-query", () => ({
-  useCloudEpicTasksQuery: () => ({
-    tasks: mocks.homeTasks,
-    firstPagePending: mocks.homePending,
-    firstPageError: mocks.homeError,
-    presentsCachedPage: mocks.homeCached,
-    isCloudPagePending: mocks.homeCloudPending,
-    completeness: mocks.homeCompleteness,
-  }),
+  useCloudEpicTasksQuery: () => ({ tasks: mocks.homeTasks }),
 }));
 
 const ENVIRONMENTS: ReadonlyArray<EnvironmentDescriptor> = [
@@ -171,7 +149,10 @@ function streamTask(taskId: string): BotTaskEntry {
   };
 }
 
-function settleBots(bots: ReadonlyArray<BotRecord>, settled: boolean): void {
+function seedBots(
+  bots: ReadonlyArray<BotRecord>,
+  flags: { readonly settled: boolean; readonly botsListed: boolean },
+): void {
   act(() => {
     useStandaloneBotsStore.setState({
       directory: {
@@ -182,7 +163,8 @@ function settleBots(bots: ReadonlyArray<BotRecord>, settled: boolean): void {
         }),
         setups: [],
       },
-      settled,
+      settled: flags.settled,
+      botsListed: flags.botsListed,
     });
   });
 }
@@ -191,13 +173,6 @@ beforeEach(() => {
   mocks.contexts = new Map();
   mocks.asked = [];
   mocks.homeTasks = [];
-  mocks.homePending = false;
-  mocks.homeError = null;
-  mocks.homeCached = false;
-  mocks.homeCloudPending = false;
-  mocks.homeCompleteness = null;
-  mocks.contextsPending = false;
-  mocks.contextsError = null;
   useAuthStore.setState({
     profile: {
       userId: "user-1",
@@ -214,6 +189,7 @@ afterEach(() => {
   useStandaloneBotsStore.setState({
     directory: { model: { groups: [], botCount: 0 }, setups: [] },
     settled: false,
+    botsListed: false,
   });
 });
 
@@ -228,15 +204,14 @@ function targetsOf(
 }
 
 describe("useBotMentionTargets bots", () => {
-  it("lists the bots of the bot's own environment by title, and none of another's", () => {
-    settleBots(
-      [
-        bot("bot_01HZY8V6K3Q9W2E4R5T6Y7V8M0", TEAM_ENV, "Tracy"),
-        bot("bot_01HZY8V6K3Q9W2E4R5T6Y7V8M1", TEAM_ENV, "Triage"),
-        bot("bot_01HZY8V6K3Q9W2E4R5T6Y7V8M2", PERSONAL_ENV, "Mine"),
-      ],
-      true,
-    );
+  const ROSTER = [
+    bot("bot_01HZY8V6K3Q9W2E4R5T6Y7V8M0", TEAM_ENV, "Tracy"),
+    bot("bot_01HZY8V6K3Q9W2E4R5T6Y7V8M1", TEAM_ENV, "Triage"),
+    bot("bot_01HZY8V6K3Q9W2E4R5T6Y7V8M2", PERSONAL_ENV, "Mine"),
+  ];
+
+  it("lists the bots of the bot's own environment by title, and none of another's, once the bot list answered", () => {
+    seedBots(ROSTER, { settled: true, botsListed: true });
 
     expect(targetsOf(TEAM_ENV, [], false).result.current.bots).toEqual([
       { id: "bot_01HZY8V6K3Q9W2E4R5T6Y7V8M0", name: "Tracy" },
@@ -244,13 +219,22 @@ describe("useBotMentionTargets bots", () => {
     ]);
   });
 
-  it("has none until the directory answered, and an empty list once it did with nothing for the environment", () => {
-    const { result } = targetsOf("env-unlisted", [], false);
-    expect(result.current.bots).toBeNull();
+  it("has none on a cold load, where the environment's group exists with no bots read yet", () => {
+    seedBots([], { settled: false, botsListed: false });
 
-    settleBots([], true);
+    expect(targetsOf(TEAM_ENV, [], false).result.current.bots).toBeNull();
+  });
 
-    expect(result.current.bots).toEqual([]);
+  it("has none after a read that failed or ran out of time, though the directory is settled", () => {
+    seedBots([], { settled: true, botsListed: false });
+
+    expect(targetsOf(TEAM_ENV, [], false).result.current.bots).toBeNull();
+  });
+
+  it("has none for an environment the answered bot list has no group for", () => {
+    seedBots(ROSTER, { settled: true, botsListed: true });
+
+    expect(targetsOf("env-unlisted", [], false).result.current.bots).toBeNull();
   });
 });
 
@@ -302,93 +286,6 @@ describe("useBotMentionTargets tasks", () => {
     expect(targetsOf(TEAM_ENV, [], false).result.current.tasks).toEqual([
       { id: HOME_TASK, name: "Untitled task" },
     ]);
-  });
-
-  it("is unsettled while Home's first page is pending, and settled once it answered with no cached page, pending cloud half or completeness reported", () => {
-    mocks.homePending = true;
-    const { result, rerender } = targetsOf(TEAM_ENV, [], false);
-
-    expect(result.current.tasksSettled).toBe(false);
-
-    mocks.homePending = false;
-    rerender();
-
-    expect(result.current.tasksSettled).toBe(true);
-  });
-
-  it("is unsettled while the stream's task contexts are pending, and when either read failed", () => {
-    mocks.contextsPending = true;
-    const { result, rerender } = targetsOf(
-      TEAM_ENV,
-      [streamTask(STREAM_TASK)],
-      false,
-    );
-    expect(result.current.tasksSettled).toBe(false);
-
-    mocks.contextsPending = false;
-    mocks.contextsError = new Error("host unreachable");
-    rerender();
-    expect(result.current.tasksSettled).toBe(false);
-
-    mocks.contextsError = null;
-    mocks.homeError = new Error("cloud down");
-    rerender();
-    expect(result.current.tasksSettled).toBe(false);
-  });
-
-  it("is unsettled while Home presents a cached page, whose cloud half has not answered", () => {
-    mocks.homeCached = true;
-
-    expect(targetsOf(TEAM_ENV, [], false).result.current.tasksSettled).toBe(
-      false,
-    );
-  });
-
-  it("is unsettled while a local-first snapshot waits on the cloud's half", () => {
-    mocks.homeCloudPending = true;
-
-    expect(targetsOf(TEAM_ENV, [], false).result.current.tasksSettled).toBe(
-      false,
-    );
-  });
-
-  it("is unsettled when the cloud's page is unavailable, and settled when it settled", () => {
-    mocks.homeCompleteness = {
-      cloudPage: "unavailable",
-      facets: "server",
-      localRows: "none",
-      sort: "server",
-    };
-    const { result, rerender } = targetsOf(TEAM_ENV, [], false);
-    expect(result.current.tasksSettled).toBe(false);
-
-    mocks.homeCompleteness = {
-      cloudPage: "settled",
-      facets: "server",
-      localRows: "none",
-      sort: "server",
-    };
-    rerender();
-    expect(result.current.tasksSettled).toBe(true);
-  });
-
-  it("is unsettled until the environment list has said whose environment this is", () => {
-    const UNREAD_ENVIRONMENT: { readonly personal: boolean | null } = {
-      personal: null,
-    };
-    const { result, rerender } = renderHook(
-      (props: { readonly personal: boolean | null }) =>
-        useBotMentionTargets({
-          environmentId: TEAM_ENV,
-          tasks: [],
-          personal: props.personal,
-        }),
-      { initialProps: UNREAD_ENVIRONMENT },
-    );
-    expect(result.current.tasksSettled).toBe(false);
-
-    rerender({ personal: false });
-    expect(result.current.tasksSettled).toBe(true);
   });
 });
 
