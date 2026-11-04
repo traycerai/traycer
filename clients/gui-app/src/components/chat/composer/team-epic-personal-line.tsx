@@ -54,7 +54,7 @@ export function TeamEpicPersonalLine(props: {
       ? status.data
       : null,
   );
-  if (notice === null || line === null) return null;
+  if (notice === null) return null;
   return (
     <TeamEpicPersonalLineBody
       teamId={notice.teamId}
@@ -68,7 +68,7 @@ export function TeamEpicPersonalLine(props: {
 function TeamEpicPersonalLineBody(props: {
   readonly teamId: string;
   readonly slug: string;
-  readonly line: string;
+  readonly line: string | null;
   readonly onContinue: (teamHostIds: ReadonlySet<string>) => void;
 }): ReactNode {
   const viewerUserId = useAuthStore((s) => s.contextMetadata?.userId ?? "");
@@ -94,7 +94,9 @@ function TeamEpicPersonalLineBody(props: {
       className="mb-2 flex min-w-0 flex-wrap items-center justify-between gap-2 rounded-md border border-border/60 px-3 py-2 text-ui-sm text-foreground"
       data-testid="team-epic-personal-line"
     >
-      <span className="min-w-0">{props.line}</span>
+      {props.line === null ? null : (
+        <span className="min-w-0">{props.line}</span>
+      )}
       <Button
         type="button"
         variant="outline"

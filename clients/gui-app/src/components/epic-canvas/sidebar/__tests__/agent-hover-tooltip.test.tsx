@@ -1092,6 +1092,24 @@ describe("AgentHoverTooltip host section", () => {
     expect(text).not.toContain(reachSentence(REACH_UNNAMED_HOSTS));
   });
 
+  it("shows no configuration badge for a user-owned task host", async () => {
+    h.teams = [{ teamId: "team-1", slug: "acme" }];
+    h.taskHosts = tasksView(
+      taskHostRow({ principal: { kind: "user", id: "viewer" } }),
+    );
+    renderAgent({
+      hostId: "host-t",
+      ownerKind: "chat",
+      ownerHostUnreachable: false,
+    });
+
+    await userEvent.hover(screen.getByRole("button", { name: "Reviewer" }));
+    const card = await screen.findByRole("dialog", { name: "Reviewer" });
+
+    expect(within(card).getByText("team-box")).toBeDefined();
+    expect(within(card).queryByText("Personal", { exact: true })).toBeNull();
+  });
+
   it("gives a person's own computer no host section", () => {
     h.taskHosts = tasksView(taskHostRow({ label: null }));
     renderAgent({

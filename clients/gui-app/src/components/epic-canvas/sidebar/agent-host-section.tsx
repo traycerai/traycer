@@ -91,11 +91,10 @@ function TaskHostSection(props: {
 }): ReactNode {
   const teams = useAuthStore((state) => state.shareableTeams);
   const principal = props.host.principal;
-  let configuration: string | null = "Personal";
-  if (principal.kind === "team") {
-    configuration =
-      teams.find((team) => team.teamId === principal.id)?.slug ?? null;
-  }
+  const configuration =
+    principal.kind === "team"
+      ? (teams.find((team) => team.teamId === principal.id)?.slug ?? null)
+      : null;
   const others = useMaybeEpicStore(
     (state) =>
       [
