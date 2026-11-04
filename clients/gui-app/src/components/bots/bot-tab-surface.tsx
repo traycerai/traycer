@@ -12,7 +12,8 @@ import {
 import type { UseQueryResult } from "@tanstack/react-query";
 import { useNavigate } from "@tanstack/react-router";
 import type { HostRpcError } from "@traycer-clients/shared/host-transport/host-messenger";
-import { EllipsisVertical } from "lucide-react";
+import { EllipsisVertical, Search } from "lucide-react";
+import { TooltipWrapper } from "@/components/ui/tooltip-wrapper";
 import type {
   BotListResponse,
   BotOpenResponse,
@@ -91,6 +92,12 @@ import {
   type BotSessionOpen,
   type BotTurnOpen,
 } from "@/stores/bots/bot-open-thread-store";
+import {
+  openBotSearch,
+  useBotSearchStore,
+} from "@/stores/bots/bot-search-store";
+import { registerBotChannelFind } from "@/lib/bots/bot-channel-find";
+import { formatChordForDisplay } from "@/lib/keybindings/chord";
 import {
   BotSessionView,
   type BotOpenSession,
@@ -260,7 +267,11 @@ function TracySurfaceShell(props: {
   }, [refetchBots, refetchEnvironments]);
 
   return (
-    <div className="@container flex h-full min-h-0" data-testid="bot-tab">
+    <div
+      className="@container flex h-full min-h-0"
+      data-testid="bot-tab"
+      data-bot-surface=""
+    >
       <BotChannelColumn
         level2={level2}
         activeBotId={botId}
@@ -836,10 +847,11 @@ function BotTabBody(props: {
 }
 
 /**
- * The rail's one slot - a thread or the bot's memory - held in its store,
- * above the views, so it survives a switch between the channel's tabs; and
- * the ways Activity and the bot's profile card open it beside the channel,
- * switching to Messages.
+ * The rail's one slot - a thread, the bot's memory or a search - held in its
+ * store, above the views, so it survives a switch between the channel's tabs;
+ * and the ways Activity and the bot's profile card open it beside the
+ * channel, switching to Messages. A thread a search result opened is the open
+ * thread like any other, with the search still behind it.
  */
 function useBotTabRail(
   botId: string,
@@ -847,6 +859,7 @@ function useBotTabRail(
 ): {
   readonly openThread: BotOpenThread | null;
   readonly openMemory: BotOpenMemory | null;
+  readonly searchResultsOpen: boolean;
   readonly setOpenThread: (open: BotOpenThread | null) => void;
   readonly setOpenMemory: (open: BotOpenMemory | null) => void;
   readonly openMemoryInChannel: () => void;
@@ -855,7 +868,10 @@ function useBotTabRail(
 } {
   const rail = useBotRail(botId);
   const setRail = useBotOpenThreadStore((s) => s.setRail);
-  const openThread = rail?.kind === "thread" ? rail : null;
+  const searchShowing = rail?.kind === "search" ? rail.showing : null;
+  const searchThread =
+    searchShowing?.kind === "thread" ? searchShowing.thread : null;
+  const openThread = rail?.kind === "thread" ? rail : searchThread;
   const openMemory = rail?.kind === "memory" ? rail : null;
   const openExchange = rail?.kind === "exchange" ? rail : null;
   // A pair's log takes the slot over whatever it holds; closing it brings
@@ -885,12 +901,49 @@ function useBotTabRail(
   return {
     openThread,
     openMemory,
+    searchResultsOpen: searchShowing?.kind === "results",
     setOpenThread,
     setOpenMemory,
     openMemoryInChannel,
     openExchange,
     exchanges,
   };
+}
+
+/**
+ * How the channel's search opens: the header's button and ⌘F, on this bot,
+ * while a host that takes it serves the tab (`null` otherwise). Each opening,
+ * the column's box included, shows the channel it opened beside: Messages,
+ * in place of a session or Threads. A session has its own find, and Threads
+ * no channel, so ⌘F is theirs while they show.
+ */
+function useChannelSearchEntry(args: {
+  readonly botId: string;
+  readonly hostId: string;
+  readonly channelShown: boolean;
+  readonly onShow: () => void;
+}): (() => void) | null {
+  const { botId, channelShown, onShow } = args;
+  const supported =
+    useHostMethodSupport(args.hostId, "bot.conversation.search") === true;
+  const opens = useBotSearchStore((state) => state.opens);
+  const seenOpens = useRef(opens);
+  const showChannel = useEffectEvent(onShow);
+  useEffect(() => {
+    if (seenOpens.current === opens) return;
+    seenOpens.current = opens;
+    showChannel();
+  }, [opens]);
+  const open = useCallback(
+    () => openBotSearch(botId, { kind: "bot", botId }, null),
+    [botId],
+  );
+  const paneVisible = usePaneVisible();
+  useEffect(() => {
+    if (!supported || !paneVisible || !channelShown) return undefined;
+    return registerBotChannelFind(open);
+  }, [channelShown, open, paneVisible, supported]);
+  return supported ? open : null;
 }
 
 /**
@@ -1067,6 +1120,7 @@ type BotTabPlace = {
   readonly session: BotOpenSession | null;
   readonly openThread: BotOpenThread | null;
   readonly openMemory: BotOpenMemory | null;
+  readonly searchResultsOpen: boolean;
   readonly channelLanding: BotChannelLanding | null;
 };
 
@@ -1266,6 +1320,7 @@ function useRailDrawnReport(
     place.session === null &&
     !place.threadsShown &&
     (place.openMemory !== null ||
+      place.searchResultsOpen ||
       (threadListSupported && place.openThread !== null));
   useLayoutEffect(() => {
     onRailDrawn(railDrawn);
@@ -1356,6 +1411,7 @@ function BotTabContent(props: {
   const {
     openThread,
     openMemory,
+    searchResultsOpen,
     setOpenThread,
     setOpenMemory,
     openMemoryInChannel,
@@ -1404,9 +1460,18 @@ function BotTabContent(props: {
       session,
       openThread,
       openMemory,
+      searchResultsOpen,
       channelLanding,
     }),
-    [channelLanding, openMemory, openThread, session, threadsShown, view],
+    [
+      channelLanding,
+      openMemory,
+      openThread,
+      searchResultsOpen,
+      session,
+      threadsShown,
+      view,
+    ],
   );
   useSpendTabLanding({
     botId,
@@ -1423,6 +1488,16 @@ function BotTabContent(props: {
   });
   useRailDrawnReport(place, threadListSupported, onRailDrawn);
   const activeTasks = useBotActiveTasks(snapshot.tasks);
+  const showMessages = useCallback(() => {
+    closeSession();
+    changeView("messages");
+  }, [changeView, closeSession]);
+  const openSearch = useChannelSearchEntry({
+    botId,
+    hostId,
+    channelShown: session === null && !threadsShown,
+    onShow: showMessages,
+  });
   // The channel's settings open beside it from the header's ⋮.
   const [settingsOpen, setSettingsOpen] = useState(false);
   const toggleSettings = useCallback(
@@ -1515,6 +1590,7 @@ function BotTabContent(props: {
                     isMain={isMain === true}
                     settingsOpen={settingsOpen}
                     onToggleSettings={toggleSettings}
+                    onOpenSearch={openSearch}
                     activityCount={activeTasks.rows.length}
                   />
                   {streamError === null ? null : (
@@ -1694,6 +1770,8 @@ function BotChannelHeader(props: {
   readonly isMain: boolean;
   readonly settingsOpen: boolean;
   readonly onToggleSettings: () => void;
+  /** Opens the channel's search; `null` where the tab's host has none. */
+  readonly onOpenSearch: (() => void) | null;
   /** How many tasks the Activity list shows. */
   readonly activityCount: number;
 }): ReactNode {
@@ -1758,6 +1836,26 @@ function BotChannelHeader(props: {
             <TalkControl form="touch" />
           </>
         ) : null}
+        {props.onOpenSearch === null ? null : (
+          <TooltipWrapper
+            label={`Search in ${props.title} ${formatChordForDisplay("mod+f")}`}
+            side="bottom"
+            sideOffset={undefined}
+            align={undefined}
+          >
+            <Button
+              type="button"
+              variant="ghost"
+              size="icon-sm"
+              aria-label={`Search in ${props.title}`}
+              data-testid="bot-channel-search-open"
+              className="ml-auto"
+              onClick={props.onOpenSearch}
+            >
+              <Search aria-hidden="true" />
+            </Button>
+          </TooltipWrapper>
+        )}
         <Button
           ref={settingsButtonRef}
           type="button"
@@ -1766,7 +1864,7 @@ function BotChannelHeader(props: {
           aria-label="Channel settings"
           aria-expanded={settingsOpen}
           data-testid="bot-channel-settings-open"
-          className="ml-auto"
+          className={props.onOpenSearch === null ? "ml-auto" : undefined}
           onClick={props.onToggleSettings}
         >
           <EllipsisVertical aria-hidden="true" />
