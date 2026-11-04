@@ -13,6 +13,8 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { useStandaloneBotsStore } from "@/stores/bots/standalone-bots-store";
 import * as Y from "yjs";
 import { HostClient } from "@traycer-clients/shared/host-client/host-client";
+import { MockRunnerHost } from "@traycer-clients/shared/host-client/mock/mock-runner-host";
+import { setAppBackgrounded } from "@/lib/notifications/notification-presence";
 import type { HostDirectoryEntry } from "@traycer-clients/shared/host-client/host-directory";
 import {
   mockLocalHostEntry,
@@ -254,11 +256,31 @@ vi.mock("@/hooks/host/use-host-stream-client-for", async () => {
 // Backs `useNotificationsServingHostEntry`'s relay-only fallback: `null`
 // stands for "no `RunnerHostProvider`", which the hook treats as
 // local-capable so an undeclared shell never silently acquires the fallback.
+// The shell's suspend/resume signals the provider listens to come from a real
+// `MockRunnerHost`, so a case raises them through its own emitters.
+const shellSignals = new MockRunnerHost({
+  signInUrl: "https://auth.example/sign-in",
+  authnBaseUrl: "https://auth.example",
+  localHost: null,
+  hosts: [],
+  workspaceFolderPickerPaths: undefined,
+  hasLocalHost: undefined,
+  traycerCli: undefined,
+});
+
 vi.mock("@/providers/use-runner-host", () => ({
   useRunnerHostOrNull: () =>
     servingHostFallbackState.hasLocalHost === null
       ? null
-      : { hasLocalHost: servingHostFallbackState.hasLocalHost },
+      : {
+          hasLocalHost: servingHostFallbackState.hasLocalHost,
+          onSystemSuspended: (
+            handler: Parameters<MockRunnerHost["onSystemSuspended"]>[0],
+          ) => shellSignals.onSystemSuspended(handler),
+          onSystemResumed: (
+            handler: Parameters<MockRunnerHost["onSystemResumed"]>[0],
+          ) => shellSignals.onSystemResumed(handler),
+        },
 }));
 
 vi.mock("@/hooks/host/use-addressable-host-id", () => ({
@@ -3523,6 +3545,42 @@ describe("<NotificationsSessionProvider />", () => {
 
     await new Promise((resolve) => setTimeout(resolve, 0));
     expect(markReadCalls).toEqual([]);
+  });
+
+  it("withdraws the focus claim from the shell's background edge and restores it on foreground", async () => {
+    vi.spyOn(document, "hasFocus").mockReturnValue(true);
+    servingHostFallbackState.hasLocalHost = true;
+    const { streamClient } = await renderHostNotificationsProvider();
+    const frames = streamClient.session.clientFrames;
+    const focusedOf = (index: number): boolean | null => {
+      const frame = frames.at(index);
+      return frame !== undefined && frame.kind === "presence"
+        ? frame.focused
+        : null;
+    };
+    try {
+      expect(focusedOf(0)).toBe(true);
+
+      // A call or another app interrupting audio is not the person leaving.
+      act(() => {
+        shellSignals.emitSystemSuspended("interrupted");
+      });
+      expect(frames).toHaveLength(1);
+
+      act(() => {
+        shellSignals.emitSystemSuspended("background");
+      });
+      expect(frames).toHaveLength(2);
+      expect(focusedOf(1)).toBe(false);
+
+      act(() => {
+        shellSignals.emitSystemResumed({ backgroundedForMs: 5_000 });
+      });
+      expect(frames).toHaveLength(3);
+      expect(focusedOf(2)).toBe(true);
+    } finally {
+      setAppBackgrounded(false);
+    }
   });
 
   it("consumes a terminal crash that arrives while that terminal is visible", async () => {

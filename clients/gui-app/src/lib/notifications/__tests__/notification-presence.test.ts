@@ -1,15 +1,20 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
 import { makeOpenableNodeRef } from "@/stores/epics/canvas/types";
+import { __setBrowserDocumentHiddenForTests } from "@/lib/dom/document-visibility";
 import {
+  isDocumentFocused,
   readFocusedHostNotificationPresence,
   readHostNotificationPresenceFrame,
+  setAppBackgrounded,
   subscribeHostNotificationPresence,
 } from "@/lib/notifications/notification-presence";
 
 describe("notification presence", () => {
   afterEach(() => {
     vi.restoreAllMocks();
+    __setBrowserDocumentHiddenForTests(false);
+    setAppBackgrounded(false);
     useEpicCanvasStore.setState({
       tabsById: {},
       canvasByTabId: {},
@@ -96,6 +101,49 @@ describe("notification presence", () => {
 
     expect(sendPresence).toHaveBeenCalledTimes(2);
 
+    unsubscribe();
+  });
+
+  it("does not claim focus from a hidden document that still has focus", () => {
+    vi.spyOn(document, "hasFocus").mockReturnValue(true);
+    const tabId = useEpicCanvasStore.getState().openEpicTab("epic-1", "Epic 1");
+    useEpicCanvasStore.getState().openTileInTab(
+      tabId,
+      makeOpenableNodeRef({
+        id: "chat-1",
+        instanceId: "chat-instance-1",
+        type: "chat",
+        name: "Chat",
+        hostId: "host-1",
+      }),
+    );
+    const sendPresence = vi.fn();
+    const unsubscribe = subscribeHostNotificationPresence(sendPresence);
+
+    __setBrowserDocumentHiddenForTests(true);
+
+    expect(sendPresence).toHaveBeenCalledTimes(1);
+    expect(isDocumentFocused()).toBe(false);
+    expect(
+      readHostNotificationPresenceFrame({ windowId: "window-1", now: () => 1 })
+        .focused,
+    ).toBe(false);
+    expect(readFocusedHostNotificationPresence()).toBeNull();
+    unsubscribe();
+  });
+
+  it("stops claiming focus from the shell's background edge and restores it on foreground", () => {
+    vi.spyOn(document, "hasFocus").mockReturnValue(true);
+    const sendPresence = vi.fn();
+    const unsubscribe = subscribeHostNotificationPresence(sendPresence);
+
+    setAppBackgrounded(true);
+    expect(sendPresence).toHaveBeenCalledTimes(1);
+    expect(isDocumentFocused()).toBe(false);
+
+    setAppBackgrounded(false);
+    expect(sendPresence).toHaveBeenCalledTimes(2);
+    expect(isDocumentFocused()).toBe(true);
     unsubscribe();
   });
 });

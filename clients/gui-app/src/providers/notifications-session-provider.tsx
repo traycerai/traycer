@@ -60,6 +60,7 @@ import {
 import { resetCloudEntityReadDriver } from "@/lib/notifications/cloud-entity-read-driver";
 import {
   readFocusedHostNotificationPresence,
+  setAppBackgrounded,
   subscribeHostNotificationPresence,
   type FocusedHostNotificationPresence,
   type HostNotificationPresenceFrame,
@@ -77,6 +78,7 @@ import { useNotificationShow } from "@/hooks/notifications/use-notifications";
 import { useNotificationActivationWithNavigate } from "@/hooks/notifications/use-notification-activation";
 import { useNotificationMarkEntityRead } from "@/hooks/notifications/use-notification-mark-entity-read-mutation";
 import { useWindowsBridge } from "@/providers/windows-bridge-context";
+import { useRunnerHostOrNull } from "@/providers/use-runner-host";
 import {
   displayCloudSnapshotArrivals,
   displayHostChannelEmission,
@@ -201,6 +203,24 @@ export function NotificationsSessionProvider(
   props: NotificationsSessionProviderProps,
 ): ReactNode {
   useEffect(() => installNotificationChimeAudioWarmup(), []);
+  const runnerHost = useRunnerHostOrNull();
+  // The shell's background edge withdraws this window's focus claim before
+  // the OS suspends it, so a turn that finishes after the person left the app
+  // still reaches their other devices; the foreground edge restores it.
+  useEffect(() => {
+    if (runnerHost === null) return undefined;
+    const suspended = runnerHost.onSystemSuspended((cause) => {
+      if (cause === "background") setAppBackgrounded(true);
+    });
+    const resumed = runnerHost.onSystemResumed(() => {
+      setAppBackgrounded(false);
+    });
+    return () => {
+      suspended.dispose();
+      resumed.dispose();
+      setAppBackgrounded(false);
+    };
+  }, [runnerHost]);
   const hostClient = useHostClient();
   const requestContextUserId = useRequestContextUserId(hostClient);
   const servingHostEntry = useNotificationsServingHostEntry();

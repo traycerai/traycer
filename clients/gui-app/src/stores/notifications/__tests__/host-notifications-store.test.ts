@@ -21,6 +21,8 @@ import type {
   StreamFrameEnvelope,
 } from "@traycer-clients/shared/host-transport/i-stream-session";
 import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
+import { __setBrowserDocumentHiddenForTests } from "@/lib/dom/document-visibility";
+import { setAppBackgrounded } from "@/lib/notifications/notification-presence";
 import {
   WsStreamClient,
   type ParamsOf,
@@ -1813,6 +1815,50 @@ describe("host notifications store", () => {
       expect(client.session.clientFrames).toHaveLength(3);
     } finally {
       vi.useRealTimers();
+    }
+  });
+
+  it("sends a not-focused presence frame at once when the document becomes hidden or the app backgrounded", () => {
+    vi.spyOn(document, "hasFocus").mockReturnValue(true);
+    const client = new MockWsStreamClient();
+    const close = openHostNotificationsStream(reconnectEngine, client, null, {
+      windowId: "window-1",
+      now: () => 456,
+      displayChannelEmission: () => undefined,
+      onFeedFrame: () => undefined,
+      onPresenceChanged: () => undefined,
+      onStreamOpened: () => undefined,
+      cloudLane: null,
+    });
+    try {
+      client.session.emitOpen();
+      const focusedOf = (index: number): boolean | null => {
+        const frame = client.session.clientFrames.at(index);
+        return frame !== undefined && frame.kind === "presence"
+          ? frame.focused
+          : null;
+      };
+      expect(focusedOf(0)).toBe(true);
+
+      __setBrowserDocumentHiddenForTests(true);
+      expect(client.session.clientFrames).toHaveLength(2);
+      expect(focusedOf(1)).toBe(false);
+
+      __setBrowserDocumentHiddenForTests(false);
+      expect(client.session.clientFrames).toHaveLength(3);
+      expect(focusedOf(2)).toBe(true);
+
+      setAppBackgrounded(true);
+      expect(client.session.clientFrames).toHaveLength(4);
+      expect(focusedOf(3)).toBe(false);
+
+      setAppBackgrounded(false);
+      expect(client.session.clientFrames).toHaveLength(5);
+      expect(focusedOf(4)).toBe(true);
+    } finally {
+      close();
+      __setBrowserDocumentHiddenForTests(false);
+      setAppBackgrounded(false);
     }
   });
 

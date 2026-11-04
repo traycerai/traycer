@@ -1,3 +1,7 @@
+import {
+  isDocumentVisible,
+  subscribeDocumentVisibility,
+} from "@/lib/dom/document-visibility";
 import { EMPTY_CANVAS } from "@/stores/epics/canvas/canvas-state";
 import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
 import {
@@ -28,7 +32,8 @@ export interface FocusedHostNotificationPresence {
 
 let botSurfaceFocused = false;
 let presentedBotConversation: HostNotificationsPresenceEntity | null = null;
-const botPresenceListeners = new Set<() => void>();
+let appBackgrounded = false;
+const presenceListeners = new Set<() => void>();
 
 /**
  * Whether this window's focused pane is the bot surface. The canvas keeps its
@@ -37,7 +42,7 @@ const botPresenceListeners = new Set<() => void>();
  */
 export function setBotSurfaceFocused(focused: boolean): void {
   botSurfaceFocused = focused;
-  for (const listener of botPresenceListeners) listener();
+  notifyPresenceListeners();
 }
 
 /**
@@ -49,7 +54,23 @@ export function setPresentedBotConversation(
   entity: HostNotificationsPresenceEntity | null,
 ): void {
   presentedBotConversation = entity;
-  for (const listener of botPresenceListeners) listener();
+  notifyPresenceListeners();
+}
+
+/**
+ * Whether the shell reports the app in the background (the phone's own
+ * background edge). The OS may suspend the WebView before the document ever
+ * reports itself hidden or blurred, so this window stops counting as focused
+ * from the edge itself, and the presence frame saying so goes out at once.
+ */
+export function setAppBackgrounded(backgrounded: boolean): void {
+  if (appBackgrounded === backgrounded) return;
+  appBackgrounded = backgrounded;
+  notifyPresenceListeners();
+}
+
+function notifyPresenceListeners(): void {
+  for (const listener of presenceListeners) listener();
 }
 
 export function readHostNotificationPresenceFrame(
@@ -68,7 +89,7 @@ export function readHostNotificationPresenceFrame(
 export function subscribeHostNotificationPresence(
   sendPresence: () => void,
 ): () => void {
-  botPresenceListeners.add(sendPresence);
+  presenceListeners.add(sendPresence);
   const unsubscribeCanvas = useEpicCanvasStore.subscribe((state, previous) => {
     if (
       state.activeTabId !== previous.activeTabId ||
@@ -78,30 +99,31 @@ export function subscribeHostNotificationPresence(
       sendPresence();
     }
   });
+  const unsubscribeVisibility = subscribeDocumentVisibility(sendPresence);
   const unsubscribeSources = (): void => {
-    botPresenceListeners.delete(sendPresence);
+    presenceListeners.delete(sendPresence);
     unsubscribeCanvas();
+    unsubscribeVisibility();
   };
   if (typeof window === "undefined" || typeof document === "undefined") {
     return unsubscribeSources;
   }
   window.addEventListener("focus", sendPresence);
   window.addEventListener("blur", sendPresence);
-  document.addEventListener("visibilitychange", sendPresence);
   return () => {
     unsubscribeSources();
     window.removeEventListener("focus", sendPresence);
     window.removeEventListener("blur", sendPresence);
-    document.removeEventListener("visibilitychange", sendPresence);
   };
 }
 
 /**
  * The entity this window is actively looking at, or `null` when the window is
- * blurred, the bot surface is focused without a conversation, or neither a bot
- * conversation nor an epic/chat tile is active. Read live (bot surface + canvas
- * store + document focus) so display-time gates see the current state rather than the last presence frame
- * that happened to be sent.
+ * blurred, hidden or backgrounded, the bot surface is focused without a
+ * conversation, or neither a bot conversation nor an epic/chat tile is active.
+ * Read live (bot surface + canvas store + document focus) so display-time
+ * gates see the current state rather than the last presence frame that
+ * happened to be sent.
  */
 export function readFocusedHostNotificationPresenceEntity(): HostNotificationsPresenceEntity | null {
   return readFocusedHostNotificationPresence()?.entity ?? null;
@@ -122,8 +144,19 @@ export function readFocusedHostNotificationPresence(): FocusedHostNotificationPr
   };
 }
 
+/**
+ * Whether the person is looking at this window: it has focus, it is visible,
+ * and the app is not in the background. A hidden window can keep
+ * `hasFocus()`, and a claim of focus from it would stamp the person's
+ * notifications read while they are elsewhere.
+ */
 export function isDocumentFocused(): boolean {
-  return typeof document !== "undefined" && document.hasFocus();
+  return (
+    !appBackgrounded &&
+    typeof document !== "undefined" &&
+    isDocumentVisible() &&
+    document.hasFocus()
+  );
 }
 
 function readActiveHostNotificationPresenceEntity(): HostNotificationsPresenceEntity | null {
