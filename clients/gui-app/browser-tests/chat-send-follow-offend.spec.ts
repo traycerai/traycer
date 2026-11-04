@@ -398,8 +398,18 @@ for (const [reply, runs] of [
         if (prev === null || b === null) return false;
         return rowIds(prev) !== rowIds(b);
       };
-      const heldCommit = (i: number): boolean =>
-        rowsChangedIn(i) && (stream[i + 1]?.B?.dist ?? 0) <= 1;
+      // The next frame is read from every recorded frame, not the stream
+      // step alone: a commit in the last stream frame corrects in the first
+      // frame after it, and a frame with no painted reading proves nothing.
+      const heldCommit = (i: number): boolean => {
+        const next = data.frames.at(data.frames.indexOf(stream[i]) + 1)?.B;
+        return (
+          rowsChangedIn(i) &&
+          next !== undefined &&
+          next !== null &&
+          next.dist <= 1
+        );
+      };
       const bOff = stream.filter(
         (f, i) => (f.B?.dist ?? 0) > 1 && !heldCommit(i),
       );
