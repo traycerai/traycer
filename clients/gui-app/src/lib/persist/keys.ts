@@ -389,6 +389,9 @@ export const PERSIST_STORES = [
   // Global across windows and kept outside the layout arrangement, so a drag
   // of the handle is not a layout change.
   { camelName: "sideTabStrip", leaf: "side-tab-strip", kind: "static" },
+  // The phone shell's level-2 task column, folded into the menu under the
+  // tile's name by the person's choice. Global across windows, as the strip.
+  { camelName: "mobileTileColumn", leaf: "mobile-tile-column", kind: "static" },
   // When this device last sent the `layout_snapshot` analytics event. Read and
   // written as one synchronous compare-and-set, so two windows launching
   // together cannot both count the same device (L-54).

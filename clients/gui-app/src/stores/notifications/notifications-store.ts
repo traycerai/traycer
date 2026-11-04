@@ -18,6 +18,7 @@ import {
   isReopenableHostStreamClose,
   type HostReconnectEngine,
 } from "@traycer-clients/shared/host-client/host-connection-reconnect-engine";
+import { isUnreadGlobalAttention } from "@/lib/notifications/global-notification-severity";
 
 /** The surface `openNotificationsStream` needs from a stream client; the
  * only two members production and test doubles both provide. */
@@ -37,6 +38,8 @@ interface NotificationsState {
   readonly entries: ReadonlyArray<NotificationEntry>;
   readonly entryIds: ReadonlyArray<string>;
   readonly unreadCount: number;
+  /** Unread entries that count on the bell (`isUnreadGlobalAttention`). */
+  readonly attentionCount: number;
   readonly revision: number;
   markAsRead: (notificationId: string) => void;
   markAllAsRead: () => void;
@@ -76,6 +79,7 @@ interface NotificationsProjection {
   readonly entries: ReadonlyArray<NotificationEntry>;
   readonly entryIds: ReadonlyArray<string>;
   readonly unreadCount: number;
+  readonly attentionCount: number;
   readonly changed: boolean;
 }
 
@@ -92,16 +96,19 @@ function createNotificationsReplica(): NotificationsReplica {
   let lastEntries: ReadonlyArray<NotificationEntry> = [];
   let lastEntryIds: ReadonlyArray<string> = [];
   let lastUnread = 0;
+  let lastAttention = 0;
 
   function project(): NotificationsProjection {
     const arr = getNotificationsArray(doc);
     const out: NotificationEntry[] = [];
     let unread = 0;
+    let attention = 0;
     for (let i = 0; i < arr.length; i++) {
       const parsed = parseNotificationRoomEntry(arr.get(i));
       if (parsed !== undefined) {
         out.push(parsed);
         if (parsed.readAt === null) unread++;
+        if (isUnreadGlobalAttention(parsed)) attention++;
       }
     }
     out.sort((a, b) => b.createdAt - a.createdAt);
@@ -114,6 +121,7 @@ function createNotificationsReplica(): NotificationsReplica {
         entries: lastEntries,
         entryIds: lastEntryIds,
         unreadCount: lastUnread,
+        attentionCount: lastAttention,
         changed: false,
       };
     }
@@ -121,10 +129,12 @@ function createNotificationsReplica(): NotificationsReplica {
     lastEntries = out;
     lastEntryIds = sameIds(entryIds, lastEntryIds) ? lastEntryIds : entryIds;
     lastUnread = unread;
+    lastAttention = attention;
     return {
       entries: out,
       entryIds: lastEntryIds,
       unreadCount: unread,
+      attentionCount: attention,
       changed: true,
     };
   }
@@ -166,6 +176,7 @@ function createNotificationsStore(
         entries: projected.entries,
         entryIds: projected.entryIds,
         unreadCount: projected.unreadCount,
+        attentionCount: projected.attentionCount,
         revision: Date.now(),
       });
     };
@@ -179,6 +190,7 @@ function createNotificationsStore(
       entries: [],
       entryIds: [],
       unreadCount: 0,
+      attentionCount: 0,
       revision: 0,
 
       markAsRead: (notificationId) => {
@@ -235,6 +247,7 @@ function createNotificationsStore(
           entries: [],
           entryIds: [],
           unreadCount: 0,
+          attentionCount: 0,
           revision: 0,
           connectionStatus: "connecting" as StreamConnectionStatus,
         });
@@ -397,6 +410,10 @@ export function useNotificationEntryById(id: string): NotificationEntry | null {
 
 export function useNotificationUnreadCount(): number {
   return useNotificationsStore((state) => state.unreadCount);
+}
+
+export function useNotificationAttentionCount(): number {
+  return useNotificationsStore((state) => state.attentionCount);
 }
 
 /**

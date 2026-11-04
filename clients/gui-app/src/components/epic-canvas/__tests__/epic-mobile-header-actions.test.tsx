@@ -22,6 +22,11 @@ import {
 } from "@/stores/layout/mobile-header-store";
 import { useMobileSwitcherStore } from "@/stores/epics/mobile-switcher-store";
 import { useAuthStore } from "@/stores/auth/auth-store";
+import {
+  installShellForm,
+  SHELL_WIDTH_COLUMN_256,
+  SHELL_WIDTH_MENU,
+} from "../../../../__tests__/mobile-level2-form-harness";
 
 interface RenameVariables {
   readonly epicDelta: {
@@ -219,6 +224,23 @@ describe("<EpicMobileSwitcherTrigger />", () => {
     // component-level form of this - a real unmount, not a direct store call -
     // is pinned in `mobile-tab-switcher-mount.test.tsx`.
     expect(useMobileSwitcherStore.getState().openTabId).toBe("tab-1");
+  });
+
+  it("draws only where level 2 is the bottom bar with its sheet", () => {
+    mountSheetFor("tab-1");
+    const shell = installShellForm(SHELL_WIDTH_COLUMN_256);
+    try {
+      render(<EpicMobileSwitcherTrigger tabId="tab-1" />);
+      expect(screen.queryByTestId("mobile-epic-switcher-trigger")).toBeNull();
+      shell.set({ width: SHELL_WIDTH_MENU, portrait: false });
+      expect(screen.queryByTestId("mobile-epic-switcher-trigger")).toBeNull();
+      shell.set({ width: SHELL_WIDTH_MENU, portrait: true });
+      expect(
+        screen.queryByTestId("mobile-epic-switcher-trigger"),
+      ).not.toBeNull();
+    } finally {
+      shell.dispose();
+    }
   });
 
   it("renders for a viewer role too - switching tabs is not permission-gated", () => {

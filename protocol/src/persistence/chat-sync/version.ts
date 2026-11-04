@@ -169,6 +169,13 @@ import { lazySchema } from "@traycer/protocol/framework/lazy-schema";
 // older reader draws the send without the post's state. The receipt's `slack`
 // (a send posted in Slack, S4b) rides the same minor, defaulted `null`.
 // 1.12 adds the per-chat Ultracode request to core.settings.
+// 1.12 also carries `tool_call.feedbackDraft` (feedback an agent drafted for
+// the user to send or skip), on the still-unreleased-minor rule:
+// `host-v1.5.1` ships chat-sync 1.6. Defaulted `null`, so an older record
+// parses unchanged and a block's raw re-emission carries the key through an
+// older reader, which draws the plain tool row. `category` is an open string
+// and `state` catches an unknown value, so neither can fail a shard. No
+// reader floor.
 export const CHAT_SYNC_SCHEMA_VERSION = { major: 1, minor: 12 } as const;
 
 export type ChatSyncSchemaVersion = typeof CHAT_SYNC_SCHEMA_VERSION;

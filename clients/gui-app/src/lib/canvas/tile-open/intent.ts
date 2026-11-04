@@ -112,6 +112,20 @@ export function tileIntent(
 
 export type TileOpenMode = "preview" | "permanent" | "background";
 
+/** The phone shell's two tile slots. */
+export type MobileTileSlot = "primary" | "secondary";
+
+/**
+ * What the two tile slots hold when an open is decided, and which one this open
+ * lands in. Only where two tiles fit; everywhere else the resolver is given
+ * `null` and the shell's one tile takes the open, as it always has.
+ */
+export interface MobileTileOpenSlots {
+  readonly target: MobileTileSlot;
+  readonly primaryInstanceId: string | null;
+  readonly secondaryInstanceId: string | null;
+}
+
 /**
  * Where inside a pane an open lands: `mode` picks pinned / preview /
  * membership-only semantics and `index` the strip position (`null` appends).
@@ -159,6 +173,17 @@ export type TileOpenPlan =
     }
   | { readonly kind: "pip"; readonly tabId: string }
   /**
+   * The phone shell's second tile takes it, and the tile the person is reading
+   * keeps the activation: `existingInstanceId` when the tile is on the canvas,
+   * `null` to add it. `transient` is the `preview` of this slot.
+   */
+  | {
+      readonly kind: "show-in-mobile-secondary";
+      readonly tabId: string;
+      readonly existingInstanceId: string | null;
+      readonly transient: boolean;
+    }
+  /**
    * Nothing to do: a background open (host push, middle-click) whose tile is
    * already on the canvas. `openTileInBackgroundTab` was idempotent by
    * construction - it never moved focus - so re-registration must not steal
@@ -203,6 +228,19 @@ const TILE_CATEGORY_BY_KIND: Record<TileKindId, TileCategory> = {
 
 export function tileCategoryOf(node: EpicCanvasTileRef): TileCategory {
   return TILE_CATEGORY_BY_KIND[node.type];
+}
+
+/**
+ * The slot an open that no tile's body placed lands in, where two tiles fit: a
+ * conversation takes the first tile, and anything else is read beside it, so
+ * choosing an artifact or a terminal from the task's list splits the view and
+ * leaves the chat where it is. A chat's own opens name the other slot instead
+ * (`MobileTileOpenTargetContext`).
+ */
+export function defaultMobileTileSlot(node: EpicCanvasTileRef): MobileTileSlot {
+  return node.type === "chat" || node.type === "terminal-agent"
+    ? "primary"
+    : "secondary";
 }
 
 /**

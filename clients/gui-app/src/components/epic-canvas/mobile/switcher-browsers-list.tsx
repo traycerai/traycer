@@ -75,7 +75,7 @@ export function SwitcherBrowsersList(props: SwitcherListProps) {
         }
         viewMenu={<BrowserOfflineFilter epicId={epicId} tabId={tabId} mobile />}
       />
-      <div className="flex min-h-0 flex-1 flex-col overflow-x-hidden overflow-y-auto overscroll-contain p-1 pb-safe-bottom">
+      <div className="flex min-h-0 flex-1 flex-col overflow-x-hidden overflow-y-auto overscroll-contain will-change-transform p-1 pb-safe-bottom">
         <BrowserListFeedback
           model={model}
           epicId={epicId}

@@ -21,6 +21,8 @@ const KNOWN_TRACKS = [AQUILO_1, ...SOUNDTRACK_MANIFEST.tracks];
 
 const trackNames = z.array(z.string());
 
+const stemFiles = z.object({ name: z.string(), files: z.array(z.string()) });
+
 const devManifestSchema = z.object({
   trackNames,
   views: z.object({
@@ -34,7 +36,10 @@ const devManifestSchema = z.object({
       z.object({
         name: z.string(),
         layers: z.array(
-          z.object({ name: z.string(), files: z.array(z.string()) }),
+          z.union([
+            stemFiles,
+            z.object({ name: z.string(), groups: z.array(stemFiles) }),
+          ]),
         ),
       }),
     ),

@@ -3736,6 +3736,96 @@ export const chatSyncSchemaSurfaceBaseline = {
                                                   "type": "null"
                                                 }
                                               ]
+                                            },
+                                            "feedbackDraft": {
+                                              "default": null,
+                                              "anyOf": [
+                                                {
+                                                  "type": "object",
+                                                  "properties": {
+                                                    "category": {
+                                                      "type": "string",
+                                                      "minLength": 1
+                                                    },
+                                                    "toolName": {
+                                                      "anyOf": [
+                                                        {
+                                                          "type": "string",
+                                                          "minLength": 1
+                                                        },
+                                                        {
+                                                          "type": "null"
+                                                        }
+                                                      ]
+                                                    },
+                                                    "goal": {
+                                                      "type": "string"
+                                                    },
+                                                    "observed": {
+                                                      "type": "string"
+                                                    },
+                                                    "suggestion": {
+                                                      "anyOf": [
+                                                        {
+                                                          "type": "string"
+                                                        },
+                                                        {
+                                                          "type": "null"
+                                                        }
+                                                      ]
+                                                    },
+                                                    "suggestDiagnostics": {
+                                                      "type": "boolean"
+                                                    },
+                                                    "state": {
+                                                      "default": "unknown",
+                                                      "type": "string",
+                                                      "enum": [
+                                                        "pending",
+                                                        "sent",
+                                                        "skipped",
+                                                        "failed",
+                                                        "unknown"
+                                                      ]
+                                                    },
+                                                    "decidedAt": {
+                                                      "anyOf": [
+                                                        {
+                                                          "type": "number"
+                                                        },
+                                                        {
+                                                          "type": "null"
+                                                        }
+                                                      ]
+                                                    },
+                                                    "failureReason": {
+                                                      "anyOf": [
+                                                        {
+                                                          "type": "string"
+                                                        },
+                                                        {
+                                                          "type": "null"
+                                                        }
+                                                      ]
+                                                    }
+                                                  },
+                                                  "required": [
+                                                    "category",
+                                                    "toolName",
+                                                    "goal",
+                                                    "observed",
+                                                    "suggestion",
+                                                    "suggestDiagnostics",
+                                                    "state",
+                                                    "decidedAt",
+                                                    "failureReason"
+                                                  ],
+                                                  "additionalProperties": false
+                                                },
+                                                {
+                                                  "type": "null"
+                                                }
+                                              ]
                                             }
                                           },
                                           "required": [
@@ -3761,7 +3851,8 @@ export const chatSyncSchemaSurfaceBaseline = {
                                             "stopped",
                                             "imageResults",
                                             "artifact",
-                                            "mcpApp"
+                                            "mcpApp",
+                                            "feedbackDraft"
                                           ],
                                           "additionalProperties": false
                                         },

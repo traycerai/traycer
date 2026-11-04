@@ -204,7 +204,7 @@ function SwitcherArtifactBrowseList(props: {
     );
   }
   return (
-    <div className="flex min-h-0 flex-1 flex-col overflow-x-hidden overflow-y-auto overscroll-contain p-1 pb-safe-bottom">
+    <div className="flex min-h-0 flex-1 flex-col overflow-x-hidden overflow-y-auto overscroll-contain will-change-transform p-1 pb-safe-bottom">
       {/* The desktop artifact tree's roles, for the same reason it carries
           them: indentation is a sighted reader's only cue, and a screen
           reader that is handed a flat run of buttons is told nothing at all
@@ -390,7 +390,7 @@ function SwitcherArtifactSearchBody(props: {
     );
   }
   return (
-    <div className="flex min-h-0 flex-1 flex-col gap-0.5 overflow-x-hidden overflow-y-auto overscroll-contain p-1 pb-safe-bottom">
+    <div className="flex min-h-0 flex-1 flex-col gap-0.5 overflow-x-hidden overflow-y-auto overscroll-contain will-change-transform p-1 pb-safe-bottom">
       {/* Hits stay flat at depth 0, and carry no tree roles. They are a
           ranking, not a tree: indenting one under another would claim a
           containment the host's ordering never asserted, and the parent it
