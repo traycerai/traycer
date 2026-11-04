@@ -327,8 +327,18 @@ vi.mock("@/hooks/bots/use-bot-conversation-list-query", () => ({
   }),
 }));
 vi.mock("@/hooks/bots/use-bot-thread-list-query", () => ({
+  botThreadListParams: (botId: string) => ({
+    botId,
+    limit: null,
+    cursor: null,
+  }),
   useBotThreadListQuery: () => ({
-    data: { threads: mocks.state.threads, threadAnchors: null },
+    data: {
+      threads: mocks.state.threads,
+      threadAnchors: null,
+      nextCursor: null,
+      total: mocks.state.threads.length,
+    },
     isFetching: false,
     isError: false,
     refetch: vi.fn(),
@@ -349,6 +359,8 @@ vi.mock("@/hooks/host/use-host-queries", () => ({
           threads: [],
           trunkCostUsd: null,
           threadAnchors: null,
+          nextCursor: null,
+          total: 0,
         },
         "bot.threadFollow.read": { follows: {} },
         "bot.readCursor.read": { cursors: {}, latest: {} },
