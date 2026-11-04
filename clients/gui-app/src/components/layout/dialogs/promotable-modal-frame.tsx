@@ -1,4 +1,4 @@
-import { useRef, type ReactNode } from "react";
+import { useId, useRef, type ReactNode } from "react";
 import { Dialog as DialogPrimitive } from "radix-ui";
 import { SquareArrowOutUpRight, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -8,6 +8,7 @@ import {
   interactionStartedOnOverlay,
 } from "@/components/layout/dialogs/dialog-outside-guard";
 import { BackdropDimSource } from "@/components/ui/backdrop-dim-source";
+import { useTitleBarDragSuppression } from "@/stores/layout/title-bar-drag-store";
 
 interface PromotableModalFrameProps {
   readonly icon: ReactNode;
@@ -57,6 +58,14 @@ export function PromotableModalFrame(
 ): ReactNode {
   const overlayRef = useRef<HTMLDivElement>(null);
   const contentRef = useRef<HTMLDivElement>(null);
+  // The frame is 80% of the window, so it lies over the side strip's and the
+  // header's window-drag regions. Electron resolves those at the OS level,
+  // before the DOM: a press on the frame where a drag region sits underneath
+  // moves the window and never reaches the frame (Settings' Host rows, in the
+  // frame's bottom-left corner, were unclickable over the strip's drag
+  // spacer). The frame mounts only while open, so holding a suppressor for
+  // its lifetime drops those regions to no-drag exactly while it is up.
+  useTitleBarDragSuppression(`promotable-modal:${useId()}`, true);
   // Sampled in the overlay's onPointerDown: while a nested layer (the
   // tier-filter/sort dropdown) is open, the dialog Content is pointer-events:none,
   // so the overlay is the hit-target for EVERY click-out - and the dialog's
