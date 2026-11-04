@@ -151,15 +151,15 @@ const oldReaderBlockSchema = definePreservedVariant({
 
 describe("chat-sync registration retains the 1.11 compaction capability", () => {
   it("keeps the head and shard on the same current version object", () => {
-    expect(CHAT_SYNC_SCHEMA_VERSION).toEqual({ major: 1, minor: 12 });
+    expect(CHAT_SYNC_SCHEMA_VERSION).toEqual({ major: 1, minor: 13 });
     const head = persistenceRecordRegistry["chat-head"][1];
     const shard = persistenceRecordRegistry["chat-shard"][1];
-    expect(head.latestMinor).toBe(12);
-    expect(shard.latestMinor).toBe(12);
-    expect(Object.keys(head.versions)).toEqual(["12"]);
-    expect(Object.keys(shard.versions)).toEqual(["12"]);
-    expect(head.versions[12].contract.schemaVersion).toBe(
-      shard.versions[12].contract.schemaVersion,
+    expect(head.latestMinor).toBe(13);
+    expect(shard.latestMinor).toBe(13);
+    expect(Object.keys(head.versions)).toEqual(["13"]);
+    expect(Object.keys(shard.versions)).toEqual(["13"]);
+    expect(head.versions[13].contract.schemaVersion).toBe(
+      shard.versions[13].contract.schemaVersion,
     );
   });
 });

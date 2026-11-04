@@ -14,7 +14,7 @@ import {
 } from "@traycer-clients/shared/host-transport/ws-stream-client";
 import type {
   HostNotificationsCloudFeedRow,
-  HostNotificationsCloudFeedRowV16,
+  HostNotificationsCloudFeedRowV17,
   HostNotificationsCloudFeedSummary,
 } from "@traycer/protocol/host/notifications/contracts";
 import {
@@ -127,7 +127,7 @@ function cloudPromptRow(
 function cloudBotAnswerRow(
   entryId: string,
   createdAt: number,
-): HostNotificationsCloudFeedRowV16 {
+): HostNotificationsCloudFeedRowV17 {
   return {
     entryId,
     originHostId: "host-a",
@@ -162,7 +162,7 @@ function cloudBotConversationRow(
   createdAt: number,
   operation: "bot.reply" | "bot.post",
   mention: boolean,
-): HostNotificationsCloudFeedRowV16 {
+): HostNotificationsCloudFeedRowV17 {
   return {
     ...cloudBotAnswerRow(entryId, createdAt),
     entry: {
@@ -898,7 +898,7 @@ describe("cloud notifications store", () => {
       null,
     );
     const base = cloudRow("entry-stalled", 4, "host-a");
-    const row: HostNotificationsCloudFeedRowV16 = {
+    const row: HostNotificationsCloudFeedRowV17 = {
       ...base,
       coalesceKey: "environment.move.stalled:host-a",
       entry: {
