@@ -903,7 +903,7 @@ export const ACTION_META: Readonly<Record<ActionId, ActionMeta>> = {
     id: "composer.dictation.toggle",
     label: "Voice input",
     description:
-      "Dictate into the composer. Tap to toggle, or hold to talk. On a bot's channel, starts or ends a call.",
+      "Dictate into the composer. Tap to toggle, or hold to talk. In a bot's channel or thread, starts or ends a call.",
     category: "app",
     kind: "chord",
     // Control+Shift+M - uses the Control key specifically (the separate ⌃ key on
