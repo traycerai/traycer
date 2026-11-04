@@ -49,9 +49,9 @@ describe("useArtifactSyncStatus", () => {
     advance(1);
     expect(result.current).toEqual({
       kind: "warning",
-      label: "Artifacts not syncing",
+      label: "Syncing…",
       sentence:
-        "Your changes are saved on this computer. Your other devices and teammates won’t see them yet. Retrying on its own.",
+        "Artifacts not syncing. Your changes are saved on this computer. Your other devices and teammates won’t see them yet. Retrying on its own.",
     });
     rerender(current);
     expect(result.current).toEqual({
@@ -109,44 +109,44 @@ describe("useArtifactSyncStatus", () => {
     {
       rooms: "retrying",
       waiting: 0,
-      label: "Artifacts not syncing",
+      label: "Syncing…",
       sentence:
-        "Your changes are saved on this computer. Your other devices and teammates won’t see them yet. Retrying on its own.",
+        "Artifacts not syncing. Your changes are saved on this computer. Your other devices and teammates won’t see them yet. Retrying on its own.",
     },
     {
       rooms: "stopped",
       waiting: 0,
-      label: "Artifacts not syncing",
+      label: "Syncing…",
       sentence:
-        "Your changes are saved on this computer. Your other devices and teammates won’t see them yet.",
+        "Artifacts not syncing. Your changes are saved on this computer. Your other devices and teammates won’t see them yet.",
     },
     {
       rooms: "retrying",
       waiting: 1,
-      label: "1 new artifact waiting",
+      label: "Syncing…",
       sentence:
-        "It’s saved on this computer and will appear here when sync is back. Retrying on its own.",
+        "1 new artifact waiting. It’s saved on this computer and will appear here when sync is back. Retrying on its own.",
     },
     {
       rooms: "stopped",
       waiting: 1,
-      label: "1 new artifact waiting",
+      label: "Syncing…",
       sentence:
-        "It’s saved on this computer and will appear here when sync is back.",
+        "1 new artifact waiting. It’s saved on this computer and will appear here when sync is back.",
     },
     {
       rooms: "retrying",
       waiting: 2,
-      label: "2 new artifacts waiting",
+      label: "Syncing…",
       sentence:
-        "They’re saved on this computer and will appear here when sync is back. Retrying on its own.",
+        "2 new artifacts waiting. They’re saved on this computer and will appear here when sync is back. Retrying on its own.",
     },
     {
       rooms: "stopped",
       waiting: 2,
-      label: "2 new artifacts waiting",
+      label: "Syncing…",
       sentence:
-        "They’re saved on this computer and will appear here when sync is back.",
+        "2 new artifacts waiting. They’re saved on this computer and will appear here when sync is back.",
     },
   ] as const)(
     "shows the correct warning for $rooms and $waiting waiting",

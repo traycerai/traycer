@@ -648,7 +648,8 @@ function indicatorForArtifactSync(
     showAgentSpinner: false,
     pulse: null,
     tooltip: status.sentence,
-    ariaLabel: `${status.label}. ${status.sentence}`,
+    // The sentence leads with what is wrong; "Syncing…" in front says nothing.
+    ariaLabel: status.sentence,
   };
 }
 
