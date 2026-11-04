@@ -1,4 +1,12 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  expect,
+  it,
+  vi,
+  type Mock,
+} from "vitest";
 import { MIX_TUNING } from "../mix-tuning";
 import { TrackPlayer } from "../player";
 import type { StemSource } from "../stems";
@@ -94,6 +102,8 @@ function makePlayer(
     random: () => 0.5,
     silenceSeconds: [5, 5],
     resumeAt,
+    onRunStart: () => undefined,
+    onRunEnd: () => undefined,
   });
 }
 
@@ -110,6 +120,8 @@ function makeFirstStatePlayer(
     random: () => 0,
     silenceSeconds: [5, 5],
     resumeAt: 0,
+    onRunStart: () => undefined,
+    onRunEnd: () => undefined,
   });
 }
 
@@ -538,7 +550,7 @@ describe("TrackPlayer run arc", () => {
     );
   });
 
-  it("keeps a long fade's end when a layer's target is restated and ramps a changed target over 1.5 s", async () => {
+  it("adds no ramp for a restated target, keeps a long fade's end when a layer is switched on again, and ramps a changed target over 1.5 s", async () => {
     const output = new FakeOutput();
     const player = makePlayer(
       output,
@@ -552,12 +564,14 @@ describe("TrackPlayer run arc", () => {
     expect(fade.seconds).toBe(6);
 
     player.setLayerTarget(0, 1);
-    const restated = output.ramps("bus0/0")[2];
-    expect(restated.target).toBe(1);
-    expect(restated.at + restated.seconds).toBeCloseTo(
-      fade.at + fade.seconds,
-      6,
-    );
+    expect(output.ramps("bus0/0")).toHaveLength(2);
+
+    // The layer is already on, so this ramps to where the fade is taking it and
+    // ends with the fade.
+    player.setLayerEnabled(0, true);
+    const kept = output.ramps("bus0/0")[2];
+    expect(kept.target).toBe(1);
+    expect(kept.at + kept.seconds).toBeCloseTo(fade.at + fade.seconds, 6);
 
     player.setLayerTarget(0, 0.5);
     expect(output.ramps("bus0/0")[3]).toMatchObject({
@@ -565,13 +579,8 @@ describe("TrackPlayer run arc", () => {
       seconds: 1.5,
     });
 
-    // Once the fade is over, restating the same target is an ordinary ramp.
-    await vi.advanceTimersByTimeAsync(4000);
-    player.setLayerTarget(1, 1);
-    expect(output.ramps("bus0/1").at(-1)).toMatchObject({
-      target: 1,
-      seconds: 1.5,
-    });
+    player.setLayerTarget(0, 0.5);
+    expect(output.ramps("bus0/0")).toHaveLength(4);
   });
 
   it("plays a layer capped at one play per run once, and again in the next run", async () => {
@@ -666,5 +675,207 @@ describe("TrackPlayer run arc", () => {
       target: 1,
       seconds: 1.5,
     });
+  });
+});
+
+interface ObservedPlayer {
+  readonly player: TrackPlayer;
+  readonly onRunStart: Mock<(state: State) => void>;
+  readonly onRunEnd: Mock<(silenceSeconds: number) => void>;
+}
+
+interface ObservedOptions {
+  readonly output: FakeOutput;
+  readonly stems: StemSource;
+  readonly track: VariableTrack;
+  readonly resumeAt: number;
+  /** Runs inside `onRunStart`, with the player and the state it opens in. */
+  readonly reactToStart: (player: TrackPlayer, state: State) => void;
+  /** Runs inside `onRunEnd`. */
+  readonly reactToEnd: (player: TrackPlayer) => void;
+}
+
+function observedPlayer(options: ObservedOptions): ObservedPlayer {
+  const onRunStart = vi.fn<(state: State) => void>((state) => {
+    options.reactToStart(player, state);
+  });
+  const onRunEnd = vi.fn<(silenceSeconds: number) => void>(() => {
+    options.reactToEnd(player);
+  });
+  const player: TrackPlayer = new TrackPlayer({
+    track: options.track,
+    output: options.output,
+    stems: options.stems,
+    random: () => 0,
+    silenceSeconds: [5, 5],
+    resumeAt: options.resumeAt,
+    onRunStart,
+    onRunEnd,
+  });
+  return { player, onRunStart, onRunEnd };
+}
+
+function shortTrack(lengthSeconds: number): VariableTrack {
+  return buildTrack({
+    lengthSeconds,
+    layers: [layerOf("A", 1, null)],
+    states: [stateOf("only", [properties(null, 1, 4, null)], 1)],
+    intro: null,
+    outro: null,
+    phases: [],
+  });
+}
+
+const NOTHING = (): void => undefined;
+
+describe("TrackPlayer run events", () => {
+  it("tells each run's start once, with the state it opens in and before anything plays", async () => {
+    const output = new FakeOutput();
+    const seen: { current: State | null; plays: number }[] = [];
+    const { player, onRunStart } = observedPlayer({
+      output,
+      stems: new FakeStems(1),
+      track: shortTrack(10),
+      resumeAt: 0,
+      reactToStart: (running) => {
+        seen.push({
+          current: running.currentState(),
+          plays: output.allPlays().length,
+        });
+      },
+      reactToEnd: NOTHING,
+    });
+    player.start(0, 0.1);
+    expect(onRunStart).toHaveBeenCalledTimes(1);
+    expect(seen).toEqual([{ current: onRunStart.mock.calls[0][0], plays: 0 }]);
+
+    // The run ends at 10.05 s and the silence lasts 5 s; the second run opens
+    // at about 15.2 s, and the third is past 25 s.
+    await vi.advanceTimersByTimeAsync(20_000);
+    expect(onRunStart).toHaveBeenCalledTimes(2);
+  });
+
+  it("does not tell a start that resumes a run, or one that opens partway into the track", async () => {
+    const resumed = observedPlayer({
+      output: new FakeOutput(),
+      stems: new FakeStems(1),
+      track: shortTrack(10),
+      resumeAt: 0,
+      reactToStart: NOTHING,
+      reactToEnd: NOTHING,
+    });
+    resumed.player.start(0, 0.1);
+    // Stopped inside the start lead, it resumes the same run from 0.
+    resumed.player.stop(0.1);
+    resumed.player.start(resumed.player.elapsed(), 0.1);
+    await vi.advanceTimersByTimeAsync(3000);
+    resumed.player.stop(0.1);
+    resumed.player.start(resumed.player.elapsed(), 0.1);
+    expect(resumed.onRunStart).toHaveBeenCalledTimes(1);
+    resumed.player.stop(0.1);
+
+    // Opening at 20 s of 30, the run ends at 10.05 s of the clock and the next
+    // one opens at about 15.2 s.
+    const partway = observedPlayer({
+      output: new FakeOutput(),
+      stems: new FakeStems(1),
+      track: shortTrack(30),
+      resumeAt: 20,
+      reactToStart: NOTHING,
+      reactToEnd: NOTHING,
+    });
+    partway.player.start(20, 0.1);
+    await vi.advanceTimersByTimeAsync(8000);
+    expect(partway.onRunStart).not.toHaveBeenCalled();
+    await vi.advanceTimersByTimeAsync(8000);
+    expect(partway.onRunStart).toHaveBeenCalledTimes(1);
+  });
+
+  it("lets a layer turned on from the callback start at the intro's end, not before", async () => {
+    const output = new FakeOutput();
+    const track = buildTrack({
+      lengthSeconds: 60,
+      layers: [layerOf("A", 1, null), layerOf("B", 1, null)],
+      states: [
+        stateOf(
+          "only",
+          [properties(null, 0, 4, null), properties(null, 0, 4, null)],
+          1,
+        ),
+      ],
+      intro: { name: "I", variants: 1, pan: null },
+      outro: null,
+      phases: [],
+    });
+    // A random of 0 rolls layer A on and leaves B off.
+    const { player, onRunStart } = observedPlayer({
+      output,
+      stems: stemsOfLength(
+        new Map([
+          ["I", 2.3],
+          ["A", 1],
+          ["B", 1],
+        ]),
+      ),
+      track,
+      resumeAt: 0,
+      reactToStart: (running) => {
+        expect(running.enabledLayers()).toEqual([true, false]);
+        running.setLayerEnabled(1, true);
+      },
+      reactToEnd: NOTHING,
+    });
+    player.start(0, 0.1);
+    expect(onRunStart).toHaveBeenCalledTimes(1);
+    await vi.advanceTimersByTimeAsync(4000);
+
+    // The intro ends at 2.3 s, which the 0.5 s grid takes to 2.5 s.
+    const intro = output.plays("bus0/2");
+    expect(intro).toHaveLength(1);
+    const layerB = output.plays("bus0/1");
+    expect(layerB[0].when - intro[0].when).toBeCloseTo(2.5, 6);
+  });
+
+  it("tells each run's end once, with the silence drawn, and not a stop", async () => {
+    const { player, onRunEnd } = observedPlayer({
+      output: new FakeOutput(),
+      stems: new FakeStems(1),
+      track: shortTrack(10),
+      resumeAt: 0,
+      reactToStart: NOTHING,
+      reactToEnd: NOTHING,
+    });
+    player.start(0, 0.1);
+    await vi.advanceTimersByTimeAsync(3000);
+    player.stop(0.1);
+    await vi.advanceTimersByTimeAsync(1000);
+    expect(onRunEnd).not.toHaveBeenCalled();
+
+    player.start(player.elapsed(), 0.1);
+    await vi.advanceTimersByTimeAsync(8000);
+    expect(onRunEnd.mock.calls).toEqual([[5]]);
+  });
+
+  it("stays stopped when the owner stops it from the run's end", async () => {
+    const output = new FakeOutput();
+    const { player, onRunStart, onRunEnd } = observedPlayer({
+      output,
+      stems: new FakeStems(1),
+      track: shortTrack(10),
+      resumeAt: 0,
+      reactToStart: NOTHING,
+      reactToEnd: (ending) => {
+        ending.stop(0.1);
+      },
+    });
+    player.start(0, 0.1);
+    await vi.advanceTimersByTimeAsync(11_000);
+    expect(onRunEnd).toHaveBeenCalledTimes(1);
+    const playsBefore = output.allPlays().length;
+
+    await vi.advanceTimersByTimeAsync(30_000);
+    expect(output.allPlays()).toHaveLength(playsBefore);
+    expect(onRunStart).toHaveBeenCalledTimes(1);
+    expect(onRunEnd).toHaveBeenCalledTimes(1);
   });
 });
