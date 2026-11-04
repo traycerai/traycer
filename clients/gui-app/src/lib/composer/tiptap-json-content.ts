@@ -265,6 +265,8 @@ export function mentionAttrsFromAttachment(
       chatId: mention.chatId,
       terminalAgentId: mention.terminalAgentId,
       terminalId: mention.terminalId,
+      botId: mention.botId,
+      botTrunkChatId: mention.botTrunkChatId,
       status: mention.status,
     };
   }
@@ -536,6 +538,7 @@ function entityMentionId(
   if (mention.contextType === "terminal") {
     return mention.terminalId ?? mention.path;
   }
+  if (mention.contextType === "bot") return mention.botId ?? mention.path;
   return mention.artifactId ?? mention.path;
 }
 

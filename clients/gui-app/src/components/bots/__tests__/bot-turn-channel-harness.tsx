@@ -77,6 +77,9 @@ function Channel(): ReactNode {
       }
       environmentId={ENVIRONMENT_ID}
       botNameOf={(botId) => (botId === OTHER_BOT_ID ? OTHER_BOT_TITLE : null)}
+      environmentBots={null}
+      openExchange={null}
+      exchangeRail={{ open: () => undefined, close: () => undefined }}
       setupHistory={null}
     />
   );

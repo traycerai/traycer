@@ -719,6 +719,7 @@ function PickerRow(props: {
     onLongPress: props.onShowFullPath,
     disabled: false,
     acceptsMouse: false,
+    acceptsPen: false,
   });
   return (
     // Hover is the pointer's half of the long-press: `useLongPress` is touch
