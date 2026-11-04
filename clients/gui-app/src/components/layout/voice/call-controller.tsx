@@ -130,6 +130,32 @@ interface CallChannel {
   readonly conversationId: string;
 }
 
+/** No words left to send at a call's end: the end route goes at once. */
+const NOTHING_LEFT: Promise<void> = Promise.resolve();
+
+/**
+ * A call's send of `text`: spoken, verbatim, into `threadId`, or, with none
+ * yet, opening the call's thread off the channel.
+ */
+function callSendRequest(
+  call: CallChannel,
+  threadId: string | null,
+  text: string,
+): BotConversationSendRequest {
+  return {
+    botId: call.botId,
+    conversationId: call.conversationId,
+    text,
+    threadId,
+    announcementId: null,
+    redeliver: null,
+    supersedes: null,
+    answer: null,
+    spoken: true,
+    ...(threadId === null ? { origin: "call" as const } : {}),
+  };
+}
+
 /**
  * Whether the end route can answer for this attempt: it goes out under whoever
  * is signed in now, and the server knows a session only to the account that
@@ -225,6 +251,16 @@ export function CallController(): ReactNode {
   const phase = useVoiceSessionStore((state) => state.phase);
   const focus = useVoiceSessionStore((state) => state.focus);
   const focusClient = useHostClientForHostId(focus?.hostId ?? null);
+  // The host the last call sent to, kept after it ends: the words a call
+  // leaves unsent at its end still go there.
+  const [sendHostId, setSendHostId] = useState<string | null>(null);
+  if (focus !== null && focus.hostId !== sendHostId) {
+    setSendHostId(focus.hostId);
+  }
+  const sendHostRef = useRef(sendHostId);
+  useEffect(() => {
+    sendHostRef.current = sendHostId;
+  }, [sendHostId]);
 
   // One scheduler per window, built at the first call and reset at each
   // call's end. Held twice: the ref for the engine's events, which run
@@ -293,8 +329,9 @@ export function CallController(): ReactNode {
   );
 
   // ---- Sending ---------------------------------------------------------- //
-  const { mutateAsync: sendAsync } =
-    useBotConversationSendMutation(focusClient);
+  const { mutateAsync: sendAsync } = useBotConversationSendMutation(
+    useHostClientForHostId(sendHostId),
+  );
   const sendRef = useRef(sendAsync);
   useEffect(() => {
     sendRef.current = sendAsync;
@@ -329,6 +366,8 @@ export function CallController(): ReactNode {
   const outboxRef = useRef<string[]>([]);
   /** The call (its token) whose send is out; `null` with none out. */
   const sendingRef = useRef<number | null>(null);
+  /** The send out now, as the thread it opened: a call's last words wait for it. */
+  const inFlightRef = useRef<Promise<string | null> | null>(null);
   /**
    * The call is closing on a queued send: the microphone is off, nothing more
    * is sent, and the unreachable line is being said before the end.
@@ -351,24 +390,20 @@ export function CallController(): ReactNode {
     if (text === undefined) return;
     const token = store.sessionToken;
     const threadId = call.threadId;
-    const request: BotConversationSendRequest = {
-      botId: call.botId,
-      conversationId: known.conversationId,
-      text,
-      threadId,
-      announcementId: null,
-      redeliver: null,
-      supersedes: null,
-      answer: null,
-      spoken: true,
-      ...(threadId === null ? { origin: "call" as const } : {}),
-    };
     sendingRef.current = token;
     const settleSend = (): boolean => {
-      if (sendingRef.current === token) sendingRef.current = null;
+      if (sendingRef.current === token) {
+        sendingRef.current = null;
+        inFlightRef.current = null;
+      }
       return useVoiceSessionStore.getState().sessionToken === token;
     };
-    sendRef.current(request).then(
+    const sent = sendRef.current(callSendRequest(known, threadId, text));
+    inFlightRef.current = sent.then(
+      (response) => response.threadId,
+      () => null,
+    );
+    sent.then(
       (response: BotConversationSendResponse) => {
         if (!settleSend()) return;
         if (response.delivery === "queued") {
@@ -559,7 +594,7 @@ export function CallController(): ReactNode {
    * minted, unless another account has taken over the window since.
    */
   const settleAttempt = useCallback(
-    async (attempt: Attempt): Promise<void> => {
+    async (attempt: Attempt, lastWords: Promise<void>): Promise<void> => {
       try {
         await attempt.engine.close();
       } catch (error) {
@@ -567,6 +602,7 @@ export function CallController(): ReactNode {
           error: describeLogError(error),
         });
       }
+      await lastWords;
       if (attempt.sessionId === null || !endRouteAnswers(attempt)) return;
       // Best effort: the call is over for the person either way, and the
       // server finalizes an unended row from its sideband.
@@ -587,9 +623,58 @@ export function CallController(): ReactNode {
   );
 
   /**
+   * What a call that ends leaves unsent, sent as its last words: the sends
+   * still waiting, then what was said since the last boundary, unless that
+   * is nothing or only an end phrase. They go one at a time after the send
+   * that is out, into the thread it opened if the call had none. Nothing is
+   * sent for a call ended by an account switch: the words were another
+   * person's. (A call closing on a queued send let its words go when the
+   * microphone went off.)
+   */
+  const takeLastWords = useCallback(
+    (reason: VoiceEndReason | null): (() => Promise<void>) | null => {
+      if (reason === "account") return null;
+      const store = useVoiceSessionStore.getState();
+      const call = store.focus;
+      const known = channelRef.current;
+      const open = store.takeOpenSpanTo(store.inputHeard);
+      const words = [...outboxRef.current];
+      if (open !== null && !isCallEndPhrase(open)) words.push(open);
+      if (words.length === 0) return null;
+      if (call === null || known === null || known.botId !== call.botId) {
+        appLogger.warn("[voice] last words had no channel to go to", {
+          words: words.length,
+        });
+        return null;
+      }
+      const inFlight = inFlightRef.current;
+      return async () => {
+        let threadId = call.threadId;
+        if (inFlight !== null) threadId = threadId ?? (await inFlight);
+        for (const text of words) {
+          // A new call on another host has its own sends now.
+          if (sendHostRef.current !== known.hostId) return;
+          try {
+            const response = await sendRef.current(
+              callSendRequest(known, threadId, text),
+            );
+            threadId = threadId ?? response.threadId;
+          } catch (error) {
+            appLogger.warn("[voice] call's last words failed", {
+              error: describeLogError(error),
+            });
+          }
+        }
+      };
+    },
+    [],
+  );
+
+  /**
    * Everything local a call leaves: capture first, then playback, timers,
-   * the scheduler's items and the words not sent. Synchronous, so a page
-   * going away releases the microphone before it is gone.
+   * the scheduler's items and the sends still waiting (an end has taken
+   * them as its last words by then). Synchronous, so a page going away
+   * releases the microphone before it is gone.
    */
   const releaseLocal = useCallback(() => {
     releaseAudio();
@@ -599,12 +684,19 @@ export function CallController(): ReactNode {
     closingRef.current = false;
     setShellVoiceLive(false);
   }, [clearTimers, releaseAudio, setShellVoiceLive]);
+  /**
+   * A live call's end, here: what it left unsent is taken first, the
+   * microphone stops, and then those words go. Settles once they are sent,
+   * which the end route waits for.
+   */
   const finishLocal = useCallback(
-    (reason: VoiceEndReason | null) => {
+    (reason: VoiceEndReason | null): Promise<void> => {
+      const lastWords = takeLastWords(reason);
       releaseLocal();
       useVoiceSessionStore.getState().sessionEnded(reason);
+      return lastWords === null ? NOTHING_LEFT : lastWords();
     },
-    [releaseLocal],
+    [releaseLocal, takeLastWords],
   );
   /** The same, for a dial that never became a call. */
   const refuseLocal = useCallback(
@@ -617,8 +709,9 @@ export function CallController(): ReactNode {
 
   /**
    * The terminal latch: takes the attempt away so no event of it is heard
-   * again, stops the microphone now, and lets the vendor accounting finish on
-   * its own. The bot's turn is left running. Idempotent.
+   * again, stops the microphone now, sends what the call left unsaid, and
+   * lets the vendor accounting finish on its own, the end route after those
+   * sends. The bot's turn is left running. Idempotent.
    */
   const end = useCallback(
     (reason: VoiceEndReason) => {
@@ -627,13 +720,14 @@ export function CallController(): ReactNode {
       if (store.phase === "idle" && attempt === null) return;
       attemptRef.current = null;
       if (attempt !== null) attempt.cancelled = true;
-      if (reason === "ended") finishLocal(null);
+      let lastWords = NOTHING_LEFT;
+      if (reason === "ended") lastWords = finishLocal(null);
       // Whatever stops the first opening before it goes live ends nothing:
       // the call never began.
       else if (firstOpeningRef.current) {
         refuseLocal(reason === "playback" ? "playback" : "unavailable", null);
-      } else finishLocal(reason);
-      if (attempt !== null) void settleAttempt(attempt);
+      } else lastWords = finishLocal(reason);
+      if (attempt !== null) void settleAttempt(attempt, lastWords);
     },
     [finishLocal, refuseLocal, settleAttempt],
   );
@@ -867,8 +961,7 @@ export function CallController(): ReactNode {
               void remintRef.current(attempt);
               return;
             }
-            finishLocal("connection");
-            void settleAttempt(attempt);
+            void settleAttempt(attempt, finishLocal("connection"));
           },
         },
       });
@@ -884,11 +977,15 @@ export function CallController(): ReactNode {
       // The first opening never was a call, so nothing ended. A replacement
       // is the live call ending: credits say so, and anything else is the
       // connection it was running on.
+      let lastWords = NOTHING_LEFT;
       if (firstOpeningRef.current)
         refuseLocal(attempt.failure ?? "unavailable", null);
-      else
-        finishLocal(attempt.failure === "credits" ? "credits" : "connection");
-      void settleAttempt(attempt);
+      else {
+        lastWords = finishLocal(
+          attempt.failure === "credits" ? "credits" : "connection",
+        );
+      }
+      void settleAttempt(attempt, lastWords);
       return false;
     }
     if (!owns() || attempt.sessionId === null) return false;
@@ -941,7 +1038,7 @@ export function CallController(): ReactNode {
       clearTimers();
       const store = useVoiceSessionStore.getState();
       if (store.phase === "idle") {
-        void settleAttempt(old);
+        void settleAttempt(old, NOTHING_LEFT);
         return;
       }
       // A run of sessions that did not outlive their own handshake ceiling
@@ -950,14 +1047,13 @@ export function CallController(): ReactNode {
       shortSessionsRef.current =
         ran < SHORT_SESSION_MS ? shortSessionsRef.current + 1 : 0;
       if (shortSessionsRef.current >= MAX_SHORT_SESSIONS) {
-        finishLocal("connection");
-        void settleAttempt(old);
+        void settleAttempt(old, finishLocal("connection"));
         return;
       }
       ensureSpeech().handoff();
       store.engineReplacing();
       const generation = useVoiceSessionStore.getState().engineGeneration;
-      await settleAttempt(old);
+      await settleAttempt(old, NOTHING_LEFT);
       // The person ended, or another replacement began, while the old one
       // closed: nothing to open.
       const now = useVoiceSessionStore.getState();

@@ -37,6 +37,7 @@ import {
   OUTPUT_HANGOVER_MS,
   OUTPUT_HANGOVER_WITHOUT_LEVEL_MS,
 } from "@/lib/voice/scheduler";
+import { useAuthStore } from "@/stores/auth/auth-store";
 import { useTracySurfaceStore } from "@/stores/bots/tracy-surface-store";
 import {
   useVoiceSessionStore,
@@ -1797,7 +1798,7 @@ describe("holding the floor while the bot works", () => {
 });
 
 describe("ending the call", () => {
-  it("stops the microphone before closing the voice and the end route, and speaks nothing after", async () => {
+  it("stops the microphone before closing the voice and the end route, and speaks nothing after, sending only what was left unsaid", async () => {
     const chat = await joinOpenThread([]);
     act(() =>
       fake.activity.set(threadActivity("t-open", "replying", TURN_REQUEST)),
@@ -1821,7 +1822,12 @@ describe("ending the call", () => {
     await advance(10 * CALL_HOLD_DELAY_MS);
 
     expect(appends()).toEqual([]);
-    expect(fake.sendMock).not.toHaveBeenCalled();
+    expect(
+      fake.sendMock.mock.calls.map(([request]) => [
+        request.text,
+        request.threadId,
+      ]),
+    ).toEqual([["Hang on", "t-open"]]);
   });
 
   it("leaves the bot's turn running: nothing is sent to cancel it", async () => {
@@ -2252,10 +2258,10 @@ describe("acknowledgement deltas across engines and calls", () => {
     voiceSays(" thing.");
     voiceSays("Sure thing.");
     await settle();
-    expect(fake.sendMock).not.toHaveBeenCalled();
+    expect(sentTexts()).toEqual(["old input"]);
     voiceSays("Okay.");
     await settle();
-    expect(sentTexts()).toEqual(["New input."]);
+    expect(sentTexts()).toEqual(["old input", "New input."]);
   });
 
   it("allows delivery confirmation to consume reply content without making it an utterance boundary", async () => {
@@ -2390,5 +2396,269 @@ describe("the mint's acknowledgement lines, through the HTTP parser", () => {
     voiceSays("Sure thing.");
     await settle();
     expect(sentTexts()).toEqual(["Cancel that."]);
+  });
+});
+
+describe("a lowercase acknowledgement after an unspaced cut-off, which no boundary recognises", () => {
+  it("sends words acknowledged in lowercase after an unspaced cut-off when the call ends", async () => {
+    const chat = await joinOpenThread([]);
+    land(chat, [botRow("r1", "The deployment passed all checks.", 200)]);
+    await settle();
+    voiceSays("The deployment");
+    speak("Cancel that.");
+    voiceSays("okay.");
+    await advance(10_000);
+    expect(sentTexts()).toEqual([]);
+    expect(useVoiceSessionStore.getState().openSpan).toBe("Cancel that.");
+    expect(useVoiceSessionStore.getState().phase).toBe("live");
+
+    act(() => driverOf().end());
+    await settle();
+
+    expect(useVoiceSessionStore.getState().phase).toBe("idle");
+    expect(sentTexts()).toEqual(["Cancel that."]);
+    expect(fake.endVoiceSession.mock.calls).toEqual([["vs1"]]);
+  });
+
+  it("merges two utterances when the first was acknowledged in lowercase after an unspaced cut-off (a known limit)", async () => {
+    const chat = await joinOpenThread([]);
+    land(chat, [botRow("r1", "The deployment passed all checks.", 200)]);
+    await settle();
+    voiceSays("The deployment");
+    speak("Cancel that. ");
+    voiceSays("okay.");
+    await advance(1_900);
+    speak("Check the logs.");
+    voiceSays("Got it.");
+    await settle();
+    expect(sentTexts()).toEqual(["Cancel that. Check the logs."]);
+  });
+
+  it("stays live on a goodbye acknowledged in lowercase after an unspaced cut-off, and ends without sending it when told to", async () => {
+    const chat = await joinOpenThread([]);
+    land(chat, [botRow("r1", "The deployment passed all checks.", 200)]);
+    await settle();
+    voiceSays("The deployment");
+    speak("goodbye");
+    voiceSays("okay.");
+    await advance(10_000);
+    expect(useVoiceSessionStore.getState().phase).toBe("live");
+    expect(sentTexts()).toEqual([]);
+
+    act(() => driverOf().end());
+    await settle();
+
+    expect(useVoiceSessionStore.getState().phase).toBe("idle");
+    expect(sentTexts()).toEqual([]);
+    expect(fake.endVoiceSession.mock.calls).toEqual([["vs1"]]);
+  });
+});
+
+describe("what a call leaves unsent at its end", () => {
+  it("sends the open span after the microphone stops and before the end route", async () => {
+    fake.sendMock.mockImplementation(() => {
+      fake.order.push("send");
+      return Promise.resolve(WRITTEN);
+    });
+    await dialLive(CHANNEL_CALL);
+    speak("Hold the build");
+    expect(sentTexts()).toEqual([]);
+
+    act(() => driverOf().end());
+    await settle();
+
+    expect(fake.sendMock.mock.calls).toEqual([
+      [
+        {
+          botId: BOT_ID,
+          conversationId: CHANNEL_ID,
+          text: "Hold the build",
+          threadId: null,
+          announcementId: null,
+          redeliver: null,
+          supersedes: null,
+          answer: null,
+          spoken: true,
+          origin: "call",
+        },
+      ],
+    ]);
+    expect(fake.order.filter((step) => step !== "engine.close")).toEqual([
+      "mic.stop",
+      "send",
+      "end-route",
+    ]);
+    expect(fake.endVoiceSession.mock.calls).toEqual([["vs1"]]);
+  });
+
+  it("sends nothing more than the acknowledged words when nothing is left open, and still ends the session", async () => {
+    await dialLive(CHANNEL_CALL);
+    await say("Hold the build.");
+    expect(sentTexts()).toEqual(["Hold the build."]);
+
+    act(() => driverOf().end());
+    await settle();
+
+    expect(sentTexts()).toEqual(["Hold the build."]);
+    expect(useVoiceSessionStore.getState().phase).toBe("idle");
+    expect(fake.endVoiceSession.mock.calls).toEqual([["vs1"]]);
+  });
+
+  it("does not send an open span that is only an end phrase", async () => {
+    await dialLive(CHANNEL_CALL);
+    speak("Bye.");
+
+    act(() => driverOf().end());
+    await settle();
+
+    expect(fake.sendMock).not.toHaveBeenCalled();
+    expect(useVoiceSessionStore.getState().phase).toBe("idle");
+    expect(fake.endVoiceSession.mock.calls).toEqual([["vs1"]]);
+  });
+
+  it("sends the open span when the vendor session closes with no time to re-mint", async () => {
+    await dialLive(CHANNEL_CALL);
+    speak("Hold the build");
+
+    act(() => events().onClosed("app"));
+    await settle();
+
+    const state = useVoiceSessionStore.getState();
+    expect(state.phase).toBe("idle");
+    expect(state.endReason).toBe("connection");
+    expect(sentTexts()).toEqual(["Hold the build"]);
+    expect(fake.endVoiceSession.mock.calls).toEqual([["vs1"]]);
+  });
+
+  it("sends the waiting utterance and the open span, in that order, into the thread the call's first send opened", async () => {
+    let answer: (response: BotConversationSendResponse) => void = () => {
+      throw new Error("the first send was never made");
+    };
+    fake.sendMock.mockImplementationOnce(
+      () =>
+        new Promise<BotConversationSendResponse>((resolve) => {
+          answer = resolve;
+        }),
+    );
+    await dialLive(CHANNEL_CALL);
+    await say("First thing.");
+    await say("Second thing.");
+    speak("Third, unfinished");
+
+    act(() => driverOf().end());
+    await settle();
+    expect(sentTexts()).toEqual(["First thing."]);
+    expect(fake.endVoiceSession).not.toHaveBeenCalled();
+
+    answer({ ...WRITTEN, threadId: "t-opened" });
+    await settle();
+
+    expect(sentTexts()).toEqual([
+      "First thing.",
+      "Second thing.",
+      "Third, unfinished",
+    ]);
+    const [first, second, third] = fake.sendMock.mock.calls.map(
+      ([request]) => request,
+    );
+    expect(first.threadId).toBeNull();
+    expect(first.origin).toBe("call");
+    expect(second.threadId).toBe("t-opened");
+    expect("origin" in second).toBe(false);
+    expect(third.threadId).toBe("t-opened");
+    expect("origin" in third).toBe(false);
+    expect(fake.endVoiceSession.mock.calls).toEqual([["vs1"]]);
+  });
+
+  it("opens no thread for later last words when the first send was lost, and follows the one the next word opens", async () => {
+    let lose: (error: Error) => void = () => {
+      throw new Error("the first send was never made");
+    };
+    fake.sendMock.mockImplementationOnce(
+      () =>
+        new Promise<BotConversationSendResponse>((_resolve, reject) => {
+          lose = reject;
+        }),
+    );
+    await dialLive(CHANNEL_CALL);
+    await say("First thing.");
+    await say("Second thing.");
+    speak("Third, unfinished");
+    fake.sendMock.mockImplementationOnce(() =>
+      Promise.resolve({ ...WRITTEN, threadId: "t-late" }),
+    );
+
+    act(() => driverOf().end());
+    await settle();
+    lose(new Error("offline"));
+    await settle();
+
+    const [, second, third] = fake.sendMock.mock.calls.map(
+      ([request]) => request,
+    );
+    expect(sentTexts()).toEqual([
+      "First thing.",
+      "Second thing.",
+      "Third, unfinished",
+    ]);
+    expect(second.threadId).toBeNull();
+    expect(second.origin).toBe("call");
+    expect(third.threadId).toBe("t-late");
+    expect("origin" in third).toBe(false);
+  });
+
+  it("sends nothing of what an account switch leaves unsaid, and ends the call for the account", async () => {
+    const identity = (userId: string) => ({
+      status: "signed-in" as const,
+      profile: { userId, userName: userId, email: `${userId}@example.com` },
+      contextMetadata: { userId, username: userId },
+    });
+    try {
+      act(() => useAuthStore.setState(identity("user-alice")));
+      await dialLive(CHANNEL_CALL);
+      speak("Hold the build");
+
+      act(() => useAuthStore.setState(identity("user-bob")));
+      await settle();
+
+      const state = useVoiceSessionStore.getState();
+      expect(state.phase).toBe("idle");
+      expect(state.endReason).toBe("account");
+      expect(fake.sendMock).not.toHaveBeenCalled();
+    } finally {
+      act(() => useAuthStore.setState(useAuthStore.getInitialState(), true));
+    }
+  });
+
+  it("goes on to the next word when one of the last words fails to send", async () => {
+    let answer: (response: BotConversationSendResponse) => void = () => {
+      throw new Error("the first send was never made");
+    };
+    fake.sendMock.mockImplementationOnce(
+      () =>
+        new Promise<BotConversationSendResponse>((resolve) => {
+          answer = resolve;
+        }),
+    );
+    await dialLive(CHANNEL_CALL);
+    await say("First thing.");
+    await say("Second thing.");
+    speak("Third, unfinished");
+    fake.sendMock.mockImplementationOnce(() =>
+      Promise.reject(new Error("offline")),
+    );
+
+    act(() => driverOf().end());
+    await settle();
+    answer({ ...WRITTEN, threadId: "t-opened" });
+    await settle();
+
+    expect(sentTexts()).toEqual([
+      "First thing.",
+      "Second thing.",
+      "Third, unfinished",
+    ]);
+    expect(useVoiceSessionStore.getState().phase).toBe("idle");
+    expect(fake.endVoiceSession.mock.calls).toEqual([["vs1"]]);
   });
 });
