@@ -244,6 +244,15 @@ export interface ChatTimelineFollowLatch {
    *  departure was published ahead of a report of theirs that has not come,
    *  which still holds them. */
   readonly reconcileTurnAtRest: () => void;
+  /** Whether the transcript window is voided: automatic correction is held
+   *  from the void until its replacement index has returned. */
+  readonly setWindowInvalidated: (isInvalidated: boolean) => void;
+  /** A commit changed the row shape: automatic correction is held until
+   *  `closeStructuralHold`. */
+  readonly openStructuralHold: () => void;
+  /** The frame after that commit's: once the window is not voided either,
+   *  the correction the hold kept back is issued once. */
+  readonly closeStructuralHold: () => void;
 }
 
 export type ChatTimelineReaderScrollDirection =
@@ -1374,6 +1383,10 @@ function canReaderGestureMove(
  *   ownership through the same latch and uses the same fresh-DOM authority.
  *   Every real maintain trigger funnels through `followEndIfPermitted` - see
  *   `chat-timeline.tsx`'s wiring.
+ * - A send's layout transaction (a voided window, a row-shape commit and its
+ *   next frame) holds every automatic correction at `startEndCorrection`.
+ *   The reader is still judged as ever; only the write waits, and the one
+ *   correction owed is issued when the hold ends.
  * - Both the listener and the observer skip unmeasurable geometry
  *   (`clientHeight === 0`, e.g. a `display:none` pane) rather than treating it
  *   as a confirmed edge - the permission ref is simply left as whatever it
@@ -1477,11 +1490,28 @@ export function useChatTimelineFollowLatch(
   // until its completion, reader input, an end navigation or unmount. Its
   // arm cannot say so - the navigation's own first report may consume it.
   const ownsFreeNavigationRef = useRef(false);
+  // The send's layout transaction holds automatic correction: while the
+  // transcript window is voided, and through a row-shape commit and the frame
+  // after it. The list's content is estimates then, and iOS WebKit reverts,
+  // clamps or reorders a write issued in a frame whose scrollable size
+  // changes - a write the ledger would read back as the reader leaving. Each
+  // bit is set and cleared by its own signal (`setWindowInvalidated`,
+  // `openStructuralHold`, `closeStructuralHold`).
+  const windowInvalidatedRef = useRef(false);
+  const structuralHoldRef = useRef(false);
+  // A correction the hold kept from being issued, issued once when both bits
+  // clear (`flushOwedCorrection`).
+  const owedCorrectionRef = useRef(false);
 
   useLayoutEffect(
     () => () => {
       ownsFreeNavigationRef.current = false;
     },
+    [],
+  );
+
+  const isLayoutHeld = useCallback(
+    (): boolean => windowInvalidatedRef.current || structuralHoldRef.current,
     [],
   );
 
@@ -1510,12 +1540,32 @@ export function useChatTimelineFollowLatch(
   // or a cancel settles it at once, and its continuation clears this record
   // before the next task. Every caller runs at the head of a reader-input
   // task or a scroll report, before any command of its own, so the cancel
-  // never retires another operation's command.
+  // never retires another operation's command - except the layout hold's
+  // opening (`holdOpened`), which runs in a commit's layout effect: a jump
+  // to the end queued earlier in that same task, before the record's
+  // continuation cleared it, is retired with it, and the jump's settle
+  // reaches the end through maintenance instead.
   const supersedePendingEndCorrection = useCallback((): void => {
     if (pendingEndCorrectionScrollRef.current === null) return;
     pendingEndCorrectionScrollRef.current = null;
     listRef.current?.cancelPendingScroll();
   }, [listRef]);
+
+  // Either hold bit rising. The correction in flight would reissue into the
+  // held frames, and the end command it queued would land in them, so both
+  // are retired. They are checked apart: a strict-bottom observation ends the
+  // active correction while its queued command stays recorded. A following
+  // reader is owed the correction they lose here.
+  const holdOpened = useCallback((): void => {
+    if (
+      activeCorrectionRef.current !== null &&
+      !ownsFreeNavigationRef.current
+    ) {
+      cancelActiveCorrection();
+    }
+    supersedePendingEndCorrection();
+    if (permissionRef.current) owedCorrectionRef.current = true;
+  }, [cancelActiveCorrection, supersedePendingEndCorrection]);
 
   const setFollowIntent = useCallback(
     (isFollowing: boolean): void => {
@@ -1770,6 +1820,13 @@ export function useChatTimelineFollowLatch(
 
   const startEndCorrection = useCallback(
     (list: LegendListRef, node: HTMLElement): void => {
+      // Every automatic correction starts here, after its caller has judged
+      // the reader, so the layout hold is checked once, here: held, nothing
+      // is written or queued, and the correction is owed.
+      if (isLayoutHeld()) {
+        owedCorrectionRef.current = true;
+        return;
+      }
       const correction = createActiveCorrection();
 
       const isCurrent = (): boolean =>
@@ -1801,6 +1858,11 @@ export function useChatTimelineFollowLatch(
         // is coming.
         if (publishUnannouncedDeparture(liveGeometry, movedAway)) {
           departureAwaitsReportRef.current = { wheelTarget: null };
+          return;
+        }
+        if (isLayoutHeld()) {
+          owedCorrectionRef.current = true;
+          cancelActiveCorrection();
           return;
         }
         issue();
@@ -1868,6 +1930,7 @@ export function useChatTimelineFollowLatch(
     [
       cancelActiveCorrection,
       createActiveCorrection,
+      isLayoutHeld,
       noteViewRead,
       noteViewportGrowthClamp,
       publishUnannouncedDeparture,
@@ -2507,6 +2570,9 @@ export function useChatTimelineFollowLatch(
     notePressView(geometry);
     const momentumArrived = noteReaderMomentum(geometry);
     if (isChatTimelineAtStrictBottom(geometry)) {
+      // The view reached the end: a correction the hold kept back has
+      // nothing left to correct.
+      owedCorrectionRef.current = false;
       reconcileStrictBottom(geometry, false);
       return;
     }
@@ -2744,6 +2810,40 @@ export function useChatTimelineFollowLatch(
     setFollowIntent,
     startEndCorrection,
   ]);
+
+  // Either hold bit falling: once neither holds, the correction owed is one
+  // ordinary maintenance pass, judged against the view as it now stands.
+  const flushOwedCorrection = useCallback((): void => {
+    if (isLayoutHeld()) return;
+    if (!owedCorrectionRef.current) return;
+    owedCorrectionRef.current = false;
+    followEndIfPermitted();
+  }, [followEndIfPermitted, isLayoutHeld]);
+
+  const setWindowInvalidated = useCallback(
+    (isInvalidated: boolean): void => {
+      if (windowInvalidatedRef.current === isInvalidated) return;
+      windowInvalidatedRef.current = isInvalidated;
+      if (isInvalidated) {
+        holdOpened();
+      } else {
+        flushOwedCorrection();
+      }
+    },
+    [flushOwedCorrection, holdOpened],
+  );
+
+  const openStructuralHold = useCallback((): void => {
+    if (structuralHoldRef.current) return;
+    structuralHoldRef.current = true;
+    holdOpened();
+  }, [holdOpened]);
+
+  const closeStructuralHold = useCallback((): void => {
+    if (!structuralHoldRef.current) return;
+    structuralHoldRef.current = false;
+    flushOwedCorrection();
+  }, [flushOwedCorrection]);
 
   const reconcileTurnAtRest = useCallback((): void => {
     // The strict bottom cannot tell a wheel whose scroll is still coming from
@@ -3174,11 +3274,15 @@ export function useChatTimelineFollowLatch(
       hasPendingEndCorrection,
       observeLiveGeometry,
       reconcileTurnAtRest,
+      setWindowInvalidated,
+      openStructuralHold,
+      closeStructuralHold,
     }),
     [
       beginOwnedEndNavigation,
       beginOwnedFreeNavigation,
       cancelOwnedFreeNavigation,
+      closeStructuralHold,
       completeOwnedFreeNavigation,
       completeOwnedEndNavigation,
       followEndIfPermitted,
@@ -3186,8 +3290,10 @@ export function useChatTimelineFollowLatch(
       isAtStrictEnd,
       noteReaderGesture,
       observeLiveGeometry,
+      openStructuralHold,
       reconcileTurnAtRest,
       setExplicitFollowIntent,
+      setWindowInvalidated,
     ],
   );
 }

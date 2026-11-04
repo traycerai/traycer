@@ -434,7 +434,7 @@ describe("Side tab view's own part on the canvas (D9, item B)", () => {
     expect(useLayoutEditorStore.getState().hoveredSetting).toBe(
       "sideStripView",
     );
-    expect(chip()?.textContent).toBe("Side tab view · Tabs only");
+    expect(chip()?.textContent).toBe("Side tab view · Tabs and agents");
     expect(chip()?.hidden).toBe(false);
   });
 

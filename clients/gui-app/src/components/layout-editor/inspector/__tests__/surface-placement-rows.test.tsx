@@ -251,8 +251,8 @@ describe("<SideStripViewRow /> (D8)", () => {
       "Tabs and agents",
     ]);
     expect(options.map((node) => node.getAttribute("aria-checked"))).toEqual([
-      "true",
       "false",
+      "true",
     ]);
     expect(screen.getByText("Side tab view")).toBeTruthy();
   });
@@ -351,11 +351,9 @@ describe("<SideStripViewRow /> (D8)", () => {
   it("writes the store at rest, with no history", () => {
     render(<SideStripViewRow {...LIVE_ROW} />);
 
-    pickPictured("Side tab view", "Tabs and agents");
+    pickPictured("Side tab view", "Tabs only");
 
-    expect(useLayoutStore.getState().arrangement.sideStripView).toBe(
-      "activity",
-    );
+    expect(useLayoutStore.getState().arrangement.sideStripView).toBe("layered");
     expect(historyDepth()).toBe(0);
   });
 
@@ -363,43 +361,45 @@ describe("<SideStripViewRow /> (D8)", () => {
     beginSession();
     render(<SideStripViewRow {...LIVE_ROW} />);
 
-    pickPictured("Side tab view", "Tabs and agents");
-    expect(useLayoutStore.getState().arrangement.sideStripView).toBe(
-      "activity",
-    );
+    pickPictured("Side tab view", "Tabs only");
+    expect(useLayoutStore.getState().arrangement.sideStripView).toBe("layered");
     expect(historyDepth()).toBe(1);
 
     useLayoutEditorStore.getState().undo();
-    expect(useLayoutStore.getState().arrangement.sideStripView).toBe("layered");
-
-    useLayoutEditorStore.getState().redo();
     expect(useLayoutStore.getState().arrangement.sideStripView).toBe(
       "activity",
     );
 
-    useLayoutEditorStore.getState().discard();
+    useLayoutEditorStore.getState().redo();
     expect(useLayoutStore.getState().arrangement.sideStripView).toBe("layered");
+
+    useLayoutEditorStore.getState().discard();
+    expect(useLayoutStore.getState().arrangement.sideStripView).toBe(
+      "activity",
+    );
   });
 
   it("offers a revert only while the view differs from the shipped one", () => {
     render(<SideStripViewRow {...LIVE_ROW} />);
     expect(
       screen.queryByRole("button", {
-        name: "Reset side tab view to default: Tabs only",
+        name: "Reset side tab view to default: Tabs and agents",
       }),
     ).toBeNull();
 
-    pickPictured("Side tab view", "Tabs and agents");
+    pickPictured("Side tab view", "Tabs only");
     fireEvent.click(
       screen.getByRole("button", {
-        name: "Reset side tab view to default: Tabs only",
+        name: "Reset side tab view to default: Tabs and agents",
       }),
     );
 
-    expect(useLayoutStore.getState().arrangement.sideStripView).toBe("layered");
+    expect(useLayoutStore.getState().arrangement.sideStripView).toBe(
+      "activity",
+    );
     expect(
       screen.queryByRole("button", {
-        name: "Reset side tab view to default: Tabs only",
+        name: "Reset side tab view to default: Tabs and agents",
       }),
     ).toBeNull();
   });
