@@ -78,6 +78,11 @@ export function useFallbackPolicySetMutation(): UseMutationResult<
                   // was unreadable before is not unreadable now - `set` is the
                   // repair path the host keeps strict precisely so this holds.
                   storedPolicyUnreadable: false,
+                  // `source` is deliberately left as it was. A save only ever
+                  // succeeds where the policy is already the caller's own -
+                  // the host refuses one on a team computer, whose routing is
+                  // the team's - so there is no team-to-own transition for a
+                  // reply to record.
                 },
         );
       },
