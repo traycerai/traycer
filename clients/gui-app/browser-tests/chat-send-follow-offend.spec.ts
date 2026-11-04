@@ -392,15 +392,18 @@ for (const [reply, runs] of [
       // row set, so a row growing with a streamed token is not a commit.
       const rowIds = (r: Reading): string =>
         r.rows.map((row) => row.slice(0, row.lastIndexOf("="))).join("|");
+      // Both neighbours are read from every recorded frame, not the stream
+      // step alone: the first stream frame's predecessor is the last frame
+      // before it, whatever its step.
       const rowsChangedIn = (i: number): boolean => {
-        const prev = stream[i - 1]?.B ?? null;
+        const prev =
+          data.frames.at(data.frames.indexOf(stream[i]) - 1)?.B ?? null;
         const b = stream[i]?.B ?? null;
         if (prev === null || b === null) return false;
         return rowIds(prev) !== rowIds(b);
       };
-      // The next frame is read from every recorded frame, not the stream
-      // step alone: a commit in the last stream frame corrects in the first
-      // frame after it, and a frame with no painted reading proves nothing.
+      // A commit in the last stream frame corrects in the first frame after
+      // it, and a frame with no painted reading proves nothing.
       const heldCommit = (i: number): boolean => {
         const next = data.frames.at(data.frames.indexOf(stream[i]) + 1)?.B;
         return (

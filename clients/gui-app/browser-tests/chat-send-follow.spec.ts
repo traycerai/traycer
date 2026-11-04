@@ -422,13 +422,20 @@ for (const c of CASES) {
     // frame the layout hold leaves unwritten: it may paint off the end, and
     // the frame after it carries the correction and must be at the end. A
     // token growing an existing row opens no hold, so an off-end paint there
-    // is a missed correction, as are two consecutive off-end frames.
+    // is a missed correction, as are two consecutive off-end frames. The one
+    // other frame excused is a height spike the next frame takes back: the
+    // latch's write landed, the content then grew within the frame and
+    // shrank again, so no correction could have followed it.
     const heldCommit = (f: ChatFollowFrame): boolean => {
       const i = frames.indexOf(f);
       const prev = frames.at(i - 1);
       const next = frames.at(i + 1);
       if (i === 0 || prev === undefined || next === undefined) return false;
-      return prev.rowKeys !== f.rowKeys && next.distance <= 1;
+      const rowShapeCommit = prev.rowKeys !== f.rowKeys;
+      const heightSpike =
+        f.scrollHeight > prev.scrollHeight &&
+        next.scrollHeight < f.scrollHeight;
+      return (rowShapeCommit || heightSpike) && next.distance <= 1;
     };
     const offEndStreaming = streaming.filter(
       (f) => f.distance > 1 && !heldCommit(f),
@@ -436,14 +443,21 @@ for (const c of CASES) {
     expect
       .soft(
         offEndStreaming.length,
-        `painted frames off the end while the reply streams, outside a row-shape commit\n${report}`,
+        `painted frames off the end while the reply streams, outside a row-shape commit or a reverted height spike\n${report}`,
       )
       .toBe(0);
+    // The stream step ends when the deltas have been delivered, which can
+    // fall between a held commit and its correction: then the first frame
+    // after the step carries the end reading.
     const lastStreaming = streaming.at(-1);
+    const endReading = (f: ChatFollowFrame): number | undefined =>
+      heldCommit(f) ? frames.at(frames.indexOf(f) + 1)?.distance : f.distance;
+    const streamEnd =
+      lastStreaming === undefined ? undefined : endReading(lastStreaming);
     expect
       .soft(
-        lastStreaming?.distance,
-        `the last streaming frame is at the end\n${report}`,
+        streamEnd,
+        `the last streaming frame, or its held commit's correction, is at the end\n${report}`,
       )
       .toBeLessThanOrEqual(1);
     expect
