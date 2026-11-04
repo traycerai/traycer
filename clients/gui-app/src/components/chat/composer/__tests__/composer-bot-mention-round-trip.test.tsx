@@ -56,10 +56,11 @@ function toAgentText(json: JsonContent): string {
 interface HarnessProps {
   readonly handleRef: { current: ComposerPromptEditorHandle | null };
   readonly initialContent: JsonContent;
+  readonly onEditorReady: () => void;
 }
 
 function Harness(props: HarnessProps) {
-  const { handleRef, initialContent } = props;
+  const { handleRef, initialContent, onEditorReady } = props;
   const [pickerStore] = useState(() => createComposerPickerStore());
   return (
     <ComposerPromptEditor
@@ -87,15 +88,9 @@ function Harness(props: HarnessProps) {
       interceptKeyDown={null}
       onFocus={() => undefined}
       onBlur={() => undefined}
-      onEditorReady={null}
+      onEditorReady={onEditorReady}
     />
   );
-}
-
-async function flushEditor(): Promise<void> {
-  await act(async () => {
-    await new Promise((resolve) => setTimeout(resolve, 0));
-  });
 }
 
 async function mountEditor(
@@ -104,8 +99,17 @@ async function mountEditor(
   const handleRef: { current: ComposerPromptEditorHandle | null } = {
     current: null,
   };
-  render(<Harness handleRef={handleRef} initialContent={initialContent} />);
-  await flushEditor();
+  // The editor is created asynchronously; its ready signal is what makes the
+  // handle's methods stop no-oping.
+  const { promise: ready, resolve: markReady } = Promise.withResolvers<void>();
+  render(
+    <Harness
+      handleRef={handleRef}
+      initialContent={initialContent}
+      onEditorReady={markReady}
+    />,
+  );
+  await ready;
   const handle = handleRef.current;
   if (handle === null) throw new Error("editor handle missing");
   return handle;
