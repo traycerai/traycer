@@ -4,14 +4,12 @@ import type {
   SandboxMember,
   SandboxSummary,
 } from "@traycer/protocol/host/sandbox-control";
-import type { HostOwnerPrincipal } from "@traycer/protocol/host/host-status";
 import type { TaskHostRow } from "@traycer/protocol/host/task-host-summary";
 import { TaskSandboxEndDetails } from "@/components/hosts/task-sandbox-end-details";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { mintNewEpicTerminalTile } from "@/components/epic-canvas/sidebar/new-terminal-tile-ref";
 import { useEpicViewTabId } from "@/components/epic-canvas/view-tab-context";
-import { useRegisteredHosts } from "@/hooks/auth/use-registered-hosts-query";
 import type { AgentHostProjection } from "@/hooks/epic/use-agent-host-projection";
 import { useEpicTileNavigation } from "@/hooks/epic/use-epic-tile-navigation";
 import { useHostClientForHostId } from "@/hooks/host/use-host-client-for-host-id";
@@ -168,12 +166,8 @@ function AuthorizedHostSection(props: {
   readonly onKeep: (sandbox: SandboxSummary) => void;
 }): ReactNode {
   const { sandbox } = props;
-  const registry = useRegisteredHosts();
-  const owner = registry.data?.hosts.find(
-    (host) => host.hostId === sandbox.hostId,
-  )?.owner;
   const configurations = useSandboxConfigurations();
-  const configuration = hoverConfiguration(sandbox, owner, configurations);
+  const configuration = hoverConfiguration(sandbox, configurations);
   const awake = sandbox.state === "awake" && !sandbox.frozen;
   return (
     <section className="space-y-1 px-3 py-2 text-ui-xs" aria-label={HOST_LABEL}>
@@ -215,19 +209,16 @@ function AuthorizedHostSection(props: {
 
 /**
  * The configuration the sandbox runs under, the line under its name: the
- * account's record of the host's owner, else the sandbox's own environment,
- * read against the person's teams (Personal once every team has answered and
- * none is its). `null` only while that is still unread.
+ * sandbox's bound environment, read against the person's teams (Personal
+ * once every team has answered and none is its). An absent environment is
+ * unknown; `null` only while its name is still unread. The summary keeps this
+ * available while the sandbox is suspended or stopped.
  */
 function hoverConfiguration(
   sandbox: SandboxSummary,
-  owner: HostOwnerPrincipal | undefined,
   configurations: SandboxConfigurations,
 ): string | null {
-  if (owner?.kind === "team") return owner.name;
-  if (owner?.kind === "user" || sandbox.environmentId === null) {
-    return "Personal";
-  }
+  if (sandbox.environmentId === null) return "unknown";
   const configuration = sandboxConfigurationOf(
     sandbox,
     configurations.configurations,
