@@ -10,20 +10,29 @@ import {
 } from "lucide-react";
 import { memo, type ReactElement, type ReactNode } from "react";
 import { MaterialFileIcon } from "@/components/material-file-icon";
+import { NamedBotAvatar } from "@/components/bots/bot-avatars";
+import { useOpenBotChannel } from "@/hooks/bots/use-open-bot-channel";
 import { TooltipWrapper } from "@/components/ui/tooltip-wrapper";
 import {
   createLegacyMentionAttachment,
   inferPathKind,
 } from "@/lib/composer/mentions";
 import { splitPromptIntoComposerSegments } from "@/lib/composer/segments";
-import type { Attachment, MentionAttachment } from "@/lib/composer/types";
+import type {
+  Attachment,
+  EntityMentionAttachment,
+  MentionAttachment,
+} from "@/lib/composer/types";
 import { basenameOfPath } from "@/lib/path";
+import { cn } from "@/lib/utils";
 import {
   EpicArtifactIcon,
   StaticEpicNodeIcon,
 } from "@/components/epic-canvas/epic-node-tab-icon";
 
 const MENTION_ICON_CLASS = "size-3.5 shrink-0 text-muted-foreground";
+const SENT_CHIP_CLASS =
+  "mx-px inline-flex items-center gap-1 rounded-md border border-border/60 bg-muted/60 px-1.5 py-0.5 align-baseline text-ui-sm font-medium text-foreground/90";
 const NODE_MENTION_ICON_CLASS = "size-3.5 shrink-0";
 
 function isGithubMentionContextType(
@@ -96,6 +105,9 @@ const ChatUserMessageMentionChip = memo(ChatUserMessageMentionChipImpl);
 function ChatUserMessageMentionChipImpl({
   mention,
 }: ChatUserMessageMentionChipProps): ReactNode {
+  if (mention.contextType === "bot") {
+    return <BotMentionChip mention={mention} />;
+  }
   const pathKind = mention.pathKind ?? inferPathKind(mention.path);
   // A GitHub mention's `path` is a synthetic token (`github-pr:org/repo#12`),
   // not a filesystem path: taking its basename would read `repo#12`, and
@@ -129,10 +141,7 @@ function ChatUserMessageMentionChipImpl({
       align={undefined}
     >
       {/* muted-fill-ok: transcript chip on bg-background, bordered besides */}
-      <span
-        className="mx-px inline-flex items-center gap-1 rounded-md border border-border/60 bg-muted/60 px-1.5 py-0.5 align-baseline text-ui-sm font-medium text-foreground/90"
-        data-composer-chip="mention"
-      >
+      <span className={SENT_CHIP_CLASS} data-composer-chip="mention">
         <MentionChipIcon
           mention={mention}
           pathKind={pathKind}
@@ -140,6 +149,38 @@ function ChatUserMessageMentionChipImpl({
         />
         <span className="truncate">{label}</span>
       </span>
+    </TooltipWrapper>
+  );
+}
+
+/**
+ * A bot the message named: its picture and name, and a click opens its
+ * channel, the one Tracy surface (`openBotChannel`).
+ */
+function BotMentionChip({
+  mention,
+}: {
+  readonly mention: EntityMentionAttachment;
+}): ReactElement {
+  const openBotChannel = useOpenBotChannel();
+  const botId = mention.botId ?? mention.epicId;
+  return (
+    <TooltipWrapper
+      label={mention.description}
+      side="top"
+      sideOffset={undefined}
+      align={undefined}
+    >
+      {/* muted-fill-ok: transcript chip on bg-background, bordered besides */}
+      <button
+        type="button"
+        className={cn(SENT_CHIP_CLASS, "cursor-pointer hover:bg-foreground/8")}
+        data-composer-chip="mention"
+        onClick={() => openBotChannel(botId, null)}
+      >
+        <NamedBotAvatar botId={botId} size="xs" />
+        <span className="truncate">{mention.label}</span>
+      </button>
     </TooltipWrapper>
   );
 }
