@@ -19,7 +19,7 @@ import type {
 } from "@traycer/protocol/host/bot/onboarding-schemas";
 import type { BotListResponse } from "@traycer/protocol/host/bot/schemas";
 import type { EnvironmentListResponseV11 } from "@traycer/protocol/host/environment/contracts";
-import type { HostNotificationsCloudFeedRowV16 } from "@traycer/protocol/host/notifications/contracts";
+import type { HostNotificationsCloudFeedRowV17 } from "@traycer/protocol/host/notifications/contracts";
 import {
   hostRpcRegistry,
   type HostRpcRegistry,
@@ -43,7 +43,6 @@ import {
   displayCloudSnapshotArrivals,
   resetNotificationFeedDisplayReceiptsForTests,
 } from "@/lib/notifications/notification-display";
-import { setPhoneLayoutOnly } from "@/lib/mobile-app";
 import { useAuthStore } from "@/stores/auth/auth-store";
 import { useStandaloneBotsStore } from "@/stores/bots/standalone-bots-store";
 
@@ -241,6 +240,7 @@ function mountHost(answers: HostAnswers): (children: ReactNode) => ReactNode {
 function pickerOn(botId: string): ReactNode {
   return (
     <BotChannelTitle
+      level2="menu"
       title="Tracy"
       activeBotId={botId}
       hostId="host-1"
@@ -253,7 +253,7 @@ function titleText(): string {
   return screen.getByTestId("bot-tab-title").textContent;
 }
 
-function verdictArrival(botId: string): HostNotificationsCloudFeedRowV16 {
+function verdictArrival(botId: string): HostNotificationsCloudFeedRowV17 {
   return {
     entryId: "verdict-1",
     originHostId: "host-1",
@@ -314,7 +314,6 @@ function signIn(userId: string): void {
 }
 
 beforeEach(() => {
-  setPhoneLayoutOnly(true);
   vi.spyOn(document, "hasFocus").mockReturnValue(true);
   resetNotificationFeedDisplayReceiptsForTests();
   host.support = true;
@@ -328,7 +327,6 @@ beforeEach(() => {
 
 afterEach(() => {
   cleanup();
-  setPhoneLayoutOnly(false);
   vi.restoreAllMocks();
   toast.dismiss();
   __resetBotListChangedSessionsForTesting();
@@ -538,6 +536,7 @@ describe("<StandaloneBotsBridge /> and a main bot still to be set up", () => {
         }}
         client={host.client}
         hostId={mockLocalHostEntry.hostId}
+        level2="menu"
         threadsView={THREADS_CLOSED}
       />
     );
@@ -817,7 +816,7 @@ describe("a bot's notification while a known host cannot take a read", () => {
     };
   }
 
-  function laterArrival(): HostNotificationsCloudFeedRowV16 {
+  function laterArrival(): HostNotificationsCloudFeedRowV17 {
     return {
       ...verdictArrival(TEAM_MAIN_BOT_ID),
       entryId: "verdict-2",

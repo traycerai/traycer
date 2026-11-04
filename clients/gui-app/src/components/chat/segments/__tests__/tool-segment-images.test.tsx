@@ -133,6 +133,7 @@ function renderTool(
           inputDetail={deriveToolInputDetail(toolName, EVAL_INPUT)}
           artifact={null}
           mcpApp={null}
+          feedbackDraft={null}
           error={null}
           agentMessageSend={null}
           managedCommand={null}
@@ -300,6 +301,7 @@ describe("<ToolSegment /> generic tool image results", () => {
   it("routes an MCP App call to its app row even when it carries image results", () => {
     const view = renderTool({
       mcpApp: MCP_APP_STAMP,
+      feedbackDraft: null,
       imageResults: [result("hash-a", "stray image")],
     });
 

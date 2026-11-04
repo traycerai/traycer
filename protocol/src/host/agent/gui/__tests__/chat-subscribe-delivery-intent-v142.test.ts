@@ -71,8 +71,7 @@ function snapshotFrame(messageDelivery: unknown) {
 }
 
 describe("chat.subscribe@1.42 registration", () => {
-  it("is the head, above a 1.41 that stays bound to its own frames", () => {
-    expect(line.latestMinor).toBe(CHAT_SUBSCRIBE_DELIVERY_INTENT_MINOR);
+  it("binds 1.42 to its own contract, above a 1.41 that stays bound to its own frames", () => {
     expect(line.versions[42].contract).toBe(chatSubscribeV142);
     expect(line.versions[41].contract).toBe(chatSubscribeV141);
     expect(chatSubscribeV142.serverFrameSchema).not.toBe(

@@ -85,6 +85,38 @@ function adoptIntentHtmlVersion(
   }
 }
 
+/**
+ * No focus to commit: the activation, and so the route, stays on the tile the
+ * person is reading. `openTileInBackgroundTab` keeps the intent's instance id,
+ * which is what the slot then names. A tile already in the slot keeps how it got
+ * there.
+ */
+function showInMobileSecondary(
+  plan: Extract<TileOpenPlan, { kind: "show-in-mobile-secondary" }>,
+  args: Pick<ExecuteTileOpenArgs, "node" | "source" | "store">,
+): void {
+  const { node, source, store } = args;
+  const { existingInstanceId, tabId } = plan;
+  if (existingInstanceId === null) {
+    store.prepareOpenTileInBackgroundTabFocusTargetFromSource(
+      tabId,
+      node,
+      source,
+    );
+  } else {
+    adoptIntentHtmlVersion(args, tabId, existingInstanceId);
+    if (
+      store.mobileSecondaryTileByTabId[tabId]?.instanceId === existingInstanceId
+    ) {
+      return;
+    }
+  }
+  store.setMobileSecondaryTile(tabId, {
+    instanceId: existingInstanceId ?? node.instanceId,
+    transient: plan.transient,
+  });
+}
+
 export function executeTileOpen(
   args: ExecuteTileOpenArgs,
 ): NestedFocusTarget | null {
@@ -118,6 +150,11 @@ export function executeTileOpen(
   }
 
   const tabId = plan.tabId;
+
+  if (plan.kind === "show-in-mobile-secondary") {
+    showInMobileSecondary(plan, args);
+    return null;
+  }
 
   const commit = (
     prepare: () => NestedFocusTarget | null,

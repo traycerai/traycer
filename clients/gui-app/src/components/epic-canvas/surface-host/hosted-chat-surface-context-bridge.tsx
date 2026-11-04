@@ -23,6 +23,7 @@ import { TabBodySelectedContext } from "@/components/epic-canvas/canvas/tab-body
 import type { ReadyTileSurfaceEnvironment } from "@/components/epic-canvas/surface-host/tile-surface-environment-registry";
 import type { EpicCanvasTileRef } from "@/stores/epics/canvas/types";
 import { PaneActivationFocusIntentContext } from "@/components/epic-canvas/pane-activation";
+import { MobileTileOpenTargetContext } from "@/lib/canvas/tile-open/mobile-tile-open-target-context";
 
 export function HostedChatSurfaceContextBridge(props: {
   readonly environment: ReadyTileSurfaceEnvironment;
@@ -69,7 +70,11 @@ export function HostedChatSurfaceContextBridge(props: {
                         <TabBodySelectedContext.Provider
                           value={environment.canvasActivity.tabSelected}
                         >
-                          <HostedChatSurfaceBody environment={environment} />
+                          <MobileTileOpenTargetContext
+                            value={environment.services.mobileOpenTarget}
+                          >
+                            <HostedChatSurfaceBody environment={environment} />
+                          </MobileTileOpenTargetContext>
                         </TabBodySelectedContext.Provider>
                       </PanePortalContainerContext.Provider>
                     </PaneFocusProbeContext.Provider>

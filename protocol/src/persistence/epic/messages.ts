@@ -272,6 +272,62 @@ export const agentUserMessageSchema = lazySchema(() =>
   }),
 );
 
+/** How a Slack message reached its bot: a mention, a reply in a thread the bot is in, a DM. */
+export const slackMessageTriggerSchema = lazySchema(() =>
+  z.enum(["mention", "thread", "dm"]),
+);
+export type SlackMessageTrigger = z.infer<typeof slackMessageTriggerSchema>;
+
+/** Why a file a Slack message carried did not reach the session. */
+export const slackFileOmissionReasonSchema = lazySchema(() =>
+  z.enum([
+    "unsupported_type",
+    "too_large",
+    "missing_scope",
+    "download_failed",
+    "not_retrieved",
+  ]),
+);
+export type SlackFileOmissionReason = z.infer<
+  typeof slackFileOmissionReasonSchema
+>;
+
+/**
+ * A Slack message, delivered to the bot session running its thread or DM
+ * (Tracy Bots, Slack attachments). `content` is the person's text as Slack
+ * sent it, then one `imageAttachment` node per image the message carried, in
+ * the bot's attachment store. The rest is what the session and the
+ * transcript read about it: who wrote it (Slack's display name, the Slack
+ * user, and the Traycer member that user maps to, when one does), its Slack
+ * `ts`, how it reached the bot, and each file it did not carry with the
+ * reason. `followUp` is a message's images that arrived after its text was
+ * delivered: the same `ts`, no text of its own.
+ *
+ * Its row's sender is the bot's own `user` sender: the person is Slack's,
+ * not a Traycer sender, and is named here.
+ */
+export const slackUserMessageSchema = lazySchema(() =>
+  z.object({
+    kind: z.literal("slack"),
+    content: jsonContentSchema,
+    author: z.object({
+      displayName: z.string().nullable(),
+      slackUserId: z.string().min(1),
+      traycerUserId: z.string().min(1).nullable(),
+    }),
+    ts: z.string().min(1),
+    trigger: slackMessageTriggerSchema,
+    followUp: z.boolean(),
+    omitted: z.array(
+      z.object({
+        fileName: z.string(),
+        reason: slackFileOmissionReasonSchema,
+      }),
+    ),
+  }),
+);
+export type SlackUserMessage = z.infer<typeof slackUserMessageSchema>;
+
 const userAuthoredMessagePreTicket13Fields = {
   kind: lazySchema(() => z.literal("user")),
   content: jsonContentSchema,
@@ -329,20 +385,42 @@ export const userMessagePayloadSchemaPreAnnotation = lazySchema(() =>
   ]),
 );
 
-export const userMessagePayloadSchema = lazySchema(() =>
+/**
+ * The payload union every `chat.subscribe` line through `1.42` ships, which
+ * the `1.43` `slack` arm must not reach: their decoders reject a kind they do
+ * not name.
+ */
+export const userMessagePayloadSchemaPreSlack = lazySchema(() =>
   z.discriminatedUnion("kind", [
     userAuthoredMessageSchema,
     agentUserMessageSchema,
   ]),
 );
+
+export const userMessagePayloadSchema = lazySchema(() =>
+  z.discriminatedUnion("kind", [
+    userAuthoredMessageSchema,
+    agentUserMessageSchema,
+    slackUserMessageSchema,
+  ]),
+);
 export type UserMessagePayload = z.infer<typeof userMessagePayloadSchema>;
 export type AgentUserMessage = z.infer<typeof agentUserMessageSchema>;
+
+/**
+ * A user row's sender names its message's kind, except a Slack message's,
+ * which the bot's own `user` sender carries (see `slackUserMessageSchema`).
+ */
+export function userMessageSenderTypeFor(kind: string): string {
+  return kind === "slack" ? "user" : kind;
+}
 
 const userMessageSenderKindRefine = (
   message: { sender: { type: string }; message: { kind: string } },
   ctx: z.RefinementCtx,
 ): void => {
-  if (message.sender.type === message.message.kind) return;
+  if (message.sender.type === userMessageSenderTypeFor(message.message.kind))
+    return;
   ctx.addIssue({
     code: z.ZodIssueCode.custom,
     path: ["message", "kind"],
@@ -605,6 +683,15 @@ export const userMessageSchemaPreCanvas = lazySchema(() =>
      */
     questionAnswer: botQuestionAnswerSchema.optional(),
   }),
+);
+/** The user row every `chat.subscribe` line through `1.42` ships: no `slack` payload. */
+export const userMessageSchemaPreSlack = lazySchema(() =>
+  z
+    .object({
+      ...userMessageSchemaPreCanvas.shape,
+      message: userMessagePayloadSchemaPreSlack,
+    })
+    .superRefine(userMessageSenderKindRefine),
 );
 export const userMessageSchema = lazySchema(() =>
   z
@@ -897,6 +984,13 @@ export type AssistantMessage = z.infer<typeof assistantMessageSchema>;
 
 export const messageSchema = lazySchema(() =>
   z.discriminatedUnion("role", [userMessageSchema, assistantMessageSchema]),
+);
+/** The message union of `chat.subscribe` lines through `1.42`: the user arm without `slack`. */
+export const messageSchemaPreSlack = lazySchema(() =>
+  z.discriminatedUnion("role", [
+    userMessageSchemaPreSlack,
+    assistantMessageSchema,
+  ]),
 );
 /** Epic records and released chat lines retain the four-kind operation block. */
 export const assistantMessageSchemaPreHtml = lazySchema(() =>
