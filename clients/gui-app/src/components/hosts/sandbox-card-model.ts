@@ -11,6 +11,7 @@ import type { HostHealthState } from "@/components/settings/host-scope/host-heal
 import { frozenDestroyAt } from "@/lib/sandboxes/sandbox-balance";
 import {
   formatSandboxDate,
+  formatSandboxUtcDay,
   sandboxFailedToStart,
 } from "@/lib/sandboxes/sandbox-row-lines";
 
@@ -127,7 +128,7 @@ const STATE_LINE: Record<HostSandboxState, string> = {
   released: "Suspended, files kept. The next shell starts it.",
 };
 
-/** "Nov 7, 2026". */
+/** "Nov 7, 2026", in the reader's own zone: for an instant that happened. */
 export function formatSandboxDay(at: number): string {
   return new Date(at).toLocaleDateString(undefined, {
     month: "short",
@@ -146,6 +147,41 @@ export function sandboxFrozenLine(frozenAt: number | null): string {
   return frozenAt === null
     ? base
     : `${base} Destroyed on ${formatSandboxDate(frozenDestroyAt(frozenAt), true)}.`;
+}
+
+/**
+ * The withdrawal notice: when this sandbox stops running, and what the person
+ * keeps when it does. `null` until a withdrawal is announced for the row's
+ * kind of sandbox, which is every row today.
+ *
+ * What survives the withdrawal is what the person can act on, so the sentence
+ * always carries it. The DATE is carried only when nothing else decides when
+ * this row ends: `destroyAt` wins wherever it is set, because the row then
+ * ends on that day rather than on the announced one. A frozen withdrawn row
+ * is the case that makes the difference: while its `frozenAt` is known it
+ * carries a day-30 `destroyAt`, which can fall well before the announced
+ * day, so naming the announced day here would tell the person the row lasts
+ * longer than it does. A frozen row whose `frozenAt` is absent is NOT that
+ * case — `sandbox-day-30.ts` skips such a record, so it has no day-30
+ * deadline to contradict, `destroyAt` is null, and the announced day is
+ * named like any unfrozen row's.
+ *
+ * The day, where it is named, is the announced one read in UTC: no clock
+ * time, because nothing ends the row at an instant — the date is what was
+ * announced, and the drain is operational.
+ */
+export function sandboxWithdrawalLine(
+  endsAt: number | null,
+  destroyAt: number | null,
+): string | null {
+  if (endsAt === null) return null;
+  // The half the person acts on, the same either way: whether the announced
+  // day is named is the only difference between the two sentences.
+  const rebuilt =
+    "is rebuilt from your environment. Files outside the repository are lost.";
+  return destroyAt === null
+    ? `This sandbox stops running on ${formatSandboxUtcDay(endsAt)} and ${rebuilt}`
+    : `This sandbox stops running and ${rebuilt}`;
 }
 
 /**
