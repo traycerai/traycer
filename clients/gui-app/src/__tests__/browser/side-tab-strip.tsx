@@ -156,6 +156,12 @@ function seedScene(): void {
         sideStripView: "activity",
       },
     });
+  } else {
+    // Tabs only: every other scene is written about the plain task rows,
+    // and the shipped strip lists the agents too.
+    useLayoutStore.setState({
+      arrangement: { ...DEFAULT_ARRANGEMENT, sideStripView: "layered" },
+    });
   }
   if (IDLE_GROUP) seedSideStripIdleGroup();
   else if (PAIRS) seedSideStripPairs();
