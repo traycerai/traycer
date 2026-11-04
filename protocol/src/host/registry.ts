@@ -684,6 +684,8 @@ import {
   botConversationSendUpgradeV10ToV11,
   botConversationSendV12,
   botConversationSendUpgradeV11ToV12,
+  botConversationSendV13,
+  botConversationSendUpgradeV12ToV13,
   botThreadListV10,
   botThreadListV11,
   botThreadListV12,
@@ -9497,7 +9499,7 @@ const HOST_RPC_REGISTRY_BASE_TAIL_DEFINITION = {
   "bot.conversation.send": {
     degrade: { kind: "unsupported" },
     1: {
-      latestMinor: 2,
+      latestMinor: 3,
       versions: {
         0: {
           contract: botConversationSendV10,
@@ -9513,6 +9515,12 @@ const HOST_RPC_REGISTRY_BASE_TAIL_DEFINITION = {
         2: {
           contract: botConversationSendV12,
           upgradeFromPreviousVersion: botConversationSendUpgradeV11ToV12,
+        },
+        // @1.3 opens a call's thread (`origin`) and marks a row spoken
+        // (`spoken`).
+        3: {
+          contract: botConversationSendV13,
+          upgradeFromPreviousVersion: botConversationSendUpgradeV12ToV13,
         },
       },
       downgradePathsFromLatest: {},
@@ -16283,7 +16291,7 @@ const HOST_STREAM_RPC_REGISTRY_DEFINITION = {
         // snapshot and `messageDeliveryChanged` (stripped below).
         42: { contract: chatSubscribeV142 },
         // @1.43: the `slack` user message, a plain user row below (see
-        // `chat-frame-compat.ts`).
+        // `chat-frame-compat.ts`). A user row may say `spoken`.
         43: { contract: chatSubscribeV143 },
       },
     },
