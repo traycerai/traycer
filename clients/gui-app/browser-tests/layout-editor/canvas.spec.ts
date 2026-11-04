@@ -321,8 +321,8 @@ test.describe("the canvas at the top placement", () => {
 
   test("a real drag of a rail icon across a divider is one history step", async () => {
     // The tight geometry, on the rail as it is measured: the divider sits
-    // right before Terminals (a 4px gap, an 8px divider, a 4px gap), Files and
-    // the Agents group (a stacked pair draws one icon, G3) before it.
+    // right before Terminals (a 4px gap, an 8px divider, a 4px gap), Agents
+    // and Artifacts before it.
     // Terminals' leading edge is aimed DROP_OVERSHOOT past the divider and the
     // pointer placed half a member behind it, so the pointer travels further
     // than the member (`drag-engine.ts` takes its grab point at the move that
@@ -978,18 +978,14 @@ const DROP_OVERSHOOT = 18;
  * `railTerminals` ended up above the divider, however the gesture got it there.
  *
  * The shipped rail carries no dividers (L-155), so the rail plan puts one in
- * first through the product's own add-divider action - between Files and
- * Terminals, so Terminals is the icon beside the divider as it was before
- * Files joined the rail, and the measured geometry the overshoot is tuned on
- * is unchanged.
- *
- * `stack:railAgents+railArtifacts` is the shipped rail's one stack LINK
- * (L-166), named after the PAIR it joins. It is a member of the order like any
- * other entry, so it is named here; the rail draws the pair as one icon (G3).
+ * first through the product's own add-divider action - between Artifacts and
+ * Terminals, so Terminals is the icon beside the divider and the measured
+ * geometry the overshoot is tuned on (a 36px icon each side of it) is
+ * unchanged. The shipped rail carries no stack (L-166), so Agents and
+ * Artifacts are each their own entry.
  */
 const TERMINALS_ABOVE_THE_DIVIDER = [
   "railAgents",
-  "stack:railAgents+railArtifacts",
   "railArtifacts",
   "railTerminals",
   "divider:1",
