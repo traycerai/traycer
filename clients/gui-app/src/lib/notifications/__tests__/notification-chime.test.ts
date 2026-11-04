@@ -73,14 +73,11 @@ function cachedAudioFor(sound: string): FakeAudio {
   return audio;
 }
 
-// Lets every already-resolved play() promise answer; a "manual" play that the
-// test has not settled stays pending.
-async function settle(): Promise<void> {
-  await vi.advanceTimersByTimeAsync(0);
+function settle(): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, 0));
 }
 
 beforeEach(() => {
-  vi.useFakeTimers();
   playMode = "allow";
   vi.stubGlobal("Audio", FakeAudio);
 });
@@ -89,7 +86,6 @@ afterEach(() => {
   disposeNotificationChimeAudio();
   audios.length = 0;
   vi.unstubAllGlobals();
-  vi.useRealTimers();
 });
 
 describe("notification chime audio", () => {
