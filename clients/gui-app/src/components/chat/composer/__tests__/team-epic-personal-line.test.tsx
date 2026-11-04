@@ -382,7 +382,10 @@ describe("<TeamEpicPersonalLine />", () => {
     cleanup();
     mocks.readiness.current = false;
     renderLine(vi.fn());
-    expect(screen.queryByTestId("team-epic-personal-line")).toBeNull();
+    expect(screen.getByTestId("team-epic-continue").textContent).toBe(
+      "Continue on a acme host",
+    );
+    expect(screen.queryByText(TEAM_EPIC_PERSONAL_LINE)).toBeNull();
     expect(mocks.statusReadCalls.at(-1)).toEqual({
       client: mocks.client,
       hostId: "host-personal",
@@ -390,16 +393,22 @@ describe("<TeamEpicPersonalLine />", () => {
     });
   });
 
-  it("hides stale status when the read errors", () => {
+  it("keeps the action when the status read errors, without a settings sentence", () => {
     mocks.statusError.current = true;
     renderLine(vi.fn());
-    expect(screen.queryByTestId("team-epic-personal-line")).toBeNull();
+    expect(screen.getByTestId("team-epic-continue").textContent).toBe(
+      "Continue on a acme host",
+    );
+    expect(screen.queryByText(TEAM_EPIC_PERSONAL_LINE)).toBeNull();
   });
 
-  it("hides unread and unsupported status instead of using an old value", () => {
+  it("keeps the action for unread or unsupported status without a settings sentence", () => {
     mocks.status.current = null;
     renderLine(vi.fn());
-    expect(screen.queryByTestId("team-epic-personal-line")).toBeNull();
+    expect(screen.getByTestId("team-epic-continue").textContent).toBe(
+      "Continue on a acme host",
+    );
+    expect(screen.queryByText(TEAM_EPIC_PERSONAL_LINE)).toBeNull();
 
     cleanup();
     mocks.status.current = environmentStatusFixture({
@@ -407,7 +416,10 @@ describe("<TeamEpicPersonalLine />", () => {
     });
     mocks.supported.current = false;
     renderLine(vi.fn());
-    expect(screen.queryByTestId("team-epic-personal-line")).toBeNull();
+    expect(screen.getByTestId("team-epic-continue").textContent).toBe(
+      "Continue on a acme host",
+    );
+    expect(screen.queryByText(TEAM_EPIC_PERSONAL_LINE)).toBeNull();
   });
 
   it("asks first when the person has not confirmed for this team", () => {
