@@ -700,6 +700,21 @@ export type ProvidersFallbackPolicyGetRequest = z.infer<
   typeof providersFallbackPolicyGetRequestSchema
 >;
 
+/**
+ * Whose policy the `get` answered with: the caller's own, or the team's on a
+ * computer the team owns, where routing is one setting for everyone who works
+ * on it.
+ *
+ * The caller cannot work this out for itself: `policy` carries no owner. It
+ * answers "is what I am looking at mine to change", and a `team` answer means
+ * it is not - the writes are refused there, and a client that offers an
+ * editor over it offers a control that cannot take.
+ */
+export const fallbackPolicySourceSchema = lazySchema(() =>
+  z.enum(["own", "team"]),
+);
+export type FallbackPolicySource = z.infer<typeof fallbackPolicySourceSchema>;
+
 export const providersFallbackPolicyGetResponseSchema = lazySchema(() =>
   z.object({
     policy: fallbackPolicySchema,
@@ -707,6 +722,11 @@ export const providersFallbackPolicyGetResponseSchema = lazySchema(() =>
     storedPolicyUnreadable: z.boolean(),
     // Derived from active traversals, never part of the persisted policy.
     inFlightCount: z.number().int().nonnegative(),
+    // Whose policy this is; see the schema. A host below 2.1 never says, and
+    // the 2.0 upgrade path answers `own` for it - which is what such a host
+    // means: it has no notion of a computer whose routing belongs to a team,
+    // so every policy it serves is the caller's own to change.
+    source: fallbackPolicySourceSchema,
   }),
 );
 export type ProvidersFallbackPolicyGetResponse = z.infer<
@@ -741,6 +761,22 @@ export const providersFallbackPolicyGetResponseSchemaV10 = lazySchema(() =>
 );
 export type ProvidersFallbackPolicyGetResponseV10 = z.infer<
   typeof providersFallbackPolicyGetResponseSchemaV10
+>;
+
+/**
+ * Frozen `get` response of major 2, minor 0: the live policy, before 2.1 said
+ * whose policy it is. A caller on this line is served this shape, and never
+ * `source`.
+ */
+export const providersFallbackPolicyGetResponseSchemaV20 = lazySchema(() =>
+  z.object({
+    policy: fallbackPolicySchema,
+    storedPolicyUnreadable: z.boolean(),
+    inFlightCount: z.number().int().nonnegative(),
+  }),
+);
+export type ProvidersFallbackPolicyGetResponseV20 = z.infer<
+  typeof providersFallbackPolicyGetResponseSchemaV20
 >;
 
 /** Frozen major-1 `set` response: the 1.5.0 shape over `fallbackPolicySchemaV10`. */
@@ -982,7 +1018,7 @@ export const providersFallbackPolicyGetV20 = defineRpcContract({
   method: "providers.fallbackPolicy.get",
   schemaVersion: { major: 2, minor: 0 } as const,
   requestSchema: providersFallbackPolicyGetRequestSchema,
-  responseSchema: providersFallbackPolicyGetResponseSchema,
+  responseSchema: providersFallbackPolicyGetResponseSchemaV20,
 });
 
 export const providersFallbackPolicyGetUpgradeV11ToV20 = defineUpgradePath<
@@ -995,14 +1031,43 @@ export const providersFallbackPolicyGetUpgradeV11ToV20 = defineUpgradePath<
   upgradeResponse: (response) => response,
 });
 
-export const providersFallbackPolicyGetDowngradeV20ToV11 = defineDowngradePath<
+// 2.1 adds `source`: the host says whose policy it answered with, so a client
+// can tell a policy the caller owns from the team's, which the policy itself
+// does not carry. Additive and request-identical, so it is a minor.
+export const providersFallbackPolicyGetV21 = defineRpcContract({
+  method: "providers.fallbackPolicy.get",
+  schemaVersion: { major: 2, minor: 1 } as const,
+  requestSchema: providersFallbackPolicyGetRequestSchema,
+  responseSchema: providersFallbackPolicyGetResponseSchema,
+});
+
+export const providersFallbackPolicyGetUpgradeV20ToV21 = defineUpgradePath<
   typeof providersFallbackPolicyGetV20,
-  typeof providersFallbackPolicyGetV11
+  typeof providersFallbackPolicyGetV21
 >({
   from: { major: 2, minor: 0 },
+  to: { major: 2, minor: 1 },
+  upgradeRequest: (request) => request,
+  // `own` is not a default standing in for an unknown. A host below 2.1 has
+  // no notion of a computer whose routing belongs to a team, so every policy
+  // it serves is one the caller may change, which is what `own` says.
+  upgradeResponse: (response) => ({ ...response, source: "own" }),
+});
+
+export const providersFallbackPolicyGetDowngradeV21ToV11 = defineDowngradePath<
+  typeof providersFallbackPolicyGetV21,
+  typeof providersFallbackPolicyGetV11
+>({
+  from: { major: 2, minor: 1 },
   to: { major: 1, minor: 1 },
   downgradeRequest: (request) => ({ ok: true, value: request }),
   downgradeResponse: (response) => {
+    // `source` is dropped with every other key major 1 does not name: the V10
+    // schema is a plain object schema, so it strips it. What is dropped is
+    // only the knowledge of whose policy it is - a major-1 client on a
+    // team-owned computer is shown the team's policy in effect, as every
+    // client is, and is simply not told so. It then mounts its editor and
+    // meets the host's write refusal on save.
     const parsed =
       providersFallbackPolicyGetResponseSchemaV10.safeParse(response);
     if (!parsed.success) {

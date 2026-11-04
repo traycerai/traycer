@@ -743,11 +743,13 @@ export type FallbackModelTarget = z.infer<typeof fallbackModelTargetSchema>;
  * by the ENGINE's own resolution rather than re-derived by the client.
  *
  * Read-only with ONE bounded exception: no probe, no gauge write, no
- * traversal-record write - but a user whose fallback policy row has never been
- * seeded gets its one-time tier-group seed on their first call, because the
- * host reads groups through the same seeding helper the ladder's tier rung
- * uses. Skipping it would answer `no-group` for a user the engine would have
- * found targets for. Idempotent thereafter, and it never touches the traversal
+ * traversal-record write - but where the policy is the caller's OWN, a row
+ * that has never been seeded gets its one-time tier-group seed on their first
+ * call, because the host reads groups through the same seeding helper the
+ * ladder's tier rung uses. Skipping it would answer `no-group` for a user the
+ * engine would have found targets for. On a host whose policy belongs to a
+ * team there is no exception at all: that row is the team's, written by the
+ * host's own applier, and every read of it settles nothing. Idempotent thereafter, and it never touches the traversal
  * record - so opening the menu still cannot move a traversal, and a surface may
  * call it on every open and refresh freely.
  *

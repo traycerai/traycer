@@ -217,6 +217,7 @@ function createFixture(initial: FallbackPolicyState): Fixture {
               policy: state.policy,
               storedPolicyUnreadable: state.storedPolicyUnreadable,
               inFlightCount: state.inFlightCount,
+              source: "own",
             };
           },
         "providers.fallbackPolicy.set": (
