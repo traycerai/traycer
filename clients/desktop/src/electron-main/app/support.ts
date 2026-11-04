@@ -58,7 +58,11 @@ import {
   type FingerprintOccurrence,
 } from "./report-ledger";
 import { buildPublicDraftFields } from "./support-public-draft";
-import { deepScrubSupportValue, scrubSupportText } from "./support-scrubber";
+import {
+  deepScrubSupportValue,
+  scrubLogTail,
+  scrubSupportText,
+} from "@traycer/protocol/utils/text/support-scrub";
 import {
   earlierHostLogRecords,
   earlierHostLogSection,
@@ -1113,7 +1117,8 @@ function tailOfLines(
   // scrubber's regexes miss the remainder, and the byte budget itself must
   // measure what will actually ship (the scrubbed text), not the raw text -
   // ticket 09's "field bounds enforced after scrubbing, never before".
-  const scrubbed = scrubSupportText(tail);
+  // DEBUG entries are dropped here too: they may carry account ids.
+  const scrubbed = scrubLogTail(tail);
   const truncatedByByteCount = Buffer.byteLength(scrubbed, "utf8") > maxBytes;
   return {
     content: truncateToTrailingBytes(scrubbed, maxBytes),

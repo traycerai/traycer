@@ -98,7 +98,7 @@ import {
   type HostNotificationSeverity,
   type HostNotificationsAttentionCursor,
   type HostNotificationsChronologicalCursor,
-  type HostNotificationsCloudFeedRowV16,
+  type HostNotificationsCloudFeedRowV17,
   type HostNotificationsCloudFeedEntryRequest,
   type HostNotificationsEntityRef,
   type HostNotificationsSummary,
@@ -362,7 +362,7 @@ export function useMergedNotificationRows(): ReadonlyArray<MergedNotificationRow
         ...orderedGlobalEntries.map((entry) => rowFromGlobalEntry(entry)),
         ...Object.values(cloudRows)
           .filter(
-            (row): row is HostNotificationsCloudFeedRowV16 => row !== undefined,
+            (row): row is HostNotificationsCloudFeedRowV17 => row !== undefined,
           )
           .filter((row) => !isAutomaticAgentRecovery(row.entry))
           .map(rowFromCloudFeedRow),
@@ -582,7 +582,7 @@ function rowFromLocalFeedId(input: {
 
 function rowFromCloudFeedId(input: {
   readonly feedMode: "local" | "cloud" | "upgrade-required";
-  readonly cloudRow: HostNotificationsCloudFeedRowV16 | undefined;
+  readonly cloudRow: HostNotificationsCloudFeedRowV17 | undefined;
 }): MergedNotificationRow | null {
   if (
     input.feedMode !== "cloud" ||
@@ -1744,7 +1744,7 @@ export function useMergedNotificationsActions(): MergedNotificationsActions {
           if (cloudState.version !== cloudVersion) return;
           const fallbackEntryIds = Object.values(cloudState.rows)
             .filter(
-              (row): row is HostNotificationsCloudFeedRowV16 =>
+              (row): row is HostNotificationsCloudFeedRowV17 =>
                 row !== undefined && row.entry.readAt === null,
             )
             .map((row) => row.entryId);
@@ -2179,7 +2179,7 @@ export function rowFromGlobalEntry(
 }
 
 export function rowFromCloudFeedRow(
-  row: HostNotificationsCloudFeedRowV16,
+  row: HostNotificationsCloudFeedRowV17,
 ): MergedNotificationRow {
   const fallback = formatHostNotificationPresentation(row.entry);
   const title =
@@ -2386,19 +2386,36 @@ function isRowCompletePayload(
   return ROW_COMPLETE_PAYLOAD_KIND_SET.has(known.kind);
 }
 
+/** Never shown: readers drop these rows. */
+const UNSHOWN_PAYLOAD_KINDS = [
+  "notification_hooks_removed",
+  "worktree_deletion",
+  "worktree_auto_cleanup",
+  "secret_export_minted",
+] as const;
+
+type UnshownPayload = Extract<
+  HostNotificationKnownPayload,
+  { readonly kind: (typeof UNSHOWN_PAYLOAD_KINDS)[number] }
+>;
+
+const UNSHOWN_PAYLOAD_KIND_SET: ReadonlySet<
+  HostNotificationKnownPayload["kind"]
+> = new Set(UNSHOWN_PAYLOAD_KINDS);
+
+function isUnshownPayload(
+  known: HostNotificationKnownPayload,
+): known is UnshownPayload {
+  return UNSHOWN_PAYLOAD_KIND_SET.has(known.kind);
+}
+
 function navigationPayloadFromKnown(
   known: HostNotificationKnownPayload,
 ): NotificationPayload | null {
-  if (isRowCompletePayload(known)) return null;
+  if (isRowCompletePayload(known) || isUnshownPayload(known)) return null;
   // A bot's row opens the bot's tab on it, as its push does.
   if (isBotRowPayload(known)) return navigationPayloadForBotRow(known);
   switch (known.kind) {
-    // Never shown: readers drop these rows.
-    case "notification_hooks_removed":
-    case "worktree_deletion":
-    case "worktree_auto_cleanup":
-    case "secret_export_minted":
-      return null;
     case "chat":
       return navigationPayloadForChatStopped(known);
     case "agent_stalled":
@@ -2431,6 +2448,13 @@ function navigationPayloadFromKnown(
         epicId: known.epicId,
         chatId: known.chatId,
         interviewBlockId: known.interviewBlockId,
+      };
+    case "feedback_draft":
+      return {
+        kind: "feedbackDraft",
+        epicId: known.epicId,
+        chatId: known.chatId,
+        blockId: known.blockId,
       };
     case "browser_human_needed":
       return {

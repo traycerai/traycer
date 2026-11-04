@@ -137,6 +137,7 @@ function startCallElement(input: {
       imageResults={[]}
       artifact={null}
       mcpApp={null}
+      feedbackDraft={null}
       variant={input.variant}
       headerFindUnitId={null}
     />
@@ -487,6 +488,7 @@ describe("the run_shell start card", () => {
           imageResults={[]}
           artifact={null}
           mcpApp={null}
+          feedbackDraft={null}
           variant="card"
           headerFindUnitId={null}
         />
