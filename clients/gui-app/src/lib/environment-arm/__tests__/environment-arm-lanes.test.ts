@@ -283,31 +283,10 @@ describe("createEnvironmentArmLanes", () => {
     expect(heard).toHaveBeenCalledTimes(1);
   });
 
-  it("lets a passive reader of held() subscribe before any lane exists and hear each change", () => {
-    const seen: Array<ReadonlyArray<readonly [string, State]>> = [];
-    const unsubscribe = lanes.subscribeHeld(() => {
-      seen.push(lanes.held());
-    });
-
-    const release = lanes.acquire(spec("k"));
-    expect(seen).toEqual([]);
-    sessions[0]?.emit(frameEnvelope(1, "a"), null);
-    expect(seen).toEqual([[["k", ["a"]]]]);
-
-    release();
-    expect(seen).toEqual([[["k", ["a"]]], []]);
-
-    unsubscribe();
-    lanes.acquire(spec("k"));
-    sessions[1]?.emit(frameEnvelope(1, "b"), null);
-    expect(seen).toEqual([[["k", ["a"]]], []]);
-    expect(lanes.held()).toEqual([["k", ["b"]]]);
-  });
-
-  it("shows an arm that ended while it opened in held() at the last notification", () => {
-    const seen: Array<ReadonlyArray<readonly [string, State]>> = [];
-    lanes.subscribeHeld(() => {
-      seen.push(lanes.held());
+  it("shows an arm that ended while it opened to read() at the last notification", () => {
+    const seen: State[] = [];
+    lanes.subscribe("k", () => {
+      seen.push(lanes.read("k", []));
     });
 
     lanes.acquire({
@@ -319,20 +298,6 @@ describe("createEnvironmentArmLanes", () => {
       },
     });
 
-    expect(seen.at(-1)).toEqual([["k", ["ended"]]]);
-    expect(lanes.read("k", [])).toEqual(["ended"]);
-  });
-
-  it("lists only the lanes someone holds", () => {
-    const releaseA = lanes.acquire(spec("a"));
-    lanes.acquire(spec("b"));
-    sessions[0]?.emit(frameEnvelope(1, "x"), null);
-    expect(lanes.held()).toEqual([
-      ["a", ["x"]],
-      ["b", []],
-    ]);
-
-    releaseA();
-    expect(lanes.held()).toEqual([["b", []]]);
+    expect(seen.at(-1)).toEqual(["ended"]);
   });
 });

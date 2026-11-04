@@ -252,40 +252,6 @@ export function useEnvironmentArmChats(
   return useMemo(() => states.flatMap((state) => state.chats), [states]);
 }
 
-/**
- * The arm chats this client already holds for `taskId` under `viewerId`,
- * read without opening anything. Only lanes a mounted surface holds are
- * here, so an empty answer is not evidence that the task has none.
- */
-export function heldEnvironmentArmChats(
-  viewerId: string,
-  taskId: string,
-): {
-  /** Environments whose arm for this task has answered. */
-  readonly settledEnvironmentIds: ReadonlySet<string>;
-  readonly chats: readonly CloudChatSummary[];
-} {
-  const settledEnvironmentIds = new Set<string>();
-  const chats: CloudChatSummary[] = [];
-  for (const [key, state] of chatLanes.held()) {
-    const parts: unknown = JSON.parse(key);
-    if (!Array.isArray(parts) || parts[2] !== viewerId || parts[4] !== taskId) {
-      continue;
-    }
-    if (!state.settled || typeof parts[3] !== "string") continue;
-    settledEnvironmentIds.add(parts[3]);
-    chats.push(...state.chats);
-  }
-  return { settledEnvironmentIds, chats };
-}
-
-/** Hears every change of the arm chats {@link heldEnvironmentArmChats} reads. */
-export function subscribeHeldEnvironmentArmChats(
-  listener: () => void,
-): () => void {
-  return chatLanes.subscribeHeld(listener);
-}
-
 // ---- plain terminals ------------------------------------------------------ //
 
 interface TerminalsState {

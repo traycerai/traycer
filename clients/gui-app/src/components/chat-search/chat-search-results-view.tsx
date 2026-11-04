@@ -42,7 +42,6 @@ import type {
 import { useRegisteredEpicTitle } from "@/lib/epic-selectors";
 import { useRelativeTimestamp } from "@/lib/relative-time";
 import { cn } from "@/lib/utils";
-import type { ChatSearchCoverage } from "@/lib/chat-search/chat-search-coverage";
 import { useChatSearchNavProps } from "@/components/chat-search/chat-search-keyboard-nav";
 
 export interface ChatSearchOpenTarget {
@@ -130,7 +129,6 @@ export function ChatSearchResultsView(props: ChatSearchResultsViewProps) {
 
   return (
     <div className="flex flex-col pb-2">
-      {results.indexState === "partial" ? <ChatSearchPartialIndexNote /> : null}
       {exhausted ? (
         <p className="px-3 py-6 text-center text-ui-sm text-muted-foreground">
           No chats match.
@@ -585,45 +583,6 @@ function ExpandToggle(props: {
         className={cn("size-3", props.expanded && "rotate-90")}
       />
     </button>
-  );
-}
-
-/**
- * The index is still building, so an absent result may only be an unread chat.
- * Rendered by every surface that shows hits, so the caveat reads the same
- * wherever the hits are.
- */
-export function ChatSearchPartialIndexNote() {
-  return (
-    <p
-      role="status"
-      className="mx-3 mt-2 rounded-md bg-foreground/5 px-2.5 py-1.5 text-ui-xs text-muted-foreground"
-    >
-      Still indexing chats on this host. Some results may be missing.
-    </p>
-  );
-}
-
-/**
- * Which chats the search could not reach: the host searches only the chats it
- * holds, so a chat kept elsewhere cannot match. Says nothing when every chat
- * the app knows of in the task was searched.
- */
-export function ChatSearchCoverageNote(props: {
-  readonly coverage: ChatSearchCoverage;
-}) {
-  const { coverage } = props;
-  if (coverage.kind === "complete") return null;
-  return (
-    <p
-      role="status"
-      data-testid="chat-search-coverage"
-      className="mx-3 mt-2 text-ui-xs text-muted-foreground"
-    >
-      {coverage.kind === "unknown"
-        ? "Chats on other devices aren't searched."
-        : `${coverage.count} ${coverage.count === 1 ? "chat" : "chats"} in this task can't be searched from this device.`}
-    </p>
   );
 }
 
