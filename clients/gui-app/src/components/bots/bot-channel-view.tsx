@@ -335,11 +335,13 @@ export function BotChannelView(props: {
       ),
     [appConversationChatId, conversations.data],
   );
+  const channelId = channel?.conversationId ?? null;
   // What the channel's box holds unsent, kept under the bot by the channel's
-  // conversation, so it outlives the pane when another channel is shown.
+  // conversation, so it outlives the pane when another channel is shown: the
+  // one the box sends to, which a host naming no channel leaves to the list.
   const { seed: channelSeed, keptDraft: channelKeptDraft } = useKeptBoxDraft(
     botId,
-    appConversationChatId,
+    channelId,
   );
 
   const {
@@ -372,7 +374,6 @@ export function BotChannelView(props: {
   } = useBotConversationSendMutation(client);
   const sendFailure = useBotSendFailure();
   const { fail: failSend, clear: clearSendFailure } = sendFailure;
-  const channelId = channel?.conversationId ?? null;
   const chooseOption = useCallback(
     (choice: string) => {
       if (channelId === null) return;

@@ -86,8 +86,9 @@ const BOX_ONE_ROW = {
  * newer draft, whether or not the box is still there, is offered back from
  * there beside it, so the offer outlives the box too.
  *
- * A send that lands is reported, and says it was queued only while the box
- * is still empty.
+ * A send that lands is reported while the box is still there, and says it
+ * was queued only while the box is still empty; one that lands after the box
+ * is gone is not reported, so nothing opens for a box the person has left.
  *
  * A quote of a selection in the conversation (`quote`) is added after what
  * the box shows, as markdown quote lines - an edit in progress included,
@@ -136,8 +137,8 @@ export function BotMessageComposer(props: {
   /** A quote to add to what the box shows; `null` for none. */
   readonly quote: BotComposerQuote | null;
   /**
-   * The host accepted `text`, what the box sent.
-   * Answers whether the owner says the send's delivery itself, where the
+   * The host accepted `text`, what the box sent; not called once the box
+   * is gone. Answers whether the owner says the send's delivery itself, where the
    * person now looks; the box says it only when it does not.
    */
   readonly onSent: (
@@ -267,8 +268,9 @@ export function BotMessageComposer(props: {
       })
       .then(
         (response) => {
-          // The send went, so it is reported whatever the box did meanwhile;
-          // the delivery is said under the box only while it is still empty.
+          // The send went, so it is reported whatever the box did meanwhile,
+          // unless the box is gone; the delivery is said under the box only
+          // while it is still empty.
           if (!mountedRef.current) return;
           const deliverySaid = onSent(response, trimmed);
           if (!emptyRef.current) return;
