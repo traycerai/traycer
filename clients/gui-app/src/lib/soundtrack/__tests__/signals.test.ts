@@ -68,7 +68,7 @@ describe("feedSignalsOfRows", () => {
     });
   });
 
-  it("leaves out an unread row of the global feed, which never asks for attention", () => {
+  it("leaves out an unread task invitation: attention-grade, but no agent is waiting", () => {
     const rows = [rowOf({ source: "global", severity: "needs_action" })];
     expect(feedSignalsOfRows(rows, NOW).blocking).toBe(0);
   });

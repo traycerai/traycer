@@ -79,7 +79,7 @@ export function SwitcherSimulatorsList(props: SwitcherListProps) {
         }
         viewMenu={null}
       />
-      <div className="flex min-h-0 flex-1 flex-col overflow-x-hidden overflow-y-auto overscroll-contain p-1 pb-safe-bottom">
+      <div className="flex min-h-0 flex-1 flex-col overflow-x-hidden overflow-y-auto overscroll-contain will-change-transform p-1 pb-safe-bottom">
         <SimulatorListFeedback model={model} epicId={epicId} tabId={tabId} />
         <div className="min-w-0 space-y-1">
           {model.groups.map((group) => (

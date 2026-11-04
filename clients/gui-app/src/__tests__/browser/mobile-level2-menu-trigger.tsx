@@ -13,27 +13,62 @@ import { RunnerHostProvider } from "@/providers/runner-host-provider";
 import { MockRunnerHost } from "@traycer-clients/shared/host-client/mock/mock-runner-host";
 import { MockHostMessenger } from "@traycer-clients/shared/host-client/mock/mock-host-messenger";
 import type { LocalHostSnapshot } from "@traycer-clients/shared/platform/runner-host";
+import { EpicSessionContext } from "@/lib/registries/epic-session-registry";
+import { openStoreForTest } from "@/stores/epics/open-epic/test-support/open-store-for-test";
+import type { EpicStreamClientFactory } from "@/stores/epics/open-epic/store";
+import { MobileCurrentTileBar } from "@/components/epic-canvas/mobile/mobile-current-tile-bar";
+import { MobileTileMenu } from "@/components/epic-canvas/mobile/mobile-tile-menu";
 import { BotChannelTitle } from "@/components/bots/bot-channel-level2";
 import { BotAvatar } from "@/components/bots/bot-avatars";
 import { Button } from "@/components/ui/button";
-import { setPhoneLayoutOnly } from "@/lib/mobile-app";
+import { setNativeKeyboardState } from "@/lib/native-keyboard";
 import { ResolvedThemeContext } from "@/providers/use-resolved-theme";
+import { useTileMinimapStore } from "@/stores/tile-minimap";
+import type { EpicCanvasTileRef } from "@/stores/epics/canvas/types";
 import "@/index.css";
 
 /**
- * THE BOTS PICKER WITH A VERY LONG NAME.
+ * THE LEVEL-2 MENU TRIGGER WITH A VERY LONG NAME.
  *
- * Mounts the production `BotChannelTitle` in the installed app, in a flex row
- * like the bot channel header's, inside a container `?width=<px>` wide. The
- * claim is layout: a long name must truncate inside the picker's trigger, not
- * push the row's other controls (the settings button) out of the row or clip
- * the trigger's chevron. jsdom lays nothing out, so a browser decides.
+ * `?surface=tile` (default) mounts the production `MobileCurrentTileBar` with
+ * `level2="menu"` inside the production `MobileTileMenu`; `?surface=bot` mounts
+ * the production `BotChannelTitle` with `level2="menu"` in a flex row like the
+ * bot channel header's. Both sit in a container `?width=<px>` wide. The claim
+ * is layout: a long name must truncate inside the trigger, not push the row's
+ * other controls (the minimap button, the settings button) out of the row or
+ * clip the trigger's chevron. jsdom lays nothing out, so a browser decides.
+ *
+ * The tile bar reads the epic projection and the host runtime, so the fixture
+ * mounts the same real layers `canvas-tab-strip-overflow.tsx` documents: an
+ * `openStoreForTest` session and a `HostRuntimeProvider` over a mock messenger.
+ * The minimap button draws only for a tile with a registered target, so one is
+ * registered.
+ *
+ * `window.__level2Keyboard.raise(inset)` raises the installed iOS app's
+ * keyboard as its native bridge does: `--keyboard-inset` on the document
+ * element, then the plugin's open state, over a window that keeps its height.
  */
-setPhoneLayoutOnly(true);
+declare global {
+  interface Window {
+    __level2Keyboard?: { readonly raise: (inset: number) => void };
+  }
+}
 
+window.__level2Keyboard = {
+  raise: (inset) => {
+    document.documentElement.style.setProperty(
+      "--keyboard-inset",
+      `${String(inset)}px`,
+    );
+    setNativeKeyboardState({ open: true, transitioning: false });
+  },
+};
+
+const EPIC_ID = "fixture-epic";
+const TAB_ID = "fixture-view-tab";
 const FIXTURE_HOST_ID = "fixture-host";
 const LONG_NAME =
-  "A remarkably long name that keeps going well past any width a phone offers for it";
+  "A remarkably long tile name that keeps going well past any width a phone offers for it";
 
 const FIXTURE_LOCAL_HOST: LocalHostSnapshot = {
   hostId: FIXTURE_HOST_ID,
@@ -44,6 +79,15 @@ const FIXTURE_LOCAL_HOST: LocalHostSnapshot = {
   displayName: "fixture",
   availability: "available",
 };
+
+const fixtureStreamClientFactory: EpicStreamClientFactory = () => ({
+  applyUpdate: () => undefined,
+  awareness: () => undefined,
+  applyArtifactRoomUpdate: () => undefined,
+  artifactRoomAwareness: () => undefined,
+  retryMigration: () => undefined,
+  close: () => undefined,
+});
 
 const fixtureMessengerFactory: MessengerFactory<HostRpcRegistry> = (args) =>
   new MockHostMessenger<HostRpcRegistry>({
@@ -61,6 +105,43 @@ const RESOLVED_THEME = {
 
 const params = new URLSearchParams(window.location.search);
 const width = params.get("width");
+const surface = params.get("surface") ?? "tile";
+
+const TILE: EpicCanvasTileRef = {
+  id: "fixture-spec",
+  instanceId: "fixture-spec-inst",
+  type: "spec",
+  name: LONG_NAME,
+  hostId: FIXTURE_HOST_ID,
+};
+
+const MINIMAP_SNAPSHOT = {
+  items: [{ key: "a", label: "First", level: 1 as const }],
+  currentIndex: 0,
+};
+useTileMinimapStore.getState().registerTarget({
+  tileInstanceId: TILE.instanceId,
+  adapter: {
+    title: "Table of contents",
+    getSnapshot: () => MINIMAP_SNAPSHOT,
+    subscribe: () => () => undefined,
+    select: () => undefined,
+  },
+});
+
+export function TileBarSurface(): React.ReactElement {
+  return (
+    <MobileTileMenu slot="primary" epicId={EPIC_ID} tabId={TAB_ID} drawn>
+      <MobileCurrentTileBar
+        epicId={EPIC_ID}
+        tile={TILE}
+        level2="menu"
+        leading={null}
+        trailing={null}
+      />
+    </MobileTileMenu>
+  );
+}
 
 export function BotHeaderSurface(): React.ReactElement {
   return (
@@ -70,6 +151,7 @@ export function BotHeaderSurface(): React.ReactElement {
     >
       <BotAvatar size="sm" />
       <BotChannelTitle
+        level2="menu"
         title={LONG_NAME}
         activeBotId="fixture-bot"
         hostId={FIXTURE_HOST_ID}
@@ -99,6 +181,16 @@ const runnerHost = new MockRunnerHost({
   traycerCli: undefined,
 });
 
+const epicHandle = openStoreForTest({
+  epicId: EPIC_ID,
+  userId: null,
+  factories: {
+    streamClientFactory: fixtureStreamClientFactory,
+    laneSelection: null,
+  },
+  writeCommand: null,
+});
+
 const queryClient = new QueryClient({
   defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
 });
@@ -119,13 +211,19 @@ createRoot(container).render(
         >
           <TooltipProvider>
             <ResolvedThemeContext.Provider value={RESOLVED_THEME}>
-              <div
-                className="flex flex-col"
-                style={width === null ? undefined : { width: `${width}px` }}
-                data-testid="fixture-container"
-              >
-                <BotHeaderSurface />
-              </div>
+              <EpicSessionContext.Provider value={epicHandle}>
+                <div
+                  className="flex flex-col"
+                  style={width === null ? undefined : { width: `${width}px` }}
+                  data-testid="fixture-container"
+                >
+                  {surface === "bot" ? (
+                    <BotHeaderSurface />
+                  ) : (
+                    <TileBarSurface />
+                  )}
+                </div>
+              </EpicSessionContext.Provider>
             </ResolvedThemeContext.Provider>
           </TooltipProvider>
         </HostRuntimeProvider>
