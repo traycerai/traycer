@@ -205,6 +205,12 @@ export interface ChatTimelineProps {
    * false; this timeline adds its own geometry settle on top.
    */
   readonly isReattachSuppressed?: () => boolean;
+  /**
+   * Whether the transcript window is voided and its replacement index has not
+   * returned: the rows are skeleton and placeholders at estimated heights, so
+   * the follow latch issues no automatic correction until it is false.
+   */
+  readonly isTranscriptWindowInvalidated: boolean;
   /** Message row receiving the temporary external-navigation highlight. */
   readonly navigationHighlightedMessageId?: string | null;
   /**
@@ -267,6 +273,7 @@ export const ChatTimeline = memo(function ChatTimeline({
   isFollowCorrectionSuppressed,
   resolveSuppressedEndLanding,
   isReattachSuppressed,
+  isTranscriptWindowInvalidated,
   navigationHighlightedMessageId,
   navigationHighlightedBlockId,
   rowHeightMemory = null,
@@ -468,12 +475,21 @@ export const ChatTimeline = memo(function ChatTimeline({
   // before the maintain effect below so this commit's own maintenance already
   // sees the flag. A later structural commit restarts the wait; one that
   // changes no key and no kind leaves it running.
+  //
+  // The same commit opens the latch's structural hold: no automatic
+  // correction is issued in this commit's frame or the next. An end written
+  // while the reshaped rows stand at estimates meets a scrollable size the
+  // browser is about to change, and iOS WebKit reverts or clamps it. The
+  // first frame requested here runs before this commit paints, so the hold
+  // closes in the second, once that commit has rendered, and issues there
+  // the one correction it kept back.
   const structuralSettleFrameRef = useRef<number | null>(null);
   useLayoutEffect(() => {
     if (!keySequenceChanged) return;
     if (structuralSettleFrameRef.current !== null) {
       cancelAnimationFrame(structuralSettleFrameRef.current);
     }
+    followLatch.openStructuralHold();
     structuralCommitUnsettledRef.current = true;
     const readScrollHeight = (): number | null => {
       const node = listRef.current?.getScrollableNode();
@@ -481,7 +497,11 @@ export const ChatTimeline = memo(function ChatTimeline({
     };
     let previousScrollHeight = readScrollHeight();
     let stillFrames = 0;
+    // The loop runs at least two frames: one check can count one still frame.
+    let framesChecked = 0;
     const checkSettled = (): void => {
+      framesChecked += 1;
+      if (framesChecked === 2) followLatch.closeStructuralHold();
       const scrollHeight = readScrollHeight();
       stillFrames =
         scrollHeight === previousScrollHeight &&
@@ -499,6 +519,15 @@ export const ChatTimeline = memo(function ChatTimeline({
     };
     structuralSettleFrameRef.current = requestAnimationFrame(checkSettled);
   }, [followLatch, keySequenceChanged, listRef, rows]);
+
+  // The voided window holds automatic correction too, from the void until its
+  // index returns. After the structural settle above: a commit that ends the
+  // void and reshapes the rows has opened the structural hold before this
+  // clears the window's, so the correction owed waits for the structural
+  // close. Before the maintain effect below, which this commit's bits gate.
+  useLayoutEffect(() => {
+    followLatch.setWindowInvalidated(isTranscriptWindowInvalidated);
+  }, [followLatch, isTranscriptWindowInvalidated]);
 
   useLayoutEffect(() => {
     const settleFrame = structuralSettleFrameRef;

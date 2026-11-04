@@ -195,6 +195,7 @@ function renderTimeline(options: RenderTimelineOptions) {
           getMessageActions={getMessageActions}
           nextStepActions={nextStepActions}
           listRef={listRef}
+          isTranscriptWindowInvalidated={false}
           className={options.className ?? "h-full"}
           data-testid={options["data-testid"]}
           onItemSizeChanged={options.onItemSizeChanged}
@@ -693,6 +694,7 @@ describe("ChatTimeline", () => {
           getMessageActions={() => null}
           nextStepActions={null}
           listRef={listRef}
+          isTranscriptWindowInvalidated={false}
           className="h-full"
           navigationHighlightedMessageId={highlight}
         />
@@ -1397,6 +1399,7 @@ describe("ChatTimeline LegendList strict-edge policy config", () => {
           getMessageActions={() => null}
           nextStepActions={null}
           listRef={listRef}
+          isTranscriptWindowInvalidated={false}
           className="h-full"
         />
       </div>
