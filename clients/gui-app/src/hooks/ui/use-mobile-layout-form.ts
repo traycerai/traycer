@@ -42,23 +42,24 @@ export function subscribeToPhonePortrait(onChange: () => void): () => void {
 }
 
 /**
- * On Android the SCREEN, not the viewport's shape: Android resizes the
- * viewport for the keyboard, so `(orientation: portrait)` would flip a
- * portrait phone to landscape while the person types, moving the navigation
- * under them.
+ * The SCREEN, not the viewport's shape, wherever the viewport resizes for the
+ * keyboard: Android does, and so does a browser tab under
+ * `interactive-widget=resizes-content`, so `(orientation: portrait)` would
+ * flip a portrait phone to landscape while the person types, moving the
+ * navigation under them.
  *
- * Everywhere else the viewport's shape. iOS overlays its keyboard rather than
- * resizing the viewport, so the shape is the device's, and the shape is what
- * moves WITH the layout: measured in the installed app on an iPad, a turn to
- * portrait narrows `#root` about 400ms before `screen.orientation` turns, and
- * a width rule reading the screen drew two tiles squeezed into the portrait
- * box for that long before snapping to one. iOS before 16.4 has no
+ * On iOS the viewport's shape. iOS overlays its keyboard rather than resizing
+ * the viewport, so the shape is the device's, and the shape is what moves WITH
+ * the layout: measured in the installed app on an iPad, a turn to portrait
+ * narrows `#root` about 400ms before `screen.orientation` turns, and a width
+ * rule reading the screen drew two tiles squeezed into the portrait box for
+ * that long before snapping to one. iOS before 16.4 has no
  * `screen.orientation` at all, and its `screen` keeps its portrait dimensions
  * in every orientation, so the shape was already the read there.
  */
 function readScreenPortrait(): boolean {
   const orientation =
-    getMobileAppPlatform() === "android" ? readScreenOrientation() : null;
+    getMobileAppPlatform() === "ios" ? null : readScreenOrientation();
   if (orientation !== null) return orientation.type.startsWith("portrait");
   return !window.matchMedia("(orientation: landscape)").matches;
 }

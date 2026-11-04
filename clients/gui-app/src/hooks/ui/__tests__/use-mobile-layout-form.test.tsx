@@ -195,17 +195,22 @@ describe("useMobileLayoutForm", () => {
     expect(renderedForm()).toEqual(RAIL_AND_MENU);
   });
 
-  // Android resizes the viewport for the keyboard, so only the screen can tell.
-  it("keeps the bar on Android when a keyboard shortens the viewport past its width", () => {
-    setMobileAppPlatform("android");
-    setScreenOrientation("portrait-primary");
-    setViewport(450, 800, { left: 0, right: 0 });
-    render(<Probe openTiles={1} />);
-    expect(renderedForm()).toEqual(PHONE_PORTRAIT);
+  // Android resizes the viewport for the keyboard, and so does a browser tab
+  // (no platform) under `interactive-widget=resizes-content`: only the screen
+  // can tell.
+  it.each(["android", null] as const)(
+    "keeps the bar on %s when a keyboard shortens the viewport past its width",
+    (platform) => {
+      setMobileAppPlatform(platform);
+      setScreenOrientation("portrait-primary");
+      setViewport(450, 800, { left: 0, right: 0 });
+      render(<Probe openTiles={1} />);
+      expect(renderedForm()).toEqual(PHONE_PORTRAIT);
 
-    setViewport(450, 400, { left: 0, right: 0 });
-    expect(renderedForm()).toEqual(PHONE_PORTRAIT);
-  });
+      setViewport(450, 400, { left: 0, right: 0 });
+      expect(renderedForm()).toEqual(PHONE_PORTRAIT);
+    },
+  );
 
   it("re-answers on Android when the screen turns, at the same width", () => {
     setMobileAppPlatform("android");
