@@ -9,7 +9,7 @@
  * reachability, the member actions' writes and navigation.
  */
 import { type ReactNode } from "react";
-import { cleanup, render, screen, within } from "@testing-library/react";
+import { act, cleanup, render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { HostNotificationsIndicatorStateResponse } from "@traycer/protocol/host/notifications/contracts";
@@ -60,22 +60,39 @@ const mocks = vi.hoisted(() => {
     /** What the host's indicator read holds per task and per agent chat. */
     epicFlags: {} as Record<string, Partial<typeof emptyFlags>>,
     chatFlags: {} as Record<string, Partial<typeof emptyFlags>>,
+    /**
+     * What a named host's indicator read holds per agent chat, for a case
+     * whose hosts answer differently; a host not named here answers
+     * `chatFlags`.
+     */
+    chatFlagsByHost: {} as Record<
+      string,
+      Record<string, Partial<typeof emptyFlags>>
+    >,
     /** Hosts the directory reports unreachable. */
     unreachable: new Set<string>(),
   };
   const answers = new Map<string, unknown>();
+  /** Each agent chat id an enabled indicator read asked a host about. */
+  const asked: Array<{ hostId: string | null; chatId: string }> = [];
   return {
     state,
     client: { stub: "tab-host-client" },
     navigateToTabIntent: vi.fn<(...args: unknown[]) => void>(),
     /** Each member action the page sent, by method. */
     actions: [] as Array<{ method: string; variables: unknown }>,
-    /** The host's `host.notifications.indicatorState` answer for a request. */
+    asked,
+    /** `hostId`'s `host.notifications.indicatorState` answer for a request. */
     answerIndicators(
+      hostId: string | null,
       requests: ReadonlyArray<{ params: IndicatorParams }>,
     ): HostNotificationsIndicatorStateResponse {
       const epics: HostNotificationsIndicatorStateResponse["epics"] = {};
       const chats: HostNotificationsIndicatorStateResponse["chats"] = {};
+      const chatFlags =
+        hostId !== null && Object.hasOwn(state.chatFlagsByHost, hostId)
+          ? state.chatFlagsByHost[hostId]
+          : state.chatFlags;
       for (const { params } of requests) {
         for (const id of params.epicIds) {
           if (Object.hasOwn(state.epicFlags, id)) {
@@ -83,8 +100,9 @@ const mocks = vi.hoisted(() => {
           }
         }
         for (const id of params.chatIds) {
-          if (Object.hasOwn(state.chatFlags, id)) {
-            chats[id] = { ...emptyFlags, ...state.chatFlags[id] };
+          asked.push({ hostId, chatId: id });
+          if (Object.hasOwn(chatFlags, id)) {
+            chats[id] = { ...emptyFlags, ...chatFlags[id] };
           }
         }
       }
@@ -95,7 +113,10 @@ const mocks = vi.hoisted(() => {
       if (!answers.has(key)) answers.set(key, make());
       return answers.get(key);
     },
-    forgetAnswers: () => answers.clear(),
+    forgetAnswers: () => {
+      answers.clear();
+      asked.length = 0;
+    },
   };
 });
 
@@ -151,21 +172,30 @@ vi.mock("@/components/epic-canvas/sidebar/use-chat-row-open-ref", () => ({
 vi.mock("@/hooks/notifications/use-notification-host", () => ({
   useNotificationResolveHostId: () => "host-notifications",
 }));
+// A host's client names the host, so a read answers as the host it went to.
 vi.mock("@/hooks/host/use-host-client-for-host-id", () => ({
-  useHostClientForHostId: () => null,
+  useHostClientForHostId: (hostId: string | null) => ({ hostId }),
 }));
 vi.mock("@/hooks/host/use-host-queries", () => ({
   useHostQueries: (args: {
+    client: { hostId: string | null };
     requests: ReadonlyArray<{ params: IndicatorParams }>;
     options: { enabled?: boolean } | null;
     combine: (results: ReadonlyArray<unknown>) => unknown;
   }) => {
     const enabled = args.options?.enabled === true;
-    const key = JSON.stringify([enabled, args.requests.map((r) => r.params)]);
+    const hostId = args.client.hostId;
+    const key = JSON.stringify([
+      enabled,
+      hostId,
+      args.requests.map((r) => r.params),
+    ]);
     return mocks.cached(key, () =>
       args.combine(
         args.requests.map(() => ({
-          data: enabled ? mocks.answerIndicators(args.requests) : undefined,
+          data: enabled
+            ? mocks.answerIndicators(hostId, args.requests)
+            : undefined,
           isPending: false,
           isFetching: false,
           error: null,
@@ -397,6 +427,7 @@ beforeEach(() => {
   mocks.state.taskTitles = {};
   mocks.state.epicFlags = {};
   mocks.state.chatFlags = {};
+  mocks.state.chatFlagsByHost = {};
   mocks.state.unreachable = new Set();
   mocks.actions.length = 0;
   mocks.forgetAnswers();
@@ -671,6 +702,60 @@ describe("<BotActivityPage /> the row's status", () => {
         .getByTestId("bot-activity-task-glyph")
         .getAttribute("aria-label"),
     ).toBe("1 running · 1 completed");
+  });
+});
+
+describe("<BotActivityPage /> agents on several hosts", () => {
+  it("rule 3: an agent on another host than its task's session is read from the host that owns it", async () => {
+    const user = userEvent.setup();
+    warmTask("t-split", [
+      { id: "a-lead", parentId: null, title: "Lead", archivedAt: null },
+      {
+        id: "a-remote",
+        parentId: "a-lead",
+        title: "Remote reviewer",
+        archivedAt: null,
+      },
+    ]);
+    const handle = getOpenEpicRegistry().peek("t-split");
+    if (handle === null) throw new Error("t-split is not warm");
+    act(() => {
+      handle.store.setState((state) => ({
+        chats: {
+          ...state.chats,
+          byId: {
+            ...state.chats.byId,
+            "a-remote": { ...state.chats.byId["a-remote"], hostId: "host-b" },
+          },
+        },
+      }));
+    });
+    // The lead's host knows nothing of the reviewer; only the reviewer's own
+    // host holds its fork.
+    mocks.state.chatFlagsByHost = {
+      "host-b": { "a-remote": { pendingFork: true } },
+    };
+    mount([periodic("t-split", {})], { boundHere: true });
+
+    expect(
+      within(row("t-split"))
+        .getByTestId("bot-activity-task-glyph")
+        .getAttribute("aria-label"),
+    ).toBe("1 waiting for fork resolution");
+    await user.click(
+      within(row("t-split")).getByTestId("bot-activity-task-chevron"),
+    );
+    const remote = within(row("t-split"))
+      .getAllByTestId("bot-activity-agent")
+      .find((agent) => agent.getAttribute("data-agent-id") === "a-remote");
+    expect(remote?.getAttribute("data-kind")).toBe("fork");
+    expect([
+      ...new Set(
+        mocks.asked
+          .filter((read) => read.chatId === "a-remote")
+          .map((read) => read.hostId),
+      ),
+    ]).toEqual(["host-b"]);
   });
 });
 

@@ -1,4 +1,10 @@
-import { useCallback, useMemo, useState, type ReactNode } from "react";
+import {
+  useCallback,
+  useContext,
+  useMemo,
+  useState,
+  type ReactNode,
+} from "react";
 import { useNavigate } from "@tanstack/react-router";
 import { ChevronRight, EllipsisVertical } from "lucide-react";
 import type { BotThreadSummary } from "@traycer/protocol/host/bot/conversation-schemas";
@@ -27,6 +33,8 @@ import {
 import { useChatRowOpenRef } from "@/components/epic-canvas/sidebar/use-chat-row-open-ref";
 import { BotTaskControls } from "@/components/bots/bot-task-actions";
 import { ChannelPost } from "@/components/bots/bot-channel-post";
+import { ChatIndicatorHostScopes } from "@/components/notifications/chat-indicator-host-scopes";
+import { NotificationIndicatorsContext } from "@/components/notifications/notification-indicator-context";
 import type { BotActiveTasks } from "@/hooks/bots/use-bot-active-tasks";
 import {
   useBotTaskAgents,
@@ -35,7 +43,6 @@ import {
 } from "@/hooks/bots/use-bot-task-agents";
 import { useHostReachability } from "@/hooks/agent/use-host-reachability";
 import { useEpicGetTaskContexts } from "@/hooks/epic/use-epic-get-task-contexts-query";
-import { useNotificationIndicators } from "@/hooks/notifications/use-notification-indicators-query";
 import {
   agentActivityTiers,
   type AgentActivityTier,
@@ -51,6 +58,8 @@ import {
 import { describeTaskInterval, firstLineOf } from "@/lib/bots/bot-trunk-model";
 import { postTextOf } from "@/lib/bots/reply-row";
 import { displayTitle } from "@/lib/display-title";
+import { UNKNOWN_HOST_PLACEHOLDER } from "@/lib/host/constants";
+import { chatIndicatorHostScopes } from "@/lib/notifications/chat-indicator-scopes";
 import { useRegisteredEpicLiveAgents } from "@/lib/epic-selectors";
 import {
   formatAbsoluteDateTime,
@@ -73,7 +82,6 @@ import {
   type NotificationIndicatorState,
 } from "@/stores/notifications/notification-indicator-state";
 
-const NO_IDS: ReadonlyArray<string> = [];
 const NO_WAITING: ReadonlyArray<BotInputNeeded> = [];
 const NO_FOCUS = {
   focusedAt: undefined,
@@ -230,7 +238,7 @@ function withSurfaces(
   };
 }
 
-function ActiveTaskRow(props: {
+type ActiveTaskRowProps = {
   readonly botId: string;
   readonly hostId: string;
   readonly boundHere: boolean;
@@ -240,13 +248,56 @@ function ActiveTaskRow(props: {
   readonly indicator: NotificationIndicatorState;
   readonly title: string | null;
   readonly threads: ReadonlyArray<BotThreadSummary> | null;
-}): ReactNode {
-  const { botId, hostId, boundHere, nameOf, entry, indicator } = props;
+};
+
+/**
+ * A task's row under its agents' indicators, each asked of the host that owns
+ * the agent, as the Chats panel asks: one host answers only for its own
+ * agents, and a task's agents can run on several.
+ */
+function ActiveTaskRow(props: ActiveTaskRowProps): ReactNode {
+  const taskId = props.entry.task.taskId;
+  const agents = useBotTaskAgents(taskId);
+  const scopes = useMemo(
+    () =>
+      chatIndicatorHostScopes(
+        (agents?.nodes ?? []).map((node) => ({
+          chatId: node.id,
+          hostId: agentHostOf(node, agents),
+        })),
+      ),
+    [agents],
+  );
+  const chatEpicIds = useMemo(
+    () =>
+      Object.fromEntries(
+        (agents?.nodes ?? []).map((node) => [node.id, taskId]),
+      ),
+    [agents, taskId],
+  );
+  return (
+    <ChatIndicatorHostScopes scopes={scopes} chatEpicIds={chatEpicIds}>
+      <ActiveTaskRowBody {...props} agents={agents} />
+    </ChatIndicatorHostScopes>
+  );
+}
+
+/** The host owning an agent, else the one serving the task's session. */
+function agentHostOf(
+  node: BotTaskAgentNode,
+  agents: BotTaskAgents | null,
+): string {
+  return node.ownerHostId ?? agents?.sessionHostId ?? UNKNOWN_HOST_PLACEHOLDER;
+}
+
+function ActiveTaskRowBody(
+  props: ActiveTaskRowProps & { readonly agents: BotTaskAgents | null },
+): ReactNode {
+  const { botId, hostId, boundHere, nameOf, entry, indicator, agents } = props;
   const { task } = entry;
   const taskId = task.taskId;
   const inputNeeded = task.inputNeeded ?? NO_WAITING;
   const tiers = agentActivityTiers(useEpicAgentActivity(taskId));
-  const agents = useBotTaskAgents(taskId);
   const agentStates = useTaskAgentStates(taskId, agents);
   const rollup = useMemo(
     () =>
@@ -341,40 +392,27 @@ function ActiveTaskRow(props: {
 
 /**
  * What each agent this window's session names for the task holds unread or
- * pending, read from the host serving that session; none for a cold task.
+ * pending, as its owning host answers (the row's `ChatIndicatorHostScopes`);
+ * none for a cold task.
  */
 function useTaskAgentStates(
   taskId: string,
   agents: BotTaskAgents | null,
 ): ReadonlyArray<TaskAgentState> {
-  const agentIds = useMemo(
-    () => agents?.nodes.map((node) => node.id) ?? NO_IDS,
-    [agents],
-  );
-  const chatEpicIds = useMemo(
-    () => Object.fromEntries(agentIds.map((id) => [id, taskId])),
-    [agentIds, taskId],
-  );
-  const chatIndicators = useNotificationIndicators({
-    hostId: agents?.sessionHostId ?? null,
-    epicIds: NO_IDS,
-    chatIds: agentIds,
-    chatEpicIds,
-    enabled: agentIds.length > 0,
-  });
+  const chatIndicators = useContext(NotificationIndicatorsContext);
   const localRows = useAppLocalNotificationsStore((state) => state.byId);
   return useMemo(
     () =>
-      agentIds.map((id) => ({
-        id,
+      (agents?.nodes ?? []).map((node) => ({
+        id: node.id,
         indicator: selectNotificationIndicatorState(
           { byId: localRows },
-          { epicId: taskId, chatId: id },
-          null,
+          { epicId: taskId, chatId: node.id },
+          agentHostOf(node, agents),
           chatIndicators,
         ),
       })),
-    [agentIds, chatIndicators, localRows, taskId],
+    [agents, chatIndicators, localRows, taskId],
   );
 }
 

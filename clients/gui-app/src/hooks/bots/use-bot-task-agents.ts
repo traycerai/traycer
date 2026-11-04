@@ -20,6 +20,8 @@ export type BotTaskAgentNode = {
   readonly depth: number;
   readonly title: string;
   readonly updatedAt: number;
+  /** The host that owns the agent; `null` for a record predating the field. */
+  readonly ownerHostId: string | null;
 };
 
 /** A task's agents as this window's session for it holds them. */
@@ -70,6 +72,7 @@ export function useBotTaskAgents(taskId: string): BotTaskAgents | null {
     return {
       nodes: treeOrder(
         tree,
+        (id) => ownerHostOf(chats, tuiAgents, id),
         sidebarTreeRootIds({
           tree,
           treeFilter: CHATS_TREE_FILTER,
@@ -84,8 +87,19 @@ export function useBotTaskAgents(taskId: string): BotTaskAgents | null {
   }, [chats, handle, sort, tree, tuiAgents]);
 }
 
+function ownerHostOf(
+  chats: OpenEpicState["chats"],
+  tuiAgents: OpenEpicState["tuiAgents"],
+  id: string,
+): string | null {
+  if (Object.hasOwn(chats.byId, id)) return chats.byId[id].hostId;
+  if (Object.hasOwn(tuiAgents.byId, id)) return tuiAgents.byId[id].hostId;
+  return null;
+}
+
 function treeOrder(
   tree: OpenEpicState["tree"],
+  hostOf: (id: string) => string | null,
   rootIds: ReadonlyArray<string>,
 ): ReadonlyArray<BotTaskAgentNode> {
   const nodes: BotTaskAgentNode[] = [];
@@ -103,6 +117,7 @@ function treeOrder(
       depth: next.depth,
       title: node.title,
       updatedAt: node.updatedAt,
+      ownerHostId: hostOf(node.id),
     });
     const children = Object.hasOwn(tree.childrenByParent, node.id)
       ? tree.childrenByParent[node.id]
