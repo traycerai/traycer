@@ -43,7 +43,7 @@ export function VoiceOutcomeLine(props: {
         line={
           refusal === "paused" && pausedCopy !== null
             ? pausedCopy
-            : refusalLine(refusal)
+            : refusalLine(refusal, callTitle ?? "the bot")
         }
         onDismiss={clearRefusal}
       >
@@ -146,7 +146,7 @@ function MicrophoneSettingsButton(): ReactNode {
   );
 }
 
-function refusalLine(refusal: VoiceRefusal): string {
+function refusalLine(refusal: VoiceRefusal, botTitle: string): string {
   switch (refusal) {
     case "credits":
       return "Calls need credits.";
@@ -160,6 +160,8 @@ function refusalLine(refusal: VoiceRefusal): string {
       return "Call did not start. Try again in a moment.";
     case "paused":
       return "This bot is paused.";
+    case "update":
+      return `Calls need an update on ${botTitle}'s host.`;
   }
 }
 

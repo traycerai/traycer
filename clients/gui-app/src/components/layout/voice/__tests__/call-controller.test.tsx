@@ -10,6 +10,8 @@ import {
   type Mock,
 } from "vitest";
 import { create, type StoreApi } from "zustand";
+import type { SchemaVersion } from "@traycer/protocol/framework/index";
+import { botConversationSendV13 } from "@traycer/protocol/host/bot/contracts";
 import type {
   BotConversationSendRequest,
   BotConversationSendResponse,
@@ -32,8 +34,10 @@ import type { VoiceEngineEvents } from "@/lib/voice/engine";
 import type { ReplyRow } from "@/lib/voice/focused-replies";
 import {
   INPUT_ACTIVE_WINDOW_MS,
+  OUTPUT_HANGOVER_MS,
   OUTPUT_HANGOVER_WITHOUT_LEVEL_MS,
 } from "@/lib/voice/scheduler";
+import { useTracySurfaceStore } from "@/stores/bots/tracy-surface-store";
 import {
   useVoiceSessionStore,
   type CallTarget,
@@ -45,13 +49,19 @@ interface ChatState {
   readonly messages: ReadonlyArray<ReplyRow>;
 }
 
+interface FakeRemote {
+  getAudioTracks(): ReadonlyArray<{ enabled: boolean }>;
+}
+
 interface ConnectInput {
   readonly exchangeSdp: (offer: string) => Promise<string>;
+  readonly onRemoteAudio: (remote: FakeRemote) => void;
   readonly events: VoiceEngineEvents;
 }
 
 interface FakeEngine {
   events: VoiceEngineEvents | null;
+  onRemoteAudio: ((remote: FakeRemote) => void) | null;
   readonly connect: Mock<(input: ConnectInput) => Promise<void>>;
   readonly appendCommentary: Mock<
     (text: string, delegationId: string | null) => void
@@ -128,15 +138,25 @@ const fake = vi.hoisted(() => {
       for (const listener of activityListeners) listener();
     },
   };
+  const remote = { getAudioTracks: () => [{ enabled: true }] };
+  // The sound-level detector the voice's track is watched by, once it is up.
+  const level: { onHealthy: ((healthy: boolean) => void) | null } = {
+    onHealthy: null,
+  };
   const engines: FakeEngine[] = [];
+  // The `bot.conversation.send` line the host negotiated; `null` is unknown.
+  const sendVersion: { current: SchemaVersion | null } = { current: null };
   const handles = new Map<string, { store: StoreApi<ChatState> }>();
   return {
     order,
     track,
     stream,
+    remote,
+    level,
     activity,
     engines,
     handles,
+    sendVersion,
     requestMicrophoneAccess: vi.fn<() => Promise<string>>(),
     getUserMedia: vi.fn<() => Promise<typeof stream>>(),
     mint: vi.fn<
@@ -175,11 +195,25 @@ vi.mock("@/hooks/bots/use-bot-mutations", () => ({
   useBotConversationSendMutation: () => ({ mutateAsync: fake.sendMock }),
   useBotOpenMutation: () => ({ mutateAsync: fake.openMock }),
 }));
-vi.mock("@/hooks/bots/use-bot-activity", async () => {
+// The real activity hook runs over this stream: a host answers only the
+// subscription made on it.
+vi.mock("@/hooks/bots/use-bot-subscription", async () => {
   const { useSyncExternalStore } = await import("react");
   return {
-    useBotActivity: () =>
-      useSyncExternalStore(fake.activity.subscribe, fake.activity.get),
+    useBotSubscriptionForHost: (args: {
+      readonly hostId: string;
+      readonly enabled: boolean;
+    }) => {
+      const activity = useSyncExternalStore(
+        fake.activity.subscribe,
+        fake.activity.get,
+      );
+      return {
+        snapshot: args.enabled && args.hostId === HOST_ID ? { activity } : null,
+        error: null,
+        deleted: false,
+      };
+    },
   };
 });
 vi.mock("@/lib/registries/chat-session-registry", async (importOriginal) => ({
@@ -204,8 +238,12 @@ vi.mock("@/hooks/host/use-effective-host-id", () => ({
 vi.mock("@/hooks/host/use-host-client-for-host-id", () => ({
   useHostClientForHostId: () => null,
 }));
-vi.mock("@/hooks/host/use-host-supports-method", () => ({
+vi.mock("@/hooks/host/use-host-supports-method", async (importOriginal) => ({
+  ...(await importOriginal<
+    typeof import("@/hooks/host/use-host-supports-method")
+  >()),
   useHostMethodSupport: () => true,
+  readHostMethodSchemaVersion: () => fake.sendVersion.current,
 }));
 vi.mock("@/hooks/voice/use-voice-availability-query", () => ({
   useVoiceAvailabilityQuery: () => ({ data: true }),
@@ -214,12 +252,24 @@ vi.mock(
   "@/hooks/notifications/use-notification-mark-entity-read-mutation",
   () => ({ useNotificationMarkEntityRead: () => ({ mutate: fake.markRead }) }),
 );
+vi.mock("@/lib/voice/audio-level", () => ({
+  watchAudioLevel: (
+    _stream: FakeRemote,
+    _onSpeaking: (speaking: boolean) => void,
+    onHealthy: (healthy: boolean) => void,
+  ) => {
+    fake.level.onHealthy = onHealthy;
+    return { stop: () => undefined };
+  },
+}));
 vi.mock("@/lib/voice/gpt-live-engine", () => ({
   createBrowserGptLiveEngine: () => {
     const engine: FakeEngine = {
       events: null,
+      onRemoteAudio: null,
       connect: vi.fn<(input: ConnectInput) => Promise<void>>(async (input) => {
         engine.events = input.events;
+        engine.onRemoteAudio = input.onRemoteAudio;
         await input.exchangeSdp("offer");
       }),
       appendCommentary:
@@ -245,6 +295,8 @@ const SERVE_HERE: BotOpenResponse = {
   bot: BOT,
   outcome: { kind: "serve-here", claimed: null },
 };
+
+const TURN_REQUEST = "r-turn";
 
 const CHANNEL_CALL: CallTarget = { botId: BOT_ID, threadId: null };
 const OPEN_THREAD_CALL: CallTarget = { botId: BOT_ID, threadId: "t-open" };
@@ -283,21 +335,20 @@ function addChat(chatId: string, state: ChatState): StoreApi<ChatState> {
 
 function sessionActivity(
   state: BotSessionActivity["state"],
+  requestId: string,
 ): BotSessionActivity {
-  return {
-    state,
-    startedAt: 1,
-    step: null,
-    requestId: "r-turn",
-    reason: null,
-  };
+  return { state, startedAt: 1, step: null, requestId, reason: null };
 }
 
 function threadActivity(
   threadId: string,
   state: BotSessionActivity["state"],
+  requestId: string,
 ): BotActivity {
-  return { trunk: null, threads: { [threadId]: sessionActivity(state) } };
+  return {
+    trunk: null,
+    threads: { [threadId]: sessionActivity(state, requestId) },
+  };
 }
 
 function engine(): FakeEngine {
@@ -376,6 +427,22 @@ function voiceSays(words: string): void {
   act(() => events().onOutputTranscriptDelta(words));
 }
 
+/**
+ * The voice's sound is up and a trusted level detector watches it: the voice
+ * counts as quiet 700 ms after its last transcript fragment, not four seconds.
+ */
+function hearVoiceWithLevelDetection(): void {
+  act(() => {
+    const onRemoteAudio = engine().onRemoteAudio;
+    if (onRemoteAudio === null)
+      throw new Error("the engine was never connected");
+    onRemoteAudio(fake.remote);
+    const onHealthy = fake.level.onHealthy;
+    if (onHealthy === null) throw new Error("no level detector was started");
+    onHealthy(true);
+  });
+}
+
 /** A call joined to thread `t-open`, whose history is `history`. */
 async function joinOpenThread(
   history: ReadonlyArray<ReplyRow>,
@@ -395,6 +462,8 @@ beforeEach(() => {
   fake.engines.length = 0;
   fake.handles.clear();
   fake.activity.set(null);
+  fake.sendVersion.current = botConversationSendV13.schemaVersion;
+  fake.level.onHealthy = null;
   fake.track.enabled = true;
   fake.track.stop.mockReset();
   fake.track.stop.mockImplementation(() => {
@@ -428,6 +497,16 @@ beforeEach(() => {
   fake.openMock.mockImplementation(() => Promise.resolve(SERVE_HERE));
   fake.markRead.mockReset();
   useVoiceSessionStore.setState(useVoiceSessionStore.getInitialState(), true);
+  useTracySurfaceStore.setState(useTracySurfaceStore.getInitialState(), true);
+  vi.stubGlobal(
+    "Audio",
+    class {
+      autoplay = false;
+      srcObject: unknown = null;
+      play = () => Promise.resolve();
+      pause = () => undefined;
+    },
+  );
   Object.defineProperty(navigator, "mediaDevices", {
     configurable: true,
     value: { getUserMedia: fake.getUserMedia },
@@ -442,6 +521,7 @@ beforeEach(() => {
 afterEach(() => {
   cleanup();
   vi.useRealTimers();
+  vi.unstubAllGlobals();
 });
 
 describe("the dial", () => {
@@ -480,6 +560,34 @@ describe("the dial", () => {
     expect(state.phase).toBe("idle");
     expect(state.refusal).toBe("unavailable");
     expect(fake.requestMicrophoneAccess).not.toHaveBeenCalled();
+    expect(fake.mint).not.toHaveBeenCalled();
+  });
+
+  it("refuses a host that negotiated a send line older than calls, asking for no microphone", async () => {
+    fake.sendVersion.current = { major: 1, minor: 2 };
+
+    await dial(CHANNEL_CALL);
+
+    const state = useVoiceSessionStore.getState();
+    expect(fake.openMock).toHaveBeenCalledTimes(1);
+    expect(state.phase).toBe("idle");
+    expect(state.refusal).toBe("update");
+    expect(fake.requestMicrophoneAccess).not.toHaveBeenCalled();
+    expect(fake.getUserMedia).not.toHaveBeenCalled();
+    expect(fake.engines).toHaveLength(0);
+    expect(fake.mint).not.toHaveBeenCalled();
+  });
+
+  it("refuses as unavailable a host whose send line is not known, asking for no microphone", async () => {
+    fake.sendVersion.current = null;
+
+    await dial(CHANNEL_CALL);
+
+    const state = useVoiceSessionStore.getState();
+    expect(state.phase).toBe("idle");
+    expect(state.refusal).toBe("unavailable");
+    expect(fake.requestMicrophoneAccess).not.toHaveBeenCalled();
+    expect(fake.engines).toHaveLength(0);
     expect(fake.mint).not.toHaveBeenCalled();
   });
 
@@ -530,11 +638,54 @@ describe("what the person says", () => {
     ]);
   });
 
+  it("keeps a new utterance whole when the voice's acknowledgement of the last one runs on", async () => {
+    await dialLive(CHANNEL_CALL);
+    speak("First request.");
+    voiceSays("One");
+    await settle();
+    expect(fake.sendMock.mock.calls.map(([request]) => request.text)).toEqual([
+      "First request.",
+    ]);
+
+    speak("Actually cancel");
+    voiceSays(" moment.");
+    await settle();
+    expect(fake.sendMock).toHaveBeenCalledTimes(1);
+    speak(" the release.");
+    await untilQuiet();
+    await acknowledge();
+
+    expect(fake.sendMock.mock.calls.map(([request]) => request.text)).toEqual([
+      "First request.",
+      "Actually cancel the release.",
+    ]);
+  });
+
+  it("does not take the start of an end phrase for a whole one when the voice's reply runs on over it", async () => {
+    const chat = await joinOpenThread([]);
+    land(chat, [
+      botRow("r1", "The release has passed checks and is ready to ship.", 200),
+    ]);
+    await settle();
+    voiceSays("The release has passed");
+    speak("end the call");
+    voiceSays(" checks");
+    speak(" with the vendor tomorrow.");
+    await untilQuiet();
+    await acknowledge();
+
+    expect(useVoiceSessionStore.getState().phase).toBe("live");
+    expect(fake.sendMock.mock.calls.map(([request]) => request.text)).toEqual([
+      "end the call with the vendor tomorrow.",
+    ]);
+  });
+
   it("binds the thread the first send opened, and sends later words into it with no origin", async () => {
     await dialLive(CHANNEL_CALL);
     await say("First thing.");
     expect(useVoiceSessionStore.getState().focus?.threadId).toBe("t1");
 
+    await untilQuiet();
     await say("Second thing.");
 
     expect(fake.sendMock).toHaveBeenCalledTimes(2);
@@ -557,6 +708,7 @@ describe("what the person says", () => {
     );
     await dialLive(CHANNEL_CALL);
     await say("First thing.");
+    await untilQuiet();
     await say("Second thing.");
     expect(fake.sendMock).toHaveBeenCalledTimes(1);
 
@@ -626,6 +778,7 @@ describe("what the person says", () => {
     expect(fake.endVoiceSession).not.toHaveBeenCalled();
 
     voiceSays(callFailureLine(BOT_TITLE));
+    await untilQuiet();
     await say("Second thing.");
     expect(fake.sendMock).toHaveBeenCalledTimes(2);
     expect(fake.sendMock.mock.calls[1][0].text).toBe("Second thing.");
@@ -690,6 +843,7 @@ describe("a send the bot cannot take", () => {
     );
     await dialLive(CHANNEL_CALL);
     await say("First thing.");
+    await untilQuiet();
     await say("Second thing.");
 
     answer(QUEUED);
@@ -703,6 +857,7 @@ describe("a send the bot cannot take", () => {
   it("neither re-sends the queued words nor sends anything said after", async () => {
     await dialAndSayIntoQueued();
 
+    await untilQuiet();
     await say("Also, one more thing.");
     await untilQuiet();
 
@@ -830,7 +985,9 @@ describe("holding the floor while the bot works", () => {
   it("says one hold line after the delay, and no more while the turn goes on", async () => {
     await joinOpenThread([]);
 
-    act(() => fake.activity.set(threadActivity("t-open", "replying")));
+    act(() =>
+      fake.activity.set(threadActivity("t-open", "replying", TURN_REQUEST)),
+    );
     await advance(CALL_HOLD_DELAY_MS - 1);
     expect(appends()).toEqual([]);
     await advance(1);
@@ -845,34 +1002,86 @@ describe("holding the floor while the bot works", () => {
   it("says nothing for a turn that is not replying", async () => {
     await joinOpenThread([]);
 
-    act(() => fake.activity.set(threadActivity("t-open", "idle")));
+    act(() =>
+      fake.activity.set(threadActivity("t-open", "idle", TURN_REQUEST)),
+    );
     await advance(10 * CALL_HOLD_DELAY_MS);
 
     expect(appends()).toEqual([]);
   });
 
-  it("waits a full delay again after a reply lands before another hold line", async () => {
+  it("says no second hold line when a reply lands after the turn's hold line was said", async () => {
     const chat = await joinOpenThread([]);
-    act(() => fake.activity.set(threadActivity("t-open", "replying")));
+    act(() =>
+      fake.activity.set(threadActivity("t-open", "replying", TURN_REQUEST)),
+    );
     await advance(CALL_HOLD_DELAY_MS);
     voiceSays(CALL_HOLD_LINE);
-    await advance(6_000);
+    await untilQuiet();
     expect(holds()).toBe(1);
 
     land(chat, [botRow("r1", "Build finished with two warnings", 200)]);
     await settle();
     voiceSays("Build finished with two warnings");
-    expect(appendedTexts()).toContain("Build finished with two warnings");
+    await advance(CALL_HOLD_DELAY_MS + OUTPUT_HANGOVER_WITHOUT_LEVEL_MS);
 
+    expect(appendedTexts()).toContain("Build finished with two warnings");
+    expect(holds()).toBe(1);
+  });
+
+  it("waits a full delay again when a reply lands before the hold line is due", async () => {
+    const chat = await joinOpenThread([]);
+    hearVoiceWithLevelDetection();
+    act(() =>
+      fake.activity.set(threadActivity("t-open", "replying", TURN_REQUEST)),
+    );
+    await advance(2_000);
+
+    land(chat, [botRow("r1", "Build finished with two warnings", 200)]);
+    await settle();
+    voiceSays("Build finished with two warnings");
+    await advance(CALL_HOLD_DELAY_MS - 1);
+    expect(holds()).toBe(0);
+    await advance(1);
+    await advance(OUTPUT_HANGOVER_MS);
+
+    expect(holds()).toBe(1);
+  });
+
+  it("gives a new replying turn its own hold line, with the same restart on a reply", async () => {
+    const chat = await joinOpenThread([]);
+    hearVoiceWithLevelDetection();
+    act(() =>
+      fake.activity.set(threadActivity("t-open", "replying", TURN_REQUEST)),
+    );
+    await advance(CALL_HOLD_DELAY_MS);
+    voiceSays(CALL_HOLD_LINE);
+    await advance(OUTPUT_HANGOVER_MS);
+    expect(holds()).toBe(1);
+
+    act(() =>
+      fake.activity.set(threadActivity("t-open", "idle", TURN_REQUEST)),
+    );
+    act(() =>
+      fake.activity.set(threadActivity("t-open", "replying", "r-next")),
+    );
+    await advance(2_000);
+    land(chat, [botRow("r1", "Build finished with two warnings", 200)]);
+    await settle();
+    voiceSays("Build finished with two warnings");
     await advance(CALL_HOLD_DELAY_MS - 1);
     expect(holds()).toBe(1);
-    await advance(5_000);
+    await advance(1);
+    await advance(OUTPUT_HANGOVER_MS);
+
     expect(holds()).toBe(2);
   });
 
   it("withdraws a hold line still waiting when a reply lands, so the reply is what is said", async () => {
     const chat = await joinOpenThread([]);
-    act(() => fake.activity.set(threadActivity("t-open", "replying")));
+    act(() =>
+      fake.activity.set(threadActivity("t-open", "replying", TURN_REQUEST)),
+    );
     await advance(CALL_HOLD_DELAY_MS - 500);
     // The person is speaking when the delay runs out: the hold stays queued.
     speak("Wait, one thing");
@@ -891,10 +1100,14 @@ describe("holding the floor while the bot works", () => {
     "says the failure line once when the turn turns %s, and the call stays open",
     async (stopped) => {
       await joinOpenThread([]);
-      act(() => fake.activity.set(threadActivity("t-open", "replying")));
+      act(() =>
+        fake.activity.set(threadActivity("t-open", "replying", TURN_REQUEST)),
+      );
       await advance(1_000);
 
-      act(() => fake.activity.set(threadActivity("t-open", stopped)));
+      act(() =>
+        fake.activity.set(threadActivity("t-open", stopped, TURN_REQUEST)),
+      );
       await settle();
       expect(appends()).toEqual([[callFailureLine(BOT_TITLE), null]]);
       voiceSays(callFailureLine(BOT_TITLE));
@@ -907,12 +1120,87 @@ describe("holding the floor while the bot works", () => {
     },
   );
 
+  it("says only the failure line when the turn fails while its hold line is still waiting", async () => {
+    await joinOpenThread([]);
+    act(() =>
+      fake.activity.set(threadActivity("t-open", "replying", TURN_REQUEST)),
+    );
+    await advance(CALL_HOLD_DELAY_MS - 500);
+    // The person is speaking when the delay runs out: the hold stays queued.
+    speak("Please wait");
+    await advance(500);
+    expect(appends()).toEqual([]);
+
+    act(() =>
+      fake.activity.set(threadActivity("t-open", "failed", TURN_REQUEST)),
+    );
+    await untilQuiet();
+
+    expect(appendedTexts()).toEqual([callFailureLine(BOT_TITLE)]);
+  });
+
+  it("reads the bot's activity on the call's own host, after the Tracy surface has closed", async () => {
+    act(() => useTracySurfaceStore.getState().openSurface(HOST_ID));
+    await joinOpenThread([]);
+    act(() =>
+      fake.activity.set(threadActivity("t-open", "replying", TURN_REQUEST)),
+    );
+    act(() => useTracySurfaceStore.getState().closeSurface());
+
+    act(() =>
+      fake.activity.set(threadActivity("t-open", "failed", TURN_REQUEST)),
+    );
+    await untilQuiet();
+
+    expect(useVoiceSessionStore.getState().phase).toBe("live");
+    expect(appendedTexts()).toEqual([callFailureLine(BOT_TITLE)]);
+  });
+
+  it("says the failure of a turn that failed while the call's first send was still out, once the thread is bound", async () => {
+    let answer: (response: BotConversationSendResponse) => void = () => {
+      throw new Error("the first send was never made");
+    };
+    fake.sendMock.mockImplementationOnce(
+      () =>
+        new Promise<BotConversationSendResponse>((resolve) => {
+          answer = resolve;
+        }),
+    );
+    await dialLive(CHANNEL_CALL);
+    await say("Ship the release.");
+    act(() => fake.activity.set(threadActivity("t1", "failed", TURN_REQUEST)));
+
+    answer(WRITTEN);
+    await settle();
+    await untilQuiet();
+
+    expect(appends()).toEqual([[callFailureLine(BOT_TITLE), null]]);
+    expect(useVoiceSessionStore.getState().phase).toBe("live");
+  });
+
+  it("says a request's failure once, though the reading is lost and found again", async () => {
+    await dialLive(CHANNEL_CALL);
+    await say("Ship the release.");
+    act(() => fake.activity.set(threadActivity("t1", "failed", TURN_REQUEST)));
+    await untilQuiet();
+    expect(appends()).toEqual([[callFailureLine(BOT_TITLE), null]]);
+    voiceSays(callFailureLine(BOT_TITLE));
+
+    act(() => fake.activity.set(null));
+    act(() => fake.activity.set(threadActivity("t1", "failed", TURN_REQUEST)));
+    await advance(10 * CALL_HOLD_DELAY_MS);
+
+    expect(appends()).toEqual([[callFailureLine(BOT_TITLE), null]]);
+  });
+
   it.each(["failed", "parked"] as const)(
     "says no failure line when the first reading of activity, after the call joined, already says the turn is %s",
     async (stopped) => {
       await joinOpenThread([]);
 
-      act(() => fake.activity.set(threadActivity("t-open", stopped)));
+      act(() =>
+        fake.activity.set(threadActivity("t-open", stopped, TURN_REQUEST)),
+      );
       await advance(10 * CALL_HOLD_DELAY_MS);
 
       expect(appends()).toEqual([]);
@@ -920,7 +1208,9 @@ describe("holding the floor while the bot works", () => {
   );
 
   it("says no failure line for a turn that had already failed when the call joined the thread", async () => {
-    act(() => fake.activity.set(threadActivity("t-open", "failed")));
+    act(() =>
+      fake.activity.set(threadActivity("t-open", "failed", TURN_REQUEST)),
+    );
     await joinOpenThread([]);
 
     await advance(10 * CALL_HOLD_DELAY_MS);
@@ -932,7 +1222,9 @@ describe("holding the floor while the bot works", () => {
 describe("ending the call", () => {
   it("stops the microphone before closing the voice and the end route, and speaks nothing after", async () => {
     const chat = await joinOpenThread([]);
-    act(() => fake.activity.set(threadActivity("t-open", "replying")));
+    act(() =>
+      fake.activity.set(threadActivity("t-open", "replying", TURN_REQUEST)),
+    );
     // A reply lands while the person is speaking: it is queued, not said.
     speak("Hang on");
     land(chat, [botRow("r1", "Build finished with two warnings", 200)]);
@@ -957,7 +1249,9 @@ describe("ending the call", () => {
 
   it("leaves the bot's turn running: nothing is sent to cancel it", async () => {
     await joinOpenThread([]);
-    act(() => fake.activity.set(threadActivity("t-open", "replying")));
+    act(() =>
+      fake.activity.set(threadActivity("t-open", "replying", TURN_REQUEST)),
+    );
     await say("Run the release checks.");
     expect(fake.sendMock).toHaveBeenCalledTimes(1);
 

@@ -25,6 +25,7 @@ import type { HostRpcRegistry } from "@/lib/host";
 import { useHostMutation } from "@/hooks/host/use-host-query";
 import {
   BOT_CONVERSATION_ANSWER_VERSION,
+  BOT_CONVERSATION_CALL_VERSION,
   BOT_CONVERSATION_RETRY_VERSION,
 } from "@/hooks/bots/use-bot-send-version";
 import { botMutationKeys, hostQueryKeys } from "@/lib/query-keys";
@@ -184,8 +185,9 @@ interface BotConversationSendContext {
  * cross-host mailbox and the row appears when the bound host drains it. No
  * toast on error - the composer states the refusal inline, under the field.
  * A retry or an edit's replacement is refused before it leaves by a host
- * below {@link BOT_CONVERSATION_RETRY_VERSION}, and a question card's answer
- * by one below {@link BOT_CONVERSATION_ANSWER_VERSION}.
+ * below {@link BOT_CONVERSATION_RETRY_VERSION}, a question card's answer by
+ * one below {@link BOT_CONVERSATION_ANSWER_VERSION}, and a call's words by one
+ * below {@link BOT_CONVERSATION_CALL_VERSION}.
  *
  * A send may change a thread, so the channel's thread list is read again on
  * the host the send went through.
@@ -207,6 +209,12 @@ export function useBotConversationSendMutation(
     client,
     method: "bot.conversation.send",
     requiredHostMethodVersion: (variables) => {
+      if (variables.spoken === true || variables.origin !== undefined) {
+        return {
+          method: "bot.conversation.send",
+          version: BOT_CONVERSATION_CALL_VERSION,
+        };
+      }
       if (variables.answer !== null) {
         return {
           method: "bot.conversation.send",

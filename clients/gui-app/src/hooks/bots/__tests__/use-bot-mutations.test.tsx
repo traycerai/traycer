@@ -359,6 +359,54 @@ describe("useBotConversationSendMutation's dispatch-time version floor", () => {
     });
   });
 
+  const V13: SchemaVersion = { major: 1, minor: 3 };
+  const CALL_OPENING: BotConversationSendRequest = {
+    ...SEND,
+    spoken: true,
+    origin: "call",
+  };
+  const CALL_IN_THREAD: BotConversationSendRequest = {
+    ...SEND,
+    threadId: "thread-1",
+    spoken: true,
+  };
+
+  it.each([
+    ["a call's opening words", CALL_OPENING],
+    ["words spoken into a thread", CALL_IN_THREAD],
+  ])(
+    "refuses %s on a host that negotiated 1.2 before they leave, so they are never taken as a typed post",
+    async (_name, variables) => {
+      const f = floorFixture(V12);
+
+      const failure = await act(() => f.send(variables));
+
+      expect(failure).toBeInstanceOf(HostMethodVersionUnsatisfiedError);
+      expect(f.handled).toEqual([]);
+      expect(f.messenger.dispatched).toEqual([]);
+      expect(f.messenger.calls).toEqual([]);
+    },
+  );
+
+  it.each([
+    ["a call's opening words", CALL_OPENING],
+    ["words spoken into a thread", CALL_IN_THREAD],
+  ])(
+    "sends %s, floor attached, to a host that negotiated 1.3",
+    async (_name, variables) => {
+      const f = floorFixture(V13);
+
+      const failure = await act(() => f.send(variables));
+
+      expect(failure).toBeNull();
+      expect(f.handled).toEqual([variables]);
+      expect(f.messenger.calls[0]?.requiredHostMethodVersion).toEqual({
+        method: "bot.conversation.send",
+        version: { major: 1, minor: 3 },
+      });
+    },
+  );
+
   it("sends a plain post to a 1.0 host with no floor, which has always been allowed to take it", async () => {
     const f = floorFixture(V10);
 

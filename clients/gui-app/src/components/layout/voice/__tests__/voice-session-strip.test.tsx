@@ -326,6 +326,22 @@ describe("VoiceSessionStrip", () => {
       expect(screen.queryByTestId("voice-session-strip")).toBeNull();
     });
 
+    it("names the bot whose host needs an update for an update refusal, until it is dismissed", async () => {
+      useVoiceSessionStore.setState({ callTitle: "Tracy" });
+      useVoiceSessionStore.getState().sessionRefused("update", null);
+      render(<VoiceSessionStrip />, { wrapper: WithTestQueryClient });
+
+      expect(screen.getByTestId("voice-strip-state").textContent).toBe(
+        "Calls need an update on Tracy's host.",
+      );
+      expect(screen.queryByTestId("voice-strip-get-credits")).toBeNull();
+
+      await userEvent.click(screen.getByRole("button", { name: "Dismiss" }));
+
+      expect(useVoiceSessionStore.getState().refusal).toBeNull();
+      expect(screen.queryByTestId("voice-session-strip")).toBeNull();
+    });
+
     it("offers no Get credits when the start failed for another reason", () => {
       useVoiceSessionStore.getState().sessionRefused("unavailable", null);
       render(<VoiceSessionStrip />, { wrapper: WithTestQueryClient });

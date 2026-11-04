@@ -64,7 +64,9 @@ export type VoiceRefusal =
   | "playback"
   | "unavailable"
   /** `bot.open` said the bot is paused; `pausedCopy` is the tab's own line. */
-  | "paused";
+  | "paused"
+  /** The bot's host is too old to take a call's words as spoken. */
+  | "update";
 
 export type VoiceAvailability =
   /** The server has not said yet: Call waits. */

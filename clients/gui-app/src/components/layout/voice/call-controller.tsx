@@ -15,7 +15,7 @@ import type { BotOpenResponse } from "@traycer/protocol/host/bot/schemas";
 import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
 import type { MicrophoneAccessStatus } from "@traycer-clients/shared/platform/runner-host";
 import { botPausedCopy } from "@/components/bots/bot-tab-open-state";
-import { useBotActivity } from "@/hooks/bots/use-bot-activity";
+import { useBotActivityForHost } from "@/hooks/bots/use-bot-activity";
 import { useBotConversationListQuery } from "@/hooks/bots/use-bot-conversation-list-query";
 import { useBotListQuery } from "@/hooks/bots/use-bot-list-query";
 import {
@@ -30,7 +30,14 @@ import {
 } from "@/hooks/auth/use-auth-identity-transition";
 import { useEffectiveHostId } from "@/hooks/host/use-effective-host-id";
 import { useHostClientForHostId } from "@/hooks/host/use-host-client-for-host-id";
-import { useHostMethodSupport } from "@/hooks/host/use-host-supports-method";
+import {
+  readHostMethodSchemaVersion,
+  useHostMethodSupport,
+} from "@/hooks/host/use-host-supports-method";
+import {
+  BOT_CONVERSATION_CALL_VERSION,
+  botSendTakes,
+} from "@/hooks/bots/use-bot-send-version";
 import { useNotificationMarkEntityRead } from "@/hooks/notifications/use-notification-mark-entity-read-mutation";
 import { useVoiceAvailabilityQuery } from "@/hooks/voice/use-voice-availability-query";
 import {
@@ -130,8 +137,9 @@ function endRouteAnswers(attempt: Attempt): boolean {
  * view and the shortcut reach it through the store's `driver`.
  *
  * A call is a thread of one bot. Each thing the person says, closed by the
- * voice's own acknowledgement line (VC0: the first output transcript after
- * input), is one `bot.conversation.send` with `spoken: true`, verbatim: the
+ * voice's own acknowledgement line (VC0: the first output transcript of a new
+ * output turn, after input), is one `bot.conversation.send` with
+ * `spoken: true`, verbatim: the
  * first opens the call's thread (`origin: "call"`), or goes into the thread
  * the call was started from; later ones go into the thread the first opened.
  * Each new reply row of the bot on that thread is appended for the voice to
@@ -778,12 +786,16 @@ export function CallController(): ReactNode {
           onOutputTranscriptDelta: (text) => {
             if (!owns()) return;
             const current = useVoiceSessionStore.getState();
+            const speech = ensureSpeech();
+            // The utterance boundary (VC0): a new output turn begins, which
+            // is the voice's acknowledgement of what the person said since the
+            // last one. The vendor marks no turn start, so a new turn is the
+            // first output after the voice had gone quiet; a fragment of the
+            // output still playing continues it and closes nothing.
+            const newTurn = !speech.activity().outputPlaying;
             current.pushCaptionLine({ direction: "output", text });
-            ensureSpeech().noteOutputTranscript(text);
-            // The utterance boundary (VC0): the voice's acknowledgement
-            // begins, so what the person said since the last one is one
-            // message, as said.
-            if (!attempt.started) return;
+            speech.noteOutputTranscript(text);
+            if (!attempt.started || !newTurn) return;
             const said = current.takeOpenSpan();
             if (said !== null) utteranceRef.current(said);
           },
@@ -949,13 +961,18 @@ export function CallController(): ReactNode {
   }, [remint, requestRemintWhenClear]);
 
   /**
-   * Whether the dial may go on to the microphone: `bot.open` answered and the
-   * bot is not paused. A paused bot is refused with its tab's own line; an
-   * open that fails is refused as unavailable. `false` too once the dial was
-   * ended or replaced meanwhile.
+   * Whether the dial may go on to the microphone: `bot.open` answered, the
+   * bot is not paused, and its host takes a call's words as spoken. A paused
+   * bot is refused with its tab's own line, a host too old with the update
+   * line; an open that fails is refused as unavailable. `false` too once the
+   * dial was ended or replaced meanwhile.
    */
   const admitBot = useCallback(
-    async (botId: string, stillStarting: () => boolean): Promise<boolean> => {
+    async (
+      botId: string,
+      hostId: string,
+      stillStarting: () => boolean,
+    ): Promise<boolean> => {
       let opened: BotOpenResponse;
       try {
         opened = await openBotAsync({ botId });
@@ -967,14 +984,24 @@ export function CallController(): ReactNode {
         return false;
       }
       if (!stillStarting()) return false;
-      if (opened.outcome.kind !== "paused") return true;
-      refuseLocal(
-        "paused",
-        botPausedCopy(
-          opened.outcome.reason,
-          namesRef.current.environmentLabel(botId),
-        ).text,
+      if (opened.outcome.kind === "paused") {
+        refuseLocal(
+          "paused",
+          botPausedCopy(
+            opened.outcome.reason,
+            namesRef.current.environmentLabel(botId),
+          ).text,
+        );
+        return false;
+      }
+      // The open answered, so the handshake with the host is done: a line it
+      // did not negotiate is one it does not have.
+      const sendLine = readHostMethodSchemaVersion(
+        hostId,
+        "bot.conversation.send",
       );
+      if (botSendTakes(sendLine, BOT_CONVERSATION_CALL_VERSION)) return true;
+      refuseLocal(sendLine === null ? "unavailable" : "update", null);
       return false;
     },
     [openBotAsync, refuseLocal],
@@ -1013,7 +1040,7 @@ export function CallController(): ReactNode {
           now.engineGeneration === generation
         );
       };
-      if (!(await admitBot(target.botId, stillStarting))) return;
+      if (!(await admitBot(target.botId, hostId, stillStarting))) return;
       let access: MicrophoneAccessStatus;
       try {
         access = await microphoneAccessAsync();
@@ -1193,8 +1220,10 @@ interface ReplyWatchState {
  * joined takes its first snapshot as history.
  *
  * The bot's turn on the thread holds the floor: past `CALL_HOLD_DELAY_MS`
- * of replying, one hold line, and nothing more until a reply lands; a turn
- * that fails or parks gets one failure line, and the call stays open.
+ * of replying, one hold line, and one only for the turn. A reply that lands
+ * first takes the place of a hold line still waiting and restarts the wait.
+ * A turn that fails or parks gets one failure line in place of any hold line
+ * still waiting, and the call stays open.
  */
 function CallThreadWatch(props: {
   readonly botId: string;
@@ -1220,7 +1249,9 @@ function CallThreadWatch(props: {
   }, [markRead]);
 
   // ---- The hold ---------------------------------------------------------- //
-  const activity = useBotActivity(botId);
+  // Read on the call's own host: the call outlives the surface it was
+  // placed from.
+  const activity = useBotActivityForHost(botId, hostId);
   const session =
     activity !== null && Object.hasOwn(activity.threads, threadId)
       ? activity.threads[threadId]
@@ -1232,6 +1263,10 @@ function CallThreadWatch(props: {
   const holdTimerRef = useRef<number | null>(null);
   /** The hold line queued and not appended yet, so a reply can take its place. */
   const holdItemRef = useRef<string | null>(null);
+  /** The replying turn has had its one hold line: no reply row re-arms it. */
+  const holdSpentRef = useRef(false);
+  /** The requests whose failure has been said, so each is said once. */
+  const announcedRef = useRef(new Set<string>());
   const lineSerialRef = useRef(0);
   const turnRef = useRef<{
     readonly state: string | null;
@@ -1265,54 +1300,82 @@ function CallThreadWatch(props: {
       holdTimerRef.current = null;
     }
   }, []);
-  /** Starts the wait for one hold line, from now. */
+  /** Takes back a hold line that is queued and not appended yet. */
+  const withdrawHold = useCallback(() => {
+    const hold = holdItemRef.current;
+    if (hold === null) return;
+    scheduler.remove(hold);
+    holdItemRef.current = null;
+  }, [scheduler]);
+  /** Starts the wait for the turn's one hold line, from now. */
   const armHold = useCallback(() => {
     clearHold();
     holdTimerRef.current = window.setTimeout(() => {
       holdTimerRef.current = null;
+      holdSpentRef.current = true;
       holdItemRef.current = sayLine("hold", CALL_HOLD_LINE);
     }, CALL_HOLD_DELAY_MS);
   }, [clearHold, sayLine]);
   const armHoldRef = useRef(armHold);
+  const withdrawHoldRef = useRef(withdrawHold);
   useEffect(() => {
     armHoldRef.current = armHold;
-  }, [armHold]);
+    withdrawHoldRef.current = withdrawHold;
+  }, [armHold, withdrawHold]);
   useEffect(() => clearHold, [clearHold]);
 
   useEffect(() => {
     const previous = turnRef.current;
     turnRef.current = { state: turnState, requestId: turnRequest };
     if (turnState === "replying") {
-      if (previous?.state !== "replying" || previous.requestId !== turnRequest)
+      if (
+        previous?.state !== "replying" ||
+        previous.requestId !== turnRequest
+      ) {
+        holdSpentRef.current = false;
         armHold();
+      }
       return;
     }
+    // The turn is over: its hold line, if still queued, is no longer true.
     clearHold();
+    withdrawHold();
     const stopped = turnState === "failed" || turnState === "parked";
-    // A turn already stopped when the call joined its thread, or when the
-    // first reading came, is not news.
-    const changed =
-      previous !== null &&
-      previous.state !== null &&
-      (previous.state !== turnState || previous.requestId !== turnRequest);
-    if (stopped && changed) {
-      sayLine("failed", callFailureLine(botTitle));
-    }
-  }, [armHold, botTitle, clearHold, sayLine, turnRequest, turnState]);
+    if (!stopped) return;
+    // In a thread the call joined, a turn already stopped at the first
+    // reading is history. In one the call's own send opened, it is the
+    // answer to that send, however early it landed.
+    const known = previous !== null && previous.state !== null;
+    const news = known
+      ? previous.state !== turnState || previous.requestId !== turnRequest
+      : opened;
+    // A reading lost and found again repeats the failure; it is said once.
+    const request = turnRequest ?? "";
+    if (!news || (!known && announcedRef.current.has(request))) return;
+    announcedRef.current.add(request);
+    sayLine("failed", callFailureLine(botTitle));
+  }, [
+    armHold,
+    botTitle,
+    clearHold,
+    opened,
+    sayLine,
+    turnRequest,
+    turnState,
+    withdrawHold,
+  ]);
 
   // ---- The replies -------------------------------------------------------- //
   useEffect(() => {
     if (handle === null) return undefined;
     const memory = createReplyWatchMemory();
     const speak = (messageId: string, text: string): void => {
-      // A reply landed: a hold line still waiting is not said, and the turn,
-      // if it runs on, waits a full delay again before another.
-      const hold = holdItemRef.current;
-      if (hold !== null) {
-        scheduler.remove(hold);
-        holdItemRef.current = null;
+      // A reply landed: a hold line still waiting is not said. A turn that
+      // runs on waits a full delay again, unless it has had its hold line.
+      withdrawHoldRef.current();
+      if (turnRef.current?.state === "replying" && !holdSpentRef.current) {
+        armHoldRef.current();
       }
-      if (turnRef.current?.state === "replying") armHoldRef.current();
       scheduler.enqueue({
         id: `reply:${messageId}`,
         priority: "focused",
