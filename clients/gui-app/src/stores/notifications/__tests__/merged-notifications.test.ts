@@ -762,7 +762,7 @@ describe("merged notifications feed", () => {
     });
     expect(classifyNotificationLifecycle(invited)).toEqual({
       section: "attention",
-      tier: "blocking",
+      tier: "invitation",
     });
 
     const commented = rowFromGlobalEntry({

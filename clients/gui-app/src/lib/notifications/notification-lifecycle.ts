@@ -1,13 +1,22 @@
 import type { HostNotificationSeverity } from "@traycer/protocol/host/notifications/contracts";
+import type { MergedNotificationSource } from "@/stores/notifications/merged-notifications";
 
 /**
- * Attention's classes, in order: prompts that block, failures, then a bot's
- * rows that need the person without anything having gone wrong: its answers,
- * replies in threads they follow, and rows that mention them.
+ * Attention's classes, in order: prompts that block, failures, a bot's rows
+ * that need the person without anything having gone wrong (its answers,
+ * replies in threads they follow, and rows that mention them), then a task
+ * another person shared with them. An invitation is attention-grade without
+ * an agent waiting behind it, which is why it is not `blocking`: the
+ * surfaces that say "an agent is waiting" read that tier alone.
  */
-export type NotificationAttentionTier = "blocking" | "failure" | "answer";
+export type NotificationAttentionTier =
+  | "blocking"
+  | "failure"
+  | "answer"
+  | "invitation";
 
 export interface NotificationLifecycleInput {
+  readonly source: MergedNotificationSource;
   readonly severity: HostNotificationSeverity;
   readonly readAt: number | null;
   /**
@@ -34,9 +43,11 @@ export function classifyNotificationLifecycle(
   row: NotificationLifecycleInput,
 ): NotificationLifecycleClassification {
   if (row.severity === "needs_action") {
-    return row.readAt === null
-      ? { section: "attention", tier: "blocking" }
-      : { section: "recent" };
+    if (row.readAt !== null) return { section: "recent" };
+    return {
+      section: "attention",
+      tier: row.source === "global" ? "invitation" : "blocking",
+    };
   }
   if (row.severity === "failure") {
     return row.readAt === null
@@ -55,6 +66,7 @@ const ATTENTION_TIER_ORDER: Readonly<
   blocking: 0,
   failure: 1,
   answer: 2,
+  invitation: 3,
 };
 
 export interface AttentionOrderCandidate {

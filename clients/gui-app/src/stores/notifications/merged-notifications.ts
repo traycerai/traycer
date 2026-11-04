@@ -451,8 +451,8 @@ interface AttentionOrderEntry {
   readonly tier: NotificationAttentionTier;
 }
 
-/** Attention, blocking-first, then failures, then answers, newest first
- * within each tier.
+/** Attention, blocking-first, then failures, answers and invitations, newest
+ * first within each tier.
  * Never filtered - Attention is complete and filter-invariant by design. */
 export function useAttentionNotificationIds(): ReadonlyArray<string> {
   const rows = useMergedNotificationRows();

@@ -28,7 +28,7 @@ type MixFeedSignals = Pick<MixSignals, "blocking" | "failure" | "done">;
 
 type FeedRow = Pick<
   MergedNotificationRow,
-  "severity" | "readAt" | "botAnswer" | "createdAt"
+  "source" | "severity" | "readAt" | "botAnswer" | "createdAt"
 >;
 
 /**

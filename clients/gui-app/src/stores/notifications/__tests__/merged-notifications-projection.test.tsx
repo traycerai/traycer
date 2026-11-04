@@ -46,6 +46,7 @@ import {
   useMergedNotificationRow,
   useMergedNotificationUnreadCount,
   useNotificationBellState,
+  useBlockingAttentionCount,
   useNotificationCenterHostState,
   useRecentNotificationIds,
   type NotificationBellState,
@@ -617,6 +618,25 @@ describe("merged notification projection (Attention / Recent)", () => {
 
     expect(attention.current).toEqual([globalFeedId("invite-unread")]);
     expect(recent.current).toEqual([globalFeedId("invite-read")]);
+  });
+
+  it("keeps an unread task invitation out of the blocking count: no agent is waiting", () => {
+    applyHostSnapshot([hostPrompt("prompt", 100, null)], {
+      unreadCount: 1,
+      attentionCount: 1,
+    });
+    seedGlobal([invitedEntry("invite", 50, null)]);
+
+    const { result } = renderHook(() => ({
+      attention: useAttentionNotificationIds(),
+      blocking: useBlockingAttentionCount(),
+    }));
+
+    expect(result.current.attention).toEqual([
+      hostFeedId("prompt"),
+      globalFeedId("invite"),
+    ]);
+    expect(result.current.blocking).toBe(1);
   });
 
   it("keeps resolved prompts in Attention until their notification is read", () => {

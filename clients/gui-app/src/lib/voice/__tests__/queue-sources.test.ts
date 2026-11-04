@@ -92,7 +92,14 @@ describe("replyRefsOf", () => {
       }),
     },
     { name: "a failure", excluded: row({ severity: "failure" }) },
-    { name: "a global row", excluded: row({ source: "global" }) },
+    {
+      name: "a task invitation",
+      excluded: row({
+        source: "global",
+        severity: "needs_action",
+        botAnswer: false,
+      }),
+    },
     {
       name: "a bot row with no message id",
       excluded: row({

@@ -14,11 +14,12 @@ const WINDOW = MIX_TUNING.doneWindowMs;
 
 type Row = Pick<
   MergedNotificationRow,
-  "severity" | "readAt" | "botAnswer" | "createdAt"
+  "source" | "severity" | "readAt" | "botAnswer" | "createdAt"
 >;
 
 function rowOf(overrides: Partial<Row>): Row {
   return {
+    source: "host",
     severity: "done",
     readAt: null,
     botAnswer: false,
@@ -65,6 +66,11 @@ describe("feedSignalsOfRows", () => {
       failure: 2,
       done: 0,
     });
+  });
+
+  it("leaves out an unread task invitation: attention-grade, but no agent is waiting", () => {
+    const rows = [rowOf({ source: "global", severity: "needs_action" })];
+    expect(feedSignalsOfRows(rows, NOW).blocking).toBe(0);
   });
 
   it("counts a done row inside the window, read or not, and not one outside it", () => {
