@@ -246,7 +246,7 @@ describe("<HostSwitcher /> sandbox grouping", () => {
 });
 
 describe("<HostSwitcher /> sandbox rows", () => {
-  it("disables a frozen sandbox where a host must be dialable, and says it is frozen", () => {
+  it("disables a frozen sandbox where a host must be dialable, and shows its lifecycle and condition", () => {
     renderSwitcher({
       hosts: [PERSONAL, FROZEN],
       selected: PERSONAL,
@@ -254,8 +254,8 @@ describe("<HostSwitcher /> sandbox rows", () => {
       intent: "bind",
     });
     expect(row("sbx-frozen").getAttribute("aria-disabled")).toBe("true");
-    expect(row("sbx-frozen").textContent).toContain("frozen");
-    expect(row("sbx-frozen").textContent).not.toContain("suspended");
+    expect(row("sbx-frozen").textContent).toContain("Suspended");
+    expect(row("sbx-frozen").textContent).toContain("Out of credits");
   });
 
   it("speaks the lifecycle word, not 'offline', for a suspended sandbox", () => {
@@ -265,9 +265,9 @@ describe("<HostSwitcher /> sandbox rows", () => {
       action: PICKER_ACTION,
       intent: "bind",
     });
-    expect(row("sbx-suspended").textContent).toContain("suspended");
+    expect(row("sbx-suspended").textContent).toContain("Suspended");
     expect(row("sbx-suspended").textContent).not.toContain("offline");
-    expect(row("sbx-awake").textContent).toContain("awake");
+    expect(row("sbx-awake").textContent).toContain("Awake");
     expect(row("sbx-awake").getAttribute("aria-disabled")).not.toBe("true");
   });
 
@@ -279,7 +279,21 @@ describe("<HostSwitcher /> sandbox rows", () => {
       intent: "view",
     });
     expect(row("sbx-frozen").getAttribute("aria-disabled")).not.toBe("true");
-    expect(row("sbx-frozen").textContent).toContain("frozen");
+    expect(row("sbx-frozen").textContent).toContain("Suspended");
+    expect(row("sbx-frozen").textContent).toContain("Out of credits");
+  });
+
+  it("names both the lifecycle and frozen condition in the trigger's accessible label", () => {
+    renderSwitcher({
+      hosts: [FROZEN],
+      selected: FROZEN,
+      action: PICKER_ACTION,
+      intent: "bind",
+    });
+
+    expect(
+      screen.getByTestId("settings-host-switcher").getAttribute("aria-label"),
+    ).toContain("Suspended · Out of credits");
   });
 
   it("calls a sandbox row a Sandbox to assistive tech", () => {

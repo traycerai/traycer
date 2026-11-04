@@ -1,6 +1,7 @@
 import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
 import { Badge } from "@/components/ui/badge";
 import { useState, type ReactNode } from "react";
+import { HOST_FROZEN_WORD } from "@traycer/protocol/host/host-status";
 import {
   ChevronDown,
   ChevronRight,
@@ -1141,9 +1142,13 @@ function hostSwitcherTriggerText(
       : hostOptionStatusWord(selected, AVAILABLE_HOST_ROW_SURFACE_STATE);
   const name =
     selected === null ? null : hostRowTitle(selected, composer !== null);
+  const spokenStatus =
+    status !== null && selected?.sandbox?.frozen
+      ? `${status} · ${HOST_FROZEN_WORD}`
+      : status;
   return {
     label: name ?? "Select a host",
-    ariaLabel: hostSwitcherLabel(intent, name, status),
+    ariaLabel: hostSwitcherLabel(intent, name, spokenStatus),
     status,
   };
 }
@@ -1228,6 +1233,9 @@ function HostSwitcherTrigger(props: {
             {triggerStatus}
           </span>
         )}
+        {triggerStatus !== null && selected?.sandbox?.frozen ? (
+          <Badge variant="warning">{HOST_FROZEN_WORD}</Badge>
+        ) : null}
         <ChevronDown className="size-3.5 shrink-0 text-muted-foreground" />
       </Button>
     </PopoverTrigger>

@@ -2578,12 +2578,12 @@ describe("PublishedChatTile - a sandbox chat's state, by precedence", () => {
     [
       "released",
       { state: "released", kind: "automation" },
-      "e2e-sbx-p1 is suspended · files kept · the next shell starts it",
+      "e2e-sbx-p1 is not running · files kept · the next shell starts it",
     ],
     [
       "destroyed before the task records its end",
       { state: "destroyed" },
-      "Destroying e2e-sbx-p1 · pending",
+      "Destroyed e2e-sbx-p1 · pending",
     ],
   ] as const)(
     "says a listed %s sandbox's own line, never the unknown one",

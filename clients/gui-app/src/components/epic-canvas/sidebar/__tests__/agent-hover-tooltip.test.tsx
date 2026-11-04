@@ -261,7 +261,7 @@ vi.mock("@/components/worktree/worktree-owner-metadata", () => ({
 
 import { AgentHoverTooltip } from "@/components/epic-canvas/sidebar/agent-hover-tooltip";
 import { TooltipProvider } from "@/components/ui/tooltip";
-import { SANDBOX_PUBLIC_STATE_LABEL } from "@/lib/sandboxes/sandbox-row-lines";
+import { hostSandboxStateWord } from "@traycer/protocol/host/host-status";
 
 const CLAIM: RoleClaim = {
   claimId: "claim-1",
@@ -674,7 +674,7 @@ describe("AgentHoverTooltip host section", () => {
     const text = screen.getByTestId("worktree-host-section").textContent;
     expect(text).toContain("Host");
     expect(text).toContain("build-box");
-    expect(text).toContain(SANDBOX_PUBLIC_STATE_LABEL.awake);
+    expect(text).toContain(hostSandboxStateWord("awake"));
     expect(text).toContain("unknown");
     expect(text).toContain(shortPriceLabel(120));
     expect(text).toContain("Sandbox · Linux · 2 vCPU · 4 GB");

@@ -1,5 +1,5 @@
 import type { HostHealthState } from "@/components/settings/host-scope/host-health";
-import type { HostSandboxState } from "@traycer/protocol/host/host-status";
+import { hostSandboxStateWord } from "@traycer/protocol/host/host-status";
 import { isSandboxAsleep } from "@traycer-clients/shared/host-client/sandbox-control";
 import type { HostDirectoryEntry } from "@traycer-clients/shared/host-client/host-directory";
 import { isSandboxHostDirectoryEntry } from "@traycer-clients/shared/host-client/remote-fetcher";
@@ -217,7 +217,12 @@ export function hostOptionStatusWord(
   // that is fine.
   const sandboxWord =
     host.sandbox === null ? null : sandboxStateWord(host.sandbox);
-  if (sandboxWord !== null && sandboxWord !== "awake") return sandboxWord;
+  if (
+    host.sandbox !== null &&
+    (host.sandbox.state !== "awake" || host.sandbox.frozen)
+  ) {
+    return sandboxWord;
+  }
   const statusWord = STATUS_WORD[host.health.state];
   if (statusWord !== null) return statusWord;
   if (surfaceState.kind === "refused") return surfaceState.word;
@@ -299,7 +304,7 @@ function lastSeenLabel(lastSeenAt: string | null): string | null {
  */
 export function sandboxWordYieldsToHealth(host: HostScopeOption): boolean {
   if (host.sandbox === null) return false;
-  if (sandboxStateWord(host.sandbox) !== "awake") return false;
+  if (host.sandbox.state !== "awake" || host.sandbox.frozen) return false;
   return STATUS_WORD[host.health.state] !== null;
 }
 
@@ -491,28 +496,10 @@ export function hostOptionKindLabel(host: HostScopeOption): string {
  * connectivity it would otherwise show. Every state has a word, `awake`
  * included: a sandbox is billed by state, so "awake" is information a person
  * scanning the list acts on, where a personal host's "online" is not.
- * `frozen` leads, because it is why a suspended or stopped sandbox will not
- * wake; a destroyed or failed row never reads frozen (the flag is folded with
- * the state upstream, `isSandboxFrozenInEffect`).
+ * Frozen is a condition shown beside the lifecycle, never in its place.
  */
-const SANDBOX_STATE_WORD: Record<HostSandboxState, string> = {
-  creating: "creating",
-  awake: "awake",
-  suspending: "suspending",
-  suspended: "suspended",
-  resuming: "resuming",
-  stopping: "stopping",
-  stopped: "stopped",
-  starting: "starting",
-  destroying: "destroying",
-  destroyed: "destroyed",
-  failed: "failed",
-  released: "released",
-};
-
-export function sandboxStateWord(sandbox: HostScopeSandbox): string | null {
-  if (sandbox.frozen) return "frozen";
-  return sandbox.state === null ? null : SANDBOX_STATE_WORD[sandbox.state];
+export function sandboxStateWord(sandbox: HostScopeSandbox): string {
+  return hostSandboxStateWord(sandbox.state);
 }
 
 /**

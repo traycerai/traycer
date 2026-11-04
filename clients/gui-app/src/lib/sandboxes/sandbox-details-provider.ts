@@ -6,6 +6,10 @@ import type {
   SandboxSummary,
   UserSandboxCost,
 } from "@traycer/protocol/host/sandbox-control";
+import {
+  HOST_FROZEN_WORD,
+  hostSandboxStateWord,
+} from "@traycer/protocol/host/host-status";
 import { sandboxQueryKeys } from "@/lib/query-keys";
 import type {
   DetailsEntry,
@@ -17,14 +21,12 @@ import type {
 import { frozenDestroyAt } from "@/lib/sandboxes/sandbox-balance";
 import {
   SANDBOX_DEFAULT_IDLE_MINUTES,
-  SANDBOX_PUBLIC_STATE_LABEL,
   formatSandboxAge,
   formatSandboxDate,
   formatSandboxUtcDay,
   sandboxFailedToStart,
   sandboxMemberName,
   sandboxPeriodLabel,
-  sandboxPublicState,
   sandboxRegionLabel,
   sandboxReportedAt,
   sandboxRetentionIsWithdrawn,
@@ -165,7 +167,7 @@ function statusRows(input: SandboxDetailsInput): SandboxDetailsRow[] {
   const rows: SandboxDetailsRow[] = [
     {
       label: "State",
-      value: SANDBOX_PUBLIC_STATE_LABEL[sandboxPublicState(summary)],
+      value: hostSandboxStateWord(summary.state),
     },
     {
       label: "Last report",
@@ -237,7 +239,7 @@ function statusRows(input: SandboxDetailsInput): SandboxDetailsRow[] {
   }
   if (summary.frozen && summary.frozenAt !== null) {
     rows.push({
-      label: "Frozen",
+      label: HOST_FROZEN_WORD,
       value: `out of credits since ${formatSandboxDate(summary.frozenAt, true)}; destroyed on ${formatSandboxDate(frozenDestroyAt(summary.frozenAt), true)}`,
     });
   }
@@ -516,13 +518,13 @@ function sandboxReason(summary: SandboxSummary): string | null {
   if (summary.state === "failed") {
     return sandboxFailedToStart(summary.failureCode);
   }
-  if (summary.frozen) return "Out of credits";
+  if (summary.frozen) return HOST_FROZEN_WORD;
   if (summary.guestConfigured === false) return "Settings didn't apply";
   return null;
 }
 
 function detailsStatus(summary: SandboxSummary): DetailsStatus {
-  const state = SANDBOX_PUBLIC_STATE_LABEL[sandboxPublicState(summary)];
+  const state = hostSandboxStateWord(summary.state);
   const reason = sandboxReason(summary);
   return {
     summary: [state, sandboxShapeLine(summary), sandboxRegionLabel(summary)]

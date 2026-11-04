@@ -78,8 +78,6 @@ function unsettledSandboxState(
     case "released":
       return { kind: "released", sandbox };
     case "destroyed":
-      // Its end record has not reached the task yet.
-      return { kind: "moving", sandbox, state: "destroying" };
     case "creating":
     case "resuming":
     case "starting":

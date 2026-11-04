@@ -1,4 +1,6 @@
 import type { ReactNode } from "react";
+import { HOST_FROZEN_WORD } from "@traycer/protocol/host/host-status";
+import { Badge } from "@/components/ui/badge";
 import type { HostBusyBreakdown } from "@traycer/protocol/host/status/index";
 import { describeHostBusy } from "@/components/host/host-restart-copy";
 import {
@@ -208,9 +210,12 @@ export function HostIdentityCard(props: {
                 className="text-ui-sm font-medium text-muted-foreground"
                 data-testid="host-identity-sandbox-state"
               >
-                {capitalizeWord(sandboxStateWord(host.sandbox) ?? "sandbox")}
+                {sandboxStateWord(host.sandbox)}
               </span>
             )}
+            {host.sandbox?.frozen ? (
+              <Badge variant="warning">{HOST_FROZEN_WORD}</Badge>
+            ) : null}
             {/* `health.detail` renders for the NON-live states only. Live
                 details are the redundant ones — "Running on this computer."
                 repeats the `Local` tag, and the relay route line was
@@ -358,8 +363,4 @@ function HostIdentityHealth(props: {
 function hostKindTag(host: HostScopeOption): string {
   if (host.isLocalMachine) return "This computer";
   return host.sandbox === null ? "Remote" : "Sandbox";
-}
-
-function capitalizeWord(word: string): string {
-  return word.length === 0 ? word : word[0].toUpperCase() + word.slice(1);
 }

@@ -1,4 +1,7 @@
-import type { HostSandboxState } from "@traycer/protocol/host/host-status";
+import {
+  hostSandboxStateWord,
+  type HostSandboxState,
+} from "@traycer/protocol/host/host-status";
 import {
   parseSandboxHeartbeatPhase,
   sandboxSupportReference,
@@ -125,7 +128,7 @@ const STATE_LINE: Record<HostSandboxState, string> = {
   destroying: "Destroying. Its disk is being deleted.",
   destroyed: "Destroyed. Its disk is gone and nothing more is billed.",
   failed: "Failed to start.",
-  released: "Suspended, files kept. The next shell starts it.",
+  released: `${hostSandboxStateWord("released")}, files kept. The next shell starts it.`,
 };
 
 /** "Nov 7, 2026", in the reader's own zone: for an instant that happened. */
@@ -495,7 +498,7 @@ export function sandboxTileOverlay(
     case "suspended":
       return {
         kind: "asleep",
-        message: "Suspended, resumes on your next action",
+        message: `${hostSandboxStateWord(state)}, resumes on your next action`,
         verb: "resume",
         label: "Resume",
       };
@@ -503,22 +506,22 @@ export function sandboxTileOverlay(
     case "stopped":
       return {
         kind: "asleep",
-        message: "Stopped",
+        message: hostSandboxStateWord(state),
         verb: "start",
         label: "Start",
       };
-    // The Automations row at rest: `start` opens it. Suspended, as its badge.
+    // The Automations row at rest: `start` opens it, with its files kept.
     case "released":
       return {
         kind: "asleep",
-        message: "Suspended",
+        message: hostSandboxStateWord(state),
         verb: "start",
         label: "Start",
       };
     case "resuming":
-      return { kind: "moving", message: "Resuming" };
+      return { kind: "moving", message: hostSandboxStateWord(state) };
     case "starting":
-      return { kind: "moving", message: "Starting" };
+      return { kind: "moving", message: hostSandboxStateWord(state) };
     // Awake renders normally; creating, failed and destroyed are the tile's
     // own connection states, which it already shows.
     case "creating":

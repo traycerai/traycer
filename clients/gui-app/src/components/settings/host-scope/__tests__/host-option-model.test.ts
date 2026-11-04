@@ -338,7 +338,7 @@ describe("hostOptionStatusWord - a sandbox's lifecycle word against its health",
           sandboxOption({ state: "awake", frozen: false, health }),
           available,
         ),
-      ).toBe("awake");
+      ).toBe("Awake");
     }
   });
 
@@ -364,13 +364,13 @@ describe("hostOptionStatusWord - a sandbox's lifecycle word against its health",
         sandboxOption({ state: "suspended", frozen: false, health: "offline" }),
         available,
       ),
-    ).toBe("suspended");
+    ).toBe("Suspended");
     expect(
       hostOptionStatusWord(
         sandboxOption({ state: "awake", frozen: true, health: "offline" }),
         available,
       ),
-    ).toBe("frozen");
+    ).toBe("Awake");
   });
 });
 

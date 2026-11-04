@@ -945,7 +945,7 @@ describe("<SandboxesSettingsPanel />", () => {
       "awake-1": ["Awake", "Suspend"],
       "suspended-1": ["Suspended", "Resume"],
       "stopped-1": ["Stopped", "Start"],
-      "frozen-1": ["Frozen", "Add credits ↗"],
+      "frozen-1": ["Suspended", "Add credits ↗"],
       "failed-1": ["Failed", "Retry"],
     };
     for (const [id, [badge, primary]] of Object.entries(expected)) {
@@ -956,6 +956,9 @@ describe("<SandboxesSettingsPanel />", () => {
       expect(within(element).getByTestId("row-primary").textContent).toBe(
         primary,
       );
+      if (id === "frozen-1") {
+        expect(within(element).getByText("Out of credits")).toBeDefined();
+      }
     }
   });
 
@@ -1029,7 +1032,7 @@ describe("<SandboxesSettingsPanel />", () => {
       ).toContain("1 session");
     });
 
-    it("reorders from current activity when a public state changes", () => {
+    it("orders raw awake rows first, and keeps that order when only frozen changes", () => {
       mocks.sandboxes = [
         row("older", { lastActivityAt: 100 }),
         row("newer", { lastActivityAt: 200 }),
@@ -1049,7 +1052,7 @@ describe("<SandboxesSettingsPanel />", () => {
         summary.id === "older" ? { ...summary, frozen: true } : summary,
       );
       rerender(<SandboxesSettingsPanel />);
-      expect(names()).toEqual(["sleeping", "newer", "older"]);
+      expect(names()).toEqual(["older", "sleeping", "newer"]);
     });
 
     it("keeps the order when a transition lands in the same public state", () => {
@@ -1203,7 +1206,7 @@ describe("<SandboxesSettingsPanel />", () => {
     );
     expect(
       within(rowOf("frozen")).getByTestId("sandboxes-row-clock").textContent,
-    ).toContain("destroyed on");
+    ).toContain("Will be removed on");
   });
 
   it("narrows the list by the search and by the state filter, with a count badge", () => {
@@ -1273,7 +1276,7 @@ describe("<SandboxesSettingsPanel />", () => {
       kind: "automation",
     });
 
-    it.each(["all", "awake", "suspended", "stopped", "frozen", "failed"])(
+    it.each(["all", "awake", "suspended", "stopped", "resuming", "failed"])(
       "offers the header action only for idle State filters: %s",
       async (state) => {
         const idleState = state === "stopped" ? "stopped" : "suspended";
@@ -2542,10 +2545,10 @@ describe("<SandboxesSettingsPanel />", () => {
       ).toBe("Automations");
       expect(
         within(automations).getByTestId("sandboxes-row-state").textContent,
-      ).toBe("Suspended");
+      ).toBe("Not running");
       expect(
         within(automations).getByTestId("sandboxes-row-clock").textContent,
-      ).toBe("Suspended · files kept · the next shell starts it");
+      ).toBe("Not running · files kept · the next shell starts it");
       expect(
         within(automations).getByRole("button", { name: "Open terminal" }),
       ).toBeDefined();

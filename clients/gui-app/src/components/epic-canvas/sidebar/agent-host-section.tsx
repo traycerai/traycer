@@ -1,5 +1,9 @@
 import { useEffect, type ReactNode } from "react";
 import type { HostRpcRegistry } from "@traycer/protocol/host/index";
+import {
+  HOST_FROZEN_WORD,
+  hostSandboxStateWord,
+} from "@traycer/protocol/host/host-status";
 import type {
   SandboxMember,
   SandboxSummary,
@@ -48,10 +52,8 @@ import {
   wakeString,
 } from "@/lib/sandboxes/sandbox-strings";
 import {
-  SANDBOX_PUBLIC_STATE_LABEL,
   sandboxMemberName,
   sandboxHostActivityLine,
-  sandboxPublicState,
   sandboxIdlePolicyLine,
   sandboxSessionKinds,
   sandboxShapeLine,
@@ -245,7 +247,8 @@ function HostHeading(props: {
       />
       <span className="font-medium break-words">{sandbox.displayName}</span>
       <span className="text-muted-foreground">
-        {SANDBOX_PUBLIC_STATE_LABEL[sandboxPublicState(sandbox)]}
+        {hostSandboxStateWord(sandbox.state)}
+        {sandbox.frozen ? ` · ${HOST_FROZEN_WORD}` : ""}
         {props.awake && sandbox.priceMcPerHour !== null
           ? ` · ${shortPriceLabel(sandbox.priceMcPerHour.awakeMc)}`
           : ""}

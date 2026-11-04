@@ -204,7 +204,7 @@ describe("sandboxStateLine", () => {
 
   it("says a released row's files are kept and the next shell starts it", () => {
     expect(sandboxStateLine("released", false, null)).toBe(
-      "Suspended, files kept. The next shell starts it.",
+      "Not running, files kept. The next shell starts it.",
     );
   });
 
@@ -484,6 +484,10 @@ describe("sandboxTileOverlay", () => {
         kind: "asleep",
         verb: "resume",
         label: "Resume",
+        message:
+          state === "suspending"
+            ? "Suspending, resumes on your next action"
+            : "Suspended, resumes on your next action",
       });
     }
     for (const state of ["stopping", "stopped"] as const) {
@@ -491,6 +495,7 @@ describe("sandboxTileOverlay", () => {
         kind: "asleep",
         verb: "start",
         label: "Start",
+        message: state === "stopping" ? "Stopping" : "Stopped",
       });
     }
   });
@@ -509,7 +514,7 @@ describe("sandboxTileOverlay", () => {
   it("offers a released row a Start overlay", () => {
     expect(sandboxTileOverlay("released", false)).toEqual({
       kind: "asleep",
-      message: "Suspended",
+      message: "Not running",
       verb: "start",
       label: "Start",
     });
