@@ -1192,7 +1192,7 @@ describe("the defaults that changed for a new install only", () => {
     expect(storedLayoutVersion()).toBe(8);
   });
 
-  it("keeps a version-7 record's own picks: a vertical strip at the right listing its agents", async () => {
+  it("keeps a version-7 record's own picks: a vertical strip at the right listing its agents, the pair unstacked", async () => {
     writeLayoutRecordAtVersion(
       {
         basePreset: "default",
@@ -1200,6 +1200,9 @@ describe("the defaults that changed for a new install only", () => {
         arrangement: v15Arrangement({
           tabStripPlacement: "right",
           sideStripView: "activity",
+          rail: DEFAULT_ARRANGEMENT.rail.filter(
+            (entry) => entry.kind === "panel",
+          ),
         }),
       },
       7,
@@ -1210,6 +1213,7 @@ describe("the defaults that changed for a new install only", () => {
     expect(state().arrangement.tabStripPlacement).toBe("right");
     expect(state().arrangement.sidebarStartCollapsed).toBe(false);
     expect(state().arrangement.sideStripView).toBe("activity");
+    expect(railStacks(state().arrangement.rail)).toEqual([]);
   });
 
   it("keeps a current record's own sidebarStartCollapsed, whichever way it says", async () => {
