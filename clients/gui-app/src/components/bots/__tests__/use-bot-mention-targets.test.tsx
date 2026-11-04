@@ -12,7 +12,10 @@ import type {
   BotTaskEntry,
 } from "@traycer/protocol/host/bot/schemas";
 import type { EnvironmentDescriptor } from "@traycer/protocol/host/environment/contracts";
-import type { ListTaskLight } from "@traycer/protocol/host/epic/unary-schemas";
+import type {
+  ListTaskLight,
+  ListTasksCompleteness,
+} from "@traycer/protocol/host/epic/unary-schemas";
 import { useBotMentionTargets } from "@/components/bots/use-bot-mention-targets";
 import { buildHomeBotsModel } from "@/lib/home-bots/bots-model";
 import { tracyRecord } from "@/lib/home-bots/__tests__/standalone-bots-fixtures";
@@ -37,6 +40,10 @@ const mocks = vi.hoisted(() => ({
   /** Whether Home's first page is still pending, and the error it failed with. */
   homePending: false,
   homeError: null as Error | null,
+  /** Whether Home presents a cached page, and whether its cloud half is pending. */
+  homeCached: false,
+  homeCloudPending: false,
+  homeCompleteness: null as ListTasksCompleteness | null,
   /** The stream task contexts read's pending flag and error. */
   contextsPending: false,
   contextsError: null as Error | null,
@@ -57,6 +64,9 @@ vi.mock("@/hooks/epics/use-cloud-epic-tasks-query", () => ({
     tasks: mocks.homeTasks,
     firstPagePending: mocks.homePending,
     firstPageError: mocks.homeError,
+    presentsCachedPage: mocks.homeCached,
+    isCloudPagePending: mocks.homeCloudPending,
+    completeness: mocks.homeCompleteness,
   }),
 }));
 
@@ -156,6 +166,9 @@ beforeEach(() => {
   mocks.homeTasks = [];
   mocks.homePending = false;
   mocks.homeError = null;
+  mocks.homeCached = false;
+  mocks.homeCloudPending = false;
+  mocks.homeCompleteness = null;
   mocks.contextsPending = false;
   mocks.contextsError = null;
   useAuthStore.setState({
@@ -257,7 +270,7 @@ describe("useBotMentionTargets tasks", () => {
     ]);
   });
 
-  it("is unsettled while Home's first page is pending, and settled once it answered", () => {
+  it("is unsettled while Home's first page is pending, and settled once it answered with no cached page, pending cloud half or completeness reported", () => {
     mocks.homePending = true;
     const { result, rerender } = targetsOf(TEAM_ENV, []);
 
@@ -283,5 +296,37 @@ describe("useBotMentionTargets tasks", () => {
     mocks.homeError = new Error("cloud down");
     rerender();
     expect(result.current.tasksSettled).toBe(false);
+  });
+
+  it("is unsettled while Home presents a cached page, whose cloud half has not answered", () => {
+    mocks.homeCached = true;
+
+    expect(targetsOf(TEAM_ENV, []).result.current.tasksSettled).toBe(false);
+  });
+
+  it("is unsettled while a local-first snapshot waits on the cloud's half", () => {
+    mocks.homeCloudPending = true;
+
+    expect(targetsOf(TEAM_ENV, []).result.current.tasksSettled).toBe(false);
+  });
+
+  it("is unsettled when the cloud's page is unavailable, and settled when it settled", () => {
+    mocks.homeCompleteness = {
+      cloudPage: "unavailable",
+      facets: "server",
+      localRows: "none",
+      sort: "server",
+    };
+    const { result, rerender } = targetsOf(TEAM_ENV, []);
+    expect(result.current.tasksSettled).toBe(false);
+
+    mocks.homeCompleteness = {
+      cloudPage: "settled",
+      facets: "server",
+      localRows: "none",
+      sort: "server",
+    };
+    rerender();
+    expect(result.current.tasksSettled).toBe(true);
   });
 });

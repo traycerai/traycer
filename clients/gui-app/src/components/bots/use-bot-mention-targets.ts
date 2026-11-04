@@ -17,7 +17,7 @@ export interface BotMentionTargets {
   /** `null` while the bots directory has not answered. */
   readonly bots: ReadonlyArray<BotMentionTarget> | null;
   readonly tasks: ReadonlyArray<BotMentionTarget>;
-  /** Home's first page and the stream's task contexts have answered. */
+  /** The cloud's own first page of Home and the stream's task contexts have answered. */
   readonly tasksSettled: boolean;
 }
 
@@ -83,9 +83,16 @@ export function useBotMentionTargets(input: {
     return targets;
   }, [contexts.tasksById, environmentId, home.tasks, streamTaskIds]);
 
+  // Settled only on the cloud's own first page: a cached page or a local
+  // snapshot whose cloud half is pending may lack a task the cloud lists, and
+  // one whose cloud half is unavailable, or a read that failed, will not
+  // bring it. Until then a task the directory lacks stays as written.
   const tasksSettled =
     !home.firstPagePending &&
     home.firstPageError === null &&
+    !home.presentsCachedPage &&
+    !home.isCloudPagePending &&
+    home.completeness?.cloudPage !== "unavailable" &&
     !contexts.isPending &&
     contexts.error === null;
 

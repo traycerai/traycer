@@ -274,6 +274,9 @@ vi.mock("@/hooks/epics/use-cloud-epic-tasks-query", async (importOriginal) => ({
     tasks: mocks.homeTasks,
     firstPagePending: mocks.homeFirstPagePending,
     firstPageError: null,
+    presentsCachedPage: false,
+    isCloudPagePending: false,
+    completeness: null,
   }),
 }));
 vi.mock("@/hooks/host/use-host-supports-method", () => ({
