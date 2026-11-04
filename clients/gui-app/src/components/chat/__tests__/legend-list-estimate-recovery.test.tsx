@@ -258,6 +258,60 @@ describe("LegendList estimate recovery", () => {
     );
   });
 
+  // The follow latch records a row by `keyAtIndex` and later looks its top up
+  // with `positionByKey`. The list's id for a row is the extractor's string,
+  // or, when the list has no extractor, the index as a string, so the key
+  // from `keyAtIndex` has to find the row through the lookups in both cases.
+  describe("a row key read with keyAtIndex", () => {
+    it("finds the same row through positionByKey when the list has a key extractor", async () => {
+      const listRef = createRef<LegendListRef | null>();
+      render(createTestList(rows(12), listRef));
+      await settleLegendList();
+
+      const list = listRef.current;
+      if (list === null) throw new Error("LegendList ref did not mount");
+      const state = list.getState();
+
+      for (const index of [0, 5, 11]) {
+        expect(state.keyAtIndex(index)).toBe(`row-${index}`);
+        expect(state.positionByKey(state.keyAtIndex(index))).toBe(
+          measured(state.positionAtIndex(index)),
+        );
+      }
+    });
+
+    it("finds the same row through positionByKey when the list has no key extractor", async () => {
+      const listRef = createRef<LegendListRef | null>();
+      render(
+        <LegendList
+          ref={listRef}
+          data={rows(12)}
+          estimatedItemSize={90}
+          getItemType={() => "assistant"}
+          recycleItems={false}
+          renderItem={({ item }) => <div data-index={item.id}>{item.id}</div>}
+        />,
+      );
+      await settleLegendList();
+
+      const list = listRef.current;
+      if (list === null) throw new Error("LegendList ref did not mount");
+      const state = list.getState();
+
+      for (const index of [0, 5, 11]) {
+        expect(state.keyAtIndex(index)).toBe(String(index));
+        expect(state.positionByKey(state.keyAtIndex(index))).toBe(
+          measured(state.positionAtIndex(index)),
+        );
+      }
+      // Distinct rows resolve to distinct tops, so the lookup is not
+      // answering with one row's position for every key.
+      expect(state.positionByKey(state.keyAtIndex(5))).toBeGreaterThan(
+        measured(state.positionByKey(state.keyAtIndex(0))),
+      );
+    });
+  });
+
   it("cancels consecutive imperative scrolls without rebinding the browser canceller", async () => {
     const listRef = createRef<LegendListRef | null>();
     render(createTestList(rows(20), listRef));
