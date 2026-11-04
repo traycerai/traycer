@@ -15,9 +15,10 @@ export const MENTION_TOKEN_REGEX = /(^|\s)@([^\s@]+)(?=\s|$)/g;
 // swallow another's token.
 // `browser-tab:<title>` carries no `/epicId` segment (a browser tab is not
 // epic-entity-shaped the way `chat:`/`terminal:` are), so it gets its own
-// bare alternative rather than joining the `type:epicId/id` group.
+// bare alternative rather than joining the `type:epicId/id` group; so does
+// `bot:<botId>`, whose id is its own task.
 const COMPLETE_ENTITY_TOKEN_REGEX =
-  /^(epic:[^/\s]+|browser-tab:[^/\s]+|(spec|ticket|story|review|chat|terminal-agent|terminal|github-pr|github-issue):[^/\s]+\/[^\s]+)$/u;
+  /^(epic:[^/\s]+|browser-tab:[^/\s]+|bot:[^/\s]+|(spec|ticket|story|review|chat|terminal-agent|terminal|github-pr|github-issue):[^/\s]+\/[^\s]+)$/u;
 
 /**
  * A GitHub entity token ends at its reference, and nothing after it belongs.
