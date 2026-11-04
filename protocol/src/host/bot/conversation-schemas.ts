@@ -598,6 +598,8 @@ export const botConversationSearchRequestSchema = lazySchema(() =>
      * Good only for the search that issued it, by the same caller, for
      * minutes after its last page and until the host restarts; anything else
      * answers `E_INVALID_ARGUMENT`, and the search starts again from `null`.
+     * Asking again from `null` closes the search's open pages. A search too
+     * large for the host to keep open answers the same code.
      */
     cursor: botConversationSearchCursorSchema,
     limit: z.number().int().min(1).max(BOT_CONVERSATION_SEARCH_MAX_PAGE_SIZE),
@@ -681,6 +683,11 @@ export type BotConversationSearchUnreachable = z.infer<
 export const botConversationSearchResponseSchema = lazySchema(() =>
   z.object({
     hits: z.array(botConversationSearchHitSchema),
+    /**
+     * `null` is the only end of a search: a page may hold no hits and still
+     * carry a cursor. In `newest`, a row whose time changes between pages may
+     * come back; a client drops repeats by message.
+     */
     nextCursor: botConversationSearchCursorSchema,
     /**
      * `partial` while an index has not caught up, or a bot's host did not
