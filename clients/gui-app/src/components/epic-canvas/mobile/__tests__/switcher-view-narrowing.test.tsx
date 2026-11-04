@@ -5,6 +5,26 @@ import { useLeftPanelStore } from "@/stores/epics/left-panel-store";
 import { SORT_FIELD } from "@/lib/epic-sort";
 import type { ArtifactSearchResults } from "@/components/epic-canvas/sidebar/use-artifact-search-results";
 
+// The artifacts list windows its rows by the scroller's measured height, which
+// jsdom reports as 0 - no rows at all. Report a tall viewport instead, so every
+// row this file narrows to is drawn; the windowing itself is covered in
+// `switcher-lists.test.tsx`.
+vi.mock("@tanstack/react-virtual", async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import("@tanstack/react-virtual")>();
+  return {
+    ...actual,
+    useVirtualizer: (options: Parameters<typeof actual.useVirtualizer>[0]) =>
+      actual.useVirtualizer({
+        ...options,
+        observeElementRect: (_instance, onRect) => {
+          onRect({ width: 400, height: 10_000 });
+          return () => undefined;
+        },
+      }),
+  };
+});
+
 /**
  * The switcher's Agents and Artifacts lists narrow and order through the SAME
  * per-epic store the desktop sidebar writes, so these assertions are the parity

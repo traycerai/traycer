@@ -154,15 +154,61 @@ function rowMenuEntries(
  */
 export function SwitcherRowActions(props: SwitcherRowActionsProps) {
   const canMutate = isEditableRole(useEpicPermissionRole());
-  // Keyed on the role so a change of access remounts the body: a dialog opened
-  // as an editor is gone for good once access is lost, rather than staying
-  // submittable or reappearing on its own if access comes back.
+  if (!canMutate && props.kind !== "artifact") return null;
+  // Keyed on the role so a change of access remounts the row's actions: a
+  // dialog opened as an editor is gone for good once access is lost, rather
+  // than staying submittable or reappearing on its own if access comes back.
   return (
-    <SwitcherRowActionsBody
+    <SwitcherRowActionsGate
       key={canMutate ? "editor" : "viewer"}
       {...props}
       canMutate={canMutate}
     />
+  );
+}
+
+/**
+ * The "…" alone until it is pressed. The body behind it is a menu root, two
+ * dialogs and every mutation hook a row might need, and a list draws one of
+ * these per row: on a task with a thousand artifacts that is what the switcher
+ * spent most of its seconds mounting. A press mounts the body with its menu
+ * already open, so the first tap behaves as the trigger would have.
+ */
+function SwitcherRowActionsGate(
+  props: SwitcherRowActionsProps & { readonly canMutate: boolean },
+) {
+  const [armed, setArmed] = useState(false);
+  if (armed) return <SwitcherRowActionsBody {...props} />;
+  return (
+    // The same control the body's menu trigger is - label, test id, size -
+    // so the press lands on the one "…" the row has had all along.
+    <Button
+      type="button"
+      variant="muted"
+      size="icon-sm"
+      aria-label={`Actions for ${props.name}`}
+      aria-haspopup="menu"
+      aria-expanded={false}
+      data-testid={`switcher-more-${props.nodeId}`}
+      className="shrink-0"
+      onPointerDown={(event) => {
+        // The gesture the menu's own trigger opens on.
+        if (event.button === 0 && !event.ctrlKey) setArmed(true);
+      }}
+      onKeyDown={(event) => {
+        if (
+          event.key === "Enter" ||
+          event.key === " " ||
+          event.key === "ArrowDown"
+        ) {
+          event.preventDefault();
+          setArmed(true);
+        }
+      }}
+      onClick={() => setArmed(true)}
+    >
+      <MoreHorizontal className="size-4" />
+    </Button>
   );
 }
 
@@ -290,8 +336,6 @@ function SwitcherRowActionsBody(
     killTerminal.mutate({ sessionId: nodeId });
   }, [closeOpenTile, killTerminal, nodeId]);
 
-  if (!canMutate && kind !== "artifact") return null;
-
   const isTerminal = kind === "terminal";
   const deletePending =
     deleteChat.isPending ||
@@ -319,7 +363,8 @@ function SwitcherRowActionsBody(
 
   return (
     <>
-      <DropdownMenu>
+      {/* Open on mount: the body exists because the "…" was just pressed. */}
+      <DropdownMenu defaultOpen>
         <DropdownMenuTrigger asChild>
           <Button
             type="button"
