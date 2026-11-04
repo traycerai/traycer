@@ -1,3 +1,5 @@
+import { budgetCatalogue } from "@/lib/sandboxes/__tests__/sandbox-catalogue-fixture";
+import { sandboxReadinessLine } from "@/lib/sandboxes/sandbox-readiness";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   cleanup,
@@ -920,4 +922,46 @@ describe("SandboxSetupLine when the settings did not apply", () => {
     const retry = within(detail).getByTestId("sandbox-setup-retry-applying");
     expect(retry.hasAttribute("disabled")).toBe(true);
   });
+});
+
+describe("staged New readiness", () => {
+  it.each([{ warm: 2 }, { cold: 120_001 }])(
+    "renders the contextual readiness before a create starts",
+    (result) => {
+      const target = refused(
+        { kind: "personal" },
+        { kind: "failed", code: "create", step: "creating" },
+      ).target;
+      if (target.kind !== "new") throw new Error("expected New target");
+      const [provider] = budgetCatalogue(480_000).providers;
+      const catalogue = {
+        providers: [
+          {
+            ...provider,
+            readiness: {
+              request: {
+                os: "linux" as const,
+                shape: { cpus: 2, memoryMb: 4096, diskMb: 20480 },
+                region: "us-east",
+                generationId: null,
+              },
+              result,
+            },
+          },
+        ],
+      };
+      const line = sandboxReadinessLine(catalogue, target.shape);
+      render(
+        <SandboxSetupLine
+          stage={{ ...created(), target, phase: "staged", startedAt: null }}
+          name="api-refactor"
+          facts={{ ...facts(false), readinessLine: line }}
+          actions={ACTIONS}
+        />,
+      );
+      expect(screen.getByTestId("sandbox-staged-readiness").textContent).toBe(
+        line,
+      );
+    },
+  );
 });

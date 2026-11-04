@@ -107,6 +107,18 @@ describe("sandbox control plane mirror", () => {
     });
   });
 
+  it("preserves a row's wake budget and accepts older rows without it", () => {
+    expect(
+      sandboxListResponseSchema.parse({
+        sandboxes: [{ ...SANDBOX_VIEW, wakeBudgetMs: 300_000 }],
+      }).sandboxes[0]?.wakeBudgetMs,
+    ).toBe(300_000);
+    expect(
+      sandboxListResponseSchema.safeParse({ sandboxes: [SANDBOX_VIEW] })
+        .success,
+    ).toBe(true);
+  });
+
   it("preserves offered agents with the catalogue's shape bounds and from-prices", () => {
     const parsed = sandboxCatalogueSchema.parse({
       offeredAgents: ["traycer"],
@@ -253,6 +265,70 @@ describe("sandbox control plane mirror", () => {
         .providers[0];
       expect(row?.creatable).toBe(true);
       expect(row?.notCreatableReason).toBeNull();
+    });
+
+    it.each([
+      {},
+      {
+        suspendedMemoryGbHourMillicredits: null,
+        awakeDiskGbHourMillicredits: null,
+      },
+      { suspendedMemoryGbHourMillicredits: 30, awakeDiskGbHourMillicredits: 2 },
+      { suspendedMemoryGbHourMillicredits: 0, awakeDiskGbHourMillicredits: 0 },
+    ])(
+      "preserves optional pricing rates and accepts older pricing payloads",
+      (optional) => {
+        const pricing = {
+          vcpuHourMillicredits: 50,
+          memoryGbHourMillicredits: 25,
+          diskGbHourMillicredits: 0.5,
+          multiplier: 1.25,
+          ...optional,
+        };
+        const row = sandboxCatalogueSchema.parse({
+          providers: [
+            {
+              ...OLDER_ROW,
+              regions: [{ ...OLDER_ROW.regions[0], pricing }],
+            },
+          ],
+        }).providers[0];
+        expect(row?.regions[0]?.pricing).toEqual(pricing);
+      },
+    );
+
+    it.each([{ warm: 0 }, { warm: 2 }, { cold: 120_001 }, { cold: null }])(
+      "preserves the echoed readiness and derived create budget",
+      (result) => {
+        const readiness = {
+          request: {
+            os: "linux",
+            shape: { cpus: 2, memoryMb: 4096, diskMb: 20480 },
+            region: "us",
+            generationId: "gen-one",
+          },
+          result,
+        };
+        const row = sandboxCatalogueSchema.parse({
+          providers: [{ ...OLDER_ROW, createBudgetMs: 480_000, readiness }],
+        }).providers[0];
+        expect(row?.readiness).toEqual(readiness);
+        expect(row?.createBudgetMs).toBe(480_000);
+      },
+    );
+
+    it("preserves the disk rounding step while accepting older bounds without it", () => {
+      expect(
+        sandboxCatalogueSchema.parse({
+          providers: [
+            { ...OLDER_ROW, shape: { ...OLDER_ROW.shape, diskStepMb: 1024 } },
+          ],
+        }).providers[0]?.shape.diskStepMb,
+      ).toBe(1024);
+      expect(
+        sandboxCatalogueSchema.parse({ providers: [OLDER_ROW] }).providers[0]
+          ?.shape.diskStepMb,
+      ).toBeUndefined();
     });
 
     // Prevents a client dropping the reason a provider offers no shape.

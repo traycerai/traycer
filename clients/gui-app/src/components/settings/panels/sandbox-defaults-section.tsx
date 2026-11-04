@@ -33,6 +33,8 @@ import {
   configurationStageShape,
   stagePrice,
   stageProviderFor,
+  stageProviderForShape,
+  stageQuotedSize,
   stageShapeDefaults,
   type SandboxConfigurationDefaults,
   type StageShape,
@@ -83,11 +85,11 @@ function shapeLine(catalogue: SandboxCatalogue, shape: StageSize): string {
     .join(" · ");
 }
 
-/** A size's option key; an unset disk is the provider's default. */
+/** A size's option key, at the same geometry as its quote and saved defaults. */
 function sizeKey(catalogue: SandboxCatalogue, size: StageSize): string {
-  const disk =
-    size.diskMb ?? stageProviderFor(catalogue, size.os)?.shape.diskDefaultMb;
-  return `${size.os}:${size.cpus}:${size.memoryMb}:${disk ?? ""}`;
+  const provider = stageProviderForShape(catalogue, size);
+  const quoted = provider === null ? null : stageQuotedSize(provider, size);
+  return `${size.os}:${quoted?.shape.cpus ?? size.cpus}:${quoted?.shape.memoryMb ?? size.memoryMb}:${quoted?.shape.diskMb ?? size.diskMb ?? ""}`;
 }
 
 /**

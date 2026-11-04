@@ -1,3 +1,6 @@
+import { createPendingStageStorage } from "@/lib/sandboxes/pending-stage-storage";
+import { persistKey, STORE_KEYS } from "@/lib/persist/keys";
+import { budgetCatalogue } from "./sandbox-catalogue-fixture";
 import {
   afterEach,
   beforeEach,
@@ -711,6 +714,35 @@ describe("runStagedSandbox settling", () => {
 
     expect(clock.sleeps).toBe(1);
     expect(stageOf().phase).toBe("handoff");
+  });
+
+  it("waits beyond the legacy deadline for a fresh 480 second provider create budget", async () => {
+    useStagedSandboxStore.getState().stage(surfaceKey, PERSONAL_NEW);
+    const { auth, deps, clock } = harness(
+      { lists: [listOf(row({ state: "creating" }))] },
+      true,
+    );
+    vi.spyOn(auth, "getSandboxCatalogue").mockResolvedValue({
+      kind: "ok",
+      catalogue: budgetCatalogue(480_000),
+    });
+    const sleep = deps.sleep;
+    let legacyDeadlinePhase: string | undefined;
+    let legacyDeadlineFailure: object | null | undefined;
+    await run(false, {
+      ...deps,
+      sleep: async (ms) => {
+        await sleep(ms);
+        if (clock.now - 1_000_000 === 360_000) {
+          legacyDeadlinePhase = stageOf().phase;
+          legacyDeadlineFailure = stageOf().failure;
+        }
+      },
+    });
+    expect(legacyDeadlinePhase).toBe("creating");
+    expect(legacyDeadlineFailure).toBeNull();
+    expect(clock.now - 1_000_000).toBe(480_000);
+    expect(stageOf().failure).toEqual({ kind: "timed-out", step: "booting" });
   });
 
   it("times out when the budget runs out with the sandbox still on its way", async () => {
@@ -1480,4 +1512,151 @@ describe("settleVerdict", () => {
       expect(settleVerdict(row({ state }))).toBeNull();
     },
   );
+});
+
+describe("retained create attempt", () => {
+  function retained() {
+    const store = useStagedSandboxStore.getState();
+    store.stage(surfaceKey, PERSONAL_NEW);
+    store.begin(surfaceKey, false, 900_000, false);
+    store.report(surfaceKey, {
+      createdSandboxId: SANDBOX_ID,
+      createdHostId: NEW_HOST_ID,
+      step: "booting",
+      sendTaken: true,
+      createAttempt: { budgetMs: 480_000, startedAt: 1_000_000 },
+    });
+    onTestFinished(holdHandoffOwner(surfaceKey, null, ownerGoneOnUnmount));
+  }
+
+  it("waits for a known created row through catalogue outage under the retained bound", async () => {
+    retained();
+    useStagedSandboxStore.getState().setTarget(surfaceKey, TEAM_NEW);
+    const { auth, deps, clock } = harness(
+      { lists: [listOf(row({ state: "creating" }))] },
+      true,
+    );
+    const preflight = vi
+      .spyOn(auth, "getSandboxCatalogue")
+      .mockRejectedValue(new Error("offline"));
+    const environment = vi
+      .spyOn(auth, "getTeamEnvironment")
+      .mockRejectedValue(new Error("offline"));
+    await runStagedSandbox(
+      surfaceKey,
+      false,
+      { taskId: null, resume: true },
+      deps,
+    );
+    expect(preflight).not.toHaveBeenCalled();
+    expect(environment).not.toHaveBeenCalled();
+    expect(auth.requests).toEqual([]);
+    expect(clock.now).toBe(1_480_000);
+    expect(stageOf().failure).toEqual({ kind: "timed-out", step: "booting" });
+  });
+
+  it("an idempotent resend without a known row retains its bound without rereading inventory", async () => {
+    retained();
+    useStagedSandboxStore
+      .getState()
+      .report(surfaceKey, { createdSandboxId: null, createdHostId: null });
+    const { auth, deps, clock } = harness(
+      { lists: [listOf(row({ state: "creating" }))] },
+      true,
+    );
+    const preflight = vi
+      .spyOn(auth, "getSandboxCatalogue")
+      .mockRejectedValue(new Error("offline"));
+    await run(false, deps);
+    expect(auth.requests).toHaveLength(1);
+    expect(preflight).not.toHaveBeenCalled();
+    expect(clock.now).toBe(1_480_000);
+  });
+
+  it("persists the post-preflight origin through the pending-stage serialized reload path", async () => {
+    const sendId = "attempt-origin";
+    surfaceKey = pendingSendSurfaceKey(sendId);
+    useAuthStore
+      .getState()
+      .setSignedIn(
+        { userId: "user-1", userName: "U", email: "u@example.com" },
+        { userId: "user-1", username: "U" },
+        [],
+      );
+    onTestFinished(() => useAuthStore.getState().setSignedOut());
+    usePendingSandboxSendStore.getState().add(pendingSend({ id: sendId }));
+    onTestFinished(() => {
+      usePendingSandboxSendStore.setState({ sends: {} });
+    });
+    const ownership = holdPendingSandboxSendOwnership(sendId);
+    onTestFinished(ownership.release);
+    await ownership.ready;
+    retained();
+    const storage = createPendingStageStorage();
+    const name = persistKey(STORE_KEYS.stagedSandboxSend);
+    const serialized = storage.getItem(name);
+    if (typeof serialized !== "string")
+      throw new Error("expected persisted stage");
+    useStagedSandboxStore.setState({
+      bySurface: { [surfaceKey]: { ...stageOf(), createAttempt: null } },
+    });
+    createPendingStageStorage().setItem(name, serialized);
+    await useStagedSandboxStore.persist.rehydrate();
+    const { auth, deps, clock } = harness(
+      { lists: [listOf(row({ state: "creating" }))] },
+      true,
+    );
+    clock.now = 1_200_000;
+    vi.spyOn(auth, "getSandboxCatalogue").mockRejectedValue(
+      new Error("offline"),
+    );
+    await runStagedSandbox(
+      surfaceKey,
+      false,
+      { taskId: null, resume: true },
+      deps,
+    );
+    expect(clock.now).toBe(1_480_000);
+    expect(stageOf().createAttempt).toEqual({
+      budgetMs: 480_000,
+      startedAt: 1_000_000,
+    });
+  });
+
+  it("Keep waiting resets only the driver origin while retaining the original create bound", async () => {
+    retained();
+    const { auth, deps, clock } = harness(
+      { lists: [listOf(row({ state: "creating" }))] },
+      true,
+    );
+    clock.now = 1_200_000;
+    const preflight = vi
+      .spyOn(auth, "getSandboxCatalogue")
+      .mockRejectedValue(new Error("offline"));
+    await run(false, deps);
+    expect(clock.now).toBe(1_680_000);
+    expect(preflight).not.toHaveBeenCalled();
+    expect(stageOf().createAttempt).toEqual({
+      budgetMs: 480_000,
+      startedAt: 1_200_000,
+    });
+  });
+
+  it("a fresh retry discards the old attempt and reads the new bound", async () => {
+    retained();
+    const { auth, deps, clock } = harness(
+      { lists: [listOf(row({ state: "creating" }))] },
+      true,
+    );
+    const preflight = vi
+      .spyOn(auth, "getSandboxCatalogue")
+      .mockResolvedValue({ kind: "ok", catalogue: budgetCatalogue(600_000) });
+    await run(true, deps);
+    expect(preflight).toHaveBeenCalledTimes(1);
+    expect(clock.now).toBe(1_600_000);
+    expect(stageOf().createAttempt).toEqual({
+      budgetMs: 600_000,
+      startedAt: 1_000_000,
+    });
+  });
 });

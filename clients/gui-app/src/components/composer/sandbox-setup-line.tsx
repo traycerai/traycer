@@ -173,6 +173,7 @@ export interface SandboxSetupLineActions {
 
 /** The facts the line reads beyond the stage. */
 export interface SandboxSetupLineFacts {
+  readonly readinessLine?: string | null;
   /** The cost line of the staged shape, shown when the line is expanded. */
   readonly costLine: string;
   /** The region and shape, for the shape refusal. */
@@ -240,7 +241,17 @@ export function SandboxSetupLine(props: {
       />
     );
   }
-  if (stage.phase === "staged" || stage.startedAt === null) return null;
+  if (stage.phase === "staged" || stage.startedAt === null) {
+    const readinessLine = props.facts.readinessLine ?? null;
+    return stage.target.kind !== "new" || readinessLine === null ? null : (
+      <p
+        className="m-0 text-ui-xs text-muted-foreground"
+        data-testid="sandbox-staged-readiness"
+      >
+        {readinessLine}
+      </p>
+    );
+  }
   // A sandbox that rested on its own is said by its state footer, never by
   // a create still on its way. A send this window can't give back stays
   // here, with the person's way to wake it.

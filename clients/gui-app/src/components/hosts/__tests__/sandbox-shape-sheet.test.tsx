@@ -1,3 +1,8 @@
+import { sandboxReadinessLine } from "@/lib/sandboxes/sandbox-readiness";
+import type {
+  StageConfiguration,
+  StageSize,
+} from "@/lib/sandboxes/sandbox-stage-model";
 import { afterEach, describe, expect, it, vi, type Mock } from "vitest";
 import {
   cleanup,
@@ -18,6 +23,7 @@ import {
   userWith,
 } from "@/lib/sandboxes/__tests__/auth-user-fixture";
 import {
+  shortPriceLabel,
   USE_THIS_SHAPE,
   CHANGE_LABEL,
   idleAndRestingLine,
@@ -38,6 +44,7 @@ const CATALOGUE: SandboxCatalogue = {
         memoryMaxMb: 65536,
         memoryStepMb: 512,
         diskMinMb: 10240,
+        diskStepMb: 1024,
         diskMaxMb: 102400,
         diskDefaultMb: 20480,
       },
@@ -82,6 +89,12 @@ vi.mock("@/hooks/sandboxes/use-sandbox-catalogue-query", () => ({
     data: catalogueInUse,
   }),
 }));
+vi.mock("@/hooks/sandboxes/use-sandbox-readiness-query", () => ({
+  useSandboxReadiness: (
+    _configuration: StageConfiguration | null,
+    shape: StageSize | null,
+  ) => sandboxReadinessLine(catalogueInUse, shape),
+}));
 vi.mock("@/hooks/auth/use-auth-user-query", () => ({
   useAuthUser: () => ({ data: authUser }),
 }));
@@ -122,6 +135,75 @@ function renderSheet(onUseShape: Mock) {
 }
 
 describe("<SandboxShapeSheet />", () => {
+  it.each([
+    { result: { warm: 2 }, text: "2 ready now." },
+    { result: { warm: 0 }, text: "None ready now. Starting may take longer." },
+    {
+      result: { cold: 120_001 },
+      text: "Starting takes up to about 3 minutes.",
+    },
+    { result: { cold: null }, text: "Starting may take a few minutes." },
+  ])("renders contextual readiness $text", ({ result, text }) => {
+    const [provider] = CATALOGUE.providers;
+    catalogueInUse = {
+      providers: [
+        {
+          ...provider,
+          readiness: {
+            request: {
+              os: "linux",
+              shape: { cpus: 2, memoryMb: 4096, diskMb: 20480 },
+              region: "us-east",
+              generationId: null,
+            },
+            result,
+          },
+        },
+      ],
+    };
+    renderSheet(vi.fn());
+    expect(screen.getByText(text)).toBeDefined();
+  });
+
+  it("renders all three billed hourly rates for the selected shape", () => {
+    const [provider] = CATALOGUE.providers;
+    catalogueInUse = {
+      providers: [
+        {
+          ...provider,
+          regions: [
+            {
+              ...provider.regions[0],
+              pricing: {
+                vcpuHourMillicredits: 50,
+                memoryGbHourMillicredits: 25,
+                diskGbHourMillicredits: 0.5,
+                suspendedMemoryGbHourMillicredits: 30,
+                awakeDiskGbHourMillicredits: 2,
+                multiplier: 1.25,
+              },
+            },
+          ],
+        },
+      ],
+    };
+    renderSheet(vi.fn());
+    const price = screen.getByTestId("sandbox-shape-sheet-price");
+    expect(price.textContent).toContain("$0.30 an hour while awake");
+    expect(price.textContent).toContain(
+      `Suspended: ${shortPriceLabel(163)} · Stopped: ${shortPriceLabel(13)}`,
+    );
+  });
+
+  it("labels resting rates as From when older pricing only quotes the smallest shape", () => {
+    renderSheet(vi.fn());
+    expect(
+      screen.getByTestId("sandbox-shape-sheet-price").textContent,
+    ).toContain(
+      `From Suspended: ${shortPriceLabel(4)} · Stopped: ${shortPriceLabel(2)}`,
+    );
+  });
+
   it("says a cleared resting period keeps the sandbox, not the period it opened with", () => {
     render(
       <SandboxShapeSheet
@@ -228,6 +310,79 @@ describe("<SandboxShapeSheet />", () => {
       screen.getByRole("combobox", { name: "Size" }).textContent,
     ).toContain("4 vCPU · 8 GB · 40 GB");
     expect(screen.getByText(idleAndRestingLine(2, 120))).toBeDefined();
+  });
+
+  it("opens a nondefault rung with unset disk at its own geometry, price and readiness and submits it", () => {
+    const [provider] = catalogueWithShapes().providers;
+    catalogueInUse = {
+      providers: [
+        {
+          ...provider,
+          readiness: {
+            request: {
+              os: "linux",
+              shape: { cpus: 4, memoryMb: 8192, diskMb: 40960 },
+              region: "us-east",
+              generationId: null,
+            },
+            result: { warm: 2 },
+          },
+          regions: [
+            {
+              ...provider.regions[0],
+              pricing: {
+                vcpuHourMillicredits: 50,
+                memoryGbHourMillicredits: 25,
+                diskGbHourMillicredits: 1,
+                suspendedMemoryGbHourMillicredits: 30,
+                awakeDiskGbHourMillicredits: 2,
+                multiplier: 1,
+              },
+            },
+          ],
+        },
+      ],
+    };
+    const onUseShape = vi.fn();
+    render(
+      <SandboxShapeSheet
+        open
+        onOpenChange={() => undefined}
+        configuration={{ kind: "personal" }}
+        defaults={null}
+        initialShape={{
+          os: "linux",
+          cpus: 4,
+          memoryMb: 8192,
+          diskMb: null,
+          region: "us-east",
+          idleMinutes: 30,
+          destroyAfterRestingMinutes: 120,
+        }}
+        initialName=""
+        context={{
+          audience: "private",
+          reachHost: null,
+          unmovedComputer: null,
+        }}
+        onUseShape={onUseShape}
+      />,
+    );
+    expect(
+      screen.getByRole("combobox", { name: "Size" }).textContent,
+    ).toContain("4 vCPU · 8 GB · 40 GB");
+    expect(screen.getByText("2 ready now.")).toBeDefined();
+    expect(
+      screen.getByTestId("sandbox-shape-sheet-price").textContent,
+    ).toContain("$0.48 an hour while awake");
+    const use = screen.getByRole("button", { name: USE_THIS_SHAPE });
+    expect(use.hasAttribute("disabled")).toBe(false);
+    fireEvent.click(use);
+    expect(onUseShape.mock.calls[0]?.[0]).toMatchObject({
+      cpus: 4,
+      memoryMb: 8192,
+      diskMb: 40960,
+    });
   });
 
   it("uses the listed shape that was picked, disk included", () => {
