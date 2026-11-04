@@ -32,6 +32,7 @@ import { useChatWriteRoute } from "@/hooks/epic/use-chat-write-route";
 import { CHAT_NOT_ADOPTED_COPY } from "@/stores/epics/open-epic/chat-write-routing";
 import { useEpicDeleteTuiAgent } from "@/hooks/epic/use-epic-tui-agent-mutations";
 import { useEpicExportArtifacts } from "@/hooks/epic/use-epic-export-artifacts-mutation";
+import { hasNestedMarkdownArtifacts } from "@/lib/artifacts/artifact-export-selection";
 import { useEpicDeleteArtifact } from "@/hooks/epic/use-epic-node-mutations";
 import type { ArtifactExportFormat } from "@/lib/artifacts/artifact-export";
 import { useTerminalKillFor } from "@/hooks/terminal/use-terminal-kill-for-mutation";
@@ -67,15 +68,24 @@ const EXPORT_LABELS: Record<ArtifactExportFormat, string> = {
   pdf: "Export as PDF",
 };
 
+const EXPORT_NESTED_LABELS: Record<ArtifactExportFormat, string> = {
+  markdown: "Export with nested artifacts as Markdown ZIP",
+  pdf: "Export with nested artifacts as PDF ZIP",
+};
+
 interface RowMenuInput {
   readonly nodeId: string;
   readonly kind: SwitcherRowKind;
   readonly canMutate: boolean;
   readonly chatWriteUnavailable: boolean;
   readonly canExport: boolean;
+  readonly canExportNested: boolean;
   readonly exportPending: boolean;
   readonly closePending: boolean;
-  readonly onExport: (format: ArtifactExportFormat) => void;
+  readonly onExport: (
+    format: ArtifactExportFormat,
+    includeNested: boolean,
+  ) => void;
   readonly onRename: () => void;
   readonly onDelete: () => void;
 }
@@ -86,25 +96,36 @@ function rowMenuEntries(
   const { nodeId, kind, canMutate, chatWriteUnavailable } = input;
   const isTerminal = kind === "terminal";
   const disabledTooltip = chatWriteUnavailable ? CHAT_NOT_ADOPTED_COPY : null;
-  const exportEntry = (format: ArtifactExportFormat): SidebarRowMenuEntry => ({
+  const exportEntry = (
+    format: ArtifactExportFormat,
+    includeNested: boolean,
+  ): SidebarRowMenuEntry => ({
     kind: "item",
-    id: `export-${format}`,
-    label: EXPORT_LABELS[format],
+    id: includeNested ? `export-nested-${format}` : `export-${format}`,
+    label: includeNested ? EXPORT_NESTED_LABELS[format] : EXPORT_LABELS[format],
     icon: <FileDown className="size-3.5" />,
     disabled: input.exportPending,
     disabledTooltip: null,
     variant: "default",
-    testIds: {
-      dropdown: `switcher-export-${format}-${nodeId}`,
-      context: `switcher-export-${format}-ctx-${nodeId}`,
-    },
-    onSelect: () => input.onExport(format),
+    testIds: includeNested
+      ? {
+          dropdown: `switcher-export-nested-${format}-${nodeId}`,
+          context: `switcher-export-nested-${format}-ctx-${nodeId}`,
+        }
+      : {
+          dropdown: `switcher-export-${format}-${nodeId}`,
+          context: `switcher-export-${format}-ctx-${nodeId}`,
+        },
+    onSelect: () => input.onExport(format, includeNested),
   });
   return [
     ...(input.canExport
       ? [
-          exportEntry("markdown"),
-          exportEntry("pdf"),
+          exportEntry("markdown", false),
+          exportEntry("pdf", false),
+          ...(input.canExportNested
+            ? [exportEntry("markdown", true), exportEntry("pdf", true)]
+            : []),
           { kind: "separator" as const, id: "after-export" },
         ]
       : []),
@@ -271,6 +292,10 @@ function SwitcherRowActionsBody(
   // Document export requires a Markdown body.
   const canExport =
     kind === "artifact" && isMarkdownArtifactKind(artifact?.kind);
+  const canExportNested = useEpicStore(
+    (state: OpenEpicState) =>
+      canExport && hasNestedMarkdownArtifacts(state, nodeId),
+  );
   // The row's terminal lives on the host the switcher LISTS (the Epic
   // session's), so kill goes to that same client - never the ambient one.
   const killTerminal = useTerminalKillFor(
@@ -363,14 +388,16 @@ function SwitcherRowActionsBody(
     canMutate,
     chatWriteUnavailable,
     canExport,
+    canExportNested,
     exportPending: exportArtifacts.isPending,
     closePending: killTerminal.isPending,
-    onExport: (format) =>
+    onExport: (format, includeNested) =>
       exportArtifacts.mutate({
         artifacts: [{ id: nodeId, title: name }],
         format,
-        archive: false,
-        archiveTitle: null,
+        archive: includeNested,
+        archiveTitle: includeNested ? name : null,
+        includeNested,
       }),
     onRename: () => setRenameOpen(true),
     onDelete: isTerminal ? closeTerminal : () => setConfirmOpen(true),
