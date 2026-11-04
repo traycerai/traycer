@@ -1150,7 +1150,7 @@ describe("<BotTabSurface /> a team's main bot still to be set up", () => {
   });
 
   describe("Create a team host on a machine", () => {
-    const TOKEN = "tok_9f2c7a41d0b8";
+    const TOKEN = "team-host-install-token-fixture";
     const HOST_ID = "0b6f6a3e-6f4c-4a0e-9d6e-0d7a4c1f2a11";
     const EXPIRES_AT = 1_791_000_900_000;
     const JOIN_COMMAND = `traycer host join ${TOKEN}`;
