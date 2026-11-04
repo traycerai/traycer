@@ -26,12 +26,15 @@ const MAX_TEST_WORKERS = IS_CI
 // extends this file, so the root sets no include and each project lists its own.
 const FRESH_MODULE_FILES = [
   "**/src/config/__tests__/adversarial-store-fuzz.test.ts",
+  "**/src/config/__tests__/adversarial-hostile-config.test.ts",
   "**/src/config/__tests__/adversarial-detect-shells.test.ts",
   "**/src/config/__tests__/apply-env-overrides.test.ts",
   "**/src/config/__tests__/data-root.test.ts",
   "**/src/config/__tests__/data-root-consumers.test.ts",
+  "**/src/config/__tests__/data-root-target-transient.test.ts",
   "**/src/config/__tests__/detect-shells.test.ts",
   "**/src/config/__tests__/store.test.ts",
+  "**/src/config/__tests__/store-windows-rename-retry.test.ts",
   "**/src/config/__tests__/store-concurrent-writes.test.ts",
   "**/src/config/__tests__/store-lock-breakers.test.ts",
   "**/src/config/__tests__/store-lock-deadlines.test.ts",
@@ -58,9 +61,9 @@ const freshIsolateFiles = FRESH_MODULE_FILES.filter(
 const lockClockFiles = FRESH_MODULE_FILES.filter((file) =>
   LOCK_CLOCK_FILES.has(file),
 );
-if (freshIsolateFiles.length !== 14 || lockClockFiles.length !== 3) {
+if (freshIsolateFiles.length !== 17 || lockClockFiles.length !== 3) {
   throw new Error(
-    `protocol vitest projects expected 14 fresh-isolate files and 3 lock-clock files, got ${freshIsolateFiles.length} and ${lockClockFiles.length}`,
+    `protocol vitest projects expected 17 fresh-isolate files and 3 lock-clock files, got ${freshIsolateFiles.length} and ${lockClockFiles.length}`,
   );
 }
 
