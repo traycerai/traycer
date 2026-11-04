@@ -7,7 +7,7 @@ import {
 
 function input(
   overrides: Partial<NotificationLifecycleInput> &
-    Pick<NotificationLifecycleInput, "source" | "severity">,
+    Pick<NotificationLifecycleInput, "severity">,
 ): NotificationLifecycleInput {
   return {
     readAt: null,
@@ -18,72 +18,44 @@ function input(
 describe("classifyNotificationLifecycle", () => {
   it("places unresolved host needs_action rows in attention as blocking", () => {
     expect(
-      classifyNotificationLifecycle(
-        input({ source: "host", severity: "needs_action" }),
-      ),
+      classifyNotificationLifecycle(input({ severity: "needs_action" })),
     ).toEqual({ section: "attention", tier: "blocking" });
   });
 
   it("places unread host failures in attention as failure tier", () => {
     expect(
       classifyNotificationLifecycle(
-        input({ source: "host", severity: "failure", readAt: null }),
+        input({ severity: "failure", readAt: null }),
       ),
     ).toEqual({ section: "attention", tier: "failure" });
   });
 
   it("moves read host failures to recent immediately", () => {
     expect(
-      classifyNotificationLifecycle(
-        input({ source: "host", severity: "failure", readAt: 50 }),
-      ),
+      classifyNotificationLifecycle(input({ severity: "failure", readAt: 50 })),
     ).toEqual({ section: "recent" });
   });
 
   it("places unread app-local failures in attention as failure tier", () => {
     expect(
       classifyNotificationLifecycle(
-        input({ source: "app-local", severity: "failure", readAt: null }),
+        input({ severity: "failure", readAt: null }),
       ),
     ).toEqual({ section: "attention", tier: "failure" });
   });
 
   it("moves read app-local failures to recent", () => {
     expect(
-      classifyNotificationLifecycle(
-        input({ source: "app-local", severity: "failure", readAt: 99 }),
-      ),
-    ).toEqual({ section: "recent" });
-  });
-
-  it("never places global rows in attention regardless of severity or read state", () => {
-    expect(
-      classifyNotificationLifecycle(
-        input({ source: "global", severity: "failure", readAt: null }),
-      ),
-    ).toEqual({ section: "recent" });
-    expect(
-      classifyNotificationLifecycle(
-        input({ source: "global", severity: "needs_action" }),
-      ),
-    ).toEqual({ section: "recent" });
-    expect(
-      classifyNotificationLifecycle(
-        input({ source: "global", severity: "info", readAt: null }),
-      ),
+      classifyNotificationLifecycle(input({ severity: "failure", readAt: 99 })),
     ).toEqual({ section: "recent" });
   });
 
   it("keeps host done/info rows in recent even when unread", () => {
     expect(
-      classifyNotificationLifecycle(
-        input({ source: "host", severity: "done", readAt: null }),
-      ),
+      classifyNotificationLifecycle(input({ severity: "done", readAt: null })),
     ).toEqual({ section: "recent" });
     expect(
-      classifyNotificationLifecycle(
-        input({ source: "host", severity: "info", readAt: null }),
-      ),
+      classifyNotificationLifecycle(input({ severity: "info", readAt: null })),
     ).toEqual({ section: "recent" });
   });
 
@@ -91,7 +63,6 @@ describe("classifyNotificationLifecycle", () => {
     expect(
       classifyNotificationLifecycle(
         input({
-          source: "host",
           severity: "needs_action",
           readAt: 10,
         }),
@@ -103,7 +74,6 @@ describe("classifyNotificationLifecycle", () => {
     expect(
       classifyNotificationLifecycle(
         input({
-          source: "host",
           severity: "done",
           readAt: null,
           botAnswer: true,
@@ -113,7 +83,6 @@ describe("classifyNotificationLifecycle", () => {
     expect(
       classifyNotificationLifecycle(
         input({
-          source: "host",
           severity: "done",
           readAt: 50,
           botAnswer: true,

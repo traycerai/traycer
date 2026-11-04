@@ -1,5 +1,4 @@
 import type { HostNotificationSeverity } from "@traycer/protocol/host/notifications/contracts";
-import type { MergedNotificationSource } from "@/stores/notifications/merged-notifications";
 
 /**
  * Attention's classes, in order: prompts that block, failures, then a bot's
@@ -9,7 +8,6 @@ import type { MergedNotificationSource } from "@/stores/notifications/merged-not
 export type NotificationAttentionTier = "blocking" | "failure" | "answer";
 
 export interface NotificationLifecycleInput {
-  readonly source: MergedNotificationSource;
   readonly severity: HostNotificationSeverity;
   readonly readAt: number | null;
   /**
@@ -28,13 +26,13 @@ export type NotificationLifecycleClassification =
  * The single lifecycle classifier: every feed row belongs to Attention or
  * Recent, never both. Attention membership is unread host prompts,
  * unread host failures, unread app-local failures and unread bot answers, as
- * the hosts' summaries count them. Collaboration rows are never
- * attention-eligible.
+ * the hosts' summaries count them, and unread invitations to a task, the one
+ * collaboration row the room counts (`severityForGlobalEvent`); every other
+ * collaboration row is informational and stays in Recent.
  */
 export function classifyNotificationLifecycle(
   row: NotificationLifecycleInput,
 ): NotificationLifecycleClassification {
-  if (row.source === "global") return { section: "recent" };
   if (row.severity === "needs_action") {
     return row.readAt === null
       ? { section: "attention", tier: "blocking" }

@@ -362,7 +362,29 @@ function appLocalEntry(
   };
 }
 
+/** An informational collaboration row: news about a task the person has. */
 function globalEntry(
+  id: string,
+  createdAt: number,
+  readAt: number | null,
+): NotificationEntry {
+  return {
+    id,
+    createdAt,
+    readAt,
+    event: {
+      kind: NOTIFICATION_EVENT_TYPES.COMMENT_ADDED,
+      epicId: "epic-1",
+      artifactType: "spec",
+      artifactId: "artifact-1",
+      threadId: "thread-1",
+      actorName: "Alice",
+    },
+  };
+}
+
+/** The collaboration row that counts on the bell: a task shared with them. */
+function invitedEntry(
   id: string,
   createdAt: number,
   readAt: number | null,
@@ -564,7 +586,7 @@ describe("merged notification projection (Attention / Recent)", () => {
     ]);
   });
 
-  it("keeps global rows in Recent only", () => {
+  it("keeps informational collaboration rows in Recent only", () => {
     seedGlobal([
       globalEntry("g-unread", 50, null),
       globalEntry("g-read", 40, 10),
@@ -580,6 +602,21 @@ describe("merged notification projection (Attention / Recent)", () => {
       globalFeedId("g-unread"),
       globalFeedId("g-read"),
     ]);
+  });
+
+  it("places an unread task invitation in Attention and moves it to Recent once read", () => {
+    seedGlobal([
+      invitedEntry("invite-unread", 50, null),
+      invitedEntry("invite-read", 40, 10),
+    ]);
+
+    const { result: attention } = renderHook(() =>
+      useAttentionNotificationIds(),
+    );
+    const { result: recent } = renderHook(() => useRecentNotificationIds());
+
+    expect(attention.current).toEqual([globalFeedId("invite-unread")]);
+    expect(recent.current).toEqual([globalFeedId("invite-read")]);
   });
 
   it("keeps resolved prompts in Attention until their notification is read", () => {
@@ -1197,6 +1234,42 @@ describe("useNotificationBellState", () => {
 
     const { result } = renderHook(() => useNotificationBellState());
     expect(result.current).toEqual({ kind: "attention", count: 150 });
+  });
+
+  it("counts an unread task invitation as attention until it is read", () => {
+    applyHostSnapshot([], { unreadCount: 0, attentionCount: 0 });
+    seedGlobal([
+      invitedEntry("invite", 20, null),
+      globalEntry("comment", 10, null),
+    ]);
+
+    const { result } = renderHook(() => useNotificationBellState());
+    expect(result.current).toEqual({ kind: "attention", count: 1 });
+
+    act(() => {
+      useNotificationsStore.getState().markAsRead("invite");
+    });
+    // The comment is still unread: activity, not attention.
+    expect(result.current).toEqual({ kind: "quietDot" });
+  });
+
+  it("adds an unread task invitation to both partitions' attention in mixed mode", () => {
+    notificationFeedModeRef.value = "cloud";
+    try {
+      applyHostSnapshot([], { unreadCount: 0, attentionCount: 1 });
+      useCloudNotificationsStore.getState().applySnapshot({
+        rows: [],
+        summary: { totalCount: 0, unreadCount: 0, attentionCount: 1 },
+        version: 1,
+      });
+      seedGlobal([invitedEntry("invite", 20, null)]);
+
+      const { result } = renderHook(() => useNotificationBellState());
+      expect(result.current).toEqual({ kind: "attention", count: 3 });
+    } finally {
+      notificationFeedModeRef.value = "local";
+      useCloudNotificationsStore.getState().reset();
+    }
   });
 
   it("draws a bot's unread answer as attention once the host's summary counts it", () => {

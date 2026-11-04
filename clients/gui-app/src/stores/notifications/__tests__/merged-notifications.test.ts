@@ -753,11 +753,35 @@ describe("merged notifications feed", () => {
     });
   });
 
-  it("projects global category as collaboration", () => {
-    expect(rowFromGlobalEntry(globalEntry("global", 10, null))).toMatchObject({
+  it("projects global category as collaboration, with an invitation as the one attention-grade event", () => {
+    const invited = rowFromGlobalEntry(globalEntry("global", 10, null));
+    expect(invited).toMatchObject({
       category: "collaboration",
       resolvedAt: null,
+      severity: "needs_action",
+    });
+    expect(classifyNotificationLifecycle(invited)).toEqual({
+      section: "attention",
+      tier: "blocking",
+    });
+
+    const commented = rowFromGlobalEntry({
+      ...globalEntry("comment", 11, null),
+      event: {
+        kind: NOTIFICATION_EVENT_TYPES.COMMENT_ADDED,
+        epicId: "epic-1",
+        artifactType: "spec",
+        artifactId: "artifact-1",
+        threadId: "thread-1",
+        actorName: "Alice",
+      },
+    });
+    expect(commented).toMatchObject({
+      category: "collaboration",
       severity: "info",
+    });
+    expect(classifyNotificationLifecycle(commented)).toEqual({
+      section: "recent",
     });
   });
 
