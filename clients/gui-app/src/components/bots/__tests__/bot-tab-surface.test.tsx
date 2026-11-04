@@ -51,6 +51,7 @@ import {
   vi,
   type Mock,
 } from "vitest";
+import type { TeamHostInstallTokenResult } from "@traycer-clients/shared/host-client/team-host";
 import type {
   SandboxCatalogueFetchResult,
   SandboxCreateFetchResult,
@@ -71,6 +72,7 @@ import {
   type FakeSandboxBinding,
 } from "@/hooks/sandboxes/__tests__/sandbox-binding-fixture";
 import { sandboxSummaryFixture } from "@/hooks/sandboxes/__tests__/sandbox-fixtures";
+import { formatClockTime } from "@/lib/relative-time";
 import type {
   BotOpenPausedReason,
   BotOpenResponse,
@@ -106,9 +108,15 @@ type OpenResult =
 
 type ReadScript = { setup: BotOnboardingSetup | null } | "fails";
 
-/** The control plane a team's Enable cloud reads and creates through. */
+/**
+ * The control plane a team's Enable cloud reads and creates through, and a
+ * team host's install token is minted on.
+ */
 interface TeamCloudBinding extends FakeSandboxBinding {
   readonly auth: FakeSandboxAuth & {
+    readonly mintTeamHostInstallToken: Mock<
+      (environmentId: string) => Promise<TeamHostInstallTokenResult>
+    >;
     readonly getTraycerModels: Mock<() => Promise<TraycerModelsFetchResult>>;
     readonly getSandboxCatalogue: Mock<
       () => Promise<SandboxCatalogueFetchResult>
@@ -1014,6 +1022,60 @@ function setUpNewTeam(): void {
   openSurfaceOn(SETUP_BOT_ID);
 }
 
+/** The configuration's defaults for a team's sandbox: the built-in shape. */
+const TEAM_DEFAULTS = {
+  os: "linux",
+  cpus: 4,
+  memoryMb: 8192,
+  diskMb: 40960,
+  idleMinutes: 45,
+  restingMinutes: 1_440,
+} as const;
+
+/**
+ * The control plane a new team's setup card reads and creates through: one
+ * provider with room for the team's default shape, a model a team sandbox
+ * runs, no sandboxes listed, and a signed-in viewer. A mint answers a
+ * network error until a case scripts it.
+ */
+function scriptTeamControlPlane(): void {
+  const base = createFakeSandboxBinding();
+  mocks.binding = {
+    ...base,
+    auth: {
+      ...base.auth,
+      getTraycerModels: vi.fn(() =>
+        Promise.resolve<TraycerModelsFetchResult>({
+          kind: "ok",
+          models: [TRAYCER_MODEL],
+        }),
+      ),
+      getSandboxCatalogue: vi.fn(() =>
+        Promise.resolve<SandboxCatalogueFetchResult>({
+          kind: "ok",
+          catalogue: CATALOGUE,
+        }),
+      ),
+      mintTeamHostInstallToken: vi.fn<
+        (environmentId: string) => Promise<TeamHostInstallTokenResult>
+      >(() =>
+        Promise.resolve({
+          kind: "network-error",
+          detail: "mintTeamHostInstallToken was not scripted",
+        }),
+      ),
+    },
+  };
+  mocks.sandboxDefaults = {
+    kind: "ready",
+    value: { defaults: TEAM_DEFAULTS, revision: 3 },
+  };
+  useAuthStore.setState({
+    status: "signed-in",
+    contextMetadata: { userId: "user-viewer", username: "olive" },
+  });
+}
+
 describe("<BotTabSurface /> a team's main bot still to be set up", () => {
   beforeEach(() => {
     setUpNewTeam();
@@ -1087,22 +1149,293 @@ describe("<BotTabSurface /> a team's main bot still to be set up", () => {
     });
   });
 
-  it("draws the machine option's button disabled with a line saying it is not available yet, and a click does nothing", async () => {
-    const user = userEvent.setup();
-    render(surfaceFor(SETUP_BOT_ID));
+  describe("Create a team host on a machine", () => {
+    const TOKEN = "tok_9f2c7a41d0b8";
+    const HOST_ID = "0b6f6a3e-6f4c-4a0e-9d6e-0d7a4c1f2a11";
+    const EXPIRES_AT = 1_791_000_900_000;
+    const JOIN_COMMAND = `traycer host join ${TOKEN}`;
+    const MINTED: TeamHostInstallTokenResult = {
+      kind: "ok",
+      hostId: HOST_ID,
+      installToken: TOKEN,
+      expiresAt: EXPIRES_AT,
+    };
+    const initialClipboard = Object.getOwnPropertyDescriptor(
+      navigator,
+      "clipboard",
+    );
 
-    const option = screen.getByTestId("team-host-option-machine");
-    const button = within(option).getByRole("button");
-    expect([
-      button.textContent,
-      button.hasAttribute("disabled"),
-      document.getElementById(button.getAttribute("aria-describedby") ?? "")
-        ?.textContent,
-    ]).toEqual(["Create team host", true, "Not available yet."]);
-    await user.click(button);
+    beforeEach(scriptTeamControlPlane);
+    afterEach(() => {
+      if (initialClipboard === undefined) {
+        Reflect.deleteProperty(navigator, "clipboard");
+      } else {
+        Object.defineProperty(navigator, "clipboard", initialClipboard);
+      }
+    });
 
-    expect(mocks.open).not.toHaveBeenCalled();
-    expect(screen.getByTestId("team-setup-channel")).toBeTruthy();
+    function auth(): TeamCloudBinding["auth"] {
+      if (mocks.binding === null) throw new Error("no binding scripted");
+      return mocks.binding.auth;
+    }
+
+    function machineOption(): HTMLElement {
+      return screen.getByTestId("team-host-option-machine");
+    }
+
+    function createButton(): HTMLElement {
+      return within(machineOption()).getByRole("button", {
+        name: "Create team host",
+      });
+    }
+
+    /** Enable cloud is enabled only once the sandbox list has answered. */
+    async function sandboxListRead(): Promise<void> {
+      await waitFor(() =>
+        expect(
+          within(screen.getByTestId("team-host-option-cloud")).getByRole(
+            "button",
+            { name: "Enable cloud" },
+          ),
+        ).toHaveProperty("disabled", false),
+      );
+    }
+
+    function noteLine(): string | undefined {
+      return within(machineOption()).queryByTestId(
+        "team-host-option-machine-note",
+      )?.textContent;
+    }
+
+    it("mints once for the team's environment, holds the button while it is out, then shows the command and when it lapses, with the token nowhere else", async () => {
+      const user = userEvent.setup();
+      let answer: (result: TeamHostInstallTokenResult) => void = () =>
+        undefined;
+      auth().mintTeamHostInstallToken.mockImplementation(
+        () =>
+          new Promise((resolve) => {
+            answer = resolve;
+          }),
+      );
+      render(surfaceFor(SETUP_BOT_ID));
+      await sandboxListRead();
+
+      expect(createButton()).toHaveProperty("disabled", false);
+      expect(noteLine()).toBeUndefined();
+      await user.click(createButton());
+
+      expect(auth().mintTeamHostInstallToken.mock.calls).toEqual([["env-new"]]);
+      await waitFor(() =>
+        expect(createButton()).toHaveProperty("disabled", true),
+      );
+      await user.click(createButton());
+      expect(auth().mintTeamHostInstallToken).toHaveBeenCalledTimes(1);
+
+      act(() => {
+        answer(MINTED);
+      });
+
+      expect(
+        (await screen.findByTestId("team-host-option-machine-command"))
+          .textContent,
+      ).toBe(JOIN_COMMAND);
+      expect(
+        screen.getByTestId("team-host-option-machine-expiry").textContent,
+      ).toBe(
+        `Expires at ${formatClockTime(EXPIRES_AT)}. The team's bots start once the machine joins.`,
+      );
+      expect(
+        within(machineOption()).queryByRole("button", {
+          name: "Create team host",
+        }),
+      ).toBeNull();
+      expect(auth().mintTeamHostInstallToken).toHaveBeenCalledTimes(1);
+      // The command is the token's only appearance, in text or attributes.
+      expect(document.body.innerHTML.split(TOKEN)).toHaveLength(2);
+    });
+
+    it.each([
+      [
+        "waits for the machine while the team's kept sandbox is listed",
+        sandboxSummaryFixture({
+          environmentId: "env-new",
+          kind: "agent",
+          burst: false,
+          state: "awake",
+        }),
+        true,
+      ],
+      [
+        "stays pressable when only a burst sandbox of the team is listed",
+        sandboxSummaryFixture({ environmentId: "env-new", burst: true }),
+        false,
+      ],
+      [
+        "stays pressable when only a destroyed sandbox of the team is listed",
+        sandboxSummaryFixture({
+          environmentId: "env-new",
+          burst: false,
+          state: "destroyed",
+        }),
+        false,
+      ],
+      [
+        "stays pressable when only another team's kept sandbox is listed",
+        sandboxSummaryFixture({ environmentId: "env-team", burst: false }),
+        false,
+      ],
+    ] as const)("%s", async (_case, sandbox, waits) => {
+      auth().listSandboxes.mockResolvedValue({
+        kind: "ok",
+        response: { sandboxes: [sandbox] },
+      });
+      render(surfaceFor(SETUP_BOT_ID));
+
+      if (waits) {
+        await waitFor(() =>
+          expect(noteLine()).toBe("The team has a cloud sandbox."),
+        );
+        expect(createButton()).toHaveProperty("disabled", true);
+        expect(
+          document.getElementById(
+            createButton().getAttribute("aria-describedby") ?? "",
+          )?.textContent,
+        ).toBe("The team has a cloud sandbox.");
+      } else {
+        await sandboxListRead();
+        expect(createButton()).toHaveProperty("disabled", false);
+        expect(noteLine()).toBeUndefined();
+      }
+    });
+
+    it.each([
+      [
+        "a create is out",
+        () => useTeamCloudCreateStore.getState().start("env-new", "key-1"),
+      ],
+      [
+        "a create was accepted that the list does not carry yet",
+        () => {
+          useTeamCloudCreateStore.getState().start("env-new", "key-1");
+          useTeamCloudCreateStore
+            .getState()
+            .accept("env-new", "sbx_1", Date.now());
+        },
+      ],
+    ] as const)(
+      "holds the button while %s for the team's cloud, and a press mints nothing",
+      async (_case, script) => {
+        const user = userEvent.setup();
+        auth().listSandboxes.mockImplementation(() => new Promise(() => {}));
+        script();
+        render(surfaceFor(SETUP_BOT_ID));
+
+        expect(noteLine()).toBe("The team has a cloud sandbox.");
+        expect(createButton()).toHaveProperty("disabled", true);
+        await user.click(createButton());
+
+        expect(auth().mintTeamHostInstallToken).not.toHaveBeenCalled();
+      },
+    );
+
+    it.each<readonly [string, TeamHostInstallTokenResult, string]>([
+      [
+        "the team already has a host",
+        { kind: "team-host-exists" },
+        "The team already has a host.",
+      ],
+      [
+        "the viewer cannot add a host to the team",
+        { kind: "not-found" },
+        "You can't add a host to this team.",
+      ],
+      [
+        "the viewer is signed out",
+        { kind: "unauthorized" },
+        "Sign in to add a host to this team.",
+      ],
+      [
+        "the service is unavailable",
+        { kind: "unavailable", reason: "Hosts can't be added right now." },
+        "Hosts can't be added right now.",
+      ],
+      [
+        "the server refuses with a code of its own",
+        { kind: "refused", status: 422, code: "invalid_environment" },
+        "Couldn't create the install token. Try again.",
+      ],
+      [
+        "the network fails",
+        { kind: "network-error", detail: "offline" },
+        "Couldn't create the install token. Try again.",
+      ],
+    ])(
+      "says so under the button when %s, and leaves the button to press again",
+      async (_case, result, line) => {
+        const user = userEvent.setup();
+        auth().mintTeamHostInstallToken.mockResolvedValue(result);
+        render(surfaceFor(SETUP_BOT_ID));
+        await sandboxListRead();
+
+        await user.click(createButton());
+
+        const alert = await screen.findByRole("alert");
+        expect(alert.textContent).toBe(line);
+        expect(alert.dataset.testid).toBe("team-host-option-machine-refusal");
+        expect(createButton()).toHaveProperty("disabled", false);
+        expect(
+          screen.queryByTestId("team-host-option-machine-command"),
+        ).toBeNull();
+
+        await user.click(createButton());
+        await waitFor(() =>
+          expect(auth().mintTeamHostInstallToken).toHaveBeenCalledTimes(2),
+        );
+      },
+    );
+
+    it("copies the join command, and the copy button says Copied", async () => {
+      const user = userEvent.setup();
+      const writeText = vi.fn((_value: string) => Promise.resolve());
+      Object.defineProperty(navigator, "clipboard", {
+        value: { writeText },
+        configurable: true,
+      });
+      auth().mintTeamHostInstallToken.mockResolvedValue(MINTED);
+      render(surfaceFor(SETUP_BOT_ID));
+      await sandboxListRead();
+      await user.click(createButton());
+
+      await user.click(
+        await within(machineOption()).findByRole("button", {
+          name: "Copy command",
+        }),
+      );
+
+      expect(writeText.mock.calls).toEqual([[JOIN_COMMAND]]);
+      expect(
+        await within(machineOption()).findByRole("button", { name: "Copied" }),
+      ).toBeTruthy();
+    });
+
+    it("drops the token when the card is left: the surface opened again offers the button, not the command", async () => {
+      const user = userEvent.setup();
+      auth().mintTeamHostInstallToken.mockResolvedValue(MINTED);
+      const first = render(surfaceFor(SETUP_BOT_ID));
+      await sandboxListRead();
+      await user.click(createButton());
+      await screen.findByTestId("team-host-option-machine-command");
+      first.unmount();
+
+      render(surfaceFor(SETUP_BOT_ID));
+
+      expect(createButton()).toBeTruthy();
+      expect(
+        screen.queryByTestId("team-host-option-machine-command"),
+      ).toBeNull();
+      expect(document.body.innerHTML).not.toContain(TOKEN);
+      expect(auth().mintTeamHostInstallToken).toHaveBeenCalledTimes(1);
+    });
   });
 
   it("draws the message box with nothing to type into or send, and says why", () => {
@@ -1489,45 +1822,7 @@ describe("<BotTabSurface /> a team's main bot still to be set up", () => {
   });
 
   describe("Enable cloud", () => {
-    /** The configuration's defaults: none set means the built-in shape. */
-    const TEAM_DEFAULTS = {
-      os: "linux",
-      cpus: 4,
-      memoryMb: 8192,
-      diskMb: 40960,
-      idleMinutes: 45,
-      restingMinutes: 1_440,
-    } as const;
-
-    beforeEach(() => {
-      const base = createFakeSandboxBinding();
-      mocks.binding = {
-        ...base,
-        auth: {
-          ...base.auth,
-          getTraycerModels: vi.fn(() =>
-            Promise.resolve<TraycerModelsFetchResult>({
-              kind: "ok",
-              models: [TRAYCER_MODEL],
-            }),
-          ),
-          getSandboxCatalogue: vi.fn(() =>
-            Promise.resolve<SandboxCatalogueFetchResult>({
-              kind: "ok",
-              catalogue: CATALOGUE,
-            }),
-          ),
-        },
-      };
-      mocks.sandboxDefaults = {
-        kind: "ready",
-        value: { defaults: TEAM_DEFAULTS, revision: 3 },
-      };
-      useAuthStore.setState({
-        status: "signed-in",
-        contextMetadata: { userId: "user-viewer", username: "olive" },
-      });
-    });
+    beforeEach(scriptTeamControlPlane);
 
     function auth(): TeamCloudBinding["auth"] {
       if (mocks.binding === null) throw new Error("no binding scripted");
@@ -2197,6 +2492,23 @@ describe("<BotTabSurface /> a team's main bot once it is live", () => {
     expect(within(channel).getByTestId("team-setup-arrival").textContent).toBe(
       "Cloud enabled for Acme · bots run on sandboxes",
     );
+  });
+
+  it("says the team's machine joined, with the machine option kept as history: no button and no token", () => {
+    mocks.reads["env-team"] = {
+      setup: { ...LIVE_SETUP, arrival: { kind: "machine" } },
+    };
+    render(surface());
+
+    const channel = screen.getByTestId("stub-channel");
+    expect(within(channel).getByTestId("team-setup-arrival").textContent).toBe(
+      "Acme's machine joined · bots run on it",
+    );
+    const option = within(channel).getByTestId("team-host-option-machine");
+    expect(within(option).queryAllByRole("button")).toEqual([]);
+    expect(
+      within(option).queryByTestId("team-host-option-machine-command"),
+    ).toBeNull();
   });
 
   it.each<readonly [string, () => void]>([

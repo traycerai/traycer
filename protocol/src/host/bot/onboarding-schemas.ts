@@ -130,12 +130,44 @@ export const botOnboardingReadResponseSchemaV11 = lazySchema(() =>
 );
 
 /**
+ * `bot.onboarding.read@1.2`'s arrival, frozen (T67b): `cloud`, the team's
+ * bots on its sandboxes, the only way a team got a host then.
+ */
+export const botOnboardingArrivalSchemaV12 = lazySchema(() =>
+  z.object({ kind: z.enum(["cloud"]) }),
+);
+
+/** `bot.onboarding.read@1.2`'s setup, frozen: its arrival is `cloud` only. */
+export const botOnboardingSetupSchemaV12 = lazySchema(() =>
+  z.object({
+    botId: botIdSchema,
+    title: z.string().min(1),
+    state: z.enum(["needs_host", "live"]),
+    arrival: botOnboardingArrivalSchemaV12.nullable(),
+  }),
+);
+
+/** `bot.onboarding.read@1.2`'s response, frozen. */
+export const botOnboardingReadResponseSchemaV12 = lazySchema(() =>
+  z.object({
+    github: botOnboardingGithubSchema,
+    unlocked: z.boolean(),
+    choice: botOnboardingChoiceSchema.nullable(),
+    catalog: z.array(botOnboardingAreaSchema),
+    setup: botOnboardingSetupSchemaV12.nullable(),
+  }),
+);
+export type BotOnboardingReadResponseV12 = z.infer<
+  typeof botOnboardingReadResponseSchemaV12
+>;
+
+/**
  * How the team's host came, once its main bot exists (T67b): `cloud` when
- * the team's bots run on its sandboxes, the only way a team gets a host
- * today.
+ * the team's bots run on its sandbox, `machine` when they run on a computer
+ * of the team's own (T141, from `@1.3`).
  */
 export const botOnboardingArrivalSchema = lazySchema(() =>
-  z.object({ kind: z.enum(["cloud"]) }),
+  z.object({ kind: z.enum(["cloud", "machine"]) }),
 );
 export type BotOnboardingArrival = z.infer<typeof botOnboardingArrivalSchema>;
 
@@ -159,9 +191,10 @@ export const botOnboardingSetupSchema = lazySchema(() =>
 export type BotOnboardingSetup = z.infer<typeof botOnboardingSetupSchema>;
 
 /**
- * `bot.onboarding.read@1.2`'s response: `setup` stays once the main bot
- * exists, in its `live` state. `null` for a team whose bots pre-date
- * onboarding, and when the answering host predates `setup`.
+ * `bot.onboarding.read@1.3`'s response: `setup` stays once the main bot
+ * exists, in its `live` state, with how its host came. `null` for a team
+ * whose bots pre-date onboarding, and when the answering host predates
+ * `setup`.
  */
 export const botOnboardingReadResponseSchema = lazySchema(() =>
   z.object({

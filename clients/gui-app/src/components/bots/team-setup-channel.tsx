@@ -38,6 +38,12 @@ import {
   type SandboxDefaultsRead,
 } from "@/hooks/sandboxes/use-sandbox-defaults";
 import { useSandboxList } from "@/hooks/sandboxes/use-sandbox-list-query";
+import {
+  useTeamHostInstallTokenMutation,
+  type TeamHostInstallToken,
+} from "@/hooks/bots/use-team-host-install-token-mutation";
+import { useClipboardCopy } from "@/hooks/ui/use-clipboard-copy";
+import { formatClockTime } from "@/lib/relative-time";
 import { useSandboxTraycerModels } from "@/hooks/sandboxes/use-sandbox-traycer-models-query";
 import {
   configurationStageShape,
@@ -181,8 +187,8 @@ function TeamSetupPostBody(props: {
 /**
  * The ways a team gets a host its bots can run on (decision 127): cloud for
  * the team, which starts the team's kept sandbox (decision 130), or a team
- * host on a machine, which cannot run a team's bots yet, so its button is
- * drawn and does nothing, with a line saying so.
+ * host on a machine the team keeps running (T141), which joins with a
+ * one-time install token.
  */
 function TeamHostOptionsCard(props: {
   readonly live: TeamSetupLive | null;
@@ -215,8 +221,8 @@ function TeamHostOptionsCard(props: {
         description="A machine the team keeps running, signed in as the team."
         action={
           live === null ? null : (
-            <TeamHostOptionUnavailable
-              action="Create team host"
+            <CreateTeamMachineAction
+              environmentId={live.environmentId}
               testId="team-host-option-machine"
             />
           )
@@ -247,31 +253,127 @@ function TeamHostOption(props: {
   );
 }
 
-/** An option with nothing behind it yet: its button, disabled, and why. */
-function TeamHostOptionUnavailable(props: {
-  readonly action: string;
+/**
+ * Create a team host on a machine (T141): mint the one-time token the
+ * machine joins with, and show it once with the command to run there and
+ * when it lapses. Pressed while the team has a cloud sandbox, or one is on
+ * its way, it would be refused, so it waits; the server refuses a second
+ * host either way. Once the machine joins, the setup goes live and the
+ * channel's history line says how the host came.
+ */
+function CreateTeamMachineAction(props: {
+  readonly environmentId: string;
   readonly testId: string;
 }): ReactNode {
-  const { testId } = props;
+  const { environmentId, testId } = props;
   const noteId = useId();
+  const sandboxes = useSandboxList();
+  const cloud = useTeamCloudCreate(environmentId, sandboxes.data);
+  const mint = useTeamHostInstallTokenMutation(environmentId);
+  if (mint.data !== undefined) {
+    return <TeamMachineJoin token={mint.data} testId={testId} />;
+  }
+  const cloudOnItsWay =
+    cloud !== undefined && (cloud.pending || cloud.acceptedSandboxId !== null);
+  const hasCloudSandbox =
+    sandboxes.data?.sandboxes.some((summary) =>
+      hostsTeamBots(summary, environmentId),
+    ) ?? false;
+  const note =
+    cloudOnItsWay || hasCloudSandbox ? "The team has a cloud sandbox." : null;
+  const refusal =
+    mint.isPending || mint.error === null ? null : mint.error.message;
   return (
     <div className="flex min-w-0 flex-col items-start gap-1">
       <Button
         type="button"
         size="sm"
         variant="outline"
-        disabled
-        aria-describedby={noteId}
+        disabled={note !== null || mint.isPending}
+        aria-describedby={note === null ? undefined : noteId}
+        onClick={() => {
+          if (note === null && !mint.isPending) mint.mutate();
+        }}
         data-testid={`${testId}-action`}
       >
-        {props.action}
+        {mint.isPending ? (
+          <AgentSpinningDots
+            className={undefined}
+            testId={undefined}
+            variant={undefined}
+          />
+        ) : null}
+        Create team host
+      </Button>
+      {note === null ? null : (
+        <p
+          id={noteId}
+          className="text-ui-xs text-muted-foreground"
+          data-testid={`${testId}-note`}
+        >
+          {note}
+        </p>
+      )}
+      {refusal === null ? null : (
+        <p
+          role="alert"
+          className="text-ui-xs text-destructive"
+          data-testid={`${testId}-refusal`}
+        >
+          {refusal}
+        </p>
+      )}
+    </div>
+  );
+}
+
+/** How long "Copied" stays on the copy button. */
+const COPIED_RESET_MS = 2_000;
+
+/**
+ * The minted token, shown once: the command that joins the machine and when
+ * the token lapses. Leaving the card drops it; a lost token is replaced by
+ * pressing again once it lapses.
+ */
+function TeamMachineJoin(props: {
+  readonly token: TeamHostInstallToken;
+  readonly testId: string;
+}): ReactNode {
+  const { testId } = props;
+  const command = `traycer host join ${props.token.installToken}`;
+  const { copied, copy } = useClipboardCopy({
+    resetMs: COPIED_RESET_MS,
+    onSuccess: null,
+    onError: null,
+  });
+  return (
+    <div
+      className="flex w-full min-w-0 flex-col items-start gap-1.5"
+      data-testid={`${testId}-join`}
+    >
+      <p className="text-ui-xs text-foreground">
+        Run this on the machine. The token works once and is shown only here.
+      </p>
+      <pre
+        className="w-full overflow-x-auto rounded-md border border-border/60 bg-foreground/3 p-2 font-mono text-ui-xs text-foreground"
+        data-testid={`${testId}-command`}
+      >
+        {command}
+      </pre>
+      <Button
+        type="button"
+        size="sm"
+        variant="outline"
+        onClick={() => copy(command)}
+        data-testid={`${testId}-copy`}
+      >
+        {copied ? "Copied" : "Copy command"}
       </Button>
       <p
-        id={noteId}
         className="text-ui-xs text-muted-foreground"
-        data-testid={`${testId}-unavailable`}
+        data-testid={`${testId}-expiry`}
       >
-        Not available yet.
+        {`Expires at ${formatClockTime(props.token.expiresAt)}. The team's bots start once the machine joins.`}
       </p>
     </div>
   );
@@ -540,4 +642,5 @@ const TEAM_SETUP_ARRIVAL_LINES: Readonly<
   Record<BotOnboardingArrival["kind"], (teamName: string) => string>
 > = {
   cloud: (teamName) => `Cloud enabled for ${teamName} · bots run on sandboxes`,
+  machine: (teamName) => `${teamName}'s machine joined · bots run on it`,
 };

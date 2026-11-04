@@ -215,6 +215,10 @@ function buildFakeBridge(
       kind: "network-error" as const,
       detail: "test",
     }),
+    mintTeamHostInstallToken: async () => ({
+      kind: "network-error" as const,
+      detail: "test",
+    }),
     getSandboxGrants: async () => ({
       kind: "network-error" as const,
       detail: "test",

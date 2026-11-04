@@ -67,6 +67,7 @@ import type {
   readSlackAppViaHttp,
   registerSlackAppViaHttp,
 } from "@traycer-clients/shared/host-client/slack-app";
+import type { mintTeamHostInstallTokenViaHttp } from "@traycer-clients/shared/host-client/team-host";
 import type {
   decideSecretRequestViaHttp,
   fetchEnvironmentProvidersViaHttp,
@@ -173,6 +174,12 @@ const disconnectSlackAppViaHttpMock = vi.hoisted(() =>
     detail: "unscripted",
   })),
 );
+const mintTeamHostInstallTokenViaHttpMock = vi.hoisted(() =>
+  vi.fn<typeof mintTeamHostInstallTokenViaHttp>(async () => ({
+    kind: "network-error",
+    detail: "unscripted",
+  })),
+);
 /** The secrets broker's grants read and decide the two handlers make, observed. */
 const fetchSandboxGrantsViaHttpMock = vi.hoisted(() =>
   vi.fn<typeof fetchSandboxGrantsViaHttp>(async () => ({
@@ -225,6 +232,9 @@ vi.mock("@traycer-clients/shared/host-client/slack-app", () => ({
   registerSlackAppViaHttp: registerSlackAppViaHttpMock,
   mintSlackAppInstallUrlViaHttp: mintSlackAppInstallUrlViaHttpMock,
   disconnectSlackAppViaHttp: disconnectSlackAppViaHttpMock,
+}));
+vi.mock("@traycer-clients/shared/host-client/team-host", () => ({
+  mintTeamHostInstallTokenViaHttp: mintTeamHostInstallTokenViaHttpMock,
 }));
 vi.mock("@traycer-clients/shared/host-client/sandbox-secrets", () => ({
   fetchSandboxGrantsViaHttp: fetchSandboxGrantsViaHttpMock,
@@ -837,6 +847,8 @@ describe("RunnerIpcBridge", () => {
           RunnerHostInvoke.registerSlackApp,
           RunnerHostInvoke.mintSlackAppInstallUrl,
           RunnerHostInvoke.disconnectSlackApp,
+          // A team environment's bot-host install token, on traycer-server.
+          RunnerHostInvoke.mintTeamHostInstallToken,
           // The secrets broker, on authn.
           RunnerHostInvoke.getSandboxGrants,
           RunnerHostInvoke.getTeamEnvironment,
@@ -1335,6 +1347,11 @@ describe("RunnerIpcBridge", () => {
         RunnerHostInvoke.disconnectSlackApp,
         disconnectSlackAppViaHttpMock,
         ["bot-1"],
+      ],
+      [
+        RunnerHostInvoke.mintTeamHostInstallToken,
+        mintTeamHostInstallTokenViaHttpMock,
+        ["env-1"],
       ],
     ];
     for (const [channel, mock, args] of calls) {

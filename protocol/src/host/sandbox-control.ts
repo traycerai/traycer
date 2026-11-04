@@ -942,6 +942,11 @@ export const SANDBOX_REFUSAL_CODE_ENVIRONMENT_UNAVAILABLE =
  * old name, so trying again is safe.
  */
 export const SANDBOX_REFUSAL_CODE_RENAME_UNAVAILABLE = "rename_unavailable";
+/**
+ * A kept team sandbox (a create or a Keep) whose environment already has its
+ * bot host: a kept sandbox or a team machine (Tracy Bots T141).
+ */
+export const SANDBOX_REFUSAL_CODE_TEAM_HOST_EXISTS = "team_host_exists";
 
 // -----------------------------------------------------------------------------
 // Lifecycle verbs

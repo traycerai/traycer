@@ -136,6 +136,10 @@ import {
 } from "@traycer-clients/shared/host-client/slack-app";
 import type { SlackAppRegisterRequest } from "@traycer/protocol/host/slack-app";
 import {
+  mintTeamHostInstallTokenViaHttp,
+  type TeamHostInstallTokenResult,
+} from "@traycer-clients/shared/host-client/team-host";
+import {
   createSandboxViaHttp,
   destroySandboxViaHttp,
   fetchSandboxCatalogueViaHttp,
@@ -971,6 +975,18 @@ export class MobileRunnerHost implements IRunnerHost {
       bearerToken,
       null,
       botId,
+    );
+  }
+
+  mintTeamHostInstallToken(
+    bearerToken: string,
+    environmentId: string,
+  ): Promise<TeamHostInstallTokenResult> {
+    return mintTeamHostInstallTokenViaHttp(
+      this.serverBaseUrl,
+      bearerToken,
+      null,
+      environmentId,
     );
   }
 
