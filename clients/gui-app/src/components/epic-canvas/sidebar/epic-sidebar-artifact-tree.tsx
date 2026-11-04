@@ -39,6 +39,7 @@ import {
   tileIntent,
 } from "@/lib/canvas/tile-open/intent";
 import { useEpicExportArtifacts } from "@/hooks/epic/use-epic-export-artifacts-mutation";
+import { hasNestedMarkdownArtifacts } from "@/lib/artifacts/artifact-export-selection";
 import { cn } from "@/lib/utils";
 import { useDeletedArtifactsAvailable } from "@/hooks/epic/use-deleted-artifacts-available";
 import { useEpicSessionHostId } from "@/hooks/epic/use-epic-session-host-id";
@@ -1955,6 +1956,9 @@ function useArtifactRowMenuEntries(
   const markdown = useEpicStore((state) =>
     isMarkdownArtifactKind(state.artifacts.byId[props.nodeId]?.kind),
   );
+  const nested = useEpicStore(
+    (state) => markdown && hasNestedMarkdownArtifacts(state, props.nodeId),
+  );
   const { canMutate, nodeId, nodeName, onPerformDelete, onStartRename } = props;
   const copyIdEntry = useSidebarCopyIdMenuEntry(nodeId);
   const exportPending = exportArtifacts.isPending;
@@ -1972,6 +1976,16 @@ function useArtifactRowMenuEntries(
         format,
         archive: false,
         archiveTitle: null,
+        includeNested: false,
+      });
+    };
+    const exportNested = (format: "markdown" | "pdf"): void => {
+      exportMutate({
+        artifacts: [{ id: nodeId, title: nodeName }],
+        format,
+        archive: true,
+        archiveTitle: nodeName,
+        includeNested: true,
       });
     };
     const exportIcon = exportPending ? (
@@ -2012,6 +2026,25 @@ function useArtifactRowMenuEntries(
         },
         onSelect: () => exportOne("pdf"),
       },
+      ...(nested
+        ? (["markdown", "pdf"] as const).map((format): SidebarRowMenuEntry => ({
+            kind: "item",
+            id: `export-nested-${format}`,
+            label:
+              format === "markdown"
+                ? "Export with nested artifacts as Markdown ZIP"
+                : "Export with nested artifacts as PDF ZIP",
+            icon: exportIcon,
+            disabled: exportPending,
+            disabledTooltip: null,
+            variant: "default",
+            testIds: {
+              dropdown: `epic-sidebar-export-nested-${format}-${nodeId}`,
+              context: `epic-sidebar-context-export-nested-${format}-${nodeId}`,
+            },
+            onSelect: () => exportNested(format),
+          }))
+        : []),
       { kind: "separator", id: "after-export" },
       {
         kind: "item",
@@ -2055,6 +2088,7 @@ function useArtifactRowMenuEntries(
         );
   }, [
     markdown,
+    nested,
     canMutate,
     copyIdEntry,
     exportMutate,
