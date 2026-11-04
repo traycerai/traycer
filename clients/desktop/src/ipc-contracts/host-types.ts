@@ -39,6 +39,15 @@ export interface DesktopPublishedHostSnapshot extends DesktopLocalHostSnapshot {
   readonly availability: LiveHostAvailability;
 }
 
+/**
+ * The OS wake pulse (`RunnerHostEvent.systemResumed`). `screenLocked` is true
+ * when the machine woke behind its lock screen: the person is not back until
+ * the unlock, which sends a pulse of its own.
+ */
+export interface DesktopSystemWake {
+  readonly screenLocked: boolean;
+}
+
 export interface DesktopTrayEpic {
   readonly epicId: string;
   readonly title: string;
