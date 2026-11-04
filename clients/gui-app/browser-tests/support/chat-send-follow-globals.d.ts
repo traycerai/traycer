@@ -16,6 +16,8 @@ interface ChatFollowReading {
   readonly promptBottom: number | null;
   readonly rows: number;
   readonly lastRowKey: string | null;
+  /** Every rendered row's key in order: the row shape the layout hold rides. */
+  readonly rowKeys: string;
 }
 
 interface ChatFollowFrame extends ChatFollowReading {
