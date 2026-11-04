@@ -2,6 +2,12 @@ import { act, cleanup, render, screen } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { MobileTabSwitcherMount } from "@/components/epic-canvas/mobile/mobile-tab-switcher-mount";
 import { useMobileSwitcherStore } from "@/stores/epics/mobile-switcher-store";
+import {
+  installShellForm,
+  SHELL_WIDTH_COLUMN_256,
+  SHELL_WIDTH_MENU,
+  type ShellFormHarness,
+} from "../../../../../__tests__/mobile-level2-form-harness";
 
 // The sheet pulls the resolved-theme context and every embedded panel body with
 // it; this file is about the mount's REGISTRATION, so stub it to a marker
@@ -69,5 +75,41 @@ describe("<MobileTabSwitcherMount />", () => {
     act(() => useMobileSwitcherStore.getState().setOpen("tab-1", true));
     unmount();
     expect(useMobileSwitcherStore.getState().openTabId).toBe("tab-1");
+  });
+
+  describe("by level 2 form", () => {
+    let shell: ShellFormHarness;
+    beforeEach(() => {
+      shell = installShellForm(SHELL_WIDTH_COLUMN_256);
+    });
+    afterEach(() => shell.dispose());
+
+    it("draws the sheet only at bar", () => {
+      render(<MobileTabSwitcherMount epicId="epic-1" tabId="tab-1" />);
+      expect(screen.queryByTestId("sheet")).toBeNull();
+      shell.set({ width: SHELL_WIDTH_MENU, portrait: false });
+      expect(screen.queryByTestId("sheet")).toBeNull();
+      shell.set({ width: SHELL_WIDTH_MENU, portrait: true });
+      expect(screen.queryByTestId("sheet")).not.toBeNull();
+    });
+
+    it("clears an open request in the column form, so a later flip to bar does not pop the sheet", () => {
+      render(<MobileTabSwitcherMount epicId="epic-1" tabId="tab-1" />);
+      act(() => useMobileSwitcherStore.getState().setOpen("tab-1", true));
+      expect(useMobileSwitcherStore.getState().openTabId).toBeNull();
+      shell.set({ width: SHELL_WIDTH_MENU, portrait: true });
+      expect(screen.getByTestId("sheet").getAttribute("data-open")).toBe(
+        "false",
+      );
+    });
+
+    it("stays registered in every form", () => {
+      render(<MobileTabSwitcherMount epicId="epic-1" tabId="tab-1" />);
+      expect(mountedFor("tab-1")).toBe(true);
+      shell.set({ width: SHELL_WIDTH_MENU, portrait: false });
+      expect(mountedFor("tab-1")).toBe(true);
+      shell.set({ width: SHELL_WIDTH_MENU, portrait: true });
+      expect(mountedFor("tab-1")).toBe(true);
+    });
   });
 });

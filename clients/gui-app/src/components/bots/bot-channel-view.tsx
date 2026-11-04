@@ -109,7 +109,7 @@ import type {
 } from "@/stores/bots/bot-open-thread-store";
 import { useAuthStore, type AuthProfile } from "@/stores/auth/auth-store";
 import type { StackedIdentity } from "@/components/bots/bot-avatars";
-import { isPhoneLayoutOnly } from "@/lib/mobile-app";
+import type { MobileTileCount } from "@/lib/layout/mobile-layout-form";
 import { cn } from "@/lib/utils";
 
 const EMPTY_THREADS: ReadonlyArray<BotThreadSummary> = [];
@@ -297,6 +297,8 @@ export function BotChannelView(props: {
   readonly onOpenActivity: () => void;
   /** A live team main bot's setup history at the top of the channel (T67b); `null` for none. */
   readonly setupHistory: ReactNode;
+  /** How many tiles the installed app shows; `null` where the container decides. */
+  readonly tiles: MobileTileCount | null;
 }): ReactNode {
   const {
     botId,
@@ -320,6 +322,7 @@ export function BotChannelView(props: {
     botNameOf,
     onOpenActivity,
     setupHistory,
+    tiles,
   } = props;
   const openThreadPostId = open?.anchorMessageId ?? null;
   const client = useTabHostClient();
@@ -758,7 +761,7 @@ export function BotChannelView(props: {
               data-conversation-id={channel.conversationId}
               className={cn(
                 "min-h-0 min-w-0 flex-1 flex-col",
-                railOpen ? channelBesideRailClass() : "flex",
+                railOpen ? channelBesideRailClass(tiles) : "flex",
               )}
             >
               <BotChatTranscript
@@ -802,6 +805,7 @@ export function BotChannelView(props: {
               />
             </section>
             <ChannelMemoryPane
+              tiles={tiles}
               memory={openMemory}
               render={(memory) => (
                 <BotMemoryPanel
@@ -825,6 +829,7 @@ export function BotChannelView(props: {
               )}
             />
             <ChannelThreadPane
+              tiles={tiles}
               postId={railThreadPostId}
               render={(postId) => (
                 <BotThreadPanel
@@ -914,49 +919,54 @@ function useSurfaceCards(args: {
 }
 
 /**
- * The channel while the rail is open: the rail takes its place in the installed
- * app, and sits beside it where the tab's container has room. Either way it stays
- * mounted, so its scroll and its draft are there when the rail closes.
+ * The channel while the rail is open: the rail takes its place on one tile, and
+ * sits beside it on two. Either way it stays mounted, so its scroll and its draft
+ * are there when the rail closes.
  */
-function channelBesideRailClass(): string {
-  return isPhoneLayoutOnly() ? "hidden" : "hidden @3xl:flex";
+function channelBesideRailClass(tiles: MobileTileCount | null): string {
+  if (tiles === null) return "hidden @3xl:flex";
+  return tiles === 2 ? "flex" : "hidden";
 }
 
 /**
  * The rail's pane. Off the installed app the tab's container places it and the
- * person drags its width; in the installed app it fills the row, with nothing to
- * drag.
+ * person drags its width; in the installed app the width rule places it, and two
+ * tiles split the row equally with nothing to drag.
  */
-function railPanePlacement(): {
+function railPanePlacement(tiles: MobileTileCount | null): {
   readonly className: string;
   readonly handleClassName: string;
 } {
-  if (isPhoneLayoutOnly()) {
+  if (tiles === null) {
     return {
-      className: "flex min-h-0 min-w-0 flex-1 flex-col",
-      handleClassName: "hidden",
+      className:
+        "flex min-h-0 min-w-0 flex-1 flex-col @3xl:w-(--bot-pane-width) @3xl:max-w-[60%] @3xl:flex-none @3xl:border-l @3xl:border-border/60",
+      handleClassName: "hidden @3xl:block",
     };
   }
   return {
-    className:
-      "flex min-h-0 min-w-0 flex-1 flex-col @3xl:w-(--bot-pane-width) @3xl:max-w-[60%] @3xl:flex-none @3xl:border-l @3xl:border-border/60",
-    handleClassName: "hidden @3xl:block",
+    className: cn(
+      "flex min-h-0 min-w-0 flex-1 flex-col",
+      tiles === 2 && "border-l border-border/60",
+    ),
+    handleClassName: "hidden",
   };
 }
 
 /** The bot's memory open in the rail; nothing for none (`null`). */
 function ChannelMemoryPane(props: {
+  readonly tiles: MobileTileCount | null;
   readonly memory: BotOpenMemory | null;
   readonly render: (memory: BotOpenMemory) => ReactNode;
 }): ReactNode {
-  const { memory, render } = props;
+  const { tiles, memory, render } = props;
   if (memory === null) return null;
   return (
     <BotResizablePane
       pane="thread"
       edge="left"
       label="Resize panel"
-      {...railPanePlacement()}
+      {...railPanePlacement(tiles)}
       testId="bot-memory-pane"
     >
       {render(memory)}
@@ -966,17 +976,18 @@ function ChannelMemoryPane(props: {
 
 /** The thread open in the rail, by its post's id; nothing for none (`null`). */
 function ChannelThreadPane(props: {
+  readonly tiles: MobileTileCount | null;
   readonly postId: string | null;
   readonly render: (postId: string) => ReactNode;
 }): ReactNode {
-  const { postId, render } = props;
+  const { tiles, postId, render } = props;
   if (postId === null) return null;
   return (
     <BotResizablePane
       pane="thread"
       edge="left"
       label="Resize thread"
-      {...railPanePlacement()}
+      {...railPanePlacement(tiles)}
       testId="bot-thread-pane"
     >
       {render(postId)}
