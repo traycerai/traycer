@@ -4,14 +4,14 @@ import {
   type RandomSource,
   type ScheduledPlay,
 } from "../scheduler";
-import {
-  AQUILO_1,
-  type Layer,
-  type LayerProperties,
-  type Range,
-  type State,
-  type VariableTrack,
+import type {
+  Layer,
+  LayerProperties,
+  Range,
+  State,
+  VariableTrack,
 } from "../variable-sound";
+import { AQUILO_1 } from "./aquilo-1";
 import { mulberry32 } from "./fakes";
 
 const FIXED_ZERO: Range = [0, 0];

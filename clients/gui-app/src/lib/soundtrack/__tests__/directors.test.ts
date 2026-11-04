@@ -6,7 +6,8 @@ import {
   type MixPlan,
 } from "../directors";
 import type { MixSignals } from "../signals";
-import { AQUILO_1, type VariableTrack } from "../variable-sound";
+import type { VariableTrack } from "../variable-sound";
+import { AQUILO_1 } from "./aquilo-1";
 
 const QUIET: MixSignals = {
   view: "home",
