@@ -10,22 +10,47 @@ import type {
   HostListItem,
   HostOwnerPrincipal,
 } from "@traycer/protocol/host/host-status";
+import type { EnvironmentStatusResponseV11 } from "@traycer/protocol/host/environment-schemas";
+import { environmentStatusFixture } from "@/lib/environment/__tests__/environment-test-support";
 import type { EpicShareableTeam } from "@/stores/auth/auth-store";
 import { useAuthStore } from "@/stores/auth/auth-store";
 
 /**
- * A chat on a host no team owns, in a team's task, says it runs on the person's
- * Personal settings and offers to continue on one of that team's hosts. The
- * first use per person per team asks first. Everything the line reads (the
- * task's team, the tab host's team, the host registry) is mocked at the hook
- * boundary.
+ * A chat on a host no team owns, in a team's task, names the settings its
+ * host reports and offers to continue on one of that team's hosts. The first
+ * use per person per team asks first. Host reads are mocked at the hook
+ * boundary; settings classification uses real status fixtures.
  */
 
 const mocks = vi.hoisted(() => {
   const epicTeam: { current: string | null } = { current: null };
   const tabHostTeam: { current: string | null } = { current: null };
   const hosts: { current: readonly HostListItem[] | null } = { current: null };
-  return { epicTeam, tabHostTeam, hosts };
+  const status: {
+    current: EnvironmentStatusResponseV11 | null;
+  } = { current: null };
+  const statusError: { current: boolean } = { current: false };
+  const supported: { current: boolean | null } = { current: true };
+  const readiness: { current: boolean } = { current: true };
+  const resolvedHostIds: string[] = [];
+  const statusReadCalls: Array<{
+    client: object | null;
+    hostId: string | null;
+    enabled: boolean;
+  }> = [];
+  const client = {};
+  return {
+    epicTeam,
+    tabHostTeam,
+    hosts,
+    status,
+    statusError,
+    supported,
+    readiness,
+    resolvedHostIds,
+    statusReadCalls,
+    client,
+  };
 });
 
 vi.mock("@/hooks/epics/use-epic-owning-team", () => ({
@@ -45,12 +70,36 @@ vi.mock("@/hooks/auth/use-registered-hosts-query", async (importOriginal) => ({
     data: mocks.hosts.current === null ? null : { hosts: mocks.hosts.current },
   }),
 }));
+vi.mock("@/hooks/host/use-host-client-for-host-id", () => ({
+  useHostClientForHostId: (hostId: string | null) => {
+    if (hostId !== null) mocks.resolvedHostIds.push(hostId);
+    return mocks.client;
+  },
+}));
+vi.mock("@/hooks/host/use-reactive-host-readiness", () => ({
+  useReactiveHostReadiness: () => ({ canExecute: mocks.readiness.current }),
+}));
+vi.mock("@/hooks/environment/use-environment-reads", () => ({
+  useEnvironmentStatusRead: (
+    client: object | null,
+    hostId: string | null,
+    enabled: boolean,
+  ) => {
+    mocks.statusReadCalls.push({ client, hostId, enabled });
+    return {
+      supported: mocks.supported.current,
+      data: mocks.status.current,
+      isError: mocks.statusError.current,
+    };
+  },
+}));
 
 import {
   TEAM_EPIC_PERSONAL_LINE,
   teamEpicContinueCaution,
   teamEpicContinueLabel,
   teamEpicPersonalNotice,
+  teamEpicSettingsLine,
 } from "@/components/chat/composer/team-epic-personal-line-model";
 import { TeamEpicPersonalLine } from "@/components/chat/composer/team-epic-personal-line";
 import {
@@ -163,6 +212,14 @@ beforeEach(() => {
   mocks.epicTeam.current = "t1";
   mocks.tabHostTeam.current = null;
   mocks.hosts.current = REGISTRY;
+  mocks.status.current = environmentStatusFixture({
+    consent: { acceptedAt: 1, planHash: "accepted" },
+  });
+  mocks.statusError.current = false;
+  mocks.supported.current = true;
+  mocks.readiness.current = true;
+  mocks.resolvedHostIds.length = 0;
+  mocks.statusReadCalls.length = 0;
   setViewer(VIEWER, [ACME, BETA]);
 });
 
@@ -232,6 +289,42 @@ describe("teamEpicPersonalNotice", () => {
     expect(teamEpicContinueLabel("acme")).toBe("Continue on a acme host");
     expect(teamEpicContinueCaution("acme")).toBe(CAUTION);
   });
+
+  it("classifies local, moved, previously shared, moving, stopped and unread settings", () => {
+    expect(
+      teamEpicSettingsLine(
+        environmentStatusFixture({
+          principal: null,
+          planes: { records: "local", broker: "local", room: "local" },
+        }),
+      ),
+    ).toBe("Running on this computer's own settings.");
+    expect(
+      teamEpicSettingsLine(
+        environmentStatusFixture({
+          consent: { acceptedAt: 1, planHash: "accepted" },
+        }),
+      ),
+    ).toBe(TEAM_EPIC_PERSONAL_LINE);
+    expect(teamEpicSettingsLine(environmentStatusFixture({}))).toBe(
+      TEAM_EPIC_PERSONAL_LINE,
+    );
+    expect(
+      teamEpicSettingsLine(
+        environmentStatusFixture({
+          setup: { stage: "moving_settings", state: "running" },
+        }),
+      ),
+    ).toBeNull();
+    expect(
+      teamEpicSettingsLine(
+        environmentStatusFixture({
+          setup: { stage: "moving_settings", state: "failed" },
+        }),
+      ),
+    ).toBeNull();
+    expect(teamEpicSettingsLine(null)).toBeNull();
+  });
 });
 
 describe("<TeamEpicPersonalLine />", () => {
@@ -275,6 +368,46 @@ describe("<TeamEpicPersonalLine />", () => {
     expect(screen.getByTestId("team-epic-continue").textContent).toBe(
       "Continue on a acme host",
     );
+  });
+
+  it("resolves and reads the explicit tab host, and disables that read when readiness is false", () => {
+    renderLine(vi.fn());
+    expect(mocks.resolvedHostIds).toContain("host-personal");
+    expect(mocks.statusReadCalls).toContainEqual({
+      client: mocks.client,
+      hostId: "host-personal",
+      enabled: true,
+    });
+
+    cleanup();
+    mocks.readiness.current = false;
+    renderLine(vi.fn());
+    expect(screen.queryByTestId("team-epic-personal-line")).toBeNull();
+    expect(mocks.statusReadCalls.at(-1)).toEqual({
+      client: mocks.client,
+      hostId: "host-personal",
+      enabled: false,
+    });
+  });
+
+  it("hides stale status when the read errors", () => {
+    mocks.statusError.current = true;
+    renderLine(vi.fn());
+    expect(screen.queryByTestId("team-epic-personal-line")).toBeNull();
+  });
+
+  it("hides unread and unsupported status instead of using an old value", () => {
+    mocks.status.current = null;
+    renderLine(vi.fn());
+    expect(screen.queryByTestId("team-epic-personal-line")).toBeNull();
+
+    cleanup();
+    mocks.status.current = environmentStatusFixture({
+      consent: { acceptedAt: 1, planHash: "accepted" },
+    });
+    mocks.supported.current = false;
+    renderLine(vi.fn());
+    expect(screen.queryByTestId("team-epic-personal-line")).toBeNull();
   });
 
   it("asks first when the person has not confirmed for this team", () => {

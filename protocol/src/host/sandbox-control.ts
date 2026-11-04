@@ -201,7 +201,8 @@ export interface SandboxSummary {
   readonly priceMcPerHour: SandboxHourlyPrice | null;
   /**
    * The environment the sandbox belongs to; `null` from a server that
-   * predates environments, which reads as the person's Personal one.
+   * predates environments. An absent id does not establish Personal
+   * membership; the sandbox's environment is unknown.
    */
   readonly environmentId: string | null;
   /**
