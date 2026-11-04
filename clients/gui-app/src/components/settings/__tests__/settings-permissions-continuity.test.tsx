@@ -1,3 +1,4 @@
+import { useSettingsHostScopeStore } from "@/stores/settings/settings-host-scope-store";
 /**
  * The Rules editor's unsaved text across a walk through OTHER Settings
  * sections, through the REAL `SettingsModalContent` / `SettingsSurface`, the
@@ -26,7 +27,7 @@ import {
 } from "@/components/settings/panels/auto-policy-document";
 import { SettingsModalContent } from "@/components/settings/settings-modal-content";
 import { SettingsSurface } from "@/components/settings/settings-surface";
-import { useSettingsHostScopeStore } from "@/stores/settings/settings-host-scope-store";
+
 import { useSettingsSearchStore } from "@/stores/settings/settings-search-store";
 import {
   armSettingsOpenIntent,
@@ -167,7 +168,7 @@ beforeEach(() => {
     source: "account",
     readState: "fresh",
   };
-  useSettingsHostScopeStore.setState({ scopedHostId: null });
+  useSettingsHostScopeStore.getState().reset();
   useSettingsSearchStore.setState({ pendingReveal: null });
   resetSettingsOpenIntentForTests();
   resetRulesEditForTests();

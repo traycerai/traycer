@@ -1,3 +1,4 @@
+import { useSettingsHostScopeStore } from "@/stores/settings/settings-host-scope-store";
 import {
   afterEach,
   beforeEach,
@@ -41,7 +42,7 @@ import type { HostScope } from "@/components/settings/host-scope/use-host-scope"
 import { useAccountContextStore } from "@/stores/auth/account-context-store";
 import { useDesktopDialogStore } from "@/stores/dialogs/desktop-dialog-store";
 import { useProvidersFocusStore } from "@/stores/settings/providers-focus-store";
-import { useSettingsHostScopeStore } from "@/stores/settings/settings-host-scope-store";
+
 import { useSettingsSearchStore } from "@/stores/settings/settings-search-store";
 import type {
   AvailableProviderRateLimits,
@@ -988,7 +989,7 @@ beforeEach(() => {
   // per-provider links carry across. Neither is reset by the render, so a
   // leftover from the previous case would let an assertion pass on it.
   useSettingsSearchStore.getState().clearReveal();
-  useSettingsHostScopeStore.getState().setScopedHostId(null);
+  useSettingsHostScopeStore.getState().reset();
   onClose = vi.fn();
 });
 
@@ -3459,7 +3460,7 @@ describe("<RateLimitPopover /> manage provider links", () => {
       // No tab named: Providers resolves this provider's own first tab.
       focusTab: null,
     });
-    expect(useSettingsHostScopeStore.getState().scopedHostId).toBe("host-a");
+    expect(useSettingsHostScopeStore.getState().pendingHostId).toBe("host-a");
   });
 
   it("deep-links an ambient provider from its own header", () => {

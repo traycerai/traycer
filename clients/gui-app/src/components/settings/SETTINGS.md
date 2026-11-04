@@ -1258,6 +1258,18 @@ the whole surface guards against:
   tag beside the host name, which replaced a full-width row asserting the same
   boolean.
 
+Settings keeps one host view selection per environment pick, in the window's
+non-persisted `settings-host-scope-store`. `useHostScope()` filters the global
+host options through `useHostsRunningConfiguration` membership (or the one
+Local host), defaulting to the first member only when no selection exists.
+An explicit selection that leaves membership stays vanished, with its picked
+name and a Forget control; loading or failed membership selects nothing.
+Named entry points share `carryViewedHostIntoSettingsScope`: hold the target
+pending, resolve its Local row or confirm Personal/team membership, then set
+the environment pick and its host selection. This never activates a host.
+Membership, discovery and Personal's computer lists use the unscoped
+`useHostScopeFor(WINDOW_HOST_SELECTION)` beneath that selection.
+
 `useHostScope()` (`host-scope/use-host-scope.ts`) is the single hook every
 panel under the picker reads; `usePersonalHostScope()` beside it is the same
 host model over a fixed "follow the active host" selection, for the Personal

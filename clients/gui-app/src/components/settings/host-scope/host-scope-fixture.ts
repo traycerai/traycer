@@ -89,6 +89,7 @@ export function hostScopeFixture(overrides: Partial<HostScope>): HostScope {
     hostId: host?.hostId ?? null,
     hostLabel: host?.name ?? "No host",
     vanishedHostId: null,
+    vanishedSelection: null,
     returnToActive: () => undefined,
     activeHostId: host?.hostId ?? null,
     activeHost: host,

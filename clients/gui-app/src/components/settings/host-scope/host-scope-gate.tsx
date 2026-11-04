@@ -48,6 +48,29 @@ export function HostScopeGate(props: {
 }): ReactNode {
   const { scope } = props;
 
+  if (scope.status === "vanished" && scope.vanishedSelection !== null) {
+    const selection = scope.vanishedSelection;
+    return (
+      <HostScopeNotice
+        tone="warn"
+        title={`${selection.name} is no longer here.`}
+        detail={null}
+        action={
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            onClick={selection.forget}
+            data-testid="host-scope-forget-vanished"
+          >
+            Forget {selection.name}
+          </Button>
+        }
+        testId="host-scope-vanished"
+      />
+    );
+  }
+
   if (scope.status === "vanished") {
     return (
       <HostScopeNotice

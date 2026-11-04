@@ -1,3 +1,4 @@
+import { useSettingsHostScopeStore } from "@/stores/settings/settings-host-scope-store";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { MockRunnerHost } from "@traycer-clients/shared/host-client/mock/mock-runner-host";
 import type { LocalHostSnapshot } from "@traycer-clients/shared/platform/runner-host";
@@ -8,7 +9,10 @@ import {
   type HostDirectoryServiceOptions,
 } from "@/lib/host/host-directory-service";
 import { lastLocalHostIdKey } from "@/lib/persist";
-import { useSettingsHostScopeStore } from "@/stores/settings/settings-host-scope-store";
+import {
+  setSettingsHostSelection,
+  settingsHostSelection,
+} from "@/stores/settings/__tests__/settings-host-scope-test-support";
 
 /**
  * Mirrors `host-directory-service.test.ts`'s own `LAST_LOCAL_HOST_ID_STORAGE_KEY`
@@ -83,7 +87,7 @@ afterEach(() => {
     directory.dispose();
   }
   window.localStorage.removeItem(LAST_LOCAL_HOST_ID_STORAGE_KEY);
-  useSettingsHostScopeStore.getState().setScopedHostId(null);
+  useSettingsHostScopeStore.getState().reset();
 });
 
 describe("HostDirectoryService with hasLocalHost: false and a persisted local host id", () => {
@@ -194,9 +198,7 @@ describe("HostDirectoryService with hasLocalHost: false and a persisted local ho
     // Primed as though a PREVIOUS (hasLocalHost: true) launch of this machine
     // had scoped Settings to the persisted id - the holder `adoptLocalHostId`
     // migrates when a re-enrollment fires.
-    useSettingsHostScopeStore
-      .getState()
-      .setScopedHostId(PERSISTED_LOCAL_HOST_ID);
+    setSettingsHostSelection(PERSISTED_LOCAL_HOST_ID);
     const host = makeHost(false, null);
     const directory = makeDirectory({
       authContextId: null,
@@ -209,7 +211,7 @@ describe("HostDirectoryService with hasLocalHost: false and a persisted local ho
     await directory.start();
     host.setLocalHost(localSnapshot);
 
-    expect(useSettingsHostScopeStore.getState().scopedHostId).toBe(
+    expect(settingsHostSelection()?.hostId ?? null).toBe(
       PERSISTED_LOCAL_HOST_ID,
     );
   });
@@ -309,9 +311,7 @@ describe("HostDirectoryService with hasLocalHost: true and a persisted local hos
       LAST_LOCAL_HOST_ID_STORAGE_KEY,
       PERSISTED_LOCAL_HOST_ID,
     );
-    useSettingsHostScopeStore
-      .getState()
-      .setScopedHostId(PERSISTED_LOCAL_HOST_ID);
+    setSettingsHostSelection(PERSISTED_LOCAL_HOST_ID);
     const host = makeHost(true, null);
     // The shell answers with a DIFFERENT id than the persisted one - a
     // re-enrollment (reinstall/replacement) discovered on this launch.
@@ -327,8 +327,6 @@ describe("HostDirectoryService with hasLocalHost: true and a persisted local hos
     await directory.start();
 
     expect(directory.getLocalHostId()).toBe("re-enrolled-host-id");
-    expect(useSettingsHostScopeStore.getState().scopedHostId).toBe(
-      "re-enrolled-host-id",
-    );
+    expect(settingsHostSelection()?.hostId ?? null).toBe("re-enrolled-host-id");
   });
 });

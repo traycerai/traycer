@@ -1,3 +1,4 @@
+import { useSettingsHostScopeStore } from "@/stores/settings/settings-host-scope-store";
 // The Overview re-provides a scoped STREAM binding beside its unary one (for
 // the Data & migration group), and the real hook reads `useAuthService` -
 // which this suite deliberately does not stand up. `null` keeps the panel on
@@ -114,7 +115,7 @@ import {
   selectHostOverviewTab,
   type OverviewHostFixture,
 } from "@/components/settings/panels/__tests__/host-overview-test-support";
-import { useSettingsHostScopeStore } from "@/stores/settings/settings-host-scope-store";
+
 import { useSettingsSearchStore } from "@/stores/settings/settings-search-store";
 import {
   armSettingsOpenIntent,
@@ -315,7 +316,7 @@ afterEach(() => {
   resetNegotiatedManifests();
   resetSettingsOpenIntentForTests();
   useSettingsSearchStore.setState({ pendingReveal: null });
-  useSettingsHostScopeStore.setState({ scopedHostId: null });
+  useSettingsHostScopeStore.getState().reset();
   scopeOverrides.current = {};
   hostBindingMock.current = null;
   tabHostIdRef.current = "host-a";
@@ -441,7 +442,7 @@ describe("<HostSettingsPanel /> Overview — tabbed shell", () => {
       scopeOverrides.current = scopeFrom("host-b", fixtureB);
       fireEvent.click(screen.getByRole("button", { name: "Open host update" }));
 
-      expect(useSettingsHostScopeStore.getState().scopedHostId).toBe("host-b");
+      expect(useSettingsHostScopeStore.getState().pendingHostId).toBe("host-b");
       expect(activeTabTestId()).toBe("host-overview-tab-updates");
     });
   });

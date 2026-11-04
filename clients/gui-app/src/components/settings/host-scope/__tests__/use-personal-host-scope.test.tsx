@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { act, cleanup, renderHook } from "@testing-library/react";
+import { useState } from "react";
 import { HostClient } from "@traycer-clients/shared/host-client/host-client";
 import type { HostDirectoryEntry } from "@traycer-clients/shared/host-client/host-directory";
 import { MockHostMessenger } from "@traycer-clients/shared/host-client/mock/mock-host-messenger";
@@ -69,12 +70,11 @@ vi.mock("@/lib/analytics", () => ({
 import { hostScopeOptionFixture } from "@/components/settings/host-scope/host-scope-fixture";
 import {
   useAccountHostScope,
-  useHostScope,
+  useHostScopeFor,
   usePersonalHostScope,
 } from "@/components/settings/host-scope/use-host-scope";
 import { PERSONAL_PICK } from "@/lib/settings-environment-pages";
 import { useSettingsEnvironmentPickStore } from "@/stores/settings/settings-environment-pick-store";
-import { useSettingsHostScopeStore } from "@/stores/settings/settings-host-scope-store";
 
 function makeClient(hostId: string): HostClient<HostRpcRegistry> {
   const entry: HostDirectoryEntry = {
@@ -123,16 +123,18 @@ function installTwoHosts(): void {
   harness.overrideClient = makeClient(PICKED_HOST_ID);
 }
 
-function renderBothScopes() {
-  return renderHook(() => ({
-    hostGroup: useHostScope(),
-    personal: usePersonalHostScope(),
-  }));
+function renderBothScopes(initialHostId: string | null) {
+  return renderHook(() => {
+    const [scopedHostId, setScopedHostId] = useState(initialHostId);
+    return {
+      hostGroup: useHostScopeFor({ scopedHostId, setScopedHostId }),
+      personal: usePersonalHostScope(),
+    };
+  });
 }
 
 afterEach(() => {
   cleanup();
-  useSettingsHostScopeStore.setState({ scopedHostId: null });
   useSettingsEnvironmentPickStore.setState({
     pick: null,
     defaultPick: PERSONAL_PICK,
@@ -146,9 +148,7 @@ afterEach(() => {
 describe("usePersonalHostScope", () => {
   it("reads the window's own host while the Host group is pointed at another host", () => {
     installTwoHosts();
-    useSettingsHostScopeStore.setState({ scopedHostId: PICKED_HOST_ID });
-
-    const { result } = renderBothScopes();
+    const { result } = renderBothScopes(PICKED_HOST_ID);
 
     expect(result.current.hostGroup.hostId).toBe(PICKED_HOST_ID);
     expect(result.current.hostGroup.isViewingActive).toBe(false);
@@ -160,7 +160,7 @@ describe("usePersonalHostScope", () => {
 
   it("is moved by no pick: a pick under the Host group changes only the Host group", () => {
     installTwoHosts();
-    const { result } = renderBothScopes();
+    const { result } = renderBothScopes(null);
     expect(result.current.hostGroup.hostId).toBe(WINDOW_HOST_ID);
     expect(result.current.personal.hostId).toBe(WINDOW_HOST_ID);
 
@@ -170,14 +170,11 @@ describe("usePersonalHostScope", () => {
 
     expect(result.current.hostGroup.hostId).toBe(PICKED_HOST_ID);
     expect(result.current.personal.hostId).toBe(WINDOW_HOST_ID);
-    expect(useSettingsHostScopeStore.getState().scopedHostId).toBe(
-      PICKED_HOST_ID,
-    );
   });
 
   it("offers no way to re-point itself: its setter changes neither scope", () => {
     installTwoHosts();
-    const { result } = renderBothScopes();
+    const { result } = renderBothScopes(null);
 
     act(() => {
       result.current.personal.setHostId(PICKED_HOST_ID);
@@ -185,13 +182,11 @@ describe("usePersonalHostScope", () => {
 
     expect(result.current.personal.hostId).toBe(WINDOW_HOST_ID);
     expect(result.current.hostGroup.hostId).toBe(WINDOW_HOST_ID);
-    expect(useSettingsHostScopeStore.getState().scopedHostId).toBeNull();
   });
 
   it("follows the window when the window's own host changes", () => {
     installTwoHosts();
-    useSettingsHostScopeStore.setState({ scopedHostId: PICKED_HOST_ID });
-    const { result, rerender } = renderBothScopes();
+    const { result, rerender } = renderBothScopes(PICKED_HOST_ID);
     expect(result.current.personal.hostId).toBe(WINDOW_HOST_ID);
 
     harness.hosts = [
@@ -264,7 +259,7 @@ describe("usePersonalHostScope under the Environment dropdown's pick", () => {
   it("is not re-pointed by the Host group's pick while a Local row is picked", () => {
     installTwoHosts();
     useSettingsEnvironmentPickStore.setState({ pick: LOCAL_PICK });
-    const { result } = renderBothScopes();
+    const { result } = renderBothScopes(null);
 
     act(() => {
       result.current.hostGroup.setHostId(WINDOW_HOST_ID);

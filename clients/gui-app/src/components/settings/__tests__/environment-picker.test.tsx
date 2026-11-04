@@ -1,3 +1,4 @@
+import { useSettingsHostScopeStore } from "@/stores/settings/settings-host-scope-store";
 import type { EnvironmentStatusResponseV11 } from "@traycer/protocol/host/environment-schemas";
 import {
   act,
@@ -23,7 +24,6 @@ import type { NegotiatedMethodVersion } from "@/lib/host/read-negotiated-method-
 import { PERSONAL_PICK } from "@/lib/settings-environment-pages";
 import { useMoveSheetStore } from "@/stores/settings/move-sheet-store";
 import { useSettingsEnvironmentPickStore } from "@/stores/settings/settings-environment-pick-store";
-import { useSettingsHostScopeStore } from "@/stores/settings/settings-host-scope-store";
 
 // The two per-host reads the picker draws from are queries and a manifest
 // registry; they are the boundary, so the suite answers them directly.
@@ -233,7 +233,7 @@ beforeEach(() => {
     defaultPick: PERSONAL_PICK,
   });
   useMoveSheetStore.setState({ target: null });
-  useSettingsHostScopeStore.setState({ scopedHostId: null });
+  useSettingsHostScopeStore.getState().reset();
 });
 
 afterEach(() => {
@@ -313,7 +313,7 @@ describe("<EnvironmentPicker />", () => {
     expect(screen.queryByTestId("environment-picker-move-old")).toBeNull();
 
     fireEvent.click(screen.getByTestId("environment-picker-finish-old"));
-    expect(useSettingsHostScopeStore.getState().scopedHostId).toBe("old");
+    expect(useSettingsHostScopeStore.getState().pendingHostId).toBe("old");
     expect(surface.openSettings).toHaveBeenCalledWith(
       expect.objectContaining({ section: "host" }),
     );
@@ -468,13 +468,13 @@ describe("<EnvironmentPicker />", () => {
       "Two computers are named windows-test-machine · Rename",
     );
     fireEvent.click(line);
-    expect(useSettingsHostScopeStore.getState().scopedHostId).toBe("mac");
+    expect(useSettingsHostScopeStore.getState().pendingHostId).toBe("mac");
     expect(surface.openSettings).toHaveBeenCalledWith(
       expect.objectContaining({ section: "host" }),
     );
     cleanup();
 
-    useSettingsHostScopeStore.setState({ scopedHostId: null });
+    useSettingsHostScopeStore.getState().reset();
     reads.running = {
       hosts: [runningHost("other", false), runningHost("third", false)],
       state: "ready",
@@ -488,7 +488,7 @@ describe("<EnvironmentPicker />", () => {
     renderPicker("mac");
     openMenu();
     fireEvent.click(screen.getByTestId("environment-picker-name-collision"));
-    expect(useSettingsHostScopeStore.getState().scopedHostId).toBe("other");
+    expect(useSettingsHostScopeStore.getState().pendingHostId).toBe("other");
   });
 
   // A press takes the surface with it, which is the whole point of pressing:
