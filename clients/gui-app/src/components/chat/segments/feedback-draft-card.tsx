@@ -1,3 +1,4 @@
+import { v4 as uuidv4 } from "uuid";
 import { useId, useState, type ReactNode } from "react";
 import { MessageSquareText } from "lucide-react";
 import { create, useStore } from "zustand";
@@ -146,12 +147,21 @@ function LiveFeedbackDraftCard(
             ...blockRef,
             decision,
             includeDiagnostics,
-            clientActionId: crypto.randomUUID(),
+            clientActionId: newClientActionId(),
           });
         },
       }}
     />
   );
+}
+
+/**
+ * `crypto.randomUUID` throws outside a secure context (plain http), and
+ * `uuid`'s bare `v4()` calls it too; random bytes from `getRandomValues`
+ * work in either.
+ */
+function newClientActionId(): string {
+  return uuidv4({ random: crypto.getRandomValues(new Uint8Array(16)) });
 }
 
 function liveReadOnlyReason(
@@ -246,8 +256,9 @@ function FeedbackDraftBody(props: {
       ) : null}
       {draft.state === "failed" ? (
         <p className="text-destructive">
-          Not sent{draft.failureReason === null ? "" : `: ${draft.failureReason}`}
-          . You can try again.
+          Not sent
+          {draft.failureReason === null ? "" : `: ${draft.failureReason}`}. You
+          can try again.
         </p>
       ) : null}
       {awaiting ? <FeedbackDraftActions draft={draft} live={live} /> : null}
@@ -280,7 +291,11 @@ function FeedbackDraftActions(props: {
   const readOnly: FeedbackDraftReadOnlyReason | null =
     live === null ? "no-chat" : live.readOnly;
   if (live === null || readOnly !== null) {
-    return <p className="text-muted-foreground">{READ_ONLY_COPY[readOnly ?? "no-chat"]}</p>;
+    return (
+      <p className="text-muted-foreground">
+        {READ_ONLY_COPY[readOnly ?? "no-chat"]}
+      </p>
+    );
   }
   return (
     <div className="flex flex-col gap-2">
@@ -361,34 +376,36 @@ function FeedbackDraftPreviewDialog(props: {
             What Send attaches when the box is ticked.
           </DialogDescription>
         </DialogHeader>
-        {preview.isPending ? (
-          <AgentSpinningDots
-            className={undefined}
-            testId={undefined}
-            variant={undefined}
-          />
-        ) : null}
-        {!preview.isPending && data === null ? (
-          <p className="text-muted-foreground">
-            The diagnostic data could not be read.
-          </p>
-        ) : null}
-        {data === null ? null : (
-          <div className="flex min-h-0 flex-col gap-2 overflow-auto">
-            <dl className="flex flex-col gap-1">
-              {data.details.map((detail) => (
-                <FeedbackDraftField
-                  key={detail.label}
-                  label={detail.label}
-                  value={detail.value}
-                />
-              ))}
-            </dl>
-            <pre className="max-h-80 overflow-auto font-mono text-ui-xs whitespace-pre-wrap">
-              {data.logTail}
-            </pre>
-          </div>
-        )}
+        <div className="flex min-h-0 flex-col gap-2 px-5 py-4">
+          {preview.isPending ? (
+            <AgentSpinningDots
+              className={undefined}
+              testId={undefined}
+              variant={undefined}
+            />
+          ) : null}
+          {!preview.isPending && data === null ? (
+            <p className="text-muted-foreground">
+              The diagnostic data could not be read.
+            </p>
+          ) : null}
+          {data === null ? null : (
+            <div className="flex min-h-0 flex-col gap-2 overflow-auto">
+              <dl className="flex flex-col gap-1">
+                {data.details.map((detail) => (
+                  <FeedbackDraftField
+                    key={detail.label}
+                    label={detail.label}
+                    value={detail.value}
+                  />
+                ))}
+              </dl>
+              <pre className="max-h-80 overflow-auto font-mono text-ui-xs whitespace-pre-wrap">
+                {data.logTail}
+              </pre>
+            </div>
+          )}
+        </div>
       </DialogContent>
     </Dialog>
   );

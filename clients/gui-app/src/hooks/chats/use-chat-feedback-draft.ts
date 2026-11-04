@@ -1,8 +1,5 @@
 import { useMemo } from "react";
-import type {
-  UseMutationResult,
-  UseQueryResult,
-} from "@tanstack/react-query";
+import type { UseMutationResult, UseQueryResult } from "@tanstack/react-query";
 import type {
   ChatFeedbackDraftDecideRequest,
   ChatFeedbackDraftDecideResponse,
@@ -13,6 +10,7 @@ import type { HostClient } from "@traycer-clients/shared/host-client/host-client
 import type { HostRpcRegistry } from "@/lib/host";
 import { useHostMutation, useHostQuery } from "@/hooks/host/use-host-query";
 import { useHostMethodSupport } from "@/hooks/host/use-host-supports-method";
+import { toast } from "sonner";
 import { toastFromHostError } from "@/lib/host-error-toast";
 import { feedbackDraftMutationKeys } from "@/lib/query-keys";
 
@@ -58,6 +56,28 @@ export function useChatFeedbackDraftPreviewQuery(
 }
 
 /**
+ * What to tell the user when the host refused a decision in its response
+ * rather than by throwing. `null` when there is nothing to say: a settled
+ * decision, or `already-decided`, whose stamp the card shows instead.
+ */
+export function feedbackDraftRefusalMessage(
+  response: ChatFeedbackDraftDecideResponse,
+): string | null {
+  if (response.kind !== "error" || response.feedbackDraft !== null) {
+    return null;
+  }
+  switch (response.code) {
+    case "not-allowed":
+      return "Nothing was sent: you can't act on this chat.";
+    case "session-unavailable":
+      return "Nothing was sent: this chat's host isn't available.";
+    case "not-draft-block":
+    case "already-decided":
+      return "Nothing was sent: this feedback draft can't be decided.";
+  }
+}
+
+/**
  * Send or Skip on a draft. The settled stamp also reaches the transcript as a
  * row update; the response is what the card shows until it does.
  */
@@ -75,6 +95,10 @@ export function useChatFeedbackDraftDecideMutation(
     mapVariables: (variables) => variables,
     options: {
       mutationKey: feedbackDraftMutationKeys.decide(blockId),
+      onSuccess: (response) => {
+        const refusal = feedbackDraftRefusalMessage(response);
+        if (refusal !== null) toast.error(refusal);
+      },
       onError: (error) => {
         toastFromHostError(error, "Couldn't send the feedback");
       },
