@@ -18,8 +18,14 @@ import {
   deriveHostScopeStatus,
   type HostScopeStatus,
 } from "@/components/settings/host-scope/host-scope-status";
-import { useHostOptions } from "@/components/settings/host-scope/use-host-options";
+import {
+  useHostOptions,
+  type HostOptions,
+} from "@/components/settings/host-scope/use-host-options";
 import { useSettingsHostScopeStore } from "@/stores/settings/settings-host-scope-store";
+import { useHostsRunningConfiguration } from "@/components/settings/environment/use-hosts-running-configuration";
+import { useSettingsHostEntry } from "@/components/settings/host-scope/use-settings-host-entry";
+import { environmentPickValue } from "@/lib/settings-environment-pages";
 import { useEnvironmentPick } from "@/stores/settings/settings-environment-pick-store";
 import {
   findHostOption,
@@ -34,7 +40,7 @@ import {
 } from "@/components/settings/host-scope/host-option-model";
 
 export interface HostScope {
-  /** Every host this account owns or this client can dial, merged and sorted. */
+  /** The surface's options, with the global host facts preserved. */
   readonly hosts: readonly HostScopeOption[];
   /** The host being administered. `null` when there are no hosts, or `vanished`. */
   readonly host: HostScopeOption | null;
@@ -42,6 +48,11 @@ export interface HostScope {
   readonly hostLabel: string;
   /** The id that was picked but is no longer listed — only when `vanished`. */
   readonly vanishedHostId: string | null;
+  /** Settings remembers the selected name after its membership row leaves. */
+  readonly vanishedSelection: {
+    readonly name: string;
+    readonly forget: () => void;
+  } | null;
   /** Drop an explicit pick and follow the active host again. */
   readonly returnToActive: () => void;
   /** The app-wide active host — where new work lands and the bell reads from. */
@@ -112,15 +123,74 @@ export interface HostScopeSelection {
   readonly setScopedHostId: (hostId: string | null) => void;
 }
 
-/**
- * The one host-scope hook for the Host group in Settings. Every panel under the
- * sidebar's picker reads this and nothing else, which is what makes the
- * switcher authoritative rather than one more picker among five.
- */
+/** The picked environment's host selection, shared by the rail and host panels. */
 export function useHostScope(): HostScope {
-  const scopedHostId = useSettingsHostScopeStore((s) => s.scopedHostId);
-  const setScopedHostId = useSettingsHostScopeStore((s) => s.setScopedHostId);
-  return useHostScopeFor({ scopedHostId, setScopedHostId });
+  const options = useHostOptions();
+  const pick = useEnvironmentPick();
+  const pendingHostId = useSettingsHostScopeStore((s) => s.pendingHostId);
+  const selection = useSettingsHostScopeStore(
+    (s) => s.hostByEnvironment[environmentPickValue(pick)] ?? null,
+  );
+  const selectHost = useSettingsHostScopeStore((s) => s.selectHost);
+  const entry = useSettingsHostEntry();
+  const membership = useHostsRunningConfiguration(
+    pick.kind === "local" ? { kind: "personal" } : pick,
+    pick.kind !== "local",
+  );
+  const membershipState = pick.kind === "local" ? "ready" : membership.state;
+  const ready = membershipState === "ready";
+  const hosts = useMemo(() => {
+    if (!ready || pendingHostId !== null) return [];
+    const memberIds = new Set(
+      pick.kind === "local"
+        ? [pick.hostId]
+        : membership.hosts.map((host) => host.hostId),
+    );
+    return options.hosts.filter((host) => memberIds.has(host.hostId));
+  }, [ready, pendingHostId, pick, membership.hosts, options.hosts]);
+  const setScopedHostId = useCallback(
+    (hostId: string | null) => {
+      if (hostId === null) {
+        selectHost(pick, null);
+        return;
+      }
+      const host = findHostOption(hosts, hostId);
+      if (host !== null) selectHost(pick, { hostId, name: host.name });
+    },
+    [pick, selectHost, hosts],
+  );
+  const retryLists = (): void => {
+    options.retryLists();
+    membership.retry();
+    entry.retry();
+  };
+  const listsFailed =
+    options.listsFailed || membershipState === "failed" || entry.failed;
+  const scope = useHostScopeWithOptions(
+    {
+      scopedHostId: selection?.hostId ?? hosts.at(0)?.hostId ?? null,
+      setScopedHostId,
+    },
+    {
+      ...options,
+      hosts,
+      listsResolved: options.listsResolved && ready && pendingHostId === null,
+      listsFailed,
+      isLoading:
+        options.isLoading ||
+        membershipState === "loading" ||
+        (pendingHostId !== null && !entry.failed),
+      retryLists,
+    },
+  );
+  return {
+    ...scope,
+    activeHost: findHostOption(options.hosts, options.activeHostId),
+    vanishedSelection:
+      scope.vanishedHostId !== null && selection !== null
+        ? { name: selection.name, forget: () => selectHost(pick, null) }
+        : null,
+  };
 }
 
 /**
@@ -135,7 +205,7 @@ export function useHostScope(): HostScope {
  * A team, and Personal on a window whose host does not run it, read the
  * cloud instead (`PersonalPageFrame`).
  */
-const WINDOW_HOST_SELECTION: HostScopeSelection = {
+export const WINDOW_HOST_SELECTION: HostScopeSelection = {
   scopedHostId: null,
   setScopedHostId: () => undefined,
 };
@@ -172,12 +242,15 @@ export function useAccountHostScope(): HostScope {
  * wrongly.
  */
 export function useHostScopeFor(selection: HostScopeSelection): HostScope {
+  return useHostScopeWithOptions(selection, useHostOptions());
+}
+
+function useHostScopeWithOptions(
+  selection: HostScopeSelection,
+  options: HostOptions,
+): HostScope {
   const ambientClient = useHostClient();
   const runnerHost = useRunnerHost();
-  // The list itself is shared with every other picker in the app — see
-  // `useHostOptions`. What is left here is the SELECTION on top of it, which is
-  // the only part Settings and the usage popover own.
-  const options = useHostOptions();
   const { hosts, activeHostId, listsResolved, listsFailed, nowMs } = options;
 
   const { scopedHostId, setScopedHostId } = selection;
@@ -274,6 +347,7 @@ export function useHostScopeFor(selection: HostScopeSelection): HostScope {
       host?.name ??
       (resolved.vanishedHostId === null ? "No host" : UNNAMED_HOST_LABEL),
     vanishedHostId: resolved.vanishedHostId,
+    vanishedSelection: null,
     returnToActive: () => setScopedHostId(null),
     activeHostId,
     activeHost: findHostOption(hosts, activeHostId),

@@ -12,7 +12,7 @@ import {
 import type { HostPickIntent } from "@/components/settings/host-scope/host-option-model";
 import { useSystemTabModalActions } from "@/stores/tabs/use-system-tab-modal";
 import { useRegisteredHostsPollLiveness } from "@/hooks/auth/use-registered-hosts-query";
-import { useSettingsHostScopeStore } from "@/stores/settings/settings-host-scope-store";
+import { carryViewedHostIntoSettingsScope } from "@/components/settings/host-scope/carry-viewed-host-into-settings";
 
 interface HostSectionProps {
   /**
@@ -83,9 +83,7 @@ export function WorkspaceHostSwitcher(
         kind: "manage-hosts",
         onSelect: () => {
           if (props.activeHostId !== null) {
-            useSettingsHostScopeStore
-              .getState()
-              .setScopedHostId(props.activeHostId);
+            carryViewedHostIntoSettingsScope(props.activeHostId);
           }
           // Named rather than left null: an Overview already open on another
           // tab comes back to Updates, as every host link does.

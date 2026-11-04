@@ -46,7 +46,7 @@ import {
 import { navigateToSettingsSection } from "@/lib/settings-navigation";
 import type { SettingsSectionId } from "@/lib/settings-sections";
 import { useSettingsEnvironmentPickStore } from "@/stores/settings/settings-environment-pick-store";
-import { useSettingsHostScopeStore } from "@/stores/settings/settings-host-scope-store";
+import { carryViewedHostIntoSettingsScope } from "@/components/settings/host-scope/carry-viewed-host-into-settings";
 import { useAddHostDialogStore } from "@/stores/settings/add-host-dialog-store";
 import {
   useMoveSheetStore,
@@ -100,9 +100,6 @@ export function EnvironmentPicker(props: {
   );
   const setPick = useSettingsEnvironmentPickStore((state) => state.setPick);
   const openMoveSheet = useMoveSheetStore((state) => state.openSheet);
-  const setScopedHostId = useSettingsHostScopeStore(
-    (state) => state.setScopedHostId,
-  );
   const choose = (next: EnvironmentPick): void => {
     moveEnvironmentPick({
       next,
@@ -114,7 +111,7 @@ export function EnvironmentPicker(props: {
   };
   // Finish moving and Rename both continue on that host's Overview.
   const openHostOverview = (hostId: string): void => {
-    setScopedHostId(hostId);
+    carryViewedHostIntoSettingsScope(hostId);
     navigateToSettingsSection("host");
   };
   // Outside the menu, which unmounts its content as it closes on `Review`.

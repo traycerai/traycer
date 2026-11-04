@@ -1349,9 +1349,7 @@ export class HostDirectoryService implements IHostDirectoryService {
     // read `vanished` once the twin deregisters). A genuine remote pin never
     // matches `previous`, so it is left alone.
     const settingsScope = useSettingsHostScopeStore.getState();
-    if (settingsScope.scopedHostId === previous) {
-      settingsScope.setScopedHostId(next);
-    }
+    settingsScope.adoptHostId(previous, next);
     appLogger.debug("[host-directory] local host id re-enrolled", {
       previous,
       next,
