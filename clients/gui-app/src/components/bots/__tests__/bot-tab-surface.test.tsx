@@ -24,6 +24,13 @@ import {
   raiseNativeKeyboard,
   restoreKeyboardEnvironment,
 } from "../../../../__tests__/short-keyboard-viewport-harness";
+import {
+  installShellForm,
+  SHELL_WIDTH_COLUMN_256,
+  SHELL_WIDTH_MENU,
+  SHELL_WIDTH_TWO_TILES,
+  type ShellFormHarness,
+} from "../../../../__tests__/mobile-level2-form-harness";
 import { StrictMode, type ReactNode } from "react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import {
@@ -482,9 +489,11 @@ vi.mock("@/components/bots/bot-channel-view", () => ({
       userId: string,
     ) => { displayName: string | null; avatarUrl: string | null } | null;
     setupHistory: ReactNode;
+    tiles: number | null;
   }) => (
     <div
       data-testid="stub-channel"
+      data-tiles={String(props.tiles)}
       data-host-id={props.hostId}
       data-bound-host-id={props.boundHostId ?? "none"}
       data-bot-title={props.botTitle}
@@ -700,7 +709,10 @@ import { useBotTabLandingStore } from "@/stores/bots/bot-tab-landing-store";
 import { openChatSearchResult } from "@/lib/chat-search/open-chat-search-result";
 import { rowFromHostEntry } from "@/stores/notifications/merged-notifications";
 import { useBotDraftsStore } from "@/stores/bots/bot-drafts-store";
-import { useBotOpenThreadStore } from "@/stores/bots/bot-open-thread-store";
+import {
+  useBotOpenThreadStore,
+  type BotRail,
+} from "@/stores/bots/bot-open-thread-store";
 import { useTeamCloudCreateStore } from "@/stores/bots/team-cloud-create-store";
 
 const BOT_ID = "bot_01ARZ3NDEKTSV4RRFFQ69G5FAV";
@@ -1040,11 +1052,12 @@ describe("<BotTabSurface /> a team's main bot still to be set up", () => {
   });
 
   describe("level 2 in the installed app", () => {
+    let shell: ShellFormHarness;
     beforeEach(() => {
-      setPhoneLayoutOnly(true);
+      shell = installShellForm(SHELL_WIDTH_MENU);
     });
     afterEach(() => {
-      setPhoneLayoutOnly(false);
+      shell.dispose();
     });
 
     it("offers Threads from the setup channel's title, which replaces the setup until Threads goes back", async () => {
@@ -1942,37 +1955,150 @@ describe("<BotTabSurface /> bot.open", () => {
   });
 
   describe("level 2 in the installed app", () => {
+    let shell: ShellFormHarness;
     beforeEach(() => {
-      setPhoneLayoutOnly(true);
+      shell = installShellForm(SHELL_WIDTH_COLUMN_256);
     });
     afterEach(() => {
-      setPhoneLayoutOnly(false);
+      shell.dispose();
     });
 
-    it("draws no sidebar, and the bot's name opens the bots list, which a pick or Threads closes", async () => {
-      const user = userEvent.setup();
+    it("draws the bots as the 256 column the resolver answers, with no handle and no container gate", () => {
+      render(surface());
+
+      const pane = screen.getByTestId("bot-channel-sidebar-pane");
+      expect(pane.style.width).toBe("256px");
+      expect(
+        screen.queryByTestId("bot-channel-sidebar-pane-resize-handle"),
+      ).toBeNull();
+      expect(pane.className).not.toContain("@3xl");
+      expect(within(pane).getByTestId("stub-sidebar")).toBeTruthy();
+      expect(screen.queryByTestId("bot-channel-picker-trigger")).toBeNull();
+    });
+
+    it.each([
+      ["menu", { width: SHELL_WIDTH_MENU, portrait: false }],
+      ["bar", { width: SHELL_WIDTH_COLUMN_256, portrait: true }],
+    ])(
+      "draws no sidebar at %s, and the bot's name opens the bots list, which a pick or Threads closes",
+      async (_form, shape) => {
+        shell.set(shape);
+        const user = userEvent.setup();
+        render(surface());
+
+        expect(screen.queryByTestId("bot-channel-sidebar-pane")).toBeNull();
+        const trigger = screen.getByTestId("bot-channel-picker-trigger");
+        expect(screen.getByTestId("bot-tab-title").contains(trigger)).toBe(
+          true,
+        );
+        expect(trigger.textContent).toContain("Release Bot");
+
+        await user.click(trigger);
+        const picker = await screen.findByTestId("bot-channel-picker");
+        expect(
+          within(picker).getByTestId("stub-sidebar").dataset.activeBotId,
+        ).toBe(BOT_ID);
+        await user.click(within(picker).getByTestId("stub-sidebar-pick"));
+        expect(screen.queryByTestId("bot-channel-picker")).toBeNull();
+
+        await user.click(trigger);
+        await user.click(
+          within(await screen.findByTestId("bot-channel-picker")).getByTestId(
+            "stub-sidebar-threads",
+          ),
+        );
+        expect(screen.queryByTestId("bot-channel-picker")).toBeNull();
+      },
+    );
+
+    it("draws the bots column at 256 and the channel as one tile while no thread is open at a two-tile width", () => {
+      shell.set({ width: SHELL_WIDTH_TWO_TILES, portrait: false });
+      render(surface());
+
+      expect(screen.getByTestId("bot-channel-sidebar-pane").style.width).toBe(
+        "256px",
+      );
+      expect(screen.queryByTestId("bot-channel-picker-trigger")).toBeNull();
+      expect(screen.getByTestId("stub-channel").dataset.tiles).toBe("1");
+    });
+
+    it("folds the bots column to the picker and tells the channel two tiles show once a thread is open at a two-tile width", () => {
+      shell.set({ width: SHELL_WIDTH_TWO_TILES, portrait: false });
+      useBotOpenThreadStore.getState().setRail(BOT_ID, {
+        kind: "thread",
+        anchorMessageId: "post-7",
+        announcement: false,
+        anchorKind: null,
+        sent: null,
+      });
       render(surface());
 
       expect(screen.queryByTestId("bot-channel-sidebar-pane")).toBeNull();
-      const trigger = screen.getByTestId("bot-channel-picker-trigger");
-      expect(screen.getByTestId("bot-tab-title").contains(trigger)).toBe(true);
-      expect(trigger.textContent).toContain("Release Bot");
+      expect(screen.getByTestId("bot-channel-picker-trigger")).toBeTruthy();
+      expect(screen.getByTestId("stub-channel").dataset.tiles).toBe("2");
+    });
 
-      await user.click(trigger);
-      const picker = await screen.findByTestId("bot-channel-picker");
-      expect(
-        within(picker).getByTestId("stub-sidebar").dataset.activeBotId,
-      ).toBe(BOT_ID);
-      await user.click(within(picker).getByTestId("stub-sidebar-pick"));
-      expect(screen.queryByTestId("bot-channel-picker")).toBeNull();
+    describe("the tile count the shell resolves as the rail comes and goes", () => {
+      const OPEN_THREAD: BotRail = {
+        kind: "thread",
+        anchorMessageId: "post-7",
+        announcement: false,
+        anchorKind: null,
+        sent: null,
+      };
 
-      await user.click(trigger);
-      await user.click(
-        within(await screen.findByTestId("bot-channel-picker")).getByTestId(
-          "stub-sidebar-threads",
-        ),
-      );
-      expect(screen.queryByTestId("bot-channel-picker")).toBeNull();
+      // One tile draws the bots column at this width and two fold it to the
+      // picker, so the column is what tells the shell's count apart.
+      function columnDrawn(): boolean {
+        return screen.queryByTestId("bot-channel-sidebar-pane") !== null;
+      }
+
+      beforeEach(() => {
+        shell.set({ width: SHELL_WIDTH_TWO_TILES, portrait: false });
+        useBotOpenThreadStore.getState().setRail(BOT_ID, OPEN_THREAD);
+      });
+
+      it("returns to one tile when the thread closes", () => {
+        render(surface());
+        expect(columnDrawn()).toBe(false);
+
+        act(() => useBotOpenThreadStore.getState().setRail(BOT_ID, null));
+
+        expect(columnDrawn()).toBe(true);
+        expect(screen.getByTestId("stub-channel").dataset.tiles).toBe("1");
+      });
+
+      it("returns to one tile when the channel switches in place to one with nothing open", () => {
+        const view = render(surface());
+        expect(columnDrawn()).toBe(false);
+
+        view.rerender(surfaceFor(OTHER_BOT_ID));
+
+        expect(columnDrawn()).toBe(true);
+        expect(screen.getByTestId("stub-channel").dataset.tiles).toBe("1");
+      });
+
+      it("returns to one tile on Activity, where no rail is drawn", async () => {
+        const user = userEvent.setup();
+        render(surface());
+        expect(columnDrawn()).toBe(false);
+
+        await user.click(screen.getByTestId("bot-tab-view-activity"));
+
+        expect(columnDrawn()).toBe(true);
+      });
+
+      it("returns to one tile when Threads is shown from the column", async () => {
+        const user = userEvent.setup();
+        render(surface());
+        await user.click(screen.getByTestId("bot-channel-picker-trigger"));
+        const picker = await screen.findByTestId("bot-channel-picker");
+
+        await user.click(within(picker).getByTestId("stub-sidebar-threads"));
+
+        expect(screen.getByTestId("stub-threads")).toBeTruthy();
+        expect(columnDrawn()).toBe(true);
+      });
     });
 
     it("keeps the resizable pane and the plain title off the installed app", () => {
@@ -3811,11 +3937,12 @@ describe("<BotTabSurface /> with no channel selected", () => {
   });
 
   describe("level 2 in the installed app", () => {
+    let shell: ShellFormHarness;
     beforeEach(() => {
-      setPhoneLayoutOnly(true);
+      shell = installShellForm(SHELL_WIDTH_MENU);
     });
     afterEach(() => {
-      setPhoneLayoutOnly(false);
+      shell.dispose();
     });
 
     it("heads the pane with Tracy as the picker, to reach a team still to be set up that the default channel does not see", async () => {

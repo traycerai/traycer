@@ -9,6 +9,7 @@ import {
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { computePosition } from "@floating-ui/dom";
 import { FirstTaskLandingGuide } from "@/components/onboarding/first-task-landing-guide";
+import { MobileStripFormContext } from "@/components/layout/tabs/mobile-strip-form-context";
 import { useFirstTaskGuideStore } from "@/stores/onboarding/first-task-guide-store";
 import { useMobileNavStore } from "@/stores/layout/mobile-nav-store";
 
@@ -443,6 +444,19 @@ describe("FirstTaskLandingGuide mobile tasks branch", () => {
     viewport.mobile = false;
     mountTrigger();
     render(<Harness />);
+    makeVisible(screen.getByTestId("folder-add"));
+    fireEvent(window, new Event("resize"));
+
+    await expectCardTitle("Pick a project");
+  });
+
+  it("takes the folder flow, not the hamburger, where the strip stands in for the drawer", async () => {
+    mountTrigger();
+    render(
+      <MobileStripFormContext.Provider value="rail">
+        <Harness />
+      </MobileStripFormContext.Provider>,
+    );
     makeVisible(screen.getByTestId("folder-add"));
     fireEvent(window, new Event("resize"));
 
