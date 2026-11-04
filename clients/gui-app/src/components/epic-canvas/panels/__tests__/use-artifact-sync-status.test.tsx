@@ -52,6 +52,8 @@ describe("useArtifactSyncStatus", () => {
       title: "Artifacts not syncing",
       sentence:
         "Artifacts not syncing. Your changes are saved on this computer. Your other devices and teammates won’t see them yet. Retrying on its own.",
+      description:
+        "Your changes are saved on this computer. Your other devices and teammates won’t see them yet. Retrying on its own.",
     });
     rerender(current);
     expect(result.current).toEqual({ kind: "calm" });
@@ -110,6 +112,8 @@ describe("useArtifactSyncStatus", () => {
       title: "Artifacts not syncing",
       sentence:
         "Artifacts not syncing. Your changes are saved on this computer. Your other devices and teammates won’t see them yet. Retrying on its own.",
+      description:
+        "Your changes are saved on this computer. Your other devices and teammates won’t see them yet. Retrying on its own.",
     },
     {
       rooms: "stopped",
@@ -118,6 +122,8 @@ describe("useArtifactSyncStatus", () => {
       title: "Artifacts not syncing",
       sentence:
         "Artifacts not syncing. Your changes are saved on this computer. Your other devices and teammates won’t see them yet.",
+      description:
+        "Your changes are saved on this computer. Your other devices and teammates won’t see them yet.",
     },
     {
       rooms: "retrying",
@@ -126,6 +132,8 @@ describe("useArtifactSyncStatus", () => {
       title: "1 new artifact waiting",
       sentence:
         "1 new artifact waiting. It’s saved on this computer and will appear here when sync is back. Retrying on its own.",
+      description:
+        "It’s saved on this computer and will appear here when sync is back. Retrying on its own.",
     },
     {
       rooms: "stopped",
@@ -134,6 +142,8 @@ describe("useArtifactSyncStatus", () => {
       title: "1 new artifact waiting",
       sentence:
         "1 new artifact waiting. It’s saved on this computer and will appear here when sync is back.",
+      description:
+        "It’s saved on this computer and will appear here when sync is back.",
     },
     {
       rooms: "retrying",
@@ -142,6 +152,8 @@ describe("useArtifactSyncStatus", () => {
       title: "2 new artifacts waiting",
       sentence:
         "2 new artifacts waiting. They’re saved on this computer and will appear here when sync is back. Retrying on its own.",
+      description:
+        "They’re saved on this computer and will appear here when sync is back. Retrying on its own.",
     },
     {
       rooms: "stopped",
@@ -150,10 +162,12 @@ describe("useArtifactSyncStatus", () => {
       title: "2 new artifacts waiting",
       sentence:
         "2 new artifacts waiting. They’re saved on this computer and will appear here when sync is back.",
+      description:
+        "They’re saved on this computer and will appear here when sync is back.",
     },
   ] as const)(
     "shows the correct warning for $rooms and $waiting waiting",
-    ({ rooms, waiting, kind, title, sentence }) => {
+    ({ rooms, waiting, kind, title, sentence, description }) => {
       const { result } = renderHook(() =>
         useArtifactSyncStatus({
           rooms,
@@ -162,7 +176,7 @@ describe("useArtifactSyncStatus", () => {
         }),
       );
       advance(15_000);
-      expect(result.current).toEqual({ kind, title, sentence });
+      expect(result.current).toEqual({ kind, title, sentence, description });
     },
   );
 

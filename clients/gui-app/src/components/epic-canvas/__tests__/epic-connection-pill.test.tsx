@@ -1281,9 +1281,9 @@ describe("artifact sync in the connection pill", () => {
     expect(pill.dataset.source).toBe("artifact-sync");
     expect(pill.textContent).toBe("");
     expect(pill.getAttribute("aria-label")).toBe(sentence);
-    expect(
-      screen.getByTestId("epic-connection-pill-dot").className,
-    ).toContain("bg-warning");
+    expect(screen.getByTestId("epic-connection-pill-dot").className).toContain(
+      "bg-warning",
+    );
     expect(screen.getByRole("status").textContent).toContain(sentence);
     vi.useRealTimers();
     await expectTooltip(sentence);

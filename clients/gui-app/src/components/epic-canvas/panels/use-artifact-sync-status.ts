@@ -18,6 +18,7 @@ export type ArtifactSyncStatus =
       readonly kind: "retrying" | "stopped";
       readonly title: string;
       readonly sentence: string;
+      readonly description: string;
     };
 
 const CALM: ArtifactSyncStatus = { kind: "calm" };
@@ -37,14 +38,14 @@ function sheetTitle(waiting: number): string {
   return `${String(waiting)} new artifacts waiting`;
 }
 
-function sentenceFor(waiting: number, retry: string): string {
+function descriptionFor(waiting: number): string {
   if (waiting === 0) {
-    return `Artifacts not syncing. Your changes are saved on this computer. Your other devices and teammates won’t see them yet.${retry}`;
+    return "Your changes are saved on this computer. Your other devices and teammates won’t see them yet.";
   }
   if (waiting === 1) {
-    return `1 new artifact waiting. It’s saved on this computer and will appear here when sync is back.${retry}`;
+    return "It’s saved on this computer and will appear here when sync is back.";
   }
-  return `${String(waiting)} new artifacts waiting. They’re saved on this computer and will appear here when sync is back.${retry}`;
+  return "They’re saved on this computer and will appear here when sync is back.";
 }
 
 function reportFor(
@@ -53,10 +54,13 @@ function reportFor(
 ): Exclude<ArtifactSyncStatus, { readonly kind: "calm" }> {
   // `stopped` drops the promise: nothing on the host is trying again.
   const retry = rooms === "stopped" ? "" : " Retrying on its own.";
+  const title = sheetTitle(waiting);
+  const description = `${descriptionFor(waiting)}${retry}`;
   return {
     kind: rooms === "stopped" ? "stopped" : "retrying",
-    title: sheetTitle(waiting),
-    sentence: sentenceFor(waiting, retry),
+    title,
+    sentence: `${title}. ${description}`,
+    description,
   };
 }
 

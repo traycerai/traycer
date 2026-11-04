@@ -53,9 +53,9 @@ export function MobileArtifactSyncControl(props: {
         data-theme={themePreset}
         className={cn(resolvedTheme === "dark" && "dark")}
       >
-        <div className="min-w-0 break-words p-4 pb-safe-bottom-gutter">
+        <div className="w-full min-w-0 break-words whitespace-normal p-4 pb-safe-bottom-gutter">
           <DrawerTitle>{status.title}</DrawerTitle>
-          <DrawerDescription>{status.sentence}</DrawerDescription>
+          <DrawerDescription>{status.description}</DrawerDescription>
         </div>
       </DrawerContent>
     </Drawer>
