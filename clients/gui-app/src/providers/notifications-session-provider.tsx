@@ -60,7 +60,7 @@ import {
 import { resetCloudEntityReadDriver } from "@/lib/notifications/cloud-entity-read-driver";
 import {
   readFocusedHostNotificationPresence,
-  setAppBackgrounded,
+  setAppSuspended,
   subscribeHostNotificationPresence,
   type FocusedHostNotificationPresence,
   type HostNotificationPresenceFrame,
@@ -204,21 +204,23 @@ export function NotificationsSessionProvider(
 ): ReactNode {
   useEffect(() => installNotificationChimeAudioWarmup(), []);
   const runnerHost = useRunnerHostOrNull();
-  // The shell's background edge withdraws this window's focus claim before
-  // the OS suspends it, so a turn that finishes after the person left the app
-  // still reaches their other devices; the foreground edge restores it.
+  // The shell's leave edge (the app backgrounded, the machine locked or
+  // asleep) withdraws this window's focus claim before the OS suspends it, so
+  // a turn that finishes after the person left still reaches their other
+  // devices; the resume edge restores it. An audio interruption is not the
+  // person leaving.
   useEffect(() => {
     if (runnerHost === null) return undefined;
     const suspended = runnerHost.onSystemSuspended((cause) => {
-      if (cause === "background") setAppBackgrounded(true);
+      if (cause !== "interrupted") setAppSuspended(true);
     });
     const resumed = runnerHost.onSystemResumed(() => {
-      setAppBackgrounded(false);
+      setAppSuspended(false);
     });
     return () => {
       suspended.dispose();
       resumed.dispose();
-      setAppBackgrounded(false);
+      setAppSuspended(false);
     };
   }, [runnerHost]);
   const hostClient = useHostClient();

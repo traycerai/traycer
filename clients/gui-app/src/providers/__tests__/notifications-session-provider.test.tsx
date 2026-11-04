@@ -14,7 +14,7 @@ import { useStandaloneBotsStore } from "@/stores/bots/standalone-bots-store";
 import * as Y from "yjs";
 import { HostClient } from "@traycer-clients/shared/host-client/host-client";
 import { MockRunnerHost } from "@traycer-clients/shared/host-client/mock/mock-runner-host";
-import { setAppBackgrounded } from "@/lib/notifications/notification-presence";
+import { setAppSuspended } from "@/lib/notifications/notification-presence";
 import type { HostDirectoryEntry } from "@traycer-clients/shared/host-client/host-directory";
 import {
   mockLocalHostEntry,
@@ -3547,7 +3547,7 @@ describe("<NotificationsSessionProvider />", () => {
     expect(markReadCalls).toEqual([]);
   });
 
-  it("withdraws the focus claim from the shell's background edge and restores it on foreground", async () => {
+  it("withdraws the focus claim on the shell's leave edges and restores it on resume", async () => {
     vi.spyOn(document, "hasFocus").mockReturnValue(true);
     servingHostFallbackState.hasLocalHost = true;
     const { streamClient } = await renderHostNotificationsProvider();
@@ -3578,8 +3578,21 @@ describe("<NotificationsSessionProvider />", () => {
       });
       expect(frames).toHaveLength(3);
       expect(focusedOf(2)).toBe(true);
+
+      // The desktop's screen lock or sleep is the person leaving too.
+      act(() => {
+        shellSignals.emitSystemSuspended("locked");
+      });
+      expect(frames).toHaveLength(4);
+      expect(focusedOf(3)).toBe(false);
+
+      act(() => {
+        shellSignals.emitSystemResumed({ backgroundedForMs: null });
+      });
+      expect(frames).toHaveLength(5);
+      expect(focusedOf(4)).toBe(true);
     } finally {
-      setAppBackgrounded(false);
+      setAppSuspended(false);
     }
   });
 

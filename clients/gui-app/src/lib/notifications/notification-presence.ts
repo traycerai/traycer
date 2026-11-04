@@ -32,7 +32,7 @@ export interface FocusedHostNotificationPresence {
 
 let botSurfaceFocused = false;
 let presentedBotConversation: HostNotificationsPresenceEntity | null = null;
-let appBackgrounded = false;
+let appSuspended = false;
 const presenceListeners = new Set<() => void>();
 
 /**
@@ -58,14 +58,15 @@ export function setPresentedBotConversation(
 }
 
 /**
- * Whether the shell reports the app in the background (the phone's own
- * background edge). The OS may suspend the WebView before the document ever
- * reports itself hidden or blurred, so this window stops counting as focused
- * from the edge itself, and the presence frame saying so goes out at once.
+ * Whether the shell reports the person away from the app: it went to the
+ * background, or the machine locked or went to sleep. The OS may suspend the
+ * window before the document ever reports itself hidden or blurred, so this
+ * window stops counting as focused from the edge itself, and the presence
+ * frame saying so goes out at once.
  */
-export function setAppBackgrounded(backgrounded: boolean): void {
-  if (appBackgrounded === backgrounded) return;
-  appBackgrounded = backgrounded;
+export function setAppSuspended(suspended: boolean): void {
+  if (appSuspended === suspended) return;
+  appSuspended = suspended;
   notifyPresenceListeners();
 }
 
@@ -119,7 +120,7 @@ export function subscribeHostNotificationPresence(
 
 /**
  * The entity this window is actively looking at, or `null` when the window is
- * blurred, hidden or backgrounded, the bot surface is focused without a
+ * blurred, hidden or suspended, the bot surface is focused without a
  * conversation, or neither a bot conversation nor an epic/chat tile is active.
  * Read live (bot surface + canvas store + document focus) so display-time
  * gates see the current state rather than the last presence frame that
@@ -146,13 +147,13 @@ export function readFocusedHostNotificationPresence(): FocusedHostNotificationPr
 
 /**
  * Whether the person is looking at this window: it has focus, it is visible,
- * and the app is not in the background. A hidden window can keep
+ * and the app is not suspended. A hidden window can keep
  * `hasFocus()`, and a claim of focus from it would stamp the person's
  * notifications read while they are elsewhere.
  */
 export function isDocumentFocused(): boolean {
   return (
-    !appBackgrounded &&
+    !appSuspended &&
     typeof document !== "undefined" &&
     isDocumentVisible() &&
     document.hasFocus()

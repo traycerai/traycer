@@ -6,7 +6,7 @@ import {
   isDocumentFocused,
   readFocusedHostNotificationPresence,
   readHostNotificationPresenceFrame,
-  setAppBackgrounded,
+  setAppSuspended,
   subscribeHostNotificationPresence,
 } from "@/lib/notifications/notification-presence";
 
@@ -14,7 +14,7 @@ describe("notification presence", () => {
   afterEach(() => {
     vi.restoreAllMocks();
     __setBrowserDocumentHiddenForTests(false);
-    setAppBackgrounded(false);
+    setAppSuspended(false);
     useEpicCanvasStore.setState({
       tabsById: {},
       canvasByTabId: {},
@@ -137,11 +137,11 @@ describe("notification presence", () => {
     const sendPresence = vi.fn();
     const unsubscribe = subscribeHostNotificationPresence(sendPresence);
 
-    setAppBackgrounded(true);
+    setAppSuspended(true);
     expect(sendPresence).toHaveBeenCalledTimes(1);
     expect(isDocumentFocused()).toBe(false);
 
-    setAppBackgrounded(false);
+    setAppSuspended(false);
     expect(sendPresence).toHaveBeenCalledTimes(2);
     expect(isDocumentFocused()).toBe(true);
     unsubscribe();

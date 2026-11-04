@@ -22,7 +22,7 @@ import type {
 } from "@traycer-clients/shared/host-transport/i-stream-session";
 import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
 import { __setBrowserDocumentHiddenForTests } from "@/lib/dom/document-visibility";
-import { setAppBackgrounded } from "@/lib/notifications/notification-presence";
+import { setAppSuspended } from "@/lib/notifications/notification-presence";
 import {
   WsStreamClient,
   type ParamsOf,
@@ -1848,17 +1848,17 @@ describe("host notifications store", () => {
       expect(client.session.clientFrames).toHaveLength(3);
       expect(focusedOf(2)).toBe(true);
 
-      setAppBackgrounded(true);
+      setAppSuspended(true);
       expect(client.session.clientFrames).toHaveLength(4);
       expect(focusedOf(3)).toBe(false);
 
-      setAppBackgrounded(false);
+      setAppSuspended(false);
       expect(client.session.clientFrames).toHaveLength(5);
       expect(focusedOf(4)).toBe(true);
     } finally {
       close();
       __setBrowserDocumentHiddenForTests(false);
-      setAppBackgrounded(false);
+      setAppSuspended(false);
     }
   });
 
