@@ -92,12 +92,32 @@ export interface BotOpenMemory {
 }
 
 /**
- * What the rail beside a bot's channel holds: one slot, a thread or the
- * bot's memory, the newer replacing the older.
+ * What a search holds the rail for: its results, a thread one of them opened
+ * in their place, or nothing while a pane too narrow for both shows the
+ * channel at a result. The last two offer the way back to the results.
+ */
+export type BotSearchShowing =
+  | { readonly kind: "results" }
+  | { readonly kind: "thread"; readonly thread: BotOpenThread }
+  | { readonly kind: "channel" };
+
+/**
+ * A search open in the rail, and the thread it displaced, which closing the
+ * results restores (`null` when it displaced none).
+ */
+export interface BotOpenSearch {
+  readonly back: BotOpenThread | null;
+  readonly showing: BotSearchShowing;
+}
+
+/**
+ * What the rail beside a bot's channel holds: one slot, a thread, the bot's
+ * memory or a search, the newer replacing the older.
  */
 export type BotRail =
   | ({ readonly kind: "thread" } & BotOpenThread)
-  | ({ readonly kind: "memory" } & BotOpenMemory);
+  | ({ readonly kind: "memory" } & BotOpenMemory)
+  | ({ readonly kind: "search" } & BotOpenSearch);
 
 /**
  * The memory opened over what the rail holds (the bot's profile card): it
@@ -107,7 +127,27 @@ export type BotRail =
 export function memoryRailOver(rail: BotRail | null): BotRail {
   if (rail === null) return { kind: "memory", back: null };
   if (rail.kind === "thread") return { kind: "memory", back: threadOf(rail) };
+  if (rail.kind === "search") {
+    return {
+      kind: "memory",
+      back: rail.showing.kind === "thread" ? rail.showing.thread : rail.back,
+    };
+  }
   return { kind: "memory", back: rail.back };
+}
+
+/**
+ * Search results opened over what the rail holds: they take the one slot and
+ * keep for closing the thread they displace, or the one the memory or search
+ * already there displaced.
+ */
+export function searchRailOver(rail: BotRail | null): BotRail {
+  const showing = { kind: "results" } as const;
+  if (rail === null) return { kind: "search", back: null, showing };
+  if (rail.kind === "thread") {
+    return { kind: "search", back: threadOf(rail), showing };
+  }
+  return { kind: "search", back: rail.back, showing };
 }
 
 function threadOf(
