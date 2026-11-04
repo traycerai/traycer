@@ -56,7 +56,10 @@ export function replyRefsOf(
   for (const row of rows) {
     const classification = classifyNotificationLifecycle(row);
     if (classification.section !== "attention") continue;
-    if (classification.tier === "failure") continue;
+    // A reply answers a bot: its question (blocking) or its answer. A failure
+    // and a task invitation are attention, and neither is a bot to reply to.
+    if (classification.tier !== "blocking" && classification.tier !== "answer")
+      continue;
     const target = botTargetOf(row);
     if (target === null || seen.has(target.messageId)) continue;
     seen.add(target.messageId);

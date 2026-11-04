@@ -92,7 +92,7 @@ function SwitcherEmbeddedBody(props: SwitcherPanelEmbedProps): ReactNode {
       return <PrPanelBody epicId={epicId} tabId={tabId} />;
     case "sharing":
       return (
-        <div className="h-full overflow-y-auto overscroll-contain">
+        <div className="h-full overflow-y-auto overscroll-contain will-change-transform">
           <SharingPanel epicId={epicId} />
         </div>
       );
