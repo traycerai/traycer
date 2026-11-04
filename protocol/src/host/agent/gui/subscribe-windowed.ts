@@ -7,6 +7,7 @@ import {
   openChatEventSchema,
   openMessageSchema,
   openMessageSchemaPreFeedbackDraft,
+  openMessageSchemaPreSlack,
   openMessageSchemaPreNotApplied,
   openMessageSchemaPreCanvas,
   openMessageSchemaPreHtml,
@@ -849,6 +850,13 @@ export type OpenChatTranscriptWindow = z.infer<
   typeof openChatTranscriptWindowSchema
 >;
 
+/** The open tail `chat.subscribe@1.42` ships: no `slack` user row. */
+export const openChatTranscriptWindowSchemaPreSlack = lazySchema(() =>
+  openChatTranscriptWindowSchema.extend({
+    messages: z.array(openMessageSchemaPreSlack),
+  }),
+);
+
 /**
  * Wire-freeze copy of the tail bound to `chat.subscribe@1.9`.
  *
@@ -1254,6 +1262,13 @@ export const openChatRangeResponseSchemaPreFeedbackDraft = lazySchema(() =>
   chatRangeResponseSchema.extend({
     messages: z.array(openMessageSchemaPreFeedbackDraft),
     events: z.array(openChatEventSchema),
+  }),
+);
+
+/** The open range `chat.subscribe@1.42` ships: no `slack` user row. */
+export const openChatRangeResponseSchemaPreSlack = lazySchema(() =>
+  openChatRangeResponseSchema.extend({
+    messages: z.array(openMessageSchemaPreSlack),
   }),
 );
 
