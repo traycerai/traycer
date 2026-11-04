@@ -533,7 +533,7 @@ function isTerminalEntry(entry: HostNotificationCloudEntryV27): boolean {
   return entry.severity === "failure" || entry.severity === "done";
 }
 
-function isLongTurnAlertEntry(entry: HostNotificationCloudEntryV26): boolean {
+function isLongTurnAlertEntry(entry: HostNotificationCloudEntryV27): boolean {
   return (
     entry.kind === "agent.stalled" &&
     "reason" in entry.payload &&
