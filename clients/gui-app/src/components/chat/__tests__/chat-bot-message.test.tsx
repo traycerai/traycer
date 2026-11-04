@@ -1039,13 +1039,13 @@ describe("<ChatMessage /> bot row choices and announcement threads", () => {
     };
   }
 
-  it("draws no turn receipt under a proposal, though the presentation names a turn for any ids", () => {
+  it("draws the receipt the presentation names under a proposal, asked by the announcement's id", () => {
     const replyReceipt = vi.fn<
       (messageIds: ReadonlyArray<string>) => ChatBotTurnReceipt | null
     >(() => ({
       summary: "Read 1 file",
       startedAt: 0,
-      endedAt: 1_000,
+      endedAt: 80_000,
       open: vi.fn(),
     }));
     renderRow(announcementRow("proposal"), {
@@ -1057,8 +1057,12 @@ describe("<ChatMessage /> bot row choices and announcement threads", () => {
       replyReceipt,
     });
 
-    expect(screen.queryByTestId("bot-turn-receipt")).toBeNull();
-    expect(replyReceipt).not.toHaveBeenCalled();
+    expect(replyReceipt).toHaveBeenCalledWith([ANNOUNCEMENT_ID]);
+    expect(
+      within(screen.getByTestId("bot-announcement")).getByTestId(
+        "bot-turn-receipt",
+      ).textContent,
+    ).toBe("Read 1 file · 1m 20s");
   });
 
   it("asks for a reply's turn by its own message id and every record its row carries", () => {
