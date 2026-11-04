@@ -297,6 +297,12 @@ function CreateTeamMachineAction(props: {
       <TeamMachineJoin
         token={latest.token}
         onRemint={() => mint.mutate()}
+        held={createTeamMachineNote({
+          environmentId,
+          cloud,
+          sandboxes: sandboxes.data,
+          machineJoining: props.machineJoining,
+        })}
         testId={testId}
       />
     );
@@ -399,13 +405,21 @@ function useLapsed(atMs: number | null): boolean {
  * (`onRemint`); the server lets the lapsed one go unless the machine joined
  * with it in time, and then refuses. A refused new token is the newest mint,
  * so the card shows the Create button with the refusal under it.
+ *
+ * `held` is why the team cannot take another host now (its cloud sandbox,
+ * or a computer of its own still joining, past this token's window: the
+ * one this token enrolled, waiting for a provider), said in place of the
+ * lapse and holding "Create a new token". A token still in its window keeps
+ * its command whatever the hold: its own pending machine is listed.
  */
 function TeamMachineJoin(props: {
   readonly token: TeamHostInstallToken;
   readonly onRemint: () => void;
+  readonly held: string | null;
   readonly testId: string;
 }): ReactNode {
-  const { testId } = props;
+  const { testId, held } = props;
+  const heldId = useId();
   const command = `traycer host join ${props.token.installToken}`;
   const lapsed = useLapsed(props.token.expiresAt);
   const { copied, copy } = useClipboardCopy({
@@ -419,14 +433,22 @@ function TeamMachineJoin(props: {
         className="flex w-full min-w-0 flex-col items-start gap-1.5"
         data-testid={`${testId}-expired`}
       >
-        <p className="text-ui-xs text-foreground">
-          The install token expired before the machine joined.
+        <p
+          id={heldId}
+          className="text-ui-xs text-foreground"
+          data-testid={`${testId}-expired-line`}
+        >
+          {held ?? "The install token expired before the machine joined."}
         </p>
         <Button
           type="button"
           size="sm"
           variant="outline"
-          onClick={props.onRemint}
+          disabled={held !== null}
+          aria-describedby={held === null ? undefined : heldId}
+          onClick={() => {
+            if (held === null) props.onRemint();
+          }}
           data-testid={`${testId}-remint`}
         >
           Create a new token
@@ -590,11 +612,14 @@ function EnableTeamCloudAction(props: {
   // between must still know the team's sandbox is coming.
   const pressed = useTeamCloudCreate(environmentId, sandboxes.data);
   const pending = pressed?.pending === true;
+  // A machine's token being minted from this app, this card's or an earlier
+  // mount's, holds the team's host as a listed one does.
+  const machineMint = useTeamHostInstallTokenLatest(environmentId);
 
   const shape = teamStageShape(catalogue.data, defaults);
   const blocked = enableTeamCloudBlocked({
     environmentId,
-    machineJoining: props.machineJoining,
+    machineJoining: props.machineJoining || machineMint.pending,
     models,
     sandboxes,
     unlisted: pressed?.acceptedSandboxId ?? null,

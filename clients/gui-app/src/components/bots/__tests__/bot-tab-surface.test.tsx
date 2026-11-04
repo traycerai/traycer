@@ -1633,6 +1633,92 @@ describe("<BotTabSurface /> a team's main bot still to be set up", () => {
         ).toBeNull();
         expect(document.body.innerHTML).not.toContain(TOKEN);
       });
+
+      describe("while the team's host is held", () => {
+        const JOINING_SETUP: BotOnboardingSetup = {
+          ...NEEDS_HOST_SETUP,
+          state: "host_joining",
+          arrival: { kind: "machine" },
+        };
+
+        /** The card's buttons that are not held. */
+        function pressableButtons(): readonly string[] {
+          return within(screen.getByTestId("team-host-options"))
+            .getAllByRole("button")
+            .filter((button) => !button.hasAttribute("disabled"))
+            .map((button) => button.textContent);
+        }
+
+        it("keeps the command in the window while the machine it enrolled is joining, then says so and offers no new token", async () => {
+          const user = lapseUser();
+          auth().mintTeamHostInstallToken.mockResolvedValue(MINTED);
+          const view = render(surfaceFor(SETUP_BOT_ID));
+          await sandboxListRead();
+          await user.click(createButton());
+          await screen.findByTestId("team-host-option-machine-command");
+
+          // The machine registered with the token but has no provider signed
+          // in, so no bot exists yet: the team's read says it is joining.
+          mocks.state.readsCached = true;
+          mocks.reads["env-new"] = { setup: JOINING_SETUP };
+          view.rerender(surfaceFor(SETUP_BOT_ID));
+
+          expect(
+            screen.getByTestId("team-host-option-machine-command").textContent,
+          ).toBe(JOIN_COMMAND);
+
+          await lapse();
+
+          const line = screen.getByTestId(
+            "team-host-option-machine-expired-line",
+          );
+          expect(line.textContent).toBe("A machine is joining the team.");
+          expect(remintButton()).toHaveProperty("disabled", true);
+          expect(remintButton().getAttribute("aria-describedby")).toBe(line.id);
+          expect(pressableButtons()).toEqual([]);
+          await user.click(remintButton());
+          expect(auth().mintTeamHostInstallToken).toHaveBeenCalledTimes(1);
+          expect(document.body.innerHTML).not.toContain(TOKEN);
+        });
+
+        it("offers no new token past the window while the team's kept sandbox is listed", async () => {
+          const user = lapseUser();
+          auth().mintTeamHostInstallToken.mockResolvedValue(MINTED);
+          render(surfaceFor(SETUP_BOT_ID));
+          await sandboxListRead();
+          await user.click(createButton());
+          await screen.findByTestId("team-host-option-machine-command");
+
+          auth().listSandboxes.mockResolvedValue({
+            kind: "ok",
+            response: {
+              sandboxes: [
+                sandboxSummaryFixture({
+                  environmentId: "env-new",
+                  kind: "agent",
+                  burst: false,
+                  state: "awake",
+                }),
+              ],
+            },
+          });
+          await act(async () => {
+            await queryClient.invalidateQueries();
+          });
+          await lapse();
+
+          const line = screen.getByTestId(
+            "team-host-option-machine-expired-line",
+          );
+          await waitFor(() =>
+            expect(line.textContent).toBe("The team has a cloud sandbox."),
+          );
+          expect(remintButton()).toHaveProperty("disabled", true);
+          expect(remintButton().getAttribute("aria-describedby")).toBe(line.id);
+          await user.click(remintButton());
+          expect(auth().mintTeamHostInstallToken).toHaveBeenCalledTimes(1);
+        });
+      });
     });
   });
 
@@ -2122,6 +2208,79 @@ describe("<BotTabSurface /> a team's main bot still to be set up", () => {
         name: "Enable cloud",
       });
     }
+
+    describe("while a machine's install token is being minted", () => {
+      const MACHINE_JOINING_NOTE = "A machine is joining the team.";
+
+      // The join view's lapse is read from the clock: only `Date` is held.
+      beforeEach(() => {
+        vi.useFakeTimers({ toFake: ["Date"] });
+      });
+      afterEach(() => {
+        vi.useRealTimers();
+      });
+
+      function createHostButton(): HTMLElement {
+        return within(screen.getByTestId("team-host-option-machine")).getByRole(
+          "button",
+          { name: "Create team host" },
+        );
+      }
+
+      async function pressEnableCloudHeld(user: UserEvent): Promise<void> {
+        expect(enableButton()).toHaveProperty("disabled", true);
+        expect(
+          document.getElementById(
+            enableButton().getAttribute("aria-describedby") ?? "",
+          )?.textContent,
+        ).toBe(MACHINE_JOINING_NOTE);
+        expect(createHostButton()).toHaveProperty("disabled", true);
+        await user.click(enableButton());
+        expect(auth().createSandbox).not.toHaveBeenCalled();
+      }
+
+      it("holds the button and creates nothing, as does a card that is left and comes back while the mint is still out, until the token is minted", async () => {
+        const user = userEvent.setup();
+        let answer: (result: TeamHostInstallTokenResult) => void = () =>
+          undefined;
+        auth().mintTeamHostInstallToken.mockImplementation(
+          () =>
+            new Promise((resolve) => {
+              answer = resolve;
+            }),
+        );
+        const first = render(surfaceFor(SETUP_BOT_ID));
+        await waitFor(() =>
+          expect(enableButton()).toHaveProperty("disabled", false),
+        );
+
+        await user.click(createHostButton());
+        await waitFor(() =>
+          expect(enableButton()).toHaveProperty("disabled", true),
+        );
+        await pressEnableCloudHeld(user);
+
+        first.unmount();
+        render(surfaceFor(SETUP_BOT_ID));
+        await pressEnableCloudHeld(user);
+        expect(auth().mintTeamHostInstallToken).toHaveBeenCalledTimes(1);
+
+        act(() => {
+          answer({
+            kind: "ok",
+            hostId: "0b6f6a3e-6f4c-4a0e-9d6e-0d7a4c1f2a11",
+            installToken: "team-host-install-token-fixture",
+            expiresAt: Date.now() + 10 * 60_000,
+          });
+        });
+
+        expect(
+          (await screen.findByTestId("team-host-option-machine-command"))
+            .textContent,
+        ).toBe("traycer host join team-host-install-token-fixture");
+        expect(auth().createSandbox).not.toHaveBeenCalled();
+      });
+    });
 
     it("creates the team's kept sandbox in the team's environment, in the configuration's default shape and region, holding the button while it is created", async () => {
       const user = userEvent.setup();
