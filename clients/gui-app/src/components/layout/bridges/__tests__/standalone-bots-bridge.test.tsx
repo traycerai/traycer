@@ -19,7 +19,7 @@ import type {
 } from "@traycer/protocol/host/bot/onboarding-schemas";
 import type { BotListResponse } from "@traycer/protocol/host/bot/schemas";
 import type { EnvironmentListResponseV11 } from "@traycer/protocol/host/environment/contracts";
-import type { HostNotificationsCloudFeedRowV16 } from "@traycer/protocol/host/notifications/contracts";
+import type { HostNotificationsCloudFeedRowV17 } from "@traycer/protocol/host/notifications/contracts";
 import {
   hostRpcRegistry,
   type HostRpcRegistry,
@@ -253,7 +253,7 @@ function titleText(): string {
   return screen.getByTestId("bot-tab-title").textContent;
 }
 
-function verdictArrival(botId: string): HostNotificationsCloudFeedRowV16 {
+function verdictArrival(botId: string): HostNotificationsCloudFeedRowV17 {
   return {
     entryId: "verdict-1",
     originHostId: "host-1",
@@ -816,7 +816,7 @@ describe("a bot's notification while a known host cannot take a read", () => {
     };
   }
 
-  function laterArrival(): HostNotificationsCloudFeedRowV16 {
+  function laterArrival(): HostNotificationsCloudFeedRowV17 {
     return {
       ...verdictArrival(TEAM_MAIN_BOT_ID),
       entryId: "verdict-2",
