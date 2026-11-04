@@ -66,7 +66,7 @@ export type BrowserTabMentionContextType = "browser-tab";
 /**
  * The epic-scoped entities a mention chip can DECODE to an attachment.
  *
- * Every member is reachable: `mentionAttachmentFromAttrs` names these four
+ * Every member is reachable: `mentionAttachmentFromAttrs` names these five
  * literals and the artifact kinds explicitly before falling through to `null`,
  * and `entityMentionAttachmentFromAttrs` - the only producer of an
  * `EntityMentionAttachment` - is called from nowhere else.
@@ -84,7 +84,16 @@ export type EntityMentionContextType =
   | "chat"
   | "terminal-agent"
   | "terminal"
+  | BotMentionContextType
   | ArtifactMentionContextType;
+
+/**
+ * A bot, mentioned from an agent chat. Its own literal rather than `chat`: a
+ * bot is not an agent of the open task, and its chip opens the bot's channel.
+ * `epicId` is the bot's id (a bot's id is its task id), and the chip carries
+ * the trunk agent's id too, because an agent cannot list bots.
+ */
+export type BotMentionContextType = "bot";
 
 /**
  * Wire spelling, not a local one: these strings ARE `ContextType` members in
@@ -155,6 +164,10 @@ export type EntityMentionAttachment = {
   terminalAgentId: string | null;
   /** Session id of a plain terminal mention; null for every other entity. */
   terminalId: string | null;
+  /** The bot a bot mention names; null for every other entity. */
+  botId: string | null;
+  /** The bot's trunk agent; null for every other entity, and when unknown. */
+  botTrunkChatId: string | null;
   status: string | number | null;
 };
 
@@ -303,7 +316,8 @@ export function mentionAttachmentFromAttrs(
     contextType === "epic" ||
     contextType === "chat" ||
     contextType === "terminal-agent" ||
-    contextType === "terminal"
+    contextType === "terminal" ||
+    contextType === "bot"
   ) {
     return entityMentionAttachmentFromAttrs(attrs, contextType);
   }
@@ -479,6 +493,9 @@ function entityMentionAttachmentFromAttrs(
         : null,
     terminalId:
       contextType === "terminal" ? (stringValue(attrs.terminalId) ?? id) : null,
+    botId: contextType === "bot" ? (stringValue(attrs.botId) ?? epicId) : null,
+    botTrunkChatId:
+      contextType === "bot" ? stringValue(attrs.botTrunkChatId) : null,
     status: statusValue(attrs.status),
   };
 }
@@ -490,6 +507,10 @@ function entityPathFromAttrs(
   const epicId = stringValue(attrs.epicId);
   const id = stringValue(attrs.id);
   if (contextType === "epic") return epicId === null ? id : `epic:${epicId}`;
+  if (contextType === "bot") {
+    const botId = stringValue(attrs.botId) ?? epicId;
+    return botId === null ? null : `bot:${botId}`;
+  }
   if (id === null || epicId === null) return null;
   return `${contextType}:${epicId}/${id}`;
 }

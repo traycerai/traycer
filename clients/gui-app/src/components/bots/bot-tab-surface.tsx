@@ -80,10 +80,13 @@ import {
   type BotChannelLanding,
 } from "@/components/bots/bot-channel-view";
 import {
+  exchangeRailOver,
   memoryRailOver,
   sessionTargetOfTurn,
   useBotOpenThreadStore,
   useBotRail,
+  type BotExchangeRail,
+  type BotOpenExchange,
   type BotOpenMemory,
   type BotOpenThread,
   type BotSessionOpen,
@@ -864,6 +867,8 @@ function useBotTabRail(
   readonly setOpenMemory: (open: BotOpenMemory | null) => void;
   readonly openPostInChannel: (open: BotOpenThread) => void;
   readonly openMemoryInChannel: () => void;
+  readonly openExchange: BotOpenExchange | null;
+  readonly exchanges: BotExchangeRail;
 } {
   const rail = useBotRail(botId);
   const setRail = useBotOpenThreadStore((s) => s.setRail);
@@ -872,6 +877,16 @@ function useBotTabRail(
     searchShowing?.kind === "thread" ? searchShowing.thread : null;
   const openThread = rail?.kind === "thread" ? rail : searchThread;
   const openMemory = rail?.kind === "memory" ? rail : null;
+  const openExchange = rail?.kind === "exchange" ? rail : null;
+  // A pair's log takes the slot over whatever it holds; closing it brings
+  // that back.
+  const exchanges = useMemo(
+    (): BotExchangeRail => ({
+      open: (peerBotId) => setRail(botId, exchangeRailOver(rail, peerBotId)),
+      close: () => setRail(botId, rail?.kind === "exchange" ? rail.back : rail),
+    }),
+    [botId, rail, setRail],
+  );
   const setOpenMemory = useCallback(
     (open: BotOpenMemory | null) =>
       setRail(botId, open === null ? null : { kind: "memory", ...open }),
@@ -903,6 +918,8 @@ function useBotTabRail(
     setOpenMemory,
     openPostInChannel,
     openMemoryInChannel,
+    openExchange,
+    exchanges,
   };
 }
 
@@ -1412,6 +1429,8 @@ function BotTabContent(props: {
     setOpenMemory,
     openPostInChannel,
     openMemoryInChannel,
+    openExchange,
+    exchanges: exchangeRail,
   } = useBotTabRail(botId, onViewChange);
   const memoryAccess = useMemo(
     (): BotMemoryAccess => ({
@@ -1647,6 +1666,9 @@ function BotTabContent(props: {
                       onOpenMemory={setOpenMemory}
                       environmentId={snapshot.bot.environmentId}
                       botNameOf={botNameOf}
+                      environmentBots={environmentBots}
+                      openExchange={openExchange}
+                      exchangeRail={exchangeRail}
                       onOpenActivity={openActivity}
                       setupHistory={setupHistory}
                       tiles={tiles}

@@ -432,7 +432,7 @@ describe("soundtrack store: directors", () => {
     expect(targets[1]).toBe(1.25);
   });
 
-  it("restores the plan's layers every 5 s after a track's end discards them", async () => {
+  it("restores the plan's layers as a track's next run starts, not at the next 5 s tick", async () => {
     const shortHome = [makeTrack("short", 10)];
     const { store, opened } = harness(
       manifestOf(shortHome, { ...SINGLE_VIEWS, home: ["short"] }),
@@ -446,17 +446,21 @@ describe("soundtrack store: directors", () => {
     // Only A rolled on at zero; the plan held B on beside it.
     expect(lastRamp(output, "bus0/1")?.target).toBe(1.25);
 
-    // The track ends at 10 s and is silent for 8 s; the run that follows rolls
-    // its layers afresh, and B is off with nothing having restated the plan.
+    // The track ends on the first tick at or after 10.05 s and is silent for
+    // 8 s, so the next run starts at about 18.1 s, before the replan tick at
+    // 20 s. Its roll leaves B off; the plan turns it on at once.
     await advance(16);
-    expect(lastRamp(output, "bus0/1")?.target).toBe(0);
-
-    // The next 5 s tick sets it again.
-    await advance(2);
-    expect(lastRamp(output, "bus0/1")?.target).toBe(1.25);
+    const ramps = output.ramps("bus0/1");
+    const runStartGain = ramps.filter((ramp) => ramp.seconds === 0.01).at(-1);
+    expect(runStartGain).toMatchObject({ target: 0 });
+    expect(runStartGain?.at).toBeGreaterThan(18);
+    expect(ramps.at(-1)).toMatchObject({ target: 1.25, at: runStartGain?.at });
+    expect(
+      output.plays("bus0/1").filter((play) => play.at >= 18),
+    ).not.toHaveLength(0);
   });
 
-  it("does not re-plan identical signals, and a restated plan flips no layer", async () => {
+  it("does not re-plan identical signals, and a restated plan ramps and flips no layer", async () => {
     const { store, opened } = singleTrackHarness(mulberry32(11));
     store.getState().setDirector("rules");
     store.getState().enable();
@@ -470,15 +474,11 @@ describe("soundtrack store: directors", () => {
     expect(store.getState().lastPlan).toBe(planBefore);
     expect(opened[0].output.calls).toHaveLength(callsBefore);
 
-    // The 5 s tick restates the plan: gains are ramped to where they were and
-    // no layer goes on or off.
-    const targetsBefore = layerTargets(opened[0].output, "bus0");
+    // The 5 s tick restates the plan: no gain is ramped and no layer goes on
+    // or off.
     const rampsBefore = opened[0].output.calls.filter(isRamp).length;
     await advance(MIX_TUNING.replanIntervalMs / 1000);
-    expect(opened[0].output.calls.filter(isRamp).length).toBeGreaterThan(
-      rampsBefore,
-    );
-    expect(layerTargets(opened[0].output, "bus0")).toEqual(targetsBefore);
+    expect(opened[0].output.calls.filter(isRamp)).toHaveLength(rampsBefore);
     expect(store.getState().lastPlan).toEqual(planBefore);
   });
 });

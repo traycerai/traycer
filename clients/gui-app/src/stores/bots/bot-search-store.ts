@@ -289,9 +289,7 @@ export function openBotSearch(
 export function closeBotSearch(botId: string): void {
   const rail = railOf(botId);
   const back = rail?.kind === "search" ? rail.back : null;
-  useBotOpenThreadStore
-    .getState()
-    .setRail(botId, back === null ? null : { kind: "thread", ...back });
+  useBotOpenThreadStore.getState().setRail(botId, back);
   useBotSearchStore.getState().reset();
 }
 
@@ -320,7 +318,7 @@ export function jumpToBotSearchHit(
   const rail = railOf(fromBotId);
   const back = rail?.kind === "search" ? rail.back : null;
   const { setRail } = useBotOpenThreadStore.getState();
-  setRail(fromBotId, back === null ? null : { kind: "thread", ...back });
+  setRail(fromBotId, back);
   setRail(hit.botId, searchRailOver(null));
   return true;
 }

@@ -220,6 +220,7 @@ export const MobileHistoryRow = memo(function MobileHistoryRow(
     // mode with a permanently unchecked row in it.
     disabled: selectionMode || isRenaming || !canDelete,
     acceptsMouse: false,
+    acceptsPen: false,
     onLongPress: () => {
       setTrayOpen(false);
       onToggleSelection(item.epicId);

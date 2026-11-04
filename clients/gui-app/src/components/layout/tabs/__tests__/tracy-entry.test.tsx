@@ -1183,6 +1183,34 @@ describe("the fixed Tracy entry - signals", () => {
       },
     );
 
+    it.each(PLACEMENTS)(
+      "wears the solid primary tone in the $placement, and the strips seat it off the glyph in a ring",
+      async ({ placement, countTestId, mountEntry }) => {
+        tracyIndicators({ unreadDone: true, unreadCount: 3 });
+        mountEntry();
+
+        const entry = await screen.findByTestId("tab-tracy");
+        const count = within(entry).getByTestId(countTestId);
+        expect(count.getAttribute("data-slot")).toBe("badge");
+        expect(count.getAttribute("data-variant")).toBe("default");
+        expect(count.classList.contains("bg-primary")).toBe(true);
+        expect(count.classList.contains("text-primary-foreground")).toBe(true);
+        if (placement !== "collapsed rail") {
+          for (const seat of [
+            "-top-3.5",
+            "left-3.5",
+            "right-auto",
+            "ring-2",
+            "ring-canvas",
+          ]) {
+            expect(count.classList.contains(seat)).toBe(true);
+          }
+          expect(count.classList.contains("-right-px")).toBe(false);
+          expect(count.classList.contains("translate-x-1/2")).toBe(false);
+        }
+      },
+    );
+
     it("reads 99+ past ninety-nine", async () => {
       tracyIndicators({ unreadDone: true, unreadCount: 120 });
       mountTopStrip("/");

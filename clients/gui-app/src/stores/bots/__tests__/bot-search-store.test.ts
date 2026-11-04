@@ -8,6 +8,7 @@ import {
   searchHit,
 } from "@/lib/bots/__tests__/bot-search-test-support";
 import {
+  exchangeRailOver,
   memoryRailOver,
   searchRailOver,
   useBotOpenThreadStore,
@@ -153,7 +154,7 @@ describe("opening and closing the search in a bot's rail", () => {
     openBotSearch(SEARCH_BOT_A, IN_A, "ship");
     expect(railOf(SEARCH_BOT_A)).toEqual({
       kind: "search",
-      back: OPEN_THREAD,
+      back: { kind: "thread", ...OPEN_THREAD },
       showing: { kind: "results" },
     });
     expect(useBotSearchStore.getState()).toMatchObject({
@@ -227,26 +228,141 @@ describe("opening and closing the search in a bot's rail", () => {
     expect(railOf(SEARCH_BOT_A)).toEqual({ kind: "thread", ...OPEN_THREAD });
   });
 
-  it("keeps the displaced thread through the memory and the search taking the rail from each other", () => {
+  it("keeps the displaced thread through the memory over a search, and the memory itself through a search over the memory", () => {
     const thread: BotRail = { kind: "thread", ...OPEN_THREAD };
     const search = searchRailOver(thread);
     const memory = memoryRailOver(search);
 
     expect(search).toEqual({
       kind: "search",
-      back: OPEN_THREAD,
+      back: thread,
       showing: { kind: "results" },
     });
     expect(memory).toEqual({ kind: "memory", back: OPEN_THREAD });
-    expect(searchRailOver(memory)).toEqual(search);
-    // A search showing a result's thread: that thread is what the memory gives back.
+    expect(searchRailOver(memory)).toEqual({
+      kind: "search",
+      back: memory,
+      showing: { kind: "results" },
+    });
+  });
+});
+
+/** A thread other than {@link OPEN_THREAD}, for a result's thread. */
+const RESULT_THREAD: BotOpenThread = {
+  ...OPEN_THREAD,
+  anchorMessageId: "post-9",
+};
+const PEER_BOT_ID = SEARCH_BOT_B;
+
+/** As the surface does: a pair's log over whatever the rail holds. */
+function openLog(botId: string): void {
+  const { setRail } = useBotOpenThreadStore.getState();
+  setRail(botId, exchangeRailOver(railOf(botId), PEER_BOT_ID));
+}
+
+/** As the surface does: closing the log brings back what it displaced. */
+function closeLog(botId: string): void {
+  const rail = railOf(botId);
+  useBotOpenThreadStore
+    .getState()
+    .setRail(botId, rail?.kind === "exchange" ? rail.back : rail);
+}
+
+describe("the rail a search shares with a pair's log and the memory", () => {
+  const thread: BotRail = { kind: "thread", ...OPEN_THREAD };
+
+  beforeEach(() => {
+    useBotOpenThreadStore.getState().setRail(SEARCH_BOT_A, thread);
+  });
+
+  it("over a pair's log: closing the results brings the log back, and closing the log what it displaced", () => {
+    openLog(SEARCH_BOT_A);
+    const log = railOf(SEARCH_BOT_A);
+
+    openBotSearch(SEARCH_BOT_A, ALL, "ship");
+    expect(railOf(SEARCH_BOT_A)).toEqual({
+      kind: "search",
+      back: log,
+      showing: { kind: "results" },
+    });
+
+    closeBotSearch(SEARCH_BOT_A);
+    expect(railOf(SEARCH_BOT_A)).toEqual({
+      kind: "exchange",
+      peerBotId: PEER_BOT_ID,
+      back: thread,
+    });
+
+    closeLog(SEARCH_BOT_A);
+    expect(railOf(SEARCH_BOT_A)).toEqual(thread);
+  });
+
+  it("over the memory: closing the results brings the memory back, with the thread it displaced", () => {
+    const memory = memoryRailOver(thread);
+    useBotOpenThreadStore.getState().setRail(SEARCH_BOT_A, memory);
+
+    openBotSearch(SEARCH_BOT_A, ALL, "ship");
+    closeBotSearch(SEARCH_BOT_A);
+
+    expect(railOf(SEARCH_BOT_A)).toEqual({
+      kind: "memory",
+      back: OPEN_THREAD,
+    });
+  });
+
+  it("under a pair's log: closing the log brings the results back", () => {
+    openBotSearch(SEARCH_BOT_A, ALL, "ship");
+    const results = railOf(SEARCH_BOT_A);
+
+    openLog(SEARCH_BOT_A);
+    expect(railOf(SEARCH_BOT_A)).toEqual({
+      kind: "exchange",
+      peerBotId: PEER_BOT_ID,
+      back: results,
+    });
+
+    closeLog(SEARCH_BOT_A);
+    expect(railOf(SEARCH_BOT_A)).toEqual(results);
+    expect(useBotSearchStore.getState().query).toBe("ship");
+  });
+
+  it("under the memory: its back is the thread the search displaced while it shows results, then the thread it shows", () => {
+    openBotSearch(SEARCH_BOT_A, ALL, "ship");
+    const results = railOf(SEARCH_BOT_A);
+    if (results?.kind !== "search") throw new Error("the search did not open");
+
+    expect(memoryRailOver(results)).toEqual({
+      kind: "memory",
+      back: OPEN_THREAD,
+    });
     expect(
       memoryRailOver({
-        kind: "search",
-        back: null,
-        showing: { kind: "thread", thread: OPEN_THREAD },
+        ...results,
+        showing: { kind: "thread", thread: RESULT_THREAD },
       }),
-    ).toEqual({ kind: "memory", back: OPEN_THREAD });
+    ).toEqual({ kind: "memory", back: RESULT_THREAD });
+  });
+
+  it("opened while a pair's log sits over an older search: the older search leaves the chain, so closing the new one and then the log ends with no search", () => {
+    openBotSearch(SEARCH_BOT_A, ALL, "ship");
+    openLog(SEARCH_BOT_A);
+
+    openBotSearch(SEARCH_BOT_A, ALL, "deploy");
+    expect(railOf(SEARCH_BOT_A)).toEqual({
+      kind: "search",
+      back: { kind: "exchange", peerBotId: PEER_BOT_ID, back: thread },
+      showing: { kind: "results" },
+    });
+
+    closeBotSearch(SEARCH_BOT_A);
+    expect(railOf(SEARCH_BOT_A)).toEqual({
+      kind: "exchange",
+      peerBotId: PEER_BOT_ID,
+      back: thread,
+    });
+
+    closeLog(SEARCH_BOT_A);
+    expect(railOf(SEARCH_BOT_A)).toEqual(thread);
   });
 });
 
