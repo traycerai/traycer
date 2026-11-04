@@ -1,6 +1,5 @@
 import { afterEach, describe, expect, it } from "vitest";
 import type {
-  AppResourceSnapshotWireV15,
   EpicResourceSnapshotWireV15,
   HostTreeResourceSnapshotWireV15,
   OtherResourceSnapshotWireV15,
@@ -16,6 +15,7 @@ import type {
 import {
   createResourcesStore,
   resourceOwnerKey,
+  type AppResourceUsage,
   type ResourcesStreamClientFactory,
 } from "@/stores/resources/resources-store";
 import { resourcesRegistry } from "@/stores/resources/resources-registry";
@@ -77,12 +77,11 @@ function makeEpic(
   };
 }
 
-function makeApp(
-  over: Partial<AppResourceSnapshotWireV15>,
-): AppResourceSnapshotWireV15 {
+function makeApp(over: Partial<AppResourceUsage>): AppResourceUsage {
   return {
     sampledAt: 1_000,
     hostTotalMemoryBytes: 16_000,
+    hostCpuCount: 16,
     process: makeProcess({
       pid: 10,
       rootPid: 10,
@@ -261,6 +260,37 @@ describe("createResourcesStore", () => {
     );
 
     expect(handle.store.getState().app?.process?.name).toBe("traycer-host");
+    handle.dispose();
+  });
+
+  it("keeps the app identity while the host's processor count is unchanged, and swaps it when the count moves", () => {
+    // The processor count is the denominator of every CPU share, so a change
+    // in it alone must reach subscribers even though every sampled figure is
+    // the same.
+    const fake = makeFakeClient();
+    const handle = createResourcesStore({
+      scope: { kind: "epic", epicId: "epic-1" },
+      streamClientFactory: fake.factory,
+    });
+
+    fake.callbacks().onSnapshot(projection({ app: makeApp({}) }));
+    const first = handle.store.getState().app;
+
+    fake
+      .callbacks()
+      .onUpdate(
+        projection({ sampledAt: 2_000, app: makeApp({ sampledAt: 2_000 }) }),
+      );
+    expect(handle.store.getState().app).toBe(first);
+
+    fake.callbacks().onUpdate(
+      projection({
+        sampledAt: 3_000,
+        app: makeApp({ sampledAt: 3_000, hostCpuCount: 8 }),
+      }),
+    );
+    expect(handle.store.getState().app?.hostCpuCount).toBe(8);
+    expect(handle.store.getState().app).not.toBe(first);
     handle.dispose();
   });
 

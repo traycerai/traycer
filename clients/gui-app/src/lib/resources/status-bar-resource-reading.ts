@@ -4,10 +4,13 @@ import {
   formatCpuPercent,
   formatMemoryBytes,
   formatProcessCount,
+  formatRamSharePercent,
 } from "@/lib/resources/format-resource-usage";
 import {
   attributedProjection,
   hostMemorySharePercent,
+  hostCpuSharePercent,
+  hostCpuCoresLabel,
 } from "@/lib/resources/headline-resource-summary";
 import type { GlobalResourceProjection } from "@/stores/resources/resources-registry";
 
@@ -29,6 +32,7 @@ import type { GlobalResourceProjection } from "@/stores/resources/resources-regi
  */
 export interface StatusBarResourceReading {
   readonly cpuPercent: number | null;
+  readonly cpuCoresLabel: string | null;
   readonly memoryBytes: number | null;
   readonly processCount: number | null;
   /**
@@ -42,6 +46,7 @@ export interface StatusBarResourceReading {
 
 const EMPTY_READING: StatusBarResourceReading = {
   cpuPercent: null,
+  cpuCoresLabel: null,
   memoryBytes: null,
   processCount: null,
   ramSharePercent: null,
@@ -61,6 +66,7 @@ export interface StatusBarResourceMetricView {
   /** `null` renders the dash; `unavailableReason` then says why. */
   readonly value: string | null;
   readonly unavailableReason: string | null;
+  readonly cpuCoresLabel: string | null;
 }
 
 /**
@@ -96,8 +102,15 @@ export function statusBarResourceReading(
   // thrown away for one missing field.
   const memoryBytes =
     base.rssBytes === null ? null : base.rssBytes + (desktopApp?.rssBytes ?? 0);
+  // As in the headline, Desktop belongs only to a reading of this machine.
+  // Its native share is added directly; the count is used only for cores detail.
+  const desktopShare = desktopApp?.cpuSharePercent ?? 0;
+  const perCore =
+    base.cpuPercent + desktopShare * (projection.app?.hostCpuCount ?? 0);
+  const hostShare = hostCpuSharePercent(base.cpuPercent, projection.app);
   return {
-    cpuPercent: base.cpuPercent + (desktopApp?.cpuPercent ?? 0),
+    cpuPercent: hostShare === null ? null : hostShare + desktopShare,
+    cpuCoresLabel: hostCpuCoresLabel(perCore, projection.app),
     memoryBytes,
     processCount: base.processCount + (desktopApp?.processCount ?? 0),
     // `hostTotalMemoryBytes` rides on the host `app` snapshot, so the share is
@@ -155,6 +168,7 @@ export function statusBarResourceMetricViews(input: {
     return {
       metric,
       label: METRIC_LABELS[metric],
+      cpuCoresLabel: metric === "cpu" ? reading.cpuCoresLabel : null,
       value,
       unavailableReason:
         value === null
@@ -171,6 +185,7 @@ export function statusBarResourceMetricViews(input: {
               hostTotalMemoryKnown:
                 projection.app !== null &&
                 projection.app.hostTotalMemoryBytes > 0,
+              hostCpuCountKnown: projection.app?.hostCpuCount !== undefined,
               hostLabel: input.hostLabel,
             })
           : null,
@@ -196,12 +211,10 @@ function formatStatusBarMetric(
         ? null
         : formatProcessCount(reading.processCount);
     case "ramShare":
-      // Percent formatting, not memory formatting: `formatCpuPercent` is the
-      // app's percent formatter and the resource monitor's own RAM share reads
-      // through it too, so the two surfaces round identically.
+      // RAM precision stays independent of CPU's sub-1% tier.
       return reading.ramSharePercent === null
         ? null
-        : formatCpuPercent(reading.ramSharePercent);
+        : formatRamSharePercent(reading.ramSharePercent);
   }
 }
 
@@ -240,12 +253,16 @@ function unavailableReason(input: {
   readonly hasSample: boolean;
   /** That projection carries a total-memory figure to divide by. */
   readonly hostTotalMemoryKnown: boolean;
+  readonly hostCpuCountKnown: boolean;
   readonly hostLabel: string;
 }): string {
   if (input.globalStreamUnsupported) {
     return `${input.hostLabel} is running an older Traycer host, which doesn't stream resource usage. Update it to see its processes here.`;
   }
   if (input.hasSample) {
+    if (input.metric === "cpu" && !input.hostCpuCountKnown) {
+      return `${input.hostLabel} doesn't report how many processors it has, so there is no total to take a CPU share of.`;
+    }
     if (input.metric === "ramShare" && !input.hostTotalMemoryKnown) {
       return `${input.hostLabel} doesn't report how much memory it has, so there is no total to take a share of.`;
     }
@@ -268,7 +285,10 @@ export function statusBarResourceSegmentLabel(
 ): string {
   if (views.length === 0) return "Resources, no metrics selected";
   const readings = views
-    .map((view) => `${view.label} ${view.value ?? "unavailable"}`)
+    .map(
+      (view) =>
+        `${view.label} ${view.value ?? "unavailable"}${view.cpuCoresLabel === null ? "" : ` (${view.cpuCoresLabel})`}`,
+    )
     .join(", ");
   return `Resources: ${readings}`;
 }
