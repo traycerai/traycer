@@ -41,7 +41,7 @@ import {
   waitFor,
   within,
 } from "@testing-library/react";
-import userEvent from "@testing-library/user-event";
+import userEvent, { type UserEvent } from "@testing-library/user-event";
 import {
   afterEach,
   beforeEach,
@@ -1152,7 +1152,10 @@ describe("<BotTabSurface /> a team's main bot still to be set up", () => {
   describe("Create a team host on a machine", () => {
     const TOKEN = "team-host-install-token-fixture";
     const HOST_ID = "0b6f6a3e-6f4c-4a0e-9d6e-0d7a4c1f2a11";
-    const EXPIRES_AT = 1_791_000_900_000;
+    /** A token's window from its mint to its lapse. */
+    const TOKEN_WINDOW_MS = 10 * 60_000;
+    const NOW = Date.UTC(2026, 10, 4, 12, 0, 0);
+    const EXPIRES_AT = NOW + TOKEN_WINDOW_MS;
     const JOIN_COMMAND = `traycer host join ${TOKEN}`;
     const MINTED: TeamHostInstallTokenResult = {
       kind: "ok",
@@ -1166,7 +1169,14 @@ describe("<BotTabSurface /> a team's main bot still to be set up", () => {
     );
 
     beforeEach(scriptTeamControlPlane);
+    // A token lapses at its own time on the clock, so the clock is held: only
+    // `Date`, which a case that waits for a lapse widens to the timers.
+    beforeEach(() => {
+      vi.useFakeTimers({ toFake: ["Date"] });
+      vi.setSystemTime(NOW);
+    });
     afterEach(() => {
+      vi.useRealTimers();
       if (initialClipboard === undefined) {
         Reflect.deleteProperty(navigator, "clipboard");
       } else {
@@ -1418,7 +1428,7 @@ describe("<BotTabSurface /> a team's main bot still to be set up", () => {
       ).toBeTruthy();
     });
 
-    it("drops the token when the card is left: the surface opened again offers the button, not the command", async () => {
+    it("keeps the token when the card is left and comes back within its window: the join view again, with no second mint", async () => {
       const user = userEvent.setup();
       auth().mintTeamHostInstallToken.mockResolvedValue(MINTED);
       const first = render(surfaceFor(SETUP_BOT_ID));
@@ -1429,12 +1439,270 @@ describe("<BotTabSurface /> a team's main bot still to be set up", () => {
 
       render(surfaceFor(SETUP_BOT_ID));
 
-      expect(createButton()).toBeTruthy();
+      expect(
+        screen.getByTestId("team-host-option-machine-command").textContent,
+      ).toBe(JOIN_COMMAND);
+      expect(
+        within(machineOption()).queryByRole("button", {
+          name: "Create team host",
+        }),
+      ).toBeNull();
+      expect(auth().mintTeamHostInstallToken).toHaveBeenCalledTimes(1);
+      expect(document.body.innerHTML.split(TOKEN)).toHaveLength(2);
+    });
+
+    it("shows a mint still out when the card is left and comes back: the button held, then the token once it is minted", async () => {
+      const user = userEvent.setup();
+      let answer: (result: TeamHostInstallTokenResult) => void = () =>
+        undefined;
+      auth().mintTeamHostInstallToken.mockImplementation(
+        () =>
+          new Promise((resolve) => {
+            answer = resolve;
+          }),
+      );
+      const first = render(surfaceFor(SETUP_BOT_ID));
+      await sandboxListRead();
+      await user.click(createButton());
+      await waitFor(() =>
+        expect(createButton()).toHaveProperty("disabled", true),
+      );
+      first.unmount();
+
+      render(surfaceFor(SETUP_BOT_ID));
+
+      expect(createButton()).toHaveProperty("disabled", true);
       expect(
         screen.queryByTestId("team-host-option-machine-command"),
       ).toBeNull();
-      expect(document.body.innerHTML).not.toContain(TOKEN);
       expect(auth().mintTeamHostInstallToken).toHaveBeenCalledTimes(1);
+
+      act(() => {
+        answer(MINTED);
+      });
+
+      expect(
+        (await screen.findByTestId("team-host-option-machine-command"))
+          .textContent,
+      ).toBe(JOIN_COMMAND);
+      expect(auth().mintTeamHostInstallToken).toHaveBeenCalledTimes(1);
+    });
+
+    describe("once the token lapses before the machine joins", () => {
+      const REMINTED_TOKEN = "team-host-install-token-second";
+
+      beforeEach(() => {
+        // The lapse is a timer, so the timers are held with the clock, which
+        // still follows real time for the waits around it.
+        vi.useFakeTimers({
+          toFake: ["Date", "setTimeout", "clearTimeout"],
+          shouldAdvanceTime: true,
+        });
+        vi.setSystemTime(NOW);
+      });
+
+      function lapseUser(): UserEvent {
+        return userEvent.setup({
+          advanceTimers: (ms) => vi.advanceTimersByTime(ms),
+        });
+      }
+
+      async function lapse(): Promise<void> {
+        await act(async () => {
+          await vi.advanceTimersByTimeAsync(TOKEN_WINDOW_MS);
+        });
+      }
+
+      function remintButton(): HTMLElement {
+        return within(machineOption()).getByRole("button", {
+          name: "Create a new token",
+        });
+      }
+
+      it("keeps the command and its copy button until the token lapses, then says it expired and offers neither", async () => {
+        const user = lapseUser();
+        auth().mintTeamHostInstallToken.mockResolvedValue(MINTED);
+        render(surfaceFor(SETUP_BOT_ID));
+        await sandboxListRead();
+        await user.click(createButton());
+        await screen.findByTestId("team-host-option-machine-command");
+        expect(
+          within(machineOption()).getByRole("button", { name: "Copy command" }),
+        ).toBeTruthy();
+
+        await act(async () => {
+          await vi.advanceTimersByTimeAsync(TOKEN_WINDOW_MS / 2);
+        });
+        expect(
+          screen.getByTestId("team-host-option-machine-command").textContent,
+        ).toBe(JOIN_COMMAND);
+
+        await lapse();
+
+        expect(
+          screen.getByTestId("team-host-option-machine-expired").textContent,
+        ).toBe(
+          "The install token expired before the machine joined.Create a new token",
+        );
+        expect(
+          screen.queryByTestId("team-host-option-machine-command"),
+        ).toBeNull();
+        expect(
+          within(machineOption()).queryByRole("button", {
+            name: "Copy command",
+          }),
+        ).toBeNull();
+        expect(document.body.innerHTML).not.toContain(TOKEN);
+      });
+
+      it("shows the expired view at once for a token that lapsed while the card was away", async () => {
+        const user = lapseUser();
+        auth().mintTeamHostInstallToken.mockResolvedValue(MINTED);
+        const first = render(surfaceFor(SETUP_BOT_ID));
+        await sandboxListRead();
+        await user.click(createButton());
+        await screen.findByTestId("team-host-option-machine-command");
+        first.unmount();
+        vi.setSystemTime(NOW + TOKEN_WINDOW_MS + 1);
+
+        render(surfaceFor(SETUP_BOT_ID));
+        await act(async () => {
+          await vi.advanceTimersByTimeAsync(0);
+        });
+
+        expect(
+          screen.getByTestId("team-host-option-machine-expired"),
+        ).toBeTruthy();
+        expect(remintButton()).toBeTruthy();
+        expect(document.body.innerHTML).not.toContain(TOKEN);
+      });
+
+      it("mints again when Create a new token is pressed, and shows the new token's command in place of the dead one", async () => {
+        const user = lapseUser();
+        auth().mintTeamHostInstallToken.mockResolvedValueOnce(MINTED);
+        auth().mintTeamHostInstallToken.mockImplementationOnce(() =>
+          Promise.resolve({
+            kind: "ok",
+            hostId: HOST_ID,
+            installToken: REMINTED_TOKEN,
+            expiresAt: Date.now() + TOKEN_WINDOW_MS,
+          }),
+        );
+        render(surfaceFor(SETUP_BOT_ID));
+        await sandboxListRead();
+        await user.click(createButton());
+        await screen.findByTestId("team-host-option-machine-command");
+        await lapse();
+
+        await user.click(remintButton());
+
+        expect(auth().mintTeamHostInstallToken.mock.calls).toEqual([
+          ["env-new"],
+          ["env-new"],
+        ]);
+        expect(
+          (await screen.findByTestId("team-host-option-machine-command"))
+            .textContent,
+        ).toBe(`traycer host join ${REMINTED_TOKEN}`);
+        expect(
+          screen.queryByTestId("team-host-option-machine-expired"),
+        ).toBeNull();
+        expect(document.body.innerHTML).not.toContain(TOKEN);
+      });
+
+      it("says why under the button when the new token is refused", async () => {
+        const user = lapseUser();
+        auth().mintTeamHostInstallToken.mockResolvedValueOnce(MINTED);
+        auth().mintTeamHostInstallToken.mockResolvedValueOnce({
+          kind: "team-host-exists",
+        });
+        render(surfaceFor(SETUP_BOT_ID));
+        await sandboxListRead();
+        await user.click(createButton());
+        await screen.findByTestId("team-host-option-machine-command");
+        await lapse();
+
+        await user.click(remintButton());
+
+        const alert = await within(machineOption()).findByRole("alert");
+        expect(alert.textContent).toBe("The team already has a host.");
+        expect(alert.dataset.testid).toBe("team-host-option-machine-refusal");
+        expect(auth().mintTeamHostInstallToken).toHaveBeenCalledTimes(2);
+        expect(
+          screen.queryByTestId("team-host-option-machine-command"),
+        ).toBeNull();
+        expect(document.body.innerHTML).not.toContain(TOKEN);
+      });
+    });
+  });
+
+  describe("while a machine of the team is joining", () => {
+    const JOINING_SETUP: BotOnboardingSetup = {
+      ...NEEDS_HOST_SETUP,
+      state: "host_joining",
+      arrival: { kind: "machine" },
+    };
+    const JOINING_NOTE = "A machine is joining the team.";
+
+    beforeEach(() => {
+      scriptTeamControlPlane();
+      // The setup channel's own read is not enabled by the surface: it reads
+      // as what the host answered, which the fake host serves from its cache.
+      mocks.state.readsCached = true;
+    });
+
+    function hostButtons(): readonly HTMLElement[] {
+      return [
+        within(screen.getByTestId("team-host-option-cloud")).getByRole(
+          "button",
+          { name: "Enable cloud" },
+        ),
+        within(screen.getByTestId("team-host-option-machine")).getByRole(
+          "button",
+          { name: "Create team host" },
+        ),
+      ];
+    }
+
+    it("shows the setup channel with both host buttons held under the note, and lets them be pressed again once the machine is gone", async () => {
+      mocks.reads["env-new"] = { setup: JOINING_SETUP };
+      const view = render(surfaceFor(SETUP_BOT_ID));
+
+      expect(screen.getByTestId("team-setup-channel")).toBeTruthy();
+      expect(mocks.open).not.toHaveBeenCalled();
+      for (const option of ["cloud", "machine"]) {
+        const note = screen.getByTestId(`team-host-option-${option}-note`);
+        expect(note.textContent).toBe(JOINING_NOTE);
+        const button = within(
+          screen.getByTestId(`team-host-option-${option}`),
+        ).getByRole("button");
+        expect(button).toHaveProperty("disabled", true);
+        expect(button.getAttribute("aria-describedby")).toBe(note.id);
+      }
+
+      mocks.reads["env-new"] = { setup: NEEDS_HOST_SETUP };
+      view.rerender(surfaceFor(SETUP_BOT_ID));
+
+      await waitFor(() =>
+        expect(
+          hostButtons().map((button) => button.hasAttribute("disabled")),
+        ).toEqual([false, false]),
+      );
+      expect(screen.queryByTestId("team-host-option-cloud-note")).toBeNull();
+      expect(screen.queryByTestId("team-host-option-machine-note")).toBeNull();
+    });
+
+    it("mints nothing and creates nothing when a held button is pressed", async () => {
+      const user = userEvent.setup();
+      mocks.reads["env-new"] = { setup: JOINING_SETUP };
+      render(surfaceFor(SETUP_BOT_ID));
+
+      for (const button of hostButtons()) await user.click(button);
+
+      expect(
+        mocks.binding?.auth.mintTeamHostInstallToken,
+      ).not.toHaveBeenCalled();
+      expect(mocks.binding?.auth.createSandbox).not.toHaveBeenCalled();
     });
   });
 
@@ -1478,6 +1746,22 @@ describe("<BotTabSurface /> a team's main bot still to be set up", () => {
 
     expect(screen.getByTestId("team-setup-channel")).toBeTruthy();
     expect(mocks.open).not.toHaveBeenCalled();
+  });
+
+  it("shows the setup channel for a team whose machine is joining, as one still to be set up, and opens no bot", () => {
+    mocks.reads["env-new"] = {
+      setup: {
+        ...NEEDS_HOST_SETUP,
+        state: "host_joining",
+        arrival: { kind: "machine" },
+      },
+    };
+    render(surfaceFor(SETUP_BOT_ID));
+
+    expect(screen.getByTestId("team-setup-channel")).toBeTruthy();
+    expect(screen.queryByTestId("stub-channel")).toBeNull();
+    expect(mocks.open).not.toHaveBeenCalled();
+    expect(isKept(SETUP_BOT_ID)).toBe(true);
   });
 
   it.each<readonly [string, ReadScript]>([

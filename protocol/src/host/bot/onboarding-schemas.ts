@@ -175,16 +175,20 @@ export type BotOnboardingArrival = z.infer<typeof botOnboardingArrivalSchema>;
  * The team's main bot through its setup (T67, T67b). `needs_host` while the
  * team has no live bot: no host the team can use runs it yet, and `botId` is
  * the id it will be created under (the one its environment derives), so a
- * channel opened on it now is the bot's channel once it exists. `live` once
- * the team's first host created it: the setup stays in the channel as its
- * history, and `arrival` says how the host came (`null` while
- * `needs_host`). `title` is the name it is created with.
+ * channel opened on it now is the bot's channel once it exists.
+ * `host_joining` (from `@1.3`, T141) while a computer of the team's own holds
+ * the team's host and the bot does not exist yet: its install token is out,
+ * or it joined and waits for a provider signed in there; no second host can
+ * be added meanwhile. `live` once the team's first host created it: the setup
+ * stays in the channel as its history. `arrival` says how the host came, or
+ * is coming (`null` while `needs_host`). `title` is the name it is created
+ * with.
  */
 export const botOnboardingSetupSchema = lazySchema(() =>
   z.object({
     botId: botIdSchema,
     title: z.string().min(1),
-    state: z.enum(["needs_host", "live"]),
+    state: z.enum(["needs_host", "host_joining", "live"]),
     arrival: botOnboardingArrivalSchema.nullable(),
   }),
 );

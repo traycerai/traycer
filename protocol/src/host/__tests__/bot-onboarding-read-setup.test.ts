@@ -175,3 +175,39 @@ describe("bot.onboarding.read@1.3 arrival on a team's own computer", () => {
     expect(upgrade.upgradeResponse(v12)).toEqual(v12);
   });
 });
+
+describe("bot.onboarding.read@1.3 setup whose machine is joining", () => {
+  const HOST_JOINING = {
+    botId: BOT_A,
+    title: "Tracy",
+    state: "host_joining",
+    arrival: { kind: "machine" },
+  } as const;
+  const parseAt = (
+    contract: typeof botOnboardingReadV12 | typeof botOnboardingReadV13,
+    setup: object,
+  ): boolean =>
+    contract.responseSchema.safeParse({ ...V10_RESPONSE, setup }).success;
+
+  it("accepts host_joining at 1.3 with a machine arrival", () => {
+    expect(
+      botOnboardingReadV13.responseSchema.parse({
+        ...V10_RESPONSE,
+        setup: HOST_JOINING,
+      }).setup,
+    ).toEqual(HOST_JOINING);
+  });
+
+  it("keeps 1.2 frozen on needs_host and live, so host_joining is projected, never sent", () => {
+    expect(parseAt(botOnboardingReadV12, HOST_JOINING)).toBe(false);
+    expect(
+      parseAt(botOnboardingReadV12, { ...HOST_JOINING, arrival: null }),
+    ).toBe(false);
+  });
+
+  it("still names no other state", () => {
+    expect(
+      parseAt(botOnboardingReadV13, { ...HOST_JOINING, state: "joining" }),
+    ).toBe(false);
+  });
+});

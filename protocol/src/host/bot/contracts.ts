@@ -514,8 +514,10 @@ export const botOnboardingReadUpgradeV11ToV12 = defineUpgradePath<
 
 /**
  * `bot.onboarding.read@1.3` (T141): a live setup's arrival may be `machine`,
- * a computer of the team's own. A `1.2` caller is served that setup with
- * `arrival: null` (`WITHIN_MAJOR_RESPONSE_PROJECTIONS` on the host).
+ * a computer of the team's own, and a setup whose machine holds the team's
+ * host before the bot exists is `host_joining`. A `1.2` caller is served a
+ * machine's arrival as `null` and `host_joining` as `needs_host`
+ * (`WITHIN_MAJOR_RESPONSE_PROJECTIONS` on the host).
  */
 export const botOnboardingReadV13 = defineRpcContract({
   method: "bot.onboarding.read",

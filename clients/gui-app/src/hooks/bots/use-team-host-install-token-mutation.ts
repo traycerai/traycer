@@ -1,5 +1,6 @@
 import { useMutation, type UseMutationResult } from "@tanstack/react-query";
 import type { TeamHostInstallTokenResult } from "@traycer-clients/shared/host-client/team-host";
+import { useMutationStateOf } from "@/hooks/use-mutation-state-of";
 import { useHostBinding } from "@/lib/host";
 import { teamHostMutationKeys } from "@/lib/query-keys";
 
@@ -35,11 +36,20 @@ function failureLine(failure: TeamHostInstallTokenFailure): string {
 }
 
 /**
+ * How long a minted token stays in memory once nothing shows it: past the
+ * token's own 10-minute window, so a card that comes back after the token
+ * lapsed says so and offers a new one.
+ */
+const MINTED_TOKEN_KEPT_MS = 30 * 60_000;
+
+/**
  * `POST /api/environments/{id}/team-host/install-token`: mints the one-time
  * token a team's own computer joins with (`traycer host join <token>`). The
- * token is a credential shown once: the answer lives only on this mutation,
- * which is dropped from the cache as soon as nothing observes it
- * (`gcTime: 0`), and nothing here logs it. A refusal is drawn in place.
+ * token is a credential: the answer lives only on this mutation, in memory,
+ * never persisted and never logged; it outlives the card that sent it for
+ * its window (`MINTED_TOKEN_KEPT_MS`), so the card shows the mint in flight
+ * or its token again after it remounts ({@link useTeamHostInstallTokenLatest}).
+ * A refusal is drawn in place.
  */
 export function useTeamHostInstallTokenMutation(
   environmentId: string,
@@ -55,6 +65,53 @@ export function useTeamHostInstallTokenMutation(
       if (result.kind !== "ok") throw new Error(failureLine(result));
       return { installToken: result.installToken, expiresAt: result.expiresAt };
     },
-    gcTime: 0,
+    gcTime: MINTED_TOKEN_KEPT_MS,
   });
+}
+
+/** The newest mint for an environment, whichever mount of the card sent it. */
+export interface TeamHostInstallTokenLatest {
+  /** A mint is in flight. */
+  readonly pending: boolean;
+  /** The newest minted token, or `null` before one (or after it is dropped). */
+  readonly token: TeamHostInstallToken | null;
+}
+
+function isInstallToken(value: unknown): value is TeamHostInstallToken {
+  return (
+    typeof value === "object" &&
+    value !== null &&
+    "installToken" in value &&
+    typeof value.installToken === "string" &&
+    "expiresAt" in value &&
+    typeof value.expiresAt === "number"
+  );
+}
+
+/**
+ * The environment's newest install-token mint as the mutation cache holds
+ * it: the card reads it so a mint sent before it unmounted is still in
+ * flight, or shown, when it comes back.
+ */
+export function useTeamHostInstallTokenLatest(
+  environmentId: string,
+): TeamHostInstallTokenLatest {
+  const states = useMutationStateOf(
+    { mutationKey: teamHostMutationKeys.installToken(environmentId) },
+    (mutation) => ({
+      status: mutation.state.status,
+      data: mutation.state.data,
+    }),
+  );
+  const latest = states.at(-1);
+  return {
+    pending: latest?.status === "pending",
+    token:
+      latest?.status === "success" && isInstallToken(latest.data)
+        ? {
+            installToken: latest.data.installToken,
+            expiresAt: latest.data.expiresAt,
+          }
+        : null,
+  };
 }
