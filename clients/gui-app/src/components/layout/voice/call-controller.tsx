@@ -58,15 +58,14 @@ import {
   MAX_SHORT_SESSIONS,
   REMINT_BEFORE_EXPIRY_MS,
   REMINT_CONTEXT_USAGE_RATIO,
-  NO_OUTPUT_TURNS,
+  NO_OUTPUT_SENTENCE,
   SHORT_SESSION_MS,
   callFailureLine,
   callUnreachableLine,
   channelConversation,
-  giveOutputText,
   hearOutput,
   isCallEndPhrase,
-  type OutputTurns,
+  type OutputSentence,
 } from "@/lib/voice/call";
 import { VoiceEngineError, type VoiceEngine } from "@/lib/voice/engine";
 import {
@@ -114,8 +113,10 @@ interface Attempt {
   cancelled: boolean;
   /** The account signed in when the attempt began. */
   readonly account: string | null;
-  /** What this engine's voice is saying, and the texts given it: what closes an utterance. */
-  output: OutputTurns;
+  /** The acknowledgement lines the mint named: the voice's own, which close an utterance. */
+  acknowledgements: ReadonlyArray<string>;
+  /** The sentence of this engine's output transcript being heard. */
+  sentence: OutputSentence;
 }
 
 /** What a send carries, besides the words: the call's channel. */
@@ -143,9 +144,8 @@ function endRouteAnswers(attempt: Attempt): boolean {
  * view and the shortcut reach it through the store's `driver`.
  *
  * A call is a thread of one bot. Each thing the person says, closed by the
- * voice's own acknowledgement line (VC0: the first output transcript of a new
- * output turn, after input), is one `bot.conversation.send` with
- * `spoken: true`, verbatim: the
+ * voice's acknowledgement (one of the lines the mint names), is one
+ * `bot.conversation.send` with `spoken: true`, verbatim: the
  * first opens the call's thread (`origin: "call"`), or goes into the thread
  * the call was started from; later ones go into the thread the first opened.
  * Each new reply row of the bot on that thread is appended for the voice to
@@ -237,7 +237,6 @@ export function CallController(): ReactNode {
         if (attempt === null || attempt.cancelled || !attempt.started) return;
         try {
           attempt.engine.appendCommentary(text, delegationId);
-          attempt.output = giveOutputText(attempt.output, text);
         } catch (error) {
           appLogger.warn("[voice] append failed", {
             error: describeLogError(error),
@@ -693,7 +692,8 @@ export function CallController(): ReactNode {
       failure: null,
       cancelled: false,
       account: useAuthStore.getState().contextMetadata?.userId ?? null,
-      output: NO_OUTPUT_TURNS,
+      acknowledgements: [],
+      sentence: NO_OUTPUT_SENTENCE,
     };
     attemptRef.current = attempt;
     const owns = (): boolean =>
@@ -729,6 +729,19 @@ export function CallController(): ReactNode {
                 }
                 throw closedBeforeStart();
               }
+              // Without the lines no utterance would ever close: a server
+              // that does not name them cannot carry a call.
+              if (
+                result.session.acknowledgementLines === null ||
+                result.session.acknowledgementLines.length === 0
+              ) {
+                attempt.failure = "unavailable";
+                throw new VoiceEngineError(
+                  "EXCHANGE_FAILED",
+                  "voice session mint named no acknowledgement lines",
+                );
+              }
+              attempt.acknowledgements = result.session.acknowledgementLines;
               return result.session.answerSdp;
             case "dormant":
               // The fallback when the availability read was wrong or stale:
@@ -794,15 +807,20 @@ export function CallController(): ReactNode {
           onOutputTranscriptDelta: (text) => {
             if (!owns()) return;
             const current = useVoiceSessionStore.getState();
-            // The utterance boundary (VC0): the voice's own line after what
-            // the person said, its acknowledgement. The vendor marks no turn,
-            // so it is told by text (`hearOutput`): once the line has ended,
-            // what the person said before it began is one message; a reading
-            // of the texts the voice was given closes nothing. A tail of the
-            // person's words transcribed after the acknowledgement began
-            // joins the next utterance: one mis-split, never a loss.
-            const heard = hearOutput(attempt.output, text, current.inputHeard);
-            attempt.output = heard.turns;
+            // The utterance boundary (VC0): the voice's acknowledgement after
+            // what the person said, one of the lines the mint named. The
+            // vendor marks no turn, so it is told by text (`hearOutput`):
+            // once the line has ended, what the person said before it began
+            // is one message; anything else the voice says closes nothing. A
+            // tail of the person's words transcribed after the acknowledgement
+            // began joins the next utterance: one mis-split, never a loss.
+            const heard = hearOutput(
+              attempt.sentence,
+              attempt.acknowledgements,
+              text,
+              current.inputHeard,
+            );
+            attempt.sentence = heard.sentence;
             current.pushCaptionLine({ direction: "output", text });
             ensureSpeech().noteOutputTranscript(text);
             if (!attempt.started) return;

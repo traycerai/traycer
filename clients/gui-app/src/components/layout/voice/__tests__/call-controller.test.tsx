@@ -497,6 +497,7 @@ beforeEach(() => {
         voiceSessionId: "vs1",
         answerSdp: "answer",
         expiresAt: Date.now() + 7_200_000,
+        acknowledgementLines: ["Okay.", "One moment.", "Got it."],
       },
     }),
   );
@@ -1128,7 +1129,7 @@ describe("the utterance boundary, told by the voice's own text", () => {
     expect(useVoiceSessionStore.getState().phase).toBe("live");
   });
 
-  it("resets the read latch on engine replacement and restores a pending reply", async () => {
+  it("restores a pending reply on engine replacement, and does not hang up when the voice reads it over unfinished input", async () => {
     const chat = await joinOpenThread([]);
     const first = botRow("r1", "The build passed.", 200);
     land(chat, [first]);
@@ -1153,7 +1154,7 @@ describe("the utterance boundary, told by the voice's own text", () => {
     ]);
   });
 
-  it("resets the read latch before a second call", async () => {
+  it("does not hang up in a second call when the voice reads a reply over unfinished input", async () => {
     const chat = await joinOpenThread([]);
     const first = botRow("r1", "The build passed.", 200);
     land(chat, [first]);
@@ -1804,4 +1805,370 @@ describe("ending the call", () => {
 
     expect(fake.sendMock).toHaveBeenCalledTimes(1);
   });
+});
+
+describe("round 5 classification and position probes", () => {
+  it.each([
+    ["I", "I will check the deployment."],
+    ["proper noun", "Maya will check the deployment."],
+  ])(
+    "does not close input when a later supplied reply starts with %s after an earlier partial reading",
+    async (_label, later) => {
+      const chat = await joinOpenThread([]);
+      hearVoiceWithLevelDetection();
+      const first = botRow(
+        "r1",
+        "The build passed and the deployment is still running.",
+        200,
+      );
+      land(chat, [first]);
+      await settle();
+      voiceSays("The build passed");
+      speak("end the call"); // Interrupt the reading, with more input still to come.
+      await advance(INPUT_ACTIVE_WINDOW_MS);
+      land(chat, [first, botRow("r2", later, 300)]);
+      await settle();
+      expect(appendedTexts()).toEqual([
+        "The build passed and the deployment is still running.",
+        later,
+      ]);
+      voiceSays(later);
+      speak(" with the vendor tomorrow.");
+      await acknowledge();
+      expect(useVoiceSessionStore.getState().phase).toBe("live");
+      expect(fake.sendMock.mock.calls.map(([r]) => r.text)).toEqual([
+        "end the call with the vendor tomorrow.",
+      ]);
+    },
+  );
+
+  it("sends an interruption after only the first word of a reading with a capitalised acknowledgement", async () => {
+    const chat = await joinOpenThread([]);
+    land(chat, [
+      botRow(
+        "r1",
+        "The build passed and the deployment is still running.",
+        200,
+      ),
+    ]);
+    await settle();
+    voiceSays("The");
+    speak("Cancel it.");
+    voiceSays("Okay.");
+    await advance(10_000);
+    expect(fake.sendMock.mock.calls.map(([r]) => r.text)).toEqual([
+      "Cancel it.",
+    ]);
+  });
+
+  it("sends an interruption when its acknowledgement starts lowercase after several read words", async () => {
+    const chat = await joinOpenThread([]);
+    land(chat, [
+      botRow(
+        "r1",
+        "The build passed and the deployment is still running.",
+        200,
+      ),
+    ]);
+    await settle();
+    expect(appendedTexts()).toEqual([
+      "The build passed and the deployment is still running.",
+    ]);
+    voiceSays("The build passed");
+    speak("Cancel it.");
+    voiceSays(" okay.");
+    await advance(10_000);
+    expect(fake.sendMock.mock.calls.map(([r]) => r.text)).toEqual([
+      "Cancel it.",
+    ]);
+    expect(useVoiceSessionStore.getState().openSpan).toBe("");
+  });
+
+  it("ends on bye acknowledged lowercase after an interrupted reading", async () => {
+    const chat = await joinOpenThread([]);
+    land(chat, [
+      botRow(
+        "r1",
+        "The build passed and the deployment is still running.",
+        200,
+      ),
+    ]);
+    await settle();
+    voiceSays("The build passed");
+    speak("bye");
+    voiceSays(" okay.");
+    await advance(10_000);
+    expect(useVoiceSessionStore.getState().phase).toBe("idle");
+    expect(fake.sendMock).not.toHaveBeenCalled();
+  });
+
+  it("sends on an own acknowledgement wholly contained in the pending reply", async () => {
+    const chat = await joinOpenThread([]);
+    land(chat, [botRow("r1", "Got it, the build passed.", 200)]);
+    await settle();
+    speak("Cancel that.");
+    voiceSays("Got it.");
+    await advance(10_000);
+    expect(fake.sendMock.mock.calls.map(([r]) => r.text)).toEqual([
+      "Cancel that.",
+    ]);
+    expect(useVoiceSessionStore.getState().openSpan).toBe("");
+  });
+
+  it("keeps two acknowledged utterances separate after a contained acknowledgement", async () => {
+    const chat = await joinOpenThread([]);
+    land(chat, [botRow("r1", "Got it, the build passed.", 200)]);
+    await settle();
+    speak("First request.");
+    voiceSays("Got it.");
+    await advance(800);
+    speak("Cancel that.");
+    voiceSays("Okay.");
+    await settle();
+    expect(fake.sendMock.mock.calls.map(([r]) => r.text)).toEqual([
+      "First request.",
+      "Cancel that.",
+    ]);
+  });
+
+  it("keeps an own lowercase prefix collision at its original input position", async () => {
+    const chat = await joinOpenThread([]);
+    land(chat, [botRow("r1", "One deployment is still running.", 200)]);
+    await settle();
+    speak("First request.");
+    voiceSays("one");
+    speak("end the call");
+    voiceSays(" moment.");
+    speak(" with the vendor tomorrow.");
+    await acknowledge();
+    expect(useVoiceSessionStore.getState().phase).toBe("live");
+    expect(fake.sendMock.mock.calls.map(([r]) => r.text)).toEqual([
+      "First request.",
+      "end the call with the vendor tomorrow.",
+    ]);
+  });
+
+  it("keeps a capitalised continuation of a shared prefix at its original input position", async () => {
+    const chat = await joinOpenThread([]);
+    land(chat, [botRow("r1", "One deployment is still running.", 200)]);
+    await settle();
+    speak("First request.");
+    voiceSays("One");
+    speak("Second request.");
+    voiceSays(" Moment.");
+    await acknowledge();
+    expect(fake.sendMock.mock.calls.map(([r]) => r.text)).toEqual([
+      "First request.",
+      "Second request.",
+    ]);
+  });
+
+  it("does not close input on a decimal read from the supplied text", async () => {
+    const chat = await joinOpenThread([]);
+    land(chat, [
+      botRow("r1", "The ratio is 3.5 and I asked Maya to check it.", 200),
+    ]);
+    await settle();
+    speak("end the call");
+    voiceSays("The ratio is 3.5");
+    voiceSays(" and I asked Maya to check it.");
+    speak(" with the vendor tomorrow.");
+    await acknowledge();
+    expect(useVoiceSessionStore.getState().phase).toBe("live");
+    expect(fake.sendMock.mock.calls.map(([r]) => r.text)).toEqual([
+      "end the call with the vendor tomorrow.",
+    ]);
+  });
+
+  it("ignores proper nouns and I at chunk starts within a verbatim reading", async () => {
+    const chat = await joinOpenThread([]);
+    land(chat, [
+      botRow("r1", "Maya and I have reviewed it. Ivan will deploy it.", 200),
+    ]);
+    await settle();
+    voiceSays("Maya and");
+    speak("end the call");
+    voiceSays(" I have reviewed it.");
+    voiceSays(" Ivan will deploy it.");
+    speak(" with the vendor tomorrow.");
+    await acknowledge();
+    expect(useVoiceSessionStore.getState().phase).toBe("live");
+    expect(fake.sendMock.mock.calls.map(([r]) => r.text)).toEqual([
+      "end the call with the vendor tomorrow.",
+    ]);
+  });
+
+  it("keeps a late input tail for the next close without duplicating it across two own lines", async () => {
+    await dialLive(CHANNEL_CALL);
+    speak("First request.");
+    voiceSays("One");
+    speak("Second");
+    voiceSays(" moment.");
+    await settle();
+    expect(fake.sendMock.mock.calls.map(([r]) => r.text)).toEqual([
+      "First request.",
+    ]);
+    speak(" request.");
+    voiceSays("Okay. Got it.");
+    await settle();
+    expect(fake.sendMock.mock.calls.map(([r]) => r.text)).toEqual([
+      "First request.",
+      "Second request.",
+    ]);
+    expect(useVoiceSessionStore.getState().openSpan).toBe("");
+  });
+
+  it("does not let a separately delivered closing mark close input after a fully read reply", async () => {
+    const chat = await joinOpenThread([]);
+    land(chat, [botRow("r1", "The build passed.", 200)]);
+    await settle();
+    voiceSays("The build passed");
+    speak("end the call");
+    voiceSays(".");
+    speak(" with the vendor tomorrow.");
+    await acknowledge();
+    expect(useVoiceSessionStore.getState().phase).toBe("live");
+    expect(fake.sendMock.mock.calls.map(([r]) => r.text)).toEqual([
+      "end the call with the vendor tomorrow.",
+    ]);
+  });
+});
+
+describe("the acknowledgement lines the mint names", () => {
+  it("closes an utterance on a line of the mint and not on a line the session does not name", async () => {
+    fake.mint.mockImplementation(() =>
+      Promise.resolve({
+        kind: "ok",
+        session: {
+          voiceSessionId: "vs1",
+          answerSdp: "answer",
+          expiresAt: Date.now() + 7_200_000,
+          acknowledgementLines: ["Sure thing."],
+        },
+      }),
+    );
+    await dialLive(CHANNEL_CALL);
+    speak("Cancel the release.");
+    voiceSays("Okay.");
+    await advance(10_000);
+    expect(fake.sendMock).not.toHaveBeenCalled();
+
+    voiceSays("Sure thing.");
+    await settle();
+    expect(fake.sendMock.mock.calls.map(([r]) => r.text)).toEqual([
+      "Cancel the release.",
+    ]);
+  });
+
+  it.each([
+    ["absent", null],
+    ["empty", []],
+  ])(
+    "refuses the dial as unavailable when the mint's lines are %s, ending the minted session",
+    async (_label, lines) => {
+      fake.mint.mockImplementation(() =>
+        Promise.resolve({
+          kind: "ok",
+          session: {
+            voiceSessionId: "vs-no-lines",
+            answerSdp: "answer",
+            expiresAt: Date.now() + 7_200_000,
+            acknowledgementLines: lines,
+          },
+        }),
+      );
+
+      await dial(CHANNEL_CALL);
+
+      const state = useVoiceSessionStore.getState();
+      expect(state.phase).toBe("idle");
+      expect(state.refusal).toBe("unavailable");
+      expect(state.endReason).toBeNull();
+      expect(fake.endVoiceSession.mock.calls).toEqual([["vs-no-lines"]]);
+    },
+  );
+
+  it("ends a live call as a lost connection when a replacement session names no lines", async () => {
+    await dialLive(CHANNEL_CALL);
+    fake.mint.mockImplementation(() =>
+      Promise.resolve({
+        kind: "ok",
+        session: {
+          voiceSessionId: "vs2",
+          answerSdp: "answer",
+          expiresAt: Date.now() + 7_200_000,
+          acknowledgementLines: null,
+        },
+      }),
+    );
+
+    act(() => events().onClosed("connection"));
+    await settle();
+
+    const state = useVoiceSessionStore.getState();
+    expect(state.phase).toBe("idle");
+    expect(state.endReason).toBe("connection");
+    expect(state.refusal).toBeNull();
+    expect(fake.endVoiceSession.mock.calls).toEqual([["vs1"], ["vs2"]]);
+  });
+
+  it("closes the person's words early when the voice reads a reply that is exactly a line (a known limit)", async () => {
+    const chat = await joinOpenThread([]);
+    land(chat, [botRow("r1", "Okay.", 200)]);
+    await settle();
+    expect(appendedTexts()).toEqual(["Okay."]);
+    speak("Cancel that");
+    voiceSays("Okay.");
+    await settle();
+    expect(fake.sendMock.mock.calls.map(([r]) => r.text)).toEqual([
+      "Cancel that",
+    ]);
+  });
+
+  it("closes on the voice's own line but not on a reading that begins with the same words", async () => {
+    const chat = await joinOpenThread([]);
+    speak("First request.");
+    voiceSays("Got it.");
+    await settle();
+    expect(fake.sendMock.mock.calls.map(([r]) => r.text)).toEqual([
+      "First request.",
+    ]);
+
+    land(chat, [botRow("r1", "Got it, the build passed.", 200)]);
+    await untilQuiet();
+    expect(appendedTexts()).toEqual(["Got it, the build passed."]);
+    speak("Second request");
+    voiceSays("Got it, the build passed.");
+    await advance(10_000);
+    expect(fake.sendMock.mock.calls.map(([r]) => r.text)).toEqual([
+      "First request.",
+    ]);
+    expect(useVoiceSessionStore.getState().openSpan).toBe("Second request");
+  });
+
+  it.each([["Got it!"], ["One moment..."]])(
+    "closes on a line the transcription ends with a different mark than the mint's: %s",
+    async (said) => {
+      await dialLive(CHANNEL_CALL);
+      speak("Cancel that.");
+      voiceSays(said);
+      await settle();
+      expect(fake.sendMock.mock.calls.map(([r]) => r.text)).toEqual([
+        "Cancel that.",
+      ]);
+    },
+  );
+
+  it.each([["okay."], ["got it."]])(
+    "closes on a line the transcription gives in lowercase: %s",
+    async (said) => {
+      await dialLive(CHANNEL_CALL);
+      speak("Cancel that.");
+      voiceSays(said);
+      await settle();
+      expect(fake.sendMock.mock.calls.map(([r]) => r.text)).toEqual([
+        "Cancel that.",
+      ]);
+    },
+  );
 });

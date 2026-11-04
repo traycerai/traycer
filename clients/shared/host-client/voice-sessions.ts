@@ -45,12 +45,19 @@ export interface VoiceSessionMinted {
   readonly answerSdp: string;
   /** Epoch milliseconds. */
   readonly expiresAt: number;
+  /**
+   * The lines the voice says, word for word, when the person finishes
+   * speaking: what tells the app an utterance ended. `null` from a server
+   * that does not name them.
+   */
+  readonly acknowledgementLines: ReadonlyArray<string> | null;
 }
 
 const voiceSessionMintedSchema = z.object({
   voiceSessionId: z.string().min(1),
   answerSdp: z.string().min(1),
   expiresAt: z.number(),
+  acknowledgementLines: z.array(z.string()).optional(),
 });
 
 const voiceSessionEndedSchema = z.object({
@@ -262,7 +269,15 @@ export async function voiceSessionsMintViaHttp(
       detail: "the minted voice session did not match the contract",
     };
   }
-  return { kind: "ok", session: parsed.data };
+  return {
+    kind: "ok",
+    session: {
+      voiceSessionId: parsed.data.voiceSessionId,
+      answerSdp: parsed.data.answerSdp,
+      expiresAt: parsed.data.expiresAt,
+      acknowledgementLines: parsed.data.acknowledgementLines ?? null,
+    },
+  };
 }
 
 /**

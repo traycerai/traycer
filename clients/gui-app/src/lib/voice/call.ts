@@ -60,165 +60,79 @@ function spokenWords(text: string): string {
 }
 
 /**
- * What the voice is saying, told by text alone (the vendor marks no turn).
- * The voice says two kinds of thing: a line of its own (an acknowledgement:
- * after every utterance, one line ending in terminal punctuation), and the
- * texts the app gave it, which it reads verbatim. The app knows the texts it
- * gave and has not heard said yet, in order. Only a line of the voice's own
- * closes an utterance; a reading never does.
+ * The sentence of the voice's output transcript being heard, as the deltas
+ * that brought its letters: each with how much the person had said (an input
+ * position) when it came. The vendor marks no turn, so what the voice says is
+ * told sentence by sentence, against the acknowledgement lines the mint named.
  */
-export interface OutputTurns {
-  /** Texts given to the voice and not heard said yet, oldest first. */
-  readonly given: ReadonlyArray<string>;
-  /**
-   * The current turn: `none` before any (or after one that ended with no
-   * letters); `undecided` while all it said is the start of the given texts;
-   * `reading` once it reached the end of the first of them; `own` once it
-   * left them.
-   */
-  readonly kind: "none" | "undecided" | "reading" | "own";
-  /** The transcript of the current turn. */
-  readonly turn: string;
-  /** The letters of an undecided or reading turn past the given texts heard whole. */
-  readonly heard: string;
-  /** The reading heard every text it was given: over, though more is given after it. */
-  readonly read: boolean;
-  /** How much the person had said (an input position) when the turn began. */
+export interface OutputSentence {
+  readonly parts: ReadonlyArray<SentencePart>;
+}
+
+interface SentencePart {
+  readonly letters: string;
   readonly began: number;
 }
 
-export const NO_OUTPUT_TURNS: OutputTurns = {
-  given: [],
-  kind: "none",
-  turn: "",
-  heard: "",
-  read: false,
-  began: 0,
-};
-
-/** A text given to the voice to say. */
-export function giveOutputText(turns: OutputTurns, text: string): OutputTurns {
-  return { ...turns, given: [...turns.given, text] };
-}
+export const NO_OUTPUT_SENTENCE: OutputSentence = { parts: [] };
 
 /**
  * Hears one output transcript delta, `said` being how much the person has
- * said so far (an input position). Returns the turns after it, and, for each
- * line of the voice's own that the delta ends, the input position its turn
- * began at: the person's words before it are one utterance, and words that
- * came while it was said belong to the next.
+ * said so far (an input position), `lines` the acknowledgement lines the
+ * mint named. Returns the sentence after it, and, for each acknowledgement the
+ * delta ends, the input position it began at: the person's words before it are
+ * one utterance, and words that came while it was said belong to the next.
  *
- * A delta is heard in pieces, each ending after a terminal mark: a line of
- * the voice's own ends at its first mark, and what follows in the same delta
- * begins the next turn. A turn that is the start of the given texts is
- * undecided, and closes nothing, until it reaches the end of the first of
- * them (a reading, in which punctuation closes nothing) or leaves them. One
- * that leaves them with a word that goes on with its sentence was a line of
- * the voice's own from its start; one that leaves them with a new sentence
- * was a reading cut short, as is a reading that leaves them: the texts it did
- * not reach are dropped and the new sentence begins the next turn.
+ * A sentence ends at a terminal mark and may span deltas. It is an
+ * acknowledgement when, from the start of the sentence or of one of its
+ * deltas, its letters and digits are one of the lines': a reading the person
+ * cut short, which ends without a mark, runs into the acknowledgement that
+ * follows it. Every other sentence (a reading of a reply, or noise) closes
+ * nothing.
  */
 export function hearOutput(
-  turns: OutputTurns,
+  sentence: OutputSentence,
+  lines: ReadonlyArray<string>,
   delta: string,
   said: number,
-): { readonly turns: OutputTurns; readonly closes: ReadonlyArray<number> } {
+): {
+  readonly sentence: OutputSentence;
+  readonly closes: ReadonlyArray<number>;
+} {
   const closes: number[] = [];
-  let current = turns;
+  let parts = sentence.parts;
   for (const piece of delta.match(/[^.!?]*[.!?]+|[^.!?]+/g) ?? []) {
-    current = hearPiece(current, piece, said);
-    if (current.kind === "own" && endsLine(current.turn)) {
-      closes.push(current.began);
-      current = { ...current, kind: "none", turn: "" };
-    }
+    const letters = spokenLetters(piece);
+    if (letters.length > 0) parts = [...parts, { letters, began: said }];
+    if (!/[.!?]$/.test(piece)) continue;
+    const began = acknowledgementStart(parts, lines);
+    if (began !== null) closes.push(began);
+    parts = [];
   }
-  return { turns: current, closes };
-}
-
-function hearPiece(
-  turns: OutputTurns,
-  piece: string,
-  said: number,
-): OutputTurns {
-  switch (turns.kind) {
-    case "none":
-      return beginTurn(turns.given, piece, said);
-    case "own":
-      return { ...turns, turn: turns.turn + piece };
-    case "reading":
-      if (turns.read) return beginTurn(turns.given, piece, said);
-      return goOnReading(turns, piece) ?? beginTurn([], piece, said);
-    case "undecided": {
-      const read = goOnReading(turns, piece);
-      if (read !== null) return read;
-      if (startsSentence(piece)) return beginTurn([], piece, said);
-      return { ...turns, kind: "own", turn: turns.turn + piece };
-    }
-  }
-}
-
-function beginTurn(
-  given: ReadonlyArray<string>,
-  piece: string,
-  said: number,
-): OutputTurns {
-  const letters = spokenLetters(piece);
-  if (letters.length === 0) return { ...NO_OUTPUT_TURNS, given };
-  const turns: OutputTurns = {
-    given,
-    kind: "undecided",
-    turn: "",
-    heard: "",
-    read: false,
-    began: said,
-  };
-  return goOnReading(turns, piece) ?? { ...turns, kind: "own", turn: piece };
+  return { sentence: { parts }, closes };
 }
 
 /**
- * The turn after `piece`, when it goes on with the given texts: undecided
- * until it reaches the end of the first, then reading, with the texts heard
- * whole taken off the front. `null` when it leaves them.
+ * Where the acknowledgement that ends a sentence began: the earliest of its
+ * parts from which the rest is one of the lines. `null` for none.
  */
-function goOnReading(turns: OutputTurns, piece: string): OutputTurns | null {
-  const heard = turns.heard + spokenLetters(piece);
-  if (!spokenLetters(turns.given.join("")).startsWith(heard)) return null;
-  const turn = turns.turn + piece;
-  const first = turns.given.at(0);
-  const reached =
-    turns.kind === "reading" ||
-    (first !== undefined && heard.length >= spokenLetters(first).length);
-  if (!reached) return { ...turns, kind: "undecided", turn, heard };
-  return settleReading({ ...turns, kind: "reading", turn, heard });
+function acknowledgementStart(
+  parts: ReadonlyArray<SentencePart>,
+  lines: ReadonlyArray<string>,
+): number | null {
+  const known = lines.map(spokenLetters);
+  const start = parts.findIndex((_part, index) =>
+    known.includes(
+      parts
+        .slice(index)
+        .map((part) => part.letters)
+        .join(""),
+    ),
+  );
+  return parts[start]?.began ?? null;
 }
 
-/**
- * Takes the given texts heard whole off the front. A closing mark that comes
- * on its own after them has no letters, so it begins no turn.
- */
-function settleReading(turns: OutputTurns): OutputTurns {
-  let given = turns.given;
-  let heard = turns.heard;
-  let first = given.at(0);
-  while (first !== undefined && heard.startsWith(spokenLetters(first))) {
-    heard = heard.slice(spokenLetters(first).length);
-    given = given.slice(1);
-    first = given.at(0);
-  }
-  return { ...turns, given, heard, read: given.length === 0 };
-}
-
-function endsLine(text: string): boolean {
-  return /[.!?]$/.test(text.trim());
-}
-
-/** Whether a piece opens a new sentence: its first letter is a capital. */
-function startsSentence(piece: string): boolean {
-  const first = /[\p{L}\p{N}]/u.exec(piece)?.[0] ?? "";
-  return /\p{Lu}/u.test(first);
-}
-
-/** A text's letters and digits, lowercased: how a transcript is held to a given text. */
+/** A text's letters and digits, lowercased: how a sentence is held to a line. */
 function spokenLetters(text: string): string {
   return text.toLowerCase().replace(/[^\p{L}\p{N}]/gu, "");
 }
