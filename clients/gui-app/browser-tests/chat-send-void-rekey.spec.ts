@@ -200,10 +200,9 @@ test.describe("a following reader", () => {
         );
         frames.push({
           following: document.body.dataset.following,
+          // The pill is `aria-hidden` for as long as it is hidden.
           pillShown:
-            pill !== null &&
-            pill.classList.contains("opacity-100") &&
-            !pill.classList.contains("opacity-0"),
+            pill !== null && pill.getAttribute("aria-hidden") !== "true",
         });
       };
       const progress = { done: false };
