@@ -26,6 +26,11 @@ describe("xPostLength", () => {
   it("counts CJK characters as two", () => {
     expect(xPostLength("日本語")).toBe(6);
   });
+
+  it("counts an emoji as two however many code points build it", () => {
+    // A family (zero-width joined), a skin tone, a flag and a keycap.
+    expect(xPostLength("👨‍👩‍👧 👍🏽 🇮🇳 1️⃣ ❤️")).toBe(5 * 2 + 4);
+  });
 });
 
 describe("xPostIntentUrl", () => {

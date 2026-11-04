@@ -30,6 +30,24 @@ function codePointWeight(codePoint: number): number {
     : 2;
 }
 
+/** Every emoji counts as this many characters on X, however it is built. */
+const EMOJI_WEIGHT = 2;
+
+/**
+ * An emoji with its presentation selector, skin tone, keycap or zero-width
+ * joined parts, a flag (two regional indicators), or a lone pictograph.
+ */
+const EMOJI_PATTERN =
+  /\p{Regional_Indicator}{2}|[#*0-9]\uFE0F?\u20E3|\p{Extended_Pictographic}(?:\uFE0F|\p{Emoji_Modifier})?(?:\u200D\p{Extended_Pictographic}(?:\uFE0F|\p{Emoji_Modifier})?)*/gu;
+
+function textWeight(text: string): number {
+  let weight = 0;
+  for (const char of text) {
+    weight += codePointWeight(char.codePointAt(0) ?? 0);
+  }
+  return weight;
+}
+
 /** How long X will count `text` as, out of {@link X_POST_LIMIT}. */
 export function xPostLength(text: string): number {
   let links = 0;
@@ -38,10 +56,13 @@ export function xPostLength(text: string): number {
     return "";
   });
   let weight = links * LINK_WEIGHT;
-  for (const char of rest) {
-    weight += codePointWeight(char.codePointAt(0) ?? 0);
-  }
-  return weight;
+  const plain = rest.replace(EMOJI_PATTERN, (emoji) => {
+    // A lone code point keeps its own weight, so a symbol such as "©"
+    // still counts as the one character X counts it as.
+    weight += [...emoji].length === 1 ? textWeight(emoji) : EMOJI_WEIGHT;
+    return "";
+  });
+  return weight + textWeight(plain);
 }
 
 /** X's web intent that opens a new post with `text` filled in. */
