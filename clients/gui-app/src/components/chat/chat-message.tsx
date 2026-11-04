@@ -18,6 +18,7 @@ import { ImportedChatMarkerSegment } from "./segments/imported-chat-marker-segme
 import { AutoJudgeUnattendedDenialSegment } from "./segments/auto-judge-unattended-denial-segment";
 import type { InterviewDeliveryRetryAction } from "./segments/interview-delivery-retry-action";
 import { SetupCardSegment } from "./segments/setup-card-segment";
+import { BotExchangeLineSegment } from "./segments/bot-exchange-line-segment";
 import type { NextStepActionHandler } from "./segments/next-steps-action-group";
 import type { TranscriptRowPart } from "@/stores/chats/assistant-turn-parts";
 
@@ -174,6 +175,15 @@ function renderSpecialSegment(segment: MessageSegment): ReactElement | null {
           sourceCwd={segment.sourceCwd}
         />
       </div>
+    );
+  }
+  if (segment.kind === "bot-exchanges") {
+    return (
+      <BotExchangeLineSegment
+        id={segment.id}
+        pairs={segment.pairs}
+        lastAt={segment.lastAt}
+      />
     );
   }
   if (segment.kind === "auto-judge-unattended-denial") {

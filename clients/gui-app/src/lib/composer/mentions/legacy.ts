@@ -46,6 +46,8 @@ function legacyEntityMentionAttachment(path: string): MentionAttachment | null {
       chatId: null,
       terminalAgentId: null,
       terminalId: null,
+      botId: null,
+      botTrunkChatId: null,
       status: null,
     };
   }
@@ -72,6 +74,8 @@ function legacyEntityMentionAttachment(path: string): MentionAttachment | null {
       chatId,
       terminalAgentId: null,
       terminalId: null,
+      botId: null,
+      botTrunkChatId: null,
       status: null,
     };
   }
@@ -98,6 +102,8 @@ function legacyEntityMentionAttachment(path: string): MentionAttachment | null {
       chatId: null,
       terminalAgentId,
       terminalId: null,
+      botId: null,
+      botTrunkChatId: null,
       status: null,
     };
   }
@@ -126,6 +132,35 @@ function legacyEntityMentionAttachment(path: string): MentionAttachment | null {
       chatId: null,
       terminalAgentId: null,
       terminalId,
+      botId: null,
+      botTrunkChatId: null,
+      status: null,
+    };
+  }
+
+  // `bot:<botId>`: a bot's id is its task id. Its trunk agent is not in the
+  // text, so a chip rebuilt from it names the bot alone.
+  const botMatch = path.match(/^bot:([^/\s]+)$/u);
+  if (botMatch !== null) {
+    const botId = botMatch[1];
+    return {
+      kind: "mention",
+      contextType: "bot",
+      path,
+      pathKind: null,
+      relPath: null,
+      absolutePath: null,
+      workspacePath: null,
+      label: botId,
+      description: "",
+      epicId: botId,
+      artifactId: null,
+      artifactType: null,
+      chatId: null,
+      terminalAgentId: null,
+      terminalId: null,
+      botId,
+      botTrunkChatId: null,
       status: null,
     };
   }
@@ -184,6 +219,8 @@ function legacyEntityMentionAttachment(path: string): MentionAttachment | null {
     chatId: null,
     terminalAgentId: null,
     terminalId: null,
+    botId: null,
+    botTrunkChatId: null,
     status: null,
   };
 }

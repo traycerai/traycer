@@ -473,6 +473,9 @@ function mountChannelWith(
               onOpenMemory={vi.fn()}
               environmentId="env-1"
               botNameOf={() => null}
+              environmentBots={null}
+              openExchange={null}
+              exchangeRail={{ open: () => undefined, close: () => undefined }}
               resolveMember={resolveMember}
               tasks={[]}
               surfaceActions={null}

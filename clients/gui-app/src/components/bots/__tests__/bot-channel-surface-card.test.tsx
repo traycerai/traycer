@@ -537,6 +537,9 @@ function mountChannel(input: {
               onOpenMemory={vi.fn()}
               environmentId="env-1"
               botNameOf={() => null}
+              environmentBots={null}
+              openExchange={null}
+              exchangeRail={{ open: () => undefined, close: () => undefined }}
               onOpenActivity={vi.fn()}
               setupHistory={null}
             />
