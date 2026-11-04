@@ -526,11 +526,9 @@ export type BotTurnLocateResponse = z.infer<typeof botTurnLocateResponseSchema>;
 
 export const BOT_CONVERSATION_SEARCH_MAX_QUERY_CHARS = 200;
 export const BOT_CONVERSATION_SEARCH_MAX_PAGE_SIZE = 50;
-/** A search over every bot pages each bot apart, so its cursor names them. */
-export const BOT_CONVERSATION_SEARCH_MAX_CURSOR_CHARS = 16_384;
 
 const botConversationSearchCursorSchema = lazySchema(() =>
-  z.string().max(BOT_CONVERSATION_SEARCH_MAX_CURSOR_CHARS).nullable(),
+  z.string().max(64).nullable(),
 );
 
 /** One bot's channel and threads, or those of every bot the caller can see. */
@@ -581,9 +579,9 @@ export type BotConversationSearchSort = z.infer<
  * `E_INVALID_ARGUMENT`, because the scan over every bot exceeds the host's
  * event-loop stall budget.
  *
- * `newest` pages every match. `relevance` pages the best 1,000 by relevance,
- * and `total` is `null` where more than those match; the last page of such a
- * search is not the last match.
+ * `newest` pages every match. `relevance` pages the best 1,000 by relevance;
+ * the last page of a search with more is not the last match. In either order
+ * `total` is the first page's count, `null` from 1,000 matches.
  */
 export const botConversationSearchRequestSchema = lazySchema(() =>
   z.object({
@@ -597,8 +595,9 @@ export const botConversationSearchRequestSchema = lazySchema(() =>
     where: botConversationSearchWhereSchema,
     /**
      * Opaque; pass back the previous page's `nextCursor`, `null` to start.
-     * Good only for the search that issued it, on the host that issued it,
-     * by the same caller; anything else answers `E_INVALID_ARGUMENT`.
+     * Good only for the search that issued it, by the same caller, for
+     * minutes after its last page and until the host restarts; anything else
+     * answers `E_INVALID_ARGUMENT`, and the search starts again from `null`.
      */
     cursor: botConversationSearchCursorSchema,
     limit: z.number().int().min(1).max(BOT_CONVERSATION_SEARCH_MAX_PAGE_SIZE),
@@ -688,7 +687,7 @@ export const botConversationSearchResponseSchema = lazySchema(() =>
      * answer, so a missing result may still appear.
      */
     indexState: z.enum(["complete", "partial"]),
-    /** Hits in all when that is cheap to know; `null` otherwise. */
+    /** Hits in all when they were counted; `null` otherwise. */
     total: z.number().int().nonnegative().nullable(),
     /** The bots this answer leaves out, each said once. */
     unreachable: z.array(botConversationSearchUnreachableSchema),
