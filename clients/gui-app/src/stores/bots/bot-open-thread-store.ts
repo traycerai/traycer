@@ -92,22 +92,54 @@ export interface BotOpenMemory {
 }
 
 /**
- * What the rail beside a bot's channel holds: one slot, a thread or the
- * bot's memory, the newer replacing the older.
+ * The log of the bot's messages with another bot, open in the rail
+ * (decision 174): read-only, and what it displaced, which closing it brings
+ * back (`null` when it displaced nothing).
+ */
+export interface BotOpenExchange {
+  readonly peerBotId: string;
+  readonly back: BotRail | null;
+}
+
+/** Opens a pair's log in the rail, and closes it back to what it displaced. */
+export interface BotExchangeRail {
+  readonly open: (peerBotId: string) => void;
+  readonly close: () => void;
+}
+
+/**
+ * What the rail beside a bot's channel holds: one slot, a thread, the
+ * bot's memory or a pair's log, the newer replacing the older.
  */
 export type BotRail =
   | ({ readonly kind: "thread" } & BotOpenThread)
-  | ({ readonly kind: "memory" } & BotOpenMemory);
+  | ({ readonly kind: "memory" } & BotOpenMemory)
+  | ({ readonly kind: "exchange" } & BotOpenExchange);
 
 /**
  * The memory opened over what the rail holds (the bot's profile card): it
  * takes the one slot and keeps for its back button the thread it displaces,
- * or the one the memory already open there displaced.
+ * or the one the memory or a pair's log already open there displaced.
  */
 export function memoryRailOver(rail: BotRail | null): BotRail {
   if (rail === null) return { kind: "memory", back: null };
   if (rail.kind === "thread") return { kind: "memory", back: threadOf(rail) };
-  return { kind: "memory", back: rail.back };
+  if (rail.kind === "memory") return { kind: "memory", back: rail.back };
+  return memoryRailOver(rail.back);
+}
+
+/**
+ * A pair's log opened over what the rail holds: it takes the one slot and
+ * keeps what it displaces for its close, or what the log already open there
+ * displaced, so another pair replaces the log and closing still returns to
+ * the rail as it was before the first.
+ */
+export function exchangeRailOver(
+  rail: BotRail | null,
+  peerBotId: string,
+): BotRail {
+  const back = rail?.kind === "exchange" ? rail.back : rail;
+  return { kind: "exchange", peerBotId, back };
 }
 
 function threadOf(
