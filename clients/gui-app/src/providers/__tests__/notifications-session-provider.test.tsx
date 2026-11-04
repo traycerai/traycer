@@ -3574,7 +3574,10 @@ describe("<NotificationsSessionProvider />", () => {
       expect(focusedOf(1)).toBe(false);
 
       act(() => {
-        shellSignals.emitSystemResumed({ backgroundedForMs: 5_000 });
+        shellSignals.emitSystemResumed({
+          backgroundedForMs: 5_000,
+          screenLocked: false,
+        });
       });
       expect(frames).toHaveLength(3);
       expect(focusedOf(2)).toBe(true);
@@ -3587,10 +3590,53 @@ describe("<NotificationsSessionProvider />", () => {
       expect(focusedOf(3)).toBe(false);
 
       act(() => {
-        shellSignals.emitSystemResumed({ backgroundedForMs: null });
+        shellSignals.emitSystemResumed({
+          backgroundedForMs: null,
+          screenLocked: false,
+        });
       });
       expect(frames).toHaveLength(5);
       expect(focusedOf(4)).toBe(true);
+    } finally {
+      setAppSuspended(false);
+    }
+  });
+
+  it("keeps the focus claim withdrawn across a wake behind the lock screen until the unlock", async () => {
+    vi.spyOn(document, "hasFocus").mockReturnValue(true);
+    servingHostFallbackState.hasLocalHost = true;
+    const { streamClient } = await renderHostNotificationsProvider();
+    const frames = streamClient.session.clientFrames;
+    const focusedOf = (index: number): boolean | null => {
+      const frame = frames.at(index);
+      return frame !== undefined && frame.kind === "presence"
+        ? frame.focused
+        : null;
+    };
+    try {
+      act(() => {
+        shellSignals.emitSystemSuspended("locked");
+      });
+      expect(frames).toHaveLength(2);
+      expect(focusedOf(1)).toBe(false);
+
+      // The machine woke but the screen is still locked: nobody is here.
+      act(() => {
+        shellSignals.emitSystemResumed({
+          backgroundedForMs: null,
+          screenLocked: true,
+        });
+      });
+      expect(frames).toHaveLength(2);
+
+      act(() => {
+        shellSignals.emitSystemResumed({
+          backgroundedForMs: null,
+          screenLocked: false,
+        });
+      });
+      expect(frames).toHaveLength(3);
+      expect(focusedOf(2)).toBe(true);
     } finally {
       setAppSuspended(false);
     }

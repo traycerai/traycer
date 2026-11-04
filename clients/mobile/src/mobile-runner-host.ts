@@ -1966,6 +1966,7 @@ class MobileSystemResume {
     const event: SystemResumeEvent = {
       backgroundedForMs:
         enteredAt === null ? null : Math.max(0, Date.now() - enteredAt),
+      screenLocked: false,
     };
     for (const handler of Array.from(this.handlers)) {
       try {
