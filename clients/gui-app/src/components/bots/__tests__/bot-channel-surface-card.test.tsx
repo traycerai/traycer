@@ -537,6 +537,9 @@ function mountChannel(input: {
               onOpenMemory={vi.fn()}
               environmentId="env-1"
               botNameOf={() => null}
+              environmentBots={null}
+              openExchange={null}
+              exchangeRail={{ open: () => undefined, close: () => undefined }}
               onOpenActivity={vi.fn()}
               setupHistory={null}
             />
@@ -1213,6 +1216,30 @@ describe("<BotChannelView tiles={null} /> a post's surface card: answering and d
     expect(acts[1]?.actionId).toMatch(UUID);
     expect(acts[1]?.actionId).not.toBe(actionId);
     expect(acts[1]?.action).toEqual(acts[0]?.action);
+  });
+
+  it("keeps an agent's question single-choice even where words are taken: a second pick replaces the first", async () => {
+    const user = userEvent.setup();
+    answer = () => Promise.resolve(SETTLED);
+    mountChannel({
+      rows: [post(QUESTION)],
+      tasks: [task([OPEN_QUESTION])],
+      surfaceActions: [],
+    });
+
+    await user.click(within(card()).getByRole("button", { name: "main" }));
+    await user.click(within(card()).getByRole("button", { name: "release" }));
+
+    expect(
+      within(card())
+        .getByRole("button", { name: "main" })
+        .getAttribute("aria-pressed"),
+    ).toBe("false");
+    expect(
+      within(card())
+        .getByRole("button", { name: "release" })
+        .getAttribute("aria-pressed"),
+    ).toBe("true");
   });
 
   it("sends an answer again as a new action once the tab's host reports the unanswered one refused", async () => {

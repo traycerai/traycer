@@ -68,6 +68,9 @@ export const RunnerHostInvoke = {
   // no route to the machine, which is why it does not live on the host-
   // management bridge next to the OS-service verbs it must not be confused with.
   deregisterHostFromAccount: "runnerHost:hosts:deregisterFromAccount",
+  // The team's soundtrack set on a staging build, with its samples' links
+  // signed: `electron-main/soundtrack/`. Only main holds the key.
+  readSoundtrackSet: "runnerHost:soundtrack:readSet",
   // The sandbox control plane (traycer-server `/api/sandboxes`). Same CORS
   // reason as the registry calls above: traycer-server's allow-list is the web
   // dashboard origin, so the renderer cannot reach it directly.
@@ -647,6 +650,9 @@ export const RunnerHostSync = {
   // `"managed"` or `"none"`: whether this app instance runs the local-host
   // lanes, pinned at boot from the lifecycle policy (restart-to-apply).
   localHostCapability: "runnerHost:sync:localHostCapability",
+  // Whether this build can read the team's soundtrack set: the toggle is drawn
+  // at render, before anything asynchronous could answer.
+  soundtrackSourceAvailable: "runnerHost:sync:soundtrackSourceAvailable",
 } as const;
 
 type RunnerHostInvokeChannel =

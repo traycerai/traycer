@@ -29,6 +29,7 @@ import type {
 } from "@/lib/composer/types";
 import { dirnameOfPath, mentionPathTree } from "@/lib/path";
 import { hostNameFromLabel } from "@/hooks/agent/use-host-reachability";
+import { BotAvatar, NamedBotAvatar } from "@/components/bots/bot-avatars";
 
 /**
  * Row-display mapping for @mention suggestion entries: the picker's
@@ -196,6 +197,13 @@ export function previewForSuggestion(
         secondary: entry.url,
         mono: false,
       };
+    case "bot":
+      return {
+        kind: "text",
+        primary: entry.label,
+        secondary: entry.description,
+        mono: false,
+      };
   }
 }
 
@@ -271,6 +279,8 @@ export function iconForSuggestion(entry: MentionSuggestionEntry): ReactElement {
       );
     case "browser-tab":
       return browserTabRowIcon(entry);
+    case "bot":
+      return <NamedBotAvatar botId={entry.botId} size="xs" />;
   }
 }
 
@@ -303,6 +313,11 @@ export function agentCategoryIcon(): ReactElement {
 /** Icon for the **Terminals** mention category and its rows. */
 export function terminalCategoryIcon(): ReactElement {
   return categoryNodeIcon("terminal");
+}
+
+/** Icon for the **Tracy** mention category: a bot, none in particular. */
+export function botCategoryIcon(): ReactElement {
+  return <BotAvatar size="xs" />;
 }
 
 /** Icon for the **Browser** mention category itself (not its rows, which favicon). */

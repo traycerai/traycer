@@ -15,23 +15,23 @@ import {
  */
 
 /** Chosen: the narrowest a content tile gets before it stops being readable. */
-export const MOBILE_PANE_MIN_WIDTH_PX = 384;
+const MOBILE_PANE_MIN_WIDTH_PX = 384;
 
 /** Measured: the bots sidebar's width where the bot tab had room for it. */
-export const MOBILE_COLUMN_WIDTH_PX = 256;
+const MOBILE_COLUMN_WIDTH_PX = 256;
 
 /**
  * Chosen: the tight end of the level-2 column, the narrowest that still shows
  * a row's name. Between this and {@link MOBILE_COLUMN_WIDTH_PX} the column
  * takes its minimum so the pane keeps its own.
  */
-export const MOBILE_COLUMN_MIN_WIDTH_PX = 220;
+const MOBILE_COLUMN_MIN_WIDTH_PX = 220;
 
 /** The desktop strip's rail, which is what draws here. */
-export const MOBILE_RAIL_WIDTH_PX = SIDE_STRIP_RAIL_WIDTH_PX;
+const MOBILE_RAIL_WIDTH_PX = SIDE_STRIP_RAIL_WIDTH_PX;
 
 /** The desktop strip expanded, at its default width. */
-export const MOBILE_EXPANDED_STRIP_WIDTH_PX = SIDE_STRIP_DEFAULT_WIDTH_PX;
+const MOBILE_EXPANDED_STRIP_WIDTH_PX = SIDE_STRIP_DEFAULT_WIDTH_PX;
 
 /**
  * Measured: the widest phone viewport in portrait is 466, and the next panel

@@ -155,6 +155,51 @@ describe("chat turn minimap logic", () => {
   });
 });
 
+function windowWith(
+  entries: ReadonlyArray<RowSkeletonEntry>,
+): TranscriptWindow {
+  return {
+    epoch: 1,
+    rowCount: entries.length,
+    indexRevision: 1,
+    indexRevisionRebuilding: false,
+    skeleton: entries,
+    skeletonRevision: 0,
+    skeletonComplete: true,
+    // Fully delivered: the prefix reached the end of the index.
+    skeletonStreamCoveredThrough: entries.length,
+    // The assistant row is hydrated - it is the one taking tokens. It
+    // draws no ledger record in this fixture (the minimap derive reads only
+    // `skeleton`/`spans` shape, never record bodies or byte figures), so
+    // the ledger stays empty and the span references nothing.
+    records: { messages: new Map(), events: new Map(), revision: 0 },
+    spans: [
+      {
+        fromOrdinal: 1,
+        rowIds: ["r-1"],
+        messageIds: [],
+        eventIds: [],
+        rowContext: {},
+        contextBytes: 0,
+      },
+    ],
+    staleSpans: [],
+    carriedSkeleton: [],
+    liveMessages: [],
+    liveEvents: [],
+    snapshotProvisionalMessageIds: [],
+    snapshotProvisionalEventIds: [],
+    unavailableRowIds: [],
+    unavailableRowOrdinals: [],
+    hydratedBytes: 0,
+    evictionTerminal: "none",
+    unsettledByteMessageIds: [],
+    invalidated: false,
+    visibleOrdinals: null,
+    clock: 1,
+  };
+}
+
 /**
  * The rail's derive is a whole-transcript scan plus a per-turn allocation and
  * preview compaction. `rows` is rebuilt on every streaming token, so keying the
@@ -175,51 +220,6 @@ describe("chatTurnMinimapItems caching", () => {
     skeletonEntry("r-1", "assistant", null),
   ];
 
-  function windowWith(
-    entries: ReadonlyArray<RowSkeletonEntry>,
-  ): TranscriptWindow {
-    return {
-      epoch: 1,
-      rowCount: entries.length,
-      indexRevision: 1,
-      indexRevisionRebuilding: false,
-      skeleton: entries,
-      skeletonRevision: 0,
-      skeletonComplete: true,
-      // Fully delivered: the prefix reached the end of the index.
-      skeletonStreamCoveredThrough: entries.length,
-      // The assistant row is hydrated - it is the one taking tokens. It
-      // draws no ledger record in this fixture (the minimap derive reads only
-      // `skeleton`/`spans` shape, never record bodies or byte figures), so
-      // the ledger stays empty and the span references nothing.
-      records: { messages: new Map(), events: new Map(), revision: 0 },
-      spans: [
-        {
-          fromOrdinal: 1,
-          rowIds: ["r-1"],
-          messageIds: [],
-          eventIds: [],
-          rowContext: {},
-          contextBytes: 0,
-        },
-      ],
-      staleSpans: [],
-      carriedSkeleton: [],
-      liveMessages: [],
-      liveEvents: [],
-      snapshotProvisionalMessageIds: [],
-      snapshotProvisionalEventIds: [],
-      unavailableRowIds: [],
-      unavailableRowOrdinals: [],
-      hydratedBytes: 0,
-      evictionTerminal: "none",
-      unsettledByteMessageIds: [],
-      invalidated: false,
-      visibleOrdinals: null,
-      clock: 1,
-    };
-  }
-
   it("does not re-derive across a pure block delta", () => {
     const window = windowWith(skeleton);
     // The streaming assistant row: same row, new model object per token, so a
@@ -228,8 +228,16 @@ describe("chatTurnMinimapItems caching", () => {
     const rowsAfter = listRowsFor(window, "the reply so far");
     expect(rowsAfter).not.toBe(rowsBefore);
 
-    const first = chatTurnMinimapItems({ rows: rowsBefore, window });
-    const second = chatTurnMinimapItems({ rows: rowsAfter, window });
+    const first = chatTurnMinimapItems({
+      rows: rowsBefore,
+      window,
+      senderFirst: false,
+    });
+    const second = chatTurnMinimapItems({
+      rows: rowsAfter,
+      window,
+      senderFirst: false,
+    });
 
     expect(second).toBe(first);
     expect(first.map((item) => item.messageId)).toEqual(["r-0"]);
@@ -240,6 +248,7 @@ describe("chatTurnMinimapItems caching", () => {
     const first = chatTurnMinimapItems({
       rows: listRowsFor(window, "reply"),
       window,
+      senderFirst: false,
     });
     // An `updated` index delta rebuilds the window - here the first turn's
     // preview was edited.
@@ -250,6 +259,7 @@ describe("chatTurnMinimapItems caching", () => {
     const second = chatTurnMinimapItems({
       rows: listRowsFor(edited, "reply"),
       window: edited,
+      senderFirst: false,
     });
 
     expect(second).not.toBe(first);
@@ -261,6 +271,7 @@ describe("chatTurnMinimapItems caching", () => {
     const first = chatTurnMinimapItems({
       rows: listRowsFor(window, "reply"),
       window,
+      senderFirst: false,
     });
     // A pending send: a human turn the index has not placed yet. Same window,
     // so only the unplaced tail can report it.
@@ -274,7 +285,11 @@ describe("chatTurnMinimapItems caching", () => {
         part: null,
       },
     ];
-    const second = chatTurnMinimapItems({ rows: withPending, window });
+    const second = chatTurnMinimapItems({
+      rows: withPending,
+      window,
+      senderFirst: false,
+    });
 
     expect(second).not.toBe(first);
     expect(second.map((item) => item.messageId)).toEqual(["r-0", "pending-1"]);
@@ -291,16 +306,170 @@ describe("chatTurnMinimapItems caching", () => {
     // scroll to the wrong place.
     const window = windowWith(skeleton);
     const rows = listRowsFor(window, "reply");
-    const first = chatTurnMinimapItems({ rows, window });
+    const first = chatTurnMinimapItems({ rows, window, senderFirst: false });
 
     // Same window, same trailing unplaced run (there is none) - only the
     // assistant row has gone.
     const suppressed = rows.filter((row) => row.key !== "r-1");
     expect(suppressed.length).toBe(rows.length - 1);
 
-    const second = chatTurnMinimapItems({ rows: suppressed, window });
+    const second = chatTurnMinimapItems({
+      rows: suppressed,
+      window,
+      senderFirst: false,
+    });
 
     expect(second).not.toBe(first);
+  });
+});
+
+/**
+ * A bot's channel lists the members' posts. The rows are the same human rows an
+ * agent chat lists; only the label differs, and it differs by mode.
+ */
+describe("chatTurnMinimapItems labels", () => {
+  function member(id: string, senderLabel: string, content: string) {
+    return { ...userModel(id, content), senderLabel };
+  }
+
+  function hydrated(model: ChatMessageModel): TranscriptListRow {
+    return {
+      kind: "hydrated",
+      key: model.id,
+      ordinal: null,
+      model,
+      part: null,
+    };
+  }
+
+  const channelModels: ReadonlyArray<ChatMessageModel> = [
+    member("post-ada", "Ada", "Ship the rail"),
+    assistantModel("reply-1", "On it"),
+    {
+      ...assistantModel("announcement-1", "Proposal"),
+      announcement: { kind: "proposal", link: null },
+    },
+    {
+      ...member("agent-post", "Agent 2", "Agent traffic"),
+      agentSenderInfo: {
+        agentId: "agent-2",
+        senderTitle: "Agent 2",
+        expectReply: false,
+        responseId: null,
+      },
+    },
+    member("post-grace", "Grace", "Add a test"),
+  ];
+  const channelRows = channelModels.map(hydrated);
+
+  it("leads each member post with its sender, skipping the bot's and agents' rows", () => {
+    const items = chatTurnMinimapItems({
+      rows: channelRows,
+      window: null,
+      senderFirst: true,
+    });
+
+    expect(
+      items.map((item) => ({ id: item.messageId, label: item.label })),
+    ).toEqual([
+      { id: "post-ada", label: "Ada: Ship the rail" },
+      { id: "post-grace", label: "Grace: Add a test" },
+    ]);
+  });
+
+  it("keeps the preview alone when the sender does not lead, though senderLabel is set and the same rows were read sender-first", () => {
+    chatTurnMinimapItems({
+      rows: channelRows,
+      window: null,
+      senderFirst: true,
+    });
+    const items = chatTurnMinimapItems({
+      rows: channelRows,
+      window: null,
+      senderFirst: false,
+    });
+
+    expect(items.map((item) => item.label)).toEqual([
+      "Ship the rail",
+      "Add a test",
+    ]);
+  });
+
+  it("names an empty post by its sender", () => {
+    const items = chatTurnMinimapItems({
+      rows: [hydrated(member("post-ada", "Ada", ""))],
+      window: null,
+      senderFirst: true,
+    });
+
+    expect(items.map((item) => item.label)).toEqual(["Ada: Untitled message"]);
+  });
+
+  it("derives each label mode once on the same window, a cold row keeping its preview alone in both", () => {
+    const window = windowWith([
+      skeletonEntry("r-0", "user", "first question"),
+      skeletonEntry("r-1", "assistant", null),
+    ]);
+    const rows = [
+      ...listRowsFor(window, "reply"),
+      hydrated(member("pending-1", "Ada", "a new question")),
+    ];
+
+    const sender = chatTurnMinimapItems({ rows, window, senderFirst: true });
+    const preview = chatTurnMinimapItems({ rows, window, senderFirst: false });
+
+    expect(sender.map((item) => item.label)).toEqual([
+      "first question",
+      "Ada: a new question",
+    ]);
+    expect(preview.map((item) => item.label)).toEqual([
+      "first question",
+      "a new question",
+    ]);
+  });
+
+  it("follows a member's name resolving late, on the same window and keys, and still keeps a token's derive", () => {
+    const window = windowWith([
+      skeletonEntry("r-0", "user", "first question"),
+      skeletonEntry("r-1", "assistant", null),
+    ]);
+    // r-0 is placed and hydrated: the label the bot's member directory gives
+    // its sender is all that changes between the reads below.
+    function rowsWith(senderLabel: string, assistantContent: string) {
+      const [, assistant] = listRowsFor(window, assistantContent);
+      const post: TranscriptListRow = {
+        kind: "hydrated",
+        key: "r-0",
+        ordinal: 0,
+        model: member("r-0", senderLabel, "first question"),
+        part: null,
+      };
+      return [post, assistant];
+    }
+
+    const unresolved = chatTurnMinimapItems({
+      rows: rowsWith("Member", "the reply so f"),
+      window,
+      senderFirst: true,
+    });
+    const nextToken = chatTurnMinimapItems({
+      rows: rowsWith("Member", "the reply so far"),
+      window,
+      senderFirst: true,
+    });
+    const resolved = chatTurnMinimapItems({
+      rows: rowsWith("Ada Lovelace", "the reply so far"),
+      window,
+      senderFirst: true,
+    });
+
+    expect(nextToken).toBe(unresolved);
+    expect(unresolved.map((item) => item.label)).toEqual([
+      "Member: first question",
+    ]);
+    expect(resolved.map((item) => item.label)).toEqual([
+      "Ada Lovelace: first question",
+    ]);
   });
 });
 

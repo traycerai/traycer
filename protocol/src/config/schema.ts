@@ -184,7 +184,7 @@ export type SessionNamesConfig = z.infer<
 
 /**
  * The `agentFeedback` block in `~/.traycer/cli/config.json`: whether agents may
- * send Traycer's maintainers feedback (`traycer_send_feedback`). It defaults on.
+ * draft feedback for the user to review (`traycer_draft_feedback`). It defaults on.
  *
  * Its own top-level block, not a key of `features`, because the value that must
  * survive is the user's `false`: an older binary strips an unknown key inside

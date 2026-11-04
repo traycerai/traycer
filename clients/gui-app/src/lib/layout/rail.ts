@@ -248,18 +248,17 @@ export function railStackOf(
 }
 
 /**
- * The shipped rail: the ten panels in order, no dividers (L-155), and exactly
- * one stack - Agents with Artifacts (L-166).
+ * The shipped rail: the ten panels in order, no dividers (L-155) and no
+ * stack - Agents and Artifacts each draw their own icon and body. A stack is
+ * the user's own to make (L-166).
  *
- * That pair is the one the shipped sidebar drew together, and the owner's
- * objection was to the seven default dividers rather than to the two panels
- * sharing the body.
+ * Earlier builds shipped Agents stacked with Artifacts; an install that was
+ * on one of them keeps that pair (`layout-store.ts`, the earlier-install
+ * baseline), so this list speaks for a NEW install only.
  */
-export const DEFAULT_RAIL: ReadonlyArray<RailEntry> = [
-  { kind: "panel", id: "railAgents" },
-  { kind: "stack", id: railStackId(["railAgents", "railArtifacts"]) },
-  ...RAIL_REGION_IDS.slice(1).map((id): RailEntry => ({ kind: "panel", id })),
-];
+export const DEFAULT_RAIL: ReadonlyArray<RailEntry> = RAIL_REGION_IDS.map(
+  (id): RailEntry => ({ kind: "panel", id }),
+);
 
 /** The `dividerSeq` the shipped rail has used up, so the first one is `divider:1`. */
 export const DEFAULT_RAIL_DIVIDER_SEQ = 0;

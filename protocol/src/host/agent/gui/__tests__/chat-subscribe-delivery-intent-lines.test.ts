@@ -158,65 +158,18 @@ describe("the lines this file walks", () => {
 
 describe.each(DELIVERY_MINORS)("chat.subscribe@1.%i", (minor) => {
   it("its own schema decides whether messageDeliveryChanged keeps the intent", () => {
-    expect(parseOnLine(minor, changedFrame).delivery).toEqual(
-      expectedDeliveryOn(minor),
-    );
+    expect(parseOnLine(minor, changedFrame)).toEqual({
+      ...changedFrame,
+      delivery: expectedDeliveryOn(minor),
+    });
   });
 
-  it("its own schema decides whether a complete snapshot keeps the intent", () => {
-    expect(
-      snapshotDelivery(parseOnLine(minor, snapshotFrame(delivery))),
-    ).toEqual(expectedDeliveryOn(minor));
-  });
-
-  it("the projection sends messageDeliveryChanged in that line's shape, which the line then parses unchanged", () => {
-    const projected = projectChatServerFrameForVersion(
-      changedFrame,
-      version(minor),
-    );
-    expect(projected.delivery).toEqual(expectedDeliveryOn(minor));
-    expect(parseOnLine(minor, projected).delivery).toEqual(projected.delivery);
-  });
-
-  it("the projection sends the snapshot in that line's shape, which the line then parses unchanged", () => {
-    const projected = projectChatServerFrameForVersion(
-      snapshotFrame(delivery),
-      version(minor),
-    );
-    expect(snapshotDelivery(asRecord(projected, "frame"))).toEqual(
-      expectedDeliveryOn(minor),
-    );
-    expect(snapshotDelivery(parseOnLine(minor, projected))).toEqual(
-      expectedDeliveryOn(minor),
-    );
-  });
-});
-
-describe("a peer whose version is not negotiated yet", () => {
-  it("gets neither carrier's intent", () => {
-    expect(
-      projectChatServerFrameForVersion(changedFrame, null).delivery,
-    ).toEqual(frozenDelivery);
-    expect(
-      snapshotDelivery(
-        asRecord(
-          projectChatServerFrameForVersion(snapshotFrame(delivery), null),
-          "frame",
-        ),
-      ),
-    ).toEqual(frozenDelivery);
-  });
-});
-
-describe("a complete 1.42 snapshot", () => {
-  const LIVE_MINOR = CHAT_SUBSCRIBE_DELIVERY_INTENT_MINOR;
-
-  it("retains the intent alongside the rest of the snapshot", () => {
+  it("its own schema decides whether a complete snapshot keeps the intent, and keeps the rest of it", () => {
     const parsed = asRecord(
-      parseOnLine(LIVE_MINOR, snapshotFrame(delivery)).snapshot,
+      parseOnLine(minor, snapshotFrame(delivery)).snapshot,
       "snapshot",
     );
-    expect(parsed.messageDelivery).toEqual(delivery);
+    expect(parsed.messageDelivery).toEqual(expectedDeliveryOn(minor));
     expect(parsed).toMatchObject({
       rowCount: 0,
       runStatus: "idle",
@@ -225,9 +178,51 @@ describe("a complete 1.42 snapshot", () => {
     });
   });
 
+  it("the projection sends messageDeliveryChanged in that line's shape, which the line then parses unchanged", () => {
+    const projected = projectChatServerFrameForVersion(
+      changedFrame,
+      version(minor),
+    );
+    expect(projected).toEqual({
+      ...changedFrame,
+      delivery: expectedDeliveryOn(minor),
+    });
+    expect(parseOnLine(minor, projected)).toEqual(projected);
+  });
+
+  it("the projection sends the snapshot in that line's shape, which the line then parses unchanged", () => {
+    const projected = projectChatServerFrameForVersion(
+      snapshotFrame(delivery),
+      version(minor),
+    );
+    expect(projected).toEqual(snapshotFrame(expectedDeliveryOn(minor)));
+    expect(snapshotDelivery(parseOnLine(minor, projected))).toEqual(
+      expectedDeliveryOn(minor),
+    );
+  });
+});
+
+describe("a peer whose version is not negotiated yet", () => {
+  it("gets neither carrier's intent, and the rest of each frame is untouched", () => {
+    expect(projectChatServerFrameForVersion(changedFrame, null)).toEqual({
+      ...changedFrame,
+      delivery: frozenDelivery,
+    });
+    expect(
+      projectChatServerFrameForVersion(snapshotFrame(delivery), null),
+    ).toEqual(snapshotFrame(frozenDelivery));
+  });
+});
+
+describe("a 1.42 snapshot", () => {
   it("reads a delivery with the key omitted, as a 1.41 host sends it, as carrying no intent", () => {
     expect(
-      snapshotDelivery(parseOnLine(LIVE_MINOR, snapshotFrame(frozenDelivery))),
+      snapshotDelivery(
+        parseOnLine(
+          CHAT_SUBSCRIBE_DELIVERY_INTENT_MINOR,
+          snapshotFrame(frozenDelivery),
+        ),
+      ),
     ).toEqual({ ...frozenDelivery, worktreeIntent: null });
   });
 });

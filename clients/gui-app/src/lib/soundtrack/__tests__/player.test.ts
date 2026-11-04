@@ -123,6 +123,8 @@ function makePlayerWithRandom(
     random,
     silenceSeconds: [5, 5],
     resumeAt: 0,
+    onRunStart: () => undefined,
+    onRunEnd: () => undefined,
   });
 }
 
@@ -139,6 +141,8 @@ function makePlayer(
     random: () => 0.5,
     silenceSeconds: [silenceSeconds, silenceSeconds],
     resumeAt: 0,
+    onRunStart: () => undefined,
+    onRunEnd: () => undefined,
   });
 }
 
@@ -205,6 +209,8 @@ describe("TrackPlayer scheduling", () => {
       random: () => 0.5,
       silenceSeconds: [5, 5],
       resumeAt: 20,
+      onRunStart: () => undefined,
+      onRunEnd: () => undefined,
     });
     expect(player.elapsed()).toBe(20);
 

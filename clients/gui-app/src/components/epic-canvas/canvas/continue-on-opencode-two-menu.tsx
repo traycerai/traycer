@@ -129,6 +129,7 @@ export function ContinueOnOpencodeTwoTabMenu(
             openCreatedChatWhenProjectedWithNavigation({
               intent,
               navigateNestedFocus,
+              mobileTarget: null,
             }),
           onCreateError: (error) => {
             // The shared create toast stays silent on a fork the host could

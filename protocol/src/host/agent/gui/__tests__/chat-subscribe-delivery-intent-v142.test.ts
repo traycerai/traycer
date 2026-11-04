@@ -90,12 +90,6 @@ describe("chat.subscribe@1.42 registration", () => {
 });
 
 describe("messageDeliveryChanged", () => {
-  it("1.42 keeps the intent", () => {
-    expect(chatSubscribeV142.serverFrameSchema.parse(changedFrame)).toEqual(
-      changedFrame,
-    );
-  });
-
   it("1.42 reads a 1.41 host's delivery as carrying no intent", () => {
     expect(
       chatSubscribeV142.serverFrameSchema.parse({
@@ -126,13 +120,6 @@ describe("messageDeliveryChanged", () => {
     ).toBe(false);
   });
 
-  it("1.41 has no such key: its schema drops it", () => {
-    expect(chatSubscribeV141.serverFrameSchema.parse(changedFrame)).toEqual({
-      ...changedFrame,
-      delivery: frozenDelivery,
-    });
-  });
-
   it("the live full-snapshot union keeps it too", () => {
     expect(chatSubscribeServerFrameSchema.parse(changedFrame)).toEqual(
       changedFrame,
@@ -157,25 +144,10 @@ describe("projectChatServerFrameForVersion", () => {
     );
   });
 
-  it("strips messageDeliveryChanged.delivery below 1.42, and the result parses unchanged on 1.41", () => {
-    const projected = projectChatServerFrameForVersion(changedFrame, V141);
-    expect(projected).toEqual({ ...changedFrame, delivery: frozenDelivery });
-    expect(chatSubscribeV141.serverFrameSchema.parse(projected)).toEqual(
-      projected,
-    );
-  });
-
   it("strips the snapshot's messageDelivery below 1.42, leaving the rest of it", () => {
     expect(
       projectChatServerFrameForVersion(snapshotFrame(delivery), V141).snapshot,
     ).toEqual({ rowCount: 3, messageDelivery: frozenDelivery });
-  });
-
-  it("strips for a peer whose version is not negotiated yet", () => {
-    expect(projectChatServerFrameForVersion(changedFrame, null)).toEqual({
-      ...changedFrame,
-      delivery: frozenDelivery,
-    });
   });
 
   it("leaves a retired delivery and a snapshot without one alone", () => {

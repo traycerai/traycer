@@ -28,6 +28,7 @@ import {
   FakeOutput,
   FakeStems,
   isRamp,
+  mulberry32,
 } from "@/lib/soundtrack/__tests__/fakes";
 import { createSoundtrackStore } from "../soundtrack-store";
 
@@ -85,17 +86,6 @@ const SINGLE_VIEWS: SoundtrackManifest["views"] = {
 };
 
 const SINGLE_TRACKS = [makeTrack("calm", 60), makeTrack("busy", 60)];
-
-/** mulberry32: the same draws on every run. */
-function seededRandom(seed: number): () => number {
-  let state = seed;
-  return () => {
-    state = (state + 0x6d2b79f5) | 0;
-    let mixed = Math.imul(state ^ (state >>> 15), 1 | state);
-    mixed = (mixed + Math.imul(mixed ^ (mixed >>> 7), 61 | mixed)) ^ mixed;
-    return ((mixed ^ (mixed >>> 14)) >>> 0) / 4294967296;
-  };
-}
 
 interface OpenedPorts {
   readonly output: FakeOutput;
@@ -179,7 +169,7 @@ afterEach(() => {
 
 describe("soundtrack store: a session", () => {
   it("opens the ports on enable and starts the view's track on the first signals", async () => {
-    const { store, openPorts, opened } = singleTrackHarness(seededRandom(1));
+    const { store, openPorts, opened } = singleTrackHarness(mulberry32(1));
     store.getState().enable();
 
     expect(store.getState().enabled).toBe(true);
@@ -210,7 +200,7 @@ describe("soundtrack store: a session", () => {
   });
 
   it("cuts the samples sounding over the stop fade on disable", async () => {
-    const { store, opened } = singleTrackHarness(seededRandom(1));
+    const { store, opened } = singleTrackHarness(mulberry32(1));
     store.getState().enable();
     store.getState().setSignals(signalsOf({ view: "home" }));
     // A sample is under way: they last 2.2 s from the first tick.
@@ -225,7 +215,7 @@ describe("soundtrack store: a session", () => {
   });
 
   it("fades out, closes the ports and stores where each view got to on disable", async () => {
-    const { store, opened } = singleTrackHarness(seededRandom(1));
+    const { store, opened } = singleTrackHarness(mulberry32(1));
     store.getState().enable();
     store.getState().setSignals(signalsOf({ view: "home" }));
     await advance(3);
@@ -251,7 +241,7 @@ describe("soundtrack store: a session", () => {
     const warn = vi
       .spyOn(appLogger, "warn")
       .mockImplementation(() => undefined);
-    const { store, openPorts } = singleTrackHarness(seededRandom(1));
+    const { store, openPorts } = singleTrackHarness(mulberry32(1));
     openPorts.mockImplementationOnce(() => {
       throw new Error("no audio device");
     });
@@ -268,7 +258,7 @@ describe("soundtrack store: a session", () => {
   });
 
   it("does nothing with signals while off, and keeps none for when it is switched on", () => {
-    const { store, openPorts, opened } = singleTrackHarness(seededRandom(1));
+    const { store, openPorts, opened } = singleTrackHarness(mulberry32(1));
     store.getState().setSignals(signalsOf({ view: "home", blocking: 2 }));
     expect(openPorts).not.toHaveBeenCalled();
     expect(store.getState().soundingView).toBeNull();
@@ -282,7 +272,7 @@ describe("soundtrack store: a session", () => {
 
 describe("soundtrack store: views", () => {
   it("crossfades to another view's track, and back resumes the first where it left off", async () => {
-    const { store, opened } = singleTrackHarness(seededRandom(1));
+    const { store, opened } = singleTrackHarness(mulberry32(1));
     store.getState().enable();
     store.getState().setSignals(signalsOf({ view: "home" }));
     await advance(3);
@@ -324,7 +314,7 @@ describe("soundtrack store: views", () => {
   });
 
   it("fades out for a view with no track, and sounds again when one with a track returns", async () => {
-    const { store, opened } = singleTrackHarness(seededRandom(1));
+    const { store, opened } = singleTrackHarness(mulberry32(1));
     store.getState().enable();
     store.getState().setSignals(signalsOf({ view: "home" }));
     await advance(2);
@@ -384,7 +374,7 @@ describe("soundtrack store: views", () => {
 
 describe("soundtrack store: directors", () => {
   it("re-plans at once when the director changes, and the player gets what the rules say", async () => {
-    const { store, opened } = singleTrackHarness(seededRandom(7));
+    const { store, opened } = singleTrackHarness(mulberry32(7));
     store.getState().enable();
     store
       .getState()
@@ -411,7 +401,7 @@ describe("soundtrack store: directors", () => {
   });
 
   it("dims the mix through the port while a failure is unread, and lifts it when it is read", () => {
-    const { store, opened } = singleTrackHarness(seededRandom(7));
+    const { store, opened } = singleTrackHarness(mulberry32(7));
     store.getState().setDirector("rules");
     store.getState().enable();
     store.getState().setSignals(signalsOf({ view: "home", failure: 1 }));
@@ -422,7 +412,7 @@ describe("soundtrack store: directors", () => {
   });
 
   it("keeps a held B on when the count trims the others", async () => {
-    const { store, opened } = singleTrackHarness(seededRandom(3));
+    const { store, opened } = singleTrackHarness(mulberry32(3));
     store.getState().setDirector("rules");
     store.getState().enable();
     store
@@ -442,7 +432,7 @@ describe("soundtrack store: directors", () => {
     expect(targets[1]).toBe(1.25);
   });
 
-  it("restores the plan's layers every 5 s after a track's end discards them", async () => {
+  it("restores the plan's layers as a track's next run starts, not at the next 5 s tick", async () => {
     const shortHome = [makeTrack("short", 10)];
     const { store, opened } = harness(
       manifestOf(shortHome, { ...SINGLE_VIEWS, home: ["short"] }),
@@ -456,18 +446,22 @@ describe("soundtrack store: directors", () => {
     // Only A rolled on at zero; the plan held B on beside it.
     expect(lastRamp(output, "bus0/1")?.target).toBe(1.25);
 
-    // The track ends at 10 s and is silent for 8 s; the run that follows rolls
-    // its layers afresh, and B is off with nothing having restated the plan.
+    // The track ends on the first tick at or after 10.05 s and is silent for
+    // 8 s, so the next run starts at about 18.1 s, before the replan tick at
+    // 20 s. Its roll leaves B off; the plan turns it on at once.
     await advance(16);
-    expect(lastRamp(output, "bus0/1")?.target).toBe(0);
-
-    // The next 5 s tick sets it again.
-    await advance(2);
-    expect(lastRamp(output, "bus0/1")?.target).toBe(1.25);
+    const ramps = output.ramps("bus0/1");
+    const runStartGain = ramps.filter((ramp) => ramp.seconds === 0.01).at(-1);
+    expect(runStartGain).toMatchObject({ target: 0 });
+    expect(runStartGain?.at).toBeGreaterThan(18);
+    expect(ramps.at(-1)).toMatchObject({ target: 1.25, at: runStartGain?.at });
+    expect(
+      output.plays("bus0/1").filter((play) => play.at >= 18),
+    ).not.toHaveLength(0);
   });
 
-  it("does not re-plan identical signals, and a restated plan flips no layer", async () => {
-    const { store, opened } = singleTrackHarness(seededRandom(11));
+  it("does not re-plan identical signals, and a restated plan ramps and flips no layer", async () => {
+    const { store, opened } = singleTrackHarness(mulberry32(11));
     store.getState().setDirector("rules");
     store.getState().enable();
     const busy = signalsOf({ view: "home", working: 1, blocking: 1 });
@@ -480,15 +474,11 @@ describe("soundtrack store: directors", () => {
     expect(store.getState().lastPlan).toBe(planBefore);
     expect(opened[0].output.calls).toHaveLength(callsBefore);
 
-    // The 5 s tick restates the plan: gains are ramped to where they were and
-    // no layer goes on or off.
-    const targetsBefore = layerTargets(opened[0].output, "bus0");
+    // The 5 s tick restates the plan: no gain is ramped and no layer goes on
+    // or off.
     const rampsBefore = opened[0].output.calls.filter(isRamp).length;
     await advance(MIX_TUNING.replanIntervalMs / 1000);
-    expect(opened[0].output.calls.filter(isRamp).length).toBeGreaterThan(
-      rampsBefore,
-    );
-    expect(layerTargets(opened[0].output, "bus0")).toEqual(targetsBefore);
+    expect(opened[0].output.calls.filter(isRamp)).toHaveLength(rampsBefore);
     expect(store.getState().lastPlan).toEqual(planBefore);
   });
 });
@@ -509,7 +499,7 @@ describe("soundtrack store: reading the manifest and the volume", () => {
     const store = createSoundtrackStore({
       readManifest,
       openPorts: openFakePorts,
-      random: seededRandom(1),
+      random: mulberry32(1),
     });
     return {
       store,
@@ -571,7 +561,7 @@ describe("soundtrack store: reading the manifest and the volume", () => {
   });
 
   it("moves the open port's volume while on", () => {
-    const { store, opened } = singleTrackHarness(seededRandom(1));
+    const { store, opened } = singleTrackHarness(mulberry32(1));
     store.getState().enable();
 
     store.getState().setVolume(0.3);
@@ -581,7 +571,7 @@ describe("soundtrack store: reading the manifest and the volume", () => {
   });
 
   it("opens the ports at the volume set before it was on", () => {
-    const { store, openPorts } = singleTrackHarness(seededRandom(1));
+    const { store, openPorts } = singleTrackHarness(mulberry32(1));
 
     store.getState().setVolume(0.9);
     store.getState().enable();
@@ -590,7 +580,7 @@ describe("soundtrack store: reading the manifest and the volume", () => {
   });
 
   it("ducks the open ports and ignores a chime while off", () => {
-    const { store, opened } = singleTrackHarness(seededRandom(1));
+    const { store, opened } = singleTrackHarness(mulberry32(1));
     store.getState().duck(0.4);
     store.getState().enable();
     store.getState().duck(0.5);
