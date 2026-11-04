@@ -33,6 +33,8 @@ describe("xPostLength", () => {
     expect(
       xPostLength("https://en.wikipedia.org/wiki/Rust_(programming_language)."),
     ).toBe(23 + 1);
+    // Punctuation inside balanced parentheses stays in the link.
+    expect(xPostLength("https://example.com/(Dr.)")).toBe(23);
   });
 
   it("adds the surrounding text to the link weight", () => {

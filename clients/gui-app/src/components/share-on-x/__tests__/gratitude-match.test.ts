@@ -19,6 +19,7 @@ describe("matchGratitude", () => {
     ["gracias", "thank_you"],
     ["shukriya bhai", "thank_you"],
     ["kudos", "great_job"],
+    ["keep it up", "great_job"],
     ["bahut badhiya", "great_job"],
     ["awesome!", "amazing"],
     ["works like a charm, ty", "nailed_it"],
@@ -51,6 +52,10 @@ describe("matchGratitude", () => {
     "far from perfect",
     "not great",
     "still broken, thanks",
+    "not exactly perfect",
+    "not exactly amazing",
+    "it isn't perfect",
+    "that isn't awesome",
   ])("ignores a negated thank-you: %j", (text) => {
     expect(matchGratitude(text)).toBeNull();
   });
@@ -65,6 +70,7 @@ describe("matchGratitude", () => {
     "use w",
     "make it nice",
     "make it perfect",
+    "keep it up with the tests and the docs",
     "lets go with option b then and also add docs",
   ])("ignores an instruction-like phrase: %j", (text) => {
     expect(matchGratitude(text)).toBeNull();

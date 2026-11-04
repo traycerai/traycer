@@ -18,24 +18,29 @@ const LINK_PATTERN =
  * Characters a link cannot end with: X leaves trailing punctuation out of the
  * link and counts it as text ("see https://x.com." links "https://x.com").
  */
-const TRAILING_PUNCTUATION = /[.,;:!?'"\u2019\u201D\]}>)]+$/u;
+const TRAILING_PUNCTUATION = /[.,;:!?'"\u2019\u201D\]}>)]/u;
+
+function count(text: string, char: string): number {
+  return text.split(char).length - 1;
+}
 
 /**
- * A link and the punctuation after it, which X counts as text. A closing
- * parenthesis stays with the link while it balances one inside it, as in a
- * Wikipedia URL.
+ * The punctuation after a link, which X counts as text. A closing parenthesis
+ * that balances one inside the link ends it, with everything before it kept,
+ * as in "https://en.wikipedia.org/wiki/Rust_(language)".
  */
-function splitTrailing(match: string): readonly [string, string] {
-  let link = match.replace(TRAILING_PUNCTUATION, "");
-  let rest = match.slice(link.length);
-  while (rest.startsWith(")")) {
-    const opens = link.split("(").length - 1;
-    const closes = link.split(")").length - 1;
-    if (opens <= closes) break;
-    link += ")";
-    rest = rest.slice(1);
+function trailingText(match: string): string {
+  let end = match.length;
+  while (end > 0) {
+    const last = match.charAt(end - 1);
+    if (!TRAILING_PUNCTUATION.test(last)) break;
+    if (last === ")") {
+      const link = match.slice(0, end);
+      if (count(link, "(") >= count(link, ")")) break;
+    }
+    end -= 1;
   }
-  return [link, rest];
+  return match.slice(end);
 }
 
 /**
@@ -89,7 +94,7 @@ export function xPostLength(text: string): number {
       }
       links += 1;
       // The punctuation after a link stays in the text it is counted with.
-      return splitTrailing(match)[1];
+      return trailingText(match);
     });
   let weight = links * LINK_WEIGHT;
   const plain = rest.replace(EMOJI_PATTERN, (emoji) => {
