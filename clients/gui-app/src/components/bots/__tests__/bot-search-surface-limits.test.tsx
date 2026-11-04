@@ -1,7 +1,8 @@
 /**
  * Search in Tracy (decision 186), through the REAL `BotTabSurface`: a page
- * with no hits that still has pages to come, and the longest query the host
- * takes. The fake hosts and the module mocks are in
+ * with no hits that still has pages to come, a host that repeats the cursor
+ * it was asked for, the longest query the host takes, and the keys of an
+ * input method. The fake hosts and the module mocks are in
  * `bot-search-surface-support.tsx`; every request is checked against the
  * protocol's request schema, as the host does.
  * The clock is a fake one, so the debounce is crossed by advancing it.
@@ -10,6 +11,8 @@ import {
   mocks,
   hitRows,
   lastAsked,
+  transcriptOf,
+  conversationOf,
   settle,
   installSearchSurfaceLifecycle,
 } from "./bot-search-surface-support";
@@ -22,6 +25,7 @@ import {
 } from "@traycer/protocol/host/bot/conversation-schemas";
 import { HostRpcError } from "@traycer-clients/shared/host-transport/host-messenger";
 import {
+  SEARCH_BOT_A,
   SEARCH_BOT_C,
   searchHit,
   searchResponse,
@@ -170,4 +174,81 @@ describe("the longest query the host takes", () => {
       BOT_CONVERSATION_SEARCH_MAX_QUERY_CHARS,
     );
   });
+});
+
+describe("a host that answers a page with the cursor it was asked for", () => {
+  it.each([
+    ["after a page of hits", [searchHit({ messageId: "post-1" })]],
+    ["after an empty page", []],
+  ] as const)(
+    "stops the list at 'could not load more' %s, with no restart and no 'no results', and Retry asks that page again",
+    async (_after, firstHits) => {
+      mocks.state.answer = (_hostId, request) =>
+        request.cursor === null
+          ? searchResponse({ hits: [...firstHits], nextCursor: "page-2" })
+          : searchResponse({ hits: [], nextCursor: request.cursor });
+      render(<Surface />);
+      typeInColumnBox("ship");
+      await settle();
+      // Past the retry delays the failed page is asked again after.
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(60_000);
+      });
+
+      expect(cursorsAsked()).toEqual([null, "page-2", "page-2", "page-2"]);
+      const failure = screen.getByTestId("bot-search-more-error");
+      expect(screen.queryByTestId("bot-search-no-results")).toBeNull();
+      expect(screen.queryAllByTestId("bot-search-hit")).toHaveLength(
+        firstHits.length,
+      );
+
+      fireEvent.click(within(failure).getByRole("button", { name: "Retry" }));
+      await settle();
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(60_000);
+      });
+
+      expect(cursorsAsked()).toEqual([
+        null,
+        "page-2",
+        "page-2",
+        "page-2",
+        "page-2",
+        "page-2",
+        "page-2",
+      ]);
+      expect(screen.getByTestId("bot-search-more-error")).toBeTruthy();
+      expect(screen.queryAllByTestId("bot-search-hit")).toHaveLength(
+        firstHits.length,
+      );
+    },
+  );
+});
+
+describe("the keys of an input method", () => {
+  it.each(["Enter", "ArrowDown", "ArrowUp"] as const)(
+    "%s while composing is left to the input method: no jump, no selection, not prevented; the same key after it lands the result",
+    async (key) => {
+      render(<Surface />);
+      typeInColumnBox("ship");
+      await settle();
+      const input = screen.getByTestId("bot-search-input");
+      const landedOn = (): string | undefined =>
+        transcriptOf(conversationOf(SEARCH_BOT_A)).dataset.landOn;
+
+      const notPrevented = fireEvent.keyDown(input, { key, isComposing: true });
+      await settle();
+
+      expect(notPrevented).toBe(true);
+      expect(landedOn()).toBe("none");
+      expect(hitRows()[0].getAttribute("aria-current")).toBeNull();
+
+      const prevented = !fireEvent.keyDown(input, { key });
+      await settle();
+
+      expect(prevented).toBe(true);
+      expect(landedOn()).toBe("post-1");
+      expect(hitRows()[0].getAttribute("aria-current")).toBe("true");
+    },
+  );
 });

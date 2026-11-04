@@ -379,6 +379,78 @@ describe("fetchBotSearchPage", () => {
     },
   );
 
+  it.each([
+    ["no hits", []],
+    ["hits", [searchHit({ messageId: "a-2" })]],
+  ] as const)(
+    "fails a page whose host answers it with %s and the cursor it was asked for, with an RPC_ERROR, so the list is not restarted",
+    async (_answer, hits) => {
+      const rejection = fetchBotSearchPage({
+        sources: [{ ...TAB_SOURCE, cursor: "c", started: true }],
+        sort: "relevance",
+        ask: () =>
+          Promise.resolve(searchResponse({ hits: [...hits], nextCursor: "c" })),
+        reachableHostOf: nobodyReachable,
+      });
+
+      await expect(rejection).rejects.toBeInstanceOf(HostRpcError);
+      await expect(rejection).rejects.toMatchObject({
+        code: "RPC_ERROR",
+        requestId: "repeated-cursor",
+      });
+    },
+  );
+
+  it("takes a first page's cursor whatever it is, and a cursor the host moved on from", async () => {
+    const answerWithCursor = (nextCursor: string) => () =>
+      Promise.resolve(
+        searchResponse({
+          hits: [searchHit({ messageId: "a-1" })],
+          nextCursor,
+        }),
+      );
+
+    const first = await fetchBotSearchPage({
+      sources: [TAB_SOURCE],
+      sort: "relevance",
+      ask: answerWithCursor("c"),
+      reachableHostOf: nobodyReachable,
+    });
+    const later = await fetchBotSearchPage({
+      sources: [{ ...TAB_SOURCE, cursor: "c", started: true }],
+      sort: "relevance",
+      ask: answerWithCursor("d"),
+      reachableHostOf: nobodyReachable,
+    });
+
+    expect(first.next.map((source) => source.cursor)).toEqual(["c"]);
+    expect(later.next.map((source) => source.cursor)).toEqual(["d"]);
+  });
+
+  it("asks nothing of a source that has a page of hits on hand, and keeps its cursor, which is not a repeat", async () => {
+    const ask = vi.fn((): Promise<BotConversationSearchResponse> =>
+      Promise.reject(hostFailure("RPC_ERROR")),
+    );
+
+    const page = await fetchBotSearchPage({
+      sources: [
+        {
+          ...TAB_SOURCE,
+          cursor: "c",
+          started: true,
+          pending: rankedHits(SEARCH_BOT_A, countdown(40, 21), "relevance"),
+        },
+      ],
+      sort: "relevance",
+      ask,
+      reachableHostOf: nobodyReachable,
+    });
+
+    expect(ask).not.toHaveBeenCalled();
+    expect(page.hits).toHaveLength(20);
+    expect(page.next.map((source) => source.cursor)).toEqual(["c"]);
+  });
+
   it("asks no follow-up on a later page, where the bot already has a source of its own", async () => {
     const directB: BotSearchSource = {
       hostId: B_HOST,

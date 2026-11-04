@@ -206,11 +206,7 @@ export const useBotSearchStore = create<BotSearchState>()(
             threadId: hit.threadId,
             messageId: hit.messageId,
           },
-          marks: {
-            chatId: hit.threadId ?? hit.conversationId,
-            messageId: hit.messageId,
-            words: botSearchWordsOf(hit),
-          },
+          marks: marksOf(hit),
           focusAsked: state.focusAsked + (keepFocus ? 1 : 0),
         })),
       spendJump: () => set({ jump: null }),
@@ -264,6 +260,18 @@ export const useBotSearchStore = create<BotSearchState>()(
 
 /** A search run in another window reaches this one's list live. */
 installCrossWindowRehydrate(useBotSearchStore, BOT_SEARCH_RECENTS_PERSIST_KEY);
+
+/** What to mark of `hit`: nothing where the index named no words of it. */
+function marksOf(hit: BotConversationSearchHit): BotSearchMarks | null {
+  const words = botSearchWordsOf(hit);
+  return words.length === 0
+    ? null
+    : {
+        chatId: hit.threadId ?? hit.conversationId,
+        messageId: hit.messageId,
+        words,
+      };
+}
 
 function railOf(botId: string): BotRail | null {
   const { byBotId } = useBotOpenThreadStore.getState();

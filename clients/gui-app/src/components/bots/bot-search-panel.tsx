@@ -197,6 +197,8 @@ export function BotSearchPanel(props: {
     if (next !== undefined) openHit(next, true);
   };
   const onInputKeyDown = (event: KeyboardEvent<HTMLInputElement>): void => {
+    // These keys pick a candidate in an input method, not a result.
+    if (event.nativeEvent.isComposing) return;
     if (event.key === "ArrowDown" || event.key === "ArrowUp") {
       event.preventDefault();
       step(event.key === "ArrowDown" ? 1 : -1);
@@ -609,7 +611,8 @@ function BotSearchResultList(props: {
   );
   // A page may hold no hits and still carry a cursor: only the end of the
   // search says there are none. Until then the list is what asks for the next
-  // page, and a page the host refuses, its session spent, stops it.
+  // page, and a page that fails stops it: the host refusing one, its session
+  // spent, or repeating its cursor.
   if (hits.length === 0 && !hasMore) {
     return (
       <div className="flex min-h-0 flex-1 flex-col overflow-y-auto">

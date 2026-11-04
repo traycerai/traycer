@@ -5,7 +5,7 @@ import {
   type BotConversationSearchResponse,
   type BotConversationSearchUnreachable,
 } from "@traycer/protocol/host/bot/conversation-schemas";
-import type { HostRpcError } from "@traycer-clients/shared/host-transport/host-messenger";
+import { HostRpcError } from "@traycer-clients/shared/host-transport/host-messenger";
 import { CHAT_SEARCH_BODY_MIN_QUERY_CHARS } from "@/lib/chat-search/chat-search-results";
 import type {
   BotSearchDate,
@@ -170,6 +170,9 @@ function unreachableOf(
  * are already on screen and which a retry can go on from, and a host that
  * refuses the request, which did answer. A cursor its host no longer holds is
  * one of these, and the search starts again.
+ *
+ * A host that answers a page with the cursor it was asked for has not moved,
+ * and fails the page: the list would ask it again for as long as it stays open.
  */
 export async function fetchBotSearchPage(input: {
   readonly sources: ReadonlyArray<BotSearchSource>;
@@ -184,7 +187,12 @@ export async function fetchBotSearchPage(input: {
   const unreachable: Array<BotConversationSearchUnreachable> = [];
   const askOne = (source: BotSearchSource): Promise<BotSearchAnswer> =>
     ask(source).then(
-      (answer) => ({ source, answer }),
+      (answer) => {
+        if (source.cursor !== null && answer.nextCursor === source.cursor) {
+          throw repeatedCursorError();
+        }
+        return { source, answer };
+      },
       (error: HostRpcError) => {
         if (
           source.hostId === null ||
@@ -244,6 +252,16 @@ export async function fetchBotSearchPage(input: {
       : totals.reduce<number>((sum, total) => sum + (total ?? 0), 0),
     unreachable,
   };
+}
+
+function repeatedCursorError(): HostRpcError {
+  return new HostRpcError({
+    code: "RPC_ERROR",
+    requestId: "repeated-cursor",
+    method: "bot.conversation.search",
+    message: "The host answered a page with the cursor it was asked for",
+    fatalDetails: null,
+  });
 }
 
 /** Asks a source that is short of a page, and passes over one that is not. */

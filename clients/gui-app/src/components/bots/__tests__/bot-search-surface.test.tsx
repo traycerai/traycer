@@ -397,6 +397,68 @@ describe("jumping to a result", () => {
     },
   );
 
+  describe("a result the index named no words of", () => {
+    const UNMARKED = searchHit({
+      messageId: "post-2",
+      snippet: { text: "ship the release today", highlights: [] },
+      score: 8,
+    });
+
+    afterEach(() => {
+      vi.restoreAllMocks();
+    });
+
+    beforeEach(() => {
+      mocks.state.rows = new Map([
+        [
+          conversationOf(SEARCH_BOT_A),
+          [
+            { messageId: "post-1", text: "ship the release today" },
+            { messageId: "post-2", text: "ship the release today" },
+          ],
+        ],
+      ]);
+      mocks.state.answer = answerWith(
+        searchResponse({ hits: [SEARCH_RESULT_A, UNMARKED], total: 2 }),
+      );
+    });
+
+    it("lands on its row and marks nothing, however the row changes after", async () => {
+      await openWithResults("release");
+      const observers = vi.spyOn(globalThis, "MutationObserver");
+
+      fireEvent.click(hitRows()[1]);
+      await settle();
+
+      expect(transcriptOf(conversationOf(SEARCH_BOT_A)).dataset.landOn).toBe(
+        "post-2",
+      );
+      expect(useBotSearchStore.getState().marks).toBeNull();
+      // Nothing watches the transcript for the words it would paint.
+      expect(observers).not.toHaveBeenCalled();
+      act(() => {
+        const row = document.querySelector('[data-message-id="post-2"]');
+        row?.append(document.createTextNode(" release again"));
+      });
+      await settle();
+      expect(paintedWords()).toEqual([]);
+    });
+
+    it("clears the marks an earlier result left", async () => {
+      await openWithResults("release");
+      fireEvent.click(hitRows()[0]);
+      await settle();
+      expect(useBotSearchStore.getState().marks).not.toBeNull();
+      expect(paintedWords()).toEqual(["release"]);
+
+      fireEvent.click(hitRows()[1]);
+      await settle();
+
+      expect(useBotSearchStore.getState().marks).toBeNull();
+      expect(paintedWords()).toEqual([]);
+    });
+  });
+
   it("opens a thread's result in the rail at the reply, and the back link brings the results back with the query, filters and scroll", async () => {
     mocks.state.threads = [thread("thread-1", "post-7")];
     mocks.state.answer = answerWith(
