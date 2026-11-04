@@ -38,6 +38,17 @@ export interface TrackPlayerOptions {
   readonly silenceSeconds: Range;
   /** What `elapsed` answers until the first start; 0 for a track from its top. */
   readonly resumeAt: number;
+  /**
+   * Once per run, with the state it opens in: after the roll and before its
+   * first grid tick, so what is set from here lands on that tick. A start that
+   * resumes a run, or opens partway into the track, is not a run's start.
+   */
+  readonly onRunStart: (state: State) => void;
+  /**
+   * Once per run, as its silence begins; the next run starts when the silence
+   * is over unless the player is stopped meanwhile.
+   */
+  readonly onRunEnd: (silenceSeconds: number) => void;
 }
 
 /** A phase of the track with its time drawn, for one run. */
@@ -118,8 +129,8 @@ function bookendChannel(
 }
 
 /**
- * Plays one track, for one view. Stopping remembers the position, and `elapsed`
- * answers it while stopped, so a view resumes with `start(player.elapsed(), …)`.
+ * Plays one track. Stopping remembers the position, and `elapsed` answers it
+ * while stopped, so a view resumes with `start(player.elapsed(), …)`.
  * The state and its enabled layers are kept across a stop; the track's end
  * discards them and a fresh state is rolled after the silence. A run is shaped
  * by the track's intro, phases and outro, as `VariableTrack` describes them.
@@ -130,6 +141,8 @@ export class TrackPlayer {
   private readonly stems: StemSource;
   private readonly random: RandomSource;
   private readonly silenceSeconds: Range;
+  private readonly onRunStart: (state: State) => void;
+  private readonly onRunEnd: (silenceSeconds: number) => void;
   private readonly bus: OutputGain;
   private readonly layerGains: readonly OutputGain[];
   private readonly layerTargets: number[];
@@ -159,6 +172,8 @@ export class TrackPlayer {
     this.stems = options.stems;
     this.random = options.random;
     this.silenceSeconds = options.silenceSeconds;
+    this.onRunStart = options.onRunStart;
+    this.onRunEnd = options.onRunEnd;
     this.position = options.resumeAt;
     this.bus = options.output.createBus(0);
     this.layerGains = options.track.layers.map((layer) =>
@@ -216,6 +231,17 @@ export class TrackPlayer {
     this.timer = null;
     this.cutVoices(fade);
     this.bus.ramp(0, fade);
+  }
+
+  /**
+   * Stops the player as `stop` does and forgets the run it was in, so the next
+   * start opens a fresh run from the track's top.
+   */
+  rewind(fadeSeconds: number): void {
+    this.stop(fadeSeconds);
+    this.scheduler = null;
+    this.run = null;
+    this.position = 0;
   }
 
   /**
@@ -300,8 +326,12 @@ export class TrackPlayer {
     this.applyLayerGain(layerIndex, LAYER_RAMP_SECONDS);
   }
 
-  /** The gain an enabled layer ramps to; it stands across states. */
+  /**
+   * The gain an enabled layer ramps to; it stands across states. Restating the
+   * target it has changes nothing, so a plan can restate it freely.
+   */
   setLayerTarget(layerIndex: number, target: number): void {
+    if (this.layerTargets[layerIndex] === target) return;
     this.layerTargets[layerIndex] = target;
     if (this.scheduler !== null) {
       this.applyLayerGain(layerIndex, LAYER_RAMP_SECONDS);
@@ -345,6 +375,7 @@ export class TrackPlayer {
   }
 
   private beginRun(fromElapsed: number, now: number): void {
+    const runStarts = this.run === null && fromElapsed === 0;
     let opening: State | null = null;
     if (this.run === null) {
       const drawn = this.phases
@@ -392,6 +423,8 @@ export class TrackPlayer {
       this.applyLayerGain(layerIndex, SAMPLE_FADE_SECONDS);
     });
     if (introDue) void this.placeIntro(phase, this.intro);
+    // Last, so the gains it moves are not set back by the ones above.
+    if (runStarts) this.onRunStart(scheduler.decidingState());
   }
 
   /** The chosen state, else the one a run of a phased track opens in, else any. */
@@ -465,10 +498,10 @@ export class TrackPlayer {
     this.scheduler = null;
     this.run = null;
     this.position = 0;
-    this.phase = {
-      kind: "silence",
-      endsAt: now + drawSeconds(this.silenceSeconds, this.random),
-    };
+    const silenceSeconds = drawSeconds(this.silenceSeconds, this.random);
+    this.phase = { kind: "silence", endsAt: now + silenceSeconds };
+    // Last, so the owner may stop the player from it.
+    this.onRunEnd(silenceSeconds);
   }
 
   /**
@@ -613,8 +646,8 @@ export class TrackPlayer {
       : 0;
     const now = this.output.currentTime();
     const last = this.layerRamps[layerIndex];
-    // Restating a target keeps a longer ramp's end, so the plan the session
-    // restates every 5 s does not cut a phase's fade short.
+    // A ramp to where the gain is already going keeps a longer ramp's end, so
+    // a move that leaves a layer where a phase's fade takes it cannot cut it.
     const length =
       last !== null &&
       last.target === target &&

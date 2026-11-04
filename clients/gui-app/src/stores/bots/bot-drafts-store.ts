@@ -6,7 +6,7 @@ import { create } from "zustand";
  * while the question waits for the bot's host to settle it.
  */
 export interface BotAnswerDraft {
-  readonly chosen: string | null;
+  readonly chosen: ReadonlyArray<string>;
   readonly typed: string;
   /**
    * The answer sent: held from the send until the question shows settled,

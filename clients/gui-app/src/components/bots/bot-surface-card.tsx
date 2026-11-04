@@ -275,6 +275,8 @@ function SurfaceQuestion(props: {
     text: item.text,
     options: item.options,
     allowFreeText: item.allowsFreeText || item.options.length === 0,
+    // An agent's question takes one option: its answer names the option picked.
+    several: false,
     settlement: null,
     draft: drafts?.[keyOf(index)] ?? EMPTY_QUESTION_CARD_DRAFT,
   }));

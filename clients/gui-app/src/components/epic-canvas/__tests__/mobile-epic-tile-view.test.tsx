@@ -163,37 +163,62 @@ vi.mock("@/components/epic-canvas/canvas/pane-opener", () => ({
 // The current-tile bar is covered by its own test; stub it here to a marker
 // carrying the tile it was handed, so the view test can assert WHICH tile the
 // bar reflects without pulling the bar's host/title hooks.
-// It also draws the header's trailing controls and, where level 2 is the menu,
-// the trigger that opens the tile's `MobileTileMenu`.
-vi.mock("@/components/epic-canvas/mobile/mobile-current-tile-bar", async () => {
-  const { MobileLevel2MenuTrigger } =
-    await import("@/components/layout/shell/mobile-level2");
+// It also draws the header's trailing controls and, in the pane form, the
+// control that opens the tile's sheet.
+vi.mock("@/components/epic-canvas/mobile/mobile-current-tile-bar", () => ({
+  MobileCurrentTileBar: (props: {
+    readonly tile: EpicCanvasTileRef;
+    readonly onSwitch: (() => void) | null;
+    readonly trailing: ReactNode;
+  }) => (
+    <div data-testid="current-tile-bar" data-tile-id={props.tile.id}>
+      {props.onSwitch === null ? null : (
+        <button
+          type="button"
+          data-testid={`switch-${props.tile.id}`}
+          onClick={props.onSwitch}
+        />
+      )}
+      {props.trailing}
+    </div>
+  ),
+}));
+
+// The bottom sheet pulls the resolved-theme context (and much more); what
+// matters here is the list it mounts, in the slot it names, while open.
+vi.mock("@/components/epic-canvas/mobile/tab-switcher-sheet", async () => {
+  const { TileSwitcherList } =
+    await import("@/components/epic-canvas/mobile/tile-switcher-list");
+  const { MobileTileOpenTargetContext } =
+    await import("@/lib/canvas/tile-open/mobile-tile-open-target-context");
   return {
-    MobileCurrentTileBar: (props: {
-      readonly tile: EpicCanvasTileRef;
-      readonly level2: unknown;
-      readonly trailing: ReactNode;
-    }) => (
-      <div data-testid="current-tile-bar" data-tile-id={props.tile.id}>
-        {props.level2 === "menu" ? (
-          <MobileLevel2MenuTrigger
-            testId={`menu-trigger-${props.tile.id}`}
-            className={undefined}
+    TabSwitcherSheet: (props: {
+      readonly epicId: string;
+      readonly tabId: string;
+      readonly open: boolean;
+      readonly onOpenChange: (open: boolean) => void;
+      readonly target: { readonly slot: string } | null;
+    }) =>
+      props.open ? (
+        <div data-testid={`sheet-${props.target?.slot ?? "bar"}`}>
+          <MobileTileOpenTargetContext
+            value={
+              props.target === null
+                ? null
+                : { tabId: props.tabId, slot: props.target.slot as never }
+            }
           >
-            {props.tile.name}
-          </MobileLevel2MenuTrigger>
-        ) : null}
-        {props.trailing}
-      </div>
-    ),
+            <TileSwitcherList
+              epicId={props.epicId}
+              tabId={props.tabId}
+              onClose={() => props.onOpenChange(false)}
+              trailing={null}
+            />
+          </MobileTileOpenTargetContext>
+        </div>
+      ) : null,
   };
 });
-
-// The bottom-sheet is a leaf of the view but out of this test's scope; it pulls
-// the resolved-theme context (and much more), so stub it to nothing.
-vi.mock("@/components/epic-canvas/mobile/tab-switcher-sheet", () => ({
-  TabSwitcherSheet: () => null,
-}));
 
 // ActiveTabBody's published-copy fallback (`usePublishedChatFallbackRef`)
 // reads reachability, the active host, the host client, cloud chats, and the
@@ -734,13 +759,13 @@ describe("<MobileEpicTileView />", () => {
       expect(owned()).toBe("true");
     });
 
-    it("mounts two tiles with level 2 as the menu, each under its own header", () => {
+    it("mounts two tiles, each under its own header, with no Split to offer", () => {
       seed(twoPaneCanvas("pane-A"));
       showSecond("inst-3", false);
       renderView();
       expect(within(primaryPane()).queryByTestId("tile-spec-1")).not.toBeNull();
       expect(within(secondPane()).queryByTestId("tile-spec-3")).not.toBeNull();
-      expect(screen.queryByTestId("mobile-tile-column")).toBeNull();
+      expect(screen.queryByTestId("mobile-tile-split")).toBeNull();
       expect(
         within(primaryPane())
           .getByTestId("current-tile-bar")
@@ -817,14 +842,13 @@ describe("<MobileEpicTileView />", () => {
       expect(canvasOf().tilesByInstanceId["inst-3"]).toBeDefined();
     });
 
-    it("goes back to one tile and the column when the second is closed", () => {
+    it("goes back to one tile, with the Split offered again, when the second is closed", () => {
       seed(twoPaneCanvas("pane-A"));
       showSecond("inst-3", false);
       renderView();
-      expect(screen.queryByTestId("mobile-tile-column")).toBeNull();
       fireEvent.click(screen.getByTestId("mobile-secondary-tile-close"));
       expect(screen.queryByTestId("mobile-epic-second-tile")).toBeNull();
-      expect(screen.queryByTestId("mobile-tile-column")).not.toBeNull();
+      expect(screen.queryByTestId("mobile-tile-split")).not.toBeNull();
     });
 
     it("unmounts the second tile below the two-tile width, keeps the first mounted, and trades places on its row", () => {
@@ -836,6 +860,8 @@ describe("<MobileEpicTileView />", () => {
       shell.set({ width: SHELL_WIDTH_COLUMN_256, portrait: false });
       expect(screen.queryByTestId("mobile-epic-second-tile")).toBeNull();
       expect(primaryPane()).toBe(firstPane);
+      // The list names the second tile only while it is off screen.
+      fireEvent.click(screen.getByTestId("switch-spec-1"));
       expect(screen.queryByTestId("switcher-last-tile-select")).not.toBeNull();
 
       shell.set({ width: SHELL_WIDTH_TWO_TILES, portrait: false });
@@ -849,62 +875,83 @@ describe("<MobileEpicTileView />", () => {
       expect(within(secondPane()).queryByTestId("tile-spec-1")).not.toBeNull();
     });
 
-    it("lands a pick made in the second tile's menu in the second tile", () => {
-      seed(twoPaneCanvas("pane-A"));
-      showSecond("inst-3", false);
-      renderView();
-      fireEvent.click(screen.getByTestId("menu-trigger-spec-3"));
+    function pick(node: EpicCanvasTileRef, from: HTMLElement): void {
       pendingOpen.value = {
         intent: tileIntent(
-          spec(4),
+          node,
           { tabId: VIEW_TAB_ID },
           "explicit",
           "direct_ui",
         ),
       };
-      fireEvent.click(screen.getByTestId("list-pick"));
+      fireEvent.click(within(from).getByTestId("list-pick"));
+    }
+
+    it("lands a pick made in the second tile's sheet in the second tile", () => {
+      seed(twoPaneCanvas("pane-A"));
+      showSecond("inst-3", false);
+      renderView();
+      fireEvent.click(screen.getByTestId("switch-spec-3"));
+      pick(spec(4), screen.getByTestId("sheet-secondary"));
       expect(within(secondPane()).queryByTestId("tile-spec-4")).not.toBeNull();
       expect(within(primaryPane()).queryByTestId("tile-spec-1")).not.toBeNull();
     });
 
-    it("reads an artifact picked from the column beside the first tile, folding the column", () => {
+    it("replaces the first tile with a pick from its own sheet, leaving the second", () => {
+      seed(twoPaneCanvas("pane-A"));
+      showSecond("inst-3", false);
+      renderView();
+      fireEvent.click(screen.getByTestId("switch-spec-1"));
+      pick(spec(4), screen.getByTestId("sheet-primary"));
+      expect(within(primaryPane()).queryByTestId("tile-spec-4")).not.toBeNull();
+      expect(within(secondPane()).queryByTestId("tile-spec-3")).not.toBeNull();
+    });
+
+    it("opens the second pane with the list from the Split, and a pick lands there beside the first", () => {
       seed(twoPaneCanvas("pane-A"));
       renderView();
-      expect(screen.queryByTestId("mobile-tile-column")).not.toBeNull();
-      pendingOpen.value = {
-        intent: tileIntent(
-          spec(4),
-          { tabId: VIEW_TAB_ID },
-          "explicit",
-          "direct_ui",
-        ),
-      };
-      fireEvent.click(screen.getByTestId("list-pick"));
+      expect(screen.queryByTestId("mobile-tile-chooser")).toBeNull();
+      fireEvent.click(screen.getByTestId("mobile-tile-split"));
+      const chooser = screen.getByTestId("mobile-tile-chooser");
+      expect(screen.queryByTestId("mobile-tile-split")).toBeNull();
+      pick(spec(4), chooser);
       expect(within(secondPane()).queryByTestId("tile-spec-4")).not.toBeNull();
       expect(within(primaryPane()).queryByTestId("tile-spec-1")).not.toBeNull();
-      expect(screen.queryByTestId("mobile-tile-column")).toBeNull();
+      expect(screen.queryByTestId("mobile-tile-chooser")).toBeNull();
       expect(slot()).toEqual({ instanceId: "inst-4", transient: false });
+      // The Split is spent: closing the tile it placed goes back to one tile.
+      fireEvent.click(screen.getByTestId("mobile-secondary-tile-close"));
+      expect(screen.queryByTestId("mobile-tile-chooser")).toBeNull();
+      expect(screen.queryByTestId("mobile-tile-split")).not.toBeNull();
     });
 
-    it("reads an artifact picked from the first tile's menu beside it, as the column does", () => {
+    it("closes the Split's pane from its header, and a tile opened beside the first meanwhile spends it", () => {
       seed(twoPaneCanvas("pane-A"));
-      showSecond("inst-3", false);
       renderView();
-      fireEvent.click(screen.getByTestId("menu-trigger-spec-1"));
-      pendingOpen.value = {
-        intent: tileIntent(
-          spec(4),
-          { tabId: VIEW_TAB_ID },
-          "explicit",
-          "direct_ui",
-        ),
-      };
-      fireEvent.click(screen.getByTestId("list-pick"));
-      expect(within(primaryPane()).queryByTestId("tile-spec-1")).not.toBeNull();
+      fireEvent.click(screen.getByTestId("mobile-tile-split"));
+      fireEvent.click(screen.getByTestId("mobile-tile-chooser-close"));
+      expect(screen.queryByTestId("mobile-tile-chooser")).toBeNull();
+      expect(screen.queryByTestId("mobile-tile-split")).not.toBeNull();
+
+      fireEvent.click(screen.getByTestId("mobile-tile-split"));
+      open("open-from-spec-1", spec(4));
       expect(within(secondPane()).queryByTestId("tile-spec-4")).not.toBeNull();
+      fireEvent.click(screen.getByTestId("mobile-secondary-tile-close"));
+      expect(screen.queryByTestId("mobile-tile-chooser")).toBeNull();
     });
 
-    it("closes the first tile's side, and the second takes the screen with the column back", () => {
+    it("offers no Split upright, and keeps one asked for on the side across the turn", () => {
+      seed(twoPaneCanvas("pane-A"));
+      renderView();
+      fireEvent.click(screen.getByTestId("mobile-tile-split"));
+      shell.tilt(true);
+      expect(screen.queryByTestId("mobile-tile-chooser")).toBeNull();
+      expect(screen.queryByTestId("mobile-tile-split")).toBeNull();
+      shell.tilt(false);
+      expect(screen.queryByTestId("mobile-tile-chooser")).not.toBeNull();
+    });
+
+    it("closes the first tile's side, and the second takes the screen", () => {
       seed(twoPaneCanvas("pane-A"));
       showSecond("inst-3", true);
       renderView();
@@ -912,7 +959,6 @@ describe("<MobileEpicTileView />", () => {
       expect(screen.queryByTestId("mobile-epic-second-tile")).toBeNull();
       expect(within(primaryPane()).queryByTestId("tile-spec-3")).not.toBeNull();
       expect(screen.queryByTestId("tile-spec-1")).toBeNull();
-      expect(screen.queryByTestId("mobile-tile-column")).not.toBeNull();
       expect(slot()).toBeUndefined();
       // The first tile stays open in the task, and so does the one that was transient beside it.
       expect(canvasOf().tilesByInstanceId["inst-1"]).toBeDefined();
@@ -930,7 +976,6 @@ describe("<MobileEpicTileView />", () => {
       shell.tilt(true);
       expect(screen.queryByTestId("mobile-epic-second-tile")).toBeNull();
       expect(within(primaryPane()).queryByTestId("tile-spec-1")).not.toBeNull();
-      expect(screen.queryByTestId("mobile-tile-column")).not.toBeNull();
       expect(slot()).toEqual({ instanceId: "inst-3", transient: false });
 
       shell.tilt(false);
@@ -1220,6 +1265,7 @@ describe("<MobileEpicTileView /> with two tiles and chats painted by the stable 
       shell.set({ width: SHELL_WIDTH_COLUMN_256, portrait: false });
       mountHosted(paneCanvas([spec(1)], "inst-1", ["inst-1"]));
       openFrom("open-from-spec-1", spec(2), "single");
+      fireEvent.click(screen.getByTestId("switch-spec-2"));
       openFrom("list-pick", spec(1), "explicit");
       shell.set({ width: SHELL_WIDTH_TWO_TILES, portrait: false });
       openFrom("open-from-spec-1", spec(2), "explicit");
@@ -1238,6 +1284,7 @@ describe("<MobileEpicTileView /> with two tiles and chats painted by the stable 
       mountHosted(paneCanvas([spec(1)], "inst-1", ["inst-1"]));
       openFrom("open-from-spec-1", spec(2), "single");
       showSecond("inst-1", false);
+      fireEvent.click(screen.getByTestId("switch-spec-2"));
       fireEvent.click(screen.getByTestId("switcher-last-tile-select"));
       shell.set({ width: SHELL_WIDTH_TWO_TILES, portrait: false });
       openFrom("open-from-spec-2", spec(3), "single");

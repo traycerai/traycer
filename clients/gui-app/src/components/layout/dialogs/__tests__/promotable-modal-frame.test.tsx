@@ -8,6 +8,7 @@ import {
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { Dialog as DialogPrimitive } from "radix-ui";
 import { PromotableModalFrame } from "@/components/layout/dialogs/promotable-modal-frame";
+import { useTitleBarDragStore } from "@/stores/layout/title-bar-drag-store";
 
 // The guard's pure decision functions (`interactionStartedOnOverlay` +
 // `dialogContentInertToPointer`) are unit-tested in `dialog-outside-guard.test.ts`.
@@ -57,6 +58,17 @@ describe("PromotableModalFrame", () => {
     screen.getByTestId("promote");
     screen.getByTestId("close");
     screen.getByTestId("modal-body");
+  });
+
+  // The frame lies over the side strip's and header's window-drag regions,
+  // which Electron resolves before the DOM: without a suppressor the frame's
+  // bottom-left corner (Settings' Host rows) took no clicks.
+  it("suppresses the window drag regions for exactly as long as it is up", () => {
+    expect(useTitleBarDragStore.getState().suppressors.size).toBe(0);
+    renderFrame(vi.fn());
+    expect(useTitleBarDragStore.getState().suppressors.size).toBe(1);
+    cleanup();
+    expect(useTitleBarDragStore.getState().suppressors.size).toBe(0);
   });
 
   it("still closes on Escape (Escape is deliberately NOT guarded)", async () => {

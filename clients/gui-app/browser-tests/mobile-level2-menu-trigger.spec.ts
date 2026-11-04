@@ -2,14 +2,14 @@ import { expect, test, type Locator } from "@playwright/test";
 
 import { fixture } from "./support/fixtures.ts";
 
-// A long name in the level-2 menu trigger truncates inside the trigger. The
+// A long name in a pane header's trigger truncates inside the trigger. The
 // trigger is a Button, whose own `shrink-0` left it at its intrinsic width, so
 // the row's other controls were pushed off screen. Whether a flex item shrinks
 // is layout, which jsdom does not compute: this renders the production bar and
 // the production bot title with a very long name in a narrow container.
 
 const ROW = '[data-testid="mobile-tile-pane-header"]';
-const TRIGGER = '[data-testid="mobile-tile-menu-trigger"]';
+const TRIGGER = '[data-testid="mobile-tile-title-trigger"]';
 const TITLE = '[data-testid="mobile-current-tile-title"]';
 const MINIMAP = '[data-testid="content-minimap-button"]';
 

@@ -2324,6 +2324,7 @@ function finishDispatchUi(
       source: "direct_ui",
     },
     navigateNestedFocus,
+    mobileTarget: null,
   });
 }
 

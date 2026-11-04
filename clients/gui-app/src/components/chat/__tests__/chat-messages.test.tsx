@@ -88,6 +88,10 @@ import type { TileFindAdapter } from "@/stores/tile-find";
 import { NO_TRANSCRIPT_BASELINE } from "@/stores/chats/chat-announcements";
 import type { BackgroundItem } from "@traycer/protocol/host/agent/gui/subscribe";
 import {
+  ChatBotPresentationContext,
+  type ChatBotPresentation,
+} from "@/components/chat/chat-bot-presentation-context";
+import {
   makeAssistantMessage,
   makeMessage,
   makeMessageAt,
@@ -1000,6 +1004,8 @@ interface RenderChatMessagesOptions {
   readonly coldRewrittenMessageIds?: ReadonlySet<string>;
   /** Test-only seam: captures the adapter registered by ChatMessages. */
   readonly tileFindContext?: TileFindContextValue;
+  /** Draws the transcript as a bot's channel or thread; omitted draws an agent chat. */
+  readonly botPresentation?: ChatBotPresentation;
   readonly transcriptWindow?: TranscriptWindow | null;
   readonly onVisibleOrdinalRangeChange?: (range: OrdinalRange | null) => void;
   /** `ChatMessages.onScrollRequestSettled`; only the scrollRequest coverage
@@ -1174,11 +1180,20 @@ function renderChatMessages(options: RenderChatMessagesOptions) {
       </TileFindContext.Provider>
     );
   };
+  const contentWithPresentation = (): ReactNode => {
+    const rendered = contentWithFindContext();
+    if (options.botPresentation === undefined) return rendered;
+    return (
+      <ChatBotPresentationContext.Provider value={options.botPresentation}>
+        {rendered}
+      </ChatBotPresentationContext.Provider>
+    );
+  };
   const jsx = (): ReactNode =>
     options.strictMode === true ? (
-      <StrictMode>{contentWithFindContext()}</StrictMode>
+      <StrictMode>{contentWithPresentation()}</StrictMode>
     ) : (
-      contentWithFindContext()
+      contentWithPresentation()
     );
 
   const result = render(jsx());
@@ -3130,6 +3145,66 @@ describe("ChatMessages scroll policy", () => {
       );
       expect(screen.getByTestId("chat-turn-minimap-card")).toBeTruthy();
     });
+    const CHANNEL_PRESENTATION: ChatBotPresentation = {
+      botTitle: "Tracy",
+      threadLine: () => null,
+      openThread: () => undefined,
+      openAnnouncementThread: () => undefined,
+      threadAnchorKinds: [],
+      chooseOption: null,
+      questions: null,
+      failedRequest: null,
+      failedRecovery: null,
+      replyReceipt: null,
+      requestReceipt: null,
+    };
+    const THREAD_PRESENTATION: ChatBotPresentation = {
+      ...CHANNEL_PRESENTATION,
+      threadLine: null,
+      openThread: null,
+      openAnnouncementThread: null,
+    };
+
+    it.each([
+      { surface: "channel", presentation: CHANNEL_PRESENTATION },
+      { surface: "thread", presentation: THREAD_PRESENTATION },
+    ])(
+      "lists a bot $surface's member posts sender-first and not the bot's reply",
+      async ({ presentation }) => {
+        renderChatMessages({
+          messages: [
+            {
+              ...makeMessage(0, "user"),
+              senderLabel: "Ada",
+              content: "Ship the rail",
+            },
+            { ...makeMessage(1, "assistant"), content: "On it" },
+            {
+              ...makeMessage(2, "user"),
+              senderLabel: "Grace",
+              content: "Add a test",
+            },
+          ],
+          scrollStateKey: "bot-channel-minimap",
+          botPresentation: presentation,
+        });
+        await settleLegendList();
+
+        await waitFor(() => {
+          expect(screen.getByTestId("chat-turn-minimap")).toBeTruthy();
+        });
+        fireEvent.mouseEnter(
+          screen.getByRole("group", { name: "Message minimap controls" }),
+        );
+        const rows = screen
+          .getByTestId("chat-turn-minimap-card")
+          .querySelectorAll("[data-minimap-list-row]");
+        expect(Array.from(rows, (row) => row.textContent)).toEqual([
+          "Ada: Ship the rail",
+          "Grace: Add a test",
+        ]);
+      },
+    );
     it("does not mount the minimap when its placement is hidden", async () => {
       useLayoutStore.getState().setRegionValues("minimap", { shown: "hidden" });
       renderChatMessages({

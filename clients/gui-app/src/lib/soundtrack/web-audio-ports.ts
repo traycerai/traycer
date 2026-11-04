@@ -1,4 +1,5 @@
 import { appLogger, describeLogError } from "@/lib/logger";
+import { reissueStemManifest } from "./manifest";
 import { WebAudioDimFilter, WebAudioLevel, WebAudioOutput } from "./output";
 import type { SoundtrackPorts } from "./session";
 import { ManifestStemSource, type StemManifest } from "./stems";
@@ -32,7 +33,7 @@ export function openWebAudioPorts(
   }
   return {
     output,
-    stems: new ManifestStemSource(stems, output),
+    stems: new ManifestStemSource(stems, output, reissueStemManifest),
     setDimmed: (dimmed) => {
       dim.setDimmed(dimmed);
     },

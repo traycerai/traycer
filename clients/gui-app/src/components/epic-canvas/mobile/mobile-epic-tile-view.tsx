@@ -13,23 +13,25 @@ import { MobileCurrentTileBar } from "@/components/epic-canvas/mobile/mobile-cur
 import { MobileTerminalKeyBar } from "@/components/epic-canvas/mobile/mobile-terminal-key-bar";
 import { MobileEmptyPaneLevel2 } from "@/components/epic-canvas/mobile/mobile-empty-pane-level2";
 import { MobileTabSwitcherMount } from "@/components/epic-canvas/mobile/mobile-tab-switcher-mount";
-import { MobileTileColumn } from "@/components/epic-canvas/mobile/mobile-tile-column";
-import { MobileTileColumnToggle } from "@/components/epic-canvas/mobile/mobile-tile-column-toggle";
-import { MobileTileMenu } from "@/components/epic-canvas/mobile/mobile-tile-menu";
+import { MobileTileChooserPane } from "@/components/epic-canvas/mobile/mobile-tile-chooser-pane";
 import {
   MobilePrimaryTileClose,
   MobileSecondaryTileClose,
   MobileTileOriginCrumb,
+  MobileTileSplitButton,
 } from "@/components/epic-canvas/mobile/mobile-tile-header-actions";
 import type { MobileTileSelection } from "@/components/epic-canvas/mobile/mobile-tile-selection";
-import { useMobileTileReading } from "@/components/epic-canvas/mobile/use-mobile-tile-level2-form";
+import { TabSwitcherSheet } from "@/components/epic-canvas/mobile/tab-switcher-sheet";
+import {
+  useMobileTileReading,
+  type MobileTileListForm,
+} from "@/components/epic-canvas/mobile/use-mobile-tile-level2-form";
 import { resolveHostedTileOwnership } from "@/components/epic-canvas/surface-host/hosted-tile-resolver";
 import { usePaneVisible } from "@/components/epic-tabs/pane-visibility-context";
 import { MobileDrawerTaskPaintReporter } from "@/components/layout/shell/mobile-drawer-history-gate";
 import { isEpicArtifactKind } from "@/lib/artifacts/node-display";
 import type { MobileTileSlot } from "@/lib/canvas/tile-open/intent";
 import { MobileTileOpenTargetContext } from "@/lib/canvas/tile-open/mobile-tile-open-target-context";
-import type { MobileLevel2Form } from "@/lib/layout/mobile-layout-form";
 import { useMaybeOpenEpicHandle } from "@/providers/use-open-epic-handle";
 import {
   useEpicHostTransportStatus,
@@ -47,6 +49,10 @@ import { useNativeKeyboardOpen } from "@/hooks/ui/use-native-keyboard-open";
 import { isMobileApp } from "@/lib/mobile-app";
 import { cn } from "@/lib/utils";
 import { useEpicCanvas } from "@/stores/epics/canvas/store";
+import {
+  useIsMobileSwitcherOpen,
+  useMobileSwitcherStore,
+} from "@/stores/epics/mobile-switcher-store";
 import { firstPaneId } from "@/stores/epics/canvas/tile-tree";
 import type { TileLayoutNode } from "@/stores/epics/canvas/types";
 import "@/components/layout/shell/mobile-shell-touch-targets.css";
@@ -59,8 +65,11 @@ interface MobileEpicTileViewProps {
 /**
  * Phone (<768px) epic view: renders one canvas tile, or two side by side where
  * the width rule has room and the person has a second open, in place of the
- * desktop split canvas, with level 2 (the task's tiles) in the form the rule
- * answers. Mounted only from the `useIsMobileViewport()` branch in
+ * desktop split canvas. The task's list is the bottom sheet in every form:
+ * opened from the app header on a phone, and from each tile's own header
+ * everywhere wider, where a Split opens the second pane with the list in it
+ * for the person to choose what reads beside the first. Mounted only from the
+ * `useIsMobileViewport()` branch in
  * `TileCanvasLive` (non-null root), so the desktop tiling layer is never built
  * here. The first tile is chosen by `selectMobileTile`, which reads but never
  * writes the split tree; the second is named by its own slot in the same store,
@@ -82,7 +91,7 @@ export function MobileEpicTileView(props: MobileEpicTileViewProps) {
   const { epicId, tabId } = props;
   const canvas = useEpicCanvas(tabId);
   const reading = useMobileTileReading(tabId);
-  const { level2, columnOffered, primary: selection } = reading;
+  const { form, splitFits, primary: selection } = reading;
   // A second tile the width has no room for keeps its slot: it comes back with
   // the width, and the list names it meanwhile.
   const secondary = reading.tiles === 2 ? reading.secondary : null;
@@ -94,6 +103,7 @@ export function MobileEpicTileView(props: MobileEpicTileViewProps) {
   if (secondary === null && engagedSlot !== "primary") {
     setEngagedSlot("primary");
   }
+  const chooser = useSplitChooser(secondary, splitFits);
   useHostedTileEngagement({
     tabId,
     primary: selection,
@@ -175,28 +185,25 @@ export function MobileEpicTileView(props: MobileEpicTileViewProps) {
   const keyboardOpen = keyboardInset > 0 || nativeKeyboardOpen;
 
   return (
-    // The row is drawn in every form, and the column and the first tile hold
-    // their slots in it, so a rotation that changes the form remounts neither.
+    // The row is drawn in every form, and the first tile holds its slot in it,
+    // so a rotation that changes the form does not remount it.
     <div className="flex h-full min-h-0 w-full bg-canvas">
-      <MobileTileColumn epicId={epicId} tabId={tabId} level2={level2} />
       <MobileTilePane
         epicId={epicId}
         tabId={tabId}
         slot="primary"
         selection={selection}
-        level2={level2}
+        form={form}
         keyboardInset={keyboardInset}
         keyboardOpen={keyboardOpen}
         engaged={secondary === null || engagedSlot === "primary"}
         onEngage={setEngagedSlot}
-        leading={
-          <FoldedColumnToggle level2={level2} columnOffered={columnOffered} />
-        }
         trailing={
           <PrimaryTileTrailing
             epicId={epicId}
             tabId={tabId}
             secondary={secondary}
+            onSplit={chooser.onSplit}
           />
         }
       >
@@ -218,17 +225,17 @@ export function MobileEpicTileView(props: MobileEpicTileViewProps) {
           tabId={tabId}
           slot="secondary"
           selection={secondary}
-          level2={level2}
+          form={form}
           keyboardInset={keyboardInset}
           keyboardOpen={keyboardOpen}
           engaged={engagedSlot === "secondary"}
           onEngage={setEngagedSlot}
-          leading={null}
           trailing={<MobileSecondaryTileClose tabId={tabId} />}
         >
           {null}
         </MobileTilePane>
       )}
+      <SplitChooserPane epicId={epicId} tabId={tabId} chooser={chooser} />
     </div>
   );
 }
@@ -269,30 +276,67 @@ function useHostedTileEngagement(args: {
   }, [twoTiles]);
 }
 
-/**
- * The column's fold control at the head of the first pane while the column is
- * folded into the menu; while the column draws, it carries its own.
- */
-function FoldedColumnToggle(props: {
-  readonly level2: MobileLevel2Form;
-  readonly columnOffered: boolean;
-}): ReactNode {
-  if (props.level2 !== "menu") return null;
-  return <MobileTileColumnToggle offered={props.columnOffered} />;
+interface SplitChooser {
+  /** Whether the second pane shows the list right now. */
+  readonly drawn: boolean;
+  /** Opens it; `null` where it is not offered: two tiles show, or only one fits. */
+  readonly onSplit: (() => void) | null;
+  readonly close: () => void;
 }
 
 /**
- * What ends the first tile's header: the way back to Tracy, and, while a
- * second tile shows, the close that leaves the second alone on screen.
+ * A Split asks for a second pane with the list in it. It draws while the width
+ * fits two and the slot is empty, and is spent once a tile lands there, from
+ * the list or from the first tile's body alike: closing that tile later goes
+ * back to one tile, not to the list.
+ */
+function useSplitChooser(
+  secondary: MobileTileSelection | null,
+  splitFits: boolean,
+): SplitChooser {
+  const [choosing, setChoosing] = useState(false);
+  if (secondary !== null && choosing) {
+    setChoosing(false);
+  }
+  const open = useCallback(() => setChoosing(true), []);
+  const close = useCallback(() => setChoosing(false), []);
+  const offered = splitFits && secondary === null;
+  const drawn = choosing && offered;
+  return { drawn, onSplit: offered && !drawn ? open : null, close };
+}
+
+function SplitChooserPane(props: {
+  readonly epicId: string;
+  readonly tabId: string;
+  readonly chooser: SplitChooser;
+}): ReactNode {
+  const { epicId, tabId, chooser } = props;
+  if (!chooser.drawn) return null;
+  return (
+    <MobileTileChooserPane
+      epicId={epicId}
+      tabId={tabId}
+      slot="secondary"
+      onClose={chooser.close}
+    />
+  );
+}
+
+/**
+ * What ends the first tile's header: the Split while a second tile would fit
+ * and none shows, the way back to Tracy, and, while a second tile shows, the
+ * close that leaves the second alone on screen.
  */
 function PrimaryTileTrailing(props: {
   readonly epicId: string;
   readonly tabId: string;
   readonly secondary: MobileTileSelection | null;
+  readonly onSplit: (() => void) | null;
 }): ReactNode {
-  const { epicId, tabId, secondary } = props;
+  const { epicId, tabId, secondary, onSplit } = props;
   return (
     <>
+      {onSplit === null ? null : <MobileTileSplitButton onSplit={onSplit} />}
       <MobileTileOriginCrumb tabId={tabId} />
       {secondary === null ? null : (
         <MobilePrimaryTileClose
@@ -303,6 +347,33 @@ function PrimaryTileTrailing(props: {
       )}
     </>
   );
+}
+
+/**
+ * The sheet a tile's header opens, with a pick landing in that tile's slot.
+ * The first slot's open is the switcher's own flag, so a comment thread that
+ * asks the switcher to open opens this, and the phone's header trigger reads
+ * the same flag in the `bar` form, where the shell mounts the sheet instead;
+ * the second slot's is its own, so the two never open together.
+ */
+function useTileSheet(
+  tabId: string,
+  slot: MobileTileSlot,
+): {
+  readonly open: boolean;
+  readonly setOpen: (next: boolean) => void;
+} {
+  const switcherOpen = useIsMobileSwitcherOpen(tabId);
+  const setSwitcherOpen = useMobileSwitcherStore((s) => s.setOpen);
+  const [secondaryOpen, setSecondaryOpen] = useState(false);
+  const setOpen = useCallback(
+    (next: boolean) => {
+      if (slot === "primary") setSwitcherOpen(tabId, next);
+      else setSecondaryOpen(next);
+    },
+    [setSwitcherOpen, slot, tabId],
+  );
+  return { open: slot === "primary" ? switcherOpen : secondaryOpen, setOpen };
 }
 
 /** What an open from inside each slot's tile lands in: the other one. */
@@ -320,17 +391,16 @@ function MobileTilePane(props: {
   readonly tabId: string;
   readonly slot: MobileTileSlot;
   readonly selection: MobileTileSelection;
-  readonly level2: MobileLevel2Form;
+  readonly form: MobileTileListForm;
   readonly keyboardInset: number;
   readonly keyboardOpen: boolean;
   readonly engaged: boolean;
   readonly onEngage: (slot: MobileTileSlot) => void;
-  readonly leading: ReactNode;
   readonly trailing: ReactNode;
   readonly children: ReactNode;
 }) {
-  const { epicId, tabId, slot, selection, level2, engaged, onEngage } = props;
-  const { keyboardInset, keyboardOpen, leading, trailing, children } = props;
+  const { epicId, tabId, slot, selection, form, engaged, onEngage } = props;
+  const { keyboardInset, keyboardOpen, trailing, children } = props;
   const isTerminalTile =
     selection.ref.type === "terminal" ||
     selection.ref.type === "terminal-agent";
@@ -339,6 +409,10 @@ function MobileTilePane(props: {
     () => ({ tabId, slot: OTHER_SLOT[slot] }),
     [slot, tabId],
   );
+  const ownTarget = useMemo(() => ({ tabId, slot }), [slot, tabId]);
+  const sheet = useTileSheet(tabId, slot);
+  const { setOpen: setSheetOpen } = sheet;
+  const openSheet = useCallback(() => setSheetOpen(true), [setSheetOpen]);
   return (
     <div
       className={cn(
@@ -364,20 +438,22 @@ function MobileTilePane(props: {
       }
     >
       {children}
-      <MobileTileMenu
+      <MobileCurrentTileBar
         epicId={epicId}
-        tabId={tabId}
-        slot={slot}
-        drawn={level2 === "menu"}
-      >
-        <MobileCurrentTileBar
+        tile={selection.ref}
+        onSwitch={form === "pane" ? openSheet : null}
+        trailing={trailing}
+      />
+      {/* In the `bar` form the shell mounts the one sheet, over the same flag. */}
+      {form === "pane" ? (
+        <TabSwitcherSheet
           epicId={epicId}
-          tile={selection.ref}
-          level2={level2}
-          leading={leading}
-          trailing={trailing}
+          tabId={tabId}
+          open={sheet.open}
+          onOpenChange={setSheetOpen}
+          target={ownTarget}
         />
-      </MobileTileMenu>
+      ) : null}
       <div
         className="relative min-h-0 flex-1"
         {...(isTerminalTile ? KEYBOARD_FOCUS_OWNER_PROPS : null)}
