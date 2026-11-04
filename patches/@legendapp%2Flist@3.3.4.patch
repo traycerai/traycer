@@ -647,10 +647,10 @@ index ea0348877ff08eb9962ff97efebf2cc19cffad11..f84f068551d683000d9d613a41037094
              const previousPaddingEnd = (_a3 = resetPaddingBaselineRef.current) != null ? _a3 : contentNode.style[axis.paddingEndProp];
              resetPaddingBaselineRef.current = previousPaddingEnd;
 -            const pad = (nextScroll + viewportSize - totalSize) * 2;
-+            // The shortfall once. Twice that is still scrollable on the frame
-+            // this pad is visible, so a follow already at the end paints that
-+            // far short of it. The next frame removes the pad.
-+            const pad = nextScroll + viewportSize - totalSize;
++            // The shortfall once, added to a pad this frame has not removed.
++            // totalSize already includes that pad. The next frame removes it.
++            const appliedPad = Number.parseFloat(contentNode.style[axis.paddingEndProp]);
++            const pad = (Number.isFinite(appliedPad) ? appliedPad : 0) + (nextScroll + viewportSize - totalSize);
              contentNode.style[axis.paddingEndProp] = `${pad}px`;
              void contentNode.offsetHeight;
              scrollBy();
@@ -1382,10 +1382,10 @@ index c96345be154d77f66c26ea42cea15a18e22f5dfa..453752a247583b7987614ffdcd83d1bf
              const previousPaddingEnd = (_a3 = resetPaddingBaselineRef.current) != null ? _a3 : contentNode.style[axis.paddingEndProp];
              resetPaddingBaselineRef.current = previousPaddingEnd;
 -            const pad = (nextScroll + viewportSize - totalSize) * 2;
-+            // The shortfall once. Twice that is still scrollable on the frame
-+            // this pad is visible, so a follow already at the end paints that
-+            // far short of it. The next frame removes the pad.
-+            const pad = nextScroll + viewportSize - totalSize;
++            // The shortfall once, added to a pad this frame has not removed.
++            // totalSize already includes that pad. The next frame removes it.
++            const appliedPad = Number.parseFloat(contentNode.style[axis.paddingEndProp]);
++            const pad = (Number.isFinite(appliedPad) ? appliedPad : 0) + (nextScroll + viewportSize - totalSize);
              contentNode.style[axis.paddingEndProp] = `${pad}px`;
              void contentNode.offsetHeight;
              scrollBy();
@@ -2387,10 +2387,10 @@ index ea0348877ff08eb9962ff97efebf2cc19cffad11..53e513148b127db962a4bdb18ef4aa66
              const previousPaddingEnd = (_a3 = resetPaddingBaselineRef.current) != null ? _a3 : contentNode.style[axis.paddingEndProp];
              resetPaddingBaselineRef.current = previousPaddingEnd;
 -            const pad = (nextScroll + viewportSize - totalSize) * 2;
-+            // The shortfall once. Twice that is still scrollable on the frame
-+            // this pad is visible, so a follow already at the end paints that
-+            // far short of it. The next frame removes the pad.
-+            const pad = nextScroll + viewportSize - totalSize;
++            // The shortfall once, added to a pad this frame has not removed.
++            // totalSize already includes that pad. The next frame removes it.
++            const appliedPad = Number.parseFloat(contentNode.style[axis.paddingEndProp]);
++            const pad = (Number.isFinite(appliedPad) ? appliedPad : 0) + (nextScroll + viewportSize - totalSize);
              contentNode.style[axis.paddingEndProp] = `${pad}px`;
              void contentNode.offsetHeight;
              scrollBy();
@@ -3341,10 +3341,10 @@ index c96345be154d77f66c26ea42cea15a18e22f5dfa..734469842c53e85c60a3f101d2ff1bd6
              const previousPaddingEnd = (_a3 = resetPaddingBaselineRef.current) != null ? _a3 : contentNode.style[axis.paddingEndProp];
              resetPaddingBaselineRef.current = previousPaddingEnd;
 -            const pad = (nextScroll + viewportSize - totalSize) * 2;
-+            // The shortfall once. Twice that is still scrollable on the frame
-+            // this pad is visible, so a follow already at the end paints that
-+            // far short of it. The next frame removes the pad.
-+            const pad = nextScroll + viewportSize - totalSize;
++            // The shortfall once, added to a pad this frame has not removed.
++            // totalSize already includes that pad. The next frame removes it.
++            const appliedPad = Number.parseFloat(contentNode.style[axis.paddingEndProp]);
++            const pad = (Number.isFinite(appliedPad) ? appliedPad : 0) + (nextScroll + viewportSize - totalSize);
              contentNode.style[axis.paddingEndProp] = `${pad}px`;
              void contentNode.offsetHeight;
              scrollBy();
