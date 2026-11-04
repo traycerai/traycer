@@ -11,9 +11,11 @@ import {
   terminalSessionFixture,
 } from "@/hooks/sandboxes/__tests__/sandbox-fixtures";
 import {
+  SANDBOX_DEFAULT_IDLE_MINUTES,
   SANDBOX_ROW_FILTER_NONE,
   sandboxClockLine,
   sandboxDestroyAllIdleOffered,
+  sandboxIdlePolicyLine,
   sandboxReleasedChatLine,
   sandboxFilterCount,
   sandboxFrozenClock,
@@ -570,6 +572,21 @@ describe("sandboxClockLine, a resting row", () => {
     );
   });
 
+  it("drops the destroy clause for a withdrawn row, which would otherwise read as resting forever", () => {
+    expect(
+      line(
+        {
+          destroyAt: null,
+          destroyAfterRestingMinutes: null,
+          withdrawalEndsAt: Date.UTC(2026, 11, 1),
+        },
+        50,
+      ),
+    ).toBe(
+      "Suspended since 09:49 · Suspend keeps memory · resumes on your next action · $0.05 today",
+    );
+  });
+
   it("dates a stopped row's destroy unless it is started", () => {
     expect(line({ state: "stopped", destroyAt: DESTROY_AT }, 0)).toBe(
       "Stopped since 09:49 · destroyed Nov 1 at 09:49 unless started",
@@ -618,6 +635,50 @@ describe("sandboxClockLine, a resting row", () => {
         "Suspended since Oct 27 23:53",
       );
     });
+  });
+});
+
+describe("sandboxIdlePolicyLine", () => {
+  it("gives a withdrawn non-burst row the idle clause alone, never the burst sentence", () => {
+    expect(
+      sandboxIdlePolicyLine(
+        sandboxSummaryFixture({
+          idleMinutes: null,
+          burst: false,
+          destroyAfterRestingMinutes: null,
+          withdrawalEndsAt: Date.UTC(2026, 11, 1),
+        }),
+      ),
+    ).toBe(`Suspends after ${SANDBOX_DEFAULT_IDLE_MINUTES} idle min`);
+  });
+
+  it("keeps the burst sentence for a burst row even once withdrawn: the guard does not swallow it", () => {
+    expect(
+      sandboxIdlePolicyLine(
+        sandboxSummaryFixture({
+          idleMinutes: null,
+          burst: true,
+          withdrawalEndsAt: Date.UTC(2026, 11, 1),
+        }),
+      ),
+    ).toBe(
+      `destroys itself after ${SANDBOX_DEFAULT_IDLE_MINUTES} idle minutes · files on it are lost then`,
+    );
+  });
+
+  it("gives an ordinary row idle plus its resting clause, with the server's default idle minutes", () => {
+    expect(
+      sandboxIdlePolicyLine(
+        sandboxSummaryFixture({
+          idleMinutes: null,
+          burst: false,
+          destroyAfterRestingMinutes: 10_080,
+          withdrawalEndsAt: null,
+        }),
+      ),
+    ).toBe(
+      `Suspends after ${SANDBOX_DEFAULT_IDLE_MINUTES} idle min · destroyed after 7 resting days`,
+    );
   });
 });
 
