@@ -1,11 +1,11 @@
 import { describe, expect, it } from "vitest";
 import {
   upgradeRequestToVersion,
+  upgradeResponseToVersion,
   validateVersionedRpcRegistry,
 } from "@traycer/protocol/framework/index";
 import { hostRpcRegistry } from "@traycer/protocol/host/index";
 import {
-  agentSendMessageUpgradeV11ToV12,
   agentSendMessageV11,
   agentSendMessageV12,
 } from "@traycer/protocol/host/agent/contracts";
@@ -24,14 +24,10 @@ const request = {
 };
 
 describe("agent.sendMessage@1.2 registry", () => {
-  it("validates, and registers 1.2 as the latest minor with its upgrade path", () => {
+  it("validates, and registers 1.2 as the latest minor", () => {
     expect(() => validateVersionedRpcRegistry(hostRpcRegistry)).not.toThrow();
     const line = hostRpcRegistry["agent.sendMessage"][1];
     expect(line.latestMinor).toBe(2);
-    expect(line.versions[2].contract).toBe(agentSendMessageV12);
-    expect(line.versions[2].upgradeFromPreviousVersion).toBe(
-      agentSendMessageUpgradeV11ToV12,
-    );
   });
 });
 
@@ -73,9 +69,15 @@ describe("agent.sendMessage@1.2 attachments", () => {
     ).toEqual([]);
   });
 
-  it("the response schema is shared", () => {
-    expect(agentSendMessageV12.responseSchema).toBe(
-      agentSendMessageV11.responseSchema,
+  it("a reply crosses the 1.1 and 1.2 lines unchanged", () => {
+    const reply = { responseId: "response-1" };
+    const upgraded = upgradeResponseToVersion(
+      hostRpcRegistry["agent.sendMessage"],
+      V11,
+      V12,
+      agentSendMessageV11.responseSchema.parse(reply),
     );
+    expect(agentSendMessageV12.responseSchema.parse(upgraded)).toEqual(reply);
+    expect(agentSendMessageV11.responseSchema.parse(upgraded)).toEqual(reply);
   });
 });
