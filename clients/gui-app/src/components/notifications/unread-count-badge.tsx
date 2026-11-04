@@ -6,8 +6,9 @@ import { formatUnreadCount } from "@/lib/notifications/unread-count";
  * How many unread notifications a row or glyph holds; nothing at zero.
  *
  * Unread is information, not a failure, so the count is never `destructive`.
- * Inline beside a label it is the inbox pill's quiet unread tone (`muted`)
- * and announces itself. Seated on a glyph's corner (`corner` holds the
+ * Inline beside a label it is the filled `secondary` tag the channel
+ * column's Threads pill wears, so the column reads in one tone, and it
+ * announces itself. Seated on a glyph's corner (`corner` holds the
  * placement classes) it is the solid primary fill the phone bell's count
  * uses, hidden from assistive tech, because the control it sits on carries
  * the count in its own label.
@@ -33,7 +34,7 @@ export function UnreadCountBadge(props: {
     );
   }
   return (
-    <Badge variant="muted" size={props.size} data-testid={props.testId}>
+    <Badge variant="secondary" size={props.size} data-testid={props.testId}>
       <span className="tabular-nums">{formatUnreadCount(props.count)}</span>
       <span className="sr-only"> unread</span>
     </Badge>

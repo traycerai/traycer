@@ -5,16 +5,16 @@ import { UnreadCountBadge } from "../unread-count-badge";
 afterEach(() => cleanup());
 
 describe("<UnreadCountBadge />", () => {
-  it("draws an inline count as the quiet muted tag, announced as unread", () => {
+  it("draws an inline count as the filled secondary tag, announced as unread", () => {
     render(
       <UnreadCountBadge count={3} size="sm" testId="count" corner={null} />,
     );
 
     const badge = screen.getByTestId("count");
     expect(badge.getAttribute("data-slot")).toBe("badge");
-    expect(badge.getAttribute("data-variant")).toBe("muted");
-    expect(badge.classList.contains("border-border/60")).toBe(true);
-    expect(badge.classList.contains("text-muted-foreground")).toBe(true);
+    expect(badge.getAttribute("data-variant")).toBe("secondary");
+    expect(badge.classList.contains("bg-secondary")).toBe(true);
+    expect(badge.classList.contains("text-secondary-foreground")).toBe(true);
     expect(badge.getAttribute("aria-hidden")).toBeNull();
     expect(badge.textContent).toBe("3 unread");
   });
