@@ -878,18 +878,162 @@ describe("the utterance boundary, told by the voice's own text", () => {
     ]);
   });
 
-  it("takes whatever the voice says after a whole reply with no closing mark as a new turn, even a bare closing mark", async () => {
+  it("does not hang up on unfinished input between two sentences of the same reply", async () => {
     const chat = await joinOpenThread([]);
-    land(chat, [botRow("r1", "The build finished with two warnings", 200)]);
+    land(chat, [
+      botRow("r1", "The build passed. The deployment is still running.", 200),
+    ]);
     await settle();
-    voiceSays("The build finished");
-    voiceSays(" with two warnings");
-    speak("Ship it");
-    voiceSays(".");
-    await settle();
+    expect(appendedTexts()).toEqual([
+      "The build passed. The deployment is still running.",
+    ]);
+    voiceSays("The build passed.");
+    speak("end the call");
+    voiceSays(" The deployment is still running.");
+    speak(" with the vendor tomorrow.");
+    await acknowledge();
+    expect(useVoiceSessionStore.getState().phase).toBe("live");
+    expect(fake.sendMock.mock.calls.map(([r]) => r.text)).toEqual([
+      "end the call with the vendor tomorrow.",
+    ]);
+  });
 
-    expect(fake.sendMock.mock.calls.map(([request]) => request.text)).toEqual([
-      "Ship it",
+  it("does not hang up when the previous reply's closing punctuation arrives during unfinished input", async () => {
+    const chat = await joinOpenThread([]);
+    land(chat, [botRow("r1", "The build passed.", 200)]);
+    await settle();
+    voiceSays("The build passed");
+    speak("end the call");
+    voiceSays(".");
+    speak(" with the vendor tomorrow.");
+    await acknowledge();
+    expect(useVoiceSessionStore.getState().phase).toBe("live");
+    expect(fake.sendMock.mock.calls.map(([r]) => r.text)).toEqual([
+      "end the call with the vendor tomorrow.",
+    ]);
+  });
+
+  it("does not split an acknowledgement whose prefix equals the last given reply", async () => {
+    const chat = await joinOpenThread([]);
+    land(chat, [botRow("r1", "One.", 200)]);
+    await settle();
+    voiceSays("One.");
+    await untilQuiet();
+    speak("First request.");
+    voiceSays("One");
+    await settle();
+    speak("Actually cancel");
+    voiceSays(" moment.");
+    speak(" the release.");
+    await acknowledge();
+    expect(fake.sendMock.mock.calls.map(([r]) => r.text)).toEqual([
+      "First request.",
+      "Actually cancel the release.",
+    ]);
+  });
+
+  it("sends the last utterance when it interrupts the first of multiple appended chunks", async () => {
+    const chat = await joinOpenThread([]);
+    const reply =
+      "The release summary starts with " +
+      "deployment status remains healthy ".repeat(80) +
+      "and the rollout is complete.";
+    land(chat, [botRow("r1", reply, 200)]);
+    await settle();
+    expect(appendedTexts().length).toBeGreaterThan(1);
+    expect(appendedTexts()[0]).toMatch(/^The release summary starts with/);
+    voiceSays("The release summary starts with");
+    speak("Cancel the rollout.");
+    await acknowledge();
+    await advance(10_000);
+    expect(fake.sendMock.mock.calls.map(([r]) => r.text)).toEqual([
+      "Cancel the rollout.",
+    ]);
+  });
+
+  it("does not split an input at a mid-sentence chunk transition", async () => {
+    const chat = await joinOpenThread([]);
+    const reply =
+      "The release summary starts with " +
+      "deployment status remains healthy ".repeat(80) +
+      "and the rollout is complete.";
+    land(chat, [botRow("r1", reply, 200)]);
+    await settle();
+    expect(appendedTexts().length).toBeGreaterThan(1);
+    const chunks = appendedTexts();
+    voiceSays(chunks[0]);
+    speak("Actually cancel");
+    voiceSays(chunks[1]);
+    speak(" the release.");
+    await acknowledge();
+    expect(fake.sendMock.mock.calls.map(([r]) => r.text)).toEqual([
+      "Actually cancel the release.",
+    ]);
+  });
+
+  it("keeps reading a second reply as one turn when the voice's own acknowledgement came between the two", async () => {
+    const chat = await joinOpenThread([]);
+    land(chat, [botRow("r1", "The deploy finished.", 200)]);
+    await settle();
+    voiceSays("The deploy finished.");
+    await untilQuiet();
+    land(chat, [
+      botRow("r1", "The deploy finished.", 200),
+      botRow("r2", "The build passed. The deployment is still running.", 300),
+    ]);
+    await settle();
+    expect(appendedTexts()).toEqual([
+      "The deploy finished.",
+      "The build passed. The deployment is still running.",
+    ]);
+    speak("Cancel that");
+    voiceSays("Okay.");
+    await settle();
+    expect(fake.sendMock.mock.calls.map(([r]) => r.text)).toEqual([
+      "Cancel that",
+    ]);
+
+    voiceSays("The build passed.");
+    speak("end the call");
+    voiceSays(" The deployment is still running.");
+    speak(" with the vendor tomorrow.");
+    expect(useVoiceSessionStore.getState().phase).toBe("live");
+    expect(fake.sendMock).toHaveBeenCalledTimes(1);
+    await acknowledge();
+
+    expect(useVoiceSessionStore.getState().phase).toBe("live");
+    expect(fake.sendMock.mock.calls.map(([r]) => r.text)).toEqual([
+      "Cancel that",
+      "end the call with the vendor tomorrow.",
+    ]);
+  });
+
+  it("does not hang up when the voice reads a reply's paragraphs with other spacing than it was given", async () => {
+    const chat = await joinOpenThread([]);
+    const paragraphs: ReplyRow = {
+      role: "assistant",
+      messageId: "r1",
+      timestamp: 200,
+      blocks: [
+        textBlock("The build passed."),
+        textBlock("The deployment is running."),
+      ],
+    };
+    land(chat, [paragraphs]);
+    await settle();
+    expect(appendedTexts()).toEqual([
+      "The build passed.\n\nThe deployment is running.",
+    ]);
+
+    voiceSays("The build passed.");
+    speak("end the call");
+    voiceSays(" The deployment is running.");
+    speak(" with the vendor tomorrow.");
+    await acknowledge();
+
+    expect(useVoiceSessionStore.getState().phase).toBe("live");
+    expect(fake.sendMock.mock.calls.map(([r]) => r.text)).toEqual([
+      "end the call with the vendor tomorrow.",
     ]);
   });
 });

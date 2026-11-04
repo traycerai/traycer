@@ -58,12 +58,15 @@ import {
   MAX_SHORT_SESSIONS,
   REMINT_BEFORE_EXPIRY_MS,
   REMINT_CONTEXT_USAGE_RATIO,
+  NO_OUTPUT_TURNS,
   SHORT_SESSION_MS,
-  beginsOutputTurn,
   callFailureLine,
   callUnreachableLine,
   channelConversation,
+  giveOutputText,
+  hearOutput,
   isCallEndPhrase,
+  type OutputTurns,
 } from "@/lib/voice/call";
 import { VoiceEngineError, type VoiceEngine } from "@/lib/voice/engine";
 import {
@@ -111,10 +114,8 @@ interface Attempt {
   cancelled: boolean;
   /** The account signed in when the attempt began. */
   readonly account: string | null;
-  /** The output transcript of the voice's current turn: what closes an utterance. */
-  outputTurn: string;
-  /** The last line given to this engine to say, `null` before any. */
-  given: string | null;
+  /** What this engine's voice is saying, and the texts given it: what closes an utterance. */
+  output: OutputTurns;
 }
 
 /** What a send carries, besides the words: the call's channel. */
@@ -236,7 +237,7 @@ export function CallController(): ReactNode {
         if (attempt === null || attempt.cancelled || !attempt.started) return;
         try {
           attempt.engine.appendCommentary(text, delegationId);
-          attempt.given = text;
+          attempt.output = giveOutputText(attempt.output, text);
         } catch (error) {
           appLogger.warn("[voice] append failed", {
             error: describeLogError(error),
@@ -692,8 +693,7 @@ export function CallController(): ReactNode {
       failure: null,
       cancelled: false,
       account: useAuthStore.getState().contextMetadata?.userId ?? null,
-      outputTurn: "",
-      given: null,
+      output: NO_OUTPUT_TURNS,
     };
     attemptRef.current = attempt;
     const owns = (): boolean =>
@@ -797,16 +797,14 @@ export function CallController(): ReactNode {
             // The utterance boundary (VC0): a new output turn begins, which
             // is the voice's acknowledgement of what the person said since the
             // last one. The vendor marks no turn, so it is told by text
-            // (`beginsOutputTurn`): a fragment that goes on with an unfinished
-            // line continues it and closes nothing. A tail of the person's
-            // words transcribed after the next acknowledgement began joins the
-            // next utterance: one mis-split, never a loss.
-            const newTurn = beginsOutputTurn(
-              attempt.outputTurn,
-              text,
-              attempt.given,
-            );
-            attempt.outputTurn = newTurn ? text : attempt.outputTurn + text;
+            // (`hearOutput`): a fragment that goes on with an unfinished line,
+            // or with the texts the voice was given, continues it and closes
+            // nothing. A tail of the person's words transcribed after the next
+            // acknowledgement began joins the next utterance: one mis-split,
+            // never a loss.
+            const heard = hearOutput(attempt.output, text);
+            attempt.output = heard.turns;
+            const newTurn = heard.newTurn;
             current.pushCaptionLine({ direction: "output", text });
             ensureSpeech().noteOutputTranscript(text);
             if (!attempt.started || !newTurn) return;

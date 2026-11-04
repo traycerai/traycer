@@ -60,30 +60,118 @@ function spokenWords(text: string): string {
 }
 
 /**
- * Whether an output transcript delta begins a new output turn of the voice,
- * decided by text alone (the vendor marks no turn). `turn` is the transcript
- * of the current turn so far; `given` is the last line the app gave the
- * voice to say, `null` before any. A turn is over once what it said is
- * complete: nothing yet, a line ending in terminal punctuation (every line
- * of the voice's own does), or the whole of the given line. A given line the
- * person spoke over is cut short: a delta that does not go on with its text
- * begins the next turn.
+ * What the voice is saying, told by text alone (the vendor marks no turn).
+ * The voice says two kinds of thing: a line of its own (an acknowledgement,
+ * always one line ending in terminal punctuation), and the texts the app gave
+ * it, which it reads verbatim. The app knows the texts it gave and has not
+ * heard said yet, in order.
  */
-export function beginsOutputTurn(
-  turn: string,
+export interface OutputTurns {
+  /** Texts given to the voice and not heard said yet, oldest first. */
+  readonly given: ReadonlyArray<string>;
+  /** The transcript of the voice's current turn. */
+  readonly turn: string;
+  /** Whether the current turn is the voice reading the given texts. */
+  readonly reading: boolean;
+  /** The letters of the reading turn past the given texts already heard. */
+  readonly heard: string;
+  /**
+   * The reading heard every text it was given: it is over, though more text
+   * is given after it.
+   */
+  readonly read: boolean;
+}
+
+export const NO_OUTPUT_TURNS: OutputTurns = {
+  given: [],
+  turn: "",
+  reading: false,
+  heard: "",
+  read: false,
+};
+
+/** A text given to the voice to say. */
+export function giveOutputText(turns: OutputTurns, text: string): OutputTurns {
+  return { ...turns, given: [...turns.given, text] };
+}
+
+/**
+ * Hears one output transcript delta: the turns after it, and whether it
+ * begins a new turn (the utterance boundary). A turn is over once it is
+ * complete: a line of the voice's own once it ends in terminal punctuation,
+ * a reading once every given text is heard whole, closing mark included
+ * (punctuation inside a reading closes nothing). A reading the person spoke
+ * over is cut short: a delta that does not go on with the given text begins
+ * the next turn, and the texts it did not reach are dropped.
+ */
+export function hearOutput(
+  turns: OutputTurns,
   delta: string,
-  given: string | null,
-): boolean {
-  const said = turn.trim();
-  if (said.length === 0 || /[.!?]$/.test(said)) return true;
-  if (given === null) return false;
-  const givenWords = spokenWords(given);
-  const saidWords = spokenWords(said);
-  if (saidWords === givenWords) return true;
-  return (
-    givenWords.startsWith(saidWords) &&
-    !givenWords.startsWith(spokenWords(turn + delta))
-  );
+): { readonly turns: OutputTurns; readonly newTurn: boolean } {
+  const complete =
+    turns.turn.trim().length === 0 ||
+    (turns.reading ? turns.read : endsLine(turns.turn));
+  if (complete) {
+    return { turns: beginTurn(turns.given, delta), newTurn: true };
+  }
+  if (!turns.reading) {
+    return { turns: { ...turns, turn: turns.turn + delta }, newTurn: false };
+  }
+  const heard = turns.heard + spokenLetters(delta);
+  if (spokenLetters(turns.given.join("")).startsWith(heard)) {
+    return {
+      turns: settleReading({ ...turns, turn: turns.turn + delta, heard }),
+      newTurn: false,
+    };
+  }
+  return { turns: beginTurn([], delta), newTurn: true };
+}
+
+function beginTurn(given: ReadonlyArray<string>, delta: string): OutputTurns {
+  const letters = spokenLetters(delta);
+  const reading =
+    letters.length > 0 && spokenLetters(given.join("")).startsWith(letters);
+  const turns = {
+    given,
+    turn: delta,
+    reading,
+    heard: reading ? letters : "",
+    read: false,
+  };
+  return reading ? settleReading(turns) : turns;
+}
+
+/**
+ * Takes the given texts heard whole off the front. The last letters of a
+ * text that ends a sentence are not enough while its closing mark has not
+ * come: it may yet arrive on its own.
+ */
+function settleReading(turns: OutputTurns): OutputTurns {
+  let given = turns.given;
+  let heard = turns.heard;
+  let first = given.at(0);
+  while (first !== undefined && heardWhole(first, heard, turns.turn)) {
+    heard = heard.slice(spokenLetters(first).length);
+    given = given.slice(1);
+    first = given.at(0);
+  }
+  return { ...turns, given, heard, read: given.length === 0 };
+}
+
+/** Whether `heard` holds all of `text`, its closing mark too when it has one. */
+function heardWhole(text: string, heard: string, turn: string): boolean {
+  const letters = spokenLetters(text);
+  if (!heard.startsWith(letters)) return false;
+  return heard.length > letters.length || !endsLine(text) || endsLine(turn);
+}
+
+function endsLine(text: string): boolean {
+  return /[.!?]$/.test(text.trim());
+}
+
+/** A text's letters and digits, lowercased: how a transcript is held to a given text. */
+function spokenLetters(text: string): string {
+  return text.toLowerCase().replace(/[^\p{L}\p{N}]/gu, "");
 }
 
 /**
