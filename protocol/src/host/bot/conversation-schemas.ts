@@ -419,13 +419,30 @@ export const botThreadSummarySchema = lazySchema(() =>
 );
 export type BotThreadSummary = z.infer<typeof botThreadSummarySchema>;
 
+/** `bot.thread.list@1.0` and `@1.1`'s request, frozen by hand: the whole list, unpaged. */
+export const botThreadListRequestSchemaV10 = lazySchema(() =>
+  z.object({ botId: botIdSchema }),
+);
+
 /**
  * Answered by any host: the bound one from its own store, any other from
  * the summaries the bound host keeps in the bot's environment room (T65).
- * Most recent activity first.
+ * Most recent activity first, ties by thread id.
  */
 export const botThreadListRequestSchema = lazySchema(() =>
-  z.object({ botId: botIdSchema }),
+  botThreadListRequestSchemaV10.extend({
+    /**
+     * `bot.thread.list@1.2`: the most threads to return; `null` for every
+     * one after `cursor`, as a 1.1 request lists them.
+     */
+    limit: z.number().int().min(1).nullable(),
+    /**
+     * `bot.thread.list@1.2`: a `nextCursor` a listing of this bot returned,
+     * to list the threads after the page it ended; `null` from the most
+     * recent. Opaque; a cursor another bot's listing returned is refused.
+     */
+    cursor: z.string().min(1).max(1024).nullable(),
+  }),
 );
 export type BotThreadListRequest = z.infer<typeof botThreadListRequestSchema>;
 
@@ -491,10 +508,17 @@ export const botThreadListResponseSchemaV11 = lazySchema(() =>
   }),
 );
 
-/** `bot.thread.list@1.2`: each anchor carries its post's excerpt. */
+/**
+ * `bot.thread.list@1.2`: each anchor carries its post's excerpt, and the
+ * list is paged.
+ */
 export const botThreadListResponseSchema = lazySchema(() =>
   botThreadListResponseSchemaV11.extend({
     threads: z.array(botThreadSummarySchema),
+    /** The `cursor` for the threads after this page; `null` on the last page. */
+    nextCursor: z.string().min(1).max(1024).nullable(),
+    /** How many threads the bot has, this page's included. */
+    total: z.number().int().nonnegative(),
   }),
 );
 export type BotThreadListResponse = z.infer<typeof botThreadListResponseSchema>;

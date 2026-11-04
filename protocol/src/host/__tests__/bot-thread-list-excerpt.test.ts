@@ -16,6 +16,8 @@ import {
   botThreadAnchorSchema,
 } from "@traycer/protocol/host/bot/conversation-schemas";
 
+const BOT_ID = "bot_01HZX5Y8K3M2N4P6Q7R8S9T0V1";
+
 const ANCHOR = {
   messageId: "conversation-request:req-1",
   requestId: "req-1",
@@ -82,12 +84,61 @@ describe("bot.thread.list@1.2 anchor excerpts", () => {
     expect(botThreadListV12.responseSchema.parse(upgraded)).toEqual(upgraded);
   });
 
+  it("upgrades a 1.1 request to an unpaged one, and a 1.1 host's answer to one page holding every thread", () => {
+    const upgrade = line.versions[2].upgradeFromPreviousVersion;
+    if (upgrade === null) throw new Error("expected a 1.1 to 1.2 upgrade path");
+
+    const request = upgrade.upgradeRequest(
+      botThreadListV11.requestSchema.parse({ botId: BOT_ID }),
+    );
+    const response = upgrade.upgradeResponse(
+      botThreadListV11.responseSchema.parse(LISTED_V11),
+    );
+
+    expect(request).toEqual({ botId: BOT_ID, limit: null, cursor: null });
+    expect(botThreadListV12.requestSchema.parse(request)).toEqual(request);
+    expect(response.nextCursor).toBeNull();
+    expect(response.total).toBe(LISTED_V11.threads.length);
+    expect(botThreadListV12.responseSchema.parse(response)).toEqual(response);
+  });
+
+  it("strips a limit and a cursor from a 1.0 or 1.1 request, read off the registry's lines", () => {
+    for (const minor of [0, 1] as const) {
+      const requestSchema = line.versions[minor].contract.requestSchema;
+
+      expect(
+        requestSchema.parse({ botId: BOT_ID, limit: 5, cursor: "t1.x" }),
+      ).toEqual({ botId: BOT_ID });
+    }
+  });
+
+  it("requires a 1.2 request to say both its limit and its cursor, and bounds them", () => {
+    const requestSchema = line.versions[2].contract.requestSchema;
+
+    expect(requestSchema.safeParse({ botId: BOT_ID }).success).toBe(false);
+    expect(
+      requestSchema.safeParse({ botId: BOT_ID, limit: 1, cursor: null })
+        .success,
+    ).toBe(true);
+    for (const limit of [0, -1, 1.5]) {
+      expect(
+        requestSchema.safeParse({ botId: BOT_ID, limit, cursor: null }).success,
+      ).toBe(false);
+    }
+    expect(
+      requestSchema.safeParse({ botId: BOT_ID, limit: null, cursor: "" })
+        .success,
+    ).toBe(false);
+  });
+
   it("freezes 1.0 and 1.1 at anchors without the excerpt, dropping one they never carried", () => {
     const excerpted = {
       ...LISTED_V11,
       threads: [
         { ...LISTED_V11.threads[0], anchor: { ...ANCHOR, excerpt: "Hold" } },
       ],
+      nextCursor: null,
+      total: 1,
     };
 
     for (const contract of [botThreadListV10, botThreadListV11]) {

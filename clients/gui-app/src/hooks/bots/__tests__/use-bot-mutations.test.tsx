@@ -31,6 +31,7 @@ import { hostRpcRegistry, type HostRpcRegistry } from "@/lib/host";
 import { createHostQueryInvalidator } from "@/lib/host/query-invalidator";
 import { FloorEnforcingMessenger } from "@/hooks/config/__tests__/floor-enforcing-messenger";
 import { useBotConversationSendMutation } from "@/hooks/bots/use-bot-mutations";
+import { botThreadListParams } from "@/hooks/bots/use-bot-thread-list-query";
 import { hostQueryKeys } from "@/lib/query-keys";
 
 vi.mock("@/hooks/host/use-reactive-host-readiness", () => ({
@@ -91,7 +92,7 @@ function mountSend(handlers: MockHandlerMap<HostRpcRegistry>): {
 } {
   const queryClient = new QueryClient();
   const sendingHost = hostOver(mockRemoteHostEntry, queryClient, handlers);
-  const params = { botId: BOT_ID };
+  const params = botThreadListParams(BOT_ID);
   for (const hostId of [SENDING_HOST_ID, OTHER_HOST_ID]) {
     queryClient.setQueryData(
       hostQueryKeys.method<HostRpcRegistry, "bot.thread.list">(
@@ -99,7 +100,7 @@ function mountSend(handlers: MockHandlerMap<HostRpcRegistry>): {
         "bot.thread.list",
         params,
       ),
-      { threads: [] },
+      { threads: [], nextCursor: null, total: 0 },
     );
   }
   queryClient.setQueryData(

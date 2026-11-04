@@ -95,9 +95,14 @@ function stage(input: {
   );
 }
 
-function threads(bot: string): Promise<CommandResult> {
-  return buildBotThreadsCommand({ bot })(makeCtx());
+function threads(
+  bot: string,
+  page: { readonly limit: number | null; readonly cursor: string | null },
+): Promise<CommandResult> {
+  return buildBotThreadsCommand({ bot, ...page })(makeCtx());
 }
+
+const UNPAGED = { limit: null, cursor: null } as const;
 
 async function rejection(run: Promise<CommandResult>): Promise<CliError> {
   const error: unknown = await run.then(
@@ -126,12 +131,16 @@ describe("bot threads", () => {
         threads: THREADS,
         trunkCostUsd: null,
         threadAnchors: null,
+        nextCursor: null,
+        total: THREADS.length,
       }),
     });
 
-    const result = await threads("tracy");
+    const result = await threads("tracy", UNPAGED);
 
-    expect(threadListCalls()).toEqual([{ botId: BOT_ID_A }]);
+    expect(threadListCalls()).toEqual([
+      { botId: BOT_ID_A, limit: null, cursor: null },
+    ]);
     expect(result.human).toBe(
       [
         "Tracy",
@@ -139,17 +148,55 @@ describe("bot threads", () => {
         "  thread-1  (post removed)  no replies  1 open request  cost unknown",
       ].join("\n"),
     );
-    expect(result.data).toEqual({ botId: BOT_ID_A, threads: THREADS });
+    expect(result.data).toEqual({
+      botId: BOT_ID_A,
+      threads: THREADS,
+      nextCursor: null,
+      total: THREADS.length,
+    });
     expect(result.exitCode).toBe(0);
+  });
+
+  it("passes --limit and --cursor on, and prints how many of the total a page holds and the cursor for the next", async () => {
+    stage({
+      bot: tracy,
+      threads: () => ({
+        threads: [THREADS[0]],
+        trunkCostUsd: null,
+        threadAnchors: null,
+        nextCursor: "t1.next-page",
+        total: 5,
+      }),
+    });
+
+    const result = await threads("tracy", { limit: 1, cursor: "t1.this-page" });
+
+    expect(threadListCalls()).toEqual([
+      { botId: BOT_ID_A, limit: 1, cursor: "t1.this-page" },
+    ]);
+    expect(result.human).toBe(
+      [
+        "Tracy (1 of 5)",
+        "  thread-2  post 2026-10-23T13:58:00Z  3 replies, last 2026-10-23T14:02:11Z  2 open requests  $0.42",
+        "More: --cursor t1.next-page",
+      ].join("\n"),
+    );
+    expect(result.data).toMatchObject({ nextCursor: "t1.next-page", total: 5 });
   });
 
   it("says when the bot has no threads", async () => {
     stage({
       bot: tracy,
-      threads: () => ({ threads: [], trunkCostUsd: null, threadAnchors: null }),
+      threads: () => ({
+        threads: [],
+        trunkCostUsd: null,
+        threadAnchors: null,
+        nextCursor: null,
+        total: 0,
+      }),
     });
 
-    const result = await threads(BOT_ID_A);
+    const result = await threads(BOT_ID_A, UNPAGED);
 
     expect(result.human).toBe("Tracy has no threads yet.");
     expect(result.exitCode).toBe(0);
@@ -162,10 +209,12 @@ describe("bot threads", () => {
         threads: [{ ...THREADS[0], openRequestCount: -1 }],
         trunkCostUsd: null,
         threadAnchors: null,
+        nextCursor: null,
+        total: 1,
       }),
     });
 
-    const error = await rejection(threads(BOT_ID_A));
+    const error = await rejection(threads(BOT_ID_A, UNPAGED));
 
     expect(error.code).toBe(CLI_ERROR_CODES.HOST_INCOMPATIBLE);
   });
@@ -177,13 +226,17 @@ describe("bot threads", () => {
         threads: THREADS,
         trunkCostUsd: null,
         threadAnchors: null,
+        nextCursor: null,
+        total: THREADS.length,
       }),
     });
 
-    const result = await threads(BOT_ID_A);
+    const result = await threads(BOT_ID_A, UNPAGED);
 
     expect(result.exitCode).toBe(0);
-    expect(threadListCalls()).toEqual([{ botId: BOT_ID_A }]);
+    expect(threadListCalls()).toEqual([
+      { botId: BOT_ID_A, limit: null, cursor: null },
+    ]);
   });
 
   it("refuses a bot no host runs", async () => {
@@ -193,10 +246,12 @@ describe("bot threads", () => {
         threads: THREADS,
         trunkCostUsd: null,
         threadAnchors: null,
+        nextCursor: null,
+        total: THREADS.length,
       }),
     });
 
-    const error = await rejection(threads(BOT_ID_A));
+    const error = await rejection(threads(BOT_ID_A, UNPAGED));
 
     expect(error.message).toBe(
       "traycer: no host runs Tracy; move it to a host first.",
@@ -221,7 +276,7 @@ describe("bot threads on a host without them", () => {
         }),
       );
 
-      const error = await rejection(threads(BOT_ID_A));
+      const error = await rejection(threads(BOT_ID_A, UNPAGED));
 
       expect(error.message).toBe(BOT_HOST_UPDATE_MESSAGE);
       expect(error.code).toBe(CLI_ERROR_CODES.HOST_UNSUPPORTED);

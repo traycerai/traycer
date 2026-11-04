@@ -224,6 +224,8 @@ function mount(): void {
           threads: mocks.hosted[botId].threads,
           trunkCostUsd: null,
           threadAnchors: null,
+          nextCursor: null,
+          total: mocks.hosted[botId].threads.length,
         }),
         "bot.threadFollow.read": ({ botId }) => ({
           follows: { ...mocks.hosted[botId].follows },

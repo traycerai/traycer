@@ -15,6 +15,7 @@ import { useHostQueries } from "@/hooks/host/use-host-queries";
 import { useHostMethodSupport } from "@/hooks/host/use-host-supports-method";
 import { useCloudChatViewerId } from "@/hooks/chats/use-cloud-chat-queries";
 import { useBotThreadFollowSupported } from "@/hooks/bots/use-bot-thread-follow";
+import { botThreadListParams } from "@/hooks/bots/use-bot-thread-list-query";
 import { useBotReadCursorSupported } from "@/hooks/bots/use-bot-read-cursor";
 import {
   channelMuted,
@@ -69,7 +70,7 @@ export function useBotFollowedThreads(
   const viewerUserId = useCloudChatViewerId();
   const viewerKnown = viewerUserId.length > 0;
   const byBot = useMemo(
-    () => bots.map((bot) => ({ botId: bot.botId })),
+    () => bots.map((bot) => botThreadListParams(bot.botId)),
     [bots],
   );
   const lists = useHostQueries<HostRpcRegistry, "bot.thread.list">({

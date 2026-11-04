@@ -17,22 +17,31 @@ import type { CommandFn } from "../runner/runner";
  * activity first (`bot.thread.list`): when the post each answers was sent,
  * its replies, its open requests and its cost. Any host lists a running
  * bot's threads: another host than the bot's own lists what that host wrote
- * to the bot's environment room.
+ * to the bot's environment room. `limit` pages the list (`null`: every
+ * thread), and `cursor` continues after the page a listing ended.
  */
 export function buildBotThreadsCommand(opts: {
   readonly bot: string;
+  readonly limit: number | null;
+  readonly cursor: string | null;
 }): CommandFn {
   return async () => {
     const bot = findBot(await listBots(), opts.bot);
     refuseUnlessSomeHostRuns(bot);
-    const { threads } = parseCanonicalHostResponse(
+    const { threads, nextCursor, total } = parseCanonicalHostResponse(
       "bot.thread.list",
       botThreadListResponseSchema,
-      await toBotCliError(callHostRpc("bot.thread.list", { botId: bot.botId })),
+      await toBotCliError(
+        callHostRpc("bot.thread.list", {
+          botId: bot.botId,
+          limit: opts.limit,
+          cursor: opts.cursor,
+        }),
+      ),
     );
     return {
-      data: { botId: bot.botId, threads },
-      human: renderThreads(bot.title, threads),
+      data: { botId: bot.botId, threads, nextCursor, total },
+      human: renderThreads(bot.title, threads, nextCursor, total),
       exitCode: 0,
     };
   };
@@ -41,13 +50,21 @@ export function buildBotThreadsCommand(opts: {
 function renderThreads(
   title: string,
   threads: readonly BotThreadSummary[],
+  nextCursor: string | null,
+  total: number,
 ): string {
-  if (threads.length === 0) return `${title} has no threads yet.`;
+  if (total === 0) return `${title} has no threads yet.`;
   const lines = threads.map(
     (thread) =>
       `  ${thread.threadId}  ${describeAnchor(thread)}  ${describeReplies(thread)}  ${describeOpenRequests(thread.openRequestCount)}  ${describeCost(thread.costUsd)}`,
   );
-  return [title, ...lines].join("\n");
+  return [
+    threads.length === total
+      ? title
+      : `${title} (${threads.length} of ${total})`,
+    ...lines,
+    ...(nextCursor === null ? [] : [`More: --cursor ${nextCursor}`]),
+  ].join("\n");
 }
 
 /** When the post was sent; a summary names the post, not its text. */
