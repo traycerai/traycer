@@ -129,6 +129,8 @@ function artifactMention(quote: ArtifactQuote): EntityMentionAttachment {
     chatId: null,
     terminalAgentId: null,
     terminalId: null,
+    botId: null,
+    botTrunkChatId: null,
     status: quote.artifactStatus,
   };
 }
