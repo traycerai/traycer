@@ -934,9 +934,7 @@ export type ToolCallMcpAppStamp = z.infer<typeof toolCallMcpAppStampSchema>;
  * state cannot fail the block, and a reader treats it as settled.
  */
 export const toolCallFeedbackDraftStateSchema = lazySchema(() =>
-  z
-    .enum(["pending", "sent", "skipped", "failed", "unknown"])
-    .catch("unknown"),
+  z.enum(["pending", "sent", "skipped", "failed", "unknown"]).catch("unknown"),
 );
 export type ToolCallFeedbackDraftState = z.infer<
   typeof toolCallFeedbackDraftStateSchema
@@ -1097,6 +1095,36 @@ export const toolCallBlockSchemaPreArtifact = lazySchema(() =>
   }),
 );
 export type ToolCallBlock = z.infer<typeof toolCallBlockSchema>;
+
+// Wire-freeze copy of `toolCallBlockSchema` as `chat.subscribe@1.37` through
+// `@1.41` ship it: the live block without the `feedbackDraft` stamp `1.42`
+// added. Hand-frozen, NOT `.omit()`-derived; keys keep the live order.
+export const toolCallBlockSchemaPreFeedbackDraft = lazySchema(() =>
+  z.object({
+    ...baseBlockFields,
+    status: actionBlockStatus,
+    type: z.literal("tool_call"),
+    toolName: z.string(),
+    inputSummary: z.string().nullable().default(null),
+    inputDetail: toolInputDetailSchema.nullable().default(null),
+    taskTodoItems: z.array(parsedTaskTodoSchema).nullable().default(null),
+    error: z.string().nullable(),
+    agentMessageSend: agentMessageSendSchema.nullable().default(null),
+    agentMessageReceipt: agentMessageReceiptSchema.nullable().default(null),
+    agentMessageDelivery: agentMessageDeliverySchema.nullable().default(null),
+    botSendReceipt: botSendReceiptSchema.nullable().default(null),
+    managedCommand: toolCallManagedCommandSchema.nullable().default(null),
+    progress: z.string().nullable().default(null),
+    backgroundOutput: backgroundTaskOutputSchema.nullable().default(null),
+    startedAt: z.number().nullable().default(null),
+    endedAt: z.number().nullable().default(null),
+    backgroundTask: z.boolean().nullable().default(false),
+    stopped: z.boolean().default(false),
+    imageResults: z.array(imageGenerationResultSchema).default([]),
+    artifact: toolCallArtifactStampSchema.nullable().default(null),
+    mcpApp: toolCallMcpAppStampSchema.nullable().default(null),
+  }),
+);
 
 // Wire-freeze copy of `toolCallBlockSchema` as the stream lines bound to
 // `openContentBlockSchemaPreNotApplied` (from `chat.subscribe@1.31`) ship it:

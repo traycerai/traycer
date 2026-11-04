@@ -171,6 +171,9 @@ const CONVERSATION_MINOR = 25;
 // host stamps it; a client never sends a body).
 const DELIVERY_MINOR = 29;
 const DELIVERY_NEEDLES = ['"agentMessageDelivery":'];
+// `1.42`: the tool-call `feedbackDraft` stamp, server frames only.
+const FEEDBACK_DRAFT_MINOR = 42;
+const FEEDBACK_DRAFT_NEEDLES = ['"feedbackDraft":'];
 const CONVERSATION_NEEDLES = [
   '"conversationRequest":',
   '"resolvedByMessageId":',
@@ -474,6 +477,15 @@ describe("chat.subscribe line surfaces", () => {
         expect(
           DELIVERY_NEEDLES.filter((needle) => text.includes(needle)),
         ).toEqual(carriesDelivery ? DELIVERY_NEEDLES : []);
+      });
+
+      const carriesFeedbackDraft = minor >= FEEDBACK_DRAFT_MINOR;
+
+      it(`server frames ${carriesFeedbackDraft ? "carry" : "hold back"} the tool-call feedback draft`, () => {
+        const text = schemaText(contract.serverFrameSchema);
+        expect(
+          FEEDBACK_DRAFT_NEEDLES.filter((needle) => text.includes(needle)),
+        ).toEqual(carriesFeedbackDraft ? FEEDBACK_DRAFT_NEEDLES : []);
       });
 
       it("client frames hold back the delivery state on every line", () => {
