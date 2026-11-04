@@ -1608,6 +1608,102 @@ describe("<BotChannelView tiles={null} /> focused notification presence", () => 
     expect(channelBox().value).toBe("Draft for A");
   });
 
+  it("says nothing in another conversation's box of a send that fails after the channel switched", async () => {
+    mocks.state.realComposer = true;
+    // The host holds the send until the case refuses it.
+    const held = Promise.withResolvers<BotConversationSendResponse>();
+    mocks.sendAsync.mockImplementationOnce(() => held.promise);
+    const user = userEvent.setup();
+    const { rerender } = mount({ openThreadPostId: null });
+    const channelBox = (): HTMLTextAreaElement => {
+      const box = within(screen.getByTestId("bot-channel-composer")).getByRole(
+        "textbox",
+      );
+      if (!(box instanceof HTMLTextAreaElement)) throw new Error("no box");
+      return box;
+    };
+
+    await user.type(channelBox(), "From A");
+    await user.click(
+      within(screen.getByTestId("bot-channel-composer")).getByRole("button", {
+        name: "Send",
+      }),
+    );
+    expect(mocks.sendAsync).toHaveBeenCalledTimes(1);
+    expect(mocks.sendAsync.mock.calls[0]?.[0].conversationId).toBe(
+      "conversation-channel",
+    );
+
+    mocks.state.appConversationChatId = "conversation-later";
+    rerender();
+    await user.type(channelBox(), "Draft for B");
+
+    // The box's own handler was chained first, so it has run once this
+    // settles.
+    await act(async () => {
+      held.reject(new Error("the host is offline"));
+      await held.promise.catch(() => undefined);
+    });
+
+    expect(screen.queryByTestId("bot-channel-composer-send-failed")).toBeNull();
+    expect(channelBox().value).toBe("Draft for B");
+
+    mocks.state.appConversationChatId = "conversation-channel";
+    rerender();
+    expect(channelBox().value).toBe("From A");
+  });
+
+  it("says nothing in another conversation's box of a send that fails after the channel switched, and offers it back in its own", async () => {
+    mocks.state.realComposer = true;
+    // The host holds the send until the case refuses it.
+    const held = Promise.withResolvers<BotConversationSendResponse>();
+    mocks.sendAsync.mockImplementationOnce(() => held.promise);
+    const user = userEvent.setup();
+    const { rerender } = mount({ openThreadPostId: null });
+    const channelBox = (): HTMLTextAreaElement => {
+      const box = within(screen.getByTestId("bot-channel-composer")).getByRole(
+        "textbox",
+      );
+      if (!(box instanceof HTMLTextAreaElement)) throw new Error("no box");
+      return box;
+    };
+
+    await user.type(channelBox(), "From A");
+    await user.click(
+      within(screen.getByTestId("bot-channel-composer")).getByRole("button", {
+        name: "Send",
+      }),
+    );
+    expect(mocks.sendAsync).toHaveBeenCalledTimes(1);
+    await user.type(channelBox(), "Newer A");
+
+    mocks.state.appConversationChatId = "conversation-later";
+    rerender();
+    await user.type(channelBox(), "Draft for B");
+
+    // The box's own handler was chained first, so it has run once this
+    // settles.
+    await act(async () => {
+      held.reject(new Error("the host is offline"));
+      await held.promise.catch(() => undefined);
+    });
+
+    expect(screen.queryByTestId("bot-channel-composer-send-failed")).toBeNull();
+    expect(channelBox().value).toBe("Draft for B");
+
+    mocks.state.appConversationChatId = "conversation-channel";
+    rerender();
+    expect(channelBox().value).toBe("Newer A");
+    expect(
+      screen.getByTestId("bot-channel-composer-send-failed").textContent,
+    ).toContain("From A");
+
+    await user.click(
+      screen.getByTestId("bot-channel-composer-send-failed-restore"),
+    );
+    expect(channelBox().value).toBe("From A");
+  });
+
   it("leaves presence to the focused partner while its pane is the unfocused side of a split", () => {
     render(
       <PaneSurfaceActivityContext.Provider

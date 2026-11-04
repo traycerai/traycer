@@ -279,22 +279,25 @@ export function BotMessageComposer(props: {
         () => {
           // Back where the draft is, while nothing newer is there: the box,
           // or the draft kept outside a box that is gone. Else offered back,
-          // beside the draft kept outside the box where there is one.
+          // beside the draft kept outside the box where there is one. A box
+          // that is gone leaves its owner's failure alone where its draft is
+          // kept outside it: the owner may show another conversation's box
+          // now, and the kept draft says it for this one.
           if (mountedRef.current && emptyRef.current) {
             putBack(unsent);
             failure.fail(null);
           } else if (keptDraft === null) {
             failure.fail(unsent);
+          } else if (mountedRef.current) {
+            keptDraft.offer(unsent);
+            failure.fail(null);
           } else if (
-            !mountedRef.current &&
             unsent.supersedes === null &&
             keptDraft.revision() === null
           ) {
             keptDraft.keep(unsent.text);
-            failure.fail(null);
           } else {
             keptDraft.offer(unsent);
-            failure.fail(null);
           }
         },
       );
