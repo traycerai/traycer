@@ -466,7 +466,7 @@ export type BotTurnKey = z.infer<typeof botTurnKeySchema>;
 
 /**
  * What a reader asks the bound host of a bot's turns: the turns behind the
- * replies it shows (`messageIds`), the turns that took the posts it shows as
+ * bot's rows it shows (`messageIds`), the turns that took the posts it shows as
  * not answered (`requestIds`), and turns it already knows (`turns`: a
  * check-in's). Any host answers: the bound one from its own record, any
  * other from what the bound host keeps in the bot's environment room.

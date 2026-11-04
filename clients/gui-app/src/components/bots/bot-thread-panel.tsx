@@ -16,7 +16,7 @@ import { BotChatTranscript } from "@/components/bots/bot-chat-transcript";
 import { useBotFailedRecovery } from "@/components/bots/bot-failed-recovery";
 import { BotRoutingCard } from "@/components/bots/bot-routing-card";
 import { useBotTurnLocateQuery } from "@/hooks/bots/use-bot-turn-locate-query";
-import { botTurnIndexOf } from "@/lib/bots/bot-turn-receipt";
+import { botTurnIndexOf, turnOfMessages } from "@/lib/bots/bot-turn-receipt";
 import {
   BotMessageComposer,
   type BotComposerEdit,
@@ -326,20 +326,23 @@ function ThreadOrigin(props: ThreadPanelBodyProps): ReactNode {
     (requestId: string) => failedOnRequest(activity, requestId),
     [activity],
   );
-  // The post's turn, while the bot failed to answer it: its receipt, and the
-  // agent chat's reason and actions where the thread's session names it as
-  // its last failed attempt.
+  // The turn behind the post: the bot's post draws the receipt of the turn
+  // that wrote it, as in the channel; a member's post, while the bot failed
+  // to answer it, the receipt of the turn that took it, and the agent chat's
+  // reason and actions where the thread's session names that turn as its
+  // last failed attempt.
   const listed = props.thread.kind === "listed" ? props.thread.thread : null;
   const originRequestId = listed?.anchor?.requestId ?? sent?.requestId ?? null;
   const failedOrigin =
     originRequestId !== null && failedOnPost(originRequestId) !== null
       ? [originRequestId]
       : NO_IDS;
+  const botOrigin = listed?.anchor?.senderUserId === null;
   const located = useBotTurnLocateQuery({
     client,
     hostId,
     botId,
-    messageIds: NO_IDS,
+    messageIds: botOrigin ? [originMessageId] : NO_IDS,
     requestIds: failedOrigin,
     turns: NO_TURN_KEYS,
   });
@@ -370,6 +373,21 @@ function ThreadOrigin(props: ThreadPanelBodyProps): ReactNode {
     },
     [onOpenTurn, turnOfRequest],
   );
+  const replyReceipt = useCallback(
+    (messageIds: ReadonlyArray<string>): ChatBotTurnReceipt | null => {
+      const ref = turnOfMessages(turnIndex, messageIds);
+      if (ref === null) return null;
+      // The session lands on the card of the send that wrote the post.
+      const sendPostId = messageIds[0] ?? null;
+      return {
+        summary: ref.summary,
+        startedAt: ref.startedAt,
+        endedAt: ref.endedAt,
+        open: () => onOpenTurn(ref, sendPostId),
+      };
+    },
+    [onOpenTurn, turnIndex],
+  );
   const failedRequest = useBotFailedRequest({
     client,
     hostId,
@@ -393,8 +411,8 @@ function ThreadOrigin(props: ThreadPanelBodyProps): ReactNode {
     [anchorSenderLabel, botId, viewerUserId],
   );
   const turns = useMemo(
-    () => ({ failedRecovery, requestReceipt }),
-    [failedRecovery, requestReceipt],
+    () => ({ failedRecovery, replyReceipt, requestReceipt }),
+    [failedRecovery, replyReceipt, requestReceipt],
   );
   const loadedPresentation = useMemo(
     () => originPresentation(botTitle, questions, failedRequest, turns),
@@ -411,7 +429,11 @@ function ThreadOrigin(props: ThreadPanelBodyProps): ReactNode {
             ? null
             : { ...failed, retry: null, edit: null };
         },
-        { failedRecovery: null, requestReceipt: turns.requestReceipt },
+        {
+          failedRecovery: null,
+          replyReceipt: turns.replyReceipt,
+          requestReceipt: turns.requestReceipt,
+        },
       ),
     [botTitle, failedRequest, questions, turns],
   );
@@ -567,7 +589,10 @@ function originPresentation(
   botTitle: string,
   questions: ChatBotQuestions,
   failedRequest: ChatBotPresentation["failedRequest"],
-  turns: Pick<ChatBotPresentation, "failedRecovery" | "requestReceipt">,
+  turns: Pick<
+    ChatBotPresentation,
+    "failedRecovery" | "replyReceipt" | "requestReceipt"
+  >,
 ): ChatBotPresentation {
   return {
     botTitle,
@@ -579,7 +604,7 @@ function originPresentation(
     questions,
     failedRequest,
     failedRecovery: turns.failedRecovery,
-    replyReceipt: null,
+    replyReceipt: turns.replyReceipt,
     requestReceipt: turns.requestReceipt,
   };
 }
