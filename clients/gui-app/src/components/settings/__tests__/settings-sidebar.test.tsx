@@ -743,6 +743,7 @@ const EXPECTED_SECTION_GROUPS: ReadonlyArray<
   ["browser-agent-access", "personal"],
   ["secrets", "personal"],
   ["sandboxes", "personal"],
+  ["storage", "personal"],
   ["members", "personal"],
   ["agent-definitions", "personal"],
   ["machine-setup", "personal"],
@@ -1016,6 +1017,7 @@ describe("<SettingsSidebar /> Environment pick", () => {
     "Variables & shells",
     "Secrets",
     "Sandboxes",
+    "Storage",
   ];
 
   it("lists Personal's Environment rows exactly, with no retired page and no Members", async () => {
@@ -1028,7 +1030,7 @@ describe("<SettingsSidebar /> Environment pick", () => {
     expect(present("credits")).toBe(true);
   });
 
-  it("hides MCP servers, Skills, Sandboxes and Members while a Local row is picked", async () => {
+  it("hides MCP servers, Skills, Sandboxes, Storage and Members while a Local row is picked", async () => {
     useSettingsEnvironmentPickStore.setState({
       pick: { kind: "local", hostId: "host-old", hostName: "Old laptop" },
     });

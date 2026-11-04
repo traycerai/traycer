@@ -1,0 +1,109 @@
+import { z } from "zod";
+import type { UseQueryResult } from "@tanstack/react-query";
+import type { HostRpcError } from "@traycer-clients/shared/host-transport/host-messenger";
+import { useCloudChatViewerId } from "@/hooks/chats/use-cloud-chat-queries";
+import type { ConfigurationItem } from "@/hooks/environment/team/use-configuration-items-query";
+import { useHostQueryWithResponseMap } from "@/hooks/host/use-host-query";
+import { usePoolTierHostClient } from "@/hooks/host/use-pool-tier";
+import {
+  useSandboxDefaultsEnvironments,
+  type SandboxDefaultsEnvironment,
+} from "@/hooks/sandboxes/use-sandbox-defaults";
+import { useHostClient, type HostRpcRegistry } from "@/lib/host";
+import type { EnvironmentPick } from "@/lib/settings-environment-pages";
+import { cloudVerdictPreflight } from "@/lib/host/cloud-verdict-preflight";
+import {
+  authorizesCloudCapability,
+  useAuthStore,
+} from "@/stores/auth/auth-store";
+
+const METHOD = "environment.configuration.items";
+
+/** The item the "Free up space on this computer" switch writes. */
+export const STORAGE_POLICY_KIND = "storage_policy";
+export const STORAGE_POLICY_KEY = "storage";
+
+/** The item's value as authn validates it (`items.ts`). */
+export const storagePolicyValueSchema = z.strictObject({
+  freeUpSpace: z.boolean(),
+});
+
+/** A configuration's storage policy as last read, with the revision a save quotes. */
+export interface ConfigurationStoragePolicy {
+  /**
+   * Whether the configuration's hosts free up space. On when no item is set;
+   * off for a value the hosts cannot read, since they then free up nothing.
+   */
+  readonly freeUpSpace: boolean;
+  /** `null` when there is no item yet: a save creates it. */
+  readonly revision: number | null;
+}
+
+function storagePolicyOf(
+  items: readonly ConfigurationItem[],
+): ConfigurationStoragePolicy {
+  const item = items.find(
+    (row) => row.kind === STORAGE_POLICY_KIND && row.key === STORAGE_POLICY_KEY,
+  );
+  if (item === undefined) return { freeUpSpace: true, revision: null };
+  const parsed = storagePolicyValueSchema.safeParse(item.value);
+  return {
+    freeUpSpace: parsed.success && parsed.data.freeUpSpace,
+    revision: item.revision,
+  };
+}
+
+/**
+ * The picked configuration's environment: Personal's, or the team's the pick
+ * names. `null` for a Local row, and while the account's list has not
+ * answered.
+ */
+function environmentOfPick(
+  environments: ReadonlyMap<string, SandboxDefaultsEnvironment>,
+  pick: EnvironmentPick,
+): SandboxDefaultsEnvironment | null {
+  if (pick.kind === "personal") return environments.get("personal") ?? null;
+  if (pick.kind === "local") return null;
+  for (const environment of environments.values()) {
+    if (environment.environmentId === pick.environmentId) return environment;
+  }
+  return null;
+}
+
+/**
+ * The picked configuration's storage policy: its environment (`null` when
+ * there is none, so there is nothing to set) and the read of its
+ * `storage_policy` item, with the sandbox defaults' road
+ * (`useConfigurationSandboxDefaults`): the environment from the account's
+ * list, its items on the viewer's session.
+ */
+export function useConfigurationStoragePolicy(pick: EnvironmentPick): {
+  readonly environment: SandboxDefaultsEnvironment | null;
+  readonly read: UseQueryResult<ConfigurationStoragePolicy, HostRpcError>;
+} {
+  const environment = environmentOfPick(
+    useSandboxDefaultsEnvironments(true),
+    pick,
+  );
+  const client = usePoolTierHostClient(useHostClient());
+  const viewerId = useCloudChatViewerId();
+  const authorized = useAuthStore((state) =>
+    authorizesCloudCapability(state.status),
+  );
+  const read = useHostQueryWithResponseMap<
+    HostRpcRegistry,
+    typeof METHOD,
+    ConfigurationStoragePolicy
+  >({
+    cacheKeyIdentity: [viewerId, STORAGE_POLICY_KIND],
+    client,
+    method: METHOD,
+    params: { environmentId: environment?.environmentId ?? "" },
+    preflight: cloudVerdictPreflight(METHOD),
+    mapResponse: ({ response }) => storagePolicyOf(response.items),
+    options: {
+      enabled: environment !== null && viewerId.length > 0 && authorized,
+    },
+  });
+  return { environment, read };
+}

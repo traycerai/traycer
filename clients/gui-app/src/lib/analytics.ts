@@ -136,6 +136,7 @@ export type AnalyticsSettingsSection =
   | "sandboxes"
   | "secrets"
   | "shell"
+  | "storage"
   | "usage"
   | "worktrees";
 
@@ -353,6 +354,7 @@ export type AnalyticsSetting =
   | "defaultSelection"
   | "defaultServiceTier"
   | "diffViewerPreferences"
+  | "freeUpSpace"
   | "linkOpen"
   | "browserSearchEngine"
   | "pinnedContextBreakdownFields"
@@ -1430,6 +1432,7 @@ const ANALYTICS_SETTINGS_SECTIONS = new Set<string>(
     members: true,
     secrets: true,
     shell: true,
+    storage: true,
     usage: true,
     credits: true,
     worktrees: true,
@@ -1468,6 +1471,7 @@ const ANALYTICS_SETTINGS = new Set<string>(
     defaultSelection: true,
     defaultServiceTier: true,
     diffViewerPreferences: true,
+    freeUpSpace: true,
     linkOpen: true,
     browserSearchEngine: true,
     pinnedContextBreakdownFields: true,

@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   epicListChatRecordsUpgradeV12ToV13,
+  epicListChatRecordsUpgradeV13ToV14,
   epicListChatRecordsV12,
   epicListChatRecordsV13,
 } from "@traycer/protocol/host/epic/contracts";
@@ -12,6 +13,7 @@ import {
   listChatRecordsRequestV13Schema,
   listChatRecordsResponseV12Schema,
   listChatRecordsResponseV13Schema,
+  listChatRecordsResponseV14Schema,
 } from "@traycer/protocol/host/epic/chat-records";
 import {
   epicListTuiAgentsUpgradeV12ToV13,
@@ -147,6 +149,57 @@ describe("epic.listChatRecords@1.3", () => {
       major: 1,
       minor: 3,
     });
+  });
+});
+
+describe("epic.listChatRecords@1.4", () => {
+  it("A6: a @1.4 snapshot parses under the @1.3 schema with `evicted` stripped", () => {
+    const snapshot = {
+      kind: "snapshot" as const,
+      listStamp: STAMP,
+      chats: [{ ...CHAT_ROW, evicted: true }],
+    };
+    expect(listChatRecordsResponseV14Schema.parse(snapshot)).toEqual(snapshot);
+
+    const parsed = listChatRecordsResponseV13Schema.parse(snapshot);
+
+    if (parsed.kind !== "snapshot") throw new Error("expected a snapshot");
+    expect(Object.hasOwn(parsed.chats[0], "evicted")).toBe(false);
+    expect(parsed.chats).toEqual([CHAT_ROW]);
+  });
+
+  it("A7: the response upgrade fills evicted: false on snapshot rows and passes unchanged through", () => {
+    const upgraded = epicListChatRecordsUpgradeV13ToV14.upgradeResponse({
+      kind: "snapshot",
+      listStamp: STAMP,
+      chats: [CHAT_ROW],
+    });
+    expect(upgraded).toEqual({
+      kind: "snapshot",
+      listStamp: STAMP,
+      chats: [{ ...CHAT_ROW, evicted: false }],
+    });
+    expect(listChatRecordsResponseV14Schema.parse(upgraded)).toEqual(upgraded);
+
+    const unchanged = {
+      kind: "unchanged" as const,
+      listStamp: STAMP,
+      touched: [],
+    };
+    expect(
+      epicListChatRecordsUpgradeV13ToV14.upgradeResponse(unchanged),
+    ).toEqual(unchanged);
+  });
+
+  it("A8: the request is @1.3's unchanged", () => {
+    const request = {
+      epicId: "epic-1",
+      hasDocReplica: true,
+      knownRevision: STAMP,
+    };
+    expect(epicListChatRecordsUpgradeV13ToV14.upgradeRequest(request)).toEqual(
+      request,
+    );
   });
 });
 

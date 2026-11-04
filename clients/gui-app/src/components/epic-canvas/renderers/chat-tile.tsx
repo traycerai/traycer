@@ -246,9 +246,15 @@ import {
 import { useCollaboratorDisplayName } from "@/hooks/epics/use-collaborator-display-name";
 import { useHostLease } from "@/hooks/host/use-host-lease";
 import {
+  useChatEvictionServing,
   useChatServing,
   useChatServingHostId,
 } from "@/lib/chats/chat-serving-witness";
+import {
+  useEvictedChatSend,
+  type EvictedChatSend,
+} from "@/hooks/chats/use-evicted-chat-send";
+import { useEvictedSendAckRefusals } from "@/hooks/chats/use-evicted-send-ack-refusals";
 import { useChatContinueHere } from "@/hooks/chats/use-chat-continue-here";
 import {
   useEpicCreateChatForHost,
@@ -440,6 +446,12 @@ interface ChatTileProps {
 
 interface ChatTileSessionViewProps {
   readonly restingSandbox?: RestingChatSandbox;
+  /**
+   * The road for a message to a chat its host may have dropped the records
+   * of. Held by the live tile above its session, so a parked message outlives
+   * the session's move from the pool to the host; absent on a published copy.
+   */
+  readonly evictedSend?: EvictedChatSend;
   readonly handle: ChatSessionStoreHandle;
   readonly node: ChatSurfaceNode;
   readonly viewTabId: string;
@@ -670,6 +682,14 @@ function ChatTileForChat(props: ChatTileProps) {
   // serves never reads as an offline tile.
   const servingKey = { hostId: tabHostId, epicId, chatId: node.id };
   const servingHostId = useChatServingHostId(servingKey);
+  const eviction = useChatEvictionServing(servingKey);
+  const evictedSend = useEvictedChatSend({
+    epicId,
+    chatId: node.id,
+    hostId: tabHostId,
+    served: eviction.served,
+    held: eviction.held,
+  });
   const reachability = useHostReachability(servingHostId);
   const hostLabel = useChatTileHostLabel(reachability, tabHostId);
   const ownerReachability = useHostReachability(tabHostId);
@@ -844,6 +864,7 @@ function ChatTileForChat(props: ChatTileProps) {
               isActive={isActive}
               currentEpicId={epicId}
               restingSandbox={wakeOf(sandbox)}
+              evictedSend={evictedSend}
               readOnlyNotice={sandboxAvailability.readOnlyNotice}
               isLiveSession
               preContent={preContentFrame}
@@ -3466,6 +3487,22 @@ function useChatTileSessionViewModel(
     chatId: node.id,
     target: props.restingSandbox ?? null,
   });
+  // The ordinary road for a message on this session: the parked message of an
+  // evicted chat takes it too, once the session is the host's.
+  const submitLiveMessage = useCallback(
+    (input: ChatComposerSubmitInput): boolean | Promise<boolean> => {
+      if (!canAct) return false;
+      // Armed behind the folder dialog, the composer gets the promise and
+      // clears its text only once "Send and switch" dispatches the send.
+      return submitThroughRebindGate({
+        submit: input,
+        dispatch: dispatchUserSend,
+        refusal: NO_LIVE_SEND_REFUSAL,
+      }).accepted;
+    },
+    [canAct, dispatchUserSend, submitThroughRebindGate],
+  );
+  const evictedSend = props.evictedSend ?? null;
   const submitMessage = useCallback(
     (input: ChatComposerSubmitInput): boolean | Promise<boolean> => {
       if (profile === null) return false;
@@ -3502,28 +3539,33 @@ function useChatTileSessionViewModel(
       }
       if (props.restingSandbox !== undefined)
         return submitBoundSandboxMessage(input);
-      if (!canAct) return false;
-      // Armed behind the folder dialog, the composer gets the promise and
-      // clears its text only once "Send and switch" dispatches the send.
-      return submitThroughRebindGate({
-        submit: input,
-        dispatch: dispatchUserSend,
-        refusal: NO_LIVE_SEND_REFUSAL,
-      }).accepted;
+      if (evictedSend?.parks === true) return evictedSend.park(input);
+      return submitLiveMessage(input);
     },
     [
       activeEditingQueueItemId,
       props.restingSandbox,
       submitBoundSandboxMessage,
+      evictedSend,
+      submitLiveMessage,
       canAct,
       chatActions,
       dispatchUi,
-      dispatchUserSend,
       node.instanceId,
       profile,
-      submitThroughRebindGate,
     ],
   );
+  // The parked message goes once the host holds the chat again and this
+  // session is the host's own: the pool's session never acts, so `canAct`
+  // waits for the host's snapshot.
+  useEffect(() => {
+    if (evictedSend === null || !evictedSend.ready) return;
+    if (evictedSend.served || !canAct) return;
+    const parked = evictedSend.take();
+    if (parked === null) return;
+    void Promise.resolve(submitLiveMessage(parked.input)).then(parked.settle);
+  }, [evictedSend, canAct, submitLiveMessage]);
+  useEvictedSendAckRefusals(handle, evictedSend?.refuse ?? null);
   // `/btw` / `/side`: fork this chat and ask there. The tile contributes what
   // only it knows about its own chat - owner, title, lineage, workspace, pane -
   // and `startSideChat` owns the create, its recovery, and the open. Deliberately
@@ -4023,6 +4065,7 @@ function useChatTileSessionViewModel(
     [state.snapshotLoaded],
   );
 
+  const evictedOwnerUserId = state.chat?.userId ?? null;
   const lowerAccess = useMemo(
     () => ({
       isCopy,
@@ -4030,6 +4073,14 @@ function useChatTileSessionViewModel(
       canAct,
       readOnlyNotice: props.readOnlyNotice,
       restingSandbox: props.restingSandbox,
+      evictedChat:
+        evictedSend === null
+          ? undefined
+          : {
+              parks: evictedSend.parks,
+              line: evictedSend.line,
+              ownerUserId: evictedOwnerUserId,
+            },
     }),
     [
       isCopy,
@@ -4037,6 +4088,8 @@ function useChatTileSessionViewModel(
       canAct,
       props.readOnlyNotice,
       props.restingSandbox,
+      evictedSend,
+      evictedOwnerUserId,
     ],
   );
 
