@@ -158,10 +158,13 @@ export function sandboxFrozenLine(frozenAt: number | null): string {
  * always carries it. The DATE is carried only when nothing else decides when
  * this row ends: `destroyAt` wins wherever it is set, because the row then
  * ends on that day rather than on the announced one. A frozen withdrawn row
- * is the case that makes the difference — it keeps its own day-30
- * `destroyAt`, which can fall well before the announced day, so naming the
- * announced day here would tell the person the row lasts longer than it
- * does.
+ * is the case that makes the difference: while its `frozenAt` is known it
+ * carries a day-30 `destroyAt`, which can fall well before the announced
+ * day, so naming the announced day here would tell the person the row lasts
+ * longer than it does. A frozen row whose `frozenAt` is absent is NOT that
+ * case — `sandbox-day-30.ts` skips such a record, so it has no day-30
+ * deadline to contradict, `destroyAt` is null, and the announced day is
+ * named like any unfrozen row's.
  *
  * The day, where it is named, is the announced one read in UTC: no clock
  * time, because nothing ends the row at an instant — the date is what was

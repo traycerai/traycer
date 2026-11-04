@@ -634,8 +634,9 @@ export function sandboxFrozenClock(frozenAt: number | null): string | null {
  * Whether a withdrawal, not the resting policy, is what decides how long this
  * row is kept.
  *
- * A withdrawn row is ended by its announced date, and the server sends an
- * unfrozen one no resting deadline (a frozen row keeps its day-30 deadline;
+ * A withdrawn row is ended by its own `destroyAt` where it has one and by its
+ * announced date otherwise, and the server sends an unfrozen one no resting
+ * deadline (a frozen row keeps the day-30 deadline that its `destroyAt` is;
  * see the exception below). So the resting policy is no longer a claim about
  * this row,
  * and a surface that states one says something the withdrawal contradicts —
@@ -675,7 +676,8 @@ export function sandboxRetentionIsWithdrawn(summary: SandboxSummary): boolean {
  * kept: `destroys itself after 30 idle minutes · files on it are lost then`
  * for a burst row, `Suspends after 30 idle min · destroyed after 7 resting
  * days` for an ordinary one, and the idle clause alone for a withdrawn row,
- * whose announced date decides that instead of its resting policy.
+ * where that is decided by its own `destroyAt` if it has one and by the
+ * announced date otherwise, never by its resting policy.
  *
  * The three readings are one decision about one row, so they are made here
  * rather than at each surface that draws them. What makes that worth

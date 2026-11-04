@@ -1035,8 +1035,8 @@ function SandboxListRow(props: {
  * When this sandbox stops running, on a row whose kind the control plane is
  * withdrawing. It sits under the clock line because it replaces what that
  * line would say: an unfrozen withdrawn row carries no resting deadline while
- * this date stands. A frozen one keeps its own day-30 deadline and states it
- * through the clock line, so both lines show — and this one drops its date
+ * this date stands. A frozen one that carries its own day-30 deadline states
+ * it through the clock line, so both lines show — and this one drops its date
  * then, rather than contradict the day the clock line names.
  */
 function SandboxRowWithdrawal(props: {

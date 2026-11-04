@@ -128,9 +128,11 @@ function starter(input: SandboxDetailsInput): string | null {
  * Idle, then Resting; an agent's sandbox never rests, it destroys itself,
  * and Automations never rests either: it is released, its files kept.
  *
- * A withdrawn row gets no Resting row: its announced date decides how long it
- * is kept, so a resting promise here would contradict it, and this surface
- * carries no withdrawal notice of its own to read it against.
+ * A withdrawn row gets no Resting row: how long it is kept is decided by its
+ * own `destroyAt` where one is set and by the announced date otherwise, never
+ * by its resting policy, so a resting promise here would contradict it either
+ * way — and this surface carries no withdrawal notice of its own to read it
+ * against.
  */
 function idleRows(summary: SandboxSummary): SandboxDetailsRow[] {
   const idle = summary.idleMinutes ?? SANDBOX_DEFAULT_IDLE_MINUTES;
