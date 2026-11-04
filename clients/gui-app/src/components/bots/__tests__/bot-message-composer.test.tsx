@@ -375,11 +375,13 @@ describe("<BotMessageComposer /> @ mentions", () => {
     mountIn(TEAM);
 
     await user.type(box(), "@");
-    expect(optionNames()).toEqual(["u-ann", "u-anders", "u-bob"]);
+    expect(menuLabels()).toEqual(["People"]);
+    await user.click(menuRow("People"));
+    expect(menuLabels()).toEqual(["Back", "Ann Lee", "Anders", "Bob"]);
+    await user.click(menuRow("Back"));
 
     await user.type(box(), "Tra");
-    expect(screen.queryByTestId("bot-mention-list")).toBeNull();
-    expect(screen.queryByRole("option")).toBeNull();
+    expect(mentionMenu()).toBeNull();
     expect(screen.queryByText("Tracy")).toBeNull();
   });
 

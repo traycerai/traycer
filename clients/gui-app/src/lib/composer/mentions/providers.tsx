@@ -84,11 +84,10 @@ export type MentionProviderId =
   | "browser-tab"
   | "terminals"
   | "artifacts"
-  // A bot channel's box (`bot-mention-completion.tsx`) lists the people and
-  // bots of the bot's environment in these two steps, and its tasks in an
-  // `epic` step; the registry has no provider for either.
-  | "members"
-  | "bots";
+  // A bot channel's box (`bot-mention-completion.tsx`) lists the people of
+  // the bot's environment in this step, which the registry has no provider
+  // for; its bots and tasks in `bots` and `epic` steps.
+  | "members";
 
 export interface MentionMenuCopy {
   readonly header: string;

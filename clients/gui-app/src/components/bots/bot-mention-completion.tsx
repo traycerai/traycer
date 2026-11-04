@@ -89,7 +89,7 @@ export interface BotMentionCompletion {
 /** One category of the menu's first level, in its order. */
 interface BotMentionCategory {
   readonly kind: BotMentionKind;
-  /** Its step's id: a task step is the agent composer's task step. */
+  /** Its step's id: the bots and tasks steps take the agent composer's ids. */
   readonly providerId: MentionProviderId;
   readonly label: string;
   readonly description: string;
@@ -115,7 +115,7 @@ const CATEGORIES: ReadonlyArray<BotMentionCategory> = [
     kind: "task",
     providerId: "epic",
     label: "Tasks",
-    description: "Environment tasks",
+    description: "Accessible tasks",
     icon: epicIcon,
   },
 ];

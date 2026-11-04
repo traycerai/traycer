@@ -49,9 +49,8 @@ const PROVIDER_SCORE_BOOSTS: Readonly<Record<MentionProviderId, number>> = {
   "browser-tab": 0.9,
   terminals: 0.9,
   artifacts: 0.9,
-  // A bot channel's names: a member's name and a bot's title are deliberate.
+  // A bot channel's people: a member's name is deliberate.
   members: 0.9,
-  bots: 0.9,
 };
 
 /**
