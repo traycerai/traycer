@@ -102,13 +102,14 @@ import { TextSegment } from "./segments/text-segment";
  * agent chat's reason and actions where the bot's session names the post's
  * turn as its last failed attempt, and the receipt of that turn under them.
  *
- * Under a reply of the bot, the receipt of the turn that wrote it (Tracy
- * Bots T86): what the turn did and how long it took, shown while the row is
- * hovered or the receipt has keyboard focus, and always while the turn
- * runs. It opens the turn's session, landed on the turn. A touch screen
- * has no hover, and its rows show no actions until pressed: a long press on
- * a row offers its "Reply in thread", on a reply its receipt, and on a
- * message the bot failed to answer its Retry and Edit, in a sheet instead.
+ * Under every row of the bot a turn wrote, a reply, a question or an
+ * announcement, the receipt of that turn (Tracy Bots T86, decision 173):
+ * what the turn did and how long it took, or while it runs how long it has
+ * been running, always shown. It opens the turn's session, landed on the
+ * turn. A row no turn wrote draws none. A touch screen has no hover, and its
+ * rows show no actions until pressed: a long press on a row offers its
+ * "Reply in thread", the receipt where the row has one, and on a message the
+ * bot failed to answer its Retry and Edit, in a sheet instead.
  *
  * Without `hoverActions` the row is drawn as the post a thread opens on, at
  * the top of the thread panel: the same row, with nothing on hover.
@@ -195,7 +196,7 @@ function MemberRow(props: {
         <UnansweredLine failed={failed} recovery={recovery} />
       )}
       {failedReceipt === null ? null : (
-        <TurnReceiptLine receipt={failedReceipt} alwaysShown />
+        <TurnReceiptLine receipt={failedReceipt} />
       )}
       {replyInThread === null || !threadStarted(threadLine) ? null : (
         <ThreadLine
@@ -393,12 +394,7 @@ function BotRow(props: {
           onChoose={presentation.chooseOption}
         />
       )}
-      {receipt === null ? null : (
-        <TurnReceiptLine
-          receipt={receipt}
-          alwaysShown={receipt.endedAt === null}
-        />
-      )}
+      {receipt === null ? null : <TurnReceiptLine receipt={receipt} />}
       {replyInThread === null || !threadStarted(threadLine) ? null : (
         <ThreadLine
           line={threadLine}
@@ -453,21 +449,16 @@ function useRowSheet(enabled: boolean): {
   };
 }
 
-/** The receipt under a reply of the bot; an announcement has none. */
+/** The receipt under a row of the bot, by the turn that wrote it; `null` where none did. */
 function replyReceiptFor(
   message: ChatMessageModel,
   presentation: ChatBotPresentation,
 ): ChatBotTurnReceipt | null {
-  if (
-    message.announcement !== undefined ||
-    presentation.replyReceipt === null
-  ) {
-    return null;
-  }
+  if (presentation.replyReceipt === null) return null;
   return presentation.replyReceipt(replyMessageIdsOf(message));
 }
 
-/** The message ids a reply's row carries: its own, and every record of its turn. */
+/** The message ids a bot's row carries: its own, and every record of its turn. */
 function replyMessageIdsOf(message: ChatMessageModel): ReadonlyArray<string> {
   const ids = message.turnMessageIds ?? [];
   const own = message.persistentMessageId;
@@ -903,17 +894,16 @@ function UnansweredLine(props: {
 }
 
 /**
- * The receipt under a reply, or under a post the bot did not answer: the
- * turn's activity and how long it took, or while it runs how long it has
- * been running, in the muted style of Slack's "3 replies"; it opens the
- * turn. Revealed while the row is hovered or the receipt has keyboard focus,
- * and hidden on a touch screen, unless `alwaysShown`.
+ * The receipt under a row of the bot, or under a post the bot did not
+ * answer: the turn's activity and how long it took, or while it runs how
+ * long it has been running, in the muted style of the row's time, as a
+ * Slack app's footer sits under its attachment; it opens the turn. Always
+ * shown, at rest and on a touch screen alike.
  */
 function TurnReceiptLine(props: {
   readonly receipt: ChatBotTurnReceipt;
-  readonly alwaysShown: boolean;
 }): ReactElement {
-  const { receipt, alwaysShown } = props;
+  const { receipt } = props;
   const label = turnReceiptLabel(receipt);
   return (
     <button
@@ -921,11 +911,7 @@ function TurnReceiptLine(props: {
       data-testid="bot-turn-receipt"
       data-running={receipt.endedAt === null ? "true" : "false"}
       onClick={receipt.open}
-      className={cn(
-        "-ml-1 flex w-fit max-w-full items-center gap-1 rounded-md px-1 py-0.5 text-left text-ui-xs text-muted-foreground transition-colors hover:text-foreground focus-visible:outline-2 focus-visible:outline-ring",
-        !alwaysShown &&
-          "opacity-0 group-hover/message:opacity-100 focus-visible:opacity-100 pointer-coarse:hidden",
-      )}
+      className="-ml-1 flex w-fit max-w-full items-center gap-1 rounded-md px-1 py-0.5 text-left text-ui-xs text-muted-foreground transition-colors hover:text-foreground focus-visible:outline-2 focus-visible:outline-ring"
     >
       <span className="min-w-0 truncate">
         {label ?? <RunningFor startedAt={receipt.startedAt} />}

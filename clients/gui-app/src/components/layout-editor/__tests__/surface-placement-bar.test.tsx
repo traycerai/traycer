@@ -376,14 +376,14 @@ describe("the tab strip bar's View pair", () => {
     selectSurfaceWithNode("topBar");
     render(<SurfacePlacementBar />);
 
-    fireEvent.click(screen.getByRole("radio", { name: "Tabs and agents" }));
+    fireEvent.click(screen.getByRole("radio", { name: "Tabs only" }));
 
-    expect(useLayoutStore.getState().arrangement.sideStripView).toBe(
-      "activity",
-    );
+    expect(useLayoutStore.getState().arrangement.sideStripView).toBe("layered");
     expect(historyDepth()).toBe(1);
 
     useLayoutEditorStore.getState().undo();
-    expect(useLayoutStore.getState().arrangement.sideStripView).toBe("layered");
+    expect(useLayoutStore.getState().arrangement.sideStripView).toBe(
+      "activity",
+    );
   });
 });
