@@ -36,7 +36,10 @@ export const credentialIdentitySchema = lazySchema(() =>
 export type CredentialIdentity = z.infer<typeof credentialIdentitySchema>;
 
 export const credentialVersionSchema = lazySchema(() =>
-  z.union([z.number().int().min(1).max(Number.MAX_SAFE_INTEGER), z.literal("unknown")]),
+  z.union([
+    z.number().int().min(1).max(Number.MAX_SAFE_INTEGER),
+    z.literal("unknown"),
+  ]),
 );
 export type CredentialVersion = z.infer<typeof credentialVersionSchema>;
 
@@ -46,9 +49,16 @@ export const credentialHomeSchema = lazySchema(() =>
     bindingVersion: credentialVersionSchema,
     materialRevision: credentialVersionSchema,
     custodyVersion: credentialVersionSchema,
-    custodyClass: z.enum(["self-sufficient", "brokered", "transitional", "unknown"]),
+    custodyClass: z.enum([
+      "self-sufficient",
+      "brokered",
+      "transitional",
+      "unknown",
+    ]),
     materialFingerprint: z.string().nullable(),
-    observation: z.object({ identity: credentialIdentitySchema, capturedAt: z.number() }).nullable(),
+    observation: z
+      .object({ identity: credentialIdentitySchema, capturedAt: z.number() })
+      .nullable(),
     materialMatchesBinding: z.enum(["yes", "no", "unknown"]),
   }),
 );
