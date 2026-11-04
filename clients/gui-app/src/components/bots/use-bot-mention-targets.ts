@@ -17,6 +17,8 @@ export interface BotMentionTargets {
   /** `null` while the bots directory has not answered. */
   readonly bots: ReadonlyArray<BotMentionTarget> | null;
   readonly tasks: ReadonlyArray<BotMentionTarget>;
+  /** Home's first page and the stream's task contexts have answered. */
+  readonly tasksSettled: boolean;
 }
 
 /**
@@ -81,5 +83,11 @@ export function useBotMentionTargets(input: {
     return targets;
   }, [contexts.tasksById, environmentId, home.tasks, streamTaskIds]);
 
-  return { bots, tasks: taskTargets };
+  const tasksSettled =
+    !home.firstPagePending &&
+    home.firstPageError === null &&
+    !contexts.isPending &&
+    contexts.error === null;
+
+  return { bots, tasks: taskTargets, tasksSettled };
 }

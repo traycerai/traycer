@@ -3,20 +3,14 @@
  * (`AgentReferenceMarkdown` over `TraycerMarkdown`): a `<@userId>` token is
  * the member's chip where `BotMentionsContext` names them, `<#botId>` the
  * bot's chip that opens its channel, and `<~epicId>` the task's chip that
- * opens the task, titled from the directory or by a real
- * `epic.getTaskContexts` read answered by a stub host. A token nothing names
- * stays as written, or says the bot or task is removed once the read
- * answered without it.
+ * opens the task, titled only from the directory's task list. A token
+ * nothing names stays as written, or says the bot or task is removed once the
+ * directory's reads have answered without it; a task outside the directory is
+ * never read by id, so another environment's is never named.
  */
 import type { ReactNode } from "react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import {
-  cleanup,
-  fireEvent,
-  render,
-  screen,
-  waitFor,
-} from "@testing-library/react";
+import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type {
   GetTaskContextsResponse,
@@ -37,8 +31,7 @@ const STRANGER = "user-stranger";
 const TRIAGE_BOT = "bot_01HZY8V6K3Q9W2E4R5T6Y7V8M1";
 const REMOVED_BOT = "bot_01HZY8V6K3Q9W2E4R5T6Y7V8M2";
 const RELEASE_TASK = "6f1c2a7e-3b4d-4e5f-8a9b-0c1d2e3f4a5b";
-const READ_TASK = "0b9d7c1e-2a3f-4b5c-8d6e-7f8091a2b3c4";
-const GONE_TASK = "9a8b7c6d-5e4f-4a3b-9c2d-1e0f9a8b7c6d";
+const FOREIGN_TASK = "0b9d7c1e-2a3f-4b5c-8d6e-7f8091a2b3c4";
 const USER_ID = "user-test";
 
 const MEMBERS: Record<string, BotMentioned> = {
@@ -173,6 +166,7 @@ const DIRECTORY: BotMentionDirectory = {
   person: (userId) => (Object.hasOwn(MEMBERS, userId) ? MEMBERS[userId] : null),
   bots: [{ id: TRIAGE_BOT, name: "Triage" }],
   tasks: [{ id: RELEASE_TASK, name: "Release notes" }],
+  tasksSettled: true,
 };
 
 function body(markdown: string) {
@@ -310,49 +304,28 @@ describe("a task's chip", () => {
     expect(askedTaskIds()).toEqual([]);
   });
 
-  it("is titled by the host's read for a task the directory does not list, and opens it", async () => {
-    answerLookups({ [READ_TASK]: "Quarterly plan" });
-    renderIn(`see <~${READ_TASK}>`, DIRECTORY);
+  it("says a removed task for one the directory does not list, even one the host would title, and reads nothing", () => {
+    answerLookups({ [FOREIGN_TASK]: "Another team's roadmap" });
+    const container = renderIn(`see <~${FOREIGN_TASK}>`, DIRECTORY);
 
-    const chip = await screen.findByTestId("bot-mention-task");
-    expect(chip.textContent).toBe("@Quarterly plan");
-    fireEvent.click(chip);
-
-    expect(askedTaskIds()).toEqual([READ_TASK]);
-    expect(mocks.navigateToTabIntent).toHaveBeenCalledWith(
-      mocks.navigate,
-      openEpicFromListIntent({
-        epicId: READ_TASK,
-        focus: undefined,
-        name: "Quarterly plan",
-        replaceEmptyDraftId: null,
-      }),
-      undefined,
+    expect(screen.getByTestId("bot-mention-task-removed").textContent).toBe(
+      "a removed task",
     );
-  });
-
-  it("says a removed task once the read answered without it", async () => {
-    answerLookups({});
-    renderIn(`see <~${GONE_TASK}>`, DIRECTORY);
-
-    expect(
-      (await screen.findByTestId("bot-mention-task-removed")).textContent,
-    ).toBe("a removed task");
     expect(screen.queryByTestId("bot-mention-task")).toBeNull();
+    expect(container.textContent).not.toContain("Another team's roadmap");
+    expect(askedTaskIds()).toEqual([]);
   });
 
-  it("leaves the token as written while the read has not answered, and when it failed", async () => {
-    const pending = Promise.withResolvers<never>();
-    mocks.request.mockImplementation(() => pending.promise);
-    const container = renderIn(`see <~${GONE_TASK}>`, DIRECTORY);
+  it("leaves the token as written for an unlisted task until the directory's reads have settled", () => {
+    answerLookups({ [FOREIGN_TASK]: "Another team's roadmap" });
+    const container = renderIn(`see <~${FOREIGN_TASK}>`, {
+      ...DIRECTORY,
+      tasksSettled: false,
+    });
 
-    await waitFor(() => expect(askedTaskIds()).toEqual([GONE_TASK]));
     expect(screen.queryByTestId("bot-mention-task-removed")).toBeNull();
-    expect(container.textContent).toContain(`<~${GONE_TASK}>`);
-
-    pending.reject(new Error("host unreachable"));
-    await waitFor(() => expect(queryClient.isFetching()).toBe(0));
-    expect(screen.queryByTestId("bot-mention-task-removed")).toBeNull();
-    expect(container.textContent).toContain(`<~${GONE_TASK}>`);
+    expect(screen.queryByTestId("bot-mention-task")).toBeNull();
+    expect(container.textContent).toContain(`<~${FOREIGN_TASK}>`);
+    expect(askedTaskIds()).toEqual([]);
   });
 });

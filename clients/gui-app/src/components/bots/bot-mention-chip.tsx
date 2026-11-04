@@ -1,15 +1,9 @@
-import { useContext, useMemo, type ReactNode } from "react";
+import { useContext, type ReactNode } from "react";
 import { useNavigate } from "@tanstack/react-router";
 import { BotMentionsContext } from "@/components/bots/bot-mentions-context";
-import { useEpicGetTaskContexts } from "@/hooks/epic/use-epic-get-task-contexts-query";
 import { useOpenBotChannel } from "@/hooks/bots/use-open-bot-channel";
-import { taskMentionDisplayTitle } from "@/lib/composer/mentions/task-mention-helpers";
 import { navigateToTabIntent } from "@/lib/tab-navigation";
 import { openEpicFromListIntent } from "@/lib/tab-navigation/intents";
-import {
-  authorizesCloudCapability,
-  useAuthStore,
-} from "@/stores/auth/auth-store";
 import { cn } from "@/lib/utils";
 
 // A name is one unit: it never breaks across lines, and a bot or task
@@ -88,38 +82,24 @@ export function BotChannelMentionChip(props: {
 }
 
 /**
- * A task named in a message (decision 177): its title as a chip that opens
- * the task, or "a removed task" for one its context read does not find. A
- * task the tab does not list is read by its id. The token as written
- * outside a bot's tab and while that read has not answered.
+ * A task of the bot's environment named in a message (decision 177): its
+ * title as a chip that opens the task, for a task the tab's directory lists.
+ * Any other id is "a removed task", even one the viewer can open: it may be
+ * another environment's, which this channel never names. The token as
+ * written outside a bot's tab and while the directory's reads have not
+ * answered.
  */
 export function TaskMentionChip(props: {
   readonly taskId: string;
   readonly children: ReactNode;
 }): ReactNode {
   const directory = useContext(BotMentionsContext);
-  const listed =
-    directory?.tasks.find((entry) => entry.id === props.taskId) ?? null;
-  const userId = useAuthStore((s) => s.profile?.userId ?? null);
-  const cloud = useAuthStore((s) => authorizesCloudCapability(s.status));
-  const unlisted = useMemo(
-    () => (directory !== null && listed === null ? [props.taskId] : []),
-    [directory, listed, props.taskId],
-  );
-  const contexts = useEpicGetTaskContexts(unlisted, userId, {
-    enabled: cloud,
-  });
   const navigate = useNavigate();
   if (directory === null) return <>{props.children}</>;
-  const read = contexts.tasksById.get(props.taskId)?.epic?.light ?? null;
   const title =
-    listed?.name ?? (read === null ? null : taskMentionDisplayTitle(read));
+    directory.tasks.find((entry) => entry.id === props.taskId)?.name ?? null;
   if (title === null) {
-    // Removed only on the read's answer: unread, failed or not asked, the
-    // token stays as written.
-    if (!cloud || contexts.isPending || contexts.error !== null) {
-      return <>{props.children}</>;
-    }
+    if (!directory.tasksSettled) return <>{props.children}</>;
     return (
       <span
         data-testid="bot-mention-task-removed"

@@ -34,16 +34,30 @@ const mocks = vi.hoisted(() => ({
   asked: [] as Array<ReadonlyArray<string>>,
   /** Home's `epic.listTasks` rows. */
   homeTasks: [] as ListTaskLight[],
+  /** Whether Home's first page is still pending, and the error it failed with. */
+  homePending: false,
+  homeError: null as Error | null,
+  /** The stream task contexts read's pending flag and error. */
+  contextsPending: false,
+  contextsError: null as Error | null,
 }));
 
 vi.mock("@/hooks/epic/use-epic-get-task-contexts-query", () => ({
   useEpicGetTaskContexts: (ids: ReadonlyArray<string>) => {
     mocks.asked.push(ids);
-    return { tasksById: mocks.contexts, isPending: false, error: null };
+    return {
+      tasksById: mocks.contexts,
+      isPending: mocks.contextsPending,
+      error: mocks.contextsError,
+    };
   },
 }));
 vi.mock("@/hooks/epics/use-cloud-epic-tasks-query", () => ({
-  useCloudEpicTasksQuery: () => ({ tasks: mocks.homeTasks }),
+  useCloudEpicTasksQuery: () => ({
+    tasks: mocks.homeTasks,
+    firstPagePending: mocks.homePending,
+    firstPageError: mocks.homeError,
+  }),
 }));
 
 const ENVIRONMENTS: ReadonlyArray<EnvironmentDescriptor> = [
@@ -140,6 +154,10 @@ beforeEach(() => {
   mocks.contexts = new Map();
   mocks.asked = [];
   mocks.homeTasks = [];
+  mocks.homePending = false;
+  mocks.homeError = null;
+  mocks.contextsPending = false;
+  mocks.contextsError = null;
   useAuthStore.setState({
     profile: {
       userId: "user-1",
@@ -237,5 +255,33 @@ describe("useBotMentionTargets tasks", () => {
     expect(targetsOf(TEAM_ENV, []).result.current.tasks).toEqual([
       { id: HOME_TASK, name: "Untitled task" },
     ]);
+  });
+
+  it("is unsettled while Home's first page is pending, and settled once it answered", () => {
+    mocks.homePending = true;
+    const { result, rerender } = targetsOf(TEAM_ENV, []);
+
+    expect(result.current.tasksSettled).toBe(false);
+
+    mocks.homePending = false;
+    rerender();
+
+    expect(result.current.tasksSettled).toBe(true);
+  });
+
+  it("is unsettled while the stream's task contexts are pending, and when either read failed", () => {
+    mocks.contextsPending = true;
+    const { result, rerender } = targetsOf(TEAM_ENV, [streamTask(STREAM_TASK)]);
+    expect(result.current.tasksSettled).toBe(false);
+
+    mocks.contextsPending = false;
+    mocks.contextsError = new Error("host unreachable");
+    rerender();
+    expect(result.current.tasksSettled).toBe(false);
+
+    mocks.contextsError = null;
+    mocks.homeError = new Error("cloud down");
+    rerender();
+    expect(result.current.tasksSettled).toBe(false);
   });
 });

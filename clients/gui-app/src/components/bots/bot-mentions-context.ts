@@ -31,9 +31,12 @@ export interface BotMentionDirectory {
   readonly bots: ReadonlyArray<BotMentionTarget> | null;
   /**
    * The environment's tasks the tab knows by title: the ones the bot's
-   * stream lists, then the environment's on Home's task list.
+   * stream lists, then the environment's on Home's task list. Only these are
+   * named: a task id outside them may be another environment's.
    */
   readonly tasks: ReadonlyArray<BotMentionTarget>;
+  /** The reads behind `tasks` have answered, so a task it lacks is not one it will list. */
+  readonly tasksSettled: boolean;
 }
 
 export const BotMentionsContext = createContext<BotMentionDirectory | null>(
