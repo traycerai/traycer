@@ -118,7 +118,11 @@ The poison's priority lasts **30 seconds since the latest accepted failure**
 `providers.list` path, honor it during that interval. The list projects the
 current ambient result onto an enabled ambient profile row; it does not
 persist an indefinite poison there. The cache-only harness-catalog reader
-also ignores expired poison and expired cache entries.
+also ignores expired poison. For Claude, it keeps the last authoritative
+verdict until the credential generation changes. Ordinary provider refreshes
+update Claude's status from the passive scan while keeping the account email
+and plan. A clean sign-out clears both; unreadable credentials keep the last
+verdict while a full probe runs.
 
 During those 30 seconds, a non-definitive probe result (`configured`, `unknown`
 or `unavailable`) is not cached while the poison is live. The poison can clear
