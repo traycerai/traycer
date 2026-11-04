@@ -39,6 +39,12 @@ vi.mock("@tanstack/react-virtual", async (importOriginal) => {
           onRect({ width: 400, height: viewport.height });
           return () => undefined;
         },
+        // jsdom lays nothing out, so a drawn row would measure 0px tall and
+        // every row would collapse onto the first; a row measures its estimate.
+        measureElement: (element, _entry, instance) =>
+          instance.options.estimateSize(
+            Number(element.getAttribute("data-index")),
+          ),
       }),
   };
 });
@@ -410,6 +416,7 @@ beforeEach(() => {
 afterEach(() => {
   cleanup();
   sessionHandle.dispose();
+  document.documentElement.style.fontSize = "";
 });
 
 describe("<SwitcherArtifactsList />", () => {
@@ -529,6 +536,24 @@ describe("<SwitcherArtifactsList />", () => {
     fireEvent.scroll(tree);
     expect(screen.getByTestId("switcher-artifact-row-tk-0")).toBeDefined();
     expect(screen.queryByTestId("switcher-artifact-row-tk-299")).toBeNull();
+  });
+
+  it("places rows by the person's UI font size, not a fixed pixel height", () => {
+    // The UI font size setting is applied as the root font size, and a row's
+    // `min-h-11` grows with it; a window placing rows 46px apart at 20px
+    // would overlap every row with the next.
+    document.documentElement.style.fontSize = "20px";
+    holder.records = [
+      artifactFixture("tk-1", null, "Ticket 1", "ticket"),
+      artifactFixture("tk-2", null, "Ticket 2", "ticket"),
+    ];
+    render(<SwitcherArtifactsList {...PROPS} />);
+    const items = screen.getAllByRole("treeitem");
+    // 2.75rem row + 0.125rem gap at 20px.
+    expect(items.map((item) => item.style.transform)).toEqual([
+      "translateY(0px)",
+      "translateY(57.5px)",
+    ]);
   });
 
   it("gives ranked search hits no tree roles", () => {

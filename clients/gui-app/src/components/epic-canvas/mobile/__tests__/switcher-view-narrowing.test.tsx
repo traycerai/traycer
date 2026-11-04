@@ -21,6 +21,10 @@ vi.mock("@tanstack/react-virtual", async (importOriginal) => {
           onRect({ width: 400, height: 10_000 });
           return () => undefined;
         },
+        measureElement: (element, _entry, instance) =>
+          instance.options.estimateSize(
+            Number(element.getAttribute("data-index")),
+          ),
       }),
   };
 });

@@ -179,13 +179,22 @@ export function SwitcherArtifactsList(props: SwitcherListProps) {
 }
 
 /**
- * A row is the shared `SwitcherListRow`'s 44px minimum and nothing taller: its
- * label truncates to one line. The list positions rows by this height instead
- * of measuring each, so a row's place is known before it is drawn.
+ * A row is the shared `SwitcherListRow`'s `min-h-11` (2.75rem) and nothing
+ * taller: its label truncates to one line. The estimate seeds a row's place
+ * before it is drawn; each drawn row is then measured, because the root font
+ * size is the person's UI font size setting and a row grows with it.
  */
-const ARTIFACT_ROW_HEIGHT_PX = 44;
-/** The `space-y-0.5` the rows had as a plain list. */
-const ARTIFACT_ROW_GAP_PX = 2;
+const ARTIFACT_ROW_HEIGHT_REM = 2.75;
+/** The `space-y-0.5` (0.125rem) the rows had as a plain list. */
+const ARTIFACT_ROW_GAP_REM = 0.125;
+const FALLBACK_ROOT_FONT_SIZE_PX = 16;
+
+function readRootFontSizePx(): number {
+  const size = Number.parseFloat(
+    window.getComputedStyle(document.documentElement).fontSize,
+  );
+  return Number.isFinite(size) && size > 0 ? size : FALLBACK_ROOT_FONT_SIZE_PX;
+}
 /**
  * Rows drawn beyond the viewport at either end, so a flick has rows ready
  * before the scroller shows the gap. A big task has a thousand rows; drawing
@@ -236,14 +245,18 @@ function SwitcherArtifactWindow(props: {
 }) {
   const { rows, epicId, tabId, onClose } = props;
   const scroller = useRef<HTMLDivElement>(null);
+  // Read once per mount: the chooser is remounted when the person reopens
+  // it, and a font size changed while it is open is caught by the per-row
+  // measurement below.
+  const [rootFontSizePx] = useState(readRootFontSizePx);
   // Measurements are read on each render, never passed through memoized
   // children - the same arrangement as the canvas layers tree.
   // eslint-disable-next-line react-hooks/incompatible-library
   const virtualizer = useVirtualizer({
     count: rows.length,
     getScrollElement: () => scroller.current,
-    estimateSize: () => ARTIFACT_ROW_HEIGHT_PX,
-    gap: ARTIFACT_ROW_GAP_PX,
+    estimateSize: () => ARTIFACT_ROW_HEIGHT_REM * rootFontSizePx,
+    gap: ARTIFACT_ROW_GAP_REM * rootFontSizePx,
     overscan: ARTIFACT_ROW_OVERSCAN,
   });
   return (
@@ -267,6 +280,8 @@ function SwitcherArtifactWindow(props: {
           <SwitcherArtifactTreeItem
             key={rows[item.index].record.id}
             row={rows[item.index]}
+            index={item.index}
+            measure={virtualizer.measureElement}
             top={item.start}
             epicId={epicId}
             tabId={tabId}
@@ -280,19 +295,24 @@ function SwitcherArtifactWindow(props: {
 
 function SwitcherArtifactTreeItem(props: {
   readonly row: SwitcherArtifactTreeRow;
+  readonly index: number;
+  readonly measure: (element: HTMLDivElement | null) => void;
   readonly top: number;
   readonly epicId: string;
   readonly tabId: string;
   readonly onClose: () => void;
 }) {
-  const { row, top, epicId, tabId, onClose } = props;
+  const { row, index, measure, top, epicId, tabId, onClose } = props;
   const isActive = useIsActiveEpicArtifact(tabId, row.record.id);
   return (
     // A tree that never collapses still owes its branches an expansion state:
     // with none, a parent is announced as a leaf and the rows under it read
     // as unrelated. Leaves omit the attribute entirely - that omission is what
     // marks them as leaves, so it must not be `false`.
+    // `data-index` is how the measured element is matched back to its row.
     <div
+      ref={measure}
+      data-index={index}
       role="treeitem"
       aria-level={row.depth + 1}
       aria-posinset={row.posInSet}
