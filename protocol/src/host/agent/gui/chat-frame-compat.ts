@@ -886,44 +886,64 @@ function projectCanvasAnnotationPayload(value: unknown): unknown {
     : { ...value, browserAnnotations };
 }
 
-function projectCanvasAnnotationMessage(value: unknown): unknown {
+type UserPayloadProjector = (payload: unknown) => unknown;
+
+function projectRowPayload(
+  value: unknown,
+  project: UserPayloadProjector,
+): unknown {
   if (!isRecord(value) || value.role !== "user") return value;
-  const message = projectCanvasAnnotationPayload(value.message);
+  const message = project(value.message);
   return message === value.message ? value : { ...value, message };
 }
 
-function projectCanvasAnnotationMessages(value: unknown): unknown {
+function projectRowPayloads(
+  value: unknown,
+  project: UserPayloadProjector,
+): unknown {
   if (!Array.isArray(value)) return value;
-  const messages = value.map(projectCanvasAnnotationMessage);
+  const messages = value.map((row) => projectRowPayload(row, project));
   return messages.every((message, index) => message === value[index])
     ? value
     : messages;
 }
 
-function projectCanvasAnnotationQueueItem(item: unknown): unknown {
+function projectQueueItemPayload(
+  item: unknown,
+  project: UserPayloadProjector,
+): unknown {
   if (!isRecord(item) || !("message" in item)) return item;
-  const message = projectCanvasAnnotationPayload(item.message);
+  const message = project(item.message);
   return message === item.message ? item : { ...item, message };
 }
 
-function projectCanvasAnnotationQueueItems(value: unknown): unknown {
+function projectQueueItemPayloads(
+  value: unknown,
+  project: UserPayloadProjector,
+): unknown {
   if (!Array.isArray(value)) return value;
-  const items = value.map(projectCanvasAnnotationQueueItem);
+  const items = value.map((item) => projectQueueItemPayload(item, project));
   return items.every((item, index) => item === value[index]) ? value : items;
 }
 
-function projectCanvasAnnotationQueue(value: unknown): unknown {
+function projectQueuePayloads(
+  value: unknown,
+  project: UserPayloadProjector,
+): unknown {
   if (!isRecord(value)) return value;
-  const items = projectCanvasAnnotationQueueItems(value.items);
+  const items = projectQueueItemPayloads(value.items, project);
   return items === value.items ? value : { ...value, items };
 }
 
-/** Queue events carry the same payload under metadata.item or metadata.items. */
-function projectCanvasAnnotationEvent(value: unknown): unknown {
+/** Queue events carry the payload under metadata.item or metadata.items. */
+function projectEventPayload(
+  value: unknown,
+  project: UserPayloadProjector,
+): unknown {
   if (!isRecord(value) || !isRecord(value.metadata)) return value;
   const metadata = value.metadata;
-  const item = projectCanvasAnnotationQueueItem(metadata.item);
-  const items = projectCanvasAnnotationQueueItems(metadata.items);
+  const item = projectQueueItemPayload(metadata.item, project);
+  const items = projectQueueItemPayloads(metadata.items, project);
   if (item === metadata.item && items === metadata.items) return value;
   const projected = { ...metadata };
   if (item !== metadata.item) projected.item = item;
@@ -931,36 +951,43 @@ function projectCanvasAnnotationEvent(value: unknown): unknown {
   return { ...value, metadata: projected };
 }
 
-function projectCanvasAnnotationEvents(value: unknown): unknown {
+function projectEventPayloads(
+  value: unknown,
+  project: UserPayloadProjector,
+): unknown {
   if (!Array.isArray(value)) return value;
-  const events = value.map(projectCanvasAnnotationEvent);
+  const events = value.map((event) => projectEventPayload(event, project));
   return events.every((event, index) => event === value[index])
     ? value
     : events;
 }
 
-function projectPreCanvasAnnotationFrame(
+/**
+ * `project` applied to every channel a user payload reaches a peer on: the
+ * accepted row, a queue event, the queue, a range, and the snapshot's chat,
+ * tail and queue. The frame itself comes back when nothing changed.
+ */
+function projectUserPayloadsInFrame(
   frame: ProjectedChatSubscribeServerFrame,
-  negotiated: SchemaVersion | null,
+  project: UserPayloadProjector,
 ): ProjectedChatSubscribeServerFrame {
-  if (supportsCanvasAnnotations(negotiated)) return frame;
   switch (frame.kind) {
     case "messageAccepted": {
-      const message = projectCanvasAnnotationMessage(frame.message);
+      const message = projectRowPayload(frame.message, project);
       return message === frame.message ? frame : { ...frame, message };
     }
     case "eventAppended": {
-      const event = projectCanvasAnnotationEvent(frame.event);
+      const event = projectEventPayload(frame.event, project);
       return event === frame.event ? frame : { ...frame, event };
     }
     case "queueChanged": {
-      const queue = projectCanvasAnnotationQueue(frame.queue);
+      const queue = projectQueuePayloads(frame.queue, project);
       return queue === frame.queue ? frame : { ...frame, queue };
     }
     case "range": {
       if (!isRecord(frame.range)) return frame;
-      const messages = projectCanvasAnnotationMessages(frame.range.messages);
-      const events = projectCanvasAnnotationEvents(frame.range.events);
+      const messages = projectRowPayloads(frame.range.messages, project);
+      const events = projectEventPayloads(frame.range.events, project);
       if (messages === frame.range.messages && events === frame.range.events)
         return frame;
       const range = { ...frame.range };
@@ -975,8 +1002,8 @@ function projectPreCanvasAnnotationFrame(
       for (const key of ["chat", "tail"]) {
         const container = original[key];
         if (!isRecord(container)) continue;
-        const messages = projectCanvasAnnotationMessages(container.messages);
-        const events = projectCanvasAnnotationEvents(container.events);
+        const messages = projectRowPayloads(container.messages, project);
+        const events = projectEventPayloads(container.events, project);
         if (messages === container.messages && events === container.events)
           continue;
         const projected = { ...container };
@@ -985,7 +1012,7 @@ function projectPreCanvasAnnotationFrame(
         snapshot[key] = projected;
       }
       if ("queue" in original)
-        snapshot.queue = projectCanvasAnnotationQueue(original.queue);
+        snapshot.queue = projectQueuePayloads(original.queue, project);
       return snapshot.chat === original.chat &&
         snapshot.tail === original.tail &&
         snapshot.queue === original.queue
@@ -995,6 +1022,14 @@ function projectPreCanvasAnnotationFrame(
     default:
       return frame;
   }
+}
+
+function projectPreCanvasAnnotationFrame(
+  frame: ProjectedChatSubscribeServerFrame,
+  negotiated: SchemaVersion | null,
+): ProjectedChatSubscribeServerFrame {
+  if (supportsCanvasAnnotations(negotiated)) return frame;
+  return projectUserPayloadsInFrame(frame, projectCanvasAnnotationPayload);
 }
 
 /** The `slack` user message first rides 1.43 (`slackUserMessageSchema`). */
@@ -1040,121 +1075,16 @@ function projectSlackPayload(value: unknown): unknown {
   };
 }
 
-function projectSlackMessage(value: unknown): unknown {
-  if (!isRecord(value) || value.role !== "user") return value;
-  const message = projectSlackPayload(value.message);
-  return message === value.message ? value : { ...value, message };
-}
-
-function projectSlackMessages(value: unknown): unknown {
-  if (!Array.isArray(value)) return value;
-  const messages = value.map(projectSlackMessage);
-  return messages.every((message, index) => message === value[index])
-    ? value
-    : messages;
-}
-
-function projectSlackQueueItem(item: unknown): unknown {
-  if (!isRecord(item) || !("message" in item)) return item;
-  const message = projectSlackPayload(item.message);
-  return message === item.message ? item : { ...item, message };
-}
-
-function projectSlackQueueItems(value: unknown): unknown {
-  if (!Array.isArray(value)) return value;
-  const items = value.map(projectSlackQueueItem);
-  return items.every((item, index) => item === value[index]) ? value : items;
-}
-
-function projectSlackQueue(value: unknown): unknown {
-  if (!isRecord(value)) return value;
-  const items = projectSlackQueueItems(value.items);
-  return items === value.items ? value : { ...value, items };
-}
-
-/** Queue events carry the payload under metadata.item or metadata.items. */
-function projectSlackEvent(value: unknown): unknown {
-  if (!isRecord(value) || !isRecord(value.metadata)) return value;
-  const metadata = value.metadata;
-  const item = projectSlackQueueItem(metadata.item);
-  const items = projectSlackQueueItems(metadata.items);
-  if (item === metadata.item && items === metadata.items) return value;
-  const projected = { ...metadata };
-  if (item !== metadata.item) projected.item = item;
-  if (items !== metadata.items) projected.items = items;
-  return { ...value, metadata: projected };
-}
-
-function projectSlackEvents(value: unknown): unknown {
-  if (!Array.isArray(value)) return value;
-  const events = value.map(projectSlackEvent);
-  return events.every((event, index) => event === value[index])
-    ? value
-    : events;
-}
-
 /**
- * Every channel a user payload reaches a peer on - the accepted row, a queue
- * event, the queue, a range, the snapshot's chat, tail and queue - with each
- * Slack message degraded for a peer below 1.43, whose payload union rejects
- * the kind.
+ * Each Slack message in the frame degraded for a peer below 1.43, whose
+ * payload union rejects the kind.
  */
 function projectPreSlackMessageFrame(
   frame: ProjectedChatSubscribeServerFrame,
   negotiated: SchemaVersion | null,
 ): ProjectedChatSubscribeServerFrame {
   if (supportsSlackMessages(negotiated)) return frame;
-  switch (frame.kind) {
-    case "messageAccepted": {
-      const message = projectSlackMessage(frame.message);
-      return message === frame.message ? frame : { ...frame, message };
-    }
-    case "eventAppended": {
-      const event = projectSlackEvent(frame.event);
-      return event === frame.event ? frame : { ...frame, event };
-    }
-    case "queueChanged": {
-      const queue = projectSlackQueue(frame.queue);
-      return queue === frame.queue ? frame : { ...frame, queue };
-    }
-    case "range": {
-      if (!isRecord(frame.range)) return frame;
-      const messages = projectSlackMessages(frame.range.messages);
-      const events = projectSlackEvents(frame.range.events);
-      if (messages === frame.range.messages && events === frame.range.events)
-        return frame;
-      const range = { ...frame.range };
-      if (messages !== frame.range.messages) range.messages = messages;
-      if (events !== frame.range.events) range.events = events;
-      return { ...frame, range };
-    }
-    case "snapshot": {
-      if (!isRecord(frame.snapshot)) return frame;
-      const original = frame.snapshot;
-      const snapshot = { ...original };
-      for (const key of ["chat", "tail"]) {
-        const container = original[key];
-        if (!isRecord(container)) continue;
-        const messages = projectSlackMessages(container.messages);
-        const events = projectSlackEvents(container.events);
-        if (messages === container.messages && events === container.events)
-          continue;
-        const projected = { ...container };
-        if (messages !== container.messages) projected.messages = messages;
-        if (events !== container.events) projected.events = events;
-        snapshot[key] = projected;
-      }
-      if ("queue" in original)
-        snapshot.queue = projectSlackQueue(original.queue);
-      return snapshot.chat === original.chat &&
-        snapshot.tail === original.tail &&
-        snapshot.queue === original.queue
-        ? frame
-        : { ...frame, snapshot };
-    }
-    default:
-      return frame;
-  }
+  return projectUserPayloadsInFrame(frame, projectSlackPayload);
 }
 
 function stripAnswerSelection(value: unknown): unknown {

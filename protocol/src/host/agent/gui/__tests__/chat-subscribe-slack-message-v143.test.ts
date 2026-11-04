@@ -209,6 +209,125 @@ function snapshotFrame(
   });
 }
 
+/** The prompt item a queue event embeds, under `metadata.item` or `.items`. */
+function promptItemOf(message: Record<string, unknown>): unknown {
+  return asArray(queueOf(message).items, "items")[0];
+}
+
+function queueEvent(
+  type: string,
+  metadata: Record<string, unknown>,
+): Record<string, unknown> {
+  return {
+    eventId: "e-queue",
+    type,
+    timestamp: 1,
+    clientActionId: null,
+    actor: null,
+    message: null,
+    turnId: null,
+    messageId: null,
+    queueItemId: null,
+    approvalId: null,
+    blockId: null,
+    severity: "info",
+    metadata,
+  };
+}
+
+function eventAppendedFrame(event: Record<string, unknown>) {
+  return serverFrame({ kind: "eventAppended", event });
+}
+
+function rangeEventFrame(event: Record<string, unknown>) {
+  return serverFrame({
+    kind: "range",
+    range: {
+      requestId: "range-1",
+      epoch: 0,
+      fromOrdinal: 0,
+      rowIds: [],
+      messages: [],
+      events: [event],
+      reachedStart: true,
+      reachedEnd: true,
+    },
+  });
+}
+
+function snapshotTailEventFrame(event: Record<string, unknown>) {
+  const frame = snapshotFrame(slackPayload("Priya"), slackPayload("Priya"));
+  const snapshot = asRecord(frame.snapshot, "snapshot");
+  return {
+    ...frame,
+    snapshot: {
+      ...snapshot,
+      tail: { fromOrdinal: 0, messages: [], events: [event] },
+      queue: { status: "idle", items: [] },
+    },
+  };
+}
+
+function snapshotChatEventFrame(event: Record<string, unknown>) {
+  const frame = snapshotFrame(slackPayload("Priya"), slackPayload("Priya"));
+  const snapshot = asRecord(frame.snapshot, "snapshot");
+  return {
+    ...frame,
+    snapshot: {
+      ...snapshot,
+      chat: { ...asRecord(snapshot.chat, "chat"), events: [event] },
+      tail: { fromOrdinal: 0, messages: [], events: [] },
+      queue: { status: "idle", items: [] },
+    },
+  };
+}
+
+/** The projected event, wherever its carrier holds it. */
+function eventOfFrame(projected: unknown): unknown {
+  const frame = asRecord(projected, "frame");
+  if (frame.kind === "eventAppended") return frame.event;
+  if (frame.kind === "range") {
+    return asArray(asRecord(frame.range, "range").events, "events")[0];
+  }
+  const snapshot = asRecord(frame.snapshot, "snapshot");
+  const tail = asArray(asRecord(snapshot.tail, "tail").events, "events");
+  return tail.length > 0
+    ? tail[0]
+    : asArray(asRecord(snapshot.chat, "chat").events, "events")[0];
+}
+
+/** The payload an event embeds, under `metadata.item` or `metadata.items`. */
+function eventMessageOf(event: unknown): unknown {
+  const metadata = asRecord(asRecord(event, "event").metadata, "metadata");
+  const item =
+    "item" in metadata
+      ? metadata.item
+      : asArray(metadata.items, "metadata.items")[0];
+  return asRecord(item, "item").message;
+}
+
+const EVENT_CARRIERS = [
+  ["eventAppended", eventAppendedFrame],
+  ["a range's events", rangeEventFrame],
+  ["a snapshot's tail.events", snapshotTailEventFrame],
+  ["a whole snapshot's chat.events", snapshotChatEventFrame],
+] as const;
+
+const QUEUE_EVENTS = [
+  [
+    "queue.added under metadata.item",
+    () =>
+      queueEvent("queue.added", { item: promptItemOf(slackPayload("Priya")) }),
+  ],
+  [
+    "queue.paused under metadata.items",
+    () =>
+      queueEvent("queue.paused", {
+        items: [promptItemOf(slackPayload("Priya"))],
+      }),
+  ],
+] as const;
+
 function firstMessageOf(messages: unknown): unknown {
   return asRecord(asArray(messages, "messages")[0], "row").message;
 }
@@ -291,6 +410,19 @@ describe("chat.subscribe server frame projection of a Slack message", () => {
       expect(
         chatSubscribeV142.serverFrameSchema.safeParse(projected).success,
       ).toBe(true);
+    });
+
+    describe.each(EVENT_CARRIERS)("on %s", (_carrier, frameOf) => {
+      it.each(QUEUE_EVENTS)("degrades %s", (_event, eventOf) => {
+        const projected = projectChatServerFrameForVersion(
+          frameOf(eventOf()),
+          negotiated,
+        );
+
+        expect(eventMessageOf(eventOfFrame(projected))).toEqual(
+          degraded("Priya"),
+        );
+      });
     });
 
     it("does not touch the frame the caller passed in", () => {

@@ -79,6 +79,22 @@ describe("chat-sync reader floor for a Slack message", () => {
     ).toEqual(SLACK_FLOOR);
   });
 
+  it("floors a Slack prompt held in a queue event's metadata.items", () => {
+    const event: ChatEvent = {
+      ...queueAdded(SLACK_PAYLOAD),
+      type: "queue.paused",
+      metadata: {
+        items: [
+          { kind: "prompt", queueItemId: "queue-1", message: SLACK_PAYLOAD },
+        ],
+      },
+    };
+
+    expect(chatSyncReaderFloorForTranscriptEvents([event])).toEqual(
+      SLACK_FLOOR,
+    );
+  });
+
   it("takes the Slack floor over the canvas one when a transcript holds both", () => {
     expect(
       chatSyncReaderFloorForTranscriptMessages([
