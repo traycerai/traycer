@@ -337,6 +337,18 @@ describe("listed shapes", () => {
   const LARGE = { cpus: 4, memoryMb: 8192, diskMb: 40960, default: false };
   const MIDDLE = { cpus: 2, memoryMb: 8192, diskMb: 20480, default: false };
   const SMALLEST = { cpus: 2, memoryMb: 4096, diskMb: 20480, default: true };
+  const CPU_SIBLING = {
+    cpus: 4,
+    memoryMb: 4096,
+    diskMb: 20480,
+    default: false,
+  };
+  const DISK_SIBLING = {
+    cpus: 2,
+    memoryMb: 4096,
+    diskMb: 40960,
+    default: false,
+  };
   const STAGED = {
     os: "linux",
     region: "us-east",
@@ -347,38 +359,37 @@ describe("listed shapes", () => {
     destroyAfterRestingMinutes: null,
   } as const;
 
-  it("uses parsed exact rung prices for both staged and smallest quotes even when unit rates disagree", () => {
-    const parsed = sandboxCatalogueSchema.parse({
-      ...listed(RATES),
-      providers: listed(RATES).providers.map((provider) => ({
-        ...provider,
-        regions: provider.regions.map((region) => ({
-          ...region,
-          shapePrices: [
-            {
-              ...LARGE,
-              priceMcPerHour: { awakeMc: 1200, suspendedMc: 7, stoppedMc: 3 },
-            },
-            {
-              ...MIDDLE,
-              priceMcPerHour: { awakeMc: 1000, suspendedMc: 6, stoppedMc: 2 },
-            },
-            {
-              ...SMALLEST,
-              priceMcPerHour: { awakeMc: 901, suspendedMc: 5, stoppedMc: 1 },
-            },
-          ],
-        })),
-      })),
-    });
+  it("uses the exact price of a non-smallest staged rung over conflicting unit rates", () => {
+    const parsed = exactCatalogue();
 
-    expect(stagePrice(parsed, STAGED)).toEqual({
-      awakeMcPerHour: 901,
+    expect(
+      stagePrice(parsed, {
+        ...STAGED,
+        cpus: MIDDLE.cpus,
+        memoryMb: MIDDLE.memoryMb,
+        diskMb: MIDDLE.diskMb,
+      }),
+    ).toEqual({
+      awakeMcPerHour: 1000,
       exact: true,
     });
+  });
+
+  it("matches all dimensions for stagePrice and preserves a zero exact price", () => {
+    const parsed = exactCatalogue();
+
+    expect(stagePrice(parsed, STAGED)).toEqual({
+      awakeMcPerHour: 0,
+      exact: true,
+    });
+  });
+
+  it("matches all dimensions for stageSmallestShape and preserves a zero exact price", () => {
+    const parsed = exactCatalogue();
+
     expect(stageSmallestShape(parsed, STAGED)).toEqual({
       isStaged: true,
-      awakeMcPerHour: 901,
+      awakeMcPerHour: 0,
     });
   });
 
@@ -398,8 +409,59 @@ describe("listed shapes", () => {
   function listed(pricing: SandboxCataloguePricing | null): SandboxCatalogue {
     const [provider] = catalogue(pricing, "linux").providers;
     return {
-      providers: [{ ...provider, shapes: [LARGE, MIDDLE, SMALLEST] }],
+      providers: [
+        {
+          ...provider,
+          shapes: [LARGE, MIDDLE, CPU_SIBLING, DISK_SIBLING, SMALLEST],
+        },
+      ],
     };
+  }
+
+  function exactCatalogue(): SandboxCatalogue {
+    const shapePrices = [
+      {
+        cpus: LARGE.cpus,
+        memoryMb: LARGE.memoryMb,
+        diskMb: LARGE.diskMb,
+        priceMcPerHour: { awakeMc: 1200, suspendedMc: 7, stoppedMc: 3 },
+      },
+      {
+        cpus: MIDDLE.cpus,
+        memoryMb: MIDDLE.memoryMb,
+        diskMb: MIDDLE.diskMb,
+        priceMcPerHour: { awakeMc: 1000, suspendedMc: 6, stoppedMc: 2 },
+      },
+      {
+        cpus: CPU_SIBLING.cpus,
+        memoryMb: CPU_SIBLING.memoryMb,
+        diskMb: CPU_SIBLING.diskMb,
+        priceMcPerHour: { awakeMc: 700, suspendedMc: 5, stoppedMc: 2 },
+      },
+      {
+        cpus: DISK_SIBLING.cpus,
+        memoryMb: DISK_SIBLING.memoryMb,
+        diskMb: DISK_SIBLING.diskMb,
+        priceMcPerHour: { awakeMc: 777, suspendedMc: 8, stoppedMc: 4 },
+      },
+      {
+        cpus: SMALLEST.cpus,
+        memoryMb: SMALLEST.memoryMb,
+        diskMb: SMALLEST.diskMb,
+        priceMcPerHour: { awakeMc: 0, suspendedMc: 5, stoppedMc: 1 },
+      },
+    ];
+    const base = listed(RATES);
+    return sandboxCatalogueSchema.parse({
+      ...base,
+      providers: base.providers.map((provider) => ({
+        ...provider,
+        regions: provider.regions.map((region) => ({
+          ...region,
+          shapePrices,
+        })),
+      })),
+    });
   }
 
   // The bounds (3 vCPU, 6 GB, 30 GB) admit the unlisted size, so only the list rejects it.
