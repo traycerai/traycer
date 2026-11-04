@@ -645,6 +645,8 @@ vi.mock("@/hooks/host/use-host-queries", () => {
             ? {
                 threads: fake.botThreads.get(request.params.botId) ?? [],
                 trunkCostUsd: null,
+                nextCursor: null,
+                total: (fake.botThreads.get(request.params.botId) ?? []).length,
               }
             : undefined,
         ),
@@ -719,6 +721,11 @@ vi.mock("@/hooks/bots/use-bot-conversation-list-query", async () => {
 vi.mock("@/hooks/bots/use-bot-thread-list-query", async () => {
   const { useSyncExternalStore } = await import("react");
   return {
+    botThreadListParams: (botId: string) => ({
+      botId,
+      limit: null,
+      cursor: null,
+    }),
     useBotThreadListQuery: () => ({
       data: useSyncExternalStore(
         fake.threadList.subscribe,

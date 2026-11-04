@@ -12,6 +12,7 @@ import { FallbackLadderEditor } from "@/components/settings/panels/fallback/fall
 import { FallbackOverridesMatrix } from "@/components/settings/panels/fallback/fallback-overrides-matrix";
 import { FallbackTierGroupsEditor } from "@/components/settings/panels/fallback/fallback-tier-groups-editor";
 import { FallbackConflictAnnouncementsProvider } from "@/components/settings/panels/fallback/fallback-conflict-announcements-provider";
+import { FallbackPolicySummary } from "@/components/settings/panels/fallback/fallback-policy-summary";
 import { useFallbackCatalogOptionsForClient } from "@/components/settings/panels/fallback/fallback-catalog-options";
 import {
   toKeyedGroups,
@@ -419,38 +420,18 @@ function TeamRoutingReadOnly(props: {
   readonly policy: FallbackPolicy;
   readonly profiles: TeamRoutingSnapshot["profiles"];
 }): ReactNode {
-  const policy = props.policy;
   return (
     <section className="flex flex-col gap-3 text-ui-sm">
-      <p>Route automatically: {policy.enabled ? "On" : "Off"}</p>
-      <p>Try these in order: {policy.ladder.join(" → ")}</p>
-      <p>
-        Time to cancel: {policy.graceWindowSeconds} seconds. Maximum wait:{" "}
-        {policy.maxWaitMinutes} minutes.
-      </p>
-      <p>Return to preferred: {policy.returnToPreferred}.</p>
-      <p>
-        Accounts:{" "}
-        {props.profiles.map((profile) => profile.name).join(", ") || "None"}.
-      </p>
-      {policy.tierGroups.map((group) => (
-        <div key={group.id}>
-          <h3 className="font-medium">{group.id}</h3>
-          {group.candidates.map((candidate) => (
-            <p
-              key={`${candidate.harnessId}:${candidate.modelFamily}:${candidate.reasoningEffort}`}
-            >
-              {candidate.harnessId} · {candidate.modelFamily} ·{" "}
-              {candidate.reasoningEffort}
-            </p>
-          ))}
-        </div>
-      ))}
-      {Object.entries(policy.reasonOverrides ?? {}).map(([reason, value]) => (
-        <p key={reason}>
-          {reason}: {value === "off" ? "Off" : value.join(" → ")}
-        </p>
-      ))}
+      <FallbackPolicySummary
+        policy={props.policy}
+        accounts={
+          <p>
+            Accounts:{" "}
+            {props.profiles.map((profile) => profile.name).join(", ") || "None"}
+            .
+          </p>
+        }
+      />
     </section>
   );
 }
