@@ -728,7 +728,7 @@ index ea0348877ff08eb9962ff97efebf2cc19cffad11..f92b39704c23e95dac36ba0e0443b65e
        getAverageItemSizes: () => getAverageItemSizes(state),
        indexByKey: (key) => state.indexByKey.get(key),
 +      // Patched: the key the list gives the item at an index in range.
-+      keyAtIndex: (index) => getId(state, index),
++      keyAtIndex: (index) => state.props.keyExtractor(state.props.data[index], index),
        isAtEnd: peek$(ctx, "isAtEnd"),
        isAtStart: peek$(ctx, "isAtStart"),
        isEndReached: state.isEndReached,
@@ -1463,7 +1463,7 @@ index c96345be154d77f66c26ea42cea15a18e22f5dfa..19fe93871fa9c1d55d4cbc08f3b0d65a
        getAverageItemSizes: () => getAverageItemSizes(state),
        indexByKey: (key) => state.indexByKey.get(key),
 +      // Patched: the key the list gives the item at an index in range.
-+      keyAtIndex: (index) => getId(state, index),
++      keyAtIndex: (index) => state.props.keyExtractor(state.props.data[index], index),
        isAtEnd: peek$(ctx, "isAtEnd"),
        isAtStart: peek$(ctx, "isAtStart"),
        isEndReached: state.isEndReached,
@@ -2478,7 +2478,7 @@ index ea0348877ff08eb9962ff97efebf2cc19cffad11..85db0a8ed67228caa857261f6f3ed660
        getAverageItemSizes: () => getAverageItemSizes(state),
        indexByKey: (key) => state.indexByKey.get(key),
 +      // Patched: the key the list gives the item at an index in range.
-+      keyAtIndex: (index) => getId(state, index),
++      keyAtIndex: (index) => state.props.keyExtractor(state.props.data[index], index),
        isAtEnd: peek$(ctx, "isAtEnd"),
        isAtStart: peek$(ctx, "isAtStart"),
        isEndReached: state.isEndReached,
@@ -3432,7 +3432,7 @@ index c96345be154d77f66c26ea42cea15a18e22f5dfa..bf0abf2a3895f16dd785ef3891f392f2
        getAverageItemSizes: () => getAverageItemSizes(state),
        indexByKey: (key) => state.indexByKey.get(key),
 +      // Patched: the key the list gives the item at an index in range.
-+      keyAtIndex: (index) => getId(state, index),
++      keyAtIndex: (index) => state.props.keyExtractor(state.props.data[index], index),
        isAtEnd: peek$(ctx, "isAtEnd"),
        isAtStart: peek$(ctx, "isAtStart"),
        isEndReached: state.isEndReached,
