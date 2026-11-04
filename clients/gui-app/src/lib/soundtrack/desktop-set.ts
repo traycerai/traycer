@@ -42,8 +42,9 @@ export function desktopSoundtrackBridge(): DesktopSoundtrackBridge | null {
  * manifest, which names no link.
  *
  * Reads that overlap share one. Any other read is a real one, because a session
- * asks again for links that stopped working, and its answer leaves the cache at
- * once, because a link is a credential. A failed read is not repeated: the
+ * asks again for links that stopped working, and its answer leaves the cache on
+ * the next garbage-collection turn (`gcTime: 0` schedules it; nothing removes it
+ * synchronously), because a link is a credential. A failed read is not repeated: the
  * caller already has what to do without it, and a malformed manifest would only
  * be malformed again.
  */

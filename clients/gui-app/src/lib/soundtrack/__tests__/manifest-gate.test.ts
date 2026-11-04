@@ -217,7 +217,7 @@ describe("reading through the query client", () => {
     expect(JSON.stringify(second)).not.toContain("X-Goog-Signature=first");
   });
 
-  it("keeps no signed link in the cache once a read has settled", async () => {
+  it("drops the signed links from the cache on the garbage-collection turn after a read settles", async () => {
     vi.useFakeTimers();
     installBridge(true);
     readSoundtrackSet.mockResolvedValue(signedFor("abc123"));
