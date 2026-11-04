@@ -317,6 +317,21 @@ const REPRESENTATIVE_ENTRIES: Readonly<
       count: 2,
     },
   },
+  "feedback.drafted": {
+    ...ENTRY_BASE,
+    kind: "feedback.drafted",
+    severity: "needs_action",
+    outcome: null,
+    resolvedAt: null,
+    payload: {
+      kind: "feedback_draft",
+      epicId: "epic-1",
+      chatId: "chat-1",
+      chatTitle: "Chat",
+      taskTitle: "Task",
+      blockId: "block-1",
+    },
+  },
   "host.operation.finished": {
     ...ENTRY_BASE,
     kind: "host.operation.finished",

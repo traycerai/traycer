@@ -1068,4 +1068,16 @@ export const PAYLOAD_FINGERPRINT_BASELINE = {
     },
     required: ["kind", "hostId", "hostName", "count"],
   },
+  feedback_draft: {
+    type: "object",
+    properties: {
+      kind: { type: "string", const: "feedback_draft" },
+      epicId: { type: "string", minLength: 1 },
+      chatId: { type: "string", minLength: 1 },
+      chatTitle: { type: "string" },
+      taskTitle: { type: "string" },
+      blockId: { type: "string", minLength: 1 },
+    },
+    required: ["kind", "epicId", "chatId", "chatTitle", "taskTitle", "blockId"],
+  },
 } satisfies Record<HostNotificationKnownPayloadKind, JsonSchemaFingerprint>;

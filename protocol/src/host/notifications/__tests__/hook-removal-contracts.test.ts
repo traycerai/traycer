@@ -483,15 +483,17 @@ describe("the removal notice on each negotiated version", () => {
     ).toBe(true);
   });
 
-  it("is registered on the latest line of each surface", () => {
-    expect(hostRpcRegistry["host.notifications.list"][2].latestMinor).toBe(5);
+  it("is registered from list 2.5, feed 1.7 and cloudFeed 1.6 on", () => {
+    expect(
+      hostRpcRegistry["host.notifications.list"][2].latestMinor,
+    ).toBeGreaterThanOrEqual(5);
     expect(
       hostStreamRpcRegistry["host.notifications.feed.subscribe"][1].latestMinor,
-    ).toBe(7);
+    ).toBeGreaterThanOrEqual(7);
     expect(
       hostStreamRpcRegistry["host.notifications.cloudFeed.subscribe"][1]
         .latestMinor,
-    ).toBe(6);
+    ).toBeGreaterThanOrEqual(6);
   });
 });
 

@@ -11,6 +11,7 @@ import type {
   ImageGenerationResult,
   ToolCallManagedCommand,
   ToolCallMcpAppStamp,
+  ToolCallFeedbackDraftStamp,
   ToolCallArtifactStamp,
 } from "@traycer/protocol/persistence/epic/content-blocks";
 import { useChatTranscriptJumpStore } from "@/stores/chats/chat-transcript-jump-store";
@@ -64,6 +65,7 @@ import { ManagedCommandRestartSegment } from "./managed-command-restart-segment"
 import { ManagedCommandStartSegment } from "./managed-command-start-segment";
 import { isTraycerBrowserReplToolName } from "@traycer/protocol/host/agent/gui/browser-tools";
 import { McpAppRow } from "./mcp-app-row";
+import { FeedbackDraftCard } from "./feedback-draft-card";
 import { ArtifactRow } from "./artifact-row";
 import { ToolImageGallery } from "./tool-image-gallery";
 import { BotSendCard } from "@/components/bots/bot-send-card";
@@ -112,6 +114,9 @@ interface ToolSegmentProps {
   // The MCP App the call rendered (null otherwise). Routes the call to the
   // app row.
   mcpApp: ToolCallMcpAppStamp | null;
+  // The feedback the call drafted (null otherwise). Routes the call to the
+  // draft's card.
+  feedbackDraft: ToolCallFeedbackDraftStamp | null;
   variant: "card" | "row";
   headerFindUnitId: string | null;
 }
@@ -296,6 +301,15 @@ export function ToolSegment(props: ToolSegmentProps) {
         id={props.id}
         send={botSend}
         findUnitId={props.headerFindUnitId}
+      />
+    );
+  }
+  if (props.feedbackDraft !== null) {
+    return (
+      <FeedbackDraftCard
+        id={props.id}
+        draft={props.feedbackDraft}
+        headerFindUnitId={props.headerFindUnitId}
       />
     );
   }

@@ -1492,6 +1492,22 @@ export type SendAgentMessageRequestV11 = z.infer<
 >;
 
 /**
+ * `agent.sendMessage@1.2` - adds `attachments`: file names of images in the
+ * SENDER's own transcript, sent with the message as images. The host resolves
+ * each name against the sender chat's image attachments, most recent first;
+ * the receiver gets the image itself, not a description of it. Empty sends
+ * text only.
+ */
+export const sendAgentMessageRequestSchemaV12 = lazySchema(() =>
+  sendAgentMessageRequestSchemaV11.extend({
+    attachments: z.array(z.string()).default([]),
+  }),
+);
+export type SendAgentMessageRequestV12 = z.infer<
+  typeof sendAgentMessageRequestSchemaV12
+>;
+
+/**
  * `responseId` is the broker-minted thread id when the request carried
  * `expectReply=true` - the receiver passes it back on its reply. It is
  * `null` when no reply is expected (one-shot delivery or a final reply

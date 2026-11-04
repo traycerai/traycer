@@ -1,13 +1,15 @@
-import {
-  redactSensitiveText,
-  SENSITIVE_KEY_PATTERN,
-} from "@traycer/protocol/utils/text/redaction";
+import { redactSensitiveText, SENSITIVE_KEY_PATTERN } from "./redaction";
 
 /**
  * The support-specific scrubber (ticket 09 / tech-plan T6): applied at
  * serialization to every private string, log tail, local diagnostic bundle,
  * and derived title before any of it can leave the machine (Sentry, the
  * local diagnostic bundle file, or the public GitHub draft).
+ *
+ * It lives in the protocol package because two senders use it: the desktop's
+ * "Report an issue" and the host's agent-feedback diagnostics. Both ship the
+ * same kind of text to the same kind of place, so they must scrub it the
+ * same way.
  *
  * Deliberately does NOT reuse `logger.ts`'s `redactLogText`: that helper caps
  * output at 1,000 chars, which would silently truncate exactly the 500-line /
@@ -136,6 +138,43 @@ const UNC_PATH_PATTERN = new RegExp(
 export function scrubSupportText(text: string): string {
   const pathPseudonyms = new Map<string, string>();
   return scrubSupportTextWithPseudonyms(text, pathPseudonyms);
+}
+
+/**
+ * The header every log entry starts with, in both logs a report attaches:
+ * `host.log` writes `[YYYY-MM-DD HH:MM:SS.mmm] [LEVEL] ` (traycer-host's
+ * `host-logger.ts`), and electron-log's default file format writes the same
+ * shape with a lowercase level. The host's writer guarantees no payload line
+ * starts with this header, so it is the only entry boundary there is.
+ */
+const LOG_ENTRY_HEADER =
+  /^\[\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}\.\d{3}\] \[([A-Za-z]+)\]/;
+
+/**
+ * Scrubs a log tail for egress: drops every DEBUG entry, then applies
+ * {@link scrubSupportText} to what is left.
+ *
+ * DEBUG is the one level allowed to carry account and user identifiers, so
+ * no DEBUG entry leaves the machine. An entry is its header line plus every
+ * line after it up to the next header (an indented stack, or raw output
+ * written between entries), and the whole entry is dropped with its header.
+ * Lines before the first header belong to an entry whose header the tail cut
+ * off, so they are dropped too: their level is unknown and might be DEBUG.
+ *
+ * No length cap, for the same reason as `scrubSupportText`: the caller caps
+ * the result, so the budget measures what ships.
+ */
+export function scrubLogTail(text: string): string {
+  const kept: string[] = [];
+  let keepEntry = false;
+  for (const line of text.split("\n")) {
+    const header = LOG_ENTRY_HEADER.exec(line);
+    if (header !== null) {
+      keepEntry = header[1]?.toLowerCase() !== "debug";
+    }
+    if (keepEntry) kept.push(line);
+  }
+  return scrubSupportText(kept.join("\n"));
 }
 
 function scrubSupportTextWithPseudonyms(

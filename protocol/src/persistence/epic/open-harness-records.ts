@@ -52,6 +52,7 @@ import {
   toolCallBlockSchema,
   toolCallBlockSchemaPreArtifact,
   toolCallBlockSchemaPreBotSendReceipt,
+  toolCallBlockSchemaPreFeedbackDraft,
   toolCallBlockSchemaPreDelivery,
 } from "@traycer/protocol/persistence/epic/content-blocks";
 import {
@@ -59,6 +60,8 @@ import {
   userMessageSchema,
   userMessageSchemaPreCanvas,
   userMessageSchemaPreConversation,
+  userMessageSchemaPreSlack,
+  userMessageSenderTypeFor,
 } from "@traycer/protocol/persistence/epic/messages";
 import {
   agentSenderSchema,
@@ -232,6 +235,27 @@ export const openContentBlockSchema = lazySchema(() =>
 );
 export type OpenContentBlock = z.infer<typeof openContentBlockSchema>;
 
+/** Open blocks through `chat.subscribe@1.41`, before the feedback-draft stamp. */
+export const openContentBlockSchemaPreFeedbackDraft = lazySchema(() =>
+  z.discriminatedUnion("type", [
+    openTextBlockSchema,
+    reasoningBlockSchema,
+    toolCallBlockSchemaPreFeedbackDraft,
+    fileChangeBlockSchema,
+    commandBlockSchema,
+    subAgentBlockSchema,
+    approvalBlockSchema,
+    todoBlockSchema,
+    openPlanBlockSchema,
+    errorBlockSchema,
+    compactionBlockSchema,
+    autonomousResumeBlockSchema,
+    openSteerBlockSchema,
+    interviewBlockSchema,
+    artifactOperationBlockSchema,
+  ]),
+);
+
 /**
  * The open content-block union as `chat.subscribe@1.23` through `@1.28` ship
  * it: the tool block without `1.29`'s `agentMessageDelivery` stamp. Listed
@@ -278,6 +302,22 @@ export const openUserMessageSchemaPreCanvas = lazySchema(() =>
       });
     }),
 );
+/** The open user row `chat.subscribe` lines through `1.42` ship: no `slack` payload. */
+export const openUserMessageSchemaPreSlack = lazySchema(() =>
+  z
+    .object({
+      ...userMessageSchemaPreSlack.shape,
+      sender: openUserMessageSenderSchema,
+    })
+    .superRefine((message, ctx) => {
+      if (message.sender.type === message.message.kind) return;
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["message", "kind"],
+        message: "User message sender.type must match message.kind.",
+      });
+    }),
+);
 export const openUserMessageSchema = lazySchema(() =>
   z
     .object({
@@ -285,7 +325,10 @@ export const openUserMessageSchema = lazySchema(() =>
       sender: openUserMessageSenderSchema,
     })
     .superRefine((message, ctx) => {
-      if (message.sender.type === message.message.kind) return;
+      if (
+        message.sender.type === userMessageSenderTypeFor(message.message.kind)
+      )
+        return;
       ctx.addIssue({
         code: z.ZodIssueCode.custom,
         path: ["message", "kind"],
@@ -331,6 +374,14 @@ export const openAssistantMessageSchema = lazySchema(() =>
 );
 export type OpenAssistantMessage = z.infer<typeof openAssistantMessageSchema>;
 
+/** The open assistant row `chat.subscribe@1.37` through `@1.41` ship. */
+export const openAssistantMessageSchemaPreFeedbackDraft = lazySchema(() =>
+  assistantMessageSchema.extend({
+    sender: openAgentSenderSchema,
+    blocks: z.array(openContentBlockSchemaPreFeedbackDraft),
+  }),
+);
+
 /** The open assistant row `chat.subscribe@1.23` through `@1.28` ship. */
 export const openAssistantMessageSchemaPreDelivery = lazySchema(() =>
   assistantMessageSchema.extend({
@@ -342,7 +393,7 @@ export const openAssistantMessageSchemaPreDelivery = lazySchema(() =>
 /** Canvas-aware rows before the not-applied outcome flag. */
 export const openMessageSchemaPreNotApplied = lazySchema(() =>
   z.discriminatedUnion("role", [
-    openUserMessageSchema,
+    openUserMessageSchemaPreSlack,
     openAssistantMessageSchemaPreNotApplied,
   ]),
 );
@@ -350,6 +401,20 @@ export const openMessageSchemaPreNotApplied = lazySchema(() =>
 export const openMessageSchema = lazySchema(() =>
   z.discriminatedUnion("role", [
     openUserMessageSchema,
+    openAssistantMessageSchema,
+  ]),
+);
+/** The open row `chat.subscribe@1.37` through `@1.41` ship. */
+export const openMessageSchemaPreFeedbackDraft = lazySchema(() =>
+  z.discriminatedUnion("role", [
+    openUserMessageSchemaPreSlack,
+    openAssistantMessageSchemaPreFeedbackDraft,
+  ]),
+);
+/** The open row `chat.subscribe@1.42` ships: `tool_call.feedbackDraft`, no `slack` user row. */
+export const openMessageSchemaPreSlack = lazySchema(() =>
+  z.discriminatedUnion("role", [
+    openUserMessageSchemaPreSlack,
     openAssistantMessageSchema,
   ]),
 );

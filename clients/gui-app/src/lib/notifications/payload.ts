@@ -43,6 +43,7 @@ export type NotificationPayloadKind =
   | "epic"
   | "approval"
   | "interview"
+  | "feedbackDraft"
   | "chat"
   | "terminal"
   | "browserSession"
@@ -79,6 +80,14 @@ export interface InterviewNotificationPayload {
   readonly epicId: string;
   readonly chatId: string;
   readonly interviewBlockId: string | undefined;
+}
+
+/** A feedback draft an agent wrote, waiting on its `tool_call` block. */
+export interface FeedbackDraftNotificationPayload {
+  readonly kind: "feedbackDraft";
+  readonly epicId: string;
+  readonly chatId: string;
+  readonly blockId: string;
 }
 
 /**
@@ -176,6 +185,7 @@ export type NotificationPayload =
   | EpicNotificationPayload
   | ApprovalNotificationPayload
   | InterviewNotificationPayload
+  | FeedbackDraftNotificationPayload
   | ChatNotificationPayload
   | TerminalNotificationPayload
   | BrowserSessionNotificationPayload
@@ -363,6 +373,18 @@ function parseInterviewPayload(
   };
 }
 
+function parseFeedbackDraftPayload(
+  value: Record<string, unknown>,
+): FeedbackDraftNotificationPayload | null {
+  const epicId = readString(value.epicId);
+  const chatId = readString(value.chatId);
+  const blockId = readString(value.blockId);
+  if (epicId === null || chatId === null || blockId === null) {
+    return null;
+  }
+  return { kind: "feedbackDraft", epicId, chatId, blockId };
+}
+
 /**
  * Total parse of a host-surface destination. An unknown `surface` yields
  * `null` (degrade to opening the centre) rather than a payload the router
@@ -433,6 +455,9 @@ export function parseNotificationPayload(
       return parseApprovalPayload(value);
     case "interview":
       return parseInterviewPayload(value);
+    case "feedback_draft":
+    case "feedbackDraft":
+      return parseFeedbackDraftPayload(value);
     default:
       return null;
   }
@@ -482,6 +507,7 @@ export function isNotificationPayloadRoutable(
     case "epic":
     case "chat":
     case "interview":
+    case "feedbackDraft":
     case "terminal":
     case "browserSession":
     case "hostSurface":
@@ -603,6 +629,25 @@ export function routeNotificationForHost(
             payload.interviewBlockId === undefined
               ? null
               : { kind: "block", blockId: payload.interviewBlockId },
+        },
+      );
+    // The draft's card is the block itself: open the chat, scroll to it and
+    // expand it, on the host that holds the draft.
+    case "feedbackDraft":
+      return routeEpicChatNotification(
+        navigate,
+        {
+          kind: "chat",
+          epicId: payload.epicId,
+          chatId: payload.chatId,
+          messageId: undefined,
+          eventId: undefined,
+        },
+        receivedAt,
+        {
+          targetHostId: originHostId,
+          effectiveHostId,
+          transcriptTarget: { kind: "block", blockId: payload.blockId },
         },
       );
     case "artifact": {
