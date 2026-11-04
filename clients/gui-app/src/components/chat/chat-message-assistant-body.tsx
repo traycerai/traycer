@@ -1784,6 +1784,10 @@ export function AssistantSegment({
     case "auto-judge-notice":
       // A judge notice: synthesized system row only, like the refusal above.
       return null;
+    case "bot-exchanges":
+      // A bot channel's line of bot-to-bot messages: synthesized system row
+      // only, like the two above.
+      return null;
     default: {
       const _exhaustive: never = segment;
       void _exhaustive;

@@ -561,6 +561,23 @@ export type MessageSegment =
     }
   | {
       id: string;
+      kind: "bot-exchanges";
+      /**
+       * A run of a bot's messages with other bots, drawn as one line between
+       * a bot channel's rows (Tracy Bots, decision 174). Synthesized by
+       * `withBotExchangeLines` from the bot's Communication Graph feed, never
+       * persisted: one entry per other bot, in the order the run first
+       * reached it, with how many messages of the run it took part in.
+       */
+      pairs: ReadonlyArray<{
+        readonly peerBotId: string;
+        readonly count: number;
+      }>;
+      /** When the run's last message was sent. */
+      lastAt: number;
+    }
+  | {
+      id: string;
       kind: "imported-chat-marker";
       /**
        * Synthesized in `rendered-messages` from the chat's `chat.imported`
