@@ -79,13 +79,26 @@ export function ShareNudgeToastContent(props: {
       }}
     >
       <div className="flex flex-col gap-1">
-        <div className="font-medium">Glad that worked out</div>
+        {/* The opt-out rides the title row, quieter than the two choices,
+            so those two keep one row to themselves. */}
+        <div className="flex items-center justify-between gap-3">
+          <div className="font-medium">Glad that worked out</div>
+          <Button
+            type="button"
+            size="xs"
+            variant="muted"
+            className="-my-1 -mr-2 shrink-0"
+            onClick={() => choose("opt_out")}
+          >
+            Don't ask again
+          </Button>
+        </div>
         <div className="text-muted-foreground">
           If Traycer saved you some time, a post on X helps other people find
           it.
         </div>
       </div>
-      <div className="flex flex-wrap items-center gap-1.5">
+      <div className="flex items-center gap-1.5">
         <Button
           type="button"
           size="sm"
@@ -125,15 +138,6 @@ export function ShareNudgeToastContent(props: {
               {String(seconds)}s
             </span>
           </span>
-        </Button>
-        <Button
-          type="button"
-          size="sm"
-          variant="ghost"
-          className="ml-auto"
-          onClick={() => choose("opt_out")}
-        >
-          Don't ask again
         </Button>
       </div>
     </div>
