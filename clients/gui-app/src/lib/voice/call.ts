@@ -46,13 +46,44 @@ export const CALL_END_PHRASES: ReadonlyArray<string> = [
 
 /** Whether an utterance is only an end phrase. */
 export function isCallEndPhrase(said: string): boolean {
-  const words = said
+  return CALL_END_PHRASES.includes(spokenWords(said));
+}
+
+/** A line's words, lowercased and without punctuation, one space apart. */
+function spokenWords(text: string): string {
+  return text
     .toLowerCase()
     .replace(/[^\p{L}\p{N}\s]/gu, " ")
     .split(/\s+/)
     .filter((word) => word.length > 0)
     .join(" ");
-  return CALL_END_PHRASES.includes(words);
+}
+
+/**
+ * Whether an output transcript delta begins a new output turn of the voice,
+ * decided by text alone (the vendor marks no turn). `turn` is the transcript
+ * of the current turn so far; `given` is the last line the app gave the
+ * voice to say, `null` before any. A turn is over once what it said is
+ * complete: nothing yet, a line ending in terminal punctuation (every line
+ * of the voice's own does), or the whole of the given line. A given line the
+ * person spoke over is cut short: a delta that does not go on with its text
+ * begins the next turn.
+ */
+export function beginsOutputTurn(
+  turn: string,
+  delta: string,
+  given: string | null,
+): boolean {
+  const said = turn.trim();
+  if (said.length === 0 || /[.!?]$/.test(said)) return true;
+  if (given === null) return false;
+  const givenWords = spokenWords(given);
+  const saidWords = spokenWords(said);
+  if (saidWords === givenWords) return true;
+  return (
+    givenWords.startsWith(saidWords) &&
+    !givenWords.startsWith(spokenWords(turn + delta))
+  );
 }
 
 /**

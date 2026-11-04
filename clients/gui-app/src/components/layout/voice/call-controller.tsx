@@ -59,6 +59,7 @@ import {
   REMINT_BEFORE_EXPIRY_MS,
   REMINT_CONTEXT_USAGE_RATIO,
   SHORT_SESSION_MS,
+  beginsOutputTurn,
   callFailureLine,
   callUnreachableLine,
   channelConversation,
@@ -110,6 +111,10 @@ interface Attempt {
   cancelled: boolean;
   /** The account signed in when the attempt began. */
   readonly account: string | null;
+  /** The output transcript of the voice's current turn: what closes an utterance. */
+  outputTurn: string;
+  /** The last line given to this engine to say, `null` before any. */
+  given: string | null;
 }
 
 /** What a send carries, besides the words: the call's channel. */
@@ -231,6 +236,7 @@ export function CallController(): ReactNode {
         if (attempt === null || attempt.cancelled || !attempt.started) return;
         try {
           attempt.engine.appendCommentary(text, delegationId);
+          attempt.given = text;
         } catch (error) {
           appLogger.warn("[voice] append failed", {
             error: describeLogError(error),
@@ -686,6 +692,8 @@ export function CallController(): ReactNode {
       failure: null,
       cancelled: false,
       account: useAuthStore.getState().contextMetadata?.userId ?? null,
+      outputTurn: "",
+      given: null,
     };
     attemptRef.current = attempt;
     const owns = (): boolean =>
@@ -786,15 +794,21 @@ export function CallController(): ReactNode {
           onOutputTranscriptDelta: (text) => {
             if (!owns()) return;
             const current = useVoiceSessionStore.getState();
-            const speech = ensureSpeech();
             // The utterance boundary (VC0): a new output turn begins, which
             // is the voice's acknowledgement of what the person said since the
-            // last one. The vendor marks no turn start, so a new turn is the
-            // first output after the voice had gone quiet; a fragment of the
-            // output still playing continues it and closes nothing.
-            const newTurn = !speech.activity().outputPlaying;
+            // last one. The vendor marks no turn, so it is told by text
+            // (`beginsOutputTurn`): a fragment that goes on with an unfinished
+            // line continues it and closes nothing. A tail of the person's
+            // words transcribed after the next acknowledgement began joins the
+            // next utterance: one mis-split, never a loss.
+            const newTurn = beginsOutputTurn(
+              attempt.outputTurn,
+              text,
+              attempt.given,
+            );
+            attempt.outputTurn = newTurn ? text : attempt.outputTurn + text;
             current.pushCaptionLine({ direction: "output", text });
-            speech.noteOutputTranscript(text);
+            ensureSpeech().noteOutputTranscript(text);
             if (!attempt.started || !newTurn) return;
             const said = current.takeOpenSpan();
             if (said !== null) utteranceRef.current(said);
@@ -1263,8 +1277,13 @@ function CallThreadWatch(props: {
   const holdTimerRef = useRef<number | null>(null);
   /** The hold line queued and not appended yet, so a reply can take its place. */
   const holdItemRef = useRef<string | null>(null);
-  /** The replying turn has had its one hold line: no reply row re-arms it. */
+  /**
+   * The replying turn has had its one hold line (said, or given to the voice
+   * and past taking back): no reply row re-arms it.
+   */
   const holdSpentRef = useRef(false);
+  /** Which replying turn is current, so a late delivery spends only its own. */
+  const spanRef = useRef(0);
   /** The requests whose failure has been said, so each is said once. */
   const announcedRef = useRef(new Set<string>());
   const lineSerialRef = useRef(0);
@@ -1274,7 +1293,7 @@ function CallThreadWatch(props: {
   } | null>(null);
 
   const sayLine = useCallback(
-    (kind: string, text: string): string => {
+    (kind: string, text: string, onDelivered: (() => void) | null): string => {
       lineSerialRef.current += 1;
       const id = `${kind}:${threadId}:${lineSerialRef.current}`;
       scheduler.enqueue({
@@ -1287,7 +1306,7 @@ function CallThreadWatch(props: {
           threadTitle: null,
           text,
         }),
-        onDelivered: null,
+        onDelivered,
         onGivenUp: null,
       });
       return id;
@@ -1300,20 +1319,28 @@ function CallThreadWatch(props: {
       holdTimerRef.current = null;
     }
   }, []);
-  /** Takes back a hold line that is queued and not appended yet. */
+  /**
+   * Takes back the hold line while it is still queued: it was never said, so
+   * the turn keeps its hold. One already given to the voice cannot be taken
+   * back and is being said: the turn has had it.
+   */
   const withdrawHold = useCallback(() => {
     const hold = holdItemRef.current;
     if (hold === null) return;
-    scheduler.remove(hold);
     holdItemRef.current = null;
+    const pending = scheduler.pendingCount();
+    scheduler.remove(hold);
+    if (scheduler.pendingCount() === pending) holdSpentRef.current = true;
   }, [scheduler]);
   /** Starts the wait for the turn's one hold line, from now. */
   const armHold = useCallback(() => {
     clearHold();
     holdTimerRef.current = window.setTimeout(() => {
       holdTimerRef.current = null;
-      holdSpentRef.current = true;
-      holdItemRef.current = sayLine("hold", CALL_HOLD_LINE);
+      const span = spanRef.current;
+      holdItemRef.current = sayLine("hold", CALL_HOLD_LINE, () => {
+        if (spanRef.current === span) holdSpentRef.current = true;
+      });
     }, CALL_HOLD_DELAY_MS);
   }, [clearHold, sayLine]);
   const armHoldRef = useRef(armHold);
@@ -1332,6 +1359,10 @@ function CallThreadWatch(props: {
         previous?.state !== "replying" ||
         previous.requestId !== turnRequest
       ) {
+        // A new turn: the last one's hold line, if still queued, is not
+        // this one's.
+        withdrawHold();
+        spanRef.current += 1;
         holdSpentRef.current = false;
         armHold();
       }
@@ -1353,7 +1384,7 @@ function CallThreadWatch(props: {
     const request = turnRequest ?? "";
     if (!news || (!known && announcedRef.current.has(request))) return;
     announcedRef.current.add(request);
-    sayLine("failed", callFailureLine(botTitle));
+    sayLine("failed", callFailureLine(botTitle), null);
   }, [
     armHold,
     botTitle,

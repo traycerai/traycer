@@ -140,9 +140,10 @@ const fake = vi.hoisted(() => {
   };
   const remote = { getAudioTracks: () => [{ enabled: true }] };
   // The sound-level detector the voice's track is watched by, once it is up.
-  const level: { onHealthy: ((healthy: boolean) => void) | null } = {
-    onHealthy: null,
-  };
+  const level: {
+    onHealthy: ((healthy: boolean) => void) | null;
+    onSpeaking: ((speaking: boolean) => void) | null;
+  } = { onHealthy: null, onSpeaking: null };
   const engines: FakeEngine[] = [];
   // The `bot.conversation.send` line the host negotiated; `null` is unknown.
   const sendVersion: { current: SchemaVersion | null } = { current: null };
@@ -255,10 +256,11 @@ vi.mock(
 vi.mock("@/lib/voice/audio-level", () => ({
   watchAudioLevel: (
     _stream: FakeRemote,
-    _onSpeaking: (speaking: boolean) => void,
+    onSpeaking: (speaking: boolean) => void,
     onHealthy: (healthy: boolean) => void,
   ) => {
     fake.level.onHealthy = onHealthy;
+    fake.level.onSpeaking = onSpeaking;
     return { stop: () => undefined };
   },
 }));
@@ -411,9 +413,13 @@ function speak(...deltas: ReadonlyArray<string>): void {
   });
 }
 
-/** The voice's acknowledgement begins: the utterance boundary. */
+/**
+ * The voice's acknowledgement begins: the utterance boundary. Every line the
+ * voice acknowledges with ends in terminal punctuation ("Okay.", "Got it.",
+ * "One moment."), which is how its turn is told to be over.
+ */
 async function acknowledge(): Promise<void> {
-  act(() => events().onOutputTranscriptDelta("Okay"));
+  act(() => events().onOutputTranscriptDelta("Okay."));
   await settle();
 }
 
@@ -443,6 +449,13 @@ function hearVoiceWithLevelDetection(): void {
   });
 }
 
+/** The voice's sound crosses the speaking threshold, or falls under it. */
+function remoteSpeaking(speaking: boolean): void {
+  const onSpeaking = fake.level.onSpeaking;
+  if (onSpeaking === null) throw new Error("no audio detector");
+  act(() => onSpeaking(speaking));
+}
+
 /** A call joined to thread `t-open`, whose history is `history`. */
 async function joinOpenThread(
   history: ReadonlyArray<ReplyRow>,
@@ -464,6 +477,7 @@ beforeEach(() => {
   fake.activity.set(null);
   fake.sendVersion.current = botConversationSendV13.schemaVersion;
   fake.level.onHealthy = null;
+  fake.level.onSpeaking = null;
   fake.track.enabled = true;
   fake.track.stop.mockReset();
   fake.track.stop.mockImplementation(() => {
@@ -652,7 +666,6 @@ describe("what the person says", () => {
     await settle();
     expect(fake.sendMock).toHaveBeenCalledTimes(1);
     speak(" the release.");
-    await untilQuiet();
     await acknowledge();
 
     expect(fake.sendMock.mock.calls.map(([request]) => request.text)).toEqual([
@@ -671,7 +684,6 @@ describe("what the person says", () => {
     speak("end the call");
     voiceSays(" checks");
     speak(" with the vendor tomorrow.");
-    await untilQuiet();
     await acknowledge();
 
     expect(useVoiceSessionStore.getState().phase).toBe("live");
@@ -685,7 +697,6 @@ describe("what the person says", () => {
     await say("First thing.");
     expect(useVoiceSessionStore.getState().focus?.threadId).toBe("t1");
 
-    await untilQuiet();
     await say("Second thing.");
 
     expect(fake.sendMock).toHaveBeenCalledTimes(2);
@@ -708,7 +719,6 @@ describe("what the person says", () => {
     );
     await dialLive(CHANNEL_CALL);
     await say("First thing.");
-    await untilQuiet();
     await say("Second thing.");
     expect(fake.sendMock).toHaveBeenCalledTimes(1);
 
@@ -778,10 +788,109 @@ describe("what the person says", () => {
     expect(fake.endVoiceSession).not.toHaveBeenCalled();
 
     voiceSays(callFailureLine(BOT_TITLE));
-    await untilQuiet();
     await say("Second thing.");
     expect(fake.sendMock).toHaveBeenCalledTimes(2);
     expect(fake.sendMock.mock.calls[1][0].text).toBe("Second thing.");
+  });
+});
+
+describe("the utterance boundary, told by the voice's own text", () => {
+  it("sends a short follow-up acknowledged 1.9 seconds after the previous acknowledgement without a detector", async () => {
+    await dialLive(CHANNEL_CALL);
+    await say("First request.");
+    await advance(800);
+    speak("Cancel");
+    await advance(200);
+    speak(" that.");
+    await advance(900);
+    voiceSays("Okay.");
+    await advance(10_000);
+    expect(fake.sendMock.mock.calls.map(([r]) => r.text)).toEqual([
+      "First request.",
+      "Cancel that.",
+    ]);
+  });
+
+  it("honours an exact end phrase with a 1.9-second acknowledgement gap without a detector", async () => {
+    await dialLive(CHANNEL_CALL);
+    await say("First request.");
+    await advance(800);
+    speak("bye");
+    await advance(1_100);
+    voiceSays("Okay.");
+    await advance(10_000);
+    expect(useVoiceSessionStore.getState().phase).toBe("idle");
+    expect(fake.sendMock.mock.calls.map(([r]) => r.text)).toEqual([
+      "First request.",
+    ]);
+  });
+
+  it("commits the first utterance when audio starts 100 ms before its transcript arrives", async () => {
+    await dialLive(CHANNEL_CALL);
+    hearVoiceWithLevelDetection();
+    speak("Ship the release.");
+    await advance(1_000);
+    remoteSpeaking(true);
+    await advance(100);
+    voiceSays("Okay.");
+    await advance(700);
+    remoteSpeaking(false);
+    await advance(10_000);
+    expect(fake.sendMock.mock.calls.map(([r]) => r.text)).toEqual([
+      "Ship the release.",
+    ]);
+  });
+
+  it("sends a follow-up while the detector still has the previous audio's hangover", async () => {
+    await dialLive(CHANNEL_CALL);
+    hearVoiceWithLevelDetection();
+    await say("First request.");
+    remoteSpeaking(true);
+    await advance(500); // Previous acknowledgement audio ends here.
+    speak("No.");
+    await advance(400); // Next acknowledgement transcript: 900ms after the last.
+    voiceSays("Okay.");
+    await advance(100); // Detector's 500ms audio hangover ends.
+    remoteSpeaking(false);
+    await advance(10_000);
+    expect(fake.sendMock.mock.calls.map(([r]) => r.text)).toEqual([
+      "First request.",
+      "No.",
+    ]);
+  });
+
+  it("sends the person's words at once when they speak over a reply and the voice is cut off", async () => {
+    const chat = await joinOpenThread([]);
+    land(chat, [
+      botRow("r1", "The release has passed checks and is ready to ship.", 200),
+    ]);
+    await settle();
+    expect(appendedTexts()).toEqual([
+      "The release has passed checks and is ready to ship.",
+    ]);
+
+    voiceSays("The release has passed");
+    speak("Cancel the release");
+    await acknowledge();
+
+    expect(fake.sendMock.mock.calls.map(([request]) => request.text)).toEqual([
+      "Cancel the release",
+    ]);
+  });
+
+  it("takes whatever the voice says after a whole reply with no closing mark as a new turn, even a bare closing mark", async () => {
+    const chat = await joinOpenThread([]);
+    land(chat, [botRow("r1", "The build finished with two warnings", 200)]);
+    await settle();
+    voiceSays("The build finished");
+    voiceSays(" with two warnings");
+    speak("Ship it");
+    voiceSays(".");
+    await settle();
+
+    expect(fake.sendMock.mock.calls.map(([request]) => request.text)).toEqual([
+      "Ship it",
+    ]);
   });
 });
 
@@ -843,7 +952,6 @@ describe("a send the bot cannot take", () => {
     );
     await dialLive(CHANNEL_CALL);
     await say("First thing.");
-    await untilQuiet();
     await say("Second thing.");
 
     answer(QUEUED);
@@ -857,7 +965,6 @@ describe("a send the bot cannot take", () => {
   it("neither re-sends the queued words nor sends anything said after", async () => {
     await dialAndSayIntoQueued();
 
-    await untilQuiet();
     await say("Also, one more thing.");
     await untilQuiet();
 
@@ -1075,6 +1182,92 @@ describe("holding the floor while the bot works", () => {
     await advance(OUTPUT_HANGOVER_MS);
 
     expect(holds()).toBe(2);
+  });
+
+  it("restarts the hold wait when a reply replaces a queued but unspoken hold", async () => {
+    const chat = await joinOpenThread([]);
+    hearVoiceWithLevelDetection();
+    act(() =>
+      fake.activity.set(threadActivity("t-open", "replying", TURN_REQUEST)),
+    );
+    await advance(CALL_HOLD_DELAY_MS - 500);
+    speak("Please wait");
+    await advance(500);
+    expect(appends()).toEqual([]);
+    land(chat, [
+      botRow("r1", "Build passed; deployment is still running.", 200),
+    ]);
+    await untilQuiet();
+    expect(appendedTexts()).toEqual([
+      "Build passed; deployment is still running.",
+    ]);
+    voiceSays("Build passed; deployment is still running.");
+    await advance(2 * CALL_HOLD_DELAY_MS);
+    expect(
+      appendedTexts().filter((text) => text === CALL_HOLD_LINE),
+    ).toHaveLength(1);
+  });
+
+  it("withdraws the old queued hold when a new request replaces replying without an idle snapshot", async () => {
+    await joinOpenThread([]);
+    act(() =>
+      fake.activity.set(threadActivity("t-open", "replying", TURN_REQUEST)),
+    );
+    await advance(CALL_HOLD_DELAY_MS - 500);
+    speak("Please wait");
+    await advance(500);
+    expect(appends()).toEqual([]);
+    act(() =>
+      fake.activity.set(threadActivity("t-open", "replying", "r-next")),
+    );
+    await advance(INPUT_ACTIVE_WINDOW_MS); // New turn has not waited four seconds.
+    expect(appendedTexts()).toEqual([]);
+  });
+
+  it("gives a new turn its own full wait after a reply, though the old turn's hold is confirmed said after the new turn began", async () => {
+    const chat = await joinOpenThread([]);
+    hearVoiceWithLevelDetection();
+    act(() =>
+      fake.activity.set(threadActivity("t-open", "replying", TURN_REQUEST)),
+    );
+    await advance(CALL_HOLD_DELAY_MS);
+    expect(holds()).toBe(1);
+
+    act(() =>
+      fake.activity.set(threadActivity("t-open", "replying", "r-next")),
+    );
+    await advance(1_000);
+    // The old turn's hold is only now confirmed said: it is not the new turn's.
+    voiceSays(CALL_HOLD_LINE);
+    await advance(1_000);
+    land(chat, [botRow("r1", "Build finished with two warnings", 200)]);
+    await settle();
+    voiceSays("Build finished with two warnings");
+    await advance(CALL_HOLD_DELAY_MS - 1);
+    expect(holds()).toBe(1);
+    await advance(1);
+    await advance(OUTPUT_HANGOVER_MS);
+
+    expect(holds()).toBe(2);
+  });
+
+  it("says no second hold line in a turn when a reply finds its hold already given to the voice", async () => {
+    const chat = await joinOpenThread([]);
+    act(() =>
+      fake.activity.set(threadActivity("t-open", "replying", TURN_REQUEST)),
+    );
+    await advance(CALL_HOLD_DELAY_MS);
+    expect(holds()).toBe(1);
+
+    land(chat, [botRow("r1", "Build finished with two warnings", 200)]);
+    await advance(CALL_HOLD_DELAY_MS + 1);
+    voiceSays(CALL_HOLD_LINE);
+    await untilQuiet();
+    voiceSays("Build finished with two warnings");
+    await advance(2 * CALL_HOLD_DELAY_MS);
+
+    expect(appendedTexts()).toContain("Build finished with two warnings");
+    expect(holds()).toBe(1);
   });
 
   it("withdraws a hold line still waiting when a reply lands, so the reply is what is said", async () => {
