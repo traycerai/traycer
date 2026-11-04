@@ -1383,8 +1383,8 @@ function canReaderGestureMove(
  *   ownership through the same latch and uses the same fresh-DOM authority.
  *   Every real maintain trigger funnels through `followEndIfPermitted` - see
  *   `chat-timeline.tsx`'s wiring.
- * - A send's layout transaction (a voided window, a row-shape commit and its
- *   next frame) holds every automatic correction at `startEndCorrection`.
+ * - A send's voided window and the row-shape commit that replaces it through
+ *   its next frame hold every automatic correction at `startEndCorrection`.
  *   The reader is still judged as ever; only the write waits, and the one
  *   correction owed is issued when the hold ends.
  * - Both the listener and the observer skip unmeasurable geometry
@@ -1490,9 +1490,9 @@ export function useChatTimelineFollowLatch(
   // until its completion, reader input, an end navigation or unmount. Its
   // arm cannot say so - the navigation's own first report may consume it.
   const ownsFreeNavigationRef = useRef(false);
-  // The send's layout transaction holds automatic correction: while the
-  // transcript window is voided, and through a row-shape commit and the frame
-  // after it. The list's content is estimates then, and iOS WebKit reverts,
+  // The send's void and replacement hold automatic correction: while the
+  // transcript window is voided, and through its replacement row-shape commit
+  // and the frame after it. The list's content is estimates then, and WebKit reverts,
   // clamps or reorders a write issued in a frame whose scrollable size
   // changes - a write the ledger would read back as the reader leaving. Each
   // bit is set and cleared by its own signal (`setWindowInvalidated`,
