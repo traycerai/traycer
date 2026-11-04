@@ -70,6 +70,9 @@ import {
   type BotMentionDirectory,
 } from "@/components/bots/bot-mentions-context";
 import { useAuthStore } from "@/stores/auth/auth-store";
+import { useStandaloneBotsStore } from "@/stores/bots/standalone-bots-store";
+import { EMPTY_HOME_BOTS_MODEL } from "@/lib/home-bots/bots-model";
+import { ONE_PERSONAL_MAIN_BOT_DIRECTORY } from "@/lib/home-bots/__tests__/standalone-bots-fixtures";
 import {
   BotMessageComposer,
   type BotComposerEdit,
@@ -357,6 +360,27 @@ describe("<BotMessageComposer /> @ mentions", () => {
 
   afterEach(() => {
     useAuthStore.setState({ profile: null });
+    useStandaloneBotsStore.setState({
+      directory: { model: EMPTY_HOME_BOTS_MODEL, setups: [] },
+      settled: false,
+    });
+  });
+
+  it("offers the team's members and no bot to a person who has bots to mention elsewhere", async () => {
+    const user = userEvent.setup();
+    useStandaloneBotsStore.setState({
+      directory: ONE_PERSONAL_MAIN_BOT_DIRECTORY,
+      settled: true,
+    });
+    mountIn(TEAM);
+
+    await user.type(box(), "@");
+    expect(optionNames()).toEqual(["u-ann", "u-anders", "u-bob"]);
+
+    await user.type(box(), "Tra");
+    expect(screen.queryByTestId("bot-mention-list")).toBeNull();
+    expect(screen.queryByRole("option")).toBeNull();
+    expect(screen.queryByText("Tracy")).toBeNull();
   });
 
   it("lists the team's matching members in one flat list, not the viewer nor a member without a name", async () => {

@@ -274,8 +274,7 @@ describe("<MobileCurrentTileBar trailing={null} />", () => {
       <MobileCurrentTileBar
         epicId="epic-1"
         tile={SPEC_TILE}
-        level2="bar"
-        leading={null}
+        onSwitch={null}
         trailing={null}
       />,
     );
@@ -289,8 +288,7 @@ describe("<MobileCurrentTileBar trailing={null} />", () => {
       <MobileCurrentTileBar
         epicId="epic-1"
         tile={CHAT_TILE}
-        level2="bar"
-        leading={null}
+        onSwitch={null}
         trailing={null}
       />,
     );
@@ -317,8 +315,7 @@ describe("<MobileCurrentTileBar trailing={null} />", () => {
         <MobileCurrentTileBar
           epicId="epic-1"
           tile={TERMINAL_TILE}
-          level2="bar"
-          leading={null}
+          onSwitch={null}
           trailing={null}
         />,
       );
@@ -335,8 +332,7 @@ describe("<MobileCurrentTileBar trailing={null} />", () => {
         <MobileCurrentTileBar
           epicId="epic-1"
           tile={TERMINAL_TILE}
-          level2="bar"
-          leading={null}
+          onSwitch={null}
           trailing={null}
         />,
       );
@@ -355,8 +351,7 @@ describe("<MobileCurrentTileBar trailing={null} />", () => {
         <MobileCurrentTileBar
           epicId="epic-1"
           tile={TERMINAL_TILE}
-          level2="bar"
-          leading={null}
+          onSwitch={null}
           trailing={null}
         />,
       );
@@ -373,8 +368,7 @@ describe("<MobileCurrentTileBar trailing={null} />", () => {
         <MobileCurrentTileBar
           epicId="epic-1"
           tile={TERMINAL_TILE}
-          level2="bar"
-          leading={null}
+          onSwitch={null}
           trailing={null}
         />,
       );
@@ -410,8 +404,7 @@ describe("<MobileCurrentTileBar trailing={null} />", () => {
           epicId="epic-1"
 
           tile={input.tile}
-          level2="bar"
-          leading={null}
+          onSwitch={null}
           trailing={null}
         />,
       );
@@ -507,8 +500,7 @@ describe("<MobileCurrentTileBar trailing={null} />", () => {
         <MobileCurrentTileBar
           epicId="epic-1"
           tile={CHAT_TILE}
-          level2="bar"
-          leading={null}
+          onSwitch={null}
           trailing={null}
         />,
       );
@@ -535,8 +527,7 @@ describe("<MobileCurrentTileBar trailing={null} />", () => {
           <MobileCurrentTileBar
             epicId="epic-1"
             tile={aTile}
-            level2="bar"
-            leading={null}
+            onSwitch={null}
             trailing={null}
           />,
         );
@@ -551,8 +542,7 @@ describe("<MobileCurrentTileBar trailing={null} />", () => {
           <MobileCurrentTileBar
             epicId="epic-1"
             tile={bTile}
-            level2="bar"
-            leading={null}
+            onSwitch={null}
             trailing={null}
           />,
         );

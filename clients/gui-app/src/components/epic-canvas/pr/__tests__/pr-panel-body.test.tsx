@@ -25,6 +25,10 @@ import { TooltipProvider } from "@/components/ui/tooltip";
 import { prDetailTileId } from "@/lib/pr/pr-detail-tile";
 import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
 import { usePrPanelStore } from "@/stores/epics/pr-panel-store";
+import {
+  DEFAULT_LAYOUT_SNAPSHOT,
+  useLayoutStore,
+} from "@/stores/layout/layout-store";
 import type { TilePane } from "@/stores/epics/canvas/tile-tree";
 import {
   requestSidebarNodeReveal,
@@ -202,6 +206,15 @@ describe("PrPanelBody card list", () => {
 
   beforeEach(() => {
     canvasHostState.id = "host-a";
+    // The panel body draws only in an open sidebar, and the shipped layout
+    // collapses the sidebar in a new tab.
+    useLayoutStore.setState({
+      ...DEFAULT_LAYOUT_SNAPSHOT,
+      arrangement: {
+        ...DEFAULT_LAYOUT_SNAPSHOT.arrangement,
+        sidebarStartCollapsed: false,
+      },
+    });
     usePrPanelStore.setState({ stateFilter: "all" });
     usePrPresenceStore.setState({ hasItemsByScopeKey: {} });
     resetCanvas();

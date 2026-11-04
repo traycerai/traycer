@@ -2,6 +2,7 @@ import { CornerUpLeft, File } from "lucide-react";
 import type { ReactElement } from "react";
 import { isSubsequence } from "@traycer/protocol/utils/text/fuzzy";
 import type {
+  BotMentionEntry,
   BrowserTabMentionEntry,
   EpicAgentMentionEntry,
   EpicMentionEntry,
@@ -39,6 +40,7 @@ import {
 } from "./step-chrome";
 import {
   artifactsIcon,
+  botCategoryIcon,
   browserTabCategoryIcon,
   descriptionForSuggestion,
   detailForSuggestion,
@@ -78,6 +80,7 @@ export type MentionProviderId =
   | "issues"
   | "epic"
   | "chat"
+  | "bots"
   | "browser-tab"
   | "terminals"
   | "artifacts"
@@ -289,6 +292,8 @@ export interface ComposerMentionProviderContext {
    * `BrowserTabMentionEntry`).
    */
   readonly browserTabEntries: ReadonlyArray<BrowserTabMentionEntry>;
+  /** Every bot the person can see, from the standalone bots directory. */
+  readonly botEntries: ReadonlyArray<BotMentionEntry>;
   /**
    * The subset of `roots` demonstrably attached to `currentEpicId` on this
    * host (a binding running dir or resolved workspace folder). File/folder
@@ -852,6 +857,47 @@ class AgentMentionProvider extends ComposerMentionProvider {
 }
 
 /**
+ * The **Tracy** category: every bot the person can see, whichever task is
+ * open. A bot is not an Agent of the task, so it is not listed under Agents;
+ * its chip names the bot and its trunk agent, which the agent messages. No
+ * category while the directory holds no bot.
+ */
+class BotMentionProvider extends ComposerMentionProvider {
+  readonly id = "bots" as const;
+  readonly rootOrder = 46;
+  protected readonly label = "Tracy";
+  protected readonly description = "Bots";
+
+  rootEntry(context: ComposerMentionProviderContext): MentionMenuEntry | null {
+    if (context.botEntries.length === 0) return null;
+    return providerEntry({
+      id: "provider:bots",
+      label: this.label,
+      description: this.description,
+      icon: botCategoryIcon(),
+      step: this.providerStep("root", null),
+    });
+  }
+
+  rootSearchEntries(
+    context: ComposerMentionProviderContext,
+  ): ReadonlyArray<MentionMenuEntry> {
+    return botSuggestionEntries(context);
+  }
+
+  stepEntries(
+    _step: MentionFlowStep,
+    context: ComposerMentionProviderContext,
+  ): ReadonlyArray<MentionMenuEntry> {
+    return [backEntry("Mentions"), ...botSuggestionEntries(context)];
+  }
+
+  menuCopy(_step: MentionFlowStep): MentionMenuCopy {
+    return { header: "Tracy", empty: "No bots available" };
+  }
+}
+
+/**
  * The one **Browser** category. Lists every attachable tab across every
  * browser session on the chat's host, flat (no per-session grouping) - the
  * design calls for one drill-in list, title plus url subtitle, ranked with
@@ -860,7 +906,7 @@ class AgentMentionProvider extends ComposerMentionProvider {
  */
 class BrowserTabMentionProvider extends ComposerMentionProvider {
   readonly id = "browser-tab" as const;
-  readonly rootOrder = 46;
+  readonly rootOrder = 47;
   protected readonly label = "Browser";
   protected readonly description = "Browser tabs";
 
@@ -904,7 +950,7 @@ class BrowserTabMentionProvider extends ComposerMentionProvider {
  */
 class TerminalMentionProvider extends ComposerMentionProvider {
   readonly id = "terminals" as const;
-  readonly rootOrder = 47;
+  readonly rootOrder = 48;
   protected readonly label = "Terminals";
   protected readonly description = "Task terminals";
 
@@ -1396,6 +1442,7 @@ export const mentionProviderRegistry = new MentionProviderRegistry([
   new GithubMentionProvider("issues"),
   new EpicMentionProvider(),
   new AgentMentionProvider(),
+  new BotMentionProvider(),
   new BrowserTabMentionProvider(),
   new TerminalMentionProvider(),
   new ArtifactMentionProvider(),
@@ -1489,7 +1536,7 @@ function suggestionEntry(entry: MentionSuggestionEntry): MentionMenuEntry[] {
       label: entry.label,
       detail: detailForSuggestion(entry),
       description: descriptionForSuggestion(entry),
-      searchText: null,
+      searchText: entry.kind === "bot" ? entry.keywords.join(" ") : null,
       disabledReason: null,
       icon: iconForSuggestion(entry),
       action,
@@ -1534,6 +1581,52 @@ function terminalSuggestionEntries(
     context.query,
     context.limit,
   ).flatMap((entry) => suggestionEntry(entry));
+}
+
+function botSuggestionEntries(
+  context: ComposerMentionProviderContext,
+): ReadonlyArray<MentionMenuEntry> {
+  return rankBotEntries(
+    context.botEntries,
+    context.query,
+    context.limit,
+  ).flatMap((entry) => suggestionEntry(entry));
+}
+
+/**
+ * Best match on the bot's name first, then on its keywords (its own and its
+ * environment's names, "tracy", "bot"); the directory's order breaks ties.
+ */
+function rankBotEntries(
+  entries: ReadonlyArray<BotMentionEntry>,
+  query: string,
+  limit: number,
+): ReadonlyArray<BotMentionEntry> {
+  const normalizedQuery = query.trim().toLowerCase();
+  return entries
+    .flatMap((entry, index) => {
+      const score = scoreBotEntry(entry, normalizedQuery);
+      return score === null ? [] : [{ entry, score, index }];
+    })
+    .toSorted((left, right) =>
+      left.score === right.score
+        ? left.index - right.index
+        : left.score - right.score,
+    )
+    .map((item) => item.entry)
+    .slice(0, limit);
+}
+
+function scoreBotEntry(
+  entry: BotMentionEntry,
+  normalizedQuery: string,
+): number | null {
+  const byName = scoreLabelAndId(entry.label, entry.botId, normalizedQuery);
+  if (byName !== null) return byName;
+  const keywordHit = entry.keywords.some((keyword) =>
+    keyword.toLowerCase().includes(normalizedQuery),
+  );
+  return keywordHit ? 500 : null;
 }
 
 function browserTabSuggestionEntries(

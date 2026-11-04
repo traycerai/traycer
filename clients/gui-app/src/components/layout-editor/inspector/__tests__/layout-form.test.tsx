@@ -337,7 +337,7 @@ describe("Find (item 2, item 6)", () => {
 
 describe("layoutAreaSummary (L-91)", () => {
   it("reads the tab placement word for Task tabs", () => {
-    expect(layoutAreaSummary("topBar", DEFAULT_LAYOUT_SNAPSHOT)).toBe("Top");
+    expect(layoutAreaSummary("topBar", DEFAULT_LAYOUT_SNAPSHOT)).toBe("Left");
   });
 
   it("counts the Sidebar's panels, and how many are hidden", () => {
@@ -445,7 +445,7 @@ describe("layoutAreaChanged (L-91)", () => {
     act(() => {
       useLayoutStore.getState().setArrangement({
         ...DEFAULT_ARRANGEMENT,
-        tabStripPlacement: "left",
+        tabStripPlacement: "top",
       });
     });
     expect(layoutAreaChanged("presets", useLayoutStore.getState())).toBe(false);
