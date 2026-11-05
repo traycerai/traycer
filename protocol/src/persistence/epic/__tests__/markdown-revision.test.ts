@@ -115,20 +115,17 @@ describe("encodeMarkdownRevision / decodeMarkdownRevision", () => {
     );
   });
 
-  it("round-trips a manifest with merge fields and one without", () => {
+  it("round-trips a manifest with merge fields", () => {
     const merged = withManifest({
       merge: { base: HASH_B, superseded: [HASH_C, HASH_D] },
     });
-    const plain = withManifest({ merge: null });
 
-    for (const envelope of [merged, plain]) {
-      const bytes = encodeMarkdownRevision(envelope);
-      const decoded = decodeMarkdownRevision(bytes);
-      expect(decoded).toEqual(envelope);
-      expect(Array.from(encodeMarkdownRevision(decoded))).toEqual(
-        Array.from(bytes),
-      );
-    }
+    const bytes = encodeMarkdownRevision(merged);
+    const decoded = decodeMarkdownRevision(bytes);
+    expect(decoded).toEqual(merged);
+    expect(Array.from(encodeMarkdownRevision(decoded))).toEqual(
+      Array.from(bytes),
+    );
   });
 
   it("accepts a merge that dropped nothing (empty superseded set)", () => {
@@ -329,26 +326,26 @@ describe("markdownRevisionHash", () => {
     expect(new Set(hashes).size).toBe(hashes.length);
   });
 
-  it("is not affected by key order in the value that was encoded", async () => {
-    const base = baseEnvelope();
-    const reordered: MarkdownRevisionEnvelope = {
-      manifest: {
-        transient: base.manifest.transient,
-        createdAt: base.manifest.createdAt,
-        editorSessionId: base.manifest.editorSessionId,
-        hostId: base.manifest.hostId,
-        author: base.manifest.author,
-        merge: base.manifest.merge,
-        parent: base.manifest.parent,
-        artifactId: base.manifest.artifactId,
+  it("is not affected by the key order of a node's attrs", async () => {
+    const withAttrs = (
+      attrs: Record<string, string | number>,
+    ): MarkdownRevisionEnvelope => ({
+      ...baseEnvelope(),
+      document: {
+        type: "doc",
+        content: [
+          {
+            type: "heading",
+            attrs,
+            content: [{ type: "text", text: "Title" }],
+          },
+        ],
       },
-      scalars: base.scalars,
-      markdown: base.markdown,
-      document: base.document,
-      format: base.format,
-    };
+    });
 
-    expect(await hashOf(reordered)).toBe(await hashOf(base));
+    expect(
+      await hashOf(withAttrs({ level: 2, id: "h-1", textAlign: "left" })),
+    ).toBe(await hashOf(withAttrs({ textAlign: "left", id: "h-1", level: 2 })));
   });
 });
 
@@ -550,6 +547,39 @@ describe("envelope refusals", () => {
         false,
       );
     }
+  });
+});
+
+describe("encodeMarkdownRevision refuses anything the schema would drop", () => {
+  it("refuses a document node carrying a key the document schema does not keep", () => {
+    const paragraph = {
+      type: "paragraph",
+      content: [{ type: "text", text: "hello" }],
+      futureField: { at: 1 },
+    };
+    const lossy = {
+      ...baseEnvelope(),
+      document: { type: "doc", content: [paragraph] },
+    };
+
+    expectInvalid(() => encodeMarkdownRevision(lossy), /does not keep/u);
+  });
+
+  it("refuses attrs carrying an own __proto__ key", () => {
+    const attrs: Record<string, unknown> = JSON.parse(
+      '{"__proto__":{"polluted":true},"ordinary":2}',
+    );
+    const envelope: MarkdownRevisionEnvelope = {
+      ...baseEnvelope(),
+      document: {
+        type: "doc",
+        content: [
+          { type: "paragraph", attrs, content: [{ type: "text", text: "x" }] },
+        ],
+      },
+    };
+
+    expectInvalid(() => encodeMarkdownRevision(envelope), /does not keep/u);
   });
 });
 

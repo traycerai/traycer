@@ -3,6 +3,12 @@ import { getRecordSchema } from "@traycer/protocol/framework/versioned-record";
 import { commonRecordRegistry } from "@traycer/protocol/common/registry";
 import { imageSha256HexSchema } from "./images";
 import { lazySchema } from "@traycer/protocol/framework/lazy-schema";
+import {
+  MARKDOWN_REVISION_HEAD_PATH,
+  MARKDOWN_REVISION_HEAD_SCALARS_FIELD,
+  MARKDOWN_REVISION_HEAD_SEQ_FIELD,
+  markdownRevisionScalarsSchema,
+} from "./markdown-revision";
 
 /**
  * Artifact metadata and tombstones. Markdown, HTML and canvas entries carry
@@ -126,11 +132,28 @@ const artifactRoomFields = {
 /**
  * A markdown body stored as revision objects: the head names the current
  * revision envelope as its one file (`markdown-revision.ts`), the same shape
- * as an html head. Absent on an entry whose body still lives in its artifact
- * room.
+ * as an html head. That file's generation also carries the revision's
+ * position in the cloud chain, so a reader of the index can tell a newer
+ * projection from an older one, and the revision's frontmatter scalars, so
+ * they are always the ones of the revision the generation names.
  */
+export const markdownArtifactHeadSchema = lazySchema(() =>
+  z.object({
+    files: z.object({
+      [MARKDOWN_REVISION_HEAD_PATH]: z.object({
+        ...artifactObjectFields,
+        [MARKDOWN_REVISION_HEAD_SEQ_FIELD]: z.number().int().positive(),
+        [MARKDOWN_REVISION_HEAD_SCALARS_FIELD]: markdownRevisionScalarsSchema,
+      }),
+    }),
+    capturedAt: z.number(),
+  }),
+);
+export type MarkdownArtifactHead = z.infer<typeof markdownArtifactHeadSchema>;
+
+/** Absent on an entry whose body still lives in its artifact room. */
 const markdownHeadFields = {
-  head: lazySchema(() => artifactHeadSchema.optional()),
+  head: lazySchema(() => markdownArtifactHeadSchema.optional()),
 } as const;
 
 const baseEpicArtifactFields = {

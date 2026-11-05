@@ -37,6 +37,15 @@ export const MARKDOWN_REVISION_MEDIA_TYPE = "application/json";
  * index tell a newer projection from an older one without asking the cloud.
  */
 export const MARKDOWN_REVISION_HEAD_SEQ_FIELD = "seq";
+/**
+ * The frontmatter scalars of the revision a markdown head names, a leaf on the
+ * same generation. They travel with the revision: concurrent projections on
+ * two replicas settle each map key on its own, so scalars written beside the
+ * head could end up paired with the other write's revision, while the
+ * generation is replaced whole. The entry's own `kind`, `title`, `assignee`
+ * and `status` are a projection of these.
+ */
+export const MARKDOWN_REVISION_HEAD_SCALARS_FIELD = "scalars";
 
 export const markdownRevisionHashSchema = lazySchema(() =>
   z
@@ -214,20 +223,33 @@ const decoder = new TextDecoder("utf-8", { fatal: true });
  * The envelope's canonical bytes: keys sorted at every depth, no whitespace,
  * UTF-8. The same envelope always encodes to the same bytes, which is what
  * makes its sha256 a stable revision id.
+ *
+ * Refuses an envelope the schema would not keep whole. The document schema
+ * strips keys it does not know (an unknown node or mark field, an own
+ * `__proto__` in attrs), so encoding the parse would hash a value other than
+ * the caller's, and encoding the argument would store bytes a reader parses
+ * to less. Either way the id would not name the envelope that was written.
  */
 export function encodeMarkdownRevision(
   envelope: MarkdownRevisionEnvelope,
 ): Uint8Array {
+  if (!isJsonValue(envelope)) {
+    throw new InvalidMarkdownRevisionError("not a JSON value");
+  }
   const parsed = markdownRevisionEnvelopeSchema.safeParse(envelope);
   if (!parsed.success) {
     throw new InvalidMarkdownRevisionError(parsed.error.message);
   }
-  // The parsed value, not the argument: what is encoded is exactly what a
-  // reader's parse of these bytes yields, so decode(encode(x)) always holds.
-  if (!isJsonValue(parsed.data)) {
-    throw new InvalidMarkdownRevisionError("not a JSON value");
+  const canonical = canonicalJsonStringify(envelope);
+  if (
+    !isJsonValue(parsed.data) ||
+    canonicalJsonStringify(parsed.data) !== canonical
+  ) {
+    throw new InvalidMarkdownRevisionError(
+      "the schema does not keep every field",
+    );
   }
-  return encoder.encode(canonicalJsonStringify(parsed.data));
+  return encoder.encode(canonical);
 }
 
 /**
