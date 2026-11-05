@@ -55,6 +55,7 @@ const COPY_PROPERTIES = new Set([
   "loading",
   "message",
   "pending",
+  "problem",
   "success",
   "title",
 ]);
@@ -98,7 +99,14 @@ const VOCABULARY: ReadonlyArray<VocabularyCell> = [
     guidance: "Personal is valid in other contexts and is not a blanket ban.",
   },
   { replaces: "Frozen", matches: [{ copy: "Frozen", kind: "phrase" }] },
-  { replaces: "Resting", matches: [{ copy: "Resting", kind: "phrase" }] },
+  {
+    replaces: "Resting",
+    matches: [
+      { copy: "Resting", kind: "phrase" },
+      { copy: "rests", kind: "phrase" },
+      { copy: "rested", kind: "phrase" },
+    ],
+  },
   {
     replaces: "the two folds and the chat rewrite",
     matches: [],
@@ -618,6 +626,8 @@ describe("retired environment vocabulary", () => {
             <span>{\`\${name} is a Sandbox host\`}</span>
           </div>
           <p>{\`Policy: \${idlePolicy}\`}</p>
+          <p>rests</p>
+          <p>rested</p>
           <h2>Teams</h2>
           <p>This computer</p>
           <p>This computer only connects from its own network.</p>
@@ -631,6 +641,7 @@ describe("retired environment vocabulary", () => {
       function standaloneLabel(): string {
         return \`Resting\`;
       }
+      const validation = { problem: "Resting" };
     `;
     const hits = scanSourceText(sample, "sample.tsx");
     expect(hits.map((hit) => hit.copy)).toEqual([
@@ -641,8 +652,11 @@ describe("retired environment vocabulary", () => {
       "workspace folders",
       "Sandbox host",
       "Resting",
+      "rests",
+      "rested",
       "This computer",
       "dormant",
+      "Resting",
       "Resting",
     ]);
     expect(

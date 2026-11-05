@@ -337,7 +337,9 @@ function shapeOfForm(
   if (form.restingAmount.trim().length > 0) {
     const amount = Number(form.restingAmount);
     if (!Number.isInteger(amount) || amount <= 0) {
-      return { problem: "Resting period must be a whole number, or empty." };
+      return {
+        problem: '"Destroyed after idle for" must be a whole number, or empty.',
+      };
     }
     destroyAfterRestingMinutes = amount * UNIT_MINUTES[form.restingUnit];
   }

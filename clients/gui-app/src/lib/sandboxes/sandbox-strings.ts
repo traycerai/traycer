@@ -255,7 +255,7 @@ export function teamClause(teamName: string): string {
 }
 
 export const RESTING_STORAGE_CLAUSE =
-  "Storage while it rests, on the same credits until another member wakes it.";
+  "Storage while it's suspended or stopped, on the same credits until another member wakes it.";
 export function restingStorageClause(): string {
   return RESTING_STORAGE_CLAUSE;
 }
@@ -648,7 +648,7 @@ export const STOP = "Stop";
 
 /** The settled line's idle rule, with the configured period. */
 export function idleRuleLine(idleMinutes: number): string {
-  return `After ${idleMinutes} minutes with no agent turn, running shell or browser tab on screen, this sandbox suspends. Closing this tab does not stop running work or immediately stop charges; storage is charged while it rests.`;
+  return `After ${idleMinutes} minutes with no agent turn, running shell or browser tab on screen, this sandbox suspends. Closing this tab does not stop running work or immediately stop charges; storage is charged while it's suspended or stopped.`;
 }
 
 // ── Who: started, kept, paid ──────────────────────────────────────────────
