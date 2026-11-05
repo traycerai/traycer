@@ -291,10 +291,7 @@ export function BotMessageComposer(props: {
           } else if (mountedRef.current) {
             keptDraft.offer(unsent);
             failure.fail(null);
-          } else if (
-            unsent.supersedes === null &&
-            keptDraft.revision() === null
-          ) {
+          } else if (unsent.supersedes === null && !keptDraft.hasDraft()) {
             keptDraft.keep(unsent.text);
           } else {
             keptDraft.offer(unsent);
@@ -571,8 +568,8 @@ export type BotComposerSeed = {
 export type BotKeptDraft = {
   /** What the box holds now, as the person types it; empty keeps nothing. */
   readonly keep: (text: string) => void;
-  /** Which revision of the draft is kept now; `null` while none is. */
-  readonly revision: () => number | null;
+  /** Whether a draft is kept now, read when a send settles. */
+  readonly hasDraft: () => boolean;
   /** A failed send of the box offered back beside the draft; `null` for none. */
   readonly unsent: BotUnsentMessage | null;
   /** Offers a failed send back; `null` takes the offer away. */
