@@ -173,7 +173,7 @@ describe("useChatSandboxState", () => {
   it.each([
     ["failed", { kind: "failed" }],
     ["released", { kind: "released" }],
-    ["destroyed", { kind: "moving", state: "destroying" }],
+    ["destroyed", { kind: "moving", state: "destroyed" }],
   ] as const)(
     "reads a listed %s sandbox by its own state, never as unknown",
     (state, expected) => {

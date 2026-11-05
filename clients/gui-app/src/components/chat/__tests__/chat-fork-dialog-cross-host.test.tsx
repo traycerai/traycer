@@ -893,6 +893,11 @@ describe("ChatForkDialog cross-host routing", () => {
   it("cross-host resets the workspace to an empty seed, drops A/B override, and does not apply the staged-preselection gate", async () => {
     renderDialog(abForkTarget(), ignoreOpenChange);
 
+    expect(
+      screen.getByText(
+        "Makes a second chat there. This one stays where it is.",
+      ),
+    ).toBeDefined();
     expect(dialogMocks.lastWorkspace?.workspaceSeed).toEqual(
       expect.objectContaining({
         folders: [SOURCE_FOLDER.path],

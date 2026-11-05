@@ -102,29 +102,30 @@ vi.mock("@/hooks/rate-limits/use-rate-limit-host-scope", () => ({
 // contract mounts both under a `connecting` scope - the state where every
 // host-backed body is withheld - and the fixture's `hostScope` says which
 // state to serve. Permissions reads `usePersonalHostScope` (it is an Account
-// page now) and the Overview reads `useHostScope`, so BOTH hooks answer with
-// the same connecting-aware factory. The ref is set per test.
+// page now), the Overview reads `useHostScope`, and the checklist reads the
+// unscoped fleet through `useHostScopeFor`. All use the same connecting-aware
+// factory. Keep the mock self-contained: the real scope and membership reader
+// import each other. The ref is set per test.
 const hostScopeState = vi.hoisted((): { current: "connecting" | null } => ({
   current: null,
 }));
-vi.mock(
-  "@/components/settings/host-scope/use-host-scope",
-  async (importOriginal) => {
-    const { hostScopeFixture: fixture } =
-      await import("@/components/settings/host-scope/host-scope-fixture");
-    const useScope = () =>
-      fixture(
-        hostScopeState.current === "connecting" ? { status: "connecting" } : {},
-      );
-    return {
-      ...(await importOriginal<
-        typeof import("@/components/settings/host-scope/use-host-scope")
-      >()),
-      useHostScope: useScope,
-      usePersonalHostScope: useScope,
-    };
-  },
-);
+vi.mock("@/components/settings/host-scope/use-host-scope", async () => {
+  const { hostScopeFixture: fixture } =
+    await import("@/components/settings/host-scope/host-scope-fixture");
+  const useScope = () =>
+    fixture(
+      hostScopeState.current === "connecting" ? { status: "connecting" } : {},
+    );
+  return {
+    WINDOW_HOST_SELECTION: {
+      scopedHostId: null,
+      setScopedHostId: () => undefined,
+    },
+    useHostScope: useScope,
+    usePersonalHostScope: useScope,
+    useHostScopeFor: useScope,
+  };
+});
 
 // The Layout panel wraps itself directly in the shared watched-usage read
 // (`LayoutUsageProvider`), which resolves a host scope through a real

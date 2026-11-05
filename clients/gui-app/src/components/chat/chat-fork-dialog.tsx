@@ -1314,6 +1314,9 @@ function ChatForkDialogBody(props: ChatForkDialogProps) {
               </ComposerStagedSurfaceKeyProvider>
             </div>
           </section>
+          <p className="text-ui-xs text-muted-foreground">
+            Makes a second chat there. This one stays where it is.
+          </p>
           <ActiveHostWorkspaceControls
             sandboxStaging={sandboxStaging}
             // Locked while the create is in flight, like every other control in

@@ -53,7 +53,9 @@ describe("requestActivate (Settings ▸ Activate, the only preferred-host write 
       isLocalMachine: true,
     });
 
-    await requestActivate(fakeAuthority(activate), "local-1", localOption);
+    await expect(
+      requestActivate(fakeAuthority(activate), "local-1", localOption),
+    ).resolves.toBe(true);
 
     expect(activate).toHaveBeenCalledWith("local-1");
     expect(trackSpy).toHaveBeenCalledTimes(1);
@@ -78,7 +80,9 @@ describe("requestActivate (Settings ▸ Activate, the only preferred-host write 
       isLocalMachine: false,
     });
 
-    await requestActivate(fakeAuthority(activate), "remote-1", remoteOption);
+    await expect(
+      requestActivate(fakeAuthority(activate), "remote-1", remoteOption),
+    ).resolves.toBe(true);
 
     expect(trackSpy).toHaveBeenCalledWith(AnalyticsEvent.HostSelected, {
       source: "direct_ui",
@@ -124,7 +128,7 @@ describe("requestActivate (Settings ▸ Activate, the only preferred-host write 
     expect(wakeSandboxOnPick).not.toHaveBeenCalled();
   });
 
-  it("reason unknown-host: no analytics, toasts that the host is no longer registered", async () => {
+  it("reason unknown-host: no analytics, explains that it is gone and the previous machine stays active", async () => {
     const trackSpy = vi.spyOn(Analytics.getInstance(), "track");
     const activate = vi.fn((): Promise<ActivateResult> =>
       Promise.resolve({ ok: false, reason: "unknown-host" }),
@@ -134,16 +138,18 @@ describe("requestActivate (Settings ▸ Activate, the only preferred-host write 
       name: "Gone Machine",
     });
 
-    await requestActivate(fakeAuthority(activate), "gone-1", option);
+    await expect(
+      requestActivate(fakeAuthority(activate), "gone-1", option),
+    ).resolves.toBe(false);
 
     expect(trackSpy).not.toHaveBeenCalled();
     expect(toast.error).toHaveBeenCalledTimes(1);
     expect(toast.error).toHaveBeenCalledWith(
-      "Gone Machine is no longer registered to this account.",
+      "It's gone from your account. The previous machine stays active.",
     );
   });
 
-  it("reason incompatible: no analytics, toasts that the host needs an update", async () => {
+  it("reason incompatible: no analytics, tells the person to update the app", async () => {
     const trackSpy = vi.spyOn(Analytics.getInstance(), "track");
     const activate = vi.fn((): Promise<ActivateResult> =>
       Promise.resolve({ ok: false, reason: "incompatible" }),
@@ -158,11 +164,11 @@ describe("requestActivate (Settings ▸ Activate, the only preferred-host write 
     expect(trackSpy).not.toHaveBeenCalled();
     expect(toast.error).toHaveBeenCalledTimes(1);
     expect(toast.error).toHaveBeenCalledWith(
-      "Old Machine needs a host update before it can be activated.",
+      "Update the app to use this machine.",
     );
   });
 
-  it("reason team-host: no analytics, toasts that team hosts can't be made active without naming the host", async () => {
+  it("reason team-host: no analytics, explains why a team's machine cannot be the app default", async () => {
     const trackSpy = vi.spyOn(Analytics.getInstance(), "track");
     const activate = vi.fn((): Promise<ActivateResult> =>
       Promise.resolve({ ok: false, reason: "team-host" }),
@@ -177,11 +183,11 @@ describe("requestActivate (Settings ▸ Activate, the only preferred-host write 
     expect(trackSpy).not.toHaveBeenCalled();
     expect(toast.error).toHaveBeenCalledTimes(1);
     expect(toast.error).toHaveBeenCalledWith(
-      "Team hosts can't be made active.",
+      "A team's machine can't be the app's default.",
     );
   });
 
-  it("reason not-attached: no analytics, toasts the reload-and-retry copy (option-independent)", async () => {
+  it("reason not-attached: no analytics, offers a retry", async () => {
     const trackSpy = vi.spyOn(Analytics.getInstance(), "track");
     const activate = vi.fn((): Promise<ActivateResult> =>
       Promise.resolve({ ok: false, reason: "not-attached" }),
@@ -195,12 +201,10 @@ describe("requestActivate (Settings ▸ Activate, the only preferred-host write 
 
     expect(trackSpy).not.toHaveBeenCalled();
     expect(toast.error).toHaveBeenCalledTimes(1);
-    expect(toast.error).toHaveBeenCalledWith(
-      "This window lost its connection to the selection service - reload and try again.",
-    );
+    expect(toast.error).toHaveBeenCalledWith("Try again in a moment.");
   });
 
-  it("reason persist-failed: no analytics, toasts the retry-safe copy WITHOUT naming the host (option-independent)", async () => {
+  it("reason persist-failed: no analytics, explains that the previous machine stays active and offers a retry", async () => {
     // Nothing moved and no event fired, so the same Activate is safe to
     // retry verbatim - which is why the copy says "try again", not "it may
     // or may not have applied". And it must NOT name the host, same family
@@ -223,11 +227,11 @@ describe("requestActivate (Settings ▸ Activate, the only preferred-host write 
     expect(trackSpy).not.toHaveBeenCalled();
     expect(toast.error).toHaveBeenCalledTimes(1);
     expect(toast.error).toHaveBeenCalledWith(
-      "Couldn't save your choice - try again.",
+      "The choice didn't stick — the previous machine stays active. Try again.",
     );
   });
 
-  it("reason unrecognized: no analytics, toasts the generic couldn't-activate copy naming the host", async () => {
+  it("reason unrecognized: no analytics, explains the outcome is unknown", async () => {
     const trackSpy = vi.spyOn(Analytics.getInstance(), "track");
     const activate = vi.fn((): Promise<ActivateResult> =>
       Promise.resolve({ ok: false, reason: "unrecognized" }),
@@ -242,11 +246,11 @@ describe("requestActivate (Settings ▸ Activate, the only preferred-host write 
     expect(trackSpy).not.toHaveBeenCalled();
     expect(toast.error).toHaveBeenCalledTimes(1);
     expect(toast.error).toHaveBeenCalledWith(
-      "Couldn't activate Weird Machine.",
+      "Couldn't confirm Weird Machine as the app's machine. Check which machine is active, then try again.",
     );
   });
 
-  it("a null option still produces sensible copy ('That host' / 'remote')", async () => {
+  it("a null option still produces sensible copy and remote analytics", async () => {
     const trackSpy = vi.spyOn(Analytics.getInstance(), "track");
     const okActivate = vi.fn((): Promise<ActivateResult> =>
       Promise.resolve({ ok: true }),
@@ -266,11 +270,11 @@ describe("requestActivate (Settings ▸ Activate, the only preferred-host write 
       null,
     );
     expect(toast.error).toHaveBeenCalledWith(
-      "That host is no longer registered to this account.",
+      "It's gone from your account. The previous machine stays active.",
     );
   });
 
-  it("a REJECTING activate call is caught: no analytics, generic toast, does not throw", async () => {
+  it("a REJECTING activate call gives confirmation guidance without analytics or throwing", async () => {
     const trackSpy = vi.spyOn(Analytics.getInstance(), "track");
     const activate = vi.fn((): Promise<ActivateResult> =>
       Promise.reject(new Error("transport exploded")),
@@ -282,12 +286,28 @@ describe("requestActivate (Settings ▸ Activate, the only preferred-host write 
 
     await expect(
       requestActivate(fakeAuthority(activate), "boom-1", option),
-    ).resolves.toBeUndefined();
+    ).resolves.toBe(false);
 
     expect(trackSpy).not.toHaveBeenCalled();
     expect(toast.error).toHaveBeenCalledTimes(1);
     expect(toast.error).toHaveBeenCalledWith(
-      "Couldn't activate this host. Try again.",
+      "Couldn't confirm Boom Machine as the app's machine. Check which machine is active, then try again.",
+    );
+  });
+
+  it("a rejected activate call uses the fallback label when the option is unavailable", async () => {
+    const trackSpy = vi.spyOn(Analytics.getInstance(), "track");
+    const activate = vi.fn((): Promise<ActivateResult> =>
+      Promise.reject(new Error("transport exploded")),
+    );
+
+    await expect(
+      requestActivate(fakeAuthority(activate), "unknown-to-panel", null),
+    ).resolves.toBe(false);
+
+    expect(trackSpy).not.toHaveBeenCalled();
+    expect(toast.error).toHaveBeenCalledExactlyOnceWith(
+      "Couldn't confirm that machine as the app's machine. Check which machine is active, then try again.",
     );
   });
 });

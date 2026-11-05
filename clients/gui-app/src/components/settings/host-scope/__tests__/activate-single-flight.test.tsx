@@ -9,8 +9,8 @@ import {
 /**
  * Activate is SINGLE-FLIGHT.
  *
- * `makeActive` is fire-and-forget by shape and the button behind it carried no
- * pending state, so a double-click issued two `authority.activate` calls. That
+ * The hook guards the write even before a button can render its pending
+ * state, so a double-click issues only one `authority.activate` call. That
  * write is not cheap and not idempotent by accident: each one validates,
  * persists and re-derives the window's host, and each success fires the app's
  * only `HostSelected` analytics event. Two clicks meant two persists racing to
@@ -23,6 +23,7 @@ import {
  * attribute while dropping the guard would still be the bug.
  */
 const activateCalls: string[] = [];
+let activation: Promise<boolean> | null = null;
 let resolveActivate: ((result: ActivateResult) => void) | null = null;
 
 const authority = {
@@ -84,12 +85,13 @@ afterEach(async () => {
   if (resolve !== null) {
     await act(async () => {
       resolve({ ok: true });
-      await Promise.resolve();
+      await activation;
     });
   }
   cleanup();
   activateCalls.length = 0;
   resolveActivate = null;
+  activation = null;
 });
 
 describe("Activate is single-flight", () => {
@@ -100,8 +102,8 @@ describe("Activate is single-flight", () => {
     expect(result.current.isActivating).toBe(false);
 
     act(() => {
-      result.current.makeActive("host-b");
-      result.current.makeActive("host-b");
+      activation = result.current.makeActive("host-b");
+      void result.current.makeActive("host-b");
     });
 
     expect(activateCalls).toEqual(["host-b"]);
@@ -116,8 +118,8 @@ describe("Activate is single-flight", () => {
     const { result } = renderScope();
 
     act(() => {
-      result.current.makeActive("host-b");
-      result.current.makeActive("host-a");
+      activation = result.current.makeActive("host-b");
+      void result.current.makeActive("host-a");
     });
 
     expect(activateCalls).toEqual(["host-b"]);
@@ -130,17 +132,17 @@ describe("Activate is single-flight", () => {
     const { result } = renderScope();
 
     act(() => {
-      result.current.makeActive("host-b");
+      activation = result.current.makeActive("host-b");
     });
     await act(async () => {
       resolveActivate?.({ ok: true });
-      await Promise.resolve();
+      await activation;
     });
 
     expect(result.current.isActivating).toBe(false);
 
     act(() => {
-      result.current.makeActive("host-a");
+      activation = result.current.makeActive("host-a");
     });
     expect(activateCalls).toEqual(["host-b", "host-a"]);
   });

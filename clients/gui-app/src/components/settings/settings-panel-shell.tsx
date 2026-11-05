@@ -2,6 +2,7 @@ import type { ReactNode } from "react";
 import { cn } from "@/lib/utils";
 import { useSettingsDensity } from "@/providers/settings-density-context";
 import { PersonalPageHeaderStatus } from "@/components/settings/personal/personal-page-frame";
+import { SettingsPhoneScopeLine } from "@/components/settings/settings-phone-scope-line";
 
 interface SettingsPanelShellProps {
   title: string;
@@ -57,6 +58,7 @@ export function SettingsPanelShell(props: SettingsPanelShellProps) {
           >
             {title}
           </h1>
+          <SettingsPhoneScopeLine />
           {description ? (
             <p className="max-w-[72ch] text-ui-sm text-muted-foreground">
               {description}
