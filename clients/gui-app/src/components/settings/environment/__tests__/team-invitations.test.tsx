@@ -307,11 +307,15 @@ describe("the invited rows of the Environment dropdown", () => {
       screen.queryByText("Your teams couldn't be read from here."),
     ).toBeNull();
     expect(
-      screen.getByLabelText("Reading your teams").getAttribute("aria-busy"),
+      screen
+        .getByRole("status", { name: "Reading your teams" })
+        .getAttribute("aria-busy"),
     ).toBe("true");
     teamsPending.resolve(NO_ENVIRONMENTS);
     await waitFor(() => {
-      expect(screen.queryByLabelText("Reading your teams")).toBeNull();
+      expect(
+        screen.queryByRole("status", { name: "Reading your teams" }),
+      ).toBeNull();
     });
   });
 

@@ -450,8 +450,9 @@ export function useMakeActiveHost(hosts: readonly HostScopeOption[]): {
  * `ok: true` resolves only after the authority validated, persisted, and
  * re-derived, so the analytics event below is fired against a preference that
  * actually landed - and it is the ONLY `HostSelected` in the app now. A
- * refusal is a real answer about a host, not a transport failure, so each one
- * says what the user can do about it instead of a generic error.
+ * recognized refusal says what the user can do about it. `unrecognized`
+ * covers a failed call or an unreadable answer: the choice may already have
+ * persisted, so its words make no claim about which machine is active.
  *
  * Deliberately not refused by the authority, and therefore never toasted
  * here: a registered host that is currently OFFLINE. Preferred is intent, not
@@ -466,6 +467,8 @@ export async function requestActivate(
   try {
     result = await authority.activate(hostId);
   } catch (error: unknown) {
+    // Like an unreadable answer, a failed call leaves the outcome unknown.
+    // `unrecognized` makes no claim about which machine is active.
     appLogger.warn("[host-scope] activate request failed", {
       hostId,
       error: String(error),
@@ -496,7 +499,7 @@ export async function requestActivate(
  * rather than a hand-written copy of it.
  *
  * A `Record` keyed on `ActivateRefusalReason` is the census: the day the
- * contract grows a sixth arm, this object fails to compile with the missing
+ * contract grows another arm, this object fails to compile with the missing
  * key named, instead of silently routing a new refusal into the generic
  * fallback and telling the user nothing about a reason the engine took the
  * trouble to distinguish. That is exactly how `persist-failed` arrived.
@@ -515,8 +518,10 @@ const ACTIVATE_REFUSAL_COPY: Record<
   // this says "try again" and not "it may or may not have applied".
   "persist-failed": () =>
     "The choice didn't stick — the previous machine stays active. Try again.",
+  // A failed call or an unreadable answer leaves the outcome unknown, so
+  // this makes no claim about which machine is active.
   unrecognized: (label) =>
-    `Couldn't set ${label} as the app's machine. The previous machine stays active.`,
+    `Couldn't confirm ${label} as the app's machine. Check which machine is active, then try again.`,
 };
 
 function activateRefusalMessage(

@@ -56,6 +56,7 @@ export function TeamRows(props: TeamRowsProps): ReactNode {
       {loading ? (
         <div
           className="flex flex-col gap-1.5 px-1.5 py-2"
+          role="status"
           aria-busy="true"
           aria-label="Reading your teams"
         >
