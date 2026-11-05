@@ -290,6 +290,14 @@ interface ActiveEndCorrection {
   animationFrameId: number | null;
 }
 
+/** The layout hold's close correction, once its write has landed the view on
+ *  the end: where the view stood before it, and the content end it left. */
+interface CloseCorrectionWrite {
+  readonly fromScrollTop: number;
+  readonly scrollHeight: number;
+  readonly clientHeight: number;
+}
+
 interface ListRowTop {
   readonly key: string;
   readonly top: number;
@@ -1386,7 +1394,11 @@ function canReaderGestureMove(
  * - A send's voided window and the row-shape commit that replaces it through
  *   its next frame hold every automatic correction at `startEndCorrection`.
  *   The reader is still judged as ever; only the write waits, and the one
- *   correction owed is issued when the hold ends.
+ *   correction owed is issued when the hold ends. iOS WebKit can drop that
+ *   write a frame after it lands: the view falls back to where it was
+ *   written from, the content end unmoved. That one fall-back is the
+ *   browser's, not the reader leaving, and is corrected again; a second is
+ *   judged as any report is.
  * - Both the listener and the observer skip unmeasurable geometry
  *   (`clientHeight === 0`, e.g. a `display:none` pane) rather than treating it
  *   as a confirmed edge - the permission ref is simply left as whatever it
@@ -1465,8 +1477,9 @@ export function useChatTimelineFollowLatch(
   // view read above it before its report arrives. The app and the list
   // announce every write they make (`CHAT_TIMELINE_SCROLLER_MOVED_EVENT`),
   // and the browser moves the view only by clamping it onto a lower end,
-  // which leaves it on the end. Null while the movement is announced reader
-  // input's, until the next report or the touch's lift; from a lift a
+  // which leaves it on the end, or by dropping the write the layout hold's
+  // close made (`isDroppedCloseWrite`). Null while the movement is announced
+  // reader input's, until the next report or the touch's lift; from a lift a
   // held-back write may land after, until the next report; and before the
   // first.
   const expectedScrollTopRef = useRef<number | null>(null);
@@ -1502,6 +1515,13 @@ export function useChatTimelineFollowLatch(
   // A correction the hold kept from being issued, issued once when both bits
   // clear (`flushOwedCorrection`).
   const owedCorrectionRef = useRef(false);
+  // The correction issued at the hold's close, until the first view off the
+  // strict bottom after it, the content end moving, reader input, or the next
+  // hold. iOS WebKit can drop that one write after it has landed: a frame
+  // later the view is back at the offset it was written from, the content end
+  // unmoved. The ledger expects the end it wrote, so it would read that
+  // fall-back as the reader leaving (`isDroppedCloseWrite`).
+  const closeCorrectionWriteRef = useRef<CloseCorrectionWrite | null>(null);
 
   useLayoutEffect(
     () => () => {
@@ -1564,8 +1584,35 @@ export function useChatTimelineFollowLatch(
       cancelActiveCorrection();
     }
     supersedePendingEndCorrection();
+    closeCorrectionWriteRef.current = null;
     if (permissionRef.current) owedCorrectionRef.current = true;
   }, [cancelActiveCorrection, supersedePendingEndCorrection]);
+
+  // Whether this view is the close correction's write dropped: the first view
+  // off the strict bottom since that write, back at the offset it was written
+  // from, the content end where the write left it, with no reader input
+  // between. Read once either way. A content end that moved retires the
+  // record, since the view no longer stands where the write was made.
+  const isDroppedCloseWrite = useCallback(
+    (geometry: ChatTimelineScrollGeometry): boolean => {
+      const write = closeCorrectionWriteRef.current;
+      if (write === null) return false;
+      const endUnmoved =
+        geometry.scrollHeight === write.scrollHeight &&
+        geometry.clientHeight === write.clientHeight;
+      if (endUnmoved && isChatTimelineAtStrictBottom(geometry)) return false;
+      closeCorrectionWriteRef.current = null;
+      return (
+        endUnmoved &&
+        Math.abs(restingScrollTop(geometry) - write.fromScrollTop) <=
+          CHAT_TIMELINE_STRICT_BOTTOM_EPSILON_PX &&
+        permissionRef.current &&
+        armedReaderDepartureRef.current === null &&
+        !ownsFreeNavigationRef.current
+      );
+    },
+    [],
+  );
 
   const setFollowIntent = useCallback(
     (isFollowing: boolean): void => {
@@ -1639,6 +1686,7 @@ export function useChatTimelineFollowLatch(
       readerGestureGenerationRef.current += 1;
       readerMomentumEndRef.current = null;
       expectedScrollTopRef.current = null;
+      closeCorrectionWriteRef.current = null;
       if (intent.direction === "toward-end") {
         readerDepartureScrollTopRef.current = null;
         departureOwedRef.current = false;
@@ -1713,13 +1761,19 @@ export function useChatTimelineFollowLatch(
   // report starts it again after reader input, whose arm decides until then.
   const noteViewRead = useCallback(
     (geometry: ChatTimelineScrollGeometry): boolean => {
+      // A read can see the browser drop the close correction's write before
+      // the report of it arrives, as a report can (`noteReportMovement`).
+      const droppedCloseWrite = isDroppedCloseWrite(geometry);
       const expected = expectedScrollTopRef.current;
       if (expected === null) return false;
       const resting = restingScrollTop(geometry);
       expectedScrollTopRef.current = resting;
-      return resting < expected - CHAT_TIMELINE_STRICT_BOTTOM_EPSILON_PX;
+      return (
+        !droppedCloseWrite &&
+        resting < expected - CHAT_TIMELINE_STRICT_BOTTOM_EPSILON_PX
+      );
     },
-    [],
+    [isDroppedCloseWrite],
   );
 
   // A following reader under no arm whose view moved away from the end,
@@ -2292,18 +2346,22 @@ export function useChatTimelineFollowLatch(
 
   // Whether this scroll report moved the view away from the end past
   // everything the app, the list and the browser moved it since the previous
-  // one; the next is measured from it.
+  // one; the next is measured from it. The browser dropping the close
+  // correction's write moved it, not the reader: the report goes on as a
+  // layout-owned one, which corrects again.
   const noteReportMovement = useCallback(
     (geometry: ChatTimelineScrollGeometry): boolean => {
+      const droppedCloseWrite = isDroppedCloseWrite(geometry);
       const expected = expectedScrollTopRef.current;
       const resting = restingScrollTop(geometry);
       expectedScrollTopRef.current = resting;
       return (
+        !droppedCloseWrite &&
         expected !== null &&
         resting < expected - CHAT_TIMELINE_STRICT_BOTTOM_EPSILON_PX
       );
     },
-    [],
+    [isDroppedCloseWrite],
   );
 
   // A detached reader whose departure is published. Whether the strict
@@ -2812,13 +2870,32 @@ export function useChatTimelineFollowLatch(
   ]);
 
   // Either hold bit falling: once neither holds, the correction owed is one
-  // ordinary maintenance pass, judged against the view as it now stands.
+  // ordinary maintenance pass, judged against the view as it now stands. A
+  // write that lands the view on the end is recorded, so that the browser
+  // dropping it is not read as the reader leaving (`isDroppedCloseWrite`).
   const flushOwedCorrection = useCallback((): void => {
     if (isLayoutHeld()) return;
     if (!owedCorrectionRef.current) return;
     owedCorrectionRef.current = false;
+    const node = listRef.current?.getScrollableNode();
+    const before = node ? readScrollGeometry(node) : null;
     followEndIfPermitted();
-  }, [followEndIfPermitted, isLayoutHeld]);
+    const after = node ? readScrollGeometry(node) : null;
+    closeCorrectionWriteRef.current =
+      before !== null &&
+      after !== null &&
+      isChatTimelineGeometryMeasurable(before) &&
+      isChatTimelineGeometryMeasurable(after) &&
+      isChatTimelineAtStrictBottom(after) &&
+      restingScrollTop(after) >
+        restingScrollTop(before) + CHAT_TIMELINE_STRICT_BOTTOM_EPSILON_PX
+        ? {
+            fromScrollTop: restingScrollTop(before),
+            scrollHeight: after.scrollHeight,
+            clientHeight: after.clientHeight,
+          }
+        : null;
+  }, [followEndIfPermitted, isLayoutHeld, listRef]);
 
   const setWindowInvalidated = useCallback(
     (isInvalidated: boolean): void => {
@@ -3014,6 +3091,7 @@ export function useChatTimelineFollowLatch(
       cancelActiveCorrection();
       readerEndCandidateRef.current = null;
       readerMomentumEndRef.current = null;
+      closeCorrectionWriteRef.current = null;
       armedReaderDepartureRef.current = touchArmAt(geometry, listRef.current);
       supersedePendingEndCorrection();
     };
