@@ -77,16 +77,17 @@ export function collabTileNotice(
 
 /**
  * What a collab tile says over a served body the host cannot bring up to
- * date for now. The editor stays usable under it, so each sentence says what
- * is not happening and whether anything is lost, and nothing else.
+ * date for now. The editor stays usable under it, so the sentence says what
+ * is not happening and nothing else: where edits are kept, and when the host
+ * tries again, are not promises the contract makes to the viewing device.
  */
 export function collabTileDegradedNotice(
   reason: ArtifactBodyDegradedReason,
 ): string {
   switch (reason) {
     case "room-unavailable":
-      return "This document isn't updating right now. Traycer will try again shortly.";
+      return "This document isn't updating right now.";
     case "baseline-unavailable":
-      return "This document isn't syncing to the cloud right now. Your edits are kept on this device.";
+      return "This document isn't syncing right now.";
   }
 }

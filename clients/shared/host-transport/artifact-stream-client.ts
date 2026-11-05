@@ -3,15 +3,15 @@
  * body, bidirectionally synced, opened per open tile and closed with it.
  *
  * The only lane that carries binary payloads. Three server frames arrive with
- * bytes (`doc`, `docUpdate`, `awareness`) and three without (`docAck`,
- * `unavailable`, and `@1.1`'s `bodySync`); the contract declares which per
- * frame, and a payload that contradicts the declaration is dropped rather than
- * reinterpreted.
+ * bytes (`doc`, `docUpdate`, `awareness`) and four without (`docAck`,
+ * `unavailable`, `@1.1`'s `bodySync` and `@1.2`'s `bodyDegraded`); the
+ * contract declares which per frame, and a payload that contradicts the
+ * declaration is dropped rather than reinterpreted.
  *
- * Frames are parsed with the `@1.1` union whatever minor the connection
- * negotiated. That is safe in the one direction it has to be: `@1.1` is a
- * strict superset of `@1.0`, and a host on `@1.0` simply never sends the
- * frame the wider union adds.
+ * Frames are parsed with the `@1.2` union whatever minor the connection
+ * negotiated. That is safe in the one direction it has to be: each minor is a
+ * strict superset of the one before, and a host on an older minor simply
+ * never sends the frames the wider union adds.
  *
  * ## The attach is bound to ONE authority epoch, for life
  *
