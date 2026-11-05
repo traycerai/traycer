@@ -99,7 +99,7 @@ case "${workflow}" in
       case "$1" in
         *.md) return 1 ;;
       esac
-      [[ $1 =~ ^(protocol|clients/shared)/ ]]
+      [[ $1 == scripts/test-worker-environment.ts || $1 =~ ^(protocol|clients/shared)/ ]]
     }
     ;;
   # The CLI's real-launchd provisioning and readiness rows
@@ -114,7 +114,7 @@ case "${workflow}" in
       case "$1" in
         *.md) return 1 ;;
       esac
-      [[ $1 =~ ^(protocol|clients/shared|clients/traycer-cli)/ ]]
+      [[ $1 == scripts/test-worker-environment.ts || $1 =~ ^(protocol|clients/shared|clients/traycer-cli)/ ]]
     }
     ;;
   # Every committed `gradle-wrapper.jar` is checked against the checksums Gradle
