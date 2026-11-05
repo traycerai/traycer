@@ -9725,7 +9725,7 @@ describe("useChatTimelineFollowLatch", () => {
       return mounted;
     }
 
-    it("corrects again when the browser drops the close write and the view falls back to where it was written from, once", () => {
+    it("corrects again each time the browser drops the close write back to where it was written from", () => {
       const { node, listRef, onFollowIntentChange } = closeHoldOverGrownTail();
 
       shim.setGeometry(node, { scrollTop: 1000 });
@@ -9734,11 +9734,13 @@ describe("useChatTimelineFollowLatch", () => {
       expect(node.scrollTop).toBe(1200);
       expect(listRef.scrollToEnd).toHaveBeenCalledTimes(2);
 
-      // A second fall-back is judged as any report is.
+      // The correction's own report, then the browser drops it too.
       fireNativeScroll(node);
       shim.setGeometry(node, { scrollTop: 1000 });
       fireNativeScroll(node);
-      expect(onFollowIntentChange).toHaveBeenLastCalledWith(false);
+      expect(onFollowIntentChange).not.toHaveBeenCalledWith(false);
+      expect(node.scrollTop).toBe(1200);
+      expect(listRef.scrollToEnd).toHaveBeenCalledTimes(3);
     });
 
     it("corrects again when a maintenance read sees the close write dropped before its report arrives", () => {
@@ -9851,8 +9853,8 @@ describe("useChatTimelineFollowLatch", () => {
       expect(listRef.scrollToEnd).toHaveBeenCalledTimes(1);
     });
 
-    it("publishes departure when the browser drops the same end write a second time", () => {
-      const { node, onFollowIntentChange } = listLandsViewOnEnd();
+    it("keeps following and corrects again when the browser drops the correction issued over a fall-back back to the same offset", () => {
+      const { node, listRef, onFollowIntentChange } = listLandsViewOnEnd();
       listMovesViewOffEndAndBack(node);
       shim.setGeometry(node, { scrollTop: 1000 });
       fireNativeScroll(node);
@@ -9862,7 +9864,9 @@ describe("useChatTimelineFollowLatch", () => {
       shim.setGeometry(node, { scrollTop: 1000 });
       fireNativeScroll(node);
 
-      expect(onFollowIntentChange).toHaveBeenLastCalledWith(false);
+      expect(onFollowIntentChange).not.toHaveBeenCalledWith(false);
+      expect(node.scrollTop).toBe(1800);
+      expect(listRef.scrollToEnd).toHaveBeenCalledTimes(2);
     });
 
     /** The content shrinks 48 and the view is clamped onto the end; the
@@ -9932,6 +9936,90 @@ describe("useChatTimelineFollowLatch", () => {
       fireNativeScroll(node);
 
       expect(onFollowIntentChange).toHaveBeenLastCalledWith(false);
+    });
+
+    /** The browser dropped the close write back to its origin (1000) and the
+     *  correction over it landed the view on the end (1200); its report
+     *  arrived. */
+    function closeWriteDroppedAndCorrected(): {
+      readonly node: HTMLDivElement;
+      readonly listRef: HeldCommandListRef;
+      readonly result: { readonly current: ChatTimelineFollowLatch };
+      readonly onFollowIntentChange: Mock<(isFollowing: boolean) => void>;
+    } {
+      const mounted = closeHoldOverGrownTail();
+      const { node } = mounted;
+      shim.setGeometry(node, { scrollTop: 1000 });
+      fireNativeScroll(node);
+      expect(node.scrollTop).toBe(1200);
+      fireNativeScroll(node);
+      return mounted;
+    }
+
+    it("judges a fall-back to the held offset as any view is once the reader moved the view elsewhere and came back", () => {
+      const { node, onFollowIntentChange } = closeWriteDroppedAndCorrected();
+
+      shim.setGeometry(node, { scrollTop: 1100 });
+      fireNativeScroll(node);
+      expect(onFollowIntentChange).toHaveBeenLastCalledWith(false);
+
+      shim.setGeometry(node, { scrollTop: 1200 });
+      fireNativeScroll(node);
+      expect(onFollowIntentChange).toHaveBeenLastCalledWith(true);
+
+      shim.setGeometry(node, { scrollTop: 1000 });
+      fireNativeScroll(node);
+      expect(onFollowIntentChange).toHaveBeenLastCalledWith(false);
+    });
+
+    it("publishes departure for a fall-back to the held offset after the reader touched the list", () => {
+      const { node, onFollowIntentChange } = closeWriteDroppedAndCorrected();
+
+      fireTouch(node, "touchstart", 300);
+      fireTouch(node, "touchend", 300);
+      shim.setGeometry(node, { scrollTop: 1000 });
+      fireNativeScroll(node);
+
+      expect(onFollowIntentChange).toHaveBeenLastCalledWith(false);
+    });
+
+    it("publishes departure for a fall-back to the held offset after the browser landed the view on the end itself", () => {
+      const { node, result, onFollowIntentChange } = closeHoldOverGrownTail();
+
+      // The fall-back arrives in a voided window, so its correction is held.
+      result.current.setWindowInvalidated(true);
+      shim.setGeometry(node, { scrollTop: 1000 });
+      fireNativeScroll(node);
+      expect(onFollowIntentChange).not.toHaveBeenCalledWith(false);
+      expect(node.scrollTop).toBe(1000);
+
+      // No write took the view there: the browser landed it on the end.
+      shim.setGeometry(node, { scrollTop: 1200 });
+      fireNativeScroll(node);
+      expect(onFollowIntentChange).not.toHaveBeenCalledWith(false);
+
+      shim.setGeometry(node, { scrollTop: 1000 });
+      fireNativeScroll(node);
+      expect(onFollowIntentChange).toHaveBeenLastCalledWith(false);
+    });
+
+    it("corrects again when the view falls back to the held offset over an end that grew since the write that was dropped", () => {
+      const { node, listRef, result, onFollowIntentChange } =
+        closeWriteDroppedAndCorrected();
+
+      // The content grows and an ordinary correction lands on the new end.
+      shim.setGeometry(node, { scrollHeight: 1900 });
+      result.current.followEndIfPermitted();
+      expect(node.scrollTop).toBe(1400);
+      fireNativeScroll(node);
+      expect(listRef.scrollToEnd).toHaveBeenCalledTimes(3);
+
+      shim.setGeometry(node, { scrollTop: 1000 });
+      fireNativeScroll(node);
+
+      expect(onFollowIntentChange).not.toHaveBeenCalledWith(false);
+      expect(node.scrollTop).toBe(1400);
+      expect(listRef.scrollToEnd).toHaveBeenCalledTimes(4);
     });
   });
 });

@@ -313,6 +313,13 @@ interface EndWrite {
   readonly clientHeight: number;
 }
 
+/** The offset iOS WebKit put the view back at by dropping an end write, and
+ *  the viewport it did so in. */
+interface HeldOffset {
+  readonly scrollTop: number;
+  readonly clientHeight: number;
+}
+
 interface ListRowTop {
   readonly key: string;
   readonly top: number;
@@ -1414,9 +1421,11 @@ function canReaderGestureMove(
  *   the hold's close correction, an ordinary correction, or the list's own
  *   write as a reply's row enters below the view: the view falls back to
  *   where it was written from, over the end the write reached or a lower one
- *   the content has since shrunk to. That fall-back is the browser's, not the
- *   reader leaving, and is corrected again, once per write: the same write
- *   dropped again is judged as any report is.
+ *   the content has since shrunk to. WebKit then holds that offset, and can
+ *   drop later writes back to it, the correction issued over the fall-back
+ *   among them. A return there is the browser's, not the reader leaving, and
+ *   is corrected again each time, until reader input or an unannounced move
+ *   anywhere else.
  * - Both the listener and the observer skip unmeasurable geometry
  *   (`clientHeight === 0`, e.g. a `display:none` pane) rather than treating it
  *   as a confirmed edge - the permission ref is simply left as whatever it
@@ -1543,10 +1552,14 @@ export function useChatTimelineFollowLatch(
   // expects the end the write reached, so it would read that fall-back as the
   // reader leaving (`isDroppedEndWrite`).
   const endWriteRef = useRef<EndWrite | null>(null);
-  // The end write whose fall-back was last excused, until another is
-  // recorded or reader input. The correction issued over that fall-back is the
-  // same write again, and is not excused a second time.
-  const excusedEndWriteRef = useRef<EndWrite | null>(null);
+  // The offset the browser dropped an end write back to, from that fall-back
+  // until reader input or an unannounced move anywhere else. WebKit holds the
+  // view there: it can drop later writes back to it, the correction issued
+  // over the fall-back among them, and one two writes on over an end that has
+  // grown since (`isAtHeldOffset`). A strict-end report does not end it - the
+  // page can read a write as landed while WebKit still holds the offset - and
+  // neither does a hold opening.
+  const heldOffsetRef = useRef<HeldOffset | null>(null);
 
   useLayoutEffect(
     () => () => {
@@ -1600,11 +1613,10 @@ export function useChatTimelineFollowLatch(
   // is excused.
   const retireEndWrites = useCallback((): void => {
     endWriteRef.current = null;
-    excusedEndWriteRef.current = null;
+    heldOffsetRef.current = null;
   }, []);
 
-  // A write that landed the view on the end becomes the latest end write,
-  // unless it is the write whose fall-back was just excused, issued again.
+  // A write that landed the view on the end becomes the latest end write.
   const noteEndWrite = useCallback(
     (
       move: ChatTimelineScrollerMove,
@@ -1619,24 +1631,11 @@ export function useChatTimelineFollowLatch(
       ) {
         return;
       }
-      const write: EndWrite = {
+      endWriteRef.current = {
         fromScrollTop,
         landedEnd: geometry.scrollHeight - geometry.clientHeight,
         clientHeight: geometry.clientHeight,
       };
-      // The same write again: from the same offset, onto the end it reached
-      // or the one the content has shrunk to since.
-      const excused = excusedEndWriteRef.current;
-      if (
-        excused !== null &&
-        Math.abs(excused.fromScrollTop - fromScrollTop) <=
-          CHAT_TIMELINE_STRICT_BOTTOM_EPSILON_PX &&
-        isEndAtOrBelowLanding(excused, geometry)
-      ) {
-        return;
-      }
-      excusedEndWriteRef.current = null;
-      endWriteRef.current = write;
     },
     [],
   );
@@ -1657,31 +1656,87 @@ export function useChatTimelineFollowLatch(
     if (permissionRef.current) owedCorrectionRef.current = true;
   }, [cancelActiveCorrection, supersedePendingEndCorrection]);
 
-  // Whether this view is the browser dropping the latest end write: back at
-  // the offset it was written from, off an end that is the one the write
-  // reached or a lower one the content has shrunk to, the reader still
-  // following under no arm or owned navigation. That spends the record.
-  // Otherwise only a scroll report spends it - the report is the movement the
-  // write answers for - unless it finds the view still on the end the write
-  // reached or a lower one, which a fall-back may yet follow. A read, or
-  // another write's origin, can fall between the list's own writes at heights
-  // the write never left, and settles nothing.
+  // A fall-back is excused only for a reader still following under no arm or
+  // owned navigation: anyone else's view is theirs to judge.
+  const isFollowingUnarmed = useCallback(
+    (): boolean =>
+      permissionRef.current &&
+      armedReaderDepartureRef.current === null &&
+      !ownsFreeNavigationRef.current,
+    [],
+  );
+
+  // Whether this view is WebKit holding the view at the offset it dropped an
+  // end write back to: there again, off the end, in the viewport it did that
+  // in, whatever was written since and wherever the end has gone. Any other
+  // unannounced move ends the hold: off the end anywhere else, which is then
+  // judged as any view is, or onto the end with no write that took it there,
+  // which is WebKit landing the write itself. `expected` is where the ledger
+  // has the view; a view still standing there has not moved, and neither has
+  // one the content clamped onto a lower end.
+  const isAtHeldOffset = useCallback(
+    (
+      geometry: ChatTimelineScrollGeometry,
+      expected: number | null,
+    ): boolean => {
+      const held = heldOffsetRef.current;
+      if (held === null) return false;
+      const resting = restingScrollTop(geometry);
+      const atStrictBottom = isChatTimelineAtStrictBottom(geometry);
+      if (
+        !atStrictBottom &&
+        geometry.clientHeight === held.clientHeight &&
+        Math.abs(resting - held.scrollTop) <=
+          CHAT_TIMELINE_STRICT_BOTTOM_EPSILON_PX
+      ) {
+        return isFollowingUnarmed();
+      }
+      const moved =
+        expected !== null &&
+        (atStrictBottom
+          ? resting > expected + CHAT_TIMELINE_STRICT_BOTTOM_EPSILON_PX
+          : Math.abs(resting - expected) >
+            CHAT_TIMELINE_STRICT_BOTTOM_EPSILON_PX);
+      if (moved) heldOffsetRef.current = null;
+      return false;
+    },
+    [isFollowingUnarmed],
+  );
+
+  // Whether this view is the browser dropping an end write, which is not the
+  // reader leaving. Either it is back at the offset WebKit already holds it
+  // at, or it is the latest end write's fall-back: back at the offset that
+  // write was made from, off an end that is the one it reached or a lower one
+  // the content has shrunk to, the reader still following under no arm or
+  // owned navigation. That spends the record and makes its offset the one
+  // WebKit holds. Otherwise only a scroll report spends the record - the
+  // report is the movement the write answers for - unless it finds the view
+  // still on the end the write reached or a lower one, which a fall-back may
+  // yet follow. A read, or another write's origin, can fall between the
+  // list's own writes at heights the write never left, and settles nothing.
   const isDroppedEndWrite = useCallback(
-    (geometry: ChatTimelineScrollGeometry, isReport: boolean): boolean => {
+    (
+      geometry: ChatTimelineScrollGeometry,
+      isReport: boolean,
+      expected: number | null,
+    ): boolean => {
+      if (isAtHeldOffset(geometry, expected)) return true;
       const write = endWriteRef.current;
       if (write === null) return false;
       const endAtOrBelowLanding = isEndAtOrBelowLanding(write, geometry);
+      const resting = restingScrollTop(geometry);
       if (
         endAtOrBelowLanding &&
-        Math.abs(restingScrollTop(geometry) - write.fromScrollTop) <=
+        Math.abs(resting - write.fromScrollTop) <=
           CHAT_TIMELINE_STRICT_BOTTOM_EPSILON_PX &&
         !isChatTimelineAtStrictBottom(geometry) &&
-        permissionRef.current &&
-        armedReaderDepartureRef.current === null &&
-        !ownsFreeNavigationRef.current
+        isFollowingUnarmed()
       ) {
         endWriteRef.current = null;
-        excusedEndWriteRef.current = write;
+        heldOffsetRef.current = {
+          scrollTop: resting,
+          clientHeight: geometry.clientHeight,
+        };
         return true;
       }
       if (
@@ -1692,20 +1747,23 @@ export function useChatTimelineFollowLatch(
       }
       return false;
     },
-    [],
+    [isAtHeldOffset, isFollowingUnarmed],
   );
 
-  // Whether a write found the view at `from` because the browser dropped the
-  // latest end write, seen before any read or report of it. Only a write that
-  // left the content end as it found it says which end that offset stood
-  // over.
+  // Whether a write found the view at `from` because the browser dropped an
+  // end write, seen before any read or report of it. Only a write that left
+  // the content end as it found it says which end that offset stood over.
   const isDroppedEndWriteAtOrigin = useCallback(
     (
       move: ChatTimelineScrollerMove,
       geometry: ChatTimelineScrollGeometry,
     ): boolean =>
       move.fromEnd === geometry.scrollHeight - geometry.clientHeight &&
-      isDroppedEndWrite({ ...geometry, scrollTop: move.from }, false),
+      isDroppedEndWrite(
+        { ...geometry, scrollTop: move.from },
+        false,
+        expectedScrollTopRef.current,
+      ),
     [isDroppedEndWrite],
   );
 
@@ -1863,8 +1921,8 @@ export function useChatTimelineFollowLatch(
     (geometry: ChatTimelineScrollGeometry): boolean => {
       // A read can see the browser drop an end write before the report of it
       // arrives, as a report can (`noteReportMovement`).
-      const droppedEndWrite = isDroppedEndWrite(geometry, false);
       const expected = expectedScrollTopRef.current;
+      const droppedEndWrite = isDroppedEndWrite(geometry, false, expected);
       if (expected === null) return false;
       const resting = restingScrollTop(geometry);
       expectedScrollTopRef.current = resting;
@@ -2467,8 +2525,8 @@ export function useChatTimelineFollowLatch(
   // corrects again.
   const noteReportMovement = useCallback(
     (geometry: ChatTimelineScrollGeometry): boolean => {
-      const droppedEndWrite = isDroppedEndWrite(geometry, true);
       const expected = expectedScrollTopRef.current;
+      const droppedEndWrite = isDroppedEndWrite(geometry, true, expected);
       const resting = restingScrollTop(geometry);
       expectedScrollTopRef.current = resting;
       return (
