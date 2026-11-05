@@ -712,7 +712,31 @@ describe("sandbox confirm dialogs", () => {
         <SandboxKeepDialog sandbox={SANDBOX} open onOpenChange={vi.fn()} />,
       );
       expect(screen.getByTestId("sandbox-confirm-keep").textContent).toContain(
-        "on Nov 1 at 10:36 if it stays idle from now.",
+        "on Nov 1 at 10:36 if it's suspended or stopped from now on.",
+      );
+    });
+
+    it("counts a changed resting period from the pinned now and names the suspended or stopped state", () => {
+      render(
+        <SandboxIdleSettingsDialog
+          sandbox={sandboxSummaryFixture({
+            displayName: NAME,
+            state: "awake",
+            destroyAfterRestingMinutes: 10_080,
+          })}
+          open
+          onOpenChange={vi.fn()}
+        />,
+      );
+      fireEvent.change(
+        screen.getByTestId("sandbox-idle-settings-resting-value"),
+        { target: { value: "2" } },
+      );
+
+      expect(
+        screen.getByTestId("sandbox-idle-settings-preview").textContent,
+      ).toBe(
+        "Destroyed on Oct 27 at 10:36 if it's suspended or stopped from now on.",
       );
     });
 

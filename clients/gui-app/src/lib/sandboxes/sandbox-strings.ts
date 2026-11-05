@@ -692,7 +692,7 @@ const KEEP_STOPS_DELETING = "Stops deleting itself when idle.";
 const KEEP_PAID_WHILE_AWAKE = "Paid by you while awake.";
 
 export function keepPreviewLine(restingDays: number, date: string): string {
-  return `${KEEP_STOPS_DELETING} Destroyed after ${restingDays} idle days instead, on ${date} if it stays idle from now. ${KEEP_PAID_WHILE_AWAKE}`;
+  return `${KEEP_STOPS_DELETING} Destroyed after ${restingDays} idle days instead, on ${date} if it's suspended or stopped from now on. ${KEEP_PAID_WHILE_AWAKE}`;
 }
 
 /**
