@@ -255,7 +255,7 @@ describe("<RemoteFolderPickerDialog />", () => {
     const loading = await screen.findByRole("status", {
       name: "Loading folders",
     });
-    expect(loading.getAttribute("aria-busy")).toBe("true");
+    expect(loading.hasAttribute("aria-busy")).toBe(false);
 
     queryByPath.set(pathKey(null), readyLevel(HOME_RESPONSE));
     fireEvent.click(screen.getByTestId("remote-folder-picker-test-rerender"));
