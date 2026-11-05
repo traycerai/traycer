@@ -1,5 +1,4 @@
 import {
-  HOST_FROZEN_WORD,
   HOST_SANDBOX_STATE_WORDS,
   hostSandboxStateWord,
   type HostSandboxState,
@@ -573,9 +572,9 @@ function idleMinutesOf(summary: SandboxSummary): number {
 }
 
 /**
- * The three frozen causes, each its own sentence. The payer whose
- * credits ran out is the row's last payer; the third cause (the payer left
- * the team) is not on the summary, so it reads as the second.
+ * The row's last payer names whose credits ran out. The out-of-credits badge
+ * sits beside the state; this line says what happened and whether resuming
+ * changes the payer.
  */
 export function sandboxFrozenCause(
   summary: SandboxSummary,
@@ -583,7 +582,7 @@ export function sandboxFrozenCause(
   viewerUserId: string | null,
 ): string {
   if (configuration.kind === "personal") {
-    return `${HOST_FROZEN_WORD}: your credits ran out.`;
+    return "Your credits ran out.";
   }
   const team = configuration.teamName;
   const payer = summary.wakePayer;
@@ -591,9 +590,9 @@ export function sandboxFrozenCause(
     payer === null ||
     (viewerUserId !== null && payer.userId === viewerUserId)
   ) {
-    return `${HOST_FROZEN_WORD}: your ${team} credits ran out.`;
+    return `Your ${team} credits ran out.`;
   }
-  return `${HOST_FROZEN_WORD}: ${payer.displayName ?? "a member"}'s ${team} credits ran out.`;
+  return `${payer.displayName ?? "a member"}'s ${team} credits ran out. Resuming changes the payer to you.`;
 }
 
 /** Whether a frozen row's remedy is the viewer's own top-up. */

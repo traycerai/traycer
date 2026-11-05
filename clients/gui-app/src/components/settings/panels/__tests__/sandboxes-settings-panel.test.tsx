@@ -1206,7 +1206,10 @@ describe("<SandboxesSettingsPanel />", () => {
     );
     expect(
       within(rowOf("frozen")).getByTestId("sandboxes-row-clock").textContent,
-    ).toContain("Will be removed on");
+    ).toBe("Your credits ran out. Will be removed on 8 Nov");
+    expect(within(rowOf("frozen")).getAllByText("Out of credits")).toHaveLength(
+      1,
+    );
   });
 
   it("narrows the list by the search and by the state filter, with a count badge", () => {

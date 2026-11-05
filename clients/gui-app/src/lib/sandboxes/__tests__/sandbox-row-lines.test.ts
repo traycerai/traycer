@@ -359,6 +359,68 @@ describe("sandboxSessionsLine and sandboxIdleRefusal", () => {
 });
 
 describe("sandboxClockLine", () => {
+  const teamConfiguration: SandboxPageConfiguration = {
+    kind: "team",
+    teamId: "team-1",
+    teamName: "Acme",
+    environmentId: "env-acme",
+  };
+
+  it.each([
+    {
+      name: "Personal",
+      configuration: { kind: "personal" },
+      wakePayer: null,
+      expected: "Your credits ran out.",
+    },
+    {
+      name: "a team with an unknown payer",
+      configuration: teamConfiguration,
+      wakePayer: null,
+      expected: "Your Acme credits ran out.",
+    },
+    {
+      name: "a team whose payer is the viewer",
+      configuration: teamConfiguration,
+      wakePayer: { userId: "viewer", displayName: "Me" },
+      expected: "Your Acme credits ran out.",
+    },
+    {
+      name: "a team whose payer is another member",
+      configuration: teamConfiguration,
+      wakePayer: { userId: "payer", displayName: "Priya" },
+      expected:
+        "Priya's Acme credits ran out. Resuming changes the payer to you.",
+    },
+    {
+      name: "a team whose other payer has no name",
+      configuration: teamConfiguration,
+      wakePayer: { userId: "payer", displayName: null },
+      expected:
+        "a member's Acme credits ran out. Resuming changes the payer to you.",
+    },
+  ] as const)(
+    "names whose credits ran out for $name",
+    ({ configuration, wakePayer, expected }) => {
+      expect(
+        sandboxClockLine({
+          summary: sandboxSummaryFixture({
+            state: "suspended",
+            frozen: true,
+            frozenAt: null,
+            wakePayer,
+          }),
+          configuration,
+          cost: null,
+          wakeString: null,
+          viewerUserId: "viewer",
+          reachability: { unreachable: false, lastContactAt: null },
+          now: NOW,
+        }),
+      ).toBe(expected);
+    },
+  );
+
   it("states the idle stop for an awake Automations row on its own period", () => {
     expect(
       sandboxClockLine({
