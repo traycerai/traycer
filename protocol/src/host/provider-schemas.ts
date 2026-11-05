@@ -1,3 +1,7 @@
+import {
+  credentialHomeSchema,
+  credentialIdentitySchema,
+} from "./provider-credential-home-schemas";
 /**
  * Schemas for the `providers.*` host RPC surface. Manages the CLI binary
  * Traycer runs for each provider (Codex / Claude Code / OpenCode).
@@ -1608,7 +1612,51 @@ export const providerProfileSchema = lazySchema(() =>
       .optional(),
   }),
 );
-export type ProviderProfile = z.infer<typeof providerProfileSchema>;
+/** Read projection: a future row is one disabled, explained row, never a lost inventory. */
+export const providerProfileProjectionSchema = lazySchema(() =>
+  providerProfileSchema
+    .extend({
+      recordVersion: z.literal(1).optional(),
+      credentialIdentity: credentialIdentitySchema.optional(),
+      credentialHome: credentialHomeSchema.optional(),
+      readability: z
+        .object({
+          kind: z.enum(["readable", "unreadable"]),
+          reason: z.string().nullable(),
+        })
+        .optional(),
+    })
+    .catch((context) => {
+      const input = context.input;
+      const row = typeof input === "object" && input !== null ? input : {};
+      return {
+        profileId:
+          "profileId" in row && typeof row.profileId === "string"
+            ? row.profileId
+            : "unreadable",
+        label:
+          "label" in row && typeof row.label === "string"
+            ? row.label
+            : "Unreadable profile",
+        kind: "managed" as const,
+        authType: "oauth" as const,
+        auth: UNKNOWN_PROVIDER_AUTH,
+        identity: null,
+        usageUpdatedAt: null,
+        rateLimitStatus: "unknown" as const,
+        rateLimitLimitedScopes: null,
+        duplicateOfProfileId: null,
+        ambientDriftNotice: null,
+        accentColor: null,
+        enabled: false,
+        readability: {
+          kind: "unreadable" as const,
+          reason: "Profile row uses an unsupported or invalid shape",
+        },
+      };
+    }),
+);
+export type ProviderProfile = z.infer<typeof providerProfileProjectionSchema>;
 
 export function isProfileEnabled(profile: {
   readonly enabled?: boolean;
@@ -2437,16 +2485,8 @@ export type ProvidersListRequestV70 = z.infer<
   typeof providersListRequestSchemaV70
 >;
 
-/**
- * Canonical (live) `providers.list` response. Always returns the classic
- * provider catalog; when the request carried a `native` query, `native` holds
- * the list/discover result (or a typed native error). Classic callers receive
- * `native: null`.
- *
- * Earlier lines each bind a frozen response; only the head binds this
- * live schema, so new fields do not widen a released line.
- */
-export const providersListResponseSchema = lazySchema(() =>
+/** Frozen `providers.list@10.7` response, before credential home projections. */
+export const providersListResponseSchemaV107Preimage = lazySchema(() =>
   z.object({
     providers: z.array(providerCliStateSchema),
     native: nativeListResultSchema.nullable().default(null),
@@ -2480,6 +2520,20 @@ export const providersListResponseSchema = lazySchema(() =>
         }),
       )
       .optional(),
+  }),
+);
+/**
+ * Canonical `providers.list` response. Classic callers receive `native: null`;
+ * a native query carries its list/discover result or typed error there.
+ * Home facts are additive keys; earlier lines retain their frozen decoders.
+ */
+export const providersListResponseSchema = lazySchema(() =>
+  providersListResponseSchemaV107Preimage.extend({
+    providers: z.array(
+      providerCliStateSchema.extend({
+        profiles: z.array(providerProfileProjectionSchema).catch([]),
+      }),
+    ),
   }),
 );
 export type ProvidersListResponse = z.infer<typeof providersListResponseSchema>;
