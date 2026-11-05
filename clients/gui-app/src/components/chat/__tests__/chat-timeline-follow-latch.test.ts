@@ -9702,5 +9702,87 @@ describe("useChatTimelineFollowLatch", () => {
       expect(onFollowIntentChange).toHaveBeenLastCalledWith(false);
       expect(listRef.scrollToEnd).toHaveBeenCalledTimes(1);
     });
+
+    /** A send's voided window closes over a tail that grew: the one owed
+     *  correction lands the view on the end (written from offset 1000) and
+     *  the write's own report arrives. */
+    function closeHoldOverGrownTail(): {
+      readonly node: HTMLDivElement;
+      readonly listRef: HeldCommandListRef;
+      readonly result: { readonly current: ChatTimelineFollowLatch };
+      readonly onFollowIntentChange: Mock<(isFollowing: boolean) => void>;
+    } {
+      const mounted = mountHeldFollowing();
+      const { node, listRef, result, onFollowIntentChange } = mounted;
+      fireNativeScroll(node);
+      result.current.setWindowInvalidated(true);
+      shim.setGeometry(node, { scrollHeight: 1700 });
+      result.current.setWindowInvalidated(false);
+      expect(node.scrollTop).toBe(1200);
+      expect(listRef.scrollToEnd).toHaveBeenCalledTimes(1);
+      fireNativeScroll(node);
+      onFollowIntentChange.mockClear();
+      return mounted;
+    }
+
+    it("corrects again when the browser drops the close write and the view falls back to where it was written from, once", () => {
+      const { node, listRef, onFollowIntentChange } = closeHoldOverGrownTail();
+
+      shim.setGeometry(node, { scrollTop: 1000 });
+      fireNativeScroll(node);
+      expect(onFollowIntentChange).not.toHaveBeenCalledWith(false);
+      expect(node.scrollTop).toBe(1200);
+      expect(listRef.scrollToEnd).toHaveBeenCalledTimes(2);
+
+      // A second fall-back is judged as any report is.
+      fireNativeScroll(node);
+      shim.setGeometry(node, { scrollTop: 1000 });
+      fireNativeScroll(node);
+      expect(onFollowIntentChange).toHaveBeenLastCalledWith(false);
+    });
+
+    it("corrects again when a maintenance read sees the close write dropped before its report arrives", () => {
+      const { node, listRef, result, onFollowIntentChange } =
+        closeHoldOverGrownTail();
+
+      shim.setGeometry(node, { scrollTop: 1000 });
+      result.current.followEndIfPermitted();
+
+      expect(onFollowIntentChange).not.toHaveBeenCalledWith(false);
+      expect(node.scrollTop).toBe(1200);
+      expect(listRef.scrollToEnd).toHaveBeenCalledTimes(2);
+    });
+
+    it("publishes departure when the view falls back to the close write's origin over a content end that moved", () => {
+      const { node, listRef, onFollowIntentChange } = closeHoldOverGrownTail();
+
+      shim.setGeometry(node, { scrollTop: 1000, scrollHeight: 1750 });
+      fireNativeScroll(node);
+
+      expect(onFollowIntentChange).toHaveBeenLastCalledWith(false);
+      expect(listRef.scrollToEnd).toHaveBeenCalledTimes(1);
+    });
+
+    it("publishes departure when the view falls back to an offset other than the close write's origin", () => {
+      const { node, listRef, onFollowIntentChange } = closeHoldOverGrownTail();
+
+      shim.setGeometry(node, { scrollTop: 1100 });
+      fireNativeScroll(node);
+
+      expect(onFollowIntentChange).toHaveBeenLastCalledWith(false);
+      expect(listRef.scrollToEnd).toHaveBeenCalledTimes(1);
+    });
+
+    it("publishes departure for a fall-back to the close write's origin after the reader touched the list", () => {
+      const { node, listRef, onFollowIntentChange } = closeHoldOverGrownTail();
+
+      fireTouch(node, "touchstart", 300);
+      fireTouch(node, "touchend", 300);
+      shim.setGeometry(node, { scrollTop: 1000 });
+      fireNativeScroll(node);
+
+      expect(onFollowIntentChange).toHaveBeenLastCalledWith(false);
+      expect(listRef.scrollToEnd).toHaveBeenCalledTimes(1);
+    });
   });
 });
