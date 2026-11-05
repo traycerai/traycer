@@ -26,6 +26,7 @@ interface SettingsHostScopeState {
     host: SettingsHostSelection,
     pick: EnvironmentPick,
   ) => void;
+  readonly abandonHostEntry: (hostId: string) => void;
   readonly reset: () => void;
   readonly adoptHostId: (previous: string, next: string) => void;
 }
@@ -54,6 +55,10 @@ export const useSettingsHostScopeStore = create<SettingsHostScopeState>(
               },
               pendingHostId: null,
             },
+      ),
+    abandonHostEntry: (hostId) =>
+      set((state) =>
+        state.pendingHostId === hostId ? { pendingHostId: null } : state,
       ),
     reset: () => set({ hostByEnvironment: {}, pendingHostId: null }),
     adoptHostId: (previous, next) => {
