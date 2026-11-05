@@ -4,29 +4,29 @@ import { lazySchema } from "../framework/lazy-schema";
 /** Provider-stated spend scope. Display names and email never qualify an id. */
 export const spendScopeKeySchema = lazySchema(() =>
   z.union([
-    z.object({
+    z.strictObject({
       providerId: z.string().min(1),
       accountId: z.string().min(1),
       organizationId: z.string().min(1).nullable(),
     }),
-    z.object({ providerId: z.string().min(1), email: z.string().min(1) }),
+    z.strictObject({ providerId: z.string().min(1), email: z.string().min(1) }),
   ]),
 );
 export type SpendScopeKey = z.infer<typeof spendScopeKeySchema>;
 
 export const credentialIdentitySchema = lazySchema(() =>
   z.discriminatedUnion("kind", [
-    z.object({
+    z.strictObject({
       kind: z.literal("spend-scoped"),
       spendScopeKey: spendScopeKeySchema,
       provenance: z.string().min(1),
     }),
-    z.object({
+    z.strictObject({
       kind: z.literal("unidentified"),
       provenance: z.string().min(1),
       reason: z.string().min(1),
     }),
-    z.object({
+    z.strictObject({
       kind: z.literal("accountless"),
       provenance: z.string().min(1),
       reason: z.string().min(1),
@@ -44,7 +44,7 @@ export const credentialVersionSchema = lazySchema(() =>
 export type CredentialVersion = z.infer<typeof credentialVersionSchema>;
 
 export const credentialHomeSchema = lazySchema(() =>
-  z.object({
+  z.strictObject({
     homeAddress: z.string().min(1),
     bindingVersion: credentialVersionSchema,
     materialRevision: credentialVersionSchema,
