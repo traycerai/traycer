@@ -3,6 +3,12 @@ import { getRecordSchema } from "@traycer/protocol/framework/versioned-record";
 import { commonRecordRegistry } from "@traycer/protocol/common/registry";
 import { imageSha256HexSchema } from "./images";
 import { lazySchema } from "@traycer/protocol/framework/lazy-schema";
+import {
+  MARKDOWN_REVISION_HEAD_PATH,
+  MARKDOWN_REVISION_HEAD_SCALARS_FIELD,
+  MARKDOWN_REVISION_HEAD_SEQ_FIELD,
+  markdownRevisionScalarsSchema,
+} from "./markdown-revision";
 
 /**
  * Artifact metadata and tombstones. Markdown, HTML and canvas entries carry
@@ -123,6 +129,33 @@ const artifactRoomFields = {
   artifactRoomId: lazySchema(() => z.string()),
 } as const;
 
+/**
+ * A markdown body stored as revision objects: the head names the current
+ * revision envelope as its one file (`markdown-revision.ts`), the same shape
+ * as an html head. That file's generation also carries the revision's
+ * position in the cloud chain, so a reader of the index can tell a newer
+ * projection from an older one, and the revision's frontmatter scalars, so
+ * they are always the ones of the revision the generation names.
+ */
+export const markdownArtifactHeadSchema = lazySchema(() =>
+  z.object({
+    files: z.object({
+      [MARKDOWN_REVISION_HEAD_PATH]: z.object({
+        ...artifactObjectFields,
+        [MARKDOWN_REVISION_HEAD_SEQ_FIELD]: z.number().int().positive(),
+        [MARKDOWN_REVISION_HEAD_SCALARS_FIELD]: markdownRevisionScalarsSchema,
+      }),
+    }),
+    capturedAt: z.number(),
+  }),
+);
+export type MarkdownArtifactHead = z.infer<typeof markdownArtifactHeadSchema>;
+
+/** Absent on an entry whose body still lives in its artifact room. */
+const markdownHeadFields = {
+  head: lazySchema(() => markdownArtifactHeadSchema.optional()),
+} as const;
+
 const baseEpicArtifactFields = {
   ...baseEpicArtifactFieldsPreHtml,
   layout: lazySchema(() => z.enum(["folder", "file"]).default("folder")),
@@ -143,6 +176,7 @@ export const specArtifactSchema = lazySchema(() =>
     kind: z.literal("spec"),
     ...baseEpicArtifactFields,
     ...artifactRoomFields,
+    ...markdownHeadFields,
   }),
 );
 export type SpecArtifact = z.infer<typeof specArtifactSchema>;
@@ -152,6 +186,7 @@ export const ticketArtifactSchema = lazySchema(() =>
     kind: z.literal("ticket"),
     ...baseEpicArtifactFields,
     ...artifactRoomFields,
+    ...markdownHeadFields,
     assignee: z.string(),
     status: ticketStatusSchema,
   }),
@@ -163,6 +198,7 @@ export const storyArtifactSchema = lazySchema(() =>
     kind: z.literal("story"),
     ...baseEpicArtifactFields,
     ...artifactRoomFields,
+    ...markdownHeadFields,
     assignee: z.string(),
     status: ticketStatusSchema,
   }),
@@ -174,22 +210,23 @@ export const reviewArtifactSchema = lazySchema(() =>
     kind: z.literal("review"),
     ...baseEpicArtifactFields,
     ...artifactRoomFields,
+    ...markdownHeadFields,
   }),
 );
 export type ReviewArtifact = z.infer<typeof reviewArtifactSchema>;
 
-// Released entries have neither layout nor relativePath.
+// Released entries have neither layout, relativePath nor a markdown head.
 export const specArtifactSchemaPreHtml = lazySchema(() =>
-  specArtifactSchema.omit({ layout: true, relativePath: true }),
+  specArtifactSchema.omit({ layout: true, relativePath: true, head: true }),
 );
 export const ticketArtifactSchemaPreHtml = lazySchema(() =>
-  ticketArtifactSchema.omit({ layout: true, relativePath: true }),
+  ticketArtifactSchema.omit({ layout: true, relativePath: true, head: true }),
 );
 export const storyArtifactSchemaPreHtml = lazySchema(() =>
-  storyArtifactSchema.omit({ layout: true, relativePath: true }),
+  storyArtifactSchema.omit({ layout: true, relativePath: true, head: true }),
 );
 export const reviewArtifactSchemaPreHtml = lazySchema(() =>
-  reviewArtifactSchema.omit({ layout: true, relativePath: true }),
+  reviewArtifactSchema.omit({ layout: true, relativePath: true, head: true }),
 );
 
 export const epicArtifactSchemaPreHtml = lazySchema(() =>
