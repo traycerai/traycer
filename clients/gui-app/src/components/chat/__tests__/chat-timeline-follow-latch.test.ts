@@ -9864,5 +9864,74 @@ describe("useChatTimelineFollowLatch", () => {
 
       expect(onFollowIntentChange).toHaveBeenLastCalledWith(false);
     });
+
+    /** The content shrinks 48 and the view is clamped onto the end; the
+     *  latch then writes the view onto the grown end (written from 952), and
+     *  the content shrinks back, the browser clamping the view onto that
+     *  lower end. A read there writes nothing. */
+    function clampedOntoShrunkenEndAfterWrite(): {
+      readonly node: HTMLDivElement;
+      readonly listRef: HeldCommandListRef;
+      readonly result: { readonly current: ChatTimelineFollowLatch };
+      readonly onFollowIntentChange: Mock<(isFollowing: boolean) => void>;
+    } {
+      const mounted = mountHeldFollowing();
+      const { node, result } = mounted;
+      fireNativeScroll(node);
+      shim.setGeometry(node, { scrollHeight: 1452, scrollTop: 952 });
+      fireNativeScroll(node);
+      shim.setGeometry(node, { scrollHeight: 2044 });
+      result.current.followEndIfPermitted();
+      expect(node.scrollTop).toBe(1544);
+      shim.setGeometry(node, { scrollHeight: 1500, scrollTop: 1000 });
+      result.current.followEndIfPermitted();
+      return mounted;
+    }
+
+    it("corrects again when the view falls back to the write's origin over an end the content shrank under it", () => {
+      const { node, onFollowIntentChange } = clampedOntoShrunkenEndAfterWrite();
+
+      shim.setGeometry(node, { scrollTop: 952 });
+      fireNativeScroll(node);
+
+      expect(onFollowIntentChange).not.toHaveBeenCalledWith(false);
+      expect(node.scrollTop).toBe(1000);
+    });
+
+    it("corrects again at the close of a window voided between the clamp and the fall-back", () => {
+      const { node, result, onFollowIntentChange } =
+        clampedOntoShrunkenEndAfterWrite();
+
+      result.current.setWindowInvalidated(true);
+      shim.setGeometry(node, { scrollTop: 952 });
+      fireNativeScroll(node);
+      expect(onFollowIntentChange).not.toHaveBeenCalledWith(false);
+
+      // The browser lands the view on the end by itself.
+      shim.setGeometry(node, { scrollTop: 1000 });
+      fireNativeScroll(node);
+      // The reply grows during the void; the correction is held.
+      shim.setGeometry(node, { scrollHeight: 1541 });
+      result.current.followEndIfPermitted();
+      expect(node.scrollTop).toBe(1000);
+
+      result.current.setWindowInvalidated(false);
+
+      expect(onFollowIntentChange).not.toHaveBeenCalledWith(false);
+      expect(node.scrollTop).toBe(1041);
+    });
+
+    it("publishes departure when the view falls back to a correction's origin after the content grew past where it landed", () => {
+      const { node, result, onFollowIntentChange } = mountHeldFollowing();
+      fireNativeScroll(node);
+      shim.setGeometry(node, { scrollHeight: 1600 });
+      result.current.followEndIfPermitted();
+      fireNativeScroll(node);
+
+      shim.setGeometry(node, { scrollHeight: 1700, scrollTop: 1000 });
+      fireNativeScroll(node);
+
+      expect(onFollowIntentChange).toHaveBeenLastCalledWith(false);
+    });
   });
 });
