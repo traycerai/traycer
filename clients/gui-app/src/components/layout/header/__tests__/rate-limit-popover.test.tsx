@@ -4024,9 +4024,23 @@ describe("<RateLimitPopover /> host picker", () => {
     );
   });
 
-  it("shows a host picker row when there is more than one host", () => {
-    renderPopoverWithScope(twoHostScope({}), false);
+  it("shows the watched sandbox's name and kind in the picker when there is more than one host", () => {
+    const sandbox = hostScopeOptionFixture({
+      hostId: "host-sandbox",
+      name: "quiet-harbor",
+      kind: "sandbox",
+    });
+    renderPopoverWithScope(
+      twoHostScope({
+        host: sandbox,
+        hosts: [sandbox, hostScopeOptionFixture({ hostId: "host-a" })],
+      }),
+      false,
+    );
     expect(screen.getByTestId("rate-limit-host-picker-row")).toBeTruthy();
+    expect(screen.getByTestId("settings-host-switcher").textContent).toBe(
+      "quiet-harbor Sandbox",
+    );
   });
 
   // The `vanished` exception: a pick that no longer resolves is not a choice,
@@ -4083,6 +4097,9 @@ describe("<RateLimitPopover /> host picker", () => {
     });
     renderPopoverWithScope(scope, true);
 
+    expect(screen.getByTestId("settings-host-switcher").textContent).toBe(
+      "Alpha Computer",
+    );
     expect(
       screen.getByTestId("rate-limit-host-stale-pin").textContent,
     ).toContain("Bright Meadow is no longer here. You're seeing Alpha.");

@@ -746,7 +746,7 @@ describe("<HostSwitcher /> composer mode computers", () => {
     });
 
     const chip = screen.getByTestId("settings-host-switcher");
-    expect(chip.textContent).toContain("windows-test-machine");
+    expect(chip.textContent).toBe("windows-test-machine");
     const local = row("local-win");
     expect(within(local).getByText("windows-test-machine")).toBeDefined();
     expect(within(local).getByText("Windows · Active")).toBeDefined();

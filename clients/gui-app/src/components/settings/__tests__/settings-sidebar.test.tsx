@@ -891,6 +891,7 @@ describe("<SettingsSidebar /> scope groups", () => {
     const pickers = screen.getAllByTestId("settings-host-switcher");
     expect(pickers).toHaveLength(1);
     const picker = pickers[0];
+    expect(picker.textContent).toBe("host-a Computer");
     const follows = (earlier: HTMLElement, later: HTMLElement): boolean =>
       (earlier.compareDocumentPosition(later) &
         Node.DOCUMENT_POSITION_FOLLOWING) !==
