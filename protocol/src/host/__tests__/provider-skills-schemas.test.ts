@@ -17,6 +17,12 @@ import {
   providerSkillsCapabilitiesSchemaV70Preimage,
   providersSkillsInspectResultSchema,
 } from "@traycer/protocol/host/provider-native-schemas";
+import {
+  providersListV107,
+  providersListV108,
+  providersNativeMutateV14,
+  providersNativeMutateV15,
+} from "@traycer/protocol/host/registry";
 import { toCanonicalJsonSchema } from "@traycer/protocol/framework/json-schema-fingerprint";
 
 type SkillsScope = "global" | "project";
@@ -744,5 +750,73 @@ describe("v7.0 frozen skills shapes do not grow the new keys", () => {
       kind: "skills",
       skills: [BASE_SKILL_ROW],
     });
+  });
+});
+
+describe("profile-origin metadata compatibility", () => {
+  const enrichedRow = {
+    ...BASE_SKILL_ROW,
+    origin: "Imported from github.com/org/skills",
+    profileOrigin: "this-host" as const,
+    shadowed: true,
+  };
+
+  it("parses optional origin metadata and preserves the existing import provenance", () => {
+    expect(providerSkillSchema.parse(enrichedRow)).toEqual(enrichedRow);
+    expect(providerSkillSchema.parse(BASE_SKILL_ROW)).toEqual(BASE_SKILL_ROW);
+  });
+
+  it("released list and mutation heads retain import provenance and strip only new metadata", () => {
+    const native = {
+      ok: true,
+      kind: "skills",
+      skills: [enrichedRow],
+    } as const;
+    const legacyRow = {
+      ...BASE_SKILL_ROW,
+      origin: "Imported from github.com/org/skills",
+    };
+    expect(
+      providersListV107.responseSchema.parse({ providers: [], native }),
+    ).toEqual({
+      providers: [],
+      native: { ok: true, kind: "skills", skills: [legacyRow] },
+    });
+    expect(
+      providersNativeMutateV14.responseSchema.parse({ result: native }),
+    ).toEqual({ result: { ok: true, kind: "skills", skills: [legacyRow] } });
+  });
+
+  it("new list and mutation heads accept legacy and enriched skill rows", () => {
+    const enriched = {
+      ok: true,
+      kind: "skills",
+      skills: [enrichedRow],
+    } as const;
+    const legacy = {
+      ok: true,
+      kind: "skills",
+      skills: [
+        {
+          ...BASE_SKILL_ROW,
+          origin: "Imported from github.com/org/skills",
+        },
+      ],
+    } as const;
+    expect(
+      providersListV108.responseSchema.parse({
+        providers: [],
+        native: enriched,
+      }),
+    ).toEqual({ providers: [], native: enriched });
+    expect(
+      providersListV108.responseSchema.parse({ providers: [], native: legacy }),
+    ).toEqual({ providers: [], native: legacy });
+    expect(
+      providersNativeMutateV15.responseSchema.parse({ result: enriched }),
+    ).toEqual({ result: enriched });
+    expect(
+      providersNativeMutateV15.responseSchema.parse({ result: legacy }),
+    ).toEqual({ result: legacy });
   });
 });

@@ -1000,7 +1000,7 @@ export type ProviderSkillSourceBadge = z.infer<
   typeof providerSkillSourceBadgeSchema
 >;
 
-export const providerSkillSchema = lazySchema(() =>
+const providerSkillSchemaBeforeProfileOrigin = lazySchema(() =>
   z.object({
     name: z.string(),
     description: z.string().nullable(),
@@ -1016,6 +1016,16 @@ export const providerSkillSchema = lazySchema(() =>
      * Omitted means this is not a conflict row.
      */
     conflict: z.boolean().optional(),
+  }),
+);
+/** Skill metadata added on list@10.8 and nativeMutate@1.5; older rows omit it. */
+export const providerSkillSchema = lazySchema(() =>
+  providerSkillSchemaBeforeProfileOrigin.extend({
+    profileOrigin: z
+      .enum(["user", "host-view", "this-host"])
+      .nullable()
+      .optional(),
+    shadowed: z.boolean().optional(),
   }),
 );
 export type ProviderSkill = z.infer<typeof providerSkillSchema>;
@@ -1287,6 +1297,38 @@ export const nativeListQuerySchema = lazySchema(() =>
 );
 export type NativeListQuery = z.infer<typeof nativeListQuerySchema>;
 
+const nativeListSuccessResultSchemaBeforeProfileOrigin = lazySchema(() =>
+  z.discriminatedUnion("kind", [
+    z.object({
+      ok: z.literal(true),
+      kind: z.literal("mcp"),
+      servers: z.array(providerMcpServerSchema),
+      notices: z.array(providerMcpNoticeSchema).default([]).optional(),
+      coverage: providerMcpCoverageSchema.nullable().default(null).optional(),
+    }),
+    z.object({
+      ok: z.literal(true),
+      kind: z.literal("plugins"),
+      plugins: z.array(providerPluginSchema),
+    }),
+    z.object({
+      ok: z.literal(true),
+      kind: z.literal("skills"),
+      skills: z.array(providerSkillSchemaBeforeProfileOrigin),
+    }),
+    z.object({
+      ok: z.literal(true),
+      kind: z.literal("mcpDiscover"),
+      server: providerMcpServerSchema,
+    }),
+    z.object({
+      ok: z.literal(true),
+      kind: z.literal("pluginIcon"),
+      icon: providerPluginIconSchema,
+    }),
+  ]),
+);
+
 const nativeListSuccessResultSchema = lazySchema(() =>
   z.discriminatedUnion("kind", [
     z.object({
@@ -1322,6 +1364,12 @@ const nativeListSuccessResultSchema = lazySchema(() =>
 export const nativeListResultSchema = lazySchema(() =>
   z.union([nativeListSuccessResultSchema, providerNativeErrorResultSchema]),
 );
+export const nativeListResultSchemaBeforeProfileOrigin = lazySchema(() =>
+  z.union([
+    nativeListSuccessResultSchemaBeforeProfileOrigin,
+    providerNativeErrorResultSchema,
+  ]),
+);
 export type NativeListResult = z.infer<typeof nativeListResultSchema>;
 
 /** MCP result published on list@10.1 and 10.2, before origin and coverage. */
@@ -1342,7 +1390,7 @@ export const nativeListResultSchemaV101Preimage = lazySchema(() =>
       z.object({
         ok: z.literal(true),
         kind: z.literal("skills"),
-        skills: z.array(providerSkillSchema),
+        skills: z.array(providerSkillSchemaBeforeProfileOrigin),
       }),
       z.object({
         ok: z.literal(true),
@@ -1376,7 +1424,7 @@ export const nativeListResultSchemaBeforeMcpRemedies = lazySchema(() =>
       z.object({
         ok: z.literal(true),
         kind: z.literal("skills"),
-        skills: z.array(providerSkillSchema),
+        skills: z.array(providerSkillSchemaBeforeProfileOrigin),
       }),
       z.object({
         ok: z.literal(true),
@@ -1589,6 +1637,33 @@ export const nativeMutationSchemaV10Preimage = lazySchema(() =>
     }),
 );
 
+const nativeMutationSuccessResultSchemaBeforeProfileOrigin = lazySchema(() =>
+  z.discriminatedUnion("kind", [
+    z.object({
+      ok: z.literal(true),
+      kind: z.literal("mcp"),
+      servers: z.array(providerMcpServerSchema),
+      notices: z.array(providerMcpNoticeSchema).default([]).optional(),
+      coverage: providerMcpCoverageSchema.nullable().default(null).optional(),
+    }),
+    z.object({
+      ok: z.literal(true),
+      kind: z.literal("plugins"),
+      plugins: z.array(providerPluginSchema),
+    }),
+    z.object({
+      ok: z.literal(true),
+      kind: z.literal("skills"),
+      skills: z.array(providerSkillSchemaBeforeProfileOrigin),
+    }),
+    z.object({
+      ok: z.literal(true),
+      kind: z.literal("skillsInspect"),
+      ...providersSkillsInspectResultSchema.shape,
+    }),
+  ]),
+);
+
 const nativeMutationSuccessResultSchema = lazySchema(() =>
   z.discriminatedUnion("kind", [
     z.object({
@@ -1619,6 +1694,12 @@ const nativeMutationSuccessResultSchema = lazySchema(() =>
 export const nativeMutationResultSchema = lazySchema(() =>
   z.union([nativeMutationSuccessResultSchema, providerNativeErrorResultSchema]),
 );
+export const nativeMutationResultSchemaBeforeProfileOrigin = lazySchema(() =>
+  z.union([
+    nativeMutationSuccessResultSchemaBeforeProfileOrigin,
+    providerNativeErrorResultSchema,
+  ]),
+);
 export type NativeMutationResult = z.infer<typeof nativeMutationResultSchema>;
 
 /**
@@ -1641,6 +1722,17 @@ export type ProviderNativeMutateErrorCode = z.infer<
 
 /** Mutation result on `providers.nativeMutate@1.4`. */
 export const nativeMutationResultSchemaV14 = lazySchema(() =>
+  z.union([
+    nativeMutationSuccessResultSchemaBeforeProfileOrigin,
+    z.object({
+      ok: z.literal(false),
+      code: providerNativeMutateErrorCodeSchema,
+      detail: z.string().nullable(),
+    }),
+  ]),
+);
+/** The additive skill-origin metadata on nativeMutate@1.5. */
+export const nativeMutationResultSchemaV15 = lazySchema(() =>
   z.union([
     nativeMutationSuccessResultSchema,
     z.object({
@@ -1672,7 +1764,7 @@ export const nativeMutationResultSchemaV11Preimage = lazySchema(() =>
       z.object({
         ok: z.literal(true),
         kind: z.literal("skills"),
-        skills: z.array(providerSkillSchema),
+        skills: z.array(providerSkillSchemaBeforeProfileOrigin),
       }),
       z.object({
         ok: z.literal(true),
@@ -1701,7 +1793,7 @@ export const nativeMutationResultSchemaV10Preimage = lazySchema(() =>
       z.object({
         ok: z.literal(true),
         kind: z.literal("skills"),
-        skills: z.array(providerSkillSchema),
+        skills: z.array(providerSkillSchemaBeforeProfileOrigin),
       }),
       z.object({
         ok: z.literal(true),
