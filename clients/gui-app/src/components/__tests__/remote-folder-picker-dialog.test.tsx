@@ -242,6 +242,29 @@ describe("<RemoteFolderPickerDialog />", () => {
     expect(screen.queryByTestId("remote-folder-picker-dialog")).toBeNull();
   });
 
+  it("announces folder loading and clears the status when the listing arrives", async () => {
+    queryByPath.set(pathKey(null), {
+      data: undefined,
+      isPending: true,
+      error: null,
+      refetch: () => Promise.resolve(),
+    });
+    render(<PickerRerenderHarness />);
+    void useRemoteFolderPickerStore.getState().requestPick(makeClient());
+
+    const loading = await screen.findByRole("status", {
+      name: "Loading folders",
+    });
+    expect(loading.getAttribute("aria-busy")).toBe("true");
+
+    queryByPath.set(pathKey(null), readyLevel(HOME_RESPONSE));
+    fireEvent.click(screen.getByTestId("remote-folder-picker-test-rerender"));
+    expect(await screen.findByTestId("remote-folder-picker-rows")).toBeTruthy();
+    expect(
+      screen.queryByRole("status", { name: "Loading folders" }),
+    ).toBeNull();
+  });
+
   it("keeps a stable height and single-row footer across directory levels", async () => {
     render(<RemoteFolderPickerDialog />);
     void useRemoteFolderPickerStore.getState().requestPick(makeClient());

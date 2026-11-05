@@ -1041,6 +1041,7 @@ function RemoteFolderPickerListingStatus(props: {
       <div
         className="flex flex-col gap-1"
         data-testid="remote-folder-picker-loading"
+        role="status"
         aria-busy="true"
         aria-label="Loading folders"
       >

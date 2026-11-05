@@ -231,7 +231,7 @@ describe("requestActivate (Settings ▸ Activate, the only preferred-host write 
     );
   });
 
-  it("reason unrecognized: no analytics, says the previous machine stays active", async () => {
+  it("reason unrecognized: no analytics, explains the outcome is unknown", async () => {
     const trackSpy = vi.spyOn(Analytics.getInstance(), "track");
     const activate = vi.fn((): Promise<ActivateResult> =>
       Promise.resolve({ ok: false, reason: "unrecognized" }),
@@ -246,7 +246,7 @@ describe("requestActivate (Settings ▸ Activate, the only preferred-host write 
     expect(trackSpy).not.toHaveBeenCalled();
     expect(toast.error).toHaveBeenCalledTimes(1);
     expect(toast.error).toHaveBeenCalledWith(
-      "Couldn't set Weird Machine as the app's machine. The previous machine stays active.",
+      "Couldn't confirm Weird Machine as the app's machine. Check which machine is active, then try again.",
     );
   });
 
@@ -274,7 +274,7 @@ describe("requestActivate (Settings ▸ Activate, the only preferred-host write 
     );
   });
 
-  it("a REJECTING activate call is caught: no analytics, generic toast, does not throw", async () => {
+  it("a REJECTING activate call gives confirmation guidance without analytics or throwing", async () => {
     const trackSpy = vi.spyOn(Analytics.getInstance(), "track");
     const activate = vi.fn((): Promise<ActivateResult> =>
       Promise.reject(new Error("transport exploded")),
@@ -291,7 +291,23 @@ describe("requestActivate (Settings ▸ Activate, the only preferred-host write 
     expect(trackSpy).not.toHaveBeenCalled();
     expect(toast.error).toHaveBeenCalledTimes(1);
     expect(toast.error).toHaveBeenCalledWith(
-      "Couldn't set Boom Machine as the app's machine. The previous machine stays active.",
+      "Couldn't confirm Boom Machine as the app's machine. Check which machine is active, then try again.",
+    );
+  });
+
+  it("a rejected activate call uses the fallback label when the option is unavailable", async () => {
+    const trackSpy = vi.spyOn(Analytics.getInstance(), "track");
+    const activate = vi.fn((): Promise<ActivateResult> =>
+      Promise.reject(new Error("transport exploded")),
+    );
+
+    await expect(
+      requestActivate(fakeAuthority(activate), "unknown-to-panel", null),
+    ).resolves.toBe(false);
+
+    expect(trackSpy).not.toHaveBeenCalled();
+    expect(toast.error).toHaveBeenCalledExactlyOnceWith(
+      "Couldn't confirm that machine as the app's machine. Check which machine is active, then try again.",
     );
   });
 });
