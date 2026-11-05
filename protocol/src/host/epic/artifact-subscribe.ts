@@ -406,3 +406,73 @@ export const artifactSubscribeV11 = defineStreamRpcContract({
   serverFrameSchema: artifactSubscribeServerFrameSchemaV11,
   clientFrameSchema: artifactSubscribeClientFrameSchemaV10,
 });
+
+// ─── `artifact.subscribe@1.2` - additive: the `bodyDegraded` frame ────────
+//
+// `@1.1` can say a served body is still syncing, and nothing else, so a body
+// the host could not bring up to date at all read as syncing for as long as
+// the tile was open: a day, on one staging room whose executor had refused it
+// and whose cloud attach had no baseline to compare against. `@1.2` adds one
+// frame that says the host has stopped trying for now, and why, so the tile
+// can say so instead of showing the sync strip indefinitely.
+//
+// @1.0 and @1.1 stay installed and FROZEN: the host gates the frame on the
+// negotiated minor (`ARTIFACT_SUBSCRIBE_BODY_DEGRADED_MINOR`).
+
+/**
+ * Why the host cannot bring the served body up to date right now.
+ *
+ * - `room-unavailable` - the host is refusing work on the room this body
+ *   lives in after the room's work stalled its executor. It retries the room
+ *   on its own after a back-off; the body stays readable.
+ * - `baseline-unavailable` - the cloud would not take this body's room, because
+ *   the host could not produce the baseline the two copies are compared
+ *   against. Edits stay on the host until it can.
+ */
+export const artifactBodyDegradedReasonSchema = lazySchema(() =>
+  z.enum(["room-unavailable", "baseline-unavailable"]),
+);
+export type ArtifactBodyDegradedReason = z.infer<
+  typeof artifactBodyDegradedReasonSchema
+>;
+
+/**
+ * The body is degraded, for `reason`. Sent after the `doc` frame it describes,
+ * and again when the reason changes. A client forgets it on every `doc`,
+ * `unavailable` and `bodySync` frame: a `bodySync` means the host is
+ * reconciling the body again, and it re-sends this after the next `doc` if
+ * the body is still degraded.
+ */
+const artifactSubscribeBodyDegradedFrameSchemaV12 = lazySchema(() =>
+  z.object({
+    kind: z.literal("bodyDegraded"),
+    ...epicLaneEpochFrameFields,
+    ...artifactSubscribeAddressFields,
+    reason: artifactBodyDegradedReasonSchema,
+    hasBinaryPayload: z.literal(false),
+  }),
+);
+
+export const artifactSubscribeServerFrameSchemaV12 = lazySchema(() =>
+  z.discriminatedUnion("kind", [
+    ...artifactSubscribeServerFrameSchemaV11.options,
+    artifactSubscribeBodyDegradedFrameSchemaV12,
+  ]),
+);
+export type ArtifactSubscribeServerFrameV12 = z.infer<
+  typeof artifactSubscribeServerFrameSchemaV12
+>;
+
+/**
+ * The minor at which `bodyDegraded` exists. A producer gates on it per
+ * subscription; a consumer on a lower minor never sees the frame.
+ */
+export const ARTIFACT_SUBSCRIBE_BODY_DEGRADED_MINOR = 2;
+
+export const artifactSubscribeV12 = defineStreamRpcContract({
+  method: "artifact.subscribe",
+  schemaVersion: { major: 1, minor: 2 } as const,
+  openRequestSchema: artifactSubscribeOpenRequestSchemaV10,
+  serverFrameSchema: artifactSubscribeServerFrameSchemaV12,
+  clientFrameSchema: artifactSubscribeClientFrameSchemaV10,
+});

@@ -36,12 +36,13 @@ import {
   epicSubscribeV16,
 } from "@traycer/protocol/host/epic/subscribe";
 import {
-  ARTIFACT_SUBSCRIBE_BODY_SYNC_MINOR,
+  ARTIFACT_SUBSCRIBE_BODY_DEGRADED_MINOR,
   artifactSubscribeClientFrameSchemaV10,
   artifactSubscribeOpenRequestSchemaV10,
   artifactSubscribeSeedOfferSchema,
   artifactSubscribeServerFrameSchemaV10,
   artifactSubscribeServerFrameSchemaV11,
+  artifactSubscribeServerFrameSchemaV12,
   artifactSubscribeUnavailableCodeSchema,
 } from "@traycer/protocol/host/epic/artifact-subscribe";
 import {
@@ -83,12 +84,13 @@ describe("registry shape: the epic lane surface installs at the versions the spl
     // `@1.2` (the epic files arm) and `@1.3` (the html, canvas and file
     // artifact kinds) and `@1.4` (anchor fields on comment thread records),
     // `epic.status.subscribe` grew `@1.1` and `@1.2` after `@1.0` shipped, and
-    // `artifact.subscribe` grew `@1.1` for the `bodySync` frame. All three keep
+    // `artifact.subscribe` grew `@1.1` for the `bodySync` frame and `@1.2` for
+    // the `bodyDegraded` frame. All three keep
     // `@1.0` installed for released peers.
     for (const [method, latestMinor] of [
       ["epic.state.subscribe", 5],
       ["epic.status.subscribe", 2],
-      ["artifact.subscribe", 1],
+      ["artifact.subscribe", 2],
     ] as const) {
       const majorLine = hostStreamRpcRegistry[method][1];
       expect(majorLine.latestMinor).toBe(latestMinor);
@@ -107,7 +109,7 @@ describe("registry shape: the epic lane surface installs at the versions the spl
       EPIC_STATUS_ARTIFACT_SYNC_MINOR,
     );
     expect(hostStreamRpcRegistry["artifact.subscribe"][1].latestMinor).toBe(
-      ARTIFACT_SUBSCRIBE_BODY_SYNC_MINOR,
+      ARTIFACT_SUBSCRIBE_BODY_DEGRADED_MINOR,
     );
   });
 
@@ -2018,5 +2020,50 @@ describe("artifact.subscribe@1.1 bodySync frame (O1)", () => {
         ).toBe(true);
       },
     );
+  });
+});
+
+describe("artifact.subscribe@1.2 bodyDegraded frame", () => {
+  const bodyDegradedBase = {
+    kind: "bodyDegraded" as const,
+    authorityEpoch: "epoch-1",
+    artifactId: "artifact-1",
+    hasBinaryPayload: false as const,
+  };
+
+  it.each(["room-unavailable", "baseline-unavailable"] as const)(
+    "@1.2 accepts reason %s and @1.1 rejects it: the frame does not exist on the frozen line",
+    (reason) => {
+      const frame = { ...bodyDegradedBase, reason };
+      expect(
+        artifactSubscribeServerFrameSchemaV12.safeParse(frame).success,
+      ).toBe(true);
+      expect(
+        artifactSubscribeServerFrameSchemaV11.safeParse(frame).success,
+      ).toBe(false);
+    },
+  );
+
+  it("rejects an unknown reason", () => {
+    expect(
+      artifactSubscribeServerFrameSchemaV12.safeParse({
+        ...bodyDegradedBase,
+        reason: "stale",
+      }).success,
+    ).toBe(false);
+  });
+
+  it("still parses every @1.1 bodySync state", () => {
+    for (const state of ["syncing", "synced"] as const) {
+      expect(
+        artifactSubscribeServerFrameSchemaV12.safeParse({
+          kind: "bodySync",
+          authorityEpoch: "epoch-1",
+          artifactId: "artifact-1",
+          state,
+          hasBinaryPayload: false,
+        }).success,
+      ).toBe(true);
+    }
   });
 });
