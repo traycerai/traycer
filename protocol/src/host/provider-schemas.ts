@@ -1612,6 +1612,31 @@ export const providerProfileSchema = lazySchema(() =>
       .optional(),
   }),
 );
+/** A disabled inventory row that retains the identity of an unreadable entry. */
+export function buildUnreadableProviderProfile(input: {
+  readonly profileId: string;
+  readonly label: string;
+  readonly kind: ProviderProfileKind;
+  readonly reason: string;
+}) {
+  return {
+    profileId: input.profileId,
+    label: input.label,
+    kind: input.kind,
+    authType: "oauth" as const,
+    auth: UNKNOWN_PROVIDER_AUTH,
+    identity: null,
+    usageUpdatedAt: null,
+    rateLimitStatus: "unknown" as const,
+    rateLimitLimitedScopes: null,
+    duplicateOfProfileId: null,
+    ambientDriftNotice: null,
+    accentColor: null,
+    enabled: false,
+    readability: { kind: "unreadable" as const, reason: input.reason },
+  };
+}
+
 /** Read projection: a future row is one disabled, explained row, never a lost inventory. */
 export const providerProfileProjectionSchema = lazySchema(() =>
   providerProfileSchema
@@ -1629,7 +1654,7 @@ export const providerProfileProjectionSchema = lazySchema(() =>
     .catch((context) => {
       const input = context.input;
       const row = typeof input === "object" && input !== null ? input : {};
-      return {
+      return buildUnreadableProviderProfile({
         profileId:
           "profileId" in row && typeof row.profileId === "string"
             ? row.profileId
@@ -1638,22 +1663,9 @@ export const providerProfileProjectionSchema = lazySchema(() =>
           "label" in row && typeof row.label === "string"
             ? row.label
             : "Unreadable profile",
-        kind: "managed" as const,
-        authType: "oauth" as const,
-        auth: UNKNOWN_PROVIDER_AUTH,
-        identity: null,
-        usageUpdatedAt: null,
-        rateLimitStatus: "unknown" as const,
-        rateLimitLimitedScopes: null,
-        duplicateOfProfileId: null,
-        ambientDriftNotice: null,
-        accentColor: null,
-        enabled: false,
-        readability: {
-          kind: "unreadable" as const,
-          reason: "Profile row uses an unsupported or invalid shape",
-        },
-      };
+        kind: "managed",
+        reason: "Profile row uses an unsupported or invalid shape",
+      });
     }),
 );
 export type ProviderProfile = z.infer<typeof providerProfileProjectionSchema>;
