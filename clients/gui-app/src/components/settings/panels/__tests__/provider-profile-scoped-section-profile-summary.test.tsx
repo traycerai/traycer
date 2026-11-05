@@ -78,6 +78,29 @@ function managedProfile(): ProviderCliState["profiles"][number] {
   };
 }
 
+function ambientProfile(): ProviderCliState["profiles"][number] {
+  return {
+    profileId: "ambient",
+    enabled: true,
+    kind: "ambient",
+    authType: "oauth",
+    label: "Terminal account",
+    auth: {
+      status: "authenticated",
+      badgeText: null,
+      label: null,
+      detail: null,
+    },
+    identity: null,
+    usageUpdatedAt: null,
+    rateLimitStatus: "unknown",
+    rateLimitLimitedScopes: null,
+    duplicateOfProfileId: null,
+    accentColor: null,
+    ambientDriftNotice: null,
+  };
+}
+
 // `opencode` is not in the rate-limit-capable provider set, so the embedded
 // usage card and refresh button take their no-query branch - no additional
 // host-query mocking needed for this section-level test.
@@ -155,6 +178,35 @@ describe("<ProviderProfileScopedSection /> profile summary email reveal", () => 
     // ...and hovering the redacted text must not read the raw address either -
     // the whole point of redaction is defeated if the tooltip still says it.
     expect(tooltipTextFor(emailSpan)).not.toBe(RAW_EMAIL);
+  });
+
+  it("shows the existing launch command for a selected ambient profile only when present", () => {
+    const ambient = {
+      ...ambientProfile(),
+      launchCommand: {
+        command: "opencode --config /tmp/profile",
+        shell: "posix" as const,
+      },
+    };
+    renderSection({
+      state: { ...opencodeState(), profiles: [ambient] },
+      selectedProfileId: "ambient",
+    });
+
+    expect(screen.getByText("Open from terminal")).toBeDefined();
+    expect(
+      screen.getByLabelText("OpenCode profile launch command").textContent,
+    ).toBe("opencode --config /tmp/profile");
+
+    cleanup();
+    renderSection({
+      state: {
+        ...opencodeState(),
+        profiles: [{ ...ambient, launchCommand: null }],
+      },
+      selectedProfileId: "ambient",
+    });
+    expect(screen.queryByText("Open from terminal")).toBeNull();
   });
 
   it("reveals the raw email in both the text and the tooltip once toggled", () => {

@@ -35,7 +35,10 @@ import { useRefreshProviders } from "@/hooks/providers/use-refresh-providers";
 import { providersMutationKeys } from "@/lib/query-keys";
 import { ProviderOnHostOnlyLine } from "./provider-on-host-only-line";
 import { EmbeddedProviderRateLimitForProvider } from "./provider-rate-limit-section";
-import { ProfileEditDialog } from "./provider-profile-edit-dialog";
+import {
+  ProfileEditDialog,
+  ProfileLaunchCommandBlock,
+} from "./provider-profile-edit-dialog";
 import {
   isProviderAmbientAuthenticated,
   isProviderAmbientSignedOut,
@@ -407,6 +410,12 @@ export function ProviderProfileScopedSection(
           onSignIn={openProfileSignIn}
           onManage={openProfileEditor}
         />
+        {selectedProfile.kind === "ambient" ? (
+          <ProfileLaunchCommandBlock
+            providerId={state.providerId}
+            launchCommand={selectedProfile.launchCommand}
+          />
+        ) : null}
 
         <ProfileScopedSectionMessages
           addProfileDisabled={addProfileDisabled}

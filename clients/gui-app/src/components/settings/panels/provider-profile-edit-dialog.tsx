@@ -151,7 +151,7 @@ function ProfileEligibilityEditor(props: {
   );
 }
 
-function ProfileLaunchCommandBlock(props: {
+export function ProfileLaunchCommandBlock(props: {
   readonly providerId: ProviderId;
   readonly launchCommand: ProviderProfile["launchCommand"];
 }): ReactNode {

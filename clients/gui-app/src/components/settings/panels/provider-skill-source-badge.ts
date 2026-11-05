@@ -1,4 +1,27 @@
-import type { ProviderSkillSourceBadge } from "@traycer/protocol/host/provider-native-schemas";
+import type {
+  ProviderSkill,
+  ProviderSkillSourceBadge,
+} from "@traycer/protocol/host/provider-native-schemas";
+
+/** The host may predate these badges; an omitted origin keeps its old row. */
+export function skillProfileOriginLabel(
+  origin: ProviderSkill["profileOrigin"],
+): string | null {
+  switch (origin) {
+    case "user":
+      return "Your skill";
+    case "host-view":
+      return "Traycer";
+    case "this-host":
+      return "Made on this computer";
+    case null:
+    case undefined:
+      return null;
+  }
+}
+
+export const SKILL_SHADOWED_TOOLTIP =
+  "Shadowed by a Traycer skill of the same name";
 
 /**
  * How a skill's origin is named and toned. Shared by the list row and the
