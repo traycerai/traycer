@@ -689,7 +689,7 @@ describe("<SandboxesSettingsPanel />", () => {
         name: "Your defaults for new sandboxes",
       });
       expect(heading.nextElementSibling?.textContent).toBe(
-        "Each new Personal sandbox starts with these. Sandboxes you already have aren't destroyed after resting until you change their Idle settings.",
+        "Each new Personal sandbox starts with these. Sandboxes you already have aren't destroyed when idle until you change their Idle settings.",
       );
     });
 
@@ -701,7 +701,7 @@ describe("<SandboxesSettingsPanel />", () => {
         name: "Acme's defaults for new sandboxes",
       });
       expect(heading.nextElementSibling?.textContent).toBe(
-        "Shared by Acme · editors can change them · not a spending limit. Each new Acme sandbox starts with these. Sandboxes you already have aren't destroyed after resting until you change their Idle settings.",
+        "Shared by Acme · editors can change them · not a spending limit. Each new Acme sandbox starts with these. Sandboxes you already have aren't destroyed when idle until you change their Idle settings.",
       );
     });
 

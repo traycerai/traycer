@@ -246,10 +246,10 @@ function extractRenderedCopy(
     if (ts.isTemplateExpression(expression)) {
       return [
         { node: expression.head, text: expression.head.text },
-        ...expression.templateSpans.map((span) => ({
-          node: span.literal,
-          text: span.literal.text,
-        })),
+        ...expression.templateSpans.flatMap((span) => [
+          ...copyValues(span.expression, resolving),
+          { node: span.literal, text: span.literal.text },
+        ]),
       ];
     }
     return copyCompositeValues(expression, resolving);
@@ -605,6 +605,7 @@ describe("retired environment vocabulary", () => {
       const sandboxTone = getTone();
       const reusableCopy = "Personal host";
       const name = "work computer";
+      const idlePolicy = "Destroyed after resting";
       const StatusToneBadge = ({ tone }: { tone: { label: string } }) => <span>{tone.label}</span>;
       const Sample = ({ flag, items }: { flag: boolean; items: string[] }) => (
         <>
@@ -616,6 +617,7 @@ describe("retired environment vocabulary", () => {
             {items.map((item) => <span>workspace folders</span>)}
             <span>{\`\${name} is a Sandbox host\`}</span>
           </div>
+          <p>{\`Policy: \${idlePolicy}\`}</p>
           <h2>Teams</h2>
           <p>This computer</p>
           <p>This computer only connects from its own network.</p>
@@ -638,6 +640,7 @@ describe("retired environment vocabulary", () => {
       "Frozen",
       "workspace folders",
       "Sandbox host",
+      "Resting",
       "This computer",
       "dormant",
       "Resting",

@@ -210,7 +210,7 @@ export function SandboxDefaultsSection(props: {
 }
 
 const KEPT_UNTIL_IDLE_CHANGED =
-  "Sandboxes you already have aren't destroyed after resting until you change their Idle settings.";
+  "Sandboxes you already have aren't destroyed when idle until you change their Idle settings.";
 
 function DefaultsHeading(props: {
   readonly configuration: SandboxPageConfiguration;
