@@ -136,5 +136,5 @@ export function sandboxRestingPreview(
     return KEPT_FOREVER_PREVIEW;
   }
   if (Number.isNaN(minutes)) return "";
-  return `Destroyed on ${formatSandboxDate(now + minutes * MS_PER_MINUTE, true)} if it rests from now.`;
+  return `Destroyed on ${formatSandboxDate(now + minutes * MS_PER_MINUTE, true)} if it stays idle from now.`;
 }

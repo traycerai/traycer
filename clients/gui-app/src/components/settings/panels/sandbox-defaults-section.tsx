@@ -359,7 +359,9 @@ function defaultsOfForm(
   }
   const restingMinutes = periodMinutes(resting);
   if (restingMinutes !== null && Number.isNaN(restingMinutes)) {
-    return { problem: "Resting period must be a whole number, or empty." };
+    return {
+      problem: '"Destroy after idle for" must be a whole number, or empty.',
+    };
   }
   const defaults = stageShapeDefaults(catalogue, {
     ...picked,
