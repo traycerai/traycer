@@ -29,10 +29,15 @@ import {
 // A team page reads its hosts from the host list; this window's own host
 // scope has no hosts here.
 vi.mock("@/components/settings/host-scope/use-host-scope", async () => {
+  const WINDOW_HOST_SELECTION = {
+    scopedHostId: null,
+    setScopedHostId: () => undefined,
+  };
   const { hostScopeFixture } =
     await import("@/components/settings/host-scope/host-scope-fixture");
   const scope = hostScopeFixture({ host: null });
-  return { useHostScope: () => scope };
+  const useHostScope = () => scope;
+  return { useHostScope, useHostScopeFor: useHostScope, WINDOW_HOST_SELECTION };
 });
 vi.mock("@/lib/host", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/lib/host")>()),
