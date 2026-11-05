@@ -1,7 +1,10 @@
 import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
 import { Badge } from "@/components/ui/badge";
 import { useState, type ReactNode } from "react";
-import { HOST_FROZEN_WORD } from "@traycer/protocol/host/host-status";
+import {
+  HOST_FROZEN_WORD,
+  HOST_KIND_WORDS,
+} from "@traycer/protocol/host/host-status";
 import {
   ChevronDown,
   ChevronRight,
@@ -1190,6 +1193,8 @@ function HostSwitcherTrigger(props: {
   const { selected } = props;
   const text = hostSwitcherTriggerText(props.intent, selected, props.composer);
   const triggerStatus = text.status;
+  const showKind = ["rail", "panel-header"].includes(props.surfaceKind);
+  const kind = selected === null ? null : selected.kind;
   const keepFocusableWhenDisabled =
     props.disabled && props.keepFocusableWhenDisabled === true;
 
@@ -1245,6 +1250,12 @@ function HostSwitcherTrigger(props: {
         )}
         {triggerStatus !== null && selected?.sandbox?.frozen ? (
           <Badge variant="warning">{HOST_FROZEN_WORD}</Badge>
+        ) : null}
+        {showKind && kind !== null ? (
+          <span className="shrink-0 text-ui-xs font-normal text-muted-foreground">
+            {" "}
+            {HOST_KIND_WORDS[kind]}
+          </span>
         ) : null}
         <ChevronDown className="size-3.5 shrink-0 text-muted-foreground" />
       </Button>
