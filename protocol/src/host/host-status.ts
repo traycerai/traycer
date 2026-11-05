@@ -206,6 +206,7 @@ export const HOST_FROZEN_WORD = "Out of credits";
 export const HOST_KIND_WORDS: Record<HostRegistryKind, string> = {
   personal: "Computer",
   sandbox: "Sandbox",
+  machine: "Team machine",
 };
 
 /**
