@@ -2485,15 +2485,7 @@ export type ProvidersListRequestV70 = z.infer<
   typeof providersListRequestSchemaV70
 >;
 
-/**
- * Canonical (live) `providers.list` response. Always returns the classic
- * provider catalog; when the request carried a `native` query, `native` holds
- * the list/discover result (or a typed native error). Classic callers receive
- * `native: null`.
- *
- * Earlier lines each bind a frozen response; only the head binds this
- * live schema, so new fields do not widen a released line.
- */
+/** Frozen `providers.list@10.7` response, before credential home projections. */
 export const providersListResponseSchemaV107Preimage = lazySchema(() =>
   z.object({
     providers: z.array(providerCliStateSchema),
@@ -2530,7 +2522,11 @@ export const providersListResponseSchemaV107Preimage = lazySchema(() =>
       .optional(),
   }),
 );
-/** Home facts are additive keys; older response lines keep their frozen profile decoder. */
+/**
+ * Canonical `providers.list` response. Classic callers receive `native: null`;
+ * a native query carries its list/discover result or typed error there.
+ * Home facts are additive keys; earlier lines retain their frozen decoders.
+ */
 export const providersListResponseSchema = lazySchema(() =>
   providersListResponseSchemaV107Preimage.extend({
     providers: z.array(
