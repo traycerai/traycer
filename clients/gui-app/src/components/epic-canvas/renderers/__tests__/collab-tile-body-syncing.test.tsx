@@ -18,6 +18,7 @@ import * as Y from "yjs";
 import { Awareness } from "y-protocols/awareness";
 import { EpicSessionContext } from "@/lib/registries/epic-session-registry";
 import { LINK_DOWN_ESCALATION_MS } from "@/lib/link-down-escalation";
+import type { ArtifactBodyDegradedReason } from "@traycer/protocol/host/epic/artifact-subscribe";
 import type { EpicNodeRef } from "@/stores/epics/canvas/types";
 import type { OpenEpicStoreHandle } from "@/stores/epics/open-epic/store";
 import { CollabTileBody } from "../collab-tile-body";
@@ -145,6 +146,7 @@ type StoreState = {
   artifactRooms: {
     stateByArtifactId: Record<string, "ready">;
     bodySyncingByArtifactId: Record<string, true>;
+    bodyDegradedByArtifactId: Record<string, ArtifactBodyDegradedReason>;
   };
 };
 
@@ -158,6 +160,7 @@ function makeHandle(): TestHandle {
     artifactRooms: {
       stateByArtifactId: { [ARTIFACT_ID]: "ready" },
       bodySyncingByArtifactId: {},
+      bodyDegradedByArtifactId: {},
     },
   }));
   return { store, epicId: "epic-1" };
@@ -178,6 +181,7 @@ function setSyncing(handle: TestHandle, on: boolean): void {
       artifactRooms: {
         stateByArtifactId: { [ARTIFACT_ID]: "ready" },
         bodySyncingByArtifactId: on ? { [ARTIFACT_ID]: true } : {},
+        bodyDegradedByArtifactId: {},
       },
     });
   });
@@ -266,6 +270,7 @@ describe("CollabTileBody syncing strip", () => {
       artifactRooms: {
         stateByArtifactId: { [ARTIFACT_ID]: "ready" },
         bodySyncingByArtifactId: { [ARTIFACT_ID]: true },
+        bodyDegradedByArtifactId: {},
       },
     });
     mountTile(handle);

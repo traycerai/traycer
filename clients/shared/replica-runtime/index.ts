@@ -64,6 +64,7 @@ export {
 export type {
   ControlEvent,
   DocAwarenessEvent,
+  DocBodyDegradedEvent,
   DocBodySyncEvent,
   DocCoverageAckEvent,
   DocReadyEvent,

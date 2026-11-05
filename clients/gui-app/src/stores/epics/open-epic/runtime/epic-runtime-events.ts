@@ -36,6 +36,7 @@
  * `RecordSnapshotEvent` / `RecordTransactionEvent` proper and this union gains
  * nothing - the replicas are what stay.
  */
+import type { ArtifactBodyDegradedReason } from "@traycer/protocol/host/epic/artifact-subscribe";
 import type { PermissionRole } from "@traycer/protocol/host/epic/unary-schemas";
 import type {
   EpicCloudSyncStatus,
@@ -221,6 +222,17 @@ export type EpicRoomEvent =
       readonly kind: "room-body-sync";
       readonly artifactRoomId: string;
       readonly state: "syncing" | "synced";
+    }
+  /**
+   * A READY body the host cannot bring up to date for now, and why
+   * (`artifact.subscribe@1.2` only). Beside availability for the reason
+   * `room-body-sync` is, and forgotten the same way, plus on every
+   * `room-body-sync`.
+   */
+  | {
+      readonly kind: "room-body-degraded";
+      readonly artifactRoomId: string;
+      readonly reason: ArtifactBodyDegradedReason;
     };
 
 // ─── Control plane ────────────────────────────────────────────────────────

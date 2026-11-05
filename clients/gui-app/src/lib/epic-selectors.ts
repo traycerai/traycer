@@ -21,6 +21,7 @@
  * runtime safety.
  */
 import { useLayoutEffect, useMemo, useSyncExternalStore } from "react";
+import type { ArtifactBodyDegradedReason } from "@traycer/protocol/host/epic/artifact-subscribe";
 import { useStore } from "zustand";
 import { useShallow } from "zustand/react/shallow";
 import { createSelector, lruMemoize } from "reselect";
@@ -2330,6 +2331,25 @@ export function useEpicArtifactBodySyncing(artifactId: string | null): boolean {
   return useStore(handle.store, (s) => {
     if (artifactId === null) return false;
     return Object.hasOwn(s.artifactRooms.bodySyncingByArtifactId, artifactId);
+  });
+}
+
+/**
+ * Why the host cannot bring `artifactId`'s served body up to date right now
+ * (`artifact.subscribe@1.2`'s `bodyDegraded`), or `null` when it has said
+ * nothing of the kind. Like {@link useEpicArtifactBodySyncing}, only ever set
+ * for a `ready` body, and `null` is "nothing to show", never a claim that the
+ * body is healthy.
+ */
+export function useEpicArtifactBodyDegraded(
+  artifactId: string | null,
+): ArtifactBodyDegradedReason | null {
+  const handle = useOpenEpicHandle();
+  return useStore(handle.store, (s) => {
+    if (artifactId === null) return null;
+    if (!Object.hasOwn(s.artifactRooms.bodyDegradedByArtifactId, artifactId))
+      return null;
+    return s.artifactRooms.bodyDegradedByArtifactId[artifactId];
   });
 }
 

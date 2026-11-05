@@ -37,10 +37,10 @@
  * attach.
  */
 import {
-  artifactSubscribeServerFrameSchemaV11,
+  artifactSubscribeServerFrameSchemaV12,
   type ArtifactSubscribeClientFrameV10,
   type ArtifactSubscribeSeedOffer,
-  type ArtifactSubscribeServerFrameV11,
+  type ArtifactSubscribeServerFrameV12,
 } from "@traycer/protocol/host/epic/artifact-subscribe";
 import type { HostStreamRpcRegistry } from "@traycer/protocol/host/registry";
 import type {
@@ -52,8 +52,8 @@ import type { IStreamClient } from "./i-stream-client";
 
 export const ARTIFACT_SUBSCRIBE_METHOD = "artifact.subscribe";
 
-type ArtifactServerFrame<Kind extends ArtifactSubscribeServerFrameV11["kind"]> =
-  Extract<ArtifactSubscribeServerFrameV11, { readonly kind: Kind }>;
+type ArtifactServerFrame<Kind extends ArtifactSubscribeServerFrameV12["kind"]> =
+  Extract<ArtifactSubscribeServerFrameV12, { readonly kind: Kind }>;
 
 export type ArtifactDocFrame = ArtifactServerFrame<"doc">;
 export type ArtifactDocUpdateFrame = ArtifactServerFrame<"docUpdate">;
@@ -61,6 +61,7 @@ export type ArtifactDocAckFrame = ArtifactServerFrame<"docAck">;
 export type ArtifactAwarenessFrame = ArtifactServerFrame<"awareness">;
 export type ArtifactUnavailableFrame = ArtifactServerFrame<"unavailable">;
 export type ArtifactBodySyncFrame = ArtifactServerFrame<"bodySync">;
+export type ArtifactBodyDegradedFrame = ArtifactServerFrame<"bodyDegraded">;
 
 export interface ArtifactStreamCallbacks {
   /**
@@ -89,6 +90,12 @@ export interface ArtifactStreamCallbacks {
    * after the next `doc`. Never delivered by a host on `@1.0`.
    */
   readonly onBodySync: (frame: ArtifactBodySyncFrame) => void;
+  /**
+   * The served body cannot be brought up to date for now, and why (`@1.2`).
+   * Forgotten on every `onDoc`, `onUnavailable` and `onBodySync`. Never
+   * delivered by a host below `@1.2`.
+   */
+  readonly onBodyDegraded: (frame: ArtifactBodyDegradedFrame) => void;
   readonly onConnectionStatus: StatusChangeHandler;
 }
 
@@ -176,7 +183,7 @@ export class ArtifactStreamClient {
     binaryPayload: Uint8Array | null,
   ): void {
     if (this.closed) return;
-    const parsed = artifactSubscribeServerFrameSchemaV11.safeParse(envelope);
+    const parsed = artifactSubscribeServerFrameSchemaV12.safeParse(envelope);
     if (!parsed.success) return;
     const frame = parsed.data;
     // The address invariant the contract STATES but cannot enforce: every
@@ -223,6 +230,11 @@ export class ArtifactStreamClient {
       case "bodySync": {
         if (binaryPayload !== null) return;
         this.callbacks.onBodySync(frame);
+        return;
+      }
+      case "bodyDegraded": {
+        if (binaryPayload !== null) return;
+        this.callbacks.onBodyDegraded(frame);
         return;
       }
       case "pong":

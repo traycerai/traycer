@@ -17,6 +17,7 @@
  * `OpenEpicState.getArtifactFragment(id)` - the editor escape hatch.
  */
 import type { EpicArtifactKind } from "@traycer/protocol/common/registry";
+import type { ArtifactBodyDegradedReason } from "@traycer/protocol/host/epic/artifact-subscribe";
 import type {
   AgentMode,
   ChatRunSettings,
@@ -397,6 +398,16 @@ export interface ArtifactRoomsSlice {
    * not report it - and must never be read as a claim that the body is synced.
    */
   readonly bodySyncingByArtifactId: Readonly<Record<string, true>>;
+  /**
+   * Artifacts whose `ready` body the host cannot bring up to date for now,
+   * with why (`artifact.subscribe@1.2`'s `bodyDegraded`). A subset of the
+   * `ready` keys, dropped on a reseed, on leaving `ready` and on the next
+   * `bodySync`. The tile says so in place of the syncing strip; the editor
+   * stays mounted.
+   */
+  readonly bodyDegradedByArtifactId: Readonly<
+    Record<string, ArtifactBodyDegradedReason>
+  >;
 }
 
 /**
@@ -440,6 +451,9 @@ export const EMPTY_ARTIFACT_ROOMS_SLICE: ArtifactRoomsSlice = Object.freeze({
     {} as Record<string, EpicArtifactRoomAvailability>,
   ),
   bodySyncingByArtifactId: Object.freeze({} as Record<string, true>),
+  bodyDegradedByArtifactId: Object.freeze(
+    {} as Record<string, ArtifactBodyDegradedReason>,
+  ),
 });
 
 /**

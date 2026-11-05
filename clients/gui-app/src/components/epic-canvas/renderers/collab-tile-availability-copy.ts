@@ -1,3 +1,4 @@
+import type { ArtifactBodyDegradedReason } from "@traycer/protocol/host/epic/artifact-subscribe";
 import type { EpicArtifactRoomAvailability } from "@/stores/epics/open-epic/types";
 
 /**
@@ -72,4 +73,20 @@ export function collabTileNotice(
     return "This document hasn't loaded yet.";
   }
   return null;
+}
+
+/**
+ * What a collab tile says over a served body the host cannot bring up to
+ * date for now. The editor stays usable under it, so each sentence says what
+ * is not happening and whether anything is lost, and nothing else.
+ */
+export function collabTileDegradedNotice(
+  reason: ArtifactBodyDegradedReason,
+): string {
+  switch (reason) {
+    case "room-unavailable":
+      return "This document isn't updating right now. Traycer will try again shortly.";
+    case "baseline-unavailable":
+      return "This document isn't syncing to the cloud right now. Your edits are kept on this device.";
+  }
 }

@@ -67,6 +67,7 @@ import {
 } from "@traycer-clients/shared/replica-runtime";
 import type {
   ArtifactAwarenessFrame,
+  ArtifactBodyDegradedFrame,
   ArtifactBodySyncFrame,
   ArtifactDocAckFrame,
   ArtifactDocFrame,
@@ -324,6 +325,15 @@ export function createArtifactLaneAdapter(
           authorityEpoch: frame.authorityEpoch,
           docId: artifactId,
           state: frame.state,
+        });
+      },
+      onBodyDegraded: (frame: ArtifactBodyDegradedFrame) => {
+        // Forwarded as the wire states it, for `onBodySync`'s reason.
+        emit({
+          kind: "doc-body-degraded",
+          authorityEpoch: frame.authorityEpoch,
+          docId: artifactId,
+          reason: frame.reason,
         });
       },
       onConnectionStatus: (status, reason, _retryCause, continuity) => {

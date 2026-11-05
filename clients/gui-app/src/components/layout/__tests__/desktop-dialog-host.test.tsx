@@ -540,7 +540,11 @@ function createDirtyEpicHandle(
     commentThreads: EMPTY_COMMENT_THREADS_SLICE,
     // Keyed by ARTIFACT id since the cutover - a room hosts many bodies, and
     // `artifact.subscribe` has no rooms at all.
-    artifactRooms: { stateByArtifactId: {}, bodySyncingByArtifactId: {} },
+    artifactRooms: {
+      stateByArtifactId: {},
+      bodySyncingByArtifactId: {},
+      bodyDegradedByArtifactId: {},
+    },
     artifactRoomDirtyByArtifactRoomId: {},
     rootDirty: false,
     hasDirtySnapshotForOpenCycle: true,

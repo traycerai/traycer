@@ -70,5 +70,6 @@ export const INERT_ARTIFACT_CALLBACKS: ArtifactStreamCallbacks = {
   onAwareness: () => {},
   onUnavailable: () => {},
   onBodySync: () => {},
+  onBodyDegraded: () => {},
   onConnectionStatus: () => {},
 };

@@ -25,7 +25,10 @@ import { useArtifactAttachmentScopeValue } from "@/lib/attachments/use-artifact-
 import { useLoadDeadline } from "@/hooks/host/use-load-deadline";
 import { useIsMobileViewport } from "@/hooks/ui/use-mobile-viewport";
 import { MobileDrawerVisibleTilePaintReporter } from "@/components/layout/shell/mobile-drawer-history-gate";
-import { collabTileNotice } from "./collab-tile-availability-copy";
+import {
+  collabTileDegradedNotice,
+  collabTileNotice,
+} from "./collab-tile-availability-copy";
 import { TILE_CONTENT_BUDGET_MS } from "@/lib/host/bounded-load-budgets";
 import { LINK_DOWN_ESCALATION_MS } from "@/lib/link-down-escalation";
 import { streamSyncingLabel } from "@/lib/sync/stream-syncing-state";
@@ -41,6 +44,7 @@ import { startCommentDraft } from "@/lib/comments/start-comment-draft";
 import {
   useChildIdsOf,
   useEpicArtifactBodyAvailability,
+  useEpicArtifactBodyDegraded,
   useEpicArtifactBodySubscribeAnswered,
   useEpicArtifactBodySyncing,
   useEpicArtifactBodyAwareness,
@@ -868,16 +872,36 @@ function CollabTileBodyEditor(props: CollabTileBodyEditorProps) {
  * A visible caption had nowhere to go: the tile's top-right corner belongs to
  * the version-history button, which covered it on every artifact kind, and a
  * moving bar at the tile edge already says what the word said.
+ *
+ * A DEGRADED body (`artifact.subscribe@1.2`'s `bodyDegraded`) takes the strip's
+ * place with a sentence: the host has stopped trying for now, so a sweep would
+ * say "still working" about work that is not happening. It is in flow above
+ * the editor rather than over it, so it covers no text, and it keeps clear of
+ * the version-history button at the right.
  */
 function CollabTileBodySyncStrip(props: {
   readonly artifactId: string;
   readonly testId: string;
 }) {
+  const degraded = useEpicArtifactBodyDegraded(props.artifactId);
   const syncing = useEpicArtifactBodySyncing(props.artifactId);
   const escalated = useLoadDeadline(
-    syncing ? props.artifactId : null,
+    syncing && degraded === null ? props.artifactId : null,
     LINK_DOWN_ESCALATION_MS,
   );
+  if (degraded !== null) {
+    return (
+      <div
+        data-testid={`${props.testId}-body-degraded`}
+        data-reason={degraded}
+        role="status"
+        aria-live="polite"
+        className="shrink-0 border-b border-warning/30 bg-warning/10 py-2 pr-12 pl-6 text-xs text-warning-foreground"
+      >
+        {collabTileDegradedNotice(degraded)}
+      </div>
+    );
+  }
   if (!syncing) return null;
   return (
     <div

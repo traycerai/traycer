@@ -1780,6 +1780,7 @@ function createFakeDocReplica(planeId: string): Replica<
         case "doc-awareness":
         case "doc-ready":
         case "doc-body-sync":
+        case "doc-body-degraded":
           return { kind: "applied", cursor: null };
         case "doc-unavailable": {
           if (event.code === "stale-authority-epoch") {

@@ -22,6 +22,7 @@ import type {
   ArtifactRoomsSlice,
   EpicArtifactRoomAvailability,
 } from "../types";
+import type { ArtifactBodyDegradedReason } from "@traycer/protocol/host/epic/artifact-subscribe";
 import { EMPTY_ARTIFACT_ROOMS_SLICE } from "../types";
 import type { EpicRoomEvent } from "./epic-runtime-events";
 import type { EpicRoomsProjection } from "./epic-runtime-projection";
@@ -186,6 +187,12 @@ export function createEpicRoomsReplica(
    * state after each seed), every non-ready transition, and every reset.
    */
   const bodySyncingByRoom = new Set<string>();
+  /**
+   * Rooms whose `ready` body the host cannot bring up to date for now, with
+   * why. Bounded and cleared exactly as `bodySyncingByRoom` is, and also by
+   * every `room-body-sync`: the host is reconciling that body again.
+   */
+  const bodyDegradedByRoom = new Map<string, ArtifactBodyDegradedReason>();
   let bindingBumpScheduled = false;
   let observedAtMs: number | null = null;
 
@@ -210,7 +217,18 @@ export function createEpicRoomsReplica(
         bodySyncingByArtifactId[artifactId] = true;
       }
     }
-    return { stateByArtifactId, bodySyncingByArtifactId };
+    const bodyDegradedByArtifactId: Record<string, ArtifactBodyDegradedReason> =
+      {};
+    for (const [artifactRoomId, reason] of bodyDegradedByRoom) {
+      for (const artifactId of artifactIdsForRoom(artifactRoomId)) {
+        bodyDegradedByArtifactId[artifactId] = reason;
+      }
+    }
+    return {
+      stateByArtifactId,
+      bodySyncingByArtifactId,
+      bodyDegradedByArtifactId,
+    };
   }
 
   function sameRecord<V>(
@@ -226,7 +244,8 @@ export function createEpicRoomsReplica(
     const held = sink.read().artifactRooms;
     return (
       sameRecord(held.stateByArtifactId, next.stateByArtifactId) &&
-      sameRecord(held.bodySyncingByArtifactId, next.bodySyncingByArtifactId)
+      sameRecord(held.bodySyncingByArtifactId, next.bodySyncingByArtifactId) &&
+      sameRecord(held.bodyDegradedByArtifactId, next.bodyDegradedByArtifactId)
     );
   }
 
@@ -267,6 +286,7 @@ export function createEpicRoomsReplica(
     tier.destroyAll();
     availabilityByRoom.clear();
     bodySyncingByRoom.clear();
+    bodyDegradedByRoom.clear();
     observedAtMs = null;
     invalidateBindings();
     sink.publish({
@@ -286,6 +306,7 @@ export function createEpicRoomsReplica(
     // it right after this frame, so forgetting it here cannot leave a stale
     // "syncing" over a body that has since synced.
     bodySyncingByRoom.delete(event.artifactRoomId);
+    bodyDegradedByRoom.delete(event.artifactRoomId);
     // Forwarded, not decided. Which arm delivered this body is not something
     // this replica knows or should: the arm states what its wire states, and
     // the tier applies the rule. That is what lets one rooms replica serve
@@ -332,6 +353,7 @@ export function createEpicRoomsReplica(
       tier.invalidate(artifactRoomId);
       // The sync state describes a served body; there is none now.
       bodySyncingByRoom.delete(artifactRoomId);
+      bodyDegradedByRoom.delete(artifactRoomId);
     }
     // No publish at all when nothing moved. The closure returned the previous
     // state object from its updater here, which zustand reads as "no change"
@@ -361,8 +383,20 @@ export function createEpicRoomsReplica(
     } else {
       bodySyncingByRoom.delete(artifactRoomId);
     }
+    // The host is reconciling this body again, whichever state it names.
+    bodyDegradedByRoom.delete(artifactRoomId);
     // GATED: a repeat of the state already shown changes nothing, and the
     // binding epoch is untouched - the doc behind the editor is the same one.
+    publishAvailability();
+  }
+
+  function applyBodyDegraded(
+    artifactRoomId: string,
+    reason: ArtifactBodyDegradedReason,
+  ): void {
+    // Only a SERVED body is degraded, for `applyBodySync`'s reason.
+    if (availabilityByRoom.get(artifactRoomId) !== "ready") return;
+    bodyDegradedByRoom.set(artifactRoomId, reason);
     publishAvailability();
   }
 
@@ -401,6 +435,9 @@ export function createEpicRoomsReplica(
           break;
         case "room-body-sync":
           applyBodySync(event.artifactRoomId, event.state);
+          break;
+        case "room-body-degraded":
+          applyBodyDegraded(event.artifactRoomId, event.reason);
           break;
       }
       // Doc-class frames on the `@1` line carry no lane cursor - see
@@ -479,6 +516,7 @@ export function createEpicRoomsReplica(
       // no body to hand them.
       availabilityByRoom.clear();
       bodySyncingByRoom.clear();
+      bodyDegradedByRoom.clear();
       if (!hadRoomState) return false;
       invalidateBindings();
       sink.publish({

@@ -114,6 +114,7 @@ function attach(): {
           state: frame.state,
           epoch: frame.authorityEpoch,
         }),
+      onBodyDegraded: () => {},
       onConnectionStatus: () => {},
     },
   });

@@ -775,6 +775,7 @@ describe("ArtifactStreamClient (real, over a stub IStreamSession) - binary-paylo
       },
       onUnavailable: () => {},
       onBodySync: () => {},
+      onBodyDegraded: () => {},
       onConnectionStatus: () => {},
     };
     return {

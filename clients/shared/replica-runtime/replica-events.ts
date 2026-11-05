@@ -458,6 +458,20 @@ export interface DocBodySyncEvent {
   readonly state: "syncing" | "synced";
 }
 
+/**
+ * A SERVED body the authority cannot bring up to date for now, and why.
+ *
+ * Beside availability for {@link DocBodySyncEvent}'s reason: the body stays
+ * served and editable. Forgotten on every snapshot, every `doc-unavailable`
+ * and every `doc-body-sync`, which says the authority is reconciling it again.
+ */
+export interface DocBodyDegradedEvent {
+  readonly kind: "doc-body-degraded";
+  readonly authorityEpoch: string;
+  readonly docId: string;
+  readonly reason: "room-unavailable" | "baseline-unavailable";
+}
+
 export type DocReplicaEvent =
   | DocSnapshotEvent
   | DocUpdateEvent
@@ -465,7 +479,8 @@ export type DocReplicaEvent =
   | DocAwarenessEvent
   | DocReadyEvent
   | DocUnavailableEvent
-  | DocBodySyncEvent;
+  | DocBodySyncEvent
+  | DocBodyDegradedEvent;
 
 // ─── Ephemera ─────────────────────────────────────────────────────────────
 
