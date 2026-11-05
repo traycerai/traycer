@@ -712,7 +712,7 @@ describe("sandbox confirm dialogs", () => {
         <SandboxKeepDialog sandbox={SANDBOX} open onOpenChange={vi.fn()} />,
       );
       expect(screen.getByTestId("sandbox-confirm-keep").textContent).toContain(
-        "on Nov 1 at 10:36 if it's suspended or stopped from now on.",
+        "Destroyed after 7 days instead, on Nov 1 at 10:36 if it's suspended or stopped from now on.",
       );
     });
 
