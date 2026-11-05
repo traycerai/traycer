@@ -2128,7 +2128,7 @@ describe("resolvePersistedArrangement: the enum fields (L-133)", () => {
   }>([
     {
       field: "tabStripPlacement",
-      fallback: "left",
+      fallback: "top",
       valid: ["top", "left", "right"],
       junk: [1, "TOP", null, {}, "sideways"],
     },
