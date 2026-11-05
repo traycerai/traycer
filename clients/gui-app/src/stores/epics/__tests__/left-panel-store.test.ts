@@ -166,22 +166,20 @@ describe("useLeftPanelStore", () => {
 
   it("does not share same-epic sidebar state across tabs", () => {
     useLeftPanelStore.getState().setActivePanelId("tab-a", "artifacts");
-    // Expanded by hand: a new tab starts collapsed (the shipped default), so
-    // the record that must stay with tab-a is the one that differs from it.
-    useLeftPanelStore.getState().setMainCollapsed("tab-a", false);
+    useLeftPanelStore.getState().setMainCollapsed("tab-a", true);
     useLeftPanelStore.getState().revealCommentsPanel("tab-a");
 
     expect(useLeftPanelStore.getState().getActivePanelId("tab-a")).toBe(
       "artifacts",
     );
-    expect(useLeftPanelStore.getState().isMainCollapsed("tab-a")).toBe(false);
+    expect(useLeftPanelStore.getState().isMainCollapsed("tab-a")).toBe(true);
     expect(useLeftPanelStore.getState().isCommentsPanelRevealed("tab-a")).toBe(
       true,
     );
     expect(useLeftPanelStore.getState().getActivePanelId("tab-b")).toBe(
       "chats",
     );
-    expect(useLeftPanelStore.getState().isMainCollapsed("tab-b")).toBe(true);
+    expect(useLeftPanelStore.getState().isMainCollapsed("tab-b")).toBe(false);
     expect(useLeftPanelStore.getState().isCommentsPanelRevealed("tab-b")).toBe(
       false,
     );
@@ -286,11 +284,6 @@ describe("useLeftPanelStore", () => {
   });
 
   it("restores a collapsed sidebar after refresh", async () => {
-    // With the fallback off, collapsing is the decision this half records; the
-    // shipped fallback is on, so a collapse there would be no record at all.
-    act(() => {
-      writeArrangementField("sidebarStartCollapsed", false);
-    });
     useLeftPanelStore.getState().setMainCollapsed("tab-a", true);
 
     expect(readPersistedLeftPanelState().state.mainCollapsedByTabId).toEqual({
@@ -353,30 +346,29 @@ describe("useLeftPanelStore", () => {
 
   it("opens a tab with no collapse record of its own as the layout's Collapsed in new tasks says", () => {
     const { result } = renderHook(() => useMainPanelCollapsed("tab-a"));
-    // Collapsed is the shipped default.
-    expect(useLeftPanelStore.getState().isMainCollapsed("tab-a")).toBe(true);
-    expect(result.current).toBe(true);
-
-    act(() => {
-      writeArrangementField("sidebarStartCollapsed", false);
-    });
-
     expect(useLeftPanelStore.getState().isMainCollapsed("tab-a")).toBe(false);
     expect(result.current).toBe(false);
-
-    // A tab the user collapsed keeps that, whatever the fallback says; a tab
-    // never touched keeps following it.
-    act(() => {
-      useLeftPanelStore.getState().toggleMainCollapsed("tab-a");
-    });
-    expect(result.current).toBe(true);
-    expect(useLeftPanelStore.getState().isMainCollapsed("tab-b")).toBe(false);
 
     act(() => {
       writeArrangementField("sidebarStartCollapsed", true);
     });
+
+    expect(useLeftPanelStore.getState().isMainCollapsed("tab-a")).toBe(true);
     expect(result.current).toBe(true);
+
+    // A tab the user expanded keeps that, whatever the fallback says; a tab
+    // never touched keeps following it.
+    act(() => {
+      useLeftPanelStore.getState().toggleMainCollapsed("tab-a");
+    });
+    expect(result.current).toBe(false);
     expect(useLeftPanelStore.getState().isMainCollapsed("tab-b")).toBe(true);
+
+    act(() => {
+      writeArrangementField("sidebarStartCollapsed", false);
+    });
+    expect(result.current).toBe(false);
+    expect(useLeftPanelStore.getState().isMainCollapsed("tab-b")).toBe(false);
   });
 
   it("restores a persisted sidebar width", async () => {

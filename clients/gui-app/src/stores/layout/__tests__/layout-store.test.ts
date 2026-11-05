@@ -1097,14 +1097,13 @@ describe("migrating an unrecognized version resets to the defaults", () => {
 });
 
 /**
- * Version 8 changed two shipped defaults - tabs at the left edge, the
- * sidebar collapsed in a new task - for a NEW install only, and the side
- * strip's view (agents under the tab) followed the same way. An install that exists is told apart by what it left behind:
- * a layout record at an earlier version, or, with none, a legacy settings or
- * sidebar record from a build before the layout store. Each of those reads
- * what its record does not say against the EARLIER defaults.
+ * The side strip's view (agents under the tab) ships as `activity` for a
+ * NEW install only. An install that exists is told apart by what it left
+ * behind: a layout record at an earlier version, or, with none, a legacy
+ * settings or sidebar record from a build before the layout store. Each of
+ * those reads what its record does not say against the EARLIER default.
  */
-describe("the defaults that changed for a new install only", () => {
+describe("the side strip view, which changed for a new install only", () => {
   beforeEach(reset);
   afterEach(reset);
 
@@ -1127,8 +1126,8 @@ describe("the defaults that changed for a new install only", () => {
 
     expect(state()).toEqual(DEFAULT_LAYOUT_SNAPSHOT);
     expect(state().arrangement).toMatchObject({
-      tabStripPlacement: "left",
-      sidebarStartCollapsed: true,
+      tabStripPlacement: "top",
+      sidebarStartCollapsed: false,
       sideStripView: "activity",
     });
     expect(storedLayoutVersion()).toBe(8);
@@ -1154,7 +1153,7 @@ describe("the defaults that changed for a new install only", () => {
       },
     },
   ])(
-    "keeps $name on tabs at the top, tabs only in the strip and the sidebar open",
+    "keeps $name on tabs only in the strip, with the tabs at the top and the sidebar open",
     async ({ seed }) => {
       seed();
 
@@ -1220,9 +1219,9 @@ describe("the defaults that changed for a new install only", () => {
     await rehydrateFrom({
       basePreset: "default",
       overrides: {},
-      arrangement: { ...DEFAULT_ARRANGEMENT, sidebarStartCollapsed: false },
+      arrangement: { ...DEFAULT_ARRANGEMENT, sidebarStartCollapsed: true },
     });
 
-    expect(getLayoutSnapshot().arrangement.sidebarStartCollapsed).toBe(false);
+    expect(getLayoutSnapshot().arrangement.sidebarStartCollapsed).toBe(true);
   });
 });
