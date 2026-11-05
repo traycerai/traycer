@@ -123,6 +123,16 @@ const artifactRoomFields = {
   artifactRoomId: lazySchema(() => z.string()),
 } as const;
 
+/**
+ * A markdown body stored as revision objects: the head names the current
+ * revision envelope as its one file (`markdown-revision.ts`), the same shape
+ * as an html head. Absent on an entry whose body still lives in its artifact
+ * room.
+ */
+const markdownHeadFields = {
+  head: lazySchema(() => artifactHeadSchema.optional()),
+} as const;
+
 const baseEpicArtifactFields = {
   ...baseEpicArtifactFieldsPreHtml,
   layout: lazySchema(() => z.enum(["folder", "file"]).default("folder")),
@@ -143,6 +153,7 @@ export const specArtifactSchema = lazySchema(() =>
     kind: z.literal("spec"),
     ...baseEpicArtifactFields,
     ...artifactRoomFields,
+    ...markdownHeadFields,
   }),
 );
 export type SpecArtifact = z.infer<typeof specArtifactSchema>;
@@ -152,6 +163,7 @@ export const ticketArtifactSchema = lazySchema(() =>
     kind: z.literal("ticket"),
     ...baseEpicArtifactFields,
     ...artifactRoomFields,
+    ...markdownHeadFields,
     assignee: z.string(),
     status: ticketStatusSchema,
   }),
@@ -163,6 +175,7 @@ export const storyArtifactSchema = lazySchema(() =>
     kind: z.literal("story"),
     ...baseEpicArtifactFields,
     ...artifactRoomFields,
+    ...markdownHeadFields,
     assignee: z.string(),
     status: ticketStatusSchema,
   }),
@@ -174,22 +187,23 @@ export const reviewArtifactSchema = lazySchema(() =>
     kind: z.literal("review"),
     ...baseEpicArtifactFields,
     ...artifactRoomFields,
+    ...markdownHeadFields,
   }),
 );
 export type ReviewArtifact = z.infer<typeof reviewArtifactSchema>;
 
-// Released entries have neither layout nor relativePath.
+// Released entries have neither layout, relativePath nor a markdown head.
 export const specArtifactSchemaPreHtml = lazySchema(() =>
-  specArtifactSchema.omit({ layout: true, relativePath: true }),
+  specArtifactSchema.omit({ layout: true, relativePath: true, head: true }),
 );
 export const ticketArtifactSchemaPreHtml = lazySchema(() =>
-  ticketArtifactSchema.omit({ layout: true, relativePath: true }),
+  ticketArtifactSchema.omit({ layout: true, relativePath: true, head: true }),
 );
 export const storyArtifactSchemaPreHtml = lazySchema(() =>
-  storyArtifactSchema.omit({ layout: true, relativePath: true }),
+  storyArtifactSchema.omit({ layout: true, relativePath: true, head: true }),
 );
 export const reviewArtifactSchemaPreHtml = lazySchema(() =>
-  reviewArtifactSchema.omit({ layout: true, relativePath: true }),
+  reviewArtifactSchema.omit({ layout: true, relativePath: true, head: true }),
 );
 
 export const epicArtifactSchemaPreHtml = lazySchema(() =>
