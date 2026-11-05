@@ -55,6 +55,7 @@ vi.mock("@/components/settings/host-scope/use-host-scope", () => {
     hostId: DEAD_PICKED_HOST_ID,
     hostLabel: "Old laptop",
     vanishedHostId: DEAD_PICKED_HOST_ID,
+    vanishedSelection: null,
     activeHostId: ACTIVE_HOST_ID,
     activeHost: { hostId: ACTIVE_HOST_ID, name: "This machine" },
     isViewingActive: false,

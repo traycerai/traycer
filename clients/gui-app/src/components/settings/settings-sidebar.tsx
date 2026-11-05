@@ -25,12 +25,12 @@ import { Analytics, AnalyticsEvent } from "@/lib/analytics";
 import { HostSwitcher } from "@/components/settings/host-scope/host-switcher";
 import {
   useHostScope,
+  useHostScopeFor,
+  WINDOW_HOST_SELECTION,
   type HostScope,
 } from "@/components/settings/host-scope/use-host-scope";
 import { useAddHostDialogStore } from "@/stores/settings/add-host-dialog-store";
 import { AddHostDialog } from "@/components/settings/host-scope/add-host-dialog";
-import { SandboxBalanceBanner } from "@/components/hosts/sandbox-balance-banner";
-import { useAuthStore } from "@/stores/auth/auth-store";
 import { useRegisteredHostsPollLiveness } from "@/hooks/auth/use-registered-hosts-query";
 import { NO_HOST_OPTION_REFUSALS } from "@/components/settings/host-scope/host-option-model";
 import { useFleetUpdateViews } from "@/hooks/host/use-fleet-update-views";
@@ -41,10 +41,8 @@ import { useSettingsSearchStore } from "@/stores/settings/settings-search-store"
 import { useRunnerHostOrNull } from "@/providers/use-runner-host";
 import { EnvironmentPicker } from "@/components/settings/environment-picker";
 import { useGettingStartedGuideIsComplete } from "@/components/onboarding/getting-started-checklist";
-import { HostPickerSandboxesLink } from "@/components/settings/environment/host-picker-sandboxes-link";
 import { environmentSectionShown } from "@/lib/settings-environment-pages";
 import { useEnvironmentPick } from "@/stores/settings/settings-environment-pick-store";
-import { useSandboxControlUnavailableReason } from "@/hooks/sandboxes/use-sandbox-control-unavailable-reason";
 
 export type SettingsSidebarMode =
   | { readonly kind: "route" }
@@ -78,6 +76,7 @@ export interface SettingsSidebarProps {
  */
 export function SettingsSidebar(props: SettingsSidebarProps) {
   const scope = useHostScope();
+  const globalScope = useHostScopeFor(WINDOW_HOST_SELECTION);
   // Read here, not in the search component, because a running search REPLACES
   // this list — the rail cannot ask a child whether to render its own body.
   // Held in the store so the modal frame around the rail can see a search is
@@ -132,18 +131,25 @@ export function SettingsSidebar(props: SettingsSidebarProps) {
         ? null
         : groups.map((group, groupIndex) => (
             <Fragment key={group.id}>
-              {groupIndex === 0 ? null : <SettingsSidebarGroupRule />}
+              {groupIndex === 0 || group.id === "host" ? null : (
+                <SettingsSidebarGroupRule />
+              )}
               {group.id !== "guide" ? (
-                <SettingsSidebarGroupHeader label={group.label} />
+                <SettingsSidebarGroupHeader
+                  label={group.id === "host" ? "Hosts" : group.label}
+                />
               ) : null}
               {group.id === "personal" ? (
                 <SettingsSidebarEnvironmentPicker
-                  scope={scope}
+                  scope={globalScope}
                   mode={props.mode}
                 />
               ) : null}
               {group.id === "host" ? (
-                <SettingsSidebarHostPicker scope={scope} />
+                <SettingsSidebarHostPicker
+                  scope={scope}
+                  allHosts={globalScope.hosts}
+                />
               ) : null}
               <div
                 className={cn(
@@ -225,11 +231,10 @@ function SettingsSidebarHostPicker(props: {
   // is six hooks deep, and this component would run all of it a second time
   // in the same render pass.
   readonly scope: HostScope;
+  readonly allHosts: HostScope["hosts"];
 }): ReactNode {
   const { scope } = props;
   const openAddHost = useAddHostDialogStore((s) => s.openDialog);
-  const signedIn = useAuthStore((s) => s.status === "signed-in");
-  const sandboxesUnavailable = useSandboxControlUnavailableReason();
   // THE one surface that badges update state (settled product decision: fleet
   // update state lives in Settings). The resolver reads only hosts that already
   // have a borrowable session, so opening this list causes no connection and
@@ -262,10 +267,15 @@ function SettingsSidebarHostPicker(props: {
         // the verb itself rather than in a link to this very page.
         action={{
           kind: "add-host",
-          onSelect: () => openAddHost(scope.hosts.map((host) => host.hostId)),
+          onSelect: () =>
+            openAddHost(props.allHosts.map((host) => host.hostId)),
         }}
         surface="rail"
         intent="view"
+        consequence={{
+          heading: "Look at another machine",
+          hint: "Changes what this window shows. Nothing is created.",
+        }}
         disabled={false}
         isLoading={scope.isLoading}
         listsFailed={scope.listsFailed}
@@ -274,22 +284,6 @@ function SettingsSidebarHostPicker(props: {
         composer={null}
         environmentLabelForHost={environmentLabelForHost}
       />
-      {/* A sandbox is an account's machine: nothing to create signed out,
-          and nothing at all from a build that cannot reach the control
-          plane (staging), which says so instead. */}
-      {signedIn && sandboxesUnavailable !== null ? (
-        <p
-          data-testid="settings-sandboxes-unavailable"
-          className="px-2 py-1 text-ui-xs text-muted-foreground"
-        >
-          {sandboxesUnavailable}
-        </p>
-      ) : null}
-      {signedIn ? <HostPickerSandboxesLink scope={scope} /> : null}
-      {/* The host list's balance banner: the two-hour and thirty-minute
-          warnings for the account's awake sandboxes. Nothing for a user with
-          none. */}
-      <SandboxBalanceBanner />
       {/* Said at rest, not on discovery: sections describing a host that is
           NOT the app's active one is the single most confusing state this
           surface can be in, so it never waits to be noticed.

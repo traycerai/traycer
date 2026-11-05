@@ -1,3 +1,4 @@
+import { useSettingsHostScopeStore } from "@/stores/settings/settings-host-scope-store";
 /**
  * The Rules editor's unsaved text across a walk through OTHER Settings
  * sections, through the REAL `SettingsModalContent` / `SettingsSurface`, the
@@ -14,6 +15,7 @@ import {
   screen,
 } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { StrictMode, type ReactNode } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { resetRulesEditForTests } from "@/components/settings/panels/permissions/rules-edit-store";
@@ -26,7 +28,15 @@ import {
 } from "@/components/settings/panels/auto-policy-document";
 import { SettingsModalContent } from "@/components/settings/settings-modal-content";
 import { SettingsSurface } from "@/components/settings/settings-surface";
-import { useSettingsHostScopeStore } from "@/stores/settings/settings-host-scope-store";
+import { MockHostMessenger } from "@traycer-clients/shared/host-client/mock/mock-host-messenger";
+import { MockRunnerHost } from "@traycer-clients/shared/host-client/mock/mock-runner-host";
+import {
+  HostRuntimeProvider,
+  hostRpcRegistry,
+  type HostRpcRegistry,
+} from "@/lib/host";
+import { RunnerHostProvider } from "@/providers/runner-host-provider";
+
 import { useSettingsSearchStore } from "@/stores/settings/settings-search-store";
 import {
   armSettingsOpenIntent,
@@ -74,8 +84,7 @@ vi.mock("@/components/settings/panels/providers-settings-panel", () => ({
   McpServersSettingsPanel: (): ReactNode => null,
   SkillsSettingsPanel: (): ReactNode => null,
 }));
-// The Providers probe stands in for a Personal page; its status frame reads
-// the host through Query, which this suite does not provide. The frame has
+// The Providers probe stands in for a Personal page. The status frame has
 // its own suite (`personal/__tests__/personal-page-frame.test.tsx`).
 vi.mock("@/components/settings/personal/personal-page-frame", () => ({
   PersonalPageFrame: (props: { readonly children: ReactNode }): ReactNode =>
@@ -86,11 +95,17 @@ vi.mock("@/components/settings/personal/personal-page-frame", () => ({
 // ---- host boundary, as in rules-tab-host-continuity -----------------------
 
 vi.mock("@/components/settings/host-scope/use-host-scope", () => {
+  const WINDOW_HOST_SELECTION = {
+    scopedHostId: null,
+    setScopedHostId: () => undefined,
+  };
   const useHostScope = () =>
     hostScopeFixture({ status: "following", hostId: "host-a" });
   return {
     useHostScope,
     usePersonalHostScope: useHostScope,
+    useHostScopeFor: useHostScope,
+    WINDOW_HOST_SELECTION,
   };
 });
 vi.mock(
@@ -167,7 +182,7 @@ beforeEach(() => {
     source: "account",
     readState: "fresh",
   };
-  useSettingsHostScopeStore.setState({ scopedHostId: null });
+  useSettingsHostScopeStore.getState().reset();
   useSettingsSearchStore.setState({ pendingReveal: null });
   resetSettingsOpenIntentForTests();
   resetRulesEditForTests();
@@ -267,7 +282,45 @@ describe("Rules edit across sections inside Settings", () => {
 
   it("routed surface on a phone: keeps the edit through the index and another section", async () => {
     route.mobile = true;
-    const view = render(<SettingsSurface lastPath={null} />);
+    const queryClient = new QueryClient({
+      defaultOptions: { queries: { retry: false, gcTime: 0 } },
+    });
+    const runnerHost = new MockRunnerHost({
+      signInUrl: "https://auth.traycer.invalid/sign-in",
+      authnBaseUrl: "https://authn.traycer.invalid",
+      localHost: null,
+      hosts: [],
+      workspaceFolderPickerPaths: undefined,
+      hasLocalHost: undefined,
+      traycerCli: undefined,
+    });
+    const messengerFactory = (args: { readonly registry: HostRpcRegistry }) =>
+      new MockHostMessenger<HostRpcRegistry>({
+        registry: args.registry,
+        requestId: () => "req-runtime",
+        handlers: {},
+      });
+    const remoteFetcher = () =>
+      Promise.resolve({ kind: "hosts" as const, entries: [] });
+    const view = render(<SettingsSurface lastPath={null} />, {
+      wrapper: ({ children }) => (
+        <QueryClientProvider client={queryClient}>
+          <RunnerHostProvider runnerHost={runnerHost}>
+            <HostRuntimeProvider
+              registry={hostRpcRegistry}
+              messengerFactory={messengerFactory}
+              invalidator={null}
+              requestId={null}
+              remoteFetcher={remoteFetcher}
+              fallback={null}
+            >
+              {children}
+            </HostRuntimeProvider>
+          </RunnerHostProvider>
+        </QueryClientProvider>
+      ),
+    });
+    await screen.findByRole("combobox", { name: "Section" });
     await typeAndDeliverDraft();
 
     route.pathname = "/settings";

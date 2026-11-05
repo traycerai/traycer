@@ -383,13 +383,13 @@ describe("<SandboxTileStateFrame />", () => {
     }
   });
 
-  it("overlays a released sandbox with Suspended and Start", () => {
+  it("overlays a released sandbox with Not running and Start", () => {
     setSandboxEntry("released", false);
     renderFrame(false);
 
     const overlay = screen.getByTestId("sandbox-tile-overlay");
     expect(overlay.getAttribute("data-kind")).toBe("asleep");
-    expect(overlay.textContent).toContain("Suspended");
+    expect(overlay.textContent).toContain("Not running");
     expect(screen.getByTestId("sandbox-tile-overlay-wake").textContent).toBe(
       "Start",
     );
@@ -456,7 +456,7 @@ describe("<SandboxTileStateFrame />", () => {
     const overlay = screen.getByTestId("sandbox-tile-overlay");
     expect(overlay.getAttribute("data-kind")).toBe("frozen");
     expect(overlay.textContent).toMatch(
-      /^Frozen: out of credits\. Top up to resume\. Destroyed on /,
+      /^Out of credits\. Top up to resume\. Destroyed on /,
     );
     expect(screen.queryByTestId("sandbox-tile-overlay-wake")).toBeNull();
     expect(bodyWrapper().hasAttribute("inert")).toBe(true);
@@ -466,7 +466,7 @@ describe("<SandboxTileStateFrame />", () => {
     setSandboxEntry("stopped", true);
     renderFrame(false);
     expect(screen.getByTestId("sandbox-tile-overlay").textContent).toBe(
-      "Frozen: out of credits. Top up to resume.",
+      "Out of credits. Top up to resume.",
     );
   });
 

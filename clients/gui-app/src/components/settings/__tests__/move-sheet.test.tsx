@@ -220,9 +220,10 @@ describe("<MoveSheet />", () => {
     mount({ plans: [FIRST_PLAN], acceptAnswers: [ACCEPTED] });
     await settle();
 
-    expect(
-      screen.getByText("Move Old laptop's settings to Personal"),
-    ).toBeTruthy();
+    expect(screen.getByText("Move Old laptop to Personal?")).toBeTruthy();
+    expect(screen.getByTestId("move-sheet-description").textContent).toBe(
+      "Your Personal settings start reaching it. The settings already on it stay there — nothing is deleted. You can move it back any time.",
+    );
     const moves = screen.getByTestId("move-sheet-moves");
     expect(moves.textContent).toContain("Moves");
     expect(screen.getByTestId("move-sheet-moves-summary").textContent).toBe(
@@ -339,43 +340,7 @@ describe("<MoveSheet />", () => {
     expect(screen.queryByText("Same name in Personal")).toBeNull();
   });
 
-  it("names the computers the moved settings reach, leaving out the target", async () => {
-    const reach = async (names: readonly string[]): Promise<string | null> => {
-      cleanup();
-      useMoveSheetStore.setState({ target: null });
-      mountReaching(
-        { plans: [FIRST_PLAN], acceptAnswers: [ACCEPTED] },
-        names.map((name) => ({ hostId: `id-${name}`, name })),
-      );
-      await settle();
-      return screen.getByTestId("move-sheet-description").textContent;
-    };
-
-    expect(await reach([])).toBe(
-      "Your settings then reach every computer and sandbox running Personal. After the move, that is Old laptop only. Old laptop keeps working either way. Every row opens to its items.",
-    );
-    expect(await reach(["MacBook Pro"])).toBe(
-      "Your settings then reach every computer and sandbox running Personal, which today is MacBook Pro and Old laptop. Old laptop keeps working either way. Every row opens to its items.",
-    );
-    expect(await reach(["MacBook Pro", "dev-box"])).toBe(
-      "Your settings then reach every computer and sandbox running Personal, which today is MacBook Pro, dev-box and Old laptop. Old laptop keeps working either way. Every row opens to its items.",
-    );
-    expect(await reach(["MacBook Pro", "dev-box", "build-1"])).toContain(
-      "which today is MacBook Pro, dev-box and 1 more, and Old laptop. Old laptop keeps",
-    );
-
-    cleanup();
-    mountReaching({ plans: [FIRST_PLAN], acceptAnswers: [ACCEPTED] }, [
-      { hostId: HOST_ID, name: "Old laptop" },
-      { hostId: "mac", name: "MacBook Pro" },
-    ]);
-    await settle();
-    expect(screen.getByTestId("move-sheet-description").textContent).toContain(
-      "which today is MacBook Pro and Old laptop. Old laptop keeps",
-    );
-  });
-
-  it("names nobody and holds Move to Personal while the computers running Personal are unread", async () => {
+  it("holds Move to Personal while the computers running Personal are unread", async () => {
     mountWithRunning(
       { plans: [FIRST_PLAN], acceptAnswers: [ACCEPTED] },
       {
@@ -389,9 +354,6 @@ describe("<MoveSheet />", () => {
     );
     await settle();
 
-    expect(screen.getByTestId("move-sheet-description").textContent).toBe(
-      "Old laptop keeps working either way. Every row opens to its items.",
-    );
     expect(
       screen.getByTestId("move-sheet-accept").hasAttribute("disabled"),
     ).toBe(true);
@@ -435,9 +397,6 @@ describe("<MoveSheet />", () => {
     });
     await settle();
 
-    expect(screen.getByTestId("move-sheet-description").textContent).toBe(
-      "Nothing on Old laptop needs moving.",
-    );
     expect(screen.queryByTestId("move-sheet-not-now")).toBeNull();
     expect(screen.queryByTestId("move-sheet-accept")).toBeNull();
     expect(screen.queryByTestId("move-sheet-disclosure")).toBeNull();

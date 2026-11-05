@@ -178,6 +178,37 @@ export const HOST_SANDBOX_STATES = [
 export type HostSandboxState = (typeof HOST_SANDBOX_STATES)[number];
 
 /**
+ * One word per state, everywhere, including filters and sort menus.
+ * Words never decide actions; behavioural classifiers keep reading raw state.
+ */
+export const HOST_SANDBOX_STATE_WORDS: Record<HostSandboxState, string> = {
+  creating: "Creating",
+  awake: "Awake",
+  suspending: "Suspending",
+  suspended: "Suspended",
+  resuming: "Resuming",
+  stopping: "Stopping",
+  stopped: "Stopped",
+  starting: "Starting",
+  destroying: "Destroying",
+  destroyed: "Destroyed",
+  failed: "Failed",
+  released: "Not running",
+};
+
+export function hostSandboxStateWord(state: HostSandboxState | null): string {
+  return state === null ? "Status unknown" : HOST_SANDBOX_STATE_WORDS[state];
+}
+
+/** Frozen is a condition shown beside the state, never a state of its own. */
+export const HOST_FROZEN_WORD = "Out of credits";
+
+export const HOST_KIND_WORDS: Record<HostRegistryKind, string> = {
+  personal: "Computer",
+  sandbox: "Sandbox",
+};
+
+/**
  * The runtime profile a host reported at registration: `agent` is the full
  * host (sandbox mode included), `automation` the slim Automations pod. It
  * arrives on the host list, never on `host capabilities` (no CLI runs in a

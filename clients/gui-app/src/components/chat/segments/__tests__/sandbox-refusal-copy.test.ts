@@ -8,7 +8,9 @@ describe("sandboxRefusalCopyFor", () => {
     const copy = sandboxRefusalCopyFor("SANDBOX_FROZEN", "anything at all");
     expect(copy).not.toBeNull();
     expect(copy?.headline).toBe(FROZEN_HEADLINE);
-    expect(copy?.description).toContain("credits ran out");
+    expect(copy?.description).toBe(
+      "This sandbox ran out of credits, which ended the turn. Add credits, then send a message to pick up where it stopped.",
+    );
   });
 
   it("matches the message prefix `CODE:` when the block carries no code", () => {

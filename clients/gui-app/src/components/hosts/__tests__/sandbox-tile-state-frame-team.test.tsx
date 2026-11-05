@@ -206,7 +206,9 @@ describe("<SandboxTileStateFrame /> frozen team sandbox", () => {
 
     const overlay = screen.getByTestId("sandbox-tile-overlay");
     expect(overlay.getAttribute("data-kind")).toBe("frozen");
-    expect(overlay.textContent).toBe("Frozen: Ada Lovelace's bundle is out.");
+    expect(overlay.textContent).toBe(
+      "Out of credits: Ada Lovelace's bundle is out.",
+    );
     expect(screen.queryByTestId("sandbox-tile-overlay-wake")).toBeNull();
   });
 
@@ -220,7 +222,7 @@ describe("<SandboxTileStateFrame /> frozen team sandbox", () => {
     });
     renderFrame();
     expect(screen.getByTestId("sandbox-tile-overlay").textContent).toMatch(
-      /^Frozen: Ada Lovelace's bundle is out\. Destroyed on /,
+      /^Out of credits: Ada Lovelace's bundle is out\. Destroyed on /,
     );
   });
 
@@ -234,7 +236,7 @@ describe("<SandboxTileStateFrame /> frozen team sandbox", () => {
     });
     renderFrame();
     expect(screen.getByTestId("sandbox-tile-overlay").textContent).toBe(
-      "Frozen: out of credits. Top up to resume.",
+      "Out of credits. Top up to resume.",
     );
   });
 });
