@@ -137,22 +137,13 @@ vi.mock(
   }),
 );
 
-/**
- * The shipped arrangement with the sidebar open in a new tab: every case here
- * is about where the column draws, which a collapsed rail would not show.
- */
-const OPEN_SIDEBAR_ARRANGEMENT = {
-  ...DEFAULT_ARRANGEMENT,
-  sidebarStartCollapsed: false,
-};
-
 function resetStores() {
   window.localStorage.clear();
   useLeftPanelStore.setState({
     mainCollapsedByTabId: {},
     sidebarWidthPx: DEFAULT_SIDEBAR_WIDTH_PX,
   });
-  useLayoutStore.setState({ arrangement: OPEN_SIDEBAR_ARRANGEMENT });
+  useLayoutStore.setState({ arrangement: DEFAULT_ARRANGEMENT });
 }
 
 beforeEach(resetStores);
@@ -387,7 +378,7 @@ describe("<EpicSurface /> sidebar side (S-06)", () => {
   it("puts the sidebar column after the body when sidebarSide is right", () => {
     act(() => {
       useLayoutStore.setState({
-        arrangement: { ...OPEN_SIDEBAR_ARRANGEMENT, sidebarSide: "right" },
+        arrangement: { ...DEFAULT_ARRANGEMENT, sidebarSide: "right" },
       });
     });
 
@@ -463,7 +454,7 @@ describe("<EpicSurface /> sidebar side (S-06)", () => {
   it("agrees across two split panes, since the side is global", () => {
     act(() => {
       useLayoutStore.setState({
-        arrangement: { ...OPEN_SIDEBAR_ARRANGEMENT, sidebarSide: "right" },
+        arrangement: { ...DEFAULT_ARRANGEMENT, sidebarSide: "right" },
       });
     });
 

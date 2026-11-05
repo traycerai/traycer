@@ -340,15 +340,11 @@ describe("<AppShell />", () => {
     windowHost.runnerHost = {};
     setViewportWidth(DESKTOP_VIEWPORT_WIDTH);
     // Home hidden and the resource monitor shown are SHIPPED_DEFAULT_VALUES,
-    // and usageHost "status-bar" (the footer) is DEFAULT_ARRANGEMENT. The tabs
-    // go across the top here, the header these cases are written about; the
-    // shipped left strip has its own cases below (`selectTabStripPlacement`).
+    // and usageHost "status-bar" (the footer) is DEFAULT_ARRANGEMENT - so a
+    // full reset of the layout store is the same starting point the old
+    // settings-store + layout-store pair used to set explicitly.
     useLayoutStore.setState({
       ...DEFAULT_LAYOUT_SNAPSHOT,
-      arrangement: {
-        ...DEFAULT_LAYOUT_SNAPSHOT.arrangement,
-        tabStripPlacement: "top",
-      },
     });
     useAuthStore
       .getState()
