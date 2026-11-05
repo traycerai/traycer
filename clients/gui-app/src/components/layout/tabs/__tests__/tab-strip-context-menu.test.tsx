@@ -600,13 +600,7 @@ describe("the Tabs placement radio group", () => {
   }
 
   it("sits after the split commands and before Close Other Tabs, checked on the stored placement", async () => {
-    useLayoutStore.setState({
-      ...DEFAULT_LAYOUT_SNAPSHOT,
-      arrangement: {
-        ...DEFAULT_LAYOUT_SNAPSHOT.arrangement,
-        tabStripPlacement: "top",
-      },
-    });
+    useLayoutStore.setState({ ...DEFAULT_LAYOUT_SNAPSHOT });
     renderTabMenu();
 
     const top = await screen.findByTestId("tab-strip-placement-top");
@@ -661,13 +655,7 @@ describe("the Tabs placement radio group", () => {
   });
 
   it("in a session, the firewall swallows the task tab's menu and Home's menu writes one undo step", async () => {
-    useLayoutStore.setState({
-      ...DEFAULT_LAYOUT_SNAPSHOT,
-      arrangement: {
-        ...DEFAULT_LAYOUT_SNAPSHOT.arrangement,
-        tabStripPlacement: "top",
-      },
-    });
+    useLayoutStore.setState({ ...DEFAULT_LAYOUT_SNAPSHOT });
     useLayoutEditorStore.getState().beginSession({
       entry: "keyboard",
       source: "direct_ui",
