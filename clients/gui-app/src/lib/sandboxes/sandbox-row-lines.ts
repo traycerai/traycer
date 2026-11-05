@@ -592,7 +592,7 @@ export function sandboxFrozenCause(
   ) {
     return `Your ${team} credits ran out.`;
   }
-  return `${payer.displayName ?? "a member"}'s ${team} credits ran out. Resuming changes the payer to you.`;
+  return `${payer.displayName ?? "A member"}'s ${team} credits ran out. Resuming changes the payer to you.`;
 }
 
 /** Whether a frozen row's remedy is the viewer's own top-up. */

@@ -397,7 +397,7 @@ describe("sandboxClockLine", () => {
       configuration: teamConfiguration,
       wakePayer: { userId: "payer", displayName: null },
       expected:
-        "a member's Acme credits ran out. Resuming changes the payer to you.",
+        "A member's Acme credits ran out. Resuming changes the payer to you.",
     },
   ] as const)(
     "names whose credits ran out for $name",
