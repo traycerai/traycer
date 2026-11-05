@@ -22,7 +22,7 @@ import {
  * as shown against it, so changing a clause's words re-opens the block for
  * everyone once.
  */
-export const CONSEQUENCES_WORDING_VERSION = 1;
+export const CONSEQUENCES_WORDING_VERSION = 2;
 
 /** A configuration as copy reads it: Personal, or a team by its name. */
 export type SandboxConfigurationCopy =
