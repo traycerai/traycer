@@ -299,7 +299,7 @@ describe("sandboxStateLine", () => {
 });
 
 describe("sandboxFrozenLine", () => {
-  const BASE = "Frozen: out of credits. Top up to resume.";
+  const BASE = "Out of credits. Top up to resume.";
 
   it("omits the date when the server did not say when the row froze", () => {
     expect(sandboxFrozenLine(null)).toBe(BASE);

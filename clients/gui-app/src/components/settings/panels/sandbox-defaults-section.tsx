@@ -306,7 +306,7 @@ function SandboxDefaultsList(props: {
       </dt>
       <dd data-testid="sandboxes-defaults-idle">{idleText}</dd>
       <dt className="text-muted-foreground">
-        Destroy after resting for (empty: never)
+        Destroy after idle for (empty: never)
       </dt>
       <dd data-testid="sandboxes-defaults-resting">{restingText}</dd>
     </dl>
@@ -434,7 +434,7 @@ function SandboxDefaultsForm(props: {
         />
         <PeriodInput
           id={`${ids}-resting`}
-          label="Destroy after resting for (empty: never)"
+          label="Destroy after idle for (empty: never)"
           placeholder="Never"
           field={resting}
           testId="sandboxes-defaults-resting-input"

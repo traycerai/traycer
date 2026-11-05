@@ -189,6 +189,12 @@ export function NewTerminalPickerBody(props: NewTerminalPickerBodyProps) {
         className="flex min-h-0 flex-col overflow-y-auto"
         data-testid="new-terminal-picker-scroller"
       >
+        <div className="border-b p-2.5">
+          <p className="text-ui-sm font-semibold">Open a terminal</p>
+          <p className="text-ui-xs text-muted-foreground">
+            The terminal lives on the machine you pick, for its lifetime.
+          </p>
+        </div>
         {/*
           The host section renders the RESOLVED host, which is what keeps this
           create surface honest without a banner: a pin whose host died resolves

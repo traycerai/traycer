@@ -1,5 +1,8 @@
 import type { HostHealthState } from "@/components/settings/host-scope/host-health";
-import { hostSandboxStateWord } from "@traycer/protocol/host/host-status";
+import {
+  HOST_KIND_WORDS,
+  hostSandboxStateWord,
+} from "@traycer/protocol/host/host-status";
 import { isSandboxAsleep } from "@traycer-clients/shared/host-client/sandbox-control";
 import type { HostDirectoryEntry } from "@traycer-clients/shared/host-client/host-directory";
 import { isSandboxHostDirectoryEntry } from "@traycer-clients/shared/host-client/remote-fetcher";
@@ -15,7 +18,6 @@ import {
   COMPUTER_ACTIVE,
   computerOfflineLine,
   computerSubLine,
-  THIS_COMPUTER,
 } from "@/lib/sandboxes/sandbox-strings";
 import type {
   FleetUpdateView,
@@ -50,7 +52,8 @@ export type HostPickIntent = "view" | "bind" | "pin";
  * on" - the active-host switch still reloads open tabs today, so
  * that promise would be false. This only says what IS true.
  */
-export const ACTIVATE_HOST_HINT = "Switching changes where new work starts.";
+export const ACTIVATE_HOST_HINT =
+  "Every window follows, and the choice outlives this one.";
 
 /**
  * A refusal the SURFACE holds against a host, keyed by `hostId` and carrying
@@ -231,19 +234,15 @@ export function hostOptionStatusWord(
 
 /**
  * A computer's sub-line in the composer and in-task pickers: the machine's
- * name under a `This computer` title, its OS, and whether it answers
- * (`windows-test-machine · Windows · Active`, `Linux · Active`). `pickable`
+ * OS and whether it answers (`Windows · Active`, `Linux · Active`). `pickable`
  * is the row's own {@link isHostOptionSelectable}, so the offline line
  * promises a wait only on a row that can be picked.
  */
 export function composerComputerSubLine(
   host: HostScopeOption,
   pickable: boolean,
-  /** The row's title is `This computer`, so the machine's name goes here. */
-  nameBelow: boolean,
 ): string {
   return computerSubLine([
-    nameBelow && host.isLocalMachine ? host.name : null,
     formatPlatform(host.platform),
     composerComputerStatus(host, pickable),
   ]);
@@ -464,16 +463,6 @@ function retainedBadgeWord(kind: FleetUpdateViewKind): string | null {
 }
 
 /**
- * What a host is called on the chip and its row. The composer and in-task
- * pickers call the machine this app runs on `This computer`, its own name
- * moving to the row's sub-line, so it reads beside the sandbox rows; every
- * other list names it.
- */
-export function hostRowTitle(host: HostScopeOption, composer: boolean): string {
-  return composer && host.isLocalMachine ? THIS_COMPUTER : host.name;
-}
-
-/**
  * What KIND of host this is, in words.
  *
  * The row draws this as a glyph, which is `aria-hidden` — so when the Select
@@ -484,11 +473,7 @@ export function hostRowTitle(host: HostScopeOption, composer: boolean): string {
  * icon they cannot see.
  */
 export function hostOptionKindLabel(host: HostScopeOption): string {
-  if (host.isLocalMachine) return "This computer";
-  if (host.sandbox !== null) return "Sandbox";
-  if (host.entry?.kind === "remote") return "Remote host";
-  if (host.entry?.kind === "mock") return "Mock host";
-  return "Host";
+  return host.kind === null ? "Host" : HOST_KIND_WORDS[host.kind];
 }
 
 /**
@@ -601,7 +586,8 @@ export function hostOptionCanActivate(host: HostScopeOption): boolean {
  * Why a team's host is never this window's host. Shown on its disabled
  * Activate and as the refusal when a switch to one is asked for anyway.
  */
-export const TEAM_HOST_ACTIVATE_REASON = "Team hosts can't be made active.";
+export const TEAM_HOST_ACTIVATE_REASON =
+  "A team's machine can't be the app's default.";
 
 /**
  * One team's hosts in a list: its sandboxes and pods, and the

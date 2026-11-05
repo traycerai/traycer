@@ -79,7 +79,7 @@ export interface HostScope {
    * selection authority, which validates against the fleet, persists, and
    * re-derives; the new effective host comes back down to every window.
    */
-  readonly makeActive: (hostId: string) => void;
+  readonly makeActive: (hostId: string) => Promise<boolean>;
   /**
    * An Activate is in flight. The button MUST gate on this.
    *
@@ -401,7 +401,7 @@ function subscribePendingActivation(listener: () => void): () => void {
  * can hold its controls while one is running.
  */
 export function useMakeActiveHost(hosts: readonly HostScopeOption[]): {
-  readonly makeActive: (hostId: string) => void;
+  readonly makeActive: (hostId: string) => Promise<boolean>;
   readonly isActivating: boolean;
   readonly activatingHostId: string | null;
 } {
@@ -412,7 +412,7 @@ export function useMakeActiveHost(hosts: readonly HostScopeOption[]): {
   );
   const makeActive = useCallback(
     (hostId: string) => {
-      if (pendingActivations.has(authority)) return;
+      if (pendingActivations.has(authority)) return Promise.resolve(false);
       const option = findHostOption(hosts, hostId);
       // Defence for every caller, not only the Overview that hides the
       // button: a management-only row is never made the window's host.
@@ -420,11 +420,11 @@ export function useMakeActiveHost(hosts: readonly HostScopeOption[]): {
         appLogger.debug("[host-scope] activate refused: management-only host", {
           hostId,
         });
-        return;
+        return Promise.resolve(false);
       }
       pendingActivations.set(authority, hostId);
       notifyPendingActivation();
-      void requestActivate(authority, hostId, option).finally(() => {
+      return requestActivate(authority, hostId, option).finally(() => {
         pendingActivations.delete(authority);
         notifyPendingActivation();
       });
@@ -461,7 +461,7 @@ export async function requestActivate(
   authority: SelectionAuthorityClient,
   hostId: string,
   option: HostScopeOption | null,
-): Promise<void> {
+): Promise<boolean> {
   let result: ActivateResult;
   try {
     result = await authority.activate(hostId);
@@ -470,8 +470,10 @@ export async function requestActivate(
       hostId,
       error: String(error),
     });
-    toast.error("Couldn't activate this host. Try again.");
-    return;
+    toast.error(
+      activateRefusalMessage("unrecognized", option?.name ?? "that machine"),
+    );
+    return false;
   }
   if (result.ok) {
     // Preferred is intent, not liveness: a sleeping sandbox is now preferred,
@@ -481,11 +483,12 @@ export async function requestActivate(
       source: "direct_ui",
       host_kind: option?.isLocalMachine === true ? "local" : "remote",
     });
-    return;
+    return true;
   }
   toast.error(
-    activateRefusalMessage(result.reason, option?.name ?? "That host"),
+    activateRefusalMessage(result.reason, option?.name ?? "that machine"),
   );
+  return false;
 }
 
 /**
@@ -497,29 +500,23 @@ export async function requestActivate(
  * key named, instead of silently routing a new refusal into the generic
  * fallback and telling the user nothing about a reason the engine took the
  * trouble to distinguish. That is exactly how `persist-failed` arrived.
- *
- * Two families, and the split matters for the copy: `unknown-host` /
- * `incompatible` are statements ABOUT THE HOST and name it (`team-host` is
- * one too, said once for every team host); `not-attached` /
- * `persist-failed` are failures of this window's own machinery, where naming
- * the host would misattribute the fault to a machine that is fine.
  */
 const ACTIVATE_REFUSAL_COPY: Record<
   ActivateRefusalReason,
   (label: string) => string
 > = {
-  "unknown-host": (label) =>
-    `${label} is no longer registered to this account.`,
-  incompatible: (label) =>
-    `${label} needs a host update before it can be activated.`,
+  "unknown-host": () =>
+    "It's gone from your account. The previous machine stays active.",
+  incompatible: () => "Update the app to use this machine.",
   "team-host": () => TEAM_HOST_ACTIVATE_REASON,
-  "not-attached": () =>
-    "This window lost its connection to the selection service - reload and try again.",
+  "not-attached": () => "Try again in a moment.",
   // Nothing moved: the preference was refused BEFORE any state changed and no
   // event fired, so the same Activate is safe to retry verbatim - which is why
   // this says "try again" and not "it may or may not have applied".
-  "persist-failed": () => "Couldn't save your choice - try again.",
-  unrecognized: (label) => `Couldn't activate ${label}.`,
+  "persist-failed": () =>
+    "The choice didn't stick — the previous machine stays active. Try again.",
+  unrecognized: (label) =>
+    `Couldn't set ${label} as the app's machine. The previous machine stays active.`,
 };
 
 function activateRefusalMessage(

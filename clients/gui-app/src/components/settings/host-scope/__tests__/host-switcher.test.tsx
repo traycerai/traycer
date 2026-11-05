@@ -43,6 +43,7 @@ function renderEmpty(props: {
       }}
       surface="rail"
       intent="view"
+      consequence={null}
       disabled={false}
       isLoading={props.isLoading}
       listsFailed={props.listsFailed}
@@ -115,6 +116,7 @@ describe("<HostSwitcher /> empty vs failed", () => {
         action={{ kind: "add-host", onSelect: () => undefined }}
         surface="rail"
         intent="view"
+        consequence={null}
         disabled={false}
         isLoading={false}
         listsFailed
@@ -150,6 +152,7 @@ describe("<HostSwitcher /> empty vs failed", () => {
         action={{ kind: "add-host", onSelect: () => undefined }}
         surface="rail"
         intent="view"
+        consequence={null}
         disabled={false}
         isLoading={false}
         listsFailed
@@ -184,6 +187,7 @@ describe("<HostSwitcher /> empty vs failed", () => {
           action={{ kind: "add-host", onSelect: () => undefined }}
           surface="rail"
           intent="view"
+          consequence={null}
           disabled={false}
           isLoading={isLoading}
           listsFailed={false}
@@ -232,6 +236,7 @@ describe("<HostSwitcher /> empty vs failed", () => {
           action={{ kind: "add-host", onSelect: () => undefined }}
           surface="rail"
           intent="view"
+          consequence={null}
           disabled={false}
           isLoading={false}
           listsFailed={false}
@@ -324,6 +329,7 @@ describe("<HostSwitcher /> empty vs failed", () => {
         action={{ kind: "add-host", onSelect: () => undefined }}
         surface="rail"
         intent="view"
+        consequence={null}
         disabled={false}
         isLoading={false}
         listsFailed={false}
@@ -356,6 +362,7 @@ describe("<HostSwitcher /> trigger status", () => {
       action: { kind: "manage-hosts" as const, onSelect: () => undefined },
       surface: "inline" as const,
       intent: "pin" as const,
+      consequence: null,
       disabled: false,
       isLoading: false,
       listsFailed: false,
@@ -443,6 +450,7 @@ describe("<HostSwitcher /> a host nobody named", () => {
         action={{ kind: "manage-hosts", onSelect: () => undefined }}
         surface="inline"
         intent="pin"
+        consequence={null}
         disabled={false}
         isLoading={false}
         listsFailed={false}
@@ -490,6 +498,7 @@ describe("<HostSwitcher /> trailing action", () => {
         action={{ kind: "manage-hosts", onSelect }}
         surface="panel-header"
         intent="view"
+        consequence={null}
         disabled={false}
         isLoading={false}
         listsFailed={false}
@@ -528,6 +537,7 @@ describe("<HostSwitcher /> trailing action", () => {
         action={{ kind: "manage-hosts", onSelect: () => undefined }}
         surface="panel-header"
         intent="view"
+        consequence={null}
         disabled={false}
         isLoading={false}
         listsFailed={false}
@@ -573,6 +583,7 @@ describe("<HostSwitcher /> setting-up status word (M5)", () => {
         action={{ kind: "add-host", onSelect: () => undefined }}
         surface="rail"
         intent="view"
+        consequence={null}
         refusalByHostId={NO_HOST_OPTION_REFUSALS}
         inertExceptHostId={null}
         disabled={false}
@@ -616,6 +627,7 @@ describe("<HostSwitcher /> environment labels (Tracy Bots)", () => {
         action={{ kind: "add-host", onSelect: () => undefined }}
         surface="rail"
         intent="view"
+        consequence={null}
         refusalByHostId={NO_HOST_OPTION_REFUSALS}
         inertExceptHostId={null}
         disabled={false}

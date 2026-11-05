@@ -8,6 +8,7 @@ import {
   HostPresenceDot,
 } from "@/components/settings/host-scope/host-glyph";
 import {
+  hostOptionKindLabel,
   sandboxStateWord,
   sandboxWordYieldsToHealth,
 } from "@/components/settings/host-scope/host-option-model";
@@ -189,7 +190,7 @@ export function HostIdentityCard(props: {
                   the two surfaces described one fleet in two languages. A
                   remote host now gets a tag too — the absence of one was never
                   a deliberate signal, just the local-only branch showing. */}
-              <HostTag label={hostKindTag(host)} tone={undefined} />
+              <HostTag label={hostOptionKindLabel(host)} tone={undefined} />
             </div>
             {/* The window binding used to be an `Active` tag here and a verb in
                 the footer, with nothing tying them together. Both are now one
@@ -352,15 +353,4 @@ function HostIdentityHealth(props: {
       </span>
     </span>
   );
-}
-
-/**
- * The header's kind tag. The machine this app runs on reads `This computer`,
- * never `Local`: `Local` is the Environment dropdown's badge for a computer
- * whose settings are not in Personal yet, and a computer without a Local row
- * must not wear it.
- */
-function hostKindTag(host: HostScopeOption): string {
-  if (host.isLocalMachine) return "This computer";
-  return host.sandbox === null ? "Remote" : "Sandbox";
 }

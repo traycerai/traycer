@@ -667,7 +667,7 @@ describe("sandboxIdlePolicyLine", () => {
     );
   });
 
-  it("gives an ordinary row idle plus its resting clause, with the server's default idle minutes", () => {
+  it("gives an ordinary row its idle period and idle days, with the server's default idle minutes", () => {
     expect(
       sandboxIdlePolicyLine(
         sandboxSummaryFixture({
@@ -678,7 +678,7 @@ describe("sandboxIdlePolicyLine", () => {
         }),
       ),
     ).toBe(
-      `Suspends after ${SANDBOX_DEFAULT_IDLE_MINUTES} idle min · destroyed after 7 resting days`,
+      `Suspends after ${SANDBOX_DEFAULT_IDLE_MINUTES} idle min · destroyed after 7 idle days`,
     );
   });
 });

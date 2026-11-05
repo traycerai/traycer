@@ -272,6 +272,10 @@ function SettingsSidebarHostPicker(props: {
         }}
         surface="rail"
         intent="view"
+        consequence={{
+          heading: "Look at another machine",
+          hint: "Changes what this window shows. Nothing is created.",
+        }}
         disabled={false}
         isLoading={scope.isLoading}
         listsFailed={scope.listsFailed}

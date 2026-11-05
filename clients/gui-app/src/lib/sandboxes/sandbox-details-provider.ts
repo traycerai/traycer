@@ -151,7 +151,7 @@ function idleRows(summary: SandboxSummary): SandboxDetailsRow[] {
   return [
     idleRow,
     {
-      label: "Resting",
+      label: "Idle for",
       value:
         summary.destroyAfterRestingMinutes === null ||
         summary.destroyAfterRestingMinutes === 0
@@ -286,7 +286,7 @@ function operationVerb(entry: SandboxHistoryEntry): string {
     return sandboxFailedToStart(entry.outcomeDetail);
   }
   if (entry.fromState === "creating") return "Created";
-  if (entry.cause === "freeze") return "Frozen";
+  if (entry.cause === "freeze") return HOST_FROZEN_WORD;
   switch (entry.state) {
     case "suspending":
     case "suspended":
@@ -339,7 +339,7 @@ function operationCause(
 /**
  * One History line: `Suspended by you until Oct 25 at 09:55 · under $0.01`,
  * `Resumed by you (Open terminal) · awake until Oct 25 at 10:01 · $0.02`, or
- * on the current operation `· resting from then` / `· awake from then`.
+ * on the current operation `· idle from then` / `· awake from then`.
  */
 function historyEntryEvent(
   entry: SandboxHistoryEntry,
@@ -353,7 +353,7 @@ function historyEntryEvent(
   if (entry.state === "failed" || ended) {
     span = [cause];
   } else if (entry.untilAt === null) {
-    span = [cause, resting ? "resting from then" : "awake from then"];
+    span = [cause, resting ? "idle from then" : "awake from then"];
   } else if (resting) {
     const until = `until ${formatSandboxDate(entry.untilAt, true)}`;
     span = [cause === null ? until : `${cause} ${until}`, cost];
@@ -404,14 +404,14 @@ function historyEvents(input: SandboxDetailsInput): SandboxDetailsEvent[] {
   if (summary.restingSince !== null) {
     events.push({
       at: summary.restingSince,
-      label: "Resting",
-      value: "the resting clock started",
+      label: "Idle",
+      value: "it went idle",
     });
   }
   if (summary.frozenAt !== null) {
     events.push({
       at: summary.frozenAt,
-      label: "Frozen",
+      label: HOST_FROZEN_WORD,
       value: "out of credits",
     });
   }

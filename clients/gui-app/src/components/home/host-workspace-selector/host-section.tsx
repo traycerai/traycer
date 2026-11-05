@@ -79,6 +79,7 @@ export function WorkspaceHostSwitcher(
       refusalByHostId={props.refusalByHostId}
       inertExceptHostId={props.inertExceptHostId}
       intent={props.intent}
+      consequence={null}
       action={{
         kind: "manage-hosts",
         onSelect: () => {

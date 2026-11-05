@@ -686,10 +686,10 @@ describe("sandboxDetailsEntry History from the server's operations", () => {
     ]);
   });
 
-  it("ends the current entry with resting from then or awake from then", () => {
+  it("ends the current entry with idle from then or awake from then", () => {
     expect(
       events([entryOperation({ untilAt: null })], {}).map((e) => e.value),
-    ).toEqual(["by you · resting from then"]);
+    ).toEqual(["by you · idle from then"]);
     expect(
       events(
         [

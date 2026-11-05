@@ -105,7 +105,7 @@ export function hostScopeFixture(overrides: Partial<HostScope>): HostScope {
     // the plain-RPC branches production takes on a current host.
     localMaintenanceFallback: false,
     setHostId: () => undefined,
-    makeActive: () => undefined,
+    makeActive: () => Promise.resolve(false),
     isActivating: false,
     isLoading: false,
     listsFailed: false,

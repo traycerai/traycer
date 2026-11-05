@@ -533,7 +533,11 @@ describe("sandbox row words", () => {
     ).toBe("Sandbox");
     expect(
       hostOptionKindLabel(
-        hostScopeOptionFixture({ hostId: "p", isLocalMachine: false }),
+        hostScopeOptionFixture({
+          hostId: "p",
+          isLocalMachine: false,
+          kind: null,
+        }),
       ),
     ).toBe("Host");
   });

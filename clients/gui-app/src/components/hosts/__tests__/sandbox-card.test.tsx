@@ -315,7 +315,7 @@ describe("<SandboxCard /> per state", () => {
     );
     expect(screen.getByText(HOST_FROZEN_WORD, { exact: true })).toBeTruthy();
     expect(screen.getByTestId("sandbox-card-state-line").textContent).toMatch(
-      /^Frozen: out of credits\. Top up to resume\. Destroyed on /,
+      /^Out of credits\. Top up to resume\. Destroyed on /,
     );
     expect(actionTestIds()).toEqual(["sandbox-card-destroy"]);
   });
@@ -365,7 +365,7 @@ describe("<SandboxCard /> per state", () => {
     // The server sent no label for "eu-west": the raw id is not shown.
     expect(screen.queryByTestId("sandbox-card-region")).toBeNull();
     expect(screen.getByTestId("sandbox-card-rate").textContent).toBe(
-      "$0.12 an hour while awake · under $0.01 an hour while resting",
+      "$0.12 an hour while awake · under $0.01 an hour while suspended or stopped",
     );
     expect(screen.getByTestId("sandbox-card-idle").textContent).toBe(
       "Destroyed after 2 h idle",
@@ -714,7 +714,7 @@ describe("<SandboxCard /> facts as the scope resolves them", () => {
     );
     expect(screen.getByText(HOST_FROZEN_WORD, { exact: true })).toBeTruthy();
     expect(screen.getByTestId("sandbox-card-state-line").textContent).toMatch(
-      /^Frozen: out of credits/,
+      /^Out of credits/,
     );
     expect(actionTestIds()).toEqual(["sandbox-card-destroy"]);
   });

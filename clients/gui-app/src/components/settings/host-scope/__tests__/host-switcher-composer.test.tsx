@@ -141,6 +141,7 @@ function renderPicker(input: {
         action={null}
         surface="field"
         intent={input.intent}
+        consequence={null}
         disabled={false}
         isLoading={false}
         listsFailed={false}
@@ -564,7 +565,7 @@ describe("<HostSwitcher /> composer mode search narrows", () => {
     isLocalMachine: false,
     isActive: false,
   });
-  const THIS_COMPUTER = hostScopeOptionFixture({
+  const LOCAL_COMPUTER = hostScopeOptionFixture({
     hostId: "mine",
     name: "windows-test-machine",
     isLocalMachine: true,
@@ -586,7 +587,7 @@ describe("<HostSwitcher /> composer mode search narrows", () => {
 
   function search(term: string): void {
     renderSwitcher({
-      hosts: [PRO, THIS_COMPUTER, P1, P2],
+      hosts: [PRO, LOCAL_COMPUTER, P1, P2],
       composer: composerMode({}),
       intent: "pin",
     });
@@ -607,8 +608,8 @@ describe("<HostSwitcher /> composer mode search narrows", () => {
     expect(screen.queryByTestId("host-switcher-composer-no-match")).toBeNull();
   });
 
-  it("matches a row by its title as well as its name", () => {
-    search("this comp");
+  it("matches the local row by its real name", () => {
+    search("windows-test");
 
     expect(hostRows()).toEqual(["mine"]);
   });
@@ -735,7 +736,7 @@ describe("<HostSwitcher /> composer mode computers", () => {
     });
   }
 
-  it("calls the machine the app runs on `This computer` on the chip and the row, its name on the row's line", () => {
+  it("uses the local machine's name on the chip and row, with platform and status below", () => {
     renderPicker({
       hosts: [WINDOWS_LOCAL],
       selected: WINDOWS_LOCAL,
@@ -745,13 +746,10 @@ describe("<HostSwitcher /> composer mode computers", () => {
     });
 
     const chip = screen.getByTestId("settings-host-switcher");
-    expect(chip.textContent).toContain("This computer");
-    expect(chip.textContent).not.toContain("windows-test-machine");
+    expect(chip.textContent).toContain("windows-test-machine");
     const local = row("local-win");
-    expect(within(local).getByText("This computer")).toBeDefined();
-    expect(
-      within(local).getByText("windows-test-machine · Windows · Active"),
-    ).toBeDefined();
+    expect(within(local).getByText("windows-test-machine")).toBeDefined();
+    expect(within(local).getByText("Windows · Active")).toBeDefined();
   });
 
   it("still names the machine in a list that is not the composer's", () => {
@@ -766,13 +764,8 @@ describe("<HostSwitcher /> composer mode computers", () => {
     expect(screen.getByTestId("settings-host-switcher").textContent).toContain(
       "windows-test-machine",
     );
-    // Only a screen reader hears what the row is (`This computer`); the row
-    // shows the machine's name.
-    expect(
-      within(row("local-win")).queryByText("This computer", {
-        ignore: ".sr-only, script, style",
-      }),
-    ).toBeNull();
+    // The local row shows the same real name as the chip.
+    expect(within(row("local-win")).queryByText("This computer")).toBeNull();
     expect(
       within(row("local-win")).getByText("windows-test-machine"),
     ).toBeDefined();
@@ -893,7 +886,7 @@ describe("<HostSwitcher /> composer mode row titles wrap", () => {
       intent: "pin",
     });
 
-    expectWraps(within(row("local-win")).getByText("This computer"));
+    expectWraps(within(row("local-win")).getByText("windows-test-machine"));
   });
 
   it("wraps a sandbox row's name", () => {

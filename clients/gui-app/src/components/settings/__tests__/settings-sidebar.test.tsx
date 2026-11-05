@@ -940,6 +940,10 @@ describe("<SettingsSidebar /> scope groups", () => {
 
     expect(screen.getByRole("heading", { name: "Hosts" })).not.toBeNull();
     fireEvent.click(screen.getByTestId("settings-host-switcher"));
+    expect(screen.getByText("Look at another machine")).not.toBeNull();
+    expect(
+      screen.getByText("Changes what this window shows. Nothing is created."),
+    ).not.toBeNull();
     expect(
       screen.getByTestId("settings-host-switcher-option-host-member"),
     ).not.toBeNull();

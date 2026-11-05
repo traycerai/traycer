@@ -1,4 +1,5 @@
 import {
+  HOST_FROZEN_WORD,
   hostSandboxStateWord,
   type HostSandboxState,
 } from "@traycer/protocol/host/host-status";
@@ -146,7 +147,7 @@ export function formatSandboxDay(at: number): string {
  * the sentence without it.
  */
 export function sandboxFrozenLine(frozenAt: number | null): string {
-  const base = "Frozen: out of credits. Top up to resume.";
+  const base = `${HOST_FROZEN_WORD}. Top up to resume.`;
   return frozenAt === null
     ? base
     : `${base} Destroyed on ${formatSandboxDate(frozenDestroyAt(frozenAt), true)}.`;
@@ -221,13 +222,13 @@ export function sandboxTeamFrozenLine(
   viewerUserId: string | null,
 ): string {
   const payer = summary.wakePayer;
-  if (payer === null) return "Frozen: its payer's bundle is out.";
+  if (payer === null) return `${HOST_FROZEN_WORD}: its payer's bundle is out.`;
   if (viewerUserId !== null && payer.userId === viewerUserId) {
-    return "Frozen: your bundle is out.";
+    return `${HOST_FROZEN_WORD}: your bundle is out.`;
   }
   return payer.displayName === null
-    ? "Frozen: its payer's bundle is out."
-    : `Frozen: ${payer.displayName}'s bundle is out.`;
+    ? `${HOST_FROZEN_WORD}: its payer's bundle is out.`
+    : `${HOST_FROZEN_WORD}: ${payer.displayName}'s bundle is out.`;
 }
 
 /**
@@ -240,7 +241,8 @@ export function sandboxTeamFrozenStateLine(
   summary: SandboxSummary | null,
   viewerUserId: string | null,
 ): string {
-  if (summary === null) return "Frozen: its payer's bundle is out.";
+  if (summary === null)
+    return `${HOST_FROZEN_WORD}: its payer's bundle is out.`;
   const line = sandboxTeamFrozenLine(summary, viewerUserId);
   return summary.frozenAt === null
     ? line

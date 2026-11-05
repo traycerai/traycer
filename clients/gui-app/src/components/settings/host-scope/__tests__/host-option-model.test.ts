@@ -171,13 +171,17 @@ describe("hostOptionStatusWord — the row speaks the health vocabulary", () => 
   });
 });
 
-describe("hostOptionKindLabel — unchanged, and deliberately route-side", () => {
-  it("names this computer", () => {
+describe("hostOptionKindLabel", () => {
+  it("uses the protocol word for a registered Personal computer", () => {
     expect(
       hostOptionKindLabel(
-        hostScopeOptionFixture({ hostId: "host-a", isLocalMachine: true }),
+        hostScopeOptionFixture({
+          hostId: "host-a",
+          isLocalMachine: true,
+          kind: "personal",
+        }),
       ),
-    ).toBe("This computer");
+    ).toBe("Computer");
   });
 
   it("falls back to Host when no directory entry says otherwise", () => {
@@ -186,6 +190,7 @@ describe("hostOptionKindLabel — unchanged, and deliberately route-side", () =>
         hostScopeOptionFixture({
           hostId: "host-a",
           isLocalMachine: false,
+          kind: null,
           entry: null,
         }),
       ),

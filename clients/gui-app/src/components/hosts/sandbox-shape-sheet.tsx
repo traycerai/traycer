@@ -543,7 +543,7 @@ function ShapeSheetForm(props: {
             onChange={(value) => setForm({ ...form, idleMinutes: value })}
           />
           <div className="flex flex-col gap-1.5">
-            <Label htmlFor={`${ids}-resting`}>Destroyed after resting</Label>
+            <Label htmlFor={`${ids}-resting`}>Destroyed after idle for</Label>
             <div className="flex gap-2">
               <Input
                 id={`${ids}-resting`}
@@ -569,7 +569,7 @@ function ShapeSheetForm(props: {
                   }
                 }}
               >
-                <SelectTrigger aria-label="Resting period unit">
+                <SelectTrigger aria-label="Idle period unit">
                   <SelectValue />
                 </SelectTrigger>
                 <SelectContent>

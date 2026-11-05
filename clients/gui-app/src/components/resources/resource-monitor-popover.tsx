@@ -1077,6 +1077,7 @@ function ResourceMonitorHostPickerRow(props: {
         }}
         surface="panel-header"
         intent="view"
+        consequence={null}
         disabled={false}
         isLoading={scope.isLoading}
         listsFailed={scope.listsFailed}
