@@ -2,7 +2,7 @@
  * `environment.list` - every team environment the signed-in user belongs to.
  * `environment.host.read` / `environment.host.bind` - the one environment
  * this host is bound to, and rebinding it.
- * `environment.host.list` - the hosts of a team environment the caller may see.
+ * `environment.host.list` - the hosts of an environment the caller may see.
  * `environment.members` - the people in an environment, by name and avatar,
  * so a client can name the member who wrote a message.
  * `environment.setMainBot` - which of an environment's bots is its main bot.
@@ -161,11 +161,11 @@ export const environmentListUpgradeV10ToV11 = defineUpgradePath<
 });
 
 /**
- * The environment this host is bound to, for the signed-in user. A host
- * belongs to exactly one of its owner's environments and every agent on it
- * runs in that one. `explicit` is false when the owner never bound the host:
- * it is then in their personal environment, which is the only default and
- * never a team.
+ * The host's team binding, as the signed-in user sees it. `explicit` is false
+ * for both an absent environment binding and an explicit Personal binding;
+ * both carry the Personal descriptor, because `environment` is non-null.
+ * This read cannot distinguish a computer's own settings from Personal.
+ * That settings place is answered by `environment.status` on the host.
  *
  * Only the account that bound a host can unbind it. `enrolledByUserId` is
  * that account, null when the binding is not explicit; `canUnbind` is whether
@@ -201,8 +201,10 @@ export const environmentHostReadV10 = defineRpcContract({
  * the same answer `environment.host.read` gives on that host, read from the
  * account's binding records instead of asking the host. Served by the server
  * pool, so a list of hosts reads every row's binding without a connection to
- * each host. A host the user cannot see a binding for answers the personal
- * environment (`explicit` false), exactly as an unbound host does.
+ * each host. An absent binding and an explicit Personal binding both answer
+ * the Personal descriptor with `explicit` false. This answers which team, if
+ * any, is bound to the host; only `environment.status` can answer whether a
+ * computer runs its own settings or Personal.
  */
 export const environmentBindingReadRequestSchema = lazySchema(() =>
   z.object({
@@ -222,10 +224,12 @@ export const environmentBindingReadV10 = defineRpcContract({
 
 /**
  * Binds the serving host to one of the signed-in user's environments.
- * Binding to the personal environment removes the binding (`explicit`
- * false). Refused for an environment the user does not belong to, and while
- * a live bot of another environment is bound to the host. A rebind applies
- * to new turns; running turns keep the environment they started with.
+ * A Personal binding is reported with `explicit` false, the same answer as
+ * an absent environment binding; it does not mean the host runs its own
+ * settings. Read `environment.status` for that distinction. Refused for an
+ * environment the user does not belong to, and while a live bot of another
+ * environment is bound to the host. A rebind applies to new turns; running
+ * turns keep the environment they started with.
  */
 export const environmentHostBindRequestSchema = lazySchema(() =>
   z.object({
@@ -276,8 +280,9 @@ export type EnvironmentHostRecord = z.infer<typeof environmentHostRecordSchema>;
 /**
  * The hosts of the environment the caller may see: every sandbox bound to it,
  * whoever bound it, plus the caller's own bound hosts of any kind. A member of
- * an object root so the response can grow additively. Empty for a personal
- * environment, whose hosts are its owner's unbound ones.
+ * an object root so the response can grow additively. Personal lists its
+ * bound hosts like any other environment; an absent binding is not Personal
+ * membership.
  */
 export const environmentHostListResponseSchema = lazySchema(() =>
   z.object({
@@ -289,7 +294,7 @@ export type EnvironmentHostListResponse = z.infer<
 >;
 
 /**
- * Lists the hosts of a team environment the caller may see. Refused
+ * Lists the hosts of an environment the caller may see. Refused
  * for an environment the caller does not belong to, and for one that does
  * not exist.
  */

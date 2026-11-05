@@ -135,7 +135,7 @@ describe("sandboxTeamFrozenLine", () => {
         }),
         VIEWER,
       ),
-    ).toBe("Frozen: your bundle is out.");
+    ).toBe("Out of credits: your bundle is out.");
   });
 
   it("names another member's bundle", () => {
@@ -146,13 +146,13 @@ describe("sandboxTeamFrozenLine", () => {
         }),
         VIEWER,
       ),
-    ).toBe("Frozen: Ada Lovelace's bundle is out.");
+    ).toBe("Out of credits: Ada Lovelace's bundle is out.");
   });
 
   it("says 'its payer's bundle' when no payer is recorded", () => {
     expect(
       sandboxTeamFrozenLine(sandboxSummaryFixture({ wakePayer: null }), VIEWER),
-    ).toBe("Frozen: its payer's bundle is out.");
+    ).toBe("Out of credits: its payer's bundle is out.");
   });
 
   it("says 'its payer's bundle' when the payer has no display name", () => {
@@ -163,7 +163,7 @@ describe("sandboxTeamFrozenLine", () => {
         }),
         VIEWER,
       ),
-    ).toBe("Frozen: its payer's bundle is out.");
+    ).toBe("Out of credits: its payer's bundle is out.");
   });
 });
 

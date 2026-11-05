@@ -1,4 +1,8 @@
-import type { HostSandboxState } from "@traycer/protocol/host/host-status";
+import {
+  HOST_FROZEN_WORD,
+  hostSandboxStateWord,
+  type HostSandboxState,
+} from "@traycer/protocol/host/host-status";
 import {
   parseSandboxHeartbeatPhase,
   sandboxSupportReference,
@@ -125,7 +129,7 @@ const STATE_LINE: Record<HostSandboxState, string> = {
   destroying: "Destroying. Its disk is being deleted.",
   destroyed: "Destroyed. Its disk is gone and nothing more is billed.",
   failed: "Failed to start.",
-  released: "Suspended, files kept. The next shell starts it.",
+  released: `${hostSandboxStateWord("released")}, files kept. The next shell starts it.`,
 };
 
 /** "Nov 7, 2026", in the reader's own zone: for an instant that happened. */
@@ -143,7 +147,7 @@ export function formatSandboxDay(at: number): string {
  * the sentence without it.
  */
 export function sandboxFrozenLine(frozenAt: number | null): string {
-  const base = "Frozen: out of credits. Top up to resume.";
+  const base = `${HOST_FROZEN_WORD}. Top up to resume.`;
   return frozenAt === null
     ? base
     : `${base} Destroyed on ${formatSandboxDate(frozenDestroyAt(frozenAt), true)}.`;
@@ -218,13 +222,13 @@ export function sandboxTeamFrozenLine(
   viewerUserId: string | null,
 ): string {
   const payer = summary.wakePayer;
-  if (payer === null) return "Frozen: its payer's bundle is out.";
+  if (payer === null) return `${HOST_FROZEN_WORD}: its payer's bundle is out.`;
   if (viewerUserId !== null && payer.userId === viewerUserId) {
-    return "Frozen: your bundle is out.";
+    return `${HOST_FROZEN_WORD}: your bundle is out.`;
   }
   return payer.displayName === null
-    ? "Frozen: its payer's bundle is out."
-    : `Frozen: ${payer.displayName}'s bundle is out.`;
+    ? `${HOST_FROZEN_WORD}: its payer's bundle is out.`
+    : `${HOST_FROZEN_WORD}: ${payer.displayName}'s bundle is out.`;
 }
 
 /**
@@ -237,7 +241,8 @@ export function sandboxTeamFrozenStateLine(
   summary: SandboxSummary | null,
   viewerUserId: string | null,
 ): string {
-  if (summary === null) return "Frozen: its payer's bundle is out.";
+  if (summary === null)
+    return `${HOST_FROZEN_WORD}: its payer's bundle is out.`;
   const line = sandboxTeamFrozenLine(summary, viewerUserId);
   return summary.frozenAt === null
     ? line
@@ -495,7 +500,7 @@ export function sandboxTileOverlay(
     case "suspended":
       return {
         kind: "asleep",
-        message: "Suspended, resumes on your next action",
+        message: `${hostSandboxStateWord(state)}, resumes on your next action`,
         verb: "resume",
         label: "Resume",
       };
@@ -503,22 +508,22 @@ export function sandboxTileOverlay(
     case "stopped":
       return {
         kind: "asleep",
-        message: "Stopped",
+        message: hostSandboxStateWord(state),
         verb: "start",
         label: "Start",
       };
-    // The Automations row at rest: `start` opens it. Suspended, as its badge.
+    // The Automations row at rest: `start` opens it, with its files kept.
     case "released":
       return {
         kind: "asleep",
-        message: "Suspended",
+        message: hostSandboxStateWord(state),
         verb: "start",
         label: "Start",
       };
     case "resuming":
-      return { kind: "moving", message: "Resuming" };
+      return { kind: "moving", message: hostSandboxStateWord(state) };
     case "starting":
-      return { kind: "moving", message: "Starting" };
+      return { kind: "moving", message: hostSandboxStateWord(state) };
     // Awake renders normally; creating, failed and destroyed are the tile's
     // own connection states, which it already shows.
     case "creating":

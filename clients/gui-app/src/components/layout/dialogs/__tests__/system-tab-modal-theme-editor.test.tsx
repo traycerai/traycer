@@ -45,6 +45,7 @@ vi.mock("@/components/settings/host-scope/use-host-scope", () => {
     hostId: null,
     hostLabel: "No host",
     vanishedHostId: null,
+    vanishedSelection: null,
     returnToActive: () => {},
     activeHostId: null,
     activeHost: null,
@@ -62,6 +63,11 @@ vi.mock("@/components/settings/host-scope/use-host-scope", () => {
   });
   return {
     useHostScope,
+    useHostScopeFor: useHostScope,
+    WINDOW_HOST_SELECTION: {
+      scopedHostId: null,
+      setScopedHostId: () => undefined,
+    },
     usePersonalHostScope: useHostScope,
   };
 });

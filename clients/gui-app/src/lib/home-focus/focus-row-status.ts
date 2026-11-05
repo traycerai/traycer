@@ -106,7 +106,7 @@ export const FOCUS_ROW_STATES: Readonly<
    * one click from being live again. The hollow dot is the same "present rather
    * than in flight" mark `background` and `waiting` carry. */
   dormant: {
-    word: "dormant",
+    word: "Browser asleep",
     dotClassName: "border border-muted-foreground bg-transparent",
     wordClassName: "text-muted-foreground",
   },

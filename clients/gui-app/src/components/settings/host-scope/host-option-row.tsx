@@ -1,4 +1,6 @@
 import type { ReactNode, Ref } from "react";
+import { HOST_FROZEN_WORD } from "@traycer/protocol/host/host-status";
+import { Badge } from "@/components/ui/badge";
 import { HostGlyph } from "@/components/settings/host-scope/host-glyph";
 import {
   hostOptionKindLabel,
@@ -172,6 +174,9 @@ export function HostOptionRow(props: {
           {statusWord}
         </span>
       )}
+      {statusWord !== null && host.sandbox?.frozen ? (
+        <Badge variant="warning">{HOST_FROZEN_WORD}</Badge>
+      ) : null}
     </>
   );
 }
