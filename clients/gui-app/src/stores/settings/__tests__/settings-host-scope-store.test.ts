@@ -59,3 +59,23 @@ describe("Settings host id adoption", () => {
     });
   });
 });
+
+describe("Settings host entry requests", () => {
+  it("preserves a newer request on stale abandon and reset clears pending state", () => {
+    const store = useSettingsHostScopeStore.getState();
+    store.requestHost("older-host");
+    store.abandonHostEntry("different-host");
+    expect(useSettingsHostScopeStore.getState().pendingHostId).toBe(
+      "older-host",
+    );
+
+    store.requestHost("newer-host");
+    store.abandonHostEntry("older-host");
+    expect(useSettingsHostScopeStore.getState().pendingHostId).toBe(
+      "newer-host",
+    );
+
+    store.reset();
+    expect(useSettingsHostScopeStore.getState().pendingHostId).toBeNull();
+  });
+});
