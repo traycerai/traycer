@@ -70,7 +70,9 @@ export type MarkdownRevisionAuthor = z.infer<
  * revisions whose overlapping hunks it dropped. A set (sorted, no duplicates),
  * not one revision: an ingest and a refused republish can both supersede
  * before one publish lands. Empty when the merge combined without dropping
- * anything.
+ * anything. `base` is a reference, not a dependency: the merging host diffs
+ * from the base document in its own local copy and never fetches it, so it
+ * may name a revision whose object expiry has removed.
  */
 export const markdownRevisionMergeSchema = lazySchema(() =>
   z
