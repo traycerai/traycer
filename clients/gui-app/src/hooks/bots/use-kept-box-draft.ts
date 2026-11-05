@@ -38,9 +38,9 @@ export function useKeptBoxDraft(
         ? null
         : {
             keep: (text) => typeThreadBox(botId, key, text),
-            revision: () =>
-              useBotDraftsStore.getState().threadBoxes[botId]?.[key]
-                ?.revision ?? null,
+            hasDraft: () =>
+              useBotDraftsStore.getState().threadBoxes[botId]?.[key] !==
+              undefined,
             unsent,
             offer: (message) => offerUnsent(botId, key, message),
           },

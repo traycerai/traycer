@@ -30,7 +30,7 @@ const MANIFEST: StemManifest = {
 const BIG_STEM_FRAMES = 32 * 1024 * 1024;
 
 function stubFetch(status: (call: number) => number) {
-  const fetchMock = vi.fn((_url: string, _init: RequestInit) =>
+  const fetchMock = vi.fn((_url: string) =>
     Promise.resolve(
       new Response(new ArrayBuffer(4), {
         status: status(fetchMock.mock.calls.length),
@@ -40,7 +40,6 @@ function stubFetch(status: (call: number) => number) {
   vi.stubGlobal("fetch", fetchMock);
   return {
     urls: () => fetchMock.mock.calls.map(([url]) => url),
-    inits: () => fetchMock.mock.calls.map(([, init]) => init),
   };
 }
 

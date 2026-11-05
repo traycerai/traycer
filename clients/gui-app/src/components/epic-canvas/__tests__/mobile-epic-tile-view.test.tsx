@@ -212,7 +212,6 @@ vi.mock("@/components/epic-canvas/mobile/tab-switcher-sheet", async () => {
               epicId={props.epicId}
               tabId={props.tabId}
               onClose={() => props.onOpenChange(false)}
-              trailing={null}
             />
           </MobileTileOpenTargetContext>
         </div>
