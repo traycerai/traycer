@@ -63,6 +63,7 @@ import {
   terminalSessionFixture,
 } from "@/hooks/sandboxes/__tests__/sandbox-fixtures";
 import {
+  formatSandboxDate,
   sandboxPeriodLabel,
   sandboxRowActionLabel,
   sandboxRowActions,
@@ -1206,7 +1207,9 @@ describe("<SandboxesSettingsPanel />", () => {
     );
     expect(
       within(rowOf("frozen")).getByTestId("sandboxes-row-clock").textContent,
-    ).toBe("Your credits ran out. Will be removed on 8 Nov");
+    ).toBe(
+      `Your credits ran out. Will be removed on ${formatSandboxDate(frozenDestroyAt(frozenAt), false)}`,
+    );
     expect(within(rowOf("frozen")).getAllByText("Out of credits")).toHaveLength(
       1,
     );

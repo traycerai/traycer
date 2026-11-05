@@ -11,6 +11,7 @@ import {
   terminalSessionFixture,
 } from "@/hooks/sandboxes/__tests__/sandbox-fixtures";
 import {
+  formatSandboxDate,
   SANDBOX_DEFAULT_IDLE_MINUTES,
   SANDBOX_ROW_FILTER_NONE,
   sandboxClockLine,
@@ -610,9 +611,9 @@ describe("sandboxClockLine, a resting row", () => {
       now: CLOCK_NOW,
     });
 
-  it("promises the next wake and dates the destroy to the minute", () => {
+  it("promises the next wake and dates the removal in the reader's locale", () => {
     expect(line({ destroyAt: DESTROY_AT }, 50)).toBe(
-      "Suspended since 09:49 · Suspend keeps memory · resumes on your next action · Will be removed on 1 Nov · $0.05 today",
+      `Suspended since 09:49 · Suspend keeps memory · resumes on your next action · Will be removed on ${formatSandboxDate(DESTROY_AT, false)} · $0.05 today`,
     );
   });
 
@@ -652,7 +653,7 @@ describe("sandboxClockLine, a resting row", () => {
 
   it("dates a stopped row's destroy unless it is started", () => {
     expect(line({ state: "stopped", destroyAt: DESTROY_AT }, 0)).toBe(
-      "Stopped since 09:49 · Will be removed on 1 Nov",
+      `Stopped since 09:49 · Will be removed on ${formatSandboxDate(DESTROY_AT, false)}`,
     );
   });
 
@@ -748,9 +749,12 @@ describe("sandboxIdlePolicyLine", () => {
 describe("sandboxFrozenClock", () => {
   it("dates the removal thirty days after the freeze", () => {
     const frozenAt = new Date(2026, 9, 9, 12, 0).getTime();
+    const destroyAt = new Date(2026, 10, 8, 12, 0).getTime();
     const clock = sandboxFrozenClock(frozenAt);
 
-    expect(clock).toBe("Will be removed on 8 Nov");
+    expect(clock).toBe(
+      `Will be removed on ${formatSandboxDate(destroyAt, false)}`,
+    );
   });
 });
 
@@ -1064,6 +1068,22 @@ describe("sandboxClockLine, an awake row's day from the ledger", () => {
       now: NOW,
     });
 
+  const movingLine = (
+    state: "resuming" | "starting",
+    todayAwakeMs: number | null,
+    resumePending: boolean,
+  ): string =>
+    sandboxClockLine({
+      summary: sandboxSummaryFixture({ state, burst: false }),
+      configuration: { kind: "personal" },
+      cost: cost(300, todayAwakeMs),
+      wakeString: null,
+      viewerUserId: null,
+      reachability: { unreachable: false, lastContactAt: null },
+      now: NOW,
+      resumePending,
+    });
+
   it("reads the ledger's awake time, not the time since the last wake, beside the day's cost", () => {
     const text = line(cost(300, 3_600_000));
 
@@ -1074,6 +1094,38 @@ describe("sandboxClockLine, an awake row's day from the ledger", () => {
   it("an older server's null duration hides the duration, never the wake's age labelled today, and keeps the label and the cost", () => {
     expect(line(cost(300, null))).toBe(
       "Awake · $0.30 today · suspends after 30 idle min",
+    );
+  });
+
+  it.each([
+    [
+      "resuming",
+      "Resuming · Awake 12 min today · $0.30 today · suspends after 30 idle min",
+    ],
+    [
+      "starting",
+      "Starting · Awake 12 min today · $0.30 today · suspends after 30 idle min",
+    ],
+  ] as const)(
+    "reads the ledger's awake time while %s without a pending action",
+    (state, expected) => {
+      expect(movingLine(state, 12 * 60_000, false)).toBe(expected);
+    },
+  );
+
+  it.each([
+    ["resuming", "Resuming · $0.30 today · suspends after 30 idle min"],
+    ["starting", "Starting · $0.30 today · suspends after 30 idle min"],
+  ] as const)(
+    "keeps the state word while %s when the ledger has no duration",
+    (state, expected) => {
+      expect(movingLine(state, null, false)).toBe(expected);
+    },
+  );
+
+  it("keeps the pending resume fence ahead of the ledger duration", () => {
+    expect(movingLine("resuming", 12 * 60_000, true)).toBe(
+      "Resuming · pending",
     );
   });
 });

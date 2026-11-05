@@ -611,7 +611,11 @@ export function sandboxFrozenNeedsOwnCredits(
 /** The frozen clock's sentence; the frozen date governs even a `never` period. */
 export function sandboxFrozenClock(frozenAt: number | null): string | null {
   if (frozenAt === null) return null;
-  return `Will be removed on ${new Date(frozenDestroyAt(frozenAt)).toLocaleDateString("en-GB", { day: "numeric", month: "short" })}`;
+  return sandboxRemovalLine(frozenDestroyAt(frozenAt));
+}
+
+function sandboxRemovalLine(at: number): string {
+  return `Will be removed on ${formatSandboxDate(at, false)}`;
 }
 
 /**
@@ -682,7 +686,7 @@ export function sandboxIdlePolicyLine(summary: SandboxSummary): string {
 }
 
 /**
- * `Will be removed on 1 Nov`, or `kept until you destroy it` on
+ * `Will be removed on Nov 1`, or `kept until you destroy it` on
  * a row that rests forever. `null` while a period is set but its date has not
  * arrived yet: a default drawn before the value would flash the wrong claim,
  * and `null` on a withdrawn row, whose retention the resting policy no longer
@@ -691,7 +695,7 @@ export function sandboxIdlePolicyLine(summary: SandboxSummary): string {
 function restingDestroyClause(summary: SandboxSummary): string | null {
   if (sandboxRetentionIsWithdrawn(summary)) return null;
   if (summary.destroyAt !== null) {
-    return `Will be removed on ${new Date(summary.destroyAt).toLocaleDateString("en-GB", { day: "numeric", month: "short" })}`;
+    return sandboxRemovalLine(summary.destroyAt);
   }
   const period = summary.destroyAfterRestingMinutes;
   // `0` is never, as the server spells it.
@@ -779,7 +783,12 @@ function awakeClockLine(input: SandboxClockInput): string {
   const awake =
     awakeMs === null
       ? hostSandboxStateWord(summary.state)
-      : `${hostSandboxStateWord(summary.state)} ${formatSandboxDuration(awakeMs)} today`;
+      : joinParts(
+          summary.state === "awake"
+            ? null
+            : hostSandboxStateWord(summary.state),
+          `${hostSandboxStateWord("awake")} ${formatSandboxDuration(awakeMs)} today`,
+        );
   if (summary.burst) {
     return joinParts(
       awake,
