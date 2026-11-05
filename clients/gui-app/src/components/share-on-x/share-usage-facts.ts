@@ -39,7 +39,7 @@ export interface ShareUsageFacts {
  * either resolves through the protocol's own names, and an id it does not
  * know is shown as written.
  */
-export function harnessDisplayName(harnessId: string): string {
+function harnessDisplayName(harnessId: string): string {
   if (isRunHarnessId(harnessId)) {
     return PROVIDER_DISPLAY_NAMES[TUI_HARNESS_ID_TO_PROVIDER_ID[harnessId]];
   }
