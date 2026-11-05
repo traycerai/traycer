@@ -683,7 +683,7 @@ describe("AgentHoverTooltip host section", () => {
     expect(text).toMatch(/\d+ min awake/);
     expect(text).toContain(hoverTodayCost(2000));
     expect(text).toContain("Suspends after 30 idle min");
-    expect(text).toContain("destroyed after 7 resting days");
+    expect(text).toContain("destroyed after 7 idle days");
     expect(text).toContain("Creator, build");
     expect(text).toContain("1 more in other tasks");
     for (const name of ["Open terminal", "Files", "Details"]) {

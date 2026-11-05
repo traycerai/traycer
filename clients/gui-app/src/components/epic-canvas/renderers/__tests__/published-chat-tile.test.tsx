@@ -2316,7 +2316,7 @@ describe("PublishedChatTile - the sandbox's own state", () => {
     expect(screen.queryByTestId("published-chat-dead-tile-chat-1")).toBeNull();
     const footer = screen.getByTestId("chat-tile-session-view");
     expect(footer.textContent).toBe(
-      "e2e-sbx-p3 was destroyed on Oct 28 at 00:55 after resting. Its files are gone; this chat stays readable.",
+      "e2e-sbx-p3 was destroyed on Oct 28 at 00:55 after its idle period. Its files are gone; this chat stays readable.",
     );
     // Its actions ride in the same line, for the chat's own owner host.
     const actions = within(footer).getByTestId("sandbox-end-actions");
