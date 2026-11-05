@@ -2,6 +2,10 @@ import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
 import { Badge } from "@/components/ui/badge";
 import { useState, type ReactNode } from "react";
 import {
+  HOST_FROZEN_WORD,
+  HOST_KIND_WORDS,
+} from "@traycer/protocol/host/host-status";
+import {
   ChevronDown,
   ChevronRight,
   Plus,
@@ -36,7 +40,6 @@ import {
   groupComposerHostOptions,
   groupHostOptions,
   hostOptionKindLabel,
-  hostRowTitle,
   hostRowSurfaceState,
   hostOptionStatusWord,
   isHostOptionSelectable,
@@ -305,6 +308,10 @@ export function HostSwitcher(props: {
    * `HostPickIntent`.
    */
   readonly intent: HostPickIntent;
+  readonly consequence: {
+    readonly heading: string;
+    readonly hint: string;
+  } | null;
   /**
    * Per-host reasons THIS surface cannot use a host, keyed by `hostId` — the
    * fork dialog's "needs update" for a target that does not speak the fork RPC
@@ -441,6 +448,16 @@ export function HostSwitcher(props: {
           <Command
             filter={props.composer === null ? undefined : composerSearchFilter}
           >
+            {props.consequence === null ? null : (
+              <div className="border-b px-3 py-2">
+                <p className="text-ui-sm font-semibold">
+                  {props.consequence.heading}
+                </p>
+                <p className="text-ui-xs text-muted-foreground">
+                  {props.consequence.hint}
+                </p>
+              </div>
+            )}
             {showSearch ? (
               <CommandInput
                 placeholder={SEARCH_HOSTS_PLACEHOLDER}
@@ -592,16 +609,14 @@ function hostSwitcherShowsSearch(
 const COMPOSER_UNFILTERED_PREFIXES = ["new-sandbox:", "action:"] as const;
 
 /**
- * Whether a composer host row matches a search: its title or its name
+ * Whether a composer host row matches a search: its name
  * contains the term, ignoring case. Partial terms narrow (`p2` keeps
  * `e2e-sbx-p2` alone), unlike cmdk's scattered-letter scoring.
  */
 function composerHostMatches(host: HostScopeOption, term: string): boolean {
   const needle = term.trim().toLocaleLowerCase();
   if (needle.length === 0) return true;
-  return [hostRowTitle(host, true), host.name].some((text) =>
-    text.toLocaleLowerCase().includes(needle),
-  );
+  return host.name.toLocaleLowerCase().includes(needle);
 }
 
 /**
@@ -1139,11 +1154,14 @@ function hostSwitcherTriggerText(
     selected === null
       ? null
       : hostOptionStatusWord(selected, AVAILABLE_HOST_ROW_SURFACE_STATE);
-  const name =
-    selected === null ? null : hostRowTitle(selected, composer !== null);
+  const name = selected?.name ?? null;
+  const spokenStatus =
+    status !== null && selected?.sandbox?.frozen
+      ? `${status} · ${HOST_FROZEN_WORD}`
+      : status;
   return {
     label: name ?? "Select a host",
-    ariaLabel: hostSwitcherLabel(intent, name, status),
+    ariaLabel: hostSwitcherLabel(intent, name, spokenStatus),
     status,
   };
 }
@@ -1175,6 +1193,8 @@ function HostSwitcherTrigger(props: {
   const { selected } = props;
   const text = hostSwitcherTriggerText(props.intent, selected, props.composer);
   const triggerStatus = text.status;
+  const showKind = ["rail", "panel-header"].includes(props.surfaceKind);
+  const kind = selected === null ? null : selected.kind;
   const keepFocusableWhenDisabled =
     props.disabled && props.keepFocusableWhenDisabled === true;
 
@@ -1228,6 +1248,15 @@ function HostSwitcherTrigger(props: {
             {triggerStatus}
           </span>
         )}
+        {triggerStatus !== null && selected?.sandbox?.frozen ? (
+          <Badge variant="warning">{HOST_FROZEN_WORD}</Badge>
+        ) : null}
+        {showKind && kind !== null ? (
+          <span className="shrink-0 text-ui-xs font-normal text-muted-foreground">
+            {" "}
+            {HOST_KIND_WORDS[kind]}
+          </span>
+        ) : null}
         <ChevronDown className="size-3.5 shrink-0 text-muted-foreground" />
       </Button>
     </PopoverTrigger>
@@ -1367,7 +1396,7 @@ function HostSwitcherRow(props: {
     surfaceInert: props.surfaceInert,
   });
   const selectable = isHostOptionSelectable(host, props.intent, surfaceState);
-  const title = hostRowTitle(host, props.composer);
+  const title = host.name;
   return (
     <CommandItem
       value={host.hostId}
@@ -1395,7 +1424,7 @@ function HostSwitcherRow(props: {
           host={host}
           title={title}
           subLines={[
-            composerComputerSubLine(host, selectable, title !== host.name),
+            composerComputerSubLine(host, selectable),
             ...props.subLines,
           ]}
         />

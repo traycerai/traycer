@@ -222,7 +222,7 @@ describe("useSandboxWakeForOpenedTile", () => {
 
       expect(mocks.toastWarning).toHaveBeenCalledTimes(1);
       expect(mocks.toastWarning.mock.calls[0][0]).toBe(
-        "This sandbox is frozen",
+        "This sandbox is out of credits.",
       );
       cleanup();
     }

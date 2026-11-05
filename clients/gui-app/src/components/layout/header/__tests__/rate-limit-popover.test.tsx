@@ -1,3 +1,6 @@
+import { useSettingsHostScopeStore } from "@/stores/settings/settings-host-scope-store";
+import { useTabsStore } from "@/stores/tabs/store";
+import { PERSONAL_PICK } from "@/lib/settings-environment-pages";
 import {
   afterEach,
   beforeEach,
@@ -37,11 +40,12 @@ import {
   hostScopeFixture,
   hostScopeOptionFixture,
 } from "@/components/settings/host-scope/host-scope-fixture";
+import type { HostScopeOption } from "@/components/settings/host-scope/host-scope-model";
 import type { HostScope } from "@/components/settings/host-scope/use-host-scope";
 import { useAccountContextStore } from "@/stores/auth/account-context-store";
 import { useDesktopDialogStore } from "@/stores/dialogs/desktop-dialog-store";
 import { useProvidersFocusStore } from "@/stores/settings/providers-focus-store";
-import { useSettingsHostScopeStore } from "@/stores/settings/settings-host-scope-store";
+
 import { useSettingsSearchStore } from "@/stores/settings/settings-search-store";
 import type {
   AvailableProviderRateLimits,
@@ -114,6 +118,9 @@ type MockState = {
   // a test can assert the button subscribes to EVERY configured httpFetch
   // provider's query state, not just the first.
   lastUseHostQueriesProviderIds: ReadonlyArray<string> | null;
+  settingsHost: HostScopeOption | null;
+  settingsOverlayActive: boolean;
+  routerPathname: string;
   profileSelection: {
     shownProfiles: Readonly<Record<string, ReadonlyArray<string | null>>>;
     lastProfileByHarness: Readonly<Record<string, string | null>>;
@@ -142,6 +149,9 @@ const mocks = vi.hoisted<MockState>(() => ({
   consumeReset: vi.fn(),
   lastUseHostQueriesOptions: null,
   lastUseHostQueriesProviderIds: null,
+  settingsHost: null,
+  settingsOverlayActive: false,
+  routerPathname: "/",
   profileSelection: {
     shownProfiles: {},
     lastProfileByHarness: {},
@@ -294,7 +304,31 @@ vi.mock("@/lib/rate-limits/provider-rate-limit-fetch", () => ({
 }));
 vi.mock("@/stores/tabs/use-system-tab-modal", () => ({
   useSystemTabModalActions: () => ({ openSettings: mocks.openSettings }),
+  useSystemOverlayActive: () => mocks.settingsOverlayActive,
 }));
+vi.mock("@tanstack/react-router", async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import("@tanstack/react-router")>();
+  return {
+    ...actual,
+    useRouterState: (args: {
+      select: (state: { location: { pathname: string } }) => unknown;
+    }) => args.select({ location: { pathname: mocks.routerPathname } }),
+  };
+});
+vi.mock(
+  "@/components/settings/host-scope/use-host-scope",
+  async (importOriginal) => {
+    const actual =
+      await importOriginal<
+        typeof import("@/components/settings/host-scope/use-host-scope")
+      >();
+    return {
+      ...actual,
+      useHostScope: () => ({ host: mocks.settingsHost }),
+    };
+  },
+);
 // The Traycer tab reads the signed-in user's subscription (AuthService), not a
 // host RPC. Default is a signed-out/cold user -> no Traycer tab, so the
 // host-RPC-provider tests below behave exactly as before.
@@ -988,7 +1022,11 @@ beforeEach(() => {
   // per-provider links carry across. Neither is reset by the render, so a
   // leftover from the previous case would let an assertion pass on it.
   useSettingsSearchStore.getState().clearReveal();
-  useSettingsHostScopeStore.getState().setScopedHostId(null);
+  useSettingsHostScopeStore.getState().reset();
+  mocks.settingsHost = null;
+  mocks.settingsOverlayActive = false;
+  mocks.routerPathname = "/";
+  useTabsStore.setState(useTabsStore.getInitialState(), true);
   onClose = vi.fn();
 });
 
@@ -3459,7 +3497,7 @@ describe("<RateLimitPopover /> manage provider links", () => {
       // No tab named: Providers resolves this provider's own first tab.
       focusTab: null,
     });
-    expect(useSettingsHostScopeStore.getState().scopedHostId).toBe("host-a");
+    expect(useSettingsHostScopeStore.getState().pendingHostId).toBe("host-a");
   });
 
   it("deep-links an ambient provider from its own header", () => {
@@ -3966,13 +4004,43 @@ describe("<RateLimitPopover /> Traycer tab", () => {
 
 describe("<RateLimitPopover /> host picker", () => {
   it("shows no host picker row when there is only one host", () => {
-    renderPopover();
+    const host = hostScopeOptionFixture({
+      hostId: "host-a",
+      name: "tgill-popos",
+      kind: "personal",
+    });
+    renderPopoverWithScope(hostScopeFixture({ host, hosts: [host] }), false);
     expect(screen.queryByTestId("rate-limit-host-picker-row")).toBeNull();
+    expect(screen.getByTestId("rate-limit-host-identity").textContent).toBe(
+      "tgill-popos · Computer",
+    );
   });
 
-  it("shows a host picker row when there is more than one host", () => {
-    renderPopoverWithScope(twoHostScope({}), false);
+  it("names an empty host scope without inventing a kind", () => {
+    renderPopoverWithScope(hostScopeFixture({ host: null, hosts: [] }), false);
+
+    expect(screen.getByTestId("rate-limit-host-identity").textContent).toBe(
+      "No host",
+    );
+  });
+
+  it("shows the watched sandbox's name and kind in the picker when there is more than one host", () => {
+    const sandbox = hostScopeOptionFixture({
+      hostId: "host-sandbox",
+      name: "quiet-harbor",
+      kind: "sandbox",
+    });
+    renderPopoverWithScope(
+      twoHostScope({
+        host: sandbox,
+        hosts: [sandbox, hostScopeOptionFixture({ hostId: "host-a" })],
+      }),
+      false,
+    );
     expect(screen.getByTestId("rate-limit-host-picker-row")).toBeTruthy();
+    expect(screen.getByTestId("settings-host-switcher").textContent).toBe(
+      "quiet-harbor Sandbox",
+    );
   });
 
   // The `vanished` exception: a pick that no longer resolves is not a choice,
@@ -3993,6 +4061,166 @@ describe("<RateLimitPopover /> host picker", () => {
     });
     renderPopoverWithScope(scope, true);
     expect(screen.getByTestId("rate-limit-host-picker-row")).toBeTruthy();
+  });
+
+  it("names a stale pin, shows active-host usage, and forgets the saved name", () => {
+    const active = hostScopeOptionFixture({ hostId: "host-a", name: "Alpha" });
+    const forget = vi.fn();
+    const activeProfile = providerProfile({
+      profileId: "active-profile",
+      kind: "managed",
+      label: "Active profile",
+      tier: "Max",
+      usageUpdatedAt: NOW - 10_000,
+    });
+    mocks.configured = [
+      {
+        providerId: "claude-code",
+        lane: "ephemeralProcess",
+        profiles: [activeProfile],
+      },
+    ];
+    mocks.results = {
+      "claude-code": readyResult(claudeReady()),
+      [resultKey("claude-code", "active-profile")]: readyResult(claudeReady()),
+    };
+    const scope = hostScopeFixture({
+      host: null,
+      hosts: [active],
+      activeHostId: active.hostId,
+      activeHost: active,
+      vanishedHostId: "host-gone",
+      hostLabel: "host-gone",
+      vanishedSelection: { name: "Bright Meadow", forget },
+      status: "vanished",
+      isViewingActive: false,
+    });
+    renderPopoverWithScope(scope, true);
+
+    expect(screen.getByTestId("settings-host-switcher").textContent).toBe(
+      "Alpha Computer",
+    );
+    expect(
+      screen.getByTestId("rate-limit-host-stale-pin").textContent,
+    ).toContain("Bright Meadow is no longer here. You're seeing Alpha.");
+    expect(screen.getByText("Current session")).toBeTruthy();
+    const profileEye = screen.getByRole("button", {
+      name: "Show Active profile in status bar",
+    });
+    expect(profileEye.getAttribute("aria-pressed")).toBe("false");
+    fireEvent.click(profileEye);
+    expect(useLayoutStore.getState().arrangement.shownProfiles).toEqual({
+      "host-a": { "claude-code": ["active-profile"] },
+    });
+    expect(profileEye.getAttribute("aria-pressed")).toBe("true");
+    fireEvent.click(
+      screen.getByRole("button", { name: "Forget Bright Meadow" }),
+    );
+    expect(forget).toHaveBeenCalledTimes(1);
+
+    cleanup();
+    renderPopoverWithScope(
+      hostScopeFixture({
+        host: null,
+        hosts: [],
+        activeHost: null,
+        activeHostId: null,
+        vanishedHostId: "host-gone",
+        vanishedSelection: { name: "Bright Meadow", forget },
+        status: "vanished",
+        isViewingActive: false,
+      }),
+      true,
+    );
+    expect(screen.getByTestId("rate-limit-host-picker-row")).toBeTruthy();
+    expect(
+      screen.getByTestId("settings-host-switcher-empty").textContent,
+    ).toContain("No hosts yet");
+    expect(screen.getByTestId("rate-limit-host-stale-pin").textContent).toBe(
+      "Bright Meadow is no longer here.Forget Bright Meadow",
+    );
+    expect(screen.queryByTestId("rate-limit-popover-panes")).toBeNull();
+  });
+
+  it("shows Settings mismatch only while Settings is visible and changes usage scope alone", () => {
+    const settingsHost = hostScopeOptionFixture({
+      hostId: "host-b",
+      name: "Bravo",
+    });
+    const setUsageHost = vi.fn();
+    mocks.settingsHost = settingsHost;
+    useSettingsHostScopeStore.getState().selectHost(PERSONAL_PICK, {
+      hostId: settingsHost.hostId,
+      name: settingsHost.name,
+    });
+    const settingsSelectionBefore =
+      useSettingsHostScopeStore.getState().hostByEnvironment;
+    const usageScope = twoHostScope({ setHostId: setUsageHost });
+
+    const closed = renderPopoverWithScope(usageScope, false);
+    expect(screen.queryByTestId("rate-limit-host-mismatch")).toBeNull();
+    closed.unmount();
+
+    mocks.settingsOverlayActive = true;
+    renderPopoverWithScope(usageScope, false);
+    expect(screen.getByTestId("rate-limit-host-mismatch").textContent).toBe(
+      "Showing Alpha. Settings is showing Bravo.Show Bravo here",
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Show Bravo here" }));
+
+    expect(setUsageHost).toHaveBeenCalledWith("host-b");
+    expect(useSettingsHostScopeStore.getState().hostByEnvironment).toEqual(
+      settingsSelectionBefore,
+    );
+    expect(useSettingsHostScopeStore.getState().pendingHostId).toBeNull();
+    expect(useTabsStore.getState().activeItemId).toBeNull();
+  });
+
+  it("treats a Settings surface in the active split as visible", () => {
+    const settingsHost = hostScopeOptionFixture({
+      hostId: "host-b",
+      name: "Bravo",
+    });
+    mocks.settingsHost = settingsHost;
+    useSettingsHostScopeStore.getState().selectHost(PERSONAL_PICK, {
+      hostId: settingsHost.hostId,
+      name: settingsHost.name,
+    });
+    useTabsStore.setState({
+      items: [
+        {
+          kind: "split",
+          id: "split-settings",
+          left: { kind: "tab", ref: { kind: "settings", id: "settings" } },
+          right: { kind: "tab", ref: { kind: "history", id: "history" } },
+          focusedSide: "left",
+          routeBackingSide: "left",
+          leftRatio: 0.5,
+        },
+      ],
+      activeItemId: "split-settings",
+      systemTabs: {
+        settings: {
+          id: "settings",
+          kind: "settings",
+          name: "Settings",
+          lastPath: null,
+        },
+        history: {
+          id: "history",
+          kind: "history",
+          name: "History",
+          lastPath: null,
+        },
+      },
+    });
+
+    renderPopoverWithScope(twoHostScope({}), false);
+
+    expect(
+      screen.getByTestId("rate-limit-host-mismatch").textContent,
+    ).toContain("Settings is showing Bravo.");
   });
 
   it("scopes the view without making the picked host active", () => {

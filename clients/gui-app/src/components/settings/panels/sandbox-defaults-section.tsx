@@ -210,7 +210,7 @@ export function SandboxDefaultsSection(props: {
 }
 
 const KEPT_UNTIL_IDLE_CHANGED =
-  "Sandboxes you already have aren't destroyed after resting until you change their Idle settings.";
+  "Sandboxes you already have aren't destroyed when idle until you change their Idle settings.";
 
 function DefaultsHeading(props: {
   readonly configuration: SandboxPageConfiguration;
@@ -306,7 +306,7 @@ function SandboxDefaultsList(props: {
       </dt>
       <dd data-testid="sandboxes-defaults-idle">{idleText}</dd>
       <dt className="text-muted-foreground">
-        Destroy after resting for (empty: never)
+        Destroy after idle for (empty: never)
       </dt>
       <dd data-testid="sandboxes-defaults-resting">{restingText}</dd>
     </dl>
@@ -359,7 +359,9 @@ function defaultsOfForm(
   }
   const restingMinutes = periodMinutes(resting);
   if (restingMinutes !== null && Number.isNaN(restingMinutes)) {
-    return { problem: "Resting period must be a whole number, or empty." };
+    return {
+      problem: '"Destroy after idle for" must be a whole number, or empty.',
+    };
   }
   const defaults = stageShapeDefaults(catalogue, {
     ...picked,
@@ -434,7 +436,7 @@ function SandboxDefaultsForm(props: {
         />
         <PeriodInput
           id={`${ids}-resting`}
-          label="Destroy after resting for (empty: never)"
+          label="Destroy after idle for (empty: never)"
           placeholder="Never"
           field={resting}
           testId="sandboxes-defaults-resting-input"
