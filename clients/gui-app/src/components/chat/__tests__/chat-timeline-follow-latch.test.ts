@@ -9784,5 +9784,85 @@ describe("useChatTimelineFollowLatch", () => {
       expect(onFollowIntentChange).toHaveBeenLastCalledWith(false);
       expect(listRef.scrollToEnd).toHaveBeenCalledTimes(1);
     });
+
+    /** A reply's row enters below a following reader's view and the list
+     *  itself lands the view on the new end, written from offset 1000. */
+    function listLandsViewOnEnd(): {
+      readonly node: HTMLDivElement;
+      readonly listRef: HeldCommandListRef;
+      readonly result: { readonly current: ChatTimelineFollowLatch };
+      readonly onFollowIntentChange: Mock<(isFollowing: boolean) => void>;
+    } {
+      const mounted = mountHeldFollowing();
+      const { node } = mounted;
+      fireNativeScroll(node);
+      shim.setGeometry(node, { scrollHeight: 2300 });
+      fireListAdjust(node, { scrollTop: 1800, scrollHeight: 2300 });
+      return mounted;
+    }
+
+    /** The row's height swings: the list moves the view up off the end over
+     *  it, and the row settles back to the height the end write left. */
+    function listMovesViewOffEndAndBack(node: HTMLDivElement): void {
+      shim.setGeometry(node, { scrollHeight: 3100 });
+      fireListAdjust(node, { scrollTop: 1010, scrollHeight: 3100 });
+      shim.setGeometry(node, { scrollHeight: 2300 });
+    }
+
+    it("corrects again when the browser drops the list's end write and the report finds the view where it was written from", () => {
+      const { node, listRef, onFollowIntentChange } = listLandsViewOnEnd();
+      listMovesViewOffEndAndBack(node);
+
+      shim.setGeometry(node, { scrollTop: 1000 });
+      fireNativeScroll(node);
+
+      expect(onFollowIntentChange).not.toHaveBeenCalledWith(false);
+      expect(node.scrollTop).toBe(1800);
+      expect(listRef.scrollToEnd).toHaveBeenCalledTimes(1);
+    });
+
+    it("keeps the list's end write for a read at other heights, so the fall-back after it is still corrected", () => {
+      const { node, listRef, result, onFollowIntentChange } =
+        listLandsViewOnEnd();
+
+      shim.setGeometry(node, { scrollHeight: 2301 });
+      result.current.followEndIfPermitted();
+      shim.setGeometry(node, { scrollHeight: 2300 });
+      listMovesViewOffEndAndBack(node);
+
+      shim.setGeometry(node, { scrollTop: 1000 });
+      fireNativeScroll(node);
+
+      expect(onFollowIntentChange).not.toHaveBeenCalledWith(false);
+      expect(node.scrollTop).toBe(1800);
+      expect(listRef.scrollToEnd).toHaveBeenCalledTimes(1);
+    });
+
+    it("corrects again when the list's next write is the first to find the view back where its end write started", () => {
+      const { node, listRef, onFollowIntentChange } = listLandsViewOnEnd();
+      listMovesViewOffEndAndBack(node);
+
+      shim.setGeometry(node, { scrollTop: 1000 });
+      fireListAdjust(node, { scrollTop: 1010, scrollHeight: 2300 });
+      fireNativeScroll(node);
+
+      expect(onFollowIntentChange).not.toHaveBeenCalledWith(false);
+      expect(node.scrollTop).toBe(1800);
+      expect(listRef.scrollToEnd).toHaveBeenCalledTimes(1);
+    });
+
+    it("publishes departure when the browser drops the same end write a second time", () => {
+      const { node, onFollowIntentChange } = listLandsViewOnEnd();
+      listMovesViewOffEndAndBack(node);
+      shim.setGeometry(node, { scrollTop: 1000 });
+      fireNativeScroll(node);
+      expect(node.scrollTop).toBe(1800);
+      fireNativeScroll(node);
+
+      shim.setGeometry(node, { scrollTop: 1000 });
+      fireNativeScroll(node);
+
+      expect(onFollowIntentChange).toHaveBeenLastCalledWith(false);
+    });
   });
 });

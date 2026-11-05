@@ -1721,6 +1721,29 @@ describe("ChatTimeline follow-latch real-LegendList integration", () => {
       expect(scrollToEnd).toHaveBeenCalledTimes(2);
     });
 
+    it("corrects again when the browser drops the write an ordinary row-shape commit made", async () => {
+      const messages = makeMessages(ROW_COUNT);
+      const { node, scrollToEnd, commit, onFollowIntentChange } =
+        await mountFollowing(messages);
+      const parked = node.scrollTop;
+
+      commit(appendAssistantRows(messages, 1, "sent"), false);
+      expectAtTrueEnd(node);
+      expect(scrollToEnd).toHaveBeenCalledTimes(1);
+      // The write's own report reaches the latch.
+      fireNativeScroll(node);
+
+      // The browser drops the write a frame after it landed: the view is
+      // back at the offset it was written from, the content end unmoved.
+      node.scrollTop = parked;
+      fireNativeScroll(node);
+      await advanceLegendListFrames(1);
+
+      expect(onFollowIntentChange).not.toHaveBeenCalledWith(false);
+      expectAtTrueEnd(node);
+      expect(scrollToEnd).toHaveBeenCalledTimes(2);
+    });
+
     for (const restart of ["append", "hydrate"] as const) {
       it(`closes a void replacement's hold after ${restart === "append" ? "an append" : "hydration"} restarts its settle loop`, async () => {
         const messages = makeMessages(ROW_COUNT);
