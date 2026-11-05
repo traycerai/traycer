@@ -581,6 +581,43 @@ describe("encodeMarkdownRevision refuses anything the schema would drop", () => 
 
     expectInvalid(() => encodeMarkdownRevision(envelope), /does not keep/u);
   });
+
+  it("refuses a document array carrying an own property that is not an index", () => {
+    // An element walk never sees the extra property and the schema rebuilds
+    // the array without it, so the refusal has to come from the array itself.
+    const content = [
+      { type: "paragraph", content: [{ type: "text", text: "hello" }] },
+    ];
+    Object.assign(content, { futureField: { at: 1 } });
+    const envelope: MarkdownRevisionEnvelope = {
+      ...baseEnvelope(),
+      document: { type: "doc", content },
+    };
+
+    expectInvalid(() => encodeMarkdownRevision(envelope), /not a JSON value/u);
+  });
+
+  it("refuses attrs holding a sparse array", () => {
+    // `JSON.stringify` writes the hole at index 0 as `null`, so the bytes
+    // would name an array the caller never held.
+    const ids: unknown[] = [];
+    ids[1] = "x";
+    const envelope: MarkdownRevisionEnvelope = {
+      ...baseEnvelope(),
+      document: {
+        type: "doc",
+        content: [
+          {
+            type: "paragraph",
+            attrs: { ids },
+            content: [{ type: "text", text: "hello" }],
+          },
+        ],
+      },
+    };
+
+    expectInvalid(() => encodeMarkdownRevision(envelope), /not a JSON value/u);
+  });
 });
 
 describe("decodeMarkdownRevision refusals", () => {
