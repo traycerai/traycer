@@ -63,19 +63,26 @@ describe("FallbackLadderEditor", () => {
     expect(labels[1]).toContain(FALLBACK_RUNG_COPY.notify.label);
   });
 
-  it("states that switching starts a new agent session, unconditionally, above the step list", () => {
-    // This paragraph answers the page's central question - what happens to my
-    // chat - and nothing on the page said it before:
-    // the switch-back row's "starts a fresh session too" had no antecedent,
-    // since nothing had ever said the OUTBOUND switch started one either.
-    // Falsification: delete the `<p>` above the DndContext in
-    // `fallback-ladder-editor.tsx`. This is the only place that sentence is
-    // said, so nothing else would catch its silent removal.
+  it("states the ladder consequence and keeps session and reorder details under collapsed Help", () => {
     renderLadder(vi.fn(), vi.fn(), ALL_ENABLED);
     expect(
       screen.getByText(
-        "Switching accounts or models starts a new agent session using this chat's history, and retries the blocked message there. Messages waiting to run use the new account or model too.",
+        "Try another account or model, wait for reset, then notify you if needed.",
       ),
+    ).toBeDefined();
+    const help = screen.getByText("Help").closest("details");
+    expect(help).not.toBeNull();
+    if (help === null) return;
+    expect(help).toHaveProperty("open", false);
+    fireEvent.click(screen.getByText("Help"));
+    expect(help).toHaveProperty("open", true);
+    expect(
+      within(help).getByText(
+        /Switching accounts or models starts a new agent session/,
+      ),
+    ).toBeDefined();
+    expect(
+      within(help).getByText(/Reorder with Move up and Move down/),
     ).toBeDefined();
   });
 

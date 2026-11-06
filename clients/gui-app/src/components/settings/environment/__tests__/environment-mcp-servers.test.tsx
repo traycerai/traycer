@@ -162,7 +162,38 @@ function offFor(providers: readonly ProviderId[]): string[] {
   return providers.map((id) => providerIdToGuiHarnessId(id));
 }
 
+async function openRemoveForGithub(): Promise<void> {
+  await userEvent.click(
+    await screen.findByRole("button", { name: "More for github" }),
+  );
+  await userEvent.click(
+    await screen.findByRole("menuitem", { name: "Remove" }),
+  );
+}
+
 describe("The MCP servers page", () => {
+  it("keeps Add a server in the page header and puts row actions in More", async () => {
+    negotiateMethods(ALL_METHODS);
+    const harness = mountTeamPage(
+      poolSource("editor"),
+      handlers({
+        servers: () => [declaredServer({ serverId: "srv-1", name: "github" })],
+        hostServers: [],
+      }),
+    );
+    render(<EnvironmentMcpServersPage />, { wrapper: harness.Wrapper });
+
+    expect(
+      await screen.findByRole("button", { name: "Add a server" }),
+    ).toBeTruthy();
+    expect(screen.queryByRole("heading", { name: "Servers" })).toBeNull();
+    await userEvent.click(
+      screen.getByRole("button", { name: "More for github" }),
+    );
+    expect(await screen.findByRole("menuitem", { name: "Edit" })).toBeTruthy();
+    expect(screen.getByRole("menuitem", { name: "Remove" })).toBeTruthy();
+  });
+
   it.each([
     { off: [], phrase: "all providers" },
     { off: CAPABLE.slice(1), phrase: "Codex only" },
@@ -374,7 +405,7 @@ describe("The MCP servers page", () => {
     },
   );
 
-  it("keeps a tool's toggle through switching the server off and on again", async () => {
+  it("shows a mixed shared tool state while retaining per-provider toggle details", async () => {
     negotiateMethods(ALL_METHODS);
     // Models the host's contract: setEnabled false takes the server out of
     // every provider but keeps its toggles; setEnabled true brings the item
@@ -416,6 +447,11 @@ describe("The MCP servers page", () => {
     expect(await screen.findByText("Enabled")).toBeTruthy();
     await userEvent.click(screen.getByRole("button", { name: "Tools" }));
 
+    const sharedSearch = await screen.findByRole("switch", {
+      name: "github search",
+    });
+    expect(sharedSearch.getAttribute("aria-checked")).toBe("mixed");
+    await userEvent.click(screen.getByText("Differs by provider"));
     expect(
       (
         await screen.findByRole("switch", { name: "github Codex search" })
@@ -423,9 +459,12 @@ describe("The MCP servers page", () => {
     ).toBe("false");
     expect(
       screen
-        .getByRole("switch", { name: "github Codex open" })
+        .getByRole("switch", { name: "github open" })
         .getAttribute("aria-checked"),
     ).toBe("true");
+    expect(screen.getAllByRole("switch", { name: "github open" })).toHaveLength(
+      1,
+    );
     expect(
       harness.paramsOf("environment.configuration.mcpServers.setEnabled"),
     ).toEqual([
@@ -433,6 +472,64 @@ describe("The MCP servers page", () => {
       { environmentId: "env-a", serverId: "srv-1", enabled: true },
     ]);
     expectNoItemOrDeclarationWrites(harness);
+  });
+
+  it("shows one mixed shared tool switch and saves its state across providers once", async () => {
+    negotiateMethods(ALL_METHODS);
+    const harness = mountTeamPage(
+      poolSource("editor"),
+      handlers({
+        servers: () => [
+          declaredServer({
+            serverId: "srv-1",
+            name: "github",
+            item: {
+              key: "github",
+              revision: 4,
+              toolToggles: { claude: { search: false } },
+              offFor: [],
+            },
+          }),
+        ],
+        hostServers: [hostMcpServer("github", ["search"])],
+      }),
+    );
+    render(<EnvironmentMcpServersPage />, { wrapper: harness.Wrapper });
+
+    await userEvent.click(await screen.findByRole("button", { name: "Tools" }));
+    const sharedSwitch = await screen.findByRole("switch", {
+      name: "github search",
+    });
+    expect(sharedSwitch.getAttribute("aria-checked")).toBe("mixed");
+    expect(
+      screen.getAllByRole("switch", { name: "github search" }),
+    ).toHaveLength(1);
+    await userEvent.click(screen.getByText("Differs by provider"));
+    expect(
+      await screen.findByRole("switch", { name: "github Codex search" }),
+    ).toBeTruthy();
+
+    await userEvent.click(sharedSwitch);
+    const writes = harness.paramsOf("environment.configuration.items.put");
+    expect(writes).toHaveLength(1);
+    expect(writes[0]).toMatchObject({
+      environmentId: "env-a",
+      kind: "mcp_server",
+      key: "github",
+      value: {
+        mcpServerId: "srv-1",
+        toolToggles: Object.fromEntries(
+          CAPABLE.map((providerId) => [
+            providerIdToGuiHarnessId(providerId),
+            { search: true },
+          ]),
+        ),
+      },
+      revision: 4,
+    });
+    expect(
+      harness.paramsOf("environment.configuration.mcpServers.put"),
+    ).toHaveLength(0);
   });
 
   describe("a server's Tools that cannot be shown", () => {
@@ -484,7 +581,7 @@ describe("The MCP servers page", () => {
 
       expect(
         await screen.findByRole("switch", {
-          name: "github Claude Code search",
+          name: "github search",
         }),
       ).toBeTruthy();
     });
@@ -567,9 +664,7 @@ describe("The MCP servers page", () => {
       );
       render(<EnvironmentMcpServersPage />, { wrapper: harness.Wrapper });
 
-      await userEvent.click(
-        await screen.findByRole("button", { name: "Remove" }),
-      );
+      await openRemoveForGithub();
       const dialog = await screen.findByRole("dialog");
 
       expect(within(dialog).getByText("Remove github?")).toBeTruthy();
@@ -596,9 +691,7 @@ describe("The MCP servers page", () => {
     );
     render(<EnvironmentMcpServersPage />, { wrapper: harness.Wrapper });
 
-    await userEvent.click(
-      await screen.findByRole("button", { name: "Remove" }),
-    );
+    await openRemoveForGithub();
     await userEvent.click(
       within(await screen.findByRole("dialog")).getByRole("button", {
         name: "Cancel",
@@ -611,7 +704,7 @@ describe("The MCP servers page", () => {
       harness.paramsOf("environment.configuration.mcpServers.delete"),
     ).toHaveLength(0);
 
-    await userEvent.click(screen.getByRole("button", { name: "Remove" }));
+    await openRemoveForGithub();
     await userEvent.click(
       within(await screen.findByRole("dialog")).getByRole("button", {
         name: "Remove server",
@@ -649,9 +742,7 @@ describe("The MCP servers page", () => {
       });
       render(<EnvironmentMcpServersPage />, { wrapper: harness.Wrapper });
 
-      await userEvent.click(
-        await screen.findByRole("button", { name: "Remove" }),
-      );
+      await openRemoveForGithub();
       await userEvent.click(
         within(await screen.findByRole("dialog")).getByRole("button", {
           name: "Remove server",
@@ -678,7 +769,7 @@ describe("The MCP servers page", () => {
     render(<EnvironmentMcpServersPage />, { wrapper: harness.Wrapper });
 
     expect(await screen.findByText("github")).toBeTruthy();
-    for (const verb of ["Add a server", "Edit", "Remove"]) {
+    for (const verb of ["Add a server", "More for github"]) {
       expect(screen.queryByRole("button", { name: verb })).toBeNull();
     }
     expect(screen.queryByRole("switch")).toBeNull();

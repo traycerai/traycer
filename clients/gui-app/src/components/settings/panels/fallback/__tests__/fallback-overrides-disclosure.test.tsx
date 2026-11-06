@@ -1,4 +1,4 @@
-import { cleanup, render, screen } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   createDefaultFallbackPolicy,
@@ -37,7 +37,9 @@ describe("FallbackOverridesMatrix disclosure", () => {
     expect(
       screen.queryByRole("button", { name: /Per-failure overrides/i }),
     ).toBeNull();
-    // Overview is visible with no click: every problem is listed.
+    expect(screen.getByText("5 problems follow the main plan")).toBeTruthy();
+    expect(screen.queryAllByTestId(/^fallback-override-row-/)).toHaveLength(0);
+    fireEvent.click(screen.getByRole("button", { name: "Customize" }));
     expect(screen.getAllByTestId(/^fallback-override-row-/)).toHaveLength(5);
   });
 });

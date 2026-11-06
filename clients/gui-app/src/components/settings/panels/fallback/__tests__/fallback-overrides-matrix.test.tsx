@@ -92,6 +92,10 @@ function renderMatrixWith(
 }
 
 function rowButton(reason: HostNotificationStoppedReason): HTMLElement {
+  const customize = screen.queryByRole("button", { name: "Customize" });
+  if (customize?.getAttribute("aria-expanded") === "false") {
+    fireEvent.click(customize);
+  }
   return screen.getByRole("button", {
     name: new RegExp(`^${FALLBACK_REASON_LABELS[reason]}`),
   });
@@ -147,8 +151,11 @@ afterEach(() => {
 });
 
 describe("FallbackOverridesMatrix - the expandable list", () => {
-  it("starts with every editable row collapsed and no checkbox reachable", () => {
+  it("summarizes inherited problems and hides provider rows until Customize", () => {
     renderMatrix(policy({}));
+    expect(screen.getByText("5 problems follow the main plan")).toBeTruthy();
+    expect(screen.queryAllByTestId(/^fallback-override-row-/)).toHaveLength(0);
+    fireEvent.click(screen.getByRole("button", { name: "Customize" }));
     for (const reason of EDITABLE_REASONS) {
       expect(rowButton(reason).getAttribute("aria-expanded")).toBe("false");
     }
@@ -157,6 +164,7 @@ describe("FallbackOverridesMatrix - the expandable list", () => {
 
   it("draws exactly five editable rows, each keeping its row testid on the whole row", () => {
     renderMatrix(policy({}));
+    fireEvent.click(screen.getByRole("button", { name: "Customize" }));
     for (const reason of EDITABLE_REASONS) {
       const row = screen.getByTestId(`fallback-override-row-${reason}`);
       // The testid is on the ENTIRE row: the disclosure button lives inside it.
@@ -252,13 +260,13 @@ describe("FallbackOverridesMatrix - editing", () => {
     ]);
   });
 
-  it("an off value is distinct from an empty row: it reads as 'recovery disabled', not as unchecked choices", () => {
+  it("an off value is distinct from an empty row: expanded copy says recovery is disabled", () => {
     renderMatrix(policy({ reasonOverrides: { auth: "off" } }));
+    openRow("auth");
     const row = screen.getByTestId("fallback-override-row-auth");
     expect(
-      within(row).getByText(/Recovery disabled for this problem/),
+      within(row).getByText(/Recovery is disabled for this problem/),
     ).not.toBeNull();
-    openRow("auth");
     expect(isChecked(choice("auth", "account"))).toBe(false);
     expect(isChecked(choice("auth", "model"))).toBe(false);
   });
@@ -312,20 +320,17 @@ describe("FallbackOverridesMatrix - editing", () => {
     expect(within(row).queryByText("Main plan")).toBeNull();
   });
 
-  it("a row without an override is labelled Main plan and the others Custom only when overridden", () => {
+  it("marks an overridden row Custom while inherited behavior stays in the summary", () => {
     renderMatrix(
       policy({ reasonOverrides: { rate_limit: ["profile", "notify"] } }),
     );
+    fireEvent.click(screen.getByRole("button", { name: "Customize" }));
     expect(
       within(screen.getByTestId("fallback-override-row-rate_limit")).getByText(
         "Custom",
       ),
     ).not.toBeNull();
-    expect(
-      within(screen.getByTestId("fallback-override-row-billing")).getByText(
-        "Main plan",
-      ),
-    ).not.toBeNull();
+    expect(screen.queryByText("Main plan")).toBeNull();
   });
 
   it("opening an older custom rule does not reorder it", () => {
@@ -369,6 +374,7 @@ describe("FallbackOverridesMatrix - contextual notify and transient retries", ()
 
   it("an explicit off outage row does not promise a retry", () => {
     renderMatrix(policy({ reasonOverrides: { provider_unavailable: "off" } }));
+    openRow("provider_unavailable");
     const row = screen.getByTestId(
       "fallback-override-row-provider_unavailable",
     );
@@ -376,21 +382,23 @@ describe("FallbackOverridesMatrix - contextual notify and transient retries", ()
     // promised retry STEP is wrong.
     expect(within(row).queryByText(/^Brief retry$/)).toBeNull();
     expect(within(row).queryByText(/Brief retry →/)).toBeNull();
-    expect(within(row).getByText(/Recovery disabled/)).not.toBeNull();
+    expect(within(row).getByText(/Recovery is disabled/)).not.toBeNull();
   });
 
   it("a saved sequence with no notify does not promise a brief retry on the outage row", () => {
     renderMatrix(policy({ reasonOverrides: { provider_unavailable: [] } }));
+    openRow("provider_unavailable");
     const row = screen.getByTestId(
       "fallback-override-row-provider_unavailable",
     );
     expect(within(row).queryByText(/Brief retry/)).toBeNull();
   });
 
-  it("billing summary says it always notifies", () => {
+  it("shows the billing recovery chain only when that row is expanded", () => {
     renderMatrix(policy({}));
+    expect(screen.queryByText("Always notify you")).toBeNull();
+    openRow("billing");
     const row = screen.getByTestId("fallback-override-row-billing");
-    // The row's own summary, not the hidden editor's step list.
     expect(row.textContent).toContain("Always notify you");
   });
 });
@@ -560,6 +568,7 @@ describe("FallbackOverridesMatrix - status and attention", () => {
     renderMatrixWith(policy({}), { attentionReason: "rate_limit" });
     const marked = screen.getByTestId("fallback-override-row-rate_limit");
     expect(within(marked).getByText("Check save")).not.toBeNull();
+    openRow("billing");
     const other = screen.getByTestId("fallback-override-row-billing");
     expect(within(other).queryByText("Check save")).toBeNull();
   });

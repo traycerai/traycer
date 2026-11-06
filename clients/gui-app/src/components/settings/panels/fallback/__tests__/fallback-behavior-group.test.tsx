@@ -162,6 +162,10 @@ describe("FallbackBehaviorGroup - AX8: the return-to-preferred radiogroup is nam
     expect(textOf(group.getAttribute("aria-describedby"))).toContain(
       "Switching back also starts a new agent session",
     );
+    expect(screen.getByText("Help").closest("details")).toHaveProperty(
+      "open",
+      false,
+    );
   });
 
   it("the 'Switch back automatically' radio carries its own consequence as an accessible description", () => {

@@ -14,6 +14,7 @@ import { TeamPermissions } from "@/components/settings/environment/team-permissi
 import { BrowserAgentAccessGroup } from "@/components/settings/panels/browser-agent-access-group";
 import { TeamMcpServers } from "@/components/settings/environment/team-mcp-servers";
 import { TeamVariablesAndShells } from "@/components/settings/environment/team-variables-and-shells";
+import { reachableHost } from "./mcp-skills-test-support";
 import {
   configurationItem,
   mountTeamPage,
@@ -60,6 +61,66 @@ const variable = (
   });
 
 describe("TeamVariablesAndShells", () => {
+  it("keeps values compact until edited and opens a draft row from Add variable", async () => {
+    const harness = mountTeamPage(poolSource("editor"), {
+      "environment.configuration.items": () => ({
+        items: [variable("NODE_ENV", "production", 3)],
+      }),
+      "environment.host.list": () => ({ hosts: [] }),
+    });
+    render(<TeamVariablesAndShells />, { wrapper: harness.Wrapper });
+
+    expect(
+      await screen.findByRole("button", { name: "Edit NODE_ENV value" }),
+    ).toBeTruthy();
+    expect(screen.queryByLabelText("NODE_ENV value")).toBeNull();
+    expect(screen.queryByRole("button", { name: "Save" })).toBeNull();
+    await userEvent.click(
+      screen.getByRole("button", { name: "More for NODE_ENV" }),
+    );
+    expect(
+      await screen.findByRole("menuitem", { name: "Delete" }),
+    ).toBeTruthy();
+    await userEvent.keyboard("{Escape}");
+
+    await userEvent.click(screen.getByRole("button", { name: "Add variable" }));
+    expect(await screen.findByLabelText("Variable name")).toBeTruthy();
+    expect(screen.getByLabelText("New variable value")).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Add a variable" })).toBeTruthy();
+  });
+
+  it("shows applied differences inline and full host values only after Details", async () => {
+    const harness = mountTeamPage(poolSource("editor"), {
+      "environment.configuration.items": () => ({
+        items: [variable("NODE_ENV", "production", 3)],
+      }),
+      "environment.host.list": () => ({ hosts: [reachableHost] }),
+      "config.env.list": () => ({
+        entries: [{ key: "NODE_ENV", value: "staging" }],
+      }),
+      "config.shell.get": () => ({
+        path: "/bin/zsh",
+        args: ["-l"],
+        synthesised: false,
+      }),
+    });
+    render(<TeamVariablesAndShells />, { wrapper: harness.Wrapper });
+
+    expect(await screen.findByText("Applied on Mac mini")).toBeTruthy();
+    expect(screen.queryByText("Live values")).toBeNull();
+    expect(await screen.findByText("This host uses staging")).toBeTruthy();
+    expect(screen.queryByText(/Shell:/)).toBeNull();
+    await userEvent.click(screen.getByRole("button", { name: "Details" }));
+    expect(await screen.findByText(/Shell:/)).toBeTruthy();
+    expect(screen.getByText("/bin/zsh -l")).toBeTruthy();
+    const appliedVariableKey = screen.getByText("NODE_ENV", {
+      selector: "code",
+    });
+    expect(appliedVariableKey.parentElement?.textContent).toBe(
+      "NODE_ENV: staging",
+    );
+  });
+
   it("reads the team's items by environment id, never the host's own config", async () => {
     const harness = mountTeamPage(poolSource("editor"), {
       "environment.configuration.items": () => ({
@@ -69,6 +130,9 @@ describe("TeamVariablesAndShells", () => {
     });
     render(<TeamVariablesAndShells />, { wrapper: harness.Wrapper });
 
+    await userEvent.click(
+      await screen.findByRole("button", { name: "Edit NODE_ENV value" }),
+    );
     expect(await screen.findByLabelText("NODE_ENV value")).toHaveProperty(
       "value",
       "production",
@@ -123,7 +187,9 @@ describe("TeamVariablesAndShells", () => {
       }),
     );
 
-    expect(await screen.findByLabelText("NODE_ENV value")).toBeTruthy();
+    expect(
+      await screen.findByRole("button", { name: "Edit NODE_ENV value" }),
+    ).toBeTruthy();
     expect(
       harness.paramsOf("environment.configuration.items").length,
     ).toBeGreaterThan(reads);
@@ -161,6 +227,10 @@ describe("TeamVariablesAndShells", () => {
     });
     render(<TeamVariablesAndShells />, { wrapper: harness.Wrapper });
 
+    expect(screen.queryByRole("button", { name: "Save" })).toBeNull();
+    await userEvent.click(
+      await screen.findByRole("button", { name: "Edit NODE_ENV value" }),
+    );
     const field = await screen.findByLabelText("NODE_ENV value");
     await userEvent.clear(field);
     await userEvent.type(field, "development");
@@ -181,12 +251,13 @@ describe("TeamVariablesAndShells", () => {
     expect(
       await screen.findByText("Changed by Grace a moment ago"),
     ).toBeTruthy();
-    await waitFor(() => {
-      expect(screen.getByLabelText("NODE_ENV value")).toHaveProperty(
-        "value",
-        "staging",
-      );
-    });
+    await userEvent.click(
+      await screen.findByRole("button", { name: "Edit NODE_ENV value" }),
+    );
+    expect(screen.getByLabelText("NODE_ENV value")).toHaveProperty(
+      "value",
+      "staging",
+    );
 
     // The next save quotes the reread revision, not the stale one.
     await userEvent.type(screen.getByLabelText("NODE_ENV value"), "!");
@@ -219,6 +290,9 @@ describe("TeamVariablesAndShells", () => {
     const user = userEvent.setup();
     render(<TeamVariablesAndShells />, { wrapper: harness.Wrapper });
 
+    await user.click(
+      await screen.findByRole("button", { name: "Edit NODE_ENV value" }),
+    );
     expect(await screen.findByLabelText("NODE_ENV value")).toHaveProperty(
       "value",
       "production",
@@ -227,6 +301,9 @@ describe("TeamVariablesAndShells", () => {
       screen.getByRole("combobox", { name: "Operating system" }),
     );
     await user.click(await screen.findByRole("option", { name: "Linux" }));
+    await user.click(
+      screen.getByRole("button", { name: "Edit NODE_ENV value" }),
+    );
     const field = screen.getByLabelText("NODE_ENV value");
     expect(field).toHaveProperty("value", "linux-value");
 
@@ -274,6 +351,10 @@ describe("TeamVariablesAndShells", () => {
     const row = await screen.findByRole("region", { name: "API_URL · macOS" });
     expect(within(row).getByText("macOS")).toBeTruthy();
     expect(screen.queryByText("No variables.")).toBeNull();
+    expect(within(row).queryByRole("button", { name: "Save" })).toBeNull();
+    await user.click(
+      within(row).getByRole("button", { name: "Edit API_URL · macOS value" }),
+    );
     const field = within(row).getByLabelText("API_URL · macOS value");
     expect(field).toHaveProperty("value", "mac-value");
 
@@ -320,12 +401,12 @@ describe("TeamVariablesAndShells", () => {
     });
     render(<TeamVariablesAndShells />, { wrapper: harness.Wrapper });
 
-    const card = (await screen.findByText("Live values")).closest("section");
-    expect(card).not.toBeNull();
-    if (card === null) return;
+    await screen.findByRole("heading", { name: "Variables & shells" });
     // An unread inventory is not an empty one, so the card says nothing at
     // all rather than sending the reader to start a sandbox.
-    expect(within(card).queryByRole("status")).toBeNull();
+    expect(screen.queryByRole("status")).toBeNull();
+    expect(screen.queryByText("Applied on Mac mini")).toBeNull();
+    expect(screen.queryByText("Live values")).toBeNull();
     expect(screen.queryByText(/sandbox to see/)).toBeNull();
   });
 
