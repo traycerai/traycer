@@ -4750,6 +4750,76 @@ describe("WorktreesList v1.2 signals", () => {
     expect(within(open).queryByText("Payments revamp")).toBeNull();
     expect(within(open).queryByTestId("task-merge-rollup")).toBeNull();
   });
+
+  it("shows a cross-repo Task rollup only on its first header", () => {
+    renderList({
+      hostId: "host-a",
+      queryClient: new QueryClient(),
+      worktrees: [
+        entry({
+          worktreePath: "/wt/zeta",
+          branch: "feat-zeta",
+          repoLabel: "acme/zeta",
+          repoIdentifier: { owner: "acme", repo: "zeta" },
+          owners: [
+            {
+              epicId: "epic-1",
+              ownerKind: "chat",
+              ownerId: "chat-zeta",
+              updatedAt: 1,
+            },
+          ],
+          prState: "merged",
+          prNumber: 40,
+          mergedHeadShaMatches: true,
+        }),
+        entry({
+          worktreePath: "/wt/alpha",
+          branch: "feat-alpha",
+          repoLabel: "acme/alpha",
+          repoIdentifier: { owner: "acme", repo: "alpha" },
+          owners: [
+            {
+              epicId: "epic-1",
+              ownerKind: "chat",
+              ownerId: "chat-alpha",
+              updatedAt: 2,
+            },
+          ],
+          prState: "open",
+          prNumber: 41,
+          mergedHeadShaMatches: false,
+        }),
+      ],
+      taskTitlesByEpicId: new Map([["epic-1", "Payments revamp"]]),
+      enrichedByPath: undefined,
+      erroredPaths: undefined,
+      seededPaths: undefined,
+      onVisiblePathsChange: undefined,
+    });
+
+    const headers = screen
+      .getAllByTestId("worktree-repo-header")
+      .filter(
+        (header) => header.getAttribute("data-task-epic-id") === "epic-1",
+      );
+    expect(headers).toHaveLength(2);
+    const firstHeader = headers[0];
+    const secondHeader = headers[1];
+    expect(within(firstHeader).getByText("acme/zeta")).toBeTruthy();
+    expect(within(secondHeader).getByText("acme/alpha")).toBeTruthy();
+    for (const header of headers) {
+      within(header).getByRole("button", {
+        name: "Open Task Payments revamp",
+      });
+    }
+
+    expect(screen.getAllByTestId("task-merge-rollup")).toHaveLength(1);
+    expect(
+      within(firstHeader).getByTestId("task-merge-rollup").textContent,
+    ).toBe("Merged 1/2");
+    expect(within(secondHeader).queryByTestId("task-merge-rollup")).toBeNull();
+  });
 });
 
 describe("WorktreesList virtualization + per-viewport enrichment", () => {
