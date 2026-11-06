@@ -624,21 +624,23 @@ describe("<HostSettingsPanel /> Overview — tabbed shell", () => {
       expect(screen.getAllByTestId("host-make-active")).toHaveLength(1);
     });
 
-    it("wraps the full long name on a phone with its pencil and the ⋯ menu", async () => {
+    it("gives the full long name its own row on a phone, with its pencil, and the ⋯ menu below it", async () => {
       window.innerWidth = 500;
       await renderLongNamedHost();
 
       const row = screen.getByTestId("host-identity-name-row");
-      expect(row.classList.contains("flex-wrap")).toBe(true);
+      expect(row.classList.contains("w-full")).toBe(true);
       const name = within(row).getByRole("heading", { name: LONG_NAME });
       expect(name.classList.contains("min-w-0")).toBe(true);
       expect(name.classList.contains("wrap-anywhere")).toBe(true);
       expect(name.classList.contains("truncate")).toBe(false);
       expect(within(row).getByTestId("host-overview-edit-name")).not.toBeNull();
-      // The ⋯ menu shares the row's line: the header's one flex line holds the
-      // name row and the actions side by side.
+      // Below sm the header stacks: the ⋯ menu sits under the name row, in the
+      // same header block, never beside the name.
       const line = row.parentElement;
       if (line === null) throw new Error("the name row sits in no line");
+      expect(line.classList.contains("flex-col")).toBe(true);
+      expect(within(row).queryByTestId("host-overview-menu")).toBeNull();
       expect(within(line).getByTestId("host-overview-menu")).not.toBeNull();
     });
   });
@@ -649,7 +651,7 @@ describe("<HostSettingsPanel /> Overview — tabbed shell", () => {
     expect(
       screen
         .getByTestId("host-identity-name-row")
-        .classList.contains("flex-wrap"),
+        .classList.contains("sm:flex-wrap"),
     ).toBe(true);
   });
 
