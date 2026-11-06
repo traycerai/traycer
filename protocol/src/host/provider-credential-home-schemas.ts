@@ -60,7 +60,7 @@ export const credentialStandingSchema = lazySchema(() =>
     authority: z.enum(["provider-client", "custodian"]).nullable(),
     cause: z.string().nullable(),
     observation: z.strictObject({
-      source: z.enum(["provider-client", "custodian", "install"]),
+      source: z.enum(["provider-client", "custodian", "install", "sign-out"]),
       status: z.enum(["answered", "unknown"]),
       capturedAt: z.number(),
     }),
