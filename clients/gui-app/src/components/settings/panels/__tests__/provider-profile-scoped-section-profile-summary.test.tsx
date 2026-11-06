@@ -1,6 +1,13 @@
 import type { ProviderCliState } from "@traycer/protocol/host/provider-schemas";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import {
+  cleanup,
+  fireEvent,
+  render,
+  screen,
+  within,
+} from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { tooltipTextFor } from "@/components/ui/__tests__/tooltip-probe";
@@ -157,12 +164,79 @@ describe("<ProviderProfileScopedSection /> profile summary email reveal", () => 
     expect(tooltipTextFor(emailSpan)).not.toBe(RAW_EMAIL);
   });
 
-  it("reveals the raw email in both the text and the tooltip once toggled", () => {
+  it("reveals the raw email in the wrapping address, with no tooltip", () => {
     renderSection({});
 
     fireEvent.click(screen.getByRole("button", { name: /Reveal email/ }));
 
     const emailSpan = screen.getByText(RAW_EMAIL);
-    expect(tooltipTextFor(emailSpan)).toBe(RAW_EMAIL);
+    expect(emailSpan.className).toContain("whitespace-normal");
+    expect(emailSpan.className).toContain("break-words");
+    expect(emailSpan.className).not.toContain("truncate");
+    expect(tooltipTextFor(emailSpan)).toBeNull();
+  });
+
+  it("wraps the address and the plan, and shows no Signed in badge on a usable row", () => {
+    const profile = managedProfile();
+    renderSection({
+      state: {
+        ...opencodeState(),
+        profiles: [
+          {
+            ...profile,
+            identity: { email: RAW_EMAIL, tier: "Team", accountUuid: null },
+          },
+        ],
+      },
+    });
+
+    const email = screen.getByText(REDACTED_EMAIL);
+    expect(email.className).toContain("whitespace-normal");
+    expect(email.className).toContain("break-words");
+    expect(email.className).not.toContain("truncate");
+    const plan = screen.getByText("Team");
+    expect(plan.tagName).toBe("P");
+    expect(plan.className).toContain("whitespace-normal");
+    expect(plan.className).toContain("break-words");
+    expect(plan.className).not.toContain("truncate");
+    expect(screen.queryByText("Signed in")).toBeNull();
+    expect(screen.queryByText("Signed out")).toBeNull();
+  });
+
+  it("shows standing text only when the profile is not usable, and keeps the verbs in More", async () => {
+    const profile = managedProfile();
+    renderSection({
+      state: {
+        ...opencodeState(),
+        profiles: [
+          {
+            ...profile,
+            auth: {
+              status: "unauthenticated",
+              badgeText: null,
+              label: null,
+              detail: null,
+            },
+          },
+        ],
+      },
+    });
+
+    const standing = screen.getByText("Signed out");
+    expect(standing.tagName).toBe("P");
+    expect(standing.className).toContain("whitespace-normal");
+    expect(standing.className).toContain("break-words");
+    expect(standing.className).not.toContain("truncate");
+    expect(screen.queryByText("Signed in")).toBeNull();
+
+    await userEvent.click(
+      screen.getByRole("button", { name: "More for Work account" }),
+    );
+    const menu = screen.getByRole("menu");
+    expect(within(menu).getByRole("button", { name: "Sign in" })).toBeTruthy();
+    expect(
+      within(menu).getByRole("button", { name: "Manage profile" }),
+    ).toBeTruthy();
+    expect(within(menu).queryByRole("switch")).toBeNull();
   });
 });

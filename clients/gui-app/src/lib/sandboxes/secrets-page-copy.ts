@@ -27,7 +27,7 @@ export const PERSONAL_SECRETS_READ_FAILED = "Couldn't read Personal's secrets.";
 
 /** In place of the kinds Add a secret does not offer: a provider's key. */
 export const PROVIDER_KEYS_LINE = {
-  before: "Provider keys are set on each provider's Account tab, under ",
+  before: "Provider keys are set on each provider's page, under ",
   link: "Providers",
   after: ".",
 } as const;

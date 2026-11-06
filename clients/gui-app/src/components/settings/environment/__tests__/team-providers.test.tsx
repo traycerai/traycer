@@ -18,9 +18,12 @@ import {
 } from "@/lib/settings-details-entry";
 import { useSettingsEnvironmentPickStore } from "@/stores/settings/settings-environment-pick-store";
 import { providerState, reachableHost } from "./mcp-skills-test-support";
+import type { SettingsSectionId } from "@/lib/settings-sections";
+import { setSystemTabModalApi } from "@/stores/tabs/system-tab-modal-bridge";
 import {
   configurationItem,
   mountTeamPage,
+  personalPoolSource,
   poolSource,
   requireTeamHostClient,
   resetTeamPageHarness,
@@ -59,6 +62,7 @@ afterEach(() => {
   cleanup();
   resetTeamPageHarness();
   useSettingsEnvironmentPickStore.setState({ pick: null });
+  setSystemTabModalApi(null);
 });
 
 const profile = (enabled: boolean, revision: number) =>
@@ -136,6 +140,72 @@ function cursorProviderListRow(): ProviderCliState {
   };
 }
 
+const cursorProfile = (name: string, revision: number) =>
+  configurationItem({
+    kind: "managed_profile",
+    key: `cursor:${name}`,
+    value: {
+      name,
+      color: null,
+      harnessId: "cursor",
+      accountIdentity: null,
+      needsLink: false,
+      enabled: true,
+    },
+    revision,
+  });
+
+const cursorKey = {
+  secretId: "secret-cursor",
+  name: "CURSOR_API_KEY",
+  kind: "provider" as const,
+  protocol: null,
+  destinations: [],
+  ...RETIRED_SECRET_ROW_FIELDS,
+  providerVariables: [...RETIRED_PROVIDER_VARIABLES],
+  currentVersionId: "v1",
+  revoked: false,
+  updatedAt: 1,
+  variables: [],
+};
+
+function publishSettingsApi(
+  setSection: (section: SettingsSectionId) => void,
+): void {
+  setSystemTabModalApi({
+    active: null,
+    openSettings: () => undefined,
+    openHistory: () => undefined,
+    close: () => undefined,
+    setSection,
+    replaceOwnedSettingsRoute: () => undefined,
+    promoteToTab: () => undefined,
+    isOverlayActive: () => true,
+  });
+}
+
+async function openProfileMore(name: string): Promise<void> {
+  await userEvent.click(
+    await screen.findByRole("button", { name: `More for ${name}` }),
+  );
+}
+
+function railButton(name: string): HTMLElement {
+  const rail = screen.getByRole("navigation", { name: "Configured providers" });
+  return within(rail).getByRole("button", { name: new RegExp(`^${name}`) });
+}
+
+/** Name and subtitle are sibling spans, so `textContent` has no space between them. */
+function railPieces(name: string): { title: string; subtitle: string | null } {
+  const spans = [...railButton(name).querySelectorAll(":scope > span")];
+  const title = (spans[0]?.textContent ?? "").replace(/\s+/g, " ").trim();
+  const subtitle =
+    spans.length < 2
+      ? null
+      : (spans[1]?.textContent ?? "").replace(/\s+/g, " ").trim();
+  return { title, subtitle };
+}
+
 function handlers(items: () => EnvironmentConfigurationItem[]) {
   return {
     "environment.configuration.items": () => ({ items: items() }),
@@ -153,7 +223,9 @@ function handlers(items: () => EnvironmentConfigurationItem[]) {
 }
 
 describe("TeamProviders items", () => {
-  it("words each rail row from the team's plans and keys: plan, key, no plan", async () => {
+  it("puts configured providers first, folds the rest, and follows the first configured row until a click", async () => {
+    const setSection = vi.fn<(section: SettingsSectionId) => void>();
+    publishSettingsApi(setSection);
     const harness = mountTeamPage(poolSource("editor"), {
       ...handlers(() => [profile(true, 4)]),
       "environment.plans.list": () => ({
@@ -167,40 +239,163 @@ describe("TeamProviders items", () => {
         ],
       }),
       "environment.secrets.list": () => ({
-        secrets: [
-          {
-            secretId: "secret-cursor",
-            name: "CURSOR_API_KEY",
-            kind: "provider",
-            protocol: null,
-            destinations: [],
-            ...RETIRED_SECRET_ROW_FIELDS,
-            providerVariables: [...RETIRED_PROVIDER_VARIABLES],
-            currentVersionId: "v1",
-            revoked: false,
-            updatedAt: 1,
-            variables: [],
-          },
-        ],
+        secrets: [cursorKey],
         removed: [],
       }),
     });
     render(<TeamProviders />, { wrapper: harness.Wrapper });
 
-    const rail = await screen.findByRole("navigation", { name: "Providers" });
-    const wordOf = (name: string): string => {
-      const row = within(rail).getByRole("button", { name: new RegExp(name) });
-      return row.textContent.replace(name, "");
-    };
-    await waitFor(() => {
-      expect(wordOf("Codex")).toBe("plan");
+    expect(
+      await screen.findByText(
+        "Sign-ins, keys and tools for each coding agent.",
+      ),
+    ).toBeTruthy();
+    expect(screen.queryByRole("combobox")).toBeNull();
+    const rail = await screen.findByRole("navigation", {
+      name: "Configured providers",
     });
-    expect(wordOf("Cursor")).toBe("key");
-    expect(within(rail).getAllByText("no plan").length).toBeGreaterThan(0);
-    expect(within(rail).queryByText("No profiles")).toBeNull();
+    await waitFor(() => {
+      expect(railButton("Codex").getAttribute("aria-current")).toBe("true");
+    });
+    expect(railPieces("Codex")).toEqual({ title: "Codex", subtitle: null });
+    expect(railButton("Codex").className).toContain("whitespace-normal");
+    expect(railButton("Codex").className).toContain("break-words");
+    expect(railButton("Codex").className).not.toContain("truncate");
+    expect(railPieces("Cursor")).toEqual({ title: "Cursor", subtitle: null });
+    expect(
+      within(rail).queryByRole("button", { name: /^Claude Code/ }),
+    ).toBeNull();
+    expect(rail.textContent).not.toContain("plan");
+    expect(rail.textContent).not.toContain("key");
+    expect(rail.textContent).not.toContain("No profiles");
+    const callsBeforeToggle = harness.messenger.calls.length;
+    const add = within(rail).getByRole("button", { name: "Add provider" });
+    expect(add.getAttribute("aria-expanded")).toBe("false");
+    await userEvent.click(add);
+    expect(harness.messenger.calls.length).toBe(callsBeforeToggle);
+    expect(add.getAttribute("aria-expanded")).toBe("true");
+    expect(railPieces("Claude Code")).toEqual({
+      title: "Claude Code",
+      subtitle: "1 profile",
+    });
+    await userEvent.click(railButton("Claude Code"));
+    expect(railButton("Claude Code").getAttribute("aria-current")).toBe("true");
+    expect(railButton("Codex").getAttribute("aria-current")).toBeNull();
+    expect(railButton("Claude Code")).toBeTruthy();
+    await userEvent.click(
+      screen.getByRole("button", { name: "All keys are in Secrets" }),
+    );
+    expect(setSection).toHaveBeenCalledWith("secrets");
     expect(harness.paramsOf("environment.configuration.items")[0]).toEqual({
       environmentId: "env-a",
     });
+  });
+
+  it("keeps a provider on the rail while its plan or secrets read is still out", async () => {
+    const plans = Promise.withResolvers<{ plans: [] }>();
+    const harness = mountTeamPage(poolSource("editor"), {
+      ...handlers(() => []),
+      "environment.plans.list": () => plans.promise,
+    });
+    render(<TeamProviders />, { wrapper: harness.Wrapper });
+
+    const rail = await screen.findByRole("navigation", {
+      name: "Configured providers",
+    });
+    expect(
+      within(rail).queryByRole("button", { name: "Add provider" }),
+    ).toBeNull();
+    expect(
+      within(rail).getByRole("button", { name: "Command Code" }),
+    ).toBeTruthy();
+    expect(railButton("Claude Code").getAttribute("aria-current")).toBe("true");
+
+    plans.resolve({ plans: [] });
+
+    const add = await within(rail).findByRole("button", {
+      name: "Add provider",
+    });
+    expect(add.getAttribute("aria-expanded")).toBe("false");
+    expect(
+      within(rail).queryByRole("button", { name: "Command Code" }),
+    ).toBeNull();
+    expect(railButton("Claude Code").getAttribute("aria-current")).toBe("true");
+    expect(harness.paramsOf("environment.plans.list").length).toBeGreaterThan(
+      0,
+    );
+  });
+
+  it("configures a Personal provider only when it has a managed profile", async () => {
+    const harness = mountTeamPage(personalPoolSource(), {
+      ...handlers(() => [
+        cursorProfile("Cursor Work", 1),
+        cursorProfile("Cursor Home", 2),
+      ]),
+    });
+    render(<TeamProviders />, { wrapper: harness.Wrapper });
+
+    const rail = await screen.findByRole("navigation", {
+      name: "Configured providers",
+    });
+    await waitFor(() => {
+      expect(railButton("Cursor").getAttribute("aria-current")).toBe("true");
+    });
+    expect(railPieces("Cursor")).toEqual({
+      title: "Cursor",
+      subtitle: "2 profiles",
+    });
+    expect(
+      within(rail).queryByRole("button", { name: /^Claude Code/ }),
+    ).toBeNull();
+    expect(rail.textContent).not.toContain("plan");
+    expect(rail.textContent).not.toContain("key");
+    expect(rail.textContent).not.toContain("No profiles");
+    await userEvent.click(
+      within(rail).getByRole("button", { name: "Add provider" }),
+    );
+    await userEvent.click(railButton("Claude Code"));
+    expect(railButton("Claude Code").getAttribute("aria-current")).toBe("true");
+    expect(railButton("Cursor").getAttribute("aria-current")).toBeNull();
+    expect(harness.paramsOf("environment.configuration.items")[0]).toEqual({
+      environmentId: "env-personal",
+    });
+  });
+
+  it("orders Plans & limits as Key, Plans, Profiles, then rate limits", async () => {
+    const harness = mountTeamPage(poolSource("editor"), {
+      ...handlers(() => [cursorProfile("Cursor Work", 1)]),
+      "environment.secrets.list": () => ({
+        secrets: [cursorKey],
+        removed: [],
+      }),
+    });
+    render(<TeamProviders />, { wrapper: harness.Wrapper });
+
+    await waitFor(() => {
+      expect(railButton("Cursor").getAttribute("aria-current")).toBe("true");
+    });
+    expect(screen.queryByRole("heading", { name: "Key" })).toBeTruthy();
+    const panel = screen.getByRole("tabpanel");
+    const labels = ["Key", "Plans", "Profiles", "Rate limits"].map((name) =>
+      within(panel).getByRole("heading", { name }),
+    );
+    expect(
+      labels[0]?.compareDocumentPosition(labels[1] ?? labels[0]) &
+        Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy();
+    expect(
+      labels[1]?.compareDocumentPosition(labels[2] ?? labels[1]) &
+        Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy();
+    expect(
+      labels[2]?.compareDocumentPosition(labels[3] ?? labels[2]) &
+        Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy();
+    expect(within(panel).getByRole("region", { name: "Key" })).toBeTruthy();
+    expect(within(panel).getByRole("region", { name: "Plans" })).toBeTruthy();
+    expect(harness.paramsOf("environment.secrets.list").length).toBeGreaterThan(
+      0,
+    );
   });
 
   it("toggles a profile against the displayed revision, and a conflict rereads it beside the changed-by line", async () => {
@@ -217,7 +412,9 @@ describe("TeamProviders items", () => {
     });
     render(<TeamProviders />, { wrapper: harness.Wrapper });
 
-    const toggle = await screen.findByRole("switch", { name: "Use Work" });
+    expect(await screen.findByText("Work")).toBeTruthy();
+    await openProfileMore("Work");
+    const toggle = screen.getByRole("switch", { name: "Use Work" });
     await userEvent.click(toggle);
 
     expect(harness.paramsOf("environment.configuration.items.put")).toEqual([
@@ -240,6 +437,8 @@ describe("TeamProviders items", () => {
     expect(
       await screen.findByText("Changed by Grace a moment ago"),
     ).toBeTruthy();
+    expect(screen.getByText("Off")).toBeTruthy();
+    await openProfileMore("Work");
     await waitFor(() => {
       expect(screen.getByRole("switch", { name: "Use Work" })).toHaveProperty(
         "ariaChecked",
@@ -255,7 +454,16 @@ describe("TeamProviders items", () => {
     );
     render(<TeamProviders />, { wrapper: harness.Wrapper });
 
-    expect(await screen.findByText("Work")).toBeTruthy();
+    const name = await screen.findByText("Work");
+    expect(name.className).toContain("whitespace-normal");
+    expect(name.className).toContain("break-words");
+    expect(name.className).not.toContain("truncate");
+    expect(screen.getByText("ada@example.com").className).toContain(
+      "whitespace-normal",
+    );
+    expect(screen.queryByText("Off")).toBeNull();
+    expect(screen.queryByRole("heading", { name: "Key" })).toBeNull();
+    await openProfileMore("Work");
     expect(screen.getByText("On")).toBeTruthy();
     expect(screen.queryByRole("switch")).toBeNull();
     expect(screen.queryByRole("button", { name: "Add a key" })).toBeNull();
@@ -345,6 +553,9 @@ describe("TeamProviders items", () => {
     render(<TeamProviders />, { wrapper: harness.Wrapper });
 
     await userEvent.click(
+      await screen.findByRole("button", { name: "Add provider" }),
+    );
+    await userEvent.click(
       await screen.findByRole("button", { name: /^Cursor/ }),
     );
     await userEvent.click(await screen.findByRole("tab", { name: "Env" }));
@@ -417,12 +628,9 @@ describe("TeamProviders items", () => {
       );
       render(<TeamProviders />, { wrapper: harness.Wrapper });
 
-      const card = (await screen.findByText("Work")).closest("div.rounded-lg");
-      if (!(card instanceof HTMLElement))
-        throw new Error("profile row not found");
-      await userEvent.click(
-        within(card).getByRole("button", { name: "Details" }),
-      );
+      expect(await screen.findByText("Work")).toBeTruthy();
+      await openProfileMore("Work");
+      await userEvent.click(screen.getByRole("button", { name: "Details" }));
 
       await waitFor(() => {
         expect(provider).toHaveBeenCalled();

@@ -7,6 +7,7 @@ import { useConfigurationKey } from "@/components/settings/environment/use-confi
 import { useState, type ReactNode } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { HostMethodVersionUnsatisfiedError } from "@traycer-clients/shared/host-transport/host-messenger";
+import type { ProviderId } from "@traycer/protocol/host/provider-schemas";
 import { useHostClient } from "@/lib/host";
 import { useEnvironmentSecretsQuery } from "@/hooks/environment/team/use-secrets-query";
 import { SecretRow } from "@/components/settings/secrets/secret-row";
@@ -17,15 +18,40 @@ import { useCanEditConfiguration } from "./configuration-source";
 import { ConfigurationReadFailed } from "./team-read-failed";
 import { TeamSecretNames } from "./team-secret-names";
 
-export function TeamProviderKeys(): ReactNode {
+/**
+ * The variable a team's `provider` secret is named for, per provider. The
+ * same names `teamProviderStateWord` matches: authn refuses any other name,
+ * and only these providers take a team key. Claude Code and Codex do not.
+ */
+const PROVIDER_KEY_SECRET_NAMES: Partial<Record<ProviderId, string>> = {
+  cursor: "CURSOR_API_KEY",
+  kiro: "KIRO_API_KEY",
+  droid: "FACTORY_API_KEY",
+  openrouter: "OPENROUTER_API_KEY",
+  huggingface: "HF_TOKEN",
+  amp: "AMP_API_KEY",
+};
+
+/**
+ * The selected provider's key. A provider that does not take one renders
+ * nothing: its keys, if any were stored under another name, stay on Secrets.
+ */
+export function TeamProviderKeys(props: {
+  readonly providerId: ProviderId;
+}): ReactNode {
   const client = usePoolTierHostClient(useHostClient());
   const queries = useQueryClient();
   const query = useEnvironmentSecretsQuery(client);
   const canEdit = useCanEditConfiguration();
   const configurationKey = useConfigurationKey();
   const [adding, setAdding] = useState(false);
+  const keyName = PROVIDER_KEY_SECRET_NAMES[props.providerId];
   const keys =
-    query.data?.secrets.filter((secret) => secret.kind === "provider") ?? [];
+    keyName === undefined
+      ? []
+      : (query.data?.secrets.filter(
+          (secret) => secret.kind === "provider" && secret.name === keyName,
+        ) ?? []);
   // A reader who cannot edit, once the latest read SUCCEEDED. The list's
   // "No secrets." is a claim about the configuration, and there are two states
   // where `keys` is `[]` without that claim being true: while the first read is
@@ -61,10 +87,11 @@ export function TeamProviderKeys(): ReactNode {
       ),
     });
   };
+  if (keyName === undefined) return null;
   return (
-    <section className="flex flex-col gap-3" aria-label="Model provider keys">
+    <section className="flex flex-col gap-3" aria-label="Key">
       <div className="flex items-center justify-between gap-2">
-        <h2 className="text-ui-sm font-medium">Model provider keys</h2>
+        <h2 className="text-ui-sm font-medium">Key</h2>
         {canEdit && !query.isError && query.data !== undefined ? (
           <Button
             type="button"
@@ -107,11 +134,11 @@ export function TeamProviderKeys(): ReactNode {
       )}
       {canEdit ? (
         <AddSecretDialog
-          // Keyed by configuration: a half-filled form stays with the
-          // configuration it was started in.
-          key={configurationKey}
+          // Keyed by configuration and provider: a half-filled form stays
+          // with the key it was started for.
+          key={`${configurationKey}:${props.providerId}`}
           open={adding}
-          prefill={null}
+          prefill={{ name: keyName, value: "" }}
           client={client}
           onOpenChange={setAdding}
           initialKind="provider"
