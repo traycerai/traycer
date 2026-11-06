@@ -109,8 +109,14 @@ import {
 import type { HostOverviewUpdatesSummary } from "@/components/settings/panels/host-overview-updates-state";
 import {
   HostOverviewAnswerCard,
+  HostOverviewUpdateAction,
   type HostOverviewVersionAnswer,
 } from "@/components/settings/panels/host-overview-updates";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
 import { HostOverviewUpdatesTab } from "@/components/settings/panels/host-overview-updates-tab";
 import type { VersionPickerProps } from "@/components/settings/panels/host-overview-version-picker";
 import { describeCliFloorRemedy } from "@/components/settings/panels/host-overview-cli-floor-remedy";
@@ -586,10 +592,60 @@ describe("<HostOverviewAnswerCard/> draws only an answer with something to say, 
     },
   );
 
-  it("shows Update now and Check now while nothing is in flight", () => {
+  it("keeps Check now in the Updates tab while nothing is in flight", () => {
     renderTab(false);
-    expect(screen.getByTestId("host-overview-update-now")).not.toBeNull();
+    expect(screen.queryByTestId("host-overview-update-now")).toBeNull();
     expect(screen.getByTestId("host-overview-update-check")).not.toBeNull();
+  });
+
+  it("renders a due Update now once in the header and not in the answer card", () => {
+    const answer = answerWithUpdatable();
+    render(
+      <>
+        <HostOverviewAnswerCard
+          version="1.5.0"
+          answer={answer}
+          inFlight={false}
+        />
+        {HostOverviewUpdateAction(answer, false, false)}
+      </>,
+    );
+
+    expect(screen.getAllByTestId("host-overview-update-now")).toHaveLength(1);
+    expect(screen.getByRole("button", { name: "Update now" })).toBeTruthy();
+  });
+
+  it("does not put Update now in the header when no newer version is due", () => {
+    const answer = answerWith({ updatableVersion: null });
+    render(
+      <>
+        <HostOverviewAnswerCard
+          version="1.5.0"
+          answer={answer}
+          inFlight={false}
+        />
+        {HostOverviewUpdateAction(answer, false, false)}
+      </>,
+    );
+
+    expect(screen.queryByTestId("host-overview-update-now")).toBeNull();
+  });
+
+  it("offers a due Update now menu item for a sandbox More menu", () => {
+    const answer = answerWithUpdatable();
+    render(
+      <DropdownMenu>
+        <DropdownMenuTrigger>More</DropdownMenuTrigger>
+        <DropdownMenuContent>
+          {HostOverviewUpdateAction(answer, false, true)}
+        </DropdownMenuContent>
+      </DropdownMenu>,
+    );
+    fireEvent.pointerDown(screen.getByRole("button", { name: "More" }), {
+      button: 0,
+    });
+
+    expect(screen.getByRole("menuitem", { name: "Update now" })).toBeTruthy();
   });
 
   it("hides both the moment inFlight is true, though the same updatable version is on offer", () => {

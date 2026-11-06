@@ -105,6 +105,21 @@ export function sandboxCardActions(
   return actions;
 }
 
+/** The one inline verb; all other allowed verbs stay in More. */
+export function sandboxHeaderPrimaryAction(
+  actions: readonly SandboxCardAction[],
+): SandboxCardAction | null {
+  return (
+    actions.find(
+      (action) =>
+        action === "suspend" ||
+        action === "resume" ||
+        action === "start" ||
+        action === "stop",
+    ) ?? null
+  );
+}
+
 /** The label each action's button carries. */
 export const SANDBOX_CARD_ACTION_LABEL: Record<SandboxCardAction, string> = {
   suspend: "Suspend",
@@ -378,11 +393,11 @@ export function sandboxSuspendKeepsLine(
 ): string | null {
   switch (suspendFidelity) {
     case "memory":
-      return "Suspend keeps memory: processes are still running on resume";
+      return "keeps memory";
     case "disk":
-      return "Suspend keeps the disk only: processes restart on resume";
+      return "keeps disk only · processes restart on resume";
     case "none":
-      return "Suspend keeps nothing: it restarts from its image";
+      return "restarts from its image";
     default:
       return null;
   }
@@ -399,8 +414,8 @@ export function sandboxGuestConfigFailure(
   if (summary.guestConfigured !== false) return null;
   const reason = summary.guestConfigFailureReason;
   return reason === null || reason.trim().length === 0
-    ? "Guest setup failed. Agents can't start here until it succeeds."
-    : `Guest setup failed: ${reason}`;
+    ? "Settings did not apply. Agents can't start here until they do."
+    : `Settings did not apply: ${reason}`;
 }
 
 /**
@@ -534,4 +549,63 @@ export function sandboxTileOverlay(
     case null:
       return null;
   }
+}
+
+/** Failure details accompany the state word rather than replacing the header. */
+export function sandboxHeaderFailureLine(sandbox: {
+  readonly state: HostSandboxState | null;
+  readonly frozen: boolean;
+  readonly summary: SandboxSummary | null;
+}): string | null {
+  if (sandbox.frozen) return null;
+  if (sandbox.state === "failed")
+    return sandboxStateLine(sandbox.state, false, sandbox.summary);
+  if (
+    sandbox.state === "stopped" &&
+    sandbox.summary !== null &&
+    sandbox.summary.failureCode !== null
+  )
+    return sandboxStateLine(sandbox.state, false, sandbox.summary);
+  return null;
+}
+
+export function sandboxHeaderNeedsRepair(
+  summary: SandboxSummary,
+  state: HostSandboxState | null,
+  frozen: boolean,
+  supported: boolean,
+): boolean {
+  return (
+    state === "awake" &&
+    !frozen &&
+    summary.phase !== null &&
+    summary.guestConfigured === false &&
+    supported
+  );
+}
+
+/** The host page offers only Destroy when credits run out, so names no wake remedy. */
+export function sandboxHeaderCreditsLine(
+  summary: SandboxSummary | null,
+  teamOwned: boolean,
+  teamName: string | null,
+  viewerUserId: string | null,
+): string {
+  const payer = summary?.wakePayer ?? null;
+  let payerName = "Its payer's";
+  if (payer !== null)
+    payerName =
+      payer.userId === viewerUserId
+        ? "Your"
+        : `${payer.displayName ?? "A member"}'s`;
+  const credits = teamOwned
+    ? `${payerName} ${teamName ?? "team"} credits ran out`
+    : "Your credits ran out";
+  const frozenAt = summary?.frozenAt ?? null;
+  const destroyAt =
+    summary?.destroyAt ??
+    (frozenAt === null ? null : frozenDestroyAt(frozenAt));
+  return destroyAt === null
+    ? credits
+    : `${credits} · Will be removed on ${formatSandboxDate(destroyAt, true)}`;
 }

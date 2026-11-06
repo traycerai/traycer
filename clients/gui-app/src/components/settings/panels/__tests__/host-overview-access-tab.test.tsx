@@ -430,6 +430,25 @@ describe("<HostOverviewAccessTab /> on a team's host", () => {
 });
 
 describe("<HostOverviewAccessTab /> terminal accounts", () => {
+  it("keeps an unanswered remote access prompt inside the Remote access group", async () => {
+    const host = hostWith({}, { providers: [] });
+    renderTab(host, READY);
+
+    const section = await screen.findByTestId("remote-access-section");
+    expect(
+      within(section).getByRole("heading", { name: "Remote access" }),
+    ).toBeTruthy();
+    expect(
+      within(section).getByTestId("remote-access-question").textContent,
+    ).toBe("Not set");
+    expect(
+      within(section).getByRole("button", { name: "Turn on" }),
+    ).toBeTruthy();
+    expect(
+      within(section).getByRole("button", { name: "Not now" }),
+    ).toBeTruthy();
+  });
+
   it("names the host in the sign-in sentence of a host that is not this machine", async () => {
     const host = hostWith({}, { providers: [claudeAmbient(true)] });
     renderTab(host, READY);
@@ -476,7 +495,7 @@ describe("<HostOverviewAccessTab /> terminal accounts", () => {
     const rows = await screen.findAllByTestId("terminal-account-row");
     expect(rows).toHaveLength(1);
     expect(within(rows[0]).getByText("Claude Code")).toBeTruthy();
-    expect(within(rows[0]).getByText("Terminal account")).toBeTruthy();
+    expect(within(rows[0]).queryByText("Terminal account")).toBeNull();
     expect(
       screen.getByText(
         "dev-box's own sign-in, which stays on dev-box. Sign in on Providers to use one everywhere.",
@@ -517,7 +536,7 @@ describe("<HostOverviewAccessTab /> terminal accounts", () => {
     renderTab(host, READY);
 
     const toggle = await screen.findByRole("switch", {
-      name: "Claude Code Terminal account",
+      name: "Claude Code",
     });
     expect(toggle.getAttribute("aria-checked")).toBe("true");
 
@@ -535,7 +554,7 @@ describe("<HostOverviewAccessTab /> terminal accounts", () => {
     renderTab(host, READY);
 
     const toggle = await screen.findByRole("switch", {
-      name: "Claude Code Terminal account",
+      name: "Claude Code",
     });
     expect(toggle.getAttribute("aria-checked")).toBe("false");
 

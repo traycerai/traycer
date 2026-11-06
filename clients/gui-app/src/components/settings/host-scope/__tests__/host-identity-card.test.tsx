@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it } from "vitest";
 import { cleanup, render, screen } from "@testing-library/react";
-import { HOST_FROZEN_WORD } from "@traycer/protocol/host/host-status";
+import { SandboxHeaderNotices } from "@/components/hosts/sandbox-card";
 import { HostIdentityCard } from "@/components/settings/host-scope/host-identity-card";
 import { hostScopeOptionFixture } from "@/components/settings/host-scope/host-scope-fixture";
 import type { HostScopeOption } from "@/components/settings/host-scope/host-scope-model";
@@ -42,10 +42,8 @@ function renderCard(host: HostScopeOption): void {
     <HostIdentityCard
       host={host}
       displayName={host.name}
-      version={null}
       nameAction={null}
       nameInput={null}
-      nameRowWraps={false}
       busy={false}
       busySessionCount={null}
       busyBreakdown={null}
@@ -53,7 +51,9 @@ function renderCard(host: HostScopeOption): void {
       healthAction={null}
       lifecycleLine={null}
     >
-      {null}
+      {host.sandbox === null ? null : (
+        <SandboxHeaderNotices sandbox={host.sandbox} teamName={null} />
+      )}
     </HostIdentityCard>,
   );
 }
@@ -92,6 +92,8 @@ describe("<HostIdentityCard /> a sandbox's state word against its health", () =>
     expect(screen.getByTestId("host-identity-sandbox-state").textContent).toBe(
       "Suspended",
     );
-    expect(screen.getByText(HOST_FROZEN_WORD, { exact: true })).toBeTruthy();
+    expect(screen.getByTestId("sandbox-card-state-line").textContent).toBe(
+      "Your credits ran out",
+    );
   });
 });

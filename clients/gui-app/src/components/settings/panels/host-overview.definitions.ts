@@ -43,6 +43,15 @@ export const HOST_OVERVIEW = defineSettingsSection("host", {
     availableWhen: alwaysAvailable,
     keywords: ["Personal", "this computer only", "move", "stop sharing"],
   },
+  sandboxTab: {
+    kind: "group",
+    search: { contributesTo: "page" },
+    label: "Sandbox",
+    description: "Size, idle policy, secrets, network events and cost details.",
+    breadcrumb: "Overview",
+    availableWhen: alwaysAvailable,
+    keywords: ["sandbox", "secrets", "cost", "region", "idle"],
+  },
   updatesTab: {
     kind: "group",
     search: { anchor: "host-overview-tab-updates" },
@@ -496,6 +505,7 @@ export const HOST_OVERVIEW = defineSettingsSection("host", {
  * ignored.
  */
 export const HOST_OVERVIEW_TABS = [
+  "sandbox",
   "installation",
   "updates",
   "access",
@@ -539,6 +549,7 @@ export function hostOverviewTabForIntent(
 
 /** The tab-trigger group each tab anchors on. */
 export const HOST_OVERVIEW_TAB_GROUPS = {
+  sandbox: HOST_OVERVIEW.definitions.sandboxTab,
   installation: HOST_OVERVIEW.definitions.installationTab,
   updates: HOST_OVERVIEW.definitions.updatesTab,
   access: HOST_OVERVIEW.definitions.accessTab,

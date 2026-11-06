@@ -202,3 +202,33 @@ export function sandboxGitHubLine(github: SandboxGitHubAccess): string {
     .join(", ");
   return `GitHub: ${accounts}`;
 }
+
+/** Only explicit readiness can claim that every secret works. */
+export function sandboxSecretsSummary(
+  summary: SandboxGrantsSummary,
+  routes: readonly SandboxRouteReadiness[] | null,
+  tone: "ready" | "pending" | "degraded" | null,
+): string {
+  const views = sandboxGrantViews(summary, routes);
+  const count = views.length;
+  const failed = views.filter(
+    (view) =>
+      view.routes.some((route) => route.readiness === "unavailable") ||
+      view.rotation?.tone === "warning",
+  ).length;
+  const github = summary.github;
+  const gitHubFailure =
+    github !== null && (!github.linked || github.installations.length === 0);
+  const secrets = `${count} ${count === 1 ? "secret" : "secrets"}`;
+  if (failed > 0)
+    return `${failed} of ${count} secrets not working${gitHubFailure ? " · GitHub not working" : ""}`;
+  if (gitHubFailure) return `${secrets} · GitHub not working`;
+  if (count === 0) return secrets;
+  if (tone === "degraded") return `${secrets} · not working`;
+  if (tone === "pending") return `${secrets} · connecting`;
+  const allReady = views.every((view) =>
+    view.routes.every((route) => route.readiness === "ready"),
+  );
+  if (tone === "ready" && allReady) return `${secrets} · all working`;
+  return secrets;
+}
