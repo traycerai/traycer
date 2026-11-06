@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import type { EnvironmentPlan } from "@traycer/protocol/host/environment/configuration-contracts";
 import type { EnvironmentSecret } from "@traycer/protocol/host/environment-schemas";
 import { teamProviderStateWord } from "../team-provider-state-word";
+import { RETIRED_SECRET_ROW_FIELDS } from "@traycer/protocol/host/released-wire-rows";
 
 function plan(
   harness: string,
@@ -20,6 +21,7 @@ function providerKey(
   overrides: Partial<EnvironmentSecret>,
 ): EnvironmentSecret {
   return {
+    ...RETIRED_SECRET_ROW_FIELDS,
     secretId: `secret-${name}`,
     name,
     kind: "provider",

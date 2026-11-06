@@ -62,6 +62,11 @@ import { dataHandlingNoticeText } from "@/components/settings/members/data-handl
 import { RunnerHostContext } from "@/providers/runner-host-context";
 import { useAuthStore } from "@/stores/auth/auth-store";
 import { useSettingsEnvironmentPickStore } from "@/stores/settings/settings-environment-pick-store";
+import {
+  RETIRED_PROVIDER_VARIABLES,
+  RETIRED_SECRET_CREATE_FIELDS,
+  RETIRED_SECRET_ROW_FIELDS,
+} from "@traycer/protocol/host/released-wire-rows";
 
 const HOST_ID = "host-secrets";
 const TYPED_VALUE = "sk_live_TYPED_VALUE_9f3a7c";
@@ -106,6 +111,8 @@ function secretFixture(
   overrides: Partial<EnvironmentSecretV12>,
 ): EnvironmentSecretV12 {
   return {
+    ...RETIRED_SECRET_ROW_FIELDS,
+    providerVariables: [...RETIRED_PROVIDER_VARIABLES],
     secretId: "sec-1",
     name: "STRIPE_KEY",
     kind: "api_key",
@@ -707,6 +714,9 @@ describe("saving a secret", () => {
         connectorId: null,
         confirmedAddresses: null,
         value: TYPED_VALUE,
+        // The two fields a released host still reads off this request, with
+        // the only values this tree sends.
+        ...RETIRED_SECRET_CREATE_FIELDS,
         portOverride: false,
         swapSites: ["header"],
         variables: [],

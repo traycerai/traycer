@@ -86,6 +86,7 @@ const movePlan: EnvironmentMovePlanResponseV12 = {
   hostVersion: "1.5.0",
   disclosureVersion: 1,
   rows: {
+    looksLikeAKey: [],
     moves: [
       {
         kind: "variable",

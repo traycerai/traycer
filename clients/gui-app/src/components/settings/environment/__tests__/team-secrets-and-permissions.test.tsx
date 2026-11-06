@@ -24,6 +24,10 @@ import {
   type TeamPageHarness,
 } from "./team-configuration-test-support";
 import { SECRETS_EMPTY_TEXT } from "@/lib/sandboxes/secrets-page-copy";
+import {
+  RETIRED_PROVIDER_VARIABLES,
+  RETIRED_SECRET_ROW_FIELDS,
+} from "@traycer/protocol/host/released-wire-rows";
 
 // The computers holding a copy are covered by `secret-remove-preview-computers`.
 vi.mock(
@@ -62,6 +66,8 @@ afterEach(() => {
 
 function secret(name: string, revoked: boolean): EnvironmentSecretV12 {
   return {
+    ...RETIRED_SECRET_ROW_FIELDS,
+    providerVariables: [...RETIRED_PROVIDER_VARIABLES],
     secretId: `sec-${name}`,
     name,
     kind: "api_key",

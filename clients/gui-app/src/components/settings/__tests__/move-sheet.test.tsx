@@ -86,6 +86,7 @@ function planWith(
     hostVersion: "1.5.0",
     disclosureVersion: 1,
     rows: {
+      looksLikeAKey: [],
       moves: [],
       staysOnThisComputer: [],
       alreadyInPersonal: [],
