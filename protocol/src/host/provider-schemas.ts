@@ -1640,7 +1640,8 @@ export function buildUnreadableProviderProfile(input: {
 
 export const managedProfileDeliveryRefusalSchema = lazySchema(() =>
   z.enum([
-    "sign-in-kind-unavailable-on-computer",
+    "no-custody-kind",
+    "credential-unusable",
     "credential-account-mismatch",
     "team-material-off-computers",
     "sandbox-placeholder-only",
