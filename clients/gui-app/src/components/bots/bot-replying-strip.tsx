@@ -16,7 +16,8 @@ import type { BotSessionActivity } from "@/hooks/bots/use-bot-activity";
  * receipt under a finished reply is: it reads the same at rest, and hovered
  * or focused it says "View turn" and how long the turn has been running. On
  * a touch screen the whole line takes the tap at the touch minimum, past its
- * drawn height, which stays the dock's. The line stays the status either
+ * drawn height, which stays the dock's: the extra height is taken above the
+ * line, never from the message box under it. The line stays the status either
  * way: the button is named by the replying text, and what it shows on hover
  * is kept out of what the status announces.
  */
@@ -48,7 +49,7 @@ export function BotReplyingStrip(props: {
           type="button"
           aria-label={replying}
           onClick={turn.open}
-          className="group/replying -my-0.5 -ml-1 flex min-w-0 max-w-full items-center gap-2 rounded-md px-1 py-0.5 text-left transition-[color,background-color,box-shadow] hover:bg-foreground/5 hover:text-foreground hover:ring-1 hover:ring-border/60 focus-visible:bg-foreground/5 focus-visible:text-foreground focus-visible:ring-1 focus-visible:ring-border/60 focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-ring pointer-coarse:after:absolute pointer-coarse:after:inset-x-0 pointer-coarse:after:top-1/2 pointer-coarse:after:h-full pointer-coarse:after:min-h-11 pointer-coarse:after:-translate-y-1/2"
+          className="group/replying -my-0.5 -ml-1 flex min-w-0 max-w-full items-center gap-2 rounded-md px-1 py-0.5 text-left transition-[color,background-color,box-shadow] hover:bg-foreground/5 hover:text-foreground hover:ring-1 hover:ring-border/60 focus-visible:bg-foreground/5 focus-visible:text-foreground focus-visible:ring-1 focus-visible:ring-border/60 focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-ring pointer-coarse:after:absolute pointer-coarse:after:inset-x-0 pointer-coarse:after:bottom-0 pointer-coarse:after:h-full pointer-coarse:after:min-h-11"
         >
           {picture}
           <WorkingShimmerText className="min-w-0 truncate group-hover/replying:hidden group-focus-visible/replying:hidden">

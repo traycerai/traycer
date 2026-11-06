@@ -3,16 +3,19 @@ import { expect, test, type Locator, type Page } from "@playwright/test";
 import { centreOf, fixture, nextFrames } from "./support/fixtures.ts";
 
 // "Tracy is replying…" is the way into the running turn (Tracy Bots T148).
-// At rest it reads as status; hovered or keyboard-focused it says
-// "View turn" and the running time, with a chevron; on a touch screen the whole line takes
-// the tap at the 44px minimum while the drawn line, and so the dock, keeps
-// its height. Which text shows, what paints, what a point hits and how tall
-// the line is are CSS and layout, which jsdom cannot answer.
+// At rest it reads as status; hovered or keyboard-focused it says "View
+// turn" and the running time, with a chevron; on a touch screen the whole
+// line takes the tap at the 44px minimum while the drawn line, and so the
+// dock, keeps its height. The extra height is taken above the line, never
+// from the message box under it. Which text shows, what paints, what a
+// point hits and how tall the line is are CSS and layout, which jsdom
+// cannot answer.
 
 const STRIP = '[data-testid="strip-turn"]';
 const PLAIN_STRIP = '[data-testid="strip-plain"]';
 const DOCK = '[data-testid="dock-turn"]';
 const BUTTON = `${STRIP} button`;
+const COMPOSER_INPUT = '[data-testid="composer-turn-input"]';
 
 const REPLYING = "Tracy is replying…";
 const VIEW_TURN = /^View turn · \d+m \d+s$/;
@@ -49,14 +52,19 @@ async function expectViewTurnText(page: Page): Promise<void> {
   await expect(chevron(page)).toBeVisible();
 }
 
-/** Whether the button is what a point on the page hits. */
-async function hitsButton(page: Page, x: number, y: number): Promise<boolean> {
+/** Whether a point on the page lands in an element matching `selector`. */
+async function hits(
+  page: Page,
+  selector: string,
+  x: number,
+  y: number,
+): Promise<boolean> {
   return page.evaluate(
-    ({ px, py, selector }) => {
+    ({ px, py, target }) => {
       const hit = document.elementFromPoint(px, py);
-      return hit !== null && hit.closest(selector) !== null;
+      return hit !== null && hit.closest(target) !== null;
     },
-    { px: x, py: y, selector: BUTTON },
+    { px: x, py: y, target: selector },
   );
 }
 
@@ -99,13 +107,13 @@ test("on a fine pointer the hit area stays the drawn line", async ({
   await open(page);
   const at = await centreOf(page.locator(STRIP));
 
-  expect(await hitsButton(page, at.x, at.y - 16)).toBe(false);
+  expect(await hits(page, BUTTON, at.x, at.y - 16)).toBe(false);
 });
 
 test.describe("on a touch screen", () => {
   test.use({ hasTouch: true, isMobile: true });
 
-  test("the whole line width takes the tap at 44px, and the dock keeps its height", async ({
+  test("the line's touch band grows upward only: the message box keeps every pixel, and the dock its height", async ({
     page,
   }) => {
     await open(page);
@@ -118,18 +126,32 @@ test.describe("on a touch screen", () => {
     if (strip === null || plain === null) throw new Error("no strip box");
     expect(strip.height).toBe(plain.height);
 
-    const centre = await centreOf(page.locator(STRIP));
-    const xs = [strip.x + 2, centre.x, strip.x + strip.width - 2];
+    const bottom = strip.y + strip.height;
+    const centreX = strip.x + strip.width / 2;
+    const xs = [strip.x + 2, centreX, strip.x + strip.width - 2];
     for (const x of xs) {
-      for (const dy of [-21, 21]) {
-        expect(await hitsButton(page, x, centre.y + dy)).toBe(true);
-      }
+      expect(await hits(page, BUTTON, x, bottom - 1)).toBe(true);
+      expect(await hits(page, BUTTON, x, bottom - 43)).toBe(true);
+      // Past the 44px band, the transcript stand-in.
+      expect(await hits(page, BUTTON, x, bottom - 45)).toBe(false);
     }
-    // The enlarged band reaches neither the composer below nor the transcript above.
-    expect(await hitsButton(page, centre.x, centre.y + 40)).toBe(false);
-    expect(await hitsButton(page, centre.x, centre.y - 40)).toBe(false);
 
-    await page.touchscreen.tap(centre.x, centre.y - 20);
+    // The box keeps its pixels: the padding under the line is not the
+    // button, and the field's first row and the point 21px under the
+    // line's centre are the box's own.
+    expect(await hits(page, BUTTON, centreX, bottom + 1)).toBe(false);
+    const centreY = strip.y + strip.height / 2;
+    expect(await hits(page, COMPOSER_INPUT, centreX, centreY + 21)).toBe(true);
+    const input = await page.locator(COMPOSER_INPUT).boundingBox();
+    if (input === null) throw new Error("no composer input box");
+    expect(await hits(page, COMPOSER_INPUT, centreX, input.y + 1)).toBe(true);
+
+    // A tap 21px under the line's centre focuses the box and opens nothing;
+    // a tap inside the band opens the turn.
+    await page.touchscreen.tap(centreX, centreY + 21);
+    await expect(page.locator(COMPOSER_INPUT)).toBeFocused();
+    await expect(page.locator(DOCK)).not.toHaveAttribute("data-opened", /.*/);
+    await page.touchscreen.tap(centreX, centreY - 20);
     await expect(page.locator(DOCK)).toHaveAttribute("data-opened", "1");
   });
 });
