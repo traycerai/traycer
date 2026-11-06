@@ -948,6 +948,18 @@ vi.mock("@/components/ui/dropdown-menu", async () => ({
   ...(await import("./dropdown-menu-passthrough-mock")),
 }));
 
+// These broad panel cases cover provider settings, not the separate Details
+// drawer. Its subject gate is exercised with a real team environment in the
+// TeamProviders suite; keep this host-scoped harness from issuing an unrelated
+// environment lookup for every selected profile.
+vi.mock(
+  "@/components/settings/details/use-provider-row-details-subject",
+  () => ({
+    useAppliedProviderItemDetailsSubject: () => null,
+    useProviderRowDetailsSubject: () => null,
+  }),
+);
+
 // Radix's Select needs a pointer-capable layout to open its listbox, which
 // jsdom does not provide. Mirrors the stand-in
 // `provider-model-provider-connect-dialog.test.tsx` uses: same element
@@ -3262,10 +3274,41 @@ describe("<ProvidersSettingsPanel />", () => {
     expect(
       screen.queryByRole("button", { name: "Refresh all providers" }),
     ).toBeNull();
-    expect(
-      screen.getByRole("button", { name: "All keys are in Secrets" }),
-    ).toBeDefined();
+    expect(screen.getByRole("button", { name: "Open Secrets" })).toBeDefined();
   });
+
+  it.each([
+    { providerId: "kiro", label: "Kiro" },
+    { providerId: "cursor", label: "Cursor" },
+  ] as const)(
+    "labels the Secrets link for $label's provider key",
+    ({ providerId, label }) => {
+      providerMocks.listResult.data = {
+        providers: [
+          providerState({
+            providerId,
+            selected: { kind: "bundled" },
+            candidates: [],
+            envOverrides: [],
+            nativeCapabilities: FULL_TABS,
+            apiKey: { supported: true, configured: false, source: null },
+          }),
+        ],
+      };
+
+      render(
+        <TooltipProvider>
+          <ProvidersSettingsPanel />
+        </TooltipProvider>,
+      );
+
+      openProfilesTab();
+      expect(screen.getByRole("region", { name: "Key" })).toBeDefined();
+      expect(screen.getAllByText(label).length).toBeGreaterThan(0);
+      fireEvent.click(screen.getByRole("button", { name: "Open Secrets" }));
+      expect(navigateToSettingsSectionMock).toHaveBeenCalledWith("secrets");
+    },
+  );
 
   it("blocks disabling the last enabled provider", () => {
     providerMocks.listResult.data = {
@@ -4830,7 +4873,9 @@ describe("<ProvidersSettingsPanel />", () => {
         name: "More for Codex's own login on dev-box",
       }),
     ).toBeDefined();
-    expect(screen.queryByRole("button", { name: "Manage profile" })).toBeNull();
+    expect(
+      screen.queryByRole("menuitem", { name: "Manage profile" }),
+    ).toBeNull();
     expect(screen.queryByText("Email unavailable")).toBeNull();
     expect(
       screen.queryByRole("button", { name: "Refresh usage limits" }),
@@ -4840,10 +4885,11 @@ describe("<ProvidersSettingsPanel />", () => {
         name: "Refresh profile statuses and usage limits",
       }),
     ).toBeNull();
-    expect(within(ownLoginRow).getAllByRole("button")).toHaveLength(2);
+    expect(within(ownLoginRow).getAllByRole("button")).toHaveLength(1);
+    expect(within(ownLoginRow).getAllByRole("menuitem")).toHaveLength(1);
 
     fireEvent.click(
-      within(ownLoginRow).getByRole("button", {
+      within(ownLoginRow).getByRole("menuitem", {
         name: "Sign in to use everywhere",
       }),
     );
@@ -4953,7 +4999,9 @@ describe("<ProvidersSettingsPanel />", () => {
         }),
       ).toBeDefined();
       expect(
-        within(row).getByRole("button", { name: "Sign in to use everywhere" }),
+        within(row).getByRole("menuitem", {
+          name: "Sign in to use everywhere",
+        }),
       ).toBeDefined();
       expect(within(row).queryByText(/isn't signed in/)).toBeNull();
       expect(within(row).queryByText(/Couldn't check/)).toBeNull();
@@ -4970,7 +5018,7 @@ describe("<ProvidersSettingsPanel />", () => {
         }),
       ).toBeNull();
       expect(
-        within(row).getByRole("button", { name: "Sign in" }),
+        within(row).getByRole("menuitem", { name: "Sign in" }),
       ).toBeDefined();
       expect(
         within(row).getByRole("button", {
@@ -4996,7 +5044,7 @@ describe("<ProvidersSettingsPanel />", () => {
           name: "More for Claude Code's own login on windows-test-machine",
         }),
       ).toBeDefined();
-      fireEvent.click(within(row).getByRole("button", { name: "Retry" }));
+      fireEvent.click(within(row).getByRole("menuitem", { name: "Retry" }));
 
       expect(providerMocks.refreshProviders).toHaveBeenCalledOnce();
     });
@@ -5006,7 +5054,7 @@ describe("<ProvidersSettingsPanel />", () => {
 
       expect(within(row).getByText(/Checking/)).toBeDefined();
       expect(within(row).queryByText(/Couldn't check/)).toBeNull();
-      expect(within(row).queryByRole("button", { name: "Retry" })).toBeNull();
+      expect(within(row).queryByRole("menuitem", { name: "Retry" })).toBeNull();
       expect(
         within(row).queryByRole("button", { name: /^More for / }),
       ).toBeNull();
@@ -5068,7 +5116,7 @@ describe("<ProvidersSettingsPanel />", () => {
 
     openProfilesTab();
 
-    fireEvent.click(screen.getByRole("button", { name: "Manage profile" }));
+    fireEvent.click(screen.getByRole("menuitem", { name: "Manage profile" }));
     fireEvent.change(screen.getByLabelText("Profile name"), {
       target: { value: "Default" },
     });
@@ -5098,7 +5146,7 @@ describe("<ProvidersSettingsPanel />", () => {
     expect(providerMocks.recolorProfileMutate).toHaveBeenCalledTimes(2);
     act(() => recolorOptions.onSuccess());
 
-    fireEvent.click(screen.getByRole("button", { name: "Manage profile" }));
+    fireEvent.click(screen.getByRole("menuitem", { name: "Manage profile" }));
     fireEvent.click(screen.getByRole("button", { name: "Switch account" }));
     await waitFor(() => {
       expect(providerMocks.startLoginMutate).toHaveBeenCalled();
@@ -5158,7 +5206,7 @@ describe("<ProvidersSettingsPanel />", () => {
 
     openProfilesTab();
     fireEvent.click(screen.getByRole("menuitem", { name: "Work" }));
-    fireEvent.click(screen.getByRole("button", { name: "Manage profile" }));
+    fireEvent.click(screen.getByRole("menuitem", { name: "Manage profile" }));
 
     const dialog = screen.getByRole("dialog", { name: "Edit profile" });
     expect(within(dialog).getByText("Open from terminal")).toBeDefined();
@@ -5239,7 +5287,7 @@ describe("<ProvidersSettingsPanel />", () => {
     openProfilesTab();
 
     fireEvent.click(screen.getByRole("menuitem", { name: "Work" }));
-    fireEvent.click(screen.getByRole("button", { name: "Manage profile" }));
+    fireEvent.click(screen.getByRole("menuitem", { name: "Manage profile" }));
     fireEvent.change(screen.getByLabelText("Profile name"), {
       target: { value: "Unsaved name" },
     });
@@ -5248,7 +5296,7 @@ describe("<ProvidersSettingsPanel />", () => {
     );
     fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
 
-    fireEvent.click(screen.getByRole("button", { name: "Manage profile" }));
+    fireEvent.click(screen.getByRole("menuitem", { name: "Manage profile" }));
     const reopenedNameInput = screen.getByLabelText("Profile name");
     if (!(reopenedNameInput instanceof HTMLInputElement)) {
       throw new Error("Expected profile name input");
@@ -5272,10 +5320,12 @@ describe("<ProvidersSettingsPanel />", () => {
         name: "Codex's own login on dev-box",
       }),
     );
-    expect(screen.queryByRole("button", { name: "Manage profile" })).toBeNull();
+    expect(
+      screen.queryByRole("menuitem", { name: "Manage profile" }),
+    ).toBeNull();
 
     fireEvent.click(screen.getByRole("menuitem", { name: "Work" }));
-    fireEvent.click(screen.getByRole("button", { name: "Manage profile" }));
+    fireEvent.click(screen.getByRole("menuitem", { name: "Manage profile" }));
 
     const nameInput = screen.getByLabelText("Profile name");
     if (!(nameInput instanceof HTMLInputElement)) {
@@ -5350,7 +5400,7 @@ describe("<ProvidersSettingsPanel />", () => {
     );
     const { rerender } = render(renderSection("host-b"));
 
-    fireEvent.click(screen.getByRole("button", { name: "Manage profile" }));
+    fireEvent.click(screen.getByRole("menuitem", { name: "Manage profile" }));
     fireEvent.change(screen.getByLabelText("Profile name"), {
       target: { value: "Host B draft" },
     });
@@ -5542,7 +5592,7 @@ describe("<ProvidersSettingsPanel />", () => {
     fireEvent.click(
       screen.getByRole("menuitem", { name: "Signed out, Signed out" }),
     );
-    const manageProfileButton = screen.getByRole("button", {
+    const manageProfileButton = screen.getByRole("menuitem", {
       name: "Manage profile",
     });
     const profileSummaryActions = manageProfileButton.closest(
@@ -5557,10 +5607,10 @@ describe("<ProvidersSettingsPanel />", () => {
     expect(standing.className).toContain("break-words");
     expect(standing.className).not.toContain("truncate");
     expect(
-      within(profileSummaryActions).getByRole("button", { name: "Sign in" }),
+      within(profileSummaryActions).getByRole("menuitem", { name: "Sign in" }),
     ).toBeDefined();
     expect(
-      within(profileSummaryActions).getByRole("button", {
+      within(profileSummaryActions).getByRole("menuitem", {
         name: "Manage profile",
       }),
     ).toBe(manageProfileButton);
@@ -5633,7 +5683,7 @@ describe("<ProvidersSettingsPanel />", () => {
         name: "Disabled profile, Disabled",
       }),
     );
-    fireEvent.click(screen.getByRole("button", { name: "Manage profile" }));
+    fireEvent.click(screen.getByRole("menuitem", { name: "Manage profile" }));
 
     expect(screen.getByRole("dialog", { name: "Edit profile" })).toBeDefined();
     expect(screen.getByLabelText("Profile name")).toHaveProperty(
@@ -6274,7 +6324,7 @@ describe("<ProvidersSettingsPanel />", () => {
     openProfilesTab();
 
     fireEvent.click(screen.getByRole("menuitem", { name: "Work" }));
-    fireEvent.click(screen.getByRole("button", { name: "Manage profile" }));
+    fireEvent.click(screen.getByRole("menuitem", { name: "Manage profile" }));
     fireEvent.click(screen.getByRole("button", { name: "Switch account" }));
     await waitFor(() => {
       expect(providerMocks.startLoginMutate).toHaveBeenCalled();
@@ -6348,7 +6398,7 @@ describe("<ProvidersSettingsPanel />", () => {
     openProfilesTab();
 
     fireEvent.click(screen.getByRole("menuitem", { name: "Work" }));
-    fireEvent.click(screen.getByRole("button", { name: "Manage profile" }));
+    fireEvent.click(screen.getByRole("menuitem", { name: "Manage profile" }));
     fireEvent.click(screen.getByRole("button", { name: "Switch account" }));
     await waitFor(() => {
       expect(providerMocks.startLoginMutate).toHaveBeenCalled();
@@ -6709,7 +6759,7 @@ describe("<ProvidersSettingsPanel />", () => {
     openProfilesTab();
 
     fireEvent.click(screen.getByRole("menuitem", { name: "Work" }));
-    fireEvent.click(screen.getByRole("button", { name: "Manage profile" }));
+    fireEvent.click(screen.getByRole("menuitem", { name: "Manage profile" }));
     fireEvent.click(screen.getByRole("button", { name: "Switch account" }));
     await waitFor(() => {
       expect(providerMocks.startLoginMutate).toHaveBeenCalled();
@@ -6821,7 +6871,7 @@ describe("<ProvidersSettingsPanel />", () => {
     openProfilesTab();
 
     fireEvent.click(screen.getByRole("menuitem", { name: "Work" }));
-    fireEvent.click(screen.getByRole("button", { name: "Manage profile" }));
+    fireEvent.click(screen.getByRole("menuitem", { name: "Manage profile" }));
     fireEvent.click(screen.getByRole("button", { name: "Switch account" }));
     const [, startOptions] = firstStartLoginCall();
     await act(() => {
@@ -7239,7 +7289,7 @@ describe("<ProvidersSettingsPanel />", () => {
     openProfilesTab();
 
     fireEvent.click(screen.getByRole("menuitem", { name: "Work" }));
-    fireEvent.click(screen.getByRole("button", { name: "Manage profile" }));
+    fireEvent.click(screen.getByRole("menuitem", { name: "Manage profile" }));
     fireEvent.click(screen.getByRole("button", { name: "Switch account" }));
     await waitFor(() => {
       expect(providerMocks.startLoginMutate).toHaveBeenCalledTimes(1);
@@ -7617,7 +7667,7 @@ describe("<ProvidersSettingsPanel />", () => {
 
     // Defaults to the ambient profile - select "Work" (signed out) first.
     fireEvent.click(screen.getByRole("menuitem", { name: "Work, Signed out" }));
-    fireEvent.click(screen.getByRole("button", { name: "Sign in" }));
+    fireEvent.click(screen.getByRole("menuitem", { name: "Sign in" }));
 
     await waitFor(() => {
       expect(providerMocks.startLoginMutate).toHaveBeenCalled();
@@ -7794,7 +7844,7 @@ describe("<ProvidersSettingsPanel />", () => {
     // The row's own "Sign in" button - sign-in intent, so the dialog exists
     // for the sign-in and nothing else.
     fireEvent.click(screen.getByRole("menuitem", { name: "Work, Signed out" }));
-    fireEvent.click(screen.getByRole("button", { name: "Sign in" }));
+    fireEvent.click(screen.getByRole("menuitem", { name: "Sign in" }));
 
     await waitFor(() => {
       expect(providerMocks.startLoginMutate).toHaveBeenCalled();
@@ -7864,7 +7914,7 @@ describe("<ProvidersSettingsPanel />", () => {
     openProfilesTab();
 
     fireEvent.click(screen.getByRole("menuitem", { name: "Work, Signed out" }));
-    fireEvent.click(screen.getByRole("button", { name: "Sign in" }));
+    fireEvent.click(screen.getByRole("menuitem", { name: "Sign in" }));
 
     await waitFor(() => {
       expect(providerMocks.startLoginMutate).toHaveBeenCalled();
@@ -7947,7 +7997,7 @@ describe("<ProvidersSettingsPanel />", () => {
     openProfilesTab();
 
     fireEvent.click(screen.getByRole("menuitem", { name: "Work, Signed out" }));
-    fireEvent.click(screen.getByRole("button", { name: "Sign in" }));
+    fireEvent.click(screen.getByRole("menuitem", { name: "Sign in" }));
 
     await waitFor(() => {
       expect(providerMocks.startLoginMutate).toHaveBeenCalled();
@@ -8049,7 +8099,7 @@ describe("<ProvidersSettingsPanel />", () => {
     // Manage-profile intent: the name/color fields are live and uncommitted
     // until "Save changes", so this entry must land back on the form.
     fireEvent.click(screen.getByRole("menuitem", { name: "Work" }));
-    fireEvent.click(screen.getByRole("button", { name: "Manage profile" }));
+    fireEvent.click(screen.getByRole("menuitem", { name: "Manage profile" }));
     fireEvent.click(screen.getByRole("button", { name: "Switch account" }));
 
     await waitFor(() => {
@@ -8160,7 +8210,7 @@ describe("<ProvidersSettingsPanel />", () => {
     openProfilesTab();
 
     fireEvent.click(screen.getByRole("menuitem", { name: "Work" }));
-    fireEvent.click(screen.getByRole("button", { name: "Manage profile" }));
+    fireEvent.click(screen.getByRole("menuitem", { name: "Manage profile" }));
     fireEvent.click(screen.getByRole("button", { name: "Switch account" }));
 
     await waitFor(() => {
@@ -9014,7 +9064,7 @@ describe("<ProvidersSettingsPanel />", () => {
     // Defaults to the ambient profile - select "Work" to bring its editable
     // details dialog (name field, actions) into view.
     fireEvent.click(screen.getByRole("menuitem", { name: "Work" }));
-    fireEvent.click(screen.getByRole("button", { name: "Manage profile" }));
+    fireEvent.click(screen.getByRole("menuitem", { name: "Manage profile" }));
     fireEvent.change(screen.getByLabelText("Profile name"), {
       target: { value: "Personal" },
     });
@@ -9029,7 +9079,7 @@ describe("<ProvidersSettingsPanel />", () => {
     expect(typeof renameOptions.onSuccess).toBe("function");
     act(() => renameOptions.onSuccess());
 
-    fireEvent.click(screen.getByRole("button", { name: "Manage profile" }));
+    fireEvent.click(screen.getByRole("menuitem", { name: "Manage profile" }));
     fireEvent.click(screen.getByRole("button", { name: "Remove profile" }));
     expect(
       screen.getByText(

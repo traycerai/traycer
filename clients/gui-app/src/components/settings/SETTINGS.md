@@ -874,9 +874,9 @@ start from the named host's seeded policy; Reset and Restore default tiers
 delete the team item. Host-source panels preserve their existing behavior.
 
 Providers, on a cloud-backed Personal or a team, lists configured providers
-first and folds the rest behind Add provider. The header links to Secrets,
-where every key also lives. The selected provider's pane holds its own key
-when that provider takes one, then Plans, then its profiles, then rate limits.
+first and folds the rest behind Add provider. The header links to Secrets.
+The selected provider's pane holds its own key when that provider takes one,
+then Plans, then its profiles, then rate limits.
 The executable path and version sit in Details under the rate-limit card.
 Plans replace Add a profile, with an unlink preview.
 Only controls with a persisted team store are rendered. MCP rows expose the
