@@ -29,6 +29,7 @@ import {
   serializeChatCollapsibleKey,
 } from "@/components/chat/chat-collapsible-key";
 import type { ChatMessage as ChatMessageModel } from "@/stores/composer/chat-store";
+import { chatFindSegmentUnitId } from "@/components/chat/chat-find-projection";
 import { makeMessage } from "./chat-message-fixtures";
 
 const TILE_INSTANCE_ID = "find-controller-tile";
@@ -49,7 +50,19 @@ describe("useChatFindController - chain-open on reveal", () => {
 
   beforeEach(() => {
     registeredAdapter = null;
-    scrollToLocation = vi.fn();
+    // Matches `issueFreeTimelineNavigation`'s real contract: `afterSettle`
+    // fires once row landing is done and the reader has not taken over. A
+    // test that needs to hold the reveal pending, or to simulate the reader
+    // cancelling, overrides this with its own captured callback.
+    scrollToLocation = vi.fn(
+      (
+        _location: unknown,
+        afterSettle: () => void,
+        _onCancelled: () => void,
+      ) => {
+        afterSettle();
+      },
+    );
     cancelManualNavigation = vi.fn();
     setScrolledActiveUserMessageIdIfChanged = vi.fn();
 
@@ -444,6 +457,459 @@ describe("useChatFindController - chain-open on reveal", () => {
       act(() => rerenderScope({ openSubagentId: null, getSubagentViewRoot }));
       expect(getAdapter().getSnapshot().total).toBe(2);
     });
+  });
+});
+
+describe("useChatFindController - deferred settle gates reveal", () => {
+  // The race this suite guards: `requestFindReveal`/`scheduleFindRevealStep`
+  // must not paint or re-center a unit before the row navigation they
+  // started has told them, via `afterSettle`, that it can no longer correct
+  // the scroll - and must retire cleanly, never stuck pending forever, when
+  // that navigation instead reports `onCancelled` (the reader took over).
+  // `chat-messages.tsx`'s `issueFreeTimelineNavigation` is the real caller of
+  // both; here `scrollToLocation` stands in for it and a test holds the
+  // callbacks itself to simulate navigation still in flight or cancelled.
+  let registeredAdapter: ChatFindAdapter | null;
+  let scroller: HTMLElement;
+  let scrollToLocation: Mock;
+  let cancelManualNavigation: Mock;
+  let setScrolledActiveUserMessageIdIfChanged: Mock;
+  let restoreFrames: (() => void) | null;
+  let restoreHighlights: (() => void) | null;
+
+  beforeEach(() => {
+    registeredAdapter = null;
+    scrollToLocation = vi.fn(
+      (
+        _location: unknown,
+        afterSettle: () => void,
+        _onCancelled: () => void,
+      ) => {
+        afterSettle();
+      },
+    );
+    cancelManualNavigation = vi.fn();
+    setScrolledActiveUserMessageIdIfChanged = vi.fn();
+
+    scroller = document.createElement("div");
+    document.body.append(scroller);
+
+    restoreFrames = installFrameQueue();
+    restoreHighlights = installMockHighlights();
+  });
+
+  afterEach(() => {
+    restoreFrames?.();
+    restoreFrames = null;
+    restoreHighlights?.();
+    restoreHighlights = null;
+    cleanup();
+    scroller.remove();
+    registeredAdapter = null;
+    vi.restoreAllMocks();
+  });
+
+  function renderController(messages: ReadonlyArray<ChatMessageModel>): {
+    readonly getAdapter: () => ChatFindAdapter;
+    readonly getController: () => {
+      readonly scheduleMountedHighlightSync: () => void;
+      readonly onRenderedDataChange: () => void;
+    };
+  } {
+    const getScroller = (): HTMLElement => scroller;
+    const tileFindContext = {
+      tileInstanceId: TILE_INSTANCE_ID,
+      registerAdapter: (adapter: TileFindAdapter) => {
+        registeredAdapter = adapter as ChatFindAdapter;
+        return () => {
+          if (registeredAdapter === adapter) {
+            registeredAdapter = null;
+          }
+        };
+      },
+    };
+    const forceStore = createChatFindForceStore();
+    let controller: {
+      readonly scheduleMountedHighlightSync: () => void;
+      readonly onRenderedDataChange: () => void;
+    } | null = null;
+
+    function Wrapper(props: { readonly children: ReactNode }) {
+      return createElement(
+        ChatFindForceTileInstanceIdContext.Provider,
+        { value: TILE_INSTANCE_ID },
+        createElement(
+          ChatFindForceStoreContext.Provider,
+          { value: forceStore },
+          createElement(
+            TileFindContext.Provider,
+            { value: tileFindContext },
+            props.children,
+          ),
+        ),
+      );
+    }
+
+    renderHook(
+      () => {
+        const messagesRef = useRef(messages);
+        messagesRef.current = messages;
+        const rowIndexByKeyRef = useRef(
+          new Map(
+            messages.map((message, index) => [message.id, index] as const),
+          ),
+        );
+        const backgroundToolBlockIdsRef = useRef<ReadonlySet<string>>(
+          EMPTY_BACKGROUND_TOOL_BLOCK_IDS,
+        );
+        controller = useChatFindController({
+          splitLongTurns: true,
+          instanceId: TILE_INSTANCE_ID,
+          messages,
+          messagesRef,
+          backgroundToolBlockIds: EMPTY_BACKGROUND_TOOL_BLOCK_IDS,
+          backgroundToolBlockIdsRef,
+          getFindCoverageMessage: NO_COVERAGE_MESSAGE,
+          getFindPlacement: () => FULLY_LOADED_TRANSCRIPT,
+          requestIndexJump: () => undefined,
+          requestIndexRead: () => undefined,
+          rowIndexByKeyRef,
+          getScroller,
+          scrollToLocation,
+          cancelManualNavigation,
+          getNavigationGeneration: () => 0,
+          setScrolledActiveUserMessageIdIfChanged,
+          openSubagentId: null,
+          getSubagentViewRoot: () => null,
+        });
+        return controller;
+      },
+      { wrapper: Wrapper },
+    );
+
+    return {
+      getAdapter: () => {
+        if (registeredAdapter === null) {
+          throw new Error("chat find adapter did not register");
+        }
+        return registeredAdapter;
+      },
+      getController: () => {
+        if (controller === null) throw new Error("controller did not mount");
+        return controller;
+      },
+    };
+  }
+
+  /** Mounts `messageId`'s row (empty of any find unit) in the scroller. */
+  function mountRow(messageId: string): HTMLElement {
+    const row = document.createElement("div");
+    row.dataset.messageId = messageId;
+    scroller.append(row);
+    return row;
+  }
+
+  /** Mounts a find unit for `unitId` inside an already-mounted row. */
+  function mountUnit(row: HTMLElement, unitId: string, text: string): void {
+    const unit = document.createElement("span");
+    unit.dataset.chatFindUnit = unitId;
+    unit.textContent = text;
+    row.append(unit);
+  }
+
+  const NEEDLE = "deferred-settle-needle";
+
+  function transcriptWithOneOffscreenNeedle(
+    messageId: string,
+    needle: string,
+  ): ReadonlyArray<ChatMessageModel> {
+    return [
+      {
+        ...makeMessage(0, "assistant"),
+        id: messageId,
+        segments: [
+          {
+            id: `${messageId}-seg`,
+            kind: "text",
+            markdown: needle,
+            isStreaming: false,
+          },
+        ],
+      },
+    ];
+  }
+
+  function transcriptWithRepeatedOffscreenNeedle(
+    messageId: string,
+    needle: string,
+  ): ReadonlyArray<ChatMessageModel> {
+    return [
+      {
+        ...makeMessage(0, "assistant"),
+        id: messageId,
+        segments: [
+          {
+            id: `${messageId}-seg`,
+            kind: "text",
+            markdown: `${needle} and again ${needle}`,
+            isStreaming: false,
+          },
+        ],
+      },
+    ];
+  }
+
+  it("holds the reveal pending through a rendered-data change and a mounted-highlight sync, then paints once settle fires", () => {
+    const messages = transcriptWithOneOffscreenNeedle("msg-deferred", NEEDLE);
+    const capturedAfterSettles: Array<() => void> = [];
+    scrollToLocation.mockImplementation(
+      (
+        _location: unknown,
+        afterSettle: () => void,
+        _onCancelled: () => void,
+      ) => {
+        capturedAfterSettles.push(afterSettle);
+      },
+    );
+    const { getAdapter, getController } = renderController(messages);
+    const adapter = getAdapter();
+
+    act(() => {
+      void adapter.search({ requestId: 1, query: NEEDLE, matchCase: false });
+    });
+    flushOneFrame();
+
+    expect(scrollToLocation).toHaveBeenCalledTimes(1);
+    expect(adapter.getSnapshot().exactHighlight).toBe("pending");
+    const capturedAfterSettle = capturedAfterSettles[0];
+
+    // The row lands and mounts while the navigation this reveal started is
+    // still outstanding - the exact sequence a LegendList mount signal races
+    // against a slow scroll settle.
+    const row = mountRow("msg-deferred");
+    mountUnit(row, chatFindSegmentUnitId("msg-deferred-seg"), NEEDLE);
+
+    // Both signals `chat-messages.tsx` would fire on that mount must be
+    // no-ops while the row navigation they did not start is still pending.
+    act(() => getController().onRenderedDataChange());
+    act(() => getController().scheduleMountedHighlightSync());
+    flushFrames();
+
+    expect(scrollToLocation).toHaveBeenCalledTimes(1);
+    expect(adapter.getSnapshot().exactHighlight).toBe("pending");
+
+    // The navigation settles: only now may the reveal proceed.
+    act(() => capturedAfterSettle());
+    flushFrames();
+
+    expect(adapter.getSnapshot().exactHighlight).toBe("painted");
+  });
+
+  it("ignores a stale settle completion after a newer search superseded it", () => {
+    const firstMessages = transcriptWithOneOffscreenNeedle(
+      "msg-stale-one",
+      "stale-needle-one",
+    );
+    const capturedAfterSettles: Array<() => void> = [];
+    scrollToLocation.mockImplementation(
+      (
+        _location: unknown,
+        afterSettle: () => void,
+        _onCancelled: () => void,
+      ) => {
+        capturedAfterSettles.push(afterSettle);
+      },
+    );
+    const { getAdapter } = renderController(firstMessages);
+    const adapter = getAdapter();
+
+    act(() => {
+      void adapter.search({
+        requestId: 1,
+        query: "stale-needle-one",
+        matchCase: false,
+      });
+    });
+    flushOneFrame();
+    expect(scrollToLocation).toHaveBeenCalledTimes(1);
+    expect(adapter.getSnapshot().exactHighlight).toBe("pending");
+    const staleAfterSettle = capturedAfterSettles[0];
+
+    // A different, newer query takes over before the first navigation ever
+    // settled - the generation bump this depends on.
+    act(() => {
+      void adapter.search({
+        requestId: 2,
+        query: "stale-needle-one",
+        matchCase: false,
+      });
+    });
+    flushOneFrame();
+    expect(scrollToLocation).toHaveBeenCalledTimes(2);
+
+    // The stale settle from the superseded navigation arrives late. It must
+    // not advance or corrupt the current (second) navigation's pending gate.
+    act(() => staleAfterSettle());
+    flushFrames();
+    expect(adapter.getSnapshot().exactHighlight).toBe("pending");
+    expect(scrollToLocation).toHaveBeenCalledTimes(2);
+
+    // The current navigation's own settle still completes the reveal.
+    const row = mountRow("msg-stale-one");
+    mountUnit(
+      row,
+      chatFindSegmentUnitId("msg-stale-one-seg"),
+      "stale-needle-one",
+    );
+    const currentAfterSettle = capturedAfterSettles[1];
+    act(() => currentAfterSettle());
+    flushFrames();
+    expect(adapter.getSnapshot().exactHighlight).toBe("painted");
+  });
+
+  it("still waits for row navigation on a same-unit hop requested while the first reveal's navigation is pending", () => {
+    const messages = transcriptWithRepeatedOffscreenNeedle(
+      "msg-same-unit",
+      "same-unit-needle",
+    );
+    const capturedAfterSettles: Array<() => void> = [];
+    scrollToLocation.mockImplementation(
+      (
+        _location: unknown,
+        afterSettle: () => void,
+        _onCancelled: () => void,
+      ) => {
+        capturedAfterSettles.push(afterSettle);
+      },
+    );
+    const { getAdapter } = renderController(messages);
+    const adapter = getAdapter();
+
+    act(() => {
+      void adapter.search({
+        requestId: 1,
+        query: "same-unit-needle",
+        matchCase: false,
+      });
+    });
+    flushOneFrame();
+    expect(scrollToLocation).toHaveBeenCalledTimes(1);
+    expect(adapter.getSnapshot().exactHighlight).toBe("pending");
+
+    // The second occurrence lives in the SAME unit as the first. Reached
+    // while the first reveal's row navigation is still outstanding, it must
+    // not be mistaken for an already-open in-place hop: nothing has mounted
+    // or positioned that unit yet.
+    act(() => {
+      void adapter.next();
+    });
+    flushOneFrame();
+
+    expect(scrollToLocation).toHaveBeenCalledTimes(2);
+    expect(adapter.getSnapshot().exactHighlight).toBe("pending");
+
+    const row = mountRow("msg-same-unit");
+    mountUnit(
+      row,
+      chatFindSegmentUnitId("msg-same-unit-seg"),
+      "same-unit-needle and again same-unit-needle",
+    );
+    const secondAfterSettle = capturedAfterSettles[1];
+    act(() => secondAfterSettle());
+    flushFrames();
+
+    expect(adapter.getSnapshot().exactHighlight).toBe("painted");
+  });
+
+  it("retires the pending reveal without painting when the row navigation reports cancellation, leaves a later mount to a passive repaint only, and still fully navigates the next same-unit hop", () => {
+    const messages = transcriptWithRepeatedOffscreenNeedle(
+      "msg-cancelled",
+      "cancelled-needle",
+    );
+    const capturedAfterSettles: Array<() => void> = [];
+    const capturedOnCancelleds: Array<() => void> = [];
+    scrollToLocation.mockImplementation(
+      (
+        _location: unknown,
+        afterSettle: () => void,
+        onCancelled: () => void,
+      ) => {
+        capturedAfterSettles.push(afterSettle);
+        capturedOnCancelleds.push(onCancelled);
+      },
+    );
+    const { getAdapter, getController } = renderController(messages);
+    const adapter = getAdapter();
+
+    act(() => {
+      void adapter.search({
+        requestId: 1,
+        query: "cancelled-needle",
+        matchCase: false,
+      });
+    });
+    flushOneFrame();
+    expect(scrollToLocation).toHaveBeenCalledTimes(1);
+    expect(adapter.getSnapshot().exactHighlight).toBe("pending");
+
+    // The reader takes the viewport back before the navigation ever settled.
+    act(() => capturedOnCancelleds[0]());
+    flushFrames();
+
+    // Retiring the reveal is not painting it: the match stays "pending" (the
+    // active match is retained for a future passive paint) but nothing was
+    // scrolled or highlighted on the reader's behalf, and no second
+    // navigation was issued. A LATE call of the first navigation's own
+    // `afterSettle` (a straggler racing the cancellation) must not resurrect
+    // the retired reveal either.
+    expect(scrollToLocation).toHaveBeenCalledTimes(1);
+    expect(adapter.getSnapshot().exactHighlight).toBe("pending");
+    act(() => capturedAfterSettles[0]?.());
+    flushFrames();
+    expect(scrollToLocation).toHaveBeenCalledTimes(1);
+    expect(adapter.getSnapshot().exactHighlight).toBe("pending");
+
+    // The row mounts afterwards. With the reveal retired this can only be a
+    // passive repaint (no further navigation, no second `scrollToLocation`
+    // call) - never a resumed reveal fighting the reader's own scroll.
+    const row = mountRow("msg-cancelled");
+    mountUnit(
+      row,
+      chatFindSegmentUnitId("msg-cancelled-seg"),
+      "cancelled-needle and again cancelled-needle",
+    );
+    act(() => getController().scheduleMountedHighlightSync());
+    flushFrames();
+
+    expect(scrollToLocation).toHaveBeenCalledTimes(1);
+    expect(adapter.getSnapshot().exactHighlight).toBe("painted");
+
+    // A passive rescan (the same signal a streaming message edit fires)
+    // reconciles the open chain against the now-mounted unit. It must not
+    // resurrect the completed-reveal bookkeeping the cancellation retired:
+    // only an actual completed navigation+paint may mark a unit "already
+    // revealed" for the in-place-hop shortcut below.
+    act(() => {
+      adapter.notifyRowsChanged();
+    });
+    flushFrames();
+    expect(scrollToLocation).toHaveBeenCalledTimes(1);
+
+    // The cancelled reveal must not count as an already-opened unit: the
+    // next hop into the SAME unit has to navigate fully again, not take the
+    // same-unit in-place-hop shortcut over a reader-owned scroll position.
+    act(() => {
+      void adapter.next();
+    });
+    flushOneFrame();
+
+    expect(scrollToLocation).toHaveBeenCalledTimes(2);
+    expect(adapter.getSnapshot().exactHighlight).toBe("pending");
+
+    const secondAfterSettle = capturedAfterSettles[1];
+    act(() => secondAfterSettle());
+    flushFrames();
+    expect(adapter.getSnapshot().exactHighlight).toBe("painted");
   });
 });
 
