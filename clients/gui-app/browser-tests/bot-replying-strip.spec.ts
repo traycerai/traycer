@@ -90,7 +90,7 @@ test("hovering the line swaps in View turn and the running time, with a chevron 
   await page.mouse.move(at.x, at.y);
 
   await expectViewTurnText(page);
-  expect(await background(page)).not.toBe(resting);
+  await expect.poll(() => background(page)).not.toBe(resting);
 });
 
 test("keyboard focus swaps the text the way hover does", async ({ page }) => {
@@ -103,7 +103,7 @@ test("keyboard focus swaps the text the way hover does", async ({ page }) => {
 
   await expect(button(page)).toBeFocused();
   await expectViewTurnText(page);
-  expect(await background(page)).not.toBe(resting);
+  await expect.poll(() => background(page)).not.toBe(resting);
 });
 
 async function heightOf(page: Page, selector: string): Promise<number> {
