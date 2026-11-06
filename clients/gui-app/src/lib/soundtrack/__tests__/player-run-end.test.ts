@@ -302,6 +302,46 @@ describe("TrackPlayer outro", () => {
     expect(output.ramps("bus0/0").at(-1)?.at).toBeGreaterThan(18);
   });
 
+  it("waits for an outro that loads after the length, with no layer sample left sounding, and ends the run with it", async () => {
+    const output = new FakeOutput();
+    const outro = Promise.withResolvers<AudioBuffer>();
+    const stems: StemSource = {
+      load: (_track, layer) =>
+        layer.name === "O"
+          ? outro.promise
+          : Promise.resolve(makeAudioBuffer(2, 10)),
+    };
+    // The one 2 s sample plays at 3 s and is over by 5 s; no repeat falls
+    // before the length.
+    const track: VariableTrack = {
+      ...buildTrack(1, OUTRO),
+      states: [stateOf([properties(3, 20)])],
+    };
+    const { player, onRunEnd } = observedPlayer(output, stems, track);
+    player.start(0, 0.1);
+
+    await advance(12);
+    expect(output.plays("bus0/0")).toHaveLength(1);
+    expect(output.plays("bus0/1")).toEqual([]);
+    expect(onRunEnd).not.toHaveBeenCalled();
+    expect(player.currentState()).not.toBeNull();
+
+    const releasedAt = output.currentTime();
+    outro.resolve(makeAudioBuffer(3, 10));
+    await advance(1);
+    const played = output.plays("bus0/1");
+    expect(played).toHaveLength(1);
+    // On the next 0.5 s grid tick that has not gone by.
+    expect(played[0].when).toBeGreaterThanOrEqual(releasedAt);
+    expect(played[0].when).toBeLessThan(releasedAt + 0.5 + TICK_SECONDS);
+    expect(onRunEnd).not.toHaveBeenCalled();
+
+    const outroEnd = played[0].when + played[0].duration;
+    await advance(outroEnd - output.currentTime() + TICK_SECONDS + 0.01);
+    expect(onRunEnd).toHaveBeenCalledTimes(1);
+    expect(player.currentState()).toBeNull();
+  });
+
   it("rings out like a track without one when the outro will not load", async () => {
     vi.spyOn(appLogger, "warn").mockReturnValue(undefined);
     const output = new FakeOutput();
