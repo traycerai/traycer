@@ -208,7 +208,7 @@ export function TabStripPositionRow(props: AreaRowPlacement): ReactNode {
             }
           : null
       }
-      revertLabel="Reset tab placement to default: Left"
+      revertLabel="Reset tab placement to default: Top"
       description={TAB_STRIP_PLACEMENT_ROW.description}
       stacked={false}
       selected={false}
@@ -261,7 +261,7 @@ export function SideStripViewRow(props: AreaRowPlacement): ReactNode {
             }
           : null
       }
-      revertLabel="Reset side tab view to default: Tabs only"
+      revertLabel="Reset side tab view to default: Tabs and agents"
       description={SIDE_STRIP_VIEW_ROW.description}
       stacked
       selected={selected}
@@ -365,7 +365,7 @@ export function SidebarStartCollapsedRow(props: AreaRowPlacement): ReactNode {
               );
             }
       }
-      revertLabel="Reset sidebar collapsed in new tasks to default: On"
+      revertLabel="Reset sidebar collapsed in new tasks to default: Off"
       description={SIDEBAR_START_COLLAPSED_ROW.description}
       stacked={false}
       selected={false}

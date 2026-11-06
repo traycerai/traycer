@@ -1,5 +1,9 @@
 import { z } from "zod";
 import { lazySchema } from "@traycer/protocol/framework/lazy-schema";
+import {
+  chatSearchModeSchema,
+  chatSearchSnippetSchema,
+} from "@traycer/protocol/host/chat-search/schemas";
 import { botIdSchema } from "./schemas";
 
 /**
@@ -419,13 +423,30 @@ export const botThreadSummarySchema = lazySchema(() =>
 );
 export type BotThreadSummary = z.infer<typeof botThreadSummarySchema>;
 
+/** `bot.thread.list@1.0` and `@1.1`'s request, frozen by hand: the whole list, unpaged. */
+export const botThreadListRequestSchemaV10 = lazySchema(() =>
+  z.object({ botId: botIdSchema }),
+);
+
 /**
  * Answered by any host: the bound one from its own store, any other from
  * the summaries the bound host keeps in the bot's environment room (T65).
- * Most recent activity first.
+ * Most recent activity first, ties by thread id.
  */
 export const botThreadListRequestSchema = lazySchema(() =>
-  z.object({ botId: botIdSchema }),
+  botThreadListRequestSchemaV10.extend({
+    /**
+     * `bot.thread.list@1.2`: the most threads to return; `null` for every
+     * one after `cursor`, as a 1.1 request lists them.
+     */
+    limit: z.number().int().min(1).nullable(),
+    /**
+     * `bot.thread.list@1.2`: a `nextCursor` a listing of this bot returned,
+     * to list the threads after the page it ended; `null` from the most
+     * recent. Opaque; a cursor another bot's listing returned is refused.
+     */
+    cursor: z.string().min(1).max(1024).nullable(),
+  }),
 );
 export type BotThreadListRequest = z.infer<typeof botThreadListRequestSchema>;
 
@@ -491,10 +512,17 @@ export const botThreadListResponseSchemaV11 = lazySchema(() =>
   }),
 );
 
-/** `bot.thread.list@1.2`: each anchor carries its post's excerpt. */
+/**
+ * `bot.thread.list@1.2`: each anchor carries its post's excerpt, and the
+ * list is paged.
+ */
 export const botThreadListResponseSchema = lazySchema(() =>
   botThreadListResponseSchemaV11.extend({
     threads: z.array(botThreadSummarySchema),
+    /** The `cursor` for the threads after this page; `null` on the last page. */
+    nextCursor: z.string().min(1).max(1024).nullable(),
+    /** How many threads the bot has, this page's included. */
+    total: z.number().int().nonnegative(),
   }),
 );
 export type BotThreadListResponse = z.infer<typeof botThreadListResponseSchema>;
@@ -510,7 +538,7 @@ export type BotTurnKey = z.infer<typeof botTurnKeySchema>;
 
 /**
  * What a reader asks the bound host of a bot's turns: the turns behind the
- * replies it shows (`messageIds`), the turns that took the posts it shows as
+ * bot's rows it shows (`messageIds`), the turns that took the posts it shows as
  * not answered (`requestIds`), and turns it already knows (`turns`: a
  * check-in's). Any host answers: the bound one from its own record, any
  * other from what the bound host keeps in the bot's environment room.
@@ -561,3 +589,188 @@ export const botTurnLocateResponseSchema = lazySchema(() =>
   z.object({ turns: z.array(botTurnRefSchema) }),
 );
 export type BotTurnLocateResponse = z.infer<typeof botTurnLocateResponseSchema>;
+
+// ---- bot.conversation.search (T139) ------------------------------------- //
+
+export const BOT_CONVERSATION_SEARCH_MAX_QUERY_CHARS = 200;
+export const BOT_CONVERSATION_SEARCH_MAX_PAGE_SIZE = 50;
+
+const botConversationSearchCursorSchema = lazySchema(() =>
+  z.string().max(64).nullable(),
+);
+
+/** One bot's channel and threads, or those of every bot the caller can see. */
+export const botConversationSearchScopeSchema = lazySchema(() =>
+  z.discriminatedUnion("kind", [
+    z.object({ kind: z.literal("bot"), botId: botIdSchema }),
+    z.object({ kind: z.literal("all") }),
+  ]),
+);
+export type BotConversationSearchScope = z.infer<
+  typeof botConversationSearchScopeSchema
+>;
+
+/** Whose rows match: `bot` the bot's own, `me` the caller's, a member's by id. */
+export const botConversationSearchFromSchema = lazySchema(() =>
+  z.union([
+    z.enum(["anyone", "bot", "me"]),
+    z.object({ userId: z.string().min(1).max(255) }),
+  ]),
+);
+export type BotConversationSearchFrom = z.infer<
+  typeof botConversationSearchFromSchema
+>;
+
+/** Which records match: the channel's top level, its threads, or both. */
+export const botConversationSearchWhereSchema = lazySchema(() =>
+  z.enum(["both", "posts", "threads"]),
+);
+export type BotConversationSearchWhere = z.infer<
+  typeof botConversationSearchWhereSchema
+>;
+
+/**
+ * `newest` orders the matches by time. `relevance` orders them as the mode
+ * does: `ranked` by relevance and recency, `substring` by time.
+ */
+export const botConversationSearchSortSchema = lazySchema(() =>
+  z.enum(["relevance", "newest"]),
+);
+export type BotConversationSearchSort = z.infer<
+  typeof botConversationSearchSortSchema
+>;
+
+/**
+ * Text search over what the members of a bot read: posts, replies,
+ * announcements and question cards, never a session of the bot. Its mode is
+ * `chat.search`'s, with the same refusal: `substring` over `all` answers
+ * `E_INVALID_ARGUMENT`, because the scan over every bot exceeds the host's
+ * event-loop stall budget.
+ *
+ * `newest` pages every match. `relevance` pages the best 1,000 by relevance;
+ * the last page of a search with more is not the last match. In either order
+ * `total` is the first page's count, `null` from 1,000 matches.
+ */
+export const botConversationSearchRequestSchema = lazySchema(() =>
+  z.object({
+    scope: botConversationSearchScopeSchema,
+    query: z.string().min(1).max(BOT_CONVERSATION_SEARCH_MAX_QUERY_CHARS),
+    mode: chatSearchModeSchema,
+    sort: botConversationSearchSortSchema,
+    from: botConversationSearchFromSchema,
+    /** Epoch ms, inclusive; `null` for any time. */
+    since: z.number().int().nullable(),
+    where: botConversationSearchWhereSchema,
+    /**
+     * Opaque; pass back the previous page's `nextCursor`, `null` to start.
+     * Good only for the search that issued it, by the same caller, for
+     * minutes after its last page and until the host restarts; anything else
+     * answers `E_INVALID_ARGUMENT`, and the search starts again from `null`.
+     * Asking again from `null` closes the search's open pages. A search too
+     * large for the host to keep open answers the same code.
+     */
+    cursor: botConversationSearchCursorSchema,
+    limit: z.number().int().min(1).max(BOT_CONVERSATION_SEARCH_MAX_PAGE_SIZE),
+  }),
+);
+export type BotConversationSearchRequest = z.infer<
+  typeof botConversationSearchRequestSchema
+>;
+
+/** What a row is to a reader of the channel. */
+export const botConversationSearchRowKindSchema = lazySchema(() =>
+  z.enum(["post", "reply", "announcement", "question"]),
+);
+export type BotConversationSearchRowKind = z.infer<
+  typeof botConversationSearchRowKindSchema
+>;
+
+export const botConversationSearchHitSchema = lazySchema(() =>
+  z.object({
+    botId: botIdSchema,
+    /** The channel. */
+    conversationId: z.string().min(1),
+    /** The thread the row is in; `null` for a row at the channel's top level. */
+    threadId: z.string().min(1).nullable(),
+    messageId: z.string().min(1),
+    /** The member who wrote the row; `null` for the bot's own. */
+    senderUserId: z.string().min(1).nullable(),
+    rowKind: botConversationSearchRowKindSchema,
+    createdAt: z.number().int(),
+    /** Offsets as `chat.search` gives them. */
+    snippet: chatSearchSnippetSchema,
+    /** Rows of the thread this channel row heads; `null` when it heads none. */
+    replyCount: z.number().int().nonnegative().nullable(),
+    /**
+     * The excerpt of the post a hit's thread hangs off
+     * ({@link botThreadAnchorExcerptOf}); `null` for a channel row, and when
+     * the answering host holds no text for that post.
+     */
+    threadExcerpt: z
+      .string()
+      .min(1)
+      .max(BOT_THREAD_ANCHOR_EXCERPT_MAX_CHARS)
+      .nullable(),
+    /**
+     * Where the hit stands in its search, higher first: comparable across
+     * the pages and bots of one search, and with nothing else. Scores of the
+     * same query and mode from different hosts are interleaved as a
+     * best-effort ranking, not a cross-host guarantee; hits of one source keep
+     * their own order.
+     */
+    score: z.number(),
+  }),
+);
+export type BotConversationSearchHit = z.infer<
+  typeof botConversationSearchHitSchema
+>;
+
+/**
+ * Why a bot's rows are missing from an answer.
+ *
+ * - `no-host`: no host runs the bot.
+ * - `offline`: its host did not answer.
+ * - `unsupported`: its host predates this method.
+ * - `other-owner`: its host belongs to another owner, so this host may not
+ *   ask it; a client that can reach that host asks it directly.
+ */
+export const botConversationSearchUnreachableReasonSchema = lazySchema(() =>
+  z.enum(["no-host", "offline", "unsupported", "other-owner"]),
+);
+export type BotConversationSearchUnreachableReason = z.infer<
+  typeof botConversationSearchUnreachableReasonSchema
+>;
+
+export const botConversationSearchUnreachableSchema = lazySchema(() =>
+  z.object({
+    botId: botIdSchema,
+    reason: botConversationSearchUnreachableReasonSchema,
+  }),
+);
+export type BotConversationSearchUnreachable = z.infer<
+  typeof botConversationSearchUnreachableSchema
+>;
+
+export const botConversationSearchResponseSchema = lazySchema(() =>
+  z.object({
+    hits: z.array(botConversationSearchHitSchema),
+    /**
+     * `null` is the only end of a search: a page may hold no hits and still
+     * carry a cursor. In `newest`, a row whose time changes between pages may
+     * come back; a client drops repeats by message.
+     */
+    nextCursor: botConversationSearchCursorSchema,
+    /**
+     * `partial` while an index has not caught up, or a bot's host did not
+     * answer, so a missing result may still appear.
+     */
+    indexState: z.enum(["complete", "partial"]),
+    /** Hits in all when they were counted; `null` otherwise. */
+    total: z.number().int().nonnegative().nullable(),
+    /** The bots this answer leaves out, each said once. */
+    unreachable: z.array(botConversationSearchUnreachableSchema),
+  }),
+);
+export type BotConversationSearchResponse = z.infer<
+  typeof botConversationSearchResponseSchema
+>;

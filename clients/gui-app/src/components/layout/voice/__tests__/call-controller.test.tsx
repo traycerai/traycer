@@ -2917,6 +2917,7 @@ describe("what a call leaves unsent at its end", () => {
 describe("a call dialled from a message box", () => {
   const FAILURE: BotSendFailure = {
     failed: false,
+    unsent: null,
     fail: () => undefined,
     clear: () => undefined,
   };
@@ -2939,6 +2940,7 @@ describe("a call dialled from a message box", () => {
             failure={FAILURE}
             edit={null}
             onEditEnd={() => undefined}
+            onEditResume={() => undefined}
             seed={null}
             keptDraft={null}
             quote={null}

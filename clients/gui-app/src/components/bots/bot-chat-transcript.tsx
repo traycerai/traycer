@@ -2,6 +2,7 @@ import {
   useCallback,
   useEffect,
   useMemo,
+  useRef,
   useState,
   useSyncExternalStore,
   type ReactNode,
@@ -19,6 +20,7 @@ import { botTurnIndexOf, turnOfMessages } from "@/lib/bots/bot-turn-receipt";
 import type { BotTurnRef } from "@traycer/protocol/host/bot/conversation-schemas";
 import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
 import type { HostRpcRegistry } from "@/lib/host";
+import { useBotSearchWordMarks } from "@/hooks/bots/use-bot-search-word-marks";
 import { useBotTurnLocateQuery } from "@/hooks/bots/use-bot-turn-locate-query";
 import { useBotFailedRecovery } from "@/components/bots/bot-failed-recovery";
 import type { BotTurnOpen } from "@/stores/bots/bot-open-thread-store";
@@ -536,6 +538,13 @@ function BotChatTranscriptBody(props: {
     );
   }, []);
   useLandOnMessage(landOn, state.snapshotLoaded, land);
+  const transcriptRef = useRef<HTMLDivElement | null>(null);
+  const rowIdOf = useCallback(
+    (messageId: string): string | null =>
+      jumpTargetIn(messages, { kind: "message", messageId })?.rowId ?? null,
+    [messages],
+  );
+  useBotSearchWordMarks(transcriptRef, chatId, rowIdOf);
   const getMessageActions = useCallback(() => null, []);
   const turns = useTranscriptTurns({
     client: tabClient,
@@ -608,6 +617,7 @@ function BotChatTranscriptBody(props: {
     <ChatContainerContext.Provider value={botId}>
       <ChatBotPresentationContext.Provider value={presentation}>
         <div
+          ref={transcriptRef}
           data-chat-keyboard-scroll-scope=""
           data-active="true"
           data-testid="bot-chat-transcript"
@@ -804,9 +814,11 @@ function useTranscriptTurns(input: {
 const NO_TURN_KEYS: ReadonlyArray<{ chatId: string; turnId: string }> = [];
 
 /**
- * What to ask the host about a list's rows: every reply of the bot (not an
- * announcement), by each record its row carries, and every post the bot
- * failed to answer, by its request.
+ * What to ask the host about a list's rows: every row of the bot (a reply,
+ * a question or an announcement), by each record its row carries, and every
+ * post the bot failed to answer, by its request. A row no turn wrote (an
+ * announcement the host posts itself) is asked too, and the host names no
+ * turn for it.
  */
 function turnLocateKeysOf(
   messages: ReadonlyArray<ChatMessage>,
@@ -819,7 +831,6 @@ function turnLocateKeysOf(
   const requestIds: string[] = [];
   for (const message of messages) {
     if (message.role === "assistant") {
-      if (message.announcement !== undefined) continue;
       if (message.persistentMessageId !== null) {
         messageIds.push(message.persistentMessageId);
       }

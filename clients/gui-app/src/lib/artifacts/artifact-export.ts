@@ -26,6 +26,16 @@ export interface ArtifactExportSource {
    * by title rather than exporting an empty file.
    */
   readonly markdown: string | null;
+  /**
+   * The id of this artifact's parent WITHIN THE EXPORT, or `null` for a root.
+   *
+   * An archive places a parent's children in a folder named after it, next to
+   * the parent's own file inside that folder, so a nested export unpacks as the
+   * tree the sidebar shows. An id that names no other source in the request is
+   * treated as a root, as is any source a malformed cycle would orphan. Every
+   * `null` reproduces the flat archive.
+   */
+  readonly parentId: string | null;
 }
 
 export interface ArtifactExportRequest {
@@ -73,22 +83,166 @@ function safeFileStem(title: string): string {
   return WINDOWS_RESERVED_FILENAME.test(stem) ? `_${stem}` : stem;
 }
 
-function collisionSafeFilenames(
+/**
+ * The longest archive path an entry may take, in UTF-16 code units (what
+ * Windows counts). Extraction tools that are not long-path aware refuse a path
+ * over MAX_PATH (260), and that count includes the folder the archive is
+ * unpacked into, so this leaves 60 units for it.
+ */
+const ARCHIVE_PATH_BUDGET = 200;
+/** Room kept on every name in a path for a ` (n)` collision suffix. */
+const COLLISION_SUFFIX_RESERVE = 6;
+/** Below this a stem stops being recognizable; deeper paths may then exceed the budget. */
+const MIN_BUDGETED_STEM = 12;
+
+/** `stem` cut to at most `maxUnits` UTF-16 units, on a code-point boundary. */
+function truncateStem(stem: string, maxUnits: number): string {
+  if (stem.length <= maxUnits) return stem;
+  let truncated = "";
+  for (const character of stem) {
+    if (truncated.length + character.length > maxUnits) break;
+    truncated += character;
+  }
+  return truncated.replace(/[. ]+$/g, "") || "artifact";
+}
+
+/**
+ * Claims an entry in one directory and returns its stem, suffixing ` (2)`,
+ * ` (3)`... on a clash. `used` holds the directory's ACTUAL entry names,
+ * lower-cased: a folder is its stem, a file its stem plus `entrySuffix`. So a
+ * folder titled `Plan.md` and a file titled `Plan` (written `Plan.md`) clash,
+ * while a folder `Plan/` and a file `Plan.md` - different names on disk - do
+ * not.
+ */
+function claimEntry(
+  stem: string,
+  entrySuffix: string,
+  used: Set<string>,
+): string {
+  let candidate = stem;
+  let suffix = 2;
+  while (used.has(`${candidate}${entrySuffix}`.toLocaleLowerCase("en-US"))) {
+    candidate = `${stem} (${suffix})`;
+    suffix += 1;
+  }
+  used.add(`${candidate}${entrySuffix}`.toLocaleLowerCase("en-US"));
+  return candidate;
+}
+
+/**
+ * One archive path per source, in request order.
+ *
+ * A leaf is `<stem>.<ext>` in its parent's directory. A source with children
+ * becomes a folder `<stem>/` holding its own `<stem>.<ext>` and its children,
+ * so the parent travels with what is nested under it. Entry names are unique
+ * per directory, case-insensitively, since most archives are unpacked onto
+ * case-insensitive filesystems; a folder and a file are compared by the names
+ * they actually take on disk.
+ *
+ * Stems shrink with depth so every path stays within `ARCHIVE_PATH_BUDGET`. A
+ * leaf may take whatever its directory leaves. A folder must leave room for
+ * the deepest path beneath it, which carries one name per folder level below
+ * plus a file name, so the room left is shared equally among those names: a
+ * folder holding only files takes half, one with two levels of folders under
+ * it a quarter. A short name leaves its unused share to the names below it.
+ */
+function archivePaths(
   artifacts: ReadonlyArray<ArtifactExportSource>,
   extension: "md" | "pdf",
 ): string[] {
-  const used = new Set<string>();
-  return artifacts.map((artifact) => {
-    const stem = safeFileStem(artifact.title);
-    let candidate = stem;
-    let suffix = 2;
-    while (used.has(candidate.toLocaleLowerCase("en-US"))) {
-      candidate = `${stem} (${suffix})`;
-      suffix += 1;
+  const ids = new Set(artifacts.map((artifact) => artifact.id));
+  const childrenByParent = new Map<string, number[]>();
+  const rootIndexes: number[] = [];
+  artifacts.forEach((artifact, index) => {
+    const { parentId } = artifact;
+    if (parentId === null || parentId === artifact.id || !ids.has(parentId)) {
+      rootIndexes.push(index);
+      return;
     }
-    used.add(candidate.toLocaleLowerCase("en-US"));
-    return `${candidate}.${extension}`;
+    const siblings = childrenByParent.get(parentId);
+    if (siblings === undefined) {
+      childrenByParent.set(parentId, [index]);
+    } else {
+      siblings.push(index);
+    }
   });
+
+  // Folder levels from `id` down, itself included: 0 for a file, 1 for a
+  // folder holding only files. A cycle's back edge counts as a file, which is
+  // what `place` makes of it.
+  const levels = new Map<string, number>();
+  const onPath = new Set<string>();
+  const folderLevels = (id: string): number => {
+    const known = levels.get(id);
+    if (known !== undefined) return known;
+    if (onPath.has(id)) return 0;
+    onPath.add(id);
+    let deepest = 0;
+    for (const child of childrenByParent.get(id) ?? []) {
+      deepest = Math.max(deepest, 1 + folderLevels(artifacts[child].id));
+    }
+    onPath.delete(id);
+    levels.set(id, deepest);
+    return deepest;
+  };
+
+  // Every placed path is non-empty, so "" doubles as "not placed yet".
+  const paths = artifacts.map(() => "");
+  const foldered = new Set<string>();
+  const place = (
+    indexes: readonly number[],
+    directory: string,
+    used: Set<string>,
+  ): void => {
+    for (const index of indexes) {
+      if (paths[index] !== "") continue;
+      const artifact = artifacts[index];
+      // A repeated id is one artifact: its children go under the first copy.
+      // A child already placed (the far end of a cycle) earns no folder.
+      const children = foldered.has(artifact.id)
+        ? []
+        : (childrenByParent.get(artifact.id) ?? []).filter(
+            (child) => child !== index && paths[child] === "",
+          );
+      foldered.add(artifact.id);
+      const fileSuffix = `.${extension}`;
+      const available =
+        ARCHIVE_PATH_BUDGET - directory.length - fileSuffix.length;
+      const isFolder = children.length > 0;
+      // `depth` folder names and one file name share what is left, less the
+      // `depth` slashes between them; each keeps room for a collision suffix.
+      const depth = isFolder ? folderLevels(artifact.id) : 0;
+      const stemBudget = Math.max(
+        MIN_BUDGETED_STEM,
+        Math.floor((available - depth) / (depth + 1)) -
+          COLLISION_SUFFIX_RESERVE,
+      );
+      const baseStem = truncateStem(safeFileStem(artifact.title), stemBudget);
+      if (!isFolder) {
+        const stem = claimEntry(baseStem, fileSuffix, used);
+        paths[index] = `${directory}${stem}${fileSuffix}`;
+        continue;
+      }
+      const stem = claimEntry(baseStem, "", used);
+      const folder = `${directory}${stem}/`;
+      paths[index] = `${folder}${stem}${fileSuffix}`;
+      place(
+        children,
+        folder,
+        new Set([`${stem}${fileSuffix}`.toLocaleLowerCase("en-US")]),
+      );
+    }
+  };
+  const rootNames = new Set<string>();
+  place(rootIndexes, "", rootNames);
+  // A parent cycle has no root to be reached from; its members export at the
+  // top level rather than silently dropping out of the archive.
+  place(
+    artifacts.map((_, index) => index),
+    "",
+    rootNames,
+  );
+  return paths;
 }
 
 function requireAvailableMarkdown(artifact: ArtifactExportSource): string {
@@ -446,13 +600,21 @@ export async function createArtifactExport(
     throw new Error("Individual export requires exactly one artifact.");
   }
   const extension = request.format === "markdown" ? "md" : "pdf";
-  const filenames = collisionSafeFilenames(request.artifacts, extension);
+  // The path budget is about unpacking an archive; a single file goes through
+  // a save dialog and keeps the name it has always had.
+  const filenames = request.archive
+    ? archivePaths(request.artifacts, extension)
+    : [`${safeFileStem(request.artifacts[0].title)}.${extension}`];
   const markdownFiles = request.artifacts.map((artifact) =>
     requireAvailableMarkdown(artifact),
   );
-  const fileBytes = await Promise.all(
-    markdownFiles.map((markdown) => exportFileBytes(request.format, markdown)),
-  );
+  // One conversion at a time: a nested export has no cap on its size, and
+  // starting every PDF build together would make the whole selection's layout
+  // work concurrent.
+  const fileBytes: Uint8Array<ArrayBuffer>[] = [];
+  for (const markdown of markdownFiles) {
+    fileBytes.push(await exportFileBytes(request.format, markdown));
+  }
   if (request.archive) {
     const { zipSync } = await import("fflate");
     const entries = fileBytes.reduce<Record<string, Uint8Array<ArrayBuffer>>>(

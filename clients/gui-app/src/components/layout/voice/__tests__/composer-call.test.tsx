@@ -100,6 +100,7 @@ vi.mock("@/lib/links/open-link", () => ({
 
 const FAILURE: BotSendFailure = {
   failed: false,
+  unsent: null,
   fail: () => undefined,
   clear: () => undefined,
 };
@@ -166,6 +167,7 @@ function box(kind: BoxKind): ReactNode {
       failure={FAILURE}
       edit={null}
       onEditEnd={() => undefined}
+      onEditResume={() => undefined}
       seed={null}
       keptDraft={null}
       quote={null}

@@ -3,6 +3,7 @@
 Landed-input controls were measured against source main 120982023.
 The original 25 names and bounds retain their freshly observed classes.
 The MomentumPair controls were measured with the pair on main 49ec74dbf.
+The SendHold controls and the layout-hold variants were measured on main 8636d3252.
 Bounds count states including Init; witness lengths are evidence.
 """
 
@@ -13,6 +14,10 @@ MODULES = {'ChatScroll_MomentumPair_after': ('ChatScrollMomentumPair', 'ReplaySp
  'ChatScroll_MomentumPair_first_before': ('ChatScrollMomentumPair', 'ReplaySpec'),
  'ChatScroll_PKConsumer_after': ('ChatScrollPKConsumer', 'ReplaySpec'),
  'ChatScroll_PKConsumer_before': ('ChatScrollPKConsumer', 'ReplaySpec'),
+ 'ChatScroll_SendHold_after': ('ChatScrollSendHold', 'ReplaySpec'),
+ 'ChatScroll_SendHold_before': ('ChatScrollSendHold', 'ReplaySpec'),
+ 'ChatScroll_SendHold_closepad': ('ChatScrollSendHold', 'ReplaySpec'),
+ 'ChatScroll_SendHold_nowindow': ('ChatScrollSendHold', 'ReplaySpec'),
  'ChatScroll_drag_idle_fixed_pressqueue_after': ('ChatScrollT2Bounded', 'T2Spec'),
  'ChatScroll_drag_idle_fixed_pressqueue_before': ('ChatScrollT2Bounded', 'T2Spec')}
 
@@ -22,7 +27,11 @@ CHECK_DEADLOCK = {'ChatScroll_MomentumPair_after': True,
  'ChatScroll_MomentumPair_first_after': True,
  'ChatScroll_MomentumPair_first_before': True,
  'ChatScroll_PKConsumer_after': True,
- 'ChatScroll_PKConsumer_before': True}
+ 'ChatScroll_PKConsumer_before': True,
+ 'ChatScroll_SendHold_after': True,
+ 'ChatScroll_SendHold_before': True,
+ 'ChatScroll_SendHold_closepad': True,
+ 'ChatScroll_SendHold_nowindow': True}
 
 DEPTH = {'ChatScroll_MomentumPair_after': 16,
  'ChatScroll_MomentumPair_before': 16,
@@ -30,6 +39,10 @@ DEPTH = {'ChatScroll_MomentumPair_after': 16,
  'ChatScroll_MomentumPair_first_before': 15,
  'ChatScroll_PKConsumer_after': 42,
  'ChatScroll_PKConsumer_before': 42,
+ 'ChatScroll_SendHold_after': 40,
+ 'ChatScroll_SendHold_before': 40,
+ 'ChatScroll_SendHold_closepad': 32,
+ 'ChatScroll_SendHold_nowindow': 40,
  'ChatScroll_armless_viewport_fixed': 18,
  'ChatScroll_drag_idle_fixed': 18,
  'ChatScroll_drag_idle_fixed_nopressstep': 18,
@@ -59,9 +72,12 @@ DEPTH = {'ChatScroll_MomentumPair_after': 16,
  'ChatScroll_phone_above_tail_fixed': 20,
  'ChatScroll_phone_read': 12,
  'ChatScroll_phone_read_fixed': 12,
+ 'ChatScroll_phone_send_fixed': 12,
+ 'ChatScroll_phone_send_fixed_withlayouthold': 12,
  'ChatScroll_send': 14,
  'ChatScroll_send_fixed': 16,
  'ChatScroll_touch_end_fixed': 12,
+ 'ChatScroll_touch_end_fixed_withlayouthold': 12,
  'ChatScroll_turn_wheel_fixed': 18,
  'ChatScroll_turn_wheel_fixed_withturnclear': 18,
  'ChatScroll_unscrolled_wheel_fixed': 18}
@@ -70,6 +86,19 @@ MOMENTUM_ENDPOINT = ('Required coverage only: the reader history reaches source 
                      'absence fails the control.')
 MOMENTUM_YANK = ('Without momdir, the silent pan onto the end an away lift recorded reads as '
                  'its fling arriving: the report follows and writes past where the reader stopped.')
+
+SEND_ENDPOINT = ('Required coverage only: the send-6 history reaches source quiescence; '
+                 'absence fails the control.')
+SEND_DETACH = ('Send 6: the frame reverts the burst in the open pad to the offset before it, '
+               'below the ledger; the report publishes a departure, and the reader rests one unit '
+               'short of the end, detached with the pill (24-state measured witness).')
+SEND_NOWINDOW = ('The structural bit alone closes a frame after the send, so the close correction '
+                 'queues the scrollToEnd that bursts into the pad inside the void, and the reader '
+                 'detaches as without the hold (26-state measured witness).')
+SEND_CLOSEPAD = ('Under the hold, the close correction lands, then its own queued scrollToEnd runs '
+                 'into a pad that opens as it runs; the frame takes it back below the ledger, the '
+                 'report detaches the reader, and the pad reset leaves them free at the strict '
+                 'bottom with the pill ({} measured witness).')
 
 VIOLATIONS = {'ChatScroll_MomentumPair_after': {'I_MomentumPairEndpointNotReached': MOMENTUM_ENDPOINT},
  'ChatScroll_MomentumPair_before': {'I_IntentHeld': MOMENTUM_YANK,
@@ -91,6 +120,14 @@ VIOLATIONS = {'ChatScroll_MomentumPair_after': {'I_MomentumPairEndpointNotReache
                                                                     'reaches source quiescence (11 '
                                                                     'states); absence fails the '
                                                                     'control.'},
+ 'ChatScroll_SendHold_after': {'I_SendHoldEndpointNotReached': SEND_ENDPOINT},
+ 'ChatScroll_SendHold_before': {'I_IntentHeld': SEND_DETACH,
+                                'I_SendHoldEndpointNotReached': SEND_ENDPOINT},
+ 'ChatScroll_SendHold_closepad': {'I_ModeMatchesGeometry': SEND_CLOSEPAD.format('29- to 30-state'),
+                                  'I_PillHonest': SEND_CLOSEPAD.format('30-state'),
+                                  'I_SendHoldEndpointNotReached': SEND_ENDPOINT},
+ 'ChatScroll_SendHold_nowindow': {'I_IntentHeld': SEND_NOWINDOW,
+                                  'I_SendHoldEndpointNotReached': SEND_ENDPOINT},
  'ChatScroll_drag_idle_fixed_nopressstep': {'I_IntentHeld': 'Without pressstep, a return drag is '
                                                             'hidden by its original press offset '
                                                             'and corrected (17-state measured '

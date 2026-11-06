@@ -62,12 +62,12 @@ const LIT_CASES: ReadonlyArray<LitCase> = [
   {
     name: "topBar: the Position field (tab strip placement)",
     surface: "topBar",
-    snapshot: withArrangement({ tabStripPlacement: "top" }),
+    snapshot: withArrangement({ tabStripPlacement: "left" }),
   },
   {
     name: "topBar: the View field (side strip view)",
     surface: "topBar",
-    snapshot: withArrangement({ sideStripView: "activity" }),
+    snapshot: withArrangement({ sideStripView: "layered" }),
   },
   {
     name: "sidebar: a value change on a rail region",

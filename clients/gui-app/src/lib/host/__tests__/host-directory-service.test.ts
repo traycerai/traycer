@@ -1,3 +1,4 @@
+import { useSettingsHostScopeStore } from "@/stores/settings/settings-host-scope-store";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { DefaultRequestContextProvider } from "@traycer-clients/shared/auth/request-context-provider";
 import { createAuthenticatedUserFixture } from "@traycer-clients/shared/test-fixtures/authenticated-user";
@@ -20,7 +21,10 @@ import {
   type HostDirectoryServiceOptions,
 } from "@/lib/host/host-directory-service";
 import { lastLocalHostIdKey } from "@/lib/persist";
-import { useSettingsHostScopeStore } from "@/stores/settings/settings-host-scope-store";
+import {
+  setSettingsHostSelection,
+  settingsHostSelection,
+} from "@/stores/settings/__tests__/settings-host-scope-test-support";
 import { __setBrowserDocumentHiddenForTests } from "@/lib/dom/document-visibility";
 
 // Matches the production constant of the same name in `host-directory-service.ts`
@@ -143,7 +147,7 @@ afterEach(() => {
     directory.dispose();
   }
   window.localStorage.removeItem(LAST_LOCAL_HOST_ID_STORAGE_KEY);
-  useSettingsHostScopeStore.getState().setScopedHostId(null);
+  useSettingsHostScopeStore.getState().reset();
   __setBrowserDocumentHiddenForTests(false);
   vi.useRealTimers();
 });
@@ -1774,9 +1778,7 @@ describe("HostDirectoryService", () => {
         LAST_LOCAL_HOST_ID_STORAGE_KEY,
         localSnapshot.hostId,
       );
-      useSettingsHostScopeStore
-        .getState()
-        .setScopedHostId(localSnapshot.hostId);
+      setSettingsHostSelection(localSnapshot.hostId);
       const host = makeHost(localSnapshot);
       const directory = makeDirectory({
         authContextId: null,
@@ -1793,7 +1795,7 @@ describe("HostDirectoryService", () => {
       });
       await flushPromises();
 
-      expect(useSettingsHostScopeStore.getState().scopedHostId).toBe(
+      expect(settingsHostSelection()?.hostId ?? null).toBe(
         "re-enrolled-host-id",
       );
     });
@@ -1803,9 +1805,7 @@ describe("HostDirectoryService", () => {
         LAST_LOCAL_HOST_ID_STORAGE_KEY,
         localSnapshot.hostId,
       );
-      useSettingsHostScopeStore
-        .getState()
-        .setScopedHostId("some-other-remote-host");
+      setSettingsHostSelection("some-other-remote-host");
       const host = makeHost(localSnapshot);
       const directory = makeDirectory({
         authContextId: null,
@@ -1822,7 +1822,7 @@ describe("HostDirectoryService", () => {
       });
       await flushPromises();
 
-      expect(useSettingsHostScopeStore.getState().scopedHostId).toBe(
+      expect(settingsHostSelection()?.hostId ?? null).toBe(
         "some-other-remote-host",
       );
     });

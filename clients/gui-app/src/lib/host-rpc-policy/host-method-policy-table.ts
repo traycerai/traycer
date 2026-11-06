@@ -1763,6 +1763,8 @@ export const HOST_METHOD_POLL_TABLE = {
   // coalescing into one message - a post, or a reply whose `threadId` names
   // the thread; the same text into two threads is two params, never joined.
   "bot.conversation.list": { ...LATEST_SCHEDULING, poll: null },
+  // A search box's read: only the newest query's answer is shown.
+  "bot.conversation.search": { ...LATEST_SCHEDULING, poll: null },
   "bot.conversation.send": {
     mode: "fifo",
     joinResponseTimeoutMs: null,

@@ -58,7 +58,6 @@ export function MobileTileChooserPane(props: {
             epicId={epicId}
             tabId={tabId}
             onClose={onClose ?? stayOpen}
-            trailing={null}
           />
         </MobileTileOpenTargetContext>
       </nav>

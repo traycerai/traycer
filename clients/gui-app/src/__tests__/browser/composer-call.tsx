@@ -166,9 +166,10 @@ export function Pane(): ReactElement {
                 : "Reply in the thread"
             }
             testId={TEST_ID}
-            failure={{ failed: false, fail: noop, clear: noop }}
+            failure={{ failed: false, unsent: null, fail: noop, clear: noop }}
             edit={null}
             onEditEnd={noop}
+            onEditResume={noop}
             seed={null}
             keptDraft={null}
             quote={null}

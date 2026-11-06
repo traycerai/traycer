@@ -12,6 +12,7 @@ import {
   ChatStateLineContext,
 } from "./chat-state-line";
 import { ChatSandboxFooter } from "@/components/chat/chat-sandbox-footer";
+import { reportSentChatMessage } from "@/components/share-on-x/sent-messages";
 import { useChatSandboxState } from "@/hooks/sandboxes/use-chat-sandbox-state";
 import { useLiveChatSandboxState } from "@/hooks/sandboxes/use-live-chat-sandbox-state";
 import { TaskSandboxEndDetails } from "@/components/hosts/task-sandbox-end-details";
@@ -3505,14 +3506,23 @@ function useChatTileSessionViewModel(
       if (!canAct) return false;
       // Armed behind the folder dialog, the composer gets the promise and
       // clears its text only once "Send and switch" dispatches the send.
-      return submitThroughRebindGate({
-        submit: input,
-        dispatch: dispatchUserSend,
-        refusal: NO_LIVE_SEND_REFUSAL,
-      }).accepted;
+      return reportSentChatMessage(
+        submitThroughRebindGate({
+          submit: input,
+          dispatch: dispatchUserSend,
+          refusal: NO_LIVE_SEND_REFUSAL,
+        }).accepted,
+        {
+          text: input.contentText,
+          epicId: currentEpicId,
+          hostId: activeHostId,
+        },
+      );
     },
     [
       activeEditingQueueItemId,
+      activeHostId,
+      currentEpicId,
       props.restingSandbox,
       submitBoundSandboxMessage,
       canAct,

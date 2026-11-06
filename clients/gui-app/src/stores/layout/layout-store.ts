@@ -102,12 +102,13 @@ const LAYOUT_PERSIST_KEY = persistKey(STORE_KEYS.layout);
  *   legacy records tell (`legacyRecordsPresent`).
  * - 1: desktop-v1.4.0's record, `{ statusBar, composer }`.
  * - 7: desktop-v1.5.0 to v1.5.3: this store's shape without
- *   `sidebarStartCollapsed`, and with the earlier shipped defaults.
- * - 8: this shape, which changed three shipped defaults for a NEW install
- *   (tabs at the left edge, the sidebar collapsed in a new task, Agents and
- *   Artifacts unstacked). Every earlier version reads what its record does
- *   not say against the EARLIER defaults, so an install that exists keeps
- *   the layout it had.
+ *   `sidebarStartCollapsed`.
+ * - 8: this shape. It arrived with two shipped defaults changed for a NEW
+ *   install (tabs at the left edge, the sidebar collapsed in a new task),
+ *   both taken back before a release wrote a record; what stands is the
+ *   side strip's view, `activity` for a new install. Every record from 7 on
+ *   names that field, so only a 0 or 1 record reads it against the EARLIER
+ *   default, and an install that exists keeps the view it had.
  *
  * 2 to 6 were written only by pre-release builds of this store and are
  * deliberately NOT reused: zustand skips `migrate` when the stored version
@@ -120,25 +121,16 @@ const EARLIER_DEFAULTS_LAYOUT_VERSION = 7;
 const LAYOUT_PERSIST_VERSION = 8;
 
 /**
- * The three fields whose shipped default version 8 changed, as every build
- * before it shipped them: what an install from one of those builds was
- * looking at wherever its record says nothing. A record at version 7 says
- * nothing about `sidebarStartCollapsed` (the field did not exist); a record
- * at 0 or 1 says nothing about any of the three.
+ * The field whose shipped default changed after a release wrote records, as
+ * every build before the change shipped it: what an install from one of
+ * those builds was looking at wherever its record says nothing. A record at
+ * 0 or 1 says nothing about the side strip's view.
  *
- * `DEFAULT_ARRANGEMENT` and `DEFAULT_RAIL` speak for a new install only, and
- * every reader of an earlier record falls back here instead.
+ * `DEFAULT_ARRANGEMENT` speaks for a new install only, and every reader of
+ * an earlier record falls back here instead.
  */
-const EARLIER_INSTALL_ARRANGEMENT: Pick<
-  LayoutArrangement,
-  "tabStripPlacement" | "sidebarStartCollapsed" | "rail"
-> = {
-  tabStripPlacement: "top",
-  sidebarStartCollapsed: false,
-  rail: normalizeRail([
-    ...DEFAULT_RAIL,
-    { kind: "stack", id: railStackId(["railAgents", "railArtifacts"]) },
-  ]),
+const EARLIER_INSTALL_ARRANGEMENT: Pick<LayoutArrangement, "sideStripView"> = {
+  sideStripView: "layered",
 };
 
 seedMissingLayoutRecord();
@@ -377,10 +369,12 @@ function migrateLayoutPersistedState(
 }
 
 /**
- * A desktop-v1.5.x record, field for field, with the one field it could not
- * have written read as that build drew it: the sidebar open in a new task.
- * Its `tabStripPlacement` and `rail` are its own - every v1.5.x build wrote
- * both - and read verbatim by the same resolvers a rehydrate runs.
+ * A desktop-v1.5.x record, field for field, read by the same resolvers a
+ * rehydrate runs. The one field it could not have written,
+ * `sidebarStartCollapsed`, reads as that build drew it, which is the shipped
+ * default: the sidebar open in a new task. Its `sideStripView` is its own -
+ * every v1.5.x build wrote it - and the earlier baseline underneath never
+ * reaches a v1.5.x record.
  */
 function fromEarlierDefaultsRecord(
   stored: Record<string, unknown>,
@@ -410,9 +404,9 @@ function fromEarlierDefaultsRecord(
  * field whether or not anyone touched it, and the delta is the user's own
  * picks (L-133).
  *
- * The three fields v1.4.0 had no setting for read as v1.4.0 drew them
- * (`EARLIER_INSTALL_ARRANGEMENT`): this is an install that exists, and the
- * layout it had is the one it keeps.
+ * The side strip's view, which v1.4.0 had no setting for, reads as v1.4.0
+ * drew it (`EARLIER_INSTALL_ARRANGEMENT`): this is an install that exists,
+ * and the layout it had is the one it keeps.
  *
  * Two things do not survive, deliberately:
  * - A provider on Automatic AND explicit limits keeps only the explicit keys.
@@ -472,8 +466,7 @@ function fromShippedRecords(layout: Record<string, unknown>): LayoutSnapshot {
       minimapSide: settings.chatTurnMinimapSide,
       rail: carriedRail(leftPanel.panelGroups),
       taskTabLayout: settings.taskTabLayout,
-      tabStripPlacement: EARLIER_INSTALL_ARRANGEMENT.tabStripPlacement,
-      sidebarStartCollapsed: EARLIER_INSTALL_ARRANGEMENT.sidebarStartCollapsed,
+      sideStripView: EARLIER_INSTALL_ARRANGEMENT.sideStripView,
     }),
   };
 }
@@ -644,13 +637,9 @@ function carriedRailVisibility(value: unknown): Record<string, unknown> {
  *
  * A group becomes one stack of every member this build still has (L-181):
  * the shipped groups had no cap, and neither has a stack.
- *
- * A record with no readable grouping falls back to the rail v1.4.0 drew -
- * Agents stacked with Artifacts - not to today's shipped rail: this is an
- * install that exists.
  */
 function carriedRail(value: unknown): ReadonlyArray<RailEntry> {
-  if (!Array.isArray(value)) return EARLIER_INSTALL_ARRANGEMENT.rail;
+  if (!Array.isArray(value)) return DEFAULT_RAIL;
   const groups = value.flatMap(
     (group): ReadonlyArray<ReadonlyArray<string>> => {
       if (!isRecord(group) || !Array.isArray(group.panelIds)) return [];
@@ -662,7 +651,7 @@ function carriedRail(value: unknown): ReadonlyArray<RailEntry> {
     },
   );
   const panelIds = groups.flat();
-  if (panelIds.length === 0) return EARLIER_INSTALL_ARRANGEMENT.rail;
+  if (panelIds.length === 0) return DEFAULT_RAIL;
   const rail = railPanelEntriesFromIds(panelIds);
   const links = groups.flatMap((group): RailEntry[] => {
     const members = group.flatMap((panelId) => {

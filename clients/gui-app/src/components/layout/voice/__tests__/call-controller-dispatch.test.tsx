@@ -37,6 +37,7 @@ import { hostRpcRegistry, type HostRpcRegistry } from "@/lib/host";
 import { createHostQueryInvalidator } from "@/lib/host/query-invalidator";
 import { createAppQueryClient } from "@/lib/query-client";
 import { hostQueryKeys } from "@/lib/query-keys";
+import { botThreadListParams } from "@/hooks/bots/use-bot-thread-list-query";
 import type { VoiceEngineEvents } from "@/lib/voice/engine";
 import { useAuthStore } from "@/stores/auth/auth-store";
 import { useTracySurfaceStore } from "@/stores/bots/tracy-surface-store";
@@ -540,9 +541,9 @@ describe("a call's last words through the real send", () => {
         hostQueryKeys.method<HostRpcRegistry, "bot.thread.list">(
           hostId,
           "bot.thread.list",
-          { botId: BOT_ID },
+          botThreadListParams(BOT_ID),
         ),
-        { threads: [] },
+        { threads: [], nextCursor: null, total: 0 },
       );
     }
     await dialLive();

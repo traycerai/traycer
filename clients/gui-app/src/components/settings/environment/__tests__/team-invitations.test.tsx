@@ -60,6 +60,7 @@ afterEach(() => {
 });
 
 const V10 = { major: 1, minor: 0 } as const;
+const V11 = { major: 1, minor: 1 } as const;
 
 const INVITATION: EnvironmentInvitation = {
   environmentId: "env-beta",
@@ -143,9 +144,16 @@ function stubInvitationHttp(
   return calls;
 }
 
-function rowsElement(onReview: (invitation: EnvironmentInvitation) => void) {
+function rowsElement(
+  onReview: (invitation: EnvironmentInvitation) => void,
+  onConnectComputer: () => void,
+  menuOpenMode: "controlled" | "defaultOpen",
+) {
   return (
-    <DropdownMenu open>
+    <DropdownMenu
+      open={menuOpenMode === "controlled" ? true : undefined}
+      defaultOpen={menuOpenMode === "defaultOpen"}
+    >
       <DropdownMenuTrigger>open</DropdownMenuTrigger>
       <DropdownMenuContent>
         <DropdownMenuRadioGroup value="personal">
@@ -153,6 +161,7 @@ function rowsElement(onReview: (invitation: EnvironmentInvitation) => void) {
             pick={PERSONAL_PICK}
             onPick={() => undefined}
             onReview={onReview}
+            onConnectComputer={onConnectComputer}
           />
         </DropdownMenuRadioGroup>
       </DropdownMenuContent>
@@ -160,9 +169,15 @@ function rowsElement(onReview: (invitation: EnvironmentInvitation) => void) {
   );
 }
 
-function renderRows(onReview: (invitation: EnvironmentInvitation) => void) {
+function renderRows(
+  onReview: (invitation: EnvironmentInvitation) => void,
+  onConnectComputer: () => void,
+  menuOpenMode: "controlled" | "defaultOpen",
+) {
   return (harnessWrapper: TeamPageHarness["Wrapper"]) =>
-    render(rowsElement(onReview), { wrapper: harnessWrapper });
+    render(rowsElement(onReview, onConnectComputer, menuOpenMode), {
+      wrapper: harnessWrapper,
+    });
 }
 
 function InvitationFlow(props: {
@@ -181,6 +196,7 @@ function InvitationFlow(props: {
               pick={PERSONAL_PICK}
               onPick={() => undefined}
               onReview={setInvitation}
+              onConnectComputer={() => undefined}
             />
           </DropdownMenuRadioGroup>
         </DropdownMenuContent>
@@ -196,6 +212,7 @@ function InvitationFlow(props: {
 
 async function assertExplicitHttpInvitationFlow(
   harness: TeamPageHarness,
+  expectMembershipUnread: boolean,
 ): Promise<void> {
   const calls = stubInvitationHttp(undefined);
   const onAccepted = vi.fn();
@@ -204,6 +221,12 @@ async function assertExplicitHttpInvitationFlow(
 
   const row = await screen.findByTestId("environment-invitation-env-beta");
   expect(row.textContent).toContain("Beta");
+  expect(screen.getByText("Invitations")).toBeTruthy();
+  if (expectMembershipUnread) {
+    expect(
+      screen.getByText("Your teams couldn't be read from here."),
+    ).toBeTruthy();
+  }
   expect(calls.map((call) => call.method)).toEqual(["GET"]);
   expect(calls[0]?.url).toBe(
     `${AUTHN_BASE_URL}/api/v3/environments/me/invitations`,
@@ -240,7 +263,7 @@ async function assertExplicitHttpInvitationFlow(
 }
 
 describe("the invited rows of the Environment dropdown", () => {
-  it("lists an invited team as 'invited' with Review, and hands the invitation to Review", async () => {
+  it("shows invitation details and hands the grant to Review", async () => {
     negotiateMethods({
       "environment.invitations.list": V10,
       "environment.invitations.accept": V10,
@@ -250,18 +273,221 @@ describe("the invited rows of the Environment dropdown", () => {
       "environment.invitations.list": () => ({ invitations: [INVITATION] }),
     });
     const onReview = vi.fn();
-    renderRows(onReview)(harness.Wrapper);
+    renderRows(onReview, () => undefined, "controlled")(harness.Wrapper);
 
     const row = await screen.findByTestId("environment-invitation-env-beta");
     expect(row.textContent).toContain("Beta");
-    expect(row.textContent).toContain("invited");
-    // The verb continues the row's own line, so the row keeps no gutter for a
-    // check it can never show.
-    expect(row.className).not.toContain("pr-8");
+    expect(row.textContent).toContain(
+      "Invited you · not yours to edit until you accept",
+    );
+    expect(screen.getByText("Invitations")).toBeTruthy();
+    expect(screen.queryByRole("menuitemradio", { name: /Beta/ })).toBeNull();
     await userEvent.click(
       screen.getByTestId("environment-invitation-review-env-beta"),
     );
     expect(onReview).toHaveBeenCalledExactlyOnceWith(INVITATION);
+  });
+
+  it("keeps the Teams group loading while membership is pending", async () => {
+    negotiateMethods({
+      "environment.list": V11,
+      "environment.invitations.list": V10,
+      "environment.invitations.accept": V10,
+    });
+    const teamsPending = Promise.withResolvers<typeof NO_ENVIRONMENTS>();
+    const harness = mountTeamPage(poolSource("editor"), {
+      "environment.list": () => teamsPending.promise,
+      "environment.invitations.list": () => ({ invitations: [] }),
+      "environment.invitations.accept": () => ({ outcome: "accepted" }),
+    });
+    renderRows(vi.fn(), () => undefined, "controlled")(harness.Wrapper);
+
+    expect(screen.getByText("Teams")).toBeTruthy();
+    expect(
+      screen.queryByText("Your teams couldn't be read from here."),
+    ).toBeNull();
+    const loading = screen.getByRole("status", { name: "Reading your teams" });
+    expect(loading.hasAttribute("aria-busy")).toBe(false);
+    teamsPending.resolve(NO_ENVIRONMENTS);
+    await waitFor(() => {
+      expect(
+        screen.queryByRole("status", { name: "Reading your teams" }),
+      ).toBeNull();
+    });
+  });
+
+  it("shows the exact membership error and retries the failed query without closing", async () => {
+    negotiateMethods({
+      "environment.list": V11,
+    });
+    const invitationCalls = stubInvitationHttp(() => []);
+    const onConnectComputer = vi.fn();
+    const harness = mountTeamPage(poolSource("editor"), {
+      "environment.list": () => {
+        throw new Error("membership unavailable");
+      },
+      "environment.invitations.list": () => ({ invitations: [] }),
+    });
+    renderRows(
+      vi.fn(),
+      onConnectComputer,
+      "defaultOpen",
+    )(wrapperWithInvitationAuth(harness.Wrapper, invitationAuth()));
+
+    expect(
+      await screen.findByText("Your teams couldn't be read from here."),
+    ).toBeTruthy();
+    await userEvent.click(screen.getByRole("menuitem", { name: "Try again" }));
+    await waitFor(() => {
+      expect(harness.paramsOf("environment.list")).toHaveLength(2);
+    });
+    expect(invitationCalls.map((call) => call.method)).toEqual(["GET"]);
+    expect(screen.getByRole("menu")).toBeTruthy();
+    expect(screen.getByText("Teams")).toBeTruthy();
+    expect(
+      screen.getByText("Your teams couldn't be read from here."),
+    ).toBeTruthy();
+    await userEvent.click(
+      screen.getByRole("menuitem", { name: "Connect a computer" }),
+    );
+    expect(onConnectComputer).toHaveBeenCalledOnce();
+    expect(screen.queryByRole("menu")).toBeNull();
+  });
+
+  it("omits Teams after an authoritative empty membership answer", async () => {
+    negotiateMethods({
+      "environment.list": V11,
+    });
+    stubInvitationHttp(() => []);
+    const harness = mountTeamPage(poolSource("editor"), {
+      "environment.list": () => NO_ENVIRONMENTS,
+      "environment.invitations.list": () => ({ invitations: [] }),
+    });
+    renderRows(
+      vi.fn(),
+      () => undefined,
+      "controlled",
+    )(wrapperWithInvitationAuth(harness.Wrapper, invitationAuth()));
+
+    await waitFor(() => {
+      expect(harness.paramsOf("environment.list")).toHaveLength(1);
+    });
+    await waitFor(() => {
+      expect(screen.queryByText("Teams")).toBeNull();
+      expect(
+        screen.queryByText("Your teams couldn't be read from here."),
+      ).toBeNull();
+    });
+  });
+
+  it("renders an answered team as an ordinary pickable row", async () => {
+    negotiateMethods({
+      "environment.list": V11,
+    });
+    const harness = mountTeamPage(poolSource("editor"), {
+      "environment.list": () => ({
+        environments: [
+          {
+            environmentId: "env-team",
+            ownerKind: "organization",
+            ownerId: "org-team",
+            roomId: "room-team",
+            label: "Acme Robotics",
+            effectiveRole: "editor",
+            kind: "team",
+            hostCount: 1,
+            providerHandle: "handle-team",
+          },
+        ],
+      }),
+      "environment.invitations.list": () => ({ invitations: [] }),
+    });
+    const onPick = vi.fn();
+    render(
+      <DropdownMenu open>
+        <DropdownMenuTrigger>open</DropdownMenuTrigger>
+        <DropdownMenuContent>
+          <DropdownMenuRadioGroup value="personal">
+            <TeamRows
+              pick={PERSONAL_PICK}
+              onPick={onPick}
+              onReview={vi.fn()}
+              onConnectComputer={() => undefined}
+            />
+          </DropdownMenuRadioGroup>
+        </DropdownMenuContent>
+      </DropdownMenu>,
+      { wrapper: harness.Wrapper },
+    );
+
+    const row = await screen.findByTestId("environment-team-env-team");
+    expect(row.textContent).toContain("Acme Robotics");
+    expect(row.textContent).toContain("You edit");
+    await userEvent.click(row);
+    expect(onPick).toHaveBeenCalledExactlyOnceWith({
+      kind: "team",
+      environmentId: "env-team",
+    });
+  });
+
+  it("keeps an invitation reviewable through membership and acceptance failures", async () => {
+    negotiateMethods({
+      "environment.list": V11,
+      "environment.invitations.list": V10,
+      "environment.invitations.accept": V10,
+    });
+    const acceptancePending = Promise.withResolvers<never>();
+    const harness = mountTeamPage(poolSource("editor"), {
+      "environment.list": () => {
+        throw new Error("membership unavailable");
+      },
+      "environment.invitations.list": () => ({ invitations: [INVITATION] }),
+      "environment.invitations.accept": () => acceptancePending.promise,
+    });
+    const onAccepted = vi.fn();
+    render(<InvitationFlow onAccepted={onAccepted} />, {
+      wrapper: harness.Wrapper,
+    });
+
+    const row = await screen.findByTestId("environment-invitation-env-beta");
+    expect(row.textContent).toContain(
+      "Invited you · not yours to edit until you accept",
+    );
+    expect(
+      screen.getByText("Your teams couldn't be read from here."),
+    ).toBeTruthy();
+    await userEvent.click(
+      screen.getByTestId("environment-invitation-review-env-beta"),
+    );
+    expect(
+      screen.getByRole("heading", { name: "You're invited to Beta" }),
+    ).toBeTruthy();
+
+    await userEvent.click(screen.getByTestId("invite-accept"));
+    await waitFor(() => {
+      expect(screen.getByTestId("invite-accept").hasAttribute("disabled")).toBe(
+        true,
+      );
+    });
+    acceptancePending.reject(new Error("acceptance unavailable"));
+    await waitFor(() => {
+      expect(screen.getByTestId("invite-accept").hasAttribute("disabled")).toBe(
+        false,
+      );
+    });
+    expect(onAccepted).not.toHaveBeenCalled();
+    expect(harness.paramsOf("environment.invitations.accept")).toHaveLength(1);
+
+    await userEvent.click(screen.getByRole("button", { name: "Close" }));
+    await waitFor(() => {
+      expect(screen.queryByTestId("invite-accept-dialog")).toBeNull();
+    });
+    await userEvent.click(
+      screen.getByTestId("environment-invitation-review-env-beta"),
+    );
+    expect(
+      screen.getByRole("heading", { name: "You're invited to Beta" }),
+    ).toBeTruthy();
   });
 
   it("lists and accepts an older-host invitation over authenticated HTTP only after explicit review", async () => {
@@ -271,7 +497,7 @@ describe("the invited rows of the Environment dropdown", () => {
       "environment.invitations.list": () => ({ invitations: [INVITATION] }),
       "environment.invitations.accept": () => ({ outcome: "accepted" }),
     });
-    await assertExplicitHttpInvitationFlow(harness);
+    await assertExplicitHttpInvitationFlow(harness, false);
   });
 
   it("lists and accepts over authenticated HTTP without an active host", async () => {
@@ -286,7 +512,7 @@ describe("the invited rows of the Environment dropdown", () => {
     teamHostBoundary.client = requester.createRequesterForHostId(null);
     expect(teamHostBoundary.client.getActiveHostId()).toBeNull();
 
-    await assertExplicitHttpInvitationFlow(harness);
+    await assertExplicitHttpInvitationFlow(harness, true);
   });
 
   it("waits for an addressable host's invitation capabilities before routing", async () => {
@@ -298,9 +524,11 @@ describe("the invited rows of the Environment dropdown", () => {
     });
     expect(requireTeamHostClient().getActiveHostId()).not.toBeNull();
     const calls = stubInvitationHttp(undefined);
-    renderRows(vi.fn())(
-      wrapperWithInvitationAuth(harness.Wrapper, invitationAuth()),
-    );
+    renderRows(
+      vi.fn(),
+      () => undefined,
+      "controlled",
+    )(wrapperWithInvitationAuth(harness.Wrapper, invitationAuth()));
 
     await waitFor(() => {
       expect(harness.paramsOf("environment.list")).toHaveLength(1);
@@ -319,7 +547,7 @@ describe("the invited rows of the Environment dropdown", () => {
       "environment.invitations.list": () => ({ invitations: [INVITATION] }),
       "environment.invitations.accept": () => ({ outcome: "accepted" }),
     });
-    renderRows(vi.fn())(harness.Wrapper);
+    renderRows(vi.fn(), () => undefined, "controlled")(harness.Wrapper);
 
     await waitFor(() => {
       expect(harness.paramsOf("environment.list")).toHaveLength(1);
@@ -337,9 +565,11 @@ describe("the invited rows of the Environment dropdown", () => {
       "environment.invitations.list": () => ({ invitations: [INVITATION] }),
     });
     const calls = stubInvitationHttp(undefined);
-    renderRows(vi.fn())(
-      wrapperWithInvitationAuth(harness.Wrapper, invitationAuth()),
-    );
+    renderRows(
+      vi.fn(),
+      () => undefined,
+      "controlled",
+    )(wrapperWithInvitationAuth(harness.Wrapper, invitationAuth()));
 
     expect(
       await screen.findByTestId("environment-invitation-env-beta"),
@@ -363,13 +593,13 @@ describe("the invited rows of the Environment dropdown", () => {
       harness.Wrapper,
       invitationAuth(),
     );
-    const view = renderRows(onReview)(wrapper);
+    const view = renderRows(onReview, () => undefined, "controlled")(wrapper);
     expect(
       await screen.findByTestId("environment-invitation-env-beta"),
     ).toBeTruthy();
 
     viewerUserId.current = "user-other";
-    view.rerender(rowsElement(onReview));
+    view.rerender(rowsElement(onReview, () => undefined, "controlled"));
 
     await waitFor(() => {
       expect(calls.filter((call) => call.method === "GET")).toHaveLength(2);

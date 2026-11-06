@@ -293,6 +293,7 @@ describe("TeamModelRouting", () => {
         policy: policyOf(false),
         storedPolicyUnreadable: false,
         inFlightCount: 0,
+        source: "own",
       }),
       "environment.configuration.items.put": () => ({
         outcome: "saved",

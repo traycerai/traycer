@@ -29,12 +29,16 @@ export interface BotThreadBoxDraft {
    * question card), never by typing, so the box loads each one once.
    */
   readonly seedId: number;
-  /**
-   * Which draft this is, new on every change to it, typed or put there, and
-   * never reused: a send spends the revision it carried and nothing newer,
-   * even one with the same text.
-   */
-  readonly revision: number;
+}
+
+/** A message a box sent that never reached the conversation. */
+export interface BotUnsentMessage {
+  /** As the box showed it. */
+  readonly text: string;
+  /** As it was sent: each mention as its member's token. */
+  readonly wire: string;
+  /** The failed message it was to replace; `null` for a new message. */
+  readonly supersedes: string | null;
 }
 
 /** A lookup misses for a bot or key with nothing kept. */
@@ -50,6 +54,11 @@ interface BotDraftsState {
    * conversation for the channel's own box.
    */
   readonly threadBoxes: ByBot<BotThreadBoxDraft>;
+  /**
+   * A box's send that failed while the box held a newer draft, or after the
+   * box was gone, offered back beside that draft; keyed as `threadBoxes`.
+   */
+  readonly unsentBoxes: ByBot<BotUnsentMessage>;
   /** Keeps a card's draft; `null` drops it. */
   readonly setAnswer: (
     botId: string,
@@ -68,15 +77,11 @@ interface BotDraftsState {
     anchorMessageId: string,
     text: string,
   ) => void;
-  /**
-   * The draft at `revision` was sent from that box: dropped while the box
-   * still holds it, and kept when a newer draft took its place before the
-   * send landed.
-   */
-  readonly spendThreadBox: (
+  /** Offers `unsent` back in that box; `null` takes the offer away. */
+  readonly offerUnsent: (
     botId: string,
     anchorMessageId: string,
-    revision: number,
+    unsent: BotUnsentMessage | null,
   ) => void;
   /** Drops every draft of the bot: its tab closed. */
   readonly forgetBot: (botId: string) => void;
@@ -105,13 +110,6 @@ function withEntry<T>(
   return next;
 }
 
-let lastRevision = 0;
-
-function nextRevision(): number {
-  lastRevision += 1;
-  return lastRevision;
-}
-
 /**
  * What a member has not sent yet: a card's answer, and what a thread's box
  * or the channel's holds, typed or put there by Discuss. Kept above the
@@ -122,6 +120,7 @@ function nextRevision(): number {
 export const useBotDraftsStore = create<BotDraftsState>()((set) => ({
   answers: {},
   threadBoxes: {},
+  unsentBoxes: {},
   setAnswer: (botId, key, draft) =>
     set((state) => ({ answers: withEntry(state.answers, botId, key, draft) })),
   seedThreadBox: (botId, anchorMessageId, text) =>
@@ -129,7 +128,6 @@ export const useBotDraftsStore = create<BotDraftsState>()((set) => ({
       threadBoxes: withEntry(state.threadBoxes, botId, anchorMessageId, {
         text,
         seedId: (state.threadBoxes[botId]?.[anchorMessageId]?.seedId ?? 0) + 1,
-        revision: nextRevision(),
       }),
     })),
   typeThreadBox: (botId, anchorMessageId, text) =>
@@ -146,30 +144,32 @@ export const useBotDraftsStore = create<BotDraftsState>()((set) => ({
             : {
                 text,
                 seedId: current?.seedId ?? 0,
-                revision: nextRevision(),
               },
         ),
       };
     }),
-  spendThreadBox: (botId, anchorMessageId, revision) =>
+  offerUnsent: (botId, anchorMessageId, unsent) =>
     set((state) =>
-      state.threadBoxes[botId]?.[anchorMessageId]?.revision === revision
-        ? {
-            threadBoxes: withEntry(
-              state.threadBoxes,
+      unsent === null &&
+      state.unsentBoxes[botId]?.[anchorMessageId] === undefined
+        ? state
+        : {
+            unsentBoxes: withEntry(
+              state.unsentBoxes,
               botId,
               anchorMessageId,
-              null,
+              unsent,
             ),
-          }
-        : state,
+          },
     ),
   forgetBot: (botId) =>
     set((state) => {
       const answers = { ...state.answers };
       const threadBoxes = { ...state.threadBoxes };
+      const unsentBoxes = { ...state.unsentBoxes };
       delete answers[botId];
       delete threadBoxes[botId];
-      return { answers, threadBoxes };
+      delete unsentBoxes[botId];
+      return { answers, threadBoxes, unsentBoxes };
     }),
 }));

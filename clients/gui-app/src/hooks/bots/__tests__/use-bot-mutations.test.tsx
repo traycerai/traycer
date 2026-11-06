@@ -34,6 +34,7 @@ import {
   useBotCallSendMutation,
   useBotConversationSendMutation,
 } from "@/hooks/bots/use-bot-mutations";
+import { botThreadListParams } from "@/hooks/bots/use-bot-thread-list-query";
 import { hostQueryKeys } from "@/lib/query-keys";
 
 // The app's binding, which a call's send resolves its named host through.
@@ -105,7 +106,7 @@ function mountSend(handlers: MockHandlerMap<HostRpcRegistry>): {
 } {
   const queryClient = new QueryClient();
   const sendingHost = hostOver(mockRemoteHostEntry, queryClient, handlers);
-  const params = { botId: BOT_ID };
+  const params = botThreadListParams(BOT_ID);
   for (const hostId of [SENDING_HOST_ID, OTHER_HOST_ID]) {
     queryClient.setQueryData(
       hostQueryKeys.method<HostRpcRegistry, "bot.thread.list">(
@@ -113,7 +114,7 @@ function mountSend(handlers: MockHandlerMap<HostRpcRegistry>): {
         "bot.thread.list",
         params,
       ),
-      { threads: [] },
+      { threads: [], nextCursor: null, total: 0 },
     );
   }
   queryClient.setQueryData(
@@ -274,9 +275,9 @@ function mountCallSend(): {
       hostQueryKeys.method<HostRpcRegistry, "bot.thread.list">(
         hostId,
         "bot.thread.list",
-        { botId: BOT_ID },
+        botThreadListParams(BOT_ID),
       ),
-      { threads: [] },
+      { threads: [], nextCursor: null, total: 0 },
     );
   }
   const wrapper = (props: { readonly children: ReactNode }): ReactNode => (

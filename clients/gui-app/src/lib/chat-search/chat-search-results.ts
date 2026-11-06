@@ -51,8 +51,6 @@ export interface ChatSearchMergedResults {
    */
   readonly chatNextCursor: string | null;
   readonly messageNextCursor: string | null;
-  /** `partial` when any page on screen was answered by a still-building index. */
-  readonly indexState: ChatSearchResponse["indexState"];
 }
 
 /**
@@ -95,9 +93,6 @@ export function mergeChatSearchPages(input: {
     }
   }
 
-  const loaded = [first, ...moreChats, ...moreMessages].filter(
-    (page): page is ChatSearchResponse => page !== undefined,
-  );
   return {
     chatMatches,
     messageMatches,
@@ -106,9 +101,6 @@ export function mergeChatSearchPages(input: {
       messagePages,
       (page) => page.messageNextCursor,
     ),
-    indexState: loaded.some((page) => page.indexState === "partial")
-      ? "partial"
-      : "complete",
   };
 }
 

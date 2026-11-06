@@ -26,6 +26,7 @@ import {
   type TeamPageHarness,
 } from "@/components/settings/environment/__tests__/team-configuration-test-support";
 import userEvent from "@testing-library/user-event";
+import { frozenDestroyAt } from "@/lib/sandboxes/sandbox-balance";
 import type { ReactElement } from "react";
 import type {
   SandboxVerbFetchResult,
@@ -62,6 +63,7 @@ import {
   terminalSessionFixture,
 } from "@/hooks/sandboxes/__tests__/sandbox-fixtures";
 import {
+  formatSandboxDate,
   sandboxPeriodLabel,
   sandboxRowActionLabel,
   sandboxRowActions,
@@ -688,7 +690,7 @@ describe("<SandboxesSettingsPanel />", () => {
         name: "Your defaults for new sandboxes",
       });
       expect(heading.nextElementSibling?.textContent).toBe(
-        "Each new Personal sandbox starts with these. Sandboxes you already have aren't destroyed after resting until you change their Idle settings.",
+        "Each new Personal sandbox starts with these. Sandboxes you already have aren't destroyed when idle until you change their Idle settings.",
       );
     });
 
@@ -700,7 +702,7 @@ describe("<SandboxesSettingsPanel />", () => {
         name: "Acme's defaults for new sandboxes",
       });
       expect(heading.nextElementSibling?.textContent).toBe(
-        "Shared by Acme · editors can change them · not a spending limit. Each new Acme sandbox starts with these. Sandboxes you already have aren't destroyed after resting until you change their Idle settings.",
+        "Shared by Acme · editors can change them · not a spending limit. Each new Acme sandbox starts with these. Sandboxes you already have aren't destroyed when idle until you change their Idle settings.",
       );
     });
 
@@ -944,7 +946,7 @@ describe("<SandboxesSettingsPanel />", () => {
       "awake-1": ["Awake", "Suspend"],
       "suspended-1": ["Suspended", "Resume"],
       "stopped-1": ["Stopped", "Start"],
-      "frozen-1": ["Frozen", "Add credits ↗"],
+      "frozen-1": ["Suspended", "Add credits ↗"],
       "failed-1": ["Failed", "Retry"],
     };
     for (const [id, [badge, primary]] of Object.entries(expected)) {
@@ -955,6 +957,9 @@ describe("<SandboxesSettingsPanel />", () => {
       expect(within(element).getByTestId("row-primary").textContent).toBe(
         primary,
       );
+      if (id === "frozen-1") {
+        expect(within(element).getByText("Out of credits")).toBeDefined();
+      }
     }
   });
 
@@ -1028,7 +1033,7 @@ describe("<SandboxesSettingsPanel />", () => {
       ).toContain("1 session");
     });
 
-    it("reorders from current activity when a public state changes", () => {
+    it("orders raw awake rows first, and keeps that order when only frozen changes", () => {
       mocks.sandboxes = [
         row("older", { lastActivityAt: 100 }),
         row("newer", { lastActivityAt: 200 }),
@@ -1048,7 +1053,7 @@ describe("<SandboxesSettingsPanel />", () => {
         summary.id === "older" ? { ...summary, frozen: true } : summary,
       );
       rerender(<SandboxesSettingsPanel />);
-      expect(names()).toEqual(["sleeping", "newer", "older"]);
+      expect(names()).toEqual(["older", "sleeping", "newer"]);
     });
 
     it("keeps the order when a transition lands in the same public state", () => {
@@ -1162,6 +1167,54 @@ describe("<SandboxesSettingsPanel />", () => {
     });
   });
 
+  it("shows a row's withdrawal notice only when the server announces one", () => {
+    const endsAt = new Date(2026, 11, 1).getTime();
+    renderPanel([
+      row("withdrawn", { withdrawalEndsAt: endsAt }),
+      row("plain", { withdrawalEndsAt: null }),
+    ]);
+
+    expect(
+      within(rowOf("withdrawn")).getByTestId("sandboxes-row-withdrawal")
+        .textContent,
+    ).toContain("stops running");
+    expect(
+      within(rowOf("plain")).queryByTestId("sandboxes-row-withdrawal"),
+    ).toBeNull();
+  });
+
+  // The second production call site of the withdrawal sentence. Its card
+  // twin is covered in `sandbox-card.test.tsx`; without this case, dropping
+  // `destroyAt` at THIS call site would put the announced day back beside
+  // the clock line's day-30 and no test would notice.
+  it("drops the announced day from a frozen withdrawn row's notice, where the clock line names the day-30 one", () => {
+    const frozenAt = Date.UTC(2026, 9, 9);
+    renderPanel([
+      row("frozen", {
+        state: "suspended",
+        frozen: true,
+        frozenAt,
+        destroyAt: frozenDestroyAt(frozenAt),
+        withdrawalEndsAt: Date.UTC(2026, 11, 1),
+      }),
+    ]);
+
+    expect(
+      within(rowOf("frozen")).getByTestId("sandboxes-row-withdrawal")
+        .textContent,
+    ).toBe(
+      "This sandbox stops running and is rebuilt from your environment. Files outside the repository are lost.",
+    );
+    expect(
+      within(rowOf("frozen")).getByTestId("sandboxes-row-clock").textContent,
+    ).toBe(
+      `Your credits ran out. Will be removed on ${formatSandboxDate(frozenDestroyAt(frozenAt), false)}`,
+    );
+    expect(within(rowOf("frozen")).getAllByText("Out of credits")).toHaveLength(
+      1,
+    );
+  });
+
   it("narrows the list by the search and by the state filter, with a count badge", () => {
     renderPanel([
       row("alpha", { state: "awake" }),
@@ -1229,7 +1282,7 @@ describe("<SandboxesSettingsPanel />", () => {
       kind: "automation",
     });
 
-    it.each(["all", "awake", "suspended", "stopped", "frozen", "failed"])(
+    it.each(["all", "awake", "suspended", "stopped", "resuming", "failed"])(
       "offers the header action only for idle State filters: %s",
       async (state) => {
         const idleState = state === "stopped" ? "stopped" : "suspended";
@@ -2498,10 +2551,10 @@ describe("<SandboxesSettingsPanel />", () => {
       ).toBe("Automations");
       expect(
         within(automations).getByTestId("sandboxes-row-state").textContent,
-      ).toBe("Suspended");
+      ).toBe("Not running");
       expect(
         within(automations).getByTestId("sandboxes-row-clock").textContent,
-      ).toBe("Suspended · files kept · the next shell starts it");
+      ).toBe("Not running · files kept · the next shell starts it");
       expect(
         within(automations).getByRole("button", { name: "Open terminal" }),
       ).toBeDefined();

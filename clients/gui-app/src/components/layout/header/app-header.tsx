@@ -72,6 +72,7 @@ function DesktopAppHeader(props: AppHeaderProps): ReactNode {
   return (
     <header
       data-testid="app-header"
+      data-app-title-band-surface
       data-variant={variant}
       className={cn(
         // The height is a shared token: the boot surfaces reserve this exact

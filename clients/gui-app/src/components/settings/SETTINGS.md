@@ -1258,6 +1258,18 @@ the whole surface guards against:
   tag beside the host name, which replaced a full-width row asserting the same
   boolean.
 
+Settings keeps one host view selection per environment pick, in the window's
+non-persisted `settings-host-scope-store`. `useHostScope()` filters the global
+host options through `useHostsRunningConfiguration` membership (or the one
+Local host), defaulting to the first member only when no selection exists.
+An explicit selection that leaves membership stays vanished, with its picked
+name and a Forget control; loading or failed membership selects nothing.
+Named entry points share `carryViewedHostIntoSettingsScope`: hold the target
+pending, resolve its Local row or confirm Personal/team membership, then set
+the environment pick and its host selection. This never activates a host.
+Membership, discovery and Personal's computer lists use the unscoped
+`useHostScopeFor(WINDOW_HOST_SELECTION)` beneath that selection.
+
 `useHostScope()` (`host-scope/use-host-scope.ts`) is the single hook every
 panel under the picker reads; `usePersonalHostScope()` beside it is the same
 host model over a fixed "follow the active host" selection, for the Personal
@@ -4807,8 +4819,12 @@ min`): "The judge didn't finish in time, so it's asking you instead."
   when a turn dies on a provider error it cannot retry (rate limit, outage,
   billing, signed out). Backed by `providers.fallbackPolicy.get` / `.set`.
   - **Host-scoped like Agent selection**, and for the same reason: the policy
-    lives in `provider-accounts.json`, which is machine-local, so it is one
-    policy per Traycer user **per host**. The panel mounts `HostScopeGate`,
+    lives in `provider-accounts.json`, which is machine-local. On a personal
+    computer that makes it one policy per Traycer user **per host**; on a
+    team-owned computer it is one policy **per computer**, the team's, which
+    every member reads and only the team's own page sets (the `source` bullet
+    below; `providers.fallbackPolicy` refuses a write there).
+    The panel mounts `HostScopeGate`,
     re-provides `HostRuntimeContext` only at `status === "ready"`, and keys its
     editor on `scope.hostId` so one machine's draft can never be saved to
     another's row.
@@ -4816,9 +4832,11 @@ min`): "The judge didn't finish in time, so it's asking you instead."
     "Applies to your chat agents on `<host name>`" - which is a deliberate
     exception to the no-readout rule above. The sentence is not a second copy
     of the sidebar's label; it rules out the reading that this configures every
-    agent on the machine. The policy covers that user's **chat** agents and
-    never terminal agents, which cannot be reconfigured in place and get no
-    fallback at all. The chat surfaces link in here from another host's chat
+    agent on the machine. The policy covers **chat** agents and never terminal
+    agents, which cannot be reconfigured in place and get no fallback at all -
+    the signed-in user's own chat agents on a personal computer, and every
+    member's on a team-owned one, where the read-only state says whose policy
+    it is in its own sentence. The chat surfaces link in here from another host's chat
     (through `carryViewedHostIntoSettingsScope`), which is precisely when a
     panel that said nothing would be editing the wrong machine.
   - **Groups**: Fallback (the `Automatic fallback` master switch, on for a user
@@ -5582,6 +5600,25 @@ wrap`). Each row names the account its first usable match runs on, the
     a corrupt row with routing off, plus that flag, instead of throwing,
     so that this page still renders and a save can replace the bad row; the
     notice says what is on screen is not what is stored.
+  - **`source`** says whose policy the response is, and `team` replaces the
+    editor with a read-out (`FallbackTeamRoutingInEffect`). Routing on a
+    team-owned computer is the team's - one setting for everyone who works on
+    that machine, set on the team's own page - so there is nothing for a member
+    to change there: no editor, no master toggle, no Danger Zone, and no
+    action. The editor would otherwise present every control as if it described
+    what happens now, and a save would be refused by the host anyway
+    (`TeamHostRoutingIsTheTeamsError`, which `set`, `reset` and
+    `restoreTierGroups` all raise there). The read-out states the policy in
+    effect through the same `FallbackPolicySummary` the team's own page uses
+    for a viewer, with one sentence saying whose it is and where it is set, and
+    the host answers `source` from the same module a turn resolves its account
+    with, so the page cannot claim one policy while the engine routes by
+    another. `storedPolicyUnreadable` adds a line to that read-out rather than
+    bringing the editor back: a member has no own routing to set instead, and
+    unsaid it would leave routing off looking like the team's decision. A
+    client below `get`@2.1 is answered the same policy in effect and simply is
+    not told whose it is, so it mounts its editor and meets the refusal on
+    save; nothing here implies a host support floor.
   - **`inFlightCount`** is rendered as a plain number in the master toggle's
     helper with **no link**: every holding or waiting chat already shows its own
     card with its own stop action. "Right now" is a claim about the present,

@@ -1,4 +1,8 @@
-import type { HostSandboxState } from "@traycer/protocol/host/host-status";
+import {
+  HOST_FROZEN_WORD,
+  hostSandboxStateWord,
+  type HostSandboxState,
+} from "@traycer/protocol/host/host-status";
 import {
   parseSandboxHeartbeatPhase,
   sandboxSupportReference,
@@ -11,6 +15,7 @@ import type { HostHealthState } from "@/components/settings/host-scope/host-heal
 import { frozenDestroyAt } from "@/lib/sandboxes/sandbox-balance";
 import {
   formatSandboxDate,
+  formatSandboxUtcDay,
   sandboxFailedToStart,
 } from "@/lib/sandboxes/sandbox-row-lines";
 
@@ -124,10 +129,10 @@ const STATE_LINE: Record<HostSandboxState, string> = {
   destroying: "Destroying. Its disk is being deleted.",
   destroyed: "Destroyed. Its disk is gone and nothing more is billed.",
   failed: "Failed to start.",
-  released: "Suspended, files kept. The next shell starts it.",
+  released: `${hostSandboxStateWord("released")}, files kept. The next shell starts it.`,
 };
 
-/** "Nov 7, 2026". */
+/** "Nov 7, 2026", in the reader's own zone: for an instant that happened. */
 export function formatSandboxDay(at: number): string {
   return new Date(at).toLocaleDateString(undefined, {
     month: "short",
@@ -142,10 +147,45 @@ export function formatSandboxDay(at: number): string {
  * the sentence without it.
  */
 export function sandboxFrozenLine(frozenAt: number | null): string {
-  const base = "Frozen: out of credits. Top up to resume.";
+  const base = `${HOST_FROZEN_WORD}. Top up to resume.`;
   return frozenAt === null
     ? base
     : `${base} Destroyed on ${formatSandboxDate(frozenDestroyAt(frozenAt), true)}.`;
+}
+
+/**
+ * The withdrawal notice: when this sandbox stops running, and what the person
+ * keeps when it does. `null` until a withdrawal is announced for the row's
+ * kind of sandbox, which is every row today.
+ *
+ * What survives the withdrawal is what the person can act on, so the sentence
+ * always carries it. The DATE is carried only when nothing else decides when
+ * this row ends: `destroyAt` wins wherever it is set, because the row then
+ * ends on that day rather than on the announced one. A frozen withdrawn row
+ * is the case that makes the difference: while its `frozenAt` is known it
+ * carries a day-30 `destroyAt`, which can fall well before the announced
+ * day, so naming the announced day here would tell the person the row lasts
+ * longer than it does. A frozen row whose `frozenAt` is absent is NOT that
+ * case — `sandbox-day-30.ts` skips such a record, so it has no day-30
+ * deadline to contradict, `destroyAt` is null, and the announced day is
+ * named like any unfrozen row's.
+ *
+ * The day, where it is named, is the announced one read in UTC: no clock
+ * time, because nothing ends the row at an instant — the date is what was
+ * announced, and the drain is operational.
+ */
+export function sandboxWithdrawalLine(
+  endsAt: number | null,
+  destroyAt: number | null,
+): string | null {
+  if (endsAt === null) return null;
+  // The half the person acts on, the same either way: whether the announced
+  // day is named is the only difference between the two sentences.
+  const rebuilt =
+    "is rebuilt from your environment. Files outside the repository are lost.";
+  return destroyAt === null
+    ? `This sandbox stops running on ${formatSandboxUtcDay(endsAt)} and ${rebuilt}`
+    : `This sandbox stops running and ${rebuilt}`;
 }
 
 /**
@@ -182,13 +222,13 @@ export function sandboxTeamFrozenLine(
   viewerUserId: string | null,
 ): string {
   const payer = summary.wakePayer;
-  if (payer === null) return "Frozen: its payer's bundle is out.";
+  if (payer === null) return `${HOST_FROZEN_WORD}: its payer's bundle is out.`;
   if (viewerUserId !== null && payer.userId === viewerUserId) {
-    return "Frozen: your bundle is out.";
+    return `${HOST_FROZEN_WORD}: your bundle is out.`;
   }
   return payer.displayName === null
-    ? "Frozen: its payer's bundle is out."
-    : `Frozen: ${payer.displayName}'s bundle is out.`;
+    ? `${HOST_FROZEN_WORD}: its payer's bundle is out.`
+    : `${HOST_FROZEN_WORD}: ${payer.displayName}'s bundle is out.`;
 }
 
 /**
@@ -201,7 +241,8 @@ export function sandboxTeamFrozenStateLine(
   summary: SandboxSummary | null,
   viewerUserId: string | null,
 ): string {
-  if (summary === null) return "Frozen: its payer's bundle is out.";
+  if (summary === null)
+    return `${HOST_FROZEN_WORD}: its payer's bundle is out.`;
   const line = sandboxTeamFrozenLine(summary, viewerUserId);
   return summary.frozenAt === null
     ? line
@@ -459,7 +500,7 @@ export function sandboxTileOverlay(
     case "suspended":
       return {
         kind: "asleep",
-        message: "Suspended, resumes on your next action",
+        message: `${hostSandboxStateWord(state)}, resumes on your next action`,
         verb: "resume",
         label: "Resume",
       };
@@ -467,22 +508,22 @@ export function sandboxTileOverlay(
     case "stopped":
       return {
         kind: "asleep",
-        message: "Stopped",
+        message: hostSandboxStateWord(state),
         verb: "start",
         label: "Start",
       };
-    // The Automations row at rest: `start` opens it. Suspended, as its badge.
+    // The Automations row at rest: `start` opens it, with its files kept.
     case "released":
       return {
         kind: "asleep",
-        message: "Suspended",
+        message: hostSandboxStateWord(state),
         verb: "start",
         label: "Start",
       };
     case "resuming":
-      return { kind: "moving", message: "Resuming" };
+      return { kind: "moving", message: hostSandboxStateWord(state) };
     case "starting":
-      return { kind: "moving", message: "Starting" };
+      return { kind: "moving", message: hostSandboxStateWord(state) };
     // Awake renders normally; creating, failed and destroyed are the tile's
     // own connection states, which it already shows.
     case "creating":

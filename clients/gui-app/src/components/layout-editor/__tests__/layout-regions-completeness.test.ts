@@ -137,8 +137,6 @@ const REACHABLE_VALUES: ReadonlyArray<LayoutValues> = [
 
 const MOVED_ARRANGEMENT = {
   ...DEFAULT_ARRANGEMENT,
-  // Across the top, so a header reading names its end rather than the strip.s.
-  tabStripPlacement: "top" as const,
   usageHost: "header" as const,
   usageSide: "right" as const,
   resourceHost: "header" as const,

@@ -503,7 +503,8 @@ export const RunnerHostEvent = {
   // OS wake pulse (powerMonitor `resume` / `unlock-screen`) bridged to the
   // renderer so it force-reconnects its host streams - re-registering the
   // live request context within seconds of wake instead of waiting out the
-  // ~60s heartbeat. No payload: it is a pure "the machine just woke" signal.
+  // ~60s heartbeat. Payload: `DesktopSystemWake`, which says whether the
+  // screen is still locked.
   systemResumed: "runnerHost:event:systemResumed",
   // The person is leaving the machine (powerMonitor `suspend` /
   // `lock-screen`), bridged so a live voice session ends and its microphone

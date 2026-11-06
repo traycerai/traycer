@@ -1097,20 +1097,15 @@ describe("migrating an unrecognized version resets to the defaults", () => {
 });
 
 /**
- * Version 8 changed three shipped defaults - tabs at the left edge, the
- * sidebar collapsed in a new task, Agents and Artifacts unstacked - for a NEW
- * install only. An install that exists is told apart by what it left behind:
- * a layout record at an earlier version, or, with none, a legacy settings or
- * sidebar record from a build before the layout store. Each of those reads
- * what its record does not say against the EARLIER defaults.
+ * The side strip's view (agents under the tab) ships as `activity` for a
+ * NEW install only. An install that exists is told apart by what it left
+ * behind: a layout record at an earlier version, or, with none, a legacy
+ * settings or sidebar record from a build before the layout store. Each of
+ * those reads what its record does not say against the EARLIER default.
  */
-describe("the three defaults version 8 changed, for a new install only", () => {
+describe("the side strip view, which changed for a new install only", () => {
   beforeEach(reset);
   afterEach(reset);
-
-  const EARLIER_RAIL_STACKS = [
-    { kind: "stack", id: "stack:railAgents+railArtifacts" },
-  ];
 
   /** Every field a v1.5.x record wrote: this build's shape minus `sidebarStartCollapsed`. */
   function v15Arrangement(
@@ -1119,11 +1114,7 @@ describe("the three defaults version 8 changed, for a new install only", () => {
     const arrangement: Record<string, unknown> = {
       ...DEFAULT_ARRANGEMENT,
       tabStripPlacement: "top",
-      rail: [
-        { kind: "panel", id: "railAgents" },
-        ...EARLIER_RAIL_STACKS,
-        ...DEFAULT_ARRANGEMENT.rail.slice(1),
-      ],
+      sideStripView: "layered",
       ...patch,
     };
     delete arrangement.sidebarStartCollapsed;
@@ -1135,10 +1126,10 @@ describe("the three defaults version 8 changed, for a new install only", () => {
 
     expect(state()).toEqual(DEFAULT_LAYOUT_SNAPSHOT);
     expect(state().arrangement).toMatchObject({
-      tabStripPlacement: "left",
-      sidebarStartCollapsed: true,
+      tabStripPlacement: "top",
+      sidebarStartCollapsed: false,
+      sideStripView: "activity",
     });
-    expect(railStacks(state().arrangement.rail)).toEqual([]);
     expect(storedLayoutVersion()).toBe(8);
   });
 
@@ -1162,7 +1153,7 @@ describe("the three defaults version 8 changed, for a new install only", () => {
       },
     },
   ])(
-    "keeps $name on tabs at the top, the sidebar open and Agents stacked with Artifacts",
+    "keeps $name on tabs only in the strip, with the tabs at the top and the sidebar open",
     async ({ seed }) => {
       seed();
 
@@ -1171,11 +1162,8 @@ describe("the three defaults version 8 changed, for a new install only", () => {
       expect(state().arrangement).toMatchObject({
         tabStripPlacement: "top",
         sidebarStartCollapsed: false,
+        sideStripView: "layered",
       });
-      expect(railStacks(state().arrangement.rail)).toEqual(EARLIER_RAIL_STACKS);
-      expect(everyRailPanelId(state().arrangement.rail)).toEqual(
-        everyRailPanelId(DEFAULT_ARRANGEMENT.rail),
-      );
       expect(storedLayoutVersion()).toBe(8);
     },
   );
@@ -1197,20 +1185,23 @@ describe("the three defaults version 8 changed, for a new install only", () => {
     expect(state().arrangement).toMatchObject({
       tabStripPlacement: "top",
       sidebarStartCollapsed: false,
+      sideStripView: "layered",
       minimapSide: "left",
     });
-    expect(railStacks(state().arrangement.rail)).toEqual(EARLIER_RAIL_STACKS);
     expect(storedLayoutVersion()).toBe(8);
   });
 
-  it("keeps a version-7 record's own picks: a vertical strip at the right, the pair unstacked", async () => {
+  it("keeps a version-7 record's own picks: a vertical strip at the right listing its agents, the pair unstacked", async () => {
     writeLayoutRecordAtVersion(
       {
         basePreset: "default",
         overrides: {},
         arrangement: v15Arrangement({
           tabStripPlacement: "right",
-          rail: DEFAULT_ARRANGEMENT.rail,
+          sideStripView: "activity",
+          rail: DEFAULT_ARRANGEMENT.rail.filter(
+            (entry) => entry.kind === "panel",
+          ),
         }),
       },
       7,
@@ -1220,6 +1211,7 @@ describe("the three defaults version 8 changed, for a new install only", () => {
 
     expect(state().arrangement.tabStripPlacement).toBe("right");
     expect(state().arrangement.sidebarStartCollapsed).toBe(false);
+    expect(state().arrangement.sideStripView).toBe("activity");
     expect(railStacks(state().arrangement.rail)).toEqual([]);
   });
 
@@ -1227,9 +1219,9 @@ describe("the three defaults version 8 changed, for a new install only", () => {
     await rehydrateFrom({
       basePreset: "default",
       overrides: {},
-      arrangement: { ...DEFAULT_ARRANGEMENT, sidebarStartCollapsed: false },
+      arrangement: { ...DEFAULT_ARRANGEMENT, sidebarStartCollapsed: true },
     });
 
-    expect(getLayoutSnapshot().arrangement.sidebarStartCollapsed).toBe(false);
+    expect(getLayoutSnapshot().arrangement.sidebarStartCollapsed).toBe(true);
   });
 });

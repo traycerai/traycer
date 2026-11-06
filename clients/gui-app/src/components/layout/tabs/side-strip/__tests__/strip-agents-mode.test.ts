@@ -52,6 +52,7 @@ function arrange(
 describe("useLiveAgentsInStrip", () => {
   it("is true only for an expanded, vertical Activity view, and follows a live collapse and view switch", () => {
     const { result } = renderHook(() => useLiveAgentsInStrip());
+    // The shipped layout: tabs at the top, so the view does not apply.
     expect(result.current).toBe(false);
 
     arrange("left", "activity");

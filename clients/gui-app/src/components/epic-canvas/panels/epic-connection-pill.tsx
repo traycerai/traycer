@@ -59,9 +59,12 @@ import { UNKNOWN_HOST_PLACEHOLDER } from "@/lib/host/constants";
  * synced": (i) the GUI↔host transport, (ii) the control lane's cloud-sync
  * status and its per-cycle freshness, (iii) the control lane's aggregate dirty
  * bit, (iv) runtime-local divergence, and (v) refused or superseded writes.
- * Whether artifact rooms are behind is a sixth input that gates `synced` and,
- * past its own grace, takes the light as its own plane
- * (`use-artifact-sync-status.ts`).
+ * Whether artifact rooms are behind is a sixth input that gates `synced`.
+ * Past its own grace the plane speaks for itself
+ * (`use-artifact-sync-status.ts`): still retrying, it is the same quiet
+ * saving dot as ordinary saving and takes that light only so the hover can
+ * say what is waiting; it never outranks a warning or a danger. When the
+ * host has stopped retrying, the dot is amber and still has no label.
  *
  * (i)-(iv) arrive as {@link EpicSyncPillState}; (v) arrives BESIDE it as
  * {@link EpicWriteCommandAlert} and is weighed as its own plane here. Folding
@@ -178,7 +181,7 @@ export function EpicConnectionPill(props: EpicConnectionPillProps) {
           data-testid="epic-connection-pill"
           data-status={state}
           data-source={selected.source}
-          aria-label={accessibleNameFor(rawSelected)}
+          aria-label={buttonNameFor(indicator.label, rawSelected)}
           className={cn(
             "inline-flex items-center gap-1 text-ui-xs font-medium text-current focus:outline-none focus-visible:ring-1 focus-visible:ring-ring",
             indicator.containerClassName,
@@ -354,6 +357,21 @@ function accessibleNameFor(selected: SelectedIndicator): string {
     selected.indicator.ariaLabel,
     ...selected.alsoReported.map((other) => other.ariaLabel),
   ].join(" ");
+}
+
+/**
+ * The button's name starts with the label it shows, so a person can say the
+ * label they see to click the pill (WCAG 2.5.3, label in name).
+ */
+function buttonNameFor(
+  visibleLabel: string | null,
+  selected: SelectedIndicator,
+): string {
+  const name = accessibleNameFor(selected);
+  if (visibleLabel === null || name.startsWith(visibleLabel)) return name;
+  // "Syncing…" already ends its sentence; "Offline" does not.
+  const separator = visibleLabel.endsWith("…") ? " " : ". ";
+  return `${visibleLabel}${separator}${name}`;
 }
 
 function ConnectionPillDot(props: { indicator: PillIndicator }) {
@@ -536,10 +554,18 @@ function highestSeverityIndicator(signals: PillSignals): SelectedIndicator {
   }
   let selected = artifact;
   for (const candidate of secondary) {
-    if (
-      SEVERITY_RANK[candidate.indicator.severity] >
-      SEVERITY_RANK[selected.indicator.severity]
-    ) {
+    const candidateRank = SEVERITY_RANK[candidate.indicator.severity];
+    const selectedRank = SEVERITY_RANK[selected.indicator.severity];
+    // Rooms still retrying share ordinary saving's activity rank. They take
+    // that unlabeled light so the hover says what is waiting. A warning or
+    // danger artifact leg keeps the row, and so does every real warning.
+    const retryingTakesSavingLight =
+      candidate.source === "artifact-sync" &&
+      candidate.indicator.severity === "activity" &&
+      selected.source === "artifact" &&
+      selected.indicator.severity === "activity" &&
+      selected.indicator.label === null;
+    if (candidateRank > selectedRank || retryingTakesSavingLight) {
       selected = candidate;
     }
   }
@@ -618,37 +644,37 @@ function indicatorForWriteCommandAlert(
 }
 
 /**
- * Carries a label like the write alerts, because an artifact other people
- * cannot see yet is not discoverable by hovering a light. `recovered` ranks as
- * `activity`, which beats only a steady `synced`, so the label never covers
- * another plane's report.
+ * Dot only. Rooms still catching up render as ordinary saving: the quiet
+ * container, the neutral dot, the idle pulse, severity `activity`. The
+ * sentence is the hover and the accessible name. There is no label, so text
+ * in the status row cannot read as a lasting fault. When the host has
+ * stopped retrying, the dot is amber and the severity is `warning`, still
+ * with no label. A real warning or danger keeps the row either way.
  */
 function indicatorForArtifactSync(
   status: Exclude<ArtifactSyncStatus, { readonly kind: "calm" }>,
 ): PillIndicator {
-  if (status.kind === "recovered") {
+  if (status.kind === "retrying") {
     return {
       severity: "activity",
-      containerClassName:
-        "rounded-md bg-success/10 px-2 py-0.5 text-success-foreground",
+      containerClassName: QUIET_CONTAINER_CLASS,
       dotClassName: "",
-      label: status.label,
+      label: null,
       showAgentSpinner: false,
-      pulse: "active",
-      tooltip: null,
-      ariaLabel: status.label,
+      pulse: "idle",
+      tooltip: status.sentence,
+      ariaLabel: status.sentence,
     };
   }
   return {
     severity: "warning",
-    containerClassName:
-      "rounded-md bg-warning/10 px-2 py-0.5 text-warning-foreground",
+    containerClassName: QUIET_CONTAINER_CLASS,
     dotClassName: "bg-warning",
-    label: status.label,
+    label: null,
     showAgentSpinner: false,
     pulse: null,
     tooltip: status.sentence,
-    ariaLabel: `${status.label}. ${status.sentence}`,
+    ariaLabel: status.sentence,
   };
 }
 

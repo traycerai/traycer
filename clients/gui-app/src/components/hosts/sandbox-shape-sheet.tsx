@@ -337,7 +337,9 @@ function shapeOfForm(
   if (form.restingAmount.trim().length > 0) {
     const amount = Number(form.restingAmount);
     if (!Number.isInteger(amount) || amount <= 0) {
-      return { problem: "Resting period must be a whole number, or empty." };
+      return {
+        problem: '"Destroyed after idle for" must be a whole number, or empty.',
+      };
     }
     destroyAfterRestingMinutes = amount * UNIT_MINUTES[form.restingUnit];
   }
@@ -543,7 +545,7 @@ function ShapeSheetForm(props: {
             onChange={(value) => setForm({ ...form, idleMinutes: value })}
           />
           <div className="flex flex-col gap-1.5">
-            <Label htmlFor={`${ids}-resting`}>Destroyed after resting</Label>
+            <Label htmlFor={`${ids}-resting`}>Destroyed after idle for</Label>
             <div className="flex gap-2">
               <Input
                 id={`${ids}-resting`}
@@ -569,7 +571,7 @@ function ShapeSheetForm(props: {
                   }
                 }}
               >
-                <SelectTrigger aria-label="Resting period unit">
+                <SelectTrigger aria-label="Idle period unit">
                   <SelectValue />
                 </SelectTrigger>
                 <SelectContent>
