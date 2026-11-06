@@ -1560,6 +1560,7 @@ describe("chat find over a windowed transcript: older rows from the index", () =
         .onTranscriptLandingSettled("assistant:T:part:1", "landed");
     });
     flushFrames();
+    expect(find.scrollToLocation).toHaveBeenCalled();
     expect(adapter.getSnapshot()).toMatchObject({
       current: 1,
       total: 1,
