@@ -1,3 +1,4 @@
+import { resolve as resolveTestSetup } from "node:path";
 import path from "path";
 import { defineConfig } from "vitest/config";
 import { ZOD_INLINE_SERVER_DEPS } from "./vitest.shared";
@@ -40,6 +41,7 @@ export default defineConfig({
     ],
   },
   test: {
+    sequence: { setupFiles: "list" },
     // Vitest 5 flipped clearMocks to true; keep the v4 behavior (mock call history persists across tests).
     clearMocks: false,
     server: ZOD_INLINE_SERVER_DEPS,
@@ -53,6 +55,12 @@ export default defineConfig({
     // transport - can write into the real `~` on any runtime. Deliberately
     // NOT wired into vitest.config.packaging.ts: the real electron-builder
     // pack there needs the real `~/Library/Caches/electron-builder`.
-    setupFiles: ["./vitest.setup.ts"],
+    setupFiles: [
+      resolveTestSetup(
+        import.meta.dirname,
+        "../../scripts/test-worker-environment.ts",
+      ),
+      "./vitest.setup.ts",
+    ],
   },
 });
