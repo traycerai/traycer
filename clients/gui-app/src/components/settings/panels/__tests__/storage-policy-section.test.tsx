@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   act,
   cleanup,
+  fireEvent,
   render,
   screen,
   waitFor,
@@ -49,6 +50,7 @@ import {
   PERSONAL_PICK,
   type EnvironmentPick,
 } from "@/lib/settings-environment-pages";
+import type { StoragePolicyValue } from "@/hooks/environment/use-storage-policy";
 import { useSettingsEnvironmentPickStore } from "@/stores/settings/settings-environment-pick-store";
 
 const PERSONAL_ENV = "env-personal";
@@ -128,14 +130,55 @@ function renderSection(ui: ReactNode): void {
   );
 }
 
-async function theSwitch(): Promise<HTMLElement> {
-  return screen.findByRole("switch", {
-    name: "Free up space on this computer",
+const FOOTNOTE =
+  "Applies on every host in this environment. A chat comes back when an agent continues it.";
+
+async function chatsSwitch(): Promise<HTMLElement> {
+  return screen.findByRole("switch", { name: "Chats" });
+}
+
+function artifactsSwitch(): HTMLElement {
+  return screen.getByRole("switch", { name: "Artifacts" });
+}
+
+function idleTasksSelect(): HTMLElement {
+  return screen.getByRole("combobox", { name: "Idle tasks" });
+}
+
+function archivedChatsSelect(): HTMLElement {
+  return screen.getByRole("combobox", { name: "Archived chats" });
+}
+
+/** Waits for the read to land: every control enabled for an owner. */
+async function settled(): Promise<void> {
+  const control = await chatsSwitch();
+  await waitFor(() => {
+    expect(control.hasAttribute("disabled")).toBe(false);
   });
 }
 
-const FOOTNOTE =
-  "Runs only when the disk is getting full. A chat comes back when an agent continues it.";
+/** Opens a Radix select the way jsdom can (the keyboard), then picks an option. */
+function pickOption(trigger: HTMLElement, optionName: string): void {
+  fireEvent.keyDown(trigger, { key: "Enter" });
+  fireEvent.click(screen.getByRole("option", { name: optionName }));
+}
+
+function expectPut(
+  environmentId: string,
+  value: StoragePolicyValue,
+  revision: number | null,
+): void {
+  expect(harness?.paramsOf(PUT)).toEqual([
+    {
+      environmentId,
+      kind: "storage_policy",
+      key: "storage",
+      os: null,
+      value,
+      revision,
+    },
+  ]);
+}
 
 describe("<StoragePolicySection />", () => {
   beforeEach(() => {
@@ -151,97 +194,212 @@ describe("<StoragePolicySection />", () => {
     cleanup();
   });
 
-  it("is on with its footnote while no storage_policy item is set", async () => {
+  it("shows the defaults and the footnote while no storage_policy item is set", async () => {
     renderSection(PERSONAL_SECTION);
 
-    const control = await theSwitch();
-    await waitFor(() => {
-      expect(control.getAttribute("aria-checked")).toBe("true");
-      expect(control.hasAttribute("disabled")).toBe(false);
-    });
+    await settled();
+    expect((await chatsSwitch()).getAttribute("aria-checked")).toBe("true");
+    expect(artifactsSwitch().getAttribute("aria-checked")).toBe("true");
+    expect(idleTasksSelect().textContent).toContain(
+      "When the disk is getting full",
+    );
+    expect(archivedChatsSelect().textContent).toContain("After 30 days");
     expect(screen.getByText(FOOTNOTE)).toBeTruthy();
   });
 
-  it("creates the item with no revision when switched off", async () => {
+  it("creates the item with the whole value and no revision when Chats is switched off", async () => {
     renderSection(PERSONAL_SECTION);
-    const control = await theSwitch();
-    await waitFor(() => {
-      expect(control.hasAttribute("disabled")).toBe(false);
-    });
+    await settled();
 
-    await userEvent.click(control);
+    await userEvent.click(await chatsSwitch());
 
     await waitFor(() => {
-      expect(harness?.paramsOf(PUT)).toEqual([
+      expectPut(
+        PERSONAL_ENV,
         {
-          environmentId: PERSONAL_ENV,
-          kind: "storage_policy",
-          key: "storage",
-          os: null,
-          value: { freeUpSpace: false },
-          revision: null,
+          chats: false,
+          artifacts: true,
+          idleTaskDays: null,
+          archivedChatDays: 30,
         },
-      ]);
+        null,
+      );
     });
   });
 
-  it("quotes the existing item's revision when switched back on", async () => {
-    host.items = [storageItem({ freeUpSpace: false }, 4)];
-    renderSection(PERSONAL_SECTION);
-    const control = await theSwitch();
-    await waitFor(() => {
-      expect(control.getAttribute("aria-checked")).toBe("false");
-    });
-    expect(screen.queryByText(FOOTNOTE)).toBeNull();
-
-    await userEvent.click(control);
-
-    await waitFor(() => {
-      expect(harness?.paramsOf(PUT)).toEqual([
+  it("writes the whole stored value under the item's revision when Artifacts is switched off", async () => {
+    host.items = [
+      storageItem(
         {
-          environmentId: PERSONAL_ENV,
-          kind: "storage_policy",
-          key: "storage",
-          os: null,
-          value: { freeUpSpace: true },
-          revision: 4,
+          chats: true,
+          artifacts: true,
+          idleTaskDays: 14,
+          archivedChatDays: 90,
         },
-      ]);
+        4,
+      ),
+    ];
+    renderSection(PERSONAL_SECTION);
+    await settled();
+
+    await userEvent.click(artifactsSwitch());
+
+    await waitFor(() => {
+      expectPut(
+        PERSONAL_ENV,
+        {
+          chats: true,
+          artifacts: false,
+          idleTaskDays: 14,
+          archivedChatDays: 90,
+        },
+        4,
+      );
+    });
+  });
+
+  it("writes the whole value under the item's revision when an Idle tasks window is picked", async () => {
+    host.items = [
+      storageItem(
+        {
+          chats: true,
+          artifacts: false,
+          idleTaskDays: null,
+          archivedChatDays: 7,
+        },
+        6,
+      ),
+    ];
+    renderSection(PERSONAL_SECTION);
+    await settled();
+
+    pickOption(idleTasksSelect(), "After 14 days");
+
+    await waitFor(() => {
+      expectPut(
+        PERSONAL_ENV,
+        {
+          chats: true,
+          artifacts: false,
+          idleTaskDays: 14,
+          archivedChatDays: 7,
+        },
+        6,
+      );
+    });
+  });
+
+  it("writes no window when Never is picked for Archived chats", async () => {
+    renderSection(PERSONAL_SECTION);
+    await settled();
+
+    pickOption(archivedChatsSelect(), "Never");
+
+    await waitFor(() => {
+      expectPut(
+        PERSONAL_ENV,
+        {
+          chats: true,
+          artifacts: true,
+          idleTaskDays: null,
+          archivedChatDays: null,
+        },
+        null,
+      );
     });
   });
 
   it("drops back to the value it read and toasts when the write is refused", async () => {
     host.put = () => Promise.reject(new Error("write refused"));
     renderSection(PERSONAL_SECTION);
-    const control = await theSwitch();
-    await waitFor(() => {
-      expect(control.hasAttribute("disabled")).toBe(false);
-    });
+    await settled();
+    const control = await chatsSwitch();
 
     await userEvent.click(control);
 
-    const toast = await screen.findByText("Couldn't save these settings.");
-    expect(toast).toBeTruthy();
+    expect(
+      await screen.findByText("Couldn't save these settings."),
+    ).toBeTruthy();
     await waitFor(() => {
       expect(control.getAttribute("aria-checked")).toBe("true");
     });
   });
 
-  it("reads an item whose value does not parse as off", async () => {
-    host.items = [storageItem({ freeUpSpace: "yes" }, 2)];
+  it("reads an item whose value does not parse as both switches off, with no footnote and no windows to change", async () => {
+    host.items = [storageItem({ freeUpSpace: true }, 2)];
     renderSection(PERSONAL_SECTION);
 
-    const control = await theSwitch();
+    const control = await chatsSwitch();
     await waitFor(() => {
       expect(control.getAttribute("aria-checked")).toBe("false");
     });
+    expect(artifactsSwitch().getAttribute("aria-checked")).toBe("false");
+    expect(idleTasksSelect().hasAttribute("disabled")).toBe(true);
+    expect(archivedChatsSelect().hasAttribute("disabled")).toBe(true);
+    expect(screen.queryByText(FOOTNOTE)).toBeNull();
+  });
+
+  it("disables Archived chats but not Idle tasks while Chats is off", async () => {
+    host.items = [
+      storageItem(
+        {
+          chats: false,
+          artifacts: true,
+          idleTaskDays: null,
+          archivedChatDays: 30,
+        },
+        3,
+      ),
+    ];
+    renderSection(PERSONAL_SECTION);
+    await settled();
+
+    expect(archivedChatsSelect().hasAttribute("disabled")).toBe(true);
+    expect(idleTasksSelect().hasAttribute("disabled")).toBe(false);
+  });
+
+  it("disables Idle tasks too while both switches are off", async () => {
+    host.items = [
+      storageItem(
+        {
+          chats: false,
+          artifacts: false,
+          idleTaskDays: null,
+          archivedChatDays: 30,
+        },
+        3,
+      ),
+    ];
+    renderSection(PERSONAL_SECTION);
+    await settled();
+
+    expect(idleTasksSelect().hasAttribute("disabled")).toBe(true);
+    expect(archivedChatsSelect().hasAttribute("disabled")).toBe(true);
+  });
+
+  it("lists a stored window that is not a preset and shows it selected", async () => {
+    host.items = [
+      storageItem(
+        {
+          chats: true,
+          artifacts: true,
+          idleTaskDays: 45,
+          archivedChatDays: 30,
+        },
+        5,
+      ),
+    ];
+    renderSection(PERSONAL_SECTION);
+    await settled();
+
+    expect(idleTasksSelect().textContent).toContain("After 45 days");
   });
 
   it("renders nothing on a host that does not advertise the item write", async () => {
     renderSection(PERSONAL_SECTION);
-    await theSwitch();
+    await chatsSwitch();
 
-    // The same host, renegotiated without the write: the row goes, so its
+    // The same host, renegotiated without the write: the section goes, so its
     // absence is the gate's answer and not a read still in flight.
     act(() => {
       recordNegotiatedHostMethods(mockLocalHostEntry.hostId, [
@@ -251,60 +409,79 @@ describe("<StoragePolicySection />", () => {
     });
 
     await waitFor(() => {
-      expect(
-        within(document.body).queryByRole("switch", {
-          name: "Free up space on this computer",
-        }),
-      ).toBeNull();
+      expect(within(document.body).queryByTestId("storage-policy")).toBeNull();
     });
   });
 
-  it("disables the switch for a viewer", async () => {
+  it("disables every control for a viewer", async () => {
     host.role = "viewer";
     renderSection(PERSONAL_SECTION);
 
-    const control = await theSwitch();
+    const control = await chatsSwitch();
     await waitFor(() => {
       expect(control.hasAttribute("disabled")).toBe(true);
     });
+    expect(artifactsSwitch().hasAttribute("disabled")).toBe(true);
+    expect(idleTasksSelect().hasAttribute("disabled")).toBe(true);
+    expect(archivedChatsSelect().hasAttribute("disabled")).toBe(true);
   });
 
   it("reads and writes the picked team's environment, not Personal's", async () => {
-    host.items = [storageItem({ freeUpSpace: false }, 9)];
-    host.teamItems = [storageItem({ freeUpSpace: true }, 2)];
+    host.items = [
+      storageItem(
+        {
+          chats: false,
+          artifacts: false,
+          idleTaskDays: null,
+          archivedChatDays: 30,
+        },
+        9,
+      ),
+    ];
+    host.teamItems = [
+      storageItem(
+        {
+          chats: true,
+          artifacts: false,
+          idleTaskDays: 7,
+          archivedChatDays: null,
+        },
+        2,
+      ),
+    ];
     const pick: EnvironmentPick = { kind: "team", environmentId: TEAM_ENV };
     renderSection(<StoragePolicySection pick={pick} />);
-    const control = await theSwitch();
-    await waitFor(() => {
-      expect(control.getAttribute("aria-checked")).toBe("true");
-      expect(control.hasAttribute("disabled")).toBe(false);
-    });
+    await settled();
+    expect((await chatsSwitch()).getAttribute("aria-checked")).toBe("true");
 
-    await userEvent.click(control);
+    await userEvent.click(await chatsSwitch());
 
     await waitFor(() => {
-      expect(harness?.paramsOf(PUT)).toEqual([
+      expectPut(
+        TEAM_ENV,
         {
-          environmentId: TEAM_ENV,
-          kind: "storage_policy",
-          key: "storage",
-          os: null,
-          value: { freeUpSpace: false },
-          revision: 2,
+          chats: false,
+          artifacts: false,
+          idleTaskDays: 7,
+          archivedChatDays: null,
         },
-      ]);
+        2,
+      );
     });
   });
 
-  it("has no environment to write under a Local pick, so the switch is disabled", async () => {
+  it("has no environment to write under a Local pick, so every control is disabled", async () => {
     renderSection(
       <StoragePolicySection
         pick={{ kind: "local", hostId: "host-1", hostName: "Laptop" }}
       />,
     );
 
-    const control = await theSwitch();
+    const control = await chatsSwitch();
     expect(control.hasAttribute("disabled")).toBe(true);
+    expect(artifactsSwitch().hasAttribute("disabled")).toBe(true);
+    expect(idleTasksSelect().hasAttribute("disabled")).toBe(true);
+    expect(archivedChatsSelect().hasAttribute("disabled")).toBe(true);
   });
 });
 
@@ -337,6 +514,6 @@ describe("<StorageSettingsPanel />", () => {
   it("draws the row under the Personal pick", async () => {
     renderSection(<StorageSettingsPanel />);
 
-    expect(await theSwitch()).toBeTruthy();
+    expect(await chatsSwitch()).toBeTruthy();
   });
 });

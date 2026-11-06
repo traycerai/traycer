@@ -19,22 +19,39 @@ import {
 
 const METHOD = "environment.configuration.items";
 
-/** The item the "Free up space on this computer" switch writes. */
+/** The item the Storage page writes. */
 export const STORAGE_POLICY_KIND = "storage_policy";
 export const STORAGE_POLICY_KEY = "storage";
 
+/** An age window in whole days, or `null` for none. */
+const ageWindowSchema = z.number().int().positive().nullable();
+
 /** The item's value as authn validates it (`items.ts`). */
 export const storagePolicyValueSchema = z.strictObject({
-  freeUpSpace: z.boolean(),
+  chats: z.boolean(),
+  artifacts: z.boolean(),
+  idleTaskDays: ageWindowSchema,
+  archivedChatDays: ageWindowSchema,
 });
+
+export type StoragePolicyValue = z.infer<typeof storagePolicyValueSchema>;
+
+/** What the hosts apply while no item is set. */
+export const STORAGE_POLICY_DEFAULTS: StoragePolicyValue = {
+  chats: true,
+  artifacts: true,
+  idleTaskDays: null,
+  archivedChatDays: 30,
+};
 
 /** A configuration's storage policy as last read, with the revision a save quotes. */
 export interface ConfigurationStoragePolicy {
   /**
-   * Whether the configuration's hosts free up space. On when no item is set;
-   * off for a value the hosts cannot read, since they then free up nothing.
+   * What the configuration's hosts keep: the defaults when no item is set,
+   * and both kinds off for a value the hosts cannot read, since they then
+   * clean up nothing.
    */
-  readonly freeUpSpace: boolean;
+  readonly value: StoragePolicyValue;
   /** `null` when there is no item yet: a save creates it. */
   readonly revision: number | null;
 }
@@ -45,10 +62,14 @@ function storagePolicyOf(
   const item = items.find(
     (row) => row.kind === STORAGE_POLICY_KIND && row.key === STORAGE_POLICY_KEY,
   );
-  if (item === undefined) return { freeUpSpace: true, revision: null };
+  if (item === undefined) {
+    return { value: STORAGE_POLICY_DEFAULTS, revision: null };
+  }
   const parsed = storagePolicyValueSchema.safeParse(item.value);
   return {
-    freeUpSpace: parsed.success && parsed.data.freeUpSpace,
+    value: parsed.success
+      ? parsed.data
+      : { ...STORAGE_POLICY_DEFAULTS, chats: false, artifacts: false },
     revision: item.revision,
   };
 }

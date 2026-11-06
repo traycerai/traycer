@@ -1,7 +1,11 @@
 import { alwaysAvailable } from "@/lib/settings/settings-availability";
 import { defineSettingsSection } from "@/lib/settings-search/settings-definitions";
 
-/** The Storage page's search entry, and its one row. */
+/**
+ * The Storage page's search entry, and its rows. The rows are gated on the
+ * host advertising the item write, which no shell predicate can decide, so
+ * each folds into the page's entry: a result must land somewhere.
+ */
 export const STORAGE = defineSettingsSection("storage", {
   page: {
     availableWhen: alwaysAvailable,
@@ -16,17 +20,42 @@ export const STORAGE = defineSettingsSection("storage", {
       "full",
     ],
   },
-  // Gated on the host advertising the item write, which no shell predicate
-  // can decide, so it folds into the page's entry: a result must land
-  // somewhere.
-  freeUpSpace: {
+  chats: {
     kind: "row",
     group: null,
     search: { contributesTo: "page" },
-    label: "Free up space on this computer",
+    label: "Chats",
     description:
-      "Keep chats and artifacts of tasks you haven't used lately in the cloud instead of on disk. Applies on every host in this environment.",
+      "Keep chats of tasks you haven't used lately in the cloud instead of on disk.",
     availableWhen: alwaysAvailable,
-    keywords: ["cloud", "chats", "artifacts"],
+    keywords: ["cloud", "chats"],
+  },
+  artifacts: {
+    kind: "row",
+    group: null,
+    search: { contributesTo: "page" },
+    label: "Artifacts",
+    description:
+      "Keep artifacts of tasks you haven't used lately in the cloud instead of on disk.",
+    availableWhen: alwaysAvailable,
+    keywords: ["cloud", "artifacts"],
+  },
+  idleTasks: {
+    kind: "row",
+    group: null,
+    search: { contributesTo: "page" },
+    label: "Idle tasks",
+    description: "When to clean up a task nobody has used.",
+    availableWhen: alwaysAvailable,
+    keywords: ["idle", "unused", "days"],
+  },
+  archivedChats: {
+    kind: "row",
+    group: null,
+    search: { contributesTo: "page" },
+    label: "Archived chats",
+    description: "When to clean up a chat that stays archived.",
+    availableWhen: alwaysAvailable,
+    keywords: ["archived", "archive", "days"],
   },
 });

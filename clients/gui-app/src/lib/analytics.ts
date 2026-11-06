@@ -354,7 +354,6 @@ export type AnalyticsSetting =
   | "defaultSelection"
   | "defaultServiceTier"
   | "diffViewerPreferences"
-  | "freeUpSpace"
   | "linkOpen"
   | "browserSearchEngine"
   | "pinnedContextBreakdownFields"
@@ -372,6 +371,10 @@ export type AnalyticsSetting =
   | "startPageWallpaperCurated"
   | "startPageWallpaperTint"
   | "steerOnModEnterEnabled"
+  | "storageArchivedChats"
+  | "storageArtifacts"
+  | "storageChats"
+  | "storageIdleTasks"
   | "summonHotkeyChord"
   | "summonHotkeyEnabled"
   | "terminalCursorBlink"
@@ -1471,7 +1474,6 @@ const ANALYTICS_SETTINGS = new Set<string>(
     defaultSelection: true,
     defaultServiceTier: true,
     diffViewerPreferences: true,
-    freeUpSpace: true,
     linkOpen: true,
     browserSearchEngine: true,
     pinnedContextBreakdownFields: true,
@@ -1486,6 +1488,10 @@ const ANALYTICS_SETTINGS = new Set<string>(
     startPageWallpaperCurated: true,
     startPageWallpaperTint: true,
     steerOnModEnterEnabled: true,
+    storageArchivedChats: true,
+    storageArtifacts: true,
+    storageChats: true,
+    storageIdleTasks: true,
     summonHotkeyChord: true,
     summonHotkeyEnabled: true,
     terminalCursorBlink: true,

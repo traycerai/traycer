@@ -5611,36 +5611,53 @@ wrap`). Each row names the account its first usable match runs on, the
 - `Storage` (Environment, section id `storage`, route `/settings/storage`,
   `environment/storage-settings-panel.tsx`): what the picked configuration's
   hosts keep on disk. It is offered for Personal and teams, and not on a
-  Local row (`PAGES_HIDDEN_BY_PICK`), since its one setting is an environment
+  Local row (`PAGES_HIDDEN_BY_PICK`), since its settings are an environment
   item. Later storage rows go here too.
-  - **Free up space on this computer** (`panels/storage-policy-section.tsx`,
-    `data-testid="storage-free-up-space"`): "Keep chats and artifacts of
-    tasks you haven't used lately in the cloud instead of on disk. Applies
-    on every host in this environment." With the switch on, a line under it
-    reads "Runs only when the disk is getting full. A chat comes back when
-    an agent continues it."
-    - It is the configuration's `storage_policy` item (key `storage`, value
-      `{ freeUpSpace }`, `hooks/environment/use-storage-policy.ts`), read
-      through the pool tier like the sandbox defaults. The pick names the
-      environment: Personal's own, or the team's. **No item reads on**, and
-      an item whose value does not parse reads off, because the hosts then
-      free up nothing.
-    - The switch writes `environment.configuration.items.put` with the
-      revision it read (`null` creates the item). While the write is pending,
-      the switch shows the value being saved and a spinner beside it. A
-      refused write drops back to the value read, and the shared mutation's
-      toast says why. A stale or refused outcome shows
-      `ConfigurationWriteFeedback` under the row. A viewer of a team
-      configuration sees the switch disabled.
-    - The row draws nothing on a host that does not advertise the item write
-      (`useHostSupportsMethod`, asked of the host the write goes through).
-      It is keyed by the viewer, like the auto-archive row, so a pending save
-      never outlives an account switch.
-    - The item changes nothing a host reports (`UNREPORTED_ITEM_KINDS`), so
-      the page carries no status chip, like Sandboxes. Search folds the row
-      into the Storage page entry (`contributesTo: "page"`): the row is gated
-      on the host, which no search shell can decide, so it is not an
-      anchored entry and has no search fixture.
+  - **The storage policy** (`panels/storage-policy-section.tsx`,
+    `data-testid="storage-policy"`), four rows:
+    - **Chats**, a switch: "Keep chats of tasks you haven't used lately in
+      the cloud instead of on disk."
+    - **Artifacts**, a switch: "Keep artifacts of tasks you haven't used
+      lately in the cloud instead of on disk."
+    - **Idle tasks**, a select: "When to clean up a task nobody has used."
+      Options "When the disk is getting full" (no window), "After 7 days",
+      "After 14 days", "After 30 days", "After 90 days". Disabled while both
+      switches are off, since the window cleans whichever kinds are on.
+    - **Archived chats**, a select: "When to clean up a chat that stays
+      archived." Options "Never", "After 7 days", "After 30 days", "After 90
+      days". Disabled while Chats is off.
+    - A stored window that is not one of the options is listed as "After N
+      days", so the select shows what is in force.
+    - While either switch is on, a line under the rows reads "Applies on
+      every host in this environment. A chat comes back when an agent
+      continues it."
+  - It is the configuration's `storage_policy` item (key `storage`, value
+    `{ chats, artifacts, idleTaskDays, archivedChatDays }`, the windows whole
+    days or `null`; `hooks/environment/use-storage-policy.ts`), read through
+    the pool tier like the sandbox defaults. The pick names the environment:
+    Personal's own, or the team's. **No item reads as the defaults**, both
+    switches on, no idle window and archived chats after 30 days. An item
+    whose value does not parse reads with both switches off, because the
+    hosts then clean up nothing.
+  - Every control writes the whole value through
+    `environment.configuration.items.put` with the revision it read (`null`
+    creates the item), so a concurrent edit of one field cannot lose
+    another. While the write is pending, every control shows the value being
+    saved, is disabled, and the changed control has a spinner beside it. A
+    refused write drops back to the value read, and the shared mutation's
+    toast says why. A stale or refused outcome shows
+    `ConfigurationWriteFeedback` under the rows. A viewer of a team
+    configuration sees every control disabled. A failed read says so on the
+    Chats row, with Retry.
+  - The section draws nothing on a host that does not advertise the item
+    write (`useHostSupportsMethod`, asked of the host the write goes
+    through). It is keyed by the viewer, like the auto-archive row, so a
+    pending save never outlives an account switch.
+  - The item changes nothing a host reports (`UNREPORTED_ITEM_KINDS`), so
+    the page carries no status chip, like Sandboxes. Search folds every row
+    into the Storage page entry (`contributesTo: "page"`): the rows are gated
+    on the host, which no search shell can decide, so none is an anchored
+    entry and none has a search fixture.
 - `Keybindings` Keyboard shortcut customization.
 - `Shell` Shell binary + args used for every terminal PTY
   (`TerminalSessionManager` reads the effective config per spawn, file-watched,
