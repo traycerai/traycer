@@ -1275,7 +1275,7 @@ describe("html view state", () => {
   it("reaches a plain page as soon as it is ready, without an initialized handshake", () => {
     const harness = createHarness({ canvas: false, ready: true });
 
-    harness.host.setHtmlView(true, 1.5);
+    harness.host.setHtmlView({ enabled: true, scale: 1.5, commenting: false });
 
     expect(viewMessages(harness)).toEqual([
       {
@@ -1289,7 +1289,7 @@ describe("html view state", () => {
   it("is dropped, not queued, before the page has proven itself", () => {
     const harness = createHarness({ canvas: false, ready: false });
 
-    harness.host.setHtmlView(true, 2);
+    harness.host.setHtmlView({ enabled: true, scale: 2, commenting: false });
     harness.host.receive({
       jsonrpc: "2.0",
       method: "traycer/notifications/document-ready",
@@ -1302,7 +1302,7 @@ describe("html view state", () => {
   it("is never sent to a canvas board", () => {
     const harness = createHarness({ canvas: true, ready: true });
 
-    harness.host.setHtmlView(true, 1.5);
+    harness.host.setHtmlView({ enabled: true, scale: 1.5, commenting: false });
 
     expect(viewMessages(harness)).toEqual([]);
   });

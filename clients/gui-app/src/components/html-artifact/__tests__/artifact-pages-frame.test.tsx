@@ -49,7 +49,6 @@ interface PagesOptions {
   readonly pages: readonly string[];
   /** `null` fills the tile; a number is a row in the chat. */
   readonly height: number | null;
-  readonly pageZoom: boolean;
   /** The caller's rows for the chip's "More actions" menu. */
   readonly menuItems: ReactNode;
 }
@@ -57,7 +56,6 @@ interface PagesOptions {
 const FILLING_ONE_PAGE: PagesOptions = {
   pages: ["index.html"],
   height: null,
-  pageZoom: false,
   menuItems: undefined,
 };
 
@@ -79,7 +77,7 @@ function renderPages(overrides: Partial<PagesOptions>) {
       title="Report"
       className=""
       height={options.height}
-      pageZoom={options.pageZoom}
+      commenting={false}
       onSize={() => undefined}
       onStatus={() => undefined}
       onBridge={null}
@@ -208,7 +206,7 @@ function frameProps(): SandboxFrameProps {
 
 describe("the floating controls chip", () => {
   it("offers no Back or Home on an artifact with one page", () => {
-    renderPages({ pageZoom: true });
+    renderPages({});
 
     expect(
       screen.getByRole("toolbar", { name: "HTML artifact controls" }),
@@ -253,7 +251,7 @@ describe("the floating controls chip", () => {
 
 describe("the More actions menu", () => {
   it("keeps Actual size for a page that fills its tile, enabled only once the page is ready and off 100%", () => {
-    renderPages({ pageZoom: true });
+    renderPages({});
     openMoreActions();
     const actualSize = (): string | null =>
       screen
@@ -274,7 +272,6 @@ describe("the More actions menu", () => {
 
   it("lists the caller's rows after Actual size", () => {
     renderPages({
-      pageZoom: true,
       menuItems: <DropdownMenuItem>Download</DropdownMenuItem>,
     });
 
@@ -288,7 +285,7 @@ describe("the More actions menu", () => {
   });
 
   it("offers neither zoom nor a menu in the chat, where the row has a fixed height", () => {
-    renderPages({ pages: TWO_PAGES, height: 240, pageZoom: true });
+    renderPages({ pages: TWO_PAGES, height: 240 });
 
     const toolbar = screen.getByRole("toolbar", {
       name: "HTML artifact controls",
@@ -304,7 +301,6 @@ describe("the More actions menu", () => {
     renderPages({
       pages: TWO_PAGES,
       height: 240,
-      pageZoom: true,
       menuItems: <DropdownMenuItem>Download</DropdownMenuItem>,
     });
 
@@ -358,30 +354,24 @@ describe("the room a filling page keeps for the controls", () => {
   it("is the chip's bottom edge, so the page opens clear of it", () => {
     layOutControlsChip();
 
-    renderPages({ pageZoom: true });
+    renderPages({});
 
     expect(frameProps().pageInsetTop).toBe(38);
   });
 
   it("follows the chip when its controls wrap onto another row", () => {
     const layout = layOutControlsChip();
-    renderPages({ pageZoom: true });
+    renderPages({});
 
     layout.growTo(66);
 
     expect(frameProps().pageInsetTop).toBe(74);
   });
 
-  it.each([
-    [
-      "in the chat, where the chip only comes up on hover",
-      { pages: TWO_PAGES, height: 240, pageZoom: true },
-    ],
-    ["where the page has no controls at all", { pageZoom: false }],
-  ])("is none %s", (_where, options) => {
+  it("is none in the chat, where the chip only comes up on hover", () => {
     layOutControlsChip();
 
-    renderPages(options);
+    renderPages({ pages: TWO_PAGES, height: 240 });
 
     expect(frameProps().pageInsetTop).toBe(0);
   });
@@ -392,7 +382,7 @@ describe("the room a filling page keeps for the controls", () => {
     vi.stubGlobal("innerWidth", 480);
     layOutControlsChip();
 
-    renderPages({ pageZoom: true });
+    renderPages({});
 
     expect(frameProps().pageInsetTop).toBe(0);
   });

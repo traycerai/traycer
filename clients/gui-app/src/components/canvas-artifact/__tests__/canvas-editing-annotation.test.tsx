@@ -296,6 +296,7 @@ function mountOverlay() {
         tileId="canvas-tile-1"
         boardPath={BOARD_PATH}
         registry={registry}
+        pointerInPage={false}
         onPick={() => undefined}
         onRetire={() => undefined}
         onEscape={() => undefined}

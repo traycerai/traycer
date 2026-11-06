@@ -1,4 +1,11 @@
-import { useLayoutEffect, useRef, useState, type ReactNode } from "react";
+import {
+  useEffect,
+  useEffectEvent,
+  useLayoutEffect,
+  useRef,
+  useState,
+  type ReactNode,
+} from "react";
 import { ArrowLeft, House, Minus, MoreHorizontal, Plus } from "lucide-react";
 import { ActualSizeGlyph } from "@/components/epic-canvas/zoom-controls/zoom-controls";
 import { useCoarsePointer } from "@/hooks/ui/use-coarse-pointer";
@@ -21,6 +28,7 @@ import { TooltipWrapper } from "@/components/ui/tooltip-wrapper";
 import type { ArtifactManifest } from "@/lib/sandbox/artifact-serving";
 import type {
   SandboxBridgeHost,
+  SandboxHtmlView,
   SandboxSize,
   SandboxStatus,
 } from "@/lib/sandbox/bridge-host";
@@ -260,11 +268,12 @@ export function ArtifactPagesFrame(props: {
   /** The page's height in px, or `null` to fill what the row leaves. */
   readonly height: number | null;
   /**
-   * Whether the zoom cluster is offered. A filling page zooms through its
-   * viewer script; a document served without that script has nothing to
-   * answer the buttons.
+   * Whether a press on the entry page picks an element to comment on instead
+   * of acting on the page. The page stays loaded either way - this is a mode
+   * the loaded page is told to take - so its scroll, zoom and own state
+   * outlast the switch. Other pages are read as usual.
    */
-  readonly pageZoom: boolean;
+  readonly commenting: boolean;
   readonly onSize: (size: SandboxSize) => void;
   readonly onStatus: (status: SandboxStatus) => void;
   readonly onBridge: ((bridge: SandboxBridgeHost | null) => void) | null;
@@ -296,7 +305,7 @@ export function ArtifactPagesFrame(props: {
     title,
     className,
     height,
-    pageZoom,
+    commenting,
     onSize,
     onStatus,
     onBridge,
@@ -315,9 +324,6 @@ export function ArtifactPagesFrame(props: {
   const [ready, setReady] = useState(false);
   const coarsePointer = useCoarsePointer();
   const controlSize = coarsePointer ? "icon-touch" : "icon-sm";
-  const changeScale = (next: number): void => {
-    bridgeRef.current?.setHtmlView(height === null, next);
-  };
   const [history, setHistory] = useState(() => freshHistory(entryPath));
   let current = history;
   if (history.entryPath !== entryPath) {
@@ -395,8 +401,31 @@ export function ArtifactPagesFrame(props: {
 
   const standIn = pageStandIn(current, { goHome, readAgain });
   const fills = height === null;
+  const onEntryPage = currentPath === entryPath && standIn === null;
+  // Comments anchor to the entry page's bytes, so only it is commented on.
+  const commentingHere = commenting && onEntryPage;
+  const viewAt = (next: number): SandboxHtmlView => ({
+    enabled: fills,
+    scale: next,
+    commenting: commentingHere,
+  });
+  const changeScale = (next: number): void => {
+    bridgeRef.current?.setHtmlView(viewAt(next));
+  };
+  // Every load is a fresh document that opens for reading, so its view and
+  // mode are told on each ready as well as on each change.
+  const tellPage = (bridge: SandboxBridgeHost): void => {
+    bridge.setHtmlView(viewAt(scaleRef.current));
+    void bridge.setMode(commentingHere ? "edit" : "play");
+  };
+  const tellReadyPage = useEffectEvent(() => {
+    if (ready && bridgeRef.current !== null) tellPage(bridgeRef.current);
+  });
+  useEffect(() => {
+    tellReadyPage();
+  }, [commentingHere]);
   const pages = pageNavigationFor(source.manifest, current);
-  const zoom = fills && pageZoom ? { ready, scale } : null;
+  const zoom = fills ? { ready, scale } : null;
   const hasControls =
     pages !== null ||
     zoom !== null ||
@@ -444,8 +473,10 @@ export function ArtifactPagesFrame(props: {
           onSize={onSize}
           onStatus={(status) => {
             setReady(status === "ready");
-            if (status === "ready")
-              bridgeRef.current?.setHtmlView(fills, scaleRef.current);
+            // A page change can report loading and ready in one go, which
+            // leaves `ready` where it was, so the new page is told here.
+            if (status === "ready" && bridgeRef.current !== null)
+              tellPage(bridgeRef.current);
             onStatus(status);
           }}
           onRequestTeardown={noop}
@@ -464,7 +495,7 @@ export function ArtifactPagesFrame(props: {
           sourceEquivalent={sourceEquivalent}
           ref={onFrame}
         />
-        {renderOverlay?.(currentPath === entryPath && standIn === null)}
+        {renderOverlay?.(onEntryPage)}
         {standIn}
       </div>
     </div>
