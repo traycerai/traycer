@@ -1,5 +1,15 @@
 import { useConfigurationKey } from "@/components/settings/environment/use-configuration-key";
 import { useState, type ReactNode } from "react";
+import { MoreHorizontal } from "lucide-react";
+import {
+  DropdownMenu,
+  DropdownMenuTrigger,
+  DropdownMenuContent,
+  DropdownMenuItem,
+} from "@/components/ui/dropdown-menu";
+import type { McpListData } from "@/hooks/providers/native-response-map";
+import type { UseQueryResult } from "@tanstack/react-query";
+import type { HostRpcError } from "@traycer-clients/shared/host-transport/host-messenger";
 import type { ProviderId } from "@traycer/protocol/host/provider-schemas";
 import type { EnvironmentConfigurationWriteResponse } from "@traycer/protocol/host/environment/configuration-contracts";
 import { SettingsPanelShell } from "@/components/settings/settings-panel-shell";
@@ -58,18 +68,24 @@ import { TeamReadFailed } from "./team-read-failed";
 import { TeamViewingHostBinding } from "./team-viewing-host-binding";
 
 export function EnvironmentMcpServersPage(): ReactNode {
+  const configurationKey = useConfigurationKey();
+  return <EnvironmentMcpServers key={configurationKey} />;
+}
+
+function McpPage(props: {
+  readonly children: ReactNode;
+  readonly action: ReactNode;
+}): ReactNode {
   const personal = useConfigurationIsPersonal();
   const name = useConfigurationName();
-  // Keyed by configuration: a draft or a write's outcome stays with the
-  // configuration it was made in.
-  const configurationKey = useConfigurationKey();
   return (
     <SettingsPanelShell
       title="MCP servers"
       description={mcpPageSubtitle(personal, name)}
+      headerAction={props.action}
       bodyClassName="overflow-visible rounded-none border-none bg-transparent"
     >
-      <EnvironmentMcpServers key={configurationKey} />
+      {props.children}
     </SettingsPanelShell>
   );
 }
@@ -79,9 +95,18 @@ function EnvironmentMcpServers(): ReactNode {
     useHostClient(),
     "environment.configuration.mcpServers.list",
   );
-  if (version === null) return <MutedAgentSpinner />;
-  // A host that predates the list shows the items it can read.
-  if (version === false) return <TeamMcpItems providerId={null} />;
+  if (version === null)
+    return (
+      <McpPage action={null}>
+        <MutedAgentSpinner />
+      </McpPage>
+    );
+  if (version === false)
+    return (
+      <McpPage action={null}>
+        <TeamMcpItems providerId={null} />
+      </McpPage>
+    );
   return <McpServerList />;
 }
 
@@ -94,43 +119,46 @@ function McpServerList(): ReactNode {
     null,
   );
   const [issue, setIssue] = useState<ConfigurationWriteIssue>(null);
-  if (query.isPending) return <MutedAgentSpinner />;
+  if (query.isPending)
+    return (
+      <McpPage action={null}>
+        <MutedAgentSpinner />
+      </McpPage>
+    );
   if (query.isError)
     return (
-      <TeamReadFailed
-        message={mcpReadFailed(name)}
-        onRetry={() => void query.refetch()}
-      />
+      <McpPage action={null}>
+        <TeamReadFailed
+          message={mcpReadFailed(name)}
+          onRetry={() => void query.refetch()}
+        />
+      </McpPage>
     );
-  const add = canEdit ? (
-    <Button type="button" size="sm" onClick={() => setEditing("new")}>
-      Add a server
-    </Button>
-  ) : null;
   return (
-    <section className="flex flex-col gap-3" aria-label="Servers">
-      <ConfigurationWriteFeedback issue={issue} />
-      {query.data.length === 0 ? (
-        <>
-          <div className="flex flex-wrap items-center gap-3">
+    <McpPage
+      action={
+        canEdit ? (
+          <Button type="button" size="sm" onClick={() => setEditing("new")}>
+            Add a server
+          </Button>
+        ) : null
+      }
+    >
+      <section className="flex flex-col gap-3" aria-label="Servers">
+        <ConfigurationWriteFeedback issue={issue} />
+        {query.data.length === 0 ? (
+          <>
             <p className="text-ui-sm text-muted-foreground">
               MCP servers give agents tools.
             </p>
-            {add}
-          </div>
-          <TeamViewingHostBinding unavailable={null}>
-            <OnHostOnlyServersLine
-              providers={providers}
-              environmentNames={[]}
-            />
-          </TeamViewingHostBinding>
-        </>
-      ) : (
-        <>
-          <div className="flex items-center justify-between gap-3">
-            <h3 className="text-ui-sm font-medium">Servers</h3>
-            {add}
-          </div>
+            <TeamViewingHostBinding unavailable={null}>
+              <OnHostOnlyServersLine
+                providers={providers}
+                environmentNames={[]}
+              />
+            </TeamViewingHostBinding>
+          </>
+        ) : (
           <ul className="flex flex-col gap-2">
             {query.data.map((server) => (
               <McpServerRow
@@ -143,15 +171,15 @@ function McpServerList(): ReactNode {
               />
             ))}
           </ul>
-        </>
-      )}
-      {editing === null ? null : (
-        <McpServerDialog
-          server={editing === "new" ? null : editing}
-          onClose={() => setEditing(null)}
-        />
-      )}
-    </section>
+        )}
+        {editing === null ? null : (
+          <McpServerDialog
+            server={editing === "new" ? null : editing}
+            onClose={() => setEditing(null)}
+          />
+        )}
+      </section>
+    </McpPage>
   );
 }
 
@@ -202,7 +230,9 @@ function McpServerRow(props: {
     <li className="flex flex-col gap-2 rounded-lg border border-border/60 p-3">
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div className="min-w-0">
-          <div className="truncate text-ui-sm font-medium">{server.name}</div>
+          <div className="wrap-anywhere text-ui-sm font-medium">
+            {server.name}
+          </div>
           <TeamViewingHostBinding
             unavailable={
               <McpServerLine
@@ -222,38 +252,6 @@ function McpServerRow(props: {
           </TeamViewingHostBinding>
         </div>
         <div className="flex flex-wrap items-center gap-2">
-          {enabled ? (
-            <Button
-              type="button"
-              variant="ghost"
-              size="sm"
-              aria-expanded={toolsOpen}
-              onClick={() => setToolsOpen((open) => !open)}
-            >
-              Tools
-            </Button>
-          ) : null}
-          {props.canEdit ? (
-            <Button
-              type="button"
-              variant="ghost"
-              size="sm"
-              onClick={props.onEdit}
-            >
-              Edit
-            </Button>
-          ) : null}
-          {props.canEdit && removable ? (
-            <Button
-              type="button"
-              variant="ghost"
-              size="sm"
-              disabled={pending}
-              onClick={() => setConfirming(true)}
-            >
-              Remove
-            </Button>
-          ) : null}
           <span className="flex items-center gap-2 text-ui-xs text-muted-foreground">
             {serverSwitchLabel(enabled)}
             {props.canEdit && switchable ? (
@@ -287,6 +285,44 @@ function McpServerRow(props: {
               />
             ) : null}
           </span>
+          {enabled ? (
+            <Button
+              type="button"
+              variant="ghost"
+              size="sm"
+              aria-expanded={toolsOpen}
+              onClick={() => setToolsOpen((open) => !open)}
+            >
+              Tools
+            </Button>
+          ) : null}
+          {props.canEdit ? (
+            <DropdownMenu>
+              <DropdownMenuTrigger asChild>
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="icon-sm"
+                  aria-label={`More for ${server.name}`}
+                >
+                  <MoreHorizontal />
+                </Button>
+              </DropdownMenuTrigger>
+              <DropdownMenuContent align="end">
+                <DropdownMenuItem onSelect={props.onEdit}>
+                  Edit
+                </DropdownMenuItem>
+                {removable ? (
+                  <DropdownMenuItem
+                    disabled={pending}
+                    onSelect={() => setConfirming(true)}
+                  >
+                    Remove
+                  </DropdownMenuItem>
+                ) : null}
+              </DropdownMenuContent>
+            </DropdownMenu>
+          ) : null}
         </div>
       </div>
       <RemoveServerDialog
@@ -311,18 +347,12 @@ function McpServerRow(props: {
       />
       {toolsOpen && enabled ? (
         <TeamViewingHostBinding unavailable={null}>
-          <div className="flex flex-col gap-3">
-            {using.map((providerId) => (
-              <McpServerTools
-                key={providerId}
-                server={server}
-                providerId={providerId}
-                canEdit={props.canEdit}
-                showProvider
-                onIssue={props.onIssue}
-              />
-            ))}
-          </div>
+          <SharedMcpServerTools
+            server={server}
+            providers={using}
+            canEdit={props.canEdit}
+            onIssue={props.onIssue}
+          />
         </TeamViewingHostBinding>
       ) : null}
     </li>
@@ -465,7 +495,9 @@ export function McpServerTools(props: {
             key={tool.name}
             className="flex items-center justify-between gap-3"
           >
-            <span className="min-w-0 truncate text-ui-sm">{tool.name}</span>
+            <span className="min-w-0 wrap-anywhere text-ui-sm">
+              {tool.name}
+            </span>
             <Switch
               aria-label={`${props.server.name} ${label} ${tool.name}`}
               checked={enabled}
@@ -498,6 +530,205 @@ export function McpServerTools(props: {
                 );
               }}
             />
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+type ToolListQuery = UseQueryResult<McpListData, HostRpcError>;
+
+/** Each provider retains its own cached read and discovery polling. */
+function McpToolReads(props: {
+  readonly providers: readonly ProviderId[];
+  readonly enabled: boolean;
+  readonly lists: readonly ToolListQuery[];
+  readonly children: (lists: readonly ToolListQuery[]) => ReactNode;
+}): ReactNode {
+  const providerId = props.providers.at(0);
+  const list = useProvidersMcpList({
+    providerId: providerId ?? "claude-code",
+    scope: "global",
+    workspaceRoot: null,
+    enabled: props.enabled && providerId !== undefined,
+    pollWhilePending: false,
+  });
+  if (providerId === undefined) return props.children(props.lists);
+  return (
+    <McpToolReads
+      providers={props.providers.slice(1)}
+      enabled={props.enabled}
+      lists={[...props.lists, list]}
+    >
+      {props.children}
+    </McpToolReads>
+  );
+}
+
+/** One tool inventory, with provider-specific settings disclosed only when they differ. */
+function SharedMcpServerTools(props: {
+  readonly server: EnvironmentMcpServer;
+  readonly providers: readonly ProviderId[];
+  readonly canEdit: boolean;
+  readonly onIssue: (issue: ConfigurationWriteIssue) => void;
+}): ReactNode {
+  return (
+    <McpToolReads
+      providers={props.providers}
+      enabled={props.server.item !== null}
+      lists={[]}
+    >
+      {(lists) => <SharedMcpToolInventory {...props} lists={lists} />}
+    </McpToolReads>
+  );
+}
+
+function SharedMcpToolInventory(props: {
+  readonly server: EnvironmentMcpServer;
+  readonly providers: readonly ProviderId[];
+  readonly canEdit: boolean;
+  readonly onIssue: (issue: ConfigurationWriteIssue) => void;
+  readonly lists: readonly ToolListQuery[];
+}): ReactNode {
+  const source = useConfigurationSource();
+  const { putItem } = useConfigurationMcpServerMutations();
+  const item = props.server.item;
+  const lists = props.lists;
+  if (item === null) return null;
+  const tools = new Map<
+    string,
+    { readonly providerId: ProviderId; readonly enabled: boolean }[]
+  >();
+  lists.forEach((list, index) => {
+    const providerId = props.providers.at(index);
+    if (providerId === undefined) return;
+    const harness = providerIdToGuiHarnessId(providerId);
+    list.data?.servers
+      .find((server) => server.name === item.key)
+      ?.tools.forEach((tool) => {
+        const states = tools.get(tool.name) ?? [];
+        states.push({
+          providerId,
+          enabled: item.toolToggles[harness]?.[tool.name] ?? tool.enabled,
+        });
+        tools.set(tool.name, states);
+      });
+  });
+  const toggle = (
+    name: string,
+    providers: readonly ProviderId[],
+    next: boolean,
+  ): void => {
+    if (source.kind !== "pool") return;
+    const toggles = { ...item.toolToggles };
+    providers.forEach((id) => {
+      const harness = providerIdToGuiHarnessId(id);
+      toggles[harness] = { ...toggles[harness], [name]: next };
+    });
+    putItem.mutate(
+      {
+        environmentId: source.environmentId,
+        kind: "mcp_server",
+        key: item.key,
+        os: null,
+        value: mcpItemValue(props.server, toggles, item.offFor),
+        revision: item.revision,
+      },
+      { onSuccess: (result) => props.onIssue(configurationWriteIssue(result)) },
+    );
+  };
+  const ready = lists.every((list) => list.isSuccess);
+  return (
+    <div className="flex flex-col gap-3">
+      {lists.some((list) => list.isPending) ? <MutedAgentSpinner /> : null}
+      {lists.map((list, index) => {
+        const id = props.providers.at(index);
+        if (id === undefined) return null;
+        const label = providerDisplayName(id);
+        if (list.isError && !list.isFetching)
+          return (
+            <TeamReadFailed
+              key={id}
+              message={`Couldn't read ${label}'s tools for this server.`}
+              onRetry={() => void list.refetch()}
+            />
+          );
+        if (
+          list.data !== undefined &&
+          !list.data.servers.some((server) => server.name === item.key)
+        )
+          return (
+            <p
+              key={id}
+              role="status"
+              className="text-ui-xs text-muted-foreground"
+            >
+              {label} hasn't listed this server's tools yet.
+            </p>
+          );
+        return null;
+      })}
+      {[...tools].map(([name, states]) => {
+        const enabled = states.every((state) => state.enabled);
+        const mixed = !enabled && states.some((state) => state.enabled);
+        const differs = mixed || states.length !== props.providers.length;
+        return (
+          <div key={name} className="flex flex-col gap-1">
+            <div className="flex items-start justify-between gap-3">
+              <span className="min-w-0 wrap-anywhere text-ui-sm">{name}</span>
+              {mixed ? (
+                <span className="ml-auto text-ui-xs text-muted-foreground">
+                  Mixed
+                </span>
+              ) : null}
+              <Switch
+                aria-label={`${props.server.name} ${name}`}
+                aria-checked={mixed ? "mixed" : enabled}
+                checked={enabled}
+                disabled={!props.canEdit || putItem.isPending || !ready}
+                onCheckedChange={(next) =>
+                  toggle(
+                    name,
+                    states.map((state) => state.providerId),
+                    next,
+                  )
+                }
+              />
+            </div>
+            {differs ? (
+              <details className="text-ui-xs text-muted-foreground">
+                <summary className="cursor-pointer">
+                  Differs by provider
+                </summary>
+                <div className="flex flex-col gap-2 pt-2">
+                  {props.providers.map((id) => {
+                    const state = states.find(
+                      (entry) => entry.providerId === id,
+                    );
+                    return (
+                      <div
+                        key={id}
+                        className="flex items-center justify-between gap-3"
+                      >
+                        <span className="min-w-0 wrap-anywhere">
+                          {providerDisplayName(id)}
+                          {state === undefined ? " · Not listed" : ""}
+                        </span>
+                        {state === undefined ? null : (
+                          <Switch
+                            aria-label={`${props.server.name} ${providerDisplayName(id)} ${name}`}
+                            checked={state.enabled}
+                            disabled={!props.canEdit || putItem.isPending}
+                            onCheckedChange={(next) => toggle(name, [id], next)}
+                          />
+                        )}
+                      </div>
+                    );
+                  })}
+                </div>
+              </details>
+            ) : null}
           </div>
         );
       })}

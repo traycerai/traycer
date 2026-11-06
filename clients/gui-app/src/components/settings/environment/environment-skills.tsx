@@ -16,6 +16,14 @@ import {
 import { SettingsPanelShell } from "@/components/settings/settings-panel-shell";
 import { ProviderSkillDetailDialog } from "@/components/settings/panels/provider-skill-detail-dialog";
 import { SettingsSegmentedControl } from "@/components/settings/controls/settings-segmented-control";
+import {
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
+  DialogDescription,
+  DialogClose,
+} from "@/components/ui/dialog";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import {
@@ -207,18 +215,24 @@ function useServedSkills() {
 }
 
 export function EnvironmentSkillsPage(): ReactNode {
+  const configurationKey = useConfigurationKey();
+  return <EnvironmentSkills key={configurationKey} providerId={null} />;
+}
+
+function SkillsPage(props: {
+  readonly children: ReactNode;
+  readonly action: ReactNode;
+}): ReactNode {
   const personal = useConfigurationIsPersonal();
   const name = useConfigurationName();
-  // Keyed by configuration: a draft or a write's outcome stays with the
-  // configuration it was made in.
-  const configurationKey = useConfigurationKey();
   return (
     <SettingsPanelShell
       title="Skills"
       description={skillsPageSubtitle(personal, name)}
-      bodyClassName="overflow-visible rounded-none border-none bg-transparent"
+      headerAction={props.action}
+      bodyClassName="flex flex-col gap-3 overflow-visible rounded-none border-none bg-transparent"
     >
-      <EnvironmentSkills key={configurationKey} providerId={null} />
+      {props.children}
     </SettingsPanelShell>
   );
 }
@@ -255,29 +269,37 @@ function EnvironmentSkills(props: {
   // skill's files where a picked host projects them. The page names no host
   // for a list that came from the room, so the picker is drawn only where a
   // host is what the page is missing.
+  const wrap = (content: ReactNode): ReactNode =>
+    props.providerId === null ? (
+      <SkillsPage action={null}>{content}</SkillsPage>
+    ) : (
+      content
+    );
   const hosted =
     served.scope.client !== null && served.scope.viewingHost !== null;
-  if (served.listVersion === null) return <SkillsReading name={name} />;
+  if (served.listVersion === null) return wrap(<SkillsReading name={name} />);
   if (served.listVersion === false)
-    return hosted ? (
-      <TeamSkills providerId={props.providerId} />
-    ) : (
-      <TeamReadFailed
-        message={skillsReadFailed(name)}
-        onRetry={() => void served.query.refetch()}
-      />
+    return wrap(
+      hosted ? (
+        <TeamSkills providerId={props.providerId} />
+      ) : (
+        <TeamReadFailed
+          message={skillsReadFailed(name)}
+          onRetry={() => void served.query.refetch()}
+        />
+      ),
     );
   const { query } = served;
-  if (query.isPending) return <SkillsReading name={name} />;
+  if (query.isPending) return wrap(<SkillsReading name={name} />);
   if (query.isError)
-    return (
+    return wrap(
       <TeamReadFailed
         message={skillsReadFailed(name)}
         onRetry={() => void query.refetch()}
-      />
+      />,
     );
   if (query.data.outcome === "not_served")
-    return <section className="flex flex-col gap-3">{noHost}</section>;
+    return wrap(<section className="flex flex-col gap-3">{noHost}</section>);
   const { skills, revision } = query.data;
   // An editor checks sources and imports on the viewing host, which only a
   // picked host offers.
@@ -286,6 +308,16 @@ function EnvironmentSkills(props: {
   const list =
     props.providerId === null ? (
       <SkillsPageList
+        addAction={
+          canEdit ? (
+            <AddSkillWithHost
+              uploadable={served.uploadable}
+              importable={importable}
+              searchable={served.searchable}
+              hostClient={served.scope.client}
+            />
+          ) : null
+        }
         listed={withServedState(query.data, served.state)}
         checkable={checkable}
         canEdit={canEdit}
@@ -321,14 +353,6 @@ function EnvironmentSkills(props: {
       ) : (
         list
       )}
-      {props.providerId === null && canEdit ? (
-        <AddSkillWithHost
-          uploadable={served.uploadable}
-          importable={importable}
-          searchable={served.searchable}
-          hostClient={served.scope.client}
-        />
-      ) : null}
     </section>
   );
 }
@@ -393,33 +417,62 @@ function AddSkill(props: {
   readonly hostClient: HostClient<HostRpcRegistry> | null;
   readonly onNotServed: () => void;
 }): ReactNode {
-  const [importing, setImporting] = useState(false);
+  const [dialog, setDialog] = useState<"add" | "import" | null>(null);
   const importAction = props.importable ? (
     <Button
       type="button"
       variant="outline"
       size="sm"
-      onClick={() => setImporting(true)}
+      onClick={() => setDialog("import")}
     >
       {IMPORT_SKILL_LABEL}
     </Button>
   ) : null;
+  let description = "Import a skill from a source.";
+  if (props.uploadable)
+    description = props.importable
+      ? "Upload a skill folder or import from a source."
+      : "Upload a skill folder.";
+  if (!props.uploadable && !props.importable) return null;
   return (
     <>
-      {props.uploadable ? (
-        <TeamSkillUpload
-          onNotServed={props.onNotServed}
-          importAction={importAction}
-        />
-      ) : (
-        importAction
-      )}
-      {importing ? (
+      <Button type="button" size="sm" onClick={() => setDialog("add")}>
+        Add skill
+      </Button>
+      {dialog === "add" ? (
+        <Dialog
+          open
+          onOpenChange={(open) => {
+            if (!open) setDialog(null);
+          }}
+        >
+          <DialogContent>
+            <DialogHeader>
+              <DialogTitle>Add skill</DialogTitle>
+              <DialogDescription>{description}</DialogDescription>
+            </DialogHeader>
+            {props.uploadable ? (
+              <TeamSkillUpload
+                onNotServed={props.onNotServed}
+                importAction={importAction}
+              />
+            ) : (
+              importAction
+            )}
+            <DialogClose asChild>
+              <Button type="button" variant="ghost" size="sm">
+                Cancel
+              </Button>
+            </DialogClose>
+          </DialogContent>
+        </Dialog>
+      ) : null}
+      {dialog === "import" ? (
         <EnvironmentSkillImportDialog
           hostClient={props.hostClient}
           searchable={props.searchable}
           initialSource=""
-          onClose={() => setImporting(false)}
+          onClose={() => setDialog(null)}
         />
       ) : null}
     </>
@@ -509,6 +562,7 @@ function policyNeedsConfirm(
 }
 
 function SkillsPageList(props: {
+  readonly addAction: ReactNode;
   readonly listed: ListedSkills;
   /** The viewing host checks each skill's source again on asking. */
   readonly checkable: boolean;
@@ -684,34 +738,38 @@ function SkillsPageList(props: {
   const canUpdate = (skill: EnvironmentSkillV11): boolean =>
     props.canEdit && props.hosted && props.updatable && skill.updateAvailable;
 
+  const checkAction =
+    props.checkable && skills.some((skill) => skill.upstream !== null) ? (
+      <Button
+        type="button"
+        variant="outline"
+        size="sm"
+        disabled={checkUpdates.isPending}
+        onClick={() => {
+          if (source.kind !== "pool") return;
+          checkUpdates.mutate({
+            environmentId: source.environmentId,
+            refresh: true,
+          });
+        }}
+      >
+        {CHECK_SKILL_UPDATES_LABEL}
+        {checkUpdates.isPending ? <MutedAgentSpinner /> : null}
+      </Button>
+    ) : null;
   return (
-    <>
+    <SkillsPage
+      action={
+        <div className="flex max-w-full flex-wrap items-center gap-2">
+          {checkAction}
+          {props.addAction}
+        </div>
+      }
+    >
       {skills.length === 0 ? (
         <p className="text-ui-sm text-muted-foreground">{noSkillsLine(name)}</p>
       ) : (
         <>
-          <div className="flex items-center justify-between gap-3">
-            <h3 className="text-ui-sm font-medium">Skills</h3>
-            {props.checkable &&
-            skills.some((skill) => skill.upstream !== null) ? (
-              <Button
-                type="button"
-                variant="link"
-                size="inline-xs"
-                disabled={checkUpdates.isPending}
-                onClick={() => {
-                  if (source.kind !== "pool") return;
-                  checkUpdates.mutate({
-                    environmentId: source.environmentId,
-                    refresh: true,
-                  });
-                }}
-              >
-                {CHECK_SKILL_UPDATES_LABEL}
-                {checkUpdates.isPending ? <MutedAgentSpinner /> : null}
-              </Button>
-            ) : null}
-          </div>
           {props.policiesSettable ? (
             <p className="text-ui-xs text-muted-foreground">
               {SKILL_POLICIES_LINE}
@@ -729,7 +787,7 @@ function SkillsPageList(props: {
                 >
                   <div className="min-w-0">
                     <div className="flex min-w-0 flex-wrap items-center gap-2">
-                      <span className="truncate text-ui-sm font-medium">
+                      <span className="wrap-anywhere text-ui-sm font-medium">
                         {skill.name}
                       </span>
                       {skill.updateAvailable ? (
@@ -737,7 +795,7 @@ function SkillsPageList(props: {
                       ) : null}
                     </div>
                     {skill.upstream === null ? null : (
-                      <div className="truncate text-ui-xs text-muted-foreground">
+                      <div className="wrap-anywhere text-ui-xs text-muted-foreground">
                         {skillUpstreamLine(
                           skill.upstream.source,
                           skill.upstream.ref,
@@ -745,7 +803,7 @@ function SkillsPageList(props: {
                       </div>
                     )}
                     {skill.description === null ? null : (
-                      <div className="truncate text-ui-xs text-muted-foreground">
+                      <div className="wrap-anywhere text-ui-xs text-muted-foreground">
                         {skill.description}
                       </div>
                     )}
@@ -840,7 +898,7 @@ function SkillsPageList(props: {
                   key={skillName}
                   className="flex items-center justify-between gap-3"
                 >
-                  <span className="min-w-0 truncate text-ui-sm">
+                  <span className="min-w-0 wrap-anywhere text-ui-sm">
                     {skillName}
                   </span>
                   {props.canEdit && props.hosted && props.restorable ? (
@@ -920,7 +978,7 @@ function SkillsPageList(props: {
           onClose={() => setOpenName(null)}
         />
       )}
-    </>
+    </SkillsPage>
   );
 }
 
@@ -1339,7 +1397,7 @@ function ProviderSkillsList(props: {
                 className="flex items-center justify-between gap-3"
               >
                 <div className="min-w-0">
-                  <div className="truncate text-ui-sm">{skill.name}</div>
+                  <div className="wrap-anywhere text-ui-sm">{skill.name}</div>
                   <div className="text-ui-xs text-muted-foreground">
                     {skillSourceLine(skill, name)}
                   </div>

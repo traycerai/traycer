@@ -84,6 +84,7 @@ describe("TeamTextItems kind collisions", () => {
     ): ReactNode => <RenderBoundary>{textItems(items)}</RenderBoundary>;
     const { rerender } = render(view([shell]), { wrapper: harness.Wrapper });
 
+    await user.click(screen.getByRole("button", { name: "Add variable" }));
     await user.type(screen.getByLabelText("Variable name"), "shell");
     await user.type(
       screen.getByLabelText("New variable value"),
@@ -107,16 +108,10 @@ describe("TeamTextItems kind collisions", () => {
       ]),
     );
 
-    await waitFor(() => {
-      expect(screen.getByLabelText("Variable name")).toHaveProperty(
-        "value",
-        "",
-      );
-    });
-    expect(screen.getByLabelText("shell value")).toHaveProperty(
-      "value",
-      "custom-shell",
-    );
+    expect(
+      await screen.findByRole("button", { name: "Edit shell value" }),
+    ).toBeTruthy();
+    expect(screen.queryByRole("region", { name: "New variable" })).toBeNull();
     expect(screen.queryByRole("status")).toBeNull();
   });
 
@@ -146,9 +141,10 @@ describe("TeamTextItems kind collisions", () => {
     await user.click(
       within(screen.getByRole("region", { name: "shell" })).getByRole(
         "button",
-        { name: "Delete" },
+        { name: "More for shell" },
       ),
     );
+    await user.click(screen.getByRole("menuitem", { name: "Delete" }));
     await waitFor(() => {
       expect(
         harness.paramsOf("environment.configuration.items.delete"),
@@ -159,6 +155,12 @@ describe("TeamTextItems kind collisions", () => {
     expect(
       within(screen.getByRole("region", { name: "shell" })).getByRole("status"),
     ).toHaveProperty("textContent", "shell · Removing");
+    expect(
+      within(screen.getByRole("region", { name: "shell" })).getByRole(
+        "button",
+        { name: "More for shell" },
+      ),
+    ).toHaveProperty("disabled", true);
     await act(async () => {
       deletion.resolve({ outcome: "saved", revision: 2 });
       await deletion.promise;
@@ -166,10 +168,9 @@ describe("TeamTextItems kind collisions", () => {
 
     await waitFor(() => {
       expect(screen.queryByRole("region", { name: "shell" })).toBeNull();
-      expect(screen.getByLabelText("Variable name")).toHaveProperty(
-        "disabled",
-        false,
-      );
+      expect(
+        screen.getByRole("button", { name: "Add variable" }),
+      ).toHaveProperty("disabled", false);
     });
     expect(screen.queryByRole("status")).toBeNull();
   });
@@ -198,18 +199,32 @@ describe("TeamTextItems revision changes during writes", () => {
       const { rerender } = render(textItems([variable]), {
         wrapper: harness.Wrapper,
       });
-      const originalEditor = screen.getByLabelText("NODE_ENV value");
+      const originalEditButton = screen.getByRole("button", {
+        name: "Edit NODE_ENV value",
+      });
 
       if (action === "put") {
+        await user.click(originalEditButton);
+        const originalEditor = screen.getByLabelText("NODE_ENV value");
         await user.clear(originalEditor);
         await user.type(originalEditor, "production");
+      } else {
+        await user.click(
+          within(screen.getByRole("region", { name: "NODE_ENV" })).getByRole(
+            "button",
+            { name: "More for NODE_ENV" },
+          ),
+        );
+        await user.click(screen.getByRole("menuitem", { name: "Delete" }));
       }
-      await user.click(
-        within(screen.getByRole("region", { name: "NODE_ENV" })).getByRole(
-          "button",
-          { name: action === "put" ? "Save" : "Delete" },
-        ),
-      );
+      if (action === "put") {
+        await user.click(
+          within(screen.getByRole("region", { name: "NODE_ENV" })).getByRole(
+            "button",
+            { name: "Save" },
+          ),
+        );
+      }
       await waitFor(() => {
         expect(harness.paramsOf(method)).toHaveLength(1);
       });
@@ -220,11 +235,12 @@ describe("TeamTextItems revision changes during writes", () => {
           { ...variable, revision: 2, value: { value: "production" } },
         ]),
       );
-      expect(screen.getByLabelText("NODE_ENV value")).not.toBe(originalEditor);
-      expect(screen.getByLabelText("Variable name")).toHaveProperty(
-        "disabled",
-        true,
-      );
+      expect(
+        screen.getByRole("button", { name: "Edit NODE_ENV value" }),
+      ).not.toBe(originalEditButton);
+      expect(
+        screen.getByRole("button", { name: "Add variable" }),
+      ).toHaveProperty("disabled", true);
 
       await act(async () => {
         write.resolve({ outcome: "saved", revision: 2 });
@@ -233,13 +249,15 @@ describe("TeamTextItems revision changes during writes", () => {
       if (action === "delete") rerender(textItems([]));
 
       await waitFor(() => {
-        expect(screen.getByLabelText("Variable name")).toHaveProperty(
-          "disabled",
-          false,
-        );
+        expect(
+          screen.getByRole("button", { name: "Add variable" }),
+        ).toHaveProperty("disabled", false);
         expect(screen.queryByRole("status")).toBeNull();
       });
       if (action === "put") {
+        await user.click(
+          screen.getByRole("button", { name: "Edit NODE_ENV value" }),
+        );
         expect(screen.getByLabelText("NODE_ENV value")).toHaveProperty(
           "value",
           "production",

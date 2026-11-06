@@ -937,13 +937,20 @@ host-owned status, local values and held-item reviews retain their target
 host. The MCP servers page
 (`environment-mcp-servers.tsx`) lists every server once from
 `environment.configuration.mcpServers.list`, with its transport, the tool
-count the viewing host reports, the providers that use it, Tools, Edit,
-Remove and an Enabled switch (`mcpServers.setEnabled`: off keeps the tool
+count the viewing host reports, the providers that use it, Tools, a More
+menu (Edit and Remove), and an Enabled switch (`mcpServers.setEnabled`: off keeps the tool
 toggles on the server and takes its `mcp_server` item away; on puts it back,
-on for every provider). Add and Edit (`mcp-server-dialog.tsx`) write
+on for every provider). Add a server sits in the page header, with no repeated
+Servers heading. Tools merges the viewing host's provider inventories into one
+row per tool. A shared switch writes all represented harness toggles in one
+existing item write; mixed states are labelled and retain their per-provider
+switches behind “Differs by provider”. Reading never changes a toggle. Each
+provider keeps its existing cache and discovery polling. Add and Edit (`mcp-server-dialog.tsx`) write
 `mcpServers.put@1.1`; a remote server's Secret is picked from the
 configuration's secrets or typed, and a command server is refused one. The
-Skills page (`environment-skills.tsx`) lists the configuration's room through
+Skills page has Check for updates and Add skill in its header, with no repeated
+Skills heading. Add skill opens the existing upload and import controls in a
+dialog. The page (`environment-skills.tsx`) lists the configuration's room through
 its serving tier (`environment.configuration.skills.list`), with the providers
 that use each ("Built-in" before them for Traycer's own; the configuration's
 own carry no source word). A pool build uses the pool requester's readiness,
@@ -978,6 +985,21 @@ item's delete, so its confirmation asks "Remove “<name>” from every provider
 every host?" (`personalRemoveText`); a local entry's keeps its own config or disk
 text.
 
+Variables and shells uses compact key/value rows. Values become inputs on
+click, with Save only while editing; each existing row's More menu holds its
+removal action. Add variable opens its editor on demand. The shell's program
+and arguments follow the same edit-in-place layout. One “Applied on <host> ·
+Details” line identifies the live read; Details holds the full inventory and
+host picker. Only a value that differs from its setting gets “This host uses
+<value>” beneath it. No separate Live values card is rendered.
+
+Agents has one purpose sentence at its editor, shared by the room-backed and
+legacy editor surfaces, with no page description or tab caption repeating it.
+
+Secret rows summarize destinations by count. The full addresses remain in
+Details with Verify and versions. Recovery steps are collapsed under “Secret
+leaked?”, together with the offline fallback; their actions are unchanged.
+
 **Personal ▸ Empty states and words.** Each page opens empty to what it
 holds and one action: Variables and shells "Variables are plain values every
 host gets. Add a variable."; MCP servers "MCP servers give agents tools." with
@@ -1002,7 +1024,7 @@ a Local pick, so a host that has not moved its settings still reads
 Personal's. A read waits for Personal's id. A provider's sign-in
 (`providers.link`, `providers.linkComplete`) names the same environment, and
 its Continue waits for Personal's id. Each row reads
-"STRIPE_KEY · Set · sent to api.stripe.com · added by you 24 Oct"
+"STRIPE_KEY · Set · 1 destination · added by you 24 Oct"
 ("replaced by you" after a replacement, from the current version) with
 **Replace**, **Remove** and **Details**; Details holds **Verify**
 (`environment.secrets.verify` by id), the rotation, **Versions** (Undo,
@@ -4910,6 +4932,12 @@ min`): "The judge didn't finish in time, so it's asking you instead."
     honestly, with a one-way `Add this step back` link - there is deliberately
     no path from here to turning it off, so nothing implies the
     always-published error card is something the user switched on.
+  - The ladder has one consequence sentence. Session/history mechanics and
+    reorder instructions sit behind Help. Per-problem settings summarize
+    inherited rows as “N problems follow the main plan”, followed by “M custom”
+    when applicable. Every problem row remains visible with its own chain and
+    routing or disabled prefixes; only Custom and Check save badges remain.
+    Clicking a row expands its controls. There is no separate Customize toggle.
   - **Enablement is PRESENCE in the stored `ladder`**, which cannot represent
     where a turned-off step sat. The panel therefore holds the four-row display
     order in its draft and persists only the enabled subset; a step turned off

@@ -180,17 +180,16 @@ function ReturnToPreferredRow(props: ReturnToPreferredRowProps): ReactNode {
         <div id={headingId} className="font-medium text-foreground">
           When the original provider&apos;s limit resets
         </div>
-        <p
-          id={descriptionId}
-          className="max-w-[72ch] text-pretty text-ui-sm text-muted-foreground"
-        >
-          {/* "too" had no antecedent: nothing earlier on the page had said
-              the OUTBOUND switch starts a session either, so the word pointed
-              at a fact the reader had never been given. The ladder editor now
-              states it once, up front, which is what earns the "also" here. */}
-          Switching back also starts a new agent session using this chat&apos;s
-          history.
-        </p>
+        <details className="text-ui-xs text-muted-foreground">
+          <summary className="cursor-pointer">Help</summary>{" "}
+          <p
+            id={descriptionId}
+            className="max-w-[72ch] text-pretty text-ui-sm text-muted-foreground"
+          >
+            Switching back also starts a new agent session using this
+            chat&apos;s history.
+          </p>
+        </details>
       </div>
       <div className={cn("ml-auto", SETTINGS_ROW_STACK.control)}>
         {/* The radio group carries the SETTING's name and its caveat. Without

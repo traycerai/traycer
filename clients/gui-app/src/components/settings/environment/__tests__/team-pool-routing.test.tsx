@@ -240,7 +240,10 @@ describe("team pages on a build with a server pool", () => {
     removeSurfaceHost();
     render(<TeamVariablesAndShells />, { wrapper: harness.Wrapper });
 
-    const value = await screen.findByLabelText("NODE_ENV value");
+    await userEvent.click(
+      await screen.findByRole("button", { name: "Edit NODE_ENV value" }),
+    );
+    const value = screen.getByLabelText("NODE_ENV value");
     const listReadsBefore = hostIdsOf(harness, "environment.list").length;
     await userEvent.clear(value);
     await userEvent.type(value, "staging");

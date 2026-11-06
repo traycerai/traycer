@@ -1,6 +1,13 @@
 import { useState, type ReactNode } from "react";
 import type { EnvironmentOs } from "@traycer/protocol/host/environment-schemas";
 import type { EnvironmentConfigurationItemWriteResponse } from "@traycer/protocol/host/environment/configuration-contracts";
+import { MoreHorizontal } from "lucide-react";
+import {
+  DropdownMenu,
+  DropdownMenuTrigger,
+  DropdownMenuContent,
+  DropdownMenuItem,
+} from "@/components/ui/dropdown-menu";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -129,27 +136,31 @@ export function TeamTextItems(props: {
   const savingWrite = put.isPending ? pending : null;
   return (
     <div className="flex flex-col gap-3">
-      {rows.map((item) => (
-        <TeamTextItemEditor
-          // A row is kind+key+os, and its key carries any provider prefix;
-          // the draft seeds from it once, so a new address must remount.
-          key={`${item.os}:${item.key}:${item.revision}`}
-          item={item}
-          pending={pending}
-          onWrite={writeItem}
-          saving={textRowWrite(item, savingWrite) !== null}
-          failure={failure}
-          kind={props.kind}
-          os={props.os}
-          osLabel={
-            props.os === "any" && item.os !== null && item.os !== "any"
-              ? OS_LABELS[item.os]
-              : null
-          }
-          providerId={props.providerId}
-          details={props.renderDetails(item)}
-        />
-      ))}
+      {rows.length === 0 ? null : (
+        <div className="rounded-lg border border-border/60">
+          {rows.map((item) => (
+            <TeamTextItemEditor
+              // A row is kind+key+os, and its key carries any provider prefix;
+              // the draft seeds from it once, so a new address must remount.
+              key={`${item.os}:${item.key}:${item.revision}`}
+              item={item}
+              pending={pending}
+              onWrite={writeItem}
+              saving={textRowWrite(item, savingWrite) !== null}
+              failure={failure}
+              kind={props.kind}
+              os={props.os}
+              osLabel={
+                props.os === "any" && item.os !== null && item.os !== "any"
+                  ? OS_LABELS[item.os]
+                  : null
+              }
+              providerId={props.providerId}
+              details={props.renderDetails(item)}
+            />
+          ))}
+        </div>
+      )}
       {rows.length === 0 && pending === null ? (
         <p className="text-ui-sm text-muted-foreground">No variables.</p>
       ) : null}
@@ -193,6 +204,7 @@ function TeamTextItemEditor(props: {
   const [name, setName] = useState("");
   const [value, setValue] = useState(saved);
   const [accepted, setAccepted] = useState(false);
+  const [editing, setEditing] = useState(false);
   const writeError =
     props.failure !== null &&
     textRowWrite(props.item, props.failure.write) !== null
@@ -204,6 +216,7 @@ function TeamTextItemEditor(props: {
       setValue("");
     }
     setAccepted(false);
+    setEditing(false);
   }
   const title = props.item?.key ?? "New variable";
   const label = props.osLabel === null ? title : `${title} · ${props.osLabel}`;
@@ -239,55 +252,57 @@ function TeamTextItemEditor(props: {
     };
     void props.onWrite(write);
   };
+  if (props.item === null && !editing)
+    return (
+      <Button
+        type="button"
+        variant="outline"
+        size="sm"
+        disabled={props.pending !== null}
+        onClick={() => setEditing(true)}
+      >
+        Add variable
+      </Button>
+    );
   return (
     <section
-      className="flex flex-col gap-2 rounded-lg border border-border/60 p-3"
+      className="flex min-w-0 flex-col gap-2 border-b border-border/60 px-3 py-3 last:border-b-0"
       aria-label={label}
     >
-      <div className="flex flex-wrap items-center justify-between gap-2">
-        <span className="flex min-w-0 items-center gap-1.5">
-          <span className="truncate font-mono text-ui-sm">{title}</span>
-          {props.osLabel === null ? null : (
-            <Badge variant="secondary" size="xs">
-              {props.osLabel}
-            </Badge>
-          )}
-        </span>
-        {props.details}
-      </div>
-      {props.item === null ? (
-        <Input
-          aria-label="Variable name"
-          disabled={props.pending !== null}
-          value={name}
-          onChange={(event) => setName(event.target.value)}
-          placeholder="NODE_ENV"
-        />
-      ) : null}
-      {canEdit ? (
-        <Input
-          aria-label={`${label} value`}
-          disabled={props.pending !== null}
-          value={value}
-          onChange={(event) => setValue(event.target.value)}
-        />
-      ) : (
-        <span className="font-mono text-ui-sm">{saved}</span>
-      )}
+      <TeamTextFields
+        title={title}
+        label={label}
+        osLabel={props.osLabel}
+        isNew={props.item === null}
+        canEdit={canEdit}
+        editing={editing}
+        disabled={props.pending !== null}
+        name={name}
+        value={value}
+        saved={saved}
+        onName={setName}
+        onValue={setValue}
+        onEdit={() => setEditing(true)}
+        onDelete={deleteItem}
+        details={props.details}
+      />
       <TeamTextWriteStatus item={props.item} pending={props.pending} />
       {writeError === null ? null : (
         <p role="alert" className="text-ui-xs text-destructive">
           {writeError}
         </p>
       )}
-      {canEdit ? (
+      {canEdit && editing ? (
         <TeamTextActions
           isNew={props.item === null}
           disabled={props.pending !== null}
           canSave={props.item === null ? validName : value !== saved}
           saving={props.saving}
           onSave={save}
-          onDelete={deleteItem}
+          onCancel={() => {
+            setValue(saved);
+            setEditing(false);
+          }}
         />
       ) : null}
     </section>
@@ -314,21 +329,19 @@ function TeamTextActions(props: {
   readonly canSave: boolean;
   readonly saving: boolean;
   readonly onSave: () => void;
-  readonly onDelete: () => void;
+  readonly onCancel: () => void;
 }): ReactNode {
   return (
     <div className="flex justify-end gap-2">
-      {props.isNew ? null : (
-        <Button
-          type="button"
-          variant="ghost"
-          size="sm"
-          disabled={props.disabled}
-          onClick={props.onDelete}
-        >
-          Delete
-        </Button>
-      )}
+      <Button
+        type="button"
+        variant="ghost"
+        size="sm"
+        disabled={props.disabled}
+        onClick={props.onCancel}
+      >
+        Cancel
+      </Button>
       <Button
         type="button"
         size="sm"
@@ -355,4 +368,98 @@ function TeamTextWriteStatus(props: {
       {write.key} · {action}
     </p>
   );
+}
+
+function TeamTextFields(props: {
+  readonly title: string;
+  readonly label: string;
+  readonly osLabel: string | null;
+  readonly isNew: boolean;
+  readonly canEdit: boolean;
+  readonly editing: boolean;
+  readonly disabled: boolean;
+  readonly name: string;
+  readonly value: string;
+  readonly saved: string;
+  readonly onName: (value: string) => void;
+  readonly onValue: (value: string) => void;
+  readonly onEdit: () => void;
+  readonly onDelete: () => void;
+  readonly details: ReactNode;
+}): ReactNode {
+  let valueControl: ReactNode = (
+    <span className="wrap-anywhere font-mono text-ui-sm">{props.saved}</span>
+  );
+  if (props.canEdit)
+    valueControl = props.editing ? (
+      <Input
+        ref={focusVariableValue}
+        aria-label={`${props.label} value`}
+        disabled={props.disabled}
+        value={props.value}
+        onChange={(event) => props.onValue(event.target.value)}
+      />
+    ) : (
+      <button
+        type="button"
+        className="w-full cursor-text text-left font-mono text-ui-sm wrap-anywhere"
+        aria-label={`Edit ${props.label} value`}
+        disabled={props.disabled}
+        onClick={() => props.onEdit()}
+      >
+        {props.saved || "Empty value"}
+      </button>
+    );
+  return (
+    <div className="grid min-w-0 grid-cols-[minmax(0,1fr)_auto] items-start gap-3 sm:grid-cols-[minmax(0,1fr)_minmax(0,2fr)_auto]">
+      <span className="flex min-w-0 flex-wrap items-center gap-1.5">
+        <span className="wrap-anywhere font-mono text-ui-sm">
+          {props.title}
+        </span>
+        {props.osLabel === null ? null : (
+          <Badge variant="secondary" size="xs">
+            {props.osLabel}
+          </Badge>
+        )}
+      </span>
+      <div className="col-start-1 row-start-2 min-w-0 sm:col-start-2 sm:row-start-1">
+        {props.isNew ? (
+          <Input
+            aria-label="Variable name"
+            disabled={props.disabled}
+            value={props.name}
+            onChange={(event) => props.onName(event.target.value)}
+            placeholder="NODE_ENV"
+          />
+        ) : null}
+        {valueControl}
+        {props.details}
+      </div>
+      {props.canEdit && !props.isNew ? (
+        <DropdownMenu>
+          <DropdownMenuTrigger asChild>
+            <Button
+              type="button"
+              variant="ghost"
+              size="icon-sm"
+              className="col-start-2 row-start-1 sm:col-start-3"
+              aria-label={`More for ${props.label}`}
+              disabled={props.disabled}
+            >
+              <MoreHorizontal />
+            </Button>
+          </DropdownMenuTrigger>
+          <DropdownMenuContent align="end">
+            <DropdownMenuItem onSelect={props.onDelete}>
+              Delete
+            </DropdownMenuItem>
+          </DropdownMenuContent>
+        </DropdownMenu>
+      ) : null}
+    </div>
+  );
+}
+
+function focusVariableValue(node: HTMLInputElement | null): void {
+  node?.focus();
 }
