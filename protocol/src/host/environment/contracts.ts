@@ -167,9 +167,13 @@ export const environmentListUpgradeV10ToV11 = defineUpgradePath<
  * This read cannot distinguish a computer's own settings from Personal.
  * That settings place is answered by `environment.status` on the host.
  *
- * Only the account that bound a host can unbind it. `enrolledByUserId` is
- * that account, null when the binding is not explicit; `canUnbind` is whether
- * the caller is it.
+ * Authn stores enrollment attribution independently of whether the host is
+ * bound. This result surfaces it as `enrolledByUserId` when the installed
+ * source knows a binding, including Personal; an unbound or
+ * attribution-unknown result answers null. Read and bind use that same
+ * source. `canUnbind` is true only when this result is explicit, the stored
+ * enroller is the caller, and the host is a computer rather than a sandbox;
+ * a sandbox's boot binding is immutable.
  */
 export const environmentHostBindingSchema = lazySchema(() =>
   z.object({
@@ -198,8 +202,8 @@ export const environmentHostReadV10 = defineRpcContract({
 
 /**
  * The environment the named host is bound to, as the signed-in user sees it:
- * the same answer `environment.host.read` gives on that host, read from the
- * account's binding records instead of asking the host. Served by the server
+ * the same answer `environment.host.read` gives on that host, read from
+ * authn's host directory instead of asking the host. Served by the server
  * pool, so a list of hosts reads every row's binding without a connection to
  * each host. An absent binding and an explicit Personal binding both answer
  * the Personal descriptor with `explicit` false. This answers which team, if
@@ -223,13 +227,14 @@ export const environmentBindingReadV10 = defineRpcContract({
 });
 
 /**
- * Binds the serving host to one of the signed-in user's environments.
+ * A compatibility request for the serving host's binding. After the
+ * authenticated compatibility write acknowledges, the response is composed
+ * from the same installed binding source as read. The acknowledgement
+ * supplies no binding authority and changes no stored attribution.
+ *
  * A Personal binding is reported with `explicit` false, the same answer as
  * an absent environment binding; it does not mean the host runs its own
- * settings. Read `environment.status` for that distinction. Refused for an
- * environment the user does not belong to, and while a live bot of another
- * environment is bound to the host. A rebind applies to new turns; running
- * turns keep the environment they started with.
+ * settings. Read `environment.status` for that distinction.
  */
 export const environmentHostBindRequestSchema = lazySchema(() =>
   z.object({
@@ -257,13 +262,11 @@ export type EnvironmentHostListRequest = z.infer<
 >;
 
 /**
- * One host bound to an environment. `hostLabel` and `hostPlatform` are what
- * the host reported about itself when it was bound, null when it reported
- * nothing; `enrolledByUserId` is the account that bound it, the only one that
- * can unbind it. `kind` is the host's registry kind: a `sandbox` is the
- * environment's machine, listed to every member and open to the environment's
- * bots; a `personal` machine is its enrolling member's, listed to that member
- * alone. `boundAt` is epoch milliseconds.
+ * The frozen @1.0 host row. `hostLabel` and `hostPlatform` are the registry's
+ * reported metadata; `kind` is its machine kind. `enrolledByUserId` is stored
+ * enrollment attribution, independent of the environment's owner.
+ * `boundAt` is epoch milliseconds when known. This version requires both
+ * attribution and time as values; rows with either unknown are omitted.
  */
 export const environmentHostRecordSchema = lazySchema(() =>
   z.object({
@@ -278,11 +281,11 @@ export const environmentHostRecordSchema = lazySchema(() =>
 export type EnvironmentHostRecord = z.infer<typeof environmentHostRecordSchema>;
 
 /**
- * The hosts of the environment the caller may see: every sandbox bound to it,
- * whoever bound it, plus the caller's own bound hosts of any kind. A member of
- * an object root so the response can grow additively. Personal lists its
- * bound hosts like any other environment; an absent binding is not Personal
- * membership.
+ * The environment's hosts visible to the caller, in an object root. Personal
+ * lists its bound hosts like any other environment; an absent binding is not
+ * Personal membership. The frozen @1.0 representation omits rows with
+ * unknown attribution or binding time, so it may be empty even when authn
+ * lists bound hosts.
  */
 export const environmentHostListResponseSchema = lazySchema(() =>
   z.object({
