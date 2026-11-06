@@ -166,6 +166,7 @@ import {
   deletedSpecArtifactSchema,
   deletedStoryArtifactSchema,
   deletedTicketArtifactSchema,
+  MARKDOWN_BODY_FIELD,
   reviewArtifactSchema,
   specArtifactSchema,
   storyArtifactSchema,
@@ -268,16 +269,16 @@ export type EpicArtifactRecord = z.infer<typeof epicArtifactRecordSchema>;
 export const epicDeletedArtifactRecordSchemaPreHtml = lazySchema(() =>
   z.discriminatedUnion("kind", [
     deletedSpecArtifactSchema
-      .omit({ artifactRoomId: true })
+      .omit({ artifactRoomId: true, [MARKDOWN_BODY_FIELD]: true })
       .extend(epicLaneRowRevisionFields),
     deletedTicketArtifactSchema
-      .omit({ artifactRoomId: true })
+      .omit({ artifactRoomId: true, [MARKDOWN_BODY_FIELD]: true })
       .extend(epicLaneRowRevisionFields),
     deletedStoryArtifactSchema
-      .omit({ artifactRoomId: true })
+      .omit({ artifactRoomId: true, [MARKDOWN_BODY_FIELD]: true })
       .extend(epicLaneRowRevisionFields),
     deletedReviewArtifactSchema
-      .omit({ artifactRoomId: true })
+      .omit({ artifactRoomId: true, [MARKDOWN_BODY_FIELD]: true })
       .extend(epicLaneRowRevisionFields),
   ]),
 );
@@ -285,16 +286,16 @@ export const epicDeletedArtifactRecordSchemaPreHtml = lazySchema(() =>
 export const epicDeletedArtifactRecordSchema = lazySchema(() =>
   z.discriminatedUnion("kind", [
     deletedSpecArtifactSchema
-      .omit({ artifactRoomId: true })
+      .omit({ artifactRoomId: true, [MARKDOWN_BODY_FIELD]: true })
       .extend(epicLaneRowRevisionFields),
     deletedTicketArtifactSchema
-      .omit({ artifactRoomId: true })
+      .omit({ artifactRoomId: true, [MARKDOWN_BODY_FIELD]: true })
       .extend(epicLaneRowRevisionFields),
     deletedStoryArtifactSchema
-      .omit({ artifactRoomId: true })
+      .omit({ artifactRoomId: true, [MARKDOWN_BODY_FIELD]: true })
       .extend(epicLaneRowRevisionFields),
     deletedReviewArtifactSchema
-      .omit({ artifactRoomId: true })
+      .omit({ artifactRoomId: true, [MARKDOWN_BODY_FIELD]: true })
       .extend(epicLaneRowRevisionFields),
     deletedHtmlArtifactSchema
       .omit({ artifactRoomId: true, deletionUnderstood: true })

@@ -419,8 +419,9 @@ export const artifactSubscribeV11 = defineStreamRpcContract({
 // reading and writing the room, which is no longer the body. The host ends
 // such a lane, and refuses a write made on it, with `unavailable` and a code
 // that says where the body went, so the client reattaches at once and is
-// served the body where it lives now. Below `@1.2` the same refusal reads as a
-// terminal `bodyUnavailable`.
+// served the body where it lives now, with the refused write's change already
+// in it. Below `@1.2` the same refusal reads as a terminal `bodyUnavailable`,
+// and the refused write is not carried.
 //
 // @1.0 and @1.1 stay installed and FROZEN: the host gates the code on the
 // negotiated minor.
@@ -430,8 +431,9 @@ export const artifactSubscribeV11 = defineStreamRpcContract({
  *
  * - `bodyMoved` - the body is no longer served from what this lane attached
  *   to: it moved to the artifact's revision chain. Always terminal. An edit
- *   the lane carried was not applied. Reattach to be served the body where it
- *   lives now; a reattach is never answered `bodyMoved`.
+ *   the lane carried was not applied to the room; it is carried to the body
+ *   where it lives now. Reattach to be served that body; a reattach is never
+ *   answered `bodyMoved`.
  */
 export const artifactSubscribeUnavailableCodeSchemaV12 = lazySchema(() =>
   z.enum([...artifactSubscribeUnavailableCodeSchema.options, "bodyMoved"]),

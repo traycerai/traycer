@@ -8156,6 +8156,10 @@ export const epicSchemaSurfaceBaseline = {
                     "files",
                     "capturedAt"
                   ]
+                },
+                "markdownBody": {
+                  "type": "string",
+                  "const": "object"
                 }
               },
               "required": [
@@ -8346,6 +8350,10 @@ export const epicSchemaSurfaceBaseline = {
                     "files",
                     "capturedAt"
                   ]
+                },
+                "markdownBody": {
+                  "type": "string",
+                  "const": "object"
                 },
                 "assignee": {
                   "type": "string"
@@ -8558,6 +8566,10 @@ export const epicSchemaSurfaceBaseline = {
                     "capturedAt"
                   ]
                 },
+                "markdownBody": {
+                  "type": "string",
+                  "const": "object"
+                },
                 "assignee": {
                   "type": "string"
                 },
@@ -8768,6 +8780,10 @@ export const epicSchemaSurfaceBaseline = {
                     "files",
                     "capturedAt"
                   ]
+                },
+                "markdownBody": {
+                  "type": "string",
+                  "const": "object"
                 }
               },
               "required": [
@@ -9218,6 +9234,10 @@ export const epicSchemaSurfaceBaseline = {
                       "type": "null"
                     }
                   ]
+                },
+                "markdownBody": {
+                  "type": "string",
+                  "const": "object"
                 }
               },
               "required": [
@@ -9326,6 +9346,10 @@ export const epicSchemaSurfaceBaseline = {
                       "type": "null"
                     }
                   ]
+                },
+                "markdownBody": {
+                  "type": "string",
+                  "const": "object"
                 }
               },
               "required": [
@@ -9434,6 +9458,10 @@ export const epicSchemaSurfaceBaseline = {
                       "type": "null"
                     }
                   ]
+                },
+                "markdownBody": {
+                  "type": "string",
+                  "const": "object"
                 }
               },
               "required": [
@@ -9542,6 +9570,10 @@ export const epicSchemaSurfaceBaseline = {
                       "type": "null"
                     }
                   ]
+                },
+                "markdownBody": {
+                  "type": "string",
+                  "const": "object"
                 }
               },
               "required": [
@@ -19298,6 +19330,10 @@ export const epicSchemaSurfaceBaseline = {
                     "capturedAt"
                   ],
                   "additionalProperties": false
+                },
+                "markdownBody": {
+                  "type": "string",
+                  "const": "object"
                 }
               },
               "required": [
@@ -19493,6 +19529,10 @@ export const epicSchemaSurfaceBaseline = {
                     "capturedAt"
                   ],
                   "additionalProperties": false
+                },
+                "markdownBody": {
+                  "type": "string",
+                  "const": "object"
                 },
                 "assignee": {
                   "type": "string"
@@ -19710,6 +19750,10 @@ export const epicSchemaSurfaceBaseline = {
                   ],
                   "additionalProperties": false
                 },
+                "markdownBody": {
+                  "type": "string",
+                  "const": "object"
+                },
                 "assignee": {
                   "type": "string"
                 },
@@ -19925,6 +19969,10 @@ export const epicSchemaSurfaceBaseline = {
                     "capturedAt"
                   ],
                   "additionalProperties": false
+                },
+                "markdownBody": {
+                  "type": "string",
+                  "const": "object"
                 }
               },
               "required": [
@@ -20389,6 +20437,10 @@ export const epicSchemaSurfaceBaseline = {
                       "type": "null"
                     }
                   ]
+                },
+                "markdownBody": {
+                  "type": "string",
+                  "const": "object"
                 }
               },
               "required": [
@@ -20498,6 +20550,10 @@ export const epicSchemaSurfaceBaseline = {
                       "type": "null"
                     }
                   ]
+                },
+                "markdownBody": {
+                  "type": "string",
+                  "const": "object"
                 }
               },
               "required": [
@@ -20607,6 +20663,10 @@ export const epicSchemaSurfaceBaseline = {
                       "type": "null"
                     }
                   ]
+                },
+                "markdownBody": {
+                  "type": "string",
+                  "const": "object"
                 }
               },
               "required": [
@@ -20716,6 +20776,10 @@ export const epicSchemaSurfaceBaseline = {
                       "type": "null"
                     }
                   ]
+                },
+                "markdownBody": {
+                  "type": "string",
+                  "const": "object"
                 }
               },
               "required": [
