@@ -494,14 +494,32 @@ function ProfileSignOutAction(props: {
 }): ReactNode {
   const signOut = useSignOutProviderProfile();
   const host = usePersonalPageHost();
-  const supported = useHostSupportsMethod(host.hostId, "providers.signOutProfile");
-  if (!supported || props.profile.kind !== "managed" || props.profile.presence?.kind !== "admitted") return null;
-  return <Button type="button" size="sm" variant="ghost"
-    disabled={props.disabled || signOut.isPending}
-    onClick={() => signOut.mutate(
-      {providerId: props.providerId, profileId: props.profile.profileId},
-      {onSuccess: props.onSignedOut},
-    )}>Sign out</Button>;
+  const supported = useHostSupportsMethod(
+    host.hostId,
+    "providers.signOutProfile",
+  );
+  if (
+    !supported ||
+    props.profile.kind !== "managed" ||
+    props.profile.presence?.kind !== "admitted"
+  )
+    return null;
+  return (
+    <Button
+      type="button"
+      size="sm"
+      variant="ghost"
+      disabled={props.disabled || signOut.isPending}
+      onClick={() =>
+        signOut.mutate(
+          { providerId: props.providerId, profileId: props.profile.profileId },
+          { onSuccess: props.onSignedOut },
+        )
+      }
+    >
+      Sign out
+    </Button>
+  );
 }
 
 export function ProfileEditDialog(props: {
@@ -732,8 +750,12 @@ export function ProfileEditDialog(props: {
                   </Button>
                 </span>
               </TooltipWrapper>
-              <ProfileSignOutAction providerId={providerId} profile={props.profile}
-                disabled={savePending} onSignedOut={() => props.onOpenChange(false)} />
+              <ProfileSignOutAction
+                providerId={providerId}
+                profile={props.profile}
+                disabled={savePending}
+                onSignedOut={() => props.onOpenChange(false)}
+              />
               <div className="flex items-center gap-2">
                 <Button
                   type="button"

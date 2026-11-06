@@ -86,7 +86,11 @@ export const credentialHomeSchema = lazySchema(() =>
         state: z.enum(["admitted", "revoking", "absent"]),
         retainedReason: z.literal("material-changed").nullable(),
         cause: z
-          .enum(["host-left-environment", "profile-account-changed", "signed-out-by-person"])
+          .enum([
+            "host-left-environment",
+            "profile-account-changed",
+            "signed-out-by-person",
+          ])
           .nullable(),
       })
       .nullable(),
@@ -102,5 +106,8 @@ export type CredentialHome = z.infer<typeof credentialHomeSchema>;
 
 /** Presence is independent of material health; only admitted or local homes participate. */
 export function credentialHomeIsCandidate(home: CredentialHome): boolean {
-  return home.environmentPresence === null || home.environmentPresence.state === "admitted";
+  return (
+    home.environmentPresence === null ||
+    home.environmentPresence.state === "admitted"
+  );
 }

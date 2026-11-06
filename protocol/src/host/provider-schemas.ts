@@ -1638,11 +1638,17 @@ export function buildUnreadableProviderProfile(input: {
   };
 }
 
-export const managedProfileDeliveryRefusalSchema = lazySchema(() => z.enum([
-  "sign-in-kind-unavailable-on-computer", "credential-account-mismatch",
-  "team-material-off-computers", "sandbox-placeholder-only",
-]));
-export type ManagedProfileDeliveryRefusal = z.infer<typeof managedProfileDeliveryRefusalSchema>;
+export const managedProfileDeliveryRefusalSchema = lazySchema(() =>
+  z.enum([
+    "sign-in-kind-unavailable-on-computer",
+    "credential-account-mismatch",
+    "team-material-off-computers",
+    "sandbox-placeholder-only",
+  ]),
+);
+export type ManagedProfileDeliveryRefusal = z.infer<
+  typeof managedProfileDeliveryRefusalSchema
+>;
 
 /** Read projection: a future row is one disabled, explained row, never a lost inventory. */
 export const providerProfileProjectionSchema = lazySchema(() =>
@@ -1652,7 +1658,9 @@ export const providerProfileProjectionSchema = lazySchema(() =>
       credentialIdentity: credentialIdentitySchema.optional(),
       credentialHome: credentialHomeSchema.optional(),
       environmentProfileId: z.string().nullable().optional(),
-      deliveryRefusal: managedProfileDeliveryRefusalSchema.nullable().optional(),
+      deliveryRefusal: managedProfileDeliveryRefusalSchema
+        .nullable()
+        .optional(),
       presence: z
         .discriminatedUnion("kind", [
           z.object({
