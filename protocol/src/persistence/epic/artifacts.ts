@@ -151,9 +151,23 @@ export const markdownArtifactHeadSchema = lazySchema(() =>
 );
 export type MarkdownArtifactHead = z.infer<typeof markdownArtifactHeadSchema>;
 
-/** Absent on an entry whose body still lives in its artifact room. */
+/**
+ * The field that marks a markdown artifact born an object: its body was never
+ * its room's fragment ({@link MARKDOWN_BODY_EPOCH_FIELD}). Its one value is
+ * {@link MARKDOWN_BODY_OBJECT}.
+ */
+export const MARKDOWN_BODY_FIELD = "markdownBody";
+export const MARKDOWN_BODY_OBJECT = "object";
+
+/**
+ * `head` is absent on an entry whose body still lives in its artifact room;
+ * `markdownBody` is present only on one born an object.
+ */
 const markdownHeadFields = {
   head: lazySchema(() => markdownArtifactHeadSchema.optional()),
+  [MARKDOWN_BODY_FIELD]: lazySchema(() =>
+    z.literal(MARKDOWN_BODY_OBJECT).optional(),
+  ),
 } as const;
 
 const baseEpicArtifactFields = {
@@ -215,18 +229,39 @@ export const reviewArtifactSchema = lazySchema(() =>
 );
 export type ReviewArtifact = z.infer<typeof reviewArtifactSchema>;
 
-// Released entries have neither layout, relativePath nor a markdown head.
+// Released entries have neither layout, relativePath, a markdown head nor
+// the born-object marker.
 export const specArtifactSchemaPreHtml = lazySchema(() =>
-  specArtifactSchema.omit({ layout: true, relativePath: true, head: true }),
+  specArtifactSchema.omit({
+    layout: true,
+    relativePath: true,
+    head: true,
+    [MARKDOWN_BODY_FIELD]: true,
+  }),
 );
 export const ticketArtifactSchemaPreHtml = lazySchema(() =>
-  ticketArtifactSchema.omit({ layout: true, relativePath: true, head: true }),
+  ticketArtifactSchema.omit({
+    layout: true,
+    relativePath: true,
+    head: true,
+    [MARKDOWN_BODY_FIELD]: true,
+  }),
 );
 export const storyArtifactSchemaPreHtml = lazySchema(() =>
-  storyArtifactSchema.omit({ layout: true, relativePath: true, head: true }),
+  storyArtifactSchema.omit({
+    layout: true,
+    relativePath: true,
+    head: true,
+    [MARKDOWN_BODY_FIELD]: true,
+  }),
 );
 export const reviewArtifactSchemaPreHtml = lazySchema(() =>
-  reviewArtifactSchema.omit({ layout: true, relativePath: true, head: true }),
+  reviewArtifactSchema.omit({
+    layout: true,
+    relativePath: true,
+    head: true,
+    [MARKDOWN_BODY_FIELD]: true,
+  }),
 );
 
 export const epicArtifactSchemaPreHtml = lazySchema(() =>
@@ -314,16 +349,19 @@ export const ARTIFACT_ARTIFACT_ROOM_FIELD = "artifactRoomId";
  *
  * - Absent or 0: every markdown artifact's body is its room's fragment.
  * - {@link MARKDOWN_BODY_EPOCH_HEADS} (1): a markdown artifact whose entry
- *   names a markdown head (`head`) has its body on the revision chain; its
- *   room fragment is no longer its body. A host at this epoch reads and
- *   writes such a body through the head and creates new markdown artifacts
- *   with no room. An artifact whose entry names no head still lives in its
- *   room. A host older than the epoch does not read this field and keeps
- *   using the room.
+ *   is an object ({@link isMarkdownObjectEntry}) has its body on the revision
+ *   chain; its room fragment is not its body. A host at this epoch reads and
+ *   writes such a body through the head, and creates a new markdown artifact
+ *   as an object: its entry carries {@link MARKDOWN_BODY_FIELD} from the
+ *   creating transaction, and its room holds threads and presence only. Such
+ *   an entry names no head until its first revision lands; until then a host
+ *   without its body serves it as not available yet. An artifact whose entry
+ *   is not an object still lives in its room. A host older than the epoch
+ *   reads neither field and keeps using the room.
  *
  * The cutoff rule, at epoch 1 and later: a client's write into an artifact
- * room that touches the body fragment of an artifact whose entry names a
- * markdown head is refused by the host at the point it would be applied, and
+ * room that touches the body fragment of an artifact whose entry is an object
+ * is refused by the host at the point it would be applied, and
  * the client is told so, never answered as saved. `artifact.subscribe`
  * answers it `unavailable` with code `bodyMoved` (from minor 2; terminal
  * `bodyUnavailable` below), `epic.subscribe` with the room's
@@ -335,6 +373,22 @@ export const ARTIFACT_ARTIFACT_ROOM_FIELD = "artifactRoomId";
 export const MARKDOWN_BODY_EPOCH_FIELD = "markdownBodyEpoch";
 /** The epoch at which a markdown entry's head is its body's authority. */
 export const MARKDOWN_BODY_EPOCH_HEADS = 1;
+
+/**
+ * Whether a markdown entry's body is an object on the revision chain rather
+ * than its room's fragment: the entry names a markdown head, or was born an
+ * object ({@link MARKDOWN_BODY_FIELD}). Takes the entry's `head` and marker as
+ * stored, a Yjs map read as JSON or a record's fields.
+ */
+export function isMarkdownObjectEntry(
+  head: unknown,
+  markdownBody: unknown,
+): boolean {
+  return (
+    markdownBody === MARKDOWN_BODY_OBJECT ||
+    markdownArtifactHeadSchema.safeParse(head).success
+  );
+}
 export const markdownBodyEpochSchema = lazySchema(() =>
   z.number().int().nonnegative(),
 );
@@ -369,10 +423,22 @@ const baseDeletedEpicArtifactFields = {
   status: lazySchema(() => ticketStatusSchema.nullish()),
 } as const;
 
+/**
+ * Present on the tombstone of a markdown artifact that was an object
+ * ({@link isMarkdownObjectEntry}): its body is the revision chain's, which a
+ * revival names as its head again.
+ */
+const deletedMarkdownBodyFields = {
+  [MARKDOWN_BODY_FIELD]: lazySchema(() =>
+    z.literal(MARKDOWN_BODY_OBJECT).optional(),
+  ),
+} as const;
+
 export const deletedSpecArtifactSchema = lazySchema(() =>
   z.object({
     kind: z.literal("spec"),
     ...baseDeletedEpicArtifactFields,
+    ...deletedMarkdownBodyFields,
   }),
 );
 export type DeletedSpecArtifact = z.infer<typeof deletedSpecArtifactSchema>;
@@ -381,6 +447,7 @@ export const deletedTicketArtifactSchema = lazySchema(() =>
   z.object({
     kind: z.literal("ticket"),
     ...baseDeletedEpicArtifactFields,
+    ...deletedMarkdownBodyFields,
   }),
 );
 export type DeletedTicketArtifact = z.infer<typeof deletedTicketArtifactSchema>;
@@ -389,6 +456,7 @@ export const deletedStoryArtifactSchema = lazySchema(() =>
   z.object({
     kind: z.literal("story"),
     ...baseDeletedEpicArtifactFields,
+    ...deletedMarkdownBodyFields,
   }),
 );
 export type DeletedStoryArtifact = z.infer<typeof deletedStoryArtifactSchema>;
@@ -397,16 +465,18 @@ export const deletedReviewArtifactSchema = lazySchema(() =>
   z.object({
     kind: z.literal("review"),
     ...baseDeletedEpicArtifactFields,
+    ...deletedMarkdownBodyFields,
   }),
 );
 export type DeletedReviewArtifact = z.infer<typeof deletedReviewArtifactSchema>;
 
+// Released tombstones carry no born-object marker.
 export const deletedEpicArtifactSchemaPreHtml = lazySchema(() =>
   z.discriminatedUnion("kind", [
-    deletedSpecArtifactSchema,
-    deletedTicketArtifactSchema,
-    deletedStoryArtifactSchema,
-    deletedReviewArtifactSchema,
+    deletedSpecArtifactSchema.omit({ [MARKDOWN_BODY_FIELD]: true }),
+    deletedTicketArtifactSchema.omit({ [MARKDOWN_BODY_FIELD]: true }),
+    deletedStoryArtifactSchema.omit({ [MARKDOWN_BODY_FIELD]: true }),
+    deletedReviewArtifactSchema.omit({ [MARKDOWN_BODY_FIELD]: true }),
   ]),
 );
 export const deletedHtmlArtifactSchema = lazySchema(() =>
@@ -436,7 +506,10 @@ export type DeletedFileArtifact = z.infer<typeof deletedFileArtifactSchema>;
 
 export const deletedEpicArtifactSchema = lazySchema(() =>
   z.discriminatedUnion("kind", [
-    ...deletedEpicArtifactSchemaPreHtml.options,
+    deletedSpecArtifactSchema,
+    deletedTicketArtifactSchema,
+    deletedStoryArtifactSchema,
+    deletedReviewArtifactSchema,
     deletedHtmlArtifactSchema,
     deletedCanvasArtifactSchema,
     deletedFileArtifactSchema,
@@ -487,6 +560,12 @@ export function buildDeletedEpicArtifact(
     case "ticket":
     case "story":
     case "review":
-      return { ...common, kind: artifact.kind };
+      return isMarkdownObjectEntry(artifact.head, artifact[MARKDOWN_BODY_FIELD])
+        ? {
+            ...common,
+            kind: artifact.kind,
+            [MARKDOWN_BODY_FIELD]: MARKDOWN_BODY_OBJECT,
+          }
+        : { ...common, kind: artifact.kind };
   }
 }

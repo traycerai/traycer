@@ -2,15 +2,29 @@
  * Protocol-boundary contract for the head a markdown index entry carries once
  * its body is stored as revision objects: the one `revision.json` file with
  * the revision's `seq` and frontmatter `scalars`, kept by the live entry
- * schemas and dropped by the frozen pre-html readers older releases use.
+ * schemas and dropped by the frozen pre-html readers older releases use. Also
+ * the born-object marker (`markdownBody: "object"`) that names an object
+ * without a head, the predicate over both, and the marker on a deleted
+ * artifact's tombstone.
  *
  * Self-contained per the protocol-test convention (no cross-workspace
  * fixture imports).
  */
 import { describe, expect, it } from "vitest";
 import {
+  buildDeletedEpicArtifact,
+  deletedCanvasArtifactSchema,
+  deletedEpicArtifactSchema,
+  deletedEpicArtifactSchemaPreHtml,
+  deletedFileArtifactSchema,
+  deletedHtmlArtifactSchema,
+  deletedReviewArtifactSchema,
+  deletedSpecArtifactSchema,
+  deletedStoryArtifactSchema,
+  deletedTicketArtifactSchema,
   epicArtifactSchema,
   epicArtifactSchemaPreHtml,
+  isMarkdownObjectEntry,
   markdownBodyEpochSchema,
   reviewArtifactSchema,
   reviewArtifactSchemaPreHtml,
@@ -23,6 +37,7 @@ import {
 } from "@traycer/protocol/persistence/epic/artifacts";
 
 const TITLE = "Title";
+const DELETED_AT = "2026-10-18T00:00:00.000Z";
 
 const OBJECT_REF = {
   sha256: "a".repeat(64),
@@ -200,6 +215,210 @@ describe("the frozen pre-html readers ignore the head", () => {
       const parsed = epicArtifactSchemaPreHtml.parse(entry);
       expect(parsed).toEqual(unchanged);
       expect(parsed).not.toHaveProperty("head");
+    },
+  );
+});
+
+describe("isMarkdownObjectEntry", () => {
+  const markdownHead = headWithScalars(plainScalars("spec"));
+
+  it.each<[string, unknown, unknown]>([
+    ["a markdown head alone", markdownHead, undefined],
+    ["the born marker alone", undefined, "object"],
+    ["a head and the marker", markdownHead, "object"],
+  ])("is true for %s", (_label, head, markdownBody) => {
+    expect(isMarkdownObjectEntry(head, markdownBody)).toBe(true);
+  });
+
+  it.each<[string, unknown, unknown]>([
+    ["neither", undefined, undefined],
+    ["a null head and a null marker", null, null],
+    [
+      "an html-shaped head, which names no markdown revision",
+      headOf(OBJECT_REF),
+      undefined,
+    ],
+  ])("is false for %s", (_label, head, markdownBody) => {
+    expect(isMarkdownObjectEntry(head, markdownBody)).toBe(false);
+  });
+
+  it.each<[string, unknown]>([
+    ["another word", "inline"],
+    ["the right word in another case", "Object"],
+    ["the empty string", ""],
+    ["a boolean", true],
+    ["null", null],
+  ])(
+    "is false for a head-less entry whose marker is %s",
+    (_label, markdownBody) => {
+      expect(isMarkdownObjectEntry(undefined, markdownBody)).toBe(false);
+    },
+  );
+});
+
+describe("the born-object marker on a live markdown entry", () => {
+  const bornOf = (entry: (typeof MARKDOWN_CASES)[number]["entry"]) => {
+    const { head: _head, ...headless } = entry;
+    return { ...headless, markdownBody: "object" };
+  };
+
+  it.each(MARKDOWN_CASES)(
+    "$kind keeps a head-less marked entry through its schema and the union",
+    ({ schema, entry }) => {
+      const born = bornOf(entry);
+      expect(schema.parse(born)).toEqual(born);
+      expect(epicArtifactSchema.parse(born)).toEqual(born);
+    },
+  );
+
+  it.each(MARKDOWN_CASES)(
+    "$kind refuses a marker other than object",
+    ({ schema, entry }) => {
+      expect(
+        schema.safeParse({ ...bornOf(entry), markdownBody: "inline" }).success,
+      ).toBe(false);
+    },
+  );
+
+  it.each(MARKDOWN_CASES)(
+    "$kind pre-html reader drops the marker",
+    ({ preHtmlSchema, entry }) => {
+      const born = bornOf(entry);
+      const {
+        markdownBody: _markdownBody,
+        layout: _layout,
+        relativePath: _relativePath,
+        ...unchanged
+      } = born;
+      const parsed = preHtmlSchema.parse(born);
+      expect(parsed).toEqual(unchanged);
+      expect(Object.keys(epicArtifactSchemaPreHtml.parse(born))).not.toContain(
+        "markdownBody",
+      );
+    },
+  );
+});
+
+describe("a deleted markdown artifact's born-object marker", () => {
+  const DELETED_MARKDOWN = [
+    { kind: "spec", schema: deletedSpecArtifactSchema },
+    { kind: "ticket", schema: deletedTicketArtifactSchema },
+    { kind: "story", schema: deletedStoryArtifactSchema },
+    { kind: "review", schema: deletedReviewArtifactSchema },
+  ];
+
+  function slimTombstone(kind: string) {
+    return {
+      id: `deleted-${kind}`,
+      kind,
+      title: `Deleted ${kind}`,
+      artifactRoomId: null,
+      deletedAt: DELETED_AT,
+    };
+  }
+
+  it.each(DELETED_MARKDOWN)(
+    "$kind keeps the marker through its schema and the union",
+    ({ kind, schema }) => {
+      const tombstone = { ...slimTombstone(kind), markdownBody: "object" };
+      expect(schema.parse(tombstone)).toEqual(tombstone);
+      expect(deletedEpicArtifactSchema.parse(tombstone)).toEqual(tombstone);
+    },
+  );
+
+  it.each(DELETED_MARKDOWN)(
+    "$kind parses a tombstone without it and does not invent one",
+    ({ kind, schema }) => {
+      const tombstone = slimTombstone(kind);
+      expect(schema.parse(tombstone)).toEqual(tombstone);
+      expect(
+        Object.keys(deletedEpicArtifactSchema.parse(tombstone)),
+      ).not.toContain("markdownBody");
+    },
+  );
+
+  it.each(DELETED_MARKDOWN)(
+    "$kind refuses a marker other than object",
+    ({ kind, schema }) => {
+      const tombstone = { ...slimTombstone(kind), markdownBody: "inline" };
+      expect(schema.safeParse(tombstone).success).toBe(false);
+      expect(deletedEpicArtifactSchema.safeParse(tombstone).success).toBe(
+        false,
+      );
+    },
+  );
+
+  it.each([
+    { kind: "html", schema: deletedHtmlArtifactSchema },
+    { kind: "canvas", schema: deletedCanvasArtifactSchema },
+    { kind: "file", schema: deletedFileArtifactSchema },
+  ])(
+    "$kind tombstone strips the marker instead of keeping or refusing it",
+    ({ kind, schema }) => {
+      const tombstone = { ...slimTombstone(kind), markdownBody: "object" };
+      expect(Object.keys(schema.parse(tombstone))).not.toContain(
+        "markdownBody",
+      );
+      expect(
+        Object.keys(deletedEpicArtifactSchema.parse(tombstone)),
+      ).not.toContain("markdownBody");
+    },
+  );
+
+  it.each(DELETED_MARKDOWN)(
+    "the frozen pre-html union strips the marker from a $kind tombstone",
+    ({ kind }) => {
+      const parsed = deletedEpicArtifactSchemaPreHtml.parse({
+        ...slimTombstone(kind),
+        markdownBody: "object",
+      });
+      expect(parsed).toEqual(slimTombstone(kind));
+    },
+  );
+});
+
+describe("buildDeletedEpicArtifact on a markdown entry", () => {
+  /** The same entry with its head taken off. */
+  function headless(entry: (typeof MARKDOWN_CASES)[number]["entry"]) {
+    const { head: _head, ...rest } = entry;
+    return rest;
+  }
+
+  it.each(MARKDOWN_CASES)(
+    "$kind with a head carries the marker, which the deleted union keeps",
+    ({ entry }) => {
+      const tombstone = buildDeletedEpicArtifact(
+        epicArtifactSchema.parse(entry),
+        DELETED_AT,
+      );
+      expect(tombstone).toHaveProperty("markdownBody", "object");
+      expect(deletedEpicArtifactSchema.parse(tombstone)).toEqual(tombstone);
+    },
+  );
+
+  it.each(MARKDOWN_CASES)(
+    "$kind born as an object (the marker, no head yet) carries the marker",
+    ({ entry }) => {
+      const tombstone = buildDeletedEpicArtifact(
+        epicArtifactSchema.parse({
+          ...headless(entry),
+          markdownBody: "object",
+        }),
+        DELETED_AT,
+      );
+      expect(tombstone).toHaveProperty("markdownBody", "object");
+      expect(deletedEpicArtifactSchema.parse(tombstone)).toEqual(tombstone);
+    },
+  );
+
+  it.each(MARKDOWN_CASES)(
+    "$kind still in its room (no head, no marker) has no marker key at all",
+    ({ entry }) => {
+      const tombstone = buildDeletedEpicArtifact(
+        epicArtifactSchema.parse(headless(entry)),
+        DELETED_AT,
+      );
+      expect(Object.keys(tombstone)).not.toContain("markdownBody");
     },
   );
 });
