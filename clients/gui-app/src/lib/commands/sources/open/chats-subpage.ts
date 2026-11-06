@@ -26,9 +26,18 @@
  * that prefix to the `open_chat` analytics command
  * (`palette-cmdk-controller.ts`), so they survive the category merge unchanged.
  */
-import { useMemo } from "react";
+import { use, useMemo } from "react";
 import { v4 as uuidv4 } from "uuid";
 import type { CloudChatSummary } from "@traycer/protocol/host/epic/cloud-chat";
+import type { HostDirectoryEntry } from "@traycer-clients/shared/host-client/host-directory";
+import { readHostDirectoryEntry } from "@traycer-clients/shared/host-client/host-connection-registry";
+import { hostUnavailability } from "@traycer-clients/shared/host-client/remote-fetcher";
+import { ownerSandboxOpensLive } from "@/hooks/chats/use-owner-sandbox-opens-live";
+import { ChatServingWitnessContext } from "@/lib/chats/chat-serving-witness";
+import { isLocalHostBootingEntry } from "@/lib/host/transport-key";
+import { openTileIntoTargetGroup } from "@/lib/commands/actions";
+import { makePublishedChatTileRef } from "@/stores/epics/canvas/tile-schema/published-chat-tile";
+import type { EpicCanvasTileRef } from "@/stores/epics/canvas/types";
 import { useHostDirectoryList } from "@/hooks/host/use-host-directory-list-query";
 import { useHostClientForHostId } from "@/hooks/host/use-host-client-for-host-id";
 import { useCloudChatList } from "@/hooks/chats/use-cloud-chat-queries";
@@ -78,6 +87,26 @@ function cloudOnlyChatNodeId(chat: CloudChatSummary): string {
   return `cloud:${chat.identity.ownerUserId}:${chat.identity.chatId}`;
 }
 
+/**
+ * Whether a cloud-only chat opens LIVE against its owner host, or as the
+ * published copy the owner last uploaded. The sidebar's cloud row answers
+ * this with `useHostReachability` plus `useOwnerSandboxOpensLive`; a palette
+ * leaf is data, not a mounted row, so it reads the same directory facts off
+ * the connection registry at the moment it runs. The verdicts agree where
+ * they can both be reached from here: a listed, dialable owner opens live; a
+ * missing, not-dialable or still-booting one, and an empty directory, keep
+ * the published copy, which is what "host-starting" lands on in the row too.
+ * A sandbox owner at rest opens live where the pool serves it.
+ */
+function cloudChatOpensLive(
+  entry: HostDirectoryEntry | null,
+  witnessPresent: boolean,
+): boolean {
+  if (ownerSandboxOpensLive(entry, witnessPresent)) return true;
+  if (entry === null || isLocalHostBootingEntry(entry)) return false;
+  return hostUnavailability(entry) === null;
+}
+
 export function useChatsOpenerItems(ctx: CommandContext): ChatsOpenerItems {
   // The host serving the active epic's projection: the fallback a chat with
   // no recorded host binds to, and the reference a cross-host badge is judged
@@ -85,6 +114,10 @@ export function useChatsOpenerItems(ctx: CommandContext): ChatsOpenerItems {
   const activeHostId = useActiveEpicHostId(ctx.activeEpicId);
   const defaultHostId = activeHostId ?? UNKNOWN_HOST_PLACEHOLDER;
   const projection = useActiveEpicProjection(ctx.activeEpicId);
+  // Whether the pool serves a sandbox's chat at rest - see
+  // `useOwnerSandboxOpensLive`. Absent above the palette, every owner's
+  // reachability decides alone, as in a build with no pool.
+  const servingWitnessPresent = use(ChatServingWitnessContext) !== null;
   const directoryList = useHostDirectoryList();
   const hostLabelById = useMemo(() => {
     return new Map(
@@ -180,28 +213,59 @@ export function useChatsOpenerItems(ctx: CommandContext): ChatsOpenerItems {
         badgeFor(chat.hostId),
       );
     });
-    // The ordinary live chat ref bound to the OWNER host - what the palette
-    // opens for a projected chat on another host, and what the sidebar's
-    // cloud row opens for a reachable owner. The tile subscribes against that
-    // host directly and does not need the chat in this device's projection;
-    // an owner that is not reachable surfaces in the tile's own dead-tile
-    // banner, with its Clone offer, rather than being hidden from the list.
+    // The same two refs the sidebar's cloud row opens, chosen the same way.
+    // A reachable owner gets the ordinary live chat ref bound to that host:
+    // the tile subscribes against it directly and does not need the chat in
+    // this device's projection. An unreachable owner gets the published copy,
+    // read on this epic's serving host. The live tile's own published-copy
+    // fallback cannot stand in for that choice here: it recovers the owner
+    // from a SAME-host projection row, and a cloud-only chat has none, so a
+    // live ref for an unreachable owner would show a dead tile with no
+    // transcript where the sidebar shows the copy.
     const cloudOnly = cloudOnlyChats.map((chat) => {
-      const leaf = openerExistingLeaf(
-        "chats",
-        ctx,
-        {
-          id: chat.identity.chatId,
-          instanceId: uuidv4(),
-          type: "chat",
-          name: displayTitle(chat.title ?? "", "agent"),
-          hostId: chat.ownerHostId,
-        },
-        badgeFor(chat.ownerHostId),
-      );
-      // Re-keyed on the owner too: `open:chats:<chatId>` is a LOCAL row's id,
-      // and a cloud row can share a host-minted chat id with one.
-      return { ...leaf, id: `open:chats:${cloudOnlyChatNodeId(chat)}` };
+      const name = displayTitle(chat.title ?? "", "agent");
+      const liveRef = (): EpicCanvasTileRef => ({
+        id: chat.identity.chatId,
+        instanceId: uuidv4(),
+        type: "chat",
+        name,
+        hostId: chat.ownerHostId,
+      });
+      const publishedRef = (): EpicCanvasTileRef =>
+        makePublishedChatTileRef({
+          taskId: chat.identity.taskId,
+          chatId: chat.identity.chatId,
+          ownerUserId: chat.identity.ownerUserId,
+          ownerHostId: chat.ownerHostId,
+          name,
+          hostId: defaultHostId,
+        });
+      const leaf = openerActionLeaf({
+        // Keyed on the owner too: `open:chats:<chatId>` is a LOCAL row's id,
+        // and a cloud row can share a host-minted chat id with one. The
+        // prefix stays: it routes the `open_chat` analytics command.
+        id: `open:chats:${cloudOnlyChatNodeId(chat)}`,
+        label: name,
+        keywords: [name],
+        run: () =>
+          openTileIntoTargetGroup({
+            tabId: ctx.activeTabId,
+            groupId: ctx.targetGroupId,
+            // Decided when the leaf RUNS, not when the list was built: the
+            // owner can come or go while the palette is open.
+            ref: cloudChatOpensLive(
+              readHostDirectoryEntry(chat.ownerHostId),
+              servingWitnessPresent,
+            )
+              ? liveRef()
+              : publishedRef(),
+            dedupe: false,
+            navigateNestedFocus: ctx.router.navigateNestedFocus,
+          }),
+      });
+      const hostBadge = badgeFor(chat.ownerHostId);
+      const located = { ...leaf, tileHostId: chat.ownerHostId };
+      return hostBadge === null ? located : { ...located, hostBadge };
     });
     return { create: newChat, existing, cloudOnly };
   }, [
@@ -211,6 +275,7 @@ export function useChatsOpenerItems(ctx: CommandContext): ChatsOpenerItems {
     activeHostId,
     defaultHostId,
     hostLabelById,
+    servingWitnessPresent,
   ]);
 }
 

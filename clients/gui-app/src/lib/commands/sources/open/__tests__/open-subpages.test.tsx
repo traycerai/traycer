@@ -358,6 +358,17 @@ const cloudChatsMock = vi.hoisted<{ current: CloudChatSummary[] }>(() => ({
 vi.mock("@/hooks/chats/use-cloud-chat-queries", () => ({
   useCloudChatList: () => ({ data: { chats: cloudChatsMock.current } }),
 }));
+// The directory rows a cloud-only leaf reads when it RUNS, to choose between
+// the owner's live chat and its published copy. A host absent here is one
+// the directory does not list: unreachable.
+const directoryRowsMock = vi.hoisted<{
+  current: Record<string, HostDirectoryEntry>;
+}>(() => ({ current: {} }));
+vi.mock("@traycer-clients/shared/host-client/host-connection-registry", () => ({
+  readHostDirectoryEntry: (hostId: string) =>
+    directoryRowsMock.current[hostId] ?? null,
+  subscribeHostRowChanged: () => () => undefined,
+}));
 vi.mock(
   "@/hooks/chats/use-chat-publication-targets",
   async (importOriginal) => {
@@ -755,6 +766,7 @@ afterEach(() => {
   cleanup();
   vi.clearAllMocks();
   cloudChatsMock.current = [];
+  directoryRowsMock.current = {};
   activeHostIdMock.current = "default-host";
   browserHostIdMock.current = "default-host";
   browserPinSelectionMock.current = null;
@@ -834,7 +846,17 @@ describe("Agents opener sub-page", () => {
   // table holds it; the opener lists the same rows, after the tree, so a chat
   // started on another machine is not in one surface and missing from the
   // other for a record poll.
-  it("lists the cloud's chats that fold into no local chat, newest first, bound to their owner host", () => {
+  it("lists the cloud's chats that fold into no local chat, newest first, and opens a reachable owner's chat live", () => {
+    directoryRowsMock.current = {
+      "chat-host": {
+        hostId: "chat-host",
+        label: "Other Mac",
+        kind: "remote",
+        websocketUrl: "ws://chat-host.test",
+        version: null,
+        transportDialability: "dialable",
+      },
+    };
     cloudChatsMock.current = [
       cloudChat({
         chatId: "older-remote",
@@ -883,6 +905,33 @@ describe("Agents opener sub-page", () => {
       id: "older-remote",
       type: "chat",
       hostId: "chat-host",
+    });
+  });
+
+  // The live tile's own published-copy fallback recovers the owner from a
+  // same-host projection row, and a cloud-only chat has none - so the leaf
+  // itself opens the copy, carrying the cloud identity, as the sidebar's
+  // cloud row does for an owner the directory does not list.
+  it("opens an unreachable owner's cloud chat as its published copy on the reading host", () => {
+    cloudChatsMock.current = [
+      cloudChat({
+        chatId: "offline-remote",
+        ownerUserId: "collaborator-1",
+        ownerHostId: "gone-host",
+        title: "Gone chat",
+        publishedAt: 5,
+      }),
+    ];
+    const items = renderItems(useAgentsOpenerItems);
+    runById(items, "open:chats:cloud:collaborator-1:offline-remote");
+    expect(lastTileOpen().ref).toMatchObject({
+      id: "published-chat:epic-1:collaborator-1:offline-remote",
+      type: "published-chat",
+      name: "Gone chat",
+      hostId: "default-host",
+      chatId: "offline-remote",
+      ownerUserId: "collaborator-1",
+      ownerHostId: "gone-host",
     });
   });
 
