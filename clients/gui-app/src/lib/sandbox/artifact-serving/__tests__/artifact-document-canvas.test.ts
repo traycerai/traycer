@@ -187,6 +187,10 @@ describe("a commentable html page", () => {
     // the bootstrap's canvas flag. A commentable page adds to the plain one.
     expect(page).not.toBe(plain);
     expect(page).toContain(selection);
+    // The zoom script's touch listeners must come first; see documentParts.
+    expect(page.indexOf(buildHtmlViewerPrelude())).toBeLessThan(
+      page.indexOf(selection),
+    );
     expect(page.replace(STAMP_PATTERN, "").replace(selection, "")).toBe(plain);
   });
 });

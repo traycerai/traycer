@@ -446,4 +446,26 @@ describe("commenting on the entry page", () => {
       commenting: true,
     });
   });
+
+  // A page's own link back to the entry page reports where it landed and that
+  // it is ready in one go. The new document is told the entry page's mode,
+  // with no stale word from the page it left.
+  it("tells a page reached by its own link that page's mode, and only that", () => {
+    const bridge = realBridge();
+    frames.bridge = bridge;
+    const setMode = vi.spyOn(bridge, "setMode");
+    const { report } = renderPages({ pages: TWO_PAGES, commenting: true });
+    act(() => frameProps().onStatus("ready"));
+    report((page) => page.onNavigate("report.html"));
+    expect(setMode).toHaveBeenLastCalledWith("play");
+    setMode.mockClear();
+
+    report((page) => {
+      page.onNavigate("index.html");
+      frameProps().onStatus("loading");
+      frameProps().onStatus("ready");
+    });
+
+    expect(setMode.mock.calls).toEqual([["edit"]]);
+  });
 });

@@ -322,6 +322,8 @@ export function ArtifactPagesFrame(props: {
   const scaleRef = useRef(1);
   const [scale, setScale] = useState(1);
   const [ready, setReady] = useState(false);
+  // Counts each document that proved itself; see `tellReadyPage`.
+  const [readyLoads, setReadyLoads] = useState(0);
   const coarsePointer = useCoarsePointer();
   const controlSize = coarsePointer ? "icon-touch" : "icon-sm";
   const [history, setHistory] = useState(() => freshHistory(entryPath));
@@ -412,18 +414,19 @@ export function ArtifactPagesFrame(props: {
   const changeScale = (next: number): void => {
     bridgeRef.current?.setHtmlView(viewAt(next));
   };
-  // Every load is a fresh document that opens for reading, so its view and
-  // mode are told on each ready as well as on each change.
-  const tellPage = (bridge: SandboxBridgeHost): void => {
+  // Every load is a fresh document that opens for reading, so it is told its
+  // view and mode once its ready has rendered, and again on each change. The
+  // report that says ready has already moved `currentPath` to the page that
+  // loaded, so the mode told is that page's, never the one before it.
+  const tellReadyPage = useEffectEvent(() => {
+    const bridge = bridgeRef.current;
+    if (!ready || bridge === null) return;
     bridge.setHtmlView(viewAt(scaleRef.current));
     void bridge.setMode(commentingHere ? "edit" : "play");
-  };
-  const tellReadyPage = useEffectEvent(() => {
-    if (ready && bridgeRef.current !== null) tellPage(bridgeRef.current);
   });
   useEffect(() => {
     tellReadyPage();
-  }, [commentingHere]);
+  }, [readyLoads, commentingHere]);
   const pages = pageNavigationFor(source.manifest, current);
   const zoom = fills ? { ready, scale } : null;
   const hasControls =
@@ -474,9 +477,8 @@ export function ArtifactPagesFrame(props: {
           onStatus={(status) => {
             setReady(status === "ready");
             // A page change can report loading and ready in one go, which
-            // leaves `ready` where it was, so the new page is told here.
-            if (status === "ready" && bridgeRef.current !== null)
-              tellPage(bridgeRef.current);
+            // leaves `ready` where it was; the count still moves.
+            if (status === "ready") setReadyLoads((count) => count + 1);
             onStatus(status);
           }}
           onRequestTeardown={noop}
