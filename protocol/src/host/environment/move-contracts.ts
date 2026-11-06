@@ -73,7 +73,9 @@ export type EnvironmentMovePlanRequest = z.infer<
  * A value that reads like a credential is listed under
  * `staysOnThisComputer`: a secret's value does not move in or out of a
  * computer, so the move leaves it where it is rather than offering to store
- * it.
+ * it. `looksLikeAKey` is retired and still declared, because `cli-v1.5.2` and
+ * `cli-v1.5.3` require the key: it is empty on every plan this tree builds
+ * (`RETIRED_LOOKS_LIKE_A_KEY_ROWS` in `released-wire-rows.ts`).
  */
 export const environmentMovePlanResponseSchema = lazySchema(() =>
   z.object({
@@ -86,6 +88,7 @@ export const environmentMovePlanResponseSchema = lazySchema(() =>
       staysOnThisComputer: z.array(environmentMoveRowSchema),
       alreadyInPersonal: z.array(environmentMoveRowSchema),
       differsMasked: z.array(environmentMoveRowSchema),
+      looksLikeAKey: z.array(environmentMoveRowSchema),
     }),
   }),
 );
@@ -196,11 +199,16 @@ export function environmentMoveItemChoiceKey(
  * `environmentMoveItemChoiceKey`: leave it on this computer (`stays`). A row
  * with no answer moves as planned, and nothing is stored as a secret from
  * here: a secret's value does not move in or out of a computer.
+ *
+ * `secret` and `variable` are retired and still accepted, because
+ * `cli-v1.5.2` and `cli-v1.5.3` can still send either on this released
+ * version: the move resolver refuses both rather than storing a value found
+ * on a computer.
  */
 export const environmentMoveKeyChoiceSchema = lazySchema(() =>
   z.object({
     key: z.string().min(1),
-    choice: z.enum(["stays"]),
+    choice: z.enum(["secret", "variable", "stays"]),
   }),
 );
 export type EnvironmentMoveKeyChoice = z.infer<

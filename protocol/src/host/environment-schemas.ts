@@ -6,6 +6,11 @@ import {
 import { lazySchema } from "@traycer/protocol/framework/lazy-schema";
 import { executableWriteGrantSchema } from "@traycer/protocol/host/executable-write-grant";
 import { providerIdSchema } from "@traycer/protocol/host/provider-ids";
+import {
+  SANDBOX_ROUTE_PROTOCOLS,
+  SANDBOX_SECRET_FORM_KINDS,
+  SANDBOX_SECRET_SWAP_SITES,
+} from "@traycer/protocol/host/secret-intake-catalogue";
 
 /**
  * Wire shapes of the environment methods: the desktop Settings pages a person's
@@ -442,12 +447,34 @@ export type EnvironmentReviewResponseV12 = z.infer<
  * held entry (`EnvironmentReviewEntry.entryId`). `approve` applies the held
  * hook, `discard` leaves it unapplied. `gone` is an entry already applied or
  * discarded.
+ *
+ * The `secret`, `variable` and `stays` arms answered a held credential-like
+ * value, a plane this tree no longer has. They stay in the request because
+ * `cli-v1.5.2` and `cli-v1.5.3` can still send them, and this is a released
+ * version whose shape may not change; the review resolver refuses all three.
+ * Nothing promotes a held value any more - the value never travels, because
+ * it is never parked.
  */
 export const environmentReviewHeldApplyRequestSchema = lazySchema(() =>
-  z.object({
-    heldId: z.string().min(1),
-    choice: z.enum(["discard", "approve"]),
-  }),
+  z.discriminatedUnion("choice", [
+    z.object({
+      heldId: z.string().min(1),
+      choice: z.literal("secret"),
+      kind: z.enum(SANDBOX_SECRET_FORM_KINDS),
+      protocol: z.enum(SANDBOX_ROUTE_PROTOCOLS),
+      hosts: z.array(z.string().min(1).max(253)).min(1).max(16),
+      port: z.number().int().min(1).max(65_535).nullable(),
+      portOverride: z.boolean(),
+      swapSites: z.array(z.enum(SANDBOX_SECRET_SWAP_SITES)).min(1).max(3),
+      plaintextConsent: z
+        .object({ disclosureVersion: z.number().int().nonnegative() })
+        .nullable(),
+    }),
+    z.object({
+      heldId: z.string().min(1),
+      choice: z.enum(["variable", "stays", "discard", "approve"]),
+    }),
+  ]),
 );
 export type EnvironmentReviewHeldApplyRequest = z.infer<
   typeof environmentReviewHeldApplyRequestSchema
@@ -830,6 +857,13 @@ export const environmentSecretSchema = lazySchema(() =>
     kind: z.string().min(1).max(32),
     protocol: z.string().min(1).max(32).nullable(),
     destinations: z.array(z.string().min(1)),
+    /**
+     * Retired, and still declared because `cli-v1.5.2` and `cli-v1.5.3`
+     * require both: `RETIRED_SECRET_ROW_FIELDS` in `released-wire-rows.ts`
+     * holds the only values this tree writes, and says when they go.
+     */
+    mode: z.string().min(1).max(32),
+    state: z.string().min(1).max(32),
     currentVersionId: z.string().min(1).nullable(),
     revoked: z.boolean(),
     updatedAt: z.number(),
@@ -891,6 +925,15 @@ export const environmentSecretsCreateRequestSchema = lazySchema(() =>
   z.object({
     name: z.string().min(1),
     ...secretBindingCandidateFields,
+    /**
+     * Retired, and still declared here and below because `cli-v1.5.2` and
+     * `cli-v1.5.3` send both: `RETIRED_SECRET_CREATE_FIELDS` in
+     * `released-wire-rows.ts` holds what a client of this tree sends. A
+     * released peer that names a plane this tree does not serve - any `mode`
+     * but brokered, any export policy but none - is refused by the create
+     * resolver.
+     */
+    mode: z.string().min(1).max(32),
     /** The person kept a port that is another protocol's default, on purpose. */
     portOverride: z.boolean(),
     /** HTTP kinds only; others send `["header"]`. Known: header, query, body. */
@@ -904,6 +947,8 @@ export const environmentSecretsCreateRequestSchema = lazySchema(() =>
         }),
       )
       .max(16),
+    /** Retired; see `mode` above. */
+    exportPolicy: z.string().min(1).max(32).nullable(),
     /** "Sandboxes get it": granted to every live and future sandbox. */
     sandboxesByDefault: z.boolean(),
     plaintextConsent: z
@@ -1408,6 +1453,15 @@ export type EnvironmentSecretsListResponseV11 = z.infer<
 export const environmentSecretSchemaV12 = lazySchema(() =>
   environmentSecretSchema.extend({
     variables: z.array(z.string().min(1)),
+    /**
+     * Retired, and still declared because `cli-v1.5.2` and `cli-v1.5.3`
+     * require it: nothing binds a secret to a name in one provider's env any
+     * more, so `RETIRED_PROVIDER_VARIABLES` is the empty list every row
+     * carries.
+     */
+    providerVariables: z.array(
+      z.object({ providerId: z.string().min(1), name: z.string().min(1) }),
+    ),
   }),
 );
 export type EnvironmentSecretV12 = z.infer<typeof environmentSecretSchemaV12>;

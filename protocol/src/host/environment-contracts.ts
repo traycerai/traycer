@@ -1,5 +1,6 @@
 import { defineRpcContract, defineUpgradePath } from "../framework/index";
 import * as schemas from "./environment-schemas";
+import { RETIRED_PROVIDER_VARIABLES } from "./released-wire-rows";
 
 /**
  * The environment methods: every one a NEW name, introduced at `@1.0`, off
@@ -57,7 +58,12 @@ export const environmentSecretsListV12 = defineRpcContract({
   responseSchema: schemas.environmentSecretsListResponseSchemaV12,
 });
 
-/** A `@1.1` host names no variables: its rows set the secret under none. */
+/**
+ * A `@1.1` host names no variables: its rows set the secret under none. It
+ * names no provider variable either, and no host does any more
+ * (`RETIRED_PROVIDER_VARIABLES`), so the key is the empty list rather than a
+ * guess about what that host held.
+ */
 export const environmentSecretsListUpgradeV11ToV12 = defineUpgradePath<
   typeof environmentSecretsListV11,
   typeof environmentSecretsListV12
@@ -70,6 +76,7 @@ export const environmentSecretsListUpgradeV11ToV12 = defineUpgradePath<
     secrets: response.secrets.map((secret) => ({
       ...secret,
       variables: [],
+      providerVariables: [...RETIRED_PROVIDER_VARIABLES],
     })),
     removed: response.removed.map((removed) => ({
       ...removed,
