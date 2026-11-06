@@ -1,3 +1,4 @@
+import { useSettingsHostScopeStore } from "@/stores/settings/settings-host-scope-store";
 import { INERT_ROOT_STATE_PORT } from "@/stores/epics/open-epic/test-support/root-state-port-fixture";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { act, cleanup, render, renderHook } from "@testing-library/react";
@@ -6,7 +7,10 @@ import { EpicSessionLifecycleBridge } from "@/providers/auth-lifecycle-bridge";
 import { __getChatSessionRegistryForTests } from "@/lib/registries/chat-session-registry";
 import { __getOpenEpicRegistryForTests } from "@/lib/registries/epic-session-registry";
 import { useAuthStore } from "@/stores/auth/auth-store";
-import { useSettingsHostScopeStore } from "@/stores/settings/settings-host-scope-store";
+import {
+  setSettingsHostSelection,
+  settingsHostSelection,
+} from "@/stores/settings/__tests__/settings-host-scope-test-support";
 import { useWatchHostStore } from "@/stores/host-scope/watch-host-store";
 import { useAddHostDialogStore } from "@/stores/settings/add-host-dialog-store";
 import { useProvidersFocusStore } from "@/stores/settings/providers-focus-store";
@@ -166,7 +170,7 @@ describe("<EpicSessionLifecycleBridge />", () => {
     // Module-level stores: without this a leaked pick or an open dialog would
     // travel between the cases below and the assertions would stop meaning
     // anything.
-    useSettingsHostScopeStore.getState().setScopedHostId(null);
+    useSettingsHostScopeStore.getState().reset();
     // This one PERSISTS, so it needs both halves and in this order: the store
     // first, then the storage the persist middleware just rewrote. Two cases
     // below set it and rely on the bridge's own transition to clear it - a
@@ -284,7 +288,7 @@ describe("<EpicSessionLifecycleBridge />", () => {
     // B's session opened Settings on a `vanished` host B has never seen and
     // cannot dismiss without re-picking. `null` restores "follow the active
     // host", which is the store's unset state, not an empty one.
-    useSettingsHostScopeStore.getState().setScopedHostId("host-owned-by-alice");
+    setSettingsHostSelection("host-owned-by-alice");
 
     render(
       <EpicSessionLifecycleBridge>
@@ -296,11 +300,11 @@ describe("<EpicSessionLifecycleBridge />", () => {
       resetAuth("signed-in", "bob@example.com", "user-bob");
     });
 
-    expect(useSettingsHostScopeStore.getState().scopedHostId).toBeNull();
+    expect(settingsHostSelection()?.hostId ?? null).toBeNull();
   });
 
   it("drops the Settings host scope on sign-out", () => {
-    useSettingsHostScopeStore.getState().setScopedHostId("host-owned-by-alice");
+    setSettingsHostSelection("host-owned-by-alice");
 
     render(
       <EpicSessionLifecycleBridge>
@@ -312,7 +316,7 @@ describe("<EpicSessionLifecycleBridge />", () => {
       resetAuth("signed-out", null, null);
     });
 
-    expect(useSettingsHostScopeStore.getState().scopedHostId).toBeNull();
+    expect(settingsHostSelection()?.hostId ?? null).toBeNull();
   });
 
   it("drops the shared watch-host pick on user-switch", () => {
@@ -774,7 +778,7 @@ describe("<EpicSessionLifecycleBridge />", () => {
     // transition, so an explicit pick must survive it. Without this the two
     // assertions above would also pass for a bridge that cleared the scope on
     // every render.
-    useSettingsHostScopeStore.getState().setScopedHostId("host-a");
+    setSettingsHostSelection("host-a");
 
     render(
       <EpicSessionLifecycleBridge>
@@ -782,7 +786,7 @@ describe("<EpicSessionLifecycleBridge />", () => {
       </EpicSessionLifecycleBridge>,
     );
 
-    expect(useSettingsHostScopeStore.getState().scopedHostId).toBe("host-a");
+    expect(settingsHostSelection()?.hostId ?? null).toBe("host-a");
   });
 
   it("does not clear sessions on the initial mount when already signed-in", () => {

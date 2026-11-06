@@ -1978,9 +1978,19 @@ describe("the chat chip is the composer's picker", () => {
   it("says the computer's OS and that it is active, and the funded New row's price", () => {
     openChip();
 
+    const computer = screen.getByTestId(
+      "settings-host-switcher-option-host-test",
+    );
     expect(
-      screen.getByTestId("settings-host-switcher-option-host-test").textContent,
-    ).toContain("windows-test-machine · Windows · Active");
+      within(computer).getByText("Computer").classList.contains("sr-only"),
+    ).toBe(true);
+    const visibleCopy = Array.from(computer.querySelectorAll("span"))
+      .filter(
+        (span) =>
+          span.children.length === 0 && !span.classList.contains("sr-only"),
+      )
+      .map((span) => span.textContent);
+    expect(visibleCopy).toEqual(["windows-test-machine", "Windows · Active"]);
     expect(screen.getByText("New Personal sandbox")).toBeDefined();
     expect(
       screen.getByText(

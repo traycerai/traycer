@@ -1,6 +1,9 @@
 import { useState, type ReactNode } from "react";
 import { toast } from "sonner";
-import type { HostSandboxState } from "@traycer/protocol/host/host-status";
+import {
+  HOST_FROZEN_WORD,
+  type HostSandboxState,
+} from "@traycer/protocol/host/host-status";
 import type { SandboxGrantsSummary } from "@traycer/protocol/host/sandbox-secrets";
 import type {
   SandboxCost,
@@ -143,16 +146,19 @@ export function SandboxCard(props: {
         <CardDescription data-testid="sandbox-card-state-line">
           {cardStateLine(props.sandbox, viewerUserId)}
         </CardDescription>
-        {word === null ? null : (
-          <CardAction>
+        <CardAction>
+          <div className="flex flex-wrap items-center gap-2">
             <Badge
               variant={stateBadgeVariant(state, frozen)}
               data-testid="sandbox-card-state"
             >
-              {capitalize(word)}
+              {word}
             </Badge>
-          </CardAction>
-        )}
+            {frozen ? (
+              <Badge variant="warning">{HOST_FROZEN_WORD}</Badge>
+            ) : null}
+          </div>
+        </CardAction>
       </CardHeader>
       <CardContent className="flex flex-col gap-2">
         {summary === null ? (
@@ -1140,8 +1146,4 @@ function formatBalance(
   return minutes === null
     ? balance
     : `${balance}, about ${formatRunway(minutes)} at your current burn`;
-}
-
-function capitalize(word: string): string {
-  return word.length === 0 ? word : word[0].toUpperCase() + word.slice(1);
 }

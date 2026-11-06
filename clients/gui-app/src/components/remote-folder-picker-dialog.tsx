@@ -507,7 +507,7 @@ function useRemoteFolderPickerNative(args: {
     } catch {
       if (isCurrentPickerRequest(requestId)) {
         reportableErrorToast("Couldn't open the folder picker.", undefined, {
-          title: "Could not add workspace folders",
+          title: "Could not add folders",
           message: "The folder picker failed to open.",
           code: null,
           source: "Workspace folders",
@@ -1041,7 +1041,7 @@ function RemoteFolderPickerListingStatus(props: {
       <div
         className="flex flex-col gap-1"
         data-testid="remote-folder-picker-loading"
-        aria-busy="true"
+        role="status"
         aria-label="Loading folders"
       >
         {[0, 1, 2].map((i) => (

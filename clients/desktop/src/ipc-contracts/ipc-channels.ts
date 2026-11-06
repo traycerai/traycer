@@ -86,7 +86,6 @@ export const RunnerHostInvoke = {
   endVoiceSession: "runnerHost:voice:sessions:end",
   // The voice router's model call (traycer-server `/inference`), same CORS
   // reason.
-  routeVoiceUtterance: "runnerHost:voice:route",
   // Whether the sender window holds a live voice session: such a window is
   // hidden, not destroyed, when the person closes it.
   setVoiceSessionLive: "runnerHost:voice:setLive",

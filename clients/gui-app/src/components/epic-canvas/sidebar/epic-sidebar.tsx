@@ -2685,6 +2685,9 @@ function SidebarBulkSelectionActions() {
       format,
       archive: true,
       archiveTitle: meta?.epicLight?.title ?? "Traycer",
+      // Exactly the checked rows. The archive still lays them out as the
+      // tree; nested export is the row menu's explicit choice.
+      includeNested: false,
     });
   };
   return (

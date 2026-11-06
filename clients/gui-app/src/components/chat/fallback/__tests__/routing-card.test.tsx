@@ -1,3 +1,4 @@
+import { useSettingsHostScopeStore } from "@/stores/settings/settings-host-scope-store";
 import type { ComponentProps } from "react";
 import {
   act,
@@ -23,7 +24,7 @@ import { TooltipProvider } from "@/components/ui/tooltip";
 import { setDesktopWindowOnScreen } from "@/lib/dom/document-visibility";
 import { formatWaitTime } from "@/lib/relative-time";
 import { FALLBACK_SETTINGS_SECTION_ID } from "@/lib/settings-sections";
-import { useSettingsHostScopeStore } from "@/stores/settings/settings-host-scope-store";
+import { setSettingsHostSelection } from "@/stores/settings/__tests__/settings-host-scope-test-support";
 import {
   BANNED_VOCABULARY,
   FAILED_CLAUDE_TUPLE,
@@ -400,12 +401,12 @@ describe("RoutingCard", () => {
     mocks.openSettings.mockReset();
     mocks.outcome = "applied";
     mocks.proceedSupported = true;
-    useSettingsHostScopeStore.getState().setScopedHostId(APP_HOST);
+    setSettingsHostSelection(APP_HOST);
   });
 
   afterEach(() => {
     cleanup();
-    useSettingsHostScopeStore.getState().setScopedHostId(null);
+    useSettingsHostScopeStore.getState().reset();
     // A case that fails mid-test can exit before its own `useRealTimers`, and
     // fake timers would leak into every later case.
     vi.useRealTimers();
@@ -557,7 +558,7 @@ describe("RoutingCard", () => {
       expect(mocks.openSettings).toHaveBeenCalledWith(
         expect.objectContaining({ section: "providers" }),
       );
-      expect(useSettingsHostScopeStore.getState().scopedHostId).toBe(TAB_HOST);
+      expect(useSettingsHostScopeStore.getState().pendingHostId).toBe(TAB_HOST);
     });
   });
 
@@ -822,7 +823,7 @@ describe("RoutingCard", () => {
       fireEvent.click(
         screen.getByRole("button", { name: "Model routing settings" }),
       );
-      expect(useSettingsHostScopeStore.getState().scopedHostId).toBe(TAB_HOST);
+      expect(useSettingsHostScopeStore.getState().pendingHostId).toBe(TAB_HOST);
       expect(mocks.openSettings).toHaveBeenCalledWith({
         section: FALLBACK_SETTINGS_SECTION_ID,
         resetToGeneral: false,

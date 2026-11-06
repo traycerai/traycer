@@ -169,7 +169,7 @@ describe("buildHostScopeOptions sandbox facts", () => {
       option === undefined
         ? null
         : hostOptionStatusWord(option, AVAILABLE_HOST_ROW_SURFACE_STATE),
-    ).toBe("awake");
+    ).toBe("Awake");
   });
 
   it("never reads a destroyed sandbox as frozen, whatever flag the registry kept", () => {
@@ -188,7 +188,7 @@ describe("buildHostScopeOptions sandbox facts", () => {
     expect(option?.sandbox?.state).toBe("destroyed");
     expect(option?.sandbox?.frozen).toBe(false);
     expect(option?.sandbox ? sandboxStateWord(option.sandbox) : null).toBe(
-      "destroyed",
+      "Destroyed",
     );
   });
 
@@ -488,7 +488,7 @@ describe("credentialTargetHostOptions", () => {
 });
 
 describe("sandbox row words", () => {
-  it("leads with frozen, then the lifecycle word, and has none for a state not yet known", () => {
+  it("shows the lifecycle word and reports an unknown state directly", () => {
     expect(
       sandboxStateWord({
         state: "suspended",
@@ -496,7 +496,7 @@ describe("sandbox row words", () => {
         summary: null,
         teamOwned: false,
       }),
-    ).toBe("frozen");
+    ).toBe("Suspended");
     expect(
       sandboxStateWord({
         state: "stopped",
@@ -504,7 +504,7 @@ describe("sandbox row words", () => {
         summary: null,
         teamOwned: false,
       }),
-    ).toBe("stopped");
+    ).toBe("Stopped");
     expect(
       sandboxStateWord({
         state: null,
@@ -512,7 +512,7 @@ describe("sandbox row words", () => {
         summary: null,
         teamOwned: false,
       }),
-    ).toBeNull();
+    ).toBe("Status unknown");
   });
 
   it("labels a sandbox row Sandbox ahead of its transport kind", () => {
@@ -533,7 +533,11 @@ describe("sandbox row words", () => {
     ).toBe("Sandbox");
     expect(
       hostOptionKindLabel(
-        hostScopeOptionFixture({ hostId: "p", isLocalMachine: false }),
+        hostScopeOptionFixture({
+          hostId: "p",
+          isLocalMachine: false,
+          kind: null,
+        }),
       ),
     ).toBe("Host");
   });

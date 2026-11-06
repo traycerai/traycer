@@ -11,7 +11,6 @@ import type { BrowserPanelPreferences } from "@/stores/epics/browser-panel-store
 import { useBrowserCatalogContext } from "@/components/epic-canvas/renderers/browser-catalog-context";
 import { useBrowserSessionsContext } from "@/components/epic-canvas/renderers/browser-sessions-context";
 import { useHostOptions } from "@/components/settings/host-scope/use-host-options";
-import { useReactiveLocalHostId } from "@/hooks/host/use-reactive-local-host-id";
 import { useBrowserPanelPreferences } from "@/stores/epics/browser-panel-store";
 import { browserSessionTileId } from "@/stores/epics/canvas/tile-schema/browser-tile";
 import {
@@ -26,7 +25,6 @@ import { hostNameFromLabel } from "@/hooks/agent/use-host-reachability";
 export interface BrowserDeviceGroupModel {
   readonly hostId: string;
   readonly name: string;
-  readonly isLocal: boolean;
   readonly offline: boolean;
   readonly expanded: boolean;
   readonly rows: readonly BrowserSidebarTabRow[];
@@ -112,7 +110,6 @@ function matchesReveal(
 function groupBrowserRows(args: {
   readonly rows: readonly BrowserSidebarTabRow[];
   readonly hosts: ReadonlyMap<string, HostScopeOption>;
-  readonly localHostId: string | null;
   readonly preferences: BrowserPanelPreferences;
   readonly query: string;
   readonly revealNodeId: string | null;
@@ -126,7 +123,6 @@ function groupBrowserRows(args: {
   return [...grouped].map(([hostId, rows]) => ({
     hostId,
     name: hostNameFromLabel(args.hosts.get(hostId)?.name ?? null, hostId),
-    isLocal: hostId === args.localHostId,
     offline: isBrowserDeviceOffline(args.hosts.get(hostId)),
     expanded:
       args.query.trim().length > 0 ||
@@ -146,7 +142,6 @@ export function useBrowserListModel(
   const live = useBrowserSessionsContext();
   const heldStates = useHeldBrowserStates(epicId);
   const options = useHostOptions();
-  const localHostId = useReactiveLocalHostId();
   const preferences = useBrowserPanelPreferences(epicId);
   const sessions = useMemo(
     () =>
@@ -178,7 +173,6 @@ export function useBrowserListModel(
   const groups = groupBrowserRows({
     rows: matches,
     hosts,
-    localHostId,
     preferences,
     query,
     revealNodeId,

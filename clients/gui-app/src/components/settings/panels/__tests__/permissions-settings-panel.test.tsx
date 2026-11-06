@@ -1,3 +1,4 @@
+import { useSettingsHostScopeStore } from "@/stores/settings/settings-host-scope-store";
 import { act, cleanup, render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { useState, type ReactNode } from "react";
@@ -19,7 +20,7 @@ import {
 } from "@/stores/settings/settings-environment-pick-store";
 import { PermissionsSettingsPanel } from "@/components/settings/panels/permissions-settings-panel";
 import type { PendingRuleDraft } from "@/components/settings/panels/auto-policy-document";
-import { useSettingsHostScopeStore } from "@/stores/settings/settings-host-scope-store";
+import { settingsHostSelection } from "@/stores/settings/__tests__/settings-host-scope-test-support";
 import { useSettingsSearchStore } from "@/stores/settings/settings-search-store";
 import {
   armSettingsOpenIntent,
@@ -77,9 +78,7 @@ const judgeRenderedUnder = vi.hoisted(
 );
 vi.mock("@/components/settings/panels/permissions/judge-tab", () => ({
   JudgeTab: (): ReactNode => {
-    judgeRenderedUnder.current.push(
-      useSettingsHostScopeStore.getState().scopedHostId,
-    );
+    judgeRenderedUnder.current.push(settingsHostSelection()?.hostId ?? null);
     return <div data-testid="judge-body" />;
   },
 }));
@@ -151,7 +150,7 @@ beforeEach(() => {
   carryForwards.current = true;
   judgeRenderedUnder.current = [];
   rulesProps.current = [];
-  useSettingsHostScopeStore.setState({ scopedHostId: null });
+  useSettingsHostScopeStore.getState().reset();
   useSettingsSearchStore.setState({ pendingReveal: null });
   resetSettingsOpenIntentForTests();
   resetRulesEditForTests();
@@ -380,7 +379,7 @@ describe("PermissionsSettingsPanel", () => {
       render(<PermissionsSettingsPanel />);
 
       expect(carryMock).toHaveBeenCalledWith("host-b");
-      expect(useSettingsHostScopeStore.getState().scopedHostId).toBe("host-b");
+      expect(useSettingsHostScopeStore.getState().pendingHostId).toBe("host-b");
       expect(useSettingsOpenIntentStore.getState().intent).toBeNull();
     });
 
@@ -388,18 +387,22 @@ describe("PermissionsSettingsPanel", () => {
       armIntent({ tab: "judge", draft: null, hostId: null });
       render(<PermissionsSettingsPanel />);
 
-      expect(useSettingsHostScopeStore.getState().scopedHostId).toBeNull();
+      expect(settingsHostSelection()?.hostId ?? null).toBeNull();
       expect(useSettingsOpenIntentStore.getState().intent).toBeNull();
     });
 
-    it("never mounts a gated body against the machine the page is leaving", () => {
+    it("holds the gated body until the named host's environment resolves", () => {
+      scopeOverrides.current = {
+        host: null,
+        hostId: null,
+        status: "connecting",
+        isLoading: true,
+      };
       armIntent({ tab: "judge", draft: null, hostId: "host-b" });
       render(<PermissionsSettingsPanel />);
 
-      expect(judgeRenderedUnder.current.length).toBeGreaterThan(0);
-      expect(judgeRenderedUnder.current.every((id) => id === "host-b")).toBe(
-        true,
-      );
+      expect(useSettingsHostScopeStore.getState().pendingHostId).toBe("host-b");
+      expect(judgeRenderedUnder.current).toEqual([]);
     });
   });
 

@@ -113,7 +113,9 @@ interface ProviderProfileScopedSectionProps {
  * page reads, which Traycer neither made nor carries anywhere else.
  */
 function ownLoginLabel(providerLabel: string, hostName: string | null): string {
-  return `${providerLabel}'s own login on ${hostName ?? "this computer"}`;
+  return hostName === null
+    ? `${providerLabel}'s own login`
+    : `${providerLabel}'s own login on ${hostName}`;
 }
 
 /**
@@ -616,7 +618,7 @@ function OwnLoginSummary(props: {
   const refreshing =
     useIsMutatingOf({ mutationKey: providersMutationKeys.refresh() }) > 0;
   const providerLabel = PROVIDER_DISPLAY_NAMES[props.state.providerId];
-  const hostName = props.hostName ?? "this computer";
+  const hostName = props.hostName;
   const readState = ambientLoginReadState(props.state);
 
   if (readState === "signed-out") {
@@ -626,7 +628,8 @@ function OwnLoginSummary(props: {
         className="flex min-w-0 flex-wrap items-center justify-between gap-2"
       >
         <span className="min-w-0 text-ui-xs text-muted-foreground">
-          {providerLabel} isn&apos;t signed in on {hostName}
+          {providerLabel} isn&apos;t signed in
+          {hostName === null ? null : ` on ${hostName}`}
         </span>
         <TooltipWrapper
           label={props.addProfileDisabledReason}
@@ -659,7 +662,8 @@ function OwnLoginSummary(props: {
         className="flex min-w-0 flex-wrap items-center gap-1 text-ui-xs text-muted-foreground"
       >
         <span className="min-w-0">
-          Checking {providerLabel}&apos;s login on {hostName}…
+          Checking {providerLabel}&apos;s login
+          {hostName === null ? null : ` on ${hostName}`}…
         </span>
       </div>
     );
@@ -672,7 +676,8 @@ function OwnLoginSummary(props: {
         className="flex min-w-0 flex-wrap items-center gap-1 text-ui-xs text-muted-foreground"
       >
         <span className="min-w-0">
-          Couldn&apos;t check {providerLabel}&apos;s login on {hostName}.
+          Couldn&apos;t check {providerLabel}&apos;s login
+          {hostName === null ? null : ` on ${hostName}`}.
         </span>
         <Button
           type="button"

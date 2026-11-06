@@ -406,7 +406,7 @@ describe("<ProviderProfileScopedSection /> host gate", () => {
     expect(onAddProfile).toHaveBeenCalledTimes(1);
   });
 
-  it("falls back to this computer when the page names no host, and holds the sign-in verb with the credential refusal", () => {
+  it("omits the host name when unknown, and holds the sign-in verb with the credential refusal", () => {
     renderSection(
       {
         canAddProfile: false,
@@ -418,7 +418,7 @@ describe("<ProviderProfileScopedSection /> host gate", () => {
 
     expect(
       screen.getByRole("button", {
-        name: "OpenCode profile: OpenCode's own login on this computer",
+        name: "OpenCode profile: OpenCode's own login",
       }),
     ).toBeDefined();
     const verb = screen.getByRole<HTMLButtonElement>("button", {
