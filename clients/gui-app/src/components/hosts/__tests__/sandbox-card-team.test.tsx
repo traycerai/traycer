@@ -391,6 +391,13 @@ describe("<SandboxCard /> team cost view", () => {
     },
   );
 
+  it("says Not billing for a frozen team sandbox, which has no ledger rate", () => {
+    renderCard(sandboxOf("suspended", true, {}), true);
+
+    expect(screen.getAllByText("Not billing")).toHaveLength(1);
+    expect(screen.queryByText("under $0.01 an hour")).toBeNull();
+  });
+
   it("mounts no cost view on a team card, and the personal view on a personal one", () => {
     mocks.costs = {
       sandboxes: [COST],

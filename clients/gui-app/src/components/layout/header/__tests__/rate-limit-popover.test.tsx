@@ -2072,9 +2072,11 @@ describe("<RateLimitPopover /> rail", () => {
     expect(classTokens(label)).toContain("wrap-anywhere");
     expect(classTokens(label)).not.toContain("truncate");
     expect(label.closest(".truncate")).toBeNull();
-    expect(
-      screen.getByText("Professional plan 5x").getAttribute("data-wrap"),
-    ).toBe("");
+    const plan = screen.getByText("Professional plan 5x");
+    expect(plan.getAttribute("data-wrap")).toBe("");
+    // A fixed height on a wrapping badge clips its second line.
+    expect(classTokens(plan)).toContain("h-auto");
+    expect(classTokens(plan)).not.toContain("h-5");
   });
 
   it("keeps an unauthenticated ambient row with cached lastGood data visible without a refresh action", () => {

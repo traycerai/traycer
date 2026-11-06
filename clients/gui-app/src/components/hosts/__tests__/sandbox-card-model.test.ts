@@ -390,33 +390,53 @@ describe("sandboxWithdrawalLine", () => {
 describe("sandboxIdleLine", () => {
   it("states the release rule for an Automations row on its idle period, files kept", () => {
     expect(
-      sandboxIdleLine(summaryOf({ kind: "automation", idleMinutes: 30 })),
+      sandboxIdleLine(
+        summaryOf({ kind: "automation", idleMinutes: 30 }),
+        "awake",
+      ),
     ).toBe("Stops after 30 min idle · files kept · the next shell starts it");
   });
 
+  it("keeps only the period for a released Automations row, whose state line says the rest", () => {
+    expect(
+      sandboxIdleLine(
+        summaryOf({ kind: "automation", idleMinutes: 30 }),
+        "released",
+      ),
+    ).toBe("Stops after 30 min idle");
+  });
+
   it("says Suspends for a normal row and Destroyed for a burst row", () => {
-    expect(sandboxIdleLine(summaryOf({ burst: false, idleMinutes: 30 }))).toBe(
-      "Suspends after 30 min idle",
-    );
-    expect(sandboxIdleLine(summaryOf({ burst: true, idleMinutes: 30 }))).toBe(
-      "Destroyed after 30 min idle",
-    );
+    expect(
+      sandboxIdleLine(summaryOf({ burst: false, idleMinutes: 30 }), "awake"),
+    ).toBe("Suspends after 30 min idle");
+    expect(
+      sandboxIdleLine(summaryOf({ burst: true, idleMinutes: 30 }), "awake"),
+    ).toBe("Destroyed after 30 min idle");
   });
 
   it("takes the 30-minute default when the row sets no idle period", () => {
-    expect(sandboxIdleLine(summaryOf({ idleMinutes: null }))).toBe(
+    expect(sandboxIdleLine(summaryOf({ idleMinutes: null }), "awake")).toBe(
       "Suspends after 30 min idle",
     );
-    expect(sandboxIdleLine(summaryOf({ burst: true, idleMinutes: null }))).toBe(
-      "Destroyed after 30 min idle",
-    );
+    expect(
+      sandboxIdleLine(summaryOf({ burst: true, idleMinutes: null }), "awake"),
+    ).toBe("Destroyed after 30 min idle");
   });
 
   it("words an hour boundary, a whole number of hours and a fractional one", () => {
-    expect(sandboxIdleLine(summaryOf({ idleMinutes: 59 }))).toContain("59 min");
-    expect(sandboxIdleLine(summaryOf({ idleMinutes: 60 }))).toContain("1 h");
-    expect(sandboxIdleLine(summaryOf({ idleMinutes: 120 }))).toContain("2 h");
-    expect(sandboxIdleLine(summaryOf({ idleMinutes: 90 }))).toContain("1.5 h");
+    expect(sandboxIdleLine(summaryOf({ idleMinutes: 59 }), "awake")).toContain(
+      "59 min",
+    );
+    expect(sandboxIdleLine(summaryOf({ idleMinutes: 60 }), "awake")).toContain(
+      "1 h",
+    );
+    expect(sandboxIdleLine(summaryOf({ idleMinutes: 120 }), "awake")).toContain(
+      "2 h",
+    );
+    expect(sandboxIdleLine(summaryOf({ idleMinutes: 90 }), "awake")).toContain(
+      "1.5 h",
+    );
   });
 });
 

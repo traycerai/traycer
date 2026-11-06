@@ -397,11 +397,18 @@ function formatMinutes(minutes: number): string {
  * The idle rule as the card states it. A burst sandbox is destroyed, not
  * suspended, once idle for its period; the Automations
  * row is released, its files kept, once no shell has run for its period.
+ * Once released, the state line already says the files are kept and the next
+ * shell starts it, so the rule keeps only its period.
  */
-export function sandboxIdleLine(summary: SandboxSummary): string {
+export function sandboxIdleLine(
+  summary: SandboxSummary,
+  state: HostSandboxState | null,
+): string {
   const minutes = summary.idleMinutes ?? SANDBOX_DEFAULT_IDLE_MINUTES;
   if (summary.kind === "automation") {
-    return `Stops after ${formatMinutes(minutes)} idle · files kept · the next shell starts it`;
+    return state === "released"
+      ? `Stops after ${formatMinutes(minutes)} idle`
+      : `Stops after ${formatMinutes(minutes)} idle · files kept · the next shell starts it`;
   }
   return summary.burst
     ? `Destroyed after ${formatMinutes(minutes)} idle`

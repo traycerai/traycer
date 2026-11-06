@@ -154,24 +154,36 @@ export function SandboxCard(props: {
 export function SandboxHeaderCost(props: {
   readonly sandbox: HostScopeSandbox;
 }): ReactNode {
-  const { summary, state, teamOwned } = props.sandbox;
+  const { summary, state, frozen, teamOwned } = props.sandbox;
   if (summary === null) return null;
   return teamOwned ? (
-    <SandboxHeaderRate summary={summary} state={state} cost={null} />
+    <SandboxHeaderRate
+      summary={summary}
+      state={state}
+      frozen={frozen}
+      cost={null}
+    />
   ) : (
-    <SandboxPersonalHeaderCost summary={summary} state={state} />
+    <SandboxPersonalHeaderCost
+      summary={summary}
+      state={state}
+      frozen={frozen}
+    />
   );
 }
 
 function SandboxHeaderRate(props: {
   readonly summary: SandboxSummary;
   readonly state: HostSandboxState | null;
+  readonly frozen: boolean;
   readonly cost: SandboxCost | null;
 }): ReactNode {
   return (
     <>
       <span aria-hidden>·</span>
-      <span>{formatHeaderRate(props.summary, props.state, props.cost)}</span>
+      <span>
+        {formatHeaderRate(props.summary, props.state, props.frozen, props.cost)}
+      </span>
     </>
   );
 }
@@ -179,6 +191,7 @@ function SandboxHeaderRate(props: {
 function formatHeaderRate(
   summary: SandboxSummary,
   state: HostSandboxState | null,
+  frozen: boolean,
   cost: SandboxCost | null,
 ): string {
   if (summary.kind === "automation") return "Free";
@@ -186,6 +199,9 @@ function formatHeaderRate(
     return cost.currentRateMillicreditsPerHour === 0
       ? "Not billing"
       : hourlyRate(cost.currentRateMillicreditsPerHour);
+  // Without a ledger (a team's sandbox, or a personal ledger not read yet), a
+  // frozen sandbox still accrues nothing: the list price is not its rate.
+  if (frozen) return "Not billing";
   const price = summary.priceMcPerHour;
   if (price === null) return "Not priced here";
   if (state === "suspended") return hourlyRate(price.suspendedMc);
@@ -196,6 +212,7 @@ function formatHeaderRate(
 function SandboxPersonalHeaderCost(props: {
   readonly summary: SandboxSummary;
   readonly state: HostSandboxState | null;
+  readonly frozen: boolean;
 }): ReactNode {
   useRefreshSandboxCosts();
   const costs = useSandboxCosts();
@@ -208,6 +225,7 @@ function SandboxPersonalHeaderCost(props: {
       <SandboxHeaderRate
         summary={props.summary}
         state={props.state}
+        frozen={props.frozen}
         cost={cost}
       />
       {cost === null ? null : (
@@ -375,7 +393,7 @@ function SandboxFacts(props: {
       <SandboxOtherRate summary={summary} state={props.state} />
       <dt className="text-muted-foreground">Idle policy</dt>
       <dd className="min-w-0 wrap-anywhere" data-testid="sandbox-card-idle">
-        {sandboxIdleLine(summary)}
+        {sandboxIdleLine(summary, props.state)}
         {keeps === null || summary.burst ? null : ` · ${keeps}`}
       </dd>
       <dt className="text-muted-foreground">Last active</dt>
