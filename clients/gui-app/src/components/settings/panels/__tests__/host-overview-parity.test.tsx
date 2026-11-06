@@ -460,7 +460,7 @@ describe("<HostSettingsPanel /> Overview local/remote parity", () => {
     );
 
     // The Installation tab's shared half is INSIDE that equality, not beside
-    // it: About this host (the date and last seen), Details (platform,
+    // it: About this host (the date and unseen line), Details (platform,
     // architecture, the running version, the registry version, and the host
     // id), the unmanaged install line, and the OS service group. Pinned on
     // `local` — `remote` equals it — so the comparison cannot pass by both
@@ -471,7 +471,6 @@ describe("<HostSettingsPanel /> Overview local/remote parity", () => {
       expect.arrayContaining([
         "host-overview-about",
         "host-overview-about-added",
-        "host-overview-about-last-seen",
         "host-overview-installation-details",
         "host-overview-about-host-id",
         "host-overview-about-version",

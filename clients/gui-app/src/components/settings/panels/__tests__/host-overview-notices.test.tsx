@@ -253,34 +253,18 @@ describe("inFlightUpdateKind", () => {
 });
 
 describe("describeHostOfflineNotice", () => {
-  it("states the last-seen half and the phase clause together, exactly as describeLastSeenUpdateClause states the clause", () => {
+  it("states the retained phase as last contact, exactly as describeLastSeenUpdateClause states the clause", () => {
     const downloadingView = view("downloading", { targetVersion: "2.1.0" });
     const clause = describeLastSeenUpdateClause(downloadingView);
     expect(clause).not.toBeNull();
     expect(
       describeHostOfflineNotice({
         hostName: "host-a",
-        lastSeen: "last seen 3h ago",
         view: downloadingView,
         accountKnowsHost: true,
       }),
     ).toBe(
-      `Can't reach host-a — last seen 3h ago, ${clause}. Auto-update settings still apply at its next check-in; everything else here needs a connection.`,
-    );
-  });
-
-  it("drops the last-seen half when the account holds no check-in, keeping only the clause", () => {
-    const downloadingView = view("downloading", { targetVersion: "2.1.0" });
-    const clause = describeLastSeenUpdateClause(downloadingView);
-    expect(
-      describeHostOfflineNotice({
-        hostName: "host-a",
-        lastSeen: null,
-        view: downloadingView,
-        accountKnowsHost: true,
-      }),
-    ).toBe(
-      `Can't reach host-a — last seen ${clause}. Auto-update settings still apply at its next check-in; everything else here needs a connection.`,
+      `Can't reach host-a — last contact was ${clause}. Auto-update settings still apply at its next check-in; everything else here needs a connection.`,
     );
   });
 
@@ -288,22 +272,20 @@ describe("describeHostOfflineNotice", () => {
     expect(
       describeHostOfflineNotice({
         hostName: "host-a",
-        lastSeen: "last seen 3h ago",
         view: view("complete", {}),
         accountKnowsHost: true,
       }),
     ).toBe(
-      "Can't reach host-a — last seen 3h ago. Auto-update settings still apply at its next check-in; everything else here needs a connection.",
+      "Can't reach host-a. Auto-update settings still apply at its next check-in; everything else here needs a connection.",
     );
     expect(
       describeHostOfflineNotice({
         hostName: "host-a",
-        lastSeen: "last seen 3h ago",
         view: null,
         accountKnowsHost: true,
       }),
     ).toBe(
-      "Can't reach host-a — last seen 3h ago. Auto-update settings still apply at its next check-in; everything else here needs a connection.",
+      "Can't reach host-a. Auto-update settings still apply at its next check-in; everything else here needs a connection.",
     );
   });
 
@@ -311,7 +293,6 @@ describe("describeHostOfflineNotice", () => {
     expect(
       describeHostOfflineNotice({
         hostName: "host-a",
-        lastSeen: null,
         view: null,
         accountKnowsHost: false,
       }),

@@ -402,6 +402,9 @@ describe("<DiagnosticsSettingsPanel />", () => {
     expect(await screen.findByTestId("settings-log-level-host")).toBeTruthy();
     expect(screen.getByText("CLI log level")).toBeTruthy();
     expect(screen.getByText("Host log level")).toBeTruthy();
+    expect(
+      screen.getAllByText(/Applies to every Traycer host on this computer\./),
+    ).toHaveLength(1);
   });
 
   it("hides the non-default reminder when all levels are Info", async () => {

@@ -119,35 +119,9 @@ describe("deriveAboutThisHost", () => {
     expect(view.addedToAccount).toBe("24 Oct");
   });
 
-  // The fixture's record is `connectable`, so this also pins that the cloud's
-  // lease reading does not word the row: a lease read up to its TTL old is not
-  // evidence of a check-in, and the row has one wording.
-  it("words a stale lastSeenAt on the given clock, capitalised", () => {
-    const view = deriveAboutThisHost(about("2026-09-24T09:00:00Z", {}));
-    expect(view.unseenLine).toBeNull();
-    expect(view.lastSeenLine).toBe("Last seen · 3h ago");
-  });
-
-  it("says 'Just now' for a stamp inside the header's 45s window", () => {
-    const view = deriveAboutThisHost(about("2026-09-24T11:59:30Z", {}));
-    expect(view.lastSeenLine).toBe("Last seen · Just now");
-  });
-
-  it("treats a stamp in the future as no time elapsed rather than a negative age", () => {
-    const view = deriveAboutThisHost(about("2026-09-24T12:05:00Z", {}));
-    expect(view.lastSeenLine).toBe("Last seen · Just now");
-  });
-
   it("collapses a host that never checked in to one line", () => {
     const view = deriveAboutThisHost(about(null, {}));
     expect(view.unseenLine).toBe("Not seen since it was added");
-    expect(view.lastSeenLine).toBeNull();
-  });
-
-  it("says 'Unknown' for an unparsable lastSeenAt", () => {
-    const view = deriveAboutThisHost(about("not-a-date", {}));
-    expect(view.unseenLine).toBeNull();
-    expect(view.lastSeenLine).toBe("Last seen · Unknown");
   });
 
   it("shows an unparsable createdAt as it came", () => {

@@ -486,8 +486,9 @@ describe("Overview ▸ Installation — About this host", () => {
     expect((await screen.findByRole("tooltip")).textContent).toBe(HOST_ID);
   });
 
-  it("words lastSeenAt on the scope's clock even while the header's live evidence holds", async () => {
-    setReadyScope({
+  it("shows offline last-seen time only in the header, not About or the notice", async () => {
+    setRoutelessScope({
+      status: "unreachable",
       isLocalMachine: false,
       item: registryItem({
         status: {
@@ -495,20 +496,37 @@ describe("Overview ▸ Installation — About this host", () => {
           lastSeenAt: new Date(NOW_MS - THREE_HOURS_MS).toISOString(),
         },
       }),
-      // The header's live dot, which a running local process lights whatever
-      // the relay uplink is doing. This row must not follow it: it read
-      // "Online now" here, claiming a check-in the account had not received.
-      live: true,
-      fixture: fixtureFor(false, undefined, undefined),
-      methods: [...OVERVIEW_METHODS, ...SERVICE_METHODS],
     });
+    const host = scopeOverrides.current.host;
+    if (typeof host !== "object" || host === null) {
+      throw new Error("expected the selected host fixture");
+    }
+    scopeOverrides.current = {
+      ...scopeOverrides.current,
+      host: {
+        ...host,
+        health: {
+          state: "offline",
+          label: "Offline",
+          detail: "last seen 3h ago",
+          tone: "idle",
+          live: false,
+        },
+      },
+    };
     mount(null);
     await selectHostOverviewTab("installation");
 
-    const lastSeen = screen.getByTestId("host-overview-about-last-seen");
-    expect(lastSeen.textContent).toBe("Last seen · 3h ago");
-    // The green fill carried the same claim as the wording.
-    expect(lastSeen.className).not.toContain("text-success-foreground");
+    expect(screen.getByTestId("host-identity-health").textContent).toBe(
+      "Offline",
+    );
+    expect(screen.getAllByText(/last seen/i)).toHaveLength(1);
+    const about = within(installationPane()).getByTestId("host-overview-about");
+    expect(
+      within(about).queryByTestId("host-overview-about-last-seen"),
+    ).toBeNull();
+    const notices = screen.getByTestId("host-overview-notices");
+    expect(within(notices).queryByText(/last seen/i)).toBeNull();
     expect(screen.getByTestId("host-overview-about-platform").textContent).toBe(
       "macOS · last account report, 3h ago",
     );
@@ -834,10 +852,14 @@ describe("Overview ▸ Installation — OS service group", () => {
     expect(service.textContent).toContain("OS service");
     await waitFor(() => {
       expect(
-        within(service).getByTestId("host-overview-service-manifest")
-          .textContent,
+        within(openInstallationDetails()).getByTestId(
+          "host-overview-service-manifest",
+        ).textContent,
       ).toBe("ai.traycer.host · /tmp/ai.traycer.host.plist");
     });
+    expect(
+      within(service).queryByTestId("host-overview-service-manifest"),
+    ).toBeNull();
     expect(
       within(service).getByTestId("host-overview-service-description")
         .textContent,
@@ -875,6 +897,11 @@ describe("Overview ▸ Installation — OS service group", () => {
     ).toBeNull();
     expect(
       within(service).queryByTestId("host-overview-service-deregister"),
+    ).toBeNull();
+    expect(
+      within(installationDetails()).queryByTestId(
+        "host-overview-service-manifest",
+      ),
     ).toBeNull();
   });
 });

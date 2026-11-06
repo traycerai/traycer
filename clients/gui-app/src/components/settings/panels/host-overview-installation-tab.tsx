@@ -106,7 +106,14 @@ export function HostOverviewInstallationTab(
           runningVersion={props.runningVersion}
         />
       ) : null}
-      <InstallationDetails rows={detailRows} />
+      <InstallationDetails
+        rows={detailRows}
+        serviceManifestLine={
+          live && props.service?.degrade === null
+            ? props.service.manifestLine
+            : null
+        }
+      />
       <HostOverviewInstallationHostGroups {...props} />
       {/* A bridge fact about THIS computer's CLI, not a host read, so it
           stays while the host is down. */}
@@ -166,8 +173,10 @@ function HostOverviewInstallStatus(props: {
 
 function InstallationDetails(props: {
   readonly rows: readonly InstallationDetailRow[];
+  readonly serviceManifestLine: string | null;
 }): ReactNode {
-  if (props.rows.length === 0) return null;
+  if (props.rows.length === 0 && props.serviceManifestLine === null)
+    return null;
   return (
     <details
       className="min-w-0"
@@ -180,6 +189,16 @@ function InstallationDetails(props: {
         {props.rows.map((row) => (
           <InstallationFact key={row.testId} row={row} />
         ))}
+        {props.serviceManifestLine === null ? null : (
+          <HostOverviewFact
+            label="OS service"
+            value={props.serviceManifestLine}
+            kind="code"
+            tone="default"
+            copy={null}
+            testId="host-overview-service-manifest"
+          />
+        )}
       </dl>
     </details>
   );
