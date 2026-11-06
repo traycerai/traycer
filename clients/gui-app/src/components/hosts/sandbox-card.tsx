@@ -409,7 +409,7 @@ function SandboxOtherRate(props: {
   return (
     <>
       <dt className="text-muted-foreground">
-        {resting ? "Awake rate" : "Resting rate"}
+        {resting ? "Awake rate" : "Storage rate"}
       </dt>
       <dd data-testid="sandbox-card-other-rate">{hourlyRate(rate)}</dd>
     </>
