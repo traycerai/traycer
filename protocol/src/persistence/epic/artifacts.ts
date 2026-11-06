@@ -303,6 +303,42 @@ export const ARTIFACT_BODY_FRAGMENT_PREFIX = "artifact-body:";
  */
 export const ARTIFACT_ARTIFACT_ROOM_FIELD = "artifactRoomId";
 
+/**
+ * The epic's markdown body epoch: a number on the epic root map (the map that
+ * holds `artifacts`), written by the host that migrates the epic's markdown
+ * bodies off their shared artifact rooms, in the same transaction as the
+ * first artifact it switches, and only ever raised. Only 1 is defined: two
+ * hosts writing the same value converge, while two different values written
+ * at once would settle by Yjs client order, so a later epoch needs its own
+ * rule for that.
+ *
+ * - Absent or 0: every markdown artifact's body is its room's fragment.
+ * - {@link MARKDOWN_BODY_EPOCH_HEADS} (1): a markdown artifact whose entry
+ *   names a markdown head (`head`) has its body on the revision chain; its
+ *   room fragment is no longer its body. A host at this epoch reads and
+ *   writes such a body through the head and creates new markdown artifacts
+ *   with no room. An artifact whose entry names no head still lives in its
+ *   room. A host older than the epoch does not read this field and keeps
+ *   using the room.
+ *
+ * The cutoff rule, at epoch 1 and later: a client's write into an artifact
+ * room that touches the body fragment of an artifact whose entry names a
+ * markdown head is refused by the host at the point it would be applied, and
+ * the client is told so, never answered as saved. `artifact.subscribe`
+ * answers it `unavailable` with code `bodyMoved` (from minor 2; terminal
+ * `bodyUnavailable` below), `epic.subscribe` with `artifactRoomState`
+ * `unavailable`, reason `bodyMoved` (from minor 7; the state alone below).
+ * Bytes another host's room write brings through the cloud are kept, since
+ * a room cannot refuse part of its log, and every reader at the epoch
+ * ignores such a fragment.
+ */
+export const MARKDOWN_BODY_EPOCH_FIELD = "markdownBodyEpoch";
+/** The epoch at which a markdown entry's head is its body's authority. */
+export const MARKDOWN_BODY_EPOCH_HEADS = 1;
+export const markdownBodyEpochSchema = lazySchema(() =>
+  z.number().int().nonnegative(),
+);
+
 /** Y.Map field names for the nested manifest and each path's upload status. */
 export const ARTIFACT_HEAD_FIELD = "head";
 export const ARTIFACT_HEAD_FILES_FIELD = "files";

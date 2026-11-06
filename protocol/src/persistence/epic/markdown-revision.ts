@@ -54,12 +54,19 @@ export const markdownRevisionHashSchema = lazySchema(() =>
     .regex(/^[0-9a-f]{64}$/u, "Expected a lowercase hex sha256 revision hash"),
 );
 
-/** Who wrote the revision. A merge is attributed to the host's merging actor. */
+/**
+ * Who wrote the revision. A merge is attributed to the host's merging actor.
+ * `migration` is a body the host extracted from the artifact's old shared
+ * room when the artifact's body moved onto the revision chain: the first
+ * revision of every artifact that had a room, with no parent, and any
+ * re-extraction the migration publishes on top of it after the room moved.
+ */
 export const markdownRevisionAuthorSchema = lazySchema(() =>
   z.discriminatedUnion("kind", [
     z.object({ kind: z.literal("person"), userId: z.string().min(1) }).strict(),
     z.object({ kind: z.literal("agent"), chatId: z.string().min(1) }).strict(),
     z.object({ kind: z.literal("system") }).strict(),
+    z.object({ kind: z.literal("migration") }).strict(),
   ]),
 );
 export type MarkdownRevisionAuthor = z.infer<
@@ -119,6 +126,13 @@ export const markdownRevisionManifestSchema = lazySchema(() =>
         ctx.addIssue({
           code: "custom",
           message: "a merge revision has a parent",
+          path: ["merge"],
+        });
+      }
+      if (manifest.author.kind === "migration" && manifest.merge !== null) {
+        ctx.addIssue({
+          code: "custom",
+          message: "a migration revision is never a merge",
           path: ["merge"],
         });
       }
