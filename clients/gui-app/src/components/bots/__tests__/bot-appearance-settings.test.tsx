@@ -298,7 +298,15 @@ describe("<BotAppearanceSettings />", () => {
       release = resolve;
     });
     const user = userEvent.setup();
-    mount(BARE);
+    const stored = creatureSheet(BOT_ID)[1];
+    mount({
+      ...BARE,
+      mark: { kind: "creature", family: stored.family, seed: stored.seed },
+    });
+    const useDefault = screen.getByTestId<HTMLButtonElement>(
+      "bot-settings-icon-default",
+    );
+    expect(useDefault.disabled).toBe(false);
 
     await user.upload(
       screen.getByTestId("bot-settings-icon-file"),
@@ -312,14 +320,12 @@ describe("<BotAppearanceSettings />", () => {
       expect(mocks.blobWrites).toHaveLength(1);
     });
     expect(creature.disabled).toBe(true);
-    expect(
-      screen.getByTestId<HTMLButtonElement>("bot-settings-icon-default")
-        .disabled,
-    ).toBe(true);
+    expect(useDefault.disabled).toBe(true);
     expect(
       screen.getByTestId<HTMLButtonElement>("bot-settings-colour-1").disabled,
     ).toBe(false);
     await user.click(creature);
+    await user.click(useDefault);
     expect(mocks.appearanceWrites).toEqual([]);
 
     release();
@@ -332,6 +338,7 @@ describe("<BotAppearanceSettings />", () => {
     await waitFor(() => {
       expect(creature.disabled).toBe(false);
     });
+    expect(useDefault.disabled).toBe(false);
   });
 
   it("names no picture when the host refuses its bytes, and says so", async () => {

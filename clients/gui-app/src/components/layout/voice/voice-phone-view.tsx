@@ -108,7 +108,6 @@ export function VoicePhoneView(): ReactNode {
                 <CallDial
                   preselected={state.dial}
                   preselectedTitle={botTitle}
-                  onDialed={() => undefined}
                 />
               </div>
             </>
@@ -424,9 +423,8 @@ function talkLine(
 function CallDial(props: {
   readonly preselected: CallTarget;
   readonly preselectedTitle: string;
-  readonly onDialed: () => void;
 }): ReactNode {
-  const { preselected, preselectedTitle, onDialed } = props;
+  const { preselected, preselectedTitle } = props;
   const surfaceHostId = useTracySurfaceStore((state) =>
     state.open ? state.hostId : null,
   );
@@ -486,7 +484,6 @@ function CallDial(props: {
             threadId:
               selected === preselected.botId ? preselected.threadId : null,
           });
-          onDialed();
         }}
       >
         <Phone aria-hidden="true" />

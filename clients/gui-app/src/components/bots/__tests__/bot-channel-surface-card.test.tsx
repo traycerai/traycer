@@ -1013,7 +1013,7 @@ describe("<BotChannelView tiles={null} /> a post's surface card: Open", () => {
       surfaceActions: null,
     });
 
-    await user.click(screen.getByRole("link", { name: "the plan" }));
+    await user.click(screen.getByRole("button", { name: "the plan" }));
 
     await vi.waitFor(() => expect(mocks.navigate).toHaveBeenCalled());
     expect(mocks.resolveArtifact).toHaveBeenCalledWith(

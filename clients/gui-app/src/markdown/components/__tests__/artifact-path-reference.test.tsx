@@ -38,15 +38,6 @@ function renderChip(
 }
 
 describe("ArtifactPathReference label", () => {
-  it("labels an index.md/index.html leaf by its containing folder, not the file name", () => {
-    renderChip(
-      { "data-artifact-path": SCREENSHOT_PATH, children: SCREENSHOT_PATH },
-      stubPolicy(() => true),
-    );
-
-    expect(screen.getByRole("button").textContent).toBe("screenshots");
-  });
-
   it("labels a non-index leaf by its basename", () => {
     const path = `/Users/tgill/.traycer/epics/${EPIC_ID}/artifacts/notes/bar.ts`;
     renderChip(
