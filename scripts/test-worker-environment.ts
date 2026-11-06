@@ -14,6 +14,10 @@ const allowed = new Set([
   "WINDIR", // Windows system executable directory fallback.
   "COMSPEC", // Windows command interpreter used by shell/process tests.
   "PATHEXT", // Windows command extension resolution used by executable discovery.
+  // Runner image warms this cache; PowerShell reads it during command discovery.
+  // https://github.com/actions/runner-images/blob/main/images/windows/scripts/build/Configure-PowerShell.ps1
+  // https://learn.microsoft.com/en-us/powershell/module/microsoft.powershell.core/about/about_environment_variables
+  "PSMODULEANALYSISCACHEPATH", // reuse the Windows PowerShell startup cache for bounded real-child probes.
   "CI", // suite concurrency/integration timeout behavior explicitly tested/read in source.
   "NODE_ENV", // Vitest/React test behavior; overwrite to literal `test`, never preserve production mode.
   "VITEST", // production's test-only gating and Vitest worker identity.
