@@ -217,10 +217,10 @@ export function sandboxCreatorLine(
 }
 
 /**
- * Whose bundle the running wake of a team sandbox is charged to, while it is
+ * Who pays for the running wake of a team sandbox, while it is
  * awake; `null` asleep, frozen, or when the server names no payer.
  */
-export function sandboxWakePayerLine(
+export function sandboxWakePayerName(
   state: HostSandboxState | null,
   frozen: boolean,
   summary: SandboxSummary,
@@ -228,7 +228,9 @@ export function sandboxWakePayerLine(
 ): string | null {
   const payer = summary.wakePayer;
   if (state !== "awake" || frozen || payer === null) return null;
-  return `This wake is on ${memberWords(payer, viewerUserId, PAYER_WORDS)} bundle`;
+  return viewerUserId !== null && payer.userId === viewerUserId
+    ? "You"
+    : (payer.displayName ?? "A team member");
 }
 
 /** A frozen team sandbox: the paying member's bundle ran out. */
@@ -300,12 +302,6 @@ const CREATOR_WORDS: MemberWords = {
   viewer: "you",
   named: (displayName) => displayName,
   unnamed: "a team member",
-};
-
-const PAYER_WORDS: MemberWords = {
-  viewer: "your",
-  named: (displayName) => `${displayName}'s`,
-  unnamed: "a team member's",
 };
 
 function memberWords(

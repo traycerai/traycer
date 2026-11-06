@@ -4,7 +4,7 @@ import {
   sandboxCreatorLine,
   sandboxPodRoomLine,
   sandboxTeamFrozenLine,
-  sandboxWakePayerLine,
+  sandboxWakePayerName,
 } from "@/components/hosts/sandbox-card-model";
 import { sandboxSummaryFixture } from "@/hooks/sandboxes/__tests__/sandbox-fixtures";
 
@@ -71,7 +71,7 @@ describe("sandboxCreatorLine", () => {
   });
 });
 
-describe("sandboxWakePayerLine", () => {
+describe("sandboxWakePayerName", () => {
   const payerIsViewer = sandboxSummaryFixture({
     wakePayer: { userId: VIEWER, displayName: "Vera Viewer" },
   });
@@ -82,41 +82,41 @@ describe("sandboxWakePayerLine", () => {
     wakePayer: { userId: "user-ada", displayName: null },
   });
 
-  it("says the wake is on the viewer's bundle", () => {
-    expect(sandboxWakePayerLine("awake", false, payerIsViewer, VIEWER)).toBe(
-      "This wake is on your bundle",
+  it("names the viewer as You", () => {
+    expect(sandboxWakePayerName("awake", false, payerIsViewer, VIEWER)).toBe(
+      "You",
     );
   });
 
-  it("names another member's bundle", () => {
-    expect(sandboxWakePayerLine("awake", false, payerIsAda, VIEWER)).toBe(
-      "This wake is on Ada Lovelace's bundle",
+  it("names another member without possessive wording", () => {
+    expect(sandboxWakePayerName("awake", false, payerIsAda, VIEWER)).toBe(
+      "Ada Lovelace",
     );
   });
 
-  it("says 'a team member's bundle' when the payer has no display name", () => {
-    expect(sandboxWakePayerLine("awake", false, payerHasNoName, VIEWER)).toBe(
-      "This wake is on a team member's bundle",
+  it("uses a neutral name when the payer has no display name", () => {
+    expect(sandboxWakePayerName("awake", false, payerHasNoName, VIEWER)).toBe(
+      "A team member",
     );
   });
 
   it("is silent unless the sandbox is awake", () => {
     expect(
-      sandboxWakePayerLine("suspended", false, payerIsAda, VIEWER),
+      sandboxWakePayerName("suspended", false, payerIsAda, VIEWER),
     ).toBeNull();
     expect(
-      sandboxWakePayerLine("resuming", false, payerIsAda, VIEWER),
+      sandboxWakePayerName("resuming", false, payerIsAda, VIEWER),
     ).toBeNull();
-    expect(sandboxWakePayerLine(null, false, payerIsAda, VIEWER)).toBeNull();
+    expect(sandboxWakePayerName(null, false, payerIsAda, VIEWER)).toBeNull();
   });
 
   it("is silent on a frozen sandbox", () => {
-    expect(sandboxWakePayerLine("awake", true, payerIsAda, VIEWER)).toBeNull();
+    expect(sandboxWakePayerName("awake", true, payerIsAda, VIEWER)).toBeNull();
   });
 
   it("is silent when nobody is recorded as paying", () => {
     expect(
-      sandboxWakePayerLine(
+      sandboxWakePayerName(
         "awake",
         false,
         sandboxSummaryFixture({ wakePayer: null }),

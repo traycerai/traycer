@@ -29,7 +29,7 @@ import {
   sandboxHeaderNeedsRepair,
   sandboxHeaderFailureLine,
   sandboxSuspendKeepsLine,
-  sandboxWakePayerLine,
+  sandboxWakePayerName,
   sandboxWithdrawalLine,
   type SandboxCardAction,
   type SandboxSecretsReadiness,
@@ -432,14 +432,12 @@ function SandboxProvenance(props: {
       ) ?? null)
     : null;
   const payer = props.teamOwned
-    ? (sandboxWakePayerLine(
+    ? sandboxWakePayerName(
         props.state,
         props.frozen,
         summary,
         props.viewerUserId,
       )
-        ?.replace(/^This wake is on /, "")
-        .replace(/ bundle$/, "") ?? null)
     : null;
   return (
     <>

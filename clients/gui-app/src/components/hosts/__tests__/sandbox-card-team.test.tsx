@@ -283,7 +283,7 @@ describe("<SandboxCard /> team creator and wake payer", () => {
       true,
     );
     expect(text("sandbox-card-creator")).toBe("you");
-    expect(text("sandbox-card-wake-payer")).toBe("your");
+    expect(text("sandbox-card-wake-payer")).toBe("You");
   });
 
   it("names another member by their display name", () => {
@@ -295,7 +295,7 @@ describe("<SandboxCard /> team creator and wake payer", () => {
       true,
     );
     expect(text("sandbox-card-creator")).toBe("Ada Lovelace");
-    expect(text("sandbox-card-wake-payer")).toBe("Grace Hopper's");
+    expect(text("sandbox-card-wake-payer")).toBe("Grace Hopper");
   });
 
   it("shows the creator but no payer line while the team sandbox is asleep", () => {

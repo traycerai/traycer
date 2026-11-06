@@ -46,9 +46,9 @@ export function HostIdentityCard(props: {
           <HostGlyph host={host} className="size-4.5" />
         </span>
         <div className="min-w-0 flex-1">
-          <div className="flex min-w-0 flex-wrap items-start justify-between gap-2">
+          <div className="flex min-w-0 flex-col items-start gap-2 sm:flex-row sm:flex-wrap sm:justify-between">
             <div
-              className="flex min-w-0 flex-1 flex-wrap items-center gap-x-2 gap-y-1"
+              className="flex min-w-0 w-full flex-1 items-start gap-x-2 gap-y-1 sm:w-auto sm:flex-wrap sm:items-center"
               data-testid="host-identity-name-row"
             >
               {props.nameInput === null ? (
