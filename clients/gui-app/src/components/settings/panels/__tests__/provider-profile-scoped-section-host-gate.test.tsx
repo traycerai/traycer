@@ -1,6 +1,7 @@
 import type { ProviderCliState } from "@traycer/protocol/host/provider-schemas";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { useSettingsEnvironmentPickStore } from "@/stores/settings/settings-environment-pick-store";
 import { TooltipProvider } from "@/components/ui/tooltip";
@@ -196,14 +197,21 @@ function renderSection(
  * it and to `state.enabled`, not the gate function itself (covered in
  * `provider-signin-availability.test.ts`).
  */
+async function openMore(label: string): Promise<void> {
+  await userEvent.click(
+    screen.getByRole("button", { name: `More for ${label}` }),
+  );
+}
+
 describe("<ProviderProfileScopedSection /> host gate", () => {
   afterEach(() => {
     cleanup();
     useSettingsEnvironmentPickStore.setState({ pick: null });
   });
 
-  it("disables Manage profile with the disabled reason while the provider is off", () => {
+  it("disables Manage profile with the disabled reason while the provider is off", async () => {
     renderSection({ state: opencodeState({ enabled: false }) }, null);
+    await openMore("Work");
 
     const manageButton = screen.getByRole<HTMLButtonElement>("button", {
       name: "Manage profile",
@@ -214,8 +222,9 @@ describe("<ProviderProfileScopedSection /> host gate", () => {
     );
   });
 
-  it("keeps Manage profile enabled with no tooltip while the provider is on", () => {
+  it("keeps Manage profile enabled with no tooltip while the provider is on", async () => {
     renderSection({ state: opencodeState({ enabled: true }) }, null);
+    await openMore("Work");
 
     const manageButton = screen.getByRole<HTMLButtonElement>("button", {
       name: "Manage profile",
@@ -331,7 +340,7 @@ describe("<ProviderProfileScopedSection /> host gate", () => {
     expect(screen.queryByRole("button", { name: "CLI & Args" })).toBeNull();
   });
 
-  it("holds Sign in and Add a profile with the credential refusal as the reason, and offers no CLI & Args link, when the host takes no credentials", () => {
+  it("holds Sign in and Add a profile with the credential refusal as the reason, and offers no CLI & Args link, when the host takes no credentials", async () => {
     const REFUSAL = "Sandboxes don't take sign-ins";
     const profile = managedProfile();
     renderSection(
@@ -360,25 +369,26 @@ describe("<ProviderProfileScopedSection /> host gate", () => {
       null,
     );
 
-    const signIn = screen.getByRole<HTMLButtonElement>("button", {
-      name: "Sign in",
-    });
-    expect(signIn.disabled).toBe(true);
-    expect(tooltipTextNear(signIn)).toBe(REFUSAL);
     expect(
       screen.getByRole<HTMLButtonElement>("button", { name: "Add a profile" })
         .disabled,
     ).toBe(true);
-    expect(screen.getByText(REFUSAL)).toBeDefined();
     expect(screen.queryByRole("button", { name: "CLI & Args" })).toBeNull();
     expect(
       screen.queryByText("The OpenCode CLI is not installed on this host.", {
         exact: false,
       }),
     ).toBeNull();
+    await openMore("Work");
+    const signIn = screen.getByRole<HTMLButtonElement>("button", {
+      name: "Sign in",
+    });
+    expect(signIn.disabled).toBe(true);
+    expect(tooltipTextNear(signIn)).toBe(REFUSAL);
+    expect(screen.getByText(REFUSAL)).toBeDefined();
   });
 
-  it("names the terminal login after its host, with no Terminal badge and no manage or re-auth button, and its one verb starts a new sign-in", () => {
+  it("names the terminal login after its host, with no Terminal badge and no manage or re-auth button, and its one verb starts a new sign-in", async () => {
     const onAddProfile = vi.fn();
     renderSection(
       {
@@ -395,18 +405,20 @@ describe("<ProviderProfileScopedSection /> host gate", () => {
     ).toBeDefined();
     expect(screen.getByText("works on this computer only")).toBeDefined();
     expect(screen.queryByText("Terminal")).toBeNull();
-    expect(screen.queryByRole("button", { name: "Manage profile" })).toBeNull();
-    expect(screen.queryByRole("button", { name: "Sign in" })).toBeNull();
+    expect(screen.queryByText("Signed in")).toBeNull();
     expect(screen.queryByText("Email unavailable")).toBeNull();
     expect(screen.queryByRole("button", { name: /^Refresh/ })).toBeNull();
 
+    await openMore("OpenCode's own login on Studio");
+    expect(screen.queryByRole("button", { name: "Manage profile" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Sign in" })).toBeNull();
     fireEvent.click(
       screen.getByRole("button", { name: "Sign in to use everywhere" }),
     );
     expect(onAddProfile).toHaveBeenCalledTimes(1);
   });
 
-  it("omits the host name when unknown, and holds the sign-in verb with the credential refusal", () => {
+  it("omits the host name when unknown, and holds the sign-in verb with the credential refusal", async () => {
     renderSection(
       {
         canAddProfile: false,
@@ -421,6 +433,7 @@ describe("<ProviderProfileScopedSection /> host gate", () => {
         name: "OpenCode profile: OpenCode's own login",
       }),
     ).toBeDefined();
+    await openMore("OpenCode's own login");
     const verb = screen.getByRole<HTMLButtonElement>("button", {
       name: "Sign in to use everywhere",
     });

@@ -1644,34 +1644,110 @@ function expectPinnedRailLayout(): void {
 }
 
 /**
- * Provider rows currently in the rail, in rendered order. Scoped to the LIST
- * rather than the nav, which also holds the search row's filter button - and
- * returns `[]` for the filtered-empty rail, where no list is rendered at all.
+ * Both the desktop rail and the phone list are mounted, and both are named
+ * "Configured providers". jsdom does not apply the `md:` classes that hide
+ * one of them. The desktop nav is the one that holds the search control.
  */
-function railProviderNames(): readonly string[] {
-  const nav = screen.getByRole("navigation", { name: "Providers" });
-  const list = within(nav).queryByRole("list", { name: "Providers" });
-  if (list === null) return [];
-  return within(list)
-    .getAllByRole("button")
-    .map((button) => button.getAttribute("aria-label") ?? "");
+function desktopProviderNav(hidden: boolean): HTMLElement {
+  const navs = screen.getAllByRole("navigation", {
+    name: "Configured providers",
+    hidden,
+  });
+  const desktop = navs.find(
+    (nav) =>
+      within(nav).queryByRole("textbox", {
+        name: "Search providers",
+        hidden,
+      }) !== null,
+  );
+  if (desktop === undefined) {
+    throw new Error("desktop provider nav not found");
+  }
+  return desktop;
+}
+
+function phoneProviderNav(hidden: boolean): HTMLElement {
+  const navs = screen.getAllByRole("navigation", {
+    name: "Configured providers",
+    hidden,
+  });
+  const phone = navs.find(
+    (nav) =>
+      within(nav).queryByRole("textbox", {
+        name: "Search providers",
+        hidden,
+      }) === null,
+  );
+  if (phone === undefined) {
+    throw new Error("phone provider nav not found");
+  }
+  return phone;
+}
+
+function isRailChrome(button: HTMLElement): boolean {
+  const label = button.getAttribute("aria-label") ?? "";
+  if (label.startsWith("Filter providers")) return true;
+  if (label === "Clear provider search") return true;
+  return visibleButtonText(button) === "Add provider";
 }
 
 /**
- * The rail row for a provider, scoped to the rail LIST like
- * `railProviderNames` above - never bare `screen`. Below `md` the
- * always-mounted `ProvidersMobileSelect` renders one item per provider under
- * the SAME display name (jsdom applies no CSS, so `md:hidden` never actually
- * hides it there), so an unscoped `getByRole("button", { name })` collides
- * with that item the moment more than one provider is in the fixture.
- * `hidden` is threaded through explicitly rather than defaulted, since the
- * one caller behind a dialog's `hideOthers` needs it true and every other
- * caller needs it false.
+ * Name and subtitle are sibling elements, so `textContent` glues them
+ * together. Skip `aria-hidden` icons and join the remaining text the way the
+ * button's accessible name does.
+ */
+function visibleButtonText(button: HTMLElement): string {
+  const parts: string[] = [];
+  const walk = (node: Node): void => {
+    if (
+      node instanceof Element &&
+      node.getAttribute("aria-hidden") === "true"
+    ) {
+      return;
+    }
+    if (node.nodeType === Node.TEXT_NODE) {
+      const text = (node.textContent ?? "").replace(/\s+/g, " ").trim();
+      if (text.length > 0) parts.push(text);
+      return;
+    }
+    for (const child of node.childNodes) walk(child);
+  };
+  walk(button);
+  return parts.join(" ");
+}
+
+/**
+ * Provider rows currently in the desktop rail, in rendered order. The nav
+ * also holds search, filter, clear, and Add provider; those are not rows.
+ * Returns `[]` when the filtered rail has no provider buttons.
+ */
+function railProviderNames(): readonly string[] {
+  const buttons = within(desktopProviderNav(false)).queryAllByRole("button");
+  return buttons
+    .filter((button) => !isRailChrome(button))
+    .map((button) => visibleButtonText(button));
+}
+
+/**
+ * The desktop rail row for a provider. Below `md` the phone list renders the
+ * same names (jsdom applies no CSS, so `md:hidden` never hides it), so an
+ * unscoped `getByRole("button", { name })` collides. `hidden` is threaded
+ * through explicitly: the caller behind a dialog's `hideOthers` needs it
+ * true and every other caller needs it false.
  */
 function railProviderRow(name: string | RegExp, hidden: boolean): HTMLElement {
-  const nav = screen.getByRole("navigation", { name: "Providers", hidden });
-  const list = within(nav).getByRole("list", { name: "Providers", hidden });
-  return within(list).getByRole("button", { name, hidden });
+  return within(desktopProviderNav(hidden)).getByRole("button", {
+    name,
+    hidden,
+  });
+}
+
+function openAddProvider(): void {
+  fireEvent.click(
+    within(desktopProviderNav(false)).getByRole("button", {
+      name: "Add provider",
+    }),
+  );
 }
 
 vi.mock(
@@ -2284,7 +2360,7 @@ describe("<ProvidersSettingsPanel />", () => {
           name: PROVIDER_SETTINGS_RESET_LABEL,
         }),
       ).toBeDefined();
-      const providers = screen.getByRole("navigation", { name: "Providers" });
+      const providers = desktopProviderNav(false);
       expect(
         alert.compareDocumentPosition(providers) &
           Node.DOCUMENT_POSITION_FOLLOWING,
@@ -2460,7 +2536,7 @@ describe("<ProvidersSettingsPanel />", () => {
         expect(
           screen.queryByRole("button", { name: PROVIDER_SETTINGS_RESET_LABEL }),
         ).toBeNull();
-        const providers = screen.getByRole("navigation", { name: "Providers" });
+        const providers = desktopProviderNav(false);
         expect(
           alert.compareDocumentPosition(providers) &
             Node.DOCUMENT_POSITION_FOLLOWING,
@@ -2571,6 +2647,7 @@ describe("<ProvidersSettingsPanel />", () => {
     // OpenCode, ranked first, is selected: its row says nothing of the kind.
     expect(screen.queryByText(/this computer only/)).toBeNull();
 
+    openAddProvider();
     fireEvent.click(railProviderRow(/Traycer/i, false));
 
     expect(
@@ -2587,8 +2664,9 @@ describe("<ProvidersSettingsPanel />", () => {
       </TooltipProvider>,
     );
 
+    openAddProvider();
     fireEvent.click(railProviderRow(/Traycer/i, false));
-    // CLI candidates live on CLI & Args; Account / Profiles lead the tab order.
+    // CLI candidates live on CLI & Args; Profiles & Limits leads the tab order.
     selectTab("CLI & Args");
 
     expect(screen.getByText("/usr/local/bin/opencode")).toBeDefined();
@@ -2637,6 +2715,18 @@ describe("<ProvidersSettingsPanel />", () => {
       </RunnerHostContext.Provider>,
     );
 
+    expect(
+      screen.getByRole("tab", { name: "Account" }).getAttribute("data-state"),
+    ).toBe("active");
+    expect(screen.queryByRole("region", { name: "Key" })).toBeNull();
+    expect(
+      within(screen.getByRole("tabpanel")).getByLabelText("API key"),
+    ).toBeDefined();
+    expect(
+      within(screen.getByRole("tabpanel")).getByRole("button", {
+        name: "Save",
+      }),
+    ).toBeDefined();
     expect(screen.getByRole("tab", { name: "CLI & Args" })).toBeDefined();
     selectTab("CLI & Args");
     expect(
@@ -2863,16 +2953,8 @@ describe("<ProvidersSettingsPanel />", () => {
       </TooltipProvider>,
     );
 
-    const nav = screen.getByRole("navigation", { name: "Providers" });
-    // Scoped to the LIST, not the whole nav: the nav also holds the rail's
-    // search row, whose filter trigger is a button too and would otherwise
-    // enter this ordering assertion as a phantom first provider.
-    const list = within(nav).getByRole("list", { name: "Providers" });
-    expect(
-      within(list)
-        .getAllByRole("button")
-        .map((button) => button.getAttribute("aria-label")),
-    ).toEqual([
+    expect(screen.queryByRole("list", { name: "Providers" })).toBeNull();
+    expect(railProviderNames()).toEqual([
       "Codex",
       "Claude Code",
       "OpenRouter",
@@ -2897,6 +2979,21 @@ describe("<ProvidersSettingsPanel />", () => {
     );
 
     expect(railProviderNames()).toEqual(["OpenCode", "OpenRouter"]);
+    const phone = phoneProviderNav(false);
+    expect(
+      within(phone).queryByRole("textbox", { name: "Search providers" }),
+    ).toBeNull();
+    expect(
+      within(phone).getByRole("button", { name: "Add provider" }),
+    ).toBeDefined();
+    expect(
+      within(desktopProviderNav(false)).queryByRole("button", {
+        name: "Add provider",
+      }),
+    ).toBeNull();
+    expect(
+      within(phone).queryByRole("button", { name: /^Traycer/ }),
+    ).toBeNull();
   });
 
   it("renders configured, unavailable, and pending auth statuses", () => {
@@ -2958,6 +3055,7 @@ describe("<ProvidersSettingsPanel />", () => {
 
     expect(screen.getByText("Configured, not verified")).toBeDefined();
 
+    openAddProvider();
     fireEvent.click(railProviderRow("Cursor", false));
     expect(screen.getByText("Could not check account status")).toBeDefined();
 
@@ -3164,6 +3262,9 @@ describe("<ProvidersSettingsPanel />", () => {
     expect(
       screen.queryByRole("button", { name: "Refresh all providers" }),
     ).toBeNull();
+    expect(
+      screen.getByRole("button", { name: "All keys are in Secrets" }),
+    ).toBeDefined();
   });
 
   it("blocks disabling the last enabled provider", () => {
@@ -3460,8 +3561,7 @@ describe("<ProvidersSettingsPanel />", () => {
         }),
       ],
     };
-    const personal =
-      "Sign-ins, keys and tools for each coding agent, on every computer and sandbox running Personal.";
+    const personal = "Sign-ins, keys and tools for each coding agent.";
     // The file's cases pick a Local row; this one starts on Personal.
     useSettingsEnvironmentPickStore.setState({ pick: { kind: "personal" } });
 
@@ -3497,7 +3597,7 @@ describe("<ProvidersSettingsPanel />", () => {
     }
   });
 
-  it("gives each rail row one word of state from its own row", () => {
+  it("subtitles a rail row with its profile count, never own login", () => {
     providerMocks.listResult.data = {
       providers: [
         providerState({
@@ -3543,11 +3643,178 @@ describe("<ProvidersSettingsPanel />", () => {
       </TooltipProvider>,
     );
 
+    const codex = railProviderRow(/^Codex/, false);
+    expect(within(codex).getByText("2 profiles")).toBeDefined();
+    expect(codex.className).toContain("whitespace-normal");
+    expect(codex.className).toContain("break-words");
+    expect(codex.className).not.toContain("truncate");
+    expect(codex.querySelector("[aria-hidden='true']")).not.toBeNull();
+    const claude = railProviderRow("Claude Code", false);
+    expect(within(claude).queryByText("own login")).toBeNull();
+    expect(within(claude).queryByText("key")).toBeNull();
+    expect(visibleButtonText(claude)).toBe("Claude Code");
+  });
+
+  it("keeps configured providers on the idle rail and folds the rest behind Add provider", () => {
+    const login = {
+      oauthArgs: ["auth", "login"],
+      token: null,
+      codePaste: null,
+      terminalLogin: null,
+      remoteSafe: null,
+      selfOpensBrowser: null,
+    };
+    const unknownAuth = {
+      status: "unknown" as const,
+      badgeText: null,
+      label: null,
+      detail: null,
+    };
+    providerMocks.listResult.data = {
+      providers: [
+        {
+          ...providerState({
+            providerId: "codex",
+            selected: { kind: "bundled" },
+            candidates: [],
+            envOverrides: [],
+            profiles: [
+              profile({
+                profileId: "managed-1",
+                kind: "managed",
+                label: "Work",
+                email: "work@example.test",
+                tier: null,
+                authStatus: "authenticated",
+                duplicateOfProfileId: null,
+                ambientDriftNotice: null,
+              }),
+              profile({
+                profileId: "managed-2",
+                kind: "managed",
+                label: "Home",
+                email: "home@example.test",
+                tier: null,
+                authStatus: "authenticated",
+                duplicateOfProfileId: null,
+                ambientDriftNotice: null,
+              }),
+            ],
+          }),
+          enabled: false,
+        },
+        providerState({
+          providerId: "claude-code",
+          selected: { kind: "bundled" },
+          candidates: [],
+          envOverrides: [],
+        }),
+        {
+          ...providerState({
+            providerId: "openrouter",
+            selected: { kind: "bundled" },
+            candidates: [],
+            envOverrides: [],
+            apiKey: { supported: true, configured: true, source: "stored" },
+          }),
+          auth: unknownAuth,
+        },
+        {
+          ...providerState({
+            providerId: "cursor",
+            selected: { kind: "bundled" },
+            candidates: [],
+            envOverrides: [],
+          }),
+          auth: {
+            status: "unauthenticated",
+            badgeText: null,
+            label: null,
+            detail: null,
+          },
+        },
+        {
+          ...providerState({
+            providerId: "kimi",
+            selected: { kind: "bundled" },
+            candidates: [],
+            envOverrides: [],
+          }),
+          auth: unknownAuth,
+          authPending: true,
+        },
+        {
+          ...providerState({
+            providerId: "qwen",
+            selected: { kind: "bundled" },
+            candidates: [],
+            envOverrides: [],
+          }),
+          auth: unknownAuth,
+          loginCapability: login,
+        },
+        providerState({
+          providerId: "traycer",
+          selected: { kind: "bundled" },
+          candidates: [],
+          envOverrides: [],
+        }),
+      ],
+    };
+
+    render(
+      <TooltipProvider>
+        <ProvidersSettingsPanel />
+      </TooltipProvider>,
+    );
+
+    expect(railProviderNames()).toEqual([
+      "Codex 2 profiles · off",
+      "Claude Code",
+      "OpenRouter",
+      "Cursor signed out",
+      "Kimi",
+    ]);
     expect(
-      within(railProviderRow("Codex", false)).getByText("2 profiles"),
+      within(railProviderRow(/^OpenRouter/, false)).queryByText("key"),
+    ).toBeNull();
+    expect(
+      within(railProviderRow("Claude Code", false)).queryByText("own login"),
+    ).toBeNull();
+    const phone = phoneProviderNav(false);
+    expect(
+      within(phone)
+        .getAllByRole("button")
+        .filter((button) => !isRailChrome(button))
+        .map((button) => visibleButtonText(button)),
+    ).toEqual([
+      "Codex 2 profiles · off",
+      "Claude Code",
+      "OpenRouter",
+      "Cursor signed out",
+      "Kimi",
+    ]);
+
+    openAddProvider();
+    expect(visibleButtonText(railProviderRow(/^Qwen Code/, false))).toBe(
+      "Qwen Code not checked",
+    );
+    expect(railProviderRow(/^Traycer/, false)).toBeDefined();
+
+    fireEvent.change(
+      screen.getByRole("textbox", { name: "Search providers" }),
+      {
+        target: { value: "qwen" },
+      },
+    );
+    expect(railProviderNames()).toEqual(["Qwen Code not checked"]);
+    expect(
+      within(phoneProviderNav(false)).getByRole("button", {
+        name: "Add provider",
+      }),
     ).toBeDefined();
     expect(
-      within(railProviderRow("Claude Code", false)).getByText("own login"),
+      within(phoneProviderNav(false)).queryByRole("button", { name: /^Codex/ }),
     ).toBeDefined();
   });
 
@@ -3834,6 +4101,44 @@ describe("<ProvidersSettingsPanel />", () => {
       expect(providerMocks.setEnvOverrideMutate).not.toHaveBeenCalled();
       expect(providerMocks.deleteEnvOverrideMutate).not.toHaveBeenCalled();
     });
+
+    it("keeps the Account-tab label and opens the key on Profiles & Limits when Account was dropped", () => {
+      renderOnPersonalPage([
+        providerState({
+          providerId: "cursor",
+          selected: { kind: "bundled" },
+          candidates: [],
+          envOverrides: [],
+          nativeCapabilities: FULL_TABS,
+          apiKey: { supported: true, configured: false, source: null },
+        }),
+      ]);
+      selectTab("Env");
+      typeVariable("CURSOR_API_KEY", KEY_VALUE);
+
+      const line = screen.getByTestId("env-key-refusal");
+      expect(line.textContent).toBe(
+        "This is Cursor's key. Set it on Cursor's Account tab.",
+      );
+      fireEvent.click(
+        within(line).getByRole("button", { name: "Cursor's Account tab" }),
+      );
+
+      expect(screen.queryByRole("tab", { name: "Account" })).toBeNull();
+      expect(
+        screen
+          .getByRole("tab", { name: "Profiles & Limits" })
+          .getAttribute("data-state"),
+      ).toBe("active");
+      const key = within(screen.getByRole("tabpanel")).getByRole("region", {
+        name: "Key",
+      });
+      expect(
+        within(key).getByLabelText<HTMLInputElement>("API key").value,
+      ).toBe("");
+      expect(within(key).getByRole("button", { name: "Save" })).toBeDefined();
+      expect(document.body.textContent).not.toContain(KEY_VALUE);
+    });
   });
 
   describe("account-managed credentials (providers.list credentialsManagedInAccount)", () => {
@@ -3921,6 +4226,35 @@ describe("<ProvidersSettingsPanel />", () => {
           "credentials-managed-in-account",
         ),
       ).toBeDefined();
+    });
+
+    it("replaces the key controls inside the Key section when the account manages credentials", () => {
+      providerMocks.listResult.data = {
+        providers: [
+          providerState({
+            providerId: "cursor",
+            selected: { kind: "bundled" },
+            candidates: [],
+            envOverrides: [],
+            nativeCapabilities: FULL_TABS,
+            apiKey: { supported: true, configured: false, source: null },
+          }),
+        ],
+        credentialsManagedInAccount: true,
+      };
+      renderPanel();
+
+      openProfilesTab();
+
+      const key = within(screen.getByRole("tabpanel")).getByRole("region", {
+        name: "Key",
+      });
+      expect(
+        within(key).getByTestId("credentials-managed-in-account"),
+      ).toBeDefined();
+      expect(within(key).queryByRole("button", { name: "Save" })).toBeNull();
+      expect(within(key).queryByRole("button", { name: "Clear" })).toBeNull();
+      expect(within(key).queryByLabelText("API key")).toBeNull();
     });
   });
 
@@ -4064,18 +4398,53 @@ describe("<ProvidersSettingsPanel />", () => {
       </TooltipProvider>,
     );
 
-    expect(
-      screen.getByRole("tab", { name: "Account" }).getAttribute("data-state"),
-    ).toBe("active");
-    // Discriminating: the usage tab is rendered and selectable for amp,
-    // so this is the deep link picking the right one of two live tabs rather
-    // than the wrong one being absent.
+    expect(screen.queryByRole("tab", { name: "Account" })).toBeNull();
     expect(
       screen
         .getByRole("tab", { name: "Profiles & Limits" })
         .getAttribute("data-state"),
-    ).toBe("inactive");
+    ).toBe("active");
+    const key = within(screen.getByRole("tabpanel")).getByRole("region", {
+      name: "Key",
+    });
+    expect(within(key).getByRole("heading", { name: "Key" })).toBeDefined();
+    expect(within(key).getByLabelText("API key")).toBeDefined();
+    expect(within(key).getByRole("button", { name: "Save" })).toBeDefined();
     expect(useProvidersFocusStore.getState().focusHarnessId).toBeNull();
+  });
+
+  it("resolves a preferred account tab to Profiles & Limits when usage is also supported", () => {
+    useProvidersFocusStore.getState().setFocusHarnessId("cursor");
+    useProvidersFocusStore.getState().setFocusTab("account");
+    providerMocks.listResult.data = {
+      providers: [
+        providerState({
+          providerId: "cursor",
+          selected: { kind: "bundled" },
+          candidates: [],
+          envOverrides: [],
+          nativeCapabilities: FULL_TABS,
+          apiKey: { supported: true, configured: false, source: null },
+        }),
+      ],
+    };
+
+    render(
+      <TooltipProvider>
+        <ProvidersSettingsPanel />
+      </TooltipProvider>,
+    );
+
+    expect(screen.queryByRole("tab", { name: "Account" })).toBeNull();
+    expect(
+      screen
+        .getByRole("tab", { name: "Profiles & Limits" })
+        .getAttribute("data-state"),
+    ).toBe("active");
+    expect(
+      within(screen.getByRole("tabpanel")).getByRole("region", { name: "Key" }),
+    ).toBeDefined();
+    expect(useProvidersFocusStore.getState().focusTab).toBeNull();
   });
 
   it("ignores focusTab when the target provider does not support it", () => {
@@ -4414,8 +4783,13 @@ describe("<ProvidersSettingsPanel />", () => {
       screen.queryByText("Terminal", { selector: '[data-slot="badge"]' }),
     ).toBeNull();
     expect(
-      within(ownLoginRow).getByText("Signed in", {
+      within(ownLoginRow).queryByText("Signed in", {
         selector: '[data-slot="badge"]',
+      }),
+    ).toBeNull();
+    expect(
+      within(ownLoginRow).getByRole("button", {
+        name: "More for Codex's own login on dev-box",
       }),
     ).toBeDefined();
     expect(screen.queryByRole("button", { name: "Manage profile" })).toBeNull();
@@ -4428,7 +4802,7 @@ describe("<ProvidersSettingsPanel />", () => {
         name: "Refresh profile statuses and usage limits",
       }),
     ).toBeNull();
-    expect(within(ownLoginRow).getAllByRole("button")).toHaveLength(1);
+    expect(within(ownLoginRow).getAllByRole("button")).toHaveLength(2);
 
     fireEvent.click(
       within(ownLoginRow).getByRole("button", {
@@ -4523,14 +4897,25 @@ describe("<ProvidersSettingsPanel />", () => {
       return row;
     }
 
-    it("names the computer and badges an authenticated login Signed in", () => {
+    it("names the computer and shows no Signed in badge on a usable login", () => {
       const row = renderOwnLogin("authenticated", false);
 
+      const where = within(row).getByText("works on this computer only");
+      expect(where.className).toContain("whitespace-normal");
+      expect(where.className).toContain("break-words");
+      expect(where.className).not.toContain("truncate");
       expect(
-        within(row).getByText("works on this computer only"),
+        within(row).queryByText("Signed in", {
+          selector: '[data-slot="badge"]',
+        }),
+      ).toBeNull();
+      expect(
+        within(row).getByRole("button", {
+          name: "More for Claude Code's own login on windows-test-machine",
+        }),
       ).toBeDefined();
       expect(
-        within(row).getByText("Signed in", { selector: '[data-slot="badge"]' }),
+        within(row).getByRole("button", { name: "Sign in to use everywhere" }),
       ).toBeDefined();
       expect(within(row).queryByText(/isn't signed in/)).toBeNull();
       expect(within(row).queryByText(/Couldn't check/)).toBeNull();
@@ -4549,6 +4934,11 @@ describe("<ProvidersSettingsPanel />", () => {
       expect(
         within(row).getByRole("button", { name: "Sign in" }),
       ).toBeDefined();
+      expect(
+        within(row).getByRole("button", {
+          name: "More for Claude Code's own login on windows-test-machine",
+        }),
+      ).toBeDefined();
     });
 
     it("says a failed check couldn't be checked, never Unavailable, and Retry refreshes the providers", () => {
@@ -4563,6 +4953,11 @@ describe("<ProvidersSettingsPanel />", () => {
       ).toBeNull();
       expect(providerMocks.refreshProviders).not.toHaveBeenCalled();
 
+      expect(
+        within(row).getByRole("button", {
+          name: "More for Claude Code's own login on windows-test-machine",
+        }),
+      ).toBeDefined();
       fireEvent.click(within(row).getByRole("button", { name: "Retry" }));
 
       expect(providerMocks.refreshProviders).toHaveBeenCalledOnce();
@@ -4574,6 +4969,9 @@ describe("<ProvidersSettingsPanel />", () => {
       expect(within(row).getByText(/Checking/)).toBeDefined();
       expect(within(row).queryByText(/Couldn't check/)).toBeNull();
       expect(within(row).queryByRole("button", { name: "Retry" })).toBeNull();
+      expect(
+        within(row).queryByRole("button", { name: /^More for / }),
+      ).toBeNull();
       expect(
         within(row).queryByText("Signed in", {
           selector: '[data-slot="badge"]',
@@ -5093,7 +5491,14 @@ describe("<ProvidersSettingsPanel />", () => {
     // Select "Work" - its own duplicate-account warning and tier.
     fireEvent.click(screen.getByRole("menuitem", { name: "Work" }));
     expect(screen.getByText("Same account as Terminal account")).toBeDefined();
-    expect(screen.getByText("Team")).toBeDefined();
+    const plan = screen.getByText("Team");
+    expect(plan.tagName).toBe("P");
+    expect(plan.className).toContain("whitespace-normal");
+    expect(plan.className).toContain("break-words");
+    expect(plan.className).not.toContain("truncate");
+    expect(
+      screen.queryByText("Signed in", { selector: '[data-slot="badge"]' }),
+    ).toBeNull();
 
     // Select "Signed out" - its own unauthenticated status.
     fireEvent.click(
@@ -5108,11 +5513,11 @@ describe("<ProvidersSettingsPanel />", () => {
     if (!(profileSummaryActions instanceof HTMLElement)) {
       throw new Error("Expected signed-out profile summary and actions row");
     }
-    expect(
-      within(profileSummaryActions).getByText("Signed out", {
-        selector: '[data-slot="badge"]',
-      }),
-    ).toBeDefined();
+    const standing = within(profileSummaryActions).getByText("Signed out");
+    expect(standing.tagName).toBe("P");
+    expect(standing.className).toContain("whitespace-normal");
+    expect(standing.className).toContain("break-words");
+    expect(standing.className).not.toContain("truncate");
     expect(
       within(profileSummaryActions).getByRole("button", { name: "Sign in" }),
     ).toBeDefined();
@@ -5124,7 +5529,20 @@ describe("<ProvidersSettingsPanel />", () => {
     expect(within(profileSummaryActions).queryByText("No plan")).toBeNull();
     expect(
       profileSummaryActions.querySelectorAll('[data-slot="badge"]'),
-    ).toHaveLength(1);
+    ).toHaveLength(0);
+    expect(
+      within(profileSummaryActions).getByRole("button", {
+        name: "More for Signed out",
+      }),
+    ).toBeDefined();
+    const enableSwitches = screen.getAllByRole("switch", {
+      name: "Allow agents to use Signed out",
+    });
+    expect(
+      enableSwitches.every(
+        (control) => !profileSummaryActions.contains(control),
+      ),
+    ).toBe(true);
   });
 
   it("selects a disabled managed profile for Settings management", () => {
@@ -6900,7 +7318,7 @@ describe("<ProvidersSettingsPanel />", () => {
     // dialog aria-hides the tab rail; openProfilesTab is unnecessary and would
     // fail getByRole("tab") without { hidden: true }.
     expect(
-      railProviderRow("Claude Code", true).getAttribute("data-active"),
+      railProviderRow(/^Claude Code/, true).getAttribute("aria-current"),
     ).toBe("true");
     expect(
       screen
@@ -7006,7 +7424,7 @@ describe("<ProvidersSettingsPanel />", () => {
     );
 
     expect(
-      railProviderRow("Claude Code", true).getAttribute("data-active"),
+      railProviderRow(/^Claude Code/, true).getAttribute("aria-current"),
     ).toBe("true");
     expect(
       screen
@@ -7087,7 +7505,7 @@ describe("<ProvidersSettingsPanel />", () => {
     );
 
     expect(
-      railProviderRow("Claude Code", false).getAttribute("data-active"),
+      railProviderRow(/^Claude Code/, false).getAttribute("aria-current"),
     ).toBe("true");
     expect(
       screen
@@ -8896,14 +9314,6 @@ describe("<ProvidersSettingsPanel />", () => {
       };
     });
 
-    function railProviderNames(): string[] {
-      const nav = screen.getByRole("navigation", { name: "Providers" });
-      const list = within(nav).getByRole("list", { name: "Providers" });
-      return within(list)
-        .getAllByRole("button")
-        .map((button) => button.textContent);
-    }
-
     it("draws the MCP servers page with only the providers that have MCP, on the MCP tab alone", () => {
       render(
         <TooltipProvider>
@@ -8913,6 +9323,11 @@ describe("<ProvidersSettingsPanel />", () => {
 
       expect(
         screen.getByRole("heading", { name: "MCP servers" }),
+      ).toBeDefined();
+      expect(
+        screen.getByText(
+          "The MCP servers each coding agent can use. Yours follow you to every host; one added on this computer stays here until you add it to Personal.",
+        ),
       ).toBeDefined();
       const names = railProviderNames();
       expect(names.some((name) => /OpenCode/.test(name))).toBe(true);
@@ -8938,6 +9353,11 @@ describe("<ProvidersSettingsPanel />", () => {
       );
 
       expect(screen.getByRole("heading", { name: "Skills" })).toBeDefined();
+      expect(
+        screen.getByText(
+          "The skills each coding agent can use. Yours follow you to every host; one added on this computer stays here until you add it to Personal.",
+        ),
+      ).toBeDefined();
       const names = railProviderNames();
       expect(names.some((name) => /OpenCode/.test(name))).toBe(true);
       expect(names.some((name) => /Cursor/.test(name))).toBe(true);
@@ -9180,7 +9600,6 @@ describe("<ProvidersSettingsPanel /> mobile section picker", () => {
         .getAllByRole("button")
         .map((button) => button.textContent),
     ).toEqual([
-      "Account",
       "Profiles & Limits",
       "CLI & Args",
       "Env",
@@ -9205,7 +9624,10 @@ describe("<ProvidersSettingsPanel /> mobile section picker", () => {
     // instead, and clears the dangling reference.
     const panel = screen.getByRole("tabpanel");
     expect(panel.getAttribute("aria-labelledby")).toBeNull();
-    expect(panel.getAttribute("aria-label")).toBe("Account");
+    expect(panel.getAttribute("aria-label")).toBe("Profiles & Limits");
+    const key = within(panel).getByRole("region", { name: "Key" });
+    expect(within(key).getByLabelText("API key")).toBeDefined();
+    expect(within(key).getByRole("button", { name: "Save" })).toBeDefined();
   });
 
   it("opens a deep link straight on the requested tab", () => {

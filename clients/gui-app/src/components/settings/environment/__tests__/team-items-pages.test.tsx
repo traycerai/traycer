@@ -532,8 +532,8 @@ describe("Environment page subtitles", () => {
     [
       "Providers",
       <TeamProviders key="p" />,
-      "Plans, keys and settings for each coding agent, on every host running Acme.",
-      "Sign-ins, keys and tools for each coding agent, on every computer and sandbox running Personal.",
+      "Sign-ins, keys and tools for each coding agent.",
+      "Sign-ins, keys and tools for each coding agent.",
     ],
     [
       "MCP servers",

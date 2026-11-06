@@ -717,15 +717,15 @@ Supporting pieces, all viewport-agnostic where possible:
   slot holds a labelled button, so focus and screen-reader order would then
   reach Reset before the field it acts on (WCAG 2.4.3 / 1.3.2). No `order-*`
   on interactive content: source order is the only order.
-- The Providers rail collapses below `md` into a full-width provider `Select`
-  above the detail pane, and the detail pane's own tab rail collapses into a
-  second `Select` (`provider-section-select.tsx`) in the rail's slot - so
-  picking a section is the same gesture as picking the provider one row above
-  it, rather than a bespoke one. Both arms read the same `tabs` list and the
-  same `PROVIDER_TAB_LABELS`; only the container differs, and `Tabs` stays
-  controlled by the panel, so exactly one section body is mounted either way.
-  Rows are icon + label only: the state a section is in belongs in its BODY,
-  one tap away, and a two-line row inside a menu is a card in other clothes.
+- Below `md` the Providers rail is a wrapping list of provider buttons above
+  the detail pane, the same names the pointer-width rail draws: configured
+  providers first, each name wrapping, with its profile count and a not-usable
+  word when the row has one, and the rest behind Add provider. It is not a
+  `Select`, and search does not narrow it. The detail pane's tab rail still
+  collapses into a `Select` (`provider-section-select.tsx`). Both tab arms
+  read the same `tabs` list and the same `PROVIDER_TAB_LABELS`; only the
+  container differs, and `Tabs` stays controlled by the panel, so exactly one
+  section body is mounted either way.
   The phone arm has no tab TRIGGERS, so it labels each pane with `aria-label`
   and clears the `aria-labelledby` Radix would otherwise point at a trigger
   that is not rendered. `EnvOverrideEditor` rows restack onto two lines below
@@ -738,7 +738,7 @@ Supporting pieces, all viewport-agnostic where possible:
   - The scope reaches only what the settings subtree CONTAINS, so the rows
     inside an open menu are out of its range by construction: Radix portals
     popover content to the body. A control the scope enlarges can therefore
-    open a list it cannot, which is how the Providers `Select` came to have a
+    open a list it cannot, which is how a settings `Select` came to have a
     44px trigger over 28px rows. Anything living in a portal owns its own
     target instead, at the primitive: `pointer-coarse:min-h-11` on
     `ui/select.tsx`'s `SelectItem` and on all four of `ui/dropdown-menu.tsx`'s
@@ -873,7 +873,12 @@ First edits of an absent model-routing item
 start from the named host's seeded policy; Reset and Restore default tiers
 delete the team item. Host-source panels preserve their existing behavior.
 
-Providers renders Plans in place of Add a profile, with an unlink preview.
+Providers, on a cloud-backed Personal or a team, lists configured providers
+first and folds the rest behind Add provider. The header links to Secrets,
+where every key also lives. The selected provider's pane holds its own key
+when that provider takes one, then Plans, then its profiles, then rate limits.
+The executable path and version sit in Details under the rate-limit card.
+Plans replace Add a profile, with an unlink preview.
 Only controls with a persisted team store are rendered. MCP rows expose the
 server id and tool toggles; declarations and Add are absent. Provider Details
 uses the persisted kind and key. Personal rows offer it only when applied-item
@@ -2954,7 +2959,9 @@ window`, recorded in the type as `coverage.browsersAreMountedOnly` -
     provider header and its config.** Order is `account` · `usage` · `general` ·
     `env` · `modelProviders` · `mcp` · `plugins` · `skills`, filtered per provider through
     `supportedTabsFor` (`provider-settings-tabs.ts` - pure, so the rule is
-    tested without rendering the panel).
+    tested without rendering the panel). `viewTabs` then drops `account` when
+    `usage` is also supported: the key is the first block of Profiles & Limits,
+    so it has one place. A key provider with no usage tab keeps Account.
     - **The provider header and the rail are PINNED rows; only the active tab's
       body scrolls.** `ProvidersRailLayout`'s detail column used to carry
       `overflow-y-auto p-5` around the whole of `ProviderDetail`, so the rail
@@ -3004,10 +3011,13 @@ window`, recorded in the type as `coverage.browsersAreMountedOnly` -
       provider authenticate?" vs "which account is running, and how much of it
       is left?"), and a provider can have either without the other - amp takes
       a key but advertises no `usage` tab at all, claude-code has profiles and
-      limits but no key field - so one shared tab always showed a hole for
-      whichever half a provider lacked. Nothing about "does this take a key?"
-      needs the host to say so, and adding an id to the enum would risk the
-      whole-object `.catch` above for zero gain.
+      limits but no key field. When both tabs would show, `viewTabs` keeps
+      `usage` and the key form is the first block of that tab (still replaced
+      by the account-managed line on a sandbox host). A preferred `account`
+      deep link resolves onto that tab. Amp still shows Account as the key's
+      whole body. Nothing about "does this take a key?" needs the host to say
+      so, and adding an id to the enum would risk the whole-object `.catch`
+      above for zero gain.
     - **The visible set is the host's advertisement, PLUS client-derived
       `account`.** There is no per-provider subtraction left. `general` used to
       be dropped for cursor and amp by a `hidesCliCandidates` id check, on the
@@ -3248,12 +3258,13 @@ window`, recorded in the type as `coverage.browsersAreMountedOnly` -
       moving. The Judge tab's model controls hold no echo and never lock.
   - **API-key providers (Cursor).** Cursor authenticates with an API key rather
     than a CLI login, so it renders an `ApiKeySection` (masked input +
-    Save/Clear) when `state.apiKey.supported` — **as the whole body of the
-    client-derived `account` ("Account") tab**. It used to sit ABOVE the tab bar
-    as its own pre-tab region, which put a provider's only real setting outside
-    the tabs that were supposed to hold its settings (and hid the fact that
-    Cursor's General tab rendered nothing). Nothing renders between the provider
-    header and the tab rail now. Also a "Create an API key" link
+    Save/Clear) when `state.apiKey.supported` — **as the first block of
+    Profiles & Limits, titled Key**, because Cursor also has a usage tab. A
+    provider with a key and no usage tab still uses the client-derived
+    `account` tab as that block's whole body. The key used to sit ABOVE the tab
+    bar as its own pre-tab region, which put a provider's only real setting
+    outside the tabs that were supposed to hold its settings. Nothing renders
+    between the provider header and the tab rail. Also a "Create an API key" link
     that opens the provider dashboard via `openLink(url, "docs")`
     (`API_KEY_DASHBOARD_URL`). The key is stored AES-256-GCM encrypted in
     `provider-overrides.json` and never returned over RPC - `state.apiKey` only
