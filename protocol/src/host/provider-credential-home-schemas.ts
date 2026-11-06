@@ -80,20 +80,21 @@ export const credentialHomeSchema = lazySchema(() =>
       "transitional",
       "unknown",
     ]),
-    environmentPresence: z
-      .strictObject({
+    environmentPresence: z.discriminatedUnion("scope", [
+      z.strictObject({
+        scope: z.literal("environment"),
         environmentId: z.string().min(1),
         state: z.enum(["admitted", "revoking", "absent"]),
         retainedReason: z.literal("material-changed").nullable(),
-        cause: z
-          .enum([
-            "host-left-environment",
-            "profile-account-changed",
-            "signed-out-by-person",
-          ])
-          .nullable(),
-      })
-      .nullable(),
+        cause: z.enum(["host-left-environment", "profile-account-changed", "signed-out-by-person"]).nullable(),
+      }),
+      z.strictObject({
+        scope: z.literal("local"),
+        state: z.enum(["revoking", "absent"]),
+        retainedReason: z.literal("material-changed").nullable(),
+        cause: z.literal("signed-out-by-person"),
+      }),
+    ]).nullable(),
     materialFingerprint: z.string().nullable(),
     standing: credentialStandingSchema.optional(),
     observation: z

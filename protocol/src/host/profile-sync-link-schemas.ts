@@ -146,6 +146,10 @@ export const profileSyncCredentialSchema = lazySchema(() =>
         account: providerDocumentSchema.nullable(),
       }),
       z.strictObject({
+        kind: z.literal("claude-api-key"),
+        apiKey: z.string().min(1).max(PROFILE_SYNC_MAX_CREDENTIAL_BYTES),
+      }),
+      z.strictObject({
         kind: z.literal("codex-auth-file"),
         document: providerDocumentSchema,
       }),
@@ -180,7 +184,7 @@ export function profileSyncCredentialFitsProvider(
 ): boolean {
   switch (providerId) {
     case "claude":
-      return credential.kind === "claude-oauth";
+      return credential.kind === "claude-oauth" || credential.kind === "claude-api-key";
     case "codex":
       return credential.kind === "codex-auth-file";
     case "grok":

@@ -1667,6 +1667,7 @@ export const providerProfileProjectionSchema = lazySchema(() =>
             kind: z.literal("admitted"),
             bindingVersion: credentialVersionSchema,
           }),
+          z.object({ kind: z.literal("revoking"), cause: z.enum(["host-left-environment", "profile-account-changed", "signed-out-by-person"]).nullable() }),
           z.object({ kind: z.literal("no-home") }),
           z.object({ kind: z.literal("placeholder-only") }),
         ])
@@ -1710,6 +1711,8 @@ export const providersSignOutProfileRequestSchema = lazySchema(() =>
 export const providersSignOutProfileResponseSchema = lazySchema(() =>
   z.object({ signedOut: z.literal(true) }),
 );
+export type ProvidersSignOutProfileRequest = z.infer<typeof providersSignOutProfileRequestSchema>;
+export type ProvidersSignOutProfileResponse = z.infer<typeof providersSignOutProfileResponseSchema>;
 
 export const providersSetProfileEnabledRequestSchema = lazySchema(() =>
   z.object({
