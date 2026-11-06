@@ -4,15 +4,18 @@ import { centreOf, fixture, nextFrames } from "./support/fixtures.ts";
 
 // "Tracy is replying…" is the way into the running turn (Tracy Bots T148).
 // At rest it reads as status; hovered or keyboard-focused it says "View
-// turn" and the running time, with a chevron; on a touch screen the whole
-// line takes the tap at the 44px minimum while the drawn line, and so the
-// dock, keeps its height. The extra height is taken above the line, never
-// from the message box under it. Which text shows, what paints, what a
-// point hits and how tall the line is are CSS and layout, which jsdom
-// cannot answer.
+// turn" and the running time, with a chevron. On a touch screen the line
+// itself is drawn 44px tall and is the button edge to edge; the dock grows
+// by that much while the bot replies, and nothing overlaps the row above or
+// the box below. A fine pointer keeps the shorter line. Which text shows,
+// what paints, what a point hits and how tall the line is are CSS and
+// layout, which jsdom cannot answer.
 
 const STRIP = '[data-testid="strip-turn"]';
 const PLAIN_STRIP = '[data-testid="strip-plain"]';
+const NONE_STRIP = '[data-testid="strip-none"]';
+const LINK = '[data-testid="link-turn"]';
+const COMPOSER = '[data-testid="composer-turn"]';
 const DOCK = '[data-testid="dock-turn"]';
 const BUTTON = `${STRIP} button`;
 const COMPOSER_INPUT = '[data-testid="composer-turn-input"]';
@@ -94,6 +97,8 @@ test("keyboard focus swaps the text the way hover does", async ({ page }) => {
   await open(page);
   const resting = await background(page);
 
+  // The link above the line is the first stop; the line is the next.
+  await page.locator(LINK).focus();
   await page.keyboard.press("Tab");
 
   await expect(button(page)).toBeFocused();
@@ -101,20 +106,31 @@ test("keyboard focus swaps the text the way hover does", async ({ page }) => {
   expect(await background(page)).not.toBe(resting);
 });
 
-test("on a fine pointer the hit area stays the drawn line", async ({
+async function heightOf(page: Page, selector: string): Promise<number> {
+  const box = await page.locator(selector).boundingBox();
+  if (box === null) throw new Error(`no layout box for ${selector}`);
+  return box.height;
+}
+
+test("on a fine pointer every strip is the same short line, and the hit area stays the drawn line", async ({
   page,
 }) => {
   await open(page);
-  const at = await centreOf(page.locator(STRIP));
+  const turn = await heightOf(page, STRIP);
+  expect(await heightOf(page, PLAIN_STRIP)).toBe(turn);
+  expect(await heightOf(page, NONE_STRIP)).toBe(turn);
 
+  const at = await centreOf(page.locator(STRIP));
   expect(await hits(page, BUTTON, at.x, at.y - 16)).toBe(false);
 });
 
 test.describe("on a touch screen", () => {
   test.use({ hasTouch: true, isMobile: true });
 
-  test("the line's touch band grows upward only: the message box keeps every pixel, and the dock its height", async ({
+  test("the line is drawn 44px tall and is the button edge to edge, overlapping neither the row above nor the box below", async ({
     page,
+    browser,
+    baseURL,
   }) => {
     await open(page);
     expect(
@@ -122,36 +138,67 @@ test.describe("on a touch screen", () => {
     ).toBe(true);
 
     const strip = await page.locator(STRIP).boundingBox();
-    const plain = await page.locator(PLAIN_STRIP).boundingBox();
-    if (strip === null || plain === null) throw new Error("no strip box");
-    expect(strip.height).toBe(plain.height);
+    if (strip === null) throw new Error("no strip box");
+    expect(strip.height).toBe(44);
+    // A reply to a request is as tall before the host names its turn.
+    expect(await heightOf(page, PLAIN_STRIP)).toBe(44);
+    // A turn answering no request is drawn as on a fine pointer.
+    const fine = await browser.newContext({
+      baseURL,
+      hasTouch: false,
+      isMobile: false,
+    });
+    const finePage = await fine.newPage();
+    await open(finePage);
+    expect(
+      await finePage.evaluate(() => matchMedia("(pointer: coarse)").matches),
+    ).toBe(false);
+    const fineHeight = await heightOf(finePage, NONE_STRIP);
+    await fine.close();
+    expect(await heightOf(page, NONE_STRIP)).toBe(fineHeight);
 
-    const bottom = strip.y + strip.height;
     const centreX = strip.x + strip.width / 2;
-    const xs = [strip.x + 2, centreX, strip.x + strip.width - 2];
+    const xs = [strip.x + 1, centreX, strip.x + strip.width - 1];
     for (const x of xs) {
-      expect(await hits(page, BUTTON, x, bottom - 1)).toBe(true);
-      expect(await hits(page, BUTTON, x, bottom - 43)).toBe(true);
-      // Past the 44px band, the transcript stand-in.
-      expect(await hits(page, BUTTON, x, bottom - 45)).toBe(false);
+      expect(await hits(page, BUTTON, x, strip.y)).toBe(true);
+      expect(await hits(page, BUTTON, x, strip.y + strip.height - 1)).toBe(
+        true,
+      );
     }
 
-    // The box keeps its pixels: the padding under the line is not the
-    // button, and the field's first row and the point 21px under the
-    // line's centre are the box's own.
-    expect(await hits(page, BUTTON, centreX, bottom + 1)).toBe(false);
-    const centreY = strip.y + strip.height / 2;
-    expect(await hits(page, COMPOSER_INPUT, centreX, centreY + 21)).toBe(true);
+    // Above the line is the row above, down to the link's last row; below
+    // it is the message box.
+    const link = await page.locator(LINK).boundingBox();
+    if (link === null) throw new Error("no link box");
+    expect(await hits(page, BUTTON, centreX, strip.y - 1)).toBe(false);
+    expect(
+      await hits(page, "a", link.x + link.width / 2, link.y + link.height - 1),
+    ).toBe(true);
+    expect(
+      await hits(
+        page,
+        BUTTON,
+        link.x + link.width / 2,
+        link.y + link.height - 1,
+      ),
+    ).toBe(false);
+    expect(
+      await hits(page, COMPOSER, centreX, strip.y + strip.height + 1),
+    ).toBe(true);
+    expect(await hits(page, BUTTON, centreX, strip.y + strip.height + 1)).toBe(
+      false,
+    );
+
+    // A tap in the field's top padding focuses the field and opens nothing;
+    // a tap on the line's top edge opens the turn. (A tap on the field's
+    // first row, 6px under the line, Chrome's touch adjustment hands to the
+    // line, though the point itself is the field's.)
     const input = await page.locator(COMPOSER_INPUT).boundingBox();
     if (input === null) throw new Error("no composer input box");
-    expect(await hits(page, COMPOSER_INPUT, centreX, input.y + 1)).toBe(true);
-
-    // A tap 21px under the line's centre focuses the box and opens nothing;
-    // a tap inside the band opens the turn.
-    await page.touchscreen.tap(centreX, centreY + 21);
+    await page.touchscreen.tap(centreX, input.y + 8);
     await expect(page.locator(COMPOSER_INPUT)).toBeFocused();
     await expect(page.locator(DOCK)).not.toHaveAttribute("data-opened", /.*/);
-    await page.touchscreen.tap(centreX, centreY - 20);
+    await page.touchscreen.tap(centreX, strip.y);
     await expect(page.locator(DOCK)).toHaveAttribute("data-opened", "1");
   });
 });

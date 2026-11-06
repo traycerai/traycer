@@ -25,14 +25,16 @@ import "@/index.css";
 /**
  * THE REPLYING STRIP IN A DOCK, WITH AND WITHOUT A TURN TO OPEN.
  *
- * The real `BotReplyingStrip` and the real `BotMessageComposer` in two docks
- * as the channel stacks them, siblings of one column with no gap of their
- * own: a transcript stand-in above, the strip, the message box below. The
- * strip's touch band must stay off the box, whose own padding and frame sit
- * right under the line, so the box is the real one. The first dock's strip
- * names a turn that has been running for a few seconds; the second names
- * none, to compare heights. Opening the turn is counted on the first dock's
- * `data-opened`. `?theme=dark` draws it dark.
+ * The real `BotReplyingStrip` and the real `BotMessageComposer` in three
+ * docks as the channel stacks them, siblings of one column with no gap of
+ * their own: a transcript stand-in above, the strip, the message box below.
+ * The transcript's last row is a link flush on the strip, as a post's link is
+ * above it in a thread with no replies, and the box is the real one, whose
+ * padding and frame sit right under the line: a strip reaching up or down
+ * would take their taps. The first dock's strip names a turn that has been
+ * running for a few seconds; the second answers a request with no turn named
+ * yet; the third answers no request, to compare heights. Opening the turn is
+ * counted on the first dock's `data-opened`. `?theme=dark` draws it dark.
  */
 const theme = new URLSearchParams(window.location.search).get("theme");
 useSettingsStore.getState().setTheme(theme === "dark" ? "dark" : "light");
@@ -93,6 +95,7 @@ function noop(): void {}
 
 export function Dock(props: {
   readonly id: string;
+  readonly requestId: string | null;
   readonly withTurn: boolean;
   readonly onOpen: () => void;
 }): ReactElement {
@@ -101,14 +104,23 @@ export function Dock(props: {
       data-testid={`dock-${props.id}`}
       className="flex h-96 w-full max-w-md flex-col border border-border/60"
     >
-      <div className="min-h-0 flex-1 p-4 text-ui-sm">Transcript</div>
+      <div className="flex min-h-0 flex-1 flex-col justify-end px-4 text-ui-sm">
+        <p>Transcript</p>
+        <a
+          href="https://example.com/release"
+          data-testid={`link-${props.id}`}
+          className="w-fit underline"
+        >
+          the release checklist
+        </a>
+      </div>
       <BotReplyingStrip
         botTitle="Tracy"
         activity={{
           state: "replying",
           startedAt: STARTED_AT,
           step: null,
-          requestId: "request-1",
+          requestId: props.requestId,
           reason: null,
         }}
         turn={
@@ -155,8 +167,14 @@ export function Page(): ReactElement {
   return (
     <TabHostContext.Provider value={HOST_ID}>
       <div className="flex w-full gap-4 bg-background p-4 text-foreground">
-        <Dock id="turn" withTurn onOpen={onOpen} />
-        <Dock id="plain" withTurn={false} onOpen={onOpen} />
+        <Dock id="turn" requestId="request-1" withTurn onOpen={onOpen} />
+        <Dock
+          id="plain"
+          requestId="request-1"
+          withTurn={false}
+          onOpen={onOpen}
+        />
+        <Dock id="none" requestId={null} withTurn={false} onOpen={onOpen} />
       </div>
     </TabHostContext.Provider>
   );

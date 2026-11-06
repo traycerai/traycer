@@ -5,6 +5,7 @@ import { RunningFor } from "@/components/chat/chat-bot-message";
 import type { ChatBotTurnReceipt } from "@/components/chat/chat-bot-presentation-context";
 import { WorkingShimmerText } from "@/components/ui/working-shimmer-text";
 import type { BotSessionActivity } from "@/hooks/bots/use-bot-activity";
+import { cn } from "@/lib/utils";
 
 /**
  * Slack's typing line, in a bot channel's or thread's message box dock and
@@ -15,11 +16,13 @@ import type { BotSessionActivity } from "@/hooks/bots/use-bot-activity";
  * Once the host names the turn (`turn`), the line is the way into it, as the
  * receipt under a finished reply is: it reads the same at rest, and hovered
  * or focused it says "View turn" and how long the turn has been running. On
- * a touch screen the whole line takes the tap at the touch minimum, past its
- * drawn height, which stays the dock's: the extra height is taken above the
- * line, never from the message box under it. The line stays the status either
- * way: the button is named by the replying text, and what it shows on hover
- * is kept out of what the status announces.
+ * a touch screen the line is drawn at the touch minimum, and the whole of it,
+ * gutters included, is the button: the dock grows by that much while the bot
+ * replies, and nothing overlaps the post above or the message box below. It
+ * is that tall from the first frame of a reply to a post (`requestId`), not
+ * only once the host names the turn, so the dock does not jump when it does.
+ * The line stays the status either way: the button is named by the replying
+ * text, and what it shows on hover is kept out of what the status announces.
  */
 export function BotReplyingStrip(props: {
   readonly botTitle: string;
@@ -35,7 +38,12 @@ export function BotReplyingStrip(props: {
     <div
       role="status"
       data-testid={testId}
-      className="relative flex min-w-0 shrink-0 items-center gap-2 px-5 pt-1 text-ui-xs text-muted-foreground"
+      className={cn(
+        "flex min-w-0 shrink-0 items-center gap-2 px-5 pt-1 text-ui-xs text-muted-foreground",
+        activity.requestId !== null &&
+          "pointer-coarse:h-11 pointer-coarse:pt-0",
+        turn !== null && "pointer-coarse:px-0",
+      )}
     >
       {turn === null ? (
         <>
@@ -49,7 +57,7 @@ export function BotReplyingStrip(props: {
           type="button"
           aria-label={replying}
           onClick={turn.open}
-          className="group/replying -my-0.5 -ml-1 flex min-w-0 max-w-full items-center gap-2 rounded-md px-1 py-0.5 text-left transition-[color,background-color,box-shadow] hover:bg-foreground/5 hover:text-foreground hover:ring-1 hover:ring-border/60 focus-visible:bg-foreground/5 focus-visible:text-foreground focus-visible:ring-1 focus-visible:ring-border/60 focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-ring pointer-coarse:after:absolute pointer-coarse:after:inset-x-0 pointer-coarse:after:bottom-0 pointer-coarse:after:h-full pointer-coarse:after:min-h-11"
+          className="group/replying -my-0.5 -ml-1 flex min-w-0 max-w-full items-center gap-2 rounded-md px-1 py-0.5 text-left transition-[color,background-color,box-shadow] hover:bg-foreground/5 hover:text-foreground hover:ring-1 hover:ring-border/60 focus-visible:bg-foreground/5 focus-visible:text-foreground focus-visible:ring-1 focus-visible:ring-border/60 focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-ring pointer-coarse:my-0 pointer-coarse:ml-0 pointer-coarse:h-full pointer-coarse:w-full pointer-coarse:rounded-none pointer-coarse:px-5 pointer-coarse:py-0"
         >
           {picture}
           <WorkingShimmerText className="min-w-0 truncate group-hover/replying:hidden group-focus-visible/replying:hidden">
