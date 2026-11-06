@@ -24,6 +24,7 @@ import {
   type SecretFormState,
 } from "@/lib/sandboxes/secret-intake-form";
 import { secretVerifyLine } from "@/lib/sandboxes/secret-verify-copy";
+import { RETIRED_SECRET_CREATE_FIELDS } from "@traycer/protocol/host/released-wire-rows";
 
 /** A database form that passes `secretFormProblem`, brokered and consented. */
 function validDatabaseForm(): SecretFormState {
@@ -389,6 +390,8 @@ describe("secretCreateRequest", () => {
     const request = secretCreateRequest(validDatabaseForm());
     expect(request).toEqual({
       environmentId: null,
+      // The two fields a released host still reads off this request.
+      ...RETIRED_SECRET_CREATE_FIELDS,
       name: "PROD_DB",
       kind: "database",
       protocol: "postgres",

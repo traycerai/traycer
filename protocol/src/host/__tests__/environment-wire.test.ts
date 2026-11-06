@@ -60,6 +60,7 @@ import {
 } from "@traycer/protocol/host-transport/remote/rpc-types";
 import { releasedMethodNames } from "./__fixtures__/released-method-names";
 import { supportMatrix } from "./__fixtures__/support-matrix";
+import { RETIRED_SECRET_CREATE_FIELDS } from "@traycer/protocol/host/released-wire-rows";
 
 /**
  * The wire of the environment family: the 26 environment methods, the
@@ -176,6 +177,9 @@ const sshBinding = {
 
 const createOptions = {
   name: "PROD_DB",
+  // Retired, and still on the request because `cli-v1.5.2` and `cli-v1.5.3`
+  // send both. The host refuses any other value for either.
+  ...RETIRED_SECRET_CREATE_FIELDS,
   portOverride: false,
   swapSites: ["header"],
   variables: [{ name: "DATABASE_URL", dialect: "postgres_url" }],
@@ -1937,11 +1941,17 @@ describe("environment.review.heldApply and environment.review.record", () => {
     expect(
       accepts(heldApply.requestSchema, { heldId: "", choice: "discard" }),
     ).toBe(false);
-    for (const choice of ["secret", "variable", "stays", "keep"]) {
-      expect(
-        accepts(heldApply.requestSchema, { heldId: "held-1", choice }),
-      ).toBe(false);
-    }
+    // A choice no version of this method ever had is refused at the frame.
+    // The retired ones a released desktop can still send - `variable`,
+    // `stays` and a whole `secret` arm - are parsed and then refused by the
+    // review resolver; `released-secret-wire-rows.test.ts` holds that.
+    expect(
+      accepts(heldApply.requestSchema, { heldId: "held-1", choice: "keep" }),
+    ).toBe(false);
+    // `secret` carries its whole binding or it is not that arm at all.
+    expect(
+      accepts(heldApply.requestSchema, { heldId: "held-1", choice: "secret" }),
+    ).toBe(false);
   });
 
   it("answers applied, gone or forbidden, and nothing carrying the held value", () => {
