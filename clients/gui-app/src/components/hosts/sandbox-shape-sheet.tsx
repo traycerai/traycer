@@ -57,7 +57,6 @@ import {
   idleAndRestingLine,
   newSandboxRowLabel,
   sandboxShapeLabel,
-  shortPriceLabel,
   wakeString,
 } from "@/lib/sandboxes/sandbox-strings";
 
@@ -495,7 +494,7 @@ function ShapeSheetForm(props: {
               value={sizeValue(form, provider.shapes, provider)}
               options={provider.shapes.map((rung) => ({
                 value: rungKey(rung),
-                label: rungLabel(props.catalogue, form, rung),
+                label: rungLabel(rung),
               }))}
               onChange={(value) => {
                 const rung = provider.shapes?.find(
@@ -643,23 +642,9 @@ function sizeValue(
   return rung === null ? "" : rungKey(rung);
 }
 
-/** `2 vCPU · 4 GB · 20 GB · $0.12/h`, priced in the form's region. */
-function rungLabel(
-  catalogue: SandboxCatalogue,
-  form: ShapeForm,
-  rung: SandboxShapeRung,
-): string {
-  const size = `${sandboxShapeLabel(rung.cpus, rung.memoryMb)} · ${formatMemory(rung.diskMb)}`;
-  const price = stagePrice(catalogue, {
-    os: form.os,
-    region: form.region,
-    cpus: rung.cpus,
-    memoryMb: rung.memoryMb,
-    diskMb: rung.diskMb,
-  });
-  if (price === null) return size;
-  const label = shortPriceLabel(price.awakeMcPerHour);
-  return `${size} · ${price.exact ? label : `from ${label}`}`;
+/** The resources only; the consequences line states the price. */
+function rungLabel(rung: SandboxShapeRung): string {
+  return `${sandboxShapeLabel(rung.cpus, rung.memoryMb)} · ${formatMemory(rung.diskMb)}`;
 }
 
 function ShapeNumber(props: {

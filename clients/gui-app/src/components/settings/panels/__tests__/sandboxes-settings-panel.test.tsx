@@ -351,9 +351,7 @@ vi.mock(
         const { primary } = sandboxRowActions(props);
         return (
           <span data-testid="row-primary">
-            {primary === null
-              ? ""
-              : sandboxRowActionLabel(primary, props.configuration)}
+            {primary === null ? "" : sandboxRowActionLabel(primary)}
           </span>
         );
       },
@@ -573,9 +571,7 @@ describe("<SandboxesSettingsPanel />", () => {
 
   it("shows … for the default shape only while the catalogue has not answered", () => {
     renderPanel([]);
-    expect(screen.getByTestId("sandboxes-defaults-shape").textContent).toBe(
-      "…",
-    );
+    expect(screen.getByText("Loading defaults…")).toBeTruthy();
   });
 
   it("says sandboxes can't be created once the catalogue answers with no shape", async () => {
@@ -583,9 +579,7 @@ describe("<SandboxesSettingsPanel />", () => {
     host.environments = [descriptor(PERSONAL_ENV, "user", "u1", "viewer")];
     renderPanel([]);
     await waitFor(() => {
-      expect(screen.getByTestId("sandboxes-defaults-shape").textContent).toBe(
-        SANDBOXES_CANT_BE_CREATED,
-      );
+      expect(screen.getByText(SANDBOXES_CANT_BE_CREATED)).toBeTruthy();
     });
   });
 
@@ -634,24 +628,16 @@ describe("<SandboxesSettingsPanel />", () => {
         renderPanel([]);
         await waitFor(() => {
           expect(
-            screen.getByTestId("sandboxes-defaults-shape").textContent,
+            screen.getByTestId("sandboxes-defaults-summary").textContent,
           ).toContain("4 vCPU");
         });
-        seen.push(
-          [
-            "sandboxes-defaults-shape",
-            "sandboxes-defaults-idle",
-            "sandboxes-defaults-resting",
-          ]
-            .map((id) => screen.getByTestId(id).textContent)
-            .join("|"),
-        );
+        seen.push(screen.getByTestId("sandboxes-defaults-summary").textContent);
         cleanup();
       }
 
       expect(seen[0]).toBe(seen[1]);
-      expect(seen[0]).toContain(sandboxPeriodLabel(45));
-      expect(seen[0]).toContain(KEPT_UNTIL_YOU_DESTROY_IT);
+      expect(seen[0]).toContain(`suspends after ${sandboxPeriodLabel(45)}`);
+      expect(seen[0]).toContain(KEPT_UNTIL_YOU_DESTROY_IT.toLowerCase());
     });
 
     it("shows the spec's defaults when the configuration has no item", async () => {
@@ -670,40 +656,53 @@ describe("<SandboxesSettingsPanel />", () => {
 
       await waitFor(() => {
         expect(
-          screen.getByTestId("sandboxes-defaults-shape").textContent,
-        ).toContain("2 vCPU");
+          screen.getByTestId("sandboxes-defaults-summary").textContent,
+        ).toContain("Linux · 2 vCPU · 4 GB");
       });
-      expect(screen.getByTestId("sandboxes-defaults-idle").textContent).toBe(
-        sandboxPeriodLabel(30),
-      );
-      expect(screen.getByTestId("sandboxes-defaults-resting").textContent).toBe(
-        sandboxPeriodLabel(7 * 24 * 60),
+      const summary = screen.getByTestId(
+        "sandboxes-defaults-summary",
+      ).textContent;
+      expect(summary).toContain(`suspends after ${sandboxPeriodLabel(30)}`);
+      expect(summary).toContain(
+        `removed after ${sandboxPeriodLabel(7 * 24 * 60)}`,
       );
     });
 
-    it("introduces Personal's defaults as what each new Personal sandbox starts with", async () => {
+    it("shows Personal defaults as one summary and opens the existing form in place", async () => {
       mocks.catalogue = CATALOGUE;
-      host.environments = [descriptor(PERSONAL_ENV, "user", "u1", "viewer")];
+      host.environments = [descriptor(PERSONAL_ENV, "user", "u1", "owner")];
       renderPanel([]);
 
-      const heading = await screen.findByRole("heading", {
-        name: "Your defaults for new sandboxes",
-      });
-      expect(heading.nextElementSibling?.textContent).toBe(
-        "Each new Personal sandbox starts with these. Sandboxes you already have aren't destroyed when idle until you change their Idle settings.",
+      expect(
+        await screen.findByRole("heading", { name: "Defaults" }),
+      ).toBeTruthy();
+      expect(
+        screen.getByTestId("sandboxes-defaults-summary").textContent,
+      ).toContain(
+        `Linux · 2 vCPU · 4 GB · suspends after ${sandboxPeriodLabel(30)} · removed after ${sandboxPeriodLabel(7 * 24 * 60)}`,
       );
+      expect(screen.queryByTestId("sandboxes-defaults-form")).toBeNull();
+      await userEvent.click(
+        await screen.findByRole("button", { name: "Edit defaults" }),
+      );
+      expect(screen.getByTestId("sandboxes-defaults-form")).toBeTruthy();
     });
 
-    it("introduces a team's defaults as what each new team sandbox starts with", async () => {
+    it("shows a team's default summary without repeating the environment", async () => {
       viewTeamAs("editor", { cpus: 8, memoryMb: 16_384, idleMinutes: 90 });
       renderPanel([]);
 
-      const heading = await screen.findByRole("heading", {
-        name: "Acme's defaults for new sandboxes",
+      expect(
+        await screen.findByRole("heading", { name: "Defaults" }),
+      ).toBeTruthy();
+      await waitFor(() => {
+        expect(
+          screen.getByTestId("sandboxes-defaults-summary").textContent,
+        ).toContain("Linux · 4 vCPU · 8 GB · suspends after 45 minutes");
       });
-      expect(heading.nextElementSibling?.textContent).toBe(
-        "Shared by Acme · editors can change them · not a spending limit. Each new Acme sandbox starts with these. Sandboxes you already have aren't destroyed when idle until you change their Idle settings.",
-      );
+      expect(
+        screen.getByTestId("sandboxes-defaults-summary").textContent,
+      ).not.toContain("Acme");
     });
 
     it("gives a viewer the item read-only, naming who can change it", async () => {
@@ -736,7 +735,10 @@ describe("<SandboxesSettingsPanel />", () => {
       ];
       renderPanel([]);
 
-      expect(await screen.findByText("Ada, Bo can change them")).toBeTruthy();
+      expect(
+        (await screen.findByTestId("sandboxes-defaults-editors")).textContent,
+      ).toContain("Editors and admins can change defaults · Members");
+      expect(screen.queryByText(/Ada|Bo|Cy|Di/u)).toBeNull();
       expect(screen.queryByTestId("sandboxes-defaults-form")).toBeNull();
       expect(
         screen.queryByRole("button", { name: "Save defaults" }),
@@ -746,6 +748,9 @@ describe("<SandboxesSettingsPanel />", () => {
     it("gives an editor the form on the item's values, saving it at the read revision", async () => {
       viewTeamAs("editor", { cpus: 8, memoryMb: 16_384, idleMinutes: 90 });
       renderPanel([]);
+      await userEvent.click(
+        await screen.findByRole("button", { name: "Edit defaults" }),
+      );
 
       const idle = await screen.findByTestId("sandboxes-defaults-idle-input");
       expect(
@@ -789,6 +794,9 @@ describe("<SandboxesSettingsPanel />", () => {
           finish = resolve;
         });
       renderPanel([]);
+      await userEvent.click(
+        await screen.findByRole("button", { name: "Edit defaults" }),
+      );
 
       const idle = await screen.findByTestId("sandboxes-defaults-idle-input");
       fireEvent.change(idle, { target: { value: "2" } });
@@ -811,6 +819,9 @@ describe("<SandboxesSettingsPanel />", () => {
     it("refuses an idle period under 2 minutes without writing", async () => {
       viewTeamAs("editor", { cpus: 8, memoryMb: 16_384, idleMinutes: 90 });
       renderPanel([]);
+      await userEvent.click(
+        await screen.findByRole("button", { name: "Edit defaults" }),
+      );
 
       const idle = await screen.findByTestId("sandboxes-defaults-idle-input");
       fireEvent.change(idle, { target: { value: "1" } });
@@ -835,6 +846,9 @@ describe("<SandboxesSettingsPanel />", () => {
         };
       };
       renderPanel([]);
+      await userEvent.click(
+        await screen.findByRole("button", { name: "Edit defaults" }),
+      );
 
       const idle = await screen.findByTestId("sandboxes-defaults-idle-input");
       fireEvent.change(idle, { target: { value: "2" } });
@@ -849,7 +863,7 @@ describe("<SandboxesSettingsPanel />", () => {
       expect(screen.getByText(/Changed by Grace/)).toBeTruthy();
     });
 
-    it("reopens the form on the configuration switched to, and saves to it, at the same revision", async () => {
+    it("switches the defaults summary and editor to the selected configuration", async () => {
       viewTeamAs("editor", { cpus: 8, memoryMb: 16_384, idleMinutes: 90 });
       const personal = {
         ...SANDBOX_DEFAULTS_VALUE,
@@ -872,12 +886,24 @@ describe("<SandboxesSettingsPanel />", () => {
       );
 
       expect(
+        await screen.findByRole("button", { name: "Edit defaults" }),
+      ).toBeTruthy();
+      await userEvent.click(
+        await screen.findByRole("button", { name: "Edit defaults" }),
+      );
+      expect(
         await screen.findByTestId("sandboxes-defaults-idle-input"),
       ).toHaveProperty("value", "45");
       act(() => {
         useSettingsEnvironmentPickStore.setState({ pick: PERSONAL_PICK });
       });
 
+      expect(
+        await screen.findByTestId("sandboxes-defaults-summary"),
+      ).toBeTruthy();
+      await userEvent.click(
+        await screen.findByRole("button", { name: "Edit defaults" }),
+      );
       await waitFor(() => {
         expect(
           screen.getByTestId("sandboxes-defaults-idle-input"),
@@ -911,6 +937,9 @@ describe("<SandboxesSettingsPanel />", () => {
         current: { revision: 4, changedBy: "Grace", changedAt: 2 },
       });
       renderPanel([]);
+      await userEvent.click(
+        await screen.findByRole("button", { name: "Edit defaults" }),
+      );
 
       const idle = await screen.findByTestId("sandboxes-defaults-idle-input");
       fireEvent.change(idle, { target: { value: "2" } });
@@ -921,7 +950,7 @@ describe("<SandboxesSettingsPanel />", () => {
       });
 
       expect(
-        await screen.findByText("Your defaults for new sandboxes"),
+        await screen.findByRole("heading", { name: "Defaults" }),
       ).toBeTruthy();
       expect(screen.queryByText(/Changed by Grace/)).toBeNull();
     });
@@ -975,7 +1004,7 @@ describe("<SandboxesSettingsPanel />", () => {
 
     const failed = within(rowOf("build-box"));
     expect(failed.getByTestId("sandboxes-row-clock").textContent).toBe(
-      "Couldn't start build-box at 11:01 · SBX-0412",
+      "Couldn't start at 11:01 · SBX-0412",
     );
     expect(
       failed.getByRole("button", { name: "Retry" }).hasAttribute("disabled"),
@@ -1028,9 +1057,8 @@ describe("<SandboxesSettingsPanel />", () => {
         "sleeping refreshed",
       ]);
       expect(
-        within(rowOf("older")).getByTestId("sandboxes-row-sessions")
-          .textContent,
-      ).toContain("1 session");
+        within(rowOf("older")).queryByTestId("sandboxes-row-sessions"),
+      ).toBeNull();
     });
 
     it("orders raw awake rows first, and keeps that order when only frozen changes", () => {
@@ -1183,11 +1211,7 @@ describe("<SandboxesSettingsPanel />", () => {
     ).toBeNull();
   });
 
-  // The second production call site of the withdrawal sentence. Its card
-  // twin is covered in `sandbox-card.test.tsx`; without this case, dropping
-  // `destroyAt` at THIS call site would put the announced day back beside
-  // the clock line's day-30 and no test would notice.
-  it("drops the announced day from a frozen withdrawn row's notice, where the clock line names the day-30 one", () => {
+  it("keeps a frozen payer consequence once on its own line before the removal date", () => {
     const frozenAt = Date.UTC(2026, 9, 9);
     renderPanel([
       row("frozen", {
@@ -1205,11 +1229,23 @@ describe("<SandboxesSettingsPanel />", () => {
     ).toBe(
       "This sandbox stops running and is rebuilt from your environment. Files outside the repository are lost.",
     );
-    expect(
-      within(rowOf("frozen")).getByTestId("sandboxes-row-clock").textContent,
-    ).toBe(
-      `Your credits ran out. Will be removed on ${formatSandboxDate(frozenDestroyAt(frozenAt), false)}`,
+    const frozen = rowOf("frozen");
+    expect(within(frozen).getByTestId("sandboxes-row-clock").textContent).toBe(
+      `Will be removed on ${formatSandboxDate(frozenDestroyAt(frozenAt), false)}`,
     );
+    const consequence = within(frozen).getByTestId(
+      "sandboxes-row-payer-consequence",
+    );
+    expect(consequence.textContent).toBe("Your credits ran out.");
+    expect(consequence.className).toContain("wrap-anywhere");
+    expect(frozen.textContent.match(/Your credits ran out\./gu)).toHaveLength(
+      1,
+    );
+    expect(
+      consequence.compareDocumentPosition(
+        within(frozen).getByTestId("row-primary"),
+      ) & Node.DOCUMENT_POSITION_FOLLOWING,
+    ).not.toBe(0);
     expect(within(rowOf("frozen")).getAllByText("Out of credits")).toHaveLength(
       1,
     );
@@ -1683,6 +1719,9 @@ describe("<SandboxesSettingsPanel />", () => {
     });
     await withSettingsTabSelected();
     renderPanel([]);
+    await userEvent.click(
+      await screen.findByRole("button", { name: "Edit defaults" }),
+    );
     await waitFor(() => {
       expect(
         screen.getByTestId("sandboxes-defaults-idle-input"),
@@ -1703,31 +1742,50 @@ describe("<SandboxesSettingsPanel />", () => {
     useStagedSandboxStore.setState({ bySurface: {} });
   });
 
-  it("says an agent started a sandbox an agent created and the person kept, not that they did", () => {
+  it("keeps starter, keeper and task details off the row and leaves Details in More", async () => {
     useAuthStore.setState({
       status: "signed-in",
       contextMetadata: { userId: "user-me", username: "me" },
     });
+    mocks.realActions = true;
     renderPanel([
       row("sbx-kept", {
+        displayName:
+          "A sandbox name that must stay completely visible on one wrapping line",
         burst: false,
         createdByAgentId: "agent-1",
+        createdByAgentName: "Planner",
+        createdByTaskTitle: "Sandbox setup",
         createdBy: null,
         keptBy: { userId: "user-me", displayName: "Me" },
       }),
     ]);
 
     const kept = rowOf("sbx-kept");
-    expect(within(kept).getByText("Started by an agent")).toBeDefined();
-    expect(within(kept).getByText("Kept by you")).toBeDefined();
-    expect(within(kept).queryByText("Started by you")).toBeNull();
+    const name = within(kept).getByTestId("sandboxes-row-name");
+    expect(name.textContent).toBe(
+      "A sandbox name that must stay completely visible on one wrapping line",
+    );
+    expect(name.className).toContain("wrap-anywhere");
+    expect(name.nextElementSibling).not.toBeNull();
+    expect(
+      within(kept).queryByText(/Started by|Kept by|Planner|Sandbox setup/u),
+    ).toBeNull();
+    expect(within(kept).queryByTestId("sandboxes-row-sessions")).toBeNull();
+    await userEvent.click(
+      within(kept).getByRole("button", { name: /^More actions for/ }),
+    );
+    const menu = await screen.findByTestId("sandbox-row-menu-content");
+    expect(
+      within(menu).getAllByRole("menuitem", { name: "Details" }),
+    ).toHaveLength(1);
     useAuthStore.setState({ status: "signed-out", contextMetadata: null });
   });
 
-  describe("a row's running sessions", () => {
+  describe("row details stay in Details", () => {
     const AWAKE = row("sbx-awake", { state: "awake" });
 
-    it("names each session on the host as a pill beside the count, an idle terminal included", () => {
+    it("keeps session reports off the list row", () => {
       mocks.report = liveSessionReport(
         {
           agents: [agentSessionFixture({ name: "Planner", working: true })],
@@ -1737,31 +1795,28 @@ describe("<SandboxesSettingsPanel />", () => {
       );
       renderPanel([AWAKE]);
 
-      const line = within(rowOf("sbx-awake")).getByTestId(
-        "sandboxes-row-sessions",
-      );
-      expect(line.textContent).toBe("2 sessions runningPlannermake watch");
       expect(
-        within(line)
-          .getAllByTestId("sandboxes-row-session-pill")
-          .map((pill) => pill.textContent),
-      ).toEqual(["Planner", "make watch"]);
+        within(rowOf("sbx-awake")).queryByTestId("sandboxes-row-sessions"),
+      ).toBeNull();
+      expect(within(rowOf("sbx-awake")).queryByText("Planner")).toBeNull();
+      expect(within(rowOf("sbx-awake")).queryByText("make watch")).toBeNull();
     });
 
-    it("draws no pills when the host runs nothing", () => {
+    it("keeps session pills off the row", () => {
       mocks.report = liveSessionReport({ agents: [], terminals: [] }, false);
       renderPanel([AWAKE]);
 
-      expect(screen.queryAllByTestId("sandboxes-row-session-pill")).toEqual([]);
+      expect(
+        within(rowOf("sbx-awake")).queryByTestId("sandboxes-row-session-pill"),
+      ).toBeNull();
     });
 
-    it("says the count is unknown, never a zero, when no report is held", () => {
+    it("does not show an unknown session count in the list", () => {
       renderPanel([AWAKE]);
 
       expect(
-        within(rowOf("sbx-awake")).getByTestId("sandboxes-row-sessions")
-          .textContent,
-      ).toBe("Sessions unknown · no report yet");
+        within(rowOf("sbx-awake")).queryByText(/Sessions unknown/u),
+      ).toBeNull();
     });
   });
 
@@ -1832,7 +1887,7 @@ describe("<SandboxesSettingsPanel />", () => {
       );
       renderPanel([row("sbx-a", {})]);
 
-      expect(header()).toBe("1 sandbox · $0.50 today (UTC day).");
+      expect(header()).toBe("1 sandbox · $0.50 today");
     });
 
     it("reads the team's own environment for a team, with the viewer's share", () => {
@@ -1861,16 +1916,14 @@ describe("<SandboxesSettingsPanel />", () => {
       );
       renderPanel([row("sbx-a", { environmentId: TEAM_DAY_ENV })]);
 
-      expect(header()).toBe(
-        "1 sandbox · $5.00 today (UTC day), $0.70 of it yours.",
-      );
+      expect(header()).toBe("1 sandbox · $5.00 today, $0.70 of it yours");
     });
 
     it("falls back to the listed rows' sum when the server sends no per-environment totals", () => {
       mocks.costs = costsOf([], 20);
       renderPanel([row("sbx-a", {})]);
 
-      expect(header()).toBe("1 sandbox · $0.02 today (UTC day).");
+      expect(header()).toBe("1 sandbox · $0.02 today");
     });
 
     it("leaves the viewer's share out when it is zero", () => {
@@ -1894,7 +1947,7 @@ describe("<SandboxesSettingsPanel />", () => {
       );
       renderPanel([row("sbx-a", { environmentId: TEAM_DAY_ENV })]);
 
-      expect(header()).toBe("1 sandbox · $5.00 today (UTC day).");
+      expect(header()).toBe("1 sandbox · $5.00 today");
     });
 
     function pickTeam(): void {
@@ -1922,9 +1975,7 @@ describe("<SandboxesSettingsPanel />", () => {
       );
       renderPanel([row("sbx-a", { environmentId: TEAM_DAY_ENV })]);
 
-      expect(header()).toBe(
-        "1 sandbox · $0.04 today (UTC day), $0.04 of it yours.",
-      );
+      expect(header()).toBe("1 sandbox · $0.04 today, $0.04 of it yours");
     });
 
     it("reads Automations only for a team with no sandboxes but a listed Automations row, with the share", () => {
@@ -1948,7 +1999,7 @@ describe("<SandboxesSettingsPanel />", () => {
       ]);
 
       expect(header()).toBe(
-        "Automations only · $0.04 today (UTC day), $0.04 of it yours.",
+        "Automations only · $0.04 today, $0.04 of it yours",
       );
     });
 
@@ -1966,7 +2017,7 @@ describe("<SandboxesSettingsPanel />", () => {
       );
       renderPanel([]);
 
-      expect(header()).toBe("Automations only · $0.04 today (UTC day).");
+      expect(header()).toBe("Automations only · $0.04 today");
     });
   });
 
@@ -2005,13 +2056,13 @@ describe("<SandboxesSettingsPanel />", () => {
       });
       viewAs(PAYER.userId);
       renderPanel([awake]);
-      expect(within(rowOf(awake.id)).getByText("Paid by you")).toBeDefined();
+      expect(within(rowOf(awake.id)).getByText(/paid by you/u)).toBeDefined();
       expect(within(rowOf(awake.id)).queryByText("Paid by Priya")).toBeNull();
       cleanup();
 
       viewAs("user-other");
       renderPanel([awake]);
-      expect(within(rowOf(awake.id)).getByText("Paid by Priya")).toBeDefined();
+      expect(within(rowOf(awake.id)).getByText(/paid by Priya/u)).toBeDefined();
     });
 
     it("tells only a member who isn't the payer that resuming makes them the payer", () => {
@@ -2022,15 +2073,51 @@ describe("<SandboxesSettingsPanel />", () => {
       });
       viewAs(PAYER.userId);
       renderPanel([resting]);
-      expect(clockOf(resting.id)).toMatch(
-        / · Storage uses your Acme credits\.$/,
-      );
+      expect(clockOf(resting.id)).not.toContain("Storage uses");
+      expect(
+        within(rowOf(resting.id)).queryByTestId(
+          "sandboxes-row-payer-consequence",
+        ),
+      ).toBeNull();
       cleanup();
 
       viewAs("user-other");
       renderPanel([resting]);
-      expect(clockOf(resting.id)).toMatch(
-        / · Storage uses Priya's Acme credits\. Resuming changes the payer to you\.$/,
+      expect(clockOf(resting.id)).not.toContain("Resuming changes the payer");
+      expect(
+        within(rowOf(resting.id)).getByTestId("sandboxes-row-payer-consequence")
+          .textContent,
+      ).toBe("Resuming changes the payer to you.");
+    });
+
+    it("keeps the frozen payer consequence once before a short Resume", () => {
+      const frozen = row("sbx-frozen-payer", {
+        state: "suspended",
+        frozen: true,
+        frozenAt: Date.UTC(2026, 9, 20),
+        environmentId: TEAM_ENV,
+        wakePayer: PAYER,
+      });
+      viewAs("user-other");
+      renderPanel([frozen]);
+
+      const frozenRow = rowOf(frozen.id);
+      const consequence = within(frozenRow).getByTestId(
+        "sandboxes-row-payer-consequence",
+      );
+      expect(consequence.textContent).toBe(
+        "Priya's Acme credits ran out. Resuming changes the payer to you.",
+      );
+      expect(
+        frozenRow.textContent.match(/Resuming changes the payer to you\./gu),
+      ).toHaveLength(1);
+      expect(within(frozenRow).getByTestId("row-primary").textContent).toBe(
+        "Resume",
+      );
+      expect(
+        within(frozenRow).getByTestId("sandboxes-row-clock").textContent,
+      ).toBe(
+        `Will be removed on ${formatSandboxDate(frozenDestroyAt(frozen.frozenAt ?? 0), false)}`,
       );
     });
   });
@@ -2058,9 +2145,15 @@ describe("<SandboxesSettingsPanel />", () => {
       expect(
         within(destroying).getByTestId("sandboxes-row-state").textContent,
       ).toBe("Destroying");
-      expect(
-        within(destroying).getByTestId("sandboxes-row-clock").textContent,
-      ).toBe("Destroying · pending");
+      if (frozen) {
+        expect(
+          within(destroying).queryByTestId("sandboxes-row-clock"),
+        ).toBeNull();
+      } else {
+        expect(
+          within(destroying).getByTestId("sandboxes-row-clock").textContent,
+        ).toBe("Pending.");
+      }
       expect(
         within(destroying).queryByTestId("sandboxes-row-sessions"),
       ).toBeNull();
@@ -2081,7 +2174,7 @@ describe("<SandboxesSettingsPanel />", () => {
     const panel = renderUi(<SandboxesSettingsPanel />);
     const clock = (): string =>
       within(rowOf(sandbox.id)).getByTestId("sandboxes-row-clock").textContent;
-    expect(clock()).toBe("Resuming · pending");
+    expect(clock()).toBe("Pending.");
     expect(
       within(rowOf(sandbox.id)).queryByTestId("sandboxes-row-sessions"),
     ).toBeNull();
@@ -2089,17 +2182,16 @@ describe("<SandboxesSettingsPanel />", () => {
     mocks.sandboxes = [{ ...sandbox, state: "awake" }];
     mocks.sessionFailed = true;
     panel.rerender(<SandboxesSettingsPanel />);
-    expect(clock()).toBe("Resuming · pending");
+    expect(clock()).toBe("Pending.");
 
     mocks.resumePending = false;
     mocks.sessionFailed = false;
     mocks.report = liveSessionReport({ agents: [], terminals: [] }, false);
     panel.rerender(<SandboxesSettingsPanel />);
-    expect(clock()).toContain("Awake");
+    expect(clock()).not.toBe("Pending.");
     expect(
-      within(rowOf(sandbox.id)).getByTestId("sandboxes-row-sessions")
-        .textContent,
-    ).toBe("0 sessions running");
+      within(rowOf(sandbox.id)).queryByTestId("sandboxes-row-sessions"),
+    ).toBeNull();
 
     // Lifecycle state changes always take over from the pending wake.
     mocks.resumePending = false;
@@ -2133,14 +2225,14 @@ describe("<SandboxesSettingsPanel />", () => {
     const clock = (): string =>
       within(rowOf(resuming.id)).getByTestId("sandboxes-row-clock").textContent;
     await waitFor(() => expect(host.status).toHaveBeenCalledTimes(1));
-    expect(clock()).toBe("Resuming · pending");
+    expect(clock()).toBe("Pending.");
 
     await act(() =>
       page.queryClient.invalidateQueries({
         queryKey: sandboxQueryKeys.list(binding.auth, "u-viewer"),
       }),
     );
-    expect(clock()).toBe("Resuming · pending");
+    expect(clock()).toBe("Pending.");
 
     const offline: RemoteHostDirectoryEntry = {
       ...online,
@@ -2153,7 +2245,7 @@ describe("<SandboxesSettingsPanel />", () => {
       expect(binding.auth.listSandboxes).toHaveBeenCalledTimes(3),
     );
     // Losing the host alone does not replace the pending lifecycle line.
-    expect(clock()).toBe("Resuming · pending");
+    expect(clock()).toBe("Pending.");
     await act(async () => {
       confirmation.resolve({ kind: "ok", response: { sandboxes: [awake] } });
       await confirmation.promise;
@@ -2253,7 +2345,7 @@ describe("<SandboxesSettingsPanel />", () => {
       } else {
         const expected =
           nextState === "destroying"
-            ? "Destroying · pending"
+            ? "Pending."
             : "Running, but Traycer can't connect";
         await waitFor(() =>
           expect(

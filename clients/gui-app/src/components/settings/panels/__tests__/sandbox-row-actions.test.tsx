@@ -1175,49 +1175,48 @@ describe("<SandboxRowActions /> a sandbox whose settings did not apply", () => {
       recordNegotiatedHostMethods("host-failed", [REPAIR_METHOD]);
     });
 
-    it("offers Retry applying with the awake sandbox's own Open terminal, Stop, Choose another host and Details", () => {
+    it("keeps Retry setup primary and lists each other setup action once in More", async () => {
       renderFailed({ state: "awake" }, false);
 
-      expect(
-        screen.getByRole("button", { name: "Retry applying" }),
-      ).toBeTruthy();
-      for (const name of [
+      expect(screen.getByRole("button", { name: "Retry setup" })).toBeTruthy();
+      expect(await menuItems()).toEqual([
         "Open terminal",
+        "Rename",
         "Stop",
         "Choose another host",
         "Details",
-      ]) {
-        expect(screen.getByRole("button", { name })).toBeTruthy();
-      }
-      expect(screen.queryByRole("button", { name: "Repair setup" })).toBeNull();
+        "Destroy",
+      ]);
     });
 
-    it("offers Retry applying for an environment-only failure whose guest is fine", () => {
+    it("offers Retry setup for an environment-only failure whose guest is fine", () => {
       renderFailed({ state: "awake", guestConfigured: true }, true);
 
-      expect(
-        screen.getByRole("button", { name: "Retry applying" }),
-      ).toBeTruthy();
-      expect(screen.queryByRole("button", { name: "Repair setup" })).toBeNull();
+      expect(screen.getByRole("button", { name: "Retry setup" })).toBeTruthy();
     });
 
     it.each([
       { guestConfigured: false, settingsFailed: false },
       { guestConfigured: true, settingsFailed: true },
     ])(
-      "keeps Details only inline and keeps the lifecycle menu for guestConfigured=$guestConfigured, settingsFailed=$settingsFailed",
+      "keeps Details and lifecycle actions in More for guestConfigured=$guestConfigured, settingsFailed=$settingsFailed",
       async ({ guestConfigured, settingsFailed }) => {
         renderFailed({ state: "awake", guestConfigured }, settingsFailed);
-        const details = screen.getByRole("button", { name: "Details" });
-
         expect(await menuItems()).toEqual([
           "Open terminal",
           "Rename",
           "Stop",
+          "Choose another host",
+          "Details",
           "Destroy",
         ]);
         await userEvent.keyboard("{Escape}");
-        await userEvent.click(details);
+        await userEvent.click(
+          screen.getByRole("button", { name: /^More actions for/ }),
+        );
+        await userEvent.click(
+          await screen.findByRole("menuitem", { name: "Details" }),
+        );
         expect(useSandboxDetailsStore.getState().sandboxId).toBe("sbx-failed");
       },
     );
@@ -1226,7 +1225,7 @@ describe("<SandboxRowActions /> a sandbox whose settings did not apply", () => {
       renderFailed({ state: "awake" }, false);
 
       await userEvent.click(
-        screen.getByRole("button", { name: "Retry applying" }),
+        screen.getByRole("button", { name: "Retry setup" }),
       );
 
       expect(settings.retry).toHaveBeenCalledTimes(1);
@@ -1242,20 +1241,19 @@ describe("<SandboxRowActions /> a sandbox whose settings did not apply", () => {
       recordNegotiatedHostMethods("host-failed", [REPAIR_METHOD]);
     });
 
-    it("offers Repair setup, never Retry applying, for a guest that really failed", () => {
+    it("offers Retry setup for a guest that really failed", () => {
       renderFailed({ state: "awake" }, false);
 
-      expect(screen.getByRole("button", { name: "Repair setup" })).toBeTruthy();
       expect(
-        screen.queryByRole("button", { name: "Retry applying" }),
-      ).toBeNull();
+        screen.getAllByRole("button", { name: "Retry setup" }),
+      ).toHaveLength(1);
     });
 
     it("runs the guest-only repair, never the combined retry", async () => {
       renderFailed({ state: "awake" }, false);
 
       await userEvent.click(
-        screen.getByRole("button", { name: "Repair setup" }),
+        screen.getByRole("button", { name: "Retry setup" }),
       );
 
       expect(settings.retry).not.toHaveBeenCalled();
@@ -1266,19 +1264,13 @@ describe("<SandboxRowActions /> a sandbox whose settings did not apply", () => {
     it("offers no guest repair for an environment-only failure whose guest is fine", () => {
       renderFailed({ state: "awake", guestConfigured: true }, true);
 
-      expect(screen.queryByRole("button", { name: "Repair setup" })).toBeNull();
-      expect(
-        screen.queryByRole("button", { name: "Retry applying" }),
-      ).toBeNull();
+      expect(screen.queryByRole("button", { name: "Retry setup" })).toBeNull();
     });
 
     it("offers no guest repair while the guest fact is unknown", () => {
       renderFailed({ state: "awake", guestConfigured: null }, true);
 
-      expect(screen.queryByRole("button", { name: "Repair setup" })).toBeNull();
-      expect(
-        screen.queryByRole("button", { name: "Retry applying" }),
-      ).toBeNull();
+      expect(screen.queryByRole("button", { name: "Retry setup" })).toBeNull();
     });
 
     it("offers no repair when the repair method is present but its version is not known to be 1.0", () => {
@@ -1286,10 +1278,7 @@ describe("<SandboxRowActions /> a sandbox whose settings did not apply", () => {
       recordNegotiatedHostMethods("host-failed", [REPAIR_METHOD]);
       renderFailed({ state: "awake" }, false);
 
-      expect(screen.queryByRole("button", { name: "Repair setup" })).toBeNull();
-      expect(
-        screen.queryByRole("button", { name: "Retry applying" }),
-      ).toBeNull();
+      expect(screen.queryByRole("button", { name: "Retry setup" })).toBeNull();
     });
 
     it("offers no repair when the host has no repair method at all", () => {
@@ -1297,7 +1286,7 @@ describe("<SandboxRowActions /> a sandbox whose settings did not apply", () => {
       recordNegotiatedHostMethods("host-failed", ["terminal.plain.create"]);
       renderFailed({ state: "awake" }, false);
 
-      expect(screen.queryByRole("button", { name: "Repair setup" })).toBeNull();
+      expect(screen.queryByRole("button", { name: "Retry setup" })).toBeNull();
     });
   });
 
@@ -1315,9 +1304,7 @@ describe("<SandboxRowActions /> a sandbox whose settings did not apply", () => {
       expect(
         screen.queryByRole("button", { name: "Open terminal" }),
       ).toBeNull();
-      expect(
-        screen.queryByRole("button", { name: "Retry applying" }),
-      ).toBeNull();
+      expect(screen.queryByRole("button", { name: "Retry setup" })).toBeNull();
       const items = await menuItems();
       expect(items).not.toContain("Stop");
       expect(items).toContain("Destroy");
@@ -1330,9 +1317,7 @@ describe("<SandboxRowActions /> a sandbox whose settings did not apply", () => {
       expect(
         screen.queryByRole("button", { name: "Open terminal" }),
       ).toBeNull();
-      expect(
-        screen.queryByRole("button", { name: "Retry applying" }),
-      ).toBeNull();
+      expect(screen.queryByRole("button", { name: "Retry setup" })).toBeNull();
     });
 
     it("still resumes a suspended sandbox", async () => {
@@ -1343,7 +1328,7 @@ describe("<SandboxRowActions /> a sandbox whose settings did not apply", () => {
       expect(await menuItems()).toContain("Destroy");
     });
 
-    it("still offers Give it another period on a stopped sandbox near its destroy time", () => {
+    it("keeps Give it another period in More on a stopped sandbox near its destroy time", async () => {
       renderFailed(
         {
           state: "stopped",
@@ -1353,7 +1338,7 @@ describe("<SandboxRowActions /> a sandbox whose settings did not apply", () => {
         false,
       );
 
-      expect(screen.getByTestId("sandbox-row-give-another")).toBeTruthy();
+      expect(await menuItems()).toContain("Give it another 1 hour");
     });
   });
 
@@ -1372,9 +1357,7 @@ describe("<SandboxRowActions /> a sandbox whose settings did not apply", () => {
         "Details",
         "Destroy",
       ]);
-      expect(
-        screen.queryByRole("button", { name: "Retry applying" }),
-      ).toBeNull();
+      expect(screen.queryByRole("button", { name: "Retry setup" })).toBeNull();
     });
 
     it("keeps Stop as the primary of an unreachable awake sandbox", () => {

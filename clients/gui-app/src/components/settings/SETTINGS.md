@@ -915,6 +915,18 @@ Notifications left the Host group; only their group did. Browser agent access
 moved out of Browser into its own section, `browser-agent-access`, and then
 into Permissions; agent definitions became the Agents page's Definitions tab.
 
+Sandboxes (`sandboxes`) names the environment once in its header. Defaults
+start as one summary; **Edit defaults** reveals the existing form in place.
+Viewers get a **Members** link instead of an editor roster. The list starts
+with its count and today's cost, search and filters. Each row gives the full
+name its own wrapping line, then state, resources/rate/payer and the clock.
+A payer change is a separate line before the short primary action. Every
+other action lives once in **More**, including **Details**; a setup failure
+leads with **Retry setup**. Details holds the starter, agent/task purpose,
+sessions and setup evidence. Keep states the actual wake payer once, and the
+Size picker leaves pricing to its consequences line. The out-of-credits chat
+footer uses the list's payer sentence on a wrapping line above **Resume**.
+
 MCP servers (`mcp-servers`) and Skills (`skills`) are pages of the
 configuration, read from the cloud on Personal and on a team alike, whatever
 the window's host runs (`CLOUD_ONLY_SECTIONS` in `PersonalPageFrame`). In a
