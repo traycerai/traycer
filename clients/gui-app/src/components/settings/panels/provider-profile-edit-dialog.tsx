@@ -526,12 +526,6 @@ export function ProfileEditDialog(props: {
 }): ReactNode {
   const providerId = props.state.providerId;
   const removeProfile = useRemoveProviderProfile();
-  const signOutProfile = useSignOutProviderProfile();
-  const personalHost = usePersonalPageHost();
-  const signOutSupported = useHostSupportsMethod(
-    personalHost.hostId,
-    "providers.signOutProfile",
-  );
   const renameProfile = useRenameProviderProfile();
   const recolorProfile = useRecolorProviderProfile();
   const [switchingAccountOverride, setSwitchingAccount] = useState<
