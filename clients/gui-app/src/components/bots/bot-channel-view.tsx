@@ -827,7 +827,8 @@ export function BotChannelView(props: {
               )}
             >
               {/* The message area: where a chosen background tints the
-                  channel, and the box below keeps the page's own. */}
+                  channel. The dock below it (the replying strip, the
+                  routing card and the box) keeps the page's own. */}
               <div
                 data-testid="bot-channel-messages"
                 data-channel-background={background.swatch}
@@ -856,17 +857,17 @@ export function BotChannelView(props: {
                     landOn={landing}
                   />
                 </BotExchangeLinesContext>
-                <BotReplyingStrip
-                  botTitle={botTitle}
-                  activity={trunkReply}
-                  testId="bot-channel-replying"
-                />
-                <BotRoutingCard
-                  botId={botId}
-                  hostId={hostId}
-                  sessionChatId={trunkChatId}
-                />
               </div>
+              <BotReplyingStrip
+                botTitle={botTitle}
+                activity={trunkReply}
+                testId="bot-channel-replying"
+              />
+              <BotRoutingCard
+                botId={botId}
+                hostId={hostId}
+                sessionChatId={trunkChatId}
+              />
               <BotMessageComposer
                 // Its draft is the conversation's, kept by it (`channelKeptDraft`).
                 key={channel.conversationId}
