@@ -76,8 +76,18 @@ interface PlayingPhase {
   readonly fromElapsed: number;
   /** Whether this start has asked for the outro yet. */
   outroAsked: boolean;
-  /** Clock time the outro ends, and the run with it; null until placed. */
-  endsAt: number | null;
+  /**
+   * Clock time the outro ends, and the run with it; null until placed. From
+   * then on the layers' gains are the outro's fade.
+   */
+  outroEndsAt: number | null;
+  /**
+   * Whether the run rings out past the track's length rather than ending on
+   * its outro: it has none, or this start's would not load.
+   */
+  ringsOut: boolean;
+  /** Clock time the ring-out ends at the latest; null until it begins. */
+  ringOutCapAt: number | null;
   /** The plays the scheduler counted since this start, played or skipped. */
   readonly placed: PlacedPlay[];
 }
@@ -97,6 +107,8 @@ type PlayerPhase =
 interface ActiveVoice {
   readonly voice: OutputVoice;
   readonly endsAt: number;
+  /** The layer it plays on; null for an intro or outro. */
+  readonly layerIndex: number | null;
 }
 
 /** An intro or outro, as a layer the stems know by its name, and its gain. */
@@ -119,6 +131,7 @@ function bookendChannel(
   return {
     layer: {
       name: bookend.name,
+      role: null,
       variants: bookend.variants,
       sublayers: 1,
       sublayerStartingOffset: null,
@@ -365,8 +378,8 @@ export class TrackPlayer {
     }
     if (
       this.phase.kind === "playing" &&
-      this.phase.endsAt !== null &&
-      now >= this.phase.endsAt
+      this.phase.outroEndsAt !== null &&
+      now >= this.phase.outroEndsAt
     ) {
       this.voices = this.voices.filter((active) => active.endsAt > now);
       this.endRun(now, MIX_TUNING.outroRingOutSeconds);
@@ -415,7 +428,9 @@ export class TrackPlayer {
       trackStart: now - fromElapsed + START_LEAD_SECONDS,
       fromElapsed,
       outroAsked: false,
-      endsAt: null,
+      outroEndsAt: null,
+      ringsOut: this.outro === null,
+      ringOutCapAt: null,
       placed: [],
     };
     this.phase = phase;
@@ -470,11 +485,11 @@ export class TrackPlayer {
   private lookAhead(phase: PlayingPhase, now: number): void {
     const trackTime = now - phase.trackStart;
     const { lengthSeconds, alignmentSeconds } = this.track;
-    if (this.outro === null && trackTime >= lengthSeconds) {
-      this.endRun(now, SAMPLE_FADE_SECONDS);
+    this.voices = this.voices.filter((active) => active.endsAt > now);
+    if (phase.ringsOut && trackTime >= lengthSeconds) {
+      this.ringOut(phase, now);
       return;
     }
-    this.voices = this.voices.filter((active) => active.endsAt > now);
     if (
       this.outro !== null &&
       !phase.outroAsked &&
@@ -490,6 +505,22 @@ export class TrackPlayer {
       trackTime + LOOKAHEAD_HORIZON_SECONDS,
     );
     for (const play of plays) void this.place(phase, play);
+  }
+
+  /**
+   * Past the track's length nothing new starts: the samples sounding play on to
+   * their own ends, and the run ends with the last one heard, or at the cap,
+   * fading what still sounds. One on a layer switched off is not heard, so it
+   * holds nothing up.
+   */
+  private ringOut(phase: PlayingPhase, now: number): void {
+    phase.ringOutCapAt ??= now + MIX_TUNING.ringOutCapSeconds;
+    const heard = this.voices.some(
+      (active) =>
+        active.layerIndex === null || this.layerLevel(active.layerIndex) > 0,
+    );
+    if (heard && now < phase.ringOutCapAt) return;
+    this.endRun(now, MIX_TUNING.ringOutFadeSeconds);
   }
 
   /** The run is over: what still sounds fades out, and the silence begins. */
@@ -526,6 +557,7 @@ export class TrackPlayer {
         phase.placed.push({ play, startAt });
         this.startVoice(
           this.layerGains[play.layerIndex],
+          play.layerIndex,
           buffer,
           phase.trackStart + startAt,
         );
@@ -553,7 +585,7 @@ export class TrackPlayer {
       const buffer = await this.stems.load(this.track, intro.layer, variant);
       if (this.phase !== phase) return;
       const startAt = this.bookendStartAt(phase, phase.fromElapsed);
-      this.startVoice(intro.gain, buffer, phase.trackStart + startAt);
+      this.startVoice(intro.gain, null, buffer, phase.trackStart + startAt);
       gridFrom = startAt + buffer.duration;
     } catch (error) {
       if (this.phase !== phase) return;
@@ -570,7 +602,8 @@ export class TrackPlayer {
 
   /**
    * The outro takes the first tick at or after the track's length that it can,
-   * and the run ends with it; one that will not load ends the run there.
+   * the layers fade out under it, and the run ends with it. A run whose outro
+   * will not load rings out from the later of now and the track's length.
    */
   private async placeOutro(
     phase: PlayingPhase,
@@ -582,16 +615,27 @@ export class TrackPlayer {
       if (this.phase !== phase) return;
       const when =
         phase.trackStart + this.bookendStartAt(phase, this.track.lengthSeconds);
-      this.startVoice(outro.gain, buffer, when);
-      phase.endsAt = when + buffer.duration;
+      this.startVoice(outro.gain, null, buffer, when);
+      phase.outroEndsAt = when + buffer.duration;
+      this.fadeLayersOut(phase.outroEndsAt);
     } catch (error) {
       if (this.phase !== phase) return;
       this.reportMissing(outro.layer, variant, error);
-      phase.endsAt = Math.max(
-        this.output.currentTime(),
-        phase.trackStart + this.track.lengthSeconds,
-      );
+      phase.ringsOut = true;
     }
+  }
+
+  /**
+   * Every layer's gain down to 0 by `endsAt`, from now: a ramp, so the samples
+   * ringing on are faded and not cut. Placed at most a grid tick ahead of the
+   * outro, so it takes the outro's length, near enough.
+   */
+  private fadeLayersOut(endsAt: number): void {
+    const seconds = endsAt - this.output.currentTime();
+    this.layerGains.forEach((gain, layerIndex) => {
+      gain.ramp(0, seconds);
+      this.layerRamps[layerIndex] = { target: 0, endsAt };
+    });
   }
 
   private bookendVariant(bookend: BookendChannel): number {
@@ -609,12 +653,14 @@ export class TrackPlayer {
 
   private startVoice(
     gain: OutputGain,
+    layerIndex: number | null,
     buffer: AudioBuffer,
     when: number,
   ): void {
     this.voices.push({
       voice: gain.play(buffer, when, SAMPLE_FADE_SECONDS),
       endsAt: when + buffer.duration,
+      layerIndex,
     });
   }
 
@@ -640,10 +686,20 @@ export class TrackPlayer {
     this.voices = [];
   }
 
+  /** The gain a layer is going to, outside an outro's fade. */
+  private layerLevel(layerIndex: number): number {
+    return this.enabledLayers()[layerIndex] ? this.layerTargets[layerIndex] : 0;
+  }
+
+  /**
+   * Under the outro, nothing but its fade moves a layer: a target or a switch
+   * set meanwhile waits for the next start.
+   */
   private applyLayerGain(layerIndex: number, seconds: number): void {
-    const target = this.enabledLayers()[layerIndex]
-      ? this.layerTargets[layerIndex]
-      : 0;
+    if (this.phase.kind === "playing" && this.phase.outroEndsAt !== null) {
+      return;
+    }
+    const target = this.layerLevel(layerIndex);
     const now = this.output.currentTime();
     const last = this.layerRamps[layerIndex];
     // A ramp to where the gain is already going keeps a longer ramp's end, so

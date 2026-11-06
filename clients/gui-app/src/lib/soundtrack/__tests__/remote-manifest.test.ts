@@ -63,6 +63,7 @@ const SUITE: VariableTrack = {
     {
       name: "pool",
       variants: 2,
+      role: null,
       sublayers: 1,
       sublayerStartingOffset: null,
       pan: -0.5,
@@ -74,6 +75,7 @@ const SUITE: VariableTrack = {
         { name: "y", variants: 1 },
       ],
       sequence: ["x", "y", "x"],
+      role: null,
       sublayers: 1,
       sublayerStartingOffset: null,
       pan: null,
@@ -140,6 +142,23 @@ describe("parseRemoteManifest", () => {
     const { version: _version, ...expected } = aquiloManifest();
 
     expect(parseRemoteManifest(aquiloManifest())).toEqual(expected);
+  });
+
+  // A role a layer names comes through in the exact check above.
+  it("reads a layer published with no role as one with none", () => {
+    const unroled = {
+      ...aquiloManifest(),
+      tracks: [
+        {
+          ...AQUILO_1,
+          layers: AQUILO_1.layers.map(({ role: _role, ...layer }) => layer),
+        },
+      ],
+    };
+
+    expect(
+      parseRemoteManifest(unroled).tracks[0].layers.map((layer) => layer.role),
+    ).toEqual([null, null, null, null]);
   });
 
   it("accepts a track using groups, an intro, an outro and phases", () => {
@@ -415,6 +434,22 @@ describe("parseRemoteManifest", () => {
         ...suiteManifest(),
         tracks: [
           { ...SUITE, outro: { name: "out/ro", variants: 1, pan: null } },
+        ],
+      }),
+    ],
+    [
+      "a layer role that is none of the four",
+      "Invalid input",
+      () => ({
+        ...aquiloManifest(),
+        tracks: [
+          {
+            ...AQUILO_1,
+            layers: AQUILO_1.layers.map((layer) => ({
+              ...layer,
+              role: "bass",
+            })),
+          },
         ],
       }),
     ],

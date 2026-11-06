@@ -54,6 +54,10 @@ function makeTrack(name: string, lengthSeconds: number): VariableTrack {
     layers: LAYER_NAMES.map((layerName) => ({
       name: layerName,
       variants: 1,
+      // As aquilo-1 has them, so the rules director holds B.
+      role: ({ A: null, B: "pad", C: "motif", D: "texture" } as const)[
+        layerName
+      ],
       sublayers: 1,
       sublayerStartingOffset: null,
       pan: null,
