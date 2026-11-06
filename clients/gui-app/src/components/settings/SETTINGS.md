@@ -6367,7 +6367,7 @@ set-state-in-effect` forbids the effect form, and an effect would also
     wait - it draws nothing, and the header sits directly on the tab bar.
     1. **The offline notice**, while the host can't be reached for a reason
        other than a restart (`!usable`, not connecting, the health word not
-       "Restarting…"): "Can't reach build-box — last contact was while
+       "Restarting…"): "Can't reach build-box — last seen while
        downloading update to v1.5.1. Auto-update settings still apply at its
        next check-in; everything else here needs a connection."
        (`describeHostOfflineNotice`). The phase clause comes from

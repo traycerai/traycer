@@ -253,7 +253,7 @@ describe("inFlightUpdateKind", () => {
 });
 
 describe("describeHostOfflineNotice", () => {
-  it("states the retained phase as last contact, exactly as describeLastSeenUpdateClause states the clause", () => {
+  it("states the retained phase with no last-seen time, exactly as describeLastSeenUpdateClause states the clause", () => {
     const downloadingView = view("downloading", { targetVersion: "2.1.0" });
     const clause = describeLastSeenUpdateClause(downloadingView);
     expect(clause).not.toBeNull();
@@ -264,7 +264,7 @@ describe("describeHostOfflineNotice", () => {
         accountKnowsHost: true,
       }),
     ).toBe(
-      `Can't reach host-a — last contact was ${clause}. Auto-update settings still apply at its next check-in; everything else here needs a connection.`,
+      `Can't reach host-a — last seen ${clause}. Auto-update settings still apply at its next check-in; everything else here needs a connection.`,
     );
   });
 

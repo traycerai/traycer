@@ -638,7 +638,9 @@ describe("TeamPermissions", () => {
       "Couldn't read Acme's permissions.",
     );
     expect(
-      await screen.findByText("What agents may do without asking."),
+      await screen.findByText(
+        "What agents may do without asking, on every host running these settings.",
+      ),
     ).toBeTruthy();
     const reads = harness.paramsOf("environment.configuration.items").length;
 

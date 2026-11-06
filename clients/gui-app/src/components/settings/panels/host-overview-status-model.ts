@@ -79,6 +79,6 @@ export function describeHostOfflineNotice(input: {
   const tail = input.accountKnowsHost
     ? "Auto-update settings still apply at its next check-in; everything else here needs a connection."
     : "Everything here needs a connection.";
-  const retainedPhase = clause === null ? "" : ` — last contact was ${clause}`;
+  const retainedPhase = clause === null ? "" : ` — last seen ${clause}`;
   return `Can't reach ${input.hostName}${retainedPhase}. ${tail}`;
 }

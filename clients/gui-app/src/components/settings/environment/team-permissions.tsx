@@ -32,8 +32,8 @@ export function TeamPermissions(props: {
       title="Permissions"
       description={
         personal
-          ? "What your agents may do without asking, on every computer and sandbox running this environment."
-          : "What agents may do without asking."
+          ? "What your agents may do without asking, on every computer and sandbox running these settings."
+          : "What agents may do without asking, on every host running these settings."
       }
       bodyClassName="flex flex-col gap-3 overflow-visible rounded-none border-none bg-transparent"
     >

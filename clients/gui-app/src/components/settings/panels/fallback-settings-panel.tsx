@@ -180,7 +180,7 @@ function HostFallbackSettingsPanel(): ReactNode {
       title="Model routing"
       description={
         pick.kind === "personal"
-          ? "Applies to your agents on every computer and sandbox running this environment."
+          ? "Applies to your agents on every computer and sandbox running these settings."
           : fallbackPanelDescription(scope)
       }
       bodyClassName="overflow-visible rounded-none border-none bg-transparent"

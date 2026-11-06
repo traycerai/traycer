@@ -180,7 +180,7 @@ describe("TeamVariablesAndShells", () => {
     );
     expect(
       await screen.findByText(
-        "Plain values every host running this environment gets, and the shell agents run in.",
+        "Plain values every host running these settings gets, and the shell agents run in.",
       ),
     ).toBeTruthy();
     const reads = harness.paramsOf("environment.configuration.items").length;
@@ -632,14 +632,14 @@ describe("Environment page subtitles", () => {
     [
       "Permissions",
       <TeamPermissions key="x">{null}</TeamPermissions>,
-      "What agents may do without asking.",
-      "What your agents may do without asking, on every computer and sandbox running this environment.",
+      "What agents may do without asking, on every host running these settings.",
+      "What your agents may do without asking, on every computer and sandbox running these settings.",
     ],
     [
       "Variables & shells",
       <TeamVariablesAndShells key="v" />,
-      "Plain values every host running this environment gets, and the shell agents run in.",
-      "Plain values every computer and sandbox running this environment gets, and the shell agents run in.",
+      "Plain values every host running these settings gets, and the shell agents run in.",
+      "Plain values every computer and sandbox running these settings gets, and the shell agents run in.",
     ],
   ])("%s names its configuration", async (_page, page, team, personal) => {
     if (team !== null) {
@@ -698,7 +698,8 @@ describe("Environment page subtitles", () => {
       source: poolSource("editor"),
       pick: { kind: "team", environmentId: "env-a" },
       environmentName: "Acme",
-      purpose: "What agents may do without asking.",
+      purpose:
+        "What agents may do without asking, on every host running these settings.",
     },
     {
       pageTitle: "Variables & shells",
@@ -708,7 +709,7 @@ describe("Environment page subtitles", () => {
       pick: { kind: "team", environmentId: "env-a" },
       environmentName: "Acme",
       purpose:
-        "Plain values every host running this environment gets, and the shell agents run in.",
+        "Plain values every host running these settings gets, and the shell agents run in.",
     },
   ] as const)(
     "$pageTitle · $environmentName shows its environment once in the phone caption",

@@ -52,8 +52,8 @@ export function TeamVariablesAndShells(): ReactNode {
       title="Variables & shells"
       description={
         personal
-          ? "Plain values every computer and sandbox running this environment gets, and the shell agents run in."
-          : "Plain values every host running this environment gets, and the shell agents run in."
+          ? "Plain values every computer and sandbox running these settings gets, and the shell agents run in."
+          : "Plain values every host running these settings gets, and the shell agents run in."
       }
       bodyClassName="flex flex-col gap-4 overflow-visible rounded-none border-none bg-transparent"
     >
