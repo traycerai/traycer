@@ -13,16 +13,15 @@
  * signed-in person's Accept, and accepting one.
  *
  * `@1.1` of `environment.list`, `environment.host.list` and
- * `environment.members` adds the redesign's fields, each with its upgrade
- * from `@1.0`; no line here has shipped, so none is a MAJOR. `@1.2` of
- * `environment.host.list` adds each host's `hasLocalRow`.
+ * `environment.members` adds the fields described below, with upgrades from
+ * `@1.0`. `@1.2` of `environment.host.list` adds each host's `hasLocalRow`.
  *
  * An environment is the cloud container a team shares: skills, the shared
  * notes block, the agent selection guide and the bot list, all held in one
  * collab room. A team is an authn organization. The user belongs to one
  * environment per team they are in, plus their personal environment, and sees
  * them side by side; there is no "current" one. The cloud lists and creates
- * them; the host proxies the list, cached for the signed-in session.
+ * them; the host proxies the list.
  *
  * OPTIONAL capability. Never in `RELEASED_FLOOR_METHOD_NAMES`: the floor is
  * fail-closed on the method-name union, so a name present on only one peer
@@ -265,8 +264,8 @@ export type EnvironmentHostListRequest = z.infer<
  * reported metadata; `kind` is its machine kind. `enrolledByUserId` is stored
  * enrollment attribution, independent of the environment's owner.
  * `boundAt` is epoch milliseconds on a released row, not a canonical binding
- * time. This version requires attribution and time as values; a row without
- * either is omitted.
+ * time. This version requires attribution and time as values; a row missing
+ * attribution or time is omitted.
  */
 export const environmentHostRecordSchema = lazySchema(() =>
   z.object({
@@ -332,8 +331,7 @@ export type EnvironmentHostItemApply = z.infer<
  * when it last reported (null before it ever did), and its per-item apply
  * states. `boundAt` is null: authn records no canonical binding time.
  * `enrolledByUserId` is null where attribution is unknown. `@1.0` has no
- * null for either, so the serving host leaves such a row out of a `@1.0`
- * caller's answer (the minor is projection-gated in the registry).
+ * null for either, so a `@1.0` answer omits such a row.
  */
 export const environmentHostRecordSchemaV11 = lazySchema(() =>
   environmentHostRecordSchema.extend({
@@ -902,7 +900,7 @@ export type EnvironmentSetMainBotResponse = z.infer<
 >;
 
 /**
- * Makes a bot its environment's main bot (decision 30): the bot that curates
+ * Makes a bot its environment's main bot: the bot that curates
  * the environment's shared memory and is told when it passes its ceiling. Any
  * member may set it, and set it back. Refused for an environment the caller
  * does not belong to exactly as for one that does not exist, and for a bot

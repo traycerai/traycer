@@ -9165,8 +9165,7 @@ const HOST_RPC_REGISTRY_BASE_TAIL_DEFINITION = {
       downgradePathsFromLatest: {},
     },
   },
-  // The one environment this host is bound to, and rebinding it. Optional
-  // capabilities like `environment.list`.
+  // This host's binding. Optional like `environment.list`.
   "environment.host.read": {
     degrade: { kind: "unsupported" },
     1: {
@@ -9180,8 +9179,8 @@ const HOST_RPC_REGISTRY_BASE_TAIL_DEFINITION = {
       downgradePathsFromLatest: {},
     },
   },
-  // A named host's binding, served by the server pool from the account's
-  // binding records; `environment.host.read` stays the host's own answer.
+  // A named host's binding recorded by authn; `environment.host.read`
+  // answers for the serving host.
   "environment.binding.read": {
     degrade: { kind: "unsupported" },
     1: {
@@ -9208,7 +9207,7 @@ const HOST_RPC_REGISTRY_BASE_TAIL_DEFINITION = {
       downgradePathsFromLatest: {},
     },
   },
-  // The hosts of a team environment the caller may see. Optional like its
+  // The hosts of an environment the caller may see. Optional like its
   // siblings.
   "environment.host.list": {
     degrade: { kind: "unsupported" },
