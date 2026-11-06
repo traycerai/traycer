@@ -22,8 +22,7 @@ export function useBotReplyingTurn(args: {
   readonly onOpenTurn: BotTurnOpen;
 }): ChatBotTurnReceipt | null {
   const { client, hostId, botId, activity, onOpenTurn } = args;
-  const requestId =
-    activity?.state === "replying" ? activity.requestId : null;
+  const requestId = activity?.state === "replying" ? activity.requestId : null;
   const requestIds = useMemo(
     () => (requestId === null ? NO_IDS : [requestId]),
     [requestId],
