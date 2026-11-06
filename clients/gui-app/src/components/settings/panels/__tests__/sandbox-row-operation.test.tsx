@@ -81,6 +81,11 @@ vi.mock("@/hooks/sandboxes/use-sandbox-session-report", () => ({
     report: { kind: "unknown" },
     failed: false,
   }),
+  useSandboxRowSessionReport: () => ({
+    report: { kind: "unknown" },
+    failed: false,
+    resumePending: false,
+  }),
 }));
 vi.mock("@/components/host/host-restart-sessions", () => ({
   KnownHostSessionsList: () => null,
