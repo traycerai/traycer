@@ -50,6 +50,7 @@ import {
 } from "@/components/chat/chat-find";
 import { chatFindTranscriptPlacement } from "@/components/chat/chat-find-index";
 import type { ChatFindIndexRead } from "@/components/chat/chat-find-index";
+import { buildRowKeyToIndex } from "@/components/chat/chat-messages-scroll-helpers";
 import { useChatFindIndexFeed } from "@/hooks/chats/use-chat-find-index-feed";
 import { useChatFindController } from "@/components/chat/use-chat-find-controller";
 import { TileFindContext } from "@/components/epic-canvas/tile-find/tile-find-adapter-context";
@@ -70,6 +71,7 @@ import {
   type TranscriptWindow,
 } from "@/stores/chats/transcript-window";
 import type { ChatMessage as ChatMessageModel } from "@/stores/composer/chat-store";
+import { transcriptListRows } from "@/stores/chats/transcript-list-rows";
 import type { TileFindAdapter } from "@/stores/tile-find";
 import { makeMessageAt } from "./chat-message-fixtures";
 
@@ -509,8 +511,12 @@ function renderFind(input: {
     useLayoutEffect(() => {
       messagesRef.current = transcript.messages;
       windowRef.current = transcript.window;
-      rowIndexByKeyRef.current = new Map(
-        transcript.messages.map((message, index) => [message.id, index]),
+      rowIndexByKeyRef.current = buildRowKeyToIndex(
+        transcriptListRows({
+          window: transcript.window,
+          rendered: transcript.messages,
+          splitLongTurns: true,
+        }),
       );
     }, [transcript]);
     const backgroundToolBlockIdsRef = useRef(EMPTY_PROMOTED);
@@ -1510,7 +1516,7 @@ describe("chat find over a windowed transcript: older rows from the index", () =
     // The reveal now waits for that callback before painting the exact hit.
     find.scrollToLocation.mockImplementation(
       (location: unknown, afterSettle: () => void) => {
-        expect(location).toMatchObject({ index: 0 });
+        expect(location).toMatchObject({ index: 1 });
         afterSettle();
       },
     );
