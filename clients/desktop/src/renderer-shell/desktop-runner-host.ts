@@ -177,6 +177,7 @@ import type {
   SlackAppWriteResult,
 } from "@traycer-clients/shared/host-client/slack-app";
 import type { SlackAppRegisterRequest } from "@traycer/protocol/host/slack-app";
+import type { TeamHostInstallTokenResult } from "@traycer-clients/shared/host-client/team-host";
 import type { ExecutableWriteGrantFetchResult } from "@traycer-clients/shared/host-client/executable-write-grant";
 import type {
   SandboxAutomationOpenTarget,
@@ -318,6 +319,10 @@ export interface DesktopPreloadBridge {
     bearerToken: string,
     botId: string,
   ): Promise<SlackAppWriteResult>;
+  mintTeamHostInstallToken(
+    bearerToken: string,
+    environmentId: string,
+  ): Promise<TeamHostInstallTokenResult>;
   getSandboxGrants(
     bearerToken: string,
     environmentId: string | null,
@@ -1414,6 +1419,13 @@ export class DesktopRunnerHost implements IRunnerHost {
     botId: string,
   ): Promise<SlackAppWriteResult> {
     return this.bridge.disconnectSlackApp(bearerToken, botId);
+  }
+
+  mintTeamHostInstallToken(
+    bearerToken: string,
+    environmentId: string,
+  ): Promise<TeamHostInstallTokenResult> {
+    return this.bridge.mintTeamHostInstallToken(bearerToken, environmentId);
   }
 
   getSandboxGrants(

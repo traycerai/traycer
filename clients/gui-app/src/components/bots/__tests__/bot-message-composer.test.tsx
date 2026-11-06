@@ -74,6 +74,10 @@ import {
   BotIdentityContext,
   type BotOwner,
 } from "@/components/bots/bot-identity-context";
+import {
+  BotMentionsContext,
+  type BotMentionDirectory,
+} from "@/components/bots/bot-mentions-context";
 import { useAuthStore } from "@/stores/auth/auth-store";
 import { useStandaloneBotsStore } from "@/stores/bots/standalone-bots-store";
 import { EMPTY_HOME_BOTS_MODEL } from "@/lib/home-bots/bots-model";
@@ -187,6 +191,52 @@ function box(): HTMLTextAreaElement {
   const element = screen.getByRole("textbox", { name: "Message Tracy" });
   if (!(element instanceof HTMLTextAreaElement)) throw new Error("no box");
   return element;
+}
+
+/** The `@` menu, which portals to the body; `null` while it is closed. */
+function mentionMenu(): HTMLElement | null {
+  return document.querySelector<HTMLElement>('[data-slot="composer-menu"]');
+}
+
+function openMenu(): HTMLElement {
+  const menu = mentionMenu();
+  if (menu === null) throw new Error("the mention menu is not open");
+  return menu;
+}
+
+/** A menu row's name: its label, without the avatar or description beside it. */
+function rowLabel(row: HTMLElement): string {
+  return row.querySelector("span.font-medium")?.textContent ?? "";
+}
+
+function menuRows(): HTMLElement[] {
+  return Array.from(
+    openMenu().querySelectorAll<HTMLElement>('[role="option"]'),
+  );
+}
+
+/** The menu's rows in order, by name. */
+function menuLabels(): string[] {
+  return menuRows().map(rowLabel);
+}
+
+function menuRow(label: string): HTMLElement {
+  const row = menuRows().find((candidate) => rowLabel(candidate) === label);
+  if (row === undefined) throw new Error(`no menu row ${label}`);
+  return row;
+}
+
+/** The menu's header: "Mentions" at the first level, else the category. */
+function menuHeader(): string {
+  return openMenu().firstElementChild?.textContent ?? "";
+}
+
+/** The name of the row the menu highlights. */
+function highlightedLabel(): string | null {
+  const row = menuRows().find(
+    (candidate) => candidate.getAttribute("aria-selected") === "true",
+  );
+  return row === undefined ? null : rowLabel(row);
 }
 
 /** The callbacks the box handed its last send. */
@@ -572,12 +622,6 @@ describe("<BotMessageComposer /> @ mentions", () => {
     );
   }
 
-  function optionNames(): string[] {
-    return screen
-      .getAllByTestId("bot-mention-option")
-      .map((option) => option.getAttribute("data-user-id") ?? "");
-  }
-
   beforeEach(() => {
     useAuthStore.setState({
       profile: {
@@ -606,21 +650,24 @@ describe("<BotMessageComposer /> @ mentions", () => {
     mountIn(TEAM);
 
     await user.type(box(), "@");
-    expect(optionNames()).toEqual(["u-ann", "u-anders", "u-bob"]);
+    expect(menuLabels()).toEqual(["People"]);
+    await user.click(menuRow("People"));
+    expect(menuLabels()).toEqual(["Back", "Ann Lee", "Anders", "Bob"]);
+    await user.click(menuRow("Back"));
 
     await user.type(box(), "Tra");
-    expect(screen.queryByTestId("bot-mention-list")).toBeNull();
-    expect(screen.queryByRole("option")).toBeNull();
+    expect(mentionMenu()).toBeNull();
     expect(screen.queryByText("Tracy")).toBeNull();
   });
 
-  it("lists the team's matching members, not the viewer nor a member without a name", async () => {
+  it("lists the team's matching members in one flat list, not the viewer nor a member without a name", async () => {
     const user = userEvent.setup();
     mountIn(TEAM);
 
     await user.type(box(), "@an");
 
-    expect(optionNames()).toEqual(["u-ann", "u-anders"]);
+    // The composer's root ranking: the shorter name that starts with it first.
+    expect(menuLabels()).toEqual(["Anders", "Ann Lee"]);
   });
 
   it("picks the highlighted member with the arrows and Enter, shows @Name, and sends the token", async () => {
@@ -630,15 +677,15 @@ describe("<BotMessageComposer /> @ mentions", () => {
     await user.type(box(), "hey @an");
     await user.keyboard("{ArrowDown}{Enter}");
 
-    expect(box().value).toBe("hey @Anders ");
-    expect(screen.queryByTestId("bot-mention-list")).toBeNull();
+    expect(box().value).toBe("hey @Ann Lee ");
+    expect(mentionMenu()).toBeNull();
     expect(mocks.send).not.toHaveBeenCalled();
 
     await user.type(box(), "look");
     await user.click(screen.getByTestId("bot-channel-composer-send"));
 
     expect(mocks.send).toHaveBeenCalledTimes(1);
-    expect(mocks.send.mock.calls[0][0].text).toBe("hey <@u-anders> look");
+    expect(mocks.send.mock.calls[0][0].text).toBe("hey <@u-ann> look");
   });
 
   describe("two members with the same name", () => {
@@ -1053,31 +1100,482 @@ describe("<BotMessageComposer /> @ mentions", () => {
     });
   });
 
-  it("closes the list on Escape and keeps the text", async () => {
+  it("closes the menu on Escape and keeps the text", async () => {
     const user = userEvent.setup();
     mountIn(TEAM);
 
     await user.type(box(), "@an");
-    expect(screen.getByTestId("bot-mention-list")).toBeTruthy();
+    expect(mentionMenu()).not.toBeNull();
     await user.keyboard("{Escape}");
 
-    expect(screen.queryByTestId("bot-mention-list")).toBeNull();
+    expect(mentionMenu()).toBeNull();
     expect(box().value).toBe("@an");
   });
 
-  it("shows no list for a personal bot, and sends the @ as typed", async () => {
+  it("shows no menu for a personal bot with nothing to name, and sends the @ as typed", async () => {
     const user = userEvent.setup();
     mountIn(PERSON);
 
     await user.type(box(), "@an");
-    expect(screen.queryByTestId("bot-mention-list")).toBeNull();
+    expect(mentionMenu()).toBeNull();
 
     await user.click(screen.getByTestId("bot-channel-composer-send"));
     expect(mocks.send.mock.calls[0][0].text).toBe("@an");
   });
 });
 
-describe("the member list after Escape", () => {
+describe("<BotMessageComposer /> @ mentions of bots and tasks", () => {
+  const OWN_BOT = "bot_01HZY8V6K3Q9W2E4R5T6Y7V8M0";
+  const TRIAGE_BOT = "bot_01HZY8V6K3Q9W2E4R5T6Y7V8M1";
+  const NOTES_BOT = "bot_01HZY8V6K3Q9W2E4R5T6Y7V8M2";
+  const RELEASE_TASK = "6f1c2a7e-3b4d-4e5f-8a9b-0c1d2e3f4a5b";
+  const ROADMAP_TASK = "0b9d7c1e-2a3f-4b5c-8d6e-7f8091a2b3c4";
+  const TEAM: BotOwner = {
+    kind: "team",
+    name: "Acme",
+    members: [
+      { userId: "u-viewer", displayName: "Andy Viewer", avatarUrl: null },
+      { userId: "u-ann", displayName: "Ann Lee", avatarUrl: null },
+      { userId: "u-anon", displayName: null, avatarUrl: null },
+    ],
+  };
+  const PERSON: BotOwner = {
+    kind: "person",
+    userId: "u-viewer",
+    name: "Andy Viewer",
+    avatarUrl: null,
+  };
+  const DIRECTORY: BotMentionDirectory = {
+    person: () => null,
+    bots: [
+      { id: OWN_BOT, name: "Tracy" },
+      { id: TRIAGE_BOT, name: "Triage" },
+      { id: NOTES_BOT, name: "Release bot" },
+    ],
+    tasks: [
+      { id: RELEASE_TASK, name: "Release notes" },
+      { id: ROADMAP_TASK, name: "Roadmap" },
+    ],
+    tasksAnswered: true,
+  };
+
+  function mountWith(
+    owner: BotOwner,
+    directory: BotMentionDirectory,
+    edit: BotComposerEdit | null,
+  ): void {
+    render(
+      <BotIdentityContext value={{ botId: OWN_BOT, title: "Tracy", owner }}>
+        <BotMentionsContext value={directory}>
+          {composer(edit, null)}
+        </BotMentionsContext>
+      </BotIdentityContext>,
+    );
+  }
+
+  async function sentText(user: UserEvent): Promise<string> {
+    await user.click(screen.getByTestId("bot-channel-composer-send"));
+    return mocks.send.mock.calls.at(-1)?.[0].text ?? "";
+  }
+
+  beforeEach(() => {
+    useAuthStore.setState({
+      profile: {
+        userId: "u-viewer",
+        userName: "Andy Viewer",
+        email: "andy@example.com",
+        avatarUrl: null,
+      },
+    });
+  });
+
+  afterEach(() => {
+    useAuthStore.setState({ profile: null });
+  });
+
+  it("shows People, Bots and Tasks after @ for a team bot, and nothing else", async () => {
+    const user = userEvent.setup();
+    mountWith(TEAM, DIRECTORY, null);
+
+    await user.type(box(), "@");
+
+    expect(menuLabels()).toEqual(["People", "Bots", "Tasks"]);
+    expect(menuHeader()).toBe("Mentions");
+  });
+
+  it("shows Bots and Tasks after @ for a personal bot, which has no one else to name", async () => {
+    const user = userEvent.setup();
+    mountWith(PERSON, DIRECTORY, null);
+
+    await user.type(box(), "@");
+
+    expect(menuLabels()).toEqual(["Bots", "Tasks"]);
+  });
+
+  it("opens the Bots step on a click: Back first, then the environment's bots without the box's own, under the header Bots", async () => {
+    const user = userEvent.setup();
+    mountWith(TEAM, DIRECTORY, null);
+    await user.type(box(), "@");
+
+    await user.click(menuRow("Bots"));
+
+    expect(menuHeader()).toBe("Bots");
+    expect(menuLabels()).toEqual(["Back", "Triage", "Release bot"]);
+  });
+
+  it("opens the Bots step on Enter at the highlighted row, with the same rows", async () => {
+    const user = userEvent.setup();
+    mountWith(TEAM, DIRECTORY, null);
+    await user.type(box(), "@");
+
+    await user.keyboard("{ArrowDown}{Enter}");
+
+    expect(menuHeader()).toBe("Bots");
+    expect(menuLabels()).toEqual(["Back", "Triage", "Release bot"]);
+    expect(box().value).toBe("@");
+    expect(mocks.send).not.toHaveBeenCalled();
+  });
+
+  it("returns from a step to the three categories on Back", async () => {
+    const user = userEvent.setup();
+    mountWith(TEAM, DIRECTORY, null);
+    await user.type(box(), "@");
+    await user.click(menuRow("Bots"));
+
+    await user.click(menuRow("Back"));
+
+    expect(menuHeader()).toBe("Mentions");
+    expect(menuLabels()).toEqual(["People", "Bots", "Tasks"]);
+  });
+
+  it("ranks what is typed after @ in one flat list across kinds, a prefix hit before a substring hit whatever its kind, with no category rows", async () => {
+    const user = userEvent.setup();
+    mountWith(
+      TEAM,
+      {
+        person: () => null,
+        bots: [
+          { id: OWN_BOT, name: "Tracy" },
+          { id: NOTES_BOT, name: "Weekly roadmap" },
+        ],
+        tasks: [{ id: ROADMAP_TASK, name: "Roadmap" }],
+        tasksAnswered: true,
+      },
+      null,
+    );
+
+    await user.type(box(), "@road");
+
+    // The bot comes first in the categories' order; the task's name starts
+    // with the query and the bot's only has it in the middle.
+    expect(menuLabels()).toEqual(["Roadmap", "Weekly roadmap"]);
+    expect(menuHeader()).toBe("Mentions");
+  });
+
+  it.each([
+    {
+      category: "People",
+      name: "Ann Lee",
+      written: "@Ann Lee ",
+      token: "<@u-ann>",
+    },
+    {
+      category: "Bots",
+      name: "Triage",
+      written: "@Triage ",
+      token: `<#${TRIAGE_BOT}>`,
+    },
+    {
+      category: "Tasks",
+      name: "Release notes",
+      written: "@Release notes ",
+      token: `<~${RELEASE_TASK}>`,
+    },
+  ])(
+    "writes @Name for a pick from the $category step and sends its token",
+    async ({ category, name, written, token }) => {
+      const user = userEvent.setup();
+      mountWith(TEAM, DIRECTORY, null);
+      await user.type(box(), "@");
+      await user.click(menuRow(category));
+
+      await user.click(menuRow(name));
+
+      expect(box().value).toBe(written);
+      expect(mentionMenu()).toBeNull();
+      expect(await sentText(user)).toBe(token);
+    },
+  );
+
+  it("walks to Tasks with the arrows, wraps from its Back row to the last name, and Enter picks it without sending the message", async () => {
+    const user = userEvent.setup();
+    mountWith(TEAM, DIRECTORY, null);
+    await user.type(box(), "@");
+
+    await user.keyboard("{ArrowDown}{ArrowDown}");
+    expect(highlightedLabel()).toBe("Tasks");
+    await user.keyboard("{Enter}");
+    expect(menuHeader()).toBe("Tasks");
+    expect(mocks.send).not.toHaveBeenCalled();
+
+    await user.keyboard("{ArrowUp}");
+    expect(highlightedLabel()).toBe("Roadmap");
+    await user.keyboard("{Enter}");
+
+    expect(box().value).toBe("@Roadmap ");
+    expect(mentionMenu()).toBeNull();
+    expect(mocks.send).not.toHaveBeenCalled();
+  });
+
+  it("wraps the highlight from the last category to the first on ArrowDown", async () => {
+    const user = userEvent.setup();
+    mountWith(TEAM, DIRECTORY, null);
+    await user.type(box(), "@");
+
+    await user.keyboard("{ArrowDown}{ArrowDown}{ArrowDown}");
+
+    expect(highlightedLabel()).toBe("People");
+  });
+
+  it("does not take Shift+Enter: the box gets its new line and the menu picks nothing", async () => {
+    const user = userEvent.setup();
+    mountWith(TEAM, DIRECTORY, null);
+    await user.type(box(), "@");
+
+    await user.keyboard("{Shift>}{Enter}{/Shift}");
+
+    expect(box().value).toBe("@\n");
+    expect(mocks.send).not.toHaveBeenCalled();
+  });
+
+  it("closes the menu when what is typed matches no name, when a comma ends the query, and on a double space", async () => {
+    const user = userEvent.setup();
+    mountWith(TEAM, DIRECTORY, null);
+
+    await user.type(box(), "@zzzz");
+    expect(mentionMenu()).toBeNull();
+
+    await user.clear(box());
+    await user.type(box(), "@Road");
+    expect(mentionMenu()).not.toBeNull();
+    await user.keyboard(",");
+    expect(mentionMenu()).toBeNull();
+
+    // Still a name's start once trimmed: only the prose rule closes it.
+    await user.clear(box());
+    await user.type(box(), "@Road  ");
+    expect(mentionMenu()).toBeNull();
+  });
+
+  describe("a search while a source of names has not answered", () => {
+    function tree(owner: BotOwner, directory: BotMentionDirectory): ReactNode {
+      return (
+        <BotIdentityContext value={{ botId: OWN_BOT, title: "Tracy", owner }}>
+          <BotMentionsContext value={directory}>
+            {composer(null, null)}
+          </BotMentionsContext>
+        </BotIdentityContext>
+      );
+    }
+
+    it("keeps the menu open on a task not listed yet, and lists it for a pick once the tasks have answered", async () => {
+      const user = userEvent.setup();
+      const loading: BotMentionDirectory = {
+        person: () => null,
+        bots: [
+          { id: OWN_BOT, name: "Tracy" },
+          { id: TRIAGE_BOT, name: "Triage" },
+        ],
+        tasks: [],
+        tasksAnswered: false,
+      };
+      const view = render(tree(PERSON, loading));
+
+      await user.type(box(), "@Roadmap");
+      expect(mentionMenu()).not.toBeNull();
+      expect(menuLabels()).toEqual([]);
+
+      view.rerender(
+        tree(PERSON, {
+          ...loading,
+          tasks: [{ id: ROADMAP_TASK, name: "Roadmap" }],
+          tasksAnswered: true,
+        }),
+      );
+
+      expect(menuLabels()).toEqual(["Roadmap"]);
+      await user.keyboard("{Enter}");
+      expect(box().value).toBe("@Roadmap ");
+      expect(await sentText(user)).toBe(`<~${ROADMAP_TASK}>`);
+    });
+
+    it("keeps the menu open on a member not listed yet while the team's members are unread, and lists them once read", async () => {
+      const user = userEvent.setup();
+      const answered: BotMentionDirectory = {
+        person: () => null,
+        bots: [
+          { id: OWN_BOT, name: "Tracy" },
+          { id: TRIAGE_BOT, name: "Triage" },
+        ],
+        tasks: [],
+        tasksAnswered: true,
+      };
+      const unread: BotOwner = { kind: "team", name: "Acme", members: null };
+      const view = render(tree(unread, answered));
+
+      await user.type(box(), "@Zoe");
+      expect(mentionMenu()).not.toBeNull();
+      expect(menuLabels()).toEqual([]);
+
+      view.rerender(
+        tree(
+          {
+            kind: "team",
+            name: "Acme",
+            members: [
+              { userId: "u-zoe", displayName: "Zoe Park", avatarUrl: null },
+            ],
+          },
+          answered,
+        ),
+      );
+
+      expect(menuLabels()).toEqual(["Zoe Park"]);
+    });
+  });
+
+  it("finds a bot by a run of its id when its title has none of those letters, and picks it", async () => {
+    const user = userEvent.setup();
+    const ID_ONLY_BOT = "bot_01JD5X8Q2M4N6P8R0S2T4V6W8Y";
+    mountWith(
+      PERSON,
+      {
+        person: () => null,
+        bots: [
+          { id: OWN_BOT, name: "Tracy" },
+          { id: ID_ONLY_BOT, name: "Weekly sync" },
+        ],
+        tasks: [{ id: ROADMAP_TASK, name: "Roadmap" }],
+        tasksAnswered: true,
+      },
+      null,
+    );
+
+    await user.type(box(), "@6W8Y");
+
+    // Only the bot's id holds the run: neither its title, nor the other
+    // names, nor their ids, do.
+    expect(menuLabels()).toEqual(["Weekly sync"]);
+    await user.keyboard("{Enter}");
+    expect(box().value).toBe("@Weekly sync ");
+    expect(await sentText(user)).toBe(`<#${ID_ONLY_BOT}>`);
+  });
+
+  it("keeps each row's kind glyph in a category step: a person's avatar, a bot's avatar, the task icon", async () => {
+    const user = userEvent.setup();
+    mountWith(TEAM, DIRECTORY, null);
+    const glyphsOf = (row: HTMLElement): string[] =>
+      [
+        ["person-avatar", "person"],
+        ["bot-avatar", "bot"],
+        ["bot-mention-task-glyph", "task"],
+      ].flatMap(([testId, kind]) =>
+        row.querySelector(`[data-testid="${testId}"]`) === null ? [] : [kind],
+      );
+
+    await user.type(box(), "@");
+    await user.click(menuRow("People"));
+    expect(glyphsOf(menuRow("Ann Lee"))).toEqual(["person"]);
+
+    await user.click(menuRow("Back"));
+    await user.click(menuRow("Bots"));
+    expect(glyphsOf(menuRow("Triage"))).toEqual(["bot"]);
+
+    await user.click(menuRow("Back"));
+    await user.click(menuRow("Tasks"));
+    expect(glyphsOf(menuRow("Release notes"))).toEqual(["task"]);
+  });
+
+  it("shows @Name for a pick of each kind and sends each as its own token", async () => {
+    const user = userEvent.setup();
+    mountWith(TEAM, DIRECTORY, null);
+
+    await user.type(box(), "ask @ann");
+    await user.keyboard("{Enter}");
+    await user.type(box(), "@tri");
+    await user.keyboard("{Enter}");
+    await user.type(box(), "about @notes");
+    await user.keyboard("{Enter}");
+
+    expect(box().value).toBe("ask @Ann Lee @Triage about @Release notes ");
+    expect(await sentText(user)).toBe(
+      `ask <@u-ann> <#${TRIAGE_BOT}> about <~${RELEASE_TASK}>`,
+    );
+  });
+
+  it("sends a bot's or a task's name typed plainly as its token, and an @ naming neither as typed", async () => {
+    const user = userEvent.setup();
+    mountWith(PERSON, DIRECTORY, null);
+    await user.type(box(), "@Triage see @Release notes and @nobody");
+
+    expect(await sentText(user)).toBe(
+      `<#${TRIAGE_BOT}> see <~${RELEASE_TASK}> and @nobody`,
+    );
+  });
+
+  describe("a bot and a task with the same name", () => {
+    const SHARED: BotMentionDirectory = {
+      person: () => null,
+      bots: [
+        { id: OWN_BOT, name: "Tracy" },
+        { id: TRIAGE_BOT, name: "Roadmap" },
+      ],
+      tasks: [{ id: ROADMAP_TASK, name: "Roadmap" }],
+      tasksAnswered: true,
+    };
+
+    it("sends the one picked", async () => {
+      const user = userEvent.setup();
+      mountWith(PERSON, SHARED, null);
+      await user.type(box(), "@road");
+      await user.keyboard("{ArrowDown}{Enter}");
+
+      expect(await sentText(user)).toBe(`<~${ROADMAP_TASK}>`);
+    });
+
+    it("sends the name as typed when none was picked", async () => {
+      const user = userEvent.setup();
+      mountWith(PERSON, SHARED, null);
+      await user.type(box(), "@Roadmap");
+
+      expect(await sentText(user)).toBe("@Roadmap");
+    });
+  });
+
+  it("shows an edited message's three tokens as names and sends them back as the same tokens", async () => {
+    const user = userEvent.setup();
+    const wire = `<@u-ann> asked <#${TRIAGE_BOT}> about <~${RELEASE_TASK}>`;
+    mountWith(TEAM, DIRECTORY, { requestId: "request-failed", text: wire });
+
+    expect(box().value).toBe("@Ann Lee asked @Triage about @Release notes");
+    expect(await sentText(user)).toBe(wire);
+  });
+
+  it("shows an edited message's token that nothing names as it was written", async () => {
+    const user = userEvent.setup();
+    const gone = `<#${NOTES_BOT}> and <~${ROADMAP_TASK}>`;
+    mountWith(
+      PERSON,
+      { person: () => null, bots: [], tasks: [], tasksAnswered: true },
+      { requestId: "request-failed", text: gone },
+    );
+
+    expect(box().value).toBe(gone);
+    expect(await sentText(user)).toBe(gone);
+  });
+});
+
+describe("the mention menu after Escape", () => {
   const TEAM: BotOwner = {
     kind: "team",
     name: "Acme",
@@ -1115,12 +1613,12 @@ describe("the member list after Escape", () => {
     const user = userEvent.setup();
     await user.type(box(), "@an");
     await user.keyboard("{Escape}");
-    expect(screen.queryByTestId("bot-mention-list")).toBeNull();
+    expect(mentionMenu()).toBeNull();
 
     await user.clear(box());
     await user.type(box(), "@an");
 
-    expect(screen.getByTestId("bot-mention-list")).toBeTruthy();
+    expect(mentionMenu()).not.toBeNull();
   });
 
   it("shows again for an @ at the same offset after a send", async () => {
@@ -1135,7 +1633,7 @@ describe("the member list after Escape", () => {
 
     await user.type(box(), "@an");
 
-    expect(screen.getByTestId("bot-mention-list")).toBeTruthy();
+    expect(mentionMenu()).not.toBeNull();
   });
 
   it("shows for a new @ at the offset it was closed on, after a pick at another @", async () => {
@@ -1145,12 +1643,12 @@ describe("the member list after Escape", () => {
     await user.type(box(), " @bo");
     await user.keyboard("{Enter}");
     expect(box().value).toBe("@an @Bob ");
-    expect(screen.queryByTestId("bot-mention-list")).toBeNull();
+    expect(mentionMenu()).toBeNull();
 
     act(() => box().setSelectionRange(0, 3));
     await user.keyboard("@an");
 
-    expect(screen.getByTestId("bot-mention-list")).toBeTruthy();
+    expect(mentionMenu()).not.toBeNull();
   });
 
   it("stays closed while the same @ is still being typed", async () => {
@@ -1160,11 +1658,11 @@ describe("the member list after Escape", () => {
     await user.keyboard("n");
 
     expect(box().value).toBe("@an");
-    expect(screen.queryByTestId("bot-mention-list")).toBeNull();
+    expect(mentionMenu()).toBeNull();
   });
 });
 
-describe("the member list for assistive technology", () => {
+describe("the mention menu's highlight and attributes", () => {
   const TEAM: BotOwner = {
     kind: "team",
     name: "Acme",
@@ -1197,33 +1695,72 @@ describe("the member list for assistive technology", () => {
     useAuthStore.setState({ profile: null });
   });
 
-  /** The member the list has highlighted, by id. */
-  function highlightedId(): string | null {
-    return (
-      screen
-        .getAllByTestId("bot-mention-option")
-        .find((option) => option.getAttribute("aria-selected") === "true")
-        ?.id ?? null
-    );
-  }
-
-  it("names no highlighted member while no list shows", async () => {
-    const user = userEvent.setup();
-    await user.type(box(), "hello");
-
-    expect(box().hasAttribute("aria-activedescendant")).toBe(false);
-  });
-
-  it("names the highlighted member while the list shows", async () => {
+  it("marks the first row aria-selected when it opens, and only that row", async () => {
     const user = userEvent.setup();
     await user.type(box(), "@an");
 
-    const highlighted = highlightedId();
-    expect(highlighted).not.toBeNull();
-    expect(box().getAttribute("aria-activedescendant")).toBe(highlighted);
+    expect(highlightedLabel()).toBe("Anders");
+    expect(
+      openMenu().querySelectorAll('[role="option"][aria-selected="true"]'),
+    ).toHaveLength(1);
   });
 
-  it("carries only attributes a multiline box allows, with valid values, while the list shows", async () => {
+  it("moves the aria-selected row with the arrows", async () => {
+    const user = userEvent.setup();
+    await user.type(box(), "@an");
+
+    await user.keyboard("{ArrowDown}");
+
+    expect(highlightedLabel()).toBe("Ann Lee");
+  });
+
+  it("moves the highlight to the row the pointer is over", async () => {
+    const user = userEvent.setup();
+    await user.type(box(), "@an");
+
+    await user.hover(menuRow("Ann Lee"));
+
+    expect(highlightedLabel()).toBe("Ann Lee");
+  });
+
+  it("points the box at the open menu: aria-controls is the listbox's id, aria-activedescendant the highlighted row's and follows the arrows, aria-autocomplete is list", async () => {
+    const user = userEvent.setup();
+    await user.type(box(), "@an");
+    const listbox = openMenu().querySelector('[role="listbox"]');
+    const selectedRowId = (): string | null =>
+      menuRows().find((row) => row.getAttribute("aria-selected") === "true")
+        ?.id ?? null;
+
+    expect(listbox?.id).toBeTruthy();
+    expect(box().getAttribute("aria-controls")).toBe(listbox?.id);
+    expect(box().getAttribute("aria-activedescendant")).toBe(selectedRowId());
+    expect(box().getAttribute("aria-autocomplete")).toBe("list");
+
+    const first = selectedRowId();
+    await user.keyboard("{ArrowDown}");
+
+    expect(selectedRowId()).not.toBe(first);
+    expect(box().getAttribute("aria-activedescendant")).toBe(selectedRowId());
+  });
+
+  it("leaves aria-controls and aria-activedescendant off the box while the menu is closed, before typing and after Escape, but not aria-autocomplete", async () => {
+    const user = userEvent.setup();
+    const expectClosed = (): void => {
+      expect(box().hasAttribute("aria-controls")).toBe(false);
+      expect(box().hasAttribute("aria-activedescendant")).toBe(false);
+      expect(box().getAttribute("aria-autocomplete")).toBe("list");
+    };
+    expectClosed();
+
+    await user.type(box(), "@an");
+    expect(box().hasAttribute("aria-controls")).toBe(true);
+    await user.keyboard("{Escape}");
+
+    expect(mentionMenu()).toBeNull();
+    expectClosed();
+  });
+
+  it("carries only attributes a multiline box allows, with valid values, while the menu shows", async () => {
     const user = userEvent.setup();
     await user.type(box(), "@an");
     const { default: axe } = await import("axe-core");
@@ -1244,25 +1781,5 @@ describe("the member list for assistive technology", () => {
         })),
       })),
     ).toEqual([]);
-  });
-
-  it("follows the highlight as the arrows move it", async () => {
-    const user = userEvent.setup();
-    await user.type(box(), "@an");
-    const first = highlightedId();
-
-    await user.keyboard("{ArrowDown}");
-
-    const second = highlightedId();
-    expect(second).not.toBe(first);
-    expect(box().getAttribute("aria-activedescendant")).toBe(second);
-  });
-
-  it("names no highlighted member once Escape closes the list", async () => {
-    const user = userEvent.setup();
-    await user.type(box(), "@an");
-    await user.keyboard("{Escape}");
-
-    expect(box().hasAttribute("aria-activedescendant")).toBe(false);
   });
 });

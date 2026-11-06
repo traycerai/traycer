@@ -100,9 +100,9 @@ const BOX_ONE_ROW = {
  * the box shows, as markdown quote lines - an edit in progress included,
  * which stays an edit - and the box takes the focus with the caret after it.
  *
- * `@` completes a member of the team's environment (decision 137); the box
- * shows their name and the send writes their token, so the bot's host knows
- * who was mentioned.
+ * `@` completes a member of the team's environment (decision 137), or a bot
+ * or a task of the bot's environment (decision 177); the box shows the name
+ * and the send writes its token, so the bot's host knows what was named.
  *
  * With the keyboard up on a short viewport the box is one row, the field beside
  * Send, and a longer draft scrolls inside the field. The same elements restyle,
@@ -187,12 +187,12 @@ export function BotMessageComposer(props: {
   const inputRef = useRef<HTMLTextAreaElement>(null);
   const [form, setForm] = useState<HTMLFormElement | null>(null);
   const box = useKeyboardFocusLayoutWithin(form) ? BOX_ONE_ROW : BOX_FULL;
-  const mentionListId = useId();
+  const frameRef = useRef<HTMLDivElement>(null);
   const mentions = useBotMentionCompletion({
     text,
     setText,
     inputRef,
-    listId: mentionListId,
+    replyRow: box === BOX_ONE_ROW ? frameRef : null,
   });
   // A new edit replaces what the box holds with the message's text.
   const [loadedEdit, setLoadedEdit] = useState<BotComposerEdit | null>(null);
@@ -343,13 +343,14 @@ export function BotMessageComposer(props: {
     >
       <ComposerCallCaptions shown={call.barShown} testId={testId} />
       <div
+        ref={frameRef}
         className={cn(
           "relative rounded-lg border border-border bg-background transition-colors focus-within:border-ring",
           box.frame,
         )}
       >
         <ComposerCallSwap shown={call.barShown} testId={testId}>
-          {mentions.list}
+          {mentions.menu}
           <label htmlFor={inputId} className="sr-only">
             {label}
           </label>
@@ -386,9 +387,7 @@ export function BotMessageComposer(props: {
             maxLength={MESSAGE_MAX}
             className={cn("min-h-10", box.input)}
             data-testid={`${testId}-input`}
-            aria-autocomplete="list"
-            aria-controls={mentions.listOpen ? mentionListId : undefined}
-            aria-activedescendant={mentions.activeOptionId ?? undefined}
+            {...mentions.inputAria}
             onSelect={(event) =>
               mentions.onCaret(event.currentTarget.selectionStart)
             }

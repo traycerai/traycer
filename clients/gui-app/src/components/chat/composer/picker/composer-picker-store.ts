@@ -338,7 +338,9 @@ const INITIAL_STATE: ComposerPickerState = {
  */
 function isMentionPick(entry: MentionMenuEntry): boolean {
   const kind = entry.action.kind;
-  return kind === "complete" || kind === "attach-tab-preview";
+  return (
+    kind === "complete" || kind === "attach-tab-preview" || kind === "select"
+  );
 }
 
 function stepIdOf(step: MentionFlowStep): string {

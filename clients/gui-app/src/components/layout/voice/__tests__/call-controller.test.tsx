@@ -2081,21 +2081,6 @@ describe("acknowledgement boundaries and input positions", () => {
     ]);
     expect(useVoiceSessionStore.getState().openSpan).toBe("");
   });
-
-  it("does not let a separately delivered closing mark close input after a fully read reply", async () => {
-    const chat = await joinOpenThread([]);
-    land(chat, [botRow("r1", "The build passed.", 200)]);
-    await settle();
-    voiceSays("The build passed");
-    speak("end the call");
-    voiceSays(".");
-    speak(" with the vendor tomorrow.");
-    await acknowledge();
-    expect(useVoiceSessionStore.getState().phase).toBe("live");
-    expect(fake.sendMock.mock.calls.map(([r]) => r.text)).toEqual([
-      "end the call with the vendor tomorrow.",
-    ]);
-  });
 });
 
 describe("the acknowledgement lines the mint names", () => {

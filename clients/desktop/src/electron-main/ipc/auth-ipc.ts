@@ -49,6 +49,7 @@ import {
   readSlackAppViaHttp,
   registerSlackAppViaHttp,
 } from "@traycer-clients/shared/host-client/slack-app";
+import { mintTeamHostInstallTokenViaHttp } from "@traycer-clients/shared/host-client/team-host";
 import { mintExecutableWriteGrantViaHttp } from "@traycer-clients/shared/host-client/executable-write-grant";
 import { config } from "../../config";
 import type {
@@ -438,6 +439,22 @@ function registerSandboxControlPlaneIpc(bridge: RunnerIpcBridge): void {
         bearerToken,
         await iapProxyToken(),
         parsedRequest,
+      );
+    },
+  );
+
+  bridge.handleInvoke(
+    RunnerHostInvoke.mintTeamHostInstallToken,
+    async (_event, bearerToken: unknown, environmentId: unknown) => {
+      assertString(bearerToken, "mintTeamHostInstallToken.bearerToken");
+      return mintTeamHostInstallTokenViaHttp(
+        config.serverBaseUrl,
+        bearerToken,
+        await iapProxyToken(),
+        parseRequiredId(
+          environmentId,
+          "mintTeamHostInstallToken.environmentId",
+        ),
       );
     },
   );
