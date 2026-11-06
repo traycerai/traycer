@@ -241,7 +241,7 @@ function ShownArtifact(props: {
           title={stamp.title}
           className="w-full"
           height={height}
-          pageZoom
+          commenting={false}
           onSize={handleSize}
           onStatus={handleStatus}
           onBridge={null}
