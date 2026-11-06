@@ -1361,7 +1361,6 @@ function HostSwitcherRow(props: {
           updateView={props.updateView}
           environmentLabel={props.environmentLabel ?? props.tag}
           nameRef={null}
-          nameWraps
         />
       </CommandItem>
       <HostSwitcherRowDetails

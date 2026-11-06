@@ -284,7 +284,6 @@ function UserMenuHostRow(props: {
           surfaceState={AVAILABLE_HOST_ROW_SURFACE_STATE}
           updateView={null}
           nameRef={nameRef}
-          nameWraps
           environmentLabel={null}
         />
         {host.hostId === activatingHostId ? (

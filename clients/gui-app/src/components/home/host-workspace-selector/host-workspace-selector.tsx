@@ -467,9 +467,11 @@ type ActiveHostWorkspaceControlsProps = {
    */
   readonly seedIntentOverride: SeedIntentOverride | null;
   // "inline" (landing composer): folder rows with the host chip pushed to the
-  // far right of row 1. "stacked" (fork dialog, terminal-agent launcher): a
+  // far right of row 1. "stacked" (terminal-agent launcher, add-node): a
   // file-tree-style Host list above a Workspaces section, no trailing chip.
-  readonly layout: "inline" | "stacked";
+  // "stacked-caller-heading" (chat fork): the same, under a heading the dialog
+  // draws itself ("Run location"), so the host block adds none.
+  readonly layout: HostWorkspaceControlsLayout;
   readonly hostScope: HostWorkspaceControlsHostScope;
   readonly disabled: boolean;
   /**
@@ -479,6 +481,20 @@ type ActiveHostWorkspaceControlsProps = {
    * host (the fork dialogs, the terminal-agent launcher).
    */
   readonly sandboxStaging: SandboxStagingSurface | null;
+};
+
+type HostWorkspaceControlsLayout =
+  | "inline"
+  | "stacked"
+  | "stacked-caller-heading";
+
+/** The stacked host block's own heading; `null` where nothing or the caller heads it. */
+const STACKED_HOST_HEADING: Readonly<
+  Record<HostWorkspaceControlsLayout, string | null>
+> = {
+  inline: null,
+  stacked: "Host",
+  "stacked-caller-heading": null,
 };
 
 export function ActiveHostWorkspaceControls(
@@ -617,7 +633,7 @@ export function ActiveHostWorkspaceControls(
     }
   };
 
-  if (props.layout === "stacked") {
+  if (props.layout !== "inline") {
     // Host picker as a flat file-tree-style list (own header), with the
     // folder rows in their own "Workspaces" section below — no trailing chip.
     // `--fc-text` brightens location labels to match the panel's other sections;
@@ -625,6 +641,7 @@ export function ActiveHostWorkspaceControls(
     return (
       <div className="flex w-full max-w-full min-w-0 flex-col gap-3 [--fc-opacity:1] [--fc-text:var(--color-foreground)]">
         <HostSection
+          heading={STACKED_HOST_HEADING[props.layout]}
           hosts={visibleHostOptions}
           activeHostId={activeHostId}
           onSelect={handleSelectHost}

@@ -54,11 +54,6 @@ export function HostOptionRow(props: {
    */
   readonly nameRef: Ref<HTMLSpanElement>;
   /**
-   * Retained for callers using the shared row contract. Every name now wraps,
-   * including surfaces that previously passed `false`.
-   */
-  readonly nameWraps: boolean;
-  /**
    * The environment this host runs (Tracy Bots), or `null` for a picker that
    * does not say - which is every picker but Settings' host list, the one
    * place the person changes it.

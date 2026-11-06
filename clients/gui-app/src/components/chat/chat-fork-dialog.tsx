@@ -1338,7 +1338,7 @@ function ChatForkDialogBody(props: ChatForkDialogProps) {
             // silently.
             disabled={createChat.isPending || attachEnvironment.isPending}
             stagingKey={stagingKey}
-            layout="stacked"
+            layout="stacked-caller-heading"
             workspaceSeed={workspaceSeed}
             seedIntent={seedIntent}
             seedIntentOverride={seedIntentOverride}
