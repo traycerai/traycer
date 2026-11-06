@@ -1,9 +1,12 @@
+import { ArtifactPathReference } from "@/markdown/components/artifact-path-reference";
+import { rehypeTraycerArtifactReferences } from "@/markdown/plugins/rehype-traycer-artifact-references";
 import { useMemo, type ComponentType, type ReactNode } from "react";
 import { TraycerMarkdown } from "@/markdown";
 import { AgentReferenceChip } from "@/components/chat/agent-reference-chip";
 import { CodeBlock } from "@/markdown/components/code-block";
 import { extractText } from "@/markdown/components/extract-react-node-text";
 import {
+  TRAYCER_ARTIFACT_PATH_TAG,
   TRAYCER_AGENT_TAG,
   TRAYCER_MENTION_TAG,
 } from "@/markdown/plugins/const";
@@ -18,6 +21,7 @@ import {
 // pass would otherwise read as an id to chip.
 const AGENT_REFERENCE_REHYPE_PLUGINS = [
   rehypeBotMentions,
+  rehypeTraycerArtifactReferences,
   rehypeTraycerAgentReferences,
 ];
 
@@ -25,6 +29,7 @@ const AGENT_REFERENCE_MARKDOWN_COMPONENTS: Record<
   string,
   ComponentType<Record<string, unknown>>
 > = {
+  [TRAYCER_ARTIFACT_PATH_TAG]: ArtifactPathReference,
   [TRAYCER_AGENT_TAG]: AgentReferenceMarkdownNode as ComponentType<
     Record<string, unknown>
   >,
