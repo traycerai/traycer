@@ -3489,7 +3489,7 @@ function ChatMessagesInner(props: ChatMessagesInnerProps) {
   //
   // `afterSettle` runs once the ROW landing is done (valid or exhausted), so
   // a block-level `scrollIntoView` cannot fight the 1px row-top re-issue.
-  // Find passes `null`; `navigateToMessage` requests the inner reveal here.
+  // Find and `navigateToMessage` both request the inner reveal here.
   //
   // It settles on the list's own promise, never a `scrollend` race: a landing
   // that needs no scroll fires no `scrollend`, and the list can hold the
@@ -3500,11 +3500,15 @@ function ChatMessagesInner(props: ChatMessagesInnerProps) {
     (
       location: ChatTimelineNavigationLocation,
       afterSettle: (() => void) | null,
+      onCancelled: (() => void) | null,
     ): void => {
       activeNavigationSettleCleanupRef.current?.cancel();
       const generationAtIssue = anchorUserScrollGenerationRef.current;
       const list = chatTimelineRef.current;
-      if (!list) return;
+      if (!list) {
+        onCancelled?.();
+        return;
+      }
       followLatchRef.current?.beginOwnedFreeNavigation();
       const imperativeScrollGeneration = beginImperativeScrollOperation(
         location.animated,
@@ -3514,7 +3518,15 @@ function ChatMessagesInner(props: ChatMessagesInnerProps) {
       let lastSettleTimedOut = false;
       let cancelled = false;
       const scrollNode = list.getScrollableNode();
+      let completed = false;
+      const notifyCancelled = (): void => {
+        if (completed) return;
+        completed = true;
+        onCancelled?.();
+      };
       const finishFreeNavigation = (): void => {
+        if (completed) return;
+        completed = true;
         releaseSettle();
         finishImperativeScrollOperation(imperativeScrollGeneration);
         followLatchRef.current?.completeOwnedFreeNavigation();
@@ -3583,13 +3595,17 @@ function ChatMessagesInner(props: ChatMessagesInnerProps) {
               anchorUserScrollGenerationRef.current !== generationAtIssue
             ) {
               releaseSettle();
+              notifyCancelled();
               return;
             }
             finishExhausted();
           };
           void pendingScroll.then(finishTrailing, finishTrailing);
         },
-        onAborted: releaseSettle,
+        onAborted: () => {
+          releaseSettle();
+          notifyCancelled();
+        },
         maxRetries: CHAT_TIMELINE_NAVIGATION_MAX_RETRIES,
       });
       // A cancelled navigation has no landing of its own to decide: it only
@@ -3601,6 +3617,7 @@ function ChatMessagesInner(props: ChatMessagesInnerProps) {
           cancelSettle();
           releaseSettle();
           followLatchRef.current?.cancelOwnedFreeNavigation();
+          notifyCancelled();
         },
       };
     },
@@ -3610,13 +3627,6 @@ function ChatMessagesInner(props: ChatMessagesInnerProps) {
       finishImperativeScrollOperation,
       scrollToTimelineLocation,
     ],
-  );
-
-  const scrollToTimelineLocationSuppressingFollowRestore = useCallback(
-    (location: ChatTimelineNavigationLocation): void => {
-      issueFreeTimelineNavigation(location, null);
-    },
-    [issueFreeTimelineNavigation],
   );
 
   // No visible traversal is allowed: `animated` is an explicit
@@ -4526,6 +4536,7 @@ function ChatMessagesInner(props: ChatMessagesInnerProps) {
               blockReveal.requestReveal(messageId, blockId);
             }
           : null,
+        null,
       );
     },
     [
@@ -4567,6 +4578,7 @@ function ChatMessagesInner(props: ChatMessagesInnerProps) {
           viewOffset: listTopOffsetAdjustmentRef.current,
           animated: event.animated,
         },
+        null,
         null,
       );
     };
@@ -4795,7 +4807,7 @@ function ChatMessagesInner(props: ChatMessagesInnerProps) {
     requestIndexRead: setFindIndexRead,
     rowIndexByKeyRef,
     getScroller,
-    scrollToLocation: scrollToTimelineLocationSuppressingFollowRestore,
+    scrollToLocation: issueFreeTimelineNavigation,
     cancelManualNavigation: releaseForExplicitNavigation,
     getNavigationGeneration: getReaderNavigationGeneration,
     setScrolledActiveUserMessageIdIfChanged,
