@@ -420,7 +420,6 @@ describe("<EpicSurface /> sidebar side (S-06)", () => {
           {...appColumnChrome({ placement, platform: null, frameless: false })}
           columnRef={() => undefined}
           header={<header />}
-          soundtrackTopRow={null}
           strip={<nav />}
           banners={<div />}
           surface={

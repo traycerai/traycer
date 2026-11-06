@@ -12,8 +12,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { act, cleanup, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { SoundtrackWarmupBridge } from "@/components/layout/bridges/soundtrack-signals-bridge";
-import { SoundtrackControl } from "@/components/layout/soundtrack/soundtrack-control";
-import { TooltipProvider } from "@/components/ui/tooltip";
+import { SoundtrackSettingsSection } from "@/components/settings/panels/soundtrack-settings-section";
 import {
   openedFakePorts,
   resetFakePorts,
@@ -127,16 +126,16 @@ describe("the soundtrack warm-up", () => {
     expect(openedFakePorts).toHaveLength(2);
   });
 
-  it("ends with the soundtrack off when the first press lands on the toggle", async () => {
+  it("ends with the soundtrack off when the first press lands on the Music switch", async () => {
     useSettingsStore.setState({ soundtrackEnabled: true });
     render(
-      <TooltipProvider>
+      <>
         <SoundtrackWarmupBridge />
-        <SoundtrackControl />
-      </TooltipProvider>,
+        <SoundtrackSettingsSection />
+      </>,
     );
 
-    await userEvent.click(screen.getByRole("button", { name: "Soundtrack" }));
+    await userEvent.click(screen.getByRole("switch", { name: "Music" }));
 
     // The press opened the device and its click, the same gesture, closed it.
     expect(openedFakePorts).toHaveLength(1);
