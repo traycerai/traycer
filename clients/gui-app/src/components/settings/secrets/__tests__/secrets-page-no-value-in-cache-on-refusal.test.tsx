@@ -82,13 +82,10 @@ function createdSecret(): EnvironmentSecretV12 {
     kind: "api_key",
     protocol: "https",
     destinations: ["api.stripe.com"],
-    mode: "brokered",
-    state: "live",
     currentVersionId: "ver-1",
     revoked: false,
     updatedAt: 1,
     variables: [],
-    providerVariables: [],
   };
 }
 

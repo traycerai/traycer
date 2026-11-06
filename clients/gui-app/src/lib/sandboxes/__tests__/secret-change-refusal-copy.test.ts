@@ -36,12 +36,9 @@ describe("secretChangeRefusalLine", () => {
     },
   );
 
-  it("returns the exact line for the destroy and create rows", () => {
+  it("returns the exact line for the destroy row", () => {
     expect(secretChangeRefusalLine("destroy", "version_current")).toBe(
       "This is the current value. Replace or revoke it first.",
-    );
-    expect(secretChangeRefusalLine("create", "team_secrets_are_brokered")).toBe(
-      "Team secrets are brokered only; a tool that needs a plain value needs a personal sandbox.",
     );
   });
 
@@ -67,10 +64,10 @@ describe("secretChangeRefusalLine", () => {
       secretChangeRefusalLine("destroy", "secret_version_stale"),
     ).toBeNull();
     expect(
-      secretChangeRefusalLine("undo", "team_secrets_are_brokered"),
+      secretChangeRefusalLine("undo", "provider_name_unknown"),
     ).toBeNull();
     expect(
-      secretChangeRefusalLine("destroy", "team_secrets_are_brokered"),
+      secretChangeRefusalLine("destroy", "provider_name_unknown"),
     ).toBeNull();
     expect(secretChangeRefusalLine("create", "version_destroyed")).toBeNull();
   });

@@ -280,7 +280,6 @@ export function secretCreateRequest(
     environmentId: null,
     name: state.name,
     ...bindingFields(state),
-    mode: "brokered",
     portOverride: false,
     swapSites: state.kind === "api_key" ? [...state.swapSites] : ["header"],
     variables: state.variables.map((variable) => ({

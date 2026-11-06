@@ -18,7 +18,6 @@ function grant(overrides: Partial<SandboxGrant>): SandboxGrant {
     secretName: "DB_PASSWORD",
     kind: "password",
     protocol: "postgres",
-    mode: "brokered",
     source: "approved",
     connectorName: null,
     rotation: null,
@@ -297,14 +296,6 @@ describe("sandboxGrantViews", () => {
     expect(view.modeLine).toBe("brokered");
   });
 
-  it("shows a mode this build does not know as its own word", () => {
-    const [view] = sandboxGrantViews(
-      summary([grant({ mode: "tunnelled" })]),
-      null,
-    );
-    expect(view.modeLine).toBe("postgres · tunnelled");
-  });
-
   it.each([
     ["default", "granted to every sandbox"],
     ["inherited", "inherited from the sandbox that created this one"],
@@ -400,23 +391,13 @@ describe("a grant's rotation", () => {
 });
 
 describe("the stand-in clause", () => {
-  it("applies when any grant is brokered", () => {
+  it("applies to any grant, routes or not: every grant is brokered", () => {
     expect(
-      sandboxHasBrokeredGrant(
-        summary([grant({ mode: "tunnelled", routes: [] }), grant({})]),
-      ),
+      sandboxHasBrokeredGrant(summary([grant({ routes: [] }), grant({})])),
     ).toBe(true);
   });
 
-  it("does not apply when no grant is brokered, or there are none", () => {
-    expect(
-      sandboxHasBrokeredGrant(
-        summary([
-          grant({ mode: "tunnelled", routes: [] }),
-          grant({ mode: "tunnelled", routes: [] }),
-        ]),
-      ),
-    ).toBe(false);
+  it("does not apply when the sandbox holds no grant", () => {
     expect(sandboxHasBrokeredGrant(summary([]))).toBe(false);
   });
 
@@ -453,7 +434,7 @@ describe("sandboxRouteAddresses", () => {
             },
           ],
         }),
-        grant({ mode: "tunnelled", routes: [] }),
+        grant({ routes: [] }),
       ]),
     );
     expect([...addresses.entries()]).toEqual([

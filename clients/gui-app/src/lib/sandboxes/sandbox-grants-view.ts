@@ -1,6 +1,5 @@
 import type { SandboxRouteReadiness } from "@traycer/protocol/host/sandbox-control";
 import {
-  SANDBOX_GRANT_MODE_BROKERED,
   SANDBOX_ROUTE_UNREADY_CONNECTOR_OFFLINE,
   type SandboxGitHubAccess,
   type SandboxGrant,
@@ -57,13 +56,14 @@ export interface SandboxGrantView {
 export const SANDBOX_STAND_IN_CLAUSE =
   "Agents here see a stand-in for each brokered secret; the real value is attached as a request leaves the sandbox.";
 
-/** Whether the card says the stand-in clause: any brokered grant. */
+/**
+ * Whether the card says the stand-in clause: any grant at all. Brokering is
+ * the one way a sandbox holds a secret, so a grant is a brokered grant.
+ */
 export function sandboxHasBrokeredGrant(
   summary: SandboxGrantsSummary,
 ): boolean {
-  return summary.grants.some(
-    (grant) => grant.mode === SANDBOX_GRANT_MODE_BROKERED,
-  );
+  return summary.grants.length > 0;
 }
 
 const SOURCE_WORDS: Readonly<Record<string, string>> = {
@@ -71,11 +71,6 @@ const SOURCE_WORDS: Readonly<Record<string, string>> = {
   inherited: "inherited from the sandbox that created this one",
   approved: "approved for this sandbox",
 };
-
-function modeWords(mode: string): string {
-  if (mode === SANDBOX_GRANT_MODE_BROKERED) return "brokered";
-  return mode;
-}
 
 function addressOf(destination: string, port: number | null): string {
   return port === null ? destination : `${destination}:${port}`;
@@ -154,10 +149,13 @@ export function sandboxGrantViews(
   );
   return summary.grants.map((grant) => ({
     secretName: grant.secretName,
+    // The broker reports no mode: brokering is the only way a sandbox holds
+    // a secret, so the line states it beside the protocol rather than
+    // reading a field that can only hold one value.
     modeLine:
       grant.protocol.length === 0
-        ? modeWords(grant.mode)
-        : `${grant.protocol} · ${modeWords(grant.mode)}`,
+        ? "brokered"
+        : `${grant.protocol} · brokered`,
     via:
       grant.connectorName === null
         ? null

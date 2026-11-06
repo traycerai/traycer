@@ -44,8 +44,6 @@ const SECRET: EnvironmentSecret = {
   kind: "api_key",
   protocol: null,
   destinations: ["api.acme.test:443"],
-  mode: "brokered",
-  state: "live",
   currentVersionId: "v1",
   revoked: false,
   updatedAt: 1,

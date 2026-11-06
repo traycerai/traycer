@@ -264,9 +264,6 @@ export const RPC_ERROR_CODES = [
   "endpoint_unavailable",
   // The destination answers HTTP/3 only, which the bound class cannot carry.
   "h3_only_destination",
-  // A team's secrets are brokered only: a tool that needs a plain value needs
-  // a personal sandbox.
-  "team_secrets_are_brokered",
   // Undo named a version whose value was destroyed.
   "version_destroyed",
   // Destroy named the current version: replace or revoke the secret first.

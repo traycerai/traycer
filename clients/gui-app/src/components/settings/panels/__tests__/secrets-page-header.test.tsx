@@ -49,13 +49,10 @@ function secret(name: string): EnvironmentSecretV12 {
     kind: "api_key",
     protocol: null,
     destinations: ["api.example.com"],
-    mode: "brokered",
-    state: "live",
     currentVersionId: "ver-1",
     revoked: false,
     updatedAt: 1,
     variables: [],
-    providerVariables: [],
   };
 }
 

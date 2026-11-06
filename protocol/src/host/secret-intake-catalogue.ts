@@ -152,14 +152,6 @@ export const SANDBOX_SECRET_FORM_KINDS = [
 ] as const satisfies readonly SandboxSecretKind[];
 export type SandboxSecretFormKind = (typeof SANDBOX_SECRET_FORM_KINDS)[number];
 
-/**
- * How a sandbox holds a secret. One mode: the sandbox holds a placeholder and
- * the egress gateway swaps the real value in on the wire. No secret reaches a
- * sandbox as its own text.
- */
-export const SANDBOX_SECRET_MODES = ["brokered"] as const;
-export type SandboxSecretMode = (typeof SANDBOX_SECRET_MODES)[number];
-
 /** Where a key may appear in an HTTP request. */
 export const SANDBOX_SECRET_SWAP_SITES = ["header", "query", "body"] as const;
 export type SandboxSecretSwapSite = (typeof SANDBOX_SECRET_SWAP_SITES)[number];

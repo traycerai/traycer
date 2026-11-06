@@ -188,11 +188,6 @@ describe("<RetrospectiveSession /> commands on hold", () => {
           kind: "mcp_server",
           key: "legacy",
         }),
-        entryOf({
-          entryId: "value-1",
-          reason: "credential_like_value",
-          key: "DATABASE_URL",
-        }),
       ],
       [],
     );
@@ -210,12 +205,6 @@ describe("<RetrospectiveSession /> commands on hold", () => {
     expect(rowText("mcp-2")).toContain(
       `legacy (MCP server). ${COMMAND_DETAIL_TAIL}`,
     );
-    const values = screen.getByTestId("retrospective-held-values");
-    expect(within(values).getByText("On hold until you choose")).toBeTruthy();
-    expect(
-      within(values).getByTestId("retrospective-held-value-1"),
-    ).toBeTruthy();
-    expect(within(values).queryByTestId("retrospective-held-mcp-1")).toBeNull();
   });
 
   it("words each held executable kind by what it does and who gets it", async () => {
@@ -331,9 +320,12 @@ describe("<RetrospectiveSession /> a held choice the host refuses", () => {
       }),
       [
         entryOf({
-          entryId: "value-1",
-          reason: "credential_like_value",
-          key: "DATABASE_URL",
+          entryId: "hook-1",
+          reason: "executable_entry",
+          kind: "hook",
+          key: "notify",
+          command: "notify.sh",
+          event: "stop",
         }),
       ],
       [],
@@ -345,10 +337,8 @@ describe("<RetrospectiveSession /> a held choice the host refuses", () => {
       },
     );
 
-    const row = await screen.findByTestId("retrospective-held-value-1");
-    fireEvent.click(
-      within(row).getByRole("button", { name: "Keep as a variable" }),
-    );
+    const row = await screen.findByTestId("retrospective-held-hook-1");
+    fireEvent.click(within(row).getByRole("button", { name: "Approve" }));
 
     expect((await screen.findByRole("status")).textContent).toBe(
       "You no longer have access to change these settings.",
@@ -363,9 +353,12 @@ describe("<RetrospectiveSession /> an inventory that cannot be read", () => {
     let failing = true;
     const entries = [
       entryOf({
-        entryId: "value-1",
-        reason: "credential_like_value",
-        key: "DATABASE_URL",
+        entryId: "hook-1",
+        reason: "executable_entry",
+        kind: "hook",
+        key: "notify",
+        command: "notify.sh",
+        event: "stop",
       }),
     ];
     renderSessionWith(
@@ -392,13 +385,13 @@ describe("<RetrospectiveSession /> an inventory that cannot be read", () => {
     expect((await within(sheet).findByRole("status")).textContent).toBe(
       "Couldn't read Old laptop's settings.Retry",
     );
-    expect(screen.queryByTestId("retrospective-held-value-1")).toBeNull();
+    expect(screen.queryByTestId("retrospective-held-hook-1")).toBeNull();
 
     failing = false;
     fireEvent.click(within(sheet).getByRole("button", { name: "Retry" }));
 
     expect(
-      await screen.findByTestId("retrospective-held-value-1"),
+      await screen.findByTestId("retrospective-held-hook-1"),
     ).toBeTruthy();
   });
 });

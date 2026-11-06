@@ -66,7 +66,6 @@ export const TEAM_SECRETS_LINE =
   "Team secrets are brokered only; a tool that needs a plain value needs a personal sandbox.";
 
 export const SECRET_REVOKED_LABEL = "Revoked";
-export const SECRET_PENDING_REVIEW_LABEL = "Waiting for you";
 
 /**
  * Beside Replace value, Undo and Destroy, and under the recovery order: what

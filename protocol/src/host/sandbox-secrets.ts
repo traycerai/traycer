@@ -9,20 +9,13 @@
  *
  * Read tolerantly, as `sandbox-control.ts` is: the broker ships on its own
  * schedule, so a field it adds is ignored, and the open strings below
- * (`kind`, `protocol`, `mode`, `source`, a request's `status`) are compared
+ * (`kind`, `protocol`, `source`, a request's `status`) are compared
  * against the lists here and never rejected for being new.
  */
 import { z } from "zod";
 import { lazySchema } from "@traycer/protocol/framework/lazy-schema";
 
 // ─── `GET /api/v3/environments/:environmentId/secrets/hosts/:hostId/grants` ─
-
-/**
- * How a sandbox holds a secret: a placeholder the gateway swaps on the wire,
- * which is the only way. Anything else a broker reports is shown as its own
- * word.
- */
-export const SANDBOX_GRANT_MODE_BROKERED = "brokered";
 
 /**
  * One destination a granted secret is brokered to. `route` is the id that
@@ -65,7 +58,6 @@ export interface SandboxGrant {
   readonly secretName: string;
   readonly kind: string;
   readonly protocol: string;
-  readonly mode: string;
   /** `default`, `inherited` or `approved`: why this sandbox has it. */
   readonly source: string;
   readonly connectorName: string | null;
@@ -137,7 +129,6 @@ export const sandboxGrantSchema: z.ZodType<SandboxGrant> = lazySchema(() =>
     secretName: z.string().min(1),
     kind: z.string(),
     protocol: z.string(),
-    mode: z.string(),
     source: z.string(),
     connectorName: z.string().nullable().default(null),
     routes: z.array(sandboxGrantRouteSchema).default([]),

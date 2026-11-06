@@ -25,8 +25,6 @@ function providerKey(
     kind: "provider",
     protocol: null,
     destinations: [],
-    mode: "brokered",
-    state: "live",
     currentVersionId: "v1",
     revoked: false,
     updatedAt: 1,
@@ -80,7 +78,6 @@ describe("teamProviderStateWord", () => {
 
   it.each([
     ["revoked", { revoked: true }],
-    ["awaiting review", { state: "pending_review" }],
     ["not a provider secret", { kind: "api_key" }],
     ["another provider's variable", { name: "KIRO_API_KEY" }],
   ] as const)("does not count a key that is %s", (_label, overrides) => {

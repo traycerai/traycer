@@ -54,7 +54,6 @@ import { dashboardRunnerHost } from "@/components/settings/host-scope/__tests__/
 import { SecretsPage } from "@/components/settings/secrets/secrets-page";
 import { buildEnvironmentClient } from "@/lib/environment/__tests__/environment-test-support";
 import type { HostRpcRegistry } from "@/lib/host";
-import { secretChangeRefusalLine } from "@/lib/sandboxes/secret-change-refusal-copy";
 import {
   SECRET_REVOKED_LABEL,
   SECRETS_EMPTY_TEXT,
@@ -112,13 +111,10 @@ function secretFixture(
     kind: "api_key",
     protocol: "https",
     destinations: ["api.stripe.com"],
-    mode: "brokered",
-    state: "live",
     currentVersionId: "ver-1",
     revoked: false,
     updatedAt: 1,
     variables: [],
-    providerVariables: [],
     ...overrides,
   };
 }
@@ -711,7 +707,6 @@ describe("saving a secret", () => {
         connectorId: null,
         confirmedAddresses: null,
         value: TYPED_VALUE,
-        mode: "brokered",
         portOverride: false,
         swapSites: ["header"],
         variables: [],
@@ -787,24 +782,6 @@ describe("saving a secret", () => {
     expect(screen.getByTestId("add-secret-dialog")).toBeTruthy();
     expect(screen.getByTestId("secret-save")).toBeTruthy();
     expect(screen.queryByTestId("secret-save-done")).toBeNull();
-    expect(host.reads.list).toBe(1);
-  });
-
-  it("says why a team's secret is refused, with the refusal line", async () => {
-    const host = buildSecretsHost({
-      secrets: [],
-      createAnswer: { outcome: "refused", code: "team_secrets_are_brokered" },
-    });
-    renderPage(host);
-
-    await saveApiKey();
-
-    const line = secretChangeRefusalLine("create", "team_secrets_are_brokered");
-    expect(line).not.toBeNull();
-    const note = await screen.findByTestId("secret-save-note");
-    expect(note.textContent).toBe(line);
-    expect(screen.getByTestId("add-secret-dialog")).toBeTruthy();
-    // A refusal saved nothing, so there is nothing to re-read.
     expect(host.reads.list).toBe(1);
   });
 

@@ -412,7 +412,6 @@ describe("secretCreateRequest", () => {
       connectorId: null,
       confirmedAddresses: null,
       value: "s3cret-db-password",
-      mode: "brokered",
       portOverride: false,
       swapSites: ["header"],
       // No `id`: the row's own key in the form is never sent.
