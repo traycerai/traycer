@@ -39,6 +39,9 @@ export const RPC_ERROR_CODES = [
   "binding-changed",
   "binding-version-unknown",
   "custody-pending",
+  "host-left-environment",
+  "profile-account-changed",
+  "signed-out-by-person",
   "SENDER_TUI_UNSUPPORTED",
   // Caller-supplied input is structurally valid but semantically rejected
   // (e.g. minting the reserved `traycer:system` agent id). Additive and

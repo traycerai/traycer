@@ -103,6 +103,7 @@ export const credentialHomeSchema = lazySchema(() =>
         }),
       ])
       .nullable(),
+    handoffEnvironmentId: z.string().min(1).nullable(),
     materialFingerprint: z.string().nullable(),
     standing: credentialStandingSchema.optional(),
     observation: z
