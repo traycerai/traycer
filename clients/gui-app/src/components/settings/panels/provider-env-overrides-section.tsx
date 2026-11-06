@@ -35,30 +35,39 @@ import { useEnvironmentPick } from "@/stores/settings/settings-environment-pick-
 import { useHostsRunningPersonal } from "@/components/settings/environment/use-hosts-running-configuration";
 import { useCloudChatViewerId } from "@/hooks/chats/use-cloud-chat-queries";
 import { useConfigurationKey } from "@/components/settings/environment/use-configuration-key";
+import type { ProviderKeyTab } from "./provider-settings-tabs";
 
 type ProviderId = ProviderCliState["providerId"];
 
+/** The tab that holds this provider's key, and the opener that selects it. */
+export type ProviderKeyHome = {
+  readonly label: ProviderKeyTab["label"];
+  readonly open: () => void;
+};
+
 /**
  * A provider's variables refuse a key the way Variables does, except the
- * provider's own key variable, whose home is its Account tab: the value is
+ * provider's own key variable, whose home is `keyHome`: the value is
  * cleared, not carried, so the key neither stays in the row nor travels.
  */
 function providerKeyRefusal(
   refusal: KeyRefusal | null,
   keyVariable: string,
   providerName: string,
-  onOpenAccount: (() => void) | null,
+  keyHome: ProviderKeyHome | null,
 ): KeyRefusalFor {
   if (refusal === null) return null;
   return (name) =>
-    onOpenAccount === null || name !== keyVariable
+    keyHome === null || name !== keyVariable
       ? refusal
       : {
           before: `This is ${providerName}'s key. Set it on `,
-          link: `${providerName}'s Account tab`,
+          link: `${providerName}'s ${keyHome.label}`,
           after: ".",
           clearsValue: true,
-          onLink: onOpenAccount,
+          onLink: () => {
+            keyHome.open();
+          },
         };
 }
 
@@ -74,14 +83,14 @@ export function ProviderEnvOverridesSection({
   providerId,
   overrides,
   envOverrideScope,
-  onOpenAccount,
+  keyHome,
 }: {
   readonly providerId: ProviderId;
   /**
-   * Opens this provider's Account tab, where its own key is kept; `null` for
-   * a provider without one.
+   * Opens the tab that holds this provider's key, named as that tab is named;
+   * `null` for a provider without one.
    */
-  readonly onOpenAccount: (() => void) | null;
+  readonly keyHome: ProviderKeyHome | null;
   readonly overrides: readonly {
     readonly key: string;
     readonly value: string | null;
@@ -252,7 +261,7 @@ export function ProviderEnvOverridesSection({
           keyShaped.refusal,
           envNamePlaceholder(providerId),
           providerName,
-          onOpenAccount,
+          keyHome,
         )}
         credentialRefusal={credentialRefusal}
         overrides={overrides}

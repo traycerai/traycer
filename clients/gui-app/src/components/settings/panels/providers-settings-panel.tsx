@@ -131,6 +131,7 @@ import { ProviderEnvOverridesSection } from "./provider-env-overrides-section";
 import { ProviderSectionSelect } from "./provider-section-select";
 import { ProviderCliCandidatesSection } from "./provider-cli-candidates-section";
 import {
+  providerKeyTab,
   providerTabInputs,
   supportedTabsFor as resolveSupportedTabs,
   tabsForView,
@@ -211,7 +212,11 @@ function viewTabs(
     resolveSupportedTabs(providerTabInputs(state, permissionsTab)),
     view,
   );
-  if (tabs.includes("account") && tabs.includes("usage")) {
+  const keyTab = providerKeyTab({
+    apiKeySupported: state.apiKey.supported,
+    usageAdvertised: state.nativeCapabilities.supportedTabs.includes("usage"),
+  });
+  if (keyTab !== null && keyTab.tab === "usage") {
     return tabs.filter((tab) => tab !== "account");
   }
   return tabs;
@@ -1928,13 +1933,17 @@ function AccountManagedCredentialsLine(): ReactNode {
   );
 }
 
-/** The Env tab: a provider with a key sends its own key variable to Account. */
+/** The Env tab: a provider with a key sends its own key variable to that key's tab. */
 function ProviderEnvTab(props: {
   readonly state: ProviderCliState;
   readonly onActiveTabChange: (tab: ProviderTabKey) => void;
 }): ReactNode {
   const { state, onActiveTabChange } = props;
   const configurationKey = useConfigurationKey();
+  const keyTab = providerKeyTab({
+    apiKeySupported: state.apiKey.supported,
+    usageAdvertised: state.nativeCapabilities.supportedTabs.includes("usage"),
+  });
   return (
     <ProviderEnvOverridesSection
       // Keyed by configuration and provider: a row's draft stays with the
@@ -1943,8 +1952,13 @@ function ProviderEnvTab(props: {
       providerId={state.providerId}
       overrides={state.envOverrides}
       envOverrideScope={state.nativeCapabilities.envOverrideScope}
-      onOpenAccount={
-        state.apiKey.supported ? () => onActiveTabChange("account") : null
+      keyHome={
+        keyTab === null
+          ? null
+          : {
+              label: keyTab.label,
+              open: () => onActiveTabChange(keyTab.tab),
+            }
       }
     />
   );

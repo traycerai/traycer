@@ -59,7 +59,7 @@ import { cn } from "@/lib/utils";
  * Settings ▸ Personal ▸ Secrets ▸ Add a secret:
  * kind first, then the kind's form with Verify, then the custody sentence
  * once more before Save. API keys and database logins are offered; a
- * provider's key is set on its Account tab, which the picker points to, and
+ * provider's key is set on that provider's page, which the picker points to, and
  * SSH, the cloud and certificate kinds have no row. A kind no protocol of
  * which is brokered is greyed with the catalogue's own line. A value a
  * Variables row refused arrives as `prefill`, its name and value filled in.

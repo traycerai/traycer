@@ -569,7 +569,7 @@ describe("the add dialog's kind picker", () => {
       ).toBeNull();
     }
     expect(screen.getByTestId("secret-provider-keys-line").textContent).toBe(
-      "Provider keys are set on each provider's Account tab, under Providers.",
+      "Provider keys are set on each provider's page, under Providers.",
     );
   });
 

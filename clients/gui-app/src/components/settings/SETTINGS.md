@@ -1020,7 +1020,7 @@ hosts" (or "Not applied on dev-box", "Applying on dev-box…"), and a removal
 under way reads "Cleanup requested · waiting for dev-box · Retry". A
 Details that cannot load reads "Couldn't load details." with Retry.
 **Add a secret** offers API key and database login, with "Provider keys are
-set on each provider's Account tab, under Providers." where Providers opens
+set on each provider's page, under Providers." where Providers opens
 that page (`lib/sandboxes/secret-intake-form.ts`: server address, port,
 login, database, variables, mode, "Every sandbox gets it", the database's
 plaintext lines and their disclosure version). The server address's hint is
@@ -1098,11 +1098,12 @@ opens Secrets. A value typed there that looks like a key (`classifyCredential`) 
 refused in its row with "This looks like a key. Add it as a secret.", whose
 link opens Add a secret with the name and value filled in; nothing is stored
 as a variable. A provider's own key variable typed on its Env tab
-(`envNamePlaceholder`, for every provider with an Account tab key) is refused
-instead with "This is Kiro's key. Set it on Kiro's Account tab.", whose link
-opens that provider's Account tab; the typed value is cleared and nothing is
-saved. That tab is the one the provider page shows (`apiKey.supported`), so a
-provider without one, such as Claude Code, keeps the first line. A name one
+(`envNamePlaceholder`, for every provider whose key has a tab) is refused
+instead with "This is Kiro's key. Set it on Kiro's Profiles & Limits." when
+that tab is Profiles & Limits, or "This is Amp's key. Set it on Amp's Account."
+when the provider has a key and no usage tab. The link opens that same tab
+(`providerKeyTab`); the typed value is cleared and nothing is saved. A
+provider without a key tab, such as Claude Code, keeps the first line. A name one
 of Personal's secrets is set under (`environment.secrets.list@1.2` rows'
 `variables`) reads "ENV_E2E_SERVICE_TOKEN · from the secret
 ENV_E2E_SERVICE_TOKEN · Secrets" on Variables, with no value and nothing to

@@ -3973,7 +3973,7 @@ describe("<ProvidersSettingsPanel />", () => {
         apiKey: { supported: true, configured: false, source: null },
       });
 
-    it("sends the provider's own key variable to its Account tab, with the value cleared and nothing saved", () => {
+    it("sends the provider's own key variable to Account when Profiles & Limits is absent, with the value cleared and nothing saved", () => {
       renderOnPersonalPage([withKey("cursor")]);
       selectTab("Env");
 
@@ -3981,12 +3981,12 @@ describe("<ProvidersSettingsPanel />", () => {
 
       const line = screen.getByTestId("env-key-refusal");
       expect(line.textContent).toBe(
-        "This is Cursor's key. Set it on Cursor's Account tab.",
+        "This is Cursor's key. Set it on Cursor's Account.",
       );
       expect(providerMocks.setEnvOverrideMutate).not.toHaveBeenCalled();
 
       fireEvent.click(
-        within(line).getByRole("button", { name: "Cursor's Account tab" }),
+        within(line).getByRole("button", { name: "Cursor's Account" }),
       );
 
       expect(
@@ -4088,11 +4088,11 @@ describe("<ProvidersSettingsPanel />", () => {
       expect(screen.queryByDisplayValue(SAVED_KEY)).toBeNull();
       const line = within(row).getByTestId("env-key-refusal");
       expect(line.textContent).toBe(
-        "This is Cursor's key. Set it on Cursor's Account tab.",
+        "This is Cursor's key. Set it on Cursor's Account.",
       );
 
       fireEvent.click(
-        within(line).getByRole("button", { name: "Cursor's Account tab" }),
+        within(line).getByRole("button", { name: "Cursor's Account" }),
       );
 
       expect(
@@ -4102,7 +4102,7 @@ describe("<ProvidersSettingsPanel />", () => {
       expect(providerMocks.deleteEnvOverrideMutate).not.toHaveBeenCalled();
     });
 
-    it("keeps the Account-tab label and opens the key on Profiles & Limits when Account was dropped", () => {
+    it("names Profiles & Limits and opens that tab when the provider has one", () => {
       renderOnPersonalPage([
         providerState({
           providerId: "cursor",
@@ -4118,10 +4118,12 @@ describe("<ProvidersSettingsPanel />", () => {
 
       const line = screen.getByTestId("env-key-refusal");
       expect(line.textContent).toBe(
-        "This is Cursor's key. Set it on Cursor's Account tab.",
+        "This is Cursor's key. Set it on Cursor's Profiles & Limits.",
       );
       fireEvent.click(
-        within(line).getByRole("button", { name: "Cursor's Account tab" }),
+        within(line).getByRole("button", {
+          name: "Cursor's Profiles & Limits",
+        }),
       );
 
       expect(screen.queryByRole("tab", { name: "Account" })).toBeNull();
@@ -4137,6 +4139,42 @@ describe("<ProvidersSettingsPanel />", () => {
         within(key).getByLabelText<HTMLInputElement>("API key").value,
       ).toBe("");
       expect(within(key).getByRole("button", { name: "Save" })).toBeDefined();
+      expect(document.body.textContent).not.toContain(KEY_VALUE);
+    });
+
+    it("names Amp's Account tab and opens it, because Amp has a key and no Profiles & Limits", () => {
+      renderOnPersonalPage([
+        providerState({
+          providerId: "amp",
+          selected: { kind: "bundled" },
+          candidates: [],
+          envOverrides: [],
+          nativeCapabilities: CURSOR_TABS,
+          apiKey: { supported: true, configured: false, source: null },
+        }),
+      ]);
+      selectTab("Env");
+      typeVariable("AMP_API_KEY", KEY_VALUE);
+
+      const line = screen.getByTestId("env-key-refusal");
+      expect(line.textContent).toBe(
+        "This is Amp's key. Set it on Amp's Account.",
+      );
+      expect(
+        screen.queryByRole("tab", { name: "Profiles & Limits" }),
+      ).toBeNull();
+      fireEvent.click(
+        within(line).getByRole("button", { name: "Amp's Account" }),
+      );
+
+      expect(
+        screen.getByRole("tab", { name: "Account" }).getAttribute("data-state"),
+      ).toBe("active");
+      expect(
+        within(screen.getByRole("tabpanel")).getByLabelText<HTMLInputElement>(
+          "API key",
+        ).value,
+      ).toBe("");
       expect(document.body.textContent).not.toContain(KEY_VALUE);
     });
   });
