@@ -50,6 +50,7 @@ function baseManifest(): MarkdownRevisionManifest {
 function baseEnvelope(): MarkdownRevisionEnvelope {
   return {
     format: 1,
+    kind: "markdown",
     document: paragraphDocument("hello"),
     markdown: "hello\n",
     scalars: {
@@ -102,9 +103,13 @@ describe("encodeMarkdownRevision / decodeMarkdownRevision", () => {
     expect(/\s/u.test(text)).toBe(false);
     expect(text.startsWith('{"document":')).toBe(true);
     expect(text.indexOf('"document"')).toBeLessThan(text.indexOf('"format"'));
-    expect(text.indexOf('"format"')).toBeLessThan(text.indexOf('"manifest"'));
-    expect(text.indexOf('"manifest"')).toBeLessThan(text.indexOf('"markdown"'));
-    expect(text.indexOf('"markdown"')).toBeLessThan(text.indexOf('"scalars"'));
+    expect(text.indexOf('"format"')).toBeLessThan(text.indexOf('"kind"'));
+    expect(text.indexOf('"kind"')).toBeLessThan(text.indexOf('"manifest"'));
+    // The `markdown` key, not the `"markdown"` value of `kind`.
+    expect(text.indexOf('"manifest"')).toBeLessThan(
+      text.indexOf('"markdown":'),
+    );
+    expect(text.indexOf('"markdown":')).toBeLessThan(text.indexOf('"scalars"'));
     // Manifest keys sorted too: artifactId < author < createdAt < ... < transient.
     const manifestStart = text.indexOf('"manifest"');
     expect(text.indexOf('"artifactId"', manifestStart)).toBeLessThan(
@@ -524,6 +529,16 @@ describe("envelope refusals", () => {
     ).toBe(false);
   });
 
+  it("refuses an envelope whose kind is not markdown", () => {
+    // Object.assign keeps the fixture typed while overriding the literal.
+    const html = Object.assign(baseEnvelope(), { kind: "html" });
+
+    expectInvalid(
+      () => encodeMarkdownRevision(html),
+      /invalid_value[\s\S]*kind/u,
+    );
+  });
+
   it("refuses scalars that mix the spec and ticket shapes", () => {
     const specWithAssignee = {
       ...baseEnvelope(),
@@ -637,6 +652,7 @@ describe("decodeMarkdownRevision refusals", () => {
         scalars: base.scalars,
         markdown: base.markdown,
         manifest: base.manifest,
+        kind: base.kind,
         format: base.format,
         document: base.document,
       }),
@@ -704,6 +720,23 @@ describe("decodeMarkdownRevision refusals", () => {
     );
   });
 
+  it("refuses canonical bytes whose kind is another kind or absent", () => {
+    const canonical = decoder.decode(encodeMarkdownRevision(baseEnvelope()));
+    const otherKind = encoder.encode(
+      canonical.replace('"kind":"markdown"', '"kind":"html"'),
+    );
+    const noKind = encoder.encode(canonical.replace('"kind":"markdown",', ""));
+
+    expectInvalid(
+      () => decodeMarkdownRevision(otherKind),
+      /invalid_value[\s\S]*kind/u,
+    );
+    expectInvalid(
+      () => decodeMarkdownRevision(noKind),
+      /invalid_value[\s\S]*kind/u,
+    );
+  });
+
   it("refuses a newer format number instead of reading around it", () => {
     const canonical = decoder.decode(encodeMarkdownRevision(baseEnvelope()));
     const bytes = encoder.encode(canonical.replace('"format":1', '"format":2'));
@@ -731,6 +764,7 @@ describe("decodeMarkdownRevision refusals", () => {
     const forged = {
       document: parsed.document,
       format: 1,
+      kind: "markdown",
       manifest: {
         artifactId: "artifact-1",
         author: { kind: "person", userId: "user-1" },
