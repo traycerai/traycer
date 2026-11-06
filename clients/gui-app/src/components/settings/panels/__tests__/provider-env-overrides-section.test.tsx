@@ -108,6 +108,10 @@ import { useAuthStore } from "@/stores/auth/auth-store";
 import { useSettingsEnvironmentPickStore } from "@/stores/settings/settings-environment-pick-store";
 import type { EnvOverrideValue } from "../env-override-editor";
 import { ProviderEnvOverridesSection } from "../provider-env-overrides-section";
+import {
+  RETIRED_PROVIDER_VARIABLES,
+  RETIRED_SECRET_ROW_FIELDS,
+} from "@traycer/protocol/host/released-wire-rows";
 
 const mocks = vi.hoisted(() => ({
   setOverrideMutate: vi.fn<(variables: unknown) => Promise<void>>(() =>
@@ -832,6 +836,8 @@ describe("ProviderEnvOverridesSection on a Personal page with a held value", () 
       { key: "ANTHROPIC_AUTH_TOKEN", value: HELD_VALUE },
     ];
     const secretSettingIt: EnvironmentSecretV12 = {
+      ...RETIRED_SECRET_ROW_FIELDS,
+      providerVariables: [...RETIRED_PROVIDER_VARIABLES],
       secretId: "sec-1",
       name: "CLAUDE_TOKEN",
       kind: "api_key",
@@ -867,6 +873,8 @@ describe("ProviderEnvOverridesSection on a Personal page with a held value", () 
       // secret's actual name from its binding (`variables`), never assume
       // the key and the secret's display name coincide.
       const secretBoundGlobally: EnvironmentSecretV12 = {
+        ...RETIRED_SECRET_ROW_FIELDS,
+        providerVariables: [...RETIRED_PROVIDER_VARIABLES],
         secretId: "sec-shadow",
         name: "R2 access",
         kind: "api_key",

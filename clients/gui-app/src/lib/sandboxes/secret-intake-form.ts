@@ -4,6 +4,7 @@ import type {
   EnvironmentSecretsVerifyRequest,
   EnvironmentSecretsVerifyRequestV11,
 } from "@traycer/protocol/host/environment-schemas";
+import { RETIRED_SECRET_CREATE_FIELDS } from "@traycer/protocol/host/released-wire-rows";
 import {
   SANDBOX_DATABASE_DEFAULT_PORT,
   SANDBOX_DATABASE_UPSTREAM_MECHANISMS,
@@ -280,6 +281,7 @@ export function secretCreateRequest(
     environmentId: null,
     name: state.name,
     ...bindingFields(state),
+    ...RETIRED_SECRET_CREATE_FIELDS,
     portOverride: false,
     swapSites: state.kind === "api_key" ? [...state.swapSites] : ["header"],
     variables: state.variables.map((variable) => ({

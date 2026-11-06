@@ -111,6 +111,10 @@ import {
 import { RunnerHostProvider } from "@/providers/runner-host-provider";
 import { useAuthStore } from "@/stores/auth/auth-store";
 import { useSettingsEnvironmentPickStore } from "@/stores/settings/settings-environment-pick-store";
+import {
+  RETIRED_PROVIDER_VARIABLES,
+  RETIRED_SECRET_ROW_FIELDS,
+} from "@traycer/protocol/host/released-wire-rows";
 
 const HOST_ID = "host-a";
 const READY_STATUS: EnvironmentStatusResponseV11 = environmentStatusFixture({
@@ -744,6 +748,8 @@ describe("a variable this computer keeps its own value for", () => {
 describe("a variable a secret sets on the Personal page", () => {
   const NAME = "ENV_E2E_SERVICE_TOKEN";
   const secretSettingIt: EnvironmentSecretV12 = {
+    ...RETIRED_SECRET_ROW_FIELDS,
+    providerVariables: [...RETIRED_PROVIDER_VARIABLES],
     secretId: "sec-1",
     name: NAME,
     kind: "api_key",
