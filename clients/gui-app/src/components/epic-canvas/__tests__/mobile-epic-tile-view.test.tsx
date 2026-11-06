@@ -1294,13 +1294,24 @@ describe("<MobileEpicTileView /> with two tiles and chats painted by the stable 
     });
   });
 
-  describe("an open that names an HTML version", () => {
+  describe("an Expand that names an HTML version", () => {
     it.each([false, true])(
       "adopts it on the tile in the second slot (already displayed there: %s)",
       (displayed) => {
         mountHosted(paneCanvas([spec(1), html(1)], "inst-1", ["inst-1"]));
         if (displayed) showSecond("html-inst-1", false);
-        openFrom("open-from-spec-1", html(2), "explicit");
+        pendingOpen.value = {
+          intent: {
+            ...tileIntent(
+              html(2),
+              { tabId: VIEW_TAB_ID },
+              "explicit",
+              "direct_ui",
+            ),
+            adoptHtmlVersion: true,
+          },
+        };
+        fireEvent.click(screen.getByTestId("open-from-spec-1"));
         expect(canvasOf().tilesByInstanceId["html-inst-1"]).toMatchObject({
           htmlVersion: versionOf(2),
         });
