@@ -50,7 +50,6 @@ import { useApplyRequestedSandboxesConfiguration } from "@/hooks/sandboxes/use-a
 import type { EnvironmentPick } from "@/lib/settings-environment-pages";
 import { useEnvironmentPick } from "@/stores/settings/settings-environment-pick-store";
 import { useRefreshSandboxCosts } from "@/hooks/sandboxes/use-refresh-sandbox-costs";
-import { useIsMobileViewport } from "@/hooks/ui/use-mobile-viewport";
 import { useSandboxRowSessionReport } from "@/hooks/sandboxes/use-sandbox-session-report";
 import { useSandboxSettingsStatus } from "@/hooks/sandboxes/use-sandbox-settings-status";
 import { sandboxSettingsFailed } from "@traycer/protocol/host/sandbox-settings";
@@ -123,13 +122,9 @@ export function SandboxesSettingsPanel(): ReactNode {
   const configuration = configurationForPick(configurations, pick);
   const runnerHost = useRunnerHost();
   const openLink = useOpenLink();
-  const mobile = useIsMobileViewport();
-  const environmentName =
-    configuration.kind === "team" ? configuration.teamName : "Personal";
   return (
     <SettingsPanelShell
       title={SANDBOXES.page.label}
-      description={mobile ? undefined : environmentName}
       bodyClassName="overflow-visible rounded-none border-0 bg-transparent"
       headerAction={
         <div className="flex flex-wrap items-center justify-end gap-2">

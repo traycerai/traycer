@@ -14,9 +14,8 @@ export const SECRETS_EMPTY_TEXT =
   "Values and logins your agents use. On your computers they are set as values; on sandboxes agents use them without seeing them.";
 
 /** A team's Secrets text, as its subtitle and as its empty state. */
-export function teamSecretsText(teamName: string): string {
-  return `Values and logins ${teamName}'s agents use, on its sandboxes without being seen.`;
-}
+export const TEAM_SECRETS_DESCRIPTION =
+  "Values and logins agents use, on sandboxes without being seen.";
 
 export const SECRETS_ADD_LABEL = "Add a secret";
 

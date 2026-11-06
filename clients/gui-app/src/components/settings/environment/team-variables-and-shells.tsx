@@ -33,14 +33,9 @@ import {
 import { TeamVariableLiveFacts } from "./team-variable-live-facts";
 import { TeamTextItems } from "./team-text-items";
 import { ConfigurationReadFailed } from "./team-read-failed";
-import { usePickedTeamLabel } from "./team-pick-label";
 
 export function TeamVariablesAndShells(): ReactNode {
   const personal = useConfigurationIsPersonal();
-  const source = useConfigurationSource();
-  const teamName =
-    usePickedTeamLabel(source.kind === "pool" ? source.environmentId : "") ??
-    "this team";
   const query = useConfigurationVariablesQuery();
   const read = useBoundedRead(query);
   const items = query.data;
@@ -57,8 +52,8 @@ export function TeamVariablesAndShells(): ReactNode {
       title="Variables & shells"
       description={
         personal
-          ? "Plain values every computer and sandbox running Personal gets, and the shell agents run in."
-          : `Plain values every host running ${teamName} gets, and the shell agents run in.`
+          ? "Plain values every computer and sandbox running this environment gets, and the shell agents run in."
+          : "Plain values every host running this environment gets, and the shell agents run in."
       }
       bodyClassName="flex flex-col gap-4 overflow-visible rounded-none border-none bg-transparent"
     >

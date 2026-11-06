@@ -121,6 +121,76 @@ describe("FallbackBehaviorGroup - selecting a value", () => {
   });
 });
 
+describe("FallbackBehaviorGroup Help disclosures", () => {
+  it("keeps the grace, wait, and automatic-return explanations inside their collapsed Help sections", () => {
+    render(
+      <FallbackBehaviorGroup
+        policy={policy({ returnToPreferred: "auto" })}
+        onChange={vi.fn()}
+        status={null}
+      />,
+    );
+
+    const explanations = [
+      "Traycer waits this long before switching, so you can cancel from the chat. Opening the menu to choose another account or model pauses the countdown.",
+      "If the limit resets later than this, Traycer skips waiting and moves on to the next step.",
+      "Messages waiting to run move back to the original account or model.",
+    ];
+    const helpSummaries = screen.getAllByText("Help");
+    expect(helpSummaries).toHaveLength(3);
+
+    for (const [index, explanationText] of explanations.entries()) {
+      const summary = helpSummaries[index];
+      const explanation = screen.getByText(explanationText);
+      const help = summary.closest("details");
+      expect(help).not.toBeNull();
+      expect(explanation.closest("details")).toBe(help);
+      expect(help).toHaveProperty("open", false);
+
+      fireEvent.click(summary);
+      expect(help).toHaveProperty("open", true);
+      expect(screen.getByText(explanationText)).toBe(explanation);
+    }
+  });
+
+  it("points each timing combobox directly to its explanation paragraph inside closed Help", () => {
+    render(
+      <FallbackBehaviorGroup
+        policy={policy({})}
+        onChange={vi.fn()}
+        status={null}
+      />,
+    );
+
+    const controls = [
+      [
+        "Time to cancel a switch",
+        "Traycer waits this long before switching, so you can cancel from the chat. Opening the menu to choose another account or model pauses the countdown.",
+      ],
+      [
+        "Longest wait for a usage limit to reset",
+        "If the limit resets later than this, Traycer skips waiting and moves on to the next step.",
+      ],
+    ] as const;
+
+    for (const [name, explanationText] of controls) {
+      const control = screen.getByRole("combobox", { name });
+      const descriptionId = control.getAttribute("aria-describedby");
+      expect(descriptionId).not.toBeNull();
+      if (descriptionId === null) return;
+
+      const explanation = document.getElementById(descriptionId);
+      expect(explanation).not.toBeNull();
+      if (explanation === null) return;
+      expect(explanation.tagName).toBe("P");
+      expect(explanation.textContent).toBe(explanationText);
+      const help = explanation.closest("details");
+      expect(help).not.toBeNull();
+      expect(help).toHaveProperty("open", false);
+    }
+  });
+});
+
 describe("FallbackBehaviorGroup - AX8: the return-to-preferred radiogroup is named and described", () => {
   // jest-dom's `toHaveAccessibleName`/`toHaveAccessibleDescription` are not
   // wired into this repo's vitest setup (`vitest.config.ts`'s `setupFiles`
@@ -162,10 +232,12 @@ describe("FallbackBehaviorGroup - AX8: the return-to-preferred radiogroup is nam
     expect(textOf(group.getAttribute("aria-describedby"))).toContain(
       "Switching back also starts a new agent session",
     );
-    expect(screen.getByText("Help").closest("details")).toHaveProperty(
-      "open",
-      false,
-    );
+    const descriptionId = group.getAttribute("aria-describedby");
+    expect(
+      descriptionId === null
+        ? null
+        : document.getElementById(descriptionId)?.closest("details"),
+    ).toHaveProperty("open", false);
   });
 
   it("the 'Switch back automatically' radio carries its own consequence as an accessible description", () => {

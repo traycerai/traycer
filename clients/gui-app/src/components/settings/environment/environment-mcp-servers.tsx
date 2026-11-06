@@ -52,7 +52,7 @@ import {
 import {
   DISABLED_SERVER_PHRASE,
   REMOVE_SERVER_LABEL,
-  mcpPageSubtitle,
+  MCP_PAGE_DESCRIPTION,
   mcpReadFailed,
   providersPhrase,
   removeReach,
@@ -76,12 +76,10 @@ function McpPage(props: {
   readonly children: ReactNode;
   readonly action: ReactNode;
 }): ReactNode {
-  const personal = useConfigurationIsPersonal();
-  const name = useConfigurationName();
   return (
     <SettingsPanelShell
       title="MCP servers"
-      description={mcpPageSubtitle(personal, name)}
+      description={MCP_PAGE_DESCRIPTION}
       headerAction={props.action}
       bodyClassName="overflow-visible rounded-none border-none bg-transparent"
     >

@@ -14,6 +14,9 @@ import { TeamPermissions } from "@/components/settings/environment/team-permissi
 import { BrowserAgentAccessGroup } from "@/components/settings/panels/browser-agent-access-group";
 import { TeamMcpServers } from "@/components/settings/environment/team-mcp-servers";
 import { TeamVariablesAndShells } from "@/components/settings/environment/team-variables-and-shells";
+import { SettingsSectionContext } from "@/components/settings/settings-section-context";
+import { setPhoneLayoutOnly } from "@/lib/mobile-app";
+import { useSettingsEnvironmentPickStore } from "@/stores/settings/settings-environment-pick-store";
 import { reachableHost } from "./mcp-skills-test-support";
 import {
   configurationItem,
@@ -45,6 +48,8 @@ vi.mock("@/hooks/host/use-host-client-for-host-id", () => ({
 afterEach(() => {
   cleanup();
   resetTeamPageHarness();
+  useSettingsEnvironmentPickStore.setState({ pick: null });
+  setPhoneLayoutOnly(false);
 });
 
 const variable = (
@@ -175,7 +180,7 @@ describe("TeamVariablesAndShells", () => {
     );
     expect(
       await screen.findByText(
-        "Plain values every host running Acme gets, and the shell agents run in.",
+        "Plain values every host running this environment gets, and the shell agents run in.",
       ),
     ).toBeTruthy();
     const reads = harness.paramsOf("environment.configuration.items").length;
@@ -487,11 +492,7 @@ describe("TeamMcpServers", () => {
     });
     render(<TeamMcpServers />, { wrapper: harness.Wrapper });
 
-    expect(
-      await screen.findByText(
-        "Tools agents can call. Acme's servers reach every provider on every host running Acme.",
-      ),
-    ).toBeTruthy();
+    expect(await screen.findByText("Tools agents can call.")).toBeTruthy();
   });
 
   it("toggles a tool against the displayed revision for an editor", async () => {
@@ -619,26 +620,26 @@ describe("Environment page subtitles", () => {
     [
       "MCP servers",
       <TeamMcpServers key="m" />,
-      "Tools agents can call. Acme's servers reach every provider on every host running Acme.",
-      "Tools agents can call. Personal's servers reach every provider on every computer and sandbox running Personal.",
+      "Tools agents can call.",
+      "Tools agents can call.",
     ],
     [
       "Skills",
       <TeamSkillsPage key="s" />,
       null,
-      "Instructions agents follow for a kind of task. Personal's skills reach every provider on every computer and sandbox running Personal.",
+      "Instructions agents follow for a kind of task.",
     ],
     [
       "Permissions",
       <TeamPermissions key="x">{null}</TeamPermissions>,
-      "What Acme's agents may do without asking, on every host running Acme.",
-      "What your agents may do without asking, on every computer and sandbox running Personal.",
+      "What agents may do without asking.",
+      "What your agents may do without asking, on every computer and sandbox running this environment.",
     ],
     [
       "Variables & shells",
       <TeamVariablesAndShells key="v" />,
-      "Plain values every host running Acme gets, and the shell agents run in.",
-      "Plain values every computer and sandbox running Personal gets, and the shell agents run in.",
+      "Plain values every host running this environment gets, and the shell agents run in.",
+      "Plain values every computer and sandbox running this environment gets, and the shell agents run in.",
     ],
   ])("%s names its configuration", async (_page, page, team, personal) => {
     if (team !== null) {
@@ -652,6 +653,101 @@ describe("Environment page subtitles", () => {
     render(page, { wrapper: harness.Wrapper });
     expect(await screen.findByText(personal)).toBeTruthy();
   });
+
+  it.each([
+    {
+      pageTitle: "MCP servers",
+      section: "mcp-servers",
+      page: <TeamMcpServers key="mcp" />,
+      source: poolSource("editor"),
+      pick: { kind: "team", environmentId: "env-a" },
+      environmentName: "Acme",
+      purpose: "Tools agents can call.",
+    },
+    {
+      pageTitle: "MCP servers",
+      section: "mcp-servers",
+      page: <TeamMcpServers key="mcp-personal" />,
+      source: personalPoolSource(),
+      pick: { kind: "personal" },
+      environmentName: "Personal",
+      purpose: "Tools agents can call.",
+    },
+    {
+      pageTitle: "Skills",
+      section: "skills",
+      page: <TeamSkillsPage key="skills" />,
+      source: poolSource("editor"),
+      pick: { kind: "team", environmentId: "env-a" },
+      environmentName: "Acme",
+      purpose: "Instructions agents follow for a kind of task.",
+    },
+    {
+      pageTitle: "Skills",
+      section: "skills",
+      page: <TeamSkillsPage key="skills-personal" />,
+      source: personalPoolSource(),
+      pick: { kind: "personal" },
+      environmentName: "Personal",
+      purpose: "Instructions agents follow for a kind of task.",
+    },
+    {
+      pageTitle: "Permissions",
+      section: "permissions",
+      page: <TeamPermissions key="permissions">{null}</TeamPermissions>,
+      source: poolSource("editor"),
+      pick: { kind: "team", environmentId: "env-a" },
+      environmentName: "Acme",
+      purpose: "What agents may do without asking.",
+    },
+    {
+      pageTitle: "Variables & shells",
+      section: "shell",
+      page: <TeamVariablesAndShells key="variables-shells" />,
+      source: poolSource("editor"),
+      pick: { kind: "team", environmentId: "env-a" },
+      environmentName: "Acme",
+      purpose:
+        "Plain values every host running this environment gets, and the shell agents run in.",
+    },
+  ] as const)(
+    "$pageTitle · $environmentName shows its environment once in the phone caption",
+    async ({
+      pageTitle,
+      section,
+      page,
+      source,
+      pick,
+      environmentName,
+      purpose,
+    }) => {
+      useSettingsEnvironmentPickStore.setState({
+        pick,
+      });
+      setPhoneLayoutOnly(true);
+      const harness = mountTeamPage(source, handlers);
+      render(
+        <SettingsSectionContext value={section}>{page}</SettingsSectionContext>,
+        { wrapper: harness.Wrapper },
+      );
+
+      const scopeLine = await screen.findByTestId("settings-phone-scope-line");
+      await waitFor(() => {
+        expect(scopeLine.textContent).toBe(environmentName);
+      });
+      const heading = screen.getByRole("heading", {
+        level: 1,
+        name: pageTitle,
+      });
+      const header = heading.closest("header");
+      expect(header).not.toBeNull();
+      if (header === null) return;
+      expect(
+        header.textContent.match(new RegExp(environmentName, "g")) ?? [],
+      ).toHaveLength(1);
+      expect(await screen.findByText(purpose)).toBeTruthy();
+    },
+  );
 });
 
 describe("A cloud page's failed read", () => {

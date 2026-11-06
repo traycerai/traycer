@@ -444,9 +444,7 @@ describe("The Skills page", () => {
       { environmentId: "env-a" },
     ]);
     expect(
-      await screen.findByText(
-        "Instructions agents follow for a kind of task. Acme's skills reach every provider on every host running Acme.",
-      ),
+      await screen.findByText("Instructions agents follow for a kind of task."),
     ).toBeTruthy();
   });
 
@@ -722,9 +720,7 @@ describe("The Skills page", () => {
     render(<EnvironmentSkillsPage />, { wrapper: harness.Wrapper });
 
     expect(
-      await screen.findByText(
-        "Instructions agents follow for a kind of task. Personal's skills reach every provider on every computer and sandbox running Personal.",
-      ),
+      await screen.findByText("Instructions agents follow for a kind of task."),
     ).toBeTruthy();
     await waitFor(() => {
       expect(harness.paramsOf("environment.configuration.skills.list")).toEqual(
