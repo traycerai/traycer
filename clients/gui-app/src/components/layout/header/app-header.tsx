@@ -140,13 +140,16 @@ function DesktopAppHeader(props: AppHeaderProps): ReactNode {
 }
 
 /**
- * The tab strip's box. The tabs keep a floor of the header, so readings moved
- * up here shrink before they do.
+ * The tab strip's box. From md the tabs keep a floor of the header, so readings
+ * moved up here shrink before they do. Below md there is no floor: Windows and
+ * Linux keep this header in a zoomed window that narrow, where the menu, the
+ * arrows and the header's own controls already fill the row, and a floor would
+ * push those controls under the native window buttons.
  */
 function tabStripBoxClass(showTabStrip: boolean, draggable: boolean): string {
   return cn(
-    "relative z-10 flex flex-1 items-center",
-    showTabStrip ? "min-w-[30%]" : "min-w-0",
+    "relative z-10 flex min-w-0 flex-1 items-center",
+    showTabStrip && "md:min-w-[30%]",
     draggable && "[-webkit-app-region:drag]",
   );
 }

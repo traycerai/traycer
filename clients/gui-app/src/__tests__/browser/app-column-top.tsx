@@ -97,6 +97,19 @@ if (FRAMELESS) {
   document.documentElement.classList.add("wco");
 }
 
+if (WCO === "win") {
+  // Windows resolves the leading inset to 0, but plain Chrome falls back to
+  // macOS's 82px. `env(titlebar-area-*)` also cannot resolve outside an
+  // installed window-controls-overlay app, so a stylesheet stands in for what
+  // `WINDOW_TRAILING_INSET_CLASS` resolves to under Windows' three 46px caption
+  // buttons: 138px plus the 12px gutter.
+  document.documentElement.style.setProperty("--window-leading-inset", "0px");
+  const caption = document.createElement("style");
+  caption.textContent =
+    'html.wco [data-testid="app-header"] { padding-right: 150px; }';
+  document.head.append(caption);
+}
+
 if (search.get("account") === "1") {
   useAuthStore.getState().setSignedIn(
     {

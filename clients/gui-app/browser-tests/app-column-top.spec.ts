@@ -110,6 +110,44 @@ for (const width of [1400, 1100, 900, 800, 768]) {
   });
 }
 
+// Windows and Linux keep the desktop header in a zoomed window narrower than
+// the phone header's breakpoint. The menu, the arrows and the account controls
+// already fill the row there, so the tabs may not reserve room of their own.
+test("in a zoomed Windows window the header's controls stay clear of the caption buttons", async ({
+  page,
+}) => {
+  await page.setViewportSize({ width: 560, height: 800 });
+  await open(page, "placement=top&wco=win&account=1");
+  await page.evaluate(() => window.__appColumnTopProbe?.openTabs(12));
+  await expect(
+    page
+      .getByRole("menubar", { name: "Application menu" })
+      .getByRole("menuitem"),
+  ).toHaveCount(5);
+  await expect(page.getByTestId("notifications-bell")).toBeVisible();
+  await expect(page.getByTestId("user-menu-trigger")).toBeVisible();
+  const header = page.getByTestId("app-header");
+  const limit = await header.evaluate(
+    (node) =>
+      window.innerWidth - parseFloat(getComputedStyle(node).paddingRight),
+  );
+  await expect
+    .poll(() =>
+      header
+        .locator("> :last-child")
+        .locator("button, a")
+        .evaluateAll((nodes) =>
+          Math.max(...nodes.map((node) => node.getBoundingClientRect().right)),
+        ),
+    )
+    .toBeLessThanOrEqual(limit);
+  const sideways = await page.evaluate(() => {
+    const root = document.documentElement;
+    return root.scrollWidth - root.clientWidth;
+  });
+  expect(sideways).toBe(0);
+});
+
 for (const query of ["placement=right&wco=mac", "placement=left&wco=win"]) {
   test(`side tabs under a title band (${query}) start the content at the band's bottom`, async ({
     page,
