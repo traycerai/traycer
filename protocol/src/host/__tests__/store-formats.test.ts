@@ -568,9 +568,11 @@ describe("taskStoreFormatReadBy", () => {
     ["1.5.2", 4],
     ["1.5.3-rc.1", 4],
     ["1.5.3", 4],
-    ["1.5.4-rc.1", 5],
-    ["1.5.4", 5],
-    ["1.6.0", 5],
+    ["1.5.4-rc.0", 4],
+    ["1.5.4-rc.1", 6],
+    ["1.5.4-rc.2", 6],
+    ["1.5.4", 6],
+    ["1.6.0", 6],
   ])("%s reads task store format %s", (version, reads) => {
     expect(taskStoreFormatReadBy(version)).toBe(reads);
   });
@@ -608,42 +610,43 @@ describe("taskStoreFloorBlock", () => {
   });
 
   it("caps the on-disk format at the newest known before comparing", () => {
-    expect(taskStoreFloorBlock("1.5.4-rc.1", 6)).toBeNull();
-    expect(taskStoreFloorBlock("1.4.2", 6)).toEqual({
+    expect(taskStoreFloorBlock("1.5.4-rc.1", 7)).toBeNull();
+    expect(taskStoreFloorBlock("1.4.2", 7)).toEqual({
       targetReads: 2,
-      onDisk: 6,
+      onDisk: 7,
     });
   });
 
   /**
-   * The format-5 row, through the floor: a release inside the format-4 era
-   * is blocked by a format-5 disk, which is the whole reason the row exists
+   * The format-6 row, through the floor: a release inside the format-4 era
+   * is blocked by a format-6 disk, which is the whole reason the row exists
    * - such a host does not read the positioned byte storage tables and would
    * fold past the durable holds they carry. 1.5.3 is the last release in
    * that era and the one a rollback from the 1.5.4 line actually lands on.
    */
-  it("blocks a format-4 era target over a format-5 store", () => {
-    expect(taskStoreFloorBlock("1.5.0", 5)).toEqual({
+  it("blocks a format-4 era target over a format-6 store", () => {
+    expect(taskStoreFloorBlock("1.5.0", 6)).toEqual({
       targetReads: 4,
-      onDisk: 5,
+      onDisk: 6,
     });
-    expect(taskStoreFloorBlock("1.5.2", 5)).toEqual({
+    expect(taskStoreFloorBlock("1.5.2", 6)).toEqual({
       targetReads: 4,
-      onDisk: 5,
+      onDisk: 6,
     });
-    expect(taskStoreFloorBlock("1.5.3", 5)).toEqual({
+    expect(taskStoreFloorBlock("1.5.3", 6)).toEqual({
       targetReads: 4,
-      onDisk: 5,
+      onDisk: 6,
     });
-    expect(taskStoreFloorBlock("1.5.4-rc.1", 5)).toBeNull();
+    expect(taskStoreFloorBlock("1.5.4-rc.1", 6)).toBeNull();
+    expect(taskStoreFloorBlock("1.5.4", 6)).toBeNull();
   });
 
   it("types the newest format as the table's last row", () => {
-    const ok: NewestTaskStoreFormat = 5;
-    // @ts-expect-error 6 is not the newest format the table knows
-    const tooNew: NewestTaskStoreFormat = 6;
+    const ok: NewestTaskStoreFormat = 6;
+    // @ts-expect-error 7 is not the newest format the table knows
+    const tooNew: NewestTaskStoreFormat = 7;
     expect(ok).toBe(NEWEST_TASK_STORE_FORMAT);
-    expect(tooNew).toBe(6);
+    expect(tooNew).toBe(7);
   });
 
   it("names the host's refusal reason", () => {
