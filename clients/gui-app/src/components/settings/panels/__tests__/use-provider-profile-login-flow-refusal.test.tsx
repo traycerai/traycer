@@ -151,6 +151,8 @@ function LoginFlowHarness(props: {
   readonly awaitLoginImpl: (
     variables: AwaitLoginVariables,
   ) => Promise<AwaitLoginResponse>;
+  readonly onCancel?: (request: CancelLoginRequest) => void;
+  readonly onSubmitCode?: (request: SubmitLoginCodeRequest) => void;
   readonly onFailed: (message: string) => void;
   readonly onIdentity: () => void;
 }): ReactNode {
@@ -178,7 +180,10 @@ function LoginFlowHarness(props: {
     CancelLoginRequest,
     { readonly hostId: string | null }
   >({
-    mutationFn: () => Promise.resolve({ cancelled: true }),
+    mutationFn: (request) => {
+      props.onCancel?.(request);
+      return Promise.resolve({ cancelled: true });
+    },
     onMutate: () => ({ hostId: null }),
   });
   const submitLoginCode: SubmitLoginCodeMutation = useMutation<
@@ -186,7 +191,10 @@ function LoginFlowHarness(props: {
     HostRpcError,
     SubmitLoginCodeRequest
   >({
-    mutationFn: () => Promise.resolve({ outcome: "accepted" }),
+    mutationFn: (request) => {
+      props.onSubmitCode?.(request);
+      return Promise.resolve({ outcome: "accepted" });
+    },
   });
   const touchLogin: TouchLoginMutation = useMutation<
     TouchLoginResponse,
@@ -264,6 +272,15 @@ function LoginFlowHarness(props: {
       >
         start
       </button>
+      <button
+        type="button"
+        onClick={() => flow.codePaste.submit("synthetic-code")}
+      >
+        Test submit code
+      </button>
+      <button type="button" onClick={() => flow.cancel()}>
+        Test cancel
+      </button>
     </div>
   );
 }
@@ -277,6 +294,8 @@ function renderFlow(options: {
   readonly awaitLoginImpl: (
     variables: AwaitLoginVariables,
   ) => Promise<AwaitLoginResponse>;
+  readonly onCancel?: (request: CancelLoginRequest) => void;
+  readonly onSubmitCode?: (request: SubmitLoginCodeRequest) => void;
   readonly onIdentity?: () => void;
 }): { readonly onFailed: Mock<(message: string) => void> } {
   const onFailed = vi.fn<(message: string) => void>();
@@ -379,10 +398,15 @@ describe("useProviderProfileLoginFlow - a provider that refuses the completed si
         if (awaitCount === 1) {
           return Promise.resolve(
             awaitAnswer({
-              installation: { kind: "waiting-for-readers", count: 2 },
+              installation: {
+                kind: "waiting-for-readers",
+                admissionId: "admission-reader-wait",
+                count: 2,
+              },
             }),
           );
         }
+        expect(variables.request.profileId).toBe("admission-reader-wait");
         expect(variables.request.lastSeenReaderCount).toBe(2);
         secondAwaitStarted.resolve();
         return secondAwaitResult.promise;
@@ -405,6 +429,74 @@ describe("useProviderProfileLoginFlow - a provider that refuses the completed si
     expect(
       screen.queryByText("Waiting for 2 agents on this profile"),
     ).toBeNull();
+  });
+
+  it("uses the waiting admission id for follow-up await, code submission, and cancellation", async () => {
+    const secondAwaitStarted = deferred<void>();
+    const secondAwaitResult = deferred<AwaitLoginResponse>();
+    const cancelCalls = vi.fn<(request: CancelLoginRequest) => void>();
+    const submitCalls = vi.fn<(request: SubmitLoginCodeRequest) => void>();
+    const cancelObserved = deferred<CancelLoginRequest>();
+    const submitObserved = deferred<SubmitLoginCodeRequest>();
+    let awaitCount = 0;
+
+    renderFlow({
+      mode: "create",
+      existingProfileId: null,
+      startLoginImpl: () => Promise.resolve(startedAnswer({})),
+      onCancel: (request) => {
+        cancelCalls(request);
+        cancelObserved.resolve(request);
+      },
+      onSubmitCode: (request) => {
+        submitCalls(request);
+        submitObserved.resolve(request);
+      },
+      awaitLoginImpl: (variables) => {
+        awaitCount += 1;
+        if (awaitCount === 1) {
+          return Promise.resolve(
+            awaitAnswer({
+              installation: {
+                kind: "waiting-for-readers",
+                admissionId: "admission-reader-wait",
+                count: 2,
+              },
+            }),
+          );
+        }
+        expect(variables.request.profileId).toBe("admission-reader-wait");
+        expect(variables.request.lastSeenReaderCount).toBe(2);
+        secondAwaitStarted.resolve();
+        return secondAwaitResult.promise;
+      },
+    });
+
+    await act(async () => {
+      await secondAwaitStarted.promise;
+    });
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "Test submit code" }));
+      await expect(submitObserved.promise).resolves.toEqual({
+        providerId: PROVIDER_ID,
+        profileId: "admission-reader-wait",
+        code: "synthetic-code",
+      });
+    });
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "Test cancel" }));
+      await expect(cancelObserved.promise).resolves.toEqual({
+        providerId: PROVIDER_ID,
+        profileId: "admission-reader-wait",
+        holderId: null,
+      });
+    });
+    expect(submitCalls).toHaveBeenCalledTimes(1);
+    expect(cancelCalls).toHaveBeenCalledTimes(1);
+    await act(async () => {
+      secondAwaitResult.resolve(awaitAnswer({ state: authenticatedState() }));
+      await secondAwaitResult.promise;
+    });
   });
 
   it("lands a create-mode flow on `failed` carrying the refusal, with its reason as the message", async () => {

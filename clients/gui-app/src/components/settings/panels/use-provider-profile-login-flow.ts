@@ -1051,6 +1051,7 @@ export function useProviderProfileLoginFlow(
           // an auto-restart mints a fresh attempt with a fresh budget.
           let authPendingRepolls = 0;
           let lastSeenReaderCount: number | null = null;
+          let awaitProfileId = nextProfileId;
           // A resolution this attempt must no longer act on: a later attempt
           // (auto-restart, or the child finishing while a restart was
           // already triggered) superseded this long-poll, the flow was
@@ -1083,9 +1084,11 @@ export function useProviderProfileLoginFlow(
             const installation = result.installation ?? null;
             if (installation !== null) {
               lastSeenReaderCount = installation.count;
+              awaitProfileId = installation.admissionId;
+              attemptProfileRef.current = installation.admissionId;
               setState({
                 kind: "waiting",
-                profileId: nextProfileId,
+                profileId: installation.admissionId,
                 url: null,
                 userCode: null,
                 readerCount: installation.count,
@@ -1146,7 +1149,7 @@ export function useProviderProfileLoginFlow(
               {
                 request: {
                   providerId,
-                  profileId: nextProfileId,
+                  profileId: awaitProfileId,
                   lastSeenReaderCount,
                 },
                 signal: awaitAbort.signal,

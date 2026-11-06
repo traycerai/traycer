@@ -773,14 +773,22 @@ describe("providers.awaitLogin wire compatibility", () => {
       existingProfileId: null,
       codeRejected: false,
       refusal: null,
-      installation: { kind: "waiting-for-readers", count: 2 },
+      installation: {
+        kind: "waiting-for-readers",
+        admissionId: "admission-opaque-1",
+        count: 2,
+      },
     };
     const frozen = line.versions[2].contract.responseSchema.parse(waiting);
     expect(frozen.state).toBeNull();
     expect(frozen).not.toHaveProperty("installation");
     expect(
       line.versions[3].contract.responseSchema.parse(waiting).installation,
-    ).toEqual({ kind: "waiting-for-readers", count: 2 });
+    ).toEqual({
+      kind: "waiting-for-readers",
+      admissionId: "admission-opaque-1",
+      count: 2,
+    });
   });
 
   it("upgrades the frozen 2.2 request and response into the live 2.3 wait fields", () => {

@@ -4086,6 +4086,7 @@ export const providersAwaitLoginResponseSchemaV22 = lazySchema(() =>
 export const providerLoginInstallationSchema = lazySchema(() =>
   z.object({
     kind: z.literal("waiting-for-readers"),
+    admissionId: z.string(),
     count: z.number().int().positive(),
   }),
 );
