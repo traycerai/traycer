@@ -525,6 +525,19 @@ function isTranscriptWindowRecovering(
   );
 }
 
+/**
+ * Whether the host served this row whole. A fresh span seats only rows served
+ * complete (`incompleteRowIds` are withheld), so its body is every record of
+ * the row. A drawn row proves nothing: a live record or a stale body can draw
+ * part of one, and the legacy line's backfill delivers a turn in pieces.
+ */
+function isRowServedWhole(
+  window: TranscriptWindow | null,
+  rowId: string,
+): boolean {
+  return window?.spans.some((span) => span.rowIds.includes(rowId)) === true;
+}
+
 /** LegendList's web implementation can return null before its scroll element
  * attaches even though the cross-platform public type is non-null. Keep that
  * runtime boundary explicit for mount-time restoration reads. */
@@ -4600,12 +4613,15 @@ function ChatMessagesInner(props: ChatMessagesInnerProps) {
       scrollToEnd(false);
     });
   });
-  const retireParkedRestore = useEffectEvent((): void => {
-    if (initialParkAtEnd) followLatestOverGoneAnchor();
+  // A whole-row anchor clamped to a nearby row keeps that landing. A mount
+  // parked at the tail has landed nowhere, and a part of a turn has no neighbour
+  // to settle for, so those follow the latest once the saved row is proved gone.
+  const retireGoneAnchor = useEffectEvent((): void => {
+    if (initialParkAtEnd || isSavedTurnPart) followLatestOverGoneAnchor();
   });
   // Whether a row missing from the list is gone rather than late. A skeleton
   // mid-stream has not named every row, and a window recovering from a void is
-  // being renamed. The legacy line has no such signal: its restore waits.
+  // being renamed. The legacy line has no such signal, so its restore waits.
   const everyRowIsNamed =
     transcriptWindow !== null &&
     transcriptWindow.skeletonComplete &&
@@ -4632,13 +4648,12 @@ function ChatMessagesInner(props: ChatMessagesInnerProps) {
   // transition as an "attempt" - a live reopen can replay dozens of
   // incremental `messages` reference changes before the anchor's own
   // commit lands, exhausting a small counter and disarming the retry
-  // before it ever got the chance to see the anchor arrive. A mount that
-  // landed on a nearby row keeps it for a genuinely branch-deleted anchor,
+  // before it ever got the chance to see the anchor arrive. A whole-row anchor
+  // that landed on a nearby row keeps it for a genuinely branch-deleted anchor,
   // which simply never disarms, the same tradeoff the transcript-jump precedent
-  // accepts. A mount parked at the tail has landed nowhere, so once the
-  // transcript proves the row gone it follows the latest instead. Disarms
-  // permanently the first time it lands - a NEW live message arriving afterward
-  // can never re-trigger a jump back here.
+  // accepts; anything else follows the latest once the transcript proves the
+  // row gone (`retireGoneAnchor`). Disarms permanently the first time it lands -
+  // a NEW live message arriving afterward can never re-trigger a jump back here.
   // Route the catch-up through the same bounded validate/retry operation
   // restoration convergence uses, and only clear the pending id/session
   // fallback from the VALIDATED-success path (`onValidated` below) - never
@@ -4702,13 +4717,15 @@ function ChatMessagesInner(props: ChatMessagesInnerProps) {
       const ownerIndex =
         owner === null ? undefined : rowIndexByKeyRef.current.get(owner);
       if (ownerIndex === undefined) {
-        if (everyRowIsNamed) retireParkedRestore();
+        if (everyRowIsNamed) retireGoneAnchor();
         return;
       }
       const ownerRow = listRows[ownerIndex];
       if (ownerRow.kind !== "placeholder") {
-        // Its body is here and no part of it carries the saved segment.
-        retireParkedRestore();
+        // Served whole, its body proves no part carries the saved segment.
+        if (isRowServedWhole(transcriptWindowRef.current, ownerRow.key)) {
+          retireGoneAnchor();
+        }
         return;
       }
       // The saved index used the expanded list. Demand the owning ordinal

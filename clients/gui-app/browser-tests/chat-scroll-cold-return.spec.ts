@@ -68,17 +68,23 @@ declare global {
 
 /** The mount sequence of a tab reopened in a new renderer session: the page
  *  loads with the tab withheld, the saved position is seeded, then it opens. */
-async function coldMount(page: Page, seed: Seed): Promise<void> {
+async function coldMount(
+  page: Page,
+  seed: Seed,
+  splitTurn: number,
+  skeletonFirst: boolean,
+): Promise<void> {
   await page.setViewportSize(VIEWPORT);
   await page.goto(
     `${fixture("chat-scroll-model")}?line=windowed&mountLater=1` +
-      `&turns=${String(TURNS)}&splitTurn=${String(SPLIT_TURN)}` +
+      `&turns=${String(TURNS)}&splitTurn=${String(splitTurn)}` +
       `&skeletonChunkMs=300&tailBytes=512`,
   );
   await page.waitForFunction(() => "__chatScrollProbe" in window, undefined, {
     polling: "raf",
   });
   await nextFrames(page, 2);
+  if (skeletonFirst) await waitForSkeletonComplete(page);
   await page.evaluate((saved) => {
     window.__chatScrollProbe.seedSaved(saved);
     window.__chatScrollProbe.mountNow();
@@ -207,7 +213,7 @@ test.describe("a cold return over a saved position the list cannot name yet", ()
   test("a part of a long turn waits at the tail, then lands exactly", async ({
     page,
   }) => {
-    await coldMount(page, PART_ANCHOR);
+    await coldMount(page, PART_ANCHOR, SPLIT_TURN, false);
     const stop = await startSampling(page);
     await expectParkedAtMount(page);
     await waitForSkeletonComplete(page);
@@ -233,7 +239,7 @@ test.describe("a cold return over a saved position the list cannot name yet", ()
   test("a wheel up while it waits retires the restore and the reader stays", async ({
     page,
   }) => {
-    await coldMount(page, PART_ANCHOR);
+    await coldMount(page, PART_ANCHOR, SPLIT_TURN, false);
     await expectParkedAtMount(page);
     await nextFrames(page, 10);
     const stop = await startSampling(page);
@@ -273,7 +279,7 @@ test.describe("a cold return over a saved position the list cannot name yet", ()
   test("an owner the transcript never names waits, then follows the latest", async ({
     page,
   }) => {
-    await coldMount(page, OWNER_NEVER_NAMED);
+    await coldMount(page, OWNER_NEVER_NAMED, SPLIT_TURN, false);
     const stop = await startSampling(page);
     await expectParkedAtMount(page);
     await waitForSkeletonComplete(page);
@@ -308,7 +314,7 @@ test.describe("a cold return over a saved position the list cannot name yet", ()
   test("an owner present without the saved segment follows the latest", async ({
     page,
   }) => {
-    await coldMount(page, SEGMENT_GONE);
+    await coldMount(page, SEGMENT_GONE, SPLIT_TURN, false);
     const stop = await startSampling(page);
     await expectParkedAtMount(page);
     await waitForSkeletonComplete(page);
@@ -325,5 +331,43 @@ test.describe("a cold return over a saved position the list cannot name yet", ()
     expectParkedAtTail(waiting);
     expect(view.mode).toBe("following-end");
     expect(view.fromEnd).toBeLessThanOrEqual(1);
+  });
+
+  test("a first-turn owner already named at mount follows the latest, not the top", async ({
+    page,
+  }) => {
+    // Not parked: the skeleton is complete before the tab opens, so the mount
+    // lands on the owner row. Turn 0 is the first message of the chat.
+    const firstTurn = "assistant:turn-0";
+    await coldMount(
+      page,
+      {
+        mode: "free-scrolling",
+        anchorMessageId: `${firstTurn}#gone-seg`,
+        anchorRowKey: firstTurn,
+        anchorIndex: 2,
+        offset: SAVED_OFFSET,
+      },
+      0,
+      true,
+    );
+    expect(await isNamed(page, firstTurn), "the owner is named at mount").toBe(
+      true,
+    );
+    await page.waitForFunction(
+      () => window.__chatScrollProbe.geometry() !== null,
+      undefined,
+      { polling: "raf" },
+    );
+    const view = await settle(page, 20);
+
+    expect(view.mode).toBe("following-end");
+    expect(view.fromEnd).toBeLessThanOrEqual(1);
+    expect(view.scrollTop, "not at the first message").toBeGreaterThan(
+      NEAR_TOP_PX,
+    );
+    expect(
+      await page.evaluate(() => window.__chatScrollProbe.pendingRestore()),
+    ).toBeNull();
   });
 });
