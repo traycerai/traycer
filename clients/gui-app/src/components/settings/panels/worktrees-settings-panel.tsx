@@ -1021,6 +1021,7 @@ type WorktreeFlatItem =
       readonly group: WorktreeRepoGroup;
       readonly collapsed: boolean;
       readonly showDivider: boolean;
+      readonly showTaskRollup: boolean;
     }
   | {
       readonly kind: "row";
@@ -1041,13 +1042,20 @@ function buildWorktreeFlatItems(
   collapsedRepoKeys: ReadonlySet<string>,
 ): WorktreeFlatItem[] {
   const items: WorktreeFlatItem[] = [];
+  const seenTaskEpicIds = new Set<string>();
   for (const group of groups) {
     const collapsed = collapsedRepoKeys.has(group.key);
+    // A Task can span repositories; its rollup belongs to its first header in
+    // page order, regardless of which groups are collapsed or mounted.
+    const showTaskRollup =
+      group.taskEpicId !== null && !seenTaskEpicIds.has(group.taskEpicId);
+    if (group.taskEpicId !== null) seenTaskEpicIds.add(group.taskEpicId);
     items.push({
       kind: "header",
       group,
       collapsed,
       showDivider: items.length > 0,
+      showTaskRollup,
     });
     if (collapsed) continue;
     const omitTaskAssociation = group.taskEpicId !== null;
@@ -2020,6 +2028,7 @@ export function WorktreesList(props: {
                             onToggle={toggleRepoCollapsed}
                             taskTitlesByEpicId={taskTitlesByEpicId}
                             taskRollupByEpicId={taskRollupByEpicId}
+                            showTaskRollup={item.showTaskRollup}
                           />
                         </div>
                       ) : (
@@ -2483,9 +2492,10 @@ type WorktreeScriptReviewDraft = {
  * no filled high-emphasis background, and muted/regular-weight text so it never
  * competes with a row's bold branch name or colored tier pill. A repo whose
  * worktrees each belong to one Task splits into one header per Task: the Task
- * title (a button when the title is known) and that Task's merge caption live
- * here, once, and the rows underneath drop both. Collapse stays its own button
- * so the Task title can open the Task without also folding the group.
+ * title (a button when the title is known) lives here, and its merge caption
+ * appears only on the Task's first header across repositories. The rows
+ * underneath drop both. Collapse stays its own button so the Task title can
+ * open the Task without also folding the group.
  */
 const WorktreeRepoHeader = memo(function WorktreeRepoHeader(props: {
   readonly group: WorktreeRepoGroup;
@@ -2493,6 +2503,7 @@ const WorktreeRepoHeader = memo(function WorktreeRepoHeader(props: {
   readonly onToggle: (group: WorktreeRepoGroup, collapsed: boolean) => void;
   readonly taskTitlesByEpicId: ReadonlyMap<string, string>;
   readonly taskRollupByEpicId: ReadonlyMap<string, TaskMergeRollup>;
+  readonly showTaskRollup: boolean;
 }): ReactNode {
   const { collapsed, group, onToggle, taskRollupByEpicId, taskTitlesByEpicId } =
     props;
@@ -2584,10 +2595,12 @@ const WorktreeRepoHeader = memo(function WorktreeRepoHeader(props: {
           {group.label}
         </p>
       </div>
-      <TaskMergeRollupBadge
-        rollup={taskRollupByEpicId.get(taskEpicId) ?? null}
-        leadWithTask={false}
-      />
+      {props.showTaskRollup ? (
+        <TaskMergeRollupBadge
+          rollup={taskRollupByEpicId.get(taskEpicId) ?? null}
+          leadWithTask={false}
+        />
+      ) : null}
       <span className="shrink-0 text-ui-xs text-muted-foreground">
         {group.items.length}
       </span>
@@ -2626,8 +2639,8 @@ interface WorktreeRowProps {
   readonly deleteEnrichment: WorktreeEnrichmentState;
   readonly taskTitlesByEpicId: ReadonlyMap<string, string>;
   readonly taskRollupByEpicId: ReadonlyMap<string, TaskMergeRollup>;
-  // True when this row sits under a Task group header, which already shows the
-  // Task title and that Task's merge caption. The row keeps its own PR state.
+  // True when this row sits under a Task group header. The headers show the
+  // Task title and its merge caption; the row keeps its own PR state.
   readonly omitTaskAssociation: boolean;
   // Epic ids that already have a Task group header in this list. A row outside
   // those groups still names each Task, but does not repeat a caption the
@@ -3743,10 +3756,10 @@ function soleOwnerEpicId(entry: WorktreeHostEntryV14): string | null {
  * Groups worktrees by repo for display, keyed on the resolved identifier when
  * present (real `owner/repo`) and otherwise on the display label (local repos
  * and orphans). A worktree owned by exactly one Task leaves that repo bucket
- * and joins a Task group of the same repo, so the Task title and its merge
- * caption render once in the header. Rows WITHIN each group are ordered by
- * creation time - "Newest" (default, most recently created first) or "Oldest".
- * A `null` `createdAt` sorts last in both directions.
+ * and joins a Task group of the same repo. Each header shows the Task title;
+ * only its first header across repos shows the merge caption. Rows WITHIN each
+ * group are ordered by creation time - "Newest" (default, most recently created
+ * first) or "Oldest". A `null` `createdAt` sorts last in both directions.
  */
 function groupByRepo(
   worktrees: readonly WorktreeHostEntryV14[],
