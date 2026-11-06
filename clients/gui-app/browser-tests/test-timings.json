@@ -45,6 +45,7 @@
   "browser-tests/chat-timeline-tall-header.spec.ts": 9.4,
   "browser-tests/chat-turn-parts-stream.spec.ts": 8.8,
   "browser-tests/comment-draft-submit.spec.ts": 8.7,
+  "browser-tests/composer-call.spec.ts": 70.0,
   "browser-tests/composer-drafts-popover.spec.ts": 5.9,
   "browser-tests/composer-expanded-container.spec.ts": 0.9,
   "browser-tests/composer-queue-dock.spec.ts": 35.9,
@@ -87,6 +88,7 @@
   "browser-tests/side-strip-split-pairs.spec.ts": 21.9,
   "browser-tests/sign-in-theme-contrast.spec.ts": 113.7,
   "browser-tests/soundtrack-output.spec.ts": 2.3,
+  "browser-tests/soundtrack-top-row.spec.ts": 66.4,
   "browser-tests/status-bar-usage-scroll.spec.ts": 10.1,
   "browser-tests/strip-drop-intent.spec.ts": 42.4,
   "browser-tests/strip-selection-travel.spec.ts": 8.7,
@@ -95,7 +97,6 @@
   "browser-tests/toast-undo-over-modal.spec.ts": 4.6,
   "browser-tests/tool-image-frame.spec.ts": 13.5,
   "browser-tests/ultracode-picker-row.spec.ts": 35,
-  "browser-tests/voice-top-row.spec.ts": 66.4,
   "browser-tests/windowed-edit-scroll.spec.ts": 7.6,
   "browser-tests/workspace-file-horizontal-scroll.spec.ts": 4.4,
   "browser-tests/worktree-delete-progress-overflow.spec.ts": 1.5

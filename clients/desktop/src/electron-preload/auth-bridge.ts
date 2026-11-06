@@ -42,7 +42,6 @@ import type {
   UpdateHostVersionPolicyFetchResult,
   UpdateHostVersionPolicyInput,
   VoiceAvailabilityFetchResult,
-  VoiceRouteFetchResult,
   VoiceSessionEndFetchResult,
   VoiceSessionIndicator,
   VoiceSessionMintFetchResult,
@@ -156,11 +155,6 @@ export interface AuthBridgeSurface {
     bearerToken: string,
     voiceSessionId: string,
   ): Promise<VoiceSessionEndFetchResult>;
-  // The voice router's model call, opaque JSON in and out.
-  routeVoiceUtterance(
-    bearerToken: string,
-    requestBody: string,
-  ): Promise<VoiceRouteFetchResult>;
   setVoiceSessionLive(live: boolean): Promise<void>;
   setVoiceSessionIndicator(indicator: VoiceSessionIndicator): Promise<void>;
   createSandbox(
@@ -355,14 +349,6 @@ export function buildAuthBridge(): AuthBridgeSurface {
         bearerToken,
         voiceSessionId,
       ) as Promise<VoiceSessionEndFetchResult>,
-
-    // The voice router's model call, opaque JSON in and out.
-    routeVoiceUtterance: (bearerToken, requestBody) =>
-      ipcRenderer.invoke(
-        RunnerHostInvoke.routeVoiceUtterance,
-        bearerToken,
-        requestBody,
-      ) as Promise<VoiceRouteFetchResult>,
 
     setVoiceSessionLive: (live) =>
       ipcRenderer.invoke(

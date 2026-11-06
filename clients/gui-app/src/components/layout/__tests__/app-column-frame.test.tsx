@@ -46,7 +46,7 @@ function renderFrameWith(
     ...chrome,
     columnRef: () => undefined,
     header: <header data-testid="header-slot" />,
-    voiceTopRow: <div data-testid="voice-top-row-slot" />,
+    soundtrackTopRow: <div data-testid="soundtrack-top-row-slot" />,
     strip: <nav data-testid="strip-slot" />,
     banners: <div data-testid="banners-slot" />,
     surface: <div data-testid="surface-slot" />,
@@ -122,15 +122,15 @@ describe("AppColumnFrame", () => {
     expect(precedes(header, screen.getByRole("main"))).toBe(true);
   });
 
-  it("seats the voice top row first in the content column, over the banners and <main>, beside a side strip and under the top header", () => {
+  it("seats the soundtrack top row first in the content column, over the banners and <main>, beside a side strip and under the top header", () => {
     renderFrame(TOP);
-    const topRow = screen.getByTestId("voice-top-row-slot");
+    const topRow = screen.getByTestId("soundtrack-top-row-slot");
     expect(precedes(screen.getByTestId("header-slot"), topRow)).toBe(true);
     expect(precedes(topRow, screen.getByTestId("banners-slot"))).toBe(true);
     cleanup();
 
     renderFrame(LEFT_NONE);
-    const sideRow = screen.getByTestId("voice-top-row-slot");
+    const sideRow = screen.getByTestId("soundtrack-top-row-slot");
     expect(sideRow.parentElement).toBe(
       screen.getByTestId("strip-slot").nextElementSibling,
     );

@@ -7,6 +7,8 @@ import { HistoryNavButtons } from "@/components/layout/header/history-nav-button
 import { useMobileHeaderActive } from "@/components/layout/header/use-mobile-header-active";
 import { DesktopMenuBar } from "@/components/layout/header/desktop-menu-bar";
 import { APP_HEADER_HEIGHT_CLASS } from "@/components/layout/header/app-header-height";
+import { SoundtrackTopRowControl } from "@/components/layout/soundtrack/soundtrack-top-row";
+import { useSoundtrackTopRowDrawn } from "@/components/layout/soundtrack/use-soundtrack-top-row-drawn";
 import {
   HeaderBarCluster,
   HeaderIdentity,
@@ -19,8 +21,6 @@ import {
   WINDOW_LEADING_INSET_CLASS,
   WINDOW_TRAILING_INSET_CLASS,
 } from "@/components/layout/header/title-bar-drag";
-import { useVoiceTopRowDrawn } from "@/components/layout/voice/use-voice-top-row-drawn";
-import { VoiceTopRowControl } from "@/components/layout/voice/voice-top-row";
 import { cn } from "@/lib/utils";
 import { useTitleBarDraggingSuppressed } from "@/stores/layout/title-bar-drag-store";
 
@@ -65,8 +65,8 @@ function DesktopAppHeader(props: AppHeaderProps): ReactNode {
   const dragSuppressed = useTitleBarDraggingSuppressed();
   const draggable = framelessDesktop && !dragSuppressed;
   const spacerDragStyle = titleBarSpacerStyle(framelessDesktop, dragSuppressed);
-  const voiceDrawn = useVoiceTopRowDrawn();
-  const centreZone = showTabStrip && voiceDrawn;
+  const soundtrackDrawn = useSoundtrackTopRowDrawn();
+  const centreZone = showTabStrip && soundtrackDrawn;
   const tabStripBoxRef = useRef<HTMLDivElement | null>(null);
 
   return (
@@ -193,12 +193,12 @@ function trailingSpacerClass(
 }
 
 /**
- * Talk, or the session strip, centred on the header. The gap before it is what
- * puts the zone's middle on the header's middle, and it closes as the tabs reach
- * the zone, so a long strip of tabs pushes the zone right rather than losing
- * width to it. The zone starts at its minimum (Talk, or the strip's controls)
- * and grows to the whole strip with the room left over, so the tabs keep their
- * width before the focus line and Waiting keep theirs. Its grow weight only says
+ * The call strip, centred on the header. The gap before it is what puts the
+ * zone's middle on the header's middle, and it closes as the tabs reach the
+ * zone, so a long strip of tabs pushes the zone right rather than losing width
+ * to it. The zone starts at its minimum (the strip's controls) and grows to the
+ * whole strip with the room left over, so the tabs keep their width before the
+ * bot's name keeps its. Its grow weight only says
  * it fills before the trailing drag spacer, which takes what its cap leaves.
  * Measured because that gap depends on how wide the tabs are, which CSS cannot
  * subtract from half the header. The gap's shrink weight matches the tab box's:
@@ -268,7 +268,7 @@ function HeaderCentreZone(props: {
         className="relative z-10 flex max-w-max min-w-min flex-[1000_1_0%] items-center self-stretch px-2"
         style={props.framelessDesktop ? NO_DRAG_STYLE : undefined}
       >
-        <VoiceTopRowControl />
+        <SoundtrackTopRowControl />
       </div>
     </>
   );

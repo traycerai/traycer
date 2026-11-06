@@ -67,6 +67,10 @@ import type { BotTranscriptLanding } from "@/components/bots/bot-chat-transcript
 import { useBotDraftsStore } from "@/stores/bots/bot-drafts-store";
 import { setPhoneLayoutOnly } from "@/lib/mobile-app";
 import {
+  useVoiceSessionStore,
+  type VoiceSessionDriver,
+} from "@/stores/voice/voice-session-store";
+import {
   holdScreenLandscape,
   IPHONE_17,
   lowerNativeKeyboard,
@@ -740,6 +744,50 @@ describe("<BotThreadPanel /> a direct reply nobody has replied under", () => {
     expect(
       sent.map((request) => [request.text, request.announcementId]),
     ).toEqual([["Which job?", "answer-1"]]);
+  });
+});
+
+describe("<BotThreadPanel /> Call", () => {
+  beforeEach(() => {
+    useVoiceSessionStore.setState({
+      availability: "live",
+      driver: {
+        start: vi.fn<VoiceSessionDriver["start"]>(),
+        end: vi.fn<VoiceSessionDriver["end"]>(),
+        setMuted: vi.fn<VoiceSessionDriver["setMuted"]>(),
+      },
+    });
+  });
+
+  afterEach(() => {
+    useVoiceSessionStore.setState(useVoiceSessionStore.getInitialState(), true);
+  });
+
+  it("is in the box of a listed thread, calling that thread, and not in the header", async () => {
+    const user = userEvent.setup();
+    mountPanel(listed("user-teammate"), [botReply(null)]);
+
+    const header = screen.getByTestId("bot-thread-close").closest("header");
+    if (header === null) throw new Error("expected the thread header");
+    expect(within(header).queryByRole("button", { name: /^Call/ })).toBeNull();
+    const call = within(screen.getByTestId("bot-thread-composer")).getByRole(
+      "button",
+      { name: "Call Release Bot" },
+    );
+
+    await user.click(call);
+
+    expect(useVoiceSessionStore.getState().driver?.start).toHaveBeenCalledWith({
+      botId: BOT_ID,
+      threadId: THREAD_ID,
+    });
+  });
+
+  it("is not in the box replying under a question nobody has replied under", () => {
+    channelMessages = [announcement("question-1", "Ship the release today?")];
+    mountPanel({ kind: "unopened", retry: null, sendable: true }, []);
+
+    expect(screen.queryByTestId("bot-thread-composer-call")).toBeNull();
   });
 });
 
