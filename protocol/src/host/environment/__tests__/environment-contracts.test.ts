@@ -695,6 +695,7 @@ const REDESIGN_WIRE_CASES: readonly RedesignWireCase[] = [
         staysOnThisComputer: [],
         alreadyInPersonal: [],
         differsMasked: [],
+        looksLikeAKey: [],
       },
     },
     badResponse: {
@@ -1393,6 +1394,10 @@ describe("the environments redesign's new @1.0 methods", () => {
         staysOnThisComputer: [leaky],
         alreadyInPersonal: [leaky],
         differsMasked: [leaky],
+        // No plan this host builds puts a row here, but the released schema
+        // still declares the group, and a value is stripped out of a row in
+        // it exactly as in every other.
+        looksLikeAKey: [leaky],
       },
     });
     for (const rows of Object.values(plan.rows)) {
@@ -1422,6 +1427,7 @@ describe("the environments redesign's new @1.0 methods", () => {
         staysOnThisComputer: [],
         alreadyInPersonal: [],
         differsMasked: [],
+        looksLikeAKey: [],
       },
     });
     const upgraded = environmentMovePlanUpgradeV10ToV11.upgradeResponse(v10);
@@ -1455,6 +1461,7 @@ describe("the environments redesign's new @1.0 methods", () => {
         staysOnThisComputer: [],
         alreadyInPersonal: [],
         differsMasked: [],
+        looksLikeAKey: [],
       },
     });
     const upgraded = environmentMovePlanUpgradeV11ToV12.upgradeResponse(v11);

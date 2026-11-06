@@ -40,6 +40,10 @@ export function sandboxCredentialLine(
             : `Not available on sandboxes: ${mechanism}`,
       };
     }
+    // `process-scoped` is a retired mode no host emits; it stays a declared
+    // member of a released catalog version. A row carrying one is read the
+    // way a row with no mode is: the picker says what it always said.
+    case "process-scoped":
     case null:
     case undefined:
       return null;

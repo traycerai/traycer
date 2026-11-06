@@ -59,6 +59,10 @@ import {
   resetTeamPageHarness,
   type TeamPageHarness,
 } from "./team-configuration-test-support";
+import {
+  RETIRED_PROVIDER_VARIABLES,
+  RETIRED_SECRET_ROW_FIELDS,
+} from "@traycer/protocol/host/released-wire-rows";
 
 /**
  * A configuration page left open stays current with no navigation, no
@@ -167,6 +171,8 @@ const variable = (key: string, revision: number) =>
 
 function secretFixture(): EnvironmentSecretV12 {
   return {
+    ...RETIRED_SECRET_ROW_FIELDS,
+    providerVariables: [...RETIRED_PROVIDER_VARIABLES],
     secretId: "sec-1",
     name: "STRIPE_KEY",
     kind: "api_key",

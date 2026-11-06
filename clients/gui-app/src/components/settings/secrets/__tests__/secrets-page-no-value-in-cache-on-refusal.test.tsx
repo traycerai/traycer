@@ -29,6 +29,10 @@ import type { HostRpcRegistry } from "@/lib/host";
 import type { OpenLink } from "@/lib/links/open-link";
 import { RunnerHostContext } from "@/providers/runner-host-context";
 import { SECRETS_EMPTY_TEXT } from "@/lib/sandboxes/secrets-page-copy";
+import {
+  RETIRED_PROVIDER_VARIABLES,
+  RETIRED_SECRET_ROW_FIELDS,
+} from "@traycer/protocol/host/released-wire-rows";
 
 // The writes name their environment through the surface's client.
 const hostBoundary = vi.hoisted((): { client: unknown } => ({ client: null }));
@@ -77,6 +81,8 @@ interface SecretsHost {
 
 function createdSecret(): EnvironmentSecretV12 {
   return {
+    ...RETIRED_SECRET_ROW_FIELDS,
+    providerVariables: [...RETIRED_PROVIDER_VARIABLES],
     secretId: "sec-new",
     name: "STRIPE_KEY",
     kind: "api_key",
