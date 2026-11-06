@@ -13,7 +13,6 @@ import {
   isSandboxDatabaseEngine,
   type SandboxConnectionDialect,
   type SandboxRouteProtocol,
-  type SandboxSecretMode,
   type SandboxSecretSwapSite,
 } from "@traycer/protocol/host/secret-intake-catalogue";
 import {
@@ -45,7 +44,6 @@ export interface SecretFormState {
   readonly kind: DesktopSecretKind;
   readonly name: string;
   readonly protocol: SandboxRouteProtocol;
-  readonly mode: SandboxSecretMode;
   /** "Sandboxes get it": granted to every live and future sandbox. */
   readonly sandboxesByDefault: boolean;
   /** One or more hosts, separated by commas, spaces or new lines. */
@@ -94,7 +92,6 @@ export function initialSecretForm(kind: DesktopSecretKind): SecretFormState {
     kind,
     name: "",
     protocol,
-    mode: "brokered",
     sandboxesByDefault: true,
     hosts: "",
     port: defaultPort(protocol),
@@ -145,7 +142,7 @@ export function secretFormPort(state: SecretFormState): number | null {
 
 /** Whether saving waits for the plaintext lines to be confirmed. */
 export function secretFormNeedsConsent(state: SecretFormState): boolean {
-  return state.mode === "brokered" && state.kind === "database";
+  return state.kind === "database";
 }
 
 const HOSTNAME = /^[A-Za-z0-9._-]{1,253}$/;
@@ -213,7 +210,7 @@ export function secretFormProblem(state: SecretFormState): string | null {
     return "Choose where the key appears in a request.";
   }
   if (secretFormNeedsConsent(state) && !state.plaintextConsent) {
-    return "Confirm the plaintext notice, or choose exposed.";
+    return "Confirm the plaintext notice.";
   }
   return null;
 }
@@ -283,14 +280,12 @@ export function secretCreateRequest(
     environmentId: null,
     name: state.name,
     ...bindingFields(state),
-    mode: state.mode,
     portOverride: false,
     swapSites: state.kind === "api_key" ? [...state.swapSites] : ["header"],
     variables: state.variables.map((variable) => ({
       name: variable.name,
       dialect: variable.dialect,
     })),
-    exportPolicy: null,
     sandboxesByDefault: state.sandboxesByDefault,
     plaintextConsent:
       secretFormNeedsConsent(state) && state.plaintextConsent

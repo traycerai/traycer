@@ -161,7 +161,6 @@ describe("a fresh form", () => {
     expect(form.variables).toEqual([
       { id: 0, name: "DATABASE_URL", dialect: "libpq-url" },
     ]);
-    expect(form.mode).toBe("brokered");
     expect(form.sandboxesByDefault).toBe(true);
     expect(form.plaintextConsent).toBe(false);
   });
@@ -240,11 +239,8 @@ describe("the form's readers", () => {
     expect(secretFormPort({ ...validApiKeyForm(), port: "123456" })).toBeNaN();
   });
 
-  it("asks for consent only on a brokered database", () => {
+  it("asks for consent on a database and on nothing else", () => {
     expect(secretFormNeedsConsent(validDatabaseForm())).toBe(true);
-    expect(
-      secretFormNeedsConsent({ ...validDatabaseForm(), mode: "exposed" }),
-    ).toBe(false);
     expect(secretFormNeedsConsent(validApiKeyForm())).toBe(false);
   });
 });
@@ -341,17 +337,11 @@ describe("secretFormProblem", () => {
     );
   });
 
-  it("holds a brokered database for the plaintext notice, and an exposed one does not need it", () => {
+  it("holds a database for the plaintext notice until it is confirmed", () => {
     expect(
       secretFormProblem({ ...validDatabaseForm(), plaintextConsent: false }),
-    ).toBe("Confirm the plaintext notice, or choose exposed.");
-    expect(
-      secretFormProblem({
-        ...validDatabaseForm(),
-        mode: "exposed",
-        plaintextConsent: false,
-      }),
-    ).toBeNull();
+    ).toBe("Confirm the plaintext notice.");
+    expect(secretFormProblem(validDatabaseForm())).toBeNull();
   });
 
   it("refuses a protocol the table does not broker", () => {
@@ -422,12 +412,10 @@ describe("secretCreateRequest", () => {
       connectorId: null,
       confirmedAddresses: null,
       value: "s3cret-db-password",
-      mode: "brokered",
       portOverride: false,
       swapSites: ["header"],
       // No `id`: the row's own key in the form is never sent.
       variables: [{ name: "DATABASE_URL", dialect: "libpq-url" }],
-      exportPolicy: null,
       sandboxesByDefault: true,
       plaintextConsent: { disclosureVersion: 1 },
     });
@@ -473,15 +461,6 @@ describe("secretCreateRequest", () => {
       swapSites: [],
     });
     expect(request.swapSites).toEqual(["header"]);
-  });
-
-  it("carries no consent for an exposed database", () => {
-    const request = secretCreateRequest({
-      ...validDatabaseForm(),
-      mode: "exposed",
-    });
-    expect(request.mode).toBe("exposed");
-    expect(request.plaintextConsent).toBeNull();
   });
 
   it("carries no consent for a brokered database that was not confirmed", () => {
@@ -562,7 +541,6 @@ describe("secretVerifyCandidateRequest", () => {
       "portOverride",
       "swapSites",
       "variables",
-      "exportPolicy",
       "sandboxesByDefault",
       "plaintextConsent",
     ]) {

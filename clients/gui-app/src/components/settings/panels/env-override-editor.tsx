@@ -313,11 +313,6 @@ export function EnvOverrideEditor(props: {
    */
   readonly rowNotes: ReadonlyMap<string, ReactNode>;
   /**
-   * Rows on hold until the person chooses, by key, each with its `Review`
-   * control. Such a row shows its name only, never its value.
-   */
-  readonly onHold: ReadonlyMap<string, ReactNode>;
-  /**
    * Rows a secret sets, by key, each with the secret's name: "NAME · from
    * the secret NAME · Secrets", with no value and nothing to edit here.
    */
@@ -447,12 +442,6 @@ export function EnvOverrideEditor(props: {
       {overrides.length > 0 ? (
         <ul className="divide-y divide-border/40">
           {overrides.map((entry) => {
-            const review = props.onHold.get(entry.key);
-            if (review !== undefined) {
-              return (
-                <EnvHeldRow key={entry.key} name={entry.key} review={review} />
-              );
-            }
             const secretName = props.claimedBy.get(entry.key);
             if (secretName !== undefined) {
               return (
@@ -814,22 +803,6 @@ function RemoveVariableButton(props: {
     >
       <Trash2 className="size-4" />
     </button>
-  );
-}
-
-function EnvHeldRow(props: {
-  readonly name: string;
-  readonly review: ReactNode;
-}) {
-  return (
-    <li
-      className="px-3 py-2.5 text-ui-sm text-muted-foreground"
-      data-testid="env-held-row"
-    >
-      <span className="font-mono text-foreground">{props.name}</span>
-      {" · on hold until you choose · "}
-      {props.review}
-    </li>
   );
 }
 

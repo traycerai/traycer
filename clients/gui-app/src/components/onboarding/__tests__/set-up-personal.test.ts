@@ -55,13 +55,10 @@ function secret(
     kind: "api_key",
     protocol: null,
     destinations: [],
-    mode: "brokered",
-    state: "live",
     currentVersionId: "v1",
     revoked: false,
     updatedAt: 1,
     variables: [],
-    providerVariables: [],
     ...overrides,
   };
 }
@@ -183,11 +180,6 @@ describe("the secret step", () => {
         secret({ secretId: "s1", revoked: true }),
         secret({ secretId: "s2", revoked: false }),
       ],
-      true,
-    ],
-    [
-      "a secret still waiting for review",
-      [secret({ state: "pending_review" })],
       true,
     ],
     ["only revoked secrets", [secret({ revoked: true })], false],

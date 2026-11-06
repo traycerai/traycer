@@ -18,7 +18,6 @@ import {
   defineUpgradePath,
 } from "@traycer/protocol/framework/index";
 import { lazySchema } from "@traycer/protocol/framework/lazy-schema";
-import { SANDBOX_SECRET_NAME_PATTERN } from "@traycer/protocol/host/secret-intake-catalogue";
 import {
   environmentItemKindSchema,
   environmentOsSchema,
@@ -69,9 +68,12 @@ export type EnvironmentMovePlanRequest = z.infer<
  *
  * The rows: `moves` travel to Personal; `staysOnThisComputer` never leave it
  * (a terminal sign-in, a held executable); `alreadyInPersonal` are equal
- * there; `differsMasked` exist in Personal with another value, neither shown;
- * `looksLikeAKey` are values that read like a credential, each answered by a
- * key choice.
+ * there; `differsMasked` exist in Personal with another value, neither shown.
+ *
+ * A value that reads like a credential is listed under
+ * `staysOnThisComputer`: a secret's value does not move in or out of a
+ * computer, so the move leaves it where it is rather than offering to store
+ * it.
  */
 export const environmentMovePlanResponseSchema = lazySchema(() =>
   z.object({
@@ -84,7 +86,6 @@ export const environmentMovePlanResponseSchema = lazySchema(() =>
       staysOnThisComputer: z.array(environmentMoveRowSchema),
       alreadyInPersonal: z.array(environmentMoveRowSchema),
       differsMasked: z.array(environmentMoveRowSchema),
-      looksLikeAKey: z.array(environmentMoveRowSchema),
     }),
   }),
 );
@@ -100,20 +101,13 @@ export const environmentMovePlanV10 = defineRpcContract({
 });
 
 /**
- * `@1.1` adds `sameNameInPersonal`: rows that look like a key whose name
- * Personal already holds as a secret. Secret values are never read back, so
- * the two cannot be compared; the move leaves this computer's value here and
- * uploads nothing for it. Such a row counts in no other list. It also adds
- * `guideDiffers`: this computer's agent selection guide has the person's
- * edits, which the move never puts over Personal's. Not a row: it counts in no
- * list and has no choice. A `@1.0` answer upgrades with no such rows and
+ * `@1.1` adds `guideDiffers`: this computer's agent selection guide has the
+ * person's edits, which the move never puts over Personal's. Not a row: it
+ * counts in no list and has no choice. A `@1.0` answer upgrades with
  * `guideDiffers` false.
  */
 export const environmentMovePlanResponseSchemaV11 = lazySchema(() =>
   environmentMovePlanResponseSchema.extend({
-    rows: environmentMovePlanResponseSchema.shape.rows.extend({
-      sameNameInPersonal: z.array(environmentMoveRowSchema).default([]),
-    }),
     guideDiffers: z.boolean().default(false),
   }),
 );
@@ -137,7 +131,6 @@ export const environmentMovePlanUpgradeV10ToV11 = defineUpgradePath<
   upgradeRequest: (request) => request,
   upgradeResponse: (response) => ({
     ...response,
-    rows: { ...response.rows, sameNameInPersonal: [] },
     guideDiffers: false,
   }),
 });
@@ -183,44 +176,31 @@ export const environmentMovePlanUpgradeV11ToV12 = defineUpgradePath<
 });
 
 /** What every `environmentMoveItemChoiceKey` starts with. */
-export const ENVIRONMENT_MOVE_ITEM_CHOICE_PREFIX = "item:";
+const ITEM_CHOICE_PREFIX = "item:";
 
 /**
- * The key a choice on one `moves` row is sent under, beside the
- * `looksLikeAKey` rows' own keys: `item:<kind>:<key>`. A row's kind has no
- * `:`, so the separator after it splits the key back out. Only a host whose plan
- * says `itemChoices` reads it: `secret` stores a variable or provider
- * override as a secret, `stays` leaves the row on this computer only.
+ * The key a choice on one `moves` row is sent under: `item:<kind>:<key>`. A
+ * row's kind has no `:`, so the separator after it splits the key back out.
+ * Only a host whose plan says `itemChoices` reads it: `stays` leaves the row
+ * on this computer only.
  */
 export function environmentMoveItemChoiceKey(
   kind: string,
   key: string,
 ): string {
-  return `${ENVIRONMENT_MOVE_ITEM_CHOICE_PREFIX}${kind}:${key}`;
-}
-
-/** A variable row's secret name, or null when intake cannot store it. */
-export function environmentMoveSecretName(
-  kind: string,
-  key: string,
-): string | null {
-  if (kind !== "variable" && kind !== "env_override") return null;
-  const separator = key.indexOf(":");
-  if (kind === "env_override" && separator <= 0) return null;
-  const name = kind === "variable" ? key : key.slice(separator + 1);
-  return SANDBOX_SECRET_NAME_PATTERN.test(name) ? name : null;
+  return `${ITEM_CHOICE_PREFIX}${kind}:${key}`;
 }
 
 /**
- * The person's answer to one `looksLikeAKey` row, by its key: move it as a
- * `secret`, move it as a `variable`, or leave it on this computer (`stays`).
- * On a host whose plan says `itemChoices`, also one `moves` row's, under
- * `environmentMoveItemChoiceKey`; the request's shape is the same.
+ * The person's answer to one `moves` row, under
+ * `environmentMoveItemChoiceKey`: leave it on this computer (`stays`). A row
+ * with no answer moves as planned, and nothing is stored as a secret from
+ * here: a secret's value does not move in or out of a computer.
  */
 export const environmentMoveKeyChoiceSchema = lazySchema(() =>
   z.object({
     key: z.string().min(1),
-    choice: z.enum(["secret", "variable", "stays"]),
+    choice: z.enum(["stays"]),
   }),
 );
 export type EnvironmentMoveKeyChoice = z.infer<

@@ -1751,7 +1751,6 @@ export const FROZEN_CATALOG_LINE_SNAPSHOTS = {
                     "type": "string",
                     "enum": [
                       "placeholder",
-                      "process-scoped",
                       "unsupported"
                     ]
                   },

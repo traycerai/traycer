@@ -98,8 +98,6 @@ const movePlan: EnvironmentMovePlanResponseV12 = {
     staysOnThisComputer: [],
     alreadyInPersonal: [],
     differsMasked: [],
-    looksLikeAKey: [],
-    sameNameInPersonal: [],
   },
   guideDiffers: false,
 };
