@@ -106,6 +106,8 @@ export const RunnerHostInvoke = {
   registerSlackApp: "runnerHost:slackApps:register",
   mintSlackAppInstallUrl: "runnerHost:slackApps:installUrl",
   disconnectSlackApp: "runnerHost:slackApps:disconnect",
+  // A team environment's bot-host install token (traycer-server), likewise.
+  mintTeamHostInstallToken: "runnerHost:teamHost:installToken",
   // The secrets broker (authn), from Electron main for the same reason.
   getSandboxGrants: "runnerHost:sandboxSecrets:grants",
   getTeamEnvironment: "runnerHost:environments:team",

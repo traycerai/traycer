@@ -11,6 +11,7 @@ import type {
   SandboxPatchRequest,
 } from "@traycer/protocol/host/sandbox-control";
 import { SLACK_SETTINGS_UNAVAILABLE_IN_STAGING } from "@traycer-clients/shared/host-client/slack-app";
+import { TEAM_HOST_UNAVAILABLE_IN_STAGING } from "@traycer-clients/shared/host-client/team-host";
 import type { SlackAppRegisterRequest } from "@traycer/protocol/host/slack-app";
 import type { IRunnerHost } from "@traycer-clients/shared/platform/runner-host";
 import { AuthService } from "@/lib/auth/auth-service";
@@ -74,6 +75,18 @@ function slackSpies() {
   };
 }
 
+function teamHostSpies() {
+  return {
+    mintTeamHostInstallToken: vi.fn<IRunnerHost["mintTeamHostInstallToken"]>(
+      () =>
+        Promise.resolve({
+          kind: "network-error" as const,
+          detail: "unscripted",
+        }),
+    ),
+  };
+}
+
 function sandboxSpies() {
   return {
     listSandboxes: vi.fn<IRunnerHost["listSandboxes"]>(() =>
@@ -115,15 +128,17 @@ function sandboxSpies() {
 function makeService(reason: string | null) {
   const spies = sandboxSpies();
   const slack = slackSpies();
+  const teamHost = teamHostSpies();
   const service = new AuthService({
     runnerHost: createFakeRunnerHost({
       ...spies,
       ...slack,
+      ...teamHost,
       sandboxControlUnavailableReason: reason,
     }),
   });
   trackedServices.push(service);
-  return { service, spies, slack };
+  return { service, spies, slack, teamHost };
 }
 
 afterEach(() => {
@@ -249,6 +264,26 @@ describe("AuthService sandbox control on a build that cannot reach it", () => {
     expect(slack.registerSlackApp).not.toHaveBeenCalled();
     expect(slack.mintSlackAppInstallUrl).not.toHaveBeenCalled();
     expect(slack.disconnectSlackApp).not.toHaveBeenCalled();
+  });
+
+  it("answers the team host install token with the staging failure and never reaches the runner host", async () => {
+    const { service, teamHost } = makeService(REASON);
+
+    expect(await service.mintTeamHostInstallToken("env-1")).toEqual({
+      kind: "unavailable",
+      reason: TEAM_HOST_UNAVAILABLE_IN_STAGING,
+    });
+
+    expect(teamHost.mintTeamHostInstallToken).not.toHaveBeenCalled();
+  });
+
+  it("control: with no reason set, a signed-out team host install token answers unauthorized", async () => {
+    const { service, teamHost } = makeService(null);
+
+    expect(await service.mintTeamHostInstallToken("env-1")).toEqual({
+      kind: "unauthorized",
+    });
+    expect(teamHost.mintTeamHostInstallToken).not.toHaveBeenCalled();
   });
 
   it("control: with no reason set, signed-out Slack calls answer unauthorized instead of unavailable", async () => {
