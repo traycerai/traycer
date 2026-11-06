@@ -373,7 +373,7 @@ describe("<SandboxCard /> team cost view", () => {
   });
 
   it.each([
-    ["awake", "$0.12 an hour", "under $0.01 an hour", "Resting rate"],
+    ["awake", "$0.12 an hour", "under $0.01 an hour", "Storage rate"],
     ["suspended", "under $0.01 an hour", "$0.12 an hour", "Awake rate"],
   ] as const)(
     "shows current and other-state rates once, with no personal ledger, when %s",

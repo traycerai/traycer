@@ -711,7 +711,7 @@ describe("<SandboxCard /> per state", () => {
 
 describe("<SandboxCard /> rates", () => {
   it.each([
-    ["awake", "$0.12 an hour", "under $0.01 an hour", "Resting rate"],
+    ["awake", "$0.12 an hour", "under $0.01 an hour", "Storage rate"],
     ["suspended", "under $0.01 an hour", "$0.12 an hour", "Awake rate"],
     ["stopped", "under $0.01 an hour", "$0.12 an hour", "Awake rate"],
   ] as const)(
@@ -741,7 +741,7 @@ describe("<SandboxCard /> rates", () => {
 
     expect(screen.getAllByText("$0.25 an hour")).toHaveLength(1);
     expect(screen.queryByText("$0.12 an hour")).toBeNull();
-    expect(screen.getByText("Resting rate")).toBeTruthy();
+    expect(screen.getByText("Storage rate")).toBeTruthy();
   });
 
   it("says Not billing for a frozen personal sandbox and shows its awake rate once", () => {
