@@ -59,6 +59,7 @@ const provider = {
         materialRevision: 1,
         custodyVersion: 1,
         custodyClass: "self-sufficient",
+        environmentPresence: null,
         materialFingerprint: "synthetic-digest",
         observation: null,
         materialMatchesBinding: "unknown",
