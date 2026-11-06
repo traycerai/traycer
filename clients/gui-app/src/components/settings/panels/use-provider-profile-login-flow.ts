@@ -96,6 +96,7 @@ export type ProviderProfileLoginFlowState =
     }
   | {
       readonly kind: "waiting";
+      readonly readerCount?: number;
       readonly profileId: string | null;
       readonly url: string | null;
       readonly userCode: string | null;
@@ -1049,6 +1050,8 @@ export function useProviderProfileLoginFlow(
           // the constant's doc comment). Scoped to this attempt's closure -
           // an auto-restart mints a fresh attempt with a fresh budget.
           let authPendingRepolls = 0;
+          let lastSeenReaderCount: number | null = null;
+          let awaitProfileId = nextProfileId;
           // A resolution this attempt must no longer act on: a later attempt
           // (auto-restart, or the child finishing while a restart was
           // already triggered) superseded this long-poll, the flow was
@@ -1078,6 +1081,21 @@ export function useProviderProfileLoginFlow(
           };
           const handleAwaitSuccess = (result: AwaitLoginResult): void => {
             if (attemptAbandoned()) return;
+            const installation = result.installation ?? null;
+            if (installation !== null) {
+              lastSeenReaderCount = installation.count;
+              awaitProfileId = installation.admissionId;
+              attemptProfileRef.current = installation.admissionId;
+              setState({
+                kind: "waiting",
+                profileId: installation.admissionId,
+                url: null,
+                userCode: null,
+                readerCount: installation.count,
+              });
+              awaitOnce();
+              return;
+            }
             const resolution =
               mode === "reauth" && existingProfileId === null
                 ? classifyAmbientAwaitResult(result)
@@ -1129,7 +1147,11 @@ export function useProviderProfileLoginFlow(
           const awaitOnce = (): void => {
             awaitLogin.mutate(
               {
-                request: { providerId, profileId: nextProfileId },
+                request: {
+                  providerId,
+                  profileId: awaitProfileId,
+                  lastSeenReaderCount,
+                },
                 signal: awaitAbort.signal,
               },
               { onSuccess: handleAwaitSuccess, onError: handleAwaitError },
@@ -1244,11 +1266,14 @@ export function useProviderProfileLoginFlow(
     ],
   );
 
+  const waitingForReaders =
+    state.kind === "waiting" && state.readerCount !== undefined;
   const commitPending =
-    submitLoginCode.isPending ||
-    (submitLoginCode.isSuccess &&
-      submitLoginCode.data.outcome === "accepted" &&
-      state.kind === "waiting");
+    !waitingForReaders &&
+    (submitLoginCode.isPending ||
+      (submitLoginCode.isSuccess &&
+        submitLoginCode.data.outcome === "accepted" &&
+        state.kind === "waiting"));
 
   const cancel = useCallback((): void => {
     if (commitPending) return;
@@ -1353,7 +1378,9 @@ export function useProviderProfileLoginFlow(
   }, [providerId, state, touchLoginMutate]);
 
   const codePasteEnabled =
-    loginCapability !== null && loginCapability.codePaste !== null;
+    !waitingForReaders &&
+    loginCapability !== null &&
+    loginCapability.codePaste !== null;
 
   // Keep the provider child alive throughout the browser-approval leg. Users
   // may spend several minutes in account pickers or 2FA before interacting

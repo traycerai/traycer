@@ -284,6 +284,9 @@ function ProviderProfileReauthState({
           cancelPending={flow.cancelPending}
           cancelDisabled={flow.commitPending}
           waiting={flow.state.kind === "waiting"}
+          readerCount={
+            flow.state.kind === "waiting" ? flow.state.readerCount : undefined
+          }
           codePaste={flow.codePaste}
           onOpenExternalLink={onOpenExternalLink}
           onCancel={onCancel}

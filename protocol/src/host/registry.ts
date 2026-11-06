@@ -1517,9 +1517,11 @@ import {
   providersAddCustomPathResponseSchemaV10,
   providersAddCustomPathResponseSchemaV20,
   providersAwaitLoginRequestSchema,
+  providersAwaitLoginRequestSchemaV22,
   providersAwaitLoginRequestSchemaV10,
   providersAwaitLoginRequestSchemaV20,
   providersAwaitLoginResponseSchema,
+  providersAwaitLoginResponseSchemaV22,
   providersAwaitLoginResponseSchemaV10,
   providersAwaitLoginResponseSchemaV20,
   providersAwaitLoginResponseSchemaV21,
@@ -4756,7 +4758,7 @@ export const providersAwaitLoginUpgradeV1ToV2 = defineUpgradePath<
 export const providersAwaitLoginV21 = defineRpcContract({
   method: "providers.awaitLogin",
   schemaVersion: { major: 2, minor: 1 } as const,
-  requestSchema: providersAwaitLoginRequestSchema,
+  requestSchema: providersAwaitLoginRequestSchemaV22,
   responseSchema: providersAwaitLoginResponseSchemaV21,
 });
 
@@ -4794,8 +4796,8 @@ export const providersAwaitLoginUpgradeV20ToV21 = defineUpgradePath<
 export const providersAwaitLoginV22 = defineRpcContract({
   method: "providers.awaitLogin",
   schemaVersion: { major: 2, minor: 2 } as const,
-  requestSchema: providersAwaitLoginRequestSchema,
-  responseSchema: providersAwaitLoginResponseSchema,
+  requestSchema: providersAwaitLoginRequestSchemaV22,
+  responseSchema: providersAwaitLoginResponseSchemaV22,
 });
 
 export const providersAwaitLoginUpgradeV21ToV22 = defineUpgradePath<
@@ -4807,6 +4809,23 @@ export const providersAwaitLoginUpgradeV21ToV22 = defineUpgradePath<
   upgradeRequest: (request) => request,
   // A v2.1 host never read the provider's refusal, so it has none to report.
   upgradeResponse: (response) => ({ ...response, refusal: null }),
+});
+
+export const providersAwaitLoginV23 = defineRpcContract({
+  method: "providers.awaitLogin",
+  schemaVersion: { major: 2, minor: 3 } as const,
+  requestSchema: providersAwaitLoginRequestSchema,
+  responseSchema: providersAwaitLoginResponseSchema,
+});
+
+export const providersAwaitLoginUpgradeV22ToV23 = defineUpgradePath<
+  typeof providersAwaitLoginV22,
+  typeof providersAwaitLoginV23
+>({
+  from: { major: 2, minor: 2 },
+  to: { major: 2, minor: 3 },
+  upgradeRequest: (request) => ({ ...request, lastSeenReaderCount: null }),
+  upgradeResponse: (response) => ({ ...response, installation: null }),
 });
 
 export const providersAwaitLoginDowngradeV21ToV20 = defineDowngradePath<
@@ -4868,6 +4887,21 @@ export const providersAwaitLoginDowngradeV22ToV10 = defineDowngradePath<
       }),
     };
   },
+});
+
+export const providersAwaitLoginDowngradeV23ToV10 = defineDowngradePath<
+  typeof providersAwaitLoginV23,
+  typeof providersAwaitLoginV10
+>({
+  from: { major: 2, minor: 3 },
+  to: { major: 1, minor: 0 },
+  downgradeRequest: (request) =>
+    providersAwaitLoginDowngradeV22ToV10.downgradeRequest({
+      providerId: request.providerId,
+      profileId: request.profileId,
+    }),
+  downgradeResponse: (response) =>
+    providersAwaitLoginDowngradeV22ToV10.downgradeResponse(response),
 });
 
 export const providersCancelLoginV10 = defineRpcContract({
@@ -12748,7 +12782,7 @@ const HOST_RPC_PROVIDERS_REGISTRY_DEFINITION = {
       downgradePathsFromLatest: {},
     },
     2: {
-      latestMinor: 2,
+      latestMinor: 3,
       versions: {
         0: {
           contract: providersAwaitLoginV20,
@@ -12762,9 +12796,13 @@ const HOST_RPC_PROVIDERS_REGISTRY_DEFINITION = {
           contract: providersAwaitLoginV22,
           upgradeFromPreviousVersion: providersAwaitLoginUpgradeV21ToV22,
         },
+        3: {
+          contract: providersAwaitLoginV23,
+          upgradeFromPreviousVersion: providersAwaitLoginUpgradeV22ToV23,
+        },
       },
       downgradePathsFromLatest: {
-        1: providersAwaitLoginDowngradeV22ToV10,
+        1: providersAwaitLoginDowngradeV23ToV10,
       },
     },
   },

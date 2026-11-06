@@ -4042,10 +4042,16 @@ export type ProvidersStartLoginResponseV13 = z.infer<
 // and the 2.0→2.1 upgrade fills `null`). The v2->v1 downgrade bridge in
 // registry.ts explicitly drops it before the strict v1.0 parse (see
 // `providersAwaitLoginDowngradeV22ToV10`).
-export const providersAwaitLoginRequestSchema = lazySchema(() =>
+export const providersAwaitLoginRequestSchemaV22 = lazySchema(() =>
   z.object({
     providerId: providerIdSchema,
     profileId: z.string().nullable().default(null),
+  }),
+);
+export const providersAwaitLoginRequestSchema = lazySchema(() =>
+  z.object({
+    ...providersAwaitLoginRequestSchemaV22.shape,
+    lastSeenReaderCount: z.number().int().nonnegative().nullable().optional(),
   }),
 );
 export const providersAwaitLoginRequestSchemaV10 = lazySchema(() =>
@@ -4117,7 +4123,7 @@ export const providersAwaitLoginResponseSchemaV21 = lazySchema(() =>
  * `providers.awaitLogin@2.2` response. Returns the re-probed `state`, and
  * `refusal` when the provider turned the sign-in away.
  */
-export const providersAwaitLoginResponseSchema = lazySchema(() =>
+export const providersAwaitLoginResponseSchemaV22 = lazySchema(() =>
   z.object({
     ...providersAwaitLoginResponseSchemaV21.shape,
     // Non-null when the provider refused the sign-in after the browser leg
@@ -4126,6 +4132,27 @@ export const providersAwaitLoginResponseSchema = lazySchema(() =>
     // before. A 2.1 caller drops the key and reads the null state as "the
     // sign-in did not complete", which is still true.
     refusal: providerLoginRefusalSchema.nullable().default(null),
+  }),
+);
+export const providerLoginInstallationSchema = lazySchema(() =>
+  z.object({
+    kind: z.literal("waiting-for-readers"),
+    admissionId: z.string(),
+    count: z.number().int().positive(),
+  }),
+);
+export type ProviderLoginInstallation = z.infer<
+  typeof providerLoginInstallationSchema
+>;
+
+/** A pending account change returns no authenticated state until its readers drain. */
+export const providersAwaitLoginResponseSchema = lazySchema(() =>
+  z.object({
+    ...providersAwaitLoginResponseSchemaV22.shape,
+    installation: providerLoginInstallationSchema
+      .nullable()
+      .optional()
+      .catch(null),
   }),
 );
 export const providersAwaitLoginResponseSchemaV20 = lazySchema(() =>
