@@ -24,6 +24,7 @@ import {
   type SecretFormState,
 } from "@/lib/sandboxes/secret-intake-form";
 import { secretVerifyLine } from "@/lib/sandboxes/secret-verify-copy";
+import { CLI_V152_SECRET_CREATE_RETIRED_FIELDS } from "@traycer/protocol/host/__tests__/__fixtures__/cli-v1-5-2-retired-wire";
 import { RETIRED_SECRET_CREATE_FIELDS } from "@traycer/protocol/host/released-wire-rows";
 
 /** A database form that passes `secretFormProblem`, brokered and consented. */
@@ -425,6 +426,26 @@ describe("secretCreateRequest", () => {
     expect(request.variables.every((variable) => !("id" in variable))).toBe(
       true,
     );
+  });
+
+  it("builds a request the released desktop's own create schema still reads", () => {
+    // `cli-v1.5.2` and `cli-v1.5.3` declare `mode` and `exportPolicy` REQUIRED
+    // on the create request, so the released schema is the oracle and this
+    // builder's real output is what it reads. Asserting the two constants
+    // against a copy of themselves would prove nothing; dropping the spread
+    // from `secretCreateRequest` has to be what fails, for every form kind the
+    // page can submit.
+    for (const form of [
+      validDatabaseForm(),
+      validApiKeyForm(),
+      withSecretProtocol(validDatabaseForm(), "tds"),
+    ]) {
+      expect(
+        CLI_V152_SECRET_CREATE_RETIRED_FIELDS.safeParse(
+          secretCreateRequest(form),
+        ).success,
+      ).toBe(true);
+    }
   });
 
   it("sends the SQL Server TDS version", () => {

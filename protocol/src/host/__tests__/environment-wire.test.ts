@@ -1943,8 +1943,10 @@ describe("environment.review.heldApply and environment.review.record", () => {
     ).toBe(false);
     // A choice no version of this method ever had is refused at the frame.
     // The retired ones a released desktop can still send - `variable`,
-    // `stays` and a whole `secret` arm - are parsed and then refused by the
-    // review resolver; `released-secret-wire-rows.test.ts` holds that.
+    // `stays` and a whole `secret` arm - PARSE here, which is all this
+    // repository can show: `released-secret-wire-rows.test.ts` holds the
+    // parsing. Their refusal happens in the host, which is not in this
+    // repository, and is held by the review resolver's own tests there.
     expect(
       accepts(heldApply.requestSchema, { heldId: "held-1", choice: "keep" }),
     ).toBe(false);

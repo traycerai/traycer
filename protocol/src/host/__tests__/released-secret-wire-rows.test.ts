@@ -3,6 +3,7 @@ import { guiHarnessSandboxCredentialModeSchema } from "@traycer/protocol/host/ag
 import {
   environmentMoveAcceptRequestSchema,
   environmentMovePlanResponseSchema,
+  environmentMovePlanResponseSchemaV11,
 } from "@traycer/protocol/host/environment/move-contracts";
 import {
   environmentReviewHeldApplyRequestSchema,
@@ -17,8 +18,8 @@ import {
 import {
   CLI_V152_MOVE_KEY_CHOICES,
   CLI_V152_MOVE_PLAN_ROW_GROUPS,
+  CLI_V152_MOVE_PLAN_ROW_GROUPS_V11,
   CLI_V152_SANDBOX_CREDENTIAL_MODES,
-  CLI_V152_SECRET_CREATE_RETIRED_FIELDS,
   CLI_V152_SECRETS_LIST_RESPONSE_V12,
 } from "./__fixtures__/cli-v1-5-2-retired-wire";
 
@@ -90,14 +91,6 @@ describe("a released desktop parses what this tree sends", () => {
     },
   );
 
-  it("sends a create request a released peer's own fields describe", () => {
-    const retired = CLI_V152_SECRET_CREATE_RETIRED_FIELDS.parse(
-      RETIRED_SECRET_CREATE_FIELDS,
-    );
-
-    expect(retired).toStrictEqual({ mode: "brokered", exportPolicy: null });
-  });
-
   it("keeps every row group a released plan names", () => {
     const groups = Object.keys(
       environmentMovePlanResponseSchema.parse({
@@ -118,6 +111,32 @@ describe("a released desktop parses what this tree sends", () => {
     expect(groups.sort()).toStrictEqual(
       [...CLI_V152_MOVE_PLAN_ROW_GROUPS].sort(),
     );
+  });
+
+  // `sameNameInPersonal` is the other group the cut took, added at `@1.1`.
+  // The released schema gives it `.default([])`, so this case states both
+  // halves of that: a plan built WITHOUT the key still parses, and the parsed
+  // rows carry it anyway, so a released desktop reading `@1.1` or `@1.2`
+  // finds every group it declares.
+  it("answers the @1.1 plan's own row groups, filling the one it no longer builds", () => {
+    const parsed = environmentMovePlanResponseSchemaV11.parse({
+      planHash: "h",
+      planRevision: 0,
+      hostVersion: "1.6.0",
+      disclosureVersion: 1,
+      rows: {
+        moves: [],
+        staysOnThisComputer: [],
+        alreadyInPersonal: [],
+        differsMasked: [],
+        looksLikeAKey: [],
+      },
+    });
+
+    expect(Object.keys(parsed.rows).sort()).toStrictEqual(
+      [...CLI_V152_MOVE_PLAN_ROW_GROUPS_V11].sort(),
+    );
+    expect(parsed.rows.sameNameInPersonal).toStrictEqual([]);
   });
 });
 

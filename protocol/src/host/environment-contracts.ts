@@ -24,8 +24,11 @@ import { RETIRED_PROVIDER_VARIABLES } from "./released-wire-rows";
  * `environment.status` answers the move's consent and planes;
  * `environment.review` answers the retrospective sheet's record;
  * `providers.link` and `providers.linkComplete` name the environment whose
- * plan they link. Neither
- * line has shipped, so none is a MAJOR.
+ * plan they link. Each is a MINOR because every addition is additive and an
+ * older peer is served directly: both lines HAVE shipped - `cli-v1.5.2` and
+ * `cli-v1.5.3` carry them - so a removal here would need a MAJOR, which is
+ * why the fields those releases require are filled from
+ * `host/released-wire-rows.ts` rather than dropped.
  */
 export const environmentSecretsListV10 = defineRpcContract({
   method: "environment.secrets.list",

@@ -405,9 +405,8 @@ export type EnvironmentReviewResponseV11 = z.infer<
 
 /**
  * `environment.review@1.2`: each entry names what a held executable does, the
- * facts its line on the retrospective sheet reads. All null on a held value
- * and on any row the host cannot describe; a `@1.1` answer upgrades with all
- * null.
+ * facts its line on the retrospective sheet reads. All null on any row the
+ * host cannot describe; a `@1.1` answer upgrades with all null.
  *
  * - `command`: what it runs, as configured: an MCP server's or hook's command
  *   line, arguments included and env values left out; a shell's path and
@@ -417,8 +416,9 @@ export type EnvironmentReviewResponseV11 = z.infer<
  * - `harness`: the harness id an agent definition is for, or the program an
  *   env setting changes (its key's `<harness>:` prefix).
  * - `value`: a launch-sensitive variable's or env setting's value as
- *   configured. A value that looks like a credential is never here: that row
- *   is a held value.
+ *   configured. A value that looks like a credential is never here, and is no
+ *   longer anywhere else either: the held-value plane that once carried one is
+ *   gone, and such a value stays on the computer it was found on.
  */
 export const environmentReviewEntrySchemaV12 = lazySchema(() =>
   environmentReviewEntrySchema.extend({

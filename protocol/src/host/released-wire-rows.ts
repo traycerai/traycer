@@ -28,9 +28,18 @@
  * refused at the handler, which is the rule the removal was made under: a
  * case the broker cannot serve is refused, never served as plain text.
  *
- * Retire this module when `protocol/scripts/compat/support-floor.json` passes
- * `1.5.3`: at that point no released peer names these fields, and they can
- * leave the schemas with it.
+ * Raising `protocol/scripts/compat/support-floor.json` past `1.5.3` does NOT
+ * free these fields. The restored versions are this tree's own versions too,
+ * so every client built from here declares them required exactly as
+ * `cli-v1.5.2` does; moving the floor past the two releases that started this
+ * only drops the oldest peers, never the requirement. Two things can end this
+ * module, and nothing else:
+ *
+ *  - a new method MAJOR that omits the fields, with a downgrade bridge filling
+ *    them for every older major still supported; or
+ *  - proof that no supported peer parses the restored line any more - every
+ *    version in the protected set at or above a major that omits them - at
+ *    which point the restored minors and this module leave together.
  */
 
 /**
@@ -70,3 +79,13 @@ export const RETIRED_SECRET_CREATE_FIELDS = {
  * no choice for it, so this group is empty on every plan.
  */
 export const RETIRED_LOOKS_LIKE_A_KEY_ROWS: readonly never[] = [];
+
+/**
+ * `environment.move.plan@1.1`'s other retired row group: rows that look like
+ * a key whose name Personal already holds as a secret. Retired with
+ * `looksLikeAKey` and empty for the same reason. The released schema declares
+ * it `.default([])`, so unlike `looksLikeAKey` a host that omits the key is
+ * still parsed; this constant is what the `@1.0`→`@1.1` bridge fills, so the
+ * two groups read the same way at every call site.
+ */
+export const RETIRED_SAME_NAME_IN_PERSONAL_ROWS: readonly never[] = [];
