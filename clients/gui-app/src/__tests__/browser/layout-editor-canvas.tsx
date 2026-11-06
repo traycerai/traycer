@@ -1632,7 +1632,6 @@ export function CanvasFixture(): ReactNode {
           columnRef={setColumn}
           {...chrome}
           header={<FixtureHeader />}
-          soundtrackTopRow={null}
           strip={
             stripEdge === null ? null : (
               <SideTabStrip

@@ -1,4 +1,4 @@
-import { useLayoutEffect, useRef, type ReactNode, type RefObject } from "react";
+import type { ReactNode } from "react";
 import { MobileAppHeader } from "@/components/layout/header/mobile-app-header";
 import { TabStrip } from "@/components/layout/tabs/tab-strip";
 import { AppUpdateHeaderButton } from "@/components/layout/header/app-update-button";
@@ -7,8 +7,6 @@ import { HistoryNavButtons } from "@/components/layout/header/history-nav-button
 import { useMobileHeaderActive } from "@/components/layout/header/use-mobile-header-active";
 import { DesktopMenuBar } from "@/components/layout/header/desktop-menu-bar";
 import { APP_HEADER_HEIGHT_CLASS } from "@/components/layout/header/app-header-height";
-import { SoundtrackTopRowControl } from "@/components/layout/soundtrack/soundtrack-top-row";
-import { useSoundtrackTopRowDrawn } from "@/components/layout/soundtrack/use-soundtrack-top-row-drawn";
 import {
   HeaderBarCluster,
   HeaderIdentity,
@@ -65,9 +63,6 @@ function DesktopAppHeader(props: AppHeaderProps): ReactNode {
   const dragSuppressed = useTitleBarDraggingSuppressed();
   const draggable = framelessDesktop && !dragSuppressed;
   const spacerDragStyle = titleBarSpacerStyle(framelessDesktop, dragSuppressed);
-  const soundtrackDrawn = useSoundtrackTopRowDrawn();
-  const centreZone = showTabStrip && soundtrackDrawn;
-  const tabStripBoxRef = useRef<HTMLDivElement | null>(null);
 
   return (
     <header
@@ -110,22 +105,17 @@ function DesktopAppHeader(props: AppHeaderProps): ReactNode {
           style={spacerDragStyle}
         />
       ) : null}
-      <div
-        ref={tabStripBoxRef}
-        className={tabStripBoxClass(showTabStrip, draggable, centreZone)}
-      >
+      <div className={tabStripBoxClass(showTabStrip, draggable)}>
         {showTabStrip ? <TabStrip /> : null}
       </div>
-      {centreZone ? (
-        <HeaderCentreZone
-          tabStripBoxRef={tabStripBoxRef}
-          framelessDesktop={framelessDesktop}
-          dragSuppressed={dragSuppressed}
-        />
-      ) : null}
       <div
         aria-hidden
-        className={trailingSpacerClass(showTabStrip, centreZone)}
+        className={cn(
+          "relative z-10 h-full",
+          showTabStrip
+            ? "hidden shrink-0 basis-[clamp(2rem,6vw,6rem)] md:block"
+            : "min-w-0 flex-1",
+        )}
         style={spacerDragStyle}
       />
       {/* Shrinkable for the readings in it alone: the controls after them
@@ -153,123 +143,10 @@ function DesktopAppHeader(props: AppHeaderProps): ReactNode {
  * The tab strip's box. The tabs keep a floor of the header, so readings moved
  * up here shrink before they do.
  */
-function tabStripBoxClass(
-  showTabStrip: boolean,
-  draggable: boolean,
-  centreZone: boolean,
-): string {
+function tabStripBoxClass(showTabStrip: boolean, draggable: boolean): string {
   return cn(
-    "relative z-10 flex items-center",
-    // With a centre zone the box is as wide as its tabs, so they give up only
-    // the width the zone needs, and it gives way before the zone's controls do.
-    // Its shrink weight is what makes it give way first: flex shrinks by weight
-    // times base size, so at weight 1 the tabs' wide base would also squeeze the
-    // header's controls out past the window's edge. From md it keeps the same
-    // floor as a header with no zone, so readings the person moved up here
-    // shrink before the tabs do: past the floor the centre gap gives way, then
-    // the readings' cluster (`HeaderCentreZone`). Below md there is no floor: a
-    // zoomed Windows or Linux window that narrow has no room for one, so the
-    // strip's fixed controls slide under the zone, where a floor would make the
-    // window scroll sideways instead.
-    centreZone ? "flex-[0_1000_auto] min-w-0 md:min-w-[30%]" : "flex-1",
-    showTabStrip && !centreZone ? "min-w-[30%]" : null,
-    !showTabStrip && "min-w-0",
+    "relative z-10 flex flex-1 items-center",
+    showTabStrip ? "min-w-[30%]" : "min-w-0",
     draggable && "[-webkit-app-region:drag]",
-  );
-}
-
-/** The drag spacer before the right-side controls. */
-function trailingSpacerClass(
-  showTabStrip: boolean,
-  centreZone: boolean,
-): string {
-  if (centreZone) return "relative z-10 hidden h-full min-w-0 flex-1 md:block";
-  return cn(
-    "relative z-10 h-full",
-    showTabStrip
-      ? "hidden shrink-0 basis-[clamp(2rem,6vw,6rem)] md:block"
-      : "min-w-0 flex-1",
-  );
-}
-
-/**
- * The call strip, centred on the header. The gap before it is what puts the
- * zone's middle on the header's middle, and it closes as the tabs reach the
- * zone, so a long strip of tabs pushes the zone right rather than losing width
- * to it. The zone starts at its minimum (the strip's controls) and grows to the
- * whole strip with the room left over, so the tabs keep their width before the
- * bot's name keeps its. Its grow weight only says
- * it fills before the trailing drag spacer, which takes what its cap leaves.
- * Measured because that gap depends on how wide the tabs are, which CSS cannot
- * subtract from half the header. The gap's shrink weight matches the tab box's:
- * once the tabs are at their floor, centring is what gives way next, before
- * the readings on the right lose any of their room; the measured basis is
- * inline, so the class leaves it `auto`. Direct children of `<header>`, for
- * the drag-region reason given in `DesktopAppHeader`.
- */
-function HeaderCentreZone(props: {
-  readonly tabStripBoxRef: RefObject<HTMLDivElement | null>;
-  readonly framelessDesktop: boolean;
-  readonly dragSuppressed: boolean;
-}): ReactNode {
-  const { tabStripBoxRef } = props;
-  const gapRef = useRef<HTMLDivElement | null>(null);
-  const zoneRef = useRef<HTMLDivElement | null>(null);
-  useLayoutEffect(() => {
-    const gap = gapRef.current;
-    const zone = zoneRef.current;
-    const tabStripBox = tabStripBoxRef.current;
-    const header = gap === null ? null : gap.parentElement;
-    if (gap === null || zone === null || tabStripBox === null) return undefined;
-    if (header === null) return undefined;
-    const place = (): void => {
-      const headerBox = header.getBoundingClientRect();
-      const middle = headerBox.left + headerBox.width / 2;
-      const zoneStart = middle - zone.getBoundingClientRect().width / 2;
-      const tabsEnd = tabStripBox.getBoundingClientRect().right;
-      const basis = `${Math.max(0, Math.round(zoneStart - tabsEnd))}px`;
-      if (gap.style.flexBasis !== basis) gap.style.flexBasis = basis;
-    };
-    place();
-    // The write moves what is observed, so it waits for the next frame: made
-    // inside the callback it would resize observed boxes in the same delivery,
-    // and the browser reports the loop as an error.
-    let frame: number | null = null;
-    const observer = new ResizeObserver(() => {
-      if (frame !== null) return;
-      frame = requestAnimationFrame(() => {
-        frame = null;
-        place();
-      });
-    });
-    observer.observe(header);
-    observer.observe(zone);
-    observer.observe(tabStripBox);
-    return () => {
-      observer.disconnect();
-      if (frame !== null) cancelAnimationFrame(frame);
-    };
-  }, [tabStripBoxRef]);
-  return (
-    <>
-      <div
-        ref={gapRef}
-        aria-hidden
-        data-testid="app-header-centre-gap"
-        className="relative z-10 h-full flex-[0_1000_auto]"
-        style={titleBarSpacerStyle(
-          props.framelessDesktop,
-          props.dragSuppressed,
-        )}
-      />
-      <div
-        ref={zoneRef}
-        data-testid="app-header-centre-zone"
-        className="relative z-10 flex max-w-max min-w-min flex-[1000_1_0%] items-center self-stretch px-2"
-        style={props.framelessDesktop ? NO_DRAG_STYLE : undefined}
-      >
-        <SoundtrackTopRowControl />
-      </div>
-    </>
   );
 }
