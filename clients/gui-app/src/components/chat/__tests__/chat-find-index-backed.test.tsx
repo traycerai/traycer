@@ -1509,7 +1509,10 @@ describe("chat find over a windowed transcript: older rows from the index", () =
     // The timeline reports completion after its row navigation settles.
     // The reveal now waits for that callback before painting the exact hit.
     find.scrollToLocation.mockImplementation(
-      (_location: unknown, afterSettle: () => void) => afterSettle(),
+      (location: unknown, afterSettle: () => void) => {
+        expect(location).toMatchObject({ index: 0 });
+        afterSettle();
+      },
     );
     const adapter = find.getAdapter();
 
