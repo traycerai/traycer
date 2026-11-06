@@ -22,6 +22,7 @@ import {
   sandboxGuestConfigFailure,
   sandboxHostVouches,
   sandboxIdleLine,
+  sandboxOperationalLine,
   sandboxPodRoomLine,
   sandboxSecretsReadiness,
   sandboxHeaderCreditsLine,
@@ -69,6 +70,8 @@ import { useSandboxEgressEvents } from "@/hooks/sandboxes/use-sandbox-egress-eve
 import { useSandboxGrants } from "@/hooks/sandboxes/use-sandbox-grants-query";
 import {
   sandboxRouteAddresses,
+  SANDBOX_STAND_IN_CLAUSE,
+  sandboxHasBrokeredGrant,
   sandboxGrantViews,
   sandboxGitHubLine,
   type SandboxGrantView,
@@ -98,6 +101,7 @@ export function SandboxCard(props: {
 }): ReactNode {
   const { summary, state, frozen, teamOwned } = props.sandbox;
   const viewerUserId = useAuthStore((s) => s.contextMetadata?.userId ?? null);
+  const operationalLine = sandboxOperationalLine(state, frozen);
   return (
     <div
       className="flex min-w-0 flex-col gap-5 p-5"
@@ -105,6 +109,14 @@ export function SandboxCard(props: {
       data-state={state ?? "unknown"}
       data-frozen={frozen ? "true" : "false"}
     >
+      {operationalLine === null ? null : (
+        <p
+          className="text-ui-xs text-muted-foreground"
+          data-testid="sandbox-card-operational-line"
+        >
+          {operationalLine}
+        </p>
+      )}
       {summary === null ? (
         <SandboxDetailsMissing state={state} />
       ) : (
@@ -142,17 +154,24 @@ export function SandboxCard(props: {
 export function SandboxHeaderCost(props: {
   readonly sandbox: HostScopeSandbox;
 }): ReactNode {
-  const { summary, teamOwned } = props.sandbox;
+  const { summary, state, teamOwned } = props.sandbox;
   if (summary === null) return null;
+  return teamOwned ? (
+    <SandboxHeaderRate summary={summary} state={state} cost={null} />
+  ) : (
+    <SandboxPersonalHeaderCost summary={summary} state={state} />
+  );
+}
+
+function SandboxHeaderRate(props: {
+  readonly summary: SandboxSummary;
+  readonly state: HostSandboxState | null;
+  readonly cost: SandboxCost | null;
+}): ReactNode {
   return (
     <>
       <span aria-hidden>·</span>
-      <span>
-        {summary.kind === "automation"
-          ? "Free"
-          : formatHeaderRate(summary, props.sandbox.state)}
-      </span>
-      {teamOwned ? null : <SandboxTodayCost summary={summary} />}
+      <span>{formatHeaderRate(props.summary, props.state, props.cost)}</span>
     </>
   );
 }
@@ -160,7 +179,13 @@ export function SandboxHeaderCost(props: {
 function formatHeaderRate(
   summary: SandboxSummary,
   state: HostSandboxState | null,
+  cost: SandboxCost | null,
 ): string {
+  if (summary.kind === "automation") return "Free";
+  if (cost !== null)
+    return cost.currentRateMillicreditsPerHour === 0
+      ? "Not billing"
+      : hourlyRate(cost.currentRateMillicreditsPerHour);
   const price = summary.priceMcPerHour;
   if (price === null) return "Not priced here";
   if (state === "suspended") return hourlyRate(price.suspendedMc);
@@ -168,8 +193,9 @@ function formatHeaderRate(
   return hourlyRate(price.awakeMc);
 }
 
-function SandboxTodayCost(props: {
+function SandboxPersonalHeaderCost(props: {
   readonly summary: SandboxSummary;
+  readonly state: HostSandboxState | null;
 }): ReactNode {
   useRefreshSandboxCosts();
   const costs = useSandboxCosts();
@@ -177,15 +203,23 @@ function SandboxTodayCost(props: {
   const cost =
     costs.data?.sandboxes.find((item) => item.sandboxId === props.summary.id) ??
     null;
-  if (cost === null) return null;
   return (
     <>
-      <span aria-hidden>·</span>
-      <span data-testid="sandbox-card-cost-today">
-        {props.summary.kind === "automation"
-          ? "Free today"
-          : `${formatSandboxCost(sandboxCostTodayMc(cost, now))} today`}
-      </span>
+      <SandboxHeaderRate
+        summary={props.summary}
+        state={props.state}
+        cost={cost}
+      />
+      {cost === null ? null : (
+        <>
+          <span aria-hidden>·</span>
+          <span data-testid="sandbox-card-cost-today">
+            {props.summary.kind === "automation"
+              ? "Free today"
+              : `${formatSandboxCost(sandboxCostTodayMc(cost, now))} today`}
+          </span>
+        </>
+      )}
     </>
   );
 }
@@ -590,6 +624,7 @@ function SandboxSecretsSection(props: {
     props.hostState,
   );
   const grantsSummary = grants.data ?? null;
+  if (summary.phase === null && grantsSummary === null) return null;
   const label =
     grantsSummary === null
       ? null
@@ -601,7 +636,7 @@ function SandboxSecretsSection(props: {
     <>
       <SandboxSecretsSummaryRow
         label={label}
-        failed={grants.isError}
+        failed={grantsSummary === null && grants.isError}
         configurationId={configurationId}
         refetching={grants.isFetching}
         onRetry={() => void grants.refetch()}
@@ -707,6 +742,14 @@ function SandboxSecretsDetails(props: {
     >
       <summary className="cursor-pointer">Details</summary>
       <div className="mt-3 flex flex-col gap-2">
+        {props.summary !== null && sandboxHasBrokeredGrant(props.summary) ? (
+          <p
+            className="text-muted-foreground"
+            data-testid="sandbox-card-stand-in"
+          >
+            {SANDBOX_STAND_IN_CLAUSE}
+          </p>
+        ) : null}
         {props.readiness === null ? null : (
           <p
             data-testid="sandbox-card-secrets-readiness"
@@ -813,15 +856,17 @@ function SandboxNetworkEvents(props: {
   const events = useSandboxEgressEvents(props.awake ? props.hostId : null);
   const lines = sandboxCardEgressEventLines(events);
   const blocked = lines.filter((line) => line.tone === "refused").length;
-  if (blocked === 0) return null;
+  if (lines.length === 0) return null;
   return (
     <details
       className="border-t border-border/50 pt-3 text-ui-xs"
       data-testid="sandbox-card-egress-events"
     >
       <summary className="cursor-pointer">
-        {blocked} recent blocked {blocked === 1 ? "request" : "requests"} · See
-        events
+        {blocked === 0
+          ? "Recent network events"
+          : `${blocked} recent blocked ${blocked === 1 ? "request" : "requests"}`}
+        {" · See events"}
       </summary>
       <ul className="mt-3 flex flex-col gap-2">
         {lines.map((line) => (
