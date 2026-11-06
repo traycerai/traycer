@@ -16,7 +16,7 @@ const ANCHOR = '[data-testid="bot-thread-anchor"]';
 const COMPOSER = '[data-testid="bot-thread-composer"]';
 const INPUT = '[data-testid="bot-thread-composer-input"]';
 const SEND = '[data-testid="bot-thread-composer-send"]';
-const ACTIVITY = '[data-testid="bot-thread-activity"]';
+const SESSION = '[data-testid="bot-thread-session"]';
 const TASKS = '[data-testid="bot-thread-tasks"]';
 
 const BoxSchema = z.object({ top: z.number(), bottom: z.number() });
@@ -90,7 +90,7 @@ for (const device of DEVICES) {
 
       test("what the row gives up is not painted", async ({ page }) => {
         await openFocused(page, search);
-        await expect(page.locator(ACTIVITY)).toBeHidden();
+        await expect(page.locator(SESSION)).toBeHidden();
         await expect(page.locator(TASKS)).toBeHidden();
       });
 
@@ -158,7 +158,7 @@ test.describe("the iPad Pro 11's keyboard", () => {
     page,
   }) => {
     await openFocused(page, "?thread=zero&post=long&keyboard=428&top=32");
-    await expect(page.locator(ACTIVITY)).toBeHidden();
+    await expect(page.locator(SESSION)).toBeHidden();
   });
 
   test("would leave 406 with no status bar, which keeps the full box", async ({
@@ -173,6 +173,6 @@ test.describe("the iPad Pro 11's keyboard", () => {
       "data-box-form",
       "full",
     );
-    await expect(page.locator(ACTIVITY)).toBeVisible();
+    await expect(page.locator(SESSION)).toBeVisible();
   });
 });

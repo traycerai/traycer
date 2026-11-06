@@ -6,6 +6,7 @@ import { RootDndProvider } from "@/components/epic-canvas/dnd/root-dnd-provider"
 import { TileFindOwnerBridge } from "@/components/epic-canvas/tile-find/tile-find-owner-bridge";
 import { TileSelectAllBridge } from "@/components/epic-canvas/tile-select-all-bridge";
 import { ReservedBrowserChordsBridge } from "@/components/layout/bridges/reserved-browser-chords-bridge";
+import { SoundtrackShortcutBridge } from "@/components/layout/bridges/soundtrack-shortcut-bridge";
 import { QuitInterceptBridge } from "@/components/layout/bridges/quit-intercept-bridge";
 import { MigrationBlockingModalHost } from "@/components/layout/dialogs/migration-blocking-modal-host";
 import { AppColumnFrame } from "@/components/layout/app-column-frame";
@@ -36,11 +37,8 @@ import { TopLevelSurfaceActivationProvider } from "@/components/layout/top-level
 import { HostScopeReady } from "@/components/layout/host-readiness-controller";
 import { MigrationRunController } from "@/components/migration/migration-run-controller";
 import { TracyEntryController } from "@/components/layout/tabs/tracy-entry-controller";
-import { SoundtrackShortcutBridge } from "@/components/layout/soundtrack/soundtrack-control";
-import { TalkShortcutBridge } from "@/components/layout/voice/talk-control";
-import { VoiceSessionController } from "@/components/layout/voice/voice-session-controller";
+import { CallController } from "@/components/layout/voice/call-controller";
 import { VoiceSessionChrome } from "@/components/layout/voice/voice-session-chrome";
-import { VoiceColumnTopRow } from "@/components/layout/voice/voice-top-row";
 import { LandingTerminalHost } from "@/components/home/terminal-panel/landing-terminal-host";
 import { OpenFolderDialog } from "@/components/open-folder-dialog";
 import { RemoteFolderPickerDialog } from "@/components/remote-folder-picker-dialog";
@@ -137,7 +135,6 @@ function AppShellBody(props: AppShellProps) {
               columnRef={setAppColumn}
               {...chrome}
               header={<AppHeader variant="app" />}
-              voiceTopRow={<VoiceColumnTopRow titleBand={chrome.titleBand} />}
               strip={
                 stripEdge === null ? null : (
                   <SideTabStrip
@@ -159,7 +156,8 @@ function AppShellBody(props: AppShellProps) {
                     connectivity={sessionConnectivity}
                   />
                   {/* The phone's full-screen view, and its bar while that
-                    view is down (V5). Desktop's strip is in the top row. */}
+                    view is down (V5). Desktop's call bar is in the bot's
+                    message box. */}
                   <VoiceSessionChrome />
                 </>
               }
@@ -227,12 +225,10 @@ function AppShellBody(props: AppShellProps) {
                   {/* Once per window, for every strip placement: the fixed
                     Tracy entry's tab, its lock and its place first. */}
                   <TracyEntryController />
-                  {/* Once per window: the voice session's owner (the
-                    microphone, the engine, the scheduler), which the Talk
-                    control and the strip drive through the store, from the
-                    top row and the phone's channel header. */}
-                  <VoiceSessionController />
-                  <TalkShortcutBridge />
+                  {/* Once per window: the call's owner (the microphone, the
+                    engine, the scheduler), which the Call controls, the strip
+                    and the phone's call view drive through the store. */}
+                  <CallController />
                   <SoundtrackShortcutBridge />
                   <MigrationRunController />
                   <MigrationBlockingModalHost />

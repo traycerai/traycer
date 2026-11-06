@@ -130,7 +130,6 @@ describe("chat-composer submit gate (path resolution)", () => {
           onSubmitMessage,
           onSideChat: null,
           targetHostId: null,
-          restingSandbox: null,
           queueEditTargetId: null,
           // The gate is off in these fixtures: they predate it and assert the
           // inline behaviour, which is what `false` preserves exactly.
@@ -944,7 +943,6 @@ function mountSubmitHookWith(args: {
         onSubmitMessage: args.onSubmitMessage,
         onSideChat: null,
         targetHostId: args.targetHostId,
-        restingSandbox: null,
         queueEditTargetId: null,
         // The gate is off in these fixtures: they predate it and assert the
         // inline behaviour, which is what `false` preserves exactly.

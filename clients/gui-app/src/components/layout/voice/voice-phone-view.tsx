@@ -1,38 +1,55 @@
-import { useEffect, type KeyboardEvent, type ReactNode } from "react";
-import { AudioLines, Captions, Mic, MicOff, X } from "lucide-react";
+import { useEffect, useState, type KeyboardEvent, type ReactNode } from "react";
+import { AudioLines, Captions, Mic, MicOff, Phone, X } from "lucide-react";
 import { useShallow } from "zustand/react/shallow";
 import { Button } from "@/components/ui/button";
+import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
 import { Sheet, SheetContent, SheetTitle } from "@/components/ui/sheet";
+import { ResumeAfterDictation } from "@/components/layout/voice/composer-call";
 import { VoiceOutcomeLine } from "@/components/layout/voice/voice-ended-line";
-import { ResumeAfterDictation } from "@/components/layout/voice/voice-session-strip";
-import { VoiceWaitingControl } from "@/components/layout/voice/voice-waiting-control";
-import { useVoiceFocusLabel } from "@/hooks/voice/use-voice-focus-label";
-import { useOpenBotChannel } from "@/hooks/bots/use-open-bot-channel";
+import { useHostClientForHostId } from "@/hooks/host/use-host-client-for-host-id";
+import { useVoiceDirectory } from "@/hooks/voice/use-voice-directory";
 import { cn } from "@/lib/utils";
+import { captionSpeaker } from "@/lib/voice/call";
+import { useTracySurfaceStore } from "@/stores/bots/tracy-surface-store";
 import {
   useVoiceSessionStore,
-  type VoiceFocus,
+  type CallTarget,
   type VoicePhase,
+  type VoiceSessionState,
 } from "@/stores/voice/voice-session-store";
 
+/** Which of its three states the phone's call view shows; `null` while it is down. */
+type CallViewState = "dial" | "call" | "ended";
+
+function callViewState(state: VoiceSessionState): CallViewState | null {
+  if (!state.phoneViewOpen) return null;
+  if (state.phase !== "idle") return "call";
+  if (state.dial !== null) return "dial";
+  if (state.endReason !== null || state.refusal !== null) return "ended";
+  return null;
+}
+
 /**
- * The phone's voice session (V5, boards V-C to V-E): a full-screen view over
- * the bot channel the session started in. The focus line at the top (tap it
- * to see the channel behind, with the session still live), the Waiting
- * control, and the talk button: with the open microphone, the default, it
- * mutes and unmutes ("Listening · tap to mute"); under push-to-talk, the
- * per-session switch beneath it, the microphone carries the person only
- * while it is held. ✕ ends the session. No running transcript is drawn
- * unless the person turns captions on (V6).
+ * The phone's call view (Call Tracy, VC3), full screen over the bot surface,
+ * in three states. The dial: the bot whose message box's Call was tapped
+ * preselected,
+ * every bot the person can call listed, and Call. The call: the bot's name
+ * (tap it to see the channel behind, with the call still live), the talk
+ * button (with the open microphone, the default, it mutes and unmutes:
+ * "Listening · tap to mute"; under push-to-talk, the switch beneath it, the
+ * microphone carries the person only while it is held), ✕ to end, and the
+ * captions toggle. The end: why the call ended, until dismissed. No running
+ * transcript is drawn unless the person turns captions on.
  *
- * The phone layout only; the desktop has the strip.
+ * The phone layout only; on the desktop the call is in its message box.
  */
 export function VoicePhoneView(): ReactNode {
+  const view = useVoiceSessionStore(callViewState);
   const state = useVoiceSessionStore(
     useShallow((s) => ({
       phase: s.phase,
-      focus: s.focus,
-      phoneViewOpen: s.phoneViewOpen,
+      dial: s.dial,
+      callTitle: s.callTitle,
       captions: s.captions,
       captionLines: s.captionLines,
       driver: s.driver,
@@ -40,15 +57,22 @@ export function VoicePhoneView(): ReactNode {
   );
   const setPhoneViewOpen = useVoiceSessionStore((s) => s.setPhoneViewOpen);
   const setCaptions = useVoiceSessionStore((s) => s.setCaptions);
-  const open = state.phase !== "idle" && state.phoneViewOpen;
+  const botTitle = state.callTitle ?? "the bot";
   const driver = state.driver;
   return (
     // The phone's back gesture (Escape) shows the channel behind; it never
-    // ends the session, which stays on screen in the bar until ended.
+    // ends a call, which stays on screen in the bar until ended. Backing out
+    // of the dial or the end puts them away.
     <Sheet
-      open={open}
+      open={view !== null}
       onOpenChange={(next) => {
-        if (!next) setPhoneViewOpen(false);
+        if (next) return;
+        const store = useVoiceSessionStore.getState();
+        if (view === "dial") store.closeDial();
+        else if (view === "ended") {
+          store.clearEndReason();
+          store.clearRefusal();
+        } else setPhoneViewOpen(false);
       }}
     >
       <SheetContent
@@ -56,118 +80,125 @@ export function VoicePhoneView(): ReactNode {
         showCloseButton={false}
         aria-describedby={undefined}
         data-testid="voice-phone-view"
+        data-view={view ?? undefined}
         className="gap-0"
       >
-        <SheetTitle className="sr-only">Voice session</SheetTitle>
+        <SheetTitle className="sr-only">Call</SheetTitle>
         {/* The bottom sheet is as tall as its content: this column fills
           the window below the status bar, the home indicator cleared. */}
         <div className="flex h-safe-dvh min-h-0 flex-col pb-safe-bottom">
-          <header className="flex min-w-0 items-center gap-2 px-2 pt-2">
-            <Button
-              type="button"
-              variant="ghost"
-              size="icon-touch"
-              aria-label="End"
-              data-testid="voice-phone-end"
-              disabled={driver === null || state.phase === "ending"}
-              onClick={() => driver?.end()}
+          {view === "dial" && state.dial !== null ? (
+            <>
+              <header className="flex min-w-0 items-center gap-2 px-2 pt-2">
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="icon-touch"
+                  aria-label="Close"
+                  data-testid="voice-phone-dial-close"
+                  onClick={() => useVoiceSessionStore.getState().closeDial()}
+                >
+                  <X aria-hidden="true" />
+                </Button>
+                <span className="min-w-0 flex-1 truncate text-ui-sm font-medium text-foreground">
+                  Call
+                </span>
+              </header>
+              <div className="flex min-h-0 flex-1 flex-col justify-end overflow-y-auto px-4 pb-4">
+                <CallDial
+                  preselected={state.dial}
+                  preselectedTitle={botTitle}
+                  onDialed={() => undefined}
+                />
+              </div>
+            </>
+          ) : null}
+          {view === "call" ? (
+            <>
+              <header className="flex min-w-0 items-center gap-2 px-2 pt-2">
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="icon-touch"
+                  aria-label="End"
+                  data-testid="voice-phone-end"
+                  disabled={driver === null || state.phase === "ending"}
+                  onClick={() => driver?.end()}
+                >
+                  <X aria-hidden="true" />
+                </Button>
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="touch"
+                  data-testid="voice-phone-bot"
+                  className="min-w-0 flex-1 justify-start"
+                  onClick={() => setPhoneViewOpen(false)}
+                >
+                  <span className="w-full truncate text-left text-ui-sm text-foreground">
+                    {botTitle}
+                  </span>
+                </Button>
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="icon-touch"
+                  aria-label="Captions"
+                  aria-pressed={state.captions}
+                  data-testid="voice-phone-captions"
+                  onClick={() => setCaptions(!state.captions)}
+                >
+                  <Captions aria-hidden="true" />
+                </Button>
+              </header>
+              <div className="flex min-h-0 flex-1 flex-col justify-end overflow-y-auto px-4">
+                {state.captions ? (
+                  <ul
+                    data-testid="voice-phone-captions-lines"
+                    aria-label="Captions"
+                    className="flex w-full flex-col gap-2 py-3 text-ui-sm"
+                  >
+                    {state.captionLines.length === 0 ? (
+                      <li className="text-muted-foreground italic">
+                        Nothing said yet.
+                      </li>
+                    ) : (
+                      state.captionLines.map((line) => (
+                        <li
+                          key={line.id}
+                          data-direction={line.direction}
+                          className={cn(
+                            line.direction === "output"
+                              ? "text-foreground"
+                              : "text-muted-foreground",
+                          )}
+                        >
+                          {captionSpeaker(line.direction, botTitle)}
+                          {line.text}
+                        </li>
+                      ))
+                    )}
+                  </ul>
+                ) : null}
+              </div>
+              <div className="flex flex-col items-center gap-3 px-4 pt-2 pb-4">
+                <ResumeAfterDictation />
+                <TalkButton botTitle={botTitle} />
+                <TalkModeSwitch />
+              </div>
+            </>
+          ) : null}
+          {view === "ended" ? (
+            <div
+              data-testid="voice-phone-ended"
+              className="flex min-h-0 flex-1 flex-col justify-center px-4"
             >
-              <X aria-hidden="true" />
-            </Button>
-            {state.focus === null ? (
-              <span className="min-w-0 flex-1" />
-            ) : (
-              <PhoneFocusLine
-                focus={state.focus}
-                onOpened={() => setPhoneViewOpen(false)}
-              />
-            )}
-            <Button
-              type="button"
-              variant="ghost"
-              size="icon-touch"
-              aria-label="Captions"
-              aria-pressed={state.captions}
-              data-testid="voice-phone-captions"
-              onClick={() => setCaptions(!state.captions)}
-            >
-              <Captions aria-hidden="true" />
-            </Button>
-          </header>
-          <div className="flex min-h-0 flex-1 flex-col justify-end overflow-y-auto px-4">
-            {state.captions ? (
-              <ul
-                data-testid="voice-phone-captions-lines"
-                aria-label="Captions"
-                className="flex w-full flex-col gap-2 py-3 text-ui-sm"
-              >
-                {state.captionLines.length === 0 ? (
-                  <li className="text-muted-foreground italic">
-                    Nothing said yet.
-                  </li>
-                ) : (
-                  state.captionLines.map((line) => (
-                    <li
-                      key={line.id}
-                      data-direction={line.direction}
-                      className={cn(
-                        line.direction === "output"
-                          ? "text-foreground"
-                          : "text-muted-foreground",
-                      )}
-                    >
-                      {line.direction === "input" ? "You: " : "Tracy: "}
-                      {line.text}
-                    </li>
-                  ))
-                )}
-              </ul>
-            ) : null}
-          </div>
-          <div className="flex flex-col items-center gap-3 px-4 pt-2 pb-4">
-            <div className="flex w-full items-center justify-between gap-2">
-              <VoiceWaitingControl />
-              <ResumeAfterDictation />
+              <VoiceOutcomeLine surface="view" />
             </div>
-            <TalkButton />
-            <TalkModeSwitch />
-          </div>
+          ) : null}
         </div>
       </SheetContent>
     </Sheet>
-  );
-}
-
-/**
- * Where the next post goes, as one button: tapping it shows the channel
- * behind the view, the session still live.
- */
-function PhoneFocusLine(props: {
-  readonly focus: VoiceFocus;
-  readonly onOpened: () => void;
-}): ReactNode {
-  const { focus, onOpened } = props;
-  const openBotChannel = useOpenBotChannel();
-  const { environmentLabel, botTitle, threadLabel } = useVoiceFocusLabel(focus);
-  return (
-    <Button
-      type="button"
-      variant="ghost"
-      size="touch"
-      data-testid="voice-phone-focus"
-      className="min-w-0 flex-1 flex-col items-start"
-      onClick={() => {
-        onOpened();
-        openBotChannel(focus.botId, null);
-      }}
-    >
-      <span className="w-full truncate text-left text-ui-sm text-foreground">
-        {botTitle}
-      </span>
-      <span className="w-full truncate text-left text-muted-foreground">
-        {threadLabel ?? environmentLabel ?? "Channel"}
-      </span>
-    </Button>
   );
 }
 
@@ -176,7 +207,7 @@ function PhoneFocusLine(props: {
  * the microphone is open while the button is held, by finger or by Space or
  * Enter, and closes on release, cancel or a finger sliding off.
  */
-function TalkButton(): ReactNode {
+function TalkButton(props: { readonly botTitle: string }): ReactNode {
   const state = useVoiceSessionStore(
     useShallow((s) => ({
       phase: s.phase,
@@ -226,7 +257,7 @@ function TalkButton(): ReactNode {
               : "bg-muted-foreground/40",
           )}
         />
-        {phaseWord(state.phase)}
+        {phaseWord(state.phase, props.botTitle)}
       </span>
       <Button
         type="button"
@@ -260,13 +291,13 @@ function TalkButton(): ReactNode {
         data-testid="voice-phone-talk-state"
         className="text-ui-sm text-foreground"
       >
-        {talkLine(state)}
+        {talkLine(state, props.botTitle)}
       </span>
     </div>
   );
 }
 
-/** The per-session switch between the open microphone and push-to-talk. */
+/** The per-call switch between the open microphone and push-to-talk. */
 function TalkModeSwitch(): ReactNode {
   const pushToTalk = useVoiceSessionStore((s) => s.pushToTalk);
   const setPushToTalk = useVoiceSessionStore((s) => s.setPushToTalk);
@@ -302,15 +333,15 @@ function TalkModeSwitch(): ReactNode {
 }
 
 /**
- * The session on the phone while its view is down, and the line about how
- * the last one went afterwards: under the header, on every screen, so an open
+ * The call on the phone while its view is down, and the line about how the
+ * last one went afterwards: under the header, on every screen, so an open
  * microphone is never out of sight. Open brings the view back.
  */
 export function VoicePhoneBar(): ReactNode {
   const state = useVoiceSessionStore(
     useShallow((s) => ({
       phase: s.phase,
-      focus: s.focus,
+      callTitle: s.callTitle,
       phoneViewOpen: s.phoneViewOpen,
       muted: s.muted,
       pushToTalk: s.pushToTalk,
@@ -320,12 +351,13 @@ export function VoicePhoneBar(): ReactNode {
     })),
   );
   const setPhoneViewOpen = useVoiceSessionStore((s) => s.setPhoneViewOpen);
-  if (state.phase === "idle") return <VoiceOutcomeLine surface="bar" />;
   if (state.phoneViewOpen) return null;
+  if (state.phase === "idle") return <VoiceOutcomeLine surface="bar" />;
   const driver = state.driver;
+  const botTitle = state.callTitle ?? "the bot";
   return (
     <section
-      aria-label="Voice session"
+      aria-label="Call"
       data-testid="voice-phone-bar"
       className="flex w-full items-center gap-2 border-b border-border bg-background px-3 py-1.5 text-ui-xs text-muted-foreground"
     >
@@ -334,13 +366,9 @@ export function VoicePhoneBar(): ReactNode {
         data-testid="voice-phone-bar-state"
         className="shrink-0 font-medium text-foreground"
       >
-        {talkLine(state)}
+        {talkLine(state, botTitle)}
       </span>
-      {state.focus === null ? (
-        <span className="min-w-0 flex-1" />
-      ) : (
-        <PhoneBarFocus focus={state.focus} />
-      )}
+      <span className="min-w-0 flex-1 truncate">{botTitle}</span>
       <Button
         type="button"
         variant="outline"
@@ -364,28 +392,106 @@ export function VoicePhoneBar(): ReactNode {
   );
 }
 
-function PhoneBarFocus(props: { readonly focus: VoiceFocus }): ReactNode {
-  const { botTitle } = useVoiceFocusLabel(props.focus);
-  return <span className="min-w-0 flex-1 truncate">{botTitle}</span>;
-}
-
-function phaseWord(phase: VoicePhase): string {
-  if (phase === "connecting") return "Connecting…";
+function phaseWord(phase: VoicePhase, botTitle: string): string {
+  if (phase === "connecting") return `Calling ${botTitle}…`;
   if (phase === "ending") return "Ending…";
   return "Live";
 }
 
 /** What the microphone is doing, in the words under the talk button. */
-function talkLine(state: {
-  readonly phase: VoicePhase;
-  readonly muted: boolean;
-  readonly pushToTalk: boolean;
-  readonly talkHeld: boolean;
-  readonly pausedForDictation: boolean;
-}): string {
-  if (state.phase === "connecting") return "Connecting…";
+function talkLine(
+  state: {
+    readonly phase: VoicePhase;
+    readonly muted: boolean;
+    readonly pushToTalk: boolean;
+    readonly talkHeld: boolean;
+    readonly pausedForDictation: boolean;
+  },
+  botTitle: string,
+): string {
+  if (state.phase === "connecting") return `Calling ${botTitle}…`;
   if (state.phase === "ending") return "Ending…";
-  if (state.pausedForDictation) return "Voice paused for dictation";
+  if (state.pausedForDictation) return "Call paused for dictation";
   if (state.pushToTalk) return state.talkHeld ? "Listening" : "Hold to talk";
   return state.muted ? "Muted · tap to listen" : "Listening · tap to mute";
+}
+
+/**
+ * The phone's dial (Call Tracy, P11): the bot whose box the dial came from is
+ * preselected, and every bot the person can call is listed to pick another.
+ * Call places it; a bot other than the preselected one gets a new thread.
+ */
+function CallDial(props: {
+  readonly preselected: CallTarget;
+  readonly preselectedTitle: string;
+  readonly onDialed: () => void;
+}): ReactNode {
+  const { preselected, preselectedTitle, onDialed } = props;
+  const surfaceHostId = useTracySurfaceStore((state) =>
+    state.open ? state.hostId : null,
+  );
+  const client = useHostClientForHostId(surfaceHostId);
+  const listed = useVoiceDirectory(client, surfaceHostId, true);
+  const bots =
+    listed.length > 0
+      ? listed
+      : [
+          {
+            botId: preselected.botId,
+            title: preselectedTitle,
+            environmentId: "",
+            environmentLabel: "",
+          },
+        ];
+  const [selected, setSelected] = useState(preselected.botId);
+  const driver = useVoiceSessionStore((state) => state.driver);
+  const phase = useVoiceSessionStore((state) => state.phase);
+  return (
+    <div className="flex w-full flex-col gap-3" data-testid="call-dial">
+      <RadioGroup
+        aria-label="Bot to call"
+        value={selected}
+        onValueChange={setSelected}
+      >
+        {bots.map((bot) => (
+          <label
+            key={bot.botId}
+            data-testid="call-dial-bot"
+            data-selected={bot.botId === selected ? "" : undefined}
+            className={cn(
+              "flex min-w-0 items-center gap-2 rounded-md px-2 py-1.5 text-ui-sm",
+              bot.botId === selected && "bg-foreground/8",
+            )}
+          >
+            <RadioGroupItem value={bot.botId} />
+            <span className="min-w-0 flex-1 truncate text-foreground">
+              {bot.title}
+            </span>
+            {bot.environmentLabel.length === 0 ? null : (
+              <span className="shrink-0 truncate text-ui-xs text-muted-foreground">
+                {bot.environmentLabel}
+              </span>
+            )}
+          </label>
+        ))}
+      </RadioGroup>
+      <Button
+        type="button"
+        size="sm"
+        data-testid="call-dial-call"
+        disabled={driver === null || phase !== "idle"}
+        onClick={() => {
+          driver?.start({
+            botId: selected,
+            threadId:
+              selected === preselected.botId ? preselected.threadId : null,
+          });
+          onDialed();
+        }}
+      >
+        <Phone aria-hidden="true" />
+        Call
+      </Button>
+    </div>
+  );
 }

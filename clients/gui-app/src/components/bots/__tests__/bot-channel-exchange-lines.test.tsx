@@ -419,7 +419,6 @@ function Channel(
             environmentBots={props.environmentBots}
             openExchange={props.openExchange}
             exchangeRail={props.rail}
-            onOpenActivity={() => undefined}
             setupHistory={null}
           />
         </BotIdentityContext>

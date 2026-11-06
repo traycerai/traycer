@@ -143,8 +143,8 @@ vi.mock("@/components/layout/tabs/tracy-entry-controller", () => ({
   TracyEntryController: () => null,
 }));
 // The voice layer resolves the runner host the same way, so it stays unmounted.
-vi.mock("@/components/layout/voice/voice-session-controller", () => ({
-  VoiceSessionController: () => null,
+vi.mock("@/components/layout/voice/call-controller", () => ({
+  CallController: () => null,
 }));
 
 // The shell's two-finger history swipe reads the desktop bridge through the

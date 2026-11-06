@@ -126,7 +126,6 @@ export type {
   VoiceSessionMintRequest,
   VoiceTrayAction,
 } from "@traycer-clients/shared/host-client/voice-sessions";
-export type { VoiceRouteFetchResult } from "@traycer-clients/shared/host-client/voice-router";
 export type {
   EnvironmentProvidersFetchResult,
   SandboxGrantsFetchResult,

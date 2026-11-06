@@ -67,6 +67,10 @@ import type { BotTranscriptLanding } from "@/components/bots/bot-chat-transcript
 import { useBotDraftsStore } from "@/stores/bots/bot-drafts-store";
 import { setPhoneLayoutOnly } from "@/lib/mobile-app";
 import {
+  useVoiceSessionStore,
+  type VoiceSessionDriver,
+} from "@/stores/voice/voice-session-store";
+import {
   holdScreenLandscape,
   IPHONE_17,
   lowerNativeKeyboard,
@@ -478,7 +482,6 @@ function panelTree(thread: BotThreadPanelThread): ReactNode {
               }
               resolveMember={resolveMember}
               onClose={vi.fn()}
-              onOpenActivity={vi.fn()}
               onEditPost={onEditPost}
               onOpenTurn={vi.fn()}
               onOpenSession={vi.fn()}
@@ -740,6 +743,50 @@ describe("<BotThreadPanel /> a direct reply nobody has replied under", () => {
     expect(
       sent.map((request) => [request.text, request.announcementId]),
     ).toEqual([["Which job?", "answer-1"]]);
+  });
+});
+
+describe("<BotThreadPanel /> Call", () => {
+  beforeEach(() => {
+    useVoiceSessionStore.setState({
+      availability: "live",
+      driver: {
+        start: vi.fn<VoiceSessionDriver["start"]>(),
+        end: vi.fn<VoiceSessionDriver["end"]>(),
+        setMuted: vi.fn<VoiceSessionDriver["setMuted"]>(),
+      },
+    });
+  });
+
+  afterEach(() => {
+    useVoiceSessionStore.setState(useVoiceSessionStore.getInitialState(), true);
+  });
+
+  it("is in the box of a listed thread, calling that thread, and not in the header", async () => {
+    const user = userEvent.setup();
+    mountPanel(listed("user-teammate"), [botReply(null)]);
+
+    const header = screen.getByTestId("bot-thread-close").closest("header");
+    if (header === null) throw new Error("expected the thread header");
+    expect(within(header).queryByRole("button", { name: /^Call/ })).toBeNull();
+    const call = within(screen.getByTestId("bot-thread-composer")).getByRole(
+      "button",
+      { name: "Call Release Bot" },
+    );
+
+    await user.click(call);
+
+    expect(useVoiceSessionStore.getState().driver?.start).toHaveBeenCalledWith({
+      botId: BOT_ID,
+      threadId: THREAD_ID,
+    });
+  });
+
+  it("is not in the box replying under a question nobody has replied under", () => {
+    channelMessages = [announcement("question-1", "Ship the release today?")];
+    mountPanel({ kind: "unopened", retry: null, sendable: true }, []);
+
+    expect(screen.queryByTestId("bot-thread-composer-call")).toBeNull();
   });
 });
 
@@ -1312,6 +1359,13 @@ describe("<BotThreadPanel /> the anchor", () => {
     expect(channel.textContent).not.toContain("#");
     expect(within(channel).getByTestId("bot-avatar")).toBeTruthy();
     expect(screen.getByRole("heading", { name: "Thread" })).toBeTruthy();
+  });
+
+  it("rule 8: has no Activity button on a listed thread", () => {
+    mountPanel(listed("user-teammate"), [botReply(null)]);
+
+    expect(screen.queryByTestId("bot-thread-activity")).toBeNull();
+    expect(screen.queryByRole("button", { name: "Activity" })).toBeNull();
   });
 
   it("shows the anchor without text while the channel has no row for it, and its text once the channel's row is there", () => {
@@ -2184,7 +2238,6 @@ describe("<BotThreadPanel /> on a short viewport under the keyboard", () => {
 
     await user.type(box, "Not yet");
     expect(composerForm().getAttribute("data-box-form")).toBe("one-row");
-    expect(shown("bot-thread-activity")).toBe(false);
     expect(shown("bot-thread-session")).toBe(false);
     expect(shown("bot-thread-close")).toBe(true);
     expect(shown("bot-thread-composer-send")).toBe(true);
@@ -2196,7 +2249,6 @@ describe("<BotThreadPanel /> on a short viewport under the keyboard", () => {
 
     lowerNativeKeyboard();
     expect(composerForm().getAttribute("data-box-form")).toBe("full");
-    expect(shown("bot-thread-activity")).toBe(true);
     expect(shown("bot-thread-session")).toBe(true);
   });
 });
