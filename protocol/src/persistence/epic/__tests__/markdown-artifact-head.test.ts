@@ -11,6 +11,7 @@ import { describe, expect, it } from "vitest";
 import {
   epicArtifactSchema,
   epicArtifactSchemaPreHtml,
+  markdownBodyEpochSchema,
   reviewArtifactSchema,
   reviewArtifactSchemaPreHtml,
   specArtifactSchema,
@@ -201,4 +202,18 @@ describe("the frozen pre-html readers ignore the head", () => {
       expect(parsed).not.toHaveProperty("head");
     },
   );
+});
+
+describe("the markdown body epoch", () => {
+  it.each([0, 1])("accepts %s", (epoch) => {
+    expect(markdownBodyEpochSchema.safeParse(epoch).success).toBe(true);
+  });
+
+  it.each([
+    ["negative", -1],
+    ["fractional", 1.5],
+    ["a numeric string", "1"],
+  ])("refuses %s", (_label, epoch) => {
+    expect(markdownBodyEpochSchema.safeParse(epoch).success).toBe(false);
+  });
 });

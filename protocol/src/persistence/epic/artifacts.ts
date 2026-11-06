@@ -326,8 +326,8 @@ export const ARTIFACT_ARTIFACT_ROOM_FIELD = "artifactRoomId";
  * markdown head is refused by the host at the point it would be applied, and
  * the client is told so, never answered as saved. `artifact.subscribe`
  * answers it `unavailable` with code `bodyMoved` (from minor 2; terminal
- * `bodyUnavailable` below), `epic.subscribe` with `artifactRoomState`
- * `unavailable`, reason `bodyMoved` (from minor 7; the state alone below).
+ * `bodyUnavailable` below), `epic.subscribe` with the room's
+ * `artifactRoomState` `unavailable`.
  * Bytes another host's room write brings through the cloud are kept, since
  * a room cannot refuse part of its log, and every reader at the epoch
  * ignores such a fragment.
