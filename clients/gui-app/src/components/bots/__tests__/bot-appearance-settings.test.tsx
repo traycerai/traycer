@@ -36,6 +36,8 @@ const mocks = vi.hoisted(() => ({
   blobAnswer: { ok: true } as
     | { ok: true }
     | { ok: false; reason: "digest-mismatch" },
+  /** While set, `drafts.putBlob` is not answered until it resolves. */
+  blobGate: null as Promise<void> | null,
   /** Whether the next image decodes. */
   decodes: true,
 }));
@@ -118,7 +120,10 @@ function mount(appearance: BotAppearance): void {
         },
         "drafts.putBlob": (params) => {
           mocks.blobWrites.push(params);
-          return mocks.blobAnswer;
+          const answer = mocks.blobAnswer;
+          return mocks.blobGate === null
+            ? answer
+            : mocks.blobGate.then(() => answer);
         },
       },
     }),
@@ -141,6 +146,7 @@ beforeEach(() => {
   mocks.appearanceWrites = [];
   mocks.blobWrites = [];
   mocks.blobAnswer = { ok: true };
+  mocks.blobGate = null;
   mocks.decodes = true;
 });
 
@@ -284,6 +290,48 @@ describe("<BotAppearanceSettings />", () => {
       ]);
     });
     expect(mocks.blobWrites).toEqual([{ sha256, bytesBase64: "iVBORwECAwQ=" }]);
+  });
+
+  it("holds every other icon choice while an upload is on its way, so it cannot overwrite a newer one", async () => {
+    let release: () => void = () => {};
+    mocks.blobGate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const user = userEvent.setup();
+    mount(BARE);
+
+    await user.upload(
+      screen.getByTestId("bot-settings-icon-file"),
+      new File(["x"], "me.jpg", { type: "image/jpeg" }),
+    );
+
+    const creature = screen.getByTestId<HTMLButtonElement>(
+      "bot-settings-icon-creature-3",
+    );
+    await waitFor(() => {
+      expect(mocks.blobWrites).toHaveLength(1);
+    });
+    expect(creature.disabled).toBe(true);
+    expect(
+      screen.getByTestId<HTMLButtonElement>("bot-settings-icon-default")
+        .disabled,
+    ).toBe(true);
+    expect(
+      screen.getByTestId<HTMLButtonElement>("bot-settings-colour-1").disabled,
+    ).toBe(false);
+    await user.click(creature);
+    expect(mocks.appearanceWrites).toEqual([]);
+
+    release();
+    const sha256 = await sha256Hex(PNG_BYTES);
+    await waitFor(() => {
+      expect(mocks.appearanceWrites).toEqual([
+        { botId: BOT_ID, mark: { kind: "picture", blobRef: sha256 } },
+      ]);
+    });
+    await waitFor(() => {
+      expect(creature.disabled).toBe(false);
+    });
   });
 
   it("names no picture when the host refuses its bytes, and says so", async () => {

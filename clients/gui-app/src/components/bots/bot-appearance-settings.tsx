@@ -208,6 +208,12 @@ function BotIconSection(props: {
   const labelId = useId();
   const sheet = useMemo(() => creatureSheet(botId), [botId]);
   const swatch = botSwatchAt(props.swatch);
+  const upload = usePictureUpload((blobRef) =>
+    onChange({ kind: "picture", blobRef }),
+  );
+  // An upload names its picture only once the host holds it, so every other
+  // icon choice waits for it: one made meanwhile would be overwritten.
+  const disabled = props.disabled || upload.busy;
   return (
     <section
       aria-labelledby={labelId}
@@ -227,7 +233,7 @@ function BotIconSection(props: {
             aria-pressed
             className={CHOICE_CLASS}
             data-testid="bot-settings-icon-picture"
-            disabled={props.disabled}
+            disabled={disabled}
           >
             <NamedBotAvatar botId={botId} size="default" />
           </button>
@@ -242,7 +248,7 @@ function BotIconSection(props: {
             }
             className={CHOICE_CLASS}
             data-testid={`bot-settings-icon-creature-${String(index)}`}
-            disabled={props.disabled}
+            disabled={disabled}
             onClick={() =>
               onChange({
                 kind: "creature",
@@ -262,15 +268,11 @@ function BotIconSection(props: {
       </div>
       <div className="flex flex-wrap items-center gap-2">
         {props.picturesSupported ? (
-          <BotPictureUpload
-            botId={botId}
-            disabled={props.disabled}
-            onUploaded={(blobRef) => onChange({ kind: "picture", blobRef })}
-          />
+          <BotPictureUpload upload={upload} disabled={disabled} />
         ) : null}
         <UseDefaultButton
           testId="bot-settings-icon-default"
-          disabled={props.disabled || mark === null}
+          disabled={disabled || mark === null}
           onClick={() => onChange(null)}
         />
       </div>
@@ -279,38 +281,62 @@ function BotIconSection(props: {
   );
 }
 
+/** A picture on its way to the tab's host, from the file to the host's answer. */
+interface PictureUpload {
+  /** True from the moment a file is chosen until the host has answered. */
+  readonly busy: boolean;
+  readonly refusal: string | null;
+  readonly choose: (file: File) => void;
+}
+
 /**
- * "Upload a picture": the person's image, cropped to a square and scaled to
- * the largest avatar, put on the tab's host before the bot's icon names it.
+ * The person's image, cropped to a square and scaled to the largest avatar,
+ * put on the tab's host; `onUploaded` names it once the host holds it.
  */
-function BotPictureUpload(props: {
-  readonly botId: string;
-  readonly disabled: boolean;
-  readonly onUploaded: (blobRef: string) => void;
-}): ReactNode {
+function usePictureUpload(
+  onUploaded: (blobRef: string) => void,
+): PictureUpload {
   const client = useTabHostClient();
   const put = useBotPicturePutMutation(client);
-  const inputRef = useRef<HTMLInputElement | null>(null);
+  const [preparing, setPreparing] = useState(false);
   const [unreadable, setUnreadable] = useState(false);
   const choose = async (file: File): Promise<void> => {
     setUnreadable(false);
-    const picture = await prepareBotPicture(file);
-    if (picture === null) {
-      setUnreadable(true);
-      return;
-    }
-    const bytesBase64 = await bytesToBase64Async(picture.bytes);
-    put.mutate(
-      { sha256: picture.sha256, bytesBase64 },
-      {
-        onSuccess: (response) => {
-          if (response.ok) props.onUploaded(picture.sha256);
-          else setUnreadable(true);
+    setPreparing(true);
+    try {
+      const picture = await prepareBotPicture(file);
+      if (picture === null) {
+        setUnreadable(true);
+        return;
+      }
+      const bytesBase64 = await bytesToBase64Async(picture.bytes);
+      put.mutate(
+        { sha256: picture.sha256, bytesBase64 },
+        {
+          onSuccess: (response) => {
+            if (response.ok) onUploaded(picture.sha256);
+            else setUnreadable(true);
+          },
         },
-      },
-    );
+      );
+    } finally {
+      setPreparing(false);
+    }
   };
-  const refusal = pictureRefusal(unreadable, put.error);
+  return {
+    busy: preparing || put.isPending,
+    refusal: pictureRefusal(unreadable, put.error),
+    choose: (file) => void choose(file),
+  };
+}
+
+/** "Upload a picture", and why the last one did not reach the host. */
+function BotPictureUpload(props: {
+  readonly upload: PictureUpload;
+  readonly disabled: boolean;
+}): ReactNode {
+  const { upload } = props;
+  const inputRef = useRef<HTMLInputElement | null>(null);
   return (
     <div className="flex flex-col gap-1">
       <div className="flex flex-wrap items-center gap-2">
@@ -319,11 +345,11 @@ function BotPictureUpload(props: {
           size="sm"
           variant="outline"
           data-testid="bot-settings-icon-upload"
-          disabled={props.disabled || put.isPending}
+          disabled={props.disabled}
           onClick={() => inputRef.current?.click()}
         >
           Upload a picture
-          {put.isPending ? (
+          {upload.busy ? (
             <AgentSpinningDots
               className="ml-1"
               testId={undefined}
@@ -344,10 +370,10 @@ function BotPictureUpload(props: {
         onChange={(event) => {
           const file = event.target.files?.[0];
           event.target.value = "";
-          if (file !== undefined) void choose(file);
+          if (file !== undefined) upload.choose(file);
         }}
       />
-      <BotSettingsRefusal message={refusal} />
+      <BotSettingsRefusal message={upload.refusal} />
     </div>
   );
 }

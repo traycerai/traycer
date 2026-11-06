@@ -370,8 +370,10 @@ export type BotUpdateResponse = z.infer<typeof botUpdateResponseSchema>;
 /**
  * The bot's look, one choice at a time: a key left out keeps its choice, and
  * `null` clears it back to the default. Changing it takes the same authority
- * as renaming the bot. A picture's blob is claimed for the bot, and given up
- * when the picture is replaced or cleared, or the bot deleted.
+ * as renaming the bot. A picture names an `image-attachment` blob of the
+ * bot's trunk chat, which must be stored before the write; the row and that
+ * blob are the claim. Replacing or clearing a picture changes the row only:
+ * nothing is released, and the bytes go when the bot's prefix is swept.
  */
 export const botUpdateAppearanceRequestSchema = lazySchema(() =>
   z.object({
