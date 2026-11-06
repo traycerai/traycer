@@ -28,6 +28,7 @@ const CREDENTIALS: Record<string, ProfileSyncCredential> = {
   },
   codex: { kind: "codex-auth-file", document: { tokens: {} } },
   grok: { kind: "grok-auth-file", document: { key: "k" } },
+  "grok-key": { kind: "grok-api-key", apiKey: "grok-key" },
   "antigravity-oauth": { kind: "antigravity-oauth", document: { token: "t" } },
   "antigravity-key": { kind: "antigravity-api-key", apiKey: "key" },
 };
@@ -36,6 +37,7 @@ const PAIRS: ReadonlyArray<readonly [ProfileSyncProvider, string]> = [
   ["claude", "claude"],
   ["codex", "codex"],
   ["grok", "grok"],
+  ["grok", "grok-key"],
   ["antigravity", "antigravity-oauth"],
   ["antigravity", "antigravity-key"],
 ];
@@ -94,6 +96,7 @@ describe("a request's sign-in must belong to its provider", () => {
   it("refuses a mismatched provider and sign-in", () => {
     const codex = credentialFor("codex");
     const claude = credentialFor("claude");
+    const grokKey = credentialFor("grok-key");
     expect(
       hostProfileSyncApplyRequestSchema.safeParse(applyRequest("claude", codex))
         .success,
@@ -111,6 +114,16 @@ describe("a request's sign-in must belong to its provider", () => {
       hostProfileSyncOfferRequestSchema.safeParse(offerRequest("grok", claude))
         .success,
     ).toBe(false);
+    expect(
+      hostProfileSyncApplyRequestSchema.safeParse(
+        applyRequest("codex", grokKey),
+      ).success,
+    ).toBe(false);
+    expect(
+      hostProfileSyncOfferRequestSchema.safeParse(
+        offerRequest("codex", grokKey),
+      ).success,
+    ).toBe(false);
   });
 });
 
@@ -125,6 +138,7 @@ describe("profileSyncCredentialFitsProvider", () => {
     ["claude", ["claude"]],
     ["codex", ["codex"]],
     ["grok", ["grok"]],
+    ["grok-key", ["grok"]],
     ["antigravity-oauth", ["antigravity"]],
     ["antigravity-key", ["antigravity"]],
   ];
