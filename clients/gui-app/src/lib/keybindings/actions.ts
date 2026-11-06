@@ -73,7 +73,6 @@ export const ACTION_IDS = [
   "app.zoom.out",
   "app.zoom.reset",
   "composer.dictation.toggle",
-  "voice.talk.toggle",
   "soundtrack.toggle",
   "composer.suggestion.accept",
   "composer.drafts",
@@ -904,7 +903,7 @@ export const ACTION_META: Readonly<Record<ActionId, ActionMeta>> = {
     id: "composer.dictation.toggle",
     label: "Voice input",
     description:
-      "Dictate into the composer. Tap to start, tap again to stop; or hold to talk and release to stop. Speech is transcribed on-device.",
+      "Dictate into the composer. Tap to toggle, or hold to talk. In a bot's channel or thread, starts or ends a call.",
     category: "app",
     kind: "chord",
     // Control+Shift+M - uses the Control key specifically (the separate ⌃ key on
@@ -916,23 +915,6 @@ export const ACTION_META: Readonly<Record<ActionId, ActionMeta>> = {
     terminalPolicy: "app",
     secondaryTerminalPolicy: undefined,
     desktopOnly: false,
-  },
-  "voice.talk.toggle": {
-    id: "voice.talk.toggle",
-    label: "Talk",
-    description:
-      "Start or stop talking with your bots. Costs credits while on.",
-    category: "app",
-    kind: "chord",
-    // Its own chord, apart from dictation's ⌃⇧M. Per-platform like the model
-    // picker's: ⌃⌥T keeps Control distinct from ⌘ on macOS, and Alt+Shift+T
-    // avoids the Windows/Linux Ctrl+Alt=AltGr conflict.
-    defaultChord: { mac: "ctrl+alt+t", other: "alt+shift+t" },
-    secondaryChord: undefined,
-    terminalPolicy: "app",
-    secondaryTerminalPolicy: undefined,
-    // The phone's Talk is its own surface (the mobile voice ticket).
-    desktopOnly: true,
   },
   "soundtrack.toggle": {
     id: "soundtrack.toggle",

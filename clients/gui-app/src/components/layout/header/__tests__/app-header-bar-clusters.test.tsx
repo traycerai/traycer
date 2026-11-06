@@ -1,6 +1,7 @@
 import "../../../../../__tests__/test-browser-apis";
 import { act, cleanup, render, screen } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { WithTestQueryClient } from "@/__tests__/with-test-query-client";
 import { AppHeader } from "@/components/layout/header/app-header";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import {
@@ -11,10 +12,6 @@ import {
   DEFAULT_LAYOUT_SNAPSHOT,
   useLayoutStore,
 } from "@/stores/layout/layout-store";
-import {
-  useVoiceSessionStore,
-  type VoiceSessionDriver,
-} from "@/stores/voice/voice-session-store";
 
 /**
  * The header's two clusters (L-156).
@@ -91,7 +88,7 @@ afterEach(() => {
   cleanup();
   vi.unstubAllGlobals();
   useLayoutStore.setState({ ...DEFAULT_LAYOUT_SNAPSHOT });
-  useVoiceSessionStore.setState(useVoiceSessionStore.getInitialState(), true);
+  vi.unstubAllEnvs();
 });
 
 function place(patch: Partial<LayoutArrangement>): void {
@@ -280,23 +277,18 @@ class FakeResizeObserver implements ResizeObserver {
   }
 }
 
-function offerVoice(): void {
-  useVoiceSessionStore.setState({
-    availability: "live",
-    driver: {
-      start: vi.fn<VoiceSessionDriver["start"]>(),
-      end: vi.fn<VoiceSessionDriver["end"]>(),
-      setMuted: vi.fn<VoiceSessionDriver["setMuted"]>(),
-    },
-  });
-}
-
 function renderHeader(): void {
   render(
     <TooltipProvider>
       <AppHeader variant="app" />
     </TooltipProvider>,
+    { wrapper: WithTestQueryClient },
   );
+}
+
+/** A build with a soundtrack to play, which is what the zone is drawn for. */
+function offerSoundtrack(): void {
+  vi.stubEnv("MODE", "development");
 }
 
 /** The box the tab strip is drawn in. */
@@ -306,24 +298,23 @@ function tabsBox(): HTMLElement {
   return box;
 }
 
-describe("the header's centre zone for Talk", () => {
-  it("draws neither the zone nor its gap with no voice drawn, and the tabs keep the free width", () => {
+describe("the header's centre zone for the soundtrack's toggle", () => {
+  it("draws neither the zone nor its gap in a build with no soundtrack, and the tabs keep the free width", () => {
     renderHeader();
 
     expect(screen.queryByTestId("app-header-centre-gap")).toBeNull();
     expect(screen.queryByTestId("app-header-centre-zone")).toBeNull();
-    expect(screen.queryByRole("button", { name: "Talk" })).toBeNull();
     expect(tabsBox().classList.contains("flex-1")).toBe(true);
   });
 
-  it("draws Talk in the zone with voice drawn, and the tabs give up the free width", () => {
-    offerVoice();
+  it("draws the toggle in the zone in a build with a soundtrack, and the tabs give up the free width", () => {
+    offerSoundtrack();
     renderHeader();
 
     const zone = screen.getByTestId("app-header-centre-zone");
-    expect(zone.contains(screen.getByRole("button", { name: "Talk" }))).toBe(
-      true,
-    );
+    expect(
+      zone.contains(screen.getByRole("button", { name: "Soundtrack" })),
+    ).toBe(true);
     expect(zone.parentElement).toBe(screen.getByTestId("app-header"));
     expect(
       screen
@@ -336,7 +327,7 @@ describe("the header's centre zone for Talk", () => {
   it("puts the zone's middle on the header's middle through the observer, and drops the gap to nothing when the tabs reach past it", () => {
     vi.stubGlobal("ResizeObserver", FakeResizeObserver);
     resizeObservers.length = 0;
-    offerVoice();
+    offerSoundtrack();
     renderHeader();
     vi.spyOn(
       screen.getByTestId("app-header"),

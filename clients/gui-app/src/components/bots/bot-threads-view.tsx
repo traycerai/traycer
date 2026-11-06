@@ -1,5 +1,5 @@
 import { useMemo, type ReactNode } from "react";
-import { ArrowLeft } from "lucide-react";
+import { ArrowLeft, Phone } from "lucide-react";
 import type { BotRecord } from "@traycer/protocol/host/bot/schemas";
 import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
 import { Button } from "@/components/ui/button";
@@ -197,7 +197,8 @@ function ThreadList(props: {
 }
 
 /**
- * One thread: its bot, the first line of its post and its replies. The post
+ * One thread: its bot, the first line of its post (with a phone for a thread
+ * a call opened) and its replies. The post
  * is read from what the bot's channel has loaded; an older one is named
  * "Thread". A thread whose post is gone from the channel cannot be opened.
  */
@@ -261,8 +262,17 @@ function ThreadRowBody(props: {
           <ReplyTime at={thread.lastReplyAt} />
         )}
       </span>
-      <span className="min-w-0 truncate text-ui-sm text-foreground">
-        {props.title}
+      <span className="flex min-w-0 items-center gap-1.5 text-ui-sm text-foreground">
+        {/* A thread a call opened (Call Tracy, P12): its rows were spoken. */}
+        {thread.kind === "call" ? (
+          <Phone
+            role="img"
+            aria-label="Call"
+            data-testid="bot-thread-row-call"
+            className="size-3.5 shrink-0 text-muted-foreground"
+          />
+        ) : null}
+        <span className="min-w-0 truncate">{props.title}</span>
       </span>
       <span className="flex items-center gap-2 text-ui-xs text-muted-foreground">
         {replies}
