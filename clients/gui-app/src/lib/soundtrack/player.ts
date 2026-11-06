@@ -525,14 +525,13 @@ export class TrackPlayer {
   /**
    * Past the track's length nothing new starts: the samples sounding play on to
    * their own ends, and the run ends with the last one heard, or at the cap,
-   * fading what still sounds. One on a layer switched off is not heard, nor one
-   * yet to start, so neither holds anything up.
+   * fading what still sounds. One on a layer switched off is not heard, so it
+   * holds nothing up.
    */
   private ringOut(capAt: number, now: number): void {
     const heard = this.voices.some(
       (active) =>
-        active.startsAt <= now &&
-        (active.layerIndex === null || this.layerLevel(active.layerIndex) > 0),
+        active.layerIndex === null || this.layerLevel(active.layerIndex) > 0,
     );
     if (heard && now < capAt) return;
     this.endRun(now, MIX_TUNING.ringOutFadeSeconds);
