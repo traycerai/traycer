@@ -4691,7 +4691,15 @@ describe("ResourceMonitorPopover · host picker", () => {
     ).not.toBeNull();
     expect(
       screen.getByRole("button", { name: "Settings host: host-b" }).textContent,
-    ).toBe("host-b Computer");
+    ).toBe("host-b");
+    fireEvent.click(
+      screen.getByRole("button", { name: "Settings host: host-b" }),
+    );
+    expect(
+      within(
+        screen.getByTestId("settings-host-switcher-option-host-b"),
+      ).getByText("Computer"),
+    ).not.toBeNull();
   });
 
   it("keeps the panel open while the picker's portalled list is used", () => {
