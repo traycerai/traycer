@@ -9,7 +9,6 @@ import {
   fireEvent,
   render,
   screen,
-  waitFor,
   within,
 } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -91,8 +90,6 @@ function planWith(
       staysOnThisComputer: [],
       alreadyInPersonal: [],
       differsMasked: [],
-      looksLikeAKey: [],
-      sameNameInPersonal: [],
       ...rows,
     },
     guideDiffers: false,
@@ -101,10 +98,13 @@ function planWith(
 
 const FIRST_PLAN = plan("hash-1", {
   moves: [row("EDITOR", "EDITOR", "variable"), row("PAGER", "PAGER", null)],
-  staysOnThisComputer: [row("SSH", "SSH sign-in", "terminal")],
-  looksLikeAKey: [
-    row("OPENAI_API_KEY", "OPENAI_API_KEY", null),
-    row("TOKEN_X", "TOKEN_X", null),
+  staysOnThisComputer: [
+    row("SSH", "SSH sign-in", "terminal"),
+    row(
+      "OPENAI_API_KEY",
+      "OPENAI_API_KEY",
+      "OPENAI_API_KEY (variable) holds a value that reads like a key, and a key's value does not move in or out of a computer, so it stays here and keeps working. To use it everywhere, add it on Secrets.",
+    ),
   ],
 });
 
@@ -216,7 +216,7 @@ const ACCEPTED: EnvironmentMoveAcceptResponse = {
 };
 
 describe("<MoveSheet />", () => {
-  it("draws the plan's rows: Moves, Stays, Already in Personal (empty), Looks like a key", async () => {
+  it("draws the plan's rows: Moves, Stays with a key-shaped value, Already in Personal (empty)", async () => {
     mount({ plans: [FIRST_PLAN], acceptAnswers: [ACCEPTED] });
     await settle();
 
@@ -227,29 +227,27 @@ describe("<MoveSheet />", () => {
     const moves = screen.getByTestId("move-sheet-moves");
     expect(moves.textContent).toContain("Moves");
     expect(screen.getByTestId("move-sheet-moves-summary").textContent).toBe(
-      "2 variables · 2 secrets",
+      "2 variables",
     );
     expect(
-      within(moves).getByRole("button", { name: "Show all 4" }),
+      within(moves).getByRole("button", { name: "Show all 2" }),
     ).toBeTruthy();
-    expect(
-      screen.getByTestId("move-sheet-staysOnThisComputer").textContent,
-    ).toContain("Stays on this computer");
+    const stays = screen.getByTestId("move-sheet-staysOnThisComputer");
+    expect(stays.textContent).toContain("Stays on this computer");
+    // The key-shaped value is a stay, with its own reason and no choice.
+    expect(stays.textContent).toContain("OPENAI_API_KEY");
+    expect(stays.textContent).toContain(
+      "a key's value does not move in or out of a computer",
+    );
     expect(
       screen.getByTestId("move-sheet-alreadyInPersonal").textContent,
     ).toContain("Nothing yet.");
     // Different from Personal is drawn only when the plan has any.
     expect(screen.queryByTestId("move-sheet-differsMasked")).toBeNull();
-    expect(screen.getAllByTestId("move-sheet-key-row")).toHaveLength(2);
+    // Nothing here is stored as a secret, so no custody sentence.
     expect(
-      screen.getAllByRole("button", { name: "Leave as a variable" }),
-    ).toHaveLength(2);
-    expect(
-      screen.getAllByRole("button", { name: "Leave on this computer only" }),
-    ).toHaveLength(2);
-    expect(screen.getByTestId("move-sheet-disclosure").textContent).toContain(
-      "Stored encrypted in Traycer's cloud.",
-    );
+      screen.getByTestId("move-sheet-disclosure").textContent,
+    ).not.toContain("Stored encrypted in Traycer's cloud.");
   });
 
   it("titles the differing section and reads its rows as label: detail", async () => {
@@ -275,14 +273,11 @@ describe("<MoveSheet />", () => {
     expect(moves.textContent).toContain("EDITOR · variable");
   });
 
-  it("draws Already in Personal, Same name in Personal, then Different from Personal, the same-name rows as label: detail", async () => {
-    const detail =
-      "Personal already has a secret with this name. MacBook's value is not uploaded and stays on MacBook; Personal's is kept for every other computer and sandbox. Secret values are never read back, so they can't be compared. To use MacBook's everywhere, Replace it on Secrets.";
+  it("draws Already in Personal above Different from Personal", async () => {
     mount({
       plans: [
         plan("hash-s", {
           alreadyInPersonal: [row("HOME", "HOME", null)],
-          sameNameInPersonal: [row("OPENAI_API_KEY", "OPENAI_API_KEY", detail)],
           differsMasked: [row("PAGER", "PAGER", "value differs")],
         }),
       ],
@@ -291,21 +286,12 @@ describe("<MoveSheet />", () => {
     await settle();
 
     const already = screen.getByTestId("move-sheet-alreadyInPersonal");
-    const sameName = screen.getByTestId("move-sheet-sameNameInPersonal");
     const differs = screen.getByTestId("move-sheet-differsMasked");
     expect(already.textContent).toContain("Already in Personal");
-    expect(sameName.textContent).toContain("Same name in Personal");
     expect(
-      already.compareDocumentPosition(sameName) &
+      already.compareDocumentPosition(differs) &
         Node.DOCUMENT_POSITION_FOLLOWING,
     ).toBeTruthy();
-    expect(
-      sameName.compareDocumentPosition(differs) &
-        Node.DOCUMENT_POSITION_FOLLOWING,
-    ).toBeTruthy();
-
-    fireEvent.click(within(sameName).getByRole("button", { name: "1 item" }));
-    expect(sameName.textContent).toContain(`OPENAI_API_KEY: ${detail}`);
   });
 
   it("says above Moves where an edited agent selection guide goes, naming the computer", async () => {
@@ -330,14 +316,6 @@ describe("<MoveSheet />", () => {
     await settle();
 
     expect(screen.queryByTestId("move-sheet-guide-differs")).toBeNull();
-  });
-
-  it("leaves out Same name in Personal while it has no rows", async () => {
-    mount({ plans: [FIRST_PLAN], acceptAnswers: [ACCEPTED] });
-    await settle();
-
-    expect(screen.queryByTestId("move-sheet-sameNameInPersonal")).toBeNull();
-    expect(screen.queryByText("Same name in Personal")).toBeNull();
   });
 
   it("holds Move to Personal while the computers running Personal are unread", async () => {
@@ -471,22 +449,6 @@ describe("<MoveSheet />", () => {
     expect(disclosure()).toBe(
       `${custody} No other computer runs Personal yet. Any computer that starts running Personal later receives these keys and secrets as values its tools and agents can read. ${accepts}`,
     );
-    cleanup();
-
-    mount({
-      plans: [
-        plan("hash-k", {
-          looksLikeAKey: [row("OPENAI_API_KEY", "OPENAI_API_KEY", null)],
-        }),
-      ],
-      acceptAnswers: [ACCEPTED],
-    });
-    await settle();
-    expect(disclosure()).toContain(custody);
-    fireEvent.click(
-      screen.getByRole("button", { name: "Leave as a variable" }),
-    );
-    expect(disclosure()).toBe(accepts);
   });
 
   it("offers How Traycer handles this under the disclosure, and not on the nothing-to-move sheet", async () => {
@@ -510,82 +472,6 @@ describe("<MoveSheet />", () => {
     });
     await settle();
     expect(screen.queryByTestId("members-data-handling-trigger")).toBeNull();
-  });
-
-  it("lists a key row in Moves by how it moves, following its choice, and drops it only when it stays", async () => {
-    const custody = "Stored encrypted in Traycer's cloud.";
-    mount({
-      plans: [
-        plan("hash-m", {
-          moves: [row("EDITOR", "EDITOR", null)],
-          looksLikeAKey: [row("ENV_E2E_API_TOKEN", "ENV_E2E_API_TOKEN", null)],
-        }),
-      ],
-      acceptAnswers: [ACCEPTED],
-    });
-    await settle();
-
-    const moves = () => screen.getByTestId("move-sheet-moves");
-    const openMoves = (count: string) =>
-      fireEvent.click(within(moves()).getByRole("button", { name: count }));
-    const disclosure = () =>
-      screen.getByTestId("move-sheet-disclosure").textContent;
-
-    expect(screen.getByTestId("move-sheet-moves-summary").textContent).toBe(
-      "1 variable · 1 secret",
-    );
-    openMoves("Show all 2");
-    expect(moves().textContent).toContain("ENV_E2E_API_TOKEN, as a secret");
-    expect(moves().textContent).toContain("EDITOR");
-    expect(disclosure()).toContain(custody);
-
-    fireEvent.click(
-      screen.getByRole("button", { name: "Leave as a variable" }),
-    );
-    expect(screen.getByTestId("move-sheet-moves-summary").textContent).toBe(
-      "2 variables",
-    );
-    expect(moves().textContent).toContain("ENV_E2E_API_TOKEN, as a variable");
-    expect(moves().textContent).not.toContain("as a secret");
-    expect(disclosure()).not.toContain(custody);
-
-    fireEvent.click(
-      screen.getByRole("button", { name: "Leave on this computer only" }),
-    );
-    expect(screen.getByTestId("move-sheet-moves-summary").textContent).toBe(
-      "1 variable",
-    );
-    expect(moves().textContent).not.toContain("ENV_E2E_API_TOKEN");
-    expect(screen.getByTestId("move-sheet-key-row")).toBeTruthy();
-    expect(disclosure()).not.toContain(custody);
-  });
-
-  it("keeps Moves for a lone key row left as a variable, and drops it when the row stays", async () => {
-    mount({
-      plans: [
-        plan("hash-k2", {
-          looksLikeAKey: [row("ENV_E2E_API_TOKEN", "ENV_E2E_API_TOKEN", null)],
-        }),
-      ],
-      acceptAnswers: [ACCEPTED],
-    });
-    await settle();
-
-    fireEvent.click(
-      screen.getByRole("button", { name: "Leave as a variable" }),
-    );
-    const moves = screen.getByTestId("move-sheet-moves");
-    expect(screen.getByTestId("move-sheet-moves-summary").textContent).toBe(
-      "1 variable",
-    );
-    fireEvent.click(within(moves).getByRole("button", { name: "Show all 1" }));
-    expect(moves.textContent).toContain("ENV_E2E_API_TOKEN, as a variable");
-
-    fireEvent.click(
-      screen.getByRole("button", { name: "Leave on this computer only" }),
-    );
-    expect(screen.queryByTestId("move-sheet-moves")).toBeNull();
-    expect(screen.getByTestId("move-sheet-key-row")).toBeTruthy();
   });
 
   it("has no Moves section when only stays rows are planned", async () => {
@@ -653,151 +539,60 @@ describe("<MoveSheet />", () => {
 
     fireEvent.click(
       within(screen.getByTestId("move-sheet-moves")).getByRole("button", {
-        name: "Show all 4",
+        name: "Show all 2",
       }),
     );
     expect(screen.getByTestId("move-sheet-moves").textContent).toContain(
-      "OPENAI_API_KEY, as a secret",
+      "EDITOR",
     );
     expect(screen.getByTestId("move-sheet-moves").textContent).toContain(
-      "EDITOR",
+      "PAGER",
     );
     expect(screen.getByTestId("move-sheet-moves").textContent).toContain(
       "variable",
     );
   });
 
-  it("sends the plan hash with a secret choice per key row, changed by the row's buttons", async () => {
+  it("sends the plan hash alone when no row's choice was changed", async () => {
     const { accepts } = mount({
       plans: [FIRST_PLAN],
       acceptAnswers: [ACCEPTED],
     });
     await settle();
 
-    const [firstKey, secondKey] = screen.getAllByTestId("move-sheet-key-row");
-    fireEvent.click(
-      firstKey.querySelector<HTMLButtonElement>("button:nth-of-type(1)") ??
-        firstKey,
-    );
-    fireEvent.click(
-      secondKey.querySelector<HTMLButtonElement>("button:nth-of-type(2)") ??
-        secondKey,
-    );
     fireEvent.click(screen.getByTestId("move-sheet-accept"));
     await settle();
 
-    expect(accepts).toEqual([
-      {
-        planHash: "hash-1",
-        keyChoices: [
-          { key: "OPENAI_API_KEY", choice: "variable" },
-          { key: "TOKEN_X", choice: "stays" },
-        ],
-      },
-    ]);
+    expect(accepts).toEqual([{ planHash: "hash-1", keyChoices: [] }]);
     // An accepted move closes the sheet.
     expect(useMoveSheetStore.getState().target).toBeNull();
   });
 
-  it("sends secret for every key row the person left alone", async () => {
-    const { accepts } = mount({
-      plans: [FIRST_PLAN],
-      acceptAnswers: [ACCEPTED],
-    });
-    await settle();
-
-    fireEvent.click(screen.getByTestId("move-sheet-accept"));
-    await settle();
-
-    expect(accepts[0]?.keyChoices).toEqual([
-      { key: "OPENAI_API_KEY", choice: "secret" },
-      { key: "TOKEN_X", choice: "secret" },
-    ]);
-  });
-
-  it("keeps an invalid held key local by default and when its variable choice is toggled back", async () => {
-    const heldKeyPlan = plan("hash-held-key", {
-      looksLikeAKey: [row("api_key", "api_key", null)],
-    });
-    const variableChoice = mount({
-      plans: [heldKeyPlan],
-      acceptAnswers: [ACCEPTED],
-    });
-    const initialRow = await screen.findByTestId("move-sheet-key-row");
-    expect(screen.queryByTestId("move-sheet-moves")).toBeNull();
-    expect(initialRow.textContent).not.toContain("would become a secret");
-    expect(
-      within(initialRow)
-        .getByRole("button", {
-          name: "Leave on this computer only",
-        })
-        .getAttribute("aria-pressed"),
-    ).toBe("true");
-
-    fireEvent.click(
-      within(initialRow).getByRole("button", { name: "Leave as a variable" }),
-    );
-    expect(
-      within(initialRow)
-        .getByRole("button", {
-          name: "Leave as a variable",
-        })
-        .getAttribute("aria-pressed"),
-    ).toBe("true");
-    fireEvent.click(screen.getByTestId("move-sheet-accept"));
-    await waitFor(() => {
-      expect(variableChoice.accepts[0]?.keyChoices).toEqual([
-        { key: "api_key", choice: "variable" },
-      ]);
-      expect(useMoveSheetStore.getState().target).toBeNull();
-    });
-
-    cleanup();
-    useMoveSheetStore.setState({ target: null });
-
-    const toggledBack = mount({
-      plans: [heldKeyPlan],
-      acceptAnswers: [ACCEPTED],
-    });
-    const toggledRow = await screen.findByTestId("move-sheet-key-row");
-    const variableButton = within(toggledRow).getByRole("button", {
-      name: "Leave as a variable",
-    });
-    fireEvent.click(variableButton);
-    expect(variableButton.getAttribute("aria-pressed")).toBe("true");
-    fireEvent.click(variableButton);
-
-    expect(variableButton.getAttribute("aria-pressed")).toBe("false");
-    expect(
-      within(toggledRow)
-        .getByRole("button", {
-          name: "Leave on this computer only",
-        })
-        .getAttribute("aria-pressed"),
-    ).toBe("true");
-    expect(screen.queryByTestId("move-sheet-moves")).toBeNull();
-
-    fireEvent.click(screen.getByTestId("move-sheet-accept"));
-    await waitFor(() => {
-      expect(toggledBack.accepts[0]?.keyChoices).toEqual([
-        { key: "api_key", choice: "stays" },
-      ]);
-      expect(useMoveSheetStore.getState().target).toBeNull();
-    });
-  });
-
   it("re-reads the plan on plan_changed, says so, and sends the new hash next", async () => {
-    const changed = plan("hash-2", {
-      moves: [row("EDITOR", "EDITOR", null)],
-      looksLikeAKey: [row("OPENAI_API_KEY", "OPENAI_API_KEY", null)],
-    });
+    const changed = planWith(
+      "hash-2",
+      { moves: [row("EDITOR", "EDITOR", null)] },
+      { personalHoldsSecrets: false, itemChoices: true },
+    );
     const { accepts } = mount({
-      plans: [FIRST_PLAN, changed],
+      plans: [
+        planWith(
+          "hash-1",
+          { moves: [row("EDITOR", "EDITOR", null)] },
+          { personalHoldsSecrets: false, itemChoices: true },
+        ),
+        changed,
+      ],
       acceptAnswers: [{ outcome: "plan_changed" }, ACCEPTED],
     });
     await settle();
     fireEvent.click(
-      screen.getAllByRole("button", { name: "Leave as a variable" })[0],
+      within(screen.getByTestId("move-sheet-moves")).getByRole("button", {
+        name: "Show all 1",
+      }),
+    );
+    fireEvent.click(
+      screen.getByRole("button", { name: "Leave on this computer only" }),
     );
 
     fireEvent.click(screen.getByTestId("move-sheet-accept"));
@@ -806,7 +601,6 @@ describe("<MoveSheet />", () => {
     expect(screen.getByTestId("move-sheet-plan-changed").textContent).toBe(
       "This list changed. Read it again.",
     );
-    expect(screen.getAllByTestId("move-sheet-key-row")).toHaveLength(1);
     expect(useMoveSheetStore.getState().target).not.toBeNull();
 
     fireEvent.click(screen.getByTestId("move-sheet-accept"));
@@ -816,10 +610,8 @@ describe("<MoveSheet />", () => {
       "hash-1",
       "hash-2",
     ]);
-    // The first answer was for a list that no longer exists.
-    expect(accepts[1]?.keyChoices).toEqual([
-      { key: "OPENAI_API_KEY", choice: "secret" },
-    ]);
+    // The re-read dropped the choice made against the list that is gone.
+    expect(accepts[1]?.keyChoices).toEqual([]);
   });
 
   it("closes on Not now and sends nothing", async () => {
@@ -852,15 +644,15 @@ describe("<MoveSheet />", () => {
     );
     expect(useMoveSheetStore.getState().target).not.toBeNull();
   });
-  it("lists a Looks-like-a-key override as <NAME> (<Provider>), as a secret, then as a variable", async () => {
+  it("lists a provider override as <NAME> (<Provider>)", async () => {
     mount({
       plans: [
         plan("hash-o", {
-          looksLikeAKey: [
+          moves: [
             rowOfKind(
-              "claude-code:ANTHROPIC_AUTH_TOKEN",
+              "claude-code:ANTHROPIC_BASE_URL",
               "env_override",
-              "ANTHROPIC_AUTH_TOKEN",
+              "ANTHROPIC_BASE_URL",
             ),
           ],
         }),
@@ -871,45 +663,12 @@ describe("<MoveSheet />", () => {
 
     const moves = screen.getByTestId("move-sheet-moves");
     fireEvent.click(within(moves).getByRole("button", { name: "Show all 1" }));
-    const text = () =>
-      within(moves).getByTestId("move-sheet-moves-row").textContent;
-    expect(text()).toBe("ANTHROPIC_AUTH_TOKEN (Claude Code), as a secret");
-
-    fireEvent.click(
-      screen.getByRole("button", { name: "Leave as a variable" }),
+    expect(within(moves).getByTestId("move-sheet-moves-row").textContent).toBe(
+      "ANTHROPIC_BASE_URL (Claude Code)",
     );
-    expect(text()).toBe("ANTHROPIC_AUTH_TOKEN (Claude Code), as a variable");
     expect(screen.getByTestId("move-sheet-moves-summary").textContent).toBe(
       "1 Claude Code env setting",
     );
-  });
-
-  it("moves a key row left on this computer only from Moves to Stays", async () => {
-    mount({
-      plans: [
-        plan("hash-ks", {
-          moves: [row("EDITOR", "EDITOR", null)],
-          looksLikeAKey: [row("TOKEN_X", "TOKEN_X", null)],
-        }),
-      ],
-      acceptAnswers: [ACCEPTED],
-    });
-    await settle();
-    expect(
-      within(screen.getByTestId("move-sheet-moves")).getByRole("button", {
-        name: "Show all 2",
-      }),
-    ).toBeTruthy();
-
-    fireEvent.click(
-      screen.getByRole("button", { name: "Leave on this computer only" }),
-    );
-
-    const moves = screen.getByTestId("move-sheet-moves");
-    fireEvent.click(within(moves).getByRole("button", { name: "Show all 1" }));
-    expect(moves.textContent).not.toContain("TOKEN_X");
-    const stays = screen.getByTestId("move-sheet-staysOnThisComputer");
-    expect(stays.textContent).toContain("TOKEN_X");
   });
 
   it("names the other computers in the recipient boundary when a secret moves", async () => {
@@ -973,7 +732,6 @@ describe("<MoveSheet />", () => {
             rowOfKind("OPENAI_API_KEY", "secret", "OPENAI_API_KEY"),
             rowOfKind("fallback", "fallback_policy", "fallback"),
           ],
-          looksLikeAKey: [row("TOKEN_X", "TOKEN_X", null)],
         },
         { personalHoldsSecrets: false, itemChoices },
       );
@@ -990,86 +748,19 @@ describe("<MoveSheet />", () => {
     function openMoves(): void {
       fireEvent.click(
         within(screen.getByTestId("move-sheet-moves")).getByRole("button", {
-          name: "Show all 4",
+          name: "Show all 3",
         }),
       );
     }
 
-    it("offers a variable both choices, a provider key only Leave, and a fallback policy neither", async () => {
+    it("offers Leave on a variable and a secret, and nothing on a fallback policy", async () => {
       mount({ plans: [itemPlan(true)], acceptAnswers: [ACCEPTED] });
       await settle();
       openMoves();
 
-      expect(rowButtons(0)).toEqual([
-        "Mark as a secret",
-        "Leave on this computer only",
-      ]);
+      expect(rowButtons(0)).toEqual(["Leave on this computer only"]);
       expect(rowButtons(1)).toEqual(["Leave on this computer only"]);
       expect(rowButtons(2)).toEqual([]);
-    });
-
-    it("offers secret storage only for names the secret intake accepts", async () => {
-      const overlongName = `A${"B".repeat(128)}`;
-      const { accepts } = mount({
-        plans: [
-          planWith(
-            "hash-secret-names",
-            {
-              moves: [
-                row("region", "region", null),
-                row("_PRIVATE", "_PRIVATE", null),
-                row(overlongName, overlongName, null),
-                rowOfKind(
-                  "claude-code:region",
-                  "env_override",
-                  "Claude Code override",
-                ),
-                row("GITHUB_TOKEN", "GITHUB_TOKEN", null),
-              ],
-            },
-            { personalHoldsSecrets: false, itemChoices: true },
-          ),
-        ],
-        acceptAnswers: [ACCEPTED],
-      });
-      const showAll = await screen.findByRole("button", {
-        name: "Show all 5",
-      });
-      fireEvent.click(showAll);
-
-      const rows = await within(
-        screen.getByTestId("move-sheet-moves"),
-      ).findAllByTestId("move-sheet-moves-row");
-      expect(rows).toHaveLength(5);
-      for (const index of [0, 1, 2, 3]) {
-        expect(
-          within(rows[index]).queryByRole("button", {
-            name: "Mark as a secret",
-          }),
-        ).toBeNull();
-        expect(
-          within(rows[index]).getByRole("button", {
-            name: "Leave on this computer only",
-          }),
-        ).toBeTruthy();
-      }
-      expect(
-        within(rows[4]).getByRole("button", {
-          name: "Mark as a secret",
-        }),
-      ).toBeTruthy();
-
-      fireEvent.click(
-        within(rows[4]).getByRole("button", {
-          name: "Leave on this computer only",
-        }),
-      );
-      fireEvent.click(screen.getByTestId("move-sheet-accept"));
-      await waitFor(() =>
-        expect(accepts[0]?.keyChoices).toEqual([
-          { key: "item:variable:GITHUB_TOKEN", choice: "stays" },
-        ]),
-      );
     });
 
     it("offers no choice on a host that does not honour them, and sends no item entry", async () => {
@@ -1084,35 +775,7 @@ describe("<MoveSheet />", () => {
       expect(rowButtons(1)).toEqual([]);
       fireEvent.click(screen.getByTestId("move-sheet-accept"));
       await settle();
-      expect(accepts[0]?.keyChoices).toEqual([
-        { key: "TOKEN_X", choice: "secret" },
-      ]);
-    });
-
-    it("lists a row marked as a secret by that name, counts it, and sends it under item:<kind>:<key> beside the key rows", async () => {
-      const { accepts } = mount({
-        plans: [itemPlan(true)],
-        acceptAnswers: [ACCEPTED],
-      });
-      await settle();
-      openMoves();
-
-      fireEvent.click(screen.getByRole("button", { name: "Mark as a secret" }));
-      expect(
-        within(screen.getByTestId("move-sheet-moves")).getAllByTestId(
-          "move-sheet-moves-row",
-        )[0].textContent,
-      ).toContain("EDITOR, as a secret");
-      expect(screen.getByTestId("move-sheet-moves-summary").textContent).toBe(
-        "2 secrets · 1 API key · Model routing",
-      );
-      fireEvent.click(screen.getByTestId("move-sheet-accept"));
-      await settle();
-
-      expect(accepts[0]?.keyChoices).toEqual([
-        { key: "TOKEN_X", choice: "secret" },
-        { key: "item:variable:EDITOR", choice: "secret" },
-      ]);
+      expect(accepts[0]?.keyChoices).toEqual([]);
     });
 
     it("moves a row left on this computer only under Stays, where its pressed button takes it back", async () => {
@@ -1144,7 +807,6 @@ describe("<MoveSheet />", () => {
       fireEvent.click(screen.getByTestId("move-sheet-accept"));
       await settle();
       expect(accepts[0]?.keyChoices).toEqual([
-        { key: "TOKEN_X", choice: "secret" },
         { key: "item:variable:EDITOR", choice: "stays" },
       ]);
     });
@@ -1173,15 +835,13 @@ describe("<MoveSheet />", () => {
       expect(screen.queryByTestId("move-sheet-left-here-row")).toBeNull();
       expect(
         within(screen.getByTestId("move-sheet-moves")).getByRole("button", {
-          name: "Show all 4",
+          name: "Show all 3",
         }),
       ).toBeTruthy();
       fireEvent.click(screen.getByTestId("move-sheet-accept"));
       await settle();
 
-      expect(accepts[0]?.keyChoices).toEqual([
-        { key: "TOKEN_X", choice: "secret" },
-      ]);
+      expect(accepts[0]?.keyChoices).toEqual([]);
     });
   });
 });

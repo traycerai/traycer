@@ -724,11 +724,7 @@ function SandboxGrantRow(props: {
     >
       <p>
         <span className="font-medium">{view.secretName}</span>
-        <span
-          className={cn(
-            view.exposed ? "text-warning-foreground" : "text-muted-foreground",
-          )}
-        >
+        <span className="text-muted-foreground">
           {" · "}
           {view.modeLine}
         </span>

@@ -176,11 +176,9 @@ const sshBinding = {
 
 const createOptions = {
   name: "PROD_DB",
-  mode: "brokered",
   portOverride: false,
   swapSites: ["header"],
   variables: [{ name: "DATABASE_URL", dialect: "postgres_url" }],
-  exportPolicy: null,
   sandboxesByDefault: false,
   plaintextConsent: null,
 };
@@ -1675,7 +1673,6 @@ describe("secret versions, Undo, Destroy, rotation and consent shapes, field for
       }),
     ).toBe(false);
     expect(accepts(schema, { ...database, variables: [] })).toBe(true);
-    expect(accepts(schema, { ...database, exportPolicy: "none" })).toBe(true);
     expect(accepts(schema, { ...database, portOverride: "yes" })).toBe(false);
     expect(
       accepts(schema, { ...database, sandboxesByDefault: undefined }),
@@ -1910,18 +1907,6 @@ describe("environment.review.heldApply and environment.review.record", () => {
     hostRpcRegistry["environment.review.heldApply"][1].versions[0].contract;
   const record =
     hostRpcRegistry["environment.review.record"][1].versions[0].contract;
-  const secretArm = {
-    heldId: "held-1",
-    choice: "secret",
-    kind: "api_key",
-    protocol: "https",
-    hosts: ["api.example.com"],
-    port: null,
-    portOverride: false,
-    swapSites: ["header"],
-    plaintextConsent: { disclosureVersion: 1 },
-  };
-
   it("registers both off the released floor with unsupported degrade, major 1", () => {
     for (const method of [
       "environment.review.heldApply",
@@ -1935,41 +1920,28 @@ describe("environment.review.heldApply and environment.review.record", () => {
     }
   });
 
-  it("takes the secret arm's binding when the choice is secret, and refuses the choice without it", () => {
-    expect(heldApply.requestSchema.parse(secretArm)).toEqual(secretArm);
-    expect(
-      accepts(heldApply.requestSchema, { heldId: "held-1", choice: "secret" }),
-    ).toBe(false);
-    for (const bad of [
-      { ...secretArm, hosts: [] },
-      { ...secretArm, swapSites: [] },
-      { ...secretArm, swapSites: ["cookie"] },
-      { ...secretArm, port: 0 },
-      { ...secretArm, protocol: "gopher" },
-      { ...secretArm, kind: "pgp" },
-    ]) {
-      expect(accepts(heldApply.requestSchema, bad)).toBe(false);
-    }
-  });
-
-  it("takes only the held id for the plain choices, dropping a binding sent with them", () => {
-    for (const choice of ["variable", "stays", "discard", "approve"] as const) {
+  it("takes the held id and one of its two choices, dropping anything sent beside them", () => {
+    for (const choice of ["discard", "approve"] as const) {
       expect(
         heldApply.requestSchema.parse({ heldId: "held-1", choice }),
       ).toEqual({ heldId: "held-1", choice });
     }
     expect(
       heldApply.requestSchema.parse({
-        ...secretArm,
-        choice: "variable",
+        heldId: "held-1",
+        choice: "approve",
+        kind: "api_key",
+        hosts: ["api.example.com"],
       }),
-    ).toEqual({ heldId: "held-1", choice: "variable" });
+    ).toEqual({ heldId: "held-1", choice: "approve" });
     expect(
-      accepts(heldApply.requestSchema, { heldId: "", choice: "variable" }),
+      accepts(heldApply.requestSchema, { heldId: "", choice: "discard" }),
     ).toBe(false);
-    expect(
-      accepts(heldApply.requestSchema, { heldId: "held-1", choice: "keep" }),
-    ).toBe(false);
+    for (const choice of ["secret", "variable", "stays", "keep"]) {
+      expect(
+        accepts(heldApply.requestSchema, { heldId: "held-1", choice }),
+      ).toBe(false);
+    }
   });
 
   it("answers applied, gone or forbidden, and nothing carrying the held value", () => {

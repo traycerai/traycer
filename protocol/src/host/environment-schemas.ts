@@ -6,11 +6,6 @@ import {
 import { lazySchema } from "@traycer/protocol/framework/lazy-schema";
 import { executableWriteGrantSchema } from "@traycer/protocol/host/executable-write-grant";
 import { providerIdSchema } from "@traycer/protocol/host/provider-ids";
-import {
-  SANDBOX_ROUTE_PROTOCOLS,
-  SANDBOX_SECRET_FORM_KINDS,
-  SANDBOX_SECRET_SWAP_SITES,
-} from "@traycer/protocol/host/secret-intake-catalogue";
 
 /**
  * Wire shapes of the environment methods: the desktop Settings pages a person's
@@ -350,13 +345,11 @@ export type EnvironmentReviewRequest = z.infer<
 >;
 
 /**
- * One "needs you" row: a held credential-like value ("Make it a secret" or
- * "Keep as a variable"), a held executable entry, or a sink-reaching write made
+ * One "needs you" row: a held executable entry, or a sink-reaching write made
  * without a grant. Apply goes through the dashboard's Review page; this method
  * only lists.
  */
 export const ENVIRONMENT_REVIEW_REASONS = [
-  "credential_like_value",
   "executable_entry",
   "needs_grant",
 ] as const;
@@ -446,35 +439,15 @@ export type EnvironmentReviewResponseV12 = z.infer<
 
 /**
  * `environment.review.heldApply@1.0`: the retrospective sheet's choice for one
- * held entry (`EnvironmentReviewEntry.entryId`). `secret`, `variable` and
- * `stays` answer a held credential-like value; `approve` a held hook;
- * `discard` either. `gone` is an entry already applied or discarded.
- *
- * `secret` promotes the held value, already sealed in the broker, to a secret
- * with the binding the add dialog collects: its kind, protocol, hosts and
- * port, the swap sites, and the plaintext-at-the-gateway consent's disclosure
- * version where the protocol needs it. The value never travels again.
+ * held entry (`EnvironmentReviewEntry.entryId`). `approve` applies the held
+ * hook, `discard` leaves it unapplied. `gone` is an entry already applied or
+ * discarded.
  */
 export const environmentReviewHeldApplyRequestSchema = lazySchema(() =>
-  z.discriminatedUnion("choice", [
-    z.object({
-      heldId: z.string().min(1),
-      choice: z.literal("secret"),
-      kind: z.enum(SANDBOX_SECRET_FORM_KINDS),
-      protocol: z.enum(SANDBOX_ROUTE_PROTOCOLS),
-      hosts: z.array(z.string().min(1).max(253)).min(1).max(16),
-      port: z.number().int().min(1).max(65_535).nullable(),
-      portOverride: z.boolean(),
-      swapSites: z.array(z.enum(SANDBOX_SECRET_SWAP_SITES)).min(1).max(3),
-      plaintextConsent: z
-        .object({ disclosureVersion: z.number().int().nonnegative() })
-        .nullable(),
-    }),
-    z.object({
-      heldId: z.string().min(1),
-      choice: z.enum(["variable", "stays", "discard", "approve"]),
-    }),
-  ]),
+  z.object({
+    heldId: z.string().min(1),
+    choice: z.enum(["discard", "approve"]),
+  }),
 );
 export type EnvironmentReviewHeldApplyRequest = z.infer<
   typeof environmentReviewHeldApplyRequestSchema
@@ -857,10 +830,6 @@ export const environmentSecretSchema = lazySchema(() =>
     kind: z.string().min(1).max(32),
     protocol: z.string().min(1).max(32).nullable(),
     destinations: z.array(z.string().min(1)),
-    /** Known: brokered, exposed. */
-    mode: z.string().min(1).max(32),
-    /** Known: live, pending_review. */
-    state: z.string().min(1).max(32),
     currentVersionId: z.string().min(1).nullable(),
     revoked: z.boolean(),
     updatedAt: z.number(),
@@ -922,7 +891,6 @@ export const environmentSecretsCreateRequestSchema = lazySchema(() =>
   z.object({
     name: z.string().min(1),
     ...secretBindingCandidateFields,
-    mode: z.string().min(1).max(32),
     /** The person kept a port that is another protocol's default, on purpose. */
     portOverride: z.boolean(),
     /** HTTP kinds only; others send `["header"]`. Known: header, query, body. */
@@ -936,8 +904,6 @@ export const environmentSecretsCreateRequestSchema = lazySchema(() =>
         }),
       )
       .max(16),
-    /** Known: none, presigned_url, short_lived_credentials. */
-    exportPolicy: z.string().min(1).max(32).nullable(),
     /** "Sandboxes get it": granted to every live and future sandbox. */
     sandboxesByDefault: z.boolean(),
     plaintextConsent: z
@@ -958,7 +924,7 @@ export const environmentSecretsCreateResponseSchema = lazySchema(() =>
     z.object({ outcome: z.literal("pending"), uploadId: z.string().min(1) }),
     z.object({
       outcome: z.literal("refused"),
-      /** Known: team_secrets_are_brokered, protocol_not_brokered. */
+      /** Known: protocol_not_brokered. */
       code: z.string().min(1).max(64),
     }),
   ]),
@@ -1435,18 +1401,13 @@ export type EnvironmentSecretsListResponseV11 = z.infer<
 >;
 
 /**
- * `list@1.2`'s row: `@1.1`'s plus the names a computer running the
- * configuration sets the secret's value under. `variables` are the
- * configuration's variable names (Variables & shells); `providerVariables`
- * are names in one provider's env (a provider's Env tab), by provider id.
- * The desktop shows such a name as the secret's, never as a plain value.
+ * `list@1.2`'s row: `@1.1`'s plus the configuration's variable names the
+ * secret's value is set under (Variables & shells). The desktop shows such a
+ * name as the secret's, never as a plain value.
  */
 export const environmentSecretSchemaV12 = lazySchema(() =>
   environmentSecretSchema.extend({
     variables: z.array(z.string().min(1)),
-    providerVariables: z.array(
-      z.object({ providerId: z.string().min(1), name: z.string().min(1) }),
-    ),
   }),
 );
 export type EnvironmentSecretV12 = z.infer<typeof environmentSecretSchemaV12>;

@@ -78,13 +78,10 @@ const SECRET: EnvironmentSecretV12 = {
   kind: "api_key",
   protocol: "https",
   destinations: ["api.stripe.com"],
-  mode: "brokered",
-  state: "live",
   currentVersionId: "ver-2",
   revoked: false,
   updatedAt: 1,
   variables: [],
-  providerVariables: [],
 };
 
 // Settled (enforced, every producer proven), so the bridge stops re-reading it.

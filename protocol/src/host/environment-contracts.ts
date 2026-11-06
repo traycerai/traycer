@@ -70,7 +70,6 @@ export const environmentSecretsListUpgradeV11ToV12 = defineUpgradePath<
     secrets: response.secrets.map((secret) => ({
       ...secret,
       variables: [],
-      providerVariables: [],
     })),
     removed: response.removed.map((removed) => ({
       ...removed,

@@ -10,7 +10,6 @@ import { useProvidersSetEnvOverride } from "@/hooks/providers/use-providers-set-
 import { useProvidersDeleteEnvOverride } from "@/hooks/providers/use-providers-delete-env-override-mutation";
 import { CredentialRefusalNote } from "@/components/providers/credential-refusal-note";
 import { useHostCredentialRefusal } from "@/hooks/host/use-host-credential-refusal";
-import { useHeldValueReviews } from "@/components/settings/personal/use-held-value-reviews";
 import { useKeyShapedSecret } from "@/components/settings/personal/use-key-shaped-secret";
 import {
   usePersonalPageHost,
@@ -63,6 +62,14 @@ function providerKeyRefusal(
         };
 }
 
+/**
+ * No name in a provider's env is a secret's own: a secret reaches a provider
+ * only through the variables of Variables & shells, which every provider's
+ * env inherits, so this tab has no claim row of its own and an override of
+ * such a name gets the shadow note instead.
+ */
+const NO_PROVIDER_CLAIMS: ReadonlyMap<string, string> = new Map();
+
 export function ProviderEnvOverridesSection({
   providerId,
   overrides,
@@ -106,10 +113,6 @@ export function ProviderEnvOverridesSection({
   const credentialRefusal = useHostCredentialRefusal(null);
   // The same rule as Variables: a key-shaped value is refused for Secrets.
   const keyShaped = useKeyShapedSecret();
-  const onHold = useHeldValueReviews(
-    "env_override",
-    `${providerIdToGuiHarnessId(providerId)}:`,
-  );
   // Use everywhere: this host's own value becomes Personal's, then the host
   // stops keeping one; cleared only after the save landed.
   const pageHost = usePersonalPageHost();
@@ -164,13 +167,12 @@ export function ProviderEnvOverridesSection({
     providerId,
     keyPrefix: `${providerIdToGuiHarnessId(providerId)}:`,
   });
-  const claimedBy = useSecretClaimedNames({ kind: "provider", providerId });
   // Every name a Personal secret is set under in Variables & shells, which
-  // every provider's env inherits regardless of its own bindings: a plain
-  // override of the same name - one this provider's OWN binding (claimedBy)
-  // does not claim - shadows that secret rather than reading from it, and
-  // the row says so.
-  const globalClaims = useSecretClaimedNames({ kind: "variable" });
+  // every provider's env inherits: a plain override of the same name shadows
+  // that secret rather than reading from it, and the row says so. Nothing
+  // binds a secret to a name in one provider's env, so no binding of this
+  // provider's own can claim the name first.
+  const globalClaims = useSecretClaimedNames();
   // The hosts this save propagates to, for the pending row's own label; a
   // Local row's save reaches only this computer, so it keeps the plain
   // Adding/Saving/Removing text instead. Only once the list has actually
@@ -203,13 +205,7 @@ export function ProviderEnvOverridesSection({
       />,
     );
   }
-  addShadowedSecretNotes({
-    rowNotes,
-    overrides,
-    claimedBy,
-    globalClaims,
-    providerName,
-  });
+  addShadowedSecretNotes({ rowNotes, overrides, globalClaims, providerName });
 
   // A rename is set-new → delete-old so a failed delete leaves a harmless
   // duplicate rather than a lost value.
@@ -251,8 +247,7 @@ export function ProviderEnvOverridesSection({
       <EnvOverrideEditor
         key={JSON.stringify([viewerId, configurationKey, providerId])}
         rowNotes={rowNotes}
-        onHold={onHold}
-        claimedBy={claimedBy}
+        claimedBy={NO_PROVIDER_CLAIMS}
         keyRefusal={providerKeyRefusal(
           keyShaped.refusal,
           envNamePlaceholder(providerId),
@@ -318,15 +313,13 @@ function addShadowedSecretNotes(props: {
     readonly key: string;
     readonly value: string | null;
   }[];
-  readonly claimedBy: ReadonlyMap<string, string>;
   readonly globalClaims: ReadonlyMap<string, string>;
   readonly providerName: string;
 }): void {
-  const { rowNotes, claimedBy, globalClaims, providerName } = props;
+  const { rowNotes, globalClaims, providerName } = props;
   for (const entry of props.overrides) {
     if (entry.value === null) continue;
     if (rowNotes.has(entry.key)) continue;
-    if (claimedBy.has(entry.key)) continue;
     const secretName = globalClaims.get(entry.key);
     if (secretName === undefined) continue;
     rowNotes.set(
