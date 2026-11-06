@@ -1,5 +1,5 @@
 import "../../../../../__tests__/test-browser-apis";
-import { act, cleanup, render, screen } from "@testing-library/react";
+import { cleanup, render, screen } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { WithTestQueryClient } from "@/__tests__/with-test-query-client";
 import { AppHeader } from "@/components/layout/header/app-header";
@@ -258,113 +258,18 @@ describe("the header's bar clusters (L-156)", () => {
   });
 });
 
-/** The `ResizeObserver`s the header made, so a test can report a resize through the real callback. */
-const resizeObservers: FakeResizeObserver[] = [];
+describe("the header in a build that offers the soundtrack", () => {
+  it("draws no soundtrack or music control", () => {
+    vi.stubEnv("MODE", "development");
+    render(
+      <TooltipProvider>
+        <AppHeader variant="app" />
+      </TooltipProvider>,
+      { wrapper: WithTestQueryClient },
+    );
 
-class FakeResizeObserver implements ResizeObserver {
-  constructor(private readonly callback: ResizeObserverCallback) {
-    resizeObservers.push(this);
-  }
-
-  observe(): void {}
-
-  unobserve(): void {}
-
-  disconnect(): void {}
-
-  report(): void {
-    this.callback([], this);
-  }
-}
-
-function renderHeader(): void {
-  render(
-    <TooltipProvider>
-      <AppHeader variant="app" />
-    </TooltipProvider>,
-    { wrapper: WithTestQueryClient },
-  );
-}
-
-/** A build with a soundtrack to play, which is what the zone is drawn for. */
-function offerSoundtrack(): void {
-  vi.stubEnv("MODE", "development");
-}
-
-/** The box the tab strip is drawn in. */
-function tabsBox(): HTMLElement {
-  const box = screen.getByRole("tablist", { name: "Open tabs" }).parentElement;
-  if (box === null) throw new Error("the tab strip has no box");
-  return box;
-}
-
-describe("the header's centre zone for the soundtrack's toggle", () => {
-  it("draws neither the zone nor its gap in a build with no soundtrack, and the tabs keep the free width", () => {
-    renderHeader();
-
-    expect(screen.queryByTestId("app-header-centre-gap")).toBeNull();
-    expect(screen.queryByTestId("app-header-centre-zone")).toBeNull();
-    expect(tabsBox().classList.contains("flex-1")).toBe(true);
-  });
-
-  it("draws the toggle in the zone in a build with a soundtrack, and the tabs give up the free width", () => {
-    offerSoundtrack();
-    renderHeader();
-
-    const zone = screen.getByTestId("app-header-centre-zone");
     expect(
-      zone.contains(screen.getByRole("button", { name: "Soundtrack" })),
-    ).toBe(true);
-    expect(zone.parentElement).toBe(screen.getByTestId("app-header"));
-    expect(
-      screen
-        .getByTestId("app-header-centre-gap")
-        .compareDocumentPosition(zone) & Node.DOCUMENT_POSITION_FOLLOWING,
-    ).toBeTruthy();
-    expect(tabsBox().classList.contains("flex-1")).toBe(false);
-  });
-
-  it("puts the zone's middle on the header's middle through the observer, and drops the gap to nothing when the tabs reach past it", () => {
-    vi.stubGlobal("ResizeObserver", FakeResizeObserver);
-    resizeObservers.length = 0;
-    offerSoundtrack();
-    renderHeader();
-    vi.spyOn(
-      screen.getByTestId("app-header"),
-      "getBoundingClientRect",
-    ).mockReturnValue(new DOMRect(0, 0, 1000, 40));
-    vi.spyOn(
-      screen.getByTestId("app-header-centre-zone"),
-      "getBoundingClientRect",
-    ).mockReturnValue(new DOMRect(0, 0, 100, 40));
-    const tabsRect = vi.spyOn(tabsBox(), "getBoundingClientRect");
-    const gap = screen.getByTestId("app-header-centre-gap");
-    const frames: FrameRequestCallback[] = [];
-    vi.stubGlobal("requestAnimationFrame", (run: FrameRequestCallback) => {
-      frames.push(run);
-      return frames.length;
-    });
-    const reportResize = (): void => {
-      act(() => {
-        for (const observer of [...resizeObservers, ...resizeObservers]) {
-          observer.report();
-        }
-      });
-      // Nothing moves inside the observer's delivery: the write waits a frame,
-      // and a second report before it runs asks for no second one.
-      expect(frames).toHaveLength(1);
-      expect(gap.style.flexBasis).not.toBe(expected);
-      frames.splice(0).forEach((run) => run(0));
-    };
-
-    let expected = "250px";
-    tabsRect.mockReturnValue(new DOMRect(0, 0, 200, 40));
-    reportResize();
-    expect(gap.style.flexBasis).toBe("250px");
-
-    expected = "0px";
-    tabsRect.mockReturnValue(new DOMRect(0, 0, 700, 40));
-    reportResize();
-    expect(gap.style.flexBasis).toBe("0px");
+      screen.queryByRole("button", { name: /soundtrack|music/i }),
+    ).toBeNull();
   });
 });

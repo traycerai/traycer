@@ -240,7 +240,6 @@ export function SweepColumn(props: {
           columnRef={() => undefined}
           {...chrome}
           header={<AppHeader variant="app" />}
-          soundtrackTopRow={null}
           strip={
             stripEdge === null ? null : (
               <SideTabStrip
