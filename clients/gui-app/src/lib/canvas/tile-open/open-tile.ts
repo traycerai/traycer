@@ -150,6 +150,7 @@ export function openTileWithNavigation(
     navigateNested,
     epicId: store.tabsById[tabId]?.epicId ?? null,
     pipOrigin: options.pipOrigin,
+    adoptHtmlVersion: intent.adoptHtmlVersion === true,
   });
   // And again on the id it landed under: into a pane, the canvas mints one of
   // its own, because a row's ref outlives one open.
