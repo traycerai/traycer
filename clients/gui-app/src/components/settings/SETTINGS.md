@@ -6088,8 +6088,19 @@ set-state-in-effect` forbids the effect form, and an effect would also
     `useHostReachability`, which is the tab-binding check and can call a host
     reachable that this scope cannot dial. A disk-truth list -
     so orphaned worktrees whose owning agent was deleted still appear -
-    grouped by repo under quiet, collapsible headers (`WorktreeRepoHeader`)
-    that stay visually secondary to row status. The selected host is reached
+    grouped by repo under quiet, collapsible headers (`WorktreeRepoHeader`).
+    A worktree owned by exactly one Task joins a Task group of that repo:
+    the header names the Task (wrapping, and a button when the title is
+    known) with the repo under it, and that Task's merge caption once. Rows
+    in the group keep their own PR state and drop the Task title. A worktree
+    with no Task, or with more than one, stays in the repo's other group and
+    keeps one Task label. Names wrap rather than truncating. On a narrow
+    window (under 768px, and in the installed phone app) the list toolbar
+    keeps search and one **Filter and sort** control; select-all, expand or
+    collapse all, refresh, the policy chips, and the updated-ago line move
+    into the list's **More** menu (`List actions`). Wider windows keep the
+    two-row toolbar. A list-less toolbar (offline, empty, still loading)
+    stays the wide layout at every width. The selected host is reached
     through a **transient per-host client** (`useHostClientFor`) so picking a
     host never swaps the app-wide active host or reloads the Epic list (and
     never affects the branch-prefix default above). Backed by the host
@@ -6169,11 +6180,12 @@ set-state-in-effect` forbids the effect form, and an effect would also
     inline.
   - Background delete progress renders as a non-intrusive strip
     (`WorktreeDeleteProgressStrip`) that stays visible through partial
-    failures until dismissed. A quiet `Task {label}` caption
-    (`TaskMergeRollupBadge`) beside a resolved Task chip reports that Task's
-    aggregate merge progress across every worktree it owns - deliberately
-    plain muted text, not a colored badge, so it never competes with or is
-    mistaken for the row's own tier pill.
+    failures until dismissed. A Task group header carries that Task's merge
+    caption once (`Merged` or `Merged N/M`, `TaskMergeRollupBadge`), plain
+    muted text with no "Task" prefix because the header already names the
+    Task. A worktree outside any Task group keeps its Task label, and the
+    caption beside that label still leads with `Task` so it is not read as
+    the row's tier pill. The caption is never a colored badge.
 - `Host` **Overview**: ONE page about one host - the scoped one - and the same
   page whether that host is on this desk or in a datacenter. The cross-device
   **My Hosts** list and the separate **This machine** section are both gone; the
@@ -7383,7 +7395,12 @@ level`, `Host log level` and the host's log tails described the selected host.
   resolved
   (`log-level-controls.ts`), so `LogLevelRow` stays presentational and the sweep
   walks RPC and bridge rows without knowing which is which.
-  - **Log detail.** Two rows (`LogLevelRow`, a `Select` over the full
+  - **Log detail.** The page's purpose line is "Logs from this host, for
+    support." Beside the heading, "Use Debug while capturing a problem." The
+    longer capture steps sit behind **How to capture a problem** (collapsed):
+    raise the relevant level to Debug, reproduce, then set it back to Info;
+    this app's own log and memory capture live under Application › Diagnostics.
+    Two rows (`LogLevelRow`, a `Select` over the full
     `trace/debug/info/warn/error` scale, `info` labelled "Info (default)") - all
     default Info and apply immediately. The CLI/host thresholds are
     machine-user-global (`~/.traycer/cli/config.json`), which the row copy says:
