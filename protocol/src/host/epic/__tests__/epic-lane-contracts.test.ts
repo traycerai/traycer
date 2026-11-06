@@ -36,6 +36,7 @@ import {
   epicSubscribeV16,
 } from "@traycer/protocol/host/epic/subscribe";
 import {
+  ARTIFACT_SUBSCRIBE_BODY_MOVED_MINOR,
   ARTIFACT_SUBSCRIBE_BODY_SYNC_MINOR,
   artifactSubscribeClientFrameSchemaV10,
   artifactSubscribeOpenRequestSchemaV10,
@@ -83,12 +84,12 @@ describe("registry shape: the epic lane surface installs at the versions the spl
     // `@1.2` (the epic files arm) and `@1.3` (the html, canvas and file
     // artifact kinds) and `@1.4` (anchor fields on comment thread records),
     // `epic.status.subscribe` grew `@1.1` and `@1.2` after `@1.0` shipped, and
-    // `artifact.subscribe` grew `@1.1` for the `bodySync` frame. All three keep
-    // `@1.0` installed for released peers.
+    // `artifact.subscribe` grew `@1.1` for the `bodySync` frame and `@1.2` for
+    // the `bodyMoved` code. All three keep `@1.0` installed for released peers.
     for (const [method, latestMinor] of [
       ["epic.state.subscribe", 5],
       ["epic.status.subscribe", 2],
-      ["artifact.subscribe", 1],
+      ["artifact.subscribe", 2],
     ] as const) {
       const majorLine = hostStreamRpcRegistry[method][1];
       expect(majorLine.latestMinor).toBe(latestMinor);
@@ -107,7 +108,7 @@ describe("registry shape: the epic lane surface installs at the versions the spl
       EPIC_STATUS_ARTIFACT_SYNC_MINOR,
     );
     expect(hostStreamRpcRegistry["artifact.subscribe"][1].latestMinor).toBe(
-      ARTIFACT_SUBSCRIBE_BODY_SYNC_MINOR,
+      ARTIFACT_SUBSCRIBE_BODY_MOVED_MINOR,
     );
   });
 
