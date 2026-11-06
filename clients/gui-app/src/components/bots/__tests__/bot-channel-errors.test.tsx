@@ -223,8 +223,6 @@ const OPEN_UNOPENED_THREAD: BotOpenThread = {
   sent: null,
 };
 
-const onOpenActivity = vi.fn<() => void>();
-
 function mount(openThread: BotOpenThread | null): void {
   render(
     <QueryClientProvider client={new QueryClient()}>
@@ -255,7 +253,6 @@ function mount(openThread: BotOpenThread | null): void {
             surfaceActions={null}
             openThread={openThread}
             onOpenThread={vi.fn()}
-            onOpenActivity={onOpenActivity}
             setupHistory={null}
           />
         </ChatExpansionTestProviders>
@@ -291,7 +288,6 @@ async function typeAndEnter(box: HTMLElement, text: string): Promise<void> {
 beforeEach(() => {
   mocks.sends.length = 0;
   mocks.toastFromHostError.mockClear();
-  onOpenActivity.mockClear();
   mocks.state.threads = [];
   mocks.state.activity = null;
   vi.spyOn(document, "hasFocus").mockReturnValue(true);

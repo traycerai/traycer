@@ -85,6 +85,72 @@ export function chatDescendantKind(
   return null;
 }
 
+/** The ladder, most urgent first, for picking a rollup's kind. */
+const CHAT_STATUS_ORDER: ReadonlyArray<ChatDescendantStatusKind> = [
+  "failure",
+  "fork",
+  "interview",
+  "approval",
+  "running",
+  "background",
+  "done",
+  "terminal-failure",
+];
+
+/**
+ * Rollup over a set of chats: the highest-priority kind plus per-tier counts
+ * (each chat is counted once, under its own highest tier) so a tooltip or a
+ * line can break the aggregate down instead of hiding it behind one glyph.
+ */
+export interface ChatDescendantStatusRollup {
+  readonly kind: ChatDescendantStatusKind;
+  readonly failureCount: number;
+  readonly forkCount: number;
+  readonly interviewCount: number;
+  readonly approvalCount: number;
+  readonly runningCount: number;
+  readonly backgroundCount: number;
+  readonly doneCount: number;
+  readonly terminalFailureCount: number;
+}
+
+/**
+ * Folds each chat's kind (`chatDescendantKind`, `null` for nothing notable)
+ * onto the ladder; `null` when none is notable. A collapsed parent in the
+ * Chats panel and a bot's Activity row both roll up through this.
+ */
+export function chatDescendantStatusRollup(
+  kinds: Iterable<ChatDescendantStatusKind | null>,
+): ChatDescendantStatusRollup | null {
+  const counts: Record<ChatDescendantStatusKind, number> = {
+    failure: 0,
+    fork: 0,
+    interview: 0,
+    approval: 0,
+    running: 0,
+    background: 0,
+    done: 0,
+    "terminal-failure": 0,
+  };
+  for (const kind of kinds) {
+    if (kind !== null) counts[kind] += 1;
+  }
+  const kind =
+    CHAT_STATUS_ORDER.find((candidate) => counts[candidate] > 0) ?? null;
+  if (kind === null) return null;
+  return {
+    kind,
+    failureCount: counts.failure,
+    forkCount: counts.fork,
+    interviewCount: counts.interview,
+    approvalCount: counts.approval,
+    runningCount: counts.running,
+    backgroundCount: counts.background,
+    doneCount: counts.done,
+    terminalFailureCount: counts["terminal-failure"],
+  };
+}
+
 /** A chat's own state: the ladder, plus "unknown" for an unserved host. */
 export type OwnChatStatusKind = ChatDescendantStatusKind | "unknown";
 
@@ -108,6 +174,38 @@ export function ownChatStatusKind(
   const kind = chatDescendantKind(indicatorState, tier);
   if (kind === null && coverage === "unserved") return "unknown";
   return kind;
+}
+
+/** "1 needs attention · 2 running": a rollup's non-zero tiers, most urgent first. */
+export function chatStatusRollupWords(
+  rollup: ChatDescendantStatusRollup,
+): string {
+  const parts: string[] = [];
+  if (rollup.failureCount > 0) {
+    parts.push(
+      `${rollup.failureCount} ${rollup.failureCount === 1 ? "needs" : "need"} attention`,
+    );
+  }
+  if (rollup.forkCount > 0) {
+    parts.push(`${rollup.forkCount} waiting for fork resolution`);
+  }
+  if (rollup.interviewCount > 0) {
+    parts.push(`${rollup.interviewCount} waiting for interview`);
+  }
+  if (rollup.approvalCount > 0) {
+    parts.push(`${rollup.approvalCount} waiting for approval`);
+  }
+  if (rollup.runningCount > 0) parts.push(`${rollup.runningCount} running`);
+  if (rollup.backgroundCount > 0) {
+    parts.push(`${rollup.backgroundCount} in background`);
+  }
+  if (rollup.doneCount > 0) parts.push(`${rollup.doneCount} completed`);
+  if (rollup.terminalFailureCount > 0) {
+    parts.push(
+      `${rollup.terminalFailureCount} terminal ${rollup.terminalFailureCount === 1 ? "failure" : "failures"}`,
+    );
+  }
+  return parts.join(" · ");
 }
 
 /**

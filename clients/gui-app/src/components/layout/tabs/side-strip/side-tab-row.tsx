@@ -493,6 +493,7 @@ function CornerBadge(props: { readonly badge: SideTabRowProps["badge"] }) {
           size="xs"
           testId="side-tab-rail-count"
           corner={cn(SIDE_STRIP_NAV_TILE_COUNT_CLASS, "static")}
+          noun="unread"
         />
       </span>
     );

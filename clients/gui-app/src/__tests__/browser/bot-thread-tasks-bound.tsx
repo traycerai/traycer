@@ -276,7 +276,6 @@ export function Pane(): ReactElement {
                   anchorSenderLabel={() => "You"}
                   resolveMember={UNRESOLVED_BOT_MEMBERS}
                   onClose={noop}
-                  onOpenActivity={noop}
                   onEditPost={noop}
                   onOpenTurn={noop}
                   onOpenSession={noop}
