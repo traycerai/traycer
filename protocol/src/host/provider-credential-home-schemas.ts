@@ -43,6 +43,25 @@ export const credentialVersionSchema = lazySchema(() =>
 );
 export type CredentialVersion = z.infer<typeof credentialVersionSchema>;
 
+/** Material standing and the authority of the observation that established it. */
+export const credentialStandingSchema = lazySchema(() =>
+  z.strictObject({
+    material: z.enum([
+      "usable", "stale", "signed-out", "rejected", "refused-by-provider",
+    ]),
+    repairDeadline: z.number().nullable(),
+    familyVersion: z.string().min(1).nullable(),
+    authority: z.enum(["provider-client", "custodian"]).nullable(),
+    cause: z.string().nullable(),
+    observation: z.strictObject({
+      source: z.enum(["provider-client", "custodian"]),
+      status: z.enum(["answered", "unknown"]),
+      capturedAt: z.number(),
+    }),
+  }),
+);
+export type CredentialStanding = z.infer<typeof credentialStandingSchema>;
+
 export const credentialHomeSchema = lazySchema(() =>
   z.strictObject({
     homeAddress: z.string().min(1),
@@ -56,6 +75,7 @@ export const credentialHomeSchema = lazySchema(() =>
       "unknown",
     ]),
     materialFingerprint: z.string().nullable(),
+    standing: credentialStandingSchema.optional(),
     observation: z
       .object({ identity: credentialIdentitySchema, capturedAt: z.number() })
       .nullable(),
