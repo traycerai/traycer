@@ -1,5 +1,6 @@
 import {
   credentialHomeSchema,
+  credentialVersionSchema,
   credentialIdentitySchema,
 } from "./provider-credential-home-schemas";
 /**
@@ -1637,6 +1638,12 @@ export function buildUnreadableProviderProfile(input: {
   };
 }
 
+export const managedProfileDeliveryRefusalSchema = lazySchema(() => z.enum([
+  "sign-in-kind-unavailable-on-computer", "credential-account-mismatch",
+  "team-material-off-computers", "sandbox-placeholder-only",
+]));
+export type ManagedProfileDeliveryRefusal = z.infer<typeof managedProfileDeliveryRefusalSchema>;
+
 /** Read projection: a future row is one disabled, explained row, never a lost inventory. */
 export const providerProfileProjectionSchema = lazySchema(() =>
   providerProfileSchema
@@ -1644,6 +1651,18 @@ export const providerProfileProjectionSchema = lazySchema(() =>
       recordVersion: z.literal(1).optional(),
       credentialIdentity: credentialIdentitySchema.optional(),
       credentialHome: credentialHomeSchema.optional(),
+      environmentProfileId: z.string().nullable().optional(),
+      deliveryRefusal: managedProfileDeliveryRefusalSchema.nullable().optional(),
+      presence: z
+        .discriminatedUnion("kind", [
+          z.object({
+            kind: z.literal("admitted"),
+            bindingVersion: credentialVersionSchema,
+          }),
+          z.object({ kind: z.literal("no-home") }),
+          z.object({ kind: z.literal("placeholder-only") }),
+        ])
+        .optional(),
       readability: z
         .object({
           kind: z.enum(["readable", "unreadable"]),
@@ -1675,6 +1694,14 @@ export function isProfileEnabled(profile: {
 }): boolean {
   return profile.enabled !== false;
 }
+
+/** The named row resolves an account; a brokered sign-out reaches every home for it. */
+export const providersSignOutProfileRequestSchema = lazySchema(() =>
+  z.object({ providerId: providerIdSchema, profileId: z.string().min(1) }),
+);
+export const providersSignOutProfileResponseSchema = lazySchema(() =>
+  z.object({ signedOut: z.literal(true) }),
+);
 
 export const providersSetProfileEnabledRequestSchema = lazySchema(() =>
   z.object({

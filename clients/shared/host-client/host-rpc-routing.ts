@@ -724,6 +724,7 @@ export const HOST_UNARY_RPC_ROUTES = {
   "providers.setPackPolicy": "target-host",
   "providers.setProfileApiKey": "target-host",
   "providers.setProfileEnabled": "target-host",
+  "providers.signOutProfile": "target-host",
   "providers.setSelection": "target-host",
   "providers.setTerminalAgentArgs": "target-host",
   "providers.settingsFile.reset": "target-host",

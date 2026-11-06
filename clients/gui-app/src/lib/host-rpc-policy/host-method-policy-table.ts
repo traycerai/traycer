@@ -2266,6 +2266,11 @@ export const HOST_METHOD_POLL_TABLE = {
     poll: null,
   },
   // Profile eligibility is persisted provider configuration.
+  "providers.signOutProfile": {
+    mode: "fifo",
+    joinResponseTimeoutMs: null,
+    poll: null,
+  },
   "providers.setProfileEnabled": {
     mode: "fifo",
     joinResponseTimeoutMs: null,
