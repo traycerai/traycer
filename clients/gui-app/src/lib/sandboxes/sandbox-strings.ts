@@ -717,6 +717,11 @@ export const TASK_FILES = "Task files";
 export const HOST_LABEL = "Host";
 export const SESSIONS_UNKNOWN = "Sessions unknown · no report yet";
 
+/** The hover's session summary: how many, never their names. */
+export function hoverSessionCount(count: number): string {
+  return count === 1 ? "1 session" : `${count} sessions`;
+}
+
 /** A team sandbox to a reader authorized only over the task. */
 export function hoverTaskConfiguration(teamName: string | null): string {
   return `a sandbox of ${teamName ?? "a team"}`;

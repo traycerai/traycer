@@ -11,12 +11,15 @@ import {
   type RefObject,
 } from "react";
 import { useQueryClient } from "@tanstack/react-query";
-import { Eye, EyeOff, Gauge, Settings } from "lucide-react";
+import { ChevronDown, Eye, EyeOff, Gauge, Settings } from "lucide-react";
 import {
   DEFAULT_ACCOUNT_CONTEXT,
   type AccountContext,
 } from "@traycer/protocol/common/schemas";
-import { HOST_KIND_WORDS } from "@traycer/protocol/host/host-status";
+import {
+  HOST_FROZEN_WORD,
+  HOST_KIND_WORDS,
+} from "@traycer/protocol/host/host-status";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Switch } from "@/components/ui/switch";
@@ -81,6 +84,7 @@ import {
   type RateLimitProfileSelection,
 } from "@/hooks/rate-limits/use-rate-limit-profile-selection";
 import { fetchProviderRateLimits } from "@/lib/rate-limits/provider-rate-limit-fetch";
+import { HostGlyph } from "@/components/settings/host-scope/host-glyph";
 import { HostSwitcher } from "@/components/settings/host-scope/host-switcher";
 import { isHostScopeUsable } from "@/components/settings/host-scope/host-scope-status";
 import { isHostSwitcherListInteraction } from "@/components/settings/host-scope/host-switcher-portal";
@@ -160,7 +164,11 @@ import { useSettingsSearchStore } from "@/stores/settings/settings-search-store"
 import { LAYOUT } from "@/components/settings/panels/layout-settings.definitions";
 import { isMobileApp } from "@/lib/mobile-app";
 import { cn } from "@/lib/utils";
-import { NO_HOST_OPTION_REFUSALS } from "@/components/settings/host-scope/host-option-model";
+import {
+  AVAILABLE_HOST_ROW_SURFACE_STATE,
+  hostOptionStatusWord,
+  NO_HOST_OPTION_REFUSALS,
+} from "@/components/settings/host-scope/host-option-model";
 
 /**
  * A rail/Overview entry, in draw order: either a host-RPC provider or the
@@ -1059,29 +1067,22 @@ function RateLimitPopoverHostHeader(props: {
     settingsOverlayOpen || settingsRouteOpen || settingsTabVisible;
   // Choice and identity are separate: a stale pin keeps its recovery picker
   // even when the fleet has shrunk to one host or none.
-  const showHostPicker =
-    scope.hosts.length > 1 || scope.vanishedHostId !== null;
+  const opensList = scope.hosts.length > 1 || scope.vanishedHostId !== null;
   return (
     <>
-      {showHostPicker ? (
+      {opensList && scope.hosts.length === 0 ? (
         <RateLimitHostPickerRow
           scope={scope}
           displayedHost={displayedHost}
           onClose={props.onClose}
         />
       ) : (
-        <div
-          className="shrink-0 border-b px-3 py-2 text-ui-sm font-medium"
-          data-testid="rate-limit-host-identity"
-        >
-          {displayedHost === null ? "No host" : displayedHost.name}
-          {displayedHost === null || displayedHost.kind === null ? null : (
-            <span className="font-normal text-muted-foreground">
-              {" · "}
-              {HOST_KIND_WORDS[displayedHost.kind]}
-            </span>
-          )}
-        </div>
+        <RateLimitHostHeader
+          host={displayedHost}
+          opensList={opensList}
+          scope={scope}
+          onClose={props.onClose}
+        />
       )}
       {scope.vanishedSelection === null ? null : (
         <div
@@ -1123,24 +1124,130 @@ function RateLimitSettingsMismatch(props: {
   if (settingsHost === null || settingsHost.hostId === props.usageHost.hostId)
     return null;
   return (
-    <div
-      className="m-3 flex shrink-0 flex-col gap-2 rounded-md border p-2 text-ui-xs"
-      role="status"
-      data-testid="rate-limit-host-mismatch"
-    >
-      <p>
-        Showing {props.usageHost.name}. Settings is showing {settingsHost.name}.
-      </p>
+    <div className="mx-3 mt-3 min-w-0" data-testid="rate-limit-host-mismatch">
       <Button
         variant="outline"
         size="sm"
-        className="self-start"
+        className="h-auto w-full max-w-full min-w-0 shrink justify-start text-start whitespace-normal break-words"
         onClick={() => props.onSelect(settingsHost.hostId)}
       >
-        Show {settingsHost.name} here
+        Show usage for {settingsHost.name}
       </Button>
     </div>
   );
+}
+
+/**
+ * The usage popover's host header. One shape whether the account has one
+ * host or many: the name wraps, the kind sits under it, and a chevron is
+ * drawn only when this header opens the host list. The list is Settings'
+ * host switcher, laid over the face so choosing a host stays that picker.
+ */
+function RateLimitHostHeader(props: {
+  readonly host: HostScopeOption | null;
+  readonly opensList: boolean;
+  readonly scope: HostScope;
+  readonly onClose: () => void;
+}): ReactNode {
+  const face = (
+    <RateLimitHostFace host={props.host} opensList={props.opensList} />
+  );
+  if (!props.opensList) {
+    return (
+      <div className="shrink-0 border-b" data-testid="rate-limit-host-identity">
+        {face}
+      </div>
+    );
+  }
+  return (
+    <div
+      className="relative shrink-0 border-b hover:bg-foreground/5 focus-within:ring-3 focus-within:ring-ring/50 focus-within:ring-inset"
+      data-testid="rate-limit-host-header"
+    >
+      <div className="pointer-events-none" aria-hidden>
+        {face}
+      </div>
+      <div className="absolute inset-0 opacity-0 [&_[data-testid=rate-limit-host-picker-row]]:h-full [&_[data-testid=settings-host-switcher]]:size-full">
+        <RateLimitHostPickerRow
+          scope={props.scope}
+          displayedHost={props.host}
+          onClose={props.onClose}
+        />
+      </div>
+    </div>
+  );
+}
+
+function RateLimitHostFace(props: {
+  readonly host: HostScopeOption | null;
+  readonly opensList: boolean;
+}): ReactNode {
+  const lines = rateLimitHostHeaderLines(props.host, props.opensList);
+  return (
+    <div
+      className="flex w-full min-w-0 items-start gap-3 px-3 py-2 text-start text-ui-sm"
+      data-testid={
+        props.opensList ? "rate-limit-host-face" : "rate-limit-host-header"
+      }
+    >
+      {props.host === null ? null : (
+        <HostGlyph
+          host={props.host}
+          className="mt-0.5 size-4 text-muted-foreground"
+        />
+      )}
+      <span className="min-w-0 flex-1">
+        <span className="block font-medium break-words">{lines.label}</span>
+        {lines.kind === null ? null : (
+          <span className="block text-ui-xs font-normal break-words text-muted-foreground">
+            {lines.kind}
+          </span>
+        )}
+        {lines.status === null ? null : (
+          <span
+            className="block text-ui-xs font-normal break-words text-muted-foreground"
+            data-testid="rate-limit-host-status"
+          >
+            {lines.status}
+          </span>
+        )}
+        {lines.frozen ? (
+          <Badge variant="warning" className="mt-0.5">
+            {HOST_FROZEN_WORD}
+          </Badge>
+        ) : null}
+      </span>
+      {props.opensList ? (
+        <ChevronDown className="mt-0.5 size-3.5 shrink-0 text-muted-foreground" />
+      ) : null}
+    </div>
+  );
+}
+
+function rateLimitHostHeaderLines(
+  host: HostScopeOption | null,
+  opensList: boolean,
+): {
+  readonly label: string;
+  readonly kind: string | null;
+  readonly status: string | null;
+  readonly frozen: boolean;
+} {
+  if (host === null) {
+    return {
+      label: opensList ? "Select a host" : "No host",
+      kind: null,
+      status: null,
+      frozen: false,
+    };
+  }
+  const status = hostOptionStatusWord(host, AVAILABLE_HOST_ROW_SURFACE_STATE);
+  return {
+    label: host.name,
+    kind: host.kind === null ? null : HOST_KIND_WORDS[host.kind],
+    status,
+    frozen: status !== null && host.sandbox !== null && host.sandbox.frozen,
+  };
 }
 
 /**

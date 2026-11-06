@@ -38,8 +38,8 @@ import {
   hoverAgentIdentity,
   hoverAlsoInTask,
   hoverAwakeMinutes,
-  hoverMoreSessions,
   hoverSandboxIdentity,
+  hoverSessionCount,
   hoverTaskConfiguration,
   hoverTodayCost,
   KEEP_THIS_SANDBOX,
@@ -53,9 +53,7 @@ import {
 } from "@/lib/sandboxes/sandbox-strings";
 import {
   sandboxMemberName,
-  sandboxHostActivityLine,
   sandboxIdlePolicyLine,
-  sandboxSessionKinds,
   sandboxShapeLine,
 } from "@/lib/sandboxes/sandbox-row-lines";
 import { cn } from "@/lib/utils";
@@ -525,23 +523,40 @@ function HostActivity(props: {
     (terminal) =>
       terminal.status === "running" && terminal.sessionKind === "terminal",
   );
-  const names = [
-    ...here.flatMap((agent) => (agent.title === null ? [] : [agent.title])),
-    ...runningTerminals.flatMap((terminal) =>
-      terminal.title === null ? [] : [terminal.title],
-    ),
-  ];
-  const more = Math.max(0, count - here.length - runningTerminals.length);
-  const hostWide = sandboxHostActivityLine(
-    sandboxSessionKinds(status.data?.sessions ?? null),
-  );
+  const listed = status.data?.sessions ?? null;
+  const total = hoverReportedSessionCount({
+    listedOnHost:
+      listed === null ? null : listed.agents.length + listed.terminals.length,
+    busySessionCount: count,
+    taskSessions: here.length + runningTerminals.length,
+  });
+  if (total === 0) return null;
   return (
-    <div className="text-muted-foreground">
-      {hostWide === null ? null : (
-        <p data-testid="agent-host-activity">{hostWide}</p>
-      )}
-      {names.length === 0 ? null : <p>{names.join(", ")}</p>}
-      {more > 0 ? <p>{hoverMoreSessions(more)}</p> : null}
-    </div>
+    <button
+      type="button"
+      data-testid="agent-host-sessions"
+      className="w-fit max-w-full text-start text-ui-xs break-words underline underline-offset-3"
+      onClick={() => openSandboxDetails(props.sandbox.id)}
+    >
+      {hoverSessionCount(total)}
+    </button>
   );
+}
+
+/**
+ * Sessions the hover can account for. The host's own list is the full count.
+ * Without one, the task's sessions plus those the busy count places in other
+ * tasks. A missing report never becomes a zero; that path says so above.
+ */
+function hoverReportedSessionCount(input: {
+  readonly listedOnHost: number | null;
+  readonly busySessionCount: number;
+  readonly taskSessions: number;
+}): number {
+  const accounted =
+    input.taskSessions +
+    Math.max(0, input.busySessionCount - input.taskSessions);
+  return input.listedOnHost === null
+    ? accounted
+    : Math.max(input.listedOnHost, accounted);
 }
