@@ -2,6 +2,7 @@ import { z } from "zod";
 import { lazySchema } from "@traycer/protocol/framework/lazy-schema";
 import { getRecordSchema } from "@traycer/protocol/framework/versioned-record";
 import { commonRecordRegistry } from "@traycer/protocol/common/registry";
+import type { ArtifactRevisionKind } from "@traycer/protocol/persistence/epic/artifact-revision";
 import {
   canonicalJsonStringify,
   isJsonValue,
@@ -191,6 +192,11 @@ export const markdownRevisionEnvelopeSchema = lazySchema(() =>
   z
     .object({
       format: z.literal(MARKDOWN_REVISION_FORMAT),
+      /**
+       * The artifact revision chain's discriminator (`artifact-revision.ts`):
+       * a markdown chain decodes only a markdown envelope.
+       */
+      kind: z.literal("markdown" satisfies ArtifactRevisionKind),
       /**
        * ProseMirror JSON in the artifact document schema, anchor marks
        * included: the seed for an editor doc and the unit of a three-way
