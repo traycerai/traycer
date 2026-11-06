@@ -331,8 +331,6 @@ export function BotChannelView(props: {
   readonly openExchange: BotOpenExchange | null;
   /** Opens a pair's log in the rail, and closes it back to what it displaced. */
   readonly exchangeRail: BotExchangeRail;
-  /** Opens the bot's Activity tab, from the open thread's header. */
-  readonly onOpenActivity: () => void;
   /** A live team main bot's setup history at the top of the channel (T67b); `null` for none. */
   readonly setupHistory: ReactNode;
   /** How many tiles the installed app shows; `null` where the container decides. */
@@ -361,7 +359,6 @@ export function BotChannelView(props: {
     environmentBots,
     openExchange,
     exchangeRail,
-    onOpenActivity,
     setupHistory,
     tiles,
   } = props;
@@ -946,7 +943,6 @@ export function BotChannelView(props: {
                       threadLanding.spend();
                       onOpenThread(null);
                     }}
-                    onOpenActivity={onOpenActivity}
                     onEditPost={editPostFromThread}
                     onOpenTurn={onOpenTurn}
                     onOpenSession={onOpenSession}

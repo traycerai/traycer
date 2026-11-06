@@ -540,7 +540,6 @@ function mountChannel(input: {
               environmentBots={null}
               openExchange={null}
               exchangeRail={{ open: () => undefined, close: () => undefined }}
-              onOpenActivity={vi.fn()}
               setupHistory={null}
             />
           </ChatExpansionTestProviders>

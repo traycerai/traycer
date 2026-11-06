@@ -1,7 +1,5 @@
 import type { UseMutationResult } from "@tanstack/react-query";
 import type {
-  BotNotificationsStopRequest,
-  BotNotificationsStopResponse,
   BotTaskActionRequest,
   BotTaskRunNowResponse,
   BotTaskSetPausedRequest,
@@ -88,29 +86,6 @@ export function useBotTaskStopMutation(
       mutationKey: botMutationKeys.taskStop(),
       onError: (error) =>
         toastFromHostError(error, "Couldn't stop the automation."),
-    },
-  });
-}
-
-export function useBotNotificationsStopMutation(
-  client: HostClient<HostRpcRegistry> | null,
-): UseMutationResult<
-  BotNotificationsStopResponse,
-  HostRpcError,
-  BotNotificationsStopRequest
-> {
-  return useHostMutation<HostRpcRegistry, "bot.notifications.stop">({
-    client,
-    method: "bot.notifications.stop",
-    mapVariables: (variables) => variables,
-    requiredHostMethodVersion: () => ({
-      method: "bot.notifications.stop",
-      version: { major: 1, minor: 0 },
-    }),
-    options: {
-      mutationKey: botMutationKeys.notificationsStop(),
-      onError: (error) =>
-        toastFromHostError(error, "Couldn't stop watching notifications."),
     },
   });
 }
