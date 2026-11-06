@@ -1,5 +1,6 @@
 import { z } from "zod";
 import type { SoundtrackManifest } from "./manifest";
+import type { LayerRole } from "./variable-sound";
 
 /**
  * The published form of a track set, v1: the definitions travel with the stems,
@@ -31,8 +32,17 @@ function rangeOf(bound: z.ZodNumber) {
 const secondsRange = rangeOf(seconds);
 const pan = z.number().min(-1).max(1).nullable();
 
+const layerRoles = {
+  pad: "pad",
+  motif: "motif",
+  texture: "texture",
+  event: "event",
+} as const satisfies Record<LayerRole, LayerRole>;
+
 const layerFields = {
   name: stemName,
+  // A set published before roles existed has none, and plays with none.
+  role: z.enum(layerRoles).nullable().default(null),
   sublayers: positiveCount,
   sublayerStartingOffset: secondsRange.nullable(),
   pan,

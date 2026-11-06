@@ -136,6 +136,10 @@ import {
 } from "@traycer-clients/shared/host-client/slack-app";
 import type { SlackAppRegisterRequest } from "@traycer/protocol/host/slack-app";
 import {
+  mintTeamHostInstallTokenViaHttp,
+  type TeamHostInstallTokenResult,
+} from "@traycer-clients/shared/host-client/team-host";
+import {
   createSandboxViaHttp,
   destroySandboxViaHttp,
   fetchSandboxCatalogueViaHttp,
@@ -168,10 +172,6 @@ import {
   type VoiceSessionMintRequest,
   type VoiceTrayAction,
 } from "@traycer-clients/shared/host-client/voice-sessions";
-import {
-  voiceRouteViaHttp,
-  type VoiceRouteFetchResult,
-} from "@traycer-clients/shared/host-client/voice-router";
 import {
   decideSecretRequestViaHttp,
   fetchEnvironmentProvidersViaHttp,
@@ -810,18 +810,6 @@ export class MobileRunnerHost implements IRunnerHost {
     );
   }
 
-  routeVoiceUtterance(
-    bearerToken: string,
-    requestBody: string,
-  ): Promise<VoiceRouteFetchResult> {
-    return voiceRouteViaHttp(
-      this.serverBaseUrl,
-      bearerToken,
-      null,
-      requestBody,
-    );
-  }
-
   setVoiceSessionLive(live: boolean): Promise<void> {
     // The phone has one window and no close, so nothing keeps a live session
     // alive here; its background edge ends one (`onSystemSuspended`). Live is
@@ -971,6 +959,18 @@ export class MobileRunnerHost implements IRunnerHost {
       bearerToken,
       null,
       botId,
+    );
+  }
+
+  mintTeamHostInstallToken(
+    bearerToken: string,
+    environmentId: string,
+  ): Promise<TeamHostInstallTokenResult> {
+    return mintTeamHostInstallTokenViaHttp(
+      this.serverBaseUrl,
+      bearerToken,
+      null,
+      environmentId,
     );
   }
 

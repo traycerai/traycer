@@ -293,7 +293,6 @@ function mountSubmit(args: MountArgs) {
       onSubmitMessage: args.onSubmitMessage,
       onSideChat: args.onSideChat ?? null,
       targetHostId: args.targetHostId ?? null,
-      restingSandbox: null,
       queueEditTargetId: args.queueEditTargetId ?? null,
       getDraftBlobBridgeSupported:
         args.getDraftBlobBridgeSupported ?? (() => false),
@@ -556,7 +555,6 @@ function mountSteerConflictLiveBlock(args: {
         onSubmitMessage: args.onSubmitMessage,
         onSideChat: null,
         targetHostId: GATE_HOST,
-        restingSandbox: null,
         queueEditTargetId: null,
         getDraftBlobBridgeSupported: args.bridgeSupported ?? (() => false),
       }),
@@ -769,7 +767,6 @@ function Harness(props: {
     onSubmitMessage: props.onSubmitMessage,
     onSideChat: null,
     targetHostId: props.targetHostId,
-    restingSandbox: null,
     queueEditTargetId: null,
     // The production shape (`chat-tile.tsx`): a STABLE getter bound directly
     // to the store, never to a value captured from this render.

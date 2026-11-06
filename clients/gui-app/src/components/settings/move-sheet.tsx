@@ -1,7 +1,6 @@
 import { useState, type ReactNode } from "react";
 import { ChevronRight } from "lucide-react";
 import {
-  moveKeyChoice,
   existingSecretsArriveSentence,
   MOVE_ACCEPTS_AS_SHOWN,
   MOVE_DISCLOSURE,
@@ -10,7 +9,6 @@ import {
   moveRecipientSentence,
   moveItemChoiceKey,
   moveRowChoices,
-  movesRowText,
   movesSectionRows,
   movesSummary,
   guideDiffersNote,
@@ -329,10 +327,8 @@ function MovePlanRows(props: {
       {MOVE_SECTIONS.map((section) => {
         // Stays lists the rows the person left here after the plan's own.
         const stays = section.rows === "staysOnThisComputer";
-        const sectionRows = stays
-          ? [...rows.staysOnThisComputer, ...leftHere.keys]
-          : rows[section.rows];
-        const chosen = stays ? leftHere.items : [];
+        const sectionRows = rows[section.rows];
+        const chosen = stays ? leftHere : [];
         // A sheet that moves nothing says so in its description instead.
         const hidden =
           sectionRows.length + chosen.length === 0 &&
@@ -351,24 +347,6 @@ function MovePlanRows(props: {
           />
         );
       })}
-      {rows.looksLikeAKey.length === 0 ? null : (
-        <section
-          className="flex flex-col gap-2"
-          data-testid="move-sheet-looksLikeAKey"
-        >
-          <h3 className="font-medium text-ui-sm">Looks like a key</h3>
-          <ul className="flex flex-col gap-2">
-            {rows.looksLikeAKey.map((row) => (
-              <LooksLikeAKeyRow
-                key={row.key}
-                row={row}
-                choice={moveKeyChoice(row, choices.get(row.key) ?? "secret")}
-                onChoose={(choice) => props.onChoose(row.key, choice)}
-              />
-            ))}
-          </ul>
-        </section>
-      )}
       {movesNothing ? null : (
         <div className="flex flex-col gap-1">
           <p
@@ -450,9 +428,8 @@ function MovesSection(props: {
 }
 
 /**
- * One Moves row: its name, how it moves, and its choices. A row from Looks
- * like a key takes its choices there; a row a host does not let the person
- * choose for has none.
+ * One Moves row: its name and its one choice. A row a host does not let the
+ * person choose for has none.
  */
 function MovesRow(props: {
   readonly plan: MovePlan;
@@ -460,42 +437,26 @@ function MovesRow(props: {
   readonly onChoose: (choice: MoveKeyChoice | null) => void;
 }): ReactNode {
   const { entry } = props;
-  const offers = entry.looksLikeAKey
-    ? { secret: false, stays: false }
-    : moveRowChoices(props.plan, entry.row);
-  const marked = entry.treatment === "secret";
+  const offers = moveRowChoices(props.plan, entry.row);
   return (
     <li className="flex flex-col gap-1" data-testid="move-sheet-moves-row">
       <span className="text-ui-sm">
-        {movesRowText(entry)}
+        {moveRowLabel(entry.row)}
         {entry.row.detail === null ? null : (
           <span className="text-muted-foreground"> · {entry.row.detail}</span>
         )}
       </span>
-      {offers.secret || offers.stays ? (
+      {offers.stays ? (
         <div className="flex flex-wrap gap-2">
-          {offers.secret ? (
-            <Button
-              type="button"
-              size="sm"
-              variant={marked ? "secondary" : "outline"}
-              aria-pressed={marked}
-              onClick={() => props.onChoose(marked ? null : "secret")}
-            >
-              Mark as a secret
-            </Button>
-          ) : null}
-          {offers.stays ? (
-            <Button
-              type="button"
-              size="sm"
-              variant="outline"
-              aria-pressed={false}
-              onClick={() => props.onChoose("stays")}
-            >
-              Leave on this computer only
-            </Button>
-          ) : null}
+          <Button
+            type="button"
+            size="sm"
+            variant="outline"
+            aria-pressed={false}
+            onClick={() => props.onChoose("stays")}
+          >
+            Leave on this computer only
+          </Button>
         </div>
       ) : null}
     </li>
@@ -585,49 +546,5 @@ function MoveRowText(props: {
         {row.detail}
       </span>
     </>
-  );
-}
-
-function LooksLikeAKeyRow(props: {
-  readonly row: MoveRow;
-  readonly choice: MoveKeyChoice;
-  readonly onChoose: (choice: MoveKeyChoice) => void;
-}): ReactNode {
-  const { row, choice } = props;
-  return (
-    <li className="flex flex-col gap-1" data-testid="move-sheet-key-row">
-      <span className="text-ui-sm">
-        <code>{moveRowLabel(row)}</code>
-        {choice === "secret" ? " would become a secret." : null}
-      </span>
-      <div className="flex flex-wrap gap-2">
-        <Button
-          type="button"
-          size="sm"
-          variant={choice === "variable" ? "secondary" : "outline"}
-          aria-pressed={choice === "variable"}
-          onClick={() =>
-            props.onChoose(
-              moveKeyChoice(row, choice === "variable" ? "secret" : "variable"),
-            )
-          }
-        >
-          Leave as a variable
-        </Button>
-        <Button
-          type="button"
-          size="sm"
-          variant={choice === "stays" ? "secondary" : "outline"}
-          aria-pressed={choice === "stays"}
-          onClick={() =>
-            props.onChoose(
-              moveKeyChoice(row, choice === "stays" ? "secret" : "stays"),
-            )
-          }
-        >
-          Leave on this computer only
-        </Button>
-      </div>
-    </li>
   );
 }

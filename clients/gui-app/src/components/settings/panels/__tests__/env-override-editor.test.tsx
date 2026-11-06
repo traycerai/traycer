@@ -1,4 +1,3 @@
-import type { ReactNode } from "react";
 import {
   act,
   cleanup,
@@ -11,7 +10,6 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { EnvOverrideEditor, type KeyRefusalFor } from "../env-override-editor";
 
 const NO_ROW_NOTES: ReadonlyMap<string, string> = new Map();
-const NOT_ON_HOLD: ReadonlyMap<string, ReactNode> = new Map();
 const NOT_CLAIMED: ReadonlyMap<string, string> = new Map();
 
 type EnvCommit = (
@@ -44,7 +42,6 @@ function editorElement(input: EditorInput) {
       credentialRefusal={input.credentialRefusal}
       rowNotes={NO_ROW_NOTES}
       claimedBy={NOT_CLAIMED}
-      onHold={NOT_ON_HOLD}
       keyRefusal={null}
       staleRefusal={null}
       namePlaceholder="OPENAI_API_KEY"
@@ -395,7 +392,6 @@ describe("EnvOverrideEditor", () => {
           credentialRefusal={refusal}
           rowNotes={NO_ROW_NOTES}
           claimedBy={NOT_CLAIMED}
-          onHold={NOT_ON_HOLD}
           keyRefusal={null}
           staleRefusal={null}
           namePlaceholder="NODE_ENV"
@@ -504,7 +500,6 @@ describe("EnvOverrideEditor credential-shaped names", () => {
         credentialRefusal={input.refusal}
         rowNotes={NO_ROW_NOTES}
         claimedBy={NOT_CLAIMED}
-        onHold={NOT_ON_HOLD}
         keyRefusal={null}
         staleRefusal={null}
         namePlaceholder="NODE_ENV"
@@ -610,57 +605,6 @@ describe("EnvOverrideEditor credential-shaped names", () => {
   });
 });
 
-describe("EnvOverrideEditor rows on hold", () => {
-  const HELD_VALUE = "sk-9fA3kLm2Qx7ZpR4tVb8NcW1yHd6Je5Gs";
-
-  it("shows a held row as its name, on hold and a Review control, never its value or an input", () => {
-    const onReview = vi.fn();
-    render(
-      <EnvOverrideEditor
-        overrides={[
-          { key: "API_TOKEN", value: HELD_VALUE },
-          { key: "LOG_LEVEL", value: "debug" },
-        ]}
-        disabled={false}
-        credentialRefusal={null}
-        rowNotes={NO_ROW_NOTES}
-        claimedBy={NOT_CLAIMED}
-        onHold={
-          new Map<string, ReactNode>([
-            [
-              "API_TOKEN",
-              <button key="r" type="button" onClick={onReview}>
-                Review
-              </button>,
-            ],
-          ])
-        }
-        keyRefusal={null}
-        staleRefusal={null}
-        namePlaceholder="NODE_ENV"
-        emptyLabel="No environment variables."
-        onCommit={vi.fn<EnvCommit>()}
-        onDelete={vi.fn<EnvDelete>()}
-      />,
-    );
-
-    const held = screen.getByTestId("env-held-row");
-    expect(held.textContent).toBe(
-      "API_TOKEN · on hold until you choose · Review",
-    );
-    expect(document.body.textContent).not.toContain(HELD_VALUE);
-    expect(screen.queryByLabelText("Value for API_TOKEN")).toBeNull();
-    expect(screen.queryByLabelText("Name for API_TOKEN")).toBeNull();
-
-    // Its neighbour is an ordinary editable row.
-    expect(screen.getByLabelText("Value for LOG_LEVEL")).toBeTruthy();
-    expect(screen.getAllByTestId("env-held-row")).toHaveLength(1);
-
-    fireEvent.click(within(held).getByRole("button", { name: "Review" }));
-    expect(onReview).toHaveBeenCalledTimes(1);
-  });
-});
-
 describe("EnvOverrideEditor refusing a value that looks like a key", () => {
   const API_KEY_VALUE = "sk-9fA3kLm2Qx7ZpR4tVb8NcW1yHd6Je5Gs";
   const REFUSAL = "This looks like a key. Add it as a secret.";
@@ -705,7 +649,6 @@ describe("EnvOverrideEditor refusing a value that looks like a key", () => {
         credentialRefusal={null}
         rowNotes={NO_ROW_NOTES}
         claimedBy={NOT_CLAIMED}
-        onHold={NOT_ON_HOLD}
         keyRefusal={input.keyRefusal}
         staleRefusal={null}
         namePlaceholder="NODE_ENV"
@@ -945,7 +888,6 @@ describe("EnvOverrideEditor saved values that look like a key", () => {
         credentialRefusal={null}
         rowNotes={new Map([[NAME, "Only on this computer."]])}
         claimedBy={NOT_CLAIMED}
-        onHold={NOT_ON_HOLD}
         keyRefusal={input.keyRefusal}
         staleRefusal={null}
         namePlaceholder="NODE_ENV"
@@ -1051,7 +993,6 @@ describe("EnvOverrideEditor rows a secret sets", () => {
         credentialRefusal={null}
         rowNotes={NO_ROW_NOTES}
         claimedBy={new Map([["STRIPE_TOKEN", "STRIPE_KEY"]])}
-        onHold={NOT_ON_HOLD}
         keyRefusal={null}
         staleRefusal={null}
         namePlaceholder="OPENAI_API_KEY"

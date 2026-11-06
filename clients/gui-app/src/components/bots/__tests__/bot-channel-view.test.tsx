@@ -12,6 +12,10 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import userEvent from "@testing-library/user-event";
 import { setPhoneLayoutOnly } from "@/lib/mobile-app";
 import {
+  useVoiceSessionStore,
+  type VoiceSessionDriver,
+} from "@/stores/voice/voice-session-store";
+import {
   holdScreenLandscape,
   IPHONE_17,
   lowerNativeKeyboard,
@@ -525,14 +529,12 @@ let mountTiles: MobileTileCount | null = null;
 
 function mount(options: MountOptions): {
   readonly onOpenThread: Mock<(open: BotOpenThread | null) => void>;
-  readonly onOpenActivity: Mock<() => void>;
   /** Renders the same view again, reading the mocks' current state. */
   readonly rerender: () => void;
   /** Renders the view again with the tab's open-thread selection changed. */
   readonly reopen: (openThread: BotOpenThread | null) => void;
 } {
   const onOpenThread = vi.fn<(open: BotOpenThread | null) => void>();
-  const onOpenActivity = vi.fn<() => void>();
   const queryClient = new QueryClient();
   const tree = (openThread: BotOpenThread | null): ReactNode => (
     <QueryClientProvider client={queryClient}>
@@ -563,7 +565,6 @@ function mount(options: MountOptions): {
             surfaceActions={null}
             openThread={openThread}
             onOpenThread={onOpenThread}
-            onOpenActivity={onOpenActivity}
             setupHistory={null}
           />
         </ChatExpansionTestProviders>
@@ -582,7 +583,6 @@ function mount(options: MountOptions): {
   const result = render(tree(current));
   return {
     onOpenThread,
-    onOpenActivity,
     rerender: () => result.rerender(tree(current)),
     reopen: (openThread) => {
       current = openThread;
@@ -2065,6 +2065,56 @@ describe("<BotChannelView /> boxes on a short viewport under the keyboard", () =
   });
 });
 
+describe("<BotChannelView tiles={null} /> Call in the boxes", () => {
+  beforeEach(() => {
+    mocks.state.threads = [
+      thread("thread-a", "post-a", {
+        conversationId: "conversation-channel",
+        sessionChatId: "session-a",
+        replyCount: 2,
+        lastReplyAt: 7_000,
+      }),
+    ];
+    mocks.postIds = ["post-a"];
+    mocks.state.realComposer = true;
+  });
+
+  afterEach(() => {
+    useVoiceSessionStore.setState(useVoiceSessionStore.getInitialState(), true);
+  });
+
+  it("draws Call in the channel's box and the open thread's box, each calling its own place, and none in the thread's header", async () => {
+    const user = userEvent.setup();
+    const driver = {
+      start: vi.fn<VoiceSessionDriver["start"]>(),
+      end: vi.fn<VoiceSessionDriver["end"]>(),
+      setMuted: vi.fn<VoiceSessionDriver["setMuted"]>(),
+    };
+    useVoiceSessionStore.setState({ availability: "live", driver });
+    mount({ openThreadPostId: "post-a" });
+
+    const channelCall = screen.getByTestId("bot-channel-composer-call");
+    const threadCall = screen.getByTestId("bot-thread-composer-call");
+    expect(channelCall.getAttribute("aria-label")).toBe("Call Release Bot");
+    expect(threadCall.getAttribute("aria-label")).toBe("Call Release Bot");
+    const threadHeader = screen
+      .getByTestId("bot-thread-close")
+      .closest("header");
+    if (threadHeader === null) throw new Error("expected the thread header");
+    expect(
+      within(threadHeader).queryByRole("button", { name: /^Call/ }),
+    ).toBeNull();
+
+    await user.click(threadCall);
+    await user.click(channelCall);
+
+    expect(driver.start.mock.calls).toEqual([
+      [{ botId: BOT_ID, threadId: "thread-a" }],
+      [{ botId: BOT_ID, threadId: null }],
+    ]);
+  });
+});
+
 describe("<BotChannelView tiles={null} /> open thread", () => {
   beforeEach(() => {
     mocks.state.threads = [
@@ -2245,15 +2295,6 @@ describe("<BotChannelView tiles={null} /> open thread", () => {
     const panel = screen.getByTestId("bot-thread-panel");
     expect(within(panel).queryByTestId("bot-thread-cost")).toBeNull();
     expect(panel.textContent).not.toContain("$0.42");
-  });
-
-  it("opens the bot's Activity from the thread's header", async () => {
-    const user = userEvent.setup();
-    const { onOpenActivity } = mount({ openThreadPostId: "post-a" });
-
-    await user.click(screen.getByRole("button", { name: "Activity" }));
-
-    expect(onOpenActivity).toHaveBeenCalledTimes(1);
   });
 
   it("closes the thread from its header", async () => {

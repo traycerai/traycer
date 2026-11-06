@@ -75,6 +75,7 @@ import {
   botOnboardingCompleteResponseSchema,
   botOnboardingReadRequestSchema,
   botOnboardingReadResponseSchema,
+  botOnboardingReadResponseSchemaV12,
   botOnboardingReadResponseSchemaV10,
   botOnboardingReadResponseSchemaV11,
 } from "./onboarding-schemas";
@@ -515,7 +516,7 @@ export const botOnboardingReadV12 = defineRpcContract({
   method: "bot.onboarding.read",
   schemaVersion: { major: 1, minor: 2 } as const,
   requestSchema: botOnboardingReadRequestSchema,
-  responseSchema: botOnboardingReadResponseSchema,
+  responseSchema: botOnboardingReadResponseSchemaV12,
 });
 export const botOnboardingReadUpgradeV11ToV12 = defineUpgradePath<
   typeof botOnboardingReadV11,
@@ -531,6 +532,29 @@ export const botOnboardingReadUpgradeV11ToV12 = defineUpgradePath<
         ? null
         : { ...response.setup, state: "needs_host", arrival: null },
   }),
+});
+
+/**
+ * `bot.onboarding.read@1.3` (T141): a live setup's arrival may be `machine`,
+ * a computer of the team's own, and a setup whose machine holds the team's
+ * host before the bot exists is `host_joining`. A `1.2` caller is served a
+ * machine's arrival as `null` and `host_joining` as `needs_host`
+ * (`WITHIN_MAJOR_RESPONSE_PROJECTIONS` on the host).
+ */
+export const botOnboardingReadV13 = defineRpcContract({
+  method: "bot.onboarding.read",
+  schemaVersion: { major: 1, minor: 3 } as const,
+  requestSchema: botOnboardingReadRequestSchema,
+  responseSchema: botOnboardingReadResponseSchema,
+});
+export const botOnboardingReadUpgradeV12ToV13 = defineUpgradePath<
+  typeof botOnboardingReadV12,
+  typeof botOnboardingReadV13
+>({
+  from: botOnboardingReadV12.schemaVersion,
+  to: botOnboardingReadV13.schemaVersion,
+  upgradeRequest: (request) => request,
+  upgradeResponse: (response) => response,
 });
 
 export const botOnboardingChooseV10 = defineRpcContract({

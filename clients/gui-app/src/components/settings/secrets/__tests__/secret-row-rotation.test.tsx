@@ -68,6 +68,10 @@ import {
 import { RunnerHostContext } from "@/providers/runner-host-context";
 import { useAuthStore } from "@/stores/auth/auth-store";
 import { useSettingsEnvironmentPickStore } from "@/stores/settings/settings-environment-pick-store";
+import {
+  RETIRED_PROVIDER_VARIABLES,
+  RETIRED_SECRET_ROW_FIELDS,
+} from "@traycer/protocol/host/released-wire-rows";
 
 const HOST_ID = "host-secrets";
 const PERSONAL_ENV = "env-personal";
@@ -106,18 +110,17 @@ function secretFixture(
   overrides: Partial<EnvironmentSecretV12>,
 ): EnvironmentSecretV12 {
   return {
+    ...RETIRED_SECRET_ROW_FIELDS,
+    providerVariables: [...RETIRED_PROVIDER_VARIABLES],
     secretId: "sec-1",
     name: "STRIPE_KEY",
     kind: "api_key",
     protocol: "https",
     destinations: ["api.stripe.com"],
-    mode: "brokered",
-    state: "live",
     currentVersionId: "ver-3",
     revoked: false,
     updatedAt: 1,
     variables: [],
-    providerVariables: [],
     ...overrides,
   };
 }

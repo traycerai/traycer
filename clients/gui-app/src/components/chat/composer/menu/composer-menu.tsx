@@ -19,8 +19,8 @@ import { Button } from "@/components/ui/button";
 import { usePaneFocused } from "@/components/epic-tabs/pane-visibility-context";
 import { useIsMobileViewport } from "@/hooks/ui/use-mobile-viewport";
 import {
-  mentionProviderRegistry,
   type MentionFlowStep,
+  type MentionMenuCopy,
   type MentionStepChrome,
   type MentionStepChromeStatus,
 } from "@/lib/composer/mentions";
@@ -52,6 +52,7 @@ import {
   initialComposerMenuPlacement,
   readComposerMenuReservedEdges,
 } from "./composer-menu-middleware";
+import { composerMenuOptionId } from "./composer-menu-option-id";
 import { SlashMenuItem } from "./slash-menu-item";
 import { ZERO_DOM_RECT } from "./zero-dom-rect";
 
@@ -104,10 +105,17 @@ export interface ComposerMenuProps {
   readonly pickerStore: ComposerPickerStore;
   /** The composer's one row on the focus layout, which the menu ends above; `null` elsewhere. */
   readonly replyRow: RefObject<HTMLElement | null> | null;
+  /** A mention step's header and empty line: the prompt's are `mentionProviderRegistry.menuCopy`. */
+  readonly menuCopy: (step: MentionFlowStep) => MentionMenuCopy;
+  /**
+   * The listbox's id, for an editor that points at it and at its rows
+   * (`composerMenuOptionId`); `null` lets the menu name its own.
+   */
+  readonly listboxId: string | null;
 }
 
 export function ComposerMenu(props: ComposerMenuProps) {
-  const { pickerStore, replyRow } = props;
+  const { pickerStore, replyRow, menuCopy, listboxId } = props;
   const slice = useStore(pickerStore, useShallow(selectMenuSlice));
   const {
     open,
@@ -124,7 +132,7 @@ export function ComposerMenu(props: ComposerMenuProps) {
   const paneFocused = usePaneFocused();
 
   const baseMenuId = useId();
-  const menuId = `${baseMenuId}-menu`;
+  const menuId = listboxId ?? `${baseMenuId}-menu`;
 
   if (!open || !paneFocused) return null;
   if (typeof document === "undefined") return null;
@@ -133,6 +141,7 @@ export function ComposerMenu(props: ComposerMenuProps) {
     <ComposerMenuPortal
       pickerStore={pickerStore}
       replyRow={replyRow}
+      menuCopy={menuCopy}
       kind={kind}
       slashTrigger={slashTrigger}
       items={items}
@@ -150,6 +159,7 @@ export function ComposerMenu(props: ComposerMenuProps) {
 interface ComposerMenuPortalProps {
   readonly pickerStore: ComposerPickerStore;
   readonly replyRow: RefObject<HTMLElement | null> | null;
+  readonly menuCopy: (step: MentionFlowStep) => MentionMenuCopy;
   readonly kind: "mention" | "slash" | null;
   readonly slashTrigger: ComposerSlashTrigger | null;
   readonly items: ReadonlyArray<ComposerPickerItem>;
@@ -166,6 +176,7 @@ function ComposerMenuPortal(props: ComposerMenuPortalProps) {
   const {
     pickerStore,
     replyRow,
+    menuCopy,
     kind,
     slashTrigger,
     items,
@@ -201,11 +212,11 @@ function ComposerMenuPortal(props: ComposerMenuPortalProps) {
   );
 
   const copy = useMemo(() => {
-    if (kind === "mention") return mentionProviderRegistry.menuCopy(step);
+    if (kind === "mention") return menuCopy(step);
     // Both triggers list the same catalog, so the header does not vary with the
     // trigger - only the row prefixes echo which character was typed.
     return SLASH_MENU_COPY;
-  }, [kind, step]);
+  }, [kind, menuCopy, step]);
 
   const showEmptyLabelWithItems = useMemo(
     () =>
@@ -484,7 +495,7 @@ function renderPickerItem(
   trigger: ComposerSlashTrigger,
 ): RenderedItem {
   return {
-    id: `${menuId}-item-${index}`,
+    id: composerMenuOptionId(menuId, index),
     node:
       item.kind === "mention" ? (
         <MentionMenuItem entry={item.entry} />

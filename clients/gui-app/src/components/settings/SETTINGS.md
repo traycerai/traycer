@@ -1057,8 +1057,7 @@ credential; if the server needs one, it stops working until you pick another
 secret on MCP servers." ("Used by <A> and <B>." or "<A>, <B> and <n> more",
 then "Removing it leaves them without a credential; any that need one stop
 working until you pick another secret on MCP servers."), whose "MCP servers"
-opens that page (`secretUsedByLine`). A held secret's
-row keeps its "Waiting for you" badge.
+opens that page (`secretUsedByLine`).
 
 **Environment ▸ Retrospective sheet and Stop using Personal.** On a 1.1
 host, Overview shows `Shared by an earlier version` / `This computer stopped
@@ -1075,10 +1074,9 @@ Local picker row's subtitle (`its own settings, not in Personal yet`,
 `partly in Personal`, `stopped using Personal`) and `Move to Personal` /
 `Finish moving` verb come from those planes (E4's slot); the row's `Local`
 badge reads "Settings on this computer only" on hover. The Secrets page's
-`N values from {host} are on hold until you choose · Review them` line
-(`1 value … is on hold until you choose · Review it`) opens the same sheet
-for that host's held rows. `Keep as a secret` collects Add-secret's binding (kind, protocol,
-hosts, port, swap sites, gateway consent) with no value field, then
+`N commands from {host} are on hold until you choose · Review them` line
+(`1 command … is on hold until you choose · Review it`) opens the same sheet
+for that host's held rows, where Approve and Discard answer one row through
 `environment.review.heldApply`. Stop using Personal opens the preview
 (`environment.move.stopPreview`) and confirm (`environment.move.stop`) after
 every needs-choice row has Keep locally, Remove from this computer, or
@@ -1091,11 +1089,7 @@ kinds the page edits: each convergence notice from `environment.notices`
 with Undo (`environment.undo`, with the grant) while `undoAvailable`, and each
 "needs you" row from `environment.review` ("LOG_LEVEL is waiting for you:
 runs a command / was changed without your confirmation.") with Review, which
-opens Secrets. A value held because it looks like a key reads
-"LOG_LEVEL looks like a key and is on hold until you choose · Review", and
-its Variables or provider-variable row reads "LOG_LEVEL · on hold until you
-choose · Review" with no value; both Reviews open the retrospective sheet for
-that value. A value typed there that looks like a key (`classifyCredential`) is
+opens Secrets. A value typed there that looks like a key (`classifyCredential`) is
 refused in its row with "This looks like a key. Add it as a secret.", whose
 link opens Add a secret with the name and value filled in; nothing is stored
 as a variable. A provider's own key variable typed on its Env tab
@@ -1105,10 +1099,10 @@ opens that provider's Account tab; the typed value is cleared and nothing is
 saved. That tab is the one the provider page shows (`apiKey.supported`), so a
 provider without one, such as Claude Code, keeps the first line. A name one
 of Personal's secrets is set under (`environment.secrets.list@1.2` rows'
-`variables` and `providerVariables`: a moved key's secret is bound to the item
-it came from) reads "ENV_E2E_SERVICE_TOKEN · from the secret
-ENV_E2E_SERVICE_TOKEN · Secrets" on Variables or that provider's Env, with no
-value and nothing to edit there. A value
+`variables`) reads "ENV_E2E_SERVICE_TOKEN · from the secret
+ENV_E2E_SERVICE_TOKEN · Secrets" on Variables, with no value and nothing to
+edit there. A provider's Env has no such name: nothing binds a secret to a
+name in one provider's env. A value
 already saved that looks like a key shows as dots with Remove, never in a
 field, on every Variables and Env list (Personal, a team, a Local row), with
 the same line beneath where the page has one; its link carries the saved
@@ -1729,8 +1723,10 @@ means the drain UI renders NOTHING - never a zero, which would offer to end
   (`panels/notification-chime-settings-section.tsx`), one dropdown per kind
   of alert, untitled because the page is already named for it; and, in a build
   with something to play, **Soundtrack**
-  (`panels/soundtrack-settings-section.tsx`), its volume and what it follows.
-  Its on and off is the toggle in the top row. The id still says notifications:
+  (`panels/soundtrack-settings-section.tsx`): **Music**, the soundtrack's only
+  on and off switch (the palette's Soundtrack action flips the same setting),
+  then its volume and what it follows, which stay editable while it is off.
+  Nothing for it is drawn in the window's chrome. The id still says notifications:
   the OS and push rows moved to Alerts, and ids do not change.
 - `Alerts` (`panels/alerts-settings-panel.tsx`, `/settings/alerts`): one
   group, **Notifications** (anchor `alerts-notifications`), where the alerts

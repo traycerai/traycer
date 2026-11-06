@@ -31,6 +31,12 @@ import {
 } from "@/components/bots/bot-channel-notices";
 import { useBotMentionCompletion } from "@/components/bots/bot-mention-completion";
 import {
+  ComposerCallButton,
+  ComposerCallCaptions,
+  ComposerCallSwap,
+} from "@/components/layout/voice/composer-call";
+import { useComposerCall } from "@/components/layout/voice/use-composer-call";
+import {
   appendQuoteMarkdown,
   type QuoteTextSnapshot,
 } from "@/components/chat/quote/append-quote-to-draft";
@@ -94,16 +100,25 @@ const BOX_ONE_ROW = {
  * the box shows, as markdown quote lines - an edit in progress included,
  * which stays an edit - and the box takes the focus with the caret after it.
  *
- * `@` completes a member of the team's environment (decision 137); the box
- * shows their name and the send writes their token, so the bot's host knows
- * who was mentioned.
+ * `@` completes a member of the team's environment (decision 137), or a bot
+ * or a task of the bot's environment (decision 177); the box shows the name
+ * and the send writes its token, so the bot's host knows what was named.
  *
  * With the keyboard up on a short viewport the box is one row, the field beside
  * Send, and a longer draft scrolls inside the field. The same elements restyle,
  * so the field keeps its focus.
+ *
+ * Call sits beside Send on the channel's box and an opened thread's (Call
+ * Tracy): a call from the channel opens a new thread with the first thing
+ * said, one from a thread continues it. While the call placed from this box
+ * runs, the box swaps its field for the call bar, with the captions above
+ * it; the draft is kept and comes back with the field. The composer
+ * microphone's chord starts and ends that call.
  */
 export function BotMessageComposer(props: {
   readonly botId: string;
+  /** The bot's name, as Call says it. */
+  readonly botTitle: string;
   readonly conversationId: string;
   /** The thread the reply goes into; `null` posts at the channel's top level. */
   readonly threadId: string | null;
@@ -148,6 +163,7 @@ export function BotMessageComposer(props: {
 }): ReactNode {
   const {
     botId,
+    botTitle,
     conversationId,
     threadId,
     announcementId,
@@ -165,17 +181,18 @@ export function BotMessageComposer(props: {
     onSent,
   } = props;
   const client = useTabHostClient();
+  const call = useComposerCall(botId, threadId, announcementId);
   const send = useBotConversationSendMutation(client);
   const [text, setText] = useState("");
   const inputRef = useRef<HTMLTextAreaElement>(null);
   const [form, setForm] = useState<HTMLFormElement | null>(null);
   const box = useKeyboardFocusLayoutWithin(form) ? BOX_ONE_ROW : BOX_FULL;
-  const mentionListId = useId();
+  const frameRef = useRef<HTMLDivElement>(null);
   const mentions = useBotMentionCompletion({
     text,
     setText,
     inputRef,
-    listId: mentionListId,
+    replyRow: box === BOX_ONE_ROW ? frameRef : null,
   });
   // A new edit replaces what the box holds with the message's text.
   const [loadedEdit, setLoadedEdit] = useState<BotComposerEdit | null>(null);
@@ -324,88 +341,95 @@ export function BotMessageComposer(props: {
         submit();
       }}
     >
+      <ComposerCallCaptions shown={call.barShown} testId={testId} />
       <div
+        ref={frameRef}
         className={cn(
           "relative rounded-lg border border-border bg-background transition-colors focus-within:border-ring",
           box.frame,
         )}
       >
-        {mentions.list}
-        <label htmlFor={inputId} className="sr-only">
-          {label}
-        </label>
-        {edit === null ? null : (
-          <div
-            className="col-span-2 flex items-center gap-2 px-3 pt-2 text-ui-xs text-muted-foreground"
-            data-testid={`${testId}-editing`}
-          >
-            <span className="min-w-0 flex-1">
-              Sending replaces your message that failed.
-            </span>
-            <Button
-              type="button"
-              variant="link"
-              size="xs"
-              data-testid={`${testId}-edit-cancel`}
-              onClick={() => {
-                setText("");
-                onEditEnd();
-              }}
+        <ComposerCallSwap shown={call.barShown} testId={testId}>
+          {mentions.menu}
+          <label htmlFor={inputId} className="sr-only">
+            {label}
+          </label>
+          {edit === null ? null : (
+            <div
+              className="col-span-2 flex items-center gap-2 px-3 pt-2 text-ui-xs text-muted-foreground"
+              data-testid={`${testId}-editing`}
             >
-              Cancel
+              <span className="min-w-0 flex-1">
+                Sending replaces your message that failed.
+              </span>
+              <Button
+                type="button"
+                variant="link"
+                size="xs"
+                data-testid={`${testId}-edit-cancel`}
+                onClick={() => {
+                  setText("");
+                  onEditEnd();
+                }}
+              >
+                Cancel
+              </Button>
+            </div>
+          )}
+          <Textarea
+            ref={inputRef}
+            id={inputId}
+            value={text}
+            variant="bare"
+            size="sm"
+            rows={1}
+            placeholder={placeholder}
+            maxLength={MESSAGE_MAX}
+            className={cn("min-h-10", box.input)}
+            data-testid={`${testId}-input`}
+            {...mentions.inputAria}
+            onSelect={(event) =>
+              mentions.onCaret(event.currentTarget.selectionStart)
+            }
+            // Every edit, as `input` reports it: one that leaves the text as
+            // it was (a paste of the same text over it) reaches no `onChange`,
+            // and still replaced the picks it covered.
+            onInput={(event) => mentions.onInput(event.currentTarget)}
+            onChange={(event) => {
+              setText(event.target.value);
+              if (lastDelivery !== null) setLastDelivery(null);
+              // A failed message offered back stays offered while they type.
+              if (failure.unsent === null) failure.clear();
+            }}
+            onKeyDown={onKeyDown}
+          />
+          <div
+            className={cn("flex items-center justify-end gap-2 px-2", box.send)}
+          >
+            <ComposerCallButton
+              target={call.target}
+              botTitle={botTitle}
+              testId={testId}
+            />
+            <Button
+              type="submit"
+              size="icon-sm"
+              disabled={!canSend}
+              aria-label="Send"
+              data-testid={`${testId}-send`}
+            >
+              {send.isPending ? (
+                <AgentSpinningDots
+                  className={undefined}
+                  testId={undefined}
+                  variant={undefined}
+                />
+              ) : (
+                <SendHorizontal aria-hidden="true" />
+              )}
             </Button>
           </div>
-        )}
-        <Textarea
-          ref={inputRef}
-          id={inputId}
-          value={text}
-          variant="bare"
-          size="sm"
-          rows={1}
-          placeholder={placeholder}
-          maxLength={MESSAGE_MAX}
-          className={cn("min-h-10", box.input)}
-          data-testid={`${testId}-input`}
-          aria-autocomplete="list"
-          aria-controls={mentions.listOpen ? mentionListId : undefined}
-          aria-activedescendant={mentions.activeOptionId ?? undefined}
-          onSelect={(event) =>
-            mentions.onCaret(event.currentTarget.selectionStart)
-          }
-          // Every edit, as `input` reports it: one that leaves the text as
-          // it was (a paste of the same text over it) reaches no `onChange`,
-          // and still replaced the picks it covered.
-          onInput={(event) => mentions.onInput(event.currentTarget)}
-          onChange={(event) => {
-            setText(event.target.value);
-            if (lastDelivery !== null) setLastDelivery(null);
-            // A failed message offered back stays offered while they type.
-            if (failure.unsent === null) failure.clear();
-          }}
-          onKeyDown={onKeyDown}
-        />
-        <div
-          className={cn("flex items-center justify-end gap-2 px-2", box.send)}
-        >
-          <Button
-            type="submit"
-            size="icon-sm"
-            disabled={!canSend}
-            aria-label="Send"
-            data-testid={`${testId}-send`}
-          >
-            {send.isPending ? (
-              <AgentSpinningDots
-                className={undefined}
-                testId={undefined}
-                variant={undefined}
-              />
-            ) : (
-              <SendHorizontal aria-hidden="true" />
-            )}
-          </Button>
-        </div>
+        </ComposerCallSwap>
       </div>
       <ComposerStatus
         failure={failure}

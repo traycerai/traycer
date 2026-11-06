@@ -47,7 +47,6 @@ describe("<PickerSandboxCredentialLine />", () => {
 
   it.each([
     ["placeholder", "plain"],
-    ["process-scoped", "caution"],
     ["unsupported", "unavailable"],
   ] as const)("renders the %s mode in the %s tone", (mode, tone) => {
     render(<PickerSandboxCredentialLine harness={harnessWith(mode, null)} />);

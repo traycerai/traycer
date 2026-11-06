@@ -26,6 +26,7 @@ import type {
   SlackAppReadResult,
   SlackAppWriteResult,
 } from "../slack-app";
+import type { TeamHostInstallTokenResult } from "../team-host";
 import {
   SLACK_APP_REFUSAL_APP_NOT_FOUND,
   SLACK_APP_REFUSAL_APP_TAKEN,
@@ -43,7 +44,6 @@ import {
   type VoiceSessionMintRequest,
   type VoiceTrayAction,
 } from "../voice-sessions";
-import { voiceRouteViaHttp, type VoiceRouteFetchResult } from "../voice-router";
 import {
   decideSecretRequestViaHttp,
   fetchEnvironmentProvidersViaHttp,
@@ -210,6 +210,10 @@ const MOCK_TOKEN_STORE_KEY = "traycer.token";
 const MOCK_SLACK_INSTALL_URL = "https://slack.mock.invalid/oauth/v2/authorize";
 /** The server's install-state life (`SLACK_INSTALL_STATE_TTL_MS`). */
 const MOCK_SLACK_INSTALL_TTL_MS = 600_000;
+/** The mock's team-host install token and the host it enrolls: fixed, so a dev walk reads the same every time. */
+const MOCK_TEAM_HOST_ID = "00000000-0000-4000-8000-000000000001";
+const MOCK_TEAM_HOST_INSTALL_TOKEN = "mock-team-host-install-token";
+const MOCK_TEAM_HOST_INSTALL_TTL_MS = 600_000;
 const STEP_UP_EXPIRY_SKEW_MS = 5_000;
 
 interface RetainedStepUpCredential {
@@ -737,18 +741,6 @@ export class MockRunnerHost implements IRunnerHost {
     );
   }
 
-  routeVoiceUtterance(
-    bearerToken: string,
-    requestBody: string,
-  ): Promise<VoiceRouteFetchResult> {
-    return voiceRouteViaHttp(
-      this.serverBaseUrl,
-      bearerToken,
-      null,
-      requestBody,
-    );
-  }
-
   /** The last value a window reported, for a test to read back. */
   voiceSessionLive = false;
 
@@ -947,6 +939,18 @@ export class MockRunnerHost implements IRunnerHost {
         : app;
     this.slackApps.set(botId, next);
     return { kind: "ok", app: next };
+  }
+
+  async mintTeamHostInstallToken(
+    _bearerToken: string,
+    _environmentId: string,
+  ): Promise<TeamHostInstallTokenResult> {
+    return {
+      kind: "ok",
+      hostId: MOCK_TEAM_HOST_ID,
+      installToken: MOCK_TEAM_HOST_INSTALL_TOKEN,
+      expiresAt: Date.now() + MOCK_TEAM_HOST_INSTALL_TTL_MS,
+    };
   }
 
   /** Test/dev hook: Slack removed the bot's app (`app_uninstalled`). */

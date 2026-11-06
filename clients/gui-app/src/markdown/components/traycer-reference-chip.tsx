@@ -17,7 +17,7 @@ interface TraycerReferenceChipProps {
   readonly icon: ReactNode;
   readonly children: ReactNode;
   readonly title: string | undefined;
-  readonly refKind: "spec" | "ticket" | "chat" | "epic";
+  readonly refKind: "spec" | "ticket" | "chat" | "epic" | "artifact";
   readonly onOpen: ((event: MouseEvent<HTMLButtonElement>) => void) | null;
   readonly sameEpicNodeRef: EpicNodeRef | null;
   readonly epicId: string | undefined;
@@ -152,7 +152,7 @@ function ReferenceChipButton(props: {
   /** Hover label; `tooltip` not `title` so the call site cannot read as the
    *  native attribute. */
   readonly tooltip: string | undefined;
-  readonly refKind: "spec" | "ticket" | "chat" | "epic";
+  readonly refKind: "spec" | "ticket" | "chat" | "epic" | "artifact";
   readonly onOpen: (event: MouseEvent<HTMLButtonElement>) => void;
   readonly drag: ReferenceChipDragWiring | null;
 }) {

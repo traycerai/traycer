@@ -493,6 +493,23 @@ describe("settings search", () => {
       }
     });
 
+    it.each(["music", "soundtrack"])(
+      "finds the Music row under %s only in a build that offers the soundtrack",
+      (query) => {
+        const offered = { ...DESKTOP, soundtrackOffered: true };
+        const hit = searchSettings(query, offered).find(
+          (result) => result.entry.anchor === "sounds-soundtrack-music",
+        );
+        expect(hit?.entry.section).toBe("app-notifications");
+
+        expect(
+          searchSettings(query, DESKTOP).filter(
+            (result) => result.entry.anchor === "sounds-soundtrack-music",
+          ),
+        ).toEqual([]);
+      },
+    );
+
     it("offers the phone's push row on mobile and withholds it on desktop", () => {
       expect(labelsFor("push notifications", MOBILE)).toContain(
         "Push notifications",
