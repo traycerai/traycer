@@ -1,6 +1,7 @@
 import { useCallback, useMemo, useState, type ReactNode } from "react";
 import { Expand } from "lucide-react";
 import type { ToolCallArtifactStamp } from "@traycer/protocol/persistence/epic/content-blocks";
+import type { HtmlArtifactVersionSelection } from "@traycer/protocol/host/epic/html-artifact-versions";
 import {
   useChatAttachmentScope,
   type ChatAttachmentScopeValue,
@@ -10,6 +11,7 @@ import { HtmlArtifactDownloadButton } from "@/components/html-artifact/html-arti
 import type { SandboxSource } from "@/components/sandbox/sandbox-frame";
 import { useEpicStore } from "@/hooks/use-epic-store";
 import { useEpicTileNavigation } from "@/hooks/epic/use-epic-tile-navigation";
+import { isLiveHtmlArtifactVersion } from "@/hooks/epic/use-epic-html-artifact-version";
 import { useCoarsePointer } from "@/hooks/ui/use-coarse-pointer";
 import { artifactSourcePathsFor } from "@/lib/artifacts/artifact-object-paths";
 import { useStableOutsideReferenceResolver } from "@/lib/artifacts/use-stable-outside-reference-resolver";
@@ -252,10 +254,11 @@ function ShownArtifact(props: {
               source={source}
               scope={scope}
               title={stamp.title}
-              capturedAt={inlineCaptureTime(
+              htmlVersion={expandedHtmlVersion(
                 state.kind === "latest",
-                resolved,
+                source,
                 stamp,
+                resolved,
               )}
             />
           }
@@ -277,21 +280,36 @@ function ShownArtifact(props: {
   );
 }
 
-function inlineCaptureTime(
-  latest: boolean,
-  location: ArtifactLocation | null,
+/**
+ * The version Expand opens the tile on: the stamped capture this card shows,
+ * or `null` (Latest) when the card shows the artifact's current version, so
+ * the tile reads as Latest and follows the next save instead of freezing on
+ * the bundle that happened to be current at the click.
+ */
+function expandedHtmlVersion(
+  showingLatest: boolean,
+  source: Extract<SandboxSource, { kind: "artifact" }>,
   stamp: ToolCallArtifactStamp,
-): number {
-  return latest
-    ? (location?.artifact.head?.capturedAt ?? stamp.manifest.capturedAt)
-    : stamp.manifest.capturedAt;
+  location: ArtifactLocation | null,
+): HtmlArtifactVersionSelection | null {
+  if (showingLatest) return null;
+  const stamped: HtmlArtifactVersionSelection = {
+    manifest: {
+      files: stamp.manifest.files,
+      capturedAt: stamp.manifest.capturedAt,
+    },
+    entryPath: source.entryPath,
+  };
+  return isLiveHtmlArtifactVersion(stamped, location?.artifact ?? null)
+    ? null
+    : stamped;
 }
 
 function InlineArtifactActions(props: {
   readonly source: Extract<SandboxSource, { kind: "artifact" }>;
   readonly scope: ChatAttachmentScopeValue;
   readonly title: string;
-  readonly capturedAt: number;
+  readonly htmlVersion: HtmlArtifactVersionSelection | null;
 }) {
   const { openTile } = useEpicTileNavigation();
   const coarsePointer = useCoarsePointer();
@@ -321,23 +339,20 @@ function InlineArtifactActions(props: {
                 type: "html",
                 name: props.title,
                 hostId: props.scope.hostId,
-                htmlVersion: {
-                  manifest: {
-                    files: props.source.manifest.files,
-                    capturedAt: props.capturedAt,
-                  },
-                  entryPath: props.source.entryPath,
-                },
+                ...(props.htmlVersion === null
+                  ? {}
+                  : { htmlVersion: props.htmlVersion }),
               },
               target: { epicId: props.scope.epicId },
               gesture: "explicit",
               modifiers: null,
               placement: null,
               // One tile per artifact, like every other opener. A tile that
-              // is already open adopts this captured version on the hit
-              // (`executeTileOpen`), so the preview still comes up intact.
+              // is already open adopts this card's version on the hit, Latest
+              // included (`executeTileOpen`), so it shows what the card shows.
               dedupe: true,
               source: "direct_ui",
+              adoptHtmlVersion: true,
             });
           }}
         >

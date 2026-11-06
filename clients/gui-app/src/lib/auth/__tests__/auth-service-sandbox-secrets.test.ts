@@ -29,7 +29,6 @@ const SUMMARY_RESULT: SandboxGrantsFetchResult = {
         secretName: "DB_PASSWORD",
         kind: "password",
         protocol: "mysql",
-        mode: "brokered",
         source: "approved",
         connectorName: null,
         rotation: null,

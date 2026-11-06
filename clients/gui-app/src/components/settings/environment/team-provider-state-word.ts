@@ -44,7 +44,6 @@ export function teamProviderStateWord(input: {
       (secret) =>
         secret.kind === "provider" &&
         secret.name === keyName &&
-        secret.state === "live" &&
         !secret.revoked,
     );
   if (keyed) return "key";

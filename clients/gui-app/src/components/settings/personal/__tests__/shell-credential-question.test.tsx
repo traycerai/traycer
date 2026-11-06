@@ -638,8 +638,7 @@ describe("the Variables empty state", () => {
   });
 });
 
-describe("a held key-shaped variable on a Personal page", () => {
-  const HELD_NAME = "API_TOKEN";
+describe("a variable held for the person on a Personal page", () => {
   const heldEntry = (
     reason: string,
     key: string,
@@ -654,52 +653,7 @@ describe("a held key-shaped variable on a Personal page", () => {
     heldAt: 1,
   });
 
-  it("reads on hold with a Review, never shows the value, and says so in the banner", async () => {
-    renderShellPage({
-      ...READY_HOST,
-      existingVariables: [
-        { key: HELD_NAME, value: API_KEY_VALUE },
-        { key: "LOG_LEVEL", value: "debug" },
-      ],
-      review: [heldEntry("credential_like_value", HELD_NAME, "entry-1")],
-    });
-
-    const row = await screen.findByTestId("env-held-row");
-    expect(row.textContent).toBe(
-      `${HELD_NAME} · on hold until you choose · Review`,
-    );
-    expect(document.body.textContent).not.toContain(API_KEY_VALUE);
-    expect(screen.queryByLabelText(`Value for ${HELD_NAME}`)).toBeNull();
-    expect(screen.getByLabelText("Value for LOG_LEVEL")).toBeTruthy();
-
-    const banner = await screen.findByTestId("personal-review-row");
-    expect(banner.textContent).toBe(
-      `${HELD_NAME} looks like a key and is on hold until you choose · Review`,
-    );
-
-    // Either Review opens the sheet for that value.
-    fireEvent.click(within(row).getByTestId("held-value-review"));
-    const sheet = await screen.findByTestId("retrospective-sheet");
-    expect(
-      within(sheet).getByTestId("retrospective-held-entry-1"),
-    ).toBeTruthy();
-    expect(navigateToSettingsSectionMock).not.toHaveBeenCalled();
-  });
-
-  it("opens the sheet from the banner's Review too", async () => {
-    renderShellPage({
-      ...READY_HOST,
-      existingVariables: [{ key: HELD_NAME, value: API_KEY_VALUE }],
-      review: [heldEntry("credential_like_value", HELD_NAME, "entry-1")],
-    });
-
-    const banner = await screen.findByTestId("personal-review-row");
-    fireEvent.click(within(banner).getByTestId("held-value-review"));
-    expect(await screen.findByTestId("retrospective-sheet")).toBeTruthy();
-    expect(navigateToSettingsSectionMock).not.toHaveBeenCalled();
-  });
-
-  it("keeps an editable row for a variable held for another reason, and its Review opens Secrets", async () => {
+  it("keeps an editable row for a variable the review names, and its Review opens Secrets", async () => {
     renderShellPage({
       ...READY_HOST,
       existingVariables: [{ key: "SHELL_INIT", value: "echo hi" }],
@@ -795,13 +749,10 @@ describe("a variable a secret sets on the Personal page", () => {
     kind: "api_key",
     protocol: "https",
     destinations: ["api.example.com"],
-    mode: "exposed",
-    state: "live",
     currentVersionId: "ver-1",
     revoked: false,
     updatedAt: 1,
     variables: [NAME],
-    providerVariables: [],
   };
   const withKeyShapedValue = {
     ...READY_HOST,

@@ -93,7 +93,7 @@ const REFUSAL_ROWS: Readonly<Record<SandboxEgressRefusalCode, RefusalRow>> = {
   protocol_not_brokered: {
     headline: "Protocol is not brokered",
     describe: (subject) =>
-      `${subject.protocol ?? "This protocol"} is not one Traycer brokers, so ${secretOf(subject)} cannot be used for ${subject.host ?? "this destination"} through the gateway. Store it as an exposed secret to use it on a sandbox.`,
+      `${subject.protocol ?? "This protocol"} is not one Traycer brokers, so ${secretOf(subject)} cannot be used for ${subject.host ?? "this destination"} on a sandbox.`,
     asksForGrant: false,
   },
   signing_shape_unsupported: {

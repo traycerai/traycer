@@ -1398,7 +1398,6 @@ describe("<SandboxCard /> grants list", () => {
       secretName: "PROD_DB",
       kind: "password",
       protocol: "postgres",
-      mode: "brokered",
       source: "approved",
       connectorName: null,
       rotation: null,
@@ -1604,12 +1603,11 @@ describe("<SandboxCard /> grants list", () => {
     expect(route.textContent).toBe("db.internal:5432");
   });
 
-  it("shows an exposed grant without routes", () => {
+  it("shows a grant with no routes, by its protocol alone", () => {
     mocks.grantsData = grantsOf(
       [
         grantOf({
           secretName: "API_TOKEN",
-          mode: "exposed",
           protocol: "https",
           routes: [],
         }),
@@ -1621,9 +1619,7 @@ describe("<SandboxCard /> grants list", () => {
 
     const grant = screen.getByTestId("sandbox-card-grant");
     expect(grant.textContent).toContain("API_TOKEN");
-    expect(grant.textContent).toContain(
-      "https · exposed, readable on the sandbox",
-    );
+    expect(grant.textContent).toContain("https · brokered");
     expect(within(grant).queryByTestId("sandbox-card-grant-route")).toBeNull();
   });
 
@@ -1640,11 +1636,8 @@ describe("<SandboxCard /> grants list", () => {
     );
   });
 
-  it("says agents see a stand-in when a grant is brokered", () => {
-    mocks.grantsData = grantsOf(
-      [grantOf({ mode: "exposed", routes: [] }), grantOf({})],
-      null,
-    );
+  it("says agents see a stand-in while the sandbox holds any grant", () => {
+    mocks.grantsData = grantsOf([grantOf({ routes: [] }), grantOf({})], null);
 
     renderCard(sandboxOf("awake", false, { phase: "ready" }));
 
@@ -1653,18 +1646,11 @@ describe("<SandboxCard /> grants list", () => {
     );
   });
 
-  it("says nothing of a stand-in when every grant is exposed", () => {
-    mocks.grantsData = grantsOf(
-      [
-        grantOf({ secretName: "API_TOKEN", mode: "exposed", routes: [] }),
-        grantOf({ secretName: "OTHER", mode: "exposed", routes: [] }),
-      ],
-      null,
-    );
+  it("says nothing of a stand-in when the sandbox holds no grant", () => {
+    mocks.grantsData = grantsOf([], null);
 
     renderCard(sandboxOf("awake", false, { phase: "ready" }));
 
-    expect(screen.getByTestId("sandbox-card-grants")).toBeTruthy();
     expect(screen.queryByTestId("sandbox-card-stand-in")).toBeNull();
   });
 

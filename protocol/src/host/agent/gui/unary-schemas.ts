@@ -59,8 +59,8 @@ export type GuiHarnessUnavailableReason = z.infer<
 //
 //  - `placeholder`: the harness is launched with a placeholder in place of the
 //    key, and the egress gateway swaps the real credential in on the wire.
-//  - `process-scoped`: the harness is handed a short-lived token file scoped
-//    to its own process, rewritten before it expires.
+//    This is the only way a harness reaches its provider: no credential is
+//    handed to a sandbox as its own text.
 //  - `unsupported`: the way this harness authenticates cannot be brokered. The
 //    row stays in the catalog so the picker can say why; the mechanism is in
 //    `sandboxCredentialNote`.
@@ -68,7 +68,7 @@ export type GuiHarnessUnavailableReason = z.infer<
 // A harness the host does not offer on a sandbox at all is absent from the
 // catalog, so it has no member here.
 export const guiHarnessSandboxCredentialModeSchema = lazySchema(() =>
-  z.enum(["placeholder", "process-scoped", "unsupported"]),
+  z.enum(["placeholder", "unsupported"]),
 );
 export type GuiHarnessSandboxCredentialMode = z.infer<
   typeof guiHarnessSandboxCredentialModeSchema
