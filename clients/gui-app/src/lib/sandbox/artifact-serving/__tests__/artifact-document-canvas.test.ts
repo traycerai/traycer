@@ -1,6 +1,7 @@
 import { JSDOM, VirtualConsole, type DOMWindow } from "jsdom";
 import { afterEach, describe, expect, it } from "vitest";
 import { parseCanvasBox, parseCanvasElement } from "../../canvas-bridge";
+import { buildHtmlSelectionPrelude } from "../../canvas-bootstrap";
 import type { SandboxTheme } from "../../theme-map";
 import {
   buildArtifactDocument,
@@ -167,6 +168,26 @@ describe("an ordinary document is untouched by the canvas option", () => {
     const html = "<p   class=x >spaced</p>";
     const composed = buildArtifactDocument(html, optionsFor(false));
     expect(composed.endsWith(`</script>${html}`)).toBe(true);
+  });
+});
+
+describe("a commentable html page", () => {
+  const html =
+    "<main><p id='deep'>Deep</p><a href='other.html'>away</a></main>";
+
+  it("is the plain page plus position stamps and the selection script, with the plain bootstrap", () => {
+    const plain = buildArtifactDocument(html, optionsFor(false));
+    const page = buildArtifactDocument(html, {
+      ...optionsFor(true),
+      canvasLinks: "native",
+    });
+    const selection = buildHtmlSelectionPrelude(NONCE);
+
+    // A board would swap the viewer prelude for the canvas channel and set
+    // the bootstrap's canvas flag. A commentable page adds to the plain one.
+    expect(page).not.toBe(plain);
+    expect(page).toContain(selection);
+    expect(page.replace(STAMP_PATTERN, "").replace(selection, "")).toBe(plain);
   });
 });
 

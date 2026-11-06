@@ -12,10 +12,12 @@ import {
   PING_TIMEOUT_MS,
   SandboxBridgeHost,
   type SandboxHostContext,
+  type SandboxServedPages,
   type SandboxShortcutPress,
 } from "../bridge-host";
 import type {
   CanvasElement,
+  CanvasPageActivity,
   CanvasPageError,
   CanvasTextSelection,
 } from "../canvas-bridge";
@@ -73,9 +75,19 @@ interface Harness {
 
 const hosts: SandboxBridgeHost[] = [];
 
+/** A folder of pages: canvas with these is a commentable html page, not a board. */
+const COMMENTABLE_PAGES: SandboxServedPages = {
+  treePath: "site",
+  onNavigate: () => undefined,
+  onPageMissing: () => undefined,
+  onPageUnreachable: () => undefined,
+};
+
 function createHarness(options: {
   readonly canvas: boolean;
   readonly ready: boolean;
+  /** Omitted, the document is one page: a board when `canvas` is set. */
+  readonly pages?: SandboxServedPages | null;
 }): Harness {
   const sent: Sent[] = [];
   const onTextSelection =
@@ -90,7 +102,7 @@ function createHarness(options: {
       canvas: options.canvas,
       nonce: NONCE,
       forwardedShortcuts: [],
-      pages: null,
+      pages: options.pages ?? null,
     },
     hostContext: HOST_CONTEXT,
     hostVersion: "9.9.9",
@@ -1281,7 +1293,25 @@ describe("html view state", () => {
       {
         jsonrpc: "2.0",
         method: "traycer/html/view",
-        params: { enabled: true, scale: 1.5 },
+        params: { enabled: true, scale: 1.5, commenting: false },
+      },
+    ]);
+  });
+
+  it("reaches a commentable html page, which a board would have refused", () => {
+    const harness = createHarness({
+      canvas: true,
+      ready: true,
+      pages: COMMENTABLE_PAGES,
+    });
+
+    harness.host.setHtmlView({ enabled: true, scale: 1.25, commenting: true });
+
+    expect(viewMessages(harness)).toEqual([
+      {
+        jsonrpc: "2.0",
+        method: "traycer/html/view",
+        params: { enabled: true, scale: 1.25, commenting: true },
       },
     ]);
   });
@@ -1305,5 +1335,152 @@ describe("html view state", () => {
     harness.host.setHtmlView({ enabled: true, scale: 1.5, commenting: false });
 
     expect(viewMessages(harness)).toEqual([]);
+  });
+});
+
+describe("page activity from a commentable html page", () => {
+  function commentable(ready: boolean): Harness {
+    return createHarness({
+      canvas: true,
+      ready,
+      pages: COMMENTABLE_PAGES,
+    });
+  }
+
+  function listen(harness: Harness): CanvasPageActivity[] {
+    const heard: CanvasPageActivity[] = [];
+    harness.host.onPageActivity((activity) => {
+      heard.push(activity);
+    });
+    return heard;
+  }
+
+  function edit(harness: Harness): void {
+    void harness.host.setMode("edit");
+  }
+
+  function hover(marker: number): Sent {
+    return notification("traycer/canvas/hover", {
+      nonce: NONCE,
+      element: element({ marker }),
+    });
+  }
+
+  it("delivers the newest of each kind once the frame runs, and nothing before", () => {
+    const harness = commentable(true);
+    edit(harness);
+    const heard = listen(harness);
+
+    harness.host.receive(hover(1));
+    harness.host.receive(hover(2));
+    harness.host.receive(
+      notification("traycer/canvas/pick", { nonce: NONCE, x: 12, y: 34 }),
+    );
+    harness.host.receive(
+      notification("traycer/canvas/layout", { nonce: NONCE }),
+    );
+
+    expect(heard).toEqual([]);
+    vi.advanceTimersToNextFrame();
+
+    expect(heard.map((activity) => activity.kind)).toEqual([
+      "hover",
+      "pick",
+      "layout",
+    ]);
+    expect(heard[0]).toMatchObject({ kind: "hover", element: { marker: 2 } });
+    expect(heard[1]).toEqual({ kind: "pick", x: 12, y: 34 });
+    expect(heard[2]).toEqual({ kind: "layout" });
+  });
+
+  it("drops a board's reports even after the app asked it to edit", () => {
+    const harness = createHarness({ canvas: true, ready: true });
+    edit(harness);
+    const heard = listen(harness);
+
+    harness.host.receive(hover(7));
+    harness.host.receive(
+      notification("traycer/canvas/pick", { nonce: NONCE, x: 1, y: 2 }),
+    );
+    harness.host.receive(
+      notification("traycer/canvas/layout", { nonce: NONCE }),
+    );
+    vi.advanceTimersToNextFrame();
+
+    expect(heard).toEqual([]);
+  });
+
+  it("drops a report before the page has proven its nonce, and one carrying another nonce", () => {
+    const unproven = commentable(false);
+    edit(unproven);
+    const unprovenHeard = listen(unproven);
+    unproven.host.receive(hover(7));
+    vi.advanceTimersToNextFrame();
+    expect(unprovenHeard).toEqual([]);
+
+    const harness = commentable(true);
+    edit(harness);
+    const heard = listen(harness);
+    harness.host.receive(
+      notification("traycer/canvas/pick", { nonce: "other-nonce", x: 1, y: 2 }),
+    );
+    vi.advanceTimersToNextFrame();
+    expect(heard).toEqual([]);
+  });
+
+  it("drops reports while the page is for reading, including one already queued", () => {
+    const harness = commentable(true);
+    const heard = listen(harness);
+
+    harness.host.receive(hover(7));
+    void harness.host.setMode("play");
+    vi.advanceTimersToNextFrame();
+    expect(heard).toEqual([]);
+
+    edit(harness);
+    harness.host.receive(
+      notification("traycer/canvas/pick", { nonce: NONCE, x: 8, y: 9 }),
+    );
+    vi.advanceTimersToNextFrame();
+    expect(heard).toEqual([{ kind: "pick", x: 8, y: 9 }]);
+  });
+
+  it("drops a queued report when the frame moves to another page", () => {
+    const harness = commentable(true);
+    edit(harness);
+    const heard = listen(harness);
+    harness.host.receive(hover(7));
+
+    // The entry page's ready ran ahead of its load. The next load begins
+    // the page after it, and that page has not been asked to edit.
+    harness.host.frameLoaded();
+    harness.host.frameLoaded();
+    vi.advanceTimersToNextFrame();
+    expect(heard).toEqual([]);
+
+    harness.host.receive({
+      jsonrpc: "2.0",
+      method: "traycer/notifications/document-ready",
+      params: { nonce: NONCE, height: 80 },
+    });
+    edit(harness);
+    harness.host.receive(
+      notification("traycer/canvas/pick", { nonce: NONCE, x: 3, y: 4 }),
+    );
+    vi.advanceTimersToNextFrame();
+    expect(heard).toEqual([{ kind: "pick", x: 3, y: 4 }]);
+  });
+
+  it("treats a zoom report as a layout move while the page is being commented on", () => {
+    const harness = commentable(true);
+    edit(harness);
+    const heard = listen(harness);
+
+    harness.host.receive(
+      notification("traycer/notifications/html-view", { scale: 1.5 }),
+    );
+    vi.advanceTimersToNextFrame();
+
+    expect(heard).toEqual([{ kind: "layout" }]);
   });
 });
