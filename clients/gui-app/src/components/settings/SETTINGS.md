@@ -6346,7 +6346,8 @@ set-state-in-effect` forbids the effect form, and an effect would also
        reports `off` (`shownRemoteAccess`), even when a status read still says
        `on`.
     4. **Terminal account**, one row per provider with an ambient profile,
-       labelled by provider name only,
+       visibly labelled by provider name only, with its switch named
+       "<Provider> terminal account" for screen readers,
        under "This computer's own sign-in, which stays on this computer. Sign
        in on Providers to use one everywhere." (a team host: "This host's own
        sign-in, which stays on this host. An admin can link a plan on
