@@ -1487,7 +1487,6 @@ function PhoneShellHarness(): ReactNode {
       {...chrome}
       columnRef={() => undefined}
       header={<MobileAppHeader />}
-      soundtrackTopRow={null}
       strip={
         placement === "left" ? (
           <SideTabStrip edge="left" ownsTitleBar={false} />

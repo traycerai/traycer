@@ -1729,8 +1729,10 @@ means the drain UI renders NOTHING - never a zero, which would offer to end
   (`panels/notification-chime-settings-section.tsx`), one dropdown per kind
   of alert, untitled because the page is already named for it; and, in a build
   with something to play, **Soundtrack**
-  (`panels/soundtrack-settings-section.tsx`), its volume and what it follows.
-  Its on and off is the toggle in the top row. The id still says notifications:
+  (`panels/soundtrack-settings-section.tsx`): **Music**, the soundtrack's only
+  on and off switch (the palette's Soundtrack action flips the same setting),
+  then its volume and what it follows, which stay editable while it is off.
+  Nothing for it is drawn in the window's chrome. The id still says notifications:
   the OS and push rows moved to Alerts, and ids do not change.
 - `Alerts` (`panels/alerts-settings-panel.tsx`, `/settings/alerts`): one
   group, **Notifications** (anchor `alerts-notifications`), where the alerts

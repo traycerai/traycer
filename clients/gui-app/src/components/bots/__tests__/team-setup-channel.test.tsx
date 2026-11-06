@@ -18,10 +18,14 @@ import {
   environmentListMock,
   environmentMembersMock,
   hostDirectoryListMock,
+  cloudEpicTasksMock,
+  epicTaskContextsMock,
+  hostClientForHostIdMock,
   hostEnvironmentBindingsMock,
   hostQueriesMock,
   hostSupportsMethodMock,
   mocks,
+  notificationHostMock,
   tabHostClientMock,
   tabHostProviderMock,
   type TeamCloudBinding,
@@ -63,7 +67,26 @@ vi.mock("@/lib/tab-navigation", async (importOriginal) =>
     await importOriginal<typeof import("@/lib/tab-navigation")>(),
   ),
 );
+vi.mock(
+  "@/hooks/epic/use-epic-get-task-contexts-query",
+  () => epicTaskContextsMock,
+);
+vi.mock("@/hooks/epics/use-cloud-epic-tasks-query", async (importOriginal) =>
+  cloudEpicTasksMock(
+    await importOriginal<
+      typeof import("@/hooks/epics/use-cloud-epic-tasks-query")
+    >(),
+  ),
+);
 vi.mock("@/hooks/host/use-host-supports-method", () => hostSupportsMethodMock);
+vi.mock(
+  "@/hooks/notifications/use-notification-host",
+  () => notificationHostMock,
+);
+vi.mock(
+  "@/hooks/host/use-host-client-for-host-id",
+  () => hostClientForHostIdMock,
+);
 vi.mock("@/hooks/host/use-host-queries", () => hostQueriesMock);
 vi.mock("@/lib/host", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/lib/host")>()),

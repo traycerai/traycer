@@ -28,6 +28,8 @@ import { useTracySurfaceStore } from "@/stores/bots/tracy-surface-store";
 import { useBotDraftsStore } from "@/stores/bots/bot-drafts-store";
 import { useBotOpenThreadStore } from "@/stores/bots/bot-open-thread-store";
 import { useTeamCloudCreateStore } from "@/stores/bots/team-cloud-create-store";
+import { useStandaloneBotsStore } from "@/stores/bots/standalone-bots-store";
+import { EMPTY_DIRECTORY_STATE } from "@/lib/home-bots/__tests__/standalone-bots-fixtures";
 import { mocks, type OpenResult } from "./bot-tab-surface-mocks";
 
 export const BOT_ID = "bot_01ARZ3NDEKTSV4RRFFQ69G5FAV";
@@ -241,6 +243,11 @@ export function resetBotTabSurfaceMocks(): void {
   mocks.binding = null;
   mocks.sandboxDefaults = { kind: "pending" };
   mocks.supportQueries.length = 0;
+  mocks.taskContexts = new Map();
+  mocks.homeTasks = [];
+  mocks.taskReads.contextsPending = false;
+  mocks.taskReads.homePending = false;
+  mocks.taskReads.homeRefused = false;
   mocks.membersQueries.length = 0;
   mocks.state.membersSupport = true;
   mocks.state.snapshot = snapshot();
@@ -284,6 +291,8 @@ export function resetBotTabSurfaceMocks(): void {
   useBotOpenThreadStore.setState({ byBotId: {} });
   useTeamCloudCreateStore.setState({ byEnvironmentId: {} });
   __resetAgentActivityStoreForTests();
+  mocks.unreadTaskIds.clear();
+  mocks.indicatorAnswers.clear();
   openSurfaceOn(BOT_ID);
 }
 
@@ -293,6 +302,7 @@ const AUTH_AT_START = useAuthStore.getState();
 export function endBotTabSurfaceCase(queryClient: QueryClient): void {
   cleanup();
   queryClient.clear();
+  useStandaloneBotsStore.setState(EMPTY_DIRECTORY_STATE);
   // A case that signs a viewer in leaves no one signed in for the next.
   useAuthStore.setState({
     profile: null,

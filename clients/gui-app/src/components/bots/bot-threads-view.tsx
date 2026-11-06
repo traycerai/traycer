@@ -182,6 +182,7 @@ function ThreadList(props: {
               size="xs"
               testId="bot-thread-row-unread-count"
               corner={null}
+              noun="unread"
             />
             <BotThreadRowMenu
               botId={entry.bot.botId}

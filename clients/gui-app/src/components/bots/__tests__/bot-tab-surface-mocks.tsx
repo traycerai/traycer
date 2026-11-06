@@ -20,6 +20,7 @@ import type {
 } from "@/hooks/sandboxes/__tests__/sandbox-binding-fixture";
 import type { BotOpenResponse } from "@traycer/protocol/host/bot/schemas";
 import type { BotOnboardingSetup } from "@traycer/protocol/host/bot/onboarding-schemas";
+import type { ListTaskLight } from "@traycer/protocol/host/epic/unary-schemas";
 import type { BotSubscriptionSnapshot } from "@/hooks/bots/use-bot-subscription";
 import type { BotThreadSummary } from "@traycer/protocol/host/bot/conversation-schemas";
 import type { TabNavigationIntent } from "@/lib/tab-navigation/intents";
@@ -98,6 +99,23 @@ export const mocks = {
   /** The environment list query's `refetch`. */
   environmentsRefetch: vi.fn<() => void>(),
   supportQueries: [] as Array<{ hostId: string | null; method: string }>,
+  /** The task titles `epic.getTaskContexts` found for the bot's stream tasks. */
+  taskContexts: new Map<string, ListTaskLight>(),
+  /** Home's `epic.listTasks` rows. */
+  homeTasks: [] as ListTaskLight[],
+  /** How far the tab's two task reads have got; answered unless a case says otherwise. */
+  taskReads: {
+    contextsPending: false,
+    homePending: false,
+    homeRefused: false,
+  },
+  /**
+   * What the host's `indicatorState` read answers per task: the tasks whose
+   * result the person has not seen. One answer object per request set, as a
+   * query cache holds it.
+   */
+  unreadTaskIds: new Set<string>(),
+  indicatorAnswers: new Map<string, unknown>(),
   membersQueries: [] as Array<{
     environmentId: string | null;
     enabled: boolean;
@@ -172,18 +190,98 @@ export const hostSupportsMethodMock = {
   },
 };
 
+// The tasks a bot's channel can name come from two host reads, scripted here:
+// the titles of the stream's tasks, and Home's task list.
+const taskContextsRead = () => ({
+  tasksById: mocks.taskContexts,
+  isPending: mocks.taskReads.contextsPending,
+  error: null,
+});
+
+export const epicTaskContextsMock = {
+  useEpicGetTaskContexts: taskContextsRead,
+  useEpicGetTaskContextsForClient: taskContextsRead,
+};
+
+export function cloudEpicTasksMock<T extends object>(original: T): T {
+  return {
+    ...original,
+    useCloudEpicTasksQuery: () => ({ tasks: mocks.homeTasks }),
+    useCloudEpicTasksQueryForClient: () => ({
+      tasks: mocks.homeTasks,
+      presentsCachedPage: false,
+      firstPagePending: mocks.taskReads.homePending,
+      firstPageError: null,
+      initialLegRefused: mocks.taskReads.homeRefused,
+    }),
+  };
+}
+
+// The Activity count reads the notification indicators through the notification
+// host; the query transport below answers them.
+export const notificationHostMock = {
+  useNotificationResolveHostId: () => "host-notifications",
+};
+
+export const hostClientForHostIdMock = {
+  useHostClientForHostId: () => null,
+};
+
 // The host RPC boundary: `bot.onboarding.read` answers what the test
 // scripted, and a query that is not enabled reads as pending, or as what it
 // answered before when that is cached (`readsCached`), as TanStack's does.
 export const hostQueriesMock = {
   useHostQueries: (args: {
-    requests: ReadonlyArray<{ params: { environmentId: string } }>;
+    requests: ReadonlyArray<{
+      params: { environmentId?: string; epicIds?: ReadonlyArray<string> };
+    }>;
     options: { enabled?: boolean } | null;
-  }) =>
-    args.requests.map((request) => {
+    combine?: (results: ReadonlyArray<unknown>) => unknown;
+  }) => {
+    if (args.combine !== undefined) {
+      // `host.notifications.indicatorState` for the Activity count.
+      const combine = args.combine;
+      const enabled = args.options?.enabled === true;
+      const epicIds = args.requests.flatMap((r) => r.params.epicIds ?? []);
+      const key = JSON.stringify([enabled, epicIds]);
+      if (!mocks.indicatorAnswers.has(key)) {
+        const unread = {
+          pendingFork: false,
+          pendingApproval: false,
+          pendingInterview: false,
+          unreadFailure: false,
+          unreadDone: true,
+          unreadCount: 1,
+        };
+        mocks.indicatorAnswers.set(
+          key,
+          combine(
+            args.requests.map(() => ({
+              data: enabled
+                ? {
+                    epics: Object.fromEntries(
+                      epicIds
+                        .filter((id) => mocks.unreadTaskIds.has(id))
+                        .map((id) => [id, unread]),
+                    ),
+                    chats: {},
+                    complete: true,
+                  }
+                : undefined,
+              isPending: false,
+              isFetching: false,
+              error: null,
+              refetch: () => Promise.resolve(),
+            })),
+          ),
+        );
+      }
+      return mocks.indicatorAnswers.get(key);
+    }
+    return args.requests.map((request) => {
       const script =
         args.options?.enabled === true || mocks.state.readsCached
-          ? mocks.reads[request.params.environmentId]
+          ? mocks.reads[request.params.environmentId ?? ""]
           : undefined;
       const pending = {
         status: "pending",
@@ -199,7 +297,8 @@ export const hostQueriesMock = {
         data: script,
         dataUpdatedAt: mocks.state.readAt,
       };
-    }),
+    });
+  },
 };
 
 export const hostEnvironmentBindingsMock = {

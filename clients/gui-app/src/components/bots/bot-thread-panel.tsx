@@ -153,7 +153,6 @@ export function BotThreadPanel(props: {
   readonly anchorSenderLabel: (senderUserId: string | null) => string;
   readonly resolveMember: BotMemberResolver;
   readonly onClose: () => void;
-  readonly onOpenActivity: () => void;
   readonly onEditPost: (edit: BotComposerEdit) => void;
   /** Opens a turn of the bot: its session, in place of the channel. */
   readonly onOpenTurn: BotTurnOpen;
@@ -164,7 +163,7 @@ export function BotThreadPanel(props: {
   /** A quote for the panel's box to add to what it shows; `null` for none. */
   readonly quote: BotComposerQuote | null;
 }): ReactNode {
-  const { botTitle, onClose, onOpenActivity, onOpenSession } = props;
+  const { botTitle, onClose, onOpenSession } = props;
   const thread = props.thread.kind === "listed" ? props.thread.thread : null;
   const threadId =
     props.thread.kind === "posted"
@@ -238,15 +237,6 @@ export function BotThreadPanel(props: {
               Thread session
             </Button>
           )}
-          <Button
-            type="button"
-            variant="ghost"
-            size="xs"
-            data-testid="bot-thread-activity"
-            onClick={onOpenActivity}
-          >
-            Activity
-          </Button>
         </div>
         <Button
           type="button"
@@ -547,10 +537,6 @@ function ThreadTasks(props: {
     [tasks, threadId],
   );
   const threads = useMemo(() => (thread === null ? [] : [thread]), [thread]);
-  const place = useMemo(
-    () => ({ kind: "thread" as const, threadId }),
-    [threadId],
-  );
   const [band, setBand] = useState<HTMLDivElement | null>(null);
   const collapsed = useCollapsed(band);
   if (own.length === 0) return null;
@@ -575,7 +561,7 @@ function ThreadTasks(props: {
           hostId={hostId}
           tasks={own}
           threads={threads}
-          place={place}
+          threadId={threadId}
         />
       </div>
     </section>

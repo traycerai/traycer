@@ -110,11 +110,8 @@ import {
 import { BotActivityPage } from "@/components/bots/bot-activity-page";
 import { BotThreadsView } from "@/components/bots/bot-threads-view";
 import { useBotThreadListQuery } from "@/hooks/bots/use-bot-thread-list-query";
-import { useBotActivitySummary } from "@/hooks/bots/use-bot-activity-summary";
-import {
-  activityLabelParts,
-  type BotActivityLabelPart,
-} from "@/lib/bots/bot-activity-model";
+import { useBotActiveTasks } from "@/hooks/bots/use-bot-active-tasks";
+import { UnreadCountBadge } from "@/components/notifications/unread-count-badge";
 import { BotChannelSettingsPanel } from "@/components/bots/bot-settings-panel";
 import {
   BotIdentityContext,
@@ -133,8 +130,10 @@ import { botMemberName } from "@/lib/bots/bot-member-names";
 import { useAuthStore } from "@/stores/auth/auth-store";
 import {
   BotMentionsContext,
+  type BotMentionDirectory,
   type BotMentioned,
 } from "@/components/bots/bot-mentions-context";
+import { useBotMentionTargets } from "@/components/bots/use-bot-mention-targets";
 import { isMainBot, type MainBotIds } from "@/lib/bots/bot-main";
 import {
   botPausedCopy,
@@ -863,7 +862,6 @@ function useBotTabRail(
   readonly searchResultsOpen: boolean;
   readonly setOpenThread: (open: BotOpenThread | null) => void;
   readonly setOpenMemory: (open: BotOpenMemory | null) => void;
-  readonly openPostInChannel: (open: BotOpenThread) => void;
   readonly openMemoryInChannel: () => void;
   readonly openExchange: BotOpenExchange | null;
   readonly exchanges: BotExchangeRail;
@@ -900,21 +898,12 @@ function useBotTabRail(
       setRail(botId, open === null ? null : { kind: "thread", ...open }),
     [botId, setRail],
   );
-  // A post or a thread, from Activity: its thread opens beside the channel.
-  const openPostInChannel = useCallback(
-    (open: BotOpenThread) => {
-      setOpenThread(open);
-      onViewChange("messages");
-    },
-    [onViewChange, setOpenThread],
-  );
   return {
     openThread,
     openMemory,
     searchResultsOpen: searchShowing?.kind === "results",
     setOpenThread,
     setOpenMemory,
-    openPostInChannel,
     openMemoryInChannel,
     openExchange,
     exchanges,
@@ -1318,6 +1307,19 @@ function useChannelSetupHistory(input: {
 }
 
 /**
+ * Whether a bot's environment is the viewer's personal one; `null` while the
+ * environment list has not answered. The list holds only the viewer's own
+ * environments, so its one personal entry is theirs.
+ */
+function viewerOwnsEnvironment(
+  unread: boolean,
+  environment: EnvironmentListResponseV11["environments"][number] | null,
+): boolean | null {
+  if (unread) return null;
+  return environment !== null && environment.ownerKind === "user";
+}
+
+/**
  * Says whether the rail is drawn beside the channel, before the paint it would
  * otherwise be a frame late for. The rail draws only under Messages.
  */
@@ -1425,7 +1427,6 @@ function BotTabContent(props: {
     searchResultsOpen,
     setOpenThread,
     setOpenMemory,
-    openPostInChannel,
     openMemoryInChannel,
     openExchange,
     exchanges: exchangeRail,
@@ -1499,6 +1500,7 @@ function BotTabContent(props: {
     onViewChange,
   });
   useRailDrawnReport(place, threadListSupported, onRailDrawn);
+  const activeTasks = useBotActiveTasks(snapshot.tasks);
   const showMessages = useCallback(() => {
     closeSession();
     changeView("messages");
@@ -1508,14 +1510,6 @@ function BotTabContent(props: {
     hostId,
     channelShown: session === null && !threadsShown,
     onShow: showMessages,
-  });
-  const openActivity = useCallback(() => changeView("activity"), [changeView]);
-  const activitySummary = useBotActivitySummary({
-    botId,
-    trunkChatId: snapshot.bot.trunkChatId,
-    tasks: snapshot.tasks,
-    activity: snapshot.activity,
-    threads,
   });
   // The channel's settings open beside it from the header's ⋮.
   const [settingsOpen, setSettingsOpen] = useState(false);
@@ -1555,9 +1549,18 @@ function BotTabContent(props: {
     [botId, owner, snapshot.bot.title],
   );
   // A mention names the viewer, or a member the directory lists; anyone
-  // else's token stays as written.
-  const mentioned = useCallback(
-    (userId: string): BotMentioned | null => {
+  // else's token stays as written. A bot or a task is one of the
+  // environment's (decision 177).
+  const mentionTargets = useBotMentionTargets({
+    environmentId: snapshot.bot.environmentId,
+    tasks: snapshot.tasks,
+    personal: viewerOwnsEnvironment(
+      environments.data === undefined,
+      environment,
+    ),
+  });
+  const mentioned = useMemo((): BotMentionDirectory => {
+    const person = (userId: string): BotMentioned | null => {
       if (viewer !== null && viewer.userId === userId) {
         return {
           name: botMemberName(userId, viewer, resolveMember),
@@ -1567,9 +1570,20 @@ function BotTabContent(props: {
       const member = resolveMember(userId);
       if (member === null) return null;
       return { name: member.displayName ?? "member", self: false };
-    },
-    [resolveMember, viewer],
-  );
+    };
+    return {
+      person,
+      bots: mentionTargets.bots,
+      tasks: mentionTargets.tasks,
+      tasksAnswered: mentionTargets.tasksAnswered,
+    };
+  }, [
+    mentionTargets.bots,
+    mentionTargets.tasks,
+    mentionTargets.tasksAnswered,
+    resolveMember,
+    viewer,
+  ]);
 
   return (
     <BotMentionsContext value={mentioned}>
@@ -1610,11 +1624,7 @@ function BotTabContent(props: {
                     settingsOpen={settingsOpen}
                     onToggleSettings={toggleSettings}
                     onOpenSearch={openSearch}
-                    activityLabel={activityLabelParts({
-                      stopped: activitySummary.stopped.length,
-                      running: activitySummary.running.length,
-                      tasks: activitySummary.tasks,
-                    })}
+                    activityCount={activeTasks.rows.length}
                   />
                   {streamError === null ? null : (
                     // A fatal close AFTER a snapshot: the last reading stays on
@@ -1667,7 +1677,6 @@ function BotTabContent(props: {
                       environmentBots={environmentBots}
                       openExchange={openExchange}
                       exchangeRail={exchangeRail}
-                      onOpenActivity={openActivity}
                       setupHistory={setupHistory}
                       tiles={tiles}
                     />
@@ -1679,20 +1688,11 @@ function BotTabContent(props: {
                     <BotActivityPage
                       botId={botId}
                       hostId={hostId}
-                      boundHost={snapshot.boundHost}
-                      channelId={snapshot.bot.appConversationChatId}
-                      tasks={snapshot.tasks}
-                      notificationSubscriptions={
-                        snapshot.notificationSubscriptions
-                      }
-                      stoppedNotificationWatches={
-                        snapshot.stoppedNotificationWatches
-                      }
+                      botTitle={snapshot.bot.title}
+                      boundHere={snapshot.boundHost.isThisHost}
+                      active={activeTasks}
                       resolveMember={resolveMember}
-                      summary={activitySummary}
                       threads={threads}
-                      onOpenPost={openPostInChannel}
-                      onOpenTurn={openTurn}
                     />
                   </TabsContent>
                 </Tabs>
@@ -1792,8 +1792,7 @@ function ErrorNotice(props: {
  * its name with the main bot's star, the ⋮ that opens the channel's settings,
  * and the channel's views under it. What the bot is for is the top of its channel; nothing else
  * sits here but, on the phone, Talk. A session started here is focused on
- * this channel. Activity's label is the bot's indicator: what stopped, in red
- * and first, what runs and the tasks it tracks.
+ * this channel. Activity's count is the tasks its list shows.
  */
 function BotChannelHeader(props: {
   readonly level2: MobileLevel2Form | null;
@@ -1806,7 +1805,8 @@ function BotChannelHeader(props: {
   readonly onToggleSettings: () => void;
   /** Opens the channel's search; `null` where the tab's host has none. */
   readonly onOpenSearch: (() => void) | null;
-  readonly activityLabel: ReadonlyArray<BotActivityLabelPart>;
+  /** How many tasks the Activity list shows. */
+  readonly activityCount: number;
 }): ReactNode {
   const { settingsOpen } = props;
   // With the keyboard up on a short viewport: the name row alone while the
@@ -1904,20 +1904,13 @@ function BotChannelHeader(props: {
         </TabsTrigger>
         <TabsTrigger value="activity" data-testid="bot-tab-view-activity">
           Activity
-          {props.activityLabel.map((part) => (
-            <span
-              key={part.kind}
-              data-testid={`bot-tab-activity-${part.kind}`}
-              className={cn(
-                "font-normal",
-                part.kind === "stopped"
-                  ? "text-destructive"
-                  : "text-muted-foreground",
-              )}
-            >
-              {` · ${part.text}`}
-            </span>
-          ))}
+          <UnreadCountBadge
+            count={props.activityCount}
+            size="xs"
+            testId="bot-tab-activity-count"
+            corner={null}
+            noun="active"
+          />
         </TabsTrigger>
       </TabsList>
     </header>

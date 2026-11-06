@@ -7,7 +7,13 @@ afterEach(() => cleanup());
 describe("<UnreadCountBadge />", () => {
   it("draws an inline count as the filled secondary tag, announced as unread", () => {
     render(
-      <UnreadCountBadge count={3} size="sm" testId="count" corner={null} />,
+      <UnreadCountBadge
+        count={3}
+        size="sm"
+        testId="count"
+        corner={null}
+        noun="unread"
+      />,
     );
 
     const badge = screen.getByTestId("count");
@@ -26,6 +32,7 @@ describe("<UnreadCountBadge />", () => {
         size="xs"
         testId="count"
         corner="absolute -top-1 -right-1"
+        noun="unread"
       />,
     );
 
@@ -41,7 +48,13 @@ describe("<UnreadCountBadge />", () => {
 
   it("draws nothing at zero", () => {
     render(
-      <UnreadCountBadge count={0} size="sm" testId="count" corner={null} />,
+      <UnreadCountBadge
+        count={0}
+        size="sm"
+        testId="count"
+        corner={null}
+        noun="unread"
+      />,
     );
 
     expect(screen.queryByTestId("count")).toBeNull();

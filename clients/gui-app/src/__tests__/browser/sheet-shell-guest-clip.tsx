@@ -485,7 +485,6 @@ export function Fixture(): ReactNode {
       {...CHROME}
       columnRef={() => undefined}
       header={<AppHeader variant="app" />}
-      soundtrackTopRow={null}
       strip={<nav data-fixture-strip className="w-10 shrink-0 bg-canvas" />}
       banners={<div />}
       surface={

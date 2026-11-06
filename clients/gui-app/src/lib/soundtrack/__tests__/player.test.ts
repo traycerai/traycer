@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { appLogger } from "@/lib/logger";
+import { MIX_TUNING } from "../mix-tuning";
 import { crossfadePlayers, TrackPlayer } from "../player";
 import type { StemSource } from "../stems";
 import type { LayerProperties, VariableTrack } from "../variable-sound";
@@ -27,6 +28,7 @@ function makeTrack(lengthSeconds: number, variantsOfA: number): VariableTrack {
       {
         name: "A",
         variants: variantsOfA,
+        role: null,
         sublayers: 1,
         sublayerStartingOffset: null,
         pan: null,
@@ -34,6 +36,7 @@ function makeTrack(lengthSeconds: number, variantsOfA: number): VariableTrack {
       {
         name: "B",
         variants: 2,
+        role: null,
         sublayers: 1,
         sublayerStartingOffset: null,
         pan: null,
@@ -76,6 +79,7 @@ function makeStatesTrack(lengthSeconds: number): VariableTrack {
       {
         name: "A",
         variants: 2,
+        role: null,
         sublayers: 1,
         sublayerStartingOffset: null,
         pan: null,
@@ -83,6 +87,7 @@ function makeStatesTrack(lengthSeconds: number): VariableTrack {
       {
         name: "B",
         variants: 2,
+        role: null,
         sublayers: 1,
         sublayerStartingOffset: null,
         pan: null,
@@ -161,6 +166,7 @@ function makeSingleLayerTrack(
       {
         name: "A",
         variants: 2,
+        role: null,
         sublayers: 1,
         sublayerStartingOffset: null,
         pan: null,
@@ -440,19 +446,25 @@ describe("TrackPlayer resume", () => {
 });
 
 describe("TrackPlayer end of track", () => {
-  it("cuts at the end, stays silent for silenceSeconds, then starts a fresh state at track time 0", async () => {
+  it("rings out past the end until the last heard sample finishes, fades what a switched-off layer still sounds, stays silent for silenceSeconds, then starts a fresh state at track time 0", async () => {
     const output = new FakeOutput();
-    // 8 s samples are still sounding when the 5 s track ends.
+    // 8 s samples are still sounding when the 5 s track ends. A's, started at
+    // track time 0, ends at 8; B's is switched off at 1 s and holds nothing up.
     const player = makePlayer(output, new FakeStems(8), makeTrack(5, 2), 3);
     player.start(0, 0.1);
     await vi.advanceTimersByTimeAsync(1000);
     player.setLayerEnabled(1, false);
     expect(player.currentState()).not.toBeNull();
     await vi.advanceTimersByTimeAsync(4500);
+    // Past the 5 s length A still sounds, and nothing is cut.
+    expect(output.cuts()).toEqual([]);
+    expect(player.currentState()).not.toBeNull();
 
+    await vi.advanceTimersByTimeAsync(3000);
     const cuts = output.cuts();
-    expect(cuts.map((call) => call.gain).sort()).toEqual(["bus0/0", "bus0/1"]);
-    for (const cut of cuts) expect(cut.fade).toBe(0.01);
+    expect(cuts.map((call) => ({ gain: call.gain, fade: call.fade }))).toEqual([
+      { gain: "bus0/1", fade: MIX_TUNING.ringOutFadeSeconds },
+    ]);
     expect(player.currentState()).toBeNull();
     expect(player.elapsed()).toBe(0);
 
@@ -850,6 +862,7 @@ describe("TrackPlayer scheduling inside one lookahead window", () => {
         {
           name: "A",
           variants: 2,
+          role: null,
           sublayers,
           sublayerStartingOffset: [offset, offset],
           pan: null,
@@ -927,6 +940,7 @@ describe("TrackPlayer scheduling inside one lookahead window", () => {
         {
           name: "A",
           variants: 2,
+          role: null,
           sublayers: 3,
           sublayerStartingOffset: [0.1, 0.2],
           pan: null,
