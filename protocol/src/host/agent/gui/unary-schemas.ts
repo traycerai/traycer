@@ -67,8 +67,15 @@ export type GuiHarnessUnavailableReason = z.infer<
 //
 // A harness the host does not offer on a sandbox at all is absent from the
 // catalog, so it has no member here.
+//
+// `process-scoped` is retired - no harness is handed a token file of its own
+// any more - and stays a declared member because `@10.1` is released and a
+// member may not leave it: this is a catalog method, where growth and
+// shrinkage both freeze the shipped line (`compat-exceptions.json` says so of
+// these three methods by name). Nothing emits it; the host's launch-state
+// table has no such row left.
 export const guiHarnessSandboxCredentialModeSchema = lazySchema(() =>
-  z.enum(["placeholder", "unsupported"]),
+  z.enum(["placeholder", "process-scoped", "unsupported"]),
 );
 export type GuiHarnessSandboxCredentialMode = z.infer<
   typeof guiHarnessSandboxCredentialModeSchema

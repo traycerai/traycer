@@ -4,6 +4,10 @@ import {
   environmentSecretsListV11,
   environmentSecretsListV12,
 } from "@traycer/protocol/host/environment-contracts";
+import {
+  RETIRED_PROVIDER_VARIABLES,
+  RETIRED_SECRET_ROW_FIELDS,
+} from "@traycer/protocol/host/released-wire-rows";
 
 const row = {
   secretId: "sec-1",
@@ -11,6 +15,7 @@ const row = {
   kind: "api_key",
   protocol: "https",
   destinations: ["api.example.com"],
+  ...RETIRED_SECRET_ROW_FIELDS,
   currentVersionId: "ver-1",
   revoked: false,
   updatedAt: 1,
@@ -42,7 +47,9 @@ describe("environment.secrets.list 1.1 -> 1.2", () => {
       removed: [removed],
     });
 
-    expect(upgraded.secrets).toEqual([{ ...row, variables: [] }]);
+    expect(upgraded.secrets).toEqual([
+      { ...row, variables: [], providerVariables: [] },
+    ]);
     expect(upgraded.removed).toEqual([
       {
         ...removed,
@@ -60,6 +67,7 @@ describe("environment.secrets.list 1.1 -> 1.2", () => {
         {
           ...row,
           variables: ["ENV_E2E_SERVICE_TOKEN"],
+          providerVariables: [...RETIRED_PROVIDER_VARIABLES],
         },
       ],
       removed: [

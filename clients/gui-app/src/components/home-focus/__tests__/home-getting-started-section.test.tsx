@@ -13,6 +13,10 @@ import {
   provider,
 } from "@/components/settings/panels/permissions/__tests__/judge-test-support";
 import { HomeGettingStartedSection } from "@/components/home-focus/home-getting-started-section";
+import {
+  RETIRED_PROVIDER_VARIABLES,
+  RETIRED_SECRET_ROW_FIELDS,
+} from "@traycer/protocol/host/released-wire-rows";
 
 const mocks = vi.hoisted(() => ({
   providers: [] as ProviderCliState[],
@@ -132,6 +136,8 @@ function storedKeyProvider(): ProviderCliState {
 
 function secret(): EnvironmentSecretV12 {
   return {
+    ...RETIRED_SECRET_ROW_FIELDS,
+    providerVariables: [...RETIRED_PROVIDER_VARIABLES],
     secretId: "secret-1",
     name: "DEPLOY_KEY",
     kind: "api_key",
