@@ -255,6 +255,20 @@ function freshHistory(entryPath: string): PageHistory {
 }
 
 /**
+ * Comments anchor to the entry page's bytes, so only the entry page is
+ * commented on, and only once it is the page loaded: Back and Home name it at
+ * once, while the page they leave is still showing.
+ */
+function commentsOnLoadedEntryPage(
+  commenting: boolean,
+  onEntryPage: boolean,
+  provenPage: { readonly path: string } | null,
+  entryPath: string,
+): boolean {
+  return commenting && onEntryPage && provenPage?.path === entryPath;
+}
+
+/**
  * A served plain-html artifact: a folder of pages the reader moves between
  * inside one frame. The app keeps its own page stack, so Back and Home work
  * whatever the page does, and a link to a page the folder lacks says so
@@ -322,8 +336,12 @@ export function ArtifactPagesFrame(props: {
   const scaleRef = useRef(1);
   const [scale, setScale] = useState(1);
   const [ready, setReady] = useState(false);
-  // Counts each document that proved itself; see `tellReadyPage`.
-  const [readyLoads, setReadyLoads] = useState(0);
+  // The page of the document that last proved itself, a fresh object for
+  // each proof. Back and Home move `currentPath` at once while the page they
+  // leave is still loaded, so the comment mode follows this, not the request.
+  const [provenPage, setProvenPage] = useState<{
+    readonly path: string;
+  } | null>(null);
   const coarsePointer = useCoarsePointer();
   const controlSize = coarsePointer ? "icon-touch" : "icon-sm";
   const [history, setHistory] = useState(() => freshHistory(entryPath));
@@ -338,6 +356,7 @@ export function ArtifactPagesFrame(props: {
     path: currentPath,
     visit: current.visit,
     onNavigate: (path) => {
+      setProvenPage({ path });
       setHistory((previous) =>
         path === previous.currentPath
           ? { ...previous, missing: false, unreachable: false }
@@ -404,8 +423,12 @@ export function ArtifactPagesFrame(props: {
   const standIn = pageStandIn(current, { goHome, readAgain });
   const fills = height === null;
   const onEntryPage = currentPath === entryPath && standIn === null;
-  // Comments anchor to the entry page's bytes, so only it is commented on.
-  const commentingHere = commenting && onEntryPage;
+  const commentingHere = commentsOnLoadedEntryPage(
+    commenting,
+    onEntryPage,
+    provenPage,
+    entryPath,
+  );
   const viewAt = (next: number): SandboxHtmlView => ({
     enabled: fills,
     scale: next,
@@ -415,9 +438,7 @@ export function ArtifactPagesFrame(props: {
     bridgeRef.current?.setHtmlView(viewAt(next));
   };
   // Every load is a fresh document that opens for reading, so it is told its
-  // view and mode once its ready has rendered, and again on each change. The
-  // report that says ready has already moved `currentPath` to the page that
-  // loaded, so the mode told is that page's, never the one before it.
+  // view and mode once its proof has rendered, and again on each change.
   const tellReadyPage = useEffectEvent(() => {
     const bridge = bridgeRef.current;
     if (!ready || bridge === null) return;
@@ -426,7 +447,7 @@ export function ArtifactPagesFrame(props: {
   });
   useEffect(() => {
     tellReadyPage();
-  }, [readyLoads, commentingHere]);
+  }, [provenPage, commentingHere]);
   const pages = pageNavigationFor(source.manifest, current);
   const zoom = fills ? { ready, scale } : null;
   const hasControls =
@@ -476,9 +497,6 @@ export function ArtifactPagesFrame(props: {
           onSize={onSize}
           onStatus={(status) => {
             setReady(status === "ready");
-            // A page change can report loading and ready in one go, which
-            // leaves `ready` where it was; the count still moves.
-            if (status === "ready") setReadyLoads((count) => count + 1);
             onStatus(status);
           }}
           onRequestTeardown={noop}

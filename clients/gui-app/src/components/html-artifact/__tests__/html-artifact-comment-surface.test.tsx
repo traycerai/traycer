@@ -131,10 +131,14 @@ function provenBridge() {
   return { setHtmlView, setMode };
 }
 
+/** The entry page proves itself: it names its page, then says ready. */
 function markReady(): void {
-  const onStatus = frames.latest?.onStatus;
-  if (onStatus === undefined) throw new Error("no frame");
-  act(() => onStatus("ready"));
+  const frame = frames.latest;
+  if (frame === null) throw new Error("no frame");
+  act(() => {
+    frame.pageNavigation?.onNavigate("index.html");
+    frame.onStatus("ready");
+  });
 }
 
 beforeEach(() => {

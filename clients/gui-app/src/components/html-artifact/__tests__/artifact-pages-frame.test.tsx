@@ -416,7 +416,11 @@ describe("commenting on the entry page", () => {
     const { report } = renderPages({ pages: TWO_PAGES, commenting: true });
     const source = frameProps().source;
 
-    act(() => frameProps().onStatus("ready"));
+    // A proven page names itself before it says ready, as the bridge does.
+    report((page) => {
+      page.onNavigate("index.html");
+      frameProps().onStatus("ready");
+    });
 
     expect(screen.getByRole("button", { name: "Zoom in" })).toBeTruthy();
     expect(setMode).toHaveBeenLastCalledWith("edit");
@@ -436,7 +440,17 @@ describe("commenting on the entry page", () => {
       commenting: false,
     });
 
+    setMode.mockClear();
     await user.click(button("Back"));
+
+    // The page being left is still the one loaded: it is not put in Edit.
+    expect(setMode).not.toHaveBeenCalledWith("edit");
+
+    report((page) => {
+      page.onNavigate("index.html");
+      frameProps().onStatus("loading");
+      frameProps().onStatus("ready");
+    });
 
     expect(frameProps().source).toBe(source);
     expect(setMode).toHaveBeenLastCalledWith("edit");
@@ -455,7 +469,10 @@ describe("commenting on the entry page", () => {
     frames.bridge = bridge;
     const setMode = vi.spyOn(bridge, "setMode");
     const { report } = renderPages({ pages: TWO_PAGES, commenting: true });
-    act(() => frameProps().onStatus("ready"));
+    report((page) => {
+      page.onNavigate("index.html");
+      frameProps().onStatus("ready");
+    });
     report((page) => page.onNavigate("report.html"));
     expect(setMode).toHaveBeenLastCalledWith("play");
     setMode.mockClear();
