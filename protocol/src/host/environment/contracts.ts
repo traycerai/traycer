@@ -1,5 +1,6 @@
 /**
- * `environment.list` - every team environment the signed-in user belongs to.
+ * `environment.list` - the personal environment, then every team environment
+ * the signed-in user belongs to.
  * `environment.host.read` / `environment.host.bind` - this host's binding
  * and its compatibility acknowledgement.
  * `environment.host.list` - the hosts of an environment the caller may see.
