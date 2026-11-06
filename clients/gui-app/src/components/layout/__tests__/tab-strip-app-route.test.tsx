@@ -21,10 +21,6 @@ import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
 import { useLandingDraftStore } from "@/stores/home/landing-draft-store";
 import { installTabSyncCoordinator } from "@/lib/tab-sync/tab-sync-coordinator";
 import { useTabsStore } from "@/stores/tabs/store";
-import {
-  DEFAULT_LAYOUT_SNAPSHOT,
-  useLayoutStore,
-} from "@/stores/layout/layout-store";
 
 // Reconciliation install is owned by `WindowsBridgeProvider` in
 // production. Test mounts skip the provider, so install once here.
@@ -147,8 +143,8 @@ vi.mock("@/components/layout/tabs/tracy-entry-controller", () => ({
   TracyEntryController: () => null,
 }));
 // The voice layer resolves the runner host the same way, so it stays unmounted.
-vi.mock("@/components/layout/voice/voice-session-controller", () => ({
-  VoiceSessionController: () => null,
+vi.mock("@/components/layout/voice/call-controller", () => ({
+  CallController: () => null,
 }));
 
 // The shell's two-finger history swipe reads the desktop bridge through the
@@ -271,15 +267,6 @@ vi.mock("@/components/layout/root-landing-page", () => ({
 }));
 
 function resetStores(): void {
-  // The header strip these cases navigate from: the shipped left strip is
-  // side-tab-strip.test.tsx.s subject.
-  useLayoutStore.setState({
-    ...DEFAULT_LAYOUT_SNAPSHOT,
-    arrangement: {
-      ...DEFAULT_LAYOUT_SNAPSHOT.arrangement,
-      tabStripPlacement: "top",
-    },
-  });
   useEpicCanvasStore.setState(useEpicCanvasStore.getInitialState(), true);
   useLandingDraftStore.setState({ drafts: [], activeDraftId: null });
   useTabsStore.setState({

@@ -76,7 +76,7 @@ describe("applying a preset offers an Undo (L-133 overturned)", () => {
     act(() => {
       useLayoutStore.getState().setArrangement({
         ...useLayoutStore.getState().arrangement,
-        tabStripPlacement: "right",
+        tabStripPlacement: "left",
       });
     });
 
@@ -89,7 +89,7 @@ describe("applying a preset offers an Undo (L-133 overturned)", () => {
     // The apply never touched the arrangement, so Undo (which only restores
     // basePreset/overrides) leaves the later arrangement change in place.
     expect(useLayoutStore.getState().arrangement.tabStripPlacement).toBe(
-      "right",
+      "left",
     );
   });
 });
@@ -174,7 +174,7 @@ describe("Reset layout's confirm, in both hosts (L-20, P-6)", () => {
       act(() => {
         useLayoutStore.getState().setArrangement({
           ...DEFAULT_ARRANGEMENT,
-          tabStripPlacement: "right",
+          tabStripPlacement: "left",
         });
       });
       render(
@@ -195,7 +195,7 @@ describe("Reset layout's confirm, in both hosts (L-20, P-6)", () => {
 
       fireEvent.click(screen.getByTestId("confirm-cancel"));
       expect(useLayoutStore.getState().arrangement.tabStripPlacement).toBe(
-        "right",
+        "left",
       );
       expect(screen.queryByRole("dialog")).toBeNull();
 
@@ -245,7 +245,7 @@ describe("View changes (L-89 overturned: no separate level)", () => {
     act(() => {
       useLayoutStore.getState().setArrangement({
         ...DEFAULT_ARRANGEMENT,
-        tabStripPlacement: "right",
+        tabStripPlacement: "left",
       });
     });
     render(<PresetsBlock reveal={vi.fn()} />);
@@ -316,7 +316,7 @@ describe("View changes' revert keeps focus in the list, or moves it to the appli
     act(() => {
       useLayoutStore.getState().setArrangement({
         ...DEFAULT_ARRANGEMENT,
-        tabStripPlacement: "right",
+        tabStripPlacement: "left",
         sidebarSide: "right",
         minimapSide: "left",
       });
@@ -334,9 +334,7 @@ describe("View changes' revert keeps focus in the list, or moves it to the appli
     revertTabPlacement.focus();
     fireEvent.click(revertTabPlacement);
 
-    expect(useLayoutStore.getState().arrangement.tabStripPlacement).toBe(
-      DEFAULT_ARRANGEMENT.tabStripPlacement,
-    );
+    expect(useLayoutStore.getState().arrangement.tabStripPlacement).toBe("top");
     const revertSidebarSide = screen.getByRole("button", {
       name: "Revert Sidebar side",
     });
@@ -349,7 +347,7 @@ describe("View changes' revert keeps focus in the list, or moves it to the appli
     act(() => {
       useLayoutStore.getState().setArrangement({
         ...DEFAULT_ARRANGEMENT,
-        tabStripPlacement: "right",
+        tabStripPlacement: "left",
         sidebarSide: "right",
       });
     });
@@ -375,7 +373,7 @@ describe("View changes' revert keeps focus in the list, or moves it to the appli
     act(() => {
       useLayoutStore.getState().setArrangement({
         ...DEFAULT_ARRANGEMENT,
-        tabStripPlacement: "right",
+        tabStripPlacement: "left",
       });
     });
     openViewChanges();
@@ -387,9 +385,7 @@ describe("View changes' revert keeps focus in the list, or moves it to the appli
     revertTabPlacement.focus();
     fireEvent.click(revertTabPlacement);
 
-    expect(useLayoutStore.getState().arrangement.tabStripPlacement).toBe(
-      DEFAULT_ARRANGEMENT.tabStripPlacement,
-    );
+    expect(useLayoutStore.getState().arrangement.tabStripPlacement).toBe("top");
     expect(screen.queryByTestId("layout-change-list")).toBeNull();
     expect(screen.queryByRole("button", { name: "View changes" })).toBeNull();
     expect(screen.queryByRole("button", { name: "Hide changes" })).toBeNull();
@@ -403,7 +399,7 @@ describe("View changes' revert keeps focus in the list, or moves it to the appli
       useLayoutStore.getState().setRegionValues("mic", { shown: "hidden" });
       useLayoutStore.getState().setArrangement({
         ...DEFAULT_ARRANGEMENT,
-        tabStripPlacement: "right",
+        tabStripPlacement: "left",
       });
     });
     openViewChanges();

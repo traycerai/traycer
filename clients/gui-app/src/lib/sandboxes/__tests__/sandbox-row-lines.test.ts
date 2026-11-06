@@ -11,6 +11,7 @@ import {
   terminalSessionFixture,
 } from "@/hooks/sandboxes/__tests__/sandbox-fixtures";
 import {
+  formatSandboxDate,
   SANDBOX_DEFAULT_IDLE_MINUTES,
   SANDBOX_ROW_FILTER_NONE,
   sandboxClockLine,
@@ -34,7 +35,6 @@ import {
   type SandboxRowAction,
   type SandboxPageConfiguration,
   sandboxTodayCost,
-  formatSandboxDate,
 } from "@/lib/sandboxes/sandbox-row-lines";
 
 const NOW = 1_791_100_000_000;
@@ -360,6 +360,68 @@ describe("sandboxSessionsLine and sandboxIdleRefusal", () => {
 });
 
 describe("sandboxClockLine", () => {
+  const teamConfiguration: SandboxPageConfiguration = {
+    kind: "team",
+    teamId: "team-1",
+    teamName: "Acme",
+    environmentId: "env-acme",
+  };
+
+  it.each([
+    {
+      name: "Personal",
+      configuration: { kind: "personal" },
+      wakePayer: null,
+      expected: "Your credits ran out.",
+    },
+    {
+      name: "a team with an unknown payer",
+      configuration: teamConfiguration,
+      wakePayer: null,
+      expected: "Your Acme credits ran out.",
+    },
+    {
+      name: "a team whose payer is the viewer",
+      configuration: teamConfiguration,
+      wakePayer: { userId: "viewer", displayName: "Me" },
+      expected: "Your Acme credits ran out.",
+    },
+    {
+      name: "a team whose payer is another member",
+      configuration: teamConfiguration,
+      wakePayer: { userId: "payer", displayName: "Priya" },
+      expected:
+        "Priya's Acme credits ran out. Resuming changes the payer to you.",
+    },
+    {
+      name: "a team whose other payer has no name",
+      configuration: teamConfiguration,
+      wakePayer: { userId: "payer", displayName: null },
+      expected:
+        "A member's Acme credits ran out. Resuming changes the payer to you.",
+    },
+  ] as const)(
+    "names whose credits ran out for $name",
+    ({ configuration, wakePayer, expected }) => {
+      expect(
+        sandboxClockLine({
+          summary: sandboxSummaryFixture({
+            state: "suspended",
+            frozen: true,
+            frozenAt: null,
+            wakePayer,
+          }),
+          configuration,
+          cost: null,
+          wakeString: null,
+          viewerUserId: "viewer",
+          reachability: { unreachable: false, lastContactAt: null },
+          now: NOW,
+        }),
+      ).toBe(expected);
+    },
+  );
+
   it("states the idle stop for an awake Automations row on its own period", () => {
     expect(
       sandboxClockLine({
@@ -379,7 +441,7 @@ describe("sandboxClockLine", () => {
   });
 
   it.each(["released", "suspended", "stopped"] as const)(
-    "reads a %s Automations row as suspended, files kept",
+    "reads a %s Automations row with its state word and kept files",
     (state) => {
       expect(
         sandboxClockLine({
@@ -391,7 +453,9 @@ describe("sandboxClockLine", () => {
           reachability: { unreachable: false, lastContactAt: null },
           now: NOW,
         }),
-      ).toBe("Suspended · files kept · the next shell starts it");
+      ).toBe(
+        `${{ released: "Not running", suspended: "Suspended", stopped: "Stopped" }[state]} · files kept · the next shell starts it`,
+      );
     },
   );
 
@@ -502,9 +566,9 @@ describe("a released sandbox's line in its chat", () => {
     });
 
     expect(sandboxReleasedChatLine("e2e-auto")).toBe(
-      `e2e-auto is s${row.slice(1)}`,
+      "e2e-auto is not running · files kept · the next shell starts it",
     );
-    expect(row).toBe("Suspended · files kept · the next shell starts it");
+    expect(row).toBe("Not running · files kept · the next shell starts it");
   });
 });
 
@@ -547,9 +611,9 @@ describe("sandboxClockLine, a resting row", () => {
       now: CLOCK_NOW,
     });
 
-  it("promises the next wake and dates the destroy to the minute", () => {
+  it("promises the next wake and dates the removal in the reader's locale", () => {
     expect(line({ destroyAt: DESTROY_AT }, 50)).toBe(
-      "Suspended since 09:49 · Suspend keeps memory · resumes on your next action · destroyed Nov 1 at 09:49 unless used · $0.05 today",
+      `Suspended since 09:49 · Suspend keeps memory · resumes on your next action · Will be removed on ${formatSandboxDate(DESTROY_AT, false)} · $0.05 today`,
     );
   });
 
@@ -589,7 +653,7 @@ describe("sandboxClockLine, a resting row", () => {
 
   it("dates a stopped row's destroy unless it is started", () => {
     expect(line({ state: "stopped", destroyAt: DESTROY_AT }, 0)).toBe(
-      "Stopped since 09:49 · destroyed Nov 1 at 09:49 unless started",
+      `Stopped since 09:49 · Will be removed on ${formatSandboxDate(DESTROY_AT, false)}`,
     );
   });
 
@@ -666,7 +730,7 @@ describe("sandboxIdlePolicyLine", () => {
     );
   });
 
-  it("gives an ordinary row idle plus its resting clause, with the server's default idle minutes", () => {
+  it("gives an ordinary row its idle period and idle days, with the server's default idle minutes", () => {
     expect(
       sandboxIdlePolicyLine(
         sandboxSummaryFixture({
@@ -677,21 +741,19 @@ describe("sandboxIdlePolicyLine", () => {
         }),
       ),
     ).toBe(
-      `Suspends after ${SANDBOX_DEFAULT_IDLE_MINUTES} idle min · destroyed after 7 resting days`,
+      `Suspends after ${SANDBOX_DEFAULT_IDLE_MINUTES} idle min · destroyed after 7 idle days`,
     );
   });
 });
 
 describe("sandboxFrozenClock", () => {
-  it("dates the destroy to the minute, thirty days after the freeze", () => {
+  it("dates the removal thirty days after the freeze", () => {
     const frozenAt = new Date(2026, 9, 9, 12, 0).getTime();
+    const destroyAt = new Date(2026, 10, 8, 12, 0).getTime();
     const clock = sandboxFrozenClock(frozenAt);
 
-    expect(clock).toMatch(
-      /^Frozen sandboxes aren't destroyed on their idle schedule; this one is destroyed on [A-Z][a-z]{2} \d{1,2} at \d{2}:\d{2}\.$/,
-    );
-    expect(clock).toContain(
-      formatSandboxDate(frozenAt + 30 * 24 * 60 * 60 * 1000, true),
+    expect(clock).toBe(
+      `Will be removed on ${formatSandboxDate(destroyAt, false)}`,
     );
   });
 });
@@ -1006,6 +1068,22 @@ describe("sandboxClockLine, an awake row's day from the ledger", () => {
       now: NOW,
     });
 
+  const movingLine = (
+    state: "resuming" | "starting",
+    todayAwakeMs: number | null,
+    resumePending: boolean,
+  ): string =>
+    sandboxClockLine({
+      summary: sandboxSummaryFixture({ state, burst: false }),
+      configuration: { kind: "personal" },
+      cost: cost(300, todayAwakeMs),
+      wakeString: null,
+      viewerUserId: null,
+      reachability: { unreachable: false, lastContactAt: null },
+      now: NOW,
+      resumePending,
+    });
+
   it("reads the ledger's awake time, not the time since the last wake, beside the day's cost", () => {
     const text = line(cost(300, 3_600_000));
 
@@ -1016,6 +1094,38 @@ describe("sandboxClockLine, an awake row's day from the ledger", () => {
   it("an older server's null duration hides the duration, never the wake's age labelled today, and keeps the label and the cost", () => {
     expect(line(cost(300, null))).toBe(
       "Awake · $0.30 today · suspends after 30 idle min",
+    );
+  });
+
+  it.each([
+    [
+      "resuming",
+      "Resuming · Awake 12 min today · $0.30 today · suspends after 30 idle min",
+    ],
+    [
+      "starting",
+      "Starting · Awake 12 min today · $0.30 today · suspends after 30 idle min",
+    ],
+  ] as const)(
+    "reads the ledger's awake time while %s without a pending action",
+    (state, expected) => {
+      expect(movingLine(state, 12 * 60_000, false)).toBe(expected);
+    },
+  );
+
+  it.each([
+    ["resuming", "Resuming · $0.30 today · suspends after 30 idle min"],
+    ["starting", "Starting · $0.30 today · suspends after 30 idle min"],
+  ] as const)(
+    "keeps the state word while %s when the ledger has no duration",
+    (state, expected) => {
+      expect(movingLine(state, null, false)).toBe(expected);
+    },
+  );
+
+  it("keeps the pending resume fence ahead of the ledger duration", () => {
+    expect(movingLine("resuming", 12 * 60_000, true)).toBe(
+      "Resuming · pending",
     );
   });
 });

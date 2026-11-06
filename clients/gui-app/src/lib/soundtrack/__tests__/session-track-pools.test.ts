@@ -40,6 +40,7 @@ function trackOf(name: string): VariableTrack {
     layers: ["A", "B"].map((layerName) => ({
       name: layerName,
       variants: 1,
+      role: null,
       sublayers: 1,
       sublayerStartingOffset: null,
       pan: null,
@@ -407,6 +408,34 @@ describe("SoundtrackSession track pools", () => {
       expect(output.plays("bus0/0").filter((play) => play.at > 11)).toEqual([]);
       session.end();
     });
+  });
+
+  it("cuts the track in its ring-out when the view moves on, and leaves its buses silent for good", async () => {
+    // Each track's one sample plays from 0 for 60 s, far past the 10 s length
+    // and the 2 s crossfade.
+    const { session, output } = openWith({
+      views: { ...EMPTY_VIEWS, home: ["one"], settings: ["two"] },
+      tracks: [trackOf("one"), trackOf("two")],
+      stems: new FakeStems(60),
+      heldLayers: [],
+      resumePositions: {},
+    });
+    session.setSignals(HOME);
+    await advance(12);
+    expect(output.cuts()).toEqual([]);
+
+    session.setSignals({ ...HOME, view: "settings" });
+    await advance(CROSSFADE_SECONDS + 1);
+    const cuts = output.cuts();
+    expect(cuts).toHaveLength(1);
+    expect(cuts[0].gain).toMatch(/^bus0\//);
+    const onOldBus = () =>
+      output.calls.filter((call) => call.gain.startsWith("bus0")).length;
+    const settled = onOldBus();
+
+    await advance(40);
+    expect(onOldBus()).toBe(settled);
+    session.end();
   });
 
   it("starts nothing after the session ends during the silence", async () => {

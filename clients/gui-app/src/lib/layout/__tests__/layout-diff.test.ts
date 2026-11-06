@@ -122,7 +122,7 @@ describe("what the page can see as changed", () => {
       { mobileFooter: true },
       { hiddenProviders: [PROVIDER] },
       { dock: [...DEFAULT_ARRANGEMENT.dock].reverse() },
-      { tabStripPlacement: "top" },
+      { tabStripPlacement: "left" },
       { sidebarSide: "right" },
       { sideStripView: "layered" },
       { taskTabLayout: "shrink" },
@@ -227,7 +227,7 @@ describe("Reset layout (L-20)", () => {
     expect(after.overrides).toEqual({});
     expect(layoutModified(after)).toBe(false);
     expect(resetWouldChange(after)).toBe(false);
-    expect(after.arrangement.tabStripPlacement).toBe("left");
+    expect(after.arrangement.tabStripPlacement).toBe("top");
     expect(after.arrangement.sidebarSide).toBe("left");
     expect(after.arrangement.sideStripView).toBe("activity");
     expect(after.arrangement.wideReadingWidthPx).toBe(

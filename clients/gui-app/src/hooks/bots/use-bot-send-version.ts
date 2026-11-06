@@ -1,4 +1,5 @@
 import type { SchemaVersion } from "@traycer/protocol/framework/index";
+import { botConversationSendV13 } from "@traycer/protocol/host/bot/contracts";
 import { useHostMethodSchemaVersion } from "@/hooks/host/use-host-supports-method";
 
 /**
@@ -17,6 +18,14 @@ export const BOT_CONVERSATION_ANSWER_VERSION = {
   major: 1,
   minor: 2,
 } as const;
+
+/**
+ * The `bot.conversation.send` line that takes a call's words (`spoken`, and
+ * `origin` for the thread a call opens): an older host would drop both and
+ * take them as an ordinary post.
+ */
+export const BOT_CONVERSATION_CALL_VERSION =
+  botConversationSendV13.schemaVersion;
 
 /** Whether a host that negotiated `negotiated` for `bot.conversation.send` takes a send that needs `required`. */
 export function botSendTakes(

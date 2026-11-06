@@ -1065,14 +1065,6 @@ describe("Settings - Layout", () => {
     });
 
     it("disables Tab overflow with its reason while the tabs are vertical, keeping its value", async () => {
-      // From the top, where overflow is live; the shipped strip is vertical.
-      useLayoutStore.setState({
-        ...DEFAULT_LAYOUT_SNAPSHOT,
-        arrangement: {
-          ...DEFAULT_LAYOUT_SNAPSHOT.arrangement,
-          tabStripPlacement: "top",
-        },
-      });
       const user = userEvent.setup();
       renderPanel();
       await goToSurfaceTab(user, "topBar");
@@ -1112,13 +1104,6 @@ describe("Settings - Layout", () => {
     });
 
     it("opens the Tabs tab with Side tab view, disabled at the top and writable once vertical (D8)", async () => {
-      useLayoutStore.setState({
-        ...DEFAULT_LAYOUT_SNAPSHOT,
-        arrangement: {
-          ...DEFAULT_LAYOUT_SNAPSHOT.arrangement,
-          tabStripPlacement: "top",
-        },
-      });
       const user = userEvent.setup();
       renderPanel();
       await goToSurfaceTab(user, "topBar");

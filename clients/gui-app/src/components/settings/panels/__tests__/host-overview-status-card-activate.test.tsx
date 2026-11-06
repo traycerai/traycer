@@ -151,9 +151,11 @@ describe("HostOverviewHeaderActions Activate gate", () => {
       throw new Error("expected a tooltip trigger around the button");
     fireEvent.focus(trigger);
     expect(screen.getByRole("tooltip").textContent).toBe(
-      "Team hosts can't be made active.",
+      "A team's machine can't be the app's default.",
     );
-    expect(TEAM_HOST_ACTIVATE_REASON).toBe("Team hosts can't be made active.");
+    expect(TEAM_HOST_ACTIVATE_REASON).toBe(
+      "A team's machine can't be the app's default.",
+    );
 
     fireEvent.click(button);
     expect(onMakeActive).not.toHaveBeenCalled();
@@ -171,7 +173,9 @@ describe("HostOverviewHeaderActions Activate gate", () => {
 
     const item = screen.getByTestId("host-make-active");
     expect(item.getAttribute("aria-disabled")).toBe("true");
-    expect(item.textContent).toContain("Team hosts can't be made active.");
+    expect(item.textContent).toContain(
+      "A team's machine can't be the app's default.",
+    );
 
     fireEvent.click(item);
     expect(onMakeActive).not.toHaveBeenCalled();

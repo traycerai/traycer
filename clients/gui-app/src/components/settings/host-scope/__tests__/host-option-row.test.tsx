@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it } from "vitest";
 import { cleanup, render } from "@testing-library/react";
+import { HOST_FROZEN_WORD } from "@traycer/protocol/host/host-status";
 import { hostScopeOptionFixture } from "@/components/settings/host-scope/host-scope-fixture";
 import { HostOptionRow } from "@/components/settings/host-scope/host-option-row";
 import { AVAILABLE_HOST_ROW_SURFACE_STATE } from "@/components/settings/host-scope/host-option-model";
@@ -272,6 +273,39 @@ describe("HostOptionRow — environment label (Tracy Bots)", () => {
       "acme",
     );
     expect(queryByTestId("host-option-environment-host-b")).toBeNull();
+  });
+});
+
+describe("HostOptionRow — frozen sandbox state", () => {
+  afterEach(cleanup);
+
+  it("shows Out of credits beside the sandbox's lifecycle word", () => {
+    const host = hostScopeOptionFixture({
+      hostId: "sandbox-host",
+      kind: "sandbox",
+      sandbox: {
+        state: "suspended",
+        frozen: true,
+        summary: null,
+        teamOwned: false,
+      },
+    });
+    const { getByText } = render(
+      <HostOptionRow
+        host={host}
+        picked={false}
+        active={false}
+        intent="view"
+        surfaceState={AVAILABLE_HOST_ROW_SURFACE_STATE}
+        updateView={null}
+        nameRef={null}
+        nameWraps={false}
+        environmentLabel={null}
+      />,
+    );
+
+    expect(getByText("Suspended", { exact: true })).toBeTruthy();
+    expect(getByText(HOST_FROZEN_WORD, { exact: true })).toBeTruthy();
   });
 });
 

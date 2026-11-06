@@ -35,6 +35,7 @@ function renderSwitcher(refusalByHostId: ReadonlyMap<string, string>): void {
       action={{ kind: "manage-hosts", onSelect: () => undefined }}
       surface="field"
       intent="bind"
+      consequence={null}
       disabled={false}
       isLoading={false}
       listsFailed={false}
@@ -104,6 +105,7 @@ describe("<HostSwitcher /> surface refusals for a fork target", () => {
         action={{ kind: "manage-hosts", onSelect: () => undefined }}
         surface="field"
         intent="bind"
+        consequence={null}
         disabled={false}
         isLoading={false}
         listsFailed={false}
@@ -146,6 +148,7 @@ describe("<HostSwitcher /> surface refusals for a fork target", () => {
         action={{ kind: "manage-hosts", onSelect: () => undefined }}
         surface="field"
         intent="bind"
+        consequence={null}
         disabled={false}
         isLoading={false}
         listsFailed={false}
@@ -207,6 +210,7 @@ describe("<HostSwitcher /> surface refusals for a fork target", () => {
         action={{ kind: "manage-hosts", onSelect: () => undefined }}
         surface="field"
         intent="bind"
+        consequence={null}
         disabled={false}
         isLoading={false}
         listsFailed={false}

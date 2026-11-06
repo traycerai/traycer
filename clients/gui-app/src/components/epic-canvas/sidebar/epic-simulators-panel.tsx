@@ -186,7 +186,6 @@ function SimulatorDeviceGroup(props: {
         <span className="min-w-0 flex-1 truncate font-medium">
           {group.name}
         </span>
-        {group.isLocal ? <span className="shrink-0">Local</span> : null}
         {group.offline ? <span className="shrink-0">Offline</span> : null}
         <span className="shrink-0 tabular-nums">{group.rows.length}</span>
       </div>

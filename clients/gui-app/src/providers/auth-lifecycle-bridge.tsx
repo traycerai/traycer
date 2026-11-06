@@ -86,14 +86,9 @@ export function EpicSessionLifecycleBridge(
       // tabs are reconciled normally instead of being protected by the prior
       // identity's create markers.
       clearSessionCreatedEpics();
-      // Settings' viewing scope is a host id, and host ids belong to an
-      // ACCOUNT. Left standing across a switch it names the previous account's
-      // machine, which the new account's lists will never contain — so Settings
-      // opens `vanished`, reporting a host id the person signing in has never
-      // seen and cannot dismiss except by re-picking. `null` is not "no host",
-      // it is "follow the active host", so this returns the surface to its
-      // default rather than emptying it.
-      useSettingsHostScopeStore.getState().setScopedHostId(null);
+      // Settings selections and pending entries belong to this account.
+      // Signing out clears every environment's view before another signs in.
+      useSettingsHostScopeStore.getState().reset();
       // The shared watch pick — the one host the usage gauge and the resource
       // monitor READ — is a host id on the same account-owned terms, and it
       // PERSISTS: left standing it survives the restart into the next sign-in

@@ -51,8 +51,16 @@ import { lazySchema } from "@traycer/protocol/framework/lazy-schema";
 // Enums (mirror `@traycerai/common/types/host`)
 // -----------------------------------------------------------------------------
 
-/** Host classification. Mirrors the `HostKind` common type / Prisma enum. */
-export type HostRegistryKind = "personal" | "sandbox";
+/**
+ * Host classification. Mirrors the `HostKind` common type / Prisma enum.
+ * `machine` is a team's own computer (Tracy Bots T141): authn lists it only
+ * behind `?include=machine`, and `host.hostInventory.subscribe` carries it
+ * from `@1.2`.
+ */
+export type HostRegistryKind = "personal" | "sandbox" | "machine";
+
+/** The kinds before `machine`, which every frozen row below carries. */
+export type HostRegistryKindV11 = Exclude<HostRegistryKind, "machine">;
 
 /**
  * Whether this host can be reached, as the cloud sees it. The ONE liveness
@@ -168,6 +176,38 @@ export const HOST_SANDBOX_STATES = [
 ] as const;
 
 export type HostSandboxState = (typeof HOST_SANDBOX_STATES)[number];
+
+/**
+ * One word per state, everywhere, including filters and sort menus.
+ * Words never decide actions; behavioural classifiers keep reading raw state.
+ */
+export const HOST_SANDBOX_STATE_WORDS: Record<HostSandboxState, string> = {
+  creating: "Creating",
+  awake: "Awake",
+  suspending: "Suspending",
+  suspended: "Suspended",
+  resuming: "Resuming",
+  stopping: "Stopping",
+  stopped: "Stopped",
+  starting: "Starting",
+  destroying: "Destroying",
+  destroyed: "Destroyed",
+  failed: "Failed",
+  released: "Not running",
+};
+
+export function hostSandboxStateWord(state: HostSandboxState | null): string {
+  return state === null ? "Status unknown" : HOST_SANDBOX_STATE_WORDS[state];
+}
+
+/** Frozen is a condition shown beside the state, never a state of its own. */
+export const HOST_FROZEN_WORD = "Out of credits";
+
+export const HOST_KIND_WORDS: Record<HostRegistryKind, string> = {
+  personal: "Computer",
+  sandbox: "Sandbox",
+  machine: "Team machine",
+};
 
 /**
  * The runtime profile a host reported at registration: `agent` is the full
@@ -294,6 +334,14 @@ export const hostUpdateStateSchema = lazySchema(() =>
 );
 
 export const hostRegistryKindSchema = lazySchema(() =>
+  z.enum(["personal", "sandbox", "machine"]),
+);
+
+/**
+ * The kind enum before `machine`, FROZEN: the rows of
+ * `host.hostInventory.subscribe@1.0` and `@1.1` carry it.
+ */
+export const hostRegistryKindSchemaV11 = lazySchema(() =>
   z.enum(["personal", "sandbox"]),
 );
 
@@ -396,8 +444,8 @@ export const hostListItemSchema: z.ZodType<HostListItem> = lazySchema(() =>
  */
 export type HostListItemV10 = Omit<
   HostListItem,
-  "sandboxState" | "sandboxFrozen" | "profile" | "owner"
->;
+  "sandboxState" | "sandboxFrozen" | "profile" | "owner" | "kind"
+> & { kind: HostRegistryKindV11 };
 
 export const hostListItemSchemaV10: z.ZodType<HostListItemV10> = lazySchema(
   () =>
@@ -406,11 +454,42 @@ export const hostListItemSchemaV10: z.ZodType<HostListItemV10> = lazySchema(
         hostId: z.string(),
         displayName: z.string().nullable(),
         platform: z.string().nullable(),
-        kind: hostRegistryKindSchema,
+        kind: hostRegistryKindSchemaV11,
         publicKey: z.string(),
         createdAt: z.string(),
         status: hostStatusDtoSchema,
         commandInterpreter: hostCommandInterpreterSchema.nullable().optional(),
+        updatePolicy: hostUpdatePolicySchema,
+      })
+      .strict(),
+);
+
+/**
+ * A registry row as `host.hostInventory.subscribe@1.1` carries it: the live
+ * row before a team's own computer (`kind: machine`, Tracy Bots T141).
+ * FROZEN, a hand-copy for the same reason as {@link hostListItemSchemaV10}.
+ * The serving host drops `machine` rows for a 1.1 subscriber.
+ */
+export type HostListItemV11 = Omit<HostListItem, "kind"> & {
+  kind: HostRegistryKindV11;
+};
+
+export const hostListItemSchemaV11: z.ZodType<HostListItemV11> = lazySchema(
+  () =>
+    z
+      .object({
+        hostId: z.string(),
+        displayName: z.string().nullable(),
+        platform: z.string().nullable(),
+        kind: hostRegistryKindSchemaV11,
+        publicKey: z.string(),
+        createdAt: z.string(),
+        status: hostStatusDtoSchema,
+        commandInterpreter: hostCommandInterpreterSchema.nullable().optional(),
+        sandboxState: hostSandboxStateSchema.nullable().optional(),
+        sandboxFrozen: z.boolean().nullable().optional(),
+        profile: hostProfileSchema.nullable().optional(),
+        owner: hostOwnerPrincipalSchema.optional(),
         updatePolicy: hostUpdatePolicySchema,
       })
       .strict(),

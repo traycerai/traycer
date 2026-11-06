@@ -29,9 +29,9 @@ describe("taskSandboxEndLine", () => {
       "e2e-sbx-p1 was destroyed on Oct 28 at 01:27 by Dana. Its files are gone; this chat stays readable.",
     ],
     [
-      "after resting",
+      "after its idle period",
       end({ cause: "resting" }),
-      "e2e-sbx-p1 was destroyed on Oct 28 at 01:27 after resting. Its files are gone; this chat stays readable.",
+      "e2e-sbx-p1 was destroyed on Oct 28 at 01:27 after its idle period. Its files are gone; this chat stays readable.",
     ],
     [
       "after the idle minutes the server reports",

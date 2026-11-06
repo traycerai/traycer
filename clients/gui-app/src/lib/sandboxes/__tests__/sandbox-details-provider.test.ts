@@ -127,7 +127,7 @@ describe("sandboxDetailsEntry", () => {
       now: NOW,
     });
 
-    expect(entry.export().status.Frozen).toMatch(
+    expect(entry.export().status["Out of credits"]).toMatch(
       /^out of credits since [A-Z][a-z]{2} \d{1,2} at \d{2}:\d{2}; destroyed on [A-Z][a-z]{2} \d{1,2} at \d{2}:\d{2}$/,
     );
   });
@@ -306,7 +306,7 @@ describe("sandboxDetailsEntry", () => {
     expect(status["Destroyed on"]).toBe(destroyDay);
     // The same day, stated the same way, by the row beside it — the
     // agreement that makes the bare day right rather than merely shorter.
-    expect(status["Frozen"]).toContain(`destroyed on ${destroyDay}`);
+    expect(status["Out of credits"]).toContain(`destroyed on ${destroyDay}`);
   });
 
   // Both arms of that branch, on ONE pair of inputs that differs in `frozen`
@@ -686,10 +686,10 @@ describe("sandboxDetailsEntry History from the server's operations", () => {
     ]);
   });
 
-  it("ends the current entry with resting from then or awake from then", () => {
+  it("ends the current entry with idle from then or awake from then", () => {
     expect(
       events([entryOperation({ untilAt: null })], {}).map((e) => e.value),
-    ).toEqual(["by you · resting from then"]);
+    ).toEqual(["by you · idle from then"]);
     expect(
       events(
         [

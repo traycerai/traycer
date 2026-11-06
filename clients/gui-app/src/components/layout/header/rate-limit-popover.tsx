@@ -16,6 +16,8 @@ import {
   DEFAULT_ACCOUNT_CONTEXT,
   type AccountContext,
 } from "@traycer/protocol/common/schemas";
+import { HOST_KIND_WORDS } from "@traycer/protocol/host/host-status";
+import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Switch } from "@/components/ui/switch";
 import {
@@ -75,13 +77,22 @@ import { limitedProviderIds } from "@/lib/rate-limits/limited-profiles";
 import { useProviderRateLimitRefresh } from "@/hooks/rate-limits/use-provider-rate-limit-refresh";
 import {
   resolveStatusBarProfileIds,
+  useRateLimitProfileSelection,
   type RateLimitProfileSelection,
 } from "@/hooks/rate-limits/use-rate-limit-profile-selection";
 import { fetchProviderRateLimits } from "@/lib/rate-limits/provider-rate-limit-fetch";
 import { HostSwitcher } from "@/components/settings/host-scope/host-switcher";
 import { isHostScopeUsable } from "@/components/settings/host-scope/host-scope-status";
 import { isHostSwitcherListInteraction } from "@/components/settings/host-scope/host-switcher-portal";
-import type { HostScope } from "@/components/settings/host-scope/use-host-scope";
+import {
+  useHostScope,
+  type HostScope,
+} from "@/components/settings/host-scope/use-host-scope";
+import type { HostScopeOption } from "@/components/settings/host-scope/host-scope-model";
+import { useRouterState } from "@tanstack/react-router";
+import { isSettingsPath } from "@/stores/tabs/kinds/settings";
+import { useTabsStore } from "@/stores/tabs/store";
+import { flattenStripItemRefs } from "@/stores/tabs/layout";
 import {
   formatUnavailableReason,
   resolvePopoverProviderRateLimitState,
@@ -110,7 +121,10 @@ import {
   type RateLimitProviderId,
 } from "@/lib/rate-limit-providers";
 import { useRelativeTimestamp, useSampledNow } from "@/lib/relative-time";
-import { useSystemTabModalActions } from "@/stores/tabs/use-system-tab-modal";
+import {
+  useSystemTabModalActions,
+  useSystemOverlayActive,
+} from "@/stores/tabs/use-system-tab-modal";
 import { useAuthUser } from "@/hooks/auth/use-auth-user-query";
 import {
   resolveAccountContext,
@@ -713,7 +727,7 @@ function RateLimitPopoverResizeSurface({
         POPOVER_SURFACE_CLASS_NAME,
         variant === "content"
           ? "flex h-[max(50vh,22rem)] min-h-[min(35vh,16rem,var(--radix-popover-content-available-height))] flex-col"
-          : "flex min-h-[min(20vh,8rem,var(--radix-popover-content-available-height))] flex-col items-start gap-3 p-4",
+          : "flex min-h-[min(20vh,8rem,var(--radix-popover-content-available-height))] flex-col",
       )}
       style={
         size === null
@@ -751,17 +765,18 @@ function RateLimitPopoverBody({
   readonly scope: HostScope;
   readonly hasExplicitPick: boolean;
 }): ReactNode {
-  // The picker earns its row once there is a choice to make. One host means
-  // one possible answer, and a control whose only outcome is the state you are
-  // already in is chrome. The `vanished` exception is not a choice but a way
-  // OUT: a pick that no longer resolves must never leave someone stranded on a
-  // notice with the only control that could clear it hidden.
-  const showHostPicker =
-    scope.hosts.length > 1 || scope.vanishedHostId !== null;
-  const header = showHostPicker ? (
-    <RateLimitHostPickerRow scope={scope} onClose={onClose} />
-  ) : null;
+  const displayedHost =
+    scope.vanishedSelection === null ? scope.host : scope.activeHost;
+  const header = (
+    <RateLimitPopoverHostHeader
+      scope={scope}
+      displayedHost={displayedHost}
+      onClose={onClose}
+    />
+  );
 
+  // A named vanished pin is disclosed above the active host's data without
+  // clearing the saved choice. Older unnamed pins retain their refusal path.
   // Everything below reads through this subtree's host binding, and a PICK
   // that is not `ready` did not produce one - so the providers, the rail and
   // every block would silently describe the AMBIENT host under the name this
@@ -772,12 +787,20 @@ function RateLimitPopoverBody({
   // reported, an `unreachable` blip on it is what the envelope's last-good
   // retention exists to survive, and swapping that for a notice would take
   // working usage away from every single-host user.
-  if (hasExplicitPick && !isHostScopeUsable(scope.status)) {
+  const unavailablePick =
+    hasExplicitPick &&
+    scope.vanishedSelection === null &&
+    !isHostScopeUsable(scope.status);
+  const noFallbackHost =
+    scope.vanishedSelection !== null && displayedHost === null;
+  if (unavailablePick || noFallbackHost) {
     return (
       <RateLimitPopoverResizeSurface variant="content">
         {header}
         <div className="flex min-h-0 flex-1 flex-col items-stretch gap-3 overflow-y-auto p-3">
-          <RateLimitHostUnavailableNotice scope={scope} />
+          {noFallbackHost ? null : (
+            <RateLimitHostUnavailableNotice scope={scope} />
+          )}
           {/* The ACCOUNT-scoped half survives the host being down: Traycer
               Inference usage comes through the AuthService with no host
               binding involved, so only the host-RPC provider panes go with
@@ -789,12 +812,39 @@ function RateLimitPopoverBody({
     );
   }
 
+  if (scope.vanishedSelection !== null && displayedHost !== null) {
+    return (
+      <RateLimitPopoverFallbackBody
+        onClose={onClose}
+        header={header}
+        hostId={displayedHost.hostId}
+      />
+    );
+  }
+
   return (
     <RateLimitPopoverScopedBody
       onClose={onClose}
       profileSelection={profileSelection}
       header={header}
-      displayedHostId={scope.hostId}
+      displayedHostId={displayedHost?.hostId ?? null}
+    />
+  );
+}
+
+/** A stale pin's displayed fallback reads that host's checked and remembered accounts. */
+function RateLimitPopoverFallbackBody(props: {
+  readonly onClose: () => void;
+  readonly header: ReactNode;
+  readonly hostId: string;
+}): ReactNode {
+  const profileSelection = useRateLimitProfileSelection(props.hostId);
+  return (
+    <RateLimitPopoverScopedBody
+      onClose={props.onClose}
+      profileSelection={profileSelection}
+      header={props.header}
+      displayedHostId={props.hostId}
     />
   );
 }
@@ -903,22 +953,9 @@ function RateLimitPopoverScopedBody({
   // Zero-state only when there is genuinely nothing to show: no host-RPC
   // providers AND no eligible Traycer tab.
   if (providers.length === 0 && !traycerSubscription.eligible) {
-    // The zero state keeps its own compact surface when nothing scopes it. With
-    // a host picker present the row has to stay reachable, or picking the one
-    // host with no providers configured would remove the only way to pick a
-    // different one.
-    if (header === null) {
-      return (
-        <RateLimitPopoverResizeSurface variant="empty">
-          <RateLimitZeroState
-            onClose={onClose}
-            displayedHostId={displayedHostId}
-          />
-        </RateLimitPopoverResizeSurface>
-      );
-    }
+    // Keep identity and recovery visible even when this host has no usage providers.
     return (
-      <RateLimitPopoverResizeSurface variant="content">
+      <RateLimitPopoverResizeSurface variant="empty">
         {header}
         <div className="flex min-h-0 flex-1 flex-col items-start gap-3 overflow-y-auto p-4">
           <RateLimitZeroState
@@ -999,6 +1036,113 @@ function RateLimitPopoverScopedBody({
   );
 }
 
+function RateLimitPopoverHostHeader(props: {
+  readonly scope: HostScope;
+  readonly displayedHost: HostScopeOption | null;
+  readonly onClose: () => void;
+}): ReactNode {
+  const { scope, displayedHost } = props;
+  const settingsOverlayOpen = useSystemOverlayActive("settings");
+  const settingsRouteOpen = useRouterState({
+    select: (state) => isSettingsPath(state.location.pathname),
+  });
+  const settingsTabVisible = useTabsStore((state) => {
+    const item = state.items.find(
+      (candidate) => candidate.id === state.activeItemId,
+    );
+    return (
+      item !== undefined &&
+      flattenStripItemRefs(item).some((ref) => ref.kind === "settings")
+    );
+  });
+  const settingsVisible =
+    settingsOverlayOpen || settingsRouteOpen || settingsTabVisible;
+  // Choice and identity are separate: a stale pin keeps its recovery picker
+  // even when the fleet has shrunk to one host or none.
+  const showHostPicker =
+    scope.hosts.length > 1 || scope.vanishedHostId !== null;
+  return (
+    <>
+      {showHostPicker ? (
+        <RateLimitHostPickerRow
+          scope={scope}
+          displayedHost={displayedHost}
+          onClose={props.onClose}
+        />
+      ) : (
+        <div
+          className="shrink-0 border-b px-3 py-2 text-ui-sm font-medium"
+          data-testid="rate-limit-host-identity"
+        >
+          {displayedHost === null ? "No host" : displayedHost.name}
+          {displayedHost === null || displayedHost.kind === null ? null : (
+            <span className="font-normal text-muted-foreground">
+              {" · "}
+              {HOST_KIND_WORDS[displayedHost.kind]}
+            </span>
+          )}
+        </div>
+      )}
+      {scope.vanishedSelection === null ? null : (
+        <div
+          className="m-3 flex shrink-0 flex-col gap-2 rounded-md border p-2 text-ui-xs"
+          role="status"
+          data-testid="rate-limit-host-stale-pin"
+        >
+          <p>
+            {scope.vanishedSelection.name} is no longer here.
+            {displayedHost === null
+              ? null
+              : ` You're seeing ${displayedHost.name}.`}
+          </p>
+          <Button
+            variant="outline"
+            size="sm"
+            className="self-start"
+            onClick={scope.vanishedSelection.forget}
+          >
+            Forget {scope.vanishedSelection.name}
+          </Button>
+        </div>
+      )}
+      {settingsVisible && displayedHost !== null ? (
+        <RateLimitSettingsMismatch
+          usageHost={displayedHost}
+          onSelect={scope.setHostId}
+        />
+      ) : null}
+    </>
+  );
+}
+
+function RateLimitSettingsMismatch(props: {
+  readonly usageHost: HostScopeOption;
+  readonly onSelect: (hostId: string) => void;
+}): ReactNode {
+  const settingsHost = useHostScope().host;
+  if (settingsHost === null || settingsHost.hostId === props.usageHost.hostId)
+    return null;
+  return (
+    <div
+      className="m-3 flex shrink-0 flex-col gap-2 rounded-md border p-2 text-ui-xs"
+      role="status"
+      data-testid="rate-limit-host-mismatch"
+    >
+      <p>
+        Showing {props.usageHost.name}. Settings is showing {settingsHost.name}.
+      </p>
+      <Button
+        variant="outline"
+        size="sm"
+        className="self-start"
+        onClick={() => props.onSelect(settingsHost.hostId)}
+      >
+        Show {settingsHost.name} here
+      </Button>
+    </div>
+  );
+}
+
 /**
  * The host row above the rail: which machine's usage the whole surface is
  * reporting. It heads the rail + detail grid rather than sitting inside either
@@ -1014,9 +1158,11 @@ function RateLimitPopoverScopedBody({
  */
 function RateLimitHostPickerRow({
   scope,
+  displayedHost,
   onClose,
 }: {
   readonly scope: HostScope;
+  readonly displayedHost: HostScopeOption | null;
   readonly onClose: () => void;
 }): ReactNode {
   const { openSettings } = useSystemTabModalActions();
@@ -1039,7 +1185,7 @@ function RateLimitHostPickerRow({
     >
       <HostSwitcher
         hosts={scope.hosts}
-        selected={scope.host}
+        selected={displayedHost}
         activeHostId={scope.activeHostId}
         onSelect={scope.setHostId}
         refusalByHostId={NO_HOST_OPTION_REFUSALS}
@@ -1055,7 +1201,7 @@ function RateLimitHostPickerRow({
             onClose();
             // The displayed host travels with the jump - one rule, one
             // implementation, shared with the provider CTAs.
-            carryViewedHostIntoSettingsScope(scope.hostId);
+            carryViewedHostIntoSettingsScope(displayedHost?.hostId ?? null);
             // Named rather than left null: an Overview already open on
             // another tab comes back to Updates, as every host link does.
             openSettings({
@@ -1069,6 +1215,7 @@ function RateLimitHostPickerRow({
         }}
         surface="panel-header"
         intent="view"
+        consequence={null}
         disabled={false}
         isLoading={scope.isLoading}
         listsFailed={scope.listsFailed}
@@ -1084,8 +1231,8 @@ function RateLimitHostPickerRow({
 /**
  * Why this surface is showing nothing rather than showing the active host's
  * numbers under another host's name. Each branch names the remedy it has,
- * because the three states differ in exactly that: `vanished` needs the pick
- * dropped, `unreachable` needs the machine back, `connecting` needs a moment.
+ * because an unreachable machine needs to return, while a connecting one
+ * needs a moment. A vanished pin is disclosed above the active host's data.
  */
 function RateLimitHostUnavailableNotice({
   scope,

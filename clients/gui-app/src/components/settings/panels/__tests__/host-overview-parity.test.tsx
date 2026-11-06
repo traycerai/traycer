@@ -94,7 +94,7 @@ interface OverviewSemanticSnapshot {
   readonly headingTexts: readonly string[];
   readonly displayedName: string;
   /**
-   * The kind tag's TEXT — "This computer" or "Remote" — rather than whether a
+   * The kind tag's TEXT — "Computer" or "Host" — rather than whether a
    * tag is there at all.
    *
    * The predecessor was `thisComputerTagPresent`, a boolean, because only a
@@ -173,7 +173,7 @@ const SHARED_ROW_NAME = "stale-registry-label";
  * every one of them explicitly instead of just excluding it.
  */
 const LOCAL_ONLY_SNAPSHOT_DIFFERENCES = [
-  // The kind tag beside the name reads "This computer" on one and "Remote" on
+  // The kind tag beside the name reads "Computer" on one and "Host" on
   // the other. One tag, one slot, one word different — asserted verbatim below.
   "kindTagLabel",
   // The Danger zone sits on a third capability plane the page was never meant
@@ -245,7 +245,7 @@ function accessibleButtonName(button: Element): string {
 /**
  * Renders one variant (local or remote) against a caller-supplied fixture and
  * reduces the DOM to a complete structural snapshot. Never a raw text diff:
- * the "This computer" tag legitimately differs between the two variants, and a
+ * the "Computer" tag legitimately differs between the two variants, and a
  * whole-tree diff would fail on it instead of proving the page itself is
  * identical.
  *
@@ -276,6 +276,7 @@ async function renderOverviewSnapshot(options: {
     host: hostScopeOptionFixture({
       hostId: options.hostId,
       isLocalMachine: options.isLocalMachine,
+      kind: options.isLocalMachine ? "personal" : null,
       connectable: true,
       // Deliberately DIFFERENT from `effectiveName`: if the page ever reads the
       // scope row's name instead of `host.identity.get`'s answer, this pins
@@ -472,7 +473,7 @@ describe("<HostSettingsPanel /> Overview local/remote parity", () => {
     expect(remote.displayedName).toBe("Studio Mac");
   });
 
-  it("differs ONLY on the kind tag's word — This computer vs Remote, named and asserted", async () => {
+  it("differs ONLY on the kind tag's word — Computer vs Host, named and asserted", async () => {
     const local = await renderOverviewSnapshot({
       hostId: "host-local",
       isLocalMachine: true,
@@ -506,8 +507,8 @@ describe("<HostSettingsPanel /> Overview local/remote parity", () => {
     // (a tag here, nothing at all for a remote host). Asserted per variant
     // rather than merely "they differ", so a tag that vanished, or two that
     // swapped, fails here.
-    expect(local.kindTagLabel).toBe("This computer");
-    expect(remote.kindTagLabel).toBe("Remote");
+    expect(local.kindTagLabel).toBe("Computer");
+    expect(remote.kindTagLabel).toBe("Host");
 
     // The recovery console is absent in both — not a local/remote difference
     // at all, so it stays inside the main equality check too; asserted here
@@ -668,7 +669,7 @@ function kindTagNodes(root: HTMLElement): readonly Element[] {
     (child) =>
       child.tagName === "SPAN" &&
       child.children.length === 0 &&
-      (child.textContent.trim() === "This computer" ||
-        child.textContent.trim() === "Remote"),
+      (child.textContent.trim() === "Computer" ||
+        child.textContent.trim() === "Host"),
   );
 }

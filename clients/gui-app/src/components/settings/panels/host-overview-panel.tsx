@@ -1660,7 +1660,9 @@ export function HostOverviewPanel(props: {
         // unconfirmed sandbox): the list shows it, no picker offers it.
         onMakeActive={
           hostOptionCanActivate(host)
-            ? () => scope.makeActive(host.hostId)
+            ? () => {
+                void scope.makeActive(host.hostId);
+              }
             : null
         }
         teamOwned={host.sandbox?.teamOwned === true}

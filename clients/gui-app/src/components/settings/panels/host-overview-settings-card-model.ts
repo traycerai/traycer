@@ -1,4 +1,6 @@
+import type { EnvironmentHostBinding } from "@traycer/protocol/host/environment/contracts";
 import type { EnvironmentStatusResponseV11 } from "@traycer/protocol/host/environment-schemas";
+import { planesOfferStopSharing } from "@/components/settings/move/status-planes";
 import { isReportedItemKind } from "@/components/settings/environment/status-chip-page-kinds";
 import {
   localRowCohort,
@@ -10,19 +12,16 @@ import {
 } from "@/lib/environment/move-in-progress";
 
 /**
- * Where this computer's settings stand against Personal, as the Overview's
- * settings card says it:
+ * Where this computer's settings stand against Personal, from its status:
  *
  * - `local`: the computer has a Local row (not moved, partly moved, or
- *   stopped on some plane, the picker's own rule): `Settings on this computer
- *   only.` with the row's verb, `Move to Personal` or `Finish moving`.
+ *   stopped on some plane, the picker's own rule), with the row's verb.
  * - `moving`: the person accepted the move and the upload has not finished.
  * - `move_stopped`: the move stalled or failed before it finished, with why
  *   and how many items it has left (`Moving stopped: …`).
  * - `moved`: the person accepted the move on this computer and it finished
- *   (`Moved to Personal on …`, from `status.consent`).
- * - `other`: none of these (shared by an earlier version on every plane); the
- *   card carries only the dated lines.
+ *   (the accepted date is from `status.consent`).
+ * - `other`: none of these (shared by an earlier version on every plane).
  */
 export type HostSettingsCardState =
   | { readonly kind: "local"; readonly verb: LocalRowVerb }
@@ -65,4 +64,77 @@ export function hostSettingsCardState(
   return status.consent === null
     ? { kind: "other" }
     : { kind: "moved", acceptedAt: status.consent.acceptedAt };
+}
+
+interface HostSettingsRowOption {
+  readonly value: "personal" | "local";
+  readonly label: string;
+  readonly description: string;
+  readonly action: "move" | "stop_sharing";
+}
+
+const HOST_SETTINGS_OPTIONS: readonly HostSettingsRowOption[] = [
+  {
+    value: "personal",
+    label: "Personal",
+    description: "Your Personal settings reach this computer.",
+    action: "move",
+  },
+  {
+    value: "local",
+    label: "This computer only",
+    description: "Uses the settings stored here.",
+    action: "stop_sharing",
+  },
+];
+
+type HostSettingsRowModel =
+  | { readonly kind: "loading" }
+  | {
+      readonly kind: "team";
+      readonly label: string;
+      readonly description: string;
+    }
+  | {
+      readonly kind: "progress";
+      readonly progress: Extract<
+        HostSettingsCardState,
+        { kind: "moving" | "move_stopped" }
+      >;
+    }
+  | {
+      readonly kind: "select";
+      readonly value: "personal" | "local";
+      readonly description: string;
+      readonly options: readonly HostSettingsRowOption[];
+    };
+
+/** Settings place comes from status; the binding answers only which team. */
+export function hostSettingsRowModel(
+  status: EnvironmentStatusResponseV11 | null,
+  binding: EnvironmentHostBinding | null,
+): HostSettingsRowModel {
+  if (status === null || binding === null) return { kind: "loading" };
+  if (binding.explicit && binding.environment.ownerKind === "organization") {
+    const label = binding.environment.label;
+    const possessive = label.endsWith("s") ? `${label}'` : `${label}'s`;
+    return { kind: "team", label, description: `Runs ${possessive} settings.` };
+  }
+  const state = hostSettingsCardState(status);
+  if (state.kind === "moving" || state.kind === "move_stopped")
+    return { kind: "progress", progress: state };
+  const value = state.kind === "local" ? "local" : "personal";
+  const offerStop = planesOfferStopSharing(status.planes);
+  return {
+    kind: "select",
+    value,
+    description:
+      value === "local"
+        ? "Uses the settings stored on this computer. Changes stay here."
+        : "Your Personal providers, keys, variables and skills reach this computer.",
+    options: HOST_SETTINGS_OPTIONS.filter(
+      (option) =>
+        option.value === value || option.action === "move" || offerStop,
+    ),
+  };
 }

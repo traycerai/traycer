@@ -1258,6 +1258,18 @@ the whole surface guards against:
   tag beside the host name, which replaced a full-width row asserting the same
   boolean.
 
+Settings keeps one host view selection per environment pick, in the window's
+non-persisted `settings-host-scope-store`. `useHostScope()` filters the global
+host options through `useHostsRunningConfiguration` membership (or the one
+Local host), defaulting to the first member only when no selection exists.
+An explicit selection that leaves membership stays vanished, with its picked
+name and a Forget control; loading or failed membership selects nothing.
+Named entry points share `carryViewedHostIntoSettingsScope`: hold the target
+pending, resolve its Local row or confirm Personal/team membership, then set
+the environment pick and its host selection. This never activates a host.
+Membership, discovery and Personal's computer lists use the unscoped
+`useHostScopeFor(WINDOW_HOST_SELECTION)` beneath that selection.
+
 `useHostScope()` (`host-scope/use-host-scope.ts`) is the single hook every
 panel under the picker reads; `usePersonalHostScope()` beside it is the same
 host model over a fixed "follow the active host" selection, for the Personal
@@ -1717,8 +1729,10 @@ means the drain UI renders NOTHING - never a zero, which would offer to end
   (`panels/notification-chime-settings-section.tsx`), one dropdown per kind
   of alert, untitled because the page is already named for it; and, in a build
   with something to play, **Soundtrack**
-  (`panels/soundtrack-settings-section.tsx`), its volume and what it follows.
-  Its on and off is the toggle in the top row. The id still says notifications:
+  (`panels/soundtrack-settings-section.tsx`): **Music**, the soundtrack's only
+  on and off switch (the palette's Soundtrack action flips the same setting),
+  then its volume and what it follows, which stay editable while it is off.
+  Nothing for it is drawn in the window's chrome. The id still says notifications:
   the OS and push rows moved to Alerts, and ids do not change.
 - `Alerts` (`panels/alerts-settings-panel.tsx`, `/settings/alerts`): one
   group, **Notifications** (anchor `alerts-notifications`), where the alerts
