@@ -70,6 +70,15 @@ export const APP_NOTIFICATIONS = defineSettingsSection("app-notifications", {
     availableWhen: isSoundtrackRowAvailable,
     keywords: ["music", "ambient"],
   },
+  soundtrackEnabled: {
+    kind: "row",
+    group: "soundtrack",
+    search: { anchor: "sounds-soundtrack-music" },
+    label: "Music",
+    description: "Plays music while you work.",
+    availableWhen: isSoundtrackRowAvailable,
+    keywords: ["soundtrack", "play"],
+  },
   soundtrackVolume: {
     kind: "row",
     group: "soundtrack",

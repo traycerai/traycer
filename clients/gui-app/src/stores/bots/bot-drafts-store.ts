@@ -29,11 +29,6 @@ export interface BotThreadBoxDraft {
    * question card), never by typing, so the box loads each one once.
    */
   readonly seedId: number;
-  /**
-   * Which draft this is, new on every change to it, typed or put there, and
-   * never reused.
-   */
-  readonly revision: number;
 }
 
 /** A message a box sent that never reached the conversation. */
@@ -115,13 +110,6 @@ function withEntry<T>(
   return next;
 }
 
-let lastRevision = 0;
-
-function nextRevision(): number {
-  lastRevision += 1;
-  return lastRevision;
-}
-
 /**
  * What a member has not sent yet: a card's answer, and what a thread's box
  * or the channel's holds, typed or put there by Discuss. Kept above the
@@ -140,7 +128,6 @@ export const useBotDraftsStore = create<BotDraftsState>()((set) => ({
       threadBoxes: withEntry(state.threadBoxes, botId, anchorMessageId, {
         text,
         seedId: (state.threadBoxes[botId]?.[anchorMessageId]?.seedId ?? 0) + 1,
-        revision: nextRevision(),
       }),
     })),
   typeThreadBox: (botId, anchorMessageId, text) =>
@@ -157,7 +144,6 @@ export const useBotDraftsStore = create<BotDraftsState>()((set) => ({
             : {
                 text,
                 seedId: current?.seedId ?? 0,
-                revision: nextRevision(),
               },
         ),
       };

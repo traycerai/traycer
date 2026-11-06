@@ -114,7 +114,11 @@ export function createMentionExtension(deps: MentionExtensionDeps) {
           commitBrowserTabPreviewInsertion(editor, range, action.entry);
           return;
         }
-        commitMentionInsertion(editor, range, action.mention);
+        // The prompt's rows all carry what they insert; a `select` row is
+        // another picker's.
+        if (action.kind === "complete") {
+          commitMentionInsertion(editor, range, action.mention);
+        }
       },
     },
   });

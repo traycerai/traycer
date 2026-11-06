@@ -33,8 +33,22 @@ export interface VariantGroup {
   readonly variants: number;
 }
 
+/**
+ * What a layer is for, which is all a director reads of it. Under the rules
+ * director a `pad` is held on, and lifted, while something waits for the
+ * person; a `motif` is lifted while a finished row counts; a `texture` follows
+ * how busy the app is, and comes up full under an unread failure, while the mix
+ * is dimmed. An `event` is a stinger, which it leaves at 1 for now.
+ */
+export type LayerRole = "pad" | "motif" | "texture" | "event";
+
 interface LayerFields {
   readonly name: string;
+  /**
+   * Its role, by which a director moves it; a layer's name means nothing to
+   * one. Null: no director moves the layer, and it plays at 1.
+   */
+  readonly role: LayerRole | null;
   /** How many independent copies of the layer run; 1 when absent in Lua. */
   readonly sublayers: number;
   /**
@@ -141,8 +155,11 @@ export interface VariableTrack {
   readonly name: string;
   readonly title: string;
   /**
-   * From the run's start, intro included. At this time no new sample starts;
-   * without an outro the run cuts here.
+   * From the run's start, intro included. At this time no new sample starts.
+   * Without an outro, the samples sounding ring on to their own ends, and the
+   * run ends with the last one heard; one still sounding
+   * `MIX_TUNING.ringOutCapSeconds` past this fades over
+   * `MIX_TUNING.ringOutFadeSeconds`, and the run ends then.
    */
   readonly lengthSeconds: number;
   readonly alignmentSeconds: number;
@@ -157,9 +174,11 @@ export interface VariableTrack {
   readonly intro: Bookend | null;
   /**
    * Plays on the first grid tick at or after `lengthSeconds`, while the layers'
-   * last samples ring on; the run ends when it does, and whatever still sounds
-   * then fades out over `MIX_TUNING.outroRingOutSeconds`. Null: the run cuts at
-   * `lengthSeconds`.
+   * last samples ring on under it: from the moment it is placed, every layer
+   * fades to silence over the outro's own length, so the outro is what is left.
+   * The run ends when it does, and whatever still sounds then fades out over
+   * `MIX_TUNING.outroRingOutSeconds`. Null, or an outro that will not load: the
+   * run rings out as `lengthSeconds` says.
    */
   readonly outro: Bookend | null;
   /**

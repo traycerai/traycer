@@ -1,3 +1,4 @@
+import { useSettingsHostScopeStore } from "@/stores/settings/settings-host-scope-store";
 // The Overview re-provides a scoped STREAM binding beside its unary one (for
 // the Data & migration group), and the real hook reads `useAuthService` -
 // which this suite deliberately does not stand up. `null` keeps the panel on
@@ -114,7 +115,7 @@ import {
   selectHostOverviewTab,
   type OverviewHostFixture,
 } from "@/components/settings/panels/__tests__/host-overview-test-support";
-import { useSettingsHostScopeStore } from "@/stores/settings/settings-host-scope-store";
+
 import { useSettingsSearchStore } from "@/stores/settings/settings-search-store";
 import {
   armSettingsOpenIntent,
@@ -315,7 +316,7 @@ afterEach(() => {
   resetNegotiatedManifests();
   resetSettingsOpenIntentForTests();
   useSettingsSearchStore.setState({ pendingReveal: null });
-  useSettingsHostScopeStore.setState({ scopedHostId: null });
+  useSettingsHostScopeStore.getState().reset();
   scopeOverrides.current = {};
   hostBindingMock.current = null;
   tabHostIdRef.current = "host-a";
@@ -323,11 +324,24 @@ afterEach(() => {
 });
 
 describe("<HostSettingsPanel /> Overview — tabbed shell", () => {
-  it("shows the settings card above the tabs, on the default tab", async () => {
+  it("shows the settings row above the tabs, on the default tab", async () => {
     const fixture = buildOverviewHostFixture({
       hostId: "host-a",
       isLocalMachine: true,
       overrideHandlers: {
+        "environment.host.read": () => ({
+          hostId: "host-a",
+          environment: {
+            environmentId: "personal",
+            ownerKind: "user",
+            ownerId: "user-a",
+            roomId: "room-a",
+            label: "Personal",
+          },
+          explicit: false,
+          enrolledByUserId: null,
+          canUnbind: false,
+        }),
         "environment.status": () =>
           environmentStatusFixture({
             planes: { records: "local", broker: "local", room: "local" },
@@ -337,19 +351,26 @@ describe("<HostSettingsPanel /> Overview — tabbed shell", () => {
     recordNegotiatedHostMethods("host-a", ALL_OVERVIEW_METHODS);
     recordNegotiatedHostManifest("host-a", {
       "environment.status": { major: 1, minor: 1 },
+      "environment.host.read": { major: 1, minor: 0 },
     });
     hostBindingMock.current = bindingWith(fixture.client);
     scopeOverrides.current = scopeFrom("host-a", fixture);
     renderPanel();
 
-    const card = await screen.findByTestId("host-settings-card");
+    const control = await screen.findByRole("combobox", { name: "Settings" });
+    const description = screen.getByText(
+      "Uses the settings stored on this computer. Changes stay here.",
+    );
+    const row = description.parentElement?.parentElement;
+    if (row === null || row === undefined) {
+      throw new Error("the settings description sits in no row");
+    }
+    expect(row.contains(control)).toBe(true);
     expect(activeTabTestId()).toBe("host-overview-tab-installation");
-    expect(
-      within(card).getByTestId("host-settings-card-local").textContent,
-    ).toBe("Settings on this computer only.");
+    expect(control.textContent).toBe("This computer only");
     const tabList = screen.getAllByRole("tab")[0].closest("[role='tablist']");
     expect(
-      card.compareDocumentPosition(tabList ?? card) &
+      row.compareDocumentPosition(tabList ?? row) &
         Node.DOCUMENT_POSITION_FOLLOWING,
     ).not.toBe(0);
   });
@@ -441,7 +462,7 @@ describe("<HostSettingsPanel /> Overview — tabbed shell", () => {
       scopeOverrides.current = scopeFrom("host-b", fixtureB);
       fireEvent.click(screen.getByRole("button", { name: "Open host update" }));
 
-      expect(useSettingsHostScopeStore.getState().scopedHostId).toBe("host-b");
+      expect(useSettingsHostScopeStore.getState().pendingHostId).toBe("host-b");
       expect(activeTabTestId()).toBe("host-overview-tab-updates");
     });
   });
@@ -593,7 +614,7 @@ describe("<HostSettingsPanel /> Overview — tabbed shell", () => {
       expect(name.classList.contains("min-w-0")).toBe(true);
       expect(name.classList.contains("truncate")).toBe(true);
       expect(within(row).getByTestId("host-overview-edit-name")).not.toBeNull();
-      expect(within(row).getByText("This computer")).not.toBeNull();
+      expect(within(row).getByText("Computer")).not.toBeNull();
       // The ⋯ menu shares the row's line: the header's one flex line holds the
       // name row and the actions side by side.
       const line = row.parentElement;
@@ -689,6 +710,7 @@ async function renderLongNamedHost(): Promise<void> {
     host: hostScopeOptionFixture({
       hostId: "host-a",
       name: LONG_NAME,
+      kind: "personal",
       isLocalMachine: true,
       connectable: true,
       isActive: true,

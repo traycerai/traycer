@@ -2,6 +2,7 @@ import {
   useCallback,
   useEffect,
   useMemo,
+  useRef,
   useState,
   useSyncExternalStore,
   type ReactNode,
@@ -19,6 +20,7 @@ import { botTurnIndexOf, turnOfMessages } from "@/lib/bots/bot-turn-receipt";
 import type { BotTurnRef } from "@traycer/protocol/host/bot/conversation-schemas";
 import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
 import type { HostRpcRegistry } from "@/lib/host";
+import { useBotSearchWordMarks } from "@/hooks/bots/use-bot-search-word-marks";
 import { useBotTurnLocateQuery } from "@/hooks/bots/use-bot-turn-locate-query";
 import { useBotFailedRecovery } from "@/components/bots/bot-failed-recovery";
 import type { BotTurnOpen } from "@/stores/bots/bot-open-thread-store";
@@ -536,6 +538,13 @@ function BotChatTranscriptBody(props: {
     );
   }, []);
   useLandOnMessage(landOn, state.snapshotLoaded, land);
+  const transcriptRef = useRef<HTMLDivElement | null>(null);
+  const rowIdOf = useCallback(
+    (messageId: string): string | null =>
+      jumpTargetIn(messages, { kind: "message", messageId })?.rowId ?? null,
+    [messages],
+  );
+  useBotSearchWordMarks(transcriptRef, chatId, rowIdOf);
   const getMessageActions = useCallback(() => null, []);
   const turns = useTranscriptTurns({
     client: tabClient,
@@ -608,6 +617,7 @@ function BotChatTranscriptBody(props: {
     <ChatContainerContext.Provider value={botId}>
       <ChatBotPresentationContext.Provider value={presentation}>
         <div
+          ref={transcriptRef}
           data-chat-keyboard-scroll-scope=""
           data-active="true"
           data-testid="bot-chat-transcript"

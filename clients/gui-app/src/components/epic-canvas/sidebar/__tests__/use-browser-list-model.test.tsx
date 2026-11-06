@@ -23,7 +23,6 @@ const hostState = vi.hoisted(() => ({
     health: { state: string };
     entry: { kind: string } | null;
   }>,
-  localHostId: "host-local" as string | null,
   isLoading: false,
   listsResolved: true,
   listsFailed: false,
@@ -47,9 +46,6 @@ vi.mock("@/components/settings/host-scope/use-host-options", () => ({
     listsResolved: hostState.listsResolved,
     listsFailed: hostState.listsFailed,
   }),
-}));
-vi.mock("@/hooks/host/use-reactive-local-host-id", () => ({
-  useReactiveLocalHostId: () => hostState.localHostId,
 }));
 vi.mock("@/hooks/host/use-surface-host-pin", () => ({
   useTabSurfaceKey: (kind: string, tabId: string) => `${kind}:${tabId}`,
@@ -175,7 +171,6 @@ describe("useBrowserListModel", () => {
       profile: { userId: "user-a", userName: "A", email: "a@example.com" },
     });
     hostState.hosts = [];
-    hostState.localHostId = "host-local";
     hostState.held = [];
     hostState.isLoading = false;
     hostState.listsResolved = true;
@@ -185,18 +180,17 @@ describe("useBrowserListModel", () => {
     host("host-nas", "NAS", "offline");
   });
 
-  it("groups durable tabs by owning device, flags only the co-located one as local, and hides confirmed-offline devices", () => {
+  it("groups durable tabs by owning host name and hides confirmed-offline hosts", () => {
     const { result } = render(catalog(RECORDS, {}), idleLive(), "");
     expect(
       result.current.groups.map((group) => [
         group.hostId,
         group.name,
-        group.isLocal,
         group.rows.length,
       ]),
     ).toEqual([
-      ["host-local", "This Mac", true, 1],
-      ["host-work", "Work Mac", false, 2],
+      ["host-local", "This Mac", 1],
+      ["host-work", "Work Mac", 2],
     ]);
     expect(result.current.groups.every((group) => group.expanded)).toBe(true);
   });

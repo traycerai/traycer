@@ -8,7 +8,15 @@ vi.mock("@/components/settings/host-scope/use-host-scope", async () => {
   const { hostScopeFixture } =
     await import("@/components/settings/host-scope/host-scope-fixture");
   const useHostScope = () => hostScopeFixture(scopeOverrides.current);
-  return { useHostScope, usePersonalHostScope: useHostScope };
+  return {
+    useHostScope,
+    useHostScopeFor: useHostScope,
+    WINDOW_HOST_SELECTION: {
+      scopedHostId: null,
+      setScopedHostId: () => undefined,
+    },
+    usePersonalHostScope: useHostScope,
+  };
 });
 
 const navigation = vi.hoisted(() => ({

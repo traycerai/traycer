@@ -447,6 +447,7 @@ describe("<StandaloneBotsBridge /> and a change to the bots elsewhere", () => {
     await waitFor(() => {
       expect(useStandaloneBotsStore.getState().settled).toBe(true);
     });
+    expect(useStandaloneBotsStore.getState().botsListed).toBe(true);
     expect(titleText()).toBe("Tracy");
 
     answers.bots = BOTH_BOTS;
@@ -648,6 +649,7 @@ describe("a bot's notification before the directory has answered", () => {
     });
 
     expect(target.showNotification.mock.calls[0]?.[0].title).toBe("Tracy");
+    expect(useStandaloneBotsStore.getState().botsListed).toBe(false);
   });
 
   it("shows the old account nothing once it has left, whatever the lists do after", async () => {

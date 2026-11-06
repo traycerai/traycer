@@ -60,7 +60,7 @@ index b6c7481603f4119495551b3e4c1c071984c144af..ff554d24a517b75aa89f6a8da4f40214
       * Sets whether scroll processing is enabled.
       * @param enabled - If true, scroll processing is enabled.
 diff --git a/react-native.web.js b/react-native.web.js
-index ea0348877ff08eb9962ff97efebf2cc19cffad11..f84f068551d683000d9d613a4103709447172dcb 100644
+index ea0348877ff08eb9962ff97efebf2cc19cffad11..f92b39704c23e95dac36ba0e0443b65ed4a7b478 100644
 --- a/react-native.web.js
 +++ b/react-native.web.js
 @@ -789,7 +789,15 @@ function recalculateSettledScroll(ctx) {
@@ -669,7 +669,7 @@ index ea0348877ff08eb9962ff97efebf2cc19cffad11..f84f068551d683000d9d613a41037094
              });
            } else {
              scrollBy();
-@@ -6757,6 +7154,7 @@ function checkResetContainers(ctx, dataProp, { didColumnsChange = false } = {})
+@@ -6757,6 +7157,7 @@ function checkResetContainers(ctx, dataProp, { didColumnsChange = false } = {})
      for (const key in state.averageSizes) {
        delete state.averageSizes[key];
      }
@@ -677,7 +677,7 @@ index ea0348877ff08eb9962ff97efebf2cc19cffad11..f84f068551d683000d9d613a41037094
      state.minIndexSizeChanged = 0;
      state.scrollForNextCalculateItemsInView = void 0;
    }
-@@ -7001,6 +7399,7 @@ function onScroll(ctx, event) {
+@@ -7001,6 +7402,7 @@ function onScroll(ctx, event) {
    }
    state.scrollPending = newScroll;
    updateScroll(ctx, newScroll, insetChanged, { fromNativeScrollEvent: true });
@@ -685,7 +685,7 @@ index ea0348877ff08eb9962ff97efebf2cc19cffad11..f84f068551d683000d9d613a41037094
    trackInitialScrollNativeProgress(state, newScroll);
    clearFinishedBootstrapInitialScrollTargetIfMovedAway(ctx);
    if (state.scrollingTo) {
-@@ -7103,7 +7502,15 @@ var ScrollAdjustHandler = class {
+@@ -7103,7 +7505,15 @@ var ScrollAdjustHandler = class {
            targetScroll = calculateOffsetWithOffsetPosition(this.ctx, currentOffset, scrollTarget);
            targetScroll = clampScrollOffset(this.ctx, targetScroll, scrollTarget);
          } else {
@@ -702,7 +702,7 @@ index ea0348877ff08eb9962ff97efebf2cc19cffad11..f84f068551d683000d9d613a41037094
          }
          const adjustment = targetScroll - state.scroll;
          if (Math.abs(adjustment) > 0.1 || Math.abs(pending) > 0.1) {
-@@ -7283,6 +7690,12 @@ function createImperativeHandle(ctx, scheduleImperativeScrollCommit) {
+@@ -7283,6 +7693,12 @@ function createImperativeHandle(ctx, scheduleImperativeScrollCommit) {
      }
    };
    const startImperativeScroll = (resolve) => {
@@ -715,7 +715,7 @@ index ea0348877ff08eb9962ff97efebf2cc19cffad11..f84f068551d683000d9d613a41037094
      state.scheduledWork.cancel("imperativeScrollReady");
      const token = ++imperativeScrollToken;
      settlePendingImperativeScroll(state);
-@@ -7333,6 +7746,7 @@ function createImperativeHandle(ctx, scheduleImperativeScrollCommit) {
+@@ -7333,6 +7749,7 @@ function createImperativeHandle(ctx, scheduleImperativeScrollCommit) {
      for (const key in state.averageSizes) {
        delete state.averageSizes[key];
      }
@@ -723,16 +723,16 @@ index ea0348877ff08eb9962ff97efebf2cc19cffad11..f84f068551d683000d9d613a41037094
      state.minIndexSizeChanged = 0;
      state.scrollForNextCalculateItemsInView = void 0;
      state.pendingTotalSize = void 0;
-@@ -7370,6 +7784,8 @@ function createImperativeHandle(ctx, scheduleImperativeScrollCommit) {
+@@ -7370,6 +7787,8 @@ function createImperativeHandle(ctx, scheduleImperativeScrollCommit) {
        endBuffered: state.endBuffered,
        getAverageItemSizes: () => getAverageItemSizes(state),
        indexByKey: (key) => state.indexByKey.get(key),
 +      // Patched: the key the list gives the item at an index in range.
-+      keyAtIndex: (index) => getId(state, index),
++      keyAtIndex: (index) => state.props.keyExtractor(state.props.data[index], index),
        isAtEnd: peek$(ctx, "isAtEnd"),
        isAtStart: peek$(ctx, "isAtStart"),
        isEndReached: state.isEndReached,
-@@ -7448,6 +7864,35 @@ function createImperativeHandle(ctx, scheduleImperativeScrollCommit) {
+@@ -7448,6 +7867,35 @@ function createImperativeHandle(ctx, scheduleImperativeScrollCommit) {
      setItemSize: (itemKey, size) => {
        updateItemSizes(ctx, { itemKey, size });
      },
@@ -768,7 +768,7 @@ index ea0348877ff08eb9962ff97efebf2cc19cffad11..f84f068551d683000d9d613a41037094
      setScrollProcessingEnabled: (enabled) => {
        state.scrollProcessingEnabled = enabled;
      },
-@@ -7720,6 +8165,7 @@ var LegendListInner = typedForwardRef(function LegendListInner2(props, forwarded
+@@ -7720,6 +8168,7 @@ var LegendListInner = typedForwardRef(function LegendListInner2(props, forwarded
      onEndReached,
      onEndReachedThreshold = 0.5,
      onItemSizeChanged,
@@ -776,7 +776,7 @@ index ea0348877ff08eb9962ff97efebf2cc19cffad11..f84f068551d683000d9d613a41037094
      onMetricsChange,
      onLayout: onLayoutProp,
      onLoad,
-@@ -7845,6 +8291,9 @@ var LegendListInner = typedForwardRef(function LegendListInner2(props, forwarded
+@@ -7845,6 +8294,9 @@ var LegendListInner = typedForwardRef(function LegendListInner2(props, forwarded
        ctx.values.set("adaptiveRender", (_m = experimental_adaptiveRender == null ? void 0 : experimental_adaptiveRender.initialMode) != null ? _m : "normal");
        ctx.state = {
          averageSizes: {},
@@ -786,7 +786,7 @@ index ea0348877ff08eb9962ff97efebf2cc19cffad11..f84f068551d683000d9d613a41037094
          columnSpans: [],
          columns: [],
          containerItemGenerations: [],
-@@ -7978,6 +8427,7 @@ var LegendListInner = typedForwardRef(function LegendListInner2(props, forwarded
+@@ -7978,6 +8430,7 @@ var LegendListInner = typedForwardRef(function LegendListInner2(props, forwarded
      onEndReachedThreshold,
      onFirstVisibleItemChanged,
      onItemSizeChanged,
@@ -795,7 +795,7 @@ index ea0348877ff08eb9962ff97efebf2cc19cffad11..f84f068551d683000d9d613a41037094
      onMomentumScrollEnd,
      onScroll: throttleScrollFn,
 diff --git a/react-native.web.mjs b/react-native.web.mjs
-index c96345be154d77f66c26ea42cea15a18e22f5dfa..453752a247583b7987614ffdcd83d1bfe9f57284 100644
+index c96345be154d77f66c26ea42cea15a18e22f5dfa..19fe93871fa9c1d55d4cbc08f3b0d65a9eeda545 100644
 --- a/react-native.web.mjs
 +++ b/react-native.web.mjs
 @@ -768,7 +768,15 @@ function recalculateSettledScroll(ctx) {
@@ -1404,7 +1404,7 @@ index c96345be154d77f66c26ea42cea15a18e22f5dfa..453752a247583b7987614ffdcd83d1bf
              });
            } else {
              scrollBy();
-@@ -6736,6 +7133,7 @@ function checkResetContainers(ctx, dataProp, { didColumnsChange = false } = {})
+@@ -6736,6 +7136,7 @@ function checkResetContainers(ctx, dataProp, { didColumnsChange = false } = {})
      for (const key in state.averageSizes) {
        delete state.averageSizes[key];
      }
@@ -1412,7 +1412,7 @@ index c96345be154d77f66c26ea42cea15a18e22f5dfa..453752a247583b7987614ffdcd83d1bf
      state.minIndexSizeChanged = 0;
      state.scrollForNextCalculateItemsInView = void 0;
    }
-@@ -6980,6 +7378,7 @@ function onScroll(ctx, event) {
+@@ -6980,6 +7381,7 @@ function onScroll(ctx, event) {
    }
    state.scrollPending = newScroll;
    updateScroll(ctx, newScroll, insetChanged, { fromNativeScrollEvent: true });
@@ -1420,7 +1420,7 @@ index c96345be154d77f66c26ea42cea15a18e22f5dfa..453752a247583b7987614ffdcd83d1bf
    trackInitialScrollNativeProgress(state, newScroll);
    clearFinishedBootstrapInitialScrollTargetIfMovedAway(ctx);
    if (state.scrollingTo) {
-@@ -7082,7 +7481,15 @@ var ScrollAdjustHandler = class {
+@@ -7082,7 +7484,15 @@ var ScrollAdjustHandler = class {
            targetScroll = calculateOffsetWithOffsetPosition(this.ctx, currentOffset, scrollTarget);
            targetScroll = clampScrollOffset(this.ctx, targetScroll, scrollTarget);
          } else {
@@ -1437,7 +1437,7 @@ index c96345be154d77f66c26ea42cea15a18e22f5dfa..453752a247583b7987614ffdcd83d1bf
          }
          const adjustment = targetScroll - state.scroll;
          if (Math.abs(adjustment) > 0.1 || Math.abs(pending) > 0.1) {
-@@ -7262,6 +7669,12 @@ function createImperativeHandle(ctx, scheduleImperativeScrollCommit) {
+@@ -7262,6 +7672,12 @@ function createImperativeHandle(ctx, scheduleImperativeScrollCommit) {
      }
    };
    const startImperativeScroll = (resolve) => {
@@ -1450,7 +1450,7 @@ index c96345be154d77f66c26ea42cea15a18e22f5dfa..453752a247583b7987614ffdcd83d1bf
      state.scheduledWork.cancel("imperativeScrollReady");
      const token = ++imperativeScrollToken;
      settlePendingImperativeScroll(state);
-@@ -7312,6 +7725,7 @@ function createImperativeHandle(ctx, scheduleImperativeScrollCommit) {
+@@ -7312,6 +7728,7 @@ function createImperativeHandle(ctx, scheduleImperativeScrollCommit) {
      for (const key in state.averageSizes) {
        delete state.averageSizes[key];
      }
@@ -1458,16 +1458,16 @@ index c96345be154d77f66c26ea42cea15a18e22f5dfa..453752a247583b7987614ffdcd83d1bf
      state.minIndexSizeChanged = 0;
      state.scrollForNextCalculateItemsInView = void 0;
      state.pendingTotalSize = void 0;
-@@ -7349,6 +7763,8 @@ function createImperativeHandle(ctx, scheduleImperativeScrollCommit) {
+@@ -7349,6 +7766,8 @@ function createImperativeHandle(ctx, scheduleImperativeScrollCommit) {
        endBuffered: state.endBuffered,
        getAverageItemSizes: () => getAverageItemSizes(state),
        indexByKey: (key) => state.indexByKey.get(key),
 +      // Patched: the key the list gives the item at an index in range.
-+      keyAtIndex: (index) => getId(state, index),
++      keyAtIndex: (index) => state.props.keyExtractor(state.props.data[index], index),
        isAtEnd: peek$(ctx, "isAtEnd"),
        isAtStart: peek$(ctx, "isAtStart"),
        isEndReached: state.isEndReached,
-@@ -7427,6 +7843,35 @@ function createImperativeHandle(ctx, scheduleImperativeScrollCommit) {
+@@ -7427,6 +7846,35 @@ function createImperativeHandle(ctx, scheduleImperativeScrollCommit) {
      setItemSize: (itemKey, size) => {
        updateItemSizes(ctx, { itemKey, size });
      },
@@ -1503,7 +1503,7 @@ index c96345be154d77f66c26ea42cea15a18e22f5dfa..453752a247583b7987614ffdcd83d1bf
      setScrollProcessingEnabled: (enabled) => {
        state.scrollProcessingEnabled = enabled;
      },
-@@ -7699,6 +8144,7 @@ var LegendListInner = typedForwardRef(function LegendListInner2(props, forwarded
+@@ -7699,6 +8147,7 @@ var LegendListInner = typedForwardRef(function LegendListInner2(props, forwarded
      onEndReached,
      onEndReachedThreshold = 0.5,
      onItemSizeChanged,
@@ -1511,7 +1511,7 @@ index c96345be154d77f66c26ea42cea15a18e22f5dfa..453752a247583b7987614ffdcd83d1bf
      onMetricsChange,
      onLayout: onLayoutProp,
      onLoad,
-@@ -7824,6 +8270,9 @@ var LegendListInner = typedForwardRef(function LegendListInner2(props, forwarded
+@@ -7824,6 +8273,9 @@ var LegendListInner = typedForwardRef(function LegendListInner2(props, forwarded
        ctx.values.set("adaptiveRender", (_m = experimental_adaptiveRender == null ? void 0 : experimental_adaptiveRender.initialMode) != null ? _m : "normal");
        ctx.state = {
          averageSizes: {},
@@ -1521,7 +1521,7 @@ index c96345be154d77f66c26ea42cea15a18e22f5dfa..453752a247583b7987614ffdcd83d1bf
          columnSpans: [],
          columns: [],
          containerItemGenerations: [],
-@@ -7957,6 +8406,7 @@ var LegendListInner = typedForwardRef(function LegendListInner2(props, forwarded
+@@ -7957,6 +8409,7 @@ var LegendListInner = typedForwardRef(function LegendListInner2(props, forwarded
      onEndReachedThreshold,
      onFirstVisibleItemChanged,
      onItemSizeChanged,
@@ -1591,7 +1591,7 @@ index b6c7481603f4119495551b3e4c1c071984c144af..ff554d24a517b75aa89f6a8da4f40214
       * Sets whether scroll processing is enabled.
       * @param enabled - If true, scroll processing is enabled.
 diff --git a/react.js b/react.js
-index ea0348877ff08eb9962ff97efebf2cc19cffad11..53e513148b127db962a4bdb18ef4aa66b415fcff 100644
+index ea0348877ff08eb9962ff97efebf2cc19cffad11..85db0a8ed67228caa857261f6f3ed66028bde3c7 100644
 --- a/react.js
 +++ b/react.js
 @@ -785,11 +785,31 @@ function checkThresholds(ctx, allowedEdge) {
@@ -2409,7 +2409,7 @@ index ea0348877ff08eb9962ff97efebf2cc19cffad11..53e513148b127db962a4bdb18ef4aa66
              });
            } else {
              scrollBy();
-@@ -6757,6 +7240,7 @@ function checkResetContainers(ctx, dataProp, { didColumnsChange = false } = {})
+@@ -6757,6 +7243,7 @@ function checkResetContainers(ctx, dataProp, { didColumnsChange = false } = {})
      for (const key in state.averageSizes) {
        delete state.averageSizes[key];
      }
@@ -2417,7 +2417,7 @@ index ea0348877ff08eb9962ff97efebf2cc19cffad11..53e513148b127db962a4bdb18ef4aa66
      state.minIndexSizeChanged = 0;
      state.scrollForNextCalculateItemsInView = void 0;
    }
-@@ -7001,6 +7485,7 @@ function onScroll(ctx, event) {
+@@ -7001,6 +7488,7 @@ function onScroll(ctx, event) {
    }
    state.scrollPending = newScroll;
    updateScroll(ctx, newScroll, insetChanged, { fromNativeScrollEvent: true });
@@ -2425,7 +2425,7 @@ index ea0348877ff08eb9962ff97efebf2cc19cffad11..53e513148b127db962a4bdb18ef4aa66
    trackInitialScrollNativeProgress(state, newScroll);
    clearFinishedBootstrapInitialScrollTargetIfMovedAway(ctx);
    if (state.scrollingTo) {
-@@ -7054,7 +7539,8 @@ var ScheduledWork = class {
+@@ -7054,7 +7542,8 @@ var ScheduledWork = class {
      const work = this.work.get(key);
      if (work) {
        this.work.delete(key);
@@ -2435,7 +2435,7 @@ index ea0348877ff08eb9962ff97efebf2cc19cffad11..53e513148b127db962a4bdb18ef4aa66
      }
    }
    has(key) {
-@@ -7103,7 +7589,15 @@ var ScrollAdjustHandler = class {
+@@ -7103,7 +7592,15 @@ var ScrollAdjustHandler = class {
            targetScroll = calculateOffsetWithOffsetPosition(this.ctx, currentOffset, scrollTarget);
            targetScroll = clampScrollOffset(this.ctx, targetScroll, scrollTarget);
          } else {
@@ -2452,7 +2452,7 @@ index ea0348877ff08eb9962ff97efebf2cc19cffad11..53e513148b127db962a4bdb18ef4aa66
          }
          const adjustment = targetScroll - state.scroll;
          if (Math.abs(adjustment) > 0.1 || Math.abs(pending) > 0.1) {
-@@ -7283,6 +7777,12 @@ function createImperativeHandle(ctx, scheduleImperativeScrollCommit) {
+@@ -7283,6 +7780,12 @@ function createImperativeHandle(ctx, scheduleImperativeScrollCommit) {
      }
    };
    const startImperativeScroll = (resolve) => {
@@ -2465,7 +2465,7 @@ index ea0348877ff08eb9962ff97efebf2cc19cffad11..53e513148b127db962a4bdb18ef4aa66
      state.scheduledWork.cancel("imperativeScrollReady");
      const token = ++imperativeScrollToken;
      settlePendingImperativeScroll(state);
-@@ -7333,6 +7833,7 @@ function createImperativeHandle(ctx, scheduleImperativeScrollCommit) {
+@@ -7333,6 +7836,7 @@ function createImperativeHandle(ctx, scheduleImperativeScrollCommit) {
      for (const key in state.averageSizes) {
        delete state.averageSizes[key];
      }
@@ -2473,16 +2473,16 @@ index ea0348877ff08eb9962ff97efebf2cc19cffad11..53e513148b127db962a4bdb18ef4aa66
      state.minIndexSizeChanged = 0;
      state.scrollForNextCalculateItemsInView = void 0;
      state.pendingTotalSize = void 0;
-@@ -7370,6 +7871,8 @@ function createImperativeHandle(ctx, scheduleImperativeScrollCommit) {
+@@ -7370,6 +7874,8 @@ function createImperativeHandle(ctx, scheduleImperativeScrollCommit) {
        endBuffered: state.endBuffered,
        getAverageItemSizes: () => getAverageItemSizes(state),
        indexByKey: (key) => state.indexByKey.get(key),
 +      // Patched: the key the list gives the item at an index in range.
-+      keyAtIndex: (index) => getId(state, index),
++      keyAtIndex: (index) => state.props.keyExtractor(state.props.data[index], index),
        isAtEnd: peek$(ctx, "isAtEnd"),
        isAtStart: peek$(ctx, "isAtStart"),
        isEndReached: state.isEndReached,
-@@ -7448,6 +7951,35 @@ function createImperativeHandle(ctx, scheduleImperativeScrollCommit) {
+@@ -7448,6 +7954,35 @@ function createImperativeHandle(ctx, scheduleImperativeScrollCommit) {
      setItemSize: (itemKey, size) => {
        updateItemSizes(ctx, { itemKey, size });
      },
@@ -2518,7 +2518,7 @@ index ea0348877ff08eb9962ff97efebf2cc19cffad11..53e513148b127db962a4bdb18ef4aa66
      setScrollProcessingEnabled: (enabled) => {
        state.scrollProcessingEnabled = enabled;
      },
-@@ -7720,6 +8252,7 @@ var LegendListInner = typedForwardRef(function LegendListInner2(props, forwarded
+@@ -7720,6 +8255,7 @@ var LegendListInner = typedForwardRef(function LegendListInner2(props, forwarded
      onEndReached,
      onEndReachedThreshold = 0.5,
      onItemSizeChanged,
@@ -2526,7 +2526,7 @@ index ea0348877ff08eb9962ff97efebf2cc19cffad11..53e513148b127db962a4bdb18ef4aa66
      onMetricsChange,
      onLayout: onLayoutProp,
      onLoad,
-@@ -7845,6 +8378,9 @@ var LegendListInner = typedForwardRef(function LegendListInner2(props, forwarded
+@@ -7845,6 +8381,9 @@ var LegendListInner = typedForwardRef(function LegendListInner2(props, forwarded
        ctx.values.set("adaptiveRender", (_m = experimental_adaptiveRender == null ? void 0 : experimental_adaptiveRender.initialMode) != null ? _m : "normal");
        ctx.state = {
          averageSizes: {},
@@ -2536,7 +2536,7 @@ index ea0348877ff08eb9962ff97efebf2cc19cffad11..53e513148b127db962a4bdb18ef4aa66
          columnSpans: [],
          columns: [],
          containerItemGenerations: [],
-@@ -7978,6 +8514,7 @@ var LegendListInner = typedForwardRef(function LegendListInner2(props, forwarded
+@@ -7978,6 +8517,7 @@ var LegendListInner = typedForwardRef(function LegendListInner2(props, forwarded
      onEndReachedThreshold,
      onFirstVisibleItemChanged,
      onItemSizeChanged,
@@ -2545,7 +2545,7 @@ index ea0348877ff08eb9962ff97efebf2cc19cffad11..53e513148b127db962a4bdb18ef4aa66
      onMomentumScrollEnd,
      onScroll: throttleScrollFn,
 diff --git a/react.mjs b/react.mjs
-index c96345be154d77f66c26ea42cea15a18e22f5dfa..734469842c53e85c60a3f101d2ff1bd62bd8a27f 100644
+index c96345be154d77f66c26ea42cea15a18e22f5dfa..bf0abf2a3895f16dd785ef3891f392f2c3bcb186 100644
 --- a/react.mjs
 +++ b/react.mjs
 @@ -764,11 +764,31 @@ function checkThresholds(ctx, allowedEdge) {
@@ -3363,7 +3363,7 @@ index c96345be154d77f66c26ea42cea15a18e22f5dfa..734469842c53e85c60a3f101d2ff1bd6
              });
            } else {
              scrollBy();
-@@ -6736,6 +7219,7 @@ function checkResetContainers(ctx, dataProp, { didColumnsChange = false } = {})
+@@ -6736,6 +7222,7 @@ function checkResetContainers(ctx, dataProp, { didColumnsChange = false } = {})
      for (const key in state.averageSizes) {
        delete state.averageSizes[key];
      }
@@ -3371,7 +3371,7 @@ index c96345be154d77f66c26ea42cea15a18e22f5dfa..734469842c53e85c60a3f101d2ff1bd6
      state.minIndexSizeChanged = 0;
      state.scrollForNextCalculateItemsInView = void 0;
    }
-@@ -6980,6 +7464,7 @@ function onScroll(ctx, event) {
+@@ -6980,6 +7467,7 @@ function onScroll(ctx, event) {
    }
    state.scrollPending = newScroll;
    updateScroll(ctx, newScroll, insetChanged, { fromNativeScrollEvent: true });
@@ -3379,7 +3379,7 @@ index c96345be154d77f66c26ea42cea15a18e22f5dfa..734469842c53e85c60a3f101d2ff1bd6
    trackInitialScrollNativeProgress(state, newScroll);
    clearFinishedBootstrapInitialScrollTargetIfMovedAway(ctx);
    if (state.scrollingTo) {
-@@ -7033,7 +7518,8 @@ var ScheduledWork = class {
+@@ -7033,7 +7521,8 @@ var ScheduledWork = class {
      const work = this.work.get(key);
      if (work) {
        this.work.delete(key);
@@ -3389,7 +3389,7 @@ index c96345be154d77f66c26ea42cea15a18e22f5dfa..734469842c53e85c60a3f101d2ff1bd6
      }
    }
    has(key) {
-@@ -7082,7 +7568,15 @@ var ScrollAdjustHandler = class {
+@@ -7082,7 +7571,15 @@ var ScrollAdjustHandler = class {
            targetScroll = calculateOffsetWithOffsetPosition(this.ctx, currentOffset, scrollTarget);
            targetScroll = clampScrollOffset(this.ctx, targetScroll, scrollTarget);
          } else {
@@ -3406,7 +3406,7 @@ index c96345be154d77f66c26ea42cea15a18e22f5dfa..734469842c53e85c60a3f101d2ff1bd6
          }
          const adjustment = targetScroll - state.scroll;
          if (Math.abs(adjustment) > 0.1 || Math.abs(pending) > 0.1) {
-@@ -7262,6 +7756,12 @@ function createImperativeHandle(ctx, scheduleImperativeScrollCommit) {
+@@ -7262,6 +7759,12 @@ function createImperativeHandle(ctx, scheduleImperativeScrollCommit) {
      }
    };
    const startImperativeScroll = (resolve) => {
@@ -3419,7 +3419,7 @@ index c96345be154d77f66c26ea42cea15a18e22f5dfa..734469842c53e85c60a3f101d2ff1bd6
      state.scheduledWork.cancel("imperativeScrollReady");
      const token = ++imperativeScrollToken;
      settlePendingImperativeScroll(state);
-@@ -7312,6 +7812,7 @@ function createImperativeHandle(ctx, scheduleImperativeScrollCommit) {
+@@ -7312,6 +7815,7 @@ function createImperativeHandle(ctx, scheduleImperativeScrollCommit) {
      for (const key in state.averageSizes) {
        delete state.averageSizes[key];
      }
@@ -3427,16 +3427,16 @@ index c96345be154d77f66c26ea42cea15a18e22f5dfa..734469842c53e85c60a3f101d2ff1bd6
      state.minIndexSizeChanged = 0;
      state.scrollForNextCalculateItemsInView = void 0;
      state.pendingTotalSize = void 0;
-@@ -7349,6 +7850,8 @@ function createImperativeHandle(ctx, scheduleImperativeScrollCommit) {
+@@ -7349,6 +7853,8 @@ function createImperativeHandle(ctx, scheduleImperativeScrollCommit) {
        endBuffered: state.endBuffered,
        getAverageItemSizes: () => getAverageItemSizes(state),
        indexByKey: (key) => state.indexByKey.get(key),
 +      // Patched: the key the list gives the item at an index in range.
-+      keyAtIndex: (index) => getId(state, index),
++      keyAtIndex: (index) => state.props.keyExtractor(state.props.data[index], index),
        isAtEnd: peek$(ctx, "isAtEnd"),
        isAtStart: peek$(ctx, "isAtStart"),
        isEndReached: state.isEndReached,
-@@ -7427,6 +7930,35 @@ function createImperativeHandle(ctx, scheduleImperativeScrollCommit) {
+@@ -7427,6 +7933,35 @@ function createImperativeHandle(ctx, scheduleImperativeScrollCommit) {
      setItemSize: (itemKey, size) => {
        updateItemSizes(ctx, { itemKey, size });
      },
@@ -3472,7 +3472,7 @@ index c96345be154d77f66c26ea42cea15a18e22f5dfa..734469842c53e85c60a3f101d2ff1bd6
      setScrollProcessingEnabled: (enabled) => {
        state.scrollProcessingEnabled = enabled;
      },
-@@ -7699,6 +8231,7 @@ var LegendListInner = typedForwardRef(function LegendListInner2(props, forwarded
+@@ -7699,6 +8234,7 @@ var LegendListInner = typedForwardRef(function LegendListInner2(props, forwarded
      onEndReached,
      onEndReachedThreshold = 0.5,
      onItemSizeChanged,
@@ -3480,7 +3480,7 @@ index c96345be154d77f66c26ea42cea15a18e22f5dfa..734469842c53e85c60a3f101d2ff1bd6
      onMetricsChange,
      onLayout: onLayoutProp,
      onLoad,
-@@ -7824,6 +8357,9 @@ var LegendListInner = typedForwardRef(function LegendListInner2(props, forwarded
+@@ -7824,6 +8360,9 @@ var LegendListInner = typedForwardRef(function LegendListInner2(props, forwarded
        ctx.values.set("adaptiveRender", (_m = experimental_adaptiveRender == null ? void 0 : experimental_adaptiveRender.initialMode) != null ? _m : "normal");
        ctx.state = {
          averageSizes: {},
@@ -3490,7 +3490,7 @@ index c96345be154d77f66c26ea42cea15a18e22f5dfa..734469842c53e85c60a3f101d2ff1bd6
          columnSpans: [],
          columns: [],
          containerItemGenerations: [],
-@@ -7957,6 +8493,7 @@ var LegendListInner = typedForwardRef(function LegendListInner2(props, forwarded
+@@ -7957,6 +8496,7 @@ var LegendListInner = typedForwardRef(function LegendListInner2(props, forwarded
      onEndReachedThreshold,
      onFirstVisibleItemChanged,
      onItemSizeChanged,

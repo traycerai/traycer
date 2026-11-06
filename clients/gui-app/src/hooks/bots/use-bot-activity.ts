@@ -30,6 +30,18 @@ export function useBotActivity(botId: string | null): BotActivity | null {
   const hostId = useTracySurfaceStore((state) =>
     state.open ? state.hostId : null,
   );
+  return useBotActivityForHost(botId, hostId);
+}
+
+/**
+ * The same reading from a host the caller names, whether or not the Tracy
+ * surface is open: a call reads its bot on the host it was placed on, for as
+ * long as it runs.
+ */
+export function useBotActivityForHost(
+  botId: string | null,
+  hostId: string | null,
+): BotActivity | null {
   const subscription = useBotSubscriptionForHost({
     botId: botId ?? "",
     hostId: hostId ?? "",

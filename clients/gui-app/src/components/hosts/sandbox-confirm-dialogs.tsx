@@ -829,7 +829,7 @@ function IdleSettingsForm(props: {
         out before the pause.
       </p>
       <SandboxPeriodField
-        label="Destroy after resting for (empty: never)"
+        label="Destroy after idle for (empty: never)"
         draft={resting}
         placeholder="never"
         disabled={props.pending}

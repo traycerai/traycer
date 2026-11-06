@@ -6,10 +6,19 @@ const scopeOverrides = vi.hoisted((): { current: Record<string, unknown> } => ({
   current: {},
 }));
 vi.mock("@/components/settings/host-scope/use-host-scope", async () => {
+  const WINDOW_HOST_SELECTION = {
+    scopedHostId: null,
+    setScopedHostId: () => undefined,
+  };
   const { hostScopeFixture } =
     await import("@/components/settings/host-scope/host-scope-fixture");
   const useHostScope = () => hostScopeFixture(scopeOverrides.current);
-  return { useHostScope, usePersonalHostScope: useHostScope };
+  return {
+    useHostScope,
+    usePersonalHostScope: useHostScope,
+    useHostScopeFor: useHostScope,
+    WINDOW_HOST_SELECTION,
+  };
 });
 
 const hostBindingMock = vi.hoisted(

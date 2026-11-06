@@ -8,11 +8,9 @@ export interface SwitcherTreeNode {
 const NO_NODES: ReadonlyArray<SwitcherTreeNode> = Object.freeze([]);
 
 /**
- * Re-arranges an already-ordered record slice into the nested shape the list
- * renders, so depth is the structure itself rather than a number travelling
- * beside it - the same choice the desktop sidebar's tree makes, and what lets
- * both surfaces expose their nesting through `role="group"` rather than
- * asserting it with an attribute.
+ * Re-arranges an already-ordered record slice into an intermediate tree. The
+ * list flattens this tree into rows with depth and sibling positions before
+ * windowing them.
  *
  * Depth is measured over the records PRESENT in the slice, not over the epic's
  * full tree. A record whose parent the facet filters removed is returned as a

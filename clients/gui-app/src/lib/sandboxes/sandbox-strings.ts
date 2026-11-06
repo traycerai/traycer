@@ -22,7 +22,7 @@ import {
  * as shown against it, so changing a clause's words re-opens the block for
  * everyone once.
  */
-export const CONSEQUENCES_WORDING_VERSION = 1;
+export const CONSEQUENCES_WORDING_VERSION = 2;
 
 /** A configuration as copy reads it: Personal, or a team by its name. */
 export type SandboxConfigurationCopy =
@@ -113,9 +113,6 @@ export function collapsedConfigurationsLabel(
 /** The search field above a host list. */
 export const SEARCH_HOSTS_PLACEHOLDER = "Search hosts";
 
-/** The chip and row title of the machine this app runs on. */
-export const THIS_COMPUTER = "This computer";
-
 /** A computer row's status: it answers. */
 export const COMPUTER_ACTIVE = "Active";
 
@@ -192,7 +189,7 @@ export function hourlyRate(mcPerHour: number): string {
 
 /**
  * A sandbox's rates: `$0.21 an hour while awake · under $0.01 an hour while
- * resting`. Resting is the higher of the suspended and stopped storage
+ * suspended or stopped`. The second figure is the higher of the two storage
  * rates, so the figure never understates either.
  */
 export function awakeAndRestingRates(price: {
@@ -200,7 +197,7 @@ export function awakeAndRestingRates(price: {
   readonly suspendedMc: number;
   readonly stoppedMc: number;
 }): string {
-  return `${hourlyRate(price.awakeMc)} while awake · ${hourlyRate(Math.max(price.suspendedMc, price.stoppedMc))} while resting`;
+  return `${hourlyRate(price.awakeMc)} while awake · ${hourlyRate(Math.max(price.suspendedMc, price.stoppedMc))} while suspended or stopped`;
 }
 
 /** The chip's short price: `$0.12/h`. */
@@ -258,7 +255,7 @@ export function teamClause(teamName: string): string {
 }
 
 export const RESTING_STORAGE_CLAUSE =
-  "Storage while it rests, on the same credits until another member wakes it.";
+  "Storage while it's suspended or stopped, on the same credits until another member wakes it.";
 export function restingStorageClause(): string {
   return RESTING_STORAGE_CLAUSE;
 }
@@ -299,7 +296,7 @@ export function wakeString(suspendFidelity: string): string | null {
   }
 }
 
-/** `Suspends after 30 idle min · destroyed after 7 resting days`. */
+/** `Suspends after 30 idle min · destroyed after 7 idle days`. */
 export function idleAndRestingLine(
   idleMinutes: number,
   destroyAfterRestingMinutes: number | null,
@@ -320,17 +317,17 @@ export function idleLine(idleMinutes: number): string {
   return `Suspends after ${idleMinutes} idle min`;
 }
 
-/** `7 resting days`, `12 resting hours`, `45 resting minutes`. */
+/** `7 idle days`, `12 idle hours`, `45 idle minutes`. */
 export function restingPeriodLabel(minutes: number): string {
   if (minutes % (24 * 60) === 0) {
     const days = minutes / (24 * 60);
-    return `${days} resting ${days === 1 ? "day" : "days"}`;
+    return `${days} idle ${days === 1 ? "day" : "days"}`;
   }
   if (minutes % 60 === 0) {
     const hours = minutes / 60;
-    return `${hours} resting ${hours === 1 ? "hour" : "hours"}`;
+    return `${hours} idle ${hours === 1 ? "hour" : "hours"}`;
   }
-  return `${minutes} resting ${minutes === 1 ? "minute" : "minutes"}`;
+  return `${minutes} idle ${minutes === 1 ? "minute" : "minutes"}`;
 }
 
 export const KEPT_UNTIL_YOU_DESTROY_IT = "kept until you destroy it";
@@ -651,7 +648,7 @@ export const STOP = "Stop";
 
 /** The settled line's idle rule, with the configured period. */
 export function idleRuleLine(idleMinutes: number): string {
-  return `After ${idleMinutes} minutes with no agent turn, running shell or browser tab on screen, this sandbox suspends. Closing this tab does not stop running work or immediately stop charges; storage is charged while it rests.`;
+  return `After ${idleMinutes} minutes with no agent turn, running shell or browser tab on screen, this sandbox suspends. Closing this tab does not stop running work or immediately stop charges; storage is charged while it's suspended or stopped.`;
 }
 
 // ── Who: started, kept, paid ──────────────────────────────────────────────
@@ -695,7 +692,7 @@ const KEEP_STOPS_DELETING = "Stops deleting itself when idle.";
 const KEEP_PAID_WHILE_AWAKE = "Paid by you while awake.";
 
 export function keepPreviewLine(restingDays: number, date: string): string {
-  return `${KEEP_STOPS_DELETING} Destroyed after ${restingDays} resting days instead, on ${date} if it rests from now. ${KEEP_PAID_WHILE_AWAKE}`;
+  return `${KEEP_STOPS_DELETING} Destroyed after ${restingDays} days instead, on ${date} if it's suspended or stopped from now on. ${KEEP_PAID_WHILE_AWAKE}`;
 }
 
 /**

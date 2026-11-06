@@ -11,11 +11,21 @@
  * runs the real sandbox reads and create over a scripted control plane.
  * The three views and the bot's session view are replaced by stubs
  * that expose their props, so what the surface PASSES them is what is
- * asserted. The tab strip's Activity label
- * reads the real summary hook over the real agent-activity store.
+ * asserted. The tab strip's Activity count reads the real
+ * `useBotActiveTasks` over the real agent-activity store and the real
+ * notification-indicator hooks (the host answers `indicatorState`).
  */
 import { useAuthStore } from "@/stores/auth/auth-store";
+import { BotMentionsContext } from "@/components/bots/bot-mentions-context";
+import { useBotMentionCompletion } from "@/components/bots/bot-mention-completion";
+import { buildHomeBotsModel } from "@/lib/home-bots/bots-model";
+import { EMPTY_DIRECTORY_STATE } from "@/lib/home-bots/__tests__/standalone-bots-fixtures";
+import { useStandaloneBotsStore } from "@/stores/bots/standalone-bots-store";
 import { setPhoneLayoutOnly } from "@/lib/mobile-app";
+import {
+  useVoiceSessionStore,
+  type VoiceSessionDriver,
+} from "@/stores/voice/voice-session-store";
 import { KEYBOARD_FOCUS_OWNER_PROPS } from "@/hooks/ui/use-keyboard-focus-layout";
 import {
   holdScreenLandscape,
@@ -31,7 +41,13 @@ import {
   SHELL_WIDTH_TWO_TILES,
   type ShellFormHarness,
 } from "../../../../__tests__/mobile-level2-form-harness";
-import { StrictMode, type ReactNode } from "react";
+import {
+  StrictMode,
+  useContext,
+  useRef,
+  useState,
+  type ReactNode,
+} from "react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import {
   act,
@@ -78,6 +94,7 @@ import type {
   BotTaskEntry,
 } from "@traycer/protocol/host/bot/schemas";
 import type { BotOnboardingSetup } from "@traycer/protocol/host/bot/onboarding-schemas";
+import type { ListTaskLight } from "@traycer/protocol/host/epic/unary-schemas";
 import type { BotSubscriptionSnapshot } from "@/hooks/bots/use-bot-subscription";
 import type {
   BotThreadSummary,
@@ -168,6 +185,23 @@ const mocks = vi.hoisted(() => ({
   /** The environment list query's `refetch`. */
   environmentsRefetch: vi.fn<() => void>(),
   supportQueries: [] as Array<{ hostId: string | null; method: string }>,
+  /** The task titles `epic.getTaskContexts` found for the bot's stream tasks. */
+  taskContexts: new Map<string, ListTaskLight>(),
+  /** Home's `epic.listTasks` rows. */
+  homeTasks: [] as ListTaskLight[],
+  /** How far the tab's two task reads have got; answered unless a case says otherwise. */
+  taskReads: {
+    contextsPending: false,
+    homePending: false,
+    homeRefused: false,
+  },
+  /**
+   * What the host's `indicatorState` read answers per task: the tasks whose
+   * result the person has not seen. One answer object per request set, as a
+   * query cache holds it.
+   */
+  unreadTaskIds: new Set<string>(),
+  indicatorAnswers: new Map<string, unknown>(),
   membersQueries: [] as Array<{
     environmentId: string | null;
     enabled: boolean;
@@ -253,6 +287,32 @@ vi.mock("@/lib/tab-navigation", async (importOriginal) => {
     },
   };
 });
+// The tasks a bot's channel can name come from two host reads, scripted here:
+// the titles of the stream's tasks, and Home's task list.
+vi.mock("@/hooks/epic/use-epic-get-task-contexts-query", () => {
+  const read = () => ({
+    tasksById: mocks.taskContexts,
+    isPending: mocks.taskReads.contextsPending,
+    error: null,
+  });
+  return {
+    useEpicGetTaskContexts: read,
+    useEpicGetTaskContextsForClient: read,
+  };
+});
+vi.mock("@/hooks/epics/use-cloud-epic-tasks-query", async (importOriginal) => ({
+  ...(await importOriginal<
+    typeof import("@/hooks/epics/use-cloud-epic-tasks-query")
+  >()),
+  useCloudEpicTasksQuery: () => ({ tasks: mocks.homeTasks }),
+  useCloudEpicTasksQueryForClient: () => ({
+    tasks: mocks.homeTasks,
+    presentsCachedPage: false,
+    firstPagePending: mocks.taskReads.homePending,
+    firstPageError: null,
+    initialLegRefused: mocks.taskReads.homeRefused,
+  }),
+}));
 vi.mock("@/hooks/host/use-host-supports-method", () => ({
   useHostMethodSupport: (hostId: string | null, method: string) => {
     mocks.supportQueries.push({ hostId, method });
@@ -266,18 +326,69 @@ vi.mock("@/hooks/host/use-host-supports-method", () => ({
     return true;
   },
 }));
+// The Activity count reads the notification indicators through the notification
+// host; the query transport below answers them.
+vi.mock("@/hooks/notifications/use-notification-host", () => ({
+  useNotificationResolveHostId: () => "host-notifications",
+}));
+vi.mock("@/hooks/host/use-host-client-for-host-id", () => ({
+  useHostClientForHostId: () => null,
+}));
 // The host RPC boundary: `bot.onboarding.read` answers what the test
 // scripted, and a query that is not enabled reads as pending, or as what it
 // answered before when that is cached (`readsCached`), as TanStack's does.
 vi.mock("@/hooks/host/use-host-queries", () => ({
   useHostQueries: (args: {
-    requests: ReadonlyArray<{ params: { environmentId: string } }>;
+    requests: ReadonlyArray<{
+      params: { environmentId?: string; epicIds?: ReadonlyArray<string> };
+    }>;
     options: { enabled?: boolean } | null;
-  }) =>
-    args.requests.map((request) => {
+    combine?: (results: ReadonlyArray<unknown>) => unknown;
+  }) => {
+    if (args.combine !== undefined) {
+      // `host.notifications.indicatorState` for the Activity count.
+      const combine = args.combine;
+      const enabled = args.options?.enabled === true;
+      const epicIds = args.requests.flatMap((r) => r.params.epicIds ?? []);
+      const key = JSON.stringify([enabled, epicIds]);
+      if (!mocks.indicatorAnswers.has(key)) {
+        const unread = {
+          pendingFork: false,
+          pendingApproval: false,
+          pendingInterview: false,
+          unreadFailure: false,
+          unreadDone: true,
+          unreadCount: 1,
+        };
+        mocks.indicatorAnswers.set(
+          key,
+          combine(
+            args.requests.map(() => ({
+              data: enabled
+                ? {
+                    epics: Object.fromEntries(
+                      epicIds
+                        .filter((id) => mocks.unreadTaskIds.has(id))
+                        .map((id) => [id, unread]),
+                    ),
+                    chats: {},
+                    complete: true,
+                  }
+                : undefined,
+              isPending: false,
+              isFetching: false,
+              error: null,
+              refetch: () => Promise.resolve(),
+            })),
+          ),
+        );
+      }
+      return mocks.indicatorAnswers.get(key);
+    }
+    return args.requests.map((request) => {
       const script =
         args.options?.enabled === true || mocks.state.readsCached
-          ? mocks.reads[request.params.environmentId]
+          ? mocks.reads[request.params.environmentId ?? ""]
           : undefined;
       const pending = {
         status: "pending",
@@ -293,7 +404,8 @@ vi.mock("@/hooks/host/use-host-queries", () => ({
         data: script,
         dataUpdatedAt: mocks.state.readAt,
       };
-    }),
+    });
+  },
 }));
 vi.mock("@/lib/host", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/lib/host")>()),
@@ -470,6 +582,59 @@ vi.mock("@/components/bots/bot-channel-sidebar", () => ({
     </div>
   ),
 }));
+/**
+ * A message box on the real `@` completion, over what the tab hands its
+ * content: the tab's directory decides when a search that matched nothing
+ * closes the menu.
+ */
+function MentionBox(): ReactNode {
+  const [text, setText] = useState("");
+  const inputRef = useRef<HTMLTextAreaElement | null>(null);
+  const mentions = useBotMentionCompletion({
+    text,
+    setText,
+    inputRef,
+    replyRow: null,
+  });
+  return (
+    <>
+      {mentions.menu}
+      <textarea
+        ref={inputRef}
+        aria-label="Stub message box"
+        value={text}
+        {...mentions.inputAria}
+        onChange={(event) => setText(event.target.value)}
+        onInput={(event) => mentions.onInput(event.currentTarget)}
+        onSelect={(event) =>
+          mentions.onCaret(event.currentTarget.selectionStart)
+        }
+        onKeyDown={mentions.onKeyDown}
+      />
+    </>
+  );
+}
+
+/** What the tab hands its content to mention (`BotMentionsContext`), as the stub channel sees it. */
+function MentionsProbe(): ReactNode {
+  const mentionable = useContext(BotMentionsContext);
+  if (mentionable === null) return null;
+  return (
+    <>
+      <MentionBox />
+      <output
+        data-testid="stub-mentionable"
+        data-bots={
+          mentionable.bots === null
+            ? "unread"
+            : mentionable.bots.map((target) => target.name).join("|")
+        }
+        data-tasks={mentionable.tasks.map((target) => target.name).join("|")}
+      />
+    </>
+  );
+}
+
 vi.mock("@/components/bots/bot-channel-view", () => ({
   BotChannelView: (props: {
     botId: string;
@@ -482,7 +647,6 @@ vi.mock("@/components/bots/bot-channel-view", () => ({
     trunkChatId: string;
     openMemory: BotOpenMemory | null;
     onOpenMemory: (open: BotOpenMemory | null) => void;
-    onOpenActivity: () => void;
     onOpenTurn: BotTurnOpen;
     onOpenSession: BotSessionOpen;
     resolveMember: (
@@ -509,11 +673,6 @@ vi.mock("@/components/bots/bot-channel-view", () => ({
     >
       <button
         type="button"
-        data-testid="stub-channel-open-activity"
-        onClick={props.onOpenActivity}
-      />
-      <button
-        type="button"
         data-testid="stub-channel-open-memory"
         onClick={() => props.onOpenMemory({ back: null })}
       />
@@ -535,6 +694,7 @@ vi.mock("@/components/bots/bot-channel-view", () => ({
         }
       />
       {props.setupHistory}
+      <MentionsProbe />
       {/* The two boxes' places in the real view: the channel's own, and one
           inside the thread panel, which the header tells apart by its marker. */}
       <div {...KEYBOARD_FOCUS_OWNER_PROPS}>
@@ -592,52 +752,18 @@ vi.mock("@/components/bots/bot-session-view", () => ({
     </div>
   ),
 }));
-// The Activity page takes the bot's bound host, which says where its
-// background work can be read, whether or not this host serves the tab.
+// The Activity page takes whether this host runs the bot, and the list the
+// tab's count is read from: its rows are what the page would draw.
 vi.mock("@/components/bots/bot-activity-page", () => ({
   BotActivityPage: (props: {
-    boundHost: { hostId: string | null; isThisHost: boolean };
-    onOpenPost: (open: BotOpenThread) => void;
-    onOpenTurn: BotTurnOpen;
+    boundHere: boolean;
+    active: { rows: ReadonlyArray<{ task: { taskId: string } }> };
   }) => (
     <div
       data-testid="stub-activity"
-      data-bound-host-id={props.boundHost.hostId ?? "none"}
-      data-is-this-host={String(props.boundHost.isThisHost)}
-    >
-      <button
-        type="button"
-        data-testid="stub-activity-open-post"
-        onClick={() =>
-          props.onOpenPost({
-            anchorMessageId: "post-1",
-            announcement: false,
-            anchorKind: null,
-            sent: null,
-          })
-        }
-      />
-      <button
-        type="button"
-        data-testid="stub-activity-open-turn"
-        onClick={() =>
-          props.onOpenTurn(
-            {
-              chatId: "trunk-1",
-              turnIds: ["turn-checkin"],
-              userMessageId: "prompt-checkin",
-              threadId: null,
-              startedAt: 1_000,
-              endedAt: 2_000,
-              summary: null,
-              messageIds: [],
-              requestIds: [],
-            },
-            null,
-          )
-        }
-      />
-    </div>
+      data-is-this-host={String(props.boundHere)}
+      data-row-ids={props.active.rows.map((row) => row.task.taskId).join(",")}
+    />
   ),
 }));
 vi.mock("@/components/bots/bot-threads-view", () => ({
@@ -907,6 +1033,11 @@ beforeEach(() => {
   mocks.binding = null;
   mocks.sandboxDefaults = { kind: "pending" };
   mocks.supportQueries.length = 0;
+  mocks.taskContexts = new Map();
+  mocks.homeTasks = [];
+  mocks.taskReads.contextsPending = false;
+  mocks.taskReads.homePending = false;
+  mocks.taskReads.homeRefused = false;
   mocks.membersQueries.length = 0;
   mocks.state.membersSupport = true;
   mocks.state.snapshot = snapshot();
@@ -950,6 +1081,8 @@ beforeEach(() => {
   useBotOpenThreadStore.setState({ byBotId: {} });
   useTeamCloudCreateStore.setState({ byEnvironmentId: {} });
   __resetAgentActivityStoreForTests();
+  mocks.unreadTaskIds.clear();
+  mocks.indicatorAnswers.clear();
   openSurfaceOn(BOT_ID);
 });
 
@@ -958,6 +1091,7 @@ const AUTH_AT_START = useAuthStore.getState();
 afterEach(() => {
   cleanup();
   queryClient.clear();
+  useStandaloneBotsStore.setState(EMPTY_DIRECTORY_STATE);
   // A case that signs a viewer in leaves no one signed in for the next.
   useAuthStore.setState({
     profile: null,
@@ -2379,7 +2513,7 @@ describe("<BotTabSurface /> paused", () => {
     ).toBe("unresolved");
   });
 
-  it("hands the Activity page the bound host, paused or not", async () => {
+  it("hands the Activity page whether this host runs the bot, paused or not", async () => {
     const user = userEvent.setup();
     mocks.state.openResult = answer({
       kind: "paused",
@@ -2389,7 +2523,6 @@ describe("<BotTabSurface /> paused", () => {
 
     await user.click(screen.getByTestId("bot-tab-view-activity"));
     const page = screen.getByTestId("stub-activity");
-    expect(page.getAttribute("data-bound-host-id")).toBe(BOUND_HOST);
     expect(page.getAttribute("data-is-this-host")).toBe("false");
   });
 
@@ -2697,6 +2830,28 @@ describe("<BotTabSurface /> main bot", () => {
   });
 });
 
+describe("<BotTabSurface /> Call", () => {
+  afterEach(() => {
+    useVoiceSessionStore.setState(useVoiceSessionStore.getInitialState(), true);
+  });
+
+  it("is not in the channel's header, where it was, even when voice is offered: the message box has it", () => {
+    useVoiceSessionStore.setState({
+      availability: "live",
+      driver: {
+        start: vi.fn<VoiceSessionDriver["start"]>(),
+        end: vi.fn<VoiceSessionDriver["end"]>(),
+        setMuted: vi.fn<VoiceSessionDriver["setMuted"]>(),
+      },
+    });
+    render(surface());
+
+    const header = screen.getByTestId("bot-tab-title").closest("header");
+    if (header === null) throw new Error("expected the channel header");
+    expect(within(header).queryByRole("button", { name: /^Call/ })).toBeNull();
+  });
+});
+
 describe("<BotTabSurface /> focused notification presence", () => {
   afterEach(() => {
     useEpicCanvasStore.setState(useEpicCanvasStore.getInitialState(), true);
@@ -2735,6 +2890,322 @@ describe("<BotTabSurface /> views", () => {
     return screen.getByTestId("bot-tab-view-activity");
   }
 
+  describe("what the channel can mention", () => {
+    const TASK_STREAM = "6f1c2a7e-3b4d-4e5f-8a9b-0c1d2e3f4a5b";
+    const TASK_HOME = "0b9d7c1e-2a3f-4b5c-8d6e-7f8091a2b3c4";
+    const TASK_ELSEWHERE = "9a8b7c6d-5e4f-4a3b-9c2d-1e0f9a8b7c6d";
+
+    function taskRow(
+      id: string,
+      title: string,
+      ownerEnvironmentId: string,
+    ): ListTaskLight {
+      return {
+        epic: {
+          light: {
+            id,
+            title,
+            initialUserPrompt: "",
+            ticketCount: 0,
+            specCount: 0,
+            storyCount: 0,
+            reviewCount: 0,
+            status: "draft",
+            createdAt: 0,
+            updatedAt: 0,
+            createdBy: "user-1",
+            version: "1.0.0",
+          },
+          permission: null,
+          repos: [],
+          workspaces: [],
+          roomInfo: null,
+        },
+        pinned: false,
+        ownerEnvironmentId,
+      };
+    }
+
+    it("hands the channel the bots of the bot's environment, and the tasks its stream lists, then Home's tasks that environment owns", () => {
+      useStandaloneBotsStore.setState({
+        directory: {
+          model: buildHomeBotsModel({
+            environments: [
+              {
+                environmentId: "env-team",
+                label: "Acme",
+                ownerKind: "organization",
+                ownerId: "org-1",
+                roomId: "room-team",
+              },
+              {
+                environmentId: "env-other",
+                label: "Newco",
+                ownerKind: "organization",
+                ownerId: "org-2",
+                roomId: "room-other",
+              },
+            ],
+            bots: [
+              BOT,
+              {
+                ...BOT,
+                botId: "bot_01HZY8V6K3Q9W2E4R5T6Y7V8M1",
+                title: "Triage",
+              },
+              {
+                ...BOT,
+                botId: "bot_01HZY8V6K3Q9W2E4R5T6Y7V8M2",
+                environmentId: "env-other",
+                title: "Elsewhere",
+              },
+            ],
+            mainBotIds: {},
+          }),
+          setups: [],
+        },
+        settled: true,
+        botsListed: true,
+      });
+      mocks.state.snapshot = {
+        ...snapshot(),
+        tasks: [trackingTask(TASK_STREAM)],
+      };
+      mocks.taskContexts.set(
+        TASK_STREAM,
+        taskRow(TASK_STREAM, "Release notes", "env-team"),
+      );
+      mocks.homeTasks = [
+        taskRow(TASK_ELSEWHERE, "Their plan", "env-other"),
+        taskRow(TASK_HOME, "Roadmap", "env-team"),
+      ];
+
+      render(surface());
+
+      const mentionable = screen.getByTestId("stub-mentionable");
+      expect(mentionable.getAttribute("data-bots")).toBe("Release Bot|Triage");
+      expect(mentionable.getAttribute("data-tasks")).toBe(
+        "Release notes|Roadmap",
+      );
+    });
+
+    describe("Home tasks the viewer owns directly", () => {
+      const VIEWER = "user-viewer";
+
+      /** A Home row naming no owner environment, on which the viewer holds the owner permission directly. */
+      function ownedDirectly(id: string, title: string): ListTaskLight {
+        const { ownerEnvironmentId: _unowned, ...base } = taskRow(
+          id,
+          title,
+          "unused",
+        );
+        const epic = base.epic;
+        if (epic === null || epic === undefined) {
+          throw new Error("the fixture row is an epic");
+        }
+        return {
+          ...base,
+          epic: {
+            ...epic,
+            permission: {
+              role: "owner",
+              accessType: "direct",
+              userId: VIEWER,
+              grantedBy: VIEWER,
+              grantedAt: 0,
+            },
+          },
+        };
+      }
+
+      beforeEach(() => {
+        useAuthStore.setState({
+          profile: {
+            userId: VIEWER,
+            userName: "Olive Owner",
+            email: "olive@example.com",
+            avatarUrl: null,
+          },
+        });
+        mocks.homeTasks = [ownedDirectly(TASK_HOME, "Roadmap")];
+      });
+
+      it("are the tasks a personal bot's channel can mention, in the viewer's own environment", () => {
+        mocks.state.environments = [
+          {
+            environmentId: "env-team",
+            label: "Olive Owner",
+            ownerKind: "user",
+          },
+        ];
+
+        render(surface());
+
+        expect(
+          screen.getByTestId("stub-mentionable").getAttribute("data-tasks"),
+        ).toBe("Roadmap");
+      });
+
+      it("are not the tasks of a team bot's channel", () => {
+        mocks.state.environments = [
+          {
+            environmentId: "env-team",
+            label: "Acme",
+            ownerKind: "organization",
+          },
+        ];
+
+        render(surface());
+
+        expect(
+          screen.getByTestId("stub-mentionable").getAttribute("data-tasks"),
+        ).toBe("");
+      });
+    });
+
+    describe("a search for a name nothing has", () => {
+      const VIEWER = "user-viewer";
+      const mentionMenu = (): Element | null =>
+        document.querySelector('[data-slot="composer-menu"]');
+
+      beforeEach(() => {
+        useAuthStore.setState({
+          status: "signed-in",
+          profile: {
+            userId: VIEWER,
+            userName: "Olive Owner",
+            email: "olive@example.com",
+            avatarUrl: null,
+          },
+        });
+        // A personal bot: the viewer is its one member, so there are no
+        // members to wait for.
+        mocks.state.environments = [
+          {
+            environmentId: "env-team",
+            label: "Olive Owner",
+            ownerKind: "user",
+          },
+        ];
+        useStandaloneBotsStore.setState({
+          directory: {
+            model: buildHomeBotsModel({
+              environments: [
+                {
+                  environmentId: "env-team",
+                  label: "Olive Owner",
+                  ownerKind: "user",
+                  ownerId: VIEWER,
+                  roomId: "room-team",
+                },
+              ],
+              bots: [
+                BOT,
+                {
+                  ...BOT,
+                  botId: "bot_01HZY8V6K3Q9W2E4R5T6Y7V8M1",
+                  title: "Triage",
+                },
+              ],
+              mainBotIds: {},
+            }),
+            setups: [],
+          },
+          settled: true,
+          botsListed: true,
+        });
+        mocks.state.snapshot = {
+          ...snapshot(),
+          tasks: [trackingTask(TASK_STREAM)],
+        };
+        mocks.taskContexts.set(
+          TASK_STREAM,
+          taskRow(TASK_STREAM, "Release notes", "env-team"),
+        );
+      });
+
+      async function typeNoMatch(): Promise<void> {
+        const user = userEvent.setup();
+        render(surface());
+        await user.type(
+          screen.getByRole("textbox", { name: "Stub message box" }),
+          "@zzzz",
+        );
+      }
+
+      it("closes the menu once Home's initial read is refused, though its first page is pending", async () => {
+        mocks.taskReads.homeRefused = true;
+        mocks.taskReads.homePending = true;
+
+        await typeNoMatch();
+
+        expect(mentionMenu()).toBeNull();
+      });
+
+      it("keeps the menu open while Home's first page is pending and its read may still run", async () => {
+        mocks.taskReads.homePending = true;
+
+        await typeNoMatch();
+
+        expect(mentionMenu()).not.toBeNull();
+      });
+
+      it("closes the menu for a viewer who is not signed in, though the stream's task contexts never answer", async () => {
+        useAuthStore.setState({ status: "unverified" });
+        mocks.taskReads.contextsPending = true;
+
+        await typeNoMatch();
+
+        expect(mentionMenu()).toBeNull();
+      });
+
+      it("keeps the menu open for a signed-in viewer while the stream's task contexts are pending", async () => {
+        mocks.taskReads.contextsPending = true;
+
+        await typeNoMatch();
+
+        expect(mentionMenu()).not.toBeNull();
+      });
+    });
+
+    it("hands the channel no bots while the bot list has not answered, though the environment's group is in the directory", () => {
+      useStandaloneBotsStore.setState({
+        directory: {
+          model: buildHomeBotsModel({
+            environments: [
+              {
+                environmentId: "env-team",
+                label: "Acme",
+                ownerKind: "organization",
+                ownerId: "org-1",
+                roomId: "room-team",
+              },
+            ],
+            bots: [],
+            mainBotIds: {},
+          }),
+          setups: [],
+        },
+        settled: true,
+        botsListed: false,
+      });
+
+      render(surface());
+
+      expect(
+        screen.getByTestId("stub-mentionable").getAttribute("data-bots"),
+      ).toBe("unread");
+    });
+
+    it("hands the channel no bots while the bots directory has not answered", () => {
+      render(surface());
+
+      expect(
+        screen.getByTestId("stub-mentionable").getAttribute("data-bots"),
+      ).toBe("unread");
+    });
+  });
+
   it("shows Messages first, with Activity beside it and no Threads tab, and no counts for a quiet bot", () => {
     render(surface());
 
@@ -2746,54 +3217,98 @@ describe("<BotTabSurface /> views", () => {
       screen.getByTestId("bot-tab-view-messages").getAttribute("aria-selected"),
     ).toBe("true");
     expect(screen.getByTestId("stub-channel")).toBeTruthy();
-    expect(
-      activityTab().querySelector("[data-testid^='bot-tab-activity-']"),
-    ).toBeNull();
+    expect(screen.queryByTestId("bot-tab-activity-count")).toBeNull();
   });
 
-  it("counts what stopped, in red and first, what runs and the tasks the bot tracks, leaving out a zero", () => {
+  /** The tab's words as a sighted person reads them: no screen-reader text. */
+  function visibleTabText(): string {
+    const copy = activityTab().cloneNode(true);
+    if (!(copy instanceof HTMLElement))
+      throw new Error("tab is not an element");
+    for (const hidden of copy.querySelectorAll(".sr-only")) hidden.remove();
+    return copy.textContent;
+  }
+
+  it("rule 6: counts the rows the Activity list shows, one number and no words, whatever puts a task there", async () => {
+    const user = userEvent.setup();
+    useAuthStore.setState({
+      status: "signed-in",
+      profile: {
+        userId: "user-ada",
+        userName: "Ada",
+        email: "ada@example.com",
+      },
+      contextMetadata: { userId: "user-ada", username: "ada" },
+    });
+    mocks.unreadTaskIds.add("task-unseen");
     mocks.state.snapshot = {
       ...snapshot(),
-      tasks: [trackingTask("task-1"), trackingTask("task-2")],
-      activity: {
-        trunk: {
-          state: "failed",
-          startedAt: null,
-          step: null,
-          requestId: "req-1",
-          reason: null,
+      tasks: [
+        { ...trackingTask("task-working"), cadence: { kind: "on-completion" } },
+        {
+          ...trackingTask("task-asking"),
+          cadence: { kind: "on-completion" },
+          inputNeeded: [
+            {
+              hostId: "host-agents",
+              hostName: "Studio Mac",
+              agentChatId: "agent-asking",
+              surfaceId: "surface-1",
+              surface: {
+                kind: "approval",
+                approvalId: "approval-1",
+                tool: "gh pr merge",
+                summary: "Merge the release PR",
+                tier: null,
+                requiresPerson: true,
+                askedAt: 1_000,
+              },
+              reportedAt: 1_000,
+              acceptsActions: true,
+            },
+          ],
         },
-        threads: {},
-      },
+        { ...trackingTask("task-unseen"), cadence: { kind: "on-completion" } },
+        trackingTask("task-periodic"),
+        { ...trackingTask("task-quiet"), cadence: { kind: "on-completion" } },
+      ],
     };
     __setAgentActivityStateForTests(
-      { "task-1": { working: ["agent-1"], turn: [] } },
+      { "task-working": { working: ["agent-1"], turn: ["agent-1"] } },
       "local",
       null,
     );
     render(surface());
+    await user.click(activityTab());
 
-    expect(activityTab().textContent).toBe(
-      "Activity · 1 stopped · 1 running · 2 tasks",
-    );
-    const parts = within(activityTab()).getAllByTestId(/^bot-tab-activity-/);
-    expect(parts.map((part) => part.dataset.testid)).toEqual([
-      "bot-tab-activity-stopped",
-      "bot-tab-activity-running",
-      "bot-tab-activity-tasks",
-    ]);
-    expect(parts[0].className).toContain("text-destructive");
-    expect(parts[1].className).not.toContain("text-destructive");
+    const shown = screen
+      .getByTestId("stub-activity")
+      .dataset.rowIds?.split(",");
+    expect(shown).toHaveLength(4);
+    expect(shown).not.toContain("task-quiet");
+    const badge = within(activityTab()).getByTestId("bot-tab-activity-count");
+    expect(badge.textContent).toContain(String(shown?.length));
+    expect(visibleTabText()).toBe(`Activity${String(shown?.length)}`);
+    // jsdom joins the name's parts without the spaces a browser puts in.
+    expect(
+      screen.getByRole("tab", {
+        name: new RegExp(`^Activity\\s*${String(shown?.length)}\\s*active$`),
+      }),
+    ).toBe(activityTab());
+    expect(screen.queryByRole("tab", { name: /unread/ })).toBeNull();
   });
 
-  it("leaves out the stopped and running counts when nothing has stopped or runs", () => {
+  it("rule 6: shows no count when no task is active", () => {
     mocks.state.snapshot = {
       ...snapshot(),
-      tasks: [trackingTask("task-1")],
+      tasks: [
+        { ...trackingTask("task-quiet"), cadence: { kind: "on-completion" } },
+      ],
     };
     render(surface());
 
-    expect(activityTab().textContent).toBe("Activity · 1 task");
+    expect(screen.queryByTestId("bot-tab-activity-count")).toBeNull();
+    expect(visibleTabText()).toBe("Activity");
   });
 
   it("shows Threads from the column in place of the channel and its views, through the tab's host, and its own channel row lands back where it was", async () => {
@@ -2907,59 +3422,12 @@ describe("<BotTabSurface /> views", () => {
     ).toBe("false");
     expect(useBotTabLandingStore.getState().byBotId).toEqual({});
   });
-
-  it("switches to Activity from the open thread's Activity link", async () => {
-    const user = userEvent.setup();
-    render(surface());
-
-    await user.click(screen.getByTestId("stub-channel-open-activity"));
-
-    expect(activityTab().getAttribute("aria-selected")).toBe("true");
-    expect(screen.getByTestId("stub-activity")).toBeTruthy();
-    expect(screen.queryByTestId("stub-channel")).toBeNull();
-  });
-
-  it("returns to Messages with the thread open when Activity opens a post", async () => {
-    const user = userEvent.setup();
-    render(surface());
-    await user.click(activityTab());
-
-    await user.click(screen.getByTestId("stub-activity-open-post"));
-
-    expect(
-      screen.getByTestId("bot-tab-view-messages").getAttribute("aria-selected"),
-    ).toBe("true");
-    expect(
-      screen.getByTestId("stub-channel").getAttribute("data-open-thread"),
-    ).toBe("post-1");
-  });
 });
 
 describe("<BotTabSurface /> a bot's session in place of its channel", () => {
   function sessionShown(): HTMLElement {
     return screen.getByTestId("stub-session");
   }
-
-  it("opens a check-in's turn from Activity as the trunk session landed on it, in place of the views, and back returns to Activity", async () => {
-    const user = userEvent.setup();
-    render(surface());
-    await user.click(screen.getByTestId("bot-tab-view-activity"));
-
-    await user.click(screen.getByTestId("stub-activity-open-turn"));
-
-    expect(sessionShown().dataset.chatId).toBe("trunk-1");
-    expect(sessionShown().dataset.threadId).toBe("none");
-    expect(sessionShown().dataset.landOn).toBe("prompt-checkin");
-    expect(screen.queryByRole("tablist")).toBeNull();
-    expect(screen.queryByTestId("stub-activity")).toBeNull();
-
-    await user.click(screen.getByTestId("stub-session-back"));
-
-    expect(screen.queryByTestId("stub-session")).toBeNull();
-    expect(
-      screen.getByTestId("bot-tab-view-activity").getAttribute("aria-selected"),
-    ).toBe("true");
-  });
 
   it("opens a reply's turn from the channel, each open a new visit, and its channel link brings Messages back where the channel was", async () => {
     const user = userEvent.setup();
@@ -2980,11 +3448,10 @@ describe("<BotTabSurface /> a bot's session in place of its channel", () => {
     ).toBe("none");
   });
 
-  it("shows the channel on the post a send followed, from Activity too, and the next session's back leaves it where it was", async () => {
+  it("shows the channel on the post a send followed, and the next session's back leaves it where it was", async () => {
     const user = userEvent.setup();
     render(surface());
-    await user.click(screen.getByTestId("bot-tab-view-activity"));
-    await user.click(screen.getByTestId("stub-activity-open-turn"));
+    await user.click(screen.getByTestId("stub-channel-open-turn"));
 
     await user.click(screen.getByTestId("stub-session-post"));
 
@@ -3003,32 +3470,23 @@ describe("<BotTabSurface /> a bot's session in place of its channel", () => {
     ).toBe("none");
   });
 
-  it.each([
-    { leaveBy: "the Activity tab", leave: "bot-tab-view-activity" },
-    {
-      leaveBy: "the channel's Activity link",
-      leave: "stub-channel-open-activity",
-    },
-  ])(
-    "lands the channel on a send's post once: leaving Messages by $leaveBy and coming back does not land again",
-    async ({ leave }) => {
-      const user = userEvent.setup();
-      render(surface());
-      await user.click(screen.getByTestId("stub-channel-open-turn"));
-      await user.click(screen.getByTestId("stub-session-post"));
-      expect(
-        screen.getByTestId("stub-channel").getAttribute("data-land-on"),
-      ).toBe("post-1");
+  it("lands the channel on a send's post once: leaving Messages by the Activity tab and coming back does not land again", async () => {
+    const user = userEvent.setup();
+    render(surface());
+    await user.click(screen.getByTestId("stub-channel-open-turn"));
+    await user.click(screen.getByTestId("stub-session-post"));
+    expect(
+      screen.getByTestId("stub-channel").getAttribute("data-land-on"),
+    ).toBe("post-1");
 
-      await user.click(screen.getByTestId(leave));
-      expect(screen.queryByTestId("stub-channel")).toBeNull();
-      await user.click(screen.getByTestId("bot-tab-view-messages"));
+    await user.click(screen.getByTestId("bot-tab-view-activity"));
+    expect(screen.queryByTestId("stub-channel")).toBeNull();
+    await user.click(screen.getByTestId("bot-tab-view-messages"));
 
-      expect(
-        screen.getByTestId("stub-channel").getAttribute("data-land-on"),
-      ).toBe("none");
-    },
-  );
+    expect(
+      screen.getByTestId("stub-channel").getAttribute("data-land-on"),
+    ).toBe("none");
+  });
 
   it("opens a thread's session from its panel, and shows that thread beside the channel by its post from the session", async () => {
     const user = userEvent.setup();

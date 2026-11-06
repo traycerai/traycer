@@ -342,6 +342,12 @@ describe("artifact export", () => {
         Node.DOCUMENT_POSITION_FOLLOWING,
     ).not.toBe(0);
 
+    // A leaf has nothing nested to carry. Checked while the menu is open:
+    // selecting an item closes it, after which every item is absent.
+    expect(
+      screen.queryByTestId(`switcher-export-nested-pdf-${ARTIFACT_NODE_ID}`),
+    ).toBeNull();
+
     fireEvent.click(pdfItem);
 
     expect(exportMutate).toHaveBeenCalledExactlyOnceWith({
@@ -349,6 +355,56 @@ describe("artifact export", () => {
       format: "pdf",
       archive: false,
       archiveTitle: null,
+      includeNested: false,
+    });
+  });
+
+  it("offers a nested export on a row with Markdown artifacts under it", () => {
+    const artifactSlice = {
+      byId: {
+        [ARTIFACT_NODE_ID]: artifactProjection({
+          id: ARTIFACT_NODE_ID,
+          kind: "spec",
+        }),
+        "ticket-under": artifactProjection({
+          id: "ticket-under",
+          kind: "ticket",
+          title: "Ticket",
+          parentId: ARTIFACT_NODE_ID,
+        }),
+      },
+      allIds: [ARTIFACT_NODE_ID, "ticket-under"],
+    };
+    const empty = { byId: {}, allIds: [] };
+    handle.store.setState({
+      artifacts: artifactSlice,
+      tree: projectTreeSlice(artifactSlice, empty, empty),
+    });
+    render(
+      <SwitcherRowActions
+        epicId={EPIC_ID}
+        tabId={tabId}
+        kind="artifact"
+        nodeId={ARTIFACT_NODE_ID}
+        name="Artifact One"
+      />,
+      { wrapper: Wrapper },
+    );
+
+    fireEvent.pointerDown(
+      screen.getByTestId(`switcher-more-${ARTIFACT_NODE_ID}`),
+      { button: 0 },
+    );
+    fireEvent.click(
+      screen.getByTestId(`switcher-export-nested-markdown-${ARTIFACT_NODE_ID}`),
+    );
+
+    expect(exportMutate).toHaveBeenCalledExactlyOnceWith({
+      artifacts: [{ id: ARTIFACT_NODE_ID, title: "Artifact One" }],
+      format: "markdown",
+      archive: true,
+      archiveTitle: "Artifact One",
+      includeNested: true,
     });
   });
 

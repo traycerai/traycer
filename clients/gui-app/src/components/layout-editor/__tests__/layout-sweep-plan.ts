@@ -469,13 +469,6 @@ const TAB_PLACEMENT_LEFT: SweepStep = arrangementFieldStep(
   "left",
 );
 
-/** The tabs across the top, which is where overflow has anything to fit. */
-const TAB_PLACEMENT_TOP: SweepStep = arrangementFieldStep(
-  "Tab placement: Top",
-  "tabStripPlacement",
-  "top",
-);
-
 const UNLOCKS: ReadonlyArray<Unlock> = [
   {
     step: controlStep(
@@ -543,13 +536,6 @@ const UNLOCKS: ReadonlyArray<Unlock> = [
     applied: (context) => ({
       ...context,
       arrangement: { ...context.arrangement, tabStripPlacement: "left" },
-    }),
-  },
-  {
-    step: TAB_PLACEMENT_TOP,
-    applied: (context) => ({
-      ...context,
-      arrangement: { ...context.arrangement, tabStripPlacement: "top" },
     }),
   },
   {

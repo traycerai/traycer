@@ -34,6 +34,15 @@ export const HOST_OVERVIEW = defineSettingsSection("host", {
       "connection",
     ],
   },
+  settingsRow: {
+    kind: "row",
+    group: null,
+    search: { contributesTo: "page" },
+    label: "Settings",
+    description: null,
+    availableWhen: alwaysAvailable,
+    keywords: ["Personal", "this computer only", "move", "stop sharing"],
+  },
   updatesTab: {
     kind: "group",
     search: { anchor: "host-overview-tab-updates" },

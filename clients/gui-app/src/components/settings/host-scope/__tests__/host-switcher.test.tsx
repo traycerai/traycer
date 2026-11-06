@@ -43,6 +43,7 @@ function renderEmpty(props: {
       }}
       surface="rail"
       intent="view"
+      consequence={null}
       disabled={false}
       isLoading={props.isLoading}
       listsFailed={props.listsFailed}
@@ -115,6 +116,7 @@ describe("<HostSwitcher /> empty vs failed", () => {
         action={{ kind: "add-host", onSelect: () => undefined }}
         surface="rail"
         intent="view"
+        consequence={null}
         disabled={false}
         isLoading={false}
         listsFailed
@@ -150,6 +152,7 @@ describe("<HostSwitcher /> empty vs failed", () => {
         action={{ kind: "add-host", onSelect: () => undefined }}
         surface="rail"
         intent="view"
+        consequence={null}
         disabled={false}
         isLoading={false}
         listsFailed
@@ -184,6 +187,7 @@ describe("<HostSwitcher /> empty vs failed", () => {
           action={{ kind: "add-host", onSelect: () => undefined }}
           surface="rail"
           intent="view"
+          consequence={null}
           disabled={false}
           isLoading={isLoading}
           listsFailed={false}
@@ -232,6 +236,7 @@ describe("<HostSwitcher /> empty vs failed", () => {
           action={{ kind: "add-host", onSelect: () => undefined }}
           surface="rail"
           intent="view"
+          consequence={null}
           disabled={false}
           isLoading={false}
           listsFailed={false}
@@ -324,6 +329,7 @@ describe("<HostSwitcher /> empty vs failed", () => {
         action={{ kind: "add-host", onSelect: () => undefined }}
         surface="rail"
         intent="view"
+        consequence={null}
         disabled={false}
         isLoading={false}
         listsFailed={false}
@@ -342,6 +348,44 @@ describe("<HostSwitcher /> empty vs failed", () => {
   });
 });
 
+describe("<HostSwitcher /> trigger kind", () => {
+  it.each(["rail", "panel-header"] as const)(
+    "shows an unknown kind's name alone on %s",
+    (surface) => {
+      const host = hostScopeOptionFixture({
+        hostId: "host-a",
+        name: "Unnamed kind",
+        kind: null,
+      });
+      render(
+        <HostSwitcher
+          hosts={[host]}
+          selected={host}
+          activeHostId={host.hostId}
+          onSelect={() => undefined}
+          action={null}
+          surface={surface}
+          intent="view"
+          consequence={null}
+          refusalByHostId={NO_HOST_OPTION_REFUSALS}
+          inertExceptHostId={null}
+          disabled={false}
+          isLoading={false}
+          listsFailed={false}
+          onRetryLists={() => undefined}
+          updateViewForHost={null}
+          composer={null}
+          environmentLabelForHost={null}
+        />,
+      );
+
+      expect(screen.getByTestId("settings-host-switcher").textContent).toBe(
+        "Unnamed kind",
+      );
+    },
+  );
+});
+
 describe("<HostSwitcher /> trigger status", () => {
   it("keeps healthy hosts quiet and names an offline selection", () => {
     const healthy = hostScopeOptionFixture({
@@ -356,6 +400,7 @@ describe("<HostSwitcher /> trigger status", () => {
       action: { kind: "manage-hosts" as const, onSelect: () => undefined },
       surface: "inline" as const,
       intent: "pin" as const,
+      consequence: null,
       disabled: false,
       isLoading: false,
       listsFailed: false,
@@ -369,6 +414,9 @@ describe("<HostSwitcher /> trigger status", () => {
     );
 
     expect(screen.queryByTestId("settings-host-switcher-status")).toBeNull();
+    expect(screen.getByTestId("settings-host-switcher").textContent).toBe(
+      "Host A",
+    );
 
     const offline = hostScopeOptionFixture({
       hostId: "host-a",
@@ -443,6 +491,7 @@ describe("<HostSwitcher /> a host nobody named", () => {
         action={{ kind: "manage-hosts", onSelect: () => undefined }}
         surface="inline"
         intent="pin"
+        consequence={null}
         disabled={false}
         isLoading={false}
         listsFailed={false}
@@ -490,6 +539,7 @@ describe("<HostSwitcher /> trailing action", () => {
         action={{ kind: "manage-hosts", onSelect }}
         surface="panel-header"
         intent="view"
+        consequence={null}
         disabled={false}
         isLoading={false}
         listsFailed={false}
@@ -528,6 +578,7 @@ describe("<HostSwitcher /> trailing action", () => {
         action={{ kind: "manage-hosts", onSelect: () => undefined }}
         surface="panel-header"
         intent="view"
+        consequence={null}
         disabled={false}
         isLoading={false}
         listsFailed={false}
@@ -573,6 +624,7 @@ describe("<HostSwitcher /> setting-up status word (M5)", () => {
         action={{ kind: "add-host", onSelect: () => undefined }}
         surface="rail"
         intent="view"
+        consequence={null}
         refusalByHostId={NO_HOST_OPTION_REFUSALS}
         inertExceptHostId={null}
         disabled={false}
@@ -616,6 +668,7 @@ describe("<HostSwitcher /> environment labels (Tracy Bots)", () => {
         action={{ kind: "add-host", onSelect: () => undefined }}
         surface="rail"
         intent="view"
+        consequence={null}
         refusalByHostId={NO_HOST_OPTION_REFUSALS}
         inertExceptHostId={null}
         disabled={false}

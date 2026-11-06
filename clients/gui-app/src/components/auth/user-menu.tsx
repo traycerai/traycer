@@ -80,10 +80,9 @@ export function UserMenuAvatar(props: {
 }
 
 /**
- * Avatar-triggered identity menu. Controlled open state is intentional:
- * jsdom doesn't implement the full PointerEvent path Radix drives, so
- * without the explicit `open` the Radix trigger wouldn't fire under
- * tests. Outside-click + Escape dismissal still come from Radix.
+ * Avatar-triggered identity menu. A host switch closes the menu only after
+ * the choice lands; a refusal keeps the list open for another pick.
+ * Outside-click and Escape dismissal still come from Radix.
  */
 export function UserMenu(props: UserMenuProps) {
   const placement = useColumnOverlayPlacement("foot");
@@ -144,7 +143,10 @@ export function UserMenu(props: UserMenuProps) {
           </span>
         </div>
         <DropdownMenuSeparator />
-        <UserMenuHostSection tooltipSide={placement?.side ?? "left"} />
+        <UserMenuHostSection
+          tooltipSide={placement?.side ?? "left"}
+          onActivated={() => setOpen(false)}
+        />
         <DropdownMenuItem
           onSelect={() => {
             setOpen(false);
@@ -249,6 +251,7 @@ function UserMenuHostRow(props: {
   readonly active: boolean;
   readonly activatingHostId: string | null;
   readonly tooltipSide: "top" | "right" | "bottom" | "left";
+  readonly onPick: (hostId: string) => void;
 }): ReactNode {
   const { host, active, activatingHostId } = props;
   const { ref: nameRef, isTruncated } = useIsTextTruncated<HTMLSpanElement>(
@@ -280,7 +283,8 @@ function UserMenuHostRow(props: {
         value={host.hostId}
         aria-disabled={selectable ? undefined : true}
         onSelect={(event) => {
-          if (!selectable) event.preventDefault();
+          event.preventDefault();
+          if (selectable && !active) props.onPick(host.hostId);
         }}
         data-testid={`user-menu-host-option-${host.hostId}`}
       >
@@ -320,6 +324,7 @@ function UserMenuHostRow(props: {
  */
 function UserMenuHostSection(props: {
   readonly tooltipSide: "top" | "right" | "bottom" | "left";
+  readonly onActivated: () => void;
 }): ReactNode {
   const binding = useHostBinding();
   useRefreshHostDirectoryOnOpen(true, binding?.directory ?? null);
@@ -345,21 +350,14 @@ function UserMenuHostSection(props: {
   if (hosts.length === 0 && !showsRetry) return null;
   return (
     <>
-      <DropdownMenuLabel>Host</DropdownMenuLabel>
+      <DropdownMenuLabel>
+        Set the app&apos;s machine
+        <span className="block whitespace-normal text-ui-xs font-normal normal-case tracking-normal text-muted-foreground">
+          {ACTIVATE_HOST_HINT}
+        </span>
+      </DropdownMenuLabel>
       <DropdownMenuRadioGroup
         value={activeHostId ?? ""}
-        onValueChange={(hostId) => {
-          // Radix still reports the value of a row whose select was
-          // cancelled, so an inert row is refused here too.
-          const host = hosts.find((option) => option.hostId === hostId);
-          if (
-            hostId !== activeHostId &&
-            host !== undefined &&
-            isUserMenuHostPickable(host, activatingHostId)
-          ) {
-            makeActive(hostId);
-          }
-        }}
         data-testid="user-menu-host-section"
       >
         {hosts.map((host) => (
@@ -369,6 +367,11 @@ function UserMenuHostSection(props: {
             active={host.hostId === activeHostId}
             activatingHostId={activatingHostId}
             tooltipSide={props.tooltipSide}
+            onPick={(hostId) => {
+              void makeActive(hostId).then((landed) => {
+                if (landed) props.onActivated();
+              });
+            }}
           />
         ))}
       </DropdownMenuRadioGroup>

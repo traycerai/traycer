@@ -1,43 +1,93 @@
 import { create } from "zustand";
+import { useSettingsEnvironmentPickStore } from "@/stores/settings/settings-environment-pick-store";
+import {
+  environmentPickValue,
+  type EnvironmentPick,
+} from "@/lib/settings-environment-pages";
 
-/**
- * WHICH HOST SETTINGS IS ADMINISTERING — and nothing else.
- *
- * This is deliberately NOT the app-wide active host. The two answer different
- * questions and merging them is the defect this store exists to prevent:
- *
- *   - **Viewing** (this store): which machine's Providers / Worktrees /
- *     Notifications / snapshots am I looking at and editing? Cheap, reversible,
- *     no effect outside Settings.
- *   - **Active for this window** (`HostDirectoryService.selectById`, read
- *     through `useAddressableHostId`): which machine does this window talk
- *     to for ambient work — notification indicators, the bell, rate limits,
- *     the resource monitor, and where newly started work lands. Consequential.
- *
- * Before this store each panel kept its own `useState`, so walking from
- * Providers to Worktrees silently reset the scope back to the active host and
- * the user had to re-pick. One store means one selection for the whole
- * Settings session.
- *
- * NOT persisted, on purpose. A viewing scope that survived a relaunch would
- * silently leave someone administering a machine they last touched days ago —
- * the reverse of the visibility problem this whole surface is fixing. It
- * resets to "follow the active host" on every app start.
- */
+export interface SettingsHostSelection {
+  readonly hostId: string;
+  readonly name: string;
+}
+
+/** Settings view selections belong to this window and never survive a restart. */
 interface SettingsHostScopeState {
-  /**
-   * `null` means "follow the active host" — not "no host". Keeping the
-   * unset case distinct from a pinned selection is what lets a single-host
-   * user never see a stale id after their only host is re-registered.
-   */
-  readonly scopedHostId: string | null;
-  /** `null` returns to following the active host. */
-  readonly setScopedHostId: (hostId: string | null) => void;
+  readonly hostByEnvironment: Readonly<
+    Record<string, SettingsHostSelection | undefined>
+  >;
+  /** A named entry waits for its environment before any host panel can read. */
+  readonly pendingHostId: string | null;
+  readonly selectHost: (
+    pick: EnvironmentPick,
+    host: SettingsHostSelection | null,
+  ) => void;
+  readonly requestHost: (hostId: string) => void;
+  readonly completeHostEntry: (
+    host: SettingsHostSelection,
+    pick: EnvironmentPick,
+  ) => void;
+  readonly abandonHostEntry: (hostId: string) => void;
+  readonly reset: () => void;
+  readonly adoptHostId: (previous: string, next: string) => void;
 }
 
 export const useSettingsHostScopeStore = create<SettingsHostScopeState>(
   (set) => ({
-    scopedHostId: null,
-    setScopedHostId: (hostId) => set({ scopedHostId: hostId }),
+    hostByEnvironment: {},
+    pendingHostId: null,
+    selectHost: (pick, host) =>
+      set((state) => {
+        const hostByEnvironment = { ...state.hostByEnvironment };
+        const key = environmentPickValue(pick);
+        if (host === null) delete hostByEnvironment[key];
+        else hostByEnvironment[key] = host;
+        return { hostByEnvironment, pendingHostId: null };
+      }),
+    requestHost: (pendingHostId) => set({ pendingHostId }),
+    completeHostEntry: (host, pick) =>
+      set((state) =>
+        state.pendingHostId !== host.hostId
+          ? state
+          : {
+              hostByEnvironment: {
+                ...state.hostByEnvironment,
+                [environmentPickValue(pick)]: host,
+              },
+              pendingHostId: null,
+            },
+      ),
+    abandonHostEntry: (hostId) =>
+      set((state) =>
+        state.pendingHostId === hostId ? { pendingHostId: null } : state,
+      ),
+    reset: () => set({ hostByEnvironment: {}, pendingHostId: null }),
+    adoptHostId: (previous, next) => {
+      set((state) => ({
+        hostByEnvironment: Object.fromEntries(
+          Object.entries(state.hostByEnvironment).map(([key, host]) => [
+            key === `local:${previous}` ? `local:${next}` : key,
+            host?.hostId === previous ? { ...host, hostId: next } : host,
+          ]),
+        ),
+        pendingHostId:
+          state.pendingHostId === previous ? next : state.pendingHostId,
+      }));
+      const environment = useSettingsEnvironmentPickStore.getState();
+      if (
+        environment.pick?.kind === "local" &&
+        environment.pick.hostId === previous
+      ) {
+        environment.setPick({ ...environment.pick, hostId: next });
+      }
+      if (
+        environment.defaultPick.kind === "local" &&
+        environment.defaultPick.hostId === previous
+      ) {
+        environment.setDefaultPick({
+          ...environment.defaultPick,
+          hostId: next,
+        });
+      }
+    },
   }),
 );

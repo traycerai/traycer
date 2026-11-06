@@ -12,7 +12,10 @@ import {
 } from "@/components/settings/environment/hosts-running-configuration-model";
 import type { HostScopeOption } from "@/components/settings/host-scope/host-scope-model";
 import { usePersonalComputers } from "@/components/settings/personal/use-personal-computers";
-import { useHostScope } from "@/components/settings/host-scope/use-host-scope";
+import {
+  useHostScopeFor,
+  WINDOW_HOST_SELECTION,
+} from "@/components/settings/host-scope/use-host-scope";
 
 const PERSONAL_TARGET = { kind: "personal" } as const;
 
@@ -67,7 +70,7 @@ export function useHostsRunningConfiguration(
       poll: true,
     },
   });
-  const scope = useHostScope();
+  const scope = useHostScopeFor(WINDOW_HOST_SELECTION);
   const computers = usePersonalComputers(personalTarget);
   const { refetch } = list;
   const retryPersonal = personal.retry;
