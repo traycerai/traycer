@@ -422,9 +422,11 @@ describe("sandboxIdleLine", () => {
 
 describe("sandboxSuspendKeepsLine", () => {
   it("states what each fidelity keeps and nothing for one this build does not know", () => {
-    expect(sandboxSuspendKeepsLine("memory")).toContain("keeps memory");
-    expect(sandboxSuspendKeepsLine("disk")).toContain("disk only");
-    expect(sandboxSuspendKeepsLine("none")).toContain("keeps nothing");
+    expect(sandboxSuspendKeepsLine("memory")).toBe("keeps memory");
+    expect(sandboxSuspendKeepsLine("disk")).toBe(
+      "keeps disk only · processes restart on resume",
+    );
+    expect(sandboxSuspendKeepsLine("none")).toBe("restarts from its image");
     expect(sandboxSuspendKeepsLine("holographic")).toBeNull();
   });
 });
@@ -446,7 +448,7 @@ describe("sandboxGuestConfigFailure", () => {
 
   it("gives the generic sentence for a failure with a null or blank reason", () => {
     const generic =
-      "Guest setup failed. Agents can't start here until it succeeds.";
+      "Settings did not apply. Agents can't start here until they do.";
     expect(
       sandboxGuestConfigFailure(
         summaryOf({ guestConfigured: false, guestConfigFailureReason: null }),
@@ -467,7 +469,7 @@ describe("sandboxGuestConfigFailure", () => {
           guestConfigFailureReason: "broker unreachable",
         }),
       ),
-    ).toBe("Guest setup failed: broker unreachable");
+    ).toBe("Settings did not apply: broker unreachable");
   });
 });
 

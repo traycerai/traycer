@@ -6235,32 +6235,45 @@ set-state-in-effect` forbids the effect form, and an effect would also
   sidebar switcher is the collection, and every lifecycle verb lives on the
   Overview of the host it describes.
 
-  **A pinned host header, a notices strip, and five tabs**
-  (`host-overview-tabs.tsx`; core flows: the `host-overview-tabs` epic
-  artifact). The header is the identity part of `HostIdentityCard` - name and
-  rename, the Local/Remote tag, Activate, the `⋯` menu, the health line, the
-  working chip - and it never moves, so switching tabs never hides Restart or
-  Activate. Under it, the notices strip (below), then in this order:
-  **Installation · Updates · Access and setup · Data · Ports · Mobile simulators**,
-  a `TabsList variant="line"`.
-  There is no Status tab any more: it repeated the header's facts and stated
-  one update three times (the update card, the version card's tag, and its
-  answer), so its update card, wait and offline notice moved into the strip,
-  where they are on every tab, and its update answer leads Updates (now the
-  answer card, drawn only when there is news or an action).
-  - **Frame.** The header, the notices strip, the tab bar and the active body
-    share one card. On desktop the page takes `SettingsPanelShell`'s
-    `fillHeight` (the Providers model) with a transparent body card: the
-    header, the strip and the bar are pinned, only the active tab's body
-    scrolls, and the card is only as tall as its content up to the pane. The
-    `md:` classes on the tab frame are that whole model. On a phone
-    (`useIsMobileViewport`) nothing is a scroll container and the page
-    scrolls as one, header and strip included; the bar becomes a section
-    `Select` (built like `PermissionsTabSelect`) whose trigger carries the
-    ACTIVE tab's search anchor, and Activate moves into the `⋯` menu as its
-    first item (with its reason written under it). The phone's name row never
-    wraps (`HostIdentityCard`'s `nameRowWraps`): the name truncates, and the
-    pencil, the tag and the `⋯` keep their space.
+  **One pinned host header and tab body** (`host-overview-tabs.tsx`). The
+  page title is Overview, without a host subtitle. `HostIdentityCard` names
+  the host once, with its kind glyph and rename pencil; the name wraps in full
+  on desktop and phone. One state word, kind, Idle or Busy and a sandbox's
+  current rate share the second line. Only a personal sandbox adds today's cost.
+  Architecture and build version live in Installation Details.
+
+  The header offers one primary action and one More menu. A sandbox's existing
+  lifecycle verbs move here from the former sandbox card: Suspend while awake,
+  Resume while suspended, Start while stopped, or Repair setup when settings
+  did not apply. Other verbs, including Destroy, live in More alongside host
+  maintenance. An out-of-credits sandbox keeps only Destroy. Ordinary hosts
+  offer Update now when due or Make active; maintenance remains in More.
+  Update now uses the same installation gates and callback as the Updates body
+  formerly did and appears exactly once. CLI-floor remedies remain in Updates.
+
+  Exceptions sit below the state: offline, update required, settings failure,
+  out of credits with the payer and removal date, withdrawal and update progress.
+  One line states `Settings: <source>`, with Change opening the existing choices
+  where available and the existing Details link. Team sources remain read-only.
+  The separate Runs line is gone.
+
+  Tabs follow immediately: **Sandbox** (only for sandbox hosts), then
+  **Installation · Updates · Access and setup · Data · Ports · Mobile simulators**.
+  The Sandbox body holds size, region, idle policy and suspend fidelity, last
+  activity, creator and team wake payer/capacity. Its other rate appears here:
+  resting while awake, awake while asleep. Secrets show only a count and health,
+  with Manage opening that environment's Secrets page. A closed Details
+  disclosure retains each grant's routes, source and rotation and the sandbox's
+  GitHub access; See why opens it on a failure, with Manage still available.
+  Blocked requests
+  show a count and a See events disclosure. Personal Cost details contains the
+  ledger, pending charges, balance and runway; teams have no personal ledger.
+
+  - **Frame.** The header, notices, settings source, tab bar and active body
+    share one surface. On desktop only the active tab body scrolls; no wrapper
+    clips the header's actions. On phone the full page scrolls and the Section
+    select follows the header. Visited tabs retain their drafts until the host
+    changes or the page closes; unvisited bodies do not mount.
   - **Every tab, every state.** All four render for every host in every
     state - connecting, restarting to finish an update, unreachable,
     stopped, not installed, update required - so the header, the strip and
@@ -6275,8 +6288,10 @@ set-state-in-effect` forbids the effect form, and an effect would also
     The two page states with NO header and no tabs are unchanged too - a host
     removed from the account while you look at it, and an account with no
     host but Traycer installed (`LocalRecoveryDangerZone`).
-  - **Tab state.** The page opens on Installation
-    (`DEFAULT_HOST_OVERVIEW_TAB`, the first of `HOST_OVERVIEW_TABS`).
+  - **Tab state.** A sandbox host opens on Sandbox; an ordinary host opens on
+    Installation (`DEFAULT_HOST_OVERVIEW_TAB`). An explicit selection carries
+    across host changes, except Sandbox falls back to Installation for a
+    non-sandbox host.
     `OpenSettingsModalOpts.tab` opens the named tab (read through
     `useSettingsOpenIntent("host")`, acknowledged with
     `acknowledgeSettingsOpenIntent`, and its `hostId` carried into the
@@ -6329,6 +6344,7 @@ set-state-in-effect` forbids the effect form, and an effect would also
        reports `off` (`shownRemoteAccess`), even when a status read still says
        `on`.
     4. **Terminal account**, one row per provider with an ambient profile,
+       labelled by provider name only,
        under "This computer's own sign-in, which stays on this computer. Sign
        in on Providers to use one everywhere." (a team host: "This host's own
        sign-in, which stays on this host. An admin can link a plan on
@@ -6380,37 +6396,16 @@ set-state-in-effect` forbids the effect form, and an effect would also
        says it with Force update…, and while the host can't be reached,
        because it names live work. Its confirm and its refusal when the work
        changes under the open dialog are unchanged.
-    4. **The Remote access question** (`host-scope/remote-access-question.tsx`,
-       its own row under the strip): "Allow other devices and agents on your
-       account to reach this computer?" with On and Not now, while the host's
-       own settings are the person's, its remote access is off, and this
-       desktop has no answer for it. Either answer, or any switch made on
-       Access and setup, is remembered per host id on this desktop
-       (`useHostAccessPromptsStore`, persisted); the host keeps no "asked"
-       mark, so another desktop, or this one after its storage is cleared,
-       asks again.
-    5. **Runs Personal** (`panels/host-environment-section.tsx`, its own row
-       under the question): which configuration THIS host runs, as a fact,
-       not a control - `Runs Personal`, or `Runs <team>` for a host an
-       earlier build bound to a team (a team cannot hold a computer in this
-       version, so there is nothing to pick). A computer with a Local row
-       (the Environment dropdown's rule) reads `Runs its own settings, not in
-Personal yet` instead, whatever it is bound to. It reads the scope's host, the
-       one the picker names, never the window's, through its binding (the
-       pool's `environment.binding.read { hostId }` in a build with a pool,
-       the host's own `environment.host.read` without one). A sandbox shows
-       nothing, and neither does a host whose handshake lacks
-       `environment.host.read`, or a binding still loading or refused.
-    6. **The settings card** (`panels/host-overview-settings-card.tsx`, its
-       own row under Runs Personal, on every tab): `Settings on this computer
-only. · Details · Move to Personal`, on one line, (or `Finish moving` when an upload
-       stopped) while the computer has a Local row, the picker's own rule
-       (`environment/local-row-cohort.tsx`); the progress row while it moves;
-       `Moved to Personal on <date>` after a consented move; and the dated
-       lines (`Shared by an earlier version · Details`, `This computer
-stopped using Personal on <date>`) with `Stop using Personal on this
-computer`. A team's host draws no card. The move sheet names the moving computer
-       in its reach disclosure, including when opened for a remote Local row.
+       The unanswered Remote access question now lives in Access and setup's
+       Remote access row: Not set, Turn on and Not now. Its capability and ownership
+       gates, mutation and per-host remembered choice are unchanged. Once answered,
+       the same row shows On, Off or Turning off. It no longer occupies the header.
+       `HostEnvironmentSection` mounts the single Settings source line described above.
+       The settings source (`panels/host-overview-settings-card.tsx`) uses the
+       existing personal/local choices, move sheet and stop-sharing confirmation.
+       Progress replaces the source while a move runs or has stopped. The existing
+       Details link retains dates and the sharing history. A team's source is
+       read-only. A sandbox retains its known source while its host is unreachable.
        The create-bot form's "Set one up in Settings" link opens this
        page. The sidebar's host list shows each host's environment label
        beside its name (`HostOptionRow`'s `environmentLabel`, resolved by
@@ -6431,7 +6426,7 @@ computer`. A team's host draws no card. The move sheet names the moving computer
   - **Updates ▸ Answer card** (`HostOverviewAnswerCard` in
     `host-overview-updates.tsx`), first on Updates, and ONLY when the update
     answer has news or an action. There is no version heading and no tag: the
-    running version is the header health line's, and "latest" is the version
+    running version is in Installation Details, and "latest" is the version
     list's installed row (`latest` beside `installed`). So a current host,
     the FIRST check (no answer in hand yet; the version list says it is
     asking), a host that can't be reached or is still connecting (the offline
@@ -6450,8 +6445,9 @@ computer`. A team's host draws no card. The move sheet names the moving computer
     over a retained catalog shows the OLD key's catalog as placeholder with
     no error (both held by the errored host id, which only data of the key's
     own clears, and which a scoped-host swap stops matching). Otherwise the card is an icon tile, a title, the
-    answer's own sentence, and the answer's one control on the right (stacked
-    under the text at full width below the `@lg` container width). Tone and title come from `ANSWER_CARD_LOOK`,
+    answer's own sentence, and any CLI-floor remedy on the right (stacked
+    under the text at full width below the `@lg` container width). Update now
+    lives in the host header. Tone and title come from `ANSWER_CARD_LOOK`,
     keyed by `answerKind`:
 
     | Answer              | Tone    | Title                                 | Line                                            | Control                                                                              |

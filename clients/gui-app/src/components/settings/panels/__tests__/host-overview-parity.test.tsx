@@ -100,18 +100,18 @@ interface OverviewSemanticSnapshot {
   readonly headingTexts: readonly string[];
   readonly displayedName: string;
   /**
-   * The kind tag's TEXT — "Computer" or "Host" — rather than whether a
-   * tag is there at all.
+   * The kind label's TEXT — "Computer" or "Host" — rather than whether a
+   * label is there at all.
    *
    * The predecessor was `thisComputerTagPresent`, a boolean, because only a
    * local host got a tag and a remote one got nothing. Both kinds are
    * labelled now, in the picker's own vocabulary, so the structural
    * difference is gone and what is left is one string. That makes this
-   * comparison STRICTER than the boolean it replaces: a missing tag on either
-   * side, or a tag on the wrong side, now fails rather than being the expected
+   * comparison STRICTER than the boolean it replaces: a missing label on either
+   * side, or a label on the wrong side, now fails rather than being the expected
    * asymmetry.
    */
-  readonly kindTagLabel: string | null;
+  readonly kindLabel: string | null;
   readonly recoveryConsolePresent: boolean;
   /**
    * Every testid inside the Danger zone — the group and its removal controls —
@@ -179,9 +179,9 @@ const SHARED_ROW_NAME = "stale-registry-label";
  * every one of them explicitly instead of just excluding it.
  */
 const LOCAL_ONLY_SNAPSHOT_DIFFERENCES = [
-  // The kind tag beside the name reads "Computer" on one and "Host" on
-  // the other. One tag, one slot, one word different — asserted verbatim below.
-  "kindTagLabel",
+  // The kind label reads "Computer" on one and "Host" on the other. One
+  // label, one slot, one word different — asserted verbatim below.
+  "kindLabel",
   // The Danger zone sits on a third capability plane the page was never meant
   // to unify: "Remove Traycer" uninstalls components from THIS computer over
   // the CLI bridge, "Remove from account" ends registry membership and touches
@@ -339,14 +339,21 @@ async function renderOverviewSnapshot(options: {
   const displayedName = (await screen.findByText(options.effectiveName))
     .textContent;
 
-  // Visit every tab so its body force-mounts: the comparison below reads the
-  // WHOLE container, and an unvisited tab's body is not in the DOM at all
-  // (`host-overview-tabs.tsx`'s `forceMount={visited.has(value) ? true :
-  // undefined}`) — without this, only the default Installation tab's
+  // Visit every tab available to this host so its body force-mounts: the
+  // comparison below reads the WHOLE container, and an unvisited tab's body is
+  // not in the DOM at all (`host-overview-tabs.tsx`'s
+  // `forceMount={visited.has(value) ? true : undefined}`) — without this, only
+  // the default Installation tab's
   // controls would ever reach the snapshot, and the Danger Zone's local/remote removal split
   // (the whole point of `removalTestIds`) would silently compare two empty
   // lists.
   for (const tab of HOST_OVERVIEW_TABS) {
+    if (
+      tab === "sandbox" &&
+      screen.queryByTestId("host-overview-tab-sandbox") === null
+    ) {
+      continue;
+    }
     await selectHostOverviewTab(tab);
   }
 
@@ -373,7 +380,7 @@ async function renderOverviewSnapshot(options: {
   //
   // Node-exact subtraction, never global string deletion.
   //
-  // Deleting the kind tag's word as a string would also erase it from any real
+  // Deleting the kind label's word as a string would also erase it from any real
   // fork that happened to contain it — the blind spot this comparison exists
   // to close. Removing the exact nodes leaves everything else compared
   // verbatim. The Danger zone goes as ONE node: it holds removal rows and
@@ -419,7 +426,7 @@ async function renderOverviewSnapshot(options: {
     buttonNames,
     headingTexts,
     displayedName,
-    kindTagLabel: readKindTagLabel(view.container),
+    kindLabel: readKindLabel(view.container),
     recoveryConsolePresent:
       screen.queryByTestId("settings-host-identity") !== null,
     removalTestIds,
@@ -484,7 +491,7 @@ describe("<HostSettingsPanel /> Overview local/remote parity", () => {
     expect(remote.displayedName).toBe("Studio Mac");
   });
 
-  it("differs ONLY on the kind tag's word — Computer vs Host, named and asserted", async () => {
+  it("differs ONLY on the kind label — Computer vs Host, named and asserted", async () => {
     const local = await renderOverviewSnapshot({
       hostId: "host-local",
       isLocalMachine: true,
@@ -513,13 +520,11 @@ describe("<HostSettingsPanel /> Overview local/remote parity", () => {
       "via relay",
     );
 
-    // One tag each, in the SAME slot, differing only in the word — the picker's
-    // own vocabulary, which is what the two surfaces used to disagree about
-    // (a tag here, nothing at all for a remote host). Asserted per variant
-    // rather than merely "they differ", so a tag that vanished, or two that
-    // swapped, fails here.
-    expect(local.kindTagLabel).toBe("Computer");
-    expect(remote.kindTagLabel).toBe("Host");
+    // One label each, in the SAME slot, differing only in the word — the
+    // picker's own vocabulary. Asserted per variant rather than merely "they
+    // differ", so a label that vanished, or two that swapped, fails here.
+    expect(local.kindLabel).toBe("Computer");
+    expect(remote.kindLabel).toBe("Host");
 
     // The recovery console is absent in both — not a local/remote difference
     // at all, so it stays inside the main equality check too; asserted here
@@ -545,7 +550,7 @@ describe("<HostSettingsPanel /> Overview local/remote parity", () => {
     expect(local.removalTestIds).toEqual([]);
   });
 
-  it("shows the RPC's hostVersion on the health line, and the registry version only in Installation Details", async () => {
+  it("keeps build versions out of the header and shows the registry version only in Installation Details", async () => {
     // The defect: both a `host.status.hostVersion` and the
     // registry row's `version` used to render as the host's version at once.
     // The registry says "1.4.2" here twice over — the scope row's `version`
@@ -554,12 +559,9 @@ describe("<HostSettingsPanel /> Overview local/remote parity", () => {
     //
     // The account's figure has ONE sanctioned place now: Installation ▸
     // Details shows what the account last heard, labelled "Last reported
-    // version", and only because it differs from the running version.
-    // Everywhere that states the version the host is RUNNING — the header's
-    // health line, the page's ONE version (the Updates tab no longer has a
-    // version heading of its own) — must still say "1.5.0" and never "1.4.2",
-    // for both variants, and "1.4.2" must appear nowhere but that one labelled
-    // row, whichever tab it is on.
+    // version", and only because it differs from the running version. The
+    // header states no version at all, for both variants, and "1.4.2" must
+    // appear nowhere but that one labelled row, whichever tab it is on.
     const local = await renderOverviewSnapshot({
       hostId: "host-local",
       isLocalMachine: true,
@@ -567,7 +569,7 @@ describe("<HostSettingsPanel /> Overview local/remote parity", () => {
       rowName: SHARED_ROW_NAME,
       hostVersion: "1.5.0",
     });
-    await expectRunningVersionOnly({ running: "1.5.0", reported: "1.4.2" });
+    await expectVersionPlacement({ running: "1.5.0", reported: "1.4.2" });
     cleanup();
 
     const remote = await renderOverviewSnapshot({
@@ -577,7 +579,7 @@ describe("<HostSettingsPanel /> Overview local/remote parity", () => {
       rowName: SHARED_ROW_NAME,
       hostVersion: "1.5.0",
     });
-    await expectRunningVersionOnly({ running: "1.5.0", reported: "1.4.2" });
+    await expectVersionPlacement({ running: "1.5.0", reported: "1.4.2" });
 
     // Belt and braces on the fixture itself: if this ever reads "1.5.0" back
     // from the row instead of the RPC, the whole pin above is vacuous.
@@ -596,29 +598,29 @@ describe("<HostSettingsPanel /> Overview local/remote parity", () => {
 function localOnlyNodes(root: HTMLElement): readonly Element[] {
   const nodes: Element[] = [];
 
-  // The kind tag, located by WHERE IT LIVES — not by its text.
+  // The kind label, located by WHERE IT LIVES — not by its text.
   //
   // Matching every leaf span in the panel by text would remove a genuine
   // local-only fork rendering the same word elsewhere along with the settled
-  // tag — the exclusion swallowing the very class of difference it exists to
-  // expose. Scoping to the identity card's heading row, where the settled tag
-  // sits beside the host name, is what keeps a stray same-text span anywhere
+  // label — the exclusion swallowing the very class of difference it exists to
+  // expose. Scoping to the identity card's state-and-kind row, where the
+  // settled label sits beside the state, keeps a stray same-text span anywhere
   // else inside the compared prose, where it breaks equality on its own.
   //
   // EXACTLY ONE is required, and that requirement now carries its own weight.
   // It used to be redundant with `thisComputerTagPresent`'s
   // `screen.queryByText(...)`, whose singular query threw on a duplicate before
   // any exclusion mattered — a safety borrowed from another field's failure
-  // mode, one refactor away from evaporating. `readKindTagLabel` reads this
+  // mode, one refactor away from evaporating. `readKindLabel` reads this
   // same row, so the check below is the only thing standing between a
-  // duplicated tag and a green run.
-  const settledTags = kindTagNodes(root);
-  if (settledTags.length > 1) {
+  // duplicated label and a green run.
+  const settledLabels = kindLabelNodes(root);
+  if (settledLabels.length > 1) {
     throw new Error(
-      `expected exactly one kind tag in the identity card, found ${settledTags.length}`,
+      `expected exactly one kind label in the identity card, found ${settledLabels.length}`,
     );
   }
-  nodes.push(...settledTags);
+  nodes.push(...settledLabels);
 
   // The Danger zone, whole: it holds removal rows and nothing else, so the
   // group IS the settled exception (see `DANGER_ZONE_SELECTOR`).
@@ -628,16 +630,16 @@ function localOnlyNodes(root: HTMLElement): readonly Element[] {
 }
 
 /**
- * The version invariant, read off the page currently rendered: the RPC's
- * `running` version on the header's health line, the registry's `reported` one
- * not on it, and `reported` exactly once on the whole page (every tab is
- * mounted, the Updates tab's answer card and version list included) — as the
- * value of Details' "Last reported version" row.
+ * The version invariant, read off the page currently rendered: neither the
+ * RPC's `running` version nor the registry's `reported` one is on the
+ * header's health line, and `reported` appears exactly once on the whole page
+ * (every tab is mounted, the Updates tab's answer card and version list
+ * included) — as the value of Details' "Last reported version" row.
  *
  * The scope fixture's clock is `nowMs: 0` and the registry stamp is
  * `2026-01-01`, so the elapsed words are "just now".
  */
-async function expectRunningVersionOnly(versions: {
+async function expectVersionPlacement(versions: {
   readonly running: string;
   readonly reported: string;
 }): Promise<void> {
@@ -648,7 +650,7 @@ async function expectRunningVersionOnly(versions: {
   if (healthLine === null) {
     throw new Error("expected the health word inside the health line");
   }
-  expect(healthLine.textContent).toContain(`v${versions.running}`);
+  expect(healthLine.textContent).not.toContain(versions.running);
   expect(healthLine.textContent).not.toContain(versions.reported);
 
   // `host.status` is what makes the running version differ from the registry.
@@ -670,25 +672,24 @@ async function expectRunningVersionOnly(versions: {
 }
 
 /**
- * The identity card's kind tag text, or `null` when there is none.
+ * The identity card's kind label text, or `null` when there is none.
  *
  * Reads the same scoped row `localOnlyNodes` deletes, deliberately: the field
  * and the exclusion must agree on WHICH node is the settled difference, or the
  * snapshot would compare prose that still contains the tag it claims to have
  * set aside.
  */
-function readKindTagLabel(root: HTMLElement): string | null {
-  const tags = kindTagNodes(root);
-  return tags.length === 1 ? tags[0].textContent.trim() : null;
+function readKindLabel(root: HTMLElement): string | null {
+  const labels = kindLabelNodes(root);
+  return labels.length === 1 ? labels[0].textContent.trim() : null;
 }
 
-/** The leaf spans in the identity card's heading row that are kind tags. */
-function kindTagNodes(root: HTMLElement): readonly Element[] {
-  const headingRow =
-    root.querySelector('[data-testid="host-identity-card"] h2')
-      ?.parentElement ?? null;
-  if (headingRow === null) return [];
-  return Array.from(headingRow.children).filter(
+/** The kind label in the identity card's state-and-kind row. */
+function kindLabelNodes(root: HTMLElement): readonly Element[] {
+  const nameRow = root.querySelector('[data-testid="host-identity-name-row"]');
+  const statusRow = nameRow?.parentElement?.nextElementSibling ?? null;
+  if (statusRow === null) return [];
+  return Array.from(statusRow.children).filter(
     (child) =>
       child.tagName === "SPAN" &&
       child.children.length === 0 &&

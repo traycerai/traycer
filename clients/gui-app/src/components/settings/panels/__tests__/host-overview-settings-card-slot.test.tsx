@@ -103,7 +103,9 @@ describe("<HostOverviewSettingsCardSlot />", () => {
     configure();
     mount(true, "host-a");
     expect(screen.queryByRole("status", { name: "Reading" })).toBeNull();
-    expect(screen.queryByRole("combobox", { name: "Settings" })).toBeNull();
+    expect(
+      screen.queryByRole("button", { name: "Change settings source" }),
+    ).toBeNull();
   });
 
   it("hides the row when the host is unusable or unnamed", () => {

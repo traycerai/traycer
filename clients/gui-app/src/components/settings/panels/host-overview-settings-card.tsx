@@ -5,16 +5,15 @@ import type { EnvironmentStatusResponseV11 } from "@traycer/protocol/host/enviro
 import { OverviewCardDetailsLine } from "@/components/settings/details/overview-card-details-line";
 import { MoveProgressLine } from "@/components/settings/move/move-progress-line";
 import { StopSharingSession } from "@/components/settings/move/stop-sharing-session";
-import { HOST_OVERVIEW } from "@/components/settings/panels/host-overview.definitions";
 import { hostSettingsRowModel } from "@/components/settings/panels/host-overview-settings-card-model";
-import { SettingsRow } from "@/components/settings/settings-row";
+import { Button } from "@/components/ui/button";
 import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "@/components/ui/select";
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuRadioGroup,
+  DropdownMenuRadioItem,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useEnvironmentHostReadQuery } from "@/hooks/bots/use-environment-host-read-query";
 import { readsHostBindingsFromPool } from "@/hooks/bots/use-host-environment-bindings-query";
@@ -36,26 +35,21 @@ export function HostOverviewSettingsCard(props: {
   const model = hostSettingsRowModel(props.status, props.binding);
   if (model.kind === "loading" || props.status === null) {
     return (
-      <SettingsRow
-        row={HOST_OVERVIEW.definitions.settingsRow}
-        status={null}
-        control={
-          <Skeleton
-            className="h-7 w-[40vw] max-w-full"
-            role="status"
-            aria-label="Reading"
-          />
-        }
-      />
+      <div className="shrink-0 px-5 pb-3 text-ui-xs text-muted-foreground">
+        Settings:{" "}
+        <Skeleton
+          className="inline-block h-4 w-[12ch]"
+          role="status"
+          aria-label="Reading"
+        />
+      </div>
     );
   }
   if (model.kind === "team") {
     return (
-      <SettingsRow
-        row={HOST_OVERVIEW.definitions.settingsRow}
-        status={model.description}
-        control={<span className="text-ui-sm font-medium">{model.label}</span>}
-      />
+      <p className="shrink-0 px-5 pb-3 text-ui-xs text-muted-foreground">
+        Settings: <span className="wrap-anywhere">{model.label}</span>
+      </p>
     );
   }
   const lineProps = {
@@ -66,29 +60,39 @@ export function HostOverviewSettingsCard(props: {
   };
   if (model.kind === "progress") {
     return (
-      <SettingsRow
-        row={HOST_OVERVIEW.definitions.settingsRow}
-        status={null}
-        control={
-          <div className="flex flex-wrap items-center gap-1 text-ui-sm">
-            <MoveProgressLine {...lineProps} progress={model.progress} />
-            {model.progress.kind === "move_stopped" ? (
-              <OverviewCardDetailsLine {...lineProps} />
-            ) : null}
-          </div>
-        }
-      />
+      <div className="flex shrink-0 flex-wrap items-center gap-1 px-5 pb-3 text-ui-xs text-muted-foreground">
+        <span>Settings:</span>
+        <MoveProgressLine {...lineProps} progress={model.progress} />
+        {model.progress.kind === "move_stopped" ? (
+          <OverviewCardDetailsLine {...lineProps} />
+        ) : null}
+      </div>
     );
   }
   return (
     <>
-      <SettingsRow
-        row={HOST_OVERVIEW.definitions.settingsRow}
-        status={model.description}
-        control={
-          <div className="flex flex-wrap items-center justify-end gap-2">
-            <OverviewCardDetailsLine {...lineProps} />
-            <Select
+      <div
+        className="flex shrink-0 flex-wrap items-center gap-1 px-5 pb-3 text-ui-xs text-muted-foreground"
+        data-testid="host-settings-source"
+      >
+        <span>
+          Settings:{" "}
+          {model.options.find((option) => option.value === model.value)?.label}
+        </span>
+        <span aria-hidden>·</span>
+        <DropdownMenu>
+          <DropdownMenuTrigger asChild>
+            <Button
+              type="button"
+              variant="link"
+              size="inline"
+              aria-label="Change settings source"
+            >
+              Change
+            </Button>
+          </DropdownMenuTrigger>
+          <DropdownMenuContent align="start">
+            <DropdownMenuRadioGroup
               value={model.value}
               onValueChange={(value) => {
                 const option = model.options.find(
@@ -105,38 +109,21 @@ export function HostOverviewSettingsCard(props: {
                 }
               }}
             >
-              <SelectTrigger
-                size="sm"
-                aria-label="Settings"
-                className="max-w-full"
-              >
-                <SelectValue>
-                  {
-                    model.options.find((option) => option.value === model.value)
-                      ?.label
-                  }
-                </SelectValue>
-              </SelectTrigger>
-              <SelectContent>
-                {model.options.map((option) => (
-                  <SelectItem
-                    key={option.value}
-                    value={option.value}
-                    textValue={option.label}
-                  >
-                    <div className="flex flex-col">
-                      <span>{option.label}</span>
-                      <span className="text-ui-xs text-muted-foreground">
-                        {option.description}
-                      </span>
-                    </div>
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-          </div>
-        }
-      />
+              {model.options.map((option) => (
+                <DropdownMenuRadioItem key={option.value} value={option.value}>
+                  <div className="flex flex-col">
+                    <span>{option.label}</span>
+                    <span className="text-ui-xs text-muted-foreground">
+                      {option.description}
+                    </span>
+                  </div>
+                </DropdownMenuRadioItem>
+              ))}
+            </DropdownMenuRadioGroup>
+          </DropdownMenuContent>
+        </DropdownMenu>
+        <OverviewCardDetailsLine {...lineProps} />
+      </div>
       <StopSharingSession
         client={props.client}
         hostId={props.hostId}
@@ -154,6 +141,7 @@ export function HostOverviewSettingsCardSlot(props: {
   readonly hostId: string | null;
   readonly hostName: string;
   readonly usable: boolean;
+  readonly fallbackSource?: string | null;
 }): ReactNode {
   const status = useEnvironmentStatusRead(
     props.client,
@@ -180,7 +168,12 @@ export function HostOverviewSettingsCardSlot(props: {
     bindingSupport === false ||
     binding.isError
   ) {
-    return null;
+    return props.fallbackSource === null ||
+      props.fallbackSource === undefined ? null : (
+      <p className="shrink-0 px-5 pb-3 text-ui-xs text-muted-foreground">
+        Settings: <span className="wrap-anywhere">{props.fallbackSource}</span>
+      </p>
+    );
   }
   return (
     <HostOverviewSettingsCard
