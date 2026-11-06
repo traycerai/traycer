@@ -114,8 +114,10 @@ export const environmentMovePlanV10 = defineRpcContract({
  * this host builds has a row here, and `RETIRED_SAME_NAME_IN_PERSONAL_ROWS`
  * is what fills it. The KEY stays because `cli-v1.5.2` and `cli-v1.5.3`
  * declare it on this released version. It differs from `looksLikeAKey` in one
- * way worth naming: the released schema gives it `.default([])`, so a host
- * that omits it is still parsed, which is why nothing has to produce it.
+ * way worth naming: the released schema gives it `.default([])`, so a PARSER
+ * tolerates its absence. That is not a licence to omit it when producing one -
+ * a default is a required key in this schema's output type, so the bridge
+ * below and the host's plan resolver both fill it.
  *
  * `guideDiffers`: this computer's agent selection guide has the person's
  * edits, which the move never puts over Personal's. Not a row: it counts in

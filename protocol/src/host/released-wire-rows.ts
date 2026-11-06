@@ -83,9 +83,12 @@ export const RETIRED_LOOKS_LIKE_A_KEY_ROWS: readonly never[] = [];
 /**
  * `environment.move.plan@1.1`'s other retired row group: rows that look like
  * a key whose name Personal already holds as a secret. Retired with
- * `looksLikeAKey` and empty for the same reason. The released schema declares
- * it `.default([])`, so unlike `looksLikeAKey` a host that omits the key is
- * still parsed; this constant is what the `@1.0`→`@1.1` bridge fills, so the
- * two groups read the same way at every call site.
+ * `looksLikeAKey` and empty for the same reason.
+ *
+ * The released schema declares it `.default([])`, so unlike `looksLikeAKey` a
+ * PARSER tolerates its absence. A PRODUCER does not get that freedom: a
+ * default is a required key in the schema's output type, so the `@1.0`→`@1.1`
+ * bridge and the host's plan resolver both fill it from here, and the two
+ * groups read the same way at every call site.
  */
 export const RETIRED_SAME_NAME_IN_PERSONAL_ROWS: readonly never[] = [];

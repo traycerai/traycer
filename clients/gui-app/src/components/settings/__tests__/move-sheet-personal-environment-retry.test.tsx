@@ -87,6 +87,7 @@ const movePlan: EnvironmentMovePlanResponseV12 = {
   disclosureVersion: 1,
   rows: {
     looksLikeAKey: [],
+    sameNameInPersonal: [],
     moves: [
       {
         kind: "variable",

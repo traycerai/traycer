@@ -86,7 +86,10 @@ function planWith(
     hostVersion: "1.5.0",
     disclosureVersion: 1,
     rows: {
+      // Both groups the key-shaped plane filled are retired and empty on
+      // every plan; the released schema still declares them.
       looksLikeAKey: [],
+      sameNameInPersonal: [],
       moves: [],
       staysOnThisComputer: [],
       alreadyInPersonal: [],
