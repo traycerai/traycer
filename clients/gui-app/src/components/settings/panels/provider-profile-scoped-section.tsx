@@ -1,7 +1,8 @@
 import { useState, type ReactNode } from "react";
 
 import { useIsMutatingOf } from "@/hooks/use-mutation-state-of";
-import { AppliedProviderItemDetails } from "@/components/settings/environment/applied-provider-item-details";
+import { SettingsDetailsDialog } from "@/components/settings/details/settings-details-button";
+import { useAppliedProviderItemDetailsSubject } from "@/components/settings/details/use-provider-row-details-subject";
 import { providerIdToGuiHarnessId } from "@/lib/provider-ordering";
 import {
   AlertTriangle,
@@ -21,6 +22,7 @@ import { Button } from "@/components/ui/button";
 import {
   DropdownMenu,
   DropdownMenuContent,
+  DropdownMenuItem,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { ReportIssueAction } from "@/components/report-issue/report-issue-action";
@@ -468,9 +470,6 @@ export function ProviderProfileScopedSection(
   );
 }
 
-const PROFILE_MENU_ACTION_CLASS =
-  "h-auto min-w-0 max-w-full shrink justify-start whitespace-normal";
-
 /**
  * The selected profile's row under the dropdown. The email, plan and a
  * not-usable standing stay on the row. Sign in, Manage profile and Details
@@ -490,6 +489,11 @@ function SelectedProfileRow(props: {
   readonly onManage: () => void;
 }): ReactNode {
   const { profile, managementHeldReason } = props;
+  const [detailsOpen, setDetailsOpen] = useState(false);
+  const detailsSubject = useAppliedProviderItemDetailsSubject(
+    "managed_profile",
+    `${providerIdToGuiHarnessId(props.state.providerId)}:${profile.profileId}`,
+  );
   if (profile.kind === "ambient") {
     return (
       <OwnLoginSummary
@@ -508,11 +512,11 @@ function SelectedProfileRow(props: {
     >
       <ProfileSummary key={profile.profileId} profile={profile} />
       <ProfileRowMore label={profileDisplayLabel(profile)}>
-        <AppliedProviderItemDetails
-          kind="managed_profile"
-          itemKey={`${providerIdToGuiHarnessId(props.state.providerId)}:${profile.profileId}`}
-          title={profile.label}
-        />
+        {detailsSubject === null ? null : (
+          <DropdownMenuItem onSelect={() => setDetailsOpen(true)}>
+            Details
+          </DropdownMenuItem>
+        )}
         {profile.auth.status === "unauthenticated" ? (
           <TooltipWrapper
             label={props.canAddProfile ? null : props.signInUnavailableHint}
@@ -520,18 +524,14 @@ function SelectedProfileRow(props: {
             sideOffset={6}
             align="start"
           >
-            <span className="inline-flex">
-              <Button
-                type="button"
-                size="xs"
-                variant="secondary"
-                className={PROFILE_MENU_ACTION_CLASS}
+            <span className="flex">
+              <DropdownMenuItem
                 disabled={!props.canAddProfile}
-                onClick={props.onSignIn}
+                onSelect={props.onSignIn}
               >
                 <LogIn data-icon="inline-start" />
                 Sign in
-              </Button>
+              </DropdownMenuItem>
             </span>
           </TooltipWrapper>
         ) : null}
@@ -544,35 +544,36 @@ function SelectedProfileRow(props: {
           sideOffset={6}
           align="end"
         >
-          {/* Span for the same reason as Add a profile above: a disabled
-              button emits no pointer events for the tooltip to see. */}
-          <span className="inline-flex">
-            <Button
-              type="button"
-              size="xs"
-              variant="outline"
-              className={PROFILE_MENU_ACTION_CLASS}
+          <span className="flex">
+            <DropdownMenuItem
               disabled={managementHeldReason !== null}
-              onClick={props.onManage}
+              onSelect={props.onManage}
             >
               <Settings2 data-icon="inline-start" />
               Manage profile
-            </Button>
+            </DropdownMenuItem>
           </span>
         </TooltipWrapper>
       </ProfileRowMore>
+      <SettingsDetailsDialog
+        subject={detailsSubject}
+        title={profile.label}
+        controls={null}
+        open={detailsOpen}
+        onOpenChange={setDetailsOpen}
+        initialTab="status"
+      />
     </div>
   );
 }
 
-/** Row actions. Omitted by the caller when the row has none. Closes once an action runs, so a dialog it opens is not stuck under the menu. */
+/** Row actions. Dialogs opened by an item live outside this menu. */
 function ProfileRowMore(props: {
   readonly label: string;
   readonly children: ReactNode;
 }): ReactNode {
-  const [open, setOpen] = useState(false);
   return (
-    <DropdownMenu open={open} onOpenChange={setOpen}>
+    <DropdownMenu>
       <DropdownMenuTrigger asChild>
         <Button
           type="button"
@@ -584,14 +585,8 @@ function ProfileRowMore(props: {
           <MoreHorizontal />
         </Button>
       </DropdownMenuTrigger>
-      <DropdownMenuContent
-        align="end"
-        className="w-max"
-        onClick={() => setOpen(false)}
-      >
-        <div className="flex min-w-0 flex-col items-stretch gap-1">
-          {props.children}
-        </div>
+      <DropdownMenuContent align="end" className="w-max">
+        {props.children}
       </DropdownMenuContent>
     </DropdownMenu>
   );
@@ -668,18 +663,14 @@ function OwnLoginSummary(props: {
             sideOffset={6}
             align="start"
           >
-            <span className="inline-flex">
-              <Button
-                type="button"
-                size="xs"
-                variant="secondary"
-                className={PROFILE_MENU_ACTION_CLASS}
+            <span className="flex">
+              <DropdownMenuItem
                 disabled={props.addProfileDisabled}
-                onClick={props.onAddProfile}
+                onSelect={props.onAddProfile}
               >
                 <LogIn data-icon="inline-start" />
                 Sign in
-              </Button>
+              </DropdownMenuItem>
             </span>
           </TooltipWrapper>
         </ProfileRowMore>
@@ -712,13 +703,9 @@ function OwnLoginSummary(props: {
           {hostName === null ? null : ` on ${hostName}`}.
         </span>
         <ProfileRowMore label={moreLabel}>
-          <Button
-            type="button"
-            variant="link"
-            size="inline-xs"
-            className={PROFILE_MENU_ACTION_CLASS}
+          <DropdownMenuItem
             disabled={refreshing}
-            onClick={() => void refreshProviders()}
+            onSelect={() => void refreshProviders()}
           >
             Retry
             {refreshing ? (
@@ -728,7 +715,7 @@ function OwnLoginSummary(props: {
                 variant={undefined}
               />
             ) : null}
-          </Button>
+          </DropdownMenuItem>
         </ProfileRowMore>
       </div>
     );
@@ -749,18 +736,14 @@ function OwnLoginSummary(props: {
           sideOffset={6}
           align="start"
         >
-          <span className="inline-flex">
-            <Button
-              type="button"
-              size="xs"
-              variant="secondary"
-              className={PROFILE_MENU_ACTION_CLASS}
+          <span className="flex">
+            <DropdownMenuItem
               disabled={props.addProfileDisabled}
-              onClick={props.onAddProfile}
+              onSelect={props.onAddProfile}
             >
               <LogIn data-icon="inline-start" />
               Sign in to use everywhere
-            </Button>
+            </DropdownMenuItem>
           </span>
         </TooltipWrapper>
       </ProfileRowMore>

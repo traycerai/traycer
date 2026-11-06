@@ -226,8 +226,10 @@ export function sandboxSecretsSummary(
   if (count === 0) return secrets;
   if (tone === "degraded") return `${secrets} · not working`;
   if (tone === "pending") return `${secrets} · connecting`;
-  const allReady = views.every((view) =>
-    view.routes.every((route) => route.readiness === "ready"),
+  const allReady = views.every(
+    (view) =>
+      view.routes.length > 0 &&
+      view.routes.every((route) => route.readiness === "ready"),
   );
   if (tone === "ready" && allReady) return `${secrets} · all working`;
   return secrets;

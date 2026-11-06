@@ -5,12 +5,29 @@ import {
   fireEvent,
   render,
   screen,
+  waitFor,
   within,
 } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { tooltipTextFor } from "@/components/ui/__tests__/tooltip-probe";
+import {
+  NO_NOTICES,
+  NO_OVERRIDES,
+  NO_REVIEW,
+  PersonalPageContext,
+} from "@/components/settings/personal/personal-page-context";
+import { PERSONAL_PICK } from "@/lib/settings-environment-pages";
+import { useSettingsEnvironmentPickStore } from "@/stores/settings/settings-environment-pick-store";
+import {
+  environmentStatusFixture,
+  itemStatusFixture,
+} from "@/lib/environment/__tests__/environment-test-support";
+import {
+  registerDetailsProvider,
+  type DetailsProvider,
+} from "@/lib/settings-details-entry";
 
 // Same rationale as the sibling report-issue test: `ProfileEditDialog` and the
 // refresh button pull in mutation/host hooks unconditionally, so those are
@@ -51,6 +68,35 @@ vi.mock("@/hooks/providers/use-recolor-provider-profile-mutation", () => ({
 }));
 vi.mock("@/hooks/providers/use-refresh-providers", () => ({
   useRefreshProviders: () => () => Promise.resolve(),
+}));
+vi.mock("@/hooks/bots/use-environment-list-query", () => ({
+  useEnvironmentListQuery: () => ({
+    data: {
+      environments: [{ environmentId: "personal-env", ownerKind: "user" }],
+    },
+    isError: false,
+    refetch: () => Promise.resolve({}),
+  }),
+}));
+vi.mock("@/hooks/chats/use-cloud-chat-queries", () => ({
+  useCloudChatViewerId: () => "test-user",
+}));
+vi.mock("@/components/settings/panels/provider-profile-edit-dialog", () => ({
+  ProfileEditDialog: (props: {
+    readonly open: boolean;
+    readonly startInReauth: boolean;
+    readonly onOpenChange: (open: boolean) => void;
+  }) =>
+    props.open ? (
+      <div
+        role="dialog"
+        aria-label={props.startInReauth ? "Sign in editor" : "Profile editor"}
+      >
+        <button type="button" onClick={() => props.onOpenChange(false)}>
+          Close editor
+        </button>
+      </div>
+    ) : null,
 }));
 
 import { ProviderProfileScopedSection } from "@/components/settings/panels/provider-profile-scoped-section";
@@ -148,9 +194,67 @@ function renderSection(
   );
 }
 
+function renderSectionWithRecordedProfile(): void {
+  const queryClient = new QueryClient({
+    defaultOptions: {
+      queries: { retry: false },
+      mutations: { retry: false },
+    },
+  });
+  render(
+    <QueryClientProvider client={queryClient}>
+      <TooltipProvider>
+        <PersonalPageContext.Provider
+          value={{
+            section: "providers",
+            pick: PERSONAL_PICK,
+            state: {
+              kind: "ready",
+              status: environmentStatusFixture({
+                items: [
+                  itemStatusFixture({
+                    kind: "managed_profile",
+                    key: "opencode:profile-managed",
+                  }),
+                ],
+              }),
+            },
+            line: null,
+            hostName: "Studio",
+            localOverrides: NO_OVERRIDES,
+            hostId: "host-1",
+            client: null,
+            notices: NO_NOTICES,
+            review: NO_REVIEW,
+          }}
+        >
+          <ProviderProfileScopedSection
+            state={opencodeState()}
+            hostId="host-1"
+            isSelectedHostLocal
+            canAddProfile
+            credentialRefusal={null}
+            onOpenCliSettings={() => undefined}
+            startInReauth={false}
+            failedAttempt={null}
+            onAddProfile={() => undefined}
+            onDismissFailedAttempt={() => undefined}
+            selectedProfileId="profile-managed"
+            onSelectedProfileIdChange={() => undefined}
+            profileEnablementAvailable
+            profileEnablementPending={() => false}
+            onSetProfileEnabled={() => undefined}
+          />
+        </PersonalPageContext.Provider>
+      </TooltipProvider>
+    </QueryClientProvider>,
+  );
+}
+
 describe("<ProviderProfileScopedSection /> profile summary email reveal", () => {
   afterEach(() => {
     cleanup();
+    useSettingsEnvironmentPickStore.setState({ pick: null });
   });
 
   it("does not leak the raw email through the tooltip while redacted", () => {
@@ -205,7 +309,9 @@ describe("<ProviderProfileScopedSection /> profile summary email reveal", () => 
 
   it("shows standing text only when the profile is not usable, and keeps the verbs in More", async () => {
     const profile = managedProfile();
+    const onAddProfile = vi.fn();
     renderSection({
+      onAddProfile,
       state: {
         ...opencodeState(),
         profiles: [
@@ -229,14 +335,64 @@ describe("<ProviderProfileScopedSection /> profile summary email reveal", () => 
     expect(standing.className).not.toContain("truncate");
     expect(screen.queryByText("Signed in")).toBeNull();
 
-    await userEvent.click(
-      screen.getByRole("button", { name: "More for Work account" }),
-    );
+    const trigger = screen.getByRole("button", {
+      name: "More for Work account",
+    });
+    trigger.focus();
+    await userEvent.keyboard("{Enter}");
     const menu = screen.getByRole("menu");
-    expect(within(menu).getByRole("button", { name: "Sign in" })).toBeTruthy();
     expect(
-      within(menu).getByRole("button", { name: "Manage profile" }),
+      within(menu).getByRole("menuitem", { name: "Sign in" }),
+    ).toBeTruthy();
+    expect(
+      within(menu).getByRole("menuitem", { name: "Manage profile" }),
     ).toBeTruthy();
     expect(within(menu).queryByRole("switch")).toBeNull();
+
+    await userEvent.keyboard("{ArrowDown}{Enter}");
+    expect(screen.getByRole("dialog", { name: "Profile editor" })).toBeTruthy();
+    expect(screen.queryByRole("menu")).toBeNull();
+    await userEvent.click(screen.getByRole("button", { name: "Close editor" }));
+
+    trigger.focus();
+    await userEvent.keyboard("{Enter}{Enter}");
+    expect(screen.getByRole("dialog", { name: "Sign in editor" })).toBeTruthy();
+    expect(onAddProfile).not.toHaveBeenCalled();
+    expect(screen.queryByRole("menu")).toBeNull();
+  });
+
+  it("opens recorded managed-profile Details from More and keeps the drawer after menu close", async () => {
+    useSettingsEnvironmentPickStore.setState({ pick: PERSONAL_PICK });
+    const provider = vi.fn<DetailsProvider>(() =>
+      Promise.reject(new Error("no evidence")),
+    );
+    const unregister = registerDetailsProvider("managed_profile", provider);
+    try {
+      renderSectionWithRecordedProfile();
+      const trigger = screen.getByRole("button", {
+        name: "More for Work account",
+      });
+      trigger.focus();
+      await userEvent.keyboard("{Enter}");
+      await screen.findByRole("menu");
+      expect(screen.getByRole("menuitem", { name: "Details" })).toBeTruthy();
+      await userEvent.keyboard("{Enter}");
+
+      const drawer = await screen.findByRole("dialog");
+      expect(
+        within(drawer).getByRole("heading", { name: "Work account" }),
+      ).toBeTruthy();
+      expect(screen.queryByRole("menu")).toBeNull();
+      await waitFor(() => {
+        expect(provider).toHaveBeenCalled();
+      });
+      expect(provider.mock.calls[0]?.[0]).toEqual({
+        environmentId: "personal-env",
+        kind: "managed_profile",
+        key: "opencode:profile-managed",
+      });
+    } finally {
+      unregister();
+    }
   });
 });

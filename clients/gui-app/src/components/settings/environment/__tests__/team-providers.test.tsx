@@ -185,9 +185,32 @@ function publishSettingsApi(
 }
 
 async function openProfileMore(name: string): Promise<void> {
-  await userEvent.click(
-    await screen.findByRole("button", { name: `More for ${name}` }),
+  const trigger = await screen.findByRole("button", {
+    name: `More for ${name}`,
+  });
+  trigger.focus();
+  await userEvent.keyboard("{Enter}");
+  await screen.findByRole("menu");
+}
+
+async function activateProfileMenuRow(name: string): Promise<void> {
+  const menu = screen.getByRole("menu");
+  const rows = Array.from(
+    menu.querySelectorAll<HTMLElement>(
+      '[role="menuitem"], [role="menuitemcheckbox"]',
+    ),
   );
+  const target = rows.find(
+    (row) =>
+      row.getAttribute("aria-label") === name ||
+      row.textContent.trim() === name,
+  );
+  if (target === undefined) throw new Error(`missing menu row: ${name}`);
+  const targetIndex = rows.indexOf(target);
+  for (let index = 0; index < targetIndex; index += 1) {
+    await userEvent.keyboard("{ArrowDown}");
+  }
+  await userEvent.keyboard("{Enter}");
 }
 
 function railButton(name: string): HTMLElement {
@@ -282,9 +305,7 @@ describe("TeamProviders items", () => {
     expect(railButton("Claude Code").getAttribute("aria-current")).toBe("true");
     expect(railButton("Codex").getAttribute("aria-current")).toBeNull();
     expect(railButton("Claude Code")).toBeTruthy();
-    await userEvent.click(
-      screen.getByRole("button", { name: "All keys are in Secrets" }),
-    );
+    await userEvent.click(screen.getByRole("button", { name: "Open Secrets" }));
     expect(setSection).toHaveBeenCalledWith("secrets");
     expect(harness.paramsOf("environment.configuration.items")[0]).toEqual({
       environmentId: "env-a",
@@ -414,8 +435,11 @@ describe("TeamProviders items", () => {
 
     expect(await screen.findByText("Work")).toBeTruthy();
     await openProfileMore("Work");
-    const toggle = screen.getByRole("switch", { name: "Use Work" });
-    await userEvent.click(toggle);
+    const checkboxItem = screen.getByRole("menuitemcheckbox", {
+      name: "Use Work",
+    });
+    expect(checkboxItem.getAttribute("aria-checked")).toBe("true");
+    await activateProfileMenuRow("Use Work");
 
     expect(harness.paramsOf("environment.configuration.items.put")).toEqual([
       {
@@ -438,12 +462,15 @@ describe("TeamProviders items", () => {
       await screen.findByText("Changed by Grace a moment ago"),
     ).toBeTruthy();
     expect(screen.getByText("Off")).toBeTruthy();
+    if (screen.queryByRole("menu") !== null) {
+      await userEvent.keyboard("{Escape}");
+    }
     await openProfileMore("Work");
     await waitFor(() => {
-      expect(screen.getByRole("switch", { name: "Use Work" })).toHaveProperty(
-        "ariaChecked",
-        "false",
-      );
+      const updatedCheckboxItem = screen.getByRole("menuitemcheckbox", {
+        name: "Use Work",
+      });
+      expect(updatedCheckboxItem.getAttribute("aria-checked")).toBe("false");
     });
   });
 
@@ -480,6 +507,11 @@ describe("TeamProviders items", () => {
     render(<TeamProviders />, { wrapper: harness.Wrapper });
 
     await userEvent.click(await screen.findByRole("tab", { name: "Env" }));
+    await userEvent.click(
+      await screen.findByRole("button", {
+        name: "Edit claude:ANTHROPIC_BASE_URL value",
+      }),
+    );
     const field = await screen.findByLabelText(
       "claude:ANTHROPIC_BASE_URL value",
     );
@@ -630,7 +662,13 @@ describe("TeamProviders items", () => {
 
       expect(await screen.findByText("Work")).toBeTruthy();
       await openProfileMore("Work");
-      await userEvent.click(screen.getByRole("button", { name: "Details" }));
+      await activateProfileMenuRow("Details");
+
+      const drawer = await screen.findByRole("dialog");
+      expect(
+        within(drawer).getByRole("heading", { name: "Work" }),
+      ).toBeTruthy();
+      expect(screen.queryByRole("menu")).toBeNull();
 
       await waitFor(() => {
         expect(provider).toHaveBeenCalled();

@@ -11,6 +11,7 @@ import {
   sandboxGrantViews,
   sandboxHasBrokeredGrant,
   sandboxRouteAddresses,
+  sandboxSecretsSummary,
 } from "@/lib/sandboxes/sandbox-grants-view";
 
 function grant(overrides: Partial<SandboxGrant>): SandboxGrant {
@@ -342,6 +343,14 @@ describe("sandboxGrantViews", () => {
     expect(views.map((view) => view.secretName)).toEqual(["A", "B"]);
     expect(views[0].routes[0].readiness).toBe("pending");
     expect(views[1].routes[0].readiness).toBe("ready");
+  });
+});
+
+describe("sandboxSecretsSummary", () => {
+  it("does not say all working when a grant has no routes", () => {
+    expect(
+      sandboxSecretsSummary(summary([grant({ routes: [] })]), [], "ready"),
+    ).toBe("1 secret");
   });
 });
 

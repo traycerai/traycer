@@ -611,7 +611,7 @@ function ProvidersSettingsPanelInner({
       // the body (the Model list timeout is in each provider's CLI & Args).
       headerAction={
         <div className="flex min-w-0 flex-wrap items-center justify-end gap-2">
-          <AllKeysInSecretsLink />
+          <OpenSecretsLink />
           {isHostScopeUsable(scope.status) ? <ProvidersGlobalStatus /> : null}
         </div>
       }
@@ -643,7 +643,7 @@ function ProvidersSettingsPanelInner({
  * `useHostClient()`, so on `connecting` / `unreachable` / `vanished` they would
  * resolve the ambient host instead of the one the page names.
  */
-function AllKeysInSecretsLink(): ReactNode {
+function OpenSecretsLink(): ReactNode {
   return (
     <Button
       type="button"
@@ -654,7 +654,7 @@ function AllKeysInSecretsLink(): ReactNode {
         navigateToSettingsSection("secrets");
       }}
     >
-      All keys are in Secrets
+      Open Secrets
     </Button>
   );
 }

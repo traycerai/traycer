@@ -15,10 +15,12 @@ import type {
 } from "@traycer/protocol/host/environment/configuration-contracts";
 import { SettingsPanelShell } from "@/components/settings/settings-panel-shell";
 import { Button } from "@/components/ui/button";
-import { Switch } from "@/components/ui/switch";
 import {
   DropdownMenu,
   DropdownMenuContent,
+  DropdownMenuCheckboxItem,
+  DropdownMenuItem,
+  DropdownMenuLabel,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { useProvidersListForClient } from "@/hooks/providers/use-providers-list-query";
@@ -53,6 +55,8 @@ import { TeamProviderLiveFacts } from "./team-provider-live-facts";
 import { TeamPlans } from "./team-plans";
 import { TeamProviderKeys } from "./team-provider-keys";
 import { ProviderRowDetails } from "@/components/settings/details/provider-row-details";
+import { SettingsDetailsDialog } from "@/components/settings/details/settings-details-button";
+import { useProviderRowDetailsSubject } from "@/components/settings/details/use-provider-row-details-subject";
 import { useConfigurationAdminNames } from "@/hooks/environment/team/use-admin-names";
 import { EnvironmentProviderSkillsTab } from "./environment-skills";
 import { teamProviderStateWord } from "./team-provider-state-word";
@@ -251,7 +255,7 @@ function TeamProvidersView(props: {
     <SettingsPanelShell
       title="Providers"
       description={PROVIDERS_PAGE_DESCRIPTION}
-      headerAction={<AllKeysInSecretsLink />}
+      headerAction={<OpenSecretsLink />}
       bodyClassName="flex flex-col gap-4 overflow-visible rounded-none border-none bg-transparent"
     >
       <ConfigurationWriteFeedback issue={issue} />
@@ -388,7 +392,7 @@ function TeamProvidersView(props: {
   );
 }
 
-function AllKeysInSecretsLink(): ReactNode {
+function OpenSecretsLink(): ReactNode {
   return (
     <Button
       type="button"
@@ -399,7 +403,7 @@ function AllKeysInSecretsLink(): ReactNode {
         navigateToSettingsSection("secrets");
       }}
     >
-      All keys are in Secrets
+      Open Secrets
     </Button>
   );
 }
@@ -451,6 +455,11 @@ function ConfigurationProfileRow(props: {
   const canEdit = useCanEditConfiguration();
   const { put } = useConfigurationItemMutations();
   const profile = configurationProfileValueSchema.parse(props.item.value);
+  const [detailsOpen, setDetailsOpen] = useState(false);
+  const detailsSubject = useProviderRowDetailsSubject(
+    props.item.kind,
+    props.item.key,
+  );
   const setEnabled = (enabled: boolean): void => {
     if (source.kind !== "pool") return;
     put.mutate(
@@ -496,30 +505,35 @@ function ConfigurationProfileRow(props: {
           </Button>
         </DropdownMenuTrigger>
         <DropdownMenuContent align="end">
-          <div className="flex min-w-0 flex-col gap-2 p-1">
-            <ProviderRowDetails
-              kind={props.item.kind}
-              itemKey={props.item.key}
-              title={profile.name}
-            />
-            {canEdit ? (
-              <div className="flex items-center justify-between gap-3 px-1">
-                <span className="text-ui-sm">Use</span>
-                <Switch
-                  aria-label={`Use ${profile.name}`}
-                  checked={profile.enabled}
-                  disabled={put.isPending}
-                  onCheckedChange={setEnabled}
-                />
-              </div>
-            ) : (
-              <span className="px-1 text-ui-xs text-muted-foreground">
-                {profile.enabled ? "On" : "Off"}
-              </span>
-            )}
-          </div>
+          {detailsSubject === null ? null : (
+            <DropdownMenuItem onSelect={() => setDetailsOpen(true)}>
+              Details
+            </DropdownMenuItem>
+          )}
+          {canEdit ? (
+            <DropdownMenuCheckboxItem
+              aria-label={`Use ${profile.name}`}
+              checked={profile.enabled}
+              disabled={put.isPending}
+              onCheckedChange={setEnabled}
+            >
+              Use
+            </DropdownMenuCheckboxItem>
+          ) : (
+            <DropdownMenuLabel>
+              {profile.enabled ? "On" : "Off"}
+            </DropdownMenuLabel>
+          )}
         </DropdownMenuContent>
       </DropdownMenu>
+      <SettingsDetailsDialog
+        subject={detailsSubject}
+        title={profile.name}
+        controls={null}
+        open={detailsOpen}
+        onOpenChange={setDetailsOpen}
+        initialTab="status"
+      />
     </li>
   );
 }
