@@ -126,9 +126,7 @@ export function UserMenu(props: UserMenuProps) {
         side={placement?.side}
         align={placement?.align ?? "end"}
         sideOffset={6}
-        // A menu's width, whatever a host is called: long names truncate
-        // in their rows and read in full from a tooltip.
-        className="w-max max-w-64 whitespace-nowrap"
+        className="w-max max-w-64"
         data-testid="user-menu-content"
       >
         <div
@@ -242,9 +240,8 @@ function isUserMenuHostPickable(
 }
 
 /**
- * One host in the account menu. Its tooltip says what a click does (the
- * activate hint, on a row that can take one) and, only when the menu's width
- * has truncated it, the host's full name.
+ * One host in the account menu. The section header owns the activation
+ * consequence; a tooltip is only a fallback for a cut-off name.
  */
 function UserMenuHostRow(props: {
   readonly host: HostScopeOption;
@@ -258,19 +255,9 @@ function UserMenuHostRow(props: {
     host.name,
   );
   const selectable = isUserMenuHostPickable(host, activatingHostId);
-  const hint = active || !selectable ? null : ACTIVATE_HOST_HINT;
   return (
     <TooltipWrapper
-      label={
-        isTruncated ? (
-          <span className="flex flex-col gap-0.5">
-            <span className="break-all">{host.name}</span>
-            {hint}
-          </span>
-        ) : (
-          hint
-        )
-      }
+      label={isTruncated ? host.name : null}
       side={props.tooltipSide}
       sideOffset={6}
       align={undefined}
@@ -287,6 +274,7 @@ function UserMenuHostRow(props: {
           if (selectable && !active) props.onPick(host.hostId);
         }}
         data-testid={`user-menu-host-option-${host.hostId}`}
+        className="items-end"
       >
         <HostOptionRow
           host={host}
@@ -296,7 +284,7 @@ function UserMenuHostRow(props: {
           surfaceState={AVAILABLE_HOST_ROW_SURFACE_STATE}
           updateView={null}
           nameRef={nameRef}
-          nameWraps={false}
+          nameWraps
           environmentLabel={null}
         />
         {host.hostId === activatingHostId ? (
