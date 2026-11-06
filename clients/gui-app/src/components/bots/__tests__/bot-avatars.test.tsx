@@ -13,8 +13,32 @@
  * "Team Tracy" bots shared one swatch then and differ now.
  */
 import type { ReactElement } from "react";
-import { cleanup, render, screen } from "@testing-library/react";
-import { afterEach, describe, expect, it } from "vitest";
+import { cleanup, render, screen, waitFor } from "@testing-library/react";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { HostClient } from "@traycer-clients/shared/host-client/host-client";
+import { MockHostMessenger } from "@traycer-clients/shared/host-client/mock/mock-host-messenger";
+import { mockLocalHostEntry } from "@traycer-clients/shared/host-client/mock/mock-host-directory";
+import { createRequestContextFixture } from "@traycer-clients/shared/test-fixtures/request-context";
+import {
+  hostRpcRegistry,
+  type HostRpcRegistry,
+} from "@traycer/protocol/host/index";
+import type {
+  BotAppearance,
+  BotDirectoryRecord,
+} from "@traycer/protocol/host/bot/schemas";
+import { stubImmediateImage } from "@/__tests__/immediate-avatar-image";
+import { BotLooksContext, botLooksOf } from "@/hooks/bots/use-bot-appearance";
+import {
+  chosenCreatureMark,
+  creatureMark,
+  creatureSheet,
+  drawCreatureMark,
+} from "@/lib/bots/creature-mark";
+import {
+  botSwatchAt,
+  derivedBotSwatchIndex,
+} from "@/lib/providers/profile-accent-color";
 import {
   AvatarStack,
   BotAvatar,
@@ -23,6 +47,19 @@ import {
 } from "@/components/bots/bot-avatars";
 import { BotIdentityContext } from "@/components/bots/bot-identity-context";
 import { avatarShape } from "@/components/bots/__tests__/avatar-shape";
+
+const mocks = vi.hoisted(() => ({
+  client: null as HostClient<HostRpcRegistry> | null,
+  reads: [] as Array<{ epicId: string; chatId: string; hash: string }>,
+}));
+
+// The host a picture's bytes are read from; the rest of the hooks are real.
+vi.mock("@/hooks/host/use-host-client-for-host-id", () => ({
+  useHostClientForHostId: () => mocks.client,
+}));
+vi.mock("@/hooks/notifications/use-notification-host", () => ({
+  useNotificationResolveHostId: () => "host-1",
+}));
 
 const PERSONAL_MAIN_BOT_ID = "bot_019YFRXBQ551DN29WCTHKM3CEP";
 const TEAM_A_MAIN_BOT_ID = "bot_0RVWRHPMH8WPT9KW1NGKJB319D";
@@ -87,8 +124,45 @@ function InBotContext(props: {
   );
 }
 
+beforeEach(() => {
+  mocks.reads = [];
+  const spine = new HostClient<HostRpcRegistry>({
+    registry: hostRpcRegistry,
+    invalidator: { invalidateHostScope: () => {} },
+    findHostById: (hostId) =>
+      hostId === mockLocalHostEntry.hostId ? mockLocalHostEntry : null,
+    messenger: new MockHostMessenger<HostRpcRegistry>({
+      registry: hostRpcRegistry,
+      requestId: () => "req-1",
+      handlers: {
+        "epic.readChatAttachment": (params) => {
+          mocks.reads.push({
+            epicId: params.epicId,
+            chatId: params.chatId,
+            hash: params.hash,
+          });
+          return {
+            ok: true,
+            bytesBase64: "iVBORwECAwQ=",
+            mediaType: "image/png",
+          };
+        },
+      },
+    }),
+  });
+  spine.setRequestContext(
+    createRequestContextFixture({ origin: "renderer", bearerToken: "tok-1" }),
+  );
+  mocks.client = spine.createRequester(mockLocalHostEntry);
+  stubImmediateImage();
+  vi.spyOn(URL, "createObjectURL").mockReturnValue("blob:bot-picture");
+  vi.spyOn(URL, "revokeObjectURL").mockReturnValue(undefined);
+});
+
 afterEach(() => {
   cleanup();
+  vi.unstubAllGlobals();
+  vi.restoreAllMocks();
 });
 
 describe("a bot's picture", () => {
@@ -217,4 +291,175 @@ describe("a bot's picture", () => {
 
     expect(after).toEqual(before);
   });
+});
+
+describe("a bot's chosen look", () => {
+  const BOT_ID = TEAM_S_MAIN_BOT_ID;
+  const PICTURE_HASH = "b".repeat(64);
+  const BARE: BotAppearance = { mark: null, swatch: null, background: null };
+
+  function row(appearance: BotAppearance | undefined): BotDirectoryRecord {
+    return {
+      botId: BOT_ID,
+      environmentId: "env-1",
+      createdByUserId: "user-1",
+      title: "Team Tracy",
+      harness: "claude",
+      model: "model-a",
+      effort: null,
+      profile: null,
+      directive: null,
+      replyMode: "thread",
+      appConversationChatId: null,
+      trunkChatId: "trunk-1",
+      boundHostId: "host-1",
+      hostEpoch: 0,
+      createdAt: 1_000,
+      archivedAt: null,
+      ...(appearance === undefined ? {} : { appearance }),
+    };
+  }
+
+  function looking(appearance: BotAppearance | undefined): ReactElement {
+    return (
+      <BotLooksContext value={botLooksOf([row(appearance)])}>
+        <NamedBotAvatar botId={BOT_ID} size="sm" />
+      </BotLooksContext>
+    );
+  }
+
+  /** The avatar's markup and custom properties, less the clip path's generated id. */
+  function markup(): string {
+    return screen
+      .getByTestId("bot-avatar")
+      .outerHTML.replace(/avatar-squircle-[\w-]+/g, "avatar-squircle-ID");
+  }
+
+  /** A swatch other than the bot's own, of the given ink. */
+  function otherSwatch(ink: "dark" | "light"): number {
+    const own = derivedBotSwatchIndex(BOT_ID);
+    const found = Array.from({ length: 24 }, (_, index) => index).find(
+      (index) => index !== own && botSwatchAt(index).ink === ink,
+    );
+    if (found === undefined) throw new Error("no such swatch");
+    return found;
+  }
+
+  it("draws the derivation when nothing is chosen, as when the bot names no look at all", () => {
+    render(looking(undefined));
+    const bare = markup();
+    cleanup();
+    render(looking(BARE));
+
+    expect(markup()).toBe(bare);
+  });
+
+  it("draws the bot's own creature from its id when no mark is chosen", () => {
+    render(looking(BARE));
+
+    expect(drawn()[0].path).toBe(
+      drawCreatureMark(creatureMark(BOT_ID), 24).path,
+    );
+  });
+
+  it("draws the creature the person chose, regrown from its family and seed", () => {
+    const choice = creatureSheet(BOT_ID)[5];
+    render(looking(BARE));
+    const [derived] = drawn();
+    cleanup();
+    render(
+      looking({
+        ...BARE,
+        mark: { kind: "creature", family: choice.family, seed: choice.seed },
+      }),
+    );
+    const [chosen] = drawn();
+
+    expect(chosen.path).toBe(
+      drawCreatureMark(chosenCreatureMark(BOT_ID, choice), 24).path,
+    );
+    expect(chosen.path).not.toBe(derived.path);
+    expect(chosen.swatch).toBe(derived.swatch);
+  });
+
+  it.each(["dark", "light"] as const)(
+    "draws the swatch the person chose, in %s ink, and keeps the bot's own creature",
+    (ink) => {
+      const index = otherSwatch(ink);
+      render(looking(BARE));
+      const [derived] = drawn();
+      cleanup();
+      render(looking({ ...BARE, swatch: index }));
+      const [chosen] = drawn();
+
+      expect(chosen.swatch).toBe(botSwatchAt(index).color);
+      expect(chosen.ink).toBe(ink);
+      expect(chosen.swatch).not.toBe(derived.swatch);
+      expect(chosen.path).toBe(derived.path);
+    },
+  );
+
+  it("draws the picture the person chose, read from the bot's trunk chat", async () => {
+    render(
+      looking({ ...BARE, mark: { kind: "picture", blobRef: PICTURE_HASH } }),
+    );
+
+    await waitFor(() => {
+      expect(
+        screen
+          .getByTestId("bot-avatar")
+          .querySelector("img")
+          ?.getAttribute("src"),
+      ).toBe("blob:bot-picture");
+    });
+    expect(mocks.reads).toEqual([
+      { epicId: BOT_ID, chatId: "trunk-1", hash: PICTURE_HASH },
+    ]);
+  });
+
+  it("draws no picture, and reads none, for a bot whose mark is a creature or none", () => {
+    render(
+      looking({ ...BARE, mark: { kind: "creature", family: "feet", seed: 2 } }),
+    );
+
+    expect(screen.getByTestId("bot-avatar").querySelector("img")).toBeNull();
+    expect(mocks.reads).toEqual([]);
+  });
+
+  it.each([
+    [
+      "a creature",
+      { ...BARE, mark: { kind: "creature", family: "crest", seed: 9 } },
+    ],
+    ["a swatch", { ...BARE, swatch: 17 }],
+    [
+      "a picture",
+      { ...BARE, mark: { kind: "picture", blobRef: PICTURE_HASH } },
+    ],
+    [
+      "all three",
+      {
+        mark: { kind: "creature", family: "ears", seed: 4 },
+        swatch: 3,
+        background: 20,
+      },
+    ],
+  ] as const)(
+    "is drawn exactly as the derivation again once %s is cleared",
+    async (_name, chosen) => {
+      render(looking(BARE));
+      const derived = markup();
+      cleanup();
+
+      const { rerender } = render(looking(chosen));
+      await waitFor(() => {
+        expect(markup()).not.toBe(derived);
+      });
+      rerender(looking(BARE));
+
+      await waitFor(() => {
+        expect(markup()).toBe(derived);
+      });
+    },
+  );
 });

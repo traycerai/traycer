@@ -90,6 +90,8 @@ import type {
 } from "@traycer/protocol/host/bot/conversation-schemas";
 import type { TabNavigationIntent } from "@/lib/tab-navigation/intents";
 import type { BotChannelLanding } from "@/components/bots/bot-channel-view";
+import type { BotAppearance } from "@traycer/protocol/host/bot/schemas";
+import { botSwatchAt } from "@/lib/providers/profile-accent-color";
 import { readFocusedHostNotificationPresence } from "@/lib/notifications/notification-presence";
 import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
 import { makeOpenableNodeRef } from "@/stores/epics/canvas/types";
@@ -195,6 +197,8 @@ const mocks = vi.hoisted(() => ({
     listedBotIds: undefined as string[] | undefined,
     /** Titles the list gives its bots; a bot not named is titled by its id. */
     listTitles: new Map<string, string>(),
+    /** The appearance the list gives a bot; a bot not named has none. */
+    listAppearance: new Map<string, BotAppearance>(),
     mainBotIds: null as Record<string, string> | null,
     support: null as boolean | null,
     /** Whether the host advertises `bot.onboarding.read`; `null` while unknown. */
@@ -470,6 +474,9 @@ vi.mock("@/hooks/bots/use-bot-list-query", () => {
                 title: mocks.state.listTitles.get(botId) ?? botId,
                 environmentId: "env-team",
                 archivedAt: null,
+                ...(mocks.state.listAppearance.has(botId)
+                  ? { appearance: mocks.state.listAppearance.get(botId) }
+                  : {}),
               })),
               mainBotIds: mocks.state.mainBotIds,
             },
@@ -941,6 +948,7 @@ beforeEach(() => {
   // The bot is listed, in a team that has bots: nothing is to be set up.
   mocks.state.listedBotIds = [BOT_ID];
   mocks.state.listTitles = new Map([[BOT_ID, "Release Bot"]]);
+  mocks.state.listAppearance = new Map();
   mocks.state.mainBotIds = null;
   mocks.state.support = true;
   mocks.state.onboardingSupport = true;
@@ -4105,5 +4113,74 @@ describe("<BotTabSurface /> header on a short viewport under the keyboard", () =
 
     expect(hiddenAway(screen.getByTestId("bot-tab-title"))).toBe(true);
     expect(hiddenAway(screen.getByTestId("bot-tab-view-messages"))).toBe(true);
+  });
+});
+
+describe("<BotTabSurface /> channel background", () => {
+  const TINT_CLASS = "bg-(--channel-tint)/10";
+
+  function header(): HTMLElement {
+    return screen.getByTestId("bot-channel-header");
+  }
+
+  function chooseBackground(background: number | null): void {
+    mocks.state.listAppearance = new Map([
+      [BOT_ID, { mark: null, swatch: null, background }],
+    ]);
+  }
+
+  afterEach(() => {
+    document.documentElement.classList.remove("dark");
+  });
+
+  it.each([false, true])(
+    "tints the header with the chosen swatch at one low opacity (dark: %s)",
+    (dark) => {
+      document.documentElement.classList.toggle("dark", dark);
+      chooseBackground(7);
+      render(surface());
+
+      expect(header().classList.contains(TINT_CLASS)).toBe(true);
+      expect(header().getAttribute("data-channel-background")).toBe("7");
+      expect(header().style.getPropertyValue("--channel-tint")).toBe(
+        botSwatchAt(7).color,
+      );
+    },
+  );
+
+  it("tints neither the bot column nor the composer nor the thread panel", () => {
+    chooseBackground(7);
+    render(surface());
+
+    for (const region of [
+      screen.getByTestId("stub-sidebar"),
+      screen.getByTestId("stub-channel"),
+    ]) {
+      expect(region.hasAttribute("data-channel-background")).toBe(false);
+      expect(region.querySelector(`[data-channel-background]`)).toBeNull();
+      expect(region.classList.contains(TINT_CLASS)).toBe(false);
+    }
+    expect(
+      screen
+        .getByRole("textbox", { name: "Channel box" })
+        .closest(`.${CSS.escape(TINT_CLASS)}`),
+    ).toBeNull();
+    expect(
+      screen
+        .getByRole("textbox", { name: "Thread box" })
+        .closest(`.${CSS.escape(TINT_CLASS)}`),
+    ).toBeNull();
+  });
+
+  it.each([
+    ["names no appearance", null],
+    ["chose none", "none"],
+  ] as const)("keeps the page's own header when the bot %s", (_name, how) => {
+    if (how === "none") chooseBackground(null);
+    render(surface());
+
+    expect(header().classList.contains(TINT_CLASS)).toBe(false);
+    expect(header().hasAttribute("data-channel-background")).toBe(false);
+    expect(header().style.getPropertyValue("--channel-tint")).toBe("");
   });
 });

@@ -102,6 +102,8 @@ const mocks = vi.hoisted(() => ({
   replyModeSupport: true as boolean | null,
   // Whether the reply-mode write is in flight.
   replyModePending: false,
+  // What it answers for `bot.updateAppearance` (the appearance section).
+  appearanceSupport: null as boolean | null,
   supportQueries: [] as Array<{ hostId: string | null; method: string }>,
   // Whether the tab's host advertises `host.usage.summary`.
   usageSupported: false,
@@ -142,6 +144,7 @@ vi.mock("@/hooks/host/use-host-supports-method", () => ({
     if (method.startsWith("bot.notificationLevel.")) {
       return mocks.notificationSupport;
     }
+    if (method === "bot.updateAppearance") return mocks.appearanceSupport;
     return method === "bot.updateReplyMode" ? mocks.replyModeSupport : null;
   },
 }));
@@ -205,6 +208,20 @@ vi.mock("@/hooks/bots/use-bot-mutations", () => ({
     isPending: mocks.replyModePending,
     error: refusalOf(mocks.refusal.replyMode),
     mutate: mocks.updateReplyMode,
+  }),
+  // The appearance section has its own suite over a real host client
+  // (`bot-appearance-settings.test.tsx`); here it only has to mount.
+  useBotUpdateAppearanceMutation: () => ({
+    isPending: false,
+    isError: false,
+    variables: undefined,
+    error: null,
+    mutate: vi.fn(),
+  }),
+  useBotPicturePutMutation: () => ({
+    isPending: false,
+    error: null,
+    mutate: vi.fn(),
   }),
 }));
 vi.mock("@/hooks/bots/use-bot-notification-level", () => ({
@@ -397,6 +414,7 @@ beforeEach(() => {
   mocks.refusal.remove = null;
   mocks.refusal.replyMode = null;
   mocks.replyModeSupport = true;
+  mocks.appearanceSupport = null;
   mocks.replyModePending = false;
   mocks.supportQueries.length = 0;
   mocks.usageSupported = false;
@@ -594,6 +612,34 @@ describe("<BotChannelSettingsPanel /> refusals", () => {
 
     expect(mocks.deleteBot).toHaveBeenCalledTimes(1);
     expect(mocks.deleteBot.mock.calls[0][0]).toEqual({ botId: BOT.botId });
+  });
+});
+
+describe("<BotChannelSettingsPanel /> appearance", () => {
+  it("offers Icon, Colour and Background in Details when the host can change them", () => {
+    mocks.appearanceSupport = true;
+    mountPanel(BOT, true);
+
+    for (const [testId, label] of [
+      ["bot-settings-icon", "Icon"],
+      ["bot-settings-colour", "Colour"],
+      ["bot-settings-background", "Background"],
+    ] as const) {
+      expect(within(screen.getByTestId(testId)).getByText(label)).toBeTruthy();
+    }
+    expect(mocks.supportQueries).toContainEqual({
+      hostId: "host-1",
+      method: "bot.updateAppearance",
+    });
+  });
+
+  it("draws none of the three when the host cannot change them", () => {
+    mocks.appearanceSupport = false;
+    mountPanel(BOT, true);
+
+    expect(screen.queryByTestId("bot-settings-icon")).toBeNull();
+    expect(screen.queryByTestId("bot-settings-colour")).toBeNull();
+    expect(screen.queryByTestId("bot-settings-background")).toBeNull();
   });
 });
 

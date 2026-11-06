@@ -8,7 +8,10 @@ import {
   type CreatureMark,
   type CreatureMarkSize,
   type CreatureSilhouette,
+  CREATURE_SHEET_SIZE,
+  chosenCreatureMark,
   creatureMark,
+  creatureSheet,
   drawCreatureMark,
 } from "@/lib/bots/creature-mark";
 
@@ -246,5 +249,57 @@ describe("drawing a creature", () => {
         );
       }
     }
+  });
+});
+
+describe("the creature sheet", () => {
+  const botIds = syntheticBotIds(60);
+
+  it("is the same for one bot id every time", () => {
+    for (const botId of botIds) {
+      expect(creatureSheet(botId)).toEqual(creatureSheet(botId));
+    }
+  });
+
+  it("offers the bot's own creature first", () => {
+    for (const botId of botIds) {
+      const [own] = creatureSheet(botId);
+      expect(own.seed).toBe(0);
+      expect(chosenCreatureMark(botId, own)).toEqual(creatureMark(botId));
+    }
+  });
+
+  it("offers twelve creatures, none drawn like another", () => {
+    for (const botId of botIds) {
+      const sheet = creatureSheet(botId);
+      expect(sheet).toHaveLength(CREATURE_SHEET_SIZE);
+      const looks = sheet.map((choice) => {
+        const mark = chosenCreatureMark(botId, choice);
+        return `${mark.silhouette}:${mark.rows.join(",")}`;
+      });
+      expect(new Set(looks).size).toBe(looks.length);
+    }
+  });
+
+  it("regrows from a stored family and seed the mask the sheet showed", () => {
+    for (const botId of botIds) {
+      for (const choice of creatureSheet(botId)) {
+        const stored = JSON.parse(JSON.stringify(choice)) as typeof choice;
+        expect(chosenCreatureMark(botId, stored)).toEqual(
+          chosenCreatureMark(botId, choice),
+        );
+        expect(chosenCreatureMark(botId, stored).silhouette).toBe(
+          choice.family,
+        );
+      }
+    }
+  });
+
+  it("grows another body from another seed", () => {
+    const [botId] = botIds;
+    const [own, second] = creatureSheet(botId);
+    expect(chosenCreatureMark(botId, second).rows).not.toEqual(
+      chosenCreatureMark(botId, { ...own, family: second.family }).rows,
+    );
   });
 });
