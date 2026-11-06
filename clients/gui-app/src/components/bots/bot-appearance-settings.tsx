@@ -319,6 +319,10 @@ function usePictureUpload(
           },
         },
       );
+    } catch {
+      // Cropping or encoding it failed on this device: the image is
+      // as unusable as one that does not decode.
+      setUnreadable(true);
     } finally {
       setPreparing(false);
     }

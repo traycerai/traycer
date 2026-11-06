@@ -38,6 +38,8 @@ const mocks = vi.hoisted(() => ({
     | { ok: false; reason: "digest-mismatch" },
   /** While set, `drafts.putBlob` is not answered until it resolves. */
   blobGate: null as Promise<void> | null,
+  /** Whether encoding the cropped picture fails. */
+  encodeFails: false,
   /** Whether the next image decodes. */
   decodes: true,
 }));
@@ -70,7 +72,9 @@ vi.mock("@/lib/images/bitmap-codec", () => ({
   },
   createBitmapCanvas: () => ({ getContext: () => ({ drawImage: () => {} }) }),
   bitmapCanvasToBlob: () =>
-    Promise.resolve(new Blob([PNG_BYTES], { type: "image/png" })),
+    mocks.encodeFails
+      ? Promise.reject(new Error("cannot encode"))
+      : Promise.resolve(new Blob([PNG_BYTES], { type: "image/png" })),
 }));
 
 import { BotAppearanceSettings } from "@/components/bots/bot-appearance-settings";
@@ -148,6 +152,7 @@ beforeEach(() => {
   mocks.blobAnswer = { ok: true };
   mocks.blobGate = null;
   mocks.decodes = true;
+  mocks.encodeFails = false;
 });
 
 afterEach(() => {
@@ -355,6 +360,46 @@ describe("<BotAppearanceSettings />", () => {
       "Couldn't read that image.",
     );
     expect(mocks.appearanceWrites).toEqual([]);
+  });
+
+  it("says so, frees every icon control and writes nothing when the picture cannot be prepared", async () => {
+    mocks.encodeFails = true;
+    const user = userEvent.setup();
+    const stored = creatureSheet(BOT_ID)[1];
+    mount({
+      ...BARE,
+      mark: { kind: "creature", family: stored.family, seed: stored.seed },
+    });
+    const file = screen.getByTestId("bot-settings-icon-file");
+
+    await user.upload(file, new File(["x"], "me.jpg", { type: "image/jpeg" }));
+
+    expect((await screen.findByRole("alert")).textContent).toBe(
+      "Couldn't read that image.",
+    );
+    for (const testId of [
+      "bot-settings-icon-creature-3",
+      "bot-settings-icon-default",
+      "bot-settings-icon-upload",
+    ]) {
+      await waitFor(() => {
+        expect(screen.getByTestId<HTMLButtonElement>(testId).disabled).toBe(
+          false,
+        );
+      });
+    }
+    expect(mocks.blobWrites).toEqual([]);
+    expect(mocks.appearanceWrites).toEqual([]);
+
+    mocks.encodeFails = false;
+    await user.upload(file, new File(["x"], "me.jpg", { type: "image/jpeg" }));
+    const sha256 = await sha256Hex(PNG_BYTES);
+    await waitFor(() => {
+      expect(mocks.appearanceWrites).toEqual([
+        { botId: BOT_ID, mark: { kind: "picture", blobRef: sha256 } },
+      ]);
+    });
+    expect(screen.queryByRole("alert")).toBeNull();
   });
 
   it("says so, and writes nothing, for a file that is not an image", async () => {
