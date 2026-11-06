@@ -649,6 +649,39 @@ function renderAgent(
   });
 }
 
+/**
+ * Closed `<details>` stays readable in jsdom, so the count is the summary's
+ * own text and `open` is the closed state. A click on the summary does not
+ * open it here; callers set `open` when they read the body.
+ */
+function sessionSummary(details: HTMLDetailsElement): HTMLElement {
+  const summary = details.querySelector("summary");
+  if (!(summary instanceof HTMLElement)) {
+    throw new Error("session disclosure has no summary");
+  }
+  return summary;
+}
+
+function closedSessionDisclosure(count: string): HTMLDetailsElement {
+  const node = screen.getByTestId("agent-host-sessions");
+  if (!(node instanceof HTMLDetailsElement)) {
+    throw new Error("agent-host-sessions is not a details element");
+  }
+  expect(node.tagName).toBe("DETAILS");
+  expect(node.open).toBe(false);
+  expect(sessionSummary(node).textContent).toBe(count);
+  return node;
+}
+
+function openedSessionBody(details: HTMLDetailsElement): HTMLElement {
+  details.open = true;
+  const body = details.querySelector(":scope > div");
+  if (!(body instanceof HTMLDivElement)) {
+    throw new Error("session disclosure has no body");
+  }
+  return body;
+}
+
 describe("AgentHoverTooltip host section", () => {
   it("shows host identity, cost, payer, shape and actions for a row in the viewer's sandbox list", async () => {
     h.sandboxes = [sandboxRow({})];
@@ -684,23 +717,22 @@ describe("AgentHoverTooltip host section", () => {
     expect(text).toContain(hoverTodayCost(2000));
     expect(text).toContain("Suspends after 30 idle min");
     expect(text).toContain("destroyed after 7 idle days");
-    expect(text).not.toContain("Creator, build");
-    expect(text).not.toContain("more in other tasks");
-    expect(screen.queryByTestId("agent-host-activity")).toBeNull();
-    const sessions = screen.getByTestId("agent-host-sessions");
-    expect(sessions.tagName).toBe("BUTTON");
-    expect(sessions.textContent).toBe("3 sessions");
-    expect(sessions.className).toContain("w-fit");
+    const sessions = closedSessionDisclosure("3 sessions");
+    expect(sessions.tagName).not.toBe("BUTTON");
     expect(sessions.className).toContain("max-w-full");
     expect(sessions.className).toContain("break-words");
-    expect(sessions.className).toContain("underline");
+    expect(sessions.className).not.toContain("underline");
+    const body = openedSessionBody(sessions);
+    expect(within(body).getByText("Creator, build")).toBeDefined();
+    expect(within(body).getByText("1 more in other tasks")).toBeDefined();
+    expect(within(body).queryByTestId("agent-host-activity")).toBeNull();
     expect(h.refetchAgents).toHaveBeenCalled();
     expect(h.refetchTerminals).toHaveBeenCalled();
+    await userEvent.click(sessionSummary(sessions));
+    expect(h.openDetails).not.toHaveBeenCalled();
     for (const name of ["Open terminal", "Files", "Details"]) {
       expect(screen.getByRole("button", { name })).toBeDefined();
     }
-    await userEvent.click(sessions);
-    expect(h.openDetails).toHaveBeenCalledWith("sbx-1");
     expect(screen.queryByRole("button", { name: TASK_FILES })).toBeNull();
     expect(
       screen.queryByRole("button", { name: KEEP_THIS_SANDBOX }),
@@ -906,9 +938,7 @@ describe("AgentHoverTooltip host section", () => {
       renderAwake();
 
       const section = screen.getByTestId("worktree-host-section");
-      const sessions = screen.getByTestId("agent-host-sessions");
-      expect(sessions.textContent).toBe("2 sessions");
-      expect(screen.queryByTestId("agent-host-activity")).toBeNull();
+      const sessions = closedSessionDisclosure("2 sessions");
       const idle = within(section).getByText("Suspends after 30 idle min", {
         exact: false,
       });
@@ -916,6 +946,11 @@ describe("AgentHoverTooltip host section", () => {
         idle.compareDocumentPosition(sessions) &
           Node.DOCUMENT_POSITION_FOLLOWING,
       ).toBeTruthy();
+      const body = openedSessionBody(sessions);
+      expect(within(body).getByTestId("agent-host-activity").textContent).toBe(
+        "1 agent and 1 terminal on it",
+      );
+      expect(within(body).getByText("2 more in other tasks")).toBeDefined();
     });
 
     it("counts the busy sessions when the host lists one terminal", () => {
@@ -925,30 +960,32 @@ describe("AgentHoverTooltip host section", () => {
       };
       renderAwake();
 
-      expect(screen.getByTestId("agent-host-sessions").textContent).toBe(
-        "2 sessions",
+      const body = openedSessionBody(closedSessionDisclosure("2 sessions"));
+      expect(within(body).getByTestId("agent-host-activity").textContent).toBe(
+        "1 terminal on it",
       );
+      expect(within(body).getByText("2 more in other tasks")).toBeDefined();
     });
 
     it("counts the busy sessions when the host sends no list", () => {
       h.sessions = null;
       renderAwake();
 
-      expect(screen.getByTestId("agent-host-sessions").textContent).toBe(
-        "2 sessions",
-      );
+      const body = openedSessionBody(closedSessionDisclosure("2 sessions"));
+      expect(within(body).getByText("2 more in other tasks")).toBeDefined();
+      expect(within(body).queryByTestId("agent-host-activity")).toBeNull();
     });
 
     it("counts the busy sessions when the host lists nothing", () => {
       h.sessions = { agents: [], terminals: [] };
       renderAwake();
 
-      expect(screen.getByTestId("agent-host-sessions").textContent).toBe(
-        "2 sessions",
-      );
+      const body = openedSessionBody(closedSessionDisclosure("2 sessions"));
+      expect(within(body).getByText("2 more in other tasks")).toBeDefined();
+      expect(within(body).queryByTestId("agent-host-activity")).toBeNull();
     });
 
-    it("draws no session button when the live report totals zero", () => {
+    it("draws no session disclosure when the live report totals zero", () => {
       h.sessions = { agents: [], terminals: [] };
       h.sandboxes = [sandboxRow({})];
       h.busySessionCount = 0;
@@ -1232,18 +1269,20 @@ describe("AgentHoverTooltip host section", () => {
         ownerKind: "chat",
         ownerHostUnreachable: false,
       });
-      expect(sectionText()).toContain(LIVE);
+      closedSessionDisclosure(LIVE);
+      expect(sectionText()).not.toContain(SESSIONS_UNKNOWN);
 
       act(() => {
         vi.advanceTimersByTime(29_999);
       });
-      expect(sectionText()).toContain(LIVE);
+      closedSessionDisclosure(LIVE);
       expect(sectionText()).not.toContain(SESSIONS_UNKNOWN);
 
       act(() => {
         vi.advanceTimersByTime(1);
       });
       expect(sectionText()).toContain(SESSIONS_UNKNOWN);
+      expect(screen.queryByTestId("agent-host-sessions")).toBeNull();
       expect(sectionText()).not.toContain(LIVE);
     });
 
@@ -1268,9 +1307,7 @@ describe("AgentHoverTooltip host section", () => {
           }),
         );
       };
-      expect(sectionText()).toContain(LIVE);
-      expect(sectionText()).not.toContain("Creator, build");
-      expect(sectionText()).not.toContain("more in other tasks");
+      closedSessionDisclosure(LIVE);
       // The held status asks the task lists to refresh once.
       expect(h.refetchAgents).toHaveBeenCalledTimes(1);
       expect(h.refetchTerminals).toHaveBeenCalledTimes(1);
@@ -1280,6 +1317,7 @@ describe("AgentHoverTooltip host section", () => {
       h.statusUpdatedAt = base + 1_000;
       rerenderSame(view);
       expect(sectionText()).toContain(SESSIONS_UNKNOWN);
+      expect(screen.queryByTestId("agent-host-sessions")).toBeNull();
       expect(sectionText()).not.toContain(LIVE);
       expect(sectionText()).not.toContain("5 sessions");
       expect(sectionText()).not.toContain("Creator, build");
@@ -1292,13 +1330,17 @@ describe("AgentHoverTooltip host section", () => {
       h.listFetching = true;
       rerenderSame(view);
       expect(sectionText()).toContain(SESSIONS_UNKNOWN);
+      expect(screen.queryByTestId("agent-host-sessions")).toBeNull();
       expect(sectionText()).not.toContain("5 sessions");
+      expect(sectionText()).not.toContain("Creator, build");
+      expect(sectionText()).not.toContain("more in other tasks");
 
       h.listFetching = false;
       rerenderSame(view);
-      expect(sectionText()).toContain("5 sessions");
-      expect(sectionText()).not.toContain("Creator, build");
-      expect(sectionText()).not.toContain("more in other tasks");
+      const body = openedSessionBody(closedSessionDisclosure("5 sessions"));
+      expect(within(body).getByText("Creator, build")).toBeDefined();
+      expect(within(body).getByText("3 more in other tasks")).toBeDefined();
+      expect(within(body).queryByTestId("agent-host-activity")).toBeNull();
     });
   });
 });

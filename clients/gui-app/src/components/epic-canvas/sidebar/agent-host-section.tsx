@@ -38,6 +38,7 @@ import {
   hoverAgentIdentity,
   hoverAlsoInTask,
   hoverAwakeMinutes,
+  hoverMoreSessions,
   hoverSandboxIdentity,
   hoverSessionCount,
   hoverTaskConfiguration,
@@ -53,7 +54,9 @@ import {
 } from "@/lib/sandboxes/sandbox-strings";
 import {
   sandboxMemberName,
+  sandboxHostActivityLine,
   sandboxIdlePolicyLine,
+  sandboxSessionKinds,
   sandboxShapeLine,
 } from "@/lib/sandboxes/sandbox-row-lines";
 import { cn } from "@/lib/utils";
@@ -523,23 +526,65 @@ function HostActivity(props: {
     (terminal) =>
       terminal.status === "running" && terminal.sessionKind === "terminal",
   );
+  const names = [
+    ...here.flatMap((agent) => (agent.title === null ? [] : [agent.title])),
+    ...runningTerminals.flatMap((terminal) =>
+      terminal.title === null ? [] : [terminal.title],
+    ),
+  ];
+  const more = Math.max(0, count - here.length - runningTerminals.length);
+  const hostWide = sandboxHostActivityLine(
+    sandboxSessionKinds(status.data?.sessions ?? null),
+  );
   const listed = status.data?.sessions ?? null;
-  const total = hoverReportedSessionCount({
-    listedOnHost:
-      listed === null ? null : listed.agents.length + listed.terminals.length,
-    busySessionCount: count,
-    taskSessions: here.length + runningTerminals.length,
-  });
-  if (total === 0) return null;
   return (
-    <button
-      type="button"
+    <HostSessionDisclosure
+      names={names}
+      more={more}
+      hostWide={hostWide}
+      total={hoverReportedSessionCount({
+        listedOnHost:
+          listed === null
+            ? null
+            : listed.agents.length + listed.terminals.length,
+        busySessionCount: count,
+        taskSessions: here.length + runningTerminals.length,
+      })}
+    />
+  );
+}
+
+/**
+ * The hover's session summary. Closed, it is only the count. Open, it is the
+ * lines the hover used to show flat: kinds, this task's names, and sessions
+ * the busy count places in other tasks. Nothing, when every one of those
+ * lines would be empty.
+ */
+function HostSessionDisclosure(props: {
+  readonly names: readonly string[];
+  readonly more: number;
+  readonly hostWide: string | null;
+  readonly total: number;
+}): ReactNode {
+  if (props.hostWide === null && props.names.length === 0 && props.more === 0) {
+    return null;
+  }
+  return (
+    <details
       data-testid="agent-host-sessions"
-      className="w-fit max-w-full text-start text-ui-xs break-words underline underline-offset-3"
-      onClick={() => openSandboxDetails(props.sandbox.id)}
+      className="min-w-0 max-w-full break-words"
     >
-      {hoverSessionCount(total)}
-    </button>
+      <summary className="w-fit max-w-full cursor-pointer text-start break-words">
+        {hoverSessionCount(props.total)}
+      </summary>
+      <div className="text-muted-foreground">
+        {props.hostWide === null ? null : (
+          <p data-testid="agent-host-activity">{props.hostWide}</p>
+        )}
+        {props.names.length === 0 ? null : <p>{props.names.join(", ")}</p>}
+        {props.more > 0 ? <p>{hoverMoreSessions(props.more)}</p> : null}
+      </div>
+    </details>
   );
 }
 
