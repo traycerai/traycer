@@ -43,6 +43,7 @@ function pooledLayer(name: string): Layer {
   return {
     name,
     variants: 1,
+    role: null,
     sublayers: 1,
     sublayerStartingOffset: null,
     pan: null,
@@ -140,6 +141,7 @@ describe("TrackScheduler grouped layer", () => {
       { name: "EA2", variants: 2 },
     ],
     sequence: SEQUENCE,
+    role: null,
     sublayers: 1,
     sublayerStartingOffset: null,
     pan: null,
@@ -258,6 +260,7 @@ describe("TrackScheduler restart", () => {
       { name: "Y", variants: 1 },
     ],
     sequence: ["X", "Y"],
+    role: null,
     sublayers: 1,
     sublayerStartingOffset: null,
     pan: null,

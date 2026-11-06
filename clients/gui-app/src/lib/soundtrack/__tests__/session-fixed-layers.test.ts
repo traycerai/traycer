@@ -18,6 +18,7 @@ function layerOf(name: string): Layer {
   return {
     name,
     variants: 1,
+    role: null,
     sublayers: 1,
     sublayerStartingOffset: null,
     pan: null,
