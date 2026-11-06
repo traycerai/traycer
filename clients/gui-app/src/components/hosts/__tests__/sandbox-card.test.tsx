@@ -1623,10 +1623,7 @@ describe("<SandboxCard /> grants list", () => {
   });
 
   it("says agents see a stand-in while the sandbox holds any grant", () => {
-    mocks.grantsData = grantsOf(
-      [grantOf({ routes: [] }), grantOf({})],
-      null,
-    );
+    mocks.grantsData = grantsOf([grantOf({ routes: [] }), grantOf({})], null);
 
     renderCard(sandboxOf("awake", false, { phase: "ready" }));
 

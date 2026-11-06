@@ -390,8 +390,6 @@ describe("<RetrospectiveSession /> an inventory that cannot be read", () => {
     failing = false;
     fireEvent.click(within(sheet).getByRole("button", { name: "Retry" }));
 
-    expect(
-      await screen.findByTestId("retrospective-held-hook-1"),
-    ).toBeTruthy();
+    expect(await screen.findByTestId("retrospective-held-hook-1")).toBeTruthy();
   });
 });

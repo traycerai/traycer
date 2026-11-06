@@ -63,9 +63,7 @@ describe("secretChangeRefusalLine", () => {
     expect(
       secretChangeRefusalLine("destroy", "secret_version_stale"),
     ).toBeNull();
-    expect(
-      secretChangeRefusalLine("undo", "provider_name_unknown"),
-    ).toBeNull();
+    expect(secretChangeRefusalLine("undo", "provider_name_unknown")).toBeNull();
     expect(
       secretChangeRefusalLine("destroy", "provider_name_unknown"),
     ).toBeNull();

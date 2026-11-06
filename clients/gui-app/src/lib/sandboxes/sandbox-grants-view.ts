@@ -153,9 +153,7 @@ export function sandboxGrantViews(
     // a secret, so the line states it beside the protocol rather than
     // reading a field that can only hold one value.
     modeLine:
-      grant.protocol.length === 0
-        ? "brokered"
-        : `${grant.protocol} · brokered`,
+      grant.protocol.length === 0 ? "brokered" : `${grant.protocol} · brokered`,
     via:
       grant.connectorName === null
         ? null

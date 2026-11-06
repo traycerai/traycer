@@ -96,7 +96,6 @@ import {
   buildEnvironmentClient,
   environmentStatusFixture,
 } from "@/lib/environment/__tests__/environment-test-support";
-import { providerIdToGuiHarnessId } from "@/lib/provider-ordering";
 import { useAuthStore } from "@/stores/auth/auth-store";
 import { useSettingsEnvironmentPickStore } from "@/stores/settings/settings-environment-pick-store";
 import type { EnvOverrideValue } from "../env-override-editor";
@@ -837,8 +836,8 @@ describe("ProviderEnvOverridesSection on a Personal page with a held value", () 
     };
 
     // Nothing binds a secret to a name in one provider's env, so a saved
-     // key-shaped value there is this provider's own value and gets the key
-     // refusal — whether or not a Personal secret of that name exists.
+    // key-shaped value there is this provider's own value and gets the key
+    // refusal — whether or not a Personal secret of that name exists.
     it.each([
       ["with no secret of that name", []],
       ["with a secret of that name", [secretSettingIt]],

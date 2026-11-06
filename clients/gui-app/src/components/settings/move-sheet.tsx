@@ -567,4 +567,3 @@ function MoveRowText(props: {
     </>
   );
 }
-

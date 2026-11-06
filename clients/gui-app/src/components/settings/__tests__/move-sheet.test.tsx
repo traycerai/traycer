@@ -704,9 +704,9 @@ describe("<MoveSheet />", () => {
 
     const moves = screen.getByTestId("move-sheet-moves");
     fireEvent.click(within(moves).getByRole("button", { name: "Show all 1" }));
-    expect(
-      within(moves).getByTestId("move-sheet-moves-row").textContent,
-    ).toBe("ANTHROPIC_BASE_URL (Claude Code)");
+    expect(within(moves).getByTestId("move-sheet-moves-row").textContent).toBe(
+      "ANTHROPIC_BASE_URL (Claude Code)",
+    );
     expect(screen.getByTestId("move-sheet-moves-summary").textContent).toBe(
       "1 Claude Code env setting",
     );
