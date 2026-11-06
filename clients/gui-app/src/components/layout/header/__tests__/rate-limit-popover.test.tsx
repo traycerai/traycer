@@ -2035,10 +2035,46 @@ describe("<RateLimitPopover /> rail", () => {
     expect(screen.getByText("Current session")).toBeTruthy();
     expect(screen.getByText("Work")).toBeTruthy();
     expect(screen.getByText("Pro 5x")).toBeTruthy();
+    expect(screen.getByText("Pro 5x").getAttribute("data-wrap")).toBe("");
     const profileSwitch = screen.getByRole("switch", {
       name: "Allow agents to use Work",
     });
     expect(profileSwitch.dataset.state).toBe("checked");
+  });
+
+  it("wraps a long profile label and its plan on the profile card", () => {
+    const longLabel =
+      "work-profile-name-that-is-long-enough-to-wrap-without-truncation";
+    mocks.configured = [
+      {
+        providerId: "codex",
+        lane: "ephemeralProcess",
+        profiles: [
+          providerProfile({
+            profileId: "work-profile",
+            kind: "managed",
+            label: longLabel,
+            tier: "Professional plan 5x",
+            usageUpdatedAt: NOW - 10_000,
+          }),
+        ],
+      },
+    ];
+    mocks.results = {
+      [resultKey("codex", "work-profile")]: readyResult(codexReady()),
+    };
+
+    renderPopover();
+
+    const label = screen.getByText(longLabel);
+    expect(label.textContent).toBe(longLabel);
+    expect(classTokens(label)).toContain("whitespace-normal");
+    expect(classTokens(label)).toContain("wrap-anywhere");
+    expect(classTokens(label)).not.toContain("truncate");
+    expect(label.closest(".truncate")).toBeNull();
+    expect(
+      screen.getByText("Professional plan 5x").getAttribute("data-wrap"),
+    ).toBe("");
   });
 
   it("keeps an unauthenticated ambient row with cached lastGood data visible without a refresh action", () => {
@@ -3954,7 +3990,9 @@ describe("<RateLimitPopover /> Traycer tab", () => {
     // Plan chips live on their matching cards. The trailing "_V3"
     // pricing-generation tag remains hidden.
     expect(screen.getByText("Pro")).toBeTruthy();
+    expect(screen.getByText("Pro").getAttribute("data-wrap")).toBe("");
     expect(screen.getByText("Ultra")).toBeTruthy();
+    expect(screen.getByText("Ultra").getAttribute("data-wrap")).toBe("");
   });
 
   it("renders Traycer account cards with active state on Overview", () => {
@@ -3978,6 +4016,33 @@ describe("<RateLimitPopover /> Traycer tab", () => {
     const activeCards = document.querySelectorAll('[aria-current="true"]');
     expect(activeCards).toHaveLength(1);
     expect(activeCards[0].textContent).toContain("Personal");
+  });
+
+  it("wraps the full long Traycer account label on its real account card", () => {
+    mocks.configured = [];
+    const longLabel =
+      "a-team-account-name-that-is-long-enough-to-wrap-without-truncation";
+    const authUser = authUserFixture({ status: "PRO_V3", withTeam: true });
+    mocks.authUser = readyAuthUser({
+      ...authUser,
+      teamSubscriptions: authUser.teamSubscriptions.map((subscription) => ({
+        ...subscription,
+        team: { ...subscription.team, slug: longLabel },
+      })),
+    });
+
+    renderPopover();
+
+    const card = screen.getByRole("button", {
+      name: `Use ${longLabel} account`,
+    });
+    const label = within(card).getByText(longLabel);
+    expect(label.textContent).toBe(longLabel);
+    expect(classTokens(label)).toContain("whitespace-normal");
+    expect(classTokens(label)).toContain("wrap-anywhere");
+    expect(classTokens(label)).not.toContain("truncate");
+    expect(label.closest(".truncate")).toBeNull();
+    expect(card.getAttribute("aria-label")).toBe(`Use ${longLabel} account`);
   });
 
   it("marks the selected team card active while retaining every account's plan", () => {

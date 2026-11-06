@@ -889,7 +889,7 @@ describe("SandboxSetupLine when the settings did not apply", () => {
     return screen.getByTestId("sandbox-setup-line-detail");
   }
 
-  it("shows the shared failure sentence, compute charge and applied-step line", () => {
+  it("shows the shared failure sentence and applied-step line", () => {
     const detail = mountSettings(false, ACTIONS);
 
     expect(
@@ -904,7 +904,7 @@ describe("SandboxSetupLine when the settings did not apply", () => {
     const lines = within(detail)
       .getAllByText(/./, { selector: "p" })
       .map((line) => line.textContent);
-    expect(lines[0]).toBe("Compute is charged while it is awake.");
+    expect(lines).not.toContain("Compute is charged while it is awake.");
     expect(lines).toContain(sandboxSettingsStepsLine(STEPS));
     expect(detail.textContent).not.toMatch(
       /permission_denied|ANTHROPIC_API_KEY|envelope-delivery/,

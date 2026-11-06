@@ -26,6 +26,7 @@ function input(overrides: Partial<ConsequencesInput>): ConsequencesInput {
     configuration: PERSONAL,
     price: { awakeMcPerHour: 120, exact: true },
     needsCredits: false,
+    billingStarted: false,
     shortfallMc: 120,
     audience: "private",
     reachHost: null,

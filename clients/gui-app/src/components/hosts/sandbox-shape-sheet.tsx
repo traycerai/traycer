@@ -394,6 +394,7 @@ function ShapeSheetForm(props: {
     configuration: props.configuration,
     price,
     needsCredits,
+    billingStarted: false,
     shortfallMc:
       balance === null || price === null
         ? null

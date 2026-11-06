@@ -2064,7 +2064,7 @@ function SingleProfileRateLimitProviderBlock({
       className="flex flex-col gap-2 rounded-lg border border-border/60 bg-background/40 p-2"
     >
       <div className="flex items-center justify-between gap-2">
-        <div className="flex min-w-0 items-center gap-1.5">
+        <div className="flex min-w-0 flex-wrap items-center gap-1.5">
           {/* Overview stacks every provider's block in one scrollable list with
               no rail-tab context alongside it, so the name alone doesn't say
               which provider this is; the single-provider detail tab already has
@@ -2076,7 +2076,9 @@ function SingleProfileRateLimitProviderBlock({
             {providerDisplayName(providerId)}
           </span>
           {planLabel !== null ? (
-            <Badge variant="secondary">{planLabel}</Badge>
+            <Badge variant="secondary" wrap>
+              {planLabel}
+            </Badge>
           ) : null}
           <ManageProviderLink
             providerId={providerId}
@@ -2824,11 +2826,13 @@ function RateLimitProviderProfileStatusBadges({
         size="default"
         className={undefined}
       />
-      <span className="min-w-0 truncate text-ui-sm font-medium text-foreground">
+      <span className="min-w-0 text-ui-sm font-medium whitespace-normal text-foreground wrap-anywhere">
         {profileDisplayLabel(profile)}
       </span>
       {planLabel !== null ? (
-        <Badge variant="secondary">{planLabel}</Badge>
+        <Badge variant="secondary" wrap>
+          {planLabel}
+        </Badge>
       ) : null}
       {!profile.enabled ? <Badge variant="outline">Disabled</Badge> : null}
     </div>
@@ -3228,7 +3232,7 @@ function TraycerAccountCards({
                   size="default"
                   className={undefined}
                 />
-                <span className="min-w-0 truncate text-ui-sm font-medium text-foreground">
+                <span className="min-w-0 text-ui-sm font-medium whitespace-normal text-foreground wrap-anywhere">
                   {account.label}
                 </span>
                 {/* The plan tier is the one chip here that names something
@@ -3239,7 +3243,7 @@ function TraycerAccountCards({
                     keeps its account name, its Active state and the whole
                     usage body underneath; only the tier goes. */}
                 {isMobileApp() ? null : (
-                  <Badge variant="secondary">
+                  <Badge variant="secondary" wrap>
                     {subscriptionPlanLabel(
                       account.subscription.subscriptionStatus,
                     )}

@@ -490,6 +490,8 @@ export interface ConsequencesInput {
   readonly configuration: StageConfiguration;
   readonly price: StagePrice | null;
   readonly needsCredits: boolean;
+  /** Ongoing billing stays visible even when the balance needs replenishing. */
+  readonly billingStarted: boolean;
   readonly shortfallMc?: number | null;
   /** A team sandbox this action wakes, before the viewer takes over payment. */
   readonly wakingName?: string | null;
@@ -520,7 +522,7 @@ export interface ConsequenceClause {
 /** The price clause, never collapsed: a price is not a disclosure. */
 export function priceClause(input: ConsequencesInput): ConsequenceClause {
   const copy = stageConfigurationCopy(input.configuration);
-  if (input.needsCredits) {
+  if (input.needsCredits && !input.billingStarted) {
     return {
       kind: "price",
       text:
@@ -556,7 +558,11 @@ export function consequenceClauses(
   // Expanded team copy puts the payer beside shared use. The summary keeps
   // price and payer together when those consequences are collapsed.
   let priceText = price.text;
-  if (copy.kind === "team" && !input.needsCredits && !input.wakingName) {
+  if (
+    copy.kind === "team" &&
+    (!input.needsCredits || input.billingStarted) &&
+    !input.wakingName
+  ) {
     priceText =
       input.price === null
         ? "Billed by the hour while awake"

@@ -618,9 +618,6 @@ export function sandboxVerbFailureLine(
   return `${sentence} · ${reference}`;
 }
 
-export const COMPUTE_CHARGED_WHILE_AWAKE =
-  "Compute is charged while it is awake.";
-
 export const RETRY_APPLYING = "Retry applying";
 export const STOP = "Stop";
 
