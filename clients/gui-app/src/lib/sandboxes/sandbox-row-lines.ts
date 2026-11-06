@@ -18,20 +18,14 @@ import { resolvePlatformBaseUrl } from "@/lib/auth/platform-base-url";
 import { frozenDestroyAt } from "@/lib/sandboxes/sandbox-balance";
 import { formatMemory } from "@/lib/sandboxes/sandbox-pricing";
 import {
-  AGENT_SANDBOX,
   KEPT_UNTIL_YOU_DESTROY_IT,
   LESS_THAN_A_CENT_SO_FAR,
   burstIdleLine,
   configurationLabel,
-  costLine,
   formatSandboxCost,
   formatSandboxDollars,
   idleAndRestingLine,
   idleLine,
-  keptByLine,
-  paidByLine,
-  startedByLine,
-  sandboxVerbPendingLine,
   type SandboxConfigurationCopy,
 } from "@/lib/sandboxes/sandbox-strings";
 
@@ -283,54 +277,6 @@ export function sandboxMemberName(
   return member.displayName ?? "a member";
 }
 
-/**
- * `Started by you` / `Started by Priya` / `Agent sandbox` / `Automations`.
- * A row an agent created and someone kept reads `Started by <agent>`, or
- * `Started by an agent` where the server does not name it to this viewer:
- * Keep changes who keeps it, never who started it.
- */
-export function sandboxStartedByLabel(
-  summary: SandboxSummary,
-  viewerUserId: string | null,
-): string {
-  if (summary.kind === "automation") return "Automations";
-  if (summary.burst) return AGENT_SANDBOX;
-  if (summary.createdByAgentId !== null) {
-    return startedByLine(summary.createdByAgentName ?? "an agent");
-  }
-  if (summary.createdBy === null) return startedByLine("you");
-  return startedByLine(sandboxMemberName(summary.createdBy, viewerUserId));
-}
-
-/**
- * `Paid by you` to the payer, `Paid by Priya` to anyone else, on an awake
- * team row only. A payer the server does not name is never `a member`.
- */
-export function sandboxPaidByLabel(
-  summary: SandboxSummary,
-  configuration: SandboxPageConfiguration,
-  viewerUserId: string | null,
-): string | null {
-  if (configuration.kind !== "team") return null;
-  if (sandboxPublicState(summary) !== "awake" || summary.wakePayer === null) {
-    return null;
-  }
-  const payer = summary.wakePayer;
-  if (viewerUserId !== null && payer.userId === viewerUserId) {
-    return paidByLine("you");
-  }
-  return payer.displayName === null ? null : paidByLine(payer.displayName);
-}
-
-export function sandboxKeptByLabel(
-  summary: SandboxSummary,
-  viewerUserId: string | null,
-): string | null {
-  return summary.keptBy === null
-    ? null
-    : keptByLine(sandboxMemberName(summary.keptBy, viewerUserId));
-}
-
 // ── The shape and cost line ─────────────────────────────────────────────────
 
 /** `Linux · 2 vCPU · 4 GB`. */
@@ -339,46 +285,51 @@ export function sandboxShapeLine(summary: SandboxSummary): string {
   return `${os} · ${summary.cpus} vCPU · ${formatMemory(summary.memoryMb)}`;
 }
 
-/**
- * The row's second line: the shape, then the cost line, or for the
- * Automations row what it runs and who pays for it. An agent sandbox names
- * the agent that created it and its task in place of whose credits, where
- * the server names them to this viewer.
- */
+/** The row's resources, awake rate and current payer, without lifecycle history. */
 export function sandboxShapeAndCostLine(
   summary: SandboxSummary,
   configuration: SandboxPageConfiguration,
   viewerUserId: string | null,
 ): string {
   if (summary.kind === "automation") return automationsShapeLine(configuration);
-  const shape = sandboxShapeLine(summary);
-  const creator = agentCreatorClause(summary);
-  const teamNonPayer =
-    configuration.kind === "team" && summary.wakePayer?.userId !== viewerUserId;
-  const resting = summary.state === "suspended" || summary.state === "stopped";
-  const wakeWarning =
-    teamNonPayer && resting ? "waking it makes you the payer" : null;
-  if (summary.priceMcPerHour === null) {
-    return joinParts(shape, wakeWarning, wakeWarning === null ? null : creator);
+  const resting =
+    summary.state === "suspended" ||
+    summary.state === "stopped" ||
+    summary.state === "suspending" ||
+    summary.state === "stopping";
+  let payer: string | null = null;
+  if (configuration.kind === "personal") payer = "you";
+  else if (summary.wakePayer !== null) {
+    payer = sandboxMemberName(summary.wakePayer, viewerUserId);
   }
-  const cost =
-    creator !== null || teamNonPayer
-      ? `${formatSandboxDollars(summary.priceMcPerHour.awakeMc)} an hour while awake`
-      : costLine(
-          summary.priceMcPerHour.awakeMc,
-          configurationCopy(configuration),
-        );
-  return joinParts(shape, cost, wakeWarning, creator);
+  return joinParts(
+    sandboxShapeLine(summary),
+    summary.priceMcPerHour === null
+      ? null
+      : `${formatSandboxDollars(summary.priceMcPerHour.awakeMc)} an hour while awake`,
+    summary.frozen || summary.state === "destroying" || payer === null
+      ? null
+      : `${resting && configuration.kind === "team" ? "storage paid" : "paid"} by ${payer}`,
+  );
 }
 
-/** `created by Planner for Sandbox setup`, on an agent sandbox. */
-function agentCreatorClause(summary: SandboxSummary): string | null {
-  const agent = summary.createdByAgentName;
-  if (!summary.burst || agent === null) return null;
-  const task = summary.createdByTaskTitle;
-  return task === null
-    ? `created by ${agent}`
-    : `created by ${agent} for ${task}`;
+/** The payer consequence sits on its own line before the row's actions. */
+export function sandboxWakePayerConsequence(
+  summary: SandboxSummary,
+  configuration: SandboxPageConfiguration,
+  viewerUserId: string | null,
+): string | null {
+  if (summary.frozen)
+    return sandboxFrozenCause(summary, configuration, viewerUserId);
+  if (configuration.kind !== "team" || summary.wakePayer === null) return null;
+  const resting =
+    summary.state === "suspended" ||
+    summary.state === "stopped" ||
+    summary.state === "suspending" ||
+    summary.state === "stopping";
+  return resting && sandboxMemberName(summary.wakePayer, viewerUserId) !== "you"
+    ? "Resuming changes the payer to you."
+    : null;
 }
 
 /** What the configuration's Automations host is for, and what it costs. */
@@ -725,16 +676,15 @@ function joinParts(...items: ReadonlyArray<string | null>): string {
 }
 
 /**
- * The row's clock line, per state. A destroy in flight
- * reads `Destroying · pending`: the row's clock and its keep promise no longer
- * hold.
+ * The row's clock line, per state. A transition without a settled clock reads
+ * `Pending.`; the state is already shown in the row's pill.
  */
 export function sandboxClockLine(input: SandboxClockInput): string {
   const { summary } = input;
   const state = sandboxPublicState(summary);
   switch (state) {
     case "destroying":
-      return sandboxVerbPendingLine("destroy");
+      return "Pending.";
     case "frozen":
       return [
         sandboxFrozenCause(summary, input.configuration, input.viewerUserId),
@@ -743,11 +693,14 @@ export function sandboxClockLine(input: SandboxClockInput): string {
         .filter((item): item is string => item !== null)
         .join(" ");
     case "failed":
-      return sandboxFailedChatLine(summary);
+      return joinParts(
+        `Couldn't start at ${formatSandboxTime(summary.lastTransitionAt)}`,
+        sandboxSupportReference(summary.failureCode),
+      );
     case "creating":
-      return hostSandboxStateWord(summary.state);
+      return "Pending.";
     case "awake":
-      if (input.resumePending) return sandboxVerbPendingLine("resume");
+      if (input.resumePending) return "Pending.";
       return summary.kind === "automation"
         ? `stops after ${idleMinutesOf(summary)} idle min · files kept · the next shell starts it`
         : awakeClockLine(input);
@@ -782,13 +735,8 @@ function awakeClockLine(input: SandboxClockInput): string {
   );
   const awake =
     awakeMs === null
-      ? hostSandboxStateWord(summary.state)
-      : joinParts(
-          summary.state === "awake"
-            ? null
-            : hostSandboxStateWord(summary.state),
-          `${hostSandboxStateWord("awake")} ${formatSandboxDuration(awakeMs)} today`,
-        );
+      ? null
+      : `${hostSandboxStateWord("awake")} ${formatSandboxDuration(awakeMs)} today`;
   if (summary.burst) {
     return joinParts(
       awake,
@@ -808,7 +756,7 @@ function restingClockLine(
   input: SandboxClockInput,
   state: "suspended" | "stopped",
 ): string {
-  const { summary, configuration, cost, now } = input;
+  const { summary, cost, now } = input;
   const since = summary.restingSince ?? summary.lastTransitionAt;
   const resting =
     state === "suspended"
@@ -822,23 +770,12 @@ function restingClockLine(
           `${stoppedLead(summary, input.viewerUserId)} since ${formatSandboxSince(since, now)}`,
           restingDestroyClause(summary),
         );
-  if (configuration.kind !== "team") {
-    return joinParts(
-      resting,
-      cost !== null && cost.todayMillicredits > 0
-        ? `${formatSandboxCost(cost.todayMillicredits)} today`
-        : null,
-    );
-  }
-  // The storage payer is the last wake's; a server that drops it at rest
-  // leaves the sentence out rather than naming the wrong member.
-  const payer = summary.wakePayer;
-  if (payer === null) return resting;
-  const who = sandboxMemberName(payer, input.viewerUserId);
-  const storage = `${resting} · Storage uses ${possessive(who)} ${configuration.teamName} credits.`;
-  return who === "you"
-    ? storage
-    : `${storage} Resuming changes the payer to you.`;
+  return joinParts(
+    resting,
+    cost !== null && cost.todayMillicredits > 0
+      ? `${formatSandboxCost(cost.todayMillicredits)} today`
+      : null,
+  );
 }
 
 /**
@@ -890,10 +827,6 @@ export function sandboxSupportReferenceLine(
   return [sandboxSupportReference(failureCode), sandboxId]
     .filter((part): part is string => part !== null)
     .join(" · ");
-}
-
-function possessive(name: string): string {
-  return name === "you" ? "your" : `${name}'s`;
 }
 
 // ── Sessions ────────────────────────────────────────────────────────────────
@@ -1148,8 +1081,8 @@ const SANDBOX_ROW_ACTION_LABEL = {
   stop: "Stop",
   keep: "Keep this sandbox",
   retry: "Retry",
-  "retry-applying": "Retry applying",
-  "repair-setup": "Repair setup",
+  "retry-applying": "Retry setup",
+  "repair-setup": "Retry setup",
   "add-credits": "Add credits ↗",
   "open-tab": "Open a tab",
   "open-terminal": "Open terminal",
@@ -1158,15 +1091,8 @@ const SANDBOX_ROW_ACTION_LABEL = {
   destroy: "Destroy",
 } satisfies Record<Exclude<SandboxRowAction, "resume-paying">, string>;
 
-export function sandboxRowActionLabel(
-  action: SandboxRowAction,
-  configuration: SandboxPageConfiguration,
-): string {
-  if (action === "resume-paying") {
-    return configuration.kind === "team"
-      ? `Resume using my ${configuration.teamName} credits`
-      : "Resume using my credits";
-  }
+export function sandboxRowActionLabel(action: SandboxRowAction): string {
+  if (action === "resume-paying") return "Resume";
   return SANDBOX_ROW_ACTION_LABEL[action];
 }
 
@@ -1218,7 +1144,7 @@ export function sandboxGiveAnotherLabel(
 // ── Header ──────────────────────────────────────────────────────────────────
 
 /**
- * `5 sandboxes and Automations · $0.34 today (UTC day), $0.16 of it yours.`
+ * `5 sandboxes and Automations · $0.34 today, $0.16 of it yours.`
  * The share is left out only when it is none of the day's or not known
  * (`null`); all of it reads `$0.04 of it yours`. The count is of the rows
  * shown, an Automations host not created yet (`unstartedAutomations`)
@@ -1242,7 +1168,7 @@ export function sandboxListHeader(input: {
     count = sandboxes === 0 ? "Automations only" : `${count} and Automations`;
   }
   if (input.todayMc === null) return count;
-  const today = `${formatSandboxCost(input.todayMc)} today (UTC day)`;
+  const today = `${formatSandboxCost(input.todayMc)} today`;
   if (input.todayYoursMc === null || input.todayYoursMc <= 0) {
     return `${count} · ${today}`;
   }

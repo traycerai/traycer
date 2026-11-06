@@ -689,19 +689,18 @@ export const FILES_NOT_RECOVERABLE =
 
 /** Keep's preview before it acts. */
 const KEEP_STOPS_DELETING = "Stops deleting itself when idle.";
-const KEEP_PAID_WHILE_AWAKE = "Paid by you while awake.";
 
 export function keepPreviewLine(restingDays: number, date: string): string {
-  return `${KEEP_STOPS_DELETING} Destroyed after ${restingDays} days instead, on ${date} if it's suspended or stopped from now on. ${KEEP_PAID_WHILE_AWAKE}`;
+  return `${KEEP_STOPS_DELETING} Destroyed after ${restingDays} days instead, on ${date} if it's suspended or stopped from now on.`;
 }
 
 /**
  * The Keep preview for a row whose withdrawal, not its resting policy,
  * decides how long it is kept: the resting sentence is left out rather than
- * naming a destroy the resting pass will not perform. Both forms are built
- * from the same two clauses so they cannot drift.
+ * naming a destroy the resting pass will not perform. The payer is stated
+ * separately by the dialog from the current wake.
  */
-export const KEEP_PREVIEW_WITHDRAWN = `${KEEP_STOPS_DELETING} ${KEEP_PAID_WHILE_AWAKE}`;
+export const KEEP_PREVIEW_WITHDRAWN = KEEP_STOPS_DELETING;
 
 export function alreadyDestroyedLine(name: string): string {
   return `${name} was already destroyed`;
