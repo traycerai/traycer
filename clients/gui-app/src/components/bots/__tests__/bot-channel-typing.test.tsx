@@ -66,6 +66,7 @@ import { IMMEDIATE_STREAM_FLUSH_COORDINATOR } from "@/stores/chats/stream-flush-
 import { CHAT_STORE_TEST_ENVIRONMENT } from "@/stores/chats/test-support/chat-store-test-environment";
 import type { ChatMessage as ChatMessageModel } from "@/stores/composer/chat-store";
 import type { HostRequester } from "@traycer-clients/shared/host-client/host-client";
+import { mockRemoteHostEntry } from "@traycer-clients/shared/host-client/mock/mock-host-directory";
 import type {
   BotTurnLocateRequest,
   BotTurnLocateResponse,
@@ -73,6 +74,7 @@ import type {
 import type { HostRpcRegistry } from "@/lib/host";
 import {
   hostClientLocating,
+  hostClientLocatingOn,
   turnRef,
   turnsAskedFor,
 } from "@/components/bots/__tests__/bot-turn-test-support";
@@ -1059,11 +1061,16 @@ describe("<BotChannelView tiles={null} /> the replying line as the way into the 
     const second = trunkTurn("request-2", "prompt-2");
     const secondAnswer = Promise.withResolvers<BotTurnLocateResponse>();
     const asked: BotTurnLocateRequest[] = [];
-    mocks.client = hostClientLocating((request) => {
-      return request.requestIds.includes("request-2")
-        ? secondAnswer.promise
-        : turnsAskedFor([first, second], request);
-    }, asked);
+    // On the host the view is mounted on, so the first answer is held while
+    // the second is read.
+    mocks.client = hostClientLocatingOn(
+      { ...mockRemoteHostEntry, hostId: HOST_ID },
+      (request) =>
+        request.requestIds.includes("request-2")
+          ? secondAnswer.promise
+          : turnsAskedFor([first, second], request),
+      asked,
+    );
     await mountAwaitingDirectReply(replying("request-1", null));
     await screen.findByRole("button", REPLYING);
 

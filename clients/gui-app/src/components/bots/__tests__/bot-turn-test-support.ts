@@ -3,6 +3,7 @@ import {
   HostClient,
   type HostRequester,
 } from "@traycer-clients/shared/host-client/host-client";
+import type { HostDirectoryEntry } from "@traycer-clients/shared/host-client/host-directory";
 import { mockRemoteHostEntry } from "@traycer-clients/shared/host-client/mock/mock-host-directory";
 import { MockHostMessenger } from "@traycer-clients/shared/host-client/mock/mock-host-messenger";
 import { createRequestContextFixture } from "@traycer-clients/shared/test-fixtures/request-context";
@@ -449,6 +450,21 @@ export function hostClientLocating(
   ) => BotTurnLocateResponse | Promise<BotTurnLocateResponse>,
   asked: BotTurnLocateRequest[],
 ): HostRequester<HostRpcRegistry> {
+  return hostClientLocatingOn(mockRemoteHostEntry, locate, asked);
+}
+
+/**
+ * The same client addressing `entry`'s host, for a view mounted on that host:
+ * a query keeps the previous answer while the next is read only when the
+ * client's host is the view's.
+ */
+export function hostClientLocatingOn(
+  entry: HostDirectoryEntry,
+  locate: (
+    request: BotTurnLocateRequest,
+  ) => BotTurnLocateResponse | Promise<BotTurnLocateResponse>,
+  asked: BotTurnLocateRequest[],
+): HostRequester<HostRpcRegistry> {
   const queryClient = new QueryClient();
   let seq = 0;
   const messenger = new MockHostMessenger<HostRpcRegistry>({
@@ -464,14 +480,13 @@ export function hostClientLocating(
   const spine = new HostClient<HostRpcRegistry>({
     registry: hostRpcRegistry,
     invalidator: createHostQueryInvalidator(queryClient),
-    findHostById: (hostId) =>
-      hostId === mockRemoteHostEntry.hostId ? mockRemoteHostEntry : null,
+    findHostById: (hostId) => (hostId === entry.hostId ? entry : null),
     messenger,
   });
   spine.setRequestContext(
     createRequestContextFixture({ origin: "renderer", bearerToken: "tok-1" }),
   );
-  return spine.createRequester(mockRemoteHostEntry);
+  return spine.createRequester(entry);
 }
 
 /** The turns of `turns` that any of the asked ids, requests or keys leads to. */
