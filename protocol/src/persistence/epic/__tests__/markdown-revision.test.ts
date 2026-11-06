@@ -145,6 +145,14 @@ describe("encodeMarkdownRevision / decodeMarkdownRevision", () => {
     const manifests: readonly Partial<MarkdownRevisionManifest>[] = [
       { author: { kind: "agent", chatId: "chat-1" }, editorSessionId: null },
       { author: { kind: "system" }, editorSessionId: null },
+      // A migration's first revision has no parent; a re-extraction published
+      // after the room moved has one.
+      {
+        author: { kind: "migration" },
+        parent: null,
+        editorSessionId: null,
+      },
+      { author: { kind: "migration" }, editorSessionId: null },
       { parent: null, editorSessionId: null },
     ];
     for (const patch of manifests) {
@@ -289,6 +297,14 @@ describe("markdownRevisionHash", () => {
         "manifest.author (kind)",
         withManifest({ author: { kind: "agent", chatId: "chat-1" } }),
       ],
+      [
+        "manifest.author (system)",
+        withManifest({ author: { kind: "system" } }),
+      ],
+      [
+        "manifest.author (migration)",
+        withManifest({ author: { kind: "migration" } }),
+      ],
       ["manifest.hostId", withManifest({ hostId: "host-2" })],
       [
         "manifest.editorSessionId",
@@ -400,6 +416,30 @@ describe("manifest refusals", () => {
     expectInvalid(
       () => encodeMarkdownRevision(envelope),
       /only a person's editor revision is transient/u,
+    );
+  });
+
+  it("refuses a transient migration write", () => {
+    const envelope = withManifest({
+      transient: true,
+      author: { kind: "migration" },
+    });
+
+    expectInvalid(
+      () => encodeMarkdownRevision(envelope),
+      /only a person's editor revision is transient/u,
+    );
+  });
+
+  it("refuses a migration revision that is a merge", () => {
+    const envelope = withManifest({
+      author: { kind: "migration" },
+      merge: { base: HASH_B, superseded: [] },
+    });
+
+    expectInvalid(
+      () => encodeMarkdownRevision(envelope),
+      /a migration revision is never a merge/u,
     );
   });
 
