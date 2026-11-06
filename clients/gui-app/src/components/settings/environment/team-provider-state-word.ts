@@ -5,9 +5,10 @@ import type { EnvironmentSecret } from "@traycer/protocol/host/environment-schem
 /**
  * The variable a team's `provider` secret is named for, per provider: a
  * provider secret's name is its provider's key variable, and authn refuses
- * any other name. Only these providers take a team key.
+ * any other name. Shared by the Providers rail and Key section. Only these
+ * providers take a team key; Claude Code and Codex do not.
  */
-const PROVIDER_KEY_SECRET_NAMES: Partial<Record<ProviderId, string>> = {
+export const PROVIDER_KEY_SECRET_NAMES: Partial<Record<ProviderId, string>> = {
   cursor: "CURSOR_API_KEY",
   kiro: "KIRO_API_KEY",
   droid: "FACTORY_API_KEY",
