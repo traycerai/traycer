@@ -276,6 +276,41 @@ describe("HostOptionRow — environment label (Tracy Bots)", () => {
   });
 });
 
+describe("HostOptionRow — wrapping names and marks", () => {
+  afterEach(cleanup);
+
+  it("wraps the complete name and places a refusal below it even when the caller opts out of wrapping", () => {
+    const name = "A very long host name that must remain readable";
+    const host = hostScopeOptionFixture({
+      hostId: "host-long",
+      name,
+    });
+    const { getByText } = render(
+      <HostOptionRow
+        host={host}
+        picked={false}
+        active={false}
+        intent="pin"
+        surfaceState={{ kind: "refused", word: "needs update" }}
+        updateView={null}
+        nameRef={null}
+        nameWraps={false}
+        environmentLabel={null}
+      />,
+    );
+
+    const title = getByText(name);
+    expect(title.classList.contains("whitespace-normal")).toBe(true);
+    expect(title.classList.contains("wrap-anywhere")).toBe(true);
+    const nameColumn = title.parentElement;
+    const marks = getByText("needs update");
+    expect(nameColumn?.contains(marks)).toBe(true);
+    expect(
+      title.compareDocumentPosition(marks) & Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy();
+  });
+});
+
 describe("HostOptionRow — frozen sandbox state", () => {
   afterEach(cleanup);
 

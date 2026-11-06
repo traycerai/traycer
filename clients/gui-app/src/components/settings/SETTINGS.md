@@ -905,6 +905,7 @@ Account; the rest is the app itself.
   read through the window's own host (`usePersonalHostScope()`), never
   through the picker.
 - **Host** - headed by THE host picker (`host-scope/host-switcher.tsx`).
+  Its popup is titled “View host”, without an introductory caption.
   Everything under it - Overview, Worktrees, Diagnostics - is scoped by that
   one selection.
 
@@ -1160,11 +1161,18 @@ footer adds one, and everything else about a host lives on that host's Overview
 (`host-scope/host-registry-updates.tsx` holds the registry half of Updates,
 beside the local controller's own region in the SAME card).
 
-**The picker inherits the composer's row anatomy**
-(`components/home/host-workspace-selector/host-section.tsx`): kind glyph, name,
-status dot, check. Two pickers over one concept must not each invent a
-vocabulary. Search appears from six hosts up; below that it is one more thing
-to skip past.
+**Every host picker shares one row anatomy** (`host-scope/host-option-row.tsx`):
+a kind glyph and a full wrapping name, with state and environment marks below
+it. Supplemental composer and in-task facts (shape, rate, payer and
+compatibility) sit in Details; opening it never picks or wakes the host.
+The selected-host trigger also wraps its full name, with exceptional status
+below and no kind label. The rail keeps the “Viewing — the active host is …”
+note. The account menu states the activation consequence once in its section
+header; its rows only offer a tooltip if a name is cut off. Search appears
+from six hosts up; below that it is one more thing to skip past.
+
+Environment picker names also wrap in full. An outdated computer's row reads
+“Update to view these settings.” Its disabled state and Move sheet are unchanged.
 
 **Nothing in the host group is local-only any more.** Shell and Diagnostics
 carried a `requiresLocalHost` flag (dimmed rail rows, a `RequiresLocalHostNotice`
