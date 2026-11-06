@@ -40,6 +40,7 @@ function input(overrides: Partial<ConsequencesInput>): ConsequencesInput {
     configuration: ACME,
     price: { awakeMcPerHour: 120, exact: true },
     needsCredits: false,
+    billingStarted: false,
     audience: "shared",
     reachHost: null,
     unmovedComputer: null,

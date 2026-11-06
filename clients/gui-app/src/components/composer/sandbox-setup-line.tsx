@@ -25,7 +25,6 @@ import {
   CHANGE_SHAPE_OR_REGION,
   CHOOSE_A_SMALLER_SHAPE,
   DETAILS,
-  COMPUTE_CHARGED_WHILE_AWAKE,
   COPY_SUPPORT_REFERENCE,
   COULDNT_VERIFY_BALANCE,
   KEEP_WAITING,
@@ -714,11 +713,7 @@ function ProgressDetail(props: {
           configuration={configuration}
         />
       ) : null}
-      <FailureSentence
-        failure={failure}
-        resuming={resuming}
-        sandboxAwake={props.view.sandboxAwake}
-      />
+      <FailureSentence failure={failure} resuming={resuming} />
       {failure?.kind === "settings" ? (
         <>
           <p className="m-0">
@@ -774,14 +769,10 @@ function StageSupportReference(props: {
 function FailureSentence(props: {
   readonly failure: StagedSandboxFailure | null;
   readonly resuming: boolean;
-  readonly sandboxAwake: boolean | null;
 }): ReactNode {
   if (props.failure?.kind === "failed") {
     if (props.resuming || stepAfterWake(props.failure.step)) return null;
     return <p className="m-0">{MESSAGE_STILL_PENDING}</p>;
-  }
-  if (props.failure?.kind === "settings" && props.sandboxAwake !== false) {
-    return <p className="m-0">{COMPUTE_CHARGED_WHILE_AWAKE}</p>;
   }
   return null;
 }

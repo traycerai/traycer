@@ -299,8 +299,6 @@ export function useSandboxStaging(input: {
     [task],
   );
 
-  const stagedConfiguration =
-    stage === null ? null : stage.target.configuration;
   const stagedFacts = useMemo(
     () =>
       stage === null || stage.target.kind !== "new" || catalogue === null
@@ -309,7 +307,8 @@ export function useSandboxStaging(input: {
     [catalogue, stage, user],
   );
   const consequences = useMemo<ConsequencesInput | null>(() => {
-    if (stage === null || stagedConfiguration === null) return null;
+    if (stage === null) return null;
+    const stagedConfiguration = stage.target.configuration;
     const principal = configurationPrincipal(stagedConfiguration, viewerUserId);
     const price = stagedTargetPrice(stage.target, input.hosts, stagedFacts);
     const balance = stageBalanceMc(user, stagedConfiguration);
@@ -323,6 +322,8 @@ export function useSandboxStaging(input: {
       configuration: stagedConfiguration,
       price,
       needsCredits: stagedFacts !== null && stagedFacts.needsCredits,
+      billingStarted:
+        stage.createdSandboxId !== null && stage.failure?.kind === "settings",
       shortfallMc:
         balance === null || price === null
           ? null
@@ -344,7 +345,6 @@ export function useSandboxStaging(input: {
     input.hosts,
     reachFor,
     stage,
-    stagedConfiguration,
     stagedFacts,
     user,
     viewerUserId,

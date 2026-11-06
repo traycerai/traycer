@@ -30,6 +30,7 @@ import {
   fireEvent,
   render,
   screen,
+  within,
 } from "@testing-library/react";
 import type { AuthenticatedUser } from "@traycer/protocol/auth";
 import type { HostListItem } from "@traycer/protocol/host/host-status";
@@ -46,6 +47,11 @@ import {
   type SandboxStaging,
 } from "@/components/composer/use-sandbox-staging";
 import { ConsequencesBlock } from "@/components/composer/consequences-block";
+import {
+  SandboxSetupLine,
+  type SandboxSetupLineActions,
+  type SandboxSetupLineFacts,
+} from "@/components/composer/sandbox-setup-line";
 import { hostScopeOptionFixture } from "@/components/settings/host-scope/host-scope-fixture";
 import type {
   HostScopeOption,
@@ -674,6 +680,123 @@ describe("useSandboxStaging New rows", () => {
       needsCredits: true,
       audience: "private",
     });
+  });
+
+  it("keeps the hourly price and payer under a created settings failure at a short balance", () => {
+    mocks.user = userWith(
+      userSubscription({
+        totalPlanCredits: 0,
+        consumedFromPlan: 0,
+        bonusCredits: 0,
+        consumedFromBonus: 0,
+        bundleRemaining: 0,
+      }),
+      [teamSubscription(0)],
+    );
+    const { composer } = mount([LAPTOP]);
+    act(() => composer.onPickNew("team-1"));
+
+    expect(staging().consequences).toMatchObject({
+      needsCredits: true,
+      billingStarted: false,
+    });
+
+    const store = useStagedSandboxStore.getState();
+    store.begin(SURFACE, false, Date.now(), false);
+    act(() =>
+      store.report(SURFACE, {
+        createdSandboxId: "sbx-created-settings-failure",
+        createdHostId: "host-created-settings-failure",
+        step: "applying",
+        failure: {
+          kind: "settings",
+          code: "SBX-0520",
+          steps: { applied: ["Secrets"], notApplied: ["Providers"] },
+        },
+      }),
+    );
+
+    const stage = staging().stage;
+    const consequences = staging().consequences;
+    if (stage === null || consequences === null) {
+      throw new Error(
+        "the settings-failed stage or its consequences are missing",
+      );
+    }
+    expect(consequences).toMatchObject({
+      needsCredits: true,
+      billingStarted: true,
+    });
+
+    const onRetryApplying = vi.fn();
+    const actions: SandboxSetupLineActions = {
+      onKeepWaiting: () => undefined,
+      onCancel: null,
+      onChooseAnotherHost: null,
+      chooseAnotherHostLabel: "Use This computer",
+      onRetryCreation: () => undefined,
+      onRetry: () => undefined,
+      onSendAgain: () => undefined,
+      onChangeShape: null,
+      onRetryApplying,
+      onRepairSetup: null,
+      onStop: null,
+      onOpenTerminal: null,
+    };
+    const facts: SandboxSetupLineFacts = {
+      costLine: "",
+      regionLabel: "US East",
+      shapeLabel: "2 vCPU · 4 GB",
+      smallerShapeAffordable: false,
+      offeredAgents: null,
+      sandboxAwake: true,
+      sandboxStoppable: false,
+      sandboxResting: false,
+    };
+    const onChooseAnotherHost = vi.fn();
+    const chooseAnotherHostLabel = staging().chooseAnotherHostLabel;
+    render(
+      <>
+        <SandboxSetupLine
+          stage={stage}
+          name="api-refactor"
+          facts={facts}
+          actions={actions}
+        />
+        <ConsequencesBlock
+          input={consequences}
+          onMoveFirst={null}
+          onOpenTerminalInstead={null}
+          onChooseAnotherHost={onChooseAnotherHost}
+          chooseAnotherHostLabel={chooseAnotherHostLabel}
+        />
+      </>,
+    );
+
+    const setupLine = screen.getByTestId("sandbox-setup-line-detail");
+    expect(
+      within(setupLine).queryByText("Compute is charged while it is awake."),
+    ).toBeNull();
+    expect(screen.getByTestId("consequences-add-credits")).toBeTruthy();
+    expect(screen.getByTestId("consequences-price").textContent).toBe(
+      "from $0.12 an hour while awake",
+    );
+    expect(
+      screen.getByTestId("consequences-clause-team").textContent,
+    ).toContain("while you pay from your team credits");
+    const blockText = screen.getByTestId("consequences-block").textContent;
+    expect(blockText.match(/while awake/g)).toHaveLength(1);
+    expect(
+      blockText.match(/while you pay from your team credits/g),
+    ).toHaveLength(1);
+    fireEvent.click(
+      screen.getByRole("button", { name: chooseAnotherHostLabel }),
+    );
+    expect(onChooseAnotherHost).toHaveBeenCalledOnce();
+    fireEvent.click(
+      within(setupLine).getByTestId("sandbox-setup-retry-applying"),
+    );
+    expect(onRetryApplying).toHaveBeenCalledOnce();
   });
 
   it("tells a team sandbox on the landing composer as shared", () => {
