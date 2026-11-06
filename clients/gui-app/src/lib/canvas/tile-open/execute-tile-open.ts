@@ -47,6 +47,8 @@ export interface ExecuteTileOpenArgs {
    * float (L4).
    */
   readonly pipOrigin: PipOrigin;
+  /** {@link TileOpenIntent.adoptHtmlVersion}. */
+  readonly adoptHtmlVersion: boolean;
 }
 
 /**
@@ -69,19 +71,23 @@ function trackIfCanvasChanged(
 }
 
 /**
- * An intent that names an HTML version (the chat's inline Expand) wants THAT
- * bundle on screen, so the tile it lands on adopts it instead of staying on
- * whatever version it was showing. An intent with no version (the sidebar row)
- * leaves the tile's choice alone.
+ * The chat's inline Expand wants the bundle its card shows on screen, so the
+ * tile it lands on adopts that version, or Latest when the card shows the
+ * artifact's current version, instead of staying on whatever it was showing.
+ * Any other open (the sidebar row) leaves the tile's choice alone.
  */
 function adoptIntentHtmlVersion(
-  args: Pick<ExecuteTileOpenArgs, "node" | "store">,
+  args: Pick<ExecuteTileOpenArgs, "node" | "store" | "adoptHtmlVersion">,
   tabId: string,
   instanceId: string,
 ): void {
   const { node, store } = args;
-  if (node.type === "html" && node.htmlVersion !== undefined) {
-    store.updateHtmlArtifactVersionInTab(tabId, instanceId, node.htmlVersion);
+  if (args.adoptHtmlVersion && node.type === "html") {
+    store.updateHtmlArtifactVersionInTab(
+      tabId,
+      instanceId,
+      node.htmlVersion ?? null,
+    );
   }
 }
 
@@ -93,7 +99,10 @@ function adoptIntentHtmlVersion(
  */
 function showInMobileSecondary(
   plan: Extract<TileOpenPlan, { kind: "show-in-mobile-secondary" }>,
-  args: Pick<ExecuteTileOpenArgs, "node" | "source" | "store">,
+  args: Pick<
+    ExecuteTileOpenArgs,
+    "node" | "source" | "store" | "adoptHtmlVersion"
+  >,
 ): void {
   const { node, source, store } = args;
   const { existingInstanceId, tabId } = plan;
