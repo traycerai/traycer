@@ -261,7 +261,7 @@ describe("<SandboxShapeSheet />", () => {
           { ...linux, shapes: LADDER },
           {
             ...linux,
-            provider: "daytona",
+            provider: "gce-windows",
             os: ["windows"],
             shapes: WINDOWS_LADDER,
             regions: [
@@ -376,7 +376,7 @@ describe("<SandboxShapeSheet />", () => {
           { ...linux, shapes: LADDER },
           {
             ...linux,
-            provider: "daytona",
+            provider: "gce-windows",
             os: ["windows"],
             shapes: [
               {

@@ -144,7 +144,7 @@ export interface SandboxSummary {
   /** The host id the sandbox enrolled under; joins the host list row. */
   readonly hostId: string;
   readonly kind: SandboxKind;
-  /** `tensorlake`, `daytona`, `gke-automation`; read as text, never branched on. */
+  /** Provider slug; read as text, never branched on. */
   readonly provider: string;
   readonly region: string;
   readonly os: SandboxOs;
