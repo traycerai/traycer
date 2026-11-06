@@ -57,14 +57,6 @@ export function HostOverviewAboutThisHost(
             {about.unseenLine}
           </p>
         )}
-        {about.lastSeenLine === null ? null : (
-          <p
-            className="min-w-0 break-words text-ui-sm text-muted-foreground"
-            data-testid="host-overview-about-last-seen"
-          >
-            {about.lastSeenLine}
-          </p>
-        )}
       </div>
     </SettingsGroup>
   );

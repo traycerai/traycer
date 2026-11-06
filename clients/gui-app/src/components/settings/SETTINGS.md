@@ -6367,14 +6367,14 @@ set-state-in-effect` forbids the effect form, and an effect would also
     wait - it draws nothing, and the header sits directly on the tab bar.
     1. **The offline notice**, while the host can't be reached for a reason
        other than a restart (`!usable`, not connecting, the health word not
-       "Restarting…"): "Can't reach build-box — last seen 3h ago, while
+       "Restarting…"): "Can't reach build-box — last contact was while
        downloading update to v1.5.1. Auto-update settings still apply at its
        next check-in; everything else here needs a connection."
        (`describeHostOfflineNotice`). The phase clause comes from
        `describeLastSeenUpdateClause` and drops when no update was in flight;
-       the last-seen half drops when the account holds no check-in; the
-       auto-update half drops for a host the account does not know. It is the
-       strip's ONLY unreachable wording, so the update card is withheld under
+       the header alone shows the last-seen time. The auto-update half drops
+       for a host the account does not know. It is the strip's ONLY unreachable
+       wording, so the update card is withheld under
        it and its retained "Last seen: …" rides in the clause instead.
     2. **The update card** (`HostOverviewOperationCard`), the host's own
        report: progress with measured bytes, the restart phases, a wait on
@@ -6596,7 +6596,7 @@ set-state-in-effect` forbids the effect form, and an effect would also
 
     | Tab               | File                                 | What lives there                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                  |
     | ----------------- | ------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-    | Installation      | `host-overview-installation-tab.tsx` | About this host (`host-overview-about-this-host.tsx`, known account facts only, so it reads offline), a compact line when there is no install record or the record's remaining facts, Details (platform, architecture, the running build version, the registry version only when it differs, Host ID), OS service (`host-overview-os-service-section.tsx`) - both replaced by one needs-a-connection line when unreachable - then Command-line tools (this computer only, `host-settings-package-manager-upgrade-hint.tsx`, which also draws the trigger's dot), the Danger zone last                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                             |
+    | Installation      | `host-overview-installation-tab.tsx` | About this host (`host-overview-about-this-host.tsx`, known account facts only, so it reads offline), a compact line when there is no install record or the record's remaining facts, Details (platform, architecture, the running build version, the registry version only when it differs, Host ID, service identifier and manifest path), OS service (`host-overview-os-service-section.tsx`) - both replaced by one needs-a-connection line when unreachable - then Command-line tools (this computer only, `host-settings-package-manager-upgrade-hint.tsx`, which also draws the trigger's dot), the Danger zone last                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                       |
     | Updates           | `host-overview-updates-tab.tsx`      | The answer card, only when the answer has news or an action (`host-overview-updates.tsx`: icon, title, the update answer, Update now or the command-line-tools fix, the failed-attempt footer), the Traycer Desktop row (`host-overview-desktop-app-row.tsx`: the app's own update, desktop app and this machine's host only), a single-row auto-update group without a drawn label, then Install a different version (`host-overview-version-picker.tsx`) with Check now on its heading, its release-candidate choice, version list and inline refusal                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                           |
     | Data              | `host-overview-data-tab.tsx`         | Import & migration (`HostImportMigrationSection`), Version history (`ArtifactVersionSettingsSection`), then an unlabeled File edit snapshots group (`HostFileEditSnapshotsSection`); one disk connection line replaces all groups when unreachable                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                |
     | Ports             | `host-overview-ports-tab.tsx`        | `HostPortForwardsCard`, on every host: one sentence when there is no list (connecting, unreachable, older host, failed read, nothing forwarded), else Forwards on this host and Ports other machines hold here, then Refresh; the trigger's count                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 |
@@ -7262,28 +7262,19 @@ set-state-in-effect` forbids the effect form, and an effect would also
       ACCOUNT's host record - the `HostListItem` the panel already holds
       (`scope.host.item`), never a host RPC - so it reads the same while the
       host connects or cannot be reached. It shows only facts the account has:
-      Added to account (`createdAt`), and either "Last seen · …" on the
-      header's own ladder and clock (`formatElapsed`, `scope.nowMs`) or, when
-      `lastSeenAt` is null, one line, "Not seen since it was added". An
-      unparsable stamp stays "Last seen · Unknown". It does not fill a grid
-      with "Not seen yet" or "Not reported yet". Last seen has no tone of its
-      own - a timestamp is not a status word, and the row has no second
-      wording. It used to read "Online now" while the header's live evidence
-      held (`health.live`), whose strongest source is the local process read:
-      a host serving this computer while its relay uplink is down therefore
-      claimed an account check-in no other device could see. Nothing on the
-      record supports a second wording either - `connectivity: "connectable"`
-      is a lease read up to its TTL old, which `deriveHostPresence` words
-      "Reported reachable" and deliberately not "Online", and which no surface
-      renders directly. A host the account has no record of gets no group, as
-      it gets no Danger zone.
+      Added to account (`createdAt`), and, when `lastSeenAt` is null,
+      "Not seen since it was added". The header owns the last-seen time.
+      A host the account has no record of gets no group, as it gets no Danger
+      zone.
     - **Details** holds platform, architecture, build version, the registry's
       last-reported version when that display differs from the build version,
       and Host ID (shortened, with copy; Copy host ID stays in the `⋯` menu
       too). Build version is `view.hostVersion ?? host.version`, labelled
       "from this host now" only while the tab has a route. The registry line
       is "No version received by the account" when `status.appVersion` is
-      null. Architecture is shown whenever it is known.
+      null. Architecture is shown whenever it is known. The OS service
+      identifier and manifest path also live here, when the host can report
+      them.
     - **Install record** is one line when the host has none — "Running from a
       checkout or unpacked tree · no installation record" — not a bordered
       group. A record that arrived keeps Build (only when the install id
@@ -7293,9 +7284,9 @@ set-state-in-effect` forbids the effect form, and an effect would also
       (`host-settings-installation-details.tsx`). `unmanaged` is a real state,
       not an error.
     - **OS service** (`host-overview-os-service-section.tsx`) is its own
-      group: the registration sentence and manifest line, Re-register and
-      Deregister with their confirms. A host that cannot report its service
-      gets the standard unsupported sentence in place of the group's
+      group: the registration sentence, Re-register and Deregister with their
+      confirms. Its identifier and manifest path are in Details. A host that
+      cannot report its service gets the standard unsupported sentence in place of the group's
       contents, under its label.
     - The install record and the OS service are the tab's host reads. While
       the host connects they are the loading shape; when it cannot be reached
@@ -7362,10 +7353,10 @@ set-state-in-effect` forbids the effect form, and an effect would also
   - **Danger zone** (`host-scope/host-danger-zone.tsx`) contains only removal:
     Remove Traycer (local CLI bridge, local host only, never gated on
     reachability), or **Remove from account** (an account write, remote +
-    registered only). A sandbox host is never removed here: the row keeps its
-    label, shows "Managed from its sandbox card." and offers no control, since
-    its membership follows the sandbox's lifecycle and the account refuses the
-    removal. Without an available removal action, the group is absent.
+    registered only). A sandbox host is never removed here: one short line
+    points to More in the header to destroy it. Its membership follows the
+    sandbox's lifecycle and the account refuses account removal. Without a
+    removal action or sandbox instruction, the group is absent.
     The account removal action is NEVER called "deregister" in copy - this app
     already uses that word for OS-SERVICE deregistration on the same tab,
     and two destructive controls sharing a verb is how someone reaches for the
@@ -7456,10 +7447,9 @@ level`, `Host log level` and the host's log tails described the selected host.
     Two rows (`LogLevelRow`, a `Select` over the full
     `trace/debug/info/warn/error` scale, `info` labelled "Info (default)") - all
     default Info and apply immediately. The CLI/host thresholds are
-    machine-user-global (`~/.traycer/cli/config.json`), which the row copy says:
-    they apply to every Traycer host environment on that machine, not to one
-    host instance. When any level differs from Info, the group grows a further
-    row: a quiet reminder plus a **Reset all to Info** button that resets only
+    machine-user-global (`~/.traycer/cli/config.json`). One shared line beside
+    the controls says they apply to every Traycer host on this computer. When
+    any level differs from Info, the group grows a further row: a quiet reminder plus a **Reset all to Info** button that resets only
     the non-default scopes (any level different from Info, not just Warn/Error -
     Trace/Debug count too; sequentially, not in parallel).
   - **Recent logs · Last N lines**: the card is content-sized while its entries

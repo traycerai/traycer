@@ -71,7 +71,6 @@ import {
   type OverviewDegradeReason,
 } from "@/components/settings/panels/host-overview-model";
 import {
-  formatLastSeen,
   liveBusyBreakdown,
   liveBusySessionCount,
   liveHostBusy,
@@ -1739,10 +1738,6 @@ export function HostOverviewPanel(props: {
         offline
           ? describeHostOfflineNotice({
               hostName: displayName,
-              lastSeen: formatLastSeen(
-                registryItem?.status.lastSeenAt ?? null,
-                nowMs,
-              ),
               view: operationView,
               accountKnowsHost: registryItem !== null,
             })

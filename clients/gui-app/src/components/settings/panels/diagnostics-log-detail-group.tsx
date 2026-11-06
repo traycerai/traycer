@@ -195,6 +195,9 @@ export function LogDetailGroup(props: {
           Use Debug while capturing a problem
         </p>
       </div>
+      <p className="mb-2 px-1 text-ui-xs text-muted-foreground">
+        Applies to every Traycer host on this computer.
+      </p>
       <SettingsGroup
         group={props.group}
         showTitle={false}

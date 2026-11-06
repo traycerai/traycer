@@ -212,7 +212,11 @@ describe("<DevicesSessionsPanel />", () => {
 
     expect(screen.getByText("Last seen 25 Aug 08:35")).toBeTruthy();
     openSessionDetails();
-    expect(screen.getByText("App 1.2.3 · Created 25 Oct 2025")).toBeTruthy();
+    expect(
+      screen
+        .getByText("Desktop · App 1.2.3 · Created 25 Oct 2025")
+        .closest("details"),
+    ).not.toBeNull();
   });
 
   it("describes where the account is signed in, without the old client-list sentence", () => {
@@ -264,7 +268,7 @@ describe("<DevicesSessionsPanel />", () => {
       screen.queryByText("Office laptop / macOS / App 2.0.0 / Berlin"),
     ).toBeNull();
     openSessionDetails();
-    expect(screen.getByText(/^App 2\.0\.0 · Created /)).toBeDefined();
+    expect(screen.getByText(/^Desktop · App 2\.0\.0 · Created /)).toBeDefined();
   });
 
   it("omits null or blank location without a stray separator", () => {
@@ -297,14 +301,12 @@ describe("<DevicesSessionsPanel />", () => {
     expect(screen.queryByText(/ \/ $/)).toBeNull();
     expect(screen.queryByText(/\/\s*\//)).toBeNull();
     openSessionDetails();
-    const created = screen.getAllByText(/^Created /);
-    expect(created).toHaveLength(2);
-    for (const line of created) {
-      expect(line.textContent).not.toContain("App");
-    }
+    expect(screen.getByText(/^CLI · Created /)).toBeDefined();
+    expect(screen.getByText(/^Web · Created /)).toBeDefined();
+    expect(screen.queryByText(/^Created /)).toBeNull();
   });
 
-  it("names each known client kind on the icon", () => {
+  it("names each known client kind on the icon and in Details", () => {
     sessionsState.sessions = [
       makeSession({
         familyId: "family-extension",
@@ -330,6 +332,13 @@ describe("<DevicesSessionsPanel />", () => {
     expect(screen.queryByText("Extension")).toBeNull();
     expect(screen.queryByText("Mobile app")).toBeNull();
     expect(screen.queryByText("Host")).toBeNull();
+    openSessionDetails();
+    for (const client of ["Extension", "Mobile app", "Host"]) {
+      const line = screen.getByText((text) =>
+        text.startsWith(`${client} · App 1.2.3 · Created `),
+      );
+      expect(line.closest("details")).not.toBeNull();
+    }
   });
 
   it("says session details are unavailable when name, platform, and location are empty", () => {

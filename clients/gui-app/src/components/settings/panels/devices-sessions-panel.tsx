@@ -88,7 +88,10 @@ function sessionPlaceLine(session: UserSessionListItem): string | null {
 function sessionDetailsLine(session: UserSessionListItem): string {
   const created = `Created ${formatRelativeTime(session.createdAt)}`;
   const version = presentText(session.appVersion);
-  return version === null ? created : `App ${version} · ${created}`;
+  const client = sessionClientLabel(session);
+  return version === null
+    ? `${client} · ${created}`
+    : `${client} · App ${version} · ${created}`;
 }
 
 function formatRelativeTime(value: string): string {

@@ -13,9 +13,8 @@ import {
 import { formatSettingsDate } from "@/lib/settings/settings-date";
 
 /**
- * What About this host is drawn from: the ACCOUNT's record of the host, and
- * the clock its "Last seen" is worded on. None of it is a host RPC, which is
- * the whole reason the group still reads while the host cannot be reached.
+ * The account's record of the host, with the scope's clock for qualifying
+ * the freshness of registry facts. None of it needs a host RPC.
  */
 export interface HostOverviewAboutSource {
   readonly item: HostListItem;
@@ -31,11 +30,6 @@ export interface HostOverviewAboutView {
   readonly addedToAccount: string;
   /** "Not seen since it was added" when `lastSeenAt` is null. */
   readonly unseenLine: string | null;
-  /**
-   * "Last seen · 3h ago", or "Last seen · Unknown" when the stamp does not
-   * parse. Null when {@link unseenLine} carries the absence.
-   */
-  readonly lastSeenLine: string | null;
 }
 
 const LIVE_FRESHNESS = "from this host now";
@@ -77,35 +71,13 @@ export interface InstallationDetailsSource {
   readonly record: InstallationDetailsRecord | null;
 }
 
-/**
- * Last seen is the account's own stamp, always - the row has no second
- * wording, and that is the fix rather than a simplification.
- *
- * It used to read "Online now" while the header's live evidence held
- * (`HostScopeOption.health.live`), and that flag's strongest source is the
- * local process read: firsthand about a process on this box, and worth nothing
- * about the account's reach. A host whose identity plane has paused serves this
- * app over its local stream while its relay uplink is down, so the header read
- * Online, the account had not heard from it in minutes, and this row claimed a
- * check-in no other device could see.
- *
- * Nothing on this record supports a second wording either. The cloud's
- * `connectable` is a lease read up to its TTL old - `deriveHostPresence` words
- * it "Reported reachable" and deliberately not "Online", and that reading is
- * step 3 of `deriveHostHealth`'s precedence rather than something a surface
- * renders. The honest line is the one the label already promises: when the
- * account last heard from the host, on the header's own ladder and clock, so
- * the two can never disagree on one screen.
- */
 export function deriveAboutThisHost(
   source: HostOverviewAboutSource,
 ): HostOverviewAboutView {
   const { item } = source;
-  const seen = describeLastSeen(item.status.lastSeenAt, source.nowMs);
   return {
     addedToAccount: formatAccountDate(item.createdAt),
-    unseenLine: seen.kind === "unseen" ? UNSEEN_SINCE_ADDED : null,
-    lastSeenLine: seen.kind === "unseen" ? null : `Last seen · ${seen.words}`,
+    unseenLine: item.status.lastSeenAt === null ? UNSEEN_SINCE_ADDED : null,
   };
 }
 
@@ -114,26 +86,6 @@ function formatAccountDate(iso: string): string {
   const at = Date.parse(iso);
   if (Number.isNaN(at)) return iso;
   return formatSettingsDate(at, false);
-}
-
-/**
- * "3h ago" - the same ladder, and the same clock, as the header's "Last seen
- * 3h ago" for a host that is offline, so the two never disagree on one screen.
- * The first letter is capitalised so "just now" reads as its own clause.
- */
-function describeLastSeen(
-  lastSeenAt: string | null,
-  nowMs: number,
-):
-  | { readonly kind: "unseen" }
-  | { readonly kind: "seen"; readonly words: string } {
-  if (lastSeenAt === null) return { kind: "unseen" };
-  const words = elapsedWords(lastSeenAt, nowMs);
-  if (words === null) return { kind: "seen", words: "Unknown" };
-  return {
-    kind: "seen",
-    words: words.charAt(0).toUpperCase() + words.slice(1),
-  };
 }
 
 function elapsedWords(lastSeenAt: string, nowMs: number): string | null {
