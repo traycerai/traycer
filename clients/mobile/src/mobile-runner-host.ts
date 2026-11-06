@@ -173,10 +173,6 @@ import {
   type VoiceTrayAction,
 } from "@traycer-clients/shared/host-client/voice-sessions";
 import {
-  voiceRouteViaHttp,
-  type VoiceRouteFetchResult,
-} from "@traycer-clients/shared/host-client/voice-router";
-import {
   decideSecretRequestViaHttp,
   fetchEnvironmentProvidersViaHttp,
   fetchSandboxGrantsViaHttp,
@@ -811,18 +807,6 @@ export class MobileRunnerHost implements IRunnerHost {
       bearerToken,
       null,
       voiceSessionId,
-    );
-  }
-
-  routeVoiceUtterance(
-    bearerToken: string,
-    requestBody: string,
-  ): Promise<VoiceRouteFetchResult> {
-    return voiceRouteViaHttp(
-      this.serverBaseUrl,
-      bearerToken,
-      null,
-      requestBody,
     );
   }
 

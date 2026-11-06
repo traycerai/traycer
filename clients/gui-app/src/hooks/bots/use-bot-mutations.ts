@@ -19,12 +19,17 @@ import type {
   BotConversationSendRequest,
   BotConversationSendResponse,
 } from "@traycer/protocol/host/bot/conversation-schemas";
-import type { HostRpcError } from "@traycer-clients/shared/host-transport/host-messenger";
+import type {
+  HostRpcError,
+  RequiredHostMethodVersion,
+} from "@traycer-clients/shared/host-transport/host-messenger";
 import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
-import type { HostRpcRegistry } from "@/lib/host";
+import { useHostBinding, type HostRpcRegistry } from "@/lib/host";
+import { resolveNamedHostClient } from "@/lib/host/binding-host-client";
 import { useHostMutation } from "@/hooks/host/use-host-query";
 import {
   BOT_CONVERSATION_ANSWER_VERSION,
+  BOT_CONVERSATION_CALL_VERSION,
   BOT_CONVERSATION_RETRY_VERSION,
 } from "@/hooks/bots/use-bot-send-version";
 import { botMutationKeys, hostQueryKeys } from "@/lib/query-keys";
@@ -184,8 +189,9 @@ interface BotConversationSendContext {
  * cross-host mailbox and the row appears when the bound host drains it. No
  * toast on error - the composer states the refusal inline, under the field.
  * A retry or an edit's replacement is refused before it leaves by a host
- * below {@link BOT_CONVERSATION_RETRY_VERSION}, and a question card's answer
- * by one below {@link BOT_CONVERSATION_ANSWER_VERSION}.
+ * below {@link BOT_CONVERSATION_RETRY_VERSION}, a question card's answer by
+ * one below {@link BOT_CONVERSATION_ANSWER_VERSION}, and a call's words by one
+ * below {@link BOT_CONVERSATION_CALL_VERSION}.
  *
  * A send may change a thread, so the channel's thread list is read again on
  * the host the send went through.
@@ -206,37 +212,119 @@ export function useBotConversationSendMutation(
   >({
     client,
     method: "bot.conversation.send",
-    requiredHostMethodVersion: (variables) => {
-      if (variables.answer !== null) {
-        return {
-          method: "bot.conversation.send",
-          version: BOT_CONVERSATION_ANSWER_VERSION,
-        };
-      }
-      return variables.redeliver === null && variables.supersedes === null
-        ? null
-        : {
-            method: "bot.conversation.send",
-            version: BOT_CONVERSATION_RETRY_VERSION,
-          };
-    },
+    requiredHostMethodVersion: conversationSendVersion,
     mapVariables: (variables) => variables,
     options: {
       mutationKey: botMutationKeys.conversationSend(),
       onMutate: () => ({ hostId: client?.getActiveHostId() ?? null }),
       onSuccess: (_response, variables, context) => {
-        // The send follows the person to its thread (decision 137).
-        void queryClient.invalidateQueries({
-          predicate: (query) => isFollowReadOf(query.queryKey, variables.botId),
-        });
-        if (context.hostId === null) return;
-        void queryClient.invalidateQueries({
-          queryKey: hostQueryKeys.methodScope(
-            context.hostId,
-            "bot.thread.list",
-          ),
-        });
+        invalidateAfterConversationSend(
+          queryClient,
+          variables.botId,
+          context.hostId,
+        );
       },
     },
+  });
+}
+
+/** A call's send, the host it goes to and the account whose call it is. */
+export interface BotCallSendVariables {
+  readonly hostId: string;
+  /** The account signed in when the call started; `null` owns no call. */
+  readonly account: string | null;
+  readonly request: BotConversationSendRequest;
+}
+
+/**
+ * A call's words (Call Tracy), each to the host named with it rather than
+ * to a host the hook follows: a call's last words still go to its own host
+ * after another call has started on a different one.
+ *
+ * A send leaves only under the account whose call it is. The check runs in
+ * the client resolver, in the same synchronous step as the dispatch (no
+ * `prepareRequest` stands between them), against the request context that
+ * dispatch carries; a switch after it aborts the captured authority in
+ * HostClient. Any other account, or none, refuses the send.
+ */
+export function useBotCallSendMutation(): UseMutationResult<
+  BotConversationSendResponse,
+  HostRpcError,
+  BotCallSendVariables,
+  BotConversationSendContext
+> {
+  const queryClient = useQueryClient();
+  const binding = useHostBinding();
+  return useHostMutation<
+    HostRpcRegistry,
+    "bot.conversation.send",
+    BotConversationSendContext,
+    BotCallSendVariables
+  >({
+    client: (variables) => {
+      const client = resolveNamedHostClient(binding, variables.hostId);
+      if (
+        client !== null &&
+        (variables.account === null ||
+          client.getRequestContextUserId() !== variables.account)
+      ) {
+        throw new Error("The call's account is no longer signed in.");
+      }
+      return client;
+    },
+    method: "bot.conversation.send",
+    requiredHostMethodVersion: (variables) =>
+      conversationSendVersion(variables.request),
+    mapVariables: (variables) => variables.request,
+    options: {
+      mutationKey: botMutationKeys.conversationSend(),
+      onMutate: (variables) => ({ hostId: variables.hostId }),
+      onSuccess: (_response, variables, context) => {
+        invalidateAfterConversationSend(
+          queryClient,
+          variables.request.botId,
+          context.hostId,
+        );
+      },
+    },
+  });
+}
+
+/** The send line a request needs: a retry, an answer and a call's words came later. */
+function conversationSendVersion(
+  variables: BotConversationSendRequest,
+): RequiredHostMethodVersion | null {
+  if (variables.spoken === true || variables.origin !== undefined) {
+    return {
+      method: "bot.conversation.send",
+      version: BOT_CONVERSATION_CALL_VERSION,
+    };
+  }
+  if (variables.answer !== null) {
+    return {
+      method: "bot.conversation.send",
+      version: BOT_CONVERSATION_ANSWER_VERSION,
+    };
+  }
+  return variables.redeliver === null && variables.supersedes === null
+    ? null
+    : {
+        method: "bot.conversation.send",
+        version: BOT_CONVERSATION_RETRY_VERSION,
+      };
+}
+
+function invalidateAfterConversationSend(
+  queryClient: QueryClient,
+  botId: string,
+  hostId: string | null,
+): void {
+  // The send follows the person to its thread (decision 137).
+  void queryClient.invalidateQueries({
+    predicate: (query) => isFollowReadOf(query.queryKey, botId),
+  });
+  if (hostId === null) return;
+  void queryClient.invalidateQueries({
+    queryKey: hostQueryKeys.methodScope(hostId, "bot.thread.list"),
   });
 }

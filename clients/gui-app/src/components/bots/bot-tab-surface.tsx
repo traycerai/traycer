@@ -21,10 +21,8 @@ import type {
 import type { EnvironmentListResponseV11 } from "@traycer/protocol/host/environment/contracts";
 import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
 import { Button } from "@/components/ui/button";
-import { TalkControl } from "@/components/layout/voice/talk-control";
 import { useInstalledAppTileForm } from "@/hooks/ui/use-installed-app-level2-form";
 import { useKeyboardFocusOwnerWithin } from "@/hooks/ui/use-keyboard-focus-layout";
-import { useMobileHeaderActive } from "@/components/layout/header/use-mobile-header-active";
 import type {
   MobileLevel2Form,
   MobileTileCount,
@@ -1811,8 +1809,6 @@ function BotChannelHeader(props: {
   readonly activityLabel: ReadonlyArray<BotActivityLabelPart>;
 }): ReactNode {
   const { settingsOpen } = props;
-  // Asked as the top row asks it, so a window has one Talk or the other.
-  const phoneLayout = useMobileHeaderActive();
   // With the keyboard up on a short viewport: the name row alone while the
   // channel's box has the focus, and nothing while a thread's does, since the
   // thread's own header is the identity row then. Only a box under this header
@@ -1863,13 +1859,6 @@ function BotChannelHeader(props: {
         />
         {props.isMain ? (
           <MainBotBadge testId="bot-tab-main" tone="muted" />
-        ) : null}
-        {phoneLayout ? (
-          <>
-            {/* Takes the free space, so Talk sits beside the ⋮. */}
-            <span className="min-w-0 flex-1" />
-            <TalkControl form="touch" />
-          </>
         ) : null}
         {props.onOpenSearch === null ? null : (
           <TooltipWrapper

@@ -859,6 +859,7 @@ export function BotChannelView(props: {
                 // Its draft is the conversation's, kept by it (`channelKeptDraft`).
                 key={channel.conversationId}
                 botId={botId}
+                botTitle={botTitle}
                 conversationId={channel.conversationId}
                 threadId={null}
                 announcementId={null}

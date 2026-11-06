@@ -35,6 +35,10 @@ import {
   tabHostProviderMock,
   tabNavigationMock,
 } from "./bot-tab-surface-mocks";
+import {
+  useVoiceSessionStore,
+  type VoiceSessionDriver,
+} from "@/stores/voice/voice-session-store";
 import { KEYBOARD_FOCUS_OWNER_PROPS } from "@/hooks/ui/use-keyboard-focus-layout";
 import { setPhoneLayoutOnly } from "@/lib/mobile-app";
 import {
@@ -1788,6 +1792,28 @@ describe("<BotTabSurface /> main bot", () => {
     const header = screen.getByTestId("bot-tab-title").closest("header");
     if (header === null) throw new Error("expected the channel header");
     expect(within(header).queryByRole("img", { name: "Main bot" })).toBeNull();
+  });
+});
+
+describe("<BotTabSurface /> Call", () => {
+  afterEach(() => {
+    useVoiceSessionStore.setState(useVoiceSessionStore.getInitialState(), true);
+  });
+
+  it("is not in the channel's header, where it was, even when voice is offered: the message box has it", () => {
+    useVoiceSessionStore.setState({
+      availability: "live",
+      driver: {
+        start: vi.fn<VoiceSessionDriver["start"]>(),
+        end: vi.fn<VoiceSessionDriver["end"]>(),
+        setMuted: vi.fn<VoiceSessionDriver["setMuted"]>(),
+      },
+    });
+    render(surface());
+
+    const header = screen.getByTestId("bot-tab-title").closest("header");
+    if (header === null) throw new Error("expected the channel header");
+    expect(within(header).queryByRole("button", { name: /^Call/ })).toBeNull();
   });
 });
 
