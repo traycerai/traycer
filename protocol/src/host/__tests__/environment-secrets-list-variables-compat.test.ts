@@ -11,8 +11,6 @@ const row = {
   kind: "api_key",
   protocol: "https",
   destinations: ["api.example.com"],
-  mode: "exposed",
-  state: "live",
   currentVersionId: "ver-1",
   revoked: false,
   updatedAt: 1,
@@ -44,9 +42,7 @@ describe("environment.secrets.list 1.1 -> 1.2", () => {
       removed: [removed],
     });
 
-    expect(upgraded.secrets).toEqual([
-      { ...row, variables: [], providerVariables: [] },
-    ]);
+    expect(upgraded.secrets).toEqual([{ ...row, variables: [] }]);
     expect(upgraded.removed).toEqual([
       {
         ...removed,
@@ -64,9 +60,6 @@ describe("environment.secrets.list 1.1 -> 1.2", () => {
         {
           ...row,
           variables: ["ENV_E2E_SERVICE_TOKEN"],
-          providerVariables: [
-            { providerId: "claude-code", name: "ANTHROPIC_AUTH_TOKEN" },
-          ],
         },
       ],
       removed: [

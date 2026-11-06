@@ -219,7 +219,7 @@ export function reviewEntryFixture(
 ): EnvironmentReviewEntry {
   return {
     entryId: "entry-1",
-    reason: "credential_like_value",
+    reason: "executable_entry",
     kind: "variable",
     key: "DATABASE_URL",
     os: "any",

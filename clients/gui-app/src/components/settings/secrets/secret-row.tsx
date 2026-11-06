@@ -29,7 +29,6 @@ import {
   type SecretVerifyLine,
 } from "@/lib/sandboxes/secret-verify-copy";
 import {
-  SECRET_PENDING_REVIEW_LABEL,
   SECRET_RECOVERY_FALLBACK,
   SECRET_RECOVERY_STEPS,
   SECRET_RECOVERY_TITLE,
@@ -143,9 +142,6 @@ function SecretRowIdentity(props: {
         </span>
         {props.revoked ? (
           <Badge variant="outline">{SECRET_REVOKED_LABEL}</Badge>
-        ) : null}
-        {!props.revoked && props.secret.state === "pending_review" ? (
-          <Badge variant="outline">{SECRET_PENDING_REVIEW_LABEL}</Badge>
         ) : null}
       </span>
     </div>

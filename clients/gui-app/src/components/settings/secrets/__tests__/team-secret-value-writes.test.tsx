@@ -82,13 +82,10 @@ function secretFixture(): EnvironmentSecretV12 {
     kind: "api_key",
     protocol: null,
     destinations: [],
-    mode: "brokered",
-    state: "live",
     currentVersionId: "ver-2",
     revoked: false,
     updatedAt: AT,
     variables: [],
-    providerVariables: [],
   };
 }
 

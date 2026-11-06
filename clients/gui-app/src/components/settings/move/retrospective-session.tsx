@@ -10,7 +10,6 @@ import {
   type EnvironmentPlanes,
 } from "@/components/settings/move/cohort-rows";
 import { heldRowsFromReview } from "@/components/settings/move/held-from-review";
-import { HeldSecretBindingDialog } from "@/components/settings/move/held-secret-binding-dialog";
 import {
   appliedOnHostNames,
   roomSharedLine,
@@ -79,10 +78,6 @@ export function RetrospectiveSession(props: {
   };
   const openMoveSheet = useMoveSheetStore((state) => state.openSheet);
   const [stopOpen, setStopOpen] = useState(false);
-  const [bindingHeld, setBindingHeld] = useState<{
-    readonly id: string;
-    readonly name: string;
-  } | null>(null);
 
   const onShown = useCallback((): void => {
     recordMutate({ event: "shown" });
@@ -102,11 +97,6 @@ export function RetrospectiveSession(props: {
   const heldPendingId = heldApply.isPending ? heldApply.variables.heldId : null;
 
   const onHeldApply = (heldId: string, choice: HeldApplyChoice): void => {
-    if (choice === "secret") {
-      const row = held.find((entry) => entry.heldId === heldId);
-      if (row !== undefined) setBindingHeld({ id: heldId, name: row.name });
-      return;
-    }
     heldApply.mutate({ heldId, choice });
   };
 
@@ -156,20 +146,6 @@ export function RetrospectiveSession(props: {
         hostName={props.hostName}
         open={stopOpen}
         onOpenChange={setStopOpen}
-      />
-      <HeldSecretBindingDialog
-        open={bindingHeld !== null}
-        heldId={bindingHeld?.id ?? ""}
-        heldName={bindingHeld?.name ?? ""}
-        pending={heldApply.isPending}
-        onOpenChange={(open) => {
-          if (!open) setBindingHeld(null);
-        }}
-        onApply={(request) => {
-          heldApply.mutate(request, {
-            onSuccess: () => setBindingHeld(null),
-          });
-        }}
       />
     </>
   );
