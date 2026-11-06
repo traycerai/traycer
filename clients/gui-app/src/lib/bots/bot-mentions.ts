@@ -1,35 +1,76 @@
 /**
- * Mentions in a bot channel's messages (decision 137): a member is named in
- * a message's text as `<@userId>`, which is what the bot's host reads the
- * mentions from. The box shows `@Name` while the person types; the send
- * writes the token.
+ * Mentions in a bot channel's messages (decisions 137, 177): a member is
+ * named in a message's text as `<@userId>`, which is what the bot's host
+ * reads the mentions from; another bot of the environment as `<#botId>` (a
+ * bot is a channel); a task as `<~epicId>`. The box shows `@Name` while the
+ * person types; the send writes the token.
  */
 
-/** A member the box can name. */
+/** What a mention names. */
+export type BotMentionKind = "person" | "bot" | "task";
+
+/** A member, bot or task the box can name. */
 export interface BotMentionCandidate {
-  readonly userId: string;
+  readonly kind: BotMentionKind;
+  /** The member's user id, the bot's id or the task's epic id. */
+  readonly id: string;
   readonly name: string;
+  /** A member's picture; `null` for a bot or a task. */
   readonly avatarUrl: string | null;
 }
 
-/** `<@userId>` in a message's text. */
-export const BOT_MENTION_TOKEN = /<@([^\s<>@]{1,64})>/g;
+/**
+ * Any mention in a message's text: `<@userId>`, `<#botId>` or `<~epicId>`,
+ * a bot and a task id in their exact shapes, so text that only looks like
+ * one (`<#include>`) stays as written. Read with {@link mentionOfToken}.
+ */
+export const BOT_MENTION_TOKEN =
+  /<(?:@([^\s<>@]{1,64})|#(bot_[0-7][0-9A-HJKMNP-TV-Z]{25})|~([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}))>/g;
 
-function botMentionToken(userId: string): string {
-  return `<@${userId}>`;
+/** What a {@link BOT_MENTION_TOKEN} match's `token` names, by its head. */
+export function mentionOfToken(token: string): {
+  readonly kind: BotMentionKind;
+  readonly id: string;
+} {
+  const id = token.slice(2, -1);
+  switch (token.charAt(1)) {
+    case "@":
+      return { kind: "person", id };
+    case "#":
+      return { kind: "bot", id };
+    default:
+      return { kind: "task", id };
+  }
+}
+
+function botMentionToken(kind: BotMentionKind, id: string): string {
+  switch (kind) {
+    case "person":
+      return `<@${id}>`;
+    case "bot":
+      return `<#${id}>`;
+    case "task":
+      return `<~${id}>`;
+  }
+}
+
+/** One key per thing named, whatever its kind. */
+function mentionKey(kind: BotMentionKind, id: string): string {
+  return `${kind}:${id}`;
 }
 
 /** Characters a name may not run into for `@Name` to be that name. */
 const NAME_BOUNDARY = /[\s.,;:!?()[\]{}'"]/;
 
 /**
- * A member picked from the list, by where the `@Name` the pick wrote sits in
- * the box: `[start, end)`, the `@` and the name.
+ * A member, bot or task picked from the list, by where the `@Name` the pick
+ * wrote sits in the box: `[start, end)`, the `@` and the name.
  */
 export interface BotMentionPick {
   readonly start: number;
   readonly end: number;
-  readonly userId: string;
+  readonly kind: BotMentionKind;
+  readonly id: string;
 }
 
 /**
@@ -234,7 +275,7 @@ function endsNameAt(text: string, at: number): boolean {
   return after === "" || NAME_BOUNDARY.test(after);
 }
 
-/** Whether `pick`'s range of `text` still reads `@Name` of the member it picked. */
+/** Whether `pick`'s range of `text` still reads `@Name` of what it picked. */
 function pickHolds(
   text: string,
   pick: BotMentionPick,
@@ -248,23 +289,28 @@ function pickHolds(
 }
 
 /**
- * The text as sent: a pick whose range still reads `@Name` of the member it
- * picked becomes that member's token, and any other `@Name` becomes its
- * member's token only where no other member has that name; a name two
- * members share and that no pick holds stays as typed. Longer names are
+ * The text as sent: a pick whose range still reads `@Name` of what it picked
+ * becomes its token, and any other `@Name` becomes a token only where
+ * nothing else the box can name - member, bot or task - has that name; a
+ * name two share and that no pick holds stays as typed. Longer names are
  * matched first, so "@Ann Lee" is not read as "@Ann".
  */
 export function mentionsToWire(
   text: string,
-  members: ReadonlyArray<BotMentionCandidate>,
+  candidates: ReadonlyArray<BotMentionCandidate>,
   picks: ReadonlyArray<BotMentionPick>,
 ): string {
-  const nameOf = new Map(members.map((member) => [member.userId, member.name]));
-  const byName = new Map<string, string[]>();
-  for (const member of members) {
-    const name = member.name.trim();
+  const nameOf = new Map(
+    candidates.map((candidate) => [
+      mentionKey(candidate.kind, candidate.id),
+      candidate.name,
+    ]),
+  );
+  const byName = new Map<string, BotMentionCandidate[]>();
+  for (const candidate of candidates) {
+    const name = candidate.name.trim();
     if (name.length === 0) continue;
-    byName.set(name, [...(byName.get(name) ?? []), member.userId]);
+    byName.set(name, [...(byName.get(name) ?? []), candidate]);
   }
   const names = [...byName.keys()].sort((a, b) => b.length - a.length);
   const pickAt = new Map(picks.map((pick) => [pick.start, pick]));
@@ -281,8 +327,11 @@ export function mentionsToWire(
       continue;
     }
     const pick = pickAt.get(at);
-    if (pick !== undefined && pickHolds(text, pick, nameOf.get(pick.userId))) {
-      out += botMentionToken(pick.userId);
+    if (
+      pick !== undefined &&
+      pickHolds(text, pick, nameOf.get(mentionKey(pick.kind, pick.id)))
+    ) {
+      out += botMentionToken(pick.kind, pick.id);
       index = pick.end;
       continue;
     }
@@ -296,30 +345,33 @@ export function mentionsToWire(
       index = at + 1;
       continue;
     }
-    // A name two members share is neither of them unless picked, nor a
-    // shorter name that starts it.
-    const userIds = byName.get(name) ?? [];
-    out += userIds.length === 1 ? botMentionToken(userIds[0]) : `@${name}`;
+    // A name two share is neither of them unless picked, nor a shorter name
+    // that starts it.
+    const named = byName.get(name) ?? [];
+    out +=
+      named.length === 1
+        ? botMentionToken(named[0].kind, named[0].id)
+        : `@${name}`;
     index = at + 1 + name.length;
   }
   return out + text.slice(index);
 }
 
 /**
- * The text as the box shows it: each member's token as `@Name`, held as a
- * pick of that member, so it is sent as them again; a token of anyone else
- * stays as it is.
+ * The text as the box shows it: each token the box can name as `@Name`,
+ * held as a pick of what it names, so it is sent as that again; any other
+ * token stays as it is.
  */
 export function mentionsToDisplay(
   text: string,
-  nameOf: (userId: string) => string | null,
+  nameOf: (kind: BotMentionKind, id: string) => string | null,
 ): { readonly text: string; readonly picks: ReadonlyArray<BotMentionPick> } {
   const picks: BotMentionPick[] = [];
   let out = "";
   let index = 0;
   for (const match of text.matchAll(BOT_MENTION_TOKEN)) {
-    const userId = match[1];
-    const name = nameOf(userId);
+    const { kind, id } = mentionOfToken(match[0]);
+    const name = nameOf(kind, id);
     out += text.slice(index, match.index);
     index = match.index + match[0].length;
     if (name === null) {
@@ -327,38 +379,30 @@ export function mentionsToDisplay(
       continue;
     }
     const shown = `@${name}`;
-    picks.push({ start: out.length, end: out.length + shown.length, userId });
+    picks.push({
+      start: out.length,
+      end: out.length + shown.length,
+      kind,
+      id,
+    });
     out += shown;
   }
   return { text: out + text.slice(index), picks };
 }
 
 /**
- * The `@` being typed at `caret`: where it starts and what follows it, or
- * `null` when the caret is not in one. An `@` starts a mention at the start
- * of the text or after a space.
+ * The `@` being typed at `caret`: where it starts and what follows it on its
+ * line, or `null` when the caret is not in one. As in the agent composer, an
+ * `@` starts a mention at the start of a line or after a space, and what
+ * follows it runs on through spaces, to the next such `@`.
  */
 export function activeMentionQuery(
   text: string,
   caret: number,
 ): { readonly start: number; readonly query: string } | null {
   const head = text.slice(0, caret);
-  const match = /(?:^|\s)@([^\s@]*)$/.exec(head);
+  const match = /(?:^|\s)@((?:(?!\s@)[^\n])*)$/.exec(head);
   if (match === null) return null;
   const query = match[1];
   return { start: caret - query.length - 1, query };
-}
-
-/** The candidates whose name starts a word with `query`, case-insensitively. */
-export function matchMentionCandidates(
-  candidates: ReadonlyArray<BotMentionCandidate>,
-  query: string,
-): ReadonlyArray<BotMentionCandidate> {
-  const needle = query.toLowerCase();
-  return candidates.filter((candidate) => {
-    const words = candidate.name.toLowerCase().split(/\s+/);
-    return words.some((_, index) =>
-      words.slice(index).join(" ").startsWith(needle),
-    );
-  });
 }

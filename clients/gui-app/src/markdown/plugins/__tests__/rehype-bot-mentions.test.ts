@@ -14,6 +14,9 @@ import {
 // The user id is shaped like an agent id on purpose.
 const USER_ID = "0f1e2d3c-4b5a-6978-8796-a5b4c3d2e1f0";
 const AGENT_ID = "11111111-2222-3333-4444-555555555555";
+const BOT_ID = "bot_01HZY8V6K3Q9W2E4R5T6Y7V8M0";
+// The task id is an agent-shaped UUID as well.
+const TASK_ID = "6f1c2a7e-3b4d-4e5f-8a9b-0c1d2e3f4a5b";
 
 async function elementsOf(markdown: string): Promise<{
   mentions: Element[];
@@ -54,6 +57,34 @@ describe("rehypeBotMentions with the agent-reference pass", () => {
 
   it("leaves a token in code as written", async () => {
     const { mentions } = await elementsOf(`\`<@${USER_ID}>\``);
+
+    expect(mentions).toEqual([]);
+  });
+
+  it("makes a bot token and a task token mentions carrying their own id, and no agent of the task's UUID", async () => {
+    const { mentions, agents } = await elementsOf(
+      `ask <#${BOT_ID}> about <~${TASK_ID}>`,
+    );
+
+    expect(
+      mentions.map((mention) => [mention.properties, mention.children]),
+    ).toEqual([
+      [{ "data-bot-id": BOT_ID }, [{ type: "text", value: `<#${BOT_ID}>` }]],
+      [{ "data-task-id": TASK_ID }, [{ type: "text", value: `<~${TASK_ID}>` }]],
+    ]);
+    expect(agents).toEqual([]);
+  });
+
+  it("leaves text that only looks like a bot or task token as written", async () => {
+    const { mentions } = await elementsOf(
+      `<#include> <#bot_01HZY8V6K3Q9W2E4R5T6Y7U8M0> <~${TASK_ID.slice(1)}>`,
+    );
+
+    expect(mentions).toEqual([]);
+  });
+
+  it("leaves a bot and a task token in code as written", async () => {
+    const { mentions } = await elementsOf(`\`<#${BOT_ID}> <~${TASK_ID}>\``);
 
     expect(mentions).toEqual([]);
   });

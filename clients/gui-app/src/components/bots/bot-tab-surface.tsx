@@ -130,8 +130,10 @@ import { botMemberName } from "@/lib/bots/bot-member-names";
 import { useAuthStore } from "@/stores/auth/auth-store";
 import {
   BotMentionsContext,
+  type BotMentionDirectory,
   type BotMentioned,
 } from "@/components/bots/bot-mentions-context";
+import { useBotMentionTargets } from "@/components/bots/use-bot-mention-targets";
 import { isMainBot, type MainBotIds } from "@/lib/bots/bot-main";
 import {
   botPausedCopy,
@@ -1305,6 +1307,19 @@ function useChannelSetupHistory(input: {
 }
 
 /**
+ * Whether a bot's environment is the viewer's personal one; `null` while the
+ * environment list has not answered. The list holds only the viewer's own
+ * environments, so its one personal entry is theirs.
+ */
+function viewerOwnsEnvironment(
+  unread: boolean,
+  environment: EnvironmentListResponseV11["environments"][number] | null,
+): boolean | null {
+  if (unread) return null;
+  return environment !== null && environment.ownerKind === "user";
+}
+
+/**
  * Says whether the rail is drawn beside the channel, before the paint it would
  * otherwise be a frame late for. The rail draws only under Messages.
  */
@@ -1534,9 +1549,18 @@ function BotTabContent(props: {
     [botId, owner, snapshot.bot.title],
   );
   // A mention names the viewer, or a member the directory lists; anyone
-  // else's token stays as written.
-  const mentioned = useCallback(
-    (userId: string): BotMentioned | null => {
+  // else's token stays as written. A bot or a task is one of the
+  // environment's (decision 177).
+  const mentionTargets = useBotMentionTargets({
+    environmentId: snapshot.bot.environmentId,
+    tasks: snapshot.tasks,
+    personal: viewerOwnsEnvironment(
+      environments.data === undefined,
+      environment,
+    ),
+  });
+  const mentioned = useMemo((): BotMentionDirectory => {
+    const person = (userId: string): BotMentioned | null => {
       if (viewer !== null && viewer.userId === userId) {
         return {
           name: botMemberName(userId, viewer, resolveMember),
@@ -1546,9 +1570,20 @@ function BotTabContent(props: {
       const member = resolveMember(userId);
       if (member === null) return null;
       return { name: member.displayName ?? "member", self: false };
-    },
-    [resolveMember, viewer],
-  );
+    };
+    return {
+      person,
+      bots: mentionTargets.bots,
+      tasks: mentionTargets.tasks,
+      tasksAnswered: mentionTargets.tasksAnswered,
+    };
+  }, [
+    mentionTargets.bots,
+    mentionTargets.tasks,
+    mentionTargets.tasksAnswered,
+    resolveMember,
+    viewer,
+  ]);
 
   return (
     <BotMentionsContext value={mentioned}>
