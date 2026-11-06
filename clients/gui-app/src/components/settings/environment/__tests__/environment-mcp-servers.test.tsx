@@ -105,6 +105,10 @@ function handlers(options: {
   readonly servers: () => EnvironmentMcpServerDeclaration[];
   /** The servers the viewing host lists for any provider. */
   readonly hostServers: readonly ProviderMcpServer[];
+  /** Provider-specific native inventories for tools that are not shared. */
+  readonly hostServersByProvider?: Partial<
+    Record<ProviderId, readonly ProviderMcpServer[]>
+  >;
 }): MockHandlerMap<HostRpcRegistry> {
   return {
     "environment.configuration.mcpServers.list": () => ({
@@ -141,7 +145,11 @@ function handlers(options: {
             native: {
               ok: true as const,
               kind: "mcp" as const,
-              servers: [...options.hostServers],
+              servers: [
+                ...(options.hostServersByProvider?.[
+                  request.native.providerId
+                ] ?? options.hostServers),
+              ],
             },
           },
   };
@@ -530,6 +538,55 @@ describe("The MCP servers page", () => {
     expect(
       harness.paramsOf("environment.configuration.mcpServers.put"),
     ).toHaveLength(0);
+  });
+
+  it("writes a shared tool setting only to providers that listed it", async () => {
+    negotiateMethods(ALL_METHODS);
+    const harness = mountTeamPage(
+      poolSource("editor"),
+      handlers({
+        servers: () => [
+          declaredServer({
+            serverId: "srv-1",
+            name: "github",
+            item: {
+              key: "github",
+              revision: 4,
+              toolToggles: {
+                claude: { search: false },
+                opencode: { open: false },
+              },
+              offFor: [],
+            },
+          }),
+        ],
+        hostServers: [],
+        hostServersByProvider: {
+          codex: [hostMcpServer("github", ["search"])],
+        },
+      }),
+    );
+    render(<EnvironmentMcpServersPage />, { wrapper: harness.Wrapper });
+
+    await userEvent.click(await screen.findByRole("button", { name: "Tools" }));
+    await userEvent.click(
+      await screen.findByRole("switch", { name: "github search" }),
+    );
+
+    const writes = harness.paramsOf("environment.configuration.items.put");
+    expect(writes).toHaveLength(1);
+    expect(writes[0]).toMatchObject({
+      environmentId: "env-a",
+      kind: "mcp_server",
+      key: "github",
+      revision: 4,
+    });
+    expect(writes[0]).toHaveProperty("value.mcpServerId", "srv-1");
+    expect(writes[0]).toHaveProperty("value.toolToggles", {
+      codex: { search: false },
+      claude: { search: false },
+      opencode: { open: false },
+    });
   });
 
   describe("a server's Tools that cannot be shown", () => {

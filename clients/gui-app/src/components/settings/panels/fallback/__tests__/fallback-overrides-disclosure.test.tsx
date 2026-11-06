@@ -1,4 +1,4 @@
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { cleanup, render, screen } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   createDefaultFallbackPolicy,
@@ -18,7 +18,7 @@ afterEach(() => {
 });
 
 describe("FallbackOverridesMatrix disclosure", () => {
-  it("no longer carries the global all-off paragraph or the chip legend; that guidance is contextual to an open row", () => {
+  it("shows the problem summaries at rest without Customize or a chip legend", () => {
     render(
       <FallbackOverridesMatrix
         policy={createDefaultFallbackPolicy()}
@@ -38,8 +38,7 @@ describe("FallbackOverridesMatrix disclosure", () => {
       screen.queryByRole("button", { name: /Per-failure overrides/i }),
     ).toBeNull();
     expect(screen.getByText("5 problems follow the main plan")).toBeTruthy();
-    expect(screen.queryAllByTestId(/^fallback-override-row-/)).toHaveLength(0);
-    fireEvent.click(screen.getByRole("button", { name: "Customize" }));
     expect(screen.getAllByTestId(/^fallback-override-row-/)).toHaveLength(5);
+    expect(screen.queryByRole("button", { name: "Customize" })).toBeNull();
   });
 });

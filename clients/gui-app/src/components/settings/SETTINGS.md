@@ -4913,10 +4913,10 @@ min`): "The judge didn't finish in time, so it's asking you instead."
     always-published error card is something the user switched on.
   - The ladder has one consequence sentence. Session/history mechanics and
     reorder instructions sit behind Help. Per-problem settings summarize
-    inherited rows as “N problems follow the main plan · Customize”; customized
-    rows stay visible. Customize reveals inherited problems, and expanding a
-    problem shows its own chain and controls. Save notices and problems needing
-    attention remain visible even while the inherited list is collapsed.
+    inherited rows as “N problems follow the main plan”, followed by “M custom”
+    when applicable. Every problem row remains visible with its own chain and
+    routing or disabled prefixes; only Custom and Check save badges remain.
+    Clicking a row expands its controls. There is no separate Customize toggle.
   - **Enablement is PRESENCE in the stored `ladder`**, which cannot represent
     where a turned-off step sat. The panel therefore holds the four-row display
     order in its draft and persists only the enabled subset; a step turned off

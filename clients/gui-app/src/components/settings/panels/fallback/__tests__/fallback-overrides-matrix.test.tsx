@@ -92,10 +92,6 @@ function renderMatrixWith(
 }
 
 function rowButton(reason: HostNotificationStoppedReason): HTMLElement {
-  const customize = screen.queryByRole("button", { name: "Customize" });
-  if (customize?.getAttribute("aria-expanded") === "false") {
-    fireEvent.click(customize);
-  }
   return screen.getByRole("button", {
     name: new RegExp(`^${FALLBACK_REASON_LABELS[reason]}`),
   });
@@ -151,20 +147,22 @@ afterEach(() => {
 });
 
 describe("FallbackOverridesMatrix - the expandable list", () => {
-  it("summarizes inherited problems and hides provider rows until Customize", () => {
+  it("summarizes inherited problems and shows their recovery chains at rest", () => {
     renderMatrix(policy({}));
     expect(screen.getByText("5 problems follow the main plan")).toBeTruthy();
-    expect(screen.queryAllByTestId(/^fallback-override-row-/)).toHaveLength(0);
-    fireEvent.click(screen.getByRole("button", { name: "Customize" }));
+    expect(screen.queryByRole("button", { name: "Customize" })).toBeNull();
+    expect(screen.queryAllByTestId(/^fallback-override-row-/)).toHaveLength(5);
     for (const reason of EDITABLE_REASONS) {
       expect(rowButton(reason).getAttribute("aria-expanded")).toBe("false");
     }
+    const rateLimit = screen.getByTestId("fallback-override-row-rate_limit");
+    expect(rateLimit.textContent).toContain("Try another account");
+    expect(rateLimit.textContent).toContain("Wait for the limit to reset");
     expect(screen.queryAllByRole("checkbox")).toHaveLength(0);
   });
 
   it("draws exactly five editable rows, each keeping its row testid on the whole row", () => {
     renderMatrix(policy({}));
-    fireEvent.click(screen.getByRole("button", { name: "Customize" }));
     for (const reason of EDITABLE_REASONS) {
       const row = screen.getByTestId(`fallback-override-row-${reason}`);
       // The testid is on the ENTIRE row: the disclosure button lives inside it.
@@ -324,13 +322,23 @@ describe("FallbackOverridesMatrix - editing", () => {
     renderMatrix(
       policy({ reasonOverrides: { rate_limit: ["profile", "notify"] } }),
     );
-    fireEvent.click(screen.getByRole("button", { name: "Customize" }));
     expect(
       within(screen.getByTestId("fallback-override-row-rate_limit")).getByText(
         "Custom",
       ),
     ).not.toBeNull();
+    expect(screen.getByText("4 problems follow the main plan")).toBeTruthy();
+    expect(screen.getByText("· 1 custom")).toBeTruthy();
     expect(screen.queryByText("Main plan")).toBeNull();
+  });
+
+  it("keeps recovery-disabled and routing-disabled context in a collapsed row summary", () => {
+    renderMatrix(policy({ enabled: false, reasonOverrides: { auth: "off" } }));
+    const summary = rowButton("auth");
+    expect(summary.textContent).toContain(
+      "Recovery disabled for this problem · ",
+    );
+    expect(summary.textContent).toContain("When routing is on: ");
   });
 
   it("opening an older custom rule does not reorder it", () => {
@@ -394,12 +402,15 @@ describe("FallbackOverridesMatrix - contextual notify and transient retries", ()
     expect(within(row).queryByText(/Brief retry/)).toBeNull();
   });
 
-  it("shows the billing recovery chain only when that row is expanded", () => {
+  it("shows the billing recovery chain at rest while keeping its controls collapsed", () => {
     renderMatrix(policy({}));
-    expect(screen.queryByText("Always notify you")).toBeNull();
-    openRow("billing");
     const row = screen.getByTestId("fallback-override-row-billing");
-    expect(row.textContent).toContain("Always notify you");
+    const trigger = rowButton("billing");
+    expect(trigger.getAttribute("aria-expanded")).toBe("false");
+    expect(trigger.textContent).toContain("Always notify you");
+    expect(within(row).queryAllByRole("checkbox")).toHaveLength(0);
+    openRow("billing");
+    expect(within(row).getByRole("region")).toBeTruthy();
   });
 });
 

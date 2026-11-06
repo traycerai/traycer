@@ -73,7 +73,6 @@ export function FallbackOverridesMatrix(
   } = props;
   const [expanded, setExpanded] =
     useState<HostNotificationStoppedReason | null>(null);
-  const [customizing, setCustomizing] = useState(false);
   const heading = useRef<HTMLHeadingElement>(null);
   const excludedNeedsAttention =
     attentionReason !== null &&
@@ -109,16 +108,7 @@ export function FallbackOverridesMatrix(
               {EDITABLE_REASONS.length - customCount} problems follow the main
               plan
             </span>
-            <span aria-hidden>·</span>
-            <Button
-              type="button"
-              variant="link"
-              size="inline-xs"
-              aria-expanded={customizing}
-              onClick={() => setCustomizing((open) => !open)}
-            >
-              Customize
-            </Button>
+            {customCount > 0 ? <span>· {customCount} custom</span> : null}
           </div>
           <Button
             size="touch"
@@ -156,13 +146,7 @@ export function FallbackOverridesMatrix(
           className="min-w-0 divide-y divide-border rounded-lg border border-border"
           data-testid="fallback-overrides-list"
         >
-          {EDITABLE_REASONS.filter(
-            (reason) =>
-              customizing ||
-              expanded === reason ||
-              attentionReason === reason ||
-              policy.reasonOverrides?.[reason] !== undefined,
-          ).map((reason) => (
+          {EDITABLE_REASONS.map((reason) => (
             <OverrideRow
               key={reason}
               policy={policy}
@@ -312,6 +296,13 @@ function OverrideRow(props: {
               {needsAttention ? (
                 <Badge variant="warning">Check save</Badge>
               ) : null}
+            </span>
+            <span className="block text-ui-xs font-normal text-muted-foreground">
+              {ladder === "off"
+                ? "Recovery disabled for this problem · "
+                : null}
+              {!policy.enabled ? "When routing is on: " : null}
+              {description.steps.join(" → ")}
             </span>
           </span>
           <ChevronDown

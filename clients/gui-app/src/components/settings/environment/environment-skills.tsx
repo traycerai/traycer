@@ -417,53 +417,62 @@ function AddSkill(props: {
   readonly hostClient: HostClient<HostRpcRegistry> | null;
   readonly onNotServed: () => void;
 }): ReactNode {
-  const [importing, setImporting] = useState(false);
+  const [dialog, setDialog] = useState<"add" | "import" | null>(null);
   const importAction = props.importable ? (
     <Button
       type="button"
       variant="outline"
       size="sm"
-      onClick={() => setImporting(true)}
+      onClick={() => setDialog("import")}
     >
       {IMPORT_SKILL_LABEL}
     </Button>
   ) : null;
-  const [adding, setAdding] = useState(false);
+  let description = "Import a skill from a source.";
+  if (props.uploadable)
+    description = props.importable
+      ? "Upload a skill folder or import from a source."
+      : "Upload a skill folder.";
   if (!props.uploadable && !props.importable) return null;
   return (
     <>
-      <Button type="button" size="sm" onClick={() => setAdding(true)}>
+      <Button type="button" size="sm" onClick={() => setDialog("add")}>
         Add skill
       </Button>
-      <Dialog open={adding} onOpenChange={setAdding}>
-        <DialogContent>
-          <DialogHeader>
-            <DialogTitle>Add skill</DialogTitle>
-            <DialogDescription>
-              Upload a skill folder or import from a source.
-            </DialogDescription>
-          </DialogHeader>
-          {props.uploadable ? (
-            <TeamSkillUpload
-              onNotServed={props.onNotServed}
-              importAction={importAction}
-            />
-          ) : (
-            importAction
-          )}
-          <DialogClose asChild>
-            <Button type="button" variant="ghost" size="sm">
-              Cancel
-            </Button>
-          </DialogClose>
-        </DialogContent>
-      </Dialog>
-      {importing ? (
+      {dialog === "add" ? (
+        <Dialog
+          open
+          onOpenChange={(open) => {
+            if (!open) setDialog(null);
+          }}
+        >
+          <DialogContent>
+            <DialogHeader>
+              <DialogTitle>Add skill</DialogTitle>
+              <DialogDescription>{description}</DialogDescription>
+            </DialogHeader>
+            {props.uploadable ? (
+              <TeamSkillUpload
+                onNotServed={props.onNotServed}
+                importAction={importAction}
+              />
+            ) : (
+              importAction
+            )}
+            <DialogClose asChild>
+              <Button type="button" variant="ghost" size="sm">
+                Cancel
+              </Button>
+            </DialogClose>
+          </DialogContent>
+        </Dialog>
+      ) : null}
+      {dialog === "import" ? (
         <EnvironmentSkillImportDialog
           hostClient={props.hostClient}
           searchable={props.searchable}
           initialSource=""
-          onClose={() => setImporting(false)}
+          onClose={() => setDialog(null)}
         />
       ) : null}
     </>

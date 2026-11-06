@@ -687,7 +687,13 @@ function SharedMcpToolInventory(props: {
                 aria-checked={mixed ? "mixed" : enabled}
                 checked={enabled}
                 disabled={!props.canEdit || putItem.isPending || !ready}
-                onCheckedChange={(next) => toggle(name, props.providers, next)}
+                onCheckedChange={(next) =>
+                  toggle(
+                    name,
+                    states.map((state) => state.providerId),
+                    next,
+                  )
+                }
               />
             </div>
             {differs ? (
