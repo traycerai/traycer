@@ -359,6 +359,35 @@ export function sandboxStateLine(
   return STATE_LINE[state];
 }
 
+/** Operational facts stay on the Sandbox tab; the header owns state and rate. */
+export function sandboxOperationalLine(
+  state: HostSandboxState | null,
+  frozen: boolean,
+): string | null {
+  if (frozen || state === null) return null;
+  switch (state) {
+    case "awake":
+    case "suspending":
+    case "resuming":
+    case "starting":
+    case "failed":
+      return null;
+    case "creating":
+    case "stopping":
+    case "stopped":
+    case "suspended":
+    case "released":
+    case "destroying":
+    case "destroyed": {
+      const line = STATE_LINE[state]
+        .replace(/^[^.,]+[.,]\s*/, "")
+        .replace(/ Billed at the storage rate\./, "")
+        .replace(/ and nothing more is billed/, "");
+      return line.charAt(0).toUpperCase() + line.slice(1);
+    }
+  }
+}
+
 /** The idle period the control plane applies when a row sets none. */
 export const SANDBOX_DEFAULT_IDLE_MINUTES = 30;
 
