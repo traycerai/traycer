@@ -16,6 +16,7 @@ import {
   botListRequestSchema,
   botListResponseSchema,
   botListResponseSchemaV10,
+  botListResponseSchemaV11,
   botMemorySubscribeClientFrameSchema,
   botMemorySubscribeOpenRequestSchema,
   botMemorySubscribeServerFrameSchema,
@@ -23,6 +24,7 @@ import {
   botOpenResponseSchema,
   botReadRequestSchema,
   botReadResponseSchema,
+  botReadResponseSchemaV10,
   botSubscribeClientFrameSchema,
   botSubscribeOpenRequestSchema,
   botSubscribeServerFrameSchema,
@@ -32,6 +34,8 @@ import {
   botSubscribeServerFrameSchemaV13,
   botSubscribeServerFrameSchemaV14,
   botSubscribeServerFrameSchemaV15,
+  botUpdateAppearanceRequestSchema,
+  botUpdateAppearanceResponseSchema,
   botUpdateResponseSchema,
   botUpdateRunSettingsRequestSchema,
   botUpdateDirectiveRequestSchema,
@@ -124,7 +128,7 @@ export const botListV11 = defineRpcContract({
   method: "bot.list",
   schemaVersion: { major: 1, minor: 1 } as const,
   requestSchema: botListRequestSchema,
-  responseSchema: botListResponseSchema,
+  responseSchema: botListResponseSchemaV11,
 });
 export const botListUpgradeV10ToV11 = defineUpgradePath<
   typeof botListV10,
@@ -136,11 +140,48 @@ export const botListUpgradeV10ToV11 = defineUpgradePath<
   upgradeResponse: (response) => ({ ...response, mainBotIds: null }),
 });
 
+/**
+ * `bot.list@1.2` (T147): each row carries the bot's appearance. A 1.1 host
+ * names none, which a reader takes as every choice at its default.
+ */
+export const botListV12 = defineRpcContract({
+  method: "bot.list",
+  schemaVersion: { major: 1, minor: 2 } as const,
+  requestSchema: botListRequestSchema,
+  responseSchema: botListResponseSchema,
+});
+export const botListUpgradeV11ToV12 = defineUpgradePath<
+  typeof botListV11,
+  typeof botListV12
+>({
+  from: botListV11.schemaVersion,
+  to: botListV12.schemaVersion,
+  upgradeRequest: (request) => request,
+  upgradeResponse: (response) => response,
+});
+
 export const botReadV10 = defineRpcContract({
   method: "bot.read",
   schemaVersion: { major: 1, minor: 0 } as const,
   requestSchema: botReadRequestSchema,
+  responseSchema: botReadResponseSchemaV10,
+});
+
+/** `bot.read@1.1` (T147): the row carries the bot's appearance. */
+export const botReadV11 = defineRpcContract({
+  method: "bot.read",
+  schemaVersion: { major: 1, minor: 1 } as const,
+  requestSchema: botReadRequestSchema,
   responseSchema: botReadResponseSchema,
+});
+export const botReadUpgradeV10ToV11 = defineUpgradePath<
+  typeof botReadV10,
+  typeof botReadV11
+>({
+  from: botReadV10.schemaVersion,
+  to: botReadV11.schemaVersion,
+  upgradeRequest: (request) => request,
+  upgradeResponse: (response) => response,
 });
 
 export const botUpdateTitleV10 = defineRpcContract({
@@ -169,6 +210,18 @@ export const botUpdateReplyModeV10 = defineRpcContract({
   schemaVersion: { major: 1, minor: 0 } as const,
   requestSchema: botUpdateReplyModeRequestSchema,
   responseSchema: botUpdateResponseSchema,
+});
+
+/**
+ * `bot.updateAppearance@1.0` (T147): the bot's picture, its swatch and its
+ * channel's background, each kept, set or cleared. Same optional posture as
+ * the namespace: a host without it offers none of the three.
+ */
+export const botUpdateAppearanceV10 = defineRpcContract({
+  method: "bot.updateAppearance",
+  schemaVersion: { major: 1, minor: 0 } as const,
+  requestSchema: botUpdateAppearanceRequestSchema,
+  responseSchema: botUpdateAppearanceResponseSchema,
 });
 
 /**
