@@ -303,7 +303,7 @@ describe("GettingStartedSettingsPanel", () => {
     expect(screen.getByRole("status").textContent).toBe("0 of 5 complete");
     expect(
       screen.getByTestId("getting-started-card-credits").textContent,
-    ).toContain("Credits pay for your sandboxes, awake or resting.");
+    ).toContain("Credits pay for your sandboxes.");
   });
 
   it("completes a step by the fact it names, never by a click", () => {

@@ -449,22 +449,20 @@ async function renderStrip(
 }
 
 /**
- * The shipped layout with the sidebar open in a new tab - the join cases read
- * which pane a tab meets, and a collapsed rail is one of the two answers -
- * and the strip in Tabs only, the view the row and group cases are written
- * about; `setSideStripView` picks the one listing the agents.
+ * The shipped layout with the strip in Tabs only, the view the row and group
+ * cases are written about; `setSideStripView` picks the one listing the
+ * agents.
  */
-const OPEN_SIDEBAR_SNAPSHOT: LayoutSnapshot = {
+const TABS_ONLY_SNAPSHOT: LayoutSnapshot = {
   ...DEFAULT_LAYOUT_SNAPSHOT,
   arrangement: {
     ...DEFAULT_LAYOUT_SNAPSHOT.arrangement,
-    sidebarStartCollapsed: false,
     sideStripView: "layered",
   },
 };
 
 function setHomeTabEnabled(enabled: boolean): void {
-  useLayoutStore.setState({ ...OPEN_SIDEBAR_SNAPSHOT });
+  useLayoutStore.setState({ ...TABS_ONLY_SNAPSHOT });
   useLayoutStore
     .getState()
     .setRegionValues("homeTab", { shown: enabled ? "shown" : "hidden" });
@@ -1083,7 +1081,7 @@ describe("<SideTabStrip />", () => {
       __resetHostNotificationsStoreForTests();
       useStripDisclosureStore.setState({ expanded: {} });
       indicatorState.value = { epics: {}, chats: {} };
-      useLayoutStore.setState({ ...OPEN_SIDEBAR_SNAPSHOT });
+      useLayoutStore.setState({ ...TABS_ONLY_SNAPSHOT });
       useChatTranscriptJumpStore.setState({ requestsByChatId: {} });
       usePaneEmphasisStore.setState({ outlinedInstanceId: null, flash: null });
     });
@@ -2027,7 +2025,7 @@ describe("<SideTabStrip />", () => {
       __resetHostNotificationsStoreForTests();
       useStripDisclosureStore.setState({ expanded: {} });
       indicatorState.value = { epics: {}, chats: {} };
-      useLayoutStore.setState({ ...OPEN_SIDEBAR_SNAPSHOT });
+      useLayoutStore.setState({ ...TABS_ONLY_SNAPSHOT });
     });
 
     /**
@@ -3393,7 +3391,7 @@ describe("<SideTabStrip />", () => {
       __resetAgentActivityStoreForTests();
       useAppLocalNotificationsStore.setState({ byId: {} });
       indicatorState.value = { epics: {}, chats: {} };
-      useLayoutStore.setState({ ...OPEN_SIDEBAR_SNAPSHOT });
+      useLayoutStore.setState({ ...TABS_ONLY_SNAPSHOT });
     });
 
     function setBeta(input: Omit<StatusCase, "name" | "shows">): void {

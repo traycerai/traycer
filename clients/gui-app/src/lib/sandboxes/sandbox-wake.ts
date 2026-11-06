@@ -229,7 +229,7 @@ function toastWakeOutcome(
     case "refused":
       // A team sandbox's wake is on its payer's bundle, not the viewer's
       // credits, so the personal "your credits ran out" would misdirect.
-      toast.warning("This sandbox is frozen", {
+      toast.warning("This sandbox is out of credits.", {
         description:
           configuration.kind === "team"
             ? "Its payer's bundle is out."

@@ -46,6 +46,7 @@ function layerOf(name: string, variants: number, pan: number | null): Layer {
   return {
     name,
     variants,
+    role: null,
     sublayers: 1,
     sublayerStartingOffset: null,
     pan,
@@ -446,6 +447,7 @@ describe("TrackPlayer run arc", () => {
         { name: "Y", variants: 1 },
       ],
       sequence: ["X", "Y"],
+      role: null,
       sublayers: 1,
       sublayerStartingOffset: null,
       pan: null,

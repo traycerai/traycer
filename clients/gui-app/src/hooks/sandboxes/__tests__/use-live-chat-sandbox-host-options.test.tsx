@@ -120,6 +120,7 @@ function ChatHostStatus(): ReactNode {
         action={null}
         surface="inline"
         intent="pin"
+        consequence={null}
         refusalByHostId={NO_HOST_OPTION_REFUSALS}
         inertExceptHostId={null}
         disabled={false}
@@ -199,7 +200,7 @@ describe("a live chat's host chip after another client stops its sandbox", () =>
     await waitFor(() =>
       expect(
         screen.getByTestId("settings-host-switcher-status").textContent,
-      ).toBe("awake"),
+      ).toBe("Awake"),
     );
     expect(fetchRegisteredHosts).toHaveBeenCalledTimes(1);
 
@@ -214,7 +215,7 @@ describe("a live chat's host chip after another client stops its sandbox", () =>
       ).toBeTruthy();
       expect(
         screen.getByTestId("settings-host-switcher-status").textContent,
-      ).toBe("stopped");
+      ).toBe("Stopped");
     });
     expect(fetchRegisteredHosts).toHaveBeenCalledTimes(2);
     expect(binding.auth.listSandboxes).toHaveBeenCalledTimes(2);
@@ -264,7 +265,7 @@ describe("a live chat's host chip after another client stops its sandbox", () =>
     await waitFor(() => {
       expect(
         screen.getByTestId("settings-host-switcher-status").textContent,
-      ).toBe("stopped");
+      ).toBe("Stopped");
       // Do not pass on a chip whose registry notification is still queued.
       expect(queryClient.getQueryData(registryKey)).toEqual(
         registry("stopped"),

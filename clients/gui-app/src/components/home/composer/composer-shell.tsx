@@ -16,6 +16,7 @@ import { useComposerNarrowObserver } from "@/components/home/composer/composer-n
 import { useComposerSheetPin } from "@/components/home/composer/use-composer-sheet-pin";
 import { useIsMobileViewport } from "@/hooks/ui/use-mobile-viewport";
 import { useVirtualKeyboardInset } from "@/hooks/ui/use-virtual-keyboard-inset";
+import { mentionProviderRegistry } from "@/lib/composer/mentions";
 import type { FileTransferDragOverlayVariant } from "@/lib/files/file-transfer-paths";
 import { isMobileApp } from "@/lib/mobile-app";
 import { cn } from "@/lib/utils";
@@ -359,6 +360,8 @@ function ComposerAreaImpl({
       <ComposerMenu
         pickerStore={pickerStore}
         replyRow={focusRow ? sheetRef : null}
+        menuCopy={mentionProviderRegistry.menuCopy}
+        listboxId={null}
       />
       {/* The dim behind the sheet. A sibling rather than the sheet's own
           pseudo-element: a negative-z child paints above its parent's

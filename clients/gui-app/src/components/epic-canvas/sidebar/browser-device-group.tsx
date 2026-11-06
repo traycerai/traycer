@@ -43,9 +43,6 @@ export function BrowserDeviceGroup(props: {
         <span className="min-w-0 flex-1 truncate font-medium">
           {hostLabelAtSentenceStart(group.name)}
         </span>
-        {group.isLocal ? (
-          <span className="shrink-0 text-ui-xs">Local</span>
-        ) : null}
         {group.offline ? (
           <span className="shrink-0 text-ui-xs">Offline</span>
         ) : null}

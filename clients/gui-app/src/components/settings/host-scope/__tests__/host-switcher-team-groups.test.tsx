@@ -141,6 +141,7 @@ function renderSwitcher(input: {
       action={input.action}
       surface="field"
       intent={input.intent}
+      consequence={null}
       disabled={false}
       isLoading={false}
       listsFailed={false}

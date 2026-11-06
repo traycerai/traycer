@@ -2,15 +2,20 @@ import { describe, expect, it } from "vitest";
 import type { BotQuestionSettlement } from "@traycer/protocol/persistence/epic/messages";
 import type { OpenTextBlock } from "@traycer/protocol/persistence/epic/open-harness-records";
 import {
-  baselineReplyWatch,
   baselineReplyWatchExcept,
   createReplyWatchMemory,
-  requestIdAnsweredIn,
-  replySpeechText,
-  requestIdAnsweredBy,
   takeNewBotReplies,
   type ReplyRow,
+  type ReplyWatchMemory,
 } from "../focused-replies";
+
+/** The snapshot a call joins an existing thread on: all of it is history. */
+function baselineAsHistory(
+  memory: ReplyWatchMemory,
+  rows: ReadonlyArray<ReplyRow>,
+): void {
+  baselineReplyWatchExcept(memory, rows, () => false);
+}
 
 function textBlock(text: string): OpenTextBlock {
   return {
@@ -32,34 +37,18 @@ function botRow(
   return { role: "assistant", messageId, timestamp, blocks };
 }
 
-function userRow(
-  messageId: string,
-  timestamp: number,
-  request: { requestId: string; resolvedByMessageId: string } | null,
-): ReplyRow {
-  return {
-    role: "user",
-    messageId,
-    timestamp,
-    conversationRequest:
-      request === null
-        ? undefined
-        : {
-            requestId: request.requestId,
-            resolvedAt: timestamp,
-            resolvedByMessageId: request.resolvedByMessageId,
-          },
-  };
+function userRow(messageId: string, timestamp: number): ReplyRow {
+  return { role: "user", messageId, timestamp };
 }
 
 describe("takeNewBotReplies", () => {
   it("returns only new bot rows with prose, joins their text blocks, and marks every row seen", () => {
     const history = botRow("old", 10, [textBlock("history")]);
     const memory = createReplyWatchMemory();
-    baselineReplyWatch(memory, [history]);
+    baselineAsHistory(memory, [history]);
     const rows: ReadonlyArray<ReplyRow> = [
       history,
-      userRow("u1", 20, null),
+      userRow("u1", 20),
       botRow("a1", 30, [textBlock("Yes."), textBlock("Merged.")]),
       botRow("a2", 40, [textBlock("   ")]),
     ];
@@ -73,7 +62,7 @@ describe("takeNewBotReplies", () => {
 
   it("treats a row hydrated from before the baseline as history, and speaks a newer one once", () => {
     const memory = createReplyWatchMemory();
-    baselineReplyWatch(memory, [
+    baselineAsHistory(memory, [
       botRow("m10", 10, [textBlock("ten")]),
       botRow("m20", 20, [textBlock("twenty")]),
     ]);
@@ -113,7 +102,7 @@ describe("takeNewBotReplies with a question", () => {
 
   it("gives an open question's choices as an explicit list after its prose", () => {
     const memory = createReplyWatchMemory();
-    baselineReplyWatch(memory, []);
+    baselineAsHistory(memory, []);
 
     expect(takeNewBotReplies([question(null)], memory)).toEqual([
       {
@@ -125,7 +114,7 @@ describe("takeNewBotReplies with a question", () => {
 
   it("gives a settled question's prose alone", () => {
     const memory = createReplyWatchMemory();
-    baselineReplyWatch(memory, []);
+    baselineAsHistory(memory, []);
 
     expect(
       takeNewBotReplies(
@@ -143,54 +132,13 @@ describe("takeNewBotReplies with a question", () => {
   });
 });
 
-describe("requestIdAnsweredBy", () => {
-  it("reads the request from the user row that resolved to the reply", () => {
-    const rows: ReadonlyArray<ReplyRow> = [
-      userRow("u1", 1, { requestId: "r-1", resolvedByMessageId: "a1" }),
-      userRow("u2", 2, { requestId: "r-2", resolvedByMessageId: "a2" }),
-      botRow("a2", 3, [textBlock("Done.")]),
-    ];
-
-    expect(requestIdAnsweredBy(rows, "a2")).toBe("r-2");
-    expect(requestIdAnsweredBy(rows, "unknown")).toBeNull();
-  });
-});
-
-describe("requestIdAnsweredIn", () => {
-  it("finds the opening request on the channel when the thread holds only the reply", () => {
-    const reply = botRow("a1", 3, [textBlock("Merged.")]);
-    const records = {
-      threadRows: [reply],
-      channelRows: [
-        userRow("u1", 1, { requestId: "r-1", resolvedByMessageId: "a1" }),
-      ],
-    };
-
-    expect(requestIdAnsweredIn(records, "a1")).toBe("r-1");
-    expect(requestIdAnsweredIn(records, "unknown")).toBeNull();
-  });
-
-  it("prefers the thread's own row over the channel's", () => {
-    const records = {
-      threadRows: [
-        userRow("u2", 2, { requestId: "r-thread", resolvedByMessageId: "a1" }),
-      ],
-      channelRows: [
-        userRow("u1", 1, { requestId: "r-channel", resolvedByMessageId: "a1" }),
-      ],
-    };
-
-    expect(requestIdAnsweredIn(records, "a1")).toBe("r-thread");
-  });
-});
-
 describe("baselineReplyWatchExcept", () => {
   it("returns the awaited answer to speak and baselines the rest as history", () => {
     const memory = createReplyWatchMemory();
     const awaited = botRow("a2", 50, [textBlock("Merged.")]);
     const rows: ReadonlyArray<ReplyRow> = [
       botRow("old", 10, [textBlock("history")]),
-      userRow("u1", 20, null),
+      userRow("u1", 20),
       awaited,
     ];
 
@@ -206,23 +154,34 @@ describe("baselineReplyWatchExcept", () => {
     expect([...memory.seen].sort()).toEqual(["a2", "old", "u1"]);
     expect(takeNewBotReplies(rows, memory)).toEqual([]);
   });
-});
 
-describe("replySpeechText", () => {
-  it("quotes the bot by name unless the voice speaks as that bot", () => {
+  it("speaks nothing of an arrival with no prose, and still marks it seen", () => {
+    const memory = createReplyWatchMemory();
+
     expect(
-      replySpeechText({
-        botTitle: "Tracy",
-        speaksAsThisBot: false,
-        content: " Done. ",
-      }),
-    ).toBe("Tracy answered: Done.");
+      baselineReplyWatchExcept(
+        memory,
+        [botRow("a1", 50, [textBlock("   ")])],
+        () => true,
+      ),
+    ).toEqual([]);
+    expect(memory.seen.has("a1")).toBe(true);
+  });
+
+  it("leaves an arrival out of the baseline bound, so a row hydrated after it still counts as new", () => {
+    const memory = createReplyWatchMemory();
+    baselineReplyWatchExcept(
+      memory,
+      [
+        botRow("old", 10, [textBlock("history")]),
+        botRow("a2", 50, [textBlock("answer")]),
+      ],
+      (row) => row.messageId === "a2",
+    );
+
+    expect(memory.since).toBe(10);
     expect(
-      replySpeechText({
-        botTitle: "Tracy",
-        speaksAsThisBot: true,
-        content: " Done. ",
-      }),
-    ).toBe("Done.");
+      takeNewBotReplies([botRow("a3", 30, [textBlock("between")])], memory),
+    ).toEqual([{ messageId: "a3", text: "between" }]);
   });
 });

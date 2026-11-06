@@ -41,7 +41,6 @@ const PHONE = {
 const FiltersSchema = z.object({
   paneLeft: z.number(),
   paneRight: z.number(),
-  boxLeft: z.number(),
   boxRight: z.number(),
   scrollWidth: z.number(),
   clientWidth: z.number(),
@@ -74,7 +73,6 @@ async function readFilters(page: Page): Promise<z.infer<typeof FiltersSchema>> {
         return {
           paneLeft: pane.left,
           paneRight: pane.right,
-          boxLeft: rect.left,
           boxRight: rect.right,
           scrollWidth: box.scrollWidth,
           clientWidth: box.clientWidth,

@@ -6,14 +6,12 @@ import {
   MOVE_DISCLOSURE,
   MOVE_SECTIONS,
   moveAcceptRequest,
-  moveReachSentence,
   moveRecipientSentence,
   moveItemChoiceKey,
   moveRowChoices,
   movesSectionRows,
   movesSummary,
   guideDiffersNote,
-  nothingToMoveLine,
   notAwaitingLine,
   PLAN_CHANGED_TEXT,
   planMovesASecret,
@@ -162,11 +160,10 @@ function MoveSheetBody(props: {
   return (
     <>
       <SheetHeader>
-        <SheetTitle>Move {target.hostName}'s settings to Personal</SheetTitle>
+        <SheetTitle>Move {target.hostName} to Personal?</SheetTitle>
         <SheetDescription data-testid="move-sheet-description">
-          {movesNothing
-            ? nothingToMoveLine(target.hostName)
-            : moveSheetLead(runningPersonal, reachedHostNames, target.hostName)}
+          Your Personal settings start reaching it. The settings already on it
+          stay there — nothing is deleted. You can move it back any time.
         </SheetDescription>
       </SheetHeader>
       <div
@@ -297,22 +294,6 @@ function HostListReadFailed(props: {
       onRetry={props.running.retry}
     />
   );
-}
-
-/**
- * The sheet's lead. Until the host list has answered it names nobody the
- * settings reach.
- */
-function moveSheetLead(
-  running: HostsRunningConfiguration,
-  reachedHostNames: readonly string[],
-  hostName: string,
-): string {
-  const reach =
-    running.state === "ready"
-      ? `${moveReachSentence(reachedHostNames, hostName)} `
-      : "";
-  return `${reach}${hostName} keeps working either way. Every row opens to its items.`;
 }
 
 function MovePlanRows(props: {

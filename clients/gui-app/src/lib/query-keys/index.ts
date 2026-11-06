@@ -88,6 +88,7 @@ export {
   botSlackMutationKeys,
   botSlackQueryKeys,
 } from "@/lib/query-keys/bot-slack-query-keys";
+export { teamHostMutationKeys } from "@/lib/query-keys/team-host-mutation-keys";
 export { mentionQueryKeys } from "@/lib/query-keys/mention-query-keys";
 export { imageMutationKeys } from "@/lib/query-keys/image-mutation-keys";
 export { appearanceQueryKeys } from "@/lib/query-keys/appearance-query-keys";

@@ -51,15 +51,7 @@ function toggle(): boolean {
 
 function resetStores(): void {
   window.localStorage.clear();
-  // From the top: the chord.s mapping is written as top <-> a side, and the
-  // shipped left strip is the first press.s destination, not its start.
-  useLayoutStore.setState({
-    ...DEFAULT_LAYOUT_SNAPSHOT,
-    arrangement: {
-      ...DEFAULT_LAYOUT_SNAPSHOT.arrangement,
-      tabStripPlacement: "top",
-    },
-  });
+  useLayoutStore.setState({ ...DEFAULT_LAYOUT_SNAPSHOT });
   useLayoutEditorStore.getState().endSession();
 }
 

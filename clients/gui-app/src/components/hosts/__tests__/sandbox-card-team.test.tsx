@@ -285,7 +285,7 @@ describe("<SandboxCard /> team creator and wake payer", () => {
       true,
     );
     expect(text("sandbox-card-state-line")).toBe(
-      "Frozen: Ada Lovelace's bundle is out.",
+      "Out of credits: Ada Lovelace's bundle is out.",
     );
   });
 });
@@ -293,7 +293,7 @@ describe("<SandboxCard /> team creator and wake payer", () => {
 describe("<SandboxCard /> frozen team destroy date", () => {
   const FROZEN_AT = new Date(2026, 8, 1, 12).getTime();
   const ADA = { userId: "user-ada", displayName: "Ada Lovelace" };
-  const BASE = "Frozen: Ada Lovelace's bundle is out.";
+  const BASE = "Out of credits: Ada Lovelace's bundle is out.";
 
   it("adds the day the sandbox is destroyed when the server sends frozenAt", () => {
     renderCard(
@@ -311,10 +311,10 @@ describe("<SandboxCard /> frozen team destroy date", () => {
       true,
     );
     expect(text("sandbox-card-state-line")).toBe(
-      "Frozen: its payer's bundle is out.",
+      "Out of credits: its payer's bundle is out.",
     );
     expect(sandboxTeamFrozenStateLine(null, VIEWER)).toBe(
-      "Frozen: its payer's bundle is out.",
+      "Out of credits: its payer's bundle is out.",
     );
   });
 
@@ -338,9 +338,9 @@ describe("<SandboxCard /> frozen team destroy date", () => {
         frozen({ userId: VIEWER, displayName: "Vera Viewer" }),
         VIEWER,
       ),
-    ).toBe(`Frozen: your bundle is out. Destroyed on ${day}.`);
+    ).toBe(`Out of credits: your bundle is out. Destroyed on ${day}.`);
     expect(sandboxTeamFrozenStateLine(frozen(null), VIEWER)).toBe(
-      `Frozen: its payer's bundle is out. Destroyed on ${day}.`,
+      `Out of credits: its payer's bundle is out. Destroyed on ${day}.`,
     );
   });
 });

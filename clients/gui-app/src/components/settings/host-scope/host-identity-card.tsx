@@ -1,4 +1,6 @@
 import type { ReactNode } from "react";
+import { HOST_FROZEN_WORD } from "@traycer/protocol/host/host-status";
+import { Badge } from "@/components/ui/badge";
 import type { HostBusyBreakdown } from "@traycer/protocol/host/status/index";
 import { describeHostBusy } from "@/components/host/host-restart-copy";
 import {
@@ -6,6 +8,7 @@ import {
   HostPresenceDot,
 } from "@/components/settings/host-scope/host-glyph";
 import {
+  hostOptionKindLabel,
   sandboxStateWord,
   sandboxWordYieldsToHealth,
 } from "@/components/settings/host-scope/host-option-model";
@@ -187,7 +190,7 @@ export function HostIdentityCard(props: {
                   the two surfaces described one fleet in two languages. A
                   remote host now gets a tag too — the absence of one was never
                   a deliberate signal, just the local-only branch showing. */}
-              <HostTag label={hostKindTag(host)} tone={undefined} />
+              <HostTag label={hostOptionKindLabel(host)} tone={undefined} />
             </div>
             {/* The window binding used to be an `Active` tag here and a verb in
                 the footer, with nothing tying them together. Both are now one
@@ -208,9 +211,12 @@ export function HostIdentityCard(props: {
                 className="text-ui-sm font-medium text-muted-foreground"
                 data-testid="host-identity-sandbox-state"
               >
-                {capitalizeWord(sandboxStateWord(host.sandbox) ?? "sandbox")}
+                {sandboxStateWord(host.sandbox)}
               </span>
             )}
+            {host.sandbox?.frozen ? (
+              <Badge variant="warning">{HOST_FROZEN_WORD}</Badge>
+            ) : null}
             {/* `health.detail` renders for the NON-live states only. Live
                 details are the redundant ones — "Running on this computer."
                 repeats the `Local` tag, and the relay route line was
@@ -347,19 +353,4 @@ function HostIdentityHealth(props: {
       </span>
     </span>
   );
-}
-
-/**
- * The header's kind tag. The machine this app runs on reads `This computer`,
- * never `Local`: `Local` is the Environment dropdown's badge for a computer
- * whose settings are not in Personal yet, and a computer without a Local row
- * must not wear it.
- */
-function hostKindTag(host: HostScopeOption): string {
-  if (host.isLocalMachine) return "This computer";
-  return host.sandbox === null ? "Remote" : "Sandbox";
-}
-
-function capitalizeWord(word: string): string {
-  return word.length === 0 ? word : word[0].toUpperCase() + word.slice(1);
 }

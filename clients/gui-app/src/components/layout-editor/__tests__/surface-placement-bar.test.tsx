@@ -83,13 +83,12 @@ async function pressAndHoldArrowKey(
   fireEvent.keyUp(target, { key, code: key });
 }
 
-/** The shipped strip is vertical; this is the other placement. */
-function withTopTabs(): void {
+function withVerticalStrip(): void {
   useLayoutStore.setState({
     ...DEFAULT_LAYOUT_SNAPSHOT,
     arrangement: {
       ...DEFAULT_LAYOUT_SNAPSHOT.arrangement,
-      tabStripPlacement: "top",
+      tabStripPlacement: "left",
     },
   });
 }
@@ -150,7 +149,7 @@ describe("<SurfacePlacementBar />", () => {
     expect(
       Array.from(options).map((option) => option.getAttribute("aria-label")),
     ).toEqual(["Top", "Left", "Right"]);
-    expect(pictogram("Left").getAttribute("aria-checked")).toBe("true");
+    expect(pictogram("Top").getAttribute("aria-checked")).toBe("true");
   });
 
   it("draws the sidebar's Left / Right pictograms", () => {
@@ -171,17 +170,17 @@ describe("<SurfacePlacementBar />", () => {
   describe.each([
     {
       surface: "topBar" as const,
-      label: "Top",
+      label: "Left",
       field: "tabStripPlacement" as const,
-      value: "top" as const,
-      revert: "left" as const,
+      value: "left" as const,
+      revert: "top" as const,
     },
     {
       surface: "topBar" as const,
       label: "Right",
       field: "tabStripPlacement" as const,
       value: "right" as const,
-      revert: "left" as const,
+      revert: "top" as const,
     },
     {
       surface: "sidebar" as const,
@@ -210,7 +209,7 @@ describe("<SurfacePlacementBar />", () => {
   );
 
   describe.each([
-    { surface: "topBar" as const, label: "Left" },
+    { surface: "topBar" as const, label: "Top" },
     { surface: "sidebar" as const, label: "Left" },
   ])(
     "clicking the already-checked $label on the $surface bar",
@@ -244,9 +243,9 @@ describe("<SurfacePlacementBar />", () => {
         );
       });
 
-      expect(document.activeElement).toBe(pictogram("Left"));
-      expect(pictogram("Left").getAttribute("tabindex")).toBe("0");
-      expect(pictogram("Top").getAttribute("tabindex")).toBe("-1");
+      expect(document.activeElement).toBe(pictogram("Top"));
+      expect(pictogram("Top").getAttribute("tabindex")).toBe("0");
+      expect(pictogram("Left").getAttribute("tabindex")).toBe("-1");
       expect(pictogram("Right").getAttribute("tabindex")).toBe("-1");
     });
 
@@ -255,13 +254,13 @@ describe("<SurfacePlacementBar />", () => {
       selectSurfaceWithNode("topBar");
       render(<SurfacePlacementBar />);
 
-      pictogram("Left").focus();
-      await pressAndHoldArrowKey(pictogram("Left"), "ArrowRight");
+      pictogram("Top").focus();
+      await pressAndHoldArrowKey(pictogram("Top"), "ArrowRight");
 
-      expect(document.activeElement).toBe(pictogram("Right"));
-      expect(pictogram("Right").getAttribute("aria-checked")).toBe("true");
+      expect(document.activeElement).toBe(pictogram("Left"));
+      expect(pictogram("Left").getAttribute("aria-checked")).toBe("true");
       expect(useLayoutStore.getState().arrangement.tabStripPlacement).toBe(
-        "right",
+        "left",
       );
       expect(historyDepth()).toBe(1);
     });
@@ -322,7 +321,6 @@ describe("<SurfacePlacementBar />", () => {
 
 describe("the tab strip bar's View pair", () => {
   it("is absent while the strip is at the top", () => {
-    withTopTabs();
     beginSession();
     selectSurfaceWithNode("topBar");
 
@@ -331,7 +329,8 @@ describe("the tab strip bar's View pair", () => {
     expect(screen.queryByRole("radiogroup", { name: "Tabs view" })).toBeNull();
   });
 
-  it("is present while the strip is vertical, the shipped placement", () => {
+  it("is present once the strip is vertical", () => {
+    withVerticalStrip();
     beginSession();
     selectSurfaceWithNode("topBar");
 
@@ -347,6 +346,7 @@ describe("the tab strip bar's View pair", () => {
   });
 
   it("is never drawn on the sidebar's bar, even with a vertical strip", () => {
+    withVerticalStrip();
     beginSession();
     selectSurfaceWithNode("sidebar");
 
@@ -362,6 +362,7 @@ describe("the tab strip bar's View pair", () => {
   // context in which the surface's own row is available while the View row
   // alone is not: both rows are gated by the identical availability check.
   it("is absent, with the whole bar, when the availability context says unavailable", () => {
+    withVerticalStrip();
     setMobileApp(true);
     beginSession();
     selectSurfaceWithNode("topBar");
@@ -372,6 +373,7 @@ describe("the tab strip bar's View pair", () => {
   });
 
   it("writes sideStripView as one recorded gesture, and undo restores it", () => {
+    withVerticalStrip();
     beginSession();
     selectSurfaceWithNode("topBar");
     render(<SurfacePlacementBar />);

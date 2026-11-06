@@ -8,7 +8,11 @@ import {
   within,
 } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { HOST_SANDBOX_STATES } from "@traycer/protocol/host/host-status";
+import {
+  HOST_FROZEN_WORD,
+  HOST_SANDBOX_STATES,
+  hostSandboxStateWord,
+} from "@traycer/protocol/host/host-status";
 import type { HostListItem } from "@traycer/protocol/host/host-status";
 import type { SandboxEgressEvent } from "@traycer/protocol/host/sandbox-egress";
 import type {
@@ -284,9 +288,9 @@ describe("<SandboxCard /> per state", () => {
       const card = screen.getByTestId("sandbox-card");
       expect(card.getAttribute("data-state")).toBe(state);
       expect(card.getAttribute("data-frozen")).toBe("false");
-      expect(
-        screen.getByTestId("sandbox-card-state").textContent.toLowerCase(),
-      ).toBe(state);
+      expect(screen.getByTestId("sandbox-card-state").textContent).toBe(
+        hostSandboxStateWord(state),
+      );
       seenLines.add(screen.getByTestId("sandbox-card-state-line").textContent);
       expect(actionTestIds()).toEqual(
         ACTIONS[state].map((action) => `sandbox-card-${action}`),
@@ -297,7 +301,7 @@ describe("<SandboxCard /> per state", () => {
     expect(seenLines.size).toBe(HOST_SANDBOX_STATES.length);
   });
 
-  it("shows a frozen row the frozen line, a Frozen badge and Destroy alone", () => {
+  it("shows a suspended state, a separate Out of credits badge and Destroy alone for a frozen row", () => {
     renderCard(
       sandboxOf("suspended", true, {
         frozenAt: new Date(2026, 9, 9, 12).getTime(),
@@ -306,9 +310,12 @@ describe("<SandboxCard /> per state", () => {
     expect(screen.getByTestId("sandbox-card").getAttribute("data-frozen")).toBe(
       "true",
     );
-    expect(screen.getByTestId("sandbox-card-state").textContent).toBe("Frozen");
+    expect(screen.getByTestId("sandbox-card-state").textContent).toBe(
+      "Suspended",
+    );
+    expect(screen.getByText(HOST_FROZEN_WORD, { exact: true })).toBeTruthy();
     expect(screen.getByTestId("sandbox-card-state-line").textContent).toMatch(
-      /^Frozen: out of credits\. Top up to resume\. Destroyed on /,
+      /^Out of credits\. Top up to resume\. Destroyed on /,
     );
     expect(actionTestIds()).toEqual(["sandbox-card-destroy"]);
   });
@@ -358,7 +365,7 @@ describe("<SandboxCard /> per state", () => {
     // The server sent no label for "eu-west": the raw id is not shown.
     expect(screen.queryByTestId("sandbox-card-region")).toBeNull();
     expect(screen.getByTestId("sandbox-card-rate").textContent).toBe(
-      "$0.12 an hour while awake · under $0.01 an hour while resting",
+      "$0.12 an hour while awake · under $0.01 an hour while suspended or stopped",
     );
     expect(screen.getByTestId("sandbox-card-idle").textContent).toBe(
       "Destroyed after 2 h idle",
@@ -677,9 +684,10 @@ describe("<SandboxCard /> facts as the scope resolves them", () => {
     expect(screen.getByTestId("sandbox-card").getAttribute("data-frozen")).toBe(
       "false",
     );
-    expect(screen.getByTestId("sandbox-card-state").textContent).not.toBe(
-      "Frozen",
+    expect(screen.getByTestId("sandbox-card-state").textContent).toBe(
+      "Suspended",
     );
+    expect(screen.queryByText(HOST_FROZEN_WORD, { exact: true })).toBeNull();
     expect(
       screen.getByTestId("sandbox-card-state-line").textContent,
     ).not.toMatch(/^Frozen/);
@@ -701,9 +709,12 @@ describe("<SandboxCard /> facts as the scope resolves them", () => {
     expect(screen.getByTestId("sandbox-card").getAttribute("data-frozen")).toBe(
       "true",
     );
-    expect(screen.getByTestId("sandbox-card-state").textContent).toBe("Frozen");
+    expect(screen.getByTestId("sandbox-card-state").textContent).toBe(
+      "Suspended",
+    );
+    expect(screen.getByText(HOST_FROZEN_WORD, { exact: true })).toBeTruthy();
     expect(screen.getByTestId("sandbox-card-state-line").textContent).toMatch(
-      /^Frozen: out of credits/,
+      /^Out of credits/,
     );
     expect(actionTestIds()).toEqual(["sandbox-card-destroy"]);
   });
@@ -719,7 +730,10 @@ describe("<SandboxCard /> facts as the scope resolves them", () => {
     expect(screen.getByTestId("sandbox-card").getAttribute("data-frozen")).toBe(
       "true",
     );
-    expect(screen.getByTestId("sandbox-card-state").textContent).toBe("Frozen");
+    expect(screen.getByTestId("sandbox-card-state").textContent).toBe(
+      "Suspended",
+    );
+    expect(screen.getByText(HOST_FROZEN_WORD, { exact: true })).toBeTruthy();
     expect(actionTestIds()).toEqual(["sandbox-card-destroy"]);
   });
 });
