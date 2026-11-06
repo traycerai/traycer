@@ -25,10 +25,9 @@ import { resolveCloneSourceOwnerUserId } from "@/hooks/chats/use-clone-source-ow
 import { Analytics, AnalyticsEvent } from "@/lib/analytics";
 
 /**
- * D-series cross-host clone edges (durability audit): "target host with
- * empty profiles[] (flag off) and transient-client failure mid-mapping -
- * resolve-cloned-chat-settings must fall back to ambient + notice, never
- * throw unhandled."
+ * Cross-host clone edges: an empty target catalog refuses the inherited
+ * account instead of substituting ambient, while a target read failure stays
+ * a distinct retryable catalog error.
  *
  * `resolve-cloned-chat-settings.test.ts` already adversarially covers most
  * of `resolveClonedChatSettings` in isolation (unreachable source, no
@@ -73,6 +72,19 @@ function profile(
     },
     identity:
       accountUuid === null ? null : { email: null, tier: null, accountUuid },
+    ...(accountUuid === null
+      ? {}
+      : {
+          credentialIdentity: {
+            kind: "spend-scoped" as const,
+            spendScopeKey: {
+              providerId: "claude-code",
+              accountId: accountUuid,
+              organizationId: null,
+            },
+            provenance: "synthetic-test",
+          },
+        }),
     usageUpdatedAt: null,
     rateLimitStatus: "unknown",
     rateLimitLimitedScopes: null,
@@ -155,7 +167,7 @@ function buildClient(
 }
 
 describe("resolveClonedChatSettings: additional adversarial edges", () => {
-  it("requires profile selection when the TARGET host has genuinely empty profiles[] (flag-off host), never throws", async () => {
+  it("requires selection when the target has no matching profile, rather than substituting ambient", async () => {
     const sourceClient = buildClient("source-host", () => ({
       providers: [
         claudeState([profile("source-work-uuid", "managed", "Work", "acct-1")]),
@@ -177,7 +189,7 @@ describe("resolveClonedChatSettings: additional adversarial edges", () => {
     expect(result).toEqual({
       status: "profile-selection-required",
       providerId: "claude-code",
-      reason: "no-enabled-terminal-fallback",
+      reason: "not-on-destination",
       matchedProfileId: null,
       targetProfiles: [],
     });
@@ -399,6 +411,14 @@ describe("cloneChatOnHostSwitch: orchestration edges (previously untested)", () 
     const ambientSettings: ChatRunSettings = {
       ...BASE_SETTINGS,
       profileId: null,
+      profileBinding: {
+        kind: "key",
+        key: {
+          providerId: "claude-code",
+          accountId: "acct-9",
+          organizationId: null,
+        },
+      },
     };
     const directory = fakeDirectory([
       {

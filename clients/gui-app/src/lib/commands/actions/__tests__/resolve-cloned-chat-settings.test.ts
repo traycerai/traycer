@@ -32,6 +32,16 @@ const BASE_SETTINGS: ChatRunSettings = {
   profileId: null,
 };
 
+const AMBIENT_PROFILE_BINDING: NonNullable<ChatRunSettings["profileBinding"]> =
+  {
+    kind: "key",
+    key: {
+      providerId: "claude-code",
+      accountId: "acct-9",
+      organizationId: null,
+    },
+  };
+
 function profile(
   profileId: string,
   kind: "ambient" | "managed",
@@ -39,7 +49,11 @@ function profile(
   account:
     | string
     | null
-    | { readonly accountUuid: string | null; readonly enabled: boolean },
+    | {
+        readonly accountUuid: string | null;
+        readonly enabled: boolean;
+        readonly displayEmail: string | null;
+      },
 ): ProviderProfile {
   const accountUuid =
     typeof account === "object" && account !== null
@@ -47,6 +61,10 @@ function profile(
       : account;
   const enabled =
     typeof account === "object" && account !== null ? account.enabled : true;
+  const displayEmail =
+    typeof account === "object" && account !== null
+      ? account.displayEmail
+      : null;
   return {
     profileId,
     enabled,
@@ -60,7 +78,22 @@ function profile(
       detail: null,
     },
     identity:
-      accountUuid === null ? null : { email: null, tier: null, accountUuid },
+      accountUuid === null
+        ? null
+        : { email: displayEmail, tier: null, accountUuid },
+    ...(accountUuid === null
+      ? {}
+      : {
+          credentialIdentity: {
+            kind: "spend-scoped" as const,
+            spendScopeKey: {
+              providerId: "claude-code",
+              accountId: accountUuid,
+              organizationId: null,
+            },
+            provenance: "synthetic-test",
+          },
+        }),
     usageUpdatedAt: null,
     rateLimitStatus: "unknown",
     rateLimitLimitedScopes: null,
@@ -142,6 +175,16 @@ function buildClient(
   profiles: ProviderProfile[] | null,
   harnesses: ReadonlyArray<GuiHarnessOption> | null,
 ): HostClient<HostRpcRegistry> {
+  return buildClientWithProviderState(
+    profiles === null ? null : claudeState(profiles),
+    harnesses,
+  );
+}
+
+function buildClientWithProviderState(
+  providerState: ProviderCliState | null,
+  harnesses: ReadonlyArray<GuiHarnessOption> | null,
+): HostClient<HostRpcRegistry> {
   const spine = new HostClient<HostRpcRegistry>({
     registry: hostRpcRegistry,
     invalidator: { invalidateHostScope: () => {} },
@@ -151,11 +194,11 @@ function buildClient(
       registry: hostRpcRegistry,
       requestId: () => "req-1",
       handlers: {
-        ...(profiles === null
+        ...(providerState === null
           ? {}
           : {
               "providers.list": () => ({
-                providers: [claudeState(profiles)],
+                providers: [providerState],
                 native: null,
               }),
             }),
@@ -180,35 +223,83 @@ describe("resolveClonedChatSettings", () => {
     resetNegotiatedManifests();
   });
 
-  it("passes ambient settings through untouched when Terminal is enabled", async () => {
-    const sourceClient = buildClient([], []);
+  it("preserves an ambient selection when its carried key matches the target", async () => {
+    const ambientKey = {
+      providerId: "claude-code",
+      accountId: "acct-9",
+      organizationId: null,
+    } as const;
+    const sourceSettings = {
+      ...BASE_SETTINGS,
+      profileBinding: { kind: "key" as const, key: ambientKey },
+    };
     const targetClient = buildClient(
       [profile("ambient", "ambient", "Terminal account", "acct-9")],
       [],
     );
     const result = await resolveClonedChatSettings({
-      sourceSettings: BASE_SETTINGS,
-      sourceClient,
+      sourceSettings,
+      sourceClient: null,
       targetClient,
       explicitTargetProfileId: null,
     });
     expect(result).toEqual({
       status: "ready",
-      settings: BASE_SETTINGS,
+      settings: sourceSettings,
       fallenBackToAmbient: false,
     });
   });
 
-  it("maps the source profile to the target's matching profile by accountUuid", async () => {
+  it("keeps the enabled ambient OpenCode selection for a profileless clone", async () => {
+    const sourceSettings: ChatRunSettings = {
+      ...BASE_SETTINGS,
+      harnessId: "opencode",
+      profileId: null,
+    };
+    const targetClient = buildClientWithProviderState(
+      {
+        ...claudeState([profile("ambient", "ambient", "OpenCode", null)]),
+        providerId: "opencode",
+      },
+      [],
+    );
+    const result = await resolveClonedChatSettings({
+      sourceSettings,
+      sourceClient: null,
+      targetClient,
+      explicitTargetProfileId: null,
+    });
+
+    if (result.status === "ready") {
+      expect(result.settings).toBe(sourceSettings);
+    }
+    expect(result).toEqual({
+      status: "ready",
+      settings: sourceSettings,
+      fallenBackToAmbient: false,
+    });
+  });
+
+  it("matches legacy profiles by account key when their display emails differ", async () => {
     const sourceSettings = { ...BASE_SETTINGS, profileId: "source-work-uuid" };
     const sourceClient = buildClient(
-      [profile("source-work-uuid", "managed", "Work", "acct-1")],
+      [
+        profile("source-work-uuid", "managed", "Work", {
+          accountUuid: "acct-1",
+          enabled: true,
+          displayEmail: "old-address@example.test",
+        }),
+      ],
       [],
     );
     const targetClient = buildClient(
       [
         profile("ambient", "ambient", "Terminal account", "acct-9"),
-        profile("target-work-uuid", "managed", "Work", "acct-1"),
+        profile("target-work-uuid", "managed", "Work", {
+          accountUuid: "acct-1",
+          enabled: true,
+          displayEmail: "new-address@example.test",
+        }),
       ],
       [],
     );
@@ -220,7 +311,18 @@ describe("resolveClonedChatSettings", () => {
     });
     expect(result).toEqual({
       status: "ready",
-      settings: { ...sourceSettings, profileId: "target-work-uuid" },
+      settings: {
+        ...sourceSettings,
+        profileId: "target-work-uuid",
+        profileBinding: {
+          kind: "key",
+          key: {
+            providerId: "claude-code",
+            accountId: "acct-1",
+            organizationId: null,
+          },
+        },
+      },
       fallenBackToAmbient: false,
     });
   });
@@ -236,6 +338,7 @@ describe("resolveClonedChatSettings", () => {
       profile("target-work-uuid", "managed", "Work", {
         accountUuid: "acct-1",
         enabled: false,
+        displayEmail: null,
       }),
     ];
     const targetClient = buildClient(targetProfiles, []);
@@ -270,7 +373,18 @@ describe("resolveClonedChatSettings", () => {
 
     expect(result).toEqual({
       status: "ready",
-      settings: { ...sourceSettings, profileId: "target-work-uuid" },
+      settings: {
+        ...sourceSettings,
+        profileId: "target-work-uuid",
+        profileBinding: {
+          kind: "key",
+          key: {
+            providerId: "claude-code",
+            accountId: "acct-1",
+            organizationId: null,
+          },
+        },
+      },
       fallenBackToAmbient: false,
     });
   });
@@ -296,7 +410,7 @@ describe("resolveClonedChatSettings", () => {
     });
   });
 
-  it("falls back to ambient when the source host is unreachable (null client)", async () => {
+  it("requires profile selection when a legacy source is unreachable", async () => {
     const sourceSettings = { ...BASE_SETTINGS, profileId: "source-work-uuid" };
     const targetClient = buildClient(
       [
@@ -312,22 +426,84 @@ describe("resolveClonedChatSettings", () => {
       explicitTargetProfileId: null,
     });
     expect(result).toEqual({
-      status: "ready",
-      settings: { ...sourceSettings, profileId: null },
-      fallenBackToAmbient: true,
+      status: "profile-selection-required",
+      providerId: "claude-code",
+      reason: "source-unidentified",
+      matchedProfileId: null,
+      targetProfiles: [
+        profile("ambient", "ambient", "Terminal account", "acct-9"),
+        profile("target-work-uuid", "managed", "Work", "acct-1"),
+      ],
     });
   });
 
-  it("falls back to Terminal when no identity matches and Terminal is enabled", async () => {
+  it("does not live-query a legacy source once it is explicitly marked unidentified", async () => {
+    const sourceSettings = {
+      ...BASE_SETTINGS,
+      profileId: "source-work-uuid",
+      profileBinding: { kind: "source-unidentified" as const },
+    };
+    const sourceMessenger = new MockHostMessenger<HostRpcRegistry>({
+      registry: hostRpcRegistry,
+      requestId: () => "source-unidentified",
+      handlers: {
+        "providers.list": () => ({
+          providers: [
+            claudeState([
+              profile("source-work-uuid", "managed", "Work", "acct-1"),
+            ]),
+          ],
+          native: null,
+        }),
+      },
+    });
+    const sourceSpine = new HostClient<HostRpcRegistry>({
+      registry: hostRpcRegistry,
+      invalidator: { invalidateHostScope: () => {} },
+      findHostById: (hostId) =>
+        hostId === mockLocalHostEntry.hostId ? mockLocalHostEntry : null,
+      messenger: sourceMessenger,
+    });
+    sourceSpine.setRequestContext(
+      createRequestContextFixture({ origin: "renderer", bearerToken: "tok-1" }),
+    );
+    const result = await resolveClonedChatSettings({
+      sourceSettings,
+      sourceClient: sourceSpine.createRequester(mockLocalHostEntry),
+      targetClient: buildClient(
+        [profile("target-work", "managed", "Work", "acct-1")],
+        [],
+      ),
+      explicitTargetProfileId: null,
+    });
+
+    expect(result).toMatchObject({
+      status: "profile-selection-required",
+      reason: "source-unidentified",
+    });
+    expect(sourceMessenger.calls).toHaveLength(0);
+  });
+
+  it("requires selection when another account has the same display email", async () => {
     const sourceSettings = { ...BASE_SETTINGS, profileId: "source-work-uuid" };
     const sourceClient = buildClient(
-      [profile("source-work-uuid", "managed", "Work", "acct-1")],
+      [
+        profile("source-work-uuid", "managed", "Work", {
+          accountUuid: "acct-1",
+          enabled: true,
+          displayEmail: "shared-address@example.test",
+        }),
+      ],
       [],
     );
-    const targetClient = buildClient(
-      [profile("ambient", "ambient", "Terminal account", "acct-9")],
-      [],
-    );
+    const targetProfiles = [
+      profile("destination-work", "managed", "Work", {
+        accountUuid: "acct-9",
+        enabled: true,
+        displayEmail: "shared-address@example.test",
+      }),
+    ];
+    const targetClient = buildClient(targetProfiles, []);
     const result = await resolveClonedChatSettings({
       sourceSettings,
       sourceClient,
@@ -335,9 +511,11 @@ describe("resolveClonedChatSettings", () => {
       explicitTargetProfileId: null,
     });
     expect(result).toEqual({
-      status: "ready",
-      settings: { ...sourceSettings, profileId: null },
-      fallenBackToAmbient: true,
+      status: "profile-selection-required",
+      providerId: "claude-code",
+      reason: "not-on-destination",
+      matchedProfileId: null,
+      targetProfiles,
     });
   });
 
@@ -360,7 +538,7 @@ describe("resolveClonedChatSettings", () => {
     expect(result).toEqual({
       status: "profile-selection-required",
       providerId: "claude-code",
-      reason: "no-enabled-terminal-fallback",
+      reason: "source-unidentified",
       matchedProfileId: null,
       targetProfiles: [
         profile("target-work-uuid", "managed", "Work", "acct-1"),
@@ -403,6 +581,7 @@ describe("resolveClonedChatSettings clamps auto against the target catalog", () 
   const autoSourceSettings: ChatRunSettings = {
     ...BASE_SETTINGS,
     permissionMode: "auto",
+    profileBinding: AMBIENT_PROFILE_BINDING,
   };
 
   // The defect: an `auto` source chat cloned onto a host with no `auto`
@@ -663,6 +842,7 @@ describe("resolveClonedChatSettings clamps auto against the target catalog", () 
     const supervisedSourceSettings: ChatRunSettings = {
       ...BASE_SETTINGS,
       permissionMode: "supervised",
+      profileBinding: AMBIENT_PROFILE_BINDING,
     };
 
     const result = await resolveClonedChatSettings({
@@ -695,6 +875,7 @@ describe("resolveClonedChatSettings refuses when no rung of the demotion chain f
   const autoSourceSettings: ChatRunSettings = {
     ...BASE_SETTINGS,
     permissionMode: "auto",
+    profileBinding: AMBIENT_PROFILE_BINDING,
   };
 
   // 1a: neither `auto` nor its fallback `auto_accept_edits` fits the target
@@ -802,6 +983,7 @@ describe("resolveClonedChatSettings refuses when no rung of the demotion chain f
     const supervisedSourceSettings: ChatRunSettings = {
       ...BASE_SETTINGS,
       permissionMode: "supervised",
+      profileBinding: AMBIENT_PROFILE_BINDING,
     };
 
     const result = await resolveClonedChatSettings({

@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { profileBindingSchema } from "../../host/provider-profile-inheritance";
 import {
   DEFAULT_AGENT_MODE,
   agentModeSchema,
@@ -359,6 +360,8 @@ export const chatRunSettingsSchema = lazySchema(() =>
     // on. `null` = the ambient/host login, so chats persisted before profiles
     // existed still parse cleanly. See the multi-profile decision log.
     profileId: z.string().nullable().default(null),
+    // Portable binding; absent on legacy or unidentified local selections.
+    profileBinding: profileBindingSchema.optional(),
     ultracode: z.boolean().default(false),
   }),
 );
@@ -563,6 +566,8 @@ export const chatRunSettingsStrictSchema = lazySchema(() =>
     serviceTier: z.string().nullable(),
     agentMode: agentModeSchema,
     profileId: z.string().nullable(),
+    // Portable binding; absent on legacy or unidentified local selections.
+    profileBinding: profileBindingSchema.optional(),
     ultracode: z.boolean(),
   }),
 );
