@@ -10,6 +10,7 @@ export const AQUILO_1: VariableTrack = {
     {
       name: "A",
       variants: 1,
+      role: null,
       sublayers: 1,
       sublayerStartingOffset: null,
       pan: null,
@@ -17,6 +18,7 @@ export const AQUILO_1: VariableTrack = {
     {
       name: "B",
       variants: 4,
+      role: "pad",
       sublayers: 1,
       sublayerStartingOffset: null,
       pan: null,
@@ -24,6 +26,7 @@ export const AQUILO_1: VariableTrack = {
     {
       name: "C",
       variants: 16,
+      role: "motif",
       sublayers: 2,
       sublayerStartingOffset: [10, 15],
       pan: null,
@@ -31,6 +34,7 @@ export const AQUILO_1: VariableTrack = {
     {
       name: "D",
       variants: 8,
+      role: "texture",
       sublayers: 1,
       sublayerStartingOffset: null,
       pan: null,

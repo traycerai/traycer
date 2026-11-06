@@ -185,6 +185,7 @@ describe("ManifestStemSource", () => {
         { name: "EA2", variants: 2 },
       ],
       sequence: ["EA1", "EA2"],
+      role: null,
       sublayers: 1,
       sublayerStartingOffset: null,
       pan: null,
@@ -435,7 +436,12 @@ describe("a refusal that lands after another stem's re-ask", () => {
 });
 
 describe("distinct stems", () => {
-  const base = { sublayers: 1, sublayerStartingOffset: null, pan: null };
+  const base = {
+    role: null,
+    sublayers: 1,
+    sublayerStartingOffset: null,
+    pan: null,
+  };
 
   it("do not share a cache entry across the groups of a layer", async () => {
     const fetched = stubFetch(() => 200);

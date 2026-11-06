@@ -30,6 +30,7 @@ const GROUPED: VariableTrack = {
         { name: "y", variants: 1 },
       ],
       sequence: ["x", "y"],
+      role: null,
       sublayers: 1,
       sublayerStartingOffset: null,
       pan: null,

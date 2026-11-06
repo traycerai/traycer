@@ -15,9 +15,11 @@ import { AppColumnFrame } from "@/components/layout/app-column-frame";
 import { AppHeader } from "@/components/layout/header/app-header";
 import {
   appColumnChrome,
+  sideStripOwnsTitleBar,
   type AppColumnChromeInput,
 } from "@/components/layout/header/app-title-band-kind";
-import { SoundtrackColumnTopRow } from "@/components/layout/soundtrack/soundtrack-top-row";
+import { SideTabStrip } from "@/components/layout/tabs/side-strip/side-tab-strip";
+import { RootDndProvider } from "@/components/epic-canvas/dnd/root-dnd-provider";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import {
   HostRuntimeProvider,
@@ -25,7 +27,10 @@ import {
   type HostRpcRegistry,
   type MessengerFactory,
 } from "@/lib/host";
-import type { TabStripPlacement } from "@/lib/layout/layout-arrangement";
+import {
+  sideTabStripEdge,
+  type TabStripPlacement,
+} from "@/lib/layout/layout-arrangement";
 import { RunnerHostProvider } from "@/providers/runner-host-provider";
 import { WindowsBridgeContext } from "@/providers/windows-bridge-context";
 import { useAuthStore } from "@/stores/auth/auth-store";
@@ -37,20 +42,16 @@ import "@/lib/theme-applier";
 import "@/index.css";
 
 /**
- * The real column frame, header and soundtrack row, because where the
- * soundtrack's toggle lands is a layout claim jsdom cannot decide.
- * `?placement=top|left|right` picks the placement and `?wco=mac|win` stands in
- * for the frameless desktop preload, as `sheet-shell-guest-clip.tsx` does: the
- * real `appColumnChrome()` then decides the title band. `?account=1` signs in,
- * which draws the bell and the user menu. Until
- * `__soundtrackTopRowProbe.openTabs` the tab strip is empty;
- * `__soundtrackTopRowProbe.fillTabs` stands in for tabs of a given natural
- * width.
+ * The real column frame, header and side tab strip, because where the content
+ * column starts is a layout claim jsdom cannot decide. `?placement=top|left|right`
+ * picks the placement and `?wco=mac|win` stands in for the frameless desktop
+ * preload, as `sheet-shell-guest-clip.tsx` does: the real `appColumnChrome()`
+ * then decides the title band. `?account=1` signs in, which draws the bell and
+ * the user menu. Until `__appColumnTopProbe.openTabs` the tab strip is empty.
  */
 declare global {
   interface Window {
-    __soundtrackTopRowProbe?: {
-      readonly fillTabs: (width: number) => void;
+    __appColumnTopProbe?: {
       readonly openTabs: (count: number) => void;
     };
   }
@@ -62,6 +63,7 @@ const PLACEMENT: TabStripPlacement =
   placementParam === "left" || placementParam === "right"
     ? placementParam
     : "top";
+const STRIP_EDGE = sideTabStripEdge(PLACEMENT);
 const WCO = search.get("wco");
 const FRAMELESS = WCO === "mac" || WCO === "win";
 const PLATFORM = WCO === "win" ? "win32" : "darwin";
@@ -95,6 +97,19 @@ if (FRAMELESS) {
   document.documentElement.classList.add("wco");
 }
 
+if (WCO === "win") {
+  // Windows resolves the leading inset to 0, but plain Chrome falls back to
+  // macOS's 82px. `env(titlebar-area-*)` also cannot resolve outside an
+  // installed window-controls-overlay app, so a stylesheet stands in for what
+  // `WINDOW_TRAILING_INSET_CLASS` resolves to under Windows' three 46px caption
+  // buttons: 138px plus the 12px gutter.
+  document.documentElement.style.setProperty("--window-leading-inset", "0px");
+  const caption = document.createElement("style");
+  caption.textContent =
+    'html.wco [data-testid="app-header"] { padding-right: 150px; }';
+  document.head.append(caption);
+}
+
 if (search.get("account") === "1") {
   useAuthStore.getState().setSignedIn(
     {
@@ -119,7 +134,7 @@ let requestCounter = 0;
 const messengerFactory: MessengerFactory<HostRpcRegistry> = ({ registry }) =>
   new MockHostMessenger<HostRpcRegistry>({
     registry,
-    requestId: () => `soundtrack-top-row-${String(++requestCounter)}`,
+    requestId: () => `app-column-top-${String(++requestCounter)}`,
     handlers: {
       "host.status": () => ({
         ready: true,
@@ -148,18 +163,7 @@ const messengerFactory: MessengerFactory<HostRpcRegistry> = ({ registry }) =>
     },
   });
 
-window.__soundtrackTopRowProbe = {
-  fillTabs: (width) => {
-    const box = document.querySelector(
-      "[data-testid='app-header-centre-gap']",
-    )?.previousElementSibling;
-    if (box === null || box === undefined) throw new Error("no centre zone");
-    const tabs = document.createElement("div");
-    tabs.dataset.fixtureTabs = "";
-    tabs.style.width = `${String(width)}px`;
-    tabs.style.flex = "0 1 auto";
-    box.append(tabs);
-  },
+window.__appColumnTopProbe = {
   openTabs: (count) => {
     const refs: TabRef[] = [];
     for (let index = 0; index < count; index += 1) {
@@ -184,21 +188,25 @@ window.__soundtrackTopRowProbe = {
 
 export function Fixture(): ReactNode {
   return (
-    <AppColumnFrame
-      {...CHROME}
-      columnRef={() => undefined}
-      header={<AppHeader variant="app" />}
-      soundtrackTopRow={
-        CHROME.titleBand === "header" ? null : (
-          <SoundtrackColumnTopRow titleBand={CHROME.titleBand} />
-        )
-      }
-      strip={<nav data-fixture-strip className="w-60 shrink-0" />}
-      banners={null}
-      surface={<div data-fixture-surface className="size-full" />}
-      mainTail={null}
-      tail={null}
-    />
+    <RootDndProvider>
+      <AppColumnFrame
+        {...CHROME}
+        columnRef={() => undefined}
+        header={<AppHeader variant="app" />}
+        strip={
+          STRIP_EDGE === null ? null : (
+            <SideTabStrip
+              edge={STRIP_EDGE}
+              ownsTitleBar={sideStripOwnsTitleBar(CHROME_INPUT)}
+            />
+          )
+        }
+        banners={null}
+        surface={<div data-fixture-surface className="size-full" />}
+        mainTail={null}
+        tail={null}
+      />
+    </RootDndProvider>
   );
 }
 

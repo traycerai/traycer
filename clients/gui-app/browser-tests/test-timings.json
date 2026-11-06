@@ -88,7 +88,7 @@
   "browser-tests/side-strip-split-pairs.spec.ts": 21.9,
   "browser-tests/sign-in-theme-contrast.spec.ts": 113.7,
   "browser-tests/soundtrack-output.spec.ts": 2.3,
-  "browser-tests/soundtrack-top-row.spec.ts": 66.4,
+  "browser-tests/app-column-top.spec.ts": 91.3,
   "browser-tests/status-bar-usage-scroll.spec.ts": 10.1,
   "browser-tests/strip-drop-intent.spec.ts": 42.4,
   "browser-tests/strip-selection-travel.spec.ts": 8.7,

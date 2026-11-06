@@ -922,8 +922,8 @@ export const ACTION_META: Readonly<Record<ActionId, ActionMeta>> = {
     description: "Play or stop the soundtrack.",
     category: "app",
     kind: "chord",
-    // Unbound by default: the control is always in the top row, so it earns a
-    // palette row rather than one of the few chords left.
+    // Unbound by default: it is a setting, in Sounds, so it earns a palette
+    // row rather than one of the few chords left.
     defaultChord: null,
     secondaryChord: undefined,
     terminalPolicy: "app",

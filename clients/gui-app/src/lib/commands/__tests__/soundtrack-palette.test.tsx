@@ -4,7 +4,7 @@
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { cleanup, render, renderHook } from "@testing-library/react";
-import { SoundtrackShortcutBridge } from "@/components/layout/soundtrack/soundtrack-control";
+import { SoundtrackShortcutBridge } from "@/components/layout/bridges/soundtrack-shortcut-bridge";
 import { actionsSource } from "@/lib/commands/sources/actions.source";
 import { runCommandItem } from "@/lib/commands/dispatch";
 import type { CommandContext, CommandItem } from "@/lib/commands/types";
