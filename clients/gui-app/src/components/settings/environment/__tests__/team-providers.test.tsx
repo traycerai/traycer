@@ -25,6 +25,10 @@ import {
   requireTeamHostClient,
   resetTeamPageHarness,
 } from "./team-configuration-test-support";
+import {
+  RETIRED_PROVIDER_VARIABLES,
+  RETIRED_SECRET_ROW_FIELDS,
+} from "@traycer/protocol/host/released-wire-rows";
 
 vi.mock("@/lib/host", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/lib/host")>()),
@@ -170,7 +174,8 @@ describe("TeamProviders items", () => {
             kind: "provider",
             protocol: null,
             destinations: [],
-            state: "live",
+            ...RETIRED_SECRET_ROW_FIELDS,
+            providerVariables: [...RETIRED_PROVIDER_VARIABLES],
             currentVersionId: "v1",
             revoked: false,
             updatedAt: 1,
