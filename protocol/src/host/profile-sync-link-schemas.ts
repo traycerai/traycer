@@ -184,7 +184,10 @@ export function profileSyncCredentialFitsProvider(
 ): boolean {
   switch (providerId) {
     case "claude":
-      return credential.kind === "claude-oauth" || credential.kind === "claude-api-key";
+      return (
+        credential.kind === "claude-oauth" ||
+        credential.kind === "claude-api-key"
+      );
     case "codex":
       return credential.kind === "codex-auth-file";
     case "grok":
