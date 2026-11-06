@@ -366,3 +366,220 @@ describe("TrackPlayer outro", () => {
     expect(player.currentState()).toBeNull();
   });
 });
+
+// TrackPlayer's own LAYER_RAMP_SECONDS, which is not exported.
+const LAYER_RAMP_SECONDS = 1.5;
+
+/** Moves the fake clock to `seconds` on the output's clock. */
+async function advanceTo(output: FakeOutput, seconds: number): Promise<void> {
+  await vi.advanceTimersByTimeAsync(
+    Math.round((seconds - output.currentTime()) * 1000),
+  );
+}
+
+describe("TrackPlayer restart over an outro's fade", () => {
+  // The one 60 s sample starts at 3 s; the 3 s outro goes down at 10 s, so the
+  // layer's gain ramps 1 to 0 until 13.05 s.
+  function fadedPlayer(output: FakeOutput): TrackPlayer {
+    return observedPlayer(
+      output,
+      stemsOfLength(
+        new Map([
+          ["A", 60],
+          ["O", 3],
+        ]),
+      ),
+      buildTrack(1, OUTRO),
+    ).player;
+  }
+
+  function layerCuts(output: FakeOutput) {
+    return output
+      .cuts()
+      .filter((cut) => cut.gain === "bus0/0")
+      .map((cut) => ({ fade: cut.fade, at: cut.at }));
+  }
+
+  it("re-cuts the sample a rewind is still fading and raises the layer over the layer ramp when a start follows at once", async () => {
+    const output = new FakeOutput();
+    const player = fadedPlayer(output);
+    player.start(0, 0.1);
+    await advanceTo(output, 12.9);
+
+    player.rewind(2);
+    const stoppedAt = output.currentTime();
+    player.start(0, 0.1);
+
+    expect(layerCuts(output)).toEqual([
+      { fade: 2, at: stoppedAt },
+      { fade: 0.01, at: stoppedAt },
+    ]);
+    expect(
+      output
+        .ramps("bus0/0")
+        .filter((ramp) => ramp.at >= stoppedAt)
+        .map((ramp) => ({ target: ramp.target, seconds: ramp.seconds })),
+    ).toEqual([{ target: 1, seconds: LAYER_RAMP_SECONDS }]);
+  });
+
+  it("does the same for a stop and a start that resumes inside the old fade", async () => {
+    const output = new FakeOutput();
+    const player = fadedPlayer(output);
+    player.start(0, 0.1);
+    await advanceTo(output, 12.9);
+
+    player.stop(2);
+    const stoppedAt = output.currentTime();
+    await advanceTo(output, 13);
+    const resumedAt = output.currentTime();
+    player.start(player.elapsed(), 0.1);
+
+    expect(layerCuts(output)).toEqual([
+      { fade: 2, at: stoppedAt },
+      { fade: 0.01, at: resumedAt },
+    ]);
+    expect(
+      output
+        .ramps("bus0/0")
+        .filter((ramp) => ramp.at >= resumedAt)
+        .map((ramp) => ({ target: ramp.target, seconds: ramp.seconds })),
+    ).toEqual([{ target: 1, seconds: LAYER_RAMP_SECONDS }]);
+  });
+
+  it("raises the layer over the edge fade, with no second cut, when the old fade is over before the start", async () => {
+    const output = new FakeOutput();
+    const player = fadedPlayer(output);
+    player.start(0, 0.1);
+    await advanceTo(output, 12.9);
+
+    player.rewind(2);
+    await advanceTo(output, 15.5);
+    const startedAt = output.currentTime();
+    player.start(0, 0.1);
+
+    expect(layerCuts(output).map((cut) => cut.fade)).toEqual([2]);
+    expect(
+      output
+        .ramps("bus0/0")
+        .filter((ramp) => ramp.at >= startedAt)
+        .map((ramp) => ({ target: ramp.target, seconds: ramp.seconds })),
+    ).toEqual([{ target: 1, seconds: 0.01 }]);
+  });
+});
+
+describe("TrackPlayer intro due at the length", () => {
+  it("does not start an intro that loads between the last tick before the length and the next, and does not hold the ring-out open", async () => {
+    const output = new FakeOutput();
+    const intro = Promise.withResolvers<AudioBuffer>();
+    const stems: StemSource = {
+      load: (_track, layer) =>
+        layer.name === "I"
+          ? intro.promise
+          : Promise.resolve(makeAudioBuffer(2, 10)),
+    };
+    const track: VariableTrack = {
+      ...buildTrack(1, null),
+      intro: { name: "I", variants: 1, pan: null },
+    };
+    const { player, onRunEnd } = observedPlayer(output, stems, track);
+    player.start(0, 0.1);
+
+    // The ticks fall every 0.12 s: 9.96 s is the last before the length and
+    // 10.08 s the next.
+    await advanceTo(output, 10.06);
+    expect(onRunEnd).not.toHaveBeenCalled();
+    intro.resolve(makeAudioBuffer(2, 10));
+    await advanceTo(output, 10.2);
+
+    expect(onRunEnd).toHaveBeenCalledTimes(1);
+    expect(output.plays("bus0/1")).toEqual([]);
+    expect(output.plays("bus0/0")).toEqual([]);
+  });
+});
+
+describe("TrackPlayer ring-out cap", () => {
+  it("counts from the length, so a tick that comes late does not move it", async () => {
+    const output = new FakeOutput();
+    // The one sample starts at 3 s and lasts 200 s.
+    const { player, onRunEnd } = observedPlayer(
+      output,
+      stemsOfLength(new Map([["A", 200]])),
+      buildTrack(1, null),
+    );
+    player.start(0, 0.1);
+    await advanceTo(output, 9.9);
+    expect(onRunEnd).not.toHaveBeenCalled();
+
+    // The clock jumps to 55 s with no tick between: the cap, 50.05 s, is long
+    // past at the next one.
+    vi.setSystemTime(Date.now() + 45_100);
+    await advance(TICK_SECONDS);
+
+    expect(onRunEnd).toHaveBeenCalledTimes(1);
+    const cuts = output.cuts();
+    expect(cuts.map((cut) => ({ gain: cut.gain, fade: cut.fade }))).toEqual([
+      { gain: "bus0/0", fade: MIX_TUNING.ringOutFadeSeconds },
+    ]);
+    expect(cuts[0].at).toBeGreaterThanOrEqual(55);
+    expect(cuts[0].at).toBeLessThan(55 + 2 * TICK_SECONDS);
+  });
+
+  describe("when the outro will not load", () => {
+    async function rejectedAt(failedAt: number) {
+      vi.spyOn(appLogger, "warn").mockReturnValue(undefined);
+      const output = new FakeOutput();
+      const outro = Promise.withResolvers<AudioBuffer>();
+      // The player asks for the outro only near the length, so a rejection
+      // before that has no one waiting on it yet.
+      outro.promise.catch(() => undefined);
+      const stems: StemSource = {
+        load: (_track, layer) =>
+          layer.name === "O"
+            ? outro.promise
+            : Promise.resolve(makeAudioBuffer(200, 10)),
+      };
+      const { player, onRunEnd } = observedPlayer(
+        output,
+        stems,
+        buildTrack(1, OUTRO),
+      );
+      player.start(0, 0.1);
+      await advanceTo(output, failedAt);
+      outro.reject(new Error("no outro"));
+      return { output, onRunEnd };
+    }
+
+    it("counts from the failure when it falls after the length", async () => {
+      const { output, onRunEnd } = await rejectedAt(20);
+
+      // Not at 50.05 s, which a cap from the length alone would give.
+      await advanceTo(output, 59.9);
+      expect(onRunEnd).not.toHaveBeenCalled();
+      expect(output.cuts()).toEqual([]);
+
+      await advanceTo(output, 60.5);
+      expect(onRunEnd).toHaveBeenCalledTimes(1);
+      const cuts = output.cuts();
+      expect(cuts.map((cut) => cut.fade)).toEqual([
+        MIX_TUNING.ringOutFadeSeconds,
+      ]);
+      expect(cuts[0].at).toBeGreaterThanOrEqual(60);
+      expect(cuts[0].at).toBeLessThanOrEqual(60 + 2 * TICK_SECONDS);
+    });
+
+    it("counts from the length when the failure falls before it", async () => {
+      const { output, onRunEnd } = await rejectedAt(5);
+
+      // Not at 45 s, which a cap from the failure would give.
+      await advanceTo(output, 49.9);
+      expect(onRunEnd).not.toHaveBeenCalled();
+
+      await advanceTo(output, 50.5);
+      expect(onRunEnd).toHaveBeenCalledTimes(1);
+      const cuts = output.cuts();
+      expect(cuts).toHaveLength(1);
+      expect(cuts[0].at).toBeGreaterThanOrEqual(50.05);
+      expect(cuts[0].at).toBeLessThanOrEqual(50.05 + 2 * TICK_SECONDS);
+    });
+  });
+});
