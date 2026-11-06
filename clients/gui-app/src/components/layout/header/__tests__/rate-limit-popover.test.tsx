@@ -4087,7 +4087,7 @@ describe("<RateLimitPopover /> host picker", () => {
     expect(screen.getByTestId("rate-limit-host-picker-row")).toBeTruthy();
     expect(screen.getAllByTestId("settings-host-switcher")).toHaveLength(1);
     expect(screen.getByTestId("settings-host-switcher").textContent).toBe(
-      "quiet-harbor Sandbox",
+      "quiet-harbor",
     );
     const header = screen.getByTestId("rate-limit-host-header");
     const face = within(header).getByTestId("rate-limit-host-face");
@@ -4158,7 +4158,7 @@ describe("<RateLimitPopover /> host picker", () => {
     renderPopoverWithScope(scope, true);
 
     expect(screen.getByTestId("settings-host-switcher").textContent).toBe(
-      "Alpha Computer",
+      "Alpha",
     );
     expect(
       screen.getByTestId("rate-limit-host-stale-pin").textContent,
