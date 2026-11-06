@@ -38,6 +38,7 @@ import type {
 } from "@traycer/protocol/host/bot/conversation-schemas";
 import type { JsonContent } from "@traycer/protocol/common/registry";
 import type { BotTaskEntry } from "@traycer/protocol/host/bot/schemas";
+import type { BotTurnLocateRequest } from "@traycer/protocol/host/bot/conversation-schemas";
 import { conversationRequestMessageId } from "@traycer/protocol/persistence/epic/messages";
 import type {
   AgentSender,
@@ -60,7 +61,23 @@ import type {
   ChatSessionStoreHandle,
 } from "@/stores/chats/chat-session-store";
 import { emptyTranscriptWindow } from "@/stores/chats/transcript-window";
-import type { BotActivity } from "@/hooks/bots/use-bot-activity";
+import type {
+  BotActivity,
+  BotSessionActivity,
+} from "@/hooks/bots/use-bot-activity";
+import {
+  recordNegotiatedHostManifest,
+  resetNegotiatedManifests,
+} from "@traycer-clients/shared/host-transport/negotiated-manifest-registry";
+import {
+  hostClientLocating,
+  turnRef,
+  turnsAskedFor,
+} from "@/components/bots/__tests__/bot-turn-test-support";
+import {
+  sessionTargetOfTurn,
+  type BotTurnOpen,
+} from "@/stores/bots/bot-open-thread-store";
 import type { BotComposerEdit } from "@/components/bots/bot-message-composer";
 import type { BotSentPost } from "@/stores/bots/bot-open-thread-store";
 import type { BotTranscriptLanding } from "@/components/bots/bot-chat-transcript";
@@ -400,6 +417,8 @@ let panelLanding: BotTranscriptLanding | null;
 /** The bot's task list the panel is handed. */
 let panelTasks: ReadonlyArray<BotTaskEntry>;
 const onEditPost = vi.fn<(edit: BotComposerEdit) => void>();
+/** The turn a tap on the replying strip asks the tab to open. */
+const onOpenTurn = vi.fn<BotTurnOpen>();
 /** What the host answers the next `bot.conversation.send` with. */
 let sendAnswer: () => Promise<BotConversationSendResponse>;
 
@@ -483,7 +502,7 @@ function panelTree(thread: BotThreadPanelThread): ReactNode {
               resolveMember={resolveMember}
               onClose={vi.fn()}
               onEditPost={onEditPost}
-              onOpenTurn={vi.fn()}
+              onOpenTurn={onOpenTurn}
               onOpenSession={vi.fn()}
               landOn={panelLanding}
               quote={null}
@@ -515,6 +534,7 @@ beforeEach(() => {
   panelOrigin = null;
   mocks.threadHandle.held = false;
   onEditPost.mockClear();
+  onOpenTurn.mockReset();
   activityStore.setState({ activity: null });
   channelMessages = [];
   mocks.locatedOrdinal = null;
@@ -2250,5 +2270,114 @@ describe("<BotThreadPanel /> on a short viewport under the keyboard", () => {
     lowerNativeKeyboard();
     expect(composerForm().getAttribute("data-box-form")).toBe("full");
     expect(shown("bot-thread-session")).toBe(true);
+  });
+});
+
+describe("<BotThreadPanel /> the replying line as the way into the turn", () => {
+  const OTHER_REQUEST = "req-trunk";
+
+  function replying(requestId: string | null): BotSessionActivity {
+    return {
+      state: "replying",
+      startedAt: Date.now() - 65_000,
+      step: null,
+      requestId,
+      reason: null,
+    };
+  }
+
+  function turnOf(chatId: string, requestId: string, threadId: string | null) {
+    return turnRef({
+      chatId,
+      turnId: `turn-${requestId}`,
+      userMessageId: `prompt-${requestId}`,
+      threadId,
+      startedAt: Date.now() - 65_000,
+      endedAt: null,
+      summary: null,
+      messageIds: [],
+      requestIds: [requestId],
+    });
+  }
+
+  beforeEach(() => {
+    recordNegotiatedHostManifest(HOST_ID, {
+      "bot.conversation.send": { major: 1, minor: 1 },
+      "bot.turn.locate": { major: 1, minor: 0 },
+    });
+  });
+
+  afterEach(() => {
+    resetNegotiatedManifests();
+  });
+
+  it("opens the thread's own session at its request, though the trunk is replying on another", async () => {
+    const user = userEvent.setup();
+    const threadTurn = turnOf("session-1", "req-1", THREAD_ID);
+    const trunkTurn = turnOf("trunk-chat", OTHER_REQUEST, null);
+    const asked: BotTurnLocateRequest[] = [];
+    mocks.client = hostClientLocating(
+      (request) => turnsAskedFor([threadTurn, trunkTurn], request),
+      asked,
+    );
+    mountPanel(listed("user-teammate"), []);
+
+    act(() => {
+      activityStore.setState({
+        activity: {
+          trunk: replying(OTHER_REQUEST),
+          threads: { [THREAD_ID]: replying("req-1") },
+        },
+      });
+    });
+    const button = await within(
+      screen.getByTestId("bot-thread-replying-strip"),
+    ).findByRole("button", { name: "Release Bot is replying…" });
+    await user.click(button);
+
+    const call = onOpenTurn.mock.calls.at(-1);
+    if (call === undefined) throw new Error("the strip opened nothing");
+    expect(call).toEqual([threadTurn, null]);
+    expect(sessionTargetOfTurn(call[0], call[1])).toEqual({
+      chatId: "session-1",
+      threadId: THREAD_ID,
+      messageId: "prompt-req-1",
+      sendPostId: null,
+    });
+    expect(asked.map((request) => request.requestIds)).toEqual([["req-1"]]);
+  });
+
+  it("is only the status line for a turn that answers no request, and becomes the button on the same node once it names one", async () => {
+    const turn = turnOf("session-1", "req-1", THREAD_ID);
+    const asked: BotTurnLocateRequest[] = [];
+    mocks.client = hostClientLocating(
+      (request) => turnsAskedFor([turn], request),
+      asked,
+    );
+    mountPanel(listed("user-teammate"), []);
+    const composer = screen.getByTestId("bot-thread-composer");
+
+    act(() => {
+      activityStore.setState({
+        activity: { trunk: null, threads: { [THREAD_ID]: replying(null) } },
+      });
+    });
+    const strip = screen.getByTestId("bot-thread-replying-strip");
+    expect(strip.getAttribute("role")).toBe("status");
+    expect(within(strip).getByText("Release Bot is replying…")).toBeTruthy();
+    expect(within(strip).queryByRole("button")).toBeNull();
+    expect(asked).toEqual([]);
+
+    act(() => {
+      activityStore.setState({
+        activity: { trunk: null, threads: { [THREAD_ID]: replying("req-1") } },
+      });
+    });
+    await within(strip).findByRole("button", {
+      name: "Release Bot is replying…",
+    });
+
+    expect(screen.getByTestId("bot-thread-replying-strip")).toBe(strip);
+    expect(screen.getByTestId("bot-thread-composer")).toBe(composer);
   });
 });

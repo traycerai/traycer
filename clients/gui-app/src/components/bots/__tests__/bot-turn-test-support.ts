@@ -444,7 +444,9 @@ export function scriptedSession(
  * `locate` and records what it was asked.
  */
 export function hostClientLocating(
-  locate: (request: BotTurnLocateRequest) => BotTurnLocateResponse,
+  locate: (
+    request: BotTurnLocateRequest,
+  ) => BotTurnLocateResponse | Promise<BotTurnLocateResponse>,
   asked: BotTurnLocateRequest[],
 ): HostRequester<HostRpcRegistry> {
   const queryClient = new QueryClient();
