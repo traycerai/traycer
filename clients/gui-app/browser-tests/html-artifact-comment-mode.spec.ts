@@ -553,15 +553,17 @@ test("at 150% zoom a hover and a pick land on the element under the pointer", as
   await page.keyboard.up("Control");
   await expect(zoomReadout(page)).toHaveText("150%");
 
-  await wheelUntilInside(page, "#deep");
-  await hoverElement(page, "#deep");
+  // A row is 21px tall at 150%, so a hit test off by more than about 10px
+  // outlines and picks the row next to it.
+  await wheelUntilInside(page, "#row-3");
+  await hoverElement(page, "#row-3");
 
-  await clickInPage(page, "#deep");
+  await clickInPage(page, "#row-3");
   await expect
-    .poll(() => markerDelta(page, selectionOutline(page), "#deep"))
+    .poll(() => markerDelta(page, selectionOutline(page), "#row-3"))
     .toBeLessThanOrEqual(2);
 
-  await wheelSelectionFollows(page, "#deep");
+  await wheelSelectionFollows(page, "#row-3");
 });
 
 test("comment mode picks instead of activating the page, while a pinch still zooms", async ({

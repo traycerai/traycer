@@ -70,7 +70,14 @@ const DEEP_SECTION = 32;
 const sections = Array.from({ length: SECTION_COUNT }, (_, index) => {
   const number = index + 1;
   if (number === DEEP_SECTION) {
-    return `<section class="block"><h2 id="deep" data-tid="deep">Section ${String(number)}</h2><p>The deep section.</p></section>`;
+    // Rows short enough that a hit even a few pixels off lands on a
+    // neighbour, which is what the zoomed hit test has to rule out.
+    const rows = Array.from(
+      { length: 5 },
+      (_row, row) =>
+        `<li id="row-${String(row + 1)}">Row ${String(row + 1)}</li>`,
+    ).join("");
+    return `<section class="block"><h2 id="deep" data-tid="deep">Section ${String(number)}</h2><p>The deep section.</p><ul class="rows">${rows}</ul></section>`;
   }
   return `<section class="block"><h2>Section ${String(number)}</h2><p>Paragraph ${String(number)} of the page.</p></section>`;
 }).join("");
@@ -83,6 +90,8 @@ button,a,summary{font:inherit}
 #note{width:200px}
 section{min-height:140px;padding:12px 16px;border-top:1px solid #ddd}
 #deep{display:block;margin:0;padding:12px 16px;background:#e8eef8}
+.rows{margin:0;padding:0;list-style:none}
+.rows li{margin:0;padding:0;font-size:12px;line-height:14px}
 </style></head><body>
 <div class="controls">
 <button id="counter" type="button">count 0</button>
