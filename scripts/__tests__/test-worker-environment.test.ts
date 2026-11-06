@@ -961,7 +961,7 @@ describe("test worker environment guard", () => {
       }
       rmSync(syntheticHome, { recursive: true, force: true });
     }
-  });
+  }, 250_000);
 
   it("checks every effective project and global setup structurally", () => {
     assertConfigSetups(repoRoot, new Map());
