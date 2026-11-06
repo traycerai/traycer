@@ -716,6 +716,7 @@ function ThreadPanelBody(props: ThreadPanelBodyProps): ReactNode {
       />
       <BotMessageComposer
         botId={props.botId}
+        botTitle={props.botTitle}
         conversationId={box.conversationId}
         threadId={box.threadId}
         announcementId={box.announcementId}

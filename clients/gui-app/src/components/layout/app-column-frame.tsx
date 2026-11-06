@@ -13,10 +13,10 @@ export interface AppColumnFrameSlots {
   /** Drawn only when `titleBand` is `"header"`. */
   readonly header: ReactNode;
   /**
-   * Talk's row when no header carries it: first in the content column, which
-   * is what it centres on. Empty when `titleBand` is `"header"`.
+   * The soundtrack's row when no header carries it: first in the content
+   * column, which is what it centres on. Empty when `titleBand` is `"header"`.
    */
-  readonly voiceTopRow: ReactNode;
+  readonly soundtrackTopRow: ReactNode;
   /** Drawn only when `placement` is a side. */
   readonly strip: ReactNode;
   readonly banners: ReactNode;
@@ -77,7 +77,7 @@ export function AppColumnFrame(props: AppColumnFrameProps): ReactNode {
         {edge === "left" ? props.strip : null}
         <div className="relative flex min-w-0 flex-1 flex-col">
           {titleBand === "header" && edge !== null ? props.header : null}
-          {props.voiceTopRow}
+          {props.soundtrackTopRow}
           {props.banners}
           <main className="relative flex min-h-0 flex-1 flex-col">
             {/* The app's content viewport. Individual surfaces
