@@ -1,7 +1,7 @@
 /**
  * `environment.list` - every team environment the signed-in user belongs to.
- * `environment.host.read` / `environment.host.bind` - the one environment
- * this host is bound to, and rebinding it.
+ * `environment.host.read` / `environment.host.bind` - this host's binding
+ * and its compatibility acknowledgement.
  * `environment.host.list` - the hosts of an environment the caller may see.
  * `environment.members` - the people in an environment, by name and avatar,
  * so a client can name the member who wrote a message.
@@ -167,13 +167,12 @@ export const environmentListUpgradeV10ToV11 = defineUpgradePath<
  * This read cannot distinguish a computer's own settings from Personal.
  * That settings place is answered by `environment.status` on the host.
  *
- * Authn stores enrollment attribution independently of whether the host is
- * bound. This result surfaces it as `enrolledByUserId` when the installed
- * source knows a binding, including Personal; an unbound or
- * attribution-unknown result answers null. Read and bind use that same
- * source. `canUnbind` is true only when this result is explicit, the stored
- * enroller is the caller, and the host is a computer rather than a sandbox;
- * a sandbox's boot binding is immutable.
+ * `enrolledByUserId` is the enrollment attribution recorded by authn for a
+ * bound host, including Personal; null when the host is unbound or
+ * attribution is unknown. Read and bind answer that same fact. `canUnbind`
+ * is true only when this result is explicit, the stored enroller is the
+ * caller, and the host is a computer rather than a sandbox; a sandbox cannot
+ * be unbound.
  */
 export const environmentHostBindingSchema = lazySchema(() =>
   z.object({
@@ -227,10 +226,10 @@ export const environmentBindingReadV10 = defineRpcContract({
 });
 
 /**
- * A compatibility request for the serving host's binding. After the
- * authenticated compatibility write acknowledges, the response is composed
- * from the same installed binding source as read. The acknowledgement
- * supplies no binding authority and changes no stored attribution.
+ * Compatibility request for the serving host's binding. The response reports
+ * the binding recorded by authn, as `environment.host.read` does;
+ * acknowledgement alone establishes no binding and changes no enrollment
+ * attribution.
  *
  * A Personal binding is reported with `explicit` false, the same answer as
  * an absent environment binding; it does not mean the host runs its own
@@ -265,8 +264,9 @@ export type EnvironmentHostListRequest = z.infer<
  * The frozen @1.0 host row. `hostLabel` and `hostPlatform` are the registry's
  * reported metadata; `kind` is its machine kind. `enrolledByUserId` is stored
  * enrollment attribution, independent of the environment's owner.
- * `boundAt` is epoch milliseconds when known. This version requires both
- * attribution and time as values; rows with either unknown are omitted.
+ * `boundAt` is epoch milliseconds on a released row, not a canonical binding
+ * time. This version requires attribution and time as values; a row without
+ * either is omitted.
  */
 export const environmentHostRecordSchema = lazySchema(() =>
   z.object({
@@ -283,9 +283,9 @@ export type EnvironmentHostRecord = z.infer<typeof environmentHostRecordSchema>;
 /**
  * The environment's hosts visible to the caller, in an object root. Personal
  * lists its bound hosts like any other environment; an absent binding is not
- * Personal membership. The frozen @1.0 representation omits rows with
- * unknown attribution or binding time, so it may be empty even when authn
- * lists bound hosts.
+ * Personal membership. The frozen @1.0 representation omits rows without
+ * attribution or a binding time. Authn records no canonical binding time,
+ * so this projection is empty even when authn lists bound hosts.
  */
 export const environmentHostListResponseSchema = lazySchema(() =>
   z.object({
@@ -330,10 +330,10 @@ export type EnvironmentHostItemApply = z.infer<
 /**
  * `environment.host.list@1.1`: each host with whether it is `reachable` now,
  * when it last reported (null before it ever did), and its per-item apply
- * states. `enrolledByUserId` and `boundAt` are null where the hosts route
- * does not know them; `@1.0` has no null for either, so the serving host
- * leaves such a row out of a `@1.0` caller's answer (the minor is
- * projection-gated in the registry).
+ * states. `boundAt` is null: authn records no canonical binding time.
+ * `enrolledByUserId` is null where attribution is unknown. `@1.0` has no
+ * null for either, so the serving host leaves such a row out of a `@1.0`
+ * caller's answer (the minor is projection-gated in the registry).
  */
 export const environmentHostRecordSchemaV11 = lazySchema(() =>
   environmentHostRecordSchema.extend({
