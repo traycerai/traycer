@@ -22,7 +22,7 @@ import {
  * as shown against it, so changing a clause's words re-opens the block for
  * everyone once.
  */
-export const CONSEQUENCES_WORDING_VERSION = 2;
+export const CONSEQUENCES_WORDING_VERSION = 3;
 
 /** A configuration as copy reads it: Personal, or a team by its name. */
 export type SandboxConfigurationCopy =
@@ -232,7 +232,7 @@ export function audienceClause(
 ): string {
   return configuration.kind === "personal"
     ? "Chats and files in this task are visible to everyone in the task."
-    : `Chats and files in this task are visible to everyone in the task, who may be outside ${configuration.teamName}.`;
+    : "Chats and files in this task are visible to everyone in the task, who may be outside the team.";
 }
 
 /**
@@ -249,10 +249,9 @@ export function reachRemedyLine(teamName: string): string {
   return `To work together, start this agent on a host in ${teamName}.`;
 }
 
-/** The team clause. */
-export function teamClause(teamName: string): string {
-  return `Everyone in ${teamName} can use it, and agents here run as the host: another member's agent can read what yours can.`;
-}
+/** Shared use and payment, followed by the distinct access warning. */
+export const TEAM_USE_AND_ACCESS_CLAUSE =
+  "Everyone in the team can use it while you pay from your team credits; another member's agent can read what yours can.";
 
 export const RESTING_STORAGE_CLAUSE =
   "Storage while it's suspended or stopped, on the same credits until another member wakes it.";
@@ -261,9 +260,6 @@ export function restingStorageClause(): string {
 }
 
 export const SHARED_USE_CLAUSE = "Other members can use it while you pay.";
-export function sharedUseClause(): string {
-  return SHARED_USE_CLAUSE;
-}
 
 /** The move clause: `computer` still holds settings not in Personal yet. */
 export function moveClause(computer: string): string {
@@ -335,22 +331,13 @@ export const CHANGE_LABEL = "Change";
 
 // ── Chip ──────────────────────────────────────────────────────────────────
 
-/**
- * The chip of a staged create: `New Acme sandbox · 2 vCPU · 4 GB · $0.12/h`.
- * `priceIsFrom` reads the price as a lower bound (`from $0.12/h`): the
- * balance is short, or the price is the region's smallest shape's.
- */
+/** A staged create's identity and resources; its consequences show the price. */
 export function stagedChipLabel(args: {
   readonly configuration: SandboxConfigurationCopy;
   readonly cpus: number;
   readonly memoryMb: number;
-  readonly priceMcPerHour: number | null;
-  readonly priceIsFrom: boolean;
 }): string {
-  const head = `${newSandboxRowLabel(args.configuration)} · ${sandboxShapeLabel(args.cpus, args.memoryMb)}`;
-  if (args.priceMcPerHour === null) return head;
-  const price = shortPriceLabel(args.priceMcPerHour);
-  return `${head} · ${args.priceIsFrom ? `from ${price}` : price}`;
+  return `${newSandboxRowLabel(args.configuration)} · ${sandboxShapeLabel(args.cpus, args.memoryMb)}`;
 }
 
 /** A resting pick: `api-refactor · suspended, resumes on send`. */
@@ -633,15 +620,6 @@ export function sandboxVerbFailureLine(
 
 export const COMPUTE_CHARGED_WHILE_AWAKE =
   "Compute is charged while it is awake.";
-
-/** A settings failure's line once its sandbox is no longer awake: no claim it is. */
-export function settingsDidntApplyOnLine(
-  configuration: string,
-  name: string,
-  reference: string,
-): string {
-  return `${configuration}'s settings didn't apply on ${name} · ${reference}`;
-}
 
 export const RETRY_APPLYING = "Retry applying";
 export const STOP = "Stop";

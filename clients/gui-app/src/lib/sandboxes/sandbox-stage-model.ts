@@ -22,11 +22,11 @@ import {
   teamAllowanceShortLine,
   audienceClause,
   costLine,
+  fundedRowPrice,
   moveClause,
   reachSentence,
   restingStorageClause,
-  sharedUseClause,
-  teamClause,
+  TEAM_USE_AND_ACCESS_CLAUSE,
   unpricedCostLine,
   type SandboxConfigurationCopy,
 } from "@/lib/sandboxes/sandbox-strings";
@@ -510,7 +510,6 @@ export type ConsequenceClauseKind =
   | "reach"
   | "team"
   | "resting-storage"
-  | "shared-use"
   | "move";
 
 export interface ConsequenceClause {
@@ -546,14 +545,24 @@ export function priceClause(input: ConsequencesInput): ConsequenceClause {
 /**
  * Every clause the block shows in full, in order: the price
  * always; the audience when the task has or may gain readers; the reach when
- * it holds a host of another configuration; the team, resting-storage and
- * shared-use clauses on a team; the move clause on an unmoved computer.
+ * it holds a host of another configuration; shared use, payment, access and
+ * resting storage on a team; the move clause on an unmoved computer.
  */
 export function consequenceClauses(
   input: ConsequencesInput,
 ): readonly ConsequenceClause[] {
   const copy = stageConfigurationCopy(input.configuration);
-  const clauses: ConsequenceClause[] = [priceClause(input)];
+  const price = priceClause(input);
+  // Expanded team copy puts the payer beside shared use. The summary keeps
+  // price and payer together when those consequences are collapsed.
+  let priceText = price.text;
+  if (copy.kind === "team" && !input.needsCredits && !input.wakingName) {
+    priceText =
+      input.price === null
+        ? "Billed by the hour while awake"
+        : fundedRowPrice(input.price.awakeMcPerHour, input.price.exact);
+  }
+  const clauses: ConsequenceClause[] = [{ kind: "price", text: priceText }];
   if (input.audience === "shared") {
     clauses.push({ kind: "audience", text: audienceClause(copy) });
   }
@@ -562,9 +571,13 @@ export function consequenceClauses(
   }
   if (input.configuration.kind === "team") {
     clauses.push(
-      { kind: "team", text: teamClause(input.configuration.teamName) },
+      {
+        kind: "team",
+        text: input.wakingName
+          ? "Everyone in the team can use it; another member's agent can read what yours can."
+          : TEAM_USE_AND_ACCESS_CLAUSE,
+      },
       { kind: "resting-storage", text: restingStorageClause() },
-      { kind: "shared-use", text: sharedUseClause() },
     );
   }
   if (input.unmovedComputer !== null) {

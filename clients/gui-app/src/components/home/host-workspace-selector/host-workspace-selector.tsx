@@ -648,6 +648,7 @@ export function ActiveHostWorkspaceControls(
         />
         <SandboxStagingExtras staging={staging} />
         <section
+          hidden={hasNewSandboxStage(staging)}
           aria-label="Workspaces"
           data-testid="host-workspace-selector-folders-section"
           className="w-full max-w-full min-w-0"
@@ -713,6 +714,15 @@ export function ActiveHostWorkspaceControls(
       />
       <SandboxStagingExtras staging={staging} />
     </>
+  );
+}
+
+/** A new sandbox has no folders to choose before creation. */
+function hasNewSandboxStage(staging: SandboxStaging | null): boolean {
+  return (
+    staging !== null &&
+    staging.stage !== null &&
+    staging.stage.target.kind === "new"
   );
 }
 

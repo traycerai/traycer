@@ -353,6 +353,12 @@ function mount(openTerminal: (target: TerminalLaunchTarget) => void): void {
   );
 }
 
+function openSettingsMoreMenu(): void {
+  fireEvent.pointerDown(screen.getByRole("button", { name: "More" }), {
+    button: 0,
+  });
+}
+
 function unsupportedEnvironmentStatus(): HostRpcError {
   return new HostRpcError({
     code: "E_HOST_UNSUPPORTED",
@@ -511,6 +517,7 @@ describe("useStagedSandboxSend's setup line", () => {
     mount(vi.fn());
 
     expect(screen.queryByTestId("sandbox-setup-retry-applying")).toBeNull();
+    openSettingsMoreMenu();
     expect(screen.getByTestId("sandbox-setup-stop")).toBeTruthy();
   });
 
@@ -533,6 +540,7 @@ describe("useStagedSandboxSend's setup line", () => {
       mountLegacy(false);
 
       expect(screen.queryByTestId("sandbox-setup-retry-applying")).toBeNull();
+      openSettingsMoreMenu();
       fireEvent.click(screen.getByTestId("sandbox-setup-repair-setup"));
 
       expect(mocks.legacyHostIds).toContain(NEW_HOST);
@@ -549,6 +557,7 @@ describe("useStagedSandboxSend's setup line", () => {
       (_name, guestConfigured) => {
         mountLegacy(guestConfigured);
 
+        openSettingsMoreMenu();
         expect(screen.queryByTestId("sandbox-setup-repair-setup")).toBeNull();
         expect(screen.queryByTestId("sandbox-setup-retry-applying")).toBeNull();
       },
@@ -561,6 +570,7 @@ describe("useStagedSandboxSend's setup line", () => {
       stageCreated("applying", { kind: "settings", code: "SBX-0520" });
       mount(vi.fn());
 
+      openSettingsMoreMenu();
       expect(screen.queryByTestId("sandbox-setup-repair-setup")).toBeNull();
     });
 
@@ -574,6 +584,7 @@ describe("useStagedSandboxSend's setup line", () => {
       mount(vi.fn());
 
       expect(screen.getByTestId("sandbox-setup-retry-applying")).toBeTruthy();
+      openSettingsMoreMenu();
       expect(screen.queryByTestId("sandbox-setup-repair-setup")).toBeNull();
     });
   });

@@ -113,15 +113,10 @@ describe("consequenceClauses", () => {
     expect(clauses[1].text).toContain("Build box");
   });
 
-  it("adds the team, resting-storage and shared-use clauses on a team", () => {
+  it("adds the team and resting-storage clauses on a team", () => {
     const clauses = consequenceClauses(input({ configuration: ACME }));
-    expect(kinds(clauses)).toEqual([
-      "price",
-      "team",
-      "resting-storage",
-      "shared-use",
-    ]);
-    expect(clauses[1].text).toContain("Acme");
+    expect(kinds(clauses)).toEqual(["price", "team", "resting-storage"]);
+    expect(clauses[1].text).toContain("Everyone in the team can use it");
   });
 
   it("adds the move clause when a computer's settings have not moved, naming it", () => {
@@ -150,7 +145,6 @@ describe("consequenceClauses", () => {
       "reach",
       "team",
       "resting-storage",
-      "shared-use",
       "move",
     ]);
   });
@@ -160,7 +154,7 @@ describe("consequenceClauses", () => {
       input({ configuration: ACME, needsCredits: true }),
     );
     expect(clauses[0].text).toMatch(/^Your Acme allowance is short/);
-    expect(clauses).toHaveLength(4);
+    expect(clauses).toHaveLength(3);
   });
 });
 
