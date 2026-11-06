@@ -32,7 +32,13 @@ vi.mock("@/lib/host", async (importOriginal) => {
   return { ...actual, useHostBinding: () => hostBindingMock.current };
 });
 
-import { cleanup, render, screen, within } from "@testing-library/react";
+import {
+  cleanup,
+  render,
+  screen,
+  waitFor,
+  within,
+} from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { MockRunnerHost } from "@traycer-clients/shared/host-client/mock/mock-runner-host";
@@ -447,24 +453,29 @@ describe("<HostSettingsPanel /> Overview local/remote parity", () => {
     );
 
     // The Installation tab's shared half is INSIDE that equality, not beside
-    // it: About this host's rows (their labels are compared as prose, their
-    // per-host Host ID normalized like every other id), the install record and
-    // the OS service group. Pinned on `local` — `remote` equals it — so the
-    // comparison cannot pass by both sides losing them. The command-line tools
-    // hint follows its presence rule on both: it needs a local CLI bridge,
-    // which neither variant's `MockRunnerHost` carries.
+    // it: About this host (the date and last seen), Details (platform,
+    // architecture, the running version, the registry version, and the host
+    // id), the unmanaged install line, and the OS service group. Pinned on
+    // `local` — `remote` equals it — so the comparison cannot pass by both
+    // sides losing them. The command-line tools hint follows its presence
+    // rule on both: it needs a local CLI bridge, which neither variant's
+    // `MockRunnerHost` carries.
     expect(local.testIds).toEqual(
       expect.arrayContaining([
         "host-overview-about",
-        "host-overview-about-host-id",
         "host-overview-about-added",
         "host-overview-about-last-seen",
+        "host-overview-installation-details",
+        "host-overview-about-host-id",
         "host-overview-about-version",
         "host-overview-about-platform",
-        "host-overview-install-record",
+        "host-overview-about-architecture",
+        "settings-host-install-version",
+        "host-overview-installation-empty",
         "host-overview-service",
       ]),
     );
+    expect(local.testIds).not.toContain("host-overview-install-record");
     expect(local.testIds).not.toContain("host-overview-command-line-tools");
 
     // The name came from `host.identity.get`'s `effectiveName` in BOTH cases —
@@ -534,20 +545,21 @@ describe("<HostSettingsPanel /> Overview local/remote parity", () => {
     expect(local.removalTestIds).toEqual([]);
   });
 
-  it("shows the RPC's hostVersion on the health line, and the registry version only in About this host's labelled row", async () => {
+  it("shows the RPC's hostVersion on the health line, and the registry version only in Installation Details", async () => {
     // The defect: both a `host.status.hostVersion` and the
     // registry row's `version` used to render as the host's version at once.
     // The registry says "1.4.2" here twice over — the scope row's `version`
     // (`hostScopeOptionFixture`'s default) and the account record's
     // `status.appVersion` (`registryItemFor`) — against the RPC's "1.5.0".
     //
-    // The account's figure has ONE sanctioned place now: Installation ▸ About
-    // this host shows what the account last heard, labelled "Last reported
-    // version" (a recorded product decision). Everywhere that states the
-    // version the host is RUNNING — the header's health line, the page's ONE
-    // version (the Updates tab no longer has a version heading of its own) —
-    // must still say "1.5.0" and never "1.4.2", for both variants, and "1.4.2"
-    // must appear nowhere but that one labelled row, whichever tab it is on.
+    // The account's figure has ONE sanctioned place now: Installation ▸
+    // Details shows what the account last heard, labelled "Last reported
+    // version", and only because it differs from the running version.
+    // Everywhere that states the version the host is RUNNING — the header's
+    // health line, the page's ONE version (the Updates tab no longer has a
+    // version heading of its own) — must still say "1.5.0" and never "1.4.2",
+    // for both variants, and "1.4.2" must appear nowhere but that one labelled
+    // row, whichever tab it is on.
     const local = await renderOverviewSnapshot({
       hostId: "host-local",
       isLocalMachine: true,
@@ -555,7 +567,7 @@ describe("<HostSettingsPanel /> Overview local/remote parity", () => {
       rowName: SHARED_ROW_NAME,
       hostVersion: "1.5.0",
     });
-    expectRunningVersionOnly({ running: "1.5.0", reported: "1.4.2" });
+    await expectRunningVersionOnly({ running: "1.5.0", reported: "1.4.2" });
     cleanup();
 
     const remote = await renderOverviewSnapshot({
@@ -565,7 +577,7 @@ describe("<HostSettingsPanel /> Overview local/remote parity", () => {
       rowName: SHARED_ROW_NAME,
       hostVersion: "1.5.0",
     });
-    expectRunningVersionOnly({ running: "1.5.0", reported: "1.4.2" });
+    await expectRunningVersionOnly({ running: "1.5.0", reported: "1.4.2" });
 
     // Belt and braces on the fixture itself: if this ever reads "1.5.0" back
     // from the row instead of the RPC, the whole pin above is vacuous.
@@ -620,15 +632,18 @@ function localOnlyNodes(root: HTMLElement): readonly Element[] {
  * `running` version on the header's health line, the registry's `reported` one
  * not on it, and `reported` exactly once on the whole page (every tab is
  * mounted, the Updates tab's answer card and version list included) — as the
- * value of About this host's "Last reported version" row.
+ * value of Details' "Last reported version" row.
+ *
+ * The scope fixture's clock is `nowMs: 0` and the registry stamp is
+ * `2026-01-01`, so the elapsed words are "just now".
  */
-function expectRunningVersionOnly(versions: {
+async function expectRunningVersionOnly(versions: {
   readonly running: string;
   readonly reported: string;
-}): void {
+}): Promise<void> {
   // The health line is the header row the health word sits on — NOT the whole
   // `host-identity-card`, which is a section around the tab bodies too and so
-  // contains About this host.
+  // contains Installation.
   const healthLine = screen.getByTestId("host-identity-health").closest("div");
   if (healthLine === null) {
     throw new Error("expected the health word inside the health line");
@@ -636,8 +651,16 @@ function expectRunningVersionOnly(versions: {
   expect(healthLine.textContent).toContain(`v${versions.running}`);
   expect(healthLine.textContent).not.toContain(versions.reported);
 
-  const aboutVersion = screen.getByTestId("host-overview-about-version");
-  expect(aboutVersion.textContent).toBe(`v${versions.reported}`);
+  // `host.status` is what makes the running version differ from the registry.
+  // Until it answers, the header falls back to the scope row and this row is
+  // absent.
+  const aboutVersion = await waitFor(() => {
+    const row = screen.getByTestId("host-overview-about-version");
+    expect(row.textContent).toBe(
+      `v${versions.reported} · last account report, just now`,
+    );
+    return row;
+  });
   expect(aboutVersion.closest("dd")?.previousElementSibling?.textContent).toBe(
     "Last reported version",
   );

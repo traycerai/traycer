@@ -891,7 +891,10 @@ Account; the rest is the app itself.
   Alerts, Keybindings, Layout, Diagnostics.
 - **Account** - Sessions, Link mobile app, Usage, Credits, Notifications,
   and Delete account on mobile. Read through the window's own host, never
-  through the picker.
+  through the picker. A session row leads with the device or host name, then
+  platform and location; "This session" is only on the current row's status
+  line. App version and when the session was created sit in that row's
+  Details. The icon keeps the client kind as its accessible name.
 - **Environment** (group id `personal`) - Providers, MCP servers, Skills,
   Permissions, Agents (id `agents`: tabs Selection guide and Definitions),
   Model routing, Variables & shells (id `shell`), Secrets, Sandboxes, and
@@ -6583,8 +6586,8 @@ computer`. A team's host draws no card. The move sheet names the moving computer
 
     | Tab               | File                                 | What lives there                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                  |
     | ----------------- | ------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-    | Installation      | `host-overview-installation-tab.tsx` | About this host (`host-overview-about-this-host.tsx`, from the account's record, so it reads offline), the Install record shown open (`host-settings-installation-details.tsx`), OS service (`host-overview-os-service-section.tsx`) - both replaced by one needs-a-connection line when unreachable - then Command-line tools (this computer only, `host-settings-package-manager-upgrade-hint.tsx`, which also draws the trigger's dot), the Danger zone last                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                   |
-    | Updates           | `host-overview-updates-tab.tsx`      | The answer card, only when the answer has news or an action (`host-overview-updates.tsx`: icon, title, the update answer, Update now or the command-line-tools fix, the failed-attempt footer), the Traycer Desktop row (`host-overview-desktop-app-row.tsx`: the app's own update, desktop app and this machine's host only), a single-row auto-update group without a drawn label, then Pick a different version (`host-overview-version-picker.tsx`) with Check now on its heading, its release-candidate choice, version list and inline refusal                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                              |
+    | Installation      | `host-overview-installation-tab.tsx` | About this host (`host-overview-about-this-host.tsx`, known account facts only, so it reads offline), a compact line when there is no install record or the record's remaining facts, Details (platform, architecture, the running build version, the registry version only when it differs, Host ID), OS service (`host-overview-os-service-section.tsx`) - both replaced by one needs-a-connection line when unreachable - then Command-line tools (this computer only, `host-settings-package-manager-upgrade-hint.tsx`, which also draws the trigger's dot), the Danger zone last                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                             |
+    | Updates           | `host-overview-updates-tab.tsx`      | The answer card, only when the answer has news or an action (`host-overview-updates.tsx`: icon, title, the update answer, Update now or the command-line-tools fix, the failed-attempt footer), the Traycer Desktop row (`host-overview-desktop-app-row.tsx`: the app's own update, desktop app and this machine's host only), a single-row auto-update group without a drawn label, then Install a different version (`host-overview-version-picker.tsx`) with Check now on its heading, its release-candidate choice, version list and inline refusal                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                           |
     | Data              | `host-overview-data-tab.tsx`         | Import & migration (`HostImportMigrationSection`), Version history (`ArtifactVersionSettingsSection`), then an unlabeled File edit snapshots group (`HostFileEditSnapshotsSection`); one disk connection line replaces all groups when unreachable                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                |
     | Ports             | `host-overview-ports-tab.tsx`        | `HostPortForwardsCard`, on every host: one sentence when there is no list (connecting, unreachable, older host, failed read, nothing forwarded), else Forwards on this host and Ports other machines hold here, then Refresh; the trigger's count                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 |
     | Mobile simulators | `host-overview-simulators-tab.tsx`   | One card: the **Use mobile simulators** switch (`config.simulator.get`/`.set`; one sentence in its place while the host has not advertised them or cannot), with the platform status folded into its description while off; **Platforms** only while on; **Check again** (`useSimulatorRecheck`: asks this host's `simulator.status`, `simulator.list` and `simulator.instances` (which holds the palette's inventory) again, and the host probes for Xcode and the Android SDK on each read) whenever a platform is unavailable, beside the switch while off and on Platforms while on, so a toolchain installed after the first read shows without a restart; **Simulator tools** while on (Installing with a bar, Installed with the version, Failed with Try again, Not needed), and while off only when the tools are still downloaded ("Downloaded, N MB. Mobile simulators are off." with Remove, behind a confirm). No agent row: the one switch grants agents the device too. On a `@1.1` host, while on: **Running now** (`host-overview-simulator-instances.tsx`, `simulator.instances` polled every 10 s while shown): every instance booted on the machine, with its OS version, "Copy of …" for a clone, a link to each task holding it that the viewer can see (its title from the app's task lists, else the short id) and "+N other" for the rest, the Agent badge while an agent drives it and the idle countdown; **Power off** (`simulator.powerOff`, first with `confirm: false`; a `confirm-required` answer, a mid-turn agent on it, asks before sending `confirm: true`) and, for an instance Traycer booted, **Keep running** (`simulator.setKeepRunning`); and **Power off when idle**, the idle window in minutes, written as `{ enabled: null, idleMinutes }` so it never flips the switch. The tab trigger carries the running count (`HostOverviewSimulatorsCount`) |
@@ -6602,11 +6605,15 @@ computer`. A team's host draws no card. The move sheet names the moving computer
     nothing is forwarded or held → "Nothing is forwarded through build-box.
     When an agent forwards a port on this host, or another machine holds one
     of its ports, it shows up here so you can stop or cut it."; otherwise two
-    groups. **Forwards on this host** (`owned`) lists description, port, state
-    and route with the counters: Forwarding or Binding → Stop, Interrupted or
-    Stopped → Clear. **Ports other machines hold here** (`held`) shows
-    "Listening for laptop" or "Reached by laptop", the open connections and
-    Cut, confirmed with the same dialog as before. A group with no rows isn't
+    groups. **Forwards on this host** (`owned`) lists the preview name (it wraps),
+    port, state and one direction line with the connection count: Forwarding →
+    Stop, Starting keeps "requested :port" and "Nothing is listening yet",
+    Interrupted or Stopped → Clear. Endpoints and, while forwarding, the byte
+    counters sit in that row's Details. **Ports other machines hold here**
+    (`held`) is one direction line ("To laptop" or "From laptop") with the
+    connection count and Cut, confirmed with the same dialog as before. A
+    held lease has no endpoint pair and no byte counters, so it has no Details.
+    A group with no rows isn't
     drawn. **Refresh** sits below the lists and re-reads them at once. The
     Stop and Cut mutations and the Cut confirm stay in the card, where they
     were before: the Cut confirm is modal, so no tab switch can happen under
@@ -6744,10 +6751,10 @@ computer`. A team's host draws no card. The move sheet names the moving computer
     The row works while the host is unreachable because it writes the account,
     and says the setting is applied at the host's next check-in (within about
     10 minutes, when no sessions are running).
-    - **Pick a different version** is a separate group. Its introduction says
-      it can install a release candidate, hotfix or earlier release; the
-      Include release candidates checkbox re-asks the host and explains when
-      the host chose inclusion from its installed release-candidate line.
+    - **Install a different version** is a separate group. It has no generic
+      introduction; the Include release candidates checkbox is its own label,
+      re-asks the host, and explains when the host chose inclusion from its
+      installed release-candidate line.
       Above older rows that cannot open newer chat stores, it warns about the
       access lost until this host updates again. The list can say it is asking,
       say no versions are available, or say the host returned no list; Check
@@ -7239,44 +7246,52 @@ computer`. A team's host draws no card. The move sheet names the moving computer
       than disabled, since the card reports the park and the header's menu
       item carries the reason - and an open confirm closes when its method
       is withdrawn or its region retires.
-  - **Installation**, top to bottom: About this host, Install record, OS
-    service, Command-line tools, Danger zone.
+  - **Installation**, top to bottom: About this host, the install line or
+    record, Details, OS service, Command-line tools, Danger zone.
     - **About this host** (`host-overview-about-this-host.tsx`) reads the
       ACCOUNT's host record - the `HostListItem` the panel already holds
       (`scope.host.item`), never a host RPC - so it reads the same while the
-      host connects or cannot be reached, which is when people come for the
-      host id. Rows: Host ID (shortened, with copy; Copy host ID stays in the
-      `⋯` menu too), Added to account (`createdAt`), Last seen, Last reported
-      version (`status.appVersion`) and Platform (`formatPlatform` plus the
-      architecture, as the header words it). Last seen is `status.lastSeenAt`
-      on the header's own ladder and clock (`formatElapsed`, `scope.nowMs`),
-      always, with no tone of its own - a timestamp is not a status word, and
-      the row has no second wording. It used to read "Online now" while the
-      header's live evidence held (`health.live`), whose strongest source is
-      the local process read: a host serving this computer while its relay
-      uplink is down therefore claimed an account check-in no other device
-      could see. Nothing on the record supports a second wording either -
-      `connectivity: "connectable"` is a lease read up to its TTL old, which
-      `deriveHostPresence` words "Reported reachable" and deliberately not
-      "Online", and which no surface renders directly. A host the account has
-      no record of gets no group, as it gets no Danger zone.
-    - **Install record** (`host-settings-installation-details.tsx`) is shown
-      open - it was a collapsed "Installation details" disclosure - and reads
-      `host.getInstallationInfo`: Version, Build (only when it differs),
-      Source, Installed, Verification, SHA-256 (shortened, with copy),
-      Platform. `unmanaged` is a real state, not an error - a host run from a
-      checkout has no install record - and it says so rather than claiming
-      nothing is installed; a failed read and an unsupported host each keep
-      their own sentence.
+      host connects or cannot be reached. It shows only facts the account has:
+      Added to account (`createdAt`), and either "Last seen · …" on the
+      header's own ladder and clock (`formatElapsed`, `scope.nowMs`) or, when
+      `lastSeenAt` is null, one line, "Not seen since it was added". An
+      unparsable stamp stays "Last seen · Unknown". It does not fill a grid
+      with "Not seen yet" or "Not reported yet". Last seen has no tone of its
+      own - a timestamp is not a status word, and the row has no second
+      wording. It used to read "Online now" while the header's live evidence
+      held (`health.live`), whose strongest source is the local process read:
+      a host serving this computer while its relay uplink is down therefore
+      claimed an account check-in no other device could see. Nothing on the
+      record supports a second wording either - `connectivity: "connectable"`
+      is a lease read up to its TTL old, which `deriveHostPresence` words
+      "Reported reachable" and deliberately not "Online", and which no surface
+      renders directly. A host the account has no record of gets no group, as
+      it gets no Danger zone.
+    - **Details** holds platform, architecture, build version, the registry's
+      last-reported version when that display differs from the build version,
+      and Host ID (shortened, with copy; Copy host ID stays in the `⋯` menu
+      too). Build version is `view.hostVersion ?? host.version`, labelled
+      "from this host now" only while the tab has a route. The registry line
+      is "No version received by the account" when `status.appVersion` is
+      null. Architecture is shown whenever it is known.
+    - **Install record** is one line when the host has none — "Running from a
+      checkout or unpacked tree · no installation record" — not a bordered
+      group. A record that arrived keeps Build (only when the install id
+      differs from the runtime version), Source, Installed, Verification and
+      SHA-256 (shortened, with copy). Version and platform are not repeated
+      here. A failed read and an unsupported host each keep their own sentence
+      (`host-settings-installation-details.tsx`). `unmanaged` is a real state,
+      not an error.
     - **OS service** (`host-overview-os-service-section.tsx`) is its own
       group: the registration sentence and manifest line, Re-register and
       Deregister with their confirms. A host that cannot report its service
       gets the standard unsupported sentence in place of the group's
       contents, under its label.
-    - Those two are the tab's host reads. While the host connects they are
-      the loading shape; when it cannot be reached one line replaces both -
-      "The install record and OS service are read from <host>, so they need
-      a connection." - and About this host, Command-line tools and the Danger
+    - The install record and the OS service are the tab's host reads. While
+      the host connects they are the loading shape; when it cannot be reached
+      one line replaces both - "The install record and OS service are read
+      from <host>, so they need a connection." - and About this host, Details
+      (from the account, not labelled live), Command-line tools and the Danger
       zone stay.
     - **Command-line tools** (this computer only, behind the panel's
       `hasLocalBridge`) is the package-manager upgrade hint with its command

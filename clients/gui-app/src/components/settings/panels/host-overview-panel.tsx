@@ -1948,6 +1948,10 @@ export function HostOverviewPanel(props: {
       // feeds - so the override happens here, where both are in hand.
       service={usable ? { ...service, busy: anyPending } : null}
       showPackageManagerHint={props.hasLocalBridge}
+      // The header's running version. The registry copy alone is the last
+      // report, which is a different fact and goes stale while this process
+      // is up.
+      runningVersion={view.hostVersion ?? host.version}
       scope={scope}
     />
   );
