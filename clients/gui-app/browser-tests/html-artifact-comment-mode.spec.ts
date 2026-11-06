@@ -188,89 +188,44 @@ async function elementCenter(
   };
 }
 
-interface Aim {
-  readonly x: number;
-  readonly y: number;
-}
-
-function aimsMatch(left: Aim, right: Aim): boolean {
-  return Math.abs(left.x - right.x) <= 2 && Math.abs(left.y - right.y) <= 2;
-}
-
 /**
- * The artifact iframe tells us where a pointer move actually arrived. Chrome
- * sometimes delivers the move after a CDP wheel shifted by that wheel's
- * delta, so the point Playwright aimed at is not the point the page hit.
+ * A wheel keeps moving the page after the event returns, and a box read
+ * during that animation is stale by the time the outline is drawn. Wait
+ * until scroll and zoom hold for three frames, then measure.
  */
-async function watchPointer(page: Page): Promise<void> {
-  await pageFrame(page)
-    .locator("html")
-    .evaluate((html) => {
-      const view = html.ownerDocument.defaultView as Window & {
-        __pointerWatch?: boolean;
-        __seenMove?: { x: number; y: number } | null;
-      };
-      if (view.__pointerWatch === true) return;
-      view.__pointerWatch = true;
-      view.__seenMove = null;
-      view.addEventListener(
-        "pointermove",
-        (event) => {
-          view.__seenMove = { x: event.clientX, y: event.clientY };
-        },
-        true,
-      );
-    });
+async function scrollSettled(page: Page): Promise<void> {
+  const read = async (): Promise<string> => {
+    const now = await memory(page);
+    return `${String(now.scrollY)}\0${now.zoom}`;
+  };
+  let previous = await read();
+  let held = 0;
+  await expect
+    .poll(
+      async () => {
+        await nextFrames(page, 1);
+        const next = await read();
+        held = next === previous ? held + 1 : 0;
+        previous = next;
+        return held;
+      },
+      { intervals: [0], timeout: 5_000 },
+    )
+    .toBeGreaterThanOrEqual(3);
 }
 
-async function takeSeenMove(page: Page): Promise<Aim | null> {
-  return pageFrame(page)
-    .locator("html")
-    .evaluate((html) => {
-      const view = html.ownerDocument.defaultView as Window & {
-        __seenMove?: Aim | null;
-      };
-      const seen = view.__seenMove ?? null;
-      view.__seenMove = null;
-      return seen;
-    });
-}
-
-/**
- * Move onto an element inside the artifact iframe, correcting when Chrome
- * shifts the delivered event. The element's own rectangle is the target:
- * Playwright's box for it sometimes carries the same wheel shift.
- */
-async function moveOnto(page: Page, selector: string): Promise<Aim> {
-  await watchPointer(page);
-  const target = await elementCenter(page, selector);
-  let aim = target;
-  for (let attempt = 0; attempt < 4; attempt += 1) {
-    await takeSeenMove(page);
-    await page.mouse.move(aim.x, aim.y);
-    await nextFrames(page, 2);
-    const seen = await takeSeenMove(page);
-    if (seen === null) continue;
-    const frameBox = await boxOf(frameElement(page));
-    const delivered = {
-      x: Math.round(frameBox.x + seen.x),
-      y: Math.round(frameBox.y + seen.y),
-    };
-    if (aimsMatch(delivered, target)) return aim;
-    aim = aimsMatch(delivered, aim)
-      ? target
-      : {
-          x: Math.round(target.x - (delivered.x - aim.x)),
-          y: Math.round(target.y - (delivered.y - aim.y)),
-        };
-  }
-  throw new Error(`pointer missed ${selector}`);
+/** One move to the element's centre. The caller asserts where the outline lands. */
+async function hoverElement(page: Page, selector: string): Promise<void> {
+  const center = await elementCenter(page, selector);
+  await page.mouse.move(center.x, center.y);
+  await expect
+    .poll(() => markerDelta(page, hoverOutline(page), selector))
+    .toBeLessThanOrEqual(2);
 }
 
 async function clickInPage(page: Page, selector: string): Promise<void> {
-  await moveOnto(page, selector);
-  await page.mouse.down();
-  await page.mouse.up();
+  const center = await elementCenter(page, selector);
+  await page.mouse.click(center.x, center.y);
 }
 
 /** Playwright's box of the element sits fully inside the iframe. */
@@ -298,6 +253,15 @@ async function wheelOnPage(page: Page, deltaY: number): Promise<void> {
   const point = await pointInFrame(page);
   await page.mouse.move(point.x, point.y);
   await page.mouse.wheel(0, deltaY);
+  await scrollSettled(page);
+}
+
+async function clickZoom(
+  page: Page,
+  name: "Zoom in" | "Zoom out",
+): Promise<void> {
+  await page.getByRole("button", { name }).click();
+  await scrollSettled(page);
 }
 
 /**
@@ -406,7 +370,7 @@ test("comment mode keeps the loaded page, and reading still reaches it", async (
   await clickInPage(page, "#note");
   await page.keyboard.type("kept");
   await wheelOnPage(page, 360);
-  await page.getByRole("button", { name: "Zoom in" }).click();
+  await clickZoom(page, "Zoom in");
   await expect(zoomReadout(page)).toHaveText("120%");
   await frameElement(page).evaluate((frame) => {
     frame.dataset.traycerFrame = "mounted";
@@ -449,9 +413,9 @@ test("zoom and wheel scroll keep working while Comments is on", async ({
   await open(page);
   await setComments(page, true);
 
-  await page.getByRole("button", { name: "Zoom in" }).click();
+  await clickZoom(page, "Zoom in");
   await expect(zoomReadout(page)).toHaveText("120%");
-  await page.getByRole("button", { name: "Zoom out" }).click();
+  await clickZoom(page, "Zoom out");
   await expect(zoomReadout(page)).toHaveText("100%");
 
   await page.keyboard.down("Control");
@@ -459,7 +423,7 @@ test("zoom and wheel scroll keep working while Comments is on", async ({
   await page.keyboard.up("Control");
   await expect(zoomReadout(page)).toHaveText("150%");
 
-  await page.getByRole("button", { name: "Zoom out" }).click();
+  await clickZoom(page, "Zoom out");
   await expect(zoomReadout(page)).not.toHaveText("150%");
   const scrolled = (await memory(page)).scrollY;
   await wheelOnPage(page, 480);
@@ -483,30 +447,69 @@ async function pinOffset(page: Page, selector: string): Promise<number> {
 }
 
 /**
- * Hover until the page's outline sits on the element. A wheel can leave the
- * next pointer event shifted, so the first aim may highlight the element
- * below; each miss aims again by how far that outline missed.
+ * Centre of the zoom script's vertical thumb, in the test page's coordinates.
+ * The thumb is in a closed shadow root, so this is the script's own formula:
+ * the track starts below the page inset, and the button sits 3px from the
+ * right and 6px from the top.
  */
-async function hoverElement(page: Page, selector: string): Promise<void> {
-  const box = await elementBoxInPage(page, selector);
-  let aim = {
-    x: Math.round(box.x + box.width / 2),
-    y: Math.round(box.y + box.height / 2),
-  };
-  for (let attempt = 0; attempt < 6; attempt += 1) {
-    await page.mouse.move(aim.x, aim.y);
-    await nextFrames(page, 4);
-    if ((await markerDelta(page, hoverOutline(page), selector)) <= 2) return;
-    const outlineBox = await hoverOutline(page).boundingBox();
-    const target = await elementBoxInPage(page, selector);
-    if (outlineBox === null) continue;
-    aim = {
-      x: Math.round(aim.x - (outlineBox.x - target.x)),
-      y: Math.round(aim.y - (outlineBox.y - target.y)),
-    };
-  }
-  throw new Error(`hover missed ${selector}`);
+async function verticalThumbCentre(
+  page: Page,
+): Promise<{ x: number; y: number }> {
+  const frameBox = await boxOf(frameElement(page));
+  const inner = await pageFrame(page)
+    .locator("html")
+    .evaluate((html) => {
+      const view = html.ownerDocument.defaultView;
+      const root = html.ownerDocument.scrollingElement;
+      if (view === null || root === null) return null;
+      const start =
+        Number.parseFloat(
+          view
+            .getComputedStyle(html)
+            .getPropertyValue("--traycer-page-inset-top"),
+        ) || 0;
+      const track = view.innerHeight - 12 - start;
+      const length = Math.min(
+        track,
+        Math.max(28, (view.innerHeight / root.scrollHeight) * track),
+      );
+      const offset =
+        start +
+        (root.scrollTop / (root.scrollHeight - view.innerHeight)) *
+          (track - length);
+      return {
+        x: view.innerWidth - 5.5,
+        y: 6 + offset + length / 2,
+      };
+    });
+  if (inner === null) throw new Error("no scrollbar thumb");
+  return { x: frameBox.x + inner.x, y: frameBox.y + inner.y };
 }
+
+test("the scrollbar thumb still scrolls while Comments is on", async ({
+  page,
+}) => {
+  await open(page);
+  await setComments(page, true);
+  // The thumb starts under the zoom chip. One wheel puts it below that chip.
+  await wheelOnPage(page, 480);
+  const before = (await memory(page)).scrollY;
+  const thumb = await verticalThumbCentre(page);
+  await page.mouse.move(thumb.x - 30, thumb.y);
+  await page.mouse.move(thumb.x, thumb.y);
+  await nextFrames(page, 2);
+  await page.mouse.down();
+  for (let step = 1; step <= 5; step += 1)
+    await page.mouse.move(thumb.x, thumb.y + (100 * step) / 5);
+  await page.mouse.up();
+  await scrollSettled(page);
+
+  expect((await memory(page)).scrollY).toBeGreaterThan(before + 100);
+  await expect(
+    page.getByRole("button", { name: "Comment", exact: true }),
+  ).toHaveCount(0);
+  await expect(selectionOutline(page)).toHaveCount(0);
+});
 
 test("a deep element can be hovered and picked, and the selection follows scroll and zoom", async ({
   page,
@@ -601,6 +604,7 @@ test("comment mode picks instead of activating the page, while a pinch still zoo
   await expect
     .poll(async () => (await memory(page)).zoom)
     .not.toBe(before.zoom);
+  await scrollSettled(page);
 
   const scrolled = (await memory(page)).scrollY;
   const from = { x: center.x, y: center.y + 80 };
