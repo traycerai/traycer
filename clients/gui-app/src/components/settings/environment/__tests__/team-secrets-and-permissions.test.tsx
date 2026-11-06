@@ -209,7 +209,7 @@ describe("SecretsPage on a team", () => {
     render(<SecretsSettingsPanel />, { wrapper: harness.Wrapper });
     expect(
       await screen.findByText(
-        "Values and logins Acme's agents use, on its sandboxes without being seen.",
+        "Values and logins agents use, on sandboxes without being seen.",
       ),
     ).toBeTruthy();
     cleanup();
@@ -638,9 +638,7 @@ describe("TeamPermissions", () => {
       "Couldn't read Acme's permissions.",
     );
     expect(
-      await screen.findByText(
-        "What Acme's agents may do without asking, on every host running Acme.",
-      ),
+      await screen.findByText("What agents may do without asking."),
     ).toBeTruthy();
     const reads = harness.paramsOf("environment.configuration.items").length;
 

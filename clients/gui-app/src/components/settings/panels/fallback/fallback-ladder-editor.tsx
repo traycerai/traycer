@@ -132,6 +132,14 @@ export function FallbackLadderEditor(
           steps still off appear just above &ldquo;
           {FALLBACK_RUNG_COPY.notify.label}&rdquo;.
         </p>
+        <dl className="space-y-2">
+          {displayOrder.map((rung) => (
+            <div key={rung}>
+              <dt className="font-medium">{FALLBACK_RUNG_COPY[rung].label}</dt>
+              <dd>{FALLBACK_RUNG_COPY[rung].description}</dd>
+            </div>
+          ))}
+        </dl>
       </details>
       <DndContext
         sensors={sensors}
@@ -377,9 +385,6 @@ function FallbackLadderRow(props: {
         >
           {copy.label}
         </div>
-        <p className="max-w-[72ch] text-pretty text-ui-sm text-muted-foreground">
-          {copy.description}
-        </p>
         {hint}
       </div>
       <div

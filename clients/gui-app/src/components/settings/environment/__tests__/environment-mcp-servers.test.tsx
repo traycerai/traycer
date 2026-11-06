@@ -840,11 +840,7 @@ describe("The MCP servers page", () => {
     );
     render(<EnvironmentMcpServersPage />, { wrapper: harness.Wrapper });
 
-    expect(
-      await screen.findByText(
-        "Tools agents can call. Personal's servers reach every provider on every computer and sandbox running Personal.",
-      ),
-    ).toBeTruthy();
+    expect(await screen.findByText("Tools agents can call.")).toBeTruthy();
     expect(
       harness.paramsOf("environment.configuration.mcpServers.list"),
     ).toEqual([{ environmentId: "env-personal" }]);
@@ -862,11 +858,7 @@ describe("The MCP servers page", () => {
       await screen.findByText("MCP servers give agents tools."),
     ).toBeTruthy();
     expect(screen.getByRole("button", { name: "Add a server" })).toBeTruthy();
-    expect(
-      await screen.findByText(
-        "Tools agents can call. Acme's servers reach every provider on every host running Acme.",
-      ),
-    ).toBeTruthy();
+    expect(await screen.findByText("Tools agents can call.")).toBeTruthy();
   });
 
   it.each([

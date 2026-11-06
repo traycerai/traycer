@@ -269,7 +269,7 @@ describe("PermissionsSettingsPanel", () => {
 
       expect(
         screen.getByText(
-          "What your agents may do without asking, on every computer and sandbox running Personal.",
+          "What your agents may do without asking, on every computer and sandbox running this environment.",
         ),
       ).not.toBeNull();
     });

@@ -74,8 +74,14 @@ describe("FallbackLadderEditor", () => {
     expect(help).not.toBeNull();
     if (help === null) return;
     expect(help).toHaveProperty("open", false);
+    for (const rung of Object.values(FALLBACK_RUNG_COPY)) {
+      expect(screen.getByText(rung.description).closest("details")).toBe(help);
+    }
     fireEvent.click(screen.getByText("Help"));
     expect(help).toHaveProperty("open", true);
+    for (const rung of Object.values(FALLBACK_RUNG_COPY)) {
+      expect(within(help).getByText(rung.description)).toBeDefined();
+    }
     expect(
       within(help).getByText(
         /Switching accounts or models starts a new agent session/,

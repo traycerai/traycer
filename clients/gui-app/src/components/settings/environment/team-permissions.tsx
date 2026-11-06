@@ -17,17 +17,13 @@ import {
 import { useConfigurationAdminNames } from "@/hooks/environment/team/use-admin-names";
 import { ConfigurationConflict } from "./configuration-conflict";
 import { ConfigurationReadFailed } from "./team-read-failed";
-import { usePickedTeamLabel, useConfigurationName } from "./team-pick-label";
+import { useConfigurationName } from "./team-pick-label";
 
 /** A team's Permissions; `children` are the page's regions below the policy. */
 export function TeamPermissions(props: {
   readonly children: ReactNode;
 }): ReactNode {
   const personal = useConfigurationIsPersonal();
-  const source = useConfigurationSource();
-  const teamName =
-    usePickedTeamLabel(source.kind === "pool" ? source.environmentId : "") ??
-    "this team";
   const query = useConfigurationPolicyQuery();
   const read = useBoundedRead(query);
   const [conflict, setConflict] = useState(false);
@@ -36,8 +32,8 @@ export function TeamPermissions(props: {
       title="Permissions"
       description={
         personal
-          ? "What your agents may do without asking, on every computer and sandbox running Personal."
-          : `What ${teamName}'s agents may do without asking, on every host running ${teamName}.`
+          ? "What your agents may do without asking, on every computer and sandbox running this environment."
+          : "What agents may do without asking."
       }
       bodyClassName="flex flex-col gap-3 overflow-visible rounded-none border-none bg-transparent"
     >

@@ -285,7 +285,7 @@ describe("PersonalPageFrame's source, one per pick", () => {
     });
     expect(
       screen.getByText(
-        "Plain values every computer and sandbox running Personal gets, and the shell agents run in.",
+        "Plain values every computer and sandbox running this environment gets, and the shell agents run in.",
       ),
     ).toBeTruthy();
     expectNoHostReads(mounted);

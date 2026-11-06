@@ -3,7 +3,6 @@ import type { FallbackPolicy } from "@traycer/protocol/host/fallback-policy";
 import { SettingsGroup } from "@/components/settings/settings-group";
 import { SettingsRow } from "@/components/settings/settings-row";
 import { withStoredNumber } from "@/components/settings/panels/fallback/fallback-behavior-range";
-import { useSettingsRowDescriptionId } from "@/components/settings/settings-row-description";
 import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
 import {
   Select,
@@ -62,12 +61,7 @@ const RETURN_TO_PREFERRED_COPY: Record<
   },
   auto: {
     label: "Switch back automatically",
-    // The queued messages moving back is the half a user is least likely to
-    // expect, and it is the half this arm alone is responsible for. The fresh
-    // session is NOT repeated here: the ladder editor states it once for every
-    // switch, and the note beside this radio group says it again for the way
-    // back, so a third copy on one option would be the page naming one cost
-    // three times.
+    // Only automatic return moves queued messages back to the original target.
     description:
       "Messages waiting to run move back to the original account or model.",
   },
@@ -101,6 +95,8 @@ export function FallbackBehaviorGroup(
   props: FallbackBehaviorGroupProps,
 ): ReactNode {
   const { policy, onChange } = props;
+  const graceDescriptionId = useId();
+  const maxWaitDescriptionId = useId();
   return (
     <SettingsGroup
       group={FALLBACK.definitions.behavior}
@@ -111,9 +107,18 @@ export function FallbackBehaviorGroup(
     >
       <SettingsRow
         row={FALLBACK.definitions.graceWindow}
+        status={
+          <details className="text-ui-xs text-muted-foreground">
+            <summary className="cursor-pointer">Help</summary>
+            <p id={graceDescriptionId}>
+              {FALLBACK.definitions.graceWindow.description}
+            </p>
+          </details>
+        }
         control={
           <NumberSelect
             ariaLabel="Time to cancel a switch"
+            descriptionId={graceDescriptionId}
             options={withStoredNumber(
               GRACE_WINDOW_SECONDS,
               policy.graceWindowSeconds,
@@ -128,9 +133,18 @@ export function FallbackBehaviorGroup(
       />
       <SettingsRow
         row={FALLBACK.definitions.maxWait}
+        status={
+          <details className="text-ui-xs text-muted-foreground">
+            <summary className="cursor-pointer">Help</summary>
+            <p id={maxWaitDescriptionId}>
+              {FALLBACK.definitions.maxWait.description}
+            </p>
+          </details>
+        }
         control={
           <NumberSelect
             ariaLabel="Longest wait for a usage limit to reset"
+            descriptionId={maxWaitDescriptionId}
             options={withStoredNumber(MAX_WAIT_MINUTES, policy.maxWaitMinutes)}
             value={policy.maxWaitMinutes}
             format={waitLabel}
@@ -154,10 +168,8 @@ interface ReturnToPreferredRowProps {
 /**
  * A radio group rather than a select, unlike the two rows above it.
  *
- * Two of the three arms have a consequence that has to be readable BEFORE the
- * choice is made - `auto` starts a fresh session and moves queued messages -
- * and a select hides every option but the current one behind a click. Three
- * options with descriptions is exactly the case radios are for.
+ * All choices stay visible. Help holds the session and queued-message
+ * consequences, linked to the group and the automatic-return option.
  */
 function ReturnToPreferredRow(props: ReturnToPreferredRowProps): ReactNode {
   const { policy, onChange } = props;
@@ -189,6 +201,13 @@ function ReturnToPreferredRow(props: ReturnToPreferredRowProps): ReactNode {
             Switching back also starts a new agent session using this
             chat&apos;s history.
           </p>
+          {Object.entries(RETURN_TO_PREFERRED_COPY).map(([value, copy]) =>
+            copy.description === null ? null : (
+              <p key={value} id={`fallback-return-${value}-description`}>
+                {copy.description}
+              </p>
+            ),
+          )}
         </details>
       </div>
       <div className={cn("ml-auto", SETTINGS_ROW_STACK.control)}>
@@ -212,15 +231,8 @@ function ReturnToPreferredRow(props: ReturnToPreferredRowProps): ReactNode {
               <RadioGroupItem
                 value={value}
                 id={`fallback-return-${value}`}
-                // The option's own consequence, where it has one - which in
-                // practice is `auto`, the arm whose cost ("Starts a fresh
-                // session and moves queued messages back") is the whole reason
-                // this row is radios instead of a Select: it has to be
-                // readable BEFORE the choice is made, and a paragraph sitting
-                // visually beside the radio is not readable before the choice
-                // by anyone navigating by control. Dropped where an option has
-                // no consequence paragraph rather than pointing at an element
-                // that is not rendered.
+                // The option keeps its accessible description when the
+                // consequence paragraph is folded into Help.
                 aria-describedby={
                   copy.description === null
                     ? undefined
@@ -232,19 +244,6 @@ function ReturnToPreferredRow(props: ReturnToPreferredRowProps): ReactNode {
                 <Label htmlFor={`fallback-return-${value}`} variant="option">
                   {copy.label}
                 </Label>
-                {copy.description === null ? null : (
-                  // The id is derived from the option's own value rather than
-                  // from `useId`, matching the radio's `id` two lines up: both
-                  // are inside a `map`, where a hook cannot go, and the copy
-                  // map's keys are the wire union so they are unique by
-                  // construction.
-                  <p
-                    id={`fallback-return-${value}-description`}
-                    className="text-ui-sm text-muted-foreground"
-                  >
-                    {copy.description}
-                  </p>
-                )}
               </div>
             </div>
           ))}
@@ -268,12 +267,12 @@ function returnToPreferredValue(
 
 function NumberSelect(props: {
   readonly ariaLabel: string;
+  readonly descriptionId: string;
   readonly options: readonly number[];
   readonly value: number;
   readonly format: (value: number) => string;
   readonly onValueChange: (value: number) => void;
 }): ReactNode {
-  const describedById = useSettingsRowDescriptionId();
   return (
     <Select
       value={String(props.value)}
@@ -285,7 +284,7 @@ function NumberSelect(props: {
     >
       <SelectTrigger
         aria-label={props.ariaLabel}
-        aria-describedby={describedById}
+        aria-describedby={props.descriptionId}
         className={TRIGGER_CLASS}
         size="sm"
       >

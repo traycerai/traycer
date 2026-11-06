@@ -92,7 +92,7 @@ import {
   skillUpstreamLine,
   skillWriteRefusal,
   skillsCardHeading,
-  skillsPageSubtitle,
+  SKILLS_PAGE_DESCRIPTION,
   skillsReadFailed,
   skillsReading,
   updateDescription,
@@ -223,12 +223,10 @@ function SkillsPage(props: {
   readonly children: ReactNode;
   readonly action: ReactNode;
 }): ReactNode {
-  const personal = useConfigurationIsPersonal();
-  const name = useConfigurationName();
   return (
     <SettingsPanelShell
       title="Skills"
-      description={skillsPageSubtitle(personal, name)}
+      description={SKILLS_PAGE_DESCRIPTION}
       headerAction={props.action}
       bodyClassName="flex flex-col gap-3 overflow-visible rounded-none border-none bg-transparent"
     >

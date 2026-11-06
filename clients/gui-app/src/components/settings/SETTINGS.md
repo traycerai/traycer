@@ -4947,8 +4947,10 @@ min`): "The judge didn't finish in time, so it's asking you instead."
     honestly, with a one-way `Add this step back` link - there is deliberately
     no path from here to turning it off, so nothing implies the
     always-published error card is something the user switched on.
-  - The ladder has one consequence sentence. Session/history mechanics and
-    reorder instructions sit behind Help. Per-problem settings summarize
+  - The ladder has one consequence sentence. Step explanations, session/history
+    mechanics and reorder instructions sit behind Help. Behavior's timing and
+    return explanations also sit behind Help; their controls keep accessible
+    descriptions linked to that text. Per-problem settings summarize
     inherited rows as “N problems follow the main plan”, followed by “M custom”
     when applicable. Every problem row remains visible with its own chain and
     routing or disabled prefixes; only Custom and Check save badges remain.
