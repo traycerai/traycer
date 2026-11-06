@@ -1,4 +1,5 @@
 import type { ReactNode } from "react";
+import { cn } from "@/lib/utils";
 import { useIsMutatingOf } from "@/hooks/use-mutation-state-of";
 import { SandboxOperationFailure } from "@/components/hosts/sandbox-operation-failure";
 import type { SandboxSummary } from "@traycer/protocol/host/sandbox-control";
@@ -71,16 +72,23 @@ function SandboxTileStateFrameInRuntime(props: {
   // the entry says "sandbox" would move the body under new parents and
   // remount it (a browser guest reloads, a terminal session is torn down),
   // awake sandbox or not. Only the overlay and `inert` vary.
-  const overlay =
+  const waking =
+    useIsMutatingOf({ mutationKey: sandboxMutationKeys.wake(hostId) }) > 0;
+  const stateOverlay =
     props.chat !== null || facts === null
       ? null
       : sandboxTileOverlay(facts.state, facts.frozen);
+  const overlay = wakingOverlay(stateOverlay, waking);
   return (
     <div
       className="relative flex h-full min-h-0 min-w-0 flex-1 flex-col"
       data-sandbox-tile-state={overlay === null ? "live" : overlay.kind}
     >
-      <div className="contents" inert={overlay !== null}>
+      <div
+        className={cn("contents", overlay?.kind === "moving" && "invisible")}
+        inert={overlay !== null}
+        aria-hidden={overlay !== null ? true : undefined}
+      >
         {props.children}
       </div>
       {facts === null ||
@@ -103,6 +111,18 @@ function SandboxTileStateFrameInRuntime(props: {
   );
 }
 
+/** A tab-open wake takes precedence over the directory's resting state. */
+function wakingOverlay(
+  overlay: SandboxTileOverlay | null,
+  waking: boolean,
+): SandboxTileOverlay | null {
+  if (!waking || overlay?.kind !== "asleep") return overlay;
+  return {
+    kind: "moving",
+    message: overlay.verb === "start" ? "Starting" : "Resuming",
+  };
+}
+
 function SandboxTileOverlayLayer(props: {
   readonly hostId: string;
   readonly overlay: SandboxTileOverlay;
@@ -113,19 +133,7 @@ function SandboxTileOverlayLayer(props: {
   const viewerUserId = useAuthStore((s) => s.contextMetadata?.userId ?? null);
   const summary =
     list.data?.sandboxes.find((s) => s.hostId === props.hostId) ?? null;
-  // The tab-open wake (`useSandboxWakeForOpenedTile`) is already bringing it
-  // up: say so, rather than offering a second Resume while the directory
-  // still reads the state it had before the wake.
-  const waking =
-    useIsMutatingOf({ mutationKey: sandboxMutationKeys.wake(props.hostId) }) >
-    0;
-  const overlay: SandboxTileOverlay =
-    waking && props.overlay.kind === "asleep"
-      ? {
-          kind: "moving",
-          message: props.overlay.verb === "start" ? "Starting" : "Resuming",
-        }
-      : props.overlay;
+  const { overlay } = props;
   return (
     <div
       data-testid="sandbox-tile-overlay"

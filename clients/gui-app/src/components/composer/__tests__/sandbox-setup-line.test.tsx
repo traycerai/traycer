@@ -24,6 +24,7 @@ import type {
   StagedSandbox,
   StagedSandboxFailure,
 } from "@/stores/composer/staged-sandbox-store";
+import { useSandboxDetailsStore } from "@/stores/sandboxes/sandbox-details-store";
 
 vi.mock("@/hooks/sandboxes/use-configuration-billing-url", () => ({
   useConfigurationBillingUrl: () => "https://example.test/billing",
@@ -193,16 +194,27 @@ describe("withdrawing a message from every refusal or failure", () => {
       const line =
         screen.queryByTestId("sandbox-refusal-line") ??
         screen.getByTestId("sandbox-setup-line-detail");
+      if (failure.kind === "settings") {
+        fireEvent.pointerDown(
+          within(line).getByRole("button", { name: "More" }),
+          { button: 0 },
+        );
+        const labels = screen
+          .getAllByRole("menuitem")
+          .map((item) => item.textContent);
+        expect(labels).toContain("Open terminal");
+        expect(labels).toContain("Use This computer");
+        expect(labels).toContain("Cancel the message");
+        expect(labels).toContain("Details");
+        fireEvent.click(screen.getByTestId("sandbox-setup-cancel"));
+        expect(onCancel).toHaveBeenCalledTimes(1);
+        expect(onOpenTerminal).not.toHaveBeenCalled();
+        cleanup();
+        return;
+      }
       const labels = buttonLabels(line);
-      // A settings failure's terminal action reads plain "Open terminal".
       const exits = [
-        ...(failure.kind === "credits"
-          ? []
-          : [
-              failure.kind === "settings"
-                ? "Open terminal"
-                : "Open terminal instead",
-            ]),
+        ...(failure.kind === "credits" ? [] : ["Open terminal instead"]),
         "Use This computer",
         "Cancel the message",
         "Details",
@@ -476,12 +488,47 @@ describe("SandboxSetupLine's failed start", () => {
     );
   }
 
-  it("titles the failure with its support reference, never the raw code", () => {
+  it("keeps a failed-create support code in its closed Support reference disclosure", () => {
     mountFailed();
 
     const line = screen.getByTestId("sandbox-setup-line");
-    expect(line.textContent).toContain("SBX-0412");
+    const disclosure = within(line).getByTestId<HTMLDetailsElement>(
+      "sandbox-setup-support-reference",
+    );
+    expect(disclosure.open).toBe(false);
+    expect(
+      within(line).getByTestId("sandbox-setup-line-toggle").textContent,
+    ).not.toContain("SBX-0412");
     expect(line.textContent).not.toContain(RAW_CODE);
+    fireEvent.click(within(disclosure).getByText("Support reference"));
+    expect(disclosure.open).toBe(true);
+    expect(within(disclosure).getByText("SBX-0412")).toBeTruthy();
+  });
+
+  it("shows a pre-create failure's support code only after opening Support reference", () => {
+    render(
+      <SandboxSetupLine
+        stage={refused(
+          { kind: "personal" },
+          { kind: "failed", code: RAW_CODE, step: "creating" },
+        )}
+        name="api-refactor"
+        facts={facts(false)}
+        actions={ACTIONS}
+      />,
+    );
+
+    const line = screen.getByTestId("sandbox-setup-line");
+    const disclosure = within(line).getByTestId<HTMLDetailsElement>(
+      "sandbox-setup-support-reference",
+    );
+    expect(disclosure.open).toBe(false);
+    expect(
+      within(line).getByTestId("sandbox-setup-line-toggle").textContent,
+    ).not.toContain("SBX-0412");
+    fireEvent.click(within(disclosure).getByText("Support reference"));
+    expect(disclosure.open).toBe(true);
+    expect(within(disclosure).getByText("SBX-0412")).toBeTruthy();
   });
 
   it("copies the support reference with the created sandbox's id", async () => {
@@ -830,7 +877,7 @@ describe("SandboxSetupLine when the settings did not apply", () => {
           sendTaken,
           failure: {
             kind: "settings",
-            code: "envelope-delivery:x",
+            code: "SBX-0520",
             steps: STEPS,
           },
         }}
@@ -842,14 +889,18 @@ describe("SandboxSetupLine when the settings did not apply", () => {
     return screen.getByTestId("sandbox-setup-line-detail");
   }
 
-  it("says the one shared sentence, then compute first and one step line, never a raw key or code", () => {
+  it("shows the shared failure sentence, compute charge and applied-step line", () => {
     const detail = mountSettings(false, ACTIONS);
 
     expect(
       screen.getByText(
-        "api-refactor is awake, but Personal's settings didn't apply · SBX-0520",
+        "api-refactor is awake, but Personal's settings didn't apply",
       ),
     ).toBeTruthy();
+    const disclosure = within(detail).getByTestId<HTMLDetailsElement>(
+      "sandbox-setup-support-reference",
+    );
+    expect(disclosure.open).toBe(false);
     const lines = within(detail)
       .getAllByText(/./, { selector: "p" })
       .map((line) => line.textContent);
@@ -858,6 +909,19 @@ describe("SandboxSetupLine when the settings did not apply", () => {
     expect(detail.textContent).not.toMatch(
       /permission_denied|ANTHROPIC_API_KEY|envelope-delivery/,
     );
+  });
+
+  it("keeps the settings support code in its closed Support reference disclosure", () => {
+    const detail = mountSettings(false, ACTIONS);
+    const disclosure = within(detail).getByTestId<HTMLDetailsElement>(
+      "sandbox-setup-support-reference",
+    );
+
+    expect(disclosure.open).toBe(false);
+    fireEvent.click(within(disclosure).getByText("Support reference"));
+
+    expect(disclosure.open).toBe(true);
+    expect(within(disclosure).getByText("SBX-0520")).toBeTruthy();
   });
 
   it("says the message waits only when the send was taken", () => {
@@ -871,22 +935,54 @@ describe("SandboxSetupLine when the settings did not apply", () => {
     expect(idle.textContent).not.toContain("waits until they apply");
   });
 
-  it("offers Retry applying, Open terminal, Stop, Use This computer and Details", () => {
+  it("keeps Retry applying primary and dispatches every secondary action once from More", () => {
+    const onRetryApplying = vi.fn();
+    const onRepairSetup = vi.fn();
+    const onOpenTerminal = vi.fn();
+    const onStop = vi.fn();
+    const onChooseAnotherHost = vi.fn();
+    const onCancel = vi.fn();
     const detail = mountSettings(true, {
       ...ACTIONS,
-      onOpenTerminal: vi.fn(),
+      onRetryApplying,
+      onRepairSetup,
+      onOpenTerminal,
+      onStop,
+      onChooseAnotherHost,
+      onCancel,
     });
 
-    const labels = buttonLabels(detail);
-    for (const label of [
-      "Retry applying",
-      "Open terminal",
-      "Stop",
-      "Use This computer",
-      "Details",
-    ]) {
-      expect(labels).toContain(label);
-    }
+    const retry = within(detail).getByTestId("sandbox-setup-retry-applying");
+    expect(retry.textContent).toContain("Retry applying");
+    expect(
+      within(detail).queryByTestId("sandbox-setup-repair-setup"),
+    ).toBeNull();
+    fireEvent.click(retry);
+    expect(onRetryApplying).toHaveBeenCalledOnce();
+
+    const chooseMenuItem = (testId: string): void => {
+      fireEvent.pointerDown(
+        within(detail).getByRole("button", { name: "More" }),
+        { button: 0 },
+      );
+      expect(
+        screen.queryByRole("menuitem", { name: "Retry applying" }),
+      ).toBeNull();
+      fireEvent.click(screen.getByTestId(testId));
+    };
+    chooseMenuItem("sandbox-setup-repair-setup");
+    chooseMenuItem("sandbox-setup-open-terminal");
+    chooseMenuItem("sandbox-setup-stop");
+    chooseMenuItem("sandbox-setup-choose-another-host");
+    chooseMenuItem("sandbox-setup-cancel");
+    chooseMenuItem("sandbox-setup-details");
+
+    expect(onRepairSetup).toHaveBeenCalledOnce();
+    expect(onOpenTerminal).toHaveBeenCalledOnce();
+    expect(onStop).toHaveBeenCalledOnce();
+    expect(onChooseAnotherHost).toHaveBeenCalledOnce();
+    expect(onCancel).toHaveBeenCalledOnce();
+    expect(useSandboxDetailsStore.getState().sandboxId).toBe("sbx_made_1");
   });
 
   it("hides Retry applying when the host offers no combined retry", () => {
@@ -895,7 +991,11 @@ describe("SandboxSetupLine when the settings did not apply", () => {
     expect(
       within(detail).queryByTestId("sandbox-setup-retry-applying"),
     ).toBeNull();
-    expect(within(detail).getByTestId("sandbox-setup-stop")).toBeTruthy();
+    fireEvent.pointerDown(
+      within(detail).getByRole("button", { name: "More" }),
+      { button: 0 },
+    );
+    expect(screen.getByTestId("sandbox-setup-stop")).toBeTruthy();
   });
 
   it("offers Repair setup instead of Retry applying when only the guest-only repair is available", () => {
@@ -906,7 +1006,11 @@ describe("SandboxSetupLine when the settings did not apply", () => {
       onRepairSetup,
     });
 
-    fireEvent.click(within(detail).getByTestId("sandbox-setup-repair-setup"));
+    fireEvent.pointerDown(
+      within(detail).getByRole("button", { name: "More" }),
+      { button: 0 },
+    );
+    fireEvent.click(screen.getByTestId("sandbox-setup-repair-setup"));
 
     expect(onRepairSetup).toHaveBeenCalledTimes(1);
     expect(
@@ -915,9 +1019,27 @@ describe("SandboxSetupLine when the settings did not apply", () => {
   });
 
   it("disables Retry applying while a retry is pending", () => {
-    const detail = mountSettings(true, { ...ACTIONS, applyingPending: true });
+    const onRetryApplying = vi.fn();
+    const onRepairSetup = vi.fn();
+    const detail = mountSettings(true, {
+      ...ACTIONS,
+      onRetryApplying,
+      onRepairSetup,
+      applyingPending: true,
+      repairSetupPending: true,
+    });
 
     const retry = within(detail).getByTestId("sandbox-setup-retry-applying");
     expect(retry.hasAttribute("disabled")).toBe(true);
+    fireEvent.pointerDown(
+      within(detail).getByRole("button", { name: "More" }),
+      { button: 0 },
+    );
+    const repair = screen.getByTestId("sandbox-setup-repair-setup");
+    expect(repair.getAttribute("aria-disabled")).toBe("true");
+    fireEvent.click(repair);
+    fireEvent.click(retry);
+    expect(onRepairSetup).not.toHaveBeenCalled();
+    expect(onRetryApplying).not.toHaveBeenCalled();
   });
 });

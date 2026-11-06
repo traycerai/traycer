@@ -524,6 +524,14 @@ describe("useSandboxStaging New rows", () => {
 
     act(() => composer.onPickNew("personal"));
 
+    expect(staging().composer.stagedLabel).toBe(
+      "New Personal sandbox · 2 vCPU · 4 GB",
+    );
+    expect(staging().composer.stagedLabel).not.toContain("$");
+    expect(staging().consequences?.price).toEqual({
+      awakeMcPerHour: 120,
+      exact: false,
+    });
     const stage = readStagedSandbox(SURFACE);
     expect(stage).toMatchObject({
       phase: "staged",

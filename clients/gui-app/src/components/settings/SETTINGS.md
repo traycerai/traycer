@@ -1807,7 +1807,8 @@ means the drain UI renders NOTHING - never a zero, which would offer to end
     light/dark selectors retain their settings search anchors.
   - **Start page** (`start-page-settings-section.tsx`): the personal landing
     backdrop. Plain rows only, like every other group here - the start page
-    itself is the preview. Rows: Wallpaper (56x34 thumbnail + "Choose
+    itself is the preview. Its body scrolls when the composer and expanded
+    sandbox setup status exceed the available height. Rows: Wallpaper (56x34 thumbnail + "Choose
     image..." + Remove; secondary text is the stored file name, "Custom image"
     when the image has no stored name, or "None" when no image is loaded),
     Traycer team curated wallpapers (the tile gallery, below), Wallpaper

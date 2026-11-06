@@ -85,9 +85,6 @@ import {
   remoteClassNotice,
   verdictAllowsSubmit,
   type ChatForkTargetVerdict,
-  CROSS_HOST_CARRY_CHANGES_NOTICE,
-  CROSS_HOST_SHALLOW_FORK_NOTICE,
-  CROSS_HOST_WORKSPACE_NOTICE,
   type ChatForkTargetSupport,
 } from "@/components/chat/chat-fork-target";
 import type { ForkWorkspaceSeed } from "@/lib/worktree/fork-workspace-seed";
@@ -1269,14 +1266,9 @@ function ChatForkDialogBody(props: ChatForkDialogProps) {
         ))}
         <DialogHeader>
           <DialogTitle>Fork agent</DialogTitle>
-          {target !== null && target.assistantMessageId === null ? (
-            <DialogDescription>
-              {isCrossHost
-                ? "The fork uses the latest usable cloud backup available when you click Fork. Work still in progress may not be included."
-                : "The fork uses the latest saved checkpoint available when you click Fork."}{" "}
-              The original agent continues working.
-            </DialogDescription>
-          ) : null}
+          <DialogDescription className="sr-only">
+            Choose the title, harness and run location for the fork.
+          </DialogDescription>
         </DialogHeader>
         <div
           className="flex min-h-0 min-w-0 flex-col gap-2 overflow-y-auto px-4 pb-2"
@@ -1314,9 +1306,26 @@ function ChatForkDialogBody(props: ChatForkDialogProps) {
               </ComposerStagedSurfaceKeyProvider>
             </div>
           </section>
-          <p className="text-ui-xs text-muted-foreground">
-            Makes a second chat there. This one stays where it is.
-          </p>
+          <div
+            className="flex min-w-0 flex-col gap-1"
+            aria-label="Run location"
+          >
+            <div className="font-sans text-overline font-medium uppercase text-muted-foreground/70">
+              Run location
+            </div>
+            <p
+              className="text-ui-xs text-muted-foreground"
+              data-testid="chat-fork-result"
+            >
+              {forkResultLine({
+                crossHost: isCrossHost,
+                emptySandbox: forkStage?.target.kind === "new",
+                latest: target?.assistantMessageId === null,
+                carriesChanges:
+                  target !== null && target.seedIntentOverride !== null,
+              })}
+            </p>
+          </div>
           <ActiveHostWorkspaceControls
             sandboxStaging={sandboxStaging}
             // Locked while the create is in flight, like every other control in
@@ -1348,10 +1357,6 @@ function ChatForkDialogBody(props: ChatForkDialogProps) {
             </p>
           ) : null}
           <ChatForkTargetNotices
-            isCrossHost={isCrossHost}
-            carriesChanges={
-              target !== null && target.seedIntentOverride !== null
-            }
             support={selectedHostSupport}
             boundaryNotPublished={boundaryNotPublished}
             publicationNotice={publicationNotice}
@@ -1391,32 +1396,59 @@ function ChatForkDialogBody(props: ChatForkDialogProps) {
   );
 }
 
+/** The result of this pick, without repeating it in the header or host rows. */
+function forkResultLine(input: {
+  readonly crossHost: boolean;
+  readonly emptySandbox: boolean;
+  readonly latest: boolean;
+  readonly carriesChanges: boolean;
+}): string {
+  let result: string;
+  if (input.crossHost) {
+    const transcript = input.latest
+      ? "this chat's latest saved transcript"
+      : "this chat's transcript through this turn";
+    const workspace = input.emptySandbox
+      ? "in an empty sandbox, with no files"
+      : "and the workspace you pick here";
+    result = `Starts from ${transcript} ${workspace}`;
+    result += input.latest
+      ? "; work still in progress may not be included."
+      : ".";
+    if (input.carriesChanges) {
+      result += " Uncommitted changes stay on the source computer.";
+    }
+  } else {
+    const checkpoint = input.latest
+      ? "this chat's latest saved checkpoint"
+      : "this chat through this turn";
+    result = `Starts from ${checkpoint} and the workspace you pick here.`;
+  }
+  return `${result} The original agent continues working.`;
+}
+
 /**
- * Everything the dialog has to SAY about the target it is pointed at: what a
- * cross-host fork gives up, why a host row is refused, and the one refusal that
- * is a "try again in a moment" rather than a failure.
+ * Publication and target refusals live below Run location, separate from the
+ * result line that describes what a successful fork starts with.
  *
  * Grouped in one place under the workspace section because they are all answers
  * to the same question — what happens if I press Fork now — and because a
  * cross-host fork can legitimately show several at once.
  */
 function ChatForkTargetNotices(props: {
-  readonly isCrossHost: boolean;
   /**
    * The Layer-1 sentence about the SOURCE CHAT, rendered once for the whole
    * dialog rather than per host row — see `chatForkTargetVerdict`.
    */
   readonly publicationNotice: string | null;
-  /** The chosen fork mode forks off the source working tree ("A/B Fork"). */
-  readonly carriesChanges: boolean;
   readonly support: ChatForkTargetSupport;
   readonly boundaryNotPublished: boolean;
 }) {
   const { support } = props;
   if (
-    !props.isCrossHost &&
     !props.boundaryNotPublished &&
-    props.publicationNotice === null
+    props.publicationNotice === null &&
+    support.kind !== "refused"
   ) {
     return null;
   }
@@ -1447,24 +1479,6 @@ function ChatForkTargetNotices(props: {
           data-testid="chat-fork-target-refused"
         >
           {support.detail}
-        </p>
-      ) : null}
-      {props.isCrossHost ? (
-        <p className="text-ui-xs text-muted-foreground">
-          {CROSS_HOST_WORKSPACE_NOTICE}
-        </p>
-      ) : null}
-      {props.isCrossHost && props.carriesChanges ? (
-        <p
-          className="text-ui-xs text-muted-foreground"
-          data-testid="chat-fork-carry-changes-disabled"
-        >
-          {CROSS_HOST_CARRY_CHANGES_NOTICE}
-        </p>
-      ) : null}
-      {props.isCrossHost ? (
-        <p className="text-ui-xs text-muted-foreground">
-          {CROSS_HOST_SHALLOW_FORK_NOTICE}
         </p>
       ) : null}
     </div>

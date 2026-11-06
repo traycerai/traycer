@@ -490,8 +490,7 @@ export function useSandboxStaging(input: {
         stage === null || stage.target.kind !== "new"
           ? null
           : stageConfigurationKey(stage.target.configuration),
-      stagedLabel:
-        stage === null ? null : stagedLabel(stage, stagedFacts, input.hosts),
+      stagedLabel: stage === null ? null : stagedLabel(stage, input.hosts),
       // Running, not settled: a refusal or a failure ends the wait.
       stagedBusy:
         stage !== null && stage.phase !== "staged" && stage.failure === null,
@@ -549,7 +548,6 @@ export function useSandboxStaging(input: {
     setSheetKey,
     stage,
     stageNew,
-    stagedFacts,
     surfaceKey,
     task,
     viewerUserId,
@@ -730,7 +728,6 @@ export function restingVerb(
 
 function stagedLabel(
   stage: StagedSandbox,
-  facts: NewRowFacts | null,
   hosts: readonly HostScopeOption[],
 ): string {
   const { target } = stage;
@@ -757,11 +754,6 @@ function stagedLabel(
     configuration: stageConfigurationCopy(target.configuration),
     cpus: target.shape.cpus,
     memoryMb: target.shape.memoryMb,
-    priceMcPerHour:
-      facts === null || facts.price === null
-        ? null
-        : facts.price.awakeMcPerHour,
-    priceIsFrom: facts !== null && facts.price !== null && !facts.price.exact,
   });
 }
 
