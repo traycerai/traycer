@@ -289,9 +289,35 @@ interface PictureUpload {
   readonly choose: (file: File) => void;
 }
 
+/** A chosen image as the tab's host takes it. */
+interface PreparedPicture {
+  readonly sha256: string;
+  readonly bytesBase64: string;
+}
+
 /**
- * The person's image, cropped to a square and scaled to the largest avatar,
- * put on the tab's host; `onUploaded` names it once the host holds it.
+ * The image cropped to a square, scaled to the largest avatar and encoded,
+ * or `null` when it cannot be read. Kept out of the hook, so the hook holds
+ * no `try` the React Compiler would skip it for.
+ */
+async function preparePicture(file: File): Promise<PreparedPicture | null> {
+  try {
+    const picture = await prepareBotPicture(file);
+    if (picture === null) return null;
+    return {
+      sha256: picture.sha256,
+      bytesBase64: await bytesToBase64Async(picture.bytes),
+    };
+  } catch {
+    // Cropping or encoding it failed on this device: the image is as
+    // unusable as one that does not decode.
+    return null;
+  }
+}
+
+/**
+ * The person's image put on the tab's host; `onUploaded` names it once the
+ * host holds it.
  */
 function usePictureUpload(
   onUploaded: (blobRef: string) => void,
@@ -303,29 +329,19 @@ function usePictureUpload(
   const choose = async (file: File): Promise<void> => {
     setUnreadable(false);
     setPreparing(true);
-    try {
-      const picture = await prepareBotPicture(file);
-      if (picture === null) {
-        setUnreadable(true);
-        return;
-      }
-      const bytesBase64 = await bytesToBase64Async(picture.bytes);
-      put.mutate(
-        { sha256: picture.sha256, bytesBase64 },
-        {
-          onSuccess: (response) => {
-            if (response.ok) onUploaded(picture.sha256);
-            else setUnreadable(true);
-          },
-        },
-      );
-    } catch {
-      // Cropping or encoding it failed on this device: the image is
-      // as unusable as one that does not decode.
+    const picture = await preparePicture(file);
+    // Rendered together with the put's pending state, so `busy` holds.
+    setPreparing(false);
+    if (picture === null) {
       setUnreadable(true);
-    } finally {
-      setPreparing(false);
+      return;
     }
+    put.mutate(picture, {
+      onSuccess: (response) => {
+        if (response.ok) onUploaded(picture.sha256);
+        else setUnreadable(true);
+      },
+    });
   };
   return {
     busy: preparing || put.isPending,
