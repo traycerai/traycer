@@ -20,6 +20,7 @@ const MINTED = {
   voiceSessionId: "vs_123",
   answerSdp: "v=0 answer",
   expiresAt: 1_791_000_000_000,
+  acknowledgementLines: ["Okay.", "One moment.", "Got it."],
 };
 
 function jsonResponse(status: number, body: unknown): Response {
@@ -90,6 +91,33 @@ describe("voiceSessionsMintViaHttp", () => {
       expected,
     );
   });
+
+  it.each([
+    ["missing", undefined],
+    ["null", null],
+    ["a string", "Okay."],
+    ["an object", {}],
+    ["an array with a non-string", ["Okay.", 2]],
+  ])(
+    "reads a session whose acknowledgement lines are %s as one with none, keeping its id",
+    async (_name, lines) => {
+      stubFetch(async () =>
+        jsonResponse(200, { ...MINTED, acknowledgementLines: lines }),
+      );
+
+      expect(
+        await voiceSessionsMintViaHttp(BASE, BEARER, null, REQUEST),
+      ).toEqual({
+        kind: "ok",
+        session: {
+          voiceSessionId: MINTED.voiceSessionId,
+          answerSdp: MINTED.answerSdp,
+          expiresAt: MINTED.expiresAt,
+          acknowledgementLines: null,
+        },
+      });
+    },
+  );
 
   it("collapses an unexpected status, a malformed session and a transport failure into network-error", async () => {
     stubFetch(async () => jsonResponse(500, { error: "boom" }));

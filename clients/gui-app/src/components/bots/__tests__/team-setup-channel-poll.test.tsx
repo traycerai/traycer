@@ -27,7 +27,12 @@ import { createAppQueryClient } from "@/lib/query-client";
 import { PaneVisibilityContext } from "@/components/epic-tabs/pane-visibility-context";
 import { TeamSetupChannel } from "@/components/bots/team-setup-channel";
 import type { BotThreadsViewState } from "@/components/bots/bot-channel-sidebar";
-import { setPhoneLayoutOnly } from "@/lib/mobile-app";
+import { useInstalledAppTileForm } from "@/hooks/ui/use-installed-app-level2-form";
+import {
+  installShellForm,
+  SHELL_WIDTH_COLUMN_256,
+  SHELL_WIDTH_MENU,
+} from "../../../../__tests__/mobile-level2-form-harness";
 
 // The channel list beside the post reads every bot and team on its own; it
 // is not what this file is about.
@@ -61,6 +66,7 @@ function readWith(setup: BotOnboardingSetup): BotOnboardingReadResponse {
 
 type Rig = {
   readonly reads: () => number;
+  readonly machineJoins: () => void;
   readonly goLive: () => void;
   readonly mount: (visible: boolean) => {
     readonly unmount: () => void;
@@ -105,12 +111,15 @@ function rig(): Rig {
   const channel = (visible: boolean): ReactNode => (
     <QueryClientProvider client={queryClient}>
       <PaneVisibilityContext value={visible}>
-        <SetupChannel client={client} />
+        <SetupWithLevel2Form client={client} />
       </PaneVisibilityContext>
     </QueryClientProvider>
   );
   return {
     reads: () => reads,
+    machineJoins: () => {
+      setup = { ...setup, state: "host_joining", arrival: { kind: "machine" } };
+    },
     goLive: () => {
       setup = { ...setup, state: "live", arrival: { kind: "cloud" } };
     },
@@ -163,6 +172,28 @@ describe("TeamSetupChannel on-screen poll", () => {
     expect(harness.reads()).toBe(3);
   });
 
+  it("keeps re-reading while a machine of the team is joining, and stops once the bot is live", async () => {
+    const harness = rig();
+    harness.mount(true);
+    await elapse(0);
+    expect(harness.reads()).toBe(1);
+
+    // A teammate's machine holds the team's host: no bot yet, so the setup is
+    // not settled and the read goes on until the bot exists.
+    harness.machineJoins();
+    await elapse(ON_SCREEN_INTERVAL_MS);
+    expect(harness.reads()).toBe(2);
+    await elapse(ON_SCREEN_INTERVAL_MS * 3);
+    expect(harness.reads()).toBe(5);
+
+    harness.goLive();
+    await elapse(ON_SCREEN_INTERVAL_MS);
+    expect(harness.reads()).toBe(6);
+
+    await elapse(ON_SCREEN_INTERVAL_MS * 3);
+    expect(harness.reads()).toBe(6);
+  });
+
   it("stops when the channel is unmounted", async () => {
     const harness = rig();
     const view = harness.mount(true);
@@ -189,23 +220,23 @@ describe("TeamSetupChannel on-screen poll", () => {
   });
 });
 
-describe("TeamSetupChannel in the installed app", () => {
-  afterEach(() => {
-    setPhoneLayoutOnly(false);
-  });
+describe("TeamSetupChannel level 2 in the installed app", () => {
+  // The column is the Tracy surface's, beside this pane; the pane's title is
+  // the picker where the surface draws none.
+  it("names the bot as a plain title beside the column at 256, and as a picker without one", () => {
+    const shell = installShellForm(SHELL_WIDTH_COLUMN_256);
+    try {
+      rig().mount(true);
+      expect(screen.getByTestId("bot-tab-title").textContent).toBe("Tracy");
+      expect(screen.queryByTestId("bot-channel-picker-trigger")).toBeNull();
 
-  // The installed app draws no column, so the pane's title is the picker.
-  it("names the bot as a plain title where the surface draws a column, and as a picker in the installed app", () => {
-    rig().mount(true);
-    expect(screen.getByTestId("bot-tab-title").textContent).toBe("Tracy");
-    expect(screen.queryByTestId("bot-channel-picker-trigger")).toBeNull();
-    cleanup();
-
-    setPhoneLayoutOnly(true);
-    rig().mount(true);
-    expect(screen.getByTestId("bot-channel-picker-trigger").textContent).toBe(
-      "Tracy",
-    );
+      shell.set({ width: SHELL_WIDTH_MENU, portrait: false });
+      expect(screen.getByTestId("bot-channel-picker-trigger").textContent).toBe(
+        "Tracy",
+      );
+    } finally {
+      shell.dispose();
+    }
   });
 });
 
@@ -216,10 +247,11 @@ const THREADS_CLOSED: BotThreadsViewState = {
   onLeave: () => undefined,
 };
 
-/** The setup pane as the surface hands it its props. */
-function SetupChannel(props: {
+/** The setup pane with the form the surface would hand it. */
+function SetupWithLevel2Form(props: {
   readonly client: HostClient<HostRpcRegistry>;
 }): ReactNode {
+  const level2 = useInstalledAppTileForm(1)?.level2 ?? null;
   return (
     <TeamSetupChannel
       setup={{
@@ -230,6 +262,7 @@ function SetupChannel(props: {
       }}
       client={props.client}
       hostId={mockLocalHostEntry.hostId}
+      level2={level2}
       threadsView={THREADS_CLOSED}
     />
   );

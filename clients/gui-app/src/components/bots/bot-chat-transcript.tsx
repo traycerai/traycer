@@ -2,6 +2,7 @@ import {
   useCallback,
   useEffect,
   useMemo,
+  useRef,
   useState,
   useSyncExternalStore,
   type ReactNode,
@@ -19,6 +20,7 @@ import { botTurnIndexOf, turnOfMessages } from "@/lib/bots/bot-turn-receipt";
 import type { BotTurnRef } from "@traycer/protocol/host/bot/conversation-schemas";
 import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
 import type { HostRpcRegistry } from "@/lib/host";
+import { useBotSearchWordMarks } from "@/hooks/bots/use-bot-search-word-marks";
 import { useBotTurnLocateQuery } from "@/hooks/bots/use-bot-turn-locate-query";
 import { useBotFailedRecovery } from "@/components/bots/bot-failed-recovery";
 import type { BotTurnOpen } from "@/stores/bots/bot-open-thread-store";
@@ -42,10 +44,15 @@ import {
   type ChatBotTurnReceipt,
 } from "@/components/chat/chat-bot-presentation-context";
 import type { QuestionCardAnswer } from "@/components/chat/question-card";
+import {
+  ChatAttachmentScopeContext,
+  type ChatAttachmentScopeValue,
+} from "@/components/chat/chat-attachment-scope-context";
 import { ChatContainerContext } from "@/components/chat/chat-container-context";
 import { TasklessMarkdownLinkProvider } from "@/components/chat/chat-markdown-link-provider";
 import { useSubagentDrillIn } from "@/components/chat/segments/subagent-open-as-chat";
 import { TileErrorBoundary } from "@/components/epic-canvas/renderers/tile-error-boundary";
+import { useHostDirectoryEntry } from "@/hooks/host/use-host-directory-entry";
 import { useTabHostClient } from "@/hooks/host/use-tab-host-client";
 import { useChatSessionHandleForContainer } from "@/lib/registries/chat-session-registry";
 import { useAuthStore } from "@/stores/auth/auth-store";
@@ -327,19 +334,45 @@ export function BotChatTranscript(props: {
   }
   return (
     <TileErrorBoundary instanceId={instanceId} resetKey={chatId}>
-      <BotChatTranscriptBody
-        handle={handle}
-        botId={botId}
-        chatId={chatId}
-        hostId={hostId}
-        title={title}
-        instanceId={instanceId}
-        surface={surface}
-        resolveMember={resolveMember}
-        header={header}
-        landOn={props.landOn}
-      />
+      <BotTranscriptImageScope botId={botId} chatId={chatId} hostId={hostId}>
+        <BotChatTranscriptBody
+          handle={handle}
+          botId={botId}
+          chatId={chatId}
+          hostId={hostId}
+          title={title}
+          instanceId={instanceId}
+          surface={surface}
+          resolveMember={resolveMember}
+          header={header}
+          landOn={props.landOn}
+        />
+      </BotTranscriptImageScope>
     </TileErrorBoundary>
+  );
+}
+
+/**
+ * Where a row's images are read from: the bot's attachment store, under the bot
+ * id, on the host serving the tab.
+ */
+export function BotTranscriptImageScope(props: {
+  readonly botId: string;
+  readonly chatId: string;
+  readonly hostId: string;
+  readonly children: ReactNode;
+}): ReactNode {
+  const { botId, chatId, hostId, children } = props;
+  const client = useTabHostClient();
+  const hostVersion = useHostDirectoryEntry(hostId)?.version ?? null;
+  const scope = useMemo<ChatAttachmentScopeValue>(
+    () => ({ epicId: botId, chatId, hostId, hostVersion, client }),
+    [botId, chatId, client, hostId, hostVersion],
+  );
+  return (
+    <ChatAttachmentScopeContext value={scope}>
+      {children}
+    </ChatAttachmentScopeContext>
   );
 }
 
@@ -536,6 +569,13 @@ function BotChatTranscriptBody(props: {
     );
   }, []);
   useLandOnMessage(landOn, state.snapshotLoaded, land);
+  const transcriptRef = useRef<HTMLDivElement | null>(null);
+  const rowIdOf = useCallback(
+    (messageId: string): string | null =>
+      jumpTargetIn(messages, { kind: "message", messageId })?.rowId ?? null,
+    [messages],
+  );
+  useBotSearchWordMarks(transcriptRef, chatId, rowIdOf);
   const getMessageActions = useCallback(() => null, []);
   const turns = useTranscriptTurns({
     client: tabClient,
@@ -608,6 +648,7 @@ function BotChatTranscriptBody(props: {
     <ChatContainerContext.Provider value={botId}>
       <ChatBotPresentationContext.Provider value={presentation}>
         <div
+          ref={transcriptRef}
           data-chat-keyboard-scroll-scope=""
           data-active="true"
           data-testid="bot-chat-transcript"
@@ -804,9 +845,11 @@ function useTranscriptTurns(input: {
 const NO_TURN_KEYS: ReadonlyArray<{ chatId: string; turnId: string }> = [];
 
 /**
- * What to ask the host about a list's rows: every reply of the bot (not an
- * announcement), by each record its row carries, and every post the bot
- * failed to answer, by its request.
+ * What to ask the host about a list's rows: every row of the bot (a reply,
+ * a question or an announcement), by each record its row carries, and every
+ * post the bot failed to answer, by its request. A row no turn wrote (an
+ * announcement the host posts itself) is asked too, and the host names no
+ * turn for it.
  */
 function turnLocateKeysOf(
   messages: ReadonlyArray<ChatMessage>,
@@ -819,7 +862,6 @@ function turnLocateKeysOf(
   const requestIds: string[] = [];
   for (const message of messages) {
     if (message.role === "assistant") {
-      if (message.announcement !== undefined) continue;
       if (message.persistentMessageId !== null) {
         messageIds.push(message.persistentMessageId);
       }

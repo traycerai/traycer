@@ -505,6 +505,17 @@ const EXPECTED_PUBLIC_SURFACE: readonly ExpectedSurfaceEntry[] = [
     ],
     args: [],
   },
+  // Tracy Bots T141: a team's own machine joins with the app's one-time
+  // install token.
+  {
+    path: "host join",
+    options: [
+      { flags: "--json", mandatory: false },
+      { flags: "--no-progress", mandatory: false },
+      { flags: "--quiet", mandatory: false },
+    ],
+    args: [{ name: "token", required: true, variadic: false }],
+  },
   {
     path: "host apply",
     options: [
@@ -1158,7 +1169,9 @@ const EXPECTED_PUBLIC_SURFACE: readonly ExpectedSurfaceEntry[] = [
   {
     path: "bot threads",
     options: [
+      { flags: "--cursor <cursor>", mandatory: false },
       { flags: "--json", mandatory: false },
+      { flags: "--limit <count>", mandatory: false },
       { flags: "--no-progress", mandatory: false },
       { flags: "--quiet", mandatory: false },
     ],

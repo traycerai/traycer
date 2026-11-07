@@ -18,6 +18,7 @@ import {
 } from "@traycer/protocol/host/environment/arm-streams";
 import type { HostStreamRpcRegistry } from "@traycer/protocol/host/registry";
 import type { PlainTerminalRecord } from "@traycer/protocol/host/terminal/plain-schemas";
+import type { EnvironmentArmGraph } from "@/lib/comm-graph/compose-comm-graph-events";
 import {
   createEnvironmentArmLanes,
   type EnvironmentArmLaneSpec,
@@ -224,6 +225,7 @@ export function useEnvironmentArmChats(
               client: scope.client,
               initial: NO_CHATS,
               ended: ENDED_CHATS,
+              reopenedFromEnd: ENDED_CHATS,
               open: (client) =>
                 client.subscribe("environment.chats.subscribe", {
                   environmentId,
@@ -250,40 +252,6 @@ export function useEnvironmentArmChats(
   );
   const states = useEnvironmentArmStates(chatLanes, specs, NO_CHATS);
   return useMemo(() => states.flatMap((state) => state.chats), [states]);
-}
-
-/**
- * The arm chats this client already holds for `taskId` under `viewerId`,
- * read without opening anything. Only lanes a mounted surface holds are
- * here, so an empty answer is not evidence that the task has none.
- */
-export function heldEnvironmentArmChats(
-  viewerId: string,
-  taskId: string,
-): {
-  /** Environments whose arm for this task has answered. */
-  readonly settledEnvironmentIds: ReadonlySet<string>;
-  readonly chats: readonly CloudChatSummary[];
-} {
-  const settledEnvironmentIds = new Set<string>();
-  const chats: CloudChatSummary[] = [];
-  for (const [key, state] of chatLanes.held()) {
-    const parts: unknown = JSON.parse(key);
-    if (!Array.isArray(parts) || parts[2] !== viewerId || parts[4] !== taskId) {
-      continue;
-    }
-    if (!state.settled || typeof parts[3] !== "string") continue;
-    settledEnvironmentIds.add(parts[3]);
-    chats.push(...state.chats);
-  }
-  return { settledEnvironmentIds, chats };
-}
-
-/** Hears every change of the arm chats {@link heldEnvironmentArmChats} reads. */
-export function subscribeHeldEnvironmentArmChats(
-  listener: () => void,
-): () => void {
-  return chatLanes.subscribeHeld(listener);
 }
 
 // ---- plain terminals ------------------------------------------------------ //
@@ -327,6 +295,7 @@ export function useEnvironmentArmTerminals(
               client: scope.client,
               initial: NO_TERMINALS,
               ended: NO_TERMINALS,
+              reopenedFromEnd: NO_TERMINALS,
               open: (client) =>
                 client.subscribe("environment.plainTerminals.subscribe", {
                   environmentId,
@@ -366,14 +335,30 @@ export function useEnvironmentArmTerminals(
 interface GraphState {
   readonly events: readonly HostCommunicationGraphCloudFeedEvent[];
   readonly cursor: HostCommunicationGraphCloudFeedCursor | null;
+  /**
+   * `complete` once a frame of a stream that started from scratch, or resumed
+   * from a cursor this state holds, reached the head the server read;
+   * `ended` once the arm ended and holds nothing.
+   */
+  readonly history: "pending" | "complete" | "ended";
 }
 interface GraphFrame {
   readonly events: readonly HostCommunicationGraphCloudFeedEvent[];
   readonly cursor: HostCommunicationGraphCloudFeedCursor | null;
+  readonly caughtUp: boolean;
 }
 const NO_GRAPH: GraphState = Object.freeze({
   events: Object.freeze([]),
   cursor: null,
+  history: "pending",
+});
+// An ended arm has nothing to hand over: it holds no one's history, and waits
+// for none. Reopened, it starts over from `NO_GRAPH`, since its stream then
+// reads the whole graph again.
+const ENDED_GRAPH: GraphState = Object.freeze({
+  events: Object.freeze([]),
+  cursor: null,
+  history: "ended",
 });
 const graphLanes = createEnvironmentArmLanes<GraphState, GraphFrame>();
 
@@ -384,7 +369,7 @@ const graphLanes = createEnvironmentArmLanes<GraphState, GraphFrame>();
  */
 export function useEnvironmentArmGraphEvents(
   epicId: string,
-): readonly HostCommunicationGraphCloudFeedEvent[] {
+): EnvironmentArmGraph {
   const scope = useEnvironmentArmScope(
     "environment.communicationGraph.subscribe",
   );
@@ -405,7 +390,8 @@ export function useEnvironmentArmGraphEvents(
               poolHostId: scope.poolHostId,
               client: scope.client,
               initial: NO_GRAPH,
-              ended: NO_GRAPH,
+              ended: ENDED_GRAPH,
+              reopenedFromEnd: NO_GRAPH,
               open: (client, readState) =>
                 client.subscribeWithParamsProvider(
                   "environment.communicationGraph.subscribe",
@@ -429,6 +415,7 @@ export function useEnvironmentArmGraphEvents(
                       frame: {
                         events: parsed.data.events,
                         cursor: parsed.data.cursor,
+                        caughtUp: parsed.data.caughtUp,
                       },
                     };
               },
@@ -440,13 +427,35 @@ export function useEnvironmentArmGraphEvents(
                   (event) => !seen.has(event.eventId),
                 );
                 const cursor = frame.cursor ?? state.cursor;
-                if (fresh.length === 0 && cursor === state.cursor) return state;
-                return { events: [...state.events, ...fresh], cursor };
+                // A complete history resumes from its own cursor, so a
+                // redial's backlog is only the gap since then: still complete.
+                const history =
+                  state.history === "complete" || frame.caughtUp
+                    ? "complete"
+                    : "pending";
+                if (
+                  fresh.length === 0 &&
+                  cursor === state.cursor &&
+                  history === state.history
+                ) {
+                  return state;
+                }
+                return {
+                  events: [...state.events, ...fresh],
+                  cursor,
+                  history,
+                };
               },
             }),
           ),
     [scope, epicId],
   );
   const states = useEnvironmentArmStates(graphLanes, specs, NO_GRAPH);
-  return useMemo(() => states.flatMap((state) => state.events), [states]);
+  return useMemo(
+    () => ({
+      events: states.flatMap((state) => state.events),
+      historySettled: states.every((state) => state.history !== "pending"),
+    }),
+    [states],
+  );
 }

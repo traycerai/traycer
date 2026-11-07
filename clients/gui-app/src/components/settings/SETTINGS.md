@@ -1057,8 +1057,7 @@ credential; if the server needs one, it stops working until you pick another
 secret on MCP servers." ("Used by <A> and <B>." or "<A>, <B> and <n> more",
 then "Removing it leaves them without a credential; any that need one stop
 working until you pick another secret on MCP servers."), whose "MCP servers"
-opens that page (`secretUsedByLine`). A held secret's
-row keeps its "Waiting for you" badge.
+opens that page (`secretUsedByLine`).
 
 **Environment ▸ Retrospective sheet and Stop using Personal.** On a 1.1
 host, Overview shows `Shared by an earlier version` / `This computer stopped
@@ -1075,10 +1074,9 @@ Local picker row's subtitle (`its own settings, not in Personal yet`,
 `partly in Personal`, `stopped using Personal`) and `Move to Personal` /
 `Finish moving` verb come from those planes (E4's slot); the row's `Local`
 badge reads "Settings on this computer only" on hover. The Secrets page's
-`N values from {host} are on hold until you choose · Review them` line
-(`1 value … is on hold until you choose · Review it`) opens the same sheet
-for that host's held rows. `Keep as a secret` collects Add-secret's binding (kind, protocol,
-hosts, port, swap sites, gateway consent) with no value field, then
+`N commands from {host} are on hold until you choose · Review them` line
+(`1 command … is on hold until you choose · Review it`) opens the same sheet
+for that host's held rows, where Approve and Discard answer one row through
 `environment.review.heldApply`. Stop using Personal opens the preview
 (`environment.move.stopPreview`) and confirm (`environment.move.stop`) after
 every needs-choice row has Keep locally, Remove from this computer, or
@@ -1091,11 +1089,7 @@ kinds the page edits: each convergence notice from `environment.notices`
 with Undo (`environment.undo`, with the grant) while `undoAvailable`, and each
 "needs you" row from `environment.review` ("LOG_LEVEL is waiting for you:
 runs a command / was changed without your confirmation.") with Review, which
-opens Secrets. A value held because it looks like a key reads
-"LOG_LEVEL looks like a key and is on hold until you choose · Review", and
-its Variables or provider-variable row reads "LOG_LEVEL · on hold until you
-choose · Review" with no value; both Reviews open the retrospective sheet for
-that value. A value typed there that looks like a key (`classifyCredential`) is
+opens Secrets. A value typed there that looks like a key (`classifyCredential`) is
 refused in its row with "This looks like a key. Add it as a secret.", whose
 link opens Add a secret with the name and value filled in; nothing is stored
 as a variable. A provider's own key variable typed on its Env tab
@@ -1105,10 +1099,10 @@ opens that provider's Account tab; the typed value is cleared and nothing is
 saved. That tab is the one the provider page shows (`apiKey.supported`), so a
 provider without one, such as Claude Code, keeps the first line. A name one
 of Personal's secrets is set under (`environment.secrets.list@1.2` rows'
-`variables` and `providerVariables`: a moved key's secret is bound to the item
-it came from) reads "ENV_E2E_SERVICE_TOKEN · from the secret
-ENV_E2E_SERVICE_TOKEN · Secrets" on Variables or that provider's Env, with no
-value and nothing to edit there. A value
+`variables`) reads "ENV_E2E_SERVICE_TOKEN · from the secret
+ENV_E2E_SERVICE_TOKEN · Secrets" on Variables, with no value and nothing to
+edit there. A provider's Env has no such name: nothing binds a secret to a
+name in one provider's env. A value
 already saved that looks like a key shows as dots with Remove, never in a
 field, on every Variables and Env list (Personal, a team, a Local row), with
 the same line beneath where the page has one; its link carries the saved
@@ -1257,6 +1251,18 @@ the whole surface guards against:
   side effect. Always wears the accent - on the Overview that is the `Active`
   tag beside the host name, which replaced a full-width row asserting the same
   boolean.
+
+Settings keeps one host view selection per environment pick, in the window's
+non-persisted `settings-host-scope-store`. `useHostScope()` filters the global
+host options through `useHostsRunningConfiguration` membership (or the one
+Local host), defaulting to the first member only when no selection exists.
+An explicit selection that leaves membership stays vanished, with its picked
+name and a Forget control; loading or failed membership selects nothing.
+Named entry points share `carryViewedHostIntoSettingsScope`: hold the target
+pending, resolve its Local row or confirm Personal/team membership, then set
+the environment pick and its host selection. This never activates a host.
+Membership, discovery and Personal's computer lists use the unscoped
+`useHostScopeFor(WINDOW_HOST_SELECTION)` beneath that selection.
 
 `useHostScope()` (`host-scope/use-host-scope.ts`) is the single hook every
 panel under the picker reads; `usePersonalHostScope()` beside it is the same
@@ -1487,9 +1493,8 @@ means the drain UI renders NOTHING - never a zero, which would offer to end
       Worktrees heading; with the heading gone the label names worktrees
       itself.
     - **Agent roles**: gated by `isAgentRolesRowAvailable` (the desktop
-      feature-settings bridge) and marked with the muted xs **Experimental**
-      badge the permission modes use, in place of an Experimental heading over
-      one row.
+      feature-settings bridge). A regular toggle, off by default; saved
+      preferences are preserved.
     - **Archive idle agents automatically** (`ChatAutoArchiveSettingsRow` in
       `panels/chat-auto-archive-settings-row.tsx`, definition
       `chatAutoArchive`): the ACCOUNT-wide chat auto-archive setting, read and
@@ -1717,9 +1722,16 @@ means the drain UI renders NOTHING - never a zero, which would offer to end
   (`panels/notification-chime-settings-section.tsx`), one dropdown per kind
   of alert, untitled because the page is already named for it; and, in a build
   with something to play, **Soundtrack**
-  (`panels/soundtrack-settings-section.tsx`), its volume and what it follows.
-  Its on and off is the toggle in the top row. The id still says notifications:
-  the OS and push rows moved to Alerts, and ids do not change.
+  (`panels/soundtrack-settings-section.tsx`): **Music**, the soundtrack's only
+  on and off switch (the palette's Soundtrack action flips the same setting);
+  **Playback controls**, drawn only while Music is on and off by default, which
+  puts previous, pause and next in a task's status row
+  (`epic-canvas/panels/epic-playback-controls.tsx`), the only place the window's
+  chrome carries the soundtrack; then its volume and what it follows, which stay
+  editable while it is off. Pause is a setting (`soundtrackPaused`), so it holds
+  across windows and restarts. Music cannot be left silent with no way back:
+  turning Music on, or these controls off, clears it. The id still says
+  notifications: the OS and push rows moved to Alerts, and ids do not change.
 - `Alerts` (`panels/alerts-settings-panel.tsx`, `/settings/alerts`): one
   group, **Notifications** (anchor `alerts-notifications`), where the alerts
   themselves are configured. **OS notifications** on a desktop with the
@@ -2022,13 +2034,14 @@ codeFontSize` in muted styling while `null`; any tick/type pins an
     On Settings > Providers the provider's limits grey with a reason and an "Open Layout" link while Usage limits or that provider is hidden here (U5).
     The link lands on the controller itself: Usage limits' Show switch, or that provider's own row in the Profiles list (`navigateToLayoutRegionRow`).
   - **Presets and resets.** The Presets block (`inspector/presets-block.tsx`)
-    applies a preset in one click, replacing visibility and style values and
-    keeping placement, order and providers, with an Undo toast. Its status
-    reads `<Preset> · Modified` only while a VALUE differs from the applied
-    preset (`layoutModified`, T5), the one kind of change a preset puts back;
-    the Presets area's dot reads the same flag. The View changes list is
-    offered for any change, grouped Styles and Arrangement, each line with its
-    own revert (`lib/layout/layout-diff.ts` builds it,
+    applies a preset in one click, replacing display and style values and
+    keeping placement, order, providers and the panels the rail shows, with an
+    Undo toast. Its status reads `<Preset> · Modified` only while a display
+    VALUE differs from the applied preset (`layoutModified`, T5), the one kind
+    of change a preset puts back; the Presets area's dot reads the same flag.
+    The View changes list is offered for any change, grouped Styles and
+    Arrangement, with panels shown or hidden under Arrangement, each line with
+    its own revert (`lib/layout/layout-diff.ts` builds it,
     `inspector/layout-change-lines.ts` words it). While Arrangement has lines,
     a note under the status says presets keep the arrangement, with the count
     of those lines, and the applied card is described by it. `Reset layout…`
@@ -4807,8 +4820,12 @@ min`): "The judge didn't finish in time, so it's asking you instead."
   when a turn dies on a provider error it cannot retry (rate limit, outage,
   billing, signed out). Backed by `providers.fallbackPolicy.get` / `.set`.
   - **Host-scoped like Agent selection**, and for the same reason: the policy
-    lives in `provider-accounts.json`, which is machine-local, so it is one
-    policy per Traycer user **per host**. The panel mounts `HostScopeGate`,
+    lives in `provider-accounts.json`, which is machine-local. On a personal
+    computer that makes it one policy per Traycer user **per host**; on a
+    team-owned computer it is one policy **per computer**, the team's, which
+    every member reads and only the team's own page sets (the `source` bullet
+    below; `providers.fallbackPolicy` refuses a write there).
+    The panel mounts `HostScopeGate`,
     re-provides `HostRuntimeContext` only at `status === "ready"`, and keys its
     editor on `scope.hostId` so one machine's draft can never be saved to
     another's row.
@@ -4816,13 +4833,16 @@ min`): "The judge didn't finish in time, so it's asking you instead."
     "Applies to your chat agents on `<host name>`" - which is a deliberate
     exception to the no-readout rule above. The sentence is not a second copy
     of the sidebar's label; it rules out the reading that this configures every
-    agent on the machine. The policy covers that user's **chat** agents and
-    never terminal agents, which cannot be reconfigured in place and get no
-    fallback at all. The chat surfaces link in here from another host's chat
+    agent on the machine. The policy covers **chat** agents and never terminal
+    agents, which cannot be reconfigured in place and get no fallback at all -
+    the signed-in user's own chat agents on a personal computer, and every
+    member's on a team-owned one, where the read-only state says whose policy
+    it is in its own sentence. The chat surfaces link in here from another host's chat
     (through `carryViewedHostIntoSettingsScope`), which is precisely when a
     panel that said nothing would be editing the wrong machine.
-  - **Groups**: Fallback (the `Automatic fallback` master switch, off by
-    default, and the `Try these in order` step editor), Behavior, Equivalent
+  - **Groups**: Fallback (the `Automatic fallback` master switch, on for a user
+    with no saved row and off over a row the host cannot read or after a reset,
+    and the `Try these in order` step editor), Behavior, Equivalent
     models, Advanced per-failure overrides, and a Danger Zone. Every policy
     field is compared by `fallbackPolicyValuesEqual`; a field missing from that
     function is equal to itself by omission, so an edit to it alone would
@@ -5353,8 +5373,8 @@ wrap`). Each row names the account its first usable match runs on, the
     change where an armed traversal can hop to. It says "keep the steps and
     timings they started with" and claims nothing more.
   - **Reset re-reads and remounts; restore writes in place.** The asymmetry is
-    the seed marker. `reset` clears it, so the default policy it returns is
-    stale the moment the next read re-seeds - writing that response into the
+    the seed marker. `reset` clears it, so the policy it returns is
+    stale the moment the next read re-seeds the groups - writing that response into the
     cache would show an empty model-group list while the engine resolves against
     a full seeded set. So the panel performs its own `refetchPolicy()` after the
     reset and remounts the editor (a `resetGeneration` in its key) onto what
@@ -5525,8 +5545,8 @@ wrap`). Each row names the account its first usable match runs on, the
     there. Both facts, or no in-force claim.
     The same rule bounds what may be said about the HOST's values at all. A
     reset that succeeded proves the host wrote something; it does not prove the
-    result differs from what is on screen - resetting an already-default policy
-    yields identical values back, and the follow-up read that would have shown
+    result differs from what is on screen - resetting a policy that already
+    matches what a reset writes yields identical values back, and the follow-up read that would have shown
     that is the request that failed. So the copy hedges ("may not be what this
     host is using now") instead of asserting an inequality no client can know.
     And a claim about DISPATCH comes from the request's own state - pending,
@@ -5578,9 +5598,28 @@ wrap`). Each row names the account its first usable match runs on, the
     itself, so the local check cannot drift from the host's - and this module
     only turns the failing path into a sentence.
   - **`storedPolicyUnreadable`** is surfaced, never swallowed. The host answers
-    a corrupt row with the default policy plus that flag instead of throwing,
+    a corrupt row with routing off, plus that flag, instead of throwing,
     so that this page still renders and a save can replace the bad row; the
     notice says what is on screen is not what is stored.
+  - **`source`** says whose policy the response is, and `team` replaces the
+    editor with a read-out (`FallbackTeamRoutingInEffect`). Routing on a
+    team-owned computer is the team's - one setting for everyone who works on
+    that machine, set on the team's own page - so there is nothing for a member
+    to change there: no editor, no master toggle, no Danger Zone, and no
+    action. The editor would otherwise present every control as if it described
+    what happens now, and a save would be refused by the host anyway
+    (`TeamHostRoutingIsTheTeamsError`, which `set`, `reset` and
+    `restoreTierGroups` all raise there). The read-out states the policy in
+    effect through the same `FallbackPolicySummary` the team's own page uses
+    for a viewer, with one sentence saying whose it is and where it is set, and
+    the host answers `source` from the same module a turn resolves its account
+    with, so the page cannot claim one policy while the engine routes by
+    another. `storedPolicyUnreadable` adds a line to that read-out rather than
+    bringing the editor back: a member has no own routing to set instead, and
+    unsaid it would leave routing off looking like the team's decision. A
+    client below `get`@2.1 is answered the same policy in effect and simply is
+    not told whose it is, so it mounts its editor and meets the refusal on
+    save; nothing here implies a host support floor.
   - **`inFlightCount`** is rendered as a plain number in the master toggle's
     helper with **no link**: every holding or waiting chat already shows its own
     card with its own stop action. "Right now" is a claim about the present,

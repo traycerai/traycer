@@ -93,6 +93,8 @@ function run(plan: TileOpenPlan): NestedFocusTarget | null {
     navigateNested,
     epicId: EPIC_ID,
     pipOrigin: "manual",
+    // Dispatch-table cases are the sidebar path: never adopt a version.
+    adoptHtmlVersion: false,
   });
 }
 
@@ -149,10 +151,9 @@ describe("executeTileOpen", () => {
     expect(trackOpenedCanvasTile).not.toHaveBeenCalled();
   });
 
-  // The chat's inline Expand dedupes onto the artifact's one tile and must
-  // still show the version it captured; a versionless open (the sidebar row)
-  // leaves the tile's choice alone.
-  it("moves a focused html tile onto the version the intent names", () => {
+  // Expand names the version its card shows (including Latest: no pin). The
+  // sidebar row does not, and must leave a picked version alone.
+  it("adopts the intent's html version only when the opener asked to", () => {
     const store = useEpicCanvasStore.getState();
     const tabId = store.openEpicTab(EPIC_ID, "Exec");
     const htmlVersion = (capturedAt: number): HtmlArtifactVersionSelection => ({
@@ -187,7 +188,7 @@ describe("executeTileOpen", () => {
       instanceId: open.instanceId,
       promote: false,
     };
-    const focusWith = (node: EpicNodeRef) =>
+    const focusWith = (node: EpicNodeRef, adoptHtmlVersion: boolean) =>
       executeTileOpen({
         plan,
         node,
@@ -196,6 +197,7 @@ describe("executeTileOpen", () => {
         navigateNested,
         epicId: EPIC_ID,
         pipOrigin: "manual",
+        adoptHtmlVersion,
       });
     const tileVersion = () => {
       const ref =
@@ -205,19 +207,36 @@ describe("executeTileOpen", () => {
       return ref?.type === "html" ? ref.htmlVersion : undefined;
     };
 
-    focusWith({
-      ...open,
-      instanceId: "inst-html-second",
-      htmlVersion: htmlVersion(2_000),
-    });
+    focusWith(
+      {
+        ...open,
+        instanceId: "inst-html-second",
+        htmlVersion: htmlVersion(2_000),
+      },
+      true,
+    );
     expect(tileVersion()).toEqual(htmlVersion(2_000));
 
-    focusWith({
-      ...open,
-      instanceId: "inst-html-third",
-      htmlVersion: undefined,
-    });
+    focusWith(
+      {
+        ...open,
+        instanceId: "inst-html-sidebar",
+        htmlVersion: undefined,
+      },
+      false,
+    );
     expect(tileVersion()).toEqual(htmlVersion(2_000));
+
+    // Expand on a current-version card: no pin on the node, adopt Latest.
+    focusWith(
+      {
+        ...open,
+        instanceId: "inst-html-expand-latest",
+        htmlVersion: undefined,
+      },
+      true,
+    );
+    expect(tileVersion()).toBeUndefined();
   });
 
   // A background open of an already-open tile touches nothing.
@@ -383,6 +402,7 @@ describe("executeTileOpen", () => {
       // A failed auto-PiP leaves the tab reachable in the sidebar; toasting
       // about background automation is the regression this pins (L4).
       pipOrigin: "agent",
+      adoptHtmlVersion: false,
     });
     expect(convertBrowserTabToPip).toHaveBeenCalledTimes(2);
     vi.mocked(convertBrowserTabToPip).mock.calls[1][0].onError("boom");
@@ -401,6 +421,7 @@ describe("executeTileOpen", () => {
         navigateNested,
         epicId: EPIC_ID,
         pipOrigin: "manual",
+        adoptHtmlVersion: false,
       }),
     ).toBeNull();
     expect(convertBrowserTabToPip).not.toHaveBeenCalled();
@@ -424,6 +445,7 @@ describe("executeTileOpen", () => {
         navigateNested,
         epicId: null,
         pipOrigin: "manual",
+        adoptHtmlVersion: false,
       }),
     ).toEqual(FOCUS);
     expect(spies.openInPane).toHaveBeenCalledTimes(1);

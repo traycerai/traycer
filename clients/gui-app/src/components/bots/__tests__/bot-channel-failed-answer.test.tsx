@@ -21,6 +21,7 @@ import {
 } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import { BotTestRunnerHost } from "@/components/bots/__tests__/bot-test-runner-host";
 import { create, type StoreApi, type UseBoundStore } from "zustand";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
@@ -100,6 +101,9 @@ const mocks = vi.hoisted(() => ({
   openSettings: vi.fn<(opts: OpenSettingsModalOpts) => void>(),
 }));
 
+vi.mock("@/hooks/host/use-host-directory-entry", () => ({
+  useHostDirectoryEntry: () => null,
+}));
 vi.mock("@/lib/registries/chat-session-registry", async (importOriginal) => ({
   ...(await importOriginal<
     typeof import("@/lib/registries/chat-session-registry")
@@ -133,10 +137,15 @@ vi.mock("@/hooks/host/use-host-supports-method", async (importOriginal) => ({
 vi.mock("@/components/epic-tabs/pane-visibility-context", () => ({
   usePaneVisible: () => true,
   usePaneFocused: () => true,
+  usePaneFocusProbe: () => () => true,
 }));
 vi.mock("@/hooks/bots/use-bot-conversation-list-query", () => ({
   useBotConversationListQuery: () => ({
-    data: { conversations: [{ conversationId: CHANNEL_ID }] },
+    data: {
+      conversations: listedConversationIds.map((conversationId) => ({
+        conversationId,
+      })),
+    },
     isError: false,
     refetch: vi.fn(),
   }),
@@ -212,6 +221,12 @@ import { BotChannelView } from "@/components/bots/bot-channel-view";
 import type { BotOpenThread } from "@/stores/bots/bot-open-thread-store";
 import { useBotDraftsStore } from "@/stores/bots/bot-drafts-store";
 import type { BotMemberResolver } from "@/lib/bots/bot-member-names";
+import {
+  boxInput,
+  editableIn,
+  textOf,
+  typeInto,
+} from "@/components/bots/__tests__/bot-box-test-support";
 
 const BOT_ID = "bot_01ARZ3NDEKTSV4RRFFQ69G5FAV";
 /** The host serving the tab, which takes the sends. */
@@ -404,6 +419,10 @@ function hostClientRecordingSends(): HostRequester<HostRpcRegistry> {
 /** What the bot's host was asked to update, in order. */
 let ensured: ReadonlyArray<string>;
 
+/** The conversations the bot lists, and the one its record names as the channel. */
+let listedConversationIds: ReadonlyArray<string> = [CHANNEL_ID];
+let namedConversationId: string = CHANNEL_ID;
+
 /** The bot's host's client, over a messenger whose `providers.ensurePack` records the provider. */
 function boundHostClientRecordingUpdates(): HostRequester<HostRpcRegistry> {
   const messenger = new MockHostMessenger<HostRpcRegistry>({
@@ -446,34 +465,39 @@ function mountChannelWith(
   const tree = (): ReactElement => (
     <StrictMode>
       <QueryClientProvider client={queryClient}>
-        <TooltipProvider>
-          <ChatExpansionTestProviders tileInstanceId="tile-1">
-            <BotChannelView
-              botId={BOT_ID}
-              hostId={HOST_ID}
-              boundHostId={boundHostId}
-              boundHostEpoch={1}
-              botTitle="Release Bot"
-              directive={null}
-              appConversationChatId={CHANNEL_ID}
-              trunkChatId="trunk-chat"
-              onOpenTurn={vi.fn()}
-              onOpenSession={vi.fn()}
-              landOn={null}
-              openMemory={null}
-              onOpenMemory={vi.fn()}
-              environmentId="env-1"
-              botNameOf={() => null}
-              resolveMember={resolveMember}
-              tasks={[]}
-              surfaceActions={null}
-              openThread={openThread}
-              onOpenThread={onOpenThread}
-              onOpenActivity={vi.fn()}
-              setupHistory={null}
-            />
-          </ChatExpansionTestProviders>
-        </TooltipProvider>
+        <BotTestRunnerHost>
+          <TooltipProvider>
+            <ChatExpansionTestProviders tileInstanceId="tile-1">
+              <BotChannelView
+                tiles={null}
+                botId={BOT_ID}
+                hostId={HOST_ID}
+                boundHostId={boundHostId}
+                boundHostEpoch={1}
+                botTitle="Release Bot"
+                directive={null}
+                appConversationChatId={namedConversationId}
+                trunkChatId="trunk-chat"
+                onOpenTurn={vi.fn()}
+                onOpenSession={vi.fn()}
+                landOn={null}
+                openMemory={null}
+                onOpenMemory={vi.fn()}
+                environmentId="env-1"
+                botNameOf={() => null}
+                environmentBots={null}
+                openExchange={null}
+                exchangeRail={{ open: () => undefined, close: () => undefined }}
+                resolveMember={resolveMember}
+                tasks={[]}
+                surfaceActions={null}
+                openThread={openThread}
+                onOpenThread={onOpenThread}
+                setupHistory={null}
+              />
+            </ChatExpansionTestProviders>
+          </TooltipProvider>
+        </BotTestRunnerHost>
       </QueryClientProvider>
     </StrictMode>
   );
@@ -481,13 +505,13 @@ function mountChannelWith(
   return () => view.rerender(tree());
 }
 
-function channelBox(): HTMLTextAreaElement {
-  const box = screen.getByRole("textbox", { name: "Message Release Bot" });
-  if (!(box instanceof HTMLTextAreaElement)) throw new Error("not a textarea");
-  return box;
+function channelBox(): HTMLElement {
+  return boxInput("Message Release Bot");
 }
 
 beforeEach(() => {
+  listedConversationIds = [CHANNEL_ID];
+  namedConversationId = CHANNEL_ID;
   sent = [];
   boundHostId = BOUND_HOST_ID;
   heldSends = null;
@@ -740,7 +764,7 @@ describe("<BotChannelView tiles={null} /> a teammate's post the bot failed to an
       "bot-channel-composer-send-failed",
     );
     expect(notice.textContent).toBe("Couldn't send. Try again.");
-    expect(channelBox().value).toBe("");
+    expect(textOf(channelBox())).toBe("");
   });
 
   it("offers Retry and no Edit on the thread anchor the teammate wrote", () => {
@@ -794,12 +818,12 @@ describe("<BotChannelView tiles={null} /> Edit on a post the bot failed to answe
       ),
     );
 
-    expect(box.value).toBe(POST_TEXT);
+    expect(textOf(box)).toBe(POST_TEXT);
     expect(
       screen.getByTestId("bot-channel-composer-editing").textContent,
     ).toContain("Sending replaces your message that failed.");
 
-    await user.type(box, " Check nightly too.");
+    typeInto(box, " Check nightly too.");
     await user.click(screen.getByTestId("bot-channel-composer-send"));
 
     expect(sent).toEqual([
@@ -817,7 +841,27 @@ describe("<BotChannelView tiles={null} /> Edit on a post the bot failed to answe
     await waitFor(() => {
       expect(screen.queryByTestId("bot-channel-composer-editing")).toBeNull();
     });
-    expect(box.value).toBe("");
+    expect(textOf(box)).toBe("");
+  });
+
+  it("drops the edit of a failed message when the channel resolves to another conversation", async () => {
+    const user = userEvent.setup();
+    activityStore.setState({ activity: trunkFailedOn(POST_REQUEST) });
+    const rerender = mountChannelWith(null, [memberPost(VIEWER_USER_ID)]);
+    await user.click(
+      within(screen.getByTestId("bot-member-row")).getByTestId(
+        "bot-message-edit",
+      ),
+    );
+    expect(screen.getByTestId("bot-channel-composer-editing")).toBeTruthy();
+    expect(textOf(channelBox())).toBe(POST_TEXT);
+
+    listedConversationIds = [CHANNEL_ID, "conversation-later"];
+    namedConversationId = "conversation-later";
+    rerender();
+
+    expect(screen.queryByTestId("bot-channel-composer-editing")).toBeNull();
+    expect(textOf(channelBox())).toBe("");
   });
 
   it("keeps an edit of a message in the open thread, its text and the message it replaces, while the channel's session goes and comes back", async () => {
@@ -869,10 +913,10 @@ describe("<BotChannelView tiles={null} /> Edit on a post the bot failed to answe
       .getAllByTestId("bot-member-row")
       .filter((row) => !anchor.contains(row));
     await user.click(within(replyRow).getByTestId("bot-message-edit"));
-    const box = within(panel).getByTestId("bot-thread-composer-input");
-    if (!(box instanceof HTMLTextAreaElement))
-      throw new Error("not a textarea");
-    await user.type(box, " Since Monday.");
+    const box = editableIn(
+      within(panel).getByTestId("bot-thread-composer-input"),
+    );
+    typeInto(box, " Since Monday.");
 
     const channel = mocks.channelHandle;
     mocks.channelHandle = null;
@@ -881,7 +925,7 @@ describe("<BotChannelView tiles={null} /> Edit on a post the bot failed to answe
     rerender();
 
     expect(box.isConnected).toBe(true);
-    expect(box.value).toBe(`${THREAD_TEXT} Since Monday.`);
+    expect(textOf(box)).toBe(`${THREAD_TEXT} Since Monday.`);
     expect(screen.getByTestId("bot-thread-composer-editing")).toBeTruthy();
     await user.click(screen.getByTestId("bot-thread-composer-send"));
     expect(sent.at(-1)).toMatchObject({
@@ -918,7 +962,7 @@ describe("<BotChannelView tiles={null} /> Edit on a post the bot failed to answe
       delivery: "written",
     });
     expect(sent[0]?.supersedes).toBe(POST_REQUEST);
-    expect(channelBox().value).toBe("");
+    expect(textOf(channelBox())).toBe("");
   });
 
   it("keeps the draft of an edit opened while an earlier edit's send was in flight", async () => {
@@ -938,7 +982,7 @@ describe("<BotChannelView tiles={null} /> Edit on a post the bot failed to answe
     });
     await user.click(screen.getByTestId("bot-message-edit"));
     const box = channelBox();
-    expect(box.value).toBe(SECOND_TEXT);
+    expect(textOf(box)).toBe(SECOND_TEXT);
     await act(async () => {
       hold.resolve();
       await hold.promise;
@@ -946,9 +990,9 @@ describe("<BotChannelView tiles={null} /> Edit on a post the bot failed to answe
 
     // The box is held while A's send is in flight, and released once it lands.
     await waitFor(() => {
-      expect(box.disabled).toBe(false);
+      expect(box.getAttribute("contenteditable")).toBe("true");
     });
-    expect(box.value).toBe(SECOND_TEXT);
+    expect(textOf(box)).toBe(SECOND_TEXT);
     expect(screen.getByTestId("bot-channel-composer-editing")).toBeTruthy();
     // A's delivery is not said under B's unsent draft.
     expect(screen.queryByTestId("bot-channel-composer-queued")).toBeNull();
@@ -967,7 +1011,7 @@ describe("<BotChannelView tiles={null} /> Edit on a post the bot failed to answe
     await user.click(screen.getByTestId("bot-channel-composer-edit-cancel"));
 
     expect(screen.queryByTestId("bot-channel-composer-editing")).toBeNull();
-    expect(channelBox().value).toBe("");
+    expect(textOf(channelBox())).toBe("");
     expect(sent).toEqual([]);
   });
 
@@ -997,7 +1041,7 @@ describe("<BotChannelView tiles={null} /> Edit on a post the bot failed to answe
     );
 
     expect(onOpenThread).toHaveBeenCalledWith(null);
-    expect(channelBox().value).toBe(POST_TEXT);
+    expect(textOf(channelBox())).toBe(POST_TEXT);
     expect(screen.getByTestId("bot-channel-composer-editing")).toBeTruthy();
   });
 });
@@ -1081,7 +1125,7 @@ describe("<BotChannelView tiles={null} /> the line under a post the bot did not 
     expect(sent[0].threadId).toBeNull();
 
     await user.click(within(line).getByRole("button", { name: "Edit" }));
-    expect(channelBox().value).toBe(POST_TEXT);
+    expect(textOf(channelBox())).toBe(POST_TEXT);
     expect(screen.getByTestId("bot-channel-composer-editing")).toBeTruthy();
   });
 

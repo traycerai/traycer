@@ -45,6 +45,12 @@ import { MockWsStreamClient } from "@/components/epic-canvas/pr/__tests__/pr-str
 import { GeneralSettingsPanel } from "@/components/settings/panels/general-settings-panel";
 import { setMobileApp } from "@/lib/mobile-app";
 import { KeybindingProvider } from "@/providers/keybinding-provider";
+import { AppColumnFrame } from "@/components/layout/app-column-frame";
+import { PHONE_SHELL_STRIP_CHROME } from "@/components/layout/header/app-title-band-kind";
+import { MobileAppHeader } from "@/components/layout/header/mobile-app-header";
+import { useMobileStripForm } from "@/components/layout/tabs/mobile-strip-form-context";
+import { MobileStripFormScope } from "@/components/layout/tabs/mobile-strip-form-scope";
+import { useTabStripPlacement } from "@/components/layout/tabs/use-tab-strip-placement";
 import { SideTabStrip } from "@/components/layout/tabs/side-strip/side-tab-strip";
 import { SheetJoinScope } from "@/components/layout/tabs/sheet-join";
 import { TabStrip } from "@/components/layout/tabs/tab-strip";
@@ -74,7 +80,7 @@ import {
   useLayoutStore,
 } from "@/stores/layout/layout-store";
 import { useSideTabStripStore } from "@/stores/layout/side-tab-strip-store";
-import { useVoiceSessionStore } from "@/stores/voice/voice-session-store";
+import { SIDE_STRIP_RAIL_WIDTH_PX } from "@/components/layout/tabs/side-strip/side-strip-tokens";
 import { useAuthStore } from "@/stores/auth/auth-store";
 import type { SurfaceNotificationIndicators } from "@/stores/notifications/notification-indicator-state";
 import { useSettingsStore } from "@/stores/settings/settings-store";
@@ -303,6 +309,14 @@ vi.mock("@/components/auth/user-menu", async (importOriginal) => ({
   UserMenu: () => <span data-testid="foot-account" />,
 }));
 
+// Whether this window is the phone shell; the width rule itself runs for real
+// against the `#root` width each case sets.
+const phoneShell = vi.hoisted((): { headerActive: boolean } => ({
+  headerActive: false,
+}));
+vi.mock("@/components/layout/header/use-mobile-header-active", () => ({
+  useMobileHeaderActive: () => phoneShell.headerActive,
+}));
 // The header's global controls each reach a host runtime this harness does not
 // mount; the header's own hamburger, title and bell are what the shell cases read.
 vi.mock("@/components/layout/header/rate-limit-icon", () => ({
@@ -424,6 +438,7 @@ function resetStores(): void {
     ...useLayoutStore.getState().arrangement,
     tabStripPlacement: "top",
   });
+  phoneShell.headerActive = false;
   tabCommandCoordinator.resetReconciliationForTesting();
   __resetBotListChangedSessionsForTesting();
   scripted.list = undefined;
@@ -1167,6 +1182,34 @@ describe("the fixed Tracy entry - signals", () => {
       },
     );
 
+    it.each(PLACEMENTS)(
+      "wears the solid primary tone in the $placement, and the strips seat it off the glyph in a ring",
+      async ({ placement, countTestId, mountEntry }) => {
+        tracyIndicators({ unreadDone: true, unreadCount: 3 });
+        mountEntry();
+
+        const entry = await screen.findByTestId("tab-tracy");
+        const count = within(entry).getByTestId(countTestId);
+        expect(count.getAttribute("data-slot")).toBe("badge");
+        expect(count.getAttribute("data-variant")).toBe("default");
+        expect(count.classList.contains("bg-primary")).toBe(true);
+        expect(count.classList.contains("text-primary-foreground")).toBe(true);
+        if (placement !== "collapsed rail") {
+          for (const seat of [
+            "-top-3.5",
+            "left-3.5",
+            "right-auto",
+            "ring-2",
+            "ring-canvas",
+          ]) {
+            expect(count.classList.contains(seat)).toBe(true);
+          }
+          expect(count.classList.contains("-right-px")).toBe(false);
+          expect(count.classList.contains("translate-x-1/2")).toBe(false);
+        }
+      },
+    );
+
     it("reads 99+ past ninety-nine", async () => {
       tracyIndicators({ unreadDone: true, unreadCount: 120 });
       mountTopStrip("/");
@@ -1401,100 +1444,6 @@ describe("the fixed Tracy entry - vertical strip", () => {
         ?.getAttribute("data-join-pane"),
     ).toBe("panel");
   });
-
-  it("draws no Talk under the entry or in the collapsed rail when voice is available", async () => {
-    const initialVoice = useVoiceSessionStore.getInitialState();
-    useVoiceSessionStore.setState({
-      availability: "live",
-      driver: {
-        start: () => undefined,
-        end: () => undefined,
-        setMuted: () => undefined,
-      },
-    });
-    try {
-      openEpicTabs(["Alpha"]);
-      mountSideStrip("/epics/e-alpha/e-alpha");
-
-      await screen.findByRole("tab", { name: "Tracy" });
-      expect(screen.queryByRole("button", { name: "Talk" })).toBeNull();
-
-      act(() => {
-        useSideTabStripStore.setState({ collapsed: true });
-      });
-      await waitFor(() =>
-        expect(
-          screen.getByTestId("side-tab-strip").getAttribute("data-collapsed"),
-        ).toBe("true"),
-      );
-      expect(screen.queryByRole("button", { name: "Talk" })).toBeNull();
-    } finally {
-      useVoiceSessionStore.setState(initialVoice, true);
-    }
-  });
-});
-
-describe("Talk without the fixed Tracy entry", () => {
-  const initialVoice = useVoiceSessionStore.getInitialState();
-
-  beforeEach(() => {
-    // Show Tracy off: no fixed entry, the surface stays reachable as a tab.
-    useSettingsStore.setState({ showTracy: false });
-    useVoiceSessionStore.setState({
-      availability: "live",
-      driver: {
-        start: () => undefined,
-        end: () => undefined,
-        setMuted: () => undefined,
-      },
-    });
-  });
-
-  afterEach(() => {
-    useVoiceSessionStore.setState(initialVoice, true);
-  });
-
-  it("draws no Talk on the header strip", async () => {
-    openEpicTabs(["Alpha"]);
-    mountTopStrip("/epics/e-alpha/e-alpha");
-
-    await screen.findByRole("tab", { name: "Alpha" });
-    expect(screen.queryByRole("button", { name: "Talk" })).toBeNull();
-    expect(screen.queryByRole("tab", { name: "Tracy" })).toBeNull();
-  });
-
-  it("draws no Talk on the empty landing route, where the strip draws no tabs, idle or through a live session", async () => {
-    // Show Tracy off, Home off, no tabs, route "/": the strip's empty landing.
-    setHomeTabEnabled(false);
-    const mounted = mountTopStrip("/");
-
-    await waitFor(() => expect(mounted.pathname()).toBe("/"));
-    expect(screen.queryByTestId("tab-strip")).toBeNull();
-    expect(screen.queryByRole("button", { name: "Talk" })).toBeNull();
-
-    act(() => {
-      useVoiceSessionStore.setState({ phase: "live" });
-    });
-    expect(screen.queryByRole("button", { name: "Talk" })).toBeNull();
-  });
-
-  it("draws no Talk in the vertical strip's top block, expanded or collapsed", async () => {
-    openEpicTabs(["Alpha"]);
-    mountSideStrip("/epics/e-alpha/e-alpha");
-
-    const strip = await screen.findByTestId("side-tab-strip");
-    expect(strip.getAttribute("data-collapsed")).toBe("false");
-    expect(screen.queryByRole("button", { name: "Talk" })).toBeNull();
-    expect(screen.queryByRole("tab", { name: "Tracy" })).toBeNull();
-
-    act(() => {
-      useSideTabStripStore.setState({ collapsed: true });
-    });
-    await waitFor(() =>
-      expect(strip.getAttribute("data-collapsed")).toBe("true"),
-    );
-    expect(screen.queryByRole("button", { name: "Talk" })).toBeNull();
-  });
 });
 
 describe("the Show Tracy setting", () => {
@@ -1525,12 +1474,115 @@ describe("the Show Tracy setting", () => {
   });
 });
 
-describe("the strip's width and collapse", () => {
+/** What the app shell draws from the form: the strip beside the header, or neither. */
+function PhoneShellHarness(): ReactNode {
+  const form = useMobileStripForm();
+  const placement = useTabStripPlacement();
+  const chrome =
+    form === null
+      ? ({ placement: "top", titleBand: "header" } as const)
+      : PHONE_SHELL_STRIP_CHROME;
+  return (
+    <AppColumnFrame
+      {...chrome}
+      columnRef={() => undefined}
+      header={<MobileAppHeader />}
+      strip={
+        placement === "left" ? (
+          <SideTabStrip edge="left" ownsTitleBar={false} />
+        ) : null
+      }
+      banners={null}
+      surface={null}
+      mainTail={null}
+      tail={null}
+    />
+  );
+}
+
+/** Where each form's width lands on the phones and tablets the rule names. */
+const RAIL_WIDTH_PX = 750;
+const EXPANDED_WIDTH_PX = 1210;
+const DRAWER_WIDTH_PX = 400;
+
+function setRootWidth(contentWidthPx: number): void {
+  document.getElementById("root")?.remove();
+  const root = document.createElement("div");
+  root.id = "root";
+  root.getBoundingClientRect = () => new DOMRect(0, 0, contentWidthPx, 402);
+  document.body.append(root);
+  phoneShell.headerActive = true;
+}
+
+function PhoneShell(): ReactNode {
+  return (
+    <MobileStripFormScope>
+      <PhoneShellHarness />
+    </MobileStripFormScope>
+  );
+}
+
+function mountPhoneShell(contentWidthPx: number): void {
+  setRootWidth(contentWidthPx);
+  mount("/", <PhoneShell />);
+}
+
+describe("the phone shell's strip", () => {
+  beforeEach(tracyIsMainBot);
   afterEach(() => {
+    document.getElementById("root")?.remove();
     setMobileApp(false);
   });
 
-  it("keeps the stored width and the handle", async () => {
+  it("draws the rail beside the header over a stored expanded choice, with Tracy after Home and no hamburger or bell", async () => {
+    mountPhoneShell(RAIL_WIDTH_PX);
+
+    const strip = await screen.findByTestId("side-tab-strip");
+    expect(strip.getAttribute("data-collapsed")).toBe("true");
+    expect(strip.style.width).toBe(`${SIDE_STRIP_RAIL_WIDTH_PX}px`);
+    const home = await screen.findByTestId("tab-home");
+    const tracy = await screen.findByTestId("tab-tracy");
+    expect(
+      home.compareDocumentPosition(tracy) & Node.DOCUMENT_POSITION_FOLLOWING,
+    ).not.toBe(0);
+    expect(screen.queryByTestId("mobile-nav-trigger")).toBeNull();
+    expect(screen.queryByTestId("mobile-header-bell")).toBeNull();
+    expect(screen.getByTestId("mobile-header-title")).not.toBeNull();
+    expect(strip.nextElementSibling?.contains(screen.getByRole("banner"))).toBe(
+      true,
+    );
+  });
+
+  it("draws no strip in the drawer form, and keeps the hamburger and the bell", async () => {
+    mountPhoneShell(DRAWER_WIDTH_PX);
+
+    expect(await screen.findByTestId("mobile-nav-trigger")).not.toBeNull();
+    expect(screen.queryByTestId("side-tab-strip")).toBeNull();
+    expect(screen.getByTestId("mobile-header-bell")).not.toBeNull();
+  });
+
+  it("takes the strip's side from the form, over a stored pick of the right edge", async () => {
+    useLayoutStore.getState().setArrangement({
+      ...useLayoutStore.getState().arrangement,
+      tabStripPlacement: "right",
+    });
+    mountPhoneShell(RAIL_WIDTH_PX);
+
+    const strip = await screen.findByTestId("side-tab-strip");
+    expect(strip.getAttribute("data-edge")).toBe("left");
+  });
+
+  it("draws the expanded form at the default width with no resize handle, over a wider stored width", async () => {
+    useSideTabStripStore.setState({ widthPx: 400 });
+    mountPhoneShell(EXPANDED_WIDTH_PX);
+
+    const strip = await screen.findByTestId("side-tab-strip");
+    expect(strip.getAttribute("data-collapsed")).toBe("false");
+    expect(strip.style.width).toBe("240px");
+    expect(screen.queryByTestId("side-tab-strip-resize-handle")).toBeNull();
+  });
+
+  it("keeps the stored width and the handle on desktop, where no form applies", async () => {
     useSideTabStripStore.setState({ widthPx: 400 });
     mountSideStrip("/");
 
@@ -1539,29 +1591,55 @@ describe("the strip's width and collapse", () => {
     expect(screen.getByTestId("side-tab-strip-resize-handle")).not.toBeNull();
   });
 
-  it("takes the collapse chord in the installed app", async () => {
-    setMobileApp(true);
-    const router = buildRouter(
-      "/",
-      <SideTabStrip edge="left" ownsTitleBar={false} />,
-    );
-    render(
-      <KeybindingProvider router={router}>
-        <RouterProvider router={router} />
-      </KeybindingProvider>,
-    );
-    await screen.findByTestId("side-tab-strip");
+  it("offers the collapse toggle only where the expanded strip fits, so a stored collapse cannot be flipped at 750", async () => {
+    useSideTabStripStore.setState({ collapsed: true });
+    mountPhoneShell(RAIL_WIDTH_PX);
 
-    window.dispatchEvent(
-      new KeyboardEvent("keydown", {
-        code: "KeyS",
-        key: "S",
-        shiftKey: true,
-        altKey: true,
-        bubbles: true,
-        cancelable: true,
-      }),
-    );
+    await screen.findByTestId("side-tab-strip");
+    expect(screen.queryByTestId("side-tab-strip-collapse")).toBeNull();
+    expect(useSideTabStripStore.getState().collapsed).toBe(true);
+
+    cleanup();
+    mountPhoneShell(EXPANDED_WIDTH_PX);
+
+    fireEvent.click(await screen.findByTestId("side-tab-strip-collapse"));
+    expect(useSideTabStripStore.getState().collapsed).toBe(false);
+  });
+
+  it("takes the collapse chord in the installed app at 1210, and has no handler for it at 750", async () => {
+    setMobileApp(true);
+    const pressCollapseChord = (): void => {
+      window.dispatchEvent(
+        new KeyboardEvent("keydown", {
+          code: "KeyS",
+          key: "S",
+          shiftKey: true,
+          altKey: true,
+          bubbles: true,
+          cancelable: true,
+        }),
+      );
+    };
+    const mountWithKeybindings = async (
+      contentWidthPx: number,
+    ): Promise<void> => {
+      setRootWidth(contentWidthPx);
+      const router = buildRouter("/", <PhoneShell />);
+      render(
+        <KeybindingProvider router={router}>
+          <RouterProvider router={router} />
+        </KeybindingProvider>,
+      );
+      await screen.findByTestId("side-tab-strip");
+    };
+
+    await mountWithKeybindings(RAIL_WIDTH_PX);
+    pressCollapseChord();
+    expect(useSideTabStripStore.getState().collapsed).toBe(false);
+
+    cleanup();
+    await mountWithKeybindings(EXPANDED_WIDTH_PX);
+    pressCollapseChord();
     expect(useSideTabStripStore.getState().collapsed).toBe(true);
   });
 });

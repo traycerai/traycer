@@ -12,6 +12,8 @@ import {
 } from "@/components/epic-canvas/canvas/browser-tab-presentation";
 import { TabHostProvider } from "@/components/epic-canvas/tab-host-provider";
 import { ContentMinimapButton } from "@/components/minimap/content-minimap-button";
+import { Button } from "@/components/ui/button";
+import { SquareStack } from "lucide-react";
 import { useChatStreamSyncState } from "@/hooks/chats/use-chat-stream-sync-state";
 import { usePublishSurfaceSync } from "@/hooks/sync/use-publish-surface-sync";
 import { useStreamSyncingSpell } from "@/hooks/sync/use-stream-syncing-spell";
@@ -32,6 +34,12 @@ import type {
 interface MobileCurrentTileBarProps {
   readonly epicId: string;
   readonly tile: EpicCanvasTileRef;
+  /**
+   * Opens the task's list for this tile, from the Switch tab control and from
+   * the tile's name. `null` in the phone's `bar` form, where the app header's
+   * trigger opens it and the bar is a label.
+   */
+  readonly onSwitch: (() => void) | null;
   /** What the pane's header carries past the tile's own controls. */
   readonly trailing: ReactNode;
 }
@@ -39,13 +47,17 @@ interface MobileCurrentTileBarProps {
 /**
  * The row naming the tile on screen: live icon, the display title, and - for a
  * tile whose content has an outline - the minimap button at the trailing edge.
- * It is also what reports a chat's stream to the app shell.
+ * It is also what reports a chat's stream to the app shell, so it renders in
+ * every form of level 2.
  *
- * Switching tabs is the header's switcher trigger, so the bar carries no
- * BETWEEN-tile navigation; the minimap moves within the tile already on screen,
- * and the title is a label, never a control: a tap on this bar is almost always
- * a reach for the tile below it. Renaming a tile lives in the switcher row's
- * actions menu.
+ * In the `bar` form it is the tile bar: switching tabs is the header's switcher
+ * trigger, so it carries no BETWEEN-tile navigation; the minimap moves within
+ * the tile already on screen, and the title is a label, never a control: a tap
+ * on this bar is almost always a reach for the tile below it. Renaming a tile
+ * lives in the switcher row's actions menu.
+ *
+ * Everywhere wider it is the pane's header, and the sheet is opened from here:
+ * a Switch tab control past the minimap, and the name itself.
  *
  * Icon + title reuse the exact desktop tab-strip resolution (`TabIcon`,
  * `useEpicTabDisplayTitle`), including the terminal bound-host client so a
@@ -120,7 +132,7 @@ function MobileCurrentTileBarBody(
     readonly terminalControl: TerminalTabControl | null;
   },
 ) {
-  const { epicId, tile, trailing } = props;
+  const { epicId, tile, onSwitch, trailing } = props;
   const { browserPresentation, terminalControl } = props;
   const isTerminal = tile.type === "terminal";
   // Terminal titles resolve against the tab's bound host; `null` for every
@@ -195,28 +207,71 @@ function MobileCurrentTileBarBody(
     wake: isChat ? chatSync.wake : null,
   });
 
+  const icon = (
+    <TabIcon
+      epicId={epicId}
+      tab={tile}
+      titleGenerationPending={titleGenerationPending}
+      browserPresentation={browserPresentation}
+    />
+  );
+  const title = (
+    <span
+      data-testid="mobile-current-tile-title"
+      className="min-w-0 flex-1 truncate text-ui-sm font-medium text-foreground"
+    >
+      {displayTitle}
+    </span>
+  );
+
   return (
     <div
       data-mobile-shell-touch-scope=""
       className="shrink-0 border-b border-canvas-border/70 bg-canvas"
     >
       <div
-        data-testid="mobile-current-tile-bar"
+        data-testid={
+          onSwitch === null
+            ? "mobile-current-tile-bar"
+            : "mobile-tile-pane-header"
+        }
         className="flex min-h-11 w-full items-center gap-2 px-3"
       >
-        <TabIcon
-          epicId={epicId}
-          tab={tile}
-          titleGenerationPending={titleGenerationPending}
-          browserPresentation={browserPresentation}
-        />
-        <span
-          data-testid="mobile-current-tile-title"
-          className="min-w-0 flex-1 truncate text-ui-sm font-medium text-foreground"
-        >
-          {displayTitle}
-        </span>
+        {onSwitch === null ? (
+          <>
+            {icon}
+            {title}
+          </>
+        ) : (
+          <Button
+            type="button"
+            variant="ghost"
+            size="sm"
+            data-testid="mobile-tile-title-trigger"
+            // `shrink` undoes the button's own `shrink-0`, and the cap gives a
+            // long name a width to truncate at, so what trails it stays in the
+            // row.
+            className="mr-auto min-w-0 max-w-full shrink justify-start"
+            onClick={onSwitch}
+          >
+            {icon}
+            {title}
+          </Button>
+        )}
         <ContentMinimapButton tileInstanceId={tile.instanceId} />
+        {onSwitch === null ? null : (
+          <Button
+            type="button"
+            variant="ghost"
+            size="icon-sm"
+            aria-label="Switch tab"
+            data-testid="mobile-tile-switch-button"
+            className="shrink-0"
+            onClick={onSwitch}
+          >
+            <SquareStack aria-hidden="true" />
+          </Button>
+        )}
         {trailing}
       </div>
     </div>

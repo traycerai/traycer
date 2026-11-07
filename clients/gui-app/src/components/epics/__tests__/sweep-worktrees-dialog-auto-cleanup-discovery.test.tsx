@@ -1,3 +1,4 @@
+import { useSettingsHostScopeStore } from "@/stores/settings/settings-host-scope-store";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   cleanup,
@@ -83,7 +84,7 @@ import {
   installTabSyncCoordinator,
 } from "@/lib/tab-sync/tab-sync-coordinator";
 import { useTabsStore } from "@/stores/tabs/store";
-import { useSettingsHostScopeStore } from "@/stores/settings/settings-host-scope-store";
+
 import { useWorktreeCleanupViewStore } from "@/stores/settings/worktree-cleanup-view-store";
 
 const DISCOVERY = "sweep-worktrees-auto-cleanup-discovery";
@@ -204,7 +205,7 @@ describe("SweepWorktreesDialog automatic-cleanup discovery", () => {
     await Promise.resolve();
     await Promise.resolve();
     useTabsStore.getState().closeSystemTab("settings");
-    useSettingsHostScopeStore.setState({ scopedHostId: null });
+    useSettingsHostScopeStore.getState().reset();
     useWorktreeCleanupViewStore.setState({
       view: "settings",
       focusedRunId: null,
@@ -320,7 +321,7 @@ describe("SweepWorktreesDialog automatic-cleanup discovery", () => {
     );
     // The policy is per HOST, so the destination is only well defined once
     // Settings is administering the machine this sweep was pointed at.
-    expect(useSettingsHostScopeStore.getState().scopedHostId).toBe("host-1");
+    expect(useSettingsHostScopeStore.getState().pendingHostId).toBe("host-1");
     // The inventory, never the cleanup history - and the card asks to be
     // brought into view once the panel mounts it, NAMING the host it is about
     // so another host's card cannot pick the request up later.

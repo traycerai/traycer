@@ -459,6 +459,14 @@ export const PERSIST_STORES = [
     leaf: "feature-announcements",
     kind: "static",
   },
+  // What this install has done with the "share Traycer on X" nudge: its
+  // cooldown, showings and opt-out (`share-on-x-nudge-store.ts`). Machine-
+  // local for the same reason as the announcements above.
+  {
+    camelName: "shareOnXNudge",
+    leaf: "share-on-x-nudge",
+    kind: "static",
+  },
   // The tasks whose mirror line each person has seen, keyed by viewer and
   // epic inside the record (`composer-mirror-line-seen-store.ts`).
   {
@@ -517,6 +525,13 @@ export const PERSIST_STORES = [
   {
     camelName: "botColumnLayout",
     leaf: "bot-column-layout",
+    kind: "static",
+  },
+  // The last searches of the Tracy surface, one list per device
+  // (`bot-search-store.ts`).
+  {
+    camelName: "botSearchRecents",
+    leaf: "bot-search-recents",
     kind: "static",
   },
 

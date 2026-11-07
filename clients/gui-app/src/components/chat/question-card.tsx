@@ -5,6 +5,7 @@ import { Textarea } from "@/components/ui/textarea";
 import { useClipboardCopy } from "@/hooks/ui/use-clipboard-copy";
 import {
   QUESTION_SKIPPED_TEXT,
+  chosenAfterPress,
   draftText,
   questionCardView,
   questionSettledLine,
@@ -19,6 +20,8 @@ export interface QuestionCardQuestion {
   readonly text: string;
   readonly options: ReadonlyArray<string>;
   readonly allowFreeText: boolean;
+  /** Whether several options may be picked; Submit sends them joined. */
+  readonly several: boolean;
   /** `null` while the question is open. */
   readonly settlement: QuestionCardSettlement | null;
   readonly draft: QuestionCardDraft;
@@ -27,7 +30,7 @@ export interface QuestionCardQuestion {
 /** What a person submits for one question: an answer, or a Skip. */
 export interface QuestionCardAnswer {
   readonly questionIndex: number;
-  /** The chosen option or the typed answer; the Skip's line for a Skip. */
+  /** The chosen options and the typed answer; the Skip's line for a Skip. */
   readonly text: string;
   readonly skipped: boolean;
 }
@@ -99,7 +102,7 @@ function QuestionCardItem(props: {
 }): ReactElement {
   const { asker, question, onDraft, onAnswer, onDiscuss } = props;
   const { draft } = question;
-  const view = questionCardView(question.settlement, draft);
+  const view = questionCardView(question.settlement, draft, question.several);
   const submit = (text: string, skipped: boolean): void => {
     if (onDraft === null) return;
     onDraft({ ...draft, sent: { text, skipped } });
@@ -145,7 +148,7 @@ function QuestionCardItem(props: {
             <OvertakenActions draft={view.draft} onDiscuss={onDiscuss} />
           ) : (
             <OpenActions
-              draft={draftText(draft)}
+              draft={draftText(draft, question.several)}
               disabled={onDraft === null || view.kind === "sent"}
               sending={view.kind === "sent"}
               onSubmit={(text) => submit(text, false)}
@@ -158,7 +161,7 @@ function QuestionCardItem(props: {
   );
 }
 
-/** The person's answer as they are making it: the option they picked, and what they typed. */
+/** The person's answer as they are making it: the options they picked, and what they typed. */
 function QuestionDraft(props: {
   readonly question: QuestionCardQuestion;
   readonly editable: boolean;
@@ -183,11 +186,18 @@ function QuestionDraft(props: {
               type="button"
               variant="outline"
               size="xs"
-              aria-pressed={chosen === option}
+              aria-pressed={chosen.includes(option)}
               disabled={!editable}
               data-testid="question-card-option"
               onClick={() =>
-                onChange({ chosen: chosen === option ? null : option })
+                onChange({
+                  chosen: chosenAfterPress(
+                    question.options,
+                    chosen,
+                    option,
+                    question.several,
+                  ),
+                })
               }
             >
               {option}

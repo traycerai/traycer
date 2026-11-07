@@ -748,7 +748,7 @@ describe("Settings - Layout", () => {
         useLayoutStore.getState().setArrangement({
           ...DEFAULT_ARRANGEMENT,
           usageHost: "header",
-          minimapSide: "left",
+          minimapSide: "right",
           mobileFooter: true,
           hiddenProviders: [DEFAULT_ARRANGEMENT.usageProviders[0]],
           providerLimits: {
@@ -804,7 +804,7 @@ describe("Settings - Layout", () => {
       act(() => {
         useLayoutStore.getState().setArrangement({
           ...DEFAULT_ARRANGEMENT,
-          minimapSide: "left",
+          minimapSide: "right",
         });
       });
       renderPanel();
@@ -1065,6 +1065,14 @@ describe("Settings - Layout", () => {
     });
 
     it("disables Tab overflow with its reason while the tabs are vertical, keeping its value", async () => {
+      // From the top, where overflow is live; the shipped strip is vertical.
+      useLayoutStore.setState({
+        ...DEFAULT_LAYOUT_SNAPSHOT,
+        arrangement: {
+          ...DEFAULT_LAYOUT_SNAPSHOT.arrangement,
+          tabStripPlacement: "top",
+        },
+      });
       const user = userEvent.setup();
       renderPanel();
       await goToSurfaceTab(user, "topBar");
@@ -1104,6 +1112,13 @@ describe("Settings - Layout", () => {
     });
 
     it("opens the Tabs tab with Side tab view, disabled at the top and writable once vertical (D8)", async () => {
+      useLayoutStore.setState({
+        ...DEFAULT_LAYOUT_SNAPSHOT,
+        arrangement: {
+          ...DEFAULT_LAYOUT_SNAPSHOT.arrangement,
+          tabStripPlacement: "top",
+        },
+      });
       const user = userEvent.setup();
       renderPanel();
       await goToSurfaceTab(user, "topBar");
@@ -1162,10 +1177,10 @@ describe("Settings - Layout", () => {
       await user.click(
         within(
           within(sidebar).getByRole("radiogroup", { name: "Sidebar side" }),
-        ).getByRole("radio", { name: "Right" }),
+        ).getByRole("radio", { name: "Left" }),
       );
 
-      expect(useLayoutStore.getState().arrangement.sidebarSide).toBe("right");
+      expect(useLayoutStore.getState().arrangement.sidebarSide).toBe("left");
     });
 
     it("withholds the desktop-only rows and the editor door in the installed mobile app", async () => {
@@ -1250,6 +1265,7 @@ describe("Settings - Layout", () => {
           mobileApp: false,
           phoneLayout: false,
           soundtrackOffered: false,
+          soundtrackOn: false,
         }).map((result) => result.entry.anchor);
 
         expect(anchors).toContain("layout-tab-strip-placement");
@@ -1265,6 +1281,7 @@ describe("Settings - Layout", () => {
           mobileApp: false,
           phoneLayout: false,
           soundtrackOffered: false,
+          soundtrackOn: false,
         }).map((result) => result.entry.anchor);
 
         expect(anchors).toContain("layout-side-strip-view");
@@ -1407,8 +1424,8 @@ describe("Settings - Layout", () => {
       act(() => {
         useLayoutStore.getState().setArrangement({
           ...DEFAULT_ARRANGEMENT,
-          minimapSide: "left", // chat
-          sidebarSide: "right", // sidebar
+          minimapSide: "right", // chat
+          sidebarSide: "left", // sidebar
         });
       });
       renderPanel();
@@ -1542,7 +1559,7 @@ describe("Settings - Layout", () => {
       act(() => {
         useLayoutStore.getState().setArrangement({
           ...DEFAULT_ARRANGEMENT,
-          minimapSide: "left", // Chat
+          minimapSide: "right", // Chat
         });
       });
     }

@@ -23,7 +23,6 @@ import type { HostClient } from "@traycer-clients/shared/host-client/host-client
 import {
   CHAT_SEARCH_MAX_QUERY_CHARS,
   type ChatSearchMessageMatch,
-  type ChatSearchResponse,
 } from "@traycer/protocol/host/chat-search/schemas";
 import { useChatSearchHost } from "@/hooks/chats/use-chat-search-host";
 import {
@@ -60,7 +59,6 @@ export type ChatSearchMessageHitsStatus =
   | {
       readonly kind: "ready";
       readonly messages: ReadonlyArray<ChatSearchMessageMatch>;
-      readonly indexState: ChatSearchResponse["indexState"];
       /**
        * The request these rows came back for, for a chat-scoped follow-up on
        * one of them - `ChatSearchExpandedRows` re-asks with `scope: chat` and
@@ -177,7 +175,6 @@ export function useChatSearchMessageHits(args: {
         return {
           kind: "ready",
           messages: status.results.messageMatches,
-          indexState: status.results.indexState,
           expansionBase: base,
           showMore: nextCursor === null ? null : showMore,
           loadingMore: status.loadingMore,

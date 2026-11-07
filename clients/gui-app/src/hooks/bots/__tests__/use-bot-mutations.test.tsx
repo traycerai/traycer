@@ -7,7 +7,7 @@
  * Real hook over two hosts' mock messengers sharing one query client.
  */
 import type { ReactNode } from "react";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { act, renderHook } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import {
@@ -30,8 +30,23 @@ import type { BotConversationSendRequest } from "@traycer/protocol/host/bot/conv
 import { hostRpcRegistry, type HostRpcRegistry } from "@/lib/host";
 import { createHostQueryInvalidator } from "@/lib/host/query-invalidator";
 import { FloorEnforcingMessenger } from "@/hooks/config/__tests__/floor-enforcing-messenger";
-import { useBotConversationSendMutation } from "@/hooks/bots/use-bot-mutations";
+import {
+  useBotCallSendMutation,
+  useBotConversationSendMutation,
+} from "@/hooks/bots/use-bot-mutations";
+import { botThreadListParams } from "@/hooks/bots/use-bot-thread-list-query";
 import { hostQueryKeys } from "@/lib/query-keys";
+
+// The app's binding, which a call's send resolves its named host through.
+const binding = vi.hoisted(
+  (): {
+    current: { readonly hostClient: HostClient<HostRpcRegistry> } | null;
+  } => ({ current: null }),
+);
+vi.mock("@/lib/host/runtime", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/lib/host/runtime")>()),
+  useHostBinding: () => binding.current,
+}));
 
 vi.mock("@/hooks/host/use-reactive-host-readiness", () => ({
   useReactiveHostReadiness: (client: HostRequester<HostRpcRegistry> | null) => {
@@ -91,7 +106,7 @@ function mountSend(handlers: MockHandlerMap<HostRpcRegistry>): {
 } {
   const queryClient = new QueryClient();
   const sendingHost = hostOver(mockRemoteHostEntry, queryClient, handlers);
-  const params = { botId: BOT_ID };
+  const params = botThreadListParams(BOT_ID);
   for (const hostId of [SENDING_HOST_ID, OTHER_HOST_ID]) {
     queryClient.setQueryData(
       hostQueryKeys.method<HostRpcRegistry, "bot.thread.list">(
@@ -99,7 +114,7 @@ function mountSend(handlers: MockHandlerMap<HostRpcRegistry>): {
         "bot.thread.list",
         params,
       ),
-      { threads: [] },
+      { threads: [], nextCursor: null, total: 0 },
     );
   }
   queryClient.setQueryData(
@@ -201,6 +216,139 @@ describe("useBotConversationSendMutation", () => {
     await mounted.send();
 
     expect(mounted.isStale(SENDING_HOST_ID, "bot.thread.list")).toBe(false);
+  });
+});
+
+const CALL: BotConversationSendRequest = {
+  ...SEND,
+  spoken: true,
+  origin: "call",
+};
+
+/** The call-send hook over two hosts of one spine, signed in as `user-alice`. */
+function mountCallSend(): {
+  readonly send: (
+    hostId: string,
+    account: string | null,
+    text: string,
+  ) => Promise<void>;
+  readonly messenger: MockHostMessenger<HostRpcRegistry>;
+  readonly isStale: (hostId: string) => boolean;
+} {
+  const queryClient = new QueryClient();
+  let seq = 0;
+  const messenger = new MockHostMessenger<HostRpcRegistry>({
+    registry: hostRpcRegistry,
+    requestId: () => `call-${String(++seq)}`,
+    handlers: {
+      "bot.conversation.send": () => ({
+        messageId: "message-1",
+        requestId: "request-1",
+        delivery: "written",
+        threadId: "thread-1",
+      }),
+    },
+  });
+  const spine = new HostClient<HostRpcRegistry>({
+    registry: hostRpcRegistry,
+    invalidator: createHostQueryInvalidator(queryClient),
+    findHostById: (hostId) =>
+      [mockRemoteHostEntry, mockLocalHostEntry].find(
+        (entry) => entry.hostId === hostId,
+      ) ?? null,
+    messenger,
+  });
+  spine.setRequestContext(
+    createRequestContextFixture({
+      origin: "renderer",
+      identity: {
+        userId: "user-alice",
+        username: "alice",
+        providerHandle: null,
+      },
+      bearerToken: "tok-1",
+    }),
+  );
+  binding.current = { hostClient: spine };
+  for (const hostId of [SENDING_HOST_ID, OTHER_HOST_ID]) {
+    queryClient.setQueryData(
+      hostQueryKeys.method<HostRpcRegistry, "bot.thread.list">(
+        hostId,
+        "bot.thread.list",
+        botThreadListParams(BOT_ID),
+      ),
+      { threads: [], nextCursor: null, total: 0 },
+    );
+  }
+  const wrapper = (props: { readonly children: ReactNode }): ReactNode => (
+    <QueryClientProvider client={queryClient}>
+      {props.children}
+    </QueryClientProvider>
+  );
+  const { result } = renderHook(() => useBotCallSendMutation(), { wrapper });
+  return {
+    send: async (hostId, account, text) => {
+      await act(async () => {
+        await result.current.mutateAsync({
+          hostId,
+          account,
+          request: { ...CALL, text },
+        });
+      });
+    },
+    messenger,
+    isStale: (hostId) =>
+      queryClient
+        .getQueryCache()
+        .findAll({
+          queryKey: hostQueryKeys.methodScope(hostId, "bot.thread.list"),
+        })
+        .some((query) => query.state.isInvalidated),
+  };
+}
+
+describe("useBotCallSendMutation", () => {
+  afterEach(() => {
+    binding.current = null;
+  });
+
+  it("sends each of a call's words to the host named with it, and makes only that host's thread list stale", async () => {
+    const mounted = mountCallSend();
+
+    await mounted.send(
+      SENDING_HOST_ID,
+      "user-alice",
+      "First call's last words",
+    );
+    expect(mounted.isStale(SENDING_HOST_ID)).toBe(true);
+    expect(mounted.isStale(OTHER_HOST_ID)).toBe(false);
+
+    await mounted.send(OTHER_HOST_ID, "user-alice", "Second call's words");
+
+    expect(
+      mounted.messenger.calls.map((sent) => [
+        sent.authority.endpoint.hostId,
+        sent.params,
+      ]),
+    ).toEqual([
+      [SENDING_HOST_ID, { ...CALL, text: "First call's last words" }],
+      [OTHER_HOST_ID, { ...CALL, text: "Second call's words" }],
+    ]);
+    expect(mounted.isStale(OTHER_HOST_ID)).toBe(true);
+  });
+
+  it("refuses, before it reaches the host, a send whose call is another account's or no account's", async () => {
+    const mounted = mountCallSend();
+
+    await expect(
+      mounted.send(SENDING_HOST_ID, "user-bob", "Bob's words"),
+    ).rejects.toThrow("The call's account is no longer signed in.");
+    await expect(
+      mounted.send(SENDING_HOST_ID, null, "Nobody's words"),
+    ).rejects.toThrow("The call's account is no longer signed in.");
+
+    expect(mounted.messenger.calls).toEqual([]);
+    expect(mounted.isStale(SENDING_HOST_ID)).toBe(false);
   });
 });
 
@@ -358,6 +506,54 @@ describe("useBotConversationSendMutation's dispatch-time version floor", () => {
       version: { major: 1, minor: 2 },
     });
   });
+
+  const V13: SchemaVersion = { major: 1, minor: 3 };
+  const CALL_OPENING: BotConversationSendRequest = {
+    ...SEND,
+    spoken: true,
+    origin: "call",
+  };
+  const CALL_IN_THREAD: BotConversationSendRequest = {
+    ...SEND,
+    threadId: "thread-1",
+    spoken: true,
+  };
+
+  it.each([
+    ["a call's opening words", CALL_OPENING],
+    ["words spoken into a thread", CALL_IN_THREAD],
+  ])(
+    "refuses %s on a host that negotiated 1.2 before they leave, so they are never taken as a typed post",
+    async (_name, variables) => {
+      const f = floorFixture(V12);
+
+      const failure = await act(() => f.send(variables));
+
+      expect(failure).toBeInstanceOf(HostMethodVersionUnsatisfiedError);
+      expect(f.handled).toEqual([]);
+      expect(f.messenger.dispatched).toEqual([]);
+      expect(f.messenger.calls).toEqual([]);
+    },
+  );
+
+  it.each([
+    ["a call's opening words", CALL_OPENING],
+    ["words spoken into a thread", CALL_IN_THREAD],
+  ])(
+    "sends %s, floor attached, to a host that negotiated 1.3",
+    async (_name, variables) => {
+      const f = floorFixture(V13);
+
+      const failure = await act(() => f.send(variables));
+
+      expect(failure).toBeNull();
+      expect(f.handled).toEqual([variables]);
+      expect(f.messenger.calls[0]?.requiredHostMethodVersion).toEqual({
+        method: "bot.conversation.send",
+        version: { major: 1, minor: 3 },
+      });
+    },
+  );
 
   it("sends a plain post to a 1.0 host with no floor, which has always been allowed to take it", async () => {
     const f = floorFixture(V10);

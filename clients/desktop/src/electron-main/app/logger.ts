@@ -88,8 +88,27 @@ function installSanitizingHook(): void {
   });
 }
 
+const LOG_CONTINUATION_INDENT = "  ";
+
+/**
+ * Indent every line after the first of a string argument. electron-log writes
+ * a string as itself, so a line break followed by `[<timestamp>] [info]` would
+ * be a forged entry header in `traycer-desktop.log` - and the support scrubber
+ * (`scrubLogTail`) drops DEBUG entries by header, so a forged non-DEBUG header
+ * inside a DEBUG message would carry the rest of that message off the machine.
+ * Indented, no continuation line starts at column 0, so none can be a header.
+ * Objects and Errors need nothing: electron-log renders them with
+ * `util.inspect`, which escapes the line breaks inside their strings.
+ */
+function renderLogString(value: string): string {
+  return /[\r\n]/.test(value)
+    ? value.replace(/\r\n|\r|\n/g, `\n${LOG_CONTINUATION_INDENT}`)
+    : value;
+}
+
 function sanitizeLogArgument(value: unknown): unknown {
-  if (typeof value === "string") return redactSensitiveText(value);
+  if (typeof value === "string")
+    return renderLogString(redactSensitiveText(value));
   if (value === null || typeof value !== "object") return value;
   return sanitizeLogValue(value, 0);
 }

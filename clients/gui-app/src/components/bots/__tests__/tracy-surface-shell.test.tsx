@@ -151,6 +151,26 @@ function useListScript(): ListScript {
   );
 }
 
+// The tasks a bot's channel can name come from two host reads that these
+// cases do not drive: neither knows any task.
+vi.mock("@/hooks/epic/use-epic-get-task-contexts-query", () => {
+  const tasksById = new Map<string, never>();
+  const read = () => ({ tasksById, isPending: false, error: null });
+  return {
+    useEpicGetTaskContexts: read,
+    useEpicGetTaskContextsForClient: read,
+  };
+});
+vi.mock("@/hooks/epics/use-cloud-epic-tasks-query", async (importOriginal) => {
+  const tasks: never[] = [];
+  return {
+    ...(await importOriginal<
+      typeof import("@/hooks/epics/use-cloud-epic-tasks-query")
+    >()),
+    useCloudEpicTasksQuery: () => ({ tasks }),
+    useCloudEpicTasksQueryForClient: () => ({ tasks }),
+  };
+});
 vi.mock("@/hooks/host/use-host-supports-method", () => ({
   useHostMethodSupport: () => true,
   useHostMethodSchemaVersion: () => ({ major: 1, minor: 1 }),
@@ -212,6 +232,8 @@ vi.mock("@/hooks/host/use-host-queries", () => ({
           threads: [],
           trunkCostUsd: null,
           threadAnchors: null,
+          nextCursor: null,
+          total: 0,
         },
         "bot.threadFollow.read": { follows: {} },
         "bot.readCursor.read": { cursors: {}, latest: {} },
@@ -238,6 +260,11 @@ vi.mock("@/hooks/host/use-host-query", async (importOriginal) => ({
   },
 }));
 vi.mock("@/hooks/bots/use-bot-thread-list-query", () => ({
+  botThreadListParams: (botId: string) => ({
+    botId,
+    limit: null,
+    cursor: null,
+  }),
   useBotThreadListQuery: (_client: unknown, botId: string) => {
     const lists = useSyncExternalStore(
       script.subscribe,
@@ -592,7 +619,7 @@ function seedKeptState(botId: string): void {
     anchorKind: null,
     sent: null,
   });
-  useBotDraftsStore.getState().typeThreadBox(botId, "post-1", "unsent");
+  useBotDraftsStore.getState().typeThreadBox(botId, "post-1", "unsent", null);
   useBotTabLandingStore
     .getState()
     .request(botId, { kind: "thread", threadId: null, messageId: null });

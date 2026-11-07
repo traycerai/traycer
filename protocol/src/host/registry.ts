@@ -18,7 +18,11 @@ import {
   epicGetChatRunSettingsBatchUpgradeV20ToV21,
   epicGetChatRunSettingsBatchDowngradeV21ToV10,
 } from "./epic/contracts";
-import { chatSubscribeV141, chatSubscribeV142 } from "./agent/gui/subscribe";
+import {
+  chatSubscribeV141,
+  chatSubscribeV142,
+  chatSubscribeV143,
+} from "./agent/gui/subscribe";
 import type { RequiredHostMethodVersion } from "../host-transport/remote/rpc-types";
 import { chatPrestartRuntimeV10 } from "./agent/gui/prestart-runtime";
 import { PROFILE_SYNC_LINK_RPC_METHODS } from "./profile-sync-link-contracts";
@@ -151,6 +155,8 @@ import {
   agentSendMessageUpgradeV10ToV11,
   agentSendMessageV10,
   agentSendMessageV11,
+  agentSendMessageUpgradeV11ToV12,
+  agentSendMessageV12,
   agentStopV10,
   agentForkV10,
 } from "@traycer/protocol/host/agent/contracts";
@@ -500,7 +506,9 @@ import {
   providersFallbackPolicyGetV11,
   providersFallbackPolicyGetV20,
   providersFallbackPolicyGetUpgradeV11ToV20,
-  providersFallbackPolicyGetDowngradeV20ToV11,
+  providersFallbackPolicyGetV21,
+  providersFallbackPolicyGetUpgradeV20ToV21,
+  providersFallbackPolicyGetDowngradeV21ToV11,
   providersFallbackPolicyPreviewTierGroupsUpgradeV10ToV11,
   providersFallbackPolicyPreviewTierGroupsV10,
   providersFallbackPolicyPreviewTierGroupsV11,
@@ -673,11 +681,16 @@ import {
 import {
   botClaimAuthorityV10,
   botConversationListV10,
+  botConversationSearchV10,
   botConversationSendV10,
   botConversationSendV11,
   botConversationSendUpgradeV10ToV11,
   botConversationSendV12,
   botConversationSendUpgradeV11ToV12,
+  botConversationSendV13,
+  botConversationSendUpgradeV12ToV13,
+  botConversationSendV14,
+  botConversationSendUpgradeV13ToV14,
   botThreadListV10,
   botThreadListV11,
   botThreadListV12,
@@ -693,8 +706,10 @@ import {
   botOnboardingReadV10,
   botOnboardingReadV11,
   botOnboardingReadV12,
+  botOnboardingReadV13,
   botOnboardingReadUpgradeV10ToV11,
   botOnboardingReadUpgradeV11ToV12,
+  botOnboardingReadUpgradeV12ToV13,
   botCreateV10,
   botDeleteV10,
   botListChangedV10,
@@ -810,6 +825,10 @@ import {
   chatMcpAppReadResourceV10,
   chatMcpAppUpdateModelContextV10,
 } from "@traycer/protocol/host/chat/mcp-app";
+import {
+  chatFeedbackDraftDecideV10,
+  chatFeedbackDraftPreviewV10,
+} from "@traycer/protocol/host/chat/feedback-draft";
 import {
   epicBatchDeleteUpgradeV10ToV11,
   epicBatchDeleteV10,
@@ -1020,6 +1039,7 @@ import {
 import {
   epicStatusSubscribeV10,
   epicStatusSubscribeV11,
+  epicStatusSubscribeV12,
 } from "@traycer/protocol/host/epic/status-subscribe";
 import {
   artifactSubscribeV10,
@@ -1194,6 +1214,7 @@ import {
   hostNotificationsClearAllUpgradeV10ToV11,
   hostNotificationsClearAllV11,
   hostNotificationsGetConfig,
+  hostNotificationsGetLongTurnAlert,
   hostNotificationsIndicatorStateUpgradeV10ToV11,
   hostNotificationsIndicatorStateUpgradeV11ToV12,
   hostNotificationsIndicatorStateV10,
@@ -1212,13 +1233,16 @@ import {
   hostNotificationsListV24,
   hostNotificationsListV25,
   hostNotificationsListUpgradeV24ToV25,
-  hostNotificationsListDowngradeV25ToV10,
+  hostNotificationsListV26,
+  hostNotificationsListUpgradeV25ToV26,
+  hostNotificationsListDowngradeV26ToV10,
   hostNotificationsMarkAllRead,
   hostNotificationsMarkAllReadUpgradeV10ToV11,
   hostNotificationsMarkAllReadV11,
   hostNotificationsMarkRead,
   hostNotificationsResolve,
   hostNotificationsSetConfig,
+  hostNotificationsSetLongTurnAlert,
   hostNotificationsFeedSubscribeV10,
   hostNotificationsFeedSubscribeV11,
   hostNotificationsFeedSubscribeV12,
@@ -1227,6 +1251,7 @@ import {
   hostNotificationsFeedSubscribeV15,
   hostNotificationsFeedSubscribeV16,
   hostNotificationsFeedSubscribeV17,
+  hostNotificationsFeedSubscribeV18,
   hostNotificationsCloudFeedSubscribeV10,
   hostNotificationsCloudFeedSubscribeV11,
   hostNotificationsCloudFeedSubscribeV12,
@@ -1234,6 +1259,7 @@ import {
   hostNotificationsCloudFeedSubscribeV14,
   hostNotificationsCloudFeedSubscribeV15,
   hostNotificationsCloudFeedSubscribeV16,
+  hostNotificationsCloudFeedSubscribeV17,
   hostNotificationsCloudFeedMarkRead,
   hostNotificationsCloudFeedMarkAllRead,
   hostNotificationsCloudFeedResolve,
@@ -1363,6 +1389,7 @@ import {
 import {
   hostInventorySubscribeV10,
   hostInventorySubscribeV11,
+  hostInventorySubscribeV12,
 } from "@traycer/protocol/host/host-inventory";
 import {
   hostChatRecordsSubscribeV10,
@@ -7517,6 +7544,32 @@ const HOST_RPC_REGISTRY_BASE_DEFINITION = {
       downgradePathsFromLatest: {},
     },
   },
+  "host.notifications.getLongTurnAlert": {
+    degrade: { kind: "unsupported" },
+    1: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: hostNotificationsGetLongTurnAlert,
+          upgradeFromPreviousVersion: null,
+        },
+      },
+      downgradePathsFromLatest: {},
+    },
+  },
+  "host.notifications.setLongTurnAlert": {
+    degrade: { kind: "unsupported" },
+    1: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: hostNotificationsSetLongTurnAlert,
+          upgradeFromPreviousVersion: null,
+        },
+      },
+      downgradePathsFromLatest: {},
+    },
+  },
   "host.notifications.markRead": {
     degrade: { kind: "unsupported" },
     1: {
@@ -8214,7 +8267,7 @@ const HOST_RPC_REGISTRY_BASE_DEFINITION = {
   },
   "agent.sendMessage": {
     1: {
-      latestMinor: 1,
+      latestMinor: 2,
       versions: {
         0: {
           contract: agentSendMessageV10,
@@ -8225,6 +8278,12 @@ const HOST_RPC_REGISTRY_BASE_DEFINITION = {
         1: {
           contract: agentSendMessageV11,
           upgradeFromPreviousVersion: agentSendMessageUpgradeV10ToV11,
+        },
+        // @1.2 adds `attachments`: images from the sender's own transcript,
+        // named by file name.
+        2: {
+          contract: agentSendMessageV12,
+          upgradeFromPreviousVersion: agentSendMessageUpgradeV11ToV12,
         },
       },
       downgradePathsFromLatest: {},
@@ -9089,8 +9148,9 @@ const HOST_RPC_REGISTRY_BASE_DEFINITION = {
 // `_NoOverlappingHostRpcMethods` assertion below is what keeps a method from
 // silently existing in more than one of them.
 const HOST_RPC_REGISTRY_BASE_TAIL_DEFINITION = {
-  // The signed-in user's team environments, proxied from the cloud. An
-  // optional capability, never a floor method - see `environment/contracts.ts`.
+  // The signed-in user's environments, personal first then each team,
+  // proxied from the cloud. An optional capability, never a floor method -
+  // see `environment/contracts.ts`.
   "environment.list": {
     degrade: { kind: "unsupported" },
     1: {
@@ -9108,8 +9168,7 @@ const HOST_RPC_REGISTRY_BASE_TAIL_DEFINITION = {
       downgradePathsFromLatest: {},
     },
   },
-  // The one environment this host is bound to, and rebinding it. Optional
-  // capabilities like `environment.list`.
+  // This host's binding. Optional like `environment.list`.
   "environment.host.read": {
     degrade: { kind: "unsupported" },
     1: {
@@ -9123,8 +9182,8 @@ const HOST_RPC_REGISTRY_BASE_TAIL_DEFINITION = {
       downgradePathsFromLatest: {},
     },
   },
-  // A named host's binding, served by the server pool from the account's
-  // binding records; `environment.host.read` stays the host's own answer.
+  // A named host's binding recorded by authn; `environment.host.read`
+  // answers for the serving host.
   "environment.binding.read": {
     degrade: { kind: "unsupported" },
     1: {
@@ -9151,7 +9210,7 @@ const HOST_RPC_REGISTRY_BASE_TAIL_DEFINITION = {
       downgradePathsFromLatest: {},
     },
   },
-  // The hosts of a team environment the caller may see. Optional like its
+  // The hosts of an environment the caller may see. Optional like its
   // siblings.
   "environment.host.list": {
     degrade: { kind: "unsupported" },
@@ -9445,10 +9504,24 @@ const HOST_RPC_REGISTRY_BASE_TAIL_DEFINITION = {
       downgradePathsFromLatest: {},
     },
   },
+  // Text search over a bot's channel and threads (T139). Same optional posture.
+  "bot.conversation.search": {
+    degrade: { kind: "unsupported" },
+    1: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: botConversationSearchV10,
+          upgradeFromPreviousVersion: null,
+        },
+      },
+      downgradePathsFromLatest: {},
+    },
+  },
   "bot.conversation.send": {
     degrade: { kind: "unsupported" },
     1: {
-      latestMinor: 2,
+      latestMinor: 4,
       versions: {
         0: {
           contract: botConversationSendV10,
@@ -9464,6 +9537,18 @@ const HOST_RPC_REGISTRY_BASE_TAIL_DEFINITION = {
         2: {
           contract: botConversationSendV12,
           upgradeFromPreviousVersion: botConversationSendUpgradeV11ToV12,
+        },
+        // @1.3 opens a call's thread (`origin`) and marks a row spoken
+        // (`spoken`).
+        3: {
+          contract: botConversationSendV13,
+          upgradeFromPreviousVersion: botConversationSendUpgradeV12ToV13,
+        },
+        // @1.4 carries a member's images (`attachments`), and with one needs
+        // no text.
+        4: {
+          contract: botConversationSendV14,
+          upgradeFromPreviousVersion: botConversationSendUpgradeV13ToV14,
         },
       },
       downgradePathsFromLatest: {},
@@ -9581,7 +9666,7 @@ const HOST_RPC_REGISTRY_BASE_TAIL_DEFINITION = {
   "bot.onboarding.read": {
     degrade: { kind: "unsupported" },
     1: {
-      latestMinor: 2,
+      latestMinor: 3,
       versions: {
         0: {
           contract: botOnboardingReadV10,
@@ -9598,6 +9683,14 @@ const HOST_RPC_REGISTRY_BASE_TAIL_DEFINITION = {
         2: {
           contract: botOnboardingReadV12,
           upgradeFromPreviousVersion: botOnboardingReadUpgradeV11ToV12,
+        },
+        // @1.3 lets a live setup's arrival be `machine`, the team's own
+        // computer (T141). VALUE growth, emission-gated: host dispatch
+        // serves a 1.2 caller `arrival: null` for it.
+        3: {
+          contract: botOnboardingReadV13,
+          upgradeFromPreviousVersion: botOnboardingReadUpgradeV12ToV13,
+          responseGrowthProjectionGated: true,
         },
       },
       downgradePathsFromLatest: {},
@@ -10636,6 +10729,34 @@ const HOST_RPC_REGISTRY_BASE_TAIL_DEFINITION = {
       versions: {
         0: {
           contract: chatMcpAppUpdateModelContextV10,
+          upgradeFromPreviousVersion: null,
+        },
+      },
+      downgradePathsFromLatest: {},
+    },
+    degrade: { kind: "unsupported" },
+  },
+  // The feedback-draft card (`chat/feedback-draft.ts`). A host without them
+  // leaves the card read-only.
+  "chat.feedbackDraft.decide": {
+    1: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: chatFeedbackDraftDecideV10,
+          upgradeFromPreviousVersion: null,
+        },
+      },
+      downgradePathsFromLatest: {},
+    },
+    degrade: { kind: "unsupported" },
+  },
+  "chat.feedbackDraft.preview": {
+    1: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: chatFeedbackDraftPreviewV10,
           upgradeFromPreviousVersion: null,
         },
       },
@@ -12354,7 +12475,7 @@ const HOST_RPC_NOTIFICATION_METHODS = {
       downgradePathsFromLatest: {},
     },
     2: {
-      latestMinor: 5,
+      latestMinor: 6,
       versions: {
         0: {
           contract: hostNotificationsListV20,
@@ -12403,9 +12524,16 @@ const HOST_RPC_NOTIFICATION_METHODS = {
           upgradeFromPreviousVersion: hostNotificationsListUpgradeV24ToV25,
           responseGrowthProjectionGated: true,
         },
+        // 2.6 adds `feedback.drafted` under the same projection gate. A new
+        // minor rather than a widening of 2.5 because 2.5 is on staging hosts.
+        6: {
+          contract: hostNotificationsListV26,
+          upgradeFromPreviousVersion: hostNotificationsListUpgradeV25ToV26,
+          responseGrowthProjectionGated: true,
+        },
       },
       downgradePathsFromLatest: {
-        1: hostNotificationsListDowngradeV25ToV10,
+        1: hostNotificationsListDowngradeV26ToV10,
       },
     },
   },
@@ -13756,15 +13884,19 @@ const HOST_RPC_ID_CARRYING_REGISTRY_DEFINITION = {
       downgradePathsFromLatest: {},
     },
     2: {
-      latestMinor: 0,
+      latestMinor: 1,
       versions: {
         0: {
           contract: providersFallbackPolicyGetV20,
           upgradeFromPreviousVersion: providersFallbackPolicyGetUpgradeV11ToV20,
         },
+        1: {
+          contract: providersFallbackPolicyGetV21,
+          upgradeFromPreviousVersion: providersFallbackPolicyGetUpgradeV20ToV21,
+        },
       },
       downgradePathsFromLatest: {
-        1: providersFallbackPolicyGetDowngradeV20ToV11,
+        1: providersFallbackPolicyGetDowngradeV21ToV11,
       },
     },
   },
@@ -14556,7 +14688,7 @@ type HostRpcNotificationMethodMap = {
       readonly downgradePathsFromLatest: Record<never, never>;
     };
     readonly 2: {
-      readonly latestMinor: 5;
+      readonly latestMinor: 6;
       readonly versions: {
         readonly 0: {
           readonly contract: typeof hostNotificationsListV20;
@@ -14585,9 +14717,14 @@ type HostRpcNotificationMethodMap = {
           readonly upgradeFromPreviousVersion: typeof hostNotificationsListUpgradeV24ToV25;
           readonly responseGrowthProjectionGated: true;
         };
+        readonly 6: {
+          readonly contract: typeof hostNotificationsListV26;
+          readonly upgradeFromPreviousVersion: typeof hostNotificationsListUpgradeV25ToV26;
+          readonly responseGrowthProjectionGated: true;
+        };
       };
       readonly downgradePathsFromLatest: {
-        readonly 1: typeof hostNotificationsListDowngradeV25ToV10;
+        readonly 1: typeof hostNotificationsListDowngradeV26ToV10;
       };
     };
   };
@@ -14908,7 +15045,7 @@ const HOST_STREAM_RPC_REGISTRY_NOTIFICATIONS_DEFINITION = {
   // on the negotiated minor rather than assuming tolerance.
   "host.notifications.feed.subscribe": {
     1: {
-      latestMinor: 7,
+      latestMinor: 8,
       versions: {
         0: {
           contract: hostNotificationsFeedSubscribeV10,
@@ -14939,12 +15076,13 @@ const HOST_STREAM_RPC_REGISTRY_NOTIFICATIONS_DEFINITION = {
           contract: hostNotificationsFeedSubscribeV16,
         },
         7: { contract: hostNotificationsFeedSubscribeV17 },
+        8: { contract: hostNotificationsFeedSubscribeV18 },
       },
     },
   },
   "host.notifications.cloudFeed.subscribe": {
     1: {
-      latestMinor: 6,
+      latestMinor: 7,
       versions: {
         0: {
           contract: hostNotificationsCloudFeedSubscribeV10,
@@ -14969,6 +15107,7 @@ const HOST_STREAM_RPC_REGISTRY_NOTIFICATIONS_DEFINITION = {
           contract: hostNotificationsCloudFeedSubscribeV15,
         },
         6: { contract: hostNotificationsCloudFeedSubscribeV16 },
+        7: { contract: hostNotificationsCloudFeedSubscribeV17 },
       },
     },
   },
@@ -15158,16 +15297,20 @@ const HOST_STREAM_RPC_REGISTRY_CORE_DEFINITION = {
   // `@1.0` shipped in cli-v1.3.0 and is frozen there. The durability legs this
   // branch carries on `snapshot` / `cloudSyncStatus` therefore live at `@1.1`;
   // the host gates them on the negotiated minor
-  // (`EPIC_STATUS_DURABILITY_LEGS_MINOR`).
+  // (`EPIC_STATUS_DURABILITY_LEGS_MINOR`). `@1.2` adds `artifactSync` the same
+  // way (`EPIC_STATUS_ARTIFACT_SYNC_MINOR`).
   "epic.status.subscribe": {
     1: {
-      latestMinor: 1,
+      latestMinor: 2,
       versions: {
         0: {
           contract: epicStatusSubscribeV10,
         },
         1: {
           contract: epicStatusSubscribeV11,
+        },
+        2: {
+          contract: epicStatusSubscribeV12,
         },
       },
     },
@@ -15636,13 +15779,18 @@ const HOST_STREAM_RPC_REGISTRY_FEATURE_DEFINITION = {
   // the host strips the fields and drops sandbox rows for a 1.0 subscriber.
   "host.hostInventory.subscribe": {
     1: {
-      latestMinor: 1,
+      latestMinor: 2,
       versions: {
         0: {
           contract: hostInventorySubscribeV10,
         },
         1: {
           contract: hostInventorySubscribeV11,
+        },
+        // @1.2 may carry a team's own computer (`kind: machine`, Tracy Bots
+        // T141); the serving host drops those rows for a 1.1 subscriber.
+        2: {
+          contract: hostInventorySubscribeV12,
         },
       },
     },
@@ -15969,7 +16117,7 @@ const HOST_STREAM_RPC_REGISTRY_DEFINITION = {
   ...HOST_STREAM_RPC_REGISTRY_OTHER_DEFINITION,
   "chat.subscribe": {
     1: {
-      latestMinor: 42,
+      latestMinor: 43,
       versions: {
         0: {
           contract: chatSubscribeV10,
@@ -16187,6 +16335,9 @@ const HOST_STREAM_RPC_REGISTRY_DEFINITION = {
         // @1.42: the delivery carries the opening's `worktreeIntent`, on the
         // snapshot and `messageDeliveryChanged` (stripped below).
         42: { contract: chatSubscribeV142 },
+        // @1.43: the `slack` user message, a plain user row below (see
+        // `chat-frame-compat.ts`). A user row may say `spoken`.
+        43: { contract: chatSubscribeV143 },
       },
     },
   },

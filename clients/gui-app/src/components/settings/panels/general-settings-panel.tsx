@@ -11,7 +11,6 @@ import { ChatAutoArchiveSettingsRow } from "@/components/settings/panels/chat-au
 import { useSettingsDensity } from "@/providers/settings-density-context";
 import { cn } from "@/lib/utils";
 import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
-import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { ConfirmDestructiveDialog } from "@/components/ui/confirm-destructive-dialog";
 import { Switch } from "@/components/ui/switch";
@@ -31,6 +30,7 @@ import {
 } from "@/components/settings/panels/general-settings.definitions";
 import { useSettingsAvailabilityContext } from "@/hooks/settings/use-settings-availability-context";
 import { useRunnerFeatureSettingsQuery } from "@/hooks/runner/use-runner-feature-settings-query";
+import { useRunnerAgentFeedbackSet } from "@/hooks/runner/use-runner-agent-feedback-set-mutation";
 import { useRunnerAgentRolesSet } from "@/hooks/runner/use-runner-agent-roles-set-mutation";
 
 function trackGeneralSetting(setting: AnalyticsSetting): void {
@@ -51,6 +51,7 @@ export function GeneralSettingsPanel() {
   const compact = useSettingsDensity() === "compact";
   const featureSettings = useRunnerFeatureSettingsQuery();
   const setAgentRoles = useRunnerAgentRolesSet();
+  const setAgentFeedback = useRunnerAgentFeedbackSet();
   const availability = useSettingsAvailabilityContext();
   const agentRolesAvailable =
     GENERAL.definitions.agentRoles.availableWhen(availability);
@@ -115,11 +116,6 @@ export function GeneralSettingsPanel() {
           {agentRolesAvailable ? (
             <SettingsRow
               row={GENERAL.definitions.agentRoles}
-              labelStatus={
-                <Badge variant="muted" size="xs">
-                  Experimental
-                </Badge>
-              }
               status={
                 featureSettings.isError
                   ? "Couldn't read feature settings. Repair Traycer's config.json, or back it up before resetting it, then reopen Settings."
@@ -136,6 +132,29 @@ export function GeneralSettingsPanel() {
                     setAgentRoles.mutate(enabled);
                   }}
                   aria-label="Agent roles"
+                />
+              }
+            />
+          ) : null}
+          {agentRolesAvailable ? (
+            <SettingsRow
+              row={GENERAL.definitions.agentFeedback}
+              status={
+                featureSettings.isError
+                  ? "Couldn't read feature settings. Repair ~/.traycer/cli/config.json, or back it up before resetting it, then reopen Settings."
+                  : undefined
+              }
+              control={
+                <Switch
+                  checked={featureSettings.data?.agentFeedback === true}
+                  disabled={
+                    featureSettings.data === undefined ||
+                    setAgentFeedback.isPending
+                  }
+                  onCheckedChange={(enabled) => {
+                    setAgentFeedback.mutate(enabled);
+                  }}
+                  aria-label="Let agents draft feedback for you to review"
                 />
               }
             />

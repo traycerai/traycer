@@ -154,6 +154,7 @@ const CHAT_MESSAGE_FIELD_UNCHANGED: {
   // message, so a resolve arrives as a new object and identity is enough.
   conversationRequest: (a, b) =>
     a.conversationRequest === b.conversationRequest,
+  slackMessage: (a, b) => a.slackMessage === b.slackMessage,
   announcement: (a, b) => a.announcement === b.announcement,
   options: (a, b) => a.options === b.options,
   // A settlement arrives as a new question object on the same row.
@@ -242,21 +243,34 @@ export const EMPTY_STABLE_TRANSCRIPT_LIST_ROWS_STATE: StableTranscriptListRowsSt
     result: [],
   };
 
-/** The row keys in order, as the list will see them. */
+/**
+ * The row shape in order, as the list will see it: each row's key AND kind.
+ * A placeholder is keyed by the row id it stands for, so its hydrated
+ * replacement keeps the key and changes only the kind - a size change of up to
+ * the placeholder's cap in one commit, which a key-only sequence would call
+ * settled content.
+ */
 export function transcriptListKeySequence(
   rows: ReadonlyArray<TranscriptListRow>,
 ): ReadonlyArray<string> {
-  return rows.map((row) => row.key);
+  return rows.map(transcriptListRowShape);
 }
 
-/** {@link didChatTimelineKeySequenceChange} for the windowed row union. */
+function transcriptListRowShape(row: TranscriptListRow): string {
+  return `${row.key}:${row.kind}`;
+}
+
+/** {@link didChatTimelineKeySequenceChange} for the windowed row union,
+ *  compared on {@link transcriptListKeySequence}'s key-and-kind shape. */
 export function didTranscriptListKeySequenceChange(
   committed: ReadonlyArray<string> | undefined,
   rows: ReadonlyArray<TranscriptListRow>,
 ): boolean {
   if (committed === undefined || committed.length === 0) return false;
   if (committed.length !== rows.length) return true;
-  return rows.some((row, index) => committed[index] !== row.key);
+  return rows.some(
+    (row, index) => committed[index] !== transcriptListRowShape(row),
+  );
 }
 
 /**

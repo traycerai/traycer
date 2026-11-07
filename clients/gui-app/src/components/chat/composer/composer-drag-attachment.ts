@@ -71,6 +71,8 @@ function entityMentionAttachment(args: {
     // Terminals are not draggable into a composer - the tree drag sources are
     // chats, terminal agents, and artifacts.
     terminalId: null,
+    botId: null,
+    botTrunkChatId: null,
     status: null,
   };
 }

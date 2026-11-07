@@ -345,6 +345,7 @@ describe("new chat command actions", () => {
         source: "direct_ui",
       },
       navigateNestedFocus: navigation.navigateNestedFocus,
+      mobileTarget: null,
     });
 
     expect(navigation.calls).toHaveLength(0);

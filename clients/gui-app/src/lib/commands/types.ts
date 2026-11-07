@@ -98,8 +98,6 @@ export interface CommandItem {
    * (the team a bot is in). Optional for the same reason as `hostBadge`.
    */
   readonly hint?: string;
-  /** The host of the tile this row opens, on an opener row for an existing tile. */
-  readonly tileHostId?: string;
   /**
    * Trailing context text, rendered by sub-pages as a badge.
    *

@@ -1,4 +1,12 @@
-import { Suspense, lazy, useCallback, useEffect, useMemo, useRef } from "react";
+import {
+  Suspense,
+  lazy,
+  use,
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+} from "react";
 import { Tabs, TabsContent } from "@/components/ui/tabs";
 import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
 import { SwitcherCategoryTabs } from "@/components/epic-canvas/mobile/switcher-category-tabs";
@@ -13,8 +21,9 @@ import { SwitcherBrowsersList } from "@/components/epic-canvas/mobile/switcher-b
 import { SwitcherSimulatorsList } from "@/components/epic-canvas/mobile/switcher-simulators-list";
 import { SwitcherArtifactsList } from "@/components/epic-canvas/mobile/switcher-artifacts-list";
 import { SwitcherCommentsList } from "@/components/epic-canvas/mobile/switcher-comments-list";
-import { selectMobileTile } from "@/components/epic-canvas/mobile/mobile-tile-selection";
-import { useEpicCanvas } from "@/stores/epics/canvas/store";
+import { SwitcherLastTileRow } from "@/components/epic-canvas/mobile/switcher-last-tile-row";
+import { useMobileTileReading } from "@/components/epic-canvas/mobile/use-mobile-tile-level2-form";
+import { MobileTileOpenTargetContext } from "@/lib/canvas/tile-open/mobile-tile-open-target-context";
 import {
   isGitDiffTileRef,
   isPrDetailTileRef,
@@ -41,16 +50,38 @@ const SwitcherPanelEmbed = lazy(() =>
 interface TileSwitcherListProps {
   readonly epicId: string;
   readonly tabId: string;
-  /** The sheet gets out of the way of a tile just opened from it. */
+  /**
+   * The list's surface gets out of the way of a tile just opened from it: the
+   * sheet and a Split's pane close. A pane with nothing to go back to passes a
+   * no-op.
+   */
   readonly onClose: () => void;
 }
 
 /**
- * "The list has not seen a shown tile yet." Distinct from `null`, which means it
- * HAS looked and the pane is empty.
+ * "The list has not seen a shown tile yet." Distinct from `null` ids, which
+ * mean it HAS looked and the slot is empty.
  */
 const UNOBSERVED = Symbol("unobserved-shown-tile");
-type ShownInstanceObservation = string | null | typeof UNOBSERVED;
+interface ShownInstanceIds {
+  readonly primaryId: string | null;
+  readonly secondaryId: string | null;
+}
+type ShownObservation = ShownInstanceIds | typeof UNOBSERVED;
+
+/** The tile a change in either watched slot brought on screen, else `null`. */
+function newlyShownTile(
+  previous: ShownInstanceIds,
+  current: ShownInstanceIds & {
+    readonly primaryTile: EpicCanvasTileRef | null;
+    readonly secondaryTile: EpicCanvasTileRef | null;
+  },
+): EpicCanvasTileRef | null {
+  if (current.secondaryId !== previous.secondaryId)
+    return current.secondaryTile;
+  if (current.primaryId !== previous.primaryId) return current.primaryTile;
+  return null;
+}
 
 /** Tile kinds only the embedded File-tree / Git-diff / Pull-requests bodies open. */
 function isEmbedOriginatedTileRef(ref: EpicCanvasTileRef): boolean {
@@ -71,8 +102,8 @@ function isEmbedOriginatedTileRef(ref: EpicCanvasTileRef): boolean {
  * Sharing panel bodies for the rest. Creating is a row inside the category that
  * owns the kind, not a list-level control.
  *
- * It has no box of its own beyond filling its parent; `TabSwitcherSheet`
- * supplies one.
+ * It has no box of its own beyond filling its parent, and whichever form level 2
+ * takes supplies one: `TabSwitcherSheet`, `MobileTileChooserPane`.
  */
 export function TileSwitcherList(props: TileSwitcherListProps) {
   const { epicId, tabId, onClose } = props;
@@ -107,24 +138,36 @@ export function TileSwitcherList(props: TileSwitcherListProps) {
   // re-resolve, cross-window nav on the shared canvas store) also changes the
   // shown tile, but must NOT close the surface under the user mid-browse - those
   // row opens close via their own `onClose`.
-  const canvas = useEpicCanvas(tabId);
-  const shownTile = useMemo(
-    () => selectMobileTile(canvas)?.ref ?? null,
-    [canvas],
-  );
-  const shownInstanceId = shownTile?.instanceId ?? null;
-  const shownInstanceIdRef = useRef<ShownInstanceObservation>(UNOBSERVED);
+  //
+  // The tiles this list chooses for: a slot's own sheet or pane watches that
+  // slot, and the phone's sheet (no target) watches both, since an open from
+  // the first tile's body lands beside it.
+  const reading = useMobileTileReading(tabId);
+  const target = use(MobileTileOpenTargetContext)?.slot ?? null;
+  const primaryTile =
+    target === "secondary" ? null : (reading.primary?.ref ?? null);
+  const secondaryTile =
+    target === "primary" ? null : (reading.secondary?.ref ?? null);
+  const primaryId = primaryTile?.instanceId ?? null;
+  const secondaryId = secondaryTile?.instanceId ?? null;
+  const observedRef = useRef<ShownObservation>(UNOBSERVED);
   useEffect(() => {
-    const previous = shownInstanceIdRef.current;
-    shownInstanceIdRef.current = shownInstanceId;
+    const previous = observedRef.current;
+    observedRef.current = { primaryId, secondaryId };
     // Only the FIRST observation after mounting is skipped - it establishes the
     // baseline rather than reporting a change. `null` cannot stand for that: it
     // is also a legitimate observation (an empty pane, which is exactly the
     // state the switcher exists to rescue the user from), and conflating the two
     // left the sheet covering the very first tile opened from an empty pane.
-    if (previous === UNOBSERVED || shownInstanceId === previous) return;
-    if (shownTile !== null && isEmbedOriginatedTileRef(shownTile)) onClose();
-  }, [shownInstanceId, shownTile, onClose]);
+    if (previous === UNOBSERVED) return;
+    const shown = newlyShownTile(previous, {
+      primaryId,
+      secondaryId,
+      primaryTile,
+      secondaryTile,
+    });
+    if (shown !== null && isEmbedOriginatedTileRef(shown)) onClose();
+  }, [primaryId, secondaryId, primaryTile, secondaryTile, onClose]);
 
   return (
     <Tabs
@@ -132,11 +175,13 @@ export function TileSwitcherList(props: TileSwitcherListProps) {
       onValueChange={handleCategoryChange}
       className="min-h-0 flex-1 gap-0"
     >
+      <SwitcherLastTileRow epicId={epicId} tabId={tabId} onClose={onClose} />
       <div className="shrink-0 border-b border-canvas-border/70">
         <SwitcherCategoryTabs
           categories={categories}
           activeCategory={activeCategory}
           onSelect={handleCategoryChange}
+          trailing={null}
         />
       </div>
       <div className="flex min-h-0 flex-1 flex-col">

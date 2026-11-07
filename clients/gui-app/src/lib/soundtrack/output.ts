@@ -10,8 +10,11 @@ export interface OutputVoice {
 export interface OutputGain {
   /** Moves linearly from the current value to `target` over `seconds`. */
   ramp(target: number, seconds: number): void;
-  /** A gain that feeds this one. */
-  createChild(initial: number): OutputGain;
+  /**
+   * A gain that feeds this one, through a fixed stereo position from -1 (left)
+   * to 1 (right); null feeds it straight, in the centre.
+   */
+  createChild(initial: number, pan: number | null): OutputGain;
   /** Starts `buffer` at clock time `when`, fading in, feeding this gain. */
   play(buffer: AudioBuffer, when: number, fadeInSeconds: number): OutputVoice;
 }
@@ -80,8 +83,12 @@ class WebAudioGain implements OutputGain {
     rampParam(this.node.gain, this.context.currentTime, target, seconds);
   }
 
-  createChild(initial: number): OutputGain {
-    return new WebAudioGain(this.context, this.node, initial);
+  createChild(initial: number, pan: number | null): OutputGain {
+    if (pan === null) return new WebAudioGain(this.context, this.node, initial);
+    const panner = this.context.createStereoPanner();
+    panner.pan.value = pan;
+    panner.connect(this.node);
+    return new WebAudioGain(this.context, panner, initial);
   }
 
   play(buffer: AudioBuffer, when: number, fadeInSeconds: number): OutputVoice {
@@ -175,15 +182,17 @@ export class ChimeDuck {
 }
 
 /**
- * The person's volume and a chime's duck in front of `destination`. They are
- * two gains in a row so that moving one never disturbs what is scheduled on the
- * other: a slider dragged during a chime leaves its duck alone.
+ * The person's volume, a chime's duck and a pause's fade in front of
+ * `destination`. They are gains in a row so that moving one never disturbs what
+ * is scheduled on another: a slider dragged during a chime leaves its duck
+ * alone, and a pause leaves both.
  */
 export class WebAudioLevel {
   /** Where the mix goes in. */
   readonly input: AudioNode;
   private readonly context: BaseAudioContext;
   private readonly volume: GainNode;
+  private readonly audible: GainNode;
   private readonly chimeDuck: ChimeDuck;
 
   constructor(
@@ -192,9 +201,11 @@ export class WebAudioLevel {
     volume: number,
   ) {
     this.context = context;
+    this.audible = context.createGain();
+    this.audible.connect(destination);
     this.volume = context.createGain();
     this.volume.gain.value = volume;
-    this.volume.connect(destination);
+    this.volume.connect(this.audible);
     const ducking = context.createGain();
     ducking.connect(this.volume);
     this.chimeDuck = new ChimeDuck(ducking.gain);
@@ -212,6 +223,16 @@ export class WebAudioLevel {
 
   duck(chimeSeconds: number): void {
     this.chimeDuck.duck(this.context.currentTime, chimeSeconds);
+  }
+
+  /** Takes the mix out for a pause, or brings it back, from wherever it is. */
+  setAudible(audible: boolean): void {
+    rampParam(
+      this.audible.gain,
+      this.context.currentTime,
+      audible ? 1 : 0,
+      MIX_TUNING.pauseFadeSeconds,
+    );
   }
 }
 

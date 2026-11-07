@@ -85,6 +85,13 @@ export interface TileOpenIntent {
   /** `false` only for the PaneOpener's "open a second view". */
   readonly dedupe: boolean;
   readonly source: AnalyticsSource;
+  /**
+   * Set by an opener that names the HTML version to show (the chat's inline
+   * Expand): a tile already open on the artifact switches to the node's
+   * `htmlVersion`, or back to Latest when the node has none. Every other
+   * opener leaves an open tile on the version its reader picked.
+   */
+  readonly adoptHtmlVersion?: boolean;
 }
 
 /**
@@ -111,6 +118,20 @@ export function tileIntent(
 }
 
 export type TileOpenMode = "preview" | "permanent" | "background";
+
+/** The phone shell's two tile slots. */
+export type MobileTileSlot = "primary" | "secondary";
+
+/**
+ * What the two tile slots hold when an open is decided, and which one this open
+ * lands in. Only where two tiles fit; everywhere else the resolver is given
+ * `null` and the shell's one tile takes the open, as it always has.
+ */
+export interface MobileTileOpenSlots {
+  readonly target: MobileTileSlot;
+  readonly primaryInstanceId: string | null;
+  readonly secondaryInstanceId: string | null;
+}
 
 /**
  * Where inside a pane an open lands: `mode` picks pinned / preview /
@@ -158,6 +179,17 @@ export type TileOpenPlan =
       readonly mode: "preview" | "permanent";
     }
   | { readonly kind: "pip"; readonly tabId: string }
+  /**
+   * The phone shell's second tile takes it, and the tile the person is reading
+   * keeps the activation: `existingInstanceId` when the tile is on the canvas,
+   * `null` to add it. `transient` is the `preview` of this slot.
+   */
+  | {
+      readonly kind: "show-in-mobile-secondary";
+      readonly tabId: string;
+      readonly existingInstanceId: string | null;
+      readonly transient: boolean;
+    }
   /**
    * Nothing to do: a background open (host push, middle-click) whose tile is
    * already on the canvas. `openTileInBackgroundTab` was idempotent by

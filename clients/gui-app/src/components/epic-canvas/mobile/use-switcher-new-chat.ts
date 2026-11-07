@@ -1,5 +1,6 @@
-import { useCallback, useRef } from "react";
+import { use, useCallback, useRef } from "react";
 import { toast } from "sonner";
+import { MobileTileOpenTargetContext } from "@/lib/canvas/tile-open/mobile-tile-open-target-context";
 import { useEpicCreateChatForHostClient } from "@/hooks/epic/use-epic-chat-mutations";
 import { useEpicNestedFocusNavigation } from "@/hooks/epic/use-epic-nested-focus-navigation";
 import { useEpicSessionHostId } from "@/hooks/epic/use-epic-session-host-id";
@@ -54,6 +55,8 @@ export function useSwitcherNewChat(
   const recordPlacement = placement.pin.setSelection;
   const createChat = useEpicCreateChatForHostClient(submitTarget.client);
   const navigateNestedFocus = useEpicNestedFocusNavigation();
+  // The new chat lands in the slot this list chooses for, as a picked row does.
+  const mobileTarget = use(MobileTileOpenTargetContext);
   // `isPending` only flips on the next render, so a fast double tap would read
   // `false` twice and file two creates.
   const inFlight = useRef(false);
@@ -104,6 +107,7 @@ export function useSwitcherNewChat(
           const cancel = openCreatedChatWhenProjectedWithNavigation({
             intent,
             navigateNestedFocus,
+            mobileTarget,
           });
           onOpened();
           return cancel;
@@ -113,6 +117,7 @@ export function useSwitcherNewChat(
     [
       createChat,
       epicId,
+      mobileTarget,
       navigateNestedFocus,
       onOpened,
       recordPlacement,

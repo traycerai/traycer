@@ -1,3 +1,4 @@
+import { carryViewedHostIntoSettingsScope } from "@/components/settings/host-scope/carry-viewed-host-into-settings";
 import { useMemo, useState, type ReactNode } from "react";
 import { Check, Copy } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -16,7 +17,10 @@ import {
   HostPresenceDot,
 } from "@/components/settings/host-scope/host-glyph";
 import { formatPlatform } from "@/components/settings/host-scope/host-scope-model";
-import { useHostScope } from "@/components/settings/host-scope/use-host-scope";
+import {
+  useHostScopeFor,
+  WINDOW_HOST_SELECTION,
+} from "@/components/settings/host-scope/use-host-scope";
 import { useAddHostDialogStore } from "@/stores/settings/add-host-dialog-store";
 import { useClipboardCopy } from "@/hooks/ui/use-clipboard-copy";
 import { navigateToSettingsSection } from "@/lib/settings-navigation";
@@ -94,7 +98,7 @@ export function AddHostDialog(): ReactNode {
 }
 
 function AddHostDialogBody(): ReactNode {
-  const scope = useHostScope();
+  const scope = useHostScopeFor(WINDOW_HOST_SELECTION);
   const knownHostIds = useAddHostDialogStore((s) => s.knownHostIds);
   const closeDialog = useAddHostDialogStore((s) => s.closeDialog);
 
@@ -229,7 +233,7 @@ function AddHostDialogBody(): ReactNode {
             type="button"
             className="w-full sm:w-auto"
             onClick={() => {
-              scope.setHostId(arrived.hostId);
+              carryViewedHostIntoSettingsScope(arrived.hostId);
               closeDialog();
               navigateToSettingsSection("host");
             }}

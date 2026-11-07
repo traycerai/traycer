@@ -2,6 +2,7 @@ import { useCallback, useEffect, type ReactNode } from "react";
 import { SquareStack } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { InlineTitleField } from "@/components/epic-canvas/mobile/inline-title-field";
+import { useMobileTileListForm } from "@/components/epic-canvas/mobile/use-mobile-tile-level2-form";
 import { useIsMobileViewport } from "@/hooks/ui/use-mobile-viewport";
 import {
   epicTabRightActionsKey,
@@ -55,11 +56,16 @@ import {
  * Ungated by permission: switching tabs reads, it does not mutate, so a viewer
  * gets the same trigger. The create actions inside the sheet carry their own
  * editor gate.
+ *
+ * Drawn only in the `bar` form: in the `pane` form each tile's own header
+ * opens the sheet.
  */
 export function EpicMobileSwitcherTrigger(props: { readonly tabId: string }) {
   const { tabId } = props;
   const setOpen = useMobileSwitcherStore((state) => state.setOpen);
   const mounted = useIsMobileSwitcherMounted(tabId);
+  const form = useMobileTileListForm(tabId);
+  if (form !== "bar") return null;
   return (
     <Button
       type="button"

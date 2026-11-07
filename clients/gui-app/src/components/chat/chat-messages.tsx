@@ -83,6 +83,9 @@ import {
   shouldMountChatTurnMinimap,
 } from "@/components/chat/chat-turn-minimap-logic";
 import { ChatBotPresentationContext } from "@/components/chat/chat-bot-presentation-context";
+import { BotExchangeLinesContext } from "@/components/chat/bot-exchange-lines-context";
+import { createBotExchangeLineCollator } from "@/stores/chats/transcript-exchange-lines";
+import type { BotExchange } from "@/lib/bots/bot-exchanges";
 import { useStopReadingOnNewReply } from "@/hooks/ui/use-read-aloud";
 import { useIsMobileViewport } from "@/hooks/ui/use-mobile-viewport";
 import { buildChatActivityTimeline } from "@/components/chat/chat-activity-groups";
@@ -368,6 +371,8 @@ export const CHAT_TIMELINE_ANCHOR_SCROLL_PROMISE_TIMEOUT_MS = 2_600;
  *  navigation whose landing is off by more than this is treated as a real
  *  undershoot, not float/rounding noise. */
 const CHAT_TIMELINE_NAVIGATION_LANDING_EPSILON_PX = 1;
+
+const NO_EXCHANGES: ReadonlyArray<BotExchange> = [];
 /** Bounded retry count for the settle/re-issue loop (at most 2-3) - the
  *  upper end, since the field bug this fixes needed
  *  multiple manual pill re-clicks to converge and the goal is to absorb that
@@ -518,6 +523,19 @@ function isTranscriptWindowRecovering(
   return (
     window !== null && (window.invalidated || window.carriedSkeleton.length > 0)
   );
+}
+
+/**
+ * Whether the host served this row whole. A fresh span seats only rows served
+ * complete (`incompleteRowIds` are withheld), so its body is every record of
+ * the row. A drawn row proves nothing: a live record or a stale body can draw
+ * part of one, and the legacy line's backfill delivers a turn in pieces.
+ */
+function isRowServedWhole(
+  window: TranscriptWindow | null,
+  rowId: string,
+): boolean {
+  return window?.spans.some((span) => span.rowIds.includes(rowId)) === true;
 }
 
 /** LegendList's web implementation can return null before its scroll element
@@ -2192,21 +2210,37 @@ function ChatMessagesInner(props: ChatMessagesInnerProps) {
   // nothing else (`ChatBotMessage` -> `BotMessageText`): no activity groups,
   // no tool cards - so the DOM that makes a long turn expensive to mount does
   // not exist there, and the layout it does draw is one framed, sender-lined
-  // message per row, which a part cannot be half of.
+  // message per row, which a part cannot be half of. It also puts the sender
+  // first in the minimap's labels, since several people post there.
   const botChannel = use(ChatBotPresentationContext) !== null;
   // ONE decision, read by all three things that derive a part key: the rows
   // below, find's projection and `chatTimelineRowKeyForBlock`. A reader that
   // split differently from the list would name rows the list never built.
   const splitLongTurns = !botChannel;
 
+  // A bot's channel or thread draws its bot's messages with other bots as
+  // lines between its rows (Tracy Bots, decision 174).
+  // The collator remembers its last placement, so a streamed token re-reads
+  // no message and rebuilds no line.
+  const exchanges = use(BotExchangeLinesContext)?.exchanges ?? NO_EXCHANGES;
+  const [collateExchangeLines] = useState(createBotExchangeLineCollator);
   const listRows = useMemo(
     () =>
-      transcriptListRows({
-        window: transcriptWindow,
-        rendered: messages,
-        splitLongTurns,
-      }),
-    [splitLongTurns, transcriptWindow, messages],
+      collateExchangeLines(
+        transcriptListRows({
+          window: transcriptWindow,
+          rendered: messages,
+          splitLongTurns,
+        }),
+        exchanges,
+      ),
+    [
+      collateExchangeLines,
+      exchanges,
+      splitLongTurns,
+      transcriptWindow,
+      messages,
+    ],
   );
 
   // Restore the persisted reading position once, on mount (tries
@@ -2250,8 +2284,9 @@ function ChatMessagesInner(props: ChatMessagesInnerProps) {
   // A restored row becomes LegendList's own `initialScrollIndex`
   // measurement bootstrap - the same self-correcting path
   // `initialScrollAtEnd` uses, carrying the saved pixel offset. `null` for a
-  // fresh open or a saved bottom-following view (LegendList's own
-  // `initialScrollAtEnd` covers those).
+  // fresh open, a saved bottom-following view (LegendList's own
+  // `initialScrollAtEnd` covers those), or a saved row the list cannot name yet
+  // (`initialParkAtEnd` covers that).
   const [initialScrollIndexAnchor] =
     useState<ChatTimelineInitialScrollAnchor | null>(() => {
       if (
@@ -2547,6 +2582,12 @@ function ChatMessagesInner(props: ChatMessagesInnerProps) {
   // explicit-navigation ownership live only inside that latch.
   const initialIsAtEnd = restoredTabState.mode === "following-end";
   const [initialScrollAtEnd] = useState(initialIsAtEnd);
+  // A saved position with no row to land on yet (a part of a turn the tail
+  // snapshot no longer reaches) parks at the tail until the catch-up below
+  // answers for it: the row arrives and the restore lands, or the transcript
+  // proves the row gone and the reader follows the latest.
+  const initialParkAtEnd =
+    !initialIsAtEnd && restoredTabState.anchorMessageId === null;
   const initialScrollMode: ChatTimelineScrollMode = initialIsAtEnd
     ? "following-end"
     : "free-scrolling";
@@ -3311,8 +3352,6 @@ function ChatMessagesInner(props: ChatMessagesInnerProps) {
   // (L-14). It is a pure view over rows the transcript already has, so
   // drawing one costs nothing the chat was not already paying.
   const minimapShown = useRegionShown("minimap") || minimapGhost;
-  // A bot channel draws no rail (`shouldMountChatTurnMinimap`); the region
-  // stays registered so the layout editor still lists it for agent chats.
   const quoteEnabled =
     quoteReplyEnabled && visible && !systemOverlayActive && quoteSink !== null;
   const quoteSelection = useQuoteSelection({
@@ -3470,7 +3509,7 @@ function ChatMessagesInner(props: ChatMessagesInnerProps) {
   //
   // `afterSettle` runs once the ROW landing is done (valid or exhausted), so
   // a block-level `scrollIntoView` cannot fight the 1px row-top re-issue.
-  // Find passes `null`; `navigateToMessage` requests the inner reveal here.
+  // Find and `navigateToMessage` both request the inner reveal here.
   //
   // It settles on the list's own promise, never a `scrollend` race: a landing
   // that needs no scroll fires no `scrollend`, and the list can hold the
@@ -3481,11 +3520,15 @@ function ChatMessagesInner(props: ChatMessagesInnerProps) {
     (
       location: ChatTimelineNavigationLocation,
       afterSettle: (() => void) | null,
+      onCancelled: (() => void) | null,
     ): void => {
       activeNavigationSettleCleanupRef.current?.cancel();
       const generationAtIssue = anchorUserScrollGenerationRef.current;
       const list = chatTimelineRef.current;
-      if (!list) return;
+      if (!list) {
+        onCancelled?.();
+        return;
+      }
       followLatchRef.current?.beginOwnedFreeNavigation();
       const imperativeScrollGeneration = beginImperativeScrollOperation(
         location.animated,
@@ -3495,7 +3538,15 @@ function ChatMessagesInner(props: ChatMessagesInnerProps) {
       let lastSettleTimedOut = false;
       let cancelled = false;
       const scrollNode = list.getScrollableNode();
+      let completed = false;
+      const notifyCancelled = (): void => {
+        if (completed) return;
+        completed = true;
+        onCancelled?.();
+      };
       const finishFreeNavigation = (): void => {
+        if (completed) return;
+        completed = true;
         releaseSettle();
         finishImperativeScrollOperation(imperativeScrollGeneration);
         followLatchRef.current?.completeOwnedFreeNavigation();
@@ -3564,13 +3615,17 @@ function ChatMessagesInner(props: ChatMessagesInnerProps) {
               anchorUserScrollGenerationRef.current !== generationAtIssue
             ) {
               releaseSettle();
+              notifyCancelled();
               return;
             }
             finishExhausted();
           };
           void pendingScroll.then(finishTrailing, finishTrailing);
         },
-        onAborted: releaseSettle,
+        onAborted: () => {
+          releaseSettle();
+          notifyCancelled();
+        },
         maxRetries: CHAT_TIMELINE_NAVIGATION_MAX_RETRIES,
       });
       // A cancelled navigation has no landing of its own to decide: it only
@@ -3582,6 +3637,7 @@ function ChatMessagesInner(props: ChatMessagesInnerProps) {
           cancelSettle();
           releaseSettle();
           followLatchRef.current?.cancelOwnedFreeNavigation();
+          notifyCancelled();
         },
       };
     },
@@ -3591,13 +3647,6 @@ function ChatMessagesInner(props: ChatMessagesInnerProps) {
       finishImperativeScrollOperation,
       scrollToTimelineLocation,
     ],
-  );
-
-  const scrollToTimelineLocationSuppressingFollowRestore = useCallback(
-    (location: ChatTimelineNavigationLocation): void => {
-      issueFreeTimelineNavigation(location, null);
-    },
-    [issueFreeTimelineNavigation],
   );
 
   // No visible traversal is allowed: `animated` is an explicit
@@ -4507,6 +4556,7 @@ function ChatMessagesInner(props: ChatMessagesInnerProps) {
               blockReveal.requestReveal(messageId, blockId);
             }
           : null,
+        null,
       );
     },
     [
@@ -4549,6 +4599,7 @@ function ChatMessagesInner(props: ChatMessagesInnerProps) {
           animated: event.animated,
         },
         null,
+        null,
       );
     };
     container.addEventListener(ScrollToTopRequestEvent.type, answerScrollToTop);
@@ -4564,16 +4615,29 @@ function ChatMessagesInner(props: ChatMessagesInnerProps) {
     settleScrollRequest,
   ]);
 
-  // The split's gone outcome retires the pending coordinate and publishes
-  // following-end through `scrollToEnd`, which sets state: a microtask, as an
-  // effect body may not set state itself. An effect event rather than a
-  // dependency: the effect re-runs on `listRows`, and must not also re-run
-  // because the callback's identity moved.
-  const followLatestAfterSplit = useEffectEvent((): void => {
+  // A saved coordinate found to be gone retires and the reader follows the
+  // latest, through `scrollToEnd`, which sets state: a microtask, as an effect
+  // body may not set state itself. An effect event rather than a dependency:
+  // the effect re-runs on `listRows`, and must not also re-run because the
+  // callback's identity moved.
+  const followLatestOverGoneAnchor = useEffectEvent((): void => {
     queueMicrotask(() => {
       scrollToEnd(false);
     });
   });
+  // A whole-row anchor clamped to a nearby row keeps that landing. A mount
+  // parked at the tail has landed nowhere, and a part of a turn has no neighbour
+  // to settle for, so those follow the latest once the saved row is proved gone.
+  const retireGoneAnchor = useEffectEvent((): void => {
+    if (initialParkAtEnd || isSavedTurnPart) followLatestOverGoneAnchor();
+  });
+  // Whether a row missing from the list is gone rather than late. A skeleton
+  // mid-stream has not named every row, and a window recovering from a void is
+  // being renamed. The legacy line has no such signal, so its restore waits.
+  const everyRowIsNamed =
+    transcriptWindow !== null &&
+    transcriptWindow.skeletonComplete &&
+    !isTranscriptWindowRecovering(transcriptWindow);
 
   // `restoredTabState`/
   // `initialScrollIndexAnchor` are computed ONCE at mount against whatever
@@ -4596,13 +4660,12 @@ function ChatMessagesInner(props: ChatMessagesInnerProps) {
   // transition as an "attempt" - a live reopen can replay dozens of
   // incremental `messages` reference changes before the anchor's own
   // commit lands, exhausting a small counter and disarming the retry
-  // before it ever got the chance to see the anchor arrive. A genuinely
-  // branch-deleted anchor simply never disarms; that is harmless (nothing
-  // is displayed for it - round-1's own clamp stays whatever it already
-  // was) for the lifetime of the tile, the same tradeoff the transcript-jump
-  // precedent already accepts. Disarms permanently the first time it
-  // lands - a NEW live message arriving afterward can never re-trigger a
-  // jump back here.
+  // before it ever got the chance to see the anchor arrive. A whole-row anchor
+  // that landed on a nearby row keeps it for a genuinely branch-deleted anchor,
+  // which simply never disarms, the same tradeoff the transcript-jump precedent
+  // accepts; anything else follows the latest once the transcript proves the
+  // row gone (`retireGoneAnchor`). Disarms permanently the first time it lands -
+  // a NEW live message arriving afterward can never re-trigger a jump back here.
   // Route the catch-up through the same bounded validate/retry operation
   // restoration convergence uses, and only clear the pending id/session
   // fallback from the VALIDATED-success path (`onValidated` below) - never
@@ -4645,7 +4708,7 @@ function ChatMessagesInner(props: ChatMessagesInnerProps) {
           return;
         }
         if (split.state.anchorMessageId === null) {
-          followLatestAfterSplit();
+          followLatestOverGoneAnchor();
           return;
         }
         restorePersistedTimelineLocation(
@@ -4665,9 +4728,18 @@ function ChatMessagesInner(props: ChatMessagesInnerProps) {
       const owner = savedChatTabAnchorRowKey(rawSavedTabState, rowKeys);
       const ownerIndex =
         owner === null ? undefined : rowIndexByKeyRef.current.get(owner);
-      if (ownerIndex === undefined) return;
+      if (ownerIndex === undefined) {
+        if (everyRowIsNamed) retireGoneAnchor();
+        return;
+      }
       const ownerRow = listRows[ownerIndex];
-      if (ownerRow.kind !== "placeholder") return;
+      if (ownerRow.kind !== "placeholder") {
+        // Served whole, its body proves no part carries the saved segment.
+        if (isRowServedWhole(transcriptWindowRef.current, ownerRow.key)) {
+          retireGoneAnchor();
+        }
+        return;
+      }
       // The saved index used the expanded list. Demand the owning ordinal
       // directly, then replay the original part key and offset after hydration.
       onVisibleOrdinalRangeChange({
@@ -4692,6 +4764,7 @@ function ChatMessagesInner(props: ChatMessagesInnerProps) {
       onExhausted: () => undefined,
     });
   }, [
+    everyRowIsNamed,
     identity,
     listRows,
     onVisibleOrdinalRangeChange,
@@ -4776,7 +4849,7 @@ function ChatMessagesInner(props: ChatMessagesInnerProps) {
     requestIndexRead: setFindIndexRead,
     rowIndexByKeyRef,
     getScroller,
-    scrollToLocation: scrollToTimelineLocationSuppressingFollowRestore,
+    scrollToLocation: issueFreeTimelineNavigation,
     cancelManualNavigation: releaseForExplicitNavigation,
     getNavigationGeneration: getReaderNavigationGeneration,
     setScrolledActiveUserMessageIdIfChanged,
@@ -4993,7 +5066,6 @@ function ChatMessagesInner(props: ChatMessagesInnerProps) {
       hasContent,
       shown: minimapShown,
       mobileViewport: isMobileViewport,
-      botChannel,
     });
 
   return (
@@ -5040,6 +5112,7 @@ function ChatMessagesInner(props: ChatMessagesInnerProps) {
                   listRef={chatTimelineRef}
                   onScroll={handleScroll}
                   initialScrollAtEnd={initialScrollAtEnd}
+                  initialParkAtEnd={initialParkAtEnd}
                   initialScrollIndex={initialScrollIndexAnchor}
                   contentInsetEndAdjustment={endInset}
                   onFollowIntentChange={onFollowIntentChange}
@@ -5048,6 +5121,9 @@ function ChatMessagesInner(props: ChatMessagesInnerProps) {
                   isFollowCorrectionSuppressed={isFollowCorrectionSuppressed}
                   resolveSuppressedEndLanding={resolveSuppressedEndLanding}
                   isReattachSuppressed={isReattachSuppressed}
+                  isTranscriptWindowInvalidated={
+                    transcriptWindow?.invalidated === true
+                  }
                   navigationHighlightedMessageId={
                     navigationHighlight?.messageId ?? null
                   }
@@ -5072,6 +5148,7 @@ function ChatMessagesInner(props: ChatMessagesInnerProps) {
                       ref={minimapHotspotRef}
                       rows={listRows}
                       transcriptWindow={transcriptWindow}
+                      senderFirst={botChannel}
                       inViewRefreshRef={minimapInViewRefreshRef}
                       listRef={chatTimelineRef}
                       topOffsetAdjustmentRef={listTopOffsetAdjustmentRef}

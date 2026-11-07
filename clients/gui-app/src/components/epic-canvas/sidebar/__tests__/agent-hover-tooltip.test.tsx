@@ -7,7 +7,15 @@ import {
   within,
 } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { afterEach, describe, expect, it, vi, type Mock } from "vitest";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  expect,
+  it,
+  vi,
+  type Mock,
+} from "vitest";
 import type { RoleClaim } from "@traycer/protocol/persistence/epic/role-claims";
 import {
   sandboxSummarySchema,
@@ -64,6 +72,7 @@ const h = vi.hoisted(() => {
     teams: object[];
     registryOwner: object | null;
     configurations: SandboxConfigurations;
+    queriedMethods: string[];
     setPanel: Mock;
     openDetails: Mock;
     openTile: Mock;
@@ -83,6 +92,7 @@ const h = vi.hoisted(() => {
     teams: [],
     registryOwner: { kind: "team", name: "Acme" },
     configurations: NO_CONFIGURATIONS,
+    queriedMethods: [],
     setPanel: vi.fn(),
     openDetails: vi.fn(),
     openTile: vi.fn(),
@@ -133,6 +143,7 @@ vi.mock("@/hooks/host/use-host-client-for-host-id", () => ({
 }));
 vi.mock("@/hooks/host/use-host-query", () => ({
   useHostQuery: (args: { readonly method: string }) => {
+    h.queriedMethods.push(args.method);
     if (args.method === "host.status") {
       return {
         isError: false,
@@ -258,7 +269,11 @@ vi.mock("@/components/worktree/worktree-owner-metadata", () => ({
 
 import { AgentHoverTooltip } from "@/components/epic-canvas/sidebar/agent-hover-tooltip";
 import { TooltipProvider } from "@/components/ui/tooltip";
-import { SANDBOX_PUBLIC_STATE_LABEL } from "@/lib/sandboxes/sandbox-row-lines";
+import {
+  DEFAULT_LAYOUT_SNAPSHOT,
+  useLayoutStore,
+} from "@/stores/layout/layout-store";
+import { hostSandboxStateWord } from "@traycer/protocol/host/host-status";
 
 const CLAIM: RoleClaim = {
   claimId: "claim-1",
@@ -304,6 +319,7 @@ function renderHover(overrides: HoverOverrides) {
 }
 
 afterEach(() => {
+  h.queriedMethods.length = 0;
   cleanup();
   resetEpicTerminalDurableCreatesForTests();
   worktreeTooltipSpy.mockClear();
@@ -330,6 +346,7 @@ afterEach(() => {
   h.setPanel.mockClear();
   h.openDetails.mockClear();
   h.openTile.mockClear();
+  useLayoutStore.setState({ ...DEFAULT_LAYOUT_SNAPSHOT });
 });
 
 /**
@@ -645,7 +662,17 @@ function renderAgent(
   });
 }
 
+/** A host's Files open in File Tree, which the shipped layout leaves off. */
+function showFileTree(): void {
+  useLayoutStore.setState({
+    ...DEFAULT_LAYOUT_SNAPSHOT,
+    overrides: { railFileTree: { shown: "shown" } },
+  });
+}
+
 describe("AgentHoverTooltip host section", () => {
+  beforeEach(showFileTree);
+
   it("shows host identity, cost, payer, shape and actions for a row in the viewer's sandbox list", () => {
     h.sandboxes = [sandboxRow({})];
     h.cost = [{ sandboxId: "sbx-1", todayMillicredits: 2000 }];
@@ -670,8 +697,8 @@ describe("AgentHoverTooltip host section", () => {
     const text = screen.getByTestId("worktree-host-section").textContent;
     expect(text).toContain("Host");
     expect(text).toContain("build-box");
-    expect(text).toContain(SANDBOX_PUBLIC_STATE_LABEL.awake);
-    expect(text).toContain("Acme");
+    expect(text).toContain(hostSandboxStateWord("awake"));
+    expect(text).toContain("unknown");
     expect(text).toContain(shortPriceLabel(120));
     expect(text).toContain("Sandbox · Linux · 2 vCPU · 4 GB");
     expect(text).toContain("started by you");
@@ -679,7 +706,7 @@ describe("AgentHoverTooltip host section", () => {
     expect(text).toMatch(/\d+ min awake/);
     expect(text).toContain(hoverTodayCost(2000));
     expect(text).toContain("Suspends after 30 idle min");
-    expect(text).toContain("destroyed after 7 resting days");
+    expect(text).toContain("destroyed after 7 idle days");
     expect(text).toContain("Creator, build");
     expect(text).toContain("1 more in other tasks");
     for (const name of ["Open terminal", "Files", "Details"]) {
@@ -691,11 +718,45 @@ describe("AgentHoverTooltip host section", () => {
     ).toBeNull();
   });
 
+  describe("with File Tree off", () => {
+    beforeEach(() => {
+      useLayoutStore.setState({ ...DEFAULT_LAYOUT_SNAPSHOT });
+    });
+
+    it("leaves a sandbox host's Files button out, with the rest of its actions", () => {
+      h.sandboxes = [sandboxRow({})];
+      renderAgent({
+        hostId: "host-sbx",
+        ownerKind: "chat",
+        ownerHostUnreachable: false,
+      });
+
+      expect(screen.queryByRole("button", { name: "Files" })).toBeNull();
+      for (const name of ["Open terminal", "Details"]) {
+        expect(screen.getByRole("button", { name })).toBeDefined();
+      }
+    });
+
+    it("keeps a task-only host's task files button", async () => {
+      h.taskHosts = tasksView(taskHostRow({}));
+      renderAgent({
+        hostId: "host-t",
+        ownerKind: "chat",
+        ownerHostUnreachable: false,
+      });
+
+      await userEvent.hover(screen.getByRole("button", { name: "Reviewer" }));
+      await screen.findByRole("dialog", { name: "Reviewer" });
+
+      expect(screen.getByRole("button", { name: TASK_FILES })).toBeDefined();
+    });
+  });
+
   describe("the configuration line under the name", () => {
     const configuration = () =>
       screen.queryByTestId("agent-host-configuration")?.textContent;
     const renderHostSandbox = () => {
-      h.sandboxes = [sandboxRow({})];
+      h.sandboxes = [sandboxRow({ environmentId: "env-acme" })];
       renderAgent({
         hostId: "host-sbx",
         ownerKind: "chat",
@@ -727,8 +788,8 @@ describe("AgentHoverTooltip host section", () => {
       expect(configuration()).toBe("Personal");
     });
 
-    it("reads the team's name for a team environment's sandbox with no registry owner", () => {
-      h.registryOwner = null;
+    it("uses the bound team environment even when the host registry names another owner", () => {
+      h.registryOwner = { kind: "user", userId: "user-1" };
       h.configurations = {
         configurations: [
           { kind: "personal" },
@@ -751,8 +812,13 @@ describe("AgentHoverTooltip host section", () => {
       expect(configuration()).toBe("Acme");
     });
 
-    it("reads Personal for a registry owner of kind user", () => {
+    it("reads Personal for a bound environment outside every team", () => {
       h.registryOwner = { kind: "user", userId: "user-1" };
+      h.configurations = {
+        configurations: [{ kind: "personal" }],
+        teamEnvironmentIds: new Set(),
+        complete: true,
+      };
       h.sandboxes = [sandboxRow({ environmentId: "env-elsewhere" })];
       renderAgent({
         hostId: "host-sbx",
@@ -761,6 +827,51 @@ describe("AgentHoverTooltip host section", () => {
       });
       expect(configuration()).toBe("Personal");
     });
+
+    it.each([
+      { owner: null, label: "without a registry owner" },
+      { owner: { kind: "user", userId: "user-1" }, label: "with a user owner" },
+      {
+        owner: { kind: "team", id: "team-1", name: "Acme" },
+        label: "with a team owner",
+      },
+    ])(
+      "shows exactly unknown for a missing environment id $label",
+      ({ owner }) => {
+        h.registryOwner = owner;
+        h.sandboxes = [sandboxRow({ environmentId: null })];
+        renderAgent({
+          hostId: "host-sbx",
+          ownerKind: "chat",
+          ownerHostUnreachable: false,
+        });
+        expect(configuration()).toBe("unknown");
+      },
+    );
+
+    it.each(["suspended", "stopped"] as const)(
+      "keeps the summary's Personal configuration for a %s sandbox without a live status read",
+      (state) => {
+        h.configurations = {
+          configurations: [{ kind: "personal" }],
+          teamEnvironmentIds: new Set(),
+          complete: true,
+        };
+        h.sandboxes = [
+          sandboxRow({
+            environmentId: "env-personal",
+            state,
+          }),
+        ];
+        renderAgent({
+          hostId: "host-sbx",
+          ownerKind: "chat",
+          ownerHostUnreachable: false,
+        });
+        expect(configuration()).toBe("Personal");
+        expect(h.queriedMethods).not.toContain("environment.status");
+      },
+    );
 
     it("shows no configuration while a team has not answered", () => {
       h.registryOwner = null;
@@ -774,6 +885,20 @@ describe("AgentHoverTooltip host section", () => {
     });
 
     it("is a line under the name, not a badge beside it", () => {
+      h.configurations = {
+        configurations: [
+          { kind: "personal" },
+          {
+            kind: "team",
+            teamId: "team-1",
+            teamName: "Acme",
+            environmentId: "env-acme",
+          },
+        ],
+        teamEnvironmentIds: new Set(["env-acme"]),
+        complete: true,
+      };
+      h.sandboxes = [sandboxRow({ environmentId: "env-acme" })];
       renderHostSandbox();
       const line = screen.getByTestId("agent-host-configuration");
       expect(line.textContent).toBe("Acme");
@@ -1022,6 +1147,24 @@ describe("AgentHoverTooltip host section", () => {
 
     expect(text).toContain(hoverTaskConfiguration(null));
     expect(text).not.toContain(reachSentence(REACH_UNNAMED_HOSTS));
+  });
+
+  it("shows no configuration badge for a user-owned task host", async () => {
+    h.teams = [{ teamId: "team-1", slug: "acme" }];
+    h.taskHosts = tasksView(
+      taskHostRow({ principal: { kind: "user", id: "viewer" } }),
+    );
+    renderAgent({
+      hostId: "host-t",
+      ownerKind: "chat",
+      ownerHostUnreachable: false,
+    });
+
+    await userEvent.hover(screen.getByRole("button", { name: "Reviewer" }));
+    const card = await screen.findByRole("dialog", { name: "Reviewer" });
+
+    expect(within(card).getByText("team-box")).toBeDefined();
+    expect(within(card).queryByText("Personal", { exact: true })).toBeNull();
   });
 
   it("gives a person's own computer no host section", () => {

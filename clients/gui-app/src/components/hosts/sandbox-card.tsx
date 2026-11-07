@@ -1,6 +1,9 @@
 import { useState, type ReactNode } from "react";
 import { toast } from "sonner";
-import type { HostSandboxState } from "@traycer/protocol/host/host-status";
+import {
+  HOST_FROZEN_WORD,
+  type HostSandboxState,
+} from "@traycer/protocol/host/host-status";
 import type { SandboxGrantsSummary } from "@traycer/protocol/host/sandbox-secrets";
 import type {
   SandboxCost,
@@ -38,6 +41,7 @@ import {
   sandboxSuspendKeepsLine,
   sandboxTeamFrozenStateLine,
   sandboxWakePayerLine,
+  sandboxWithdrawalLine,
   type SandboxCardAction,
 } from "@/components/hosts/sandbox-card-model";
 import type { HostHealthState } from "@/components/settings/host-scope/host-health";
@@ -142,16 +146,19 @@ export function SandboxCard(props: {
         <CardDescription data-testid="sandbox-card-state-line">
           {cardStateLine(props.sandbox, viewerUserId)}
         </CardDescription>
-        {word === null ? null : (
-          <CardAction>
+        <CardAction>
+          <div className="flex flex-wrap items-center gap-2">
             <Badge
               variant={stateBadgeVariant(state, frozen)}
               data-testid="sandbox-card-state"
             >
-              {capitalize(word)}
+              {word}
             </Badge>
-          </CardAction>
-        )}
+            {frozen ? (
+              <Badge variant="warning">{HOST_FROZEN_WORD}</Badge>
+            ) : null}
+          </div>
+        </CardAction>
       </CardHeader>
       <CardContent className="flex flex-col gap-2">
         {summary === null ? (
@@ -166,6 +173,7 @@ export function SandboxCard(props: {
               viewerUserId={viewerUserId}
             />
             <SandboxPodRoom summary={summary} teamOwned={teamOwned} />
+            <SandboxWithdrawalNotice summary={summary} />
             <SandboxGuestConfigFailure summary={summary} />
             <SandboxSecretsSection
               summary={summary}
@@ -445,6 +453,30 @@ function SandboxSecretsReadinessLine(props: {
   );
 }
 
+/**
+ * When this sandbox stops running, on a row whose kind the control plane is
+ * withdrawing. Nothing is broken and nothing is lost yet, so it is a
+ * warning: the end is ahead and the person can still move what they want to
+ * keep.
+ */
+function SandboxWithdrawalNotice(props: {
+  readonly summary: SandboxSummary;
+}): ReactNode {
+  const line = sandboxWithdrawalLine(
+    props.summary.withdrawalEndsAt,
+    props.summary.destroyAt,
+  );
+  if (line === null) return null;
+  return (
+    <p
+      data-testid="sandbox-card-withdrawal"
+      className="rounded-md border border-warning/30 bg-warning/10 px-2 py-1.5 text-ui-xs leading-snug break-words text-warning-foreground"
+    >
+      {line}
+    </p>
+  );
+}
+
 function SandboxGuestConfigFailure(props: {
   readonly summary: SandboxSummary;
 }): ReactNode {
@@ -692,11 +724,7 @@ function SandboxGrantRow(props: {
     >
       <p>
         <span className="font-medium">{view.secretName}</span>
-        <span
-          className={cn(
-            view.exposed ? "text-warning-foreground" : "text-muted-foreground",
-          )}
-        >
+        <span className="text-muted-foreground">
           {" · "}
           {view.modeLine}
         </span>
@@ -1114,8 +1142,4 @@ function formatBalance(
   return minutes === null
     ? balance
     : `${balance}, about ${formatRunway(minutes)} at your current burn`;
-}
-
-function capitalize(word: string): string {
-  return word.length === 0 ? word : word[0].toUpperCase() + word.slice(1);
 }

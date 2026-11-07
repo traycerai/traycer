@@ -8,7 +8,11 @@ import {
   within,
 } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { HOST_SANDBOX_STATES } from "@traycer/protocol/host/host-status";
+import {
+  HOST_FROZEN_WORD,
+  HOST_SANDBOX_STATES,
+  hostSandboxStateWord,
+} from "@traycer/protocol/host/host-status";
 import type { HostListItem } from "@traycer/protocol/host/host-status";
 import type { SandboxEgressEvent } from "@traycer/protocol/host/sandbox-egress";
 import type {
@@ -21,7 +25,10 @@ import type {
   SandboxCost,
   UserSandboxCost,
 } from "@traycer/protocol/host/sandbox-control";
-import type { SandboxRunwayWarning } from "@/lib/sandboxes/sandbox-balance";
+import {
+  frozenDestroyAt,
+  type SandboxRunwayWarning,
+} from "@/lib/sandboxes/sandbox-balance";
 import {
   createFakeSandboxBinding,
   refusal,
@@ -281,9 +288,9 @@ describe("<SandboxCard /> per state", () => {
       const card = screen.getByTestId("sandbox-card");
       expect(card.getAttribute("data-state")).toBe(state);
       expect(card.getAttribute("data-frozen")).toBe("false");
-      expect(
-        screen.getByTestId("sandbox-card-state").textContent.toLowerCase(),
-      ).toBe(state);
+      expect(screen.getByTestId("sandbox-card-state").textContent).toBe(
+        hostSandboxStateWord(state),
+      );
       seenLines.add(screen.getByTestId("sandbox-card-state-line").textContent);
       expect(actionTestIds()).toEqual(
         ACTIONS[state].map((action) => `sandbox-card-${action}`),
@@ -294,7 +301,7 @@ describe("<SandboxCard /> per state", () => {
     expect(seenLines.size).toBe(HOST_SANDBOX_STATES.length);
   });
 
-  it("shows a frozen row the frozen line, a Frozen badge and Destroy alone", () => {
+  it("shows a suspended state, a separate Out of credits badge and Destroy alone for a frozen row", () => {
     renderCard(
       sandboxOf("suspended", true, {
         frozenAt: new Date(2026, 9, 9, 12).getTime(),
@@ -303,9 +310,12 @@ describe("<SandboxCard /> per state", () => {
     expect(screen.getByTestId("sandbox-card").getAttribute("data-frozen")).toBe(
       "true",
     );
-    expect(screen.getByTestId("sandbox-card-state").textContent).toBe("Frozen");
+    expect(screen.getByTestId("sandbox-card-state").textContent).toBe(
+      "Suspended",
+    );
+    expect(screen.getByText(HOST_FROZEN_WORD, { exact: true })).toBeTruthy();
     expect(screen.getByTestId("sandbox-card-state-line").textContent).toMatch(
-      /^Frozen: out of credits\. Top up to resume\. Destroyed on /,
+      /^Out of credits\. Top up to resume\. Destroyed on /,
     );
     expect(actionTestIds()).toEqual(["sandbox-card-destroy"]);
   });
@@ -355,7 +365,7 @@ describe("<SandboxCard /> per state", () => {
     // The server sent no label for "eu-west": the raw id is not shown.
     expect(screen.queryByTestId("sandbox-card-region")).toBeNull();
     expect(screen.getByTestId("sandbox-card-rate").textContent).toBe(
-      "$0.12 an hour while awake · under $0.01 an hour while resting",
+      "$0.12 an hour while awake · under $0.01 an hour while suspended or stopped",
     );
     expect(screen.getByTestId("sandbox-card-idle").textContent).toBe(
       "Destroyed after 2 h idle",
@@ -388,6 +398,44 @@ describe("<SandboxCard /> per state", () => {
     expect(
       screen.queryByTestId("sandbox-card-guest-config-failure"),
     ).toBeNull();
+  });
+
+  // The day the notice names is pinned where it is formatted, against both
+  // call sites of the UTC formatter; this case is the card's own contract,
+  // that the notice appears exactly when the server announces a withdrawal.
+  it("shows the withdrawal notice only when the server announces one", () => {
+    const endsAt = new Date(2026, 11, 1).getTime();
+    renderCard(sandboxOf("stopped", false, { withdrawalEndsAt: endsAt }));
+    expect(screen.getByTestId("sandbox-card-withdrawal").textContent).toContain(
+      "stops running",
+    );
+    cleanup();
+
+    renderCard(sandboxOf("stopped", false, { withdrawalEndsAt: null }));
+    expect(screen.queryByTestId("sandbox-card-withdrawal")).toBeNull();
+  });
+
+  // A frozen row ends on its own day-30 deadline, which the state line above
+  // already names, and that day can fall well BEFORE the announced one — it
+  // does here by more than three weeks. A notice naming the announced day
+  // beside it would put two stop dates on one card and let the person read
+  // the later, wrong one as how long the row has left.
+  it("drops the announced day from a frozen row's notice, leaving the state line's day-30 date the only one on the card", () => {
+    const frozenAt = Date.UTC(2026, 9, 9);
+    renderCard(
+      sandboxOf("suspended", true, {
+        frozenAt,
+        destroyAt: frozenDestroyAt(frozenAt),
+        withdrawalEndsAt: Date.UTC(2026, 11, 1),
+      }),
+    );
+
+    expect(screen.getByTestId("sandbox-card-withdrawal").textContent).toBe(
+      "This sandbox stops running and is rebuilt from your environment. Files outside the repository are lost.",
+    );
+    expect(screen.getByTestId("sandbox-card-state-line").textContent).toMatch(
+      /Destroyed on /,
+    );
   });
 
   it("names the region by the server's label, never its id", () => {
@@ -636,9 +684,10 @@ describe("<SandboxCard /> facts as the scope resolves them", () => {
     expect(screen.getByTestId("sandbox-card").getAttribute("data-frozen")).toBe(
       "false",
     );
-    expect(screen.getByTestId("sandbox-card-state").textContent).not.toBe(
-      "Frozen",
+    expect(screen.getByTestId("sandbox-card-state").textContent).toBe(
+      "Suspended",
     );
+    expect(screen.queryByText(HOST_FROZEN_WORD, { exact: true })).toBeNull();
     expect(
       screen.getByTestId("sandbox-card-state-line").textContent,
     ).not.toMatch(/^Frozen/);
@@ -660,9 +709,12 @@ describe("<SandboxCard /> facts as the scope resolves them", () => {
     expect(screen.getByTestId("sandbox-card").getAttribute("data-frozen")).toBe(
       "true",
     );
-    expect(screen.getByTestId("sandbox-card-state").textContent).toBe("Frozen");
+    expect(screen.getByTestId("sandbox-card-state").textContent).toBe(
+      "Suspended",
+    );
+    expect(screen.getByText(HOST_FROZEN_WORD, { exact: true })).toBeTruthy();
     expect(screen.getByTestId("sandbox-card-state-line").textContent).toMatch(
-      /^Frozen: out of credits/,
+      /^Out of credits/,
     );
     expect(actionTestIds()).toEqual(["sandbox-card-destroy"]);
   });
@@ -678,7 +730,10 @@ describe("<SandboxCard /> facts as the scope resolves them", () => {
     expect(screen.getByTestId("sandbox-card").getAttribute("data-frozen")).toBe(
       "true",
     );
-    expect(screen.getByTestId("sandbox-card-state").textContent).toBe("Frozen");
+    expect(screen.getByTestId("sandbox-card-state").textContent).toBe(
+      "Suspended",
+    );
+    expect(screen.getByText(HOST_FROZEN_WORD, { exact: true })).toBeTruthy();
     expect(actionTestIds()).toEqual(["sandbox-card-destroy"]);
   });
 });
@@ -1343,7 +1398,6 @@ describe("<SandboxCard /> grants list", () => {
       secretName: "PROD_DB",
       kind: "password",
       protocol: "postgres",
-      mode: "brokered",
       source: "approved",
       connectorName: null,
       rotation: null,
@@ -1549,12 +1603,11 @@ describe("<SandboxCard /> grants list", () => {
     expect(route.textContent).toBe("db.internal:5432");
   });
 
-  it("shows an exposed grant without routes", () => {
+  it("shows a grant with no routes, by its protocol alone", () => {
     mocks.grantsData = grantsOf(
       [
         grantOf({
           secretName: "API_TOKEN",
-          mode: "exposed",
           protocol: "https",
           routes: [],
         }),
@@ -1566,9 +1619,7 @@ describe("<SandboxCard /> grants list", () => {
 
     const grant = screen.getByTestId("sandbox-card-grant");
     expect(grant.textContent).toContain("API_TOKEN");
-    expect(grant.textContent).toContain(
-      "https · exposed, readable on the sandbox",
-    );
+    expect(grant.textContent).toContain("https · brokered");
     expect(within(grant).queryByTestId("sandbox-card-grant-route")).toBeNull();
   });
 
@@ -1585,11 +1636,8 @@ describe("<SandboxCard /> grants list", () => {
     );
   });
 
-  it("says agents see a stand-in when a grant is brokered", () => {
-    mocks.grantsData = grantsOf(
-      [grantOf({ mode: "exposed", routes: [] }), grantOf({})],
-      null,
-    );
+  it("says agents see a stand-in while the sandbox holds any grant", () => {
+    mocks.grantsData = grantsOf([grantOf({ routes: [] }), grantOf({})], null);
 
     renderCard(sandboxOf("awake", false, { phase: "ready" }));
 
@@ -1598,18 +1646,11 @@ describe("<SandboxCard /> grants list", () => {
     );
   });
 
-  it("says nothing of a stand-in when every grant is exposed", () => {
-    mocks.grantsData = grantsOf(
-      [
-        grantOf({ secretName: "API_TOKEN", mode: "exposed", routes: [] }),
-        grantOf({ secretName: "OTHER", mode: "exposed", routes: [] }),
-      ],
-      null,
-    );
+  it("says nothing of a stand-in when the sandbox holds no grant", () => {
+    mocks.grantsData = grantsOf([], null);
 
     renderCard(sandboxOf("awake", false, { phase: "ready" }));
 
-    expect(screen.getByTestId("sandbox-card-grants")).toBeTruthy();
     expect(screen.queryByTestId("sandbox-card-stand-in")).toBeNull();
   });
 

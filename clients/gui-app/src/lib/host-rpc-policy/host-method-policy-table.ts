@@ -638,8 +638,14 @@ export const HOST_METHOD_POLL_TABLE = {
     poll: null,
   },
   "host.notifications.getConfig": { ...LATEST_SCHEDULING, poll: null },
+  "host.notifications.getLongTurnAlert": { ...LATEST_SCHEDULING, poll: null },
   // Setting notification configuration persists user intent.
   "host.notifications.setConfig": {
+    mode: "fifo",
+    joinResponseTimeoutMs: null,
+    poll: null,
+  },
+  "host.notifications.setLongTurnAlert": {
     mode: "fifo",
     joinResponseTimeoutMs: null,
     poll: null,
@@ -1593,6 +1599,14 @@ export const HOST_METHOD_POLL_TABLE = {
     joinResponseTimeoutMs: null,
     poll: null,
   },
+  // A feedback draft's preview is read when the user opens "View"; the
+  // decision is a click that may send, so each one runs, in order.
+  "chat.feedbackDraft.preview": { ...LATEST_SCHEDULING, poll: null },
+  "chat.feedbackDraft.decide": {
+    mode: "fifo",
+    joinResponseTimeoutMs: null,
+    poll: null,
+  },
   // Not polled, and this is a deliberate freshness choice rather than a copy of
   // the row above it. The answer is "which cloud row does this local chat
   // publish into", which changes exactly once in a chat's life - when a fork
@@ -1749,6 +1763,8 @@ export const HOST_METHOD_POLL_TABLE = {
   // coalescing into one message - a post, or a reply whose `threadId` names
   // the thread; the same text into two threads is two params, never joined.
   "bot.conversation.list": { ...LATEST_SCHEDULING, poll: null },
+  // A search box's read: only the newest query's answer is shown.
+  "bot.conversation.search": { ...LATEST_SCHEDULING, poll: null },
   "bot.conversation.send": {
     mode: "fifo",
     joinResponseTimeoutMs: null,

@@ -56,6 +56,7 @@ import type {
   TranscriptWindow,
 } from "@/stores/chats/transcript-window";
 import { emptyTranscriptWindow } from "@/stores/chats/transcript-window";
+import { pendingHydrationRestore } from "@/stores/chats/chat-tab-pending-hydration-restore";
 import {
   HOSTED_TILE_INSTANCE_ID_ATTRIBUTE,
   HOSTED_TILE_PANE_ID_ATTRIBUTE,
@@ -87,6 +88,10 @@ import type { InterviewSegment } from "@/stores/composer/chat-store";
 import type { TileFindAdapter } from "@/stores/tile-find";
 import { NO_TRANSCRIPT_BASELINE } from "@/stores/chats/chat-announcements";
 import type { BackgroundItem } from "@traycer/protocol/host/agent/gui/subscribe";
+import {
+  ChatBotPresentationContext,
+  type ChatBotPresentation,
+} from "@/components/chat/chat-bot-presentation-context";
 import {
   makeAssistantMessage,
   makeMessage,
@@ -1000,6 +1005,8 @@ interface RenderChatMessagesOptions {
   readonly coldRewrittenMessageIds?: ReadonlySet<string>;
   /** Test-only seam: captures the adapter registered by ChatMessages. */
   readonly tileFindContext?: TileFindContextValue;
+  /** Draws the transcript as a bot's channel or thread; omitted draws an agent chat. */
+  readonly botPresentation?: ChatBotPresentation;
   readonly transcriptWindow?: TranscriptWindow | null;
   readonly onVisibleOrdinalRangeChange?: (range: OrdinalRange | null) => void;
   /** `ChatMessages.onScrollRequestSettled`; only the scrollRequest coverage
@@ -1174,11 +1181,20 @@ function renderChatMessages(options: RenderChatMessagesOptions) {
       </TileFindContext.Provider>
     );
   };
+  const contentWithPresentation = (): ReactNode => {
+    const rendered = contentWithFindContext();
+    if (options.botPresentation === undefined) return rendered;
+    return (
+      <ChatBotPresentationContext.Provider value={options.botPresentation}>
+        {rendered}
+      </ChatBotPresentationContext.Provider>
+    );
+  };
   const jsx = (): ReactNode =>
     options.strictMode === true ? (
-      <StrictMode>{contentWithFindContext()}</StrictMode>
+      <StrictMode>{contentWithPresentation()}</StrictMode>
     ) : (
-      contentWithFindContext()
+      contentWithPresentation()
     );
 
   const result = render(jsx());
@@ -3130,6 +3146,66 @@ describe("ChatMessages scroll policy", () => {
       );
       expect(screen.getByTestId("chat-turn-minimap-card")).toBeTruthy();
     });
+    const CHANNEL_PRESENTATION: ChatBotPresentation = {
+      botTitle: "Tracy",
+      threadLine: () => null,
+      openThread: () => undefined,
+      openAnnouncementThread: () => undefined,
+      threadAnchorKinds: [],
+      chooseOption: null,
+      questions: null,
+      failedRequest: null,
+      failedRecovery: null,
+      replyReceipt: null,
+      requestReceipt: null,
+    };
+    const THREAD_PRESENTATION: ChatBotPresentation = {
+      ...CHANNEL_PRESENTATION,
+      threadLine: null,
+      openThread: null,
+      openAnnouncementThread: null,
+    };
+
+    it.each([
+      { surface: "channel", presentation: CHANNEL_PRESENTATION },
+      { surface: "thread", presentation: THREAD_PRESENTATION },
+    ])(
+      "lists a bot $surface's member posts sender-first and not the bot's reply",
+      async ({ presentation }) => {
+        renderChatMessages({
+          messages: [
+            {
+              ...makeMessage(0, "user"),
+              senderLabel: "Ada",
+              content: "Ship the rail",
+            },
+            { ...makeMessage(1, "assistant"), content: "On it" },
+            {
+              ...makeMessage(2, "user"),
+              senderLabel: "Grace",
+              content: "Add a test",
+            },
+          ],
+          scrollStateKey: "bot-channel-minimap",
+          botPresentation: presentation,
+        });
+        await settleLegendList();
+
+        await waitFor(() => {
+          expect(screen.getByTestId("chat-turn-minimap")).toBeTruthy();
+        });
+        fireEvent.mouseEnter(
+          screen.getByRole("group", { name: "Message minimap controls" }),
+        );
+        const rows = screen
+          .getByTestId("chat-turn-minimap-card")
+          .querySelectorAll("[data-minimap-list-row]");
+        expect(Array.from(rows, (row) => row.textContent)).toEqual([
+          "Ada: Ship the rail",
+          "Grace: Add a test",
+        ]);
+      },
+    );
     it("does not mount the minimap when its placement is hidden", async () => {
       useLayoutStore.getState().setRegionValues("minimap", { shown: "hidden" });
       renderChatMessages({
@@ -7150,10 +7226,10 @@ describe("ChatMessages scroll policy", () => {
         ...coldWindow,
         skeletonRevision: 1,
         indexRevision: 1,
+        skeletonComplete: false,
+        skeletonStreamCoveredThrough: ownerOrdinal,
         skeleton: skeleton.map((entry, ordinal) =>
-          ordinal === ownerOrdinal
-            ? { ...entry, rowId: `row-${ordinal}` }
-            : entry,
+          ordinal >= ownerOrdinal ? undefined : entry,
         ),
       };
       const ownerMessage: ChatMessageModel = {
@@ -7454,6 +7530,269 @@ describe("ChatMessages scroll policy", () => {
         mode: "following-end",
         anchorMessageId: null,
       });
+    });
+
+    it("parks at the tail on the legacy line while a saved part's turn is missing or incomplete, and lands when the part arrives", async () => {
+      // The legacy line has no completeness signal: a row that is not in the
+      // list, or is drawn without the saved segment while the backfill still
+      // delivers it in pieces, may be on its way, so nothing retires the
+      // restore.
+      const ownerIndex = 11;
+      const ownerRowKey = "assistant:turn-legacy-late";
+      const laterTextId = "text-later";
+      const savedPartKey = `${ownerRowKey}#${laterTextId}`;
+      const savedOffset = 24;
+      const messages = makeCompletedTranscript(40);
+      const ownerMessage: ChatMessageModel = {
+        ...messages[ownerIndex],
+        id: ownerRowKey,
+        role: "assistant",
+        segments: [
+          assistantTextSegment("text-first", "First block of the turn."),
+          assistantTextSegment(laterTextId, "Later block the reader was on."),
+        ],
+      };
+      const withOwner = (owner: ChatMessageModel): ChatMessageModel[] => [
+        ...messages.slice(0, ownerIndex),
+        owner,
+        ...messages.slice(ownerIndex + 1),
+      ];
+      const firstPieceOnly = withOwner({
+        ...ownerMessage,
+        segments: ownerMessage.segments.slice(0, 1),
+      });
+      const arrived = withOwner(ownerMessage);
+      const instanceId = `legacy-late-owner-${Math.random().toString(36).slice(2)}`;
+      const identity = makeTestIdentity(instanceId, "epic-1", "task-1");
+      saveChatTabState({
+        identity,
+        mode: "free-scrolling",
+        anchorMessageId: savedPartKey,
+        anchorRowKey: ownerRowKey,
+        anchorIndex: ownerIndex + 1,
+        offset: savedOffset,
+      });
+      setLegendListScrollContainerScrollHeightOverride(
+        LEGEND_LIST_HEADER_PX + messages.length * TICKET_13_ROW_HEIGHT_PX + 40,
+      );
+      tileLiveness.live = true;
+      const view = renderChatMessages({
+        messages,
+        instanceId,
+        epicId: "epic-1",
+        taskId: "task-1",
+        transcriptWindow: null,
+      });
+      await waitForNavigationSettle();
+      await waitForNavigationSettle();
+
+      await waitFor(() => {
+        expect(legendListRefHolder.current?.getState().isAtEnd).toBe(true);
+      });
+      expect(getScrollNode().dataset.scrollMode).toBe("free-scrolling");
+      expect(pendingHydrationRestore(identity)).not.toBeNull();
+
+      // The turn arrives with its first segment only.
+      view.rerenderWith({ messages: firstPieceOnly });
+      await waitForNavigationSettle();
+      await waitFor(() => {
+        expect(legendListRefHolder.current?.getState().isAtEnd).toBe(true);
+      });
+      expect(
+        document.querySelector<HTMLElement>(`[data-row-key="${savedPartKey}"]`),
+      ).toBeNull();
+      expect(getScrollNode().dataset.scrollMode).toBe("free-scrolling");
+      expect(pendingHydrationRestore(identity)).not.toBeNull();
+
+      view.rerenderWith({ messages: arrived });
+      await settleLegendList();
+      await waitFor(() => {
+        expect(
+          document.querySelector<HTMLElement>(
+            `[data-row-key="${savedPartKey}"]`,
+          ),
+        ).not.toBeNull();
+        expect(
+          Math.abs(
+            viewportOffsetForKey(savedPartKey) -
+              (savedOffset - LEGEND_LIST_HEADER_PX),
+          ),
+        ).toBeLessThanOrEqual(1);
+      });
+      expect(getScrollNode().dataset.scrollMode).toBe("free-scrolling");
+      view.unmount();
+    });
+
+    describe.each([
+      {
+        label: "invalidated",
+        recovering: { invalidated: true },
+      },
+      {
+        label: "carrying the skeleton it replaced",
+        recovering: { carriedSkeleton: [undefined] },
+      },
+    ])(
+      "a complete skeleton that is $label",
+      ({ recovering }: { recovering: Partial<TranscriptWindow> }) => {
+        it("keeps a saved part waiting at the tail until recovery ends, then follows the latest", async () => {
+          // Recovery renames rows under the reader: a row missing from the
+          // list proves nothing until the window settles.
+          const rowCount = 60;
+          const ownerRowKey = "assistant:turn-recovering";
+          const savedPartKey = `${ownerRowKey}#text-later`;
+          const skeleton = Array.from(
+            { length: rowCount },
+            (_unused, ordinal) => ({
+              rowId: `row-${ordinal}`,
+              createdAt: ordinal,
+              role: "assistant" as const,
+              byteLength: 80,
+              bodyDigest: `digest-${ordinal}`,
+            }),
+          );
+          const settledWindow: TranscriptWindow = {
+            ...emptyTranscriptWindow(),
+            epoch: 1,
+            rowCount,
+            skeleton,
+            skeletonRevision: 2,
+            skeletonComplete: true,
+            skeletonStreamCoveredThrough: rowCount,
+            indexRevision: 2,
+            indexRevisionRebuilding: false,
+          };
+          const instanceId = `recovering-window-${Math.random().toString(36).slice(2)}`;
+          const identity = makeTestIdentity(instanceId, "epic-1", "task-1");
+          saveChatTabState({
+            identity,
+            mode: "free-scrolling",
+            anchorMessageId: savedPartKey,
+            anchorRowKey: ownerRowKey,
+            anchorIndex: 21,
+            offset: 24,
+          });
+          setLegendListScrollContainerScrollHeightOverride(
+            LEGEND_LIST_HEADER_PX + rowCount * TICKET_13_ROW_HEIGHT_PX + 40,
+          );
+          tileLiveness.live = true;
+          const view = renderChatMessages({
+            messages: [],
+            instanceId,
+            epicId: "epic-1",
+            taskId: "task-1",
+            transcriptWindow: { ...settledWindow, ...recovering },
+          });
+          await waitForNavigationSettle();
+          await waitForNavigationSettle();
+
+          await waitFor(() => {
+            expect(legendListRefHolder.current?.getState().isAtEnd).toBe(true);
+          });
+          expect(getScrollNode().dataset.scrollMode).toBe("free-scrolling");
+          expect(pendingHydrationRestore(identity)).not.toBeNull();
+
+          view.rerenderWith({ transcriptWindow: settledWindow });
+          await waitForNavigationSettle();
+          await waitFor(() => {
+            expect(getScrollNode().dataset.scrollMode).toBe("following-end");
+            expect(legendListRefHolder.current?.getState().isAtEnd).toBe(true);
+          });
+          view.unmount();
+        });
+      },
+    );
+
+    it("keeps a saved part waiting while its owner is drawn but not served whole, then follows the latest once a fresh span serves it without the segment", async () => {
+      // A stale body can draw part of a row. Without the saved segment it
+      // proves nothing until the host serves the row whole.
+      const rowCount = 80;
+      const ownerOrdinal = 20;
+      const ownerRowKey = "assistant:turn-drawn-not-whole";
+      const savedPartKey = `${ownerRowKey}#gone-seg`;
+      const skeleton = Array.from({ length: rowCount }, (_unused, ordinal) => ({
+        rowId: ordinal === ownerOrdinal ? ownerRowKey : `row-${ordinal}`,
+        createdAt: ordinal,
+        role: "assistant" as const,
+        byteLength: 80,
+        bodyDigest: `digest-${ordinal}`,
+      }));
+      const ownerSpan = {
+        fromOrdinal: ownerOrdinal,
+        rowIds: [ownerRowKey],
+        rowContext: {},
+        messageIds: [],
+        eventIds: [],
+        contextBytes: 0,
+      };
+      const completeWindow: TranscriptWindow = {
+        ...emptyTranscriptWindow(),
+        epoch: 1,
+        rowCount,
+        skeleton,
+        skeletonRevision: 2,
+        skeletonComplete: true,
+        skeletonStreamCoveredThrough: rowCount,
+        indexRevision: 2,
+        indexRevisionRebuilding: false,
+      };
+      const staleOnlyWindow: TranscriptWindow = {
+        ...completeWindow,
+        staleSpans: [ownerSpan],
+      };
+      const servedWindow: TranscriptWindow = {
+        ...completeWindow,
+        spans: [ownerSpan],
+      };
+      const ownerMessage: ChatMessageModel = {
+        ...makeMessageAt(0, "assistant", 1_000),
+        id: ownerRowKey,
+        completedAt: 1_100,
+        segments: [
+          assistantTextSegment("text-first", "The only block drawn so far."),
+        ],
+      };
+      const instanceId = `drawn-not-whole-${Math.random().toString(36).slice(2)}`;
+      const identity = makeTestIdentity(instanceId, "epic-1", "task-1");
+      saveChatTabState({
+        identity,
+        mode: "free-scrolling",
+        anchorMessageId: savedPartKey,
+        anchorRowKey: ownerRowKey,
+        anchorIndex: ownerOrdinal + 1,
+        offset: 24,
+      });
+      setLegendListScrollContainerScrollHeightOverride(
+        LEGEND_LIST_HEADER_PX + rowCount * TICKET_13_ROW_HEIGHT_PX + 40,
+      );
+      tileLiveness.live = true;
+      const view = renderChatMessages({
+        messages: [ownerMessage],
+        instanceId,
+        epicId: "epic-1",
+        taskId: "task-1",
+        transcriptWindow: staleOnlyWindow,
+      });
+      await waitForNavigationSettle();
+      await waitForNavigationSettle();
+
+      expect(
+        document.querySelector<HTMLElement>(`[data-row-key="${ownerRowKey}"]`),
+        "the owner is drawn",
+      ).not.toBeNull();
+      await waitFor(() => {
+        expect(legendListRefHolder.current?.getState().isAtEnd).toBe(false);
+      });
+      expect(getScrollNode().dataset.scrollMode).toBe("free-scrolling");
+      expect(pendingHydrationRestore(identity)).not.toBeNull();
+
+      view.rerenderWith({ transcriptWindow: servedWindow });
+      await waitForNavigationSettle();
+      await waitFor(() => {
+        expect(getScrollNode().dataset.scrollMode).toBe("following-end");
+        expect(legendListRefHolder.current?.getState().isAtEnd).toBe(true);
+      });
+      view.unmount();
     });
 
     it("waits on the cold slices of a split turn, then reopens at the saved part once they hydrate", async () => {

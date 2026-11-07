@@ -42,9 +42,11 @@ export interface SettingsSearchFixture {
 }
 
 const FEATURE_SETTINGS: FeatureSettingsBridge = {
-  get: () => Promise.resolve({ agentRoles: false }),
+  get: () => Promise.resolve({ agentRoles: false, agentFeedback: true }),
+  setAgentFeedbackEnabled: (enabled: boolean) =>
+    Promise.resolve({ agentRoles: false, agentFeedback: enabled }),
   setAgentRolesEnabled: (enabled: boolean) =>
-    Promise.resolve({ agentRoles: enabled }),
+    Promise.resolve({ agentRoles: enabled, agentFeedback: true }),
 };
 
 const DESKTOP_ZOOM: DesktopZoomBridge = {
@@ -59,6 +61,8 @@ const DESKTOP_ZOOM: DesktopZoomBridge = {
 
 const PUSH_PERMISSION: IPushPermissionHost = {
   get: () => Promise.resolve("granted"),
+  getRegistrationState: () => "registered",
+  retryRegistration: () => Promise.resolve(),
   request: () => Promise.resolve("granted"),
   openSettings: () => Promise.resolve(),
   getMutedSeverities: () => Promise.resolve([]),
@@ -103,6 +107,7 @@ function notificationsHost(options: {
     mobileApp: false,
     phoneLayout: false,
     soundtrackOffered: false,
+    soundtrackOn: false,
   };
 }
 
@@ -112,6 +117,7 @@ const NO_BRIDGES: SettingsAvailabilityContext = {
   mobileApp: false,
   phoneLayout: false,
   soundtrackOffered: false,
+  soundtrackOn: false,
 };
 
 export const SETTINGS_SEARCH_FIXTURES = [
@@ -263,6 +269,10 @@ export const SETTINGS_SEARCH_FIXTURES = [
       {
         name: "a build with something to play",
         context: { ...NO_BRIDGES, soundtrackOffered: true },
+      },
+      {
+        name: "a build with something to play, with Music on",
+        context: { ...NO_BRIDGES, soundtrackOffered: true, soundtrackOn: true },
       },
       {
         name: "the installed app, in a build with something to play",

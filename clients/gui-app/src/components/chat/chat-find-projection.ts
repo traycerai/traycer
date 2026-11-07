@@ -817,6 +817,10 @@ function segmentSearchText(segment: MessageSegment): ReadonlyArray<string> {
       // Never drawn (`rowPaintsNothing`: the tile withholds the row), so it
       // has no text a find hit could be painted onto.
       return [];
+    case "bot-exchanges":
+      // A summary of messages that live in the bot's feed, not in this
+      // transcript: not something find searches.
+      return [];
     case "setup-card":
       return [
         normalizeSearchableText(

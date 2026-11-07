@@ -16,6 +16,7 @@ import {
 } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import type { ArtifactSyncReading } from "@/lib/epic-sync-pill-state";
 import { MobileAppHeader } from "@/components/layout/header/mobile-app-header";
 import { useAuthStore } from "@/stores/auth/auth-store";
 import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
@@ -46,6 +47,9 @@ import {
 // providers; stub them to their accessible trigger so the header renders in
 // this minimal harness while the switch on the resource-monitor toggle stays
 // observable.
+vi.mock("@/providers/use-resolved-theme", () => ({
+  useResolvedTheme: () => ({ resolvedTheme: "light", themePreset: "default" }),
+}));
 vi.mock("@/components/layout/header/rate-limit-icon", () => ({
   RateLimitIconButton: () => <button type="button" aria-label="Usage limits" />,
 }));
@@ -69,6 +73,7 @@ vi.mock("@/components/notifications/mobile-notifications-button", () => ({
 const headerTitleState = vi.hoisted(() => ({
   role: "owner",
   liveTitle: null as string | null,
+  reading: null as ArtifactSyncReading | null,
 }));
 const updateTitleMutateSpy = vi.hoisted(() => vi.fn());
 vi.mock("@/hooks/epic/use-epic-title-mutation", () => ({
@@ -84,6 +89,7 @@ vi.mock("@/lib/epic-selectors", () => ({
   // verdict, which `beforeEach` grants. The local-home exemption and the
   // unverified refusals are pinned in `epic-mobile-header-actions.test.tsx`.
   useRegisteredEpicLocalHome: () => false,
+  useRegisteredEpicArtifactSyncReading: () => headerTitleState.reading,
 }));
 
 function renderAt(path: string) {
@@ -233,15 +239,54 @@ describe("MobileAppHeader", () => {
     useAuthStore.setState({ status: "signed-in" });
     headerTitleState.role = "owner";
     headerTitleState.liveTitle = null;
+    headerTitleState.reading = null;
     updateTitleMutateSpy.mockClear();
   });
   afterEach(() => {
     cleanup();
+    vi.useRealTimers();
     setViewportWidth(DESKTOP_VIEWPORT_WIDTH);
     useAuthStore.setState({ status: "signed-out" });
     useMobileNavStore.setState({ open: false });
     useMobileHeaderStore.setState({ rightActionEntries: new Map() });
     presentNoTab();
+  });
+
+  it("starts a fresh artifact warning grace when switching tasks", async () => {
+    presentEpicTab("t0", "e0", "First");
+    renderAt("/");
+    await screen.findByRole("button", { name: "Open menu" });
+    vi.useFakeTimers();
+    headerTitleState.reading = {
+      rooms: "stopped",
+      waitingNewArtifacts: 0,
+      pillState: "hostPending",
+    };
+    act(() => {
+      presentEpicTab("t1", "e1", "One");
+    });
+    act(() => {
+      vi.advanceTimersByTime(15_000);
+    });
+    const stoppedSentence =
+      "Artifacts not syncing. Your changes are saved on this computer. Your other devices and teammates won’t see them yet.";
+    fireEvent.click(screen.getByRole("button", { name: stoppedSentence }));
+    expect(screen.getByRole("dialog")).not.toBeNull();
+    act(() => {
+      presentEpicTab("t2", "e2", "Two");
+    });
+    expect(screen.queryByRole("dialog")).toBeNull();
+    expect(screen.queryByRole("button", { name: stoppedSentence })).toBeNull();
+    act(() => {
+      vi.advanceTimersByTime(14_999);
+    });
+    expect(screen.queryByRole("button", { name: stoppedSentence })).toBeNull();
+    act(() => {
+      vi.advanceTimersByTime(1);
+    });
+    expect(
+      screen.getByRole("button", { name: stoppedSentence }),
+    ).not.toBeNull();
   });
 
   it("renders the hamburger menu trigger", async () => {

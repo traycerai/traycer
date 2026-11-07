@@ -36,8 +36,12 @@ import { useSettingsStore } from "@/stores/settings/settings-store";
 interface SoundtrackState {
   /** Whether a session is open; the person's wish is `soundtrackEnabled`. */
   readonly enabled: boolean;
+  /** Whether this window is queued behind another window's session. */
+  readonly waitingForLock: boolean;
   readonly directorId: MixDirectorId;
   readonly volume: number;
+  /** Whether a session here is to hold; the wish is `soundtrackPaused`. */
+  readonly paused: boolean;
   /** The view whose track is in front; null while off, or it has no track. */
   readonly soundingView: SoundtrackView | null;
   /** The plan applied last; null while off. */
@@ -54,14 +58,19 @@ interface SoundtrackState {
   readonly disable: () => void;
   readonly setDirector: (directorId: MixDirectorId) => void;
   readonly setVolume: (volume: number) => void;
+  readonly setPaused: (paused: boolean) => void;
   /** Ignored while off, so a publisher need not know. */
   readonly setSignals: (signals: MixSignals) => void;
   /** Ignored while off, so a chime need not know. */
   readonly duck: (chimeSeconds: number) => void;
+  /** Ignored while off: there is no track to move from. */
+  readonly next: () => void;
+  /** Ignored while off: there is no track to move from. */
+  readonly previous: () => void;
 }
 
 interface SoundtrackStoreDependencies {
-  /** Read at each `enable()`; only a development build answers with a promise. */
+  /** Read at each `enable()`; a read over the network answers with a promise. */
   readonly readManifest: () => SoundtrackManifest | Promise<SoundtrackManifest>;
   readonly openPorts: (stems: StemManifest, volume: number) => SoundtrackPorts;
   readonly random: RandomSource;
@@ -106,7 +115,14 @@ export function createSoundtrackStore(
               : { soundingView: sounding.view, lastPlan: sounding.plan },
           );
         },
+        // The wish to hear it stands, whether or not the buttons are there. With
+        // the session gone the warm-up arms again, so the next gesture opens a
+        // new device, from where this one got to.
+        onResumeRefused: () => {
+          get().disable();
+        },
       });
+      if (get().paused) session.pause();
       set({ enabled: true });
     };
     const start = (): void => {
@@ -134,8 +150,10 @@ export function createSoundtrackStore(
     };
     return {
       enabled: false,
+      waitingForLock: false,
       directorId: DEFAULT_MIX_DIRECTOR,
       volume: MIX_TUNING.volume.initial,
+      paused: false,
       soundingView: null,
       lastPlan: null,
       resumePositions: {},
@@ -147,13 +165,19 @@ export function createSoundtrackStore(
           start();
           return;
         }
+        void taken.queued?.then(() => {
+          if (lock === taken) set({ waitingForLock: true });
+        });
         void taken.held.then(() => {
-          if (lock === taken) start();
+          if (lock !== taken) return;
+          set({ waitingForLock: false });
+          start();
         });
       },
       disable: () => {
         reading = null;
         releaseLock();
+        set({ waitingForLock: false });
         if (session === null) return;
         const resumePositions = session.end();
         session = null;
@@ -172,11 +196,22 @@ export function createSoundtrackStore(
         set({ volume });
         session?.ports.setVolume(volume);
       },
+      setPaused: (paused) => {
+        set({ paused });
+        if (paused) session?.pause();
+        else session?.play();
+      },
       setSignals: (signals) => {
         session?.setSignals(signals);
       },
       duck: (chimeSeconds) => {
-        session?.ports.duck(chimeSeconds);
+        session?.duck(chimeSeconds);
+      },
+      next: () => {
+        session?.next();
+      },
+      previous: () => {
+        session?.previous();
       },
     };
   });
@@ -188,9 +223,11 @@ export const useSoundtrackStore = createSoundtrackStore({
   random: Math.random,
 });
 
-const { soundtrackDirector, soundtrackVolume } = useSettingsStore.getState();
+const { soundtrackDirector, soundtrackVolume, soundtrackPaused } =
+  useSettingsStore.getState();
 useSoundtrackStore.getState().setDirector(soundtrackDirector);
 useSoundtrackStore.getState().setVolume(soundtrackVolume);
+useSoundtrackStore.getState().setPaused(soundtrackPaused);
 
 // Another window's choices arrive this way too, because the settings store
 // rehydrates on its writes. Only off travels here: on opens the audio device,
@@ -202,6 +239,9 @@ useSettingsStore.subscribe((state, previous) => {
   }
   if (state.soundtrackVolume !== previous.soundtrackVolume) {
     soundtrack.setVolume(state.soundtrackVolume);
+  }
+  if (state.soundtrackPaused !== previous.soundtrackPaused) {
+    soundtrack.setPaused(state.soundtrackPaused);
   }
   if (previous.soundtrackEnabled && !state.soundtrackEnabled) {
     soundtrack.disable();

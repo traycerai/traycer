@@ -1606,6 +1606,7 @@ export function AssistantSegment({
           imageResults={segment.imageResults}
           artifact={segment.artifact}
           mcpApp={segment.mcpApp}
+          feedbackDraft={segment.feedbackDraft}
           variant="card"
           headerFindUnitId={
             segment.agentMessageSend === null ? findUnitId : null
@@ -1783,6 +1784,10 @@ export function AssistantSegment({
       return null;
     case "auto-judge-notice":
       // A judge notice: synthesized system row only, like the refusal above.
+      return null;
+    case "bot-exchanges":
+      // A bot channel's line of bot-to-bot messages: synthesized system row
+      // only, like the two above.
       return null;
     default: {
       const _exhaustive: never = segment;

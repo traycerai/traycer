@@ -1,7 +1,7 @@
-import { z } from "zod";
 import { appLogger, describeLogError } from "@/lib/logger";
 import { SOUNDTRACK_MANIFEST, type SoundtrackManifest } from "./manifest";
-import { AQUILO_1 } from "./variable-sound";
+import { parseRemoteManifest } from "./remote-manifest";
+import type { StemManifest } from "./stems";
 
 /**
  * Stand-in stems to listen against, in a development build only: nothing here
@@ -16,30 +16,26 @@ import { AQUILO_1 } from "./variable-sound";
 const MANIFEST_URL_OVERRIDE_KEY = "traycer-soundtrack-dev-manifest-url";
 const DEFAULT_MANIFEST_URL = "/__soundtrack-dev/manifest.json";
 
-/** Numbers only, so they may live in the repository as the audio may not. */
-const KNOWN_TRACKS = [AQUILO_1, ...SOUNDTRACK_MANIFEST.tracks];
-
-const trackNames = z.array(z.string());
-
-const devManifestSchema = z.object({
-  trackNames,
-  views: z.object({
-    home: trackNames,
-    task: trackNames,
-    bot: trackNames,
-    settings: trackNames,
-  }),
-  stems: z.object({
-    tracks: z.array(
-      z.object({
-        name: z.string(),
-        layers: z.array(
-          z.object({ name: z.string(), files: z.array(z.string()) }),
-        ),
-      }),
-    ),
-  }),
-});
+function withFilesResolved(stems: StemManifest, base: URL): StemManifest {
+  const resolved = (files: readonly string[]): readonly string[] =>
+    files.map((file) => new URL(file, base).href);
+  return {
+    tracks: stems.tracks.map((track) => ({
+      ...track,
+      layers: track.layers.map((layer) =>
+        layer.groups === undefined
+          ? { ...layer, files: resolved(layer.files) }
+          : {
+              ...layer,
+              groups: layer.groups.map((group) => ({
+                ...group,
+                files: resolved(group.files),
+              })),
+            },
+      ),
+    })),
+  };
+}
 
 /** Silent where there is none to read, as a production build is today. */
 export async function fetchDevManifest(): Promise<SoundtrackManifest> {
@@ -51,13 +47,13 @@ export async function fetchDevManifest(): Promise<SoundtrackManifest> {
     if (!response.ok) {
       throw new Error(`Fetching it answered ${String(response.status)}`);
     }
-    const manifest = devManifestSchema.parse(await response.json());
+    const manifest = parseRemoteManifest(await response.json());
     return {
-      tracks: KNOWN_TRACKS.filter((track) =>
-        manifest.trackNames.includes(track.name),
+      ...manifest,
+      stems: withFilesResolved(
+        manifest.stems,
+        new URL(url, window.location.href),
       ),
-      views: manifest.views,
-      stems: manifest.stems,
     };
   } catch (error) {
     appLogger.warn("[soundtrack] could not read the dev manifest", {

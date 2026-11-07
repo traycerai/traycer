@@ -1,3 +1,4 @@
+import { useSettingsHostScopeStore } from "@/stores/settings/settings-host-scope-store";
 // Same boundaries as the tabbed-shell suite: the scope and the ambient binding
 // are mocked, everything from the panel down is real.
 vi.mock("@/components/settings/host-scope/use-scoped-stream-binding", () => ({
@@ -79,7 +80,7 @@ import {
   selectHostOverviewTab,
   type OverviewHostFixture,
 } from "@/components/settings/panels/__tests__/host-overview-test-support";
-import { useSettingsHostScopeStore } from "@/stores/settings/settings-host-scope-store";
+
 import { resetSettingsOpenIntentForTests } from "@/stores/tabs/settings-open-intent-store";
 
 const LIST_METHOD = "portForward.listForHost";
@@ -273,7 +274,7 @@ afterEach(() => {
   focusManager.setFocused(undefined);
   resetNegotiatedManifests();
   resetSettingsOpenIntentForTests();
-  useSettingsHostScopeStore.setState({ scopedHostId: null });
+  useSettingsHostScopeStore.getState().reset();
   scopeOverrides.current = {};
   hostBindingMock.current = null;
   window.innerWidth = initialInnerWidth;

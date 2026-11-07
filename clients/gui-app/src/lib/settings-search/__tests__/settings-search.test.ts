@@ -35,6 +35,7 @@ const DESKTOP: SettingsAvailabilityContext = {
   mobileApp: false,
   phoneLayout: false,
   soundtrackOffered: false,
+  soundtrackOn: false,
 };
 
 /** The installed mobile app: no desktop bridges, push permission present. */
@@ -42,6 +43,8 @@ const MOBILE: SettingsAvailabilityContext = {
   runnerHost: createFakeRunnerHost({
     pushPermission: {
       get: () => Promise.resolve("granted"),
+      getRegistrationState: () => "registered",
+      retryRegistration: () => Promise.resolve(),
       request: () => Promise.resolve("granted"),
       openSettings: () => Promise.resolve(),
       getMutedSeverities: () => Promise.resolve([]),
@@ -53,13 +56,16 @@ const MOBILE: SettingsAvailabilityContext = {
   mobileApp: true,
   phoneLayout: true,
   soundtrackOffered: false,
+  soundtrackOn: false,
 };
 
 /** A desktop feature-settings bridge: only its presence gates Experimental. */
 const FEATURE_SETTINGS = {
-  get: () => Promise.resolve({ agentRoles: false }),
+  get: () => Promise.resolve({ agentRoles: false, agentFeedback: true }),
+  setAgentFeedbackEnabled: (enabled: boolean) =>
+    Promise.resolve({ agentRoles: false, agentFeedback: enabled }),
   setAgentRolesEnabled: (enabled: boolean) =>
-    Promise.resolve({ agentRoles: enabled }),
+    Promise.resolve({ agentRoles: enabled, agentFeedback: true }),
 };
 
 /** The labels a query returns, in rank order. */
@@ -488,6 +494,45 @@ describe("settings search", () => {
         }
       }
     });
+
+    it.each(["music", "soundtrack"])(
+      "finds the Music row under %s only in a build that offers the soundtrack",
+      (query) => {
+        const offered = { ...DESKTOP, soundtrackOffered: true };
+        const hit = searchSettings(query, offered).find(
+          (result) => result.entry.anchor === "sounds-soundtrack-music",
+        );
+        expect(hit?.entry.section).toBe("app-notifications");
+
+        expect(
+          searchSettings(query, DESKTOP).filter(
+            (result) => result.entry.anchor === "sounds-soundtrack-music",
+          ),
+        ).toEqual([]);
+      },
+    );
+
+    it.each(["playback", "controls"])(
+      "finds the Playback controls row under %s only while Music is on",
+      (query) => {
+        const anchorOf = (context: SettingsAvailabilityContext) =>
+          searchSettings(query, context).filter(
+            (result) =>
+              result.entry.anchor === "sounds-soundtrack-playback-controls",
+          );
+        const musicOn = {
+          ...DESKTOP,
+          soundtrackOffered: true,
+          soundtrackOn: true,
+        };
+
+        expect(anchorOf(musicOn).map((hit) => hit.entry.section)).toEqual([
+          "app-notifications",
+        ]);
+        expect(anchorOf({ ...musicOn, soundtrackOn: false })).toEqual([]);
+        expect(anchorOf({ ...musicOn, soundtrackOffered: false })).toEqual([]);
+      },
+    );
 
     it("offers the phone's push row on mobile and withholds it on desktop", () => {
       expect(labelsFor("push notifications", MOBILE)).toContain(

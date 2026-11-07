@@ -51,6 +51,7 @@ import {
   agentSummarySchemaV92,
   sendAgentMessageRequestSchema,
   sendAgentMessageRequestSchemaV11,
+  sendAgentMessageRequestSchemaV12,
   sendAgentMessageResponseSchema,
   stopAgentRequestSchema,
   stopAgentResponseSchema,
@@ -1591,6 +1592,30 @@ export const agentSendMessageUpgradeV10ToV11 = defineUpgradePath<
   from: agentSendMessageV10.schemaVersion,
   to: agentSendMessageV11.schemaVersion,
   upgradeRequest: (request) => ({ ...request, workspace: null }),
+  upgradeResponse: (response) => response,
+});
+
+/**
+ * `agent.sendMessage@1.2` - the request gains `attachments` (see
+ * `sendAgentMessageRequestSchemaV12`); the response is unchanged. A `1.2`
+ * caller on an older host has `attachments` stripped, so a caller that sends
+ * images requires `1.2` first.
+ */
+export const agentSendMessageV12 = defineRpcContract({
+  method: "agent.sendMessage",
+  schemaVersion: { major: 1, minor: 2 } as const,
+  requestSchema: sendAgentMessageRequestSchemaV12,
+  responseSchema: sendAgentMessageResponseSchema,
+});
+
+// An older caller sends no images.
+export const agentSendMessageUpgradeV11ToV12 = defineUpgradePath<
+  typeof agentSendMessageV11,
+  typeof agentSendMessageV12
+>({
+  from: agentSendMessageV11.schemaVersion,
+  to: agentSendMessageV12.schemaVersion,
+  upgradeRequest: (request) => ({ ...request, attachments: [] }),
   upgradeResponse: (response) => response,
 });
 

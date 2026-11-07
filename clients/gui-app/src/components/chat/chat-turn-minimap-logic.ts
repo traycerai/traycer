@@ -18,17 +18,15 @@ import type { TranscriptWindow } from "@/stores/chats/transcript-window";
  * outline it registers and that button deliberately ignores the region's
  * `shown` value.
  *
- * A bot channel never mounts it: the rail is an outline of an agent's turns,
- * and a channel is people's posts and a bot's replies, which the outline has
- * no vocabulary for. The region setting still governs every agent chat.
+ * A bot's channel and its threads mount it under the same rule: there the rail
+ * lists the members' messages, the same human rows it lists in an agent chat.
  */
 export function shouldMountChatTurnMinimap(input: {
   readonly hasContent: boolean;
   readonly shown: boolean;
   readonly mobileViewport: boolean;
-  readonly botChannel: boolean;
 }): boolean {
-  if (!input.hasContent || input.botChannel) return false;
+  if (!input.hasContent) return false;
   return input.shown || input.mobileViewport;
 }
 
@@ -316,31 +314,84 @@ function isHumanUserRow(row: TranscriptListRow): boolean {
   );
 }
 
-function chatTurnMinimapRowLabel(row: TranscriptListRow): string {
+/**
+ * A row's rail label. With `senderFirst` (a bot's channel or thread, where
+ * several people post) a hydrated row leads with its sender's name; a cold row
+ * keeps the preview alone, because the skeleton carries no sender.
+ */
+function chatTurnMinimapRowLabel(
+  row: TranscriptListRow,
+  senderFirst: boolean,
+): string {
   const text =
     row.kind === "hydrated" ? row.model.content : (row.entry?.preview ?? "");
-  return compactChatTurnMinimapPreview(text) ?? "Untitled message";
+  const preview = compactChatTurnMinimapPreview(text) ?? "Untitled message";
+  const sender =
+    senderFirst && row.kind === "hydrated" ? row.model.senderLabel : null;
+  return sender === null ? preview : `${sender}: ${preview}`;
+}
+
+/**
+ * The sender each hydrated item was labelled with, when the labels lead with
+ * one. Cold items carry none: their label is the skeleton's preview alone, and
+ * a cold row hydrates only in a range response, which rebuilds the window.
+ */
+type ChatTurnMinimapSenders = ReadonlyArray<{
+  readonly rowIndex: number;
+  readonly sender: string | null;
+}>;
+
+interface ChatTurnMinimapDerive {
+  readonly items: ReadonlyArray<ChatTurnMinimapItem>;
+  readonly senders: ChatTurnMinimapSenders;
 }
 
 function deriveChatTurnMinimapItems(
   rows: ReadonlyArray<TranscriptListRow>,
-): ReadonlyArray<ChatTurnMinimapItem> {
+  senderFirst: boolean,
+): ChatTurnMinimapDerive {
   const humanRows: number[] = [];
+  const senders: Array<{ rowIndex: number; sender: string | null }> = [];
   for (let index = 0; index < rows.length; index += 1) {
-    if (isHumanUserRow(rows[index])) humanRows.push(index);
+    const row = rows[index];
+    if (!isHumanUserRow(row)) continue;
+    humanRows.push(index);
+    if (senderFirst && row.kind === "hydrated") {
+      senders.push({ rowIndex: index, sender: row.model.senderLabel });
+    }
   }
 
-  return humanRows.map((rowIndex, index) => {
+  const items = humanRows.map((rowIndex, index): ChatTurnMinimapItem => {
     const row = rows[rowIndex];
     return {
       key: row.key,
-      label: chatTurnMinimapRowLabel(row),
+      label: chatTurnMinimapRowLabel(row, senderFirst),
       level: 1,
       messageId: row.key,
       rowIndex,
       endRowIndex: (humanRows[index + 1] ?? rows.length) - 1,
     };
   });
+  return { items, senders };
+}
+
+/**
+ * Whether a hydrated item's sender changed since the derive: a bot resolves a
+ * member's name after the row first rendered, and that refresh re-renders
+ * `messages` while the window keeps its identity. Bounded by the hydrated
+ * member posts, and allocation-free, so it can run per token.
+ */
+function sendersMoved(
+  rows: ReadonlyArray<TranscriptListRow>,
+  senders: ChatTurnMinimapSenders,
+): boolean {
+  for (const { rowIndex, sender } of senders) {
+    const row = rows[rowIndex];
+    if (row.kind !== "hydrated" || row.model.senderLabel !== sender) {
+      return true;
+    }
+  }
+  return false;
 }
 
 /**
@@ -391,18 +442,30 @@ function unplacedRowKeys(rows: ReadonlyArray<TranscriptListRow>): string {
  * `WeakMap`s, and one slot inside the windowed one, for the same reason
  * `transcript-list-rows.ts` caches placeholders per skeleton: the value is a
  * pure function of the key, it dies with the object it describes, and it needs
- * no invalidation. One slot rather than a map because the key it guards moves
+ * no invalidation beyond the senders `sendersMoved` re-checks. One slot rather than a map because the key it guards moves
  * only when an unplaced row is added or removed, which is not a churn pattern
  * worth retaining alternatives for.
+ *
+ * One pair per label mode: a bot's channel and its session view can read the
+ * same transcript with different labels, and a shared slot would make each
+ * evict the other on every token.
  */
-const lastDeriveByWindow = new WeakMap<
-  object,
-  { readonly key: string; readonly items: ReadonlyArray<ChatTurnMinimapItem> }
->();
-const lastDeriveByRows = new WeakMap<
-  object,
-  ReadonlyArray<ChatTurnMinimapItem>
->();
+interface ChatTurnMinimapDeriveCaches {
+  readonly byWindow: WeakMap<
+    object,
+    { readonly key: string; readonly derive: ChatTurnMinimapDerive }
+  >;
+  readonly byRows: WeakMap<object, ReadonlyArray<ChatTurnMinimapItem>>;
+}
+
+const previewDeriveCaches: ChatTurnMinimapDeriveCaches = {
+  byWindow: new WeakMap(),
+  byRows: new WeakMap(),
+};
+const senderFirstDeriveCaches: ChatTurnMinimapDeriveCaches = {
+  byWindow: new WeakMap(),
+  byRows: new WeakMap(),
+};
 
 /**
  * The rail's turn list, derived at most once per structural change.
@@ -440,26 +503,42 @@ const lastDeriveByRows = new WeakMap<
  * from `rows` outright by the pinned-todo pass, which reads the live turn and
  * therefore moves per token. `deriveCacheKey` carries both.
  *
+ * A third escapes it in a bot's channel and threads only: the sender a label
+ * leads with is resolved from the bot's member directory as `messages` render,
+ * so a name that resolves late re-labels a row the window still holds.
+ * `sendersMoved` re-checks the hydrated items' senders on every hit.
+ *
  * The legacy line has no window and no ordinals, so it keys on the `rows` array
  * itself - which is exactly the memo this replaced, and bounded there because
  * that line hydrates the whole transcript anyway.
+ *
+ * `senderFirst` labels each item `<sender>: <preview>` (see
+ * `chatTurnMinimapRowLabel`).
  */
 export function chatTurnMinimapItems(input: {
   readonly rows: ReadonlyArray<TranscriptListRow>;
   readonly window: TranscriptWindow | null;
+  readonly senderFirst: boolean;
 }): ReadonlyArray<ChatTurnMinimapItem> {
-  const { rows, window } = input;
+  const { rows, window, senderFirst } = input;
+  const caches = senderFirst ? senderFirstDeriveCaches : previewDeriveCaches;
   if (window === null) {
-    const cached = lastDeriveByRows.get(rows);
+    const cached = caches.byRows.get(rows);
     if (cached !== undefined) return cached;
-    const items = deriveChatTurnMinimapItems(rows);
-    lastDeriveByRows.set(rows, items);
+    const { items } = deriveChatTurnMinimapItems(rows, senderFirst);
+    caches.byRows.set(rows, items);
     return items;
   }
   const key = deriveCacheKey(rows);
-  const cached = lastDeriveByWindow.get(window);
-  if (cached !== undefined && cached.key === key) return cached.items;
-  const items = deriveChatTurnMinimapItems(rows);
-  lastDeriveByWindow.set(window, { key, items });
-  return items;
+  const cached = caches.byWindow.get(window);
+  if (
+    cached !== undefined &&
+    cached.key === key &&
+    !sendersMoved(rows, cached.derive.senders)
+  ) {
+    return cached.derive.items;
+  }
+  const derive = deriveChatTurnMinimapItems(rows, senderFirst);
+  caches.byWindow.set(window, { key, derive });
+  return derive.items;
 }

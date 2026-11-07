@@ -1,3 +1,4 @@
+import type { SandboxRateLimit } from "@traycer/protocol/host/sandbox-control";
 import type { SandboxSettingsSteps } from "@traycer/protocol/host/sandbox-settings";
 import type { PendingStageRetryAction } from "@/lib/sandboxes/pending-sandbox-send-transition";
 import type { GuiHarnessId } from "@traycer/protocol/host/index";
@@ -110,6 +111,8 @@ export type StagedSandboxFailure =
   | { readonly kind: "not-sent" };
 
 export interface StagedSandbox {
+  /** The create's latest quota wait, refreshed by accepted and polled rows. */
+  readonly rateLimit?: SandboxRateLimit | null;
   /** A same-account window asks the exclusive owner to retry this stage. */
   readonly retryRequest?: PendingStageRetryRequest;
   /** Only the owner acknowledges a mailbox request after executing its retry. */
@@ -282,6 +285,7 @@ interface StagedSandboxStoreState {
         | "step"
         | "stepAt"
         | "failure"
+        | "rateLimit"
         | "terminalLaunch"
         | "openTerminal"
         | "sendTaken"
@@ -394,6 +398,7 @@ export const useStagedSandboxStore = create<StagedSandboxStoreState>()(
             clientRequestId,
             createdSandboxId: fresh ? null : current.createdSandboxId,
             createdHostId: fresh ? null : current.createdHostId,
+            rateLimit: fresh ? null : current.rateLimit,
             startedAt: resumed ? current.startedAt : now,
             step: resumed ? current.step : "creating",
             stepAt: resumed ? current.stepAt : now,

@@ -1,6 +1,6 @@
 import { isMarkdownArtifactKind } from "@/lib/artifacts/node-display";
 import { useArtifactById } from "@/lib/epic-selectors";
-import { useCallback, useState } from "react";
+import { useCallback, useState, type ReactElement } from "react";
 import { useShallow } from "zustand/react/shallow";
 import { FileDown, MoreHorizontal, Pencil, Trash2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -20,6 +20,7 @@ import {
   type SwitcherRowKind,
 } from "@/components/epic-canvas/mobile/use-switcher-rename";
 import { useEpicPermissionRole, useEpicNodeHostId } from "@/lib/epic-selectors";
+import { useSidebarRowDropdownMount } from "@/components/epic-canvas/sidebar/use-sidebar-row-dropdown-mount";
 import { isEditableRole } from "@/lib/epic-permissions";
 import {
   describeTreeDeleteDisclosure,
@@ -31,6 +32,7 @@ import { useChatWriteRoute } from "@/hooks/epic/use-chat-write-route";
 import { CHAT_NOT_ADOPTED_COPY } from "@/stores/epics/open-epic/chat-write-routing";
 import { useEpicDeleteTuiAgent } from "@/hooks/epic/use-epic-tui-agent-mutations";
 import { useEpicExportArtifacts } from "@/hooks/epic/use-epic-export-artifacts-mutation";
+import { hasNestedMarkdownArtifacts } from "@/lib/artifacts/artifact-export-selection";
 import { useEpicDeleteArtifact } from "@/hooks/epic/use-epic-node-mutations";
 import type { ArtifactExportFormat } from "@/lib/artifacts/artifact-export";
 import { useTerminalKillFor } from "@/hooks/terminal/use-terminal-kill-for-mutation";
@@ -66,15 +68,24 @@ const EXPORT_LABELS: Record<ArtifactExportFormat, string> = {
   pdf: "Export as PDF",
 };
 
+const EXPORT_NESTED_LABELS: Record<ArtifactExportFormat, string> = {
+  markdown: "Export with nested artifacts as Markdown ZIP",
+  pdf: "Export with nested artifacts as PDF ZIP",
+};
+
 interface RowMenuInput {
   readonly nodeId: string;
   readonly kind: SwitcherRowKind;
   readonly canMutate: boolean;
   readonly chatWriteUnavailable: boolean;
   readonly canExport: boolean;
+  readonly canExportNested: boolean;
   readonly exportPending: boolean;
   readonly closePending: boolean;
-  readonly onExport: (format: ArtifactExportFormat) => void;
+  readonly onExport: (
+    format: ArtifactExportFormat,
+    includeNested: boolean,
+  ) => void;
   readonly onRename: () => void;
   readonly onDelete: () => void;
 }
@@ -85,25 +96,36 @@ function rowMenuEntries(
   const { nodeId, kind, canMutate, chatWriteUnavailable } = input;
   const isTerminal = kind === "terminal";
   const disabledTooltip = chatWriteUnavailable ? CHAT_NOT_ADOPTED_COPY : null;
-  const exportEntry = (format: ArtifactExportFormat): SidebarRowMenuEntry => ({
+  const exportEntry = (
+    format: ArtifactExportFormat,
+    includeNested: boolean,
+  ): SidebarRowMenuEntry => ({
     kind: "item",
-    id: `export-${format}`,
-    label: EXPORT_LABELS[format],
+    id: includeNested ? `export-nested-${format}` : `export-${format}`,
+    label: includeNested ? EXPORT_NESTED_LABELS[format] : EXPORT_LABELS[format],
     icon: <FileDown className="size-3.5" />,
     disabled: input.exportPending,
     disabledTooltip: null,
     variant: "default",
-    testIds: {
-      dropdown: `switcher-export-${format}-${nodeId}`,
-      context: `switcher-export-${format}-ctx-${nodeId}`,
-    },
-    onSelect: () => input.onExport(format),
+    testIds: includeNested
+      ? {
+          dropdown: `switcher-export-nested-${format}-${nodeId}`,
+          context: `switcher-export-nested-${format}-ctx-${nodeId}`,
+        }
+      : {
+          dropdown: `switcher-export-${format}-${nodeId}`,
+          context: `switcher-export-${format}-ctx-${nodeId}`,
+        },
+    onSelect: () => input.onExport(format, includeNested),
   });
   return [
     ...(input.canExport
       ? [
-          exportEntry("markdown"),
-          exportEntry("pdf"),
+          exportEntry("markdown", false),
+          exportEntry("pdf", false),
+          ...(input.canExportNested
+            ? [exportEntry("markdown", true), exportEntry("pdf", true)]
+            : []),
           { kind: "separator" as const, id: "after-export" },
         ]
       : []),
@@ -154,11 +176,12 @@ function rowMenuEntries(
  */
 export function SwitcherRowActions(props: SwitcherRowActionsProps) {
   const canMutate = isEditableRole(useEpicPermissionRole());
-  // Keyed on the role so a change of access remounts the body: a dialog opened
-  // as an editor is gone for good once access is lost, rather than staying
-  // submittable or reappearing on its own if access comes back.
+  if (!canMutate && props.kind !== "artifact") return null;
+  // Keyed on the role so a change of access remounts the row's actions: a
+  // dialog opened as an editor is gone for good once access is lost, rather
+  // than staying submittable or reappearing on its own if access comes back.
   return (
-    <SwitcherRowActionsBody
+    <SwitcherRowActionsGate
       key={canMutate ? "editor" : "viewer"}
       {...props}
       canMutate={canMutate}
@@ -166,10 +189,69 @@ export function SwitcherRowActions(props: SwitcherRowActionsProps) {
   );
 }
 
-function SwitcherRowActionsBody(
+/**
+ * The "…" alone until it is pressed. The body behind it is a menu root, two
+ * dialogs and every mutation hook a row might need, and a list draws one of
+ * these per row: on a task with a thousand artifacts that is what the switcher
+ * spent most of its seconds mounting. The sidebar's first-use mount hook opens
+ * the body on the press itself and replays a keyboard open on the mounted
+ * trigger, so the first press behaves as the trigger would have, focus on the
+ * first item included.
+ */
+function SwitcherRowActionsGate(
   props: SwitcherRowActionsProps & { readonly canMutate: boolean },
 ) {
-  const { epicId, tabId, kind, nodeId, name, canMutate } = props;
+  const {
+    mounted,
+    open,
+    setOpen,
+    triggerIdProps,
+    triggerRef,
+    onPointerDown,
+    onKeyDown,
+    onClick,
+  } = useSidebarRowDropdownMount(false);
+  const trigger = (
+    <Button
+      type="button"
+      variant="muted"
+      size="icon-sm"
+      ref={triggerRef}
+      {...triggerIdProps}
+      aria-label={`Actions for ${props.name}`}
+      aria-haspopup="menu"
+      aria-expanded={open}
+      data-state={open ? "open" : "closed"}
+      data-slot="dropdown-menu-trigger"
+      data-testid={`switcher-more-${props.nodeId}`}
+      className="shrink-0"
+      onPointerDown={onPointerDown}
+      onKeyDown={onKeyDown}
+      onClick={onClick}
+    >
+      <MoreHorizontal className="size-4" />
+    </Button>
+  );
+  if (!mounted) return trigger;
+  return (
+    <SwitcherRowActionsBody
+      {...props}
+      trigger={trigger}
+      open={open}
+      onOpenChange={setOpen}
+    />
+  );
+}
+
+function SwitcherRowActionsBody(
+  props: SwitcherRowActionsProps & {
+    readonly canMutate: boolean;
+    readonly trigger: ReactElement;
+    readonly open: boolean;
+    readonly onOpenChange: (open: boolean) => void;
+  },
+) {
+  const { epicId, tabId, kind, nodeId, name, canMutate, trigger, open } = props;
   const [renameOpen, setRenameOpen] = useState(false);
   const [confirmOpen, setConfirmOpen] = useState(false);
 
@@ -210,6 +292,10 @@ function SwitcherRowActionsBody(
   // Document export requires a Markdown body.
   const canExport =
     kind === "artifact" && isMarkdownArtifactKind(artifact?.kind);
+  const canExportNested = useEpicStore(
+    (state: OpenEpicState) =>
+      canExport && hasNestedMarkdownArtifacts(state, nodeId),
+  );
   // The row's terminal lives on the host the switcher LISTS (the Epic
   // session's), so kill goes to that same client - never the ambient one.
   const killTerminal = useTerminalKillFor(
@@ -290,8 +376,6 @@ function SwitcherRowActionsBody(
     killTerminal.mutate({ sessionId: nodeId });
   }, [closeOpenTile, killTerminal, nodeId]);
 
-  if (!canMutate && kind !== "artifact") return null;
-
   const isTerminal = kind === "terminal";
   const deletePending =
     deleteChat.isPending ||
@@ -304,14 +388,16 @@ function SwitcherRowActionsBody(
     canMutate,
     chatWriteUnavailable,
     canExport,
+    canExportNested,
     exportPending: exportArtifacts.isPending,
     closePending: killTerminal.isPending,
-    onExport: (format) =>
+    onExport: (format, includeNested) =>
       exportArtifacts.mutate({
         artifacts: [{ id: nodeId, title: name }],
         format,
-        archive: false,
-        archiveTitle: null,
+        archive: includeNested,
+        archiveTitle: includeNested ? name : null,
+        includeNested,
       }),
     onRename: () => setRenameOpen(true),
     onDelete: isTerminal ? closeTerminal : () => setConfirmOpen(true),
@@ -319,19 +405,8 @@ function SwitcherRowActionsBody(
 
   return (
     <>
-      <DropdownMenu>
-        <DropdownMenuTrigger asChild>
-          <Button
-            type="button"
-            variant="muted"
-            size="icon-sm"
-            aria-label={`Actions for ${name}`}
-            data-testid={`switcher-more-${nodeId}`}
-            className="shrink-0"
-          >
-            <MoreHorizontal className="size-4" />
-          </Button>
-        </DropdownMenuTrigger>
+      <DropdownMenu open={open} onOpenChange={props.onOpenChange}>
+        <DropdownMenuTrigger asChild>{trigger}</DropdownMenuTrigger>
         <DropdownMenuContent align="end" className="w-max">
           <SidebarDropdownMenuItems entries={entries} />
         </DropdownMenuContent>

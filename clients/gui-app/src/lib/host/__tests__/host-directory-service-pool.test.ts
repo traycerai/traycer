@@ -1,3 +1,4 @@
+import { useSettingsHostScopeStore } from "@/stores/settings/settings-host-scope-store";
 import { afterEach, describe, expect, it } from "vitest";
 import { MockRunnerHost } from "@traycer-clients/shared/host-client/mock/mock-runner-host";
 import {
@@ -6,7 +7,6 @@ import {
 } from "@traycer-clients/shared/host-client/host-directory";
 import type { RemoteHostFetcher } from "@traycer-clients/shared/host-client/remote-fetcher";
 import { HostDirectoryService } from "@/lib/host/host-directory-service";
-import { useSettingsHostScopeStore } from "@/stores/settings/settings-host-scope-store";
 
 /**
  * The server pool is resolved by id and never enumerated: it is addressable
@@ -68,7 +68,7 @@ afterEach(() => {
   for (const directory of directories.splice(0)) {
     directory.dispose();
   }
-  useSettingsHostScopeStore.getState().setScopedHostId(null);
+  useSettingsHostScopeStore.getState().reset();
 });
 
 describe("HostDirectoryService and the server pool", () => {

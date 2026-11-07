@@ -277,6 +277,7 @@ function pillStateOf(state: OpenEpicState): EpicSyncPillState {
     localProtection: state.localProtection ?? undefined,
     durabilityLegsNegotiated: state.durabilityLegsNegotiated,
     cloudFreshness: state.cloudFreshness ?? undefined,
+    artifactSync: state.artifactSync ?? undefined,
   });
 }
 

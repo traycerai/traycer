@@ -56,6 +56,9 @@ const mocks = vi.hoisted(() => ({
   handle: null as ChatSessionStoreHandle | null,
 }));
 
+vi.mock("@/hooks/host/use-host-directory-entry", () => ({
+  useHostDirectoryEntry: () => null,
+}));
 vi.mock("@/lib/registries/chat-session-registry", async (importOriginal) => ({
   ...(await importOriginal<
     typeof import("@/lib/registries/chat-session-registry")
@@ -299,7 +302,7 @@ describe("<BotChatTranscript /> in the channel", () => {
         timestamp: 2_000,
         text: "Which environment?",
       }),
-      announcement: { kind: "question", link: null },
+      announcement: { kind: "proposal", link: null },
     };
     return options === null ? base : { ...base, options: [...options] };
   }
@@ -325,7 +328,7 @@ describe("<BotChatTranscript /> in the channel", () => {
     };
   }
 
-  it("opens a question's thread from its hover action, by the record's message id", async () => {
+  it("opens a proposal's thread from its hover action, by the record's message id", async () => {
     const user = userEvent.setup();
     const openAnnouncementThread = vi.fn<(announcementId: string) => void>();
     mountTranscript(
@@ -340,7 +343,7 @@ describe("<BotChatTranscript /> in the channel", () => {
     expect(openAnnouncementThread).toHaveBeenCalledWith(QUESTION_ID, null);
   });
 
-  it("draws a question's options as buttons that cannot be clicked in the channel", () => {
+  it("draws a proposal's options as buttons that cannot be clicked in the channel", () => {
     mountTranscript(
       [question(["Staging", "Production"])],
       channelSurface(vi.fn(), null),

@@ -294,9 +294,13 @@ describe("<PortForwardRow />", () => {
   });
 
   describe("expanded detail", () => {
-    it("shows both endpoints, labeling the local listener as this machine", () => {
+    it("shows both endpoints with their directory names and kinds", () => {
       directoryData.current = [
-        directoryEntry({ hostId: "host-listen", kind: "local" }),
+        directoryEntry({
+          hostId: "host-listen",
+          label: "Dev laptop",
+          kind: "local",
+        }),
         directoryEntry({
           hostId: "host-target",
           kind: "remote",
@@ -318,8 +322,8 @@ describe("<PortForwardRow />", () => {
 
       fireEvent.click(screen.getByTestId("port-forward-row-forward-1"));
 
-      expect(screen.getByText(/this computer:8080/)).not.toBeNull();
-      expect(screen.getByText(/Build box:3000/)).not.toBeNull();
+      expect(screen.getByText(/Dev laptop · Computer:8080/)).not.toBeNull();
+      expect(screen.getByText(/Build box · Computer:3000/)).not.toBeNull();
     });
 
     it("labels an unknown target host as another machine", () => {

@@ -67,13 +67,15 @@ import {
   setEnvOverride,
   setAgentBrowserAccess,
   setAgentPages,
+  setAgentFeedbackEnabled,
+  readAgentFeedbackConfigSync,
   setAgentRolesEnabled,
   setAgentWorktreeCreatePolicy,
   setLogLevels,
   setShell,
   writeCliConfig,
 } from "../store";
-import { CLI_CONFIG_VERSION } from "../schema";
+import { CLI_CONFIG_VERSION, featureSettingsSchema } from "../schema";
 
 beforeEach(async () => {
   h.home = await mkdtemp(join(tmpdir(), "traycer-cli-config-"));
@@ -113,7 +115,10 @@ describe("cli config store", () => {
       },
       envOverrides: { FOO: "bar" },
       logs: { cliLogLevel: "info" as const, hostLogLevel: "info" as const },
-      features: { agentRoles: false, artifactVersioning: false },
+      features: {
+        agentRoles: false,
+        artifactVersioning: false,
+      },
       browser: { agentAccess: true },
       worktrees: { agentCreate: "allow" as const },
       catalog: { probeTimeoutSeconds: 60 },
@@ -270,8 +275,121 @@ describe("cli config store", () => {
       },
       envOverrides: { FOO: "bar" },
       logs: { cliLogLevel: "debug", hostLogLevel: "warn" },
-      features: { agentRoles: false, artifactVersioning: false },
+      features: {
+        agentRoles: false,
+        artifactVersioning: false,
+      },
     });
+  });
+
+  it("reads agent feedback on with no file and when the block is absent", async () => {
+    expect(readAgentFeedbackConfigSync()).toEqual({ enabled: true });
+    await writeRaw(
+      JSON.stringify({
+        version: 1,
+        shell: { path: null, args: null },
+        envOverrides: {},
+        features: { agentRoles: true },
+      }),
+    );
+    expect(readAgentFeedbackConfigSync()).toEqual({ enabled: true });
+  });
+
+  it("reads agent feedback off when the block says false", async () => {
+    await writeRaw(
+      JSON.stringify({ version: 1, agentFeedback: { enabled: false } }),
+    );
+    expect(readAgentFeedbackConfigSync()).toEqual({ enabled: false });
+  });
+
+  it("fails closed for malformed, wrong-typed, and future-version agent feedback reads", async () => {
+    await writeRaw("{ not json");
+    expect(readAgentFeedbackConfigSync()).toEqual({ enabled: false });
+
+    await writeRaw(
+      JSON.stringify({ version: 1, agentFeedback: { enabled: "no" } }),
+    );
+    expect(readAgentFeedbackConfigSync()).toEqual({ enabled: false });
+
+    await writeRaw(JSON.stringify({ version: 1, agentFeedback: true }));
+    expect(readAgentFeedbackConfigSync()).toEqual({ enabled: false });
+  });
+
+  it.skipIf(process.platform === "win32" || process.getuid?.() === 0)(
+    "fails closed when agent feedback config is unreadable",
+    async () => {
+      await writeRaw(
+        JSON.stringify({ version: 1, agentFeedback: { enabled: true } }),
+      );
+      await chmod(cliConfigPath(), 0o000);
+      try {
+        expect(readAgentFeedbackConfigSync()).toEqual({ enabled: false });
+      } finally {
+        await chmod(cliConfigPath(), 0o600);
+      }
+    },
+  );
+
+  it("sets agent feedback at top level and preserves other settings", async () => {
+    await setShell("/bin/fish", ["-l"]);
+    await setAgentRolesEnabled(true);
+
+    await setAgentFeedbackEnabled(false);
+    expect(readAgentFeedbackConfigSync()).toEqual({ enabled: false });
+    expect(await readFeatureSettings()).toEqual({
+      agentRoles: true,
+      artifactVersioning: false,
+    });
+    const raw = JSON.parse(await readFile(cliConfigPath(), "utf8"));
+    expect(raw.agentFeedback).toEqual({ enabled: false });
+    expect(raw.features).not.toHaveProperty("agentFeedback");
+    expect(await readCliConfig()).toMatchObject({
+      shell: { path: "/bin/fish", args: ["-l"] },
+    });
+
+    await setAgentFeedbackEnabled(true);
+    expect(readAgentFeedbackConfigSync()).toEqual({ enabled: true });
+    expect(await readFeatureSettings()).toMatchObject({ agentRoles: true });
+  });
+
+  it("keeps an agent feedback opt-out through unrelated updates and a features-only parse", async () => {
+    await writeRaw(
+      JSON.stringify({ version: 1, agentFeedback: { enabled: false } }),
+    );
+    await setAgentRolesEnabled(true);
+    expect(readAgentFeedbackConfigSync()).toEqual({ enabled: false });
+
+    // A binary that does not know the key parses and rewrites via the features schema.
+    const stripped = featureSettingsSchema.parse(
+      JSON.parse(await readFile(cliConfigPath(), "utf8")).features,
+    );
+    expect(stripped).toEqual({ agentRoles: true, artifactVersioning: false });
+    const raw = JSON.parse(await readFile(cliConfigPath(), "utf8"));
+    await writeRaw(JSON.stringify({ ...raw, features: stripped }));
+    expect(readAgentFeedbackConfigSync()).toEqual({ enabled: false });
+  });
+
+  it("fails closed when the rest of the config is invalid, and a toggle repairs a bad block", async () => {
+    await writeRaw(
+      JSON.stringify({ version: 999, agentFeedback: { enabled: true } }),
+    );
+    expect(readAgentFeedbackConfigSync()).toEqual({ enabled: false });
+    await writeRaw(
+      JSON.stringify({ version: "999", agentFeedback: { enabled: true } }),
+    );
+    expect(readAgentFeedbackConfigSync()).toEqual({ enabled: false });
+    await writeRaw(
+      JSON.stringify({
+        version: 1,
+        features: { agentRoles: "no" },
+        agentFeedback: { enabled: true },
+      }),
+    );
+    expect(readAgentFeedbackConfigSync()).toEqual({ enabled: false });
+
+    await writeRaw(JSON.stringify({ version: 1, agentFeedback: true }));
+    await setAgentFeedbackEnabled(true);
+    expect(readAgentFeedbackConfigSync()).toEqual({ enabled: true });
   });
 
   it("reads agent browser access as on from a pre-feature file", async () => {
@@ -477,7 +595,10 @@ describe("cli config store", () => {
       shell: { path: "/bin/zsh", args: null, entries: [] },
       envOverrides: {},
       logs: { cliLogLevel: "info", hostLogLevel: "info" },
-      features: { agentRoles: false, artifactVersioning: false },
+      features: {
+        agentRoles: false,
+        artifactVersioning: false,
+      },
       browser: { agentAccess: true },
       worktrees: { agentCreate: "allow" },
       catalog: { probeTimeoutSeconds: 60 },

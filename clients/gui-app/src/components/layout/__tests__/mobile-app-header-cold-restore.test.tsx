@@ -50,6 +50,9 @@ afterEach(() => {
 // Host-backed chrome only; the registry accessors the header reads for the
 // epic's title and permission role stay REAL here - they are the half of the
 // cold-restore path under test.
+vi.mock("@/providers/use-resolved-theme", () => ({
+  useResolvedTheme: () => ({ resolvedTheme: "light", themePreset: "default" }),
+}));
 vi.mock("@/components/layout/header/rate-limit-icon", () => ({
   RateLimitIconButton: () => <button type="button" aria-label="Usage limits" />,
 }));

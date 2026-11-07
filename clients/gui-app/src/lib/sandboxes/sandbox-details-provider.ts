@@ -6,6 +6,10 @@ import type {
   SandboxSummary,
   UserSandboxCost,
 } from "@traycer/protocol/host/sandbox-control";
+import {
+  HOST_FROZEN_WORD,
+  hostSandboxStateWord,
+} from "@traycer/protocol/host/host-status";
 import { sandboxQueryKeys } from "@/lib/query-keys";
 import type {
   DetailsEntry,
@@ -17,15 +21,15 @@ import type {
 import { frozenDestroyAt } from "@/lib/sandboxes/sandbox-balance";
 import {
   SANDBOX_DEFAULT_IDLE_MINUTES,
-  SANDBOX_PUBLIC_STATE_LABEL,
   formatSandboxAge,
   formatSandboxDate,
+  formatSandboxUtcDay,
   sandboxFailedToStart,
   sandboxMemberName,
   sandboxPeriodLabel,
-  sandboxPublicState,
   sandboxRegionLabel,
   sandboxReportedAt,
+  sandboxRetentionIsWithdrawn,
   sandboxShapeLine,
   sandboxSupportReferenceLine,
 } from "@/lib/sandboxes/sandbox-row-lines";
@@ -125,6 +129,12 @@ function starter(input: SandboxDetailsInput): string | null {
 /**
  * Idle, then Resting; an agent's sandbox never rests, it destroys itself,
  * and Automations never rests either: it is released, its files kept.
+ *
+ * A withdrawn row gets no Resting row: how long it is kept is decided by its
+ * own `destroyAt` where one is set and by the announced date otherwise, never
+ * by its resting policy, so a resting promise here would contradict it either
+ * way — and this surface carries no withdrawal notice of its own to read it
+ * against.
  */
 function idleRows(summary: SandboxSummary): SandboxDetailsRow[] {
   const idle = summary.idleMinutes ?? SANDBOX_DEFAULT_IDLE_MINUTES;
@@ -136,10 +146,12 @@ function idleRows(summary: SandboxSummary): SandboxDetailsRow[] {
   if (summary.burst) {
     return [{ label: "Idle", value: `destroys itself after ${idle} idle min` }];
   }
+  const idleRow = { label: "Idle", value: `suspends after ${idle} idle min` };
+  if (sandboxRetentionIsWithdrawn(summary)) return [idleRow];
   return [
-    { label: "Idle", value: `suspends after ${idle} idle min` },
+    idleRow,
     {
-      label: "Resting",
+      label: "Idle for",
       value:
         summary.destroyAfterRestingMinutes === null ||
         summary.destroyAfterRestingMinutes === 0
@@ -155,7 +167,7 @@ function statusRows(input: SandboxDetailsInput): SandboxDetailsRow[] {
   const rows: SandboxDetailsRow[] = [
     {
       label: "State",
-      value: SANDBOX_PUBLIC_STATE_LABEL[sandboxPublicState(summary)],
+      value: hostSandboxStateWord(summary.state),
     },
     {
       label: "Last report",
@@ -188,15 +200,46 @@ function statusRows(input: SandboxDetailsInput): SandboxDetailsRow[] {
     });
   }
   rows.push(...idleRows(summary));
+  // `destroyAt` wins wherever the server sends one, because it is the day the
+  // server will actually act on. A withdrawal does not suppress every
+  // `destroyAt`: a FROZEN row keeps its day-30 deadline, which is its own
+  // approved policy and is decided before the withdrawal is consulted
+  // (`destroyAtOf`), so a frozen withdrawn row carries both. Reading the
+  // withdrawal first there would name the later day while the Frozen row
+  // just below named the earlier one, and the server destroyed on the
+  // earlier one.
+  //
+  // The announced day answers only when there is no `destroyAt` to state,
+  // which is the ordinary withdrawn row: unfrozen, its resting deadline
+  // held.
+  //
+  // `unless used` belongs to ONE of these days: the resting deadline, which
+  // a wake really does reset — landing awake clears `restingSince`, so the
+  // clock starts over. It is false on the other two, for different reasons.
+  //
+  // Nothing the person does postpones a withdrawal. And a frozen row's
+  // day-30 day belongs to the freeze EPISODE, counted from its `frozenAt`:
+  // nothing moves that day later. What can remove it — a top-up, or, on a
+  // team row, a wake its payer's gate admits (`thawForWake`) — ENDS the
+  // episode and the deadline with it rather than deferring the day. So
+  // there is no postponement to offer: use either leaves this date exactly
+  // where it is or clears it outright, and the row states the bare day here
+  // exactly as the Frozen row below states it.
   if (summary.destroyAt !== null) {
+    const day = formatSandboxDate(summary.destroyAt, true);
     rows.push({
       label: "Destroyed on",
-      value: `${formatSandboxDate(summary.destroyAt, true)} unless used`,
+      value: summary.frozen ? day : `${day} unless used`,
+    });
+  } else if (summary.withdrawalEndsAt !== null) {
+    rows.push({
+      label: "Destroyed on",
+      value: formatSandboxUtcDay(summary.withdrawalEndsAt),
     });
   }
   if (summary.frozen && summary.frozenAt !== null) {
     rows.push({
-      label: "Frozen",
+      label: HOST_FROZEN_WORD,
       value: `out of credits since ${formatSandboxDate(summary.frozenAt, true)}; destroyed on ${formatSandboxDate(frozenDestroyAt(summary.frozenAt), true)}`,
     });
   }
@@ -243,7 +286,7 @@ function operationVerb(entry: SandboxHistoryEntry): string {
     return sandboxFailedToStart(entry.outcomeDetail);
   }
   if (entry.fromState === "creating") return "Created";
-  if (entry.cause === "freeze") return "Frozen";
+  if (entry.cause === "freeze") return HOST_FROZEN_WORD;
   switch (entry.state) {
     case "suspending":
     case "suspended":
@@ -296,7 +339,7 @@ function operationCause(
 /**
  * One History line: `Suspended by you until Oct 25 at 09:55 · under $0.01`,
  * `Resumed by you (Open terminal) · awake until Oct 25 at 10:01 · $0.02`, or
- * on the current operation `· resting from then` / `· awake from then`.
+ * on the current operation `· idle from then` / `· awake from then`.
  */
 function historyEntryEvent(
   entry: SandboxHistoryEntry,
@@ -310,7 +353,7 @@ function historyEntryEvent(
   if (entry.state === "failed" || ended) {
     span = [cause];
   } else if (entry.untilAt === null) {
-    span = [cause, resting ? "resting from then" : "awake from then"];
+    span = [cause, resting ? "idle from then" : "awake from then"];
   } else if (resting) {
     const until = `until ${formatSandboxDate(entry.untilAt, true)}`;
     span = [cause === null ? until : `${cause} ${until}`, cost];
@@ -361,14 +404,14 @@ function historyEvents(input: SandboxDetailsInput): SandboxDetailsEvent[] {
   if (summary.restingSince !== null) {
     events.push({
       at: summary.restingSince,
-      label: "Resting",
-      value: "the resting clock started",
+      label: "Idle",
+      value: "it went idle",
     });
   }
   if (summary.frozenAt !== null) {
     events.push({
       at: summary.frozenAt,
-      label: "Frozen",
+      label: HOST_FROZEN_WORD,
       value: "out of credits",
     });
   }
@@ -475,13 +518,13 @@ function sandboxReason(summary: SandboxSummary): string | null {
   if (summary.state === "failed") {
     return sandboxFailedToStart(summary.failureCode);
   }
-  if (summary.frozen) return "Out of credits";
+  if (summary.frozen) return HOST_FROZEN_WORD;
   if (summary.guestConfigured === false) return "Settings didn't apply";
   return null;
 }
 
 function detailsStatus(summary: SandboxSummary): DetailsStatus {
-  const state = SANDBOX_PUBLIC_STATE_LABEL[sandboxPublicState(summary)];
+  const state = hostSandboxStateWord(summary.state);
   const reason = sandboxReason(summary);
   return {
     summary: [state, sandboxShapeLine(summary), sandboxRegionLabel(summary)]

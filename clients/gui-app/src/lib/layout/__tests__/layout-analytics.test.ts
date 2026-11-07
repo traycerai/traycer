@@ -88,7 +88,7 @@ describe("layoutSnapshotProperties (L-46, L-54, L-55)", () => {
     expect(properties.base_preset).toBe("default");
     expect(properties.layout_usage_host).toBe("status-bar");
     expect(properties.layout_usage_side).toBe("left");
-    expect(properties.layout_minimap_side).toBe("right");
+    expect(properties.layout_minimap_side).toBe("left");
     expect(properties.layout_resource_host).toBe("status-bar");
     expect(properties.layout_resource_side).toBe("right");
     expect(properties.layout_dock_reordered).toBe(false);

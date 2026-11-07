@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { appLogger } from "@/lib/logger";
+import { MIX_TUNING } from "../mix-tuning";
 import { crossfadePlayers, TrackPlayer } from "../player";
 import type { StemSource } from "../stems";
 import type { LayerProperties, VariableTrack } from "../variable-sound";
@@ -11,10 +12,12 @@ import { FakeOutput, FakeStems, isRamp } from "./fakes";
 // every 6.2 s, which the 0.5 s grid snaps to 6.5.
 function makeTrack(lengthSeconds: number, variantsOfA: number): VariableTrack {
   const properties = (startPause: number) => ({
+    enabled: null,
     startPause: [startPause, startPause] as const,
     sequenceLength: [1, 1] as const,
     pauseBetweenSamples: [0, 0] as const,
     pauseBetweenRepetitions: [4, 4] as const,
+    playsPerRun: null,
   });
   return {
     name: "test",
@@ -25,10 +28,19 @@ function makeTrack(lengthSeconds: number, variantsOfA: number): VariableTrack {
       {
         name: "A",
         variants: variantsOfA,
+        role: null,
         sublayers: 1,
         sublayerStartingOffset: null,
+        pan: null,
       },
-      { name: "B", variants: 2, sublayers: 1, sublayerStartingOffset: null },
+      {
+        name: "B",
+        variants: 2,
+        role: null,
+        sublayers: 1,
+        sublayerStartingOffset: null,
+        pan: null,
+      },
     ],
     states: [
       {
@@ -37,6 +49,9 @@ function makeTrack(lengthSeconds: number, variantsOfA: number): VariableTrack {
         numberOfEnabledLayers: [2, 2],
       },
     ],
+    intro: null,
+    outro: null,
+    phases: [],
   };
 }
 
@@ -48,10 +63,12 @@ function makeStatesTrack(lengthSeconds: number): VariableTrack {
     startPause: number,
     pauseBetweenRepetitions: number,
   ): LayerProperties => ({
+    enabled: null,
     startPause: [startPause, startPause],
     sequenceLength: [1, 1],
     pauseBetweenSamples: [0, 0],
     pauseBetweenRepetitions: [pauseBetweenRepetitions, pauseBetweenRepetitions],
+    playsPerRun: null,
   });
   return {
     name: "states",
@@ -59,8 +76,22 @@ function makeStatesTrack(lengthSeconds: number): VariableTrack {
     lengthSeconds,
     alignmentSeconds: 0.5,
     layers: [
-      { name: "A", variants: 2, sublayers: 1, sublayerStartingOffset: null },
-      { name: "B", variants: 2, sublayers: 1, sublayerStartingOffset: null },
+      {
+        name: "A",
+        variants: 2,
+        role: null,
+        sublayers: 1,
+        sublayerStartingOffset: null,
+        pan: null,
+      },
+      {
+        name: "B",
+        variants: 2,
+        role: null,
+        sublayers: 1,
+        sublayerStartingOffset: null,
+        pan: null,
+      },
     ],
     states: [
       {
@@ -74,6 +105,9 @@ function makeStatesTrack(lengthSeconds: number): VariableTrack {
         numberOfEnabledLayers: [1, 1],
       },
     ],
+    intro: null,
+    outro: null,
+    phases: [],
   };
 }
 
@@ -94,6 +128,8 @@ function makePlayerWithRandom(
     random,
     silenceSeconds: [5, 5],
     resumeAt: 0,
+    onRunStart: () => undefined,
+    onRunEnd: () => undefined,
   });
 }
 
@@ -110,6 +146,8 @@ function makePlayer(
     random: () => 0.5,
     silenceSeconds: [silenceSeconds, silenceSeconds],
     resumeAt: 0,
+    onRunStart: () => undefined,
+    onRunEnd: () => undefined,
   });
 }
 
@@ -125,20 +163,32 @@ function makeSingleLayerTrack(
     lengthSeconds: 60,
     alignmentSeconds: 0.5,
     layers: [
-      { name: "A", variants: 2, sublayers: 1, sublayerStartingOffset: null },
+      {
+        name: "A",
+        variants: 2,
+        role: null,
+        sublayers: 1,
+        sublayerStartingOffset: null,
+        pan: null,
+      },
     ],
     states: stateNames.map((name) => ({
       name,
       layersProperties: [
         {
+          enabled: null,
           startPause: [startPause, startPause],
           sequenceLength: [1, 1],
           pauseBetweenSamples: [0, 0],
           pauseBetweenRepetitions: [4, 4],
+          playsPerRun: null,
         },
       ],
       numberOfEnabledLayers: [1, 1],
     })),
+    intro: null,
+    outro: null,
+    phases: [],
   };
 }
 
@@ -165,6 +215,8 @@ describe("TrackPlayer scheduling", () => {
       random: () => 0.5,
       silenceSeconds: [5, 5],
       resumeAt: 20,
+      onRunStart: () => undefined,
+      onRunEnd: () => undefined,
     });
     expect(player.elapsed()).toBe(20);
 
@@ -394,19 +446,25 @@ describe("TrackPlayer resume", () => {
 });
 
 describe("TrackPlayer end of track", () => {
-  it("cuts at the end, stays silent for silenceSeconds, then starts a fresh state at track time 0", async () => {
+  it("rings out past the end until the last heard sample finishes, fades what a switched-off layer still sounds, stays silent for silenceSeconds, then starts a fresh state at track time 0", async () => {
     const output = new FakeOutput();
-    // 8 s samples are still sounding when the 5 s track ends.
+    // 8 s samples are still sounding when the 5 s track ends. A's, started at
+    // track time 0, ends at 8; B's is switched off at 1 s and holds nothing up.
     const player = makePlayer(output, new FakeStems(8), makeTrack(5, 2), 3);
     player.start(0, 0.1);
     await vi.advanceTimersByTimeAsync(1000);
     player.setLayerEnabled(1, false);
     expect(player.currentState()).not.toBeNull();
     await vi.advanceTimersByTimeAsync(4500);
+    // Past the 5 s length A still sounds, and nothing is cut.
+    expect(output.cuts()).toEqual([]);
+    expect(player.currentState()).not.toBeNull();
 
+    await vi.advanceTimersByTimeAsync(3000);
     const cuts = output.cuts();
-    expect(cuts.map((call) => call.gain).sort()).toEqual(["bus0/0", "bus0/1"]);
-    for (const cut of cuts) expect(cut.fade).toBe(0.01);
+    expect(cuts.map((call) => ({ gain: call.gain, fade: call.fade }))).toEqual([
+      { gain: "bus0/1", fade: MIX_TUNING.ringOutFadeSeconds },
+    ]);
     expect(player.currentState()).toBeNull();
     expect(player.elapsed()).toBe(0);
 
@@ -788,10 +846,12 @@ describe("TrackPlayer scheduling inside one lookahead window", () => {
     enabledLayers: number,
   ): VariableTrack {
     const properties: LayerProperties = {
+      enabled: null,
       startPause: [0, 0],
       sequenceLength: [1, 1],
       pauseBetweenSamples: [0, 0],
       pauseBetweenRepetitions: [0, 0],
+      playsPerRun: null,
     };
     return {
       name: "window",
@@ -802,8 +862,10 @@ describe("TrackPlayer scheduling inside one lookahead window", () => {
         {
           name: "A",
           variants: 2,
+          role: null,
           sublayers,
           sublayerStartingOffset: [offset, offset],
+          pan: null,
         },
       ],
       states: ["first", "second"].map((name) => ({
@@ -811,6 +873,9 @@ describe("TrackPlayer scheduling inside one lookahead window", () => {
         layersProperties: [properties],
         numberOfEnabledLayers: [enabledLayers, enabledLayers],
       })),
+      intro: null,
+      outro: null,
+      phases: [],
     };
   }
 
@@ -875,8 +940,10 @@ describe("TrackPlayer scheduling inside one lookahead window", () => {
         {
           name: "A",
           variants: 2,
+          role: null,
           sublayers: 3,
           sublayerStartingOffset: [0.1, 0.2],
+          pan: null,
         },
       ],
     };

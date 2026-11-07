@@ -9,27 +9,31 @@ import { useHostQuery } from "@/hooks/host/use-host-query";
 const FALLBACK_POLICY_PARAMS = {};
 
 /**
- * Reads this user's fallback policy on the SURFACE's host.
+ * Reads the fallback policy in effect on the SURFACE's host, and `source`
+ * says whose it is: the signed-in user's own, or - on a team-owned computer -
+ * the team's, which every member reads and only the team's own page sets.
  *
  * `useHostClient()` and not the app-wide client: the settings panel re-provides
  * `HostRuntimeContext` with the scoped client, so this resolves to whichever
- * host the sidebar picker names. The policy is stored per user PER HOST
+ * host the sidebar picker names. The policy is stored PER HOST
  * (`provider-accounts.json` is machine-local), so reading it through the active
  * host while the page named another would show one machine's settings under
  * another machine's name - and, worse, save them there.
  *
  * The response carries two things beside the policy: `storedPolicyUnreadable`,
  * which the panel must surface rather than swallow (the host deliberately
- * returns a default policy instead of throwing, precisely so the user can
- * overwrite a corrupt row), and `inFlightCount`, which is derived per read and
+ * returns the default settings with routing off instead of throwing, precisely
+ * so the user can overwrite a corrupt row), and `inFlightCount`, which is derived per read and
  * so is only as fresh as the last one. The panel shows the polled count from
  * `useFallbackInFlightCountQuery` instead, and this one only until that
  * answers.
  *
- * The first read also SEEDS this user's model groups host-side when they have
- * never been established. That is why the panel always reads before it writes:
- * an explicit save of empty groups after a read sticks as "deliberately
- * emptied", while the same save before any read would be silently re-seeded.
+ * On a `source: "own"` host the first read also SEEDS the user's model groups
+ * host-side when they have never been established. That is why the panel
+ * always reads before it writes: an explicit save of empty groups after a read
+ * sticks as "deliberately emptied", while the same save before any read would
+ * be silently re-seeded. On `"team"` nothing is written by a read at all - the
+ * team's row is the environment's to write - and the panel offers no save.
  */
 export function useFallbackPolicyQuery(): UseQueryResult<
   ProvidersFallbackPolicyGetResponse,

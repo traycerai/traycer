@@ -12,11 +12,14 @@ import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
 import { Button } from "@/components/ui/button";
 import { ChatBotMessage } from "@/components/chat/chat-bot-message";
 import { BotAvatar } from "@/components/bots/bot-avatars";
-import { BotChatTranscript } from "@/components/bots/bot-chat-transcript";
+import {
+  BotChatTranscript,
+  BotTranscriptImageScope,
+} from "@/components/bots/bot-chat-transcript";
 import { useBotFailedRecovery } from "@/components/bots/bot-failed-recovery";
 import { BotRoutingCard } from "@/components/bots/bot-routing-card";
 import { useBotTurnLocateQuery } from "@/hooks/bots/use-bot-turn-locate-query";
-import { botTurnIndexOf } from "@/lib/bots/bot-turn-receipt";
+import { botTurnIndexOf, turnOfMessages } from "@/lib/bots/bot-turn-receipt";
 import {
   BotMessageComposer,
   type BotComposerEdit,
@@ -32,6 +35,7 @@ import {
 } from "@/components/bots/bot-channel-notices";
 import { BotReadFailure } from "@/components/bots/bot-read-failure";
 import { BotReplyingStrip } from "@/components/bots/bot-replying-strip";
+import { useBotReplyingTurn } from "@/hooks/bots/use-bot-replying-turn";
 import { BotTaskList } from "@/components/bots/bot-task-list";
 import { BotThreadFollowControl } from "@/components/bots/bot-thread-follow";
 import { ChannelPost } from "@/components/bots/bot-channel-post";
@@ -44,6 +48,7 @@ import {
   useBotActivity,
 } from "@/hooks/bots/use-bot-activity";
 import { useBotFailedRequest } from "@/hooks/bots/use-bot-failed-request";
+import type { BotImageReach } from "@/hooks/bots/use-bot-send-version";
 import type {
   BotTranscriptLanding,
   QuestionAnswerSend,
@@ -54,7 +59,7 @@ import type {
   ChatBotTurnReceipt,
 } from "@/components/chat/chat-bot-presentation-context";
 import type { BotMemberResolver } from "@/lib/bots/bot-member-names";
-import { threadOriginRow } from "@/lib/bots/reply-row";
+import { threadOriginRow, type ThreadOriginRow } from "@/lib/bots/reply-row";
 import { useAuthStore } from "@/stores/auth/auth-store";
 import { useBotDraftsStore } from "@/stores/bots/bot-drafts-store";
 import { useKeptBoxDraft } from "@/hooks/bots/use-kept-box-draft";
@@ -139,6 +144,8 @@ export function BotThreadPanel(props: {
   readonly hostId: string;
   /** The host that runs the bot, where a signed-out provider is signed in again; `null` when none does. */
   readonly boundHostId: string | null;
+  /** What the panel's box does with images. */
+  readonly imageReach: BotImageReach;
   readonly botTitle: string;
   /** The channel the thread's post is in. */
   readonly conversationId: string;
@@ -153,7 +160,6 @@ export function BotThreadPanel(props: {
   readonly anchorSenderLabel: (senderUserId: string | null) => string;
   readonly resolveMember: BotMemberResolver;
   readonly onClose: () => void;
-  readonly onOpenActivity: () => void;
   readonly onEditPost: (edit: BotComposerEdit) => void;
   /** Opens a turn of the bot: its session, in place of the channel. */
   readonly onOpenTurn: BotTurnOpen;
@@ -164,7 +170,7 @@ export function BotThreadPanel(props: {
   /** A quote for the panel's box to add to what it shows; `null` for none. */
   readonly quote: BotComposerQuote | null;
 }): ReactNode {
-  const { botTitle, onClose, onOpenActivity, onOpenSession } = props;
+  const { botTitle, onClose, onOpenSession } = props;
   const thread = props.thread.kind === "listed" ? props.thread.thread : null;
   const threadId =
     props.thread.kind === "posted"
@@ -238,15 +244,6 @@ export function BotThreadPanel(props: {
               Thread session
             </Button>
           )}
-          <Button
-            type="button"
-            variant="ghost"
-            size="xs"
-            data-testid="bot-thread-activity"
-            onClick={onOpenActivity}
-          >
-            Activity
-          </Button>
         </div>
         <Button
           type="button"
@@ -279,6 +276,7 @@ type ThreadPanelBodyProps = {
   readonly botId: string;
   readonly hostId: string;
   readonly boundHostId: string | null;
+  readonly imageReach: BotImageReach;
   readonly botTitle: string;
   readonly conversationId: string;
   readonly originMessageId: string;
@@ -306,7 +304,57 @@ type ThreadPanelBodyProps = {
  * sent from here nor listed.
  */
 function ThreadOrigin(props: ThreadPanelBodyProps): ReactNode {
+  const { originMessageId, sent, anchorSenderLabel, resolveMember } = props;
+  const anchor =
+    props.thread.kind === "listed" ? props.thread.thread.anchor : null;
+  const senderAvatarUrl = useCallback(
+    (senderUserId: string) => resolveMember(senderUserId)?.avatarUrl ?? null,
+    [resolveMember],
+  );
+  return (
+    <ChannelPost
+      botId={props.botId}
+      hostId={props.hostId}
+      conversationId={props.conversationId}
+      messageId={originMessageId}
+      fetchCold
+    >
+      {(post) => {
+        const origin = threadOriginRow({
+          messageId: originMessageId,
+          post,
+          sent,
+          anchor,
+          senderLabel: anchorSenderLabel,
+          senderAvatarUrl,
+        });
+        return origin === null ? null : (
+          <ThreadOriginPost
+            {...props}
+            origin={origin}
+            queued={post === null && sent?.delivery === "queued"}
+          />
+        );
+      }}
+    </ChannelPost>
+  );
+}
+
+/**
+ * The post the thread opens on (`origin`) and the turns behind it: the bot's
+ * post asks for the turn that wrote it whether or not anyone has replied in
+ * the thread yet, since the row says who wrote it. `queued` while a send the
+ * host queued has no row yet.
+ */
+function ThreadOriginPost(
+  props: ThreadPanelBodyProps & {
+    readonly origin: ThreadOriginRow;
+    readonly queued: boolean;
+  },
+): ReactNode {
   const {
+    origin,
+    queued,
     botId,
     hostId,
     boundHostId,
@@ -315,7 +363,6 @@ function ThreadOrigin(props: ThreadPanelBodyProps): ReactNode {
     originMessageId,
     sent,
     anchorSenderLabel,
-    resolveMember,
     onEditPost,
     onOpenTurn,
     sendFailure,
@@ -326,20 +373,23 @@ function ThreadOrigin(props: ThreadPanelBodyProps): ReactNode {
     (requestId: string) => failedOnRequest(activity, requestId),
     [activity],
   );
-  // The post's turn, while the bot failed to answer it: its receipt, and the
-  // agent chat's reason and actions where the thread's session names it as
-  // its last failed attempt.
   const listed = props.thread.kind === "listed" ? props.thread.thread : null;
+  // The turn behind the post: the bot's post draws the receipt of the turn
+  // that wrote it, as in the channel; a member's post, while the bot failed
+  // to answer it, the receipt of the turn that took it, and the agent chat's
+  // reason and actions where the thread's session names that turn as its
+  // last failed attempt.
   const originRequestId = listed?.anchor?.requestId ?? sent?.requestId ?? null;
   const failedOrigin =
     originRequestId !== null && failedOnPost(originRequestId) !== null
       ? [originRequestId]
       : NO_IDS;
+  const botOrigin = origin.row.role === "assistant";
   const located = useBotTurnLocateQuery({
     client,
     hostId,
     botId,
-    messageIds: NO_IDS,
+    messageIds: botOrigin ? [originMessageId] : NO_IDS,
     requestIds: failedOrigin,
     turns: NO_TURN_KEYS,
   });
@@ -370,6 +420,21 @@ function ThreadOrigin(props: ThreadPanelBodyProps): ReactNode {
     },
     [onOpenTurn, turnOfRequest],
   );
+  const replyReceipt = useCallback(
+    (messageIds: ReadonlyArray<string>): ChatBotTurnReceipt | null => {
+      const ref = turnOfMessages(turnIndex, messageIds);
+      if (ref === null) return null;
+      // The session lands on the card of the send that wrote the post.
+      const sendPostId = messageIds[0] ?? null;
+      return {
+        summary: ref.summary,
+        startedAt: ref.startedAt,
+        endedAt: ref.endedAt,
+        open: () => onOpenTurn(ref, sendPostId),
+      };
+    },
+    [onOpenTurn, turnIndex],
+  );
   const failedRequest = useBotFailedRequest({
     client,
     hostId,
@@ -393,8 +458,8 @@ function ThreadOrigin(props: ThreadPanelBodyProps): ReactNode {
     [anchorSenderLabel, botId, viewerUserId],
   );
   const turns = useMemo(
-    () => ({ failedRecovery, requestReceipt }),
-    [failedRecovery, requestReceipt],
+    () => ({ failedRecovery, replyReceipt, requestReceipt }),
+    [failedRecovery, replyReceipt, requestReceipt],
   );
   const loadedPresentation = useMemo(
     () => originPresentation(botTitle, questions, failedRequest, turns),
@@ -411,55 +476,39 @@ function ThreadOrigin(props: ThreadPanelBodyProps): ReactNode {
             ? null
             : { ...failed, retry: null, edit: null };
         },
-        { failedRecovery: null, requestReceipt: turns.requestReceipt },
+        {
+          failedRecovery: null,
+          replyReceipt: turns.replyReceipt,
+          requestReceipt: turns.requestReceipt,
+        },
       ),
     [botTitle, failedRequest, questions, turns],
   );
-  const anchor =
-    props.thread.kind === "listed" ? props.thread.thread.anchor : null;
-  const senderAvatarUrl = useCallback(
-    (senderUserId: string) => resolveMember(senderUserId)?.avatarUrl ?? null,
-    [resolveMember],
-  );
   return (
-    <ChannelPost
-      botId={botId}
-      hostId={hostId}
-      conversationId={conversationId}
-      messageId={originMessageId}
-      fetchCold
+    <div
+      className="px-2"
+      data-testid="bot-thread-anchor"
+      data-loaded={origin.loaded ? "true" : "false"}
     >
-      {(post) => {
-        const origin = threadOriginRow({
-          messageId: originMessageId,
-          post,
-          sent,
-          anchor,
-          senderLabel: anchorSenderLabel,
-          senderAvatarUrl,
-        });
-        return origin === null ? null : (
-          <div
-            className="px-2"
-            data-testid="bot-thread-anchor"
-            data-loaded={origin.loaded ? "true" : "false"}
-          >
-            <ChatBotMessage
-              message={origin.row}
-              presentation={
-                origin.loaded ? loadedPresentation : unloadedPresentation
-              }
-              hoverActions={false}
-            />
-            {post === null && sent?.delivery === "queued" ? (
-              <div className="px-3">
-                <BotQueuedNotice testId="bot-thread-queued" />
-              </div>
-            ) : null}
-          </div>
-        );
-      }}
-    </ChannelPost>
+      <BotTranscriptImageScope
+        botId={botId}
+        chatId={conversationId}
+        hostId={hostId}
+      >
+        <ChatBotMessage
+          message={origin.row}
+          presentation={
+            origin.loaded ? loadedPresentation : unloadedPresentation
+          }
+          hoverActions={false}
+        />
+      </BotTranscriptImageScope>
+      {queued ? (
+        <div className="px-3">
+          <BotQueuedNotice testId="bot-thread-queued" />
+        </div>
+      ) : null}
+    </div>
   );
 }
 
@@ -504,10 +553,6 @@ function ThreadTasks(props: {
     [tasks, threadId],
   );
   const threads = useMemo(() => (thread === null ? [] : [thread]), [thread]);
-  const place = useMemo(
-    () => ({ kind: "thread" as const, threadId }),
-    [threadId],
-  );
   const [band, setBand] = useState<HTMLDivElement | null>(null);
   const collapsed = useCollapsed(band);
   if (own.length === 0) return null;
@@ -532,7 +577,7 @@ function ThreadTasks(props: {
           hostId={hostId}
           tasks={own}
           threads={threads}
-          place={place}
+          threadId={threadId}
         />
       </div>
     </section>
@@ -567,7 +612,10 @@ function originPresentation(
   botTitle: string,
   questions: ChatBotQuestions,
   failedRequest: ChatBotPresentation["failedRequest"],
-  turns: Pick<ChatBotPresentation, "failedRecovery" | "requestReceipt">,
+  turns: Pick<
+    ChatBotPresentation,
+    "failedRecovery" | "replyReceipt" | "requestReceipt"
+  >,
 ): ChatBotPresentation {
   return {
     botTitle,
@@ -579,7 +627,7 @@ function originPresentation(
     questions,
     failedRequest,
     failedRecovery: turns.failedRecovery,
-    replyReceipt: null,
+    replyReceipt: turns.replyReceipt,
     requestReceipt: turns.requestReceipt,
   };
 }
@@ -670,16 +718,19 @@ function ThreadPanelBody(props: ThreadPanelBodyProps): ReactNode {
       />
       <BotMessageComposer
         botId={props.botId}
+        botTitle={props.botTitle}
         conversationId={box.conversationId}
         threadId={box.threadId}
         announcementId={box.announcementId}
         sendable={thread.sendable}
+        imageReach={props.imageReach}
         placeholder="Reply…"
         label={edit === null ? box.label : IN_THREAD_LABEL}
         testId="bot-thread-composer"
         failure={props.sendFailure}
         edit={edit}
         onEditEnd={endEdit}
+        onEditResume={setEdit}
         seed={seed}
         keptDraft={keptDraft}
         quote={props.quote}
@@ -799,6 +850,13 @@ function KnownThread(
   // thread's typing line, and an answer it holds or fails is said on the
   // message, with Retry and Edit.
   const activity = useBotActivity(botId)?.threads[threadId] ?? null;
+  const replyingTurn = useBotReplyingTurn({
+    client,
+    hostId,
+    botId,
+    activity,
+    onOpenTurn,
+  });
   const failedInThread = useCallback(
     (requestId: string) => failedOn(activity, requestId),
     [activity],
@@ -851,7 +909,7 @@ function KnownThread(
             skipped: given.skipped,
           },
         },
-        { onError: failSend },
+        { onError: () => failSend(null) },
       );
     },
     [botId, clearSendFailure, conversationId, failSend, sendAsync, threadId],
@@ -878,7 +936,7 @@ function KnownThread(
                   supersedes: null,
                   answer: null,
                 },
-                { onError: failSend },
+                { onError: () => failSend(null) },
               );
             },
       answerQuestion: sendable && answersTaken ? answerQuestion : null,
@@ -954,6 +1012,7 @@ function KnownThread(
       <BotReplyingStrip
         botTitle={botTitle}
         activity={activity}
+        turn={replyingTurn}
         testId="bot-thread-replying-strip"
       />
     </>
@@ -990,7 +1049,7 @@ function UnlistedThread(props: {
 }): ReactNode {
   const sendFailed = props.sendFailure.failed ? (
     <div className="shrink-0 px-4 pt-2">
-      <BotSendFailedNotice testId="bot-thread-send-failed" />
+      <BotSendFailedNotice testId="bot-thread-send-failed" restore={null} />
     </div>
   ) : null;
   if (props.thread.kind === "failed") {

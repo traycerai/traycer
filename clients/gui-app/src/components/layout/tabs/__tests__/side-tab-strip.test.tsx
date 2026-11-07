@@ -42,6 +42,7 @@ import {
   titleWarmEpic,
   warmEpic,
 } from "@/components/layout/tabs/side-strip/__tests__/warm-epic-fixture";
+import { MobileStripFormContext } from "@/components/layout/tabs/mobile-strip-form-context";
 import { SheetJoinScope } from "@/components/layout/tabs/sheet-join";
 import {
   SIDE_STRIP_RAIL_WIDTH_PX,
@@ -55,6 +56,7 @@ import { TooltipProvider } from "@/components/ui/tooltip";
 import type { EpicWaitingReason } from "@/hooks/epic/use-epic-activity-status";
 import type { TaskPinnedState } from "@/hooks/epic/use-epic-task-pinned-states-query";
 import { formatChordForDisplay } from "@/lib/keybindings/chord";
+import { setPhoneLayoutOnly } from "@/lib/mobile-app";
 import { getDefaultBindings, type ActionId } from "@/lib/keybindings/actions";
 import {
   dispatchAction,
@@ -93,6 +95,7 @@ import {
   DEFAULT_LAYOUT_SNAPSHOT,
   useLayoutStore,
 } from "@/stores/layout/layout-store";
+import type { LayoutSnapshot } from "@/lib/layout/layout-snapshot";
 import { useSideTabStripStore } from "@/stores/layout/side-tab-strip-store";
 import { tabItemId, tabRefKey } from "@/stores/tabs/layout";
 import { useTabsStore } from "@/stores/tabs/store";
@@ -352,12 +355,15 @@ interface StripOptions {
   readonly edge: EdgeSide;
   readonly ownsTitleBar: boolean;
   readonly hydrated: boolean;
+  /** The phone shell's form around the strip; `null` for a desktop window. */
+  readonly phoneForm: "expanded" | "rail" | null;
 }
 
 const LEFT_STRIP: StripOptions = {
   edge: "left",
   ownsTitleBar: false,
   hydrated: true,
+  phoneForm: null,
 };
 
 function buildRouter(
@@ -373,10 +379,12 @@ function buildRouter(
             value={{ bridge: null, hasHydrated: strip.hydrated }}
           >
             <SheetJoinScope>
-              <SideTabStrip
-                edge={strip.edge}
-                ownsTitleBar={strip.ownsTitleBar}
-              />
+              <MobileStripFormContext.Provider value={strip.phoneForm}>
+                <SideTabStrip
+                  edge={strip.edge}
+                  ownsTitleBar={strip.ownsTitleBar}
+                />
+              </MobileStripFormContext.Provider>
             </SheetJoinScope>
           </WindowsBridgeContext.Provider>
         </TooltipProvider>
@@ -440,8 +448,23 @@ async function renderStrip(
   return screen.findByTestId("side-tab-strip");
 }
 
+/**
+ * The shipped layout with the sidebar open in a new tab - the join cases read
+ * which pane a tab meets, and a collapsed rail is one of the two answers -
+ * and the strip in Tabs only, the view the row and group cases are written
+ * about; `setSideStripView` picks the one listing the agents.
+ */
+const OPEN_SIDEBAR_SNAPSHOT: LayoutSnapshot = {
+  ...DEFAULT_LAYOUT_SNAPSHOT,
+  arrangement: {
+    ...DEFAULT_LAYOUT_SNAPSHOT.arrangement,
+    sidebarStartCollapsed: false,
+    sideStripView: "layered",
+  },
+};
+
 function setHomeTabEnabled(enabled: boolean): void {
-  useLayoutStore.setState({ ...DEFAULT_LAYOUT_SNAPSHOT });
+  useLayoutStore.setState({ ...OPEN_SIDEBAR_SNAPSHOT });
   useLayoutStore
     .getState()
     .setRegionValues("homeTab", { shown: enabled ? "shown" : "hidden" });
@@ -1060,7 +1083,7 @@ describe("<SideTabStrip />", () => {
       __resetHostNotificationsStoreForTests();
       useStripDisclosureStore.setState({ expanded: {} });
       indicatorState.value = { epics: {}, chats: {} };
-      useLayoutStore.setState({ ...DEFAULT_LAYOUT_SNAPSHOT });
+      useLayoutStore.setState({ ...OPEN_SIDEBAR_SNAPSHOT });
       useChatTranscriptJumpStore.setState({ requestsByChatId: {} });
       usePaneEmphasisStore.setState({ outlinedInstanceId: null, flash: null });
     });
@@ -1184,6 +1207,30 @@ describe("<SideTabStrip />", () => {
       expect(agentIds(screen.getByTestId("strip-agent-group"))).toEqual([
         "strip-agent-c-wait",
       ]);
+    });
+
+    it("is the installed app's one view, whatever the arrangement stores, since it offers no row or editor to choose another", async () => {
+      setSideStripView("layered");
+      setPhoneLayoutOnly(true);
+      try {
+        openEpicTabs(["Alpha"]);
+        warmEpic("e-alpha", [
+          chatProjection("c-run", { title: "Runs", updatedAt: 1 }),
+        ]);
+        busy("e-alpha", ["c-run"]);
+        await renderStrip("/elsewhere", {
+          ...LEFT_STRIP,
+          phoneForm: "expanded",
+        });
+
+        const group = screen.getByTestId("strip-agent-group");
+        expect(group.getAttribute("aria-labelledby")).toBe(
+          screen.getByTestId("tab-epic-e-alpha").id,
+        );
+        expect(agentIds(group)).toEqual(["strip-agent-c-run"]);
+      } finally {
+        setPhoneLayoutOnly(false);
+      }
     });
 
     it("names an agent titled like its task by its own title, in normal text", async () => {
@@ -1980,7 +2027,7 @@ describe("<SideTabStrip />", () => {
       __resetHostNotificationsStoreForTests();
       useStripDisclosureStore.setState({ expanded: {} });
       indicatorState.value = { epics: {}, chats: {} };
-      useLayoutStore.setState({ ...DEFAULT_LAYOUT_SNAPSHOT });
+      useLayoutStore.setState({ ...OPEN_SIDEBAR_SNAPSHOT });
     });
 
     /**
@@ -3346,7 +3393,7 @@ describe("<SideTabStrip />", () => {
       __resetAgentActivityStoreForTests();
       useAppLocalNotificationsStore.setState({ byId: {} });
       indicatorState.value = { epics: {}, chats: {} };
-      useLayoutStore.setState({ ...DEFAULT_LAYOUT_SNAPSHOT });
+      useLayoutStore.setState({ ...OPEN_SIDEBAR_SNAPSHOT });
     });
 
     function setBeta(input: Omit<StatusCase, "name" | "shows">): void {

@@ -443,6 +443,164 @@ export function findCachedTaskContext(
 }
 
 /**
+ * The ids of the tasks the person's cached task lists and found
+ * `epic.getTaskContexts` answers hold (across every host), lower-cased and
+ * sorted, with the id as cached beside each. Built once and shared by every
+ * reader for that person, and rebuilt on the first read after a cache event on
+ * one of those queries: a transcript holding many id-shaped tokens resolves
+ * each against this, instead of walking the query cache once per token.
+ */
+interface HeldTaskIds {
+  entries: ReadonlyArray<readonly [lowerCased: string, taskId: string]> | null;
+  readonly listeners: Set<() => void>;
+}
+
+const heldTaskIdsByClient = new WeakMap<
+  QueryClient,
+  Map<string, HeldTaskIds>
+>();
+
+/**
+ * One query-cache listener per client, installed with its first index and
+ * kept for the client's life, so no reader ever sees an index built before a
+ * change it did not hear about: the listener drops the index (and notifies its
+ * readers) inside the cache event itself, before anything can read again.
+ */
+function heldTaskIdsFor(queryClient: QueryClient, userId: string): HeldTaskIds {
+  let byUserId = heldTaskIdsByClient.get(queryClient);
+  if (byUserId === undefined) {
+    const created = new Map<string, HeldTaskIds>();
+    queryClient.getQueryCache().subscribe((event) => {
+      if (!movesQueryState(event)) return;
+      const queryKey: unknown = event.query.queryKey;
+      if (!Array.isArray(queryKey)) return;
+      for (const [heldUserId, held] of created) {
+        if (!holdsTaskIds(queryKey, { hostId: null, userId: heldUserId })) {
+          continue;
+        }
+        held.entries = null;
+        for (const listener of held.listeners) listener();
+      }
+    });
+    heldTaskIdsByClient.set(queryClient, created);
+    byUserId = created;
+  }
+  let held = byUserId.get(userId);
+  if (held === undefined) {
+    held = { entries: null, listeners: new Set() };
+    byUserId.set(userId, held);
+  }
+  return held;
+}
+
+function holdsTaskIds(
+  queryKey: readonly unknown[],
+  scope: CloudEpicTasksCacheScope,
+): boolean {
+  return (
+    cloudEpicTasksQueryKeyMatchesScope(queryKey, scope) ||
+    epicPinReadingQueryKeyMatchesScope(queryKey, scope) ||
+    currentTasksPinTailQueryKeyMatchesScope(queryKey, scope) ||
+    epicTaskContextsQueryKeyMatchesScope(queryKey, scope)
+  );
+}
+
+function scanHeldTaskIds(
+  queryClient: QueryClient,
+  scope: CloudEpicTasksCacheScope,
+): ReadonlyArray<readonly [string, string]> {
+  const taskIds = new Set<string>();
+  for (const [, response] of queryClient.getQueriesData<ListTasksResponse>({
+    predicate: (query) =>
+      cloudEpicTasksQueryKeyMatchesScope(query.queryKey, scope) ||
+      epicPinReadingQueryKeyMatchesScope(query.queryKey, scope) ||
+      currentTasksPinTailQueryKeyMatchesScope(query.queryKey, scope),
+  })) {
+    if (response === undefined) continue;
+    for (const task of response.tasks) {
+      const taskId = task.epic?.light?.id;
+      if (taskId !== undefined) taskIds.add(taskId);
+    }
+  }
+  for (const [
+    ,
+    response,
+  ] of queryClient.getQueriesData<GetTaskContextsResponse>({
+    predicate: (query) =>
+      epicTaskContextsQueryKeyMatchesScope(query.queryKey, scope),
+  })) {
+    if (response === undefined) continue;
+    for (const [taskId, resolution] of Object.entries(response.tasks)) {
+      // An answer that did not find its task (gone, out of reach, unknown)
+      // names no task the person can open.
+      if (isFoundTaskContext(resolution)) taskIds.add(taskId);
+    }
+  }
+  return [...taskIds]
+    .map((taskId): readonly [string, string] => [taskId.toLowerCase(), taskId])
+    .sort(([a], [b]) => compareCodeUnits(a, b));
+}
+
+/** The order `<` reads strings in, which the prefix search below relies on. */
+function compareCodeUnits(a: string, b: string): number {
+  if (a < b) return -1;
+  return a > b ? 1 : 0;
+}
+
+/**
+ * Up to two ids `prefix` begins (ignoring case) among the tasks the person's
+ * cached task lists and cached `epic.getTaskContexts` batches found: two is
+ * enough to tell one task from several.
+ */
+export function findCachedTaskIdsByPrefix(
+  queryClient: QueryClient,
+  userId: string,
+  prefix: string,
+): ReadonlySet<string> {
+  const held = heldTaskIdsFor(queryClient, userId);
+  held.entries ??= scanHeldTaskIds(queryClient, { hostId: null, userId });
+  const entries = held.entries;
+  const normalizedPrefix = prefix.toLowerCase();
+  let low = 0;
+  let high = entries.length;
+  while (low < high) {
+    const middle = (low + high) >>> 1;
+    if (entries[middle][0] < normalizedPrefix) low = middle + 1;
+    else high = middle;
+  }
+  const matches = new Set<string>();
+  for (
+    let index = low;
+    index < entries.length && matches.size < 2;
+    index += 1
+  ) {
+    const [lowerCased, taskId] = entries[index];
+    if (!lowerCased.startsWith(normalizedPrefix)) break;
+    matches.add(taskId);
+  }
+  return matches;
+}
+
+/**
+ * Calls `onChange` when what {@link findCachedTaskIdsByPrefix} reads for
+ * `userId` may have moved, and for no other cache event.
+ */
+export function subscribeToCachedTaskIds(
+  queryClient: QueryClient,
+  userId: string,
+  onChange: () => void,
+): () => void {
+  const held = heldTaskIdsFor(queryClient, userId);
+  const listener = (): void => {
+    onChange();
+  };
+  held.listeners.add(listener);
+  return () => {
+    held.listeners.delete(listener);
+  };
+}
+
+/**
  * Calls `onChange` for a cache event on an `epic.getTaskContexts` batch
  * `findCachedTaskContext` reads for `scope`, and for no other.
  */

@@ -107,6 +107,7 @@ import { buildHostAvailableCommand } from "./commands/host-available";
 import { buildHostDownloadCommand } from "./commands/host-download";
 import { hostDoctorCommand } from "./commands/host-doctor";
 import { buildHostEnsureCommand } from "./commands/host-ensure";
+import { buildHostJoinCommand } from "./commands/host-join";
 import { buildHostFreePortCommand } from "./commands/host-free-port";
 import { buildHostFreePortAndRestartCommand } from "./commands/host-free-port-and-restart";
 import { buildHostInstallCommand } from "./commands/host-install";
@@ -1668,6 +1669,19 @@ function registerHostCommands(program: Command): void {
         })(ctx);
       };
     },
+  );
+
+  withRunner(
+    host
+      .command("join")
+      .description(
+        "Make this machine a team's host with the one-time install token from the app, then install and start the host. Refused on a machine that already has a Traycer host.",
+      )
+      .argument("<token>", "The install token shown in the app"),
+    (_opts, args) =>
+      buildHostJoinCommand({
+        token: expectRequiredPositional(args[0], "token"),
+      }),
   );
 
   withRunner(
@@ -3856,13 +3870,33 @@ function registerBotCommands(program: Command): void {
     bot
       .command("threads")
       .description(
-        "List a bot's threads with the post each answers, its replies, open requests and cost. Works only on the host the bot runs on.",
+        "List a bot's threads with the post each answers, its replies, open requests and cost, most recent activity first. Works only on the host the bot runs on.",
       )
-      .argument("<bot>", botArgument),
-    (_opts, args) =>
-      buildBotThreadsCommand({
+      .argument("<bot>", botArgument)
+      .option("--limit <count>", "List at most this many threads")
+      .option(
+        "--cursor <cursor>",
+        "Continue after the page a listing ended, with the cursor it printed",
+      ),
+    (opts, args) => {
+      const limit =
+        typeof opts.limit === "string"
+          ? parsePositiveIntegerArg(opts.limit)
+          : null;
+      if (typeof opts.limit === "string" && limit === null) {
+        throw cliError({
+          code: CLI_ERROR_CODES.INVALID_ARGUMENT,
+          message: "bot threads: --limit must be a positive whole number",
+          details: { limit: opts.limit },
+          exitCode: 1,
+        });
+      }
+      return buildBotThreadsCommand({
         bot: expectRequiredPositional(args[0], "bot"),
-      }),
+        limit,
+        cursor: typeof opts.cursor === "string" ? opts.cursor : null,
+      });
+    },
   );
 
   withRunner(

@@ -28,7 +28,7 @@ import {
   epicStatusSubscribeClientFrameSchemaV10,
   epicStatusSubscribeServerFrameSchemaV10,
   epicStatusSubscribeServerFrameSchemaV11,
-  EPIC_STATUS_DURABILITY_LEGS_MINOR,
+  EPIC_STATUS_ARTIFACT_SYNC_MINOR,
 } from "@traycer/protocol/host/epic/status-subscribe";
 import {
   epicCloudSyncStatusSchema,
@@ -82,12 +82,12 @@ describe("registry shape: the epic lane surface installs at the versions the spl
     // `epic.state.subscribe` grew `@1.1` (tombstones carry artifact metadata)
     // `@1.2` (the epic files arm) and `@1.3` (the html, canvas and file
     // artifact kinds) and `@1.4` (anchor fields on comment thread records),
-    // `epic.status.subscribe` grew `@1.1` after `@1.0` shipped in 1.3.0, and
+    // `epic.status.subscribe` grew `@1.1` and `@1.2` after `@1.0` shipped, and
     // `artifact.subscribe` grew `@1.1` for the `bodySync` frame. All three keep
     // `@1.0` installed for released peers.
     for (const [method, latestMinor] of [
       ["epic.state.subscribe", 5],
-      ["epic.status.subscribe", 1],
+      ["epic.status.subscribe", 2],
       ["artifact.subscribe", 1],
     ] as const) {
       const majorLine = hostStreamRpcRegistry[method][1];
@@ -100,11 +100,11 @@ describe("registry shape: the epic lane surface installs at the versions the spl
     // `@1.0` staying INSTALLED is the durable half of what the split promised;
     // the top of each line is not. cli-v1.3.0 shipped all three at `@1.0`;
     // `epic.status.subscribe` has since grown `@1.1` for the durability legs
-    // and `epic.state.subscribe` `@1.1` for tombstone metadata - which is the
+    // and `@1.2` for `artifactSync`, and `epic.state.subscribe` `@1.1` for tombstone metadata - which is the
     // correct way for a shipped lane to grow, so the table above pins each
     // line's top rather than a flat `latestMinor: 0`.
     expect(hostStreamRpcRegistry["epic.status.subscribe"][1].latestMinor).toBe(
-      EPIC_STATUS_DURABILITY_LEGS_MINOR,
+      EPIC_STATUS_ARTIFACT_SYNC_MINOR,
     );
     expect(hostStreamRpcRegistry["artifact.subscribe"][1].latestMinor).toBe(
       ARTIFACT_SUBSCRIBE_BODY_SYNC_MINOR,

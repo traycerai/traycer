@@ -7,6 +7,11 @@
  * actions - already carry their own `navigateNested` seam, so they call this
  * directly rather than growing a hook they cannot use.
  */
+import {
+  selectMobileSecondaryTile,
+  selectMobileTile,
+} from "@/components/epic-canvas/mobile/mobile-tile-selection";
+import { readMobileTwoTilesFit } from "@/hooks/ui/use-mobile-layout-form";
 import { isMobileViewport } from "@/hooks/ui/use-mobile-viewport";
 import type { NavigateNestedFocus } from "@/lib/epic-nested-focus-navigation";
 import type { NestedFocusTarget } from "@/lib/epic-nested-focus-route";
@@ -15,7 +20,9 @@ import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
 import { useSettingsStore } from "@/stores/settings/settings-store";
 import type { PipOrigin } from "@/lib/browser-view/pip/pip-store";
 import { executeTileOpen } from "./execute-tile-open";
-import type { TileOpenIntent } from "./intent";
+import type { EpicCanvasState } from "@/stores/epics/canvas/types";
+import type { MobileTileOpenSlots, TileOpenIntent } from "./intent";
+import type { MobileTileOpenTarget } from "./mobile-tile-open-target-context";
 import { resolveTileOpen } from "./resolve-tile-open";
 import { markTileOpenRequested } from "./tile-open-provenance";
 
@@ -44,13 +51,46 @@ export interface OpenTileOptions {
    * `agent` or it wedges every later agent float.
    */
   readonly pipOrigin: PipOrigin;
+  /**
+   * Which of the phone shell's two tiles the open comes from wants it, for a
+   * surface inside one of them; `null` from anywhere else.
+   */
+  readonly mobileTarget: MobileTileOpenTarget | null;
 }
 
 /** The values every in-app gesture carries: user-initiated, tab-creating. */
 export const MANUAL_TILE_OPEN: OpenTileOptions = {
   createTab: true,
   pipOrigin: "manual",
+  mobileTarget: null,
 };
+
+/**
+ * The slots, where two tiles fit, of the task on screen: an open into a task
+ * behind another tab has to bring its tile forward there, and has no pair on
+ * screen to keep. A surface's target speaks for its own task's canvas only;
+ * an open from anywhere else (the phone's sheet, a palette) takes the first
+ * tile, as it always has.
+ */
+function mobileSlotsForOpen(
+  canvas: EpicCanvasState,
+  tabId: string,
+  mobileTarget: MobileTileOpenTarget | null,
+): MobileTileOpenSlots | null {
+  const store = useEpicCanvasStore.getState();
+  if (store.activeTabId !== tabId || !readMobileTwoTilesFit()) return null;
+  const primary = selectMobileTile(canvas);
+  const secondary = selectMobileSecondaryTile(
+    canvas,
+    store.mobileSecondaryTileByTabId[tabId],
+    primary,
+  );
+  return {
+    target: mobileTarget?.tabId === tabId ? mobileTarget.slot : "primary",
+    primaryInstanceId: primary?.ref.instanceId ?? null,
+    secondaryInstanceId: secondary?.ref.instanceId ?? null,
+  };
+}
 
 export function openTileWithNavigation(
   intent: TileOpenIntent,
@@ -78,6 +118,7 @@ export function openTileWithNavigation(
     // Imperative reads: a placement decision is command-time, so it must not
     // pin this call to a viewport snapshot.
     singleTileViewport: isMobileViewport(),
+    mobileSlots: mobileSlotsForOpen(canvas, tabId, options.mobileTarget),
   });
   // And the tile the open actually LANDS ON, which for a dedupe hit is not the
   // one the intent named. Every caller mints a fresh instance id per intent,
@@ -95,6 +136,12 @@ export function openTileWithNavigation(
   if (plan.kind === "focus-existing") {
     markTileOpenRequested(plan.instanceId);
   }
+  if (
+    plan.kind === "show-in-mobile-secondary" &&
+    plan.existingInstanceId !== null
+  ) {
+    markTileOpenRequested(plan.existingInstanceId);
+  }
   const target = executeTileOpen({
     plan,
     node: intent.node,
@@ -103,6 +150,7 @@ export function openTileWithNavigation(
     navigateNested,
     epicId: store.tabsById[tabId]?.epicId ?? null,
     pipOrigin: options.pipOrigin,
+    adoptHtmlVersion: intent.adoptHtmlVersion === true,
   });
   // And again on the id it landed under: into a pane, the canvas mints one of
   // its own, because a row's ref outlives one open.

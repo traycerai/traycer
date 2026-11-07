@@ -49,6 +49,7 @@ export function notificationPayloadRequiresOriginHost(
   return (
     payload.kind === "approval" ||
     payload.kind === "interview" ||
+    payload.kind === "feedbackDraft" ||
     payload.kind === "browserSession"
   );
 }

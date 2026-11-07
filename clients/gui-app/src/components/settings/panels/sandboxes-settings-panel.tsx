@@ -1,6 +1,11 @@
 import { useMemo, useState, type ReactNode } from "react";
 import { useNavigate } from "@tanstack/react-router";
 import type { UseQueryResult } from "@tanstack/react-query";
+import {
+  HOST_FROZEN_WORD,
+  HOST_SANDBOX_STATES,
+  hostSandboxStateWord,
+} from "@traycer/protocol/host/host-status";
 import { openNewEpicIntent } from "@/lib/commands/actions/new-epic";
 import { activateTabIntent } from "@/lib/tab-navigation";
 import { Bot, Clock, ListFilter, Search, Server, Workflow } from "lucide-react";
@@ -59,7 +64,6 @@ import { useSampledNow } from "@/lib/relative-time";
 import {
   AUTOMATIONS_RELEASED_LINE,
   SANDBOX_KIND_FILTER_LABEL,
-  SANDBOX_PUBLIC_STATE_LABEL,
   SANDBOX_ROW_FILTER_NONE,
   SANDBOX_STARTER_FILTER_LABEL,
   SANDBOX_STATE_FILTER_LABEL,
@@ -91,6 +95,7 @@ import {
   type SandboxStarterFilter,
   type SandboxStateFilter,
 } from "@/lib/sandboxes/sandbox-row-lines";
+import { sandboxWithdrawalLine } from "@/components/hosts/sandbox-card-model";
 import {
   SANDBOX_LIST_FAILED,
   wakeString,
@@ -683,11 +688,7 @@ const KIND_FILTERS: readonly SandboxKindFilter[] = [
 ];
 const STATE_FILTERS: readonly SandboxStateFilter[] = [
   "all",
-  "awake",
-  "suspended",
-  "stopped",
-  "frozen",
-  "failed",
+  ...HOST_SANDBOX_STATES,
 ];
 const STARTER_FILTERS: readonly SandboxStarterFilter[] = [
   "anyone",
@@ -857,7 +858,7 @@ function UnstartedAutomationsRow(props: {
   });
   return (
     <li
-      data-state="suspended"
+      data-state="released"
       data-testid="sandboxes-row-automations-unstarted"
       className="flex flex-col gap-4 px-5 py-4 sm:flex-row sm:items-center sm:justify-between"
     >
@@ -874,7 +875,7 @@ function UnstartedAutomationsRow(props: {
               Automations
             </span>
             <Badge variant="muted" data-testid="sandboxes-row-state">
-              {SANDBOX_PUBLIC_STATE_LABEL.suspended}
+              {hostSandboxStateWord("released")}
             </Badge>
             <Badge variant="muted">Automations</Badge>
           </div>
@@ -965,8 +966,11 @@ function SandboxListRow(props: {
               variant={STATE_BADGE[state]}
               data-testid="sandboxes-row-state"
             >
-              {SANDBOX_PUBLIC_STATE_LABEL[state]}
+              {hostSandboxStateWord(summary.state)}
             </Badge>
+            {summary.frozen ? (
+              <Badge variant="warning">{HOST_FROZEN_WORD}</Badge>
+            ) : null}
             <Badge variant="muted">
               {sandboxStartedByLabel(summary, viewerUserId)}
             </Badge>
@@ -996,6 +1000,7 @@ function SandboxListRow(props: {
               })}
             </span>
           </p>
+          <SandboxRowWithdrawal summary={summary} />
           {awake && (settingsFailed || summary.guestConfigured === false) ? (
             <div className="text-ui-xs text-muted-foreground">
               <p>Compute is charged while it is awake.</p>
@@ -1026,6 +1031,32 @@ function SandboxListRow(props: {
         settingsFailed={settingsFailed}
       />
     </li>
+  );
+}
+
+/**
+ * When this sandbox stops running, on a row whose kind the control plane is
+ * withdrawing. It sits under the clock line because it replaces what that
+ * line would say: an unfrozen withdrawn row carries no resting deadline while
+ * this date stands. A frozen one that carries its own day-30 deadline states
+ * it through the clock line, so both lines show — and this one drops its date
+ * then, rather than contradict the day the clock line names.
+ */
+function SandboxRowWithdrawal(props: {
+  readonly summary: SandboxSummary;
+}): ReactNode {
+  const line = sandboxWithdrawalLine(
+    props.summary.withdrawalEndsAt,
+    props.summary.destroyAt,
+  );
+  if (line === null) return null;
+  return (
+    <p
+      className="rounded-md border border-warning/30 bg-warning/10 px-2 py-1.5 text-ui-xs leading-snug wrap-anywhere text-warning-foreground"
+      data-testid="sandboxes-row-withdrawal"
+    >
+      {line}
+    </p>
   );
 }
 

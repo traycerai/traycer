@@ -1230,9 +1230,9 @@ function runDeferredBackground(state: BootState, services: AppServices): void {
     installHostWakeRecovery(
       services.host,
       installPowerMonitorListeners,
-      () => {
+      (wake) => {
         state.bridge?.notifySystemResumed();
-        state.bridge?.fanOut(RunnerHostEvent.systemResumed, undefined);
+        state.bridge?.fanOut(RunnerHostEvent.systemResumed, wake);
         checkForUpdatesAfterResume(state.config.isDev);
         // `force: true` - matches `checkForUpdatesAfterResume` above: a real
         // probe on every wake, gated only by the debounce below (not by cache

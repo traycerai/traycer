@@ -1,7 +1,5 @@
 import type { UseMutationResult } from "@tanstack/react-query";
 import type {
-  BotNotificationsStopRequest,
-  BotNotificationsStopResponse,
   BotTaskActionRequest,
   BotTaskRunNowResponse,
   BotTaskSetPausedRequest,
@@ -16,8 +14,8 @@ import { botMutationKeys } from "@/lib/query-keys";
 import { toastFromHostError } from "@/lib/host-error-toast";
 
 /**
- * What a member does to a bot's automations and notification watches from
- * its Activity page (Tracy Bots T92). Each goes through the tab's host, which
+ * What a member does to a bot's automations from its Activity page
+ * (Tracy Bots T92). Each goes through the tab's host, which
  * the page offers them on only while it runs the bot, and is refused before
  * it leaves by a host without the method. Nothing to invalidate: the bot's
  * stream sends the row as the host now holds it.
@@ -88,29 +86,6 @@ export function useBotTaskStopMutation(
       mutationKey: botMutationKeys.taskStop(),
       onError: (error) =>
         toastFromHostError(error, "Couldn't stop the automation."),
-    },
-  });
-}
-
-export function useBotNotificationsStopMutation(
-  client: HostClient<HostRpcRegistry> | null,
-): UseMutationResult<
-  BotNotificationsStopResponse,
-  HostRpcError,
-  BotNotificationsStopRequest
-> {
-  return useHostMutation<HostRpcRegistry, "bot.notifications.stop">({
-    client,
-    method: "bot.notifications.stop",
-    mapVariables: (variables) => variables,
-    requiredHostMethodVersion: () => ({
-      method: "bot.notifications.stop",
-      version: { major: 1, minor: 0 },
-    }),
-    options: {
-      mutationKey: botMutationKeys.notificationsStop(),
-      onError: (error) =>
-        toastFromHostError(error, "Couldn't stop watching notifications."),
     },
   });
 }

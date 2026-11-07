@@ -28,9 +28,16 @@ import type {
 } from "@traycer/protocol/host/bot/conversation-schemas";
 import type { BotActivity } from "@traycer/protocol/host/bot/schemas";
 import {
+  ANNOUNCEMENT_ID,
+  ANNOUNCEMENT_PROMPT_ID,
+  ANNOUNCEMENT_THREAD_ID,
+  ANNOUNCEMENT_TURN,
   BOT_ID,
   CHANNEL_ID,
   CHANNEL_REPLY_TURN,
+  HOST_ANNOUNCEMENT_ID,
+  QUESTION_ID,
+  QUESTION_TURN,
   REPLY_ID,
   REPLY_PROMPT_ID,
   STARTED_AT,
@@ -42,10 +49,14 @@ import {
   THREAD_SESSION_ID,
   TOOK,
   TRUNK_ID,
+  announcementThread,
+  botAnnouncement,
+  botQuestion,
   botReply,
   buildScene,
   hostClientLocating,
   openedSessions,
+  scriptedSession,
   turnsAskedFor,
   type Scene,
 } from "@/components/bots/__tests__/bot-turn-test-support";
@@ -63,6 +74,9 @@ const mocks = vi.hoisted(() => ({
   locateSupported: true,
 }));
 
+vi.mock("@/hooks/host/use-host-directory-entry", () => ({
+  useHostDirectoryEntry: () => null,
+}));
 vi.mock("@/lib/registries/chat-session-registry", async (importOriginal) => ({
   ...(await importOriginal<
     typeof import("@/lib/registries/chat-session-registry")
@@ -91,6 +105,7 @@ vi.mock("@/hooks/host/use-host-supports-method", async (importOriginal) => ({
 vi.mock("@/components/epic-tabs/pane-visibility-context", () => ({
   usePaneVisible: () => true,
   usePaneFocused: () => true,
+  usePaneFocusProbe: () => () => true,
 }));
 vi.mock("@/hooks/bots/use-bot-conversation-list-query", () => ({
   useBotConversationListQuery: () => ({
@@ -242,19 +257,17 @@ describe("the receipt under a bot's reply", () => {
     expect(asked[0]).toMatchObject({ botId: BOT_ID, messageIds: [REPLY_ID] });
   });
 
-  it("is revealed on hover or focus of a fine pointer and never on a coarse one, for a settled turn", async () => {
+  it("is shown at rest for a settled turn: found with no hover or focus, and carrying no class that hides it", async () => {
     mountChannel(null);
 
     const receipt = await receiptIn(channelList());
 
     const classes = receipt.className.split(" ");
-    expect(classes).toContain("opacity-0");
-    expect(classes).toContain("group-hover/message:opacity-100");
-    expect(classes).toContain("focus-visible:opacity-100");
-    expect(classes).toContain("pointer-coarse:hidden");
+    expect(classes).not.toContain("opacity-0");
+    expect(classes).not.toContain("pointer-coarse:hidden");
   });
 
-  it("is always shown while the turn runs, saying only how long it has run", async () => {
+  it("says only how long it has run while the turn runs", async () => {
     scene.knownTurns = [
       {
         ...CHANNEL_REPLY_TURN,
@@ -269,8 +282,6 @@ describe("the receipt under a bot's reply", () => {
 
     expect(receipt.getAttribute("data-running")).toBe("true");
     expect(receipt.textContent).toMatch(/^1m \d+s$/);
-    expect(receipt.className).not.toContain("opacity-0");
-    expect(receipt.className).not.toContain("pointer-coarse:hidden");
   });
 
   it("settles into its summary and duration when the bot's activity says the turn ended", async () => {
@@ -351,6 +362,153 @@ describe("the receipt under a bot's reply", () => {
   });
 });
 
+describe("the receipt under the other rows a turn of the bot wrote", () => {
+  it("is drawn at rest under an announcement a turn wrote, asked by the announcement's id", async () => {
+    scene.knownTurns = [...scene.knownTurns, ANNOUNCEMENT_TURN];
+    scene.channel.setState({
+      messages: [
+        ...scene.channel.getState().messages,
+        botAnnouncement({
+          messageId: ANNOUNCEMENT_ID,
+          text: "Nightly triage now runs at 02:00",
+          timestamp: 2_500,
+        }),
+      ],
+    });
+    mountChannel(null);
+
+    const receipt = await within(
+      within(channelList()).getByTestId("bot-announcement"),
+    ).findByTestId("bot-turn-receipt");
+
+    expect(receipt.textContent).toBe(`${SUMMARY} · ${TOOK}`);
+    expect(receipt.className.split(" ")).not.toContain("opacity-0");
+    expect(asked[0].messageIds).toContain(ANNOUNCEMENT_ID);
+  });
+
+  it("is drawn under a question the bot asked, which the turn wrote", async () => {
+    scene.knownTurns = [...scene.knownTurns, QUESTION_TURN];
+    scene.channel.setState({
+      messages: [
+        ...scene.channel.getState().messages,
+        botQuestion({
+          messageId: QUESTION_ID,
+          timestamp: 2_500,
+          item: {
+            text: "Deploy now or after the train?",
+            options: ["Now", "After the train"],
+            allowFreeText: false,
+            settlement: null,
+          },
+        }),
+      ],
+    });
+    mountChannel(null);
+
+    await within(channelList()).findByTestId("question-card");
+    await waitFor(() => {
+      expect(
+        within(channelList()).getAllByTestId("bot-turn-receipt"),
+      ).toHaveLength(2);
+    });
+
+    const card = within(channelList()).getByTestId("question-card");
+    const row = card.closest('[data-testid="bot-reply-row"]');
+    if (!(row instanceof HTMLElement)) throw new Error("no question row");
+    expect(within(row).getByTestId("bot-turn-receipt").textContent).toBe(
+      `${SUMMARY} · ${TOOK}`,
+    );
+  });
+
+  it("is not drawn under an announcement the host posted itself, no turn having written it", async () => {
+    scene.channel.setState({
+      messages: [
+        ...scene.channel.getState().messages,
+        botAnnouncement({
+          messageId: HOST_ANNOUNCEMENT_ID,
+          text: "Release Bot was created",
+          timestamp: 2_500,
+        }),
+      ],
+    });
+    mountChannel(null);
+
+    const sibling = await receiptIn(channelList());
+    expect(sibling.textContent).toBe(`${SUMMARY} · ${TOOK}`);
+
+    const row = within(channelList()).getByTestId("bot-announcement");
+    expect(within(row).queryByTestId("bot-turn-receipt")).toBeNull();
+    expect(asked[0].messageIds).toContain(HOST_ANNOUNCEMENT_ID);
+  });
+});
+
+describe("the receipt under the bot's own post a thread opens on", () => {
+  /** The bot's announcement in the channel, with the turn that wrote it known to the host. */
+  function announcementPosted(): void {
+    scene.knownTurns = [...scene.knownTurns, ANNOUNCEMENT_TURN];
+    scene.channel.setState({
+      messages: [
+        ...scene.channel.getState().messages,
+        botAnnouncement({
+          messageId: ANNOUNCEMENT_ID,
+          text: "Nightly triage now runs at 02:00",
+          timestamp: 2_500,
+        }),
+      ],
+    });
+  }
+
+  const ANNOUNCEMENT_RAIL: BotOpenThread = {
+    anchorMessageId: ANNOUNCEMENT_ID,
+    announcement: true,
+    anchorKind: "message",
+    sent: null,
+  };
+
+  it("is drawn on the origin row of a thread whose post is the bot's announcement, and opens the turn landed on the announcement", async () => {
+    const user = userEvent.setup();
+    announcementPosted();
+    mocks.threads = [...scene.threads, announcementThread()];
+    mocks.sessions = {
+      ...scene.sessions,
+      [ANNOUNCEMENT_THREAD_ID]: scriptedSession(ANNOUNCEMENT_THREAD_ID, [])
+        .handle,
+    };
+    mountChannel(ANNOUNCEMENT_RAIL);
+
+    const receipt = await within(
+      await screen.findByRole("region", { name: "Thread" }),
+    ).findByRole("button", { name: `${SUMMARY} · ${TOOK}` });
+    expect(
+      asked.some((request) => request.messageIds.includes(ANNOUNCEMENT_ID)),
+    ).toBe(true);
+
+    await user.click(receipt);
+
+    expect(openedSessions).toEqual([
+      {
+        chatId: TRUNK_ID,
+        threadId: null,
+        messageId: ANNOUNCEMENT_PROMPT_ID,
+        sendPostId: ANNOUNCEMENT_ID,
+      },
+    ]);
+  });
+
+  it("is drawn on the origin row before anyone has replied, while the thread list has no thread for the announcement", async () => {
+    announcementPosted();
+    mountChannel(ANNOUNCEMENT_RAIL);
+
+    // Unopened: the box starts the thread.
+    await screen.findByRole("group", { name: "Reply in a new thread" });
+    const receipt = await within(
+      await screen.findByTestId("bot-thread-anchor"),
+    ).findByTestId("bot-turn-receipt");
+
+    expect(receipt.textContent).toBe(`${SUMMARY} · ${TOOK}`);
+  });
+});
+
 describe("a receipt opens its turn's session", () => {
   it("opens the trunk's session from a channel receipt, landed on the message that started the turn", async () => {
     const user = userEvent.setup();
@@ -408,11 +566,10 @@ describe("a receipt opens its turn's session", () => {
 });
 
 describe("a long press on a bot's reply on a touch screen", () => {
-  it("offers how the bot answered in a sheet whose choice opens the turn's session, with the hover receipt not shown", async () => {
+  it("offers how the bot answered in a sheet whose choice opens the turn's session", async () => {
     const user = userEvent.setup();
     mountChannel(null);
-    const receipt = await receiptIn(channelList());
-    expect(receipt.className.split(" ")).toContain("pointer-coarse:hidden");
+    await receiptIn(channelList());
     const row = within(channelList()).getByTestId("bot-reply-row");
 
     vi.useFakeTimers();

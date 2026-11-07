@@ -5,6 +5,7 @@ export * from "./agent-session-state";
 export * from "./asset-stream-schemas";
 export * from "./browser";
 export * from "./chat-fallback";
+export * from "./chat/feedback-draft";
 export * from "./chat/mcp-app";
 export * from "./chat-fork";
 export * from "./chat-search";
