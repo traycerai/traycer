@@ -277,6 +277,14 @@ export const SETTINGS_SEARCH_FIXTURES = [
         context: { ...NO_BRIDGES, soundtrackOffered: true, soundtrackOn: true },
       },
       {
+        name: "a desktop that can save a recording",
+        context: {
+          ...NO_BRIDGES,
+          soundtrackOffered: true,
+          soundtrackRecordingOffered: true,
+        },
+      },
+      {
         name: "the installed app, in a build with something to play",
         context: {
           ...NO_BRIDGES,

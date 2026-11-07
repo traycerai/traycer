@@ -23,6 +23,7 @@ import { LayoutSettingsPanel } from "@/components/settings/panels/layout-setting
 import { OpeningBehaviorPanel } from "@/components/settings/panels/opening-behavior-panel";
 import { PermissionsSettingsPanel } from "@/components/settings/panels/permissions-settings-panel";
 import { useSettingsAvailabilityContext } from "@/hooks/settings/use-settings-availability-context";
+import type { RecordingSaveChannel } from "@/lib/soundtrack/recording";
 import { setMobileApp, setPhoneLayoutOnly } from "@/lib/mobile-app";
 import type { SettingsAvailabilityContext } from "@/lib/settings/settings-availability";
 import { RunnerHostProvider } from "@/providers/runner-host-provider";
@@ -191,7 +192,7 @@ afterEach(() => {
   hostScopeState.current = null;
   setMobileApp(false);
   setPhoneLayoutOnly(false);
-  setFeatureSettingsBridge(null);
+  (globalThis as { runnerHost?: unknown }).runnerHost = undefined;
   vi.unstubAllEnvs();
   useSettingsStore.setState({ soundtrackEnabled: false });
   useLayoutStore.setState({ ...DEFAULT_LAYOUT_SNAPSHOT });
@@ -245,10 +246,10 @@ describe("settings search fixtures", () => {
 
 /**
  * Mounts `panel` in exactly the shell `context` describes: its runner host (or
- * none), the window-level feature-settings bridge, the mobile-app flag, whether
- * the phone layout is drawn (the installed app draws it at every width), and
- * whether the build has a soundtrack to play (a development build does) and
- * whether Music is on.
+ * none), the window-level feature-settings and recording bridges, the
+ * mobile-app flag, whether the phone layout is drawn (the installed app draws it
+ * at every width), and whether the build has a soundtrack to play (a development
+ * build does) and whether Music is on.
  */
 function mountInShell(
   context: SettingsAvailabilityContext,
@@ -257,7 +258,7 @@ function mountInShell(
 ): HTMLElement {
   setMobileApp(context.mobileApp);
   setPhoneLayoutOnly(context.phoneLayout);
-  setFeatureSettingsBridge(context.featureSettings);
+  setWindowBridges(context);
   if (context.soundtrackOffered) vi.stubEnv("MODE", "development");
   useSettingsStore.setState({ soundtrackEnabled: context.soundtrackOn });
   const queryClient = new QueryClient({
@@ -292,9 +293,23 @@ function ShellProbe(props: {
   return null;
 }
 
-function setFeatureSettingsBridge(
-  featureSettings: SettingsAvailabilityContext["featureSettings"],
-): void {
+const RECORDING_CHANNEL: RecordingSaveChannel = {
+  open: () => Promise.resolve({ kind: "refused" }),
+  append: () => Promise.resolve({ kind: "ok" }),
+  close: () => Promise.resolve({ kind: "ok" }),
+  reveal: () => Promise.resolve(false),
+  onFinishRequested: () => () => undefined,
+};
+
+function setWindowBridges(context: SettingsAvailabilityContext): void {
+  const { featureSettings, soundtrackRecordingOffered } = context;
   (globalThis as { runnerHost?: unknown }).runnerHost =
-    featureSettings === null ? undefined : { platform: { featureSettings } };
+    featureSettings === null && !soundtrackRecordingOffered
+      ? undefined
+      : {
+          platform: { featureSettings },
+          soundtrackRecording: soundtrackRecordingOffered
+            ? RECORDING_CHANNEL
+            : null,
+        };
 }
