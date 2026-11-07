@@ -21,8 +21,17 @@ import type {
 /** Sends the mix to `node` as well, until the answer is called. */
 export type MixTap = (node: AudioNode) => () => void;
 
-/** Calls `listener` just ahead of each start of the clock, until the answer is called. */
-export type ClockStarts = (listener: () => void) => () => void;
+/** What the ports have asked of the clock, which the context reports late. */
+export interface ClockRequests {
+  /**
+   * Whether the clock was last asked to stop. A `suspended` reported after a
+   * Play is out of date, though the state reads so until the device has
+   * started, by when frames are on their way.
+   */
+  stopAsked(): boolean;
+  /** Calls `listener` just ahead of each start, until the answer is called. */
+  onStart(listener: () => void): () => void;
+}
 
 const OPUS_MIME_TYPE = "audio/webm;codecs=opus";
 const OPUS_BITS_PER_SECOND = 128_000;
@@ -100,7 +109,7 @@ class OpusCapture implements MixCapture {
   readonly audioOffsetSeconds = OPUS_AUDIO_OFFSET_SECONDS;
   private readonly context: AudioContext;
   private readonly tap: MixTap;
-  private readonly clockStarts: ClockStarts;
+  private readonly clock: ClockRequests;
   private readonly destination: MediaStreamAudioDestinationNode;
   private readonly recorder: MediaRecorder;
   private disconnect: (() => void) | null = null;
@@ -114,10 +123,10 @@ class OpusCapture implements MixCapture {
   /** Reports the first frame, for a start the context has not run since. */
   private whenRunning: (() => void) | null = null;
 
-  constructor(context: AudioContext, tap: MixTap, clockStarts: ClockStarts) {
+  constructor(context: AudioContext, tap: MixTap, clock: ClockRequests) {
     this.context = context;
     this.tap = tap;
-    this.clockStarts = clockStarts;
+    this.clock = clock;
     this.sampleRate = context.sampleRate;
     this.destination = context.createMediaStreamDestination();
     this.destination.channelCount = CHANNELS;
@@ -157,7 +166,7 @@ class OpusCapture implements MixCapture {
     );
     const untap = this.tap(this.destination);
     const unkeep = keepRendering(this.context, this.destination);
-    const unlisten = this.clockStarts(this.resumeRecorder);
+    const unlisten = this.clock.onStart(this.resumeRecorder);
     this.context.addEventListener("statechange", this.followContext);
     this.disconnect = () => {
       untap();
@@ -212,12 +221,13 @@ class OpusCapture implements MixCapture {
 
   private readonly followContext = (): void => {
     const { state } = this.context;
-    if (state === "suspended" && this.recorder.state === "recording") {
-      this.recorder.pause();
+    if (state === "suspended") {
+      if (this.clock.stopAsked() && this.recorder.state === "recording") {
+        this.recorder.pause();
+      }
+      return;
     }
     if (state !== "running") return;
-    // Only a context that came back by some other way than `clockStarts`.
-    this.resumeRecorder();
     this.whenRunning?.();
     this.whenRunning = null;
   };
@@ -329,12 +339,10 @@ function loadPcmWorklet(context: AudioContext): Promise<void> {
 export async function openMixCapture(
   context: AudioContext,
   tap: MixTap,
-  clockStarts: ClockStarts,
+  clock: ClockRequests,
   quality: RecordingQuality,
 ): Promise<MixCapture> {
-  if (quality === "compressed") {
-    return new OpusCapture(context, tap, clockStarts);
-  }
+  if (quality === "compressed") return new OpusCapture(context, tap, clock);
   await loadPcmWorklet(context);
   return new PcmCapture(context, tap);
 }

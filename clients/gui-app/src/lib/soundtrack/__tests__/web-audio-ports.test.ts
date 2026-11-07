@@ -5,7 +5,7 @@
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { appLogger } from "@/lib/logger";
-import type { ClockStarts, MixTap } from "../mix-capture";
+import type { ClockRequests, MixTap } from "../mix-capture";
 import { MIX_TUNING } from "../mix-tuning";
 import type { MixCapture, RecordingQuality } from "../recording";
 import type { SoundtrackPorts } from "../session";
@@ -21,7 +21,7 @@ const capture = vi.hoisted(() => ({
       (
         context: AudioContext,
         tap: MixTap,
-        clockStarts: ClockStarts,
+        clock: ClockRequests,
         quality: RecordingQuality,
       ) => Promise<MixCapture>
     >(),
@@ -125,6 +125,7 @@ beforeEach(() => {
   FakeAudioContext.instances.length = 0;
   vi.stubGlobal("AudioContext", FakeAudioContext);
   onRefused.mockClear();
+  capture.opened.mockReset();
 });
 
 afterEach(() => {
@@ -228,14 +229,14 @@ describe("openWebAudioPorts pause", () => {
   });
 });
 
-describe("openWebAudioPorts clock starts", () => {
-  it("runs a capture's listeners ahead of the context's resume, and not after it unlistens", async () => {
+describe("openWebAudioPorts clock requests", () => {
+  it("runs a capture's start listeners ahead of the context's resume, and not after it unlistens", async () => {
     capture.opened.mockResolvedValue(NO_CAPTURE);
     const { ports, context } = openPorts();
     await ports.captureMix("compressed");
-    const clockStarts = capture.opened.mock.calls[0][2];
+    const clock = capture.opened.mock.calls[0][2];
     const listener = vi.fn<() => void>();
-    const unlisten = clockStarts(listener);
+    const unlisten = clock.onStart(listener);
 
     ports.pause();
     await advance(SUSPEND_AFTER_MS);
@@ -251,5 +252,22 @@ describe("openWebAudioPorts clock starts", () => {
     ports.resume(() => undefined);
     expect(listener).toHaveBeenCalledTimes(1);
     expect(context.resume).toHaveBeenCalledTimes(2);
+  });
+
+  it("asks for a stop only from the moment the suspend is issued until the resume", async () => {
+    capture.opened.mockResolvedValue(NO_CAPTURE);
+    const { ports, context } = openPorts();
+    await ports.captureMix("compressed");
+    const clock = capture.opened.mock.calls[0][2];
+    expect(clock.stopAsked()).toBe(false);
+
+    ports.pause();
+    expect(clock.stopAsked()).toBe(false);
+    await advance(SUSPEND_AFTER_MS);
+    expect(context.suspend).toHaveBeenCalledTimes(1);
+    expect(clock.stopAsked()).toBe(true);
+
+    ports.resume(() => undefined);
+    expect(clock.stopAsked()).toBe(false);
   });
 });
