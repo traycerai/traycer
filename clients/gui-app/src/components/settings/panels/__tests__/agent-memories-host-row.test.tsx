@@ -181,6 +181,98 @@ afterEach(() => {
 });
 
 describe("Agent memories ▸ the host row's write", () => {
+  it.each(["applied", "saved", "queued"] as const)(
+    "keeps the confirmed %s read when Settings reopens inside cache freshness",
+    async (state) => {
+      script.set = () =>
+        state === "queued"
+          ? queuedAnswer(UPLOAD)
+          : {
+              ...savedAnswer({ enabled: true, revision: 6 }),
+              state,
+            };
+      script.reads = [read(false, 5), read(true, 6)];
+      script.statuses = [
+        environmentStatusFixture({
+          acceptedUploads: [receipt({ revision: 6 })],
+        }),
+      ];
+      const harness = mountTeamPage({ kind: "host" }, handlers());
+      // Match production freshness and keep the entry across page navigation.
+      harness.queryClient.setDefaultOptions({
+        queries: { retry: false, staleTime: 60_000, gcTime: 300_000 },
+        mutations: { retry: false },
+      });
+      const view = render(<AgentMemoriesSettingsPanel />, {
+        wrapper: harness.Wrapper,
+      });
+      await flipOn();
+      await waitFor(() =>
+        expect(
+          screen
+            .getByRole("switch", {
+              name: "Use Traycer memories for agents",
+            })
+            .getAttribute("aria-checked"),
+        ).toBe("true"),
+      );
+      await waitFor(async () =>
+        expect(await line()).toContain("Running agents pick this up"),
+      );
+      const confirmedReads = harness.paramsOf(
+        "config.agentMemories.get",
+      ).length;
+      view.rerender(null);
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(1_000);
+      });
+      view.rerender(<AgentMemoriesSettingsPanel />);
+      await waitFor(() =>
+        expect(
+          screen
+            .getByRole("switch", {
+              name: "Use Traycer memories for agents",
+            })
+            .getAttribute("aria-checked"),
+        ).toBe("true"),
+      );
+      expect(harness.paramsOf("config.agentMemories.get").length).toBe(
+        confirmedReads,
+      );
+    },
+  );
+
+  it("refetches an unconfirmed write when reopening inside cache freshness", async () => {
+    const harness = mountTeamPage({ kind: "host" }, handlers());
+    harness.queryClient.setDefaultOptions({
+      queries: { retry: false, staleTime: 60_000, gcTime: 300_000 },
+      mutations: { retry: false },
+    });
+    const view = render(<AgentMemoriesSettingsPanel />, {
+      wrapper: harness.Wrapper,
+    });
+    await flipOn();
+    await waitFor(async () =>
+      expect(await line()).toContain("This host hasn't picked it up yet"),
+    );
+    const waitingReads = harness.paramsOf("config.agentMemories.get").length;
+    view.rerender(null);
+    script.reads = [read(true, 6)];
+    view.rerender(<AgentMemoriesSettingsPanel />);
+    await waitFor(() =>
+      expect(
+        screen
+          .getByRole("switch", {
+            name: "Use Traycer memories for agents",
+          })
+          .getAttribute("aria-checked"),
+      ).toBe("true"),
+    );
+    expect(harness.paramsOf("config.agentMemories.get").length).toBe(
+      waitingReads + 1,
+    );
+  });
+
   it.each([
     { name: "later writer", next: read(false, 7) },
     { name: "same-host environment change", next: readIn(OTHER_ENV, false, 2) },

@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState, type ReactNode } from "react";
+import { useQueryClient } from "@tanstack/react-query";
 import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
 import type { ConfigAgentMemoriesResponse } from "@traycer/protocol/host/config/schemas";
 import { Switch } from "@/components/ui/switch";
@@ -12,7 +13,10 @@ import { SettingsPanelShell } from "@/components/settings/settings-panel-shell";
 import { SettingsRow } from "@/components/settings/settings-row";
 import { useAddressableHostId } from "@/hooks/host/use-addressable-host-id";
 import { useHostMethodSupport } from "@/hooks/host/use-host-supports-method";
-import { useHostQuery } from "@/hooks/host/use-host-query";
+import {
+  useHostQuery,
+  useHostQueryEntryHash,
+} from "@/hooks/host/use-host-query";
 import { useHostScopedMutationForClient } from "@/hooks/host/use-host-scoped-mutation";
 import { trackSettingChanged } from "@/lib/analytics";
 import { configMutationKeys } from "@/lib/query-keys";
@@ -159,11 +163,28 @@ function hostRowStatus(input: {
  */
 function AgentMemoriesRow(): ReactNode {
   const client = useHostClient();
+  const queryClient = useQueryClient();
+  const entryHash = useHostQueryEntryHash({
+    cacheKeyIdentity: undefined,
+    client,
+    method: AGENT_MEMORIES_GET,
+    params: {},
+  });
   const setEnabled = useHostScopedMutationForClient(client, {
     method: AGENT_MEMORIES_SET,
     mutationKey: configMutationKeys.agentMemoriesSet(),
     errorMessage: "Couldn't update agent memories",
+    // The observer owns sequential confirmation reads. Mark this exact entry
+    // stale without launching a parallel fetch; reopening before confirmation
+    // must re-read even inside the normal cache freshness window.
     invalidateMethods: [],
+    captureContext: () => entryHash,
+    onSuccess: (_data, _variables, _hostId, capturedEntryHash) => {
+      void queryClient.invalidateQueries({
+        predicate: (entry) => entry.queryHash === capturedEntryHash,
+        refetchType: "none",
+      });
+    },
   });
   const query = useHostQuery<HostRpcRegistry, "config.agentMemories.get">({
     cacheKeyIdentity: undefined,
@@ -208,6 +229,17 @@ function AgentMemoriesRow(): ReactNode {
     let timer: number | null = null;
     let deadline: number | null = null;
     let latestRead = read;
+    let queryRead = query.data;
+    function cacheRead(): void {
+      // These are host-confirmed snapshots, not optimistic switch values.
+      // Share them with later mounts while retaining the terminal status until
+      // a subsequent real query replaces the published snapshot.
+      const entries = queryClient.setQueriesData<ConfigAgentMemoriesResponse>(
+        { predicate: (cached) => cached.queryHash === entryHash },
+        latestRead,
+      );
+      queryRead = entries.at(0)?.[1] ?? queryRead;
+    }
     function stop(): void {
       controller.abort();
       if (timer !== null) window.clearTimeout(timer);
@@ -227,7 +259,7 @@ function AgentMemoriesRow(): ReactNode {
       setObservation({
         client,
         hostId,
-        queryRead: query.data,
+        queryRead,
         active,
         read: latestRead,
         progress,
@@ -237,6 +269,10 @@ function AgentMemoriesRow(): ReactNode {
       show(progress, false);
       stop();
       if (observer.current === current) observer.current = null;
+    }
+    function finishAfterRead(progress: AgentMemoryWriteProgress): void {
+      if (progress.kind === "settled") cacheRead();
+      finish(progress);
     }
     show({ kind: "settled" }, true);
     // Armed at submission, independently of mutation and read completion.
@@ -269,7 +305,7 @@ function AgentMemoriesRow(): ReactNode {
               revision: answer.revision,
               environmentId: answer.environmentId,
             };
-            finish({ kind: "settled" });
+            finishAfterRead({ kind: "settled" });
             return;
           }
           if (answer.state === "saved" && answer.revision === null) {
@@ -293,7 +329,7 @@ function AgentMemoriesRow(): ReactNode {
                 latestRead.environmentId !== null &&
                 latestRead.environmentId !== answer.environmentId
               ) {
-                finish({ kind: "settled" });
+                finishAfterRead({ kind: "settled" });
                 return;
               }
               let queue;
@@ -321,7 +357,7 @@ function AgentMemoriesRow(): ReactNode {
                   latestRead.environmentId !== null &&
                   latestRead.environmentId !== answer.environmentId
                 ) {
-                  finish({ kind: "settled" });
+                  finishAfterRead({ kind: "settled" });
                   return;
                 }
                 const receipt = queue.acceptedUploads.find(
@@ -347,7 +383,7 @@ function AgentMemoriesRow(): ReactNode {
                 queue,
               });
               if (progress.kind !== "waiting" && progress.kind !== "queued") {
-                finish(progress);
+                finishAfterRead(progress);
                 return;
               }
               show(progress, true);
