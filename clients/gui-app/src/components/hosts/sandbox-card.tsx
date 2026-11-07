@@ -394,7 +394,11 @@ function SandboxFacts(props: {
       <dt className="text-muted-foreground">Idle policy</dt>
       <dd className="min-w-0 wrap-anywhere" data-testid="sandbox-card-idle">
         {sandboxIdleLine(summary, props.state)}
-        {keeps === null || summary.burst ? null : ` · ${keeps}`}
+        {/* What a suspend keeps: an Automations row is never suspended, and a
+            burst row is destroyed instead. */}
+        {keeps === null || summary.burst || summary.kind === "automation"
+          ? null
+          : ` · ${keeps}`}
       </dd>
       <dt className="text-muted-foreground">Last active</dt>
       <dd data-testid="sandbox-card-last-active">

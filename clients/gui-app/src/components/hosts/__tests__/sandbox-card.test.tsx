@@ -632,6 +632,14 @@ describe("<SandboxCard /> per state", () => {
     expect(screen.getByTestId("sandbox-card-idle").textContent).not.toContain(
       "keeps memory",
     );
+    cleanup();
+    // An Automations row is released, never suspended.
+    renderCard(
+      sandboxOf("released", false, { burst: false, kind: "automation" }),
+    );
+    expect(screen.getByTestId("sandbox-card-idle").textContent).toBe(
+      "Stops after 30 min idle",
+    );
   });
 
   it("reads what a suspend keeps from the catalogue entry of the sandbox's own OS", () => {
