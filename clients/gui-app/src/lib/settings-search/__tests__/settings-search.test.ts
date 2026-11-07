@@ -512,6 +512,28 @@ describe("settings search", () => {
       },
     );
 
+    it.each(["playback", "controls"])(
+      "finds the Playback controls row under %s only while Music is on",
+      (query) => {
+        const anchorOf = (context: SettingsAvailabilityContext) =>
+          searchSettings(query, context).filter(
+            (result) =>
+              result.entry.anchor === "sounds-soundtrack-playback-controls",
+          );
+        const musicOn = {
+          ...DESKTOP,
+          soundtrackOffered: true,
+          soundtrackOn: true,
+        };
+
+        expect(anchorOf(musicOn).map((hit) => hit.entry.section)).toEqual([
+          "app-notifications",
+        ]);
+        expect(anchorOf({ ...musicOn, soundtrackOn: false })).toEqual([]);
+        expect(anchorOf({ ...musicOn, soundtrackOffered: false })).toEqual([]);
+      },
+    );
+
     it("offers the phone's push row on mobile and withholds it on desktop", () => {
       expect(labelsFor("push notifications", MOBILE)).toContain(
         "Push notifications",

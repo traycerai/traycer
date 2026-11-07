@@ -46,9 +46,9 @@ function EpicPlaybackControlsBody(): ReactNode {
     return null;
   }
   return (
-    // 34rem is the row at its fullest: the pill's longest label and every other
-    // item beside these. The row keeps one shape whatever the pill is saying, so
-    // the buttons leave at that width and do not come and go with its label.
+    // 34rem of content is the row at its fullest: the pill's longest label and
+    // every other item beside these. The row keeps one shape whatever the pill is
+    // saying, so the buttons leave below that and do not come and go with it.
     <div className="flex items-center gap-1.5 @max-[34rem]:hidden">
       <PlaybackButton
         label="Previous track"
