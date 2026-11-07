@@ -1,5 +1,5 @@
 import { useConfigurationKey } from "@/components/settings/environment/use-configuration-key";
-import { useState, type ReactNode } from "react";
+import { useId, useState, type ReactNode } from "react";
 import { MoreHorizontal } from "lucide-react";
 import {
   DropdownMenu,
@@ -589,6 +589,7 @@ function SharedMcpToolInventory(props: {
   readonly onIssue: (issue: ConfigurationWriteIssue) => void;
   readonly lists: readonly ToolListQuery[];
 }): ReactNode {
+  const mixedDescriptionId = useId();
   const source = useConfigurationSource();
   const { putItem } = useConfigurationMcpServerMutations();
   const item = props.server.item;
@@ -671,18 +672,22 @@ function SharedMcpToolInventory(props: {
         const enabled = states.every((state) => state.enabled);
         const mixed = !enabled && states.some((state) => state.enabled);
         const differs = mixed || states.length !== props.providers.length;
+        const descriptionId = `${mixedDescriptionId}-${encodeURIComponent(name)}`;
         return (
           <div key={name} className="flex flex-col gap-1">
             <div className="flex items-start justify-between gap-3">
               <span className="min-w-0 wrap-anywhere text-ui-sm">{name}</span>
               {mixed ? (
-                <span className="ml-auto text-ui-xs text-muted-foreground">
+                <span
+                  id={descriptionId}
+                  className="ml-auto text-ui-xs text-muted-foreground"
+                >
                   Mixed
                 </span>
               ) : null}
               <Switch
                 aria-label={`${props.server.name} ${name}`}
-                aria-checked={mixed ? "mixed" : enabled}
+                aria-describedby={mixed ? descriptionId : undefined}
                 checked={enabled}
                 disabled={!props.canEdit || putItem.isPending || !ready}
                 onCheckedChange={(next) =>

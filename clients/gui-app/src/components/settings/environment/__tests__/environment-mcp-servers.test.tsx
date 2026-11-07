@@ -457,19 +457,18 @@ describe("The MCP servers page", () => {
 
     const sharedSearch = await screen.findByRole("switch", {
       name: "github search",
+      description: "Mixed",
     });
-    expect(sharedSearch.getAttribute("aria-checked")).toBe("mixed");
+    expect(sharedSearch.getAttribute("aria-checked")).toBe("false");
     await userEvent.click(screen.getByText("Differs by provider"));
-    expect(
-      (
-        await screen.findByRole("switch", { name: "github Codex search" })
-      ).getAttribute("aria-checked"),
-    ).toBe("false");
-    expect(
-      screen
-        .getByRole("switch", { name: "github open" })
-        .getAttribute("aria-checked"),
-    ).toBe("true");
+    const codexSearch = await screen.findByRole("switch", {
+      name: "github Codex search",
+    });
+    expect(codexSearch.getAttribute("aria-describedby")).toBeNull();
+    expect(codexSearch.getAttribute("aria-checked")).toBe("false");
+    const ordinaryOpen = screen.getByRole("switch", { name: "github open" });
+    expect(ordinaryOpen.getAttribute("aria-describedby")).toBeNull();
+    expect(ordinaryOpen.getAttribute("aria-checked")).toBe("true");
     expect(screen.getAllByRole("switch", { name: "github open" })).toHaveLength(
       1,
     );
@@ -508,7 +507,7 @@ describe("The MCP servers page", () => {
     const sharedSwitch = await screen.findByRole("switch", {
       name: "github search",
     });
-    expect(sharedSwitch.getAttribute("aria-checked")).toBe("mixed");
+    expect(sharedSwitch.getAttribute("aria-checked")).toBe("false");
     expect(
       screen.getAllByRole("switch", { name: "github search" }),
     ).toHaveLength(1);
