@@ -27,6 +27,7 @@ export const LINK_FAILED = "Couldn't link this profile.";
 export const LINK_PASTE_WHOLE_CODE = "Paste the whole code claude.ai shows.";
 export const LINK_NO_SIGN_IN =
   "Sign in to this profile on this computer first, then link it.";
+const LINK_ADD_AGAIN = "Add this profile again to continue.";
 
 export function onHostOnlyLine(hostName: string): string {
   return `On ${hostName} only.`;
@@ -156,7 +157,12 @@ export function stateOfLinkComplete(
     default:
       return {
         kind: "failed",
-        line: response.code === "no_sign_in" ? LINK_NO_SIGN_IN : LINK_FAILED,
+        line:
+          response.code === "unverifiable"
+            ? LINK_ADD_AGAIN
+            : response.code === "no_sign_in"
+              ? LINK_NO_SIGN_IN
+              : LINK_FAILED,
       };
   }
 }

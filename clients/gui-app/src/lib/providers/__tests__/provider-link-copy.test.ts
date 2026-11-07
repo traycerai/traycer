@@ -182,6 +182,17 @@ describe("stateOfLinkError", () => {
 });
 
 describe("stateOfLinkComplete", () => {
+  it("asks to add the profile again when an older handoff cannot be verified", () => {
+    expect(
+      stateOfLinkComplete(
+        { kind: "linking", linkId: "older-handoff" },
+        completeResponse({ state: "failed", code: "unverifiable" }),
+      ),
+    ).toStrictEqual({
+      kind: "failed",
+      line: "Add this profile again to continue.",
+    });
+  });
   it("keeps the account on linked", () => {
     expect(
       stateOfLinkComplete(
