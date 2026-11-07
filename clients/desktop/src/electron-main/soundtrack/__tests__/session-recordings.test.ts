@@ -571,6 +571,9 @@ describe("SessionRecordings: who is recording", () => {
 
     const openGate = Promise.withResolvers<void>();
     disk.openGate = openGate.promise;
+    // Set before the files open: only a handle opened with it set waits on it.
+    const writeGate = Promise.withResolvers<void>();
+    disk.writeGate = writeGate.promise;
     const opening = store.openRecording(OWNER, { quality: "compressed" });
     expect(store.ownersRecording()).toEqual([OWNER]);
     const order: string[] = [];
@@ -586,21 +589,25 @@ describe("SessionRecordings: who is recording", () => {
     expect(order).toEqual(["opened", "settled"]);
     expect(store.ownersRecording()).toEqual([OWNER]);
 
-    const writeGate = Promise.withResolvers<void>();
-    disk.writeGate = writeGate.promise;
     const written = store.append(OWNER, "rec-1", "audio", new Uint8Array(1));
     const closing = store.close(OWNER, "rec-1", null);
-    expect(store.ownersRecording()).toEqual([OWNER]);
     let settled = false;
     const settling = store.settled([OWNER]).then(() => {
       settled = true;
     });
-    // Another window's wait does not wait on this one's disk.
-    await store.settled([OWNER + 1]);
-    await new Promise((resolve) => setImmediate(resolve));
-    expect(settled).toBe(false);
-
-    writeGate.resolve();
+    try {
+      // The close is queued behind a write the disk is holding.
+      await vi.waitFor(() => {
+        expect(disk.writesAtGate).toBe(1);
+      });
+      expect(store.ownersRecording()).toEqual([OWNER]);
+      // Another window's wait does not wait on this one's disk.
+      await store.settled([OWNER + 1]);
+      await new Promise((resolve) => setImmediate(resolve));
+      expect(settled).toBe(false);
+    } finally {
+      writeGate.resolve();
+    }
     await written;
     await closing;
     await settling;
