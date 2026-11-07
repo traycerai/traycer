@@ -413,6 +413,64 @@ export type ConfigBrowserSetResponse = z.infer<
 >;
 
 /**
+ * Reads whether the configuration this host runs lets its agents take part in
+ * its shared memories. Unlike the switches above this is not machine-global:
+ * it belongs to the configuration, so the answer is about the one the host
+ * serves now, and a host serving none answers `false`.
+ */
+export const configAgentMemoriesGetRequestSchema = emptyRequestSchema;
+export type ConfigAgentMemoriesGetRequest = z.infer<
+  typeof configAgentMemoriesGetRequestSchema
+>;
+
+export const configAgentMemoriesResponseSchema = lazySchema(() =>
+  z.object({
+    enabled: z.boolean(),
+  }),
+);
+export type ConfigAgentMemoriesResponse = z.infer<
+  typeof configAgentMemoriesResponseSchema
+>;
+
+/**
+ * Turns shared memories for the configuration's agents on or off. The write
+ * goes to the configuration, which authorizes it; a refusal, a stale row or a
+ * held edit is an error, never a response.
+ */
+export const configAgentMemoriesSetRequestSchema = lazySchema(() =>
+  z.object({
+    enabled: z.boolean(),
+  }),
+);
+export type ConfigAgentMemoriesSetRequest = z.infer<
+  typeof configAgentMemoriesSetRequestSchema
+>;
+
+/**
+ * What the host reads back for the configuration the write was addressed to.
+ *
+ * `enabled` is that configuration's setting as this host reads it, never
+ * another's: a host that has moved to a different configuration answers
+ * `false`, the behaviour its agents have.
+ *
+ * `settled` says whether that read is yet the state the call asked for.
+ * `true` means this host now reads what was asked and its agents behave
+ * accordingly. `false` means the change is on its way but not here - queued
+ * with no connection, or committed and not yet received - or the host moved
+ * on; the caller reads back later rather than treating the write as in force.
+ * It is a statement about what this host reads, not a receipt for the write.
+ */
+export const configAgentMemoriesSetResponseSchema = lazySchema(() =>
+  z.object({
+    enabled: z.boolean(),
+    settled: z.boolean(),
+  }),
+);
+export type ConfigAgentMemoriesSetResponse = z.infer<
+  typeof configAgentMemoriesSetResponseSchema
+>;
+
+/**
  * Reads the machine-user-global policy for worktrees agents create. Like the
  * browser switch it is not keyed by host id or deploy slot: the file is one per
  * OS user, so the answer covers every host environment that user runs on this

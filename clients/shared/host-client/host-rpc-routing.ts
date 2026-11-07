@@ -384,6 +384,8 @@ export const HOST_UNARY_RPC_ROUTES = {
   "comments.setThreadStatus": "target-host",
   "config.browser.get": "target-host",
   "config.browser.set": "target-host",
+  "config.agentMemories.get": "target-host",
+  "config.agentMemories.set": "target-host",
   "config.catalog.get": "target-host",
   "config.catalog.set": "target-host",
   "config.env.delete": "target-host",

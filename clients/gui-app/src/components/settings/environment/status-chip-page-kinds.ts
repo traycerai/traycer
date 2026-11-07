@@ -5,6 +5,7 @@ const ADDITIONAL_PAGE_KINDS: Readonly<
   Partial<Record<SettingsSectionId, ReadonlySet<string>>>
 > = {
   permissions: new Set(["auto_policy", "browser_agent_access"]),
+  "agent-memories": new Set(["agent_memory"]),
   secrets: new Set(["secret"]),
   members: new Set(["member"]),
 };

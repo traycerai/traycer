@@ -893,7 +893,8 @@ Account; the rest is the app itself.
   and Delete account on mobile. Read through the window's own host, never
   through the picker.
 - **Environment** (group id `personal`) - Providers, MCP servers, Skills,
-  Permissions, Agents (id `agents`: tabs Selection guide and Definitions),
+  Permissions, Agent memories (id `agent-memories`), Agents (id `agents`:
+  tabs Selection guide and Definitions),
   Model routing, Variables & shells (id `shell`), Secrets, Sandboxes, and
   Members on a team; a Local row shows only Providers, Permissions, Agents,
   Model routing, Variables & shells and Secrets. Browser agent access is the
@@ -904,6 +905,20 @@ Account; the rest is the app itself.
   Permissions (`RETIRED_SECTION_REPLACEMENTS`, and their routes). These pages
   read through the window's own host (`usePersonalHostScope()`), never
   through the picker.
+  - **Agent memories** is one switch: whether the configuration's agents are
+    shown its shared memories and keep them current (`agent_memory`, key
+    `memory`). Its own page rather than a Permissions tab, because
+    Permissions is what an agent may do inside a task and this is what it
+    carries between tasks. Read from the configuration on its own pages and
+    from `config.agentMemories.get` otherwise, the same two sources as
+    Browser agent access; the switch sits behind `useHostMethodSupport` on
+    both `config.agentMemories.get` and `.set`, so a host that cannot honour
+    it shows a disabled row rather than a flip that fails. Editing follows
+    the configuration's own authority (`useCanEditConfiguration()`), which is
+    what the item-write route enforces; a viewer reads On/Off as text.
+    `.set` answers `{enabled, settled}`, and `settled: false` means the write
+    reached the configuration but this host has not read it back yet - the
+    row says so rather than letting the switch snap back unexplained.
 - **Host** - headed by THE host picker (`host-scope/host-switcher.tsx`).
   Everything under it - Overview, Worktrees, Diagnostics - is scoped by that
   one selection.
