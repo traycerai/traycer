@@ -155,14 +155,12 @@ export function stateOfLinkComplete(
       }
       return current;
     default:
+      if (response.code === "unverifiable") {
+        return { kind: "failed", line: LINK_ADD_AGAIN };
+      }
       return {
         kind: "failed",
-        line:
-          response.code === "unverifiable"
-            ? LINK_ADD_AGAIN
-            : response.code === "no_sign_in"
-              ? LINK_NO_SIGN_IN
-              : LINK_FAILED,
+        line: response.code === "no_sign_in" ? LINK_NO_SIGN_IN : LINK_FAILED,
       };
   }
 }
