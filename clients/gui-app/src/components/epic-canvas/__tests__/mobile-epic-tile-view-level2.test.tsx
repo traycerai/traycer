@@ -189,6 +189,7 @@ vi.mock("@/components/epic-canvas/mobile/switcher-panel-embed", () => ({
   SwitcherPanelEmbed: () => null,
 }));
 
+// File Tree is off in the shipped layout, so the switcher does not list it.
 const CATEGORY_TABS = [
   "mobile-switcher-tab-chats",
   "mobile-switcher-tab-artifacts",
@@ -197,7 +198,6 @@ const CATEGORY_TABS = [
   "mobile-switcher-tab-simulators",
   "mobile-switcher-tab-git-diff",
   "mobile-switcher-tab-pull-requests",
-  "mobile-switcher-tab-file-tree",
   "mobile-switcher-tab-sharing",
   "mobile-switcher-tab-comments",
 ];

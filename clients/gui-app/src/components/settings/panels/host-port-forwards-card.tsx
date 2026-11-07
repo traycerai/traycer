@@ -30,7 +30,7 @@ import {
 } from "@/hooks/port-forward/use-port-forward-mutations";
 
 function connectionsLabel(open: number): string {
-  return open === 1 ? "1 open connection" : `${open} open connections`;
+  return open === 1 ? "1 connection" : `${open} connections`;
 }
 
 /**
@@ -97,6 +97,7 @@ export function HostPortForwardsCard(props: {
             key={forward.forwardId}
             forward={forward}
             machine={machine}
+            thisHostId={props.hostId}
             pending={stoppingForwardId === forward.forwardId}
             disabled={stop.isPending}
             onStop={() => {
@@ -358,8 +359,14 @@ type OwnedForwardPresentation = {
   readonly stateVariant: "success" | "warning" | "info" | "muted";
   /** The port badge. A listener that is not bound yet is not offered as one. */
   readonly portLabel: string;
-  readonly detail: string;
+  /** One direction line, with the open-connection count. Null until traffic flows. */
+  readonly direction: string | null;
+  /** Why a forward is not carrying traffic, when that is a separate fact. */
+  readonly note: string | null;
   readonly action: "Stop" | "Clear";
+  readonly endpoints: string | null;
+  readonly received: string | null;
+  readonly sent: string | null;
 };
 
 /**
@@ -369,68 +376,118 @@ type OwnedForwardPresentation = {
  * for a port and holds nothing yet, so its requested port is shown as a
  * request, not as somewhere to point a browser; a stopped one is a record
  * waiting for its release to be answered, with nothing to stop.
+ *
+ * Endpoints and byte counters sit in the row's Details. The row itself is the
+ * name, the port, the state, and one direction line.
  */
 function presentOwnedForward(
   forward: OwnedPortForward,
   machine: (hostId: string) => string,
+  thisHostId: string | null,
 ): OwnedForwardPresentation {
-  const route = `${machine(forward.listen.hostId)}:${forward.listen.boundPort ?? forward.listen.requestedPort} → ${machine(forward.target.hostId)}:${forward.target.port}`;
+  const endpoints = endpointLine(forward, machine);
+  const portLabel = `:${forward.listen.boundPort ?? forward.listen.requestedPort}`;
   switch (forward.state) {
     case "active":
       return {
         stateLabel: "Forwarding",
         stateVariant: "success",
-        portLabel: `:${forward.listen.boundPort ?? forward.listen.requestedPort}`,
-        detail: `${route} · ${connectionsLabel(forward.counters.openConnections)} · ${formatByteSize(forward.counters.bytesIn)} in · ${formatByteSize(forward.counters.bytesOut)} out`,
+        portLabel,
+        direction: ownedDirection(forward, thisHostId, machine),
+        note: null,
         action: "Stop",
+        endpoints,
+        received: formatByteSize(forward.counters.bytesIn),
+        sent: formatByteSize(forward.counters.bytesOut),
       };
     case "interrupted":
       return {
         stateLabel: "Interrupted",
         stateVariant: "warning",
-        portLabel: `:${forward.listen.boundPort ?? forward.listen.requestedPort}`,
-        detail: `${route} · ${forward.stateReason ?? "interrupted"}`,
+        portLabel,
+        direction: null,
+        note: forward.stateReason ?? "interrupted",
         action: "Clear",
+        endpoints,
+        received: null,
+        sent: null,
       };
     case "binding":
       return {
         stateLabel: "Starting",
         stateVariant: "info",
         portLabel: `requested :${forward.listen.requestedPort}`,
-        detail: `Asking ${machine(forward.listen.hostId)} for port ${forward.listen.requestedPort} to reach ${machine(forward.target.hostId)}:${forward.target.port}. Nothing is listening yet.`,
+        direction: null,
+        note: "Nothing is listening yet",
         action: "Stop",
+        endpoints,
+        received: null,
+        sent: null,
       };
     case "stopped":
       return {
         stateLabel: "Stopped",
         stateVariant: "muted",
-        portLabel: `:${forward.listen.boundPort ?? forward.listen.requestedPort}`,
-        detail: `${route} · ${forward.stateReason ?? "stopped"}`,
+        portLabel,
+        direction: null,
+        note: forward.stateReason ?? "stopped",
         action: "Clear",
+        endpoints,
+        received: null,
+        sent: null,
       };
   }
   const unreachableState: never = forward.state;
   return unreachableState;
 }
 
+function ownedDirection(
+  forward: OwnedPortForward,
+  thisHostId: string | null,
+  machine: (hostId: string) => string,
+): string {
+  const listenHere =
+    thisHostId !== null && forward.listen.hostId === thisHostId;
+  const targetHere =
+    thisHostId !== null && forward.target.hostId === thisHostId;
+  const connections = connectionsLabel(forward.counters.openConnections);
+  if (listenHere && targetHere) return `On this host · ${connections}`;
+  if (listenHere) {
+    return `To ${machine(forward.target.hostId)} · ${connections}`;
+  }
+  if (targetHere) {
+    return `From ${machine(forward.listen.hostId)} · ${connections}`;
+  }
+  return `From ${machine(forward.listen.hostId)} to ${machine(forward.target.hostId)} · ${connections}`;
+}
+
+function endpointLine(
+  forward: OwnedPortForward,
+  machine: (hostId: string) => string,
+): string {
+  const listenPort = forward.listen.boundPort ?? forward.listen.requestedPort;
+  return `${machine(forward.listen.hostId)}:${listenPort} → ${machine(forward.target.hostId)}:${forward.target.port}`;
+}
+
 function OwnedForwardRow(props: {
   readonly forward: OwnedPortForward;
   readonly machine: (hostId: string) => string;
+  readonly thisHostId: string | null;
   readonly pending: boolean;
   readonly disabled: boolean;
   readonly onStop: () => void;
 }): ReactNode {
   const { forward } = props;
-  const shown = presentOwnedForward(forward, props.machine);
+  const shown = presentOwnedForward(forward, props.machine, props.thisHostId);
   return (
     <li
-      className="flex min-w-0 items-center gap-3 px-3 py-2"
+      className="flex min-w-0 flex-wrap items-start gap-3 px-3 py-2"
       data-testid={`host-port-forward-owned-${forward.forwardId}`}
       data-state={forward.state}
     >
-      <div className="flex min-w-0 flex-1 flex-col gap-0.5">
+      <div className="flex min-w-0 flex-1 basis-48 flex-col gap-0.5">
         <div className="flex min-w-0 flex-wrap items-center gap-1.5">
-          <span className="min-w-0 truncate text-ui-sm text-foreground">
+          <span className="min-w-0 wrap-anywhere text-ui-sm text-foreground">
             {forward.description}
           </span>
           <Badge variant="muted" size="xs">
@@ -440,15 +497,28 @@ function OwnedForwardRow(props: {
             {shown.stateLabel}
           </Badge>
         </div>
-        <span className="min-w-0 break-words text-ui-xs text-muted-foreground">
-          {shown.detail}
-        </span>
+        {shown.direction === null ? null : (
+          <span className="min-w-0 break-words text-ui-xs text-muted-foreground">
+            {shown.direction}
+          </span>
+        )}
+        {shown.note === null ? null : (
+          <span className="min-w-0 break-words text-ui-xs text-muted-foreground">
+            {shown.note}
+          </span>
+        )}
+        <ForwardDetails
+          testId={`host-port-forward-owned-details-${forward.forwardId}`}
+          endpoints={shown.endpoints}
+          received={shown.received}
+          sent={shown.sent}
+        />
       </div>
       <Button
         type="button"
         variant="outline"
         size="xs"
-        className="shrink-0"
+        className="max-w-full shrink-0"
         disabled={props.disabled}
         data-testid={`host-port-forward-stop-${forward.forwardId}`}
         onClick={props.onStop}
@@ -466,6 +536,48 @@ function OwnedForwardRow(props: {
   );
 }
 
+function ForwardDetails(props: {
+  readonly testId: string;
+  readonly endpoints: string | null;
+  readonly received: string | null;
+  readonly sent: string | null;
+}): ReactNode {
+  if (
+    props.endpoints === null &&
+    props.received === null &&
+    props.sent === null
+  ) {
+    return null;
+  }
+  return (
+    <details className="min-w-0" data-testid={props.testId}>
+      <summary className="cursor-pointer text-ui-xs text-muted-foreground">
+        Details
+      </summary>
+      <dl className="mt-1 flex min-w-0 flex-col gap-1 text-ui-xs text-muted-foreground">
+        {props.endpoints === null ? null : (
+          <div className="min-w-0">
+            <dt>Endpoints</dt>
+            <dd className="break-words">{props.endpoints}</dd>
+          </div>
+        )}
+        {props.received === null ? null : (
+          <div className="min-w-0">
+            <dt>Received</dt>
+            <dd className="break-words">{props.received}</dd>
+          </div>
+        )}
+        {props.sent === null ? null : (
+          <div className="min-w-0">
+            <dt>Sent</dt>
+            <dd className="break-words">{props.sent}</dd>
+          </div>
+        )}
+      </dl>
+    </details>
+  );
+}
+
 function HeldLeaseRow(props: {
   readonly lease: HeldPortForwardLease;
   readonly machine: (hostId: string) => string;
@@ -475,26 +587,22 @@ function HeldLeaseRow(props: {
   const { lease, machine } = props;
   return (
     <li
-      className="flex min-w-0 items-center gap-3 px-3 py-2"
+      className="flex min-w-0 flex-wrap items-start gap-3 px-3 py-2"
       data-testid={`host-port-forward-held-${lease.leaseId}`}
     >
-      <div className="flex min-w-0 flex-1 flex-col gap-0.5">
+      <div className="flex min-w-0 flex-1 basis-48 flex-col gap-0.5">
         <div className="flex min-w-0 flex-wrap items-center gap-1.5">
-          <span className="min-w-0 truncate text-ui-sm text-foreground">
+          <span className="min-w-0 wrap-anywhere text-ui-sm text-foreground">
             {lease.description}
           </span>
           <Badge variant="muted" size="xs">
             :{lease.port}
           </Badge>
-          <Badge variant="info" size="xs">
-            {lease.role === "listen" ? "Listening for" : "Reached by"}{" "}
-            {machine(lease.ownerHostId)}
-          </Badge>
         </div>
         <span className="min-w-0 break-words text-ui-xs text-muted-foreground">
           {lease.role === "listen"
-            ? `This port is open here and carries traffic to ${machine(lease.ownerHostId)}.`
-            : `${machine(lease.ownerHostId)} reaches this port through a forward.`}
+            ? `To ${machine(lease.ownerHostId)}`
+            : `From ${machine(lease.ownerHostId)}`}
           {" · "}
           {connectionsLabel(lease.openConnections)}
         </span>
@@ -503,7 +611,7 @@ function HeldLeaseRow(props: {
         type="button"
         variant="outline"
         size="xs"
-        className="shrink-0"
+        className="max-w-full shrink-0"
         disabled={props.disabled}
         data-testid={`host-port-forward-cut-${lease.leaseId}`}
         onClick={props.onCut}

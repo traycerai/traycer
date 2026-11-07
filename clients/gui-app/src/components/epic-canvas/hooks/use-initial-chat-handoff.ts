@@ -1,3 +1,4 @@
+import type { NestedFocusProvenance } from "@/lib/epic-nested-focus-navigation";
 import { useEffect, useMemo, useRef } from "react";
 import { v4 as uuidv4 } from "uuid";
 import { displayTitle } from "@/lib/display-title";
@@ -296,7 +297,10 @@ interface CanvasHandoffTransitionInput {
   readonly handoffStatus: InitialChatHandoff["status"] | null;
   readonly handoffPlacement: ExplicitTilePlacement | null;
   readonly markArtifactPendingCreate: (artifactId: string) => void;
-  readonly openTile: (intent: TileOpenIntent) => void;
+  readonly openTile: (
+    intent: TileOpenIntent,
+    provenance: NestedFocusProvenance,
+  ) => void;
   readonly openedChatIdRef: { current: string | null };
   readonly markedChatIdRef: { current: string | null };
   readonly projectedChatId: string | null;
@@ -368,15 +372,24 @@ function runCanvasHandoffTransition(input: CanvasHandoffTransitionInput): void {
       placement === null || tabContainsPane(input.tabId, placement.paneId)
         ? placement
         : null;
-    input.openTile({
-      node,
-      target: { tabId: input.tabId },
-      gesture: "explicit",
-      modifiers: null,
-      placement: effectivePlacement,
-      dedupe: true,
-      source: "direct_ui",
-    });
+    input.openTile(
+      {
+        node,
+        target: { tabId: input.tabId },
+        gesture: "explicit",
+        modifiers: null,
+        placement: effectivePlacement,
+        dedupe: true,
+        source: "direct_ui",
+      },
+      // Automatic, though it surfaces a chat the person created: this effect
+      // re-runs on a RELOAD, where the ref that suppresses a duplicate starts
+      // empty and nobody has just acted. The person's gesture was the compose;
+      // by the time this surfaces the chat it is no longer evidence that they
+      // are acting now, and treating a reload as a gesture would retire an
+      // artifact request they are still waiting on.
+      "automatic",
+    );
   }
   if (input.projectedChatId === null) {
     input.markArtifactPendingCreate(input.handoffChatId);
@@ -414,10 +427,7 @@ function epicReady(
   permissionRole: PermissionRole | null,
 ): boolean {
   return (
-    snapshotLoaded &&
-    connectionStatus === "open" &&
-    permissionRole !== null &&
-    permissionRole !== "viewer"
+    snapshotLoaded && connectionStatus === "open" && permissionRole !== null
   );
 }
 

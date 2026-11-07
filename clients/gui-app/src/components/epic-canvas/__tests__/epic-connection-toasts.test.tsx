@@ -233,7 +233,7 @@ describe("<EpicConnectionToasts />", () => {
     expect(sonner.warning).not.toHaveBeenCalled();
   });
 
-  it("preserves the viewer downgrade warning and fresh-snapshot rebind", async () => {
+  it("keeps unsynced edits and the open stream across an owner to editor move", async () => {
     const streams = installControlledFactory();
     renderToasts();
 
@@ -246,12 +246,9 @@ describe("<EpicConnectionToasts />", () => {
       expect(handle.store.getState().permissionRole).toBe("owner");
     });
 
-    // The replica REPLACEMENT is observed through `bindingVersion`, not by
-    // comparing `Y.Doc` references: the doc lives on the worker thread now and
-    // main has no reference to compare. `bindingVersion` IS the binding epoch
-    // the runtime advances when it swaps a replica, and it is what production
-    // consumers remount on - so this asserts the same event through the
-    // channel that still carries it.
+    // A replica REPLACEMENT would show in `bindingVersion`, the binding epoch
+    // the runtime advances when it swaps a replica (the doc lives on the
+    // worker thread, so main has no `Y.Doc` reference to compare).
     const originalBinding = handle.store.getState().bindingVersion;
 
     // A real local edit, through the root-state port. `applyLocalUpdate` is
@@ -267,19 +264,21 @@ describe("<EpicConnectionToasts />", () => {
     expect(handle.store.getState().unsyncedQueueSize).toBe(1);
 
     act(() => {
-      streams[0].callbacks.onPermissionChanged("viewer");
+      streams[0].callbacks.onPermissionChanged("editor");
     });
 
     await waitFor(() => {
-      expect(sonner.warning).toHaveBeenCalledWith(
-        "Your role on this Epic is now Viewer. Pending edits were discarded.",
+      expect(sonner.info).toHaveBeenCalledWith(
+        "Your role on this Epic is now Editor.",
         { id: "epic-role:epic-role-toast", cancel: null },
       );
     });
-    expect(handle.store.getState().unsyncedQueueSize).toBe(0);
-    expect(handle.store.getState().bindingVersion).not.toBe(originalBinding);
-    expect(streams).toHaveLength(2);
-    expect(streams[0].closeCount).toBe(1);
+    // Both remaining roles write, so the move keeps every local write path.
+    expect(sonner.warning).not.toHaveBeenCalled();
+    expect(handle.store.getState().unsyncedQueueSize).toBe(1);
+    expect(handle.store.getState().bindingVersion).toBe(originalBinding);
+    expect(streams).toHaveLength(1);
+    expect(streams[0].closeCount).toBe(0);
   });
 
   it("does not toast sustained disconnect and reconnect cycles", async () => {

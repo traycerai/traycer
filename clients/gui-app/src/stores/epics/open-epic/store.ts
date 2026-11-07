@@ -54,6 +54,11 @@ import {
   applyChatRecordHeadRows,
   dropChatRecordHeadsForChat,
 } from "./chat-record-head";
+import {
+  EMPTY_EVICTED_CHAT_IDS,
+  evictedChatIdsOfSnapshot,
+  type ChatRecordEvictionRow,
+} from "./chat-record-evictions";
 import type { RecordListRecencyPatch } from "@traycer/protocol/host/epic/record-list-revision";
 import type { TuiAgentRecordSummaryV13 } from "@traycer/protocol/host/epic/tui-agent-records";
 import type {
@@ -380,6 +385,14 @@ export interface OpenEpicState {
    * it). Read through `useEpicChatRecordHead`.
    */
   readonly chatRecordHeads: Readonly<Record<string, ChatRecordHeadStamp>>;
+  /**
+   * The chats whose records the serving host has dropped (cold eviction), by
+   * `chatId`, as its last `epic.listChatRecords@1.4` snapshot listed them.
+   * Main-thread and list-only, like {@link OpenEpicState.chatRecordHeads}:
+   * see `./chat-record-evictions`. Nothing is drawn from it; it decides only
+   * which peer serves the chat's tile.
+   */
+  readonly evictedChatIds: ReadonlySet<string>;
   /**
    * Whether `epic.listChatRecords` has produced an answer this session.
    * Missing rows are not deletion evidence until this is true. Transient
@@ -729,6 +742,12 @@ export interface OpenEpicState {
    * take part in.
    */
   applyChatRecordTouches: (patches: readonly RecordListRecencyPatch[]) => void;
+  /**
+   * Restates {@link OpenEpicState.evictedChatIds} from the rows of an
+   * `epic.listChatRecords` SNAPSHOT. Never called for the `unchanged` arm,
+   * which carries no rows and so keeps the set as it stands.
+   */
+  applyChatRecordEvictions: (rows: readonly ChatRecordEvictionRow[]) => void;
   /**
    * The chat-record ingest counter as it stands now - the value a list
    * request captures at dispatch and passes back to
@@ -2053,6 +2072,8 @@ export function createOpenEpicStore(
           // field's own note on why the head is a main-thread plane. Empty
           // until a list answer or a delta carries one.
           chatRecordHeads: EMPTY_CHAT_RECORD_HEADS,
+          // List-only, like the head: restated by each snapshot.
+          evictedChatIds: EMPTY_EVICTED_CHAT_IDS,
           tuiAgentRecordListFailed: false,
           ingestFenceIdentity: mintedIngestFenceIdentity,
           lastFocusedArtifactId: null,
@@ -2185,6 +2206,11 @@ export function createOpenEpicStore(
               kind: "apply-chat-records",
               payload: { records, issuedAtSeq },
             });
+          },
+          applyChatRecordEvictions: (rows) => {
+            const held = get().evictedChatIds;
+            const next = evictedChatIdsOfSnapshot(held, rows);
+            if (next !== held) set({ evictedChatIds: next });
           },
           applyChatRecordTouches: (patches) => {
             // No head plane to fold in, unlike the rows path above: a recency

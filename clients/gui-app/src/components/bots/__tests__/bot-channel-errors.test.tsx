@@ -49,11 +49,11 @@ const mocks = vi.hoisted(() => ({
   },
 }));
 
-// The thread panel reads its post's text from the channel's session; none is
-// loaded here.
 vi.mock("@/hooks/host/use-host-directory-entry", () => ({
   useHostDirectoryEntry: () => null,
 }));
+// The thread panel reads its post's text from the channel's session; none is
+// loaded here.
 vi.mock("@/lib/registries/chat-session-registry", async (importOriginal) => ({
   ...(await importOriginal<
     typeof import("@/lib/registries/chat-session-registry")

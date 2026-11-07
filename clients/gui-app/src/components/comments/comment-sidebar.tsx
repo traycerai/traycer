@@ -63,7 +63,7 @@ export interface CommentSidebarProps {
    *  collaborators query. `null` while resolving. */
   readonly currentUserId: string | null;
   /** True when caller may resolve / delete-thread regardless of authorship.
-   *  Editor + Owner = true. Viewer = false. */
+   *  Editor + Owner = true; a caller with no attributed role = false. */
   readonly canModerate: boolean;
   /** Triggered when the user clicks a thread card so the parent can scroll
    *  the originating tile to the anchor + flash. */

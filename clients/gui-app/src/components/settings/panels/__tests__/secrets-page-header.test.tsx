@@ -44,7 +44,7 @@ afterEach(() => {
 
 // The header's subtitle on a team's page names the team.
 const TEAM_SUBTITLE =
-  "Values and logins Acme's agents use, on its sandboxes without being seen.";
+  "Values and logins agents use, on sandboxes without being seen.";
 
 function secret(name: string): EnvironmentSecretV12 {
   return {

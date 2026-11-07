@@ -54,6 +54,7 @@ export const SETTINGS_PATHS = new Set([
   "service",
   "shell",
   "skills",
+  "storage",
   "usage",
   "worktrees",
 ]);

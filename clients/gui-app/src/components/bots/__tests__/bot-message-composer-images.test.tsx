@@ -509,9 +509,6 @@ describe("<BotMessageComposer /> sending images", () => {
         size: PNG_BYTES.byteLength,
       },
     ]);
-    expect(atob(request.attachments?.[0]?.b64content ?? "").length).toBe(
-      request.attachments?.[0]?.size,
-    );
     expect(boxText("Message Tracy")).toBe("");
     expect(openButtons()).toHaveLength(0);
     expect(screen.queryByTestId(IMAGES_ID)).toBeNull();

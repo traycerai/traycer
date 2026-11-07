@@ -112,7 +112,7 @@ vi.mock("@/components/epic-canvas/renderers/epic-node-tile", async () => {
             data-testid={`open-from-${node.id}`}
             onClick={() => {
               if (pendingOpen.value.intent !== null) {
-                openTile(pendingOpen.value.intent);
+                openTile(pendingOpen.value.intent, "user");
               }
             }}
           />
@@ -144,7 +144,7 @@ vi.mock("@/components/epic-canvas/mobile/tile-switcher-list", async () => {
             data-testid="list-pick"
             onClick={() => {
               if (pendingOpen.value.intent !== null) {
-                openTile(pendingOpen.value.intent);
+                openTile(pendingOpen.value.intent, "user");
               }
             }}
           />
@@ -284,7 +284,7 @@ vi.mock("@/components/epic-canvas/renderers/tile-render", async () => {
           data-testid={`open-from-${props.node.id}`}
           onClick={() => {
             if (pendingOpen.value.intent !== null) {
-              openTile(pendingOpen.value.intent);
+              openTile(pendingOpen.value.intent, "user");
             }
           }}
         />
@@ -1346,6 +1346,7 @@ describe("<MobileEpicTileView /> with two tiles and chats painted by the stable 
       commitWithoutNavigation,
       {
         ...MANUAL_TILE_OPEN,
+        provenance: "user",
         mobileTarget: { tabId: VIEW_TAB_ID, slot: "secondary" },
       },
     );

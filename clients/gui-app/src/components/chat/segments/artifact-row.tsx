@@ -332,28 +332,31 @@ function InlineArtifactActions(props: {
           size={coarsePointer ? "icon-touch" : "icon-sm"}
           aria-label="Expand"
           onClick={() => {
-            openTile({
-              node: {
-                id: props.source.artifactId,
-                instanceId: crypto.randomUUID(),
-                type: "html",
-                name: props.title,
-                hostId: props.scope.hostId,
-                ...(props.htmlVersion === null
-                  ? {}
-                  : { htmlVersion: props.htmlVersion }),
+            openTile(
+              {
+                node: {
+                  id: props.source.artifactId,
+                  instanceId: crypto.randomUUID(),
+                  type: "html",
+                  name: props.title,
+                  hostId: props.scope.hostId,
+                  ...(props.htmlVersion === null
+                    ? {}
+                    : { htmlVersion: props.htmlVersion }),
+                },
+                target: { epicId: props.scope.epicId },
+                gesture: "explicit",
+                modifiers: null,
+                placement: null,
+                // One tile per artifact, like every other opener. A tile that
+                // is already open adopts this card's version on the hit, Latest
+                // included (`executeTileOpen`), so it shows what the card shows.
+                dedupe: true,
+                source: "direct_ui",
+                adoptHtmlVersion: true,
               },
-              target: { epicId: props.scope.epicId },
-              gesture: "explicit",
-              modifiers: null,
-              placement: null,
-              // One tile per artifact, like every other opener. A tile that
-              // is already open adopts this card's version on the hit, Latest
-              // included (`executeTileOpen`), so it shows what the card shows.
-              dedupe: true,
-              source: "direct_ui",
-              adoptHtmlVersion: true,
-            });
+              "user",
+            );
           }}
         >
           <Expand className="size-4" />

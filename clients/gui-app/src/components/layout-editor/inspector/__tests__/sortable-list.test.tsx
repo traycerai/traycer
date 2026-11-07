@@ -885,6 +885,7 @@ describe("a keyboard step goes past a row that cannot move (G6)", () => {
       "railBrowsers",
       "railSimulators",
       "railGitDiff",
+      "stack:railGitDiff+railPullRequests",
       "railPullRequests",
       "railFileTree",
       "railSharing",

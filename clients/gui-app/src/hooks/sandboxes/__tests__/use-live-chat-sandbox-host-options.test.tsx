@@ -105,7 +105,6 @@ function ChatHostStatus(): ReactNode {
   const live = useLiveChatSandboxState("epic", "chat", HOST, true);
   const view = resolveChatSandbox(live.state, {
     reachable: live.reachable,
-    canEdit: true,
     ownedByViewer: true,
     environmentOwned: false,
   });

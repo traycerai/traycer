@@ -94,6 +94,11 @@ export interface CommandItem {
    */
   readonly hostBadge?: string;
   /**
+   * Trailing muted text on a root row: the qualifier its label leaves out
+   * (the team a bot is in). Optional for the same reason as `hostBadge`.
+   */
+  readonly hint?: string;
+  /**
    * Trailing context text, rendered by sub-pages as a badge.
    *
    * Two uses, and they are not the same thing. On a NON-ACTIONABLE row it is

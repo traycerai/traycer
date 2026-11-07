@@ -8,6 +8,12 @@ import { PortalConcealmentProvider } from "@/components/ui/portal-concealment-co
 import { cn } from "@/lib/utils";
 import { hostLabelAtSentenceStart } from "@/hooks/agent/use-host-reachability";
 
+// A host name inside this notice is the whole label of the action. The button
+// base is one line (`whitespace-nowrap`, `shrink-0`); these overrides let that
+// name wrap inside the card instead of widening it.
+const HOST_SCOPE_WRAPPING_ACTION_CLASS =
+  "h-auto max-w-full min-w-0 shrink justify-start text-left whitespace-normal wrap-anywhere";
+
 /**
  * The honest-state gate for a host-scoped panel. Its contract has two planes,
  * and keeping them distinct is the whole design:
@@ -62,6 +68,7 @@ export function HostScopeGate(props: {
             size="sm"
             onClick={selection.forget}
             data-testid="host-scope-forget-vanished"
+            className={HOST_SCOPE_WRAPPING_ACTION_CLASS}
           >
             Forget {selection.name}
           </Button>
@@ -84,6 +91,7 @@ export function HostScopeGate(props: {
             size="sm"
             onClick={scope.returnToActive}
             data-testid="host-scope-return-to-active"
+            className={HOST_SCOPE_WRAPPING_ACTION_CLASS}
           >
             Back to {scope.activeHost?.name ?? "your active host"}
           </Button>
@@ -220,6 +228,7 @@ function UnreachableNotice(props: {
             size="sm"
             onClick={scope.returnToActive}
             data-testid="host-scope-return-to-active"
+            className={HOST_SCOPE_WRAPPING_ACTION_CLASS}
           >
             Back to {scope.activeHost?.name ?? "your active host"}
           </Button>
@@ -243,7 +252,7 @@ function HostScopeNotice(props: {
       // without a live region a screen reader hears nothing change. `warn`
       // states interrupt; `idle` states wait their turn.
       role={props.tone === "warn" ? "alert" : "status"}
-      className="flex flex-col items-start gap-2 rounded-lg border border-border/60 bg-card/40 px-5 py-6"
+      className="flex w-full min-w-0 flex-col items-start gap-2 rounded-lg border border-border/60 bg-card/40 px-5 py-6"
       data-testid={props.testId}
     >
       <div

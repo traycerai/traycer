@@ -1,8 +1,14 @@
 import { useState, type ReactNode } from "react";
-import { AlertCircle, Check, ChevronDown, ChevronRight } from "lucide-react";
 import { sandboxSupportReference } from "@traycer/protocol/host/sandbox-control";
+import { AlertCircle, Check, ChevronDown, ChevronRight } from "lucide-react";
 import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
 import { Button } from "@/components/ui/button";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
 import { useConfigurationBillingUrl } from "@/hooks/sandboxes/use-configuration-billing-url";
 import { useClipboardCopy } from "@/hooks/ui/use-clipboard-copy";
 import { useElapsedSeconds } from "@/hooks/use-elapsed-seconds";
@@ -19,7 +25,6 @@ import {
   CHANGE_SHAPE_OR_REGION,
   CHOOSE_A_SMALLER_SHAPE,
   DETAILS,
-  COMPUTE_CHARGED_WHILE_AWAKE,
   COPY_SUPPORT_REFERENCE,
   COULDNT_VERIFY_BALANCE,
   KEEP_WAITING,
@@ -52,7 +57,6 @@ import {
   agentNotOfferedOnSandboxesLine,
   agentsCantRunOnSandboxLine,
   traycerOffOnSandboxLine,
-  settingsDidntApplyOnLine,
   stepApplyingSettings,
   takingLongerDetail,
 } from "@/lib/sandboxes/sandbox-strings";
@@ -66,10 +70,7 @@ import {
 import { sandboxAgentDisplayName } from "@/lib/sandboxes/sandbox-agent-refusal";
 import { openActiveModelPickerForHarness } from "@/lib/commands/active-model-picker-registry";
 import { openSandboxDetails } from "@/stores/sandboxes/sandbox-details-store";
-import {
-  sandboxSettingsFailureLine,
-  sandboxSettingsStepsLine,
-} from "@traycer/protocol/host/sandbox-settings";
+import { sandboxSettingsStepsLine } from "@traycer/protocol/host/sandbox-settings";
 
 /** The same ruled setup treatment and counter for a shell waiting on Automations. */
 export function SandboxStartingLine(props: {
@@ -107,11 +108,11 @@ function SandboxSetupLineFrame(props: {
   const ChevronIcon = props.expanded ? ChevronDown : ChevronRight;
   return (
     <div
-      className="flex w-full flex-col gap-1"
+      className="flex w-full min-w-0 flex-col gap-1"
       data-testid="sandbox-setup-line"
     >
-      <div className="flex items-center gap-3">
-        <span aria-hidden className="h-px flex-1 bg-border/60" />
+      <div className="flex min-w-0 items-center gap-3">
+        <span aria-hidden className="h-px min-w-0 flex-1 bg-border/60" />
         {props.onToggle === null ? (
           <div
             role="status"
@@ -125,14 +126,14 @@ function SandboxSetupLineFrame(props: {
             aria-expanded={props.expanded}
             data-testid="sandbox-setup-line-toggle"
             onClick={props.onToggle}
-            className="flex items-center gap-2 rounded-sm text-ui-xs text-muted-foreground outline-none transition-colors hover:text-foreground focus-visible:ring-1 focus-visible:ring-ring"
+            className="flex min-w-0 flex-wrap items-center gap-2 rounded-sm text-left text-ui-xs text-muted-foreground outline-none transition-colors hover:text-foreground focus-visible:ring-1 focus-visible:ring-ring wrap-anywhere"
           >
             {props.head}
             <ChevronIcon aria-hidden className="size-3 shrink-0" />
           </button>
         )}
         {props.trailing}
-        <span aria-hidden className="h-px flex-1 bg-border/60" />
+        <span aria-hidden className="h-px min-w-0 flex-1 bg-border/60" />
       </div>
       {props.children}
     </div>
@@ -561,6 +562,7 @@ function SandboxProgressLine(props: {
         <LineButton
           label={STOP}
           testId="sandbox-setup-stop"
+          // Expanded, the settings failure's own More menu carries Stop; collapsed, this is the only one.
           onClick={
             failure?.kind === "settings" && expanded
               ? null
@@ -626,10 +628,9 @@ function progressTitle(view: ProgressView, name: string): string {
     return resuming ? couldntResumeLine(name) : couldntStartLine(name);
   }
   if (failure?.kind === "settings") {
-    const reference = sandboxSupportReference(failure.code) ?? "SBX-0520";
     return view.sandboxAwake === false
-      ? settingsDidntApplyOnLine(view.configuration, name, reference)
-      : sandboxSettingsFailureLine(name, view.configuration, reference);
+      ? `${view.configuration}'s settings didn't apply on ${name}`
+      : `${name} is awake, but ${view.configuration}'s settings didn't apply`;
   }
   if (view.sandboxStoppable) return SANDBOX_AWAKE;
   if (view.queued) return "Queued";
@@ -647,7 +648,6 @@ function ProgressHead(props: {
 }): ReactNode {
   const { failure } = props.view;
   const waiting = stillWaiting(failure);
-  const code = failureCode(failure);
   const retryAfterAt = props.view.stage.rateLimit?.retryAfterAt;
   // A failure's title already names the sandbox.
   const namesSandbox =
@@ -670,9 +670,6 @@ function ProgressHead(props: {
         {progressTitle(props.view, props.name)}
       </span>
       {namesSandbox ? <HeadPart text={props.name} /> : null}
-      {code === null || failure?.kind === "settings" ? null : (
-        <HeadPart text={code} />
-      )}
       {props.view.queued &&
       retryAfterAt !== null &&
       retryAfterAt !== undefined ? (
@@ -721,11 +718,7 @@ function ProgressDetail(props: {
           configuration={configuration}
         />
       ) : null}
-      <FailureSentence
-        failure={failure}
-        resuming={resuming}
-        sandboxAwake={props.view.sandboxAwake}
-      />
+      <FailureSentence failure={failure} resuming={resuming} />
       {failure?.kind === "settings" ? (
         <>
           <p className="m-0">
@@ -737,7 +730,7 @@ function ProgressDetail(props: {
             <p className="m-0">Your message waits until they apply.</p>
           ) : null}
           {props.actions.applyingError ? (
-            <p role="alert">Settings still didn't apply · SBX-0520</p>
+            <p role="alert">Settings still didn't apply</p>
           ) : null}
         </>
       ) : null}
@@ -748,6 +741,7 @@ function ProgressDetail(props: {
         configuration={configuration}
         onOpenTerminal={failure === null ? props.actions.onOpenTerminal : null}
       />
+      <StageSupportReference failure={failure} />
       <div className="flex flex-wrap gap-2">
         <ProgressBranchButtons view={props.view} actions={props.actions} />
       </div>
@@ -755,17 +749,35 @@ function ProgressDetail(props: {
   );
 }
 
+/** The stage may hold a failure that the sandbox list has not recorded. */
+function StageSupportReference(props: {
+  readonly failure: StagedSandboxFailure | null;
+}): ReactNode {
+  const { failure } = props;
+  let reference: string | null = null;
+  if (failure?.kind === "settings") {
+    reference = sandboxSupportReference(failure.code) ?? "SBX-0520";
+  } else if (failure?.kind === "failed") {
+    reference = sandboxSupportReference(failure.code);
+  }
+  if (reference === null) return null;
+  return (
+    <details className="min-w-0" data-testid="sandbox-setup-support-reference">
+      <summary className="cursor-pointer text-primary">
+        Support reference
+      </summary>
+      <p className="mt-1 wrap-anywhere">{reference}</p>
+    </details>
+  );
+}
+
 function FailureSentence(props: {
   readonly failure: StagedSandboxFailure | null;
   readonly resuming: boolean;
-  readonly sandboxAwake: boolean | null;
 }): ReactNode {
   if (props.failure?.kind === "failed") {
     if (props.resuming || stepAfterWake(props.failure.step)) return null;
     return <p className="m-0">{MESSAGE_STILL_PENDING}</p>;
-  }
-  if (props.failure?.kind === "settings" && props.sandboxAwake !== false) {
-    return <p className="m-0">{COMPUTE_CHARGED_WHILE_AWAKE}</p>;
   }
   return null;
 }
@@ -788,56 +800,7 @@ function ProgressBranchButtons(props: {
   }
   if (failure?.kind === "settings") {
     return (
-      <>
-        {props.view.stage.createdSandboxId === null ? null : (
-          <>
-            <LineButton
-              label={RETRY_APPLYING}
-              testId="sandbox-setup-retry-applying"
-              onClick={actions.onRetryApplying}
-              pending={actions.applyingPending}
-            />
-            <LineButton
-              label="Repair setup"
-              testId="sandbox-setup-repair-setup"
-              onClick={actions.onRepairSetup}
-              pending={actions.repairSetupPending}
-            />
-          </>
-        )}
-        <LineButton
-          label={OPEN_TERMINAL}
-          testId="sandbox-setup-open-terminal"
-          onClick={actions.onOpenTerminal}
-        />
-        <LineButton
-          label={STOP}
-          testId="sandbox-setup-stop"
-          onClick={actions.onStop}
-        />
-        <LineButton
-          label={actions.chooseAnotherHostLabel}
-          testId="sandbox-setup-choose-another-host"
-          onClick={actions.onChooseAnotherHost}
-        />
-        {props.view.stage.sendTaken ? (
-          <LineButton
-            label={CANCEL_THE_MESSAGE}
-            testId="sandbox-setup-cancel"
-            onClick={actions.onCancel}
-          />
-        ) : null}
-        {props.view.stage.createdSandboxId === null ? null : (
-          <LineButton
-            label={DETAILS}
-            testId="sandbox-setup-details"
-            onClick={() => {
-              const sandboxId = props.view.stage.createdSandboxId;
-              if (sandboxId !== null) openSandboxDetails(sandboxId);
-            }}
-          />
-        )}
-      </>
+      <SettingsFailureButtons stage={props.view.stage} actions={actions} />
     );
   }
   if (failure !== null && waitEnded(failure)) {
@@ -874,6 +837,87 @@ function ProgressBranchButtons(props: {
         testId="sandbox-setup-choose-another-host"
         onClick={actions.onChooseAnotherHost}
       />
+    </>
+  );
+}
+
+function SettingsFailureButtons(props: {
+  readonly stage: StagedSandbox;
+  readonly actions: SandboxSetupLineActions;
+}): ReactNode {
+  const { actions } = props;
+  const sandboxId = props.stage.createdSandboxId;
+  return (
+    <>
+      {sandboxId === null || actions.onRetryApplying === null ? null : (
+        <Button
+          type="button"
+          size="xs"
+          data-testid="sandbox-setup-retry-applying"
+          onClick={actions.onRetryApplying}
+          disabled={actions.applyingPending}
+        >
+          {RETRY_APPLYING}
+          {actions.applyingPending ? (
+            <AgentSpinningDots
+              className={undefined}
+              testId={undefined}
+              variant={undefined}
+            />
+          ) : null}
+        </Button>
+      )}
+      <DropdownMenu>
+        <DropdownMenuTrigger asChild>
+          <Button type="button" variant="outline" size="xs">
+            More <ChevronDown aria-hidden className="size-3" />
+          </Button>
+        </DropdownMenuTrigger>
+        <DropdownMenuContent align="start" className="w-max">
+          {sandboxId === null ? null : (
+            <SetupMenuItem
+              label="Repair setup"
+              testId="sandbox-setup-repair-setup"
+              onSelect={actions.onRepairSetup}
+              pending={actions.repairSetupPending}
+            />
+          )}
+          <SetupMenuItem
+            label={OPEN_TERMINAL}
+            testId="sandbox-setup-open-terminal"
+            onSelect={actions.onOpenTerminal}
+            pending={false}
+          />
+          <SetupMenuItem
+            label={STOP}
+            testId="sandbox-setup-stop"
+            onSelect={actions.onStop}
+            pending={false}
+          />
+          <SetupMenuItem
+            label={actions.chooseAnotherHostLabel}
+            testId="sandbox-setup-choose-another-host"
+            onSelect={actions.onChooseAnotherHost}
+            pending={false}
+          />
+          {props.stage.sendTaken ? (
+            <SetupMenuItem
+              label={CANCEL_THE_MESSAGE}
+              testId="sandbox-setup-cancel"
+              onSelect={actions.onCancel}
+              pending={false}
+            />
+          ) : null}
+          {sandboxId === null ? null : (
+            <SetupMenuItem
+              label={DETAILS}
+              testId="sandbox-setup-details"
+              onSelect={() => openSandboxDetails(sandboxId)}
+              pending={false}
+            />
+          )}
+        </DropdownMenuContent>
+      </DropdownMenu>
     </>
   );
 }
@@ -924,13 +968,31 @@ function FailedButtons(props: {
   );
 }
 
-/** The failure's support reference for the line, never its raw code. */
-function failureCode(failure: StagedSandboxFailure | null): string | null {
-  if (failure === null) return null;
-  if (failure.kind === "failed" || failure.kind === "settings") {
-    return sandboxSupportReference(failure.code);
-  }
-  return null;
+function SetupMenuItem(props: {
+  readonly label: string;
+  readonly testId: string;
+  readonly onSelect: (() => void) | null;
+  readonly pending: boolean | undefined;
+}): ReactNode {
+  if (props.onSelect === null) return null;
+  return (
+    <DropdownMenuItem
+      data-testid={props.testId}
+      onSelect={props.onSelect}
+      disabled={props.pending}
+    >
+      <span className="min-w-0 whitespace-normal wrap-anywhere">
+        {props.label}
+      </span>
+      {props.pending ? (
+        <AgentSpinningDots
+          className={undefined}
+          testId={undefined}
+          variant={undefined}
+        />
+      ) : null}
+    </DropdownMenuItem>
+  );
 }
 
 function stepLabel(
@@ -1103,13 +1165,13 @@ export function SandboxReadyLine(props: {
       data-testid="sandbox-ready-line"
     >
       <div className="flex items-center gap-3">
-        <span aria-hidden className="h-px flex-1 bg-border/60" />
+        <span aria-hidden className="h-px min-w-0 flex-1 bg-border/60" />
         <button
           type="button"
           aria-expanded={expanded}
           data-testid="sandbox-ready-line-toggle"
           onClick={() => setExpanded(!expanded)}
-          className="flex items-center gap-2 rounded-sm text-ui-xs text-muted-foreground outline-none transition-colors hover:text-foreground focus-visible:ring-1 focus-visible:ring-ring"
+          className="flex min-w-0 flex-wrap items-center gap-2 rounded-sm text-left text-ui-xs text-muted-foreground outline-none transition-colors hover:text-foreground focus-visible:ring-1 focus-visible:ring-ring wrap-anywhere"
         >
           <Check
             aria-hidden
@@ -1120,7 +1182,7 @@ export function SandboxReadyLine(props: {
           <HeadPart text={readySecondsLabel(props.readySeconds)} />
           <ChevronIcon aria-hidden className="size-3 shrink-0" />
         </button>
-        <span aria-hidden className="h-px flex-1 bg-border/60" />
+        <span aria-hidden className="h-px min-w-0 flex-1 bg-border/60" />
       </div>
       {expanded && props.idleMinutes !== null ? (
         <p

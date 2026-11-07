@@ -8,12 +8,17 @@ import { useIsMobileViewport } from "@/hooks/ui/use-mobile-viewport";
 import { SETTINGS_SECTIONS } from "@/lib/settings-sections";
 import { useEnvironmentPick } from "@/stores/settings/settings-environment-pick-store";
 
-/** The scope a phone's section page keeps visible after its pickers disappear. */
+/** Phone sections retain scope; Overview's identity and settings lines own it. */
 export function SettingsPhoneScopeLine(): ReactNode {
   const section = useContext(SettingsSectionContext);
   const mobile = useIsMobileViewport();
   const group = SETTINGS_SECTIONS.find((entry) => entry.id === section)?.group;
-  if (!mobile || (group !== "host" && group !== "personal")) return null;
+  if (
+    !mobile ||
+    section === "host" ||
+    (group !== "host" && group !== "personal")
+  )
+    return null;
   return <PhoneScopeLine hostSection={group === "host"} />;
 }
 

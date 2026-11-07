@@ -34,6 +34,8 @@ export interface TabStripContextMenuProps {
     leading: boolean,
   ) => void;
   readonly onRevealInSidebar: (tabId: string) => void;
+  /** Whether the panel that lists this tab is on, so a reveal can land. */
+  readonly canRevealInSidebar: boolean;
   /** Copies the absolute path for workspace-file tabs; absent for other kinds. */
   readonly onCopyFilePath: (() => void) | null;
   /**
@@ -82,6 +84,7 @@ export function TabStripContextMenu(props: TabStripContextMenuProps) {
     onCloseAll,
     onSplit,
     onRevealInSidebar,
+    canRevealInSidebar,
     onCopyFilePath,
     canRename,
     onEditTitle,
@@ -150,10 +153,12 @@ export function TabStripContextMenu(props: TabStripContextMenuProps) {
           Copy File Path
         </ContextMenuItem>
       )}
-      <ContextMenuItem onSelect={() => onRevealInSidebar(tabId)}>
-        <Eye className="size-4" />
-        Reveal in Sidebar
-      </ContextMenuItem>
+      {canRevealInSidebar ? (
+        <ContextMenuItem onSelect={() => onRevealInSidebar(tabId)}>
+          <Eye className="size-4" />
+          Reveal in Sidebar
+        </ContextMenuItem>
+      ) : null}
       {chatRouting === null ? null : (
         <>
           <ContextMenuSeparator />

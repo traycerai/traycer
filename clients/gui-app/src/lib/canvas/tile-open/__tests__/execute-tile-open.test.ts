@@ -93,6 +93,7 @@ function run(plan: TileOpenPlan): NestedFocusTarget | null {
     navigateNested,
     epicId: EPIC_ID,
     pipOrigin: "manual",
+    provenance: "user",
     // Dispatch-table cases are the sidebar path: never adopt a version.
     adoptHtmlVersion: false,
   });
@@ -131,6 +132,7 @@ describe("executeTileOpen", () => {
       EPIC_ID,
       TAB_ID,
       expect.any(Function),
+      "user",
     );
   });
 
@@ -197,6 +199,7 @@ describe("executeTileOpen", () => {
         navigateNested,
         epicId: EPIC_ID,
         pipOrigin: "manual",
+        provenance: "user",
         adoptHtmlVersion,
       });
     const tileVersion = () => {
@@ -402,6 +405,7 @@ describe("executeTileOpen", () => {
       // A failed auto-PiP leaves the tab reachable in the sidebar; toasting
       // about background automation is the regression this pins (L4).
       pipOrigin: "agent",
+      provenance: "automatic",
       adoptHtmlVersion: false,
     });
     expect(convertBrowserTabToPip).toHaveBeenCalledTimes(2);
@@ -421,6 +425,7 @@ describe("executeTileOpen", () => {
         navigateNested,
         epicId: EPIC_ID,
         pipOrigin: "manual",
+        provenance: "user",
         adoptHtmlVersion: false,
       }),
     ).toBeNull();
@@ -445,6 +450,7 @@ describe("executeTileOpen", () => {
         navigateNested,
         epicId: null,
         pipOrigin: "manual",
+        provenance: "user",
         adoptHtmlVersion: false,
       }),
     ).toEqual(FOCUS);

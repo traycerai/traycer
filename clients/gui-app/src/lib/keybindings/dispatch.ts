@@ -629,7 +629,8 @@ function runNestedFocus(
   prepare: PrepareNestedFocusTarget,
 ) {
   if (router.navigateNestedFocus === undefined) return prepare();
-  return router.navigateNestedFocus(tab.epicId, tab.tabId, prepare);
+  // A keybinding is a keypress: the person asked.
+  return router.navigateNestedFocus(tab.epicId, tab.tabId, prepare, "user");
 }
 
 function duplicateActiveEpicTab(router: KeybindingRouter): boolean {
@@ -860,7 +861,12 @@ function focusGroupInDirection(
   if (router.navigateNestedFocusToPrimaryEditor === undefined) {
     runNestedFocus(router, tab, prepare);
   } else {
-    router.navigateNestedFocusToPrimaryEditor(tab.epicId, tab.tabId, prepare);
+    router.navigateNestedFocusToPrimaryEditor(
+      tab.epicId,
+      tab.tabId,
+      prepare,
+      "user",
+    );
   }
   focusGroupEditor(nextId);
   return true;

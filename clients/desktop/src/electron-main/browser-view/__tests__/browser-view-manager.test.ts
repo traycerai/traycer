@@ -2300,6 +2300,7 @@ describe("BrowserViewManager native tab lifecycle", () => {
         ...BASE_TILE_KEY,
         url: "https://example.com/next",
         disposition: "foreground",
+        openerHadUserGesture: false,
       },
     ]);
   });
@@ -4329,6 +4330,7 @@ describe("BrowserViewManager in-page window.open (Decision #22)", () => {
         ...BASE_TILE_KEY,
         url: "https://target.example/a",
         disposition: "background",
+        openerHadUserGesture: true,
       },
     ]);
   });
@@ -4372,6 +4374,7 @@ describe("BrowserViewManager in-page window.open (Decision #22)", () => {
         ...BASE_TILE_KEY,
         url: "about:blank",
         disposition: "foreground",
+        openerHadUserGesture: true,
       },
     ]);
     expect(safelyOpenExternalMock).not.toHaveBeenCalled();
@@ -4478,6 +4481,7 @@ describe("BrowserViewManager in-page window.open (Decision #22)", () => {
       ...BASE_TILE_KEY,
       url: "https://target.example/tile",
       disposition: "foreground",
+      openerHadUserGesture: true,
     });
 
     // And a native popup-of-popup gets its OWN governed contents.
@@ -4571,6 +4575,7 @@ describe("BrowserViewManager in-page window.open (Decision #22)", () => {
       ...BASE_TILE_KEY,
       url: "https://accounts.example/add-account",
       disposition: "foreground",
+      openerHadUserGesture: false,
     });
   });
 });
