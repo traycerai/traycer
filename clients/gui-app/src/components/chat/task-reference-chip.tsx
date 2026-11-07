@@ -25,6 +25,7 @@ import {
   findCachedTaskContext,
   findCachedTaskIdsByPrefix,
   readEpicTitlesFromCloudTaskCaches,
+  subscribeToCachedTaskIds,
   subscribeToCloudTaskListCaches,
   subscribeToTaskContextsCaches,
   type CloudEpicTasksCacheScope,
@@ -121,39 +122,29 @@ function PrefixTaskReferenceChip(props: {
 function useHeldTaskIdForPrefix(prefix: string): string | null {
   const queryClient = useQueryClient();
   const userId = useAuthStore((state) => state.contextMetadata?.userId ?? null);
-  const scope = useMemo<CloudEpicTasksCacheScope | null>(
-    () => (userId === null ? null : { hostId: null, userId }),
-    [userId],
-  );
   const subscribe = useCallback(
     (onStoreChange: () => void) => {
       const unsubscribeRegistry =
         getOpenEpicRegistry().subscribe(onStoreChange);
-      if (scope === null) return unsubscribeRegistry;
-      const unsubscribeLists = subscribeToCloudTaskListCaches(
+      if (userId === null) return unsubscribeRegistry;
+      const unsubscribeCaches = subscribeToCachedTaskIds(
         queryClient,
-        scope,
-        onStoreChange,
-      );
-      const unsubscribeLookups = subscribeToTaskContextsCaches(
-        queryClient,
-        scope,
+        userId,
         onStoreChange,
       );
       return () => {
         unsubscribeRegistry();
-        unsubscribeLists();
-        unsubscribeLookups();
+        unsubscribeCaches();
       };
     },
-    [queryClient, scope],
+    [queryClient, userId],
   );
   return useSyncExternalStore(subscribe, () => {
     const normalizedPrefix = prefix.toLowerCase();
     const matches = new Set(
-      scope === null
+      userId === null
         ? []
-        : findCachedTaskIdsByPrefix(queryClient, scope, prefix),
+        : findCachedTaskIdsByPrefix(queryClient, userId, prefix),
     );
     for (const handle of getOpenEpicRegistry().liveHandles()) {
       if (handle.epicId.toLowerCase().startsWith(normalizedPrefix)) {

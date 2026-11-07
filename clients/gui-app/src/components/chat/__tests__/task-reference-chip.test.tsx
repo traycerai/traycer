@@ -72,6 +72,10 @@ const AGENT_ID = "0a1b2c3d-4e5f-4a6b-8c7d-9e0f1a2b3c4d";
 const TWIN_TASK_ID = `${AGENT_ID.slice(0, 8)}-1111-4222-8333-444455556666`;
 /** A second task whose id shares its first 8 characters with `TASK_ID`. */
 const SIBLING_TASK_ID = `${TASK_ID.slice(0, 8)}-aaaa-4bbb-8ccc-ddddeeeeffff`;
+/** A task whose id no token in these cases begins. */
+const UNRELATED_TASK_ID = "c0ffee00-1111-4222-8333-444455556666";
+/** Another unrelated task, for a change to the window's list. */
+const OTHER_UNRELATED_TASK_ID = "d1ce5eed-1111-4222-8333-444455556666";
 /** The chip's own lookup of `TASK_ID`. */
 const OWN_LOOKUP_KEY = taskReferenceLookupKey(HOST_ID, USER_ID, TASK_ID);
 /** History's first page of tasks. */
@@ -233,6 +237,15 @@ function holdTasksInList(tasks: ReadonlyArray<ListTaskLight>): void {
     hasMore: false,
     facets: { repos: [], workspaces: [], ownershipScopes: [] },
   });
+}
+
+/**
+ * `count` distinct 8-character tokens, none the start of a held task's id.
+ */
+function unheldPrefixes(count: number): ReadonlyArray<string> {
+  return Array.from({ length: count }, (_, index) =>
+    index.toString(16).padStart(8, "a"),
+  );
 }
 
 /** The host names each asked id from `titles`, and finds no other. */
@@ -942,6 +955,80 @@ describe("a task id prefix in a message", () => {
     expect(container.querySelector("p")).toBe(paragraph);
     await lookupsCompleted();
     expect(lookedUpIds()).toEqual([TASK_ID]);
+  });
+
+  it("scans the query cache once for all the prefixes in a message, and once more per change to what it reads", async () => {
+    const scansAfterRender = async (
+      tokenCount: number,
+    ): Promise<{ readonly scans: () => number }> => {
+      queryClient = new QueryClient({
+        defaultOptions: { queries: { retry: false } },
+      });
+      holdTasksInList([listTaskLight(UNRELATED_TASK_ID, "Unrelated")]);
+      const spy = vi.spyOn(queryClient, "getQueriesData");
+      renderMarkdown(`Fixed in ${unheldPrefixes(tokenCount).join(" ")}.`);
+      await lookupsCompleted();
+      return { scans: () => spy.mock.calls.length };
+    };
+
+    const one = await scansAfterRender(1);
+    const scansForOne = one.scans();
+    cleanup();
+    const twenty = await scansAfterRender(20);
+
+    expect(scansForOne).toBeGreaterThan(0);
+    expect(twenty.scans()).toBe(scansForOne);
+    expect(screen.queryByRole("button")).toBeNull();
+
+    act(() => {
+      holdTasksInList([listTaskLight(OTHER_UNRELATED_TASK_ID, "Unrelated")]);
+    });
+
+    expect(twenty.scans()).toBe(scansForOne * 2);
+    expect(lookedUpIds()).toEqual([]);
+  });
+
+  it("resolves a prefix once a title lookup the window holds comes to find its task, after the index was built", async () => {
+    answerLookups({ [TASK_ID]: "Ship the release" });
+    holdTasksInList([listTaskLight(UNRELATED_TASK_ID, "Unrelated")]);
+    const prefix = TASK_ID.slice(0, 8);
+    const container = renderMarkdown(`Fixed in ${prefix}.`);
+    const paragraph = container.querySelector("p");
+    expect(paragraph?.textContent).toBe(`Fixed in ${prefix}.`);
+    expect(screen.queryByRole("button")).toBeNull();
+
+    act(() => {
+      queryClient.setQueryData(
+        OTHER_LOOKUP_KEY,
+        lookupAnswer({ [TASK_ID]: "Ship the release" }, { taskIds: [TASK_ID] }),
+      );
+    });
+
+    expect(
+      await screen.findByRole("button", { name: "Ship the release" }),
+    ).toBeTruthy();
+    expect(container.querySelector("p")).toBe(paragraph);
+    await lookupsCompleted();
+    expect(lookedUpIds()).toEqual([]);
+  });
+
+  it("does not resolve a prefix against another person's cached tasks", async () => {
+    answerLookups({ [TASK_ID]: "Ship the release" });
+    queryClient.setQueryData<ListTasksResponse>(
+      cloudEpicTasksQueryKey(HOST_ID, "someone-else", LIST_CLOUD_TASKS_REQUEST),
+      {
+        tasks: [listTaskLight(TASK_ID, "Ship the release")],
+        hasMore: false,
+        facets: { repos: [], workspaces: [], ownershipScopes: [] },
+      },
+    );
+    const prefix = TASK_ID.slice(0, 8);
+    const container = renderMarkdown(`Fixed in ${prefix}.`);
+
+    await lookupsCompleted();
+    expect(container.textContent).toBe(`Fixed in ${prefix}.`);
+    expect(screen.queryByRole("button")).toBeNull();
+    expect(lookedUpIds()).toEqual([]);
   });
 
   it("is drawn as written when the window holds two tasks it begins", async () => {
