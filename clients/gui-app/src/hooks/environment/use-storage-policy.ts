@@ -59,6 +59,14 @@ export interface ConfigurationStoragePolicy {
   readonly revision: number | null;
 }
 
+/** An unparsable item: a host reads it as nothing to clean. */
+const NOTHING_CLEANABLE: StoragePolicyValue = {
+  chats: false,
+  artifacts: false,
+  idleTaskDays: null,
+  archivedChatHours: null,
+};
+
 function storagePolicyOf(
   items: readonly ConfigurationItem[],
 ): ConfigurationStoragePolicy {
@@ -70,9 +78,7 @@ function storagePolicyOf(
   }
   const parsed = storagePolicyValueSchema.safeParse(item.value);
   return {
-    value: parsed.success
-      ? parsed.data
-      : { ...STORAGE_POLICY_DEFAULTS, chats: false, artifacts: false },
+    value: parsed.success ? parsed.data : NOTHING_CLEANABLE,
     revision: item.revision,
   };
 }

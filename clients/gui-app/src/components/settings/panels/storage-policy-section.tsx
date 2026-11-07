@@ -9,6 +9,7 @@ import {
   type ConfigurationWriteIssue,
 } from "@/components/settings/environment/configuration-write-issue";
 import { ConfigurationWriteFeedback } from "@/components/settings/environment/configuration-write-feedback";
+import { SettingsGroup } from "@/components/settings/settings-group";
 import { SettingsRow } from "@/components/settings/settings-row";
 import { useSettingsRowDescriptionId } from "@/components/settings/settings-row-description";
 import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
@@ -36,11 +37,9 @@ import { useReactiveHostReadiness } from "@/hooks/host/use-reactive-host-readine
 import { trackSettingChanged, type AnalyticsSetting } from "@/lib/analytics";
 import { useHostClient } from "@/lib/host";
 import type { EnvironmentPick } from "@/lib/settings-environment-pages";
-import { cn } from "@/lib/utils";
-import { useSettingsDensity } from "@/providers/settings-density-context";
 
-const STORAGE_FOOTNOTE =
-  "Applies on every host in this environment. A chat comes back when an agent continues it.";
+const APPLIES_EVERYWHERE = "Applies on every host in this environment.";
+const CHAT_COMES_BACK = "A chat comes back when an agent continues it.";
 
 type StorageField = keyof StoragePolicyValue;
 
@@ -69,9 +68,10 @@ function afterHours(hours: number): string {
 }
 
 /**
- * Environment ▸ Storage: the picked configuration's `storage_policy` item,
- * as two switches (chats, artifacts) and two age windows (idle tasks,
- * archived chats). Every control writes the whole value.
+ * Environment ▸ Storage: the picked configuration's `storage_policy` item, as
+ * two groups: tasks nobody has used (two switches, chats and artifacts, and
+ * their window) and archived chats (their own window). Every control writes
+ * the whole value.
  *
  * Rendered only when the surface's host advertises the item write
  * (`environment.configuration.items.put`, answered by the pool in a pool
@@ -136,96 +136,130 @@ function StoragePolicySectionBody(props: {
         variant={undefined}
       />
     ) : null;
-  const active = shown.chats || shown.artifacts;
   return (
     <section
       aria-label="Storage"
-      className="flex flex-col border-b border-border/60"
+      className="flex flex-col gap-6"
       data-testid="storage-policy"
     >
-      <SettingsRow
-        row={STORAGE.definitions.chats}
-        status={
-          read.isError ? (
-            <ReadErrorStatus
-              onRetry={() => {
-                void read.refetch();
-              }}
-            />
-          ) : undefined
-        }
-        control={
-          <div className="flex items-center gap-2">
-            {spinner("chats")}
-            <Switch
-              checked={shown.chats}
-              disabled={disabled}
-              aria-label={STORAGE.definitions.chats.label}
-              onCheckedChange={(chats) => {
-                write("chats", chats);
-              }}
-            />
-          </div>
-        }
-      />
-      <SettingsRow
-        row={STORAGE.definitions.artifacts}
-        control={
-          <div className="flex items-center gap-2">
-            {spinner("artifacts")}
-            <Switch
-              checked={shown.artifacts}
-              disabled={disabled}
-              aria-label={STORAGE.definitions.artifacts.label}
-              onCheckedChange={(artifacts) => {
-                write("artifacts", artifacts);
-              }}
-            />
-          </div>
-        }
-      />
-      <SettingsRow
-        row={STORAGE.definitions.idleTasks}
-        control={
-          <div className="flex items-center gap-2">
-            {spinner("idleTaskDays")}
-            <AgeWindowSelect
-              label={STORAGE.definitions.idleTasks.label}
-              noWindowLabel="When the disk is getting full"
-              presets={IDLE_TASK_PRESETS}
-              format={afterDays}
-              value={shown.idleTaskDays}
-              // The window cleans whichever kinds are on.
-              disabled={disabled || !active}
-              onWindowChange={(days) => {
-                write("idleTaskDays", days);
-              }}
-            />
-          </div>
-        }
-      />
-      <SettingsRow
-        row={STORAGE.definitions.archivedChats}
-        control={
-          <div className="flex items-center gap-2">
-            {spinner("archivedChatHours")}
-            <AgeWindowSelect
-              label={STORAGE.definitions.archivedChats.label}
-              noWindowLabel="Never"
-              presets={ARCHIVED_CHAT_PRESETS}
-              format={afterHours}
-              value={shown.archivedChatHours}
-              disabled={disabled || !shown.chats}
-              onWindowChange={(hours) => {
-                write("archivedChatHours", hours);
-              }}
-            />
-          </div>
-        }
-      />
-      <StoragePolicyFooter active={active} issue={issue} />
+      <SettingsGroup
+        group={STORAGE.definitions.idleTasks}
+        showTitle
+        tone="default"
+        dataTestId={undefined}
+        fill={false}
+      >
+        <SettingsRow
+          row={STORAGE.definitions.chats}
+          status={
+            read.isError ? (
+              <ReadErrorStatus
+                onRetry={() => {
+                  void read.refetch();
+                }}
+              />
+            ) : undefined
+          }
+          control={
+            <div className="flex items-center gap-2">
+              {spinner("chats")}
+              <Switch
+                checked={shown.chats}
+                disabled={disabled}
+                aria-label={STORAGE.definitions.chats.label}
+                onCheckedChange={(chats) => {
+                  write("chats", chats);
+                }}
+              />
+            </div>
+          }
+        />
+        <SettingsRow
+          row={STORAGE.definitions.artifacts}
+          control={
+            <div className="flex items-center gap-2">
+              {spinner("artifacts")}
+              <Switch
+                checked={shown.artifacts}
+                disabled={disabled}
+                aria-label={STORAGE.definitions.artifacts.label}
+                onCheckedChange={(artifacts) => {
+                  write("artifacts", artifacts);
+                }}
+              />
+            </div>
+          }
+        />
+        <SettingsRow
+          row={STORAGE.definitions.idleTaskWindow}
+          control={
+            <div className="flex items-center gap-2">
+              {spinner("idleTaskDays")}
+              <AgeWindowSelect
+                label={windowLabel(
+                  STORAGE.definitions.idleTasks.label,
+                  STORAGE.definitions.idleTaskWindow.label,
+                )}
+                noWindowLabel="When the disk is getting full"
+                presets={IDLE_TASK_PRESETS}
+                format={afterDays}
+                value={shown.idleTaskDays}
+                // The window cleans whichever kinds are on.
+                disabled={disabled || !(shown.chats || shown.artifacts)}
+                onWindowChange={(days) => {
+                  write("idleTaskDays", days);
+                }}
+              />
+            </div>
+          }
+        />
+      </SettingsGroup>
+      <SettingsGroup
+        group={STORAGE.definitions.archivedChats}
+        showTitle
+        tone="default"
+        dataTestId={undefined}
+        fill={false}
+      >
+        <SettingsRow
+          row={STORAGE.definitions.archivedChatWindow}
+          control={
+            <div className="flex items-center gap-2">
+              {spinner("archivedChatHours")}
+              <AgeWindowSelect
+                label={windowLabel(
+                  STORAGE.definitions.archivedChats.label,
+                  STORAGE.definitions.archivedChatWindow.label,
+                )}
+                noWindowLabel="Never"
+                presets={ARCHIVED_CHAT_PRESETS}
+                format={afterHours}
+                value={shown.archivedChatHours}
+                disabled={disabled}
+                onWindowChange={(hours) => {
+                  write("archivedChatHours", hours);
+                }}
+              />
+            </div>
+          }
+        />
+      </SettingsGroup>
+      <StoragePolicyFooter note={storageFootnote(shown)} issue={issue} />
     </section>
   );
+}
+
+/** Two rows read "When", so a select is named with its group as well. */
+function windowLabel(group: string, row: string): string {
+  return `${group}: ${row}`;
+}
+
+/** The line under the groups, or `null` when nothing can be cleaned. */
+function storageFootnote(policy: StoragePolicyValue): string | null {
+  if (policy.chats || policy.archivedChatHours !== null) {
+    return `${APPLIES_EVERYWHERE} ${CHAT_COMES_BACK}`;
+  }
+  return policy.artifacts ? APPLIES_EVERYWHERE : null;
 }
 
 /**
@@ -264,29 +298,23 @@ function ReadErrorStatus(props: { readonly onRetry: () => void }): ReactNode {
   );
 }
 
-/** The line under the rows while either kind is on, and a write's outcome. */
+/** The line under the groups, and a write's outcome. */
 function StoragePolicyFooter(props: {
-  readonly active: boolean;
+  readonly note: string | null;
   readonly issue: ConfigurationWriteIssue | null;
 }): ReactNode {
-  const compact = useSettingsDensity() === "compact";
-  if (!props.active && props.issue === null) return null;
+  if (props.note === null && props.issue === null) return null;
   return (
-    <div
-      className={cn(
-        "flex flex-col gap-2",
-        compact ? "px-4 py-2.5" : "px-5 py-4",
-      )}
-    >
-      {props.active ? (
+    <div className="flex flex-col gap-2 px-1">
+      {props.note === null ? null : (
         <p className="flex items-center gap-2 text-ui-xs text-muted-foreground">
           <span
             aria-hidden
             className="size-1.5 shrink-0 rounded-full bg-success"
           />
-          {STORAGE_FOOTNOTE}
+          {props.note}
         </p>
-      ) : null}
+      )}
       <ConfigurationWriteFeedback issue={props.issue} />
     </div>
   );

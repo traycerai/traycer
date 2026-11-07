@@ -15,6 +15,7 @@ export function StorageSettingsPanel(): ReactNode {
     <SettingsPanelShell
       title={STORAGE.page.label}
       description={STORAGE.page.description}
+      bodyClassName="overflow-visible rounded-none border-none bg-transparent"
     >
       {pick.kind === "local" ? null : <StoragePolicySection pick={pick} />}
     </SettingsPanelShell>

@@ -130,8 +130,21 @@ function renderSection(ui: ReactNode): void {
   );
 }
 
-const FOOTNOTE =
-  "Applies on every host in this environment. A chat comes back when an agent continues it.";
+const APPLIES = "Applies on every host in this environment.";
+const COMES_BACK = "A chat comes back when an agent continues it.";
+const FOOTNOTE = `${APPLIES} ${COMES_BACK}`;
+const SWITCH_DESCRIPTION = "Keep them in the cloud instead of on disk.";
+const IDLE_GROUP = "Tasks you haven't used lately";
+const ARCHIVED_GROUP = "Archived chats";
+
+/** The card of rows under a group's heading. */
+function groupOf(heading: string): HTMLElement {
+  const section = screen
+    .getByRole("heading", { name: heading })
+    .closest("section");
+  if (section === null) throw new Error(`no group under ${heading}`);
+  return section;
+}
 
 async function chatsSwitch(): Promise<HTMLElement> {
   return screen.findByRole("switch", { name: "Chats" });
@@ -142,11 +155,11 @@ function artifactsSwitch(): HTMLElement {
 }
 
 function idleTasksSelect(): HTMLElement {
-  return screen.getByRole("combobox", { name: "Idle tasks" });
+  return screen.getByRole("combobox", { name: `${IDLE_GROUP}: When` });
 }
 
 function archivedChatsSelect(): HTMLElement {
-  return screen.getByRole("combobox", { name: "Archived chats" });
+  return screen.getByRole("combobox", { name: `${ARCHIVED_GROUP}: When` });
 }
 
 /** Waits for the read to land: every control enabled for an owner. */
@@ -258,7 +271,7 @@ describe("<StoragePolicySection />", () => {
     });
   });
 
-  it("writes the whole value under the item's revision when an Idle tasks window is picked", async () => {
+  it("writes the whole value under the item's revision when a task window is picked", async () => {
     host.items = [
       storageItem(
         {
@@ -345,7 +358,7 @@ describe("<StoragePolicySection />", () => {
     });
   });
 
-  it("reads an item whose value does not parse as both switches off, with no footnote and no windows to change", async () => {
+  it("reads an item whose value does not parse as nothing cleanable, and a write from there is a whole valid value", async () => {
     host.items = [storageItem({ freeUpSpace: true }, 2)];
     renderSection(PERSONAL_SECTION);
 
@@ -354,12 +367,77 @@ describe("<StoragePolicySection />", () => {
       expect(control.getAttribute("aria-checked")).toBe("false");
     });
     expect(artifactsSwitch().getAttribute("aria-checked")).toBe("false");
+    expect(archivedChatsSelect().textContent).toContain("Never");
     expect(idleTasksSelect().hasAttribute("disabled")).toBe(true);
-    expect(archivedChatsSelect().hasAttribute("disabled")).toBe(true);
-    expect(screen.queryByText(FOOTNOTE)).toBeNull();
+    expect(screen.queryByText(/Applies on every host/)).toBeNull();
+
+    pickOption(archivedChatsSelect(), "After 7 days");
+
+    await waitFor(() => {
+      expectPut(
+        PERSONAL_ENV,
+        {
+          chats: false,
+          artifacts: false,
+          idleTaskDays: null,
+          archivedChatHours: 168,
+        },
+        2,
+      );
+    });
   });
 
-  it("disables Archived chats but not Idle tasks while Chats is off", async () => {
+  it("groups the controls under two headings, with the switches describing themselves alike", async () => {
+    renderSection(PERSONAL_SECTION);
+    await settled();
+
+    const idle = within(groupOf(IDLE_GROUP));
+    expect(idle.getByRole("switch", { name: "Chats" })).toBeTruthy();
+    expect(idle.getByRole("switch", { name: "Artifacts" })).toBeTruthy();
+    expect(idle.getByRole("combobox")).toBe(idleTasksSelect());
+    expect(idle.getAllByText(SWITCH_DESCRIPTION)).toHaveLength(2);
+    const archived = within(groupOf(ARCHIVED_GROUP));
+    expect(archived.getByRole("combobox")).toBe(archivedChatsSelect());
+    expect(archived.queryByRole("switch")).toBeNull();
+  });
+
+  it.each([
+    {
+      state: "nothing cleanable",
+      value: { chats: false, artifacts: false, archivedChatHours: null },
+      line: null,
+    },
+    {
+      state: "artifacts only",
+      value: { chats: false, artifacts: true, archivedChatHours: null },
+      line: APPLIES,
+    },
+    {
+      state: "chats on",
+      value: { chats: true, artifacts: false, archivedChatHours: null },
+      line: FOOTNOTE,
+    },
+    {
+      state: "archived chats only",
+      value: { chats: false, artifacts: false, archivedChatHours: 168 },
+      line: FOOTNOTE,
+    },
+    {
+      state: "artifacts and archived chats",
+      value: { chats: false, artifacts: true, archivedChatHours: 4 },
+      line: FOOTNOTE,
+    },
+  ])("draws the line under the groups for $state", async ({ value, line }) => {
+    host.items = [storageItem({ ...value, idleTaskDays: null }, 3)];
+    renderSection(PERSONAL_SECTION);
+    await settled();
+
+    expect(
+      screen.queryByText(/Applies on every host/)?.textContent ?? null,
+    ).toBe(line);
+  });
+
+  it("disables the task window but not the archived one while Chats is off", async () => {
     host.items = [
       storageItem(
         {
@@ -374,11 +452,11 @@ describe("<StoragePolicySection />", () => {
     renderSection(PERSONAL_SECTION);
     await settled();
 
-    expect(archivedChatsSelect().hasAttribute("disabled")).toBe(true);
     expect(idleTasksSelect().hasAttribute("disabled")).toBe(false);
+    expect(archivedChatsSelect().hasAttribute("disabled")).toBe(false);
   });
 
-  it("disables Idle tasks too while both switches are off", async () => {
+  it("disables only the task window while both switches are off", async () => {
     host.items = [
       storageItem(
         {
@@ -394,7 +472,30 @@ describe("<StoragePolicySection />", () => {
     await settled();
 
     expect(idleTasksSelect().hasAttribute("disabled")).toBe(true);
-    expect(archivedChatsSelect().hasAttribute("disabled")).toBe(true);
+    expect(archivedChatsSelect().hasAttribute("disabled")).toBe(false);
+  });
+
+  it("disables both windows while a write is pending", async () => {
+    let finish: () => void = () => undefined;
+    host.put = () =>
+      new Promise<EnvironmentConfigurationItemWriteResponse>((resolve) => {
+        finish = () => resolve({ outcome: "saved", revision: 1 });
+      });
+    renderSection(PERSONAL_SECTION);
+    await settled();
+
+    await userEvent.click(await chatsSwitch());
+
+    await waitFor(() => {
+      expect(archivedChatsSelect().hasAttribute("disabled")).toBe(true);
+    });
+    expect(idleTasksSelect().hasAttribute("disabled")).toBe(true);
+    act(() => {
+      finish();
+    });
+    await waitFor(() => {
+      expect(archivedChatsSelect().hasAttribute("disabled")).toBe(false);
+    });
   });
 
   it("lists a stored idle window that is not a preset and shows it selected", async () => {
