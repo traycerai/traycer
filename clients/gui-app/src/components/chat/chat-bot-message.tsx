@@ -39,6 +39,7 @@ import {
   firstLineOf,
 } from "@/lib/bots/bot-trunk-model";
 import { turnReceiptLabel } from "@/lib/bots/bot-turn-receipt";
+import { collectAssistantReplyText } from "@/lib/chat/collect-assistant-reply-text";
 import { useElapsedSeconds } from "@/hooks/use-elapsed-seconds";
 import { useLongPress, type LongPress } from "@/hooks/ui/use-long-press";
 import { useResolvedTheme } from "@/providers/use-resolved-theme";
@@ -479,7 +480,12 @@ function BotRowBody(props: {
   );
 }
 
-/** A row that asks: the card, under its text when that says more than its questions. */
+/**
+ * A row that asks: the card, under its text when that says more than its
+ * questions. The text is the row's whole text, as its segments carry it:
+ * `content` is the list's short, whitespace-folded preview, which stops
+ * matching the questions once they run long or over more than one line.
+ */
 function BotAskingBody(props: {
   readonly message: ChatMessageModel;
   readonly question: BotQuestion;
@@ -490,7 +496,10 @@ function BotAskingBody(props: {
   const { message, question, questions, botTitle, text } = props;
   return (
     <>
-      {message.content === botQuestionsText(question.questions) ? null : text}
+      {collectAssistantReplyText(message.segments) ===
+      botQuestionsText(question.questions).trim()
+        ? null
+        : text}
       <BotQuestionCard
         messageId={message.persistentMessageId}
         question={question}
