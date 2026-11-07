@@ -181,6 +181,37 @@ afterEach(() => {
 });
 
 describe("Agent memories ▸ the host row's write", () => {
+  it.each([
+    { name: "later writer", next: read(false, 7) },
+    { name: "same-host environment change", next: readIn(OTHER_ENV, false, 2) },
+  ])(
+    "shows a real query refetch after terminal application: $name",
+    async ({ next }) => {
+      script.set = () => ({
+        enabled: true,
+        state: "applied",
+        revision: 6,
+        environmentId: ENV,
+        uploadId: null,
+      });
+      const harness = mount();
+      await flipOn();
+      const toggle = screen.getByRole("switch", {
+        name: "Use Traycer memories for agents",
+      });
+      await waitFor(() =>
+        expect(toggle.getAttribute("aria-checked")).toBe("true"),
+      );
+      script.reads = [next];
+      await act(async () => {
+        await harness.queryClient.refetchQueries({ type: "active" });
+      });
+      await waitFor(() =>
+        expect(toggle.getAttribute("aria-checked")).toBe("false"),
+      );
+    },
+  );
+
   it("says the change is saved until the host's own read reaches its revision, then stops saying anything", async () => {
     // Saved at 6; this host still reads 5, then 6 on its next read.
     script.reads = [read(false, 5), read(false, 5), read(true, 6)];

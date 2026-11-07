@@ -174,6 +174,8 @@ function AgentMemoriesRow(): ReactNode {
   const hostId = client.getActiveHostId();
   const [observation, setObservation] = useState<{
     readonly hostId: string | null;
+    readonly queryRead: ConfigAgentMemoriesResponse | undefined;
+    readonly active: boolean;
     readonly read: ConfigAgentMemoriesResponse | undefined;
     readonly progress: AgentMemoryWriteProgress;
   } | null>(null);
@@ -185,7 +187,13 @@ function AgentMemoriesRow(): ReactNode {
     },
     [client],
   );
-  const shown = observation?.hostId === hostId ? observation : null;
+  // A terminal observation bridges the cached read from before submission.
+  // Once the real query receives another snapshot it owns the row again.
+  const shown =
+    observation?.hostId === hostId &&
+    (observation.active || observation.queryRead === query.data)
+      ? observation
+      : null;
   const read = shown?.read ?? query.data;
 
   function submit(asked: boolean): void {
@@ -211,15 +219,21 @@ function AgentMemoriesRow(): ReactNode {
         Date.now() < expiresAt
       );
     }
-    function show(progress: AgentMemoryWriteProgress): void {
-      setObservation({ hostId, read: latestRead, progress });
+    function show(progress: AgentMemoryWriteProgress, active: boolean): void {
+      setObservation({
+        hostId,
+        queryRead: query.data,
+        active,
+        read: latestRead,
+        progress,
+      });
     }
     function finish(progress: AgentMemoryWriteProgress): void {
-      show(progress);
+      show(progress, false);
       stop();
       if (observer.current === current) observer.current = null;
     }
-    show({ kind: "settled" });
+    show({ kind: "settled" }, true);
     // Armed at submission, independently of mutation and read completion.
     deadline = window.setTimeout(() => {
       if (observer.current !== current) return;
@@ -257,7 +271,10 @@ function AgentMemoriesRow(): ReactNode {
             finish({ kind: "unconfirmed" });
             return;
           }
-          show({ kind: answer.state === "queued" ? "queued" : "waiting" });
+          show(
+            { kind: answer.state === "queued" ? "queued" : "waiting" },
+            true,
+          );
           async function tick(): Promise<void> {
             if (!live()) return;
             try {
@@ -328,7 +345,7 @@ function AgentMemoriesRow(): ReactNode {
                 finish(progress);
                 return;
               }
-              show(progress);
+              show(progress, true);
             } catch {
               // A failed read is unavailable evidence, not a write refusal.
               if (!live()) return;
