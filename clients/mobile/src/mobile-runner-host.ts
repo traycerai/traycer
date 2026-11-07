@@ -128,13 +128,17 @@ import {
   fetchSlackAppManifestViaHttp,
   mintSlackAppInstallUrlViaHttp,
   readSlackAppViaHttp,
+  setSlackAppDmsViaHttp,
   registerSlackAppViaHttp,
   type SlackAppInstallUrlResult,
   type SlackAppManifestResult,
   type SlackAppReadResult,
   type SlackAppWriteResult,
 } from "@traycer-clients/shared/host-client/slack-app";
-import type { SlackAppRegisterRequest } from "@traycer/protocol/host/slack-app";
+import type {
+  SlackAppDmsRequest,
+  SlackAppRegisterRequest,
+} from "@traycer/protocol/host/slack-app";
 import {
   mintTeamHostInstallTokenViaHttp,
   type TeamHostInstallTokenResult,
@@ -959,6 +963,18 @@ export class MobileRunnerHost implements IRunnerHost {
       bearerToken,
       null,
       botId,
+    );
+  }
+
+  setSlackAppDms(
+    bearerToken: string,
+    request: SlackAppDmsRequest,
+  ): Promise<SlackAppWriteResult> {
+    return setSlackAppDmsViaHttp(
+      this.serverBaseUrl,
+      bearerToken,
+      null,
+      request,
     );
   }
 

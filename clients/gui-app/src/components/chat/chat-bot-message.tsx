@@ -922,7 +922,9 @@ function TurnReceiptLine(props: {
 }
 
 /** How long a running turn has been running, counting each second. */
-function RunningFor(props: { readonly startedAt: number }): ReactElement {
+export function RunningFor(props: {
+  readonly startedAt: number;
+}): ReactElement {
   const seconds = useElapsedSeconds(props.startedAt, 0, null);
   return <span className="tabular-nums">{formatClockDuration(seconds)}</span>;
 }

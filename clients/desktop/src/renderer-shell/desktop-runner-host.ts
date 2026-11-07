@@ -176,7 +176,10 @@ import type {
   SlackAppReadResult,
   SlackAppWriteResult,
 } from "@traycer-clients/shared/host-client/slack-app";
-import type { SlackAppRegisterRequest } from "@traycer/protocol/host/slack-app";
+import type {
+  SlackAppDmsRequest,
+  SlackAppRegisterRequest,
+} from "@traycer/protocol/host/slack-app";
 import type { TeamHostInstallTokenResult } from "@traycer-clients/shared/host-client/team-host";
 import type { ExecutableWriteGrantFetchResult } from "@traycer-clients/shared/host-client/executable-write-grant";
 import type {
@@ -318,6 +321,10 @@ export interface DesktopPreloadBridge {
   disconnectSlackApp(
     bearerToken: string,
     botId: string,
+  ): Promise<SlackAppWriteResult>;
+  setSlackAppDms(
+    bearerToken: string,
+    request: SlackAppDmsRequest,
   ): Promise<SlackAppWriteResult>;
   mintTeamHostInstallToken(
     bearerToken: string,
@@ -1419,6 +1426,13 @@ export class DesktopRunnerHost implements IRunnerHost {
     botId: string,
   ): Promise<SlackAppWriteResult> {
     return this.bridge.disconnectSlackApp(bearerToken, botId);
+  }
+
+  setSlackAppDms(
+    bearerToken: string,
+    request: SlackAppDmsRequest,
+  ): Promise<SlackAppWriteResult> {
+    return this.bridge.setSlackAppDms(bearerToken, request);
   }
 
   mintTeamHostInstallToken(
