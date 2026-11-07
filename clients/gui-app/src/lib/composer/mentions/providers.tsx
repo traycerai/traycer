@@ -1291,7 +1291,7 @@ function githubRowEntry(args: {
  * `https://GitHub.com/...` spellings. The other reference shapes already ARE
  * the strings rows carry, and prose queries pass through untouched.
  */
-function rootRankingQuery(query: string): string {
+export function rootRankingQuery(query: string): string {
   const reference = parseGithubReferenceQuery(query);
   if (reference === null || reference.kind !== "url") return query;
   const base = `${reference.owner}/${reference.repo}#${reference.number}`;

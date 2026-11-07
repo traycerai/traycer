@@ -52,6 +52,17 @@ describe("the box's text", () => {
     expect(botBoxText(content)).toBe("Ask @Ada and @Scout about @Redesign");
   });
 
+  it("keeps a host mention's canonical id in the sent text", () => {
+    const content = doc([
+      {
+        type: "mention",
+        attrs: { contextType: "host", id: "host-42", label: "Laptop" },
+      },
+    ]);
+    expect(botBoxWire(content)).toBe("@host:Laptop [hostId=host-42]");
+    expect(botBoxText(content)).toBe("@host:Laptop [hostId=host-42]");
+  });
+
   it("keeps formatting on a mention when replacing its chip with a token", () => {
     const formatted: JsonContent = {
       ...chip("<@user-1>", "Ada"),

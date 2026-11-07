@@ -1,3 +1,8 @@
+import { BotMemoryContext } from "@/components/bots/bot-memory-context";
+import { useEnvironmentHostLists } from "@/hooks/bots/use-environment-host-lists-query";
+import { useHostClientForHostId } from "@/hooks/host/use-host-client-for-host-id";
+import { useHostMethodSupport } from "@/hooks/host/use-host-supports-method";
+import { useHostMentionEntries } from "@/hooks/composer/use-host-mention-entries";
 import {
   useCallback,
   useContext,
@@ -131,6 +136,7 @@ export function useBotMentionCompletion(args: {
 }): BotMentionCompletion {
   const { replyRow } = args;
   const identity = useBotIdentity();
+  const hostSource = useBotMentionHosts();
   const directory = useContext(BotMentionsContext);
   const viewerUserId = useAuthStore((s) => s.profile?.userId ?? null);
   const everyone = useMemo(
@@ -155,10 +161,11 @@ export function useBotMentionCompletion(args: {
   const menuShown = menuOpen && paneFocused;
   const activeIndex = useStore(pickerStore, (state) => state.activeIndex);
   const rowCount = useStore(pickerStore, (state) => state.items.length);
-  const listed = useMemo(
+  const namesListed = useMemo(
     () => menuEntries(step, query, offered),
     [offered, query, step],
   );
+  const listed = useHostMentionEntries(step, query, namesListed, hostSource);
   const items = useMemo<ReadonlyArray<ComposerPickerItem>>(
     () =>
       listed.entries.map((entry) => ({ id: entry.id, kind: "mention", entry })),
@@ -168,7 +175,7 @@ export function useBotMentionCompletion(args: {
   // An `@` is prose once its search matched nothing with every name read, or
   // where there is nothing to name.
   const nothingToName =
-    (answered && offered.length === 0) ||
+    (answered && listed.entries.length === 0 && listed.matchedCount === 0) ||
     shouldCloseMentionForNoMatches({
       stepKind: step.kind,
       query,
@@ -241,6 +248,43 @@ export function useBotMentionCompletion(args: {
           : undefined,
     },
     contentOf,
+  };
+}
+
+function useBotMentionHosts(): {
+  hosts: ReadonlyArray<{ hostId: string; label: string }>;
+  answered: boolean;
+} {
+  const memory = useContext(BotMemoryContext);
+  const client = useHostClientForHostId(memory?.hostId ?? null);
+  const support = useHostMethodSupport(
+    memory?.hostId ?? null,
+    "environment.host.list",
+  );
+  const environmentId = memory?.environmentId ?? null;
+  const hostLists = useEnvironmentHostLists(
+    client,
+    environmentId === null ? [] : [environmentId],
+    environmentId !== null && support === true,
+  );
+  const environmentHosts =
+    environmentId === null
+      ? undefined
+      : hostLists.hostsByEnvironmentId.get(environmentId);
+  const mentionHosts = useMemo(
+    () =>
+      (environmentHosts ?? []).map((host) => ({
+        hostId: host.hostId,
+        label: host.hostLabel ?? host.hostId,
+      })),
+    [environmentHosts],
+  );
+  return {
+    hosts: mentionHosts,
+    answered:
+      environmentId === null ||
+      support === false ||
+      environmentHosts !== undefined,
   };
 }
 

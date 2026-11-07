@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 
+import { extractPlainTextFromComposerJSONContent } from "../composer-plain-text";
 import type { JsonContent } from "../registry";
 import { ContextType, jsonContentToMarkdown } from "../json-content-serializer";
 
@@ -45,6 +46,42 @@ function toDisplay(content: JsonContent): string {
     platform: "POSIX",
   });
 }
+
+describe("Host mention serialization", () => {
+  it("projects a host-only draft to visible text", () => {
+    const content: JsonContent = {
+      type: "doc",
+      content: [
+        {
+          type: "paragraph",
+          content: [
+            {
+              type: "mention",
+              attrs: {
+                contextType: "host",
+                id: "host-42",
+                label: "Laptop",
+              },
+            },
+          ],
+        },
+      ],
+    };
+    expect(extractPlainTextFromComposerJSONContent(content)).toContain(
+      "Laptop",
+    );
+  });
+
+  it("sends the canonical host id with the host label", () => {
+    const content = mentionDoc({
+      contextType: ContextType.Host,
+      id: "host-42",
+      label: "Laptop",
+    });
+    expect(toLlm(content)).toBe("ask @host:Laptop [hostId=host-42] for status");
+    expect(toDisplay(content)).toContain("host:Laptop");
+  });
+});
 
 describe("Agent mention serialization", () => {
   it("keeps the released chat context serializing unchanged for the LLM", () => {

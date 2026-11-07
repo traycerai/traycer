@@ -65,6 +65,7 @@ export enum ContextType {
    * list bots.
    */
   Bot = "bot",
+  Host = "host",
   Execution = "execution",
   User = "user",
 }
@@ -789,6 +790,7 @@ function getValidationMarker(nodeId: string, ctx: SerializerContext): string {
 
 export interface MentionAttrs {
   contextType: string;
+  hostId?: string;
   id?: string;
   label?: string;
   relPath?: string;
@@ -818,6 +820,8 @@ export function formatMentionForDisplayQuery(attrs: MentionAttrs): string {
   if (!attrs) return "";
 
   switch (attrs.contextType) {
+    case ContextType.Host:
+      return `host:${attrs.label || attrs.id || ""}`;
     case ContextType.File:
     case ContextType.Folder:
       return attrs.relPath || attrs.id || "";
@@ -1068,6 +1072,8 @@ function formatMentionForLLMQuery(
         ? `@browser-tab:${title} [tabId is unavailable]`
         : `@browser-tab:${title} [tabId=${tabId}]`;
     }
+    case ContextType.Host:
+      return `@host:${attrs.label || attrs.hostId || attrs.id || ""} [hostId=${attrs.hostId || attrs.id || ""}]`;
     // The ids travel in the text, as a GitHub mention carries its URL: an
     // agent cannot list bots, and messages one with the bot id as `taskId`
     // and the trunk agent id as `toAgentId`.

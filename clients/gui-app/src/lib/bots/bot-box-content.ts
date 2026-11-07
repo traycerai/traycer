@@ -42,6 +42,15 @@ function withoutImages(
     ) {
       return [{ type: "text", text: chip(child.attrs), marks: child.marks }];
     }
+    if (child.type === "mention" && child.attrs?.contextType === "host") {
+      return [
+        {
+          type: "text",
+          text: `@host:${String(child.attrs.label)} [hostId=${String(child.attrs.hostId ?? child.attrs.id)}]`,
+          marks: child.marks,
+        },
+      ];
+    }
     const kept = withoutImages(child, chip);
     return [child.type === "blockquote" ? quotedLines(kept) : kept];
   });
