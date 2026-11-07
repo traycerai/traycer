@@ -202,88 +202,112 @@ afterEach(() => {
 });
 
 describe("Agent memories ▸ the host row's write", () => {
-  it("refreshes the Personal switch when a revision changes elsewhere", async () => {
-    script.statuses = [
-      environmentStatusFixture({
-        principal: { kind: "personal" },
-        receivedRevision: 5,
-        appliedRevision: 5,
-      }),
-    ];
-    const harness = mountTeamPage(
-      { kind: "host" },
-      {
-        ...handlers(),
-        "environment.list": () => ({
-          environments: [
-            {
-              environmentId: ENV,
-              ownerKind: "user",
-              ownerId: "user-me",
-              roomId: "room-personal",
-              label: "Personal",
-              effectiveRole: "owner",
-              kind: "personal",
-              hostCount: 1,
-              providerHandle: null,
-            },
-          ],
+  it.each(["settled", "held initial"] as const)(
+    "refreshes the Personal switch when a revision overtakes a %s GET",
+    async (initialRead) => {
+      let releaseInitial: (value: ConfigAgentMemoriesResponse) => void = () => {
+        throw new Error("initial GET has not started");
+      };
+      if (initialRead === "held initial") {
+        let first = true;
+        script.get = () => {
+          if (!first) return Promise.resolve(read(true, 6));
+          first = false;
+          return new Promise((resolve) => {
+            releaseInitial = resolve;
+          });
+        };
+      }
+      script.statuses = [
+        environmentStatusFixture({
+          principal: { kind: "personal" },
+          receivedRevision: 5,
+          appliedRevision: 5,
         }),
-      },
-    );
-    harness.queryClient.setDefaultOptions({
-      queries: {
-        retry: false,
-        staleTime: 60_000,
-        gcTime: 300_000,
-      },
-    });
-    render(
-      <>
-        <PersonalRevision />
-        <AgentMemoriesSettingsPanel />
-      </>,
-      { wrapper: harness.Wrapper },
-    );
-    await waitFor(() => {
-      expect(screen.getByTestId("personal-revision").textContent).toBe("5");
-      expect(
-        screen
-          .getByRole("switch", { name: "Use Traycer memories for agents" })
-          .getAttribute("aria-checked"),
-      ).toBe("false");
-      expect(harness.paramsOf("environment.list")).toHaveLength(1);
-    });
-    script.reads = [read(true, 6)];
-    script.statuses = [
-      environmentStatusFixture({
-        principal: { kind: "personal" },
-        receivedRevision: 6,
-        appliedRevision: 6,
-      }),
-    ];
-    await act(async () => {
-      await harness.queryClient.invalidateQueries({
-        queryKey: hostQueryKeys.methodScope(
-          requireTeamHostClient().getActiveHostId(),
-          "environment.status",
-        ),
+      ];
+      const harness = mountTeamPage(
+        { kind: "host" },
+        {
+          ...handlers(),
+          "environment.list": () => ({
+            environments: [
+              {
+                environmentId: ENV,
+                ownerKind: "user",
+                ownerId: "user-me",
+                roomId: "room-personal",
+                label: "Personal",
+                effectiveRole: "owner",
+                kind: "personal",
+                hostCount: 1,
+                providerHandle: null,
+              },
+            ],
+          }),
+        },
+      );
+      harness.queryClient.setDefaultOptions({
+        queries: {
+          retry: false,
+          staleTime: 60_000,
+          gcTime: 300_000,
+        },
       });
-    });
-    await waitFor(() =>
-      expect(screen.getByTestId("personal-revision").textContent).toBe("6"),
-    );
-    await waitFor(() =>
-      expect(
-        screen
-          .getByRole("switch", {
-            name: "Use Traycer memories for agents",
-          })
-          .getAttribute("aria-checked"),
-      ).toBe("true"),
-    );
-    expect(harness.paramsOf("config.agentMemories.set")).toHaveLength(0);
-  });
+      render(
+        <>
+          <PersonalRevision />
+          <AgentMemoriesSettingsPanel />
+        </>,
+        { wrapper: harness.Wrapper },
+      );
+      await waitFor(() => {
+        expect(screen.getByTestId("personal-revision").textContent).toBe("5");
+        if (initialRead === "settled") {
+          expect(
+            screen
+              .getByRole("switch", { name: "Use Traycer memories for agents" })
+              .getAttribute("aria-checked"),
+          ).toBe("false");
+        }
+        expect(harness.paramsOf("environment.list")).toHaveLength(1);
+        expect(harness.paramsOf("config.agentMemories.get")).toHaveLength(1);
+      });
+      script.reads = [read(true, 6)];
+      script.statuses = [
+        environmentStatusFixture({
+          principal: { kind: "personal" },
+          receivedRevision: 6,
+          appliedRevision: 6,
+        }),
+      ];
+      await act(async () => {
+        await harness.queryClient.invalidateQueries({
+          queryKey: hostQueryKeys.methodScope(
+            requireTeamHostClient().getActiveHostId(),
+            "environment.status",
+          ),
+        });
+      });
+      await waitFor(() =>
+        expect(screen.getByTestId("personal-revision").textContent).toBe("6"),
+      );
+      if (initialRead === "held initial") {
+        act(() => {
+          releaseInitial(read(false, 5));
+        });
+      }
+      await waitFor(() =>
+        expect(
+          screen
+            .getByRole("switch", {
+              name: "Use Traycer memories for agents",
+            })
+            .getAttribute("aria-checked"),
+        ).toBe("true"),
+      );
+      expect(harness.paramsOf("config.agentMemories.set")).toHaveLength(0);
+    },
+  );
 
   it.each(["applied", "saved", "queued"] as const)(
     "keeps the confirmed %s read when Settings reopens inside cache freshness",
