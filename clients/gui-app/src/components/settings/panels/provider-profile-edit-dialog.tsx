@@ -1,3 +1,5 @@
+import { useSignOutProviderProfile } from "@/hooks/providers/use-sign-out-provider-profile-mutation";
+import { useHostSupportsMethod } from "@/hooks/host/use-host-supports-method";
 import { useId, useState, type ReactNode } from "react";
 import { toast } from "sonner";
 import { ChevronRight, RefreshCw, Trash2 } from "lucide-react";
@@ -42,6 +44,7 @@ import { useHostCredentialRefusal } from "@/hooks/host/use-host-credential-refus
 import {
   usePersonalHostName,
   usePersonalHostState,
+  usePersonalPageHost,
 } from "@/components/settings/personal/personal-page-context";
 import {
   deviceProfileKeyCustodyLine,
@@ -483,6 +486,42 @@ function ProfileEditAccountSection(props: {
   );
 }
 
+function ProfileSignOutAction(props: {
+  readonly providerId: ProviderId;
+  readonly profile: ProviderProfile;
+  readonly disabled: boolean;
+  readonly onSignedOut: () => void;
+}): ReactNode {
+  const signOut = useSignOutProviderProfile();
+  const host = usePersonalPageHost();
+  const supported = useHostSupportsMethod(
+    host.hostId,
+    "providers.signOutProfile",
+  );
+  if (
+    !supported ||
+    props.profile.kind !== "managed" ||
+    props.profile.presence?.kind !== "admitted"
+  )
+    return null;
+  return (
+    <Button
+      type="button"
+      size="sm"
+      variant="ghost"
+      disabled={props.disabled || signOut.isPending}
+      onClick={() =>
+        signOut.mutate(
+          { providerId: props.providerId, profileId: props.profile.profileId },
+          { onSuccess: props.onSignedOut },
+        )
+      }
+    >
+      Sign out
+    </Button>
+  );
+}
+
 export function ProfileEditDialog(props: {
   readonly state: ProviderCliState;
   readonly profile: ProviderProfile;
@@ -711,6 +750,12 @@ export function ProfileEditDialog(props: {
                   </Button>
                 </span>
               </TooltipWrapper>
+              <ProfileSignOutAction
+                providerId={providerId}
+                profile={props.profile}
+                disabled={savePending}
+                onSignedOut={() => props.onOpenChange(false)}
+              />
               <div className="flex items-center gap-2">
                 <Button
                   type="button"
