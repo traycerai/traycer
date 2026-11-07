@@ -204,16 +204,17 @@ export function sandboxWithdrawalLine(
 }
 
 /**
- * Who made a team sandbox, or `null` when the server does not
- * say (a personal sandbox, or a server before the field).
+ * Who made a team sandbox, as the words that follow "Created by", or `null`
+ * when the server does not say (a personal sandbox, or a server before the
+ * field).
  */
-export function sandboxCreatorLine(
+export function sandboxCreatorName(
   summary: SandboxSummary,
   viewerUserId: string | null,
 ): string | null {
   const creator = summary.createdBy;
   if (creator === null) return null;
-  return `Created by ${memberWords(creator, viewerUserId, CREATOR_WORDS)}`;
+  return memberWords(creator, viewerUserId, CREATOR_WORDS);
 }
 
 /**
@@ -369,18 +370,19 @@ export function sandboxOperationalLine(
     case "failed":
       return null;
     case "creating":
+      return "This takes about 10 seconds once capacity is found.";
     case "stopping":
+      return "Its disk is kept; running processes end.";
     case "stopped":
+      return "Disk kept, processes ended. Start boots it again; shells marked relaunch-on-restart come back.";
     case "suspended":
+      return "Resumes on your next action.";
     case "released":
+      return "Files kept. The next shell starts it.";
     case "destroying":
-    case "destroyed": {
-      const line = STATE_LINE[state]
-        .replace(/^[^.,]+[.,]\s*/, "")
-        .replace(/ Billed at the storage rate\./, "")
-        .replace(/ and nothing more is billed/, "");
-      return line.charAt(0).toUpperCase() + line.slice(1);
-    }
+      return "Its disk is being deleted.";
+    case "destroyed":
+      return "Its disk is gone.";
   }
 }
 

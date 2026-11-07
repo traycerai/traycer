@@ -17,6 +17,7 @@ import { useCanEditConfiguration } from "./configuration-source";
 
 import {
   sameConfigurationItemAddress,
+  configurationItemDraft,
   type ConfigurationItemWrite,
   type ConfigurationItemWriteFailure,
   type ConfigurationItemWrites,
@@ -52,7 +53,8 @@ export function TeamTextItems(props: {
   const canEdit = useCanEditConfiguration();
   const pending = props.writes.pending?.write ?? null;
   const accepted = props.writes.pending?.accepted !== null && pending !== null;
-  const inventory = textInventory(props.items, pending);
+  const inventory = textInventory(props.items, pending, props.writes.drafts);
+  const newDraft = newTextDraft(props);
   const rows = inventory.filter(
     (item) =>
       item.kind === props.kind &&
@@ -72,28 +74,39 @@ export function TeamTextItems(props: {
       />
       {rows.length === 0 ? null : (
         <div className="rounded-lg border border-border/60">
-          {rows.map((item) => (
-            <TeamTextItemEditor
-              // A row is kind+key+os, and its key carries any provider prefix;
-              // the draft seeds from it once, so a new address must remount.
-              key={`${item.os}:${item.key}:${item.revision}:${accepted && textRowWrite(item, pending) !== null}`}
-              item={item}
-              failure={textRowFailure(item, props.kind, props.writes.failure)}
-              pending={pending}
-              onWrite={props.writes.write}
-              saving={!accepted && textRowWrite(item, pending) !== null}
-              accepted={accepted ? textRowWrite(item, pending) !== null : false}
-              kind={props.kind}
-              os={props.os}
-              osLabel={
-                props.os === "any" && item.os !== null && item.os !== "any"
-                  ? OS_LABELS[item.os]
-                  : null
-              }
-              providerId={props.providerId}
-              details={props.renderDetails(item)}
-            />
-          ))}
+          {rows.map((item) => {
+            const draft = configurationItemDraft(props.writes, item);
+            const written = textRowWrite(item, pending) !== null;
+            return (
+              <TeamTextItemEditor
+                // Submitted drafts restore from their owner when the row revision or form mode changes.
+                key={`${item.os}:${item.key}:${item.revision}:${accepted && written}:${draft !== null}`}
+                item={item}
+                currentItem={
+                  props.items.find((current) =>
+                    sameConfigurationItemAddress(current, item),
+                  ) ?? null
+                }
+                draft={draft}
+                onDraftChange={props.writes.updateDraft}
+                onDiscardDraft={props.writes.discardDraft}
+                failure={textRowFailure(item, props.kind, props.writes.failure)}
+                pending={pending}
+                onWrite={props.writes.write}
+                saving={!accepted && written}
+                accepted={accepted ? written : false}
+                kind={props.kind}
+                os={props.os}
+                osLabel={
+                  props.os === "any" && item.os !== null && item.os !== "any"
+                    ? OS_LABELS[item.os]
+                    : null
+                }
+                providerId={props.providerId}
+                details={props.renderDetails(item)}
+              />
+            );
+          })}
         </div>
       )}
       {rows.length === 0 && pending === null ? (
@@ -101,8 +114,12 @@ export function TeamTextItems(props: {
       ) : null}
       {canEdit ? (
         <TeamTextItemEditor
-          key={`new:${props.kind}:${props.os}:${props.providerId}:${accepted}`}
+          key={`new:${props.kind}:${props.os}:${props.providerId}:${accepted}:${newDraft.held?.key ?? "new"}:${newDraft.visible !== null}`}
           item={null}
+          currentItem={null}
+          draft={newDraft.visible}
+          onDraftChange={props.writes.updateDraft}
+          onDiscardDraft={props.writes.discardDraft}
           failure={textRowFailure(null, props.kind, props.writes.failure)}
           pending={pending}
           onWrite={props.writes.write}
@@ -143,22 +160,75 @@ function AcceptedNewTextItem(props: {
   );
 }
 
+function newTextDraft(props: {
+  readonly items: readonly ConfigurationItem[];
+  readonly kind: "variable" | "env_override";
+  readonly os: EnvironmentOs;
+  readonly providerId: string | null;
+  readonly writes: ConfigurationItemWrites;
+}): {
+  readonly held: ConfigurationItemWrite | null;
+  readonly visible: ConfigurationItemWrite | null;
+} {
+  const held =
+    props.writes.drafts.find(
+      (draft) =>
+        draft.original === null &&
+        draft.kind === props.kind &&
+        draft.os === props.os &&
+        (props.providerId === null ||
+          draft.key.startsWith(`${props.providerId}:`)),
+    ) ?? null;
+  const observed =
+    held !== null &&
+    props.items.some((item) => sameConfigurationItemAddress(item, held));
+  return { held, visible: observed ? null : held };
+}
+
 function textInventory(
   items: readonly ConfigurationItem[],
   pending: ConfigurationItemWrite | null,
+  drafts: readonly ConfigurationItemWrite[],
 ): readonly ConfigurationItem[] {
-  if (
-    pending?.original === null ||
-    pending?.original === undefined ||
-    items.some((item) => sameConfigurationItemAddress(item, pending))
-  )
-    return items;
-  return [...items, pending.original];
+  const inventory = [...items];
+  const retained = pending === null ? drafts : [...drafts, pending];
+  for (const write of retained) {
+    if (
+      write.original !== null &&
+      !inventory.some((item) => sameConfigurationItemAddress(item, write))
+    )
+      inventory.push(write.original);
+  }
+  return inventory;
+}
+
+function textDraftName(
+  draft: ConfigurationItemWrite | null,
+  providerId: string | null,
+): string {
+  if (draft === null) return "";
+  return draft.key.slice(providerId === null ? 0 : providerId.length + 1);
+}
+
+function shownText(
+  item: ConfigurationItem | null,
+  pending: ConfigurationItemWrite | null,
+  accepted: boolean,
+): string {
+  if (accepted && pending?.action === "put")
+    return configurationTextValueSchema.parse(pending.value).value;
+  return item === null
+    ? ""
+    : configurationTextValueSchema.parse(item.value).value;
 }
 
 function TeamTextItemEditor(props: {
   readonly failure: ConfigurationItemWriteFailure | null;
   readonly item: ConfigurationItem | null;
+  readonly currentItem: ConfigurationItem | null;
+  readonly draft: ConfigurationItemWrite | null;
+  readonly onDraftChange: (draft: ConfigurationItemWrite) => void;
+  readonly onDiscardDraft: ConfigurationItemWrites["discardDraft"];
   readonly pending: ConfigurationItemWrite | null;
   readonly onWrite: (write: ConfigurationItemWrite) => Promise<void>;
   readonly saving: boolean;
@@ -171,17 +241,16 @@ function TeamTextItemEditor(props: {
   readonly details: ReactNode;
 }): ReactNode {
   const canEdit = useCanEditConfiguration();
-  const shownValue =
-    props.accepted && props.pending?.action === "put"
-      ? props.pending.value
-      : props.item?.value;
-  const saved =
-    shownValue === undefined
-      ? ""
-      : configurationTextValueSchema.parse(shownValue).value;
-  const [name, setName] = useState("");
-  const [value, setValue] = useState(saved);
-  const [editing, setEditing] = useState(false);
+  const saved = shownText(props.item, props.pending, props.accepted);
+  const [name, setName] = useState(() =>
+    textDraftName(props.draft, props.providerId),
+  );
+  const [value, setValue] = useState(() =>
+    props.draft === null
+      ? saved
+      : configurationTextValueSchema.parse(props.draft.value).value,
+  );
+  const [editing, setEditing] = useState(props.draft?.draftField === "value");
   const title = props.item?.key ?? "New variable";
   const label = props.osLabel === null ? title : `${title} · ${props.osLabel}`;
   const validName = /^[A-Za-z_][A-Za-z0-9_]*$/.test(name.trim());
@@ -197,20 +266,27 @@ function TeamTextItemEditor(props: {
       // An item keeps its own scope; only a new one takes the picker's.
       os: props.item === null ? props.os : props.item.os,
       action: "put",
+      draftField: "value",
       value: { value },
-      original: props.item,
+      original: props.currentItem,
     };
+    if (
+      props.draft !== null &&
+      !sameConfigurationItemAddress(props.draft, write)
+    )
+      props.onDiscardDraft(props.draft);
     void props.onWrite(write);
   };
   const deleteItem = (): void => {
-    if (props.item === null) return;
+    if (props.item === null || props.currentItem === null) return;
     const write: ConfigurationItemWrite = {
       kind: props.kind,
       key: props.item.key,
       os: props.item.os,
       action: "remove",
+      draftField: null,
       value: { value: saved },
-      original: props.item,
+      original: props.currentItem,
     };
     void props.onWrite(write);
   };
@@ -236,6 +312,7 @@ function TeamTextItemEditor(props: {
         label={label}
         osLabel={props.osLabel}
         isNew={props.item === null}
+        canDelete={props.currentItem !== null || props.saving}
         canEdit={canEdit}
         editing={editing}
         disabled={props.pending !== null}
@@ -243,7 +320,11 @@ function TeamTextItemEditor(props: {
         value={value}
         saved={saved}
         onName={setName}
-        onValue={setValue}
+        onValue={(next) => {
+          setValue(next);
+          if (props.draft !== null)
+            props.onDraftChange({ ...props.draft, value: { value: next } });
+        }}
         onEdit={() => setEditing(true)}
         onDelete={deleteItem}
         details={props.details}
@@ -260,6 +341,7 @@ function TeamTextItemEditor(props: {
           saving={props.saving}
           onSave={save}
           onCancel={() => {
+            if (props.draft !== null) props.onDiscardDraft(props.draft);
             setValue(saved);
             setEditing(false);
           }}
@@ -330,6 +412,7 @@ function TeamTextFields(props: {
   readonly label: string;
   readonly osLabel: string | null;
   readonly isNew: boolean;
+  readonly canDelete: boolean;
   readonly canEdit: boolean;
   readonly editing: boolean;
   readonly disabled: boolean;
@@ -348,7 +431,7 @@ function TeamTextFields(props: {
   if (props.canEdit)
     valueControl = props.editing ? (
       <Input
-        ref={focusVariableValue}
+        ref={props.isNew ? null : focusInput}
         aria-label={`${props.label} value`}
         disabled={props.disabled}
         value={props.value}
@@ -380,6 +463,7 @@ function TeamTextFields(props: {
       <div className="col-start-1 row-start-2 min-w-0 sm:col-start-2 sm:row-start-1">
         {props.isNew ? (
           <Input
+            ref={focusInput}
             aria-label="Variable name"
             disabled={props.disabled}
             value={props.name}
@@ -390,7 +474,7 @@ function TeamTextFields(props: {
         {valueControl}
         {props.details}
       </div>
-      {props.canEdit && !props.isNew ? (
+      {props.canEdit && !props.isNew && props.canDelete ? (
         <DropdownMenu>
           <DropdownMenuTrigger asChild>
             <Button
@@ -415,6 +499,6 @@ function TeamTextFields(props: {
   );
 }
 
-function focusVariableValue(node: HTMLInputElement | null): void {
+function focusInput(node: HTMLInputElement | null): void {
   node?.focus();
 }

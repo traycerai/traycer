@@ -10,6 +10,7 @@ import {
   sandboxFrozenLine,
   sandboxGuestConfigFailure,
   sandboxIdleLine,
+  sandboxOperationalLine,
   sandboxSecretsReadiness,
   sandboxStateLine,
   sandboxSuspendKeepsLine,
@@ -295,6 +296,35 @@ describe("sandboxStateLine", () => {
 
   it("says just Sandbox for a state it does not know", () => {
     expect(sandboxStateLine(null, false, null)).toBe("Sandbox");
+  });
+});
+
+describe("sandboxOperationalLine", () => {
+  const OPERATIONAL_LINE: Record<HostSandboxState, string | null> = {
+    creating: "This takes about 10 seconds once capacity is found.",
+    awake: null,
+    suspending: null,
+    suspended: "Resumes on your next action.",
+    resuming: null,
+    stopping: "Its disk is kept; running processes end.",
+    stopped:
+      "Disk kept, processes ended. Start boots it again; shells marked relaunch-on-restart come back.",
+    starting: null,
+    destroying: "Its disk is being deleted.",
+    destroyed: "Its disk is gone.",
+    failed: null,
+    released: "Files kept. The next shell starts it.",
+  };
+
+  it.each(HOST_SANDBOX_STATES)("speaks the fixed line for %s", (state) => {
+    expect(sandboxOperationalLine(state, false)).toBe(OPERATIONAL_LINE[state]);
+  });
+
+  it("speaks no line for an unknown state or a frozen sandbox", () => {
+    expect(sandboxOperationalLine(null, false)).toBeNull();
+    for (const state of HOST_SANDBOX_STATES) {
+      expect(sandboxOperationalLine(state, true)).toBeNull();
+    }
   });
 });
 

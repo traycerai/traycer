@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   sandboxCardShowsCostView,
-  sandboxCreatorLine,
+  sandboxCreatorName,
   sandboxPodRoomLine,
   sandboxTeamFrozenLine,
   sandboxWakePayerName,
@@ -19,55 +19,27 @@ import { sandboxSummaryFixture } from "@/hooks/sandboxes/__tests__/sandbox-fixtu
 
 const VIEWER = "user-viewer";
 
-describe("sandboxCreatorLine", () => {
-  it("is null for a sandbox with no recorded creator", () => {
-    expect(
-      sandboxCreatorLine(sandboxSummaryFixture({ createdBy: null }), VIEWER),
-    ).toBeNull();
-  });
-
-  it("says 'Created by you' for the viewer", () => {
-    expect(
-      sandboxCreatorLine(
-        sandboxSummaryFixture({
-          createdBy: { userId: VIEWER, displayName: "Vera Viewer" },
-        }),
-        VIEWER,
-      ),
-    ).toBe("Created by you");
-  });
-
-  it("names another member", () => {
-    expect(
-      sandboxCreatorLine(
-        sandboxSummaryFixture({
-          createdBy: { userId: "user-ada", displayName: "Ada Lovelace" },
-        }),
-        VIEWER,
-      ),
-    ).toBe("Created by Ada Lovelace");
-  });
-
+describe("sandboxCreatorName", () => {
   it("says 'a team member' when the member has no display name", () => {
     expect(
-      sandboxCreatorLine(
+      sandboxCreatorName(
         sandboxSummaryFixture({
           createdBy: { userId: "user-ada", displayName: null },
         }),
         VIEWER,
       ),
-    ).toBe("Created by a team member");
+    ).toBe("a team member");
   });
 
   it("never says 'you' when the viewer is unknown", () => {
     expect(
-      sandboxCreatorLine(
+      sandboxCreatorName(
         sandboxSummaryFixture({
           createdBy: { userId: "user-ada", displayName: "Ada Lovelace" },
         }),
         null,
       ),
-    ).toBe("Created by Ada Lovelace");
+    ).toBe("Ada Lovelace");
   });
 });
 

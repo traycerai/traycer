@@ -141,6 +141,52 @@ describe("TeamTextItems accepted writes", () => {
     );
   });
 
+  it("moves a refused new-variable draft when its name changes before a deliberate Save", async () => {
+    let items: EnvironmentConfigurationItem[] = [];
+    let puts = 0;
+    const harness = mountTeamPage(poolSource("editor"), {
+      "environment.configuration.items": () => ({ items }),
+      "environment.configuration.items.put": () => {
+        puts += 1;
+        if (puts === 1) throw new Error("write unavailable");
+        items = [
+          configurationItem({
+            kind: "variable",
+            key: "NEW_NAME",
+            os: "any",
+            value: { value: "draft" },
+            revision: 2,
+          }),
+        ];
+        return { outcome: "saved", revision: 2 };
+      },
+    });
+    render(<TextItemsPage />, { wrapper: harness.Wrapper });
+    await userEvent.click(screen.getByRole("button", { name: "Add variable" }));
+    await userEvent.type(screen.getByLabelText("Variable name"), "OLD_NAME");
+    await userEvent.type(screen.getByLabelText("New variable value"), "draft");
+    await userEvent.click(
+      screen.getByRole("button", { name: "Add a variable" }),
+    );
+    await screen.findByRole("alert");
+    await userEvent.clear(screen.getByLabelText("Variable name"));
+    await userEvent.type(screen.getByLabelText("Variable name"), "NEW_NAME");
+    await userEvent.click(
+      screen.getByRole("button", { name: "Add a variable" }),
+    );
+    await expectRecovered();
+    expect(screen.queryByLabelText("Variable name")).toBeNull();
+    expect(
+      screen.getByRole("button", { name: "Edit NEW_NAME value" }),
+    ).toHaveProperty("textContent", "draft");
+    expect(
+      harness.paramsOf("environment.configuration.items.put"),
+    ).toMatchObject([
+      { key: "OLD_NAME", revision: null },
+      { key: "NEW_NAME", revision: null },
+    ]);
+  });
+
   it("retains a disappearing delete until acceptance and a successful absent read, despite a shell collision", async () => {
     const text = configurationItem({
       kind: "variable",
@@ -201,9 +247,14 @@ describe("TeamTextItems accepted writes", () => {
       await harness.queryClient.refetchQueries();
     });
     await waitFor(() => {
-      expect(
-        screen.getByRole("button", { name: "Edit NODE_ENV value" }),
-      ).toHaveProperty("disabled", true);
+      expect(screen.getByLabelText("NODE_ENV value")).toHaveProperty(
+        "value",
+        "production",
+      );
+      expect(screen.getByLabelText("NODE_ENV value")).toHaveProperty(
+        "disabled",
+        true,
+      );
     });
     await act(async () => {
       write.resolve({ outcome: "saved", revision: 2 });
@@ -257,21 +308,39 @@ describe("TeamTextItems accepted writes", () => {
     ).toHaveLength(1);
   });
 
-  it("keeps a failed put's message in its editable draft row and saves on the next try", async () => {
-    let failing = true;
+  it("keeps a draft and its transport failure across an in-flight revision change, then saves on the new revision", async () => {
+    let puts = 0;
+    const firstWrite =
+      Promise.withResolvers<EnvironmentConfigurationItemWriteResponse>();
     const linux = { ...variable("linux-value", 1), os: "linux" as const };
     let items = [variable("development", 1), linux];
     const harness = mountTeamPage(poolSource("editor"), {
       "environment.configuration.items": () => ({ items }),
       "environment.configuration.items.put": () => {
-        if (failing) throw new Error("the cloud could not be reached");
-        items = [variable("production", 2), linux];
-        return { outcome: "saved", revision: 2 };
+        puts += 1;
+        if (puts === 1) return firstWrite.promise;
+        items = [variable("production", 3), linux];
+        return { outcome: "saved", revision: 3 };
       },
     });
     render(<TextItemsPage />, { wrapper: harness.Wrapper });
     await editVariable("production");
     await userEvent.click(screen.getByRole("button", { name: "Save" }));
+    const submittedField = screen.getByLabelText("NODE_ENV value");
+    items = [variable("server-value", 2), linux];
+    await act(async () => {
+      await harness.queryClient.refetchQueries();
+    });
+    await waitFor(() => {
+      const field = screen.getByLabelText("NODE_ENV value");
+      expect(field).not.toBe(submittedField);
+      expect(field).toHaveProperty("value", "production");
+      expect(field).toHaveProperty("disabled", true);
+    });
+    await act(async () => {
+      firstWrite.reject(new Error("the cloud could not be reached"));
+      await firstWrite.promise.catch(() => undefined);
+    });
     const row = screen.getByRole("region", { name: "NODE_ENV" });
     expect(await within(row).findByRole("alert")).toHaveProperty(
       "textContent",
@@ -299,7 +368,6 @@ describe("TeamTextItems accepted writes", () => {
     expect(
       harness.paramsOf("environment.configuration.items.put"),
     ).toHaveLength(1);
-    failing = false;
     await userEvent.click(within(row).getByRole("button", { name: "Save" }));
     await expectRecovered();
     expect(screen.queryByRole("alert")).toBeNull();
@@ -309,6 +377,9 @@ describe("TeamTextItems accepted writes", () => {
     expect(
       harness.paramsOf("environment.configuration.items.put"),
     ).toHaveLength(2);
+    expect(
+      harness.paramsOf("environment.configuration.items.put")[1],
+    ).toMatchObject({ revision: 2 });
   });
 
   it("retains acceptance after a failed read and retries only that read before unlocking", async () => {
@@ -403,6 +474,30 @@ describe("TeamTextItems accepted writes", () => {
     expect(screen.getByLabelText("NODE_ENV value")).toHaveProperty(
       "value",
       "recovered",
+    );
+  });
+});
+
+describe("TeamTextItems focus", () => {
+  it("puts focus on the name input when a new variable row opens", async () => {
+    const harness = mountTeamPage(poolSource("editor"), {
+      "environment.configuration.items": () => ({ items: [] }),
+    });
+    render(<TextItemsPage />, { wrapper: harness.Wrapper });
+    await userEvent.click(screen.getByRole("button", { name: "Add variable" }));
+    expect(document.activeElement).toBe(screen.getByLabelText("Variable name"));
+  });
+
+  it("puts focus on the value input when an existing variable is edited", async () => {
+    const harness = mountTeamPage(poolSource("editor"), {
+      "environment.configuration.items": () => ({ items: [variable("a", 1)] }),
+    });
+    render(<TextItemsPage />, { wrapper: harness.Wrapper });
+    await userEvent.click(
+      await screen.findByRole("button", { name: "Edit NODE_ENV value" }),
+    );
+    expect(document.activeElement).toBe(
+      screen.getByLabelText("NODE_ENV value"),
     );
   });
 });

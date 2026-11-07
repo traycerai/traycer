@@ -1739,13 +1739,11 @@ function ProviderDetail({
               rather than left for the pointer-events-none pane to explain on
               its own - the inert styling alone gave no reason at all. Usage
               stays off this gate the same way it stays off the inert styling
-              below: it is deliberately still usable while the provider is
-              off, so a reader on it is not told to turn the provider on. */}
+              below: its profile controls are deliberately still usable while
+              the provider is off, so the tab names no reason of its own. Its
+              key is the one inert part, and says why inside its own section. */}
           {detailPaneInert && activeTab !== "usage" ? (
-            <p className="px-0 pb-2 text-ui-xs text-muted-foreground">
-              {PROVIDER_DISPLAY_NAMES[providerId]} is off. Turn it on to add a
-              key or change its settings.
-            </p>
+            <ProviderOffHint providerId={providerId} />
           ) : null}
           {/* Two presentations of ONE selection, off the same `tabs` list and
               the same labels. The pointer-width rail is the line bar; below
@@ -1964,6 +1962,61 @@ function ProviderEnvTab(props: {
   );
 }
 
+/** The reason a dimmed, inert pane gives: the provider is off. */
+function ProviderOffHint(props: {
+  readonly providerId: ProviderId;
+}): ReactNode {
+  return (
+    <p className="px-0 pb-2 text-ui-xs text-muted-foreground">
+      {PROVIDER_DISPLAY_NAMES[props.providerId]} is off. Turn it on to add a key
+      or change its settings.
+    </p>
+  );
+}
+
+/**
+ * The key on Profiles & Limits. The pane's own inert gate spares this tab for
+ * the profile controls, which the key is not, so it takes the Account tab's
+ * gate itself: out of reach and dimmed while the provider is off.
+ */
+function ProviderUsageKeySection(props: {
+  readonly state: ProviderCliState;
+  readonly inert: boolean;
+  readonly draft: string;
+  readonly onDraftChange: (draft: string) => void;
+}): ReactNode {
+  if (!props.state.apiKey.supported) {
+    // A sandbox still says where credentials live when this provider has no
+    // key field. On any other host this renders nothing.
+    return (
+      <CredentialsManagedInAccountOr>{null}</CredentialsManagedInAccountOr>
+    );
+  }
+  return (
+    <section className="flex flex-col gap-3" aria-label="Key">
+      {props.inert ? (
+        <ProviderOffHint providerId={props.state.providerId} />
+      ) : null}
+      <div
+        className={cn(
+          "flex flex-col gap-3 transition-opacity duration-150",
+          props.inert && "pointer-events-none opacity-50",
+        )}
+        {...(props.inert ? { inert: true } : {})}
+      >
+        <h2 className="text-ui-sm font-medium">Key</h2>
+        <CredentialsManagedInAccountOr>
+          <ProviderApiKeySection
+            state={props.state}
+            draft={props.draft}
+            onDraftChange={props.onDraftChange}
+          />
+        </CredentialsManagedInAccountOr>
+      </div>
+    </section>
+  );
+}
+
 function ProviderTabBody({
   tab,
   state,
@@ -2037,24 +2090,12 @@ function ProviderTabBody({
     case "usage":
       return (
         <div className="flex flex-col gap-3">
-          {state.apiKey.supported ? (
-            <section className="flex flex-col gap-3" aria-label="Key">
-              <h2 className="text-ui-sm font-medium">Key</h2>
-              <CredentialsManagedInAccountOr>
-                <ProviderApiKeySection
-                  state={state}
-                  draft={apiKeyDraft}
-                  onDraftChange={onApiKeyDraftChange}
-                />
-              </CredentialsManagedInAccountOr>
-            </section>
-          ) : (
-            // A sandbox still says where credentials live when this provider
-            // has no key field. On any other host this renders nothing.
-            <CredentialsManagedInAccountOr>
-              {null}
-            </CredentialsManagedInAccountOr>
-          )}
+          <ProviderUsageKeySection
+            state={state}
+            inert={detailPaneInert}
+            draft={apiKeyDraft}
+            onDraftChange={onApiKeyDraftChange}
+          />
           <ProviderProfileScopedSection
             state={state}
             {...profileTab}

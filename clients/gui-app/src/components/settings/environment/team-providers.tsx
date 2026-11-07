@@ -322,7 +322,7 @@ function TeamProvidersView(props: {
                 ))
               : null}
           </nav>
-          <Tabs defaultValue="plans" className="min-w-0 gap-3">
+          <Tabs key={providerId} defaultValue="plans" className="min-w-0 gap-3">
             <TabsList
               variant="line"
               className="h-auto w-full max-w-full flex-wrap justify-start"

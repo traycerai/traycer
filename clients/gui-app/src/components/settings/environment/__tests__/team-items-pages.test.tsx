@@ -217,61 +217,95 @@ describe("TeamVariablesAndShells", () => {
     }
   });
 
-  it("quotes the displayed revision, and on a conflict rereads the current value beside the changed-by line", async () => {
-    let current = variable("NODE_ENV", "production", 3);
-    const harness = mountTeamPage(poolSource("editor"), {
-      "environment.configuration.items": () => ({ items: [current] }),
-      "environment.configuration.items.put": () => {
-        // Someone else saved first; their row is what the reread returns.
-        current = variable("NODE_ENV", "staging", 4);
-        return {
-          outcome: "conflict",
-          current: { revision: 4, changedBy: "Grace", changedAt: 2 },
-        };
-      },
-      "environment.host.list": () => ({ hosts: [] }),
-    });
-    render(<TeamVariablesAndShells />, { wrapper: harness.Wrapper });
-
-    expect(screen.queryByRole("button", { name: "Save" })).toBeNull();
-    await userEvent.click(
-      await screen.findByRole("button", { name: "Edit NODE_ENV value" }),
-    );
-    const field = await screen.findByLabelText("NODE_ENV value");
-    await userEvent.clear(field);
-    await userEvent.type(field, "development");
-    const row = (): HTMLElement =>
-      screen.getByRole("region", { name: "NODE_ENV" });
-    await userEvent.click(within(row()).getByRole("button", { name: "Save" }));
-
-    expect(harness.paramsOf("environment.configuration.items.put")).toEqual([
-      {
-        environmentId: "env-a",
-        kind: "variable",
-        key: "NODE_ENV",
-        os: "any",
-        value: { value: "development" },
-        revision: 3,
-      },
-    ]);
-    expect(
-      await screen.findByText("Changed by Grace a moment ago"),
-    ).toBeTruthy();
-    await userEvent.click(
-      await screen.findByRole("button", { name: "Edit NODE_ENV value" }),
-    );
-    expect(screen.getByLabelText("NODE_ENV value")).toHaveProperty(
-      "value",
-      "staging",
-    );
-
-    // The next save quotes the reread revision, not the stale one.
-    await userEvent.type(screen.getByLabelText("NODE_ENV value"), "!");
-    await userEvent.click(within(row()).getByRole("button", { name: "Save" }));
-    expect(
-      harness.paramsOf("environment.configuration.items.put")[1],
-    ).toMatchObject({ revision: 4 });
-  });
+  it.each(["Save", "Cancel"] as const)(
+    "keeps a variable draft through an immediate current conflict until deliberate %s",
+    async (action) => {
+      let current = variable("NODE_ENV", "production", 3);
+      let puts = 0;
+      const harness = mountTeamPage(poolSource("editor"), {
+        "environment.configuration.items": () => ({ items: [current] }),
+        "environment.configuration.items.put": () => {
+          puts += 1;
+          if (puts === 1) {
+            current = variable("NODE_ENV", "staging", 4);
+            return {
+              outcome: "conflict",
+              current: { revision: 4, changedBy: "Grace", changedAt: 2 },
+            };
+          }
+          current = variable("NODE_ENV", "development!", 5);
+          return { outcome: "saved", revision: 5 };
+        },
+        "environment.host.list": () => ({ hosts: [] }),
+      });
+      render(<TeamVariablesAndShells />, { wrapper: harness.Wrapper });
+      await userEvent.click(
+        await screen.findByRole("button", { name: "Edit NODE_ENV value" }),
+      );
+      const field = screen.getByLabelText("NODE_ENV value");
+      await userEvent.clear(field);
+      await userEvent.type(field, "development");
+      await userEvent.click(screen.getByRole("button", { name: "Save" }));
+      expect(
+        await screen.findByText("Changed by Grace a moment ago"),
+      ).toBeTruthy();
+      await waitFor(() => {
+        expect(screen.getByLabelText("NODE_ENV value")).toHaveProperty(
+          "value",
+          "development",
+        );
+        expect(screen.getByRole("button", { name: "Save" })).toHaveProperty(
+          "disabled",
+          false,
+        );
+      });
+      expect(harness.paramsOf("environment.configuration.items.put")).toEqual([
+        {
+          environmentId: "env-a",
+          kind: "variable",
+          key: "NODE_ENV",
+          os: "any",
+          value: { value: "development" },
+          revision: 3,
+        },
+      ]);
+      if (action === "Cancel") {
+        await userEvent.click(screen.getByRole("button", { name: "Cancel" }));
+        await waitFor(() => {
+          expect(
+            screen.getByRole("button", { name: "Edit NODE_ENV value" }),
+          ).toHaveProperty("textContent", "staging");
+        });
+        current = variable("NODE_ENV", "after-cancel", 5);
+        await act(async () => {
+          await harness.queryClient.refetchQueries();
+        });
+        await waitFor(() => {
+          expect(
+            screen.getByRole("button", { name: "Edit NODE_ENV value" }),
+          ).toHaveProperty("textContent", "after-cancel");
+        });
+        expect(screen.queryByLabelText("NODE_ENV value")).toBeNull();
+        expect(
+          harness.paramsOf("environment.configuration.items.put"),
+        ).toHaveLength(1);
+        return;
+      }
+      await userEvent.type(screen.getByLabelText("NODE_ENV value"), "!");
+      await userEvent.click(screen.getByRole("button", { name: "Save" }));
+      await waitFor(() => {
+        expect(
+          screen.getByRole("button", { name: "Edit NODE_ENV value" }),
+        ).toHaveProperty("disabled", false);
+      });
+      expect(
+        harness.paramsOf("environment.configuration.items.put")[1],
+      ).toMatchObject({ revision: 4, value: { value: "development!" } });
+      expect(
+        screen.getByRole("button", { name: "Edit NODE_ENV value" }),
+      ).toHaveProperty("textContent", "development!");
+    },
+  );
 
   it("shows and saves each operating system's own value when two share a key and revision", async () => {
     const harness = mountTeamPage(poolSource("editor"), {
@@ -579,7 +613,7 @@ describe("TeamVariablesAndShells", () => {
       expect(screen.queryByText(/(?:Saved|Removed)[.,]/)).toBeNull();
     });
 
-    it("keeps a refused draft open after conflict, then recovers on the current revision", async () => {
+    it("keeps a shell draft through an immediate current conflict and deliberately saves on the fresh revision", async () => {
       let current = shellItem;
       let conflicted = false;
       const harness = mountTeamPage(poolSource("editor"), {
@@ -587,6 +621,11 @@ describe("TeamVariablesAndShells", () => {
         "environment.configuration.items.put": () => {
           if (!conflicted) {
             conflicted = true;
+            current = {
+              ...shellItem,
+              revision: 4,
+              value: { path: "/bin/sh", args: [] },
+            };
             return {
               outcome: "conflict",
               current: { revision: 4, changedBy: "Grace", changedAt: 2 },
@@ -611,21 +650,14 @@ describe("TeamVariablesAndShells", () => {
         "value",
         "/bin/zsh",
       );
-      await user.click(screen.getByRole("button", { name: "Cancel" }));
-      current = {
-        ...shellItem,
-        revision: 4,
-        value: { path: "/bin/sh", args: [] },
-      };
-      await act(async () => {
-        await harness.queryClient.refetchQueries();
-      });
-      await waitFor(() => {
-        expect(
-          screen.getByRole("button", { name: "Edit Shell path" }),
-        ).toHaveProperty("textContent", "/bin/sh");
-      });
-      await typeNewPath(user);
+      expect(screen.getByRole("button", { name: "Save" })).toHaveProperty(
+        "disabled",
+        false,
+      );
+      expect(
+        harness.paramsOf("environment.configuration.items.put"),
+      ).toHaveLength(1);
+      await user.click(screen.getByRole("button", { name: "Save" }));
       await waitFor(() => {
         expect(
           screen.getByRole("button", { name: "Edit Shell path" }),

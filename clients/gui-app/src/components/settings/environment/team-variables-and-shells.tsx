@@ -34,6 +34,7 @@ import { ConfigurationReadFailed } from "./team-read-failed";
 import {
   useConfigurationItemWrites,
   sameConfigurationItemAddress,
+  configurationItemDraft,
   type ConfigurationItemWrites,
   type ConfigurationItemWrite,
 } from "./configuration-item-writes";
@@ -102,7 +103,7 @@ export function TeamVariablesAndShells(): ReactNode {
               />
               <h2 className="text-ui-sm font-medium">Shell</h2>
               <TeamShellEditor
-                key={`${os}:${shell?.revision ?? "new"}:${acceptedShell(writes, os) !== null}`}
+                key={`${os}:${shell?.revision ?? "new"}:${acceptedShell(writes, os) !== null}:${shellDraft(writes, os) !== null}`}
                 item={shell}
                 applied={
                   applied.shell === undefined
@@ -159,6 +160,27 @@ function acceptedShell(
   return pending.write;
 }
 
+function shellDraft(
+  writes: ConfigurationItemWrites,
+  os: EnvironmentOs,
+): ConfigurationItemWrite | null {
+  return configurationItemDraft(writes, { kind: "shell", key: "shell", os });
+}
+
+function shellDraftState(
+  draft: ConfigurationItemWrite | null,
+  saved: ShellValue,
+): {
+  readonly field: "path" | "args" | null;
+  readonly value: ShellValue;
+} {
+  if (draft === null) return { field: null, value: saved };
+  return {
+    field: draft.draftField === "args" ? "args" : "path",
+    value: configurationShellValueSchema.parse(draft.value),
+  };
+}
+
 function TeamShellEditor(props: {
   readonly item: ConfigurationItem | null;
   readonly applied: {
@@ -171,9 +193,25 @@ function TeamShellEditor(props: {
   const canEdit = useCanEditConfiguration();
   const pending = props.writes.pending;
   const saved = shownShell(props.item, acceptedShell(props.writes, props.os));
-  const [editing, setEditing] = useState<"path" | "args" | null>(null);
-  const [path, setPath] = useState(saved.path);
-  const [args, setArgs] = useState(saved.args);
+  const draft = shellDraft(props.writes, props.os);
+  const initial = shellDraftState(draft, saved);
+  const [editing, setEditing] = useState<"path" | "args" | null>(initial.field);
+  const [path, setPath] = useState(initial.value.path);
+  const [args, setArgs] = useState(initial.value.args);
+  const updateValue = (value: ShellValue): void => {
+    setPath(value.path);
+    setArgs(value.args);
+    if (draft !== null)
+      props.writes.updateDraft({
+        ...draft,
+        value: { path: value.path, args: value.args },
+      });
+  };
+  const editField = (field: "path" | "args"): void => {
+    setEditing(field);
+    if (draft !== null)
+      props.writes.updateDraft({ ...draft, draftField: field });
+  };
   const configured = props.item === null ? null : saved;
   const editingVisible = canEdit && editing !== null;
   const busy = props.writes.pending !== null;
@@ -191,7 +229,7 @@ function TeamShellEditor(props: {
             canEdit={canEdit}
             busy={busy}
             editing={editing === "path"}
-            onEdit={() => setEditing("path")}
+            onEdit={() => editField("path")}
             editor={
               <Input
                 ref={focusShellPath}
@@ -199,7 +237,9 @@ function TeamShellEditor(props: {
                 placeholder="/bin/zsh"
                 value={path}
                 disabled={busy}
-                onChange={(event) => setPath(event.target.value)}
+                onChange={(event) =>
+                  updateValue({ path: event.target.value, args })
+                }
               />
             }
           />
@@ -208,38 +248,13 @@ function TeamShellEditor(props: {
             applied={props.applied?.path ?? null}
           />
         </div>
-        {canEdit && props.item !== null ? (
-          <DropdownMenu>
-            <DropdownMenuTrigger asChild>
-              <Button
-                type="button"
-                variant="ghost"
-                size="icon-sm"
-                aria-label="More for shell"
-                disabled={busy}
-              >
-                <MoreHorizontal />
-              </Button>
-            </DropdownMenuTrigger>
-            <DropdownMenuContent align="end">
-              <DropdownMenuItem
-                onSelect={() => {
-                  if (props.item !== null)
-                    void props.writes.write({
-                      kind: "shell",
-                      key: "shell",
-                      os: props.os,
-                      action: "remove",
-                      value: { path: "", args: [] },
-                      original: props.item,
-                    });
-                }}
-              >
-                Remove
-              </DropdownMenuItem>
-            </DropdownMenuContent>
-          </DropdownMenu>
-        ) : null}
+        <ShellRemoveMenu
+          item={props.item}
+          os={props.os}
+          writes={props.writes}
+          busy={busy}
+          canEdit={canEdit}
+        />
         <span className="col-start-1 row-start-2 text-ui-sm">Arguments</span>
         <div className="col-start-2 row-start-2 min-w-0">
           <ShellField
@@ -249,14 +264,17 @@ function TeamShellEditor(props: {
             canEdit={canEdit}
             busy={busy}
             editing={editing === "args"}
-            onEdit={() => setEditing("args")}
+            onEdit={() => editField("args")}
             editor={
               <ShellFlagChips
                 args={args}
                 disabled={busy}
-                onAdd={(flag) => setArgs([...args, flag])}
+                onAdd={(flag) => updateValue({ path, args: [...args, flag] })}
                 onRemove={(index) =>
-                  setArgs(args.filter((_, i) => i !== index))
+                  updateValue({
+                    path,
+                    args: args.filter((_, i) => i !== index),
+                  })
                 }
               />
             }
@@ -275,6 +293,7 @@ function TeamShellEditor(props: {
         busy={busy}
         saving={pending?.write.kind === "shell" && pending.accepted === null}
         onCancel={() => {
+          if (draft !== null) props.writes.discardDraft(draft);
           setPath(saved.path);
           setArgs(saved.args);
           setEditing(null);
@@ -285,12 +304,56 @@ function TeamShellEditor(props: {
             key: "shell",
             os: props.os,
             action: "put",
+            draftField: editing,
             value: { path, args },
             original: props.item,
           });
         }}
       />
     </section>
+  );
+}
+
+function ShellRemoveMenu(props: {
+  readonly item: ConfigurationItem | null;
+  readonly os: EnvironmentOs;
+  readonly writes: ConfigurationItemWrites;
+  readonly busy: boolean;
+  readonly canEdit: boolean;
+}): ReactNode {
+  const item = props.item;
+  if (!props.canEdit || item === null) return null;
+  return (
+    <DropdownMenu>
+      <DropdownMenuTrigger asChild>
+        <Button
+          type="button"
+          variant="ghost"
+          size="icon-sm"
+          aria-label="More for shell"
+          disabled={props.busy}
+        >
+          <MoreHorizontal />
+        </Button>
+      </DropdownMenuTrigger>
+      <DropdownMenuContent align="end">
+        <DropdownMenuItem
+          onSelect={() => {
+            void props.writes.write({
+              kind: "shell",
+              key: "shell",
+              os: props.os,
+              action: "remove",
+              draftField: null,
+              value: { path: "", args: [] },
+              original: item,
+            });
+          }}
+        >
+          Remove
+        </DropdownMenuItem>
+      </DropdownMenuContent>
+    </DropdownMenu>
   );
 }
 

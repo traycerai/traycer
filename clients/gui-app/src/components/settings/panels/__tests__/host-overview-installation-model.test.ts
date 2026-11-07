@@ -2,7 +2,6 @@ import type { HostListItem } from "@traycer/protocol/host/host-status";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { InstallationDetailsRecord } from "@/components/settings/panels/host-settings-installation-details";
 import {
-  abbreviateIdentifier,
   deriveAboutThisHost,
   deriveInstallationDetails,
   deriveInstallRecordRows,
@@ -93,17 +92,6 @@ function details(
 ): readonly InstallationDetailRow[] {
   return deriveInstallationDetails(source);
 }
-
-describe("abbreviateIdentifier", () => {
-  it("returns an identifier of 16 characters or fewer whole", () => {
-    expect(abbreviateIdentifier("a".repeat(16))).toBe("a".repeat(16));
-    expect(abbreviateIdentifier("")).toBe("");
-  });
-
-  it("keeps the head 8 and the tail 4 of anything longer", () => {
-    expect(abbreviateIdentifier("0123456789abcdefg")).toBe("01234567…defg");
-  });
-});
 
 describe("deriveAboutThisHost", () => {
   it("uses the Settings date for when the host was added to the account", () => {
@@ -354,5 +342,105 @@ describe("deriveInstallRecordRows", () => {
     expect(detail(rows, "settings-host-install-source").value).toContain(
       "Registry",
     );
+  });
+
+  it("keeps a digest of 16 characters whole and shortens a longer one to head 8 and tail 4, with the full digest on the copy button", () => {
+    const whole = deriveInstallRecordRows(
+      { ...installRecord(), archiveSha256: "a".repeat(16) },
+      "1.5.0",
+    );
+    expect(detail(whole, "settings-host-install-sha256")).toMatchObject({
+      value: "a".repeat(16),
+      copy: { value: "a".repeat(16), label: "Copy SHA-256" },
+    });
+
+    const shortened = deriveInstallRecordRows(
+      { ...installRecord(), archiveSha256: "0123456789abcdefg" },
+      "1.5.0",
+    );
+    expect(detail(shortened, "settings-host-install-sha256")).toMatchObject({
+      value: "01234567…defg",
+      copy: { value: "0123456789abcdefg", label: "Copy SHA-256" },
+    });
+  });
+
+  it("omits the SHA-256 row when the record has no digest", () => {
+    absent(
+      deriveInstallRecordRows(
+        { ...installRecord(), archiveSha256: "" },
+        "1.5.0",
+      ),
+      "settings-host-install-sha256",
+    );
+    absent(
+      deriveInstallRecordRows(
+        { ...installRecord(), archiveSha256: null },
+        "1.5.0",
+      ),
+      "settings-host-install-sha256",
+    );
+  });
+
+  it("uses Settings dates for installation and verification", () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(new Date(2026, 9, 25, 12));
+    const rows = deriveInstallRecordRows(
+      {
+        ...installRecord(),
+        installedAt: new Date(2025, 9, 25, 8, 35).toISOString(),
+        signatureVerifiedAt: new Date(2026, 9, 25, 8, 35).toISOString(),
+      },
+      "1.5.0",
+    );
+    expect(detail(rows, "settings-host-install-installed").value).toBe(
+      "25 Oct 2025",
+    );
+    expect(detail(rows, "settings-host-verification").value).toBe(
+      "Verified 08:35",
+    );
+  });
+
+  it("reads 'Unsigned local build' as a warning for the CLI's unsigned sentinel key, never Verified", () => {
+    // An unsigned local-file install stamps `signatureVerifiedAt` with the
+    // install time anyway, so the key id is what says no signature was checked.
+    const rows = deriveInstallRecordRows(
+      {
+        ...installRecord(),
+        signatureKeyId: "local-file:unsigned",
+        signatureVerifiedAt: "2026-08-01T00:00:00Z",
+      },
+      "1.5.0",
+    );
+    const verification = detail(rows, "settings-host-verification");
+    expect(verification.value).toBe("Unsigned local build");
+    expect(verification.tone).toBe("warning");
+  });
+
+  it("reads 'Verified <date>' as success when a real key verified the archive", () => {
+    const rows = deriveInstallRecordRows(
+      {
+        ...installRecord(),
+        signatureKeyId: "key-1",
+        signatureVerifiedAt: "2026-08-01T00:00:00Z",
+      },
+      "1.5.0",
+    );
+    const verification = detail(rows, "settings-host-verification");
+    expect(verification.value).toMatch(/^Verified /);
+    expect(verification.tone).toBe("success");
+  });
+
+  it("reads 'Unverified' as a warning when nothing verified it and the key is not the unsigned sentinel", () => {
+    const rows = deriveInstallRecordRows(
+      {
+        ...installRecord(),
+        signatureKeyId: "key-1",
+        signatureVerifiedAt: null,
+      },
+      "1.5.0",
+    );
+    const verification = detail(rows, "settings-host-verification");
+    expect(verification.value).toBe("Unverified");
+    expect(verification.tone).toBe("warning");
   });
 });

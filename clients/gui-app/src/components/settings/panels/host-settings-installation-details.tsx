@@ -1,19 +1,10 @@
 import type { ReactNode } from "react";
 import { HOST_OVERVIEW } from "@/components/settings/panels/host-overview.definitions";
 import {
-  HostOverviewFact,
-  HostOverviewFacts,
-} from "@/components/settings/panels/host-overview-facts";
-import { abbreviateIdentifier } from "@/components/settings/panels/host-overview-installation-model";
-import {
   describeOverviewDegrade,
   type OverviewDegradeReason,
 } from "@/components/settings/panels/host-overview-model";
 import { HostOverviewNotice } from "@/components/settings/panels/host-overview-status-card";
-import {
-  formatInstallDate,
-  formatSource,
-} from "@/components/settings/panels/host-settings-panel-model";
 import { SettingsGroup } from "@/components/settings/settings-group";
 import type { HostInstallSourceTag } from "@traycer-clients/shared/platform/runner-host";
 
@@ -66,25 +57,17 @@ export interface InstallationDetailsRecord {
   readonly arch: string;
 }
 
-/** The CLI's sentinel for "this install was never signed". */
-const UNSIGNED_SIGNATURE_KEY_ID = "local-file:unsigned";
-
 interface InstallRecordGroupProps {
   readonly hostName: string;
   /** `host.getInstallationInfo` support, or why it is missing. */
   readonly degrade: OverviewDegradeReason | null;
-  readonly record: InstallationDetailsRecord | null;
-  readonly loading: boolean;
-  /** The read itself failed - which is NOT the same as "no record". */
-  readonly readFailed: boolean;
 }
 
 /**
- * Installation ▸ Install record, shown open: how this host was installed.
- *
- * It used to be a collapsed "Installation details" disclosure, which made the
- * one group on the page about the install a click away on the tab named for
- * it. Its states keep their words.
+ * Installation ▸ Install record, shown only when the record cannot be shown:
+ * `host.getInstallationInfo` is unsupported (`degrade`), or, with no `degrade`,
+ * the read itself failed. A record that loaded, and a host with none, are
+ * drawn by the tab from the model.
  */
 export function InstallRecordGroup(props: InstallRecordGroupProps): ReactNode {
   return (
@@ -95,23 +78,17 @@ export function InstallRecordGroup(props: InstallRecordGroupProps): ReactNode {
       dataTestId="host-overview-install-record"
       fill={false}
     >
-      <InstallRecordBody {...props} />
+      <InstallRecordFailure {...props} />
     </SettingsGroup>
   );
 }
 
 /**
- * Three outcomes, and the middle one is the finding: a FAILED read is not an
- * unmanaged host. Collapsing both to `record: null` made the card assert that
- * this host runs from a checkout or an unpacked tree - a fact the RPC never
- * established, stated to the user as if it had.
- *
- * `unmanaged` IS a real state rather than an error: a host run from a checkout
- * has no install record, and reporting that as "nothing is installed" put a
- * false alarm on every developer's machine.
+ * A FAILED read is not an unmanaged host: collapsing both to "no record" made
+ * the card assert that this host runs from a checkout or an unpacked tree - a
+ * fact the RPC never established.
  */
-function InstallRecordBody(props: InstallRecordGroupProps): ReactNode {
-  const { record } = props;
+function InstallRecordFailure(props: InstallRecordGroupProps): ReactNode {
   if (props.degrade !== null) {
     return (
       <HostOverviewNotice testId="host-overview-installation-degraded">
@@ -119,109 +96,9 @@ function InstallRecordBody(props: InstallRecordGroupProps): ReactNode {
       </HostOverviewNotice>
     );
   }
-  if (props.readFailed) {
-    return (
-      <HostOverviewNotice testId="host-overview-installation-unreadable">
-        {`Couldn't read ${props.hostName}'s installation record.`}
-      </HostOverviewNotice>
-    );
-  }
-  if (record === null) {
-    return (
-      <p
-        className="px-5 py-4 text-ui-sm text-muted-foreground"
-        data-testid="host-overview-installation-empty"
-      >
-        {props.loading
-          ? "Reading install record…"
-          : `${props.hostName} is running from a checkout or an unpacked tree, so it has no installation record.`}
-      </p>
-    );
-  }
-  const verified = isSignatureVerified(record);
   return (
-    <HostOverviewFacts testId="host-overview-install-record-facts">
-      <HostOverviewFact
-        label="Version"
-        value={`v${record.runtimeVersion ?? record.version}`}
-        kind="code"
-        tone="default"
-        copy={null}
-        testId="settings-host-install-version"
-      />
-      {record.runtimeVersion === null ||
-      record.runtimeVersion === record.version ? null : (
-        <HostOverviewFact
-          label="Build"
-          value={record.version}
-          kind="code"
-          tone="default"
-          copy={null}
-          testId="settings-host-install-build"
-        />
-      )}
-      <HostOverviewFact
-        label="Source"
-        value={formatSource(record.source)}
-        kind="code"
-        tone="default"
-        copy={null}
-        testId={undefined}
-      />
-      <HostOverviewFact
-        label="Installed"
-        value={formatInstallDate(record.installedAt)}
-        kind="code"
-        tone="default"
-        copy={null}
-        testId={undefined}
-      />
-      <HostOverviewFact
-        label="Verification"
-        value={describeVerification(record)}
-        kind="code"
-        tone={verified ? "success" : "warning"}
-        copy={null}
-        testId="settings-host-verification"
-      />
-      {record.archiveSha256 !== null && record.archiveSha256.length > 0 ? (
-        <HostOverviewFact
-          label="SHA-256"
-          value={abbreviateIdentifier(record.archiveSha256)}
-          kind="code"
-          tone="default"
-          copy={{ value: record.archiveSha256, label: "Copy SHA-256" }}
-          testId="settings-host-install-sha256"
-        />
-      ) : null}
-      <HostOverviewFact
-        label="Platform"
-        value={`${record.platform}/${record.arch}`}
-        kind="code"
-        tone="default"
-        copy={null}
-        testId={undefined}
-      />
-    </HostOverviewFacts>
+    <HostOverviewNotice testId="host-overview-installation-unreadable">
+      {`Couldn't read ${props.hostName}'s installation record.`}
+    </HostOverviewNotice>
   );
-}
-
-function isSignatureVerified(record: InstallationDetailsRecord): boolean {
-  return (
-    record.signatureVerifiedAt !== null &&
-    record.signatureKeyId !== UNSIGNED_SIGNATURE_KEY_ID
-  );
-}
-
-function describeVerification(record: InstallationDetailsRecord): string {
-  if (record.signatureKeyId === UNSIGNED_SIGNATURE_KEY_ID) {
-    // Not "Unverified": nothing failed and nothing is wrong. This build was
-    // installed from a local file or run from a tree, so there was no
-    // signature to check in the first place, and saying so is the difference
-    // between a state and a fault.
-    return "Unsigned local build";
-  }
-  return record.signatureVerifiedAt === null
-    ? "Unverified"
-    : `Verified ${formatInstallDate(record.signatureVerifiedAt)}`;
 }

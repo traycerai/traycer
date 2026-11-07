@@ -16,6 +16,7 @@ export interface ConfigurationItemWrite {
   readonly key: string;
   readonly os: ConfigurationItem["os"];
   readonly action: "put" | "remove";
+  readonly draftField: "value" | "path" | "args" | null;
   readonly value: ConfigurationItem["value"];
   readonly original: ConfigurationItem | null;
 }
@@ -41,15 +42,21 @@ interface ItemWriteState {
   readonly pending: PendingItemWrite | null;
   readonly changedAgain: ConfigurationItemWrite | null;
   readonly failure: ConfigurationItemWriteFailure | null;
+  readonly drafts: readonly ConfigurationItemWrite[];
 }
 
 export interface ConfigurationItemWrites {
   readonly pending: PendingItemWrite | null;
   readonly changedAgain: ConfigurationItemWrite | null;
   readonly failure: ConfigurationItemWriteFailure | null;
+  readonly drafts: readonly ConfigurationItemWrite[];
   readonly checking: boolean;
   readonly write: (write: ConfigurationItemWrite) => Promise<void>;
   readonly retry: () => void;
+  readonly updateDraft: (draft: ConfigurationItemWrite) => void;
+  readonly discardDraft: (
+    address: Pick<ConfigurationItem, "kind" | "key" | "os">,
+  ) => void;
 }
 
 type ItemsRead = Pick<
@@ -64,6 +71,28 @@ export function sameConfigurationItemAddress(
   return (
     left.kind === right.kind && left.key === right.key && left.os === right.os
   );
+}
+
+export function configurationItemDraft(
+  writes: ConfigurationItemWrites,
+  address: Pick<ConfigurationItem, "kind" | "key" | "os">,
+): ConfigurationItemWrite | null {
+  return (
+    writes.drafts.find((draft) =>
+      sameConfigurationItemAddress(draft, address),
+    ) ?? null
+  );
+}
+
+function retainDraft(
+  drafts: readonly ConfigurationItemWrite[],
+  write: ConfigurationItemWrite,
+): readonly ConfigurationItemWrite[] {
+  if (write.action === "remove") return drafts;
+  return [
+    ...drafts.filter((draft) => !sameConfigurationItemAddress(draft, write)),
+    write,
+  ];
 }
 
 function acceptedValueMatches(
@@ -112,7 +141,7 @@ function reconciliation(
   return acceptedValueMatches(pending.write, row) ? "confirmed" : "changed";
 }
 
-/** Receipts outlive drafts; only the addressed row or a successful removal read releases them. */
+/** Submitted drafts survive reads; accepted receipts release only after authoritative readback. */
 export function useConfigurationItemWrites(
   query: ItemsRead,
   onOutcome: (result: EnvironmentConfigurationItemWriteResponse) => void,
@@ -125,11 +154,18 @@ export function useConfigurationItemWrites(
     pending: null,
     changedAgain: null,
     failure: null,
+    drafts: [],
   });
   const active = useRef<ConfigurationItemWrite | null>(null);
   const attempt = useRef(0);
   if (state.scope !== scope) {
-    setState({ scope, pending: null, changedAgain: null, failure: null });
+    setState({
+      scope,
+      pending: null,
+      changedAgain: null,
+      failure: null,
+      drafts: [],
+    });
   }
   const pending = state.scope === scope ? state.pending : null;
   if (
@@ -202,15 +238,43 @@ export function useConfigurationItemWrites(
       return Promise.resolve();
     },
   });
+  const updateDraft = (draft: ConfigurationItemWrite): void => {
+    setState((current) =>
+      current.scope !== scope
+        ? current
+        : { ...current, drafts: retainDraft(current.drafts, draft) },
+    );
+  };
+  const discardDraft = (
+    address: Pick<ConfigurationItem, "kind" | "key" | "os">,
+  ): void => {
+    setState((current) =>
+      current.scope !== scope || current.pending !== null
+        ? current
+        : {
+            ...current,
+            drafts: current.drafts.filter(
+              (draft) => !sameConfigurationItemAddress(draft, address),
+            ),
+            failure:
+              current.failure !== null &&
+              sameConfigurationItemAddress(current.failure.write, address)
+                ? null
+                : current.failure,
+          },
+    );
+  };
   const write = async (write: ConfigurationItemWrite): Promise<void> => {
     if (source.kind !== "pool" || active.current !== null) return;
     active.current = write;
-    setState({
+    // Submitted drafts survive a refused write and any read that remounts its editor.
+    setState((current) => ({
       scope,
       pending: { write, accepted: null },
       changedAgain: null,
       failure: null,
-    });
+      drafts: retainDraft(current.drafts, write),
+    }));
     const request = {
       environmentId: source.environmentId,
       kind: write.kind,
@@ -248,7 +312,8 @@ export function useConfigurationItemWrites(
       );
       return;
     }
-    setState({
+    setState((current) => ({
+      ...current,
       scope,
       pending: {
         write,
@@ -260,13 +325,19 @@ export function useConfigurationItemWrites(
       },
       changedAgain: null,
       failure: null,
-    });
+      drafts: current.drafts.filter(
+        (draft) => !sameConfigurationItemAddress(draft, write),
+      ),
+    }));
     void readLatest(write, false);
   };
   return {
     pending,
     changedAgain: state.changedAgain,
     failure: state.failure,
+    drafts: state.drafts,
+    updateDraft,
+    discardDraft,
     checking: bounded.pending,
     write,
     retry: bounded.retry,

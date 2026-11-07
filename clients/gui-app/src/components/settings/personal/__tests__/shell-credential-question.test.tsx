@@ -624,7 +624,7 @@ describe("the Variables empty state", () => {
     await pageIsReady();
     expect(
       screen.getByText(
-        "Variables are plain values every computer and sandbox running Personal gets.",
+        "Variables are plain values every computer and sandbox running these settings gets.",
       ),
     ).toBeTruthy();
     expect(screen.queryByText(/Add a variable\.$/)).toBeNull();

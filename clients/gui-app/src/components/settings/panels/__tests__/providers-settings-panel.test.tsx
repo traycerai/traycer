@@ -3486,6 +3486,82 @@ describe("<ProvidersSettingsPanel />", () => {
 
       expect(screen.queryByText(/is off\. Turn it on/)).toBeNull();
     });
+
+    describe("the key on Profiles & Limits", () => {
+      function keyedProvider(enabled: boolean): void {
+        providerMocks.listResult.data = {
+          providers: [
+            {
+              ...providerState({
+                providerId: "codex",
+                selected: { kind: "bundled" },
+                candidates: [],
+                envOverrides: [],
+                nativeCapabilities: FULL_TABS,
+                apiKey: { supported: true, configured: false, source: null },
+                profiles: [
+                  {
+                    ...profile({
+                      profileId: "managed-1",
+                      kind: "managed",
+                      label: "Work",
+                      email: null,
+                      tier: null,
+                      authStatus: "authenticated",
+                      duplicateOfProfileId: null,
+                      ambientDriftNotice: null,
+                    }),
+                    enabled: false,
+                  },
+                ],
+              }),
+              enabled,
+            },
+          ],
+        };
+        render(
+          <TooltipProvider>
+            <ProvidersSettingsPanel />
+          </TooltipProvider>,
+        );
+        openProfilesTab();
+      }
+
+      it("is out of reach while the provider is off, and the profile controls are not", () => {
+        keyedProvider(false);
+
+        const key = screen.getByRole("region", { name: "Key" });
+        const keyField = within(key).getByLabelText("API key");
+        expect(keyField.closest("[inert]")).not.toBeNull();
+        // The reason sits in the section but outside its inert part, and is
+        // the only one on the tab.
+        const hint = within(key).getByText(
+          "Codex is off. Turn it on to add a key or change its settings.",
+        );
+        expect(hint.closest("[inert]")).toBeNull();
+        expect(screen.getAllByText(/is off\. Turn it on/)).toHaveLength(1);
+        // Every profile is off, so this switch is the step the provider's own
+        // switch is waiting for, and it has to stay live.
+        const profileSwitches = screen.getAllByRole("switch", {
+          name: "Allow agents to use Work",
+        });
+        for (const profileSwitch of profileSwitches) {
+          expect(profileSwitch.closest("[inert]")).toBeNull();
+        }
+        fireEvent.click(profileSwitches[0]);
+        expect(providerMocks.setProfileEnabledMutate).toHaveBeenCalledTimes(1);
+      });
+
+      it("control: is reachable once the provider is on", () => {
+        keyedProvider(true);
+
+        const keyField = within(
+          screen.getByRole("region", { name: "Key" }),
+        ).getByLabelText("API key");
+        expect(keyField.closest("[inert]")).toBeNull();
+        expect(screen.queryByText(/is off\. Turn it on/)).toBeNull();
+      });
+    });
   });
 
   it("describes Cursor as its coding agent, signed in with its own API key", () => {

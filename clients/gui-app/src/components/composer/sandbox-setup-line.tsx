@@ -562,7 +562,12 @@ function SandboxProgressLine(props: {
         <LineButton
           label={STOP}
           testId="sandbox-setup-stop"
-          onClick={failure?.kind === "settings" ? null : props.actions.onStop}
+          // Expanded, the settings failure's own More menu carries Stop; collapsed, this is the only one.
+          onClick={
+            failure?.kind === "settings" && expanded
+              ? null
+              : props.actions.onStop
+          }
         />
       }
       head={

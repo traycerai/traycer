@@ -985,6 +985,28 @@ describe("SandboxSetupLine when the settings did not apply", () => {
     expect(useSandboxDetailsStore.getState().sandboxId).toBe("sbx_made_1");
   });
 
+  it("keeps Stop reachable once whether the person collapses the failure or leaves it expanded", () => {
+    const onStopHere = vi.fn();
+    const detail = mountSettings(true, { ...ACTIONS, onStop: onStopHere });
+
+    expect(screen.queryAllByTestId("sandbox-setup-stop")).toHaveLength(0);
+    fireEvent.pointerDown(
+      within(detail).getByRole("button", { name: "More" }),
+      { button: 0 },
+    );
+    expect(screen.getAllByTestId("sandbox-setup-stop")).toHaveLength(1);
+    fireEvent.click(screen.getByTestId("sandbox-setup-stop"));
+    expect(onStopHere).toHaveBeenCalledTimes(1);
+
+    fireEvent.click(screen.getByTestId("sandbox-setup-line-toggle"));
+
+    expect(screen.queryByTestId("sandbox-setup-line-detail")).toBeNull();
+    const stop = screen.getByTestId("sandbox-setup-stop");
+    expect(stop.hasAttribute("disabled")).toBe(false);
+    fireEvent.click(stop);
+    expect(onStopHere).toHaveBeenCalledTimes(2);
+  });
+
   it("hides Retry applying when the host offers no combined retry", () => {
     const detail = mountSettings(true, { ...ACTIONS, onRetryApplying: null });
 

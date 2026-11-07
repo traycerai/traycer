@@ -145,7 +145,7 @@ function TeamPolicyEditor(props: {
         title="Reset the approval policy?"
         description={
           personal
-            ? "This removes your custom rules and goes back to the default approval policy on every computer and sandbox running Personal."
+            ? "This removes your custom rules and goes back to the default approval policy on every computer and sandbox running these settings."
             : `This removes ${teamName}'s custom rules and goes back to the default approval policy for every member's agents.`
         }
         cascadeSummary={null}

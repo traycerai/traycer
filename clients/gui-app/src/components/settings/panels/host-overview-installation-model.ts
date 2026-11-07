@@ -374,7 +374,7 @@ function describeVerification(record: InstallationDetailsRecord): string {
  * the whole value on a copy button and in the tooltip. Short values are
  * returned whole.
  */
-export function abbreviateIdentifier(value: string): string {
+function abbreviateIdentifier(value: string): string {
   if (value.length <= 16) return value;
   return `${value.slice(0, 8)}…${value.slice(-4)}`;
 }

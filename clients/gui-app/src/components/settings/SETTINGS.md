@@ -4158,7 +4158,7 @@ dialog.tsx` / `notification-hook-draft.ts`, unchanged by this pass).
 - `Permissions` (section id `permissions`, route `/settings/permissions`,
   `panels/permissions-settings-panel.tsx`) How much an agent may do on its own,
   and who reviews the rest; on Personal its subtitle reads "What your agents
-  may do without asking, on every computer and sandbox running Personal."
+  may do without asking, on every computer and sandbox running these settings."
   Rules carries **Reset to default**, which saves the empty policy after a
   confirm (the custom rules go; the built-in ones stay). The confirmation
   stays blocked if the current policy cannot be read freshly, its opening

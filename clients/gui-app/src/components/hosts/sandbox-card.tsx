@@ -18,7 +18,7 @@ import {
   sandboxCardActions,
   sandboxHeaderPrimaryAction,
   sandboxCardShowsCostView,
-  sandboxCreatorLine,
+  sandboxCreatorName,
   sandboxGuestConfigFailure,
   sandboxHostVouches,
   sandboxIdleLine,
@@ -448,10 +448,7 @@ function SandboxProvenance(props: {
   const { summary } = props;
   // A team row's creator and wake payer; a personal row is the viewer's own.
   const creator = props.teamOwned
-    ? (sandboxCreatorLine(summary, props.viewerUserId)?.replace(
-        /^Created by /,
-        "",
-      ) ?? null)
+    ? sandboxCreatorName(summary, props.viewerUserId)
     : null;
   const payer = props.teamOwned
     ? sandboxWakePayerName(

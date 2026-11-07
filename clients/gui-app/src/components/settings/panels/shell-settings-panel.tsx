@@ -90,7 +90,7 @@ const SAVED_FLASH_MS = 1600;
 
 function variablesEmptyLabel(personal: boolean): string {
   return personal
-    ? "Variables are plain values every computer and sandbox running Personal gets."
+    ? "Variables are plain values every computer and sandbox running these settings gets."
     : "Variables are plain values every host gets.";
 }
 type ShellSaveTarget = "program" | "flags";

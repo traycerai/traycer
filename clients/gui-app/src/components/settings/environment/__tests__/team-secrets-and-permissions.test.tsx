@@ -669,7 +669,7 @@ describe("TeamPermissions", () => {
     [
       "Personal",
       personalPoolSource(),
-      "This removes your custom rules and goes back to the default approval policy on every computer and sandbox running Personal.",
+      "This removes your custom rules and goes back to the default approval policy on every computer and sandbox running these settings.",
     ],
   ])(
     "confirms a reset for %s in that configuration's words",

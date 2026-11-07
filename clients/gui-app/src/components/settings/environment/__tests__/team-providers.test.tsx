@@ -725,6 +725,49 @@ describe("TeamProviders items", () => {
     expect(screen.queryByLabelText("claude-pack pinned version")).toBeNull();
   });
 
+  it("starts a newly selected provider on Plans & limits when the previous provider's Pack version tab is gone", async () => {
+    const harness = mountTeamPage(poolSource("editor"), {
+      ...handlers(() => []),
+      "environment.host.list": () => ({ hosts: [reachableHost] }),
+      "providers.list": () => ({
+        providers: [
+          {
+            ...providerState("claude-code", { mcp: false, skills: false }),
+            packId: "claude-pack",
+          },
+          providerState("codex", { mcp: false, skills: false }),
+        ],
+        native: null,
+      }),
+    });
+    render(<TeamProviders />, { wrapper: harness.Wrapper });
+
+    await userEvent.click(
+      await screen.findByRole("tab", { name: "Pack version" }),
+    );
+    expect(
+      screen
+        .getByRole("tab", { name: "Pack version" })
+        .getAttribute("aria-selected"),
+    ).toBe("true");
+
+    await userEvent.click(
+      await screen.findByRole("button", { name: "Add provider" }),
+    );
+    await userEvent.click(
+      await screen.findByRole("button", { name: /^Codex/ }),
+    );
+
+    await waitFor(() => {
+      expect(screen.queryByRole("tab", { name: "Pack version" })).toBeNull();
+    });
+    const plans = screen.getByRole("tab", { name: "Plans & limits" });
+    expect(plans.getAttribute("aria-selected")).toBe("true");
+    expect(screen.getByRole("tabpanel").getAttribute("id")).toBe(
+      plans.getAttribute("aria-controls"),
+    );
+  });
+
   it("opens a profile's Details on its actual item key", async () => {
     useSettingsEnvironmentPickStore.setState({
       pick: { kind: "team", environmentId: "env-a" },

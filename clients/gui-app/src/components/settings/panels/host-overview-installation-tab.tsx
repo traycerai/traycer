@@ -265,9 +265,6 @@ function HostOverviewInstallationHostGroups(
         <InstallRecordGroup
           hostName={props.hostName}
           degrade={props.installInfoDegrade}
-          record={props.record}
-          loading={props.recordLoading}
-          readFailed={props.recordReadFailed}
         />
       ) : null}
       {props.service === null ? null : <OsServiceSection {...props.service} />}
