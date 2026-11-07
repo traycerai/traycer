@@ -161,20 +161,20 @@ describe("<SandboxDefaultsSection /> on a build with a server pool", () => {
 
     await waitFor(() => {
       expect(
-        screen.getByTestId("sandboxes-defaults-shape").textContent,
-      ).toContain("4 vCPU");
+        screen.getByTestId("sandboxes-defaults-summary").textContent,
+      ).toContain("Linux · 4 vCPU · 8 GB · suspends after 45 minutes");
     });
-    expect(screen.getByTestId("sandboxes-defaults-idle").textContent).toContain(
-      "45",
-    );
     everyRequestWentToThePool(harness, "environment.configuration.items");
   });
 
-  it("names the editors a viewer can ask, read through the server pool", async () => {
+  it("shows the Members link without loading a viewer roster", async () => {
     const harness = mountViewer(() => ({ items: [SANDBOX_DEFAULTS_ITEM] }));
 
-    expect(await screen.findByText("Ada, Bo can change them")).toBeTruthy();
-    everyRequestWentToThePool(harness, "environment.members");
+    expect(
+      (await screen.findByTestId("sandboxes-defaults-editors")).textContent,
+    ).toContain("Editors and admins can change defaults · Members");
+    expect(screen.queryByText(/Ada|Bo/u)).toBeNull();
+    expect(hostIdsOf(harness, "environment.members")).toHaveLength(0);
   });
 
   it("says the defaults could not be read, with Retry and none of the value rows", async () => {
@@ -186,12 +186,6 @@ describe("<SandboxDefaultsSection /> on a build with a server pool", () => {
       await screen.findByText("Couldn't read these defaults."),
     ).toBeTruthy();
     expect(screen.getByRole("button", { name: "Retry" })).toBeTruthy();
-    for (const testId of [
-      "sandboxes-defaults-shape",
-      "sandboxes-defaults-idle",
-      "sandboxes-defaults-resting",
-    ]) {
-      expect(screen.queryByTestId(testId)).toBeNull();
-    }
+    expect(screen.queryByTestId("sandboxes-defaults-summary")).toBeNull();
   });
 });

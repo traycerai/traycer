@@ -124,8 +124,8 @@ const hostScopeMock = vi.hoisted(() => ({
   streamBinding: null as StreamRuntimeBinding | null,
 }));
 
-vi.mock("@/hooks/resources/use-resource-monitor-host-scope", () => ({
-  useResourceMonitorHostScope: () => ({
+vi.mock("@/hooks/host-scope/use-watch-host-scope", () => ({
+  useWatchHostScope: () => ({
     scope: hostScopeMock.scope ?? SINGLE_HOST_SCOPE,
     hasExplicitPick: hostScopeMock.hasExplicitPick,
   }),
@@ -2524,6 +2524,7 @@ describe("ResourceMonitorPopover", () => {
       "epic-1",
       "tab-1",
       expect.any(Function),
+      "user",
     );
     expect(canvasMock.prepareSetActiveTileTabFocusTarget).toHaveBeenCalledWith(
       "tab-1",
@@ -2960,6 +2961,7 @@ describe("ResourceMonitorPopover", () => {
       "epic-1",
       "tab-1",
       expect.any(Function),
+      "user",
     );
     expect(
       canvasMock.prepareOpenTileInPaneFocusTargetFromSource,
@@ -4690,7 +4692,15 @@ describe("ResourceMonitorPopover · host picker", () => {
       screen.getByTestId("resource-monitor-host-picker-row"),
     ).not.toBeNull();
     expect(
+      screen.getByRole("button", { name: "Settings host: host-b" }).textContent,
+    ).toBe("host-b");
+    fireEvent.click(
       screen.getByRole("button", { name: "Settings host: host-b" }),
+    );
+    expect(
+      within(
+        screen.getByTestId("settings-host-switcher-option-host-b"),
+      ).getByText("Computer"),
     ).not.toBeNull();
   });
 
@@ -5177,6 +5187,7 @@ describe("ResourceMonitorPopover · host picker", () => {
       "epic-1",
       "tab-1",
       expect.any(Function),
+      "user",
     );
     expect(canvasMock.prepareSetActiveTileTabFocusTarget).toHaveBeenCalledWith(
       "tab-1",

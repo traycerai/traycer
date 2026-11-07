@@ -234,15 +234,18 @@ export function EpicSidebarCloudChatRow(
 
   const open = useCallback(
     (event: MouseEvent<HTMLButtonElement>) => {
-      openTile({
-        node: { ...openRef(), instanceId: uuidv4() },
-        target: { tabId: props.tabId },
-        gesture: "single",
-        modifiers: modifiersFromMouseEvent(event),
-        placement: null,
-        dedupe: true,
-        source: "direct_ui",
-      });
+      openTile(
+        {
+          node: { ...openRef(), instanceId: uuidv4() },
+          target: { tabId: props.tabId },
+          gesture: "single",
+          modifiers: modifiersFromMouseEvent(event),
+          placement: null,
+          dedupe: true,
+          source: "direct_ui",
+        },
+        "user",
+      );
       if (surface !== null) surface.onRowActivated();
     },
     [openRef, openTile, props.tabId, surface],
@@ -250,15 +253,18 @@ export function EpicSidebarCloudChatRow(
 
   const openPermanent = useCallback(
     (event: MouseEvent<HTMLButtonElement>) => {
-      openTile({
-        node: { ...openRef(), instanceId: uuidv4() },
-        target: { tabId: props.tabId },
-        gesture: "double",
-        modifiers: modifiersFromMouseEvent(event),
-        placement: null,
-        dedupe: true,
-        source: "direct_ui",
-      });
+      openTile(
+        {
+          node: { ...openRef(), instanceId: uuidv4() },
+          target: { tabId: props.tabId },
+          gesture: "double",
+          modifiers: modifiersFromMouseEvent(event),
+          placement: null,
+          dedupe: true,
+          source: "direct_ui",
+        },
+        "user",
+      );
     },
     [openRef, openTile, props.tabId],
   );

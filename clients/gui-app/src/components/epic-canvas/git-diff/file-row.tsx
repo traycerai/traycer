@@ -46,30 +46,36 @@ export function FileRow(props: FileRowProps): ReactNode {
 
   const onClick = useCallback(
     (event: MouseEvent<HTMLButtonElement>) => {
-      openTile({
-        node: tile,
-        target: { tabId: props.viewTabId },
-        gesture: "single",
-        modifiers: modifiersFromMouseEvent(event),
-        placement: null,
-        dedupe: true,
-        source: "direct_ui",
-      });
+      openTile(
+        {
+          node: tile,
+          target: { tabId: props.viewTabId },
+          gesture: "single",
+          modifiers: modifiersFromMouseEvent(event),
+          placement: null,
+          dedupe: true,
+          source: "direct_ui",
+        },
+        "user",
+      );
     },
     [openTile, props.viewTabId, tile],
   );
 
   const onDoubleClick = useCallback(
     (event: MouseEvent<HTMLButtonElement>) => {
-      openTile({
-        node: tile,
-        target: { tabId: props.viewTabId },
-        gesture: "double",
-        modifiers: modifiersFromMouseEvent(event),
-        placement: null,
-        dedupe: true,
-        source: "direct_ui",
-      });
+      openTile(
+        {
+          node: tile,
+          target: { tabId: props.viewTabId },
+          gesture: "double",
+          modifiers: modifiersFromMouseEvent(event),
+          placement: null,
+          dedupe: true,
+          source: "direct_ui",
+        },
+        "user",
+      );
     },
     [openTile, props.viewTabId, tile],
   );

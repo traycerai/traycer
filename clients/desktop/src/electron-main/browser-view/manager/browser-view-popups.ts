@@ -201,6 +201,13 @@ export class BrowserViewPopups {
           details.disposition === "background-tab"
             ? "background"
             : "foreground",
+        // PEEKED, not consumed: the native-popup gate below spends this same
+        // budget to decide whether a real popup may open, so consuming it
+        // here would deny that popup. This branch is reached BEFORE that gate
+        // precisely because a tile open is not a popup - which is also why
+        // the renderer had no way to tell a reader's click from a page's own
+        // script until this field existed.
+        openerHadUserGesture: this.hadRecentGuestGesture(gestureOpener),
       });
       return { action: "deny" };
     }

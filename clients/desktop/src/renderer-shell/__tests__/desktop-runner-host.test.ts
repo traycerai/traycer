@@ -162,10 +162,6 @@ function buildFakeBridge(
       kind: "network-error" as const,
       detail: "test",
     }),
-    routeVoiceUtterance: async () => ({
-      kind: "network-error" as const,
-      detail: "test",
-    }),
     setVoiceSessionLive: async () => undefined,
     setVoiceSessionIndicator: async () => undefined,
     createSandbox: async () => ({
@@ -213,6 +209,14 @@ function buildFakeBridge(
       detail: "test",
     }),
     disconnectSlackApp: async () => ({
+      kind: "network-error" as const,
+      detail: "test",
+    }),
+    setSlackAppDms: async () => ({
+      kind: "network-error" as const,
+      detail: "test",
+    }),
+    mintTeamHostInstallToken: async () => ({
       kind: "network-error" as const,
       detail: "test",
     }),

@@ -21,6 +21,7 @@ import {
   providersListResponseSchemaV104Preimage,
   providersListResponseSchemaV105Preimage,
   providersListResponseSchemaV106Preimage,
+  providersListResponseSchemaV107Preimage,
 } from "@traycer/protocol/host/provider-schemas";
 import { hostRpcRegistry } from "@traycer/protocol/host/index";
 import { toCanonicalJsonSchema } from "@traycer/protocol/framework/json-schema-fingerprint";
@@ -79,8 +80,8 @@ describe("Claude plugin and command catalog minors", () => {
     expect(row.nativeCapabilities.supportedTabs).toEqual(["plugins"]);
   });
 
-  it("keeps Kilo's published 10.3 and Claude's 10.4 below the live 10.7", () => {
-    expect(hostRpcRegistry["providers.list"][10].latestMinor).toBe(7);
+  it("keeps Kilo's published 10.3 and Claude's 10.4 below the live 10.9", () => {
+    expect(hostRpcRegistry["providers.list"][10].latestMinor).toBe(9);
     expect(
       hostRpcRegistry["providers.list"][10].versions[2].contract.responseSchema,
     ).toBe(providersListResponseSchemaV102Preimage);
@@ -98,6 +99,9 @@ describe("Claude plugin and command catalog minors", () => {
     ).toBe(providersListResponseSchemaV106Preimage);
     expect(
       hostRpcRegistry["providers.list"][10].versions[7].contract.responseSchema,
+    ).toBe(providersListResponseSchemaV107Preimage);
+    expect(
+      hostRpcRegistry["providers.list"][10].versions[9].contract.responseSchema,
     ).toBe(providersListResponseSchema);
     expect(
       JSON.stringify(

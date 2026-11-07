@@ -15,7 +15,7 @@ export const chatSyncSchemaSurfaceBaseline = {
             },
             "minor": {
               "type": "number",
-              "const": 13
+              "const": 14
             }
           },
           "required": [
@@ -457,7 +457,7 @@ export const chatSyncSchemaSurfaceBaseline = {
             },
             "minor": {
               "type": "number",
-              "const": 13
+              "const": 14
             }
           },
           "required": [
@@ -1042,6 +1042,50 @@ export const chatSyncSchemaSurfaceBaseline = {
                                 "type": "null"
                               }
                             ]
+                          },
+                          "providerSelection": {
+                            "type": "object",
+                            "properties": {
+                              "homeAddress": {
+                                "type": "string"
+                              },
+                              "bindingVersion": {
+                                "anyOf": [
+                                  {
+                                    "type": "integer",
+                                    "minimum": 1,
+                                    "maximum": 9007199254740991
+                                  },
+                                  {
+                                    "type": "string",
+                                    "const": "unknown"
+                                  }
+                                ]
+                              },
+                              "holderRevision": {
+                                "anyOf": [
+                                  {
+                                    "type": "integer",
+                                    "minimum": 0,
+                                    "maximum": 9007199254740991
+                                  },
+                                  {
+                                    "type": "string",
+                                    "const": "self"
+                                  }
+                                ]
+                              },
+                              "dispatchedAt": {
+                                "type": "number"
+                              }
+                            },
+                            "required": [
+                              "homeAddress",
+                              "bindingVersion",
+                              "holderRevision",
+                              "dispatchedAt"
+                            ],
+                            "additionalProperties": false
                           }
                         },
                         "required": [
@@ -1215,7 +1259,7 @@ export const chatSyncSchemaSurfaceBaseline = {
             },
             "minor": {
               "type": "number",
-              "const": 13
+              "const": 14
             }
           },
           "required": [
@@ -1290,7 +1334,7 @@ export const chatSyncSchemaSurfaceBaseline = {
             },
             "minor": {
               "type": "number",
-              "const": 13
+              "const": 14
             }
           },
           "required": [
@@ -7231,6 +7275,50 @@ export const chatSyncSchemaSurfaceBaseline = {
                             "type": "null"
                           }
                         ]
+                      },
+                      "providerSelection": {
+                        "type": "object",
+                        "properties": {
+                          "homeAddress": {
+                            "type": "string"
+                          },
+                          "bindingVersion": {
+                            "anyOf": [
+                              {
+                                "type": "integer",
+                                "minimum": 1,
+                                "maximum": 9007199254740991
+                              },
+                              {
+                                "type": "string",
+                                "const": "unknown"
+                              }
+                            ]
+                          },
+                          "holderRevision": {
+                            "anyOf": [
+                              {
+                                "type": "integer",
+                                "minimum": 0,
+                                "maximum": 9007199254740991
+                              },
+                              {
+                                "type": "string",
+                                "const": "self"
+                              }
+                            ]
+                          },
+                          "dispatchedAt": {
+                            "type": "number"
+                          }
+                        },
+                        "required": [
+                          "homeAddress",
+                          "bindingVersion",
+                          "holderRevision",
+                          "dispatchedAt"
+                        ],
+                        "additionalProperties": false
                       }
                     },
                     "required": [

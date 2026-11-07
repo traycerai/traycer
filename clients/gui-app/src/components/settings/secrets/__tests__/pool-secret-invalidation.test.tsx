@@ -74,6 +74,10 @@ import { useSelectionAuthorityStore } from "@/stores/host/selection-authority-st
 import type { ReactNode } from "react";
 import type { QueryKey } from "@tanstack/react-query";
 import type { ResponseOfMethod } from "@traycer-clients/shared/host-transport/host-messenger";
+import {
+  RETIRED_PROVIDER_VARIABLES,
+  RETIRED_SECRET_ROW_FIELDS,
+} from "@traycer/protocol/host/released-wire-rows";
 
 const AT = Date.UTC(2026, 9, 20, 9, 30);
 const LOCAL_HOST_ID = mockLocalHostEntry.hostId;
@@ -96,18 +100,17 @@ function secretFixture(
   overrides: Partial<EnvironmentSecretV12>,
 ): EnvironmentSecretV12 {
   return {
+    ...RETIRED_SECRET_ROW_FIELDS,
+    providerVariables: [...RETIRED_PROVIDER_VARIABLES],
     secretId: "sec-1",
     name: "STRIPE_KEY",
     kind: "api_key",
     protocol: null,
     destinations: [],
-    mode: "brokered",
-    state: "live",
     currentVersionId: "ver-2",
     revoked: false,
     updatedAt: AT,
     variables: [],
-    providerVariables: [],
     ...overrides,
   };
 }

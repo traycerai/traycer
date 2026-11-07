@@ -85,7 +85,7 @@ describe("the change list", () => {
   it("groups arrangement lines by field, order and provider", () => {
     useLayoutStore.getState().setArrangement({
       ...DEFAULT_ARRANGEMENT,
-      sidebarSide: "right",
+      sidebarSide: "left",
       dock: [...DEFAULT_ARRANGEMENT.dock].reverse(),
       hiddenProviders: [PROVIDER],
     });
@@ -96,8 +96,8 @@ describe("the change list", () => {
       {
         kind: "field",
         field: "sidebarSide",
-        current: "right",
-        baseline: "left",
+        current: "left",
+        baseline: "right",
       },
       { kind: "order", group: "dock" },
       { kind: "provider", providerId: PROVIDER },
@@ -131,7 +131,7 @@ describe("the change list", () => {
       kind: "field",
       arrangement: {
         ...DEFAULT_ARRANGEMENT,
-        sidebarSide: "right",
+        sidebarSide: "left",
         dock: [...DEFAULT_ARRANGEMENT.dock].reverse(),
         hiddenProviders: [PROVIDER],
       },

@@ -280,15 +280,18 @@ export function useCreateTuiAgentForClient(
           hostId: placeholderHostId,
           pendingTuiHarnessId: input.harnessId,
         };
-        openTile({
-          node: placeholderRef,
-          target: { tabId: input.tabId },
-          gesture: "explicit",
-          modifiers: null,
-          placement: input.placement,
-          dedupe: true,
-          source: "direct_ui",
-        });
+        openTile(
+          {
+            node: placeholderRef,
+            target: { tabId: input.tabId },
+            gesture: "explicit",
+            modifiers: null,
+            placement: input.placement,
+            dedupe: true,
+            source: "direct_ui",
+          },
+          "user",
+        );
       };
 
       let clearStashedPreparedLaunch = false;

@@ -548,7 +548,7 @@ export function ProviderReauthBanner({
         viewTabId={viewTabId}
         keyCustody={{
           principal,
-          hostName: tabEntry?.label ?? "this computer",
+          hostName: tabEntry?.label ?? null,
         }}
       />
     </HostRuntimeContext.Provider>
@@ -1041,7 +1041,7 @@ function OAuthWaitingRow({
 /** Where a key pasted here is stored: read from the tab host's status. */
 interface KeyCustody {
   readonly principal: ProviderKeyPrincipal;
-  readonly hostName: string;
+  readonly hostName: string | null;
 }
 
 /**
@@ -1065,6 +1065,7 @@ function PastedKeyCustody(props: {
       </>
     );
   }
+  if (keyCustody.hostName === null) return null;
   return (
     <p className="max-w-[72ch] text-ui-xs text-muted-foreground">
       {deviceKeyCustodyLine(

@@ -112,6 +112,7 @@ export function ContinueOnOpencodeTwoTabMenu(
             sourceOwnerUserId: chat.userId,
           },
           source: "direct_ui",
+          provenance: "user",
           createChat: (request, callbacks) => {
             // `mutateAsync`, not `mutate`: picking the item closes the menu
             // and unmounts this component, and TanStack drops `mutate`'s

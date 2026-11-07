@@ -275,7 +275,7 @@ export function ArtifactSearchBox(props: ArtifactSearchBoxProps) {
         return;
       }
       setStaleArtifactId(null);
-      openTile(tileIntent(ref, { tabId }, gesture, "direct_ui"));
+      openTile(tileIntent(ref, { tabId }, gesture, "direct_ui"), "user");
     },
     [handle, activeHostId, openTile, tabId],
   );

@@ -132,6 +132,10 @@ export function createFakeRunnerHost(
       Promise.resolve({ kind: "network-error" as const, detail: "fake" }),
     disconnectSlackApp: () =>
       Promise.resolve({ kind: "network-error" as const, detail: "fake" }),
+    setSlackAppDms: () =>
+      Promise.resolve({ kind: "network-error" as const, detail: "fake" }),
+    mintTeamHostInstallToken: () =>
+      Promise.resolve({ kind: "network-error" as const, detail: "fake" }),
     getSandboxGrants: () =>
       Promise.resolve({ kind: "network-error" as const, detail: "fake" }),
     getTeamEnvironment: () =>
@@ -207,11 +211,6 @@ export function createFakeRunnerHost(
     mintVoiceSession: () => Promise.resolve({ kind: "dormant" as const }),
     endVoiceSession: () =>
       Promise.resolve({ kind: "ok" as const, closedAt: null }),
-    routeVoiceUtterance: () =>
-      Promise.resolve({
-        kind: "network-error" as const,
-        detail: "no router in this test",
-      }),
     setVoiceSessionLive: () => Promise.resolve(),
     setVoiceSessionIndicator: () => Promise.resolve(),
     requestHostRespawn: () => Promise.resolve({ kind: "restarted" as const }),

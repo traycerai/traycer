@@ -6,6 +6,7 @@ import {
   type GetTaskContextsResponse,
   type ListTaskLight,
 } from "@traycer/protocol/host/epic/unary-schemas";
+import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
 import type { HostRpcError } from "@traycer-clients/shared/host-transport/host-messenger";
 import { useHostClient, type HostRpcRegistry } from "@/lib/host";
 import { cloudVerdictPreflight } from "@/lib/host/cloud-verdict-preflight";
@@ -100,7 +101,24 @@ export function useEpicGetTaskContexts(
   userId: string | null,
   options: UseEpicGetTaskContextsOptions,
 ): EpicTaskContexts {
-  const client = useHostClient();
+  return useEpicGetTaskContextsForClient(
+    useHostClient(),
+    taskIds,
+    userId,
+    options,
+  );
+}
+
+/**
+ * {@link useEpicGetTaskContexts} on `client`'s host: a tab reads through its
+ * own host's client (`useTabHostClient`), not the app's.
+ */
+export function useEpicGetTaskContextsForClient(
+  client: HostClient<HostRpcRegistry> | null,
+  taskIds: readonly string[],
+  userId: string | null,
+  options: UseEpicGetTaskContextsOptions,
+): EpicTaskContexts {
   const requests = useMemo(
     () =>
       chunkTaskIds(taskIds, GET_TASK_CONTEXTS_MAX_IDS).map((chunk) => ({

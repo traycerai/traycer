@@ -16,7 +16,6 @@ import type { ITraycerCli } from "@traycer-clients/shared/platform/runner-host";
 import { isWindows } from "@/lib/keybindings/platform";
 import { HoverCard } from "@/components/ui/hover-card";
 import { useKeyShapedSecret } from "@/components/settings/personal/use-key-shaped-secret";
-import { useHeldValueReviews } from "@/components/settings/personal/use-held-value-reviews";
 import {
   usePersonalPageHost,
   usePersonalRowNotes,
@@ -86,12 +85,12 @@ import { TeamVariablesAndShells } from "@/components/settings/environment/team-v
 const PANEL_DESCRIPTION =
   "How Traycer launches terminals, the host, and provider harnesses. New terminals pick up shell changes immediately; variable changes apply on restart.";
 const PERSONAL_PANEL_DESCRIPTION =
-  "Plain values every computer and sandbox running Personal gets, and the shell agents run in.";
+  "Plain values every computer and sandbox running these settings gets, and the shell agents run in.";
 const SAVED_FLASH_MS = 1600;
 
 function variablesEmptyLabel(personal: boolean): string {
   return personal
-    ? "Variables are plain values every computer and sandbox running Personal gets."
+    ? "Variables are plain values every computer and sandbox running these settings gets."
     : "Variables are plain values every host gets.";
 }
 type ShellSaveTarget = "program" | "flags";
@@ -1044,8 +1043,7 @@ function HostEnvironmentGroup(props: {
     );
   }
   const personal = useEnvironmentPick().kind === "personal";
-  const onHold = useHeldValueReviews("variable", "");
-  const claimedBy = useSecretClaimedNames(VARIABLE_CLAIMS);
+  const claimedBy = useSecretClaimedNames();
   return (
     <SettingsGroup
       group={SHELL.definitions.hostEnvironment}
@@ -1082,7 +1080,6 @@ function HostEnvironmentGroup(props: {
           <EnvOverrideEditor
             key={JSON.stringify([viewerId, configurationKey])}
             rowNotes={rowNotes}
-            onHold={onHold}
             claimedBy={claimedBy}
             overrides={props.overrides}
             disabled={props.pending}
@@ -1104,7 +1101,6 @@ function HostEnvironmentGroup(props: {
 }
 
 const VARIABLE_NOTES = { kind: "variable" } as const;
-const VARIABLE_CLAIMS = { kind: "variable" } as const;
 
 /** One refusal for every name: Variables sends every key to Secrets. */
 function keyRefusalOf(refusal: KeyRefusal | null): KeyRefusalFor {

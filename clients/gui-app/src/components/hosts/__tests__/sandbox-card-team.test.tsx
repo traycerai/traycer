@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { ReactNode } from "react";
 import {
   cleanup,
   fireEvent,
@@ -7,6 +8,11 @@ import {
   waitFor,
 } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
 import type {
   SandboxCost,
   SandboxPod,
@@ -14,11 +20,15 @@ import type {
   UserSandboxCost,
 } from "@traycer/protocol/host/sandbox-control";
 import {
+  HOST_SANDBOX_STATES,
+  type HostSandboxState,
+} from "@traycer/protocol/host/host-status";
+import type { SandboxGrantsSummary } from "@traycer/protocol/host/sandbox-secrets";
+import {
   createFakeSandboxBinding,
   type FakeSandboxBinding,
 } from "@/hooks/sandboxes/__tests__/sandbox-binding-fixture";
 import { sandboxSummaryFixture } from "@/hooks/sandboxes/__tests__/sandbox-fixtures";
-import { sandboxTeamFrozenStateLine } from "@/components/hosts/sandbox-card-model";
 import { formatSandboxDate } from "@/lib/sandboxes/sandbox-row-lines";
 import { frozenDestroyAt } from "@/lib/sandboxes/sandbox-balance";
 import { useAuthStore } from "@/stores/auth/auth-store";
@@ -30,6 +40,14 @@ const mocks = vi.hoisted(() => ({
   toastInfo: vi.fn(),
   toastFromAuthError: vi.fn<(error: Error, title: string) => void>(),
   costs: null as UserSandboxCost | null,
+  grantsData: undefined as SandboxGrantsSummary | undefined,
+  openEnvironmentPage:
+    vi.fn<
+      (address: {
+        readonly configurationId: string | null;
+        readonly pageId: string;
+      }) => void
+    >(),
 }));
 
 vi.mock("sonner", () => ({
@@ -62,7 +80,7 @@ vi.mock("@/hooks/sandboxes/use-sandbox-egress-events", () => ({
 }));
 vi.mock("@/hooks/sandboxes/use-sandbox-grants-query", () => ({
   useSandboxGrants: () => ({
-    data: undefined,
+    data: mocks.grantsData,
     isError: false,
     isFetching: false,
     refetch: vi.fn(),
@@ -127,8 +145,19 @@ vi.mock("@/hooks/sandboxes/use-sandbox-runway-warning", () => ({
 vi.mock("@/hooks/auth/use-auth-user-query", () => ({
   useAuthUser: () => ({ data: null }),
 }));
+vi.mock("@/components/settings/environment/open-environment-page", () => ({
+  openEnvironmentPage: (address: {
+    readonly configurationId: string | null;
+    readonly pageId: string;
+  }) => mocks.openEnvironmentPage(address),
+}));
 
-import { SandboxCard } from "@/components/hosts/sandbox-card";
+import {
+  SandboxCard,
+  SandboxHeaderActions,
+  SandboxHeaderCost,
+  SandboxHeaderNotices,
+} from "@/components/hosts/sandbox-card";
 import type { HostScopeSandbox } from "@/components/settings/host-scope/host-scope-model";
 
 /**
@@ -165,13 +194,38 @@ function renderCard(sandbox: HostScopeSandbox, teamOwned: boolean): void {
   });
   render(
     <QueryClientProvider client={queryClient}>
-      <SandboxCard
+      <SandboxHeaderActions
         hostName="Host name"
-        hostState="online"
         sandbox={{ ...sandbox, teamOwned }}
         onDestroyed={null}
+        renderActions={renderSandboxHeaderActions}
       />
+      <SandboxHeaderCost sandbox={{ ...sandbox, teamOwned }} />
+      <SandboxHeaderNotices
+        sandbox={{ ...sandbox, teamOwned }}
+        teamName="Acme"
+      />
+      <SandboxCard hostState="online" sandbox={{ ...sandbox, teamOwned }} />
     </QueryClientProvider>,
+  );
+}
+
+function renderSandboxHeaderActions(
+  primary: ReactNode,
+  menuItems: ReactNode,
+): ReactNode {
+  return (
+    <>
+      {primary}
+      <DropdownMenu modal={false} open>
+        <DropdownMenuTrigger asChild>
+          <button type="button" aria-label="More actions for Host name">
+            More
+          </button>
+        </DropdownMenuTrigger>
+        <DropdownMenuContent>{menuItems}</DropdownMenuContent>
+      </DropdownMenu>
+    </>
   );
 }
 
@@ -208,6 +262,8 @@ function text(testId: string): string {
 beforeEach(() => {
   mocks.binding = createFakeSandboxBinding();
   mocks.costs = null;
+  mocks.grantsData = undefined;
+  mocks.openEnvironmentPage.mockClear();
   mocks.toastSuccess.mockClear();
   mocks.toastInfo.mockClear();
   mocks.toastFromAuthError.mockClear();
@@ -230,8 +286,8 @@ describe("<SandboxCard /> team creator and wake payer", () => {
       }),
       true,
     );
-    expect(text("sandbox-card-creator")).toBe("Created by you");
-    expect(text("sandbox-card-wake-payer")).toBe("This wake is on your bundle");
+    expect(text("sandbox-card-creator")).toBe("you");
+    expect(text("sandbox-card-wake-payer")).toBe("You");
   });
 
   it("names another member by their display name", () => {
@@ -242,10 +298,8 @@ describe("<SandboxCard /> team creator and wake payer", () => {
       }),
       true,
     );
-    expect(text("sandbox-card-creator")).toBe("Created by Ada Lovelace");
-    expect(text("sandbox-card-wake-payer")).toBe(
-      "This wake is on Grace Hopper's bundle",
-    );
+    expect(text("sandbox-card-creator")).toBe("Ada Lovelace");
+    expect(text("sandbox-card-wake-payer")).toBe("Grace Hopper");
   });
 
   it("shows the creator but no payer line while the team sandbox is asleep", () => {
@@ -256,7 +310,7 @@ describe("<SandboxCard /> team creator and wake payer", () => {
       }),
       true,
     );
-    expect(text("sandbox-card-creator")).toBe("Created by Ada Lovelace");
+    expect(text("sandbox-card-creator")).toBe("Ada Lovelace");
     expect(screen.queryByTestId("sandbox-card-wake-payer")).toBeNull();
   });
 
@@ -277,75 +331,141 @@ describe("<SandboxCard /> team creator and wake payer", () => {
     expect(screen.queryByTestId("sandbox-card-creator")).toBeNull();
   });
 
-  it("says whose bundle ran out on a frozen team card", () => {
+  it("names the team payer and removal date in the header notice", () => {
+    const frozenAt = new Date(2026, 8, 1, 12).getTime();
     renderCard(
       sandboxOf("suspended", true, {
+        frozenAt,
         wakePayer: { userId: "user-ada", displayName: "Ada Lovelace" },
       }),
       true,
     );
     expect(text("sandbox-card-state-line")).toBe(
-      "Frozen: Ada Lovelace's bundle is out.",
+      `Ada Lovelace's Acme credits ran out · Will be removed on ${formatSandboxDate(frozenDestroyAt(frozenAt), true)}`,
     );
   });
-});
 
-describe("<SandboxCard /> frozen team destroy date", () => {
-  const FROZEN_AT = new Date(2026, 8, 1, 12).getTime();
-  const ADA = { userId: "user-ada", displayName: "Ada Lovelace" };
-  const BASE = "Frozen: Ada Lovelace's bundle is out.";
-
-  it("adds the day the sandbox is destroyed when the server sends frozenAt", () => {
+  it("uses neutral payer wording when team sandbox details are unavailable", () => {
     renderCard(
-      sandboxOf("suspended", true, { frozenAt: FROZEN_AT, wakePayer: ADA }),
+      { state: "suspended", frozen: true, summary: null, teamOwned: true },
       true,
     );
     expect(text("sandbox-card-state-line")).toBe(
-      `${BASE} Destroyed on ${formatSandboxDate(frozenDestroyAt(FROZEN_AT), true)}.`,
+      "Its payer's Acme credits ran out",
     );
   });
 
-  it("names no one, and never 'your credits', before the sandbox list answers", () => {
-    renderCard(
-      { state: "suspended", frozen: true, summary: null, teamOwned: false },
-      true,
-    );
+  it("uses neutral payer wording when a team summary has no wake payer", () => {
+    renderCard(sandboxOf("suspended", true, { wakePayer: null }), true);
     expect(text("sandbox-card-state-line")).toBe(
-      "Frozen: its payer's bundle is out.",
-    );
-    expect(sandboxTeamFrozenStateLine(null, VIEWER)).toBe(
-      "Frozen: its payer's bundle is out.",
-    );
-  });
-
-  it("adds no date when frozenAt is not sent", () => {
-    renderCard(
-      sandboxOf("suspended", true, { frozenAt: null, wakePayer: ADA }),
-      true,
-    );
-    expect(text("sandbox-card-state-line")).toBe(BASE);
-  });
-
-  it("builds the line from the payer's name, the viewer's own bundle and a missing payer", () => {
-    const frozen = (payer: SandboxSummary["wakePayer"]): SandboxSummary =>
-      sandboxSummaryFixture({ frozenAt: FROZEN_AT, wakePayer: payer });
-    const day = formatSandboxDate(frozenDestroyAt(FROZEN_AT), true);
-    expect(sandboxTeamFrozenStateLine(frozen(ADA), VIEWER)).toBe(
-      `${BASE} Destroyed on ${day}.`,
-    );
-    expect(
-      sandboxTeamFrozenStateLine(
-        frozen({ userId: VIEWER, displayName: "Vera Viewer" }),
-        VIEWER,
-      ),
-    ).toBe(`Frozen: your bundle is out. Destroyed on ${day}.`);
-    expect(sandboxTeamFrozenStateLine(frozen(null), VIEWER)).toBe(
-      `Frozen: its payer's bundle is out. Destroyed on ${day}.`,
+      "Its payer's Acme credits ran out",
     );
   });
 });
 
 describe("<SandboxCard /> team cost view", () => {
+  it("opens the team Secrets page from Manage", () => {
+    mocks.grantsData = { version: 3, grants: [], github: null };
+    renderCard(sandboxOf("awake", false, { environmentId: ENV }), true);
+
+    fireEvent.click(screen.getByRole("button", { name: "Manage" }));
+
+    expect(mocks.openEnvironmentPage).toHaveBeenCalledWith({
+      configurationId: ENV,
+      pageId: "secrets",
+    });
+  });
+
+  it.each([
+    ["awake", "$0.12 an hour", "under $0.01 an hour", "Storage rate"],
+    ["suspended", "under $0.01 an hour", "$0.12 an hour", "Awake rate"],
+  ] as const)(
+    "shows current and other-state rates once, with no personal ledger, when %s",
+    (state, currentRate, otherRate, otherRateLabel) => {
+      renderCard(sandboxOf(state, false, {}), true);
+
+      expect(screen.getAllByText(currentRate)).toHaveLength(1);
+      expect(screen.getAllByText(otherRate)).toHaveLength(1);
+      expect(screen.getByText(otherRateLabel)).toBeTruthy();
+      expect(screen.queryByTestId("sandbox-card-cost-today")).toBeNull();
+      expect(screen.queryByTestId("sandbox-card-cost")).toBeNull();
+      expect(screen.getByTestId("sandbox-card-shape")).toBeTruthy();
+      expect(screen.getByTestId("sandbox-card-idle")).toBeTruthy();
+      expect(screen.getByTestId("sandbox-card-last-active")).toBeTruthy();
+    },
+  );
+
+  it("says Not billing for a frozen team sandbox, which has no ledger rate", () => {
+    renderCard(sandboxOf("suspended", true, {}), true);
+
+    expect(screen.getAllByText("Not billing")).toHaveLength(1);
+    expect(screen.queryByText("under $0.01 an hour")).toBeNull();
+  });
+
+  describe("with no ledger, each state's own rate", () => {
+    const PRICE = { awakeMc: 120, suspendedMc: 40, stoppedMc: 20 };
+    const HEADER_RATE: Record<HostSandboxState, string> = {
+      creating: "Not billing",
+      awake: "$0.12 an hour",
+      suspending: "$0.04 an hour",
+      suspended: "$0.04 an hour",
+      resuming: "$0.12 an hour",
+      stopping: "$0.02 an hour",
+      stopped: "$0.02 an hour",
+      starting: "$0.12 an hour",
+      released: "Not billing",
+      destroying: "Not billing",
+      destroyed: "Not billing",
+      failed: "Not billing",
+    };
+
+    function headerRate(sandbox: HostScopeSandbox): string {
+      render(
+        <div data-testid="header-rate">
+          <SandboxHeaderCost sandbox={{ ...sandbox, teamOwned: true }} />
+        </div>,
+      );
+      return text("header-rate").replace("·", "");
+    }
+
+    it.each(HOST_SANDBOX_STATES)("reads %s from its own tier", (state) => {
+      const sandbox = sandboxOf(state, false, { priceMcPerHour: PRICE });
+      expect(headerRate(sandbox)).toBe(HEADER_RATE[state]);
+    });
+
+    it("reads the summary's state when the host list has none yet", () => {
+      const sandbox = sandboxOf(null, false, {
+        state: "destroyed",
+        priceMcPerHour: PRICE,
+      });
+      expect(headerRate(sandbox)).toBe("Not billing");
+    });
+
+    it.each([
+      ["suspending", "Awake rate", "$0.12 an hour"],
+      ["stopping", "Awake rate", "$0.12 an hour"],
+      ["resuming", "Storage rate", "$0.04 an hour"],
+      ["starting", "Storage rate", "$0.04 an hour"],
+    ] as const)(
+      "labels the other rate of a %s card as %s",
+      (state, label, rate) => {
+        renderCard(sandboxOf(state, false, { priceMcPerHour: PRICE }), true);
+        expect(screen.getByText(label)).toBeTruthy();
+        expect(text("sandbox-card-other-rate")).toBe(rate);
+      },
+    );
+
+    it.each(["destroying", "destroyed"] as const)(
+      "states no other rate on a %s card, which accrues nothing",
+      (state) => {
+        renderCard(sandboxOf(state, false, { priceMcPerHour: PRICE }), true);
+        expect(screen.queryByTestId("sandbox-card-other-rate")).toBeNull();
+        expect(screen.queryByText("Storage rate")).toBeNull();
+        expect(screen.queryByText("Awake rate")).toBeNull();
+      },
+    );
+  });
+
   it("mounts no cost view on a team card, and the personal view on a personal one", () => {
     mocks.costs = {
       sandboxes: [COST],

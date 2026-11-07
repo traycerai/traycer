@@ -250,7 +250,7 @@ export function TerminalTile(props: TerminalTileProps) {
         }
         hostLabel={reachability.hostLabel}
         ownerKind="terminal"
-        onClose={closeCanvasTile}
+        onClose={() => closeCanvasTile("user")}
         testId={`terminal-tile-${props.tileId}`}
       />
     );
@@ -411,7 +411,8 @@ function LegacyTerminalTileLive(
     !isSignInTerminal;
   useEffect(() => {
     if (!exitedBeforeAttach) return;
-    closeExitedTile();
+    // Nobody asked: the session ended before this tile ever attached.
+    closeExitedTile("automatic");
   }, [exitedBeforeAttach, closeExitedTile]);
 
   // The host has settled on "this session is gone" (absent, or exited and
@@ -465,7 +466,7 @@ function LegacyTerminalTileLive(
         epicId={epicId}
         viewTabId={props.viewTabId}
         sessionId={sessionId}
-        closeSelf={closeExitedTile}
+        closeSelf={() => closeExitedTile("user")}
       />
     );
   }
@@ -477,7 +478,7 @@ function LegacyTerminalTileLive(
         tileId={props.tileId}
         hostHasSession={bootstrap.hostHasSession}
         onMeasured={bootstrap.reportMeasuredGrid}
-        onClose={closeExitedTile}
+        onClose={() => closeExitedTile("user")}
       />
     );
   }
@@ -495,14 +496,16 @@ function LegacyTerminalTileLive(
       onCrashExit={props.onCrashExit}
       authoritativeTerminal={null}
       closeOnExit
-      onClose={closeExitedTile}
+      // `TerminalLive` invokes this from its own exit effect only, so it is
+      // the shell ending rather than a person closing the tab.
+      onClose={() => closeExitedTile("automatic")}
       signInTile={
         isSignInTerminal
           ? {
               providerId: signInProviderId,
               epicId,
               sessionId,
-              closeSelf: closeExitedTile,
+              closeSelf: () => closeExitedTile("user"),
             }
           : null
       }
@@ -735,7 +738,7 @@ function HostTerminalTileLive(
       onCrashExit={props.onCrashExit}
       authoritativeTerminal={props.controller.viewModel}
       closeOnExit={false}
-      onClose={closeCanvasTile}
+      onClose={() => closeCanvasTile("user")}
       signInTile={null}
     />
   );

@@ -737,8 +737,8 @@ export const chatRunSettingsHarnessIdSchemaV10 = lazySchema(() =>
  * caller decodes this response against a three-mode enum, so an `auto` chat
  * read on that line would fail the whole response rather than one field. 2.0
  * below is RELEASED and carries the identical pin for the identical reason;
- * major 3 (the head) binds the live tuple and is the only line that may spell
- * `auto`.
+ * major 3 first carries `auto` through its frozen tuple. The separate current
+ * line carries later additions.
  */
 export const chatRunSettingsSchemaV10 = lazySchema(() =>
   z.object({
@@ -813,8 +813,8 @@ export const chatRunSettingsSchemaV20 = lazySchema(() =>
     model: z.string().min(1),
     // Pinned pre-`auto` for the same half-freeze reason the id is: 2.0 is
     // RELEASED, so an `auto` chat read on that line would fail the whole
-    // response rather than one field. Major 3 (the head) binds the live tuple
-    // and is the only line that may spell `auto`.
+    // response rather than one field. Major 3 first carries `auto` through
+    // its frozen tuple; later additions belong to the separate current line.
     permissionMode: permissionModeSchemaPreAuto,
     reasoningEffort: z.string().nullable(),
     serviceTier: z.string().nullable().default(null),

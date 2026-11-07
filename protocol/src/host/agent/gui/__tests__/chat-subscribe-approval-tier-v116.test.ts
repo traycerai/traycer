@@ -65,9 +65,9 @@ function approvalRequestedFrame(
 }
 
 describe("chat.subscribe registry: 1.16 installed below the 1.17 through 1.22 lines, 1.15 still installed", () => {
-  it("binds 1.16 and 1.15 to their own contracts - the head has since moved to 1.43", () => {
+  it("binds 1.16 and 1.15 to their own contracts - the head has since moved to 1.44", () => {
     const line = hostStreamRpcRegistry["chat.subscribe"][1];
-    expect(line.latestMinor).toBe(43);
+    expect(line.latestMinor).toBe(44);
     expect(line.versions[40].contract).toBe(chatSubscribeV140);
     expect(line.versions[39].contract).toBe(chatSubscribeV139);
     expect(line.versions[38].contract).toBe(chatSubscribeV138);
@@ -118,7 +118,7 @@ describe("chat.subscribe registry: 1.16 installed below the 1.17 through 1.22 li
       openChatSubscribeWindowedServerFrameSchema,
     );
     // 1.32 froze when 1.33 widened the accumulated-change `artifact` tag's
-    // kind above it; 1.33 binds the live windowed schema.
+    // kind above it; 1.33 retains that widened tag in its frozen frames.
     expect(chatSubscribeV132.serverFrameSchema).not.toBe(
       openChatSubscribeWindowedServerFrameSchema,
     );
@@ -128,7 +128,7 @@ describe("chat.subscribe registry: 1.16 installed below the 1.17 through 1.22 li
     // 1.35's frozen frames; 1.37 froze when 1.38 added `opencodeLineHeld`
     // above it; 1.38 froze when 1.39 added the notification-digest queue
     // item; 1.39 froze when 1.40 added the steer restart reasons to
-    // `actionAck`; 1.40 binds the live windowed schema.
+    // `actionAck`; 1.40 retains those reasons in its frozen frames.
     expect(chatSubscribeV133.serverFrameSchema).not.toBe(
       openChatSubscribeWindowedServerFrameSchema,
     );

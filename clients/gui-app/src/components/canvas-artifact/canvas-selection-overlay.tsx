@@ -153,6 +153,13 @@ export function CanvasSelectionOverlay(props: {
   readonly scope: CanvasAnnotationScope;
   readonly boardPath: string;
   readonly registry: CanvasFrameRegistry;
+  /**
+   * The page takes the pointer itself and reports it (an html page being
+   * commented on), so no shield covers it: its wheel, touch, pinch and
+   * scrollbars stay native, and its hover and picks come from the bridge. A
+   * board has a canvas to pan around it, so a shield catches its presses.
+   */
+  readonly pointerInPage: boolean;
   readonly onPick: (
     path: string,
     point: { x: number; y: number; additive?: boolean },
@@ -188,13 +195,26 @@ export function CanvasSelectionOverlay(props: {
   const hoverRequest = useRef({ time: 0, pending: false, generation: 0 });
   const frame = entry.frame;
   const bridge = entry.bridge;
-  const { onRetire, boardPath } = props;
+  const { onRetire, onPick, boardPath, pointerInPage } = props;
   useEffect(
     () => () => {
       onRetire(boardPath);
     },
     [onRetire, boardPath],
   );
+  useEffect(() => {
+    if (!pointerInPage || bridge === null) return;
+    return bridge.onPageActivity((activity) => {
+      if (activity.kind === "hover")
+        setHovered(
+          activity.element === null || isCanvasBoardRoot(activity.element)
+            ? null
+            : activity.element,
+        );
+      else if (activity.kind === "pick")
+        onPick(boardPath, { x: activity.x, y: activity.y });
+    });
+  }, [pointerInPage, bridge, onPick, boardPath]);
   const hasSelection = selection !== null;
   const marker = selection?.element.marker;
   const tid = selection?.element.tid;
@@ -235,8 +255,14 @@ export function CanvasSelectionOverlay(props: {
     if (bridge === null || marker === undefined || tid === undefined) return;
     let active = true;
     let pending = false;
+    // A move while a measurement is out is measured once that one lands, so
+    // the outline comes to rest where the page did.
+    let movedSince = false;
     const refresh = async (): Promise<void> => {
-      if (pending) return;
+      if (pending) {
+        movedSince = true;
+        return;
+      }
       const current = useCanvasSelectionStore.getState().selection;
       if (
         !selectionMatches(current, {
@@ -271,6 +297,10 @@ export function CanvasSelectionOverlay(props: {
       } finally {
         pending = false;
       }
+      if (movedSince && active) {
+        movedSince = false;
+        await refresh();
+      }
     };
     void refresh();
     const timer = window.setInterval(() => {
@@ -281,11 +311,17 @@ export function CanvasSelectionOverlay(props: {
     };
     window.addEventListener("resize", layoutChanged);
     window.addEventListener("scroll", layoutChanged, true);
+    // A page scrolled or zoomed inside its own document, which no listener
+    // here can hear.
+    const stopPageLayout = bridge.onPageActivity((activity) => {
+      if (activity.kind === "layout") layoutChanged();
+    });
     return () => {
       active = false;
       window.clearInterval(timer);
       window.removeEventListener("resize", layoutChanged);
       window.removeEventListener("scroll", layoutChanged, true);
+      stopPageLayout();
     };
     // Geometry updates must not restart the polling clock.
   }, [
@@ -352,114 +388,120 @@ export function CanvasSelectionOverlay(props: {
       className="nokey pointer-events-none absolute inset-0 z-10"
       data-canvas-selection-overlay=""
     >
-      <div
-        role="presentation"
-        className={cn(
-          "absolute inset-0 touch-auto [&]:pointer-events-auto",
-          props.commenting && "cursor-crosshair",
-        )}
-        tabIndex={-1}
-        onKeyDown={(event) => {
-          if (event.defaultPrevented) return;
-          if (event.key === "Escape") {
-            // The node wrapper would otherwise deselect the board before the
-            // provider can clear just the element on the first Escape.
+      {pointerInPage ? null : (
+        <div
+          role="presentation"
+          className={cn(
+            "absolute inset-0 touch-auto [&]:pointer-events-auto",
+            props.commenting && "cursor-crosshair",
+          )}
+          tabIndex={-1}
+          onKeyDown={(event) => {
+            if (event.defaultPrevented) return;
+            if (event.key === "Escape") {
+              // The node wrapper would otherwise deselect the board before the
+              // provider can clear just the element on the first Escape.
+              event.preventDefault();
+              event.stopPropagation();
+              props.onEscape();
+              return;
+            }
+            // Shift+Enter widens the selection to the parent element, as design
+            // tools do. There is no visible control for it: the hit test picks
+            // the deepest element, and this is the quiet way up.
+            if (
+              event.key === "Enter" &&
+              event.shiftKey &&
+              selection !== null &&
+              props.onSelectParent !== null
+            ) {
+              event.preventDefault();
+              event.stopPropagation();
+              props.onSelectParent();
+            }
+          }}
+          onPointerDown={(event) => {
+            if (event.button !== 0) return;
+            const start = pointInFrame(event);
+            if (start === null) return;
             event.preventDefault();
             event.stopPropagation();
-            props.onEscape();
-            return;
-          }
-          // Shift+Enter widens the selection to the parent element, as design
-          // tools do. There is no visible control for it: the hit test picks
-          // the deepest element, and this is the quiet way up.
-          if (
-            event.key === "Enter" &&
-            event.shiftKey &&
-            selection !== null &&
-            props.onSelectParent !== null
-          ) {
-            event.preventDefault();
-            event.stopPropagation();
-            props.onSelectParent();
-          }
-        }}
-        onPointerDown={(event) => {
-          if (event.button !== 0) return;
-          const start = pointInFrame(event);
-          if (start === null) return;
-          event.preventDefault();
-          event.stopPropagation();
-          event.currentTarget.focus({ preventScroll: true });
-          event.currentTarget.setPointerCapture(event.pointerId);
-          if (selection !== null && !props.commenting)
-            void bridge?.selectTextRange({ start, end: start });
-          setPointerDown(true);
-          setHovered(null);
-          hoverRequest.current.generation++;
-          gesture.current = {
-            x: event.clientX,
-            y: event.clientY,
-            additive: !props.commenting && event.shiftKey,
-            start,
-            textDrag:
-              !props.commenting &&
-              !event.shiftKey &&
-              !multiple &&
-              box !== null &&
-              start.x >= box.x &&
-              start.x <= box.x + box.width &&
-              start.y >= box.y &&
-              start.y <= box.y + box.height,
-          };
-        }}
-        onPointerMove={(event) => {
-          const point = pointInFrame(event);
-          if (point === null) return;
-          const start = gesture.current;
-          if (start === null) hover(point);
-          else if (
-            start.textDrag &&
-            Math.hypot(event.clientX - start.x, event.clientY - start.y) > 4
-          )
-            void bridge?.selectTextRange({ start: start.start, end: point });
-        }}
-        onPointerLeave={() => {
-          hoverRequest.current.generation++;
-          setHovered(null);
-        }}
-        onPointerCancel={() => {
-          gesture.current = null;
-          setPointerDown(false);
-        }}
-        onLostPointerCapture={() => {
-          gesture.current = null;
-          setPointerDown(false);
-        }}
-        onPointerUp={(event) => {
-          const start = gesture.current;
-          gesture.current = null;
-          setPointerDown(false);
-          const point = pointInFrame(event);
-          if (start === null || point === null) return;
-          if (
-            Math.hypot(event.clientX - start.x, event.clientY - start.y) > 4
-          ) {
-            if (start.textDrag)
+            event.currentTarget.focus({ preventScroll: true });
+            event.currentTarget.setPointerCapture(event.pointerId);
+            if (selection !== null && !props.commenting)
+              void bridge?.selectTextRange({ start, end: start });
+            setPointerDown(true);
+            setHovered(null);
+            hoverRequest.current.generation++;
+            gesture.current = {
+              x: event.clientX,
+              y: event.clientY,
+              additive: !props.commenting && event.shiftKey,
+              start,
+              textDrag:
+                !props.commenting &&
+                !event.shiftKey &&
+                !multiple &&
+                box !== null &&
+                start.x >= box.x &&
+                start.x <= box.x + box.width &&
+                start.y >= box.y &&
+                start.y <= box.y + box.height,
+            };
+          }}
+          onPointerMove={(event) => {
+            const point = pointInFrame(event);
+            if (point === null) return;
+            const start = gesture.current;
+            if (start === null) hover(point);
+            else if (
+              start.textDrag &&
+              Math.hypot(event.clientX - start.x, event.clientY - start.y) > 4
+            )
               void bridge?.selectTextRange({ start: start.start, end: point });
-            return;
-          }
-          props.onPick(props.boardPath, {
-            ...point,
-            ...(start.additive ? { additive: true } : {}),
-          });
-        }}
-        onDoubleClick={(event) => {
-          event.preventDefault();
-          event.stopPropagation();
-          const point = pointInFrame(event);
-          if (point !== null && !props.commenting) void bridge?.retypeAt(point);
-        }}
-      />
+          }}
+          onPointerLeave={() => {
+            hoverRequest.current.generation++;
+            setHovered(null);
+          }}
+          onPointerCancel={() => {
+            gesture.current = null;
+            setPointerDown(false);
+          }}
+          onLostPointerCapture={() => {
+            gesture.current = null;
+            setPointerDown(false);
+          }}
+          onPointerUp={(event) => {
+            const start = gesture.current;
+            gesture.current = null;
+            setPointerDown(false);
+            const point = pointInFrame(event);
+            if (start === null || point === null) return;
+            if (
+              Math.hypot(event.clientX - start.x, event.clientY - start.y) > 4
+            ) {
+              if (start.textDrag)
+                void bridge?.selectTextRange({
+                  start: start.start,
+                  end: point,
+                });
+              return;
+            }
+            props.onPick(props.boardPath, {
+              ...point,
+              ...(start.additive ? { additive: true } : {}),
+            });
+          }}
+          onDoubleClick={(event) => {
+            event.preventDefault();
+            event.stopPropagation();
+            const point = pointInFrame(event);
+            if (point !== null && !props.commenting)
+              void bridge?.retypeAt(point);
+          }}
+        />
+      )}
       {hoverBox === null || pointerDown || capturing ? null : (
         <SelectionOutline
           box={hoverBox}
