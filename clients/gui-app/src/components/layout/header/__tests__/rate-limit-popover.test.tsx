@@ -29,7 +29,11 @@ import type {
   RateLimitChatCredential,
 } from "@traycer/protocol/host";
 import type { ProvidersConsumeRateLimitResetCreditRequest } from "@traycer/protocol/host/rate-limit";
-import type { ProviderProfile } from "@traycer/protocol/host/provider-schemas";
+import type {
+  ProviderCliState,
+  ProviderProfile,
+} from "@traycer/protocol/host/provider-schemas";
+import { DEFAULT_PROVIDER_NATIVE_CAPABILITIES } from "@traycer/protocol/host/provider-native-schemas";
 import type {
   AuthenticatedUser,
   SubscriptionStatus,
@@ -94,6 +98,10 @@ type MockState = {
     fetchEligibility?: RateLimitFetchEligibility;
   }>;
   results: Record<string, QueryResult>;
+  // `useTraycerSubscription` gates the Traycer tab on this provider row's
+  // `enabled` flag, independent from host-RPC providers above. Defaults to
+  // enabled so the existing Traycer-tab cases below behave exactly as before.
+  providersList: { data: { providers: ProviderCliState[] } | undefined };
   traycerUsageFetching: boolean;
   traycerUsageUpdatedAt: Readonly<Record<string, number>>;
   openSettings: Mock<(...args: unknown[]) => void>;
@@ -141,6 +149,7 @@ function coldAuthUser(): MockAuthUser {
 const mocks = vi.hoisted<MockState>(() => ({
   configured: [],
   results: {},
+  providersList: { data: undefined },
   traycerUsageFetching: false,
   traycerUsageUpdatedAt: {},
   openSettings: vi.fn(),
@@ -334,6 +343,12 @@ vi.mock(
 // host-RPC-provider tests below behave exactly as before.
 vi.mock("@/hooks/auth/use-auth-user-query", () => ({
   useAuthUser: () => mocks.authUser,
+}));
+// `useTraycerSubscription` also gates the Traycer tab on this provider row's
+// `enabled` flag (independent of the host-RPC providers mocked above via
+// `useConfiguredRateLimitProviders`), so it gets its own fixture seam.
+vi.mock("@/hooks/providers/use-providers-list-query", () => ({
+  useProvidersList: () => mocks.providersList,
 }));
 // The aperture usage query + its turn-refresh only mount inside the shared
 // RateLimitView (rate-limit-based Traycer plans). Stub them so no real host
@@ -563,6 +578,39 @@ function unauthenticatedAmbientProfile(): ProviderProfile {
       label: null,
       detail: null,
     },
+  };
+}
+
+/**
+ * The `providers.list` row `useTraycerSubscription` reads to gate the
+ * synthetic Traycer rail entry: a disabled row drops the tab regardless of
+ * subscription eligibility.
+ */
+function traycerProviderFixture(enabled: boolean): ProviderCliState {
+  return {
+    providerId: "traycer",
+    enabled,
+    disabledBy: null,
+    selected: { kind: "bundled" },
+    candidates: [],
+    auth: {
+      status: "authenticated",
+      badgeText: null,
+      label: null,
+      detail: null,
+    },
+    authPending: false,
+    checkedAt: null,
+    apiKey: { supported: false, configured: false, source: null },
+    terminalAgentArgs: "",
+    envOverrides: [],
+    loginCapability: null,
+    availabilityPending: false,
+    nativeCapabilities: DEFAULT_PROVIDER_NATIVE_CAPABILITIES,
+    managedInstallState: null,
+    versionVisibility: null,
+    advisory: null,
+    profiles: [],
   };
 }
 
@@ -990,6 +1038,7 @@ beforeEach(() => {
   segmentsState.cluster = { kind: "hidden" };
   mocks.configured = [];
   mocks.results = {};
+  mocks.providersList = { data: { providers: [traycerProviderFixture(true)] } };
   mocks.traycerUsageFetching = false;
   mocks.traycerUsageUpdatedAt = {};
   mocks.openSettings = vi.fn();
@@ -3824,6 +3873,26 @@ describe("<RateLimitPopover /> Overview block scoping", () => {
 });
 
 describe("<RateLimitPopover /> Traycer tab", () => {
+  function singleHostPopoverElement() {
+    return (
+      <QueryClientProvider client={new QueryClient()}>
+        <TooltipProvider>
+          <Popover open>
+            <PopoverTrigger>trigger</PopoverTrigger>
+            <RateLimitPopover
+              side="bottom"
+              align="end"
+              onClose={onClose}
+              profileSelection={mocks.profileSelection}
+              scope={SINGLE_HOST_SCOPE}
+              hasExplicitPick={false}
+            />
+          </Popover>
+        </TooltipProvider>
+      </QueryClientProvider>
+    );
+  }
+
   it("adds a Traycer tab for a paid account, even with no host-RPC providers", () => {
     mocks.configured = [];
     mocks.authUser = readyAuthUser(
@@ -3831,6 +3900,38 @@ describe("<RateLimitPopover /> Traycer tab", () => {
     );
     renderPopover();
     // Eligible Traycer alone keeps the rail (not the zero-provider CTA).
+    expect(
+      screen.queryByText("Connect a supported provider to see usage here."),
+    ).toBeNull();
+    const tabs = screen.getAllByRole("tab");
+    expect(tabs.map((tab) => tab.getAttribute("aria-label"))).toEqual([
+      "Overview",
+      "Traycer Inference",
+    ]);
+  });
+
+  it("drops the tab and Overview card when the Traycer provider is disabled, and restores both once it's re-enabled", () => {
+    mocks.configured = [];
+    mocks.authUser = readyAuthUser(
+      authUserFixture({ status: "PRO_V3", withTeam: false }),
+    );
+    mocks.providersList = {
+      data: { providers: [traycerProviderFixture(false)] },
+    };
+    const { rerender } = render(singleHostPopoverElement());
+
+    // Disabled Traycer, with no host-RPC providers either, falls back to the
+    // zero-provider CTA - the same state a signed-out/cold user sees.
+    expect(
+      screen.getByText("Connect a supported provider to see usage here."),
+    ).toBeTruthy();
+    expect(screen.queryByRole("tab", { name: "Traycer Inference" })).toBeNull();
+
+    mocks.providersList = {
+      data: { providers: [traycerProviderFixture(true)] },
+    };
+    rerender(singleHostPopoverElement());
+
     expect(
       screen.queryByText("Connect a supported provider to see usage here."),
     ).toBeNull();

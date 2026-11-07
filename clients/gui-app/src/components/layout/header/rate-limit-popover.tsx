@@ -48,6 +48,7 @@ import {
 } from "@/components/settings/panels/provider-rate-limit-views";
 import { OpenModelProvidersButton } from "@/components/settings/panels/opencode-go-actions";
 import { resolveCodexResetCreditAction } from "@/components/settings/panels/codex-reset-credit-availability";
+import { useProvidersList } from "@/hooks/providers/use-providers-list-query";
 import { useHostProviderRateLimitsQuery } from "@/hooks/host/use-host-provider-rate-limits-query";
 import { useRefreshProviderRateLimitsOnMount } from "@/hooks/host/use-refresh-provider-rate-limits-on-mount";
 import {
@@ -356,6 +357,11 @@ function railTabProviderId(tab: RailTabDescriptor): ProviderId {
 
 function useTraycerSubscription() {
   const query = useAuthUser();
+  const providersQuery = useProvidersList({ enabled: true, subscribed: true });
+  const traycerEnabled =
+    providersQuery.data?.providers.some(
+      (provider) => provider.providerId === "traycer" && provider.enabled,
+    ) === true;
   const storedAccountContext = useAccountContextStore((s) => s.accountContext);
   const user = query.data ?? null;
   const teams = user?.teamSubscriptions ?? [];
@@ -376,10 +382,13 @@ function useTraycerSubscription() {
       subscription: team,
     })),
   ];
-  const eligible = accountSubscriptions.some(
-    (account) =>
-      account.subscription !== null && isTraycerEligible(account.subscription),
-  );
+  const eligible =
+    traycerEnabled &&
+    accountSubscriptions.some(
+      (account) =>
+        account.subscription !== null &&
+        isTraycerEligible(account.subscription),
+    );
   const rateLimitAccountContexts = accountSubscriptions
     .filter(
       (account) =>
@@ -876,7 +885,7 @@ function RateLimitPopoverScopedBody({
   );
 
   // Traycer is a GUI-only rail entry (AuthService subscription, not a host RPC),
-  // gated on the *selected* account being paid or credit-bundled. Recomputed
+  // gated on the provider being enabled and an account being paid or credit-bundled. Recomputed
   // reactively from the auth query + account-context store, so the tab appears /
   // disappears live as either changes - not snapshotted at popover-open time.
   const traycerSubscription = useTraycerSubscription();
