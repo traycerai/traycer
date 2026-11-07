@@ -296,6 +296,34 @@ function mount(hosts: readonly HostScopeOption[]): SandboxStaging {
   return staging();
 }
 
+function ConsequencesHarness(props: {
+  readonly hosts: readonly HostScopeOption[];
+}) {
+  const result = useSandboxStaging({
+    surface: {
+      surfaceKey: SURFACE,
+      task: null,
+      openTerminalInstead: null,
+    },
+    memoryHostId: MEMORY_HOST,
+    hosts: props.hosts,
+    forkOnNew: null,
+  });
+  useEffect(() => {
+    latest = result;
+  }, [result]);
+  if (result === null || result.consequences === null) return null;
+  return (
+    <ConsequencesBlock
+      input={result.consequences}
+      onMoveFirst={null}
+      onOpenTerminalInstead={null}
+      onChooseAnotherHost={() => undefined}
+      chooseAnotherHostLabel={result.chooseAnotherHostLabel}
+    />
+  );
+}
+
 function staging(): SandboxStaging {
   if (latest === null) throw new Error("the surface staged nothing");
   return latest;
@@ -810,6 +838,130 @@ describe("useSandboxStaging New rows", () => {
       price: { awakeMcPerHour: 120, exact: false },
     });
   });
+
+  it("keeps the hourly price after a no-provider handoff failure while awake", () => {
+    mocks.user = userWith(
+      userSubscription({
+        totalPlanCredits: 0,
+        consumedFromPlan: 0,
+        bonusCredits: 0,
+        consumedFromBonus: 0,
+        bundleRemaining: 0,
+      }),
+      [],
+    );
+    const view = render(<ConsequencesHarness hosts={[LAPTOP]} />);
+    act(() => staging().composer.onPickNew("personal"));
+    expect(screen.getByTestId("consequences-price").textContent).toContain(
+      "Not enough credits.",
+    );
+    expect(screen.getByTestId("consequences-add-credits")).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Use Laptop" })).toBeTruthy();
+    const store = useStagedSandboxStore.getState();
+    store.begin(SURFACE, false, Date.now(), false);
+    act(() =>
+      store.report(SURFACE, {
+        createdSandboxId: "sbx-no-provider-handoff",
+        createdHostId: "host-no-provider-handoff",
+        phase: "handoff",
+        step: "delivering",
+        failure: { kind: "no-provider" },
+      }),
+    );
+    view.rerender(
+      <ConsequencesHarness
+        hosts={[
+          LAPTOP,
+          sandboxHost("host-no-provider-handoff", { state: "awake" }, null),
+        ]}
+      />,
+    );
+
+    expect(screen.getByTestId("consequences-price").textContent).toBe(
+      "from $0.12 an hour while awake · uses your credits",
+    );
+    expect(screen.getByTestId("consequences-add-credits")).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Use Laptop" })).toBeTruthy();
+  });
+
+  it.each([
+    { label: "starting", state: "starting" as const },
+    { label: "suspended", state: "suspended" as const },
+  ])(
+    "does not treat an existing sandbox's id as billing before its $label wake completes",
+    ({ state }) => {
+      const host = sandboxHost("box-prewake", { state: "suspended" }, null);
+      const view = render(<ConsequencesHarness hosts={[LAPTOP, host]} />);
+      act(() => staging().composer.onPickHost(host));
+      const store = useStagedSandboxStore.getState();
+      store.begin(SURFACE, false, Date.now(), false);
+      act(() =>
+        store.report(SURFACE, {
+          createdSandboxId: "sbx-box-prewake",
+          createdHostId: host.hostId,
+          step: "booting",
+        }),
+      );
+      view.rerender(
+        <ConsequencesHarness
+          hosts={[LAPTOP, sandboxHost(host.hostId, { state }, null)]}
+        />,
+      );
+
+      expect(staging().consequences).toMatchObject({ billingStarted: false });
+      expect(screen.getByTestId("consequences-price").textContent).toBe(
+        "$0.12 an hour while awake · uses your credits",
+      );
+    },
+  );
+
+  it.each([
+    { label: "starting", state: "starting" as const, frozen: false },
+    { label: "suspended", state: "suspended" as const, frozen: false },
+    { label: "frozen", state: "awake" as const, frozen: true },
+  ])(
+    "keeps the short-balance choice when a prior handoff host is $label",
+    ({ state, frozen }) => {
+      mocks.user = userWith(
+        userSubscription({
+          totalPlanCredits: 0,
+          consumedFromPlan: 0,
+          bonusCredits: 0,
+          consumedFromBonus: 0,
+          bundleRemaining: 0,
+        }),
+        [],
+      );
+      const view = render(<ConsequencesHarness hosts={[LAPTOP]} />);
+      act(() => staging().composer.onPickNew("personal"));
+      const store = useStagedSandboxStore.getState();
+      store.begin(SURFACE, false, Date.now(), false);
+      act(() =>
+        store.report(SURFACE, {
+          createdSandboxId: "sbx-prewake-handoff",
+          createdHostId: "host-prewake-handoff",
+          phase: "handoff",
+          step: "delivering",
+          failure: { kind: "no-provider" },
+        }),
+      );
+      view.rerender(
+        <ConsequencesHarness
+          hosts={[
+            LAPTOP,
+            sandboxHost("host-prewake-handoff", { state, frozen }, null),
+          ]}
+        />,
+      );
+
+      expect(screen.getByTestId("consequences-price").textContent).toContain(
+        "Not enough credits.",
+      );
+      expect(screen.queryByText(/an hour while awake/)).toBeNull();
+      expect(screen.getByTestId("consequences-add-credits")).toBeTruthy();
+      expect(screen.getByRole("button", { name: "Use Laptop" })).toBeTruthy();
+    },
+  );
 });
 
 describe("useSandboxStaging In this task", () => {

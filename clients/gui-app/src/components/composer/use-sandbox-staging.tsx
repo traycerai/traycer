@@ -317,13 +317,18 @@ export function useSandboxStaging(input: {
     const existingHost = input.hosts.find(
       (host) => host.hostId === existingHostId,
     );
+    const stagedHost = input.hosts.find(
+      (host) => host.hostId === (stage.createdHostId ?? existingHostId),
+    );
     const payer = existingHost?.sandbox?.summary?.wakePayer;
     return {
       configuration: stagedConfiguration,
       price,
       needsCredits: stagedFacts !== null && stagedFacts.needsCredits,
-      billingStarted:
-        stage.createdSandboxId !== null && stage.failure?.kind === "settings",
+      billingStarted: stagedSandboxBillingStarted(
+        stage,
+        stagedHost?.sandbox ?? null,
+      ),
       shortfallMc:
         balance === null || price === null
           ? null
@@ -961,6 +966,35 @@ function stagedTargetPrice(
     return existingTargetPrice(hosts, target.hostId);
   }
   return stagedFacts === null ? null : stagedFacts.price;
+}
+
+/** Current lifecycle facts override a stage's last proof that it was awake. */
+function stagedSandboxBillingStarted(
+  stage: StagedSandbox,
+  sandbox: HostScopeSandbox | null,
+): boolean {
+  if (sandbox !== null) {
+    if (sandbox.frozen) return false;
+    if (sandbox.state !== null) return sandbox.state === "awake";
+  }
+  switch (stage.failure?.kind) {
+    case "settings":
+    case "no-provider":
+    case "traycer-off":
+    case "agent-not-offered":
+    case "agent-setup-failed":
+    case "not-sent":
+      return true;
+    case undefined:
+    case "timed-out":
+      return (
+        stage.phase === "handoff" ||
+        stage.step === "applying" ||
+        stage.step === "delivering"
+      );
+    default:
+      return false;
+  }
 }
 
 /** The New row of `configurationKey`; `null` for none, or no key. */
