@@ -63,6 +63,19 @@ describe("the box's text", () => {
     expect(botBoxText(content)).toBe("@host:Laptop [hostId=host-42]");
   });
 
+  it("falls back to the host id and marks a missing id", () => {
+    const host = (attrs: Record<string, unknown>): JsonContent => ({
+      type: "mention",
+      attrs: { contextType: "host", ...attrs },
+    });
+    const noLabel = doc([host({ id: "host-42" })]);
+    expect(botBoxWire(noLabel)).toBe("@host:host-42 [hostId=host-42]");
+    expect(botBoxText(noLabel)).toBe("@host:host-42 [hostId=host-42]");
+    const noId = doc([host({ label: "Laptop" })]);
+    expect(botBoxWire(noId)).toBe("@host:Laptop [hostId is unavailable]");
+    expect(botBoxText(noId)).toBe("@host:Laptop [hostId is unavailable]");
+  });
+
   it("keeps formatting on a mention when replacing its chip with a token", () => {
     const formatted: JsonContent = {
       ...chip("<@user-1>", "Ada"),

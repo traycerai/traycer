@@ -1,4 +1,4 @@
-import { useHostDirectoryList } from "@/hooks/host/use-host-directory-list-query";
+import { useHostDirectoryListQuery } from "@/hooks/host/use-host-directory-list-query";
 import { useHostMentionEntries } from "@/hooks/composer/use-host-mention-entries";
 import { isMarkdownArtifactKind } from "@/lib/artifacts/node-display";
 import {
@@ -594,7 +594,7 @@ export function useMentionItems(params: UseMentionItemsParams): void {
     [active, resolvedContext, step],
   );
 
-  const mentionHostDirectory = useHostDirectoryList();
+  const mentionHostDirectory = useHostDirectoryListQuery(active);
   const mentionHosts = useMemo(
     () =>
       (mentionHostDirectory.data ?? [])

@@ -72,6 +72,12 @@ describe("Host mention serialization", () => {
     );
   });
 
+  it("marks a host mention whose id is unavailable", () => {
+    expect(
+      toLlm(mentionDoc({ contextType: ContextType.Host, label: "Laptop" })),
+    ).toContain("@host:Laptop [hostId is unavailable]");
+  });
+
   it("sends the canonical host id with the host label", () => {
     const content = mentionDoc({
       contextType: ContextType.Host,

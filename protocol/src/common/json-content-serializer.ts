@@ -1072,8 +1072,13 @@ function formatMentionForLLMQuery(
         ? `@browser-tab:${title} [tabId is unavailable]`
         : `@browser-tab:${title} [tabId=${tabId}]`;
     }
-    case ContextType.Host:
-      return `@host:${attrs.label || attrs.hostId || attrs.id || ""} [hostId=${attrs.hostId || attrs.id || ""}]`;
+    case ContextType.Host: {
+      const hostId = attrs.hostId || attrs.id || "";
+      const title = attrs.label || hostId;
+      return hostId.length === 0
+        ? `@host:${title} [hostId is unavailable]`
+        : `@host:${title} [hostId=${hostId}]`;
+    }
     // The ids travel in the text, as a GitHub mention carries its URL: an
     // agent cannot list bots, and messages one with the bot id as `taskId`
     // and the trunk agent id as `toAgentId`.

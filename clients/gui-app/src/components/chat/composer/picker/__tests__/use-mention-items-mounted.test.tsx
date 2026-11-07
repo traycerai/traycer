@@ -37,13 +37,13 @@ const workspaceMock = vi.hoisted((): { result: WorkspaceResult } => ({
 
 const mentionDirectory = vi.hoisted(() => ({
   data: [] as Array<{ hostId: string; label: string; kind: string }>,
+  subscribed: false,
 }));
 vi.mock("@/hooks/host/use-host-directory-list-query", () => ({
-  useHostDirectoryList: () => ({
-    data: mentionDirectory.data,
-    isPending: false,
-    isError: false,
-  }),
+  useHostDirectoryListQuery: (active: boolean) => {
+    mentionDirectory.subscribed = active;
+    return { data: mentionDirectory.data, isPending: false, isError: false };
+  },
 }));
 
 const hostSupportMock = vi.hoisted(() => ({ supportsArtifactIndex: false }));
@@ -309,6 +309,16 @@ afterEach(() => {
 });
 
 describe("useMentionItems mounted publication", () => {
+  it("subscribes to the host directory only while the picker is active", async () => {
+    const pickerStore = createComposerPickerStore();
+    renderMentionItems(pickerStore, null);
+    expect(mentionDirectory.subscribed).toBe(false);
+    act(() => openMention(pickerStore, 1, ""));
+    await waitFor(() => expect(mentionDirectory.subscribed).toBe(true));
+    act(() => pickerStore.getState().closeSession(1));
+    await waitFor(() => expect(mentionDirectory.subscribed).toBe(false));
+  });
+
   it("omits pool entries while retaining an unavailable host", async () => {
     mentionDirectory.data = [
       { hostId: "offline-1", label: "Studio Offline", kind: "personal" },

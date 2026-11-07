@@ -4,16 +4,32 @@ import type { ReactNode } from "react";
 import { BotMemoryContext } from "@/components/bots/bot-memory-context";
 import { useBotMentionCompletion } from "@/components/bots/bot-mention-completion";
 
-const requests = vi.hoisted(() => ({ ids: [] as string[] }));
+const requests = vi.hoisted(() => ({
+  ids: [] as string[],
+  pending: false,
+  empty: false,
+}));
 vi.mock("@/hooks/bots/use-environment-host-lists-query", () => ({
   useEnvironmentHostLists: (_client: unknown, ids: string[]) => {
     requests.ids = ids;
-    return {
-      hostsByEnvironmentId: new Map([
-        ["team-a", [{ hostId: "team-host", hostLabel: "Studio Team" }]],
-        ["team-b", [{ hostId: "other-host", hostLabel: "Studio Other" }]],
-      ]),
-    };
+    const hostsByEnvironmentId = new Map<
+      string,
+      Array<{ hostId: string; hostLabel: string }>
+    >();
+    if (!requests.pending) {
+      hostsByEnvironmentId.set(
+        "team-a",
+        requests.empty
+          ? []
+          : [{ hostId: "team-host", hostLabel: "Studio Team" }],
+      );
+      if (!requests.empty) {
+        hostsByEnvironmentId.set("team-b", [
+          { hostId: "other-host", hostLabel: "Studio Other" },
+        ]);
+      }
+    }
+    return { hostsByEnvironmentId };
   },
 }));
 vi.mock("@/hooks/host/use-host-directory-list-query", () => ({
@@ -53,6 +69,8 @@ function Wrapper({ children }: { readonly children: ReactNode }): ReactNode {
 afterEach(() => {
   cleanup();
   requests.ids = [];
+  requests.pending = false;
+  requests.empty = false;
 });
 
 it("offers only hosts from the bot's environment", async () => {
@@ -80,4 +98,33 @@ it("offers only hosts from the bot's environment", async () => {
     ).toEqual(["host:team-host"]),
   );
   expect(requests.ids).toEqual(["team-a"]);
+});
+
+it("keeps bare @ open while hosts are pending and dismisses after an empty answer", async () => {
+  requests.pending = true;
+  const { result, rerender } = renderHook(
+    () => useBotMentionCompletion({ replyRow: null }),
+    { wrapper: Wrapper },
+  );
+  act(() =>
+    result.current.pickerStore.getState().openPicker({
+      sessionId: 1,
+      kind: "mention",
+      slashScope: null,
+      slashTrigger: null,
+      range: { from: 0, to: 1 },
+      query: "",
+      commit: vi.fn(),
+      dismiss: null,
+      focusEditor: null,
+      clientRect: null,
+    }),
+  );
+  expect(result.current.pickerStore.getState().open).toBe(true);
+  requests.pending = false;
+  requests.empty = true;
+  rerender();
+  await waitFor(() =>
+    expect(result.current.pickerStore.getState().open).toBe(false),
+  );
 });

@@ -175,6 +175,11 @@ export function useBotMentionCompletion(args: {
   // An `@` is prose once its search matched nothing with every name read, or
   // where there is nothing to name.
   const nothingToName =
+    (answered &&
+      hostSource.answered &&
+      step.kind === "root" &&
+      query.trim().length === 0 &&
+      listed.entries.length === 0) ||
     (answered && listed.entries.length === 0 && listed.matchedCount === 0) ||
     shouldCloseMentionForNoMatches({
       stepKind: step.kind,
