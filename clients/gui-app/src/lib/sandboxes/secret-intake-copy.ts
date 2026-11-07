@@ -9,11 +9,10 @@ import {
   type SandboxRouteProtocol,
   type SandboxSecretFormKind,
   type SandboxSecretKind,
-  type SandboxSecretMode,
 } from "@traycer/protocol/host/secret-intake-catalogue";
 
 /**
- * What Settings ▸ Personal ▸ Secrets says about each kind, protocol and mode.
+ * What Settings ▸ Personal ▸ Secrets says about each kind and protocol.
  * The kinds, their protocols and the not-brokered lines come from the secret
  * intake catalogue in `@traycer/protocol`, the table the broker's intake and
  * the dashboard read too, never from here.
@@ -120,20 +119,6 @@ export function secretProtocolLabel(protocol: string): string {
   const known = SANDBOX_ROUTE_PROTOCOLS.find((entry) => entry === protocol);
   return known === undefined ? protocol : SECRET_PROTOCOL_LABEL[known];
 }
-
-export const SECRET_MODE_LABEL: Readonly<Record<SandboxSecretMode, string>> = {
-  brokered: "Agents use it without seeing it (recommended)",
-  exposed: "Agents can read it",
-};
-
-/** The warning under the mode that hands agents the value; the other needs none. */
-export const SECRET_MODE_CONSEQUENCE: Readonly<
-  Record<SandboxSecretMode, string | null>
-> = {
-  brokered: null,
-  exposed:
-    "On a sandbox, any process can read it, and revoking it does not stop a copy already made.",
-};
 
 export const SECRET_DATABASE_LOGIN_ADVICE =
   "Use a dedicated login with the least privilege the work needs: a sandbox gets exactly this login's rights.";

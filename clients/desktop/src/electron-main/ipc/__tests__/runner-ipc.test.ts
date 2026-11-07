@@ -66,7 +66,9 @@ import type {
   mintSlackAppInstallUrlViaHttp,
   readSlackAppViaHttp,
   registerSlackAppViaHttp,
+  setSlackAppDmsViaHttp,
 } from "@traycer-clients/shared/host-client/slack-app";
+import type { mintTeamHostInstallTokenViaHttp } from "@traycer-clients/shared/host-client/team-host";
 import type {
   decideSecretRequestViaHttp,
   fetchEnvironmentProvidersViaHttp,
@@ -173,6 +175,18 @@ const disconnectSlackAppViaHttpMock = vi.hoisted(() =>
     detail: "unscripted",
   })),
 );
+const setSlackAppDmsViaHttpMock = vi.hoisted(() =>
+  vi.fn<typeof setSlackAppDmsViaHttp>(async () => ({
+    kind: "network-error",
+    detail: "unscripted",
+  })),
+);
+const mintTeamHostInstallTokenViaHttpMock = vi.hoisted(() =>
+  vi.fn<typeof mintTeamHostInstallTokenViaHttp>(async () => ({
+    kind: "network-error",
+    detail: "unscripted",
+  })),
+);
 /** The secrets broker's grants read and decide the two handlers make, observed. */
 const fetchSandboxGrantsViaHttpMock = vi.hoisted(() =>
   vi.fn<typeof fetchSandboxGrantsViaHttp>(async () => ({
@@ -225,6 +239,10 @@ vi.mock("@traycer-clients/shared/host-client/slack-app", () => ({
   registerSlackAppViaHttp: registerSlackAppViaHttpMock,
   mintSlackAppInstallUrlViaHttp: mintSlackAppInstallUrlViaHttpMock,
   disconnectSlackAppViaHttp: disconnectSlackAppViaHttpMock,
+  setSlackAppDmsViaHttp: setSlackAppDmsViaHttpMock,
+}));
+vi.mock("@traycer-clients/shared/host-client/team-host", () => ({
+  mintTeamHostInstallTokenViaHttp: mintTeamHostInstallTokenViaHttpMock,
 }));
 vi.mock("@traycer-clients/shared/host-client/sandbox-secrets", () => ({
   fetchSandboxGrantsViaHttp: fetchSandboxGrantsViaHttpMock,
@@ -836,6 +854,9 @@ describe("RunnerIpcBridge", () => {
           RunnerHostInvoke.registerSlackApp,
           RunnerHostInvoke.mintSlackAppInstallUrl,
           RunnerHostInvoke.disconnectSlackApp,
+          RunnerHostInvoke.setSlackAppDms,
+          // A team environment's bot-host install token, on traycer-server.
+          RunnerHostInvoke.mintTeamHostInstallToken,
           // The secrets broker, on authn.
           RunnerHostInvoke.getSandboxGrants,
           RunnerHostInvoke.getTeamEnvironment,
@@ -1335,6 +1356,16 @@ describe("RunnerIpcBridge", () => {
         disconnectSlackAppViaHttpMock,
         ["bot-1"],
       ],
+      [
+        RunnerHostInvoke.setSlackAppDms,
+        setSlackAppDmsViaHttpMock,
+        [{ botId: "bot-1", dmsEnabled: false }],
+      ],
+      [
+        RunnerHostInvoke.mintTeamHostInstallToken,
+        mintTeamHostInstallTokenViaHttpMock,
+        ["env-1"],
+      ],
     ];
     for (const [channel, mock, args] of calls) {
       const handler = ipcMainState.handlers.get(channel);
@@ -1347,6 +1378,40 @@ describe("RunnerIpcBridge", () => {
         IAP_PROXY_TOKEN,
       ]);
     }
+    bridge.dispose();
+  });
+
+  it("forwards the parsed DM setting request and rejects one without its boolean", async () => {
+    const mod = await import("../register-runner-ipc");
+    const bridge = new mod.RunnerIpcBridge({
+      host: new FakeHost(),
+      hostController: new FakeHostController(),
+      authnBaseUrl: "http://localhost:5005",
+      authRedirectUri: null,
+      tray: null,
+      zoomController: undefined,
+      authTokenStore: undefined,
+      window: buildWindow(),
+    });
+    bridge.install();
+    const handler = ipcMainState.handlers.get(RunnerHostInvoke.setSlackAppDms);
+    if (handler === undefined)
+      throw new Error("setSlackAppDms handler missing");
+
+    await handler(bareEvent(), "bearer-1", {
+      botId: "bot-1",
+      dmsEnabled: false,
+    });
+    expect(setSlackAppDmsViaHttpMock).toHaveBeenCalledWith(
+      config.serverBaseUrl,
+      "bearer-1",
+      IAP_PROXY_TOKEN,
+      { botId: "bot-1", dmsEnabled: false },
+    );
+    await expect(
+      handler(bareEvent(), "bearer-1", { botId: "bot-1" }),
+    ).rejects.toThrow();
+    expect(setSlackAppDmsViaHttpMock).toHaveBeenCalledTimes(1);
     bridge.dispose();
   });
 

@@ -619,7 +619,7 @@ function seedKeptState(botId: string): void {
     anchorKind: null,
     sent: null,
   });
-  useBotDraftsStore.getState().typeThreadBox(botId, "post-1", "unsent");
+  useBotDraftsStore.getState().typeThreadBox(botId, "post-1", "unsent", null);
   useBotTabLandingStore
     .getState()
     .request(botId, { kind: "thread", threadId: null, messageId: null });

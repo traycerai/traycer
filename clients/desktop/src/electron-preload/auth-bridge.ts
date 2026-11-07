@@ -19,8 +19,10 @@ import type {
   SlackAppInstallUrlResult,
   SlackAppManifestResult,
   SlackAppReadResult,
+  SlackAppDmsRequest,
   SlackAppRegisterRequest,
   SlackAppWriteResult,
+  TeamHostInstallTokenResult,
   SandboxAutomationOpenFetchResult,
   SandboxCatalogueFetchResult,
   SandboxCostsFetchResult,
@@ -207,6 +209,14 @@ export interface AuthBridgeSurface {
     bearerToken: string,
     botId: string,
   ): Promise<SlackAppWriteResult>;
+  setSlackAppDms(
+    bearerToken: string,
+    request: SlackAppDmsRequest,
+  ): Promise<SlackAppWriteResult>;
+  mintTeamHostInstallToken(
+    bearerToken: string,
+    environmentId: string,
+  ): Promise<TeamHostInstallTokenResult>;
   getSandboxGrants(
     bearerToken: string,
     environmentId: string | null,
@@ -456,6 +466,20 @@ export function buildAuthBridge(): AuthBridgeSurface {
         bearerToken,
         botId,
       ) as Promise<SlackAppWriteResult>,
+
+    setSlackAppDms: (bearerToken, request) =>
+      ipcRenderer.invoke(
+        RunnerHostInvoke.setSlackAppDms,
+        bearerToken,
+        request,
+      ) as Promise<SlackAppWriteResult>,
+
+    mintTeamHostInstallToken: (bearerToken, environmentId) =>
+      ipcRenderer.invoke(
+        RunnerHostInvoke.mintTeamHostInstallToken,
+        bearerToken,
+        environmentId,
+      ) as Promise<TeamHostInstallTokenResult>,
 
     getSandboxGrants: (bearerToken, environmentId, hostId) =>
       ipcRenderer.invoke(

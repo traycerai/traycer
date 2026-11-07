@@ -229,6 +229,7 @@
           "{projectRoot}/test-results/junit.xml"
         ],
         "inputs": [
+          "{workspaceRoot}/scripts/test-worker-environment.ts",
           "default",
           "^production",
           "sharedGlobals",

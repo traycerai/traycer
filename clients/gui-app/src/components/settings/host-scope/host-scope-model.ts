@@ -85,9 +85,9 @@ export interface HostScopeOption {
   /** The registry row, when there is one — needed for update policy writes. */
   readonly item: HostListItem | null;
   /**
-   * The registry's kind (`personal` or `sandbox`), from the registry row or,
-   * when only the directory has the host, from whether its entry carries
-   * sandbox facts. `null` when neither says.
+   * The registry's kind (`personal`, `sandbox` or a team's `machine`), from
+   * the registry row or, when only the directory has the host, from whether
+   * its entry carries sandbox facts. `null` when neither says.
    */
   readonly kind: HostRegistryKind | null;
   /** The sandbox facts of a `kind: sandbox` row, else `null`. */
