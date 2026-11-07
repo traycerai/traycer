@@ -27,10 +27,11 @@ interface RecordRequest {
   readonly failSliceRead: number | null;
   readonly pause: {
     readonly afterSeconds: number;
-    readonly forSeconds: number;
+    readonly holdSeconds: number;
+    readonly playInSameTask: boolean;
   } | null;
   readonly startHeldForSeconds: number | null;
-  readonly stop: "playing" | "paused" | "refused-resume" | "context-resumed";
+  readonly stop: "playing" | "paused" | "refused-resume";
 }
 
 interface Recorded {
@@ -51,6 +52,9 @@ interface Recorded {
   readonly logBytes: number;
   readonly closes: number;
   readonly wallSeconds: number;
+  readonly suspendedSeconds: number;
+  readonly clockDuringSuspensionSeconds: number;
+  readonly recorderPauses: number;
   readonly stopTookMs: number | null;
   readonly resumeOrder: readonly ("recorder" | "context")[];
   readonly maxPacketGapMs: number | null;
@@ -58,10 +62,11 @@ interface Recorded {
   readonly slicesReadAfterFailure: number | null;
 }
 
-// About four seconds of tone fits the 20 s per-test budget.
-const RECORD_SECONDS = 4;
+// Tones sound every 0.5 s: 2.5 s of music holds four, of which three are
+// needed with the last one allowed to be cut by the stop.
+const RECORD_SECONDS = 2.5;
 const EXPECTED_ONSETS = 3;
-// Stopped in the pause, 1.5 s in: the tones at 0.5 s and 1.5 s.
+// Stopped in the pause, 1 s in: tones at 0.5 s and 1 s.
 const STOPPED_ONSETS = 2;
 const DURATION_TOLERANCE_SECONDS = 0.1;
 const LOSSLESS_ONSET_TOLERANCE_MS = 0.1;
@@ -72,17 +77,22 @@ const COMPRESSED_RESIDUAL_MAX_MS = 11;
 const START_STALL_MS = 250;
 // The second, so the file still holds the first slice and its WebM header.
 const FAILED_SLICE = 2;
-// A pause in the middle: 1.5 s of music, 2 s held, then the rest of 4.5 s. The
-// context stays suspended for about what is left of the 2 s once the fade and
-// the drain are over.
-const PAUSE = { afterSeconds: 1.5, forSeconds: 2 };
-const PAUSED_RECORD_SECONDS = 4.5;
-const SUSPENDED_MIN_SECONDS = 1;
-// A packet is 60 ms; a hole as long as a pause is far past this.
-const PACKET_GAP_MAX_MS = 150;
-// Well under the capture's own 2 s grace for a stop it never hears back from.
+// A pause in the middle: 1 s of music, a hold of 0.5 s from the context
+// reporting suspended, then 1.3 s of music after the Play.
+const PAUSE = { afterSeconds: 1, holdSeconds: 0.5, playInSameTask: false };
+const AFTER_PLAY_SECONDS = 1.3;
+// What the recording lacks of the wall time is the suspension the context
+// reported; the two are read from different clocks, so they meet within this.
+const SUSPENSION_TOLERANCE_SECONDS = 0.3;
+// The audio clock stands still while the context is suspended.
+const CLOCK_DURING_SUSPENSION_MAX_SECONDS = 0.1;
+// Well under the capture's own 2 s grace for a stop it never hears back from,
+// with room for a loaded machine.
 const STOP_WITHIN_MS = 1500;
-const HELD_SECONDS = 1;
+const HELD_SECONDS = 0.5;
+// After Play in a recording started held: tones at 0.5, 1 and 1.5 s, and one
+// more to keep the last from being cut by the stop.
+const HELD_PLAY_SECONDS = 2.2;
 
 test.beforeEach(async ({ page }) => {
   await page.goto(fixture("soundtrack-recording"));
@@ -225,7 +235,7 @@ const QUALITIES: readonly Quality[] = ["lossless", "compressed"];
 function paused(quality: Quality, stop: RecordRequest["stop"]): RecordRequest {
   return {
     ...plain(quality),
-    seconds: PAUSED_RECORD_SECONDS,
+    seconds: AFTER_PLAY_SECONDS,
     pause: PAUSE,
     stop,
   };
@@ -243,12 +253,20 @@ function expectTiming(recorded: Recorded, quality: Quality): void {
   else expectCompressedTiming(recorded);
 }
 
-/** The recording's duration is shorter than the wall time by the suspension. */
+/**
+ * The recording is shorter than the wall time by the suspension the context
+ * reported, and the audio clock stood still through it.
+ */
 function expectShortBySuspension(recorded: Recorded): void {
   if (recorded.outcome.kind !== "saved") throw new Error("Not saved");
   const shortBy = recorded.wallSeconds - recorded.outcome.durationSeconds;
-  expect(shortBy).toBeGreaterThan(SUSPENDED_MIN_SECONDS);
-  expect(shortBy).toBeLessThan(PAUSE.forSeconds);
+  expect(recorded.suspendedSeconds).toBeGreaterThanOrEqual(PAUSE.holdSeconds);
+  expect(Math.abs(shortBy - recorded.suspendedSeconds)).toBeLessThan(
+    SUSPENSION_TOLERANCE_SECONDS,
+  );
+  expect(recorded.clockDuringSuspensionSeconds).toBeLessThan(
+    CLOCK_DURING_SUSPENSION_MAX_SECONDS,
+  );
 }
 
 test("a lossless recording with a pause in the middle keeps its frames and its timing after the pause, and is shorter than the wall time by the suspension", async ({
@@ -287,7 +305,11 @@ test("a compressed recording with a pause in the middle keeps its offset before 
   expect(
     recorded.onsetStarts.filter((start) => start > pauseAt).length,
   ).toBeGreaterThanOrEqual(2);
-  expect(recorded.maxPacketGapMs).toBeLessThan(PACKET_GAP_MAX_MS);
+  // A hole as long as the suspension is far past half of it; a packet is 60 ms.
+  expect(recorded.maxPacketGapMs).toBeLessThan(
+    (recorded.suspendedSeconds * 1000) / 2,
+  );
+  expect(recorded.recorderPauses).toBe(1);
   expectShortBySuspension(recorded);
   // Ahead of the clock: a recorder resumed after it drops what the clock made
   // in between.
@@ -300,9 +322,7 @@ for (const quality of QUALITIES) {
   }) => {
     const recorded = await record(page, {
       ...plain(quality),
-      // 3 s of music after Play holds the tones at 0.5, 1.5 and 2.5 s; the
-      // extra half second keeps the last from being cut by the stop.
-      seconds: PAUSED_RECORD_SECONDS - PAUSE.afterSeconds + 0.5,
+      seconds: HELD_PLAY_SECONDS,
       startHeldForSeconds: HELD_SECONDS,
     });
 
@@ -339,12 +359,12 @@ for (const quality of QUALITIES) {
       expect(recorded.logLines.at(-1)?.frames).not.toBeNull();
     }
     if (recorded.outcome.kind !== "saved") throw new Error("Not saved");
-    // 1.5 s of music, then the fade and drain of the pause: not the 2 s held.
+    // 1 s of music, then the fade and drain of the pause, up to the stop.
     expect(recorded.outcome.durationSeconds).toBeGreaterThan(
       PAUSE.afterSeconds,
     );
     expect(recorded.outcome.durationSeconds).toBeLessThan(
-      PAUSE.afterSeconds + PAUSE.forSeconds,
+      PAUSE.afterSeconds + 1,
     );
   });
 
@@ -368,15 +388,15 @@ for (const quality of QUALITIES) {
   });
 }
 
-test("a compressed recording goes on when the context is resumed behind the session, so that its length is the clock's", async ({
+test("a compressed recording is not paused by a suspended report that comes after its Play", async ({
   page,
 }) => {
-  const recorded = await record(page, paused("compressed", "context-resumed"));
+  const recorded = await record(page, {
+    ...paused("compressed", "playing"),
+    pause: { ...PAUSE, playInSameTask: true },
+  });
 
-  expectSavedAndDecoded(recorded, "compressed", STOPPED_ONSETS);
-  if (recorded.outcome.kind !== "saved") throw new Error("Not saved");
-  // The clock ran on for the second after the pause's fade and drain.
-  expect(recorded.outcome.durationSeconds).toBeGreaterThan(
-    PAUSE.afterSeconds + 1,
-  );
+  expectSavedAndDecoded(recorded, "compressed", EXPECTED_ONSETS);
+  expectCompressedTiming(recorded);
+  expect(recorded.recorderPauses).toBe(0);
 });

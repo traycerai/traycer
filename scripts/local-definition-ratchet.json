@@ -35,7 +35,6 @@
       "clients/desktop/src/electron-main/startup/__tests__/quit-transaction-deadline.test.ts": 1,
       "clients/desktop/src/electron-main/startup/host-wake-recovery.ts": 1,
       "clients/gui-app/scripts/seed-canvas-fixture-browser.mjs": 1,
-      "clients/gui-app/src/__tests__/browser/soundtrack-recording.ts": 1,
       "clients/gui-app/src/components/diff/__tests__/diff-content-primitive-edit-hydration.test.tsx": 1,
       "clients/gui-app/src/components/layout-editor/__tests__/surface-placement-bar.test.tsx": 1,
       "clients/gui-app/src/lib/epics/epic-existence-poll.ts": 1,
