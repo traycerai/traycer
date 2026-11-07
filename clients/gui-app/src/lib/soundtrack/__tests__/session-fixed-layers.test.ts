@@ -80,6 +80,12 @@ function openSession(
     setVolume: vi.fn<(volume: number) => void>(),
     duck: vi.fn<(chimeSeconds: number) => void>(),
     close: vi.fn<(afterSeconds: number) => void>(),
+    pause: () => {
+      output.stopClock();
+    },
+    resume: () => {
+      output.startClock();
+    },
   };
   const manifest: SoundtrackManifest = {
     tracks: [track],
@@ -103,6 +109,7 @@ function openSession(
     director,
     resumePositions: {},
     onSounding: vi.fn<() => void>(),
+    onResumeRefused: () => undefined,
   });
   return { session, output };
 }

@@ -125,6 +125,12 @@ function harness(manifest: SoundtrackManifest, random: () => number) {
       setVolume,
       duck,
       close,
+      pause: () => {
+        output.stopClock();
+      },
+      resume: () => {
+        output.startClock();
+      },
     };
     opened.push({ output, setDimmed, close, setVolume, duck });
     return ports;
