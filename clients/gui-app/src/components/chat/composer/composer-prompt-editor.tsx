@@ -32,7 +32,6 @@ import {
   registerComposerFocus,
 } from "@/lib/composer/composer-focus-registry";
 import { normalizeComposerContentWithSelection } from "@/lib/composer/composer-content-normalizer";
-import { hasClaimableFileTransfer } from "@/lib/files/file-transfer-paths";
 import { usePaneActivationFocusIntent } from "@/components/epic-canvas/pane-activation";
 import { usePaneFocusProbe } from "@/components/epic-tabs/pane-visibility-context";
 
@@ -698,22 +697,6 @@ function ComposerPromptEditorImpl(props: ComposerPromptEditorProps) {
     [applyContent],
   );
 
-  const handleDrop = useCallback<DragEventHandler<HTMLElement>>(
-    (event) => {
-      if (editor !== null && hasClaimableFileTransfer(event.dataTransfer)) {
-        const dropPos = editor.view.posAtCoords({
-          left: event.clientX,
-          top: event.clientY,
-        });
-        if (dropPos !== null) {
-          editor.commands.setTextSelection(dropPos.pos);
-        }
-      }
-      onDrop(event);
-    },
-    [editor, onDrop],
-  );
-
   const insertImageAttachments = useCallback(
     (attrs: ReadonlyArray<ImageAttachmentAttrs>) => {
       if (editor === null) return;
@@ -885,7 +868,7 @@ function ComposerPromptEditorImpl(props: ComposerPromptEditorProps) {
       className="relative flex-1"
       onPaste={onPaste}
       onDragOver={onDragOver}
-      onDrop={handleDrop}
+      onDrop={onDrop}
       onKeyDown={onKeyDown}
       onFocus={onFocus}
       onBlur={onBlur}
