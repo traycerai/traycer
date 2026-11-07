@@ -743,7 +743,8 @@ describe("withdraw", () => {
     scheduler.enqueue(item("a", {}));
     scheduler.enqueue(item("b", {}));
 
-    scheduler.withdraw("a");
+    expect(scheduler.withdraw("a")).toBe("unappended");
+    expect(scheduler.withdraw("a")).toBe("absent");
     clock.advance(INPUT_ACTIVE_WINDOW_MS);
 
     expect(appended).toEqual([{ text: "reply b", delegationId: "d-b" }]);
@@ -755,7 +756,7 @@ describe("withdraw", () => {
     scheduler.enqueue(item("a", { onDelivered, onGivenUp }));
     expect(appended).toHaveLength(1);
 
-    scheduler.withdraw("a");
+    expect(scheduler.withdraw("a")).toBe("appended");
     clock.advance(CONFIRM_WINDOW_MS * (MAX_DELIVERY_ATTEMPTS + 1));
     // Even the words it was waiting for prove nothing now.
     scheduler.noteOutputTranscript("Tracy says hello");
@@ -764,6 +765,25 @@ describe("withdraw", () => {
     expect(onDelivered).not.toHaveBeenCalled();
     expect(onGivenUp).not.toHaveBeenCalled();
     expect(scheduler.pendingCount()).toBe(0);
+  });
+
+  it("reports an appended item waiting for retry", () => {
+    scheduler.enqueue(item("a", {}));
+    scheduler.setReady(false);
+    clock.advance(CONFIRM_WINDOW_MS);
+    expect(appended).toHaveLength(1);
+    expect(scheduler.withdraw("a")).toBe("appended");
+    scheduler.setReady(true);
+    expect(appended).toHaveLength(1);
+  });
+
+  it("reports an appended item queued after suspension refunded its attempt", () => {
+    scheduler.enqueue(item("a", {}));
+    scheduler.setReady(false);
+    scheduler.suspendInFlight();
+    expect(scheduler.withdraw("a")).toBe("appended");
+    scheduler.setReady(true);
+    expect(appended).toHaveLength(1);
   });
 
   it("lets the next item go once the playback facts are clear, without waiting out the confirm window", () => {

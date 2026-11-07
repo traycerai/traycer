@@ -365,7 +365,7 @@ function addChat(chatId: string, state: ChatState): StoreApi<ChatState> {
 
 function sessionActivity(
   state: BotSessionActivity["state"],
-  requestId: string,
+  requestId: string | null,
 ): BotSessionActivity {
   return { state, startedAt: 1, step: null, requestId, reason: null };
 }
@@ -373,7 +373,7 @@ function sessionActivity(
 function threadActivity(
   threadId: string,
   state: BotSessionActivity["state"],
-  requestId: string,
+  requestId: string | null,
 ): BotActivity {
   return {
     trunk: null,
@@ -1645,6 +1645,44 @@ describe("holding the floor while the bot works", () => {
     expect(holds()).toBe(0);
     await advance(1);
     expect(holds()).toBe(1);
+  });
+
+  it("does not rearm a drained unconfirmed hold after the reply arrives (simulated time)", async () => {
+    const chat = await joinOpenThread([]);
+    hearVoiceWithLevelDetection();
+    act(() =>
+      fake.activity.set(threadActivity("t-open", "replying", "typed-request")),
+    );
+    await advance(CALL_HOLD_DELAY_MS);
+    expect(appends()).toEqual([[CALL_HOLD_LINE, null]]);
+    voiceSays("One moment.");
+    await advance(OUTPUT_HANGOVER_MS);
+    land(chat, [botRow("r1", "Build passed.", 200)]);
+    await settle();
+    expect(appendedTexts()).toEqual([CALL_HOLD_LINE, "Build passed."]);
+    voiceSays("Build passed.");
+    await advance(CALL_HOLD_DELAY_MS);
+    expect(holds()).toBe(1);
+  });
+
+  it("does not allocate a null-request hold after an acknowledged request resolves (simulated time)", async () => {
+    const chat = await joinOpenThread([]);
+    hearVoiceWithLevelDetection();
+    await say("Check the build.");
+    await advance(INPUT_ACTIVE_WINDOW_MS);
+    act(() =>
+      fake.activity.set(
+        threadActivity("t-open", "replying", WRITTEN.requestId),
+      ),
+    );
+    land(chat, [botRow("r1", "Build passed.", 200)]);
+    await settle();
+    expect(appendedTexts()).toEqual(["Build passed."]);
+    voiceSays("Build passed.");
+    await advance(OUTPUT_HANGOVER_MS);
+    act(() => fake.activity.set(threadActivity("t-open", "replying", null)));
+    await advance(CALL_HOLD_DELAY_MS);
+    expect(holds()).toBe(0);
   });
 
   it("says nothing for a turn that is not replying", async () => {

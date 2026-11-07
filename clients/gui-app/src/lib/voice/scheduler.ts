@@ -96,9 +96,11 @@ export interface SpeechScheduler {
    * flight runs neither of its callbacks and is never retried, but keeps the
    * slot while its own output drains (until that utterance completes, or its
    * confirm window ends), so the words it was already given can never be
-   * read as another item's delivery.
+   * read as another item's delivery. Returns whether it was ever appended,
+   * including while queued for retry or after an attempt was refunded; absent
+   * means the item is no longer held by this scheduler.
    */
-  withdraw(itemId: string): void;
+  withdraw(itemId: string): "unappended" | "appended" | "absent";
   /**
    * Re-labels a queued item's delegation before it is appended (its request
    * was placed after it was scheduled). A no-op once the item is in flight
@@ -200,6 +202,8 @@ interface QueuedItem {
   /** Re-labelled at a handoff: the delegation id belongs to one session. */
   item: SpeechItem;
   attempts: number;
+  /** An append happened, even if suspension later refunded its attempt. */
+  appended: boolean;
 }
 
 interface InFlight {
@@ -376,6 +380,7 @@ export function createSpeechScheduler(
     }
     // Every append spends one of the item's attempts, whatever becomes of it.
     next.attempts += 1;
+    next.appended = true;
     const holdMs = estimateSpeechMs(next.item.text);
     inFlight = {
       queued: next,
@@ -412,7 +417,7 @@ export function createSpeechScheduler(
   return {
     enqueue(item) {
       if (disposed) return;
-      queue.push({ item, attempts: 0 });
+      queue.push({ item, attempts: 0, appended: false });
       dispatch();
     },
     remove(itemId) {
@@ -421,8 +426,11 @@ export function createSpeechScheduler(
     },
     withdraw(itemId) {
       const index = queue.findIndex((entry) => entry.item.id === itemId);
-      if (index !== -1) queue.splice(index, 1);
-      if (inFlight?.queued.item.id !== itemId) return;
+      if (index !== -1) {
+        const entry = queue.splice(index, 1)[0];
+        return entry.appended ? "appended" : "unappended";
+      }
+      if (inFlight?.queued.item.id !== itemId) return "absent";
       inFlight.withdrawn = true;
       // Its utterance already came and went: nothing of it is left to drain.
       const drained =
@@ -434,6 +442,7 @@ export function createSpeechScheduler(
         settleInFlight(false);
         onFactsChanged();
       }
+      return "appended";
     },
     relabel(itemId, delegationId) {
       const entry = queue.find((candidate) => candidate.item.id === itemId);

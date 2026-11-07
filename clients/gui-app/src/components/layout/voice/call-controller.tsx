@@ -1496,9 +1496,7 @@ function CallThreadWatch(props: {
     const hold = holdItemRef.current;
     if (hold === null) return;
     holdItemRef.current = null;
-    const pending = scheduler.pendingCount();
-    scheduler.withdraw(hold);
-    if (scheduler.pendingCount() === pending) {
+    if (scheduler.withdraw(hold) !== "unappended") {
       holdSpentRef.current = true;
       spentRequestsRef.current.add(holdRequestRef.current ?? null);
     }
@@ -1526,7 +1524,7 @@ function CallThreadWatch(props: {
   useEffect(() => clearHold, [clearHold]);
 
   useEffect(() => {
-    if (turnState === "replying") {
+    if (turnState === "replying" && turnRequest !== null) {
       if (holdRequestRef.current !== turnRequest) {
         clearHold();
         withdrawHold();
@@ -1534,7 +1532,7 @@ function CallThreadWatch(props: {
         holdRequestRef.current = turnRequest;
         holdSpentRef.current = spentRequestsRef.current.has(turnRequest);
       }
-      if (turnRequest !== null && acknowledgedRequests.has(turnRequest)) {
+      if (acknowledgedRequests.has(turnRequest)) {
         clearHold();
         withdrawHold();
         holdSpentRef.current = true;
@@ -1553,7 +1551,7 @@ function CallThreadWatch(props: {
       }
       return;
     }
-    // The turn is over: its hold line, if still queued, is no longer true.
+    // No open post is known: a resolved post may still have a running turn.
     clearHold();
     withdrawHold();
   }, [
@@ -1595,6 +1593,7 @@ function CallThreadWatch(props: {
       withdrawHoldRef.current();
       if (
         turnRef.current?.state === "replying" &&
+        turnRef.current.requestId !== null &&
         !holdSpentRef.current &&
         !awaitingRequestRef.current
       ) {
