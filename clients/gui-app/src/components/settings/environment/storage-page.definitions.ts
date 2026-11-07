@@ -12,7 +12,7 @@ export const STORAGE = defineSettingsSection("storage", {
   page: {
     availableWhen: alwaysAvailable,
     label: "Storage",
-    description: "What this environment's hosts keep on disk.",
+    description: "What to keep on disk.",
     keywords: [
       "storage",
       "disk",

@@ -3,8 +3,15 @@ import {
   grantedPermissionRoleSchema,
   grantedRole,
 } from "@traycer/protocol/common/permission-role";
-import { permissionRoleSchema } from "@traycer/protocol/common/_internal/schemas";
+import { commonRecordRegistry } from "@traycer/protocol/common/registry";
+import { getRecordSchema } from "@traycer/protocol/framework/index";
 import { LatestPermissionRoleSchema } from "@traycer/protocol/host/epic/unary-schemas";
+
+const permissionRoleSchema = getRecordSchema(
+  commonRecordRegistry,
+  "permission-role",
+  "latest",
+);
 
 describe("grantedRole", () => {
   it("resolves the roles somebody holds to themselves", () => {
