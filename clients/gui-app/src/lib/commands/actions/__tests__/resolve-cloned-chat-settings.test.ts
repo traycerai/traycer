@@ -437,6 +437,85 @@ describe("resolveClonedChatSettings", () => {
     });
   });
 
+  // What a released host sends: `epic.getChatRunSettings@4.1` is frozen
+  // without the binding, so the decode below is what drops one a peer leaked.
+  function settingsFromReleasedHost(profileId: string): ChatRunSettings {
+    const { contract } =
+      hostRpcRegistry["epic.getChatRunSettings"][4].versions[1];
+    const { settings } = contract.responseSchema.parse({
+      settings: {
+        ...BASE_SETTINGS,
+        profileId,
+        profileBinding: AMBIENT_PROFILE_BINDING,
+      },
+    });
+    if (settings === null) throw new Error("expected the chat's settings");
+    return settings;
+  }
+
+  it("resolves from the source profile when a released host's settings arrive without a binding, whatever binding leaked onto them", async () => {
+    const sourceSettings = settingsFromReleasedHost("source-work-uuid");
+    expect(Object.hasOwn(sourceSettings, "profileBinding")).toBe(false);
+    const result = await resolveClonedChatSettings({
+      sourceSettings,
+      sourceClient: buildClient(
+        [profile("source-work-uuid", "managed", "Work", "acct-1")],
+        [],
+      ),
+      targetClient: buildClient(
+        [
+          profile("ambient", "ambient", "Terminal account", "acct-9"),
+          profile("target-work-uuid", "managed", "Work", "acct-1"),
+        ],
+        [],
+      ),
+      explicitTargetProfileId: null,
+    });
+
+    // The leaked key names acct-9, which would have selected the ambient row.
+    expect(result).toEqual({
+      status: "ready",
+      settings: {
+        ...sourceSettings,
+        profileId: "target-work-uuid",
+        profileBinding: {
+          kind: "key",
+          key: {
+            providerId: "claude-code",
+            accountId: "acct-1",
+            organizationId: null,
+          },
+        },
+      },
+      fallenBackToAmbient: false,
+    });
+  });
+
+  it("requires an explicit choice when a released host's source profile carries no account identity", async () => {
+    const sourceSettings = settingsFromReleasedHost("source-work-uuid");
+    const targetProfiles = [
+      profile("ambient", "ambient", "Terminal account", "acct-9"),
+      profile("target-work-uuid", "managed", "Work", "acct-1"),
+    ];
+    const result = await resolveClonedChatSettings({
+      sourceSettings,
+      sourceClient: buildClient(
+        [profile("source-work-uuid", "managed", "Work", null)],
+        [],
+      ),
+      targetClient: buildClient(targetProfiles, []),
+      explicitTargetProfileId: null,
+    });
+
+    expect(result).toEqual({
+      status: "profile-selection-required",
+      providerId: "claude-code",
+      reason: "source-unidentified",
+      matchedProfileId: null,
+      targetProfiles,
+    });
+  });
+
   it("does not live-query a legacy source once it is explicitly marked unidentified", async () => {
     const sourceSettings = {
       ...BASE_SETTINGS,

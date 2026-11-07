@@ -1,4 +1,7 @@
-import { chatRunSettingsSchema } from "@traycer/protocol/persistence/epic/foundation";
+import {
+  chatRunSettingsSchema,
+  chatRunSettingsSchemaPreProfileBinding,
+} from "@traycer/protocol/persistence/epic/foundation";
 import { z } from "zod";
 import { defineStreamRpcContract } from "@traycer/protocol/framework/versioned-stream-rpc";
 import { cloudChatVisibilitySchema } from "@traycer/protocol/host/epic/cloud-chat";
@@ -1393,7 +1396,7 @@ export const hostChatRecordsSubscribeV14 = defineStreamRpcContract({
 
 export const getChatRunSettingsResponseSchemaV41 = lazySchema(() =>
   getChatRunSettingsResponseSchema.extend({
-    settings: chatRunSettingsSchema.nullable(),
+    settings: chatRunSettingsSchemaPreProfileBinding.nullable(),
   }),
 );
 export type GetChatRunSettingsResponseV41 = z.infer<
@@ -1401,7 +1404,7 @@ export type GetChatRunSettingsResponseV41 = z.infer<
 >;
 export const getChatRunSettingsBatchEntrySchemaV21 = lazySchema(() =>
   getChatRunSettingsBatchEntrySchema.extend({
-    settings: chatRunSettingsSchema.nullable(),
+    settings: chatRunSettingsSchemaPreProfileBinding.nullable(),
   }),
 );
 export const getChatRunSettingsBatchResponseSchemaV21 = lazySchema(() =>
@@ -1430,3 +1433,26 @@ export function projectChatRunSettingsBatchResponseBeforeUltracode(
     })),
   };
 }
+
+/** Portable provenance is absent on the released 4.1 / 2.1 read lines. */
+export const getChatRunSettingsResponseSchemaV42 = lazySchema(() =>
+  getChatRunSettingsResponseSchemaV41.extend({
+    settings: chatRunSettingsSchema.nullable(),
+  }),
+);
+export type GetChatRunSettingsResponseV42 = z.infer<
+  typeof getChatRunSettingsResponseSchemaV42
+>;
+export const getChatRunSettingsBatchEntrySchemaV22 = lazySchema(() =>
+  getChatRunSettingsBatchEntrySchemaV21.extend({
+    settings: chatRunSettingsSchema.nullable(),
+  }),
+);
+export const getChatRunSettingsBatchResponseSchemaV22 = lazySchema(() =>
+  getChatRunSettingsBatchResponseSchemaV21.extend({
+    entries: z.array(getChatRunSettingsBatchEntrySchemaV22),
+  }),
+);
+export type GetChatRunSettingsBatchResponseV22 = z.infer<
+  typeof getChatRunSettingsBatchResponseSchemaV22
+>;

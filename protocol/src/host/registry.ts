@@ -8,15 +8,21 @@ import {
   epicCreateChatV15,
   epicCreateChatUpgradeV14ToV15,
   epicUpdateChatRunSettingsV12,
+  epicUpdateChatRunSettingsV13,
   epicUpdateChatRunSettingsUpgradeV11ToV12,
+  epicUpdateChatRunSettingsUpgradeV12ToV13,
   epicGetChatRunSettingsV41,
+  epicGetChatRunSettingsV42,
   epicGetChatRunSettingsUpgradeV40ToV41,
-  epicGetChatRunSettingsDowngradeV41ToV10,
-  epicGetChatRunSettingsDowngradeV41ToV20,
-  epicGetChatRunSettingsDowngradeV41ToV30,
+  epicGetChatRunSettingsUpgradeV41ToV42,
+  epicGetChatRunSettingsDowngradeV42ToV10,
+  epicGetChatRunSettingsDowngradeV42ToV20,
+  epicGetChatRunSettingsDowngradeV42ToV30,
   epicGetChatRunSettingsBatchV21,
+  epicGetChatRunSettingsBatchV22,
   epicGetChatRunSettingsBatchUpgradeV20ToV21,
-  epicGetChatRunSettingsBatchDowngradeV21ToV10,
+  epicGetChatRunSettingsBatchUpgradeV21ToV22,
+  epicGetChatRunSettingsBatchDowngradeV22ToV10,
 } from "./epic/contracts";
 import {
   chatSubscribeV141,
@@ -9215,7 +9221,7 @@ const HOST_RPC_REGISTRY_BASE_DEFINITION = {
   // persist-on-next-send behavior.
   "epic.updateChatRunSettings": {
     1: {
-      latestMinor: 2,
+      latestMinor: 3,
       versions: {
         0: {
           contract: epicUpdateChatRunSettingsV10,
@@ -9232,6 +9238,10 @@ const HOST_RPC_REGISTRY_BASE_DEFINITION = {
         2: {
           contract: epicUpdateChatRunSettingsV12,
           upgradeFromPreviousVersion: epicUpdateChatRunSettingsUpgradeV11ToV12,
+        },
+        3: {
+          contract: epicUpdateChatRunSettingsV13,
+          upgradeFromPreviousVersion: epicUpdateChatRunSettingsUpgradeV12ToV13,
         },
       },
       downgradePathsFromLatest: {},
@@ -10935,7 +10945,7 @@ const HOST_RPC_REGISTRY_BASE_TAIL_DEFINITION = {
       },
     },
     4: {
-      latestMinor: 1,
+      latestMinor: 2,
       versions: {
         0: {
           contract: epicGetChatRunSettingsV40,
@@ -10945,11 +10955,15 @@ const HOST_RPC_REGISTRY_BASE_TAIL_DEFINITION = {
           contract: epicGetChatRunSettingsV41,
           upgradeFromPreviousVersion: epicGetChatRunSettingsUpgradeV40ToV41,
         },
+        2: {
+          contract: epicGetChatRunSettingsV42,
+          upgradeFromPreviousVersion: epicGetChatRunSettingsUpgradeV41ToV42,
+        },
       },
       downgradePathsFromLatest: {
-        1: epicGetChatRunSettingsDowngradeV41ToV10,
-        2: epicGetChatRunSettingsDowngradeV41ToV20,
-        3: epicGetChatRunSettingsDowngradeV41ToV30,
+        1: epicGetChatRunSettingsDowngradeV42ToV10,
+        2: epicGetChatRunSettingsDowngradeV42ToV20,
+        3: epicGetChatRunSettingsDowngradeV42ToV30,
       },
     },
     degrade: { kind: "unsupported" },
@@ -10970,7 +10984,7 @@ const HOST_RPC_REGISTRY_BASE_TAIL_DEFINITION = {
       downgradePathsFromLatest: {},
     },
     2: {
-      latestMinor: 1,
+      latestMinor: 2,
       versions: {
         0: {
           contract: epicGetChatRunSettingsBatchV20,
@@ -10982,9 +10996,14 @@ const HOST_RPC_REGISTRY_BASE_TAIL_DEFINITION = {
           upgradeFromPreviousVersion:
             epicGetChatRunSettingsBatchUpgradeV20ToV21,
         },
+        2: {
+          contract: epicGetChatRunSettingsBatchV22,
+          upgradeFromPreviousVersion:
+            epicGetChatRunSettingsBatchUpgradeV21ToV22,
+        },
       },
       downgradePathsFromLatest: {
-        1: epicGetChatRunSettingsBatchDowngradeV21ToV10,
+        1: epicGetChatRunSettingsBatchDowngradeV22ToV10,
       },
     },
     degrade: { kind: "unsupported" },

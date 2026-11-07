@@ -343,6 +343,28 @@ export type ChatRunSettingsPreUltracode = z.infer<
   typeof chatRunSettingsSchemaPreUltracode
 >;
 
+/** Released settings tuples before portable account provenance. */
+export const chatRunSettingsSchemaPreProfileBinding = lazySchema(() =>
+  z.object({
+    harnessId: guiHarnessIdSchema,
+    // Concrete model slug; there is no "use the harness default" sentinel. The
+    // renderer resolves a real model (defaulting to the provider's first listed
+    // model) before a turn is sent.
+    model: z.string().min(1),
+    permissionMode: permissionModeSchema,
+    reasoningEffort: z.string().nullable(),
+    // Codex-style service / speed tier (e.g. `"fast"`). Defaults to null so
+    // chats persisted before this field was introduced still parse cleanly.
+    serviceTier: z.string().nullable().default(null),
+    agentMode: agentModeSchema,
+    // Which of the harness's logged-in profiles (subscriptions) this chat runs
+    // on. `null` = the ambient/host login, so chats persisted before profiles
+    // existed still parse cleanly. See the multi-profile decision log.
+    profileId: z.string().nullable().default(null),
+    ultracode: z.boolean().default(false),
+  }),
+);
+
 export const chatRunSettingsSchema = lazySchema(() =>
   z.object({
     harnessId: guiHarnessIdSchema,
@@ -556,6 +578,20 @@ export const chatRunSettingsStrictSchemaPreUltracode = lazySchema(() =>
 export type ChatRunSettingsStrictPreUltracode = z.infer<
   typeof chatRunSettingsStrictSchemaPreUltracode
 >;
+
+/** Released settings tuples before portable account provenance. */
+export const chatRunSettingsStrictSchemaPreProfileBinding = lazySchema(() =>
+  z.object({
+    harnessId: guiHarnessIdSchema,
+    model: z.string().min(1),
+    permissionMode: permissionModeSchema,
+    reasoningEffort: z.string().nullable(),
+    serviceTier: z.string().nullable(),
+    agentMode: agentModeSchema,
+    profileId: z.string().nullable(),
+    ultracode: z.boolean(),
+  }),
+);
 
 export const chatRunSettingsStrictSchema = lazySchema(() =>
   z.object({
