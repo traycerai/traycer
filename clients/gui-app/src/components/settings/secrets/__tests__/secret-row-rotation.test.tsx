@@ -68,6 +68,10 @@ import {
 import { RunnerHostContext } from "@/providers/runner-host-context";
 import { useAuthStore } from "@/stores/auth/auth-store";
 import { useSettingsEnvironmentPickStore } from "@/stores/settings/settings-environment-pick-store";
+import {
+  RETIRED_PROVIDER_VARIABLES,
+  RETIRED_SECRET_ROW_FIELDS,
+} from "@traycer/protocol/host/released-wire-rows";
 
 const HOST_ID = "host-secrets";
 const PERSONAL_ENV = "env-personal";
@@ -106,18 +110,17 @@ function secretFixture(
   overrides: Partial<EnvironmentSecretV12>,
 ): EnvironmentSecretV12 {
   return {
+    ...RETIRED_SECRET_ROW_FIELDS,
+    providerVariables: [...RETIRED_PROVIDER_VARIABLES],
     secretId: "sec-1",
     name: "STRIPE_KEY",
     kind: "api_key",
     protocol: "https",
     destinations: ["api.stripe.com"],
-    mode: "brokered",
-    state: "live",
     currentVersionId: "ver-3",
     revoked: false,
     updatedAt: 1,
     variables: [],
-    providerVariables: [],
     ...overrides,
   };
 }
@@ -609,12 +612,15 @@ describe("a secret's versions", () => {
     await openVersions();
 
     const recovery = screen.getByTestId("secret-recovery");
+    expect(within(recovery).getByText("Secret leaked?")).toBeTruthy();
+    expect(recovery).toHaveProperty("open", false);
+    fireEvent.click(within(recovery).getByText("Secret leaked?"));
     const steps = within(recovery).getAllByRole("listitem");
     expect(steps.map((step) => step.textContent)).toEqual([
       ...SECRET_RECOVERY_STEPS,
     ]);
     expect(steps).toHaveLength(4);
-    expect(recovery.textContent).toContain("If this secret leaked");
+    expect(recovery).toHaveProperty("open", true);
   });
 
   it("undoes a replaced version without re-granting, and re-reads the list and versions", async () => {

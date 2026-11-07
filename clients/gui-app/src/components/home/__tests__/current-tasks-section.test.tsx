@@ -613,9 +613,9 @@ describe("<CurrentTasksSection />", () => {
       expect(testState.openItem).not.toHaveBeenCalled();
     });
 
-    it("lets a viewer read a task's labels but not edit them", () => {
+    it("lets a row with no granted role read a task's labels but not edit them", () => {
       setGroups({
-        open: [task("a", { permissionRole: "viewer", ownership: "shared" })],
+        open: [task("a", { permissionRole: null, ownership: "shared" })],
       });
       renderSectionWithOrganization(organizationView({}));
 

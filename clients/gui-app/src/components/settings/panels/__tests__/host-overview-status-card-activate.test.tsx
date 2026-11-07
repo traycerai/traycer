@@ -76,18 +76,20 @@ describe("HostOverviewHeaderActions Activate gate", () => {
     expect(screen.queryByTestId("host-active-in-window")).toBeNull();
   });
 
-  it("still says Active inline when the window is already on the row, whatever onMakeActive is", () => {
+  it("shows Active in More when the window is already on the row, whatever onMakeActive is", async () => {
     renderActions({
       isActive: true,
       onMakeActive: null,
       activateInMenu: false,
       teamOwned: false,
     });
+    await openMenu();
 
     expect(screen.getByTestId("host-active-in-window").textContent).toContain(
       "Active",
     );
     expect(screen.queryByTestId("host-make-active")).toBeNull();
+    expect(screen.queryByRole("button", { name: "Activate" })).toBeNull();
   });
 
   it("puts Activate first in the phone menu when the row can be activated", async () => {

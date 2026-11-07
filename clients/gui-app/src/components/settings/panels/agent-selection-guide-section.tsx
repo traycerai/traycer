@@ -392,6 +392,7 @@ function AgentsGuideEditor(props: {
   return (
     <>
       <AgentSelectionGuideEditorSurface
+        purpose="The guide agents read when they pick a coding agent, model and effort for work they hand off."
         titleId="agent-selection-guide-heading"
         value={state.value}
         onValueChange={onChange}

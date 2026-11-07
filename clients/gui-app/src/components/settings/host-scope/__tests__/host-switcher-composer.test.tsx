@@ -299,7 +299,7 @@ describe("<HostSwitcher /> composer mode groups", () => {
     ).toBeNull();
   });
 
-  it("shows a host's sub-lines under its row", () => {
+  it("keeps a host's supplemental lines collapsed outside its option", () => {
     renderSwitcher({
       hosts: [LAPTOP],
       composer: composerMode({
@@ -309,9 +309,11 @@ describe("<HostSwitcher /> composer mode groups", () => {
       intent: "pin",
     });
 
-    expect(row("laptop").textContent).toContain(
-      "Local · runs its own settings",
-    );
+    const option = row("laptop");
+    const details = option.parentElement?.querySelector("details");
+    expect(details?.open).toBe(false);
+    expect(details?.textContent).toContain("Local · runs its own settings");
+    expect(option.textContent).not.toContain("Local · runs its own settings");
   });
 
   it("heads the New group with the defining line and lists a row per configuration", () => {
@@ -736,7 +738,7 @@ describe("<HostSwitcher /> composer mode computers", () => {
     });
   }
 
-  it("uses the local machine's name on the chip and row, with platform and status below", () => {
+  it("uses the local machine's name on the chip and row, with platform and status in Details", () => {
     renderPicker({
       hosts: [WINDOWS_LOCAL],
       selected: WINDOWS_LOCAL,
@@ -749,7 +751,21 @@ describe("<HostSwitcher /> composer mode computers", () => {
     expect(chip.textContent).toBe("windows-test-machine");
     const local = row("local-win");
     expect(within(local).getByText("windows-test-machine")).toBeDefined();
-    expect(within(local).getByText("Windows · Active")).toBeDefined();
+    const details = local.parentElement?.querySelector("details");
+    if (details === null || details === undefined) {
+      throw new Error("local computer Details are missing");
+    }
+    expect(details.open).toBe(false);
+    expect(details.closest("[cmdk-item]")).toBeNull();
+    expect(details.textContent).toContain("Windows · Active");
+    expect(local.textContent).not.toContain("Windows · Active");
+
+    fireEvent.click(within(details).getByText("Details"));
+
+    expect(details.open).toBe(true);
+    expect(onPickHost).not.toHaveBeenCalled();
+    expect(onSelect).not.toHaveBeenCalled();
+    expect(wakeSandboxOnPick).not.toHaveBeenCalled();
   });
 
   it("still names the machine in a list that is not the composer's", () => {
@@ -771,7 +787,7 @@ describe("<HostSwitcher /> composer mode computers", () => {
     ).toBeDefined();
   });
 
-  it("says OS and Active under another computer's name, drawn as a monitor", () => {
+  it("keeps another computer's OS and Active in Details, drawn as a monitor", () => {
     const linux = remoteComputer({
       hostId: "remote-linux",
       name: "build-box",
@@ -785,7 +801,9 @@ describe("<HostSwitcher /> composer mode computers", () => {
 
     const box = row("remote-linux");
     expect(within(box).getByText("build-box")).toBeDefined();
-    expect(within(box).getByText("Linux · Active")).toBeDefined();
+    expect(box.parentElement?.querySelector("details")?.textContent).toContain(
+      "Linux · Active",
+    );
     expect(box.querySelector("svg.lucide-monitor")).not.toBeNull();
     expect(box.querySelector("svg.lucide-cloud")).toBeNull();
   });
@@ -828,10 +846,87 @@ describe("<HostSwitcher /> composer mode computers", () => {
       intent: "pin",
     });
 
-    const line = "macOS · Offline since Tue 09:12 · picking it waits for it";
     const mac = row("remote-mac");
-    expect(within(mac).getByText(line)).toBeDefined();
-    expect(mac.textContent.replace(line, "")).not.toMatch(/offline/i);
+    expect(mac.textContent).toMatch(/offline/i);
+    expect(mac.parentElement?.querySelector("details")?.textContent).toContain(
+      "macOS · Offline since Tue 09:12 · picking it waits for it",
+    );
+  });
+
+  it("keeps frozen sandbox facts readable and expandable without picking or waking the row", () => {
+    const frozen = sandboxHost("sbx-frozen", "awake", { frozen: true });
+    renderSwitcher({
+      hosts: [LAPTOP, frozen],
+      composer: composerMode({
+        inThisTask: [frozen],
+        subLinesFor: (hostId) =>
+          hostId === frozen.hostId
+            ? ["Acme pays · Linux compatibility facts"]
+            : [],
+        tagFor: (hostId) => (hostId === frozen.hostId ? "Acme Robotics" : null),
+      }),
+      intent: "pin",
+    });
+
+    const option = row("sbx-frozen");
+    expect(option.getAttribute("aria-disabled")).toBe("true");
+    const details = option.parentElement?.querySelector("details");
+    if (details === null || details === undefined) {
+      throw new Error("frozen sandbox Details are missing");
+    }
+    expect(details.open).toBe(false);
+    fireEvent.click(within(details).getByText("Details"));
+
+    expect(details.open).toBe(true);
+    expect(
+      within(option).getByTestId("host-option-environment-sbx-frozen")
+        .textContent,
+    ).toBe("Acme Robotics");
+    expect(details.textContent).toContain(
+      "Acme pays · Linux compatibility facts",
+    );
+    expect(onPickHost).not.toHaveBeenCalled();
+    expect(onSelect).not.toHaveBeenCalled();
+    expect(wakeSandboxOnPick).not.toHaveBeenCalled();
+  });
+});
+
+describe("<HostSwitcher /> composer Details follow search results", () => {
+  it("hides a computer's supplemental Details when search removes its option", () => {
+    const computer = hostScopeOptionFixture({
+      hostId: "detail-computer",
+      name: "Detail computer",
+      platform: "win32-x64",
+      isLocalMachine: true,
+      isActive: true,
+    });
+    const otherHosts = Array.from({ length: 5 }, (_, index) =>
+      hostScopeOptionFixture({
+        hostId: `other-${index}`,
+        name: `Other ${index}`,
+      }),
+    );
+    renderSwitcher({
+      hosts: [computer, ...otherHosts],
+      composer: composerMode({}),
+      intent: "pin",
+    });
+
+    const detailElement =
+      row("detail-computer").parentElement?.querySelector("details");
+    expect(detailElement).not.toBeNull();
+    fireEvent.change(screen.getByPlaceholderText("Search hosts"), {
+      target: { value: "no matching host" },
+    });
+
+    expect(
+      screen.queryByTestId("settings-host-switcher-option-detail-computer"),
+    ).toBeNull();
+    expect(
+      detailElement?.parentElement?.classList.contains(
+        "not-has-[[cmdk-item]]:hidden",
+      ),
+    ).toBe(true);
   });
 });
 
@@ -847,11 +942,12 @@ describe("<HostSwitcher /> composer mode row titles wrap", () => {
   const LONG_NAMED = sandboxHost("sbx-long", "awake", {});
   const NAMED = { ...LONG_NAMED, name: ROW_TITLE };
 
-  // jsdom paints no layout, so this is a check of the classes the title
-  // carries: wrapping, and not the truncation the Settings host list keeps.
+  // jsdom paints no layout, so this checks the classes the title carries for
+  // wrapping and for the absence of truncation.
   function expectWraps(title: HTMLElement): void {
     expect(title.classList.contains("truncate")).toBe(false);
-    expect(title.classList.contains("wrap-break-word")).toBe(true);
+    expect(title.classList.contains("whitespace-normal")).toBe(true);
+    expect(title.classList.contains("wrap-anywhere")).toBe(true);
   }
 
   it("wraps the New row's label in full", () => {
@@ -872,11 +968,11 @@ describe("<HostSwitcher /> composer mode row titles wrap", () => {
       intent: "pin",
     });
 
-    expectWraps(
-      within(
-        screen.getByTestId("host-switcher-new-sandbox-personal"),
-      ).getByText(label),
-    );
+    const title = within(
+      screen.getByTestId("host-switcher-new-sandbox-personal"),
+    ).getByText(label);
+    expect(title.classList.contains("truncate")).toBe(false);
+    expect(title.classList.contains("wrap-break-word")).toBe(true);
   });
 
   it("wraps the computer row's title", () => {
@@ -899,12 +995,11 @@ describe("<HostSwitcher /> composer mode row titles wrap", () => {
     expectWraps(within(row("sbx-long")).getByText(ROW_TITLE));
   });
 
-  it("still truncates a sandbox's name in a list that is not the composer's", () => {
+  it("wraps a sandbox's name in a list that is not the composer's", () => {
     renderSwitcher({ hosts: [LAPTOP, NAMED], composer: null, intent: "pin" });
 
     const title = within(row("sbx-long")).getByText(ROW_TITLE);
-    expect(title.classList.contains("truncate")).toBe(true);
-    expect(title.classList.contains("wrap-break-word")).toBe(false);
+    expectWraps(title);
   });
 });
 

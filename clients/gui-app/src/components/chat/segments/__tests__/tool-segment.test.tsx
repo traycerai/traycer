@@ -584,20 +584,23 @@ describe("<ToolSegment /> A2A send-message rendering", () => {
     // The header link names the EPIC and asks for a deliberate, de-duped open;
     // it carries no mouse event of its own (the shared `AgentHeaderLink` also
     // fires on Enter/Space), so the modifier triple is absent by construction.
-    expect(tileNavigationMocks.openTile).toHaveBeenCalledWith({
-      node: expect.objectContaining({
-        id: PREFIX_RECEIVER_ID,
-        type: "chat",
-        name: "Prefix Receiver",
-        hostId: "host-1",
-      }) as EpicCanvasTileRef,
-      target: { epicId: "epic-1" },
-      gesture: "explicit",
-      modifiers: null,
-      placement: null,
-      dedupe: true,
-      source: "direct_ui",
-    });
+    expect(tileNavigationMocks.openTile).toHaveBeenCalledWith(
+      {
+        node: expect.objectContaining({
+          id: PREFIX_RECEIVER_ID,
+          type: "chat",
+          name: "Prefix Receiver",
+          hostId: "host-1",
+        }) as EpicCanvasTileRef,
+        target: { epicId: "epic-1" },
+        gesture: "explicit",
+        modifiers: null,
+        placement: null,
+        dedupe: true,
+        source: "direct_ui",
+      },
+      "user",
+    );
   });
 
   it("parks a transcript jump for the receiver when agentMessageReceipt matches the receiver node", () => {
@@ -648,6 +651,7 @@ describe("<ToolSegment /> A2A send-message rendering", () => {
         }) as EpicCanvasTileRef,
         target: { epicId: "epic-1" },
       }),
+      "user",
     );
     const key = chatTranscriptJumpKey("host-1", "agent-receiver-1");
     const parked = useChatTranscriptJumpStore.getState().requestsByChatId[key];
@@ -702,6 +706,7 @@ describe("<ToolSegment /> A2A send-message rendering", () => {
         }) as EpicCanvasTileRef,
         target: { epicId: "epic-1" },
       }),
+      "user",
     );
     const key = chatTranscriptJumpKey("host-1", "agent-receiver-1");
     expect(
@@ -759,6 +764,7 @@ describe("<ToolSegment /> A2A send-message rendering", () => {
         }) as EpicCanvasTileRef,
         target: { epicId: "epic-1" },
       }),
+      "user",
     );
     const key = chatTranscriptJumpKey("host-1", "agent-receiver-tui-1");
     expect(

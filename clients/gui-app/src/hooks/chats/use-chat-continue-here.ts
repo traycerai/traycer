@@ -228,23 +228,26 @@ export function useChatContinueHere(args: {
           const ownerHostId = answer.ownerHostId;
           if (ownerHostId === null) return;
           invalidateTaskLists(queryClient, epicId);
-          openTile({
-            node: {
-              id: chatId,
-              instanceId: crypto.randomUUID(),
-              type: "chat",
-              name,
-              hostId: ownerHostId,
+          openTile(
+            {
+              node: {
+                id: chatId,
+                instanceId: crypto.randomUUID(),
+                type: "chat",
+                name,
+                hostId: ownerHostId,
+              },
+              target: { epicId },
+              gesture: "explicit",
+              modifiers: null,
+              placement: null,
+              // Dedupe is per host: the dead tab on the old host never matches,
+              // and a second press focuses the tab the first one opened.
+              dedupe: true,
+              source: "direct_ui",
             },
-            target: { epicId },
-            gesture: "explicit",
-            modifiers: null,
-            placement: null,
-            // Dedupe is per host: the dead tab on the old host never matches,
-            // and a second press focuses the tab the first one opened.
-            dedupe: true,
-            source: "direct_ui",
-          });
+            "user",
+          );
         },
       },
     );

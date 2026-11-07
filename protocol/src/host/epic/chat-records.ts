@@ -536,6 +536,62 @@ export type ListChatRecordsRequestV13 = z.infer<
   typeof listChatRecordsRequestV13Schema
 >;
 
+// ─── `epic.listChatRecords@1.4` - whether the host holds the chat's records ──
+//
+// A host may drop a published chat's local records once the cloud holds them,
+// and bring them back when the chat is written to again. While they are gone
+// the host cannot serve the transcript; the server pool serves it from the
+// published copy. The row says so, so a client routes the chat's tile without
+// a round trip to the serving witness first.
+//
+// Request unchanged from `@1.3`; the row gains one key, which an older peer's
+// schema strips. Nothing is drawn from it: an evicted chat reads like any
+// other.
+
+/**
+ * The `@1.4` row: the `@1.2` row plus `evicted`.
+ *
+ * `evicted` is `true` while the serving host has dropped this chat's records
+ * (its eviction marker is set, whatever state the drop or the bring-back is
+ * in). Only an own store row can be `true`: a replica or a doc-resident entry
+ * is not this host's to drop, and reads `false`.
+ *
+ * Required rather than optional: an older host never evicts, so the
+ * `@1.3 -> @1.4` upgrade can state `false` as a fact about that peer.
+ *
+ * LIST-ONLY, like `docResident`: the stream row
+ * ({@link chatRecordSummaryStreamV13Schema}) does not carry it, so a consumer
+ * keeps the value the last list answer stated across a stream upsert. A drop
+ * or a bring-back writes no registry row, so the stream has nothing to say
+ * about it; the list's stamp moves instead, and the next poll answers a
+ * snapshot.
+ */
+export const chatRecordSummaryV14Schema = lazySchema(() =>
+  chatRecordSummaryV12Schema.extend({
+    evicted: z.boolean(),
+  }),
+);
+export type ChatRecordSummaryV14 = z.infer<typeof chatRecordSummaryV14Schema>;
+
+/** The `@1.3` response with `@1.4` rows on the `snapshot` arm. */
+export const listChatRecordsResponseV14Schema = lazySchema(() =>
+  z.discriminatedUnion("kind", [
+    z.object({
+      kind: z.literal("snapshot"),
+      listStamp: recordListStampSchema.nullable(),
+      chats: z.array(chatRecordSummaryV14Schema),
+    }),
+    z.object({
+      kind: z.literal("unchanged"),
+      listStamp: recordListStampSchema,
+      touched: z.array(recordListRecencyPatchSchema),
+    }),
+  ]),
+);
+export type ListChatRecordsResponseV14 = z.infer<
+  typeof listChatRecordsResponseV14Schema
+>;
+
 /**
  * The `host.chatRecords.subscribe@1.3` chat row: the FROZEN base row plus the
  * publication head - and deliberately NOT {@link chatRecordSummaryV12Schema}.

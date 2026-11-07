@@ -56,6 +56,9 @@ function visibilityOverrides(): PanelVisibilityOverrideById {
   );
 }
 
+/** What the shipped layout already hides: File Tree is off for a new install. */
+const SHIPPED_HIDDEN: PanelVisibilityOverrideById = { "file-tree": false };
+
 /** The layout store's own persisted overrides, which now hold the rail's show/hide. */
 function readPersistedLayoutOverrides(): Readonly<Record<string, unknown>> {
   const raw = window.localStorage.getItem(LAYOUT_PERSIST_KEY);
@@ -726,12 +729,13 @@ describe("useLeftPanelStore", () => {
   });
 
   it("persists panel visibility overrides so they survive a reload", () => {
-    expect(visibilityOverrides()).toEqual({});
+    expect(visibilityOverrides()).toEqual(SHIPPED_HIDDEN);
 
     setRailVisibilityOverride("pull-requests", true);
     setRailVisibilityOverride("sharing", false);
 
     expect(visibilityOverrides()).toEqual({
+      ...SHIPPED_HIDDEN,
       "pull-requests": true,
       sharing: false,
     });
@@ -755,7 +759,7 @@ describe("useLeftPanelStore", () => {
     setRailVisibilityOverride("pull-requests", null);
     setRailVisibilityOverride("chats", null);
 
-    expect(visibilityOverrides()).toEqual({});
+    expect(visibilityOverrides()).toEqual(SHIPPED_HIDDEN);
     expect(readPersistedLayoutOverrides()).toEqual({});
   });
 

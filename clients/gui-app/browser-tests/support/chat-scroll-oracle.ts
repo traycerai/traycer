@@ -52,6 +52,22 @@ export interface ChatScrollProbe {
     readonly offset: number;
   } | null;
   readonly instanceId: () => string;
+  /** Windowed line, `?mountLater=1`: a reading position this tab saved in an
+   *  earlier renderer session; seed it, then `mountNow`. */
+  readonly seedSaved: (saved: {
+    readonly mode: "following-end" | "free-scrolling";
+    readonly anchorMessageId: string | null;
+    readonly anchorRowKey: string | null;
+    readonly anchorIndex: number | null;
+    readonly offset: number;
+  }) => void;
+  /** Windowed line, `?mountLater=1`: opens the tab. */
+  readonly mountNow: () => void;
+  /** The hydration retry's unresolved saved anchor; `null` once it landed or
+   *  a reader superseded it. Windowed line only. */
+  readonly pendingRestore: () => object | null;
+  /** The tile unmounts in one commit and mounts in a later one. */
+  readonly remountLater: (sameInstance: boolean) => void;
 
   // Both lines. `?line=windowed` opens production's windowed line, where
   // `rowTop` and `readingRow` answer for a cold row with its placeholder.

@@ -1,7 +1,5 @@
 import type { SandboxRouteReadiness } from "@traycer/protocol/host/sandbox-control";
 import {
-  SANDBOX_GRANT_MODE_BROKERED,
-  SANDBOX_GRANT_MODE_EXPOSED,
   SANDBOX_ROUTE_UNREADY_CONNECTOR_OFFLINE,
   type SandboxGitHubAccess,
   type SandboxGrant,
@@ -36,9 +34,8 @@ export interface SandboxGrantRouteView {
 
 export interface SandboxGrantView {
   readonly secretName: string;
-  /** "postgres · brokered", "https · exposed, readable on the sandbox". */
+  /** "postgres · brokered". */
   readonly modeLine: string;
-  readonly exposed: boolean;
   /** "through connector office-vpc", or `null`. */
   readonly via: string | null;
   /** Why this sandbox has it, or `null` for a source this build has no word for. */
@@ -59,13 +56,14 @@ export interface SandboxGrantView {
 export const SANDBOX_STAND_IN_CLAUSE =
   "Agents here see a stand-in for each brokered secret; the real value is attached as a request leaves the sandbox.";
 
-/** Whether the card says the stand-in clause: any brokered grant. */
+/**
+ * Whether the card says the stand-in clause: any grant at all. Brokering is
+ * the one way a sandbox holds a secret, so a grant is a brokered grant.
+ */
 export function sandboxHasBrokeredGrant(
   summary: SandboxGrantsSummary,
 ): boolean {
-  return summary.grants.some(
-    (grant) => grant.mode === SANDBOX_GRANT_MODE_BROKERED,
-  );
+  return summary.grants.length > 0;
 }
 
 const SOURCE_WORDS: Readonly<Record<string, string>> = {
@@ -73,14 +71,6 @@ const SOURCE_WORDS: Readonly<Record<string, string>> = {
   inherited: "inherited from the sandbox that created this one",
   approved: "approved for this sandbox",
 };
-
-function modeWords(mode: string): string {
-  if (mode === SANDBOX_GRANT_MODE_BROKERED) return "brokered";
-  if (mode === SANDBOX_GRANT_MODE_EXPOSED) {
-    return "exposed, readable on the sandbox";
-  }
-  return mode;
-}
 
 function addressOf(destination: string, port: number | null): string {
   return port === null ? destination : `${destination}:${port}`;
@@ -159,11 +149,11 @@ export function sandboxGrantViews(
   );
   return summary.grants.map((grant) => ({
     secretName: grant.secretName,
+    // The broker reports no mode: brokering is the only way a sandbox holds
+    // a secret, so the line states it beside the protocol rather than
+    // reading a field that can only hold one value.
     modeLine:
-      grant.protocol.length === 0
-        ? modeWords(grant.mode)
-        : `${grant.protocol} · ${modeWords(grant.mode)}`,
-    exposed: grant.mode === SANDBOX_GRANT_MODE_EXPOSED,
+      grant.protocol.length === 0 ? "brokered" : `${grant.protocol} · brokered`,
     via:
       grant.connectorName === null
         ? null
@@ -211,4 +201,58 @@ export function sandboxGitHubLine(github: SandboxGitHubAccess): string {
     )
     .join(", ");
   return `GitHub: ${accounts}`;
+}
+
+/**
+ * The Secrets line of the Overview: its wording, and whether it reports that
+ * something is not working, which is what offers the failure details.
+ */
+export interface SandboxSecretsLine {
+  readonly label: string;
+  readonly notWorking: boolean;
+}
+
+/** Only explicit readiness can claim that every secret works. */
+export function sandboxSecretsSummary(
+  summary: SandboxGrantsSummary,
+  routes: readonly SandboxRouteReadiness[] | null,
+  tone: "ready" | "pending" | "degraded" | null,
+): SandboxSecretsLine {
+  const views = sandboxGrantViews(summary, routes);
+  const count = views.length;
+  const failed = views.filter(
+    (view) =>
+      view.routes.some((route) => route.readiness === "unavailable") ||
+      view.rotation?.tone === "warning",
+  ).length;
+  const github = summary.github;
+  const gitHubFailure =
+    github !== null && (!github.linked || github.installations.length === 0);
+  const noun = count === 1 ? "secret" : "secrets";
+  const secrets = `${count} ${noun}`;
+  if (failed > 0) {
+    return {
+      label: `${failed} of ${secrets} not working${gitHubFailure ? " · GitHub not working" : ""}`,
+      notWorking: true,
+    };
+  }
+  if (gitHubFailure) {
+    return { label: `${secrets} · GitHub not working`, notWorking: true };
+  }
+  if (count === 0) return { label: secrets, notWorking: false };
+  if (tone === "degraded") {
+    return { label: `${secrets} · not working`, notWorking: true };
+  }
+  if (tone === "pending") {
+    return { label: `${secrets} · connecting`, notWorking: false };
+  }
+  const allReady = views.every(
+    (view) =>
+      view.routes.length > 0 &&
+      view.routes.every((route) => route.readiness === "ready"),
+  );
+  if (tone === "ready" && allReady) {
+    return { label: `${secrets} · all working`, notWorking: false };
+  }
+  return { label: secrets, notWorking: false };
 }

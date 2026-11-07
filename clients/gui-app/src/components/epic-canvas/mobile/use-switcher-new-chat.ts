@@ -81,6 +81,7 @@ export function useSwitcherNewChat(
         settings: null,
         forkSource: null,
         source: "direct_ui",
+        provenance: "user",
         createChat: (request, callbacks) => {
           // `mutateAsync`, not `mutate`: a drag-dismissed sheet unmounts this
           // hook mid-create, TanStack drops `mutate`'s per-call callbacks

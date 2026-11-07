@@ -12,7 +12,10 @@ import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
 import { Button } from "@/components/ui/button";
 import { ChatBotMessage } from "@/components/chat/chat-bot-message";
 import { BotAvatar } from "@/components/bots/bot-avatars";
-import { BotChatTranscript } from "@/components/bots/bot-chat-transcript";
+import {
+  BotChatTranscript,
+  BotTranscriptImageScope,
+} from "@/components/bots/bot-chat-transcript";
 import { useBotFailedRecovery } from "@/components/bots/bot-failed-recovery";
 import { BotRoutingCard } from "@/components/bots/bot-routing-card";
 import { useBotTurnLocateQuery } from "@/hooks/bots/use-bot-turn-locate-query";
@@ -32,6 +35,7 @@ import {
 } from "@/components/bots/bot-channel-notices";
 import { BotReadFailure } from "@/components/bots/bot-read-failure";
 import { BotReplyingStrip } from "@/components/bots/bot-replying-strip";
+import { useBotReplyingTurn } from "@/hooks/bots/use-bot-replying-turn";
 import { BotTaskList } from "@/components/bots/bot-task-list";
 import { BotThreadFollowControl } from "@/components/bots/bot-thread-follow";
 import { ChannelPost } from "@/components/bots/bot-channel-post";
@@ -43,7 +47,9 @@ import {
   failedOnRequest,
   useBotActivity,
 } from "@/hooks/bots/use-bot-activity";
+import { useBotBoxEdit } from "@/hooks/bots/use-bot-box-edit";
 import { useBotFailedRequest } from "@/hooks/bots/use-bot-failed-request";
+import type { BotImageReach } from "@/hooks/bots/use-bot-send-version";
 import type {
   BotTranscriptLanding,
   QuestionAnswerSend,
@@ -139,6 +145,8 @@ export function BotThreadPanel(props: {
   readonly hostId: string;
   /** The host that runs the bot, where a signed-out provider is signed in again; `null` when none does. */
   readonly boundHostId: string | null;
+  /** What the panel's box does with images. */
+  readonly imageReach: BotImageReach;
   readonly botTitle: string;
   /** The channel the thread's post is in. */
   readonly conversationId: string;
@@ -269,6 +277,7 @@ type ThreadPanelBodyProps = {
   readonly botId: string;
   readonly hostId: string;
   readonly boundHostId: string | null;
+  readonly imageReach: BotImageReach;
   readonly botTitle: string;
   readonly conversationId: string;
   readonly originMessageId: string;
@@ -482,11 +491,19 @@ function ThreadOriginPost(
       data-testid="bot-thread-anchor"
       data-loaded={origin.loaded ? "true" : "false"}
     >
-      <ChatBotMessage
-        message={origin.row}
-        presentation={origin.loaded ? loadedPresentation : unloadedPresentation}
-        hoverActions={false}
-      />
+      <BotTranscriptImageScope
+        botId={botId}
+        chatId={conversationId}
+        hostId={hostId}
+      >
+        <ChatBotMessage
+          message={origin.row}
+          presentation={
+            origin.loaded ? loadedPresentation : unloadedPresentation
+          }
+          hoverActions={false}
+        />
+      </BotTranscriptImageScope>
       {queued ? (
         <div className="px-3">
           <BotQueuedNotice testId="bot-thread-queued" />
@@ -641,8 +658,11 @@ function ThreadPanelBody(props: ThreadPanelBodyProps): ReactNode {
   // stays the box's edit while the list drops the thread and lists it again,
   // so what is sent still replaces that message: the host takes the
   // replacement under the post as it does in the thread.
-  const [edit, setEdit] = useState<BotComposerEdit | null>(null);
-  const endEdit = useCallback(() => setEdit(null), []);
+  const activity = useBotActivity(props.botId);
+  const { edit, setEdit, endEdit } = useBotBoxEdit(
+    activity,
+    props.originMessageId,
+  );
   // What the box holds unsent, kept under the bot: what the person typed,
   // or a draft Discuss put there, from the channel's card or this thread's.
   const { botId, originMessageId } = props;
@@ -707,6 +727,7 @@ function ThreadPanelBody(props: ThreadPanelBodyProps): ReactNode {
         threadId={box.threadId}
         announcementId={box.announcementId}
         sendable={thread.sendable}
+        imageReach={props.imageReach}
         placeholder="Reply…"
         label={edit === null ? box.label : IN_THREAD_LABEL}
         testId="bot-thread-composer"
@@ -833,6 +854,13 @@ function KnownThread(
   // thread's typing line, and an answer it holds or fails is said on the
   // message, with Retry and Edit.
   const activity = useBotActivity(botId)?.threads[threadId] ?? null;
+  const replyingTurn = useBotReplyingTurn({
+    client,
+    hostId,
+    botId,
+    activity,
+    onOpenTurn,
+  });
   const failedInThread = useCallback(
     (requestId: string) => failedOn(activity, requestId),
     [activity],
@@ -988,6 +1016,7 @@ function KnownThread(
       <BotReplyingStrip
         botTitle={botTitle}
         activity={activity}
+        turn={replyingTurn}
         testId="bot-thread-replying-strip"
       />
     </>

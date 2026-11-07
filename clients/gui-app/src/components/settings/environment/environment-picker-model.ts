@@ -121,7 +121,7 @@ function needsUpdateRow(host: EnvironmentPickerHost): LocalPickerRow {
   return {
     hostId: host.hostId,
     name: host.name,
-    subtitle: needsUpdateSubtitle(host.name),
+    subtitle: "Update to view these settings.",
     verb: null,
     needsUpdate: true,
     defaultsToLocal: false,

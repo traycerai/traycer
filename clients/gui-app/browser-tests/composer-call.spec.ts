@@ -96,7 +96,7 @@ for (const width of [390, 768, 1024, 1400]) {
     const field = page.getByTestId("bot-channel-composer-input");
     await expect(call).toBeVisible();
     // A draft, so Send takes the pointer too.
-    await field.fill("Is CI green?");
+    await field.locator("[data-composer-editor]").fill("Is CI green?");
     await expect(send).toBeEnabled();
 
     const form = await boxOf(page.locator(BOX));

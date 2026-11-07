@@ -70,6 +70,7 @@ export function BundleFileSection(props: BundleFileSectionProps): ReactNode {
     if (tile === null) return;
     openTile(
       tileIntent(tile, { tabId: props.viewTabId }, "explicit", "direct_ui"),
+      "user",
     );
   }, [
     openTile,

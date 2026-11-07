@@ -81,6 +81,9 @@ export const runnerMutationKeys = {
   supportPublicDraftOpen: () => ["runner.support.publicDraftOpen"] as const,
   // Reveal a log file in the OS file manager (Diagnostics → Logs).
   revealLog: () => ["runner.support.revealLog"] as const,
+  // Reveal a saved music session's files (Sounds → Record session).
+  revealSoundtrackRecording: () =>
+    ["runner.soundtrack.revealRecording"] as const,
   // On-demand V8 heap snapshot of this renderer (Diagnostics → Memory).
   // The key identifies the mutation; it does NOT serialize it - TanStack
   // Query only serializes on `scope`, which the caller sets, and which is

@@ -893,11 +893,6 @@ describe("ChatForkDialog cross-host routing", () => {
   it("cross-host resets the workspace to an empty seed, drops A/B override, and does not apply the staged-preselection gate", async () => {
     renderDialog(abForkTarget(), ignoreOpenChange);
 
-    expect(
-      screen.getByText(
-        "Makes a second chat there. This one stays where it is.",
-      ),
-    ).toBeDefined();
     expect(dialogMocks.lastWorkspace?.workspaceSeed).toEqual(
       expect.objectContaining({
         folders: [SOURCE_FOLDER.path],
@@ -920,10 +915,11 @@ describe("ChatForkDialog cross-host routing", () => {
     expect(dialogMocks.lastWorkspace?.workspaceSeed).not.toBeNull();
     expect(dialogMocks.lastWorkspace?.seedIntent).toBeNull();
     expect(dialogMocks.lastWorkspace?.seedIntentOverride).toBeNull();
-    expect(
-      screen.getByTestId("chat-fork-carry-changes-disabled").textContent,
-    ).toContain(
-      "Uncommitted changes stay on the source computer, so this fork starts from the workspace you pick here.",
+    expect(screen.getByTestId("chat-fork-result").textContent).toContain(
+      "Starts from this chat's transcript through this turn and the workspace you pick here.",
+    );
+    expect(screen.getByTestId("chat-fork-result").textContent).toContain(
+      "Uncommitted changes stay on the source computer.",
     );
     expect(forkButton().disabled).toBe(false);
 
@@ -1672,10 +1668,9 @@ describe("ChatForkDialog cross-host routing", () => {
     );
 
     expect(selectedHostScopeHostId()).toBe(OTHER_HOST_ID);
-    // Cross-host, since the seeded host differs from the tab host - the
-    // notices block only renders bare (no publication/boundary notice primed
-    // here) when `isCrossHost` is true.
-    expect(screen.getByTestId("chat-fork-target-notices")).not.toBeNull();
+    expect(screen.getByTestId("chat-fork-result").textContent).toContain(
+      "Starts from this chat's transcript through this turn and the workspace you pick here.",
+    );
   });
 
   it("reopening with a target whose initialHostId is null lands back on the tab host", () => {
@@ -1704,7 +1699,6 @@ describe("ChatForkDialog cross-host routing", () => {
     );
 
     expect(selectedHostScopeHostId()).toBe(TAB_HOST_ID);
-    expect(screen.queryByTestId("chat-fork-target-notices")).toBeNull();
   });
 
   it("a null-boundary target preselected onto a remote host submits a latest-boundary forkSource carrying the source owner", async () => {
@@ -1757,23 +1751,27 @@ describe("ChatForkDialog cross-host routing", () => {
     expect(screen.queryByTestId("chat-fork-publication-notice")).toBeNull();
   });
 
-  it("null-boundary target: same-host notice names the latest checkpoint, cross-host names the latest cloud backup", () => {
+  it("keeps the latest checkpoint or transcript caveat in the Run location result", () => {
     renderDialog(forkTarget({ assistantMessageId: null }), ignoreOpenChange);
 
-    expect(
-      screen.getByText(/uses the latest saved checkpoint available/),
-    ).not.toBeNull();
-    expect(screen.queryByText(/latest usable cloud backup/)).toBeNull();
+    expect(screen.getByTestId("chat-fork-result").textContent).toContain(
+      "Starts from this chat's latest saved checkpoint and the workspace you pick here.",
+    );
+    expect(screen.getByTestId("chat-fork-result").textContent).not.toContain(
+      "work still in progress may not be included",
+    );
 
     fireEvent.click(screen.getByTestId(`fork-host-${OTHER_HOST_ID}`));
 
-    expect(
-      screen.getByText(/uses the latest usable cloud backup available/),
-    ).not.toBeNull();
-    expect(screen.queryByText(/latest saved checkpoint/)).toBeNull();
+    expect(screen.getByTestId("chat-fork-result").textContent).toContain(
+      "Starts from this chat's latest saved transcript and the workspace you pick here; work still in progress may not be included.",
+    );
+    expect(screen.getByTestId("chat-fork-result").textContent).not.toContain(
+      "latest saved checkpoint",
+    );
   });
 
-  it("an explicit assistantMessageId retains the assistantMessage boundary cross-host and shows no latest-boundary notice", async () => {
+  it("an explicit assistantMessageId retains the assistantMessage boundary cross-host", async () => {
     const explicitTarget = forkTarget({ initialHostId: OTHER_HOST_ID });
     const view = render(
       <ChatForkDialog
@@ -1787,10 +1785,9 @@ describe("ChatForkDialog cross-host routing", () => {
     );
 
     expect(selectedHostScopeHostId()).toBe(OTHER_HOST_ID);
-    // The dialog only names a "latest" boundary when the target's
-    // assistantMessageId is null; an explicit boundary shows neither variant.
-    expect(screen.queryByText(/latest usable cloud backup/)).toBeNull();
-    expect(screen.queryByText(/latest saved checkpoint/)).toBeNull();
+    expect(screen.getByTestId("chat-fork-result").textContent).toContain(
+      "Starts from this chat's transcript through this turn and the workspace you pick here.",
+    );
 
     const request = await submitFork();
     expect(request.hostId).toBe(OTHER_HOST_ID);

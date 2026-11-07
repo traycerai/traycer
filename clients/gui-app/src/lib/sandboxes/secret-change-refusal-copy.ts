@@ -24,8 +24,6 @@ const DESTROY_REFUSAL_LINES: Readonly<Record<string, string>> = {
 };
 
 const CREATE_REFUSAL_LINES: Readonly<Record<string, string>> = {
-  team_secrets_are_brokered:
-    "Team secrets are brokered only; a tool that needs a plain value needs a personal sandbox.",
   provider_name_unknown: "Use its provider's key variable as the name.",
 };
 

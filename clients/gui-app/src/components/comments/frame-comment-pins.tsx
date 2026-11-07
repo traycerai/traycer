@@ -125,8 +125,14 @@ export function FrameCommentPins(props: {
     if (bridge === null || frame === null || source === null) return;
     let active = true;
     let pending = false;
+    // A move while a measurement is out is measured once that one lands, so
+    // the pins come to rest where the page did.
+    let movedSince = false;
     const refresh = (): void => {
-      if (pending) return;
+      if (pending) {
+        movedSince = true;
+        return;
+      }
       pending = true;
       void readPinBoxes(bridge, present, () => active)
         .then((measured) => {
@@ -143,6 +149,9 @@ export function FrameCommentPins(props: {
         })
         .finally(() => {
           pending = false;
+          if (!movedSince || !active) return;
+          movedSince = false;
+          refresh();
         });
     };
     refresh();
@@ -152,12 +161,18 @@ export function FrameCommentPins(props: {
     observer.observe(frame);
     window.addEventListener("resize", update);
     window.addEventListener("scroll", update, true);
+    // A page scrolled or zoomed inside its own document, which no listener
+    // here can hear.
+    const stopPageLayout = bridge.onPageActivity((activity) => {
+      if (activity.kind === "layout") update();
+    });
     return () => {
       active = false;
       window.clearInterval(interval);
       observer.disconnect();
       window.removeEventListener("resize", update);
       window.removeEventListener("scroll", update, true);
+      stopPageLayout();
     };
   }, [present, source, bridge, frame]);
   return (

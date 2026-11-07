@@ -331,11 +331,9 @@ function HostOverviewMenuAction(props: {
 }
 
 /**
- * The window binding beside the `⋯` trigger: `Activate` until this window
- * starts new work here, then the `Active` state in the same slot.
+ * The primary activation action, while this window starts new work elsewhere.
  */
 function HostOverviewInlineActivate(props: {
-  readonly isActive: boolean;
   /** Activate can be offered now; `reason` says why when it cannot. */
   readonly available: boolean;
   readonly activateBusy: boolean;
@@ -343,17 +341,6 @@ function HostOverviewInlineActivate(props: {
   /** `null`: the row is not offered as the window's host (`hostOptionCanActivate`). */
   readonly onMakeActive: (() => void) | null;
 }): ReactNode {
-  if (props.isActive) {
-    return (
-      <span
-        className="inline-flex shrink-0 items-center gap-1.5 rounded-md bg-primary/10 px-2 py-1 font-medium text-ui-xs text-primary"
-        data-testid="host-active-in-window"
-      >
-        <Check className="size-3.5" aria-hidden />
-        Active
-      </span>
-    );
-  }
   // A management-only row is never offered as the window's host.
   const onMakeActive = props.onMakeActive;
   if (onMakeActive === null) return null;
@@ -494,6 +481,7 @@ export function HostOverviewHeaderActions(props: {
    * installation, the console hands in the button it already owns.
    */
   readonly primaryAction: ReactNode | null;
+  readonly menuItems?: ReactNode;
   readonly restartDegrade: OverviewDegradeReason | null;
   readonly doctorDegrade: OverviewDegradeReason | null;
   readonly restartPending: boolean;
@@ -535,11 +523,10 @@ export function HostOverviewHeaderActions(props: {
     props.teamOwned,
   );
   return (
-    <div className="flex shrink-0 items-center gap-1.5">
+    <div className="flex max-w-full shrink-0 flex-wrap items-center gap-1.5">
       {props.primaryAction}
-      {props.activateInMenu ? null : (
+      {props.activateInMenu || props.isActive ? null : (
         <HostOverviewInlineActivate
-          isActive={props.isActive}
           available={activateAvailable}
           activateBusy={props.activateBusy}
           reason={activateReason}
@@ -560,7 +547,8 @@ export function HostOverviewHeaderActions(props: {
           </Button>
         </DropdownMenuTrigger>
         <DropdownMenuContent align="end" className="min-w-56">
-          {props.activateInMenu &&
+          {props.menuItems}
+          {(props.activateInMenu || props.isActive) &&
           (props.isActive || props.onMakeActive !== null) ? (
             <>
               <HostOverviewMenuActivate
@@ -574,7 +562,7 @@ export function HostOverviewHeaderActions(props: {
             </>
           ) : null}
           <HostOverviewMenuAction
-            label="Restart"
+            label="Restart host"
             hostName={hostName}
             icon={<RotateCcw className="size-3.5" aria-hidden />}
             degrade={props.restartDegrade}
