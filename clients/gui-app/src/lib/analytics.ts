@@ -119,6 +119,7 @@ export type AnalyticsSettingsSection =
   | "getting-started"
   | "browser"
   | "browser-agent-access"
+  | "agent-memories"
   | "credits"
   | "mcp-servers"
   | "members"
@@ -381,6 +382,7 @@ export type AnalyticsSetting =
   | "allowPrereleaseUpdates"
   | "agentBrowserAccess"
   | "agentOfficeDefaultView"
+  | "useTraycerMemories"
   | "agentTabSurfacing"
   | "agentWorktreeCreate"
   | "artifactIconColorMode"
@@ -1501,6 +1503,7 @@ const ANALYTICS_SETTINGS_SECTIONS = new Set<string>(
     "getting-started": true,
     browser: true,
     "browser-agent-access": true,
+    "agent-memories": true,
     "mcp-servers": true,
     skills: true,
     "agent-definitions": true,
@@ -1539,6 +1542,7 @@ const ANALYTICS_SETTINGS = new Set<string>(
     agentTabSurfacing: true,
     agentWorktreeCreate: true,
     allowPrereleaseUpdates: true,
+    useTraycerMemories: true,
     artifactIconColorMode: true,
     artifactIconColors: true,
     catalogProbeTimeout: true,

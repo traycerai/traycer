@@ -23,6 +23,7 @@ import { Route as DraftNewRouteImport } from "./routes/draft.new";
 import { Route as EpicsIndexRouteImport } from "./routes/epics/index";
 import { Route as SettingsIndexRouteImport } from "./routes/settings.index";
 import { Route as SettingsAgentDefinitionsRouteImport } from "./routes/settings.agent-definitions";
+import { Route as SettingsAgentMemoriesRouteImport } from "./routes/settings.agent-memories";
 import { Route as SettingsAgentsRouteImport } from "./routes/settings.agents";
 import { Route as SettingsAlertsRouteImport } from "./routes/settings.alerts";
 import { Route as SettingsAppDiagnosticsRouteImport } from "./routes/settings.app-diagnostics";
@@ -130,6 +131,11 @@ const SettingsAgentDefinitionsRoute =
     path: "/agent-definitions",
     getParentRoute: () => SettingsRoute,
   } as any);
+const SettingsAgentMemoriesRoute = SettingsAgentMemoriesRouteImport.update({
+  id: "/agent-memories",
+  path: "/agent-memories",
+  getParentRoute: () => SettingsRoute,
+} as any);
 const SettingsAgentsRoute = SettingsAgentsRouteImport.update({
   id: "/agents",
   path: "/agents",
@@ -321,6 +327,7 @@ export interface FileRoutesByFullPath {
   "/draft/$draftId": typeof DraftDraftIdRoute;
   "/draft/new": typeof DraftNewRoute;
   "/settings/agent-definitions": typeof SettingsAgentDefinitionsRoute;
+  "/settings/agent-memories": typeof SettingsAgentMemoriesRoute;
   "/settings/agents": typeof SettingsAgentsRoute;
   "/settings/alerts": typeof SettingsAlertsRoute;
   "/settings/app-diagnostics": typeof SettingsAppDiagnosticsRoute;
@@ -370,6 +377,7 @@ export interface FileRoutesByTo {
   "/draft/$draftId": typeof DraftDraftIdRoute;
   "/draft/new": typeof DraftNewRoute;
   "/settings/agent-definitions": typeof SettingsAgentDefinitionsRoute;
+  "/settings/agent-memories": typeof SettingsAgentMemoriesRoute;
   "/settings/agents": typeof SettingsAgentsRoute;
   "/settings/alerts": typeof SettingsAlertsRoute;
   "/settings/app-diagnostics": typeof SettingsAppDiagnosticsRoute;
@@ -422,6 +430,7 @@ export interface FileRoutesById {
   "/draft/$draftId": typeof DraftDraftIdRoute;
   "/draft/new": typeof DraftNewRoute;
   "/settings/agent-definitions": typeof SettingsAgentDefinitionsRoute;
+  "/settings/agent-memories": typeof SettingsAgentMemoriesRoute;
   "/settings/agents": typeof SettingsAgentsRoute;
   "/settings/alerts": typeof SettingsAlertsRoute;
   "/settings/app-diagnostics": typeof SettingsAppDiagnosticsRoute;
@@ -475,6 +484,7 @@ export interface FileRouteTypes {
     | "/draft/$draftId"
     | "/draft/new"
     | "/settings/agent-definitions"
+    | "/settings/agent-memories"
     | "/settings/agents"
     | "/settings/alerts"
     | "/settings/app-diagnostics"
@@ -524,6 +534,7 @@ export interface FileRouteTypes {
     | "/draft/$draftId"
     | "/draft/new"
     | "/settings/agent-definitions"
+    | "/settings/agent-memories"
     | "/settings/agents"
     | "/settings/alerts"
     | "/settings/app-diagnostics"
@@ -575,6 +586,7 @@ export interface FileRouteTypes {
     | "/draft/$draftId"
     | "/draft/new"
     | "/settings/agent-definitions"
+    | "/settings/agent-memories"
     | "/settings/agents"
     | "/settings/alerts"
     | "/settings/app-diagnostics"
@@ -727,6 +739,13 @@ declare module "@tanstack/react-router" {
       path: "/agent-definitions";
       fullPath: "/settings/agent-definitions";
       preLoaderRoute: typeof SettingsAgentDefinitionsRouteImport;
+      parentRoute: typeof SettingsRoute;
+    };
+    "/settings/agent-memories": {
+      id: "/settings/agent-memories";
+      path: "/agent-memories";
+      fullPath: "/settings/agent-memories";
+      preLoaderRoute: typeof SettingsAgentMemoriesRouteImport;
       parentRoute: typeof SettingsRoute;
     };
     "/settings/agents": {
@@ -991,6 +1010,7 @@ const EpicsRouteWithChildren = EpicsRoute._addFileChildren(EpicsRouteChildren);
 
 interface SettingsRouteChildren {
   SettingsAgentDefinitionsRoute: typeof SettingsAgentDefinitionsRoute;
+  SettingsAgentMemoriesRoute: typeof SettingsAgentMemoriesRoute;
   SettingsAgentsRoute: typeof SettingsAgentsRoute;
   SettingsAlertsRoute: typeof SettingsAlertsRoute;
   SettingsAppDiagnosticsRoute: typeof SettingsAppDiagnosticsRoute;
@@ -1030,6 +1050,7 @@ interface SettingsRouteChildren {
 
 const SettingsRouteChildren: SettingsRouteChildren = {
   SettingsAgentDefinitionsRoute: SettingsAgentDefinitionsRoute,
+  SettingsAgentMemoriesRoute: SettingsAgentMemoriesRoute,
   SettingsAgentsRoute: SettingsAgentsRoute,
   SettingsAlertsRoute: SettingsAlertsRoute,
   SettingsAppDiagnosticsRoute: SettingsAppDiagnosticsRoute,

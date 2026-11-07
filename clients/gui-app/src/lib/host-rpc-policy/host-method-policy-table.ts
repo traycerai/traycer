@@ -2841,6 +2841,13 @@ export const HOST_METHOD_POLL_TABLE = {
     poll: null,
   },
   "config.browser.get": { ...LATEST_SCHEDULING, poll: null },
+  // The Settings write observer owns its bounded, single-flight refresh loop.
+  "config.agentMemories.get": { ...LATEST_SCHEDULING, poll: null },
+  "config.agentMemories.set": {
+    mode: "fifo",
+    joinResponseTimeoutMs: null,
+    poll: null,
+  },
   "config.browser.set": {
     mode: "fifo",
     joinResponseTimeoutMs: null,

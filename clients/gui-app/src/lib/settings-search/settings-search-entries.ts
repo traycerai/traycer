@@ -17,6 +17,7 @@ import { HOST_DIAGNOSTICS } from "@/components/settings/panels/diagnostics-setti
 import { FALLBACK } from "@/components/settings/panels/fallback-settings.definitions";
 import { GETTING_STARTED } from "@/components/settings/panels/getting-started-settings.definitions";
 import { BROWSER } from "@/components/settings/panels/browser-settings.definitions";
+import { AGENT_MEMORIES } from "@/components/settings/panels/agent-memories.definitions";
 import { BROWSER_AGENT_ACCESS } from "@/components/settings/panels/browser-agent-access.definitions";
 import { GENERAL } from "@/components/settings/panels/general-settings.definitions";
 import { HOST_OVERVIEW } from "@/components/settings/panels/host-overview.definitions";
@@ -62,6 +63,7 @@ export const SETTINGS_SEARCH_COLLECTIONS: ReadonlyArray<AnySettingsSectionCollec
     MCP_SERVERS,
     SKILLS,
     PERMISSIONS,
+    AGENT_MEMORIES,
     FALLBACK,
     SHELL,
     AGENT_SELECTION,

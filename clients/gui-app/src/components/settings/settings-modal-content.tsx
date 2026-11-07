@@ -33,6 +33,7 @@ import {
 } from "@/components/settings/panels/providers-settings-panel";
 import { MachineSetupSettingsPanel } from "@/components/settings/panels/machine-setup-settings-panel";
 import { AgentsSettingsPanel } from "@/components/settings/panels/agents-settings-panel";
+import { AgentMemoriesSettingsPanel } from "@/components/settings/panels/agent-memories-settings-panel";
 import { PermissionsSettingsPanel } from "@/components/settings/panels/permissions-settings-panel";
 import { FallbackSettingsPanel } from "@/components/settings/panels/fallback-settings-panel";
 import { NotificationsSettingsPanel } from "@/components/settings/panels/notifications-settings-panel";
@@ -120,6 +121,7 @@ const SETTINGS_PANELS = {
   "machine-setup": MachineSetupSettingsPanel,
   notifications: NotificationsSettingsPanel,
   permissions: PermissionsSettingsPanel,
+  "agent-memories": AgentMemoriesSettingsPanel,
   agents: AgentsSettingsPanel,
   fallback: FallbackSettingsPanel,
   keybindings: KeybindingsSettingsPanel,
