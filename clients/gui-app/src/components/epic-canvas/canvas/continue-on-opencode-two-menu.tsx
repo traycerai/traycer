@@ -112,6 +112,7 @@ export function ContinueOnOpencodeTwoTabMenu(
             sourceOwnerUserId: chat.userId,
           },
           source: "direct_ui",
+          provenance: "user",
           createChat: (request, callbacks) => {
             // `mutateAsync`, not `mutate`: picking the item closes the menu
             // and unmounts this component, and TanStack drops `mutate`'s
@@ -129,6 +130,7 @@ export function ContinueOnOpencodeTwoTabMenu(
             openCreatedChatWhenProjectedWithNavigation({
               intent,
               navigateNestedFocus,
+              mobileTarget: null,
             }),
           onCreateError: (error) => {
             // The shared create toast stays silent on a fork the host could

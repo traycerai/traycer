@@ -19,8 +19,10 @@ import type {
   SlackAppInstallUrlResult,
   SlackAppManifestResult,
   SlackAppReadResult,
+  SlackAppDmsRequest,
   SlackAppRegisterRequest,
   SlackAppWriteResult,
+  TeamHostInstallTokenResult,
   SandboxAutomationOpenFetchResult,
   SandboxCatalogueFetchResult,
   SandboxCostsFetchResult,
@@ -42,7 +44,6 @@ import type {
   UpdateHostVersionPolicyFetchResult,
   UpdateHostVersionPolicyInput,
   VoiceAvailabilityFetchResult,
-  VoiceRouteFetchResult,
   VoiceSessionEndFetchResult,
   VoiceSessionIndicator,
   VoiceSessionMintFetchResult,
@@ -62,6 +63,7 @@ import type {
   DesktopAuthVerificationRevoked,
   DesktopLocalAuthSessionRestoreResult,
 } from "../ipc-contracts/window-types";
+import type { SoundtrackSetReadResult } from "../ipc-contracts/soundtrack-types";
 import { subscribe, type Disposable, type Listener } from "./subscribe";
 
 /**
@@ -137,6 +139,7 @@ export interface AuthBridgeSurface {
     bearerToken: string,
     hostId: string,
   ): Promise<DeregisterHostFetchResult>;
+  readSoundtrackSet(): Promise<SoundtrackSetReadResult>;
   listSandboxes(bearerToken: string): Promise<SandboxListFetchResult>;
   getSandboxCosts(bearerToken: string): Promise<SandboxCostsFetchResult>;
   getSandboxCatalogue(
@@ -154,11 +157,6 @@ export interface AuthBridgeSurface {
     bearerToken: string,
     voiceSessionId: string,
   ): Promise<VoiceSessionEndFetchResult>;
-  // The voice router's model call, opaque JSON in and out.
-  routeVoiceUtterance(
-    bearerToken: string,
-    requestBody: string,
-  ): Promise<VoiceRouteFetchResult>;
   setVoiceSessionLive(live: boolean): Promise<void>;
   setVoiceSessionIndicator(indicator: VoiceSessionIndicator): Promise<void>;
   createSandbox(
@@ -211,6 +209,14 @@ export interface AuthBridgeSurface {
     bearerToken: string,
     botId: string,
   ): Promise<SlackAppWriteResult>;
+  setSlackAppDms(
+    bearerToken: string,
+    request: SlackAppDmsRequest,
+  ): Promise<SlackAppWriteResult>;
+  mintTeamHostInstallToken(
+    bearerToken: string,
+    environmentId: string,
+  ): Promise<TeamHostInstallTokenResult>;
   getSandboxGrants(
     bearerToken: string,
     environmentId: string | null,
@@ -311,6 +317,11 @@ export function buildAuthBridge(): AuthBridgeSurface {
         hostId,
       ) as Promise<DeregisterHostFetchResult>,
 
+    readSoundtrackSet: () =>
+      ipcRenderer.invoke(
+        RunnerHostInvoke.readSoundtrackSet,
+      ) as Promise<SoundtrackSetReadResult>,
+
     listSandboxes: (bearerToken) =>
       ipcRenderer.invoke(
         RunnerHostInvoke.listSandboxes,
@@ -348,14 +359,6 @@ export function buildAuthBridge(): AuthBridgeSurface {
         bearerToken,
         voiceSessionId,
       ) as Promise<VoiceSessionEndFetchResult>,
-
-    // The voice router's model call, opaque JSON in and out.
-    routeVoiceUtterance: (bearerToken, requestBody) =>
-      ipcRenderer.invoke(
-        RunnerHostInvoke.routeVoiceUtterance,
-        bearerToken,
-        requestBody,
-      ) as Promise<VoiceRouteFetchResult>,
 
     setVoiceSessionLive: (live) =>
       ipcRenderer.invoke(
@@ -463,6 +466,20 @@ export function buildAuthBridge(): AuthBridgeSurface {
         bearerToken,
         botId,
       ) as Promise<SlackAppWriteResult>,
+
+    setSlackAppDms: (bearerToken, request) =>
+      ipcRenderer.invoke(
+        RunnerHostInvoke.setSlackAppDms,
+        bearerToken,
+        request,
+      ) as Promise<SlackAppWriteResult>,
+
+    mintTeamHostInstallToken: (bearerToken, environmentId) =>
+      ipcRenderer.invoke(
+        RunnerHostInvoke.mintTeamHostInstallToken,
+        bearerToken,
+        environmentId,
+      ) as Promise<TeamHostInstallTokenResult>,
 
     getSandboxGrants: (bearerToken, environmentId, hostId) =>
       ipcRenderer.invoke(

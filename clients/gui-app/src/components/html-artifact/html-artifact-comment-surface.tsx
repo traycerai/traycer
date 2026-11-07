@@ -26,8 +26,6 @@ function samePageSourceIdentity(
     previous.artifactId === next.artifactId &&
     previous.treePath === next.treePath &&
     previous.entryPath === next.entryPath &&
-    previous.canvas === next.canvas &&
-    previous.canvasLinks === next.canvasLinks &&
     previous.readSpan === next.readSpan &&
     previous.resolveOutsideReference === next.resolveOutsideReference &&
     Object.hasOwn(previous.manifest.files, entryPath) &&
@@ -87,6 +85,7 @@ export function HtmlArtifactCommentSurface(props: {
   readonly viewTabId: string;
   readonly source: ArtifactSource;
   readonly toolbarControls: ReactNode;
+  readonly menuItems: ReactNode;
 }) {
   return (
     <CanvasSelectionProvider
@@ -101,6 +100,7 @@ export function HtmlArtifactCommentSurface(props: {
         source={props.source}
         title={props.artifactTitle}
         toolbarControls={props.toolbarControls}
+        menuItems={props.menuItems}
       />
     </CanvasSelectionProvider>
   );
@@ -110,6 +110,7 @@ interface CommentFrameProps {
   readonly source: ArtifactSource;
   readonly title: string;
   readonly toolbarControls: ReactNode;
+  readonly menuItems: ReactNode;
 }
 
 function ProvidedCommentFrame(props: CommentFrameProps) {
@@ -131,10 +132,12 @@ function HtmlArtifactCommentFrame(
   const path = source.entryPath === "" ? "index.html" : source.entryPath;
   const files = source.manifest.files;
   const servedSha256 = Object.hasOwn(files, path) ? files[path].sha256 : null;
+  // One document for reading and commenting: the comment tool is a mode the
+  // loaded page is told to take, so the reader's scroll and zoom and the
+  // page's own state outlast turning it on or off.
   const served = useMemo<ArtifactSource>(
-    () =>
-      commenting ? { ...source, canvas: true, canvasLinks: "native" } : source,
-    [source, commenting],
+    () => ({ ...source, canvas: true, canvasLinks: "native" }),
+    [source],
   );
   const view = useMemo<CanvasCommentView>(
     () => ({
@@ -182,7 +185,7 @@ function HtmlArtifactCommentFrame(
         title={props.title}
         className="h-full w-full"
         height={null}
-        pageZoom={!commenting}
+        commenting={commenting}
         onSize={noop}
         onStatus={(status) => events.onStatus(path, status)}
         onBridge={(bridge) => events.onBridge(path, bridge)}
@@ -200,6 +203,7 @@ function HtmlArtifactCommentFrame(
             {commentsEnabled ? events.renderToolbarControls?.() : null}
           </>
         }
+        menuItems={props.menuItems}
       />
       {events.renderCommentDraft?.()}
     </>

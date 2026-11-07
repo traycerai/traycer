@@ -4,8 +4,8 @@ import type {
 } from "@/stores/composer/chat-store";
 
 // A synthesized row whose single segment is a setup-card / forked-chat-link /
-// imported-chat-marker / auto-judge-unattended-denial / auto-judge-notice
-// renders that segment
+// imported-chat-marker / auto-judge-unattended-denial / auto-judge-notice /
+// bot-exchanges renders that segment
 // directly - its own card and its own find anchor -
 // instead of a normal message body. Both the renderer
 // (renderSpecialSegment in chat-message.tsx) and the find projection
@@ -21,7 +21,8 @@ export function singleSpecialSegment(
     segment.kind === "forked-chat-link" ||
     segment.kind === "imported-chat-marker" ||
     segment.kind === "auto-judge-unattended-denial" ||
-    segment.kind === "auto-judge-notice"
+    segment.kind === "auto-judge-notice" ||
+    segment.kind === "bot-exchanges"
   ) {
     return segment;
   }

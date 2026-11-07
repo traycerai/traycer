@@ -556,6 +556,8 @@ const PRIVATE_DIAGNOSTICS_CAUSE_KEYS =
     errorCode: true,
     sourceAction: true,
     timestamp: true,
+    hostTimestamp: true,
+    turnId: true,
   });
 
 const CONTEXT_REGISTRY_KEYS = contractKeySet<SupportContextRegistrySnapshot>({
@@ -1220,6 +1222,12 @@ function parsePrivateDiagnosticsCause(
       `${context}.sourceAction`,
     ),
     timestamp: value.timestamp,
+    // Absent reads as null, like the other nullable cause fields.
+    hostTimestamp:
+      value.hostTimestamp === undefined
+        ? null
+        : parseNullableNumber(value.hostTimestamp, `${context}.hostTimestamp`),
+    turnId: parseNullableString(value.turnId, `${context}.turnId`),
   };
 }
 

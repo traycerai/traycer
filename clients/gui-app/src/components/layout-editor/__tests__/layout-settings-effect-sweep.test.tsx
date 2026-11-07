@@ -1,5 +1,6 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import {
+  advanceSweepTime,
   holdClocksStill,
   MINTED_ID_KINDS,
   normalisedMintedIds,
@@ -84,6 +85,8 @@ const AVAILABILITY: SettingsAvailabilityContext = {
   // Both windows are composed at a desktop width: the phone layout is not
   // drawn, so the rows only it draws (the small-screen footer) have no control.
   phoneLayout: false,
+  soundtrackOffered: false,
+  soundtrackOn: false,
 };
 
 const WINDOWS: ReadonlyArray<SweepWindow> = ["sample", "epic"];
@@ -113,18 +116,19 @@ const CONFIGURED_PREFIXES = SWEEP_CONFIGURED_PROVIDERS.map(
 );
 
 /**
- * The "Stack … with the panel below" entries whose pair joins Mobile
- * simulators: the verb on its own row, and the one on the panel directly above
- * it. Read off the shipped rail through the product's own neighbour rule, so
- * the pair follows the canonical order rather than being named here.
+ * The "Stack … with the panel below" entry whose pair joins Mobile simulators
+ * to a panel with nothing else shown: the verb on the panel directly above it.
+ * Read off the shipped rail through the product's own neighbour rule, so the
+ * pair follows the canonical order rather than being named here. Mobile
+ * simulators' own verb is not here: the panel below it is Git Diff, already
+ * stacked with Pull Requests, so joining it grows a stack that draws.
  */
 const STACKS_JOINING_SIMULATORS: ReadonlySet<string> = new Set(
   DEFAULT_ARRANGEMENT.rail.flatMap((entry) => {
     if (entry.kind !== "panel") return [];
     const joins =
-      entry.id === "railSimulators" ||
       railPanelToStackBelow(DEFAULT_ARRANGEMENT.rail, entry.id) ===
-        "railSimulators";
+      "railSimulators";
     return joins ? [`rail-structure:stack-below:${entry.id}`] : [];
   }),
 );
@@ -162,7 +166,12 @@ const EXPECTED_SILENT: ReadonlyArray<SilentExemption> = [
   {
     id: "simulators-stack",
     matches: (entry) => STACKS_JOINING_SIMULATORS.has(entry.id),
-    why: "each of these joins Mobile simulators, which draws in neither window, so the stack is left with one shown member and the rail draws that member standing alone (T3)",
+    why: "it joins Mobile simulators, which draws in neither window, so the stack is left with one shown member and the rail draws that member standing alone (T3)",
+  },
+  {
+    id: "file-tree-stack",
+    matches: (entry) => entry.id === "rail-structure:stack-below:railFileTree",
+    why: "File Tree is off in the shipped layout, so joining it to the panel below leaves the stack with one shown member, which the rail draws standing alone",
   },
 ];
 
@@ -194,12 +203,6 @@ interface WindowRun {
 /** How many settles the noise control watches, and how long it waits between. */
 const IDLE_SETTLES = 12;
 const IDLE_GAP_MS = 25;
-
-function pause(ms: number): Promise<void> {
-  return new Promise<void>((resolve) => {
-    setTimeout(resolve, ms);
-  });
-}
 
 function sweepPlan(): ReadonlyArray<SweepEntry> {
   return buildSweepPlan({
@@ -256,7 +259,7 @@ async function sweepWindow(windowKind: SweepWindow): Promise<WindowRun> {
   const idle: string[] = [pristine];
   for (let index = 0; index < IDLE_SETTLES; index += 1) {
     await mount.settle();
-    await pause(IDLE_GAP_MS);
+    await advanceSweepTime(IDLE_GAP_MS);
     idle.push(mount.signature());
   }
 

@@ -39,6 +39,8 @@ function makeCause(
     errorCode: null,
     sourceAction: null,
     timestamp: 0,
+    hostTimestamp: null,
+    turnId: null,
     ...overrides,
   };
 }
@@ -519,7 +521,7 @@ describe("buildPublicDraftFields", () => {
   // user-typed intent question survived into the private Sentry envelope AND
   // the public draft TITLE - the derived title has no key/assignment context
   // to key redaction off of, so it needed the scrubber's token-shape pass
-  // (support-scrubber.ts), not a change here. This exercises that fix
+  // (`@traycer/protocol/utils/text/support-scrub`), not a change here. This exercises that fix
   // end-to-end through the real (unmodified) title-derivation code path.
   describe("token-shape redaction reaches the public title (finding N2)", () => {
     const ANTHROPIC_KEY =

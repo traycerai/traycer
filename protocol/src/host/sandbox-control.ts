@@ -132,6 +132,12 @@ export const sandboxRouteReadinessSchema: z.ZodType<SandboxRouteReadiness> =
  * create and destroy answers carry it (the server's `SandboxView`). The list
  * excludes destroyed rows.
  */
+/** A create waiting for quota; an absent field preserves older servers' behavior. */
+export interface SandboxRateLimit {
+  readonly limited: true;
+  readonly retryAfterAt: number | null;
+}
+
 export interface SandboxSummary {
   /** The sandbox id: the path segment of every `/api/sandboxes/:id` verb. */
   readonly id: string;
@@ -150,6 +156,7 @@ export interface SandboxSummary {
   readonly frozen: boolean;
   /** The vendor's or the lifecycle's code on a `failed` row, else `null`. */
   readonly failureCode: string | null;
+  readonly rateLimit?: SandboxRateLimit;
   /** `null` = the default idle period (30 minutes). */
   readonly idleMinutes: number | null;
   /** Created by an agent for one task; offered in no picker. */
@@ -194,7 +201,8 @@ export interface SandboxSummary {
   readonly priceMcPerHour: SandboxHourlyPrice | null;
   /**
    * The environment the sandbox belongs to; `null` from a server that
-   * predates environments, which reads as the person's Personal one.
+   * predates environments. An absent id does not establish Personal
+   * membership; the sandbox's environment is unknown.
    */
   readonly environmentId: string | null;
   /**
@@ -263,6 +271,28 @@ export interface SandboxSummary {
    * catalogue gives it; `null` from a server before the field.
    */
   readonly regionLabel: string | null;
+  /**
+   * When this sandbox stops running, because the control plane no longer
+   * runs sandboxes of its kind after that date; `null` on every ordinary row
+   * and from a server before the field.
+   *
+   * On an UNFROZEN row this comes with no resting deadline (`destroyAt` is
+   * `null`), because the control plane does not end a withdrawn row for
+   * resting while this date stands. A FROZEN row is the exception: it keeps
+   * its own day-30 `destroyAt`, which is decided ahead of the withdrawal, so
+   * a frozen withdrawn row carries BOTH fields. A surface that names one
+   * deadline must prefer `destroyAt` wherever it is set — that is the day the
+   * control plane acts on — and read this date only when it is `null`.
+   *
+   * What it marks is an **announced calendar day in UTC**. The instant
+   * inside that day carries no meaning — nothing compares this value to the
+   * clock, and the drain it announces is operational — so render its UTC day
+   * and no clock time. Reading it in the reader's own zone names the day
+   * before for every reader west of UTC, and names two different days to two
+   * readers of one announcement; a clock time would promise a cutoff that
+   * nothing enforces.
+   */
+  readonly withdrawalEndsAt: number | null;
 }
 
 /**
@@ -429,6 +459,12 @@ export const sandboxSummarySchema: z.ZodType<SandboxSummary> = lazySchema(() =>
     state: z.enum(HOST_SANDBOX_STATES),
     frozen: z.boolean(),
     failureCode: z.string().nullable(),
+    rateLimit: z
+      .object({
+        limited: z.literal(true),
+        retryAfterAt: z.number().finite().nullable(),
+      })
+      .optional(),
     idleMinutes: z.number().int().positive().nullable(),
     burst: z.boolean(),
     createdByHostId: z.string().nullable(),
@@ -474,6 +510,7 @@ export const sandboxSummarySchema: z.ZodType<SandboxSummary> = lazySchema(() =>
     // fail the row, and with it the whole sandbox list.
     operation: sandboxOperationSchema.nullable().default(null).catch(null),
     regionLabel: z.string().nullable().default(null),
+    withdrawalEndsAt: z.number().nullable().default(null),
   }),
 );
 
@@ -655,16 +692,34 @@ export const sandboxCataloguePricingSchema: z.ZodType<SandboxCataloguePricing> =
     }),
   );
 
+export interface SandboxShapePrice {
+  readonly cpus: number;
+  readonly memoryMb: number;
+  readonly diskMb: number;
+  readonly priceMcPerHour: SandboxHourlyPrice;
+}
+
+const sandboxShapePriceSchema: z.ZodType<SandboxShapePrice> = lazySchema(() =>
+  z.object({
+    cpus: z.number().positive(),
+    memoryMb: z.number().int().positive(),
+    diskMb: z.number().int().positive(),
+    priceMcPerHour: sandboxHourlyPriceSchema,
+  }),
+);
+
 export interface SandboxCatalogueRegion {
   readonly id: string;
   readonly label: string;
   /** The price of the provider's SMALLEST shape here, for a "from" line. */
   readonly fromPriceMcPerHour: SandboxHourlyPrice;
   /**
-   * The per-unit rates any shape here is priced from; `null` from a server
-   * that predates them, which leaves only the "from" price.
+   * The fallback per-unit rates; `null` when a server supplies none or prices
+   * whole shapes instead. Exact {@link shapePrices} take precedence.
    */
   readonly pricing: SandboxCataloguePricing | null;
+  /** Exact rung prices; absent from servers that publish only unit rates. */
+  readonly shapePrices?: readonly SandboxShapePrice[];
 }
 
 export const sandboxCatalogueRegionSchema: z.ZodType<SandboxCatalogueRegion> =
@@ -674,6 +729,7 @@ export const sandboxCatalogueRegionSchema: z.ZodType<SandboxCatalogueRegion> =
       label: z.string(),
       fromPriceMcPerHour: sandboxHourlyPriceSchema,
       pricing: sandboxCataloguePricingSchema.nullable().default(null),
+      shapePrices: z.array(sandboxShapePriceSchema).optional(),
     }),
   );
 
@@ -856,7 +912,9 @@ export type SandboxCreditSource = "personal" | "team-allowance" | "team";
  *    (`os-not-offered`, `region-not-offered`, `cpus-out-of-range`,
  *    `memory-out-of-range`, `memory-per-cpu-out-of-range`, `disk-out-of-range`,
  *    `provider-plan-too-small`: the account's plan cannot create any shape
- *    of the provider, see `SandboxCatalogueProvider.creatable`).
+ *    of the provider, see `SandboxCatalogueProvider.creatable`;
+ *    `provider-withdrawn`: no new sandbox of that operating system is made
+ *    any more, and the rows already on it carry `withdrawalEndsAt`).
  *  - `insufficient_credit` (`402`): the create gate refused; `reason`
  *    (`denied`, `unverified`, `unsupported-subscription`), the shortfall
  *    (`null` when the balance is unknown) and the burn it was computed from.
@@ -929,6 +987,11 @@ export const SANDBOX_REFUSAL_CODE_ENVIRONMENT_UNAVAILABLE =
  * old name, so trying again is safe.
  */
 export const SANDBOX_REFUSAL_CODE_RENAME_UNAVAILABLE = "rename_unavailable";
+/**
+ * A kept team sandbox (a create or a Keep) whose environment already has its
+ * bot host: a kept sandbox or a team machine (Tracy Bots T141).
+ */
+export const SANDBOX_REFUSAL_CODE_TEAM_HOST_EXISTS = "team_host_exists";
 
 // -----------------------------------------------------------------------------
 // Lifecycle verbs

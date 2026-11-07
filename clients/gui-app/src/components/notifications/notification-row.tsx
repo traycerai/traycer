@@ -21,7 +21,10 @@ import {
   TERMINAL_FAILURE_TONE,
 } from "@/components/notifications/notification-indicator-tones";
 import { TooltipWrapper } from "@/components/ui/tooltip-wrapper";
-import { NotificationRowBotAvatar } from "@/components/notifications/notification-bots";
+import {
+  NotificationRowAuthorAvatar,
+  NotificationRowBotAvatar,
+} from "@/components/notifications/notification-bots";
 import { useStandaloneBotName } from "@/hooks/bots/use-standalone-bot-name";
 import { notificationRowBotId } from "@/lib/notifications/notification-row-bot-id";
 import { SecretGrantRequestCard } from "@/components/notifications/secret-grant-request-card";
@@ -248,8 +251,8 @@ export function NotificationRow(props: NotificationRowProps): ReactNode {
         aria-hidden
         className="flex size-6 shrink-0 items-center justify-center"
       >
-        <NotificationRowBotAvatar
-          payload={row.payload}
+        <NotificationRowPicture
+          row={row}
           fallback={<Icon className={cn("size-4", glyph.colorClassName)} />}
         />
       </span>
@@ -272,6 +275,26 @@ export function NotificationRow(props: NotificationRowProps): ReactNode {
         />
       </div>
     </m.li>
+  );
+}
+
+function NotificationRowPicture(props: {
+  readonly row: MergedNotificationRow;
+  readonly fallback: ReactNode;
+}): ReactNode {
+  const { row, fallback } = props;
+  const authorUserId = row.botAuthorUserId ?? null;
+  if (authorUserId === null) {
+    return (
+      <NotificationRowBotAvatar payload={row.payload} fallback={fallback} />
+    );
+  }
+  return (
+    <NotificationRowAuthorAvatar
+      authorUserId={authorUserId}
+      payload={row.payload}
+      fallback={fallback}
+    />
   );
 }
 
@@ -313,7 +336,11 @@ function NotificationRowMain(props: {
   const body = (
     <NotificationRowBody
       title={title}
-      body={props.row.body}
+      body={
+        (props.row.secrets ?? null) !== null && props.row.resolvedAt === null
+          ? "Waiting for your decision"
+          : props.row.body
+      }
       isRead={props.isRead}
     />
   );
@@ -526,6 +553,7 @@ const HOST_KIND_GLYPHS: Record<
   "agent.stalled": FAILED_CHAT,
   "approval.requested": NEUTRAL_BELL,
   "interview.requested": NEUTRAL_BELL,
+  "feedback.drafted": NEUTRAL_BELL,
   "workspace.operation.failed": FAILED_CHAT,
   // Only reachable for an `info` row: the severity branches above already
   // claim every `done`/`failure`/`needs_action` host-operation row, and the

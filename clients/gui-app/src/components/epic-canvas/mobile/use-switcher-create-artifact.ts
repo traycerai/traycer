@@ -53,6 +53,7 @@ export function useSwitcherCreateArtifact(
               openNode: (nodeRef) => {
                 openTile(
                   tileIntent(nodeRef, { tabId }, "explicit", "direct_ui"),
+                  "user",
                 );
               },
               onBeforeOpen: null,

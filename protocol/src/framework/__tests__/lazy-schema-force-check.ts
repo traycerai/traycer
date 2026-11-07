@@ -1,7 +1,9 @@
 import { execFileSync } from "node:child_process";
+import { GIT_OUTPUT_MAX_BUFFER_BYTES } from "../../../../scripts/git-output-limit.cjs";
 import { existsSync, readFileSync } from "node:fs";
 import path from "node:path";
 import ts from "typescript";
+import { mentionsLazySchema } from "./lazy-schema-thunk-rules-scanner";
 
 export type ForceCheck = {
   readonly refused: boolean;
@@ -126,7 +128,7 @@ export function listLazySchemaModules(
       "--",
       ...pathspecs,
     ],
-    { cwd: gitRoot, encoding: "utf8" },
+    { maxBuffer: GIT_OUTPUT_MAX_BUFFER_BYTES, cwd: gitRoot, encoding: "utf8" },
   );
   const files: string[] = [];
   for (const relative of listing.split("\0")) {
@@ -141,7 +143,7 @@ export function listLazySchemaModules(
     if (!existsSync(full)) {
       continue;
     }
-    if (!readFileSync(full, "utf8").includes("lazySchema(")) {
+    if (!mentionsLazySchema(readFileSync(full, "utf8"))) {
       continue;
     }
     files.push(full);

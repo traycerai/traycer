@@ -58,14 +58,20 @@ import {
   type SlackAppReadResult,
   type SlackAppWriteResult,
 } from "@traycer-clients/shared/host-client/slack-app";
-import type { SlackAppRegisterRequest } from "@traycer/protocol/host/slack-app";
+import type {
+  SlackAppDmsRequest,
+  SlackAppRegisterRequest,
+} from "@traycer/protocol/host/slack-app";
+import {
+  TEAM_HOST_UNAVAILABLE_IN_STAGING,
+  type TeamHostInstallTokenResult,
+} from "@traycer-clients/shared/host-client/team-host";
 import type {
   VoiceAvailabilityFetchResult,
   VoiceSessionEndFetchResult,
   VoiceSessionMintFetchResult,
   VoiceSessionMintRequest,
 } from "@traycer-clients/shared/host-client/voice-sessions";
-import type { VoiceRouteFetchResult } from "@traycer-clients/shared/host-client/voice-router";
 import type {
   EnvironmentProvidersFetchResult,
   SandboxGrantsFetchResult,
@@ -121,6 +127,10 @@ import {
   type TerminalCloudVerdictLoss,
   type SignedOutCause,
 } from "@/stores/auth/auth-store";
+import {
+  readVerifiedProfile,
+  useVerifiedProfileCacheStore,
+} from "@/stores/auth/verified-profile-cache-store";
 import { normalizeAvatarUrl } from "@/lib/avatar-url";
 import {
   browserChatPartCacheStorage,
@@ -1315,10 +1325,7 @@ export class AuthService {
       // else on this path ever corrected them - `commitSubscriptionStatus`
       // above writes the entitlement alone.
       this.reprojectSameUserIdentity(outcome.user);
-      void writeProvisionalSessionSnapshot(
-        this.runnerHost.secureStorage,
-        outcome.user,
-      );
+      this.cacheValidatedIdentity(outcome.user);
       return;
     }
 
@@ -3235,27 +3242,6 @@ export class AuthService {
     return this.runnerHost.endVoiceSession(bearer, voiceSessionId);
   }
 
-  /**
-   * The voice router's one model call, with the cloud bearer, billed to the
-   * person's own account. A shell that cannot reach traycer-server reads as
-   * a transport failure: the voice asks the person to repeat.
-   */
-  async routeVoiceUtterance(
-    requestBody: string,
-  ): Promise<VoiceRouteFetchResult> {
-    if (this.sandboxControlUnavailableReason() !== null) {
-      return {
-        kind: "network-error",
-        detail: "no server for the voice router",
-      };
-    }
-    const bearer = this.cloudBearer();
-    if (bearer === null) {
-      return { kind: "unauthorized" };
-    }
-    return this.runnerHost.routeVoiceUtterance(bearer, requestBody);
-  }
-
   async createSandbox(
     request: SandboxCreateRequest,
   ): Promise<SandboxCreateFetchResult> {
@@ -3421,6 +3407,36 @@ export class AuthService {
     const bearer = this.cloudBearer();
     if (bearer === null) return { kind: "unauthorized" };
     return this.runnerHost.disconnectSlackApp(bearer, botId);
+  }
+
+  async setSlackAppDms(
+    request: SlackAppDmsRequest,
+  ): Promise<SlackAppWriteResult> {
+    const refusal = this.slackAppRefusal();
+    if (refusal !== null) return refusal;
+    const bearer = this.cloudBearer();
+    if (bearer === null) return { kind: "unauthorized" };
+    return this.runnerHost.setSlackAppDms(bearer, request);
+  }
+
+  /**
+   * The one-time install token for a team environment's bot host, on
+   * traycer-server with the person's bearer. A build that cannot reach
+   * traycer-server at all (the Slack floor's signal) answers `unavailable`
+   * without a request; signed out, `unauthorized`.
+   */
+  async mintTeamHostInstallToken(
+    environmentId: string,
+  ): Promise<TeamHostInstallTokenResult> {
+    if (this.runnerHost.sandboxControlUnavailableReason !== null) {
+      return {
+        kind: "unavailable",
+        reason: TEAM_HOST_UNAVAILABLE_IN_STAGING,
+      };
+    }
+    const bearer = this.cloudBearer();
+    if (bearer === null) return { kind: "unauthorized" };
+    return this.runnerHost.mintTeamHostInstallToken(bearer, environmentId);
   }
 
   /** Explicit invitation access when the serving tier predates the host methods. */
@@ -3629,10 +3645,7 @@ export class AuthService {
         // `reprojectSameUserIdentity`'s notion of "changed" would couple the
         // snapshot's contents to a comparison over the PROJECTED fields, which
         // is a strict subset of what the snapshot stores.
-        void writeProvisionalSessionSnapshot(
-          this.runnerHost.secureStorage,
-          outcome.user,
-        );
+        this.cacheValidatedIdentity(outcome.user);
       }
       return outcome;
     }
@@ -5035,7 +5048,21 @@ export class AuthService {
     // snapshot is current" cannot drift apart. Not awaited and unable to
     // fail - the write swallows its own errors by contract, and the cost of
     // losing one is a boot exactly as slow as it was before.
+    this.cacheValidatedIdentity(user);
+  }
+
+  /**
+   * What a validated identity leaves behind for a later launch: the snapshot
+   * the provisional apply paints with, and the picture and name a restored
+   * session the file cannot name falls back on.
+   */
+  private cacheValidatedIdentity(user: AuthenticatedUser): void {
     void writeProvisionalSessionSnapshot(this.runnerHost.secureStorage, user);
+    const profile = this.profileFromUser(user);
+    useVerifiedProfileCacheStore.getState().remember(profile.userId, {
+      avatarUrl: profile.avatarUrl ?? null,
+      displayName: profile.userName,
+    });
   }
 
   /**
@@ -5228,6 +5255,13 @@ export class AuthService {
     this.setDeviceProgress(null);
     this.setLinkLoginProgress(null);
     this.refreshScheduler.stop();
+    // `retired` means the identity is gone from this machine, so its picture
+    // and name go with it. `attempt-failed` leaves the account where it was.
+    if (cause === "retired" && this.currentProfile !== null) {
+      useVerifiedProfileCacheStore
+        .getState()
+        .forget(this.currentProfile.userId);
+    }
     // COMMIT BEFORE EMIT (see `applySignedIn`). `signOut()` announces the
     // null context synchronously and the runtime refreshes the directory
     // inside that announcement; a bearer still readable here would be sent on
@@ -5801,13 +5835,17 @@ export class AuthService {
     ) {
       return false;
     }
+    // The credentials file carries no avatar, and may carry no name: both come
+    // from the last time this account was verified here, when it has been.
+    const verified = readVerifiedProfile(session.user.id);
     const profile: AuthProfile = {
       userId: session.user.id,
-      userName: session.user.name,
+      userName:
+        session.user.name.length > 0
+          ? session.user.name
+          : (verified?.displayName ?? session.user.name),
       email: session.user.email,
-      // The credentials file carries no avatar. The header falls back to
-      // initials, which `computeInitials` derives from the name we do have.
-      avatarUrl: null,
+      avatarUrl: verified?.avatarUrl ?? null,
     };
     const identity = {
       userId: session.user.id,

@@ -62,6 +62,12 @@ import {
   type NotificationChimeSound,
   type NotificationChimeSoundsByEvent,
 } from "@/lib/notifications/notification-chime";
+import {
+  DEFAULT_MIX_DIRECTOR,
+  isMixDirectorId,
+  type MixDirectorId,
+} from "@/lib/soundtrack/directors";
+import { MIX_TUNING } from "@/lib/soundtrack/mix-tuning";
 import type { DefaultOpenTarget } from "@/lib/editor/editor-menu-catalog";
 import type { TilePlacementCategory } from "@/lib/canvas/tile-open/intent";
 export type ThemeMode = "system" | "light" | "dark";
@@ -352,6 +358,26 @@ export interface SettingsState {
   chatDockPanelHeight: number;
   /** App-wide audible cues selected for each notification event type. */
   notificationChimeSounds: NotificationChimeSoundsByEvent;
+  /**
+   * Whether the person wants the soundtrack on. A window's session follows it,
+   * but not always at once: a launch or a sign-in opens the audio device on the
+   * next gesture (`SoundtrackWarmupBridge`), and a sign-out ends the session and
+   * leaves this set.
+   */
+  soundtrackEnabled: boolean;
+  soundtrackDirector: MixDirectorId;
+  /** A gain from 0 to 1. */
+  soundtrackVolume: number;
+  /** Whether a task's status row carries previous, pause and next. */
+  soundtrackPlaybackControls: boolean;
+  /**
+   * Whether the person has paused the music, across windows and restarts: a
+   * launch with it set opens nothing at the first gesture, and Play does. It
+   * can only be set where those controls can clear it, so turning Music on or
+   * the controls off clears it too, and storage restores it only with them on.
+   * The position in a track is not kept.
+   */
+  soundtrackPaused: boolean;
   setTheme: (theme: ThemeMode) => void;
   setThemePreset: (preset: ThemePreset) => void;
   /**
@@ -406,6 +432,11 @@ export interface SettingsState {
     eventType: NotificationChimeEventType,
     value: NotificationChimeSound,
   ) => void;
+  setSoundtrackEnabled: (value: boolean) => void;
+  setSoundtrackDirector: (value: MixDirectorId) => void;
+  setSoundtrackVolume: (value: number) => void;
+  setSoundtrackPlaybackControls: (value: boolean) => void;
+  setSoundtrackPaused: (value: boolean) => void;
 }
 
 type PersistedSettingsState = Pick<
@@ -450,6 +481,11 @@ type PersistedSettingsState = Pick<
   | "workspaceFileWordWrap"
   | "chatDockPanelHeight"
   | "notificationChimeSounds"
+  | "soundtrackEnabled"
+  | "soundtrackDirector"
+  | "soundtrackVolume"
+  | "soundtrackPlaybackControls"
+  | "soundtrackPaused"
 >;
 
 type SetFn = (
@@ -484,6 +520,10 @@ function clampUiFontSize(value: number): number {
 
 function clampCodeFontSize(value: number): number {
   return Math.max(10, Math.min(24, Math.round(value)));
+}
+
+function clampSoundtrackVolume(value: number): number {
+  return Math.max(0, Math.min(1, value));
 }
 
 function partializeSettingsState(state: SettingsState): PersistedSettingsState {
@@ -528,6 +568,11 @@ function partializeSettingsState(state: SettingsState): PersistedSettingsState {
     workspaceFileWordWrap: state.workspaceFileWordWrap,
     chatDockPanelHeight: state.chatDockPanelHeight,
     notificationChimeSounds: state.notificationChimeSounds,
+    soundtrackEnabled: state.soundtrackEnabled,
+    soundtrackDirector: state.soundtrackDirector,
+    soundtrackVolume: state.soundtrackVolume,
+    soundtrackPlaybackControls: state.soundtrackPlaybackControls,
+    soundtrackPaused: state.soundtrackPaused,
   };
 }
 
@@ -578,6 +623,11 @@ export const useSettingsStore = create<SettingsState>()(
       workspaceFileWordWrap: null,
       chatDockPanelHeight: CHAT_DOCK_PANEL_DEFAULT_HEIGHT_RATIO,
       notificationChimeSounds: DEFAULT_NOTIFICATION_CHIME_SOUNDS,
+      soundtrackEnabled: false,
+      soundtrackDirector: DEFAULT_MIX_DIRECTOR,
+      soundtrackVolume: MIX_TUNING.volume.initial,
+      soundtrackPlaybackControls: false,
+      soundtrackPaused: false,
       setTheme: makeSetter(set, "theme"),
       setThemePreset: (themePreset) => {
         if (useThemeLibraryStore.getState().clearSelection())
@@ -712,6 +762,26 @@ export const useSettingsStore = create<SettingsState>()(
               },
         );
       },
+      setSoundtrackEnabled: (value) => {
+        set((s) => ({
+          soundtrackEnabled: value,
+          soundtrackPaused: !value && s.soundtrackPaused,
+        }));
+      },
+      setSoundtrackDirector: makeSetter(set, "soundtrackDirector"),
+      setSoundtrackPlaybackControls: (value) => {
+        set((s) => ({
+          soundtrackPlaybackControls: value,
+          soundtrackPaused: value && s.soundtrackPaused,
+        }));
+      },
+      setSoundtrackPaused: makeSetter(set, "soundtrackPaused"),
+      setSoundtrackVolume: (value) => {
+        const next = clampSoundtrackVolume(value);
+        set((s) =>
+          s.soundtrackVolume === next ? s : { soundtrackVolume: next },
+        );
+      },
     }),
     {
       ...basePersistOptions(persistKey(STORE_KEYS.settings)),
@@ -798,6 +868,20 @@ export const useSettingsStore = create<SettingsState>()(
             persisted.notificationChimeSounds,
             persisted.notificationChimeSound,
           ),
+          soundtrackEnabled: persisted.soundtrackEnabled === true,
+          soundtrackDirector: isMixDirectorId(persisted.soundtrackDirector)
+            ? persisted.soundtrackDirector
+            : DEFAULT_MIX_DIRECTOR,
+          soundtrackVolume:
+            typeof persisted.soundtrackVolume === "number" &&
+            Number.isFinite(persisted.soundtrackVolume)
+              ? clampSoundtrackVolume(persisted.soundtrackVolume)
+              : MIX_TUNING.volume.initial,
+          soundtrackPlaybackControls:
+            persisted.soundtrackPlaybackControls === true,
+          soundtrackPaused:
+            persisted.soundtrackPlaybackControls === true &&
+            persisted.soundtrackPaused === true,
         };
       },
     },

@@ -719,7 +719,7 @@ export function openTileInBackgroundTab(
  * `mode` mirrors the three whole-canvas openers so one pane-scoped call
  * covers all of them: `permanent` is a pinned tab, `preview` also claims the
  * pane's preview slot (evicting and GC-ing the previous preview, like
- * `openTile(..., preview: true)`), and `background` only adds membership -
+ * `openTile(..., preview: true, "user")`), and `background` only adds membership -
  * `activeTabId` / `activePaneId` are untouched, like
  * {@link openTileInBackgroundTab}.
  *
@@ -824,6 +824,48 @@ export function openTileInPane(
         ? tilesWithNode
         : withoutTiles(tilesWithNode, [inserted.removedPreviewInstanceId]),
   };
+}
+
+/**
+ * Take a tile that nothing shows off the canvas, the way a preview's replacement
+ * does: membership and payload go, and nothing about the tile's content is
+ * asked to close (a terminal keeps running). Activation is not touched, so this
+ * is for a tile that is not its pane's active one.
+ */
+export function evictTileWithoutClosing(
+  state: EpicCanvasState,
+  instanceId: string,
+): EpicCanvasState {
+  if (state.root === null) return state;
+  const pane = collectPanes(state.root).find((candidate) =>
+    candidate.tabInstanceIds.includes(instanceId),
+  );
+  if (pane === undefined) return state;
+  const removed = removeTabAtIndexPruneOnly(
+    pane,
+    pane.tabInstanceIds.indexOf(instanceId),
+  );
+  return {
+    ...state,
+    root: replacePane(state.root, pane.id, () => removed.pane),
+    tilesByInstanceId: withoutTiles(state.tilesByInstanceId, [instanceId]),
+  };
+}
+
+/**
+ * The tile keeps its place whatever opens next: a pane's preview is what the next
+ * preview there evicts, so a tile that is held some other way gives the slot up.
+ */
+export function promotePreviewTile(
+  state: EpicCanvasState,
+  instanceId: string,
+): EpicCanvasState {
+  if (state.root === null) return state;
+  const pane = collectPanes(state.root).find(
+    (candidate) => candidate.previewTabId === instanceId,
+  );
+  if (pane === undefined) return state;
+  return promotePreview(state, pane.id);
 }
 
 /** Open the picker without adding a redundant tab to an empty pane. */

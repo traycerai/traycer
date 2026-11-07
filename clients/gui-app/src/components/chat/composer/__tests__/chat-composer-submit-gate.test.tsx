@@ -1,6 +1,14 @@
 import { createRef, type ReactNode, type RefObject } from "react";
 import { act, cleanup, renderHook } from "@testing-library/react";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  expect,
+  it,
+  type Mock,
+  vi,
+} from "vitest";
 import { toast } from "sonner";
 import type {
   ChatQueueDeliveryPolicy,
@@ -122,7 +130,6 @@ describe("chat-composer submit gate (path resolution)", () => {
           onSubmitMessage,
           onSideChat: null,
           targetHostId: null,
-          restingSandbox: null,
           queueEditTargetId: null,
           // The gate is off in these fixtures: they predate it and assert the
           // inline behaviour, which is what `false` preserves exactly.
@@ -300,6 +307,106 @@ describe("chat-composer submit gate (editor readiness)", () => {
 });
 
 /**
+ * A tile that asks the person first (the "Send in the new folder?" dialog)
+ * answers the submit with a promise. The text stays while the dialog is open
+ * and clears only on a confirmed send - the pre-fix path dispatched the
+ * confirmed send with no clear at all, leaving the queued message's text in
+ * the composer as a duplicate.
+ */
+describe("chat-composer submit deferred acceptance", () => {
+  function mountDeferred(taskId: string): {
+    readonly submit: () => void;
+    readonly settle: (accepted: boolean) => Promise<void>;
+    readonly clear: Mock<() => undefined>;
+  } {
+    const clear = vi.fn(() => undefined);
+    const editor = controllableEditorHandle({
+      content: DIRTY,
+      ready: true,
+      clear,
+    });
+    const editorRef = createRef<ComposerPromptEditorHandle | null>();
+    editorRef.current = editor.handle;
+    let resolveAcceptance: (accepted: boolean) => void = () => undefined;
+    const onSubmitMessage = (): Promise<boolean> =>
+      new Promise<boolean>((resolve) => {
+        resolveAcceptance = resolve;
+      });
+    act(() => {
+      useComposerDraftStore.getState().setSnapshot(taskId, DIRTY, null);
+    });
+    const { result } = mountSubmitHook({ taskId, editorRef, onSubmitMessage });
+    return {
+      submit: () => {
+        act(() => {
+          result.current.submitDraft("enter");
+        });
+      },
+      settle: async (accepted) => {
+        await act(async () => {
+          resolveAcceptance(accepted);
+          await Promise.resolve();
+        });
+      },
+      clear,
+    };
+  }
+
+  it("keeps the draft while the answer is pending and clears it on a confirmed send", async () => {
+    const taskId = "task-deferred-confirmed";
+    const deferred = mountDeferred(taskId);
+
+    deferred.submit();
+    expect(deferred.clear).not.toHaveBeenCalled();
+    expect(useComposerDraftStore.getState().drafts[taskId]?.content).toEqual(
+      DIRTY,
+    );
+
+    await deferred.settle(true);
+    expect(deferred.clear).toHaveBeenCalledTimes(1);
+    expect(useComposerDraftStore.getState().drafts[taskId]?.content).toEqual(
+      EMPTY_DOC,
+    );
+  });
+
+  it("leaves a draft that was replaced while the dialog was open", async () => {
+    const taskId = "task-deferred-replaced";
+    const deferred = mountDeferred(taskId);
+    const newer: JsonContent = {
+      type: "doc",
+      content: [
+        { type: "paragraph", content: [{ type: "text", text: "newer" }] },
+      ],
+    };
+
+    deferred.submit();
+    // Another window's mirror lands a different draft under the dialog.
+    act(() => {
+      useComposerDraftStore.getState().setSnapshot(taskId, newer, null);
+    });
+    await deferred.settle(true);
+
+    expect(deferred.clear).not.toHaveBeenCalled();
+    expect(useComposerDraftStore.getState().drafts[taskId]?.content).toEqual(
+      newer,
+    );
+  });
+
+  it("keeps the draft when the dialog is dismissed", async () => {
+    const taskId = "task-deferred-dismissed";
+    const deferred = mountDeferred(taskId);
+
+    deferred.submit();
+    await deferred.settle(false);
+
+    expect(deferred.clear).not.toHaveBeenCalled();
+    expect(useComposerDraftStore.getState().drafts[taskId]?.content).toEqual(
+      DIRTY,
+    );
+  });
+});
+
+/**
  * Root cause 2: multiple composers share one draft-store entry per taskId.
  * Submit clears only the submitting editor's local Tiptap doc via clear();
  * siblings must observe clearDraft's resetEpoch and syncContent(empty).
@@ -430,7 +537,9 @@ describe("chat-composer submit gate (paused send diagnostics)", () => {
     readonly sendDisabled: boolean;
     readonly sendDisabledHint: string | null;
     readonly connectionStatus: StreamConnectionStatus | null;
-    readonly onSubmitMessage: (input: ChatComposerSubmitInput) => boolean;
+    readonly onSubmitMessage: (
+      input: ChatComposerSubmitInput,
+    ) => boolean | Promise<boolean>;
   }) {
     const editorRef = createRef<ComposerPromptEditorHandle | null>();
     editorRef.current = editorHandle({ content: DIRTY, ready: true });
@@ -764,7 +873,9 @@ describe("chat-composer submit gate (paused send notice)", () => {
 function mountSubmitHook(args: {
   readonly taskId: string;
   readonly editorRef: RefObject<ComposerPromptEditorHandle | null>;
-  readonly onSubmitMessage: (input: ChatComposerSubmitInput) => boolean;
+  readonly onSubmitMessage: (
+    input: ChatComposerSubmitInput,
+  ) => boolean | Promise<boolean>;
 }) {
   return mountSubmitHookWith({
     ...args,
@@ -779,7 +890,9 @@ function mountSubmitHook(args: {
 function mountSubmitHookWith(args: {
   readonly taskId: string;
   readonly editorRef: RefObject<ComposerPromptEditorHandle | null>;
-  readonly onSubmitMessage: (input: ChatComposerSubmitInput) => boolean;
+  readonly onSubmitMessage: (
+    input: ChatComposerSubmitInput,
+  ) => boolean | Promise<boolean>;
   readonly sendDisabled: boolean;
   readonly sendDisabledHint: string | null;
   readonly modelSlug: string;
@@ -830,7 +943,6 @@ function mountSubmitHookWith(args: {
         onSubmitMessage: args.onSubmitMessage,
         onSideChat: null,
         targetHostId: args.targetHostId,
-        restingSandbox: null,
         queueEditTargetId: null,
         // The gate is off in these fixtures: they predate it and assert the
         // inline behaviour, which is what `false` preserves exactly.

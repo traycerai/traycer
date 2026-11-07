@@ -41,7 +41,12 @@
     },
     "test": {
       "cache": true,
-      "inputs": ["default", "^production", "sharedGlobals"]
+      "inputs": [
+        "default",
+        "^production",
+        "sharedGlobals",
+        "{workspaceRoot}/scripts/test-worker-environment.ts"
+      ]
     },
     "format": {
       "cache": true,
@@ -86,7 +91,8 @@
     ],
     "sharedGlobals": [
       "{workspaceRoot}/package.json",
-      "{workspaceRoot}/scripts/tsrs.mjs"
+      "{workspaceRoot}/scripts/tsrs.mjs",
+      "{workspaceRoot}/scripts/git-output-limit.cjs"
     ]
   },
   "analytics": false

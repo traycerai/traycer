@@ -11,6 +11,7 @@
 import type { ReactNode } from "react";
 import { act, cleanup, render, screen, within } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import { BotTestRunnerHost } from "@/components/bots/__tests__/bot-test-runner-host";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { HostRpcError } from "@traycer-clients/shared/host-transport/host-messenger";
@@ -48,6 +49,9 @@ const mocks = vi.hoisted(() => ({
   },
 }));
 
+vi.mock("@/hooks/host/use-host-directory-entry", () => ({
+  useHostDirectoryEntry: () => null,
+}));
 // The thread panel reads its post's text from the channel's session; none is
 // loaded here.
 vi.mock("@/lib/registries/chat-session-registry", async (importOriginal) => ({
@@ -68,6 +72,7 @@ vi.mock("@/hooks/host/use-host-supports-method", async (importOriginal) => ({
 vi.mock("@/components/epic-tabs/pane-visibility-context", () => ({
   usePaneVisible: () => true,
   usePaneFocused: () => true,
+  usePaneFocusProbe: () => () => true,
 }));
 vi.mock("@/hooks/bots/use-bot-conversation-list-query", () => ({
   useBotConversationListQuery: () => ({
@@ -156,7 +161,11 @@ vi.mock("@/hooks/bots/use-bot-activity", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/hooks/bots/use-bot-activity")>()),
   useBotActivity: () => mocks.state.activity,
 }));
-vi.mock("@/components/bots/bot-chat-transcript", () => ({
+vi.mock("@/components/bots/bot-chat-transcript", async (importOriginal) => ({
+  ...(await importOriginal<
+    typeof import("@/components/bots/bot-chat-transcript")
+  >()),
+  BotTranscriptImageScope: (props: { children: ReactNode }) => props.children,
   BotChatTranscript: (props: { surface: BotTranscriptSurface | null }) => {
     const { surface } = props;
     if (surface === null || surface.chooseOption === null) return null;
@@ -182,6 +191,12 @@ import { BotChannelView } from "@/components/bots/bot-channel-view";
 import type { BotOpenThread } from "@/stores/bots/bot-open-thread-store";
 import { useBotDraftsStore } from "@/stores/bots/bot-drafts-store";
 import type { BotMemberResolver } from "@/lib/bots/bot-member-names";
+import {
+  boxInput,
+  boxWithin,
+  textOf,
+  typeInto,
+} from "@/components/bots/__tests__/bot-box-test-support";
 
 const BOT_ID = "bot_01ARZ3NDEKTSV4RRFFQ69G5FAV";
 const HOST_ID = "host-bound";
@@ -223,39 +238,42 @@ const OPEN_UNOPENED_THREAD: BotOpenThread = {
   sent: null,
 };
 
-const onOpenActivity = vi.fn<() => void>();
-
 function mount(openThread: BotOpenThread | null): void {
   render(
     <QueryClientProvider client={new QueryClient()}>
-      <TooltipProvider>
-        <ChatExpansionTestProviders tileInstanceId="tile-1">
-          <BotChannelView
-            botId={BOT_ID}
-            hostId={HOST_ID}
-            boundHostId={HOST_ID}
-            boundHostEpoch={1}
-            botTitle="Release Bot"
-            directive={null}
-            appConversationChatId={CHANNEL_ID}
-            trunkChatId="trunk-chat"
-            onOpenTurn={vi.fn()}
-            onOpenSession={vi.fn()}
-            landOn={null}
-            openMemory={null}
-            onOpenMemory={vi.fn()}
-            environmentId="env-1"
-            botNameOf={() => null}
-            resolveMember={resolveMember}
-            tasks={[]}
-            surfaceActions={null}
-            openThread={openThread}
-            onOpenThread={vi.fn()}
-            onOpenActivity={onOpenActivity}
-            setupHistory={null}
-          />
-        </ChatExpansionTestProviders>
-      </TooltipProvider>
+      <BotTestRunnerHost>
+        <TooltipProvider>
+          <ChatExpansionTestProviders tileInstanceId="tile-1">
+            <BotChannelView
+              tiles={null}
+              botId={BOT_ID}
+              hostId={HOST_ID}
+              boundHostId={HOST_ID}
+              boundHostEpoch={1}
+              botTitle="Release Bot"
+              directive={null}
+              appConversationChatId={CHANNEL_ID}
+              trunkChatId="trunk-chat"
+              onOpenTurn={vi.fn()}
+              onOpenSession={vi.fn()}
+              landOn={null}
+              openMemory={null}
+              onOpenMemory={vi.fn()}
+              environmentId="env-1"
+              botNameOf={() => null}
+              environmentBots={null}
+              openExchange={null}
+              exchangeRail={{ open: () => undefined, close: () => undefined }}
+              resolveMember={resolveMember}
+              tasks={[]}
+              surfaceActions={null}
+              openThread={openThread}
+              onOpenThread={vi.fn()}
+              setupHistory={null}
+            />
+          </ChatExpansionTestProviders>
+        </TooltipProvider>
+      </BotTestRunnerHost>
     </QueryClientProvider>,
   );
 }
@@ -279,15 +297,13 @@ async function settle(outcome: "succeed" | "fail"): Promise<void> {
   });
 }
 
-async function typeAndEnter(box: HTMLElement, text: string): Promise<void> {
-  const user = userEvent.setup();
-  await user.type(box, `${text}{Enter}`);
+function typeAndEnter(box: HTMLElement, text: string): void {
+  typeInto(box, `${text}{Enter}`);
 }
 
 beforeEach(() => {
   mocks.sends.length = 0;
   mocks.toastFromHostError.mockClear();
-  onOpenActivity.mockClear();
   mocks.state.threads = [];
   mocks.state.activity = null;
   vi.spyOn(document, "hasFocus").mockReturnValue(true);
@@ -303,21 +319,22 @@ afterEach(() => {
 describe("<BotChannelView tiles={null} /> a message the host refuses", () => {
   it("says so in the channel with the text kept, and a second Enter sends it again as a plain send", async () => {
     mount(null);
-    const box = screen.getByRole("textbox", { name: "Message Release Bot" });
-    await typeAndEnter(box, "Ship it");
+    const box = boxInput("Message Release Bot");
+    typeAndEnter(box, "Ship it");
     expect(mocks.sends).toHaveLength(1);
 
     await settle("fail");
 
     const notice = screen.getByTestId("bot-channel-composer-send-failed");
     expect(notice.getAttribute("role")).toBe("alert");
+    expect(notice.className).toContain("text-destructive");
     expect(notice.textContent).toBe(SEND_FAILED);
-    expect((box as HTMLTextAreaElement).value).toBe("Ship it");
+    expect(textOf(box)).toBe("Ship it");
     expect(mocks.toastFromHostError).not.toHaveBeenCalled();
 
     const user = userEvent.setup();
     await user.click(box);
-    await user.keyboard("{Enter}");
+    typeInto(box, "{Enter}");
 
     expect(mocks.sends).toHaveLength(2);
     expect(sendAt(1).variables).toEqual(sendAt(0).variables);
@@ -326,53 +343,46 @@ describe("<BotChannelView tiles={null} /> a message the host refuses", () => {
     await settle("succeed");
 
     expect(screen.queryByTestId("bot-channel-composer-send-failed")).toBeNull();
-    expect((box as HTMLTextAreaElement).value).toBe("");
+    expect(textOf(box)).toBe("");
   });
 
   it("takes the notice away when the person edits the text", async () => {
     mount(null);
-    const box = screen.getByRole("textbox", { name: "Message Release Bot" });
-    await typeAndEnter(box, "Ship it");
+    const box = boxInput("Message Release Bot");
+    typeAndEnter(box, "Ship it");
     await settle("fail");
     expect(screen.getByTestId("bot-channel-composer-send-failed")).toBeTruthy();
 
-    const user = userEvent.setup();
-    await user.type(box, "!");
+    typeInto(box, "!");
 
     expect(screen.queryByTestId("bot-channel-composer-send-failed")).toBeNull();
-    expect((box as HTMLTextAreaElement).value).toBe("Ship it!");
+    expect(textOf(box)).toBe("Ship it!");
   });
 });
 
 describe("<BotChannelView tiles={null} /> a channel message left unsent when the pane goes", () => {
-  it("shows the typed text again when the channel is shown again", async () => {
+  it("shows the typed text again when the channel is shown again", () => {
     mount(null);
-    const user = userEvent.setup();
-    await user.type(
-      screen.getByRole("textbox", { name: "Message Release Bot" }),
-      "Ship it",
-    );
+    typeInto(boxInput("Message Release Bot"), "Ship it");
 
     cleanup();
     mount(null);
 
-    const box = screen.getByRole("textbox", { name: "Message Release Bot" });
-    expect((box as HTMLTextAreaElement).value).toBe("Ship it");
+    const box = boxInput("Message Release Bot");
+    expect(textOf(box)).toBe("Ship it");
   });
 
   it("keeps nothing of a message once the host has taken it", async () => {
     mount(null);
-    const box = screen.getByRole("textbox", { name: "Message Release Bot" });
-    await typeAndEnter(box, "Ship it");
+    const box = boxInput("Message Release Bot");
+    typeAndEnter(box, "Ship it");
     await settle("succeed");
 
     cleanup();
     mount(null);
 
-    const remounted = screen.getByRole("textbox", {
-      name: "Message Release Bot",
-    });
-    expect((remounted as HTMLTextAreaElement).value).toBe("");
+    const remounted = boxInput("Message Release Bot");
+    expect(textOf(remounted)).toBe("");
     expect(
       useBotDraftsStore.getState().threadBoxes[BOT_ID]?.[CHANNEL_ID],
     ).toBeUndefined();
@@ -418,11 +428,9 @@ describe("<BotChannelView tiles={null} /> a thread's reply the host refuses", ()
   it("says so in the thread's dock with the text kept, and leaves the channel's box alone", async () => {
     mount(OPEN_LISTED_THREAD);
     const panel = screen.getByTestId("bot-thread-panel");
-    const box = within(panel).getByRole("textbox", {
-      name: "Reply in the thread",
-    });
+    const box = boxWithin(panel, "Reply in the thread");
 
-    await typeAndEnter(box, "Not yet");
+    typeAndEnter(box, "Not yet");
     expect(lastSend().variables).toEqual({
       botId: BOT_ID,
       conversationId: CHANNEL_ID,
@@ -438,7 +446,7 @@ describe("<BotChannelView tiles={null} /> a thread's reply the host refuses", ()
     expect(
       within(panel).getByTestId("bot-thread-composer-send-failed").textContent,
     ).toBe(SEND_FAILED);
-    expect((box as HTMLTextAreaElement).value).toBe("Not yet");
+    expect(textOf(box)).toBe("Not yet");
     expect(screen.queryByTestId("bot-channel-composer-send-failed")).toBeNull();
     expect(mocks.toastFromHostError).not.toHaveBeenCalled();
   });
@@ -467,19 +475,19 @@ describe("<BotChannelView tiles={null} /> a thread's reply the host refuses", ()
 
   it("says a refused first reply in a thread nobody has started the same way", async () => {
     mount(OPEN_UNOPENED_THREAD);
-    const box = within(screen.getByTestId("bot-thread-panel")).getByRole(
-      "textbox",
-      { name: "Reply in a new thread" },
+    const box = boxWithin(
+      screen.getByTestId("bot-thread-panel"),
+      "Reply in a new thread",
     );
 
-    await typeAndEnter(box, "First");
+    typeAndEnter(box, "First");
     expect(lastSend().variables.announcementId).toBe("question-1");
     await settle("fail");
 
     expect(
       screen.getByTestId("bot-thread-composer-send-failed").textContent,
     ).toBe(SEND_FAILED);
-    expect((box as HTMLTextAreaElement).value).toBe("First");
+    expect(textOf(box)).toBe("First");
     expect(mocks.toastFromHostError).not.toHaveBeenCalled();
   });
 });

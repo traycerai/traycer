@@ -307,7 +307,6 @@ function readyHits(
   return {
     kind: "ready",
     messages: chatIds.map(messageMatch),
-    indexState: "complete",
     expansionBase: {
       query: "matching",
       scope: { kind: "all-accessible-tasks" },

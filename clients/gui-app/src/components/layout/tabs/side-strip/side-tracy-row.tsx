@@ -81,6 +81,7 @@ export function SideTracyRow(props: {
           className="me-4"
           unreadCount={signals.unreadCount}
           muted={signals.muted}
+          ground="strip"
         />
       }
       // The chip clips what overhangs it, so the tile's count is the row's
@@ -92,6 +93,7 @@ export function SideTracyRow(props: {
             className={undefined}
             unreadCount={null}
             muted={signals.muted}
+            ground="strip"
           />
         ),
       }}

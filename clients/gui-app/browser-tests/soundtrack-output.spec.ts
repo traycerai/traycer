@@ -1,6 +1,6 @@
 import { expect, test, type Page } from "@playwright/test";
 
-import { fixture } from "./support/fixtures.ts";
+import { fixture, nextFrames } from "./support/fixtures.ts";
 
 // What the soundtrack's Web Audio port renders when a voice or a gain is cut or
 // turned round: a click is one wrong sample, and jsdom renders none. Every
@@ -289,4 +289,149 @@ test("a dim ramp turned round goes on from where the cutoff had got to", async (
     expect(beforeTurn, label).toBeLessThan(0.3);
     expect(afterTurn / beforeTurn, label).toBeLessThan(1.3);
   }
+});
+
+interface LevelRequest {
+  readonly seconds: number;
+  readonly volume: number;
+  readonly steps: readonly {
+    readonly kind: "volume" | "duck";
+    readonly at: number;
+    readonly value: number;
+  }[];
+  readonly readAt: readonly number[];
+}
+
+interface LevelRendered {
+  readonly readings: readonly number[];
+  readonly biggestStep: number;
+}
+
+interface DuckTuning {
+  readonly gain: number;
+  readonly attackSeconds: number;
+  readonly releaseSeconds: number;
+}
+
+function renderLevel(
+  page: Page,
+  request: LevelRequest,
+): Promise<LevelRendered> {
+  return page.evaluate<LevelRendered>(
+    `window.__soundtrackOutputProbe.renderLevel(${JSON.stringify(request)})`,
+  );
+}
+
+function duckTuning(page: Page): Promise<DuckTuning> {
+  return page.evaluate<DuckTuning>("window.__soundtrackOutputProbe.duckTuning");
+}
+
+// The person's volume and a chime's duck are two gains in a row: the volume
+// scales the music, the duck drops it under a chime, and neither disturbs the
+// other. A rendered sample is the product of both.
+test("the level is the volume, ducked under a chime and back once it is over", async ({
+  page,
+}) => {
+  const { gain, attackSeconds, releaseSeconds } = await duckTuning(page);
+  const duckAt = 0.5;
+  const chimeSeconds = 0.4;
+  const { readings, biggestStep } = await renderLevel(page, {
+    seconds: 3,
+    volume: 0.6,
+    steps: [{ kind: "duck", at: duckAt, value: chimeSeconds }],
+    readAt: [
+      0.3,
+      duckAt + attackSeconds + 0.05,
+      duckAt + chimeSeconds - 0.02,
+      duckAt + chimeSeconds + releaseSeconds + 0.1,
+    ],
+  });
+  const [before, held, endOfChime, after] = readings;
+  expect(before).toBeCloseTo(0.6, 3);
+  expect(held).toBeCloseTo(0.6 * gain, 3);
+  expect(endOfChime).toBeCloseTo(0.6 * gain, 3);
+  expect(after).toBeCloseTo(0.6, 3);
+  // Down over its attack and back over its release, never a jump.
+  expect(biggestStep).toBeLessThan(0.002);
+});
+
+test("a volume moved during a chime's duck leaves the duck alone", async ({
+  page,
+}) => {
+  const { gain, attackSeconds, releaseSeconds } = await duckTuning(page);
+  const duckAt = 0.5;
+  const chimeSeconds = 0.6;
+  const volumeAt = duckAt + 0.3;
+  const { readings, biggestStep } = await renderLevel(page, {
+    seconds: 3,
+    volume: 0.5,
+    steps: [
+      { kind: "duck", at: duckAt, value: chimeSeconds },
+      { kind: "volume", at: volumeAt, value: 0.9 },
+    ],
+    readAt: [
+      duckAt + attackSeconds + 0.05,
+      volumeAt + 0.2,
+      duckAt + chimeSeconds + releaseSeconds + 0.1,
+    ],
+  });
+  const [ducked, duckedLouder, released] = readings;
+  expect(ducked).toBeCloseTo(0.5 * gain, 3);
+  expect(duckedLouder).toBeCloseTo(0.9 * gain, 3);
+  expect(released).toBeCloseTo(0.9, 3);
+  expect(biggestStep).toBeLessThan(0.02);
+});
+
+interface LiveFrame {
+  readonly state: "running" | "suspended" | "closed";
+  readonly time: number;
+  readonly audible: number;
+}
+
+function live<T>(page: Page, call: string): Promise<T> {
+  return page.evaluate<T>(`window.__soundtrackOutputProbe.live.${call}`);
+}
+
+// A pause on a real, running AudioContext: the mix fades to nothing while the
+// clock still runs, then the context suspends and the clock stands still, and
+// resume starts it again and brings the mix back. The offline context the
+// tests above render with has no clock to stop. A real gesture lets the context
+// run without a flag.
+test("a pause fades the mix out, then suspends the clock, and resume goes on from there", async ({
+  page,
+}) => {
+  await page.mouse.click(10, 10);
+  await live(page, "open()");
+  await expect
+    .poll(async () => (await live<LiveFrame>(page, "read()")).time)
+    .toBeGreaterThan(0.2);
+  expect((await live<LiveFrame>(page, "read()")).audible).toBe(1);
+
+  await live(page, "startRecording()");
+  await live(page, "pause()");
+  await expect
+    .poll(async () => (await live<LiveFrame>(page, "read()")).state)
+    .toBe("suspended");
+  const frames = await live<LiveFrame[]>(page, "stopRecording()");
+
+  // The fade was heard on a running clock, and ended at nothing before the stop.
+  const running = frames.filter((frame) => frame.state === "running");
+  expect(running.some((frame) => frame.audible > 0 && frame.audible < 1)).toBe(
+    true,
+  );
+  expect(running.at(-1)?.audible).toBe(0);
+  const stopped = await live<LiveFrame>(page, "read()");
+  expect(stopped.audible).toBe(0);
+
+  // Frames pass and the clock does not.
+  await nextFrames(page, 10);
+  expect((await live<LiveFrame>(page, "read()")).time).toBe(stopped.time);
+
+  await live(page, "resume()");
+  await expect
+    .poll(async () => (await live<LiveFrame>(page, "read()")).time)
+    .toBeGreaterThan(stopped.time);
+  await expect
+    .poll(async () => (await live<LiveFrame>(page, "read()")).audible)
+    .toBe(1);
 });

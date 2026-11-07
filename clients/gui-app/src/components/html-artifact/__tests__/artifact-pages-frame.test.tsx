@@ -1,8 +1,21 @@
-import { act, cleanup, render, screen } from "@testing-library/react";
+import { useEffect, type ReactNode } from "react";
+import {
+  act,
+  cleanup,
+  fireEvent,
+  render,
+  screen,
+} from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import {
+  disposeBridges,
+  realBridge,
+} from "@/components/canvas-artifact/__tests__/canvas-edit-test-support";
 import type { SandboxFrameProps } from "@/components/sandbox/sandbox-frame";
+import { DropdownMenuItem } from "@/components/ui/dropdown-menu";
 import type { ArtifactManifest } from "@/lib/sandbox/artifact-serving";
+import type { SandboxBridgeHost } from "@/lib/sandbox/bridge-host";
 
 /**
  * The page is a sandboxed iframe on a custom scheme, which jsdom will not
@@ -12,37 +25,66 @@ import type { ArtifactManifest } from "@/lib/sandbox/artifact-serving";
  * only way to see a retry, since the reader asks for the SAME page again and
  * the ask therefore shows up in `visit` rather than in `path`.
  */
-const frames = vi.hoisted(() => ({ latest: null as SandboxFrameProps | null }));
+const frames = vi.hoisted(() => ({
+  latest: null as SandboxFrameProps | null,
+  bridge: null as SandboxBridgeHost | null,
+}));
 
 vi.mock("@/components/sandbox/sandbox-frame", () => ({
   SandboxFrame: (props: SandboxFrameProps) => {
     frames.latest = props;
+    const { onBridge } = props;
+    // A test that wants the page told its mode installs a bridge first.
+    useEffect(() => {
+      if (frames.bridge !== null) onBridge?.(frames.bridge);
+    }, [onBridge]);
     return <div data-testid="page-frame" />;
   },
 }));
 
 import { ArtifactPagesFrame } from "@/components/html-artifact/artifact-pages-frame";
 
-const MANIFEST: ArtifactManifest = {
-  files: {
-    "index.html": {
-      sha256: "sha-index",
+function manifestOf(pages: readonly string[]): ArtifactManifest {
+  const files: Record<string, ArtifactManifest["files"][string]> = {};
+  for (const page of pages) {
+    files[page] = {
+      sha256: `sha-${page}`,
       byteLength: 10,
       mediaType: "text/html; charset=utf-8",
       status: "published",
-    },
-  },
+    };
+  }
+  return { files };
+}
+
+interface PagesOptions {
+  /** Every page of the artifact; the first is the entry page. */
+  readonly pages: readonly string[];
+  /** `null` fills the tile; a number is a row in the chat. */
+  readonly height: number | null;
+  /** The caller's rows for the chip's "More actions" menu. */
+  readonly menuItems: ReactNode;
+  /** The comment tool, which only the entry page is ever put into. */
+  readonly commenting: boolean;
+}
+
+const FILLING_ONE_PAGE: PagesOptions = {
+  pages: ["index.html"],
+  height: null,
+  menuItems: undefined,
+  commenting: false,
 };
 
-function renderPages() {
+function renderPages(overrides: Partial<PagesOptions>) {
+  const options = { ...FILLING_ONE_PAGE, ...overrides };
   render(
     <ArtifactPagesFrame
       source={{
         kind: "artifact",
         artifactId: "artifact-a1",
         treePath: "site",
-        entryPath: "index.html",
-        manifest: MANIFEST,
+        entryPath: options.pages[0],
+        manifest: manifestOf(options.pages),
         // Never called: the frame that would mount a server is the stand-in
         // above. What a refused read SERVES is the artifact server's own test.
         readSpan: () => Promise.resolve({ unavailable: "failed" }),
@@ -50,8 +92,8 @@ function renderPages() {
       }}
       title="Report"
       className=""
-      height={null}
-      pageZoom={false}
+      height={options.height}
+      commenting={options.commenting}
       onSize={() => undefined}
       onStatus={() => undefined}
       onBridge={null}
@@ -59,6 +101,7 @@ function renderPages() {
       onFrame={null}
       renderOverlay={null}
       sourceEquivalent={undefined}
+      menuItems={options.menuItems}
     />,
   );
   const navigation = (): NonNullable<SandboxFrameProps["pageNavigation"]> => {
@@ -82,7 +125,11 @@ const MISSING = "This page is not in the artifact.";
 
 afterEach(() => {
   cleanup();
+  vi.restoreAllMocks();
+  vi.unstubAllGlobals();
   frames.latest = null;
+  frames.bridge = null;
+  disposeBridges();
 });
 
 describe("a served page the host would not hand over", () => {
@@ -92,7 +139,7 @@ describe("a served page the host would not hand over", () => {
    * reader is shown the bare word "failed" where the page should be.
    */
   it("says the page could not be loaded, and names where from", () => {
-    const { report } = renderPages();
+    const { report } = renderPages({});
 
     report((navigation) => navigation.onPageUnreachable());
 
@@ -106,7 +153,7 @@ describe("a served page the host would not hand over", () => {
    */
   it("asks for the same page again on Retry, and clears the overlay", async () => {
     const user = userEvent.setup();
-    const { navigation, report } = renderPages();
+    const { navigation, report } = renderPages({});
     // Off the entry page first, which is what lets this tell Retry from Home:
     // on the entry page the two are indistinguishable - Home's path, empty
     // back stack and bumped visit are all what Retry leaves behind.
@@ -128,7 +175,7 @@ describe("a served page the host would not hand over", () => {
    * must displace the first rather than stack a second overlay over it.
    */
   it("replaces the missing-page answer when a later load is unreachable instead", () => {
-    const { report } = renderPages();
+    const { report } = renderPages({});
 
     report((page) => page.onPageMissing());
     expect(screen.getByText(MISSING)).toBeTruthy();
@@ -141,12 +188,301 @@ describe("a served page the host would not hand over", () => {
   });
 
   it("clears the overlay once a page does load", () => {
-    const { report } = renderPages();
+    const { report } = renderPages({});
     report((page) => page.onPageUnreachable());
     expect(screen.getByRole("button", { name: "Retry" })).toBeTruthy();
 
     report((page) => page.onNavigate("index.html"));
 
     expect(screen.queryByRole("button", { name: "Retry" })).toBeNull();
+  });
+});
+
+const TWO_PAGES = ["index.html", "report.html"];
+
+function button(name: string): HTMLButtonElement {
+  const found = screen.getByRole("button", { name });
+  if (!(found instanceof HTMLButtonElement)) {
+    throw new Error(`${name} is not a button`);
+  }
+  return found;
+}
+
+function openMoreActions(): void {
+  // Radix opens the menu on pointerdown, not on the click event.
+  fireEvent.pointerDown(button("More actions"), { button: 0 });
+}
+
+function menuItemNames(): string[] {
+  return screen.getAllByRole("menuitem").map((item) => item.textContent.trim());
+}
+
+function frameProps(): SandboxFrameProps {
+  if (frames.latest === null) throw new Error("expected a mounted frame");
+  return frames.latest;
+}
+
+describe("the floating controls chip", () => {
+  it("offers no Back or Home on an artifact with one page", () => {
+    renderPages({});
+
+    expect(
+      screen.getByRole("toolbar", { name: "HTML artifact controls" }),
+    ).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "Back" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Home" })).toBeNull();
+  });
+
+  it("offers Back and Home from the first page of an artifact with several, both disabled on the entry page", () => {
+    renderPages({ pages: TWO_PAGES });
+
+    expect(button("Back").disabled).toBe(true);
+    expect(button("Home").disabled).toBe(true);
+  });
+
+  it("keeps a way out on a one-page artifact whose link led to a page it lacks", () => {
+    const { report } = renderPages({});
+
+    report((page) => page.onNavigate("gone.html"));
+    report((page) => page.onPageMissing());
+
+    expect(button("Back").disabled).toBe(false);
+    expect(button("Home").disabled).toBe(false);
+  });
+
+  it("enables Back and Home away from the entry page, and disables both again on return", async () => {
+    const user = userEvent.setup();
+    const { navigation, report } = renderPages({ pages: TWO_PAGES });
+
+    report((page) => page.onNavigate("report.html"));
+
+    expect(button("Back").disabled).toBe(false);
+    expect(button("Home").disabled).toBe(false);
+
+    await user.click(button("Back"));
+
+    expect(navigation().path).toBe("index.html");
+    expect(button("Back").disabled).toBe(true);
+    expect(button("Home").disabled).toBe(true);
+  });
+});
+
+describe("the More actions menu", () => {
+  it("keeps Actual size for a page that fills its tile, enabled only once the page is ready and off 100%", () => {
+    renderPages({});
+    openMoreActions();
+    const actualSize = (): string | null =>
+      screen
+        .getByRole("menuitem", { name: "Actual size" })
+        .getAttribute("aria-disabled");
+    expect(actualSize()).toBe("true");
+
+    act(() => frameProps().onStatus("ready"));
+    expect(actualSize()).toBe("true");
+
+    act(() => frameProps().onHtmlZoom?.(1.2));
+    expect(actualSize()).toBeNull();
+
+    // The readout rounds, so a scale that reads 100% is at actual size.
+    act(() => frameProps().onHtmlZoom?.(1.004));
+    expect(actualSize()).toBe("true");
+  });
+
+  it("lists the caller's rows after Actual size", () => {
+    renderPages({
+      menuItems: <DropdownMenuItem>Download</DropdownMenuItem>,
+    });
+
+    openMoreActions();
+
+    // The item's text starts with its "1:1" glyph.
+    expect(menuItemNames()).toEqual([
+      expect.stringContaining("Actual size"),
+      "Download",
+    ]);
+  });
+
+  it("offers neither zoom nor a menu in the chat, where the row has a fixed height", () => {
+    renderPages({ pages: TWO_PAGES, height: 240 });
+
+    const toolbar = screen.getByRole("toolbar", {
+      name: "HTML artifact controls",
+    });
+    // Back and Home end the chip, with no divider left hanging after them.
+    expect(toolbar.querySelector('[data-slot="separator"]')).toBeNull();
+    expect(screen.queryByRole("button", { name: "More actions" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Zoom in" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Zoom out" })).toBeNull();
+  });
+
+  it("holds only the caller's rows in the chat", () => {
+    renderPages({
+      pages: TWO_PAGES,
+      height: 240,
+      menuItems: <DropdownMenuItem>Download</DropdownMenuItem>,
+    });
+
+    openMoreActions();
+
+    expect(menuItemNames()).toEqual(["Download"]);
+  });
+});
+
+describe("the room a filling page keeps for the controls", () => {
+  /**
+   * jsdom lays nothing out and its observer never reports, so this declares
+   * the layout (the chip sits 8px down and is 30px tall) and gives the page
+   * the observer a browser has: it reports once as it starts observing, and
+   * again when told the chip changed size.
+   */
+  function layOutControlsChip(): { readonly growTo: (height: number) => void } {
+    vi.spyOn(HTMLElement.prototype, "offsetTop", "get").mockReturnValue(8);
+    const chipHeight = vi
+      .spyOn(HTMLElement.prototype, "offsetHeight", "get")
+      .mockReturnValue(30);
+    const observing = new Set<ReportingResizeObserver>();
+    class ReportingResizeObserver implements ResizeObserver {
+      private readonly callback: ResizeObserverCallback;
+      constructor(callback: ResizeObserverCallback) {
+        this.callback = callback;
+      }
+      observe(): void {
+        observing.add(this);
+        this.report();
+      }
+      unobserve(): void {}
+      disconnect(): void {
+        observing.delete(this);
+      }
+      report(): void {
+        this.callback([], this);
+      }
+    }
+    vi.stubGlobal("ResizeObserver", ReportingResizeObserver);
+    return {
+      growTo: (height) => {
+        chipHeight.mockReturnValue(height);
+        act(() => {
+          for (const observer of observing) observer.report();
+        });
+      },
+    };
+  }
+
+  it("is the chip's bottom edge, so the page opens clear of it", () => {
+    layOutControlsChip();
+
+    renderPages({});
+
+    expect(frameProps().pageInsetTop).toBe(38);
+  });
+
+  it("follows the chip when its controls wrap onto another row", () => {
+    const layout = layOutControlsChip();
+    renderPages({});
+
+    layout.growTo(66);
+
+    expect(frameProps().pageInsetTop).toBe(74);
+  });
+
+  it("is none in the chat, where the chip only comes up on hover", () => {
+    layOutControlsChip();
+
+    renderPages({ pages: TWO_PAGES, height: 240 });
+
+    expect(frameProps().pageInsetTop).toBe(0);
+  });
+
+  // A narrow window lays the chip out in flow above the frame (its `max-md`
+  // classes), so it covers nothing there.
+  it("is none on a narrow window, where the chip sits above the page", () => {
+    vi.stubGlobal("innerWidth", 480);
+    layOutControlsChip();
+
+    renderPages({});
+
+    expect(frameProps().pageInsetTop).toBe(0);
+  });
+});
+
+describe("commenting on the entry page", () => {
+  it("tells only the entry page to edit, and keeps the served source", async () => {
+    const user = userEvent.setup();
+    const bridge = realBridge();
+    frames.bridge = bridge;
+    const setHtmlView = vi.spyOn(bridge, "setHtmlView");
+    const setMode = vi.spyOn(bridge, "setMode");
+    const { report } = renderPages({ pages: TWO_PAGES, commenting: true });
+    const source = frameProps().source;
+
+    // A proven page names itself before it says ready, as the bridge does.
+    report((page) => {
+      page.onNavigate("index.html");
+      frameProps().onStatus("ready");
+    });
+
+    expect(screen.getByRole("button", { name: "Zoom in" })).toBeTruthy();
+    expect(setMode).toHaveBeenLastCalledWith("edit");
+    expect(setHtmlView).toHaveBeenLastCalledWith({
+      enabled: true,
+      scale: 1,
+      commenting: true,
+    });
+
+    report((page) => page.onNavigate("report.html"));
+
+    expect(frameProps().source).toBe(source);
+    expect(setMode).toHaveBeenLastCalledWith("play");
+    expect(setHtmlView).toHaveBeenLastCalledWith({
+      enabled: true,
+      scale: 1,
+      commenting: false,
+    });
+
+    setMode.mockClear();
+    await user.click(button("Back"));
+
+    // The page being left is still the one loaded: it is not put in Edit.
+    expect(setMode).not.toHaveBeenCalledWith("edit");
+
+    report((page) => {
+      page.onNavigate("index.html");
+      frameProps().onStatus("loading");
+      frameProps().onStatus("ready");
+    });
+
+    expect(frameProps().source).toBe(source);
+    expect(setMode).toHaveBeenLastCalledWith("edit");
+    expect(setHtmlView).toHaveBeenLastCalledWith({
+      enabled: true,
+      scale: 1,
+      commenting: true,
+    });
+  });
+
+  // A page's own link back to the entry page reports where it landed and that
+  // it is ready in one go. The new document is told the entry page's mode,
+  // with no stale word from the page it left.
+  it("tells a page reached by its own link that page's mode, and only that", () => {
+    const bridge = realBridge();
+    frames.bridge = bridge;
+    const setMode = vi.spyOn(bridge, "setMode");
+    const { report } = renderPages({ pages: TWO_PAGES, commenting: true });
+    report((page) => {
+      page.onNavigate("index.html");
+      frameProps().onStatus("ready");
+    });
+    report((page) => page.onNavigate("report.html"));
+    expect(setMode).toHaveBeenLastCalledWith("play");
+    setMode.mockClear();
+
+    report((page) => {
+      page.onNavigate("index.html");
+      frameProps().onStatus("loading");
+      frameProps().onStatus("ready");
+    });
+
+    expect(setMode.mock.calls).toEqual([["edit"]]);
   });
 });

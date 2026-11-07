@@ -56,6 +56,7 @@ import type {
   TranscriptWindow,
 } from "@/stores/chats/transcript-window";
 import { emptyTranscriptWindow } from "@/stores/chats/transcript-window";
+import { pendingHydrationRestore } from "@/stores/chats/chat-tab-pending-hydration-restore";
 import {
   HOSTED_TILE_INSTANCE_ID_ATTRIBUTE,
   HOSTED_TILE_PANE_ID_ATTRIBUTE,
@@ -87,6 +88,10 @@ import type { InterviewSegment } from "@/stores/composer/chat-store";
 import type { TileFindAdapter } from "@/stores/tile-find";
 import { NO_TRANSCRIPT_BASELINE } from "@/stores/chats/chat-announcements";
 import type { BackgroundItem } from "@traycer/protocol/host/agent/gui/subscribe";
+import {
+  ChatBotPresentationContext,
+  type ChatBotPresentation,
+} from "@/components/chat/chat-bot-presentation-context";
 import {
   makeAssistantMessage,
   makeMessage,
@@ -502,9 +507,7 @@ const TICKET_13_ROW_HEIGHT_PX = 90;
 async function waitForNavigationSettle(): Promise<void> {
   await settleLegendList();
   await act(async () => {
-    await new Promise<void>((resolve) => {
-      setTimeout(resolve, CHAT_ANCHOR_SETTLE_FALLBACK_MS + 150);
-    });
+    await advanceLegendListTime(CHAT_ANCHOR_SETTLE_FALLBACK_MS + 150);
   });
 }
 
@@ -561,9 +564,7 @@ async function fireScrollTopAndFlush(scrollTop: number): Promise<void> {
   await act(async () => {
     scrollNode.scrollTop = scrollTop;
     fireEvent.scroll(scrollNode);
-    await new Promise<void>((resolve) => {
-      requestAnimationFrame(() => resolve());
-    });
+    await advanceLegendListFrames(1);
   });
 }
 
@@ -793,9 +794,7 @@ async function enterFreeScrollingNearEnd(
     void list.scrollToOffset({ offset: parked, animated: false });
     scrollNode.scrollTop = parked;
     fireEvent.scroll(scrollNode);
-    await new Promise<void>((resolve) => {
-      requestAnimationFrame(() => resolve());
-    });
+    await advanceLegendListFrames(1);
   });
   await waitFor(() => {
     expect(getScrollNode().dataset.scrollMode).toBe("free-scrolling");
@@ -953,9 +952,7 @@ async function selectLastChatTurnMinimapItem(): Promise<void> {
   const minimapButton = screen.getByTestId("chat-turn-minimap-hit-strip");
   fireEvent.keyDown(minimapButton, { key: "End" });
   await act(async () => {
-    await new Promise<void>((resolve) => {
-      requestAnimationFrame(() => resolve());
-    });
+    await advanceLegendListFrames(1);
   });
   fireEvent.keyDown(minimapButton, { key: "Enter" });
 }
@@ -1008,6 +1005,8 @@ interface RenderChatMessagesOptions {
   readonly coldRewrittenMessageIds?: ReadonlySet<string>;
   /** Test-only seam: captures the adapter registered by ChatMessages. */
   readonly tileFindContext?: TileFindContextValue;
+  /** Draws the transcript as a bot's channel or thread; omitted draws an agent chat. */
+  readonly botPresentation?: ChatBotPresentation;
   readonly transcriptWindow?: TranscriptWindow | null;
   readonly onVisibleOrdinalRangeChange?: (range: OrdinalRange | null) => void;
   /** `ChatMessages.onScrollRequestSettled`; only the scrollRequest coverage
@@ -1182,11 +1181,20 @@ function renderChatMessages(options: RenderChatMessagesOptions) {
       </TileFindContext.Provider>
     );
   };
+  const contentWithPresentation = (): ReactNode => {
+    const rendered = contentWithFindContext();
+    if (options.botPresentation === undefined) return rendered;
+    return (
+      <ChatBotPresentationContext.Provider value={options.botPresentation}>
+        {rendered}
+      </ChatBotPresentationContext.Provider>
+    );
+  };
   const jsx = (): ReactNode =>
     options.strictMode === true ? (
-      <StrictMode>{contentWithFindContext()}</StrictMode>
+      <StrictMode>{contentWithPresentation()}</StrictMode>
     ) : (
-      contentWithFindContext()
+      contentWithPresentation()
     );
 
   const result = render(jsx());
@@ -1268,7 +1276,7 @@ describe("ChatMessages scroll policy", () => {
     legendListViewabilityProbe.start = 0;
     legendListViewabilityProbe.end = 0;
     installLegendListViewportMetrics();
-    vi.useRealTimers();
+    installLegendListTestClock();
     useSettingsStore.setState({
       quoteReplyEnabled: false,
     });
@@ -1278,7 +1286,6 @@ describe("ChatMessages scroll policy", () => {
 
   afterEach(() => {
     cleanup();
-    vi.useRealTimers();
     // Do not restoreAllMocks - it clears module mocks for isMac / activity store.
     platformMock.isMac = true;
     tileLiveness.live = false;
@@ -1783,7 +1790,6 @@ describe("ChatMessages scroll policy", () => {
       const IDLE_END_PAD_PX = 56;
 
       async function heldAtStrictBottomWhileIdle(scrollStateKey: string) {
-        installLegendListTestClock();
         const messages = makeCompletedTranscript(20);
         const baseHeight = LEGEND_LIST_HEADER_PX + messages.length * 90 + 40;
         setLegendListScrollContainerScrollHeightOverride(
@@ -3044,9 +3050,7 @@ describe("ChatMessages scroll policy", () => {
       // test can isolate "op1's stale callback fires" from "op2 also
       // genuinely settles", not required by the mechanism itself.
       await act(async () => {
-        await new Promise<void>((resolve) => {
-          setTimeout(resolve, 250);
-        });
+        await advanceLegendListTime(250);
       });
 
       // OP2: pill click (scrollToEnd, animated) - setTimelineMode
@@ -3071,9 +3075,7 @@ describe("ChatMessages scroll policy", () => {
       // assertion below can only pass because mode is still "following-end"
       // independent of either settle callback having run.
       await act(async () => {
-        await new Promise<void>((resolve) => {
-          setTimeout(resolve, 650);
-        });
+        await advanceLegendListTime(650);
       });
 
       const scrollNode = getScrollNode();
@@ -3144,6 +3146,66 @@ describe("ChatMessages scroll policy", () => {
       );
       expect(screen.getByTestId("chat-turn-minimap-card")).toBeTruthy();
     });
+    const CHANNEL_PRESENTATION: ChatBotPresentation = {
+      botTitle: "Tracy",
+      threadLine: () => null,
+      openThread: () => undefined,
+      openAnnouncementThread: () => undefined,
+      threadAnchorKinds: [],
+      chooseOption: null,
+      questions: null,
+      failedRequest: null,
+      failedRecovery: null,
+      replyReceipt: null,
+      requestReceipt: null,
+    };
+    const THREAD_PRESENTATION: ChatBotPresentation = {
+      ...CHANNEL_PRESENTATION,
+      threadLine: null,
+      openThread: null,
+      openAnnouncementThread: null,
+    };
+
+    it.each([
+      { surface: "channel", presentation: CHANNEL_PRESENTATION },
+      { surface: "thread", presentation: THREAD_PRESENTATION },
+    ])(
+      "lists a bot $surface's member posts sender-first and not the bot's reply",
+      async ({ presentation }) => {
+        renderChatMessages({
+          messages: [
+            {
+              ...makeMessage(0, "user"),
+              senderLabel: "Ada",
+              content: "Ship the rail",
+            },
+            { ...makeMessage(1, "assistant"), content: "On it" },
+            {
+              ...makeMessage(2, "user"),
+              senderLabel: "Grace",
+              content: "Add a test",
+            },
+          ],
+          scrollStateKey: "bot-channel-minimap",
+          botPresentation: presentation,
+        });
+        await settleLegendList();
+
+        await waitFor(() => {
+          expect(screen.getByTestId("chat-turn-minimap")).toBeTruthy();
+        });
+        fireEvent.mouseEnter(
+          screen.getByRole("group", { name: "Message minimap controls" }),
+        );
+        const rows = screen
+          .getByTestId("chat-turn-minimap-card")
+          .querySelectorAll("[data-minimap-list-row]");
+        expect(Array.from(rows, (row) => row.textContent)).toEqual([
+          "Ada: Ship the rail",
+          "Grace: Add a test",
+        ]);
+      },
+    );
     it("does not mount the minimap when its placement is hidden", async () => {
       useLayoutStore.getState().setRegionValues("minimap", { shown: "hidden" });
       renderChatMessages({
@@ -3412,43 +3474,38 @@ describe("ChatMessages scroll policy", () => {
       });
       await settleLegendList();
 
-      vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
-      try {
-        rerenderWith({
-          scrollRequest: {
-            kind: "message",
-            messageId: target.id,
-            blockId: null,
-            requestId: 41,
-          },
-        });
+      rerenderWith({
+        scrollRequest: {
+          kind: "message",
+          messageId: target.id,
+          blockId: null,
+          requestId: 41,
+        },
+      });
 
-        const targetRow = document.querySelector<HTMLElement>(
-          `[data-message-id="${target.id}"]`,
-        );
-        expect(targetRow?.dataset.navigationHighlighted).toBe("true");
-        expect(activityGroupOpenIds.setOpenCalls).toHaveLength(0);
-        // The request shares navigateToMessage's settle choke point rather
-        // than creating an external raw-scroll side channel. This short
-        // (6-row) transcript fits entirely within one viewport, so it is
-        // geometrically at the strict edge (LegendList's own `isContentLess`
-        // rule) regardless of which row the jump targets - mode publication
-        // is geometry-only (behavior contract), so it correctly reads
-        // `following-end` here, not an unconditional `free-scrolling`.
-        expect(getScrollNode().dataset.scrollMode).toBe("following-end");
+      const targetRow = document.querySelector<HTMLElement>(
+        `[data-message-id="${target.id}"]`,
+      );
+      expect(targetRow?.dataset.navigationHighlighted).toBe("true");
+      expect(activityGroupOpenIds.setOpenCalls).toHaveLength(0);
+      // The request shares navigateToMessage's settle choke point rather
+      // than creating an external raw-scroll side channel. This short
+      // (6-row) transcript fits entirely within one viewport, so it is
+      // geometrically at the strict edge (LegendList's own `isContentLess`
+      // rule) regardless of which row the jump targets - mode publication
+      // is geometry-only (behavior contract), so it correctly reads
+      // `following-end` here, not an unconditional `free-scrolling`.
+      expect(getScrollNode().dataset.scrollMode).toBe("following-end");
 
-        act(() => {
-          vi.advanceTimersByTime(2_999);
-        });
-        expect(targetRow?.dataset.navigationHighlighted).toBe("true");
+      act(() => {
+        vi.advanceTimersByTime(2_999);
+      });
+      expect(targetRow?.dataset.navigationHighlighted).toBe("true");
 
-        act(() => {
-          vi.advanceTimersByTime(1);
-        });
-        expect(targetRow?.dataset.navigationHighlighted).toBeUndefined();
-      } finally {
-        vi.useRealTimers();
-      }
+      act(() => {
+        vi.advanceTimersByTime(1);
+      });
+      expect(targetRow?.dataset.navigationHighlighted).toBeUndefined();
     });
 
     it("dismisses an external-jump highlight on transcript pointerdown", async () => {
@@ -4690,6 +4747,9 @@ describe("ChatMessages scroll policy", () => {
       setLegendListScrollContainerScrollHeightOverride(
         LEGEND_LIST_HEADER_PX + messages.length * 90 + 40 + 600,
       );
+      // A settle is 192 ms of list frames; the restore's re-issue after the
+      // taller row outlasts two, and "resumes saving" is only true once it ends.
+      await settleLegendList();
       await settleLegendList();
       await settleLegendList();
 
@@ -4773,7 +4833,6 @@ describe("ChatMessages scroll policy", () => {
       // since nothing will grow past them now.
       const TURN_END_PAD_PX = 56;
       async function heldAtNewEndWhileTurnRuns() {
-        installLegendListTestClock();
         const messages = makeCompletedTranscript(20);
         const lastIndex = messages.length - 1;
         const streaming = messages.map((message, index) =>
@@ -4872,7 +4931,6 @@ describe("ChatMessages scroll policy", () => {
       // retries and can outlast the loop's last command. Nothing outside the
       // component can observe it, so the test runs the clock past every wait.
       it("leaves the list's commands alone when a wheel follows a settled end navigation", async () => {
-        installLegendListTestClock();
         const messages = makeCompletedTranscript(20);
         setLegendListScrollContainerScrollHeightOverride(
           LEGEND_LIST_HEADER_PX + messages.length * 90 + 40,
@@ -4908,7 +4966,6 @@ describe("ChatMessages scroll policy", () => {
       // aborted restore's claim ends with its settle loop, which no frame
       // count on a loaded runner reliably outlasts.
       it("leaves the list's commands alone once a restore that reader input aborted has settled", async () => {
-        installLegendListTestClock();
         const view = mountWithSavedFreePosition();
         const cancel = spyCancelPendingScroll();
         fireEvent.wheel(getScrollNode(), { deltaY: 40 });
@@ -4941,7 +4998,6 @@ describe("ChatMessages scroll policy", () => {
         }
 
         it("cancels a restore's command until it settles, and only then leaves the list alone", async () => {
-          installLegendListTestClock();
           const view = mountWithSavedFreePosition();
           await settleLegendList();
           await hideWithCollapsedScrollBox(view.rerenderWith);
@@ -4987,7 +5043,6 @@ describe("ChatMessages scroll policy", () => {
         });
 
         async function clickScrollToEndWithHeldCommand() {
-          installLegendListTestClock();
           const messages = makeCompletedTranscript(20);
           setLegendListScrollContainerScrollHeightOverride(
             LEGEND_LIST_HEADER_PX + messages.length * 90 + 40,
@@ -5039,7 +5094,6 @@ describe("ChatMessages scroll policy", () => {
         });
 
         it("cancels a scroll-request landing's command that is still held after its loop gave up", async () => {
-          installLegendListTestClock();
           const messages = makeCompletedTranscript(20);
           setLegendListScrollContainerScrollHeightOverride(
             LEGEND_LIST_HEADER_PX + messages.length * 90 + 40,
@@ -5503,9 +5557,7 @@ describe("ChatMessages scroll policy", () => {
           },
         });
         await act(async () => {
-          await new Promise<void>((resolve) => {
-            setTimeout(resolve, 50);
-          });
+          await advanceLegendListTime(50);
         });
 
         await waitForNavigationSettle();
@@ -6734,9 +6786,7 @@ describe("ChatMessages scroll policy", () => {
         void list.scrollToOffset({ offset: deepPark, animated: false });
         getScrollNode().scrollTop = deepPark;
         fireEvent.scroll(getScrollNode());
-        await new Promise<void>((resolve) => {
-          requestAnimationFrame(() => resolve());
-        });
+        await advanceLegendListFrames(1);
       });
       await waitFor(() => {
         expect(getScrollNode().dataset.scrollMode).toBe("free-scrolling");
@@ -6837,9 +6887,7 @@ describe("ChatMessages scroll policy", () => {
         );
         await act(async () => {
           rerenderMessages(streamed);
-          await new Promise<void>((resolve) => {
-            requestAnimationFrame(() => resolve());
-          });
+          await advanceLegendListFrames(1);
         });
         expect(getScrollNode().dataset.scrollMode).toBe("following-end");
         expect(isJumpPillVisible()).toBe(false);
@@ -7009,9 +7057,7 @@ describe("ChatMessages scroll policy", () => {
         // also flush one frame so LegendList processes the end report.
       });
       await act(async () => {
-        await new Promise<void>((resolve) => {
-          requestAnimationFrame(() => resolve());
-        });
+        await advanceLegendListFrames(1);
       });
 
       // Full snapshot arrives - hydration-retry effect must still jump.
@@ -7093,9 +7139,7 @@ describe("ChatMessages scroll policy", () => {
         scrollNode.scrollTop = maxScrollTopFor(scrollNode);
       });
       await act(async () => {
-        await new Promise<void>((resolve) => {
-          requestAnimationFrame(() => resolve());
-        });
+        await advanceLegendListFrames(1);
       });
       await waitFor(() => {
         expect(getScrollNode().dataset.scrollMode).toBe("free-scrolling");
@@ -7182,10 +7226,10 @@ describe("ChatMessages scroll policy", () => {
         ...coldWindow,
         skeletonRevision: 1,
         indexRevision: 1,
+        skeletonComplete: false,
+        skeletonStreamCoveredThrough: ownerOrdinal,
         skeleton: skeleton.map((entry, ordinal) =>
-          ordinal === ownerOrdinal
-            ? { ...entry, rowId: `row-${ordinal}` }
-            : entry,
+          ordinal >= ownerOrdinal ? undefined : entry,
         ),
       };
       const ownerMessage: ChatMessageModel = {
@@ -7486,6 +7530,269 @@ describe("ChatMessages scroll policy", () => {
         mode: "following-end",
         anchorMessageId: null,
       });
+    });
+
+    it("parks at the tail on the legacy line while a saved part's turn is missing or incomplete, and lands when the part arrives", async () => {
+      // The legacy line has no completeness signal: a row that is not in the
+      // list, or is drawn without the saved segment while the backfill still
+      // delivers it in pieces, may be on its way, so nothing retires the
+      // restore.
+      const ownerIndex = 11;
+      const ownerRowKey = "assistant:turn-legacy-late";
+      const laterTextId = "text-later";
+      const savedPartKey = `${ownerRowKey}#${laterTextId}`;
+      const savedOffset = 24;
+      const messages = makeCompletedTranscript(40);
+      const ownerMessage: ChatMessageModel = {
+        ...messages[ownerIndex],
+        id: ownerRowKey,
+        role: "assistant",
+        segments: [
+          assistantTextSegment("text-first", "First block of the turn."),
+          assistantTextSegment(laterTextId, "Later block the reader was on."),
+        ],
+      };
+      const withOwner = (owner: ChatMessageModel): ChatMessageModel[] => [
+        ...messages.slice(0, ownerIndex),
+        owner,
+        ...messages.slice(ownerIndex + 1),
+      ];
+      const firstPieceOnly = withOwner({
+        ...ownerMessage,
+        segments: ownerMessage.segments.slice(0, 1),
+      });
+      const arrived = withOwner(ownerMessage);
+      const instanceId = `legacy-late-owner-${Math.random().toString(36).slice(2)}`;
+      const identity = makeTestIdentity(instanceId, "epic-1", "task-1");
+      saveChatTabState({
+        identity,
+        mode: "free-scrolling",
+        anchorMessageId: savedPartKey,
+        anchorRowKey: ownerRowKey,
+        anchorIndex: ownerIndex + 1,
+        offset: savedOffset,
+      });
+      setLegendListScrollContainerScrollHeightOverride(
+        LEGEND_LIST_HEADER_PX + messages.length * TICKET_13_ROW_HEIGHT_PX + 40,
+      );
+      tileLiveness.live = true;
+      const view = renderChatMessages({
+        messages,
+        instanceId,
+        epicId: "epic-1",
+        taskId: "task-1",
+        transcriptWindow: null,
+      });
+      await waitForNavigationSettle();
+      await waitForNavigationSettle();
+
+      await waitFor(() => {
+        expect(legendListRefHolder.current?.getState().isAtEnd).toBe(true);
+      });
+      expect(getScrollNode().dataset.scrollMode).toBe("free-scrolling");
+      expect(pendingHydrationRestore(identity)).not.toBeNull();
+
+      // The turn arrives with its first segment only.
+      view.rerenderWith({ messages: firstPieceOnly });
+      await waitForNavigationSettle();
+      await waitFor(() => {
+        expect(legendListRefHolder.current?.getState().isAtEnd).toBe(true);
+      });
+      expect(
+        document.querySelector<HTMLElement>(`[data-row-key="${savedPartKey}"]`),
+      ).toBeNull();
+      expect(getScrollNode().dataset.scrollMode).toBe("free-scrolling");
+      expect(pendingHydrationRestore(identity)).not.toBeNull();
+
+      view.rerenderWith({ messages: arrived });
+      await settleLegendList();
+      await waitFor(() => {
+        expect(
+          document.querySelector<HTMLElement>(
+            `[data-row-key="${savedPartKey}"]`,
+          ),
+        ).not.toBeNull();
+        expect(
+          Math.abs(
+            viewportOffsetForKey(savedPartKey) -
+              (savedOffset - LEGEND_LIST_HEADER_PX),
+          ),
+        ).toBeLessThanOrEqual(1);
+      });
+      expect(getScrollNode().dataset.scrollMode).toBe("free-scrolling");
+      view.unmount();
+    });
+
+    describe.each([
+      {
+        label: "invalidated",
+        recovering: { invalidated: true },
+      },
+      {
+        label: "carrying the skeleton it replaced",
+        recovering: { carriedSkeleton: [undefined] },
+      },
+    ])(
+      "a complete skeleton that is $label",
+      ({ recovering }: { recovering: Partial<TranscriptWindow> }) => {
+        it("keeps a saved part waiting at the tail until recovery ends, then follows the latest", async () => {
+          // Recovery renames rows under the reader: a row missing from the
+          // list proves nothing until the window settles.
+          const rowCount = 60;
+          const ownerRowKey = "assistant:turn-recovering";
+          const savedPartKey = `${ownerRowKey}#text-later`;
+          const skeleton = Array.from(
+            { length: rowCount },
+            (_unused, ordinal) => ({
+              rowId: `row-${ordinal}`,
+              createdAt: ordinal,
+              role: "assistant" as const,
+              byteLength: 80,
+              bodyDigest: `digest-${ordinal}`,
+            }),
+          );
+          const settledWindow: TranscriptWindow = {
+            ...emptyTranscriptWindow(),
+            epoch: 1,
+            rowCount,
+            skeleton,
+            skeletonRevision: 2,
+            skeletonComplete: true,
+            skeletonStreamCoveredThrough: rowCount,
+            indexRevision: 2,
+            indexRevisionRebuilding: false,
+          };
+          const instanceId = `recovering-window-${Math.random().toString(36).slice(2)}`;
+          const identity = makeTestIdentity(instanceId, "epic-1", "task-1");
+          saveChatTabState({
+            identity,
+            mode: "free-scrolling",
+            anchorMessageId: savedPartKey,
+            anchorRowKey: ownerRowKey,
+            anchorIndex: 21,
+            offset: 24,
+          });
+          setLegendListScrollContainerScrollHeightOverride(
+            LEGEND_LIST_HEADER_PX + rowCount * TICKET_13_ROW_HEIGHT_PX + 40,
+          );
+          tileLiveness.live = true;
+          const view = renderChatMessages({
+            messages: [],
+            instanceId,
+            epicId: "epic-1",
+            taskId: "task-1",
+            transcriptWindow: { ...settledWindow, ...recovering },
+          });
+          await waitForNavigationSettle();
+          await waitForNavigationSettle();
+
+          await waitFor(() => {
+            expect(legendListRefHolder.current?.getState().isAtEnd).toBe(true);
+          });
+          expect(getScrollNode().dataset.scrollMode).toBe("free-scrolling");
+          expect(pendingHydrationRestore(identity)).not.toBeNull();
+
+          view.rerenderWith({ transcriptWindow: settledWindow });
+          await waitForNavigationSettle();
+          await waitFor(() => {
+            expect(getScrollNode().dataset.scrollMode).toBe("following-end");
+            expect(legendListRefHolder.current?.getState().isAtEnd).toBe(true);
+          });
+          view.unmount();
+        });
+      },
+    );
+
+    it("keeps a saved part waiting while its owner is drawn but not served whole, then follows the latest once a fresh span serves it without the segment", async () => {
+      // A stale body can draw part of a row. Without the saved segment it
+      // proves nothing until the host serves the row whole.
+      const rowCount = 80;
+      const ownerOrdinal = 20;
+      const ownerRowKey = "assistant:turn-drawn-not-whole";
+      const savedPartKey = `${ownerRowKey}#gone-seg`;
+      const skeleton = Array.from({ length: rowCount }, (_unused, ordinal) => ({
+        rowId: ordinal === ownerOrdinal ? ownerRowKey : `row-${ordinal}`,
+        createdAt: ordinal,
+        role: "assistant" as const,
+        byteLength: 80,
+        bodyDigest: `digest-${ordinal}`,
+      }));
+      const ownerSpan = {
+        fromOrdinal: ownerOrdinal,
+        rowIds: [ownerRowKey],
+        rowContext: {},
+        messageIds: [],
+        eventIds: [],
+        contextBytes: 0,
+      };
+      const completeWindow: TranscriptWindow = {
+        ...emptyTranscriptWindow(),
+        epoch: 1,
+        rowCount,
+        skeleton,
+        skeletonRevision: 2,
+        skeletonComplete: true,
+        skeletonStreamCoveredThrough: rowCount,
+        indexRevision: 2,
+        indexRevisionRebuilding: false,
+      };
+      const staleOnlyWindow: TranscriptWindow = {
+        ...completeWindow,
+        staleSpans: [ownerSpan],
+      };
+      const servedWindow: TranscriptWindow = {
+        ...completeWindow,
+        spans: [ownerSpan],
+      };
+      const ownerMessage: ChatMessageModel = {
+        ...makeMessageAt(0, "assistant", 1_000),
+        id: ownerRowKey,
+        completedAt: 1_100,
+        segments: [
+          assistantTextSegment("text-first", "The only block drawn so far."),
+        ],
+      };
+      const instanceId = `drawn-not-whole-${Math.random().toString(36).slice(2)}`;
+      const identity = makeTestIdentity(instanceId, "epic-1", "task-1");
+      saveChatTabState({
+        identity,
+        mode: "free-scrolling",
+        anchorMessageId: savedPartKey,
+        anchorRowKey: ownerRowKey,
+        anchorIndex: ownerOrdinal + 1,
+        offset: 24,
+      });
+      setLegendListScrollContainerScrollHeightOverride(
+        LEGEND_LIST_HEADER_PX + rowCount * TICKET_13_ROW_HEIGHT_PX + 40,
+      );
+      tileLiveness.live = true;
+      const view = renderChatMessages({
+        messages: [ownerMessage],
+        instanceId,
+        epicId: "epic-1",
+        taskId: "task-1",
+        transcriptWindow: staleOnlyWindow,
+      });
+      await waitForNavigationSettle();
+      await waitForNavigationSettle();
+
+      expect(
+        document.querySelector<HTMLElement>(`[data-row-key="${ownerRowKey}"]`),
+        "the owner is drawn",
+      ).not.toBeNull();
+      await waitFor(() => {
+        expect(legendListRefHolder.current?.getState().isAtEnd).toBe(false);
+      });
+      expect(getScrollNode().dataset.scrollMode).toBe("free-scrolling");
+      expect(pendingHydrationRestore(identity)).not.toBeNull();
+
+      view.rerenderWith({ transcriptWindow: servedWindow });
+      await waitForNavigationSettle();
+      await waitFor(() => {
+        expect(getScrollNode().dataset.scrollMode).toBe("following-end");
+        expect(legendListRefHolder.current?.getState().isAtEnd).toBe(true);
+      });
+      view.unmount();
     });
 
     it("waits on the cold slices of a split turn, then reopens at the saved part once they hydrate", async () => {
@@ -7823,13 +8130,9 @@ describe("ChatMessages scroll policy", () => {
         // reissues, each settling via promise + double-rAF quiet window.
         await act(async () => {
           for (let frame = 0; frame < 40; frame += 1) {
-            await new Promise<void>((resolve) => {
-              requestAnimationFrame(() => resolve());
-            });
+            await advanceLegendListFrames(1);
           }
-          await new Promise<void>((resolve) => {
-            setTimeout(resolve, 80);
-          });
+          await advanceLegendListTime(80);
         });
         // First attempt exhausted without a validated landing.
         expect(getScrollNode().scrollTop).not.toBe(expectedScrollTop);
@@ -7843,13 +8146,9 @@ describe("ChatMessages scroll policy", () => {
         await settleLegendList();
         await act(async () => {
           for (let frame = 0; frame < 20; frame += 1) {
-            await new Promise<void>((resolve) => {
-              requestAnimationFrame(() => resolve());
-            });
+            await advanceLegendListFrames(1);
           }
-          await new Promise<void>((resolve) => {
-            setTimeout(resolve, 40);
-          });
+          await advanceLegendListTime(40);
         });
 
         expect(getScrollNode().scrollTop).toBe(expectedScrollTop);
@@ -7996,9 +8295,7 @@ describe("ChatMessages scroll policy", () => {
         scrollNode.scrollTop = maxScrollTopFor(scrollNode);
       });
       await act(async () => {
-        await new Promise<void>((resolve) => {
-          requestAnimationFrame(() => resolve());
-        });
+        await advanceLegendListFrames(1);
       });
       await waitFor(() => {
         expect(getScrollNode().dataset.scrollMode).toBe("free-scrolling");
@@ -8042,13 +8339,9 @@ describe("ChatMessages scroll policy", () => {
         // reissues, each settling via promise + double-rAF quiet window.
         await act(async () => {
           for (let frame = 0; frame < 40; frame += 1) {
-            await new Promise<void>((resolve) => {
-              requestAnimationFrame(() => resolve());
-            });
+            await advanceLegendListFrames(1);
           }
-          await new Promise<void>((resolve) => {
-            setTimeout(resolve, 80);
-          });
+          await advanceLegendListTime(80);
         });
         // First attempt exhausted without a validated landing - and the
         // premature isAtEnd=false report from the partial move must not have
@@ -8064,13 +8357,9 @@ describe("ChatMessages scroll policy", () => {
         await settleLegendList();
         await act(async () => {
           for (let frame = 0; frame < 20; frame += 1) {
-            await new Promise<void>((resolve) => {
-              requestAnimationFrame(() => resolve());
-            });
+            await advanceLegendListFrames(1);
           }
-          await new Promise<void>((resolve) => {
-            setTimeout(resolve, 40);
-          });
+          await advanceLegendListTime(40);
         });
 
         expect(getScrollNode().scrollTop).toBe(expectedScrollTop);
@@ -8148,9 +8437,7 @@ describe("ChatMessages scroll policy", () => {
         scrollNode.scrollTop = maxScrollTopFor(scrollNode);
       });
       await act(async () => {
-        await new Promise<void>((resolve) => {
-          requestAnimationFrame(() => resolve());
-        });
+        await advanceLegendListFrames(1);
       });
       await waitFor(() => {
         expect(getScrollNode().dataset.scrollMode).toBe("free-scrolling");
@@ -8173,9 +8460,7 @@ describe("ChatMessages scroll policy", () => {
         fireEvent.scroll(getScrollNode());
       });
       await act(async () => {
-        await new Promise<void>((resolve) => {
-          requestAnimationFrame(() => resolve());
-        });
+        await advanceLegendListFrames(1);
       });
 
       // Genuine permanent close before the original row ever hydrates.
@@ -8941,13 +9226,9 @@ describe("ChatMessages scroll policy", () => {
         // each settling via promise + double-rAF quiet window.
         await act(async () => {
           for (let frame = 0; frame < 40; frame += 1) {
-            await new Promise<void>((resolve) => {
-              requestAnimationFrame(() => resolve());
-            });
+            await advanceLegendListFrames(1);
           }
-          await new Promise<void>((resolve) => {
-            setTimeout(resolve, 80);
-          });
+          await advanceLegendListTime(80);
         });
       } finally {
         scrollToOffsetSpy.mockRestore();
@@ -9017,9 +9298,7 @@ describe("ChatMessages scroll policy", () => {
         rerenderWith({ visible: true });
         await act(async () => {
           for (let frame = 0; frame < 3; frame += 1) {
-            await new Promise<void>((resolve) => {
-              requestAnimationFrame(() => resolve());
-            });
+            await advanceLegendListFrames(1);
           }
         });
         // The browser reports the (unchanged) position; the restore is still
@@ -9033,13 +9312,9 @@ describe("ChatMessages scroll policy", () => {
         rerenderWith({ visible: true });
         await act(async () => {
           for (let frame = 0; frame < 40; frame += 1) {
-            await new Promise<void>((resolve) => {
-              requestAnimationFrame(() => resolve());
-            });
+            await advanceLegendListFrames(1);
           }
-          await new Promise<void>((resolve) => {
-            setTimeout(resolve, 80);
-          });
+          await advanceLegendListTime(80);
         });
       } finally {
         scrollToOffsetSpy.mockRestore();
@@ -10388,9 +10663,7 @@ describe("ChatMessages scroll policy", () => {
         });
         // eslint-disable-next-line no-await-in-loop
         await act(async () => {
-          await new Promise<void>((resolve) =>
-            requestAnimationFrame(() => resolve()),
-          );
+          await advanceLegendListFrames(1);
         });
         if (scrollNode.dataset.scrollMode === "following-end") break;
       }
@@ -10560,9 +10833,7 @@ describe("ChatMessages scroll policy", () => {
         });
         // eslint-disable-next-line no-await-in-loop
         await act(async () => {
-          await new Promise<void>((resolve) =>
-            requestAnimationFrame(() => resolve()),
-          );
+          await advanceLegendListFrames(1);
         });
         if (scrollNode.dataset.scrollMode === "following-end") break;
       }
@@ -10643,9 +10914,7 @@ describe("ChatMessages scroll policy", () => {
         });
         // eslint-disable-next-line no-await-in-loop
         await act(async () => {
-          await new Promise<void>((resolve) =>
-            requestAnimationFrame(() => resolve()),
-          );
+          await advanceLegendListFrames(1);
         });
         if (scrollNode.dataset.scrollMode === "following-end") break;
       }
@@ -10728,9 +10997,7 @@ describe("ChatMessages scroll policy", () => {
         });
         // eslint-disable-next-line no-await-in-loop
         await act(async () => {
-          await new Promise<void>((resolve) =>
-            requestAnimationFrame(() => resolve()),
-          );
+          await advanceLegendListFrames(1);
         });
         if (scrollNode.dataset.scrollMode === "following-end") break;
       }
@@ -10839,9 +11106,7 @@ describe("ChatMessages scroll policy", () => {
         });
         // eslint-disable-next-line no-await-in-loop
         await act(async () => {
-          await new Promise<void>((resolve) =>
-            requestAnimationFrame(() => resolve()),
-          );
+          await advanceLegendListFrames(1);
         });
         if (scrollNode.dataset.scrollMode === "following-end") break;
       }
@@ -10933,9 +11198,7 @@ describe("ChatMessages scroll policy", () => {
         });
         // eslint-disable-next-line no-await-in-loop
         await act(async () => {
-          await new Promise<void>((resolve) =>
-            requestAnimationFrame(() => resolve()),
-          );
+          await advanceLegendListFrames(1);
         });
         if (scrollNode.dataset.scrollMode === "following-end") break;
       }
@@ -11073,9 +11336,7 @@ describe("ChatMessages scroll policy", () => {
         });
         // eslint-disable-next-line no-await-in-loop
         await act(async () => {
-          await new Promise<void>((resolve) =>
-            requestAnimationFrame(() => resolve()),
-          );
+          await advanceLegendListFrames(1);
         });
         if (scrollNode.dataset.scrollMode === "following-end") break;
       }
@@ -11188,9 +11449,7 @@ describe("ChatMessages scroll policy", () => {
         });
         // eslint-disable-next-line no-await-in-loop
         await act(async () => {
-          await new Promise<void>((resolve) =>
-            requestAnimationFrame(() => resolve()),
-          );
+          await advanceLegendListFrames(1);
         });
         if (scrollNode.dataset.scrollMode === "following-end") break;
       }

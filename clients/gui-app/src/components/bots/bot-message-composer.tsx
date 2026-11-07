@@ -1,18 +1,21 @@
 import {
+  useCallback,
   useEffect,
   useId,
+  useLayoutEffect,
+  useMemo,
   useRef,
   useState,
-  type Dispatch,
-  type KeyboardEvent,
   type ReactNode,
   type RefObject,
-  type SetStateAction,
 } from "react";
 import { SendHorizontal } from "lucide-react";
-import type {
-  BotConversationSendDelivery,
-  BotConversationSendResponse,
+import type { JsonContent } from "@traycer/protocol/common/registry";
+import {
+  BOT_CONVERSATION_IMAGES_ONLY_TEXT,
+  type BotConversationAttachment,
+  type BotConversationSendDelivery,
+  type BotConversationSendResponse,
 } from "@traycer/protocol/host/bot/conversation-schemas";
 import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
 import { Button } from "@/components/ui/button";
@@ -22,20 +25,90 @@ import {
   KEYBOARD_FOCUS_OWNER_PROPS,
   useKeyboardFocusLayoutWithin,
 } from "@/hooks/ui/use-keyboard-focus-layout";
+import {
+  pastedImagesVerdict,
+  useBotBoxImageIngest,
+} from "@/hooks/bots/use-bot-box-images";
 import { useBotConversationSendMutation } from "@/hooks/bots/use-bot-mutations";
 import type { BotSendFailure } from "@/hooks/bots/use-bot-send-failure";
+import type { BotImageReach } from "@/hooks/bots/use-bot-send-version";
+import { isAttachmentIngestPending } from "@/hooks/composer/use-composer-paste";
+import type { BotUnsentMessage } from "@/stores/bots/bot-drafts-store";
 import {
   BotQueuedNotice,
   BotSendFailedNotice,
 } from "@/components/bots/bot-channel-notices";
 import { useBotMentionCompletion } from "@/components/bots/bot-mention-completion";
 import {
-  appendQuoteMarkdown,
+  ComposerCallButton,
+  ComposerCallCaptions,
+  ComposerCallSwap,
+} from "@/components/layout/voice/composer-call";
+import { useComposerCall } from "@/components/layout/voice/use-composer-call";
+import { ChatComposerAttachmentsStrip } from "@/components/chat/composer/chat-composer-attachments-strip";
+import {
+  ComposerPromptEditor,
+  type ComposerPromptEditorHandle,
+} from "@/components/chat/composer/composer-prompt-editor";
+import type { PastedComposerImage } from "@/components/chat/composer/editor/extensions/chat-paste-handler";
+import { ComposerDropOverlay } from "@/components/home/composer/composer-shell";
+import { FILE_DROP_OVERLAY_CONTENT } from "@/components/home/composer/composer-drop-overlay-content";
+import {
+  appendBlocks,
+  buildQuoteBlockquote,
   type QuoteTextSnapshot,
 } from "@/components/chat/quote/append-quote-to-draft";
+import {
+  botBoxAttachments,
+  botBoxText,
+  botBoxWire,
+  EMPTY_BOT_BOX,
+} from "@/lib/bots/bot-box-content";
+import {
+  collectImageAtoms,
+  type ComposerImageAtom,
+} from "@/lib/composer/image-atoms";
 import { cn } from "@/lib/utils";
 
 const MESSAGE_MAX = 100_000;
+
+function sameImageAtoms(
+  left: ReadonlyArray<ComposerImageAtom>,
+  right: ReadonlyArray<ComposerImageAtom>,
+): boolean {
+  return (
+    left.length === right.length &&
+    left.every(
+      (atom, index) =>
+        atom.b64content === right[index]?.b64content &&
+        atom.fileName === right[index]?.fileName &&
+        atom.mimeType === right[index]?.mimeType,
+    )
+  );
+}
+
+function useCachedBotBoxAttachments(
+  content: JsonContent,
+  atoms: ReadonlyArray<ComposerImageAtom>,
+  imageReach: BotImageReach,
+): ReadonlyArray<BotConversationAttachment> {
+  const [cache, setCache] = useState<{
+    atoms: ReadonlyArray<ComposerImageAtom>;
+    attachments: ReadonlyArray<BotConversationAttachment>;
+  }>({ atoms: [], attachments: [] });
+  if (imageReach !== "delivered") return [];
+  if (sameImageAtoms(cache.atoms, atoms)) return cache.attachments;
+  const attachments = botBoxAttachments(content);
+  setCache({ atoms, attachments });
+  return attachments;
+}
+
+function noop(): void {}
+
+/** An image pasted by hash has no bytes the box can send: only an inline one lands. */
+function NO_PASTED_IMAGE_BYTES(): boolean {
+  return false;
+}
 
 const BOX_FULL = {
   name: "full",
@@ -60,14 +133,28 @@ const BOX_ONE_ROW = {
  * or a reply under an announcement or direct post (`announcementId`), which
  * opens the thread hung off it. Enter sends, Shift+Enter breaks the line.
  *
- * A send is a request to the bot, not a turn: there is no model to choose,
- * nothing to approve and nothing to attach, and the bot may be paused - the
- * host then accepts the message as `queued` and the bot reads it once it can
- * be reached. The box says so, once, for the send that was queued.
+ * A send is a request to the bot, not a turn: there is no model to choose
+ * and nothing to approve, and the bot may be paused - the host then accepts
+ * the message as `queued` and the bot reads it once it can be reached. The box
+ * says so, once, for the send that was queued.
  *
- * A send that fails before the host takes it leaves the text in the box and
- * says so above it (`failure`, which an option the person clicks reports to
- * as well), until they edit or send again.
+ * The box is the agent composer's editor, with neither its slash commands nor
+ * its picker's sources: `@` lists what the bot's environment can name, and each
+ * name is a chip that the send writes as its token. Images dropped on the box
+ * or pasted into it sit in a strip above it, and go back with the rest of the
+ * editor's document wherever a failed send does. The host serving the tab has
+ * to take them: one below `bot.conversation.send@1.4` is
+ * offered none. A bot whose host has not said it takes them keeps them in the
+ * strip and says so: Send carries the text alone (`BotImageReach`).
+ *
+ * The box empties the moment it sends, and takes the next message while the
+ * last one is on its way; it sends one at a time. A send that fails before
+ * the host takes it puts the text back in the box, and the edit it was
+ * sending with it, while the box is still empty, and says so under it
+ * (`failure`, which an option the person clicks reports to as well), until
+ * they edit or send again. Where they began a newer draft meanwhile, the
+ * draft stays and the failure line offers what failed back (Restore), until
+ * they take it or send again.
  *
  * Edit on a message the bot failed to answer (`edit`) puts its text in the
  * box; what the person sends then is a new message that replaces the failed
@@ -75,27 +162,38 @@ const BOX_ONE_ROW = {
  * box as a draft of a new message, unsent: the answer a member had for a
  * question someone else settled first, taken to its discussion. A box whose
  * draft is kept outside it (`keptDraft`) reports what it holds, so the draft
- * outlives the box, and spends that draft once it is sent - even when the
- * send lands after the box is gone.
+ * outlives the box, and so holds nothing once the box sends it. A send that
+ * fails after the box is gone keeps it there again; one that fails over a
+ * newer draft, whether or not the box is still there, is offered back from
+ * there beside it, so the offer outlives the box too.
  *
- * A send that lands is reported, and clears the box only while the box
- * still holds the draft it sent: an edit, a seed or a quote loaded since is
- * a newer draft, and stays.
+ * A send that lands is reported while the box is still there, and says it
+ * was queued only while the box is still empty; one that lands after the box
+ * is gone is not reported, so nothing opens for a box the person has left.
  *
  * A quote of a selection in the conversation (`quote`) is added after what
  * the box shows, as markdown quote lines - an edit in progress included,
  * which stays an edit - and the box takes the focus with the caret after it.
  *
- * `@` completes a member of the team's environment (decision 137); the box
- * shows their name and the send writes their token, so the bot's host knows
- * who was mentioned.
+ * `@` completes a member of the team's environment (decision 137), or a bot
+ * or a task of the bot's environment (decision 177); the box shows the name
+ * and the send writes its token, so the bot's host knows what was named.
  *
  * With the keyboard up on a short viewport the box is one row, the field beside
  * Send, and a longer draft scrolls inside the field. The same elements restyle,
  * so the field keeps its focus.
+ *
+ * Call sits beside Send on the channel's box and an opened thread's (Call
+ * Tracy): a call from the channel opens a new thread with the first thing
+ * said, one from a thread continues it. While the call placed from this box
+ * runs, the box swaps its field for the call bar, with the captions above
+ * it; the draft is kept and comes back with the field. The composer
+ * microphone's chord starts and ends that call.
  */
 export function BotMessageComposer(props: {
   readonly botId: string;
+  /** The bot's name, as Call says it. */
+  readonly botTitle: string;
   readonly conversationId: string;
   /** The thread the reply goes into; `null` posts at the channel's top level. */
   readonly threadId: string | null;
@@ -106,6 +204,8 @@ export function BotMessageComposer(props: {
    * bot's host takes nothing now, the draft kept until it does.
    */
   readonly sendable: boolean;
+  /** What the box does with images. */
+  readonly imageReach: BotImageReach;
   /** "Message name" on a channel, "Reply…" in a thread, as Slack labels them. */
   readonly placeholder: string;
   /** The accessible name of the box. */
@@ -116,6 +216,8 @@ export function BotMessageComposer(props: {
   readonly edit: BotComposerEdit | null;
   /** The edit was sent or cancelled. */
   readonly onEditEnd: () => void;
+  /** The edit's send failed: the box edits that message again, with `edit.text` as sent. */
+  readonly onEditResume: (edit: BotComposerEdit) => void;
   /**
    * A draft to put in the box, unsent; each new one (by its `id`) replaces
    * what the box holds. `null` for none; a draft kept outside the box that
@@ -127,80 +229,75 @@ export function BotMessageComposer(props: {
   /** A quote to add to what the box shows; `null` for none. */
   readonly quote: BotComposerQuote | null;
   /**
-   * The host accepted `text`, what the box sent.
-   * Answers whether the owner says the send's delivery itself, where the
+   * The host accepted `text`, what the box sent; not called once the box
+   * is gone. Answers whether the owner says the send's delivery itself, where the
    * person now looks; the box says it only when it does not.
    */
   readonly onSent: (
     response: BotConversationSendResponse,
     text: string,
+    content: JsonContent,
   ) => boolean;
 }): ReactNode {
   const {
     botId,
+    botTitle,
     conversationId,
     threadId,
     announcementId,
     sendable,
+    imageReach,
     placeholder,
     label,
     testId,
     failure,
     edit,
     onEditEnd,
+    onEditResume,
     seed,
     keptDraft,
     quote,
     onSent,
   } = props;
   const client = useTabHostClient();
+  const call = useComposerCall(botId, threadId, announcementId);
   const send = useBotConversationSendMutation(client);
-  const [text, setText] = useState("");
-  const inputRef = useRef<HTMLTextAreaElement>(null);
+  const editorRef = useRef<ComposerPromptEditorHandle | null>(null);
+  const [focused, setFocused] = useState(false);
   const [form, setForm] = useState<HTMLFormElement | null>(null);
   const box = useKeyboardFocusLayoutWithin(form) ? BOX_ONE_ROW : BOX_FULL;
-  const mentionListId = useId();
+  const frameRef = useRef<HTMLDivElement>(null);
   const mentions = useBotMentionCompletion({
-    text,
-    setText,
-    inputRef,
-    listId: mentionListId,
+    replyRow: box === BOX_ONE_ROW ? frameRef : null,
   });
-  // Which draft the box holds: each edit or seed loaded is a new one, and a
-  // send owns the one it started with.
-  const [generation, setGeneration] = useState(0);
-  // A new edit replaces what the box holds with the message's text.
-  const [loadedEdit, setLoadedEdit] = useState<BotComposerEdit | null>(null);
-  if (edit !== loadedEdit) {
-    setLoadedEdit(edit);
-    if (edit !== null) {
-      setText(mentions.toDisplay(edit.text));
-      setGeneration((current) => current + 1);
-    }
-  }
-  // As does a new seed. A kept draft that goes away was what the box showed,
-  // as the box keeps what it holds there while it edits nothing: a send of
-  // it spent it, from this box closed and opened again since, so the box
-  // empties rather than offer it again.
-  const seedId = seed?.id ?? null;
-  const [loadedSeedId, setLoadedSeedId] = useState<number | null>(null);
-  if (seedId !== loadedSeedId) {
-    setLoadedSeedId(seedId);
-    if (seed !== null) {
-      setText(seed.text);
-      setGeneration((current) => current + 1);
-    } else if (edit === null) {
-      setText("");
-    }
-  }
-  useBoxQuote({ quote, setText, setGeneration, inputRef });
-  // The draft the box holds now, for a send that lands after the person
-  // moved on to another; and whether the box is still there to say anything.
-  const generationRef = useRef(generation);
-  const mountedRef = useRef(false);
+  const { content, setContent, loadBox, onEditorReady, takenQuoteId } =
+    useBotBoxDocument(editorRef, {
+      edit,
+      seed,
+      quote,
+      contentOf: mentions.contentOf,
+    });
+  const text = useMemo(() => botBoxText(content), [content]);
+  const wire = useMemo(() => botBoxWire(content), [content]);
+  const imageAtoms = useMemo(() => collectImageAtoms(content), [content]);
+  const imageCount = imageAtoms.length;
+  const takesImages = imageReach !== "none";
+  const paste = useBotBoxImageIngest(editorRef);
   useEffect(() => {
-    generationRef.current = generation;
-  }, [generation]);
+    if (edit !== null) editorRef.current?.focusAtEnd("reveal-caret");
+  }, [edit]);
+  const seedId = seed?.id ?? null;
+  useEffect(() => {
+    if (seedId !== null) editorRef.current?.focusAtEnd("reveal-caret");
+  }, [seedId]);
+  useEffect(() => {
+    if (quote === null || quote.id !== takenQuoteId) return;
+    editorRef.current?.focusAtEnd("reveal-caret");
+    quote.taken();
+  }, [quote, takenQuoteId]);
+  const emptyRef = useBoxEmptyRef(text, imageCount, edit);
+  // Whether the box is still there to say anything.
+  const mountedRef = useRef(false);
   useEffect(() => {
     mountedRef.current = true;
     return () => {
@@ -208,77 +305,140 @@ export function BotMessageComposer(props: {
     };
   }, []);
   useEffect(() => {
-    if (edit !== null) inputRef.current?.focus();
-  }, [edit]);
-  useEffect(() => {
-    if (seedId !== null) inputRef.current?.focus();
-  }, [seedId]);
-  useEffect(() => {
-    if (edit === null) keptDraft?.keep(text);
-  }, [edit, keptDraft, text]);
+    if (edit !== null) return;
+    keptDraft?.keep(
+      text,
+      text.length === 0 && imageCount === 0 ? null : content,
+    );
+  }, [content, edit, imageCount, keptDraft, text]);
   const [lastDelivery, setLastDelivery] =
     useState<BotConversationSendDelivery | null>(null);
-  const inputId = useId();
-  const trimmed = text.trim();
-  const canSend =
-    sendable &&
-    trimmed.length > 0 &&
-    trimmed.length <= MESSAGE_MAX &&
-    !send.isPending;
+  // What goes with the text: a bot's host that takes no image gets none.
+  // The editor emits a fresh document for every keystroke. The image atoms
+  // usually have the same bytes, so keep their decoded wire metadata until an
+  // image actually changes.
+  const carried = useCachedBotBoxAttachments(content, imageAtoms, imageReach);
+  const canSend = canSendBotBox({
+    sendable,
+    wireLength: wire.length,
+    attachmentCount: carried.length,
+    ingestPending: takesImages && isAttachmentIngestPending(paste),
+    sendPending: send.isPending,
+  });
 
+  // What failed goes back in the box, as it was sent: an edit's send edits
+  // that message again, and a new message's text is the box's draft.
+  const putBack = (unsent: BotUnsentMessage): void => {
+    if (unsent.supersedes !== null) {
+      onEditResume({
+        requestId: unsent.supersedes,
+        text: unsent.wire,
+        content: unsent.content,
+      });
+      return;
+    }
+    if (edit !== null) onEditEnd();
+    loadBox(unsent.content);
+  };
   const submit = (): void => {
     if (!canSend) return;
     failure.clear();
-    const supersedes = edit?.requestId ?? null;
-    const started = generation;
-    const held = keptDraft?.revision() ?? null;
+    keptDraft?.offer(null);
+    const unsent: BotUnsentMessage = {
+      text,
+      wire,
+      supersedes: edit?.requestId ?? null,
+      content,
+    };
+    // The box empties as the send starts, which drops the draft kept outside
+    // it, and the edit it held ends: the row the host writes reaches the
+    // list before the host answers.
+    loadBox(EMPTY_BOT_BOX);
+    setLastDelivery(null);
+    if (unsent.supersedes !== null) onEditEnd();
     // Settled through the promise, not `mutate`'s callbacks, which do not
-    // run once the box is gone: a kept draft that was sent is spent whether
-    // or not the box is still there.
+    // run once the box is gone.
     send
       .mutateAsync({
         botId,
         conversationId,
-        text: mentions.toWire(trimmed),
+        text: wire.length === 0 ? BOT_CONVERSATION_IMAGES_ONLY_TEXT : wire,
         threadId,
         announcementId,
         redeliver: null,
-        supersedes,
+        supersedes: unsent.supersedes,
         answer: null,
+        ...(carried.length === 0 ? {} : { attachments: [...carried] }),
       })
       .then(
         (response) => {
-          // The send went, so it is reported whatever the box did meanwhile.
-          // The box is cleared, the edit ended and the delivery said under
-          // it only while it still holds the draft it sent: an edit, a seed
-          // or a quote loaded since is a newer draft, and stays, with
-          // nothing said under it.
-          const sentDraftHeld = generationRef.current === started;
-          if (sentDraftHeld && supersedes === null && held !== null) {
-            keptDraft?.spend(held);
-          }
+          // The send went, so it is reported whatever the box did meanwhile,
+          // unless the box is gone; the delivery is said under the box only
+          // while it is still empty.
           if (!mountedRef.current) return;
-          const deliverySaid = onSent(response, trimmed);
-          if (!sentDraftHeld) return;
-          setText("");
-          if (supersedes !== null) onEditEnd();
+          const deliverySaid = onSent(response, text, unsent.content);
+          if (!emptyRef.current) return;
           setLastDelivery(deliverySaid ? null : response.delivery);
         },
-        () => failure.fail(),
+        () => {
+          // Back where the draft is, while nothing newer is there: the box,
+          // or the draft kept outside a box that is gone. Else offered back,
+          // beside the draft kept outside the box where there is one. A box
+          // that is gone leaves its owner's failure alone where its draft is
+          // kept outside it: the owner may show another conversation's box
+          // now, and the kept draft says it for this one.
+          if (mountedRef.current && emptyRef.current) {
+            putBack(unsent);
+            failure.fail(null);
+          } else if (keptDraft === null) {
+            failure.fail(unsent);
+          } else if (mountedRef.current) {
+            keptDraft.offer(unsent);
+            failure.fail(null);
+          } else if (unsent.supersedes === null && !keptDraft.hasDraft()) {
+            keptDraft.keep(unsent.text, unsent.content);
+          } else {
+            keptDraft.offer(unsent);
+          }
+        },
       );
   };
-  const onKeyDown = (event: KeyboardEvent<HTMLTextAreaElement>): void => {
-    if (mentions.onKeyDown(event)) return;
-    if (
-      event.key !== "Enter" ||
-      event.shiftKey ||
-      event.nativeEvent.isComposing
-    ) {
-      return;
+  // The box's drop target, for a host that takes images.
+  const dropTarget = takesImages
+    ? {
+        onDragEnter: paste.onDragEnter,
+        onDragLeave: paste.onDragLeave,
+        onDragOver: paste.onDragOver,
+        onDrop: paste.onDrop,
+      }
+    : undefined;
+  const dropping = takesImages ? paste.dragOverlayVariant : null;
+  const ingestPasted = useCallback(
+    (images: ReadonlyArray<PastedComposerImage>) =>
+      pastedImagesVerdict({
+        takesImages,
+        editor: editorRef.current,
+        images,
+      }),
+    [takesImages],
+  );
+  const inputGroupRef = useRef<HTMLDivElement>(null);
+  const { inputAria } = mentions;
+  useEffect(() => {
+    const input = inputGroupRef.current?.querySelector(
+      "[data-composer-editor]",
+    );
+    if (input === null || input === undefined) return;
+    for (const name of [
+      "aria-autocomplete",
+      "aria-controls",
+      "aria-activedescendant",
+    ] as const) {
+      const value = inputAria[name];
+      if (value === undefined) input.removeAttribute(name);
+      else input.setAttribute(name, value);
     }
-    event.preventDefault();
-    submit();
-  };
+  });
 
   return (
     <form
@@ -292,93 +452,145 @@ export function BotMessageComposer(props: {
         submit();
       }}
     >
+      <ComposerCallCaptions shown={call.barShown} testId={testId} />
       <div
+        ref={frameRef}
         className={cn(
           "relative rounded-lg border border-border bg-background transition-colors focus-within:border-ring",
           box.frame,
         )}
+        {...dropTarget}
       >
-        {mentions.list}
-        <label htmlFor={inputId} className="sr-only">
-          {label}
-        </label>
-        {edit === null ? null : (
-          <div
-            className="col-span-2 flex items-center gap-2 px-3 pt-2 text-ui-xs text-muted-foreground"
-            data-testid={`${testId}-editing`}
-          >
-            <span className="min-w-0 flex-1">
-              Sending replaces your message that failed.
-            </span>
-            <Button
-              type="button"
-              variant="link"
-              size="xs"
-              data-testid={`${testId}-edit-cancel`}
-              onClick={() => {
-                setText("");
-                onEditEnd();
-              }}
+        {dropping === null ? null : (
+          <ComposerDropOverlay {...FILE_DROP_OVERLAY_CONTENT[dropping]} />
+        )}
+        <ComposerCallSwap shown={call.barShown} testId={testId}>
+          {mentions.menu}
+          {takesImages && imageCount > 0 ? (
+            <div
+              className="col-span-2 flex flex-col gap-1 px-3 pt-2"
+              data-testid={`${testId}-images`}
             >
-              Cancel
+              <ChatComposerAttachmentsStrip
+                taskId={null}
+                content={content}
+                editingQueueItemId={null}
+                onCancelQueueEdit={null}
+                onRemoveImage={(id) =>
+                  editorRef.current?.removeImageAttachmentById(id)
+                }
+              />
+              {imageReach === "delivered" ? null : (
+                <p
+                  className="text-ui-xs text-muted-foreground"
+                  data-testid={`${testId}-images-not-delivered`}
+                >
+                  This bot&apos;s host can&apos;t take images yet, so only your
+                  text will be sent.
+                </p>
+              )}
+            </div>
+          ) : null}
+          {edit === null ? null : (
+            <div
+              className="col-span-2 flex items-center gap-2 px-3 pt-2 text-ui-xs text-muted-foreground"
+              data-testid={`${testId}-editing`}
+            >
+              <span className="min-w-0 flex-1">
+                Sending replaces your message that failed.
+              </span>
+              <Button
+                type="button"
+                variant="link"
+                size="xs"
+                data-testid={`${testId}-edit-cancel`}
+                onClick={() => {
+                  loadBox(EMPTY_BOT_BOX);
+                  onEditEnd();
+                }}
+              >
+                Cancel
+              </Button>
+            </div>
+          )}
+          <div
+            ref={inputGroupRef}
+            role="group"
+            aria-label={label}
+            className="min-w-0"
+            data-testid={`${testId}-input`}
+          >
+            <ComposerPromptEditor
+              ref={editorRef}
+              pickerStore={mentions.pickerStore}
+              initialContent={content}
+              initialSelection={null}
+              placeholder={placeholder}
+              editorClassName={cn("min-h-10 px-3 py-2", box.input)}
+              stabilizeImageAttachmentCaret
+              isActive={focused}
+              disabled={false}
+              slashProviderId={null}
+              preserveMessagePaste
+              hasPastedImageBytes={NO_PASTED_IMAGE_BYTES}
+              ingestPastedComposerImages={ingestPasted}
+              onDocumentChange={(next) => {
+                setContent(next);
+                if (lastDelivery !== null) setLastDelivery(null);
+                // A failed message offered back stays offered while they type.
+                if (failure.unsent === null) failure.clear();
+              }}
+              onSelectionChange={noop}
+              onSubmit={submit}
+              onPaste={takesImages ? paste.onPaste : noop}
+              onDragOver={noop}
+              onDrop={noop}
+              onKeyDown={undefined}
+              interceptKeyDown={null}
+              onFocus={() => setFocused(true)}
+              onBlur={() => setFocused(false)}
+              onEditorReady={onEditorReady}
+            />
+          </div>
+          <div
+            className={cn("flex items-center justify-end gap-2 px-2", box.send)}
+          >
+            <ComposerCallButton
+              target={call.target}
+              botTitle={botTitle}
+              testId={testId}
+            />
+            <Button
+              type="submit"
+              size="icon-sm"
+              disabled={!canSend}
+              aria-label="Send"
+              data-testid={`${testId}-send`}
+            >
+              {send.isPending ? (
+                <AgentSpinningDots
+                  className={undefined}
+                  testId={undefined}
+                  variant={undefined}
+                />
+              ) : (
+                <SendHorizontal aria-hidden="true" />
+              )}
             </Button>
           </div>
-        )}
-        <Textarea
-          ref={inputRef}
-          id={inputId}
-          value={text}
-          variant="bare"
-          size="sm"
-          rows={1}
-          placeholder={placeholder}
-          disabled={send.isPending}
-          maxLength={MESSAGE_MAX}
-          className={cn("min-h-10", box.input)}
-          data-testid={`${testId}-input`}
-          aria-autocomplete="list"
-          aria-controls={mentions.listOpen ? mentionListId : undefined}
-          aria-activedescendant={mentions.activeOptionId ?? undefined}
-          onSelect={(event) =>
-            mentions.onCaret(event.currentTarget.selectionStart)
-          }
-          // Every edit, as `input` reports it: one that leaves the text as
-          // it was (a paste of the same text over it) reaches no `onChange`,
-          // and still replaced the picks it covered.
-          onInput={(event) => mentions.onInput(event.currentTarget)}
-          onChange={(event) => {
-            setText(event.target.value);
-            if (lastDelivery !== null) setLastDelivery(null);
-            failure.clear();
-          }}
-          onKeyDown={onKeyDown}
-        />
-        <div
-          className={cn("flex items-center justify-end gap-2 px-2", box.send)}
-        >
-          <Button
-            type="submit"
-            size="icon-sm"
-            disabled={!canSend}
-            aria-label="Send"
-            data-testid={`${testId}-send`}
-          >
-            {send.isPending ? (
-              <AgentSpinningDots
-                className={undefined}
-                testId={undefined}
-                variant={undefined}
-              />
-            ) : (
-              <SendHorizontal aria-hidden="true" />
-            )}
-          </Button>
-        </div>
+        </ComposerCallSwap>
       </div>
       <ComposerStatus
-        failed={failure.failed}
+        failure={failure}
+        keptDraft={keptDraft}
         queued={lastDelivery === "queued"}
         testId={testId}
+        onRestore={(unsent) => {
+          failure.clear();
+          keptDraft?.offer(null);
+          putBack(unsent);
+          editorRef.current?.focusAtEnd("reveal-caret");
+        }}
       />
     </form>
   );
@@ -446,42 +658,150 @@ export function BotMessageComposerUnavailable(props: {
   );
 }
 
+function canSendBotBox(args: {
+  readonly sendable: boolean;
+  readonly wireLength: number;
+  readonly attachmentCount: number;
+  readonly ingestPending: boolean;
+  readonly sendPending: boolean;
+}): boolean {
+  return (
+    args.sendable &&
+    (args.wireLength > 0 || args.attachmentCount > 0) &&
+    args.wireLength <= MESSAGE_MAX &&
+    !args.ingestPending &&
+    !args.sendPending
+  );
+}
+
 /**
- * Adds each quote once, by its id, to what the box shows then, and moves the
- * focus into the box with the caret after it. The box then holds a newer
- * draft: a send still in flight does not clear it when it lands.
+ * Whether the box is empty now, for a send that settles after the person may
+ * have begun another draft: a newer draft is any text or image, or an edit
+ * loaded.
  */
-function useBoxQuote(args: {
-  readonly quote: BotComposerQuote | null;
-  readonly setText: Dispatch<SetStateAction<string>>;
-  readonly setGeneration: Dispatch<SetStateAction<number>>;
-  readonly inputRef: RefObject<HTMLTextAreaElement | null>;
-}): void {
-  const { quote, setText, setGeneration, inputRef } = args;
+function useBoxEmptyRef(
+  text: string,
+  imageCount: number,
+  edit: BotComposerEdit | null,
+): RefObject<boolean> {
+  const empty = text.length === 0 && imageCount === 0 && edit === null;
+  const emptyRef = useRef(empty);
+  useEffect(() => {
+    emptyRef.current = empty;
+  }, [empty]);
+  return emptyRef;
+}
+
+/**
+ * The editor's document as the box holds it. What the person does reaches it
+ * through `setContent`; what the box puts there itself goes through `loadBox`,
+ * which the editor then shows. A focused box keeps its caret at the end of it,
+ * and only a gesture of the person's moves focus to it.
+ */
+function useBotBoxDocument(
+  editorRef: RefObject<ComposerPromptEditorHandle | null>,
+  incoming: {
+    readonly edit: BotComposerEdit | null;
+    readonly seed: BotComposerSeed | null;
+    readonly quote: BotComposerQuote | null;
+    readonly contentOf: (text: string) => JsonContent;
+  },
+): {
+  readonly content: JsonContent;
+  readonly setContent: (content: JsonContent) => void;
+  readonly loadBox: (content: JsonContent) => void;
+  readonly onEditorReady: () => void;
+  readonly takenQuoteId: number | null;
+} {
+  const { edit, seed, quote, contentOf } = incoming;
+  const [content, setContent] = useState(EMPTY_BOT_BOX);
+  const [loaded, setLoaded] = useState<JsonContent | null>(null);
+  const loadBox = (next: JsonContent): void => {
+    setContent(next);
+    // Each load must trigger the editor sync, including repeated clears with
+    // EMPTY_BOT_BOX after consecutive sends on one mounted composer.
+    setLoaded({ ...next });
+  };
+  // An edit or seed replaces the box's content once. A quote appends after
+  // whichever document it currently holds, including an edit.
+  const [loadedEdit, setLoadedEdit] = useState<BotComposerEdit | null>(null);
+  if (edit !== loadedEdit) {
+    setLoadedEdit(edit);
+    if (edit !== null) {
+      const next = edit.content ?? contentOf(edit.text);
+      setContent(next);
+      setLoaded(next);
+    }
+  }
+  const seedId = seed?.id ?? null;
+  const [loadedSeedId, setLoadedSeedId] = useState<number | null>(null);
+  if (seedId !== loadedSeedId) {
+    setLoadedSeedId(seedId);
+    let next: JsonContent | null = null;
+    if (seed !== null) next = seed.content ?? contentOf(seed.text);
+    else if (edit === null) next = EMPTY_BOT_BOX;
+    if (next !== null) {
+      setContent(next);
+      setLoaded(next);
+    }
+  }
   const [takenQuoteId, setTakenQuoteId] = useState<number | null>(null);
   if (quote !== null && quote.id !== takenQuoteId) {
     setTakenQuoteId(quote.id);
-    setText((current) => quote.snapshots.reduce(appendQuoteMarkdown, current));
-    setGeneration((current) => current + 1);
+    const next = appendBlocks(
+      content,
+      quote.snapshots.flatMap((snapshot) => [
+        buildQuoteBlockquote(snapshot),
+        { type: "paragraph" },
+      ]),
+    );
+    setContent(next);
+    setLoaded(next);
   }
   useEffect(() => {
-    if (quote === null || quote.id !== takenQuoteId) return;
-    const input = inputRef.current;
-    if (input !== null) {
-      input.focus();
-      input.setSelectionRange(input.value.length, input.value.length);
-    }
-    quote.taken();
-  }, [inputRef, quote, takenQuoteId]);
+    const editor = editorRef.current;
+    if (loaded === null || editor === null) return;
+    const hadFocus = editor.hasFocus();
+    editor.syncContent(loaded, { from: 1, to: 1 });
+    if (hadFocus) editor.focusAtEnd("reveal-caret");
+  }, [editorRef, loaded]);
+  const contentRef = useRef(content);
+  useLayoutEffect(() => {
+    contentRef.current = content;
+  }, [content]);
+  // Anything loaded before the editor could take it.
+  const onEditorReady = useCallback(() => {
+    if (contentRef.current === EMPTY_BOT_BOX) return;
+    editorRef.current?.syncContent(contentRef.current, { from: 1, to: 1 });
+  }, [editorRef]);
+  return { content, setContent, loadBox, onEditorReady, takenQuoteId };
 }
 
+/**
+ * What the box says under it: a failed send offered back (from the draft
+ * kept outside the box, else from the failure), a failed send whose text is
+ * in the box, or a queued send.
+ */
 function ComposerStatus(props: {
-  readonly failed: boolean;
+  readonly failure: BotSendFailure;
+  readonly keptDraft: BotKeptDraft | null;
   readonly queued: boolean;
   readonly testId: string;
+  readonly onRestore: (unsent: BotUnsentMessage) => void;
 }): ReactNode {
-  if (props.failed) {
-    return <BotSendFailedNotice testId={`${props.testId}-send-failed`} />;
+  const { failure, onRestore } = props;
+  const unsent = props.keptDraft?.unsent ?? failure.unsent;
+  if (unsent !== null || failure.failed) {
+    return (
+      <BotSendFailedNotice
+        testId={`${props.testId}-send-failed`}
+        restore={
+          unsent === null
+            ? null
+            : { text: unsent.text, onRestore: () => onRestore(unsent) }
+        }
+      />
+    );
   }
   if (!props.queued) return null;
   return <BotQueuedNotice testId={`${props.testId}-queued`} />;
@@ -492,16 +812,20 @@ export type BotComposerSeed = {
   /** Which draft it is: the box loads each id once. */
   readonly id: number;
   readonly text: string;
+  /** The box's own document; `null` for text put there from outside it. */
+  readonly content: JsonContent | null;
 };
 
 /** Where a box's unsent draft is kept, outside the box. */
 export type BotKeptDraft = {
   /** What the box holds now, as the person types it; empty keeps nothing. */
-  readonly keep: (text: string) => void;
-  /** Which revision of the draft is kept now; `null` while none is. */
-  readonly revision: () => number | null;
-  /** The draft at `revision` was sent: spent, unless a newer draft took its place. */
-  readonly spend: (revision: number) => void;
+  readonly keep: (text: string, content: JsonContent | null) => void;
+  /** Whether a draft is kept now, read when a send settles. */
+  readonly hasDraft: () => boolean;
+  /** A failed send of the box offered back beside the draft; `null` for none. */
+  readonly unsent: BotUnsentMessage | null;
+  /** Offers a failed send back; `null` takes the offer away. */
+  readonly offer: (unsent: BotUnsentMessage | null) => void;
 };
 
 /** Quotes of selections, for the box to add to what it shows. */
@@ -519,4 +843,6 @@ export type BotComposerEdit = {
   /** The failed message's request, which the edit replaces. */
   readonly requestId: string;
   readonly text: string;
+  /** The box's document as a failed send of the edit left it; `null` for a row's text alone. */
+  readonly content: JsonContent | null;
 };

@@ -63,7 +63,6 @@ import {
   type EnvironmentMembersResponseV11,
 } from "@traycer/protocol/host/environment/contracts";
 import {
-  ENVIRONMENT_MOVE_ITEM_CHOICE_PREFIX,
   environmentMoveAcceptV10,
   environmentMoveItemChoiceKey,
   environmentMovePlanUpgradeV10ToV11,
@@ -712,7 +711,7 @@ const REDESIGN_WIRE_CASES: readonly RedesignWireCase[] = [
     contract: environmentMoveAcceptV10,
     request: {
       planHash: "h1",
-      keyChoices: [{ key: "TOKEN", choice: "secret" }],
+      keyChoices: [{ key: "item:variable:TOKEN", choice: "stays" }],
     },
     badRequest: {
       planHash: "h1",
@@ -1395,6 +1394,9 @@ describe("the environments redesign's new @1.0 methods", () => {
         staysOnThisComputer: [leaky],
         alreadyInPersonal: [leaky],
         differsMasked: [leaky],
+        // No plan this host builds puts a row here, but the released schema
+        // still declares the group, and a value is stripped out of a row in
+        // it exactly as in every other.
         looksLikeAKey: [leaky],
       },
     });
@@ -1409,7 +1411,7 @@ describe("the environments redesign's new @1.0 methods", () => {
     expect(preview.needsChoice[0].row).toEqual(MOVE_ROW);
   });
 
-  it("opens environment.move.plan@1.1 with sameNameInPersonal, which a @1.0 answer upgrades to empty", () => {
+  it("opens environment.move.plan@1.1 with guideDiffers, which a @1.0 answer upgrades to false", () => {
     const line = hostRpcRegistry["environment.move.plan"][1];
     expect(line.versions[1].contract).toBe(environmentMovePlanV11);
     expect(line.versions[1].upgradeFromPreviousVersion).toBe(
@@ -1429,18 +1431,8 @@ describe("the environments redesign's new @1.0 methods", () => {
       },
     });
     const upgraded = environmentMovePlanUpgradeV10ToV11.upgradeResponse(v10);
-    expect(upgraded.rows.sameNameInPersonal).toEqual([]);
     expect(upgraded.guideDiffers).toBe(false);
     expect(upgraded.rows.moves).toEqual([MOVE_ROW]);
-    const leaky = { ...MOVE_ROW, value: "sk-live-123" };
-    const v11 = environmentMovePlanV11.responseSchema.parse({
-      ...v10,
-      rows: { ...v10.rows, sameNameInPersonal: [leaky] },
-    });
-    expect(v11.rows.sameNameInPersonal).toEqual([MOVE_ROW]);
-    expect(
-      environmentMovePlanV11.responseSchema.parse(v10).rows.sameNameInPersonal,
-    ).toEqual([]);
     expect(environmentMovePlanV11.responseSchema.parse(v10).guideDiffers).toBe(
       false,
     );
@@ -1489,9 +1481,9 @@ describe("the environments redesign's new @1.0 methods", () => {
   });
 
   it("sends a Moves row's choice under item:<kind>:<key>", () => {
-    const key = environmentMoveItemChoiceKey("variable", "X");
-    expect(key).toBe("item:variable:X");
-    expect(key.startsWith(ENVIRONMENT_MOVE_ITEM_CHOICE_PREFIX)).toBe(true);
+    expect(environmentMoveItemChoiceKey("variable", "X")).toBe(
+      "item:variable:X",
+    );
     expect(
       environmentMoveItemChoiceKey("env_override", "claude-code:A_B"),
     ).toBe("item:env_override:claude-code:A_B");

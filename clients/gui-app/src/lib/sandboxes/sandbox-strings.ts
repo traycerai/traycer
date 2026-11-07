@@ -22,7 +22,7 @@ import {
  * as shown against it, so changing a clause's words re-opens the block for
  * everyone once.
  */
-export const CONSEQUENCES_WORDING_VERSION = 1;
+export const CONSEQUENCES_WORDING_VERSION = 3;
 
 /** A configuration as copy reads it: Personal, or a team by its name. */
 export type SandboxConfigurationCopy =
@@ -113,9 +113,6 @@ export function collapsedConfigurationsLabel(
 /** The search field above a host list. */
 export const SEARCH_HOSTS_PLACEHOLDER = "Search hosts";
 
-/** The chip and row title of the machine this app runs on. */
-export const THIS_COMPUTER = "This computer";
-
 /** A computer row's status: it answers. */
 export const COMPUTER_ACTIVE = "Active";
 
@@ -192,7 +189,7 @@ export function hourlyRate(mcPerHour: number): string {
 
 /**
  * A sandbox's rates: `$0.21 an hour while awake · under $0.01 an hour while
- * resting`. Resting is the higher of the suspended and stopped storage
+ * suspended or stopped`. The second figure is the higher of the two storage
  * rates, so the figure never understates either.
  */
 export function awakeAndRestingRates(price: {
@@ -200,7 +197,7 @@ export function awakeAndRestingRates(price: {
   readonly suspendedMc: number;
   readonly stoppedMc: number;
 }): string {
-  return `${hourlyRate(price.awakeMc)} while awake · ${hourlyRate(Math.max(price.suspendedMc, price.stoppedMc))} while resting`;
+  return `${hourlyRate(price.awakeMc)} while awake · ${hourlyRate(Math.max(price.suspendedMc, price.stoppedMc))} while suspended or stopped`;
 }
 
 /** The chip's short price: `$0.12/h`. */
@@ -235,7 +232,7 @@ export function audienceClause(
 ): string {
   return configuration.kind === "personal"
     ? "Chats and files in this task are visible to everyone in the task."
-    : `Chats and files in this task are visible to everyone in the task, who may be outside ${configuration.teamName}.`;
+    : "Chats and files in this task are visible to everyone in the task, who may be outside the team.";
 }
 
 /**
@@ -252,21 +249,17 @@ export function reachRemedyLine(teamName: string): string {
   return `To work together, start this agent on a host in ${teamName}.`;
 }
 
-/** The team clause. */
-export function teamClause(teamName: string): string {
-  return `Everyone in ${teamName} can use it, and agents here run as the host: another member's agent can read what yours can.`;
-}
+/** Shared use and payment, followed by the distinct access warning. */
+export const TEAM_USE_AND_ACCESS_CLAUSE =
+  "Everyone in the team can use it while you pay from your team credits; another member's agent can read what yours can.";
 
 export const RESTING_STORAGE_CLAUSE =
-  "Storage while it rests, on the same credits until another member wakes it.";
+  "Storage while it's suspended or stopped, on the same credits until another member wakes it.";
 export function restingStorageClause(): string {
   return RESTING_STORAGE_CLAUSE;
 }
 
 export const SHARED_USE_CLAUSE = "Other members can use it while you pay.";
-export function sharedUseClause(): string {
-  return SHARED_USE_CLAUSE;
-}
 
 /** The move clause: `computer` still holds settings not in Personal yet. */
 export function moveClause(computer: string): string {
@@ -299,29 +292,38 @@ export function wakeString(suspendFidelity: string): string | null {
   }
 }
 
-/** `Suspends after 30 idle min · destroyed after 7 resting days`. */
+/** `Suspends after 30 idle min · destroyed after 7 idle days`. */
 export function idleAndRestingLine(
   idleMinutes: number,
   destroyAfterRestingMinutes: number | null,
 ): string {
-  const idle = `Suspends after ${idleMinutes} idle min`;
+  const idle = idleLine(idleMinutes);
   // `0` is never, as the server spells it.
   return destroyAfterRestingMinutes === null || destroyAfterRestingMinutes === 0
     ? `${idle} · ${KEPT_UNTIL_YOU_DESTROY_IT}`
     : `${idle} · destroyed after ${restingPeriodLabel(destroyAfterRestingMinutes)}`;
 }
 
-/** `7 resting days`, `12 resting hours`, `45 resting minutes`. */
+/**
+ * `Suspends after 30 idle min`: the idle half alone, for a row whose resting
+ * policy says nothing about how long it is kept, as a withdrawn row's does
+ * not. The two share this clause so they cannot drift apart.
+ */
+export function idleLine(idleMinutes: number): string {
+  return `Suspends after ${idleMinutes} idle min`;
+}
+
+/** `7 idle days`, `12 idle hours`, `45 idle minutes`. */
 export function restingPeriodLabel(minutes: number): string {
   if (minutes % (24 * 60) === 0) {
     const days = minutes / (24 * 60);
-    return `${days} resting ${days === 1 ? "day" : "days"}`;
+    return `${days} idle ${days === 1 ? "day" : "days"}`;
   }
   if (minutes % 60 === 0) {
     const hours = minutes / 60;
-    return `${hours} resting ${hours === 1 ? "hour" : "hours"}`;
+    return `${hours} idle ${hours === 1 ? "hour" : "hours"}`;
   }
-  return `${minutes} resting ${minutes === 1 ? "minute" : "minutes"}`;
+  return `${minutes} idle ${minutes === 1 ? "minute" : "minutes"}`;
 }
 
 export const KEPT_UNTIL_YOU_DESTROY_IT = "kept until you destroy it";
@@ -329,22 +331,13 @@ export const CHANGE_LABEL = "Change";
 
 // ── Chip ──────────────────────────────────────────────────────────────────
 
-/**
- * The chip of a staged create: `New Acme sandbox · 2 vCPU · 4 GB · $0.12/h`.
- * `priceIsFrom` reads the price as a lower bound (`from $0.12/h`): the
- * balance is short, or the price is the region's smallest shape's.
- */
+/** A staged create's identity and resources; its consequences show the price. */
 export function stagedChipLabel(args: {
   readonly configuration: SandboxConfigurationCopy;
   readonly cpus: number;
   readonly memoryMb: number;
-  readonly priceMcPerHour: number | null;
-  readonly priceIsFrom: boolean;
 }): string {
-  const head = `${newSandboxRowLabel(args.configuration)} · ${sandboxShapeLabel(args.cpus, args.memoryMb)}`;
-  if (args.priceMcPerHour === null) return head;
-  const price = shortPriceLabel(args.priceMcPerHour);
-  return `${head} · ${args.priceIsFrom ? `from ${price}` : price}`;
+  return `${newSandboxRowLabel(args.configuration)} · ${sandboxShapeLabel(args.cpus, args.memoryMb)}`;
 }
 
 /** A resting pick: `api-refactor · suspended, resumes on send`. */
@@ -625,24 +618,12 @@ export function sandboxVerbFailureLine(
   return `${sentence} · ${reference}`;
 }
 
-export const COMPUTE_CHARGED_WHILE_AWAKE =
-  "Compute is charged while it is awake.";
-
-/** A settings failure's line once its sandbox is no longer awake: no claim it is. */
-export function settingsDidntApplyOnLine(
-  configuration: string,
-  name: string,
-  reference: string,
-): string {
-  return `${configuration}'s settings didn't apply on ${name} · ${reference}`;
-}
-
 export const RETRY_APPLYING = "Retry applying";
 export const STOP = "Stop";
 
 /** The settled line's idle rule, with the configured period. */
 export function idleRuleLine(idleMinutes: number): string {
-  return `After ${idleMinutes} minutes with no agent turn, running shell or browser tab on screen, this sandbox suspends. Closing this tab does not stop running work or immediately stop charges; storage is charged while it rests.`;
+  return `After ${idleMinutes} minutes with no agent turn, running shell or browser tab on screen, this sandbox suspends. Closing this tab does not stop running work or immediately stop charges; storage is charged while it's suspended or stopped.`;
 }
 
 // ── Who: started, kept, paid ──────────────────────────────────────────────
@@ -682,9 +663,19 @@ export const FILES_NOT_RECOVERABLE =
   "Files on this sandbox cannot be recovered; published chats stay readable.";
 
 /** Keep's preview before it acts. */
+const KEEP_STOPS_DELETING = "Stops deleting itself when idle.";
+
 export function keepPreviewLine(restingDays: number, date: string): string {
-  return `Stops deleting itself when idle. Destroyed after ${restingDays} resting days instead, on ${date} if it rests from now. Paid by you while awake.`;
+  return `${KEEP_STOPS_DELETING} Destroyed after ${restingDays} days instead, on ${date} if it's suspended or stopped from now on.`;
 }
+
+/**
+ * The Keep preview for a row whose withdrawal, not its resting policy,
+ * decides how long it is kept: the resting sentence is left out rather than
+ * naming a destroy the resting pass will not perform. The payer is stated
+ * separately by the dialog from the current wake.
+ */
+export const KEEP_PREVIEW_WITHDRAWN = KEEP_STOPS_DELETING;
 
 export function alreadyDestroyedLine(name: string): string {
   return `${name} was already destroyed`;
@@ -699,6 +690,11 @@ export const TASK_FILES = "Task files";
 
 export const HOST_LABEL = "Host";
 export const SESSIONS_UNKNOWN = "Sessions unknown · no report yet";
+
+/** The hover's session summary: how many, never their names. */
+export function hoverSessionCount(count: number): string {
+  return count === 1 ? "1 session" : `${count} sessions`;
+}
 
 /** A team sandbox to a reader authorized only over the task. */
 export function hoverTaskConfiguration(teamName: string | null): string {

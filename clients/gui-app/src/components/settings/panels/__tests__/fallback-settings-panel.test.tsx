@@ -396,6 +396,7 @@ function respond(
     policy: policyValue,
     storedPolicyUnreadable: false,
     inFlightCount: 0,
+    source: "own",
   };
 }
 
@@ -1130,7 +1131,9 @@ describe("FallbackSettingsPanel - R8 a confirmed reset whose read fails is not s
     // fails, so the cache still holds what it held before - TanStack's error
     // reducer keeps the previous data.
     fallbackMocks.resetMutateAsync.mockImplementationOnce(() =>
-      Promise.resolve({ policy: createDefaultFallbackPolicy() }),
+      Promise.resolve({
+        policy: { ...createDefaultFallbackPolicy(), enabled: false },
+      }),
     );
     // The post-reset read fails. `isSuccess: false` WITH data present is the
     // production shape, the same one R1 turns on.
@@ -1176,7 +1179,10 @@ describe("FallbackSettingsPanel - R8 a confirmed reset whose read fails is not s
 
     // Recovery: the read succeeds this time and returns what the host actually
     // holds after the reset.
-    fallbackMocks.queryData = respond(createDefaultFallbackPolicy());
+    fallbackMocks.queryData = respond({
+      ...createDefaultFallbackPolicy(),
+      enabled: false,
+    });
     fallbackMocks.refetchMock.mockResolvedValueOnce({
       isSuccess: true,
       data: fallbackMocks.queryData,
@@ -1190,7 +1196,7 @@ describe("FallbackSettingsPanel - R8 a confirmed reset whose read fails is not s
       expect(screen.queryByTestId("fallback-reset-unrefreshed")).toBeNull();
     });
     // VALUES, not just the banner: the editor is now seeded from the read, so
-    // the default policy's automation-off and 15-second window are what render.
+    // the reset policy's automation-off and 15-second window are what render.
     expect(
       screen
         .getByRole("switch", { name: "Route automatically" })

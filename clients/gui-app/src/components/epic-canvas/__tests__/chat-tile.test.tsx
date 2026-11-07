@@ -559,8 +559,6 @@ import {
 } from "@/components/epic-canvas/renderers/chat-tile";
 import * as chatPrewarmHandoff from "@/components/epic-canvas/chat-prewarm-handoff";
 import { TabHostProvider } from "@/components/epic-canvas/tab-host-provider";
-import { TileMinimapContext } from "@/components/epic-canvas/tile-minimap/tile-minimap-context";
-import { executePageAct } from "@/lib/voice/page-acts";
 import { RunnerHostProvider } from "@/providers/runner-host-provider";
 import { MockRunnerHost } from "@traycer-clients/shared/host-client/mock/mock-runner-host";
 import {
@@ -606,6 +604,7 @@ import type {
   WorktreeFolderIntent,
   WorktreeIntent,
 } from "@traycer/protocol/host/worktree-schemas";
+import type { ChatMessageDeliveryV142 } from "@traycer/protocol/host/agent/gui/message-delivery";
 import {
   readStagedWorktreeIntent,
   useWorktreeIntentStagingStore,
@@ -913,6 +912,8 @@ function emitChatSnapshotWithMessages(input: {
   readonly activeTurn: ChatActiveTurn | null;
   readonly pendingInterviews?: ReadonlyArray<ChatPendingInterviewState>;
   readonly managedCommands?: ReadonlyArray<ManagedCommand>;
+  readonly messageDelivery?: ChatMessageDeliveryV142 | null;
+  readonly worktreeBinding?: WorktreeBinding | null;
 }): void {
   input.callbacks.onSnapshot({
     kind: "snapshot",
@@ -948,13 +949,17 @@ function emitChatSnapshotWithMessages(input: {
       activeTurn: input.activeTurn,
       pendingApprovals: [],
       pendingInterviews: [...(input.pendingInterviews ?? [])],
-      worktreeBinding: testWorktreeBinding(),
+      worktreeBinding:
+        input.worktreeBinding === undefined
+          ? testWorktreeBinding()
+          : input.worktreeBinding,
       missingWorktreePaths: [],
       pendingFileEditApprovals: [],
       accumulatedFileChanges: [...(input.accumulatedFileChanges ?? [])],
       managedCommands: [...(input.managedCommands ?? [])],
       heldUpdates: [],
       portForwards: [],
+      messageDelivery: input.messageDelivery,
     },
   });
 }
@@ -1618,19 +1623,6 @@ function chatTileSessionViewTestTree(
 }
 
 function renderRestingCopy(handle: ChatSessionStoreHandle) {
-  return render(restingCopyTree(handle));
-}
-
-/** The resting copy in a canvas tile of its own, as the voice reads it. */
-function renderRestingCopyInTile(handle: ChatSessionStoreHandle) {
-  return render(
-    <TileMinimapContext.Provider value={CHAT_ARTIFACT.instanceId}>
-      {restingCopyTree(handle)}
-    </TileMinimapContext.Provider>,
-  );
-}
-
-function restingCopyTree(handle: ChatSessionStoreHandle) {
   act(() => {
     handle.store.setState({
       access: { role: "owner", ownerUserId: "owner-1", canAct: false },
@@ -1648,7 +1640,7 @@ function restingCopyTree(handle: ChatSessionStoreHandle) {
   const queryClient = new QueryClient({
     defaultOptions: { queries: { retry: false, gcTime: 0 } },
   });
-  return chatTileSessionViewTestTree(queryClient, handle, false);
+  return render(chatTileSessionViewTestTree(queryClient, handle, false));
 }
 
 /**
@@ -2509,64 +2501,6 @@ describe("<ChatTile />", () => {
     useStagedSandboxStore.getState().clearAll();
   });
 
-  it("lets the voice wake a resting copy through the composer in its tile: the message is held in the pending store", async () => {
-    const liveTile = renderChatTile();
-    await waitForChatTileLoaded();
-    const handle = __getChatSessionRegistryForTests().peek(
-      EPIC_ID,
-      CHAT_ARTIFACT.id,
-      HOST_ID,
-    );
-    if (handle === null) {
-      throw new Error("expected the live chat session handle");
-    }
-    liveTile.unmount();
-    sandboxCatalogueTestState.catalogue = {
-      providers: [],
-      offeredAgents: ["codex"],
-    };
-    renderRestingCopyInTile(handle);
-    await waitFor(() => {
-      const button = screen.getByRole("button", { name: "Send" });
-      if (!(button instanceof HTMLButtonElement)) {
-        throw new Error("expected send button");
-      }
-      expect(button.disabled).toBe(false);
-    });
-
-    const outcome = await executePageAct({
-      row: {
-        action: `agent.tell:${CHAT_ARTIFACT.id}`,
-        label: "Tell the agent",
-        takesWords: true,
-        confirm: true,
-      },
-      text: "use the other branch",
-      turnId: null,
-      reads: {
-        agentSession: () => ({
-          handle,
-          chatId: CHAT_ARTIFACT.id,
-          epicId: EPIC_ID,
-          hostId: HOST_ID,
-          tileInstanceId: CHAT_ARTIFACT.instanceId,
-          title: CHAT_ARTIFACT.name,
-        }),
-        paletteRow: () => null,
-      },
-    });
-
-    expect(outcome).toEqual({ kind: "executed" });
-    const sends = Object.values(usePendingSandboxSendStore.getState().sends);
-    expect(sends).toHaveLength(1);
-    expect(sends[0]).toMatchObject({
-      text: "use the other branch",
-      request: { kind: "message", chatId: CHAT_ARTIFACT.id },
-    });
-    usePendingSandboxSendStore.setState({ sends: {} });
-    useStagedSandboxStore.getState().clearAll();
-  });
-
   it.each(["owner", "viewer"] as const)(
     "keeps a suspended live tile's footer as its only availability line for the %s before copy substitution",
     async (role) => {
@@ -2919,6 +2853,7 @@ describe("<ChatTile />", () => {
           messageId: "message-1",
           revision: 1,
           state: { phase: "preparing" },
+          worktreeIntent: null,
         },
       });
     });
@@ -6752,6 +6687,98 @@ describe("<ChatTile />", () => {
     expect(chatHarness.sent[0]?.kind).toBe("send");
   });
 
+  // The composer's own text through the dialog: kept while it asks, cleared
+  // by the confirmed send (which used to leave it behind as a duplicate of
+  // the queued message), kept by a dismiss.
+  it("clears the composer once Send and switch dispatches its send", async () => {
+    stageChatWorktreeDraft("/wt/a");
+    await loadBusyChatWithShell();
+
+    submitComposerWithEnter();
+
+    expect(await screen.findByTestId("teardown-commit-dialog")).toBeTruthy();
+    expect(chatHarness.sent).toHaveLength(0);
+    expect(
+      useComposerDraftStore.getState().drafts[CHAT_ARTIFACT.id]?.content,
+    ).toEqual(PENDING_DRAFT_CONTENT);
+
+    fireEvent.click(screen.getByTestId("teardown-commit-immediate"));
+
+    await waitFor(() => {
+      expect(chatHarness.sent).toHaveLength(1);
+    });
+    const frame = chatHarness.sent[0];
+    if (frame.kind !== "send") throw new Error("expected send frame");
+    expect(frame.worktreeIntent?.entries[0]).toMatchObject({
+      kind: "import",
+      worktreePath: "/wt/a",
+    });
+    await waitFor(() => {
+      expect(
+        useComposerDraftStore.getState().drafts[CHAT_ARTIFACT.id]?.content,
+      ).toEqual({ type: "doc", content: [{ type: "paragraph" }] });
+    });
+  });
+
+  it("refuses a second gated send while the folder dialog asks about the first", async () => {
+    stageChatWorktreeDraft("/wt/a");
+    renderChatTile();
+    await waitForChatTileLoaded();
+    act(() => {
+      emitChatSnapshotWithMessages({
+        callbacks: chatHarness.callbacks(),
+        access: "owner",
+        queueItems: [],
+        settings: SESSION_SETTINGS,
+        messages: [hostUserMessage(), nextStepsAssistantMessage()],
+        activeTurn: runningActiveTurn(),
+        managedCommands: [runningShellOnProject()],
+      });
+    });
+
+    submitComposerWithEnter();
+    expect(await screen.findByTestId("teardown-commit-dialog")).toBeTruthy();
+
+    // A next-step send arriving under the dialog must not replace the
+    // composer send the dialog is about.
+    fireEvent.click(getButtonContainingText("/implementation-validation all"));
+    expect(chatHarness.sent).toHaveLength(0);
+    expect(screen.getByTestId("teardown-commit-dialog")).toBeTruthy();
+
+    fireEvent.click(screen.getByTestId("teardown-commit-immediate"));
+    await waitFor(() => {
+      expect(chatHarness.sent).toHaveLength(1);
+    });
+    const frame = chatHarness.sent[0];
+    if (frame.kind !== "send") throw new Error("expected send frame");
+    expect(JSON.stringify(frame.content)).not.toContain(
+      "/implementation-validation",
+    );
+    await waitFor(() => {
+      expect(
+        useComposerDraftStore.getState().drafts[CHAT_ARTIFACT.id]?.content,
+      ).toEqual({ type: "doc", content: [{ type: "paragraph" }] });
+    });
+  });
+
+  it("keeps the composer text when the folder dialog is dismissed", async () => {
+    stageChatWorktreeDraft("/wt/a");
+    await loadBusyChatWithShell();
+
+    submitComposerWithEnter();
+    expect(await screen.findByTestId("teardown-commit-dialog")).toBeTruthy();
+
+    fireEvent.click(screen.getByTestId("teardown-commit-cancel"));
+
+    await waitFor(() => {
+      expect(screen.queryByTestId("teardown-commit-dialog")).toBeNull();
+    });
+    expect(chatHarness.sent).toHaveLength(0);
+    expect(
+      useComposerDraftStore.getState().drafts[CHAT_ARTIFACT.id]?.content,
+    ).toEqual(PENDING_DRAFT_CONTENT);
+  });
+
   it("gates a next-step click on a staged rebind with the teardown dialog", async () => {
     stageChatWorktreeDraft("/wt/a");
     renderChatTile();
@@ -6788,6 +6815,239 @@ describe("<ChatTile />", () => {
       expect(workspaceSelectorTestState.inFlightWorktreeIntent).toEqual(
         frame.worktreeIntent,
       );
+    });
+  });
+
+  describe("the seeded worktree overlay", () => {
+    const PROJECT = "/Users/test/project";
+    const SIBLING = "/Users/test/sibling";
+
+    function seededWorktree(
+      workspacePath: string,
+      branchName: string,
+    ): WorktreeFolderIntent {
+      return {
+        kind: "worktree",
+        workspacePath,
+        repoIdentifier: null,
+        isPrimary: workspacePath === PROJECT,
+        branch: {
+          type: "new",
+          name: branchName,
+          source: "main",
+          carryUncommittedChanges: false,
+        },
+        scripts: null,
+      };
+    }
+
+    const PROJECT_SEED = seededWorktree(PROJECT, "polite-turtle");
+    const SIBLING_SEED = seededWorktree(SIBLING, "polite-otter");
+
+    function seededDelivery(
+      state: ChatMessageDeliveryV142["state"],
+      entries: ReadonlyArray<WorktreeFolderIntent>,
+    ): ChatMessageDeliveryV142 {
+      return {
+        messageId: "message-1",
+        revision: 1,
+        state,
+        worktreeIntent: { entries: [...entries] },
+      };
+    }
+
+    function emitSeededSnapshot(
+      messageDelivery: ChatMessageDeliveryV142 | null,
+      worktreeBinding: WorktreeBinding | null,
+    ): void {
+      act(() => {
+        emitChatSnapshotWithMessages({
+          callbacks: chatHarness.callbacks(),
+          access: "owner",
+          queueItems: [],
+          settings: SESSION_SETTINGS,
+          messages: [hostUserMessage()],
+          activeTurn: null,
+          messageDelivery,
+          worktreeBinding,
+        });
+      });
+    }
+
+    function emitDeliveryChanged(delivery: ChatMessageDeliveryV142): void {
+      act(() => {
+        chatHarness.callbacks().onMessageDeliveryChanged({
+          kind: "messageDeliveryChanged",
+          hasBinaryPayload: false,
+          epicId: EPIC_ID,
+          chatId: CHAT_ARTIFACT.id,
+          delivery,
+        });
+      });
+    }
+
+    it.each([
+      ["the placeholder local binding", testWorktreeBinding()],
+      ["no binding yet", null],
+    ])(
+      "shows only the worktree entries from a pending snapshot over %s",
+      async (_label, binding) => {
+        renderChatTile();
+        await waitForChatTileLoaded();
+
+        emitSeededSnapshot(
+          seededDelivery({ phase: "pending" }, [
+            PROJECT_SEED,
+            {
+              kind: "local",
+              workspacePath: SIBLING,
+              repoIdentifier: null,
+              isPrimary: false,
+            },
+          ]),
+          binding,
+        );
+
+        await waitFor(() => {
+          expect(workspaceSelectorTestState.inFlightWorktreeIntent).toEqual({
+            entries: [PROJECT_SEED],
+          });
+        });
+      },
+    );
+
+    it.each<[string, ChatMessageDeliveryV142["state"]]>([
+      [
+        "started",
+        { phase: "started", turnId: "turn-1", assistantMessageId: "reply-1" },
+      ],
+      [
+        "withdrawn",
+        {
+          phase: "withdrawn",
+          code: "WORKTREE_SETUP_FAILED",
+          reason: "The worktree could not be created.",
+          missingHashes: [],
+          restore: null,
+          restoreClaimed: false,
+        },
+      ],
+    ])(
+      "holds through preparing, then gives way to the binding at %s though the intent is still set",
+      async (_label, terminalState) => {
+        renderChatTile();
+        await waitForChatTileLoaded();
+        const entries = [PROJECT_SEED];
+        emitSeededSnapshot(
+          seededDelivery({ phase: "pending" }, entries),
+          testWorktreeBinding(),
+        );
+
+        emitDeliveryChanged(seededDelivery({ phase: "preparing" }, entries));
+        await waitFor(() => {
+          expect(workspaceSelectorTestState.inFlightWorktreeIntent).toEqual({
+            entries,
+          });
+        });
+
+        emitDeliveryChanged(seededDelivery(terminalState, entries));
+        await waitFor(() => {
+          expect(workspaceSelectorTestState.inFlightWorktreeIntent).toBeNull();
+        });
+      },
+    );
+
+    it("retires the overlay when the host nulls the intent during preparing", async () => {
+      renderChatTile();
+      await waitForChatTileLoaded();
+      emitSeededSnapshot(
+        seededDelivery({ phase: "preparing" }, [PROJECT_SEED]),
+        testWorktreeBinding(),
+      );
+      await waitFor(() => {
+        expect(workspaceSelectorTestState.inFlightWorktreeIntent).toEqual({
+          entries: [PROJECT_SEED],
+        });
+      });
+
+      emitDeliveryChanged({
+        messageId: "message-1",
+        revision: 2,
+        state: { phase: "preparing" },
+        worktreeIntent: null,
+      });
+      await waitFor(() => {
+        expect(workspaceSelectorTestState.inFlightWorktreeIntent).toBeNull();
+      });
+    });
+
+    it("drops a landed folder and keeps its pending sibling", async () => {
+      renderChatTile();
+      await waitForChatTileLoaded();
+      const delivery = seededDelivery({ phase: "preparing" }, [
+        PROJECT_SEED,
+        SIBLING_SEED,
+      ]);
+      emitSeededSnapshot(delivery, testWorktreeBinding());
+      await waitFor(() => {
+        expect(workspaceSelectorTestState.inFlightWorktreeIntent).toEqual({
+          entries: [PROJECT_SEED, SIBLING_SEED],
+        });
+      });
+
+      emitSeededSnapshot(delivery, {
+        entries: testWorktreeBinding().entries.map((entry) => ({
+          ...entry,
+          mode: "worktree",
+          worktreePath: "/wt/polite-turtle",
+          branch: "polite-turtle",
+        })),
+      });
+
+      await waitFor(() => {
+        expect(workspaceSelectorTestState.inFlightWorktreeIntent).toEqual({
+          entries: [SIBLING_SEED],
+        });
+      });
+    });
+
+    it("puts a newer dispatched intent after the seed, which is what lets it win that folder", async () => {
+      stageChatWorktreeDraft("/wt/a");
+      renderChatTile();
+      await waitForChatTileLoaded();
+      act(() => {
+        emitChatSnapshotWithMessages({
+          callbacks: chatHarness.callbacks(),
+          access: "owner",
+          queueItems: [],
+          settings: SESSION_SETTINGS,
+          messages: [hostUserMessage(), nextStepsAssistantMessage()],
+          activeTurn: null,
+          managedCommands: [runningShellOnProject()],
+          messageDelivery: seededDelivery({ phase: "preparing" }, [
+            PROJECT_SEED,
+            SIBLING_SEED,
+          ]),
+        });
+      });
+
+      fireEvent.click(
+        getButtonContainingText("/implementation-validation all"),
+      );
+      fireEvent.click(await screen.findByTestId("teardown-commit-immediate"));
+      await waitFor(() => {
+        expect(chatHarness.sent).toHaveLength(1);
+      });
+      const frame = chatHarness.sent[0];
+      if (frame.kind !== "send") throw new Error("expected send frame");
+      const dispatched = frame.worktreeIntent?.entries ?? [];
+      expect(dispatched).toHaveLength(1);
+
+      await waitFor(() => {
+        expect(workspaceSelectorTestState.inFlightWorktreeIntent).toEqual({
+          entries: [PROJECT_SEED, SIBLING_SEED, ...dispatched],
+        });
+      });
     });
   });
 

@@ -18,6 +18,7 @@ import { StrictMode, type ReactNode } from "react";
 import { act, cleanup, render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import { BotTestRunnerHost } from "@/components/bots/__tests__/bot-test-runner-host";
 import { create, type StoreApi, type UseBoundStore } from "zustand";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
@@ -28,6 +29,7 @@ import { mockRemoteHostEntry } from "@traycer-clients/shared/host-client/mock/mo
 import { MockHostMessenger } from "@traycer-clients/shared/host-client/mock/mock-host-messenger";
 import { createRequestContextFixture } from "@traycer-clients/shared/test-fixtures/request-context";
 import type { JsonContent } from "@traycer/protocol/common/registry";
+import { botQuestionsText } from "@traycer/protocol/persistence/epic/messages";
 import type {
   BotConversationSendDelivery,
   BotConversationSendRequest,
@@ -94,6 +96,9 @@ const mocks = vi.hoisted(() => ({
   threads: [] as BotThreadSummary[],
 }));
 
+vi.mock("@/hooks/host/use-host-directory-entry", () => ({
+  useHostDirectoryEntry: () => null,
+}));
 vi.mock("@/lib/registries/chat-session-registry", async (importOriginal) => ({
   ...(await importOriginal<
     typeof import("@/lib/registries/chat-session-registry")
@@ -115,6 +120,7 @@ vi.mock("@/hooks/host/use-host-supports-method", async (importOriginal) => ({
 vi.mock("@/components/epic-tabs/pane-visibility-context", () => ({
   usePaneVisible: () => true,
   usePaneFocused: () => true,
+  usePaneFocusProbe: () => () => true,
 }));
 vi.mock("@/hooks/bots/use-bot-conversation-list-query", () => ({
   useBotConversationListQuery: () => ({
@@ -190,6 +196,11 @@ import { BotChannelView } from "@/components/bots/bot-channel-view";
 import { useBotDraftsStore } from "@/stores/bots/bot-drafts-store";
 import type { BotOpenThread } from "@/stores/bots/bot-open-thread-store";
 import type { BotMemberResolver } from "@/lib/bots/bot-member-names";
+import {
+  boxWithin,
+  textOf,
+  typeInto,
+} from "@/components/bots/__tests__/bot-box-test-support";
 
 const BOT_ID = "bot_01ARZ3NDEKTSV4RRFFQ69G5FAV";
 const HOST_ID = "host-tab";
@@ -216,6 +227,18 @@ function deploy(settlement: BotQuestionSettlement | null): BotQuestionItem {
 
 function hold(settlement: BotQuestionSettlement | null): BotQuestionItem {
   return { text: HOLD, options: [], allowFreeText: true, settlement };
+}
+
+const WATCH = "What should I watch for you?";
+
+/** Options and the person's own words: the card takes several of the options. */
+function watch(settlement: BotQuestionSettlement | null): BotQuestionItem {
+  return {
+    text: WATCH,
+    options: ["Agents waiting on me", "Sandboxes and credits", "Nothing yet"],
+    allowFreeText: true,
+    settlement,
+  };
 }
 
 function byPerson(
@@ -353,15 +376,20 @@ let sent: ReadonlyArray<BotConversationSendRequest>;
 let refuseSends: boolean;
 /** How the host takes each send: `queued` while the bot's host is away. */
 let delivery: BotConversationSendDelivery;
-/** A send the host holds until the case lands it. */
+/** A send the host holds until the case lands or refuses it. */
 interface HeldSend {
   readonly land: () => void;
-  /** The host's answer, once landed. */
+  readonly refuse: () => void;
+  /** The host's answer, once landed or refused. */
   readonly answered: Promise<BotConversationSendResponse>;
 }
-/** While set, each send waits here until the case lands it. */
+/** While set, each send waits here until the case lands or refuses it. */
 let heldSends: HeldSend[] | null;
 const onOpenThread = vi.fn<(open: BotOpenThread | null) => void>();
+
+function settledRefusal(): Error {
+  return new Error("QUESTION_ALREADY_SETTLED: the question is settled");
+}
 
 function hostClientRecordingSends(): HostRequester<HostRpcRegistry> {
   const queryClient = new QueryClient();
@@ -373,9 +401,7 @@ function hostClientRecordingSends(): HostRequester<HostRpcRegistry> {
       "bot.conversation.send": (params) => {
         sent = [...sent, params];
         if (refuseSends) {
-          return Promise.reject(
-            new Error("QUESTION_ALREADY_SETTLED: the question is settled"),
-          );
+          return Promise.reject(settledRefusal());
         }
         const response: BotConversationSendResponse = {
           messageId: "message-new",
@@ -384,9 +410,13 @@ function hostClientRecordingSends(): HostRequester<HostRpcRegistry> {
           threadId: null,
         };
         if (heldSends === null) return Promise.resolve(response);
-        const { promise, resolve } =
+        const { promise, resolve, reject } =
           Promise.withResolvers<BotConversationSendResponse>();
-        heldSends.push({ land: () => resolve(response), answered: promise });
+        heldSends.push({
+          land: () => resolve(response),
+          refuse: () => reject(settledRefusal()),
+          answered: promise,
+        });
         return promise;
       },
     },
@@ -414,6 +444,16 @@ async function land(): Promise<void> {
   });
 }
 
+/** The host refuses the oldest send held. */
+async function refuse(): Promise<void> {
+  const next = heldSends?.shift();
+  if (next === undefined) throw new Error("no send is held");
+  await act(async () => {
+    next.refuse();
+    await next.answered.catch(() => undefined);
+  });
+}
+
 /** A chat's transcript as its session holds it; `set` writes rows as the host does. */
 function session(
   chatId: string,
@@ -432,34 +472,39 @@ function mountChannel(openThread: BotOpenThread | null): {
   const tree = (open: BotOpenThread | null): ReactNode => (
     <StrictMode>
       <QueryClientProvider client={queryClient}>
-        <TooltipProvider>
-          <ChatExpansionTestProviders tileInstanceId="tile-1">
-            <BotChannelView
-              botId={BOT_ID}
-              hostId={HOST_ID}
-              boundHostId={HOST_ID}
-              boundHostEpoch={1}
-              botTitle="Release Bot"
-              directive={null}
-              appConversationChatId={CHANNEL_ID}
-              trunkChatId="trunk-chat"
-              onOpenTurn={vi.fn()}
-              onOpenSession={vi.fn()}
-              landOn={null}
-              openMemory={null}
-              onOpenMemory={vi.fn()}
-              environmentId="env-1"
-              botNameOf={() => null}
-              resolveMember={resolveMember}
-              tasks={[]}
-              surfaceActions={null}
-              openThread={open}
-              onOpenThread={onOpenThread}
-              onOpenActivity={vi.fn()}
-              setupHistory={null}
-            />
-          </ChatExpansionTestProviders>
-        </TooltipProvider>
+        <BotTestRunnerHost>
+          <TooltipProvider>
+            <ChatExpansionTestProviders tileInstanceId="tile-1">
+              <BotChannelView
+                tiles={null}
+                botId={BOT_ID}
+                hostId={HOST_ID}
+                boundHostId={HOST_ID}
+                boundHostEpoch={1}
+                botTitle="Release Bot"
+                directive={null}
+                appConversationChatId={CHANNEL_ID}
+                trunkChatId="trunk-chat"
+                onOpenTurn={vi.fn()}
+                onOpenSession={vi.fn()}
+                landOn={null}
+                openMemory={null}
+                onOpenMemory={vi.fn()}
+                environmentId="env-1"
+                botNameOf={() => null}
+                environmentBots={null}
+                openExchange={null}
+                exchangeRail={{ open: () => undefined, close: () => undefined }}
+                resolveMember={resolveMember}
+                tasks={[]}
+                surfaceActions={null}
+                openThread={open}
+                onOpenThread={onOpenThread}
+                setupHistory={null}
+              />
+            </ChatExpansionTestProviders>
+          </TooltipProvider>
+        </BotTestRunnerHost>
       </QueryClientProvider>
     </StrictMode>
   );
@@ -731,7 +776,7 @@ describe("<BotChannelView tiles={null} /> a question settled while a member was 
 
     expect(sent).toHaveLength(1);
     expect(screen.getByTestId("bot-channel-composer-send-failed")).toBeTruthy();
-    expect((field as HTMLTextAreaElement).value).toBe("Hold the migration");
+    expect(field).toHaveProperty("value", "Hold the migration");
     write([questionRow([hold(byPerson(TEAMMATE_USER_ID, "Nothing"))])]);
 
     const question = cardQuestion(channelCard(), HOLD);
@@ -807,10 +852,8 @@ describe("<BotChannelView tiles={null} /> a question settled while a member was 
     expect(onOpenThread).toHaveBeenLastCalledWith(opened);
     reopen(opened);
     const panel = screen.getByTestId("bot-thread-panel");
-    const box = within(panel).getByRole("textbox", {
-      name: "Reply in a new thread",
-    });
-    expect((box as HTMLTextAreaElement).value).toBe("Hold the migration");
+    const box = boxWithin(panel, "Reply in a new thread");
+    expect(textOf(box)).toBe("Hold the migration");
     // The thread opens on the question's card, which is answered in the channel.
     expect(
       within(within(panel).getByTestId("question-card")).getByTestId(
@@ -839,12 +882,11 @@ const QUESTION_THREAD: BotOpenThread = {
 };
 
 /** The box of the question's thread, which nobody has started. */
-function questionThreadBox(): HTMLTextAreaElement {
-  const box = within(screen.getByTestId("bot-thread-panel")).getByRole(
-    "textbox",
-    { name: "Reply in a new thread" },
+function questionThreadBox(): HTMLElement {
+  const box = boxWithin(
+    screen.getByTestId("bot-thread-panel"),
+    "Reply in a new thread",
   );
-  if (!(box instanceof HTMLTextAreaElement)) throw new Error("no box");
   return box;
 }
 
@@ -1058,20 +1100,19 @@ describe("<BotChannelView tiles={null} /> what a member has not sent, across the
   });
 
   it("keeps the draft Discuss put in the question's thread, and what was typed after it, across the thread closing and the channel remounting", async () => {
-    const user = userEvent.setup();
     const view = await overtakenBoth("Hold the migration");
     await discuss(HOLD);
     view.reopen(QUESTION_THREAD);
-    await user.type(questionThreadBox(), " today");
+    typeInto(questionThreadBox(), " today");
 
     view.reopen(null);
     expect(screen.queryByTestId("bot-thread-panel")).toBeNull();
     view.reopen(QUESTION_THREAD);
-    expect(questionThreadBox().value).toBe("Hold the migration today");
+    expect(textOf(questionThreadBox())).toBe("Hold the migration today");
 
     view.unmount();
     mountChannel(QUESTION_THREAD);
-    expect(questionThreadBox().value).toBe("Hold the migration today");
+    expect(textOf(questionThreadBox())).toBe("Hold the migration today");
     expect(sent).toEqual([]);
   });
 
@@ -1094,10 +1135,38 @@ describe("<BotChannelView tiles={null} /> what a member has not sent, across the
     await land();
     view.reopen(QUESTION_THREAD);
 
-    expect(questionThreadBox().value).toBe("");
+    expect(textOf(questionThreadBox())).toBe("");
   });
 
-  /** The Discuss draft sent from the question's thread, the thread closed and opened again while the send is held. */
+  it("offers the refused send's text back beside a newer draft, in the thread opened again after the send was refused with its thread closed", async () => {
+    const user = userEvent.setup();
+    heldSends = [];
+    const view = await overtakenBoth("Hold the migration");
+    await discuss(HOLD);
+    view.reopen(QUESTION_THREAD);
+    await user.click(screen.getByTestId("bot-thread-composer-send"));
+    typeInto(questionThreadBox(), "Hold off today");
+
+    view.reopen(null);
+    await refuse();
+    view.reopen(QUESTION_THREAD);
+
+    expect(textOf(questionThreadBox())).toBe("Hold off today");
+    expect(
+      screen.getByTestId("bot-thread-composer-send-failed").textContent,
+    ).toContain("Hold the migration");
+    await user.click(
+      screen.getByTestId("bot-thread-composer-send-failed-restore"),
+    );
+    expect(textOf(questionThreadBox())).toBe("Hold the migration");
+    expect(screen.queryByTestId("bot-thread-composer-send-failed")).toBeNull();
+  });
+
+  /**
+   * The Discuss draft sent from the question's thread, the thread closed and
+   * opened again while the send is held: the draft went with the send, so the
+   * box opens empty.
+   */
   async function sentThenReopened(): Promise<void> {
     const user = userEvent.setup();
     heldSends = [];
@@ -1107,15 +1176,15 @@ describe("<BotChannelView tiles={null} /> what a member has not sent, across the
     await user.click(screen.getByTestId("bot-thread-composer-send"));
     view.reopen(null);
     view.reopen(QUESTION_THREAD);
-    expect(questionThreadBox().value).toBe("Hold the migration");
+    expect(textOf(questionThreadBox())).toBe("");
   }
 
-  it("empties the box opened again while the send was in flight once it lands, so the sent draft is not offered twice", async () => {
+  it("does not offer the sent draft again in the box opened while the send was in flight, once it lands", async () => {
     await sentThenReopened();
 
     await land();
 
-    expect(questionThreadBox().value).toBe("");
+    expect(textOf(questionThreadBox())).toBe("");
     expect(
       screen.getByTestId("bot-thread-composer-send").hasAttribute("disabled"),
     ).toBe(true);
@@ -1123,13 +1192,12 @@ describe("<BotChannelView tiles={null} /> what a member has not sent, across the
   });
 
   it("keeps what was typed in the box opened again after the send left, when the send lands", async () => {
-    const user = userEvent.setup();
     await sentThenReopened();
-    await user.type(questionThreadBox(), " today");
+    typeInto(questionThreadBox(), "Hold off today");
 
     await land();
 
-    expect(questionThreadBox().value).toBe("Hold the migration today");
+    expect(textOf(questionThreadBox())).toBe("Hold off today");
   });
 
   it("keeps a draft Discuss puts in the thread's open box while an earlier send from it is in flight", async () => {
@@ -1141,13 +1209,13 @@ describe("<BotChannelView tiles={null} /> what a member has not sent, across the
     await user.click(screen.getByTestId("bot-thread-composer-send"));
 
     await discuss(DEPLOY);
-    expect(questionThreadBox().value).toBe("Now");
+    expect(textOf(questionThreadBox())).toBe("Now");
     await land();
 
-    expect(questionThreadBox().value).toBe("Now");
+    expect(textOf(questionThreadBox())).toBe("Now");
     view.reopen(null);
     view.reopen(QUESTION_THREAD);
-    expect(questionThreadBox().value).toBe("Now");
+    expect(textOf(questionThreadBox())).toBe("Now");
   });
 
   it("keeps a draft Discuss puts in the thread while it is closed, even with the text an earlier send from its box carried, when that send lands after", async () => {
@@ -1164,7 +1232,169 @@ describe("<BotChannelView tiles={null} /> what a member has not sent, across the
     await land();
     view.reopen(QUESTION_THREAD);
 
-    expect(questionThreadBox().value).toBe("Now");
+    expect(textOf(questionThreadBox())).toBe("Now");
+  });
+});
+
+describe("<BotChannelView tiles={null} /> a row's text above its question card", () => {
+  it("shows the row's text above the card when it says more than its questions", () => {
+    session(CHANNEL_ID, [
+      botRow(
+        QUESTION_ID,
+        "I'm your bot. Two questions to start.",
+        [deploy(null)],
+        null,
+      ),
+    ]);
+    mountChannel(null);
+
+    const channel = screen.getByTestId("bot-channel");
+    expect(
+      within(channel).getByText("I'm your bot. Two questions to start."),
+    ).toBeTruthy();
+    expect(
+      within(channelCard()).getByRole("region", { name: DEPLOY }),
+    ).toBeTruthy();
+  });
+
+  it("shows the card alone, with no copy of the question, when the row's text is just its questions", () => {
+    session(CHANNEL_ID, [questionRow([deploy(null)])]);
+    mountChannel(null);
+
+    expect(
+      within(screen.getByTestId("bot-channel")).getAllByText(DEPLOY),
+    ).toHaveLength(1);
+  });
+
+  describe("with several questions, one long and multi-line", () => {
+    const LONG_MARKER = "rollback window for the canary";
+    const LONG_QUESTION = [
+      "Before the train leaves, which of these should block it?",
+      `Think about the ${LONG_MARKER}, the migration that touches billing,`,
+      "and whether the on-call engineer has signed off on the release.",
+      "x".repeat(200),
+    ].join("\n");
+    const longQuestions: BotQuestionItem[] = [
+      {
+        text: LONG_QUESTION,
+        options: [],
+        allowFreeText: true,
+        settlement: null,
+      },
+      deploy(null),
+    ];
+
+    function expectEachQuestionOnce(): void {
+      const channel = screen.getByTestId("bot-channel");
+      expect(
+        within(channel).getAllByText(new RegExp(LONG_MARKER)),
+      ).toHaveLength(1);
+      expect(within(channel).getAllByText(DEPLOY)).toHaveLength(1);
+      const card = channelCard();
+      expect(within(card).getByText(new RegExp(LONG_MARKER))).toBeTruthy();
+      expect(within(card).getByText(DEPLOY)).toBeTruthy();
+      expect(
+        within(card).getAllByRole("button", { name: "Submit" }).length,
+      ).toBeGreaterThan(0);
+      expect(
+        within(card).getAllByRole("button", { name: "Skip" }).length,
+      ).toBeGreaterThan(0);
+      expect(
+        within(card).getAllByRole("textbox", { name: "Your answer" }).length,
+      ).toBeGreaterThan(0);
+    }
+
+    it("draws each question once, in the card, when the row's text is exactly what the host writes for them", () => {
+      session(CHANNEL_ID, [
+        botRow(
+          QUESTION_ID,
+          botQuestionsText(longQuestions),
+          longQuestions,
+          null,
+        ),
+      ]);
+      mountChannel(null);
+
+      expectEachQuestionOnce();
+    });
+
+    it("draws the prose above the card once, and each question once, when the row says more than its questions", () => {
+      const prose = "Hi, I'm your release assistant. Let me ask a few things.";
+      session(CHANNEL_ID, [botRow(QUESTION_ID, prose, longQuestions, null)]);
+      mountChannel(null);
+
+      expect(
+        within(screen.getByTestId("bot-channel")).getAllByText(prose),
+      ).toHaveLength(1);
+      expectEachQuestionOnce();
+    });
+  });
+});
+
+describe("<BotChannelView tiles={null} /> a question that takes options and the person's own words", () => {
+  it("toggles several options, and Submit sends them joined in option order with the typed words after them", async () => {
+    const user = userEvent.setup();
+    session(CHANNEL_ID, [questionRow([watch(null)])]);
+    mountChannel(null);
+
+    const question = cardQuestion(channelCard(), WATCH);
+    await user.click(
+      within(question).getByRole("button", { name: "Sandboxes and credits" }),
+    );
+    await user.click(
+      within(question).getByRole("button", { name: "Agents waiting on me" }),
+    );
+    await user.type(
+      within(question).getByRole("textbox", { name: "Your answer" }),
+      "the build farm",
+    );
+    await user.click(within(question).getByRole("button", { name: "Submit" }));
+
+    expect(sent.map((request) => request.text)).toEqual([
+      "Agents waiting on me, Sandboxes and credits, the build farm",
+    ]);
+  });
+
+  it("takes a pick back when it is toggled off", async () => {
+    const user = userEvent.setup();
+    session(CHANNEL_ID, [questionRow([watch(null)])]);
+    mountChannel(null);
+
+    const question = cardQuestion(channelCard(), WATCH);
+    await user.click(
+      within(question).getByRole("button", { name: "Agents waiting on me" }),
+    );
+    await user.click(
+      within(question).getByRole("button", { name: "Sandboxes and credits" }),
+    );
+    await user.click(
+      within(question).getByRole("button", { name: "Agents waiting on me" }),
+    );
+
+    expect(
+      within(question)
+        .getByRole("button", { name: "Agents waiting on me" })
+        .getAttribute("aria-pressed"),
+    ).toBe("false");
+    await user.click(within(question).getByRole("button", { name: "Submit" }));
+    expect(sent.map((request) => request.text)).toEqual([
+      "Sandboxes and credits",
+    ]);
+  });
+
+  it("stays single-choice on a question without free text: a second pick replaces the first", async () => {
+    const user = userEvent.setup();
+    session(CHANNEL_ID, [questionRow([deploy(null)])]);
+    mountChannel(null);
+
+    const question = cardQuestion(channelCard(), DEPLOY);
+    await user.click(within(question).getByRole("button", { name: "Now" }));
+    await user.click(
+      within(question).getByRole("button", { name: "After the train" }),
+    );
+    await user.click(within(question).getByRole("button", { name: "Submit" }));
+
+    expect(sent.map((request) => request.text)).toEqual(["After the train"]);
   });
 });
 
@@ -1247,11 +1477,11 @@ describe("<BotChannelView tiles={null} /> a question a thread's session asks in 
     await user.click(within(panel).getByRole("button", { name: "Discuss" }));
 
     expect(onOpenThread).not.toHaveBeenCalled();
-    const box = within(screen.getByTestId("bot-thread-panel")).getByRole(
-      "textbox",
-      { name: "Reply in the thread" },
+    const box = boxWithin(
+      screen.getByTestId("bot-thread-panel"),
+      "Reply in the thread",
     );
-    expect((box as HTMLTextAreaElement).value).toBe("Now");
+    expect(textOf(box)).toBe("Now");
     expect(sent).toHaveLength(1);
   });
 
@@ -1314,15 +1544,14 @@ describe("<BotChannelView tiles={null} /> a question a thread's session asks in 
     session(CHANNEL_ID, [memberPost()]);
     session(THREAD_ID, [failedReply()]);
     const view = mountChannel(POST_THREAD);
-    const box = (): HTMLTextAreaElement => {
-      const element = within(screen.getByTestId("bot-thread-panel")).getByRole(
-        "textbox",
-        { name: "Reply in the thread" },
+    const box = (): HTMLElement => {
+      const element = boxWithin(
+        screen.getByTestId("bot-thread-panel"),
+        "Reply in the thread",
       );
-      if (!(element instanceof HTMLTextAreaElement)) throw new Error("no box");
       return element;
     };
-    await user.type(box(), "Ship it today");
+    typeInto(box(), "Ship it today");
     await user.click(screen.getByTestId("bot-thread-composer-send"));
     view.reopen(null);
     view.reopen(POST_THREAD);
@@ -1331,11 +1560,11 @@ describe("<BotChannelView tiles={null} /> a question a thread's session asks in 
         "bot-message-edit",
       ),
     );
-    expect(box().value).toBe("Hold for now");
+    expect(textOf(box())).toBe("Hold for now");
 
     await land();
 
-    expect(box().value).toBe("Hold for now");
+    expect(textOf(box())).toBe("Hold for now");
     expect(screen.getByTestId("bot-thread-composer-editing")).toBeTruthy();
   });
 
@@ -1360,11 +1589,11 @@ describe("<BotChannelView tiles={null} /> a question a thread's session asks in 
     await user.click(within(replies).getByRole("button", { name: "Discuss" }));
 
     expect(screen.queryByTestId("bot-thread-composer-editing")).toBeNull();
-    const box = within(screen.getByTestId("bot-thread-panel")).getByRole(
-      "textbox",
-      { name: "Reply in the thread" },
+    const box = boxWithin(
+      screen.getByTestId("bot-thread-panel"),
+      "Reply in the thread",
     );
-    expect((box as HTMLTextAreaElement).value).toBe("Now");
+    expect(textOf(box)).toBe("Now");
     await user.click(screen.getByTestId("bot-thread-composer-send"));
     expect(
       sent.map((request) => [

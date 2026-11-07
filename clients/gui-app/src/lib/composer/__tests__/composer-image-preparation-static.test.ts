@@ -203,11 +203,12 @@ describe("composer image preparation: static codecs and compression", () => {
       expect(prepared.mimeType).toBe("image/gif");
       expect(prepared.fileName).toBe("clip.gif");
       expect(prepared.byteLength).toBe(bytes.byteLength);
+      // Identity, not `toHaveBeenCalledWith`: deep-equalling these 5 MiB took 10 s.
       expect(decode).toHaveBeenCalledTimes(1);
-      expect(decode).toHaveBeenCalledWith({
-        bytes,
-        mimeType: "image/gif",
-      });
+      const decodeArgs = decode.mock.calls[0][0];
+      expect(Object.keys(decodeArgs).sort()).toEqual(["bytes", "mimeType"]);
+      expect(decodeArgs.bytes).toBe(bytes);
+      expect(decodeArgs.mimeType).toBe("image/gif");
       expect(encodeCalls).toHaveLength(0);
       expect(close).toHaveBeenCalledTimes(1);
     });
@@ -290,14 +291,14 @@ describe("composer image preparation: static codecs and compression", () => {
       let call = 0;
       const totalWebP = 3 * 4;
       const totalJpeg = 3 * 4;
+      const oversized = encodedWebpBytesOfSize(STATIC_MAX + 50);
+      const jpegOver = encodedJpegBytesOfSize(STATIC_MAX + 50);
       const { codec, encodeCalls } = makeMockCodec({
         ...emptyMockCodecOptions(),
         width: 1000,
         height: 800,
         encode: (args: EncodeArgs) => {
           call += 1;
-          const oversized = encodedWebpBytesOfSize(STATIC_MAX + 50);
-          const jpegOver = encodedJpegBytesOfSize(STATIC_MAX + 50);
           if (call === totalWebP + totalJpeg) {
             return Promise.resolve(encodedJpegBytesOfSize(200));
           }

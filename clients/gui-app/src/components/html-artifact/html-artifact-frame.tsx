@@ -8,6 +8,7 @@ export function HtmlArtifactFrame(props: {
   readonly source: Extract<SandboxSource, { kind: "artifact" }>;
   readonly title: string;
   readonly toolbarControls?: ReactNode;
+  readonly menuItems?: ReactNode;
 }) {
   return (
     <ArtifactPagesFrame
@@ -15,7 +16,7 @@ export function HtmlArtifactFrame(props: {
       title={props.title}
       className="h-full w-full"
       height={null}
-      pageZoom
+      commenting={false}
       onSize={noop}
       onStatus={noop}
       onBridge={null}
@@ -24,6 +25,7 @@ export function HtmlArtifactFrame(props: {
       renderOverlay={null}
       sourceEquivalent={undefined}
       toolbarControls={props.toolbarControls}
+      menuItems={props.menuItems}
     />
   );
 }

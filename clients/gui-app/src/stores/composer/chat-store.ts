@@ -25,6 +25,7 @@ import type {
   TodoItem,
   AgentUserMessage,
   BrowserAnnotationRecord,
+  SlackUserMessage,
 } from "@traycer/protocol/persistence/epic/schemas";
 import type {
   AgentMessageDelivery,
@@ -49,6 +50,7 @@ import type {
   ProviderNoticeTone,
   ToolCallManagedCommand,
   ToolCallMcpAppStamp,
+  ToolCallFeedbackDraftStamp,
   ToolCallArtifactStamp,
   ToolInputDetail,
   WorkflowMeta,
@@ -206,6 +208,9 @@ export interface ToolSegment {
   // The MCP App the call rendered, stamped by the host (`chat.subscribe@1.22`).
   // Null for every other call, and on a harness without app support.
   mcpApp: ToolCallMcpAppStamp | null;
+  // Feedback the call drafted for the reader to send or skip (null for every
+  // other call). Routes the call to the draft's card.
+  feedbackDraft: ToolCallFeedbackDraftStamp | null;
 }
 
 // Recursive: a subagent's own children can themselves be nested subagent
@@ -494,6 +499,15 @@ export type MessageSegment =
        * one the engine acted on.
        */
       failure: AgentFailure | null;
+      /**
+       * When the failure happened, in the Host's clock: the persisted block's
+       * own `timestamp`, which the Host stamps on the `error` event at the
+       * fault. A report filed from this row carries it, since the report
+       * click can come long after. `null` where the row has no Host time of
+       * its own (a tool's failure, projected from a tool row that keeps only
+       * its start).
+       */
+      hostTimestamp: number | null;
       // Owning subagent block id when the error ended a subagent's own thread;
       // absent for a turn-level error. See `ReasoningSegment.parentId`.
       parentId?: string;
@@ -549,6 +563,23 @@ export type MessageSegment =
        */
       marker: AutoJudgeNoticeMarker;
       message: string;
+    }
+  | {
+      id: string;
+      kind: "bot-exchanges";
+      /**
+       * A run of a bot's messages with other bots, drawn as one line between
+       * a bot channel's rows (Tracy Bots, decision 174). Synthesized by
+       * `createBotExchangeLineCollator` from the bot's Communication Graph feed, never
+       * persisted: one entry per other bot, in the order the run first
+       * reached it, with how many messages of the run it took part in.
+       */
+      pairs: ReadonlyArray<{
+        readonly peerBotId: string;
+        readonly count: number;
+      }>;
+      /** When the run's last message was sent. */
+      lastAt: number;
     }
   | {
       id: string;
@@ -776,6 +807,12 @@ export interface ChatMessage {
    * reads it.
    */
   conversationRequest?: ConversationRequest;
+  /**
+   * The Slack message this user row is, in a bot session that runs a Slack
+   * thread or DM: who wrote it in Slack, and the files it did not carry.
+   * Absent on every other row.
+   */
+  slackMessage?: SlackUserMessage;
   /**
    * The announcement this assistant row is, on a bot channel (Tracy Bots):
    * its kind and the one thing it points at. Absent on every other row.

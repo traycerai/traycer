@@ -14,6 +14,7 @@ import { StrictMode, useState, type ReactNode } from "react";
 import {
   act,
   cleanup,
+  fireEvent,
   render,
   screen,
   waitFor,
@@ -37,11 +38,13 @@ import type {
 import {
   SLACK_APP_REFUSAL_BOT_NOT_FOUND,
   SLACK_APP_REFUSAL_NOT_CONFIGURED,
+  type SlackAppDmsRequest,
   type SlackAppRegisterRequest,
 } from "@traycer/protocol/host/slack-app";
 import type {
   SlackAppManifestResult,
   SlackAppReadResult,
+  SlackAppWriteResult,
 } from "@traycer-clients/shared/host-client/slack-app";
 import { MockRunnerHost } from "@traycer-clients/shared/host-client/mock/mock-runner-host";
 import { SLACK_SETTINGS_UNAVAILABLE_IN_STAGING } from "@traycer-clients/shared/host-client/slack-app";
@@ -304,7 +307,8 @@ let queryClient: QueryClient;
 const slackOverrides: {
   read: SlackAppReadResult | null;
   manifest: SlackAppManifestResult | null;
-} = { read: null, manifest: null };
+  dms: ((request: SlackAppDmsRequest) => Promise<SlackAppWriteResult>) | null;
+} = { read: null, manifest: null, dms: null };
 const SLACK_BEARER = "test-bearer";
 
 function newSlackHost(): MockRunnerHost {
@@ -331,6 +335,9 @@ function newSlackAuth(host: MockRunnerHost): object {
       host.mintSlackAppInstallUrl(SLACK_BEARER, botId),
     disconnectSlackApp: (botId: string) =>
       host.disconnectSlackApp(SLACK_BEARER, botId),
+    setSlackAppDms: (request: SlackAppDmsRequest) =>
+      slackOverrides.dms?.(request) ??
+      host.setSlackAppDms(SLACK_BEARER, request),
   };
 }
 
@@ -379,6 +386,7 @@ beforeEach(() => {
   slackHost = newSlackHost();
   slackOverrides.read = null;
   slackOverrides.manifest = null;
+  slackOverrides.dms = null;
   mocks.binding = { auth: newSlackAuth(slackHost) };
   queryClient = createAppQueryClient();
   useBotSlackPendingInstallStore.setState({ entries: {} });
@@ -410,6 +418,7 @@ beforeEach(() => {
 
 afterEach(() => {
   cleanup();
+  vi.useRealTimers();
   queryClient.clear();
   useAuthStore.setState({
     status: "signed-out",
@@ -417,6 +426,13 @@ afterEach(() => {
     contextMetadata: null,
   });
 });
+
+/** Lets `ms` of the fake clock pass, settling the render and the reads in it. */
+async function elapse(ms: number): Promise<void> {
+  await act(async () => {
+    await vi.advanceTimersByTimeAsync(ms);
+  });
+}
 
 describe("<BotChannelSettingsPanel /> model", () => {
   it("seeds the picker with what the bot runs and leaves Apply disabled", () => {
@@ -1357,28 +1373,81 @@ describe("<BotChannelSettingsPanel /> Slack", () => {
   });
 
   it("opens the install page from Install to workspace, waits for Slack, then shows the connected workspace", async () => {
-    const user = userEvent.setup();
     await seedRegisteredApp();
+    vi.useFakeTimers();
     mountSlackPanel();
+    await elapse(0);
 
-    await user.click(
-      await screen.findByRole("button", { name: "Install to workspace" }),
+    fireEvent.click(
+      screen.getByRole("button", { name: "Install to workspace" }),
     );
+    await elapse(0);
 
     // The mock's consent lands as the link opens, but the panel only learns
     // of it from its next read: the wait shows until the 2 s poll sees it.
-    expect(
-      await screen.findByTestId("bot-settings-slack-waiting"),
-    ).toBeTruthy();
+    expect(screen.getByTestId("bot-settings-slack-waiting")).toBeTruthy();
     expect(slackHost.openedExternalLinks).toHaveLength(1);
-    const connected = await screen.findByTestId(
-      "bot-settings-slack-connected",
-      {},
-      { timeout: 6_000 },
-    );
+    // Within two periods of the poll, the budget the wait is given.
+    await elapse(4_000);
+    const connected = screen.getByTestId("bot-settings-slack-connected");
     expect(within(connected).getByText("Mock workspace")).toBeTruthy();
     expect(within(connected).getByText(CREDENTIALS.appId)).toBeTruthy();
     expect(screen.queryByTestId("bot-settings-slack-waiting")).toBeNull();
+  });
+
+  it("reads the DM setting, writes a toggle, and re-reads the app", async () => {
+    const user = userEvent.setup();
+    await seedInstalledApp();
+    mountSlackPanel();
+    await screen.findByTestId("bot-settings-slack-connected");
+
+    const setting = screen.getByTestId("bot-settings-slack-dms");
+    expect(within(setting).getByText("Direct messages")).toBeTruthy();
+    expect(
+      within(setting).getByText(
+        "Anyone in the workspace can message this bot directly.",
+      ),
+    ).toBeTruthy();
+    const toggle = within(setting).getByRole("switch", {
+      name: "Direct messages",
+    });
+    expect(toggle.getAttribute("aria-checked")).toBe("true");
+
+    await user.click(toggle);
+
+    await waitFor(() =>
+      expect(toggle.getAttribute("aria-checked")).toBe("false"),
+    );
+    const updated = await slackHost.readSlackApp(SLACK_BEARER, BOT.botId);
+    expect(updated.kind).toBe("ok");
+    if (updated.kind === "ok") expect(updated.app?.dmsEnabled).toBe(false);
+  });
+
+  it("shows a DM setting refusal in place and disables its switch while writing", async () => {
+    const user = userEvent.setup();
+    let release: (result: SlackAppWriteResult) => void = () => undefined;
+    slackOverrides.dms = () =>
+      new Promise<SlackAppWriteResult>((resolve) => {
+        release = resolve;
+      });
+    await seedInstalledApp();
+    mountSlackPanel();
+    await screen.findByTestId("bot-settings-slack-connected");
+
+    const toggle = screen.getByRole("switch", { name: "Direct messages" });
+    await user.click(toggle);
+    expect(toggle.getAttribute("disabled")).not.toBeNull();
+
+    release({
+      kind: "refused",
+      status: 404,
+      code: SLACK_APP_REFUSAL_BOT_NOT_FOUND,
+    });
+    const refusal = await within(slackGroup()).findByTestId(
+      "bot-settings-refusal",
+    );
+    expect(refusal.textContent).toBe("You can't change this bot's Slack app.");
+    expect(toggle.getAttribute("disabled")).toBeNull();
   });
 
   it("shows the workspace the app left after Disconnect, with Install to workspace to come back", async () => {
@@ -1449,17 +1518,19 @@ describe("<BotChannelSettingsPanel /> Slack", () => {
 
   it("keeps the last-read app and says the read failed when a later read cannot reach the server", async () => {
     await seedInstalledApp();
+    vi.useFakeTimers();
     mountSlackPanel();
-    await screen.findByTestId("bot-settings-slack-connected");
+    await elapse(0);
+    expect(screen.getByTestId("bot-settings-slack-connected")).toBeTruthy();
 
     slackOverrides.read = { kind: "network-error", detail: "x" };
     // The hook retries a transport failure twice, on the query client's own
     // backoff (1 s, then 2 s): the failure shows once those are spent.
-    await queryClient.invalidateQueries();
+    const refetch = queryClient.invalidateQueries();
+    await elapse(10_000);
+    await refetch;
 
-    const refusal = await within(slackGroup()).findByTestId(
-      "bot-settings-refusal",
-    );
+    const refusal = within(slackGroup()).getByTestId("bot-settings-refusal");
     expect(refusal.textContent).toBe(
       "Couldn't read this bot's Slack settings.",
     );
@@ -1473,6 +1544,7 @@ describe("<BotChannelSettingsPanel /> Slack", () => {
       registerSlackApp: vi.fn<IRunnerHost["registerSlackApp"]>(),
       mintSlackAppInstallUrl: vi.fn<IRunnerHost["mintSlackAppInstallUrl"]>(),
       disconnectSlackApp: vi.fn<IRunnerHost["disconnectSlackApp"]>(),
+      setSlackAppDms: vi.fn<IRunnerHost["setSlackAppDms"]>(),
     };
     // The real AuthService floor over a runner host that reports the reason.
     const auth = new AuthService({

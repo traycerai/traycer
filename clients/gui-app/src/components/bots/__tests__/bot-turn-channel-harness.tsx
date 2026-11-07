@@ -1,6 +1,6 @@
 import { StrictMode, useMemo, type ReactNode } from "react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { vi } from "vitest";
+import { BotTestRunnerHost } from "@/components/bots/__tests__/bot-test-runner-host";
 import {
   BOT_ID,
   CHANNEL_ID,
@@ -49,6 +49,7 @@ function Channel(): ReactNode {
   const openMemory = rail?.kind === "memory" ? rail : null;
   return (
     <BotChannelView
+      tiles={null}
       botId={BOT_ID}
       hostId={HOST_ID}
       boundHostId="host-runs-bot"
@@ -77,7 +78,9 @@ function Channel(): ReactNode {
       }
       environmentId={ENVIRONMENT_ID}
       botNameOf={(botId) => (botId === OTHER_BOT_ID ? OTHER_BOT_TITLE : null)}
-      onOpenActivity={vi.fn()}
+      environmentBots={null}
+      openExchange={null}
+      exchangeRail={{ open: () => undefined, close: () => undefined }}
       setupHistory={null}
     />
   );
@@ -114,9 +117,11 @@ export function MountedKnowingChannel(): ReactNode {
   return (
     <StrictMode>
       <QueryClientProvider client={new QueryClient()}>
-        <TooltipProvider>
-          <KnowingChannel />
-        </TooltipProvider>
+        <BotTestRunnerHost>
+          <TooltipProvider>
+            <KnowingChannel />
+          </TooltipProvider>
+        </BotTestRunnerHost>
       </QueryClientProvider>
     </StrictMode>
   );
@@ -130,9 +135,11 @@ export function MountedChannel(): ReactNode {
   return (
     <StrictMode>
       <QueryClientProvider client={new QueryClient()}>
-        <TooltipProvider>
-          <Channel />
-        </TooltipProvider>
+        <BotTestRunnerHost>
+          <TooltipProvider>
+            <Channel />
+          </TooltipProvider>
+        </BotTestRunnerHost>
       </QueryClientProvider>
     </StrictMode>
   );

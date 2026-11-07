@@ -19,7 +19,14 @@
         "{projectRoot}/vitest.config.*",
         "{workspaceRoot}/.github/workflows/*.yml",
         "{workspaceRoot}/.github/workflows/*.yaml",
-        "sharedGlobals"
+        "{workspaceRoot}/.pre-commit-config.yaml",
+        "{workspaceRoot}/nx.json",
+        "{workspaceRoot}/**/package.json",
+        "{workspaceRoot}/**/project.json",
+        "{workspaceRoot}/clients/gui-app/scripts/lint-files.mjs",
+        "sharedGlobals",
+        "{projectRoot}/**/*.ts",
+        "{workspaceRoot}/**/*vitest*config*.ts"
       ]
     }
   }

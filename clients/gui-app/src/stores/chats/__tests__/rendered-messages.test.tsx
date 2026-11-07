@@ -939,6 +939,35 @@ describe("useRenderedMessages", () => {
     },
   );
 
+  it("projects an error block's Host timestamp onto its error segment", () => {
+    const assistant = codexAssistantMessage("turn-host-timestamp", 2000);
+    assistant.blocks = [
+      {
+        type: "error",
+        blockId: "host-stamped-error",
+        status: "errored",
+        timestamp: 2468,
+        message: "The turn failed.",
+        recoverable: false,
+        code: "server_error",
+        failure: null,
+      },
+    ];
+
+    const { result } = renderRenderedMessages({
+      messages: [assistant],
+      events: [],
+    });
+    const assistantRow = result.current.find(
+      (message) => message.role === "assistant",
+    );
+
+    expect(assistantRow?.segments[0]).toMatchObject({
+      kind: "error",
+      hostTimestamp: 2468,
+    });
+  });
+
   it("invalidates a same-millisecond active retry row when its message changes", () => {
     const retryBlock = (message: string) =>
       codexRetryBlock({
@@ -1028,6 +1057,7 @@ describe("useRenderedMessages", () => {
 
     expect(driver.result.current.at(0)?.segments.at(0)).toMatchObject({
       kind: "error",
+      hostTimestamp: 2001,
       recoverable: true,
       failure: null,
     });
@@ -1036,6 +1066,7 @@ describe("useRenderedMessages", () => {
 
     expect(driver.result.current.at(0)?.segments.at(0)).toMatchObject({
       kind: "error",
+      hostTimestamp: 2001,
       recoverable: false,
       failure: {
         reason: "rate_limit",
@@ -2107,6 +2138,7 @@ describe("useRenderedMessages", () => {
           botSendReceipt: null,
           artifact: null,
           mcpApp: null,
+          feedbackDraft: null,
           progress: null,
           backgroundOutput: null,
           backgroundTask: false,
@@ -2172,6 +2204,7 @@ describe("useRenderedMessages", () => {
           botSendReceipt: null,
           artifact: null,
           mcpApp: null,
+          feedbackDraft: null,
           progress: null,
           backgroundOutput: null,
           backgroundTask: false,
@@ -2247,6 +2280,7 @@ describe("useRenderedMessages", () => {
         botSendReceipt: null,
         artifact: null,
         mcpApp: null,
+        feedbackDraft: null,
         progress: null,
         backgroundOutput: null,
         backgroundTask: false,
@@ -2421,6 +2455,7 @@ describe("useRenderedMessages", () => {
           botSendReceipt: null,
           artifact: null,
           mcpApp: null,
+          feedbackDraft: null,
           progress: null,
           backgroundOutput: null,
           backgroundTask: true,
@@ -2492,6 +2527,7 @@ describe("useRenderedMessages", () => {
           botSendReceipt: null,
           artifact: null,
           mcpApp: null,
+          feedbackDraft: null,
           progress: null,
           backgroundOutput: null,
           backgroundTask: false,
@@ -2552,6 +2588,7 @@ describe("useRenderedMessages", () => {
           botSendReceipt: null,
           artifact: null,
           mcpApp: null,
+          feedbackDraft: null,
           progress: null,
           backgroundOutput: null,
           backgroundTask: true,
@@ -2637,6 +2674,7 @@ describe("useRenderedMessages", () => {
           botSendReceipt: null,
           artifact: null,
           mcpApp: null,
+          feedbackDraft: null,
           progress: null,
           backgroundOutput: null,
           backgroundTask: false,
@@ -2754,6 +2792,7 @@ describe("useRenderedMessages", () => {
           botSendReceipt: null,
           artifact: null,
           mcpApp: null,
+          feedbackDraft: null,
           progress: null,
           backgroundOutput: null,
           backgroundTask: false,
@@ -2877,6 +2916,7 @@ describe("useRenderedMessages", () => {
           botSendReceipt: null,
           artifact: null,
           mcpApp: null,
+          feedbackDraft: null,
           progress: null,
           backgroundOutput: { stdout: "", stderr: "", truncated: false },
           backgroundTask: true,
@@ -2903,6 +2943,7 @@ describe("useRenderedMessages", () => {
           botSendReceipt: null,
           artifact: null,
           mcpApp: null,
+          feedbackDraft: null,
           progress: null,
           backgroundOutput: { stdout: "", stderr: "", truncated: false },
           backgroundTask: true,
@@ -2929,6 +2970,7 @@ describe("useRenderedMessages", () => {
           botSendReceipt: null,
           artifact: null,
           mcpApp: null,
+          feedbackDraft: null,
           progress: null,
           backgroundOutput: null,
           backgroundTask: true,
@@ -2958,6 +3000,7 @@ describe("useRenderedMessages", () => {
           botSendReceipt: null,
           artifact: null,
           mcpApp: null,
+          feedbackDraft: null,
           progress: null,
           backgroundOutput: null,
           backgroundTask: true,
@@ -2981,6 +3024,7 @@ describe("useRenderedMessages", () => {
           botSendReceipt: null,
           artifact: null,
           mcpApp: null,
+          feedbackDraft: null,
           progress: null,
           backgroundOutput: null,
           backgroundTask: false,
@@ -3107,6 +3151,7 @@ describe("useRenderedMessages", () => {
           botSendReceipt: null,
           artifact: null,
           mcpApp: null,
+          feedbackDraft: null,
           progress: null,
           backgroundOutput: null,
           backgroundTask: false,
@@ -3276,6 +3321,7 @@ describe("useRenderedMessages", () => {
           botSendReceipt: null,
           artifact: null,
           mcpApp: null,
+          feedbackDraft: null,
           progress: null,
           backgroundOutput: null,
           backgroundTask: false,
@@ -3816,6 +3862,7 @@ describe("useRenderedMessages", () => {
           botSendReceipt: null,
           artifact: null,
           mcpApp: null,
+          feedbackDraft: null,
           progress: null,
           backgroundOutput: null,
           backgroundTask: false,
@@ -3876,6 +3923,7 @@ describe("useRenderedMessages", () => {
           botSendReceipt: null,
           artifact: null,
           mcpApp: null,
+          feedbackDraft: null,
           progress: null,
           backgroundOutput: null,
           backgroundTask: false,
@@ -7284,6 +7332,7 @@ describe("useRenderedMessages: a subagent's own conversation nests under its car
       botSendReceipt: null,
       artifact: null,
       mcpApp: null,
+      feedbackDraft: null,
       progress: null,
       backgroundOutput: null,
       backgroundTask: false,
@@ -7977,6 +8026,7 @@ describe("useRenderedMessages: object artifact creation cards", () => {
       botSendReceipt: null,
       artifact: null,
       mcpApp: null,
+      feedbackDraft: null,
       progress: null,
       backgroundOutput: null,
       backgroundTask: false,

@@ -6,6 +6,7 @@ import {
   screen,
   waitFor,
 } from "@testing-library/react";
+import { useState, type ReactNode } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { MockHandlerMap } from "@traycer-clients/shared/host-client/mock/mock-host-messenger";
 import {
@@ -13,11 +14,15 @@ import {
   resetNegotiatedManifests,
 } from "@traycer-clients/shared/host-transport/negotiated-manifest-registry";
 import type { EnvironmentStatusResponseV11 } from "@traycer/protocol/host/environment-schemas";
+import type { EnvironmentHostBinding } from "@traycer/protocol/host/environment/contracts";
 import type {
   EnvironmentMoveStopPreviewResponseV11,
   EnvironmentMoveStopRequest,
 } from "@traycer/protocol/host/environment/move-contracts";
-import { hostSettingsCardState } from "@/components/settings/panels/host-overview-settings-card-model";
+import {
+  hostSettingsCardState,
+  hostSettingsRowModel,
+} from "@/components/settings/panels/host-overview-settings-card-model";
 import { HostOverviewSettingsCard } from "@/components/settings/panels/host-overview-settings-card";
 import {
   buildEnvironmentClient,
@@ -29,26 +34,29 @@ import type { HostRpcRegistry } from "@/lib/host";
 import { useMoveSheetStore } from "@/stores/settings/move-sheet-store";
 import { useRetrospectiveSheetStore } from "@/stores/settings/retrospective-sheet-store";
 
-// Details opens the configuration drawer, which has its own suite and reads
-// the host pool; a marker here, so the card's layout around it is what is
-// under test.
-vi.mock("@/components/settings/details/overview-card-details-line", () => ({
-  OverviewCardDetailsLine: () => (
-    <button type="button" data-testid="card-details">
-      Details
-    </button>
-  ),
-}));
-
-// Export diagnostics opens the same drawer on its export tab; a marker here
-// shows whether, and on which tab, the card asked for it.
+// The drawer itself has a separate suite; keep its controls real so dated
+// lines remain covered through the Details action.
 vi.mock("@/components/settings/details/settings-details-button", () => ({
+  SettingsDetailsButton: (props: { readonly controls: ReactNode }) => {
+    const [open, setOpen] = useState(false);
+    return (
+      <>
+        <button type="button" onClick={() => setOpen(true)}>
+          Details
+        </button>
+        {open ? <div data-testid="details-dialog">{props.controls}</div> : null}
+      </>
+    );
+  },
   SettingsDetailsDialog: (props: {
     readonly open: boolean;
     readonly initialTab: string;
+    readonly controls: ReactNode;
   }) =>
     props.open ? (
-      <div data-testid="details-dialog" data-tab={props.initialTab} />
+      <div data-testid="details-dialog" data-tab={props.initialTab}>
+        {props.controls}
+      </div>
     ) : null,
 }));
 vi.mock(
@@ -64,6 +72,32 @@ vi.mock(
 
 const ACCEPTED_AT = Date.UTC(2026, 9, 20, 12);
 const STOPPED_AT = Date.UTC(2026, 9, 21, 12);
+const PERSONAL_BINDING: EnvironmentHostBinding = {
+  hostId: "old",
+  environment: {
+    environmentId: "personal",
+    ownerKind: "user",
+    ownerId: "user-a",
+    roomId: "room-a",
+    label: "Personal",
+  },
+  explicit: false,
+  enrolledByUserId: null,
+  canUnbind: false,
+};
+const TEAM_BINDING: EnvironmentHostBinding = {
+  hostId: "old",
+  environment: {
+    environmentId: "team",
+    ownerKind: "organization",
+    ownerId: "org-a",
+    roomId: "room-team",
+    label: "Designers",
+  },
+  explicit: true,
+  enrolledByUserId: "user-a",
+  canUnbind: true,
+};
 
 /**
  * The card over a fake host that negotiated the redesign's methods, so the
@@ -79,6 +113,15 @@ function renderCard(
 function renderCardWithRetry(
   status: EnvironmentStatusResponseV11,
   handlers: MockHandlerMap<HostRpcRegistry>,
+  retrySupported: boolean,
+): void {
+  renderCardWithBinding(status, handlers, PERSONAL_BINDING, retrySupported);
+}
+
+function renderCardWithBinding(
+  status: EnvironmentStatusResponseV11,
+  handlers: MockHandlerMap<HostRpcRegistry>,
+  binding: EnvironmentHostBinding,
   retrySupported: boolean,
 ): void {
   const { client } = buildEnvironmentClient({ hostId: "old", handlers });
@@ -102,19 +145,10 @@ function renderCardWithRetry(
         hostId="old"
         hostName="Old laptop"
         status={status}
+        binding={binding}
       />
     </QueryClientProvider>,
   );
-}
-
-const MOVE_LINES = [
-  "host-settings-card-local",
-  "host-settings-card-progress",
-  "host-settings-card-moved",
-];
-
-function shownLines(): string[] {
-  return MOVE_LINES.filter((id) => screen.queryByTestId(id) !== null);
 }
 
 beforeEach(() => {
@@ -128,7 +162,7 @@ afterEach(() => {
 });
 
 describe("<HostOverviewSettingsCard />", () => {
-  it("says the settings are on this computer only while awaiting, and Move to Personal opens the sheet", () => {
+  it("shows This computer only while awaiting, and selecting Personal opens the move sheet", async () => {
     renderCard(
       environmentStatusFixture({
         principal: null,
@@ -138,18 +172,23 @@ describe("<HostOverviewSettingsCard />", () => {
       {},
     );
 
-    expect(shownLines()).toEqual(["host-settings-card-local"]);
-    expect(screen.getByTestId("host-settings-card-local").textContent).toBe(
-      "Settings on this computer only.",
+    expect(screen.getByTestId("host-settings-source").textContent).toContain(
+      "Settings: This computer only",
     );
-    fireEvent.click(screen.getByTestId("host-settings-card-move"));
+    fireEvent.pointerDown(
+      screen.getByRole("button", { name: "Change settings source" }),
+      { button: 0 },
+    );
+    fireEvent.click(
+      await screen.findByRole("menuitemradio", { name: /Personal/ }),
+    );
     expect(useMoveSheetStore.getState().target).toEqual({
       hostId: "old",
       hostName: "Old laptop",
     });
   });
 
-  it("puts Details on the Local line, between the sentence and Move to Personal", () => {
+  it("shows the Settings row label and keeps Details beside its value", () => {
     renderCard(
       environmentStatusFixture({
         principal: null,
@@ -159,15 +198,11 @@ describe("<HostOverviewSettingsCard />", () => {
       {},
     );
 
-    const line = screen.getByTestId("host-settings-card-local").parentElement;
-    expect(
-      Array.from(line?.children ?? []).map((child) => child.textContent),
-    ).toEqual([
-      "Settings on this computer only.",
-      "Details",
-      "Move to Personal",
-    ]);
-    expect(screen.getAllByTestId("card-details")).toHaveLength(1);
+    expect(screen.getByText(/Settings: This computer only/)).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Details" })).toBeTruthy();
+    expect(screen.getByTestId("host-settings-source").textContent).toContain(
+      "Settings: This computer only",
+    );
   });
 
   it("shows N of M items applied while moving", () => {
@@ -188,7 +223,6 @@ describe("<HostOverviewSettingsCard />", () => {
       {},
     );
 
-    expect(shownLines()).toEqual(["host-settings-card-progress"]);
     expect(
       screen
         .getByTestId("host-settings-card-progress")
@@ -196,14 +230,12 @@ describe("<HostOverviewSettingsCard />", () => {
     ).toBe(
       "Moving this computer's settings to Personal · 2 of 4 items applied",
     );
-    expect(screen.queryByTestId("host-settings-card-move")).toBeNull();
-    // Details sits on the progress line's own row, not as a line of the card.
-    const details = screen.getAllByTestId("card-details");
-    expect(details).toHaveLength(1);
     const row = screen.getByTestId("host-settings-card-progress").parentElement;
-    expect(row?.contains(details[0])).toBe(true);
-    expect(row).not.toBe(screen.getByTestId("host-settings-card"));
-    expect(details[0].parentElement).toBe(row);
+    expect(row?.contains(screen.getByRole("button", { name: "Details" }))).toBe(
+      true,
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Details" }));
+    expect(screen.getByTestId("overview-stop-sharing")).toBeTruthy();
   });
 
   it("shows no count while the move has registered no item", () => {
@@ -240,7 +272,8 @@ describe("<HostOverviewSettingsCard />", () => {
         screen.getByTestId("host-settings-card-move-stopped").textContent,
       ).toBe("Moving stopped: it timed out. 3 items left.");
       expect(screen.queryByTestId("host-settings-card-progress")).toBeNull();
-      expect(screen.queryByTestId("card-details")).toBeNull();
+      fireEvent.click(screen.getByRole("button", { name: "Details" }));
+      expect(screen.getByTestId("overview-stop-sharing")).toBeTruthy();
     });
 
     it("says it couldn't finish when it failed", () => {
@@ -308,7 +341,7 @@ describe("<HostOverviewSettingsCard />", () => {
     ).toEqual({ kind: "moving", applied: 1, total: 1 });
   });
 
-  it("says when it moved, from the consent, once setup is past the move", () => {
+  it("shows the accepted date in Details after setup is past the move", () => {
     renderCard(
       environmentStatusFixture({
         // Set HERE and nowhere above: the marker that carries this consent is
@@ -320,16 +353,17 @@ describe("<HostOverviewSettingsCard />", () => {
       {},
     );
 
-    expect(shownLines()).toEqual(["host-settings-card-moved"]);
-    const moved = screen.getByTestId("host-settings-card-moved");
-    expect(moved.textContent).toBe("Moved to Personal on 20 Oct");
-    // Details sits on the same row as the date, with no second Details row.
-    const details = screen.getAllByTestId("card-details");
-    expect(details).toHaveLength(1);
-    expect(moved.parentElement?.contains(details[0])).toBe(true);
+    expect(screen.getByTestId("host-settings-source").textContent).toContain(
+      "Settings: Personal",
+    );
+    expect(screen.queryByText("Moved to Personal on 20 Oct")).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "Details" }));
+    expect(screen.getByTestId("details-dialog").textContent).toContain(
+      "Moved to Personal on 20 Oct",
+    );
   });
 
-  it("offers Finish moving while an upload is still pending", () => {
+  it("shows the local value while an upload is still pending", () => {
     renderCard(
       environmentStatusFixture({
         planes: { records: "moved", broker: "local", room: "moved" },
@@ -339,15 +373,14 @@ describe("<HostOverviewSettingsCard />", () => {
       {},
     );
 
-    expect(screen.getByTestId("host-settings-card-local").textContent).toBe(
-      "Settings on this computer only.",
+    expect(screen.getByTestId("host-settings-source").textContent).toContain(
+      "Settings: This computer only",
     );
-    expect(screen.getByTestId("host-settings-card-move").textContent).toBe(
-      "Finish moving",
-    );
+    fireEvent.click(screen.getByRole("button", { name: "Details" }));
+    expect(screen.getByTestId("overview-stop-sharing")).toBeTruthy();
   });
 
-  it("says shared by an earlier version with Details, and Details opens the retrospective for this computer", () => {
+  it("keeps Stop using Personal in Details for a legacy shared computer", () => {
     renderCard(
       environmentStatusFixture({
         planes: {
@@ -359,9 +392,13 @@ describe("<HostOverviewSettingsCard />", () => {
       {},
     );
 
-    expect(shownLines()).toEqual([]);
-    const line = screen.getByTestId("overview-shared-by-earlier-version");
-    expect(line.textContent).toBe("Shared by an earlier version · Details");
+    expect(screen.getByTestId("host-settings-source").textContent).toContain(
+      "Settings: Personal",
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Details" }));
+    expect(
+      screen.getByTestId("overview-shared-by-earlier-version").textContent,
+    ).toContain("Shared by an earlier version");
     expect(screen.getByTestId("overview-stop-sharing").textContent).toBe(
       "Stop using Personal on this computer",
     );
@@ -374,7 +411,52 @@ describe("<HostOverviewSettingsCard />", () => {
     });
   });
 
-  it("after a stop says the date and keeps the local line with its Move to Personal", () => {
+  it("shows the team's fixed Settings source without Change", () => {
+    renderCardWithBinding(environmentStatusFixture({}), {}, TEAM_BINDING, true);
+
+    expect(screen.getByText("Designers")).toBeTruthy();
+    expect(
+      screen.queryByRole("button", { name: "Change settings source" }),
+    ).toBeNull();
+    expect(screen.getByText("Designers").parentElement?.textContent).toBe(
+      "Settings: Designers",
+    );
+  });
+
+  it("opens the Stop sharing review when This computer only is selected", async () => {
+    renderCard(
+      environmentStatusFixture({
+        planes: {
+          records: "shared_unrecorded",
+          broker: "shared_unrecorded",
+          room: "shared_unrecorded",
+        },
+      }),
+      {
+        "environment.move.stopPreview": () => ({
+          managed: [],
+          needsChoice: [],
+        }),
+      },
+    );
+
+    fireEvent.pointerDown(
+      screen.getByRole("button", { name: "Change settings source" }),
+      { button: 0 },
+    );
+    fireEvent.click(
+      await screen.findByRole("menuitemradio", { name: /This computer only/ }),
+    );
+
+    expect(
+      await screen.findByTestId("stop-sharing-managed-empty"),
+    ).toBeTruthy();
+    expect(
+      screen.getByTestId("stop-sharing-confirm").hasAttribute("disabled"),
+    ).toBe(false);
+  });
+
+  it("shows This computer only after every plane stopped using Personal", () => {
     renderCard(
       environmentStatusFixture({
         principal: null,
@@ -384,25 +466,21 @@ describe("<HostOverviewSettingsCard />", () => {
       {},
     );
 
-    expect(shownLines()).toEqual(["host-settings-card-local"]);
+    expect(screen.getByTestId("host-settings-source").textContent).toContain(
+      "Settings: This computer only",
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Details" }));
     expect(
       screen.getByText("This computer stopped using Personal on 21 Oct"),
     ).toBeTruthy();
-    expect(screen.getByTestId("host-settings-card-move").textContent).toBe(
-      "Move to Personal",
-    );
     expect(screen.queryByTestId("overview-stop-sharing")).toBeNull();
   });
 
-  it("shows none of these lines with no consent on record", () => {
+  it("shows Personal for an unrecorded shared computer", () => {
     renderCard(environmentStatusFixture({ setup: null }), {});
-    expect(shownLines()).toEqual([]);
-    cleanup();
-    renderCard(
-      environmentStatusFixture({ setup: { stage: "done", state: "done" } }),
-      {},
+    expect(screen.getByTestId("host-settings-source").textContent).toContain(
+      "Settings: Personal",
     );
-    expect(shownLines()).toEqual([]);
   });
 });
 
@@ -427,6 +505,7 @@ describe("<HostOverviewSettingsCard /> after Stop using Personal", () => {
       }),
       {},
     );
+    fireEvent.click(screen.getByRole("button", { name: "Details" }));
 
     expect(
       screen.getByTestId("overview-stop-cleanup-pending").textContent,
@@ -440,6 +519,7 @@ describe("<HostOverviewSettingsCard /> after Stop using Personal", () => {
 
   it("explains Stop using Personal under its button", () => {
     renderCard(environmentStatusFixture({}), {});
+    fireEvent.click(screen.getByRole("button", { name: "Details" }));
 
     expect(screen.getByTestId("overview-stop-sharing").textContent).toBe(
       "Stop using Personal on this computer",
@@ -495,6 +575,7 @@ describe("<HostOverviewSettingsCard /> after Stop using Personal", () => {
       },
     });
 
+    fireEvent.click(screen.getByRole("button", { name: "Details" }));
     fireEvent.click(screen.getByTestId("overview-stop-sharing"));
     fireEvent.click(
       await screen.findByTestId(
@@ -538,5 +619,105 @@ describe("hostSettingsCardState", () => {
     expect(hostSettingsCardState(environmentStatusFixture({}))).toEqual({
       kind: "other",
     });
+  });
+});
+
+describe("hostSettingsRowModel", () => {
+  it.each([
+    [
+      "local",
+      { planes: { records: "local", broker: "local", room: "local" } },
+      "local",
+    ],
+    [
+      "partly moved",
+      { planes: { records: "local", broker: "moved", room: "moved" } },
+      "local",
+    ],
+    [
+      "stopped on every plane",
+      { planes: { records: "stopped", broker: "stopped", room: "stopped" } },
+      "local",
+    ],
+    [
+      "moving",
+      { setup: { stage: "moving_settings", state: "running" } },
+      "progress",
+    ],
+    [
+      "move stopped",
+      { setup: { stage: "moving_settings", state: "failed" } },
+      "progress",
+    ],
+    [
+      "moved",
+      {
+        consent: { acceptedAt: ACCEPTED_AT, planHash: "h" },
+        setup: { stage: "done", state: "done" },
+      },
+      "personal",
+    ],
+    [
+      "legacy shared",
+      {
+        planes: {
+          records: "shared_unrecorded",
+          broker: "shared_unrecorded",
+          room: "shared_unrecorded",
+        },
+      },
+      "personal",
+    ],
+  ] as const)("places %s settings", (_name, overrides, expected) => {
+    const model = hostSettingsRowModel(
+      environmentStatusFixture(overrides),
+      PERSONAL_BINDING,
+    );
+    if (expected === "progress") {
+      expect(model.kind).toBe("progress");
+      return;
+    }
+    expect(model.kind).toBe("select");
+    if (model.kind !== "select") return;
+    expect(model.value).toBe(expected);
+    expect(model.options.map((option) => option.label)).not.toContain(
+      "Designers",
+    );
+    expect(model.options.map((option) => option.label)).toContain("Personal");
+    expect(model.options.map((option) => option.label)).toContain(
+      "This computer only",
+    );
+  });
+
+  it("uses the team's name as a fixed value", () => {
+    expect(
+      hostSettingsRowModel(environmentStatusFixture({}), TEAM_BINDING),
+    ).toEqual({
+      kind: "team",
+      label: "Designers",
+      description: "Runs Designers' settings.",
+    });
+  });
+
+  it("does not treat an implicit binding as team-owned, including a null principal", () => {
+    const status = environmentStatusFixture({
+      principal: null,
+      planes: {
+        records: "shared_unrecorded",
+        broker: "shared_unrecorded",
+        room: "shared_unrecorded",
+      },
+    });
+    expect(hostSettingsRowModel(status, PERSONAL_BINDING)).toMatchObject({
+      kind: "select",
+      value: "personal",
+    });
+  });
+
+  it("reserves the row while status or binding is unread", () => {
+    expect(hostSettingsRowModel(null, PERSONAL_BINDING).kind).toBe("loading");
+    expect(hostSettingsRowModel(environmentStatusFixture({}), null).kind).toBe(
+      "loading",
+    );
   });
 });

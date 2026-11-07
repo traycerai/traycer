@@ -1,4 +1,11 @@
-import { WebAudioDimFilter, WebAudioOutput } from "@/lib/soundtrack/output";
+import {
+  WebAudioDimFilter,
+  WebAudioLevel,
+  WebAudioOutput,
+} from "@/lib/soundtrack/output";
+import { MIX_TUNING } from "@/lib/soundtrack/mix-tuning";
+import type { SoundtrackPorts } from "@/lib/soundtrack/session";
+import { openWebAudioPorts } from "@/lib/soundtrack/web-audio-ports";
 
 /**
  * Browser fixture for what the soundtrack's Web Audio port puts in the output.
@@ -162,13 +169,163 @@ async function renderDim(request: DimRequest): Promise<DimRendered> {
   return { peaks, rms };
 }
 
+interface LevelRequest {
+  readonly seconds: number;
+  readonly volume: number;
+  /** Each runs on the render quantum its time falls in. */
+  readonly steps: readonly {
+    readonly kind: "volume" | "duck";
+    readonly at: number;
+    readonly value: number;
+  }[];
+  readonly readAt: readonly number[];
+}
+
+interface LevelRendered {
+  readonly readings: readonly number[];
+  /** The biggest jump between neighbouring samples from the first step on. */
+  readonly biggestStep: number;
+}
+
+/** A constant 1 through `WebAudioLevel`: a sample reads as the level itself. */
+async function renderLevel(request: LevelRequest): Promise<LevelRendered> {
+  const context = new OfflineAudioContext(
+    1,
+    Math.ceil(request.seconds * SAMPLE_RATE),
+    SAMPLE_RATE,
+  );
+  const constantOne = context.createBuffer(
+    1,
+    context.length,
+    context.sampleRate,
+  );
+  constantOne.getChannelData(0).fill(1);
+  const level = new WebAudioLevel(context, context.destination, request.volume);
+  const source = context.createBufferSource();
+  source.buffer = constantOne;
+  source.connect(level.input);
+  source.start(0);
+  for (const step of request.steps) {
+    void context.suspend(step.at).then(() => {
+      if (step.kind === "volume") level.setVolume(step.value);
+      else level.duck(step.value);
+      return context.resume();
+    });
+  }
+
+  const samples = (await context.startRendering()).getChannelData(0);
+  const firstStep = Math.round(request.steps[0].at * SAMPLE_RATE) + 1;
+  let biggestStep = 0;
+  for (let index = firstStep; index < samples.length; index += 1) {
+    biggestStep = Math.max(
+      biggestStep,
+      Math.abs(samples[index] - samples[index - 1]),
+    );
+  }
+  return {
+    readings: request.readAt.map(
+      (time) => samples[Math.round(time * SAMPLE_RATE)],
+    ),
+    biggestStep,
+  };
+}
+
+/** What a live device read on one animation frame. */
+interface LiveFrame {
+  readonly state: AudioContextState;
+  readonly time: number;
+  /** The pause's own gain, in front of the speakers. */
+  readonly audible: number;
+}
+
+interface LiveProbe {
+  /** Opens the ports on a real `AudioContext`; call it after a gesture. */
+  readonly open: () => void;
+  readonly read: () => LiveFrame;
+  readonly startRecording: () => void;
+  readonly stopRecording: () => readonly LiveFrame[];
+  readonly pause: () => void;
+  readonly resume: () => void;
+}
+
+/**
+ * The real ports over a running `AudioContext`, for what a pause does to the
+ * real clock. The first gain made on the context (the pause's fade) is caught as
+ * the ports build it, since the ports expose neither it nor the context.
+ */
+function createLiveProbe(): LiveProbe {
+  let ports: SoundtrackPorts | null = null;
+  const gains: GainNode[] = [];
+  const frames: LiveFrame[] = [];
+  let recording = false;
+
+  const read = (): LiveFrame => {
+    if (ports === null || gains.length === 0) {
+      throw new Error("open the live ports first");
+    }
+    return {
+      state: gains[0].context.state,
+      time: ports.output.currentTime(),
+      audible: gains[0].gain.value,
+    };
+  };
+  const record = (): void => {
+    if (!recording) return;
+    frames.push(read());
+    requestAnimationFrame(record);
+  };
+  return {
+    open(): void {
+      const Real = window.AudioContext;
+      class SpyContext extends Real {
+        override createGain(): GainNode {
+          const gain = super.createGain();
+          gains.push(gain);
+          return gain;
+        }
+      }
+      window.AudioContext = SpyContext;
+      try {
+        ports = openWebAudioPorts({ tracks: [] }, 1);
+      } finally {
+        window.AudioContext = Real;
+      }
+    },
+    read,
+    startRecording(): void {
+      frames.length = 0;
+      recording = true;
+      requestAnimationFrame(record);
+    },
+    stopRecording(): readonly LiveFrame[] {
+      recording = false;
+      return [...frames];
+    },
+    pause(): void {
+      ports?.pause();
+    },
+    resume(): void {
+      ports?.resume(() => undefined);
+    },
+  };
+}
+
 declare global {
   interface Window {
     __soundtrackOutputProbe: {
       readonly render: typeof render;
       readonly renderDim: typeof renderDim;
+      readonly renderLevel: typeof renderLevel;
+      readonly duckTuning: typeof MIX_TUNING.duck;
+      readonly live: LiveProbe;
     };
   }
 }
 
-window.__soundtrackOutputProbe = { render, renderDim };
+window.__soundtrackOutputProbe = {
+  render,
+  renderDim,
+  renderLevel,
+  duckTuning: MIX_TUNING.duck,
+  live: createLiveProbe(),
+};

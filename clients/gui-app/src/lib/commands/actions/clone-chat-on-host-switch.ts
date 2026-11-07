@@ -210,6 +210,7 @@ export function cloneChatOnHostSwitch(
       settings,
       forkSource,
       source: "direct_ui",
+      provenance: "user",
       createChat: args.createChat,
       onCreateError:
         forkSource === null
@@ -246,6 +247,7 @@ export function cloneChatOnHostSwitch(
           : openCreatedChatWhenProjectedWithNavigation({
               intent,
               navigateNestedFocus: args.navigateNestedFocus,
+              mobileTarget: null,
             });
       },
     });

@@ -52,6 +52,11 @@ export interface ChatTurnMinimapProps {
    * the rail off the per-token path.
    */
   readonly transcriptWindow: TranscriptWindow | null;
+  /**
+   * Leads each item with its sender's name: a bot's channel and its threads,
+   * where several people post and the preview alone does not say who.
+   */
+  readonly senderFirst: boolean;
   readonly listRef: RefObject<LegendListRef | null>;
   readonly topOffsetAdjustmentRef: RefObject<number>;
   readonly viewportRef: RefObject<HTMLElement | null>;
@@ -98,6 +103,7 @@ export function ChatTurnMinimap(props: ChatTurnMinimapProps) {
     listRef,
     rows,
     onSelect,
+    senderFirst,
     shown,
     side,
     topOffsetAdjustmentRef,
@@ -118,8 +124,8 @@ export function ChatTurnMinimap(props: ChatTurnMinimapProps) {
   // churning with it. The `useMemo` is left in place only to keep the lookup
   // itself off the re-render path; the cache is what makes the result stable.
   const items = useMemo(
-    () => chatTurnMinimapItems({ rows, window: transcriptWindow }),
-    [rows, transcriptWindow],
+    () => chatTurnMinimapItems({ rows, window: transcriptWindow, senderFirst }),
+    [rows, transcriptWindow, senderFirst],
   );
   const uiFontSize = useSettingsStore((state) => state.uiFontSize);
   const coarsePointer = useCoarsePointer();

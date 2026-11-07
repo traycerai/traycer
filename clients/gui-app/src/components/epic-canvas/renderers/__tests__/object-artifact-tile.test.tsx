@@ -1,26 +1,34 @@
 import { cleanup, render, screen } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { useEffect, useRef, type ReactNode } from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { SandboxSource } from "@/components/sandbox/sandbox-frame";
-import type { HtmlArtifactVersionState } from "@/hooks/epic/use-epic-html-artifact-version";
 import type {
   ArtifactProjection,
   ArtifactsSlice,
 } from "@/stores/epics/open-epic/types";
 import type { EpicArtifactRef } from "@/stores/epics/canvas/types";
-import type { HtmlArtifactVersionSelection } from "@traycer/protocol/host/epic/html-artifact-versions";
+import type {
+  EpicListHtmlArtifactVersionsResponse,
+  HtmlArtifactVersion,
+  HtmlArtifactVersionSelection,
+} from "@traycer/protocol/host/epic/html-artifact-versions";
 import { TabHostContext } from "@/components/epic-canvas/hooks/use-tab-host-id";
+import { EpicViewTabContext } from "@/components/epic-canvas/view-tab-context";
+import { TooltipProvider } from "@/components/ui/tooltip";
 import { ObjectArtifactTile } from "@/components/epic-canvas/renderers/object-artifact-tile";
 
 const EPIC_ID = "epic-1";
+const VIEW_TAB_ID = "tab-1";
 const SHA = "a".repeat(64);
+const PAST_SHA = "b".repeat(64);
 
-// The slice of the version hook's state the tile itself reads; the picker is
-// mocked, so the rest of the state never has to exist here.
-type ReportedVersion = Pick<
-  HtmlArtifactVersionState,
-  "manifest" | "entryPath" | "selectedVersion"
->;
+const EMPTY_VERSION_PAGE: EpicListHtmlArtifactVersionsResponse = {
+  versions: [],
+  nextCursor: null,
+  currentVersionNumber: null,
+};
 
 const mocks = vi.hoisted(() => ({
   artifacts: { byId: {}, allIds: [] } as ArtifactsSlice,
@@ -42,20 +50,16 @@ const mocks = vi.hoisted(() => ({
     readonly sha256: string;
   }>,
   fileViewerMounts: [] as string[],
-  // The selection the version hook reports; null follows the live head, as
-  // an unpinned tile does.
-  pinned: null as HtmlArtifactVersionSelection | null,
-  versionHookCalls: [] as Array<{
-    readonly epicId: string;
-    readonly node: EpicArtifactRef;
-    readonly artifact: ArtifactProjection | null;
-  }>,
-  pickerVersions: [] as ReportedVersion[],
   downloadProps: [] as Array<{
     readonly source: SandboxSource;
     readonly title: string;
     readonly hostId: string;
   }>,
+  versionPage: {
+    versions: [],
+    nextCursor: null,
+    currentVersionNumber: null,
+  } as EpicListHtmlArtifactVersionsResponse,
 }));
 
 vi.mock("@/lib/mobile-app", async (importOriginal) => ({
@@ -113,37 +117,39 @@ vi.mock("@/lib/epic-selectors", () => ({
   useEpicCommentRoomAvailability: () => ({ kind: "checking" as const }),
 }));
 
-// Version selection and history have their own tests. What the tile owns is
-// building the served bundle from whatever the hook reports, and handing the
-// same bundle to the picker and the download.
-vi.mock("@/hooks/epic/use-epic-html-artifact-version", () => ({
-  useEpicHtmlArtifactVersion: (props: {
-    readonly epicId: string;
-    readonly node: EpicArtifactRef;
-    readonly artifact: ArtifactProjection | null;
-  }): ReportedVersion => {
-    mocks.versionHookCalls.push(props);
-    const latest =
-      props.artifact?.kind === "html" ? (props.artifact.head ?? null) : null;
-    const pinned = mocks.pinned;
-    return {
-      manifest: pinned?.manifest ?? latest,
-      entryPath: pinned?.entryPath ?? null,
-      // The tile serves the live resolver only while nothing is selected.
-      selectedVersion: pinned,
-    };
-  },
+vi.mock("@/hooks/host/use-host-supports-method", () => ({
+  useHostSupportsMethod: () => true,
 }));
 
-vi.mock("@/components/html-artifact/html-artifact-version-picker", () => ({
-  HtmlArtifactVersionPicker: (props: { readonly version: ReportedVersion }) => {
-    mocks.pickerVersions.push(props.version);
-    return <div data-testid="version-picker" />;
-  },
+vi.mock("@/hooks/host/use-host-query", async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import("@/hooks/host/use-host-query")>();
+  return {
+    ...actual,
+    useHostQuery: () => ({
+      data: mocks.versionPage,
+      isPending: false,
+      isError: false,
+      isFetching: false,
+      refetch: () => undefined,
+    }),
+  };
+});
+
+vi.mock("@/hooks/comments/use-frame-comments-enabled", () => ({
+  useFrameCommentsEnabled: () => true,
+}));
+
+vi.mock("@/hooks/comments/use-frame-comment-threads", () => ({
+  useFrameCommentThreads: () => [],
+}));
+
+vi.mock("@/components/comments/anchored-draft-popover", () => ({
+  AnchoredDraftPopover: () => null,
 }));
 
 vi.mock("@/components/html-artifact/html-artifact-download-button", () => ({
-  HtmlArtifactDownloadButton: (props: {
+  HtmlArtifactDownloadMenuItem: (props: {
     readonly source: SandboxSource;
     readonly title: string;
     readonly hostId: string;
@@ -198,23 +204,41 @@ function setArtifacts(artifacts: readonly ArtifactProjection[]): void {
   mocks.artifacts = { byId, allIds };
 }
 
-function node(id: string): EpicArtifactRef {
+function node(
+  id: string,
+  htmlVersion: HtmlArtifactVersionSelection | undefined,
+): EpicArtifactRef {
   return {
     id,
     instanceId: `instance-${id}`,
     type: "html",
     name: "node",
     hostId: "host-1",
+    ...(htmlVersion === undefined ? {} : { htmlVersion }),
   };
+}
+
+function tileTree(ref: EpicArtifactRef, viewTabId: string | null): ReactNode {
+  const tile = (
+    <TabHostContext.Provider value="host-1">
+      <ObjectArtifactTile node={ref} epicId={EPIC_ID} />
+    </TabHostContext.Provider>
+  );
+  if (viewTabId === null) return tile;
+  return (
+    <QueryClientProvider client={new QueryClient()}>
+      <TooltipProvider delayDuration={0}>
+        <EpicViewTabContext.Provider value={viewTabId}>
+          {tile}
+        </EpicViewTabContext.Provider>
+      </TooltipProvider>
+    </QueryClientProvider>
+  );
 }
 
 // Tile renderers always mount under the tab's host provider.
 function tile(id: string): ReactNode {
-  return (
-    <TabHostContext.Provider value="host-1">
-      <ObjectArtifactTile node={node(id)} epicId={EPIC_ID} />
-    </TabHostContext.Provider>
-  );
+  return tileTree(node(id, undefined), null);
 }
 
 afterEach(() => {
@@ -227,10 +251,8 @@ afterEach(() => {
   mocks.bodyLeases = [];
   mocks.fileViewerProps = [];
   mocks.fileViewerMounts = [];
-  mocks.pinned = null;
-  mocks.versionHookCalls = [];
-  mocks.pickerVersions = [];
   mocks.downloadProps = [];
+  mocks.versionPage = EMPTY_VERSION_PAGE;
 });
 
 describe("<ObjectArtifactTile />", () => {
@@ -306,7 +328,6 @@ describe("<ObjectArtifactTile />", () => {
   });
 
   describe("a pinned historical version", () => {
-    const PAST_SHA = "b".repeat(64);
     const PAST: HtmlArtifactVersionSelection = {
       manifest: {
         files: {
@@ -341,11 +362,14 @@ describe("<ObjectArtifactTile />", () => {
       });
     }
 
-    it("serves the pinned bundle and entry page instead of the live head, and exports exactly that bundle on the tab's host", () => {
+    it("serves the pinned bundle and entry page instead of the live head, and exports exactly that bundle on the tab's host", async () => {
       setArtifacts([htmlWithNewerHead()]);
-      mocks.pinned = PAST;
 
-      render(tile("page"));
+      render(tileTree(node("page", PAST), null));
+      // Download is a row of the controls' "More actions" menu.
+      await userEvent.click(
+        screen.getByRole("button", { name: "More actions" }),
+      );
 
       const source = mocks.sandboxProps.at(-1)?.source;
       expect(source).toMatchObject({
@@ -357,15 +381,10 @@ describe("<ObjectArtifactTile />", () => {
       if (source?.kind !== "artifact")
         throw new Error("Expected an artifact source.");
       expect(source.manifest).toBe(PAST.manifest);
-      // The picker and the ZIP see the bundle the reader is looking at.
+      // The ZIP sees the bundle the reader is looking at.
       const download = mocks.downloadProps.at(-1);
       expect(download).toMatchObject({ title: "Report", hostId: "host-1" });
       expect(download?.source).toBe(source);
-      expect(mocks.pickerVersions.at(-1)).toEqual({
-        manifest: PAST.manifest,
-        entryPath: "pages/old.html",
-        selectedVersion: PAST,
-      });
     });
 
     it("refuses files that only exist in the latest tree, though the live resolver would serve them", () => {
@@ -392,26 +411,12 @@ describe("<ObjectArtifactTile />", () => {
       // The control: the same projection does resolve it for Latest.
       expect(live.resolveOutsideReference("logo.png")).not.toBeNull();
 
-      mocks.pinned = PAST;
-      view.rerender(tile("page"));
+      view.rerender(tileTree(node("page", PAST), null));
 
       const pinned = mocks.sandboxProps.at(-1)?.source;
       if (pinned?.kind !== "artifact")
         throw new Error("Expected an artifact source.");
       expect(pinned.resolveOutsideReference("logo.png")).toBeNull();
-    });
-
-    it("asks the version hook about this tile's own node and the projected artifact", () => {
-      const page = htmlWithNewerHead();
-      setArtifacts([page]);
-
-      render(tile("page"));
-
-      expect(mocks.versionHookCalls.at(-1)).toEqual({
-        epicId: EPIC_ID,
-        node: node("page"),
-        artifact: page,
-      });
     });
   });
 
@@ -674,5 +679,150 @@ describe("<ObjectArtifactTile />", () => {
     view.rerender(tile("photo"));
 
     expect(mocks.fileViewerMounts).toEqual([SHA]);
+  });
+
+  describe("version chip and comments", () => {
+    function historyVersion(
+      versionNumber: number,
+      selection: HtmlArtifactVersionSelection,
+    ): HtmlArtifactVersion {
+      return {
+        id: String(versionNumber).repeat(64),
+        versionNumber,
+        entryPath: selection.entryPath,
+        manifest: selection.manifest,
+      };
+    }
+
+    function pinOf(
+      capturedAt: number,
+      sha256: string,
+    ): HtmlArtifactVersionSelection {
+      return {
+        manifest: {
+          files: {
+            "index.html": {
+              sha256,
+              byteLength: 10,
+              mediaType: "text/html",
+            },
+          },
+          capturedAt,
+        },
+        entryPath: "index.html",
+      };
+    }
+
+    function htmlPage(capturedAt: number, sha256: string): ArtifactProjection {
+      return artifact({
+        id: "page",
+        kind: "html",
+        folderName: "report",
+        title: "Report",
+        layout: "folder",
+        head: {
+          files: {
+            "index.html": {
+              sha256,
+              byteLength: 10,
+              mediaType: "text/html",
+              status: "published",
+            },
+          },
+          capturedAt,
+        },
+      });
+    }
+
+    function versionChip(): HTMLElement {
+      return screen.getByRole("button", { name: /HTML version history/ });
+    }
+
+    function commentsButton(): HTMLElement {
+      return screen.getByRole("button", { name: "Comments" });
+    }
+
+    function textOf(element: Element): string {
+      return String(element.textContent);
+    }
+
+    function servedManifest(): unknown {
+      const source = mocks.sandboxProps.at(-1)?.source;
+      if (source?.kind !== "artifact")
+        throw new Error("Expected an artifact source.");
+      return source.manifest;
+    }
+
+    function setHistory(
+      versions: readonly HtmlArtifactVersion[],
+      currentVersionNumber: number,
+    ): void {
+      mocks.versionPage = {
+        versions: [...versions],
+        nextCursor: null,
+        currentVersionNumber,
+      };
+    }
+
+    it("shows an older pin as vN of M, warning-tinted, with comments unavailable", async () => {
+      const older = pinOf(1, PAST_SHA);
+      const live = pinOf(2, SHA);
+      setHistory([historyVersion(2, live), historyVersion(1, older)], 2);
+      setArtifacts([htmlPage(2, SHA)]);
+
+      render(tileTree(node("page", older), VIEW_TAB_ID));
+
+      const chip = versionChip();
+      expect(chip.textContent).toBe("v1 of 2");
+      expect(chip.getAttribute("data-variant")).toBe("warning-ghost");
+      expect(commentsButton().hasAttribute("disabled")).toBe(true);
+
+      await userEvent.hover(commentsButton().parentElement ?? commentsButton());
+      expect(
+        await screen.findByText("Comments are on the latest version"),
+      ).toBeTruthy();
+    });
+
+    it("reads a pin identical to the live head as Latest, with comments enabled and the current version listed once", async () => {
+      const live = pinOf(2, SHA);
+      setHistory([historyVersion(1, live)], 1);
+      setArtifacts([htmlPage(2, SHA)]);
+
+      render(tileTree(node("page", live), VIEW_TAB_ID));
+
+      const chip = versionChip();
+      expect(chip.textContent).toBe("Latest");
+      expect(chip.getAttribute("data-variant")).toBe("ghost");
+      expect(commentsButton().hasAttribute("disabled")).toBe(false);
+      expect(commentsButton().getAttribute("aria-pressed")).toBe("false");
+
+      await userEvent.click(chip);
+      const rows = screen.getAllByRole("menuitemradio");
+      expect(rows.filter((row) => /Latest/.test(textOf(row)))).toHaveLength(1);
+      expect(rows.filter((row) => /Version 1/.test(textOf(row)))).toHaveLength(
+        1,
+      );
+      expect(rows[0].getAttribute("aria-checked")).toBe("true");
+    });
+
+    it("stays on Latest and serves a later save when the tile has no pin", () => {
+      const first = htmlPage(1, SHA);
+      setHistory([historyVersion(1, pinOf(1, SHA))], 1);
+      setArtifacts([first]);
+
+      const view = render(tileTree(node("page", undefined), VIEW_TAB_ID));
+      expect(versionChip().textContent).toBe("Latest");
+      expect(servedManifest()).toBe(first.head);
+
+      const second = htmlPage(2, PAST_SHA);
+      setHistory([historyVersion(2, pinOf(2, PAST_SHA))], 2);
+      setArtifacts([second]);
+      view.rerender(tileTree(node("page", undefined), VIEW_TAB_ID));
+
+      expect(versionChip().textContent).toBe("Latest");
+      expect(versionChip().getAttribute("data-variant")).toBe("ghost");
+      expect(servedManifest()).toBe(second.head);
+      expect(commentsButton().hasAttribute("disabled")).toBe(false);
+    });
   });
 });

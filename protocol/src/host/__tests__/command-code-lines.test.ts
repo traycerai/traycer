@@ -299,7 +299,7 @@ describe("every new head is the registry's canonical line", () => {
 
   it("stream heads are the new minors, with the released minors still installed", () => {
     const chat = hostStreamRpcRegistry["chat.subscribe"][1];
-    expect(chat.latestMinor).toBe(41);
+    expect(chat.latestMinor).toBe(43);
     expect(chat.versions[22].contract).toBe(chatSubscribeV122);
     expect(chat.versions[23].contract).toBe(chatSubscribeV123);
     expect(chat.versions[21].contract).toBe(chatSubscribeV121);
@@ -708,6 +708,7 @@ describe("parse-or-refuse bridges", () => {
             policy: policyWithCandidate(representable ? "claude" : NEW_ID),
             storedPolicyUnreadable: false,
             inFlightCount: 0,
+            source: "own",
           }),
         ),
     },
@@ -963,6 +964,7 @@ describe("every new frozen response schema rejects commandcode while its live co
         policy: policyWithCandidate(id),
         storedPolicyUnreadable: false,
         inFlightCount: 0,
+        source: "own",
       }),
     },
     {

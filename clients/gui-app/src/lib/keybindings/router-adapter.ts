@@ -16,6 +16,8 @@ import {
   goBack as goBackAction,
   goForward as goForwardAction,
 } from "@/lib/commands/actions";
+import { readConnectableHostsSnapshot } from "@/hooks/host/use-connectable-host-ids";
+import { openBotChannel } from "@/lib/bots/open-bot-channel";
 import { getHistoryController } from "@/lib/persistent-history";
 import { historyNavChromeAvailable } from "@/lib/history-navigation/use-history-nav-available";
 import { LANDING_ROUTE } from "@/lib/routes";
@@ -116,7 +118,17 @@ export function routerAdapterFor(
       }
       navigateToTabIntent(router.navigate, intent, undefined);
     },
-    navigateNestedFocus: (epicId, tabId, prepare) =>
+    // Read when the row runs, not when the adapter is built: the adapter
+    // outlives every directory answer, and a surface on a host this client can
+    // no longer dial moves to the window's host as Home's rows move it.
+    openBotChannel: (botId) => {
+      openBotChannel(router.navigate, botId, {
+        landing: null,
+        isConnectable: readConnectableHostsSnapshot(),
+        onRejected: null,
+      });
+    },
+    navigateNestedFocus: (epicId, tabId, prepare, provenance) =>
       navigateNestedFocus(
         {
           history: router.history,
@@ -128,8 +140,9 @@ export function routerAdapterFor(
         },
         { epicId, tabId },
         prepare,
+        provenance,
       ),
-    navigateNestedFocusToPrimaryEditor: (epicId, tabId, prepare) =>
+    navigateNestedFocusToPrimaryEditor: (epicId, tabId, prepare, provenance) =>
       navigateNestedFocusToPrimaryEditor(
         {
           history: router.history,
@@ -141,6 +154,7 @@ export function routerAdapterFor(
         },
         { epicId, tabId },
         prepare,
+        provenance,
       ),
     // Walk the CURRENT router's persistent history; the shared actions no-op
     // when the history carries no controller brand (browser/web build).

@@ -2130,6 +2130,7 @@ function buildNotificationAnchorMessages(
             // carry - and inventing one would put fallback affordances on a
             // row no turn produced.
             failure: null,
+            hostTimestamp: event.timestamp,
           },
         ],
         structuredContent: null,
@@ -4118,6 +4119,9 @@ function renderUserMessage(
     ...(message.conversationRequest === undefined
       ? {}
       : { conversationRequest: message.conversationRequest }),
+    ...(message.message.kind === "slack"
+      ? { slackMessage: message.message }
+      : {}),
   };
 }
 
@@ -4700,6 +4704,9 @@ function toolCardFailure(tool: ToolSegment): MessageSegment | null {
     recoverable: false,
     code: null,
     failure: null,
+    // The tool row keeps when the call started, not when its error landed;
+    // its start is not the failure time, so the report carries none.
+    hostTimestamp: null,
     parentId: tool.id,
   };
 }
@@ -5302,6 +5309,14 @@ function toolCallMcpAppStamp(
   return mcpApp === undefined ? null : block.mcpApp;
 }
 
+/** A tool call's feedback draft, or `null`, normalizing older records that omit the field. */
+function toolCallFeedbackDraftStamp(
+  block: Extract<OpenContentBlock, { type: "tool_call" }>,
+): Extract<OpenContentBlock, { type: "tool_call" }>["feedbackDraft"] {
+  const feedbackDraft: unknown = block.feedbackDraft;
+  return feedbackDraft === undefined ? null : block.feedbackDraft;
+}
+
 const BLOCK_HANDLERS: {
   [K in OpenContentBlock["type"]]: (
     block: Extract<OpenContentBlock, { type: K }>,
@@ -5380,6 +5395,7 @@ const BLOCK_HANDLERS: {
     imageResults: block.imageResults,
     artifact: toolCallArtifactStamp(block),
     mcpApp: toolCallMcpAppStamp(block),
+    feedbackDraft: toolCallFeedbackDraftStamp(block),
   }),
   file_change: (block) => ({
     kind: "file_change",
@@ -5484,6 +5500,9 @@ const BLOCK_HANDLERS: {
     // affordances turn on it - so reading it here and inferring it from
     // `message`/`code` anywhere else would be two answers to one question.
     failure: block.failure,
+    // The Host's time on the `error` event, which the accumulator writes onto
+    // the block - the fault time, not the time this row was drawn or reported.
+    hostTimestamp: block.timestamp,
     ...parentIdField(block.parentBlockId),
   }),
   compaction: (block) => ({

@@ -1,25 +1,76 @@
-/**
- * A message sent to a staged sandbox waits in its task, behind the setup line,
- * until the agent the person asked for is ready on the sandbox.
- *
- * The driver, the strip, the stores and the staged run are the real ones. What
- * is faked is what lives outside the window: the control plane's create and
- * list, the account's host directory, and each host's `harnesses` and
- * `providers` answers, `epic.createChat` and the terminal create.
- */
-import type { TaskHostRow } from "@traycer/protocol/host/task-host-summary";
-import { useSyncExternalStore } from "react";
-import { TabHostContext } from "@/components/epic-canvas/hooks/use-tab-host-id";
+// Load the shared boundary mocks before importing the components under test.
+import {
+  toastSpies,
+  sessionBridge,
+  handoffHold,
+  SANDBOX_HOST,
+  TASK_PIN_HOST,
+  SANDBOX_ID,
+  SEND_ID,
+  SURFACE,
+  OCCUPIED_NEW_CHAT_CONTENT,
+  NO_AGENT_SENTENCE,
+  type HostAnswers,
+  mocks,
+  environmentListClientHosts,
+  mirrorMountHosts,
+  NEW_TARGET,
+  RESUME_TARGET,
+  START_TARGET,
+  TEAM_TARGET,
+  answerHost,
+  answerSandboxRows,
+  notifyAnswerListeners,
+  CODEX_DOWNLOADING,
+  CODEX_READY,
+  CODEX_UNAVAILABLE,
+  CODEX_SETUP_FAILED,
+  CODEX_NOT_OFFERED,
+  TRAYCER_OFF,
+  PANE,
+  FORK_REQUEST,
+  SEND_BY_KIND,
+  SEEDED,
+  seed,
+  RUNNER_HOST,
+  mount,
+  mountInTileBoundTo,
+  mountInChat,
+  waitForCreateChats,
+  createChatCalls,
+  composerStages,
+  getSetupAction,
+  findSetupAction,
+  expectOnlyTheRecordWritten,
+  listAnswers,
+  type Deferred,
+  deferred,
+  resolvePendingCreate,
+  installImmediateExclusiveLocks,
+  expectSendRecovered,
+  userSignedIn,
+  settleAsyncWork,
+  CREDITS_REFUSED,
+  flattenKeys,
+  sendOf,
+  queueBehindForeignHolder,
+  navigateNowhere,
+  reloadTaskDrafts,
+  sendFromTaskComposer,
+  reloadPendingSandboxStores,
+  openTask,
+} from "./pending-sandbox-send-fixture";
+
 import { useComposerDraftStore } from "@/stores/composer/composer-draft-store";
-import type { ChatSessionStoreHandle } from "@/stores/chats/chat-session-store";
+
 import {
   createMessageSessionHarness,
   type MessageSessionHarness,
 } from "./message-session-harness";
-import type { ReactNode } from "react";
+
 import { HostRpcError } from "@traycer-clients/shared/host-transport/host-messenger";
 import type { JsonContent } from "@traycer/protocol/common/registry";
-import type { ExternalToast } from "sonner";
+
 import {
   recordNegotiatedHostManifest,
   resetNegotiatedManifests,
@@ -27,11 +78,7 @@ import {
 import { installFreshIndexedDb } from "@/lib/composer/__tests__/fake-idb";
 import { putImage } from "@/lib/composer/landing-image-store";
 import { resetDraftBlobTransportForTests } from "@/lib/drafts/draft-blob-transport";
-import {
-  QueryClient,
-  QueryClientProvider,
-  useQueryClient,
-} from "@tanstack/react-query";
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import {
   act,
   cleanup,
@@ -51,30 +98,18 @@ import {
   onTestFinished,
   vi,
 } from "vitest";
-import type { GuiHarnessOption } from "@traycer/protocol/host/index";
-import type { ProviderCliState } from "@traycer/protocol/host/provider-schemas";
-import type {
-  SandboxCreateRequest,
-  SandboxSummary,
-} from "@traycer/protocol/host/sandbox-control";
-import type { SandboxWakeOutcome } from "@traycer-clients/shared/host-client/sandbox-control";
-import type { SandboxVerbGesture } from "@traycer/protocol/host/sandbox-control";
+
+import type { SandboxSummary } from "@traycer/protocol/host/sandbox-control";
+
 import type { SandboxVerbOutcome } from "@/hooks/sandboxes/use-sandbox-verb-mutation";
 import type { CreateChatResponseV12 } from "@traycer/protocol/host/epic/unary-schemas";
-import type { HostDirectoryEntry } from "@traycer-clients/shared/host-client/host-directory";
-import type {
-  SandboxCreateFetchResult,
-  SandboxListFetchResult,
-} from "@traycer-clients/shared/host-client/sandbox-control";
-import type { CreateChatMutationInput } from "@/hooks/epic/use-epic-chat-mutations";
+
+import type { SandboxCreateFetchResult } from "@traycer-clients/shared/host-client/sandbox-control";
+
 import { __getOpenEpicRegistryForTests } from "@/lib/registries/epic-session-registry";
-import type {
-  EpicStreamClientFactory,
-  OpenEpicStoreHandle,
-} from "@/stores/epics/open-epic/store";
-import { openStoreForTest } from "@/stores/epics/open-epic/test-support/open-store-for-test";
+
 import { RunnerHostContext } from "@/providers/runner-host-context";
-import { createFakeRunnerHost } from "../../../../__tests__/create-fake-runner-host";
+
 import { sandboxSummaryFixture } from "@/hooks/sandboxes/__tests__/sandbox-fixtures";
 import {
   MESSAGE_CONTENT,
@@ -99,15 +134,13 @@ import {
 } from "@/lib/sandboxes/pending-sandbox-send";
 import { useNewConversationReturnedSandbox } from "@/hooks/sandboxes/use-returned-sandbox-stage";
 import { openNewChatDraftRow } from "@/lib/drafts/draft-inventory-actions";
-import { takeReturnedSandboxRestored } from "@/lib/sandboxes/returned-sandbox";
-import type { UseNavigateResult } from "@tanstack/react-router";
+
 import { useAccountContextStore } from "@/stores/auth/account-context-store";
 import { useAuthStore } from "@/stores/auth/auth-store";
 import type { PendingSandboxObservation } from "@/lib/sandboxes/pending-sandbox-observation";
 import {
   readStagedSandbox,
   useStagedSandboxStore,
-  type StagedSandbox,
   type StagedSandboxFailure,
   type StagedSandboxTarget,
 } from "@/stores/composer/staged-sandbox-store";
@@ -131,31 +164,26 @@ import {
   recordStoppedSandboxSend,
   useStoppedSandboxSendReceiptStore,
 } from "@/stores/sandboxes/stopped-sandbox-send-receipt-store";
-import { useSettingsEnvironmentPickStore } from "@/stores/settings/settings-environment-pick-store";
+
 import {
   composerSurfaceKey,
   newConversationSurfaceKey,
   useSurfaceHostSelectionStore,
 } from "@/stores/host/surface-host-selection-store";
-import { browserTabId } from "@/lib/browser-tab-identity";
+
 import { persistKey, STORE_KEYS } from "@/lib/persist";
 import { createRecordMapStorage } from "@/lib/persist/record-map-storage";
+import { recordMapStorageKey } from "@/lib/persist/keys";
 import {
-  recordMapStorageKey,
-  recordMapStoragePrefix,
-} from "@/lib/persist/keys";
-import {
-  PendingSandboxSendForChat,
-  PendingSandboxSendStrip,
   PendingSandboxSendsDriver,
   SandboxReadyLineForChat,
 } from "../pending-sandbox-sends";
 import { registerChatCloneOpener } from "@/lib/chats/chat-clone-registry";
 import { registerActiveModelPicker } from "@/lib/commands/active-model-picker-registry";
-import { StoppedSandboxSendReceiptStrip } from "../stopped-sandbox-send-receipts";
+
 import { stagedRunActive } from "@/lib/sandboxes/staged-sandbox-run";
 import { TileCanvas } from "@/components/epic-canvas/canvas/tile-canvas";
-import type { SplitPaneComponentProps } from "@/components/epic-canvas/canvas/split-container";
+
 import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
 import {
   makeOpenableNodeRef,
@@ -163,1225 +191,11 @@ import {
 } from "@/stores/epics/canvas/types";
 import { makeBlankTileRef } from "@/stores/epics/canvas/tile-schema/blank-tile";
 import { PaneOpener } from "@/components/epic-canvas/canvas/pane-opener";
-import type { KeybindingRouter } from "@/lib/keybindings/dispatch";
+
 import {
   requestPaneOpenerFocus,
   resetPaneOpenerFocusForTests,
 } from "@/lib/canvas/focus-pane-opener";
-
-import type { HostOptions } from "@/components/settings/host-scope/use-host-options";
-vi.mock("@dnd-kit/core", () => ({
-  useDroppable: () => ({ setNodeRef: () => undefined }),
-}));
-
-vi.mock(
-  "@/components/epic-canvas/snapshots/snapshot-loading-context-value",
-  () => ({
-    useSnapshotLoading: () => ({
-      snapshotLoaded: true,
-      snapshotFetchError: null,
-    }),
-  }),
-);
-
-vi.mock("@/lib/epic-selectors", () => ({
-  useEpicHasArtifactRecords: () => false,
-}));
-
-vi.mock("@/lib/commands/registry", () => ({ getOpenerItems: () => [] }));
-vi.mock("@/hooks/epic/use-epic-session-host-id", () => ({
-  useEpicSessionHostId: () => SANDBOX_HOST,
-}));
-vi.mock("@/hooks/epic/use-deleted-artifacts-available", () => ({
-  useDeletedArtifactsAvailable: () => false,
-}));
-vi.mock(
-  "@/components/command-palette/command-palette-context",
-  async (importOriginal) => {
-    const actual =
-      await importOriginal<
-        typeof import("@/components/command-palette/command-palette-context")
-      >();
-    return {
-      ...actual,
-      useCommandPaletteRouter: (): KeybindingRouter => ({
-        getPathname: () => "/",
-        navigateHome: () => undefined,
-        navigateSettings: () => undefined,
-        navigateToEpic: () => undefined,
-        navigateToEpicTab: () => undefined,
-        navigateToEpicList: () => undefined,
-        navigateSettingsSection: () => undefined,
-        navigateToTabIntent: () => undefined,
-        goBack: () => undefined,
-        goForward: () => undefined,
-        isHistoryNavAvailable: () => false,
-        canGoBack: () => false,
-        canGoForward: () => false,
-      }),
-    };
-  },
-);
-
-// Keep the canvas, opener, pending strip and send lifecycle real; stand in
-// for the pane's heavyweight chat presentation at the canvas boundary.
-vi.mock("@/components/epic-canvas/canvas/tab-group-view", () => ({
-  TabGroupView: (
-    props: SplitPaneComponentProps & { epicId: string; tabId: string },
-  ) => {
-    const tile = useEpicCanvasStore((state) =>
-      props.pane.activeTabId === null
-        ? null
-        : state.canvasByTabId[props.tabId]?.tilesByInstanceId[
-            props.pane.activeTabId
-          ],
-    );
-    return tile === null || tile?.type === "blank" ? (
-      <PaneOpener
-        epicId={props.epicId}
-        tabId={props.tabId}
-        groupId={props.pane.id}
-        active
-      />
-    ) : (
-      <div data-testid="canvas-chat">{tile?.id}</div>
-    );
-  },
-}));
-
-const toastSpies = vi.hoisted(() => {
-  const dismissalQueue = {
-    deferred: false,
-    callbacks: [] as Array<() => void>,
-  };
-  // Sonner invokes onDismiss for programmatic dismissal as well as user close.
-  const activeReceiptToasts = new Map<
-    string | number,
-    {
-      readonly content: ReactNode;
-      readonly options: ExternalToast | undefined;
-    }
-  >();
-  const dismissToast = (id: string | number | undefined): void => {
-    if (id === undefined) return;
-    const active = activeReceiptToasts.get(id);
-    if (active === undefined) return;
-    activeReceiptToasts.delete(id);
-    const onDismiss = active.options?.onDismiss;
-    if (onDismiss === undefined) return;
-    const notifyDismiss = (): void => {
-      Reflect.apply(onDismiss, undefined, []);
-    };
-    if (dismissalQueue.deferred) dismissalQueue.callbacks.push(notifyDismiss);
-    else notifyDismiss();
-  };
-  return {
-    activeReceiptToasts,
-    dismissalQueue,
-    show: vi.fn<
-      (message: ReactNode, options: ExternalToast | undefined) => string
-    >((content, options) => {
-      const id = options?.id;
-      if (typeof id === "string" && id.startsWith("sandbox-stopped:"))
-        activeReceiptToasts.set(id, { content, options });
-      return typeof id === "string" || typeof id === "number"
-        ? String(id)
-        : "sandbox-stopped-toast";
-    }),
-    dismiss: vi.fn<(id: string | number | undefined) => void>(dismissToast),
-    dismissByUser: vi.fn<(id: string | number) => void>(dismissToast),
-  };
-});
-
-// The existing chat's session, handed to the message dispatch driver: a real
-// session store over a fake stream (message-session-harness.ts), or none.
-const sessionBridge = vi.hoisted(
-  (): { handle: ChatSessionStoreHandle | null } => ({ handle: null }),
-);
-vi.mock("@/lib/registries/chat-session-registry", async (importOriginal) => ({
-  ...(await importOriginal<
-    typeof import("@/lib/registries/chat-session-registry")
-  >()),
-  useChatSessionHandleForContainer: () => sessionBridge.handle,
-}));
-
-// The unrecorded-prompt handoff, held open on request: the one place a Cancel
-// of a message to an existing chat can stay "returning" long enough to read.
-const handoffHold = vi.hoisted((): { held: Promise<void> | null } => ({
-  held: null,
-}));
-vi.mock("@/lib/drafts/unrecorded-prompt-handoff", async (importOriginal) => {
-  const original =
-    await importOriginal<
-      typeof import("@/lib/drafts/unrecorded-prompt-handoff")
-    >();
-  return {
-    ...original,
-    buildUnrecordedPromptHandoff: async (
-      args: Parameters<typeof original.buildUnrecordedPromptHandoff>[0],
-    ) => {
-      if (handoffHold.held !== null) await handoffHold.held;
-      return original.buildUnrecordedPromptHandoff(args);
-    },
-  };
-});
-
-vi.mock("sonner", async (importOriginal) => {
-  const original = await importOriginal<typeof import("sonner")>();
-  return {
-    ...original,
-    toast: Object.assign(toastSpies.show, original.toast, {
-      dismiss: toastSpies.dismiss,
-    }),
-  };
-});
-
-const SANDBOX_HOST = "sbx-host";
-const TASK_PIN_HOST = "task-pin-host";
-const START_PAGE_PIN_HOST = "start-page-pin-host";
-const SANDBOX_ID = "sbx-1";
-const SEND_ID = "send-1";
-const SURFACE = pendingSendSurfaceKey(SEND_ID);
-const OCCUPIED_NEW_CHAT_CONTENT: JsonContent = {
-  type: "doc",
-  content: [
-    {
-      type: "paragraph",
-      content: [{ type: "text", text: "keep my other draft" }],
-    },
-  ],
-};
-const NO_AGENT_SENTENCE = "Agents can't run on api-refactor.";
-
-interface FakeClient {
-  readonly hostId: string;
-  readonly requestWithOptions: (
-    method: string,
-    params: { readonly sha256: string },
-  ) => Promise<{ readonly ok: true }>;
-}
-
-interface CreateChatCall {
-  /** The host the client the create went out on addresses. */
-  readonly clientHostId: string | null;
-  readonly input: CreateChatMutationInput;
-}
-
-interface HostAnswers {
-  readonly harnesses: ReadonlyArray<GuiHarnessOption>;
-  readonly providers: ReadonlyArray<ProviderCliState>;
-}
-
-const mocks = vi.hoisted(() => ({
-  /** The hosts the task lists; none unless a case names a sandbox. */
-  taskHosts: [] as TaskHostRow[],
-  /** What each host's `harnesses` and `providers` queries answer. */
-  hostAnswers: new Map<string, unknown>(),
-  answerListeners: new Set<() => void>(),
-  answerVersion: 0,
-  createChatCalls: [] as unknown[],
-  createChatError: null as Error | null,
-  createChatDeferred: null as Promise<CreateChatResponseV12> | null,
-  createChatRefusal: null as CreateChatResponseV12["refusal"] | null,
-  openTile: vi.fn<(intent: unknown) => void>(),
-  /** The control plane. */
-  createSandbox:
-    vi.fn<
-      (request: SandboxCreateRequest) => Promise<SandboxCreateFetchResult>
-    >(),
-  stopSandbox: vi.fn<(verb: string) => void>(),
-  /** Repairs started and not finished; calling one succeeds that repair. */
-  repairFinishers: [] as Array<() => void>,
-  retrySupported: true,
-  legacySupported: false,
-  legacyMutate: vi.fn(),
-  settingsStatus: undefined as
-    | {
-        readonly principal: { readonly kind: "personal" };
-        readonly items: readonly {
-          readonly kind: string;
-          readonly status: string;
-        }[];
-      }
-    | undefined,
-  /** The held answer of the next sandbox verb; `null` settles it at rest. */
-  verbAnswer: null as Promise<SandboxVerbOutcome> | null,
-  /** The verb mutation's reactive state, as `useMutation` reports it. */
-  verbState: { isPending: false, error: null } as {
-    isPending: boolean;
-    error: Error | null;
-  },
-  listSandboxes: vi.fn<() => Promise<SandboxListFetchResult>>(),
-  findById: vi.fn<(hostId: string) => HostDirectoryEntry | null>(),
-  /** The account's host directory, as the host chips and "Use <host>" read it. */
-  directoryRows: [] as HostDirectoryEntry[],
-  /** The account's sandbox rows the ready line is read from. */
-  sandboxes: [] as SandboxSummary[],
-  /** When the list was last read (epoch ms); `0` is a read before any mount. */
-  listReadAt: 0,
-  /** When the answered list request was SENT; `null` is its arrival. */
-  listReadSentAt: null as number | null,
-  refetchSandboxes: vi.fn<() => Promise<undefined>>(),
-  /** The sandbox wake the staged run asks for, by host. */
-  wake: vi.fn<
-    (
-      hostId: string,
-      gesture: SandboxVerbGesture,
-    ) => Promise<SandboxWakeOutcome | null>
-  >(),
-  /** What reached the sandbox's client, in order: puts, then the create. */
-  wire: [] as string[],
-  /** Hosts whose client is not available here, as a host not dialled yet. */
-  nullClientHosts: new Set<string>(),
-  /**
-   * What the backend answers to the NEXT model read, per host. A query keeps
-   * its first answer fixed (like the host catalog's, which never goes stale)
-   * until its returned `refetch` is called.
-   */
-  modelsByHost: new Map<string, ReadonlyArray<{ readonly slug: string }>>(),
-  /** Hosts whose model observer reports a failed refresh (cached data may remain). */
-  modelReadErrorHosts: new Set<string>(),
-  /** The catalog each host's query holds: its last answer, kept until a refetch. */
-  modelCache: new Map<
-    string,
-    {
-      readonly data: ReadonlyArray<{ readonly slug: string }> | undefined;
-      readonly isError: boolean;
-    }
-  >(),
-  /** Hosts whose model query was refetched explicitly. */
-  modelRefetches: [] as string[],
-  /** Every readiness refetch of the harness catalog. */
-  harnessRefetches: 0,
-  /** Every model read made, with the activity it asked for. */
-  modelReads: [] as Array<{
-    readonly hostId: string | null;
-    readonly enabled: boolean;
-    readonly subscribed: boolean;
-  }>,
-}));
-
-function answersFor(hostId: string): HostAnswers | undefined {
-  const answers = mocks.hostAnswers.get(hostId);
-  return isHostAnswers(answers) ? answers : undefined;
-}
-
-function isHostAnswers(value: unknown): value is HostAnswers {
-  return (
-    typeof value === "object" &&
-    value !== null &&
-    "harnesses" in value &&
-    "providers" in value
-  );
-}
-
-function useAnswerVersion(): number {
-  return useSyncExternalStore(
-    (listener) => {
-      mocks.answerListeners.add(listener);
-      return () => {
-        mocks.answerListeners.delete(listener);
-      };
-    },
-    () => mocks.answerVersion,
-  );
-}
-
-const clients = vi.hoisted(
-  () =>
-    new Map<
-      string,
-      {
-        readonly hostId: string;
-        readonly requestWithOptions: (
-          method: string,
-          params: { readonly sha256: string },
-        ) => Promise<{ readonly ok: true }>;
-      }
-    >(),
-);
-const refetchNothing = vi.hoisted(() => () => Promise.resolve(undefined));
-
-vi.mock("@/hooks/host/use-host-client-for-host-id", () => ({
-  useHostDirectoryEntryForHostId: () => null,
-  useHostClientForHostId: (hostId: string | null) => {
-    if (hostId === null || mocks.nullClientHosts.has(hostId)) return null;
-    const known = clients.get(hostId);
-    if (known !== undefined) return known;
-    const created = {
-      hostId,
-      requestWithOptions: (
-        method: string,
-        params: { readonly sha256: string },
-      ) => {
-        mocks.wire.push(`${method}:${params.sha256}`);
-        return Promise.resolve({ ok: true as const });
-      },
-    };
-    clients.set(hostId, created);
-    return created;
-  },
-}));
-
-// The staged run reads the sandbox host's environment.status; an older build
-// answers it with the typed unsupported-method error (a network failure would hold).
-vi.mock("@/lib/host/binding-host-client", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("@/lib/host/binding-host-client")>()),
-  resolveNamedHostClient: () => ({
-    request: () =>
-      Promise.reject(
-        new HostRpcError({
-          code: "E_HOST_UNSUPPORTED",
-          message: "Unsupported.",
-          requestId: "request-1",
-          method: "environment.status",
-          fatalDetails: null,
-        }),
-      ),
-  }),
-}));
-
-vi.mock("@/hooks/harnesses/use-gui-harness-catalog", () => ({
-  useGuiHarnessesQueryForClient: (
-    client: FakeClient | null,
-    activity: { readonly enabled: boolean },
-  ) => {
-    useAnswerVersion();
-    const answers =
-      client === null || !activity.enabled
-        ? undefined
-        : answersFor(client.hostId);
-    return {
-      data:
-        answers === undefined ? undefined : { harnesses: answers.harnesses },
-      refetch: () => {
-        mocks.harnessRefetches += 1;
-        return Promise.resolve(undefined);
-      },
-    };
-  },
-  // A cold read answers only while it is enabled AND subscribed, as the
-  // host query's own does: an unsubscribed observer never fetches.
-  useGuiHarnessModelsQueryForClient: (
-    client: FakeClient | null,
-    _harnessId: string,
-    _workingDirectory: string | null,
-    activity: { readonly enabled: boolean; readonly subscribed: boolean },
-  ) => {
-    useAnswerVersion();
-    mocks.modelReads.push({
-      hostId: client === null ? null : client.hostId,
-      enabled: activity.enabled,
-      subscribed: activity.subscribed,
-    });
-    const hostId = client === null ? null : client.hostId;
-    // The backend's answer now; a failed refresh keeps the previous data.
-    const answer = (
-      previous: ReadonlyArray<{ readonly slug: string }> | undefined,
-    ) => ({
-      data:
-        hostId === null
-          ? undefined
-          : (mocks.modelsByHost.get(hostId) ?? previous),
-      isError: hostId !== null && mocks.modelReadErrorHosts.has(hostId),
-    });
-    if (
-      hostId !== null &&
-      activity.enabled &&
-      activity.subscribed &&
-      !mocks.modelCache.has(hostId)
-    )
-      mocks.modelCache.set(hostId, answer(undefined));
-    // An observer reads what the cache holds while it is subscribed, enabled or not.
-    const held =
-      hostId === null || !activity.subscribed
-        ? undefined
-        : mocks.modelCache.get(hostId);
-    return {
-      data: held?.data === undefined ? undefined : { models: held.data },
-      isError: held?.isError ?? false,
-      refetch: () => {
-        if (hostId === null) return Promise.resolve(undefined);
-        mocks.modelRefetches.push(hostId);
-        mocks.modelCache.set(
-          hostId,
-          answer(mocks.modelCache.get(hostId)?.data),
-        );
-        // A query tells its observers when the read lands, never inside the
-        // effect that asked for it.
-        return Promise.resolve().then(() => {
-          notifyAnswerListeners();
-          return undefined;
-        });
-      },
-    };
-  },
-}));
-
-vi.mock("@/hooks/providers/use-providers-list-query", () => ({
-  useProvidersListForClient: (
-    client: FakeClient | null,
-    activity: { readonly enabled: boolean },
-  ) => {
-    useAnswerVersion();
-    const answers =
-      client === null || !activity.enabled
-        ? undefined
-        : answersFor(client.hostId);
-    return {
-      data:
-        answers === undefined ? undefined : { providers: answers.providers },
-      isError: false,
-      refetch: refetchNothing,
-    };
-  },
-}));
-
-vi.mock("@/hooks/epic/use-epic-chat-mutations", () => ({
-  useEpicCreateChatForHostClient: (client: FakeClient | null) => ({
-    mutateAsync: (input: CreateChatMutationInput) => {
-      mocks.wire.push("epic.createChat");
-      mocks.createChatCalls.push({
-        clientHostId: client === null ? null : client.hostId,
-        input,
-      });
-      if (mocks.createChatError !== null) {
-        return Promise.reject(mocks.createChatError);
-      }
-      if (mocks.createChatDeferred !== null) return mocks.createChatDeferred;
-      return Promise.resolve({
-        chatId: input.chatId,
-        initialTurnStarted: true,
-        ...(mocks.createChatRefusal === null
-          ? {}
-          : { refusal: mocks.createChatRefusal }),
-      });
-    },
-  }),
-  useEpicCreateChatForPendingSandbox: (
-    client: FakeClient | null,
-    _ownerUserId: string | null,
-  ) => ({
-    mutateAsync: (input: CreateChatMutationInput) => {
-      mocks.wire.push("epic.createChat");
-      mocks.createChatCalls.push({
-        clientHostId: client === null ? null : client.hostId,
-        input,
-      });
-      if (mocks.createChatError !== null) {
-        return Promise.reject(mocks.createChatError);
-      }
-      if (mocks.createChatDeferred !== null) return mocks.createChatDeferred;
-      return Promise.resolve({
-        chatId: input.chatId,
-        initialTurnStarted: true,
-        ...(mocks.createChatRefusal === null
-          ? {}
-          : { refusal: mocks.createChatRefusal }),
-      });
-    },
-  }),
-}));
-
-vi.mock("@/hooks/epic/use-epic-nested-focus-navigation", () => ({
-  useEpicNestedFocusNavigation: () => vi.fn(),
-}));
-vi.mock("@/hooks/epic/use-epic-tile-navigation", () => ({
-  useEpicTileNavigation: () => ({ openTile: mocks.openTile }),
-}));
-// The failed line's actions read it through their tab host's client: it
-// records the host of each client it is handed.
-const environmentListClientHosts = vi.hoisted(() => [] as Array<string | null>);
-vi.mock("@/hooks/bots/use-environment-list-query", () => ({
-  useEnvironmentListQuery: (client: { readonly hostId: string } | null) => {
-    environmentListClientHosts.push(client === null ? null : client.hostId);
-    return { data: { environments: [] } };
-  },
-}));
-vi.mock("@/components/epic-canvas/sidebar/new-terminal-tile-ref", () => ({
-  mintNewEpicTerminalTile: (target: {
-    readonly hostId: string;
-    readonly cwd: string;
-  }) => ({ type: "terminal", hostId: target.hostId, cwd: target.cwd }),
-  mintPendingSandboxTerminalTile: (
-    target: { readonly hostId: string; readonly cwd: string },
-    sendId: string,
-  ) => ({
-    type: "terminal",
-    hostId: target.hostId,
-    cwd: target.cwd,
-    sendId,
-  }),
-}));
-vi.mock("@/lib/commands/actions/new-chat", () => ({
-  openCreatedChatWhenProjectedWithNavigation: vi.fn(),
-}));
-
-// The control plane and the account's host directory.
-// One binding for the whole run, as the app's is, so what is derived from it
-// keeps its identity between renders.
-const hostBinding = vi.hoisted(() => ({
-  auth: {
-    createSandbox: (request: SandboxCreateRequest) =>
-      mocks.createSandbox(request),
-    listSandboxes: () => mocks.listSandboxes(),
-  },
-  directory: {
-    refresh: () => Promise.resolve(),
-    findById: (hostId: string) => mocks.findById(hostId),
-  },
-}));
-// The hosts the "Use <host>" action names, as the host chips list them.
-vi.mock("@/components/settings/host-scope/use-host-options", async () => {
-  const { hostOptionsFixture, hostScopeOptionFixture } =
-    await import("@/components/settings/host-scope/host-scope-fixture");
-  let cached: {
-    readonly from: readonly HostDirectoryEntry[];
-    readonly options: HostOptions;
-  } | null = null;
-  return {
-    useHostOptions: () => {
-      if (cached?.from !== mocks.directoryRows)
-        cached = {
-          from: mocks.directoryRows,
-          options: hostOptionsFixture({
-            hosts: mocks.directoryRows.map((entry) =>
-              hostScopeOptionFixture({
-                hostId: entry.hostId,
-                name: entry.label,
-                isLocalMachine: false,
-              }),
-            ),
-          }),
-        };
-      return cached.options;
-    },
-  };
-});
-vi.mock("@/lib/host", () => ({
-  useHostClient: () => null,
-  useHostBinding: () => hostBinding,
-  // The failed line's real actions read the control plane through it.
-  useAuthService: () => hostBinding.auth,
-}));
-// The real TabHostProvider mounts a draft mirror that needs a live stream client.
-// Only the mount is replaced: it records the host each mirror would bind.
-const mirrorMountHosts = vi.hoisted(() => [] as string[]);
-vi.mock("@/hooks/drafts/use-tab-draft-mirror", async () => {
-  const { useEffect } = await import("react");
-  const { useTabHostId } =
-    await import("@/components/epic-canvas/hooks/use-tab-host-id");
-  return {
-    TabDraftMirrorMount: () => {
-      const hostId = useTabHostId();
-      useEffect(() => {
-        mirrorMountHosts.push(hostId);
-      }, [hostId]);
-      return null;
-    },
-  };
-});
-vi.mock("@/hooks/epic/use-task-hosts-view", () => ({
-  useTaskHostsView: () =>
-    mocks.taskHosts.length === 0
-      ? { kind: "none" }
-      : { kind: "hosts", hosts: mocks.taskHosts },
-}));
-// A rested receipt reads its sandbox's state like the chat does; no host row is needed.
-vi.mock("@/hooks/host/use-host-directory-entry", () => ({
-  useHostDirectoryEntry: () => null,
-}));
-vi.mock("@/lib/sandboxes/sandbox-wake", () => ({
-  startSandboxWake: (
-    _queryClient: unknown,
-    _binding: unknown,
-    hostId: string,
-    gesture: SandboxVerbGesture,
-  ) => mocks.wake(hostId, gesture),
-}));
-vi.mock("@/hooks/auth/use-auth-user-query", () => ({
-  useAuthUser: () => ({ data: null }),
-}));
-vi.mock("@/hooks/sandboxes/use-sandbox-catalogue-query", () => ({
-  useSandboxCatalogue: () => ({ data: null }),
-}));
-// The real list query backs the staged run's own reads; the hook the ready
-// line reads is the account's rows.
-vi.mock("@/hooks/sandboxes/use-sandbox-list-query", async (importOriginal) => ({
-  ...(await importOriginal<
-    typeof import("@/hooks/sandboxes/use-sandbox-list-query")
-  >()),
-  useSandboxList: () => {
-    useAnswerVersion();
-    return {
-      data: { sandboxes: mocks.sandboxes },
-      dataUpdatedAt: mocks.listReadAt,
-      refetch: mocks.refetchSandboxes,
-    };
-  },
-  // The answered request's send time; an old fixture's read is sent when it arrives.
-  sandboxListReadSentAt: () => mocks.listReadSentAt ?? mocks.listReadAt,
-}));
-vi.mock("@/hooks/sandboxes/use-sandbox-verb-mutation", () => ({
-  // A verb as the real mutation reports it: the call is recorded, the result
-  // is pending until it answers, and a failure stays readable as `error`.
-  useSandboxVerb: () => {
-    // A mutation hook must stay in its provider tree when its button moves into a toast.
-    useQueryClient();
-    useAnswerVersion();
-    const run = (verb: string): Promise<SandboxVerbOutcome> => {
-      mocks.stopSandbox(verb);
-      mocks.verbState = { isPending: true, error: null };
-      notifyAnswerListeners();
-      const answer =
-        mocks.verbAnswer !== null
-          ? mocks.verbAnswer
-          : Promise.resolve<SandboxVerbOutcome>({
-              kind: "settled",
-              state: "stopped",
-            });
-      return answer.then(
-        (outcome) => {
-          mocks.verbState = { isPending: false, error: null };
-          notifyAnswerListeners();
-          return outcome;
-        },
-        (error: Error) => {
-          mocks.verbState = { isPending: false, error };
-          notifyAnswerListeners();
-          throw error;
-        },
-      );
-    };
-    return {
-      mutateAsync: run,
-      mutate: (verb: string) => {
-        void run(verb).catch(() => undefined);
-      },
-      isPending: mocks.verbState.isPending,
-      error: mocks.verbState.error,
-    };
-  },
-}));
-vi.mock("@/hooks/sandboxes/use-configuration-billing-url", () => ({
-  useConfigurationBillingUrl: () => "https://example.test/billing",
-}));
-vi.mock("@/lib/links/open-link", () => ({
-  useOpenLink: () => vi.fn(),
-}));
-// The isolated fixtures read the host's settings as ready; a settings hold is
-// exercised by its own test, not by every send.
-vi.mock("@/hooks/sandboxes/use-sandbox-settings-status", () => ({
-  useSandboxSettingsStatus: () => ({
-    // A failed item keeps the host's settings unready, as the real read does.
-    ready: mocks.settingsStatus === undefined,
-    data: mocks.settingsStatus,
-  }),
-}));
-vi.mock(
-  "@/hooks/sandboxes/use-sandbox-repair-guest-configuration-mutation",
-  () => ({
-    useSandboxSettingsOperation: () => null,
-    useSandboxRetryApplyingSupported: () => mocks.retrySupported,
-    useSandboxGuestSetupRepairSupported: () => mocks.legacySupported,
-    useSandboxRepairGuestSetupOnHost: () => ({
-      isPending: false,
-      mutate: mocks.legacyMutate,
-    }),
-    // A repair stays out until the test finishes it, as a slow host would.
-    useSandboxRepairGuestConfigurationOnHost: () => ({
-      mutate: (
-        _variables: Record<string, never>,
-        options: {
-          readonly onSuccess:
-            | ((outcome: {
-                readonly guestConfigured: boolean;
-                readonly settingsApplied: boolean;
-              }) => void)
-            | undefined;
-        },
-      ) => {
-        mocks.repairFinishers.push(() =>
-          options.onSuccess?.({ guestConfigured: true, settingsApplied: true }),
-        );
-      },
-    }),
-  }),
-);
-// The new host answers with its default cwd as soon as it is named.
-vi.mock(
-  "@/components/epic-canvas/sidebar/use-folderless-terminal-target",
-  () => ({
-    useFolderlessTerminalTarget: (_epicId: string, hostId: string | null) =>
-      hostId === null ? null : { hostId, cwd: "/home/sandbox" },
-  }),
-);
-
-const NEW_TARGET: StagedSandboxTarget = {
-  kind: "new",
-  configuration: { kind: "personal" },
-  shape: {
-    os: "linux",
-    cpus: 2,
-    memoryMb: 4096,
-    diskMb: null,
-    region: "us-east",
-    idleMinutes: 30,
-    destroyAfterRestingMinutes: null,
-  },
-  name: "api-refactor",
-  wakeString: null,
-};
-
-const RESUME_TARGET: StagedSandboxTarget = {
-  kind: "existing",
-  hostId: SANDBOX_HOST,
-  sandboxId: SANDBOX_ID,
-  name: "build-box",
-  configuration: { kind: "personal" },
-  verb: "resume",
-};
-
-const START_TARGET: StagedSandboxTarget = { ...RESUME_TARGET, verb: "start" };
-
-const TEAM_TARGET: StagedSandboxTarget = {
-  ...NEW_TARGET,
-  configuration: { kind: "team", teamId: "team-9", teamName: "Acme" },
-};
-
-function answerHost(hostId: string, answers: HostAnswers): void {
-  mocks.hostAnswers.set(hostId, answers);
-  notifyAnswerListeners();
-}
-
-function answerSandboxRows(sandboxes: SandboxSummary[], readAt: number): void {
-  mocks.sandboxes = sandboxes;
-  mocks.listReadAt = readAt;
-  notifyAnswerListeners();
-}
-
-function notifyAnswerListeners(): void {
-  mocks.answerVersion += 1;
-  act(() => {
-    for (const listener of mocks.answerListeners) listener();
-  });
-}
-
-/** Codex's pack is preparing on the sandbox, Claude is ready beside it. */
-const CODEX_DOWNLOADING: HostAnswers = {
-  harnesses: [
-    harnessRow("codex", { available: false }),
-    harnessRow("claude", { available: true }),
-  ],
-  providers: [
-    providerRow("codex", { status: "downloading", percent: 40 }),
-    providerRow("claude-code", { status: "installed" }),
-  ],
-};
-
-const CODEX_READY: HostAnswers = {
-  harnesses: [
-    harnessRow("codex", { available: true }),
-    harnessRow("claude", { available: true }),
-  ],
-  providers: [
-    providerRow("codex", { status: "installed" }),
-    providerRow("claude-code", { status: "installed" }),
-  ],
-};
-
-const CODEX_UNAVAILABLE: HostAnswers = {
-  harnesses: [
-    harnessRow("codex", { available: false }),
-    harnessRow("claude", { available: true }),
-  ],
-  providers: [providerRow("codex", null), providerRow("claude-code", null)],
-};
-
-const CODEX_SETUP_FAILED: HostAnswers = {
-  harnesses: [
-    harnessRow("codex", { available: false }),
-    harnessRow("claude", { available: true }),
-  ],
-  providers: [
-    providerRow("codex", {
-      status: "error",
-      reason: "disk-full",
-      message: "ENOSPC",
-      retryAtMs: null,
-    }),
-    providerRow("claude-code", null),
-  ],
-};
-
-const CODEX_NOT_OFFERED: HostAnswers = {
-  harnesses: [harnessRow("claude", { available: true })],
-  providers: [providerRow("claude-code", { status: "installed" })],
-};
-
-/** The woken sandbox's own Traycer Inference switch is off. */
-const TRAYCER_OFF: HostAnswers = {
-  harnesses: [harnessRow("traycer", { enabled: false })],
-  providers: [{ ...providerRow("traycer", null), enabled: false }],
-};
-
-interface SeedOptions {
-  readonly send: Partial<PendingSandboxSend>;
-  readonly target: StagedSandboxTarget;
-  /** Where the create stands. */
-  readonly phase: "creating" | "handoff";
-  /** The sandbox the create made, once it has answered. */
-  readonly created: boolean;
-  /** Seconds from Send to now, for the ready line. */
-  readonly elapsedSeconds: number;
-}
-
-/** The pane an in-pane New agent names for its tile. */
-const PANE = { kind: "tab", paneId: "pane-2", index: null } as const;
-
-/** A fork asked of a staged sandbox, as the fork dialog hands it over. */
-const FORK_REQUEST = {
-  kind: "fork" as const,
-  parentId: null,
-  title: "Sandbox fork",
-  forkSource: {
-    boundary: "assistantMessage" as const,
-    sourceChatId: "source-chat",
-    assistantMessageId: "assistant-message-1",
-    interviewBlockId: null,
-    carriedInterviews: "settled" as const,
-    sourceOwnerUserId: null,
-  },
-  tabId: "tab-1",
-};
-
-/** The send each kind of request starts from. */
-const SEND_BY_KIND: Readonly<
-  Record<"chat" | "fork" | "terminal", SeedOptions["send"]>
-> = {
-  chat: {},
-  fork: { request: FORK_REQUEST },
-  terminal: { request: { kind: "terminal" }, text: "" },
-};
-
-const SEEDED: SeedOptions = {
-  send: {},
-  target: NEW_TARGET,
-  phase: "handoff",
-  created: true,
-  elapsedSeconds: 24,
-};
-
-/** A message handed to its task, its create `phase` along. */
-function seed(options: SeedOptions): void {
-  usePendingSandboxSendStore
-    .getState()
-    .add(pendingSend({ id: SEND_ID, ...options.send }));
-  const store = useStagedSandboxStore.getState();
-  store.stage(SURFACE, options.target);
-  store.begin(
-    SURFACE,
-    false,
-    Date.now() - options.elapsedSeconds * 1000,
-    false,
-  );
-  store.report(SURFACE, {
-    ownerId: null,
-    sendTaken: true,
-    step: options.phase === "handoff" ? "delivering" : "booting",
-    stepAt: Date.now(),
-    ...(options.created
-      ? { createdSandboxId: SANDBOX_ID, createdHostId: SANDBOX_HOST }
-      : {}),
-    ...(options.phase === "handoff" ? { phase: "handoff" as const } : {}),
-  });
-}
-
-// The failed line's real actions build their mutations over the runner host.
-const RUNNER_HOST = createFakeRunnerHost({});
-
-function mount() {
-  const client = new QueryClient({
-    defaultOptions: { queries: { retry: false, gcTime: 0 } },
-  });
-  return render(
-    <RunnerHostContext.Provider value={RUNNER_HOST}>
-      <QueryClientProvider client={client}>
-        <PendingSandboxSendsDriver />
-        <PendingSandboxSendStrip epicId="epic-1" tabId="tab-1" />
-      </QueryClientProvider>
-    </RunnerHostContext.Provider>,
-  );
-}
-
-/** `mount`, inside a tile bound to another host than the strip's receipt. */
-function mountInTileBoundTo(tileHostId: string) {
-  const client = new QueryClient({
-    defaultOptions: { queries: { retry: false, gcTime: 0 } },
-  });
-  return render(
-    <RunnerHostContext.Provider value={RUNNER_HOST}>
-      <QueryClientProvider client={client}>
-        <TabHostContext.Provider value={tileHostId}>
-          <PendingSandboxSendsDriver />
-          <PendingSandboxSendStrip epicId="epic-1" tabId="tab-1" />
-        </TabHostContext.Provider>
-      </QueryClientProvider>
-    </RunnerHostContext.Provider>,
-  );
-}
-
-/** The driver beside the setup line of the existing chat the message was sent in. */
-function mountInChat() {
-  const client = new QueryClient({
-    defaultOptions: { queries: { retry: false, gcTime: 0 } },
-  });
-  return render(
-    <QueryClientProvider client={client}>
-      <PendingSandboxSendsDriver />
-      <PendingSandboxSendForChat
-        epicId="epic-1"
-        chatId="existing-chat"
-        tabId="tab-1"
-      />
-    </QueryClientProvider>,
-  );
-}
-
-async function waitForCreateChats(count: number): Promise<void> {
-  await waitFor(() => {
-    expect(createChatCalls()).toHaveLength(count);
-  });
-}
-
-function createChatCalls(): CreateChatCall[] {
-  return mocks.createChatCalls.filter(isCreateChatCall);
-}
-
-/** Every composer surface's stage; a pending send's own stage is not one. */
-function composerStages(): Readonly<Record<string, StagedSandbox | undefined>> {
-  const pending = pendingSendSurfaceKey("");
-  return Object.fromEntries(
-    Object.entries(useStagedSandboxStore.getState().bySurface).filter(
-      ([key]) => !key.startsWith(pending),
-    ),
-  );
-}
-
-/**
- * A give-back writes only the record on the draft that takes the message: no
- * composer surface is staged, and the task composer holds no restored mark
- * for it. The composer showing the draft stages it.
- */
-function expectOnlyTheRecordWritten(
-  before: Readonly<Record<string, StagedSandbox | undefined>>,
-): void {
-  expect(composerStages()).toEqual(before);
-  const records = [
-    useNewConversationModalStore.getState().draftPatchesByEpicId["epic-1"]
-      ?.returnedSandbox,
-    ...useLandingDraftStore
-      .getState()
-      .drafts.map((draft) => draft.returnedSandbox),
-  ];
-  for (const record of records)
-    if (record !== undefined && record !== null)
-      expect(
-        takeReturnedSandboxRestored(
-          newConversationSurfaceKey("epic-1"),
-          record,
-        ),
-      ).toBe(false);
-}
-
-function isCreateChatCall(value: unknown): value is CreateChatCall {
-  return typeof value === "object" && value !== null && "input" in value;
-}
-
-function dialableHost(hostId: string): HostDirectoryEntry {
-  return {
-    hostId,
-    label: "api-refactor",
-    kind: "remote",
-    websocketUrl: "ws://sbx-host.test",
-    version: null,
-    transportDialability: "dialable",
-  };
-}
-
-function listAnswers(rows: SandboxSummary[]): SandboxListFetchResult {
-  return { kind: "ok", response: { sandboxes: rows } };
-}
-
-interface Deferred<T> {
-  readonly promise: Promise<T>;
-  readonly resolve: (value: T) => void;
-}
-
-function deferred<T>(): Deferred<T> {
-  let resolve: (value: T) => void = () => undefined;
-  const promise = new Promise<T>((next) => {
-    resolve = next;
-  });
-  return { promise, resolve };
-}
-
-async function resolvePendingCreate(
-  create: Deferred<CreateChatResponseV12>,
-): Promise<void> {
-  await act(async () => {
-    create.resolve({
-      chatId: createChatCalls()[0]?.input.chatId ?? "cleanup-chat",
-    });
-    await create.promise;
-  });
-}
-
-/** Grants a real per-send exclusive reservation for withdrawal-specific cases. */
-function installImmediateExclusiveLocks(): () => void {
-  const originalLocks = Object.getOwnPropertyDescriptor(navigator, "locks");
-  Object.defineProperty(navigator, "locks", {
-    configurable: true,
-    value: {
-      request: (
-        _name: string,
-        _options: LockOptions,
-        callback: () => Promise<void>,
-      ) => callback(),
-    },
-  });
-  return () => {
-    if (originalLocks === undefined) {
-      Reflect.deleteProperty(navigator, "locks");
-    } else {
-      Object.defineProperty(navigator, "locks", originalLocks);
-    }
-  };
-}
-
-/**
- * A send whose sandbox ended is released, not left on its line: the stage is
- * gone, a chat's message waits in one closed Draft, a fork simply ends, and
- * nothing was sent, opened or navigated to.
- */
-function expectSendRecovered(kind: "chat" | "fork"): void {
-  expect(usePendingSandboxSendStore.getState().sends).toEqual({});
-  expect(readStagedSandbox(SURFACE)).toBeNull();
-  expect(createChatCalls()).toEqual([]);
-  expect(mocks.createSandbox).not.toHaveBeenCalled();
-  expect(useNewConversationModalOpenStore.getState().request).toBeNull();
-  expect(mocks.openTile).not.toHaveBeenCalled();
-  const { drafts, activeDraftId } = useLandingDraftStore.getState();
-  if (kind === "chat") {
-    expect(drafts).toHaveLength(1);
-    expect(drafts[0]).toMatchObject({
-      content: MESSAGE_CONTENT,
-      settings: PICKED_SETTINGS,
-      closed: true,
-    });
-    expect(activeDraftId).toBeNull();
-  } else {
-    expect(drafts).toEqual([]);
-  }
-}
-
-function userSignedIn(): void {
-  useAuthStore
-    .getState()
-    .setSignedIn(
-      { userId: "user-1", userName: "U", email: "u@example.com" },
-      { userId: "user-1", username: "U" },
-      [],
-    );
-}
-
-beforeEach(() => {
-  localStorage.clear();
-  userSignedIn();
-  useAccountContextStore.setState({ accountContext: { type: "PERSONAL" } });
-  mocks.hostAnswers.clear();
-  mocks.createChatCalls.length = 0;
-  mocks.createChatError = null;
-  mocks.createChatDeferred = null;
-  mocks.createChatRefusal = null;
-  mocks.openTile.mockReset();
-  mocks.createSandbox.mockReset();
-  mocks.stopSandbox.mockReset();
-  toastSpies.show.mockClear();
-  toastSpies.dismiss.mockClear();
-  toastSpies.dismissByUser.mockClear();
-  toastSpies.activeReceiptToasts.clear();
-  toastSpies.dismissalQueue.deferred = false;
-  toastSpies.dismissalQueue.callbacks.length = 0;
-  mocks.verbAnswer = null;
-  mocks.repairFinishers.length = 0;
-  mocks.retrySupported = true;
-  mocks.legacySupported = false;
-  mocks.legacyMutate.mockReset();
-  mocks.settingsStatus = undefined;
-  mocks.verbState = { isPending: false, error: null };
-  mocks.listSandboxes.mockReset();
-  mocks.findById.mockReset();
-  // The task's new-agent composer and the Start Page each pin a host the
-  // directory names, so "Use <host>" says whose chip the message goes back to.
-  mocks.directoryRows = [
-    { ...dialableHost(TASK_PIN_HOST), label: "Task host" },
-    { ...dialableHost(START_PAGE_PIN_HOST), label: "Start host" },
-  ];
-  mocks.findById.mockImplementation((hostId) => dialableHost(hostId));
-  // Every dispatch waits on an affirmative row read since mount: the default
-  // is the staged sandbox, awake, read after any mount.
-  mocks.sandboxes = [
-    sandboxSummaryFixture({
-      id: SANDBOX_ID,
-      hostId: SANDBOX_HOST,
-      state: "awake",
-    }),
-  ];
-  mocks.listReadAt = Date.now() + 60_000;
-  mocks.listReadSentAt = null;
-  mocks.refetchSandboxes.mockReset();
-  mocks.refetchSandboxes.mockResolvedValue(undefined);
-  mocks.wire.length = 0;
-  mocks.nullClientHosts.clear();
-  mocks.modelsByHost.clear();
-  mocks.modelReadErrorHosts.clear();
-  mocks.modelReads.length = 0;
-  mocks.modelCache.clear();
-  mocks.modelRefetches.length = 0;
-  mocks.harnessRefetches = 0;
-  mocks.wake.mockReset();
-  mocks.wake.mockResolvedValue({ kind: "awake" });
-  resetNegotiatedManifests();
-  // The sandbox's host is a known older build: it serves forks and has no
-  // environment.status, which the staged run reads as an unsupported method (an
-  // unrecorded manifest would hold the send).
-  recordNegotiatedHostManifest(SANDBOX_HOST, {
-    "epic.createChat": { major: 1, minor: 2 },
-  });
-  useStagedSandboxStore.setState({ bySurface: {} });
-  usePendingSandboxSendStore.setState({ sends: {} });
-  useStoppedSandboxSendReceiptStore.setState({ receipts: {}, strips: {} });
-  useInitialChatHandoffStore.getState().resetForTests();
-  useEpicCanvasStore.setState({ pendingChatTitles: {} });
-  useNewConversationModalStore.getState().resetForTests();
-  useNewConversationModalOpenStore.getState().close();
-  useSurfaceHostSelectionStore.getState().resetForTests();
-  useSurfaceHostSelectionStore.setState({
-    selections: {
-      [newConversationSurfaceKey("epic-1")]: TASK_PIN_HOST,
-      [composerSurfaceKey(browserTabId())]: START_PAGE_PIN_HOST,
-    },
-  });
-  useSettingsEnvironmentPickStore.setState({ pick: null });
-  useLandingDraftStore.setState({ drafts: [], activeDraftId: null });
-  useComposerDraftStore.setState({ drafts: {} });
-});
-
-afterEach(() => {
-  cleanup();
-  useAuthStore.getState().setSignedOut();
-});
 
 describe("the empty task canvas while its first sandbox send waits", () => {
   beforeEach(() => {
@@ -2311,6 +1125,7 @@ describe("a send waiting for the requested agent on its sandbox", () => {
     );
 
     expect(mocks.openTile).toHaveBeenCalledTimes(1);
+    expect(mocks.openTile.mock.calls[0]?.[1]).toBe("user");
     expect(JSON.stringify(mocks.openTile.mock.calls[0][0])).toContain(
       SANDBOX_HOST,
     );
@@ -3006,43 +1821,27 @@ describe("a send at its handoff whose sandbox is gone", () => {
   });
 
   it("reads the list again on the poll tick while it waits for the agent", async () => {
-    vi.useFakeTimers();
+    seed({ ...SEEDED, phase: "handoff", created: true });
+    answerHost(SANDBOX_HOST, CODEX_DOWNLOADING);
+    mount();
+    // The driver mounts its work once it holds the send: await that grant.
+    const ownership = holdPendingSandboxSendOwnership(SEND_ID);
     try {
-      seed({ ...SEEDED, phase: "handoff", created: true });
-      answerHost(SANDBOX_HOST, CODEX_DOWNLOADING);
-      mount();
-      // The driver mounts its work once it holds the send: await that grant.
-      const ownership = holdPendingSandboxSendOwnership(SEND_ID);
-      try {
-        await act(async () => {
-          await ownership.ready;
-        });
-      } finally {
-        ownership.release();
-      }
-      mocks.refetchSandboxes.mockClear();
-
-      act(() => {
-        vi.advanceTimersByTime(2_100);
+      await act(async () => {
+        await ownership.ready;
       });
-
-      expect(mocks.refetchSandboxes).toHaveBeenCalled();
     } finally {
-      vi.useRealTimers();
+      ownership.release();
     }
+    mocks.refetchSandboxes.mockClear();
+
+    act(() => {
+      vi.advanceTimersByTime(2_100);
+    });
+
+    expect(mocks.refetchSandboxes).toHaveBeenCalled();
   });
 });
-
-const CREDITS_REFUSED: SandboxCreateFetchResult = {
-  kind: "refused",
-  status: 402,
-  code: "insufficient_credit",
-  reason: null,
-  shortfallMc: 120,
-  newRateMcPerHour: null,
-  currentAwakeBurnMcPerHour: null,
-  message: "refused",
-};
 
 describe("a send whose task may not exist yet", () => {
   it("gives a record that came back from a reload without its task confirmed back to a start-task draft, creating and waking nothing", async () => {
@@ -4849,6 +3648,7 @@ describe("a terminal request handed to a staged sandbox", () => {
       expect(mocks.openTile).toHaveBeenCalledTimes(1);
     });
     expect(JSON.stringify(mocks.openTile.mock.calls[0][0])).toContain(sendId);
+    expect(mocks.openTile.mock.calls[0]?.[1]).toBe("automatic");
   });
 });
 
@@ -4984,6 +3784,9 @@ describe("a pending chat create", () => {
           useStagedSandboxStore.getState().report(SURFACE, {
             failure: { kind: "settings", code: "SBX-0520" },
           });
+        });
+        fireEvent.pointerDown(screen.getByRole("button", { name: "More" }), {
+          button: 0,
         });
         expect(screen.queryByTestId("sandbox-setup-stop")).toBeNull();
         expect(
@@ -6011,7 +4814,7 @@ describe("a send whose created sandbox stalled on settings, on a host with only 
   async function mountStalled(
     guestConfigured: boolean | null,
     environmentFailed: boolean,
-  ): Promise<void> {
+  ): Promise<SandboxSummary> {
     mocks.retrySupported = false;
     mocks.legacySupported = true;
     mocks.settingsStatus = environmentFailed ? ENVIRONMENT_FAILED : undefined;
@@ -6025,6 +4828,7 @@ describe("a send whose created sandbox stalled on settings, on a host with only 
       id: SANDBOX_ID,
       hostId: SANDBOX_HOST,
       state: "awake",
+      failureCode: null,
       guestConfigured,
     });
     mocks.listSandboxes.mockResolvedValue(listAnswers([stalled]));
@@ -6041,17 +4845,40 @@ describe("a send whose created sandbox stalled on settings, on a host with only 
         });
       });
     }
+    return stalled;
   }
 
+  it("shows the staged settings reference when the sandbox summary has no failure code", async () => {
+    const summary = await mountStalled(true, true);
+    expect(summary.failureCode).toBeNull();
+
+    const line = screen.getByTestId("sandbox-setup-line");
+    expect(
+      within(line).getByTestId("sandbox-setup-line-toggle").textContent,
+    ).not.toContain("SBX-0520");
+    const disclosure = within(line).getByTestId<HTMLDetailsElement>(
+      "sandbox-setup-support-reference",
+    );
+    expect(disclosure.open).toBe(false);
+
+    fireEvent.click(within(disclosure).getByText("Support reference"));
+
+    expect(disclosure.open).toBe(true);
+    expect(within(disclosure).getByText("SBX-0520")).toBeTruthy();
+  });
+
   it("offers Repair setup, not Retry applying, for a guest that really failed, and runs only the guest repair", async () => {
-    await mountStalled(false, false);
+    await mountStalled(false, true);
 
     const strip = screen.getByTestId("pending-sandbox-sends");
-    await waitFor(() => {
-      expect(strip.textContent).toMatch(/repair setup/i);
+    fireEvent.pointerDown(within(strip).getByRole("button", { name: "More" }), {
+      button: 0,
     });
-    expect(strip.textContent).not.toMatch(/retry applying/i);
-    fireEvent.click(screen.getByRole("button", { name: /repair setup/i }));
+    const repairSetup = await screen.findByRole("menuitem", {
+      name: /repair setup/i,
+    });
+    expect(screen.queryByTestId("sandbox-setup-retry-applying")).toBeNull();
+    fireEvent.click(repairSetup);
 
     expect(mocks.legacyMutate).toHaveBeenCalledTimes(1);
     expect(mocks.repairFinishers).toHaveLength(0);
@@ -6074,8 +4901,14 @@ describe("a send whose created sandbox stalled on settings, on a host with only 
           /didn't apply|waits until they apply/i,
         );
       });
-      expect(strip.textContent).not.toMatch(/repair setup/i);
-      expect(strip.textContent).not.toMatch(/retry applying/i);
+      expect(screen.queryByTestId("sandbox-setup-retry-applying")).toBeNull();
+      fireEvent.pointerDown(
+        within(strip).getByRole("button", { name: "More" }),
+        { button: 0 },
+      );
+      expect(
+        screen.queryByRole("menuitem", { name: /repair setup/i }),
+      ).toBeNull();
     },
   );
 });
@@ -6118,6 +4951,7 @@ describe("a send whose sandbox left awake on its own after the create timed out"
     answerHost(SANDBOX_HOST, CODEX_READY);
     mount();
     await screen.findByTestId("sandbox-setup-line");
+    await settleAsyncWork();
     expect(document.body.textContent).toContain("compute is charged");
   }
 
@@ -6466,6 +5300,7 @@ describe("a send held on settings that didn't apply, once its sandbox leaves awa
     answerSandboxRows([rowIn("awake")], FRESH);
     answerHost(SANDBOX_HOST, CODEX_READY);
     mount();
+    await settleAsyncWork();
     await screen.findByTestId("pending-sandbox-sends");
     act(() => {
       useStagedSandboxStore.getState().report(SURFACE, {
@@ -6724,7 +5559,7 @@ describe("a send held on settings that didn't apply, once its sandbox leaves awa
     await mountHeld();
     const before = composerStages();
 
-    fireEvent.click(screen.getByRole("button", { name: "Cancel the message" }));
+    fireEvent.click(getSetupAction("sandbox-setup-cancel"));
 
     await waitFor(() => {
       expect(usePendingSandboxSendStore.getState().sends).toEqual({});
@@ -6750,7 +5585,7 @@ describe("a send held on settings that didn't apply, once its sandbox leaves awa
     await mountHeld();
     const before = composerStages();
 
-    fireEvent.click(screen.getByRole("button", { name: "Cancel the message" }));
+    fireEvent.click(getSetupAction("sandbox-setup-cancel"));
 
     await waitFor(() => {
       expect(usePendingSandboxSendStore.getState().sends).toEqual({});
@@ -6903,10 +5738,8 @@ describe("a send whose sandbox has no id yet", () => {
         });
       });
 
-      expect(await screen.findByTestId("sandbox-setup-cancel")).toBeDefined();
-      expect(
-        screen.getByTestId("sandbox-setup-choose-another-host"),
-      ).toBeDefined();
+      expect(await findSetupAction("sandbox-setup-cancel")).toBeDefined();
+      expect(getSetupAction("sandbox-setup-choose-another-host")).toBeDefined();
       expect(screen.queryByTestId("sandbox-setup-stop")).toBeNull();
       expect(mocks.stopSandbox).not.toHaveBeenCalled();
       expect(
@@ -8190,7 +7023,7 @@ describe("a task deleted while its message waits on a sandbox", () => {
         failure: { kind: "settings", code: "SBX-0520" },
       });
     });
-    fireEvent.click(await screen.findByTestId("sandbox-setup-stop"));
+    fireEvent.click(await findSetupAction("sandbox-setup-stop"));
     await waitFor(() => {
       expect(mocks.stopSandbox).toHaveBeenCalledWith("stop");
     });
@@ -8411,1742 +7244,10 @@ describe("Stop while the sandbox boots", () => {
           .getState()
           .report(SURFACE, { step: "applying", stepAt: Date.now() });
       });
-      expect(await screen.findByTestId("sandbox-setup-stop")).toBeDefined();
+      expect(await findSetupAction("sandbox-setup-stop")).toBeDefined();
       expect(mocks.stopSandbox).not.toHaveBeenCalled();
     },
   );
-});
-
-describe("choosing Stop on an unclaimed send", () => {
-  const FRESH = Date.now() + 60_000;
-  const BACK_IN_COMPOSER_RECEIPT =
-    "Stopped api-refactor. Your message wasn't sent; it's back in the composer.";
-  const SAVED_DRAFT_RECEIPT =
-    "Stopped api-refactor. Your message wasn't sent; it's saved in your drafts.";
-  let restoreLocks: () => void = () => undefined;
-  beforeEach(() => {
-    restoreLocks = installImmediateExclusiveLocks();
-  });
-  afterEach(() => {
-    restoreLocks();
-  });
-
-  async function chooseStop(): Promise<void> {
-    await chooseStopWith(mount);
-  }
-
-  async function chooseStopWith<T>(mounter: () => T): Promise<T> {
-    seed({ ...SEEDED, elapsedSeconds: 120 });
-    answerHost(SANDBOX_HOST, CODEX_DOWNLOADING);
-    const mounted = mounter();
-    await screen.findByTestId("sandbox-setup-line");
-    act(() => {
-      useStagedSandboxStore.getState().report(SURFACE, {
-        failure: { kind: "settings", code: "SBX-0520" },
-      });
-    });
-    fireEvent.click(await screen.findByTestId("sandbox-setup-stop"));
-    return mounted;
-  }
-
-  /** The driver stays; the strip, and with it the Stop's attention, can be closed. */
-  function mountWithRemovableStrip(): { removeStrip: () => void } {
-    const client = new QueryClient({
-      defaultOptions: { queries: { retry: false, gcTime: 0 } },
-    });
-    const tree = (withStrip: boolean) => (
-      <RunnerHostContext.Provider value={RUNNER_HOST}>
-        <QueryClientProvider client={client}>
-          <PendingSandboxSendsDriver />
-          {withStrip ? (
-            <PendingSandboxSendStrip epicId="epic-1" tabId="tab-1" />
-          ) : null}
-        </QueryClientProvider>
-      </RunnerHostContext.Provider>
-    );
-    const view = render(tree(true));
-    return { removeStrip: () => view.rerender(tree(false)) };
-  }
-
-  /** Stop pending, the task closed, then a fresh row reads `state` before the Stop answers. */
-  async function closeTaskThenRowReads(
-    state: "suspended" | "stopped",
-  ): Promise<void> {
-    const answer = deferred<SandboxVerbOutcome>();
-    mocks.verbAnswer = answer.promise;
-    onTestFinished(async () => {
-      await act(async () => {
-        answer.resolve({ kind: "settled", state });
-        await answer.promise;
-      });
-    });
-    const { removeStrip } = await chooseStopWith(mountWithRemovableStrip);
-    await waitFor(() => {
-      expect(mocks.stopSandbox).toHaveBeenCalledWith("stop");
-    });
-    act(removeStrip);
-    answerSandboxRows(
-      [
-        sandboxSummaryFixture({
-          id: SANDBOX_ID,
-          hostId: SANDBOX_HOST,
-          state,
-        }),
-      ],
-      FRESH,
-    );
-    await waitFor(() => {
-      expect(usePendingSandboxSendStore.getState().sends).toEqual({});
-    });
-  }
-
-  async function chooseStopAndConfirmRest(): Promise<void> {
-    const answer = deferred<SandboxVerbOutcome>();
-    mocks.verbAnswer = answer.promise;
-    await chooseStop();
-    await waitFor(() => {
-      expect(mocks.stopSandbox).toHaveBeenCalledWith("stop");
-    });
-    answerSandboxRows(
-      [
-        sandboxSummaryFixture({
-          id: SANDBOX_ID,
-          hostId: SANDBOX_HOST,
-          state: "stopped",
-        }),
-      ],
-      Date.now() + 60_000,
-    );
-    await act(async () => {
-      answer.resolve({ kind: "settled", state: "stopped" });
-      await answer.promise;
-    });
-    await waitFor(() => {
-      expect(usePendingSandboxSendStore.getState().sends).toEqual({});
-    });
-    await screen.findByTestId("sandbox-stopped-line");
-  }
-
-  function expectSendKept(): void {
-    expect(usePendingSandboxSendStore.getState().sends[SEND_ID]).toBeDefined();
-    expect(readStagedSandbox(SURFACE)).not.toBeNull();
-    expect(screen.getByTestId("pending-sandbox-message").textContent).toBe(
-      "fix the login bug",
-    );
-    expect(useLandingDraftStore.getState().drafts).toEqual([]);
-    expect(createChatCalls()).toEqual([]);
-  }
-
-  /** Ends an unanswered Stop the way the host eventually does, so no case outlives its own. */
-  async function settleStop(
-    answer: Deferred<SandboxVerbOutcome>,
-  ): Promise<void> {
-    await act(async () => {
-      answer.resolve({ kind: "settled", state: "stopped" });
-      await answer.promise;
-    });
-    await waitFor(() => {
-      expect(usePendingSandboxSendStore.getState().sends).toEqual({});
-    });
-  }
-
-  async function createBackgroundStoppedReceipt() {
-    const answer = deferred<SandboxVerbOutcome>();
-    mocks.verbAnswer = answer.promise;
-    await chooseStop();
-    await reloadPendingSandboxStores();
-    answerHost(SANDBOX_HOST, CODEX_DOWNLOADING);
-    const client = new QueryClient({
-      defaultOptions: { queries: { retry: false, gcTime: 0 } },
-    });
-    const view = render(
-      <QueryClientProvider client={client}>
-        <PendingSandboxSendsDriver />
-      </QueryClientProvider>,
-    );
-
-    answerSandboxRows(
-      [
-        sandboxSummaryFixture({
-          id: SANDBOX_ID,
-          hostId: SANDBOX_HOST,
-          state: "stopped",
-        }),
-      ],
-      Date.now() + 60_000,
-    );
-    await act(async () => {
-      answer.resolve({ kind: "settled", state: "stopped" });
-      await answer.promise;
-    });
-    await waitFor(() => {
-      expect(usePendingSandboxSendStore.getState().sends).toEqual({});
-      expect(
-        useStoppedSandboxSendReceiptStore.getState().receipts[SEND_ID],
-      ).toBeDefined();
-      expect(
-        toastSpies.activeReceiptToasts.has(`sandbox-stopped:${SEND_ID}`),
-      ).toBe(true);
-    });
-    return { client, view };
-  }
-
-  /** A resting row was read after the strip mounted, before the person chose Stop. */
-  it("shows Stop on the created sandbox's collapsed and expanded setup line, then marks it pending", async () => {
-    const answer = deferred<SandboxVerbOutcome>();
-    mocks.verbAnswer = answer.promise;
-    seed({ ...SEEDED, phase: "creating", created: true, elapsedSeconds: 0 });
-    // The run saw the created sandbox awake and moved on to its settings.
-    useStagedSandboxStore
-      .getState()
-      .report(SURFACE, { step: "applying", stepAt: Date.now() });
-    answerHost(SANDBOX_HOST, CODEX_DOWNLOADING);
-    mount();
-
-    const line = await screen.findByTestId("sandbox-setup-line");
-    expect(
-      screen
-        .getByTestId("sandbox-setup-line-toggle")
-        .getAttribute("aria-expanded"),
-    ).toBe("false");
-    expect(within(line).getByRole("button", { name: "Stop" })).toBeDefined();
-
-    fireEvent.click(screen.getByTestId("sandbox-setup-line-toggle"));
-    expect(screen.getByTestId("sandbox-setup-line-detail")).toBeDefined();
-    fireEvent.click(within(line).getByRole("button", { name: "Stop" }));
-
-    await waitFor(() => {
-      expect(mocks.stopSandbox).toHaveBeenCalledWith("stop");
-    });
-    expect(screen.getByTestId("sandbox-setup-line").textContent).toContain(
-      "Stopping api-refactor · pending",
-    );
-    expectSendKept();
-    await settleStop(answer);
-  });
-
-  it("keeps the message and Stop when a list request sent before Stop was chosen resolves at rest after it", async () => {
-    const answer = deferred<SandboxVerbOutcome>();
-    mocks.verbAnswer = answer.promise;
-    seed({ ...SEEDED, elapsedSeconds: 120 });
-    answerHost(SANDBOX_HOST, CODEX_DOWNLOADING);
-    mount();
-    await screen.findByTestId("sandbox-setup-line");
-    act(() => {
-      useStagedSandboxStore.getState().report(SURFACE, {
-        failure: { kind: "settings", code: "SBX-0520" },
-      });
-    });
-    // The list request leaves before Stop is chosen and answers after it.
-    const sentAt = Date.now();
-    fireEvent.click(await screen.findByTestId("sandbox-setup-stop"));
-    await waitFor(() => {
-      expect(mocks.stopSandbox).toHaveBeenCalledTimes(1);
-    });
-    const resting = sandboxSummaryFixture({
-      id: SANDBOX_ID,
-      hostId: SANDBOX_HOST,
-      state: "stopped",
-    });
-    mocks.listSandboxes.mockResolvedValue(listAnswers([resting]));
-    mocks.listReadSentAt = sentAt;
-    answerSandboxRows([resting], FRESH);
-
-    await act(async () => {
-      await Promise.resolve();
-    });
-    expectSendKept();
-    expect(screen.getByTestId("sandbox-setup-stop")).toBeDefined();
-    await settleStop(answer);
-  });
-
-  it("keeps the Stop boundary across a reload: a list read sent at the boundary holds the send, one sent after it releases it once", async () => {
-    const answer = deferred<SandboxVerbOutcome>();
-    mocks.verbAnswer = answer.promise;
-    await chooseStop();
-    await waitFor(() => {
-      expect(mocks.stopSandbox).toHaveBeenCalledTimes(1);
-    });
-    const boundary =
-      usePendingSandboxSendStore.getState().sends[SEND_ID]?.stopRequestedAt;
-    if (boundary === undefined) throw new Error("the Stop wrote no boundary");
-
-    await reloadPendingSandboxStores();
-    expect(
-      usePendingSandboxSendStore.getState().sends[SEND_ID]?.stopRequestedAt,
-    ).toBe(boundary);
-    answerHost(SANDBOX_HOST, CODEX_DOWNLOADING);
-    mount();
-    const resting = sandboxSummaryFixture({
-      id: SANDBOX_ID,
-      hostId: SANDBOX_HOST,
-      state: "stopped",
-    });
-    mocks.listSandboxes.mockResolvedValue(listAnswers([resting]));
-
-    // Arrives fresh but was sent at the boundary: it proves nothing after the Stop.
-    mocks.listReadSentAt = boundary;
-    answerSandboxRows([resting], FRESH);
-    await act(async () => {
-      await Promise.resolve();
-    });
-    expect(usePendingSandboxSendStore.getState().sends[SEND_ID]).toBeDefined();
-
-    mocks.listReadSentAt = boundary + 1;
-    answerSandboxRows([resting], FRESH + 1);
-    await waitFor(() => {
-      expect(usePendingSandboxSendStore.getState().sends).toEqual({});
-    });
-    expect(createChatCalls()).toEqual([]);
-    await act(async () => {
-      answer.resolve({ kind: "settled", state: "stopped" });
-      await answer.promise;
-    });
-  });
-
-  it("stops the sandbox exactly once, then returns the send once it is at rest", async () => {
-    await chooseStop();
-
-    await waitFor(() => {
-      expect(usePendingSandboxSendStore.getState().sends).toEqual({});
-    });
-    expect(mocks.stopSandbox).toHaveBeenCalledTimes(1);
-    expect(mocks.stopSandbox).toHaveBeenCalledWith("stop");
-    expect(readStagedSandbox(SURFACE)).toBeNull();
-    expect(createChatCalls()).toEqual([]);
-  });
-
-  it("keeps the message, the stage and Stop, and says why, when the stop fails", async () => {
-    mocks.verbAnswer = Promise.reject(new Error("The sandbox would not stop."));
-    mocks.verbAnswer.catch(() => undefined);
-    await chooseStop();
-
-    await waitFor(() => {
-      expect(screen.getByTestId("sandbox-setup-line").textContent).toContain(
-        "Couldn't stop api-refactor · SBX-0701",
-      );
-    });
-    expectSendKept();
-    const line = screen.getByTestId("sandbox-setup-line");
-    expect(
-      within(line)
-        .getAllByRole("button")
-        .map((button) => button.textContent),
-    ).toEqual(["Retry", "Details"]);
-    expect(mocks.stopSandbox).toHaveBeenCalledTimes(1);
-  });
-
-  it("offers an enabled Retry after remount even when the mutation error was lost", async () => {
-    mocks.verbAnswer = Promise.reject(new Error("The sandbox would not stop."));
-    mocks.verbAnswer.catch(() => undefined);
-    await chooseStop();
-
-    await waitFor(() => {
-      expect(screen.getByTestId("sandbox-setup-line").textContent).toContain(
-        "Couldn't stop api-refactor · SBX-0701",
-      );
-    });
-    expectSendKept();
-
-    await reloadPendingSandboxStores();
-    mocks.verbState = { isPending: false, error: null };
-    const retryAnswer = deferred<SandboxVerbOutcome>();
-    mocks.verbAnswer = retryAnswer.promise;
-    answerHost(SANDBOX_HOST, CODEX_DOWNLOADING);
-    mount();
-
-    const line = await screen.findByTestId("sandbox-setup-line");
-    const retry = within(line).getByRole("button", { name: "Retry" });
-    expect(retry.hasAttribute("disabled")).toBe(false);
-    expect(line.textContent).toContain("Couldn't stop api-refactor · SBX-0701");
-    expect(within(line).getByRole("button", { name: "Details" })).toBeDefined();
-    expectSendKept();
-
-    fireEvent.click(retry);
-    await waitFor(() => {
-      expect(mocks.stopSandbox).toHaveBeenCalledTimes(2);
-    });
-    expect(screen.getByTestId("sandbox-setup-line").textContent).toContain(
-      "Stopping api-refactor · pending",
-    );
-    expectSendKept();
-    await settleStop(retryAnswer);
-  });
-
-  it("returns nothing and sends nothing while the stop has not answered, then returns the send when it settles", async () => {
-    const answer = deferred<SandboxVerbOutcome>();
-    mocks.verbAnswer = answer.promise;
-    await chooseStop();
-
-    await act(async () => {
-      await Promise.resolve();
-    });
-    expectSendKept();
-    expect(mocks.stopSandbox).toHaveBeenCalledTimes(1);
-
-    await act(async () => {
-      answer.resolve({ kind: "settled", state: "stopped" });
-      await answer.promise;
-    });
-    await waitFor(() => {
-      expect(usePendingSandboxSendStore.getState().sends).toEqual({});
-    });
-    expect(createChatCalls()).toEqual([]);
-  });
-
-  it("opens the task's composer on the stopped sandbox with the message when a stop completes in the strip that requested it", async () => {
-    await chooseStopAndConfirmRest();
-    expect(
-      useNewConversationModalStore.getState().draftPatchesByEpicId["epic-1"],
-    ).toMatchObject({ content: MESSAGE_CONTENT, settings: PICKED_SETTINGS });
-    // Unnamed, so its picker is live and the staged sandbox carries its Send:
-    // a composer named on a stopped host refuses to send.
-    expect(useNewConversationModalOpenStore.getState().request).toMatchObject({
-      epicId: "epic-1",
-      tabId: "tab-1",
-      hostId: null,
-    });
-    // On the sandbox it was sent to, never the composer's default host: the
-    // task draft records it, and the composer stages it when it shows the
-    // draft. Nothing is staged or pinned before then.
-    expect(
-      useNewConversationModalStore.getState().draftPatchesByEpicId["epic-1"]
-        ?.returnedSandbox,
-    ).toMatchObject({
-      target: {
-        kind: "existing",
-        hostId: SANDBOX_HOST,
-        sandboxId: SANDBOX_ID,
-        name: "api-refactor",
-        verb: "start",
-      },
-      clientRequestId: null,
-    });
-    expect(readStagedSandbox(newConversationSurfaceKey("epic-1"))).toBeNull();
-    expect(
-      useSurfaceHostSelectionStore.getState().selections[
-        newConversationSurfaceKey("epic-1")
-      ],
-    ).toBe(TASK_PIN_HOST);
-    expect(document.body.textContent).toContain(BACK_IN_COMPOSER_RECEIPT);
-    expect(screen.getByRole("button", { name: "Start" })).toBeDefined();
-    expect(
-      screen.getByRole("button", { name: "Choose another host" }),
-    ).toBeDefined();
-
-    fireEvent.click(screen.getByRole("button", { name: "Start" }));
-    await waitFor(() => {
-      expect(mocks.stopSandbox).toHaveBeenCalledWith("start");
-    });
-    expect(createChatCalls()).toEqual([]);
-    expect(usePendingSandboxSendStore.getState().sends).toEqual({});
-    expect(
-      useNewConversationModalStore.getState().draftPatchesByEpicId["epic-1"],
-    ).toMatchObject({ content: MESSAGE_CONTENT, settings: PICKED_SETTINGS });
-  });
-
-  describe("on a task whose composer stages the message's own sandbox", () => {
-    const ADD_AGENT_RECEIPT =
-      "Stopped api-refactor. Your message wasn't sent; it's in Add agent.";
-
-    afterEach(() => {
-      __getOpenEpicRegistryForTests().disposeAll();
-    });
-
-    /** The open composer's own hook, mounted before the Stop, stages what the draft names. */
-    async function stopWithOpenComposer(chatIds: readonly string[]) {
-      openTask(true, chatIds);
-      renderHook(() => useNewConversationReturnedSandbox("epic-1", null));
-      await chooseStopAndConfirmRest();
-      await waitFor(() => {
-        expect(
-          readStagedSandbox(newConversationSurfaceKey("epic-1")),
-        ).toMatchObject({ target: { kind: "existing", hostId: SANDBOX_HOST } });
-      });
-    }
-
-    function expectAddAgentReceipt(): void {
-      const line = screen.getByTestId("sandbox-stopped-line");
-      expect(line.textContent).toContain(ADD_AGENT_RECEIPT);
-      expect(
-        within(line).getByRole("button", { name: "Add agent" }),
-      ).toBeDefined();
-      expect(within(line).getByRole("button", { name: "Start" })).toBeDefined();
-      expect(
-        within(line).queryByRole("button", { name: "Choose another host" }),
-      ).toBeNull();
-      expect(line.textContent).not.toContain("api-refactor is stopped");
-      expect(screen.queryByTestId("rested-task-message-line")).toBeNull();
-    }
-
-    it("keeps the Stopped line, saying the message is in Add agent, once the composer stages its sandbox", async () => {
-      await stopWithOpenComposer([]);
-      expectAddAgentReceipt();
-      expect(
-        useStoppedSandboxSendReceiptStore.getState().receipts[SEND_ID],
-      ).toBeDefined();
-    });
-
-    it("keeps the line, with its two actions, after the person closes Add agent", async () => {
-      await stopWithOpenComposer([]);
-
-      act(() => {
-        useNewConversationModalOpenStore.getState().close();
-      });
-
-      expect(useNewConversationModalOpenStore.getState().request).toBeNull();
-      expectAddAgentReceipt();
-    });
-
-    it("reopens the composer with the message in it on Add agent, keeping the line", async () => {
-      await stopWithOpenComposer([]);
-      act(() => {
-        useNewConversationModalOpenStore.getState().close();
-      });
-
-      fireEvent.click(screen.getByRole("button", { name: "Add agent" }));
-
-      expect(useNewConversationModalOpenStore.getState().request).toMatchObject(
-        {
-          epicId: "epic-1",
-          tabId: "tab-1",
-          hostId: null,
-        },
-      );
-      expect(
-        useNewConversationModalStore.getState().draftPatchesByEpicId["epic-1"],
-      ).toMatchObject({ content: MESSAGE_CONTENT });
-      expectAddAgentReceipt();
-    });
-
-    it("says the message is back in the composer, with no Add agent, on a task that has a chat", async () => {
-      await stopWithOpenComposer(["chat-1"]);
-
-      const line = screen.getByTestId("sandbox-stopped-line");
-      expect(line.textContent).toContain(BACK_IN_COMPOSER_RECEIPT);
-      expect(
-        within(line).queryByRole("button", { name: "Add agent" }),
-      ).toBeNull();
-      expect(
-        useStoppedSandboxSendReceiptStore.getState().receipts[SEND_ID],
-      ).toBeDefined();
-    });
-
-    it("still clears the line when the person stages a different sandbox on the task", async () => {
-      await stopWithOpenComposer([]);
-
-      act(() => {
-        useStagedSandboxStore
-          .getState()
-          .stage(newConversationSurfaceKey("epic-1"), NEW_TARGET);
-      });
-
-      await waitFor(() => {
-        expect(screen.queryByTestId("sandbox-stopped-line")).toBeNull();
-      });
-      expect(
-        useStoppedSandboxSendReceiptStore.getState().receipts[SEND_ID],
-      ).toBeUndefined();
-    });
-
-    it("keeps the line when the composer already held a stage on this sandbox before the Stop landed", async () => {
-      openTask(true, []);
-      useStagedSandboxStore
-        .getState()
-        .stage(newConversationSurfaceKey("epic-1"), START_TARGET);
-      await chooseStopAndConfirmRest();
-
-      expectAddAgentReceipt();
-      expect(
-        useStoppedSandboxSendReceiptStore.getState().receipts[SEND_ID],
-      ).toBeDefined();
-    });
-
-    it("keeps the saved-in-drafts line when an occupied composer already held its earlier stage on this sandbox", async () => {
-      const occupiedContent: JsonContent = {
-        type: "doc",
-        content: [
-          {
-            type: "paragraph",
-            content: [{ type: "text", text: "keep my replacement" }],
-          },
-        ],
-      };
-      openTask(true, []);
-      // Seeded: an earlier give-back left the composer's content, its returned
-      // sandbox and the stage the composer made from it.
-      useNewConversationModalStore
-        .getState()
-        .setContent("epic-1", occupiedContent);
-      useNewConversationModalStore.getState().setReturnedSandbox("epic-1", {
-        target: START_TARGET,
-        clientRequestId: null,
-      });
-      useStagedSandboxStore
-        .getState()
-        .stage(newConversationSurfaceKey("epic-1"), START_TARGET);
-      await chooseStopAndConfirmRest();
-
-      const line = screen.getByTestId("sandbox-stopped-line");
-      expect(line.textContent).toContain(SAVED_DRAFT_RECEIPT);
-      expect(
-        within(line).getByRole("button", { name: "Open draft" }),
-      ).toBeDefined();
-      expect(within(line).getByRole("button", { name: "Start" })).toBeDefined();
-      expect(
-        within(line).queryByRole("button", { name: "Choose another host" }),
-      ).toBeNull();
-      expect(
-        useStoppedSandboxSendReceiptStore.getState().receipts[SEND_ID],
-      ).toBeDefined();
-    });
-
-    it("clears a cancelled receipt when the composer stages the message's own sandbox", async () => {
-      openTask(true, []);
-      useNewConversationModalStore
-        .getState()
-        .setContent("epic-1", MESSAGE_CONTENT);
-      useNewConversationModalStore.getState().setReturnedSandbox("epic-1", {
-        target: START_TARGET,
-        clientRequestId: null,
-      });
-      answerSandboxRows(
-        [
-          sandboxSummaryFixture({
-            id: SANDBOX_ID,
-            hostId: SANDBOX_HOST,
-            state: "stopped",
-          }),
-        ],
-        1,
-      );
-      recordCancelledSandboxSend(
-        pendingSend({ id: SEND_ID, epicConfirmed: true }),
-        {
-          kind: "task",
-          epicId: "epic-1",
-          parentId: null,
-          placement: null,
-        },
-      );
-      mount();
-      await screen.findByTestId("sandbox-stopped-line");
-
-      renderHook(() => useNewConversationReturnedSandbox("epic-1", null));
-
-      await waitFor(() => {
-        expect(screen.queryByTestId("sandbox-stopped-line")).toBeNull();
-      });
-      expect(
-        readStagedSandbox(newConversationSurfaceKey("epic-1")),
-      ).toMatchObject({ target: { kind: "existing" } });
-    });
-  });
-
-  it("saves the stopped message in drafts when the task composer has newer content", async () => {
-    const occupiedContent: JsonContent = {
-      type: "doc",
-      content: [
-        {
-          type: "paragraph",
-          content: [{ type: "text", text: "keep my replacement" }],
-        },
-      ],
-    };
-    useNewConversationModalStore
-      .getState()
-      .setContent("epic-1", occupiedContent);
-
-    await chooseStopAndConfirmRest();
-    expect(
-      useNewConversationModalStore.getState().draftPatchesByEpicId["epic-1"],
-    ).toMatchObject({ content: occupiedContent });
-    expect(useLandingDraftStore.getState().drafts).toMatchObject([
-      { content: MESSAGE_CONTENT, settings: PICKED_SETTINGS, closed: true },
-    ]);
-    expect(useNewConversationModalOpenStore.getState().request).toBeNull();
-    expect(mocks.openTile).not.toHaveBeenCalled();
-    expect(document.body.textContent).toContain(SAVED_DRAFT_RECEIPT);
-    // A Stop the person confirmed says "Stopped", never the state footer.
-    expect(document.body.textContent).not.toContain("api-refactor is stopped");
-    expect(screen.getByRole("button", { name: "Open draft" })).toBeDefined();
-    expect(screen.getByRole("button", { name: "Start" })).toBeDefined();
-    expect(
-      screen.queryByRole("button", { name: "Choose another host" }),
-    ).toBeNull();
-  });
-
-  it("clears the stopped receipt when the person chooses another host", async () => {
-    await chooseStopAndConfirmRest();
-    const receipt = BACK_IN_COMPOSER_RECEIPT;
-    expect(document.body.textContent).toContain(receipt);
-
-    fireEvent.click(
-      screen.getByRole("button", { name: "Choose another host" }),
-    );
-
-    await waitFor(() => {
-      expect(document.body.textContent).not.toContain(receipt);
-    });
-    expect(
-      useNewConversationModalStore.getState().draftPatchesByEpicId["epic-1"],
-    ).toMatchObject({ content: MESSAGE_CONTENT, settings: PICKED_SETTINGS });
-  });
-
-  it("clears a task receipt when an ordinary successful send consumes its composer draft", async () => {
-    const taskSurface = newConversationSurfaceKey("epic-1");
-    useSurfaceHostSelectionStore
-      .getState()
-      .setSelection(taskSurface, "pinned-host");
-
-    await chooseStopAndConfirmRest();
-    expect(document.body.textContent).toContain(BACK_IN_COMPOSER_RECEIPT);
-    // The message is back in the task's composer on the stopped sandbox: its
-    // draft records it, and the composer's pin is left as it was.
-    expect(
-      useNewConversationModalStore.getState().draftPatchesByEpicId["epic-1"]
-        ?.returnedSandbox,
-    ).toMatchObject({ target: { kind: "existing", hostId: SANDBOX_HOST } });
-    expect(
-      useSurfaceHostSelectionStore.getState().selections[taskSurface],
-    ).toBe("pinned-host");
-
-    act(() => {
-      useNewConversationModalStore.getState().clearDraft("epic-1");
-    });
-
-    await waitFor(() => {
-      expect(screen.queryByTestId("sandbox-stopped-line")).toBeNull();
-    });
-    expect(usePendingSandboxSendStore.getState().sends).toEqual({});
-    expect(
-      useSurfaceHostSelectionStore.getState().selections[taskSurface],
-    ).toBe("pinned-host");
-  });
-
-  it("clears the stopped receipt when a newer send appears in the task", async () => {
-    await chooseStopAndConfirmRest();
-    const receipt = BACK_IN_COMPOSER_RECEIPT;
-    expect(document.body.textContent).toContain(receipt);
-
-    act(() => {
-      usePendingSandboxSendStore.getState().add(
-        pendingSend({
-          id: "send-2",
-          createdAt: Date.now(),
-          text: "write the migration",
-        }),
-      );
-    });
-
-    expect(await screen.findByText("write the migration")).toBeDefined();
-    expect(document.body.textContent).not.toContain(receipt);
-  });
-
-  it("clears the stopped receipt after the sandbox is started", async () => {
-    await chooseStopAndConfirmRest();
-    const receipt = BACK_IN_COMPOSER_RECEIPT;
-    expect(document.body.textContent).toContain(receipt);
-
-    fireEvent.click(screen.getByRole("button", { name: "Start" }));
-    await waitFor(() => {
-      expect(mocks.stopSandbox).toHaveBeenCalledWith("start");
-    });
-    answerSandboxRows(
-      [
-        sandboxSummaryFixture({
-          id: SANDBOX_ID,
-          hostId: SANDBOX_HOST,
-          state: "awake",
-        }),
-      ],
-      Date.now() + 60_000,
-    );
-
-    await waitFor(() => {
-      expect(document.body.textContent).not.toContain(receipt);
-    });
-  });
-
-  it("updates Start in place without losing the background receipt or its actions", async () => {
-    await createBackgroundStoppedReceipt();
-    const id = `sandbox-stopped:${SEND_ID}`;
-    const initial = toastSpies.activeReceiptToasts.get(id);
-    if (initial === undefined)
-      throw new Error("Expected the stopped receipt toast");
-    const initialView = render(initial.content);
-    const initialStart = within(initialView.container).getByRole("button", {
-      name: "Start",
-    });
-    expect(initialStart.hasAttribute("disabled")).toBe(false);
-
-    const startAnswer = deferred<SandboxVerbOutcome>();
-    mocks.verbAnswer = startAnswer.promise;
-    fireEvent.click(initialStart);
-    await waitFor(() => {
-      expect(mocks.stopSandbox).toHaveBeenCalledWith("start");
-      const updated = toastSpies.activeReceiptToasts.get(id);
-      expect(updated).toBeDefined();
-      expect(updated?.content).not.toBe(initial.content);
-    });
-
-    const updated = toastSpies.activeReceiptToasts.get(id);
-    if (updated === undefined)
-      throw new Error("Expected the updated receipt toast");
-    const updatedView = render(updated.content);
-    expect(
-      within(updatedView.container)
-        .getByRole("button", { name: "Start" })
-        .hasAttribute("disabled"),
-    ).toBe(true);
-    expect(
-      within(updatedView.container).getByRole("button", {
-        name: "Open draft",
-      }),
-    ).toBeDefined();
-    expect(
-      within(updatedView.container).queryByRole("button", {
-        name: "Choose another host",
-      }),
-    ).toBeNull();
-    expect(
-      useStoppedSandboxSendReceiptStore.getState().receipts[SEND_ID],
-    ).toBeDefined();
-    expect(toastSpies.dismiss).not.toHaveBeenCalledWith(id);
-
-    await act(async () => {
-      startAnswer.resolve({ kind: "settled", state: "stopped" });
-      await startAnswer.promise;
-    });
-    await waitFor(() => {
-      const settled = toastSpies.activeReceiptToasts.get(id);
-      expect(settled).toBeDefined();
-      expect(settled?.content).not.toBe(updated.content);
-    });
-    const settled = toastSpies.activeReceiptToasts.get(id);
-    if (settled === undefined)
-      throw new Error("Expected the settled receipt toast");
-    expect(
-      within(render(settled.content).container)
-        .getByRole("button", { name: "Start" })
-        .hasAttribute("disabled"),
-    ).toBe(false);
-    expect(
-      useStoppedSandboxSendReceiptStore.getState().receipts[SEND_ID],
-    ).toBeDefined();
-  });
-
-  it("hands a background receipt into a mounted strip while dismissing only its toast", async () => {
-    const { client, view } = await createBackgroundStoppedReceipt();
-    const id = `sandbox-stopped:${SEND_ID}`;
-    view.rerender(
-      <QueryClientProvider client={client}>
-        <PendingSandboxSendsDriver />
-        <StoppedSandboxSendReceiptStrip epicId="epic-1" tabId="tab-1" />
-      </QueryClientProvider>,
-    );
-
-    const strip = await screen.findByTestId("sandbox-stopped-line");
-    await waitFor(() => {
-      expect(toastSpies.activeReceiptToasts.has(id)).toBe(false);
-    });
-    expect(toastSpies.dismiss).toHaveBeenCalledWith(id);
-    expect(
-      useStoppedSandboxSendReceiptStore.getState().receipts[SEND_ID],
-    ).toBeDefined();
-    expect(within(strip).getByRole("button", { name: "Start" })).toBeDefined();
-  });
-
-  it("ignores the old background dismissal after a receipt returns from a tab to a new toast", async () => {
-    const { client, view } = await createBackgroundStoppedReceipt();
-    const id = `sandbox-stopped:${SEND_ID}`;
-    const originalToast = toastSpies.activeReceiptToasts.get(id);
-    if (originalToast === undefined)
-      throw new Error("Expected the original background receipt toast");
-    toastSpies.dismissalQueue.deferred = true;
-
-    view.rerender(
-      <QueryClientProvider client={client}>
-        <PendingSandboxSendsDriver />
-        <StoppedSandboxSendReceiptStrip epicId="epic-1" tabId="tab-1" />
-      </QueryClientProvider>,
-    );
-    const strip = await screen.findByTestId("sandbox-stopped-line");
-    await waitFor(() => {
-      expect(toastSpies.activeReceiptToasts.has(id)).toBe(false);
-      expect(toastSpies.dismissalQueue.callbacks).toHaveLength(1);
-    });
-    expect(
-      useStoppedSandboxSendReceiptStore.getState().receipts[SEND_ID],
-    ).toBeDefined();
-    expect(within(strip).getByRole("button", { name: "Start" })).toBeDefined();
-
-    view.rerender(
-      <QueryClientProvider client={client}>
-        <PendingSandboxSendsDriver />
-      </QueryClientProvider>,
-    );
-    await waitFor(() => {
-      expect(toastSpies.activeReceiptToasts.has(id)).toBe(true);
-      expect(screen.queryByTestId("sandbox-stopped-line")).toBeNull();
-    });
-    const republishedToast = toastSpies.activeReceiptToasts.get(id);
-    if (republishedToast === undefined)
-      throw new Error("Expected the republished background receipt toast");
-    expect(republishedToast).not.toBe(originalToast);
-    const republishedView = render(republishedToast.content);
-    expect(
-      within(republishedView.container).getByRole("button", { name: "Start" }),
-    ).toBeDefined();
-
-    const oldDismissal = toastSpies.dismissalQueue.callbacks.shift();
-    if (oldDismissal === undefined)
-      throw new Error("Expected the delayed dismissal callback");
-    toastSpies.dismissalQueue.deferred = false;
-    act(() => {
-      oldDismissal();
-    });
-
-    expect(
-      useStoppedSandboxSendReceiptStore.getState().receipts[SEND_ID],
-    ).toBeDefined();
-    expect(toastSpies.activeReceiptToasts.get(id)).toBe(republishedToast);
-    expect(
-      within(render(republishedToast.content).container).getByRole("button", {
-        name: "Start",
-      }),
-    ).toBeDefined();
-  });
-
-  it("removes the durable receipt when the person dismisses its toast", async () => {
-    await createBackgroundStoppedReceipt();
-    const id = `sandbox-stopped:${SEND_ID}`;
-
-    act(() => {
-      toastSpies.dismissByUser(id);
-    });
-
-    await waitFor(() => {
-      expect(
-        useStoppedSandboxSendReceiptStore.getState().receipts[SEND_ID],
-      ).toBeUndefined();
-    });
-    expect(toastSpies.activeReceiptToasts.has(id)).toBe(false);
-  });
-
-  it("retires the receipt toast when its returned draft becomes obsolete", async () => {
-    await createBackgroundStoppedReceipt();
-    const id = `sandbox-stopped:${SEND_ID}`;
-
-    act(() => {
-      useLandingDraftStore.setState({ drafts: [], activeDraftId: null });
-    });
-
-    await waitFor(() => {
-      expect(
-        useStoppedSandboxSendReceiptStore.getState().receipts[SEND_ID],
-      ).toBeUndefined();
-      expect(toastSpies.activeReceiptToasts.has(id)).toBe(false);
-    });
-    expect(toastSpies.dismiss).toHaveBeenCalledWith(id);
-  });
-
-  it("keeps a saved-draft receipt in an app toast when a stop completes after its strip is gone", async () => {
-    const answer = deferred<SandboxVerbOutcome>();
-    mocks.verbAnswer = answer.promise;
-    await chooseStop();
-    // The strip goes away (reload, background) while the stop is unanswered.
-    await reloadPendingSandboxStores();
-    answerHost(SANDBOX_HOST, CODEX_DOWNLOADING);
-    const client = new QueryClient({
-      defaultOptions: { queries: { retry: false, gcTime: 0 } },
-    });
-    render(
-      <QueryClientProvider client={client}>
-        <PendingSandboxSendsDriver />
-      </QueryClientProvider>,
-    );
-
-    answerSandboxRows(
-      [
-        sandboxSummaryFixture({
-          id: SANDBOX_ID,
-          hostId: SANDBOX_HOST,
-          state: "stopped",
-        }),
-      ],
-      Date.now() + 60_000,
-    );
-
-    await act(async () => {
-      answer.resolve({ kind: "settled", state: "stopped" });
-      await answer.promise;
-    });
-    await waitFor(() => {
-      expect(usePendingSandboxSendStore.getState().sends).toEqual({});
-    });
-    expect(useLandingDraftStore.getState().drafts).toMatchObject([
-      { content: MESSAGE_CONTENT, settings: PICKED_SETTINGS, closed: true },
-    ]);
-    expect(useNewConversationModalOpenStore.getState().request).toBeNull();
-    expect(mocks.openTile).not.toHaveBeenCalled();
-    expect(createChatCalls()).toEqual([]);
-
-    await waitFor(() => {
-      expect(toastSpies.show).toHaveBeenCalled();
-    });
-    const toastCall = toastSpies.show.mock.calls.at(-1);
-    if (toastCall === undefined) throw new Error("Expected stopped-send toast");
-    const [toastContent, toastOptions] = toastCall;
-    expect(toastOptions?.duration).toBe(Infinity);
-    const toastView = render(toastContent);
-    expect(toastView.container.textContent).toContain(SAVED_DRAFT_RECEIPT);
-    expect(
-      within(toastView.container).getByRole("button", { name: "Open draft" }),
-    ).toBeDefined();
-    expect(
-      within(toastView.container).getByRole("button", { name: "Start" }),
-    ).toBeDefined();
-    expect(
-      within(toastView.container).queryByRole("button", {
-        name: "Choose another host",
-      }),
-    ).toBeNull();
-    fireEvent.click(
-      within(toastView.container).getByRole("button", { name: "Start" }),
-    );
-    await waitFor(() =>
-      expect(mocks.stopSandbox).toHaveBeenCalledWith("start"),
-    );
-  });
-
-  it("does not recreate a dismissed receipt when the late Stop result follows a row give-back", async () => {
-    const answer = deferred<SandboxVerbOutcome>();
-    mocks.verbAnswer = answer.promise;
-    await chooseStop();
-    await waitFor(() => {
-      expect(mocks.stopSandbox).toHaveBeenCalledWith("stop");
-    });
-
-    // A new window takes over the held Stop while the original verb call waits.
-    await reloadPendingSandboxStores();
-    answerHost(SANDBOX_HOST, CODEX_DOWNLOADING);
-    const client = new QueryClient({
-      defaultOptions: { queries: { retry: false, gcTime: 0 } },
-    });
-    render(
-      <QueryClientProvider client={client}>
-        <PendingSandboxSendsDriver />
-      </QueryClientProvider>,
-    );
-    answerSandboxRows(
-      [
-        sandboxSummaryFixture({
-          id: SANDBOX_ID,
-          hostId: SANDBOX_HOST,
-          state: "stopped",
-        }),
-      ],
-      Date.now() + 60_000,
-    );
-
-    await waitFor(() => {
-      expect(usePendingSandboxSendStore.getState().sends).toEqual({});
-      expect(toastSpies.show).toHaveBeenCalledTimes(1);
-    });
-    const [toastContent, toastOptions] = toastSpies.show.mock.calls[0] ?? [];
-    expect(toastOptions?.duration).toBe(Infinity);
-    expect(render(toastContent).container.textContent).toContain(
-      SAVED_DRAFT_RECEIPT,
-    );
-    if (toastOptions?.onDismiss === undefined)
-      throw new Error("Expected the saved-draft toast to dismiss its receipt");
-    Reflect.apply(toastOptions.onDismiss, undefined, []);
-
-    await waitFor(() => {
-      expect(toastSpies.dismiss).toHaveBeenCalled();
-    });
-    expect(useLandingDraftStore.getState().drafts).toMatchObject([
-      { content: MESSAGE_CONTENT, settings: PICKED_SETTINGS, closed: true },
-    ]);
-    expect(useLandingDraftStore.getState().activeDraftId).toBeNull();
-
-    await act(async () => {
-      answer.resolve({ kind: "settled", state: "stopped" });
-      await answer.promise;
-    });
-    await waitFor(() => {
-      expect(mocks.verbState.isPending).toBe(false);
-      expect(toastSpies.show).toHaveBeenCalledTimes(1);
-    });
-    expect(useLandingDraftStore.getState().drafts).toHaveLength(1);
-    expect(useLandingDraftStore.getState().activeDraftId).toBeNull();
-    expect(useNewConversationModalOpenStore.getState().request).toBeNull();
-    expect(mocks.openTile).not.toHaveBeenCalled();
-    expect(createChatCalls()).toEqual([]);
-  });
-
-  it.each(["handoff", "creating"] as const)(
-    "never clears the held stop, wakes, creates or dispatches when a repair started earlier succeeds late, in the %s phase",
-    async (phase) => {
-      const answer = deferred<SandboxVerbOutcome>();
-      mocks.verbAnswer = answer.promise;
-      seed({ ...SEEDED, phase, created: true, elapsedSeconds: 120 });
-      // The settings really are unapplied, so the failure is the row's own.
-      answerSandboxRows(
-        [
-          sandboxSummaryFixture({
-            id: SANDBOX_ID,
-            hostId: SANDBOX_HOST,
-            state: "awake",
-            guestConfigured: false,
-          }),
-        ],
-        FRESH,
-      );
-      answerHost(SANDBOX_HOST, CODEX_DOWNLOADING);
-      mount();
-      await screen.findByTestId("sandbox-setup-line");
-      act(() => {
-        useStagedSandboxStore.getState().report(SURFACE, {
-          failure: { kind: "settings", code: "SBX-0520" },
-        });
-      });
-      fireEvent.click(
-        await screen.findByTestId("sandbox-setup-retry-applying"),
-      );
-      expect(mocks.repairFinishers).toHaveLength(1);
-      fireEvent.click(await screen.findByTestId("sandbox-setup-stop"));
-      await waitFor(() => {
-        expect(mocks.stopSandbox).toHaveBeenCalledTimes(1);
-      });
-
-      // The repair, started before the Stop, succeeds now.
-      await act(async () => {
-        for (const finish of mocks.repairFinishers) finish();
-        await Promise.resolve();
-      });
-      answerSandboxRows(
-        [
-          sandboxSummaryFixture({
-            id: SANDBOX_ID,
-            hostId: SANDBOX_HOST,
-            state: "awake",
-          }),
-        ],
-        FRESH,
-      );
-
-      expectSendKept();
-      // The Stop is the send's own record; no stage writer can erase it.
-      expect(
-        usePendingSandboxSendStore.getState().sends[SEND_ID]?.stopRequested,
-      ).toBe(true);
-      expect(mocks.wake).not.toHaveBeenCalled();
-      expect(mocks.createSandbox).not.toHaveBeenCalled();
-      expect(mocks.stopSandbox).toHaveBeenCalledTimes(1);
-
-      await act(async () => {
-        answer.resolve({ kind: "settled", state: "stopped" });
-        await answer.promise;
-      });
-      await waitFor(() => {
-        expect(usePendingSandboxSendStore.getState().sends).toEqual({});
-      });
-      expect(createChatCalls()).toEqual([]);
-      expect(mocks.createSandbox).not.toHaveBeenCalled();
-    },
-  );
-
-  it("ends a terminal ask whose guest setup failed while its sandbox was being created, when a Stop that was still moving is followed by a fresh stopped row", async () => {
-    mocks.verbAnswer = Promise.resolve<SandboxVerbOutcome>({ kind: "moving" });
-    seed({
-      ...SEEDED,
-      send: { request: { kind: "terminal" }, text: "" },
-      phase: "creating",
-      created: true,
-      elapsedSeconds: 120,
-    });
-    answerSandboxRows(
-      [
-        sandboxSummaryFixture({
-          id: SANDBOX_ID,
-          hostId: SANDBOX_HOST,
-          state: "awake",
-          guestConfigured: false,
-        }),
-      ],
-      FRESH,
-    );
-    mount();
-    await screen.findByTestId("sandbox-setup-line");
-    act(() => {
-      useStagedSandboxStore.getState().report(SURFACE, {
-        failure: { kind: "settings", code: "SBX-0520" },
-      });
-    });
-    fireEvent.click(await screen.findByTestId("sandbox-setup-stop"));
-    await waitFor(() => {
-      expect(mocks.stopSandbox).toHaveBeenCalledTimes(1);
-    });
-    await act(async () => {
-      await mocks.verbAnswer;
-    });
-    expect(usePendingSandboxSendStore.getState().sends[SEND_ID]).toBeDefined();
-
-    answerSandboxRows(
-      [
-        sandboxSummaryFixture({
-          id: SANDBOX_ID,
-          hostId: SANDBOX_HOST,
-          state: "stopped",
-        }),
-      ],
-      FRESH + 1,
-    );
-
-    await waitFor(() => {
-      expect(usePendingSandboxSendStore.getState().sends).toEqual({});
-    });
-    expect(readStagedSandbox(SURFACE)).toBeNull();
-    expect(mocks.openTile).not.toHaveBeenCalled();
-    expect(mocks.createSandbox).not.toHaveBeenCalled();
-  });
-
-  it("keeps a moving stop across a sign-out that clears every stage, and quietly returns the message on a fresh stopped row once its owner is back", async () => {
-    mocks.verbAnswer = Promise.resolve<SandboxVerbOutcome>({ kind: "moving" });
-    await chooseStop();
-    await act(async () => {
-      await mocks.verbAnswer;
-    });
-    expectSendKept();
-
-    // Sign-out clears every stage; the pending record survives it.
-    cleanup();
-    useStagedSandboxStore.getState().clearAll();
-    act(() => {
-      useAuthStore.getState().setSignedOut();
-    });
-    userSignedIn();
-    await reloadPendingSandboxStores();
-    answerHost(SANDBOX_HOST, CODEX_READY);
-    answerSandboxRows(
-      [
-        sandboxSummaryFixture({
-          id: SANDBOX_ID,
-          hostId: SANDBOX_HOST,
-          state: "awake",
-        }),
-      ],
-      FRESH,
-    );
-    const client = new QueryClient({
-      defaultOptions: { queries: { retry: false, gcTime: 0 } },
-    });
-    render(
-      <QueryClientProvider client={client}>
-        <PendingSandboxSendsDriver />
-      </QueryClientProvider>,
-    );
-    await act(async () => {
-      await Promise.resolve();
-    });
-
-    // Nothing runs while the stop is unanswered, with the agent ready and the row awake.
-    expect(
-      usePendingSandboxSendStore.getState().sends[SEND_ID]?.stopRequested,
-    ).toBe(true);
-    expect(createChatCalls()).toEqual([]);
-    expect(mocks.wake).not.toHaveBeenCalled();
-    expect(mocks.createSandbox).not.toHaveBeenCalled();
-
-    answerSandboxRows(
-      [
-        sandboxSummaryFixture({
-          id: SANDBOX_ID,
-          hostId: SANDBOX_HOST,
-          state: "stopped",
-        }),
-      ],
-      FRESH + 1,
-    );
-    await waitFor(() => {
-      expect(usePendingSandboxSendStore.getState().sends).toEqual({});
-    });
-    expect(createChatCalls()).toEqual([]);
-    expect(mocks.wake).not.toHaveBeenCalled();
-    expect(useNewConversationModalOpenStore.getState().request).toBeNull();
-    expect(mocks.openTile).not.toHaveBeenCalled();
-  });
-
-  it("dispatches nothing when the agent is repaired and the sandbox unfrozen while the stop is pending", async () => {
-    const answer = deferred<SandboxVerbOutcome>();
-    mocks.verbAnswer = answer.promise;
-    await chooseStop();
-    answerSandboxRows(
-      [
-        sandboxSummaryFixture({
-          id: SANDBOX_ID,
-          hostId: SANDBOX_HOST,
-          state: "awake",
-          frozen: true,
-        }),
-      ],
-      FRESH,
-    );
-    answerHost(SANDBOX_HOST, CODEX_READY);
-    answerSandboxRows(
-      [
-        sandboxSummaryFixture({
-          id: SANDBOX_ID,
-          hostId: SANDBOX_HOST,
-          state: "awake",
-        }),
-      ],
-      FRESH + 1,
-    );
-    await act(async () => {
-      await Promise.resolve();
-    });
-
-    expectSendKept();
-    expect(mocks.stopSandbox).toHaveBeenCalledTimes(1);
-    await act(async () => {
-      answer.resolve({ kind: "settled", state: "stopped" });
-      await answer.promise;
-    });
-    await waitFor(() => {
-      expect(usePendingSandboxSendStore.getState().sends).toEqual({});
-    });
-    expect(createChatCalls()).toEqual([]);
-  });
-
-  it("keeps the stop latch across a reload, so a repaired agent still dispatches nothing", async () => {
-    const answer = deferred<SandboxVerbOutcome>();
-    mocks.verbAnswer = answer.promise;
-    await chooseStop();
-    expect(readStagedSandbox(SURFACE)?.failure).toMatchObject({
-      kind: "settings",
-      code: "pending-send-stop",
-    });
-
-    await reloadPendingSandboxStores();
-    answerHost(SANDBOX_HOST, CODEX_READY);
-    mount();
-    await screen.findByTestId("sandbox-setup-line");
-    await act(async () => {
-      await Promise.resolve();
-    });
-
-    expect(readStagedSandbox(SURFACE)?.failure).toMatchObject({
-      kind: "settings",
-      code: "pending-send-stop",
-    });
-    expect(createChatCalls()).toEqual([]);
-    expect(usePendingSandboxSendStore.getState().sends[SEND_ID]).toBeDefined();
-    answer.resolve({ kind: "settled", state: "stopped" });
-  });
-
-  it.each([null, "awake"] as const)(
-    "keeps the send when the stop settles with the sandbox %s, and returns it on the first fresh read at rest",
-    async (state) => {
-      mocks.verbAnswer = Promise.resolve<SandboxVerbOutcome>({
-        kind: "settled",
-        state,
-      });
-      await chooseStop();
-
-      await act(async () => {
-        await mocks.verbAnswer;
-      });
-      expectSendKept();
-
-      answerSandboxRows(
-        [
-          sandboxSummaryFixture({
-            id: SANDBOX_ID,
-            hostId: SANDBOX_HOST,
-            state: "suspended",
-          }),
-        ],
-        FRESH,
-      );
-      await waitFor(() => {
-        expect(usePendingSandboxSendStore.getState().sends).toEqual({});
-      });
-      expect(mocks.stopSandbox).toHaveBeenCalledTimes(1);
-    },
-  );
-
-  const SUSPENDED_DRAFT_RECEIPT =
-    "build-box is suspended. Your message wasn't sent; it's saved in your drafts.";
-
-  function expectNoStoppedReceipt(): void {
-    expect(document.body.textContent).not.toContain("Stopped ");
-    expect(screen.queryByRole("button", { name: "Start" })).toBeNull();
-    expect(
-      screen.queryByRole("button", { name: "Choose another host" }),
-    ).toBeNull();
-  }
-
-  /** A Stop left unanswered while the sandbox suspends on its own and a fresh row says so. */
-  async function suspendBeforeStopAnswers(): Promise<
-    Deferred<SandboxVerbOutcome>
-  > {
-    const answer = deferred<SandboxVerbOutcome>();
-    mocks.verbAnswer = answer.promise;
-    onTestFinished(async () => {
-      await act(async () => {
-        answer.resolve({ kind: "settled", state: "suspended" });
-        await answer.promise;
-      });
-    });
-    await chooseStop();
-    await waitFor(() => {
-      expect(mocks.stopSandbox).toHaveBeenCalledWith("stop");
-    });
-    answerSandboxRows(
-      [
-        sandboxSummaryFixture({
-          id: SANDBOX_ID,
-          hostId: SANDBOX_HOST,
-          state: "suspended",
-        }),
-      ],
-      FRESH,
-    );
-    await waitFor(() => {
-      expect(usePendingSandboxSendStore.getState().sends).toEqual({});
-    });
-    return answer;
-  }
-
-  it("says the sandbox is suspended, not Stopped, when a fresh row reads suspended before the Stop answers and the composer is occupied", async () => {
-    act(() => {
-      useNewConversationModalStore
-        .getState()
-        .setContent("epic-1", OCCUPIED_NEW_CHAT_CONTENT);
-    });
-    await suspendBeforeStopAnswers();
-
-    const line = await screen.findByTestId("sandbox-stopped-line");
-    expect(line.textContent).toContain(SUSPENDED_DRAFT_RECEIPT);
-    expectNoStoppedReceipt();
-    expect(useLandingDraftStore.getState().drafts).toMatchObject([
-      {
-        content: MESSAGE_CONTENT,
-        closed: true,
-        returnedSandbox: {
-          target: {
-            kind: "existing",
-            hostId: SANDBOX_HOST,
-            sandboxId: SANDBOX_ID,
-            verb: "resume",
-          },
-        },
-      },
-    ]);
-  });
-
-  it("puts the message back in the free composer on its resume pick when a fresh row reads suspended before the Stop answers", async () => {
-    await suspendBeforeStopAnswers();
-
-    await screen.findByTestId("sandbox-stopped-line");
-    expectNoStoppedReceipt();
-    expect(
-      useNewConversationModalStore.getState().draftPatchesByEpicId["epic-1"],
-    ).toMatchObject({
-      content: MESSAGE_CONTENT,
-      returnedSandbox: {
-        target: { kind: "existing", hostId: SANDBOX_HOST, verb: "resume" },
-      },
-    });
-    expect(useLandingDraftStore.getState().drafts).toEqual([]);
-  });
-
-  it("says the sandbox is suspended, not Stopped, when the Stop itself settles suspended", async () => {
-    act(() => {
-      useNewConversationModalStore
-        .getState()
-        .setContent("epic-1", OCCUPIED_NEW_CHAT_CONTENT);
-    });
-    const answer = deferred<SandboxVerbOutcome>();
-    mocks.verbAnswer = answer.promise;
-    await chooseStop();
-    await waitFor(() => {
-      expect(mocks.stopSandbox).toHaveBeenCalledWith("stop");
-    });
-    answerSandboxRows(
-      [
-        sandboxSummaryFixture({
-          id: SANDBOX_ID,
-          hostId: SANDBOX_HOST,
-          state: "suspended",
-        }),
-      ],
-      1,
-    );
-    await act(async () => {
-      answer.resolve({ kind: "settled", state: "suspended" });
-      await answer.promise;
-    });
-    await waitFor(() => {
-      expect(usePendingSandboxSendStore.getState().sends).toEqual({});
-    });
-    // The receipt reads the row; the earlier read was too old to return the send itself.
-    answerSandboxRows(
-      [
-        sandboxSummaryFixture({
-          id: SANDBOX_ID,
-          hostId: SANDBOX_HOST,
-          state: "suspended",
-        }),
-      ],
-      FRESH,
-    );
-
-    const line = await screen.findByTestId("sandbox-stopped-line");
-    expect(line.textContent).toContain(SUSPENDED_DRAFT_RECEIPT);
-    expectNoStoppedReceipt();
-  });
-
-  it("still says Stopped, with Start and no host choice, when the row reads stopped before the Stop answers", async () => {
-    act(() => {
-      useNewConversationModalStore
-        .getState()
-        .setContent("epic-1", OCCUPIED_NEW_CHAT_CONTENT);
-    });
-    const answer = deferred<SandboxVerbOutcome>();
-    mocks.verbAnswer = answer.promise;
-    onTestFinished(async () => {
-      await act(async () => {
-        answer.resolve({ kind: "settled", state: "stopped" });
-        await answer.promise;
-      });
-    });
-    await chooseStop();
-    await waitFor(() => {
-      expect(mocks.stopSandbox).toHaveBeenCalledWith("stop");
-    });
-    answerSandboxRows(
-      [
-        sandboxSummaryFixture({
-          id: SANDBOX_ID,
-          hostId: SANDBOX_HOST,
-          state: "stopped",
-        }),
-      ],
-      FRESH,
-    );
-    await waitFor(() => {
-      expect(usePendingSandboxSendStore.getState().sends).toEqual({});
-    });
-
-    const line = await screen.findByTestId("sandbox-stopped-line");
-    expect(line.textContent).toContain(SAVED_DRAFT_RECEIPT);
-    expect(screen.getByRole("button", { name: "Start" })).toBeDefined();
-    expect(
-      screen.queryByRole("button", { name: "Choose another host" }),
-    ).toBeNull();
-  });
-
-  it("returns a chat's message to its composer with no Stopped receipt and no state receipt when a fresh row reads suspended before the Stop answers", async () => {
-    const answer = deferred<SandboxVerbOutcome>();
-    mocks.verbAnswer = answer.promise;
-    onTestFinished(async () => {
-      await act(async () => {
-        answer.resolve({ kind: "settled", state: "suspended" });
-        await answer.promise;
-      });
-    });
-    seed({
-      ...SEEDED,
-      elapsedSeconds: 120,
-      send: { request: { kind: "message", chatId: "existing-chat" } },
-    });
-    answerHost(SANDBOX_HOST, CODEX_DOWNLOADING);
-    mountInChat();
-    await screen.findByTestId("sandbox-setup-line");
-    act(() => {
-      useStagedSandboxStore.getState().report(SURFACE, {
-        failure: { kind: "settings", code: "SBX-0520" },
-      });
-    });
-    fireEvent.click(await screen.findByTestId("sandbox-setup-stop"));
-    await waitFor(() => {
-      expect(mocks.stopSandbox).toHaveBeenCalledWith("stop");
-    });
-    answerSandboxRows(
-      [
-        sandboxSummaryFixture({
-          id: SANDBOX_ID,
-          hostId: SANDBOX_HOST,
-          state: "suspended",
-        }),
-      ],
-      FRESH,
-    );
-    await waitFor(() => {
-      expect(usePendingSandboxSendStore.getState().sends).toEqual({});
-    });
-
-    expect(document.body.textContent).not.toContain("Stopped ");
-    expect(screen.getByTestId("sandbox-stopped-line").textContent).toBe(
-      "Your message wasn't sent; it's back in the composer.",
-    );
-    expect(useLandingDraftStore.getState().drafts).toEqual([]);
-    expect(createChatCalls()).toEqual([]);
-  });
-
-  it("puts the message back in the task's composer on its sandbox's resume pick when the task closed before a suspend reached the Stop", async () => {
-    await closeTaskThenRowReads("suspended");
-
-    expect(
-      useNewConversationModalStore.getState().draftPatchesByEpicId["epic-1"],
-    ).toMatchObject({
-      content: MESSAGE_CONTENT,
-      returnedSandbox: {
-        target: {
-          kind: "existing",
-          hostId: SANDBOX_HOST,
-          sandboxId: SANDBOX_ID,
-          verb: "resume",
-        },
-      },
-    });
-    expect(useLandingDraftStore.getState().drafts).toEqual([]);
-    expect(document.body.textContent).not.toContain("Stopped ");
-  });
-
-  it("saves the message in drafts on its sandbox when the task closed with its composer occupied before a suspend reached the Stop", async () => {
-    act(() => {
-      useNewConversationModalStore
-        .getState()
-        .setContent("epic-1", OCCUPIED_NEW_CHAT_CONTENT);
-    });
-    await closeTaskThenRowReads("suspended");
-
-    expect(useLandingDraftStore.getState().drafts).toMatchObject([
-      {
-        content: MESSAGE_CONTENT,
-        closed: true,
-        returnedSandbox: {
-          target: {
-            kind: "existing",
-            hostId: SANDBOX_HOST,
-            sandboxId: SANDBOX_ID,
-            verb: "resume",
-          },
-        },
-      },
-    ]);
-  });
-
-  it("saves the message in drafts with no sandbox pick when the task closed before the sandbox stopped", async () => {
-    await closeTaskThenRowReads("stopped");
-
-    expect(useLandingDraftStore.getState().drafts).toMatchObject([
-      { content: MESSAGE_CONTENT, closed: true, returnedSandbox: null },
-    ]);
-  });
-
-  /** Shows Stop on an unclaimed send, then makes writes to `storageKey` throw as a full disk would. */
-  async function stopWithFailingWrite(storageKey: string) {
-    seed({ ...SEEDED, elapsedSeconds: 120 });
-    answerHost(SANDBOX_HOST, CODEX_DOWNLOADING);
-    mount();
-    await screen.findByTestId("sandbox-setup-line");
-    act(() => {
-      useStagedSandboxStore.getState().report(SURFACE, {
-        failure: { kind: "settings", code: "SBX-0520" },
-      });
-    });
-    const stop = await screen.findByTestId("sandbox-setup-stop");
-
-    const originalSetItem = localStorage.setItem.bind(localStorage);
-    const failedWrite = vi
-      .spyOn(Storage.prototype, "setItem")
-      .mockImplementation(function (this: Storage, key, value) {
-        if (key === storageKey) throw new Error("quota exceeded");
-        originalSetItem.call(this, key, value);
-      });
-    const raised: unknown[] = [];
-    const onRejection = (reason: unknown) => raised.push(reason);
-    const onError = (event: ErrorEvent) => {
-      event.preventDefault();
-      raised.push(event.error);
-    };
-    process.on("unhandledRejection", onRejection);
-    window.addEventListener("error", onError);
-    onTestFinished(() => {
-      process.off("unhandledRejection", onRejection);
-      window.removeEventListener("error", onError);
-      failedWrite.mockRestore();
-    });
-    fireEvent.click(stop);
-    await waitFor(() => {
-      expect(failedWrite).toHaveBeenCalledWith(storageKey, expect.any(String));
-    });
-    return { raised };
-  }
-
-  it("sends no stop and no create, keeps the message, and raises nothing when the Stop cannot be written to the send's record", async () => {
-    const { raised } = await stopWithFailingWrite(
-      recordMapStorageKey(persistKey(STORE_KEYS.pendingSandboxSend), SEND_ID),
-    );
-    // One turn of the event loop, where an unhandled rejection surfaces.
-    await new Promise<void>((resolve) => setTimeout(resolve, 0));
-
-    expect(raised).toEqual([]);
-    expect(mocks.stopSandbox).not.toHaveBeenCalled();
-    expect(createChatCalls()).toEqual([]);
-    expect(
-      usePendingSandboxSendStore.getState().sends[SEND_ID]?.stopRequested,
-    ).not.toBe(true);
-    expect(screen.getByTestId("pending-sandbox-message").textContent).toBe(
-      "fix the login bug",
-    );
-  });
-
-  it("still stops and gives the message back, raising nothing, when only the stage's projection of the Stop cannot be written", async () => {
-    const { raised } = await stopWithFailingWrite(
-      recordMapStorageKey(persistKey(STORE_KEYS.stagedSandboxSend), SURFACE),
-    );
-
-    await waitFor(() => {
-      expect(usePendingSandboxSendStore.getState().sends).toEqual({});
-    });
-    await new Promise<void>((resolve) => setTimeout(resolve, 0));
-    expect(raised).toEqual([]);
-    expect(mocks.stopSandbox).toHaveBeenCalledTimes(1);
-    expect(mocks.stopSandbox).toHaveBeenCalledWith("stop");
-    expect(createChatCalls()).toEqual([]);
-  });
-
-  it("keeps the send while the sandbox is still moving, and returns it on the first fresh read at rest", async () => {
-    mocks.verbAnswer = Promise.resolve<SandboxVerbOutcome>({ kind: "moving" });
-    await chooseStop();
-
-    await act(async () => {
-      await mocks.verbAnswer;
-    });
-    expectSendKept();
-
-    answerSandboxRows(
-      [
-        sandboxSummaryFixture({
-          id: SANDBOX_ID,
-          hostId: SANDBOX_HOST,
-          state: "stopped",
-        }),
-      ],
-      FRESH,
-    );
-    await waitFor(() => {
-      expect(usePendingSandboxSendStore.getState().sends).toEqual({});
-    });
-    expect(mocks.stopSandbox).toHaveBeenCalledTimes(1);
-  });
 });
 
 describe("the ready line above an agent whose first message waited", () => {
@@ -10181,7 +7282,7 @@ describe("the ready line above an agent whose first message waited", () => {
     fireEvent.click(screen.getByTestId("sandbox-ready-line-toggle"));
 
     expect(screen.getByTestId("sandbox-ready-line-detail").textContent).toBe(
-      "After 45 minutes with no agent turn, running shell or browser tab on screen, this sandbox suspends. Closing this tab does not stop running work or immediately stop charges; storage is charged while it rests.",
+      "After 45 minutes with no agent turn, running shell or browser tab on screen, this sandbox suspends. Closing this tab does not stop running work or immediately stop charges; storage is charged while it's suspended or stopped.",
     );
   });
 
@@ -10219,134 +7320,6 @@ describe("the ready line above an agent whose first message waited", () => {
     );
   });
 });
-
-/** Every key at any depth of a parsed JSON value. */
-function flattenKeys(value: unknown): Record<string, true> {
-  const keys: Record<string, true> = {};
-  const visit = (node: unknown): void => {
-    if (typeof node !== "object" || node === null) return;
-    for (const [key, child] of Object.entries(node)) {
-      keys[key] = true;
-      visit(child);
-    }
-  };
-  visit(value);
-  return keys;
-}
-
-/** The one send in its own persisted record. */
-function sendOf(json: string): Record<string, unknown> {
-  const parsed: unknown = JSON.parse(json);
-  if (typeof parsed !== "object" || parsed === null) {
-    throw new Error("unexpected persisted shape");
-  }
-  return Object.fromEntries(Object.entries(parsed));
-}
-
-function snapshotRecordMapStorage(
-  name: string,
-): ReadonlyArray<readonly [string, string]> {
-  const prefix = recordMapStoragePrefix(name);
-  const entries: Array<readonly [string, string]> = [];
-  for (let index = 0; index < localStorage.length; index += 1) {
-    const key = localStorage.key(index);
-    if (key === null || (key !== name && !key.startsWith(prefix))) continue;
-    const value = localStorage.getItem(key);
-    if (value !== null) entries.push([key, value]);
-  }
-  return entries;
-}
-
-function restoreRecordMapStorage(
-  name: string,
-  entries: ReadonlyArray<readonly [string, string]>,
-): void {
-  const prefix = recordMapStoragePrefix(name);
-  const keys: string[] = [];
-  for (let index = 0; index < localStorage.length; index += 1) {
-    const key = localStorage.key(index);
-    if (key === name || (key !== null && key.startsWith(prefix)))
-      keys.push(key);
-  }
-  for (const key of keys) localStorage.removeItem(key);
-  for (const [key, value] of entries) localStorage.setItem(key, value);
-}
-
-/** A foreign window holds the send's lock: ours queues and its callback never runs. */
-function queueBehindForeignHolder(): () => void {
-  const original = Object.getOwnPropertyDescriptor(navigator, "locks");
-  Object.defineProperty(navigator, "locks", {
-    configurable: true,
-    value: {
-      request: (
-        _name: string,
-        options: LockOptions,
-        _callback: () => Promise<void>,
-      ) =>
-        new Promise<void>((_resolve, reject) => {
-          options.signal?.addEventListener("abort", () =>
-            reject(new DOMException("Aborted", "AbortError")),
-          );
-        }),
-    },
-  });
-  return () => {
-    if (original === undefined) {
-      Reflect.deleteProperty(navigator, "locks");
-    } else {
-      Object.defineProperty(navigator, "locks", original);
-    }
-  };
-}
-
-/** The Drafts actions navigate; where this window's route goes is not under test. */
-const navigateNowhere: UseNavigateResult<string> = () => Promise.resolve();
-
-/** Rehydrates the task's new-agent drafts the way a new window does. */
-async function reloadTaskDrafts(): Promise<void> {
-  const key = persistKey(STORE_KEYS.newConversationDraft);
-  const saved = localStorage.getItem(key);
-  useNewConversationModalStore.setState({ draftPatchesByEpicId: {} });
-  if (saved === null) localStorage.removeItem(key);
-  else localStorage.setItem(key, saved);
-  await useNewConversationModalStore.persist.rehydrate();
-}
-
-/** The task composer's Send: it hands its stage over, as the modal does. */
-function sendFromTaskComposer(surfaceKey: string): string {
-  const sent: { id: string | null } = { id: null };
-  act(() => {
-    sent.id = handPendingSandboxSend({
-      fromSurfaceKey: surfaceKey,
-      epicId: "epic-1",
-      request: { kind: "chat", parentId: null, placement: null },
-      content: MESSAGE_CONTENT,
-      text: "fix the login bug",
-      settings: PICKED_SETTINGS,
-      epicConfirmed: true,
-      now: Date.now(),
-    });
-  });
-  if (sent.id === null) throw new Error("expected the Send to hand over");
-  return sent.id;
-}
-
-/** Rehydrates the two pending-send stores the way a new window does. */
-async function reloadPendingSandboxStores(): Promise<void> {
-  const staged = snapshotRecordMapStorage(
-    persistKey(STORE_KEYS.stagedSandboxSend),
-  );
-  const sends = snapshotRecordMapStorage(
-    persistKey(STORE_KEYS.pendingSandboxSend),
-  );
-  cleanup();
-  useStagedSandboxStore.setState({ bySurface: {} });
-  usePendingSandboxSendStore.setState({ sends: {} });
-  restoreRecordMapStorage(persistKey(STORE_KEYS.stagedSandboxSend), staged);
-  restoreRecordMapStorage(persistKey(STORE_KEYS.pendingSandboxSend), sends);
-  await useStagedSandboxStore.persist.rehydrate();
-  await usePendingSandboxSendStore.persist.rehydrate();
-}
 
 describe("a second Retry request that reaches an owner which is not at a Retry point", () => {
   let restoreLocks: () => void;
@@ -10589,15 +7562,29 @@ describe("an owner that takes up each kind of retry request", () => {
     restoreLocks();
   });
 
+  /**
+   * Records every acknowledgement the stage carries. A wake or a readiness
+   * Retry can deliver within the same turn, and delivery clears the stage, so
+   * a later read of `retryHandledId` can find nothing however fast it looks.
+   */
   async function requestAndMount(
     action: "retry-stage" | "retry-creation" | "keep-waiting",
-  ): Promise<string> {
+  ): Promise<{ readonly id: string; readonly handled: readonly string[] }> {
+    const handled: string[] = [];
+    onTestFinished(
+      useStagedSandboxStore.subscribe((state) => {
+        const handledId = state.bySurface[SURFACE]?.retryHandledId;
+        if (handledId !== undefined && handled.at(-1) !== handledId)
+          handled.push(handledId);
+      }),
+    );
     const id = await useStagedSandboxStore
       .getState()
       .requestRetry(SURFACE, "user-1", action);
     if (id === null) throw new Error("the request was not recorded");
     mount();
-    return id;
+    await settleAsyncWork();
+    return { id, handled };
   }
 
   it("runs a wake Retry as one wake of the same sandbox, acknowledges it and settles to one delivery", async () => {
@@ -10615,11 +7602,9 @@ describe("an owner that takes up each kind of retry request", () => {
         }),
       ]),
     );
-    const id = await requestAndMount("retry-stage");
+    const { id, handled } = await requestAndMount("retry-stage");
 
-    await waitFor(() => {
-      expect(readStagedSandbox(SURFACE)?.retryHandledId).toBe(id);
-    });
+    expect(handled).toEqual([id]);
     // The wake's run ends in the ordinary delivery; nothing outlives the case.
     await waitForCreateChats(1);
     await waitFor(() => {
@@ -10634,11 +7619,9 @@ describe("an owner that takes up each kind of retry request", () => {
     useStagedSandboxStore.getState().report(SURFACE, {
       failure: { kind: "unverified" },
     });
-    const id = await requestAndMount("retry-stage");
+    const { id, handled } = await requestAndMount("retry-stage");
 
-    await waitFor(() => {
-      expect(readStagedSandbox(SURFACE)?.retryHandledId).toBe(id);
-    });
+    expect(handled).toEqual([id]);
     expect(mocks.createSandbox).not.toHaveBeenCalled();
     expect(mocks.wake).not.toHaveBeenCalled();
     expect(usePendingSandboxSendStore.getState().sends[SEND_ID]).toBeDefined();
@@ -10656,11 +7639,9 @@ describe("an owner that takes up each kind of retry request", () => {
       failure: { kind: "failed", code: "create", step: "creating" },
     });
     const before = readStagedSandbox(SURFACE)?.clientRequestId;
-    const id = await requestAndMount("retry-creation");
+    const { id, handled } = await requestAndMount("retry-creation");
 
-    await waitFor(() => {
-      expect(readStagedSandbox(SURFACE)?.retryHandledId).toBe(id);
-    });
+    expect(handled).toEqual([id]);
     await waitFor(() => {
       expect(mocks.createSandbox).toHaveBeenCalledTimes(1);
     });
@@ -10683,11 +7664,9 @@ describe("an owner that takes up each kind of retry request", () => {
       failure: { kind: "timed-out", step: "creating" },
     });
     const before = readStagedSandbox(SURFACE)?.clientRequestId;
-    const id = await requestAndMount("keep-waiting");
+    const { id, handled } = await requestAndMount("keep-waiting");
 
-    await waitFor(() => {
-      expect(readStagedSandbox(SURFACE)?.retryHandledId).toBe(id);
-    });
+    expect(handled).toEqual([id]);
     await waitFor(() => {
       expect(mocks.createSandbox).toHaveBeenCalledTimes(1);
     });
@@ -11277,37 +8256,3 @@ describe("a task with no chat whose message came back to its own composer on a s
     );
   });
 });
-
-const noopStreamClientFactory: EpicStreamClientFactory = () => ({
-  applyUpdate: () => undefined,
-  awareness: () => undefined,
-  applyArtifactRoomUpdate: () => undefined,
-  artifactRoomAwareness: () => undefined,
-  retryMigration: () => undefined,
-  close: () => undefined,
-});
-
-/** The task's real open-epic store, its snapshot loaded or not, holding `chatIds`. */
-function openTask(
-  snapshotLoaded: boolean,
-  chatIds: readonly string[],
-): OpenEpicStoreHandle {
-  const handle = __getOpenEpicRegistryForTests().acquire("epic-1", () =>
-    openStoreForTest({
-      epicId: "epic-1",
-      userId: null,
-      factories: {
-        streamClientFactory: noopStreamClientFactory,
-        laneSelection: null,
-      },
-      writeCommand: null,
-    }),
-  );
-  act(() => {
-    handle.store.setState({
-      snapshotLoaded,
-      chats: { allIds: [...chatIds], byId: {} },
-    });
-  });
-  return handle;
-}

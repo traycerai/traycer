@@ -119,12 +119,12 @@ const LATEST: PickerScenario = {
 afterEach(cleanup);
 
 describe("<HtmlArtifactVersionPicker />", () => {
-  it("names the latest version by its number on the button", () => {
+  it("says Latest on the button while the live version is showing", () => {
     renderPicker(LATEST);
 
     expect(
       textOf(screen.getByRole("button", { name: /HTML version history/ })),
-    ).toContain("Latest · v3");
+    ).toBe("Latest");
   });
 
   it("lists the live version once, as the newest numbered row, then the older versions", async () => {
@@ -146,6 +146,27 @@ describe("<HtmlArtifactVersionPicker />", () => {
       expect(textOf(row)).toMatch(TIME_OF_DAY);
     }
     expect(rows[0].getAttribute("aria-checked")).toBe("true");
+  });
+
+  it("does not list the current version as its own row when that version is selected", async () => {
+    const { user } = renderPicker({
+      selected: V3,
+      selectedVersionNumber: 3,
+      selectionAvailable: true,
+      currentVersionNumber: 3,
+    });
+
+    await user.click(
+      screen.getByRole("button", { name: /HTML version history/ }),
+    );
+
+    const rows = screen.getAllByRole("menuitemradio");
+    expect(rows.filter((row) => /Latest/.test(textOf(row)))).toHaveLength(1);
+    expect(rows.map((row) => /Version (\d)/.exec(textOf(row))?.[1])).toEqual([
+      "3",
+      "2",
+      "1",
+    ]);
   });
 
   it("pins the chosen version with its number, and returns to Latest from the live row", async () => {
@@ -177,7 +198,7 @@ describe("<HtmlArtifactVersionPicker />", () => {
     );
   });
 
-  it("shows a pinned version as its number, marked selected in the menu", async () => {
+  it("shows a pinned version as its number out of the latest, marked selected in the menu", async () => {
     const { user } = renderPicker({
       selected: V2,
       selectedVersionNumber: 2,
@@ -186,8 +207,7 @@ describe("<HtmlArtifactVersionPicker />", () => {
     });
 
     const button = screen.getByRole("button", { name: /HTML version history/ });
-    expect(textOf(button)).toContain("Version 2");
-    expect(textOf(button)).not.toMatch(TIME_OF_DAY);
+    expect(textOf(button)).toBe("v2 of 3");
 
     await user.click(button);
 

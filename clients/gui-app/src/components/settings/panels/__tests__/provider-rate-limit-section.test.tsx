@@ -281,7 +281,7 @@ describe("ProviderRateLimitForProvider", () => {
     expect(screen.queryByText("Usage limits")).toBeNull();
   });
 
-  it("names this computer in the heading when the page carries no host name", () => {
+  it("omits a host clause when the page carries no host name", () => {
     render(
       <EmbeddedProviderRateLimitForProvider
         providerId="codex"
@@ -291,7 +291,8 @@ describe("ProviderRateLimitForProvider", () => {
       />,
     );
 
-    expect(screen.getByText(/as reported by this computer/)).toBeTruthy();
+    expect(screen.getByText("Rate limits")).toBeTruthy();
+    expect(screen.queryByText(/as reported by/)).toBeNull();
   });
 
   it("routes turn-completion refreshes through the current profile id", () => {

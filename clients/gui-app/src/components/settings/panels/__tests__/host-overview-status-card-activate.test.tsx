@@ -76,18 +76,20 @@ describe("HostOverviewHeaderActions Activate gate", () => {
     expect(screen.queryByTestId("host-active-in-window")).toBeNull();
   });
 
-  it("still says Active inline when the window is already on the row, whatever onMakeActive is", () => {
+  it("shows Active in More when the window is already on the row, whatever onMakeActive is", async () => {
     renderActions({
       isActive: true,
       onMakeActive: null,
       activateInMenu: false,
       teamOwned: false,
     });
+    await openMenu();
 
     expect(screen.getByTestId("host-active-in-window").textContent).toContain(
       "Active",
     );
     expect(screen.queryByTestId("host-make-active")).toBeNull();
+    expect(screen.queryByRole("button", { name: "Activate" })).toBeNull();
   });
 
   it("puts Activate first in the phone menu when the row can be activated", async () => {
@@ -151,9 +153,11 @@ describe("HostOverviewHeaderActions Activate gate", () => {
       throw new Error("expected a tooltip trigger around the button");
     fireEvent.focus(trigger);
     expect(screen.getByRole("tooltip").textContent).toBe(
-      "Team hosts can't be made active.",
+      "A team's machine can't be the app's default.",
     );
-    expect(TEAM_HOST_ACTIVATE_REASON).toBe("Team hosts can't be made active.");
+    expect(TEAM_HOST_ACTIVATE_REASON).toBe(
+      "A team's machine can't be the app's default.",
+    );
 
     fireEvent.click(button);
     expect(onMakeActive).not.toHaveBeenCalled();
@@ -171,7 +175,9 @@ describe("HostOverviewHeaderActions Activate gate", () => {
 
     const item = screen.getByTestId("host-make-active");
     expect(item.getAttribute("aria-disabled")).toBe("true");
-    expect(item.textContent).toContain("Team hosts can't be made active.");
+    expect(item.textContent).toContain(
+      "A team's machine can't be the app's default.",
+    );
 
     fireEvent.click(item);
     expect(onMakeActive).not.toHaveBeenCalled();

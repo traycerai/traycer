@@ -66,7 +66,9 @@ import type {
   mintSlackAppInstallUrlViaHttp,
   readSlackAppViaHttp,
   registerSlackAppViaHttp,
+  setSlackAppDmsViaHttp,
 } from "@traycer-clients/shared/host-client/slack-app";
+import type { mintTeamHostInstallTokenViaHttp } from "@traycer-clients/shared/host-client/team-host";
 import type {
   decideSecretRequestViaHttp,
   fetchEnvironmentProvidersViaHttp,
@@ -88,7 +90,10 @@ import {
   userBearerClaims,
 } from "../../auth/__tests__/jws-fixture";
 
-const featureSettings = vi.hoisted(() => ({ agentRoles: false }));
+const featureSettings = vi.hoisted(() => ({
+  agentRoles: false,
+  agentFeedback: true,
+}));
 /** The control-plane call the `runSandboxVerb` handler makes, observed. */
 const runSandboxVerbViaHttpMock = vi.hoisted(() =>
   vi.fn<typeof runSandboxVerbViaHttp>(async () => ({
@@ -170,6 +175,18 @@ const disconnectSlackAppViaHttpMock = vi.hoisted(() =>
     detail: "unscripted",
   })),
 );
+const setSlackAppDmsViaHttpMock = vi.hoisted(() =>
+  vi.fn<typeof setSlackAppDmsViaHttp>(async () => ({
+    kind: "network-error",
+    detail: "unscripted",
+  })),
+);
+const mintTeamHostInstallTokenViaHttpMock = vi.hoisted(() =>
+  vi.fn<typeof mintTeamHostInstallTokenViaHttp>(async () => ({
+    kind: "network-error",
+    detail: "unscripted",
+  })),
+);
 /** The secrets broker's grants read and decide the two handlers make, observed. */
 const fetchSandboxGrantsViaHttpMock = vi.hoisted(() =>
   vi.fn<typeof fetchSandboxGrantsViaHttp>(async () => ({
@@ -222,6 +239,10 @@ vi.mock("@traycer-clients/shared/host-client/slack-app", () => ({
   registerSlackAppViaHttp: registerSlackAppViaHttpMock,
   mintSlackAppInstallUrlViaHttp: mintSlackAppInstallUrlViaHttpMock,
   disconnectSlackAppViaHttp: disconnectSlackAppViaHttpMock,
+  setSlackAppDmsViaHttp: setSlackAppDmsViaHttpMock,
+}));
+vi.mock("@traycer-clients/shared/host-client/team-host", () => ({
+  mintTeamHostInstallTokenViaHttp: mintTeamHostInstallTokenViaHttpMock,
 }));
 vi.mock("@traycer-clients/shared/host-client/sandbox-secrets", () => ({
   fetchSandboxGrantsViaHttp: fetchSandboxGrantsViaHttpMock,
@@ -238,17 +259,30 @@ const appEventState = vi.hoisted(() => ({
   listeners: new Map<string, Set<(...args: unknown[]) => void>>(),
 }));
 const readFeatureSettingsMock = vi.hoisted(() =>
-  vi.fn(async () => ({ agentRoles: featureSettings.agentRoles })),
+  vi.fn(async () => ({
+    agentRoles: featureSettings.agentRoles,
+    artifactVersioning: false,
+  })),
+);
+const readAgentFeedbackConfigMock = vi.hoisted(() =>
+  vi.fn(() => ({ enabled: featureSettings.agentFeedback })),
 );
 const setAgentRolesEnabledMock = vi.hoisted(() =>
   vi.fn(async (enabled: boolean) => {
     featureSettings.agentRoles = enabled;
   }),
 );
+const setAgentFeedbackEnabledMock = vi.hoisted(() =>
+  vi.fn(async (enabled: boolean) => {
+    featureSettings.agentFeedback = enabled;
+  }),
+);
 vi.mock("@traycer/protocol/config/store", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@traycer/protocol/config/store")>()),
   readFeatureSettings: readFeatureSettingsMock,
+  readAgentFeedbackConfigSync: readAgentFeedbackConfigMock,
   setAgentRolesEnabled: setAgentRolesEnabledMock,
+  setAgentFeedbackEnabled: setAgentFeedbackEnabledMock,
 }));
 
 /**
@@ -734,8 +768,10 @@ beforeEach(() => {
   sentMessages.length = 0;
   vi.unstubAllGlobals();
   featureSettings.agentRoles = false;
+  featureSettings.agentFeedback = true;
   readFeatureSettingsMock.mockClear();
   setAgentRolesEnabledMock.mockClear();
+  setAgentFeedbackEnabledMock.mockClear();
 });
 
 afterEach(() => {
@@ -771,6 +807,7 @@ describe("RunnerIpcBridge", () => {
       const channels = Array.from(ipcMainState.handlers.keys()).sort();
       expect(channels).toEqual(
         [
+          RunnerHostInvoke.readSoundtrackSet,
           RunnerHostInvoke.sandboxArtifactRegister,
           RunnerHostInvoke.sandboxArtifactUnregister,
           RunnerHostInvoke.sandboxArtifactRespond,
@@ -809,7 +846,6 @@ describe("RunnerIpcBridge", () => {
           RunnerHostInvoke.getVoiceAvailability,
           RunnerHostInvoke.mintVoiceSession,
           RunnerHostInvoke.endVoiceSession,
-          RunnerHostInvoke.routeVoiceUtterance,
           RunnerHostInvoke.setVoiceSessionLive,
           RunnerHostInvoke.setVoiceSessionIndicator,
           // A bot's Slack app, on traycer-server too.
@@ -818,6 +854,9 @@ describe("RunnerIpcBridge", () => {
           RunnerHostInvoke.registerSlackApp,
           RunnerHostInvoke.mintSlackAppInstallUrl,
           RunnerHostInvoke.disconnectSlackApp,
+          RunnerHostInvoke.setSlackAppDms,
+          // A team environment's bot-host install token, on traycer-server.
+          RunnerHostInvoke.mintTeamHostInstallToken,
           // The secrets broker, on authn.
           RunnerHostInvoke.getSandboxGrants,
           RunnerHostInvoke.getTeamEnvironment,
@@ -1018,6 +1057,7 @@ describe("RunnerIpcBridge", () => {
           RunnerHostInvoke.logLevelsSet,
           RunnerHostInvoke.featureSettingsGet,
           RunnerHostInvoke.agentRolesEnabledSet,
+          RunnerHostInvoke.agentFeedbackEnabledSet,
           RunnerHostInvoke.fontsList,
           RunnerHostInvoke.zoomGet,
           RunnerHostInvoke.zoomSet,
@@ -1103,18 +1143,54 @@ describe("RunnerIpcBridge", () => {
 
     await expect(getHandler(bareEvent())).resolves.toEqual({
       agentRoles: false,
+      agentFeedback: true,
     });
     await expect(setHandler(bareEvent(), true)).resolves.toEqual({
       agentRoles: true,
+      agentFeedback: true,
     });
     expect(setAgentRolesEnabledMock).toHaveBeenCalledWith(true);
     await expect(getHandler(bareEvent())).resolves.toEqual({
       agentRoles: true,
+      agentFeedback: true,
     });
     await expect(setHandler(bareEvent(), "yes")).rejects.toThrow(
       "featureSettings:agentRoles:set requires a boolean",
     );
     expect(setAgentRolesEnabledMock).toHaveBeenCalledTimes(1);
+    bridge.dispose();
+  });
+
+  it("updates agent feedback through the feature-settings IPC channel", async () => {
+    const mod = await import("../register-runner-ipc");
+    const bridge = new mod.RunnerIpcBridge({
+      host: new FakeHost(),
+      hostController: new FakeHostController(),
+      authnBaseUrl: "http://localhost:5005",
+      authRedirectUri: null,
+      tray: null,
+      zoomController: undefined,
+      authTokenStore: undefined,
+      window: buildWindow(),
+    });
+    bridge.install();
+
+    const setHandler = ipcMainState.handlers.get(
+      RunnerHostInvoke.agentFeedbackEnabledSet,
+    );
+    if (setHandler === undefined) {
+      throw new Error("agent feedback IPC handler was not registered");
+    }
+
+    await expect(setHandler(bareEvent(), false)).resolves.toEqual({
+      agentRoles: false,
+      agentFeedback: false,
+    });
+    expect(setAgentFeedbackEnabledMock).toHaveBeenCalledWith(false);
+    await expect(setHandler(bareEvent(), "no")).rejects.toThrow(
+      "featureSettings:agentFeedback:set requires a boolean",
+    );
+    expect(setAgentFeedbackEnabledMock).toHaveBeenCalledTimes(1);
     bridge.dispose();
   });
 
@@ -1280,6 +1356,16 @@ describe("RunnerIpcBridge", () => {
         disconnectSlackAppViaHttpMock,
         ["bot-1"],
       ],
+      [
+        RunnerHostInvoke.setSlackAppDms,
+        setSlackAppDmsViaHttpMock,
+        [{ botId: "bot-1", dmsEnabled: false }],
+      ],
+      [
+        RunnerHostInvoke.mintTeamHostInstallToken,
+        mintTeamHostInstallTokenViaHttpMock,
+        ["env-1"],
+      ],
     ];
     for (const [channel, mock, args] of calls) {
       const handler = ipcMainState.handlers.get(channel);
@@ -1292,6 +1378,40 @@ describe("RunnerIpcBridge", () => {
         IAP_PROXY_TOKEN,
       ]);
     }
+    bridge.dispose();
+  });
+
+  it("forwards the parsed DM setting request and rejects one without its boolean", async () => {
+    const mod = await import("../register-runner-ipc");
+    const bridge = new mod.RunnerIpcBridge({
+      host: new FakeHost(),
+      hostController: new FakeHostController(),
+      authnBaseUrl: "http://localhost:5005",
+      authRedirectUri: null,
+      tray: null,
+      zoomController: undefined,
+      authTokenStore: undefined,
+      window: buildWindow(),
+    });
+    bridge.install();
+    const handler = ipcMainState.handlers.get(RunnerHostInvoke.setSlackAppDms);
+    if (handler === undefined)
+      throw new Error("setSlackAppDms handler missing");
+
+    await handler(bareEvent(), "bearer-1", {
+      botId: "bot-1",
+      dmsEnabled: false,
+    });
+    expect(setSlackAppDmsViaHttpMock).toHaveBeenCalledWith(
+      config.serverBaseUrl,
+      "bearer-1",
+      IAP_PROXY_TOKEN,
+      { botId: "bot-1", dmsEnabled: false },
+    );
+    await expect(
+      handler(bareEvent(), "bearer-1", { botId: "bot-1" }),
+    ).rejects.toThrow();
+    expect(setSlackAppDmsViaHttpMock).toHaveBeenCalledTimes(1);
     bridge.dispose();
   });
 

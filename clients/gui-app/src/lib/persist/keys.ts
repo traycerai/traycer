@@ -459,6 +459,14 @@ export const PERSIST_STORES = [
     leaf: "feature-announcements",
     kind: "static",
   },
+  // What this install has done with the "share Traycer on X" nudge: its
+  // cooldown, showings and opt-out (`share-on-x-nudge-store.ts`). Machine-
+  // local for the same reason as the announcements above.
+  {
+    camelName: "shareOnXNudge",
+    leaf: "share-on-x-nudge",
+    kind: "static",
+  },
   // The tasks whose mirror line each person has seen, keyed by viewer and
   // epic inside the record (`composer-mirror-line-seen-store.ts`).
   {
@@ -478,6 +486,14 @@ export const PERSIST_STORES = [
   {
     camelName: "sandboxShapeMemory",
     leaf: "sandbox-shape-memory",
+    kind: "static",
+  },
+  // The last verified picture and name of each account signed in here, for a
+  // restored session the credentials file cannot name
+  // (`verified-profile-cache-store.ts`).
+  {
+    camelName: "verifiedProfileCache",
+    leaf: "verified-profile-cache",
     kind: "static",
   },
   // The teams whose "Continue on a <team> host" caution each person has
@@ -511,6 +527,13 @@ export const PERSIST_STORES = [
     leaf: "bot-column-layout",
     kind: "static",
   },
+  // The last searches of the Tracy surface, one list per device
+  // (`bot-search-store.ts`).
+  {
+    camelName: "botSearchRecents",
+    leaf: "bot-search-recents",
+    kind: "static",
+  },
 
   // ── Non-zustand keys ─────────────────────────────────────────────────────
   // `last-route:<windowId>` — per-window router history (persistent-history.ts).
@@ -541,6 +564,12 @@ export const PERSIST_STORES = [
   {
     camelName: "liveChatCompletionAcknowledgementsChannel",
     leaf: "live-chat-completion-acknowledgements:v1",
+    kind: "channel",
+  },
+  // Each chime that starts, for a window other than the one playing it.
+  {
+    camelName: "notificationChimesChannel",
+    leaf: "notification-chimes:v1",
     kind: "channel",
   },
   // One monotonic key per displayed app-local notification version. Separate

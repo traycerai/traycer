@@ -18,6 +18,28 @@ function expectHiddenFromView(node: Element | null): void {
   expect(node === null || isConcealed(node)).toBe(true);
 }
 
+const HOST_SCOPE_WRAPPING_ACTION_TOKENS = [
+  "h-auto",
+  "max-w-full",
+  "min-w-0",
+  "shrink",
+  "whitespace-normal",
+  "wrap-anywhere",
+] as const;
+
+function classTokens(element: Element): ReadonlySet<string> {
+  return new Set(
+    element.className.split(/\s+/).filter((token) => token.length > 0),
+  );
+}
+
+function expectClassTokens(element: Element, tokens: readonly string[]): void {
+  const present = classTokens(element);
+  for (const token of tokens) {
+    expect(present.has(token), token).toBe(true);
+  }
+}
+
 /**
  * The gate is where "no hosts in hand" is turned into a sentence a person
  * reads, and the two ways of having none are not the same claim:
@@ -67,8 +89,13 @@ describe("<HostScopeGate /> empty and failed states", () => {
 
     const notice = screen.getByTestId("host-scope-unreachable");
     expect(notice.textContent).toContain("Can't reach Office Linux from here");
+    expect(notice.textContent).toContain(
+      "This host is in your account, but this app has no connection to it right now. Its status above is from your account, not a live link.",
+    );
+    expectClassTokens(notice, ["w-full", "min-w-0"]);
     expect(notice.textContent).not.toContain("plan");
     expect(screen.queryByRole("button", { name: "Upgrade plan" })).toBeNull();
+    expect(screen.queryByTestId("host-scope-return-to-active")).toBeNull();
     expectHiddenFromView(screen.queryByTestId("body"));
   });
 
@@ -152,7 +179,14 @@ describe("<HostScopeGate /> empty and failed states", () => {
       </HostScopeGate>,
     );
 
-    expect(screen.getByTestId("host-scope-return-to-active")).not.toBeNull();
+    const back = screen.getByTestId("host-scope-return-to-active");
+    expect(back.textContent).toBe("Back to This Mac");
+    expectClassTokens(back, HOST_SCOPE_WRAPPING_ACTION_TOKENS);
+    const notice = screen.getByTestId("host-scope-unreachable");
+    expectClassTokens(notice, ["w-full", "min-w-0"]);
+    expect(notice.textContent).toContain(
+      "This host is in your account, but this app has no connection to it right now. Its status above is from your account, not a live link.",
+    );
   });
 
   it("says the list failed, and offers a retry, rather than claiming an empty account", () => {
@@ -216,8 +250,53 @@ describe("<HostScopeGate /> empty and failed states", () => {
       </HostScopeGate>,
     );
 
-    expect(screen.getByTestId("host-scope-vanished")).not.toBeNull();
+    const notice = screen.getByTestId("host-scope-vanished");
     expect(screen.queryByTestId("host-scope-lists-failed")).toBeNull();
+    const back = screen.getByRole("button", {
+      name: "Back to your active host",
+    });
+    expect(back.getAttribute("data-testid")).toBe(
+      "host-scope-return-to-active",
+    );
+    expectClassTokens(back, HOST_SCOPE_WRAPPING_ACTION_TOKENS);
+    expectClassTokens(notice, ["w-full", "min-w-0"]);
+    expect(notice.textContent).toContain(
+      "It was removed from your account, or signed out. Nothing here can act on it.",
+    );
+  });
+
+  it("wraps Forget when the vanished host is one this screen still remembers", () => {
+    const forget = vi.fn();
+    render(
+      <HostScopeGate
+        scope={hostScopeFixture({
+          host: null,
+          status: "vanished",
+          vanishedHostId: "host-gone",
+          vanishedSelection: { name: "Old workstation", forget },
+        })}
+        skeleton={<div data-testid="skeleton" />}
+      >
+        <div data-testid="body" />
+      </HostScopeGate>,
+    );
+
+    const notice = screen.getByTestId("host-scope-vanished");
+    expect(notice.textContent).toContain("Old workstation is no longer here.");
+    expect(notice.textContent).not.toContain(
+      "It was removed from your account, or signed out.",
+    );
+    expectClassTokens(notice, ["w-full", "min-w-0"]);
+    const forgetButton = screen.getByRole("button", {
+      name: "Forget Old workstation",
+    });
+    expect(forgetButton.getAttribute("data-testid")).toBe(
+      "host-scope-forget-vanished",
+    );
+    expectClassTokens(forgetButton, HOST_SCOPE_WRAPPING_ACTION_TOKENS);
+    fireEvent.click(forgetButton);
+    expect(forget).toHaveBeenCalledTimes(1);
+    expect(screen.queryByTestId("body")).toBeNull();
   });
 });
 

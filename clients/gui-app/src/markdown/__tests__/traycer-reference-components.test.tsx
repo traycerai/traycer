@@ -238,21 +238,24 @@ describe("legacy traycer-* reference components", () => {
     expect(resolveTargetTabForEpic).not.toHaveBeenCalled();
     // A chip click is a SINGLE gesture naming the epic, de-duped, carrying the
     // click's modifier triple; preview-vs-permanent is the resolver's call.
-    expect(openTile).toHaveBeenCalledWith({
-      node: {
-        id: "spec-1",
-        instanceId: "inst-spec",
-        type: "spec",
-        name: "Spec One",
-        hostId: "active-host-1",
+    expect(openTile).toHaveBeenCalledWith(
+      {
+        node: {
+          id: "spec-1",
+          instanceId: "inst-spec",
+          type: "spec",
+          name: "Spec One",
+          hostId: "active-host-1",
+        },
+        target: { epicId: OPEN_EPIC_ID },
+        gesture: "single",
+        modifiers: { shift: false, alt: false, middle: false },
+        placement: null,
+        dedupe: true,
+        source: "direct_ui",
       },
-      target: { epicId: OPEN_EPIC_ID },
-      gesture: "single",
-      modifiers: { shift: false, alt: false, middle: false },
-      placement: null,
-      dedupe: true,
-      source: "direct_ui",
-    });
+      "user",
+    );
     expect(navigateToTabIntent).not.toHaveBeenCalled();
   });
 
@@ -265,21 +268,24 @@ describe("legacy traycer-* reference components", () => {
 
     clickRef("Chat One");
 
-    expect(openTile).toHaveBeenCalledWith({
-      node: {
-        id: "chat-1",
-        instanceId: "inst-chat",
-        type: "chat",
-        name: "Chat One",
-        hostId: "active-host-1",
+    expect(openTile).toHaveBeenCalledWith(
+      {
+        node: {
+          id: "chat-1",
+          instanceId: "inst-chat",
+          type: "chat",
+          name: "Chat One",
+          hostId: "active-host-1",
+        },
+        target: { epicId: OPEN_EPIC_ID },
+        gesture: "single",
+        modifiers: { shift: false, alt: false, middle: false },
+        placement: null,
+        dedupe: true,
+        source: "direct_ui",
       },
-      target: { epicId: OPEN_EPIC_ID },
-      gesture: "single",
-      modifiers: { shift: false, alt: false, middle: false },
-      placement: null,
-      dedupe: true,
-      source: "direct_ui",
-    });
+      "user",
+    );
     expect(navigateToTabIntent).not.toHaveBeenCalled();
   });
 
@@ -363,7 +369,7 @@ describe("legacy traycer-* reference components", () => {
     expect(screen.getByText("No Epic")).toBeTruthy();
   });
 
-  it("renders plain text when there is no open-epic session context", () => {
+  it("navigates to the epic and focuses the node when there is no open-epic session context", () => {
     mockHandle = null;
     render(
       <TraycerSpecReference data-epic-id={OPEN_EPIC_ID} data-spec-id="spec-1">
@@ -371,8 +377,25 @@ describe("legacy traycer-* reference components", () => {
       </TraycerSpecReference>,
     );
 
+    clickRef("Detached Spec");
+
+    expect(openTile).not.toHaveBeenCalled();
+    expect(navigateToTabIntent).toHaveBeenCalledTimes(1);
+    const arg = openOrFocusEpicIntent.mock.calls[0][0];
+    expect(arg.epicId).toBe(OPEN_EPIC_ID);
+    expect(arg.focus).toMatchObject({ focusArtifactId: "spec-1" });
+  });
+
+  it("renders plain text with no open-epic session context when the node id is missing", () => {
+    mockHandle = null;
+    render(
+      <TraycerSpecReference data-epic-id={OPEN_EPIC_ID}>
+        Detached Bare
+      </TraycerSpecReference>,
+    );
+
     expect(screen.queryByRole("button")).toBeNull();
-    expect(screen.getByText("Detached Spec")).toBeTruthy();
+    expect(screen.getByText("Detached Bare")).toBeTruthy();
   });
 
   it("renders plain text when a same-epic node does not resolve", () => {
@@ -565,6 +588,7 @@ describe("DEFAULT_COMPONENTS wires the legacy reference tags", () => {
         target: { epicId: OPEN_EPIC_ID },
         gesture: "single",
       }),
+      "user",
     );
   });
 });

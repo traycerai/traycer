@@ -385,6 +385,12 @@ describe("<NewTerminalPicker />", () => {
     openPicker();
 
     expect(screen.getByTestId("new-terminal-picker-popover")).toBeDefined();
+    expect(screen.getByText("Open a terminal")).toBeDefined();
+    expect(
+      screen.getByText(
+        "The terminal lives on the machine you pick, for its lifetime.",
+      ),
+    ).toBeDefined();
     expect(
       screen.getByTestId("host-workspace-selector-host-section"),
     ).toBeDefined();

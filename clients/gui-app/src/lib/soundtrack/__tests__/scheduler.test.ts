@@ -4,24 +4,15 @@ import {
   type RandomSource,
   type ScheduledPlay,
 } from "../scheduler";
-import {
-  AQUILO_1,
-  type Layer,
-  type LayerProperties,
-  type Range,
-  type State,
-  type VariableTrack,
+import type {
+  Layer,
+  LayerProperties,
+  Range,
+  State,
+  VariableTrack,
 } from "../variable-sound";
-
-function mulberry32(seed: number): RandomSource {
-  let state = seed;
-  return () => {
-    state = (state + 0x6d2b79f5) | 0;
-    let t = Math.imul(state ^ (state >>> 15), 1 | state);
-    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
-    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
-  };
-}
+import { AQUILO_1 } from "./aquilo-1";
+import { mulberry32 } from "./fakes";
 
 const FIXED_ZERO: Range = [0, 0];
 
@@ -30,10 +21,12 @@ function singleSample(
   pauseBetweenRepetitions: Range,
 ): LayerProperties {
   return {
+    enabled: null,
     startPause,
     sequenceLength: [1, 1],
     pauseBetweenSamples: FIXED_ZERO,
     pauseBetweenRepetitions,
+    playsPerRun: null,
   };
 }
 
@@ -45,8 +38,10 @@ function layer(
   return {
     name: `L${String(variants)}x${String(sublayers)}`,
     variants,
+    role: null,
     sublayers,
     sublayerStartingOffset: offset,
+    pan: null,
   };
 }
 
@@ -72,6 +67,9 @@ function buildTrack(shape: TrackShape): VariableTrack {
         numberOfEnabledLayers: shape.enabledCount,
       },
     ],
+    intro: null,
+    outro: null,
+    phases: [],
   };
 }
 
@@ -204,6 +202,9 @@ function trackWithStates(
     alignmentSeconds: 1,
     layers,
     states,
+    intro: null,
+    outro: null,
+    phases: [],
   };
 }
 
@@ -428,17 +429,21 @@ describe("TrackScheduler", () => {
       for (let seed = 1; seed <= 10; seed += 1) {
         const placed = runToEnd(makeScheduler(track, seed, 1), track, () => 3);
         track.layers.forEach((trackLayer, layerIndex) => {
+          const { variants } = trackLayer;
+          if (variants === undefined) {
+            throw new Error("aquilo-1 has pooled layers only");
+          }
           const ofLayer = placed.filter(
             ({ play }) => play.layerIndex === layerIndex,
           );
           for (let i = 1; i < ofLayer.length; i += 1) {
-            if (trackLayer.variants > 1) {
+            if (variants > 1) {
               expect(ofLayer[i].play.variant).not.toBe(
                 ofLayer[i - 1].play.variant,
               );
             }
           }
-          if (trackLayer.variants >= 3) {
+          if (variants >= 3) {
             for (let sub = 0; sub < trackLayer.sublayers; sub += 1) {
               const ofSublayer = placedOf(placed, layerIndex, sub);
               for (let i = 1; i < ofSublayer.length; i += 1) {
@@ -457,10 +462,12 @@ describe("TrackScheduler", () => {
         0.5,
         2,
         {
+          enabled: null,
           startPause: [0, 0.5],
           sequenceLength: [2, 2],
           pauseBetweenSamples: [0.4, 0.4],
           pauseBetweenRepetitions: [5, 5],
+          playsPerRun: null,
         },
         [0, 0],
       );
@@ -778,10 +785,12 @@ describe("TrackScheduler", () => {
       layers: [layer(4, 2, [20, 30])],
       properties: [
         {
+          enabled: null,
           startPause: [5, 8],
           sequenceLength: [2, 3],
           pauseBetweenSamples: [1, 2],
           pauseBetweenRepetitions: [10, 12],
+          playsPerRun: null,
         },
       ],
       enabledCount: [1, 1],
@@ -925,10 +934,12 @@ describe("TrackScheduler", () => {
       layers: [layer(4, 2, [20, 30])],
       properties: [
         {
+          enabled: null,
           startPause: [4, 6],
           sequenceLength: [2, 2],
           pauseBetweenSamples: [2, 3],
           pauseBetweenRepetitions: [10, 12],
+          playsPerRun: null,
         },
       ],
       enabledCount: [1, 1],
@@ -1006,10 +1017,12 @@ describe("TrackScheduler", () => {
       layers: [layer(3, 1, null)],
       properties: [
         {
+          enabled: null,
           startPause: [2, 2],
           sequenceLength: [2, 2],
           pauseBetweenSamples: [0, 0],
           pauseBetweenRepetitions: [10, 10],
+          playsPerRun: null,
         },
       ],
       enabledCount: [1, 1],

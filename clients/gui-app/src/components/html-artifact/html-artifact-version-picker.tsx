@@ -24,20 +24,20 @@ export function HtmlArtifactVersionPicker({
     version;
   if (!version.selectionAvailable) return null;
   if (!version.supported && selectedVersion === null) return null;
+  // The button stays short: the menu names every version with its number and
+  // time. An older version is tinted, since reading a stale page without
+  // noticing is what the label is there to prevent.
   let label = "Latest";
   if (selectedVersion !== null) {
-    label =
-      selectedVersionNumber === null
-        ? "Saved version"
-        : `Version ${selectedVersionNumber}`;
-  } else if (currentVersionNumber !== null) {
-    label = `Latest · v${currentVersionNumber}`;
+    if (selectedVersionNumber === null) label = "Saved version";
+    else if (currentVersionNumber === null) label = `v${selectedVersionNumber}`;
+    else label = `v${selectedVersionNumber} of ${currentVersionNumber}`;
   }
   return (
     <DropdownMenu>
       <DropdownMenuTrigger asChild>
         <Button
-          variant="ghost"
+          variant={selectedVersion === null ? "ghost" : "warning-ghost"}
           size={coarsePointer ? "touch" : "sm"}
           aria-label={`HTML version history: ${label}`}
         >
@@ -107,12 +107,9 @@ function HtmlArtifactVersionChoices({
           />
         </DropdownMenuRadioItem>
       ) : null}
+      {/* The current version is the Latest row above, never a row of its own. */}
       {versions
-        .filter(
-          (item) =>
-            item.versionNumber !== currentVersionNumber ||
-            item.id === selectedId,
-        )
+        .filter((item) => item.versionNumber !== currentVersionNumber)
         .map((item) => (
           <DropdownMenuRadioItem key={item.id} value={item.id}>
             <HtmlArtifactVersionLabel

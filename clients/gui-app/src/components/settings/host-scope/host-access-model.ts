@@ -279,16 +279,11 @@ const REVIEW_REASONS: Readonly<Partial<Record<string, string>>> = {
 };
 
 /**
- * "DATABASE_URL is waiting for you: looks like a secret."; a held key-shaped
- * value reads "DATABASE_URL looks like a key and is on hold until you
- * choose", which its row follows with `· Review`, and a held command reads
- * `heldCommandText`.
+ * "DATABASE_URL is waiting for you: was changed without your confirmation.";
+ * a held command reads `heldCommandText`.
  */
 export function reviewText(entry: EnvironmentReviewEntry): string {
   if (entry.reason === "executable_entry") return heldCommandText(entry);
-  if (entry.reason === "credential_like_value") {
-    return `${itemLabel(entry)} looks like a key and is on hold until you choose`;
-  }
   const reason = REVIEW_REASONS[entry.reason];
   return reason === undefined
     ? `${itemLabel(entry)} is waiting for you.`

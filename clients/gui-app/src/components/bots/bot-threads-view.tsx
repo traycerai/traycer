@@ -1,5 +1,5 @@
 import { useMemo, type ReactNode } from "react";
-import { ArrowLeft } from "lucide-react";
+import { ArrowLeft, Phone } from "lucide-react";
 import type { BotRecord } from "@traycer/protocol/host/bot/schemas";
 import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
 import { Button } from "@/components/ui/button";
@@ -18,7 +18,7 @@ import { useTabHostClient } from "@/hooks/host/use-tab-host-client";
 import { useNotificationIndicators } from "@/hooks/notifications/use-notification-indicators-query";
 import { firstLineOf } from "@/lib/bots/bot-trunk-model";
 import { postTextOf } from "@/lib/bots/reply-row";
-import { isPhoneLayoutOnly } from "@/lib/mobile-app";
+import type { MobileLevel2Form } from "@/lib/layout/mobile-layout-form";
 import { useRelativeTimestamp } from "@/lib/relative-time";
 import { cn } from "@/lib/utils";
 
@@ -35,7 +35,7 @@ const NO_EPIC_IDS: ReadonlyArray<string> = [];
  * which drops it here.
  *
  * Where the tab draws no column, whose channel row is the way back, the header
- * goes back to the tab's channel itself: always in the installed app, and
+ * goes back to the tab's channel itself: as the installed app's form says, and
  * elsewhere as the tab's own container does.
  */
 export function BotThreadsView(props: {
@@ -43,24 +43,29 @@ export function BotThreadsView(props: {
   /** The tab's channel, which the back control names. */
   readonly channelTitle: string;
   readonly onBack: () => void;
+  /** The installed app's form; `null` where the container decides. */
+  readonly level2: MobileLevel2Form | null;
 }): ReactNode {
+  const { level2 } = props;
   return (
     <div
       className="flex min-h-0 min-w-0 flex-1 flex-col"
       data-testid="bot-threads-view"
     >
       <header className="flex shrink-0 flex-col gap-0.5 px-4 pt-3 pb-2">
-        <Button
-          type="button"
-          variant="ghost"
-          size="sm"
-          className={cn("self-start", !isPhoneLayoutOnly() && "@3xl:hidden")}
-          data-testid="bot-threads-back"
-          onClick={props.onBack}
-        >
-          <ArrowLeft aria-hidden="true" />
-          {`Back to ${props.channelTitle}`}
-        </Button>
+        {level2 !== null && typeof level2 === "object" ? null : (
+          <Button
+            type="button"
+            variant="ghost"
+            size="sm"
+            className={cn("self-start", level2 === null && "@3xl:hidden")}
+            data-testid="bot-threads-back"
+            onClick={props.onBack}
+          >
+            <ArrowLeft aria-hidden="true" />
+            {`Back to ${props.channelTitle}`}
+          </Button>
+        )}
         <h1 className="text-ui-md font-bold text-foreground">Threads</h1>
         <p className="text-ui-xs text-muted-foreground">
           Threads you follow, across every bot.
@@ -176,6 +181,8 @@ function ThreadList(props: {
               }
               size="xs"
               testId="bot-thread-row-unread-count"
+              corner={null}
+              noun="unread"
             />
             <BotThreadRowMenu
               botId={entry.bot.botId}
@@ -190,7 +197,8 @@ function ThreadList(props: {
 }
 
 /**
- * One thread: its bot, the first line of its post and its replies. The post
+ * One thread: its bot, the first line of its post (with a phone for a thread
+ * a call opened) and its replies. The post
  * is read from what the bot's channel has loaded; an older one is named
  * "Thread". A thread whose post is gone from the channel cannot be opened.
  */
@@ -254,8 +262,17 @@ function ThreadRowBody(props: {
           <ReplyTime at={thread.lastReplyAt} />
         )}
       </span>
-      <span className="min-w-0 truncate text-ui-sm text-foreground">
-        {props.title}
+      <span className="flex min-w-0 items-center gap-1.5 text-ui-sm text-foreground">
+        {/* A thread a call opened (Call Tracy, P12): its rows were spoken. */}
+        {thread.kind === "call" ? (
+          <Phone
+            role="img"
+            aria-label="Call"
+            data-testid="bot-thread-row-call"
+            className="size-3.5 shrink-0 text-muted-foreground"
+          />
+        ) : null}
+        <span className="min-w-0 truncate">{props.title}</span>
       </span>
       <span className="flex items-center gap-2 text-ui-xs text-muted-foreground">
         {replies}

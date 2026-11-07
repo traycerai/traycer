@@ -1,6 +1,7 @@
 // Shared by the app and the standalone loader bundle. Keep runtime imports
 // limited to assets: the loader must not pull in app code.
 import FIGTREE_FONT_URL from "@fontsource-variable/figtree/files/figtree-latin-wght-normal.woff2?inline";
+import { PAGE_INSET_TOP_VARIABLE } from "./theme-map";
 
 const INITIAL_DOCTYPE = /^\s*<!doctype(?:\s+[^>]*)?>/i;
 
@@ -53,6 +54,8 @@ interface BootstrapConfig {
   readonly applyTheme: boolean;
   readonly artifactPage: ArtifactPageRole;
   readonly artifactRootPath: string | null;
+  /** The page's starting `--traycer-page-inset-top`, or `""` for none. */
+  readonly pageInset: string;
 }
 
 /**
@@ -111,6 +114,31 @@ function bootstrapMain(config: BootstrapConfig): void {
     notify("ui/notifications/size-changed", { width, height });
   };
 
+  // An artifact page in a tile opens below the app's floating controls. The
+  // space is padding on the page's root, so it scrolls away with the page,
+  // from a rule of this script's own, `!important` so a page's own reset of
+  // `html` cannot take it back.
+  // - Never the root's inline style: written while the page is still parsing,
+  //   that claims the root's `style` attribute, and the parser then drops the
+  //   one on the page's own `<html>` tag.
+  // - `border-box`, so the space comes out of a root sized to the window
+  //   (`html, body { height: 100% }`) instead of pushing that page's bottom
+  //   edge out of a window it may not let scroll.
+  // - The rule restates the variable, so a page reading it (the viewer's
+  //   scrollbar) sees 0px once the app drops it, not the first document's.
+  // A page the app has no controls over gets no rule.
+  const insetRule = document.createElement("style");
+  const applyPageInset = (inset: string): void => {
+    if (config.artifactPage === null) return;
+    if (!/^\d+(?:\.\d+)?px$/.test(inset)) {
+      insetRule.textContent = ":root{--traycer-page-inset-top:0px !important}";
+      return;
+    }
+    insetRule.textContent = `:root{--traycer-page-inset-top:${inset} !important;padding-top:${inset} !important;box-sizing:border-box !important}`;
+    if (!insetRule.isConnected) document.head.append(insetRule);
+  };
+  applyPageInset(config.pageInset);
+
   // A later theme change restyles the page without a reload: the same
   // variables the first paint took from the loader, applied to :root.
   const applyHostContext = (context: Record<string, unknown>): void => {
@@ -132,6 +160,13 @@ function bootstrapMain(config: BootstrapConfig): void {
         root.style.setProperty(name, value);
       }
     }
+    // The app drops the variable once its controls need no room, so its
+    // absence from a full set of variables is what clears the space.
+    const inset = styles.variables["--traycer-page-inset-top"];
+    if (typeof inset !== "string") {
+      root.style.removeProperty("--traycer-page-inset-top");
+    }
+    applyPageInset(typeof inset === "string" ? inset : "");
     const background = styles.variables["--color-background-primary"];
     if (config.paintBackground && typeof background === "string") {
       root.style.background = background;
@@ -805,6 +840,10 @@ export const buildDocument = (resource: LoaderResource): string => {
     applyTheme: resource.theme.appliesToRoot,
     artifactPage: resource.artifactPage,
     artifactRootPath: resource.artifactRootPath ?? null,
+    pageInset:
+      resource.theme.variables.find(
+        ([name]) => name === PAGE_INSET_TOP_VARIABLE,
+      )?.[1] ?? "",
   };
   return (
     "<!doctype html>" +

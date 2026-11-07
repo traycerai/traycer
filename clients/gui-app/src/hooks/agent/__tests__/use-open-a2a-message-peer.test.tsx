@@ -87,6 +87,7 @@ describe("useOpenA2AMessagePeer", () => {
     expect(mocks.openTile).toHaveBeenCalledTimes(1);
     expect(mocks.openTile).toHaveBeenCalledWith(
       expect.objectContaining({ target: { epicId: "epic-current" } }),
+      "user",
     );
     expect(mocks.activateTabIntent).not.toHaveBeenCalled();
   });

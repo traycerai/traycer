@@ -79,6 +79,7 @@ describe("agent reference chip", () => {
         gesture: "explicit",
         dedupe: true,
       }),
+      "user",
     );
   });
 

@@ -44,6 +44,10 @@ import type { HostRpcRegistry } from "@/lib/host";
 import type { ChatSessionStoreHandle } from "@/stores/chats/chat-session-store";
 import type { ChatMessage as ChatMessageModel } from "@/stores/composer/chat-store";
 import { useBotOpenThreadStore } from "@/stores/bots/bot-open-thread-store";
+import {
+  editableIn,
+  typeInto,
+} from "@/components/bots/__tests__/bot-box-test-support";
 
 const mocks = vi.hoisted(() => ({
   client: null as HostRequester<HostRpcRegistry> | null,
@@ -56,6 +60,9 @@ const mocks = vi.hoisted(() => ({
     | { readonly status: "missing" },
 }));
 
+vi.mock("@/hooks/host/use-host-directory-entry", () => ({
+  useHostDirectoryEntry: () => null,
+}));
 vi.mock("@/lib/registries/chat-session-registry", async (importOriginal) => ({
   ...(await importOriginal<
     typeof import("@/lib/registries/chat-session-registry")
@@ -83,6 +90,7 @@ vi.mock("@/hooks/host/use-host-supports-method", async (importOriginal) => ({
 vi.mock("@/components/epic-tabs/pane-visibility-context", () => ({
   usePaneVisible: () => true,
   usePaneFocused: () => true,
+  usePaneFocusProbe: () => () => true,
 }));
 vi.mock("@/hooks/bots/use-bot-conversation-list-query", () => ({
   useBotConversationListQuery: () => ({
@@ -348,11 +356,10 @@ describe("the box of a listed thread under a row of the bot, opened by its ancho
     costUsd: null,
   } satisfies BotThreadSummary;
 
-  async function sendEnabledAfterTyping(): Promise<boolean> {
-    const user = userEvent.setup();
+  function sendEnabledAfterTyping(): boolean {
     const panel = screen.getByTestId("bot-thread-panel");
-    await user.type(
-      within(panel).getByTestId("bot-thread-composer-input"),
+    typeInto(
+      editableIn(within(panel).getByTestId("bot-thread-composer-input")),
       "Since when?",
     );
     return !within(panel)
@@ -371,26 +378,26 @@ describe("the box of a listed thread under a row of the bot, opened by its ancho
       BOUND_EPOCH - 1,
       ["answer", "message"],
     ],
-  ])("takes no send under %s", async (_label, epoch, kinds) => {
+  ])("takes no send under %s", (_label, epoch, kinds) => {
     mocks.threads = [NOTICE_THREAD];
     mocks.threadAnchors = { hostId: BOUND_HOST_ID, epoch, kinds: [...kinds] };
     useBotOpenThreadStore.getState().setRail(BOT_ID, BY_ANCHOR);
     render(<MountedChannel />);
 
-    expect(await sendEnabledAfterTyping()).toBe(false);
+    expect(sendEnabledAfterTyping()).toBe(false);
   });
 
-  it("takes a send under a question of the bot on any binding, its row saying it roots a thread everywhere", async () => {
-    const question: Message = {
+  it("takes a send under a proposal of the bot on any binding, its row saying it roots a thread everywhere", () => {
+    const proposal: Message = {
       ...botReply({
         messageId: "question-1",
         text: "Which release should I watch?",
         timestamp: 4_500,
       }),
-      announcement: { kind: "question", link: null },
+      announcement: { kind: "proposal", link: null },
     };
     mocks.sessions[CHANNEL_ID].store.setState((state) => ({
-      messages: [...state.messages, question],
+      messages: [...state.messages, proposal],
     }));
     mocks.threads = [
       {
@@ -405,16 +412,16 @@ describe("the box of a listed thread under a row of the bot, opened by its ancho
       .setRail(BOT_ID, { ...BY_ANCHOR, anchorMessageId: "question-1" });
     render(<MountedChannel />);
 
-    expect(await sendEnabledAfterTyping()).toBe(true);
+    expect(sendEnabledAfterTyping()).toBe(true);
   });
 
-  it("takes a send while the binding names the row among the rows a thread roots on", async () => {
+  it("takes a send while the binding names the row among the rows a thread roots on", () => {
     mocks.threads = [NOTICE_THREAD];
     mocks.threadAnchors = anchorsNaming(["answer", "message"]);
     useBotOpenThreadStore.getState().setRail(BOT_ID, BY_ANCHOR);
     render(<MountedChannel />);
 
-    expect(await sendEnabledAfterTyping()).toBe(true);
+    expect(sendEnabledAfterTyping()).toBe(true);
   });
 
   it.each([
@@ -423,7 +430,7 @@ describe("the box of a listed thread under a row of the bot, opened by its ancho
     ["every row of the bot", BOUND_EPOCH, ["answer", "message"]],
   ])(
     "takes no send while its row cannot be read, under a binding naming %s",
-    async (_label, epoch, kinds) => {
+    (_label, epoch, kinds) => {
       // The anchor is not in the channel the session holds, and the host's
       // read of it fails.
       mocks.locate = { status: "missing" };
@@ -439,7 +446,7 @@ describe("the box of a listed thread under a row of the bot, opened by its ancho
         .setRail(BOT_ID, { ...BY_ANCHOR, anchorMessageId: "notice-cold" });
       render(<MountedChannel />);
 
-      expect(await sendEnabledAfterTyping()).toBe(false);
+      expect(sendEnabledAfterTyping()).toBe(false);
     },
   );
 });

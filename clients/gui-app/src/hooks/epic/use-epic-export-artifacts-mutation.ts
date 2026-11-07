@@ -5,6 +5,7 @@ import {
   serializeArtifactMarkdown,
   type ArtifactExportFormat,
 } from "@/lib/artifacts/artifact-export";
+import { arrangeArtifactExport } from "@/lib/artifacts/artifact-export-selection";
 import {
   ArtifactBodyUnavailableError,
   holdArtifactBody,
@@ -33,6 +34,19 @@ export interface EpicExportArtifactsInput {
   readonly format: ArtifactExportFormat;
   readonly archive: boolean;
   readonly archiveTitle: string | null;
+  /**
+   * Also export every Markdown artifact nested under the picked ones. Resolved
+   * against the tree when the export runs, not when the menu rendered, so a
+   * child added since is included. Either way the archive lays the exported
+   * artifacts out as the tree.
+   */
+  readonly includeNested: boolean;
+}
+
+interface EpicExportArtifactsOutcome {
+  readonly saved: SavedFile | null;
+  /** Artifacts written, nested ones included. */
+  readonly artifactCount: number;
 }
 
 export function useEpicExportArtifacts() {
@@ -40,7 +54,11 @@ export function useEpicExportArtifacts() {
   const fileSave = useFileSaveHost();
   const openSaved = useOpenSavedFile();
 
-  return useMutation<SavedFile | null, Error, EpicExportArtifactsInput>({
+  return useMutation<
+    EpicExportArtifactsOutcome,
+    Error,
+    EpicExportArtifactsInput
+  >({
     mutationKey: epicMutationKeys.exportArtifacts(),
     mutationFn: async (input) => {
       const firstArtifact = input.artifacts.at(0);
@@ -58,12 +76,22 @@ export function useEpicExportArtifacts() {
       // every hold until the build made the whole selection hot at once, with
       // no bound on how much a user may select. Sequential MATERIALIZATION was
       // never the property that mattered - sequential RETENTION is.
+      const picked = arrangeArtifactExport(
+        epicHandle.store.getState(),
+        input.artifacts,
+        input.includeNested,
+      );
+      const pickedIds = new Set(input.artifacts.map((artifact) => artifact.id));
+      const titleById = new Map(
+        picked.map((artifact) => [artifact.id, artifact.title]),
+      );
       const serialized: Array<{
         readonly id: string;
         readonly title: string;
+        readonly parentId: string | null;
         readonly markdown: string;
       }> = [];
-      for (const artifact of input.artifacts) {
+      for (const artifact of picked) {
         // A stale menu must not try to lease an object artifact as a Markdown body.
         const records = epicHandle.store.getState().artifacts.byId;
         if (
@@ -85,9 +113,19 @@ export function useEpicExportArtifacts() {
           // hot behind the one this loop thought was the only resident.
           "immediate",
         ).catch((cause: unknown) => {
-          // The seam names the artifact by id; the user knows it by title.
+          // The seam names the artifact by id; the user knows it by title. An
+          // artifact the export added by nesting was never picked, so its
+          // title alone would not say where it is.
           if (cause instanceof ArtifactBodyUnavailableError) {
-            throw new Error(`“${artifact.title}” is still loading.`);
+            const nestedUnder =
+              pickedIds.has(artifact.id) || artifact.parentId === null
+                ? undefined
+                : titleById.get(artifact.parentId);
+            throw new Error(
+              nestedUnder === undefined
+                ? `“${artifact.title}” is still loading.`
+                : `“${artifact.title}”, nested under “${nestedUnder}”, is still loading.`,
+            );
           }
           throw cause;
         });
@@ -116,13 +154,21 @@ export function useEpicExportArtifacts() {
       // dialog, a share sheet) the user leaves open for minutes without
       // pinning a single room. That wait is why holding leases across the
       // build was worth removing rather than merely bounding.
-      return saveBlobToDisk(output.blob, output.suggestedName, fileSave);
+      return {
+        saved: await saveBlobToDisk(
+          output.blob,
+          output.suggestedName,
+          fileSave,
+        ),
+        artifactCount: serialized.length,
+      };
     },
-    onSuccess: (saved, input) => {
+    onSuccess: ({ saved, artifactCount }, input) => {
       if (saved !== null) {
         Analytics.getInstance().track(AnalyticsEvent.ArtifactExported, {
           format: input.format,
-          artifact_count: input.artifacts.length,
+          artifact_count: artifactCount,
+          include_nested: input.includeNested,
         });
         // No Share/Download split on this surface, deliberately: its controls
         // promise an "Export", which a share sheet honours as truthfully as a

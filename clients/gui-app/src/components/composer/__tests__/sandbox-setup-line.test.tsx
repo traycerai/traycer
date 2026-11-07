@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   cleanup,
   fireEvent,
@@ -14,10 +14,17 @@ import {
 } from "@/components/composer/sandbox-setup-line";
 import { sandboxSettingsStepsLine } from "@traycer/protocol/host/sandbox-settings";
 import type { StageConfiguration } from "@/lib/sandboxes/sandbox-stage-model";
+import {
+  CANCEL_AND_KEEP_THE_DRAFT,
+  STARTING_SANDBOX,
+  STARTING_TAKING_LONGER,
+} from "@/lib/sandboxes/sandbox-strings";
+import { formatMessageTimeWithSeconds } from "@/lib/relative-time";
 import type {
   StagedSandbox,
   StagedSandboxFailure,
 } from "@/stores/composer/staged-sandbox-store";
+import { useSandboxDetailsStore } from "@/stores/sandboxes/sandbox-details-store";
 
 vi.mock("@/hooks/sandboxes/use-configuration-billing-url", () => ({
   useConfigurationBillingUrl: () => "https://example.test/billing",
@@ -187,16 +194,27 @@ describe("withdrawing a message from every refusal or failure", () => {
       const line =
         screen.queryByTestId("sandbox-refusal-line") ??
         screen.getByTestId("sandbox-setup-line-detail");
+      if (failure.kind === "settings") {
+        fireEvent.pointerDown(
+          within(line).getByRole("button", { name: "More" }),
+          { button: 0 },
+        );
+        const labels = screen
+          .getAllByRole("menuitem")
+          .map((item) => item.textContent);
+        expect(labels).toContain("Open terminal");
+        expect(labels).toContain("Use This computer");
+        expect(labels).toContain("Cancel the message");
+        expect(labels).toContain("Details");
+        fireEvent.click(screen.getByTestId("sandbox-setup-cancel"));
+        expect(onCancel).toHaveBeenCalledTimes(1);
+        expect(onOpenTerminal).not.toHaveBeenCalled();
+        cleanup();
+        return;
+      }
       const labels = buttonLabels(line);
-      // A settings failure's terminal action reads plain "Open terminal".
       const exits = [
-        ...(failure.kind === "credits"
-          ? []
-          : [
-              failure.kind === "settings"
-                ? "Open terminal"
-                : "Open terminal instead",
-            ]),
+        ...(failure.kind === "credits" ? [] : ["Open terminal instead"]),
         "Use This computer",
         "Cancel the message",
         "Details",
@@ -470,12 +488,47 @@ describe("SandboxSetupLine's failed start", () => {
     );
   }
 
-  it("titles the failure with its support reference, never the raw code", () => {
+  it("keeps a failed-create support code in its closed Support reference disclosure", () => {
     mountFailed();
 
     const line = screen.getByTestId("sandbox-setup-line");
-    expect(line.textContent).toContain("SBX-0412");
+    const disclosure = within(line).getByTestId<HTMLDetailsElement>(
+      "sandbox-setup-support-reference",
+    );
+    expect(disclosure.open).toBe(false);
+    expect(
+      within(line).getByTestId("sandbox-setup-line-toggle").textContent,
+    ).not.toContain("SBX-0412");
     expect(line.textContent).not.toContain(RAW_CODE);
+    fireEvent.click(within(disclosure).getByText("Support reference"));
+    expect(disclosure.open).toBe(true);
+    expect(within(disclosure).getByText("SBX-0412")).toBeTruthy();
+  });
+
+  it("shows a pre-create failure's support code only after opening Support reference", () => {
+    render(
+      <SandboxSetupLine
+        stage={refused(
+          { kind: "personal" },
+          { kind: "failed", code: RAW_CODE, step: "creating" },
+        )}
+        name="api-refactor"
+        facts={facts(false)}
+        actions={ACTIONS}
+      />,
+    );
+
+    const line = screen.getByTestId("sandbox-setup-line");
+    const disclosure = within(line).getByTestId<HTMLDetailsElement>(
+      "sandbox-setup-support-reference",
+    );
+    expect(disclosure.open).toBe(false);
+    expect(
+      within(line).getByTestId("sandbox-setup-line-toggle").textContent,
+    ).not.toContain("SBX-0412");
+    fireEvent.click(within(disclosure).getByText("Support reference"));
+    expect(disclosure.open).toBe(true);
+    expect(within(disclosure).getByText("SBX-0412")).toBeTruthy();
   });
 
   it("copies the support reference with the created sandbox's id", async () => {
@@ -625,6 +678,154 @@ describe("SandboxSetupLine when the sandbox rested on its own", () => {
   });
 });
 
+describe("SandboxProgressLine's queued state", () => {
+  const NOW = Date.now();
+  // Beyond STAGED_TAKING_LONGER_MS (90 s): the ordinary rule alone would
+  // already be showing "taking longer" by this point.
+  const PAST_THRESHOLD_STARTED_AT = NOW - 120_000;
+  const NOT_STOPPABLE = { ...facts(false), sandboxStoppable: false };
+
+  it("says Queued, with the retry time, while the vendor's quota wait is still ahead, even past the ordinary taking-longer threshold", () => {
+    render(
+      <SandboxSetupLine
+        stage={{
+          ...created(),
+          startedAt: PAST_THRESHOLD_STARTED_AT,
+          rateLimit: { limited: true, retryAfterAt: NOW + 30_000 },
+        }}
+        name="api-refactor"
+        facts={NOT_STOPPABLE}
+        actions={ACTIONS}
+      />,
+    );
+
+    const line = screen.getByTestId("sandbox-setup-line");
+    expect(line.textContent).toContain("Queued");
+    expect(line.textContent).toContain("Retrying at");
+    expect(line.textContent).not.toContain(STARTING_TAKING_LONGER);
+  });
+
+  it.each([
+    [
+      "an expired quota wait",
+      { limited: true, retryAfterAt: NOW - 5_000 } as const,
+    ],
+    ["no recorded quota wait", undefined],
+  ])(
+    "falls back to the ordinary elapsed rule for %s, taking longer past the threshold exactly as before",
+    (_label, rateLimit) => {
+      render(
+        <SandboxSetupLine
+          stage={{
+            ...created(),
+            startedAt: PAST_THRESHOLD_STARTED_AT,
+            rateLimit,
+          }}
+          name="api-refactor"
+          facts={NOT_STOPPABLE}
+          actions={ACTIONS}
+        />,
+      );
+
+      const line = screen.getByTestId("sandbox-setup-line");
+      expect(line.textContent).not.toContain("Queued");
+      expect(line.textContent).not.toContain("Retrying at");
+      expect(line.textContent).toContain(STARTING_TAKING_LONGER);
+    },
+  );
+
+  it("stays on the ordinary not-yet-taking-longer line for an expired quota wait before the elapsed threshold", () => {
+    render(
+      <SandboxSetupLine
+        stage={{
+          ...created(),
+          startedAt: NOW - 5_000,
+          rateLimit: { limited: true, retryAfterAt: NOW - 2_000 },
+        }}
+        name="api-refactor"
+        facts={NOT_STOPPABLE}
+        actions={ACTIONS}
+      />,
+    );
+
+    const line = screen.getByTestId("sandbox-setup-line");
+    expect(line.textContent).not.toContain("Queued");
+    expect(line.textContent).toContain(STARTING_SANDBOX);
+  });
+
+  it("stays Queued past the elapsed threshold, and expanding it by hand still offers Cancel and keep the draft and Choose another host", () => {
+    const onCancel = vi.fn();
+    const onChooseAnotherHost = vi.fn();
+    render(
+      <SandboxSetupLine
+        stage={{
+          ...created(),
+          startedAt: PAST_THRESHOLD_STARTED_AT,
+          rateLimit: { limited: true, retryAfterAt: NOW + 30_000 },
+        }}
+        name="api-refactor"
+        facts={NOT_STOPPABLE}
+        actions={{ ...ACTIONS, onCancel, onChooseAnotherHost }}
+      />,
+    );
+
+    const line = screen.getByTestId("sandbox-setup-line");
+    expect(line.textContent).toContain("Queued");
+    expect(line.textContent).not.toContain(STARTING_TAKING_LONGER);
+
+    fireEvent.click(screen.getByTestId("sandbox-setup-line-toggle"));
+    const detail = screen.getByTestId("sandbox-setup-line-detail");
+    fireEvent.click(
+      within(detail).getByRole("button", { name: CANCEL_AND_KEEP_THE_DRAFT }),
+    );
+    expect(onCancel).toHaveBeenCalledTimes(1);
+    fireEvent.click(
+      within(detail).getByRole("button", {
+        name: ACTIONS.chooseAnotherHostLabel,
+      }),
+    );
+    expect(onChooseAnotherHost).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("SandboxProgressLine's queued retry label across a local midnight", () => {
+  // A fixed instant, not `Date.now()`: the retry time must land on the NEXT
+  // local day relative to it, which only a controlled clock can guarantee
+  // regardless of when this suite happens to run.
+  const FIXED_NOW = new Date(2026, 0, 15, 23, 0, 0).getTime();
+  const NEXT_LOCAL_DAY_RETRY = new Date(2026, 0, 16, 0, 30, 0).getTime();
+  const NOT_STOPPABLE = { ...facts(false), sandboxStoppable: false };
+
+  beforeEach(() => {
+    vi.useFakeTimers();
+    vi.setSystemTime(FIXED_NOW);
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it("includes the date, not only the time, when the recorded retry falls on a different local day", () => {
+    render(
+      <SandboxSetupLine
+        stage={{
+          ...created(),
+          startedAt: FIXED_NOW,
+          rateLimit: { limited: true, retryAfterAt: NEXT_LOCAL_DAY_RETRY },
+        }}
+        name="api-refactor"
+        facts={NOT_STOPPABLE}
+        actions={ACTIONS}
+      />,
+    );
+
+    const expectedLabel = `Retrying at ${formatMessageTimeWithSeconds(NEXT_LOCAL_DAY_RETRY, FIXED_NOW)}`;
+    expect(screen.getByTestId("sandbox-setup-line").textContent).toContain(
+      expectedLabel,
+    );
+  });
+});
+
 describe("SandboxSetupLine's Stop action", () => {
   it("stays available while the created sandbox's line is collapsed or expanded", () => {
     onStop.mockClear();
@@ -676,7 +877,7 @@ describe("SandboxSetupLine when the settings did not apply", () => {
           sendTaken,
           failure: {
             kind: "settings",
-            code: "envelope-delivery:x",
+            code: "SBX-0520",
             steps: STEPS,
           },
         }}
@@ -688,22 +889,39 @@ describe("SandboxSetupLine when the settings did not apply", () => {
     return screen.getByTestId("sandbox-setup-line-detail");
   }
 
-  it("says the one shared sentence, then compute first and one step line, never a raw key or code", () => {
+  it("shows the shared failure sentence and applied-step line", () => {
     const detail = mountSettings(false, ACTIONS);
 
     expect(
       screen.getByText(
-        "api-refactor is awake, but Personal's settings didn't apply · SBX-0520",
+        "api-refactor is awake, but Personal's settings didn't apply",
       ),
     ).toBeTruthy();
+    const disclosure = within(detail).getByTestId<HTMLDetailsElement>(
+      "sandbox-setup-support-reference",
+    );
+    expect(disclosure.open).toBe(false);
     const lines = within(detail)
       .getAllByText(/./, { selector: "p" })
       .map((line) => line.textContent);
-    expect(lines[0]).toBe("Compute is charged while it is awake.");
+    expect(lines).not.toContain("Compute is charged while it is awake.");
     expect(lines).toContain(sandboxSettingsStepsLine(STEPS));
     expect(detail.textContent).not.toMatch(
       /permission_denied|ANTHROPIC_API_KEY|envelope-delivery/,
     );
+  });
+
+  it("keeps the settings support code in its closed Support reference disclosure", () => {
+    const detail = mountSettings(false, ACTIONS);
+    const disclosure = within(detail).getByTestId<HTMLDetailsElement>(
+      "sandbox-setup-support-reference",
+    );
+
+    expect(disclosure.open).toBe(false);
+    fireEvent.click(within(disclosure).getByText("Support reference"));
+
+    expect(disclosure.open).toBe(true);
+    expect(within(disclosure).getByText("SBX-0520")).toBeTruthy();
   });
 
   it("says the message waits only when the send was taken", () => {
@@ -717,22 +935,76 @@ describe("SandboxSetupLine when the settings did not apply", () => {
     expect(idle.textContent).not.toContain("waits until they apply");
   });
 
-  it("offers Retry applying, Open terminal, Stop, Use This computer and Details", () => {
+  it("keeps Retry applying primary and dispatches every secondary action once from More", () => {
+    const onRetryApplying = vi.fn();
+    const onRepairSetup = vi.fn();
+    const onOpenTerminal = vi.fn();
+    const onStop = vi.fn();
+    const onChooseAnotherHost = vi.fn();
+    const onCancel = vi.fn();
     const detail = mountSettings(true, {
       ...ACTIONS,
-      onOpenTerminal: vi.fn(),
+      onRetryApplying,
+      onRepairSetup,
+      onOpenTerminal,
+      onStop,
+      onChooseAnotherHost,
+      onCancel,
     });
 
-    const labels = buttonLabels(detail);
-    for (const label of [
-      "Retry applying",
-      "Open terminal",
-      "Stop",
-      "Use This computer",
-      "Details",
-    ]) {
-      expect(labels).toContain(label);
-    }
+    const retry = within(detail).getByTestId("sandbox-setup-retry-applying");
+    expect(retry.textContent).toContain("Retry applying");
+    expect(
+      within(detail).queryByTestId("sandbox-setup-repair-setup"),
+    ).toBeNull();
+    fireEvent.click(retry);
+    expect(onRetryApplying).toHaveBeenCalledOnce();
+
+    const chooseMenuItem = (testId: string): void => {
+      fireEvent.pointerDown(
+        within(detail).getByRole("button", { name: "More" }),
+        { button: 0 },
+      );
+      expect(
+        screen.queryByRole("menuitem", { name: "Retry applying" }),
+      ).toBeNull();
+      fireEvent.click(screen.getByTestId(testId));
+    };
+    chooseMenuItem("sandbox-setup-repair-setup");
+    chooseMenuItem("sandbox-setup-open-terminal");
+    chooseMenuItem("sandbox-setup-stop");
+    chooseMenuItem("sandbox-setup-choose-another-host");
+    chooseMenuItem("sandbox-setup-cancel");
+    chooseMenuItem("sandbox-setup-details");
+
+    expect(onRepairSetup).toHaveBeenCalledOnce();
+    expect(onOpenTerminal).toHaveBeenCalledOnce();
+    expect(onStop).toHaveBeenCalledOnce();
+    expect(onChooseAnotherHost).toHaveBeenCalledOnce();
+    expect(onCancel).toHaveBeenCalledOnce();
+    expect(useSandboxDetailsStore.getState().sandboxId).toBe("sbx_made_1");
+  });
+
+  it("keeps Stop reachable once whether the person collapses the failure or leaves it expanded", () => {
+    const onStopHere = vi.fn();
+    const detail = mountSettings(true, { ...ACTIONS, onStop: onStopHere });
+
+    expect(screen.queryAllByTestId("sandbox-setup-stop")).toHaveLength(0);
+    fireEvent.pointerDown(
+      within(detail).getByRole("button", { name: "More" }),
+      { button: 0 },
+    );
+    expect(screen.getAllByTestId("sandbox-setup-stop")).toHaveLength(1);
+    fireEvent.click(screen.getByTestId("sandbox-setup-stop"));
+    expect(onStopHere).toHaveBeenCalledTimes(1);
+
+    fireEvent.click(screen.getByTestId("sandbox-setup-line-toggle"));
+
+    expect(screen.queryByTestId("sandbox-setup-line-detail")).toBeNull();
+    const stop = screen.getByTestId("sandbox-setup-stop");
+    expect(stop.hasAttribute("disabled")).toBe(false);
+    fireEvent.click(stop);
+    expect(onStopHere).toHaveBeenCalledTimes(2);
   });
 
   it("hides Retry applying when the host offers no combined retry", () => {
@@ -741,7 +1013,11 @@ describe("SandboxSetupLine when the settings did not apply", () => {
     expect(
       within(detail).queryByTestId("sandbox-setup-retry-applying"),
     ).toBeNull();
-    expect(within(detail).getByTestId("sandbox-setup-stop")).toBeTruthy();
+    fireEvent.pointerDown(
+      within(detail).getByRole("button", { name: "More" }),
+      { button: 0 },
+    );
+    expect(screen.getByTestId("sandbox-setup-stop")).toBeTruthy();
   });
 
   it("offers Repair setup instead of Retry applying when only the guest-only repair is available", () => {
@@ -752,7 +1028,11 @@ describe("SandboxSetupLine when the settings did not apply", () => {
       onRepairSetup,
     });
 
-    fireEvent.click(within(detail).getByTestId("sandbox-setup-repair-setup"));
+    fireEvent.pointerDown(
+      within(detail).getByRole("button", { name: "More" }),
+      { button: 0 },
+    );
+    fireEvent.click(screen.getByTestId("sandbox-setup-repair-setup"));
 
     expect(onRepairSetup).toHaveBeenCalledTimes(1);
     expect(
@@ -761,9 +1041,27 @@ describe("SandboxSetupLine when the settings did not apply", () => {
   });
 
   it("disables Retry applying while a retry is pending", () => {
-    const detail = mountSettings(true, { ...ACTIONS, applyingPending: true });
+    const onRetryApplying = vi.fn();
+    const onRepairSetup = vi.fn();
+    const detail = mountSettings(true, {
+      ...ACTIONS,
+      onRetryApplying,
+      onRepairSetup,
+      applyingPending: true,
+      repairSetupPending: true,
+    });
 
     const retry = within(detail).getByTestId("sandbox-setup-retry-applying");
     expect(retry.hasAttribute("disabled")).toBe(true);
+    fireEvent.pointerDown(
+      within(detail).getByRole("button", { name: "More" }),
+      { button: 0 },
+    );
+    const repair = screen.getByTestId("sandbox-setup-repair-setup");
+    expect(repair.getAttribute("aria-disabled")).toBe("true");
+    fireEvent.click(repair);
+    fireEvent.click(retry);
+    expect(onRepairSetup).not.toHaveBeenCalled();
+    expect(onRetryApplying).not.toHaveBeenCalled();
   });
 });

@@ -1530,10 +1530,11 @@
  * darkens light surfaces and lightens dark ones.
  *
  * `transition-duration` rides along because the two are one decision: the press
- * must land on the same frame as the touch. Easing it in over the base
- * `transition-all` (150ms) outlasts a quick tap, so the tint would only ever
+ * must land on the same frame as the touch. Easing it in over the control
+ * transition (150ms) outlasts a quick tap, so the tint would only ever
  * half-appear before release. Only the press is instant - release still fades
- * at the element's normal duration.
+ * at the element's normal duration, which is why that transition lists
+ * `background-image` and not the box (`control-transition.ts`).
  *
  * Suppress it with `active:bg-none` wherever a press must not answer, e.g. an
  * `aria-disabled` control (which, unlike a natively `disabled` one, still

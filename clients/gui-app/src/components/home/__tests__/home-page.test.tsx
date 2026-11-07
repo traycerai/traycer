@@ -14,6 +14,7 @@ import type { ComposerPromptEditorHandle } from "@/components/chat/composer/comp
 import { createComposerEditorIncarnation } from "@/lib/composer/composer-editor-incarnation";
 import { useAuthStore } from "@/stores/auth/auth-store";
 import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
+import { MobileStripFormContext } from "@/components/layout/tabs/mobile-strip-form-context";
 import { useMobileNavStore } from "@/stores/layout/mobile-nav-store";
 import { useLandingDraftStore } from "@/stores/home/landing-draft-store";
 import { draftRuntimeRegistry } from "@/stores/home/draft-runtime-registry";
@@ -695,6 +696,27 @@ describe("<HomePage />", () => {
     queryClient.clear();
   });
 
+  it("opens History itself from the View history link where the strip replaces the drawer", () => {
+    homeMocks.isMobile = true;
+    useMobileNavStore.setState({ open: false });
+    const queryClient = new QueryClient({
+      defaultOptions: { queries: { retry: false, gcTime: 0 } },
+    });
+    render(
+      <QueryClientProvider client={queryClient}>
+        <MobileStripFormContext.Provider value="rail">
+          <HomePage />
+        </MobileStripFormContext.Provider>
+      </QueryClientProvider>,
+    );
+
+    fireEvent.click(screen.getByTestId("home-view-history"));
+
+    expect(homeMocks.openHistory).toHaveBeenCalledTimes(1);
+    expect(useMobileNavStore.getState().open).toBe(false);
+    queryClient.clear();
+  });
+
   it("keeps the View history link off the desktop landing page", () => {
     const queryClient = new QueryClient({
       defaultOptions: { queries: { retry: false, gcTime: 0 } },
@@ -1069,6 +1091,9 @@ describe("<HomePage />", () => {
       expect(
         screen.getByTestId("landing-draft-surface").contains(terminal),
       ).toBe(true);
+      const landingBody = document.querySelector(".landing-appearance-surface");
+      expect(landingBody?.classList.contains("overflow-y-auto")).toBe(true);
+      expect(landingBody?.classList.contains("overflow-hidden")).toBe(false);
       terminal.focus();
       expect(document.activeElement).toBe(terminal);
 

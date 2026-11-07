@@ -140,7 +140,7 @@ describe("validateVersionedStreamRpcRegistry", () => {
     // RESTATED rather than derived, deliberately: this file is the
     // change-detector for the line set, so deriving it from the registry would
     // assert the registry against itself.
-    expect(hostStreamRpcRegistry["chat.subscribe"][1].latestMinor).toBe(41);
+    expect(hostStreamRpcRegistry["chat.subscribe"][1].latestMinor).toBe(43);
     // @1.6 added the `viewer` intent on the open request; @1.7 added the
     // `viewer` client frame that restates it on a live stream.
     expect(hostStreamRpcRegistry["terminal.subscribe"][1].latestMinor).toBe(7);
@@ -153,15 +153,15 @@ describe("validateVersionedStreamRpcRegistry", () => {
     expect(
       hostStreamRpcRegistry["notifications.subscribe"][1].latestMinor,
     ).toBe(1);
-    // @1.7 / @1.6 widen the entry union with `notification.hooks.removed`;
-    // cloudFeed @1.5 stays the last minor that carries `sandbox.notice` only.
+    // @1.8 / @1.7 widen the entry union with `feedback.drafted`; cloudFeed
+    // @1.5 stays the last minor that carries `sandbox.notice` only.
     expect(
       hostStreamRpcRegistry["host.notifications.feed.subscribe"][1].latestMinor,
-    ).toBe(7);
+    ).toBe(8);
     expect(
       hostStreamRpcRegistry["host.notifications.cloudFeed.subscribe"][1]
         .latestMinor,
-    ).toBe(6);
+    ).toBe(7);
     // @1.1 carries the in-flight `opening` list and the session identity;
     // `simulator.stream` is still on the @1.0 it opened with.
     expect(hostStreamRpcRegistry["simulator.sessions"][1].latestMinor).toBe(1);

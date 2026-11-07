@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import { hostRpcRegistry } from "@traycer/protocol/host";
 import type {
   HostNotificationsCloudFeedRow,
-  HostNotificationsCloudFeedRowV16,
+  HostNotificationsCloudFeedRowV17,
   HostNotificationsIndicatorState,
   HostNotificationsIndicatorStateResponse,
 } from "@traycer/protocol/host/notifications/contracts";
@@ -202,7 +202,7 @@ describe("cloud notification indicator derivation", () => {
     entryId: string,
     threadId: string,
     readAt: number | null,
-  ): HostNotificationsCloudFeedRowV16 {
+  ): HostNotificationsCloudFeedRowV17 {
     return {
       entryId,
       originHostId: "host-b",
@@ -266,13 +266,13 @@ describe("cloud notification indicator derivation", () => {
   }
 
   function rowsById(
-    rows: ReadonlyArray<HostNotificationsCloudFeedRowV16>,
-  ): Record<string, HostNotificationsCloudFeedRowV16> {
+    rows: ReadonlyArray<HostNotificationsCloudFeedRowV17>,
+  ): Record<string, HostNotificationsCloudFeedRowV17> {
     return Object.fromEntries(rows.map((entry) => [entry.entryId, entry]));
   }
 
   it("does not light the chat's approval glyph for an unresolved browser prompt, though its unread row is counted", () => {
-    const browserRow: HostNotificationsCloudFeedRowV16 = {
+    const browserRow: HostNotificationsCloudFeedRowV17 = {
       entryId: "browser-1",
       originHostId: "host-b",
       coalesceKey: "browser.human.needed:chat-1",
@@ -369,6 +369,147 @@ describe("cloud notification indicator derivation", () => {
       unreadFailure: true,
       unreadDone: false,
       unreadCount: 2,
+    });
+  });
+
+  /** An `agent.stalled` row: a provider stall, or the host's long-turn alert. */
+  function stalled(input: {
+    readonly entryId: string;
+    readonly reason: string;
+    readonly readAt: number | null;
+    readonly updatedAt: number;
+  }): HostNotificationsCloudFeedRow {
+    return wrap(input.entryId, {
+      id: input.entryId,
+      updatedAt: input.updatedAt,
+      readAt: input.readAt,
+      kind: "agent.stalled",
+      sourceRef: null,
+      severity: "failure",
+      outcome: "errored",
+      epicId: "epic-1",
+      chatId: "chat-1",
+      payload: {
+        kind: "agent_stalled",
+        epicId: "epic-1",
+        chatId: "chat-1",
+        agentId: "chat-1",
+        agentName: "Chat",
+        taskTitle: "Epic",
+        reason: input.reason,
+        title: "Slow",
+        outcome: "errored",
+      },
+    });
+  }
+
+  describe("a long-turn alert", () => {
+    it.each([null, 5])(
+      "leaves an older unread completion lit under it (read at %s)",
+      (readAt) => {
+        const result = selectCloudNotificationIndicators(
+          rowsById([
+            stoppedAt({
+              entryId: "0001-done-unread",
+              severity: "done",
+              readAt: null,
+              updatedAt: 1,
+              chatId: "chat-1",
+            }),
+            stalled({
+              entryId: "0002-long-turn",
+              reason: "long_turn",
+              readAt,
+              updatedAt: 2,
+            }),
+          ]),
+          [],
+          ["chat-1"],
+        );
+
+        expect(result.chats["chat-1"]).toMatchObject({
+          unreadDone: true,
+          unreadFailure: false,
+        });
+      },
+    );
+
+    it("leaves an older unread failure lit under it", () => {
+      const result = selectCloudNotificationIndicators(
+        rowsById([
+          stoppedAt({
+            entryId: "0001-failure-unread",
+            severity: "failure",
+            readAt: null,
+            updatedAt: 1,
+            chatId: "chat-1",
+          }),
+          stalled({
+            entryId: "0002-long-turn",
+            reason: "long_turn",
+            readAt: null,
+            updatedAt: 2,
+          }),
+        ]),
+        [],
+        ["chat-1"],
+      );
+
+      expect(result.chats["chat-1"]).toMatchObject({
+        unreadFailure: true,
+        unreadDone: false,
+      });
+    });
+
+    it("still lets an ordinary stall end an older unread completion", () => {
+      const result = selectCloudNotificationIndicators(
+        rowsById([
+          stoppedAt({
+            entryId: "0001-done-unread",
+            severity: "done",
+            readAt: null,
+            updatedAt: 1,
+            chatId: "chat-1",
+          }),
+          stalled({
+            entryId: "0002-stall",
+            reason: "provider_buffering",
+            readAt: null,
+            updatedAt: 2,
+          }),
+        ]),
+        [],
+        ["chat-1"],
+      );
+
+      expect(result.chats["chat-1"]).toMatchObject({
+        unreadDone: false,
+        unreadFailure: true,
+      });
+    });
+
+    it("lights no glyph by itself, and is still an unread row of the entity", () => {
+      const result = selectCloudNotificationIndicators(
+        rowsById([
+          stalled({
+            entryId: "0001-long-turn",
+            reason: "long_turn",
+            readAt: null,
+            updatedAt: 1,
+          }),
+        ]),
+        [],
+        ["chat-1"],
+      );
+
+      expect(result.chats["chat-1"]).toEqual({
+        pendingApproval: false,
+        pendingInterview: false,
+        pendingFork: false,
+        unreadFailure: false,
+        unreadDone: false,
+        unreadCount: 1,
+      });
     });
   });
 

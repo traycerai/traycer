@@ -1,5 +1,5 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { act, cleanup, render, screen, waitFor } from "@testing-library/react";
+import { act, cleanup, render, screen } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
 import {
@@ -137,14 +137,15 @@ async function acceptTheMove(queryClient: QueryClient): Promise<void> {
   });
 }
 
-/** Holds the assertion's span open without asking the host anything. */
+/** Lets `ms` of the fake clock pass, settling the render and the reads in it. */
 async function holdFor(ms: number): Promise<void> {
   await act(async () => {
-    await new Promise((resolve) => setTimeout(resolve, ms));
+    await vi.advanceTimersByTimeAsync(ms);
   });
 }
 
 beforeEach(() => {
+  vi.useFakeTimers();
   useMoveSheetStore.setState({ target: null });
   useSettingsEnvironmentPickStore.setState({
     pick: { kind: "local", hostId: HOST_ID, hostName: "Old laptop" },
@@ -153,6 +154,7 @@ beforeEach(() => {
 
 afterEach(() => {
   cleanup();
+  vi.useRealTimers();
   resetNegotiatedManifests();
   clientMock.current = null;
   useSettingsEnvironmentPickStore.setState({ pick: null });
@@ -162,50 +164,37 @@ describe("the status read while this computer's move runs", () => {
   it("counts the items up and clears the note when the move ends, within the move's own span", async () => {
     let answer: EnvironmentStatusResponseV11 = AWAITING_CONSENT;
     const { queryClient } = renderNote(() => answer);
-    await waitFor(() =>
-      expect(screen.getByTestId("local-row-note").textContent).toContain(
-        "not in Personal yet",
-      ),
+    await holdFor(0);
+    expect(screen.getByTestId("local-row-note").textContent).toContain(
+      "not in Personal yet",
     );
 
     // The person presses Move to Personal: the host starts the upload.
     answer = moving(1);
     await acceptTheMove(queryClient);
-    await waitFor(() =>
-      expect(
-        screen.getByTestId("host-settings-card-progress").textContent,
-      ).toBe(
-        "Moving this computer's settings to Personal · 1 of 3 items applied",
-      ),
+    await holdFor(0);
+    expect(screen.getByTestId("host-settings-card-progress").textContent).toBe(
+      "Moving this computer's settings to Personal · 1 of 3 items applied",
     );
 
     // The count moves with the upload, and the note clears when the move
     // ends - both inside a span the steady cadence cannot resolve.
     answer = moving(2);
-    await waitFor(
-      () =>
-        expect(
-          screen.getByTestId("host-settings-card-progress").textContent,
-        ).toBe(
-          "Moving this computer's settings to Personal · 2 of 3 items applied",
-        ),
-      { timeout: WITHIN_THE_MOVE_MS },
+    await holdFor(WITHIN_THE_MOVE_MS);
+    expect(screen.getByTestId("host-settings-card-progress").textContent).toBe(
+      "Moving this computer's settings to Personal · 2 of 3 items applied",
     );
 
     answer = MOVED;
-    await waitFor(
-      () =>
-        expect(screen.queryByTestId("host-settings-card-progress")).toBeNull(),
-      { timeout: WITHIN_THE_MOVE_MS },
-    );
+    await holdFor(WITHIN_THE_MOVE_MS);
+    expect(screen.queryByTestId("host-settings-card-progress")).toBeNull();
   });
 
   it("leaves a computer that has not moved on the steady cadence", async () => {
     const { reads } = renderNote(() => AWAITING_CONSENT);
-    await waitFor(() =>
-      expect(screen.getByTestId("local-row-note").textContent).toContain(
-        "not in Personal yet",
-      ),
+    await holdFor(0);
+    expect(screen.getByTestId("local-row-note").textContent).toContain(
+      "not in Personal yet",
     );
 
     await holdFor(BEFORE_THE_STEADY_READ_MS);
@@ -229,10 +218,9 @@ describe("the status read while this computer's move runs", () => {
       setup: { stage: "moving_settings", state: "awaiting_consent" },
     });
     const { reads } = renderNote(() => stoppedSharing);
-    await waitFor(() =>
-      expect(screen.getByTestId("local-row-note").textContent).toContain(
-        "not in Personal yet",
-      ),
+    await holdFor(0);
+    expect(screen.getByTestId("local-row-note").textContent).toContain(
+      "not in Personal yet",
     );
 
     await holdFor(BEFORE_THE_STEADY_READ_MS);
@@ -251,11 +239,10 @@ describe("the status read while this computer's move runs", () => {
       ],
     });
     const { reads } = renderNote(() => stopped);
-    await waitFor(() =>
-      expect(
-        screen.getByTestId("host-settings-card-move-stopped").textContent,
-      ).toBe("Moving stopped: it couldn't finish. 1 item left."),
-    );
+    await holdFor(0);
+    expect(
+      screen.getByTestId("host-settings-card-move-stopped").textContent,
+    ).toBe("Moving stopped: it couldn't finish. 1 item left.");
 
     await holdFor(BEFORE_THE_STEADY_READ_MS);
 

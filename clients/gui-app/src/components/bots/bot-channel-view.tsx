@@ -8,6 +8,7 @@ import {
   type ReactNode,
 } from "react";
 import type { UseQueryResult } from "@tanstack/react-query";
+import type { JsonContent } from "@traycer/protocol/common/registry";
 import type {
   BotConversationRecord,
   BotConversationSendResponse,
@@ -23,6 +24,7 @@ import type {
 import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
 import type { HostRpcError } from "@traycer-clients/shared/host-transport/host-messenger";
 import type { OpenMessage } from "@traycer/protocol/persistence/epic/open-harness-records";
+import type { BotRecord } from "@traycer/protocol/host/bot/schemas";
 import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
 import type { ChatBotThreadLine } from "@/components/chat/chat-bot-presentation-context";
 import { usePaneVisible } from "@/components/epic-tabs/pane-visibility-context";
@@ -63,7 +65,23 @@ import {
 import { useBotSendFailure } from "@/hooks/bots/use-bot-send-failure";
 import { BotReadFailure } from "@/components/bots/bot-read-failure";
 import { BotReplyingStrip } from "@/components/bots/bot-replying-strip";
+import { useBotReplyingTurn } from "@/hooks/bots/use-bot-replying-turn";
 import { BotResizablePane } from "@/components/bots/bot-resizable-pane";
+import { BotExchangeLog } from "@/components/bots/bot-exchange-log";
+import {
+  BotExchangeLinesContext,
+  type BotExchangeLines,
+} from "@/components/chat/bot-exchange-lines-context";
+import {
+  exchangeLogOf,
+  type BotExchange,
+  type BotExchangeLogEntry,
+} from "@/lib/bots/bot-exchanges";
+import { useBotExchanges } from "@/hooks/bots/use-bot-exchanges";
+import {
+  BotSearchBackLink,
+  BotSearchPanel,
+} from "@/components/bots/bot-search-panel";
 import {
   BotThreadPanel,
   type BotThreadPanelThread,
@@ -81,6 +99,7 @@ import {
 } from "@/components/bots/bot-surface-card-context";
 import { useBotSendTakesAnswers } from "@/hooks/bots/use-bot-send-version";
 import { useBotFailedRequest } from "@/hooks/bots/use-bot-failed-request";
+import { useBotImageReach } from "@/hooks/bots/use-bot-send-version";
 import {
   failedOnRequest,
   useBotActivity,
@@ -95,43 +114,55 @@ import {
   type BotMemberResolver,
 } from "@/lib/bots/bot-member-names";
 import {
-  isDocumentVisible,
-  subscribeDocumentVisibility,
-} from "@/lib/dom/document-visibility";
-import { isDocumentFocused } from "@/lib/notifications/notification-presence";
+  isDocumentFocused,
+  subscribeHostNotificationPresence,
+} from "@/lib/notifications/notification-presence";
 import { useBotDraftsStore } from "@/stores/bots/bot-drafts-store";
 import { useKeptBoxDraft } from "@/hooks/bots/use-kept-box-draft";
-import type {
-  BotOpenMemory,
-  BotOpenThread,
-  BotSessionOpen,
-  BotTurnOpen,
+import {
+  useBotOpenThreadStore,
+  useBotRail,
+  type BotExchangeRail,
+  type BotOpenExchange,
+  type BotOpenMemory,
+  type BotOpenSearch,
+  type BotOpenThread,
+  type BotSessionOpen,
+  type BotTurnOpen,
 } from "@/stores/bots/bot-open-thread-store";
+import {
+  closeBotSearch,
+  showBotSearchResults,
+  useBotSearchStore,
+} from "@/stores/bots/bot-search-store";
 import { useAuthStore, type AuthProfile } from "@/stores/auth/auth-store";
 import type { StackedIdentity } from "@/components/bots/bot-avatars";
-import { isPhoneLayoutOnly } from "@/lib/mobile-app";
+import type { MobileTileCount } from "@/lib/layout/mobile-layout-form";
 import { cn } from "@/lib/utils";
 
 const EMPTY_THREADS: ReadonlyArray<BotThreadSummary> = [];
+const NO_EXCHANGES: ReadonlyArray<BotExchange> = [];
 const NO_EPIC_IDS: ReadonlyArray<string> = [];
 
 /**
- * Whether the person is in this window: it is on screen and has focus, the
- * same foreground the notification plane reads for a focused chat.
+ * The failed message the channel's box is editing, which belongs to the
+ * channel's conversation: a channel the view resolves to anew (a host that
+ * names it late, or names none and lists an earlier one) starts the box
+ * without it.
  */
-function readWindowForeground(): boolean {
-  return isDocumentVisible() && isDocumentFocused();
-}
-
-function subscribeWindowForeground(listener: () => void): () => void {
-  const stopVisibility = subscribeDocumentVisibility(listener);
-  window.addEventListener("focus", listener);
-  window.addEventListener("blur", listener);
-  return () => {
-    stopVisibility();
-    window.removeEventListener("focus", listener);
-    window.removeEventListener("blur", listener);
-  };
+function useChannelBoxEdit(channelId: string | null): {
+  readonly edit: BotComposerEdit | null;
+  readonly setEdit: (edit: BotComposerEdit | null) => void;
+  readonly endEdit: () => void;
+} {
+  const [edit, setEdit] = useState<BotComposerEdit | null>(null);
+  const endEdit = useCallback(() => setEdit(null), []);
+  const [editChannelId, setEditChannelId] = useState(channelId);
+  if (channelId !== editChannelId) {
+    setEditChannelId(channelId);
+    setEdit(null);
+  }
+  return { edit, setEdit, endEdit };
 }
 
 /**
@@ -234,9 +265,10 @@ function useThreadPanelLanding(
  * on its line; it is marked read once its panel is in front of the person,
  * which a verdict landing while they are elsewhere waits for.
  *
- * The rail beside the channel is one slot: a thread, or the bot's memory,
- * which takes the thread's place and brings it back from its header. A
- * reply's receipt, in the channel or in the thread (Tracy Bots T86), opens
+ * The rail beside the channel is one slot: a thread, the bot's memory, which
+ * takes the thread's place and brings it back from its header, or a search,
+ * whose results land the channel beside them or open a thread in their place
+ * with a link back. A reply's receipt, in the channel or in the thread (Tracy Bots T86), opens
  * the turn's session in place of the channel. The trunk's routing card sits above the channel's
  * box, as the agent chat's sits above its composer.
  */
@@ -293,10 +325,19 @@ export function BotChannelView(props: {
   readonly environmentId: string;
   /** Another bot of the environment by its id, for a shared memory's writer. */
   readonly botNameOf: (botId: string) => string | null;
-  /** Opens the bot's Activity tab, from the open thread's header. */
-  readonly onOpenActivity: () => void;
+  /**
+   * The bots of the bot's environment, which name the other end of the bot's
+   * messages with other bots; `null` until listed.
+   */
+  readonly environmentBots: ReadonlyArray<BotRecord> | null;
+  /** The log of the bot's messages with another bot, open in the rail; `null` for none. */
+  readonly openExchange: BotOpenExchange | null;
+  /** Opens a pair's log in the rail, and closes it back to what it displaced. */
+  readonly exchangeRail: BotExchangeRail;
   /** A live team main bot's setup history at the top of the channel (T67b); `null` for none. */
   readonly setupHistory: ReactNode;
+  /** How many tiles the installed app shows; `null` where the container decides. */
+  readonly tiles: MobileTileCount | null;
 }): ReactNode {
   const {
     botId,
@@ -318,8 +359,11 @@ export function BotChannelView(props: {
     onOpenMemory,
     environmentId,
     botNameOf,
-    onOpenActivity,
+    environmentBots,
+    openExchange,
+    exchangeRail,
     setupHistory,
+    tiles,
   } = props;
   const openThreadPostId = open?.anchorMessageId ?? null;
   const client = useTabHostClient();
@@ -332,11 +376,13 @@ export function BotChannelView(props: {
       ),
     [appConversationChatId, conversations.data],
   );
+  const channelId = channel?.conversationId ?? null;
   // What the channel's box holds unsent, kept under the bot by the channel's
-  // conversation, so it outlives the pane when another channel is shown.
+  // conversation, so it outlives the pane when another channel is shown: the
+  // one the box sends to, which a host naming no channel leaves to the list.
   const { seed: channelSeed, keptDraft: channelKeptDraft } = useKeptBoxDraft(
     botId,
-    appConversationChatId,
+    channelId,
   );
 
   const {
@@ -356,9 +402,13 @@ export function BotChannelView(props: {
     boundHostId,
     boundHostEpoch,
   });
+  const imageReach = useBotImageReach({
+    hostId,
+    boundHostId,
+    boundHostTakes: threadAnchorKinds,
+  });
   const activity = useBotActivity(botId);
   const viewer = useAuthStore((s) => s.profile);
-
   // A direct reply's option, clicked, is the person's next post: offered
   // only while no earlier pick is still being sent. A pick that fails says so
   // where a failed message does.
@@ -369,7 +419,6 @@ export function BotChannelView(props: {
   } = useBotConversationSendMutation(client);
   const sendFailure = useBotSendFailure();
   const { fail: failSend, clear: clearSendFailure } = sendFailure;
-  const channelId = channel?.conversationId ?? null;
   const chooseOption = useCallback(
     (choice: string) => {
       if (channelId === null) return;
@@ -385,7 +434,7 @@ export function BotChannelView(props: {
           supersedes: null,
           answer: null,
         },
-        { onError: failSend },
+        { onError: () => failSend(null) },
       );
     },
     [botId, channelId, clearSendFailure, failSend, send],
@@ -415,7 +464,7 @@ export function BotChannelView(props: {
             skipped: given.skipped,
           },
         },
-        { onError: failSend },
+        { onError: () => failSend(null) },
       );
     },
     [botId, channelId, clearSendFailure, failSend, sendAsync],
@@ -424,8 +473,7 @@ export function BotChannelView(props: {
   // A post the bot failed to answer, in a thread or at the top level, is
   // retried as it is or edited in the channel's box, which posts its
   // replacement.
-  const [edit, setEdit] = useState<BotComposerEdit | null>(null);
-  const endEdit = useCallback(() => setEdit(null), []);
+  const { edit, setEdit, endEdit } = useChannelBoxEdit(channelId);
   const failedOnChannel = useCallback(
     (requestId: string) => failedOnRequest(activity, requestId),
     [activity],
@@ -446,7 +494,7 @@ export function BotChannelView(props: {
       onOpenThread(null);
       setEdit(postEdit);
     },
-    [onOpenThread],
+    [onOpenThread, setEdit],
   );
 
   // A direct post or a row of the bot with no thread yet shows a box whose
@@ -483,7 +531,11 @@ export function BotChannelView(props: {
   // thread's panel says the send's delivery; one the bot answers in the
   // channel opens nothing, and the channel's box says it.
   const openPostedThread = useCallback(
-    (response: BotConversationSendResponse, text: string): boolean => {
+    (
+      response: BotConversationSendResponse,
+      text: string,
+      content: JsonContent,
+    ): boolean => {
       if (response.threadId === null || !threadListSupported) return false;
       onOpenThread({
         anchorMessageId: response.messageId,
@@ -493,6 +545,7 @@ export function BotChannelView(props: {
           threadId: response.threadId,
           requestId: response.requestId,
           text,
+          content,
           senderUserId: viewer?.userId ?? null,
           sentAt: Date.now(),
           delivery: response.delivery,
@@ -615,17 +668,49 @@ export function BotChannelView(props: {
   });
 
   const trunkReply = channelTrunkReply(activity);
+  const trunkReplyTurn = useBotReplyingTurn({
+    client,
+    hostId,
+    botId,
+    activity: trunkReply,
+    onOpenTurn,
+  });
 
-  // The rail holds one of a thread or the memory: the memory open leaves no
-  // thread open (`open` is `null`).
+  const [channelSection, setChannelSection] = useState<HTMLElement | null>(
+    null,
+  );
+  // The rail holds one of a thread, the memory, a pair's log or a search's results: either
+  // of the last two leaves no thread open (`open` is `null`).
   const railThreadPostId = threadListSupported ? openThreadPostId : null;
   const threadOpen = railThreadPostId !== null;
-  const railOpen = threadOpen || openMemory !== null;
+  const search = useChannelSearch({
+    botId,
+    tiles,
+    section: channelSection,
+    threadListSupported,
+    threadList,
+    railHeld: railHolds(threadOpen, openMemory, openExchange),
+    setLanding,
+  });
+  const { railOpen } = search;
+
   const openThread =
     openThreadPostId === null
       ? null
       : (threadsByPost.get(openThreadPostId) ?? null);
   const { quoteIntoOpenBox, quoteFor } = useBoxQuotes(railThreadPostId);
+  // The bot's messages with other bots: lines between the channel's rows and
+  // the open thread's, and a pair's log in the rail.
+  const exchangeLines = useExchangeLines({
+    botId,
+    hostId,
+    boundHostId,
+    trunkChatId,
+    environmentBots,
+    botTitle,
+    openPair: exchangeRail.open,
+    openThread,
+  });
   const threadLanding = useThreadPanelLanding(
     props.landOn,
     drawnPanelThreadId({
@@ -681,9 +766,6 @@ export function BotChannelView(props: {
     readCursors,
     shown: threadOpen,
   });
-  const [channelSection, setChannelSection] = useState<HTMLElement | null>(
-    null,
-  );
   const presentedChannelId = useReadChannelWhilePresented({
     client,
     botId,
@@ -758,24 +840,32 @@ export function BotChannelView(props: {
               data-conversation-id={channel.conversationId}
               className={cn(
                 "min-h-0 min-w-0 flex-1 flex-col",
-                railOpen ? channelBesideRailClass() : "flex",
+                railOpen ? channelBesideRailClass(tiles) : "flex",
               )}
             >
-              <BotChatTranscript
+              <ChannelSearchBack
                 botId={botId}
-                chatId={channel.conversationId}
-                hostId={hostId}
-                title={botTitle}
-                instanceId={`bot-channel:${botId}`}
-                surface={surface}
-                resolveMember={resolveMember}
-                showConnecting
-                header={null}
-                landOn={landing}
+                shown={search.showing}
+                on="channel"
               />
+              <BotExchangeLinesContext value={exchangeLines.channel}>
+                <BotChatTranscript
+                  botId={botId}
+                  chatId={channel.conversationId}
+                  hostId={hostId}
+                  title={botTitle}
+                  instanceId={`bot-channel:${botId}`}
+                  surface={surface}
+                  resolveMember={resolveMember}
+                  showConnecting
+                  header={null}
+                  landOn={landing}
+                />
+              </BotExchangeLinesContext>
               <BotReplyingStrip
                 botTitle={botTitle}
                 activity={trunkReply}
+                turn={trunkReplyTurn}
                 testId="bot-channel-replying"
               />
               <BotRoutingCard
@@ -784,17 +874,22 @@ export function BotChannelView(props: {
                 sessionChatId={trunkChatId}
               />
               <BotMessageComposer
+                // Its draft is the conversation's, kept by it (`channelKeptDraft`).
+                key={channel.conversationId}
                 botId={botId}
+                botTitle={botTitle}
                 conversationId={channel.conversationId}
                 threadId={null}
                 announcementId={null}
                 sendable
+                imageReach={imageReach}
                 placeholder={`Message ${botTitle}`}
                 label={`Message ${botTitle}`}
                 testId="bot-channel-composer"
                 failure={sendFailure}
                 edit={edit}
                 onEditEnd={endEdit}
+                onEditResume={setEdit}
                 seed={channelSeed}
                 keptDraft={channelKeptDraft}
                 quote={quoteFor(null)}
@@ -802,6 +897,7 @@ export function BotChannelView(props: {
               />
             </section>
             <ChannelMemoryPane
+              tiles={tiles}
               memory={openMemory}
               render={(memory) => (
                 <BotMemoryPanel
@@ -824,32 +920,73 @@ export function BotChannelView(props: {
                 />
               )}
             />
-            <ChannelThreadPane
-              postId={railThreadPostId}
-              render={(postId) => (
-                <BotThreadPanel
-                  key={postId}
+            <ChannelSearchPane
+              tiles={tiles}
+              open={search.showing === "results"}
+              render={() => (
+                <BotSearchPanel
                   botId={botId}
-                  hostId={hostId}
-                  boundHostId={boundHostId}
                   botTitle={botTitle}
-                  conversationId={channel.conversationId}
-                  originMessageId={postId}
-                  sent={open?.sent ?? null}
-                  thread={panelThread}
-                  tasks={tasks}
-                  anchorSenderLabel={anchorSenderLabel}
-                  resolveMember={resolveMember}
-                  landOn={threadLanding.landing}
-                  onClose={() => {
-                    threadLanding.spend();
-                    onOpenThread(null);
-                  }}
-                  onOpenActivity={onOpenActivity}
-                  onEditPost={editPostFromThread}
-                  onOpenTurn={onOpenTurn}
-                  onOpenSession={onOpenSession}
-                  quote={quoteFor(postId)}
+                  hostId={hostId}
+                  environmentId={environmentId}
+                  onClose={() => closeBotSearch(botId)}
+                />
+              )}
+            />
+            <ChannelThreadPane
+              tiles={tiles}
+              postId={railThreadPostId}
+              searchBack={
+                <ChannelSearchBack
+                  botId={botId}
+                  shown={search.showing}
+                  on="thread"
+                />
+              }
+              render={(postId) => (
+                <BotExchangeLinesContext value={exchangeLines.thread}>
+                  <BotThreadPanel
+                    key={postId}
+                    botId={botId}
+                    hostId={hostId}
+                    boundHostId={boundHostId}
+                    botTitle={botTitle}
+                    imageReach={imageReach}
+                    conversationId={channel.conversationId}
+                    originMessageId={postId}
+                    sent={open?.sent ?? null}
+                    thread={panelThread}
+                    tasks={tasks}
+                    anchorSenderLabel={anchorSenderLabel}
+                    resolveMember={resolveMember}
+                    landOn={
+                      threadLanding.landing ?? search.threadLandingOn(postId)
+                    }
+                    onClose={() => {
+                      threadLanding.spend();
+                      onOpenThread(null);
+                    }}
+                    onEditPost={editPostFromThread}
+                    onOpenTurn={onOpenTurn}
+                    onOpenSession={onOpenSession}
+                    quote={quoteFor(postId)}
+                  />
+                </BotExchangeLinesContext>
+              )}
+            />
+            <ChannelExchangePane
+              tiles={tiles}
+              exchange={openExchange}
+              render={(exchange) => (
+                <BotExchangeLog
+                  key={exchange.peerBotId}
+                  botId={botId}
+                  botTitle={botTitle}
+                  peerBotId={exchange.peerBotId}
+                  peerName={exchangeLines.peerName(exchange.peerBotId)}
+                  entries={exchangeLines.logOf(exchange.peerBotId)}
+                  loading={exchangeLines.loading}
+                  onClose={exchangeRail.close}
                 />
               )}
             />
@@ -914,49 +1051,54 @@ function useSurfaceCards(args: {
 }
 
 /**
- * The channel while the rail is open: the rail takes its place in the installed
- * app, and sits beside it where the tab's container has room. Either way it stays
- * mounted, so its scroll and its draft are there when the rail closes.
+ * The channel while the rail is open: the rail takes its place on one tile, and
+ * sits beside it on two. Either way it stays mounted, so its scroll and its draft
+ * are there when the rail closes.
  */
-function channelBesideRailClass(): string {
-  return isPhoneLayoutOnly() ? "hidden" : "hidden @3xl:flex";
+function channelBesideRailClass(tiles: MobileTileCount | null): string {
+  if (tiles === null) return "hidden @3xl:flex";
+  return tiles === 2 ? "flex" : "hidden";
 }
 
 /**
  * The rail's pane. Off the installed app the tab's container places it and the
- * person drags its width; in the installed app it fills the row, with nothing to
- * drag.
+ * person drags its width; in the installed app the width rule places it, and two
+ * tiles split the row equally with nothing to drag.
  */
-function railPanePlacement(): {
+function railPanePlacement(tiles: MobileTileCount | null): {
   readonly className: string;
   readonly handleClassName: string;
 } {
-  if (isPhoneLayoutOnly()) {
+  if (tiles === null) {
     return {
-      className: "flex min-h-0 min-w-0 flex-1 flex-col",
-      handleClassName: "hidden",
+      className:
+        "flex min-h-0 min-w-0 flex-1 flex-col @3xl:w-(--bot-pane-width) @3xl:max-w-[60%] @3xl:flex-none @3xl:border-l @3xl:border-border/60",
+      handleClassName: "hidden @3xl:block",
     };
   }
   return {
-    className:
-      "flex min-h-0 min-w-0 flex-1 flex-col @3xl:w-(--bot-pane-width) @3xl:max-w-[60%] @3xl:flex-none @3xl:border-l @3xl:border-border/60",
-    handleClassName: "hidden @3xl:block",
+    className: cn(
+      "flex min-h-0 min-w-0 flex-1 flex-col",
+      tiles === 2 && "border-l border-border/60",
+    ),
+    handleClassName: "hidden",
   };
 }
 
 /** The bot's memory open in the rail; nothing for none (`null`). */
 function ChannelMemoryPane(props: {
+  readonly tiles: MobileTileCount | null;
   readonly memory: BotOpenMemory | null;
   readonly render: (memory: BotOpenMemory) => ReactNode;
 }): ReactNode {
-  const { memory, render } = props;
+  const { tiles, memory, render } = props;
   if (memory === null) return null;
   return (
     <BotResizablePane
       pane="thread"
       edge="left"
       label="Resize panel"
-      {...railPanePlacement()}
+      {...railPanePlacement(tiles)}
       testId="bot-memory-pane"
     >
       {render(memory)}
@@ -964,24 +1106,267 @@ function ChannelMemoryPane(props: {
   );
 }
 
-/** The thread open in the rail, by its post's id; nothing for none (`null`). */
+/** A search's results open in the rail; nothing while they are not (`open`). */
+function ChannelSearchPane(props: {
+  readonly tiles: MobileTileCount | null;
+  readonly open: boolean;
+  readonly render: () => ReactNode;
+}): ReactNode {
+  const { tiles, open, render } = props;
+  if (!open) return null;
+  return (
+    <BotResizablePane
+      pane="thread"
+      edge="left"
+      label="Resize search"
+      {...railPanePlacement(tiles)}
+      testId="bot-search-pane"
+    >
+      {render()}
+    </BotResizablePane>
+  );
+}
+
+/** The way back to a search's results, while it stands where it is drawn. */
+function ChannelSearchBack(props: {
+  readonly botId: string;
+  readonly shown: BotOpenSearch["showing"]["kind"] | null;
+  readonly on: BotOpenSearch["showing"]["kind"];
+}): ReactNode {
+  const { botId, shown, on } = props;
+  if (shown !== on) return null;
+  return <BotSearchBackLink onBack={() => showBotSearchResults(botId)} />;
+}
+
+/** Whether the rail beside the channel holds a thread, the memory or a pair's log. */
+function railHolds(
+  threadOpen: boolean,
+  memory: BotOpenMemory | null,
+  exchange: BotOpenExchange | null,
+): boolean {
+  return threadOpen || memory !== null || exchange !== null;
+}
+
+/** A pair's log open in the rail; nothing for none (`null`). */
+function ChannelExchangePane(props: {
+  readonly tiles: MobileTileCount | null;
+  readonly exchange: BotOpenExchange | null;
+  readonly render: (exchange: BotOpenExchange) => ReactNode;
+}): ReactNode {
+  const { tiles, exchange, render } = props;
+  if (exchange === null) return null;
+  return (
+    <BotResizablePane
+      pane="thread"
+      edge="left"
+      label="Resize panel"
+      {...railPanePlacement(tiles)}
+      testId="bot-exchange-pane"
+    >
+      {render(exchange)}
+    </BotResizablePane>
+  );
+}
+
+/**
+ * What the channel and its open thread draw of the bot's messages with other
+ * bots, and what a pair's log reads: no lines while the feed or the
+ * environment's bots are not read yet, so the lines appear once both are.
+ */
+function useExchangeLines(input: {
+  readonly botId: string;
+  readonly hostId: string;
+  readonly boundHostId: string | null;
+  readonly trunkChatId: string;
+  readonly environmentBots: ReadonlyArray<BotRecord> | null;
+  readonly botTitle: string;
+  readonly openPair: (peerBotId: string) => void;
+  /** The listed thread open in the rail; `null` for none. */
+  readonly openThread: BotThreadSummary | null;
+}): {
+  readonly channel: BotExchangeLines | null;
+  readonly thread: BotExchangeLines | null;
+  /** The pair's log: every message between the bot and `peerBotId`, oldest first. */
+  readonly logOf: (peerBotId: string) => ReadonlyArray<BotExchangeLogEntry>;
+  /** The bot's feed has not handed over its history yet. */
+  readonly loading: boolean;
+  readonly peerName: (peerBotId: string) => string | null;
+} {
+  const { environmentBots, botTitle, openPair } = input;
+  const openThreadSession = input.openThread?.sessionChatId ?? null;
+  const { all, channel, ofSession } = useBotExchanges({
+    botId: input.botId,
+    hostId: input.hostId,
+    boundHostId: input.boundHostId,
+    trunkChatId: input.trunkChatId,
+  });
+  const peerName = useCallback(
+    (peerBotId: string): string | null =>
+      environmentBots?.find((bot) => bot.botId === peerBotId)?.title ?? null,
+    [environmentBots],
+  );
+  const listed = environmentBots !== null;
+  const linesOf = useCallback(
+    (exchanges: ReadonlyArray<BotExchange> | null): BotExchangeLines | null =>
+      exchanges === null || !listed
+        ? null
+        : { exchanges, botTitle, peerName, openPair },
+    [botTitle, listed, openPair, peerName],
+  );
+  const channelLines = useMemo(() => linesOf(channel), [channel, linesOf]);
+  const threadLines = useMemo(
+    () =>
+      openThreadSession === null ? null : linesOf(ofSession(openThreadSession)),
+    [linesOf, ofSession, openThreadSession],
+  );
+  const logOf = useCallback(
+    (peerBotId: string) => exchangeLogOf(all ?? NO_EXCHANGES, peerBotId),
+    [all],
+  );
+  return {
+    channel: channelLines,
+    thread: threadLines,
+    logOf,
+    loading: all === null,
+    peerName,
+  };
+}
+
+/**
+ * The thread open in the rail, by its post's id; nothing for none (`null`).
+ * `searchBack` is drawn above it.
+ */
 function ChannelThreadPane(props: {
+  readonly tiles: MobileTileCount | null;
   readonly postId: string | null;
+  readonly searchBack: ReactNode;
   readonly render: (postId: string) => ReactNode;
 }): ReactNode {
-  const { postId, render } = props;
+  const { tiles, postId, searchBack, render } = props;
   if (postId === null) return null;
   return (
     <BotResizablePane
       pane="thread"
       edge="left"
       label="Resize thread"
-      {...railPanePlacement()}
+      {...railPanePlacement(tiles)}
       testId="bot-thread-pane"
     >
+      {searchBack}
       {render(postId)}
     </BotResizablePane>
   );
+}
+
+/**
+ * Whether the rail takes the channel's place in this pane: a result landed
+ * in the channel then needs the channel in front of it.
+ */
+function channelHiddenBesideRail(
+  section: HTMLElement,
+  tiles: MobileTileCount | null,
+): boolean {
+  if (tiles !== null) return tiles === 1;
+  return window.getComputedStyle(section).display === "none";
+}
+
+/**
+ * The search this channel's rail holds, and the result on its way here: one
+ * of the channel lands it where it is, and one of a thread opens the thread
+ * in the results' place once the list says which post it hangs off, however
+ * the channel came to show (a result in another bot switches to it first). A
+ * thread no list names cannot open, and its row says so.
+ */
+function useChannelSearch(args: {
+  readonly botId: string;
+  readonly tiles: MobileTileCount | null;
+  /** The channel's section; `null` until it is drawn. */
+  readonly section: HTMLElement | null;
+  /** The rail already holds a thread, the memory or a pair's log. */
+  readonly railHeld: boolean;
+  readonly threadListSupported: boolean;
+  readonly threadList: {
+    readonly data:
+      | { readonly threads: ReadonlyArray<BotThreadSummary> }
+      | undefined;
+    readonly isError: boolean;
+  };
+  readonly setLanding: (
+    land: (previous: BotTranscriptLanding | null) => BotTranscriptLanding,
+  ) => void;
+}): {
+  /** The rail holds a thread, the memory or a pair's log, or these results. */
+  readonly railOpen: boolean;
+  /** What of the search is in front, `null` for no search. */
+  readonly showing: BotOpenSearch["showing"]["kind"] | null;
+  /** The landing a result asked of the thread hanging off `postId`, or `null`. */
+  readonly threadLandingOn: (postId: string) => BotTranscriptLanding | null;
+} {
+  const { botId, tiles, section, threadListSupported, setLanding } = args;
+  // `null` while the list is read; a host without threads lists none.
+  const threads = threadListSupported
+    ? (args.threadList.data?.threads ?? null)
+    : EMPTY_THREADS;
+  const threadsFailed = args.threadList.isError;
+  const rail = useBotRail(botId);
+  const open = rail?.kind === "search" ? rail : null;
+  const jump = useBotSearchStore((state) =>
+    state.jump?.botId === botId ? state.jump : null,
+  );
+  const threadLanding = useBotSearchStore((state) =>
+    state.threadLanding?.botId === botId ? state.threadLanding : null,
+  );
+  useEffect(() => {
+    if (jump === null || open === null) return;
+    const { messageId } = jump;
+    const search = useBotSearchStore.getState();
+    const { setRail } = useBotOpenThreadStore.getState();
+    if (jump.threadId === null) {
+      if (section === null) return;
+      search.spendJump();
+      setLanding((previous) => ({
+        messageId,
+        sendPostId: null,
+        visit: (previous?.visit ?? 0) + 1,
+      }));
+      if (channelHiddenBesideRail(section, tiles)) {
+        setRail(botId, {
+          kind: "search",
+          back: open.back,
+          showing: { kind: "channel" },
+        });
+      }
+      return;
+    }
+    if (threads === null && !threadsFailed) return;
+    const listed = threads?.find((thread) => thread.threadId === jump.threadId);
+    const anchor = listed?.anchor ?? null;
+    if (anchor === null) {
+      search.missThread();
+      return;
+    }
+    search.landThread(anchor.messageId, jump);
+    setRail(botId, {
+      kind: "search",
+      back: open.back,
+      showing: {
+        kind: "thread",
+        thread: {
+          anchorMessageId: anchor.messageId,
+          announcement: false,
+          anchorKind: null,
+          sent: null,
+        },
+      },
+    });
+  }, [botId, jump, open, section, setLanding, threads, threadsFailed, tiles]);
+  const showing = open?.showing.kind ?? null;
+  return {
+    railOpen: args.railHeld || showing === "results",
+    showing,
+    threadLandingOn: (postId) =>
+      threadLanding?.postId === postId ? threadLanding.landing : null,
+  };
 }
 
 /**
@@ -1220,8 +1605,8 @@ function useChannelRow(input: {
 function usePresented(shown: boolean): boolean {
   const paneVisible = usePaneVisible();
   const windowForeground = useSyncExternalStore(
-    subscribeWindowForeground,
-    readWindowForeground,
+    subscribeHostNotificationPresence,
+    isDocumentFocused,
   );
   return shown && paneVisible && windowForeground;
 }

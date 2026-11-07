@@ -48,6 +48,7 @@ export {
 } from "@/lib/query-keys/browser-mutation-keys";
 export { resourcesMutationKeys } from "@/lib/query-keys/resources-mutation-keys";
 export { chatContinueMutationKeys } from "@/lib/query-keys/chat-continue-mutation-keys";
+export { feedbackDraftMutationKeys } from "@/lib/query-keys/feedback-draft-mutation-keys";
 export { chatFallbackMutationKeys } from "@/lib/query-keys/chat-fallback-mutation-keys";
 export { managedCommandMutationKeys } from "@/lib/query-keys/managed-command-mutation-keys";
 export { agentMutationKeys } from "@/lib/query-keys/agent-mutation-keys";
@@ -61,6 +62,7 @@ export {
   providerAutoJudgeWriteScope,
 } from "@/lib/query-keys/auto-mode-write-scopes";
 export { providerNativeSubagentsWriteScope } from "@/lib/query-keys/providers-native-subagents-scope";
+export { providerNativeMemoryWriteScope } from "@/lib/query-keys/providers-native-memory-scope";
 export { sessionNamesWriteScope } from "@/lib/query-keys/config-session-names-scope";
 export { providersListQueryKey } from "@/lib/query-keys/providers-query-keys";
 export {
@@ -87,10 +89,12 @@ export {
   botSlackMutationKeys,
   botSlackQueryKeys,
 } from "@/lib/query-keys/bot-slack-query-keys";
+export { teamHostMutationKeys } from "@/lib/query-keys/team-host-mutation-keys";
 export { mentionQueryKeys } from "@/lib/query-keys/mention-query-keys";
 export { imageMutationKeys } from "@/lib/query-keys/image-mutation-keys";
 export { appearanceQueryKeys } from "@/lib/query-keys/appearance-query-keys";
 export { appearanceMutationKeys } from "@/lib/query-keys/appearance-mutation-keys";
+export { soundtrackQueryKeys } from "@/lib/query-keys/soundtrack-query-keys";
 
 export const queryKeys = {
   hostBase: hostQueryKeys.base,

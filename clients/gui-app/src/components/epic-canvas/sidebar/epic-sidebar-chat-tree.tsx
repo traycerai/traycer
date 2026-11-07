@@ -291,8 +291,11 @@ import {
 } from "./epic-sidebar-selection";
 import {
   chatDescendantKind,
+  chatDescendantStatusRollup,
+  chatStatusRollupWords,
   useChatArchiveHiddenIds,
   type ChatDescendantStatusKind,
+  type ChatDescendantStatusRollup,
 } from "./use-chat-archive-hidden-ids";
 import {
   chatFilterEmptyStateDescription,
@@ -450,36 +453,6 @@ const CHAT_STATUS_RANKS: Record<ChatDescendantStatusKind, number> = {
   "terminal-failure": 1,
 };
 
-/** {@link CHAT_STATUS_RANKS} most-urgent first, for picking a rollup's kind. */
-const CHAT_STATUS_ORDER: ReadonlyArray<ChatDescendantStatusKind> = [
-  "failure",
-  "fork",
-  "interview",
-  "approval",
-  "running",
-  "background",
-  "done",
-  "terminal-failure",
-];
-
-/**
- * Rollup over a collapsed parent's hidden chat descendants: the
- * highest-priority kind plus per-tier counts (each descendant is counted once,
- * under its own highest tier) so the icon's tooltip can break the aggregate
- * down instead of hiding it behind one glyph.
- */
-interface ChatDescendantStatusRollup {
-  readonly kind: ChatDescendantStatusKind;
-  readonly failureCount: number;
-  readonly forkCount: number;
-  readonly interviewCount: number;
-  readonly approvalCount: number;
-  readonly runningCount: number;
-  readonly backgroundCount: number;
-  readonly doneCount: number;
-  readonly terminalFailureCount: number;
-}
-
 const EMPTY_CHAT_DESCENDANT_IDS: ReadonlyArray<string> = [];
 
 /**
@@ -563,43 +536,19 @@ function useChatDescendantStatus(args: {
   return useAppLocalNotificationsStore(
     useShallow((state): ChatDescendantStatusRollup | null => {
       if (descendants === EMPTY_CHAT_DESCENDANT_IDS) return null;
-      const counts: Record<ChatDescendantStatusKind, number> = {
-        failure: 0,
-        fork: 0,
-        interview: 0,
-        approval: 0,
-        running: 0,
-        background: 0,
-        done: 0,
-        "terminal-failure": 0,
-      };
-      for (const [index, chatId] of descendants.entries()) {
-        const indicatorState = selectNotificationIndicatorState(
-          state,
-          { epicId, chatId },
-          descendantHostIds[index] ?? null,
-          indicators,
-        );
-        const kind = chatDescendantKind(
-          indicatorState,
-          activityTiers.get(chatId),
-        );
-        if (kind !== null) counts[kind] += 1;
-      }
-      const kind =
-        CHAT_STATUS_ORDER.find((candidate) => counts[candidate] > 0) ?? null;
-      if (kind === null) return null;
-      return {
-        kind,
-        failureCount: counts.failure,
-        forkCount: counts.fork,
-        interviewCount: counts.interview,
-        approvalCount: counts.approval,
-        runningCount: counts.running,
-        backgroundCount: counts.background,
-        doneCount: counts.done,
-        terminalFailureCount: counts["terminal-failure"],
-      };
+      return chatDescendantStatusRollup(
+        descendants.map((chatId, index) =>
+          chatDescendantKind(
+            selectNotificationIndicatorState(
+              state,
+              { epicId, chatId },
+              descendantHostIds[index] ?? null,
+              indicators,
+            ),
+            activityTiers.get(chatId),
+          ),
+        ),
+      );
     }),
   );
 }
@@ -1138,13 +1087,6 @@ export function ChatTreePanelBody(props: ChatTreePanelBodyProps) {
     },
     [tabId, panelId, expandedIdsStore, expandAction, collapseAction],
   );
-  const ensureExpanded = useCallback(
-    (id: string) => {
-      expandAction(tabId, panelId, id);
-    },
-    [tabId, panelId, expandAction],
-  );
-
   useLayoutEffect(() => {
     if (revealRequest === null) return;
     const region = treeRegionRef.current;
@@ -1176,9 +1118,8 @@ export function ChatTreePanelBody(props: ChatTreePanelBodyProps) {
       subscribe: expandedIdsStore.subscribe,
       isExpanded,
       toggleExpanded,
-      ensureExpanded,
     }),
-    [expandedIdsStore, isExpanded, toggleExpanded, ensureExpanded],
+    [expandedIdsStore, isExpanded, toggleExpanded],
   );
   // The content clock each LOCAL chat sorts by - the same value its idle-time
   // chip renders, so the order and the chip cannot disagree (see
@@ -1852,15 +1793,18 @@ const ChatNode = memo(function ChatNode(props: ChatNodeProps) {
     (event: React.MouseEvent<HTMLButtonElement>) => {
       if (isRenaming) return;
       if (openableType === null) return;
-      openTile({
-        node: openRef(),
-        target: { tabId },
-        gesture: "single",
-        modifiers: modifiersFromMouseEvent(event),
-        placement: null,
-        dedupe: true,
-        source: "direct_ui",
-      });
+      openTile(
+        {
+          node: openRef(),
+          target: { tabId },
+          gesture: "single",
+          modifiers: modifiersFromMouseEvent(event),
+          placement: null,
+          dedupe: true,
+          source: "direct_ui",
+        },
+        "user",
+      );
       // The opening itself is the tree's, on every surface. A mounting surface
       // only gets to append - the switcher sheet closes here.
       if (surface !== null) surface.onRowActivated();
@@ -1876,15 +1820,18 @@ const ChatNode = memo(function ChatNode(props: ChatNodeProps) {
       if (openableType === null) return;
       // Host-aware dedupe: a cross-host clone holds one tab per host for the
       // same copied chat id, and `openRef` means this row's own.
-      openTile({
-        node: { ...openRef(), instanceId: uuidv4() },
-        target: { tabId },
-        gesture: "double",
-        modifiers: modifiersFromMouseEvent(event),
-        placement: null,
-        dedupe: true,
-        source: "direct_ui",
-      });
+      openTile(
+        {
+          node: { ...openRef(), instanceId: uuidv4() },
+          target: { tabId },
+          gesture: "double",
+          modifiers: modifiersFromMouseEvent(event),
+          placement: null,
+          dedupe: true,
+          source: "direct_ui",
+        },
+        "user",
+      );
     },
     [openRef, isRenaming, openableType, openTile, tabId],
   );
@@ -3658,32 +3605,7 @@ function chatSelfStatusRank(
 
 /** "Nested: 1 needs attention · 2 running" - non-zero tiers, priority order. */
 function nestedChatStatusSummary(rollup: ChatDescendantStatusRollup): string {
-  const parts: string[] = [];
-  if (rollup.failureCount > 0) {
-    parts.push(
-      `${rollup.failureCount} ${rollup.failureCount === 1 ? "needs" : "need"} attention`,
-    );
-  }
-  if (rollup.forkCount > 0) {
-    parts.push(`${rollup.forkCount} waiting for fork resolution`);
-  }
-  if (rollup.interviewCount > 0) {
-    parts.push(`${rollup.interviewCount} waiting for interview`);
-  }
-  if (rollup.approvalCount > 0) {
-    parts.push(`${rollup.approvalCount} waiting for approval`);
-  }
-  if (rollup.runningCount > 0) parts.push(`${rollup.runningCount} running`);
-  if (rollup.backgroundCount > 0) {
-    parts.push(`${rollup.backgroundCount} in background`);
-  }
-  if (rollup.doneCount > 0) parts.push(`${rollup.doneCount} completed`);
-  if (rollup.terminalFailureCount > 0) {
-    parts.push(
-      `${rollup.terminalFailureCount} terminal ${rollup.terminalFailureCount === 1 ? "failure" : "failures"}`,
-    );
-  }
-  return `Nested: ${parts.join(" · ")}`;
+  return `Nested: ${chatStatusRollupWords(rollup)}`;
 }
 
 /**

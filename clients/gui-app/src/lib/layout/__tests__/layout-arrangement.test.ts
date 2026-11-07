@@ -89,6 +89,16 @@ const FLAT_RAIL: ReadonlyArray<RailEntry> = DEFAULT_RAIL.filter(
   (entry) => entry.kind === "panel",
 );
 
+/**
+ * The shipped rail without its Git Diff and Pull Requests stack: the one
+ * Agents and Artifacts stack an install from before the second stack had. The
+ * stacking and unstacking cases below build on that single pair, so each
+ * expectation names the one stack it is about.
+ */
+const ONE_STACK_RAIL: ReadonlyArray<RailEntry> = DEFAULT_RAIL.filter(
+  (entry) => entry.id !== "stack:railGitDiff+railPullRequests",
+);
+
 /** The rail as the ids it holds, panels and dividers alike, in order. */
 function idsOf(rail: ReadonlyArray<RailEntry>): ReadonlyArray<string> {
   return rail.map((entry) => entry.id);
@@ -104,7 +114,7 @@ function withRail(rail: ReadonlyArray<RailEntry>): LayoutArrangement {
 }
 
 describe("the shipped rail (L-155, L-166)", () => {
-  it("is the ten panels in order, with one stack and no dividers", () => {
+  it("is the ten panels in order, with two stacks and no dividers", () => {
     expect(idsOf(DEFAULT_RAIL)).toEqual([
       "railAgents",
       "stack:railAgents+railArtifacts",
@@ -113,6 +123,7 @@ describe("the shipped rail (L-155, L-166)", () => {
       "railBrowsers",
       "railSimulators",
       "railGitDiff",
+      "stack:railGitDiff+railPullRequests",
       "railPullRequests",
       "railFileTree",
       "railSharing",
@@ -123,6 +134,7 @@ describe("the shipped rail (L-155, L-166)", () => {
     );
     expect(DEFAULT_RAIL.filter((entry) => entry.kind === "stack")).toEqual([
       { kind: "stack", id: "stack:railAgents+railArtifacts" },
+      { kind: "stack", id: "stack:railGitDiff+railPullRequests" },
     ]);
   });
 
@@ -730,7 +742,9 @@ describe("the rail's three-state visibility (L-47, L-61)", () => {
       railComments: { shown: "hidden" },
     });
 
+    // File Tree is off in the shipped values, so the map names it too.
     expect(panelVisibilityOverridesFromValues(values)).toEqual({
+      "file-tree": false,
       sharing: false,
       "pull-requests": true,
       comments: false,
@@ -1146,7 +1160,7 @@ describe("the status bar surface toggle (L-160)", () => {
 
 describe("a stack link, normalised (L-166)", () => {
   it("is dropped when one of its panels moves away", () => {
-    const moved = moveRailPanelBeside(withRail(DEFAULT_RAIL), {
+    const moved = moveRailPanelBeside(withRail(ONE_STACK_RAIL), {
       sourcePanelId: "artifacts",
       targetPanelId: "comments",
       placeAfter: true,
@@ -1226,7 +1240,7 @@ describe("a stack link, normalised (L-166)", () => {
       idsOf(
         normalizeRail([stack("stack:railAgents+railArtifacts"), ...FLAT_RAIL]),
       ),
-    ).toEqual(idsOf(DEFAULT_RAIL));
+    ).toEqual(idsOf(ONE_STACK_RAIL));
   });
 
   it("is broken by a divider between its two panels", () => {
@@ -1253,7 +1267,7 @@ describe("a stack link, normalised (L-166)", () => {
       ...FLAT_RAIL.slice(2),
     ];
 
-    expect(idsOf(normalizeRail(three))).toEqual(idsOf(DEFAULT_RAIL));
+    expect(idsOf(normalizeRail(three))).toEqual(idsOf(ONE_STACK_RAIL));
   });
 
   it("is dropped when its id is not a pair this build can read", () => {
@@ -1280,7 +1294,7 @@ describe("a stack link, normalised (L-166)", () => {
 describe("stacking and unstacking (L-168)", () => {
   it("puts the dragged panel directly below the one it was dropped on", () => {
     const stacked = stackRailPanels(
-      withRail(DEFAULT_RAIL),
+      withRail(ONE_STACK_RAIL),
       "terminals",
       "browsers",
       "panel",
@@ -1303,7 +1317,7 @@ describe("stacking and unstacking (L-168)", () => {
   });
 
   it("joins a target that is already stacked, growing the stack, instead of refusing it (L-181)", () => {
-    const arrangement = withRail(DEFAULT_RAIL);
+    const arrangement = withRail(ONE_STACK_RAIL);
     const expected = [
       "railAgents",
       "stack:railAgents+railArtifacts+railTerminals",
@@ -1373,7 +1387,7 @@ describe("stacking and unstacking (L-168)", () => {
   });
 
   it("builds a stack one join at a time", () => {
-    let arrangement = withRail(DEFAULT_RAIL);
+    let arrangement = withRail(ONE_STACK_RAIL);
     arrangement = stackRailPanels(
       arrangement,
       "terminals",
@@ -1408,7 +1422,7 @@ describe("stacking and unstacking (L-168)", () => {
     // says: the old join goes, the new one arrives, Artifacts stands alone.
     // This is the section-header ("panel") carry: only Agents itself moves.
     const joined = stackRailPanels(
-      withRail(DEFAULT_RAIL),
+      withRail(ONE_STACK_RAIL),
       "chats",
       "terminals",
       "panel",
@@ -1441,7 +1455,7 @@ describe("stacking and unstacking (L-168)", () => {
   it("is not what a before or after drop does", () => {
     // Terminals dropped after Browsers really moves, and the two stay apart:
     // the only stack is still the shipped one.
-    const after = moveRailPanelBeside(withRail(DEFAULT_RAIL), {
+    const after = moveRailPanelBeside(withRail(ONE_STACK_RAIL), {
       sourcePanelId: "terminals",
       targetPanelId: "browsers",
       placeAfter: true,
@@ -1483,7 +1497,7 @@ describe("stacking and unstacking (L-168)", () => {
     });
 
     it("leaves the FIRST or LAST member exactly where it stands, dissolving a two-member stack", () => {
-      const paired = withRail(DEFAULT_RAIL);
+      const paired = withRail(ONE_STACK_RAIL);
 
       expect(
         idsOf(normalizeRail(unstackRailPanel(paired, "railAgents").rail)),
@@ -1515,7 +1529,7 @@ describe("stacking and unstacking (L-168)", () => {
 
   describe("moveRailPanelBeside and a stack (L-181)", () => {
     it("carries the WHOLE stack when dragged by its rail icon, landing beside another panel as one block", () => {
-      const moved = moveRailPanelBeside(withRail(DEFAULT_RAIL), {
+      const moved = moveRailPanelBeside(withRail(ONE_STACK_RAIL), {
         sourcePanelId: "chats",
         targetPanelId: "browsers",
         placeAfter: true,
@@ -1534,7 +1548,7 @@ describe("stacking and unstacking (L-168)", () => {
 
     it("carries the WHOLE stack to the rail's end", () => {
       const moved = moveRailPanelToEnd(
-        withRail(DEFAULT_RAIL),
+        withRail(ONE_STACK_RAIL),
         "chats",
         "stack",
       ).rail;
@@ -1635,7 +1649,7 @@ describe("stacking and unstacking (L-168)", () => {
     });
 
     it("reorders WITHIN its own stack and stays a member", () => {
-      const moved = moveRailPanelBeside(withRail(DEFAULT_RAIL), {
+      const moved = moveRailPanelBeside(withRail(ONE_STACK_RAIL), {
         sourcePanelId: "artifacts",
         targetPanelId: "chats",
         placeAfter: false,
@@ -1651,7 +1665,7 @@ describe("stacking and unstacking (L-168)", () => {
     });
 
     it("dropped beside a stacked target lands beside its WHOLE stack, never between its members", () => {
-      const moved = moveRailPanelBeside(withRail(DEFAULT_RAIL), {
+      const moved = moveRailPanelBeside(withRail(ONE_STACK_RAIL), {
         sourcePanelId: "git-diff",
         targetPanelId: "artifacts",
         placeAfter: true,
@@ -1729,7 +1743,7 @@ describe("stacking and unstacking (L-168)", () => {
 
   it("leaves its stack when moved to the rail's end", () => {
     const moved = moveRailPanelToEnd(
-      withRail(DEFAULT_RAIL),
+      withRail(ONE_STACK_RAIL),
       "chats",
       "panel",
     ).rail;
@@ -1742,7 +1756,7 @@ describe("stacking and unstacking (L-168)", () => {
 
   describe("the list's own join: stack with the panel below (L-168, L-181)", () => {
     it("offers the panel directly below, only from the LAST member of a block", () => {
-      const rail = withRail(DEFAULT_RAIL).rail;
+      const rail = withRail(ONE_STACK_RAIL).rail;
 
       // Agents is the FIRST member of the shipped pair, not the last.
       expect(railPanelToStackBelow(rail, "railAgents")).toBeNull();
@@ -1782,7 +1796,7 @@ describe("stacking and unstacking (L-168)", () => {
 
     it("joins the two blocks with no member moving", () => {
       const joined = stackRailPanelWithBelow(
-        withRail(DEFAULT_RAIL),
+        withRail(ONE_STACK_RAIL),
         "railArtifacts",
       ).rail;
 
@@ -1807,7 +1821,7 @@ describe("stacking and unstacking (L-168)", () => {
 
 describe("what a rail SURFACE draws (L-166, L-167)", () => {
   it("draws a stack as one capsule holding every member, and everything else as itself (L-181)", () => {
-    expect(railDisplayEntries(DEFAULT_RAIL, () => true, "spacing")).toEqual([
+    expect(railDisplayEntries(ONE_STACK_RAIL, () => true, "spacing")).toEqual([
       {
         kind: "stack",
         id: "stack:railAgents+railArtifacts",
@@ -1838,7 +1852,7 @@ describe("what a rail SURFACE draws (L-166, L-167)", () => {
 
   it("leaves the visible partner standing alone when one is hidden", () => {
     const drawn = railDisplayEntries(
-      DEFAULT_RAIL,
+      ONE_STACK_RAIL,
       (regionId) => regionId !== "railArtifacts",
       "spacing",
     );
@@ -1849,14 +1863,14 @@ describe("what a rail SURFACE draws (L-166, L-167)", () => {
 
   it("tells the body which panels share it", () => {
     expect(
-      railStackMembersFor(DEFAULT_RAIL, "railArtifacts", () => true),
+      railStackMembersFor(ONE_STACK_RAIL, "railArtifacts", () => true),
     ).toEqual(["railAgents", "railArtifacts"]);
     expect(
-      railStackMembersFor(DEFAULT_RAIL, "railTerminals", () => true),
+      railStackMembersFor(ONE_STACK_RAIL, "railTerminals", () => true),
     ).toEqual(["railTerminals"]);
     expect(
       railStackMembersFor(
-        DEFAULT_RAIL,
+        ONE_STACK_RAIL,
         "railAgents",
         (regionId) => regionId !== "railArtifacts",
       ),
@@ -2128,15 +2142,15 @@ describe("resolvePersistedArrangement: the enum fields (L-133)", () => {
   }>([
     {
       field: "tabStripPlacement",
-      fallback: "top",
+      fallback: "left",
       valid: ["top", "left", "right"],
       junk: [1, "TOP", null, {}, "sideways"],
     },
     {
       field: "sidebarSide",
-      fallback: "left",
-      valid: ["right"],
-      junk: [0, "LEFT", null, "top"],
+      fallback: "right",
+      valid: ["left"],
+      junk: [0, "RIGHT", null, "top"],
     },
     {
       field: "readingWidth",
@@ -2146,7 +2160,7 @@ describe("resolvePersistedArrangement: the enum fields (L-133)", () => {
     },
     {
       field: "sideStripView",
-      fallback: "layered",
+      fallback: "activity",
       valid: ["layered", "activity"],
       junk: [1, "ACTIVITY", null, {}, "focused"],
     },

@@ -1,5 +1,5 @@
 import { useColumnOverlayPlacement } from "@/components/layout/column-edge-context";
-import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
+import { PersonAvatar } from "@/components/bots/bot-avatars";
 import { Button } from "@/components/ui/button";
 import {
   DropdownMenu,
@@ -28,8 +28,8 @@ import { useHostBinding } from "@/lib/host";
 import { TooltipWrapper } from "@/components/ui/tooltip-wrapper";
 import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
 import { useIsTextTruncated } from "@/hooks/ui/use-is-text-truncated";
-import { computeInitials } from "@/lib/auth/compute-initials";
 import { usePlatformBillingUrl } from "@/hooks/auth/use-platform-billing-url";
+import { useAuthStore } from "@/stores/auth/auth-store";
 import { useSignOutConfirmStore } from "@/stores/auth/sign-out-confirm-store";
 import { useTitleBarDragSuppression } from "@/stores/layout/title-bar-drag-store";
 import { getSystemTabModalApi } from "@/stores/tabs/system-tab-modal-bridge";
@@ -68,23 +68,21 @@ export function UserMenuAvatar(props: {
   readonly email: string;
   readonly avatarUrl: string | null;
 }) {
+  const userId = useAuthStore((state) => state.profile?.userId ?? null);
   return (
-    <Avatar size="sm">
-      {props.avatarUrl !== null ? (
-        <AvatarImage src={props.avatarUrl} alt="" />
-      ) : null}
-      <AvatarFallback>
-        {computeInitials(props.userName, props.email)}
-      </AvatarFallback>
-    </Avatar>
+    <PersonAvatar
+      userId={userId}
+      name={props.userName.trim().length > 0 ? props.userName : props.email}
+      avatarUrl={props.avatarUrl}
+      size="sm"
+    />
   );
 }
 
 /**
- * Avatar-triggered identity menu. Controlled open state is intentional:
- * jsdom doesn't implement the full PointerEvent path Radix drives, so
- * without the explicit `open` the Radix trigger wouldn't fire under
- * tests. Outside-click + Escape dismissal still come from Radix.
+ * Avatar-triggered identity menu. A host switch closes the menu only after
+ * the choice lands; a refusal keeps the list open for another pick.
+ * Outside-click and Escape dismissal still come from Radix.
  */
 export function UserMenu(props: UserMenuProps) {
   const placement = useColumnOverlayPlacement("foot");
@@ -128,9 +126,7 @@ export function UserMenu(props: UserMenuProps) {
         side={placement?.side}
         align={placement?.align ?? "end"}
         sideOffset={6}
-        // A menu's width, whatever a host is called: long names truncate
-        // in their rows and read in full from a tooltip.
-        className="w-max max-w-64 whitespace-nowrap"
+        className="w-max max-w-64"
         data-testid="user-menu-content"
       >
         <div
@@ -145,7 +141,10 @@ export function UserMenu(props: UserMenuProps) {
           </span>
         </div>
         <DropdownMenuSeparator />
-        <UserMenuHostSection tooltipSide={placement?.side ?? "left"} />
+        <UserMenuHostSection
+          tooltipSide={placement?.side ?? "left"}
+          onActivated={() => setOpen(false)}
+        />
         <DropdownMenuItem
           onSelect={() => {
             setOpen(false);
@@ -241,34 +240,24 @@ function isUserMenuHostPickable(
 }
 
 /**
- * One host in the account menu. Its tooltip says what a click does (the
- * activate hint, on a row that can take one) and, only when the menu's width
- * has truncated it, the host's full name.
+ * One host in the account menu. The section header owns the activation
+ * consequence; a tooltip is only a fallback for a cut-off name.
  */
 function UserMenuHostRow(props: {
   readonly host: HostScopeOption;
   readonly active: boolean;
   readonly activatingHostId: string | null;
   readonly tooltipSide: "top" | "right" | "bottom" | "left";
+  readonly onPick: (hostId: string) => void;
 }): ReactNode {
   const { host, active, activatingHostId } = props;
   const { ref: nameRef, isTruncated } = useIsTextTruncated<HTMLSpanElement>(
     host.name,
   );
   const selectable = isUserMenuHostPickable(host, activatingHostId);
-  const hint = active || !selectable ? null : ACTIVATE_HOST_HINT;
   return (
     <TooltipWrapper
-      label={
-        isTruncated ? (
-          <span className="flex flex-col gap-0.5">
-            <span className="break-all">{host.name}</span>
-            {hint}
-          </span>
-        ) : (
-          hint
-        )
-      }
+      label={isTruncated ? host.name : null}
       side={props.tooltipSide}
       sideOffset={6}
       align={undefined}
@@ -281,9 +270,11 @@ function UserMenuHostRow(props: {
         value={host.hostId}
         aria-disabled={selectable ? undefined : true}
         onSelect={(event) => {
-          if (!selectable) event.preventDefault();
+          event.preventDefault();
+          if (selectable && !active) props.onPick(host.hostId);
         }}
         data-testid={`user-menu-host-option-${host.hostId}`}
+        className="items-end"
       >
         <HostOptionRow
           host={host}
@@ -293,7 +284,6 @@ function UserMenuHostRow(props: {
           surfaceState={AVAILABLE_HOST_ROW_SURFACE_STATE}
           updateView={null}
           nameRef={nameRef}
-          nameWraps={false}
           environmentLabel={null}
         />
         {host.hostId === activatingHostId ? (
@@ -321,6 +311,7 @@ function UserMenuHostRow(props: {
  */
 function UserMenuHostSection(props: {
   readonly tooltipSide: "top" | "right" | "bottom" | "left";
+  readonly onActivated: () => void;
 }): ReactNode {
   const binding = useHostBinding();
   useRefreshHostDirectoryOnOpen(true, binding?.directory ?? null);
@@ -346,21 +337,14 @@ function UserMenuHostSection(props: {
   if (hosts.length === 0 && !showsRetry) return null;
   return (
     <>
-      <DropdownMenuLabel>Host</DropdownMenuLabel>
+      <DropdownMenuLabel>
+        Set the app&apos;s machine
+        <span className="block whitespace-normal text-ui-xs font-normal normal-case tracking-normal text-muted-foreground">
+          {ACTIVATE_HOST_HINT}
+        </span>
+      </DropdownMenuLabel>
       <DropdownMenuRadioGroup
         value={activeHostId ?? ""}
-        onValueChange={(hostId) => {
-          // Radix still reports the value of a row whose select was
-          // cancelled, so an inert row is refused here too.
-          const host = hosts.find((option) => option.hostId === hostId);
-          if (
-            hostId !== activeHostId &&
-            host !== undefined &&
-            isUserMenuHostPickable(host, activatingHostId)
-          ) {
-            makeActive(hostId);
-          }
-        }}
         data-testid="user-menu-host-section"
       >
         {hosts.map((host) => (
@@ -370,6 +354,11 @@ function UserMenuHostSection(props: {
             active={host.hostId === activeHostId}
             activatingHostId={activatingHostId}
             tooltipSide={props.tooltipSide}
+            onPick={(hostId) => {
+              void makeActive(hostId).then((landed) => {
+                if (landed) props.onActivated();
+              });
+            }}
           />
         ))}
       </DropdownMenuRadioGroup>

@@ -15,9 +15,9 @@ import type { OpenEpicStoreHandle } from "@/stores/epics/open-epic/store";
 /**
  * The click handler a legacy `<traycer-*>` reference component runs, or `null`
  * when the reference is not openable. A `null` handler is the single signal the
- * component uses to fall back to plain label text - so missing ids, an absent
- * epic-session context, and a same-epic node that does not resolve all degrade
- * the chip to inert text rather than a dead click.
+ * component uses to fall back to plain label text - so missing ids and a
+ * same-epic node that does not resolve degrade the chip to inert text rather
+ * than a dead click.
  */
 export type TraycerReferenceOpenHandler =
   | ((event: MouseEvent<HTMLElement>) => void)
@@ -42,9 +42,9 @@ export interface TraycerReferenceOpenState {
 /**
  * What a click on the reference should do, resolved once in render:
  *
- * - `none` - not openable (missing ids, no epic-session context, a same-epic
- *   node that does not resolve / has no active host). The handler is `null` and
- *   the chip renders plain text.
+ * - `none` - not openable (missing ids, a same-epic node that does not resolve
+ *   / has no active host). The handler is `null` and the chip renders plain
+ *   text.
  * - `same-epic-node` - open the resolved node as a replaceable preview tile in
  *   the open epic's current tab.
  * - `navigate` - navigate to the target epic and focus it, reusing
@@ -81,9 +81,8 @@ type OpenTarget =
  *   artifact id and only focuses the epic.
  *
  * These components live in the global `DEFAULT_COMPONENTS` map and may render
- * where no `<EpicSessionProvider>` exists. Without the handle (or an active
- * host for a node ref) the handler is `null` and the component renders plain
- * text.
+ * where no `<EpicSessionProvider>` exists, such as a bot's channel: with no
+ * open epic every reference is a cross-epic one and navigates.
  */
 export function useTraycerReferenceOpenHandler(input: {
   readonly epicId: string | undefined;
@@ -119,15 +118,18 @@ export function useTraycerReferenceOpenHandler(input: {
           // A single click on the reference: the resolver turns that into the
           // epic's current tab, with the preview/permanent call left to the
           // placement settings.
-          openTile({
-            node: target.ref,
-            target: { epicId: target.epicId },
-            gesture: "single",
-            modifiers: modifiersFromMouseEvent(event),
-            placement: null,
-            dedupe: true,
-            source: "direct_ui",
-          });
+          openTile(
+            {
+              node: target.ref,
+              target: { epicId: target.epicId },
+              gesture: "single",
+              modifiers: modifiersFromMouseEvent(event),
+              placement: null,
+              dedupe: true,
+              source: "direct_ui",
+            },
+            "user",
+          );
           return;
         }
         case "navigate":
@@ -179,10 +181,8 @@ function resolveOpenTarget(input: {
   const normalizedNodeId =
     nodeId === undefined || nodeId.length === 0 ? null : nodeId;
 
-  // Base usability: an epic id, an open-epic handle, and - for node refs - a
-  // node id.
+  // Base usability: an epic id and - for node refs - a node id.
   if (epicId === undefined || epicId.length === 0) return { kind: "none" };
-  if (handle === null) return { kind: "none" };
   if (requiresNode && normalizedNodeId === null) return { kind: "none" };
 
   // SAME-epic NODE: resolve the node against the open-epic projection and open
@@ -190,7 +190,11 @@ function resolveOpenTarget(input: {
   // projected / not openable) or a missing active host degrades to plain text.
   // An epic-only reference (no node id) falls through to navigate even for the
   // open epic, re-focusing it harmlessly rather than dead-clicking.
-  if (epicId === handle.epicId && normalizedNodeId !== null) {
+  if (
+    handle !== null &&
+    epicId === handle.epicId &&
+    normalizedNodeId !== null
+  ) {
     if (activeHostId === null) return { kind: "none" };
     const ref = epicNodeRefForNodeId(
       handle.store.getState(),

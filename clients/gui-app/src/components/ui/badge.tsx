@@ -2,6 +2,7 @@ import * as React from "react";
 import { cva, type VariantProps } from "class-variance-authority";
 import { Slot } from "radix-ui";
 
+import { CONTROL_TRANSITION } from "@/components/ui/control-transition";
 import { cn } from "@/lib/utils";
 
 // Press feedback is the shared `active:press-scrim`, never a per-variant
@@ -9,7 +10,7 @@ import { cn } from "@/lib/utils";
 // why a shared variant must not assert a press color, and why the scrim is
 // opted into per variant rather than declared on the base.
 const badgeVariants = cva(
-  "group/badge inline-flex w-fit shrink-0 items-center justify-center gap-1 overflow-hidden rounded-md border border-transparent font-medium whitespace-nowrap transition-all aria-disabled:active:bg-none focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50 has-data-[icon=inline-end]:pr-1.5 has-data-[icon=inline-start]:pl-1.5 aria-invalid:border-destructive aria-invalid:ring-destructive/20 dark:aria-invalid:ring-destructive/40 [&>svg]:pointer-events-none [&>svg]:size-3!",
+  `group/badge inline-flex w-fit shrink-0 items-center justify-center gap-1 overflow-hidden rounded-md border border-transparent font-medium whitespace-nowrap ${CONTROL_TRANSITION} aria-disabled:active:bg-none focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50 has-data-[icon=inline-end]:pr-1.5 has-data-[icon=inline-start]:pl-1.5 aria-invalid:border-destructive aria-invalid:ring-destructive/20 dark:aria-invalid:ring-destructive/40 [&>svg]:pointer-events-none [&>svg]:size-3!`,
   {
     variants: {
       variant: {
@@ -49,14 +50,6 @@ const badgeVariants = cva(
         // as a button beside the text it sits in.
         accent: "bg-primary/15 text-primary active:press-scrim",
       },
-      // A badge is one line by default (`whitespace-nowrap`), which is right
-      // for a tag and wrong for a sentence-length verdict pill: at phone width
-      // the host's longest skip label is wider than the row it sits in. `wrap`
-      // lets the text wrap inside the pill and caps the pill at its container.
-      wrap: {
-        true: "h-auto max-w-full whitespace-normal text-left",
-        false: "",
-      },
       // One height, three type steps - the same shape `Input` takes. `xs` is
       // the dense metadata chip the settings panels and the pickers are full
       // of (and squares its corners, because a 16px pill reads as a button);
@@ -65,6 +58,16 @@ const badgeVariants = cva(
         default: "h-5 px-2 py-0.5 text-ui-xs",
         sm: "h-5 px-1.5 py-0 text-overline",
         xs: "h-4 rounded-sm px-1.5 py-0 text-micro leading-none",
+      },
+      // A badge is one line by default (`whitespace-nowrap`), which is right
+      // for a tag and wrong for a sentence-length verdict pill: at phone width
+      // the host's longest skip label is wider than the row it sits in. `wrap`
+      // lets the text wrap inside the pill and caps the pill at its container.
+      // Declared after `size`: cva emits classes in this order, so `h-auto`
+      // outranks the size's fixed height and every wrapped line stays visible.
+      wrap: {
+        true: "h-auto max-w-full whitespace-normal text-left",
+        false: "",
       },
     },
     defaultVariants: {

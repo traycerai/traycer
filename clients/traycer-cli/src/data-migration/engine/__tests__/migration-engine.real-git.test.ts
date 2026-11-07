@@ -1,4 +1,5 @@
 import { execFileSync, spawnSync } from "node:child_process";
+import { GIT_OUTPUT_MAX_BUFFER_BYTES } from "../../../../../../scripts/git-output-limit.cjs";
 import {
   mkdir,
   mkdtemp,
@@ -44,7 +45,10 @@ import {
  */
 
 function gitSupportsRepair(): boolean {
-  const result = spawnSync("git", ["--version"], { encoding: "utf8" });
+  const result = spawnSync("git", ["--version"], {
+    maxBuffer: GIT_OUTPUT_MAX_BUFFER_BYTES,
+    encoding: "utf8",
+  });
   if (result.error !== undefined || result.status !== 0) return false;
   const match = /(\d+)\.(\d+)/u.exec(result.stdout);
   if (match === null) return false;
@@ -80,7 +84,12 @@ function git(cwd: string, ...args: string[]): string {
       "commit.gpgsign=false",
       ...args,
     ],
-    { cwd, env: gitEnv(), encoding: "utf8" },
+    {
+      maxBuffer: GIT_OUTPUT_MAX_BUFFER_BYTES,
+      cwd,
+      env: gitEnv(),
+      encoding: "utf8",
+    },
   );
 }
 

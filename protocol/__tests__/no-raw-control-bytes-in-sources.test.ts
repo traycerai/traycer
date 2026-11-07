@@ -11,6 +11,7 @@
  * needs no exception.
  */
 import { execFileSync } from "node:child_process";
+import { GIT_OUTPUT_MAX_BUFFER_BYTES } from "../../scripts/git-output-limit.cjs";
 import {
   mkdtempSync,
   readFileSync,
@@ -117,7 +118,10 @@ function isRegularFile(absolutePath: string): boolean {
 
 /** Tracked text sources of the OSS repo, relative to the repo root. */
 export function trackedTextSources(repoRoot: string): readonly string[] {
-  const listing = execFileSync("git", ["ls-files", "-z"], { cwd: repoRoot });
+  const listing = execFileSync("git", ["ls-files", "-z"], {
+    maxBuffer: GIT_OUTPUT_MAX_BUFFER_BYTES,
+    cwd: repoRoot,
+  });
   const files: string[] = [];
   for (const relative of splitGitNulListing(listing)) {
     if (!TEXT_SOURCE_EXTENSIONS.has(path.extname(relative))) continue;

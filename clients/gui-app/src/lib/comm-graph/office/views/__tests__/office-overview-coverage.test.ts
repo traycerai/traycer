@@ -288,7 +288,7 @@ describe("the grown-City overview coverage (H1)", () => {
     // tenth is green too, and so is a 1px inset in place of the ten. So the
     // name is not fixing an observed red in this case - it is removing the
     // shape that produced one next door, where the same four literals are
-    // tighter: in `office-plan-perf.test.ts`'s corner-coverage case a tenth off
+    // tighter: in `office-plan-perf.measure.ts`'s corner-coverage case a tenth off
     // the extent alone moves the far corner 246px off the probe point and the
     // anti-vacuity guard fires (`expected 0 to be greater than 0`) for a reason
     // that has nothing to do with the corner query it guards.

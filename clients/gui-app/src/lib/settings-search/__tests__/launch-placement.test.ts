@@ -13,6 +13,8 @@ const CONTEXT: SettingsAvailabilityContext = {
   featureSettings: null,
   mobileApp: false,
   phoneLayout: false,
+  soundtrackOffered: false,
+  soundtrackOn: false,
 };
 
 /**

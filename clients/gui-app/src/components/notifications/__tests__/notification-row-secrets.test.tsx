@@ -132,6 +132,10 @@ describe("<NotificationRow /> secrets rows", () => {
     expect(
       within(card).getByTestId("secret-grant-request-secret").textContent,
     ).toBe("DB_PASSWORD");
+    expect(within(entry).getByTestId("notification-body").textContent).toBe(
+      "Waiting for your decision",
+    );
+    expect(entry.textContent.match(/DB_PASSWORD/g)).toHaveLength(1);
     expect(
       within(card).getByTestId("secret-grant-request-approve"),
     ).toBeTruthy();
@@ -144,8 +148,13 @@ describe("<NotificationRow /> secrets rows", () => {
   });
 
   it("withdraws the answers on a resolved grant request", () => {
-    const entry = renderRow(buildRow({ resolvedAt: 5_000 }));
+    const entry = renderRow(
+      buildRow({ resolvedAt: 5_000, body: "DB_PASSWORD • Decided" }),
+    );
     expect(within(entry).getByTestId("secret-grant-request-card")).toBeTruthy();
+    expect(within(entry).getByTestId("notification-body").textContent).toBe(
+      "DB_PASSWORD • Decided",
+    );
     expect(
       within(entry).queryByTestId("secret-grant-request-approve"),
     ).toBeNull();
@@ -163,10 +172,37 @@ describe("<NotificationRow /> secrets rows", () => {
     expect(within(entry).getByTestId("notification-title").textContent).toBe(
       "Deploy checkout fix",
     );
+    expect(within(entry).getByTestId("notification-body").textContent).toBe(
+      "DB_PASSWORD • Waiting for your decision",
+    );
   });
 
   it("renders no card when the secrets field is absent", () => {
     const entry = renderRow(buildRow({ secrets: undefined }));
     expect(within(entry).queryByTestId("secret-grant-request-card")).toBeNull();
+    expect(within(entry).getByTestId("notification-body").textContent).toBe(
+      "DB_PASSWORD • Waiting for your decision",
+    );
+  });
+
+  it("uses the waiting status without repeating the secret name for a team request", () => {
+    const entry = renderRow(
+      buildRow({
+        secrets: {
+          ...GRANT,
+          environmentId: "environment-1",
+          teamName: "Acme",
+        },
+      }),
+    );
+    const card = within(entry).getByTestId("secret-grant-request-card");
+
+    expect(
+      within(card).getByTestId("secret-grant-request-secret").textContent,
+    ).toBe("DB_PASSWORD");
+    expect(within(entry).getByTestId("notification-body").textContent).toBe(
+      "Waiting for your decision",
+    );
+    expect(entry.textContent.match(/DB_PASSWORD/g)).toHaveLength(1);
   });
 });

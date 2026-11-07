@@ -11,72 +11,60 @@
  * runs the real sandbox reads and create over a scripted control plane.
  * The three views and the bot's session view are replaced by stubs
  * that expose their props, so what the surface PASSES them is what is
- * asserted. The tab strip's Activity label
- * reads the real summary hook over the real agent-activity store.
+ * asserted. The tab strip's Activity count reads the real
+ * `useBotActiveTasks` over the real agent-activity store and the real
+ * notification-indicator hooks (the host answers `indicatorState`).
  */
-import { useAuthStore } from "@/stores/auth/auth-store";
-import { setPhoneLayoutOnly } from "@/lib/mobile-app";
+import {
+  botListChangedMock,
+  botListQueryMock,
+  botMemoryMock,
+  botMutationsMock,
+  botSubscriptionMock,
+  botThreadListQueryMock,
+  connectableHostIdsMock,
+  environmentListMock,
+  environmentMembersMock,
+  hostDirectoryListMock,
+  hostEnvironmentBindingsMock,
+  cloudEpicTasksMock,
+  epicTaskContextsMock,
+  hostClientForHostIdMock,
+  hostQueriesMock,
+  type HostClientChange,
+  hostSupportsMethodMock,
+  mocks,
+  notificationHostMock,
+  type ReadScript,
+  tabHostClientMock,
+  tabHostProviderMock,
+  tabNavigationMock,
+} from "./bot-tab-surface-mocks";
+import { BotMentionsContext } from "@/components/bots/bot-mentions-context";
+
+import {
+  useVoiceSessionStore,
+  type VoiceSessionDriver,
+} from "@/stores/voice/voice-session-store";
 import { KEYBOARD_FOCUS_OWNER_PROPS } from "@/hooks/ui/use-keyboard-focus-layout";
+import { setPhoneLayoutOnly } from "@/lib/mobile-app";
+
 import {
-  holdScreenLandscape,
-  IPHONE_17,
-  lowerNativeKeyboard,
-  raiseNativeKeyboard,
-  restoreKeyboardEnvironment,
-} from "../../../../__tests__/short-keyboard-viewport-harness";
-import { StrictMode, type ReactNode } from "react";
+  installShellForm,
+  SHELL_WIDTH_COLUMN_256,
+  SHELL_WIDTH_MENU,
+  SHELL_WIDTH_TWO_TILES,
+  type ShellFormHarness,
+} from "../../../../__tests__/mobile-level2-form-harness";
+import { StrictMode, useContext, type ReactNode } from "react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import {
-  act,
-  cleanup,
-  render,
-  screen,
-  waitFor,
-  within,
-} from "@testing-library/react";
+import { act, render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import {
-  afterEach,
-  beforeEach,
-  describe,
-  expect,
-  it,
-  vi,
-  type Mock,
-} from "vitest";
-import type {
-  SandboxCatalogueFetchResult,
-  SandboxCreateFetchResult,
-  SandboxListFetchResult,
-  TraycerModelsFetchResult,
-} from "@traycer-clients/shared/host-client/sandbox-control";
-import {
-  SANDBOX_REFUSAL_CODE_INSUFFICIENT_CREDIT,
-  type SandboxCatalogue,
-  type SandboxCreateRequest,
-} from "@traycer/protocol/host/sandbox-control";
-import type { GuiAgentModelOption } from "@traycer/protocol/host/agent/gui/unary-schemas";
-import type { SandboxDefaultsRead } from "@/hooks/sandboxes/use-sandbox-defaults";
-import {
-  createFakeSandboxBinding,
-  refusal,
-  type FakeSandboxAuth,
-  type FakeSandboxBinding,
-} from "@/hooks/sandboxes/__tests__/sandbox-binding-fixture";
-import { sandboxSummaryFixture } from "@/hooks/sandboxes/__tests__/sandbox-fixtures";
-import type {
-  BotOpenPausedReason,
-  BotOpenResponse,
-  BotRecord,
-  BotTaskEntry,
-} from "@traycer/protocol/host/bot/schemas";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { BotOpenPausedReason } from "@traycer/protocol/host/bot/schemas";
 import type { BotOnboardingSetup } from "@traycer/protocol/host/bot/onboarding-schemas";
-import type { BotSubscriptionSnapshot } from "@/hooks/bots/use-bot-subscription";
-import type {
-  BotThreadSummary,
-  BotTurnRef,
-} from "@traycer/protocol/host/bot/conversation-schemas";
-import type { TabNavigationIntent } from "@/lib/tab-navigation/intents";
+
+import type { BotTurnRef } from "@traycer/protocol/host/bot/conversation-schemas";
 import type { BotChannelLanding } from "@/components/bots/bot-channel-view";
 import { readFocusedHostNotificationPresence } from "@/lib/notifications/notification-presence";
 import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
@@ -89,205 +77,51 @@ import type {
   BotTurnOpen,
 } from "@/stores/bots/bot-open-thread-store";
 import {
-  __resetAgentActivityStoreForTests,
-  __setAgentActivityStateForTests,
-} from "@/stores/agent-activity-store";
-
-type OpenResult =
-  | { readonly kind: "answer"; readonly response: BotOpenResponse }
-  | { readonly kind: "error"; readonly message: string };
-
-type ReadScript = { setup: BotOnboardingSetup | null } | "fails";
-
-/** The control plane a team's Enable cloud reads and creates through. */
-interface TeamCloudBinding extends FakeSandboxBinding {
-  readonly auth: FakeSandboxAuth & {
-    readonly getTraycerModels: Mock<() => Promise<TraycerModelsFetchResult>>;
-    readonly getSandboxCatalogue: Mock<
-      () => Promise<SandboxCatalogueFetchResult>
-    >;
-  };
-}
-
-interface HostClientChange {
-  readonly reason: "auth-changed" | "availability-recovered";
-  readonly currentHostId: string | null;
-}
-type HostClientChangeListener = (event: HostClientChange) => void;
-
-const mocks = vi.hoisted(() => ({
-  hostClient: {
-    stub: "tab-host-client",
-    onChange: (listener: HostClientChangeListener): (() => void) => {
-      mocks.changeListeners.add(listener);
-      return () => mocks.changeListeners.delete(listener);
-    },
-  },
-  /** The host client's change subscribers, fired by `emitHostChange`. */
-  changeListeners: new Set<HostClientChangeListener>(),
-  /** The app's host binding; `null` (none) unless a case scripts one. */
-  binding: null as TeamCloudBinding | null,
-  /** What every configuration's `sandbox_defaults` read answers. */
-  sandboxDefaults: { kind: "pending" } as SandboxDefaultsRead,
-  resubscribe: vi.fn<() => void>(),
-  /** The router's navigate, which the tab-navigation boundary below ignores. */
-  navigate: vi.fn(),
-  /** Every intent the surface asked the tab-navigation controller to activate. */
-  activateTabIntent: vi.fn<(intent: unknown) => void>(),
-  open: vi.fn<(variables: { botId: string }) => void>(),
-  openMutation: {
-    mutate: (
-      variables: { botId: string },
-      options: {
-        onSuccess: (response: BotOpenResponse) => void;
-        onError: (error: { message: string }) => void;
-      },
-    ): void => {
-      mocks.open(variables);
-      const result = mocks.state.openResult;
-      if (result === null) return;
-      if (result.kind === "answer") options.onSuccess(result.response);
-      else options.onError({ message: result.message });
-    },
-  },
-  /** The bots the tab subscribed to, in order. */
-  subscribed: [] as string[],
-  /** What `bot.onboarding.read` answers per environment id; absent is pending. */
-  reads: {} as Record<string, ReadScript>,
-  /** A read's `refetch`, which Retry calls on a failed `bot.onboarding.read`. */
-  readRefetch: vi.fn<() => void>(),
-  /** The bot list query's `refetch`; a case scripts what a re-read answers. */
-  listRefetch: vi.fn<() => void>(),
-  /** The environment list query's `refetch`. */
-  environmentsRefetch: vi.fn<() => void>(),
-  supportQueries: [] as Array<{ hostId: string | null; method: string }>,
-  membersQueries: [] as Array<{
-    environmentId: string | null;
-    enabled: boolean;
-  }>,
-  useBotListChangedSubscriptionForHost:
-    vi.fn<(hostId: string, enabled: boolean) => void>(),
-  state: {
-    snapshot: null as BotSubscriptionSnapshot | null,
-    deleted: false,
-    error: null as string | null,
-    paneVisible: true,
-    connectable: { hostIds: [] as string[], resolved: true },
-    listedBotIds: undefined as string[] | undefined,
-    /** Titles the list gives its bots; a bot not named is titled by its id. */
-    listTitles: new Map<string, string>(),
-    mainBotIds: null as Record<string, string> | null,
-    support: null as boolean | null,
-    /** Whether the host advertises `bot.onboarding.read`; `null` while unknown. */
-    onboardingSupport: true,
-    /** The line the host negotiated for `bot.onboarding.read`. */
-    onboardingVersion: { major: 1, minor: 1 },
-    /** When a successful `bot.onboarding.read` answered. */
-    readAt: 1_000,
-    /** A disabled read still holds what it answered before, as TanStack's
-     * cache does across a reconnect. */
-    readsCached: false,
-    /**
-     * The bot list's last read failed: its status is `error`, with the data
-     * it had kept, or none when `listedBotIds` is `undefined` (a cold read).
-     */
-    listFailed: false,
-    /** The environment list's status; `pending` carries no data. */
-    environmentsStatus: "success",
-    /** A failed environment list kept `environments` from before; else none. */
-    environmentsKept: false,
-    /** The bot list query's freshness, as TanStack reports it. */
-    list: {
-      dataUpdatedAt: 1_000,
-      errorUpdatedAt: 0,
-      isFetchedAfterMount: true,
-      isFetching: false,
-    },
-    membersSupport: null as boolean | null,
-    openResult: null as OpenResult | null,
-    threads: [] as BotThreadSummary[],
-    // Whether a bot.thread.list answer is held: true serves `threads` as that
-    // list; false means no answer yet, so the query has no data.
-    threadsHeld: true,
-    // Whether a bot.thread.list read is in flight, over the held answer if any.
-    threadsFetching: false,
-    // The last read of bot.thread.list failed.
-    threadsError: false,
-    environments: [] as Array<{
-      environmentId: string;
-      label: string;
-      ownerKind: "organization" | "user";
-    }>,
-  },
-}));
+  answer,
+  BOT_ID,
+  BOUND_HOST,
+  endBotTabSurfaceCase,
+  NEEDS_HOST_SETUP,
+  OTHER_BOT_ID,
+  resetBotTabSurfaceMocks,
+  setUpNewTeam,
+  SETUP_BOT_ID,
+  TAB_HOST,
+} from "./bot-tab-surface-harness";
 
 vi.mock("@tanstack/react-router", () => ({
   useNavigate: () => mocks.navigate,
 }));
-// The tab-navigation controller is the boundary: it commits a selection when
-// it acknowledges a navigation, which these cases read off the intents asked.
-// The controller accepts and acknowledges at once, as a history push does:
-// a Tracy channel is committed when its navigation lands.
-vi.mock("@/lib/tab-navigation", async (importOriginal) => {
-  const { useTracySurfaceStore: surfaceStore } =
-    await import("@/stores/bots/tracy-surface-store");
-  return {
-    ...(await importOriginal<typeof import("@/lib/tab-navigation")>()),
-    activateTabIntent: (
-      _navigate: unknown,
-      intent: TabNavigationIntent,
-      _options: unknown,
-    ) => {
-      mocks.activateTabIntent(intent);
-      if (intent.kind === "tracy") {
-        surfaceStore.getState().selectChannel(intent.botId);
-      }
-      return true;
-    },
-  };
-});
-vi.mock("@/hooks/host/use-host-supports-method", () => ({
-  useHostMethodSupport: (hostId: string | null, method: string) => {
-    mocks.supportQueries.push({ hostId, method });
-    if (method === "environment.members") return mocks.state.membersSupport;
-    if (method === "bot.onboarding.read") return mocks.state.onboardingSupport;
-    return mocks.state.support;
-  },
-  useHostMethodSchemaVersion: () => mocks.state.onboardingVersion,
-  useHostSupportsMethod: (hostId: string | null, method: string) => {
-    mocks.supportQueries.push({ hostId, method });
-    return true;
-  },
-}));
-// The host RPC boundary: `bot.onboarding.read` answers what the test
-// scripted, and a query that is not enabled reads as pending, or as what it
-// answered before when that is cached (`readsCached`), as TanStack's does.
-vi.mock("@/hooks/host/use-host-queries", () => ({
-  useHostQueries: (args: {
-    requests: ReadonlyArray<{ params: { environmentId: string } }>;
-    options: { enabled?: boolean } | null;
-  }) =>
-    args.requests.map((request) => {
-      const script =
-        args.options?.enabled === true || mocks.state.readsCached
-          ? mocks.reads[request.params.environmentId]
-          : undefined;
-      const pending = {
-        status: "pending",
-        data: undefined,
-        dataUpdatedAt: 0,
-        refetch: mocks.readRefetch,
-      };
-      if (script === undefined) return pending;
-      if (script === "fails") return { ...pending, status: "error" };
-      return {
-        ...pending,
-        status: "success",
-        data: script,
-        dataUpdatedAt: mocks.state.readAt,
-      };
-    }),
-}));
+vi.mock("@/lib/tab-navigation", async (importOriginal) =>
+  tabNavigationMock(
+    await importOriginal<typeof import("@/lib/tab-navigation")>(),
+  ),
+);
+// The tasks a bot's channel can name come from two host reads, scripted here:
+// the titles of the stream's tasks, and Home's task list.
+vi.mock(
+  "@/hooks/epic/use-epic-get-task-contexts-query",
+  () => epicTaskContextsMock,
+);
+vi.mock("@/hooks/epics/use-cloud-epic-tasks-query", async (importOriginal) =>
+  cloudEpicTasksMock(
+    await importOriginal<
+      typeof import("@/hooks/epics/use-cloud-epic-tasks-query")
+    >(),
+  ),
+);
+vi.mock("@/hooks/host/use-host-supports-method", () => hostSupportsMethodMock);
+// The Activity count reads the notification indicators through the notification
+// host; the query transport below answers them.
+vi.mock(
+  "@/hooks/notifications/use-notification-host",
+  () => notificationHostMock,
+);
+vi.mock(
+  "@/hooks/host/use-host-client-for-host-id",
+  () => hostClientForHostIdMock,
+);
+vi.mock("@/hooks/host/use-host-queries", () => hostQueriesMock);
 vi.mock("@/lib/host", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/lib/host")>()),
   useHostBinding: () => mocks.binding,
@@ -299,48 +133,20 @@ vi.mock("@/hooks/sandboxes/use-sandbox-defaults", async (importOriginal) => ({
   useSandboxDefaults: (environmentIds: readonly string[]) =>
     new Map(environmentIds.map((id) => [id, mocks.sandboxDefaults])),
 }));
-vi.mock("@/hooks/bots/use-host-environment-bindings-query", () => ({
-  useHostEnvironmentBindings: () => ({
-    byHostId: {},
-    failedHostIds: [],
-    retryFailed: () => undefined,
-  }),
-}));
-// The members of the bot's environment, as the channel view's resolver:
-// one teammate it knows by name.
-vi.mock("@/hooks/bots/use-environment-members-query", () => ({
-  useEnvironmentMemberDirectory: (
-    _client: unknown,
-    environmentId: string | null,
-    enabled: boolean,
-  ) => {
-    mocks.membersQueries.push({ environmentId, enabled });
-    return {
-      resolve: (userId: string) =>
-        enabled && userId === "user-teammate"
-          ? { displayName: "Tess Teammate", avatarUrl: null }
-          : null,
-      members: enabled
-        ? [
-            {
-              userId: "user-teammate",
-              displayName: "Tess Teammate",
-              avatarUrl: null,
-            },
-          ]
-        : null,
-    };
-  },
-}));
+vi.mock(
+  "@/hooks/bots/use-host-environment-bindings-query",
+  () => hostEnvironmentBindingsMock,
+);
+vi.mock(
+  "@/hooks/bots/use-environment-members-query",
+  () => environmentMembersMock,
+);
 
-vi.mock("@/components/epic-canvas/tab-host-provider", () => ({
-  TabHostProvider: (props: { hostId: string; children: ReactNode }) => (
-    <>{props.children}</>
-  ),
-}));
-vi.mock("@/hooks/host/use-tab-host-client", () => ({
-  useTabHostClient: () => mocks.hostClient,
-}));
+vi.mock(
+  "@/components/epic-canvas/tab-host-provider",
+  () => tabHostProviderMock,
+);
+vi.mock("@/hooks/host/use-tab-host-client", () => tabHostClientMock);
 vi.mock(
   "@/components/epic-tabs/pane-visibility-context",
   async (importOriginal) => ({
@@ -351,83 +157,20 @@ vi.mock(
   }),
 );
 // The card's memory row is driven in `bot-memory-pane.test.tsx`.
-vi.mock("@/hooks/bots/use-bot-memory", () => ({
-  useBotMemory: () => ({ kind: "unsupported" }),
-}));
-vi.mock("@/hooks/bots/use-bot-subscription", () => ({
-  useBotSubscriptionForHost: (input: { botId: string }) => {
-    mocks.subscribed.push(input.botId);
-    return {
-      snapshot: mocks.state.snapshot,
-      deleted: mocks.state.deleted,
-      error: mocks.state.error,
-      isPending: mocks.state.snapshot === null,
-      resubscribe: mocks.resubscribe,
-    };
-  },
-}));
-vi.mock("@/hooks/host/use-connectable-host-ids", () => ({
-  useConnectableHostIds: () => mocks.state.connectable,
-}));
-// The directory still holds host labels: if the tab ever read it to say where
-// the bot runs, a label would reach the screen and the no-machine checks below
-// would catch it.
-vi.mock("@/hooks/host/use-host-directory-list-query", () => ({
-  useHostDirectoryList: () => ({
-    data: [
-      { hostId: "host-tab", label: "Laptop" },
-      { hostId: "host-bound", label: "Studio Mac" },
-    ],
-  }),
-}));
-vi.mock("@/hooks/bots/use-bot-list-query", () => {
-  const listStatus = (): "pending" | "error" | "success" => {
-    if (mocks.state.listedBotIds === undefined) {
-      return mocks.state.listFailed ? "error" : "pending";
-    }
-    return mocks.state.listFailed ? "error" : "success";
-  };
-  return {
-    useBotListQuery: () => ({
-      status: listStatus(),
-      data:
-        mocks.state.listedBotIds === undefined
-          ? undefined
-          : {
-              bots: mocks.state.listedBotIds.map((botId) => ({
-                botId,
-                title: mocks.state.listTitles.get(botId) ?? botId,
-                environmentId: "env-team",
-                archivedAt: null,
-              })),
-              mainBotIds: mocks.state.mainBotIds,
-            },
-      ...mocks.state.list,
-      refetch: mocks.listRefetch,
-    }),
-  };
-});
-vi.mock("@/hooks/bots/use-bot-list-changed-subscription", () => ({
-  useBotListChangedSubscriptionForHost: (hostId: string, enabled: boolean) =>
-    mocks.useBotListChangedSubscriptionForHost(hostId, enabled),
-}));
-vi.mock("@/hooks/bots/use-environment-list-query", () => ({
-  useEnvironmentListQuery: () => ({
-    status: mocks.state.environmentsStatus,
-    data:
-      mocks.state.environmentsStatus === "success" ||
-      (mocks.state.environmentsStatus === "error" &&
-        mocks.state.environmentsKept)
-        ? { environments: mocks.state.environments }
-        : undefined,
-    refetch: mocks.environmentsRefetch,
-  }),
-}));
-// One stable mutation object, like TanStack's `mutate`: the surface re-opens
-// from an effect keyed on it.
-vi.mock("@/hooks/bots/use-bot-mutations", () => ({
-  useBotOpenMutation: () => mocks.openMutation,
-}));
+vi.mock("@/hooks/bots/use-bot-memory", () => botMemoryMock);
+vi.mock("@/hooks/bots/use-bot-subscription", () => botSubscriptionMock);
+vi.mock("@/hooks/host/use-connectable-host-ids", () => connectableHostIdsMock);
+vi.mock(
+  "@/hooks/host/use-host-directory-list-query",
+  () => hostDirectoryListMock,
+);
+vi.mock("@/hooks/bots/use-bot-list-query", () => botListQueryMock);
+vi.mock(
+  "@/hooks/bots/use-bot-list-changed-subscription",
+  () => botListChangedMock,
+);
+vi.mock("@/hooks/bots/use-environment-list-query", () => environmentListMock);
+vi.mock("@/hooks/bots/use-bot-mutations", () => botMutationsMock);
 vi.mock("@/components/bots/bot-channel-sidebar", () => ({
   BotChannelSidebar: (props: {
     activeBotId: string | null;
@@ -463,6 +206,23 @@ vi.mock("@/components/bots/bot-channel-sidebar", () => ({
     </div>
   ),
 }));
+/** What the tab hands its content to mention (`BotMentionsContext`), as the stub channel sees it. */
+function MentionsProbe(): ReactNode {
+  const mentionable = useContext(BotMentionsContext);
+  if (mentionable === null) return null;
+  return (
+    <output
+      data-testid="stub-mentionable"
+      data-bots={
+        mentionable.bots === null
+          ? "unread"
+          : mentionable.bots.map((target) => target.name).join("|")
+      }
+      data-tasks={mentionable.tasks.map((target) => target.name).join("|")}
+    />
+  );
+}
+
 vi.mock("@/components/bots/bot-channel-view", () => ({
   BotChannelView: (props: {
     botId: string;
@@ -475,16 +235,17 @@ vi.mock("@/components/bots/bot-channel-view", () => ({
     trunkChatId: string;
     openMemory: BotOpenMemory | null;
     onOpenMemory: (open: BotOpenMemory | null) => void;
-    onOpenActivity: () => void;
     onOpenTurn: BotTurnOpen;
     onOpenSession: BotSessionOpen;
     resolveMember: (
       userId: string,
     ) => { displayName: string | null; avatarUrl: string | null } | null;
     setupHistory: ReactNode;
+    tiles: number | null;
   }) => (
     <div
       data-testid="stub-channel"
+      data-tiles={String(props.tiles)}
       data-host-id={props.hostId}
       data-bound-host-id={props.boundHostId ?? "none"}
       data-bot-title={props.botTitle}
@@ -498,11 +259,6 @@ vi.mock("@/components/bots/bot-channel-view", () => ({
         props.resolveMember("user-teammate")?.displayName ?? "unresolved"
       }
     >
-      <button
-        type="button"
-        data-testid="stub-channel-open-activity"
-        onClick={props.onOpenActivity}
-      />
       <button
         type="button"
         data-testid="stub-channel-open-memory"
@@ -526,6 +282,7 @@ vi.mock("@/components/bots/bot-channel-view", () => ({
         }
       />
       {props.setupHistory}
+      <MentionsProbe />
       {/* The two boxes' places in the real view: the channel's own, and one
           inside the thread panel, which the header tells apart by its marker. */}
       <div {...KEYBOARD_FOCUS_OWNER_PROPS}>
@@ -583,52 +340,18 @@ vi.mock("@/components/bots/bot-session-view", () => ({
     </div>
   ),
 }));
-// The Activity page takes the bot's bound host, which says where its
-// background work can be read, whether or not this host serves the tab.
+// The Activity page takes whether this host runs the bot, and the list the
+// tab's count is read from: its rows are what the page would draw.
 vi.mock("@/components/bots/bot-activity-page", () => ({
   BotActivityPage: (props: {
-    boundHost: { hostId: string | null; isThisHost: boolean };
-    onOpenPost: (open: BotOpenThread) => void;
-    onOpenTurn: BotTurnOpen;
+    boundHere: boolean;
+    active: { rows: ReadonlyArray<{ task: { taskId: string } }> };
   }) => (
     <div
       data-testid="stub-activity"
-      data-bound-host-id={props.boundHost.hostId ?? "none"}
-      data-is-this-host={String(props.boundHost.isThisHost)}
-    >
-      <button
-        type="button"
-        data-testid="stub-activity-open-post"
-        onClick={() =>
-          props.onOpenPost({
-            anchorMessageId: "post-1",
-            announcement: false,
-            anchorKind: null,
-            sent: null,
-          })
-        }
-      />
-      <button
-        type="button"
-        data-testid="stub-activity-open-turn"
-        onClick={() =>
-          props.onOpenTurn(
-            {
-              chatId: "trunk-1",
-              turnIds: ["turn-checkin"],
-              userMessageId: "prompt-checkin",
-              threadId: null,
-              startedAt: 1_000,
-              endedAt: 2_000,
-              summary: null,
-              messageIds: [],
-              requestIds: [],
-            },
-            null,
-          )
-        }
-      />
-    </div>
+      data-is-this-host={String(props.boundHere)}
+      data-row-ids={props.active.rows.map((row) => row.task.taskId).join(",")}
+    />
   ),
 }));
 vi.mock("@/components/bots/bot-threads-view", () => ({
@@ -650,15 +373,7 @@ vi.mock("@/components/bots/bot-threads-view", () => ({
     </div>
   ),
 }));
-vi.mock("@/hooks/bots/use-bot-thread-list-query", () => ({
-  useBotThreadListQuery: () => ({
-    data: mocks.state.threadsHeld
-      ? { threads: mocks.state.threads }
-      : undefined,
-    isFetching: mocks.state.threadsFetching,
-    isError: mocks.state.threadsError,
-  }),
-}));
+vi.mock("@/hooks/bots/use-bot-thread-list-query", () => botThreadListQueryMock);
 // The panel takes the bot, whether its environment is a person's own, its
 // channel, its environment's bots and how to close, and nothing else: no prop
 // says which host serves the tab, so no control can be gated on it. The stub lists the props it was given.
@@ -688,22 +403,16 @@ vi.mock("@/components/bots/bot-settings-panel", () => ({
   ),
 }));
 
-import {
-  parseNotificationPayload,
-  routeNotificationForHost,
-} from "@/lib/notifications/payload";
 import { BotTabSurface } from "@/components/bots/bot-tab-surface";
-import { useSelectionAuthorityStore } from "@/stores/host/selection-authority-store";
 import { useTracySurfaceStore } from "@/stores/bots/tracy-surface-store";
 import { useBotPaneWidthsStore } from "@/stores/bots/bot-pane-widths-store";
-import { useBotTabLandingStore } from "@/stores/bots/bot-tab-landing-store";
-import { openChatSearchResult } from "@/lib/chat-search/open-chat-search-result";
-import { rowFromHostEntry } from "@/stores/notifications/merged-notifications";
-import { useBotDraftsStore } from "@/stores/bots/bot-drafts-store";
-import { useBotOpenThreadStore } from "@/stores/bots/bot-open-thread-store";
-import { useTeamCloudCreateStore } from "@/stores/bots/team-cloud-create-store";
 
-const BOT_ID = "bot_01ARZ3NDEKTSV4RRFFQ69G5FAV";
+import { useBotDraftsStore } from "@/stores/bots/bot-drafts-store";
+import {
+  useBotOpenThreadStore,
+  type BotRail,
+} from "@/stores/bots/bot-open-thread-store";
+import { useAuthStore } from "@/stores/auth/auth-store";
 
 /** The trunk's turn behind a reply in the channel. */
 const REPLY_TURN: BotTurnRef = {
@@ -717,129 +426,6 @@ const REPLY_TURN: BotTurnRef = {
   messageIds: ["reply-1"],
   requestIds: [],
 };
-
-const OTHER_BOT_ID = "bot_01ARZ3NDEKTSV4RRFFQ69G5FAW";
-/** The id a new team's main bot will be created under. */
-const SETUP_BOT_ID = "bot_01ARZ3NDEKTSV4RRFFQ69G5FAX";
-/** The team's main bot, still to be set up, as the onboarding read names it. */
-const NEEDS_HOST_SETUP: BotOnboardingSetup = {
-  botId: SETUP_BOT_ID,
-  title: "Tracy",
-  state: "needs_host",
-  arrival: null,
-};
-const TAB_HOST = "host-tab";
-const BOUND_HOST = "host-bound";
-/** A model a team sandbox runs. */
-const TRAYCER_MODEL: GuiAgentModelOption = {
-  harnessId: "traycer",
-  slug: "first-model",
-  label: "First model",
-  description: null,
-  contextWindow: null,
-  maxOutputTokens: null,
-  defaultReasoningEffort: null,
-  supportedReasoningEfforts: [],
-  defaultServiceTier: null,
-  supportedServiceTiers: [],
-  metadata: {},
-};
-/** One provider in one region, with room for the team's default shape. */
-const CATALOGUE: SandboxCatalogue = {
-  providers: [
-    {
-      provider: "tensorlake",
-      os: ["linux"],
-      shape: {
-        cpuMin: 1,
-        cpuMax: 16,
-        cpuStep: 1,
-        memoryPerCpuMinMb: 1024,
-        memoryPerCpuMaxMb: 8192,
-        memoryMinMb: 1024,
-        memoryMaxMb: 65536,
-        memoryStepMb: 512,
-        diskMinMb: 10240,
-        diskMaxMb: 102400,
-        diskDefaultMb: 20480,
-      },
-      suspendFidelity: "memory",
-      stoppedStorage: "snapshot",
-      wakeClass: "resume",
-      shapes: null,
-      dockerInGuest: true,
-      creatable: true,
-      notCreatableReason: null,
-      regions: [
-        {
-          id: "us-east",
-          label: "US East",
-          fromPriceMcPerHour: { awakeMc: 120, suspendedMc: 4, stoppedMc: 2 },
-          pricing: null,
-        },
-      ],
-    },
-  ],
-};
-
-const BOT: BotRecord = {
-  botId: BOT_ID,
-  environmentId: "env-team",
-  createdByUserId: "user-1",
-  title: "Release Bot",
-  harness: "claude",
-  model: "opus",
-  effort: null,
-  profile: null,
-  trunkChatId: "trunk-1",
-  boundHostId: BOUND_HOST,
-  hostEpoch: 1,
-  createdAt: 1_000,
-  archivedAt: null,
-  directive: null,
-  replyMode: "thread",
-  appConversationChatId: "conversation-app",
-};
-
-function snapshot(): BotSubscriptionSnapshot {
-  return {
-    bot: BOT,
-    tasks: [],
-    openRequestCount: 0,
-    conversationsRevision: null,
-    notificationSubscriptions: null,
-    surfaceActions: null,
-    stoppedNotificationWatches: null,
-    boundHost: { hostId: BOUND_HOST, epoch: 1, isThisHost: false },
-    activity: null,
-  };
-}
-
-function trackingTask(taskId: string): BotTaskEntry {
-  return {
-    taskId,
-    cadence: { kind: "every", seconds: 3_600 },
-    lastCheckinAt: null,
-    lastCheckin: null,
-    nextAt: null,
-    state: "tracking",
-    endedReason: null,
-    createdByUserId: null,
-    spun: true,
-    label: null,
-    originRequestId: null,
-    createdByChatId: null,
-    checkins: null,
-    inputNeeded: null,
-    pause: null,
-    stop: null,
-    runRequest: null,
-  };
-}
-
-function answer(outcome: BotOpenResponse["outcome"]): OpenResult {
-  return { kind: "answer", response: { bot: BOT, outcome } };
-}
 
 let queryClient = new QueryClient();
 
@@ -875,83 +461,15 @@ function isKept(botId: string): boolean {
   return useBotDraftsStore.getState().threadBoxes[botId] !== undefined;
 }
 
-/** The surface open on `botId` with a draft kept for it, as an opener leaves it. */
-function openSurfaceOn(botId: string): void {
-  useTracySurfaceStore.setState({
-    open: true,
-    hostId: TAB_HOST,
-    botId,
-    visitedBotIds: [],
-  });
-  useBotDraftsStore.getState().typeThreadBox(botId, "post-1", "unsent");
-}
-
 beforeEach(() => {
-  vi.clearAllMocks();
-  mocks.changeListeners.clear();
   queryClient = new QueryClient({
     defaultOptions: { queries: { retry: false } },
   });
-  mocks.binding = null;
-  mocks.sandboxDefaults = { kind: "pending" };
-  mocks.supportQueries.length = 0;
-  mocks.membersQueries.length = 0;
-  mocks.state.membersSupport = true;
-  mocks.state.snapshot = snapshot();
-  mocks.state.deleted = false;
-  mocks.state.error = null;
-  mocks.state.paneVisible = true;
-  mocks.state.connectable = { hostIds: [TAB_HOST, BOUND_HOST], resolved: true };
-  // The bot is listed, in a team that has bots: nothing is to be set up.
-  mocks.state.listedBotIds = [BOT_ID];
-  mocks.state.listTitles = new Map([[BOT_ID, "Release Bot"]]);
-  mocks.state.mainBotIds = null;
-  mocks.state.support = true;
-  mocks.state.onboardingSupport = true;
-  mocks.state.onboardingVersion = { major: 1, minor: 1 };
-  mocks.state.readAt = 1_000;
-  mocks.state.readsCached = false;
-  mocks.state.listFailed = false;
-  mocks.state.environmentsStatus = "success";
-  mocks.state.environmentsKept = false;
-  mocks.state.list = {
-    dataUpdatedAt: 1_000,
-    errorUpdatedAt: 0,
-    isFetchedAfterMount: true,
-    isFetching: false,
-  };
-  mocks.readRefetch.mockReset();
-  mocks.listRefetch.mockReset();
-  mocks.environmentsRefetch.mockReset();
-  mocks.state.openResult = answer({ kind: "serve-here", claimed: null });
-  mocks.state.environments = [
-    { environmentId: "env-team", label: "Acme", ownerKind: "organization" },
-  ];
-  mocks.state.threads = [];
-  mocks.state.threadsHeld = true;
-  mocks.state.threadsFetching = false;
-  mocks.state.threadsError = false;
-  mocks.subscribed.length = 0;
-  for (const key of Object.keys(mocks.reads)) delete mocks.reads[key];
-  useSelectionAuthorityStore.setState({ effectiveHostId: TAB_HOST });
-  useBotDraftsStore.setState({ answers: {}, threadBoxes: {} });
-  useBotOpenThreadStore.setState({ byBotId: {} });
-  useTeamCloudCreateStore.setState({ byEnvironmentId: {} });
-  __resetAgentActivityStoreForTests();
-  openSurfaceOn(BOT_ID);
+  resetBotTabSurfaceMocks();
 });
 
-const AUTH_AT_START = useAuthStore.getState();
-
 afterEach(() => {
-  cleanup();
-  queryClient.clear();
-  // A case that signs a viewer in leaves no one signed in for the next.
-  useAuthStore.setState({
-    profile: null,
-    status: AUTH_AT_START.status,
-    contextMetadata: AUTH_AT_START.contextMetadata,
-  });
+  endBotTabSurfaceCase(queryClient);
 });
 
 describe("<BotTabSurface /> on a host without bot.open", () => {
@@ -987,20 +505,6 @@ describe("<BotTabSurface /> on a host without bot.open", () => {
     expect(mocks.open).not.toHaveBeenCalled();
   });
 });
-
-/**
- * A tab on a team's main bot before the bot exists: the team (`env-new`) has
- * no bot of its own, another team's bot is the only one listed, and the tab
- * is open as the sidebar's row would have opened it.
- */
-function setUpNewTeam(): void {
-  mocks.state.environments = [
-    { environmentId: "env-team", label: "Acme", ownerKind: "organization" },
-    { environmentId: "env-new", label: "Newco", ownerKind: "organization" },
-  ];
-  mocks.state.listedBotIds = [BOT_ID];
-  openSurfaceOn(SETUP_BOT_ID);
-}
 
 describe("<BotTabSurface /> a team's main bot still to be set up", () => {
   beforeEach(() => {
@@ -1040,11 +544,12 @@ describe("<BotTabSurface /> a team's main bot still to be set up", () => {
   });
 
   describe("level 2 in the installed app", () => {
+    let shell: ShellFormHarness;
     beforeEach(() => {
-      setPhoneLayoutOnly(true);
+      shell = installShellForm(SHELL_WIDTH_MENU);
     });
     afterEach(() => {
-      setPhoneLayoutOnly(false);
+      shell.dispose();
     });
 
     it("offers Threads from the setup channel's title, which replaces the setup until Threads goes back", async () => {
@@ -1072,24 +577,6 @@ describe("<BotTabSurface /> a team's main bot still to be set up", () => {
       expect(screen.queryByTestId("stub-threads")).toBeNull();
       expect(screen.getByTestId("team-setup-channel")).toBeTruthy();
     });
-  });
-
-  it("draws the machine option's button disabled with a line saying it is not available yet, and a click does nothing", async () => {
-    const user = userEvent.setup();
-    render(surfaceFor(SETUP_BOT_ID));
-
-    const option = screen.getByTestId("team-host-option-machine");
-    const button = within(option).getByRole("button");
-    expect([
-      button.textContent,
-      button.hasAttribute("disabled"),
-      document.getElementById(button.getAttribute("aria-describedby") ?? "")
-        ?.textContent,
-    ]).toEqual(["Create team host", true, "Not available yet."]);
-    await user.click(button);
-
-    expect(mocks.open).not.toHaveBeenCalled();
-    expect(screen.getByTestId("team-setup-channel")).toBeTruthy();
   });
 
   it("draws the message box with nothing to type into or send, and says why", () => {
@@ -1132,6 +619,22 @@ describe("<BotTabSurface /> a team's main bot still to be set up", () => {
 
     expect(screen.getByTestId("team-setup-channel")).toBeTruthy();
     expect(mocks.open).not.toHaveBeenCalled();
+  });
+
+  it("shows the setup channel for a team whose machine is joining, as one still to be set up, and opens no bot", () => {
+    mocks.reads["env-new"] = {
+      setup: {
+        ...NEEDS_HOST_SETUP,
+        state: "host_joining",
+        arrival: { kind: "machine" },
+      },
+    };
+    render(surfaceFor(SETUP_BOT_ID));
+
+    expect(screen.getByTestId("team-setup-channel")).toBeTruthy();
+    expect(screen.queryByTestId("stub-channel")).toBeNull();
+    expect(mocks.open).not.toHaveBeenCalled();
+    expect(isKept(SETUP_BOT_ID)).toBe(true);
   });
 
   it.each<readonly [string, ReadScript]>([
@@ -1474,425 +977,6 @@ describe("<BotTabSurface /> a team's main bot still to be set up", () => {
     expect(mocks.open).toHaveBeenCalledWith({ botId: SETUP_BOT_ID });
     expect(screen.getByTestId("stub-channel")).toBeTruthy();
   });
-
-  describe("Enable cloud", () => {
-    /** The configuration's defaults: none set means the built-in shape. */
-    const TEAM_DEFAULTS = {
-      os: "linux",
-      cpus: 4,
-      memoryMb: 8192,
-      diskMb: 40960,
-      idleMinutes: 45,
-      restingMinutes: 1_440,
-    } as const;
-
-    beforeEach(() => {
-      const base = createFakeSandboxBinding();
-      mocks.binding = {
-        ...base,
-        auth: {
-          ...base.auth,
-          getTraycerModels: vi.fn(() =>
-            Promise.resolve<TraycerModelsFetchResult>({
-              kind: "ok",
-              models: [TRAYCER_MODEL],
-            }),
-          ),
-          getSandboxCatalogue: vi.fn(() =>
-            Promise.resolve<SandboxCatalogueFetchResult>({
-              kind: "ok",
-              catalogue: CATALOGUE,
-            }),
-          ),
-        },
-      };
-      mocks.sandboxDefaults = {
-        kind: "ready",
-        value: { defaults: TEAM_DEFAULTS, revision: 3 },
-      };
-      useAuthStore.setState({
-        status: "signed-in",
-        contextMetadata: { userId: "user-viewer", username: "olive" },
-      });
-    });
-
-    function auth(): TeamCloudBinding["auth"] {
-      if (mocks.binding === null) throw new Error("no binding scripted");
-      return mocks.binding.auth;
-    }
-
-    function cloudOption(): HTMLElement {
-      return screen.getByTestId("team-host-option-cloud");
-    }
-
-    function enableButton(): HTMLElement {
-      return within(cloudOption()).getByRole("button", {
-        name: "Enable cloud",
-      });
-    }
-
-    it("creates the team's kept sandbox in the team's environment, in the configuration's default shape and region, holding the button while it is created", async () => {
-      const user = userEvent.setup();
-      let answer: (result: SandboxCreateFetchResult) => void = () => undefined;
-      auth().createSandbox.mockImplementation(
-        () =>
-          new Promise((resolve) => {
-            answer = resolve;
-          }),
-      );
-      render(surfaceFor(SETUP_BOT_ID));
-
-      await waitFor(() =>
-        expect(enableButton()).toHaveProperty("disabled", false),
-      );
-      await user.click(enableButton());
-
-      expect(auth().createSandbox.mock.calls).toEqual([
-        [
-          {
-            os: "linux",
-            cpus: 4,
-            memoryMb: 8192,
-            diskMb: 40960,
-            region: "us-east",
-            displayName: "Team bots",
-            idleMinutes: 45,
-            burst: false,
-            createdByHostId: null,
-            createdByAgentId: null,
-            environmentId: "env-new",
-            destroyAfterRestingMinutes: 1_440,
-            createdByTaskId: null,
-            clientRequestId: expect.any(String),
-          } satisfies Record<keyof SandboxCreateRequest, unknown>,
-        ],
-      ]);
-      await waitFor(() =>
-        expect(enableButton()).toHaveProperty("disabled", true),
-      );
-      await user.click(enableButton());
-      expect(auth().createSandbox).toHaveBeenCalledTimes(1);
-
-      // The created sandbox is listed once the create is answered.
-      auth().listSandboxes.mockResolvedValue({
-        kind: "ok",
-        response: {
-          sandboxes: [
-            sandboxSummaryFixture({
-              environmentId: "env-new",
-              state: "creating",
-              burst: false,
-            }),
-          ],
-        },
-      });
-      act(() => {
-        answer({
-          kind: "ok",
-          accepted: {
-            sandboxId: "sbx_1",
-            hostId: "host-sbx-1",
-            sandbox: sandboxSummaryFixture({ environmentId: "env-new" }),
-          },
-        });
-      });
-
-      await waitFor(() =>
-        expect(
-          within(cloudOption()).getByTestId("team-host-option-cloud-note")
-            .textContent,
-        ).toBe(
-          "The team has a cloud sandbox. Its bots start once it's running.",
-        ),
-      );
-      expect(enableButton()).toHaveProperty("disabled", true);
-    });
-
-    it.each([
-      [
-        "is still out",
-        (): Promise<SandboxListFetchResult> => new Promise(() => undefined),
-        "The team has a cloud sandbox. Its bots start once it's running.",
-      ],
-      [
-        "fails",
-        (): Promise<SandboxListFetchResult> =>
-          Promise.resolve({ kind: "network-error", detail: "offline" }),
-        "Couldn't reach Traycer. Try again in a moment.",
-      ],
-    ] as const)(
-      "keeps the button held after the create is accepted while the list's next read %s, so a second press creates nothing",
-      async (_case, nextList, sentence) => {
-        const user = userEvent.setup();
-        auth().createSandbox.mockResolvedValue({
-          kind: "ok",
-          accepted: {
-            sandboxId: "sbx_1",
-            hostId: "host-sbx-1",
-            sandbox: sandboxSummaryFixture({ environmentId: "env-new" }),
-          },
-        });
-        render(surfaceFor(SETUP_BOT_ID));
-        await waitFor(() =>
-          expect(enableButton()).toHaveProperty("disabled", false),
-        );
-        auth().listSandboxes.mockImplementation(nextList);
-
-        await user.click(enableButton());
-        await waitFor(() =>
-          expect(
-            document.getElementById(
-              enableButton().getAttribute("aria-describedby") ?? "",
-            )?.textContent,
-          ).toBe(sentence),
-        );
-        expect(enableButton()).toHaveProperty("disabled", true);
-        await user.click(enableButton());
-
-        expect(auth().createSandbox).toHaveBeenCalledTimes(1);
-      },
-    );
-
-    it("keeps a remounted card held while the list has not caught up with an accepted create, so a press there creates nothing", async () => {
-      const user = userEvent.setup();
-      auth().createSandbox.mockResolvedValue({
-        kind: "ok",
-        accepted: {
-          sandboxId: "sbx_team",
-          hostId: "host-sbx-team",
-          sandbox: sandboxSummaryFixture({ environmentId: "env-new" }),
-        },
-      });
-      const first = render(surfaceFor(SETUP_BOT_ID));
-      await waitFor(() =>
-        expect(enableButton()).toHaveProperty("disabled", false),
-      );
-      let answerList: (result: SandboxListFetchResult) => void = () =>
-        undefined;
-      auth().listSandboxes.mockImplementation(
-        () =>
-          new Promise((resolve) => {
-            answerList = resolve;
-          }),
-      );
-      await user.click(enableButton());
-      await waitFor(() =>
-        expect(
-          within(cloudOption()).queryByTestId("team-host-option-cloud-note")
-            ?.textContent,
-        ).toBe(
-          "The team has a cloud sandbox. Its bots start once it's running.",
-        ),
-      );
-      first.unmount();
-
-      // The same app, the card mounted again: the list still holds the read
-      // from before the create.
-      render(surfaceFor(SETUP_BOT_ID));
-      expect(
-        within(cloudOption()).getByTestId("team-host-option-cloud-note")
-          .textContent,
-      ).toBe("The team has a cloud sandbox. Its bots start once it's running.");
-      expect(enableButton()).toHaveProperty("disabled", true);
-      await user.click(enableButton());
-      expect(auth().createSandbox).toHaveBeenCalledTimes(1);
-
-      // Once the list carries the sandbox, it speaks for the team.
-      act(() => {
-        answerList({
-          kind: "ok",
-          response: {
-            sandboxes: [
-              sandboxSummaryFixture({
-                id: "sbx_team",
-                environmentId: "env-new",
-                state: "creating",
-              }),
-            ],
-          },
-        });
-      });
-      await waitFor(() =>
-        expect(
-          useTeamCloudCreateStore.getState().byEnvironmentId["env-new"],
-        ).toBeUndefined(),
-      );
-      expect(enableButton()).toHaveProperty("disabled", true);
-    });
-
-    it("lets the team make another sandbox once a list read sent after the accepted create no longer carries it, and never on a read sent before", async () => {
-      const user = userEvent.setup();
-      // Only the clock is held, so which read was sent after the answer is
-      // decided by the test, not by how fast it ran.
-      vi.useFakeTimers({ toFake: ["Date"] });
-      try {
-        vi.setSystemTime(1_000_000);
-        auth().createSandbox.mockResolvedValue({
-          kind: "ok",
-          accepted: {
-            sandboxId: "sbx_team",
-            hostId: "host-sbx-team",
-            sandbox: sandboxSummaryFixture({ environmentId: "env-new" }),
-          },
-        });
-        render(surfaceFor(SETUP_BOT_ID));
-        await waitFor(() =>
-          expect(enableButton()).toHaveProperty("disabled", false),
-        );
-
-        // The create's own refresh is sent no later than its answer is heard:
-        // the row's absence there settles nothing.
-        await user.click(enableButton());
-        await waitFor(() =>
-          expect(auth().listSandboxes.mock.calls.length).toBeGreaterThan(1),
-        );
-        await waitFor(() =>
-          expect(
-            within(cloudOption()).queryByTestId("team-host-option-cloud-note")
-              ?.textContent,
-          ).toBe(
-            "The team has a cloud sandbox. Its bots start once it's running.",
-          ),
-        );
-        expect(
-          useTeamCloudCreateStore.getState().byEnvironmentId["env-new"]
-            ?.acceptedSandboxId,
-        ).toBe("sbx_team");
-
-        // The sandbox is destroyed elsewhere before this app lists it; the
-        // next read, sent later, does not carry it.
-        vi.setSystemTime(1_000_100);
-        await act(() => queryClient.invalidateQueries());
-        await waitFor(() =>
-          expect(enableButton()).toHaveProperty("disabled", false),
-        );
-        expect(
-          useTeamCloudCreateStore.getState().byEnvironmentId["env-new"],
-        ).toBeUndefined();
-
-        await user.click(enableButton());
-        await waitFor(() =>
-          expect(auth().createSandbox).toHaveBeenCalledTimes(2),
-        );
-        const keys = auth().createSandbox.mock.calls.map(
-          ([request]) => request.clientRequestId,
-        );
-        expect(new Set(keys).size).toBe(2);
-      } finally {
-        vi.useRealTimers();
-      }
-    });
-
-    it("keeps a remounted card held while its create is still out, and sends no second create", async () => {
-      const user = userEvent.setup();
-      auth().createSandbox.mockImplementation(
-        () => new Promise(() => undefined),
-      );
-      const first = render(surfaceFor(SETUP_BOT_ID));
-      await waitFor(() =>
-        expect(enableButton()).toHaveProperty("disabled", false),
-      );
-      await user.click(enableButton());
-      first.unmount();
-
-      render(surfaceFor(SETUP_BOT_ID));
-      expect(enableButton()).toHaveProperty("disabled", true);
-      await user.click(enableButton());
-      expect(auth().createSandbox).toHaveBeenCalledTimes(1);
-    });
-
-    it.each([
-      [
-        "answers no model",
-        { kind: "ok", models: [] },
-        "No model is available for team sandboxes yet.",
-      ],
-      [
-        "cannot be read",
-        { kind: "network-error", detail: "offline" },
-        "Couldn't reach Traycer. Try again in a moment.",
-      ],
-    ] as const)(
-      "keeps the button disabled, saying why, when the team sandbox model list %s",
-      async (_case, models, sentence) => {
-        const user = userEvent.setup();
-        auth().getTraycerModels.mockResolvedValue(models);
-        render(surfaceFor(SETUP_BOT_ID));
-
-        await waitFor(() =>
-          expect(
-            document.getElementById(
-              enableButton().getAttribute("aria-describedby") ?? "",
-            )?.textContent,
-          ).toBe(sentence),
-        );
-        expect(enableButton()).toHaveProperty("disabled", true);
-        await user.click(enableButton());
-        expect(auth().createSandbox).not.toHaveBeenCalled();
-      },
-    );
-
-    it("keeps the button disabled, saying so, when the team already has its sandbox", async () => {
-      const user = userEvent.setup();
-      auth().listSandboxes.mockResolvedValue({
-        kind: "ok",
-        response: {
-          sandboxes: [
-            // Another team's kept sandbox and this team's job sandbox host
-            // no bot of this team's.
-            sandboxSummaryFixture({
-              id: "sbx_other",
-              environmentId: "env-team",
-            }),
-            sandboxSummaryFixture({
-              id: "sbx_job",
-              environmentId: "env-new",
-              burst: true,
-            }),
-            sandboxSummaryFixture({
-              id: "sbx_team",
-              environmentId: "env-new",
-              state: "suspended",
-            }),
-          ],
-        },
-      });
-      render(surfaceFor(SETUP_BOT_ID));
-
-      await waitFor(() =>
-        expect(
-          document.getElementById(
-            enableButton().getAttribute("aria-describedby") ?? "",
-          )?.textContent,
-        ).toBe(
-          "The team has a cloud sandbox. Its bots start once it's running.",
-        ),
-      );
-      expect(enableButton()).toHaveProperty("disabled", true);
-      await user.click(enableButton());
-      expect(auth().createSandbox).not.toHaveBeenCalled();
-    });
-
-    it("says a refusal for want of the team's credit under the button, and lets the person press it again", async () => {
-      const user = userEvent.setup();
-      auth().createSandbox.mockResolvedValue({
-        ...refusal(402, SANDBOX_REFUSAL_CODE_INSUFFICIENT_CREDIT),
-        creditSource: "team",
-      });
-      render(surfaceFor(SETUP_BOT_ID));
-
-      await waitFor(() =>
-        expect(enableButton()).toHaveProperty("disabled", false),
-      );
-      await user.click(enableButton());
-
-      const alert = await within(cloudOption()).findByRole("alert");
-      expect(alert.textContent).toBe(
-        "The team's credits don't cover an hour of this sandbox.",
-      );
-      expect(enableButton()).toHaveProperty("disabled", false);
-    });
-  });
 });
 
 describe("<BotTabSurface /> before the lists answer", () => {
@@ -1942,37 +1026,150 @@ describe("<BotTabSurface /> bot.open", () => {
   });
 
   describe("level 2 in the installed app", () => {
+    let shell: ShellFormHarness;
     beforeEach(() => {
-      setPhoneLayoutOnly(true);
+      shell = installShellForm(SHELL_WIDTH_COLUMN_256);
     });
     afterEach(() => {
-      setPhoneLayoutOnly(false);
+      shell.dispose();
     });
 
-    it("draws no sidebar, and the bot's name opens the bots list, which a pick or Threads closes", async () => {
-      const user = userEvent.setup();
+    it("draws the bots as the 256 column the resolver answers, with no handle and no container gate", () => {
+      render(surface());
+
+      const pane = screen.getByTestId("bot-channel-sidebar-pane");
+      expect(pane.style.width).toBe("256px");
+      expect(
+        screen.queryByTestId("bot-channel-sidebar-pane-resize-handle"),
+      ).toBeNull();
+      expect(pane.className).not.toContain("@3xl");
+      expect(within(pane).getByTestId("stub-sidebar")).toBeTruthy();
+      expect(screen.queryByTestId("bot-channel-picker-trigger")).toBeNull();
+    });
+
+    it.each([
+      ["menu", { width: SHELL_WIDTH_MENU, portrait: false }],
+      ["bar", { width: SHELL_WIDTH_COLUMN_256, portrait: true }],
+    ])(
+      "draws no sidebar at %s, and the bot's name opens the bots list, which a pick or Threads closes",
+      async (_form, shape) => {
+        shell.set(shape);
+        const user = userEvent.setup();
+        render(surface());
+
+        expect(screen.queryByTestId("bot-channel-sidebar-pane")).toBeNull();
+        const trigger = screen.getByTestId("bot-channel-picker-trigger");
+        expect(screen.getByTestId("bot-tab-title").contains(trigger)).toBe(
+          true,
+        );
+        expect(trigger.textContent).toContain("Release Bot");
+
+        await user.click(trigger);
+        const picker = await screen.findByTestId("bot-channel-picker");
+        expect(
+          within(picker).getByTestId("stub-sidebar").dataset.activeBotId,
+        ).toBe(BOT_ID);
+        await user.click(within(picker).getByTestId("stub-sidebar-pick"));
+        expect(screen.queryByTestId("bot-channel-picker")).toBeNull();
+
+        await user.click(trigger);
+        await user.click(
+          within(await screen.findByTestId("bot-channel-picker")).getByTestId(
+            "stub-sidebar-threads",
+          ),
+        );
+        expect(screen.queryByTestId("bot-channel-picker")).toBeNull();
+      },
+    );
+
+    it("draws the bots column at 256 and the channel as one tile while no thread is open at a two-tile width", () => {
+      shell.set({ width: SHELL_WIDTH_TWO_TILES, portrait: false });
+      render(surface());
+
+      expect(screen.getByTestId("bot-channel-sidebar-pane").style.width).toBe(
+        "256px",
+      );
+      expect(screen.queryByTestId("bot-channel-picker-trigger")).toBeNull();
+      expect(screen.getByTestId("stub-channel").dataset.tiles).toBe("1");
+    });
+
+    it("folds the bots column to the picker and tells the channel two tiles show once a thread is open at a two-tile width", () => {
+      shell.set({ width: SHELL_WIDTH_TWO_TILES, portrait: false });
+      useBotOpenThreadStore.getState().setRail(BOT_ID, {
+        kind: "thread",
+        anchorMessageId: "post-7",
+        announcement: false,
+        anchorKind: null,
+        sent: null,
+      });
       render(surface());
 
       expect(screen.queryByTestId("bot-channel-sidebar-pane")).toBeNull();
-      const trigger = screen.getByTestId("bot-channel-picker-trigger");
-      expect(screen.getByTestId("bot-tab-title").contains(trigger)).toBe(true);
-      expect(trigger.textContent).toContain("Release Bot");
+      expect(screen.getByTestId("bot-channel-picker-trigger")).toBeTruthy();
+      expect(screen.getByTestId("stub-channel").dataset.tiles).toBe("2");
+    });
 
-      await user.click(trigger);
-      const picker = await screen.findByTestId("bot-channel-picker");
-      expect(
-        within(picker).getByTestId("stub-sidebar").dataset.activeBotId,
-      ).toBe(BOT_ID);
-      await user.click(within(picker).getByTestId("stub-sidebar-pick"));
-      expect(screen.queryByTestId("bot-channel-picker")).toBeNull();
+    describe("the tile count the shell resolves as the rail comes and goes", () => {
+      const OPEN_THREAD: BotRail = {
+        kind: "thread",
+        anchorMessageId: "post-7",
+        announcement: false,
+        anchorKind: null,
+        sent: null,
+      };
 
-      await user.click(trigger);
-      await user.click(
-        within(await screen.findByTestId("bot-channel-picker")).getByTestId(
-          "stub-sidebar-threads",
-        ),
-      );
-      expect(screen.queryByTestId("bot-channel-picker")).toBeNull();
+      // One tile draws the bots column at this width and two fold it to the
+      // picker, so the column is what tells the shell's count apart.
+      function columnDrawn(): boolean {
+        return screen.queryByTestId("bot-channel-sidebar-pane") !== null;
+      }
+
+      beforeEach(() => {
+        shell.set({ width: SHELL_WIDTH_TWO_TILES, portrait: false });
+        useBotOpenThreadStore.getState().setRail(BOT_ID, OPEN_THREAD);
+      });
+
+      it("returns to one tile when the thread closes", () => {
+        render(surface());
+        expect(columnDrawn()).toBe(false);
+
+        act(() => useBotOpenThreadStore.getState().setRail(BOT_ID, null));
+
+        expect(columnDrawn()).toBe(true);
+        expect(screen.getByTestId("stub-channel").dataset.tiles).toBe("1");
+      });
+
+      it("returns to one tile when the channel switches in place to one with nothing open", () => {
+        const view = render(surface());
+        expect(columnDrawn()).toBe(false);
+
+        view.rerender(surfaceFor(OTHER_BOT_ID));
+
+        expect(columnDrawn()).toBe(true);
+        expect(screen.getByTestId("stub-channel").dataset.tiles).toBe("1");
+      });
+
+      it("returns to one tile on Activity, where no rail is drawn", async () => {
+        const user = userEvent.setup();
+        render(surface());
+        expect(columnDrawn()).toBe(false);
+
+        await user.click(screen.getByTestId("bot-tab-view-activity"));
+
+        expect(columnDrawn()).toBe(true);
+      });
+
+      it("returns to one tile when Threads is shown from the column", async () => {
+        const user = userEvent.setup();
+        render(surface());
+        await user.click(screen.getByTestId("bot-channel-picker-trigger"));
+        const picker = await screen.findByTestId("bot-channel-picker");
+
+        await user.click(within(picker).getByTestId("stub-sidebar-threads"));
+
+        expect(screen.getByTestId("stub-threads")).toBeTruthy();
+        expect(columnDrawn()).toBe(true);
+      });
     });
 
     it("keeps the resizable pane and the plain title off the installed app", () => {
@@ -2071,6 +1268,23 @@ describe("<BotTabSurface /> a team's main bot once it is live", () => {
     expect(within(channel).getByTestId("team-setup-arrival").textContent).toBe(
       "Cloud enabled for Acme · bots run on sandboxes",
     );
+  });
+
+  it("says the team's machine joined, with the machine option kept as history: no button and no token", () => {
+    mocks.reads["env-team"] = {
+      setup: { ...LIVE_SETUP, arrival: { kind: "machine" } },
+    };
+    render(surface());
+
+    const channel = screen.getByTestId("stub-channel");
+    expect(within(channel).getByTestId("team-setup-arrival").textContent).toBe(
+      "Acme's machine joined · bots run on it",
+    );
+    const option = within(channel).getByTestId("team-host-option-machine");
+    expect(within(option).queryAllByRole("button")).toEqual([]);
+    expect(
+      within(option).queryByTestId("team-host-option-machine-command"),
+    ).toBeNull();
   });
 
   it.each<readonly [string, () => void]>([
@@ -2253,7 +1467,7 @@ describe("<BotTabSurface /> paused", () => {
     ).toBe("unresolved");
   });
 
-  it("hands the Activity page the bound host, paused or not", async () => {
+  it("hands the Activity page whether this host runs the bot, paused or not", async () => {
     const user = userEvent.setup();
     mocks.state.openResult = answer({
       kind: "paused",
@@ -2263,7 +1477,6 @@ describe("<BotTabSurface /> paused", () => {
 
     await user.click(screen.getByTestId("bot-tab-view-activity"));
     const page = screen.getByTestId("stub-activity");
-    expect(page.getAttribute("data-bound-host-id")).toBe(BOUND_HOST);
     expect(page.getAttribute("data-is-this-host")).toBe("false");
   });
 
@@ -2571,6 +1784,28 @@ describe("<BotTabSurface /> main bot", () => {
   });
 });
 
+describe("<BotTabSurface /> Call", () => {
+  afterEach(() => {
+    useVoiceSessionStore.setState(useVoiceSessionStore.getInitialState(), true);
+  });
+
+  it("is not in the channel's header, where it was, even when voice is offered: the message box has it", () => {
+    useVoiceSessionStore.setState({
+      availability: "live",
+      driver: {
+        start: vi.fn<VoiceSessionDriver["start"]>(),
+        end: vi.fn<VoiceSessionDriver["end"]>(),
+        setMuted: vi.fn<VoiceSessionDriver["setMuted"]>(),
+      },
+    });
+    render(surface());
+
+    const header = screen.getByTestId("bot-tab-title").closest("header");
+    if (header === null) throw new Error("expected the channel header");
+    expect(within(header).queryByRole("button", { name: /^Call/ })).toBeNull();
+  });
+});
+
 describe("<BotTabSurface /> focused notification presence", () => {
   afterEach(() => {
     useEpicCanvasStore.setState(useEpicCanvasStore.getInitialState(), true);
@@ -2601,1348 +1836,5 @@ describe("<BotTabSurface /> focused notification presence", () => {
       epicId: "epic-behind",
       chatId: "chat-behind",
     });
-  });
-});
-
-describe("<BotTabSurface /> views", () => {
-  function activityTab(): HTMLElement {
-    return screen.getByTestId("bot-tab-view-activity");
-  }
-
-  it("shows Messages first, with Activity beside it and no Threads tab, and no counts for a quiet bot", () => {
-    render(surface());
-
-    expect(screen.getAllByRole("tab").map((tab) => tab.textContent)).toEqual([
-      "Messages",
-      "Activity",
-    ]);
-    expect(
-      screen.getByTestId("bot-tab-view-messages").getAttribute("aria-selected"),
-    ).toBe("true");
-    expect(screen.getByTestId("stub-channel")).toBeTruthy();
-    expect(
-      activityTab().querySelector("[data-testid^='bot-tab-activity-']"),
-    ).toBeNull();
-  });
-
-  it("counts what stopped, in red and first, what runs and the tasks the bot tracks, leaving out a zero", () => {
-    mocks.state.snapshot = {
-      ...snapshot(),
-      tasks: [trackingTask("task-1"), trackingTask("task-2")],
-      activity: {
-        trunk: {
-          state: "failed",
-          startedAt: null,
-          step: null,
-          requestId: "req-1",
-          reason: null,
-        },
-        threads: {},
-      },
-    };
-    __setAgentActivityStateForTests(
-      { "task-1": { working: ["agent-1"], turn: [] } },
-      "local",
-      null,
-    );
-    render(surface());
-
-    expect(activityTab().textContent).toBe(
-      "Activity · 1 stopped · 1 running · 2 tasks",
-    );
-    const parts = within(activityTab()).getAllByTestId(/^bot-tab-activity-/);
-    expect(parts.map((part) => part.dataset.testid)).toEqual([
-      "bot-tab-activity-stopped",
-      "bot-tab-activity-running",
-      "bot-tab-activity-tasks",
-    ]);
-    expect(parts[0].className).toContain("text-destructive");
-    expect(parts[1].className).not.toContain("text-destructive");
-  });
-
-  it("leaves out the stopped and running counts when nothing has stopped or runs", () => {
-    mocks.state.snapshot = {
-      ...snapshot(),
-      tasks: [trackingTask("task-1")],
-    };
-    render(surface());
-
-    expect(activityTab().textContent).toBe("Activity · 1 task");
-  });
-
-  it("shows Threads from the column in place of the channel and its views, through the tab's host, and its own channel row lands back where it was", async () => {
-    const user = userEvent.setup();
-    render(surface());
-    await user.click(activityTab());
-
-    await user.click(screen.getByTestId("stub-sidebar-threads"));
-
-    expect(
-      screen.getByTestId("stub-threads").getAttribute("data-host-id"),
-    ).toBe(TAB_HOST);
-    expect(screen.queryByRole("tab")).toBeNull();
-    expect(screen.queryByTestId("stub-activity")).toBeNull();
-    const sidebar = screen.getByTestId("stub-sidebar");
-    expect(sidebar.getAttribute("data-threads-shown")).toBe("true");
-    expect(sidebar.getAttribute("data-active-bot-id")).toBe(BOT_ID);
-
-    await user.click(screen.getByTestId("stub-sidebar-own-channel"));
-
-    expect(screen.queryByTestId("stub-threads")).toBeNull();
-    expect(activityTab().getAttribute("aria-selected")).toBe("true");
-    expect(sidebar.getAttribute("data-threads-shown")).toBe("false");
-  });
-
-  it.each([
-    ["the view's back control", "stub-threads-back"],
-    ["the column's row for this channel", "stub-sidebar-own-channel"],
-  ])(
-    "leaves Threads for the channel, not for a session open before it, through %s",
-    async (_way, testId) => {
-      const user = userEvent.setup();
-      render(surface());
-      await user.click(screen.getByTestId("stub-channel-open-thread-session"));
-      expect(screen.getByTestId("stub-session")).toBeTruthy();
-      await user.click(screen.getByTestId("stub-sidebar-threads"));
-
-      await user.click(screen.getByTestId(testId));
-
-      expect(screen.queryByTestId("stub-threads")).toBeNull();
-      expect(screen.queryByTestId("stub-session")).toBeNull();
-      expect(screen.getByTestId("stub-channel")).toBeTruthy();
-      expect(
-        screen
-          .getByTestId("bot-tab-view-messages")
-          .getAttribute("aria-selected"),
-      ).toBe("true");
-    },
-  );
-
-  it("goes back from Threads to the channel where it was through the view's own back control, which names the tab's channel", async () => {
-    const user = userEvent.setup();
-    render(surface());
-    await user.click(activityTab());
-    await user.click(screen.getByTestId("stub-sidebar-threads"));
-    expect(
-      screen.getByTestId("stub-threads").getAttribute("data-channel-title"),
-    ).toBe(snapshot().bot.title);
-
-    await user.click(screen.getByTestId("stub-threads-back"));
-
-    expect(screen.queryByTestId("stub-threads")).toBeNull();
-    expect(activityTab().getAttribute("aria-selected")).toBe("true");
-    expect(
-      screen.getByTestId("stub-sidebar").getAttribute("data-threads-shown"),
-    ).toBe("false");
-  });
-
-  it("opens a thread chosen in Threads beside the channel, through the tab's landing, and leaves Threads", async () => {
-    const user = userEvent.setup();
-    mocks.state.threads = [
-      {
-        threadId: "thread-1",
-        conversationId: "conversation-app",
-        sessionChatId: "session-thread-1",
-        anchor: {
-          messageId: "post-7",
-          requestId: "req-7",
-          senderUserId: "user-1",
-          sentAt: 1_000,
-          resolvedAt: null,
-          excerpt: null,
-        },
-        replyCount: 1,
-        lastReplyAt: 2_000,
-        openRequestCount: 0,
-        costUsd: null,
-      },
-    ];
-    useBotTabLandingStore.setState({ byBotId: {} });
-    render(surface());
-    await user.click(screen.getByTestId("stub-sidebar-threads"));
-
-    act(() =>
-      useBotTabLandingStore.getState().request(BOT_ID, {
-        kind: "thread",
-        threadId: "thread-1",
-        messageId: null,
-      }),
-    );
-
-    expect(screen.queryByTestId("stub-threads")).toBeNull();
-    expect(
-      screen.getByTestId("stub-channel").getAttribute("data-open-thread"),
-    ).toBe("post-7");
-    expect(
-      screen.getByTestId("bot-tab-view-messages").getAttribute("aria-selected"),
-    ).toBe("true");
-    expect(
-      screen.getByTestId("stub-sidebar").getAttribute("data-threads-shown"),
-    ).toBe("false");
-    expect(useBotTabLandingStore.getState().byBotId).toEqual({});
-  });
-
-  it("switches to Activity from the open thread's Activity link", async () => {
-    const user = userEvent.setup();
-    render(surface());
-
-    await user.click(screen.getByTestId("stub-channel-open-activity"));
-
-    expect(activityTab().getAttribute("aria-selected")).toBe("true");
-    expect(screen.getByTestId("stub-activity")).toBeTruthy();
-    expect(screen.queryByTestId("stub-channel")).toBeNull();
-  });
-
-  it("returns to Messages with the thread open when Activity opens a post", async () => {
-    const user = userEvent.setup();
-    render(surface());
-    await user.click(activityTab());
-
-    await user.click(screen.getByTestId("stub-activity-open-post"));
-
-    expect(
-      screen.getByTestId("bot-tab-view-messages").getAttribute("aria-selected"),
-    ).toBe("true");
-    expect(
-      screen.getByTestId("stub-channel").getAttribute("data-open-thread"),
-    ).toBe("post-1");
-  });
-});
-
-describe("<BotTabSurface /> a bot's session in place of its channel", () => {
-  function sessionShown(): HTMLElement {
-    return screen.getByTestId("stub-session");
-  }
-
-  it("opens a check-in's turn from Activity as the trunk session landed on it, in place of the views, and back returns to Activity", async () => {
-    const user = userEvent.setup();
-    render(surface());
-    await user.click(screen.getByTestId("bot-tab-view-activity"));
-
-    await user.click(screen.getByTestId("stub-activity-open-turn"));
-
-    expect(sessionShown().dataset.chatId).toBe("trunk-1");
-    expect(sessionShown().dataset.threadId).toBe("none");
-    expect(sessionShown().dataset.landOn).toBe("prompt-checkin");
-    expect(screen.queryByRole("tablist")).toBeNull();
-    expect(screen.queryByTestId("stub-activity")).toBeNull();
-
-    await user.click(screen.getByTestId("stub-session-back"));
-
-    expect(screen.queryByTestId("stub-session")).toBeNull();
-    expect(
-      screen.getByTestId("bot-tab-view-activity").getAttribute("aria-selected"),
-    ).toBe("true");
-  });
-
-  it("opens a reply's turn from the channel, each open a new visit, and its channel link brings Messages back where the channel was", async () => {
-    const user = userEvent.setup();
-    render(surface());
-
-    await user.click(screen.getByTestId("stub-channel-open-turn"));
-    expect(sessionShown().dataset.landOn).toBe("prompt-reply");
-    const firstVisit = sessionShown().dataset.visit;
-    await user.click(screen.getByTestId("stub-session-back"));
-    await user.click(screen.getByTestId("stub-channel-open-turn"));
-    expect(sessionShown().dataset.visit).not.toBe(firstVisit);
-
-    await user.click(screen.getByTestId("stub-session-channel"));
-
-    expect(screen.queryByTestId("stub-session")).toBeNull();
-    expect(
-      screen.getByTestId("stub-channel").getAttribute("data-land-on"),
-    ).toBe("none");
-  });
-
-  it("shows the channel on the post a send followed, from Activity too, and the next session's back leaves it where it was", async () => {
-    const user = userEvent.setup();
-    render(surface());
-    await user.click(screen.getByTestId("bot-tab-view-activity"));
-    await user.click(screen.getByTestId("stub-activity-open-turn"));
-
-    await user.click(screen.getByTestId("stub-session-post"));
-
-    expect(
-      screen.getByTestId("bot-tab-view-messages").getAttribute("aria-selected"),
-    ).toBe("true");
-    expect(
-      screen.getByTestId("stub-channel").getAttribute("data-land-on"),
-    ).toBe("post-1");
-
-    await user.click(screen.getByTestId("stub-channel-open-turn"));
-    await user.click(screen.getByTestId("stub-session-back"));
-
-    expect(
-      screen.getByTestId("stub-channel").getAttribute("data-land-on"),
-    ).toBe("none");
-  });
-
-  it.each([
-    { leaveBy: "the Activity tab", leave: "bot-tab-view-activity" },
-    {
-      leaveBy: "the channel's Activity link",
-      leave: "stub-channel-open-activity",
-    },
-  ])(
-    "lands the channel on a send's post once: leaving Messages by $leaveBy and coming back does not land again",
-    async ({ leave }) => {
-      const user = userEvent.setup();
-      render(surface());
-      await user.click(screen.getByTestId("stub-channel-open-turn"));
-      await user.click(screen.getByTestId("stub-session-post"));
-      expect(
-        screen.getByTestId("stub-channel").getAttribute("data-land-on"),
-      ).toBe("post-1");
-
-      await user.click(screen.getByTestId(leave));
-      expect(screen.queryByTestId("stub-channel")).toBeNull();
-      await user.click(screen.getByTestId("bot-tab-view-messages"));
-
-      expect(
-        screen.getByTestId("stub-channel").getAttribute("data-land-on"),
-      ).toBe("none");
-    },
-  );
-
-  it("opens a thread's session from its panel, and shows that thread beside the channel by its post from the session", async () => {
-    const user = userEvent.setup();
-    mocks.state.threads = [
-      {
-        threadId: "thread-1",
-        conversationId: "conversation-app",
-        sessionChatId: "session-thread-1",
-        anchor: {
-          messageId: "post-7",
-          requestId: "req-7",
-          senderUserId: "user-1",
-          sentAt: 1_000,
-          resolvedAt: 1_001,
-          excerpt: null,
-        },
-        replyCount: 1,
-        lastReplyAt: 2_000,
-        openRequestCount: 0,
-        costUsd: null,
-      },
-    ];
-    render(surface());
-
-    await user.click(screen.getByTestId("stub-channel-open-thread-session"));
-    expect(sessionShown().dataset.chatId).toBe("session-thread-1");
-    expect(sessionShown().dataset.threadId).toBe("thread-1");
-    expect(sessionShown().dataset.landOn).toBe("none");
-
-    await user.click(screen.getByTestId("stub-session-thread"));
-
-    expect(screen.queryByTestId("stub-session")).toBeNull();
-    expect(
-      screen.getByTestId("stub-channel").getAttribute("data-open-thread"),
-    ).toBe("post-7");
-  });
-
-  it("shows a thread beside the channel landed on the post a session's send wrote in it", async () => {
-    const user = userEvent.setup();
-    mocks.state.threads = [
-      {
-        threadId: "thread-1",
-        conversationId: "conversation-app",
-        sessionChatId: "session-thread-1",
-        anchor: {
-          messageId: "post-7",
-          requestId: "req-7",
-          senderUserId: "user-1",
-          sentAt: 1_000,
-          resolvedAt: 1_001,
-          excerpt: null,
-        },
-        replyCount: 1,
-        lastReplyAt: 2_000,
-        openRequestCount: 0,
-        costUsd: null,
-      },
-    ];
-    render(surface());
-
-    await user.click(screen.getByTestId("stub-channel-open-thread-session"));
-    await user.click(screen.getByTestId("stub-session-thread-post"));
-
-    const channel = screen.getByTestId("stub-channel");
-    expect(channel.getAttribute("data-open-thread")).toBe("post-7");
-    expect(channel.getAttribute("data-land-on")).toBe("thread-reply-9");
-    expect(channel.getAttribute("data-land-on-thread")).toBe("thread-1");
-  });
-
-  describe("an unrelated thread open beside the channel", () => {
-    const OTHER_THREAD_RAIL = {
-      kind: "thread",
-      anchorMessageId: "post-other",
-      announcement: false,
-      anchorKind: null,
-      sent: null,
-    } as const;
-
-    beforeEach(() => {
-      useBotOpenThreadStore.getState().setRail(BOT_ID, OTHER_THREAD_RAIL);
-      useBotTabLandingStore.setState({ byBotId: {} });
-    });
-
-    function openThreadBeside(): string | null {
-      return screen
-        .getByTestId("stub-channel")
-        .getAttribute("data-open-thread");
-    }
-
-    it("is closed when a session opens a row of the channel, and kept when it goes back to the channel", async () => {
-      const user = userEvent.setup();
-      render(surface());
-      expect(openThreadBeside()).toBe("post-other");
-
-      await user.click(screen.getByTestId("stub-channel-open-thread-session"));
-      await user.click(screen.getByTestId("stub-session-channel"));
-      expect(openThreadBeside()).toBe("post-other");
-
-      await user.click(screen.getByTestId("stub-channel-open-thread-session"));
-      await user.click(screen.getByTestId("stub-session-post"));
-      expect(openThreadBeside()).toBe("none");
-    });
-
-    it("is closed when a session opens a thread the list does not name", async () => {
-      const user = userEvent.setup();
-      mocks.state.threads = [];
-      render(surface());
-
-      await user.click(screen.getByTestId("stub-channel-open-thread-session"));
-      await user.click(screen.getByTestId("stub-session-thread"));
-
-      expect(openThreadBeside()).toBe("none");
-    });
-
-    it("is closed by a requested landing on a row of the channel", () => {
-      mocks.state.threads = [];
-      useBotTabLandingStore.getState().request(BOT_ID, {
-        kind: "thread",
-        threadId: null,
-        messageId: "post-1",
-      });
-      render(surface());
-
-      expect(openThreadBeside()).toBe("none");
-    });
-
-    it("is closed by a tapped push of the channel itself, from its payload through its route to the surface", () => {
-      mocks.state.threads = [];
-      const payload = parseNotificationPayload({
-        kind: "chat",
-        epicId: BOT_ID,
-        chatId: "conversation-app",
-        botId: BOT_ID,
-      });
-      expect(payload).toMatchObject({
-        kind: "chat",
-        bot: { botId: BOT_ID, threadId: null, messageId: null },
-      });
-      if (payload === null) throw new Error("the payload did not parse");
-
-      expect(
-        routeNotificationForHost(vi.fn(), payload, 1_000, {
-          originHostId: null,
-          effectiveHostId: "host-1",
-        }),
-      ).toBe(true);
-      expect(useBotTabLandingStore.getState().byBotId[BOT_ID]).toEqual({
-        kind: "thread",
-        threadId: null,
-        messageId: null,
-      });
-      render(surface());
-
-      expect(useBotTabLandingStore.getState().byBotId).toEqual({});
-      expect(openThreadBeside()).toBe("none");
-    });
-
-    it("is closed by a requested landing on a thread the list does not name", () => {
-      mocks.state.threads = [];
-      useBotTabLandingStore.getState().request(BOT_ID, {
-        kind: "thread",
-        threadId: "thread-gone",
-        messageId: "reply-3",
-      });
-      render(surface());
-
-      expect(openThreadBeside()).toBe("none");
-    });
-  });
-
-  describe("a landing requested from outside, as a tapped push does", () => {
-    const LISTED_THREAD: BotThreadSummary = {
-      threadId: "thread-1",
-      conversationId: "conversation-app",
-      sessionChatId: "session-thread-1",
-      anchor: {
-        messageId: "post-7",
-        requestId: "req-7",
-        senderUserId: "user-1",
-        sentAt: 1_000,
-        resolvedAt: 1_001,
-        excerpt: null,
-      },
-      replyCount: 1,
-      lastReplyAt: 2_000,
-      openRequestCount: 0,
-      costUsd: null,
-    };
-
-    beforeEach(() => {
-      useBotTabLandingStore.setState({ byBotId: {} });
-    });
-
-    it("opens the listed thread beside the channel on the row, and is spent, so a later render does not land it again", () => {
-      mocks.state.threads = [LISTED_THREAD];
-      useBotTabLandingStore.getState().request(BOT_ID, {
-        kind: "thread",
-        threadId: "thread-1",
-        messageId: "reply-3",
-      });
-      const { rerender } = render(surface());
-
-      const channel = screen.getByTestId("stub-channel");
-      expect(channel.getAttribute("data-open-thread")).toBe("post-7");
-      expect(channel.getAttribute("data-land-on")).toBe("reply-3");
-      expect(channel.getAttribute("data-land-on-thread")).toBe("thread-1");
-      expect(useBotTabLandingStore.getState().byBotId).toEqual({});
-
-      // The person closes the thread; rendering again does not reopen it.
-      act(() => useBotOpenThreadStore.getState().setRail(BOT_ID, null));
-      rerender(surface());
-      expect(
-        screen.getByTestId("stub-channel").getAttribute("data-open-thread"),
-      ).toBe("none");
-    });
-
-    it("shows the channel when the list does not name the thread", () => {
-      mocks.state.threads = [LISTED_THREAD];
-      useBotTabLandingStore.getState().request(BOT_ID, {
-        kind: "thread",
-        threadId: "thread-gone",
-        messageId: "reply-3",
-      });
-      render(surface());
-
-      const channel = screen.getByTestId("stub-channel");
-      expect(channel.getAttribute("data-open-thread")).toBe("none");
-      expect(channel.getAttribute("data-land-on")).toBe("none");
-      expect(useBotTabLandingStore.getState().byBotId).toEqual({});
-    });
-  });
-
-  describe("a chat search hit landing in the bot's tab", () => {
-    const LISTED_THREAD: BotThreadSummary = {
-      threadId: "thread-1",
-      conversationId: "conversation-app",
-      sessionChatId: "session-thread-1",
-      anchor: {
-        messageId: "post-7",
-        requestId: "req-7",
-        senderUserId: "user-1",
-        sentAt: 1_000,
-        resolvedAt: 1_001,
-        excerpt: null,
-      },
-      replyCount: 1,
-      lastReplyAt: 2_000,
-      openRequestCount: 0,
-      costUsd: null,
-    };
-
-    beforeEach(() => {
-      useBotTabLandingStore.setState({ byBotId: {} });
-      mocks.state.threads = [LISTED_THREAD];
-    });
-
-    function openSearchHit(chatId: string, messageId: string): void {
-      openChatSearchResult(
-        vi.fn(),
-        { epicId: BOT_ID, chatId, hostId: TAB_HOST, messageId },
-        { effectiveHostId: TAB_HOST, now: 1_000 },
-      );
-    }
-
-    function expectNoSession(): void {
-      expect(screen.queryByTestId("stub-session")).toBeNull();
-    }
-
-    it("lands the channel on the row when the hit is in the channel's chat", () => {
-      openSearchHit(BOT.appConversationChatId ?? "", "post-1");
-      render(surface());
-
-      const channel = screen.getByTestId("stub-channel");
-      expect(channel.getAttribute("data-land-on")).toBe("post-1");
-      expect(channel.getAttribute("data-open-thread")).toBe("none");
-      expectNoSession();
-      expect(useBotTabLandingStore.getState().byBotId).toEqual({});
-    });
-
-    it("opens the thread beside the channel on the row when the hit is in a thread's record", () => {
-      openSearchHit("thread-1", "reply-3");
-      render(surface());
-
-      const channel = screen.getByTestId("stub-channel");
-      expect(channel.getAttribute("data-open-thread")).toBe("post-7");
-      expect(channel.getAttribute("data-land-on")).toBe("reply-3");
-      expect(channel.getAttribute("data-land-on-thread")).toBe("thread-1");
-      expectNoSession();
-      expect(useBotTabLandingStore.getState().byBotId).toEqual({});
-    });
-
-    it("opens the thread's session on the row when the hit is in a thread's session", () => {
-      openSearchHit("session-thread-1", "session-row-1");
-      render(surface());
-
-      const session = screen.getByTestId("stub-session");
-      expect(session.getAttribute("data-chat-id")).toBe("session-thread-1");
-      expect(session.getAttribute("data-thread-id")).toBe("thread-1");
-      expect(session.getAttribute("data-land-on")).toBe("session-row-1");
-      expect(useBotTabLandingStore.getState().byBotId).toEqual({});
-    });
-
-    it("opens the trunk session on the row when the hit is in the bot's trunk chat", () => {
-      openSearchHit(BOT.trunkChatId, "turn-1");
-      render(surface());
-
-      const session = screen.getByTestId("stub-session");
-      expect(session.getAttribute("data-chat-id")).toBe(BOT.trunkChatId);
-      expect(session.getAttribute("data-thread-id")).toBe("none");
-      expect(session.getAttribute("data-land-on")).toBe("turn-1");
-      expect(useBotTabLandingStore.getState().byBotId).toEqual({});
-    });
-
-    it("lands nowhere, and is spent, when the hit's chat is none of the bot's", () => {
-      openSearchHit("chat-unknown", "post-1");
-      render(surface());
-
-      const channel = screen.getByTestId("stub-channel");
-      expect(channel.getAttribute("data-land-on")).toBe("none");
-      expect(channel.getAttribute("data-open-thread")).toBe("none");
-      expectNoSession();
-      expect(useBotTabLandingStore.getState().byBotId).toEqual({});
-    });
-
-    it("shows the thread whose session sent beside the channel, with no session opened, for a sender landing", () => {
-      useBotTabLandingStore
-        .getState()
-        .request(BOT_ID, { kind: "sender", chatId: "session-thread-1" });
-      render(surface());
-
-      const channel = screen.getByTestId("stub-channel");
-      expect(channel.getAttribute("data-open-thread")).toBe("post-7");
-      expect(channel.getAttribute("data-land-on")).toBe("none");
-      expectNoSession();
-      expect(useBotTabLandingStore.getState().byBotId).toEqual({});
-    });
-
-    it("keeps a sender landing while the thread list is read again, and opens the thread the fresh list brings", () => {
-      const NEW_THREAD: BotThreadSummary = {
-        ...LISTED_THREAD,
-        threadId: "thread-2",
-        sessionChatId: "session-thread-2",
-        anchor: {
-          messageId: "post-8",
-          requestId: "req-8",
-          senderUserId: "user-1",
-          sentAt: 3_000,
-          resolvedAt: null,
-          excerpt: null,
-        },
-      };
-      const { rerender } = render(surface());
-
-      // The held list lacks the sender's thread, and a read of it starts.
-      mocks.state.threadsFetching = true;
-      rerender(surface());
-      act(() =>
-        useBotTabLandingStore
-          .getState()
-          .request(BOT_ID, { kind: "sender", chatId: "session-thread-2" }),
-      );
-
-      expect(useBotTabLandingStore.getState().byBotId[BOT_ID]).toEqual({
-        kind: "sender",
-        chatId: "session-thread-2",
-      });
-      const channel = screen.getByTestId("stub-channel");
-      expect(channel.getAttribute("data-open-thread")).toBe("none");
-      expect(channel.getAttribute("data-land-on")).toBe("none");
-
-      // The read answers with the thread.
-      mocks.state.threads = [LISTED_THREAD, NEW_THREAD];
-      mocks.state.threadsFetching = false;
-      rerender(surface());
-
-      expect(
-        screen.getByTestId("stub-channel").getAttribute("data-open-thread"),
-      ).toBe("post-8");
-      expectNoSession();
-      expect(useBotTabLandingStore.getState().byBotId).toEqual({});
-    });
-
-    it("spends a waiting sender landing unlanded when the person moves the tab, and opens no thread when the list answers", async () => {
-      const user = userEvent.setup();
-      const NEW_THREAD: BotThreadSummary = {
-        ...LISTED_THREAD,
-        threadId: "thread-2",
-        sessionChatId: "session-thread-2",
-        anchor: {
-          messageId: "post-8",
-          requestId: "req-8",
-          senderUserId: "user-1",
-          sentAt: 3_000,
-          resolvedAt: null,
-          excerpt: null,
-        },
-      };
-      const { rerender } = render(surface());
-
-      // The held list lacks the sender's thread, and a read of it starts.
-      mocks.state.threadsFetching = true;
-      rerender(surface());
-      act(() =>
-        useBotTabLandingStore
-          .getState()
-          .request(BOT_ID, { kind: "sender", chatId: "session-thread-2" }),
-      );
-      expect(useBotTabLandingStore.getState().byBotId[BOT_ID]).toEqual({
-        kind: "sender",
-        chatId: "session-thread-2",
-      });
-
-      // The person opens Activity while the landing waits.
-      await user.click(screen.getByRole("tab", { name: /^Activity/ }));
-
-      expect(useBotTabLandingStore.getState().byBotId).toEqual({});
-      expect(
-        screen.getByRole("tab", { name: /^Activity/, selected: true }),
-      ).toBeTruthy();
-
-      // The read answers with the thread.
-      mocks.state.threads = [LISTED_THREAD, NEW_THREAD];
-      mocks.state.threadsFetching = false;
-      rerender(surface());
-
-      expect(
-        screen.getByRole("tab", { name: /^Activity/, selected: true }),
-      ).toBeTruthy();
-      expect(screen.getByTestId("stub-activity")).toBeTruthy();
-      expectNoSession();
-
-      await user.click(screen.getByRole("tab", { name: /^Messages/ }));
-
-      const channel = screen.getByTestId("stub-channel");
-      expect(channel.getAttribute("data-open-thread")).toBe("none");
-      expect(channel.getAttribute("data-land-on")).toBe("none");
-      expectNoSession();
-    });
-
-    it("spends a waiting sender landing unlanded when the person opens Threads, which stays open when the list answers", async () => {
-      const user = userEvent.setup();
-      const NEW_THREAD: BotThreadSummary = {
-        ...LISTED_THREAD,
-        threadId: "thread-2",
-        sessionChatId: "session-thread-2",
-        anchor: {
-          messageId: "post-8",
-          requestId: "req-8",
-          senderUserId: "user-1",
-          sentAt: 3_000,
-          resolvedAt: null,
-          excerpt: null,
-        },
-      };
-      const { rerender } = render(surface());
-
-      // The held list lacks the sender's thread, and a read of it starts.
-      mocks.state.threadsFetching = true;
-      rerender(surface());
-      act(() =>
-        useBotTabLandingStore
-          .getState()
-          .request(BOT_ID, { kind: "sender", chatId: "session-thread-2" }),
-      );
-      expect(useBotTabLandingStore.getState().byBotId[BOT_ID]).toEqual({
-        kind: "sender",
-        chatId: "session-thread-2",
-      });
-
-      // The person opens Threads from the column while the landing waits.
-      await user.click(screen.getByTestId("stub-sidebar-threads"));
-
-      expect(useBotTabLandingStore.getState().byBotId).toEqual({});
-      expect(screen.getByTestId("stub-threads")).toBeTruthy();
-
-      // The read answers with the thread.
-      mocks.state.threads = [LISTED_THREAD, NEW_THREAD];
-      mocks.state.threadsFetching = false;
-      rerender(surface());
-
-      expect(screen.getByTestId("stub-threads")).toBeTruthy();
-      expect(
-        screen.getByTestId("stub-sidebar").getAttribute("data-threads-shown"),
-      ).toBe("true");
-      expect(screen.queryByTestId("stub-channel")).toBeNull();
-      expectNoSession();
-    });
-
-    it("spends a sender landing waiting on the first thread-list read when the person opens Activity, which stays when the list answers", async () => {
-      const user = userEvent.setup();
-      const NEW_THREAD: BotThreadSummary = {
-        ...LISTED_THREAD,
-        threadId: "thread-2",
-        sessionChatId: "session-thread-2",
-        anchor: {
-          messageId: "post-8",
-          requestId: "req-8",
-          senderUserId: "user-1",
-          sentAt: 3_000,
-          resolvedAt: null,
-          excerpt: null,
-        },
-      };
-      // No list is held yet, and its first read is in flight.
-      mocks.state.threadsHeld = false;
-      mocks.state.threadsFetching = true;
-      const view = render(surface());
-      act(() =>
-        useBotTabLandingStore
-          .getState()
-          .request(BOT_ID, { kind: "sender", chatId: "session-thread-2" }),
-      );
-      expect(useBotTabLandingStore.getState().byBotId[BOT_ID]).toEqual({
-        kind: "sender",
-        chatId: "session-thread-2",
-      });
-
-      // The person opens Activity while the landing waits on the first read.
-      await user.click(screen.getByRole("tab", { name: /^Activity/ }));
-
-      expect(useBotTabLandingStore.getState().byBotId).toEqual({});
-      expect(
-        screen.getByRole("tab", { name: /^Activity/, selected: true }),
-      ).toBeTruthy();
-
-      // The first read answers with the sender's thread.
-      mocks.state.threadsHeld = true;
-      mocks.state.threads = [LISTED_THREAD, NEW_THREAD];
-      mocks.state.threadsFetching = false;
-      view.rerender(surface());
-
-      expect(
-        screen.getByRole("tab", { name: /^Activity/, selected: true }),
-      ).toBeTruthy();
-      expect(screen.getByTestId("stub-activity")).toBeTruthy();
-      expectNoSession();
-      expect(useBotTabLandingStore.getState().byBotId).toEqual({});
-
-      await user.click(screen.getByRole("tab", { name: /^Messages/ }));
-
-      const channel = screen.getByTestId("stub-channel");
-      expect(channel.getAttribute("data-open-thread")).toBe("none");
-      expect(channel.getAttribute("data-land-on")).toBe("none");
-      expectNoSession();
-    });
-
-    it("spends a waiting sender landing unlanded when the person opens the bot's memory, which stays when the list answers", async () => {
-      const user = userEvent.setup();
-      const NEW_THREAD: BotThreadSummary = {
-        ...LISTED_THREAD,
-        threadId: "thread-2",
-        sessionChatId: "session-thread-2",
-        anchor: {
-          messageId: "post-8",
-          requestId: "req-8",
-          senderUserId: "user-1",
-          sentAt: 3_000,
-          resolvedAt: null,
-          excerpt: null,
-        },
-      };
-      const { rerender } = render(surface());
-
-      // The held list lacks the sender's thread, and a read of it starts.
-      mocks.state.threadsFetching = true;
-      rerender(surface());
-      act(() =>
-        useBotTabLandingStore
-          .getState()
-          .request(BOT_ID, { kind: "sender", chatId: "session-thread-2" }),
-      );
-      expect(useBotTabLandingStore.getState().byBotId[BOT_ID]).toEqual({
-        kind: "sender",
-        chatId: "session-thread-2",
-      });
-
-      // The person opens the bot's memory beside the channel while it waits.
-      await user.click(screen.getByTestId("stub-channel-open-memory"));
-
-      expect(useBotTabLandingStore.getState().byBotId).toEqual({});
-      expect(
-        screen.getByTestId("stub-channel").getAttribute("data-open-memory"),
-      ).toBe("true");
-
-      // The read answers with the thread.
-      mocks.state.threads = [LISTED_THREAD, NEW_THREAD];
-      mocks.state.threadsFetching = false;
-      rerender(surface());
-
-      const channel = screen.getByTestId("stub-channel");
-      expect(channel.getAttribute("data-open-memory")).toBe("true");
-      expect(channel.getAttribute("data-open-thread")).toBe("none");
-      expect(channel.getAttribute("data-land-on")).toBe("none");
-      expectNoSession();
-      expect(useBotTabLandingStore.getState().byBotId).toEqual({});
-    });
-
-    it("lands the channel for a sender landing when the first thread-list read fails", async () => {
-      const user = userEvent.setup();
-      // No list is held, and its first read has failed.
-      mocks.state.threadsHeld = false;
-      mocks.state.threadsFetching = false;
-      mocks.state.threadsError = true;
-      render(surface());
-      await user.click(screen.getByRole("tab", { name: /^Activity/ }));
-      expect(screen.getByTestId("stub-activity")).toBeTruthy();
-
-      act(() =>
-        useBotTabLandingStore
-          .getState()
-          .request(BOT_ID, { kind: "sender", chatId: "session-thread-2" }),
-      );
-
-      expect(useBotTabLandingStore.getState().byBotId).toEqual({});
-      expect(
-        screen.getByRole("tab", { name: /^Messages/, selected: true }),
-      ).toBeTruthy();
-      const channel = screen.getByTestId("stub-channel");
-      expect(channel.getAttribute("data-open-thread")).toBe("none");
-      expect(channel.getAttribute("data-land-on")).toBe("none");
-      expectNoSession();
-    });
-
-    it("lands the channel, with no thread or session, for a sender landing on the trunk chat", () => {
-      useBotTabLandingStore
-        .getState()
-        .request(BOT_ID, { kind: "sender", chatId: BOT.trunkChatId });
-      render(surface());
-
-      const channel = screen.getByTestId("stub-channel");
-      expect(channel.getAttribute("data-open-thread")).toBe("none");
-      expect(channel.getAttribute("data-land-on")).toBe("none");
-      expectNoSession();
-      expect(useBotTabLandingStore.getState().byBotId).toEqual({});
-    });
-
-    it.each([
-      ["the trunk session", "trunk-1"],
-      ["a thread's session", "session-thread-1"],
-    ])(
-      "leaves Threads for %s, with the channel under it for Back",
-      async (_kind, chatId) => {
-        const user = userEvent.setup();
-        render(surface());
-        await user.click(screen.getByTestId("stub-sidebar-threads"));
-        expect(screen.getByTestId("stub-threads")).toBeTruthy();
-
-        act(() => openSearchHit(chatId, "session-row-1"));
-
-        expect(useBotTabLandingStore.getState().byBotId).toEqual({});
-        expect(screen.queryByTestId("stub-threads")).toBeNull();
-        expect(screen.getByTestId("stub-session").dataset.chatId).toBe(chatId);
-
-        await user.click(screen.getByTestId("stub-session-back"));
-
-        expect(screen.queryByTestId("stub-threads")).toBeNull();
-        expect(screen.getByTestId("stub-channel")).toBeTruthy();
-      },
-    );
-
-    // A row can name a host that has since gone; a surface that opens for it
-    // takes the window's host instead, which routes the bot to wherever it is
-    // served.
-    it.each(["a search hit", "a notification"])(
-      "opens the surface on the window's host when %s names a host that is gone",
-      (source) => {
-        // The surface is closed: an open one keeps its own host.
-        useTracySurfaceStore.setState({
-          open: false,
-          hostId: null,
-          botId: null,
-          visitedBotIds: [],
-        });
-        if (source === "a search hit") {
-          openChatSearchResult(
-            vi.fn(),
-            {
-              epicId: BOT_ID,
-              chatId: BOT.appConversationChatId ?? "",
-              hostId: "host-retired",
-              messageId: "post-1",
-            },
-            { effectiveHostId: TAB_HOST, now: 1_000 },
-          );
-        } else {
-          const { payload } = rowFromHostEntry({
-            id: "old-agent-stop",
-            updatedAt: 10,
-            readAt: null,
-            kind: "agent.stopped",
-            sourceRef: BOT.trunkChatId,
-            severity: "done",
-            outcome: "completed",
-            epicId: BOT_ID,
-            chatId: BOT.trunkChatId,
-            payload: {
-              kind: "chat",
-              epicId: BOT_ID,
-              chatId: BOT.trunkChatId,
-              hostId: "host-retired",
-              agentName: "Tracy",
-              taskTitle: "Tracy",
-              outcome: "completed",
-            },
-          });
-          if (payload === null) throw new Error("the row carried no payload");
-          routeNotificationForHost(vi.fn(), payload, 1_000, {
-            originHostId: null,
-            effectiveHostId: TAB_HOST,
-          });
-        }
-
-        expect(useTracySurfaceStore.getState()).toMatchObject({
-          open: true,
-          hostId: TAB_HOST,
-        });
-        expect(mocks.activateTabIntent).toHaveBeenCalledWith({
-          kind: "tracy",
-          botId: BOT_ID,
-        });
-        render(surface());
-        expect(
-          screen.queryByTestId(
-            source === "a search hit" ? "stub-channel" : "stub-session",
-          ),
-        ).not.toBeNull();
-      },
-    );
-  });
-
-  it("gives the channel the bot's trunk session", () => {
-    render(surface());
-
-    expect(
-      screen.getByTestId("stub-channel").getAttribute("data-trunk-chat-id"),
-    ).toBe("trunk-1");
-  });
-});
-
-describe("<BotTabSurface /> channel lifetime", () => {
-  /**
-   * The last bot of a team is deleted: the list no longer carries it and its
-   * team has no bot, which is what a team still to be set up looks like. A
-   * channel that showed the bot listed is that bot's, so it is forgotten and
-   * the default channel is selected - it never shows the setup notice,
-   * whatever the host answers about the team's onboarding.
-   */
-  it.each<readonly [string, () => void]>([
-    [
-      "the host answers bot.onboarding.read at 1.0",
-      () => {
-        mocks.state.onboardingVersion = { major: 1, minor: 0 };
-      },
-    ],
-    [
-      "the setup read fails",
-      () => {
-        mocks.reads["env-team"] = "fails";
-      },
-    ],
-  ])(
-    "forgets the channel, never showing the setup notice, when bot.list no longer carries the last bot of its team and %s",
-    (_name, script) => {
-      script();
-      const view = render(surface());
-      expect(screen.getByTestId("stub-channel")).toBeTruthy();
-      expect(isKept(BOT_ID)).toBe(true);
-
-      mocks.state.listedBotIds = [];
-      view.rerender(surface());
-
-      expect(isKept(BOT_ID)).toBe(false);
-      expect(screen.queryByTestId("bot-tab-error")).toBeNull();
-    },
-  );
-
-  it("forgets a channel that was never listed, and selects the default, when the list carries another bot of its team", () => {
-    mocks.state.listedBotIds = [OTHER_BOT_ID];
-    render(surface());
-
-    expect(isKept(BOT_ID)).toBe(false);
-    expect(mocks.activateTabIntent).toHaveBeenCalledWith({
-      kind: "tracy",
-      botId: OTHER_BOT_ID,
-    });
-  });
-
-  it("keeps the channel while bot.list carries the bot or has not answered", () => {
-    mocks.state.listedBotIds = [BOT_ID, OTHER_BOT_ID];
-    const view = render(surface());
-    expect(isKept(BOT_ID)).toBe(true);
-
-    view.unmount();
-    mocks.state.listedBotIds = undefined;
-    render(surface());
-    expect(isKept(BOT_ID)).toBe(true);
-  });
-
-  it("forgets the channel on the stream's deleted frame", () => {
-    mocks.state.deleted = true;
-    mocks.state.listedBotIds = [BOT_ID, OTHER_BOT_ID];
-    render(surface());
-
-    expect(isKept(BOT_ID)).toBe(false);
-    expect(mocks.activateTabIntent).toHaveBeenCalledWith({
-      kind: "tracy",
-      botId: OTHER_BOT_ID,
-    });
-  });
-
-  it("forgets the channel when the settings panel reports the bot deleted", async () => {
-    const user = userEvent.setup();
-    mocks.state.listedBotIds = [BOT_ID, OTHER_BOT_ID];
-    render(surface());
-    await user.click(screen.getByTestId("bot-channel-settings-open"));
-
-    await user.click(screen.getByTestId("stub-settings-deleted"));
-
-    expect(isKept(BOT_ID)).toBe(false);
-    expect(mocks.activateTabIntent).toHaveBeenCalledWith({
-      kind: "tracy",
-      botId: OTHER_BOT_ID,
-    });
-  });
-
-  it("commits the default channel at once while the surface is out of view, where there is no route to move", () => {
-    mocks.state.paneVisible = false;
-    mocks.state.listedBotIds = [OTHER_BOT_ID];
-    render(surface());
-
-    expect(useTracySurfaceStore.getState().botId).toBe(OTHER_BOT_ID);
-    expect(mocks.activateTabIntent).not.toHaveBeenCalled();
-  });
-
-  it("keeps the column and the previous channel's state across a switch, opening and subscribing to the new channel", () => {
-    mocks.state.listedBotIds = [BOT_ID, OTHER_BOT_ID];
-    const view = render(surface());
-    const column = screen.getByTestId("stub-sidebar");
-
-    useTracySurfaceStore.getState().selectChannel(OTHER_BOT_ID);
-    view.rerender(surfaceFor(OTHER_BOT_ID));
-
-    expect(screen.getByTestId("stub-sidebar")).toBe(column);
-    expect(column.getAttribute("data-active-bot-id")).toBe(OTHER_BOT_ID);
-    expect(mocks.open).toHaveBeenCalledWith({ botId: OTHER_BOT_ID });
-    expect(mocks.subscribed).toContain(OTHER_BOT_ID);
-    expect(isKept(BOT_ID)).toBe(true);
-  });
-
-  it("forgets an inactive visited channel when the list stops carrying it, leaving the selected one alone", () => {
-    mocks.state.listedBotIds = [BOT_ID, OTHER_BOT_ID];
-    const view = render(surface());
-    useTracySurfaceStore.getState().selectChannel(OTHER_BOT_ID);
-    useBotDraftsStore
-      .getState()
-      .typeThreadBox(OTHER_BOT_ID, "post-1", "unsent");
-    view.rerender(surfaceFor(OTHER_BOT_ID));
-    expect(useTracySurfaceStore.getState().visitedBotIds).toEqual([
-      BOT_ID,
-      OTHER_BOT_ID,
-    ]);
-
-    mocks.state.listedBotIds = [OTHER_BOT_ID];
-    view.rerender(surfaceFor(OTHER_BOT_ID));
-
-    expect(isKept(BOT_ID)).toBe(false);
-    expect(isKept(OTHER_BOT_ID)).toBe(true);
-    expect(mocks.activateTabIntent).not.toHaveBeenCalled();
-  });
-
-  it("keeps bot.list current through the change stream on the surface's own host", () => {
-    render(surface());
-
-    expect(mocks.useBotListChangedSubscriptionForHost).toHaveBeenLastCalledWith(
-      TAB_HOST,
-      true,
-    );
-  });
-});
-
-describe("<BotTabSurface /> with no channel selected", () => {
-  it("selects the default channel once the lists answer, and shows the column meanwhile", () => {
-    mocks.state.listedBotIds = [BOT_ID];
-    render(surfaceFor(null));
-
-    expect(
-      screen.getByTestId("stub-sidebar").getAttribute("data-active-bot-id"),
-    ).toBe("none");
-    expect(mocks.activateTabIntent).toHaveBeenCalledWith({
-      kind: "tracy",
-      botId: BOT_ID,
-    });
-    expect(mocks.open).not.toHaveBeenCalled();
-  });
-
-  it("says there are no bots yet, with the column still drawn, when the team has none", () => {
-    mocks.state.listedBotIds = [];
-    render(surfaceFor(null));
-
-    expect(screen.getByTestId("bot-tab-no-channel").textContent).toBe(
-      "No bots yet. Create one from Home.",
-    );
-    expect(screen.getByTestId("stub-sidebar")).toBeTruthy();
-    expect(mocks.activateTabIntent).not.toHaveBeenCalled();
-    expect(mocks.open).not.toHaveBeenCalled();
-  });
-
-  describe("level 2 in the installed app", () => {
-    beforeEach(() => {
-      setPhoneLayoutOnly(true);
-    });
-    afterEach(() => {
-      setPhoneLayoutOnly(false);
-    });
-
-    it("heads the pane with Tracy as the picker, to reach a team still to be set up that the default channel does not see", async () => {
-      mocks.state.listedBotIds = [];
-      mocks.state.environments = [
-        { environmentId: "env-new", label: "Newco", ownerKind: "organization" },
-      ];
-      mocks.reads["env-new"] = { setup: NEEDS_HOST_SETUP };
-      const user = userEvent.setup();
-      const view = render(surfaceFor(null));
-
-      expect(screen.queryByTestId("bot-channel-sidebar-pane")).toBeNull();
-      expect(screen.getByTestId("bot-tab-no-channel")).toBeTruthy();
-      const trigger = screen.getByTestId("bot-channel-picker-trigger");
-      expect(screen.getByTestId("bot-tab-title").contains(trigger)).toBe(true);
-      expect(trigger.textContent).toBe("Tracy");
-
-      await user.click(trigger);
-      const picker = await screen.findByTestId("bot-channel-picker");
-      expect(
-        within(picker).getByTestId("stub-sidebar").dataset.activeBotId,
-      ).toBe("none");
-      await user.click(within(picker).getByTestId("stub-sidebar-pick"));
-      expect(screen.queryByTestId("bot-channel-picker")).toBeNull();
-
-      // The pick navigates to the setup channel, which the route then shows.
-      view.rerender(surfaceFor(SETUP_BOT_ID));
-      expect(screen.getByTestId("team-setup-channel")).toBeTruthy();
-      expect(screen.queryByTestId("bot-tab-no-channel")).toBeNull();
-    });
-  });
-});
-
-describe("<BotTabSurface /> stream error", () => {
-  it("keeps the retained snapshot on screen and puts a retry on top of it", async () => {
-    const user = userEvent.setup();
-    mocks.state.error = "the stream closed";
-    render(surface());
-
-    expect(screen.getByTestId("bot-tab-title").textContent).toBe("Release Bot");
-    const alert = screen.getByTestId("bot-tab-error");
-    expect(alert.getAttribute("role")).toBe("alert");
-    expect(alert.textContent).toContain("the stream closed");
-    expect(screen.getByTestId("stub-channel")).toBeTruthy();
-
-    expect(mocks.resubscribe).not.toHaveBeenCalled();
-    await user.click(screen.getByRole("button", { name: "Retry" }));
-    expect(mocks.resubscribe).toHaveBeenCalledTimes(1);
-  });
-
-  it("shows only the error and its retry when no snapshot ever arrived", async () => {
-    const user = userEvent.setup();
-    mocks.state.snapshot = null;
-    mocks.state.error = "the stream closed";
-    render(surface());
-
-    expect(screen.getByTestId("bot-tab-error")).toBeTruthy();
-    expect(screen.queryByTestId("bot-tab-title")).toBeNull();
-    await user.click(screen.getByRole("button", { name: "Retry" }));
-    expect(mocks.resubscribe).toHaveBeenCalledTimes(1);
-  });
-
-  it("shows no error and no connecting state for a healthy stream", () => {
-    render(surface());
-
-    expect(screen.queryByTestId("bot-tab-error")).toBeNull();
-    expect(screen.queryByTestId("bot-tab-connecting")).toBeNull();
-  });
-
-  it("shows the connecting state before the first snapshot", () => {
-    mocks.state.snapshot = null;
-    render(surface());
-
-    expect(screen.getByTestId("bot-tab-connecting")).toBeTruthy();
-  });
-});
-
-describe("<BotTabSurface /> header on a short viewport under the keyboard", () => {
-  beforeEach(() => {
-    setPhoneLayoutOnly(true);
-    holdScreenLandscape();
-    raiseNativeKeyboard(IPHONE_17);
-  });
-
-  afterEach(() => {
-    setPhoneLayoutOnly(false);
-    restoreKeyboardEnvironment();
-  });
-
-  function hiddenAway(element: HTMLElement): boolean {
-    return element.closest("[hidden]") !== null;
-  }
-
-  it("keeps the name and gives the tabs up while the channel's box has the focus, and restores with the keyboard down", () => {
-    render(surface());
-    act(() => screen.getByLabelText("Channel box").focus());
-
-    expect(hiddenAway(screen.getByTestId("bot-tab-title"))).toBe(false);
-    expect(hiddenAway(screen.getByTestId("bot-tab-view-messages"))).toBe(true);
-    expect(hiddenAway(screen.getByTestId("bot-tab-view-activity"))).toBe(true);
-
-    lowerNativeKeyboard();
-    expect(hiddenAway(screen.getByTestId("bot-tab-view-messages"))).toBe(false);
-  });
-
-  it("keeps the whole header while a thread outside this surface has the focus", () => {
-    render(
-      <>
-        {surface()}
-        <section data-bot-thread-panel="">
-          <div {...KEYBOARD_FOCUS_OWNER_PROPS}>
-            <textarea aria-label="Another pane's thread box" />
-          </div>
-        </section>
-      </>,
-    );
-    act(() => screen.getByLabelText("Another pane's thread box").focus());
-
-    expect(hiddenAway(screen.getByTestId("bot-tab-title"))).toBe(false);
-    expect(hiddenAway(screen.getByTestId("bot-tab-view-messages"))).toBe(false);
-  });
-
-  it("gives the whole header up while a thread's box has the focus", () => {
-    render(surface());
-    act(() => screen.getByLabelText("Thread box").focus());
-
-    expect(hiddenAway(screen.getByTestId("bot-tab-title"))).toBe(true);
-    expect(hiddenAway(screen.getByTestId("bot-tab-view-messages"))).toBe(true);
   });
 });

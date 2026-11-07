@@ -162,16 +162,17 @@ export const GENERAL = defineSettingsSection("general", {
     description:
       "Let agents claim durable responsibilities and coordinate through role-aware tools and prompts.",
     availableWhen: isAgentRolesRowAvailable,
-    keywords: [
-      "roles",
-      "coordination",
-      "delegation",
-      "feature flag",
-      "experimental",
-      "beta",
-      "preview",
-      "labs",
-    ],
+    keywords: ["roles", "coordination", "delegation"],
+  },
+  agentFeedback: {
+    kind: "row",
+    group: "agents",
+    search: { anchor: "general-agent-feedback" },
+    label: "Let agents draft feedback for you to review",
+    description:
+      "Agents can draft problems and suggestions about Traycer for its maintainers. Nothing is sent until you review a draft and press Send.",
+    availableWhen: isAgentRolesRowAvailable,
+    keywords: ["feedback", "suggestions", "telemetry", "privacy", "sentry"],
   },
   // Gated on the SELECTED HOST (both `chatAutoArchive.*` methods advertised),
   // which no shell-level predicate can decide, so it has no entry of its own:

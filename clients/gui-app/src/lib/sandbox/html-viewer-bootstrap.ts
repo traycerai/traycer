@@ -32,6 +32,17 @@ function htmlViewerBootstrap(): void {
       overlay?.removeAttribute("data-active");
     }, 1000);
   };
+  // The vertical track starts below the space the page keeps for the app's
+  // controls (the page bootstrap's own variable, not any padding the page
+  // gives its root), so the thumb is never under them at the top.
+  const trackStart = (isVertical: boolean): number =>
+    isVertical
+      ? Number.parseFloat(
+          window
+            .getComputedStyle(document.documentElement)
+            .getPropertyValue("--traycer-page-inset-top"),
+        ) || 0
+      : 0;
   const updateScrollbars = (): void => {
     pendingFrame = 0;
     const root = document.scrollingElement;
@@ -43,12 +54,14 @@ function htmlViewerBootstrap(): void {
       const viewport = isVertical ? window.innerHeight : window.innerWidth;
       const extent = isVertical ? root.scrollHeight : root.scrollWidth;
       const position = isVertical ? root.scrollTop : root.scrollLeft;
-      const track = Math.max(0, viewport - 12);
+      const start = trackStart(isVertical);
+      const track = Math.max(0, viewport - 12 - start);
       const length = Math.min(track, Math.max(28, (viewport / extent) * track));
       const offset =
-        extent <= viewport
+        start +
+        (extent <= viewport
           ? 0
-          : (position / (extent - viewport)) * (track - length);
+          : (position / (extent - viewport)) * (track - length));
       button.hidden = extent <= viewport + 1;
       button.style[isVertical ? "height" : "width"] = `${length}px`;
       button.style.transform = isVertical
@@ -91,6 +104,29 @@ function htmlViewerBootstrap(): void {
     setScale(scale * Math.exp(-pixels * 0.005), event.clientX, event.clientY);
   };
 
+  // The pinch listens after the page's own touch handlers, so a page that
+  // takes a pinch for itself (a map) keeps it. While the reader comments on
+  // the page (the app says so in `traycer/html/view`), the selection script
+  // keeps a touch's start and end from the page's handlers at the window's
+  // capture, so there the pinch listens ahead of it. It never stops a
+  // touch's moves, so those need no second ear.
+  let commenting = false;
+  const inPhase =
+    (capture: boolean, handler: (event: TouchEvent) => void) =>
+    (event: TouchEvent): void => {
+      if (capture === commenting) handler(event);
+    };
+  const listenToTouch = (
+    type: "touchstart" | "touchend" | "touchcancel",
+    handler: (event: TouchEvent) => void,
+  ): void => {
+    for (const capture of [true, false])
+      window.addEventListener(type, inPhase(capture, handler), {
+        capture,
+        passive: true,
+      });
+  };
+
   let pinch: { distance: number; scale: number; x: number; y: number } | null =
     null;
   const touchGeometry = (touches: TouchList) => {
@@ -109,14 +145,10 @@ function htmlViewerBootstrap(): void {
       y: (first.clientY + second.clientY) / 2,
     };
   };
-  window.addEventListener(
-    "touchstart",
-    (event) => {
-      const geometry = zoomEnabled ? touchGeometry(event.touches) : null;
-      pinch = geometry === null ? null : { ...geometry, scale };
-    },
-    { passive: true },
-  );
+  listenToTouch("touchstart", (event) => {
+    const geometry = zoomEnabled ? touchGeometry(event.touches) : null;
+    pinch = geometry === null ? null : { ...geometry, scale };
+  });
   const onTouchMove = (event: TouchEvent): void => {
     const geometry = touchGeometry(event.touches);
     if (!zoomEnabled || pinch === null || geometry === null) return;
@@ -150,6 +182,10 @@ function htmlViewerBootstrap(): void {
     const data = event.data;
     if (data.method !== "traycer/html/view" || !isRecord(data.params)) return;
     const params = data.params;
+    if (commenting !== (params.commenting === true)) {
+      commenting = params.commenting === true;
+      pinch = null;
+    }
     setZoomEnabled(params.enabled === true);
     if (typeof params.scale === "number" && Number.isFinite(params.scale)) {
       setScale(params.scale, window.innerWidth / 2, window.innerHeight / 2);
@@ -159,8 +195,8 @@ function htmlViewerBootstrap(): void {
   const endPinch = (): void => {
     pinch = null;
   };
-  window.addEventListener("touchend", endPinch, { passive: true });
-  window.addEventListener("touchcancel", endPinch, { passive: true });
+  listenToTouch("touchend", endPinch);
+  listenToTouch("touchcancel", endPinch);
 
   document.addEventListener(
     "DOMContentLoaded",
@@ -240,7 +276,8 @@ function htmlViewerBootstrap(): void {
             (isVertical ? event.clientY : event.clientX) - start.coordinate;
           const position =
             start.scroll +
-            (delta * (extent - viewport)) / Math.max(1, viewport - 12 - length);
+            (delta * (extent - viewport)) /
+              Math.max(1, viewport - 12 - trackStart(isVertical) - length);
           window.scrollTo(
             isVertical
               ? { top: position, behavior: "instant" }

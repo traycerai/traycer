@@ -505,6 +505,7 @@ export function CanvasSelectionProvider(
               tileId={draftOwner}
               boardPath={path}
               registry={registry}
+              pointerInPage={artifactType === "html"}
               onPick={pick}
               onRetire={retire}
               onEscape={escapeSelection}
@@ -529,6 +530,7 @@ export function CanvasSelectionProvider(
     }),
     [
       artifactId,
+      artifactType,
       parent,
       pick,
       registry,

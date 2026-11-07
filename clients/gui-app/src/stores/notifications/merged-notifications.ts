@@ -79,12 +79,14 @@ import {
 } from "@/lib/notifications/notification-feed-mode";
 import { useNotificationsPopoverStore } from "@/stores/notifications/notifications-popover-store";
 import {
+  useNotificationAttentionCount,
   useNotificationEntries,
   useNotificationEntryById,
   useNotificationEntryIds,
   useNotificationUnreadCount,
   useNotificationsStore,
 } from "@/stores/notifications/notifications-store";
+import { severityForGlobalEvent } from "@/lib/notifications/global-notification-severity";
 import {
   formatHostNotificationPresentation,
   isBotConversationAttention,
@@ -96,7 +98,7 @@ import {
   type HostNotificationSeverity,
   type HostNotificationsAttentionCursor,
   type HostNotificationsChronologicalCursor,
-  type HostNotificationsCloudFeedRowV16,
+  type HostNotificationsCloudFeedRowV17,
   type HostNotificationsCloudFeedEntryRequest,
   type HostNotificationsEntityRef,
   type HostNotificationsSummary,
@@ -140,6 +142,9 @@ export interface MergedNotificationRow {
    * row that mentions them: Attention's last class while unread. Absent or
    * `false` on every other row. */
   readonly botAnswer?: boolean;
+  /** The member who wrote the bot conversation row this notice is about.
+   * Absent or `null` on the bot's own rows and on every other row. */
+  readonly botAuthorUserId?: string | null;
   readonly hostKind: HostNotificationFeedEntry["kind"] | null;
   readonly appLocalKind: AppLocalNotificationEntry["kind"] | null;
   readonly globalEntry: NotificationEntry | null;
@@ -357,7 +362,7 @@ export function useMergedNotificationRows(): ReadonlyArray<MergedNotificationRow
         ...orderedGlobalEntries.map((entry) => rowFromGlobalEntry(entry)),
         ...Object.values(cloudRows)
           .filter(
-            (row): row is HostNotificationsCloudFeedRowV16 => row !== undefined,
+            (row): row is HostNotificationsCloudFeedRowV17 => row !== undefined,
           )
           .filter((row) => !isAutomaticAgentRecovery(row.entry))
           .map(rowFromCloudFeedRow),
@@ -446,8 +451,8 @@ interface AttentionOrderEntry {
   readonly tier: NotificationAttentionTier;
 }
 
-/** Attention, blocking-first, then failures, then answers, newest first
- * within each tier.
+/** Attention, blocking-first, then failures, answers and invitations, newest
+ * first within each tier.
  * Never filtered - Attention is complete and filter-invariant by design. */
 export function useAttentionNotificationIds(): ReadonlyArray<string> {
   const rows = useMergedNotificationRows();
@@ -577,7 +582,7 @@ function rowFromLocalFeedId(input: {
 
 function rowFromCloudFeedId(input: {
   readonly feedMode: "local" | "cloud" | "upgrade-required";
-  readonly cloudRow: HostNotificationsCloudFeedRowV16 | undefined;
+  readonly cloudRow: HostNotificationsCloudFeedRowV17 | undefined;
 }): MergedNotificationRow | null {
   if (
     input.feedMode !== "cloud" ||
@@ -724,6 +729,12 @@ export type NotificationBellState =
  * number, per the "never present a stale/understated count as exact"
  * invariant.
  *
+ * Attention is every lane's count of what needs the person: the hosts'
+ * summaries, renderer-local failures, and the Notifications room's unread
+ * invitations (`severityForGlobalEvent`) - a task shared with them that
+ * nothing else announces. Every other collaboration row is unread activity,
+ * the quiet dot.
+ *
  * `unknown` RENDERS DISTINGUISHABLY from `clear` - `s5-parity-gaps` gap 3,
  * and `s5-status-truthfulness`'s class rule.
  *
@@ -749,13 +760,17 @@ export function useNotificationBellState(): NotificationBellState {
   // unread-failure count - no extra filter needed to fold it into attention.
   const appLocalUnread = useAppLocalNotificationUnreadCount();
   const globalUnread = useNotificationUnreadCount();
+  const globalAttention = useNotificationAttentionCount();
   const cloudSummary = useCloudNotificationsStore((state) => state.summary);
   if (feedMode === "cloud") {
     if (hostSummary === null || cloudSummary === null) {
       return { kind: "unknown" };
     }
     const attention =
-      hostSummary.attentionCount + cloudSummary.attentionCount + appLocalUnread;
+      hostSummary.attentionCount +
+      cloudSummary.attentionCount +
+      appLocalUnread +
+      globalAttention;
     if (attention > 0) {
       return { kind: "attention", count: attention };
     }
@@ -769,7 +784,8 @@ export function useNotificationBellState(): NotificationBellState {
   }
   if (feedMode === "upgrade-required") return { kind: "clear" };
   if (hostSummary === null) return { kind: "unknown" };
-  const attention = hostSummary.attentionCount + appLocalUnread;
+  const attention =
+    hostSummary.attentionCount + appLocalUnread + globalAttention;
   if (attention > 0) return { kind: "attention", count: attention };
   const unread = mergedUnreadCount({
     hostUnread: hostSummary.unreadCount,
@@ -1728,7 +1744,7 @@ export function useMergedNotificationsActions(): MergedNotificationsActions {
           if (cloudState.version !== cloudVersion) return;
           const fallbackEntryIds = Object.values(cloudState.rows)
             .filter(
-              (row): row is HostNotificationsCloudFeedRowV16 =>
+              (row): row is HostNotificationsCloudFeedRowV17 =>
                 row !== undefined && row.entry.readAt === null,
             )
             .map((row) => row.entryId);
@@ -2101,6 +2117,7 @@ function rowFromHostEntryForOrigin(
     agentSurface: agentSurfaceFromHostEntry(entry),
     secrets: secretsNotificationDetail(entry.kind, entry.payload),
     botAnswer: isBotAttention(entry),
+    botAuthorUserId: botConversationAuthorUserId(entry),
     hostKind: entry.kind,
     appLocalKind: null,
     globalEntry: null,
@@ -2152,7 +2169,7 @@ export function rowFromGlobalEntry(
     hostKind: null,
     appLocalKind: null,
     globalEntry: entry,
-    severity: "info",
+    severity: severityForGlobalEvent(entry.event),
     outcome: null,
     resolvedAt: null,
     sourceRef: null,
@@ -2162,7 +2179,7 @@ export function rowFromGlobalEntry(
 }
 
 export function rowFromCloudFeedRow(
-  row: HostNotificationsCloudFeedRowV16,
+  row: HostNotificationsCloudFeedRowV17,
 ): MergedNotificationRow {
   const fallback = formatHostNotificationPresentation(row.entry);
   const title =
@@ -2182,6 +2199,7 @@ export function rowFromCloudFeedRow(
     agentSurface: agentSurfaceFromHostEntry(row.entry),
     secrets: secretsNotificationDetail(row.entry.kind, row.entry.payload),
     botAnswer: isBotAttention(row.entry),
+    botAuthorUserId: botConversationAuthorUserId(row.entry),
     hostKind: row.entry.kind,
     appLocalKind: null,
     globalEntry: null,
@@ -2368,19 +2386,36 @@ function isRowCompletePayload(
   return ROW_COMPLETE_PAYLOAD_KIND_SET.has(known.kind);
 }
 
+/** Never shown: readers drop these rows. */
+const UNSHOWN_PAYLOAD_KINDS = [
+  "notification_hooks_removed",
+  "worktree_deletion",
+  "worktree_auto_cleanup",
+  "secret_export_minted",
+] as const;
+
+type UnshownPayload = Extract<
+  HostNotificationKnownPayload,
+  { readonly kind: (typeof UNSHOWN_PAYLOAD_KINDS)[number] }
+>;
+
+const UNSHOWN_PAYLOAD_KIND_SET: ReadonlySet<
+  HostNotificationKnownPayload["kind"]
+> = new Set(UNSHOWN_PAYLOAD_KINDS);
+
+function isUnshownPayload(
+  known: HostNotificationKnownPayload,
+): known is UnshownPayload {
+  return UNSHOWN_PAYLOAD_KIND_SET.has(known.kind);
+}
+
 function navigationPayloadFromKnown(
   known: HostNotificationKnownPayload,
 ): NotificationPayload | null {
-  if (isRowCompletePayload(known)) return null;
+  if (isRowCompletePayload(known) || isUnshownPayload(known)) return null;
   // A bot's row opens the bot's tab on it, as its push does.
   if (isBotRowPayload(known)) return navigationPayloadForBotRow(known);
   switch (known.kind) {
-    // Never shown: readers drop these rows.
-    case "notification_hooks_removed":
-    case "worktree_deletion":
-    case "worktree_auto_cleanup":
-    case "secret_export_minted":
-      return null;
     case "chat":
       return navigationPayloadForChatStopped(known);
     case "agent_stalled":
@@ -2413,6 +2448,13 @@ function navigationPayloadFromKnown(
         epicId: known.epicId,
         chatId: known.chatId,
         interviewBlockId: known.interviewBlockId,
+      };
+    case "feedback_draft":
+      return {
+        kind: "feedbackDraft",
+        epicId: known.epicId,
+        chatId: known.chatId,
+        blockId: known.blockId,
       };
     case "browser_human_needed":
       return {
@@ -2486,6 +2528,17 @@ function navigationPayloadForChatStopped(
     eventId: includeTranscriptAnchor ? known.eventId : undefined,
     ...(scrollToEnd ? { scrollToEnd: true as const } : {}),
   };
+}
+
+function botConversationAuthorUserId(entry: {
+  readonly kind: HostNotificationFeedEntry["kind"];
+  readonly payload: HostNotificationFeedEntry["payload"];
+}): string | null {
+  const known = parseKnownHostNotificationPayloadForKind(
+    entry.kind,
+    entry.payload,
+  );
+  return known?.kind === "bot_conversation" ? known.authorUserId : null;
 }
 
 const HOST_PAGE_LIMIT = 50;

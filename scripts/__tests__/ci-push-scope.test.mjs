@@ -12,6 +12,7 @@
 // `ci-last-green-sha.test.mjs` is where that is pinned.
 
 import { spawnSync } from "node:child_process";
+import { GIT_OUTPUT_MAX_BUFFER_BYTES } from "../git-output-limit.cjs";
 import {
   existsSync,
   mkdirSync,
@@ -43,6 +44,7 @@ const BASE_TREE = [
   "nx.json",
   "protocol/src/index.ts",
   "protocol/README.md",
+  "scripts/test-worker-environment.ts",
   "clients/shared/src/index.ts",
   "clients/traycer-cli/src/index.ts",
   "clients/gui-app/src/main.tsx",
@@ -60,6 +62,7 @@ let base;
 
 const git = (...args) => {
   const result = spawnSync("git", args, {
+    maxBuffer: GIT_OUTPUT_MAX_BUFFER_BYTES,
     cwd: repo,
     encoding: "utf8",
     env: {
@@ -169,6 +172,14 @@ describe("a failure of change detection runs everything", () => {
 });
 
 describe("protocol-compat.yml reaches the protocol surface and the client transports", () => {
+  it("runs on the test worker environment guard", () => {
+    expect(
+      pushTouching("protocol-compat.yml", [
+        "scripts/test-worker-environment.ts",
+      ]),
+    ).toBe("true");
+  });
+
   it("runs on a protocol change", () => {
     expect(pushTouching("protocol-compat.yml", ["protocol/src/index.ts"])).toBe(
       "true",
@@ -198,6 +209,14 @@ describe("protocol-compat.yml reaches the protocol surface and the client transp
 });
 
 describe("real-supervisor.yml reaches the CLI's launchd rows", () => {
+  it("runs on the test worker environment guard", () => {
+    expect(
+      pushTouching("real-supervisor.yml", [
+        "scripts/test-worker-environment.ts",
+      ]),
+    ).toBe("true");
+  });
+
   it("runs on a CLI change", () => {
     expect(
       pushTouching("real-supervisor.yml", ["clients/traycer-cli/src/index.ts"]),

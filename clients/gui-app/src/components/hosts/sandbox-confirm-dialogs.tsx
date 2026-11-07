@@ -61,6 +61,7 @@ import {
   sandboxPeriodDraft,
   sandboxPeriodMinutes,
   sandboxRestingRefusal,
+  sandboxRetentionIsWithdrawn,
   sandboxSessionPills,
   sandboxSessionsLine,
   type SandboxPageConfiguration,
@@ -74,6 +75,7 @@ import {
   alreadyDestroyedLine,
   configurationLabel,
   keepPreviewLine,
+  KEEP_PREVIEW_WITHDRAWN,
   keptByLine,
   paidByLine,
   startedByLine,
@@ -302,10 +304,13 @@ export function SandboxStopDialog(props: SandboxDialogProps): ReactNode {
   const configuration = useDialogConfiguration(props.sandbox);
   const viewerUserId = useViewerUserId();
   const now = useSampledNow();
-  const destroyed = sandboxStopDestroySentence(
-    props.sandbox.destroyAfterRestingMinutes,
-    now,
-  );
+  // A withdrawn row gets no destroy date: the resting pass will not destroy
+  // it, so naming the date its period would have fallen on promises something
+  // that is not going to happen. The sentence is already nullable for a row
+  // that rests forever, so the dialog draws fine without it.
+  const destroyed = sandboxRetentionIsWithdrawn(props.sandbox)
+    ? null
+    : sandboxStopDestroySentence(props.sandbox.destroyAfterRestingMinutes, now);
   return (
     <VerbConfirmDialog
       {...props}
@@ -409,11 +414,7 @@ export function SandboxKeepDialog(props: SandboxDialogProps): ReactNode {
     props.sandbox.wakePayer === null
       ? "you"
       : sandboxMemberName(props.sandbox.wakePayer, viewerUserId);
-  const who = [
-    startedByLine("an agent"),
-    keptByLine("you"),
-    paidByLine(payer),
-  ].join(" · ");
+  const who = [startedByLine("an agent"), keptByLine("you")].join(" · ");
   const idle = [`Suspends after ${SANDBOX_DEFAULT_IDLE_MINUTES} idle min`, wake]
     .filter((part): part is string => part !== null)
     .join(" · ");
@@ -436,18 +437,26 @@ export function SandboxKeepDialog(props: SandboxDialogProps): ReactNode {
         <DialogHeader>
           <DialogTitle className="wrap-anywhere">{`Keep ${name}?`}</DialogTitle>
           <DialogDescription className="wrap-anywhere">
-            {keepPreviewLine(restingDays, formatSandboxDate(restsUntil, true))}
+            {sandboxRetentionIsWithdrawn(props.sandbox)
+              ? KEEP_PREVIEW_WITHDRAWN
+              : keepPreviewLine(
+                  restingDays,
+                  formatSandboxDate(restsUntil, true),
+                )}
           </DialogDescription>
         </DialogHeader>
         <div className="flex flex-col gap-1 px-5 py-3 text-ui-sm">
           <p className="text-ui-xs font-medium text-muted-foreground">
             After Keep
           </p>
-          <p data-testid="sandbox-confirm-keep-who">{who}</p>
+          <p className="wrap-anywhere" data-testid="sandbox-confirm-keep-who">
+            {who}
+          </p>
+          <p className="wrap-anywhere">{`${paidByLine(payer)} while awake.`}</p>
           <p>{idle}</p>
           <p>Listed under Sandboxes you started</p>
           <p className="text-ui-xs text-muted-foreground">
-            {`${configurationLabel(configurationCopy(configuration))}'s defaults; change them on the row afterwards. Who started it and who pays are unchanged.`}
+            {`${configurationLabel(configurationCopy(configuration))}'s defaults; change them on the row afterwards.`}
           </p>
           {lost ? (
             <p
@@ -819,7 +828,7 @@ function IdleSettingsForm(props: {
         out before the pause.
       </p>
       <SandboxPeriodField
-        label="Destroy after resting for (empty: never)"
+        label="Destroy after idle for (empty: never)"
         draft={resting}
         placeholder="never"
         disabled={props.pending}
@@ -827,7 +836,11 @@ function IdleSettingsForm(props: {
         testId="sandbox-idle-settings-resting"
         onChange={setResting}
       />
-      {restingChanged ? (
+      {/* No preview for a withdrawn row: every reading of it names a resting
+          outcome the withdrawal has suspended, `Kept until you destroy it`
+          most wrongly of all. The setting still saves; what it cannot do is
+          promise this row's lifetime. */}
+      {restingChanged && !sandboxRetentionIsWithdrawn(props.sandbox) ? (
         <p
           className="text-ui-xs text-muted-foreground"
           data-testid="sandbox-idle-settings-preview"

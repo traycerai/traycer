@@ -33,7 +33,11 @@ import {
   MANUAL_TILE_OPEN,
   openTileWithNavigation,
 } from "@/lib/canvas/tile-open/open-tile";
-import type { NavigateNestedFocus } from "@/lib/epic-nested-focus-navigation";
+import type { MobileTileOpenTarget } from "@/lib/canvas/tile-open/mobile-tile-open-target-context";
+import type {
+  NavigateNestedFocus,
+  NestedFocusProvenance,
+} from "@/lib/epic-nested-focus-navigation";
 import type { AnalyticsSource } from "@/lib/analytics";
 
 const CHAT_PROJECTION_WAIT_MS = 30_000;
@@ -64,6 +68,15 @@ export interface CreatedChatOpenIntent {
    */
   readonly placement: ExplicitTilePlacement | null;
   readonly source: AnalyticsSource;
+  /**
+   * Who asked for the tile this open commits. Not derivable from `source`,
+   * which answers an analytics question: a `direct_ui` fork can still be
+   * replayed with nobody at the keyboard, because the pending-sandbox queue
+   * is persisted and rehydrates on load (`pending-sandbox-sends.tsx`), and a
+   * commit claiming the person acted retires an artifact request the route is
+   * still waiting on. The caller knows; this type refuses to guess.
+   */
+  readonly provenance: NestedFocusProvenance;
 }
 
 /**
@@ -79,6 +92,12 @@ export type CancelFn = () => void;
 export interface OpenCreatedChatWhenProjectedWithNavigationArgs {
   readonly intent: CreatedChatOpenIntent;
   readonly navigateNestedFocus: NavigateNestedFocus;
+  /**
+   * The phone shell's slot the new chat lands in, from the list that created
+   * it (`MobileTileOpenTargetContext`); `null` from anywhere else, where the
+   * shell's one tile takes it.
+   */
+  readonly mobileTarget: MobileTileOpenTarget | null;
 }
 
 export interface OpenNewChatInActiveTileArgs {
@@ -103,6 +122,8 @@ export interface OpenNewChatInActiveTileArgs {
    *  but the clone flow). */
   readonly forkSource: CreateChatMutationInput["forkSource"] | null;
   readonly source: AnalyticsSource;
+  /** Who asked - see `CreatedChatOpenIntent.provenance`. */
+  readonly provenance: NestedFocusProvenance;
   readonly createChat: CreateChatCommand;
   readonly openWhenProjected: OpenWhenProjected;
   /** The create call failed outright (never reached `onSuccess`).
@@ -144,6 +165,7 @@ export function openNewChatInActiveTile(
           hostId: args.hostId,
           placement: null,
           source: args.source,
+          provenance: args.provenance,
         });
       },
       onError: args.onCreateError,
@@ -180,7 +202,7 @@ export function openNewChatInActiveTile(
 export function openCreatedChatWhenProjected(
   intent: CreatedChatOpenIntent,
 ): CancelFn {
-  return openCreatedChatWhenProjectedInternal(intent, rawNestedFocus);
+  return openCreatedChatWhenProjectedInternal(intent, rawNestedFocus, null);
 }
 
 export function openCreatedChatWhenProjectedWithNavigation(
@@ -189,17 +211,22 @@ export function openCreatedChatWhenProjectedWithNavigation(
   return openCreatedChatWhenProjectedInternal(
     args.intent,
     args.navigateNestedFocus,
+    args.mobileTarget,
   );
 }
 
 function openCreatedChatWhenProjectedInternal(
   intent: CreatedChatOpenIntent,
   navigateNestedFocus: NavigateNestedFocus,
+  mobileTarget: MobileTileOpenTarget | null,
 ): CancelFn {
   // Any attempted open (successful or with a vanished target) is terminal;
   // only "chat not yet projected" keeps the wait alive - matching the
   // pre-analytics behavior of attempting the open exactly once.
-  if (openProjectedChat(intent, navigateNestedFocus) !== "not_projected") {
+  if (
+    openProjectedChat(intent, navigateNestedFocus, mobileTarget) !==
+    "not_projected"
+  ) {
     return noop;
   }
   const handle = getOpenEpicRegistry().get(intent.epicId);
@@ -218,7 +245,10 @@ function openCreatedChatWhenProjectedInternal(
   };
   const unsubscribe = handle.store.subscribe(() => {
     if (cancelled) return;
-    if (openProjectedChat(intent, navigateNestedFocus) === "not_projected") {
+    if (
+      openProjectedChat(intent, navigateNestedFocus, mobileTarget) ===
+      "not_projected"
+    ) {
       return;
     }
     cleanup();
@@ -268,8 +298,12 @@ function reportChatProjectionWaitExpired(intent: CreatedChatOpenIntent): void {
   );
 }
 
-const rawNestedFocus: NavigateNestedFocus = (_epicId, _tabId, prepare) =>
-  prepare();
+const rawNestedFocus: NavigateNestedFocus = (
+  _epicId,
+  _tabId,
+  prepare,
+  _provenance,
+) => prepare();
 
 function buildCreateChatRequest(args: {
   readonly epicId: string;
@@ -316,6 +350,7 @@ type ProjectedChatOpenResult =
 function openProjectedChat(
   intent: CreatedChatOpenIntent,
   navigateNestedFocus: NavigateNestedFocus,
+  mobileTarget: MobileTileOpenTarget | null,
 ): ProjectedChatOpenResult {
   const handle = getOpenEpicRegistry().get(intent.epicId);
   if (handle === null) return "not_projected";
@@ -347,7 +382,7 @@ function openProjectedChat(
       source: intent.source,
     },
     navigateNestedFocus,
-    MANUAL_TILE_OPEN,
+    { ...MANUAL_TILE_OPEN, provenance: intent.provenance, mobileTarget },
   );
   // A pane can disappear while host creation is in flight. The open is then
   // abandoned exactly as it was before analytics existed - no fallback pane,

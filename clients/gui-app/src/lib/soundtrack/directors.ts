@@ -1,6 +1,6 @@
 import { MIX_TUNING } from "./mix-tuning";
 import type { MixSignals } from "./signals";
-import type { State, VariableTrack } from "./variable-sound";
+import type { LayerRole, State, VariableTrack } from "./variable-sound";
 
 /**
  * What a director wants of the track sounding. Gains ramp at once; everything
@@ -75,21 +75,22 @@ function intensityOf(signals: MixSignals): number {
 }
 
 function layerGain(
-  layerName: string,
+  role: LayerRole | null,
   signals: MixSignals,
   intensity: number,
 ): number {
-  const { B, C, D } = MIX_TUNING.layerGains;
-  switch (layerName) {
-    case "B":
-      return signals.blocking > 0 ? B.held : B.rest;
-    case "C":
-      return signals.done > 0 ? C.lifted : C.rest;
-    case "D":
+  const { pad, motif, texture } = MIX_TUNING.layerGains;
+  switch (role) {
+    case "pad":
+      return signals.blocking > 0 ? pad.held : pad.rest;
+    case "motif":
+      return signals.done > 0 ? motif.lifted : motif.rest;
+    case "texture":
       return signals.failure > 0
-        ? D.dimmed
-        : D.base + D.perIntensity * intensity;
-    default:
+        ? texture.dimmed
+        : texture.base + texture.perIntensity * intensity;
+    case "event":
+    case null:
       return 1;
   }
 }
@@ -106,13 +107,13 @@ export class RulesDirector implements MixDirector {
       heldLayers:
         signals.blocking > 0
           ? track.layers.flatMap((layer, index) =>
-              layer.name === "B" ? [index] : [],
+              layer.role === "pad" ? [index] : [],
             )
           : [],
       // Intensity is never negative, so `calm` is the ceiling already.
       pauseMultiplier: Math.max(busy, calm - perIntensity * intensity),
       layerGains: track.layers.map((layer) =>
-        layerGain(layer.name, signals, intensity),
+        layerGain(layer.role, signals, intensity),
       ),
       dim: signals.failure > 0,
     };
@@ -130,3 +131,10 @@ export const MIX_DIRECTORS = {
 } satisfies Record<string, MixDirector>;
 
 export type MixDirectorId = keyof typeof MIX_DIRECTORS;
+
+/** Until the listening test settles the default, the honest one. */
+export const DEFAULT_MIX_DIRECTOR: MixDirectorId = "static";
+
+export function isMixDirectorId(value: unknown): value is MixDirectorId {
+  return typeof value === "string" && Object.hasOwn(MIX_DIRECTORS, value);
+}
