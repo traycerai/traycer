@@ -112,6 +112,10 @@ export const AUTO_RAIL_REGION_IDS: ReadonlyArray<AutoRailRegionId> = [
   "railComments",
 ];
 
+export function isRailRegionId(id: string): id is RailRegionId {
+  return RAIL_REGION_IDS.some((candidate) => candidate === id);
+}
+
 export function isAutoRailRegionId(id: string): id is AutoRailRegionId {
   return AUTO_RAIL_REGION_IDS.some((candidate) => candidate === id);
 }

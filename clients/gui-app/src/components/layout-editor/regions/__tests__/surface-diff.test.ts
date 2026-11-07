@@ -322,6 +322,18 @@ describe("the Context usage row carries the pinned breakdown's order (C2)", () =
  * Their area's dot counts them and the owning region's row does not, so a
  * revert on that row cannot undo a setting it does not show.
  */
+describe("a rail row's revert", () => {
+  it("still clears its shown override, though a preset keeps it", () => {
+    const snapshot: LayoutSnapshot = {
+      ...DEFAULT_LAYOUT_SNAPSHOT,
+      overrides: { railFileTree: { shown: "shown" } },
+    };
+
+    expect(regionRowChanged(snapshot, "railFileTree")).toBe(true);
+    expect(revertedRegionRow(snapshot, "railFileTree").overrides).toEqual({});
+  });
+});
+
 describe("a value another area's row sets is not its owner's (T4)", () => {
   const agentRowsOn: LayoutSnapshot = {
     ...DEFAULT_LAYOUT_SNAPSHOT,

@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it } from "vitest";
 import {
   layoutChanges,
+  layoutEditorSessionChangeSummary,
   layoutModified,
   providerChanged,
   resetLayout,
@@ -137,6 +138,51 @@ describe("what the page can see as changed", () => {
       ).toBeGreaterThan(0);
       expect(layoutModified(snapshot), JSON.stringify(patch)).toBe(false);
     }
+  });
+});
+
+describe("panels shown or hidden", () => {
+  const withFileTree: LayoutSnapshot = {
+    basePreset: "default",
+    overrides: { railFileTree: { shown: "shown" } },
+    arrangement: DEFAULT_ARRANGEMENT,
+  };
+
+  it("lists a rail override under panels, not styles, and does not mark the preset Modified", () => {
+    const changes = layoutChanges(withFileTree);
+
+    expect(changes.panels.map((change) => change.region)).toEqual([
+      "railFileTree",
+    ]);
+    expect(changes.styles).toEqual([]);
+    expect(layoutModified(withFileTree)).toBe(false);
+  });
+
+  it("still marks the preset Modified for a display override", () => {
+    const snapshot: LayoutSnapshot = {
+      ...withFileTree,
+      overrides: { ...withFileTree.overrides, mic: { shown: "hidden" } },
+    };
+
+    expect(layoutChanges(snapshot).styles.map((c) => c.region)).toEqual([
+      "mic",
+    ]);
+    expect(layoutModified(snapshot)).toBe(true);
+  });
+
+  it("is put back by the panel change's revert", () => {
+    const [change] = layoutChanges(withFileTree).panels;
+
+    expect(revertLayoutChange(withFileTree, change).overrides).toEqual({});
+  });
+
+  it("counts toward the editor session's changedCount", () => {
+    expect(
+      layoutEditorSessionChangeSummary(
+        snapshotWith(DEFAULT_ARRANGEMENT),
+        withFileTree,
+      ).changedCount,
+    ).toBe(1);
   });
 });
 
