@@ -1090,6 +1090,7 @@ describe("<ProviderReauthBanner />", () => {
     expect(awaitVariables.request).toEqual({
       providerId: "claude-code",
       profileId: null,
+      lastSeenReaderCount: null,
     });
     expect(awaitVariables.signal).toBeInstanceOf(AbortSignal);
     expect(typeof awaitOptions.onSuccess).toBe("function");
