@@ -254,6 +254,34 @@ function pasteFiles(...files: ReadonlyArray<File>): boolean {
   return fireEvent.paste(box(), { clipboardData: transferOf(...files) });
 }
 
+function pastePlain(text: string): void {
+  fireEvent.paste(box(), {
+    clipboardData: {
+      types: ["text/plain"],
+      files: [],
+      items: [],
+      getData: (type: string) => (type === "text/plain" ? text : ""),
+    },
+  });
+}
+
+function pasteComposerContent(content: object): void {
+  const value = JSON.stringify({
+    schema: "traycer.composer-content",
+    version: 1,
+    content,
+  });
+  fireEvent.paste(box(), {
+    clipboardData: {
+      types: ["application/x-traycer-composer+json"],
+      files: [],
+      items: [],
+      getData: (type: string) =>
+        type === "application/x-traycer-composer+json" ? value : "",
+    },
+  });
+}
+
 function dropFiles(...files: ReadonlyArray<File>): boolean {
   const dataTransfer = transferOf(...files);
   fireEvent.dragEnter(box(), { dataTransfer });
@@ -308,6 +336,29 @@ afterEach(() => {
 });
 
 describe("<BotMessageComposer /> taking images", () => {
+  it("accepts a drop over the footer where the overlay offers it", async () => {
+    mount("delivered", PLAIN_BOX);
+    typeInto(box(), "draft");
+    const transfer = transferOf(imageFile("shot.png", "image/png"));
+    fireEvent.dragEnter(sendButton(), { dataTransfer: transfer });
+    expect(screen.getByText("Drop image to attach")).toBeTruthy();
+    expect(fireEvent.drop(sendButton(), { dataTransfer: transfer })).toBe(
+      false,
+    );
+    await holdsImage("Image#1: shot.png");
+  });
+
+  it.each(["> quoted text", "\\<@u-ann>", "**bold**\n> quote"])(
+    "sends pasted Markdown literally: %s",
+    (text) => {
+      mount("delivered", PLAIN_BOX);
+      pastePlain(text);
+      expect(boxText("Message Tracy")).toBe(text);
+      typeInto(box(), "{Enter}");
+      expect(lastSend().request.text).toBe(text);
+    },
+  );
+
   it("shows the drop overlay while images are dragged over the box, and holds a dropped image in the strip", async () => {
     mount("delivered", PLAIN_BOX);
     const dataTransfer = transferOf(imageFile("shot.png", "image/png"));
@@ -470,6 +521,37 @@ describe("<BotMessageComposer /> against a host that takes no image", () => {
 });
 
 describe("<BotMessageComposer /> refusing what it cannot take", () => {
+  it.each([
+    ["oversize", btoa("a".repeat(5 * 1024 * 1024 + 1))],
+    ["malformed", "not base64!"],
+  ])(
+    "refuses a %s copied image before it reaches the draft",
+    (_kind, b64content) => {
+      mount("delivered", PLAIN_BOX);
+      pasteComposerContent({
+        type: "doc",
+        content: [
+          {
+            type: "paragraph",
+            content: [
+              {
+                type: "imageAttachment",
+                attrs: {
+                  id: "copy",
+                  fileName: "shot.png",
+                  mimeType: "image/png",
+                  b64content,
+                },
+              },
+            ],
+          },
+        ],
+      });
+      expect(openButtons()).toHaveLength(0);
+      expect(toast.error).toHaveBeenCalled();
+    },
+  );
+
   const NOT_AN_IMAGE = "Only PNG, JPEG, GIF and WebP images can be sent here.";
 
   it("refuses a file that is not an image with the agent composer's path toast, and attaches nothing", async () => {

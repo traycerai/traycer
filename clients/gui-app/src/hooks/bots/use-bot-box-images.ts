@@ -2,6 +2,7 @@ import { useCallback, useMemo, type RefObject } from "react";
 import {
   BOT_CONVERSATION_ATTACHMENT_MEDIA_TYPES,
   BOT_CONVERSATION_ATTACHMENTS_MAX,
+  BOT_CONVERSATION_ATTACHMENT_MAX_BYTES,
 } from "@traycer/protocol/host/bot/conversation-schemas";
 import type { ComposerPromptEditorHandle } from "@/components/chat/composer/composer-prompt-editor";
 import type { ImageAttachmentAttrs } from "@/components/chat/composer/editor/extensions/image-attachment-extension";
@@ -15,6 +16,8 @@ import {
   type UseComposerPasteResult,
 } from "@/hooks/composer/use-composer-paste";
 import { collectImageAtoms } from "@/lib/composer/image-atoms";
+import { base64ToBytes } from "@/lib/composer/image-base64";
+import { showImageTooLargeToast } from "@/lib/composer/composer-image-preparation";
 import { reportableErrorToast } from "@/lib/reportable-error-toast";
 import { useRunnerHost } from "@/providers/use-runner-host";
 
@@ -34,6 +37,32 @@ function isCarriedType(mimeType: string): boolean {
   return BOT_CONVERSATION_ATTACHMENT_MEDIA_TYPES.some(
     (type) => type === mimeType,
   );
+}
+
+function validMessageImage(image: PastedComposerImage): boolean {
+  if (!isCarriedType(image.mimeType)) {
+    refuseAsNoImage();
+    return false;
+  }
+  // A copied node has not gone through file preparation. Check its decoded
+  // payload before it can enter the draft or the 1.4 request.
+  if (
+    image.b64content.length >
+    Math.ceil(BOT_CONVERSATION_ATTACHMENT_MAX_BYTES / 3) * 4
+  ) {
+    showImageTooLargeToast(image.fileName);
+    return false;
+  }
+  const bytes = base64ToBytes(image.b64content);
+  if (bytes === null || bytes.byteLength === 0) {
+    refuse("This copied image could not be read.");
+    return false;
+  }
+  if (bytes.byteLength > BOT_CONVERSATION_ATTACHMENT_MAX_BYTES) {
+    showImageTooLargeToast(image.fileName);
+    return false;
+  }
+  return true;
 }
 
 /**
@@ -68,11 +97,13 @@ export function useBotBoxImageIngest(
     (attrs: ReadonlyArray<ImageAttachmentAttrs>): number => {
       const editor = editorRef.current;
       if (editor === null) return 0;
-      const accepted = attrs.filter(
-        (image) =>
-          image.b64content !== undefined && isCarriedType(image.mimeType),
-      );
-      if (accepted.length < attrs.length) refuseAsNoImage();
+      const accepted = attrs.filter((image) => {
+        if (image.b64content === undefined) {
+          refuseAsNoImage();
+          return false;
+        }
+        return validMessageImage(image);
+      });
       const taken = takeImages(accepted, editor);
       if (taken.length > 0) editor.insertImageAttachments(taken);
       return taken.length;
@@ -107,12 +138,7 @@ export function pastedImagesVerdict(input: {
   if (!takesImages || editor === null) {
     return images.map(() => ({ kind: "rejected" }));
   }
-  const taken = new Set(
-    takeImages(
-      images.filter((image) => isCarriedType(image.mimeType)),
-      editor,
-    ),
-  );
+  const taken = new Set(takeImages(images.filter(validMessageImage), editor));
   return images.map((image) =>
     taken.has(image)
       ? { kind: "accepted", id: crypto.randomUUID() }

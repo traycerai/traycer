@@ -40,7 +40,7 @@ function withoutImages(
       child.type === "mention" &&
       child.attrs?.contextType === BOT_TOKEN_CONTEXT_TYPE
     ) {
-      return [{ type: "text", text: chip(child.attrs) }];
+      return [{ type: "text", text: chip(child.attrs), marks: child.marks }];
     }
     const kept = withoutImages(child, chip);
     return [child.type === "blockquote" ? quotedLines(kept) : kept];

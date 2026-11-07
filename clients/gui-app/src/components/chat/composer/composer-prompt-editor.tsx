@@ -224,6 +224,7 @@ export interface ComposerPromptEditorProps {
   readonly disabled: boolean;
   /** `null` for a box with no slash commands. */
   readonly slashProviderId: GuiHarnessId | null;
+  readonly preserveMessagePaste?: boolean;
   readonly hasPastedImageBytes: ((hash: string) => boolean) | null;
   /**
    * Landing-only: validates a paste's inline-base64 images + starts their
@@ -353,6 +354,7 @@ function ComposerPromptEditorImpl(props: ComposerPromptEditorProps) {
     isActive,
     disabled,
     slashProviderId,
+    preserveMessagePaste = false,
     hasPastedImageBytes,
     ingestPastedComposerImages,
     onDocumentChange,
@@ -427,6 +429,7 @@ function ComposerPromptEditorImpl(props: ComposerPromptEditorProps) {
         getPlaceholder,
         onSubmit: stableSubmitHolder,
         slashProviderId,
+        preserveMessagePaste,
         getHasPastedImageBytes,
         getIngestPastedComposerImages,
       }),
@@ -436,6 +439,7 @@ function ComposerPromptEditorImpl(props: ComposerPromptEditorProps) {
       getIngestPastedComposerImages,
       pickerStore,
       slashProviderId,
+      preserveMessagePaste,
       stableSubmitHolder,
     ],
   );

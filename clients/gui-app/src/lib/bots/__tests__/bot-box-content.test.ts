@@ -52,6 +52,14 @@ describe("the box's text", () => {
     expect(botBoxText(content)).toBe("Ask @Ada and @Scout about @Redesign");
   });
 
+  it("keeps formatting on a mention when replacing its chip with a token", () => {
+    const formatted: JsonContent = {
+      ...chip("<@user-1>", "Ada"),
+      marks: [{ type: "code" }],
+    };
+    expect(botBoxWire(doc([formatted]))).toBe("`<@user-1>`");
+  });
+
   it("leaves typed Markdown and tokens as they were typed", () => {
     const typed = [
       "**bold** _italic_ `code` [a](https://b.c)",

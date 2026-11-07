@@ -54,6 +54,8 @@ export type PastedComposerImageOutcome =
 
 export interface ChatPasteHandlerDeps {
   readonly pickerStore: ComposerPickerStore;
+  /** Keep text/plain as written in a bot message, including Markdown escapes. */
+  readonly preserveMessagePaste: boolean;
   readonly getHasPastedImageBytes: () => ((hash: string) => boolean) | null;
   /**
    * Landing-only: validate a paste's inline-base64 images synchronously (decode,
@@ -244,6 +246,14 @@ export function createChatPasteHandler(deps: ChatPasteHandlerDeps) {
 
               const text = clipboardData.getData("text/plain");
               if (text.length === 0) return false;
+              if (deps.preserveMessagePaste) {
+                view.dispatch(
+                  view.state.tr
+                    .insertText(text.replace(/\r\n?/g, "\n"))
+                    .scrollIntoView(),
+                );
+                return true;
+              }
 
               // A `/command …` pasted at the start of the composer (e.g. a copied
               // next-step prompt) becomes a slashCommand chip, mirroring the

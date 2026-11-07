@@ -9,6 +9,7 @@ import { useState, type ReactNode } from "react";
 import { act, cleanup, render, screen } from "@testing-library/react";
 import userEvent, { type UserEvent } from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { JsonContent } from "@traycer/protocol/common/registry";
 import type {
   BotConversationSendRequest,
   BotConversationSendResponse,
@@ -106,7 +107,19 @@ const FAILURE: BotSendFailure = {
 };
 
 const onSent =
-  vi.fn<(response: BotConversationSendResponse, text: string) => boolean>();
+  vi.fn<
+    (
+      response: BotConversationSendResponse,
+      text: string,
+      content: JsonContent,
+    ) => boolean
+  >();
+const SENT_CONTENT: JsonContent = {
+  type: "doc",
+  content: [
+    { type: "paragraph", content: [{ type: "text", text: "Is CI green?" }] },
+  ],
+};
 const onEditEnd = vi.fn<() => void>();
 const onEditResume = vi.fn<(edit: BotComposerEdit) => void>();
 
@@ -338,7 +351,7 @@ describe("<BotMessageComposer /> reporting a send", () => {
     );
 
     expect(onSent).toHaveBeenCalledTimes(1);
-    expect(onSent).toHaveBeenCalledWith(RESPONSE, "Is CI green?");
+    expect(onSent).toHaveBeenCalledWith(RESPONSE, "Is CI green?", SENT_CONTENT);
     expect(boxText(LABEL)).toBe("");
   });
 
@@ -361,7 +374,7 @@ describe("<BotMessageComposer /> reporting a send", () => {
     );
 
     expect(onEditEnd).toHaveBeenCalledTimes(1);
-    expect(onSent).toHaveBeenCalledWith(RESPONSE, "Is CI green?");
+    expect(onSent).toHaveBeenCalledWith(RESPONSE, "Is CI green?", SENT_CONTENT);
   });
 
   it("reports an edit's send the person moved on from, and keeps the edit they opened since", async () => {
@@ -391,7 +404,7 @@ describe("<BotMessageComposer /> reporting a send", () => {
 
     await settleSend(callbacks, (sent) => sent.onSuccess?.(RESPONSE));
 
-    expect(onSent).toHaveBeenCalledWith(RESPONSE, "Is CI green?");
+    expect(onSent).toHaveBeenCalledWith(RESPONSE, "Is CI green?", SENT_CONTENT);
     expect(onEditEnd).toHaveBeenCalledTimes(1);
     expect(boxText(LABEL)).toBe("Is the nightly green?");
   });
@@ -606,6 +619,7 @@ describe("<BotMessageComposer /> clearing at the send", () => {
     expect(onSent).toHaveBeenCalledWith(
       { ...RESPONSE, delivery: "queued" },
       "Is CI green?",
+      SENT_CONTENT,
     );
     expect(screen.queryByTestId("bot-channel-composer-queued")).toBeNull();
     expect(boxText(LABEL)).toBe("And the nightly?");
@@ -631,7 +645,7 @@ describe("<BotMessageComposer /> quoting", () => {
     await settleSend(callbacks, (sent) => sent.onSuccess?.(RESPONSE));
 
     expect(boxText(LABEL)).toBe("> quoted");
-    expect(onSent).toHaveBeenCalledWith(RESPONSE, "Is CI green?");
+    expect(onSent).toHaveBeenCalledWith(RESPONSE, "Is CI green?", SENT_CONTENT);
   });
 });
 

@@ -372,7 +372,12 @@ export function BotMessageComposer(props: {
   };
   // The box's drop target, for a host that takes images.
   const dropTarget = takesImages
-    ? { onDragEnter: paste.onDragEnter, onDragLeave: paste.onDragLeave }
+    ? {
+        onDragEnter: paste.onDragEnter,
+        onDragLeave: paste.onDragLeave,
+        onDragOver: paste.onDragOver,
+        onDrop: paste.onDrop,
+      }
     : undefined;
   const dropping = takesImages ? paste.dragOverlayVariant : null;
   const ingestPasted = useCallback(
@@ -493,6 +498,7 @@ export function BotMessageComposer(props: {
               isActive={focused}
               disabled={false}
               slashProviderId={null}
+              preserveMessagePaste
               hasPastedImageBytes={NO_PASTED_IMAGE_BYTES}
               ingestPastedComposerImages={ingestPasted}
               onDocumentChange={(next) => {
@@ -504,8 +510,8 @@ export function BotMessageComposer(props: {
               onSelectionChange={noop}
               onSubmit={submit}
               onPaste={takesImages ? paste.onPaste : noop}
-              onDragOver={takesImages ? paste.onDragOver : noop}
-              onDrop={takesImages ? paste.onDrop : noop}
+              onDragOver={noop}
+              onDrop={noop}
               onKeyDown={undefined}
               interceptKeyDown={null}
               onFocus={() => setFocused(true)}

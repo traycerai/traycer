@@ -40,6 +40,7 @@ export interface BuildComposerExtensionsArgs {
   };
   /** `null` for a box with no slash commands: `/` is then a character. */
   readonly slashProviderId: GuiHarnessId | null;
+  readonly preserveMessagePaste?: boolean;
   readonly getHasPastedImageBytes: () => ((hash: string) => boolean) | null;
   readonly getIngestPastedComposerImages: () =>
     | ((
@@ -125,6 +126,7 @@ export function buildComposerExtensions(
     }),
     createChatPasteHandler({
       pickerStore: args.pickerStore,
+      preserveMessagePaste: args.preserveMessagePaste === true,
       getHasPastedImageBytes: args.getHasPastedImageBytes,
       getIngestPastedComposerImages: args.getIngestPastedComposerImages,
     }),
