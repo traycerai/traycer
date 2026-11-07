@@ -90,7 +90,7 @@ export function HostIdentityCard(props: {
                     data-count={props.busySessionCount ?? ""}
                     data-live={props.busy ? "true" : "false"}
                   >
-                    {busyCopy.label !== "Idle" ? "Busy" : "Idle"}
+                    {busyCopy.kind === "idle" ? "Idle" : "Busy"}
                   </button>
                 </TooltipWrapper>
               </>

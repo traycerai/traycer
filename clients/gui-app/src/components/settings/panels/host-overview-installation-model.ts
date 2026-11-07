@@ -290,17 +290,15 @@ function displayedVersion(version: string | null): string | null {
 /**
  * What the install record used to label Version: the runtime the record
  * names, or the install id when the bridge has no runtime field. A non-semver
- * install id stays whole — `formatHostVersion` would collapse it to
- * "Preview build" and the stamp would disappear.
+ * install id stays whole — `formatHostVersion` would collapse it to a generic
+ * build name and the stamp would disappear.
  */
 function displayedInstallVersion(
   record: InstallationDetailsRecord,
 ): string | null {
   const raw = record.runtimeVersion ?? record.version;
   if (raw.length === 0) return null;
-  const formatted = formatHostVersion(raw);
-  if (formatted === null || formatted === "Preview build") return `v${raw}`;
-  return formatted;
+  return `v${raw}`;
 }
 
 function registryDisplay(source: InstallationDetailsSource): string | null {

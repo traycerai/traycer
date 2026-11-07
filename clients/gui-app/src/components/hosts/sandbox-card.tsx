@@ -77,6 +77,7 @@ import {
   sandboxGitHubLine,
   type SandboxGrantView,
   sandboxSecretsSummary,
+  type SandboxSecretsLine,
 } from "@/lib/sandboxes/sandbox-grants-view";
 import { useSandboxRepairGuestConfiguration } from "@/hooks/sandboxes/use-sandbox-repair-guest-configuration-mutation";
 import {
@@ -648,7 +649,7 @@ function SandboxSecretsSection(props: {
   );
   const grantsSummary = grants.data ?? null;
   if (summary.phase === null && grantsSummary === null) return null;
-  const label =
+  const line =
     grantsSummary === null
       ? null
       : sandboxSecretsSummary(grantsSummary, routes, readiness?.tone ?? null);
@@ -658,7 +659,7 @@ function SandboxSecretsSection(props: {
   return (
     <>
       <SandboxSecretsSummaryRow
-        label={label}
+        line={line}
         failed={grantsSummary === null && grants.isError}
         configurationId={configurationId}
         refetching={grants.isFetching}
@@ -687,24 +688,24 @@ function SandboxSecretsSection(props: {
 }
 
 function SandboxSecretsSummaryRow(props: {
-  readonly label: string | null;
+  readonly line: SandboxSecretsLine | null;
   readonly failed: boolean;
   readonly configurationId: string | null;
   readonly refetching: boolean;
   readonly onRetry: () => void;
   readonly onSeeWhy: () => void;
 }): ReactNode {
-  const { label, configurationId } = props;
+  const { line, configurationId } = props;
   return (
     <>
       {" "}
-      {label === null && !props.failed ? null : (
+      {line === null && !props.failed ? null : (
         <div
           className="flex min-w-0 flex-wrap items-center justify-between gap-2 border-t border-border/50 pt-3 text-ui-xs"
           data-testid="sandbox-card-secrets"
         >
-          <span>{label ?? "Couldn't load this sandbox's secrets"}</span>
-          {label?.includes("not working") ? (
+          <span>{line?.label ?? "Couldn't load this sandbox's secrets"}</span>
+          {line?.notWorking === true ? (
             <Button
               type="button"
               variant="link"

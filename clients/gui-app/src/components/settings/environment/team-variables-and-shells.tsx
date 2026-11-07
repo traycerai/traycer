@@ -15,8 +15,10 @@ import { Input } from "@/components/ui/input";
 import { MutedAgentSpinner } from "@/components/ui/agent-spinning-dots";
 import { useBoundedRead } from "@/hooks/environment/team/use-bounded-read";
 import { useConfigurationVariablesQuery } from "@/hooks/environment/team/use-variables-query";
-import { configurationTextValueSchema } from "@/hooks/environment/team/configuration-item-values";
-import { configurationShellValueSchema } from "@/hooks/environment/team/configuration-item-values";
+import {
+  configurationShellValueSchema,
+  configurationTextValueSchema,
+} from "@/hooks/environment/team/configuration-item-values";
 import type { ConfigurationItem } from "@/hooks/environment/team/use-configuration-items-query";
 import {
   useCanEditConfiguration,
@@ -28,6 +30,7 @@ import {
   configurationWriteIssue,
   type ConfigurationWriteIssue,
 } from "./configuration-write-issue";
+import { comparesWithHost } from "./host-environment-os";
 import { TeamVariableLiveFacts } from "./team-variable-live-facts";
 import { TeamTextItems } from "./team-text-items";
 import { ConfigurationReadFailed } from "./team-read-failed";
@@ -91,9 +94,20 @@ export function TeamVariablesAndShells(): ReactNode {
                 providerId={null}
                 writes={writes}
                 renderDetails={(item) => {
-                  const entry = applied.variables?.entries.find(
-                    (entry) => entry.key === item.key,
-                  );
+                  const entry = comparesWithHost({
+                    rowOs: item.os,
+                    hostOs: applied.hostOs,
+                    siblings: items
+                      .filter(
+                        (other) =>
+                          other.kind === "variable" && other.key === item.key,
+                      )
+                      .map((other) => other.os),
+                  })
+                    ? applied.variables?.entries.find(
+                        (entry) => entry.key === item.key,
+                      )
+                    : undefined;
                   const saved = configurationTextValueSchema.parse(
                     item.value,
                   ).value;
@@ -109,7 +123,14 @@ export function TeamVariablesAndShells(): ReactNode {
                 key={`${os}:${shell?.revision ?? "new"}:${acceptedShell(writes, os) !== null}:${shellDraft(writes, os) !== null}`}
                 item={shell}
                 applied={
-                  applied.shell === undefined
+                  applied.shell === undefined ||
+                  !comparesWithHost({
+                    rowOs: os,
+                    hostOs: applied.hostOs,
+                    siblings: items
+                      .filter((other) => other.kind === "shell")
+                      .map((other) => other.os),
+                  })
                     ? null
                     : { path: applied.shell.path, args: applied.shell.args }
                 }

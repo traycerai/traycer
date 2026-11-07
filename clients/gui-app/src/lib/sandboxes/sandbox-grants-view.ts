@@ -203,12 +203,21 @@ export function sandboxGitHubLine(github: SandboxGitHubAccess): string {
   return `GitHub: ${accounts}`;
 }
 
+/**
+ * The Secrets line of the Overview: its wording, and whether it reports that
+ * something is not working, which is what offers the failure details.
+ */
+export interface SandboxSecretsLine {
+  readonly label: string;
+  readonly notWorking: boolean;
+}
+
 /** Only explicit readiness can claim that every secret works. */
 export function sandboxSecretsSummary(
   summary: SandboxGrantsSummary,
   routes: readonly SandboxRouteReadiness[] | null,
   tone: "ready" | "pending" | "degraded" | null,
-): string {
+): SandboxSecretsLine {
   const views = sandboxGrantViews(summary, routes);
   const count = views.length;
   const failed = views.filter(
@@ -221,17 +230,29 @@ export function sandboxSecretsSummary(
     github !== null && (!github.linked || github.installations.length === 0);
   const noun = count === 1 ? "secret" : "secrets";
   const secrets = `${count} ${noun}`;
-  if (failed > 0)
-    return `${failed} of ${secrets} not working${gitHubFailure ? " · GitHub not working" : ""}`;
-  if (gitHubFailure) return `${secrets} · GitHub not working`;
-  if (count === 0) return secrets;
-  if (tone === "degraded") return `${secrets} · not working`;
-  if (tone === "pending") return `${secrets} · connecting`;
+  if (failed > 0) {
+    return {
+      label: `${failed} of ${secrets} not working${gitHubFailure ? " · GitHub not working" : ""}`,
+      notWorking: true,
+    };
+  }
+  if (gitHubFailure) {
+    return { label: `${secrets} · GitHub not working`, notWorking: true };
+  }
+  if (count === 0) return { label: secrets, notWorking: false };
+  if (tone === "degraded") {
+    return { label: `${secrets} · not working`, notWorking: true };
+  }
+  if (tone === "pending") {
+    return { label: `${secrets} · connecting`, notWorking: false };
+  }
   const allReady = views.every(
     (view) =>
       view.routes.length > 0 &&
       view.routes.every((route) => route.readiness === "ready"),
   );
-  if (tone === "ready" && allReady) return `${secrets} · all working`;
-  return secrets;
+  if (tone === "ready" && allReady) {
+    return { label: `${secrets} · all working`, notWorking: false };
+  }
+  return { label: secrets, notWorking: false };
 }

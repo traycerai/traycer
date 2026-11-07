@@ -999,7 +999,13 @@ removal action. Add variable opens its editor on demand. The shell's program
 and arguments follow the same edit-in-place layout. One “Applied on <host> ·
 Details” line identifies the live read; Details holds the full inventory and
 host picker. Only a value that differs from its setting gets “This host uses
-<value>” beneath it. No separate Live values card is rendered.
+<value>” beneath it, and only a setting that applies to the viewed host: one
+for all operating systems, or for the host's own (`comparesWithHost`). A
+setting for another OS is never compared, a host that reported no OS is
+compared on universal settings only, and a universal setting is not compared
+where a setting for the same item exists for the host's OS (or, with the OS
+unknown, for any OS), because the host runs that one instead. No separate Live
+values card is rendered.
 
 Agents has one purpose sentence at its editor, shared by the room-backed and
 legacy editor surfaces, with no page description or tab caption repeating it.

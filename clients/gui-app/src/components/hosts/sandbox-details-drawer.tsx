@@ -160,10 +160,6 @@ function SandboxDetailsSections(props: {
         "personal",
     now,
   });
-  const agentStarter =
-    !summary.burst && summary.createdByAgentId !== null
-      ? (summary.createdByAgentName ?? "an agent")
-      : null;
   const clipboard = useClipboardCopy({
     resetMs: 2000,
     onSuccess: null,
@@ -185,20 +181,9 @@ function SandboxDetailsSections(props: {
           {entry.status.map((row) => (
             <div key={row.label} className="contents">
               <dt className="text-muted-foreground">{row.label}</dt>
-              <dd className="wrap-anywhere">
-                {row.label === "Started by" && agentStarter !== null
-                  ? agentStarter
-                  : row.value}
-              </dd>
+              <dd className="wrap-anywhere">{row.value}</dd>
             </div>
           ))}
-          {agentStarter !== null &&
-          !entry.status.some((row) => row.label === "Started by") ? (
-            <>
-              <dt className="text-muted-foreground">Started by</dt>
-              <dd className="wrap-anywhere">{agentStarter}</dd>
-            </>
-          ) : null}
           {summary.burst && summary.createdByAgentName !== null ? (
             <>
               <dt className="text-muted-foreground">Created by</dt>

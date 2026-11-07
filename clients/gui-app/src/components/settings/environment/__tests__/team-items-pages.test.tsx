@@ -132,6 +132,172 @@ describe("TeamVariablesAndShells", () => {
     );
   });
 
+  describe("a live value beside a setting", () => {
+    const hostOn = (hostPlatform: string | null) => ({
+      ...reachableHost,
+      hostPlatform,
+    });
+    const hostShell = { path: "/bin/zsh", args: [], synthesised: false };
+    const shellRow = (os: "any" | "linux" | "macos", path: string) =>
+      configurationItem({
+        kind: "shell",
+        key: "shell",
+        os,
+        value: { path, args: [] },
+        revision: 2,
+      });
+    const osVariable = (
+      key: string,
+      os: "any" | "linux" | "macos",
+      value: string,
+    ) => configurationItem({ kind: "variable", key, os, value: { value } });
+
+    const mountVariables = (
+      hostPlatform: string | null,
+      items: EnvironmentConfigurationItem[],
+      live: { key: string; value: string }[],
+    ) =>
+      mountTeamPage(poolSource("editor"), {
+        "environment.configuration.items": () => ({ items }),
+        "environment.host.list": () => ({ hosts: [hostOn(hostPlatform)] }),
+        "config.env.list": () => ({ entries: live }),
+        "config.shell.get": () => hostShell,
+      });
+
+    it("compares only rows that apply to the viewed host under All operating systems", async () => {
+      const harness = mountVariables(
+        "darwin-arm64",
+        [
+          osVariable("LINUX_URL", "linux", "from-linux"),
+          osVariable("MAC_URL", "macos", "from-mac"),
+          osVariable("ANY_URL", "any", "from-any"),
+        ],
+        [
+          { key: "LINUX_URL", value: "live-linux" },
+          { key: "MAC_URL", value: "live-mac" },
+          { key: "ANY_URL", value: "live-any" },
+        ],
+      );
+      render(<TeamVariablesAndShells />, { wrapper: harness.Wrapper });
+
+      const anyRow = await screen.findByRole("region", { name: "ANY_URL" });
+      const macRow = screen.getByRole("region", { name: "MAC_URL · macOS" });
+      const linuxRow = screen.getByRole("region", {
+        name: "LINUX_URL · Linux",
+      });
+      expect(
+        await within(anyRow).findByText("This host uses live-any"),
+      ).toBeTruthy();
+      expect(
+        await within(macRow).findByText("This host uses live-mac"),
+      ).toBeTruthy();
+      expect(within(linuxRow).queryByText(/This host uses/)).toBeNull();
+    });
+
+    it("leaves a universal row alone when a row for the host's own OS overrides it", async () => {
+      const harness = mountVariables(
+        "darwin-arm64",
+        [
+          osVariable("API_URL", "any", "from-any"),
+          osVariable("API_URL", "macos", "from-mac"),
+        ],
+        [{ key: "API_URL", value: "from-mac" }],
+      );
+      render(<TeamVariablesAndShells />, { wrapper: harness.Wrapper });
+
+      await screen.findByRole("region", { name: "API_URL · macOS" });
+      await userEvent.click(
+        await screen.findByRole("button", { name: "Details" }),
+      );
+      await screen.findByText(": from-mac");
+      expect(screen.queryByText(/This host uses/)).toBeNull();
+    });
+
+    it("claims a difference for a universal row but not an OS row when the host's OS is unknown", async () => {
+      const harness = mountVariables(
+        null,
+        [
+          osVariable("MAC_URL", "macos", "from-mac"),
+          osVariable("ANY_URL", "any", "from-any"),
+        ],
+        [
+          { key: "MAC_URL", value: "live-mac" },
+          { key: "ANY_URL", value: "live-any" },
+        ],
+      );
+      render(<TeamVariablesAndShells />, { wrapper: harness.Wrapper });
+
+      const anyRow = await screen.findByRole("region", { name: "ANY_URL" });
+      expect(
+        await within(anyRow).findByText("This host uses live-any"),
+      ).toBeTruthy();
+      expect(screen.queryByText("This host uses live-mac")).toBeNull();
+    });
+
+    it("compares the shell only when the selected OS applies to the viewed host", async () => {
+      const harness = mountVariables(
+        "darwin-arm64",
+        [shellRow("linux", "/bin/dash"), shellRow("macos", "/bin/fish")],
+        [],
+      );
+      const user = userEvent.setup();
+      render(<TeamVariablesAndShells />, { wrapper: harness.Wrapper });
+
+      await selectOs(user, "macOS");
+      await screen.findByText("/bin/fish");
+      expect(await screen.findByText("This host uses /bin/zsh")).toBeTruthy();
+
+      await selectOs(user, "Linux");
+      await screen.findByText("/bin/dash");
+      expect(screen.queryByText(/This host uses/)).toBeNull();
+    });
+
+    it("compares the universal shell, and drops that when the host's OS has its own", async () => {
+      let items = [shellRow("any", "/bin/bash")];
+      const harness = mountTeamPage(poolSource("editor"), {
+        "environment.configuration.items": () => ({ items }),
+        "environment.host.list": () => ({ hosts: [hostOn("darwin-arm64")] }),
+        "config.env.list": () => ({ entries: [] }),
+        "config.shell.get": () => hostShell,
+      });
+      const { rerender } = render(<TeamVariablesAndShells />, {
+        wrapper: harness.Wrapper,
+      });
+      expect(await screen.findByText("This host uses /bin/zsh")).toBeTruthy();
+
+      items = [shellRow("any", "/bin/bash"), shellRow("macos", "/bin/zsh")];
+      await act(async () => {
+        await harness.queryClient.invalidateQueries();
+      });
+      rerender(<TeamVariablesAndShells />);
+      await waitFor(() => {
+        expect(screen.queryByText(/This host uses/)).toBeNull();
+      });
+    });
+
+    it("compares a universal shell but not an OS shell when the host's OS is unknown", async () => {
+      const harness = mountVariables(null, [shellRow("any", "/bin/bash")], []);
+      render(<TeamVariablesAndShells />, { wrapper: harness.Wrapper });
+      expect(await screen.findByText("This host uses /bin/zsh")).toBeTruthy();
+    });
+
+    it("never compares an OS shell when the host's OS is unknown", async () => {
+      const harness = mountVariables(
+        null,
+        [shellRow("macos", "/bin/fish")],
+        [],
+      );
+      const user = userEvent.setup();
+      render(<TeamVariablesAndShells />, { wrapper: harness.Wrapper });
+
+      await selectOs(user, "macOS");
+      await screen.findByText("/bin/fish");
+      await user.click(await screen.findByRole("button", { name: "Details" }));
+      await screen.findByText("/bin/zsh");
+      expect(screen.queryByText(/This host uses/)).toBeNull();
+    });
+  });
+
   it("reads the team's items by environment id, never the host's own config", async () => {
     const harness = mountTeamPage(poolSource("editor"), {
       "environment.configuration.items": () => ({

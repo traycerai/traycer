@@ -350,7 +350,7 @@ describe("sandboxSecretsSummary", () => {
   it("does not say all working when a grant has no routes", () => {
     expect(
       sandboxSecretsSummary(summary([grant({ routes: [] })]), [], "ready"),
-    ).toBe("1 secret");
+    ).toEqual({ label: "1 secret", notWorking: false });
   });
 
   it("names the failing secret in the singular when it is the only one", () => {
@@ -360,7 +360,7 @@ describe("sandboxSecretsSummary", () => {
         [readiness("route-1", "unavailable", "grant_missing")],
         "degraded",
       ),
-    ).toBe("1 of 1 secret not working");
+    ).toEqual({ label: "1 of 1 secret not working", notWorking: true });
   });
 
   it("agrees the noun with the total, not the failure count", () => {
@@ -399,7 +399,7 @@ describe("sandboxSecretsSummary", () => {
         ],
         "degraded",
       ),
-    ).toBe("1 of 3 secrets not working");
+    ).toEqual({ label: "1 of 3 secrets not working", notWorking: true });
   });
 });
 

@@ -1903,6 +1903,95 @@ describe("<SandboxCard /> condensed secrets and network", () => {
     },
   );
 
+  interface SeeWhyCase {
+    readonly name: string;
+    readonly grants: SandboxGrantsSummary;
+    readonly runtime: Parameters<typeof sandboxSummaryFixture>[0];
+    readonly line: string;
+    readonly seeWhy: boolean;
+  }
+  const seeWhyCases: readonly SeeWhyCase[] = [
+    {
+      name: "an unavailable route",
+      grants: grantsOf([grant("PROD_DB", "route-1", "db.internal")]),
+      runtime: {
+        phase: "ready",
+        routes: [
+          {
+            route: "route-1",
+            state: "unavailable",
+            code: "connector_offline",
+          },
+        ],
+      },
+      line: "1 of 1 secret not working",
+      seeWhy: true,
+    },
+    {
+      name: "a failed rotation",
+      grants: grantsOf([
+        {
+          ...grant("PROD_DB", "route-1", "db.internal"),
+          rotation: { state: "failed", classes: [] },
+        },
+      ]),
+      runtime: {
+        phase: "ready",
+        routes: [{ route: "route-1", state: "ready", code: null }],
+      },
+      line: "1 of 1 secret not working",
+      seeWhy: true,
+    },
+    {
+      name: "GitHub not linked",
+      grants: {
+        ...grantsOf([]),
+        github: { linked: false, installations: [] },
+      },
+      runtime: { phase: "ready", routes: [] },
+      line: "0 secrets · GitHub not working",
+      seeWhy: true,
+    },
+    {
+      name: "a degraded sandbox",
+      grants: grantsOf([grant("PROD_DB", "route-1", "db.internal")]),
+      runtime: { phase: "degraded(gateway)", routes: [] },
+      line: "1 secret · not working",
+      seeWhy: true,
+    },
+    {
+      name: "every secret working",
+      grants: grantsOf([grant("PROD_DB", "route-1", "db.internal")]),
+      runtime: {
+        phase: "ready",
+        routes: [{ route: "route-1", state: "ready", code: null }],
+      },
+      line: "1 secret · all working",
+      seeWhy: false,
+    },
+    {
+      name: "a sandbox still connecting",
+      grants: grantsOf([grant("PROD_DB", "route-1", "db.internal")]),
+      runtime: { phase: "attaching", routes: [] },
+      line: "1 secret · connecting",
+      seeWhy: false,
+    },
+  ];
+
+  it.each(seeWhyCases)(
+    "offers See why exactly when the summary reports failure: $name",
+    ({ grants, runtime, line, seeWhy }) => {
+      mocks.grantsData = grants;
+      renderCard(sandboxOf("awake", false, runtime));
+
+      const row = screen.getByTestId("sandbox-card-secrets");
+      expect(row.textContent).toContain(line);
+      expect(
+        within(row).queryByRole("button", { name: "See why" }) !== null,
+      ).toBe(seeWhy);
+    },
+  );
+
   it("shows a blocked request count and See events only when there is a refusal", () => {
     mocks.grantsData = grantsOf([]);
     renderCard(sandboxOf("awake", false, { phase: "ready" }));

@@ -10,9 +10,15 @@ import { useConfigurationSource } from "./configuration-source";
 import { usePickedTeamLabel } from "./team-pick-label";
 
 import { TeamReadFailed } from "./team-read-failed";
+import {
+  hostEnvironmentOs,
+  type HostEnvironmentOs,
+} from "./host-environment-os";
 
 export function TeamVariableLiveFacts(props: {
   readonly children: (values: {
+    /** The OS axis of the viewed host, or `null` when it reported none. */
+    readonly hostOs: HostEnvironmentOs | null;
     readonly shell:
       | ResponseOfMethod<HostRpcRegistry, "config.shell.get">
       | undefined;
@@ -103,6 +109,7 @@ export function TeamVariableLiveFacts(props: {
         </>
       )}
       {props.children({
+        hostOs: hostEnvironmentOs(scope.viewingHost?.hostPlatform ?? null),
         shell: scope.client === null ? undefined : shell.data,
         variables: scope.client === null ? undefined : variables.data,
       })}
