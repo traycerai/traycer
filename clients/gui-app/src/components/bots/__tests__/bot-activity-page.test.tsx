@@ -867,18 +867,17 @@ describe("<BotActivityPage /> actions", () => {
     expect(screen.queryByTestId("bot-task-stop")).toBeNull();
   });
 
-  it("rule 7: every row's menu opens the brief, which opens the task", async () => {
+  it("rule 7: a click on a row's summary opens that task, and no row has a menu", async () => {
     const user = userEvent.setup();
     working({ "t-once": { working: ["a-1"], turn: ["a-1"] } });
     mount([periodic("t-every", {}), task("t-once", {})], { boundHere: true });
 
+    expect(screen.queryByRole("button", { name: "Task actions" })).toBeNull();
+    expect(screen.queryByText("Open the brief")).toBeNull();
     for (const taskId of ["t-every", "t-once"]) {
       mocks.navigateToTabIntent.mockClear();
       await user.click(
-        within(row(taskId)).getByTestId("bot-activity-task-menu"),
-      );
-      await user.click(
-        await screen.findByTestId("bot-activity-task-open-brief"),
+        within(row(taskId)).getByTestId("bot-activity-task-open"),
       );
       expect(mocks.navigateToTabIntent).toHaveBeenCalledTimes(1);
       expect(mocks.navigateToTabIntent.mock.calls[0][1]).toMatchObject({
@@ -886,6 +885,46 @@ describe("<BotActivityPage /> actions", () => {
         epicId: taskId,
       });
     }
+  });
+
+  it("rule 7: Enter and Space on the focused summary open the task", async () => {
+    const user = userEvent.setup();
+    working({ "t-once": { working: ["a-1"], turn: ["a-1"] } });
+    mount([task("t-once", {})], { boundHere: true });
+
+    const open = within(row("t-once")).getByTestId("bot-activity-task-open");
+    open.focus();
+    await user.keyboard("{Enter}");
+    expect(mocks.navigateToTabIntent).toHaveBeenCalledTimes(1);
+    await user.keyboard(" ");
+    expect(mocks.navigateToTabIntent).toHaveBeenCalledTimes(2);
+    for (const call of mocks.navigateToTabIntent.mock.calls) {
+      expect(call[1]).toMatchObject({ kind: "open-epic", epicId: "t-once" });
+    }
+  });
+
+  it("rule 7: the chevron and Run now, Pause and Stop do not open the task", async () => {
+    const user = userEvent.setup();
+    mocks.state.supported = new Set([
+      "bot.task.runNow",
+      "bot.task.setPaused",
+      "bot.task.stop",
+    ]);
+    warmTask("t-every", [
+      { id: "a-root", parentId: null, title: "Lead", archivedAt: null },
+    ]);
+    mount([periodic("t-every", {})], { boundHere: true });
+
+    const every = within(row("t-every"));
+    for (const testId of [
+      "bot-activity-task-chevron",
+      "bot-task-run-now",
+      "bot-task-pause",
+      "bot-task-stop",
+    ]) {
+      await user.click(every.getByTestId(testId));
+    }
+    expect(mocks.navigateToTabIntent).not.toHaveBeenCalled();
   });
 });
 
