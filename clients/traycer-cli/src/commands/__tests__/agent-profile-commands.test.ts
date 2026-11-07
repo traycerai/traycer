@@ -151,8 +151,8 @@ afterEach(() => {
 });
 
 describe("--profile parsing", () => {
-  it("keeps omission, explicit ambient, and a managed id distinguishable", () => {
-    expect(parseCreateProfileSelection(null)).toEqual({ kind: "last_used" });
+  it("maps omission to ambient and keeps an explicit managed id distinguishable", () => {
+    expect(parseCreateProfileSelection(null)).toEqual({ kind: "ambient" });
     expect(parseCreateProfileSelection("ambient")).toEqual({ kind: "ambient" });
     expect(parseCreateProfileSelection("prof_work")).toEqual({
       kind: "profile",
@@ -192,14 +192,14 @@ describe("agent create profile selection", () => {
     );
   });
 
-  it("sends last_used when --profile is omitted", async () => {
+  it("sends ambient when --profile is omitted", async () => {
     rpcMock.mockResolvedValue({ agentId: "agent_child", warnings: [] });
 
     await buildAgentCreateCommand(createOpts(null))(makeCtx());
 
     expect(rpcMock).toHaveBeenCalledWith(
       "agent.create",
-      expect.objectContaining({ profileSelection: { kind: "last_used" } }),
+      expect.objectContaining({ profileSelection: { kind: "ambient" } }),
     );
   });
 

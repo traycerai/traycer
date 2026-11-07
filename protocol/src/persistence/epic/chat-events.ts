@@ -1,3 +1,4 @@
+import { credentialVersionSchema } from "@traycer/protocol/host/provider-credential-home-schemas";
 import { z } from "zod";
 import { guiHarnessIdSchema } from "@traycer/protocol/persistence/epic/foundation";
 import { sha256HexSchema } from "@traycer/protocol/persistence/chat-sync/version";
@@ -82,6 +83,17 @@ export const chatEventSchema = lazySchema(() =>
     blockId: z.string().nullable(),
     severity: chatEventSeveritySchema,
     metadata: z.record(z.string(), z.unknown()).nullable(),
+    providerSelection: z
+      .object({
+        homeAddress: z.string(),
+        bindingVersion: credentialVersionSchema,
+        holderRevision: z.union([
+          z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER),
+          z.literal("self"),
+        ]),
+        dispatchedAt: z.number(),
+      })
+      .optional(),
   }),
 );
 export type ChatEvent = z.infer<typeof chatEventSchema>;

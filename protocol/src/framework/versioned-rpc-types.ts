@@ -33,6 +33,8 @@ export const RPC_ERROR_CODES = [
   "WORKSPACE_BINDING_REQUIRED",
   "WORKTREE_REMOVE_LAST_ENTRY",
   "PROVIDER_DISABLED",
+  "DELEGATE_REQUIRED",
+  "PROFILE_BINDING_CHANGED",
   "SENDER_TUI_UNSUPPORTED",
   // Caller-supplied input is structurally valid but semantically rejected
   // (e.g. minting the reserved `traycer:system` agent id). Additive and
