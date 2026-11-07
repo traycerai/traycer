@@ -1,3 +1,5 @@
+import { useArtifactExpanded } from "@/components/artifacts/artifact-expanded-context";
+import { ArtifactExpandButton } from "@/components/artifacts/artifact-expand-button";
 import {
   useEffect,
   useEffectEvent,
@@ -276,6 +278,7 @@ function commentsOnLoadedEntryPage(
  * artifact (the canvas tile, the chat row) renders it through here.
  */
 export function ArtifactPagesFrame(props: {
+  readonly initialHistory?: PageHistory;
   readonly source: Extract<SandboxSource, { kind: "artifact" }>;
   readonly title: string;
   readonly className: string;
@@ -328,6 +331,7 @@ export function ArtifactPagesFrame(props: {
     renderOverlay,
     sourceEquivalent,
   } = props;
+  const expanded = useArtifactExpanded();
   const entryPath = source.entryPath === "" ? "index.html" : source.entryPath;
   const bridgeRef = useRef<SandboxBridgeHost | null>(null);
   const [controlsElement, setControlsElement] = useState<HTMLDivElement | null>(
@@ -344,7 +348,9 @@ export function ArtifactPagesFrame(props: {
   } | null>(null);
   const coarsePointer = useCoarsePointer();
   const controlSize = coarsePointer ? "icon-touch" : "icon-sm";
-  const [history, setHistory] = useState(() => freshHistory(entryPath));
+  const [history, setHistory] = useState(
+    () => props.initialHistory ?? freshHistory(entryPath),
+  );
   let current = history;
   if (history.entryPath !== entryPath) {
     current = freshHistory(entryPath);
@@ -450,16 +456,7 @@ export function ArtifactPagesFrame(props: {
   }, [provenPage, commentingHere]);
   const pages = pageNavigationFor(source.manifest, current);
   const zoom = fills ? { ready, scale } : null;
-  const hasControls =
-    pages !== null ||
-    zoom !== null ||
-    props.toolbarControls !== undefined ||
-    props.menuItems !== undefined;
-  const pageInsetTop = useControlsInset(
-    controlsElement,
-    fills && hasControls,
-    coarsePointer,
-  );
+  const pageInsetTop = useControlsInset(controlsElement, fills, coarsePointer);
   return (
     <div
       className={cn(
@@ -467,20 +464,40 @@ export function ArtifactPagesFrame(props: {
         fills && "h-full",
       )}
     >
-      {hasControls ? (
-        <ArtifactPageControls
-          onElement={setControlsElement}
-          revealOnHover={!fills}
-          controlSize={controlSize}
-          pages={pages}
-          onBack={goBack}
-          onHome={goHome}
-          zoom={zoom}
-          onScale={changeScale}
-          toolbarControls={props.toolbarControls}
-          menuItems={props.menuItems}
-        />
-      ) : null}
+      <ArtifactPageControls
+        onElement={setControlsElement}
+        revealOnHover={!fills}
+        controlSize={controlSize}
+        pages={pages}
+        onBack={goBack}
+        onHome={goHome}
+        zoom={zoom}
+        onScale={changeScale}
+        toolbarControls={
+          <>
+            {props.toolbarControls}
+            <ArtifactExpandButton title={title}>
+              <ArtifactPagesFrame
+                source={source}
+                initialHistory={current}
+                title={title}
+                className="h-full w-full"
+                height={null}
+                commenting={false}
+                onSize={noop}
+                onStatus={noop}
+                onBridge={null}
+                onTextSelection={null}
+                onFrame={null}
+                renderOverlay={null}
+                sourceEquivalent={sourceEquivalent}
+                menuItems={props.menuItems}
+              />
+            </ArtifactExpandButton>
+          </>
+        }
+        menuItems={props.menuItems}
+      />
       <div className={cn("relative w-full", fills && "min-h-0 flex-1")}>
         <SandboxFrame
           pageInsetTop={pageInsetTop}
@@ -500,7 +517,7 @@ export function ArtifactPagesFrame(props: {
             onStatus(status);
           }}
           onRequestTeardown={noop}
-          displayMode="inline"
+          displayMode={expanded ? "fullscreen" : "inline"}
           onBridge={(bridge) => {
             bridgeRef.current = bridge;
             if (bridge === null) setReady(false);

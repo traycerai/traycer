@@ -10,6 +10,7 @@ import {
 } from "@testing-library/react";
 import { toast } from "sonner";
 import { Editor } from "@tiptap/core";
+import { EditorView } from "@tiptap/pm/view";
 import type { JsonContent } from "@traycer/protocol/common/registry";
 
 import {
@@ -35,6 +36,7 @@ vi.mock("sonner", () => ({
 afterEach(() => {
   cleanup();
   vi.mocked(toast.error).mockClear();
+  vi.restoreAllMocks();
   vi.useRealTimers();
 });
 
@@ -194,8 +196,14 @@ describe("composer path paste/drop integration (real editor)", () => {
       });
       const handleRef = await mountedHandle(fileDrops, {
         mentionRoots: ["/repo"],
+        initialContent: paragraphText("AAAABBBB"),
+        initialSelection: { from: 5, to: 5 },
       });
 
+      vi.spyOn(EditorView.prototype, "posAtCoords").mockReturnValue({
+        pos: 9,
+        inside: -1,
+      });
       fireEvent.drop(screen.getByTestId("composer-editor"), {
         dataTransfer: makeFilesWithTextDrop(file, {
           plain: "/repo/notes.txt",
@@ -208,7 +216,11 @@ describe("composer path paste/drop integration (real editor)", () => {
 
       expect(resolveDroppedFilePaths).toHaveBeenCalledOnce();
       expect(pathSpanTexts(handleRef.current)).toEqual(["notes.txt"]);
-      expect(plainTextOutsideCode(handleRef.current)).toEqual([" "]);
+      expect(textRuns(handleRef.current)).toEqual([
+        { text: "AAAA", code: false },
+        { text: "notes.txt", code: true },
+        { text: " BBBB", code: false },
+      ]);
     });
   });
 
