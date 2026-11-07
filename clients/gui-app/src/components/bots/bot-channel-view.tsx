@@ -8,6 +8,7 @@ import {
   type ReactNode,
 } from "react";
 import type { UseQueryResult } from "@tanstack/react-query";
+import type { JsonContent } from "@traycer/protocol/common/registry";
 import type {
   BotConversationRecord,
   BotConversationSendResponse,
@@ -97,6 +98,7 @@ import {
 } from "@/components/bots/bot-surface-card-context";
 import { useBotSendTakesAnswers } from "@/hooks/bots/use-bot-send-version";
 import { useBotFailedRequest } from "@/hooks/bots/use-bot-failed-request";
+import { useBotImageReach } from "@/hooks/bots/use-bot-send-version";
 import {
   failedOnRequest,
   useBotActivity,
@@ -399,6 +401,11 @@ export function BotChannelView(props: {
     boundHostId,
     boundHostEpoch,
   });
+  const imageReach = useBotImageReach({
+    hostId,
+    boundHostId,
+    boundHostTakes: threadAnchorKinds,
+  });
   const activity = useBotActivity(botId);
   const viewer = useAuthStore((s) => s.profile);
   // A direct reply's option, clicked, is the person's next post: offered
@@ -523,7 +530,11 @@ export function BotChannelView(props: {
   // thread's panel says the send's delivery; one the bot answers in the
   // channel opens nothing, and the channel's box says it.
   const openPostedThread = useCallback(
-    (response: BotConversationSendResponse, text: string): boolean => {
+    (
+      response: BotConversationSendResponse,
+      text: string,
+      content: JsonContent,
+    ): boolean => {
       if (response.threadId === null || !threadListSupported) return false;
       onOpenThread({
         anchorMessageId: response.messageId,
@@ -533,6 +544,7 @@ export function BotChannelView(props: {
           threadId: response.threadId,
           requestId: response.requestId,
           text,
+          content,
           senderUserId: viewer?.userId ?? null,
           sentAt: Date.now(),
           delivery: response.delivery,
@@ -861,6 +873,7 @@ export function BotChannelView(props: {
                 threadId={null}
                 announcementId={null}
                 sendable
+                imageReach={imageReach}
                 placeholder={`Message ${botTitle}`}
                 label={`Message ${botTitle}`}
                 testId="bot-channel-composer"
@@ -929,6 +942,7 @@ export function BotChannelView(props: {
                     hostId={hostId}
                     boundHostId={boundHostId}
                     botTitle={botTitle}
+                    imageReach={imageReach}
                     conversationId={channel.conversationId}
                     originMessageId={postId}
                     sent={open?.sent ?? null}

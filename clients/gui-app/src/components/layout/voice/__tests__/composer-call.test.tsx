@@ -161,6 +161,7 @@ function box(kind: BoxKind): ReactNode {
       threadId={kind.threadId}
       announcementId={kind.announcementId}
       sendable
+      imageReach="none"
       placeholder="Message"
       label={kind.label}
       testId={kind.testId}

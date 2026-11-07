@@ -21,6 +21,7 @@ import {
   within,
 } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import { BotTestRunnerHost } from "@/components/bots/__tests__/bot-test-runner-host";
 import userEvent, { type UserEvent } from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ChatStreamCallbacks } from "@traycer-clients/shared/host-transport/chat-stream-client";
@@ -106,6 +107,9 @@ const mocks = vi.hoisted(() => ({
   streamClient: null as StubHostStreamClient | null,
 }));
 
+vi.mock("@/hooks/host/use-host-directory-entry", () => ({
+  useHostDirectoryEntry: () => null,
+}));
 vi.mock("@/lib/registries/chat-session-registry", async (importOriginal) => ({
   ...(await importOriginal<
     typeof import("@/lib/registries/chat-session-registry")
@@ -238,6 +242,12 @@ vi.mock("@/components/chat/chat-messages", async () => {
 
 import { BotChannelView } from "@/components/bots/bot-channel-view";
 import type { BotMemberResolver } from "@/lib/bots/bot-member-names";
+import {
+  boxInput,
+  textOf,
+  boxWithin,
+  typeInto,
+} from "@/components/bots/__tests__/bot-box-test-support";
 
 const BOT_ID = "bot_01ARZ3NDEKTSV4RRFFQ69G5FAV";
 const HOST_ID = "host-bound";
@@ -540,11 +550,13 @@ function mountChannel(threads: ReadonlyArray<BotThreadSummary>): RenderResult {
   // The transcript reads the app's send ledger off the query client.
   return render(
     <QueryClientProvider client={new QueryClient()}>
-      <TooltipProvider>
-        <ChatExpansionTestProviders tileInstanceId="tile-1">
-          <ChannelHarness directive={DIRECTIVE} />
-        </ChatExpansionTestProviders>
-      </TooltipProvider>
+      <BotTestRunnerHost>
+        <TooltipProvider>
+          <ChatExpansionTestProviders tileInstanceId="tile-1">
+            <ChannelHarness directive={DIRECTIVE} />
+          </ChatExpansionTestProviders>
+        </TooltipProvider>
+      </BotTestRunnerHost>
     </QueryClientProvider>,
   );
 }
@@ -782,8 +794,8 @@ describe("<BotChannelView tiles={null} /> a channel nobody has written in", () =
 describe("<BotChannelView tiles={null} /> a post whose answer lands in a thread", () => {
   /** The channel's box sending what was typed into it, and the callbacks it handed the send. */
   async function postInChannel(user: UserEvent): Promise<SendCallbacks> {
-    const box = screen.getByRole("textbox", { name: "Message Tracy" });
-    await user.type(box, "Is CI green?");
+    const box = boxInput("Message Tracy");
+    typeInto(box, "Is CI green?");
     await user.click(screen.getByTestId("bot-channel-composer-send"));
     const call = mocks.send.mock.calls.at(-1);
     if (call === undefined) throw new Error("the channel's box sent nothing");
@@ -807,10 +819,8 @@ describe("<BotChannelView tiles={null} /> a post whose answer lands in a thread"
     });
   }
 
-  function textbox(name: string): HTMLTextAreaElement {
-    const box = screen.getByRole("textbox", { name });
-    if (!(box instanceof HTMLTextAreaElement)) throw new Error("no textbox");
-    return box;
+  function textbox(name: string): HTMLElement {
+    return boxInput(name);
   }
 
   function mountQuietChannel(): RenderResult {
@@ -834,7 +844,7 @@ describe("<BotChannelView tiles={null} /> a post whose answer lands in a thread"
       ),
     ).toBeTruthy();
     expect(within(panel).queryByTestId("bot-thread-loading")).toBeNull();
-    expect(textbox("Message Tracy").value).toBe("");
+    expect(textOf(textbox("Message Tracy"))).toBe("");
     // The channel's row lands after the host answered the send.
     emitSnapshot(CHANNEL_ID, {
       messages: [post({ direct: false, resolvedAt: null })],
@@ -854,7 +864,7 @@ describe("<BotChannelView tiles={null} /> a post whose answer lands in a thread"
     expect(screen.queryByTestId("bot-thread-replying")).toBeNull();
 
     const reply = textbox("Reply in the thread");
-    await user.type(reply, "And the nightly?");
+    typeInto(reply, "And the nightly?");
     expect(document.activeElement).toBe(reply);
 
     // The list's next read returns the thread; the activity frame redraws.
@@ -868,10 +878,8 @@ describe("<BotChannelView tiles={null} /> a post whose answer lands in a thread"
     });
 
     expect(await within(panel).findByTestId("bot-thread-replies")).toBeTruthy();
-    expect(
-      within(panel).getByRole("textbox", { name: "Reply in the thread" }),
-    ).toBe(reply);
-    expect(reply.value).toBe("And the nightly?");
+    expect(boxWithin(panel, "Reply in the thread")).toBe(reply);
+    expect(textOf(reply)).toBe("And the nightly?");
     expect(document.activeElement).toBe(reply);
     expect(within(panel).getByTestId("bot-thread-replying-strip")).toBeTruthy();
   });
@@ -954,7 +962,7 @@ describe("<BotChannelView tiles={null} /> a post whose answer lands in a thread"
     await accept(await postInChannel(user), null, "written");
 
     expect(screen.queryByTestId("bot-thread-panel")).toBeNull();
-    expect(textbox("Message Tracy").value).toBe("");
+    expect(textOf(textbox("Message Tracy"))).toBe("");
   });
 
   it("opens no thread and keeps the text when the send fails", async () => {
@@ -968,6 +976,6 @@ describe("<BotChannelView tiles={null} /> a post whose answer lands in a thread"
     });
 
     expect(screen.queryByTestId("bot-thread-panel")).toBeNull();
-    expect(textbox("Message Tracy").value).toBe("Is CI green?");
+    expect(textOf(textbox("Message Tracy"))).toBe("Is CI green?");
   });
 });

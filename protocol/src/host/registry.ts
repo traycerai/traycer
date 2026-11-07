@@ -689,6 +689,8 @@ import {
   botConversationSendUpgradeV11ToV12,
   botConversationSendV13,
   botConversationSendUpgradeV12ToV13,
+  botConversationSendV14,
+  botConversationSendUpgradeV13ToV14,
   botThreadListV10,
   botThreadListV11,
   botThreadListV12,
@@ -9519,7 +9521,7 @@ const HOST_RPC_REGISTRY_BASE_TAIL_DEFINITION = {
   "bot.conversation.send": {
     degrade: { kind: "unsupported" },
     1: {
-      latestMinor: 3,
+      latestMinor: 4,
       versions: {
         0: {
           contract: botConversationSendV10,
@@ -9541,6 +9543,12 @@ const HOST_RPC_REGISTRY_BASE_TAIL_DEFINITION = {
         3: {
           contract: botConversationSendV13,
           upgradeFromPreviousVersion: botConversationSendUpgradeV12ToV13,
+        },
+        // @1.4 carries a member's images (`attachments`), and with one needs
+        // no text.
+        4: {
+          contract: botConversationSendV14,
+          upgradeFromPreviousVersion: botConversationSendUpgradeV13ToV14,
         },
       },
       downgradePathsFromLatest: {},

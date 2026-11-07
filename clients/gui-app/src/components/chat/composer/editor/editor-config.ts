@@ -38,7 +38,8 @@ export interface BuildComposerExtensionsArgs {
   readonly onSubmit: {
     readonly current: (source: ChatComposerSubmitSource) => void;
   };
-  readonly slashProviderId: GuiHarnessId;
+  /** `null` for a box with no slash commands: `/` is then a character. */
+  readonly slashProviderId: GuiHarnessId | null;
   readonly getHasPastedImageBytes: () => ((hash: string) => boolean) | null;
   readonly getIngestPastedComposerImages: () =>
     | ((
@@ -113,7 +114,9 @@ export function buildComposerExtensions(
     }),
     createMentionExtension({ pickerStore: args.pickerStore }),
     ChatSlashCommandNode,
-    createSlashSuggestionExtension({ pickerStore: args.pickerStore }),
+    ...(args.slashProviderId === null
+      ? []
+      : [createSlashSuggestionExtension({ pickerStore: args.pickerStore })]),
     AttachmentGroupNode,
     ImageAttachmentNode,
     ChatListKeymap.configure({

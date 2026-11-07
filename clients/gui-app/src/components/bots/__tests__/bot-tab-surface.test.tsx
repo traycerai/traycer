@@ -42,6 +42,9 @@ import {
 } from "./bot-tab-surface-mocks";
 import { BotMentionsContext } from "@/components/bots/bot-mentions-context";
 import { useBotMentionCompletion } from "@/components/bots/bot-mention-completion";
+import { ComposerPromptEditor } from "@/components/chat/composer/composer-prompt-editor";
+import { EMPTY_BOT_BOX } from "@/lib/bots/bot-box-content";
+import type { JsonContent } from "@traycer/protocol/common/registry";
 import { buildHomeBotsModel } from "@/lib/home-bots/bots-model";
 import { useStandaloneBotsStore } from "@/stores/bots/standalone-bots-store";
 import {
@@ -64,13 +67,7 @@ import {
   SHELL_WIDTH_TWO_TILES,
   type ShellFormHarness,
 } from "../../../../__tests__/mobile-level2-form-harness";
-import {
-  StrictMode,
-  useContext,
-  useRef,
-  useState,
-  type ReactNode,
-} from "react";
+import { StrictMode, useContext, useState, type ReactNode } from "react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { act, render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
@@ -233,29 +230,37 @@ vi.mock("@/components/bots/bot-channel-sidebar", () => ({
  * closes the menu.
  */
 function MentionBox(): ReactNode {
-  const [text, setText] = useState("");
-  const inputRef = useRef<HTMLTextAreaElement | null>(null);
-  const mentions = useBotMentionCompletion({
-    text,
-    setText,
-    inputRef,
-    replyRow: null,
-  });
+  const [content, setContent] = useState<JsonContent>(EMPTY_BOT_BOX);
+  const mentions = useBotMentionCompletion({ replyRow: null });
   return (
     <>
       {mentions.menu}
-      <textarea
-        ref={inputRef}
-        aria-label="Stub message box"
-        value={text}
-        {...mentions.inputAria}
-        onChange={(event) => setText(event.target.value)}
-        onInput={(event) => mentions.onInput(event.currentTarget)}
-        onSelect={(event) =>
-          mentions.onCaret(event.currentTarget.selectionStart)
-        }
-        onKeyDown={mentions.onKeyDown}
-      />
+      <div role="group" aria-label="Stub message box">
+        <ComposerPromptEditor
+          pickerStore={mentions.pickerStore}
+          initialContent={content}
+          initialSelection={null}
+          placeholder="Message"
+          editorClassName={undefined}
+          stabilizeImageAttachmentCaret={false}
+          isActive
+          disabled={false}
+          slashProviderId={null}
+          hasPastedImageBytes={() => false}
+          ingestPastedComposerImages={() => []}
+          onDocumentChange={setContent}
+          onSelectionChange={() => {}}
+          onSubmit={() => {}}
+          onPaste={() => {}}
+          onDragOver={() => {}}
+          onDrop={() => {}}
+          onKeyDown={undefined}
+          interceptKeyDown={null}
+          onFocus={() => {}}
+          onBlur={() => {}}
+          onEditorReady={() => {}}
+        />
+      </div>
     </>
   );
 }
@@ -476,6 +481,10 @@ import {
   type BotRail,
 } from "@/stores/bots/bot-open-thread-store";
 import { useAuthStore } from "@/stores/auth/auth-store";
+import {
+  boxInput,
+  typeInto,
+} from "@/components/bots/__tests__/bot-box-test-support";
 
 /** The trunk's turn behind a reply in the channel. */
 const REPLY_TURN: BotTurnRef = {
@@ -2141,45 +2150,41 @@ describe("<BotTabSurface /> views", () => {
         );
       });
 
-      async function typeNoMatch(): Promise<void> {
-        const user = userEvent.setup();
+      function typeNoMatch(): void {
         render(surface());
-        await user.type(
-          screen.getByRole("textbox", { name: "Stub message box" }),
-          "@zzzz",
-        );
+        typeInto(boxInput("Stub message box"), "@zzzz");
       }
 
-      it("closes the menu once Home's initial read is refused, though its first page is pending", async () => {
+      it("closes the menu once Home's initial read is refused, though its first page is pending", () => {
         mocks.taskReads.homeRefused = true;
         mocks.taskReads.homePending = true;
 
-        await typeNoMatch();
+        typeNoMatch();
 
         expect(mentionMenu()).toBeNull();
       });
 
-      it("keeps the menu open while Home's first page is pending and its read may still run", async () => {
+      it("keeps the menu open while Home's first page is pending and its read may still run", () => {
         mocks.taskReads.homePending = true;
 
-        await typeNoMatch();
+        typeNoMatch();
 
         expect(mentionMenu()).not.toBeNull();
       });
 
-      it("closes the menu for a viewer who is not signed in, though the stream's task contexts never answer", async () => {
+      it("closes the menu for a viewer who is not signed in, though the stream's task contexts never answer", () => {
         useAuthStore.setState({ status: "unverified" });
         mocks.taskReads.contextsPending = true;
 
-        await typeNoMatch();
+        typeNoMatch();
 
         expect(mentionMenu()).toBeNull();
       });
 
-      it("keeps the menu open for a signed-in viewer while the stream's task contexts are pending", async () => {
+      it("keeps the menu open for a signed-in viewer while the stream's task contexts are pending", () => {
         mocks.taskReads.contextsPending = true;
 
-        await typeNoMatch();
+        typeNoMatch();
 
         expect(mentionMenu()).not.toBeNull();
       });
@@ -3359,7 +3364,7 @@ describe("<BotTabSurface /> channel lifetime", () => {
     useTracySurfaceStore.getState().selectChannel(OTHER_BOT_ID);
     useBotDraftsStore
       .getState()
-      .typeThreadBox(OTHER_BOT_ID, "post-1", "unsent");
+      .typeThreadBox(OTHER_BOT_ID, "post-1", "unsent", null);
     view.rerender(surfaceFor(OTHER_BOT_ID));
     expect(useTracySurfaceStore.getState().visitedBotIds).toEqual([
       BOT_ID,
