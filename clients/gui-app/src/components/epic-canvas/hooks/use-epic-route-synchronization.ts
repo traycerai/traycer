@@ -421,7 +421,6 @@ export function useEpicRouteSynchronization(
       return;
     }
 
-    lastAutoOpenKey.current = key;
     // Auto-open's recency input, read HERE rather than subscribed to. Every
     // value in it moves on each streamed token, and this decision fires once
     // per key - a subscription would re-render this hook at the token rate to
@@ -438,8 +437,30 @@ export function useEpicRouteSynchronization(
       epicNodeRecency(handle.store.getState()),
     );
     if (target === null) {
+      // An explicit REQUEST that cannot resolve yet stays PENDING rather than
+      // spending its key: the artifact's record simply has not projected into
+      // this device's session yet - a cold cross-task landing, or a record
+      // created on another device moments before the click - and it arrives on
+      // this effect's own `records` dependency, so the next run resolves it.
+      // Burning the key here is what used to drop the request for good, since
+      // every later run then returned at `lastAutoOpenKey.current === key` and
+      // the requested artifact never opened at all.
+      //
+      // Nothing is retried on a schedule: there is no timer and no poll, only
+      // the re-evaluation this effect already did. A request naming a record
+      // that never arrives therefore keeps today's bounded refusal - it opens
+      // nothing, quietly. It also names a real artifact: the cross-epic branch
+      // of `openResolvedArtifact` only navigates once
+      // `epic.resolveArtifactByPath` has confirmed one.
+      //
+      // A LANDING still spends its key on a null resolve, so its once-per-epic
+      // behaviour is unchanged.
+      if (!hasExplicitFocus) {
+        lastAutoOpenKey.current = key;
+      }
       return;
     }
+    lastAutoOpenKey.current = key;
     if (activeArtifactId === target.id) {
       return;
     }
