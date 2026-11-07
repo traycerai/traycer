@@ -186,7 +186,9 @@ import { lazySchema } from "@traycer/protocol/framework/lazy-schema";
 // `host-v1.5.3` ships chat-sync 1.12. Optional, so an older record parses
 // unchanged and a row's raw re-emission carries the key through an older
 // reader. No reader floor: an older reader draws the row as a typed message.
-export const CHAT_SYNC_SCHEMA_VERSION = { major: 1, minor: 13 } as const;
+// 1.14 adds optional providerSelection to interpreted chat events. Old readers
+// retain it in raw event envelopes; no reader floor changes.
+export const CHAT_SYNC_SCHEMA_VERSION = { major: 1, minor: 14 } as const;
 
 export type ChatSyncSchemaVersion = typeof CHAT_SYNC_SCHEMA_VERSION;
 

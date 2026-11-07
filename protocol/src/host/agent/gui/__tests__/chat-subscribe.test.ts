@@ -2402,7 +2402,7 @@ describe("chat.subscribe registry membership", () => {
     // the delivery's `worktreeIntent`, stripped for every `<=1.41` peer, and
     // `43` the `slack` user message, degraded to a plain user row for every
     // `<=1.42` peer.
-    expect(entry[1].latestMinor).toBe(43);
+    expect(entry[1].latestMinor).toBe(44);
     expect(entry[1].versions[6].contract).toBe(chatSubscribeV16);
     expect(entry[1].versions[7].contract).toBe(chatSubscribeV17);
     expect(entry[1].versions[8].contract).toBe(chatSubscribeV18);
