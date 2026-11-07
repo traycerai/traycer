@@ -1,3 +1,4 @@
+import type { NestedFocusProvenance } from "@/lib/epic-nested-focus-navigation";
 import { StagedStopFailure } from "@/components/composer/staged-sandbox-stop-failure";
 import {
   useCallback,
@@ -437,7 +438,7 @@ export function useStagedSandboxSend(input: {
             applyingPending: newHost.applyingPending,
             applyingError: newHost.applyingError,
             onStop: stop,
-            onOpenTerminal: newHost.onOpenTerminal,
+            onOpenTerminal: terminalOpenButtonAction(newHost.onOpenTerminal),
           }}
         />
         <StagedStopFailure stage={stage} onRetry={stop} />
@@ -735,10 +736,20 @@ export function useStagedSandboxHandoff(input: {
   ]);
 }
 
+/** Keep a terminal button unavailable until its action exists; a click is a user invocation. */
+export function terminalOpenButtonAction(
+  openTerminal: ((provenance: NestedFocusProvenance) => void) | null,
+): (() => void) | null {
+  return openTerminal === null ? null : () => openTerminal("user");
+}
+
 /** Where the surface opens a terminal on the new host, in its epic. */
 export interface StagedSandboxTerminal {
   readonly epicId: string;
-  readonly open: (target: TerminalLaunchTarget) => void;
+  readonly open: (
+    target: TerminalLaunchTarget,
+    provenance: NestedFocusProvenance,
+  ) => void;
 }
 
 /**
@@ -779,7 +790,7 @@ export function useNewHostActions(
   readonly repairSetupPending: boolean;
   readonly applyingPending: boolean;
   readonly applyingError: boolean;
-  readonly onOpenTerminal: (() => void) | null;
+  readonly onOpenTerminal: ((provenance: NestedFocusProvenance) => void) | null;
 } {
   const repair = useSandboxRepairGuestConfigurationOnHost(createdHostId ?? "");
   const operation = useSandboxSettingsOperation(createdHostId ?? "");
@@ -835,6 +846,6 @@ export function useNewHostActions(
     onOpenTerminal:
       terminal === null || terminalTarget === null
         ? null
-        : () => terminal.open(terminalTarget),
+        : (provenance) => terminal.open(terminalTarget, provenance),
   };
 }

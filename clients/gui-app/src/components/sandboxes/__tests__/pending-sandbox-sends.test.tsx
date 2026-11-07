@@ -1,3 +1,4 @@
+import type { NestedFocusProvenance } from "@/lib/epic-nested-focus-navigation";
 /**
  * A message sent to a staged sandbox waits in its task, behind the setup line,
  * until the agent the person asked for is ready on the sandbox.
@@ -384,7 +385,8 @@ const mocks = vi.hoisted(() => ({
   createChatError: null as Error | null,
   createChatDeferred: null as Promise<CreateChatResponseV12> | null,
   createChatRefusal: null as CreateChatResponseV12["refusal"] | null,
-  openTile: vi.fn<(intent: unknown) => void>(),
+  openTile:
+    vi.fn<(intent: unknown, provenance: NestedFocusProvenance) => void>(),
   /** The control plane. */
   createSandbox:
     vi.fn<
@@ -2335,6 +2337,7 @@ describe("a send waiting for the requested agent on its sandbox", () => {
     );
 
     expect(mocks.openTile).toHaveBeenCalledTimes(1);
+    expect(mocks.openTile.mock.calls[0]?.[1]).toBe("user");
     expect(JSON.stringify(mocks.openTile.mock.calls[0][0])).toContain(
       SANDBOX_HOST,
     );
@@ -4868,6 +4871,7 @@ describe("a terminal request handed to a staged sandbox", () => {
       expect(mocks.openTile).toHaveBeenCalledTimes(1);
     });
     expect(JSON.stringify(mocks.openTile.mock.calls[0][0])).toContain(sendId);
+    expect(mocks.openTile.mock.calls[0]?.[1]).toBe("automatic");
   });
 });
 
