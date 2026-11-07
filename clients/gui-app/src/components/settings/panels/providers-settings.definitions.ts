@@ -137,6 +137,40 @@ export const PROVIDERS = defineSettingsSection("providers", {
     availableWhen: alwaysAvailable,
     keywords: ["subagents", "traycer agents"],
   },
+  nativeMemory: {
+    kind: "group",
+    search: { anchor: null },
+    label: "Memories",
+    description:
+      "Changes apply when a provider session next starts. Saved memories are kept.",
+    breadcrumb: "Providers",
+    availableWhen: alwaysAvailable,
+    keywords: ["memory", "memories", "remember", "recall"],
+  },
+  nativeMemoryEnabled: {
+    kind: "row",
+    group: "nativeMemory",
+    search: { contributesTo: "nativeMemory" },
+    label: "Use this provider's memories",
+    description:
+      "When off, agents Traycer starts on this provider neither use nor save automatic memories.",
+    availableWhen: alwaysAvailable,
+    keywords: ["memory", "memories", "recall", "save"],
+  },
+  // Drawn in place of the switch above when memories are off and the selected
+  // executable cannot enforce that. The switch is gone in that state, so this
+  // is the only way left to clear the stored choice - see
+  // `provider-native-memory-group.tsx`.
+  nativeMemoryUnenforceable: {
+    kind: "row",
+    group: "nativeMemory",
+    search: { contributesTo: "nativeMemory" },
+    label: "Memories are off",
+    description:
+      "The selected executable cannot enforce this, so sessions will not start. Choose a supported executable, or turn memories on.",
+    availableWhen: alwaysAvailable,
+    keywords: ["memory", "memories", "recall", "save"],
+  },
   // Claude Code's General tab only: the name Traycer gives a Claude session it
   // starts on the Terminal interface. Host-gated (`config.sessionNames.*`).
   sessionName: {

@@ -128,6 +128,17 @@ function sessionSignOutButton(): HTMLElement {
   return screen.getByRole("button", { name: /^Sign out$/ });
 }
 
+/** Closed `<details>` stays in the DOM; role queries skip it until it is open. */
+function openSessionDetails(): void {
+  for (const summary of screen.getAllByText("Details")) {
+    const details = summary.parentElement;
+    if (!(details instanceof HTMLDetailsElement)) {
+      throw new Error("expected a session details disclosure");
+    }
+    details.open = true;
+  }
+}
+
 function signIn(): void {
   useAuthStore.setState({
     status: "signed-in",
@@ -199,33 +210,44 @@ describe("<DevicesSessionsPanel />", () => {
     ];
     render(<DevicesSessionsPanel />);
 
+    expect(screen.getByText("Last seen 25 Aug 08:35")).toBeTruthy();
+    openSessionDetails();
     expect(
-      screen.getByText("Created 25 Oct 2025 · Last seen 25 Aug 08:35"),
-    ).toBeTruthy();
+      screen
+        .getByText("Desktop · App 1.2.3 · Created 25 Oct 2025")
+        .closest("details"),
+    ).not.toBeNull();
   });
 
-  it("renders the sessions section description with the expanded client list", () => {
+  it("describes where the account is signed in, without the old client-list sentence", () => {
     render(<DevicesSessionsPanel />);
 
     expect(
       screen.getByText(
-        "Browser, desktop, CLI, extension, and host access for this account.",
+        "Review where your account is signed in and remove access you no longer recognize.",
       ),
     ).toBeDefined();
+    expect(
+      screen.queryByText(
+        "Browser, desktop, CLI, extension, and host access for this account.",
+      ),
+    ).toBeNull();
   });
 
-  it("labels the active credential as this session", () => {
+  it("labels the active credential as this session on the status line", () => {
     sessionsState.sessions = [
       makeSession({ familyId: "family-current", current: true }),
     ];
 
     render(<DevicesSessionsPanel />);
 
-    expect(screen.getByText("This session")).toBeDefined();
+    expect(screen.getByText(/^This session · Last seen /)).toBeDefined();
+    expect(screen.queryByText("This session")).toBeNull();
     expect(screen.queryByText("This device")).toBeNull();
+    expect(screen.queryByText("Session")).toBeNull();
   });
 
-  it("includes session location in the display line", () => {
+  it("puts the name first, platform and location on the next line, and the version in Details", () => {
     sessionsState.sessions = [
       makeSession({
         familyId: "family-loc",
@@ -237,9 +259,16 @@ describe("<DevicesSessionsPanel />", () => {
     ];
     render(<DevicesSessionsPanel />);
 
+    const name = screen.getByText("Office laptop");
+    expect(name.className).toContain("wrap-anywhere");
+    expect(name.classList.contains("truncate")).toBe(false);
+    expect(screen.getByText("macOS · Berlin")).toBeDefined();
+    expect(screen.getByRole("img", { name: "Desktop" })).toBeDefined();
     expect(
-      screen.getByText("Office laptop / macOS / App 2.0.0 / Berlin"),
-    ).toBeDefined();
+      screen.queryByText("Office laptop / macOS / App 2.0.0 / Berlin"),
+    ).toBeNull();
+    openSessionDetails();
+    expect(screen.getByText(/^Desktop · App 2\.0\.0 · Created /)).toBeDefined();
   });
 
   it("omits null or blank location without a stray separator", () => {
@@ -250,6 +279,7 @@ describe("<DevicesSessionsPanel />", () => {
         platform: "linux",
         appVersion: null,
         location: null,
+        clientKind: "cli",
       }),
       makeSession({
         familyId: "family-blank-loc",
@@ -257,17 +287,79 @@ describe("<DevicesSessionsPanel />", () => {
         platform: "Windows",
         appVersion: null,
         location: "   ",
+        clientKind: "web",
       }),
     ];
     render(<DevicesSessionsPanel />);
 
-    expect(screen.getByText("CLI session / linux")).toBeDefined();
-    expect(screen.getByText("Web session / Windows")).toBeDefined();
+    expect(screen.getByText("CLI session")).toBeDefined();
+    expect(screen.getByText("linux")).toBeDefined();
+    expect(screen.getByText("Web session")).toBeDefined();
+    expect(screen.getByText("Windows")).toBeDefined();
+    expect(screen.getByRole("img", { name: "CLI" })).toBeDefined();
+    expect(screen.getByRole("img", { name: "Web" })).toBeDefined();
     expect(screen.queryByText(/ \/ $/)).toBeNull();
     expect(screen.queryByText(/\/\s*\//)).toBeNull();
+    openSessionDetails();
+    expect(screen.getByText(/^CLI · Created /)).toBeDefined();
+    expect(screen.getByText(/^Web · Created /)).toBeDefined();
+    expect(screen.queryByText(/^Created /)).toBeNull();
   });
 
-  it("uses a neutral icon and honest labels for explicit and unrecognized client kinds", () => {
+  it("names each known client kind on the icon and in Details", () => {
+    sessionsState.sessions = [
+      makeSession({
+        familyId: "family-extension",
+        clientKind: "extension",
+        displayLabel: "Extension window",
+      }),
+      makeSession({
+        familyId: "family-mobile",
+        clientKind: "mobile",
+        displayLabel: "Phone",
+      }),
+      makeSession({
+        familyId: "family-host",
+        clientKind: "host",
+        displayLabel: "Build host",
+      }),
+    ];
+    render(<DevicesSessionsPanel />);
+
+    expect(screen.getByRole("img", { name: "Extension" })).toBeDefined();
+    expect(screen.getByRole("img", { name: "Mobile app" })).toBeDefined();
+    expect(screen.getByRole("img", { name: "Host" })).toBeDefined();
+    expect(screen.queryByText("Extension")).toBeNull();
+    expect(screen.queryByText("Mobile app")).toBeNull();
+    expect(screen.queryByText("Host")).toBeNull();
+    openSessionDetails();
+    for (const client of ["Extension", "Mobile app", "Host"]) {
+      const line = screen.getByText((text) =>
+        text.startsWith(`${client} · App 1.2.3 · Created `),
+      );
+      expect(line.closest("details")).not.toBeNull();
+    }
+  });
+
+  it("says session details are unavailable when name, platform, and location are empty", () => {
+    sessionsState.sessions = [
+      makeSession({
+        familyId: "family-empty",
+        displayLabel: "   ",
+        platform: null,
+        location: "",
+        appVersion: null,
+      }),
+    ];
+    render(<DevicesSessionsPanel />);
+
+    const name = screen.getByText("Session details unavailable");
+    expect(name.className).toContain("wrap-anywhere");
+    expect(screen.queryByText("macOS")).toBeNull();
+    expect(screen.queryByText("San Francisco")).toBeNull();
+  });
+
+  it("uses a neutral icon and an aria-label for explicit and unrecognized client kinds", () => {
     sessionsState.sessions = [
       makeSession({ familyId: "family-unknown", clientKind: "unknown" }),
       makeSession({
@@ -277,7 +369,10 @@ describe("<DevicesSessionsPanel />", () => {
     ];
     const { container } = render(<DevicesSessionsPanel />);
 
-    expect(screen.getAllByText("Unknown client")).toHaveLength(2);
+    expect(screen.getAllByRole("img", { name: "Unknown client" })).toHaveLength(
+      2,
+    );
+    expect(screen.queryByText("Unknown client")).toBeNull();
     expect(
       container.querySelectorAll("svg.lucide-circle-question-mark"),
     ).toHaveLength(2);

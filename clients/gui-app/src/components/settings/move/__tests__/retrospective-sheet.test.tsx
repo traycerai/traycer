@@ -11,9 +11,6 @@ import type { EnvironmentItemStatus } from "@traycer/protocol/host/environment-s
 import {
   APPROVE,
   DISCARD,
-  KEEP_AS_SECRET,
-  KEEP_AS_VARIABLE,
-  LEAVE_ON_THIS_COMPUTER_ONLY,
   RETROSPECTIVE_GOT_IT,
   type HeldApplyChoice,
 } from "@/components/settings/move/retrospective-copy";
@@ -48,17 +45,9 @@ const SHARED: readonly SharedInUseItem[] = [
   },
 ];
 
-const HELD_VALUE: HeldRow = {
-  heldId: "held-token",
-  name: "LOG_TOKEN",
-  kind: "value",
-  detail: "looked like a key and was held.",
-};
-
 const HELD_HOOK: HeldRow = {
   heldId: "held-hook",
   name: "notify.sh",
-  kind: "command",
   detail:
     "(MCP server) runs notify.sh --loud. Once approved, it runs on every computer and sandbox running Personal.",
 };
@@ -95,7 +84,7 @@ function sheetElement(overrides: SheetOverrides): ReactNode {
       sharedInUse={SHARED}
       roomShared="The skills folder (6 skills) and the agent selection guide"
       appliedOn={["MacBook Pro", "dev-box"]}
-      held={[HELD_VALUE, HELD_HOOK]}
+      held={[HELD_HOOK]}
       stillLocal={STILL_LOCAL}
       heldPendingId={overrides.heldPendingId}
       heldIssue={null}
@@ -169,17 +158,11 @@ describe("RetrospectiveSheet", () => {
         "The skills folder (6 skills) and the agent selection guide",
       ),
     ).toBeTruthy();
-    expect(screen.getByText("On hold until you choose")).toBeTruthy();
     expect(
       within(screen.getByTestId("retrospective-held-commands")).getByText(
         "Commands on hold",
       ),
     ).toBeTruthy();
-    expect(
-      within(screen.getByTestId("retrospective-held-values")).queryByText(
-        /notify\.sh/,
-      ),
-    ).toBeNull();
     expect(
       screen.getByTestId("retrospective-held-held-hook").textContent,
     ).toContain(
@@ -301,31 +284,6 @@ describe("RetrospectiveSheet", () => {
     });
     expect(screen.queryByTestId("retrospective-stop-sharing")).toBeNull();
     expect(screen.getByTestId("retrospective-got-it")).toBeTruthy();
-  });
-
-  it("sends each held value choice through heldApply", () => {
-    const { onHeldApply } = openSheet();
-    const choices: readonly HeldApplyChoice[] = [
-      "secret",
-      "variable",
-      "stays",
-      "discard",
-    ];
-    const labels = [
-      KEEP_AS_SECRET,
-      KEEP_AS_VARIABLE,
-      LEAVE_ON_THIS_COMPUTER_ONLY,
-      DISCARD,
-    ];
-    const row = screen.getByTestId("retrospective-held-held-token");
-    labels.forEach((label, index) => {
-      fireEvent.click(within(row).getByRole("button", { name: label }));
-      expect(onHeldApply).toHaveBeenNthCalledWith(
-        index + 1,
-        "held-token",
-        choices[index],
-      );
-    });
   });
 
   it("sends Approve and Discard on a held hook", () => {

@@ -38,7 +38,7 @@ export function ArtifactPagesToolbarFixture(): ReactElement {
         title="Report"
         className="h-full w-full"
         height={null}
-        pageZoom={false}
+        commenting={false}
         onSize={() => undefined}
         onStatus={() => undefined}
         onBridge={null}

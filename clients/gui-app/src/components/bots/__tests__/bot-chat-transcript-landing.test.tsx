@@ -17,6 +17,7 @@ import {
   waitFor,
 } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import { BotTestRunnerHost } from "@/components/bots/__tests__/bot-test-runner-host";
 import { create, type StoreApi, type UseBoundStore } from "zustand";
 import {
   afterEach,
@@ -78,6 +79,9 @@ const mocks = vi.hoisted(() => ({
   }>,
 }));
 
+vi.mock("@/hooks/host/use-host-directory-entry", () => ({
+  useHostDirectoryEntry: () => null,
+}));
 vi.mock("@/components/chat/chat-messages", async (importOriginal) => {
   const actual =
     await importOriginal<typeof import("@/components/chat/chat-messages")>();
@@ -287,18 +291,20 @@ function mountTranscript(
   const tree = (): ReactNode => (
     <StrictMode>
       <QueryClientProvider client={queryClient}>
-        <BotChatTranscript
-          botId={BOT_ID}
-          chatId={CHAT_ID}
-          hostId="host-1"
-          title="Release Bot"
-          instanceId="bot-thread:test"
-          surface={surface}
-          resolveMember={members}
-          showConnecting
-          header={null}
-          landOn={landing}
-        />
+        <BotTestRunnerHost>
+          <BotChatTranscript
+            botId={BOT_ID}
+            chatId={CHAT_ID}
+            hostId="host-1"
+            title="Release Bot"
+            instanceId="bot-thread:test"
+            surface={surface}
+            resolveMember={members}
+            showConnecting
+            header={null}
+            landOn={landing}
+          />
+        </BotTestRunnerHost>
       </QueryClientProvider>
     </StrictMode>
   );

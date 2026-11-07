@@ -125,6 +125,76 @@ describe("the soundtrack settings rows", () => {
     });
   });
 
+  describe("the Playback controls switch", () => {
+    const controls = () =>
+      screen.queryByRole("switch", { name: "Playback controls" });
+
+    it("is not drawn while Music is off", () => {
+      render(<SoundtrackSettingsSection />);
+
+      expect(controls()).toBeNull();
+    });
+
+    it("is drawn directly under Music while it is on, off by default", () => {
+      useSettingsStore.setState({ soundtrackEnabled: true });
+      render(<SoundtrackSettingsSection />);
+
+      expect(
+        screen
+          .getAllByRole("switch")
+          .map((el) => el.getAttribute("aria-label")),
+      ).toEqual(["Music", "Playback controls"]);
+      expect(controls()?.getAttribute("aria-checked")).toBe("false");
+      expect(useSettingsStore.getState().soundtrackPlaybackControls).toBe(
+        false,
+      );
+    });
+
+    it("keeps its value while Music is off and on again", async () => {
+      render(<SoundtrackSettingsSection />);
+      const music = screen.getByRole("switch", { name: "Music" });
+      await userEvent.click(music);
+      await userEvent.click(
+        screen.getByRole("switch", { name: "Playback controls" }),
+      );
+      expect(useSettingsStore.getState().soundtrackPlaybackControls).toBe(true);
+
+      await userEvent.click(music);
+      expect(controls()).toBeNull();
+      expect(useSettingsStore.getState().soundtrackPlaybackControls).toBe(true);
+
+      await userEvent.click(music);
+      expect(controls()?.getAttribute("aria-checked")).toBe("true");
+    });
+
+    it("plays a paused soundtrack when it is turned off, and keeps Music on", async () => {
+      useSettingsStore.setState({
+        soundtrackEnabled: true,
+        soundtrackPlaybackControls: true,
+        soundtrackPaused: true,
+      });
+      render(<SoundtrackSettingsSection />);
+
+      await userEvent.click(
+        screen.getByRole("switch", { name: "Playback controls" }),
+      );
+
+      expect(useSettingsStore.getState()).toMatchObject({
+        soundtrackEnabled: true,
+        soundtrackPlaybackControls: false,
+        soundtrackPaused: false,
+      });
+    });
+
+    it("is not drawn in the installed app, with Music on", () => {
+      useSettingsStore.setState({ soundtrackEnabled: true });
+      setMobileApp(true);
+      render(<SoundtrackSettingsSection />);
+
+      expect(controls()).toBeNull();
+    });
+  });
+
   it("moves the open device's volume with nothing reopened", async () => {
     render(<SoundtrackSettingsSection />);
     await openSession();

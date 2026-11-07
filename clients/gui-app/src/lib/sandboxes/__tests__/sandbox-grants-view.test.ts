@@ -11,6 +11,7 @@ import {
   sandboxGrantViews,
   sandboxHasBrokeredGrant,
   sandboxRouteAddresses,
+  sandboxSecretsSummary,
 } from "@/lib/sandboxes/sandbox-grants-view";
 
 function grant(overrides: Partial<SandboxGrant>): SandboxGrant {
@@ -18,7 +19,6 @@ function grant(overrides: Partial<SandboxGrant>): SandboxGrant {
     secretName: "DB_PASSWORD",
     kind: "password",
     protocol: "postgres",
-    mode: "brokered",
     source: "approved",
     connectorName: null,
     rotation: null,
@@ -58,7 +58,6 @@ describe("sandboxGrantViews", () => {
     expect(view).toEqual({
       secretName: "DB_PASSWORD",
       modeLine: "postgres · brokered",
-      exposed: false,
       via: null,
       source: "approved for this sandbox",
       routes: [
@@ -285,18 +284,6 @@ describe("sandboxGrantViews", () => {
     expect(view.routes[0].address).toBe("api.example.com");
   });
 
-  it("marks an exposed grant and gives it no routes", () => {
-    const [view] = sandboxGrantViews(
-      summary([grant({ mode: "exposed", protocol: "https", routes: [] })]),
-      [readiness("route-1", "ready", null)],
-    );
-    expect(view).toMatchObject({
-      exposed: true,
-      modeLine: "https · exposed, readable on the sandbox",
-      routes: [],
-    });
-  });
-
   it("carries the connector name as a via line", () => {
     const [view] = sandboxGrantViews(
       summary([grant({ connectorName: "office-vpc" })]),
@@ -308,15 +295,6 @@ describe("sandboxGrantViews", () => {
   it("drops the protocol from the mode line when there is none", () => {
     const [view] = sandboxGrantViews(summary([grant({ protocol: "" })]), null);
     expect(view.modeLine).toBe("brokered");
-  });
-
-  it("shows a mode this build does not know as its own word", () => {
-    const [view] = sandboxGrantViews(
-      summary([grant({ mode: "tunnelled" })]),
-      null,
-    );
-    expect(view.modeLine).toBe("postgres · tunnelled");
-    expect(view.exposed).toBe(false);
   });
 
   it.each([
@@ -368,6 +346,63 @@ describe("sandboxGrantViews", () => {
   });
 });
 
+describe("sandboxSecretsSummary", () => {
+  it("does not say all working when a grant has no routes", () => {
+    expect(
+      sandboxSecretsSummary(summary([grant({ routes: [] })]), [], "ready"),
+    ).toEqual({ label: "1 secret", notWorking: false });
+  });
+
+  it("names the failing secret in the singular when it is the only one", () => {
+    expect(
+      sandboxSecretsSummary(
+        summary([grant({})]),
+        [readiness("route-1", "unavailable", "grant_missing")],
+        "degraded",
+      ),
+    ).toEqual({ label: "1 of 1 secret not working", notWorking: true });
+  });
+
+  it("agrees the noun with the total, not the failure count", () => {
+    const grants = [
+      grant({ secretName: "A" }),
+      grant({
+        secretName: "B",
+        routes: [
+          {
+            route: "route-b",
+            destination: "b.internal",
+            port: 1,
+            unready: null,
+          },
+        ],
+      }),
+      grant({
+        secretName: "C",
+        routes: [
+          {
+            route: "route-c",
+            destination: "c.internal",
+            port: 2,
+            unready: null,
+          },
+        ],
+      }),
+    ];
+    expect(
+      sandboxSecretsSummary(
+        summary(grants),
+        [
+          readiness("route-1", "unavailable", "grant_missing"),
+          readiness("route-b", "ready", null),
+          readiness("route-c", "ready", null),
+        ],
+        "degraded",
+      ),
+    ).toEqual({ label: "1 of 3 secrets not working", notWorking: true });
+  });
+});
+
 describe("a grant's rotation", () => {
   it("carries the rotation line, null when the grant has none", () => {
     const views = sandboxGrantViews(
@@ -414,23 +449,13 @@ describe("a grant's rotation", () => {
 });
 
 describe("the stand-in clause", () => {
-  it("applies when any grant is brokered", () => {
+  it("applies to any grant, routes or not: every grant is brokered", () => {
     expect(
-      sandboxHasBrokeredGrant(
-        summary([grant({ mode: "exposed", routes: [] }), grant({})]),
-      ),
+      sandboxHasBrokeredGrant(summary([grant({ routes: [] }), grant({})])),
     ).toBe(true);
   });
 
-  it("does not apply when every grant is exposed, or there are none", () => {
-    expect(
-      sandboxHasBrokeredGrant(
-        summary([
-          grant({ mode: "exposed", routes: [] }),
-          grant({ mode: "exposed", routes: [] }),
-        ]),
-      ),
-    ).toBe(false);
+  it("does not apply when the sandbox holds no grant", () => {
     expect(sandboxHasBrokeredGrant(summary([]))).toBe(false);
   });
 
@@ -467,7 +492,7 @@ describe("sandboxRouteAddresses", () => {
             },
           ],
         }),
-        grant({ mode: "exposed", routes: [] }),
+        grant({ routes: [] }),
       ]),
     );
     expect([...addresses.entries()]).toEqual([

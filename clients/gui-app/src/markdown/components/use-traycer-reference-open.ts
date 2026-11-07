@@ -118,15 +118,18 @@ export function useTraycerReferenceOpenHandler(input: {
           // A single click on the reference: the resolver turns that into the
           // epic's current tab, with the preview/permanent call left to the
           // placement settings.
-          openTile({
-            node: target.ref,
-            target: { epicId: target.epicId },
-            gesture: "single",
-            modifiers: modifiersFromMouseEvent(event),
-            placement: null,
-            dedupe: true,
-            source: "direct_ui",
-          });
+          openTile(
+            {
+              node: target.ref,
+              target: { epicId: target.epicId },
+              gesture: "single",
+              modifiers: modifiersFromMouseEvent(event),
+              placement: null,
+              dedupe: true,
+              source: "direct_ui",
+            },
+            "user",
+          );
           return;
         }
         case "navigate":

@@ -1,11 +1,12 @@
 import {
+  act,
   cleanup,
   render,
   screen,
   waitFor,
   within,
 } from "@testing-library/react";
-import userEvent from "@testing-library/user-event";
+import userEvent, { type UserEvent } from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { EnvironmentConfigurationItem } from "@traycer/protocol/host/environment/configuration-contracts";
 import { TeamProviders } from "@/components/settings/environment/team-providers";
@@ -14,6 +15,10 @@ import { TeamPermissions } from "@/components/settings/environment/team-permissi
 import { BrowserAgentAccessGroup } from "@/components/settings/panels/browser-agent-access-group";
 import { TeamMcpServers } from "@/components/settings/environment/team-mcp-servers";
 import { TeamVariablesAndShells } from "@/components/settings/environment/team-variables-and-shells";
+import { SettingsSectionContext } from "@/components/settings/settings-section-context";
+import { setPhoneLayoutOnly } from "@/lib/mobile-app";
+import { useSettingsEnvironmentPickStore } from "@/stores/settings/settings-environment-pick-store";
+import { reachableHost } from "./mcp-skills-test-support";
 import {
   configurationItem,
   mountTeamPage,
@@ -44,6 +49,8 @@ vi.mock("@/hooks/host/use-host-client-for-host-id", () => ({
 afterEach(() => {
   cleanup();
   resetTeamPageHarness();
+  useSettingsEnvironmentPickStore.setState({ pick: null });
+  setPhoneLayoutOnly(false);
 });
 
 const variable = (
@@ -59,7 +66,238 @@ const variable = (
     revision,
   });
 
+async function selectOs(user: UserEvent, name: string): Promise<void> {
+  await user.click(screen.getByRole("combobox", { name: "Operating system" }));
+  await user.click(await screen.findByRole("option", { name }));
+}
+
 describe("TeamVariablesAndShells", () => {
+  it("keeps values compact until edited and opens a draft row from Add variable", async () => {
+    const harness = mountTeamPage(poolSource("editor"), {
+      "environment.configuration.items": () => ({
+        items: [variable("NODE_ENV", "production", 3)],
+      }),
+      "environment.host.list": () => ({ hosts: [] }),
+    });
+    render(<TeamVariablesAndShells />, { wrapper: harness.Wrapper });
+
+    expect(
+      await screen.findByRole("button", { name: "Edit NODE_ENV value" }),
+    ).toBeTruthy();
+    expect(screen.queryByLabelText("NODE_ENV value")).toBeNull();
+    expect(screen.queryByRole("button", { name: "Save" })).toBeNull();
+    await userEvent.click(
+      screen.getByRole("button", { name: "More for NODE_ENV" }),
+    );
+    expect(
+      await screen.findByRole("menuitem", { name: "Delete" }),
+    ).toBeTruthy();
+    await userEvent.keyboard("{Escape}");
+
+    await userEvent.click(screen.getByRole("button", { name: "Add variable" }));
+    expect(await screen.findByLabelText("Variable name")).toBeTruthy();
+    expect(screen.getByLabelText("New variable value")).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Add a variable" })).toBeTruthy();
+  });
+
+  it("shows applied differences inline and full host values only after Details", async () => {
+    const harness = mountTeamPage(poolSource("editor"), {
+      "environment.configuration.items": () => ({
+        items: [variable("NODE_ENV", "production", 3)],
+      }),
+      "environment.host.list": () => ({ hosts: [reachableHost] }),
+      "config.env.list": () => ({
+        entries: [{ key: "NODE_ENV", value: "staging" }],
+      }),
+      "config.shell.get": () => ({
+        path: "/bin/zsh",
+        args: ["-l"],
+        synthesised: false,
+      }),
+    });
+    render(<TeamVariablesAndShells />, { wrapper: harness.Wrapper });
+
+    expect(await screen.findByText("Applied on Mac mini")).toBeTruthy();
+    expect(screen.queryByText("Live values")).toBeNull();
+    expect(await screen.findByText("This host uses staging")).toBeTruthy();
+    expect(screen.queryByText(/Shell:/)).toBeNull();
+    await userEvent.click(screen.getByRole("button", { name: "Details" }));
+    expect(await screen.findByText(/Shell:/)).toBeTruthy();
+    expect(screen.getByText("/bin/zsh -l")).toBeTruthy();
+    const appliedVariableKey = screen.getByText("NODE_ENV", {
+      selector: "code",
+    });
+    expect(appliedVariableKey.parentElement?.textContent).toBe(
+      "NODE_ENV: staging",
+    );
+  });
+
+  describe("a live value beside a setting", () => {
+    const hostOn = (hostPlatform: string | null) => ({
+      ...reachableHost,
+      hostPlatform,
+    });
+    const hostShell = { path: "/bin/zsh", args: [], synthesised: false };
+    const shellRow = (os: "any" | "linux" | "macos", path: string) =>
+      configurationItem({
+        kind: "shell",
+        key: "shell",
+        os,
+        value: { path, args: [] },
+        revision: 2,
+      });
+    const osVariable = (
+      key: string,
+      os: "any" | "linux" | "macos",
+      value: string,
+    ) => configurationItem({ kind: "variable", key, os, value: { value } });
+
+    const mountVariables = (
+      hostPlatform: string | null,
+      items: EnvironmentConfigurationItem[],
+      live: { key: string; value: string }[],
+    ) =>
+      mountTeamPage(poolSource("editor"), {
+        "environment.configuration.items": () => ({ items }),
+        "environment.host.list": () => ({ hosts: [hostOn(hostPlatform)] }),
+        "config.env.list": () => ({ entries: live }),
+        "config.shell.get": () => hostShell,
+      });
+
+    it("compares only rows that apply to the viewed host under All operating systems", async () => {
+      const harness = mountVariables(
+        "darwin-arm64",
+        [
+          osVariable("LINUX_URL", "linux", "from-linux"),
+          osVariable("MAC_URL", "macos", "from-mac"),
+          osVariable("ANY_URL", "any", "from-any"),
+        ],
+        [
+          { key: "LINUX_URL", value: "live-linux" },
+          { key: "MAC_URL", value: "live-mac" },
+          { key: "ANY_URL", value: "live-any" },
+        ],
+      );
+      render(<TeamVariablesAndShells />, { wrapper: harness.Wrapper });
+
+      const anyRow = await screen.findByRole("region", { name: "ANY_URL" });
+      const macRow = screen.getByRole("region", { name: "MAC_URL · macOS" });
+      const linuxRow = screen.getByRole("region", {
+        name: "LINUX_URL · Linux",
+      });
+      expect(
+        await within(anyRow).findByText("This host uses live-any"),
+      ).toBeTruthy();
+      expect(
+        await within(macRow).findByText("This host uses live-mac"),
+      ).toBeTruthy();
+      expect(within(linuxRow).queryByText(/This host uses/)).toBeNull();
+    });
+
+    it("leaves a universal row alone when a row for the host's own OS overrides it", async () => {
+      const harness = mountVariables(
+        "darwin-arm64",
+        [
+          osVariable("API_URL", "any", "from-any"),
+          osVariable("API_URL", "macos", "from-mac"),
+        ],
+        [{ key: "API_URL", value: "from-mac" }],
+      );
+      render(<TeamVariablesAndShells />, { wrapper: harness.Wrapper });
+
+      await screen.findByRole("region", { name: "API_URL · macOS" });
+      await userEvent.click(
+        await screen.findByRole("button", { name: "Details" }),
+      );
+      await screen.findByText(": from-mac");
+      expect(screen.queryByText(/This host uses/)).toBeNull();
+    });
+
+    it("claims a difference for a universal row but not an OS row when the host's OS is unknown", async () => {
+      const harness = mountVariables(
+        null,
+        [
+          osVariable("MAC_URL", "macos", "from-mac"),
+          osVariable("ANY_URL", "any", "from-any"),
+        ],
+        [
+          { key: "MAC_URL", value: "live-mac" },
+          { key: "ANY_URL", value: "live-any" },
+        ],
+      );
+      render(<TeamVariablesAndShells />, { wrapper: harness.Wrapper });
+
+      const anyRow = await screen.findByRole("region", { name: "ANY_URL" });
+      expect(
+        await within(anyRow).findByText("This host uses live-any"),
+      ).toBeTruthy();
+      expect(screen.queryByText("This host uses live-mac")).toBeNull();
+    });
+
+    it("compares the shell only when the selected OS applies to the viewed host", async () => {
+      const harness = mountVariables(
+        "darwin-arm64",
+        [shellRow("linux", "/bin/dash"), shellRow("macos", "/bin/fish")],
+        [],
+      );
+      const user = userEvent.setup();
+      render(<TeamVariablesAndShells />, { wrapper: harness.Wrapper });
+
+      await selectOs(user, "macOS");
+      await screen.findByText("/bin/fish");
+      expect(await screen.findByText("This host uses /bin/zsh")).toBeTruthy();
+
+      await selectOs(user, "Linux");
+      await screen.findByText("/bin/dash");
+      expect(screen.queryByText(/This host uses/)).toBeNull();
+    });
+
+    it("compares the universal shell, and drops that when the host's OS has its own", async () => {
+      let items = [shellRow("any", "/bin/bash")];
+      const harness = mountTeamPage(poolSource("editor"), {
+        "environment.configuration.items": () => ({ items }),
+        "environment.host.list": () => ({ hosts: [hostOn("darwin-arm64")] }),
+        "config.env.list": () => ({ entries: [] }),
+        "config.shell.get": () => hostShell,
+      });
+      const { rerender } = render(<TeamVariablesAndShells />, {
+        wrapper: harness.Wrapper,
+      });
+      expect(await screen.findByText("This host uses /bin/zsh")).toBeTruthy();
+
+      items = [shellRow("any", "/bin/bash"), shellRow("macos", "/bin/zsh")];
+      await act(async () => {
+        await harness.queryClient.invalidateQueries();
+      });
+      rerender(<TeamVariablesAndShells />);
+      await waitFor(() => {
+        expect(screen.queryByText(/This host uses/)).toBeNull();
+      });
+    });
+
+    it("compares a universal shell but not an OS shell when the host's OS is unknown", async () => {
+      const harness = mountVariables(null, [shellRow("any", "/bin/bash")], []);
+      render(<TeamVariablesAndShells />, { wrapper: harness.Wrapper });
+      expect(await screen.findByText("This host uses /bin/zsh")).toBeTruthy();
+    });
+
+    it("never compares an OS shell when the host's OS is unknown", async () => {
+      const harness = mountVariables(
+        null,
+        [shellRow("macos", "/bin/fish")],
+        [],
+      );
+      const user = userEvent.setup();
+      render(<TeamVariablesAndShells />, { wrapper: harness.Wrapper });
+
+      await selectOs(user, "macOS");
+      await screen.findByText("/bin/fish");
+      await user.click(await screen.findByRole("button", { name: "Details" }));
+      await screen.findByText("/bin/zsh");
+      expect(screen.queryByText(/This host uses/)).toBeNull();
+    });
+  });
+
   it("reads the team's items by environment id, never the host's own config", async () => {
     const harness = mountTeamPage(poolSource("editor"), {
       "environment.configuration.items": () => ({
@@ -69,6 +307,9 @@ describe("TeamVariablesAndShells", () => {
     });
     render(<TeamVariablesAndShells />, { wrapper: harness.Wrapper });
 
+    await userEvent.click(
+      await screen.findByRole("button", { name: "Edit NODE_ENV value" }),
+    );
     expect(await screen.findByLabelText("NODE_ENV value")).toHaveProperty(
       "value",
       "production",
@@ -111,7 +352,7 @@ describe("TeamVariablesAndShells", () => {
     );
     expect(
       await screen.findByText(
-        "Plain values every host running Acme gets, and the shell agents run in.",
+        "Plain values every host running these settings gets, and the shell agents run in.",
       ),
     ).toBeTruthy();
     const reads = harness.paramsOf("environment.configuration.items").length;
@@ -123,7 +364,9 @@ describe("TeamVariablesAndShells", () => {
       }),
     );
 
-    expect(await screen.findByLabelText("NODE_ENV value")).toBeTruthy();
+    expect(
+      await screen.findByRole("button", { name: "Edit NODE_ENV value" }),
+    ).toBeTruthy();
     expect(
       harness.paramsOf("environment.configuration.items").length,
     ).toBeGreaterThan(reads);
@@ -145,56 +388,95 @@ describe("TeamVariablesAndShells", () => {
     }
   });
 
-  it("quotes the displayed revision, and on a conflict rereads the current value beside the changed-by line", async () => {
-    let current = variable("NODE_ENV", "production", 3);
-    const harness = mountTeamPage(poolSource("editor"), {
-      "environment.configuration.items": () => ({ items: [current] }),
-      "environment.configuration.items.put": () => {
-        // Someone else saved first; their row is what the reread returns.
-        current = variable("NODE_ENV", "staging", 4);
-        return {
-          outcome: "conflict",
-          current: { revision: 4, changedBy: "Grace", changedAt: 2 },
-        };
-      },
-      "environment.host.list": () => ({ hosts: [] }),
-    });
-    render(<TeamVariablesAndShells />, { wrapper: harness.Wrapper });
-
-    const field = await screen.findByLabelText("NODE_ENV value");
-    await userEvent.clear(field);
-    await userEvent.type(field, "development");
-    const row = (): HTMLElement =>
-      screen.getByRole("region", { name: "NODE_ENV" });
-    await userEvent.click(within(row()).getByRole("button", { name: "Save" }));
-
-    expect(harness.paramsOf("environment.configuration.items.put")).toEqual([
-      {
-        environmentId: "env-a",
-        kind: "variable",
-        key: "NODE_ENV",
-        os: "any",
-        value: { value: "development" },
-        revision: 3,
-      },
-    ]);
-    expect(
-      await screen.findByText("Changed by Grace a moment ago"),
-    ).toBeTruthy();
-    await waitFor(() => {
-      expect(screen.getByLabelText("NODE_ENV value")).toHaveProperty(
-        "value",
-        "staging",
+  it.each(["Save", "Cancel"] as const)(
+    "keeps a variable draft through an immediate current conflict until deliberate %s",
+    async (action) => {
+      let current = variable("NODE_ENV", "production", 3);
+      let puts = 0;
+      const harness = mountTeamPage(poolSource("editor"), {
+        "environment.configuration.items": () => ({ items: [current] }),
+        "environment.configuration.items.put": () => {
+          puts += 1;
+          if (puts === 1) {
+            current = variable("NODE_ENV", "staging", 4);
+            return {
+              outcome: "conflict",
+              current: { revision: 4, changedBy: "Grace", changedAt: 2 },
+            };
+          }
+          current = variable("NODE_ENV", "development!", 5);
+          return { outcome: "saved", revision: 5 };
+        },
+        "environment.host.list": () => ({ hosts: [] }),
+      });
+      render(<TeamVariablesAndShells />, { wrapper: harness.Wrapper });
+      await userEvent.click(
+        await screen.findByRole("button", { name: "Edit NODE_ENV value" }),
       );
-    });
-
-    // The next save quotes the reread revision, not the stale one.
-    await userEvent.type(screen.getByLabelText("NODE_ENV value"), "!");
-    await userEvent.click(within(row()).getByRole("button", { name: "Save" }));
-    expect(
-      harness.paramsOf("environment.configuration.items.put")[1],
-    ).toMatchObject({ revision: 4 });
-  });
+      const field = screen.getByLabelText("NODE_ENV value");
+      await userEvent.clear(field);
+      await userEvent.type(field, "development");
+      await userEvent.click(screen.getByRole("button", { name: "Save" }));
+      expect(
+        await screen.findByText("Changed by Grace a moment ago"),
+      ).toBeTruthy();
+      await waitFor(() => {
+        expect(screen.getByLabelText("NODE_ENV value")).toHaveProperty(
+          "value",
+          "development",
+        );
+        expect(screen.getByRole("button", { name: "Save" })).toHaveProperty(
+          "disabled",
+          false,
+        );
+      });
+      expect(harness.paramsOf("environment.configuration.items.put")).toEqual([
+        {
+          environmentId: "env-a",
+          kind: "variable",
+          key: "NODE_ENV",
+          os: "any",
+          value: { value: "development" },
+          revision: 3,
+        },
+      ]);
+      if (action === "Cancel") {
+        await userEvent.click(screen.getByRole("button", { name: "Cancel" }));
+        await waitFor(() => {
+          expect(
+            screen.getByRole("button", { name: "Edit NODE_ENV value" }),
+          ).toHaveProperty("textContent", "staging");
+        });
+        current = variable("NODE_ENV", "after-cancel", 5);
+        await act(async () => {
+          await harness.queryClient.refetchQueries();
+        });
+        await waitFor(() => {
+          expect(
+            screen.getByRole("button", { name: "Edit NODE_ENV value" }),
+          ).toHaveProperty("textContent", "after-cancel");
+        });
+        expect(screen.queryByLabelText("NODE_ENV value")).toBeNull();
+        expect(
+          harness.paramsOf("environment.configuration.items.put"),
+        ).toHaveLength(1);
+        return;
+      }
+      await userEvent.type(screen.getByLabelText("NODE_ENV value"), "!");
+      await userEvent.click(screen.getByRole("button", { name: "Save" }));
+      await waitFor(() => {
+        expect(
+          screen.getByRole("button", { name: "Edit NODE_ENV value" }),
+        ).toHaveProperty("disabled", false);
+      });
+      expect(
+        harness.paramsOf("environment.configuration.items.put")[1],
+      ).toMatchObject({ revision: 4, value: { value: "development!" } });
+      expect(
+        screen.getByRole("button", { name: "Edit NODE_ENV value" }),
+      ).toHaveProperty("textContent", "development!");
+    },
+  );
 
   it("shows and saves each operating system's own value when two share a key and revision", async () => {
     const harness = mountTeamPage(poolSource("editor"), {
@@ -219,6 +501,9 @@ describe("TeamVariablesAndShells", () => {
     const user = userEvent.setup();
     render(<TeamVariablesAndShells />, { wrapper: harness.Wrapper });
 
+    await user.click(
+      await screen.findByRole("button", { name: "Edit NODE_ENV value" }),
+    );
     expect(await screen.findByLabelText("NODE_ENV value")).toHaveProperty(
       "value",
       "production",
@@ -227,6 +512,9 @@ describe("TeamVariablesAndShells", () => {
       screen.getByRole("combobox", { name: "Operating system" }),
     );
     await user.click(await screen.findByRole("option", { name: "Linux" }));
+    await user.click(
+      screen.getByRole("button", { name: "Edit NODE_ENV value" }),
+    );
     const field = screen.getByLabelText("NODE_ENV value");
     expect(field).toHaveProperty("value", "linux-value");
 
@@ -250,22 +538,25 @@ describe("TeamVariablesAndShells", () => {
   });
 
   it("lists every operating system's variables under All, labels the ones scoped to one, and saves each under its own", async () => {
+    let items = [
+      configurationItem({
+        kind: "variable",
+        key: "API_URL",
+        os: "macos",
+        value: { value: "mac-value" },
+        revision: 2,
+      }),
+    ];
     const harness = mountTeamPage(poolSource("editor"), {
-      "environment.configuration.items": () => ({
-        items: [
-          configurationItem({
-            kind: "variable",
-            key: "API_URL",
-            os: "macos",
-            value: { value: "mac-value" },
-            revision: 2,
-          }),
-        ],
-      }),
-      "environment.configuration.items.put": () => ({
-        outcome: "saved",
-        revision: 3,
-      }),
+      "environment.configuration.items": () => ({ items }),
+      "environment.configuration.items.put": () => {
+        items = items.map((item) => ({
+          ...item,
+          value: { value: "mac-value!" },
+          revision: 3,
+        }));
+        return { outcome: "saved", revision: 3 };
+      },
       "environment.host.list": () => ({ hosts: [] }),
     });
     const user = userEvent.setup();
@@ -274,6 +565,10 @@ describe("TeamVariablesAndShells", () => {
     const row = await screen.findByRole("region", { name: "API_URL · macOS" });
     expect(within(row).getByText("macOS")).toBeTruthy();
     expect(screen.queryByText("No variables.")).toBeNull();
+    expect(within(row).queryByRole("button", { name: "Save" })).toBeNull();
+    await user.click(
+      within(row).getByRole("button", { name: "Edit API_URL · macOS value" }),
+    );
     const field = within(row).getByLabelText("API_URL · macOS value");
     expect(field).toHaveProperty("value", "mac-value");
 
@@ -290,12 +585,335 @@ describe("TeamVariablesAndShells", () => {
       },
     ]);
 
+    await waitFor(() => {
+      expect(
+        screen.getByRole("button", { name: "Edit API_URL · macOS value" }),
+      ).toHaveProperty("disabled", false);
+    });
     await user.click(
       screen.getByRole("combobox", { name: "Operating system" }),
     );
     await user.click(await screen.findByRole("option", { name: "Linux" }));
     expect(screen.queryByRole("region", { name: /API_URL/ })).toBeNull();
     expect(screen.getByText("No variables.")).toBeTruthy();
+  });
+
+  it("shows an added variable's awaiting-readback line, Retry and row only under the operating system it was added to", async () => {
+    const harness = mountTeamPage(poolSource("editor"), {
+      "environment.configuration.items": () => ({ items: [] }),
+      "environment.configuration.items.put": () => ({
+        outcome: "saved",
+        revision: 1,
+      }),
+      "environment.host.list": () => ({ hosts: [] }),
+    });
+    const user = userEvent.setup();
+    render(<TeamVariablesAndShells />, { wrapper: harness.Wrapper });
+    await selectOs(user, "Linux");
+    await user.click(
+      await screen.findByRole("button", { name: "Add variable" }),
+    );
+    await user.type(screen.getByLabelText("Variable name"), "API_URL");
+    await user.click(screen.getByRole("button", { name: "Add a variable" }));
+    const refreshed = "Saved, but latest settings haven't refreshed.";
+    expect(await screen.findByText(refreshed)).toBeTruthy();
+    expect(screen.getByText("API_URL")).toBeTruthy();
+    expect(screen.queryByText("No variables.")).toBeNull();
+
+    await selectOs(user, "macOS");
+    expect(screen.queryByText(refreshed)).toBeNull();
+    expect(screen.queryByRole("button", { name: "Retry" })).toBeNull();
+    expect(screen.queryByText("API_URL")).toBeNull();
+    expect(screen.getByText("No variables.")).toBeTruthy();
+    await selectOs(user, "Linux");
+    expect(screen.getByText(refreshed)).toBeTruthy();
+  });
+
+  describe("a shell write", () => {
+    const shellItem = configurationItem({
+      kind: "shell",
+      key: "shell",
+      os: "any",
+      value: { path: "/bin/bash", args: [] },
+      revision: 3,
+    });
+
+    const typeNewPath = async (user: UserEvent): Promise<void> => {
+      await user.click(
+        await screen.findByRole("button", { name: "Edit Shell path" }),
+      );
+      const field = await screen.findByLabelText("Shell path");
+      await user.clear(field);
+      await user.type(field, "/bin/zsh");
+      await user.click(screen.getByRole("button", { name: "Save" }));
+    };
+
+    it("keeps an accepted shell through stale read retries, then uses the confirmed revision on its next save", async () => {
+      let current = shellItem;
+      let puts = 0;
+      const harness = mountTeamPage(poolSource("editor"), {
+        "environment.configuration.items": () => ({ items: [current] }),
+        "environment.configuration.items.put": () => {
+          puts += 1;
+          if (puts === 2)
+            current = {
+              ...shellItem,
+              revision: 5,
+              value: { path: "/bin/fish", args: [] },
+            };
+          return { outcome: "saved", revision: puts === 1 ? 4 : 5 };
+        },
+        "environment.host.list": () => ({ hosts: [] }),
+      });
+      const user = userEvent.setup();
+      render(<TeamVariablesAndShells />, { wrapper: harness.Wrapper });
+      await typeNewPath(user);
+      expect(
+        await screen.findByText(
+          "Saved, but latest settings haven't refreshed.",
+        ),
+      ).toBeTruthy();
+      expect(
+        screen.getByRole("button", { name: "Edit Shell path" }),
+      ).toHaveProperty("textContent", "/bin/zsh");
+      expect(screen.queryByRole("button", { name: "Cancel" })).toBeNull();
+      const reads = harness.paramsOf("environment.configuration.items").length;
+      await user.click(screen.getByRole("button", { name: "Retry" }));
+      expect(
+        await screen.findByText(
+          "Saved, but latest settings haven't refreshed.",
+        ),
+      ).toBeTruthy();
+      expect(harness.paramsOf("environment.configuration.items")).toHaveLength(
+        reads + 1,
+      );
+      expect(
+        harness.paramsOf("environment.configuration.items.put"),
+      ).toHaveLength(1);
+      expect(
+        screen.getByRole("button", { name: "Edit Shell path" }),
+      ).toHaveProperty("disabled", true);
+      current = {
+        ...shellItem,
+        revision: 4,
+        value: { path: "/bin/zsh", args: [] },
+      };
+      await user.click(screen.getByRole("button", { name: "Retry" }));
+      await waitFor(() => {
+        expect(
+          screen.getByRole("button", { name: "Edit Shell path" }),
+        ).toHaveProperty("disabled", false);
+      });
+      await user.click(screen.getByRole("button", { name: "Edit Shell path" }));
+      await user.clear(screen.getByLabelText("Shell path"));
+      await user.type(screen.getByLabelText("Shell path"), "/bin/fish");
+      await user.click(screen.getByRole("button", { name: "Save" }));
+      await waitFor(() => {
+        expect(
+          screen.getByRole("button", { name: "Edit Shell path" }),
+        ).toHaveProperty("disabled", false);
+      });
+      expect(harness.paramsOf("environment.configuration.items.put")).toEqual([
+        {
+          environmentId: "env-a",
+          kind: "shell",
+          key: "shell",
+          os: "any",
+          value: { path: "/bin/zsh", args: [] },
+          revision: 3,
+        },
+        {
+          environmentId: "env-a",
+          kind: "shell",
+          key: "shell",
+          os: "any",
+          value: { path: "/bin/fish", args: [] },
+          revision: 4,
+        },
+      ]);
+      expect(screen.queryByText(/(?:Saved|Removed)[.,]/)).toBeNull();
+    });
+
+    it("shows a shell write's pending line only on the operating system it addresses", async () => {
+      const put = Promise.withResolvers<{
+        outcome: "saved";
+        revision: number;
+      }>();
+      const harness = mountTeamPage(poolSource("editor"), {
+        "environment.configuration.items": () => ({ items: [shellItem] }),
+        "environment.configuration.items.put": () => put.promise,
+        "environment.host.list": () => ({ hosts: [] }),
+      });
+      const user = userEvent.setup();
+      render(<TeamVariablesAndShells />, { wrapper: harness.Wrapper });
+      await typeNewPath(user);
+      expect(await screen.findByText("shell · Saving")).toBeTruthy();
+
+      await selectOs(user, "Linux");
+      expect(screen.queryByText("shell · Saving")).toBeNull();
+      await selectOs(user, "All operating systems");
+      expect(screen.getByText("shell · Saving")).toBeTruthy();
+    });
+
+    it("shows a shell write's awaiting-readback line and Retry only on the operating system it addresses", async () => {
+      const harness = mountTeamPage(poolSource("editor"), {
+        "environment.configuration.items": () => ({ items: [shellItem] }),
+        "environment.configuration.items.put": () => ({
+          outcome: "saved",
+          revision: 4,
+        }),
+        "environment.host.list": () => ({ hosts: [] }),
+      });
+      const user = userEvent.setup();
+      render(<TeamVariablesAndShells />, { wrapper: harness.Wrapper });
+      await typeNewPath(user);
+      const refreshed = "Saved, but latest settings haven't refreshed.";
+      expect(await screen.findByText(refreshed)).toBeTruthy();
+
+      await selectOs(user, "Linux");
+      expect(screen.queryByText(refreshed)).toBeNull();
+      expect(screen.queryByRole("button", { name: "Retry" })).toBeNull();
+      await selectOs(user, "All operating systems");
+      expect(screen.getByText(refreshed)).toBeTruthy();
+      expect(screen.getByRole("button", { name: "Retry" })).toBeTruthy();
+    });
+
+    it("keeps a revisionless accepted Remove pending until a read confirms absence, then allows a fresh create", async () => {
+      let items = [shellItem];
+      const harness = mountTeamPage(poolSource("editor"), {
+        "environment.configuration.items": () => ({ items }),
+        "environment.configuration.items.delete": () => ({
+          outcome: "saved",
+          revision: null,
+        }),
+        "environment.configuration.items.put": () => {
+          items = [
+            {
+              ...shellItem,
+              revision: 5,
+              value: { path: "/bin/zsh", args: [] },
+            },
+          ];
+          return { outcome: "saved", revision: 5 };
+        },
+        "environment.host.list": () => ({ hosts: [] }),
+      });
+      const user = userEvent.setup();
+      render(<TeamVariablesAndShells />, { wrapper: harness.Wrapper });
+      await user.click(
+        await screen.findByRole("button", { name: "More for shell" }),
+      );
+      await user.click(screen.getByRole("menuitem", { name: "Remove" }));
+      expect(
+        await screen.findByText(
+          "Removed, but latest settings haven't refreshed.",
+        ),
+      ).toBeTruthy();
+      expect(
+        screen.getByRole("button", { name: "Edit Shell path" }),
+      ).toHaveProperty("textContent", "No shell set.");
+      expect(
+        screen.getByRole("button", { name: "Edit Shell path" }),
+      ).toHaveProperty("disabled", true);
+      const reads = harness.paramsOf("environment.configuration.items").length;
+      items = [{ ...shellItem, revision: 4 }];
+      await user.click(screen.getByRole("button", { name: "Retry" }));
+      expect(
+        await screen.findByText(
+          "Removed, but latest settings haven't refreshed.",
+        ),
+      ).toBeTruthy();
+      expect(
+        screen.getByRole("button", { name: "Edit Shell path" }),
+      ).toHaveProperty("disabled", true);
+      items = [];
+      await user.click(screen.getByRole("button", { name: "Retry" }));
+      await waitFor(() => {
+        expect(
+          screen.getByRole("button", { name: "Edit Shell path" }),
+        ).toHaveProperty("disabled", false);
+      });
+      expect(harness.paramsOf("environment.configuration.items")).toHaveLength(
+        reads + 2,
+      );
+      expect(
+        harness.paramsOf("environment.configuration.items.delete"),
+      ).toEqual([
+        {
+          environmentId: "env-a",
+          kind: "shell",
+          key: "shell",
+          os: "any",
+          revision: 3,
+        },
+      ]);
+      await typeNewPath(user);
+      await waitFor(() => {
+        expect(
+          screen.getByRole("button", { name: "Edit Shell path" }),
+        ).toHaveProperty("disabled", false);
+      });
+      expect(
+        harness.paramsOf("environment.configuration.items.put")[0],
+      ).toMatchObject({ revision: null });
+      expect(screen.queryByText(/(?:Saved|Removed)[.,]/)).toBeNull();
+    });
+
+    it("keeps a shell draft through an immediate current conflict and deliberately saves on the fresh revision", async () => {
+      let current = shellItem;
+      let conflicted = false;
+      const harness = mountTeamPage(poolSource("editor"), {
+        "environment.configuration.items": () => ({ items: [current] }),
+        "environment.configuration.items.put": () => {
+          if (!conflicted) {
+            conflicted = true;
+            current = {
+              ...shellItem,
+              revision: 4,
+              value: { path: "/bin/sh", args: [] },
+            };
+            return {
+              outcome: "conflict",
+              current: { revision: 4, changedBy: "Grace", changedAt: 2 },
+            };
+          }
+          current = {
+            ...shellItem,
+            revision: 5,
+            value: { path: "/bin/zsh", args: [] },
+          };
+          return { outcome: "saved", revision: 5 };
+        },
+        "environment.host.list": () => ({ hosts: [] }),
+      });
+      const user = userEvent.setup();
+      render(<TeamVariablesAndShells />, { wrapper: harness.Wrapper });
+      await typeNewPath(user);
+      expect(
+        await screen.findByText("Changed by Grace a moment ago"),
+      ).toBeTruthy();
+      expect(screen.getByLabelText("Shell path")).toHaveProperty(
+        "value",
+        "/bin/zsh",
+      );
+      expect(screen.getByRole("button", { name: "Save" })).toHaveProperty(
+        "disabled",
+        false,
+      );
+      expect(
+        harness.paramsOf("environment.configuration.items.put"),
+      ).toHaveLength(1);
+      await user.click(screen.getByRole("button", { name: "Save" }));
+      await waitFor(() => {
+        expect(
+          screen.getByRole("button", { name: "Edit Shell path" }),
+        ).toHaveProperty("disabled", false);
+      });
+      expect(
+        harness.paramsOf("environment.configuration.items.put")[1],
+      ).toMatchObject({ revision: 4 });
+      expect(screen.queryByText(/(?:Saved|Removed)[.,]/)).toBeNull();
+    });
   });
 
   it("says live values need a host while the team has none", async () => {
@@ -320,12 +938,12 @@ describe("TeamVariablesAndShells", () => {
     });
     render(<TeamVariablesAndShells />, { wrapper: harness.Wrapper });
 
-    const card = (await screen.findByText("Live values")).closest("section");
-    expect(card).not.toBeNull();
-    if (card === null) return;
+    await screen.findByRole("heading", { name: "Variables & shells" });
     // An unread inventory is not an empty one, so the card says nothing at
     // all rather than sending the reader to start a sandbox.
-    expect(within(card).queryByRole("status")).toBeNull();
+    expect(screen.queryByRole("status")).toBeNull();
+    expect(screen.queryByText("Applied on Mac mini")).toBeNull();
+    expect(screen.queryByText("Live values")).toBeNull();
     expect(screen.queryByText(/sandbox to see/)).toBeNull();
   });
 
@@ -406,11 +1024,7 @@ describe("TeamMcpServers", () => {
     });
     render(<TeamMcpServers />, { wrapper: harness.Wrapper });
 
-    expect(
-      await screen.findByText(
-        "Tools agents can call. Acme's servers reach every provider on every host running Acme.",
-      ),
-    ).toBeTruthy();
+    expect(await screen.findByText("Tools agents can call.")).toBeTruthy();
   });
 
   it("toggles a tool against the displayed revision for an editor", async () => {
@@ -532,32 +1146,32 @@ describe("Environment page subtitles", () => {
     [
       "Providers",
       <TeamProviders key="p" />,
-      "Plans, keys and settings for each coding agent, on every host running Acme.",
-      "Sign-ins, keys and tools for each coding agent, on every computer and sandbox running Personal.",
+      "Sign-ins, keys and tools for each coding agent.",
+      "Sign-ins, keys and tools for each coding agent.",
     ],
     [
       "MCP servers",
       <TeamMcpServers key="m" />,
-      "Tools agents can call. Acme's servers reach every provider on every host running Acme.",
-      "Tools agents can call. Personal's servers reach every provider on every computer and sandbox running Personal.",
+      "Tools agents can call.",
+      "Tools agents can call.",
     ],
     [
       "Skills",
       <TeamSkillsPage key="s" />,
       null,
-      "Instructions agents follow for a kind of task. Personal's skills reach every provider on every computer and sandbox running Personal.",
+      "Instructions agents follow for a kind of task.",
     ],
     [
       "Permissions",
       <TeamPermissions key="x">{null}</TeamPermissions>,
-      "What Acme's agents may do without asking, on every host running Acme.",
-      "What your agents may do without asking, on every computer and sandbox running Personal.",
+      "What agents may do without asking, on every host running these settings.",
+      "What your agents may do without asking, on every computer and sandbox running these settings.",
     ],
     [
       "Variables & shells",
       <TeamVariablesAndShells key="v" />,
-      "Plain values every host running Acme gets, and the shell agents run in.",
-      "Plain values every computer and sandbox running Personal gets, and the shell agents run in.",
+      "Plain values every host running these settings gets, and the shell agents run in.",
+      "Plain values every computer and sandbox running these settings gets, and the shell agents run in.",
     ],
   ])("%s names its configuration", async (_page, page, team, personal) => {
     if (team !== null) {
@@ -571,6 +1185,102 @@ describe("Environment page subtitles", () => {
     render(page, { wrapper: harness.Wrapper });
     expect(await screen.findByText(personal)).toBeTruthy();
   });
+
+  it.each([
+    {
+      pageTitle: "MCP servers",
+      section: "mcp-servers",
+      page: <TeamMcpServers key="mcp" />,
+      source: poolSource("editor"),
+      pick: { kind: "team", environmentId: "env-a" },
+      environmentName: "Acme",
+      purpose: "Tools agents can call.",
+    },
+    {
+      pageTitle: "MCP servers",
+      section: "mcp-servers",
+      page: <TeamMcpServers key="mcp-personal" />,
+      source: personalPoolSource(),
+      pick: { kind: "personal" },
+      environmentName: "Personal",
+      purpose: "Tools agents can call.",
+    },
+    {
+      pageTitle: "Skills",
+      section: "skills",
+      page: <TeamSkillsPage key="skills" />,
+      source: poolSource("editor"),
+      pick: { kind: "team", environmentId: "env-a" },
+      environmentName: "Acme",
+      purpose: "Instructions agents follow for a kind of task.",
+    },
+    {
+      pageTitle: "Skills",
+      section: "skills",
+      page: <TeamSkillsPage key="skills-personal" />,
+      source: personalPoolSource(),
+      pick: { kind: "personal" },
+      environmentName: "Personal",
+      purpose: "Instructions agents follow for a kind of task.",
+    },
+    {
+      pageTitle: "Permissions",
+      section: "permissions",
+      page: <TeamPermissions key="permissions">{null}</TeamPermissions>,
+      source: poolSource("editor"),
+      pick: { kind: "team", environmentId: "env-a" },
+      environmentName: "Acme",
+      purpose:
+        "What agents may do without asking, on every host running these settings.",
+    },
+    {
+      pageTitle: "Variables & shells",
+      section: "shell",
+      page: <TeamVariablesAndShells key="variables-shells" />,
+      source: poolSource("editor"),
+      pick: { kind: "team", environmentId: "env-a" },
+      environmentName: "Acme",
+      purpose:
+        "Plain values every host running these settings gets, and the shell agents run in.",
+    },
+  ] as const)(
+    "$pageTitle · $environmentName shows its environment once in the phone caption",
+    async ({
+      pageTitle,
+      section,
+      page,
+      source,
+      pick,
+      environmentName,
+      purpose,
+    }) => {
+      useSettingsEnvironmentPickStore.setState({
+        pick,
+      });
+      setPhoneLayoutOnly(true);
+      const harness = mountTeamPage(source, handlers);
+      render(
+        <SettingsSectionContext value={section}>{page}</SettingsSectionContext>,
+        { wrapper: harness.Wrapper },
+      );
+
+      const scopeLine = await screen.findByTestId("settings-phone-scope-line");
+      await waitFor(() => {
+        expect(scopeLine.textContent).toBe(environmentName);
+      });
+      const heading = screen.getByRole("heading", {
+        level: 1,
+        name: pageTitle,
+      });
+      const header = heading.closest("header");
+      expect(header).not.toBeNull();
+      if (header === null) return;
+      expect(
+        header.textContent.match(new RegExp(environmentName, "g")) ?? [],
+      ).toHaveLength(1);
+      expect(await screen.findByText(purpose)).toBeTruthy();
+    },
+  );
 });
 
 describe("A cloud page's failed read", () => {

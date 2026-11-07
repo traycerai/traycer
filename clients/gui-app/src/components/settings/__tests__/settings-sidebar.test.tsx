@@ -891,7 +891,7 @@ describe("<SettingsSidebar /> scope groups", () => {
     const pickers = screen.getAllByTestId("settings-host-switcher");
     expect(pickers).toHaveLength(1);
     const picker = pickers[0];
-    expect(picker.textContent).toBe("host-a Computer");
+    expect(picker.textContent).toBe("host-a");
     const follows = (earlier: HTMLElement, later: HTMLElement): boolean =>
       (earlier.compareDocumentPosition(later) &
         Node.DOCUMENT_POSITION_FOLLOWING) !==
@@ -912,7 +912,7 @@ describe("<SettingsSidebar /> scope groups", () => {
     expect(aside.contains(picker)).toBe(true);
   });
 
-  it("shows the Hosts heading and only environment members in the rail picker", async () => {
+  it("keeps the Hosts group and titles the rail picker View host without an introduction", async () => {
     const { hostScopeOptionFixture } =
       await import("@/components/settings/host-scope/host-scope-fixture");
     const member = hostScopeOptionFixture({
@@ -941,10 +941,11 @@ describe("<SettingsSidebar /> scope groups", () => {
 
     expect(screen.getByRole("heading", { name: "Hosts" })).not.toBeNull();
     fireEvent.click(screen.getByTestId("settings-host-switcher"));
-    expect(screen.getByText("Look at another machine")).not.toBeNull();
+    expect(screen.getByText("View host")).not.toBeNull();
+    expect(screen.queryByText("Look at another machine")).toBeNull();
     expect(
-      screen.getByText("Changes what this window shows. Nothing is created."),
-    ).not.toBeNull();
+      screen.queryByText("Changes what this window shows. Nothing is created."),
+    ).toBeNull();
     expect(
       screen.getByTestId("settings-host-switcher-option-host-member"),
     ).not.toBeNull();

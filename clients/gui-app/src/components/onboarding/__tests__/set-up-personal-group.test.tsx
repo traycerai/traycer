@@ -53,6 +53,10 @@ import {
   itemStatusFixture,
 } from "@/lib/environment/__tests__/environment-test-support";
 import type { HostRpcRegistry } from "@/lib/host";
+import {
+  RETIRED_PROVIDER_VARIABLES,
+  RETIRED_SECRET_ROW_FIELDS,
+} from "@traycer/protocol/host/released-wire-rows";
 
 const HOST_ID = "host-a";
 const ALL_METHODS = [
@@ -94,18 +98,17 @@ function secret(
   overrides: Partial<EnvironmentSecretV12>,
 ): EnvironmentSecretV12 {
   return {
+    ...RETIRED_SECRET_ROW_FIELDS,
+    providerVariables: [...RETIRED_PROVIDER_VARIABLES],
     secretId: "secret-1",
     name: "DEPLOY_KEY",
     kind: "api_key",
     protocol: null,
     destinations: [],
-    mode: "brokered",
-    state: "live",
     currentVersionId: "v1",
     revoked: false,
     updatedAt: 1,
     variables: [],
-    providerVariables: [],
     ...overrides,
   };
 }

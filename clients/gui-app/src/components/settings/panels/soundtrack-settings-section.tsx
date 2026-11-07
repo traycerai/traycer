@@ -17,7 +17,10 @@ import {
 } from "@/components/ui/slider";
 import { Switch } from "@/components/ui/switch";
 import { useSettingsAvailabilityContext } from "@/hooks/settings/use-settings-availability-context";
-import { setSoundtrackOn } from "@/lib/commands/actions/soundtrack";
+import {
+  setPlaybackControlsOn,
+  setSoundtrackOn,
+} from "@/lib/commands/actions/soundtrack";
 import {
   isMixDirectorId,
   type MixDirectorId,
@@ -36,10 +39,14 @@ const DIRECTOR_IDS: readonly MixDirectorId[] = ["static", "rules"];
 /**
  * The soundtrack's switch, its level and what it follows. The level and what it
  * follows stay editable while it is off, so it comes back the way it was set.
+ * Its playback controls show only while it is on, and keep their value.
  */
 export function SoundtrackSettingsSection(): ReactNode {
   const availability = useSettingsAvailabilityContext();
   const on = useSettingsStore((state) => state.soundtrackEnabled);
+  const playbackControls = useSettingsStore(
+    (state) => state.soundtrackPlaybackControls,
+  );
   const volume = useSettingsStore((state) => state.soundtrackVolume);
   const setVolume = useSettingsStore((state) => state.setSoundtrackVolume);
   const director = useSettingsStore((state) => state.soundtrackDirector);
@@ -65,6 +72,20 @@ export function SoundtrackSettingsSection(): ReactNode {
           />
         }
       />
+      {APP_NOTIFICATIONS.definitions.soundtrackPlaybackControls.availableWhen(
+        availability,
+      ) ? (
+        <SettingsRow
+          row={APP_NOTIFICATIONS.definitions.soundtrackPlaybackControls}
+          control={
+            <Switch
+              checked={playbackControls}
+              onCheckedChange={setPlaybackControlsOn}
+              aria-label="Playback controls"
+            />
+          }
+        />
+      ) : null}
       <SettingsRow
         row={APP_NOTIFICATIONS.definitions.soundtrackVolume}
         control={

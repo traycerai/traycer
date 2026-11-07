@@ -73,6 +73,7 @@ describe("<ForkedChatLinkSegment />", () => {
       "epic-1",
       viewTabId,
       expect.any(Function),
+      "user",
     );
     const state = useEpicCanvasStore.getState();
     expect(state.openTabOrder).toEqual([viewTabId]);

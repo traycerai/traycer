@@ -722,6 +722,7 @@ export const HOST_UNARY_RPC_ROUTES = {
   "providers.setAutoJudge": "target-host",
   "providers.setEnabled": "target-host",
   "providers.setEnvOverride": "target-host",
+  "providers.setNativeMemory": "target-host",
   "providers.setNativeSubagents": "target-host",
   "providers.setPackPolicy": "target-host",
   "providers.setProfileApiKey": "target-host",
