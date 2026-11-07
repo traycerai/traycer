@@ -9,6 +9,7 @@ import userEvent from "@testing-library/user-event";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import type { ReactNode } from "react";
 import { SoundtrackSettingsSection } from "@/components/settings/panels/soundtrack-settings-section";
+import { Toaster } from "@/components/ui/sonner";
 import { FakeLockManager } from "@/lib/soundtrack/__tests__/fake-locks";
 import { holdSoundtrackSessionLock } from "@/lib/soundtrack/session-lock";
 import { AQUILO_1 } from "@/lib/soundtrack/__tests__/aquilo-1";
@@ -117,6 +118,14 @@ function disabledOf(name: string, role: "switch" | "combobox"): boolean {
   return screen.getByRole(role, { name }).hasAttribute("disabled");
 }
 
+const SAVED = {
+  kind: "saved",
+  recordingId: "rec-7",
+  name: "session-2026-11-06-1722.webm",
+  durationSeconds: 192,
+  problem: null,
+} as const;
+
 describe("the Record session row", () => {
   it.each([
     ["no bridge at all", undefined],
@@ -168,15 +177,7 @@ describe("the Record session row", () => {
   it("names the saved session after it stops, and Show in folder reveals it", async () => {
     renderSection();
     await openSession();
-    useSoundtrackStore.setState({
-      recording: {
-        kind: "saved",
-        recordingId: "rec-7",
-        name: "session-2026-11-06-1722.webm",
-        durationSeconds: 192,
-        problem: null,
-      },
-    });
+    useSoundtrackStore.setState({ recording: SAVED });
 
     expect(
       await screen.findByText(/Saved session-2026-11-06-1722\.webm, 3:12\./),
@@ -188,6 +189,37 @@ describe("the Record session row", () => {
     );
 
     expect(reveal).toHaveBeenCalledExactlyOnceWith("rec-7");
+  });
+
+  it("spins Show in folder while it waits, and says so when the desktop cannot show the recording", async () => {
+    let answer: (shown: boolean) => void = () => undefined;
+    reveal.mockImplementation(
+      () =>
+        new Promise<boolean>((resolve) => {
+          answer = resolve;
+        }),
+    );
+    render(<Toaster />);
+    renderSection();
+    await openSession();
+    useSoundtrackStore.setState({ recording: SAVED });
+    const show = await screen.findByRole("button", { name: "Show in folder" });
+
+    await userEvent.click(show);
+    expect(show.hasAttribute("disabled")).toBe(true);
+    expect(
+      screen.getByTestId("soundtrack-recording-reveal-spinner"),
+    ).toBeTruthy();
+
+    act(() => {
+      answer(false);
+    });
+
+    expect(await screen.findByText("Couldn't show the recording")).toBeTruthy();
+    expect(
+      screen.queryByTestId("soundtrack-recording-reveal-spinner"),
+    ).toBeNull();
+    expect(show.hasAttribute("disabled")).toBe(false);
   });
 
   it("keeps Stop after and Quality across a rehydrate", async () => {

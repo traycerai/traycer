@@ -2,6 +2,7 @@ import { useMutation } from "@tanstack/react-query";
 import type { ReactNode } from "react";
 import { APP_NOTIFICATIONS } from "@/components/settings/panels/app-notifications-settings.definitions";
 import { SettingsRow } from "@/components/settings/settings-row";
+import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
 import { Button } from "@/components/ui/button";
 import {
   Select,
@@ -75,11 +76,11 @@ function SavedStatus(props: {
   const { recording } = props;
   const reveal = useMutation({
     mutationKey: runnerMutationKeys.revealSoundtrackRecording(),
-    mutationFn: (recordingId: string): Promise<boolean> => {
+    mutationFn: async (recordingId: string): Promise<void> => {
       const channel = desktopRecordingChannel();
-      return channel === null
-        ? Promise.resolve(false)
-        : channel.reveal(recordingId);
+      const shown =
+        channel === null ? false : await channel.reveal(recordingId);
+      if (!shown) throw new Error("The desktop app couldn't find it.");
     },
     onError: (error) => {
       toastFromRunnerError(error, "Couldn't show the recording");
@@ -99,6 +100,13 @@ function SavedStatus(props: {
           reveal.mutate(recording.recordingId);
         }}
       >
+        {reveal.isPending ? (
+          <AgentSpinningDots
+            className="mr-1"
+            testId="soundtrack-recording-reveal-spinner"
+            variant={undefined}
+          />
+        ) : null}
         Show in folder
       </Button>
     </>
