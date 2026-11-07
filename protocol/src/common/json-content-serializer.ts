@@ -821,7 +821,7 @@ export function formatMentionForDisplayQuery(attrs: MentionAttrs): string {
 
   switch (attrs.contextType) {
     case ContextType.Host:
-      return `host:${attrs.label || attrs.id || ""}`;
+      return `host:${attrs.label || attrs.hostId || attrs.id || ""}`;
     case ContextType.File:
     case ContextType.Folder:
       return attrs.relPath || attrs.id || "";

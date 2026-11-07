@@ -72,6 +72,14 @@ describe("Host mention serialization", () => {
     );
   });
 
+  it("preserves a canonical host id when its display label is missing", () => {
+    const content = mentionDoc({
+      contextType: ContextType.Host,
+      hostId: "host-42",
+    });
+    expect(toDisplay(content)).toContain("host:host-42");
+  });
+
   it("marks a host mention whose id is unavailable", () => {
     expect(
       toLlm(mentionDoc({ contextType: ContextType.Host, label: "Laptop" })),
