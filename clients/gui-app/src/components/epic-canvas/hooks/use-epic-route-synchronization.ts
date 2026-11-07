@@ -60,9 +60,9 @@ import {
 } from "@/lib/epic-nested-focus-route";
 import { consumeNestedRoutePrimaryEditorFocus } from "@/lib/nested-route-dom-focus";
 import {
-  explicitNestedFocusIntentRevision,
+  forgetExplicitNestedFocusIntents,
   getNestedRouteApplicationDeferralMs,
-  retireExplicitNestedFocusIntents,
+  lastExplicitNestedFocusIntentSeq,
   subscribeExplicitNestedFocusIntents,
 } from "@/lib/nested-focus-navigation-intent";
 import { shouldYieldPaneActivationRouteFocus } from "@/components/epic-canvas/pane-activation";
@@ -205,7 +205,7 @@ export function useEpicRouteSynchronization(
       activeArtifactId === focusArtifactId);
 
   // A pending artifact-focus request and whether the person has since retired
-  // it. See `markExplicitNestedFocusIntent` for why the signal is a count taken
+  // it. See `markExplicitNestedFocusIntent` for why the signal is a stamp taken
   // at the navigation boundary rather than anything read off the canvas.
   const focusRequestKey =
     focusArtifactId === undefined
@@ -215,10 +215,10 @@ export function useEpicRouteSynchronization(
   // catch moves nothing else: re-selecting the already-focused tile leaves the
   // canvas byte-identical, so a consumer watching canvas state would never
   // re-render to notice it.
-  const intentRevision = useSyncExternalStore(
+  const lastIntentSeq = useSyncExternalStore(
     subscribeExplicitNestedFocusIntents,
     useCallback(
-      () => explicitNestedFocusIntentRevision(epicId, tabId),
+      () => lastExplicitNestedFocusIntentSeq(epicId, tabId),
       [epicId, tabId],
     ),
   );
@@ -229,26 +229,31 @@ export function useEpicRouteSynchronization(
   // React's documented "adjust state when a prop changes" shape, not an effect.
   const [focusRequestBaseline, setFocusRequestBaseline] = useState<{
     readonly key: string;
-    readonly revision: number;
+    readonly lastIntentSeq: number;
   } | null>(null);
   if ((focusRequestBaseline?.key ?? null) !== focusRequestKey) {
     // A later click on the same artifact carries a fresh `focusedAt`, so it is
     // a different key and therefore a new request, owed its own wait.
     setFocusRequestBaseline(
-      focusRequestKey === null
-        ? null
-        : { key: focusRequestKey, revision: intentRevision },
+      focusRequestKey === null ? null : { key: focusRequestKey, lastIntentSeq },
     );
   }
+  // Strictly NEWER, never merely different: this baseline outlives the stamp it
+  // was taken from, because the cleanup below drops that stamp on every root
+  // `StrictMode` replay while React retains the baseline. `>` reads the dropped
+  // stamp as what it is - no intent newer than the baseline - where `!==` read
+  // it as the person acting and retired a request nobody had touched.
   const focusRequestRetired =
     focusRequestBaseline !== null &&
     focusRequestBaseline.key === focusRequestKey &&
-    intentRevision !== focusRequestBaseline.revision;
+    lastIntentSeq > focusRequestBaseline.lastIntentSeq;
 
-  // Dropped when this surface goes, so the per-tab counts stay bounded by the
-  // tabs actually mounted.
+  // Dropped when this surface goes, so the per-tab stamps stay bounded by the
+  // tabs actually mounted. Unconditional, and safe to run while this surface
+  // still holds a baseline taken from the dropped stamp - see
+  // `forgetExplicitNestedFocusIntents`.
   useEffect(() => {
-    return () => retireExplicitNestedFocusIntents(epicId, tabId);
+    return () => forgetExplicitNestedFocusIntents(epicId, tabId);
   }, [epicId, tabId]);
 
   useEffect(() => {

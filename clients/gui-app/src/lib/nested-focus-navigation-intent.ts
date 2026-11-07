@@ -71,12 +71,12 @@ export function getNestedRouteApplicationDeferralMs(
 }
 
 /**
- * How many EXPLICIT nested-focus intents a tab has seen this session.
+ * When a tab last saw an EXPLICIT nested-focus intent, as a position in one
+ * session-wide monotonic sequence.
  *
  * Deliberately a second structure rather than a field on `pendingByTab` above:
  * that map is a 2-second optimistic guard which each read CONSUMES once the
- * router catches up, so it cannot answer a question asked minutes later. This
- * one is monotonic and is never consumed.
+ * router catches up, so it cannot answer a question asked minutes later.
  *
  * It exists for the route's pending artifact focus
  * (`use-epic-route-synchronization`). A cross-task artifact click lands on the
@@ -89,22 +89,102 @@ export function getNestedRouteApplicationDeferralMs(
  * and an ordinary open. What matters as much is what does NOT cross it -
  * a projection arriving, a Y.Doc hydrating, the persisted layout restoring its
  * tiles, and route-sync's own auto-open, which commits through
- * `replaceNestedFocusRoute` instead. So a count taken at that boundary says
+ * `replaceNestedFocusRoute` instead. So a stamp taken at that boundary says
  * "the person acted", where any reading of canvas state says only "something
  * changed", and the two are the same thing only until a task finishes loading.
  *
- * A COUNT, not a flag, because the waiter has to tell an action that happened
- * BEFORE its request from one that happened after: a tab the person had
- * already been working in would otherwise retire every request made into it.
- * The value means nothing on its own - only a change between two samples of it
- * does - so it is sampled when the request is first seen and compared later.
+ * ## Why a shared sequence rather than a per-tab count
+ *
+ * The waiter has to tell an action that happened BEFORE its request from one
+ * that happened after, so it samples this when the request is first seen and
+ * compares later. The obvious encoding - count per tab, retire on "changed" -
+ * has a hole: the per-tab entry is also DROPPED when the sampling surface
+ * unmounts, and a dropped entry reads as a change. Under a root
+ * `StrictMode` that is fatal, because the replayed mount runs the drop while
+ * React RETAINS the sampled baseline: the surface then compares a baseline of
+ * 1 against a re-read 0, calls that the person acting, and retires a request
+ * nobody touched.
+ *
+ * Reference-counting the samplers does not help - StrictMode's replay is
+ * release-then-reacquire, and the drop lands in the window between them.
+ *
+ * So the comparison is made ORDERED instead of merely unequal: stamps come
+ * from one monotonic sequence shared by every tab, and a request is retired
+ * only by a stamp strictly NEWER than its baseline. An absent entry then means
+ * "no intent at least as new as your baseline", which is the conservative
+ * answer, so dropping one is safe rather than load-bearing. Because the
+ * sequence itself is never reset, a genuine intent after a drop still lands
+ * above any older baseline, so supersession does not regress through the hole
+ * the drop opens.
+ *
+ * `>` gives up nothing in exchange. Every later mark draws a stamp from the
+ * shared sequence, so it is newer than any baseline taken before it - after a
+ * drop or an eviction as much as without one. Absence is not a weaker "maybe
+ * they acted"; it is the absence of evidence that they did.
+ *
+ * The sequence is a single integer, so what is unbounded is O(1).
+ *
+ * The per-tab map is NOT bounded by the mounted samplers, and it would be
+ * wrong to claim so: a retained but route-inactive surface can commit a
+ * navigation for a tab whose sampler is not mounted, so entries appear with
+ * nobody to drop them. {@link forgetExplicitNestedFocusIntents} is therefore
+ * promptness, not the bound; the bound is {@link MAX_TRACKED_TABS} below.
  *
  * Per tab, because the question is about the tab the request is landing in: an
  * intent in another task's canvas is not this person turning away from this
  * one.
  */
-const explicitIntentRevisionByTab = new Map<string, number>();
+let explicitIntentSeq = 0;
+const lastExplicitIntentSeqByTab = new Map<string, number>();
 const explicitIntentListeners = new Set<() => void>();
+
+/**
+ * How many tabs' stamps are kept, most recently stamped first.
+ *
+ * Eviction is safe for the same reason dropping one is: an evicted stamp reads
+ * as `0`, which is never newer than a baseline, and the next intent for that
+ * tab takes a fresh stamp from the shared sequence - still above any baseline
+ * sampled before it. So the cap costs a retirement only for a tab that has sat
+ * untouched through this many other tabs' gestures, which is long past the
+ * point where a pending request is still waiting on anything.
+ */
+const MAX_TRACKED_TABS = 128;
+
+let humanIntentSuppressions = 0;
+
+/**
+ * Run a nested-focus commit that NO person asked for: it writes its route and
+ * moves its activation as usual, and does not claim the person turned away
+ * from a pending artifact request.
+ *
+ * It exists because the boundary is shared. A host push - the browser
+ * coordinator surfacing a tab an agent or a page opened - commits through
+ * `navigateNestedFocus` exactly as a click does, and carries
+ * `gesture: "explicit"` while doing it. That gesture is a PLACEMENT choice
+ * (the wire carries no disposition, so a push is treated as a deliberate open
+ * rather than a background one), not evidence of a human, and reading it as
+ * one let an automated tab retire the artifact the person had just asked for.
+ *
+ * Scoped around the commit rather than configured on the navigator, because
+ * the navigator is bound by a React consumer far from the push and threaded
+ * through the coordinator as a plain function. The scope is exact despite
+ * being dynamic: {@link markExplicitNestedFocusIntent} is the first statement
+ * of the boundary and runs synchronously inside the commit, so nothing else
+ * can land between the two. The router navigation it starts is async and marks
+ * nothing.
+ *
+ * Suppression, not omission: the push still needs the boundary's route write,
+ * its DOM restore and its optimistic guard. Only the claim about provenance is
+ * withheld.
+ */
+export function withoutHumanNestedFocusIntent<T>(commit: () => T): T {
+  humanIntentSuppressions += 1;
+  try {
+    return commit();
+  } finally {
+    humanIntentSuppressions -= 1;
+  }
+}
 
 /**
  * Watch for any explicit intent. Returns the unsubscribe.
@@ -140,39 +220,68 @@ export function markExplicitNestedFocusIntent(
   epicId: string,
   tabId: string,
 ): void {
+  // A commit nobody asked for still gets its route and its activation; what it
+  // does not get is a claim that the person acted.
+  if (humanIntentSuppressions > 0) return;
+  explicitIntentSeq += 1;
   const key = pendingKey(epicId, tabId);
-  explicitIntentRevisionByTab.set(
-    key,
-    (explicitIntentRevisionByTab.get(key) ?? 0) + 1,
-  );
-  // Snapshotted, so a listener unsubscribing while being notified cannot
-  // mutate the set mid-iteration.
+  // Re-inserted, not updated in place, so the map's iteration order is recency
+  // and the eviction below drops the tab stamped longest ago.
+  lastExplicitIntentSeqByTab.delete(key);
+  lastExplicitIntentSeqByTab.set(key, explicitIntentSeq);
+  while (lastExplicitIntentSeqByTab.size > MAX_TRACKED_TABS) {
+    const oldest = lastExplicitIntentSeqByTab.keys().next();
+    if (oldest.done === true) break;
+    lastExplicitIntentSeqByTab.delete(oldest.value);
+  }
+  notifyExplicitIntentListeners();
+}
+
+/** Snapshotted, so a listener unsubscribing while being notified cannot
+ * mutate the set mid-iteration. */
+function notifyExplicitIntentListeners(): void {
   for (const listener of [...explicitIntentListeners]) listener();
 }
 
-/** The tab's current intent count, to sample and compare against later. */
-export function explicitNestedFocusIntentRevision(
+/**
+ * Where this tab's most recent explicit intent sits in the sequence, to sample
+ * as a baseline and compare a later sample against with `>`.
+ *
+ * `0` - no intent recorded for this tab, either because none happened or
+ * because {@link forgetExplicitNestedFocusIntents} dropped it - is below every
+ * stamp the sequence can issue, so it never reads as newer than a baseline.
+ */
+export function lastExplicitNestedFocusIntentSeq(
   epicId: string,
   tabId: string,
 ): number {
-  return explicitIntentRevisionByTab.get(pendingKey(epicId, tabId)) ?? 0;
+  return lastExplicitIntentSeqByTab.get(pendingKey(epicId, tabId)) ?? 0;
 }
 
 /**
- * Drop a tab's count. Called when the surface that samples it goes away, so
- * the map stays bounded by the tabs currently mounted rather than growing with
- * every tab ever opened. Dropping it is safe because a baseline is only ever
- * compared against a sample taken after it: a remounted surface takes a fresh
- * one.
+ * Drop a tab's stamp when its sampling surface goes, so a stamp is released
+ * promptly rather than waiting for {@link MAX_TRACKED_TABS} to evict it.
+ *
+ * Safe to call at any moment, including while a surface still holds a baseline
+ * sampled from the stamp being dropped - which a root `StrictMode` replay does
+ * on every mount. A dropped stamp reads as `0`, and `0` is never newer than a
+ * baseline, so the drop cannot retire a request; the next intent takes a fresh
+ * stamp from the shared sequence, which is still above that baseline.
+ *
+ * Notifies when it actually removed one, because that is a `getSnapshot`
+ * change and an external store owes its subscribers the news. The handful of
+ * mounted readers each re-read one number and re-render only if it moved.
  */
-export function retireExplicitNestedFocusIntents(
+export function forgetExplicitNestedFocusIntents(
   epicId: string,
   tabId: string,
 ): void {
-  explicitIntentRevisionByTab.delete(pendingKey(epicId, tabId));
+  if (!lastExplicitIntentSeqByTab.delete(pendingKey(epicId, tabId))) return;
+  notifyExplicitIntentListeners();
 }
 
 export function resetNestedFocusNavigationIntentsForTests(): void {
   pendingByTab.clear();
-  explicitIntentRevisionByTab.clear();
+  lastExplicitIntentSeqByTab.clear();
+  explicitIntentSeq = 0;
 }

@@ -25,6 +25,12 @@ import {
 import type { NestedFocusTarget } from "@/lib/epic-nested-focus-route";
 import { resetNestedFocusNavigationIntentsForTests } from "@/lib/nested-focus-navigation-intent";
 import type { PersistentHistoryController } from "@/lib/persistent-history";
+import {
+  setEpicSurfaceVisibility,
+  surfaceHostOpenedTab,
+} from "@/lib/browser-view/tiles/surface-host-opened-tab";
+import { TILE_KIND_BROWSER_SESSION } from "@/stores/epics/canvas/tile-kinds";
+import { useSettingsStore } from "@/stores/settings/settings-store";
 
 /**
  * T156 (the real-store regression suite for the bot-channel artifact-open
@@ -721,4 +727,153 @@ describe("route focus opens the requested artifact (T156)", () => {
     });
     expect(activeArtifactId(TAB_ID)).toBe(ARTIFACT_ID);
   });
+
+  // Both cases below mount under a ROOT StrictMode (`reactStrictMode` on
+  // `renderHook`; a nested <StrictMode> wrapper does not replay). The sequence
+  // is made nonzero BEFORE mount by a real boundary call, so the replayed
+  // mount's stamp drop has something to reset. Nested history OFF.
+  it("a root StrictMode mount replay does not retire a pending request nobody touched", async () => {
+    const PENDING_ID = "artifact-strict-replay";
+    recordsStore.set([]);
+    act(() => {
+      navigateNestedFocus(
+        makeNestedFocusRouter(fakeNavigate(), true),
+        { epicId: EPIC_ID, tabId: TAB_ID },
+        () => null,
+      );
+    });
+
+    renderHook(
+      (props: EpicRouteFocusIntent) => useEpicRouteSynchronization(props),
+      {
+        initialProps: baseIntent({
+          focusArtifactId: PENDING_ID,
+          focusedAt: 1300,
+        }),
+        reactStrictMode: true,
+      },
+    );
+
+    act(() => {
+      recordsStore.set([
+        record({ id: PENDING_ID, type: "spec", name: "Pending" }),
+      ]);
+    });
+
+    await waitFor(() => {
+      expect(activeArtifactId(TAB_ID)).toBe(PENDING_ID);
+    });
+    expect(openArtifactIds(TAB_ID)).toContain(PENDING_ID);
+  });
+
+  it("after a StrictMode replay dropped the stamp, a genuine later gesture still retires the request", async () => {
+    const PENDING_ID = "artifact-strict-pending";
+    const CHOSEN_ID = "artifact-strict-chosen";
+    recordsStore.set([record({ id: CHOSEN_ID, type: "spec", name: "Chosen" })]);
+    act(() => {
+      navigateNestedFocus(
+        makeNestedFocusRouter(fakeNavigate(), true),
+        { epicId: EPIC_ID, tabId: TAB_ID },
+        () => null,
+      );
+    });
+
+    renderHook(
+      (props: EpicRouteFocusIntent) => useEpicRouteSynchronization(props),
+      {
+        initialProps: baseIntent({
+          focusArtifactId: PENDING_ID,
+          focusedAt: 1400,
+        }),
+        reactStrictMode: true,
+      },
+    );
+
+    act(() => {
+      navigateNestedFocus(
+        makeNestedFocusRouter(fakeNavigate(), true),
+        { epicId: EPIC_ID, tabId: TAB_ID },
+        prepareOpenArtifact(CHOSEN_ID, "inst-strict-chosen"),
+      );
+    });
+    expect(activeArtifactId(TAB_ID)).toBe(CHOSEN_ID);
+
+    act(() => {
+      recordsStore.set([
+        record({ id: CHOSEN_ID, type: "spec", name: "Chosen" }),
+        record({ id: PENDING_ID, type: "spec", name: "Pending" }),
+      ]);
+    });
+
+    await waitFor(() => {
+      expect(activeArtifactId(TAB_ID)).toBe(CHOSEN_ID);
+    });
+    expect(openArtifactIds(TAB_ID)).not.toContain(PENDING_ID);
+  });
+
+  // The push cases drive the REAL `surfaceHostOpenedTab` through the REAL
+  // boundary. Human-gesture retirement in this same rig, in both modes, is
+  // already held by "superseded when the person opens something else first".
+  it.each([
+    ["agent", "nested history OFF", false],
+    ["agent", "nested history ON", true],
+    ["page", "nested history OFF", false],
+    ["page", "nested history ON", true],
+  ] as const)(
+    "a host-opened browser tab (source %s, %s) does not retire a pending artifact request",
+    async (source, _label, nestedHistoryOn) => {
+      persistentHistoryState.controller = nestedHistoryOn
+        ? ({} as PersistentHistoryController)
+        : null;
+      const priorSurfacing = useSettingsStore.getState().agentTabSurfacing;
+      useSettingsStore.setState({ agentTabSurfacing: "surface" });
+      setEpicSurfaceVisibility(EPIC_ID, TAB_ID, true);
+      try {
+        const PENDING_ID = "artifact-push-pending";
+        recordsStore.set([]);
+
+        mountHook(baseIntent({ focusArtifactId: PENDING_ID, focusedAt: 1500 }));
+
+        act(() => {
+          expect(
+            surfaceHostOpenedTab({
+              epicId: EPIC_ID,
+              viewTabId: TAB_ID,
+              hostId: HOST_ID,
+              sessionId: "session-push",
+              tabId: "tab-push",
+              source,
+              navigateNested: (epicId, tabId, prepare) =>
+                navigateNestedFocus(
+                  makeNestedFocusRouter(fakeNavigate(), true),
+                  { epicId, tabId },
+                  prepare,
+                ),
+            }),
+          ).toBe(true);
+        });
+        // The push itself must still work.
+        expect(openTiles(TAB_ID).map((tile) => tile.type)).toContain(
+          TILE_KIND_BROWSER_SESSION,
+        );
+
+        act(() => {
+          recordsStore.set([
+            record({ id: PENDING_ID, type: "spec", name: "Pending" }),
+          ]);
+        });
+
+        await waitFor(() => {
+          expect(activeArtifactId(TAB_ID)).toBe(PENDING_ID);
+        });
+        expect(openArtifactIds(TAB_ID)).toContain(PENDING_ID);
+      } finally {
+        // `beforeEach` resets the canvas store and the history controller but
+        // not the settings store, so this override is restored here rather than
+        // left for whichever test runs next.
+        useSettingsStore.setState({ agentTabSurfacing: priorSurfacing });
+        setEpicSurfaceVisibility(EPIC_ID, TAB_ID, false);
+      }
+    },
+  );
 });

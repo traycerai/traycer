@@ -58,10 +58,15 @@ function navigateNestedFocusWithDomRestore(
 ): NestedFocusTarget | null {
   const { epicId, tabId } = tab;
   // Recorded BEFORE the target is prepared, so every early return below still
-  // counts the gesture: closing the last tile prepares `null`, re-selecting
+  // stamps the gesture: closing the last tile prepares `null`, re-selecting
   // the already-focused tile prepares an equal target, and a window with no
   // history controller prepares one it never commits. The person acted in all
-  // three, which is the only thing this count is about.
+  // three, which is the only thing this stamp is about.
+  //
+  // Not every commit through here IS a person, though - a host push surfacing
+  // an agent's or a page's tab comes through the same door. Such a caller wraps
+  // its commit in `withoutHumanNestedFocusIntent`, and this call then records
+  // nothing.
   markExplicitNestedFocusIntent(epicId, tabId);
   const target = prepare();
   if (target === null) {
