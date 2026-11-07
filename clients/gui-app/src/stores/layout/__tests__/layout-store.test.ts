@@ -21,7 +21,13 @@ const LAYOUT_KEY = persistKey(STORE_KEYS.layout);
 const SETTINGS_KEY = persistKey(STORE_KEYS.settings);
 const LEFT_PANEL_KEY = persistKey(STORE_KEYS.leftPanel);
 /** The version this build writes (`LAYOUT_PERSIST_VERSION` in `layout-store.ts`). */
-const LAYOUT_VERSION = 8;
+const LAYOUT_VERSION = 9;
+
+/**
+ * What an install from before File Tree went off by default carries: the panel
+ * on, as an override, because the shipped value is now hidden.
+ */
+const FILE_TREE_SHOWN = { railFileTree: { shown: "shown" } };
 
 /** The number of Styles lines on the change list - what `changeCount` used to return. */
 function changeCount(snapshot: LayoutSnapshot): number {
@@ -521,6 +527,7 @@ describe("migrating a version-0 launch (no layout record) off the legacy setting
         resourceMonitor: { shown: "hidden" },
         railComments: { shown: "hidden" },
         railPullRequests: { shown: "shown" },
+        ...FILE_TREE_SHOWN,
       });
       expect(state.arrangement.minimapSide, order).toBe("left");
       expect(state.arrangement.taskTabLayout, order).toBe("shrink");
@@ -543,15 +550,16 @@ describe("migrating a version-0 launch (no layout record) off the legacy setting
     }
   });
 
-  it("carries a hidden minimap as hidden, on the default side", async () => {
+  it("carries a hidden minimap as hidden, on the side the earlier build drew it", async () => {
     writeSettingsRecord({ chatTurnMinimapSide: "hide" });
 
     const { state } = await relaunchStore();
 
-    expect(state().overrides).toEqual({ minimap: { shown: "hidden" } });
-    expect(state().arrangement.minimapSide).toBe(
-      DEFAULT_ARRANGEMENT.minimapSide,
-    );
+    expect(state().overrides).toEqual({
+      minimap: { shown: "hidden" },
+      ...FILE_TREE_SHOWN,
+    });
+    expect(state().arrangement.minimapSide).toBe("right");
   });
 
   it("carries a legacy group of three panels as one stack naming all three (L-181)", async () => {
@@ -586,13 +594,15 @@ describe("migrating a version-0 launch (no layout record) off the legacy setting
     ]);
   });
 
-  it("carries nothing from legacy records sitting on the shipped defaults", async () => {
+  it("carries nothing but File Tree from legacy records sitting on the earlier defaults", async () => {
     // Every user hits this migration on the first launch after it lands, not
-    // only users who changed something. A value equal to the shipped Default
-    // must not be recorded: it would win over an apply's cleared delta and
-    // read as "Detailed - Modified" on a layout nobody touched.
+    // only users who changed something. A value equal to the Default the
+    // record was written against must not be recorded: it would win over an
+    // apply's cleared delta and read as "Detailed - Modified" on a layout
+    // nobody touched. File Tree is the exception: the shipped value is now
+    // hidden, so an install that had it on has to say so.
     writeSettingsRecord({
-      chatTurnMinimapSide: DEFAULT_ARRANGEMENT.minimapSide,
+      chatTurnMinimapSide: "right",
       taskTabLayout: DEFAULT_ARRANGEMENT.taskTabLayout,
       homeTabEnabled: false,
       contextIndicatorStyle: "text",
@@ -603,7 +613,7 @@ describe("migrating a version-0 launch (no layout record) off the legacy setting
 
     const relaunched = await relaunchStore();
 
-    expect(relaunched.state().overrides).toEqual({});
+    expect(relaunched.state().overrides).toEqual(FILE_TREE_SHOWN);
   });
 
   it.each([
@@ -655,9 +665,10 @@ describe("migrating a version-0 launch (no layout record) off the legacy setting
 
       const { state: carried } = await relaunchStore();
 
-      expect(carried().overrides).toEqual(
-        monitor === null ? {} : { resourceMonitor: monitor },
-      );
+      expect(carried().overrides).toEqual({
+        ...FILE_TREE_SHOWN,
+        ...(monitor === null ? {} : { resourceMonitor: monitor }),
+      });
     },
   );
 
@@ -670,7 +681,10 @@ describe("migrating a version-0 launch (no layout record) off the legacy setting
 
     const { state } = await relaunchStore();
 
-    expect(state().overrides).toEqual({ contextUsage: { pinBreakdown: true } });
+    expect(state().overrides).toEqual({
+      contextUsage: { pinBreakdown: true },
+      ...FILE_TREE_SHOWN,
+    });
   });
 
   it("carries nothing from a record it cannot read", async () => {
@@ -794,6 +808,8 @@ describe("migrating a version-1 launch (the shipped desktop-v1.4.0-rc.1 record)"
     railComments: { shown: "shown" },
     railBrowsers: { shown: "hidden" },
     railPullRequests: { shown: "shown" },
+    // The record does not hide it, so it keeps the panel it had.
+    ...FILE_TREE_SHOWN,
   };
 
   function expectFullyCarried(state: LayoutSnapshot): void {
@@ -836,12 +852,12 @@ describe("migrating a version-1 launch (the shipped desktop-v1.4.0-rc.1 record)"
     ]);
   }
 
-  it("carries every preservable v1 field into the version-8 snapshot, one-shot", async () => {
+  it("carries every preservable v1 field into the version-9 snapshot, one-shot", async () => {
     seedFullV1Records();
 
     const first = await relaunchStore();
     expectFullyCarried(first.state());
-    expect(storedLayoutVersion()).toBe(8);
+    expect(storedLayoutVersion()).toBe(9);
 
     // Simulate the settings store's own module load rewriting its record
     // through today's `partialize`, which no longer carries these fields
@@ -849,11 +865,11 @@ describe("migrating a version-1 launch (the shipped desktop-v1.4.0-rc.1 record)"
     writeSettingsRecord({});
 
     const second = await relaunchStore();
-    // Version 8 now equals the current version, so zustand's `persist` skips
+    // Version 9 now equals the current version, so zustand's `persist` skips
     // `migrate` entirely and the legacy records are never consulted again -
     // proving the carry is one-shot and its result is what persists.
     expect(second.state()).toEqual(first.state());
-    expect(storedLayoutVersion()).toBe(8);
+    expect(storedLayoutVersion()).toBe(9);
   });
 
   it("takes both Shown switches from the strip's own slice when the readings lived in the strip", async () => {
@@ -1020,7 +1036,7 @@ describe("migrating a version-1 launch (the shipped desktop-v1.4.0-rc.1 record)"
 
     const { state } = await relaunchStore();
 
-    expect(state().overrides).toEqual({});
+    expect(state().overrides).toEqual(FILE_TREE_SHOWN);
   });
 });
 
@@ -1086,51 +1102,97 @@ describe("migrating an unrecognized version resets to the defaults", () => {
       },
     },
   ])(
-    "resets a version-$version record to the defaults without throwing, and rewrites it at version 8",
+    "resets a version-$version record to the defaults without throwing, and rewrites it at version 9",
     async ({ version, state }) => {
       await rehydrateFromVersion(state, version);
 
       expect(getLayoutSnapshot()).toEqual(DEFAULT_LAYOUT_SNAPSHOT);
-      expect(storedLayoutVersion()).toBe(8);
+      expect(storedLayoutVersion()).toBe(9);
     },
   );
 });
 
 /**
- * The side strip's view (agents under the tab) ships as `activity` for a
- * NEW install only. An install that exists is told apart by what it left
- * behind: a layout record at an earlier version, or, with none, a legacy
- * settings or sidebar record from a build before the layout store. Each of
- * those reads what its record does not say against the EARLIER default.
+ * A new install ships tabs at the left edge, the minimap on the left, the task
+ * sidebar on the right with Git Diff stacked on Pull Requests, File Tree off,
+ * and the side strip listing agents. An install that exists is told apart by
+ * what it left behind: a layout record at an earlier version, or, with none, a
+ * legacy settings or sidebar record from a build before the layout store. Each
+ * of those reads what its record does not say against the EARLIER defaults.
  */
-describe("the side strip view, which changed for a new install only", () => {
+describe("the defaults that changed for a new install only", () => {
   beforeEach(reset);
   afterEach(reset);
 
-  /** Every field a v1.5.x record wrote: this build's shape minus `sidebarStartCollapsed`. */
+  const ONE_STACK_RAIL: ReadonlyArray<RailEntry> =
+    DEFAULT_ARRANGEMENT.rail.filter(
+      (entry) => entry.id !== "stack:railGitDiff+railPullRequests",
+    );
+
+  /** The arrangement fields a pre-change install holds, whatever else its record says. */
+  const EARLIER_INSTALL_FIELDS: Partial<LayoutSnapshot["arrangement"]> = {
+    tabStripPlacement: "top",
+    sidebarSide: "left",
+    minimapSide: "right",
+    sideStripView: "layered",
+    sidebarStartCollapsed: false,
+  };
+
+  function expectEarlierInstall(state: LayoutSnapshot): void {
+    expect(state.arrangement).toMatchObject(EARLIER_INSTALL_FIELDS);
+    expect(railStacks(state.arrangement.rail)).toEqual([
+      { kind: "stack", id: "stack:railAgents+railArtifacts" },
+    ]);
+    expect(fileTreeShown(state)).toBe("shown");
+  }
+
+  function fileTreeShown(state: LayoutSnapshot): string {
+    return effectiveLayoutValues(state.basePreset, state.overrides).railFileTree
+      .shown;
+  }
+
+  /** What a v1.5.x record wrote: this build's shape minus `sidebarStartCollapsed`, on the defaults of that build. */
   function v15Arrangement(
     patch: Partial<LayoutSnapshot["arrangement"]>,
   ): Record<string, unknown> {
     const arrangement: Record<string, unknown> = {
       ...DEFAULT_ARRANGEMENT,
-      tabStripPlacement: "top",
-      sideStripView: "layered",
+      ...EARLIER_INSTALL_FIELDS,
+      rail: ONE_STACK_RAIL,
       ...patch,
     };
     delete arrangement.sidebarStartCollapsed;
     return arrangement;
   }
 
-  it("gives a fresh install - no layout record, no legacy record - the shipped defaults", async () => {
+  /** What an unreleased version-8 record wrote: v1.5.x's shape plus `sidebarStartCollapsed`. */
+  function v8Arrangement(
+    patch: Partial<LayoutSnapshot["arrangement"]>,
+  ): Record<string, unknown> {
+    return {
+      ...v15Arrangement(patch),
+      sidebarStartCollapsed: patch.sidebarStartCollapsed ?? false,
+    };
+  }
+
+  it("gives a fresh install - no layout record, no legacy record - the shipped defaults and no overrides", async () => {
     const { state } = await relaunchStore();
 
     expect(state()).toEqual(DEFAULT_LAYOUT_SNAPSHOT);
+    expect(state().overrides).toEqual({});
     expect(state().arrangement).toMatchObject({
-      tabStripPlacement: "top",
+      tabStripPlacement: "left",
+      minimapSide: "left",
+      sidebarSide: "right",
       sidebarStartCollapsed: false,
       sideStripView: "activity",
     });
-    expect(storedLayoutVersion()).toBe(8);
+    expect(railStacks(state().arrangement.rail)).toEqual([
+      { kind: "stack", id: "stack:railAgents+railArtifacts" },
+      { kind: "stack", id: "stack:railGitDiff+railPullRequests" },
+    ]);
+    expect(fileTreeShown(state())).toBe("hidden");
+    expect(storedLayoutVersion()).toBe(9);
   });
 
   it.each([
@@ -1153,22 +1215,73 @@ describe("the side strip view, which changed for a new install only", () => {
       },
     },
   ])(
-    "keeps $name on tabs only in the strip, with the tabs at the top and the sidebar open",
+    "keeps $name on top tabs, the left sidebar, the right minimap, one stack and File Tree shown",
     async ({ seed }) => {
       seed();
 
       const { state } = await relaunchStore();
 
-      expect(state().arrangement).toMatchObject({
-        tabStripPlacement: "top",
-        sidebarStartCollapsed: false,
-        sideStripView: "layered",
-      });
-      expect(storedLayoutVersion()).toBe(8);
+      expectEarlierInstall(state());
+      expect(storedLayoutVersion()).toBe(9);
     },
   );
 
-  it("reads a version-7 record's absent sidebarStartCollapsed as off, and the rest of it as written", async () => {
+  it.each([
+    {
+      name: "a version-0 launch beside a legacy settings record",
+      seed: () => {
+        writeSettingsRecord({ chatTurnMinimapSide: "hide" });
+      },
+    },
+    {
+      name: "a version-1 record",
+      seed: () => {
+        writeLayoutRecordAtVersion({ statusBar: {}, composer: {} }, 1);
+        writeSettingsRecord({ chatTurnMinimapSide: "hide" });
+      },
+    },
+  ])(
+    "keeps the minimap hidden and on the right for $name",
+    async ({ seed }) => {
+      seed();
+
+      const { state } = await relaunchStore();
+
+      expect(state().overrides.minimap).toEqual({ shown: "hidden" });
+      expect(state().arrangement.minimapSide).toBe("right");
+    },
+  );
+
+  it.each([
+    {
+      name: "a version-0 launch beside a legacy sidebar record",
+      seed: () => {
+        writeLeftPanelRecord({
+          panelVisibilityOverrideById: { "file-tree": false },
+        });
+      },
+    },
+    {
+      name: "a version-1 record",
+      seed: () => {
+        writeLayoutRecordAtVersion({ statusBar: {}, composer: {} }, 1);
+        writeLeftPanelRecord({
+          panelVisibilityOverrideById: { "file-tree": false },
+        });
+      },
+    },
+  ])(
+    "keeps File Tree hidden when the legacy record hid it: $name",
+    async ({ seed }) => {
+      seed();
+
+      const { state } = await relaunchStore();
+
+      expect(fileTreeShown(state())).toBe("hidden");
+    },
+  );
+
+  it("reads a version-7 record's absent sidebarStartCollapsed as off, its File Tree as shown, and the rest of it as written", async () => {
     writeLayoutRecordAtVersion(
       {
         basePreset: "compact",
@@ -1181,14 +1294,78 @@ describe("the side strip view, which changed for a new install only", () => {
     const { state } = await relaunchStore();
 
     expect(state().basePreset).toBe("compact");
-    expect(state().overrides).toEqual({ model: { style: "bars" } });
+    expect(state().overrides).toEqual({
+      model: { style: "bars" },
+      ...FILE_TREE_SHOWN,
+    });
     expect(state().arrangement).toMatchObject({
-      tabStripPlacement: "top",
-      sidebarStartCollapsed: false,
-      sideStripView: "layered",
+      ...EARLIER_INSTALL_FIELDS,
       minimapSide: "left",
     });
-    expect(storedLayoutVersion()).toBe(8);
+    expect(storedLayoutVersion()).toBe(9);
+  });
+
+  it("keeps a version-8 record's own arrangement and gives it File Tree shown", async () => {
+    writeLayoutRecordAtVersion(
+      {
+        basePreset: "default",
+        overrides: {},
+        arrangement: v8Arrangement({
+          sidebarStartCollapsed: true,
+          sideStripView: "activity",
+        }),
+      },
+      8,
+    );
+
+    const { state } = await relaunchStore();
+
+    expect(state().arrangement).toMatchObject({
+      ...EARLIER_INSTALL_FIELDS,
+      sidebarStartCollapsed: true,
+      sideStripView: "activity",
+    });
+    expect(railStacks(state().arrangement.rail)).toEqual([
+      { kind: "stack", id: "stack:railAgents+railArtifacts" },
+    ]);
+    expect(state().overrides).toEqual(FILE_TREE_SHOWN);
+    expect(storedLayoutVersion()).toBe(9);
+  });
+
+  it.each([7, 8])(
+    "keeps File Tree hidden when a version-%i record's overrides hid it",
+    async (version) => {
+      writeLayoutRecordAtVersion(
+        {
+          basePreset: "default",
+          overrides: { railFileTree: { shown: "hidden" } },
+          arrangement: version === 7 ? v15Arrangement({}) : v8Arrangement({}),
+        },
+        version,
+      );
+
+      const { state } = await relaunchStore();
+
+      expect(state().overrides).toEqual({ railFileTree: { shown: "hidden" } });
+      expect(fileTreeShown(state())).toBe("hidden");
+    },
+  );
+
+  it("leaves File Tree hidden on a version-9 record that has no override for it: the guard does not run on a current record", async () => {
+    writeLayoutRecordAtVersion(
+      {
+        basePreset: "default",
+        overrides: {},
+        arrangement: DEFAULT_ARRANGEMENT,
+      },
+      9,
+    );
+
+    const { state } = await relaunchStore();
+
+    expect(state().overrides).toEqual({});
+    expect(fileTreeShown(state())).toBe("hidden");
+    expect(state().arrangement).toEqual(DEFAULT_ARRANGEMENT);
   });
 
   it("keeps a version-7 record's own picks: a vertical strip at the right listing its agents, the pair unstacked", async () => {

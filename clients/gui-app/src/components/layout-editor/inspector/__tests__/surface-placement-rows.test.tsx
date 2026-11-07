@@ -156,8 +156,8 @@ describe("<TabStripPositionRow />", () => {
       "Right",
     ]);
     expect(options.map((node) => node.getAttribute("aria-checked"))).toEqual([
-      "true",
       "false",
+      "true",
       "false",
     ]);
     expect(screen.getByText("Placement")).toBeTruthy();
@@ -166,11 +166,9 @@ describe("<TabStripPositionRow />", () => {
   it("writes the store at rest, with no history", () => {
     render(<TabStripPositionRow {...LIVE_ROW} />);
 
-    pick("Tab placement", "Left");
+    pick("Tab placement", "Top");
 
-    expect(useLayoutStore.getState().arrangement.tabStripPlacement).toBe(
-      "left",
-    );
+    expect(useLayoutStore.getState().arrangement.tabStripPlacement).toBe("top");
     expect(historyDepth()).toBe(0);
   });
 
@@ -185,7 +183,9 @@ describe("<TabStripPositionRow />", () => {
     expect(historyDepth()).toBe(1);
 
     useLayoutEditorStore.getState().undo();
-    expect(useLayoutStore.getState().arrangement.tabStripPlacement).toBe("top");
+    expect(useLayoutStore.getState().arrangement.tabStripPlacement).toBe(
+      "left",
+    );
 
     useLayoutEditorStore.getState().redo();
     expect(useLayoutStore.getState().arrangement.tabStripPlacement).toBe(
@@ -193,40 +193,45 @@ describe("<TabStripPositionRow />", () => {
     );
 
     useLayoutEditorStore.getState().discard();
-    expect(useLayoutStore.getState().arrangement.tabStripPlacement).toBe("top");
+    expect(useLayoutStore.getState().arrangement.tabStripPlacement).toBe(
+      "left",
+    );
   });
 
   it("offers a revert only while the placement differs from the shipped one", () => {
     render(<TabStripPositionRow {...LIVE_ROW} />);
     expect(
       screen.queryByRole("button", {
-        name: "Reset tab placement to default: Top",
+        name: "Reset tab placement to default: Left",
       }),
     ).toBeNull();
 
-    pick("Tab placement", "Left");
+    pick("Tab placement", "Top");
     fireEvent.click(
       screen.getByRole("button", {
-        name: "Reset tab placement to default: Top",
+        name: "Reset tab placement to default: Left",
       }),
     );
 
-    expect(useLayoutStore.getState().arrangement.tabStripPlacement).toBe("top");
+    expect(useLayoutStore.getState().arrangement.tabStripPlacement).toBe(
+      "left",
+    );
     expect(
       screen.queryByRole("button", {
-        name: "Reset tab placement to default: Top",
+        name: "Reset tab placement to default: Left",
       }),
     ).toBeNull();
   });
 });
 
 describe("<SideStripViewRow /> (D8)", () => {
-  function withVerticalStrip(): void {
+  /** The shipped strip is vertical; this is the other placement. */
+  function withTopTabs(): void {
     useLayoutStore.setState({
       ...DEFAULT_LAYOUT_SNAPSHOT,
       arrangement: {
         ...DEFAULT_LAYOUT_SNAPSHOT.arrangement,
-        tabStripPlacement: "left",
+        tabStripPlacement: "top",
       },
     });
   }
@@ -290,7 +295,8 @@ describe("<SideStripViewRow /> (D8)", () => {
     expect(rowElement().className).toContain("bg-foreground/6");
   });
 
-  it("is disabled with a reason while the tabs are at the top, which is the shipped default", () => {
+  it("is disabled with a reason while the tabs are at the top", () => {
+    withTopTabs();
     render(<AreaRows surface="topBar" place="leading" />);
 
     const options = screen
@@ -308,8 +314,7 @@ describe("<SideStripViewRow /> (D8)", () => {
     expect(group.getAttribute("aria-describedby")).toBe(reason.id);
   });
 
-  it("is enabled with no status once the tabs move to a vertical strip", () => {
-    withVerticalStrip();
+  it("is enabled with no status while the tabs are on a vertical strip, the shipped default", () => {
     render(<AreaRows surface="topBar" place="leading" />);
 
     const options = screen
@@ -344,7 +349,6 @@ describe("<SideStripViewRow /> (D8)", () => {
   });
 
   it("writes the store at rest, with no history", () => {
-    withVerticalStrip();
     render(<SideStripViewRow {...LIVE_ROW} />);
 
     pickPictured("Side tab view", "Tabs only");
@@ -354,7 +358,6 @@ describe("<SideStripViewRow /> (D8)", () => {
   });
 
   it("is one undo step in a session, and Discard puts it back", () => {
-    withVerticalStrip();
     beginSession();
     render(<SideStripViewRow {...LIVE_ROW} />);
 
@@ -377,7 +380,6 @@ describe("<SideStripViewRow /> (D8)", () => {
   });
 
   it("offers a revert only while the view differs from the shipped one", () => {
-    withVerticalStrip();
     render(<SideStripViewRow {...LIVE_ROW} />);
     expect(
       screen.queryByRole("button", {
@@ -465,8 +467,8 @@ describe("<SidebarSideRow />", () => {
     );
     expect(options.map((node) => node.textContent)).toEqual(["Left", "Right"]);
     expect(options.map((node) => node.getAttribute("aria-checked"))).toEqual([
-      "true",
       "false",
+      "true",
     ]);
     expect(screen.getByText("Side")).toBeTruthy();
   });
@@ -474,9 +476,9 @@ describe("<SidebarSideRow />", () => {
   it("writes the store at rest", () => {
     render(<SidebarSideRow {...LIVE_ROW} />);
 
-    pick("Sidebar side", "Right");
+    pick("Sidebar side", "Left");
 
-    expect(useLayoutStore.getState().arrangement.sidebarSide).toBe("right");
+    expect(useLayoutStore.getState().arrangement.sidebarSide).toBe("left");
     expect(historyDepth()).toBe(0);
   });
 
@@ -484,17 +486,17 @@ describe("<SidebarSideRow />", () => {
     beginSession();
     render(<SidebarSideRow {...LIVE_ROW} />);
 
-    pick("Sidebar side", "Right");
+    pick("Sidebar side", "Left");
     expect(historyDepth()).toBe(1);
 
     useLayoutEditorStore.getState().undo();
-    expect(useLayoutStore.getState().arrangement.sidebarSide).toBe("left");
-
-    useLayoutEditorStore.getState().redo();
     expect(useLayoutStore.getState().arrangement.sidebarSide).toBe("right");
 
-    useLayoutEditorStore.getState().discard();
+    useLayoutEditorStore.getState().redo();
     expect(useLayoutStore.getState().arrangement.sidebarSide).toBe("left");
+
+    useLayoutEditorStore.getState().discard();
+    expect(useLayoutStore.getState().arrangement.sidebarSide).toBe("right");
   });
 
   it("offers a revert only while the side differs from the shipped one", () => {
@@ -505,12 +507,12 @@ describe("<SidebarSideRow />", () => {
       }),
     ).toBeNull();
 
-    pick("Sidebar side", "Right");
+    pick("Sidebar side", "Left");
     fireEvent.click(
       screen.getByRole("button", { name: "Reset sidebar side to default" }),
     );
 
-    expect(useLayoutStore.getState().arrangement.sidebarSide).toBe("left");
+    expect(useLayoutStore.getState().arrangement.sidebarSide).toBe("right");
     expect(
       screen.queryByRole("button", {
         name: "Reset sidebar side to default",
@@ -520,7 +522,7 @@ describe("<SidebarSideRow />", () => {
 
   it("keeps focus in the row when its ↺ unmounts, moving it to a sibling control", () => {
     render(<SidebarSideRow {...LIVE_ROW} />);
-    pick("Sidebar side", "Right");
+    pick("Sidebar side", "Left");
 
     const revertButton = screen.getByRole("button", {
       name: "Reset sidebar side to default",
@@ -531,7 +533,7 @@ describe("<SidebarSideRow />", () => {
     revertButton.focus();
     fireEvent.click(revertButton);
 
-    expect(useLayoutStore.getState().arrangement.sidebarSide).toBe("left");
+    expect(useLayoutStore.getState().arrangement.sidebarSide).toBe("right");
     expect(
       screen.queryByRole("button", {
         name: "Reset sidebar side to default",
@@ -700,12 +702,13 @@ describe("the Wide column width row", () => {
 });
 
 describe("<TabOverflowRow />", () => {
-  function withVerticalStrip(): void {
+  /** The shipped strip is vertical, where overflow has nothing to fit. */
+  function withTopTabs(): void {
     useLayoutStore.setState({
       ...DEFAULT_LAYOUT_SNAPSHOT,
       arrangement: {
         ...DEFAULT_LAYOUT_SNAPSHOT.arrangement,
-        tabStripPlacement: "left",
+        tabStripPlacement: "top",
       },
     });
   }
@@ -729,7 +732,8 @@ describe("<TabOverflowRow />", () => {
     expect(screen.getByText("Tab overflow")).toBeTruthy();
   });
 
-  it("is enabled with no status while the tabs sit at the top, the shipped default", () => {
+  it("is enabled with no status while the tabs sit at the top", () => {
+    withTopTabs();
     render(<AreaRows surface="topBar" place="leading" />);
 
     const options = screen
@@ -745,8 +749,7 @@ describe("<TabOverflowRow />", () => {
     expect(controlGroupOf("Tab overflow").disabled).toBe(false);
   });
 
-  it("is disabled with a reason once the tabs move to a side, which never scrolls or shrinks its own", () => {
-    withVerticalStrip();
+  it("is disabled with a reason while the tabs sit at a side, the shipped default, which never scrolls or shrinks its own", () => {
     render(<AreaRows surface="topBar" place="leading" />);
 
     const options = screen
@@ -1043,6 +1046,14 @@ describe("in the installed mobile app", () => {
     beforeEach(() => {
       originalInnerWidth = window.innerWidth;
       window.innerWidth = 500;
+      // Tabs at the top, so Tab overflow is one of the live rows checked.
+      useLayoutStore.setState({
+        ...DEFAULT_LAYOUT_SNAPSHOT,
+        arrangement: {
+          ...DEFAULT_LAYOUT_SNAPSHOT.arrangement,
+          tabStripPlacement: "top",
+        },
+      });
     });
 
     afterEach(() => {

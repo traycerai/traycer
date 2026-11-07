@@ -81,7 +81,12 @@ const TAB_ID = "tab-switcher-test";
 const EPIC_ID = "epic-1";
 const HOST_ID = "host-A";
 function resetSwitcherInputs(): void {
-  useLayoutStore.setState({ ...DEFAULT_LAYOUT_SNAPSHOT });
+  // File Tree is off in the shipped layout; the switcher cases list every
+  // category, so it starts on.
+  useLayoutStore.setState({
+    ...DEFAULT_LAYOUT_SNAPSHOT,
+    overrides: { railFileTree: { shown: "shown" } },
+  });
   useLeftPanelStore.setState({
     activePanelIdByTabId: {},
     commentsPanelRevealedByTabId: {},

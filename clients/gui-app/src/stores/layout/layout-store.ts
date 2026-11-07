@@ -11,6 +11,7 @@ import {
 } from "@/lib/layout/arrangement-persist";
 import {
   DEFAULT_RAIL,
+  GIT_DIFF_PULL_REQUESTS_STACK_ID,
   normalizeRail,
   RAIL_REGION_BY_PANEL,
   railPanelEntriesFromIds,
@@ -103,12 +104,15 @@ const LAYOUT_PERSIST_KEY = persistKey(STORE_KEYS.layout);
  * - 1: desktop-v1.4.0's record, `{ statusBar, composer }`.
  * - 7: desktop-v1.5.0 to v1.5.3: this store's shape without
  *   `sidebarStartCollapsed`.
- * - 8: this shape. It arrived with two shipped defaults changed for a NEW
- *   install (tabs at the left edge, the sidebar collapsed in a new task),
- *   both taken back before a release wrote a record; what stands is the
- *   side strip's view, `activity` for a new install. Every record from 7 on
- *   names that field, so only a 0 or 1 record reads it against the EARLIER
- *   default, and an install that exists keeps the view it had.
+ * - 8: this store's shape, written only by builds before a release, with
+ *   File Tree on by default.
+ * - 9: this shape, whose shipped defaults differ for a NEW install: the tabs
+ *   at the left edge, the minimap on the left, the task sidebar on the right
+ *   with Git Diff stacked on Pull Requests and File Tree off, and the side
+ *   strip listing agents. Every earlier version reads what its record does
+ *   not say against the EARLIER defaults, so an install that exists keeps
+ *   the layout it had. File Tree is a value, read through the record's
+ *   delta, so no earlier record can leave it out: each is given it as shown.
  *
  * 2 to 6 were written only by pre-release builds of this store and are
  * deliberately NOT reused: zustand skips `migrate` when the stored version
@@ -118,20 +122,37 @@ const LAYOUT_PERSIST_KEY = persistKey(STORE_KEYS.layout);
 const MISSING_LAYOUT_VERSION = 0;
 const SHIPPED_LAYOUT_VERSION = 1;
 const EARLIER_DEFAULTS_LAYOUT_VERSION = 7;
-const LAYOUT_PERSIST_VERSION = 8;
+const FILE_TREE_ON_LAYOUT_VERSION = 8;
+const LAYOUT_PERSIST_VERSION = 9;
 
 /**
- * The field whose shipped default changed after a release wrote records, as
- * every build before the change shipped it: what an install from one of
+ * The fields whose shipped default changed after a release wrote records, as
+ * every build before the change shipped them: what an install from one of
  * those builds was looking at wherever its record says nothing. A record at
- * 0 or 1 says nothing about the side strip's view.
+ * 0 or 1 says nothing about any of them, or holds a minimap side that is not
+ * a side.
  *
- * `DEFAULT_ARRANGEMENT` speaks for a new install only, and every reader of
- * an earlier record falls back here instead.
+ * `DEFAULT_ARRANGEMENT` and `DEFAULT_RAIL` speak for a new install only, and
+ * every reader of an earlier record falls back here instead.
  */
-const EARLIER_INSTALL_ARRANGEMENT: Pick<LayoutArrangement, "sideStripView"> = {
+const EARLIER_INSTALL_ARRANGEMENT: Pick<
+  LayoutArrangement,
+  "tabStripPlacement" | "sidebarSide" | "minimapSide" | "sideStripView" | "rail"
+> = {
+  tabStripPlacement: "top",
+  sidebarSide: "left",
+  minimapSide: "right",
   sideStripView: "layered",
+  rail: DEFAULT_RAIL.filter(
+    (entry) => entry.id !== GIT_DIFF_PULL_REQUESTS_STACK_ID,
+  ),
 };
+
+/**
+ * What an earlier install's delta starts from: File Tree on, as it drew it.
+ * The record's own value for the panel, if it hid it, is laid over this.
+ */
+const EARLIER_INSTALL_OVERRIDES = { railFileTree: { shown: "shown" } };
 
 seedMissingLayoutRecord();
 
@@ -362,7 +383,10 @@ function migrateLayoutPersistedState(
   ) {
     return fromShippedRecords(stored);
   }
-  if (version === EARLIER_DEFAULTS_LAYOUT_VERSION) {
+  if (
+    version === EARLIER_DEFAULTS_LAYOUT_VERSION ||
+    version === FILE_TREE_ON_LAYOUT_VERSION
+  ) {
     return fromEarlierDefaultsRecord(stored);
   }
   return DEFAULT_LAYOUT_SNAPSHOT;
@@ -372,9 +396,8 @@ function migrateLayoutPersistedState(
  * A desktop-v1.5.x record, field for field, read by the same resolvers a
  * rehydrate runs. The one field it could not have written,
  * `sidebarStartCollapsed`, reads as that build drew it, which is the shipped
- * default: the sidebar open in a new task. Its `sideStripView` is its own -
- * every v1.5.x build wrote it - and the earlier baseline underneath never
- * reaches a v1.5.x record.
+ * default: the sidebar open in a new task. Its delta names only what it
+ * changed, so File Tree comes from the earlier baseline.
  */
 function fromEarlierDefaultsRecord(
   stored: Record<string, unknown>,
@@ -384,7 +407,10 @@ function fromEarlierDefaultsRecord(
     : DEFAULT_LAYOUT_SNAPSHOT.basePreset;
   return {
     basePreset,
-    overrides: resolvePersistedRecordOverrides(stored.overrides, basePreset),
+    overrides: resolvePersistedRecordOverrides(
+      { ...EARLIER_INSTALL_OVERRIDES, ...recordOrEmpty(stored.overrides) },
+      basePreset,
+    ),
     arrangement: resolvePersistedArrangement({
       ...EARLIER_INSTALL_ARRANGEMENT,
       ...recordOrEmpty(stored.arrangement),
@@ -404,9 +430,9 @@ function fromEarlierDefaultsRecord(
  * field whether or not anyone touched it, and the delta is the user's own
  * picks (L-133).
  *
- * The side strip's view, which v1.4.0 had no setting for, reads as v1.4.0
- * drew it (`EARLIER_INSTALL_ARRANGEMENT`): this is an install that exists,
- * and the layout it had is the one it keeps.
+ * What v1.4.0 had no setting for reads as v1.4.0 drew it
+ * (`EARLIER_INSTALL_ARRANGEMENT`, `EARLIER_INSTALL_OVERRIDES`): this is an
+ * install that exists, and the layout it had is the one it keeps.
  *
  * Two things do not survive, deliberately:
  * - A provider on Automatic AND explicit limits keeps only the explicit keys.
@@ -444,6 +470,7 @@ function fromShippedRecords(layout: Record<string, unknown>): LayoutSnapshot {
       style: composer.reasoningIndicator,
       reasoningControl: composer.reasoningFooterControl,
     },
+    ...EARLIER_INSTALL_OVERRIDES,
     ...carriedRailVisibility(leftPanel.panelVisibilityOverrideById),
   };
   return {
@@ -461,11 +488,16 @@ function fromShippedRecords(layout: Record<string, unknown>): LayoutSnapshot {
       // selection with no keys is Automatic.
       providerLimits: rateLimits.providers,
       shownProfiles: rateLimits.shownProfiles,
-      // `"hide"` is not a side, so the resolver falls back to the default one
-      // and the minimap's Shown above is what carries the hidden state.
-      minimapSide: settings.chatTurnMinimapSide,
+      // `"hide"` is not a side, so it falls back to the side v1.4.0 drew and
+      // the minimap's Shown above is what carries the hidden state.
+      minimapSide:
+        settings.chatTurnMinimapSide === "left"
+          ? "left"
+          : EARLIER_INSTALL_ARRANGEMENT.minimapSide,
       rail: carriedRail(leftPanel.panelGroups),
       taskTabLayout: settings.taskTabLayout,
+      tabStripPlacement: EARLIER_INSTALL_ARRANGEMENT.tabStripPlacement,
+      sidebarSide: EARLIER_INSTALL_ARRANGEMENT.sidebarSide,
       sideStripView: EARLIER_INSTALL_ARRANGEMENT.sideStripView,
     }),
   };
@@ -637,9 +669,12 @@ function carriedRailVisibility(value: unknown): Record<string, unknown> {
  *
  * A group becomes one stack of every member this build still has (L-181):
  * the shipped groups had no cap, and neither has a stack.
+ *
+ * A record with no readable grouping falls back to the rail v1.4.0 drew, not
+ * to today's shipped rail: this is an install that exists.
  */
 function carriedRail(value: unknown): ReadonlyArray<RailEntry> {
-  if (!Array.isArray(value)) return DEFAULT_RAIL;
+  if (!Array.isArray(value)) return EARLIER_INSTALL_ARRANGEMENT.rail;
   const groups = value.flatMap(
     (group): ReadonlyArray<ReadonlyArray<string>> => {
       if (!isRecord(group) || !Array.isArray(group.panelIds)) return [];
@@ -651,7 +686,7 @@ function carriedRail(value: unknown): ReadonlyArray<RailEntry> {
     },
   );
   const panelIds = groups.flat();
-  if (panelIds.length === 0) return DEFAULT_RAIL;
+  if (panelIds.length === 0) return EARLIER_INSTALL_ARRANGEMENT.rail;
   const rail = railPanelEntriesFromIds(panelIds);
   const links = groups.flatMap((group): RailEntry[] => {
     const members = group.flatMap((panelId) => {
