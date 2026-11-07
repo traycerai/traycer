@@ -235,6 +235,7 @@ function AgentMemoriesRow(): ReactNode {
     let deadline: number | null = null;
     let latestRead = read;
     let queryRead = query.data;
+    let publishedConfirmation = false;
     function cacheRead(): void {
       const capturedEntry = {
         predicate: (cached: { queryHash: string }) =>
@@ -256,11 +257,26 @@ function AgentMemoriesRow(): ReactNode {
         latestRead,
       );
       queryRead = entries.at(0)?.[1] ?? queryRead;
+      publishedConfirmation = true;
     }
     function stop(): void {
       controller.abort();
       if (timer !== null) window.clearTimeout(timer);
       if (deadline !== null) window.clearTimeout(deadline);
+      if (!publishedConfirmation) {
+        const capturedEntry = {
+          predicate: (cached: { queryHash: string }) =>
+            cached.queryHash === entryHash,
+        };
+        // A focus read can freshen the old projection after settlement. Leave
+        // unconfirmed observations stale on departure or expiry, fencing any
+        // in-flight read before invalidation so it cannot restore freshness.
+        void queryClient.cancelQueries(capturedEntry);
+        void queryClient.invalidateQueries({
+          ...capturedEntry,
+          refetchType: "none",
+        });
+      }
     }
     const current = { stop };
     observer.current = current;

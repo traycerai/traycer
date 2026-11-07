@@ -37,6 +37,7 @@ import {
   resetTeamPageHarness,
   type TeamPageHarness,
 } from "@/components/settings/environment/__tests__/team-configuration-test-support";
+import { useRereadHostReadsOnFocus } from "@/hooks/environment/use-reread-host-reads-on-focus";
 import { AgentMemoriesSettingsPanel } from "@/components/settings/panels/agent-memories-settings-panel";
 import { AGENT_MEMORY_CONFIRM_BOUND_MS } from "@/components/settings/panels/agent-memories-settings-panel";
 import {
@@ -243,6 +244,69 @@ describe("Agent memories ▸ the host row's write", () => {
       );
     },
   );
+
+  it("refetches on reopening after focus rereads an unconfirmed write", async () => {
+    function FocusReader(): null {
+      useRereadHostReadsOnFocus(requireTeamHostClient().getActiveHostId());
+      return null;
+    }
+    const harness = mountTeamPage({ kind: "host" }, handlers());
+    harness.queryClient.setDefaultOptions({
+      queries: { retry: false, staleTime: 60_000, gcTime: 300_000 },
+      mutations: { retry: false },
+    });
+    const content = (
+      <>
+        <FocusReader />
+        <AgentMemoriesSettingsPanel />
+      </>
+    );
+    const view = render(content, { wrapper: harness.Wrapper });
+    await screen.findByRole("switch", {
+      name: "Use Traycer memories for agents",
+    });
+    await flipOn();
+    await waitFor(async () =>
+      expect(await line()).toContain("This host hasn't picked it up yet"),
+    );
+    await waitFor(() =>
+      expect(
+        harness.paramsOf("config.agentMemories.get").length,
+      ).toBeGreaterThan(1),
+    );
+    await waitFor(() => expect(harness.queryClient.isFetching()).toBe(0));
+    const beforeFocus = harness.paramsOf("config.agentMemories.get").length;
+    act(() => {
+      window.dispatchEvent(new Event("focus"));
+    });
+    await waitFor(() =>
+      expect(
+        harness.paramsOf("config.agentMemories.get").length,
+      ).toBeGreaterThan(beforeFocus),
+    );
+    await waitFor(() =>
+      expect(
+        screen
+          .getByRole("switch", { name: "Use Traycer memories for agents" })
+          .getAttribute("aria-checked"),
+      ).toBe("false"),
+    );
+    await waitFor(() => expect(harness.queryClient.isFetching()).toBe(0));
+    view.rerender(null);
+    script.reads = [read(true, 6)];
+    const reads = harness.paramsOf("config.agentMemories.get").length;
+    view.rerender(content);
+    await waitFor(() =>
+      expect(
+        screen
+          .getByRole("switch", { name: "Use Traycer memories for agents" })
+          .getAttribute("aria-checked"),
+      ).toBe("true"),
+    );
+    expect(harness.paramsOf("config.agentMemories.get").length).toBeGreaterThan(
+      reads,
+    );
+  });
 
   it("refetches an unconfirmed write when reopening inside cache freshness", async () => {
     const harness = mountTeamPage({ kind: "host" }, handlers());
