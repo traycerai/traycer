@@ -52,12 +52,20 @@ export function useProvidersReadModelRoutesQuery(input: {
     captureRequestContext: () => Date.now(),
     // Starting the validity budget before dispatch is conservative even when
     // the reply is delayed, without requiring synchronized host/client clocks.
-    mapResponse: ({ response, requestContext }) => ({
-      routes: response.routes.map((route) => ({
-        profileId: route.profileId,
-        resolvedModel: route.resolvedModel,
-        expiresAt: (requestContext ?? 0) + route.validForMs,
-      })),
-    }),
+    mapResponse: ({ response, requestContext }) => {
+      const now = Date.now();
+      return {
+        routes: response.routes.map((route) => {
+          const expiresAt = (requestContext ?? 0) + route.validForMs;
+          return {
+            profileId: route.profileId,
+            // A reply with no live budget is unresolved. It must not arm an
+            // expiry refresh that immediately asks for another expired reply.
+            resolvedModel: expiresAt > now ? route.resolvedModel : null,
+            expiresAt,
+          };
+        }),
+      };
+    },
   });
 }

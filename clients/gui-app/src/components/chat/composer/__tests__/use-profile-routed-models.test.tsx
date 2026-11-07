@@ -357,6 +357,65 @@ describe("default model route evidence", () => {
     });
     expect(hook.result.current.kind).toBe("visible");
   });
+  it("does not retry a successful zero-validity answer", async () => {
+    vi.useFakeTimers();
+    mocks.read.mockResolvedValue({ routes: [answer(null, "opus", 0)] });
+    const hook = setup("/repo", DEFAULT);
+    await act(async () => {
+      await vi.waitFor(() =>
+        expect(
+          hook.client
+            .getQueryCache()
+            .getAll()
+            .some((query) => query.state.status === "success"),
+        ).toBe(true),
+      );
+    });
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(60_000);
+    });
+    expect(hook.result.current.kind).toBe("visible");
+    expect(mocks.read).toHaveBeenCalledTimes(1);
+  });
+  it("does not loop on repeated answers whose validity elapsed in flight", async () => {
+    vi.useFakeTimers();
+    mocks.read.mockImplementation(pending);
+    const hook = setup("/one", DEFAULT);
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(1500);
+    });
+    act(() => resolveRead({ routes: [answer(null, "opus", 1000)] }));
+    await act(async () => {
+      await vi.waitFor(() =>
+        expect(
+          hook.client
+            .getQueryCache()
+            .getAll()
+            .some((query) => query.state.status === "success"),
+        ).toBe(true),
+      );
+    });
+    hook.rerender({ folder: "/two", selected: DEFAULT });
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(1500);
+    });
+    act(() => resolveRead({ routes: [answer(null, "opus", 1000)] }));
+    await act(async () => {
+      await vi.waitFor(() =>
+        expect(
+          hook.client
+            .getQueryCache()
+            .getAll()
+            .filter((query) => query.state.status === "success"),
+        ).toHaveLength(2),
+      );
+    });
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(60_000);
+    });
+    expect(hook.result.current.kind).toBe("visible");
+    expect(mocks.read).toHaveBeenCalledTimes(2);
+  });
   it("leaves explicit Opus ungated and shared limits visible", () => {
     const opus = setup("/repo", OPUS);
     expect(opus.result.current.kind).toBe("hidden");

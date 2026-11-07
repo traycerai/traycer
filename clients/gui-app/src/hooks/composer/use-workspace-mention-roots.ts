@@ -1,4 +1,5 @@
 import { useMemo } from "react";
+import { resolvePrimaryPath } from "@/lib/worktree/resolve-primary-path";
 import type {
   WorktreeBinding,
   WorktreeBindingEntry,
@@ -53,22 +54,22 @@ export function useWorkspaceMentionRoots(
  */
 function useLandingFoldersAndIntent(draftId: string | null): {
   readonly folders: ReadonlyArray<string>;
+  readonly primaryPath: string | null;
   readonly stagedIntent: WorktreeIntent | null;
   readonly activeHostId: string | null;
 } {
-  const draftFolders = useLandingDraftStore((state) => {
+  const draftWorkspace = useLandingDraftStore((state) => {
     if (draftId === null) return null;
     return (
-      state.drafts.find((draft) => draft.id === draftId)?.workspace.folders ??
-      null
+      state.drafts.find((draft) => draft.id === draftId)?.workspace ?? null
     );
   });
   // The landing composer's placement is its surface pin (pin ?? effective),
   // so the global folder fallback reads the bucket of the host it will
   // actually create on.
   const activeHostId = useComposerSurfaceHostPin().resolvedHostId;
-  const globalFolders = useWorkspaceFoldersStore(
-    (state) => selectWorkspaceFoldersBucket(state, activeHostId).folders,
+  const globalWorkspace = useWorkspaceFoldersStore((state) =>
+    selectWorkspaceFoldersBucket(state, activeHostId),
   );
   const stagingKeyId = worktreeStagingKeyString({
     surface: "landing",
@@ -79,7 +80,11 @@ function useLandingFoldersAndIntent(draftId: string | null): {
     (state) => state.intentByKey[stagingKeyId] ?? null,
   );
   return {
-    folders: draftFolders ?? globalFolders,
+    folders: draftWorkspace?.folders ?? globalWorkspace.folders,
+    primaryPath:
+      draftWorkspace === null
+        ? globalWorkspace.primaryPath
+        : draftWorkspace.primaryPath,
     stagedIntent,
     activeHostId,
   };
@@ -207,14 +212,15 @@ export function runDirectoryFromWorktreeBindingAndIntent(
 
 /**
  * {@link runDirectoryFromWorktreeBindingAndIntent} for a landing draft, whose
- * new chat's binding takes the draft's first folder as its primary.
+ * new chat's binding uses the workspace's selected primary folder.
  */
 export function useLandingRunWorkingDirectory(
   draftId: string | null,
 ): string | null {
-  const { folders, stagedIntent } = useLandingFoldersAndIntent(draftId);
-  if (folders.length === 0) return null;
-  const primary = folders[0];
+  const { folders, primaryPath, stagedIntent } =
+    useLandingFoldersAndIntent(draftId);
+  const primary = resolvePrimaryPath(folders, primaryPath);
+  if (primary === null) return null;
   const staged = stagedIntent?.entries.find(
     (entry) => entry.workspacePath === primary,
   );

@@ -1,4 +1,4 @@
-import { cleanup, renderHook } from "@testing-library/react";
+import { act, cleanup, renderHook } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type {
   WorktreeBinding,
@@ -11,6 +11,7 @@ import {
   mentionRootsFromWorktreeBinding,
   mentionRootsFromWorktreeBindingAndIntent,
   useLandingComposerMentionRoots,
+  useLandingRunWorkingDirectory,
   useWorkspaceMentionRoots,
 } from "../use-workspace-mention-roots";
 import { useWorkspaceFoldersStore } from "@/stores/workspace/workspace-folders-store";
@@ -512,4 +513,48 @@ describe("runDirectoryFromWorktreeBindingAndIntent", () => {
       ),
     ).toBeNull();
   });
+});
+
+describe("useLandingRunWorkingDirectory", () => {
+  beforeEach(resetStores);
+  afterEach(() => {
+    cleanup();
+    resetStores();
+  });
+
+  it.each(["global", "draft"] as const)(
+    "uses the %s primary folder and its staged intent",
+    (scope) => {
+      setGlobalFolders(["/first", "/primary"]);
+      useWorkspaceFoldersStore.setState({
+        byHost: {
+          [HOST_A]: {
+            folders: ["/first", "/primary"],
+            folderInfoByPath: {},
+            primaryPath: "/primary",
+          },
+        },
+      });
+      const draftId =
+        scope === "draft"
+          ? useLandingDraftStore.getState().createDraft(null)
+          : null;
+      if (draftId !== null) setGlobalFolders(["/other"]);
+      const key = { surface: "landing" as const, hostId: HOST_A, draftId };
+      const hook = renderHook(() => useLandingRunWorkingDirectory(draftId));
+      expect(hook.result.current).toBe("/primary");
+      act(() =>
+        useWorktreeIntentStagingStore
+          .getState()
+          .stageIntent(key, worktreeIntent("/primary", "import", "/checkout")),
+      );
+      expect(hook.result.current).toBe("/checkout");
+      act(() =>
+        useWorktreeIntentStagingStore
+          .getState()
+          .stageIntent(key, worktreeIntent("/primary", "create", null)),
+      );
+      expect(hook.result.current).toBeNull();
+    },
+  );
 });
