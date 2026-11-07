@@ -106,6 +106,7 @@ function openWith(config: SessionConfig) {
     director,
     resumePositions: config.resumePositions,
     onSounding,
+    onResumeRefused: () => undefined,
   });
   return { session, output, onSounding };
 }

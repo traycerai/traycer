@@ -305,7 +305,7 @@ function createLiveProbe(): LiveProbe {
       ports?.pause();
     },
     resume(): void {
-      ports?.resume();
+      ports?.resume(() => undefined);
     },
   };
 }

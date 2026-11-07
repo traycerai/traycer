@@ -115,6 +115,12 @@ export function createSoundtrackStore(
               : { soundingView: sounding.view, lastPlan: sounding.plan },
           );
         },
+        // The wish to hear it stands, whether or not the buttons are there. With
+        // the session gone the warm-up arms again, so the next gesture opens a
+        // new device, from where this one got to.
+        onResumeRefused: () => {
+          get().disable();
+        },
       });
       if (get().paused) session.pause();
       set({ enabled: true });

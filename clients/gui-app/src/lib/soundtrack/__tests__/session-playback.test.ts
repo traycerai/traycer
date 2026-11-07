@@ -133,6 +133,7 @@ function open(config: OpenConfig) {
     director: directorHolding([]),
     resumePositions: {},
     onSounding,
+    onResumeRefused: () => undefined,
   });
   return { session, output, stems, duck, close, draw, onSounding };
 }

@@ -29,8 +29,11 @@ export interface SoundtrackPorts {
    * on it with it, until `resume`.
    */
   pause(): void;
-  /** Starts the clock again and fades the mix back up. */
-  resume(): void;
+  /**
+   * Starts the clock again and fades the mix back up. `onRefused` runs later if
+   * the device will not start, the clock still stopped.
+   */
+  resume(onRefused: () => void): void;
 }
 
 /** Where a view's track had got to, so that it comes back there. */
@@ -56,6 +59,8 @@ interface SoundtrackSessionOptions {
   readonly director: MixDirector;
   readonly resumePositions: ResumePositions;
   readonly onSounding: (sounding: SoundingMix | null) => void;
+  /** The device would not start for the latest Play, so the music cannot go on. */
+  readonly onResumeRefused: () => void;
 }
 
 /** The tracks a view has been on, as a browser keeps its pages. */
@@ -177,6 +182,7 @@ export class SoundtrackSession {
   private readonly random: RandomSource;
   private readonly resumePositions: ResumePositions;
   private readonly onSounding: (sounding: SoundingMix | null) => void;
+  private readonly onResumeRefused: () => void;
   /** The track each view is on. */
   private readonly players = new Map<SoundtrackView, ViewPlayer>();
   /** By track name. */
@@ -190,6 +196,8 @@ export class SoundtrackSession {
   /** Starts the track a view moved on to, once the silence is over. */
   private pendingStart: PendingStart | null = null;
   private paused = false;
+  /** Moves on at each Play, pause and end, so a refusal answers only the latest. */
+  private resumeAttempt = 0;
 
   constructor(options: SoundtrackSessionOptions) {
     this.manifest = options.manifest;
@@ -197,6 +205,7 @@ export class SoundtrackSession {
     this.random = options.random;
     this.resumePositions = options.resumePositions;
     this.onSounding = options.onSounding;
+    this.onResumeRefused = options.onResumeRefused;
     this.director = options.director;
     this.timer = this.startReplanning();
   }
@@ -222,6 +231,7 @@ export class SoundtrackSession {
   pause(): void {
     if (this.paused) return;
     this.paused = true;
+    this.resumeAttempt += 1;
     window.clearInterval(this.timer);
     const pending = this.pendingStart;
     if (pending !== null && pending.timer !== null) {
@@ -240,7 +250,11 @@ export class SoundtrackSession {
   play(): void {
     if (!this.paused) return;
     this.paused = false;
-    this.ports.resume();
+    this.resumeAttempt += 1;
+    const attempt = this.resumeAttempt;
+    this.ports.resume(() => {
+      if (attempt === this.resumeAttempt) this.onResumeRefused();
+    });
     for (const player of this.trackPlayers.values()) player.release();
     const pending = this.pendingStart;
     if (pending !== null && pending.timer === null) {
@@ -291,6 +305,7 @@ export class SoundtrackSession {
 
   /** Stops every player and answers where each one got to. */
   end(): ResumePositions {
+    this.resumeAttempt += 1;
     window.clearInterval(this.timer);
     this.cancelPendingStart();
     const positions: Partial<Record<SoundtrackView, ResumePosition>> = {

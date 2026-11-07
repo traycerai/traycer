@@ -64,12 +64,13 @@ export function openWebAudioPorts(
         (MIX_TUNING.pauseFadeSeconds + DRAIN_AFTER_FADE_SECONDS) * 1000,
       );
     },
-    resume: () => {
+    resume: (onRefused) => {
       cancelSuspending();
       void context.resume().catch((error: unknown) => {
         appLogger.warn("[soundtrack] could not resume the audio context", {
           error: describeLogError(error),
         });
+        onRefused();
       });
       level.setAudible(true);
     },

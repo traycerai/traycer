@@ -109,6 +109,7 @@ function openSession(
     director,
     resumePositions: {},
     onSounding: vi.fn<() => void>(),
+    onResumeRefused: () => undefined,
   });
   return { session, output };
 }

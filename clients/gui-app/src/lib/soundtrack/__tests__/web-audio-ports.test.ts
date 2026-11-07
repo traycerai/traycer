@@ -113,7 +113,7 @@ describe("openWebAudioPorts pause", () => {
 
     ports.pause();
     await advance(SUSPEND_AFTER_MS / 2);
-    ports.resume();
+    ports.resume(() => undefined);
     await advance(10_000);
 
     expect(context.suspend).not.toHaveBeenCalled();
@@ -138,7 +138,7 @@ describe("openWebAudioPorts pause", () => {
     await advance(SUSPEND_AFTER_MS);
     expect(context.suspend).toHaveBeenCalledTimes(1);
 
-    ports.resume();
+    ports.resume(() => undefined);
     expect(context.resume).toHaveBeenCalledTimes(1);
   });
 
@@ -152,7 +152,7 @@ describe("openWebAudioPorts pause", () => {
       endTime: MIX_TUNING.pauseFadeSeconds,
     });
 
-    ports.resume();
+    ports.resume(() => undefined);
     expect(audible.ramps.at(-1)).toEqual({
       value: 1,
       endTime: MIX_TUNING.pauseFadeSeconds,
