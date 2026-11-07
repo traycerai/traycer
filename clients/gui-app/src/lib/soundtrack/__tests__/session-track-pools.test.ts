@@ -78,6 +78,12 @@ function openWith(config: SessionConfig) {
     close: vi.fn<(afterSeconds: number) => void>(),
     log: new SoundtrackLogRelay(),
     captureMix: captureNothing,
+    pause: () => {
+      output.stopClock();
+    },
+    resume: () => {
+      output.startClock();
+    },
   };
   const manifest: SoundtrackManifest = {
     tracks: config.tracks,
@@ -103,6 +109,7 @@ function openWith(config: SessionConfig) {
     director,
     resumePositions: config.resumePositions,
     onSounding,
+    onResumeRefused: () => undefined,
   });
   return { session, output, onSounding };
 }

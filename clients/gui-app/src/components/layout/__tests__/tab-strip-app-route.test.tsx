@@ -21,6 +21,10 @@ import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
 import { useLandingDraftStore } from "@/stores/home/landing-draft-store";
 import { installTabSyncCoordinator } from "@/lib/tab-sync/tab-sync-coordinator";
 import { useTabsStore } from "@/stores/tabs/store";
+import {
+  DEFAULT_LAYOUT_SNAPSHOT,
+  useLayoutStore,
+} from "@/stores/layout/layout-store";
 
 // Reconciliation install is owned by `WindowsBridgeProvider` in
 // production. Test mounts skip the provider, so install once here.
@@ -267,6 +271,15 @@ vi.mock("@/components/layout/root-landing-page", () => ({
 }));
 
 function resetStores(): void {
+  // The header strip these cases navigate from: the shipped left strip is
+  // side-tab-strip.test.tsx.s subject.
+  useLayoutStore.setState({
+    ...DEFAULT_LAYOUT_SNAPSHOT,
+    arrangement: {
+      ...DEFAULT_LAYOUT_SNAPSHOT.arrangement,
+      tabStripPlacement: "top",
+    },
+  });
   useEpicCanvasStore.setState(useEpicCanvasStore.getInitialState(), true);
   useLandingDraftStore.setState({ drafts: [], activeDraftId: null });
   useTabsStore.setState({

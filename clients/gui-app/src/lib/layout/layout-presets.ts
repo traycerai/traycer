@@ -89,7 +89,10 @@ export const SHIPPED_DEFAULT_VALUES: LayoutValues = {
   railArtifacts: { shown: "shown" },
   railGitDiff: { shown: "shown" },
   railPullRequests: { shown: "auto" },
-  railFileTree: { shown: "shown" },
+  // Off for a new install: most people never open it, and every panel on the
+  // rail costs the others attention. An install from before that default
+  // carries it as shown (`layout-store.ts`).
+  railFileTree: { shown: "hidden" },
   railSharing: { shown: "shown" },
   railComments: { shown: "auto" },
 };

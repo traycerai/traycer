@@ -43,8 +43,8 @@ export type EdgeSide = "left" | "right";
 
 /**
  * Where the header task tabs draw: horizontal at the top, or a vertical strip
- * at either edge. A new install starts with the tabs at the top: a strip
- * beside the task sidebar is two sidebars.
+ * at either edge. A new install starts with the strip at the left edge, and
+ * the task sidebar on the other side of the canvas.
  */
 export type TabStripPlacement = "top" | EdgeSide;
 
@@ -379,13 +379,13 @@ export const DEFAULT_ARRANGEMENT: LayoutArrangement = {
   usageSide: "left",
   resourceHost: "status-bar",
   resourceSide: "right",
-  minimapSide: "right",
+  minimapSide: "left",
   statusBarParked: [],
   pinnedContextFieldOrder: CONTEXT_USAGE_ROW_KEYS,
   mobileFooter: false,
   dividerSeq: DEFAULT_RAIL_DIVIDER_SEQ,
-  tabStripPlacement: "top",
-  sidebarSide: "left",
+  tabStripPlacement: "left",
+  sidebarSide: "right",
   sidebarStartCollapsed: false,
   sideStripView: "activity",
   taskTabLayout: "scroll",

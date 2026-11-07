@@ -83,6 +83,12 @@ function openSession(
     close: vi.fn<(afterSeconds: number) => void>(),
     log: new SoundtrackLogRelay(),
     captureMix: captureNothing,
+    pause: () => {
+      output.stopClock();
+    },
+    resume: () => {
+      output.startClock();
+    },
   };
   const manifest: SoundtrackManifest = {
     tracks: [track],
@@ -106,6 +112,7 @@ function openSession(
     director,
     resumePositions: {},
     onSounding: vi.fn<() => void>(),
+    onResumeRefused: () => undefined,
   });
   return { session, output };
 }

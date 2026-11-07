@@ -293,6 +293,8 @@ function harness(
     close,
     log: new SoundtrackLogRelay(),
     captureMix,
+    pause: () => undefined,
+    resume: () => undefined,
   };
   const store = createSoundtrackStore({
     readManifest: () => manifest,

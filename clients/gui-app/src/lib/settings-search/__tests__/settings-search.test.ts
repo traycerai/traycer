@@ -36,6 +36,7 @@ const DESKTOP: SettingsAvailabilityContext = {
   phoneLayout: false,
   soundtrackOffered: false,
   soundtrackRecordingOffered: false,
+  soundtrackOn: false,
 };
 
 /** The installed mobile app: no desktop bridges, push permission present. */
@@ -57,6 +58,7 @@ const MOBILE: SettingsAvailabilityContext = {
   phoneLayout: true,
   soundtrackOffered: false,
   soundtrackRecordingOffered: false,
+  soundtrackOn: false,
 };
 
 /** A desktop feature-settings bridge: only its presence gates Experimental. */
@@ -509,6 +511,28 @@ describe("settings search", () => {
             (result) => result.entry.anchor === "sounds-soundtrack-music",
           ),
         ).toEqual([]);
+      },
+    );
+
+    it.each(["playback", "controls"])(
+      "finds the Playback controls row under %s only while Music is on",
+      (query) => {
+        const anchorOf = (context: SettingsAvailabilityContext) =>
+          searchSettings(query, context).filter(
+            (result) =>
+              result.entry.anchor === "sounds-soundtrack-playback-controls",
+          );
+        const musicOn = {
+          ...DESKTOP,
+          soundtrackOffered: true,
+          soundtrackOn: true,
+        };
+
+        expect(anchorOf(musicOn).map((hit) => hit.entry.section)).toEqual([
+          "app-notifications",
+        ]);
+        expect(anchorOf({ ...musicOn, soundtrackOn: false })).toEqual([]);
+        expect(anchorOf({ ...musicOn, soundtrackOffered: false })).toEqual([]);
       },
     );
 

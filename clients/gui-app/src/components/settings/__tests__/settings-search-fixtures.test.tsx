@@ -31,6 +31,7 @@ import {
   useLayoutStore,
 } from "@/stores/layout/layout-store";
 import { useSettingsSearchStore } from "@/stores/settings/settings-search-store";
+import { useSettingsStore } from "@/stores/settings/settings-store";
 
 // Layout's provider list is read through the WATCHED host's scope. It carries
 // no anchors - the set exists only for providers a host has reported - so the
@@ -192,6 +193,7 @@ afterEach(() => {
   setPhoneLayoutOnly(false);
   setFeatureSettingsBridge(null);
   vi.unstubAllEnvs();
+  useSettingsStore.setState({ soundtrackEnabled: false });
   useLayoutStore.setState({ ...DEFAULT_LAYOUT_SNAPSHOT });
   useSettingsSearchStore.setState({
     query: "",
@@ -245,7 +247,8 @@ describe("settings search fixtures", () => {
  * Mounts `panel` in exactly the shell `context` describes: its runner host (or
  * none), the window-level feature-settings bridge, the mobile-app flag, whether
  * the phone layout is drawn (the installed app draws it at every width), and
- * whether the build has a soundtrack to play (a development build does).
+ * whether the build has a soundtrack to play (a development build does) and
+ * whether Music is on.
  */
 function mountInShell(
   context: SettingsAvailabilityContext,
@@ -256,6 +259,7 @@ function mountInShell(
   setPhoneLayoutOnly(context.phoneLayout);
   setFeatureSettingsBridge(context.featureSettings);
   if (context.soundtrackOffered) vi.stubEnv("MODE", "development");
+  useSettingsStore.setState({ soundtrackEnabled: context.soundtrackOn });
   const queryClient = new QueryClient({
     defaultOptions: {
       queries: { retry: false, gcTime: 0 },

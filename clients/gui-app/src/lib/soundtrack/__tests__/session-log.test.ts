@@ -69,6 +69,8 @@ function openSession(): {
     close: () => undefined,
     log: relay,
     captureMix: captureNothing,
+    pause: () => undefined,
+    resume: () => undefined,
   };
   const session = new SoundtrackSession({
     manifest: MANIFEST,
@@ -77,6 +79,7 @@ function openSession(): {
     director: MIX_DIRECTORS[DEFAULT_MIX_DIRECTOR],
     resumePositions: {},
     onSounding: () => undefined,
+    onResumeRefused: () => undefined,
   });
   return { session, events };
 }
@@ -216,6 +219,8 @@ function phasedRun(listening: boolean): PhasedRun {
     close: () => undefined,
     log: relay,
     captureMix: captureNothing,
+    pause: () => undefined,
+    resume: () => undefined,
   };
   const plans = { count: 0 };
   const draws = { count: 0 };
@@ -240,6 +245,7 @@ function phasedRun(listening: boolean): PhasedRun {
     director,
     resumePositions: {},
     onSounding: () => undefined,
+    onResumeRefused: () => undefined,
   });
   session.setSignals({
     view: "home",

@@ -1724,18 +1724,23 @@ means the drain UI renders NOTHING - never a zero, which would offer to end
   of alert, untitled because the page is already named for it; and, in a build
   with something to play, **Soundtrack**
   (`panels/soundtrack-settings-section.tsx`): **Music**, the soundtrack's only
-  on and off switch (the palette's Soundtrack action flips the same setting),
-  then its volume and what it follows, which stay editable while it is off.
-  Last, on a desktop build that is not production (its bridge carries
-  `soundtrackRecording`), **Record session** (`panels/soundtrack-recording-row.tsx`):
-  a switch that saves this window's music and a log of what the engine decided
-  into the desktop's own folder, with **Stop after** and **Quality** under it.
-  Those two persist and lock while it records; the recording itself never
-  persists, so every start of the app finds it off. The switch is disabled
-  until this window holds a session, and the line under it counts the audio
-  time, then names the saved session with **Show in folder**.
-  Nothing for it is drawn in the window's chrome. The id still says notifications:
-  the OS and push rows moved to Alerts, and ids do not change.
+  on and off switch (the palette's Soundtrack action flips the same setting);
+  **Playback controls**, drawn only while Music is on and off by default, which
+  puts previous, pause and next in a task's status row
+  (`epic-canvas/panels/epic-playback-controls.tsx`), the only place the window's
+  chrome carries the soundtrack; then its volume and what it follows, which stay
+  editable while it is off. Pause is a setting (`soundtrackPaused`), so it holds
+  across windows and restarts. Music cannot be left silent with no way back:
+  turning Music on, or these controls off, clears it. Last, on a dev or staging
+  desktop build (its bridge carries `soundtrackRecording`), **Record session**
+  (`panels/soundtrack-recording-row.tsx`): a switch that saves this window's
+  music and a log of what the engine decided into the desktop's own folder, with
+  **Stop after** and **Quality** under it. Those two persist and lock while it
+  records; the recording itself never persists, so every start of the app finds
+  it off. The switch is disabled until this window holds a session, and the line
+  under it counts the audio time, then names the saved session with **Show in
+  folder**. The id still says notifications: the OS and push rows moved to
+  Alerts, and ids do not change.
 - `Alerts` (`panels/alerts-settings-panel.tsx`, `/settings/alerts`): one
   group, **Notifications** (anchor `alerts-notifications`), where the alerts
   themselves are configured. **OS notifications** on a desktop with the

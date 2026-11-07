@@ -111,12 +111,12 @@ function SavedStatus(props: {
 function recordingStatus(
   recording: SoundtrackRecording,
   musicOn: boolean,
-  waitingForTurn: boolean,
+  waitingForLock: boolean,
 ): ReactNode {
   switch (recording.kind) {
     case "off":
       if (!musicOn) return "Turn on Music to record.";
-      return waitingForTurn
+      return waitingForLock
         ? "Another window is playing the music. Record from that window."
         : undefined;
     case "recording": {
@@ -171,7 +171,7 @@ export function SoundtrackRecordingRow(): ReactNode {
     (state) => state.setSoundtrackRecordingQuality,
   );
   const sessionOpen = useSoundtrackStore((state) => state.enabled);
-  const waitingForTurn = useSoundtrackStore((state) => state.waitingForTurn);
+  const waitingForLock = useSoundtrackStore((state) => state.waitingForLock);
   const recording = useSoundtrackStore((state) => state.recording);
   const startRecording = useSoundtrackStore((state) => state.startRecording);
   const stopRecording = useSoundtrackStore((state) => state.stopRecording);
@@ -181,7 +181,7 @@ export function SoundtrackRecordingRow(): ReactNode {
   return (
     <SettingsRow
       row={ROWS.soundtrackRecording}
-      status={recordingStatus(recording, musicOn, waitingForTurn)}
+      status={recordingStatus(recording, musicOn, waitingForLock)}
       control={
         <Switch
           checked={recording.kind === "recording"}

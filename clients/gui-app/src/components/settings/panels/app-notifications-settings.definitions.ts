@@ -1,6 +1,7 @@
 import {
   alwaysAvailable,
   isSoundtrackRecordingRowAvailable,
+  isPlaybackControlsRowAvailable,
   isSoundtrackRowAvailable,
 } from "@/lib/settings/settings-availability";
 import { defineSettingsSection } from "@/lib/settings-search/settings-definitions";
@@ -79,6 +80,15 @@ export const APP_NOTIFICATIONS = defineSettingsSection("app-notifications", {
     description: "Plays music while you work.",
     availableWhen: isSoundtrackRowAvailable,
     keywords: ["soundtrack", "play"],
+  },
+  soundtrackPlaybackControls: {
+    kind: "row",
+    group: "soundtrack",
+    search: { anchor: "sounds-soundtrack-playback-controls" },
+    label: "Playback controls",
+    description: "Shows previous, pause and next in a task's status bar.",
+    availableWhen: isPlaybackControlsRowAvailable,
+    keywords: ["music", "skip"],
   },
   soundtrackVolume: {
     kind: "row",

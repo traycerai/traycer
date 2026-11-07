@@ -183,12 +183,16 @@ export function EpicConnectionPill(props: EpicConnectionPillProps) {
           data-source={selected.source}
           aria-label={buttonNameFor(indicator.label, rawSelected)}
           className={cn(
-            "inline-flex items-center gap-1 text-ui-xs font-medium text-current focus:outline-none focus-visible:ring-1 focus-visible:ring-ring",
+            "inline-flex min-w-0 items-center gap-1 text-ui-xs font-medium text-current focus:outline-none focus-visible:ring-1 focus-visible:ring-ring",
             indicator.containerClassName,
           )}
         >
           <ConnectionPillDot indicator={indicator} />
-          {indicator.label}
+          {/* What gives way in a short row, every other item being a control.
+              The tooltip and the button's name keep the whole of it. */}
+          {indicator.label === null ? null : (
+            <span className="truncate">{indicator.label}</span>
+          )}
         </button>
       </TooltipWrapper>
       <span className="sr-only" role="status" aria-live="polite">
@@ -381,7 +385,7 @@ function ConnectionPillDot(props: { indicator: PillIndicator }) {
       <AgentSpinningDots
         testId="epic-connection-pill-dot"
         variant="dots"
-        className={indicator.dotClassName}
+        className={cn("shrink-0", indicator.dotClassName)}
       />
     );
   }
@@ -398,7 +402,7 @@ function ConnectionPillDot(props: { indicator: PillIndicator }) {
   return (
     <span
       data-testid="epic-connection-pill-dot"
-      className={cn("size-1.5 rounded-full", indicator.dotClassName)}
+      className={cn("size-1.5 shrink-0 rounded-full", indicator.dotClassName)}
       aria-hidden
     />
   );

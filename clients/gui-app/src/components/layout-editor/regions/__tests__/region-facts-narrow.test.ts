@@ -53,6 +53,7 @@ function contextFor(shell: Shell): LayoutFormContext {
       featureSettings: null,
       soundtrackOffered: false,
       soundtrackRecordingOffered: false,
+      soundtrackOn: false,
       ...shell,
     },
     facts: { voiceInputEnabled: true },

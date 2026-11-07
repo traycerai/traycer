@@ -58,12 +58,15 @@ async function settle(): Promise<void> {
   await vi.advanceTimersByTimeAsync(0);
 }
 
+let locks = new FakeLockManager();
+
 beforeEach(() => {
   vi.useFakeTimers();
   resetFakePorts();
+  locks = new FakeLockManager();
   Object.defineProperty(navigator, "locks", {
     configurable: true,
-    value: new FakeLockManager(),
+    value: locks,
   });
 });
 
@@ -203,39 +206,150 @@ describe("the soundtrack across windows", () => {
   });
 });
 
-describe("waiting for a turn", () => {
-  it("is true from enable while another window plays, false once the turn comes", async () => {
-    const first = openWindow(openFakePorts, readBundled);
-    const second = openWindow(openFakePorts, readBundled);
-    first().enable();
-    await settle();
-    expect(first().waitingForTurn).toBe(false);
+describe("the soundtrack lock when the browser's answers come late", () => {
+  /** A window, and its `waitingForLock` as it was at every change of the store. */
+  function openWatched() {
+    const store = createSoundtrackStore({
+      readManifest: readBundled,
+      openPorts: openFakePorts,
+      random: () => 0.5,
+      recordingChannel: () => null,
+    });
+    const seen: boolean[] = [];
+    store.subscribe((state) => {
+      seen.push(state.waitingForLock);
+    });
+    return { getState: store.getState, seen };
+  }
 
-    second().enable();
+  it("keeps a window's place in the queue when another window asks after a holder lets go", async () => {
+    const holder = openWindow(openFakePorts, readBundled);
+    const behind = openWindow(openFakePorts, readBundled);
+    const later = openWindow(openFakePorts, readBundled);
+    holder().enable();
     await settle();
-    expect(second().waitingForTurn).toBe(true);
-    expect(second().enabled).toBe(false);
+    locks.holdAnswers();
 
-    first().disable();
+    behind().enable();
+    holder().disable();
+    await settle();
+    later().enable();
+    await settle();
+    locks.deliverQuery();
+    locks.deliverGrant();
     await settle();
 
-    expect(second().waitingForTurn).toBe(false);
-    expect(second().enabled).toBe(true);
+    expect(behind().enabled).toBe(true);
+    expect(later().enabled).toBe(false);
+    expect(later().waitingForLock).toBe(true);
+    expect(openedFakePorts).toHaveLength(2);
+
+    behind().disable();
+    await settle();
+    locks.deliverGrant();
+    await settle();
+    expect(later().enabled).toBe(true);
+    later().disable();
   });
 
-  it("is false again when the window turns the music off while it waits", async () => {
+  it("leaves each of two windows playing or waiting, whichever of their lock operations the browser takes first", async () => {
     const first = openWindow(openFakePorts, readBundled);
     const second = openWindow(openFakePorts, readBundled);
+    locks.holdOperations();
+
     first().enable();
-    await settle();
     second().enable();
+    // The browser keeps each window's own two operations in order, and promises
+    // nothing about one window's against the other's.
+    locks.process([0, 2, 3, 1]);
     await settle();
-    expect(second().waitingForTurn).toBe(true);
 
-    second().disable();
-    await settle();
-
-    expect(second().waitingForTurn).toBe(false);
+    for (const window of [first, second]) {
+      expect(window().waitingForLock).toBe(!window().enabled);
+    }
+    expect(openedFakePorts).toHaveLength(1);
     first().disable();
+    second().disable();
+  });
+
+  it.each([
+    ["the answer first", true],
+    ["the grant first", false],
+  ])(
+    "never reads a free lock as a wait, with %s",
+    async (_label, answerFirst) => {
+      const { getState: window, seen } = openWatched();
+      locks.holdAnswers();
+
+      window().enable();
+      await settle();
+      if (answerFirst) {
+        locks.deliverQuery();
+        await settle();
+        locks.deliverGrant();
+      } else {
+        locks.deliverGrant();
+        await settle();
+        locks.deliverQuery();
+      }
+      await settle();
+
+      expect(window().enabled).toBe(true);
+      expect(seen).not.toContain(true);
+      window().disable();
+    },
+  );
+
+  describe("a window behind a holder", () => {
+    type Step = "answer" | "release" | "grant";
+    const ORDERS: ReadonlyArray<readonly [string, readonly Step[]]> = [
+      ["the answer, then the release", ["answer", "release", "grant"]],
+      ["the release, then the answer", ["release", "answer", "grant"]],
+    ];
+
+    async function arrange() {
+      const holder = openWindow(openFakePorts, readBundled);
+      const { getState: behind, seen } = openWatched();
+      holder().enable();
+      await settle();
+      locks.holdAnswers();
+      behind().enable();
+      await settle();
+      const step = async (what: Step): Promise<void> => {
+        if (what === "answer") locks.deliverQuery();
+        if (what === "release") holder().disable();
+        if (what === "grant") locks.deliverGrant();
+        await settle();
+      };
+      return { behind, step, seen };
+    }
+
+    it.each(ORDERS)(
+      "reads waiting with %s, and not once it opens",
+      async (_label, steps) => {
+        const { behind, step } = await arrange();
+        await step(steps[0]);
+        await step(steps[1]);
+        expect(behind().waitingForLock).toBe(true);
+
+        await step(steps[2]);
+        expect(behind().enabled).toBe(true);
+        expect(behind().waitingForLock).toBe(false);
+        behind().disable();
+      },
+    );
+
+    it("never reads waiting when its turn came before the answer did", async () => {
+      const { behind, step, seen } = await arrange();
+
+      await step("release");
+      await step("grant");
+      await step("answer");
+
+      expect(behind().enabled).toBe(true);
+      expect(behind().waitingForLock).toBe(false);
+      expect(seen).not.toContain(true);
+      behind().disable();
+    });
   });
 });

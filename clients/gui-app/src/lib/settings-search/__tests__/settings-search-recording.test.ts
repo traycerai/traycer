@@ -9,6 +9,7 @@ const SOUNDTRACK_DESKTOP: SettingsAvailabilityContext = {
   phoneLayout: false,
   soundtrackOffered: true,
   soundtrackRecordingOffered: true,
+  soundtrackOn: true,
 };
 
 const RECORDING_ANCHOR = "sounds-soundtrack-recording";

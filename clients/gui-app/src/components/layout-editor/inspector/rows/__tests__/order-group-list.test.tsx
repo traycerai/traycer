@@ -85,6 +85,7 @@ function formContext(
       featureSettings: null,
       soundtrackOffered: false,
       soundtrackRecordingOffered: false,
+      soundtrackOn: false,
       ...shell,
     },
     facts: { voiceInputEnabled: true },

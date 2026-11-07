@@ -101,10 +101,12 @@ function recordingAfter(outcome: RecordingOutcome): SoundtrackRecording {
 interface SoundtrackState {
   /** Whether a session is open; the person's wish is `soundtrackEnabled`. */
   readonly enabled: boolean;
-  /** Turned on here while another window's session plays, until it ends. */
-  readonly waitingForTurn: boolean;
+  /** Whether this window is queued behind another window's session. */
+  readonly waitingForLock: boolean;
   readonly directorId: MixDirectorId;
   readonly volume: number;
+  /** Whether a session here is to hold; the wish is `soundtrackPaused`. */
+  readonly paused: boolean;
   /** The view whose track is in front; null while off, or it has no track. */
   readonly soundingView: SoundtrackView | null;
   /** The plan applied last; null while off. */
@@ -121,6 +123,7 @@ interface SoundtrackState {
   readonly disable: () => void;
   readonly setDirector: (directorId: MixDirectorId) => void;
   readonly setVolume: (volume: number) => void;
+  readonly setPaused: (paused: boolean) => void;
   /** Ignored while off, so a publisher need not know. */
   readonly setSignals: (signals: MixSignals) => void;
   /** Ignored while off, so a chime need not know. */
@@ -133,6 +136,10 @@ interface SoundtrackState {
   readonly startRecording: (choices: RecordingChoices) => void;
   /** Finishes the recording's files; the music plays on. */
   readonly stopRecording: () => void;
+  /** Ignored while off: there is no track to move from. */
+  readonly next: () => void;
+  /** Ignored while off: there is no track to move from. */
+  readonly previous: () => void;
 }
 
 interface SoundtrackStoreDependencies {
@@ -193,7 +200,14 @@ export function createSoundtrackStore(
               : { soundingView: sounding.view, lastPlan: sounding.plan },
           );
         },
+        // The wish to hear it stands, whether or not the buttons are there. With
+        // the session gone the warm-up arms again, so the next gesture opens a
+        // new device, from where this one got to.
+        onResumeRefused: () => {
+          get().disable();
+        },
       });
+      if (get().paused) session.pause();
       set({ enabled: true });
     };
     const start = (): void => {
@@ -221,10 +235,11 @@ export function createSoundtrackStore(
     };
     return {
       enabled: false,
-      waitingForTurn: false,
+      waitingForLock: false,
       recording: { kind: "off" },
       directorId: DEFAULT_MIX_DIRECTOR,
       volume: MIX_TUNING.volume.initial,
+      paused: false,
       soundingView: null,
       lastPlan: null,
       resumePositions: {},
@@ -236,17 +251,19 @@ export function createSoundtrackStore(
           start();
           return;
         }
-        set({ waitingForTurn: true });
+        void taken.queued?.then(() => {
+          if (lock === taken) set({ waitingForLock: true });
+        });
         void taken.held.then(() => {
           if (lock !== taken) return;
-          set({ waitingForTurn: false });
+          set({ waitingForLock: false });
           start();
         });
       },
       disable: () => {
         reading = null;
         releaseLock();
-        if (get().waitingForTurn) set({ waitingForTurn: false });
+        set({ waitingForLock: false });
         if (session === null) return;
         // Ahead of the end, so that its files finish while the context is open.
         stopRecorder("music-off");
@@ -277,11 +294,22 @@ export function createSoundtrackStore(
         set({ volume });
         session?.ports.setVolume(volume);
       },
+      setPaused: (paused) => {
+        set({ paused });
+        if (paused) session?.pause();
+        else session?.play();
+      },
       setSignals: (signals) => {
         session?.setSignals(signals);
       },
       duck: (chimeSeconds) => {
-        session?.ports.duck(chimeSeconds);
+        session?.duck(chimeSeconds);
+      },
+      next: () => {
+        session?.next();
+      },
+      previous: () => {
+        session?.previous();
       },
       startRecording: ({ limitSeconds, quality }) => {
         const channel = recordingChannel();
@@ -329,9 +357,11 @@ export const useSoundtrackStore = createSoundtrackStore({
   recordingChannel: desktopRecordingChannel,
 });
 
-const { soundtrackDirector, soundtrackVolume } = useSettingsStore.getState();
+const { soundtrackDirector, soundtrackVolume, soundtrackPaused } =
+  useSettingsStore.getState();
 useSoundtrackStore.getState().setDirector(soundtrackDirector);
 useSoundtrackStore.getState().setVolume(soundtrackVolume);
+useSoundtrackStore.getState().setPaused(soundtrackPaused);
 
 // Another window's choices arrive this way too, because the settings store
 // rehydrates on its writes. Only off travels here: on opens the audio device,
@@ -343,6 +373,9 @@ useSettingsStore.subscribe((state, previous) => {
   }
   if (state.soundtrackVolume !== previous.soundtrackVolume) {
     soundtrack.setVolume(state.soundtrackVolume);
+  }
+  if (state.soundtrackPaused !== previous.soundtrackPaused) {
+    soundtrack.setPaused(state.soundtrackPaused);
   }
   if (previous.soundtrackEnabled && !state.soundtrackEnabled) {
     soundtrack.disable();

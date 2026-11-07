@@ -6,8 +6,9 @@ import {
   type PointerEvent,
   type ReactNode,
 } from "react";
-import { FileText, Files, ImageIcon } from "lucide-react";
+import { ImageIcon } from "lucide-react";
 
+import { FILE_DROP_OVERLAY_CONTENT } from "@/components/home/composer/composer-drop-overlay-content";
 import { ComposerMenu } from "@/components/chat/composer/menu/composer-menu";
 import type { ComposerPickerStore } from "@/components/chat/composer/picker/composer-picker-store";
 import { ComposerFocusLayoutContext } from "@/components/home/composer/composer-focus-layout-context";
@@ -30,31 +31,6 @@ export interface ComposerExpansion {
   readonly expanded: boolean;
   readonly onExpandedChange: (expanded: boolean) => void;
 }
-
-const FILE_DROP_OVERLAY_CONTENT = {
-  images: {
-    Icon: ImageIcon,
-    title: "Drop image to attach",
-    subtitle: "PNG, JPG, GIF up to 5MB",
-  },
-  paths: {
-    Icon: FileText,
-    title: "Drop to insert file path",
-    subtitle: "Path will be inserted in the message",
-  },
-  mixed: {
-    Icon: Files,
-    title: "Drop to attach images and insert file paths",
-    subtitle: "Images attach; file paths are inserted",
-  },
-} satisfies Record<
-  FileTransferDragOverlayVariant,
-  {
-    readonly Icon: typeof ImageIcon;
-    readonly title: string;
-    readonly subtitle: string;
-  }
->;
 
 export function ComposerDropOverlay({
   Icon,

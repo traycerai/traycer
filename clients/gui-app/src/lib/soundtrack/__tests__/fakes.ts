@@ -61,9 +61,24 @@ export class FakeOutput implements SoundtrackOutput {
   readonly pans = new Map<string, number | null>();
   private readonly base = Date.now();
   private buses = 0;
+  /** How long the clock has stood still, and since when if it does now. */
+  private stoodMs = 0;
+  private stoppedAt: number | null = null;
 
   currentTime(): number {
-    return (Date.now() - this.base) / 1000;
+    const reading = this.stoppedAt ?? Date.now();
+    return (reading - this.base - this.stoodMs) / 1000;
+  }
+
+  /** What a suspended `AudioContext` does to its clock. */
+  stopClock(): void {
+    this.stoppedAt ??= Date.now();
+  }
+
+  startClock(): void {
+    if (this.stoppedAt === null) return;
+    this.stoodMs += Date.now() - this.stoppedAt;
+    this.stoppedAt = null;
   }
 
   createBus(): OutputGain {

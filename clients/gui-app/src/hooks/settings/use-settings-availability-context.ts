@@ -6,6 +6,7 @@ import { soundtrackOffered } from "@/lib/soundtrack/manifest";
 import { desktopRecordingChannel } from "@/lib/soundtrack/recording-bridge";
 import type { SettingsAvailabilityContext } from "@/lib/settings/settings-availability";
 import { useRunnerHostOrNull } from "@/providers/use-runner-host";
+import { useSettingsStore } from "@/stores/settings/settings-store";
 
 /**
  * The shell facts every settings availability predicate reads, resolved the
@@ -16,8 +17,8 @@ import { useRunnerHostOrNull } from "@/providers/use-runner-host";
  * facts - `isMobileApp()` and the feature-settings bridge - are read on every
  * render rather than held in a module constant, and the result is memoized on
  * their values so a consumer can key its own memo on the context.
- * `phoneLayout` is subscribed rather than read, because it flips with the
- * window and a row keyed on it must flip with the layout it describes.
+ * `phoneLayout` and `soundtrackOn` are subscribed rather than read, because each
+ * flips while the page is open and a row keyed on it must flip with it.
  */
 export function useSettingsAvailabilityContext(): SettingsAvailabilityContext {
   const runnerHost = useRunnerHostOrNull();
@@ -26,6 +27,7 @@ export function useSettingsAvailabilityContext(): SettingsAvailabilityContext {
   const phoneLayout = useIsMobileViewport();
   const offered = soundtrackOffered();
   const recordingOffered = desktopRecordingChannel() !== null;
+  const soundtrackOn = useSettingsStore((state) => state.soundtrackEnabled);
   return useMemo(
     () => ({
       runnerHost,
@@ -34,6 +36,7 @@ export function useSettingsAvailabilityContext(): SettingsAvailabilityContext {
       phoneLayout,
       soundtrackOffered: offered,
       soundtrackRecordingOffered: recordingOffered,
+      soundtrackOn,
     }),
     [
       runnerHost,
@@ -42,6 +45,7 @@ export function useSettingsAvailabilityContext(): SettingsAvailabilityContext {
       phoneLayout,
       offered,
       recordingOffered,
+      soundtrackOn,
     ],
   );
 }

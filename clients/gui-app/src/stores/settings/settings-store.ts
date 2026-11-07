@@ -379,6 +379,16 @@ export interface SettingsState {
   /** How long a music recording runs; the recording itself is never kept. */
   soundtrackRecordingLimit: RecordingLimitId;
   soundtrackRecordingQuality: RecordingQuality;
+  /** Whether a task's status row carries previous, pause and next. */
+  soundtrackPlaybackControls: boolean;
+  /**
+   * Whether the person has paused the music, across windows and restarts: a
+   * launch with it set opens nothing at the first gesture, and Play does. It
+   * can only be set where those controls can clear it, so turning Music on or
+   * the controls off clears it too, and storage restores it only with them on.
+   * The position in a track is not kept.
+   */
+  soundtrackPaused: boolean;
   setTheme: (theme: ThemeMode) => void;
   setThemePreset: (preset: ThemePreset) => void;
   /**
@@ -438,6 +448,8 @@ export interface SettingsState {
   setSoundtrackVolume: (value: number) => void;
   setSoundtrackRecordingLimit: (value: RecordingLimitId) => void;
   setSoundtrackRecordingQuality: (value: RecordingQuality) => void;
+  setSoundtrackPlaybackControls: (value: boolean) => void;
+  setSoundtrackPaused: (value: boolean) => void;
 }
 
 type PersistedSettingsState = Pick<
@@ -487,6 +499,8 @@ type PersistedSettingsState = Pick<
   | "soundtrackVolume"
   | "soundtrackRecordingLimit"
   | "soundtrackRecordingQuality"
+  | "soundtrackPlaybackControls"
+  | "soundtrackPaused"
 >;
 
 type SetFn = (
@@ -574,6 +588,8 @@ function partializeSettingsState(state: SettingsState): PersistedSettingsState {
     soundtrackVolume: state.soundtrackVolume,
     soundtrackRecordingLimit: state.soundtrackRecordingLimit,
     soundtrackRecordingQuality: state.soundtrackRecordingQuality,
+    soundtrackPlaybackControls: state.soundtrackPlaybackControls,
+    soundtrackPaused: state.soundtrackPaused,
   };
 }
 
@@ -629,6 +645,8 @@ export const useSettingsStore = create<SettingsState>()(
       soundtrackVolume: MIX_TUNING.volume.initial,
       soundtrackRecordingLimit: DEFAULT_RECORDING_LIMIT,
       soundtrackRecordingQuality: DEFAULT_RECORDING_QUALITY,
+      soundtrackPlaybackControls: false,
+      soundtrackPaused: false,
       setTheme: makeSetter(set, "theme"),
       setThemePreset: (themePreset) => {
         if (useThemeLibraryStore.getState().clearSelection())
@@ -763,8 +781,20 @@ export const useSettingsStore = create<SettingsState>()(
               },
         );
       },
-      setSoundtrackEnabled: makeSetter(set, "soundtrackEnabled"),
+      setSoundtrackEnabled: (value) => {
+        set((s) => ({
+          soundtrackEnabled: value,
+          soundtrackPaused: !value && s.soundtrackPaused,
+        }));
+      },
       setSoundtrackDirector: makeSetter(set, "soundtrackDirector"),
+      setSoundtrackPlaybackControls: (value) => {
+        set((s) => ({
+          soundtrackPlaybackControls: value,
+          soundtrackPaused: value && s.soundtrackPaused,
+        }));
+      },
+      setSoundtrackPaused: makeSetter(set, "soundtrackPaused"),
       setSoundtrackVolume: (value) => {
         const next = clampSoundtrackVolume(value);
         set((s) =>
@@ -881,6 +911,11 @@ export const useSettingsStore = create<SettingsState>()(
           )
             ? persisted.soundtrackRecordingQuality
             : DEFAULT_RECORDING_QUALITY,
+          soundtrackPlaybackControls:
+            persisted.soundtrackPlaybackControls === true,
+          soundtrackPaused:
+            persisted.soundtrackPlaybackControls === true &&
+            persisted.soundtrackPaused === true,
         };
       },
     },

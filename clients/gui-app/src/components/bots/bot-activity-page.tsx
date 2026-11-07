@@ -6,20 +6,13 @@ import {
   type ReactNode,
 } from "react";
 import { useNavigate } from "@tanstack/react-router";
-import { ChevronRight, EllipsisVertical } from "lucide-react";
+import { ChevronRight } from "lucide-react";
 import type { BotThreadSummary } from "@traycer/protocol/host/bot/conversation-schemas";
 import type {
   BotInputNeeded,
   BotTaskEntry,
 } from "@traycer/protocol/host/bot/schemas";
 import { Badge } from "@/components/ui/badge";
-import { Button } from "@/components/ui/button";
-import {
-  DropdownMenu,
-  DropdownMenuContent,
-  DropdownMenuItem,
-  DropdownMenuTrigger,
-} from "@/components/ui/dropdown-menu";
 import { NestedChatStatusGlyph } from "@/components/epic-canvas/sidebar/epic-sidebar-chat-tree";
 import { revealArchiveHiddenIds } from "@/components/epic-canvas/sidebar/epic-sidebar-selection";
 import {
@@ -366,7 +359,6 @@ function ActiveTaskRowBody(
             threads={props.threads}
           />
         </button>
-        <TaskMenu onOpen={openTask} />
       </div>
       <div className="flex flex-col gap-0.5 pl-7.5">
         <BotTaskControls
@@ -670,32 +662,6 @@ function FromThread(props: {
         );
       }}
     </ChannelPost>
-  );
-}
-
-function TaskMenu(props: { readonly onOpen: () => void }): ReactNode {
-  return (
-    <DropdownMenu>
-      <DropdownMenuTrigger asChild>
-        <Button
-          type="button"
-          variant="ghost"
-          size="icon-sm"
-          aria-label="Task actions"
-          data-testid="bot-activity-task-menu"
-        >
-          <EllipsisVertical aria-hidden="true" />
-        </Button>
-      </DropdownMenuTrigger>
-      <DropdownMenuContent align="end">
-        <DropdownMenuItem
-          data-testid="bot-activity-task-open-brief"
-          onSelect={props.onOpen}
-        >
-          Open the brief
-        </DropdownMenuItem>
-      </DropdownMenuContent>
-    </DropdownMenu>
   );
 }
 
