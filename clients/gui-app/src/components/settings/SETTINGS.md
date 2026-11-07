@@ -1724,10 +1724,15 @@ means the drain UI renders NOTHING - never a zero, which would offer to end
   of alert, untitled because the page is already named for it; and, in a build
   with something to play, **Soundtrack**
   (`panels/soundtrack-settings-section.tsx`): **Music**, the soundtrack's only
-  on and off switch (the palette's Soundtrack action flips the same setting),
-  then its volume and what it follows, which stay editable while it is off.
-  Nothing for it is drawn in the window's chrome. The id still says notifications:
-  the OS and push rows moved to Alerts, and ids do not change.
+  on and off switch (the palette's Soundtrack action flips the same setting);
+  **Playback controls**, drawn only while Music is on and off by default, which
+  puts previous, pause and next in a task's status row
+  (`epic-canvas/panels/epic-playback-controls.tsx`), the only place the window's
+  chrome carries the soundtrack; then its volume and what it follows, which stay
+  editable while it is off. Pause is a setting (`soundtrackPaused`), so it holds
+  across windows and restarts. Music cannot be left silent with no way back:
+  turning Music on, or these controls off, clears it. The id still says
+  notifications: the OS and push rows moved to Alerts, and ids do not change.
 - `Alerts` (`panels/alerts-settings-panel.tsx`, `/settings/alerts`): one
   group, **Notifications** (anchor `alerts-notifications`), where the alerts
   themselves are configured. **OS notifications** on a desktop with the
@@ -2030,13 +2035,14 @@ codeFontSize` in muted styling while `null`; any tick/type pins an
     On Settings > Providers the provider's limits grey with a reason and an "Open Layout" link while Usage limits or that provider is hidden here (U5).
     The link lands on the controller itself: Usage limits' Show switch, or that provider's own row in the Profiles list (`navigateToLayoutRegionRow`).
   - **Presets and resets.** The Presets block (`inspector/presets-block.tsx`)
-    applies a preset in one click, replacing visibility and style values and
-    keeping placement, order and providers, with an Undo toast. Its status
-    reads `<Preset> · Modified` only while a VALUE differs from the applied
-    preset (`layoutModified`, T5), the one kind of change a preset puts back;
-    the Presets area's dot reads the same flag. The View changes list is
-    offered for any change, grouped Styles and Arrangement, each line with its
-    own revert (`lib/layout/layout-diff.ts` builds it,
+    applies a preset in one click, replacing display and style values and
+    keeping placement, order, providers and the panels the rail shows, with an
+    Undo toast. Its status reads `<Preset> · Modified` only while a display
+    VALUE differs from the applied preset (`layoutModified`, T5), the one kind
+    of change a preset puts back; the Presets area's dot reads the same flag.
+    The View changes list is offered for any change, grouped Styles and
+    Arrangement, with panels shown or hidden under Arrangement, each line with
+    its own revert (`lib/layout/layout-diff.ts` builds it,
     `inspector/layout-change-lines.ts` words it). While Arrangement has lines,
     a note under the status says presets keep the arrangement, with the count
     of those lines, and the applied card is described by it. `Reset layout…`
