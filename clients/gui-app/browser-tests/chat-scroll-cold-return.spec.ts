@@ -53,7 +53,6 @@ interface Frame {
   readonly fromEnd: number;
   readonly mode: string | null;
   readonly pending: boolean;
-  readonly skeleton: number;
   readonly complete: boolean;
   /** The skeleton names the saved row. */
   readonly named: boolean;
@@ -107,7 +106,6 @@ async function startSampling(page: Page): Promise<() => Promise<Frame[]>> {
           fromEnd: g.scrollHeight - g.clientHeight - g.scrollTop,
           mode: probe.mode(),
           pending: probe.pendingRestore() !== null,
-          skeleton: w.skeletonLength,
           complete: w.skeletonComplete,
           named: probe.ordinalOf("assistant:turn-200") !== null,
         });
