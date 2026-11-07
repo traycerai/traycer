@@ -2,6 +2,7 @@ import { useEffect, useId, useRef, useState, type ReactNode } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
 import type { ConfigAgentMemoriesResponse } from "@traycer/protocol/host/config/schemas";
+import type { EnvironmentStatusResponseV11 } from "@traycer/protocol/host/environment-schemas";
 import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
 import { Switch } from "@/components/ui/switch";
 import {
@@ -18,6 +19,7 @@ import {
   hostClientUnavailableError,
   useHostQuery,
   useHostQueryEntryHash,
+  useHostQueryWithResponseMap,
 } from "@/hooks/host/use-host-query";
 import { readHostReadiness } from "@/hooks/host/use-reactive-host-readiness";
 import { useHostScopedMutationForClient } from "@/hooks/host/use-host-scoped-mutation";
@@ -40,10 +42,20 @@ import { usePickedTeamLabel } from "@/components/settings/environment/team-pick-
 const AGENT_MEMORIES_GET = "config.agentMemories.get";
 const AGENT_MEMORIES_SET = "config.agentMemories.set";
 
-/** A cancelled query has no confirmation evidence and must follow the retry path. */
-function confirmationData<T>(data: T | undefined, method: string): T {
-  if (data === undefined) throw hostClientUnavailableError(method);
-  return data;
+interface ConfirmationSnapshot<T> {
+  readonly response: T;
+  readonly attempt: symbol | null | undefined;
+}
+
+/** Reverted cancellation can return old data; only this attempt can confirm. */
+function confirmationData<T>(
+  snapshot: ConfirmationSnapshot<T> | undefined,
+  attempt: symbol,
+  method: string,
+): T {
+  if (snapshot === undefined || snapshot.attempt !== attempt)
+    throw hostClientUnavailableError(method);
+  return snapshot.response;
 }
 
 /**
@@ -234,9 +246,13 @@ function AgentMemoriesRow(): ReactNode {
     )
       throw hostClientUnavailableError(method);
   }
-  const confirmationRead = useHostQuery<
+  const readAttempt = useRef<symbol | null>(null);
+  const statusAttempt = useRef<symbol | null>(null);
+  const confirmationRead = useHostQueryWithResponseMap<
     HostRpcRegistry,
-    "config.agentMemories.get"
+    "config.agentMemories.get",
+    ConfirmationSnapshot<ConfigAgentMemoriesResponse>,
+    symbol | null
   >({
     cacheKeyIdentity: confirmationIdentity,
     client,
@@ -244,10 +260,17 @@ function AgentMemoriesRow(): ReactNode {
     params: {},
     options: { enabled: false, poll: false, gcTime: 0, retry: false },
     preflight: () => preflightConfirmation(AGENT_MEMORIES_GET),
+    captureRequestContext: () => readAttempt.current,
+    mapResponse: ({ response, requestContext }) => ({
+      response,
+      attempt: requestContext,
+    }),
   });
-  const confirmationStatus = useHostQuery<
+  const confirmationStatus = useHostQueryWithResponseMap<
     HostRpcRegistry,
-    "environment.status"
+    "environment.status",
+    ConfirmationSnapshot<EnvironmentStatusResponseV11>,
+    symbol | null
   >({
     cacheKeyIdentity: confirmationIdentity,
     client,
@@ -255,6 +278,11 @@ function AgentMemoriesRow(): ReactNode {
     params: {},
     options: { enabled: false, poll: false, gcTime: 0 },
     preflight: () => preflightConfirmation("environment.status"),
+    captureRequestContext: () => statusAttempt.current,
+    mapResponse: ({ response, requestContext }) => ({
+      response,
+      attempt: requestContext,
+    }),
     requiredHostMethodVersion: () => ({
       method: "environment.status",
       version: { major: 1, minor: 1 },
@@ -430,8 +458,11 @@ function AgentMemoriesRow(): ReactNode {
           async function tick(): Promise<void> {
             if (!live()) return;
             try {
+              const initialAttempt = Symbol();
+              readAttempt.current = initialAttempt;
               latestRead = confirmationData(
                 (await confirmationRead.refetch({ throwOnError: true })).data,
+                initialAttempt,
                 AGENT_MEMORIES_GET,
               );
               if (!live()) return;
@@ -444,16 +475,22 @@ function AgentMemoriesRow(): ReactNode {
               }
               let queue;
               if (answer.state === "queued") {
+                const receiptAttempt = Symbol();
+                statusAttempt.current = receiptAttempt;
                 queue = confirmationData(
                   (await confirmationStatus.refetch({ throwOnError: true }))
                     .data,
+                  receiptAttempt,
                   "environment.status",
                 );
                 if (!live()) return;
                 // The host can rebind during the status request. Read the binding
                 // again before accepting its receipt against the previous snapshot.
+                const bindingAttempt = Symbol();
+                readAttempt.current = bindingAttempt;
                 latestRead = confirmationData(
                   (await confirmationRead.refetch({ throwOnError: true })).data,
+                  bindingAttempt,
                   AGENT_MEMORIES_GET,
                 );
                 if (!live()) return;

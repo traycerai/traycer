@@ -309,6 +309,103 @@ describe("Agent memories ▸ the host row's write", () => {
     },
   );
 
+  it("rejects retained confirmation data when a Personal revision cancels the populated post-status read", async () => {
+    let reads = 0;
+    let releasePostStatus: (
+      value: ConfigAgentMemoriesResponse,
+    ) => void = () => {
+      throw new Error("post-status read has not started");
+    };
+    script.get = () => {
+      reads += 1;
+      if (reads === 1) return Promise.resolve(read(false, 5));
+      if (reads === 2) return Promise.resolve(read(true, 9));
+      if (reads === 3)
+        return new Promise((resolve) => {
+          releasePostStatus = resolve;
+        });
+      // Keep the canonical reread unavailable: it cannot supply confirmation.
+      if (reads === 4) return new Promise(() => undefined);
+      return Promise.resolve(read(false, 10));
+    };
+    script.set = () => queuedAnswer(UPLOAD);
+    script.statuses = [
+      environmentStatusFixture({
+        principal: { kind: "personal" },
+        receivedRevision: 5,
+        appliedRevision: 5,
+        acceptedUploads: [receipt({ revision: 7 })],
+      }),
+    ];
+    const harness = mountTeamPage(
+      { kind: "host" },
+      {
+        ...handlers(),
+        "environment.list": () => ({
+          environments: [
+            {
+              environmentId: ENV,
+              ownerKind: "user",
+              ownerId: "user-me",
+              roomId: "room-personal",
+              label: "Personal",
+              effectiveRole: "owner",
+              kind: "personal",
+              hostCount: 1,
+              providerHandle: null,
+            },
+          ],
+        }),
+      },
+    );
+    harness.queryClient.setDefaultOptions({
+      queries: {
+        retry: false,
+        staleTime: 60_000,
+        gcTime: 300_000,
+      },
+    });
+    render(
+      <>
+        <PersonalRevision />
+        <AgentMemoriesSettingsPanel />
+      </>,
+      { wrapper: harness.Wrapper },
+    );
+    await waitFor(() =>
+      expect(screen.getByTestId("personal-revision").textContent).toBe("5"),
+    );
+    await flipOn();
+    await waitFor(() => expect(reads).toBe(3));
+    script.statuses = [
+      environmentStatusFixture({
+        principal: { kind: "personal" },
+        receivedRevision: 10,
+        appliedRevision: 10,
+        acceptedUploads: [receipt({ revision: 7 })],
+      }),
+    ];
+    await act(async () => {
+      await harness.queryClient.invalidateQueries({
+        queryKey: hostQueryKeys.methodScope(
+          requireTeamHostClient().getActiveHostId(),
+          "environment.status",
+        ),
+      });
+    });
+    await waitFor(() => {
+      expect(screen.getByTestId("personal-revision").textContent).toBe("10");
+      expect(reads).toBe(4);
+    });
+    expect(await line()).toContain("Waiting to reach your configuration");
+    expect(
+      screen
+        .getByRole("switch", { name: "Use Traycer memories for agents" })
+        .getAttribute("aria-checked"),
+    ).toBe("false");
+    act(() => releasePostStatus(read(false, 10)));
+  });
+
   it.each(["applied", "saved", "queued"] as const)(
     "keeps the confirmed %s read when Settings reopens inside cache freshness",
     async (state) => {
