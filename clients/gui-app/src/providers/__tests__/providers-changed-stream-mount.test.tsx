@@ -247,17 +247,19 @@ describe("<ProvidersChangedStreamMount />", () => {
       undefined;
     let resolveFreshClaudeFetch: (commands: readonly string[]) => void = () =>
       undefined;
-    const claudeQueryFn = vi.fn(
-      (): Promise<readonly string[]> =>
-        new Promise((resolve) => {
-          claudeFetches += 1;
-          if (claudeFetches === 1) {
-            resolveStaleClaudeFetch = resolve;
-          } else {
-            resolveFreshClaudeFetch = resolve;
-          }
-        }),
-    );
+    let staleClaudeFetch: Promise<readonly string[]> | undefined;
+    const claudeQueryFn = vi.fn((): Promise<readonly string[]> => {
+      const fetch = new Promise<readonly string[]>((resolve) => {
+        claudeFetches += 1;
+        if (claudeFetches === 1) {
+          resolveStaleClaudeFetch = resolve;
+        } else {
+          resolveFreshClaudeFetch = resolve;
+        }
+      });
+      if (claudeFetches === 1) staleClaudeFetch = fetch;
+      return fetch;
+    });
     // No cached data to join: the real race this guards, per the production
     // comment ("Invalidation alone joins a first fetch with no cached data").
     const claudeObserver = new QueryObserver(queryClient, {
@@ -287,13 +289,8 @@ describe("<ProvidersChangedStreamMount />", () => {
 
       renderProvidersChangedStreamMount(queryClient);
 
-      await act(async () => {
+      act(() => {
         providersMountStreamState.opened[0]?.emitChanged("claude-code");
-        // `cancelQueries` runs first and its own `.then` schedules
-        // `invalidateQueries` - let that microtask chain settle before the
-        // fresh fetch is expected to have started.
-        await Promise.resolve();
-        await Promise.resolve();
       });
 
       await waitFor(() => expect(claudeFetches).toBe(2));
@@ -308,15 +305,10 @@ describe("<ProvidersChangedStreamMount />", () => {
         expect(claudeObserver.getCurrentResult().data).toEqual(["new-skill"]),
       );
 
-      act(() => {
-        // The stale first fetch's response finally arrives, well after the
-        // fresh one settled - the host-side race this test guards.
-        resolveStaleClaudeFetch(["stale"]);
-      });
-      // Flush whatever microtasks that late, cancelled settlement schedules.
       await act(async () => {
-        await Promise.resolve();
-        await Promise.resolve();
+        // The stale first fetch arrives after the fresh one settled.
+        resolveStaleClaudeFetch(["stale"]);
+        await staleClaudeFetch;
       });
       expect(claudeObserver.getCurrentResult().data).toEqual(["new-skill"]);
       expect(claudeFetches).toBe(2);
