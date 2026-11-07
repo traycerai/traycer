@@ -445,6 +445,21 @@ it("cancels the active tool before Escape closes the expanded canvas", async () 
   expect(screen.queryByRole("dialog")).toBeNull();
 });
 
+it("clears a selected note before Escape closes the expanded canvas", async () => {
+  const user = userEvent.setup();
+  mountEditor();
+  await user.click(screen.getByRole("button", { name: "Expand" }));
+  streamChanges([{ type: "select", id: "note:note-1", selected: true }]);
+  expect(nodeNamed("note:note-1").selected).toBe(true);
+
+  await user.keyboard("{Escape}");
+  expect(screen.getByRole("dialog", { name: "Canvas" })).toBeTruthy();
+  expect(nodeNamed("note:note-1").selected).toBe(false);
+
+  await user.keyboard("{Escape}");
+  expect(screen.queryByRole("dialog")).toBeNull();
+});
+
 it("commits a sticky note on Escape without closing the expanded canvas", async () => {
   const user = userEvent.setup();
   const { store } = mountEditor();

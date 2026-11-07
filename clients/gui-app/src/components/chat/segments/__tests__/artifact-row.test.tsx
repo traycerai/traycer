@@ -854,7 +854,7 @@ describe("<ArtifactRow />", () => {
       renderRow(scopeWithClient(makeArtifactReadClient(neverRespond)), STAMP);
       expect(screen.queryByText("Showing latest")).toBeNull();
 
-      fireEvent.click(screen.getByRole("button", { name: "Expand" }));
+      fireEvent.click(screen.getByRole("button", { name: "Open in panel" }));
 
       expectLatestExpand();
     });
