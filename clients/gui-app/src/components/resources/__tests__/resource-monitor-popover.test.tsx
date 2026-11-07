@@ -2524,6 +2524,7 @@ describe("ResourceMonitorPopover", () => {
       "epic-1",
       "tab-1",
       expect.any(Function),
+      "user",
     );
     expect(canvasMock.prepareSetActiveTileTabFocusTarget).toHaveBeenCalledWith(
       "tab-1",
@@ -2960,6 +2961,7 @@ describe("ResourceMonitorPopover", () => {
       "epic-1",
       "tab-1",
       expect.any(Function),
+      "user",
     );
     expect(
       canvasMock.prepareOpenTileInPaneFocusTargetFromSource,
@@ -5185,6 +5187,7 @@ describe("ResourceMonitorPopover · host picker", () => {
       "epic-1",
       "tab-1",
       expect.any(Function),
+      "user",
     );
     expect(canvasMock.prepareSetActiveTileTabFocusTarget).toHaveBeenCalledWith(
       "tab-1",
