@@ -201,6 +201,7 @@ describe("<OpeningBehaviorPanel /> search targets", () => {
         mobileApp: false,
         phoneLayout: false,
         soundtrackOffered: false,
+        soundtrackRecordingOffered: false,
         soundtrackOn: false,
       },
       container,

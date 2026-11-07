@@ -2,6 +2,7 @@ import type { ReactNode } from "react";
 import { APP_NOTIFICATIONS } from "@/components/settings/panels/app-notifications-settings.definitions";
 import { SettingsGroup } from "@/components/settings/settings-group";
 import { SettingsRow } from "@/components/settings/settings-row";
+import { SoundtrackRecordingRow } from "@/components/settings/panels/soundtrack-recording-row";
 import {
   Select,
   SelectContent,
@@ -37,9 +38,10 @@ const DIRECTOR_LABELS: Readonly<Record<MixDirectorId, string>> = {
 const DIRECTOR_IDS: readonly MixDirectorId[] = ["static", "rules"];
 
 /**
- * The soundtrack's switch, its level and what it follows. The level and what it
- * follows stay editable while it is off, so it comes back the way it was set.
- * Its playback controls show only while it is on, and keep their value.
+ * The soundtrack's switch, its level and what it follows, and on a build that
+ * can save one, a recording of it. The level and what it follows stay editable
+ * while it is off, so it comes back the way it was set. Its playback controls
+ * show only while it is on, and keep their value.
  */
 export function SoundtrackSettingsSection(): ReactNode {
   const availability = useSettingsAvailabilityContext();
@@ -131,6 +133,11 @@ export function SoundtrackSettingsSection(): ReactNode {
           </Select>
         }
       />
+      {APP_NOTIFICATIONS.definitions.soundtrackRecording.availableWhen(
+        availability,
+      ) ? (
+        <SoundtrackRecordingRow />
+      ) : null}
     </SettingsGroup>
   );
 }

@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { appLogger } from "@/lib/logger";
 import { MIX_TUNING } from "../mix-tuning";
 import { crossfadePlayers, TrackPlayer } from "../player";
+import { SoundtrackLogRelay } from "../session-log";
 import type { StemSource } from "../stems";
 import type { LayerProperties, VariableTrack } from "../variable-sound";
 import { makeAudioBuffer } from "./audio-buffer";
@@ -126,6 +127,7 @@ function makePlayerWithRandom(
     output,
     stems,
     random,
+    log: new SoundtrackLogRelay(),
     silenceSeconds: [5, 5],
     resumeAt: 0,
     onRunStart: () => undefined,
@@ -144,6 +146,7 @@ function makePlayer(
     output,
     stems,
     random: () => 0.5,
+    log: new SoundtrackLogRelay(),
     silenceSeconds: [silenceSeconds, silenceSeconds],
     resumeAt: 0,
     onRunStart: () => undefined,
@@ -213,6 +216,7 @@ describe("TrackPlayer scheduling", () => {
       output: new FakeOutput(),
       stems: new FakeStems(SAMPLE_SECONDS),
       random: () => 0.5,
+      log: new SoundtrackLogRelay(),
       silenceSeconds: [5, 5],
       resumeAt: 20,
       onRunStart: () => undefined,
