@@ -1,4 +1,8 @@
-import type { ReactElement } from "react";
+import { useEffect, useState, type ReactElement, type ReactNode } from "react";
+import type {
+  BotConversationSendRequest,
+  BotConversationSendResponse,
+} from "@traycer/protocol/host/bot/conversation-schemas";
 import { createRoot } from "react-dom/client";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import {
@@ -11,12 +15,14 @@ import { TabHostContext } from "@/components/epic-canvas/hooks/use-tab-host-id";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import {
   HostRuntimeProvider,
+  useHostBinding,
   hostRpcRegistry,
   type HostRpcRegistry,
   type MessengerFactory,
 } from "@/lib/host";
 import { RunnerHostProvider } from "@/providers/runner-host-provider";
 import { WindowsBridgeContext } from "@/providers/windows-bridge-context";
+import { createRendererContextFixture } from "@traycer-clients/shared/test-fixtures/request-context";
 import { useVoiceSessionStore } from "@/stores/voice/voice-session-store";
 import "@/lib/theme-applier";
 import "@/index.css";
@@ -40,6 +46,8 @@ declare global {
   interface Window {
     __composerCallProbe?: {
       readonly offer: () => void;
+      readonly sent: () => readonly BotConversationSendRequest[];
+      readonly completeSend: () => void;
       readonly placeCall: () => void;
       readonly goLive: () => void;
       readonly showCaptions: () => void;
@@ -49,7 +57,7 @@ declare global {
 }
 
 const HOST_ID = "composer-call-host";
-const BOT_ID = "bot-1";
+const BOT_ID = "bot_01ARZ3NDEKTSV4RRFFQ69G5FAV";
 
 const params = new URLSearchParams(window.location.search);
 const BOT_TITLE = params.get("title") ?? "Release Bot";
@@ -73,6 +81,8 @@ const queryClient = new QueryClient({
   defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
 });
 
+const sent: BotConversationSendRequest[] = [];
+let completeSend: (() => void) | null = null;
 let requestCounter = 0;
 const messengerFactory: MessengerFactory<HostRpcRegistry> = ({ registry }) =>
   new MockHostMessenger<HostRpcRegistry>({
@@ -103,10 +113,27 @@ const messengerFactory: MessengerFactory<HostRpcRegistry> = ({ registry }) =>
         complete: true,
       }),
       "epic.getTaskContexts": () => ({ tasks: {} }),
+      "bot.conversation.send": (request) => {
+        sent.push(request);
+        return new Promise<BotConversationSendResponse>((resolve) => {
+          completeSend = () =>
+            resolve({
+              messageId: `post-${String(sent.length)}`,
+              requestId: `request-${String(sent.length)}`,
+              delivery: "written",
+              threadId: request.threadId,
+            });
+        });
+      },
     },
   });
 
 window.__composerCallProbe = {
+  sent: () => sent,
+  completeSend: () => {
+    completeSend?.();
+    completeSend = null;
+  },
   offer: () => {
     useVoiceSessionStore.setState({
       availability: "live",
@@ -139,6 +166,21 @@ window.__composerCallProbe = {
 };
 
 function noop(): void {}
+
+/** Give the real send mutation an authenticated fixture request context. */
+function RequestContext(props: { readonly children: ReactNode }): ReactNode {
+  const binding = useHostBinding();
+  const [ready, setReady] = useState(false);
+  useEffect(() => {
+    if (ready || binding === null) return;
+    const unsubscribe = binding.hostClient.onChange(() => setReady(true));
+    binding.hostClient.setRequestContext(
+      createRendererContextFixture({ bearerToken: "fixture" }),
+    );
+    return unsubscribe;
+  }, [binding, ready]);
+  return ready ? props.children : null;
+}
 
 export function Pane(): ReactElement {
   return (
@@ -207,7 +249,9 @@ createRoot(root).render(
       >
         <WindowsBridgeContext.Provider value={windowsBridgeValue}>
           <TooltipProvider>
-            <Pane />
+            <RequestContext>
+              <Pane />
+            </RequestContext>
           </TooltipProvider>
         </WindowsBridgeContext.Provider>
       </HostRuntimeProvider>

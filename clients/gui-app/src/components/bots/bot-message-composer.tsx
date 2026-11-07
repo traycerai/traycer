@@ -118,7 +118,7 @@ const BOX_FULL = {
   send: "pb-1.5",
 };
 
-/** 44 tall: the field's 40, its frame's border and the form's padding. */
+/** The field and actions share one row while the keyboard is open. */
 const BOX_ONE_ROW = {
   name: "one-row",
   form: "px-2 py-px",
@@ -567,7 +567,7 @@ export function BotMessageComposer(props: {
             />
             <Button
               type="submit"
-              size="icon-sm"
+              size="icon-sm-touch"
               disabled={!canSend}
               aria-label="Send"
               data-testid={`${testId}-send`}
@@ -643,7 +643,7 @@ export function BotMessageComposerUnavailable(props: {
         <div className="flex items-center justify-end gap-2 px-2 pb-1.5">
           <Button
             type="button"
-            size="icon-sm"
+            size="icon-sm-touch"
             disabled
             aria-label="Send"
             data-testid={`${testId}-send`}
