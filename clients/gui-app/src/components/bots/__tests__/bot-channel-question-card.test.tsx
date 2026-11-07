@@ -29,6 +29,7 @@ import { mockRemoteHostEntry } from "@traycer-clients/shared/host-client/mock/mo
 import { MockHostMessenger } from "@traycer-clients/shared/host-client/mock/mock-host-messenger";
 import { createRequestContextFixture } from "@traycer-clients/shared/test-fixtures/request-context";
 import type { JsonContent } from "@traycer/protocol/common/registry";
+import { botQuestionsText } from "@traycer/protocol/persistence/epic/messages";
 import type {
   BotConversationSendDelivery,
   BotConversationSendRequest,
@@ -1263,6 +1264,70 @@ describe("<BotChannelView tiles={null} /> a row's text above its question card",
     expect(
       within(screen.getByTestId("bot-channel")).getAllByText(DEPLOY),
     ).toHaveLength(1);
+  });
+
+  describe("with several questions, one long and multi-line", () => {
+    const LONG_MARKER = "rollback window for the canary";
+    const LONG_QUESTION = [
+      "Before the train leaves, which of these should block it?",
+      `Think about the ${LONG_MARKER}, the migration that touches billing,`,
+      "and whether the on-call engineer has signed off on the release.",
+      "x".repeat(200),
+    ].join("\n");
+    const longQuestions: BotQuestionItem[] = [
+      {
+        text: LONG_QUESTION,
+        options: [],
+        allowFreeText: true,
+        settlement: null,
+      },
+      deploy(null),
+    ];
+
+    function expectEachQuestionOnce(): void {
+      const channel = screen.getByTestId("bot-channel");
+      expect(
+        within(channel).getAllByText(new RegExp(LONG_MARKER)),
+      ).toHaveLength(1);
+      expect(within(channel).getAllByText(DEPLOY)).toHaveLength(1);
+      const card = channelCard();
+      expect(within(card).getByText(new RegExp(LONG_MARKER))).toBeTruthy();
+      expect(within(card).getByText(DEPLOY)).toBeTruthy();
+      expect(
+        within(card).getAllByRole("button", { name: "Submit" }).length,
+      ).toBeGreaterThan(0);
+      expect(
+        within(card).getAllByRole("button", { name: "Skip" }).length,
+      ).toBeGreaterThan(0);
+      expect(
+        within(card).getAllByRole("textbox", { name: "Your answer" }).length,
+      ).toBeGreaterThan(0);
+    }
+
+    it("draws each question once, in the card, when the row's text is exactly what the host writes for them", () => {
+      session(CHANNEL_ID, [
+        botRow(
+          QUESTION_ID,
+          botQuestionsText(longQuestions),
+          longQuestions,
+          null,
+        ),
+      ]);
+      mountChannel(null);
+
+      expectEachQuestionOnce();
+    });
+
+    it("draws the prose above the card once, and each question once, when the row says more than its questions", () => {
+      const prose = "Hi, I'm your release assistant. Let me ask a few things.";
+      session(CHANNEL_ID, [botRow(QUESTION_ID, prose, longQuestions, null)]);
+      mountChannel(null);
+
+      expect(
+        within(screen.getByTestId("bot-channel")).getAllByText(prose),
+      ).toHaveLength(1);
+      expectEachQuestionOnce();
+    });
   });
 });
 
