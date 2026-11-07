@@ -37,21 +37,6 @@ export function holdSoundtrackSessionLock(): SoundtrackSessionLock {
     };
   });
   let turnCame = false;
-  // Asked just ahead of the request, in the order the browser takes them, so a
-  // holder in the answer is another window, and never this one. Anyone queued is
-  // queued behind a holder, so the holder is all there is to read. The request
-  // does not wait for this: the place in the queue is taken here and now.
-  const queued = new Promise<void>((resolve) => {
-    void locks.query().then(
-      (state) => {
-        const taken = state.held?.some(
-          (lock) => lock.name === SOUNDTRACK_SESSION_LOCK,
-        );
-        if (taken === true && !turnCame) resolve();
-      },
-      () => undefined,
-    );
-  });
   const held = new Promise<void>((resolve) => {
     void locks
       .request(SOUNDTRACK_SESSION_LOCK, () => {
@@ -60,6 +45,22 @@ export function holdSoundtrackSessionLock(): SoundtrackSessionLock {
         return hold;
       })
       .catch(() => undefined);
+  });
+  // Asked after the request, in the order the browser takes them, so the answer
+  // has this window in it. Asked ahead of it, the answer could miss the whole
+  // wait: another window can take the lock between the two. A window that has to
+  // wait is pending here. One that holds the lock has had its turn by the time
+  // the answer arrives, however many have queued behind it.
+  const queued = new Promise<void>((resolve) => {
+    void locks.query().then(
+      (state) => {
+        const waiting = state.pending?.some(
+          (lock) => lock.name === SOUNDTRACK_SESSION_LOCK,
+        );
+        if (waiting === true && !turnCame) resolve();
+      },
+      () => undefined,
+    );
   });
   return { held, queued, release };
 }

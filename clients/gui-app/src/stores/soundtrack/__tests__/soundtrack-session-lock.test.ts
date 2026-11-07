@@ -250,6 +250,26 @@ describe("the soundtrack lock when the browser's answers come late", () => {
     later().disable();
   });
 
+  it("leaves each of two windows playing or waiting, whichever of their lock operations the browser takes first", async () => {
+    const first = openWindow(openFakePorts, readBundled);
+    const second = openWindow(openFakePorts, readBundled);
+    locks.holdOperations();
+
+    first().enable();
+    second().enable();
+    // The browser keeps each window's own two operations in order, and promises
+    // nothing about one window's against the other's.
+    locks.process([0, 2, 3, 1]);
+    await settle();
+
+    for (const window of [first, second]) {
+      expect(window().waitingForLock).toBe(!window().enabled);
+    }
+    expect(openedFakePorts).toHaveLength(1);
+    first().disable();
+    second().disable();
+  });
+
   it.each([
     ["the answer first", true],
     ["the grant first", false],
