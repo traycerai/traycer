@@ -102,6 +102,7 @@ type MockState = {
   // `enabled` flag, independent from host-RPC providers above. Defaults to
   // enabled so the existing Traycer-tab cases below behave exactly as before.
   providersList: { data: { providers: ProviderCliState[] } | undefined };
+  selectedProviders: { data: { providers: ProviderCliState[] } | undefined };
   traycerUsageFetching: boolean;
   traycerUsageUpdatedAt: Readonly<Record<string, number>>;
   openSettings: Mock<(...args: unknown[]) => void>;
@@ -150,6 +151,7 @@ const mocks = vi.hoisted<MockState>(() => ({
   configured: [],
   results: {},
   providersList: { data: undefined },
+  selectedProviders: { data: undefined },
   traycerUsageFetching: false,
   traycerUsageUpdatedAt: {},
   openSettings: vi.fn(),
@@ -349,6 +351,11 @@ vi.mock("@/hooks/auth/use-auth-user-query", () => ({
 // `useConfiguredRateLimitProviders`), so it gets its own fixture seam.
 vi.mock("@/hooks/providers/use-providers-list-query", () => ({
   useProvidersList: () => mocks.providersList,
+  useProvidersListForClient: (client: string | null) =>
+    client === "host-b" ? mocks.selectedProviders : mocks.providersList,
+}));
+vi.mock("@/hooks/host/use-host-client-for-host-id", () => ({
+  useHostClientForHostId: (hostId: string | null) => hostId,
 }));
 // The aperture usage query + its turn-refresh only mount inside the shared
 // RateLimitView (rate-limit-based Traycer plans). Stub them so no real host
@@ -1039,6 +1046,7 @@ beforeEach(() => {
   mocks.configured = [];
   mocks.results = {};
   mocks.providersList = { data: { providers: [traycerProviderFixture(true)] } };
+  mocks.selectedProviders = { data: undefined };
   mocks.traycerUsageFetching = false;
   mocks.traycerUsageUpdatedAt = {};
   mocks.openSettings = vi.fn();
@@ -4321,6 +4329,46 @@ describe("<RateLimitPopover /> unusable explicit host pick", () => {
 
     fireEvent.click(screen.getByTestId("rate-limit-host-return-to-active"));
     expect(returnToActive).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps account usage based on the unavailable selected host state", () => {
+    mocks.authUser = readyAuthUser(
+      authUserFixture({ status: "PRO_V3", withTeam: false }),
+    );
+    const selectedScope = hostScopeFixture({
+      host: hostScopeOptionFixture({ hostId: "host-b", connectable: false }),
+      hosts: [
+        hostScopeOptionFixture({ hostId: "host-a" }),
+        hostScopeOptionFixture({ hostId: "host-b", connectable: false }),
+      ],
+      hostLabel: "Office Linux",
+      status: "unreachable",
+      isViewingActive: false,
+    });
+
+    mocks.providersList = {
+      data: { providers: [traycerProviderFixture(false)] },
+    };
+    mocks.selectedProviders = { data: undefined };
+    const unknownView = renderPopoverWithScope(selectedScope, true);
+    expect(screen.getByText("Traycer Inference")).toBeTruthy();
+    unknownView.unmount();
+
+    mocks.providersList = {
+      data: { providers: [traycerProviderFixture(true)] },
+    };
+    mocks.selectedProviders = {
+      data: { providers: [traycerProviderFixture(false)] },
+    };
+    const disabledView = renderPopoverWithScope(selectedScope, true);
+    expect(screen.queryByText("Traycer Inference")).toBeNull();
+    disabledView.unmount();
+
+    mocks.selectedProviders = {
+      data: { providers: [traycerProviderFixture(true)] },
+    };
+    renderPopoverWithScope(selectedScope, true);
+    expect(screen.getByText("Traycer Inference")).toBeTruthy();
   });
 
   it("shows the unreachable notice for an explicitly picked host this client cannot dial", () => {
