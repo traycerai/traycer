@@ -1276,7 +1276,9 @@ export class TabNavigationController {
           "direct_ui",
         ),
         commitWithoutNavigation,
-        MANUAL_TILE_OPEN,
+        // Tab activation is a gesture; the envelope being built here owns the
+        // route write, so this claim reaches no commit of its own.
+        { ...MANUAL_TILE_OPEN, provenance: "user" },
       );
     }
     return canvas.prepareSetActiveTileTabFocusTarget(

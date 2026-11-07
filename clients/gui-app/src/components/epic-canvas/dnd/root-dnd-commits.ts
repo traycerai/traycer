@@ -552,7 +552,8 @@ function placeResolvedCanvasTile(
         source: "direct_ui",
       },
       navigateNested,
-      MANUAL_TILE_OPEN,
+      // A drag is the person's hand.
+      { ...MANUAL_TILE_OPEN, provenance: "user" },
     );
     return true;
   };

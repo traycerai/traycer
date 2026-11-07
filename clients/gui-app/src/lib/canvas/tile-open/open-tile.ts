@@ -70,11 +70,21 @@ export interface OpenTileOptions {
   readonly mobileTarget: MobileTileOpenTarget | null;
 }
 
-/** The values every in-app gesture carries: user-initiated, tab-creating. */
-export const MANUAL_TILE_OPEN: OpenTileOptions = {
+/**
+ * The values an in-app gesture carries APART from who asked: a tab may be
+ * minted, a pip floats as the person's, and no phone slot is named.
+ *
+ * `provenance` is deliberately NOT one of them, so this constant cannot be
+ * handed to `openTileWithNavigation` whole. It used to say `"user"`, which
+ * made a human's authority the default for every caller that reached for the
+ * shared shape - including the route's own auto-open and a replayed queue
+ * - and a commit claiming the person acted retires an artifact request the
+ * route is still waiting on. Spread it and name the claim:
+ * `{ ...MANUAL_TILE_OPEN, provenance: "user" }`.
+ */
+export const MANUAL_TILE_OPEN: Omit<OpenTileOptions, "provenance"> = {
   createTab: true,
   pipOrigin: "manual",
-  provenance: "user",
   mobileTarget: null,
 };
 

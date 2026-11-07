@@ -1116,6 +1116,7 @@ function ChatForkDialogBody(props: ChatForkDialogProps) {
                 hostId,
                 placement: null,
                 source: "direct_ui",
+                provenance: "user",
               },
               navigateNestedFocus,
               mobileTarget: null,

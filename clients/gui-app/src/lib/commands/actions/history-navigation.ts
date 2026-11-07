@@ -9,6 +9,7 @@ import {
   parseNestedFocusTargetFromHref,
   resolveNestedFocusTarget,
 } from "@/lib/epic-nested-focus-route";
+import { markExplicitNestedFocusIntent } from "@/lib/nested-focus-navigation-intent";
 import {
   useEpicCanvasStore,
   type ClosedTilePayload,
@@ -123,9 +124,45 @@ function navigateHistory(router: HistoryNavRouter, direction: -1 | 1): void {
   if (target === null) {
     return;
   }
-  reopenClosedTilePreview(controller.getEntries()[target.index]);
+  const landingHref = controller.getEntries()[target.index];
+  markRestoredFocusIntent(landingHref);
+  reopenClosedTilePreview(landingHref);
   router.history.go(target.index - controller.getIndex());
   trackHistoryNavigationUsed(direction === -1 ? "back" : "forward");
+}
+
+/**
+ * A traversal that lands on an entry naming a focused tile is the person
+ * CHOOSING that tile, so it retires a pending artifact-focus request the same
+ * way clicking the tile would.
+ *
+ * It has to be said here because a history step reaches the route without
+ * passing `navigateNestedFocus`, so nothing else on this path declares
+ * provenance. The route's pending request samples whether a nested target was
+ * present when it arrived, and a history move keeps the request's key - same
+ * `focusArtifactId`, same `focusedAt` - so without this the request went on
+ * outranking a target the person had just restored, and a late-arriving record
+ * opened its artifact over the tile they came back to.
+ *
+ * Only when the landing entry NAMES a target. A Back onto the request's own
+ * entry - `focusArtifactId` and no `focusPaneId` - is the person returning TO
+ * the request, and must still honour it rather than retire it.
+ *
+ * Marked before the step, like the navigation boundary does, so a landing that
+ * re-renders synchronously cannot read a stale stamp. A refused step never gets
+ * here, which is correct: nothing moved.
+ *
+ * The plain-history backend is deliberately not covered. It exposes no entry
+ * list, so the landing is unknowable before the move - the same asymmetry
+ * `stepPlainHistory` already documents - and guessing would be worse than
+ * abstaining: marking unconditionally would retire a request on a Back onto its
+ * own entry. That backend serves only the browser web app.
+ */
+function markRestoredFocusIntent(href: string): void {
+  const epicTab = parseEpicTabHref(href);
+  if (epicTab === null) return;
+  if (parseNestedFocusTargetFromHref(href) === null) return;
+  markExplicitNestedFocusIntent(epicTab.epicId, epicTab.tabId);
 }
 
 /**

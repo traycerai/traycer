@@ -984,7 +984,10 @@ const ArtifactNode = memo(function ArtifactNode(props: ArtifactNodeProps) {
           nodeId: projectedNodeId,
           fallbackHostId: activeHostId,
           openNode: (nodeRef) => {
-            openTile(tileIntent(nodeRef, { tabId }, "explicit", "direct_ui"));
+            openTile(
+              tileIntent(nodeRef, { tabId }, "explicit", "direct_ui"),
+              "user",
+            );
           },
           onBeforeOpen,
           onOpened: () => {
@@ -1020,21 +1023,24 @@ const ArtifactNode = memo(function ArtifactNode(props: ArtifactNodeProps) {
     ) => {
       if (isRenaming) return;
       if (openableType === null) return;
-      openTile({
-        node: {
-          id: nodeId,
-          instanceId: uuidv4(),
-          type: openableType,
-          name: nodeName,
-          hostId: activeHostId,
+      openTile(
+        {
+          node: {
+            id: nodeId,
+            instanceId: uuidv4(),
+            type: openableType,
+            name: nodeName,
+            hostId: activeHostId,
+          },
+          target: { tabId },
+          gesture,
+          modifiers: modifiersFromMouseEvent(event),
+          placement: null,
+          dedupe: true,
+          source: "direct_ui",
         },
-        target: { tabId },
-        gesture,
-        modifiers: modifiersFromMouseEvent(event),
-        placement: null,
-        dedupe: true,
-        source: "direct_ui",
-      });
+        "user",
+      );
     },
     [activeHostId, isRenaming, nodeId, nodeName, openTile, openableType, tabId],
   );

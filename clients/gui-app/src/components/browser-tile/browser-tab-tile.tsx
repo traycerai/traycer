@@ -1,3 +1,4 @@
+import type { NestedFocusProvenance } from "@/lib/epic-nested-focus-navigation";
 import type { PendingBrowserTabRequest } from "@/lib/browser-view/sessions/browser-sessions-coordinator";
 import { logBrowserOpenSpan } from "@/lib/browser-view/sessions/browser-open-perf";
 import {
@@ -64,7 +65,7 @@ export interface BrowserTabTileProps {
    * interprets it, and it only has to be stable for one mounted tile.
    */
   readonly pageSessionId: string;
-  readonly onRequestClose: () => void;
+  readonly onRequestClose: (provenance: NestedFocusProvenance) => void;
   /** `null` where the host surface does not persist a viewport choice. */
   readonly persistViewportPreset:
     | ((preset: BrowserViewViewportPresetId) => void)
@@ -107,7 +108,7 @@ export interface BrowserTabTileProps {
 /** Request-only chrome mounts no browser transport or native surface. */
 export function PendingBrowserTabTile(props: {
   readonly request: PendingBrowserTabRequest;
-  readonly onRequestClose: () => void;
+  readonly onRequestClose: (provenance: NestedFocusProvenance) => void;
 }) {
   const measured = useRef(false);
   useLayoutEffect(() => {
@@ -135,7 +136,7 @@ export function PendingBrowserTabTile(props: {
           variant="ghost"
           size="icon-sm"
           aria-label="Close browser tab"
-          onClick={props.onRequestClose}
+          onClick={() => props.onRequestClose("user")}
         >
           <X className="size-4" aria-hidden />
         </Button>
@@ -341,7 +342,7 @@ function BrowserTabTileSurface(props: BrowserTabTileSurfaceProps) {
         // row - hands the streamed viewer nothing to claim `mod+w` with.
         onRequestCloseTab={
           browserTileHostOwnsClose(props.placement)
-            ? props.onRequestClose
+            ? () => props.onRequestClose("user")
             : null
         }
         completeMeans={browserPeekCompleteMeaning(
@@ -954,7 +955,9 @@ export function BrowserTabTile(props: BrowserTabTileProps) {
     // along with closing the tile so a future tab reusing this instance id
     // never starts from a stale image.
     clearLastBrowserPeekFrame(browserPeekFrameKey(props.node));
-    onRequestClose();
+    // The tab disappeared from the host's inventory; no person
+    // closed this tile, so it must not claim a gesture.
+    onRequestClose("automatic");
   }, [
     onRequestClose,
     sessions.inventoryReady,

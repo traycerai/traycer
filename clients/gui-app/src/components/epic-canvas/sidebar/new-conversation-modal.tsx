@@ -1339,6 +1339,7 @@ export function NewConversationModalBody(props: {
             "explicit",
             "direct_ui",
           ),
+          "user",
         );
       },
     }),

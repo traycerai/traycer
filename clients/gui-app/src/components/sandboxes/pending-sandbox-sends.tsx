@@ -2322,6 +2322,11 @@ function finishDispatchUi(
       hostId: dispatch.input.hostId,
       placement: null,
       source: "direct_ui",
+      // NOT the person, though the source is a direct gesture: this queue is
+      // persisted and rehydrates, so a fork whose sandbox woke after a reload
+      // lands here with nobody at the keyboard. A `"user"` claim would retire
+      // an artifact request the route is waiting on in that load.
+      provenance: "automatic",
     },
     navigateNestedFocus,
     mobileTarget: null,
@@ -3168,6 +3173,7 @@ function PendingStagedSendItem(props: {
             "explicit",
             "direct_ui",
           ),
+          "user",
         );
       },
     }),

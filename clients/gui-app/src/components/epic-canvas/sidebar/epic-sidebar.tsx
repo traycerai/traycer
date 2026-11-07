@@ -2194,6 +2194,7 @@ function TreePanelActions(props: TreePanelActionsProps) {
               "explicit",
               "direct_ui",
             ),
+            "user",
           );
         },
         onBeforeOpen,

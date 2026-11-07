@@ -4776,7 +4776,10 @@ function prepareResourceTarget(
     return openTileWithNavigation(
       tileIntent(preparation.node, { tabId }, preparation.gesture, "direct_ui"),
       commitWithoutNavigation,
-      MANUAL_TILE_OPEN,
+      // A person picked this row out of the resource popover. The navigator
+      // above claims nothing either way, so this says who asked in case the
+      // caller's wrapping `navigateNested` ever becomes this one's.
+      { ...MANUAL_TILE_OPEN, provenance: "user" },
     );
   }
   return canvas.prepareSetActiveTileTabFocusTarget(

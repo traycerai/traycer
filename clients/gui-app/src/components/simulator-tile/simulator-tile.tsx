@@ -151,7 +151,10 @@ export function SimulatorTile(props: SimulatorTileProps) {
   const { openTile } = useEpicTileNavigation();
   const placeTile = useCallback(
     (ref: SimulatorTileRef) => {
-      openTile(tileIntent(ref, { tabId: viewTabId }, "explicit", "direct_ui"));
+      openTile(
+        tileIntent(ref, { tabId: viewTabId }, "explicit", "direct_ui"),
+        "user",
+      );
     },
     [openTile, viewTabId],
   );

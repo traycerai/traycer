@@ -64,7 +64,7 @@ export function BrowserSessionTile(props: BrowserSessionTileProps) {
     return (
       <PendingBrowserTabTile
         request={props.node.pending}
-        onRequestClose={() => closeCanvasTile("user")}
+        onRequestClose={closeCanvasTile}
       />
     );
   }
@@ -176,22 +176,25 @@ function ResolvedBrowserSessionTile(
           // Browser semantics, never the placement setting (A4): the popup is
           // a tab of THIS pane's session, and a background disposition
           // (middle/ctrl/cmd-click) leaves the current tab active.
-          openTile({
-            node: makeBrowserSessionTileRef({
-              hostId: props.node.hostId,
-              sessionId: opened.sessionId,
-              tabId: opened.tabId,
-            }),
-            // Resolved after the await, not before: the view tab can close
-            // while `openTab` is in flight, and opening into a closed tab id
-            // mutates a canvas with no route (R8).
-            target: currentPopupTarget(props.viewTabId, props.epicId),
-            gesture: disposition === "background" ? "host" : "explicit",
-            modifiers: null,
-            placement: { kind: "tab", paneId: props.paneId, index: null },
-            dedupe: true,
-            source: "direct_ui",
-          });
+          openTile(
+            {
+              node: makeBrowserSessionTileRef({
+                hostId: props.node.hostId,
+                sessionId: opened.sessionId,
+                tabId: opened.tabId,
+              }),
+              // Resolved after the await, not before: the view tab can close
+              // while `openTab` is in flight, and opening into a closed tab id
+              // mutates a canvas with no route (R8).
+              target: currentPopupTarget(props.viewTabId, props.epicId),
+              gesture: disposition === "background" ? "host" : "explicit",
+              modifiers: null,
+              placement: { kind: "tab", paneId: props.paneId, index: null },
+              dedupe: true,
+              source: "direct_ui",
+            },
+            "user",
+          );
         })
         .catch((cause: unknown) => {
           toast.error(
@@ -236,7 +239,7 @@ function ResolvedBrowserSessionTile(
       node={node}
       visible={visible}
       pageSessionId={pageSessionIdForCanvasTile(props.node.id)}
-      onRequestClose={() => closeCanvasTile("user")}
+      onRequestClose={closeCanvasTile}
       persistViewportPreset={persistViewportPreset}
       onOpenLinkInNewTile={onOpenLinkInNewTile}
       // The canvas has no answer of its own to "new tab" beyond opening one

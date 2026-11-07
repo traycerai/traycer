@@ -216,6 +216,7 @@ export function PrPanelBodyContent(props: {
                     "explicit",
                     "direct_ui",
                   ),
+                  "user",
                 );
               },
       };

@@ -595,7 +595,12 @@ export function useEpicRouteSynchronization(
         );
         return focusTarget;
       },
-      MANUAL_TILE_OPEN,
+      // NOT the person: this is the route serving its own focus request, and
+      // the request is the thing a human claim would retire. The navigator
+      // above takes no provenance at all - it writes the route directly
+      // rather than through the boundary that marks - so this is the value
+      // that stays correct if it is ever routed through the boundary.
+      { ...MANUAL_TILE_OPEN, provenance: "automatic" },
     );
   }, [
     snapshotLoaded,
