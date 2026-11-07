@@ -305,6 +305,10 @@ import {
   readPersistedDeliveryRestoreAck,
   writePersistedDeliveryRestoreAck,
 } from "@/lib/chats/delivery-restore-ack-persistence";
+import {
+  EVICTED_SEND_FAILED_MESSAGE,
+  isEvictedChatRefusal,
+} from "@/lib/chats/evicted-chat-refusal";
 import { create, type StoreApi, type UseBoundStore } from "zustand";
 
 import type {
@@ -3002,7 +3006,13 @@ function rejectionSurfaces(input: {
   ChatSessionState,
   "failedSendRestoration" | "errorNotices" | "lastCopyPrompts"
 > {
-  const { state, pending, frame, account } = input;
+  const { state, pending, account } = input;
+  // A send the host refused for an evicted chat fails in the words of any
+  // failed send, whichever surface ends up saying it.
+  const frame =
+    pending?.action === "send" && isEvictedChatRefusal(input.frame.code)
+      ? { ...input.frame, reason: EVICTED_SEND_FAILED_MESSAGE }
+      : input.frame;
   if (
     (pending?.action === "send" &&
       messageDeliveryNames(state.messageDelivery, pending.messageId)) ||
@@ -7164,6 +7174,27 @@ export function createChatSessionStoreWithNotificationDependencies(
       noticesSuppressedAfterDispatch.delete(clientActionId);
       return true;
     };
+    /**
+     * Whether a rejected ack speaks for its action, so the `errorNotice` the
+     * host follows it with must not speak again. For a frame of a queue-edit
+     * submission the record states the refusal, with the text or the settings
+     * it concerns, and may be gone by the time that notice lands. A send
+     * refused for an evicted chat is stated by the rejection's own surfaces,
+     * and the notice would repeat it in the host's words. Asked at the ack,
+     * while the record and the pending action still answer for the id.
+     */
+    const ackStatesItsRefusal = (frame: ChatActionAckFrame): boolean => {
+      if (frame.status !== "rejected") return false;
+      const { clientActionId } = frame;
+      if (
+        queueEditRecordForAction(get().queueEditRecords, clientActionId) !==
+        null
+      ) {
+        return true;
+      }
+      const pending = pendingActionForId(get().pendingActions, clientActionId);
+      return pending?.action === "send" && isEvictedChatRefusal(frame.code);
+    };
     const clearSuppressedNotices = (): void => {
       for (const timer of noticesSuppressedAfterDispatch.values()) {
         window.clearTimeout(timer);
@@ -8959,18 +8990,7 @@ export function createChatSessionStoreWithNotificationDependencies(
           frame.status,
         );
         retireSweptEvidenceOnAck(frame);
-        // The host follows a rejected ack with its own `errorNotice` for the
-        // same action. For a frame of a queue-edit submission the record
-        // states the refusal, with the text or the settings it concerns, and
-        // may be gone by the time that notice lands - so it is named here,
-        // while the record still answers for the id.
-        if (
-          frame.status === "rejected" &&
-          queueEditRecordForAction(
-            get().queueEditRecords,
-            frame.clientActionId,
-          ) !== null
-        ) {
+        if (ackStatesItsRefusal(frame)) {
           suppressNoticeAfterDispatch(frame.clientActionId);
         }
         holdSteerRestartRefusal(frame);

@@ -1,7 +1,8 @@
 /**
  * A chat the pool serves because its host dropped the records takes a typed
- * message (parked until the host brings the chat back), whoever the viewer is.
- * The line above the composer holds or leaves the send by what it says.
+ * message (parked until the host brings the chat back), whoever the viewer is,
+ * and its composer looks like any other: the send stays enabled and nothing is
+ * said above it.
  */
 import {
   cleanup,
@@ -61,12 +62,6 @@ import { NO_PROVIDER_FALLBACK } from "@/components/chat/fallback/fallback-state"
 import type { ChatRestoreContextValue } from "@/components/chat/chat-restore-context-core";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { TabHostProvider } from "@/components/epic-canvas/tab-host-provider";
-import {
-  EVICTED_CHAT_HEAD_MOVED_LINE,
-  EVICTED_CHAT_HYDRATING_LINE,
-  EVICTED_CHAT_UNREACHABLE_LINE,
-} from "@/components/chat/composer/evicted-chat-line";
-import type { EvictedChatLineKind } from "@/hooks/chats/use-evicted-chat-send";
 
 const EMPTY_BACKGROUND_STOP_TASK_IDS: ReadonlySet<string> = new Set();
 
@@ -202,11 +197,8 @@ const VIEWER_CANNOT_ACT = {
   readOnlyNotice: null,
 } as const;
 
-function evictedAccess(line: EvictedChatLineKind | null) {
-  return {
-    ...VIEWER_CANNOT_ACT,
-    evictedChat: { parks: true, line, ownerUserId: "owner-1" },
-  };
+function evictedAccess(parksEvictedSend: boolean) {
+  return { ...VIEWER_CANNOT_ACT, parksEvictedSend };
 }
 
 afterEach(() => {
@@ -215,41 +207,37 @@ afterEach(() => {
 });
 
 describe("the composer of an evicted chat the pool serves", () => {
-  it("renders the live composer with send enabled for a viewer who cannot act", () => {
-    render(<ChatLowerInteractionSurfaces {...props(evictedAccess(null))} />);
+  it("renders the live composer with send enabled for a viewer who cannot act, and no line above it", () => {
+    const { container } = render(
+      <ChatLowerInteractionSurfaces {...props(evictedAccess(true))} />,
+    );
 
     expect(screen.getByTestId("composer-stub")).toBeTruthy();
     expect(composerProps.at(-1)).toEqual({ sendDisabled: false });
+    expect(screen.getByTestId("composer-stub").textContent).toBe("");
+    expect(
+      container.querySelector("[role='status'], [role='alert']"),
+    ).toBeNull();
   });
 
-  it.each([
-    ["hydrating", EVICTED_CHAT_HYDRATING_LINE],
-    ["unreachable", EVICTED_CHAT_UNREACHABLE_LINE],
-  ] as const)("holds send and shows the %s line", (line, text) => {
-    render(<ChatLowerInteractionSurfaces {...props(evictedAccess(line))} />);
-
-    expect(screen.getByText(text)).toBeTruthy();
-    expect(composerProps.at(-1)).toEqual({ sendDisabled: true });
-  });
-
-  it("shows the head-moved line and leaves send enabled", () => {
+  it("keeps send enabled while a message is parked and the session cannot act", () => {
     render(
-      <ChatLowerInteractionSurfaces {...props(evictedAccess("head-moved"))} />,
+      <ChatLowerInteractionSurfaces
+        {...props({
+          isViewer: false,
+          isCopy: false,
+          canAct: false,
+          readOnlyNotice: null,
+          parksEvictedSend: true,
+        })}
+      />,
     );
 
-    expect(screen.getByText(EVICTED_CHAT_HEAD_MOVED_LINE)).toBeTruthy();
     expect(composerProps.at(-1)).toEqual({ sendDisabled: false });
   });
 
   it("keeps a viewer's read-only surface when no message is parked", () => {
-    render(
-      <ChatLowerInteractionSurfaces
-        {...props({
-          ...VIEWER_CANNOT_ACT,
-          evictedChat: { parks: false, line: null, ownerUserId: "owner-1" },
-        })}
-      />,
-    );
+    render(<ChatLowerInteractionSurfaces {...props(evictedAccess(false))} />);
 
     expect(screen.queryByTestId("composer-stub")).toBeNull();
   });

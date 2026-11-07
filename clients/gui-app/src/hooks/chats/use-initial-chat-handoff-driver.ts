@@ -326,7 +326,7 @@ interface ApplyInitialChatHandoffStepInput {
  * that fires on the transition, and a stale read would decide the question
  * with the wrong draft.
  */
-function composerDraftIsEmpty(nodeId: string): boolean {
+export function composerDraftIsEmpty(nodeId: string): boolean {
   const draft = useComposerDraftStore.getState().drafts[nodeId];
   if (draft === undefined) return true;
   return !contentIsSubmittable(draft.content);

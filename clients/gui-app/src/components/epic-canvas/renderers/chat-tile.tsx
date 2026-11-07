@@ -2666,6 +2666,19 @@ function useChatTileSessionViewModel(
     { ...state, queueTurnContinuity: false },
     activeTurnStatus,
   );
+  // A parked message reads as any send on its way. Handing it to the session
+  // swaps this row for the store's own in one commit.
+  const parkedEvictedSends = props.evictedSend?.parked;
+  const pendingUserMessages = useMemo(
+    () =>
+      parkedEvictedSends === undefined || parkedEvictedSends.length === 0
+        ? state.pendingUserMessages
+        : [
+            ...state.pendingUserMessages,
+            ...parkedEvictedSends.map((send) => send.row),
+          ],
+    [parkedEvictedSends, state.pendingUserMessages],
+  );
   const renderedMessages = useRenderedMessages(
     {
       messages: state.messages,
@@ -2678,7 +2691,7 @@ function useChatTileSessionViewModel(
       // its own correction up by row id. See `adoptWholeLogIdentity`.
       setupCardWindows:
         state.transcriptDerived?.setupCardWindows ?? EMPTY_SETUP_CARD_WINDOWS,
-      pendingUserMessages: state.pendingUserMessages,
+      pendingUserMessages,
       pendingTurn: state.pendingTurn,
       turnObservedAt: state.turnObservedAt,
       queuedPromptMessageIds: queuedPromptIds,
@@ -3539,7 +3552,10 @@ function useChatTileSessionViewModel(
       }
       if (props.restingSandbox !== undefined)
         return submitBoundSandboxMessage(input);
-      if (evictedSend?.parks === true) return evictedSend.park(input);
+      if (evictedSend?.parks === true) {
+        evictedSend.park(input, { type: "user", userId: profile.userId });
+        return true;
+      }
       return submitLiveMessage(input);
     },
     [
@@ -3555,15 +3571,17 @@ function useChatTileSessionViewModel(
       profile,
     ],
   );
-  // The parked message goes once the host holds the chat again and this
+  // The parked messages go once the host holds the chat again and this
   // session is the host's own: the pool's session never acts, so `canAct`
   // waits for the host's snapshot.
   useEffect(() => {
     if (evictedSend === null || !evictedSend.ready) return;
     if (evictedSend.served || !canAct) return;
-    const parked = evictedSend.take();
-    if (parked === null) return;
-    void Promise.resolve(submitLiveMessage(parked.input)).then(parked.settle);
+    for (const send of evictedSend.take()) {
+      void Promise.resolve(submitLiveMessage(send.input)).then((accepted) => {
+        evictedSend.settle(send, accepted);
+      });
+    }
   }, [evictedSend, canAct, submitLiveMessage]);
   useEvictedSendAckRefusals(handle, evictedSend?.refuse ?? null);
   // `/btw` / `/side`: fork this chat and ask there. The tile contributes what
@@ -4065,7 +4083,6 @@ function useChatTileSessionViewModel(
     [state.snapshotLoaded],
   );
 
-  const evictedOwnerUserId = state.chat?.userId ?? null;
   const lowerAccess = useMemo(
     () => ({
       isCopy,
@@ -4073,14 +4090,7 @@ function useChatTileSessionViewModel(
       canAct,
       readOnlyNotice: props.readOnlyNotice,
       restingSandbox: props.restingSandbox,
-      evictedChat:
-        evictedSend === null
-          ? undefined
-          : {
-              parks: evictedSend.parks,
-              line: evictedSend.line,
-              ownerUserId: evictedOwnerUserId,
-            },
+      parksEvictedSend: evictedSend?.parks,
     }),
     [
       isCopy,
@@ -4088,8 +4098,7 @@ function useChatTileSessionViewModel(
       canAct,
       props.readOnlyNotice,
       props.restingSandbox,
-      evictedSend,
-      evictedOwnerUserId,
+      evictedSend?.parks,
     ],
   );
 

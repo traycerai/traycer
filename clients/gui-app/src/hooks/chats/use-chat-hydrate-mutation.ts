@@ -6,16 +6,15 @@ import type {
 import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
 import type { HostRpcError } from "@traycer-clients/shared/host-transport/host-messenger";
 import { useHostMutation } from "@/hooks/host/use-host-query";
-import { evictedChatRefusalOfCode } from "@/lib/chats/evicted-chat-refusal";
+import { EVICTED_SEND_FAILED_MESSAGE } from "@/lib/chats/evicted-chat-refusal";
 import type { HostRpcRegistry } from "@/lib/host";
 import { toastFromHostError } from "@/lib/host-error-toast";
 import { chatHydrateMutationKeys } from "@/lib/query-keys";
 
 /**
  * Asks a chat's own host to bring back the records it dropped
- * (`epic.hydrateChat`), on that host's client. A typed refusal
- * (`evictedChatRefusalOfCode`) is said by the composer's line, so only the
- * other failures toast.
+ * (`epic.hydrateChat`), on that host's client. A failure is the failure of the
+ * message that asked, so it toasts as one, a typed refusal included.
  */
 export function useChatHydrateMutation(input: {
   readonly client: HostClient<HostRpcRegistry> | null;
@@ -29,8 +28,7 @@ export function useChatHydrateMutation(input: {
     options: {
       mutationKey: chatHydrateMutationKeys.hydrate(input.hostId, input.chatId),
       onError: (error) => {
-        if (evictedChatRefusalOfCode(error.code) !== null) return;
-        toastFromHostError(error, "Couldn't send this message.");
+        toastFromHostError(error, EVICTED_SEND_FAILED_MESSAGE);
       },
     },
   });

@@ -1,96 +1,145 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { v4 as uuidv4 } from "uuid";
+import type { UserMessageSender } from "@traycer/protocol/persistence/epic/schemas";
 import type { ChatComposerSubmitInput } from "@/components/chat/composer/chat-composer";
-import { useHostReachability } from "@/hooks/agent/use-host-reachability";
 import { useChatHydrateMutation } from "@/hooks/chats/use-chat-hydrate-mutation";
+import { composerDraftIsEmpty } from "@/hooks/chats/use-initial-chat-handoff-driver";
 import { useHostClientForHostId } from "@/hooks/host/use-host-client-for-host-id";
 import { holdChatOnItsHost } from "@/lib/chats/chat-continuing-on-host";
 import {
-  evictedChatRefusalOfCode,
-  type EvictedChatRefusal,
+  EVICTED_SEND_FAILED_MESSAGE,
+  isEvictedChatRefusal,
 } from "@/lib/chats/evicted-chat-refusal";
 import {
-  EMPTY_COMPOSER_DRAFT,
-  readComposerDraftSnapshot,
-  useComposerDraftStore,
-} from "@/stores/composer/composer-draft-store";
-
-/** What the line above the composer says about an evicted chat. */
-export type EvictedChatLineKind = "hydrating" | EvictedChatRefusal;
+  holdComposerContentImageRoots,
+  releaseComposerContentImageRoots,
+} from "@/lib/composer/composer-content-image-roots";
+import { reportableWarningToast } from "@/lib/reportable-error-toast";
+import {
+  CHAT_ACTION_REPORT_CONTEXT,
+  showErrorNoticeToast,
+} from "@/lib/toast/chat-error-notice-toast";
+import { useAccountContextStore } from "@/stores/auth/account-context-store";
+import { displacedRestorationNotice } from "@/stores/chats/chat-queue-reconciler";
+import type { PendingUserMessage } from "@/stores/chats/chat-session-store";
+import { useComposerDraftStore } from "@/stores/composer/composer-draft-store";
 
 /** A message held until the chat's host holds the chat again. */
 export interface ParkedEvictedSend {
   readonly input: ChatComposerSubmitInput;
-  /** Settles the composer's submit: `true` clears it, `false` keeps the draft. */
-  readonly settle: (accepted: boolean) => void;
+  /** The pending row the transcript draws while the message waits. */
+  readonly row: PendingUserMessage;
 }
 
 export interface EvictedChatSend {
   /**
    * Whether a message asks the chat's host to bring the chat back before it
    * is sent: while the pool serves the chat because the host dropped its
-   * records, and after the host refused a message for that reason.
+   * records, after the host refused a message for that reason, and while an
+   * earlier message still waits, so the two go in order.
    */
   readonly parks: boolean;
   /** Whether the pool serves the chat; a parked message waits until it does not. */
   readonly served: boolean;
-  readonly line: EvictedChatLineKind | null;
-  /** Whether the host holds the chat again, so the parked message may go. */
+  /** The messages waiting, oldest first. */
+  readonly parked: readonly ParkedEvictedSend[];
+  /** Whether the host holds the chat again, so the parked messages may go. */
   readonly ready: boolean;
   /**
-   * Parks a message and asks the host for the chat. The promise is the
-   * composer's: the draft stays while it is pending and after `false`.
-   * `false` at once when a message is already parked.
+   * Parks a message and, for the first one, asks the host for the chat. The
+   * composer clears as it does for any send, and this hook holds the message
+   * from here: a message that cannot go comes back to the composer.
    */
-  readonly park: (input: ChatComposerSubmitInput) => Promise<boolean> | false;
-  /** Takes the parked message to send it, which ends the hydrating line. */
-  readonly take: () => ParkedEvictedSend | null;
-  /** A refusal the host sent on a message's ack instead of the request. */
-  readonly refuse: (refusal: EvictedChatRefusal) => void;
+  readonly park: (
+    input: ChatComposerSubmitInput,
+    sender: UserMessageSender,
+  ) => void;
+  /** Takes the parked messages to send them; each is answered by `settle`. */
+  readonly take: () => readonly ParkedEvictedSend[];
+  /** How a taken message went: one that was not accepted comes back. */
+  readonly settle: (send: ParkedEvictedSend, accepted: boolean) => void;
+  /** The host refused a message on its ack instead of the request. */
+  readonly refuse: () => void;
 }
 
-interface StandingRefusal {
-  readonly refusal: EvictedChatRefusal;
-  /**
-   * The draft's revision once the refused message was back in the composer.
-   * Any edit moves the revision, and the line ends with it.
-   */
-  readonly draftRevision: number;
+function parkedSend(
+  input: ChatComposerSubmitInput,
+  sender: UserMessageSender,
+): ParkedEvictedSend {
+  return {
+    input,
+    row: {
+      clientActionId: uuidv4(),
+      messageId: uuidv4(),
+      content: input.content,
+      attachments: input.attachments,
+      sender,
+      settings: input.settings,
+      timestamp: Date.now(),
+      restore: input.restore,
+      accountContext: useAccountContextStore.getState().accountContext,
+      deliveryPolicy: input.deliveryPolicy,
+      restoreWorktreeIntent: null,
+    },
+  };
 }
 
-type ParkPhase = "idle" | "hydrating" | "ready";
+function imageRootsHolder(send: ParkedEvictedSend): string {
+  return `evicted-send:${send.row.clientActionId}`;
+}
 
 /**
- * The hydrating line while a message is parked, else a refusal while the
- * draft it came back as is unedited.
+ * Puts a message that did not go back in the composer. A newer draft there
+ * wins, and the message is stated in a toast that quotes it, the rule a failed
+ * send's restoration follows. Answers whether the composer took it.
  */
-function evictedChatLine(
-  phase: ParkPhase,
-  standing: StandingRefusal | null,
-  draftRevision: number,
-): EvictedChatLineKind | null {
-  if (phase !== "idle") return "hydrating";
-  if (standing === null || standing.draftRevision !== draftRevision) {
-    return null;
+function handBack(chatId: string, send: ParkedEvictedSend): boolean {
+  const { restore } = send.input;
+  const restored = composerDraftIsEmpty(chatId);
+  if (restored) {
+    const drafts = useComposerDraftStore.getState();
+    drafts.replaceDraft(chatId, restore.content, null);
+    drafts.restoreBrowserAnnotations(chatId, restore.browserAnnotations);
+  } else {
+    showErrorNoticeToast(
+      displacedRestorationNotice(
+        send.row.clientActionId,
+        restore.content,
+        EVICTED_SEND_FAILED_MESSAGE,
+      ),
+    );
   }
-  return standing.refusal;
+  releaseComposerContentImageRoots(imageRootsHolder(send));
+  return restored;
+}
+
+/** {@link handBack}, for a failure nothing else has told the person about. */
+function failSend(chatId: string, send: ParkedEvictedSend): void {
+  if (!handBack(chatId, send)) return;
+  reportableWarningToast(
+    EVICTED_SEND_FAILED_MESSAGE,
+    undefined,
+    CHAT_ACTION_REPORT_CONTEXT,
+  );
 }
 
 /**
  * A chat tile's road for a message to a chat its host dropped the records of
  * (cold eviction). The pool serving the transcript takes no message, so the
- * message is parked, the host is asked for the chat (`epic.hydrateChat`) and
- * the hydrating line shows. The host's answer is the release: the tile holds
- * the chat on its host (`holdChatOnItsHost`) whatever the witness still
- * reads, its session moves there, and the session view sends the parked
- * message by the ordinary road once that session can act (`take`). The hold
- * ends when the witness stops reading the chat at rest, or the tile closes. A
- * typed refusal drops the message back into the composer as the draft and
- * the line says why.
+ * message is parked and drawn as a pending send, and the host is asked for the
+ * chat (`epic.hydrateChat`). The host's answer is the release: the tile holds
+ * the chat on its host (`holdChatOnItsHost`) whatever the witness still reads,
+ * its session moves there, and the session view sends the parked messages by
+ * the ordinary road once that session can act (`take`). The hold ends when the
+ * witness stops reading the chat at rest, or the tile closes.
  *
- * Held by the tile above its session, so the parked message outlives the
- * session's move from the pool to the host. A refusal stands until the draft
- * is edited or the host's connection comes back, and a new attempt asks the
- * host again; there is no timer.
+ * Held by the tile above its session, so a parked message outlives the
+ * session's move from the pool to the host. The composer has cleared by then,
+ * so this hook is the message's only copy until it is dispatched: its images
+ * stay rooted, and a refusal, a tile that closes and a page that goes away
+ * each put it back. A message fails like any failed send: its text returns and
+ * a toast says so. There is no timer: a host that goes away after answering
+ * reads offline on the tile, and the message goes when it returns.
  */
 export function useEvictedChatSend(input: {
   readonly epicId: string;
@@ -107,49 +156,37 @@ export function useEvictedChatSend(input: {
     hostId,
     chatId,
   });
-  const parkedRef = useRef<ParkedEvictedSend | null>(null);
+  const parkedRef = useRef<readonly ParkedEvictedSend[]>([]);
   const releaseHoldRef = useRef<(() => void) | null>(null);
-  const [phase, setPhase] = useState<ParkPhase>("idle");
-  const [standing, setStanding] = useState<StandingRefusal | null>(null);
+  const [parked, setParked] = useState<readonly ParkedEvictedSend[]>([]);
+  const [ready, setReady] = useState(false);
   // Set by a refusal, cleared once the host holds the chat again: a chat the
   // host refused a message for is asked about before the next one.
   const [askFirst, setAskFirst] = useState(false);
-  const draftRevision = useComposerDraftStore(
-    (state) => (state.drafts[chatId] ?? EMPTY_COMPOSER_DRAFT).revision,
-  );
-  const ownerStatus = useHostReachability(hostId).status;
-  const [seenOwnerStatus, setSeenOwnerStatus] = useState(ownerStatus);
-  if (ownerStatus !== seenOwnerStatus) {
-    setSeenOwnerStatus(ownerStatus);
-    if (ownerStatus === "reachable") setStanding(null);
-  }
 
-  const refuse = useCallback(
-    (refusal: EvictedChatRefusal) => {
-      setAskFirst(true);
-      setStanding({
-        refusal,
-        draftRevision: readComposerDraftSnapshot(chatId).revision,
-      });
-    },
-    [chatId],
-  );
+  const replaceParked = useCallback((next: readonly ParkedEvictedSend[]) => {
+    parkedRef.current = next;
+    setParked(next);
+    if (next.length === 0) setReady(false);
+  }, []);
+
+  const refuse = useCallback(() => {
+    setAskFirst(true);
+  }, []);
 
   const park = useCallback(
-    (message: ChatComposerSubmitInput): Promise<boolean> | false => {
-      if (parkedRef.current !== null) return false;
-      let settle: (accepted: boolean) => void = () => undefined;
-      const accepted = new Promise<boolean>((resolve) => {
-        settle = resolve;
-      });
-      parkedRef.current = { input: message, settle };
-      setStanding(null);
-      setPhase("hydrating");
+    (message: ChatComposerSubmitInput, sender: UserMessageSender): void => {
+      const send = parkedSend(message, sender);
+      holdComposerContentImageRoots(imageRootsHolder(send), message.content);
+      const waiting = parkedRef.current;
+      replaceParked([...waiting, send]);
+      // The first message's request answers for every message behind it.
+      if (waiting.length > 0) return;
       hydrate(
         { epicId, chatId },
         {
           onSuccess: () => {
-            if (parkedRef.current === null) return;
+            if (parkedRef.current.length === 0) return;
             if (releaseHoldRef.current === null) {
               releaseHoldRef.current = holdChatOnItsHost({
                 hostId,
@@ -158,29 +195,34 @@ export function useEvictedChatSend(input: {
               });
             }
             setAskFirst(false);
-            setPhase("ready");
+            setReady(true);
           },
           onError: (error) => {
-            const parked = parkedRef.current;
-            parkedRef.current = null;
-            setPhase("idle");
-            parked?.settle(false);
-            const refusal = evictedChatRefusalOfCode(error.code);
-            if (refusal !== null) refuse(refusal);
+            const sends = parkedRef.current;
+            replaceParked([]);
+            // The mutation's own toast says the send failed.
+            for (const failed of sends) handBack(chatId, failed);
+            if (isEvictedChatRefusal(error.code)) refuse();
           },
         },
       );
-      return accepted;
     },
-    [chatId, epicId, hostId, hydrate, refuse],
+    [chatId, epicId, hostId, hydrate, refuse, replaceParked],
   );
 
-  const take = useCallback((): ParkedEvictedSend | null => {
-    const parked = parkedRef.current;
-    parkedRef.current = null;
-    setPhase("idle");
-    return parked;
-  }, []);
+  const take = useCallback((): readonly ParkedEvictedSend[] => {
+    const sends = parkedRef.current;
+    replaceParked([]);
+    return sends;
+  }, [replaceParked]);
+
+  const settle = useCallback(
+    (send: ParkedEvictedSend, accepted: boolean): void => {
+      if (accepted) releaseComposerContentImageRoots(imageRootsHolder(send));
+      else failSend(chatId, send);
+    },
+    [chatId],
+  );
 
   // The hold ends once the witness alone no longer reads the chat at rest.
   // Re-checked when a hold starts too, since the witness may have caught up
@@ -189,26 +231,29 @@ export function useEvictedChatSend(input: {
     if (held) return;
     releaseHoldRef.current?.();
     releaseHoldRef.current = null;
-  }, [held, phase]);
+  }, [held, ready]);
 
-  // A tile closed with a message parked hands the draft back, and its hold
-  // ends.
-  useEffect(
-    () => () => {
-      const parked = parkedRef.current;
-      parkedRef.current = null;
-      parked?.settle(false);
+  // A closed tile cannot send what it parked, and neither can a page that is
+  // going away: the message goes back to the draft, which outlives both. Its
+  // hold ends with the tile.
+  useEffect(() => {
+    const handBackParked = (): void => {
+      const sends = parkedRef.current;
+      replaceParked([]);
+      for (const failed of sends) failSend(chatId, failed);
+    };
+    window.addEventListener("pagehide", handBackParked);
+    return () => {
+      window.removeEventListener("pagehide", handBackParked);
+      handBackParked();
       releaseHoldRef.current?.();
       releaseHoldRef.current = null;
-    },
-    [],
-  );
+    };
+  }, [chatId, replaceParked]);
 
-  const line = evictedChatLine(phase, standing, draftRevision);
-  const parks = served || askFirst;
-  const ready = phase === "ready";
+  const parks = served || askFirst || parked.length > 0;
   return useMemo(
-    () => ({ parks, served, line, ready, park, take, refuse }),
-    [parks, served, line, ready, park, take, refuse],
+    () => ({ parks, served, parked, ready, park, take, settle, refuse }),
+    [parks, served, parked, ready, park, take, settle, refuse],
   );
 }

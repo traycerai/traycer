@@ -1,12 +1,16 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { act, cleanup, render, screen } from "@testing-library/react";
-import type { ReactNode } from "react";
-import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import { act, cleanup, render } from "@testing-library/react";
+import { isValidElement, type ReactNode } from "react";
 import type { ChatStreamCallbacks } from "@traycer-clients/shared/host-transport/chat-stream-client";
 import type { JsonContent } from "@traycer/protocol/common/registry";
+import type { ChatErrorNotice } from "@traycer/protocol/host/agent/gui/subscribe";
 
-const sonnerToastError = vi.hoisted(() => vi.fn());
-const sonnerToastWarning = vi.hoisted(() => vi.fn());
+const sonnerToastError = vi.hoisted(() =>
+  vi.fn<(message: ReactNode) => void>(),
+);
+const sonnerToastWarning = vi.hoisted(() =>
+  vi.fn<(message: ReactNode) => void>(),
+);
 vi.mock("sonner", () => ({
   toast: Object.assign(vi.fn(), {
     warning: sonnerToastWarning,
@@ -16,23 +20,10 @@ vi.mock("sonner", () => ({
   }),
   __esModule: true,
 }));
-vi.mock("@/hooks/agent/use-host-reachability", () => ({
-  useHostReachability: () => ({
-    status: "reachable",
-    hostLabel: "Laptop",
-    unavailability: null,
-    basis: "directory",
-    hostKind: "remote",
-  }),
-}));
-vi.mock("@/hooks/host/use-host-client-for-host-id", () => ({
-  useHostClientForHostId: () => null,
-}));
 
 import { ChatTileErrorNoticeToasts } from "@/components/epic-canvas/renderers/chat-tile-error-notice-toasts";
-import { useEvictedChatSend } from "@/hooks/chats/use-evicted-chat-send";
 import { useEvictedSendAckRefusals } from "@/hooks/chats/use-evicted-send-ack-refusals";
-import type { EvictedChatRefusal } from "@/lib/chats/evicted-chat-refusal";
+import { EVICTED_SEND_FAILED_MESSAGE } from "@/lib/chats/evicted-chat-refusal";
 import {
   createChatSessionStore,
   type ChatSessionStoreHandle,
@@ -40,11 +31,12 @@ import {
 import { IMMEDIATE_STREAM_FLUSH_COORDINATOR } from "@/stores/chats/stream-flush-coordinator";
 import { CHAT_STORE_TEST_ENVIRONMENT } from "@/stores/chats/test-support/chat-store-test-environment";
 import { buildAttachmentsFromJSONContent } from "@/lib/composer/tiptap-json-content";
-import { useComposerDraftStore } from "@/stores/composer/composer-draft-store";
 
 const EPIC_ID = "epic-x";
 const CHAT_ID = "chat-x";
 const OWNER_ID = "owner-x";
+const HOST_REASON = "The host refused the message.";
+const HOST_NOTICE_MESSAGE = "The cloud copy could not be reached.";
 
 const MESSAGE: JsonContent = {
   type: "doc",
@@ -154,7 +146,18 @@ function send(harness: Harness): string {
   return action.clientActionId;
 }
 
-function reject(harness: Harness, clientActionId: string, code: string): void {
+function pauseQueue(harness: Harness): string {
+  const clientActionId = harness.handle.store.getState().pauseQueue();
+  if (clientActionId === null) throw new Error("pause refused");
+  return clientActionId;
+}
+
+function reject(
+  harness: Harness,
+  clientActionId: string,
+  action: "send" | "pauseQueue",
+  code: string,
+): void {
   act(() => {
     harness.callbacks().onActionAck({
       kind: "actionAck",
@@ -162,9 +165,9 @@ function reject(harness: Harness, clientActionId: string, code: string): void {
       epicId: EPIC_ID,
       chatId: CHAT_ID,
       clientActionId,
-      action: "send",
+      action,
       status: "rejected",
-      reason: "The host refused the message.",
+      reason: HOST_REASON,
       code,
       backgroundStopTaskIds: [],
       token: null,
@@ -186,7 +189,7 @@ function hostNotice(
       chatId: CHAT_ID,
       notice: {
         code,
-        message: "The cloud copy could not be reached.",
+        message: HOST_NOTICE_MESSAGE,
         severity: "error",
         clientActionId,
       },
@@ -194,17 +197,39 @@ function hostNotice(
   });
 }
 
-const refuse = vi.fn<(refusal: EvictedChatRefusal) => void>();
-
-function Tile(props: { readonly handle: ChatSessionStoreHandle }): ReactNode {
-  useEvictedSendAckRefusals(props.handle, refuse);
-  return <ChatTileErrorNoticeToasts handle={props.handle} />;
+function noticeCoded(
+  harness: Harness,
+  code: string,
+  clientActionId: string,
+): ChatErrorNotice | undefined {
+  return harness.handle.store
+    .getState()
+    .errorNotices.find(
+      (notice) =>
+        notice.code === code && notice.clientActionId === clientActionId,
+    );
 }
 
-function toastCount(): number {
-  return (
-    sonnerToastError.mock.calls.length + sonnerToastWarning.mock.calls.length
+function messageText(message: ReactNode): string {
+  if (typeof message === "string") return message;
+  if (isValidElement<{ readonly children: string }>(message)) {
+    return message.props.children;
+  }
+  throw new Error("an unexpected toast message");
+}
+
+/** What was toasted, in order, whatever the severity. */
+function toasted(): string[] {
+  return [...sonnerToastError.mock.calls, ...sonnerToastWarning.mock.calls].map(
+    ([message]) => messageText(message),
   );
+}
+
+const refuse = vi.fn<() => void>();
+
+function Refusals(props: { readonly handle: ChatSessionStoreHandle }): null {
+  useEvictedSendAckRefusals(props.handle, refuse);
+  return null;
 }
 
 beforeEach(() => {
@@ -216,154 +241,169 @@ afterEach(() => {
   cleanup();
 });
 
-describe("a rejected send's ack that carries a CHAT_EVICTED code", () => {
-  it("is refused to the composer's line with no toast", () => {
+describe("useEvictedSendAckRefusals", () => {
+  it.each(["CHAT_EVICTED_UNREACHABLE", "CHAT_EVICTED_HEAD_MOVED"])(
+    "refuses once for a %s notice that arrives while mounted",
+    (code) => {
+      const harness = createHarness();
+      render(<Refusals handle={harness.handle} />);
+
+      hostNotice(harness, null, code);
+
+      expect(refuse.mock.calls).toEqual([[]]);
+    },
+  );
+
+  it("refuses nothing for any other code", () => {
     const harness = createHarness();
-    render(<Tile handle={harness.handle} />);
+    render(<Refusals handle={harness.handle} />);
+
+    hostNotice(harness, null, "SEND_REJECTED");
+
+    expect(refuse).not.toHaveBeenCalled();
+  });
+
+  it("refuses nothing for a notice that was in the ring before it mounted", () => {
+    const harness = createHarness();
+    hostNotice(harness, null, "CHAT_EVICTED_HEAD_MOVED");
+
+    render(<Refusals handle={harness.handle} />);
+
+    expect(refuse).not.toHaveBeenCalled();
+  });
+
+  it("sees a notice appended by an update that a listener nested inside it", () => {
+    const harness = createHarness();
+    const { store } = harness.handle;
+    let nested = false;
+    // Registered first, so zustand runs it before the hook's listener, and its
+    // own `set` calls the hook's listener with the nested state ahead of the
+    // outer update's result.
+    store.subscribe((state) => {
+      if (nested) return;
+      nested = true;
+      store.setState({
+        errorNotices: [
+          ...state.errorNotices,
+          {
+            code: "SOMETHING_ELSE",
+            message: "A second notice.",
+            severity: "warning",
+            clientActionId: null,
+          },
+        ],
+      });
+    });
+    render(<Refusals handle={harness.handle} />);
 
     hostNotice(harness, null, "CHAT_EVICTED_UNREACHABLE");
 
-    expect(refuse.mock.calls).toEqual([["unreachable"]]);
-    expect(toastCount()).toBe(0);
+    expect(refuse.mock.calls).toEqual([[]]);
   });
 
-  it("still toasts any other code", () => {
+  it("refuses once for a send rejected with the code, and not again for the host's follow-up", () => {
     const harness = createHarness();
-    render(<Tile handle={harness.handle} />);
-
-    reject(harness, send(harness), "SEND_REJECTED");
-
-    expect(refuse).not.toHaveBeenCalled();
-    expect(toastCount()).toBeGreaterThan(0);
-  });
-
-  it("is not reported when the notice was in the ring before the tile mounted", () => {
-    const harness = createHarness();
-    reject(harness, send(harness), "CHAT_EVICTED_HEAD_MOVED");
-
-    render(<Tile handle={harness.handle} />);
-
-    expect(refuse).not.toHaveBeenCalled();
-    expect(toastCount()).toBe(0);
-  });
-
-  it("waits for the composer to consume the failed-send slot the rejection claimed", () => {
-    const harness = createHarness();
-    render(<Tile handle={harness.handle} />);
+    render(<Refusals handle={harness.handle} />);
     const clientActionId = send(harness);
 
-    reject(harness, clientActionId, "CHAT_EVICTED_HEAD_MOVED");
-    expect(harness.handle.store.getState().failedSendRestoration).toMatchObject(
-      {
-        clientActionId,
-      },
-    );
-    expect(refuse).not.toHaveBeenCalled();
-
-    act(() => {
-      harness.handle.store.getState().ackFailedSendRestoration(clientActionId);
-    });
-
-    expect(refuse.mock.calls).toEqual([["head-moved"]]);
-    expect(toastCount()).toBe(0);
-  });
-});
-
-describe("the host's own notice for an action its ack already answered", () => {
-  it("does not refuse the action a second time", () => {
-    const harness = createHarness();
-    render(<Tile handle={harness.handle} />);
-    const clientActionId = send(harness);
-    reject(harness, clientActionId, "CHAT_EVICTED_UNREACHABLE");
-    act(() => {
-      harness.handle.store.getState().ackFailedSendRestoration(clientActionId);
-    });
-
+    reject(harness, clientActionId, "send", "CHAT_EVICTED_UNREACHABLE");
     hostNotice(harness, clientActionId, "CHAT_EVICTED_UNREACHABLE");
 
-    expect(refuse.mock.calls).toEqual([["unreachable"]]);
+    expect(refuse.mock.calls).toEqual([[]]);
   });
 
   it("refuses nothing for a send displaced into SEND_NOT_RECORDED", () => {
     const harness = createHarness();
-    render(<Tile handle={harness.handle} />);
+    render(<Refusals handle={harness.handle} />);
     const first = send(harness);
     const second = send(harness);
-    reject(harness, first, "SEND_REJECTED");
-    reject(harness, second, "CHAT_EVICTED_UNREACHABLE");
-    expect(
-      harness.handle.store
-        .getState()
-        .errorNotices.some(
-          (notice) =>
-            notice.code === "SEND_NOT_RECORDED" &&
-            notice.clientActionId === second,
-        ),
-    ).toBe(true);
+    reject(harness, first, "send", "SEND_REJECTED");
+    reject(harness, second, "send", "CHAT_EVICTED_UNREACHABLE");
 
     hostNotice(harness, second, "CHAT_EVICTED_UNREACHABLE");
 
     expect(refuse).not.toHaveBeenCalled();
   });
+});
 
-  it("drops the hand-over when the composer declines the message it waited on", () => {
+describe("a send rejected with a CHAT_EVICTED code", () => {
+  it.each(["CHAT_EVICTED_UNREACHABLE", "CHAT_EVICTED_HEAD_MOVED"])(
+    "toasts once, for %s, in the words of any failed send and not the host's",
+    (code) => {
+      const harness = createHarness();
+      render(<ChatTileErrorNoticeToasts handle={harness.handle} />);
+      const clientActionId = send(harness);
+
+      reject(harness, clientActionId, "send", code);
+      hostNotice(harness, clientActionId, code);
+
+      expect(toasted()).toEqual([EVICTED_SEND_FAILED_MESSAGE]);
+      expect(
+        harness.handle.store.getState().failedSendRestoration?.reason,
+      ).toBe(EVICTED_SEND_FAILED_MESSAGE);
+    },
+  );
+
+  it("says the same sentence when the pane was unfocused and the composer takes the prompt back", () => {
     const harness = createHarness();
-    render(<Tile handle={harness.handle} />);
     const clientActionId = send(harness);
-    reject(harness, clientActionId, "CHAT_EVICTED_HEAD_MOVED");
+    reject(harness, clientActionId, "send", "CHAT_EVICTED_UNREACHABLE");
 
     act(() => {
-      harness.handle.store
-        .getState()
-        .stateFailedSendRestoration(clientActionId);
-    });
-    hostNotice(harness, clientActionId, "CHAT_EVICTED_HEAD_MOVED");
-
-    expect(refuse).not.toHaveBeenCalled();
-  });
-
-  it("leaves the line ended by an edit made after the refusal", () => {
-    useComposerDraftStore.setState({ drafts: {} });
-    const harness = createHarness();
-    function Line(): ReactNode {
-      const evicted = useEvictedChatSend({
-        epicId: EPIC_ID,
-        chatId: CHAT_ID,
-        hostId: "host-a",
-        served: false,
-        held: false,
-      });
-      useEvictedSendAckRefusals(harness.handle, evicted.refuse);
-      return <output>{evicted.line ?? "none"}</output>;
-    }
-    render(
-      <QueryClientProvider client={new QueryClient()}>
-        <Line />
-      </QueryClientProvider>,
-    );
-    const clientActionId = send(harness);
-    reject(harness, clientActionId, "CHAT_EVICTED_UNREACHABLE");
-    act(() => {
-      useComposerDraftStore.getState().setSnapshot(CHAT_ID, MESSAGE, null);
       harness.handle.store.getState().ackFailedSendRestoration(clientActionId);
     });
-    expect(screen.getByRole("status").textContent).toBe("unreachable");
-    act(() => {
-      useComposerDraftStore.getState().setSnapshot(
-        CHAT_ID,
-        {
-          type: "doc",
-          content: [
-            { type: "paragraph", content: [{ type: "text", text: "new" }] },
-          ],
-        },
-        null,
-      );
-    });
-    expect(screen.getByRole("status").textContent).toBe("none");
 
+    expect(noticeCoded(harness, "SEND_RESTORED", clientActionId)?.message).toBe(
+      EVICTED_SEND_FAILED_MESSAGE,
+    );
+  });
+
+  it("quotes the prompt of a send displaced from the slot, with no toast in the host's words", () => {
+    const harness = createHarness();
+    render(<ChatTileErrorNoticeToasts handle={harness.handle} />);
+    const first = send(harness);
+    const second = send(harness);
+    reject(harness, first, "send", "SEND_REJECTED");
+    sonnerToastError.mockReset();
+    sonnerToastWarning.mockReset();
+
+    reject(harness, second, "send", "CHAT_EVICTED_UNREACHABLE");
+    hostNotice(harness, second, "CHAT_EVICTED_UNREACHABLE");
+
+    const displaced = noticeCoded(harness, "SEND_NOT_RECORDED", second);
+    expect(displaced?.message).toContain(
+      EVICTED_SEND_FAILED_MESSAGE.replace(/\.$/, ""),
+    );
+    expect(displaced?.message).toContain("fix the bug");
+    const said = toasted();
+    expect(said).toHaveLength(1);
+    expect(said[0]).toBe(displaced?.message);
+    expect(said.join()).not.toContain(HOST_REASON);
+    expect(said.join()).not.toContain(HOST_NOTICE_MESSAGE);
+  });
+
+  it("keeps the host's own words for the same code on an action that is not a send", () => {
+    const harness = createHarness();
+    render(<ChatTileErrorNoticeToasts handle={harness.handle} />);
+    const clientActionId = pauseQueue(harness);
+
+    reject(harness, clientActionId, "pauseQueue", "CHAT_EVICTED_UNREACHABLE");
     hostNotice(harness, clientActionId, "CHAT_EVICTED_UNREACHABLE");
 
-    expect(screen.getByRole("status").textContent).toBe("none");
+    expect(toasted()).toEqual([HOST_REASON]);
+
+    hostNotice(harness, null, "CHAT_EVICTED_UNREACHABLE");
+
+    expect(toasted().sort()).toEqual([HOST_NOTICE_MESSAGE, HOST_REASON]);
+  });
+
+  it("still toasts a send rejected for any other code", () => {
+    const harness = createHarness();
+    render(<ChatTileErrorNoticeToasts handle={harness.handle} />);
+    const clientActionId = send(harness);
+
+    reject(harness, clientActionId, "send", "SEND_REJECTED");
+
+    expect(toasted().join()).toContain(HOST_REASON);
   });
 });
