@@ -180,6 +180,11 @@ function AgentMemoriesRow(): ReactNode {
     invalidateMethods: [],
     captureContext: () => entryHash,
     onSettled: (_hostId, capturedEntryHash) => {
+      // Cancel first: an older GET could otherwise clear this invalidation
+      // after an uncertain write, or restore its pre-fetch snapshot on unmount.
+      void queryClient.cancelQueries({
+        predicate: (entry) => entry.queryHash === capturedEntryHash,
+      });
       void queryClient.invalidateQueries({
         predicate: (entry) => entry.queryHash === capturedEntryHash,
         refetchType: "none",

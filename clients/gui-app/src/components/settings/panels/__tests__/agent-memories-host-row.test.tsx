@@ -395,6 +395,60 @@ describe("Agent memories ▸ the host row's write", () => {
     );
   });
 
+  it("refetches on reopening when an older GET outlives a lost setter response", async () => {
+    let release: (value: ConfigAgentMemoriesResponse) => void = () => {
+      throw new Error("getter was not started");
+    };
+    const harness = mountTeamPage({ kind: "host" }, handlers());
+    harness.queryClient.setDefaultOptions({
+      queries: { retry: false, staleTime: 60_000, gcTime: 300_000 },
+      mutations: { retry: false },
+    });
+    const view = render(<AgentMemoriesSettingsPanel />, {
+      wrapper: harness.Wrapper,
+    });
+    await waitFor(() =>
+      expect(harness.paramsOf("config.agentMemories.get")).toHaveLength(1),
+    );
+    script.get = () =>
+      new Promise((resolve) => {
+        release = resolve;
+      });
+    let refetch: Promise<void> = Promise.resolve();
+    act(() => {
+      refetch = harness.queryClient.refetchQueries({ type: "active" });
+    });
+    await waitFor(() =>
+      expect(harness.paramsOf("config.agentMemories.get")).toHaveLength(2),
+    );
+    script.set = () => {
+      script.reads = [read(true, 6)];
+      throw new Error("response lost");
+    };
+    await flipOn();
+    await waitFor(async () =>
+      expect(await line()).toContain("Couldn't change this setting"),
+    );
+    script.get = null;
+    await act(async () => {
+      release(read(false, 5));
+      await refetch;
+    });
+    const reads = harness.paramsOf("config.agentMemories.get").length;
+    view.rerender(null);
+    view.rerender(<AgentMemoriesSettingsPanel />);
+    await waitFor(() =>
+      expect(
+        screen
+          .getByRole("switch", { name: "Use Traycer memories for agents" })
+          .getAttribute("aria-checked"),
+      ).toBe("true"),
+    );
+    expect(harness.paramsOf("config.agentMemories.get").length).toBeGreaterThan(
+      reads,
+    );
+  });
+
   it("refetches after a committed setter loses its response", async () => {
     script.set = () => {
       script.reads = [read(true, 6)];
