@@ -137,6 +137,26 @@ export const PROVIDERS = defineSettingsSection("providers", {
     availableWhen: alwaysAvailable,
     keywords: ["subagents", "traycer agents"],
   },
+  nativeMemory: {
+    kind: "group",
+    search: { anchor: null },
+    label: "Memories",
+    description:
+      "Changes apply when a provider session next starts. Saved memories are kept.",
+    breadcrumb: "Providers",
+    availableWhen: alwaysAvailable,
+    keywords: ["memory", "memories", "remember", "recall"],
+  },
+  nativeMemoryEnabled: {
+    kind: "row",
+    group: "nativeMemory",
+    search: { contributesTo: "nativeMemory" },
+    label: "Use this provider's memories",
+    description:
+      "When off, agents Traycer starts on this provider neither use nor save its memories.",
+    availableWhen: alwaysAvailable,
+    keywords: ["memory", "memories", "recall", "save"],
+  },
   // Claude Code's General tab only: the name Traycer gives a Claude session it
   // starts on the Terminal interface. Host-gated (`config.sessionNames.*`).
   sessionName: {

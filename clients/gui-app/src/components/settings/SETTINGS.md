@@ -3095,6 +3095,34 @@ window`, recorded in the type as `coverage.browsersAreMountedOnly` -
     only when the surface's host advertises both (the method is optional), so
     an older host shows nothing here. Holds a local echo of a flip until the
     host's read-back lands, like the per-provider judge select.
+  - **Memories** (`provider-native-memory-group.tsx`), one switch, "Use this
+    provider's memories", on by default. On applies NO override - the
+    provider's memory behaves exactly as it does without this setting, which
+    is why it is not a claim that the provider has memories switched on. Off
+    makes the host turn the provider's own memory off for the sessions Traycer
+    launches, both the recall of existing memories and the writing of new
+    ones: `CLAUDE_CODE_DISABLE_AUTO_MEMORY=1` in Claude Code's spawn
+    environment (GUI turns and terminal-agent PTYs alike, launch and resume),
+    and `features.memories=false` plus `memories.use_memories=false` and
+    `memories.generate_memories=false` on Codex's launch config args (the
+    app-server and the `--remote` client both). Saved memory files are kept,
+    the provider's own settings file is never written, and a `claude` or
+    `codex` started outside Traycer is unaffected; `AGENTS.md`/`CLAUDE.md`,
+    rules and skills are untouched - this is the provider's memory feature,
+    not project instructions. Persisted as `nativeMemory` in
+    `provider-overrides.json` via `providers.setNativeMemory`
+    (`useProvidersSetNativeMemory`, invalidates only `providers.list`), read
+    back as the row's `nativeMemory` from `providers.list@10.8`. Drawn only
+    when the surface's host advertises the method (it is optional), reports
+    10.8, AND says it can enforce the switch for that provider
+    (`nativeMemorySupported`) - there is no prompt-level fallback for memory,
+    so a provider with no contract the host can drive shows no switch at all
+    rather than one that stores a preference nothing acts on. A change applies
+    when a provider session next starts and never interrupts a running turn:
+    Claude's next turn spawns a fresh subprocess because the value is in its
+    options signature, and Codex retires the session's app-server between
+    turns so the next one relaunches with the new config. Holds a local echo
+    of a flip until the host's read-back lands, like the switch above.
   - **Session name** (`claude-session-name-group.tsx`), Claude Code only: one
     "Name template" field (saved on blur/Enter) for the name the scoped host
     gives a Claude Code session it starts on the Terminal interface, passed as
