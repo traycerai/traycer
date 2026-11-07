@@ -195,7 +195,10 @@ export function profileSyncCredentialFitsProvider(
     case "codex":
       return credential.kind === "codex-auth-file";
     case "grok":
-      return credential.kind === "grok-auth-file" || credential.kind === "grok-api-key";
+      return (
+        credential.kind === "grok-auth-file" ||
+        credential.kind === "grok-api-key"
+      );
     case "antigravity":
       return (
         credential.kind === "antigravity-oauth" ||
