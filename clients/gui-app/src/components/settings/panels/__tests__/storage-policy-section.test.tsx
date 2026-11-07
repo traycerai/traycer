@@ -87,7 +87,7 @@ const TEAM_DESCRIPTOR: EnvironmentDescriptorV11 = {
 };
 
 const host = {
-  role: "owner" as EnvironmentDescriptorV11["effectiveRole"],
+  teamRole: "admin" as EnvironmentDescriptorV11["effectiveRole"],
   items: [] as EnvironmentConfigurationItem[],
   teamItems: [] as EnvironmentConfigurationItem[],
   put: null as
@@ -111,7 +111,10 @@ function storageItem(
 function renderSection(ui: ReactNode): void {
   harness = mountTeamPage(poolSource("owner"), {
     "environment.list": () => ({
-      environments: [descriptor(host.role), TEAM_DESCRIPTOR],
+      environments: [
+        descriptor("owner"),
+        { ...TEAM_DESCRIPTOR, effectiveRole: host.teamRole },
+      ],
     }),
     "environment.configuration.items": (params) => ({
       items: params.environmentId === TEAM_ENV ? host.teamItems : host.items,
@@ -197,7 +200,7 @@ describe("<StoragePolicySection />", () => {
   beforeEach(() => {
     resetNegotiatedManifests();
     recordNegotiatedHostMethods(mockLocalHostEntry.hostId, [PUT]);
-    host.role = "owner";
+    host.teamRole = "admin";
     host.items = [];
     host.teamItems = [];
     host.put = null;
@@ -559,17 +562,33 @@ describe("<StoragePolicySection />", () => {
     });
   });
 
-  it("disables every control for a viewer", async () => {
-    host.role = "viewer";
-    renderSection(PERSONAL_SECTION);
+  it("disables every control after a retired viewer role is decoded, even with a loaded policy", async () => {
+    host.teamRole = "viewer";
+    host.teamItems = [
+      storageItem(
+        {
+          chats: false,
+          artifacts: false,
+          idleTaskDays: 14,
+          archivedChatHours: 24,
+        },
+        3,
+      ),
+    ];
+    renderSection(
+      <StoragePolicySection pick={{ kind: "team", environmentId: TEAM_ENV }} />,
+    );
 
     const control = await chatsSwitch();
     await waitFor(() => {
-      expect(control.hasAttribute("disabled")).toBe(true);
+      expect(control.getAttribute("aria-checked")).toBe("false");
     });
+    expect(control.hasAttribute("disabled")).toBe(true);
     expect(artifactsSwitch().hasAttribute("disabled")).toBe(true);
     expect(idleTasksSelect().hasAttribute("disabled")).toBe(true);
     expect(archivedChatsSelect().hasAttribute("disabled")).toBe(true);
+    await userEvent.click(control);
+    expect(harness?.paramsOf(PUT)).toEqual([]);
   });
 
   it("reads and writes the picked team's environment, not Personal's", async () => {
