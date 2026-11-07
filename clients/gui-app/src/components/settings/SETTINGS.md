@@ -5623,20 +5623,25 @@ wrap`). Each row names the account its first usable match runs on, the
       Options "When the disk is getting full" (no window), "After 7 days",
       "After 14 days", "After 30 days", "After 90 days". Disabled while both
       switches are off, since the window cleans whichever kinds are on.
-    - **Archived chats**, a select: "When to clean up a chat that stays
-      archived." Options "Never", "After 7 days", "After 30 days", "After 90
-      days". Disabled while Chats is off.
-    - A stored window that is not one of the options is listed as "After N
-      days", so the select shows what is in force.
+    - **Archived chats**, a select: "When to clean up an archived chat,
+      counted from its last activity." Options "Never", "After 4 hours",
+      "After 1 day", "After 7 days", "After 30 days". Disabled while Chats
+      is off.
+    - A stored window that is not one of the options is listed too, so the
+      select shows what is in force: "After N days" for idle tasks, and for
+      archived chats "After N hours" below 24 or when it is not a whole
+      number of days, else "After N days" ("After 1 hour", "After 1 day"
+      for one).
     - While either switch is on, a line under the rows reads "Applies on
       every host in this environment. A chat comes back when an agent
       continues it."
   - It is the configuration's `storage_policy` item (key `storage`, value
-    `{ chats, artifacts, idleTaskDays, archivedChatDays }`, the windows whole
-    days or `null`; `hooks/environment/use-storage-policy.ts`), read through
-    the pool tier like the sandbox defaults. The pick names the environment:
+    `{ chats, artifacts, idleTaskDays, archivedChatHours }`, the idle window
+    in whole days and the archived-chat window in whole hours, each or
+    `null`; `hooks/environment/use-storage-policy.ts`), read through the pool
+    tier like the sandbox defaults. The pick names the environment:
     Personal's own, or the team's. **No item reads as the defaults**, both
-    switches on, no idle window and archived chats after 30 days. An item
+    switches on, no idle window and archived chats after 4 hours. An item
     whose value does not parse reads with both switches off, because the
     hosts then clean up nothing.
   - Every control writes the whole value through

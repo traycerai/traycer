@@ -48,16 +48,24 @@ const ANALYTICS_SETTING = {
   chats: "storageChats",
   artifacts: "storageArtifacts",
   idleTaskDays: "storageIdleTasks",
-  archivedChatDays: "storageArchivedChats",
+  archivedChatHours: "storageArchivedChats",
 } as const satisfies Record<StorageField, AnalyticsSetting>;
 
 /** The select's value for a window that is not set. */
 const NO_WINDOW = "none";
+/** In days. */
 const IDLE_TASK_PRESETS = [7, 14, 30, 90] as const;
-const ARCHIVED_CHAT_PRESETS = [7, 30, 90] as const;
+/** In hours: 4 hours, 1, 7 and 30 days. */
+const ARCHIVED_CHAT_PRESETS = [4, 24, 168, 720] as const;
 
 function afterDays(days: number): string {
   return days === 1 ? "After 1 day" : `After ${String(days)} days`;
+}
+
+/** Whole days when the window is at least a day and a whole number of them. */
+function afterHours(hours: number): string {
+  if (hours >= 24 && hours % 24 === 0) return afterDays(hours / 24);
+  return hours === 1 ? "After 1 hour" : `After ${String(hours)} hours`;
 }
 
 /**
@@ -185,10 +193,11 @@ function StoragePolicySectionBody(props: {
               label={STORAGE.definitions.idleTasks.label}
               noWindowLabel="When the disk is getting full"
               presets={IDLE_TASK_PRESETS}
-              days={shown.idleTaskDays}
+              format={afterDays}
+              value={shown.idleTaskDays}
               // The window cleans whichever kinds are on.
               disabled={disabled || !active}
-              onDaysChange={(days) => {
+              onWindowChange={(days) => {
                 write("idleTaskDays", days);
               }}
             />
@@ -199,15 +208,16 @@ function StoragePolicySectionBody(props: {
         row={STORAGE.definitions.archivedChats}
         control={
           <div className="flex items-center gap-2">
-            {spinner("archivedChatDays")}
+            {spinner("archivedChatHours")}
             <AgeWindowSelect
               label={STORAGE.definitions.archivedChats.label}
               noWindowLabel="Never"
               presets={ARCHIVED_CHAT_PRESETS}
-              days={shown.archivedChatDays}
+              format={afterHours}
+              value={shown.archivedChatHours}
               disabled={disabled || !shown.chats}
-              onDaysChange={(days) => {
-                write("archivedChatDays", days);
+              onWindowChange={(hours) => {
+                write("archivedChatHours", hours);
               }}
             />
           </div>
@@ -283,30 +293,34 @@ function StoragePolicyFooter(props: {
 }
 
 /**
- * An age window: no window, or one of the presets. A stored window that is
- * not a preset is listed too, so the select shows what is in force.
+ * An age window: no window, or one of the presets, in the unit `format`
+ * reads. A stored window that is not a preset is listed too, so the select
+ * shows what is in force.
  */
 function AgeWindowSelect(props: {
   readonly label: string;
   readonly noWindowLabel: string;
   readonly presets: readonly number[];
-  readonly days: number | null;
+  readonly format: (value: number) => string;
+  readonly value: number | null;
   readonly disabled: boolean;
-  readonly onDaysChange: (days: number | null) => void;
+  readonly onWindowChange: (value: number | null) => void;
 }): ReactNode {
-  const { label, noWindowLabel, presets, days, disabled, onDaysChange } = props;
+  const { label, noWindowLabel, presets, format, disabled, onWindowChange } =
+    props;
+  const current = props.value;
   const describedById = useSettingsRowDescriptionId();
   const choices =
-    days === null || presets.includes(days)
+    current === null || presets.includes(current)
       ? presets
-      : [...presets, days].sort((a, b) => a - b);
+      : [...presets, current].sort((a, b) => a - b);
   return (
     <Select
-      value={days === null ? NO_WINDOW : String(days)}
+      value={current === null ? NO_WINDOW : String(current)}
       disabled={disabled}
       onValueChange={(value) => {
         const next = value === NO_WINDOW ? null : Number(value);
-        if (next !== days) onDaysChange(next);
+        if (next !== current) onWindowChange(next);
       }}
     >
       <SelectTrigger
@@ -321,7 +335,7 @@ function AgeWindowSelect(props: {
         <SelectItem value={NO_WINDOW}>{noWindowLabel}</SelectItem>
         {choices.map((choice) => (
           <SelectItem key={choice} value={String(choice)}>
-            {afterDays(choice)}
+            {format(choice)}
           </SelectItem>
         ))}
       </SelectContent>

@@ -54,8 +54,9 @@ export const STORAGE = defineSettingsSection("storage", {
     group: null,
     search: { contributesTo: "page" },
     label: "Archived chats",
-    description: "When to clean up a chat that stays archived.",
+    description:
+      "When to clean up an archived chat, counted from its last activity.",
     availableWhen: alwaysAvailable,
-    keywords: ["archived", "archive", "days"],
+    keywords: ["archived", "archive", "hours", "days"],
   },
 });

@@ -203,7 +203,7 @@ describe("<StoragePolicySection />", () => {
     expect(idleTasksSelect().textContent).toContain(
       "When the disk is getting full",
     );
-    expect(archivedChatsSelect().textContent).toContain("After 30 days");
+    expect(archivedChatsSelect().textContent).toContain("After 4 hours");
     expect(screen.getByText(FOOTNOTE)).toBeTruthy();
   });
 
@@ -220,7 +220,7 @@ describe("<StoragePolicySection />", () => {
           chats: false,
           artifacts: true,
           idleTaskDays: null,
-          archivedChatDays: 30,
+          archivedChatHours: 4,
         },
         null,
       );
@@ -234,7 +234,7 @@ describe("<StoragePolicySection />", () => {
           chats: true,
           artifacts: true,
           idleTaskDays: 14,
-          archivedChatDays: 90,
+          archivedChatHours: 2160,
         },
         4,
       ),
@@ -251,7 +251,7 @@ describe("<StoragePolicySection />", () => {
           chats: true,
           artifacts: false,
           idleTaskDays: 14,
-          archivedChatDays: 90,
+          archivedChatHours: 2160,
         },
         4,
       );
@@ -265,7 +265,7 @@ describe("<StoragePolicySection />", () => {
           chats: true,
           artifacts: false,
           idleTaskDays: null,
-          archivedChatDays: 7,
+          archivedChatHours: 168,
         },
         6,
       ),
@@ -282,7 +282,7 @@ describe("<StoragePolicySection />", () => {
           chats: true,
           artifacts: false,
           idleTaskDays: 14,
-          archivedChatDays: 7,
+          archivedChatHours: 168,
         },
         6,
       );
@@ -302,7 +302,27 @@ describe("<StoragePolicySection />", () => {
           chats: true,
           artifacts: true,
           idleTaskDays: null,
-          archivedChatDays: null,
+          archivedChatHours: null,
+        },
+        null,
+      );
+    });
+  });
+
+  it("writes the whole value in hours when After 7 days is picked for Archived chats", async () => {
+    renderSection(PERSONAL_SECTION);
+    await settled();
+
+    pickOption(archivedChatsSelect(), "After 7 days");
+
+    await waitFor(() => {
+      expectPut(
+        PERSONAL_ENV,
+        {
+          chats: true,
+          artifacts: true,
+          idleTaskDays: null,
+          archivedChatHours: 168,
         },
         null,
       );
@@ -346,7 +366,7 @@ describe("<StoragePolicySection />", () => {
           chats: false,
           artifacts: true,
           idleTaskDays: null,
-          archivedChatDays: 30,
+          archivedChatHours: 720,
         },
         3,
       ),
@@ -365,7 +385,7 @@ describe("<StoragePolicySection />", () => {
           chats: false,
           artifacts: false,
           idleTaskDays: null,
-          archivedChatDays: 30,
+          archivedChatHours: 720,
         },
         3,
       ),
@@ -377,14 +397,14 @@ describe("<StoragePolicySection />", () => {
     expect(archivedChatsSelect().hasAttribute("disabled")).toBe(true);
   });
 
-  it("lists a stored window that is not a preset and shows it selected", async () => {
+  it("lists a stored idle window that is not a preset and shows it selected", async () => {
     host.items = [
       storageItem(
         {
           chats: true,
           artifacts: true,
           idleTaskDays: 45,
-          archivedChatDays: 30,
+          archivedChatHours: 720,
         },
         5,
       ),
@@ -394,6 +414,31 @@ describe("<StoragePolicySection />", () => {
 
     expect(idleTasksSelect().textContent).toContain("After 45 days");
   });
+
+  it.each([
+    { hours: 36, shown: "After 36 hours" },
+    { hours: 48, shown: "After 2 days" },
+    { hours: 1, shown: "After 1 hour" },
+  ])(
+    "shows a stored archived window of $hours hours that is not a preset as $shown",
+    async ({ hours, shown }) => {
+      host.items = [
+        storageItem(
+          {
+            chats: true,
+            artifacts: true,
+            idleTaskDays: null,
+            archivedChatHours: hours,
+          },
+          5,
+        ),
+      ];
+      renderSection(PERSONAL_SECTION);
+      await settled();
+
+      expect(archivedChatsSelect().textContent).toContain(shown);
+    },
+  );
 
   it("renders nothing on a host that does not advertise the item write", async () => {
     renderSection(PERSONAL_SECTION);
@@ -433,7 +478,7 @@ describe("<StoragePolicySection />", () => {
           chats: false,
           artifacts: false,
           idleTaskDays: null,
-          archivedChatDays: 30,
+          archivedChatHours: 720,
         },
         9,
       ),
@@ -444,7 +489,7 @@ describe("<StoragePolicySection />", () => {
           chats: true,
           artifacts: false,
           idleTaskDays: 7,
-          archivedChatDays: null,
+          archivedChatHours: null,
         },
         2,
       ),
@@ -463,7 +508,7 @@ describe("<StoragePolicySection />", () => {
           chats: false,
           artifacts: false,
           idleTaskDays: 7,
-          archivedChatDays: null,
+          archivedChatHours: null,
         },
         2,
       );

@@ -23,15 +23,18 @@ const METHOD = "environment.configuration.items";
 export const STORAGE_POLICY_KIND = "storage_policy";
 export const STORAGE_POLICY_KEY = "storage";
 
-/** An age window in whole days, or `null` for none. */
+/** An age window in whole units, or `null` for none. */
 const ageWindowSchema = z.number().int().positive().nullable();
 
-/** The item's value as authn validates it (`items.ts`). */
+/**
+ * The item's value as authn validates it (`items.ts`): the idle window in
+ * days, the archived-chat window in hours.
+ */
 export const storagePolicyValueSchema = z.strictObject({
   chats: z.boolean(),
   artifacts: z.boolean(),
   idleTaskDays: ageWindowSchema,
-  archivedChatDays: ageWindowSchema,
+  archivedChatHours: ageWindowSchema,
 });
 
 export type StoragePolicyValue = z.infer<typeof storagePolicyValueSchema>;
@@ -41,7 +44,7 @@ export const STORAGE_POLICY_DEFAULTS: StoragePolicyValue = {
   chats: true,
   artifacts: true,
   idleTaskDays: null,
-  archivedChatDays: 30,
+  archivedChatHours: 4,
 };
 
 /** A configuration's storage policy as last read, with the revision a save quotes. */
