@@ -580,6 +580,9 @@ function AddProfileAccountSection({
           cancelPending={cancelPending}
           cancelDisabled={cancelDisabled}
           waiting={flowState.kind === "waiting"}
+          readerCount={
+            flowState.kind === "waiting" ? flowState.readerCount : undefined
+          }
           codePaste={codePaste}
           onOpenExternalLink={onOpenExternalLink}
           onCancel={onCancel}
@@ -815,6 +818,7 @@ export function AddProfileWaitingStep({
   cancelPending,
   cancelDisabled,
   waiting,
+  readerCount,
   codePaste,
   onOpenExternalLink,
   onCancel,
@@ -839,6 +843,7 @@ export function AddProfileWaitingStep({
    *  let a user's paste silently lock the field without ever being sent.
    */
   readonly waiting: boolean;
+  readonly readerCount?: number;
   readonly codePaste: ProviderProfileLoginFlowCodePaste;
   readonly onOpenExternalLink: (url: string) => void;
   readonly onCancel: () => void;
@@ -867,8 +872,12 @@ export function AddProfileWaitingStep({
       <div className="flex items-start gap-2.5">
         <MutedAgentSpinner />
         <div className="min-w-0">
-          <div className="text-ui-sm font-medium text-foreground">{title}</div>
-          {guidance !== null ? (
+          <div className="text-ui-sm font-medium text-foreground">
+            {readerCount === undefined
+              ? title
+              : `Waiting for ${readerCount} agents on this profile`}
+          </div>
+          {readerCount === undefined && guidance !== null ? (
             <p className="mt-0.5 text-ui-xs leading-relaxed text-muted-foreground">
               {guidance}
             </p>
