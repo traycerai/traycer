@@ -336,6 +336,7 @@ export function BotChatTranscript(props: {
     <TileErrorBoundary instanceId={instanceId} resetKey={chatId}>
       <BotTranscriptImageScope botId={botId} chatId={chatId} hostId={hostId}>
         <BotChatTranscriptBody
+          minimapEnabled={surface?.kind !== "thread"}
           handle={handle}
           botId={botId}
           chatId={chatId}
@@ -411,6 +412,7 @@ function channelIntro(
 }
 
 function BotChatTranscriptBody(props: {
+  readonly minimapEnabled: boolean;
   readonly handle: ChatSessionStoreHandle;
   readonly botId: string;
   readonly chatId: string;
@@ -663,6 +665,7 @@ function BotChatTranscriptBody(props: {
                 tabHostId={hostId}
               >
                 <ChatMessages
+                  minimapEnabled={props.minimapEnabled}
                   taskTitle={title}
                   taskId={chatId}
                   epicId={botId}

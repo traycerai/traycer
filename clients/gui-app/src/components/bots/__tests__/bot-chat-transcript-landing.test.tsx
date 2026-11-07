@@ -338,6 +338,19 @@ function flashing(messageId: string): boolean {
   return row.dataset.navigationHighlighted === "true";
 }
 
+describe("a loaded thread transcript", () => {
+  it("keeps its replies and landing without a minimap", async () => {
+    landing = { messageId: "ask-1", sendPostId: null, visit: 1 };
+    mountTranscript(
+      [resolvedUserMessage(), otherUserMessage(), reply()],
+      THREAD_SURFACE,
+    );
+    await settleLegendList();
+    await waitFor(() => expect(flashing("ask-1")).toBe(true));
+    expect(screen.queryByTestId("chat-turn-minimap")).toBeNull();
+  });
+});
+
 describe("a transcript asked to land on a post", () => {
   it("lands on it at each visit, the same post's again once the first landing has settled and the reader has moved on", async () => {
     const view = mountTranscript(

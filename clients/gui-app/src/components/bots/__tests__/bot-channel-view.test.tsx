@@ -847,7 +847,7 @@ describe("<BotChannelView tiles={null} /> channel", () => {
     expect(marked("post-e")).toBe("false");
   });
 
-  it("stacks a thread's line with the post's writer, and the bot once the thread has a reply", () => {
+  it("does not infer participants from legacy thread counts or the root writer", () => {
     mocks.state.threads = [
       thread("thread-a", "post-a", { replyCount: 0 }),
       thread("thread-b", "post-b", { replyCount: 2, lastReplyAt: 8_000 }),
@@ -859,8 +859,54 @@ describe("<BotChannelView tiles={null} /> channel", () => {
       screen
         .getByTestId(`stub-line-${postId}`)
         .getAttribute("data-participants");
-    expect(participants("post-a")).toBe("Tess Teammate");
-    expect(participants("post-b")).toBe("Tess Teammate,bot");
+    expect(participants("post-a")).toBe("");
+    expect(participants("post-b")).toBe("");
+  });
+
+  it("shows only the actors supplied for each thread's replies", () => {
+    mocks.state.threads = [
+      thread("thread-a", "post-a", {
+        replyCount: 1,
+        replyParticipants: [{ kind: "person", userId: "user-teammate" }],
+      }),
+      thread("thread-b", "post-b", {
+        replyCount: 2,
+        replyParticipants: [
+          { kind: "bot" },
+          { kind: "person", userId: "user-teammate" },
+        ],
+      }),
+    ];
+    mocks.postIds = ["post-a", "post-b"];
+    mount({ openThreadPostId: null });
+    expect(
+      screen.getByTestId("stub-line-post-a").getAttribute("data-participants"),
+    ).toBe("Tess Teammate");
+    expect(
+      screen.getByTestId("stub-line-post-b").getAttribute("data-participants"),
+    ).toBe("bot,Tess Teammate");
+  });
+
+  it("does not invent a bot reply from a legacy thread count under an assistant root", () => {
+    mocks.state.threads = [
+      thread("thread-a", "post-a", {
+        anchor: {
+          messageId: "post-a",
+          requestId: "request-a",
+          senderUserId: null,
+          sentAt: 1_000,
+          resolvedAt: null,
+          excerpt: null,
+        },
+        replyCount: 1,
+      }),
+    ];
+    mocks.postIds = ["post-a"];
+    mount({ openThreadPostId: null });
+
+    const line = screen.getByTestId("stub-line-post-a");
+    expect(line.getAttribute("data-reply-count")).toBe("1");
+    expect(line.getAttribute("data-participants")).toBe("");
   });
 
   it("asks the host to open a post's thread when its line is clicked", async () => {

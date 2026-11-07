@@ -1349,28 +1349,22 @@ function useChannelSearch(args: {
   };
 }
 
-/**
- * Who is in a thread, as its line under the post stacks them: the post's
- * writer, and the bot once the thread has a reply.
- */
+/** Reply authors supplied by the host; older summaries identify nobody. */
 function threadParticipants(
   thread: BotThreadSummary,
   viewer: AuthProfile | null,
   resolveMember: BotMemberResolver,
 ): ReadonlyArray<StackedIdentity> {
-  const writerId = thread.anchor?.senderUserId ?? null;
-  const writer: ReadonlyArray<StackedIdentity> =
-    writerId === null
-      ? []
-      : [
-          {
-            kind: "person",
-            userId: writerId,
-            name: botMemberName(writerId, viewer, resolveMember),
-            avatarUrl: resolveMember(writerId)?.avatarUrl ?? null,
-          },
-        ];
-  return thread.replyCount > 0 ? [...writer, { kind: "bot" }] : writer;
+  return (thread.replyParticipants ?? []).map((participant) =>
+    participant.kind === "bot"
+      ? participant
+      : {
+          kind: "person",
+          userId: participant.userId,
+          name: botMemberName(participant.userId, viewer, resolveMember),
+          avatarUrl: resolveMember(participant.userId)?.avatarUrl ?? null,
+        },
+  );
 }
 
 /**
