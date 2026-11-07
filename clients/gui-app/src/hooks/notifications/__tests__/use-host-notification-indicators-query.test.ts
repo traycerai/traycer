@@ -344,7 +344,9 @@ describe("useHostNotificationIndicators recovery", () => {
       await result.current.refetch();
     });
     expect(requestCount.value).toBe(2);
-    expect(result.current.error).not.toBeNull();
+    await waitFor(() => {
+      expect(result.current.error).not.toBeNull();
+    });
     expect(result.current.data.epics["epic-a"].unreadDone).toBe(true);
 
     await act(async () => {
