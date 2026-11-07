@@ -602,6 +602,7 @@ function ArtifactVersionHistoryPanel(props: {
     // is what the provenance link always was: a peek at the originating chat.
     tileNavigation.openTile(
       tileIntent(ref, { tabId: viewTabId }, "single", "direct_ui"),
+      "user",
     );
   };
 

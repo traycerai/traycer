@@ -10,6 +10,13 @@ interface StandaloneBotsState {
    * bots.
    */
   readonly settled: boolean;
+  /**
+   * Whether the directory holds an answer of the bot list itself. Settled
+   * also covers a read that failed or ran out of time, and the environments'
+   * groups exist before their bots are read, so only this says a bot the
+   * directory lacks is gone.
+   */
+  readonly botsListed: boolean;
 }
 
 /**
@@ -20,4 +27,5 @@ interface StandaloneBotsState {
 export const useStandaloneBotsStore = create<StandaloneBotsState>(() => ({
   directory: { model: EMPTY_HOME_BOTS_MODEL, setups: [] },
   settled: false,
+  botsListed: false,
 }));

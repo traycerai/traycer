@@ -625,7 +625,11 @@ describe("<ErrorSegment /> sandbox refusals", () => {
     expect(root.getAttribute("data-failure-presentation")).toBe("interrupted");
     expect(root.getAttribute("data-sandbox-refusal")).toBe("true");
     expect(screen.getByText("Paused: account out of credits")).toBeDefined();
-    expect(screen.getByText(/froze when your credits ran out/)).toBeDefined();
+    expect(
+      screen.getByText(
+        "This sandbox ran out of credits, which ended the turn. Add credits, then send a message to pick up where it stopped.",
+      ),
+    ).toBeDefined();
     // The host's raw sentence is replaced, not shown beside the copy.
     expect(screen.queryByText(RAW_MESSAGE)).toBeNull();
     expect(screen.queryByText("Error")).toBeNull();

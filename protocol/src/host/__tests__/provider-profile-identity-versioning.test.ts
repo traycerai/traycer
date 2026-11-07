@@ -74,7 +74,7 @@ const provider = {
   ],
 };
 
-describe("providers.list@10.8 profile identity projection", () => {
+describe("providers.list@10.9 profile identity projection", () => {
   it("keeps valid identity facts and surfaces one future row as unreadable", () => {
     const parsed = providersListResponseSchema.parse({ providers: [provider] });
     const profiles = parsed.providers[0]?.profiles;
@@ -103,9 +103,9 @@ describe("providers.list@10.8 profile identity projection", () => {
     });
   });
 
-  it("strips identity facts through the frozen 10.7 response schema", () => {
-    const frozen107 = providersList.versions[7].contract.responseSchema;
-    const parsed = frozen107.parse({ providers: [provider] });
+  it("strips identity facts through the frozen 10.8 response schema", () => {
+    const frozen108 = providersList.versions[8].contract.responseSchema;
+    const parsed = frozen108.parse({ providers: [provider] });
     const parsedProfile = parsed.providers[0]?.profiles[0];
 
     expect(parsedProfile).toBeDefined();

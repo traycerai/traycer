@@ -62,6 +62,8 @@ export interface SettingsAvailabilityContext {
    * has anything to play, which is a fact of the build and not a preference.
    */
   readonly soundtrackOffered: boolean;
+  /** `soundtrackEnabled`, subscribed: a row that needs Music on follows it. */
+  readonly soundtrackOn: boolean;
 }
 
 /** Rendered in every shell. */
@@ -111,6 +113,17 @@ export function isSoundtrackRowAvailable(
   context: SettingsAvailabilityContext,
 ): boolean {
   return !context.mobileApp && context.soundtrackOffered;
+}
+
+/**
+ * Sounds › Soundtrack › Playback controls, and the buttons it turns on: they
+ * move music, so with Music off there is nothing for them to do. Their setting
+ * stays as it was.
+ */
+export function isPlaybackControlsRowAvailable(
+  context: SettingsAvailabilityContext,
+): boolean {
+  return isSoundtrackRowAvailable(context) && context.soundtrackOn;
 }
 
 /**

@@ -557,7 +557,12 @@ describe("<HostSettingsPanel /> Overview ▸ Updates tab", () => {
     await selectHostOverviewTab("updates");
     const card = await screen.findByTestId("host-overview-answer-card");
     expect(card.getAttribute("data-answer")).toBe("available");
-    fireEvent.click(await screen.findByTestId("host-overview-update-now"));
+    const updateActions = await screen.findAllByTestId(
+      "host-overview-update-now",
+    );
+    expect(updateActions).toHaveLength(1);
+    expect(within(card).queryByTestId("host-overview-update-now")).toBeNull();
+    fireEvent.click(updateActions[0]);
 
     // The refusal lands as the red footer INSIDE the answer that is still
     // showing: the card keeps its `available` kind, and there is only one.

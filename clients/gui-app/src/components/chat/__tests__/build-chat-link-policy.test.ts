@@ -321,6 +321,7 @@ describe("buildChatLinkPolicy", () => {
         workspacePath: "/repo",
         filePath: "src/app.ts",
       }),
+      "user",
     );
   });
 
@@ -389,6 +390,7 @@ describe("buildChatLinkPolicy", () => {
         workspacePath: "/repo-b",
         filePath: "app.ts",
       }),
+      "user",
     );
   });
 
@@ -423,6 +425,7 @@ describe("buildChatLinkPolicy", () => {
         workspacePath: "/repo-a",
         filePath: "app.ts",
       }),
+      "user",
     );
   });
 
@@ -452,6 +455,7 @@ describe("buildChatLinkPolicy", () => {
         workspacePath: "/repo-a",
         filePath: "app.ts",
       }),
+      "user",
     );
   });
 
@@ -498,6 +502,7 @@ describe("buildChatLinkPolicy", () => {
         workspacePath: "/repo",
         filePath: "sub-dir/index.md",
       }),
+      "user",
     );
   });
 
@@ -734,6 +739,7 @@ describe("buildChatLinkPolicy", () => {
         workspacePath: "/repo",
         filePath: "src/app.ts",
       }),
+      "user",
     );
   });
 
@@ -800,6 +806,7 @@ describe("buildChatLinkPolicy", () => {
       chatLinkIntent({
         id: "abs-content",
       }),
+      "user",
     );
   });
 
@@ -833,7 +840,7 @@ describe("buildChatLinkPolicy", () => {
 
     // README.md is a real file - not the `index.md` fallback, even though
     // BOTH candidates were probed.
-    expect(openTile).toHaveBeenCalledWith(chatLinkIntent(directRef));
+    expect(openTile).toHaveBeenCalledWith(chatLinkIntent(directRef), "user");
   });
 
   it("synthesizes an out-of-root ref when a non-index.md artifact-tree file does not resolve and no root contains it", async () => {
@@ -851,7 +858,7 @@ describe("buildChatLinkPolicy", () => {
       CHAT_HOST_ID,
       path,
     );
-    expect(openTile).toHaveBeenCalledWith(chatLinkIntent(synthesized));
+    expect(openTile).toHaveBeenCalledWith(chatLinkIntent(synthesized), "user");
     expect(onAsyncFailure).not.toHaveBeenCalled();
   });
 
@@ -876,7 +883,7 @@ describe("buildChatLinkPolicy", () => {
     await flush();
 
     expect(mocks.fetchWorkspaceFileExists).toHaveBeenCalled();
-    expect(openTile).toHaveBeenCalledWith(chatLinkIntent(winner));
+    expect(openTile).toHaveBeenCalledWith(chatLinkIntent(winner), "user");
   });
 
   it("falls back to the index.md candidate when the direct absolute target doesn't exist (A, C1)", async () => {
@@ -952,7 +959,7 @@ describe("buildChatLinkPolicy", () => {
     run(fileLink({ path: "/repo/just-written.ts" }), lifecycle);
     await flush();
 
-    expect(openTile).toHaveBeenCalledWith(chatLinkIntent(directRef));
+    expect(openTile).toHaveBeenCalledWith(chatLinkIntent(directRef), "user");
     expect(onAsyncFailure).not.toHaveBeenCalled();
     // A non-artifact-shaped miss never attempts the RPC at all.
     expect(mocks.resolveArtifactByPath).not.toHaveBeenCalled();
@@ -1029,7 +1036,7 @@ describe("buildChatLinkPolicy", () => {
     );
     await flush();
 
-    expect(openTile).toHaveBeenCalledWith(chatLinkIntent(directRef));
+    expect(openTile).toHaveBeenCalledWith(chatLinkIntent(directRef), "user");
     expect(mocks.navigateToTabIntent).not.toHaveBeenCalled();
   });
 
@@ -1107,7 +1114,7 @@ describe("buildChatLinkPolicy", () => {
     );
     await flush();
 
-    expect(openTile).toHaveBeenCalledWith(chatLinkIntent(winner));
+    expect(openTile).toHaveBeenCalledWith(chatLinkIntent(winner), "user");
   });
 
   it("keeps the artifact-null fallback a no-op with out-of-root synthesis disabled (D5)", async () => {
@@ -1213,6 +1220,7 @@ describe("buildChatLinkPolicy", () => {
           filePath: `epics/${OPEN_EPIC_ID}/artifacts/report/index.md`,
         }),
       ),
+      "user",
     );
     expect(onAsyncFailure).not.toHaveBeenCalled();
   });

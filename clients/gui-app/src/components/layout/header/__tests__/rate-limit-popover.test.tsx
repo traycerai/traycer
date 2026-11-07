@@ -1,3 +1,6 @@
+import { useSettingsHostScopeStore } from "@/stores/settings/settings-host-scope-store";
+import { useTabsStore } from "@/stores/tabs/store";
+import { PERSONAL_PICK } from "@/lib/settings-environment-pages";
 import {
   afterEach,
   beforeEach,
@@ -26,7 +29,11 @@ import type {
   RateLimitChatCredential,
 } from "@traycer/protocol/host";
 import type { ProvidersConsumeRateLimitResetCreditRequest } from "@traycer/protocol/host/rate-limit";
-import type { ProviderProfile } from "@traycer/protocol/host/provider-schemas";
+import type {
+  ProviderCliState,
+  ProviderProfile,
+} from "@traycer/protocol/host/provider-schemas";
+import { DEFAULT_PROVIDER_NATIVE_CAPABILITIES } from "@traycer/protocol/host/provider-native-schemas";
 import type {
   AuthenticatedUser,
   SubscriptionStatus,
@@ -37,11 +44,12 @@ import {
   hostScopeFixture,
   hostScopeOptionFixture,
 } from "@/components/settings/host-scope/host-scope-fixture";
+import type { HostScopeOption } from "@/components/settings/host-scope/host-scope-model";
 import type { HostScope } from "@/components/settings/host-scope/use-host-scope";
 import { useAccountContextStore } from "@/stores/auth/account-context-store";
 import { useDesktopDialogStore } from "@/stores/dialogs/desktop-dialog-store";
 import { useProvidersFocusStore } from "@/stores/settings/providers-focus-store";
-import { useSettingsHostScopeStore } from "@/stores/settings/settings-host-scope-store";
+
 import { useSettingsSearchStore } from "@/stores/settings/settings-search-store";
 import type {
   AvailableProviderRateLimits,
@@ -90,6 +98,11 @@ type MockState = {
     fetchEligibility?: RateLimitFetchEligibility;
   }>;
   results: Record<string, QueryResult>;
+  // `useTraycerSubscription` gates the Traycer tab on this provider row's
+  // `enabled` flag, independent from host-RPC providers above. Defaults to
+  // enabled so the existing Traycer-tab cases below behave exactly as before.
+  providersList: { data: { providers: ProviderCliState[] } | undefined };
+  selectedProviders: { data: { providers: ProviderCliState[] } | undefined };
   traycerUsageFetching: boolean;
   traycerUsageUpdatedAt: Readonly<Record<string, number>>;
   openSettings: Mock<(...args: unknown[]) => void>;
@@ -114,6 +127,9 @@ type MockState = {
   // a test can assert the button subscribes to EVERY configured httpFetch
   // provider's query state, not just the first.
   lastUseHostQueriesProviderIds: ReadonlyArray<string> | null;
+  settingsHost: HostScopeOption | null;
+  settingsOverlayActive: boolean;
+  routerPathname: string;
   profileSelection: {
     shownProfiles: Readonly<Record<string, ReadonlyArray<string | null>>>;
     lastProfileByHarness: Readonly<Record<string, string | null>>;
@@ -134,6 +150,8 @@ function coldAuthUser(): MockAuthUser {
 const mocks = vi.hoisted<MockState>(() => ({
   configured: [],
   results: {},
+  providersList: { data: undefined },
+  selectedProviders: { data: undefined },
   traycerUsageFetching: false,
   traycerUsageUpdatedAt: {},
   openSettings: vi.fn(),
@@ -142,6 +160,9 @@ const mocks = vi.hoisted<MockState>(() => ({
   consumeReset: vi.fn(),
   lastUseHostQueriesOptions: null,
   lastUseHostQueriesProviderIds: null,
+  settingsHost: null,
+  settingsOverlayActive: false,
+  routerPathname: "/",
   profileSelection: {
     shownProfiles: {},
     lastProfileByHarness: {},
@@ -294,12 +315,47 @@ vi.mock("@/lib/rate-limits/provider-rate-limit-fetch", () => ({
 }));
 vi.mock("@/stores/tabs/use-system-tab-modal", () => ({
   useSystemTabModalActions: () => ({ openSettings: mocks.openSettings }),
+  useSystemOverlayActive: () => mocks.settingsOverlayActive,
 }));
+vi.mock("@tanstack/react-router", async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import("@tanstack/react-router")>();
+  return {
+    ...actual,
+    useRouterState: (args: {
+      select: (state: { location: { pathname: string } }) => unknown;
+    }) => args.select({ location: { pathname: mocks.routerPathname } }),
+  };
+});
+vi.mock(
+  "@/components/settings/host-scope/use-host-scope",
+  async (importOriginal) => {
+    const actual =
+      await importOriginal<
+        typeof import("@/components/settings/host-scope/use-host-scope")
+      >();
+    return {
+      ...actual,
+      useHostScope: () => ({ host: mocks.settingsHost }),
+    };
+  },
+);
 // The Traycer tab reads the signed-in user's subscription (AuthService), not a
 // host RPC. Default is a signed-out/cold user -> no Traycer tab, so the
 // host-RPC-provider tests below behave exactly as before.
 vi.mock("@/hooks/auth/use-auth-user-query", () => ({
   useAuthUser: () => mocks.authUser,
+}));
+// `useTraycerSubscription` also gates the Traycer tab on this provider row's
+// `enabled` flag (independent of the host-RPC providers mocked above via
+// `useConfiguredRateLimitProviders`), so it gets its own fixture seam.
+vi.mock("@/hooks/providers/use-providers-list-query", () => ({
+  useProvidersList: () => mocks.providersList,
+  useProvidersListForClient: (client: string | null) =>
+    client === "host-b" ? mocks.selectedProviders : mocks.providersList,
+}));
+vi.mock("@/hooks/host/use-host-client-for-host-id", () => ({
+  useHostClientForHostId: (hostId: string | null) => hostId,
 }));
 // The aperture usage query + its turn-refresh only mount inside the shared
 // RateLimitView (rate-limit-based Traycer plans). Stub them so no real host
@@ -529,6 +585,39 @@ function unauthenticatedAmbientProfile(): ProviderProfile {
       label: null,
       detail: null,
     },
+  };
+}
+
+/**
+ * The `providers.list` row `useTraycerSubscription` reads to gate the
+ * synthetic Traycer rail entry: a disabled row drops the tab regardless of
+ * subscription eligibility.
+ */
+function traycerProviderFixture(enabled: boolean): ProviderCliState {
+  return {
+    providerId: "traycer",
+    enabled,
+    disabledBy: null,
+    selected: { kind: "bundled" },
+    candidates: [],
+    auth: {
+      status: "authenticated",
+      badgeText: null,
+      label: null,
+      detail: null,
+    },
+    authPending: false,
+    checkedAt: null,
+    apiKey: { supported: false, configured: false, source: null },
+    terminalAgentArgs: "",
+    envOverrides: [],
+    loginCapability: null,
+    availabilityPending: false,
+    nativeCapabilities: DEFAULT_PROVIDER_NATIVE_CAPABILITIES,
+    managedInstallState: null,
+    versionVisibility: null,
+    advisory: null,
+    profiles: [],
   };
 }
 
@@ -770,6 +859,37 @@ function twoHostScope(overrides: Partial<HostScope>): HostScope {
   });
 }
 
+const USAGE_MISMATCH_WRAP = [
+  "h-auto",
+  "w-full",
+  "max-w-full",
+  "min-w-0",
+  "shrink",
+  "justify-start",
+  "whitespace-normal",
+  "break-words",
+] as const;
+
+function classTokens(element: HTMLElement): readonly string[] {
+  return element.className.split(/\s+/).filter((token) => token.length > 0);
+}
+
+function expectUsageMismatchWrap(button: HTMLElement): void {
+  const tokens = classTokens(button);
+  for (const token of USAGE_MISMATCH_WRAP) {
+    expect(tokens).toContain(token);
+  }
+  expect(tokens).not.toContain("whitespace-nowrap");
+}
+
+function faceSpan(face: HTMLElement, selector: string): HTMLSpanElement {
+  const found = face.querySelector(selector);
+  if (!(found instanceof HTMLSpanElement)) {
+    throw new Error(`missing ${selector}`);
+  }
+  return found;
+}
+
 function pointerEvent(
   type:
     | "pointerdown"
@@ -956,6 +1076,8 @@ beforeEach(() => {
   segmentsState.cluster = { kind: "hidden" };
   mocks.configured = [];
   mocks.results = {};
+  mocks.providersList = { data: { providers: [traycerProviderFixture(true)] } };
+  mocks.selectedProviders = { data: undefined };
   mocks.traycerUsageFetching = false;
   mocks.traycerUsageUpdatedAt = {};
   mocks.openSettings = vi.fn();
@@ -988,7 +1110,11 @@ beforeEach(() => {
   // per-provider links carry across. Neither is reset by the render, so a
   // leftover from the previous case would let an assertion pass on it.
   useSettingsSearchStore.getState().clearReveal();
-  useSettingsHostScopeStore.getState().setScopedHostId(null);
+  useSettingsHostScopeStore.getState().reset();
+  mocks.settingsHost = null;
+  mocks.settingsOverlayActive = false;
+  mocks.routerPathname = "/";
+  useTabsStore.setState(useTabsStore.getInitialState(), true);
   onClose = vi.fn();
 });
 
@@ -1966,10 +2092,48 @@ describe("<RateLimitPopover /> rail", () => {
     expect(screen.getByText("Current session")).toBeTruthy();
     expect(screen.getByText("Work")).toBeTruthy();
     expect(screen.getByText("Pro 5x")).toBeTruthy();
+    expect(screen.getByText("Pro 5x").getAttribute("data-wrap")).toBe("");
     const profileSwitch = screen.getByRole("switch", {
       name: "Allow agents to use Work",
     });
     expect(profileSwitch.dataset.state).toBe("checked");
+  });
+
+  it("wraps a long profile label and its plan on the profile card", () => {
+    const longLabel =
+      "work-profile-name-that-is-long-enough-to-wrap-without-truncation";
+    mocks.configured = [
+      {
+        providerId: "codex",
+        lane: "ephemeralProcess",
+        profiles: [
+          providerProfile({
+            profileId: "work-profile",
+            kind: "managed",
+            label: longLabel,
+            tier: "Professional plan 5x",
+            usageUpdatedAt: NOW - 10_000,
+          }),
+        ],
+      },
+    ];
+    mocks.results = {
+      [resultKey("codex", "work-profile")]: readyResult(codexReady()),
+    };
+
+    renderPopover();
+
+    const label = screen.getByText(longLabel);
+    expect(label.textContent).toBe(longLabel);
+    expect(classTokens(label)).toContain("whitespace-normal");
+    expect(classTokens(label)).toContain("wrap-anywhere");
+    expect(classTokens(label)).not.toContain("truncate");
+    expect(label.closest(".truncate")).toBeNull();
+    const plan = screen.getByText("Professional plan 5x");
+    expect(plan.getAttribute("data-wrap")).toBe("");
+    // A fixed height on a wrapping badge clips its second line.
+    expect(classTokens(plan)).toContain("h-auto");
+    expect(classTokens(plan)).not.toContain("h-5");
   });
 
   it("keeps an unauthenticated ambient row with cached lastGood data visible without a refresh action", () => {
@@ -3459,7 +3623,7 @@ describe("<RateLimitPopover /> manage provider links", () => {
       // No tab named: Providers resolves this provider's own first tab.
       focusTab: null,
     });
-    expect(useSettingsHostScopeStore.getState().scopedHostId).toBe("host-a");
+    expect(useSettingsHostScopeStore.getState().pendingHostId).toBe("host-a");
   });
 
   it("deep-links an ambient provider from its own header", () => {
@@ -3885,7 +4049,9 @@ describe("<RateLimitPopover /> Traycer tab", () => {
     // Plan chips live on their matching cards. The trailing "_V3"
     // pricing-generation tag remains hidden.
     expect(screen.getByText("Pro")).toBeTruthy();
+    expect(screen.getByText("Pro").getAttribute("data-wrap")).toBe("");
     expect(screen.getByText("Ultra")).toBeTruthy();
+    expect(screen.getByText("Ultra").getAttribute("data-wrap")).toBe("");
   });
 
   it("renders Traycer account cards with active state on Overview", () => {
@@ -3909,6 +4075,33 @@ describe("<RateLimitPopover /> Traycer tab", () => {
     const activeCards = document.querySelectorAll('[aria-current="true"]');
     expect(activeCards).toHaveLength(1);
     expect(activeCards[0].textContent).toContain("Personal");
+  });
+
+  it("wraps the full long Traycer account label on its real account card", () => {
+    mocks.configured = [];
+    const longLabel =
+      "a-team-account-name-that-is-long-enough-to-wrap-without-truncation";
+    const authUser = authUserFixture({ status: "PRO_V3", withTeam: true });
+    mocks.authUser = readyAuthUser({
+      ...authUser,
+      teamSubscriptions: authUser.teamSubscriptions.map((subscription) => ({
+        ...subscription,
+        team: { ...subscription.team, slug: longLabel },
+      })),
+    });
+
+    renderPopover();
+
+    const card = screen.getByRole("button", {
+      name: `Use ${longLabel} account`,
+    });
+    const label = within(card).getByText(longLabel);
+    expect(label.textContent).toBe(longLabel);
+    expect(classTokens(label)).toContain("whitespace-normal");
+    expect(classTokens(label)).toContain("wrap-anywhere");
+    expect(classTokens(label)).not.toContain("truncate");
+    expect(label.closest(".truncate")).toBeNull();
+    expect(card.getAttribute("aria-label")).toBe(`Use ${longLabel} account`);
   });
 
   it("marks the selected team card active while retaining every account's plan", () => {
@@ -3966,13 +4159,71 @@ describe("<RateLimitPopover /> Traycer tab", () => {
 
 describe("<RateLimitPopover /> host picker", () => {
   it("shows no host picker row when there is only one host", () => {
-    renderPopover();
+    const host = hostScopeOptionFixture({
+      hostId: "host-a",
+      name: "tgill-popos",
+      kind: "personal",
+    });
+    renderPopoverWithScope(hostScopeFixture({ host, hosts: [host] }), false);
     expect(screen.queryByTestId("rate-limit-host-picker-row")).toBeNull();
+    expect(screen.queryByTestId("settings-host-switcher")).toBeNull();
+    const identity = screen.getByTestId("rate-limit-host-identity");
+    expect(identity.tagName).not.toBe("BUTTON");
+    expect(identity.querySelector("button")).toBeNull();
+    expect(identity.querySelector(".lucide-chevron-down")).toBeNull();
+    const face = within(identity).getByTestId("rate-limit-host-header");
+    const name = faceSpan(face, "span.font-medium");
+    const kind = faceSpan(face, "span.text-muted-foreground");
+    expect(name.textContent).toBe("tgill-popos");
+    expect(kind.textContent).toBe("Computer");
+    expect(name).not.toBe(kind);
+    expect(classTokens(name)).toContain("break-words");
+    expect(classTokens(name)).not.toContain("truncate");
+    expect(face.textContent).not.toContain("tgill-popos · Computer");
   });
 
-  it("shows a host picker row when there is more than one host", () => {
-    renderPopoverWithScope(twoHostScope({}), false);
+  it("names an empty host scope without inventing a kind", () => {
+    renderPopoverWithScope(hostScopeFixture({ host: null, hosts: [] }), false);
+
+    const identity = screen.getByTestId("rate-limit-host-identity");
+    expect(identity.textContent).toContain("No host");
+    expect(identity.textContent).not.toContain("Computer");
+    expect(identity.textContent).not.toContain("Sandbox");
+    expect(identity.textContent).not.toContain("Team machine");
+    const face = within(identity).getByTestId("rate-limit-host-header");
+    expect(faceSpan(face, "span.font-medium").textContent).toBe("No host");
+    expect(face.querySelector("span.text-muted-foreground")).toBeNull();
+  });
+
+  it("shows the watched sandbox's name and kind in the picker when there is more than one host", () => {
+    const sandbox = hostScopeOptionFixture({
+      hostId: "host-sandbox",
+      name: "quiet-harbor",
+      kind: "sandbox",
+    });
+    renderPopoverWithScope(
+      twoHostScope({
+        host: sandbox,
+        hosts: [sandbox, hostScopeOptionFixture({ hostId: "host-a" })],
+      }),
+      false,
+    );
     expect(screen.getByTestId("rate-limit-host-picker-row")).toBeTruthy();
+    expect(screen.getAllByTestId("settings-host-switcher")).toHaveLength(1);
+    expect(screen.getByTestId("settings-host-switcher").textContent).toBe(
+      "quiet-harbor",
+    );
+    const header = screen.getByTestId("rate-limit-host-header");
+    const face = within(header).getByTestId("rate-limit-host-face");
+    expect(face.parentElement?.getAttribute("aria-hidden")).toBe("true");
+    expect(face.querySelector(".lucide-chevron-down")).not.toBeNull();
+    const name = faceSpan(face, "span.font-medium");
+    const kind = faceSpan(face, "span.text-muted-foreground");
+    expect(name.textContent).toBe("quiet-harbor");
+    expect(kind.textContent).toBe("Sandbox");
+    expect(classTokens(name)).toContain("break-words");
+    expect(classTokens(kind)).toContain("break-words");
+    expect(face.textContent).not.toContain("quiet-harbor · Sandbox");
   });
 
   // The `vanished` exception: a pick that no longer resolves is not a choice,
@@ -3993,6 +4244,240 @@ describe("<RateLimitPopover /> host picker", () => {
     });
     renderPopoverWithScope(scope, true);
     expect(screen.getByTestId("rate-limit-host-picker-row")).toBeTruthy();
+    expect(screen.getByTestId("rate-limit-host-face")).toBeTruthy();
+  });
+
+  it("names a stale pin, shows active-host usage, and forgets the saved name", () => {
+    const active = hostScopeOptionFixture({ hostId: "host-a", name: "Alpha" });
+    const forget = vi.fn();
+    const activeProfile = providerProfile({
+      profileId: "active-profile",
+      kind: "managed",
+      label: "Active profile",
+      tier: "Max",
+      usageUpdatedAt: NOW - 10_000,
+    });
+    mocks.configured = [
+      {
+        providerId: "claude-code",
+        lane: "ephemeralProcess",
+        profiles: [activeProfile],
+      },
+    ];
+    mocks.results = {
+      "claude-code": readyResult(claudeReady()),
+      [resultKey("claude-code", "active-profile")]: readyResult(claudeReady()),
+    };
+    const scope = hostScopeFixture({
+      host: null,
+      hosts: [active],
+      activeHostId: active.hostId,
+      activeHost: active,
+      vanishedHostId: "host-gone",
+      hostLabel: "host-gone",
+      vanishedSelection: { name: "Bright Meadow", forget },
+      status: "vanished",
+      isViewingActive: false,
+    });
+    renderPopoverWithScope(scope, true);
+
+    expect(screen.getByTestId("settings-host-switcher").textContent).toBe(
+      "Alpha",
+    );
+    expect(
+      screen.getByTestId("rate-limit-host-stale-pin").textContent,
+    ).toContain("Bright Meadow is no longer here. You're seeing Alpha.");
+    expect(screen.getByText("Current session")).toBeTruthy();
+    const profileEye = screen.getByRole("button", {
+      name: "Show Active profile in status bar",
+    });
+    expect(profileEye.getAttribute("aria-pressed")).toBe("false");
+    fireEvent.click(profileEye);
+    expect(useLayoutStore.getState().arrangement.shownProfiles).toEqual({
+      "host-a": { "claude-code": ["active-profile"] },
+    });
+    expect(profileEye.getAttribute("aria-pressed")).toBe("true");
+    fireEvent.click(
+      screen.getByRole("button", { name: "Forget Bright Meadow" }),
+    );
+    expect(forget).toHaveBeenCalledTimes(1);
+
+    cleanup();
+    renderPopoverWithScope(
+      hostScopeFixture({
+        host: null,
+        hosts: [],
+        activeHost: null,
+        activeHostId: null,
+        vanishedHostId: "host-gone",
+        vanishedSelection: { name: "Bright Meadow", forget },
+        status: "vanished",
+        isViewingActive: false,
+      }),
+      true,
+    );
+    expect(screen.getByTestId("rate-limit-host-picker-row")).toBeTruthy();
+    expect(screen.queryByTestId("rate-limit-host-face")).toBeNull();
+    expect(screen.queryByTestId("rate-limit-host-header")).toBeNull();
+    expect(
+      screen.getByTestId("settings-host-switcher-empty").textContent,
+    ).toContain("No hosts yet");
+    expect(screen.getByTestId("rate-limit-host-stale-pin").textContent).toBe(
+      "Bright Meadow is no longer here.Forget Bright Meadow",
+    );
+    expect(screen.queryByTestId("rate-limit-popover-panes")).toBeNull();
+  });
+
+  it("shows Settings mismatch only while Settings is visible and changes usage scope alone", () => {
+    const settingsHost = hostScopeOptionFixture({
+      hostId: "host-b",
+      name: "Bravo",
+    });
+    const setUsageHost = vi.fn();
+    mocks.settingsHost = settingsHost;
+    useSettingsHostScopeStore.getState().selectHost(PERSONAL_PICK, {
+      hostId: settingsHost.hostId,
+      name: settingsHost.name,
+    });
+    const settingsSelectionBefore =
+      useSettingsHostScopeStore.getState().hostByEnvironment;
+    const usageScope = twoHostScope({ setHostId: setUsageHost });
+
+    const closed = renderPopoverWithScope(usageScope, false);
+    expect(screen.queryByTestId("rate-limit-host-mismatch")).toBeNull();
+    closed.unmount();
+
+    mocks.settingsOverlayActive = true;
+    renderPopoverWithScope(usageScope, false);
+    const mismatch = screen.getByTestId("rate-limit-host-mismatch");
+    expect(mismatch.getAttribute("role")).not.toBe("status");
+    expect(within(mismatch).getAllByRole("button")).toHaveLength(1);
+    const button = within(mismatch).getByRole("button", {
+      name: "Show usage for Bravo",
+    });
+    expect(button.textContent).toBe("Show usage for Bravo");
+    expect(mismatch.textContent).not.toContain("Showing");
+    expect(mismatch.textContent).not.toContain("Settings is showing");
+    expectUsageMismatchWrap(button);
+
+    fireEvent.click(button);
+
+    expect(setUsageHost).toHaveBeenCalledWith("host-b");
+    expect(useSettingsHostScopeStore.getState().hostByEnvironment).toEqual(
+      settingsSelectionBefore,
+    );
+    expect(useSettingsHostScopeStore.getState().pendingHostId).toBeNull();
+    expect(useTabsStore.getState().activeItemId).toBeNull();
+  });
+
+  it("treats a Settings surface in the active split as visible", () => {
+    const settingsHost = hostScopeOptionFixture({
+      hostId: "host-b",
+      name: "Bravo",
+    });
+    const setUsageHost = vi.fn();
+    mocks.settingsHost = settingsHost;
+    useSettingsHostScopeStore.getState().selectHost(PERSONAL_PICK, {
+      hostId: settingsHost.hostId,
+      name: settingsHost.name,
+    });
+    const settingsSelectionBefore =
+      useSettingsHostScopeStore.getState().hostByEnvironment;
+    useTabsStore.setState({
+      items: [
+        {
+          kind: "split",
+          id: "split-settings",
+          left: { kind: "tab", ref: { kind: "settings", id: "settings" } },
+          right: { kind: "tab", ref: { kind: "history", id: "history" } },
+          focusedSide: "left",
+          routeBackingSide: "left",
+          leftRatio: 0.5,
+        },
+      ],
+      activeItemId: "split-settings",
+      systemTabs: {
+        settings: {
+          id: "settings",
+          kind: "settings",
+          name: "Settings",
+          lastPath: null,
+        },
+        history: {
+          id: "history",
+          kind: "history",
+          name: "History",
+          lastPath: null,
+        },
+      },
+    });
+
+    renderPopoverWithScope(twoHostScope({ setHostId: setUsageHost }), false);
+
+    const mismatch = screen.getByTestId("rate-limit-host-mismatch");
+    expect(mismatch.getAttribute("role")).not.toBe("status");
+    expect(within(mismatch).getAllByRole("button")).toHaveLength(1);
+    const button = within(mismatch).getByRole("button", {
+      name: "Show usage for Bravo",
+    });
+    expect(button.textContent).toBe("Show usage for Bravo");
+    expect(mismatch.textContent).not.toContain("Showing");
+    expect(mismatch.textContent).not.toContain("Settings is showing");
+    expectUsageMismatchWrap(button);
+
+    fireEvent.click(button);
+    expect(setUsageHost).toHaveBeenCalledWith("host-b");
+    expect(useSettingsHostScopeStore.getState().hostByEnvironment).toEqual(
+      settingsSelectionBefore,
+    );
+    expect(useSettingsHostScopeStore.getState().pendingHostId).toBeNull();
+  });
+
+  it("wraps a long host name on the face and the mismatch button", () => {
+    const longName =
+      "Windows sandbox — autonomous acceptance and integration workload";
+    const usageHost = hostScopeOptionFixture({
+      hostId: "host-long",
+      name: longName,
+      kind: "sandbox",
+    });
+    const settingsHost = hostScopeOptionFixture({
+      hostId: "host-settings-long",
+      name: longName,
+      kind: "sandbox",
+    });
+    mocks.settingsHost = settingsHost;
+    mocks.settingsOverlayActive = true;
+    useSettingsHostScopeStore.getState().selectHost(PERSONAL_PICK, {
+      hostId: settingsHost.hostId,
+      name: settingsHost.name,
+    });
+    renderPopoverWithScope(
+      twoHostScope({
+        host: usageHost,
+        hosts: [
+          usageHost,
+          hostScopeOptionFixture({ hostId: "host-a", name: "Alpha" }),
+        ],
+        activeHostId: usageHost.hostId,
+        activeHost: usageHost,
+      }),
+      false,
+    );
+
+    const face = screen.getByTestId("rate-limit-host-face");
+    const name = faceSpan(face, "span.font-medium");
+    expect(name.textContent).toBe(longName);
+    expect(face.textContent).toContain(longName);
+    expect(classTokens(name)).toContain("break-words");
+    expect(classTokens(face)).not.toContain("truncate");
+    expect(face.querySelector(".truncate")).toBeNull();
+
+    const button = screen.getByRole("button", {
+      name: `Show usage for ${longName}`,
+    });
+    expect(button.textContent).toBe(`Show usage for ${longName}`);
+    expectUsageMismatchWrap(button);
   });
 
   it("scopes the view without making the picked host active", () => {
@@ -4044,6 +4529,46 @@ describe("<RateLimitPopover /> unusable explicit host pick", () => {
 
     fireEvent.click(screen.getByTestId("rate-limit-host-return-to-active"));
     expect(returnToActive).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps account usage based on the unavailable selected host state", () => {
+    mocks.authUser = readyAuthUser(
+      authUserFixture({ status: "PRO_V3", withTeam: false }),
+    );
+    const selectedScope = hostScopeFixture({
+      host: hostScopeOptionFixture({ hostId: "host-b", connectable: false }),
+      hosts: [
+        hostScopeOptionFixture({ hostId: "host-a" }),
+        hostScopeOptionFixture({ hostId: "host-b", connectable: false }),
+      ],
+      hostLabel: "Office Linux",
+      status: "unreachable",
+      isViewingActive: false,
+    });
+
+    mocks.providersList = {
+      data: { providers: [traycerProviderFixture(false)] },
+    };
+    mocks.selectedProviders = { data: undefined };
+    const unknownView = renderPopoverWithScope(selectedScope, true);
+    expect(screen.getByText("Traycer Inference")).toBeTruthy();
+    unknownView.unmount();
+
+    mocks.providersList = {
+      data: { providers: [traycerProviderFixture(true)] },
+    };
+    mocks.selectedProviders = {
+      data: { providers: [traycerProviderFixture(false)] },
+    };
+    const disabledView = renderPopoverWithScope(selectedScope, true);
+    expect(screen.queryByText("Traycer Inference")).toBeNull();
+    disabledView.unmount();
+
+    mocks.selectedProviders = {
+      data: { providers: [traycerProviderFixture(true)] },
+    };
+    renderPopoverWithScope(selectedScope, true);
+    expect(screen.getByText("Traycer Inference")).toBeTruthy();
   });
 
   it("shows the unreachable notice for an explicitly picked host this client cannot dial", () => {

@@ -81,7 +81,6 @@ import {
 } from "@/stores/layout/layout-store";
 import { useSideTabStripStore } from "@/stores/layout/side-tab-strip-store";
 import { SIDE_STRIP_RAIL_WIDTH_PX } from "@/components/layout/tabs/side-strip/side-strip-tokens";
-import { useVoiceSessionStore } from "@/stores/voice/voice-session-store";
 import { useAuthStore } from "@/stores/auth/auth-store";
 import type { SurfaceNotificationIndicators } from "@/stores/notifications/notification-indicator-state";
 import { useSettingsStore } from "@/stores/settings/settings-store";
@@ -1445,100 +1444,6 @@ describe("the fixed Tracy entry - vertical strip", () => {
         ?.getAttribute("data-join-pane"),
     ).toBe("panel");
   });
-
-  it("draws no Talk under the entry or in the collapsed rail when voice is available", async () => {
-    const initialVoice = useVoiceSessionStore.getInitialState();
-    useVoiceSessionStore.setState({
-      availability: "live",
-      driver: {
-        start: () => undefined,
-        end: () => undefined,
-        setMuted: () => undefined,
-      },
-    });
-    try {
-      openEpicTabs(["Alpha"]);
-      mountSideStrip("/epics/e-alpha/e-alpha");
-
-      await screen.findByRole("tab", { name: "Tracy" });
-      expect(screen.queryByRole("button", { name: "Talk" })).toBeNull();
-
-      act(() => {
-        useSideTabStripStore.setState({ collapsed: true });
-      });
-      await waitFor(() =>
-        expect(
-          screen.getByTestId("side-tab-strip").getAttribute("data-collapsed"),
-        ).toBe("true"),
-      );
-      expect(screen.queryByRole("button", { name: "Talk" })).toBeNull();
-    } finally {
-      useVoiceSessionStore.setState(initialVoice, true);
-    }
-  });
-});
-
-describe("Talk without the fixed Tracy entry", () => {
-  const initialVoice = useVoiceSessionStore.getInitialState();
-
-  beforeEach(() => {
-    // Show Tracy off: no fixed entry, the surface stays reachable as a tab.
-    useSettingsStore.setState({ showTracy: false });
-    useVoiceSessionStore.setState({
-      availability: "live",
-      driver: {
-        start: () => undefined,
-        end: () => undefined,
-        setMuted: () => undefined,
-      },
-    });
-  });
-
-  afterEach(() => {
-    useVoiceSessionStore.setState(initialVoice, true);
-  });
-
-  it("draws no Talk on the header strip", async () => {
-    openEpicTabs(["Alpha"]);
-    mountTopStrip("/epics/e-alpha/e-alpha");
-
-    await screen.findByRole("tab", { name: "Alpha" });
-    expect(screen.queryByRole("button", { name: "Talk" })).toBeNull();
-    expect(screen.queryByRole("tab", { name: "Tracy" })).toBeNull();
-  });
-
-  it("draws no Talk on the empty landing route, where the strip draws no tabs, idle or through a live session", async () => {
-    // Show Tracy off, Home off, no tabs, route "/": the strip's empty landing.
-    setHomeTabEnabled(false);
-    const mounted = mountTopStrip("/");
-
-    await waitFor(() => expect(mounted.pathname()).toBe("/"));
-    expect(screen.queryByTestId("tab-strip")).toBeNull();
-    expect(screen.queryByRole("button", { name: "Talk" })).toBeNull();
-
-    act(() => {
-      useVoiceSessionStore.setState({ phase: "live" });
-    });
-    expect(screen.queryByRole("button", { name: "Talk" })).toBeNull();
-  });
-
-  it("draws no Talk in the vertical strip's top block, expanded or collapsed", async () => {
-    openEpicTabs(["Alpha"]);
-    mountSideStrip("/epics/e-alpha/e-alpha");
-
-    const strip = await screen.findByTestId("side-tab-strip");
-    expect(strip.getAttribute("data-collapsed")).toBe("false");
-    expect(screen.queryByRole("button", { name: "Talk" })).toBeNull();
-    expect(screen.queryByRole("tab", { name: "Tracy" })).toBeNull();
-
-    act(() => {
-      useSideTabStripStore.setState({ collapsed: true });
-    });
-    await waitFor(() =>
-      expect(strip.getAttribute("data-collapsed")).toBe("true"),
-    );
-    expect(screen.queryByRole("button", { name: "Talk" })).toBeNull();
-  });
 });
 
 describe("the Show Tracy setting", () => {
@@ -1582,7 +1487,6 @@ function PhoneShellHarness(): ReactNode {
       {...chrome}
       columnRef={() => undefined}
       header={<MobileAppHeader />}
-      voiceTopRow={null}
       strip={
         placement === "left" ? (
           <SideTabStrip edge="left" ownsTitleBar={false} />

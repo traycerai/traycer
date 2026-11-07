@@ -15,6 +15,7 @@ import { computePosition } from "@floating-ui/dom";
 import { FirstTaskCoachmark } from "@/components/onboarding/first-task-coachmark";
 import { OnboardingCoachmark } from "@/components/onboarding/onboarding-coachmark";
 import { useFirstTaskGuideStore } from "@/stores/onboarding/first-task-guide-store";
+import { boxInput } from "@/components/bots/__tests__/bot-box-test-support";
 
 // Click-through and the stacking order are stylesheet rules, and jsdom loads
 // no stylesheet - a computed style comes back empty either way. So they are
@@ -594,9 +595,7 @@ describe("FirstTaskCoachmark", () => {
         <KeyboardCoachmarkHarness onNext={onNext} onBack={onBack} />
       </>,
     );
-    const applicationInput = screen.getByRole("textbox", {
-      name: "Application input",
-    });
+    const applicationInput = boxInput("Application input");
     applicationInput.focus();
     makeTargetVisible(screen.getByTestId("keyboard-target"));
     fireEvent(window, new Event("resize"));
@@ -676,7 +675,7 @@ describe("FirstTaskCoachmark", () => {
     "acknowledges a nonempty %s composer input on mount",
     async (step, value) => {
       render(<InputCoachmarkHarness step={step} value={value} />);
-      const input = screen.getByRole("textbox", { name: "Composer input" });
+      const input = boxInput("Composer input");
       makeTargetVisible(input);
       fireEvent(window, new Event("resize"));
 
@@ -691,7 +690,7 @@ describe("FirstTaskCoachmark", () => {
 
   it("acknowledges nonempty typing, then stays hidden after clearing and remounting", async () => {
     render(<InputCoachmarkHarness step="prompt" value="" />);
-    const input = screen.getByRole("textbox", { name: "Composer input" });
+    const input = boxInput("Composer input");
     makeTargetVisible(input);
     fireEvent(window, new Event("resize"));
     await screen.findByTestId("guide-coachmark");
@@ -762,9 +761,7 @@ describe("FirstTaskCoachmark", () => {
     addVisibleTarget();
     await screen.findByTestId("guide-coachmark");
 
-    const applicationInput = screen.getByRole("textbox", {
-      name: "Application input",
-    });
+    const applicationInput = boxInput("Application input");
     fireEvent.keyDown(applicationInput, { key: "Escape" });
     expect(useFirstTaskGuideStore.getState().status).toBe("finished");
   });

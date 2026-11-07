@@ -381,7 +381,7 @@ function answerProviders(
 // Legacy cases supply gate answers; the held-auth cases run the real staged
 // gate against the auth-query boundary to exercise the Send continuation.
 // The Terminal-account line reads the host picker's options for the run's
-// host; with none named it is this computer.
+// host, including the name shown by its picker.
 vi.mock("@/components/settings/host-scope/use-host-options", async () => {
   const { hostOptionsFixture, hostScopeOptionFixture } =
     await import("@/components/settings/host-scope/host-scope-fixture");
@@ -389,7 +389,7 @@ vi.mock("@/components/settings/host-scope/use-host-options", async () => {
     hosts: [
       hostScopeOptionFixture({
         hostId: "host-test",
-        name: "Hardiks-MacBook-Pro---Traycer.local",
+        name: "Workstation",
         isLocalMachine: true,
       }),
     ],
@@ -735,7 +735,7 @@ const EXISTING_START: StagedSandboxTarget = {
 
 const CHIP_HOST = hostScopeOptionFixture({
   hostId: "host-test",
-  name: "This computer",
+  name: "Workstation",
   isLocalMachine: true,
 });
 const CHIP_HOSTS = [CHIP_HOST];
@@ -761,6 +761,7 @@ function StagedHostChip(): ReactElement {
       action={null}
       surface="inline"
       intent="pin"
+      consequence={null}
       refusalByHostId={new Map()}
       inertExceptHostId={null}
       disabled={false}
@@ -1569,7 +1570,7 @@ describe("LandingComposer direct submit gate", () => {
         for (const action of [
           "Choose a model",
           "Open terminal instead",
-          "Use This computer",
+          "Use Workstation",
         ]) {
           expect(notice.getByRole("button", { name: action })).toHaveProperty(
             "disabled",
@@ -1640,7 +1641,7 @@ describe("LandingComposer direct submit gate", () => {
           ["traycer"],
         );
         fireEvent.click(
-          screen.getByRole("button", { name: "Use This computer" }),
+          screen.getByRole("button", { name: "Use Workstation" }),
         );
         expect(readStagedSandbox("landing:window-test")).toBeNull();
       },

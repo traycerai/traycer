@@ -9,10 +9,6 @@ import {
 } from "@/components/settings/move/review-v11";
 import { harnessLabel } from "@/components/settings/panels/fallback/fallback-harness-label";
 
-const HELD_REASONS = new Set(["credential_like_value", "executable_entry"]);
-
-const VALUE_DETAIL = "looked like a key and was held.";
-
 /**
  * Approve writes the held entry as Personal's item (`applyHeldEntry`, a live
  * commit), so it reaches every computer and sandbox running Personal, not
@@ -27,30 +23,21 @@ const OS_LABELS: Readonly<Record<EnvironmentOs, string | null>> = {
   windows: "Windows",
 };
 
-/** Held values and executable entries; grant-needed writes stay on the page notices. */
+/** Executable entries held for the person; grant-needed writes stay on the page notices. */
 export function heldReviewEntries(
   entries: readonly EnvironmentReviewEntry[],
 ): readonly EnvironmentReviewEntry[] {
-  return entries.filter((entry) => HELD_REASONS.has(entry.reason));
+  return entries.filter((entry) => entry.reason === "executable_entry");
 }
 
 export function heldRowsFromReview(
   entries: readonly EnvironmentReviewEntry[],
 ): readonly HeldRow[] {
   return heldReviewEntries(entries).map((entry) => {
-    if (entry.reason !== "executable_entry") {
-      return {
-        heldId: entry.entryId,
-        name: entry.key,
-        kind: "value",
-        detail: VALUE_DETAIL,
-      };
-    }
     const line = heldCommandLine(entry);
     return {
       heldId: entry.entryId,
       name: line.name,
-      kind: "command",
       detail: `${line.clause}. ${line.reach}`,
     };
   });

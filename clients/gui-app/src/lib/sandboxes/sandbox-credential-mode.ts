@@ -30,11 +30,6 @@ export function sandboxCredentialLine(
             ? "Uses Traycer's key on this sandbox. Agents can use it but never see it."
             : "On this sandbox its credential stays with Traycer: agents can use it, never read it",
       };
-    case "process-scoped":
-      return {
-        tone: "caution",
-        text: "Runs with its own credential on this sandbox, readable by agents",
-      };
     case "unsupported": {
       const mechanism = note === null || note === undefined ? "" : note.trim();
       return {
@@ -45,6 +40,10 @@ export function sandboxCredentialLine(
             : `Not available on sandboxes: ${mechanism}`,
       };
     }
+    // `process-scoped` is a retired mode no host emits; it stays a declared
+    // member of a released catalog version. A row carrying one is read the
+    // way a row with no mode is: the picker says what it always said.
+    case "process-scoped":
     case null:
     case undefined:
       return null;

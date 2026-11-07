@@ -112,7 +112,7 @@ vi.mock("@/components/epic-canvas/renderers/epic-node-tile", async () => {
             data-testid={`open-from-${node.id}`}
             onClick={() => {
               if (pendingOpen.value.intent !== null) {
-                openTile(pendingOpen.value.intent);
+                openTile(pendingOpen.value.intent, "user");
               }
             }}
           />
@@ -144,7 +144,7 @@ vi.mock("@/components/epic-canvas/mobile/tile-switcher-list", async () => {
             data-testid="list-pick"
             onClick={() => {
               if (pendingOpen.value.intent !== null) {
-                openTile(pendingOpen.value.intent);
+                openTile(pendingOpen.value.intent, "user");
               }
             }}
           />
@@ -212,7 +212,6 @@ vi.mock("@/components/epic-canvas/mobile/tab-switcher-sheet", async () => {
               epicId={props.epicId}
               tabId={props.tabId}
               onClose={() => props.onOpenChange(false)}
-              trailing={null}
             />
           </MobileTileOpenTargetContext>
         </div>
@@ -285,7 +284,7 @@ vi.mock("@/components/epic-canvas/renderers/tile-render", async () => {
           data-testid={`open-from-${props.node.id}`}
           onClick={() => {
             if (pendingOpen.value.intent !== null) {
-              openTile(pendingOpen.value.intent);
+              openTile(pendingOpen.value.intent, "user");
             }
           }}
         />
@@ -1295,13 +1294,24 @@ describe("<MobileEpicTileView /> with two tiles and chats painted by the stable 
     });
   });
 
-  describe("an open that names an HTML version", () => {
+  describe("an Expand that names an HTML version", () => {
     it.each([false, true])(
       "adopts it on the tile in the second slot (already displayed there: %s)",
       (displayed) => {
         mountHosted(paneCanvas([spec(1), html(1)], "inst-1", ["inst-1"]));
         if (displayed) showSecond("html-inst-1", false);
-        openFrom("open-from-spec-1", html(2), "explicit");
+        pendingOpen.value = {
+          intent: {
+            ...tileIntent(
+              html(2),
+              { tabId: VIEW_TAB_ID },
+              "explicit",
+              "direct_ui",
+            ),
+            adoptHtmlVersion: true,
+          },
+        };
+        fireEvent.click(screen.getByTestId("open-from-spec-1"));
         expect(canvasOf().tilesByInstanceId["html-inst-1"]).toMatchObject({
           htmlVersion: versionOf(2),
         });
@@ -1336,6 +1346,7 @@ describe("<MobileEpicTileView /> with two tiles and chats painted by the stable 
       commitWithoutNavigation,
       {
         ...MANUAL_TILE_OPEN,
+        provenance: "user",
         mobileTarget: { tabId: VIEW_TAB_ID, slot: "secondary" },
       },
     );

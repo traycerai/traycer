@@ -76,7 +76,10 @@ function SwitcherLastTileRowBody(props: {
         disabled={false}
         selectTestId="switcher-last-tile-select"
         onSelect={() => {
-          openTile(tileIntent(last.ref, { tabId }, "explicit", "direct_ui"));
+          openTile(
+            tileIntent(last.ref, { tabId }, "explicit", "direct_ui"),
+            "user",
+          );
           setSecondary(
             tabId,
             current === null

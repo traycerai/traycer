@@ -16,13 +16,6 @@ describe("sandboxCredentialLine", () => {
     });
   });
 
-  it("says a process-scoped credential is readable by agents, in the caution tone", () => {
-    expect(sandboxCredentialLine("claude", "process-scoped", null)).toEqual({
-      tone: "caution",
-      text: "Runs with its own credential on this sandbox, readable by agents",
-    });
-  });
-
   it("appends the note after the unsupported line", () => {
     expect(
       sandboxCredentialLine(

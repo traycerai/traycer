@@ -11,7 +11,7 @@ const LEGACY_RESOURCE_KEY = persistKey(STORE_KEYS.resourceMonitor);
 // left behind here would look to the next case like a store that has already
 // been written.
 function resetStore(): void {
-  useWatchHostStore.setState({ scopedHostId: null });
+  useWatchHostStore.setState({ scopedHostId: null, scopedHostName: null });
   window.localStorage.clear();
 }
 
@@ -42,39 +42,68 @@ describe("useWatchHostStore", () => {
     expect(useWatchHostStore.getState().scopedHostId).toBeNull();
   });
 
-  it("persists an explicitly picked host", async () => {
-    useWatchHostStore.getState().setScopedHostId("host-b");
-
-    await new Promise<void>((resolve) => setTimeout(resolve, 0));
+  it("persists an explicitly picked host name", () => {
+    useWatchHostStore
+      .getState()
+      .selectHost({ hostId: "host-b", name: "Bravo" });
 
     expect(
       JSON.parse(window.localStorage.getItem(PERSIST_KEY) ?? "{}"),
     ).toEqual({
-      state: { scopedHostId: "host-b" },
+      state: { scopedHostId: "host-b", scopedHostName: "Bravo" },
       version: CURRENT_PERSIST_VERSION,
     });
   });
 
-  it("returns to following the active host on a null pick", async () => {
-    useWatchHostStore.getState().setScopedHostId("host-b");
+  it("clears the picked id and name on a null pick", () => {
+    useWatchHostStore
+      .getState()
+      .selectHost({ hostId: "host-b", name: "Bravo" });
     useWatchHostStore.getState().setScopedHostId(null);
 
-    await new Promise<void>((resolve) => setTimeout(resolve, 0));
-
     expect(
       JSON.parse(window.localStorage.getItem(PERSIST_KEY) ?? "{}"),
     ).toEqual({
-      state: { scopedHostId: null },
+      state: { scopedHostId: null, scopedHostName: null },
       version: CURRENT_PERSIST_VERSION,
     });
   });
 
-  it("rehydrates its own persisted pick", async () => {
+  it("rehydrates a pre-change id-only pick without inventing a name", async () => {
     writeRecord(PERSIST_KEY, { scopedHostId: "host-c" });
 
     await useWatchHostStore.persist.rehydrate();
 
-    expect(useWatchHostStore.getState().scopedHostId).toBe("host-c");
+    expect(useWatchHostStore.getState()).toMatchObject({
+      scopedHostId: "host-c",
+      scopedHostName: null,
+    });
+  });
+
+  it("rehydrates the name recorded with a picked host", async () => {
+    writeRecord(PERSIST_KEY, {
+      scopedHostId: "host-c",
+      scopedHostName: "Charlie",
+    });
+
+    await useWatchHostStore.persist.rehydrate();
+
+    expect(useWatchHostStore.getState()).toMatchObject({
+      scopedHostId: "host-c",
+      scopedHostName: "Charlie",
+    });
+  });
+
+  it("clears a retained name when the raw id-only setter changes hosts", () => {
+    useWatchHostStore
+      .getState()
+      .selectHost({ hostId: "host-b", name: "Bravo" });
+    useWatchHostStore.getState().setScopedHostId("host-c");
+
+    expect(useWatchHostStore.getState()).toMatchObject({
+      scopedHostId: "host-c",
+      scopedHostName: null,
+    });
   });
 
   it.each([

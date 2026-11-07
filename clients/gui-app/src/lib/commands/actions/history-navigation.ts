@@ -58,6 +58,12 @@ export interface HistoryNavRouter {
  * either moves or does nothing. That is the whole fallback, and it serves only
  * the browser web app - the desktop renderer and the installed mobile app both
  * run the branded history, so their steps are always the semantic kind.
+ *
+ * What the two backends no longer differ on is who the traversal belongs to.
+ * Neither function claims it: `observeNestedFocusTraversals` watches committed
+ * destinations on every backend, so a plain step - and, on that backend, the
+ * browser's own back button, which reaches neither of these functions - is
+ * accounted for by the same one policy.
  */
 export function goBack(router: HistoryNavRouter): void {
   navigateHistory(router, -1);
@@ -123,7 +129,15 @@ function navigateHistory(router: HistoryNavRouter, direction: -1 | 1): void {
   if (target === null) {
     return;
   }
-  reopenClosedTilePreview(controller.getEntries()[target.index]);
+  const landingHref = controller.getEntries()[target.index];
+  // No focus-intent claim here, deliberately. `observeNestedFocusTraversals`
+  // reads the destination the history actually committed to, and it is
+  // subscribed before the router's own loader, so on this backend - whose
+  // `go` notifies synchronously - it has already decided before the route
+  // reacts. A prediction alongside it would be a second answer to one
+  // question, and a prediction cannot tell a clamped or refused step from a
+  // real one.
+  reopenClosedTilePreview(landingHref);
   router.history.go(target.index - controller.getIndex());
   trackHistoryNavigationUsed(direction === -1 ? "back" : "forward");
 }
@@ -146,6 +160,11 @@ function navigateHistory(router: HistoryNavRouter, direction: -1 | 1): void {
  * Analytics follows the same asymmetry. A back is counted only once it is
  * actually issued; a forward counts the attempt, because nothing here can tell
  * an attempt that moved from one that did not.
+ *
+ * The landing is still unknowable here, which is one of the two reasons focus
+ * intent is claimed by observation instead: `observeNestedFocusTraversals`
+ * reads the destination the history actually committed to, after the move
+ * rather than before it, and so needs nothing from this function.
  */
 function stepPlainHistory(history: RouterHistory, direction: -1 | 1): void {
   if (direction === -1) {
