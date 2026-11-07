@@ -2,6 +2,7 @@ import { useSyncExternalStore } from "react";
 import { act, renderHook, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { CloudChatSummary } from "@traycer/protocol/host/epic/cloud-chat";
+import type { RouterHistory, UseNavigateResult } from "@tanstack/react-router";
 import {
   type EpicRouteFocusIntent,
   useEpicRouteSynchronization,
@@ -16,6 +17,14 @@ import {
   type EpicCanvasTileRef,
 } from "@/stores/epics/canvas/types";
 import type { EpicNodeKind } from "@/lib/artifacts/node-display";
+import {
+  navigateNestedFocus,
+  type NestedFocusNavigationRouter,
+  type PrepareNestedFocusTarget,
+} from "@/lib/epic-nested-focus-navigation";
+import type { NestedFocusTarget } from "@/lib/epic-nested-focus-route";
+import { resetNestedFocusNavigationIntentsForTests } from "@/lib/nested-focus-navigation-intent";
+import type { PersistentHistoryController } from "@/lib/persistent-history";
 
 /**
  * T156 (the real-store regression suite for the bot-channel artifact-open
@@ -65,8 +74,34 @@ const openEpicHandleState = vi.hoisted(() => ({
   setLastFocusedThreadId: vi.fn(),
 }));
 
+// Controllable so the supersession cases can cover both nested-history
+// modes: `null` is OFF (the suite's prior default, mocked unconditionally),
+// a truthy stand-in is ON. The controller's own shape is never read by this
+// mock's callers - only nullness matters to `nestedFocusEnabled`.
+const persistentHistoryState = vi.hoisted(() => ({
+  controller: null as PersistentHistoryController | null,
+}));
+
+// Controllable so case 4 can start cold (no snapshot yet) and flip loaded
+// mid-test, matching `useEpicArtifactRecords`'s own controllable-store
+// pattern above.
+const snapshotLoadedState = vi.hoisted(() => ({ loaded: true }));
+
+/**
+ * The part of a navigate call this suite reads: the search REDUCER the route
+ * writes its focus params through. Declared so the mock carries a real call
+ * signature - a parameterless `vi.fn` makes `mock.calls[n]` an empty tuple,
+ * and indexing it to inspect the emitted search is then a type error rather
+ * than an assertion.
+ */
+interface NavigateCallOptions {
+  readonly search?: (prev: Record<string, unknown>) => Record<string, unknown>;
+}
+
 const navigateMock = vi.hoisted(() =>
-  vi.fn(() => Promise.resolve() as Promise<unknown>),
+  vi.fn(
+    (_options: NavigateCallOptions) => Promise.resolve() as Promise<unknown>,
+  ),
 );
 
 vi.mock("@tanstack/react-router", () => ({
@@ -77,11 +112,14 @@ vi.mock("@tanstack/react-router", () => ({
   }),
 }));
 
-// No nested-focus route state in this suite - it is orthogonal to the
-// defect under test (D1/D2 live entirely in the legacy auto-open effect),
-// and keeping it off collapses the hook down to that one effect's branch.
+// Nested-focus route state is orthogonal to the original D1/D2 defect
+// (which lives entirely in the legacy auto-open effect), and keeping it off
+// by default collapses the hook down to that one effect's branch. The
+// supersession cases below flip `persistentHistoryState.controller` to cover
+// the ON mode too - the route-canonicalization effect (case 5) only runs
+// under it.
 vi.mock("@/lib/persistent-history", () => ({
-  getHistoryController: () => null,
+  getHistoryController: () => persistentHistoryState.controller,
 }));
 
 vi.mock("@/providers/use-open-epic-handle", () => ({
@@ -140,7 +178,7 @@ vi.mock("@/lib/epic-selectors", () => ({
   useEpicChatRecordListAuthoritative: () => true,
   useEpicTuiAgentRecordListAuthoritative: () => true,
   useEpicLastFocusedArtifactId: () => null,
-  useEpicSnapshotLoaded: () => true,
+  useEpicSnapshotLoaded: () => snapshotLoadedState.loaded,
 }));
 
 function record(
@@ -229,6 +267,70 @@ function mountHook(intent: EpicRouteFocusIntent) {
   );
 }
 
+/**
+ * A minimal router for the real `navigateNestedFocus` boundary.
+ * `getHistoryController` is mocked independently of `history`'s value, so
+ * the field itself is never read for its content.
+ *
+ * `matchesCurrentRoute` controls whether the boundary sees itself as acting
+ * on the tab the route-sync hook is mounted for. True lets an ON-mode call
+ * proceed to its own `router.navigate` (case 1/4's canvas assertions don't
+ * depend on it either way). Case 5 passes false: it is testing the
+ * route-sync hook's OWN canonicalizing replace, and letting the boundary
+ * ALSO commit here would register a two-second optimistic pending target
+ * (`beginNestedFocusNavigation`) for this exact tab that the test never
+ * drives to completion, which would defer that replace for the duration of
+ * the guard - a real round trip clears it once the router's commit lands
+ * and the URL reflects the new target, which this lightweight rig does not
+ * simulate. `markExplicitNestedFocusIntent` - the one thing every case here
+ * is actually about - fires unconditionally before this check either way.
+ */
+function makeNestedFocusRouter(
+  navigate: UseNavigateResult<string>,
+  matchesCurrentRoute: boolean,
+): NestedFocusNavigationRouter {
+  return {
+    history: {} as RouterHistory,
+    navigate,
+    getLocation: () => ({
+      pathname: matchesCurrentRoute
+        ? `/epics/${EPIC_ID}/${TAB_ID}`
+        : "/elsewhere",
+      search: {},
+    }),
+  };
+}
+
+/** A `navigate` stand-in for `makeNestedFocusRouter` - never asserted on
+ * itself; cases that inspect a navigate call read the hook's own
+ * `navigateMock` instead. */
+function fakeNavigate(): UseNavigateResult<string> {
+  return vi.fn() as UseNavigateResult<string>;
+}
+
+/**
+ * The `prepare` shape of a genuine tile-open gesture: opens `artifactId`
+ * into the tab through the real canvas store (not a direct
+ * `markExplicitNestedFocusIntent` call) and returns its resulting focus
+ * target, exactly what a real call site hands `navigateNestedFocus`.
+ */
+function prepareOpenArtifact(
+  artifactId: string,
+  instanceId: string,
+): PrepareNestedFocusTarget {
+  return () =>
+    useEpicCanvasStore.getState().prepareOpenTileInTabFocusTarget(
+      TAB_ID,
+      makeOpenableNodeRef({
+        id: artifactId,
+        instanceId,
+        type: "spec",
+        name: artifactId,
+        hostId: HOST_ID,
+      }),
+    );
+}
+
 describe("route focus opens the requested artifact (T156)", () => {
   beforeEach(() => {
     useEpicCanvasStore.setState(useEpicCanvasStore.getInitialState(), true);
@@ -239,6 +341,9 @@ describe("route focus opens the requested artifact (T156)", () => {
     navigateMock.mockClear();
     openEpicHandleState.setLastFocusedArtifactId.mockClear();
     openEpicHandleState.setLastFocusedThreadId.mockClear();
+    persistentHistoryState.controller = null;
+    snapshotLoadedState.loaded = true;
+    resetNestedFocusNavigationIntentsForTests();
   });
 
   afterEach(() => {
@@ -399,5 +504,221 @@ describe("route focus opens the requested artifact (T156)", () => {
       expect(openArtifactIds(TAB_ID)).toContain(TICKET_ID);
     });
     expect(activeArtifactId(TAB_ID)).toBe(TICKET_ID);
+  });
+
+  it.each([
+    ["nested history OFF", false],
+    ["nested history ON", true],
+  ] as const)(
+    "a pending artifact request is superseded when the person opens something else first (%s)",
+    async (_label, nestedHistoryOn) => {
+      persistentHistoryState.controller = nestedHistoryOn
+        ? ({} as PersistentHistoryController)
+        : null;
+      const PENDING_ID = "artifact-pending-case1";
+      const CHOSEN_ID = "artifact-chosen-case1";
+      // CHOSEN has a live record from the start: opening it is a real tile
+      // open (its record sweep must not immediately evict it), and only
+      // PENDING's record is what "arrives" during the test.
+      recordsStore.set([
+        record({ id: CHOSEN_ID, type: "spec", name: "Chosen" }),
+      ]);
+
+      mountHook(baseIntent({ focusArtifactId: PENDING_ID, focusedAt: 800 }));
+
+      act(() => {
+        navigateNestedFocus(
+          makeNestedFocusRouter(fakeNavigate(), true),
+          { epicId: EPIC_ID, tabId: TAB_ID },
+          prepareOpenArtifact(CHOSEN_ID, "inst-chosen-case1"),
+        );
+      });
+      expect(activeArtifactId(TAB_ID)).toBe(CHOSEN_ID);
+
+      act(() => {
+        recordsStore.set([
+          record({ id: CHOSEN_ID, type: "spec", name: "Chosen" }),
+          record({ id: PENDING_ID, type: "spec", name: "Pending" }),
+        ]);
+      });
+
+      await waitFor(() => {
+        expect(activeArtifactId(TAB_ID)).toBe(CHOSEN_ID);
+      });
+      expect(openArtifactIds(TAB_ID)).not.toContain(PENDING_ID);
+    },
+  );
+
+  it("opens a markdown ticket once its record arrives AFTER mount, with nested history ON", async () => {
+    persistentHistoryState.controller = {} as PersistentHistoryController;
+    const TICKET_ID = "ticket-late-nested-on";
+    recordsStore.set([]);
+
+    mountHook(baseIntent({ focusArtifactId: TICKET_ID, focusedAt: 201 }));
+
+    expect(openArtifactIds(TAB_ID)).not.toContain(TICKET_ID);
+
+    act(() => {
+      recordsStore.set([
+        record({ id: TICKET_ID, type: "ticket", name: "Late ticket" }),
+      ]);
+    });
+
+    await waitFor(
+      () => {
+        expect(openArtifactIds(TAB_ID)).toContain(TICKET_ID);
+      },
+      { timeout: 1000 },
+    );
+    expect(activeArtifactId(TAB_ID)).toBe(TICKET_ID);
+  });
+
+  it("a pre-existing bystander tile does not retire a pending request whose record has not arrived", async () => {
+    const BYSTANDER_ID = "artifact-bystander-case3";
+    const PENDING_ID = "artifact-pending-case3";
+    useEpicCanvasStore.getState().openTileInTab(
+      TAB_ID,
+      makeOpenableNodeRef({
+        id: BYSTANDER_ID,
+        instanceId: "inst-bystander-case3",
+        type: "spec",
+        name: "Bystander",
+        hostId: HOST_ID,
+      }),
+    );
+    expect(activeArtifactId(TAB_ID)).toBe(BYSTANDER_ID);
+    recordsStore.set([]);
+
+    mountHook(baseIntent({ focusArtifactId: PENDING_ID, focusedAt: 900 }));
+
+    expect(openArtifactIds(TAB_ID)).not.toContain(PENDING_ID);
+
+    act(() => {
+      recordsStore.set([
+        record({ id: PENDING_ID, type: "spec", name: "Pending" }),
+      ]);
+    });
+
+    await waitFor(() => {
+      expect(openArtifactIds(TAB_ID)).toContain(PENDING_ID);
+    });
+    expect(activeArtifactId(TAB_ID)).toBe(PENDING_ID);
+  });
+
+  it("a boundary action during cold load still supersedes a pending request once the snapshot loads", async () => {
+    snapshotLoadedState.loaded = false;
+    const PENDING_ID = "artifact-pending-case4";
+    const CHOSEN_ID = "artifact-chosen-case4";
+    recordsStore.set([]);
+
+    mountHook(baseIntent({ focusArtifactId: PENDING_ID, focusedAt: 1000 }));
+
+    act(() => {
+      navigateNestedFocus(
+        makeNestedFocusRouter(fakeNavigate(), true),
+        { epicId: EPIC_ID, tabId: TAB_ID },
+        prepareOpenArtifact(CHOSEN_ID, "inst-chosen-case4"),
+      );
+    });
+
+    act(() => {
+      snapshotLoadedState.loaded = true;
+      recordsStore.set([
+        record({ id: CHOSEN_ID, type: "spec", name: "Chosen" }),
+        record({ id: PENDING_ID, type: "spec", name: "Pending" }),
+      ]);
+    });
+
+    await waitFor(() => {
+      expect(activeArtifactId(TAB_ID)).toBe(CHOSEN_ID);
+    });
+    expect(openArtifactIds(TAB_ID)).not.toContain(PENDING_ID);
+  });
+
+  it("canonicalizes the route to where the person actually is once a pending request is retired (nested history ON)", async () => {
+    persistentHistoryState.controller = {} as PersistentHistoryController;
+    const PENDING_ID = "artifact-pending-case5";
+    const CHOSEN_ID = "artifact-chosen-case5";
+    recordsStore.set([record({ id: CHOSEN_ID, type: "spec", name: "Chosen" })]);
+
+    mountHook(baseIntent({ focusArtifactId: PENDING_ID, focusedAt: 1100 }));
+
+    // Captured so the final assertion can name the EXACT pane/tile CHOSEN
+    // landed on, rather than merely "some search patch arrived" - the old
+    // auto-open effect (pre-fix) also drives a `replaceNestedFocusRoute`
+    // call once PENDING's record lands, just naming PENDING's own tile after
+    // stealing activation back from CHOSEN. A `toBeDefined()` check on
+    // `focusPaneId` alone would pass on that wrong target too.
+    // Held on an object rather than in a `let`, so the type stays what it is
+    // declared as: TypeScript narrows a `let` assigned only inside a callback
+    // back to `null` afterwards, and the cast that would paper over that is
+    // exactly what hides a target the boundary never returned.
+    const chosen: { target: NestedFocusTarget | null } = { target: null };
+    act(() => {
+      chosen.target = navigateNestedFocus(
+        makeNestedFocusRouter(fakeNavigate(), false),
+        { epicId: EPIC_ID, tabId: TAB_ID },
+        prepareOpenArtifact(CHOSEN_ID, "inst-chosen-case5"),
+      );
+    });
+    expect(activeArtifactId(TAB_ID)).toBe(CHOSEN_ID);
+
+    act(() => {
+      recordsStore.set([
+        record({ id: CHOSEN_ID, type: "spec", name: "Chosen" }),
+        record({ id: PENDING_ID, type: "spec", name: "Pending" }),
+      ]);
+    });
+
+    // The retirement must hold, not just the route write: if PENDING had
+    // reclaimed activation, a later-arriving navigate call could still name
+    // PENDING's own (now-active) tile and slip past the target check below.
+    expect(activeArtifactId(TAB_ID)).toBe(CHOSEN_ID);
+
+    await waitFor(() => {
+      expect(navigateMock).toHaveBeenCalled();
+    });
+    const search = navigateMock.mock.calls.at(-1)?.[0].search?.({});
+    // Both named before the comparisons, because those read through `?.`: with
+    // no target captured and no search emitted they would compare `undefined`
+    // to `undefined` and pass on a route that was never canonicalized.
+    expect(chosen.target).not.toBeNull();
+    expect(search).toBeDefined();
+    expect(search?.focusPaneId).toBe(chosen.target?.paneId);
+    expect(search?.focusTileInstanceId).toBe(chosen.target?.tileInstanceId);
+  });
+
+  it("closing the only open tile through the boundary supersedes a pending request, and a fresh click starts a new one", async () => {
+    const ARTIFACT_ID = "artifact-case6-7";
+    recordsStore.set([]);
+
+    const hook = mountHook(
+      baseIntent({ focusArtifactId: ARTIFACT_ID, focusedAt: 1200 }),
+    );
+
+    act(() => {
+      navigateNestedFocus(
+        makeNestedFocusRouter(fakeNavigate(), true),
+        { epicId: EPIC_ID, tabId: TAB_ID },
+        () => null,
+      );
+    });
+
+    act(() => {
+      recordsStore.set([
+        record({ id: ARTIFACT_ID, type: "spec", name: "Case 6/7" }),
+      ]);
+    });
+
+    expect(openArtifactIds(TAB_ID)).not.toContain(ARTIFACT_ID);
+
+    hook.rerender(
+      baseIntent({ focusArtifactId: ARTIFACT_ID, focusedAt: 1201 }),
+    );
+
+    await waitFor(() => {
+      expect(openArtifactIds(TAB_ID)).toContain(ARTIFACT_ID);
+    });
+    expect(activeArtifactId(TAB_ID)).toBe(ARTIFACT_ID);
   });
 });

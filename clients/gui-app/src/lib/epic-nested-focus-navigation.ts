@@ -10,7 +10,10 @@ import {
 } from "@/lib/epic-nested-focus-route";
 import { getHistoryController } from "@/lib/persistent-history";
 import { requestNestedRoutePrimaryEditorFocus } from "@/lib/nested-route-dom-focus";
-import { beginNestedFocusNavigation } from "@/lib/nested-focus-navigation-intent";
+import {
+  beginNestedFocusNavigation,
+  markExplicitNestedFocusIntent,
+} from "@/lib/nested-focus-navigation-intent";
 
 export interface NestedFocusLocation {
   readonly pathname: string;
@@ -54,6 +57,12 @@ function navigateNestedFocusWithDomRestore(
   restorePrimaryEditor: boolean,
 ): NestedFocusTarget | null {
   const { epicId, tabId } = tab;
+  // Recorded BEFORE the target is prepared, so every early return below still
+  // counts the gesture: closing the last tile prepares `null`, re-selecting
+  // the already-focused tile prepares an equal target, and a window with no
+  // history controller prepares one it never commits. The person acted in all
+  // three, which is the only thing this count is about.
+  markExplicitNestedFocusIntent(epicId, tabId);
   const target = prepare();
   if (target === null) {
     return null;

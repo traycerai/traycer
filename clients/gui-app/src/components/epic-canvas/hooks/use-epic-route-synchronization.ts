@@ -1,5 +1,12 @@
 import { pruneRecoveryTiles } from "@/lib/tab-recovery/history";
-import { useEffect, useMemo, useRef, useState } from "react";
+import {
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  useSyncExternalStore,
+} from "react";
 import {
   useNavigate,
   useRouter,
@@ -52,7 +59,12 @@ import {
   type NestedFocusTarget,
 } from "@/lib/epic-nested-focus-route";
 import { consumeNestedRoutePrimaryEditorFocus } from "@/lib/nested-route-dom-focus";
-import { getNestedRouteApplicationDeferralMs } from "@/lib/nested-focus-navigation-intent";
+import {
+  explicitNestedFocusIntentRevision,
+  getNestedRouteApplicationDeferralMs,
+  retireExplicitNestedFocusIntents,
+  subscribeExplicitNestedFocusIntents,
+} from "@/lib/nested-focus-navigation-intent";
 import { shouldYieldPaneActivationRouteFocus } from "@/components/epic-canvas/pane-activation";
 import { findHostedTileElement } from "@/components/epic-canvas/surface-host/hosted-tile-resolver";
 import { tileIntent } from "@/lib/canvas/tile-open/intent";
@@ -192,6 +204,53 @@ export function useEpicRouteSynchronization(
       nestedRouteTargetApplied &&
       activeArtifactId === focusArtifactId);
 
+  // A pending artifact-focus request and whether the person has since retired
+  // it. See `markExplicitNestedFocusIntent` for why the signal is a count taken
+  // at the navigation boundary rather than anything read off the canvas.
+  const focusRequestKey =
+    focusArtifactId === undefined
+      ? null
+      : `${epicId}|${focusArtifactId}|${focusedAt ?? ""}`;
+  // Subscribed rather than read imperatively, because one gesture this has to
+  // catch moves nothing else: re-selecting the already-focused tile leaves the
+  // canvas byte-identical, so a consumer watching canvas state would never
+  // re-render to notice it.
+  const intentRevision = useSyncExternalStore(
+    subscribeExplicitNestedFocusIntents,
+    useCallback(
+      () => explicitNestedFocusIntentRevision(epicId, tabId),
+      [epicId, tabId],
+    ),
+  );
+  // Sampled the first time this key is RENDERED - before any effect, so before
+  // the `snapshotLoaded` gate below: the task can still be loading when the
+  // person acts, and a baseline taken once the snapshot had landed would read
+  // their action as having happened before the request and never retire it.
+  // React's documented "adjust state when a prop changes" shape, not an effect.
+  const [focusRequestBaseline, setFocusRequestBaseline] = useState<{
+    readonly key: string;
+    readonly revision: number;
+  } | null>(null);
+  if ((focusRequestBaseline?.key ?? null) !== focusRequestKey) {
+    // A later click on the same artifact carries a fresh `focusedAt`, so it is
+    // a different key and therefore a new request, owed its own wait.
+    setFocusRequestBaseline(
+      focusRequestKey === null
+        ? null
+        : { key: focusRequestKey, revision: intentRevision },
+    );
+  }
+  const focusRequestRetired =
+    focusRequestBaseline !== null &&
+    focusRequestBaseline.key === focusRequestKey &&
+    intentRevision !== focusRequestBaseline.revision;
+
+  // Dropped when this surface goes, so the per-tab counts stay bounded by the
+  // tabs actually mounted.
+  useEffect(() => {
+    return () => retireExplicitNestedFocusIntents(epicId, tabId);
+  }, [epicId, tabId]);
+
   useEffect(() => {
     if (!snapshotLoaded) {
       return;
@@ -220,6 +279,7 @@ export function useEpicRouteSynchronization(
           focusArtifactId,
           focusThreadId,
           activeArtifactId,
+          requestRetired: focusRequestRetired,
         })
       ) {
         return;
@@ -251,6 +311,7 @@ export function useEpicRouteSynchronization(
     focusArtifactId,
     focusThreadId,
     activeArtifactId,
+    focusRequestRetired,
     canvas,
     navigate,
     epicId,
@@ -410,14 +471,15 @@ export function useEpicRouteSynchronization(
 
     const key = `${epicId}|${focusArtifactId ?? ""}|${focusedAt ?? ""}`;
     const hasExplicitFocus = focusArtifactId !== undefined;
-    if (!hasExplicitFocus && hasRestoredCanvas) {
+    const gate = gateLegacyAutoOpen({
+      hasExplicitFocus,
+      hasRestoredCanvas,
+      keyAlreadySpent: lastAutoOpenKey.current === key,
+      anyKeySpent: lastAutoOpenKey.current !== null,
+    });
+    if (gate === "skip") return;
+    if (gate === "spend-key") {
       lastAutoOpenKey.current = key;
-      return;
-    }
-    if (!hasExplicitFocus && lastAutoOpenKey.current !== null) {
-      return;
-    }
-    if (hasExplicitFocus && lastAutoOpenKey.current === key) {
       return;
     }
 
@@ -436,6 +498,13 @@ export function useEpicRouteSynchronization(
       persistedFocus,
       epicNodeRecency(handle.store.getState()),
     );
+    // The person acted while this request was waiting, so it is theirs to lose
+    // rather than ours to honour over whatever they moved to. Spend the key so
+    // a later arrival of the same record cannot revive it.
+    if (hasExplicitFocus && focusRequestRetired) {
+      lastAutoOpenKey.current = key;
+      return;
+    }
     if (target === null) {
       // An explicit REQUEST that cannot resolve yet stays PENDING rather than
       // spending its key: the artifact's record simply has not projected into
@@ -517,6 +586,7 @@ export function useEpicRouteSynchronization(
     tabId,
     nestedFocusEnabled,
     nestedRouteTarget,
+    focusRequestRetired,
   ]);
 
   const lastSyncedFocus = useRef<string | null>(persistedFocus);
@@ -712,6 +782,34 @@ function replaceNestedFocusRoute(
 }
 
 /**
+ * What this run of the legacy auto-open effect may do, before anything is
+ * resolved: give up, spend the key without resolving, or go on and resolve.
+ *
+ * Extracted from the effect because it is the one part of that decision which
+ * is pure bookkeeping over the key - a LANDING fires once per epic and an
+ * explicit REQUEST once per key - and reading it as four flags here keeps the
+ * effect itself about what to open.
+ */
+type LegacyAutoOpenGate = "skip" | "spend-key" | "resolve";
+
+function gateLegacyAutoOpen(args: {
+  readonly hasExplicitFocus: boolean;
+  readonly hasRestoredCanvas: boolean;
+  readonly keyAlreadySpent: boolean;
+  readonly anyKeySpent: boolean;
+}): LegacyAutoOpenGate {
+  const { hasExplicitFocus, hasRestoredCanvas, keyAlreadySpent, anyKeySpent } =
+    args;
+  if (hasExplicitFocus) {
+    return keyAlreadySpent ? "skip" : "resolve";
+  }
+  // A restored canvas already shows what the person left open, so a landing
+  // records its key and chooses nothing.
+  if (hasRestoredCanvas) return "spend-key";
+  return anyKeySpent ? "skip" : "resolve";
+}
+
+/**
  * Whether the legacy auto-open effect should no-op: a committed nested route
  * target already governs focus, or there is nothing to auto-open yet.
  */
@@ -745,13 +843,25 @@ function shouldDeferToLegacyArtifactFocus(args: {
   readonly focusArtifactId: string | undefined;
   readonly focusThreadId: string | undefined;
   readonly activeArtifactId: string | null;
+  /**
+   * Whether the person retired the artifact request by acting themselves. A
+   * retired request will never activate its artifact, so deferring to it would
+   * never end: the URL keeps naming an id that `activeArtifactId` is now
+   * deliberately not, and the route would never record where focus actually
+   * went.
+   */
+  readonly requestRetired: boolean;
 }): boolean {
-  const { focusArtifactId, focusThreadId, activeArtifactId } = args;
+  const { focusArtifactId, focusThreadId, activeArtifactId, requestRetired } =
+    args;
   if (focusArtifactId === undefined && focusThreadId === undefined) {
     return false;
   }
   if (focusArtifactId === undefined) {
     return true;
+  }
+  if (requestRetired) {
+    return false;
   }
   if (activeArtifactId !== focusArtifactId) {
     return true;
