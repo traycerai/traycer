@@ -1270,11 +1270,22 @@ describe("soundtrack settings", () => {
     });
   });
 
+  it("reads a stored pause as not paused when the playback controls are off", async () => {
+    await rehydrateFrom({
+      soundtrackPlaybackControls: false,
+      soundtrackPaused: true,
+    });
+    expect(useSettingsStore.getState().soundtrackPaused).toBe(false);
+
+    await rehydrateFrom({ soundtrackPaused: true });
+    expect(useSettingsStore.getState().soundtrackPaused).toBe(false);
+  });
+
   it.each(["soundtrackPlaybackControls", "soundtrackPaused"] as const)(
     "reads a persisted %s that is not a boolean as off",
     async (key) => {
       useSettingsStore.setState({ [key]: true });
-      await rehydrateFrom({ [key]: "true" });
+      await rehydrateFrom({ soundtrackPlaybackControls: true, [key]: "true" });
       expect(useSettingsStore.getState()[key]).toBe(false);
     },
   );

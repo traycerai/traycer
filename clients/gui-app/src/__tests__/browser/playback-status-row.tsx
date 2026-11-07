@@ -79,13 +79,15 @@ export function Fixture(): ReactNode {
           <button
             type="button"
             data-testid="stand-in-pill"
-            className="inline-flex items-center gap-1 rounded-md bg-destructive/10 px-2 py-0.5 text-ui-xs font-medium text-destructive"
+            className="inline-flex min-w-0 items-center gap-1 rounded-md bg-destructive/10 px-2 py-0.5 text-ui-xs font-medium text-destructive"
           >
             <span
-              className="size-1.5 rounded-full bg-destructive"
+              className="size-1.5 shrink-0 rounded-full bg-destructive"
               aria-hidden
             />
-            Offline — new edits not backed up
+            <span className="truncate" data-testid="stand-in-pill-label">
+              Offline — new edits not backed up
+            </span>
           </button>
           <IconEntry label="2 pending changes" testId="stand-in-write-commands">
             <FileClock className="size-3.5" />

@@ -172,6 +172,10 @@ describe("<EpicConnectionPill />", () => {
     // Icon-only in the steady state: the claim moved off the visible copy and
     // onto the accessible name + tooltip, so the status row stays compact.
     expect(screen.getByTestId("epic-connection-pill").textContent).toBe("");
+    // No label, so no element to hold one: the row cuts a label by this class.
+    expect(
+      screen.getByTestId("epic-connection-pill").querySelector(".truncate"),
+    ).toBeNull();
     expect(
       screen.getByTestId("epic-connection-pill").getAttribute("aria-label"),
     ).toBe("All changes synced");
@@ -211,6 +215,8 @@ describe("<EpicConnectionPill />", () => {
     renderPill("connecting");
 
     expect(screen.getByText("Connecting…")).not.toBeNull();
+    // The label is in the element that gives way in a short row.
+    expect(screen.getByText("Connecting…").className).toContain("truncate");
     expect(screen.queryByText("Reconnecting…")).toBeNull();
     expect(screen.getByTestId("epic-connection-pill").className).toContain(
       "bg-amber-500/10",

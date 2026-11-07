@@ -96,7 +96,12 @@ afterEach(() => {
 
 describe("a launch that kept the pause", () => {
   beforeEach(async () => {
-    await launchWith({ soundtrackEnabled: true, soundtrackPaused: true });
+    // Storage restores a pause only with the controls that can clear it.
+    await launchWith({
+      soundtrackEnabled: true,
+      soundtrackPlaybackControls: true,
+      soundtrackPaused: true,
+    });
     render(<SoundtrackWarmupBridge />);
   });
 
@@ -129,13 +134,6 @@ describe("a launch that kept the pause", () => {
     expect(openedFakePorts).toHaveLength(1);
     expect(useSettingsStore.getState().soundtrackPaused).toBe(false);
     expect(openedFakePorts[0].output.allPlays()).not.toEqual([]);
-  });
-
-  it("opens nothing when the playback controls are turned on", () => {
-    setPlaybackControlsOn(true);
-
-    expect(openedFakePorts).toHaveLength(0);
-    expect(useSettingsStore.getState().soundtrackPaused).toBe(true);
   });
 
   it("opens the session and plays when the playback controls are turned off", async () => {

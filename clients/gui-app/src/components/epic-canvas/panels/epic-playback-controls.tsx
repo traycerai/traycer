@@ -17,6 +17,7 @@ import {
   previousTrack,
 } from "@/lib/commands/actions/soundtrack";
 import { isPlaybackControlsRowAvailable } from "@/lib/settings/settings-availability";
+import { cn } from "@/lib/utils";
 import { useSettingsStore } from "@/stores/settings/settings-store";
 import { useSoundtrackStore } from "@/stores/soundtrack/soundtrack-store";
 
@@ -46,27 +47,29 @@ function EpicPlaybackControlsBody(): ReactNode {
     return null;
   }
   return (
-    // 34rem of content is the row at its fullest: the pill's longest label and
-    // every other item beside these. The row keeps one shape whatever the pill is
-    // saying, so the buttons leave below that and do not come and go with it.
-    <div className="flex items-center gap-1.5 @max-[34rem]:hidden">
+    <div className="flex items-center gap-1.5">
       <PlaybackButton
         label="Previous track"
         testId="epic-playback-previous"
         icon={SkipBack}
         onClick={previousTrack}
+        leavesShortRow
       />
       <PlaybackButton
         label={paused ? "Play" : "Pause"}
         testId="epic-playback-toggle"
         icon={paused ? Play : Pause}
         onClick={paused ? playMusic : pauseMusic}
+        // Play is the way back to the music, so it stays for as long as there is
+        // a row.
+        leavesShortRow={!paused}
       />
       <PlaybackButton
         label="Next track"
         testId="epic-playback-next"
         icon={SkipForward}
         onClick={nextTrack}
+        leavesShortRow
       />
     </div>
   );
@@ -77,8 +80,9 @@ function PlaybackButton(props: {
   readonly testId: string;
   readonly icon: LucideIcon;
   readonly onClick: () => void;
+  readonly leavesShortRow: boolean;
 }): ReactNode {
-  const { label, testId, icon: Icon, onClick } = props;
+  const { label, testId, icon: Icon, onClick, leavesShortRow } = props;
   return (
     <TooltipWrapper
       label={label}
@@ -93,6 +97,11 @@ function PlaybackButton(props: {
         aria-label={label}
         data-testid={testId}
         onClick={onClick}
+        // 34rem of content is the row at its fullest: the pill's longest label
+        // and every other item beside these. The row keeps one shape whatever the
+        // pill is saying, so the buttons leave below that and do not come and go
+        // with it.
+        className={cn(leavesShortRow && "@max-[34rem]:hidden")}
       >
         <Icon className="size-3.5" />
       </Button>

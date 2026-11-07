@@ -10,12 +10,14 @@ declare global {
   }
 }
 
-// What the task's status row does with the playback buttons is real layout: at
-// a wide row they sit with their neighbours, and below the row's own container
-// width they leave so that nothing else is pushed out, wrapped or cut. The row
-// is hidden under 768px, so the window stays wide and the row's parent is the
-// thing narrowed. The row's container is its content box, inside 0.75rem of
-// padding either side.
+// What the task's status row does with the playback buttons is real layout. At
+// a wide row they sit with their neighbours. Below 34rem of the row's content
+// (the pill's longest label and every other item beside them) Previous, Next and
+// Pause leave, so that nothing else is pushed out, wrapped or cut. Play stays
+// while paused, being the way back to the music, and below that the pill's label
+// is what gives way. The row is hidden under 768px, so the window stays wide and
+// the row's parent is the thing narrowed. The row's container is its content
+// box, inside 0.75rem of padding either side.
 
 test.use({ viewport: { width: 1280, height: 600 }, deviceScaleFactor: 1 });
 
@@ -168,4 +170,53 @@ test("at 34rem the buttons are still shown and nothing overflows or wraps", asyn
   for (const id of BUTTONS) await expect(page.getByTestId(id)).toBeVisible();
   await expectWhole(page, [...BUTTONS, ...NEIGHBOURS]);
   expect(await heights(page, [...BUTTONS, ...NEIGHBOURS])).toEqual(wide);
+});
+
+/** Pauses with the real button, at the wide width. */
+async function pause(page: Page): Promise<void> {
+  await page.getByRole("button", { name: "Pause" }).click();
+  await expect(page.getByRole("button", { name: "Play" })).toBeVisible();
+}
+
+test("paused, below 34rem Play stays with everything whole, Previous and Next leave, and Play leaves once pressed", async ({
+  page,
+}) => {
+  await open(page);
+  await pause(page);
+  const wide = await heights(page, ["epic-playback-toggle", ...NEIGHBOURS]);
+
+  await setContentRem(page, 34, -1);
+
+  await expect(page.getByTestId("epic-playback-toggle")).toBeVisible();
+  await expect(page.getByTestId("epic-playback-previous")).toBeHidden();
+  await expect(page.getByTestId("epic-playback-next")).toBeHidden();
+  await expectWhole(page, ["epic-playback-toggle", ...NEIGHBOURS]);
+  expect(await heights(page, ["epic-playback-toggle", ...NEIGHBOURS])).toEqual(
+    wide,
+  );
+
+  await page.getByRole("button", { name: "Play" }).click();
+  await expect(page.getByTestId("epic-playback-toggle")).toBeHidden();
+});
+
+test("paused in a 360px row Play and everything else are whole, and the pill's label is what is cut", async ({
+  page,
+}) => {
+  await open(page);
+  await pause(page);
+  const wide = await heights(page, ["epic-playback-toggle", ...NEIGHBOURS]);
+
+  // The desktop's 960px minimum window less the sidebar's 600px maximum.
+  await page.evaluate(() => window.__playbackRowProbe?.setColumnWidth(360));
+  await nextFrames(page, 2);
+
+  await expect(page.getByTestId("epic-playback-toggle")).toBeVisible();
+  await expectWhole(page, ["epic-playback-toggle", ...NEIGHBOURS]);
+  expect(await heights(page, ["epic-playback-toggle", ...NEIGHBOURS])).toEqual(
+    wide,
+  );
+  const cut = await page
+    .getByTestId("stand-in-pill-label")
+    .evaluate((label) => label.scrollWidth > label.clientWidth);
+  expect(cut).toBe(true);
 });

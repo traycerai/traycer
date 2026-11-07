@@ -374,7 +374,8 @@ export interface SettingsState {
    * Whether the person has paused the music, across windows and restarts: a
    * launch with it set opens nothing at the first gesture, and Play does. It
    * can only be set where those controls can clear it, so turning Music on or
-   * the controls off clears it too. The position in a track is not kept.
+   * the controls off clears it too, and storage restores it only with them on.
+   * The position in a track is not kept.
    */
   soundtrackPaused: boolean;
   setTheme: (theme: ThemeMode) => void;
@@ -878,7 +879,9 @@ export const useSettingsStore = create<SettingsState>()(
               : MIX_TUNING.volume.initial,
           soundtrackPlaybackControls:
             persisted.soundtrackPlaybackControls === true,
-          soundtrackPaused: persisted.soundtrackPaused === true,
+          soundtrackPaused:
+            persisted.soundtrackPlaybackControls === true &&
+            persisted.soundtrackPaused === true,
         };
       },
     },
