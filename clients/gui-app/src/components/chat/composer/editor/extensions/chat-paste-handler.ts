@@ -137,7 +137,9 @@ export function createChatPasteHandler(deps: ChatPasteHandlerDeps) {
           }
         }
         if (deps.preserveSlashAsText) {
-          workingContent = plainSlashContent(workingContent);
+          const plain = plainSlashContent(workingContent);
+          if (plain === null) return false;
+          workingContent = plain;
         }
         return validateAndPasteComposerContent(view, workingContent);
       };
@@ -334,25 +336,32 @@ export function createChatPasteHandler(deps: ChatPasteHandlerDeps) {
   });
 }
 
-function plainSlashContent(node: JsonContent): JsonContent {
+function plainSlashContent(node: JsonContent): JsonContent | null {
   if (node.type === "slashCommand") {
+    const text = slashCommandPlainTextFromAttrs(node.attrs);
+    if (text.length === 0) return null;
     return {
       type: "text",
-      text: slashCommandPlainTextFromAttrs(node.attrs ?? {}),
+      text,
       ...(node.marks === undefined ? {} : { marks: node.marks }),
     };
   }
   if (node.content === undefined) return node;
-  return { ...node, content: node.content.map(plainSlashContent) };
+  return {
+    ...node,
+    content: node.content.flatMap((child) => {
+      const plain = plainSlashContent(child);
+      return plain === null ? [] : [plain];
+    }),
+  };
 }
 
 function plainSlashFragment(fragment: Fragment, schema: Schema): Fragment {
   const nodes: ProseMirrorNode[] = [];
   fragment.forEach((node) => {
     if (node.type.name === "slashCommand") {
-      nodes.push(
-        schema.text(slashCommandPlainTextFromAttrs(node.attrs), node.marks),
-      );
+      const text = slashCommandPlainTextFromAttrs(node.attrs);
+      if (text.length > 0) nodes.push(schema.text(text, node.marks));
     } else {
       nodes.push(
         node.content.size === 0

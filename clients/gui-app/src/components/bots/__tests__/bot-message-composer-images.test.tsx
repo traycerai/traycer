@@ -349,6 +349,35 @@ afterEach(() => {
 
 describe("<BotMessageComposer /> taking images", () => {
   it.each(["structured", "html"])(
+    "skips a nameless %s slash chip and keeps adjacent text",
+    (flavor) => {
+      mount("delivered", PLAIN_BOX);
+      if (flavor === "structured") {
+        pasteComposerContent({
+          type: "doc",
+          content: [
+            {
+              type: "paragraph",
+              content: [
+                { type: "text", text: "kept " },
+                { type: "slashCommand", attrs: {} },
+                { type: "text", text: "after" },
+              ],
+            },
+          ],
+        });
+      } else {
+        pasteHtml(
+          '<p>kept <span data-composer-slash-command="">/ignored</span>after</p>',
+        );
+      }
+      expect(boxText("Message Tracy")).toBe("kept after");
+      typeInto(box(), "{Enter}");
+      expect(lastSend().request.text).toBe("kept after");
+    },
+  );
+
+  it.each(["structured", "html"])(
     "keeps a %s slash chip as text after existing prose",
     (flavor) => {
       mount("delivered", PLAIN_BOX);
