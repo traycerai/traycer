@@ -1,5 +1,5 @@
 import { useCallback, useMemo, useState, type ReactNode } from "react";
-import { Expand } from "lucide-react";
+import { PanelsTopLeft } from "lucide-react";
 import type { ToolCallArtifactStamp } from "@traycer/protocol/persistence/epic/content-blocks";
 import {
   useChatAttachmentScope,
@@ -303,7 +303,7 @@ function InlineArtifactActions(props: {
         hostId={props.scope.hostId}
       />
       <TooltipWrapper
-        label="Expand"
+        label="Open in panel"
         side="top"
         sideOffset={undefined}
         align={undefined}
@@ -312,7 +312,7 @@ function InlineArtifactActions(props: {
           type="button"
           variant="ghost"
           size={coarsePointer ? "icon-touch" : "icon-sm"}
-          aria-label="Expand"
+          aria-label="Open in panel"
           onClick={() => {
             openTile({
               node: {
@@ -341,7 +341,7 @@ function InlineArtifactActions(props: {
             });
           }}
         >
-          <Expand className="size-4" />
+          <PanelsTopLeft className="size-4" />
         </Button>
       </TooltipWrapper>
     </>

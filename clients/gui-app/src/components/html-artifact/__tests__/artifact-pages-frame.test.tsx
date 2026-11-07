@@ -5,6 +5,8 @@ import {
   fireEvent,
   render,
   screen,
+  within,
+  waitFor,
 } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -25,7 +27,13 @@ const frames = vi.hoisted(() => ({ latest: null as SandboxFrameProps | null }));
 vi.mock("@/components/sandbox/sandbox-frame", () => ({
   SandboxFrame: (props: SandboxFrameProps) => {
     frames.latest = props;
-    return <div data-testid="page-frame" />;
+    return (
+      <div
+        data-testid="page-frame"
+        data-path={props.pageNavigation?.path}
+        data-mode={props.displayMode}
+      />
+    );
   },
 }));
 
@@ -206,6 +214,44 @@ function frameProps(): SandboxFrameProps {
   return frames.latest;
 }
 
+it("opens the current page in a fullscreen dialog and restores the inline view on Escape", async () => {
+  const user = userEvent.setup();
+  const { report } = renderPages({ pages: TWO_PAGES, pageZoom: true });
+  report((page) => page.onNavigate("report.html"));
+  const trigger = button("Expand");
+  await user.click(trigger);
+  const dialog = screen.getByRole("dialog", { name: "Report" });
+  const expandedFrame = within(dialog).getByTestId("page-frame");
+  expect(expandedFrame.getAttribute("data-path")).toBe("report.html");
+  expect(expandedFrame.getAttribute("data-mode")).toBe("fullscreen");
+  expect(within(dialog).queryByRole("button", { name: "Expand" })).toBeNull();
+  const back = within(dialog).getByRole("button", { name: "Back" });
+  const home = within(dialog).getByRole("button", { name: "Home" });
+  expect(back.hasAttribute("disabled")).toBe(false);
+  expect(home.hasAttribute("disabled")).toBe(false);
+  await user.click(home);
+  expect(
+    within(dialog).getByTestId("page-frame").getAttribute("data-path"),
+  ).toBe("index.html");
+  fireEvent.keyDown(dialog, { key: "Escape" });
+  expect(screen.queryByRole("dialog")).toBeNull();
+  await waitFor(() => expect(document.activeElement).toBe(trigger));
+  const inlineFrame = screen.getByTestId("page-frame");
+  expect(inlineFrame.getAttribute("data-path")).toBe("report.html");
+  expect(inlineFrame.getAttribute("data-mode")).toBe("inline");
+});
+
+it("closes on the first Escape immediately after opening and restores focus", async () => {
+  const user = userEvent.setup();
+  renderPages({ pageZoom: true });
+  const trigger = button("Expand");
+  await user.click(trigger);
+  expect(screen.getByRole("dialog", { name: "Report" })).toBeTruthy();
+  await user.keyboard("{Escape}");
+  expect(screen.queryByRole("dialog")).toBeNull();
+  await waitFor(() => expect(document.activeElement).toBe(trigger));
+});
+
 describe("the floating controls chip", () => {
   it("offers no Back or Home on an artifact with one page", () => {
     renderPages({ pageZoom: true });
@@ -293,8 +339,9 @@ describe("the More actions menu", () => {
     const toolbar = screen.getByRole("toolbar", {
       name: "HTML artifact controls",
     });
-    // Back and Home end the chip, with no divider left hanging after them.
-    expect(toolbar.querySelector('[data-slot="separator"]')).toBeNull();
+    expect(
+      within(toolbar).getByRole("button", { name: "Expand" }),
+    ).toBeTruthy();
     expect(screen.queryByRole("button", { name: "More actions" })).toBeNull();
     expect(screen.queryByRole("button", { name: "Zoom in" })).toBeNull();
     expect(screen.queryByRole("button", { name: "Zoom out" })).toBeNull();
@@ -377,7 +424,6 @@ describe("the room a filling page keeps for the controls", () => {
       "in the chat, where the chip only comes up on hover",
       { pages: TWO_PAGES, height: 240, pageZoom: true },
     ],
-    ["where the page has no controls at all", { pageZoom: false }],
   ])("is none %s", (_where, options) => {
     layOutControlsChip();
 

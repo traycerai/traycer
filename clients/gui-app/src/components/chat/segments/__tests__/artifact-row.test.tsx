@@ -746,11 +746,11 @@ describe("<ArtifactRow />", () => {
     // the mock function having been called again.
     expect(sandboxFrameMocks.mounts).toBe(2);
   });
-  describe("inline Expand", () => {
+  describe("inline Open in panel", () => {
     function lastOpenedIntent(): TileOpenIntent {
       const intent = expandMocks.openTile.mock.calls.at(-1)?.[0];
       if (intent === undefined)
-        throw new Error("Expected Expand to open a tile.");
+        throw new Error("Expected Open in panel to open a tile.");
       return intent;
     }
 
@@ -764,7 +764,7 @@ describe("<ArtifactRow />", () => {
       };
       renderRow(scopeWithClient(makeArtifactReadClient(neverRespond)), STAMP);
 
-      fireEvent.click(screen.getByRole("button", { name: "Expand" }));
+      fireEvent.click(screen.getByRole("button", { name: "Open in panel" }));
 
       // `dedupe: true` is what keeps a second click from opening a second
       // tile; the executor moves the existing tile onto this `htmlVersion`.
@@ -804,7 +804,7 @@ describe("<ArtifactRow />", () => {
       });
       expect(screen.getByText("Showing latest")).toBeTruthy();
 
-      fireEvent.click(screen.getByRole("button", { name: "Expand" }));
+      fireEvent.click(screen.getByRole("button", { name: "Open in panel" }));
 
       expect(lastOpenedIntent()).toMatchObject({
         node: {
@@ -840,9 +840,9 @@ describe("<ArtifactRow />", () => {
       const download = screen.getByTestId("download-stub");
       expect(download.dataset.hostId).toBe("host-1");
       expect(download.dataset.artifactId).toBe(ARTIFACT_ID);
-      expect(screen.getByRole("button", { name: "Expand" }).dataset.size).toBe(
-        "icon-touch",
-      );
+      expect(
+        screen.getByRole("button", { name: "Open in panel" }).dataset.size,
+      ).toBe("icon-touch");
     });
   });
 });
