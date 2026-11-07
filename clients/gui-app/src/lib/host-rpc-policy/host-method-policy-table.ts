@@ -1748,6 +1748,11 @@ export const HOST_METHOD_POLL_TABLE = {
     joinResponseTimeoutMs: null,
     poll: null,
   },
+  "bot.updateAppearance": {
+    mode: "fifo",
+    joinResponseTimeoutMs: null,
+    poll: null,
+  },
   "bot.delete": { mode: "fifo", joinResponseTimeoutMs: null, poll: null },
   "bot.claimAuthority": {
     mode: "fifo",

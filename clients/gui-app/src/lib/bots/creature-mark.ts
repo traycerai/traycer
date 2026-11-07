@@ -12,6 +12,9 @@
  * the grid: none, ears above the top corners, feet below the bottom corners,
  * or a crest above the centre.
  *
+ * A person may choose another creature in the bot's settings: a family and a
+ * seed ({@link CreatureChoice}), from which the same generator grows the mask.
+ *
  * The tests pin fixed ids to their masks so a bot keeps its creature.
  */
 export type CreatureSilhouette = "none" | "ears" | "feet" | "crest";
@@ -131,15 +134,80 @@ function isAcceptedMask(rows: readonly number[]): boolean {
   );
 }
 
-export function creatureMark(botId: string): CreatureMark {
-  const silhouette =
-    SILHOUETTES[saltedHash("creature-silhouette", botId) % SILHOUETTES.length];
+/**
+ * A creature the person chose for a bot: its silhouette and the seed its body
+ * grows from. Seed 0 is the bot's own body; every other seed grows another
+ * body from the bot's id. The mask is grown again from these each time, never
+ * stored.
+ */
+export interface CreatureChoice {
+  readonly family: CreatureSilhouette;
+  readonly seed: number;
+}
+
+/** The string a seed's hashes read: the bot's id itself for seed 0. */
+function seedSource(botId: string, seed: number): string {
+  return seed === 0 ? botId : `${botId}#${String(seed)}`;
+}
+
+function familyOf(source: string): CreatureSilhouette {
+  return SILHOUETTES[
+    saltedHash("creature-silhouette", source) % SILHOUETTES.length
+  ];
+}
+
+/** The creature of a chosen family and seed. */
+export function chosenCreatureMark(
+  botId: string,
+  choice: CreatureChoice,
+): CreatureMark {
+  const source = seedSource(botId, choice.seed);
+  const silhouette = choice.family;
   for (let roll = 0; roll < MAX_ROLLS; roll++) {
-    const bits = saltedHash(`creature-body-${String(roll)}`, botId);
+    const bits = saltedHash(`creature-body-${String(roll)}`, source);
     const rows = withAnchors(mirroredRows(bits), silhouette);
     if (isAcceptedMask(rows)) return { rows, silhouette };
   }
   return { rows: withAnchors(FALLBACK_ROWS, silhouette), silhouette };
+}
+
+/** The bot's own creature, grown from its id when nothing was chosen. */
+export function creatureMark(botId: string): CreatureMark {
+  return chosenCreatureMark(botId, { family: familyOf(botId), seed: 0 });
+}
+
+/** How many creatures the settings offer a bot, its own first. */
+export const CREATURE_SHEET_SIZE = 12;
+/** Seeds tried for a sheet before it is cut short; duplicates are skipped. */
+const MAX_SHEET_SEEDS = 64;
+
+function sameMark(a: CreatureMark, b: CreatureMark): boolean {
+  return (
+    a.silhouette === b.silhouette &&
+    a.rows.every((row, index) => row === b.rows[index])
+  );
+}
+
+/**
+ * The creatures a bot's settings offer, the same every time for one bot: its
+ * own first, then the next seeds' creatures, each in the family its seed
+ * hashes to, skipping any that looks like one already offered.
+ */
+export function creatureSheet(botId: string): readonly CreatureChoice[] {
+  const sheet: CreatureChoice[] = [];
+  const marks: CreatureMark[] = [];
+  for (
+    let seed = 0;
+    seed < MAX_SHEET_SEEDS && sheet.length < CREATURE_SHEET_SIZE;
+    seed++
+  ) {
+    const choice = { family: familyOf(seedSource(botId, seed)), seed };
+    const mark = chosenCreatureMark(botId, choice);
+    if (marks.some((offered) => sameMark(offered, mark))) continue;
+    sheet.push(choice);
+    marks.push(mark);
+  }
+  return sheet;
 }
 
 /** The avatar sizes a creature is drawn at, in CSS pixels. */

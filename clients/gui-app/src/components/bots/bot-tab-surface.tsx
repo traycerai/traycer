@@ -7,6 +7,7 @@ import {
   useRef,
   useState,
   useSyncExternalStore,
+  type CSSProperties,
   type ReactNode,
 } from "react";
 import type { UseQueryResult } from "@tanstack/react-query";
@@ -41,6 +42,11 @@ import {
   type BotSubscriptionSnapshot,
 } from "@/hooks/bots/use-bot-subscription";
 import { useBotListQuery } from "@/hooks/bots/use-bot-list-query";
+import {
+  BotLooksContext,
+  botLooksOf,
+  useChannelBackground,
+} from "@/hooks/bots/use-bot-appearance";
 import type { BotRecord } from "@traycer/protocol/host/bot/schemas";
 import { useBotListChangedSubscriptionForHost } from "@/hooks/bots/use-bot-list-changed-subscription";
 import { useEnvironmentListQuery } from "@/hooks/bots/use-environment-list-query";
@@ -223,6 +229,11 @@ function TracySurfaceShell(props: {
   // surface) without waiting for focus, through the surface's own host.
   useBotListChangedSubscriptionForHost(hostId, true);
   const groups = useBotsGroups(botList.data, environments.data);
+  // Every picture on the surface draws what its own host's list chose.
+  const looks = useMemo(
+    () => (botList.data === undefined ? null : botLooksOf(botList.data.bots)),
+    [botList.data],
+  );
 
   // Threads, from the column, in place of the channel; any move to one of
   // the channel's views ends it, and so does selecting a channel.
@@ -267,62 +278,64 @@ function TracySurfaceShell(props: {
   }, [refetchBots, refetchEnvironments]);
 
   return (
-    <div
-      className="@container flex h-full min-h-0"
-      data-testid="bot-tab"
-      data-bot-surface=""
-    >
-      <BotChannelColumn
-        level2={level2}
-        activeBotId={botId}
-        hostId={hostId}
-        threadsView={threadsView}
-      />
+    <BotLooksContext value={looks}>
       <div
-        className="relative flex min-h-0 min-w-0 flex-1 md:bg-canvas"
-        data-testid="bot-tab-content-pane"
+        className="@container flex h-full min-h-0"
+        data-testid="bot-tab"
+        data-bot-surface=""
       >
-        {/* Threads, from the column, takes the place of the channel's
+        <BotChannelColumn
+          level2={level2}
+          activeBotId={botId}
+          hostId={hostId}
+          threadsView={threadsView}
+        />
+        <div
+          className="relative flex min-h-0 min-w-0 flex-1 md:bg-canvas"
+          data-testid="bot-tab-content-pane"
+        >
+          {/* Threads, from the column, takes the place of the channel's
             views and of a session. */}
-        {threadsShown ? (
-          <BotThreadsView
-            hostId={hostId}
-            channelTitle={channelTitle}
-            onBack={leaveThreads}
-            level2={level2}
-          />
-        ) : null}
-        {botId === null && !threadsShown ? (
-          <BotUnselectedLevel2Pane
-            level2={level2}
-            title={TRACY_TAB_LABEL}
-            hostId={hostId}
-            threadsView={threadsView}
-          >
-            <TracyUnselected
-              groups={groups}
-              unavailable={unavailable}
-              listsFailed={
-                botList.status === "error" || environments.status === "error"
-              }
-              onRetry={retryLists}
+          {threadsShown ? (
+            <BotThreadsView
+              hostId={hostId}
+              channelTitle={channelTitle}
+              onBack={leaveThreads}
+              level2={level2}
             />
-          </BotUnselectedLevel2Pane>
-        ) : null}
-        {botId === null ? null : (
-          <TracyChannelPane
-            key={botId}
-            botId={botId}
-            hostId={hostId}
-            level2={level2}
-            tiles={tiles}
-            onRailDrawn={onRailDrawn}
-            threadsView={threadsView}
-            onGone={forgetChannel}
-          />
-        )}
+          ) : null}
+          {botId === null && !threadsShown ? (
+            <BotUnselectedLevel2Pane
+              level2={level2}
+              title={TRACY_TAB_LABEL}
+              hostId={hostId}
+              threadsView={threadsView}
+            >
+              <TracyUnselected
+                groups={groups}
+                unavailable={unavailable}
+                listsFailed={
+                  botList.status === "error" || environments.status === "error"
+                }
+                onRetry={retryLists}
+              />
+            </BotUnselectedLevel2Pane>
+          ) : null}
+          {botId === null ? null : (
+            <TracyChannelPane
+              key={botId}
+              botId={botId}
+              hostId={hostId}
+              level2={level2}
+              tiles={tiles}
+              onRailDrawn={onRailDrawn}
+              threadsView={threadsView}
+              onGone={forgetChannel}
+            />
+          )}
+        </div>
       </div>
-    </div>
+    </BotLooksContext>
   );
 }
 
@@ -1809,6 +1822,7 @@ function BotChannelHeader(props: {
   readonly activityCount: number;
 }): ReactNode {
   const { settingsOpen } = props;
+  const background = useChannelBackground(props.botId);
   // With the keyboard up on a short viewport: the name row alone while the
   // channel's box has the focus, and nothing while a thread's does, since the
   // thread's own header is the identity row then. Only a box under this header
@@ -1829,9 +1843,13 @@ function BotChannelHeader(props: {
     <header
       ref={setHeader}
       hidden={threadHasFocus}
+      data-testid="bot-channel-header"
+      data-channel-background={background.swatch}
+      style={{ "--channel-tint": background.color } as CSSProperties}
       className={cn(
         "flex shrink-0 flex-col gap-1 px-4",
         focusOwner === null && "pt-3",
+        background.className,
       )}
     >
       <div
