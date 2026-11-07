@@ -43,6 +43,7 @@ import {
   botBoxContentOf,
   botBoxWire,
 } from "@/lib/bots/bot-box-content";
+import * as botBoxContent from "@/lib/bots/bot-box-content";
 import {
   boxInput,
   boxText,
@@ -282,6 +283,17 @@ function pasteComposerContent(content: object): void {
   });
 }
 
+function pasteHtml(html: string): void {
+  fireEvent.paste(box(), {
+    clipboardData: {
+      types: ["text/html"],
+      files: [],
+      items: [],
+      getData: (type: string) => (type === "text/html" ? html : ""),
+    },
+  });
+}
+
 function dropFiles(...files: ReadonlyArray<File>): boolean {
   const dataTransfer = transferOf(...files);
   fireEvent.dragEnter(box(), { dataTransfer });
@@ -336,6 +348,33 @@ afterEach(() => {
 });
 
 describe("<BotMessageComposer /> taking images", () => {
+  it.each(["structured", "html"])(
+    "keeps a %s slash chip as text after existing prose",
+    (flavor) => {
+      mount("delivered", PLAIN_BOX);
+      typeInto(box(), "Use ");
+      if (flavor === "structured") {
+        pasteComposerContent({
+          type: "doc",
+          content: [
+            {
+              type: "paragraph",
+              content: [{ type: "slashCommand", attrs: { name: "plan" } }],
+            },
+          ],
+        });
+      } else {
+        pasteHtml(
+          '<p><span data-composer-slash-command="" data-name="plan">/plan</span></p>',
+        );
+      }
+      const expected = flavor === "structured" ? "Use\n\n/plan" : "Use /plan";
+      expect(boxText("Message Tracy")).toBe(expected);
+      typeInto(box(), "{Enter}");
+      expect(lastSend().request.text).toBe(expected);
+    },
+  );
+
   it("accepts a drop over the footer where the overlay offers it", async () => {
     mount("delivered", PLAIN_BOX);
     typeInto(box(), "draft");
@@ -405,6 +444,23 @@ describe("<BotMessageComposer /> taking images", () => {
 });
 
 describe("<BotMessageComposer /> sending images", () => {
+  it("reuses decoded attachments while only message text changes", async () => {
+    const decode = vi.spyOn(botBoxContent, "botBoxAttachments");
+    try {
+      mount("delivered", PLAIN_BOX);
+      pasteFiles(imageFile("shot.png", "image/png"));
+      await holdsImage("Image#1: shot.png");
+      decode.mockClear();
+
+      typeInto(box(), "caption");
+      expect(decode).not.toHaveBeenCalled();
+      typeInto(box(), "{Enter}");
+      expect(lastSend().request.attachments).toHaveLength(1);
+    } finally {
+      decode.mockRestore();
+    }
+  });
+
   it("carries each image's bytes, type, name and byte length on the request, and empties the box", async () => {
     const user = userEvent.setup();
     mount("delivered", PLAIN_BOX);
@@ -553,6 +609,34 @@ describe("<BotMessageComposer /> refusing what it cannot take", () => {
   );
 
   const NOT_AN_IMAGE = "Only PNG, JPEG, GIF and WebP images can be sent here.";
+
+  it("updates one refusal toast for several unreadable copied images", () => {
+    mount("delivered", PLAIN_BOX);
+    pasteComposerContent({
+      type: "doc",
+      content: [
+        {
+          type: "paragraph",
+          content: ["a", "b"].map((id) => ({
+            type: "imageAttachment",
+            attrs: {
+              id,
+              fileName: `${id}.png`,
+              mimeType: "image/png",
+              b64content: "invalid base64!",
+            },
+          })),
+        },
+      ],
+    });
+    const refusals = vi
+      .mocked(toast.error)
+      .mock.calls.filter(
+        ([message]) => message === "This copied image could not be read.",
+      );
+    expect(refusals).toHaveLength(2);
+    expect(refusals[0]?.[1]?.id).toBe(refusals[1]?.[1]?.id);
+  });
 
   it("refuses a file that is not an image with the agent composer's path toast, and attaches nothing", async () => {
     mount("delivered", PLAIN_BOX);

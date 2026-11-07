@@ -127,6 +127,7 @@ export function buildComposerExtensions(
     createChatPasteHandler({
       pickerStore: args.pickerStore,
       preserveMessagePaste: args.preserveMessagePaste === true,
+      preserveSlashAsText: args.slashProviderId === null,
       getHasPastedImageBytes: args.getHasPastedImageBytes,
       getIngestPastedComposerImages: args.getIngestPastedComposerImages,
     }),

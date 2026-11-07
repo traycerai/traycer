@@ -419,6 +419,24 @@ describe("<BotMessageComposer /> clearing at the send", () => {
     useBotDraftsStore.getState().threadBoxes["bot-1"]?.["conversation-channel"]
       ?.text;
 
+  it("clears the live editor after two sends on one mounted box", async () => {
+    render(<Harness initialEdit={null} keepDraft={false} />);
+
+    await typeBox("First message{Enter}");
+    expect(boxText(LABEL)).toBe("");
+    await settleSend(lastSend(), (callbacks) =>
+      callbacks.onSuccess?.(RESPONSE),
+    );
+
+    await typeBox("Second message{Enter}");
+    expect(boxText(LABEL)).toBe("");
+    await settleSend(lastSend(), (callbacks) =>
+      callbacks.onSuccess?.(RESPONSE),
+    );
+    expect(onSent).toHaveBeenCalledTimes(2);
+    expect(onSent.mock.calls[1]?.[1]).toBe("Second message");
+  });
+
   it("empties the box at the send and takes the next message while it is on its way", async () => {
     render(<Harness initialEdit={null} keepDraft={false} />);
 

@@ -39,10 +39,6 @@ import {
   tabNavigationMock,
 } from "./bot-tab-surface-mocks";
 import { BotMentionsContext } from "@/components/bots/bot-mentions-context";
-import { useBotMentionCompletion } from "@/components/bots/bot-mention-completion";
-import { ComposerPromptEditor } from "@/components/chat/composer/composer-prompt-editor";
-import { EMPTY_BOT_BOX } from "@/lib/bots/bot-box-content";
-import type { JsonContent } from "@traycer/protocol/common/registry";
 
 import { KEYBOARD_FOCUS_OWNER_PROPS } from "@/hooks/ui/use-keyboard-focus-layout";
 import { setPhoneLayoutOnly } from "@/lib/mobile-app";
@@ -58,7 +54,7 @@ import {
   SHELL_WIDTH_MENU,
   type ShellFormHarness,
 } from "../../../../__tests__/mobile-level2-form-harness";
-import { StrictMode, useContext, useState, type ReactNode } from "react";
+import { StrictMode, useContext, type ReactNode } from "react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { act, render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
@@ -77,7 +73,6 @@ import type {
   BotSessionOpen,
   BotTurnOpen,
 } from "@/stores/bots/bot-open-thread-store";
-import { __setAgentActivityStateForTests } from "@/stores/agent-activity-store";
 import {
   BOT,
   BOT_ID,
@@ -206,66 +201,20 @@ vi.mock("@/components/bots/bot-channel-sidebar", () => ({
     </div>
   ),
 }));
-/**
- * A message box on the real `@` completion, over what the tab hands its
- * content: the tab's directory decides when a search that matched nothing
- * closes the menu.
- */
-function MentionBox(): ReactNode {
-  const [content, setContent] = useState<JsonContent>(EMPTY_BOT_BOX);
-  const mentions = useBotMentionCompletion({ replyRow: null });
-  return (
-    <>
-      {mentions.menu}
-      <div role="group" aria-label="Stub message box">
-        <ComposerPromptEditor
-          pickerStore={mentions.pickerStore}
-          initialContent={content}
-          initialSelection={null}
-          placeholder="Message"
-          editorClassName={undefined}
-          stabilizeImageAttachmentCaret={false}
-          isActive
-          disabled={false}
-          slashProviderId={null}
-          hasPastedImageBytes={() => false}
-          ingestPastedComposerImages={() => []}
-          onDocumentChange={setContent}
-          onSelectionChange={() => {}}
-          onSubmit={() => {}}
-          onPaste={() => {}}
-          onDragOver={() => {}}
-          onDrop={() => {}}
-          onKeyDown={undefined}
-          interceptKeyDown={null}
-          onFocus={() => {}}
-          onBlur={() => {}}
-          onEditorReady={() => {}}
-        />
-      </div>
-    </>
-  );
-}
-
-let exerciseMentionEditor = false;
-
 /** What the tab hands its content to mention (`BotMentionsContext`), as the stub channel sees it. */
 function MentionsProbe(): ReactNode {
   const mentionable = useContext(BotMentionsContext);
   if (mentionable === null) return null;
   return (
-    <>
-      {exerciseMentionEditor ? <MentionBox /> : null}
-      <output
-        data-testid="stub-mentionable"
-        data-bots={
-          mentionable.bots === null
-            ? "unread"
-            : mentionable.bots.map((target) => target.name).join("|")
-        }
-        data-tasks={mentionable.tasks.map((target) => target.name).join("|")}
-      />
-    </>
+    <output
+      data-testid="stub-mentionable"
+      data-bots={
+        mentionable.bots === null
+          ? "unread"
+          : mentionable.bots.map((target) => target.name).join("|")
+      }
+      data-tasks={mentionable.tasks.map((target) => target.name).join("|")}
+    />
   );
 }
 
@@ -501,7 +450,6 @@ function isKept(botId: string): boolean {
 }
 
 beforeEach(() => {
-  exerciseMentionEditor = false;
   queryClient = new QueryClient({
     defaultOptions: { queries: { retry: false } },
   });

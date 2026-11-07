@@ -24,7 +24,7 @@ import { useRunnerHost } from "@/providers/use-runner-host";
 function refuse(title: string): void {
   reportableErrorToast(
     title,
-    {},
+    { id: `bot-composer-refusal:${title}` },
     { title, message: null, code: null, source: "Bot composer" },
   );
 }

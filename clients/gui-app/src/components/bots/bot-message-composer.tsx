@@ -13,6 +13,7 @@ import { SendHorizontal } from "lucide-react";
 import type { JsonContent } from "@traycer/protocol/common/registry";
 import {
   BOT_CONVERSATION_IMAGES_ONLY_TEXT,
+  type BotConversationAttachment,
   type BotConversationSendDelivery,
   type BotConversationSendResponse,
 } from "@traycer/protocol/host/bot/conversation-schemas";
@@ -63,10 +64,44 @@ import {
   botBoxWire,
   EMPTY_BOT_BOX,
 } from "@/lib/bots/bot-box-content";
-import { collectImageAtoms } from "@/lib/composer/image-atoms";
+import {
+  collectImageAtoms,
+  type ComposerImageAtom,
+} from "@/lib/composer/image-atoms";
 import { cn } from "@/lib/utils";
 
 const MESSAGE_MAX = 100_000;
+
+function sameImageAtoms(
+  left: ReadonlyArray<ComposerImageAtom>,
+  right: ReadonlyArray<ComposerImageAtom>,
+): boolean {
+  return (
+    left.length === right.length &&
+    left.every(
+      (atom, index) =>
+        atom.b64content === right[index]?.b64content &&
+        atom.fileName === right[index]?.fileName &&
+        atom.mimeType === right[index]?.mimeType,
+    )
+  );
+}
+
+function useCachedBotBoxAttachments(
+  content: JsonContent,
+  atoms: ReadonlyArray<ComposerImageAtom>,
+  imageReach: BotImageReach,
+): ReadonlyArray<BotConversationAttachment> {
+  const [cache, setCache] = useState<{
+    atoms: ReadonlyArray<ComposerImageAtom>;
+    attachments: ReadonlyArray<BotConversationAttachment>;
+  }>({ atoms: [], attachments: [] });
+  if (imageReach !== "delivered") return [];
+  if (sameImageAtoms(cache.atoms, atoms)) return cache.attachments;
+  const attachments = botBoxAttachments(content);
+  setCache({ atoms, attachments });
+  return attachments;
+}
 
 function noop(): void {}
 
@@ -244,10 +279,8 @@ export function BotMessageComposer(props: {
     });
   const text = useMemo(() => botBoxText(content), [content]);
   const wire = useMemo(() => botBoxWire(content), [content]);
-  const imageCount = useMemo(
-    () => collectImageAtoms(content).length,
-    [content],
-  );
+  const imageAtoms = useMemo(() => collectImageAtoms(content), [content]);
+  const imageCount = imageAtoms.length;
   const takesImages = imageReach !== "none";
   const paste = useBotBoxImageIngest(editorRef);
   useEffect(() => {
@@ -281,10 +314,10 @@ export function BotMessageComposer(props: {
   const [lastDelivery, setLastDelivery] =
     useState<BotConversationSendDelivery | null>(null);
   // What goes with the text: a bot's host that takes no image gets none.
-  const carried = useMemo(
-    () => (imageReach === "delivered" ? botBoxAttachments(content) : []),
-    [content, imageReach],
-  );
+  // The editor emits a fresh document for every keystroke. The image atoms
+  // usually have the same bytes, so keep their decoded wire metadata until an
+  // image actually changes.
+  const carried = useCachedBotBoxAttachments(content, imageAtoms, imageReach);
   const canSend = canSendBotBox({
     sendable,
     wireLength: wire.length,
@@ -689,7 +722,9 @@ function useBotBoxDocument(
   const [loaded, setLoaded] = useState<JsonContent | null>(null);
   const loadBox = (next: JsonContent): void => {
     setContent(next);
-    setLoaded(next);
+    // Each load must trigger the editor sync, including repeated clears with
+    // EMPTY_BOT_BOX after consecutive sends on one mounted composer.
+    setLoaded({ ...next });
   };
   // An edit or seed replaces the box's content once. A quote appends after
   // whichever document it currently holds, including an edit.
