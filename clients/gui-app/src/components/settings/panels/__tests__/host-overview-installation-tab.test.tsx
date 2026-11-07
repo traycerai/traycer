@@ -70,6 +70,7 @@ import type {
 import { hostScopeOptionFixture } from "@/components/settings/host-scope/host-scope-fixture";
 import type { HostScopeOption } from "@/components/settings/host-scope/host-scope-model";
 import { HostSettingsPanel } from "@/components/settings/panels/host-settings-panel";
+import { hostQueryKeys } from "@/lib/query-keys";
 import { formatSettingsDate } from "@/lib/settings/settings-date";
 import {
   buildOverviewHostFixture,
@@ -715,6 +716,57 @@ describe("Overview ▸ Installation — Install record, open with no click", () 
       `Couldn't read ${HOST_NAME}'s installation record.`,
     );
     expect(screen.queryByTestId("host-overview-installation-empty")).toBeNull();
+  });
+
+  it("withholds a cached install record after a failed refetch and uses account platform facts in Details", async () => {
+    let installationReads = 0;
+    readyRemote(
+      {
+        "host.getInstallationInfo": () => {
+          installationReads += 1;
+          return installationReads === 1
+            ? Promise.resolve(managed(installRecord("1.5.0", "1.5.0")))
+            : Promise.reject(new Error("transport down"));
+        },
+      },
+      undefined,
+      [...OVERVIEW_METHODS, ...SERVICE_METHODS],
+    );
+    const mounted = mount(null);
+    await selectHostOverviewTab("installation");
+
+    expect(
+      await screen.findByTestId("host-overview-install-record-facts"),
+    ).not.toBeNull();
+    const installationKey = [
+      ...hostQueryKeys.method(HOST_ID, "host.getInstallationInfo", {}),
+      "1.5.0",
+    ];
+    await act(async () => {
+      await mounted.queryClient.invalidateQueries({
+        queryKey: installationKey,
+        exact: true,
+      });
+    });
+
+    const unreadable = await screen.findByTestId(
+      "host-overview-installation-unreadable",
+    );
+    expect(unreadable.textContent).toContain(
+      `Couldn't read ${HOST_NAME}'s installation record.`,
+    );
+    expect(installationReads).toBe(2);
+    expect(
+      screen.queryByTestId("host-overview-install-record-facts"),
+    ).toBeNull();
+    const details = openInstallationDetails();
+    expect(
+      within(details).getByTestId("host-overview-about-platform").textContent,
+    ).toBe("macOS · last account report");
+    expect(
+      within(details).getByTestId("host-overview-about-architecture")
+        .textContent,
+    ).toBe("arm64 · last account report");
   });
 
   it("says a host without host.getInstallationInfo does not support it, and reads nothing", async () => {

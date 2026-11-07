@@ -119,7 +119,7 @@ function InstallRecordBody(props: InstallRecordGroupProps): ReactNode {
       </HostOverviewNotice>
     );
   }
-  if (props.readFailed && record === null) {
+  if (props.readFailed) {
     return (
       <HostOverviewNotice testId="host-overview-installation-unreadable">
         {`Couldn't read ${props.hostName}'s installation record.`}

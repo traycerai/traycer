@@ -258,8 +258,7 @@ function HostOverviewInstallationHostGroups(
     );
   }
   const recordFailed =
-    props.installInfoDegrade !== null ||
-    (props.recordReadFailed && props.record === null);
+    props.installInfoDegrade !== null || props.recordReadFailed;
   return (
     <>
       {recordFailed ? (
