@@ -51,6 +51,11 @@ import {
 } from "@/components/settings/panels/provider-rate-limit-views";
 import { OpenModelProvidersButton } from "@/components/settings/panels/opencode-go-actions";
 import { resolveCodexResetCreditAction } from "@/components/settings/panels/codex-reset-credit-availability";
+import {
+  useProvidersList,
+  useProvidersListForClient,
+} from "@/hooks/providers/use-providers-list-query";
+import { useHostClientForHostId } from "@/hooks/host/use-host-client-for-host-id";
 import { useHostProviderRateLimitsQuery } from "@/hooks/host/use-host-provider-rate-limits-query";
 import { useRefreshProviderRateLimitsOnMount } from "@/hooks/host/use-refresh-provider-rate-limits-on-mount";
 import {
@@ -362,7 +367,19 @@ function railTabProviderId(tab: RailTabDescriptor): ProviderId {
   return tab.kind === "traycer" ? "traycer" : tab.providerId;
 }
 
+/** Gates scoped account usage on the bound host’s Traycer provider setting. */
 function useTraycerSubscription() {
+  const account = useTraycerAccountSubscription();
+  const providersQuery = useProvidersList({ enabled: true, subscribed: true });
+  const enabled =
+    providersQuery.data?.providers.some(
+      (provider) => provider.providerId === "traycer" && provider.enabled,
+    ) === true;
+  return { ...account, eligible: account.eligible && enabled };
+}
+
+/** Resolves subscription eligibility independently of host availability. */
+function useTraycerAccountSubscription() {
   const query = useAuthUser();
   const storedAccountContext = useAccountContextStore((s) => s.accountContext);
   const user = query.data ?? null;
@@ -809,12 +826,9 @@ function RateLimitPopoverBody({
           {noFallbackHost ? null : (
             <RateLimitHostUnavailableNotice scope={scope} />
           )}
-          {/* The ACCOUNT-scoped half survives the host being down: Traycer
-              Inference usage comes through the AuthService with no host
-              binding involved, so only the host-RPC provider panes go with
-              the route. Hiding this too both took working data away and had
-              the notice claim more than is true. */}
-          <UnscopedTraycerUsage />
+          {/* Account usage survives an unavailable host unless that host’s
+              retained provider setting explicitly disables Traycer. */}
+          <UnscopedTraycerUsage hostId={scope.hostId} />
         </div>
       </RateLimitPopoverResizeSurface>
     );
@@ -884,7 +898,7 @@ function RateLimitPopoverScopedBody({
   );
 
   // Traycer is a GUI-only rail entry (AuthService subscription, not a host RPC),
-  // gated on the *selected* account being paid or credit-bundled. Recomputed
+  // gated on the provider being enabled and an account being paid or credit-bundled. Recomputed
   // reactively from the auth query + account-context store, so the tab appears /
   // disappears live as either changes - not snapshotted at popover-open time.
   const traycerSubscription = useTraycerSubscription();
@@ -3053,11 +3067,24 @@ function SignedOutRateLimitMessage(): ReactNode {
 /**
  * The account-scoped Usage half for a popover whose host-scoped half cannot
  * render: eligible Traycer Inference usage, framed like a pane. Returns null
- * for ineligible accounts, so the caller mounts it unconditionally.
+ * for ineligible accounts or a retained disabled provider setting. Unknown
+ * settings preserve account usage without consulting the ambient host.
  */
-function UnscopedTraycerUsage(): ReactNode {
-  const traycerSubscription = useTraycerSubscription();
-  if (!traycerSubscription.eligible) return null;
+function UnscopedTraycerUsage({
+  hostId,
+}: {
+  readonly hostId: string | null;
+}): ReactNode {
+  const traycerSubscription = useTraycerAccountSubscription();
+  const client = useHostClientForHostId(hostId);
+  const providers = useProvidersListForClient(hostId === null ? null : client, {
+    enabled: false,
+    subscribed: true,
+  });
+  const traycer = providers.data?.providers.find(
+    (provider) => provider.providerId === "traycer",
+  );
+  if (!traycerSubscription.eligible || traycer?.enabled === false) return null;
   return (
     <div className="w-full max-w-full rounded-md border border-border/60 bg-foreground/3 p-3">
       <TraycerRateLimitBlock variant="popover-overview" onReady={null} />
@@ -3086,7 +3113,7 @@ function TraycerRateLimitBlock({
   readonly variant: PopoverBlockVariant;
   readonly onReady: (() => void) | null;
 }): ReactNode {
-  const traycerSubscription = useTraycerSubscription();
+  const traycerSubscription = useTraycerAccountSubscription();
   const setAccountContext = useAccountContextStore((s) => s.setAccountContext);
   const queryClient = useQueryClient();
   const hostId = useAddressableHostId();
