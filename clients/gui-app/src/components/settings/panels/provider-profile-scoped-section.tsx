@@ -1,13 +1,15 @@
 import { useState, type ReactNode } from "react";
 
 import { useIsMutatingOf } from "@/hooks/use-mutation-state-of";
-import { AppliedProviderItemDetails } from "@/components/settings/environment/applied-provider-item-details";
+import { SettingsDetailsDialog } from "@/components/settings/details/settings-details-button";
+import { useAppliedProviderItemDetailsSubject } from "@/components/settings/details/use-provider-row-details-subject";
 import { providerIdToGuiHarnessId } from "@/lib/provider-ordering";
 import {
   AlertTriangle,
   Eye,
   EyeOff,
   LogIn,
+  MoreHorizontal,
   Plus,
   Settings2,
 } from "lucide-react";
@@ -17,7 +19,12 @@ import {
   type ProviderProfile,
 } from "@traycer/protocol/host/provider-schemas";
 import { Button } from "@/components/ui/button";
-import { Badge } from "@/components/ui/badge";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
 import { ReportIssueAction } from "@/components/report-issue/report-issue-action";
 import { createReportIssueContext } from "@/lib/report-issue-context";
 import { redactEmail } from "@/lib/providers/redact-email";
@@ -464,9 +471,9 @@ export function ProviderProfileScopedSection(
 }
 
 /**
- * The selected profile's row under the dropdown: the terminal login's own
- * row with environments, else the profile's summary, its sign-in when it is
- * signed out, and `Manage profile`.
+ * The selected profile's row under the dropdown. The email, plan and a
+ * not-usable standing stay on the row. Sign in, Manage profile and Details
+ * sit in More.
  */
 function SelectedProfileRow(props: {
   readonly state: ProviderCliState;
@@ -482,6 +489,11 @@ function SelectedProfileRow(props: {
   readonly onManage: () => void;
 }): ReactNode {
   const { profile, managementHeldReason } = props;
+  const [detailsOpen, setDetailsOpen] = useState(false);
+  const detailsSubject = useAppliedProviderItemDetailsSubject(
+    "managed_profile",
+    `${providerIdToGuiHarnessId(props.state.providerId)}:${profile.profileId}`,
+  );
   if (profile.kind === "ambient") {
     return (
       <OwnLoginSummary
@@ -496,67 +508,87 @@ function SelectedProfileRow(props: {
   return (
     <div
       data-slot="profile-summary-actions"
-      // Wraps because every item except the email is a fixed-width chip:
-      // in a single-line row a narrow viewport collapses the email to
-      // nothing and then pushes the chips into one another, since none of
-      // them can shrink. Wrapping drops the buttons onto their own line
-      // instead, keeping every chip whole.
-      className="flex min-w-0 flex-wrap items-center justify-end gap-2"
+      className="flex min-w-0 items-start justify-between gap-2"
     >
-      <AppliedProviderItemDetails
-        kind="managed_profile"
-        itemKey={`${providerIdToGuiHarnessId(props.state.providerId)}:${profile.profileId}`}
-        title={profile.label}
-      />
       <ProfileSummary key={profile.profileId} profile={profile} />
-      {profile.auth.status === "unauthenticated" ? (
+      <ProfileRowMore label={profileDisplayLabel(profile)}>
+        {detailsSubject === null ? null : (
+          <DropdownMenuItem onSelect={() => setDetailsOpen(true)}>
+            Details
+          </DropdownMenuItem>
+        )}
+        {profile.auth.status === "unauthenticated" ? (
+          <TooltipWrapper
+            label={props.canAddProfile ? null : props.signInUnavailableHint}
+            side="top"
+            sideOffset={6}
+            align="start"
+          >
+            <span className="flex">
+              <DropdownMenuItem
+                disabled={!props.canAddProfile}
+                onSelect={props.onSignIn}
+              >
+                <LogIn data-icon="inline-start" />
+                Sign in
+              </DropdownMenuItem>
+            </span>
+          </TooltipWrapper>
+        ) : null}
         <TooltipWrapper
-          label={props.canAddProfile ? null : props.signInUnavailableHint}
-          side="top"
+          label={
+            managementHeldReason ??
+            "Change the profile name and accent color, sign in again, or remove this profile."
+          }
+          side="bottom"
           sideOffset={6}
-          align="start"
+          align="end"
         >
-          <span className="inline-flex">
-            <Button
-              type="button"
-              size="xs"
-              variant="secondary"
-              className="shrink-0"
-              disabled={!props.canAddProfile}
-              onClick={props.onSignIn}
+          <span className="flex">
+            <DropdownMenuItem
+              disabled={managementHeldReason !== null}
+              onSelect={props.onManage}
             >
-              <LogIn data-icon="inline-start" />
-              Sign in
-            </Button>
+              <Settings2 data-icon="inline-start" />
+              Manage profile
+            </DropdownMenuItem>
           </span>
         </TooltipWrapper>
-      ) : null}
-      <TooltipWrapper
-        label={
-          managementHeldReason ??
-          "Change the profile name and accent color, sign in again, or remove this profile."
-        }
-        side="bottom"
-        sideOffset={6}
-        align="end"
-      >
-        {/* Span for the same reason as Add a profile above: a disabled
-            button emits no pointer events for the tooltip to see. */}
-        <span className="inline-flex">
-          <Button
-            type="button"
-            size="xs"
-            variant="outline"
-            className="shrink-0"
-            disabled={managementHeldReason !== null}
-            onClick={props.onManage}
-          >
-            <Settings2 data-icon="inline-start" />
-            Manage profile
-          </Button>
-        </span>
-      </TooltipWrapper>
+      </ProfileRowMore>
+      <SettingsDetailsDialog
+        subject={detailsSubject}
+        title={profile.label}
+        controls={null}
+        open={detailsOpen}
+        onOpenChange={setDetailsOpen}
+        initialTab="status"
+      />
     </div>
+  );
+}
+
+/** Row actions. Dialogs opened by an item live outside this menu. */
+function ProfileRowMore(props: {
+  readonly label: string;
+  readonly children: ReactNode;
+}): ReactNode {
+  return (
+    <DropdownMenu>
+      <DropdownMenuTrigger asChild>
+        <Button
+          type="button"
+          variant="ghost"
+          size="icon-sm"
+          aria-label={`More for ${props.label}`}
+          className="shrink-0"
+        >
+          <MoreHorizontal />
+        </Button>
+      </DropdownMenuTrigger>
+      <DropdownMenuContent align="end" className="w-max">
+        {props.children}
+      </DropdownMenuContent>
+    </DropdownMenu>
   );
 }
 
@@ -612,36 +644,36 @@ function OwnLoginSummary(props: {
   const hostName = props.hostName;
   const readState = ambientLoginReadState(props.state);
 
+  const moreLabel = ownLoginLabel(providerLabel, hostName);
+
   if (readState === "signed-out") {
     return (
       <div
         data-slot="profile-summary-actions"
-        className="flex min-w-0 flex-wrap items-center justify-between gap-2"
+        className="flex min-w-0 items-start justify-between gap-2"
       >
-        <span className="min-w-0 text-ui-xs text-muted-foreground">
+        <span className="min-w-0 whitespace-normal break-words text-ui-xs text-muted-foreground">
           {providerLabel} isn&apos;t signed in
           {hostName === null ? null : ` on ${hostName}`}
         </span>
-        <TooltipWrapper
-          label={props.addProfileDisabledReason}
-          side="top"
-          sideOffset={6}
-          align="start"
-        >
-          <span className="inline-flex">
-            <Button
-              type="button"
-              size="xs"
-              variant="secondary"
-              className="shrink-0"
-              disabled={props.addProfileDisabled}
-              onClick={props.onAddProfile}
-            >
-              <LogIn data-icon="inline-start" />
-              Sign in
-            </Button>
-          </span>
-        </TooltipWrapper>
+        <ProfileRowMore label={moreLabel}>
+          <TooltipWrapper
+            label={props.addProfileDisabledReason}
+            side="top"
+            sideOffset={6}
+            align="start"
+          >
+            <span className="flex">
+              <DropdownMenuItem
+                disabled={props.addProfileDisabled}
+                onSelect={props.onAddProfile}
+              >
+                <LogIn data-icon="inline-start" />
+                Sign in
+              </DropdownMenuItem>
+            </span>
+          </TooltipWrapper>
+        </ProfileRowMore>
       </div>
     );
   }
@@ -650,9 +682,9 @@ function OwnLoginSummary(props: {
     return (
       <div
         data-slot="profile-summary-actions"
-        className="flex min-w-0 flex-wrap items-center gap-1 text-ui-xs text-muted-foreground"
+        className="flex min-w-0 items-center gap-1 text-ui-xs text-muted-foreground"
       >
-        <span className="min-w-0">
+        <span className="min-w-0 whitespace-normal break-words">
           Checking {providerLabel}&apos;s login
           {hostName === null ? null : ` on ${hostName}`}…
         </span>
@@ -664,28 +696,27 @@ function OwnLoginSummary(props: {
     return (
       <div
         data-slot="profile-summary-actions"
-        className="flex min-w-0 flex-wrap items-center gap-1 text-ui-xs text-muted-foreground"
+        className="flex min-w-0 items-start justify-between gap-2 text-ui-xs text-muted-foreground"
       >
-        <span className="min-w-0">
+        <span className="min-w-0 whitespace-normal break-words">
           Couldn&apos;t check {providerLabel}&apos;s login
           {hostName === null ? null : ` on ${hostName}`}.
         </span>
-        <Button
-          type="button"
-          variant="link"
-          size="inline-xs"
-          disabled={refreshing}
-          onClick={() => void refreshProviders()}
-        >
-          Retry
-          {refreshing ? (
-            <AgentSpinningDots
-              className={undefined}
-              testId={undefined}
-              variant={undefined}
-            />
-          ) : null}
-        </Button>
+        <ProfileRowMore label={moreLabel}>
+          <DropdownMenuItem
+            disabled={refreshing}
+            onSelect={() => void refreshProviders()}
+          >
+            Retry
+            {refreshing ? (
+              <AgentSpinningDots
+                className={undefined}
+                testId={undefined}
+                variant={undefined}
+              />
+            ) : null}
+          </DropdownMenuItem>
+        </ProfileRowMore>
       </div>
     );
   }
@@ -693,36 +724,41 @@ function OwnLoginSummary(props: {
   return (
     <div
       data-slot="profile-summary-actions"
-      className="flex min-w-0 flex-wrap items-center justify-end gap-2"
+      className="flex min-w-0 items-start justify-between gap-2"
     >
-      <div className="flex min-w-0 flex-auto flex-wrap items-center gap-x-2 gap-y-1 text-ui-xs text-muted-foreground">
-        <span className="min-w-0">works on this computer only</span>
-        <Badge variant="outline" className="h-5 shrink-0" size="xs">
-          Signed in
-        </Badge>
-      </div>
-      <TooltipWrapper
-        label={props.addProfileDisabledReason}
-        side="top"
-        sideOffset={6}
-        align="start"
-      >
-        <span className="inline-flex">
-          <Button
-            type="button"
-            size="xs"
-            variant="secondary"
-            className="shrink-0"
-            disabled={props.addProfileDisabled}
-            onClick={props.onAddProfile}
-          >
-            <LogIn data-icon="inline-start" />
-            Sign in to use everywhere
-          </Button>
-        </span>
-      </TooltipWrapper>
+      <span className="min-w-0 whitespace-normal break-words text-ui-xs text-muted-foreground">
+        works on this computer only
+      </span>
+      <ProfileRowMore label={moreLabel}>
+        <TooltipWrapper
+          label={props.addProfileDisabledReason}
+          side="top"
+          sideOffset={6}
+          align="start"
+        >
+          <span className="flex">
+            <DropdownMenuItem
+              disabled={props.addProfileDisabled}
+              onSelect={props.onAddProfile}
+            >
+              <LogIn data-icon="inline-start" />
+              Sign in to use everywhere
+            </DropdownMenuItem>
+          </span>
+        </TooltipWrapper>
+      </ProfileRowMore>
     </div>
   );
+}
+
+function profileStandingText(profile: ProviderProfile): string | null {
+  if (
+    profile.auth.status === "authenticated" ||
+    profile.auth.status === "configured"
+  ) {
+    return null;
+  }
+  return profileAuthStatusText(profile);
 }
 
 function ProfileSummary({
@@ -739,27 +775,14 @@ function ProfileSummary({
   const tier = profile.identity?.tier;
   const planText =
     tier === null || tier === undefined || tier.length === 0 ? null : tier;
+  const standing = profileStandingText(profile);
 
   return (
-    <div className="flex min-w-0 flex-auto flex-wrap items-center gap-x-2 gap-y-1 text-ui-xs text-muted-foreground">
-      {/* The email (and its reveal toggle) is the one shrinkable item; the
-          badges are whole-or-nothing chips. `flex-auto`, not `flex-1`: the
-          wrap threshold is computed from each unit's flex BASIS, and `flex-1`
-          zeroes it - a zero-basis email reserves no width during line
-          collection, so the fixed chips would stay on the line and still
-          paint over the toggle. With its content as its basis the email
-          claims its width first, whole chips move down when the line cannot
-          hold everything, and the email truncates only once it has a line
-          largely to itself. */}
-      <div className="flex min-w-0 flex-auto items-center gap-1">
-        <TooltipWrapper
-          label={emailRevealed ? email : null}
-          side="top"
-          sideOffset={undefined}
-          align="start"
-        >
-          <span className="min-w-0 truncate">{emailText}</span>
-        </TooltipWrapper>
+    <div className="flex min-w-0 flex-col gap-0.5 text-ui-xs text-muted-foreground">
+      <div className="flex min-w-0 items-start gap-1">
+        <span className="min-w-0 whitespace-normal break-words">
+          {emailText}
+        </span>
         {email !== null ? (
           <button
             type="button"
@@ -780,25 +803,12 @@ function ProfileSummary({
           </button>
         ) : null}
       </div>
-      <Badge variant="outline" className="h-5 shrink-0" size="xs">
-        {profileAuthStatusText(profile)}
-      </Badge>
-      {planText !== null ? (
-        <TooltipWrapper
-          label={planText}
-          side="top"
-          sideOffset={undefined}
-          align="end"
-        >
-          <Badge
-            variant="outline"
-            className="h-5 max-w-[min(28vw,14rem)] shrink-0"
-            size="xs"
-          >
-            <span className="truncate">{planText}</span>
-          </Badge>
-        </TooltipWrapper>
-      ) : null}
+      {planText === null ? null : (
+        <p className="min-w-0 whitespace-normal break-words">{planText}</p>
+      )}
+      {standing === null ? null : (
+        <p className="min-w-0 whitespace-normal break-words">{standing}</p>
+      )}
     </div>
   );
 }

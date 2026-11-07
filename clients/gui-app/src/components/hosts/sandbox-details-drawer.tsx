@@ -1,10 +1,15 @@
 import type { ReactNode } from "react";
 import { toast } from "sonner";
-import type { SandboxSummary } from "@traycer/protocol/host/sandbox-control";
 import {
-  sandboxSettingsSteps,
+  sandboxSupportReference,
+  type SandboxSummary,
+} from "@traycer/protocol/host/sandbox-control";
+import {
+  sandboxSettingsEvidence,
+  sandboxSettingsFailed,
   sandboxSettingsStepsLine,
 } from "@traycer/protocol/host/sandbox-settings";
+import { useSandboxRowSessionReport } from "@/hooks/sandboxes/use-sandbox-session-report";
 import { unusedSettingLabel } from "@/components/settings/details/details-unused-setting";
 import { Button } from "@/components/ui/button";
 import {
@@ -29,7 +34,11 @@ import {
   sandboxDetailsEntry,
   type SandboxDetailsExport,
 } from "@/lib/sandboxes/sandbox-details-provider";
-import { formatSandboxDate } from "@/lib/sandboxes/sandbox-row-lines";
+import {
+  formatSandboxDate,
+  sandboxSessionPills,
+  sandboxSessionsLine,
+} from "@/lib/sandboxes/sandbox-row-lines";
 import {
   SANDBOX_LIST_FAILED,
   sandboxVerbFailureLine,
@@ -175,8 +184,26 @@ function SandboxDetailsSections(props: {
               <dd className="wrap-anywhere">{row.value}</dd>
             </div>
           ))}
+          {summary.burst && summary.createdByAgentName !== null ? (
+            <>
+              <dt className="text-muted-foreground">Created by</dt>
+              <dd className="wrap-anywhere">{summary.createdByAgentName}</dd>
+              {summary.createdByTaskTitle === null ? null : (
+                <>
+                  <dt className="text-muted-foreground">For task</dt>
+                  <dd className="wrap-anywhere">
+                    {summary.createdByTaskTitle}
+                  </dd>
+                </>
+              )}
+            </>
+          ) : null}
         </dl>
       </section>
+      <p className="px-4 pb-4 text-ui-xs text-muted-foreground">
+        Today’s costs use the UTC day.
+      </p>
+      <SandboxDetailsSessions summary={summary} now={now} />
       <SandboxSettingsDeliverySection summary={summary} />
       <section
         aria-label="History"
@@ -254,6 +281,43 @@ function SandboxDetailsSections(props: {
   );
 }
 
+/** Session reports stay in Details so the list shows lifecycle facts once. */
+function SandboxDetailsSessions(props: {
+  readonly summary: SandboxSummary;
+  readonly now: number;
+}): ReactNode {
+  const { report } = useSandboxRowSessionReport(props.summary);
+  if (props.summary.state !== "awake") return null;
+  return (
+    <section
+      aria-label="Sessions"
+      className="flex flex-col gap-2 border-t border-border/60 px-4 py-4"
+    >
+      <h3 className="text-ui-sm font-medium">Sessions</h3>
+      <p className="text-ui-xs text-muted-foreground wrap-anywhere">
+        {sandboxSessionsLine(report, props.now)}
+      </p>
+      <ul className="flex min-w-0 flex-col gap-1.5 text-ui-xs">
+        {sandboxSessionPills(report).map((pill) => (
+          <li
+            key={pill.key}
+            className="flex min-w-0 items-start gap-1.5 wrap-anywhere"
+            data-testid="sandbox-details-session-pill"
+          >
+            {pill.working ? (
+              <span
+                aria-hidden
+                className="mt-1 size-1.5 shrink-0 rounded-full bg-success"
+              />
+            ) : null}
+            <span className="min-w-0">{pill.label}</span>
+          </li>
+        ))}
+      </ul>
+    </section>
+  );
+}
+
 /**
  * What the sandbox's host says of its configuration's settings: what applied
  * and what didn't, then each setting for an agent sandboxes don't run, apart.
@@ -263,9 +327,19 @@ function SandboxSettingsDeliverySection(props: {
   readonly summary: SandboxSummary;
 }): ReactNode {
   const status = useSandboxSettingsStatus(props.summary).data;
-  if (status === undefined || props.summary.state !== "awake") return null;
-  const steps = sandboxSettingsStepsLine(sandboxSettingsSteps(status.items));
-  const unused = status.items.filter((item) => item.status === "not_used");
+  if (props.summary.state !== "awake") return null;
+  const items = status?.items ?? [];
+  const steps = sandboxSettingsStepsLine(
+    sandboxSettingsEvidence(items, props.summary.guestConfigured),
+  );
+  const unused = items.filter((item) => item.status === "not_used");
+  // The Support reference row above names a reference only for a mapped
+  // failure code; a settings failure without one is SBX-0520.
+  const reference =
+    (props.summary.guestConfigured === false || sandboxSettingsFailed(items)) &&
+    sandboxSupportReference(props.summary.failureCode) === null
+      ? "SBX-0520"
+      : null;
   if (steps.length === 0 && unused.length === 0) return null;
   return (
     <section
@@ -275,6 +349,11 @@ function SandboxSettingsDeliverySection(props: {
     >
       <h3 className="text-ui-sm font-medium">Settings delivery</h3>
       {steps.length === 0 ? null : <p className="text-ui-xs">{steps}</p>}
+      {reference === null ? null : (
+        <p className="text-ui-xs text-muted-foreground">
+          {`Support reference: ${reference}`}
+        </p>
+      )}
       {unused.length === 0 ? null : (
         <ul className="flex list-none flex-col gap-1 p-0 text-ui-xs text-muted-foreground">
           {unused.map((item) => (

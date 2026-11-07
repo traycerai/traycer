@@ -64,8 +64,8 @@ export function HostDangerZone(props: {
  * end, so the row would be a destructive control with nothing behind it.
  *
  * A sandbox is never removed here: its membership follows its lifecycle, and
- * the account refuses the removal. The row keeps its label, so a search for
- * "remove" still lands on it, and says where the sandbox is removed instead.
+ * the account refuses the removal. A short instruction points to the header
+ * menu that owns sandbox destruction.
  */
 function HostRemovalRow(props: {
   readonly host: HostScopeOption;
@@ -76,15 +76,12 @@ function HostRemovalRow(props: {
   if (!host.registered) return null;
   if (host.sandbox !== null) {
     return (
-      <SettingsRow
-        row={HOST_OVERVIEW.definitions.removeFromAccount}
-        status={
-          <span data-testid="settings-remove-host-sandbox-managed">
-            Managed from its sandbox card.
-          </span>
-        }
-        control={null}
-      />
+      <p
+        className="px-5 py-4 text-ui-sm text-muted-foreground"
+        data-testid="settings-remove-host-sandbox-managed"
+      >
+        To destroy this sandbox, use More in the header.
+      </p>
     );
   }
   // Keyed by host id so a scope change REMOUNTS the row. Passing the new id

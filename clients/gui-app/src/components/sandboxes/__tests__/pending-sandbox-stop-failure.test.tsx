@@ -240,6 +240,7 @@ describe("pending chat Stop failures", () => {
     seedPendingMessage();
     renderPendingMessage();
 
+    await userEvent.click(await screen.findByRole("button", { name: "More" }));
     await userEvent.click(await screen.findByTestId("sandbox-setup-stop"));
 
     const alert = await screen.findByRole("alert");

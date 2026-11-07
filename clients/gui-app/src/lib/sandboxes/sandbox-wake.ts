@@ -257,10 +257,7 @@ function toastWakeOutcome(
       return;
     }
     case "wake-not-available":
-      toast.warning("This sandbox can't be woken from here yet", {
-        description:
-          "Waking a suspended or stopped sandbox isn't available yet.",
-      });
+      toast.warning("This sandbox can't be woken from here yet");
       return;
     case "not-wakeable":
       toast.warning("This sandbox can't be woken", {
