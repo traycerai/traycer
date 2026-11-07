@@ -9,14 +9,21 @@ import {
 } from "@testing-library/react";
 import { toast } from "sonner";
 import { HostRpcError } from "@traycer-clients/shared/host-transport/host-messenger";
+import { mockLocalHostEntry } from "@traycer-clients/shared/host-client/mock/mock-host-directory";
+import {
+  recordNegotiatedHostMethods,
+  resetNegotiatedManifests,
+} from "@traycer-clients/shared/host-transport/negotiated-manifest-registry";
 import type { HydrateChatResponse } from "@traycer/protocol/host/epic/chat-hydration";
 import type { RpcErrorCode } from "@traycer/protocol/framework/versioned-rpc-types";
 import type { UserMessageSender } from "@traycer/protocol/persistence/epic/schemas";
 import type { ChatComposerSubmitInput } from "@/components/chat/composer/chat-composer";
 import {
   mountTeamPage,
+  hostIdsOf,
   poolSource,
   requireTeamHostClient,
+  type TeamPageHarness,
 } from "@/components/settings/environment/__tests__/team-configuration-test-support";
 import {
   MESSAGE_CONTENT,
@@ -43,7 +50,11 @@ import {
 import { useChatContinuingOnItsHost } from "@/lib/chats/chat-continuing-on-host";
 import { useComposerDraftStore } from "@/stores/composer/composer-draft-store";
 
-const CHAT = { hostId: "host-chat", epicId: "epic-1", chatId: "chat-1" };
+const CHAT = {
+  hostId: mockLocalHostEntry.hostId,
+  epicId: "epic-1",
+  chatId: "chat-1",
+};
 const SENDER: UserMessageSender = { type: "user", userId: "user-1" };
 const HASH = "a".repeat(64);
 
@@ -124,6 +135,22 @@ interface Deferred {
 }
 
 const hydrates: Deferred[] = [];
+const statusMethods: string[][] = [];
+const directoryState = vi.hoisted(() => ({ version: "host-version-1" }));
+
+vi.mock("@/hooks/host/use-host-directory-entry", () => ({
+  useHostDirectoryEntry: (hostId: string | null) =>
+    hostId === "mock-local"
+      ? {
+          hostId,
+          label: "Host chat",
+          kind: "remote",
+          websocketUrl: "wss://host.example.test/socket",
+          version: directoryState.version,
+          transportDialability: "dialable",
+        }
+      : null,
+}));
 
 function refusal(code: RpcErrorCode): HostRpcError {
   return new HostRpcError({
@@ -145,8 +172,30 @@ type SendRender = RenderHookResult<EvictedChatSend, Props>;
 function mount(initial: Props): {
   readonly send: SendRender;
   readonly hold: RenderHookResult<boolean, undefined>;
+  readonly page: TeamPageHarness;
 } {
   const page = mountTeamPage(poolSource("owner"), {
+    "host.status": () => {
+      recordNegotiatedHostMethods(CHAT.hostId, statusMethods.shift() ?? []);
+      return {
+        ready: true,
+        hostVersion: directoryState.version,
+        protocolVersion: { major: 1, minor: 0 },
+        busy: false,
+        busySessionCount: 0,
+        updateProgress: null,
+        busyBreakdown: null,
+        updateOperation: null,
+        updateTransaction: null,
+        storeFormats: null,
+        install: null,
+        processMemory: null,
+        crossHostMessaging: null,
+        sessions: null,
+        updatesExternallyManaged: null,
+        previousExit: null,
+      };
+    },
     "epic.hydrateChat": () =>
       new Promise<HydrateChatResponse>((resolve, reject) => {
         hydrates.push({ resolve, reject });
@@ -166,7 +215,7 @@ function mount(initial: Props): {
   );
   // A second observer that outlives the first one's unmount.
   const hold = renderHook(() => useChatContinuingOnItsHost(CHAT));
-  return { send, hold };
+  return { send, hold, page };
 }
 
 function answer(index: number, settle: (deferred: Deferred) => void): void {
@@ -225,11 +274,14 @@ function imageRootHeld(): boolean {
 
 beforeEach(() => {
   hydrates.length = 0;
+  statusMethods.length = 0;
+  directoryState.version = "host-version-1";
   useComposerDraftStore.setState({ drafts: {} });
 });
 afterEach(() => {
   cleanup();
   toast.dismiss();
+  resetNegotiatedManifests();
   __resetComposerContentImageRootsForTests();
 });
 
@@ -415,6 +467,73 @@ describe("useEvictedChatSend", () => {
     expect(await screen.findByText(SEND_FAILED)).toBeTruthy();
     expect(draftOf(CHAT.chatId)?.content).toEqual(INPUT.content);
     expect(send.result.current.parks).toBe(false);
+  });
+
+  it("restores a parked send when the host manifest lacks hydrateChat", async () => {
+    recordNegotiatedHostMethods(CHAT.hostId, []);
+    const { send } = mount({ served: false, held: false });
+
+    park(send, INPUT);
+
+    expect(
+      await screen.findByText(
+        "This needs a newer Traycer host. Update the host to continue.",
+      ),
+    ).toBeTruthy();
+    expect(send.result.current.parked).toHaveLength(0);
+    expect(hydrates).toHaveLength(0);
+    expect(draftOf(CHAT.chatId)?.content).toEqual(INPUT.content);
+    expect(draftOf(CHAT.chatId)?.browserAnnotations).toEqual([ANNOTATION]);
+    expect(imageRootHeld()).toBe(false);
+  });
+
+  it("refreshes a known-absent manifest after host upgrade and lets a retry hydrate", async () => {
+    recordNegotiatedHostMethods(CHAT.hostId, []);
+    statusMethods.push([], ["epic.hydrateChat"]);
+    const { send, page } = mount({ served: false, held: false });
+
+    await vi.waitFor(() =>
+      expect(page.paramsOf("host.status")).toHaveLength(1),
+    );
+    expect(hostIdsOf(page, "host.status")).toEqual([CHAT.hostId]);
+
+    park(send, INPUT);
+    expect(
+      await screen.findByText(
+        "This needs a newer Traycer host. Update the host to continue.",
+      ),
+    ).toBeTruthy();
+    expect(hydrates).toHaveLength(0);
+    expect(draftOf(CHAT.chatId)?.content).toEqual(INPUT.content);
+    expect(draftOf(CHAT.chatId)?.browserAnnotations).toEqual([ANNOTATION]);
+    expect(imageRootHeld()).toBe(false);
+
+    act(() => useComposerDraftStore.getState().clearDraft(CHAT.chatId));
+    directoryState.version = "host-version-2";
+    send.rerender({ served: false, held: false });
+    await vi.waitFor(() =>
+      expect(page.paramsOf("host.status")).toHaveLength(2),
+    );
+    expect(hostIdsOf(page, "host.status")).toEqual([CHAT.hostId, CHAT.hostId]);
+
+    park(send, INPUT);
+    await vi.waitFor(() => expect(hydrates).toHaveLength(1));
+    expect(send.result.current.parked).toHaveLength(1);
+    await act(async () => {
+      answer(0, (deferred) => deferred.resolve({ outcome: "hydrated" }));
+      await Promise.resolve();
+    });
+    const [retried] = take(send);
+    expect(retried.input).toEqual(INPUT);
+    settle(send, retried, true);
+
+    expect(send.result.current.parked).toEqual([]);
+    expect(imageRootHeld()).toBe(false);
+    expect(draftOf(CHAT.chatId)?.content).toEqual({
+      type: "doc",
+      content: [{ type: "paragraph" }],
+    });
+    expect(draftOf(CHAT.chatId)?.browserAnnotations).toEqual([]);
   });
 
   it("puts every parked message back, the first in the composer, when the page goes away", async () => {
