@@ -35,7 +35,6 @@ export const RPC_ERROR_CODES = [
   "PROVIDER_DISABLED",
   "DELEGATE_REQUIRED",
   "PROFILE_BINDING_CHANGED",
-<<<<<<< HEAD
   "lane-retired",
   "binding-changed",
   "binding-version-unknown",
@@ -43,8 +42,6 @@ export const RPC_ERROR_CODES = [
   "host-left-environment",
   "profile-account-changed",
   "signed-out-by-person",
-=======
->>>>>>> 728bea75655e5937ec3d8d053613a3b0915bad38
   "SENDER_TUI_UNSUPPORTED",
   // Caller-supplied input is structurally valid but semantically rejected
   // (e.g. minting the reserved `traycer:system` agent id). Additive and
