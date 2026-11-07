@@ -39,6 +39,7 @@ export function openWebAudioPorts(
     if (suspending !== null) window.clearTimeout(suspending);
     suspending = null;
   };
+  const clockStarting = new Set<() => void>();
   return {
     output,
     stems: new ManifestStemSource(stems, output, reissueStemManifest),
@@ -54,7 +55,17 @@ export function openWebAudioPorts(
     log: new SoundtrackLogRelay(),
     captureMix: async (quality) => {
       const { openMixCapture } = await import("./mix-capture");
-      return openMixCapture(context, (node) => dim.tap(node), quality);
+      return openMixCapture(
+        context,
+        (node) => dim.tap(node),
+        (listener) => {
+          clockStarting.add(listener);
+          return () => {
+            clockStarting.delete(listener);
+          };
+        },
+        quality,
+      );
     },
     pause: () => {
       level.setAudible(false);
@@ -72,6 +83,7 @@ export function openWebAudioPorts(
     },
     resume: (onRefused) => {
       cancelSuspending();
+      for (const listener of clockStarting) listener();
       void context.resume().catch((error: unknown) => {
         appLogger.warn("[soundtrack] could not resume the audio context", {
           error: describeLogError(error),

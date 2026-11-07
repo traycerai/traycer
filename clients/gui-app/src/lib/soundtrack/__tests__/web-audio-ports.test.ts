@@ -5,12 +5,36 @@
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { appLogger } from "@/lib/logger";
+import type { ClockStarts, MixTap } from "../mix-capture";
 import { MIX_TUNING } from "../mix-tuning";
+import type { MixCapture, RecordingQuality } from "../recording";
 import type { SoundtrackPorts } from "../session";
 import { openWebAudioPorts } from "../web-audio-ports";
 
 // The wait past the fade that `web-audio-ports.ts` keeps before it suspends or
 // closes, for what is still on its way to the speakers. It is private there.
+// What `captureMix` opens a capture with, which the real one would build nodes
+// from; only the arguments are read here.
+const capture = vi.hoisted(() => ({
+  opened:
+    vi.fn<
+      (
+        context: AudioContext,
+        tap: MixTap,
+        clockStarts: ClockStarts,
+        quality: RecordingQuality,
+      ) => Promise<MixCapture>
+    >(),
+}));
+vi.mock("../mix-capture", () => ({ openMixCapture: capture.opened }));
+
+const NO_CAPTURE: MixCapture = {
+  sampleRate: 48_000,
+  audioOffsetSeconds: 0,
+  start: () => undefined,
+  stop: () => Promise.resolve({ frames: null, droppedFrames: null }),
+};
+
 const DRAIN_AFTER_FADE_SECONDS = 0.5;
 const SUSPEND_AFTER_MS =
   (MIX_TUNING.pauseFadeSeconds + DRAIN_AFTER_FADE_SECONDS) * 1000;
@@ -201,5 +225,31 @@ describe("openWebAudioPorts pause", () => {
     expect(onRefused).toHaveBeenCalledTimes(1);
     expect(warn).toHaveBeenCalledTimes(1);
     warn.mockRestore();
+  });
+});
+
+describe("openWebAudioPorts clock starts", () => {
+  it("runs a capture's listeners ahead of the context's resume, and not after it unlistens", async () => {
+    capture.opened.mockResolvedValue(NO_CAPTURE);
+    const { ports, context } = openPorts();
+    await ports.captureMix("compressed");
+    const clockStarts = capture.opened.mock.calls[0][2];
+    const listener = vi.fn<() => void>();
+    const unlisten = clockStarts(listener);
+
+    ports.pause();
+    await advance(SUSPEND_AFTER_MS);
+    ports.resume(() => undefined);
+
+    expect(listener).toHaveBeenCalledTimes(1);
+    expect(listener.mock.invocationCallOrder[0]).toBeLessThan(
+      context.resume.mock.invocationCallOrder[0],
+    );
+
+    unlisten();
+    ports.pause();
+    ports.resume(() => undefined);
+    expect(listener).toHaveBeenCalledTimes(1);
+    expect(context.resume).toHaveBeenCalledTimes(2);
   });
 });

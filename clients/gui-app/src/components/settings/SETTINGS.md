@@ -1737,10 +1737,11 @@ means the drain UI renders NOTHING - never a zero, which would offer to end
   music and a log of what the engine decided into the desktop's own folder, with
   **Stop after** and **Quality** under it. Those two persist and lock while it
   records; the recording itself never persists, so every start of the app finds
-  it off. The switch is disabled until this window holds a session, and the line
-  under it counts the audio time, then names the saved session with **Show in
-  folder**. The id still says notifications: the OS and push rows moved to
-  Alerts, and ids do not change.
+  it off. The switch is disabled until this window holds a session, which a
+  launch that kept the pause does not until Play, and the line under it counts
+  the audio time, holding through a pause, then names the saved session with
+  **Show in folder**. The id still says notifications: the OS and push rows moved
+  to Alerts, and ids do not change.
 - `Alerts` (`panels/alerts-settings-panel.tsx`, `/settings/alerts`): one
   group, **Notifications** (anchor `alerts-notifications`), where the alerts
   themselves are configured. **OS notifications** on a desktop with the

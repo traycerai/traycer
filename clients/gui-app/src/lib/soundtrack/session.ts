@@ -5,7 +5,13 @@ import type { SoundtrackOutput } from "./output";
 import { CROSSFADE_SECONDS, crossfadePlayers, TrackPlayer } from "./player";
 import type { MixCapture, RecordingQuality } from "./recording";
 import type { RandomSource } from "./scheduler";
-import type { SoundtrackLogRelay } from "./session-log";
+import type {
+  PauseCause,
+  PlayCause,
+  SkipCause,
+  SkipDirection,
+  SoundtrackLogRelay,
+} from "./session-log";
 import {
   sameMixSignals,
   type MixSignals,
@@ -251,7 +257,8 @@ export class SoundtrackSession {
     log.write({
       type: "sounding",
       t: this.ports.output.currentTime(),
-      view: signals?.view ?? null,
+      view: this.frontView,
+      paused: this.paused,
       player: inFront?.player.describe() ?? null,
     });
     if (applied !== null) {
@@ -272,6 +279,7 @@ export class SoundtrackSession {
   /** Holds everything where it is, the rest of a silence included, until `play`. */
   pause(): void {
     if (this.paused) return;
+    this.logPause("person");
     this.paused = true;
     this.resumeAttempt += 1;
     window.clearInterval(this.timer);
@@ -290,20 +298,7 @@ export class SoundtrackSession {
 
   /** Goes on from where a pause held it, with what arrived meanwhile. */
   play(): void {
-    if (!this.paused) return;
-    this.paused = false;
-    this.resumeAttempt += 1;
-    const attempt = this.resumeAttempt;
-    this.ports.resume(() => {
-      if (attempt === this.resumeAttempt) this.onResumeRefused();
-    });
-    for (const player of this.trackPlayers.values()) player.release();
-    const pending = this.pendingStart;
-    if (pending !== null && pending.timer === null) {
-      this.waitOutSilence(pending.player, pending.secondsLeft);
-    }
-    this.timer = this.startReplanning();
-    this.followSignals();
+    this.playFor("person");
   }
 
   /**
@@ -313,21 +308,28 @@ export class SoundtrackSession {
    * the run's end picked is the one to go to, and it starts at once.
    */
   next(): void {
-    this.play();
+    this.playFor("skip");
     const { inFront, pendingStart } = this;
     if (inFront === null) return;
     if (pendingStart !== null) {
+      this.logSkip("next", inFront.track, "silence");
       this.cancelPendingStart();
       startFromSilence(pendingStart.player);
       return;
     }
     const { history } = inFront;
     if (history.at + 1 < history.tracks.length) {
-      this.skipTo(inFront, { ...history, at: history.at + 1 });
+      this.skipTo(
+        inFront,
+        { ...history, at: history.at + 1 },
+        "next",
+        "history",
+      );
       return;
     }
     const track = this.anotherTrack(inFront);
-    this.skipTo(inFront, track === null ? history : visited(history, track));
+    if (track === null) this.skipTo(inFront, history, "next", "restart");
+    else this.skipTo(inFront, visited(history, track), "next", "pick");
   }
 
   /**
@@ -335,14 +337,20 @@ export class SoundtrackSession {
    * paused, or with none earlier goes back to the top of this one.
    */
   previous(): void {
-    this.play();
+    this.playFor("skip");
     const { inFront } = this;
     if (inFront === null) return;
     const { history } = inFront;
-    this.skipTo(
-      inFront,
-      history.at > 0 ? { ...history, at: history.at - 1 } : history,
-    );
+    if (history.at > 0) {
+      this.skipTo(
+        inFront,
+        { ...history, at: history.at - 1 },
+        "previous",
+        "history",
+      );
+    } else {
+      this.skipTo(inFront, history, "previous", "restart");
+    }
   }
 
   /** Stops every player and answers where each one got to. */
@@ -365,6 +373,27 @@ export class SoundtrackSession {
     }
     this.ports.close(MIX_TUNING.stopFadeSeconds);
     return positions;
+  }
+
+  private playFor(cause: PlayCause): void {
+    if (!this.paused) return;
+    this.logPlay(cause);
+    this.paused = false;
+    this.resumeAttempt += 1;
+    const attempt = this.resumeAttempt;
+    this.ports.resume(() => {
+      if (attempt !== this.resumeAttempt) return;
+      // Ahead of the end it brings, which a recording stops listening at.
+      this.logPause("refused-resume");
+      this.onResumeRefused();
+    });
+    for (const player of this.trackPlayers.values()) player.release();
+    const pending = this.pendingStart;
+    if (pending !== null && pending.timer === null) {
+      this.waitOutSilence(pending.player, pending.secondsLeft);
+    }
+    this.timer = this.startReplanning();
+    this.followSignals();
   }
 
   private startReplanning(): number {
@@ -397,9 +426,15 @@ export class SoundtrackSession {
   }
 
   /** Moves the view to the track `history` is at, from its top, crossfading. */
-  private skipTo(from: ViewPlayer, history: TrackHistory): void {
+  private skipTo(
+    from: ViewPlayer,
+    history: TrackHistory,
+    direction: SkipDirection,
+    cause: SkipCause,
+  ): void {
     this.cancelPendingStart();
     const track = history.tracks[history.at];
+    this.logSkip(direction, track, cause);
     const to: ViewPlayer = {
       view: from.view,
       track,
@@ -559,6 +594,34 @@ export class SoundtrackSession {
     settleEnabledLayers(player, plan, this.random);
     this.ports.setDimmed(plan.dim);
     this.onSounding({ view, plan });
+  }
+
+  private logPause(cause: PauseCause): void {
+    const { log, output } = this.ports;
+    if (!log.listening()) return;
+    log.write({ type: "pause", t: output.currentTime(), cause });
+  }
+
+  private logPlay(cause: PlayCause): void {
+    const { log, output } = this.ports;
+    if (!log.listening()) return;
+    log.write({ type: "play", t: output.currentTime(), cause });
+  }
+
+  private logSkip(
+    direction: SkipDirection,
+    to: VariableTrack,
+    cause: SkipCause,
+  ): void {
+    const { log, output } = this.ports;
+    if (!log.listening()) return;
+    log.write({
+      type: "skip",
+      t: output.currentTime(),
+      direction,
+      to: to.name,
+      cause,
+    });
   }
 
   /** The five values a director reads, copied one by one and nothing else. */

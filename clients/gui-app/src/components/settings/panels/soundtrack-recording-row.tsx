@@ -105,25 +105,36 @@ function SavedStatus(props: {
   );
 }
 
+/** How the music stands, which is what the line says while nothing records. */
+interface MusicSituation {
+  readonly on: boolean;
+  readonly waitingForLock: boolean;
+  readonly paused: boolean;
+  readonly sessionOpen: boolean;
+}
+
 /**
  * The live line in place of the description; undefined keeps the description.
  */
 function recordingStatus(
   recording: SoundtrackRecording,
-  musicOn: boolean,
-  waitingForLock: boolean,
+  music: MusicSituation,
 ): ReactNode {
   switch (recording.kind) {
     case "off":
-      if (!musicOn) return "Turn on Music to record.";
-      return waitingForLock
-        ? "Another window is playing the music. Record from that window."
+      if (!music.on) return "Turn on Music to record.";
+      if (music.waitingForLock) {
+        return "Another window is playing the music. Record from that window.";
+      }
+      return music.paused && !music.sessionOpen
+        ? "Music is paused. Play it to record."
         : undefined;
     case "recording": {
+      const lead = music.paused ? "Recording paused" : "Recording";
       const elapsed = clockText(recording.elapsedSeconds);
       return recording.limitSeconds === null
-        ? `Recording, ${elapsed}.`
-        : `Recording, ${elapsed} of ${clockText(recording.limitSeconds)}.`;
+        ? `${lead}, ${elapsed}.`
+        : `${lead}, ${elapsed} of ${clockText(recording.limitSeconds)}.`;
     }
     case "saving":
       return "Saving…";
@@ -162,6 +173,7 @@ function Choice(props: {
  */
 export function SoundtrackRecordingRow(): ReactNode {
   const musicOn = useSettingsStore((state) => state.soundtrackEnabled);
+  const paused = useSettingsStore((state) => state.soundtrackPaused);
   const limit = useSettingsStore((state) => state.soundtrackRecordingLimit);
   const setLimit = useSettingsStore(
     (state) => state.setSoundtrackRecordingLimit,
@@ -181,7 +193,12 @@ export function SoundtrackRecordingRow(): ReactNode {
   return (
     <SettingsRow
       row={ROWS.soundtrackRecording}
-      status={recordingStatus(recording, musicOn, waitingForLock)}
+      status={recordingStatus(recording, {
+        on: musicOn,
+        waitingForLock,
+        paused,
+        sessionOpen,
+      })}
       control={
         <Switch
           checked={recording.kind === "recording"}

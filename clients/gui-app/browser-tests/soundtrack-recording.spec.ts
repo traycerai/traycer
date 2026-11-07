@@ -25,6 +25,12 @@ interface RecordRequest {
   } | null;
   readonly stallAfterStartMs: number | null;
   readonly failSliceRead: number | null;
+  readonly pause: {
+    readonly afterSeconds: number;
+    readonly forSeconds: number;
+  } | null;
+  readonly startHeldForSeconds: number | null;
+  readonly stop: "playing" | "paused" | "refused-resume" | "context-resumed";
 }
 
 interface Recorded {
@@ -41,6 +47,13 @@ interface Recorded {
   readonly decodedSeconds: number;
   readonly onsetOffsetsMs: readonly number[];
   readonly wavFrames: number | null;
+  readonly onsetStarts: readonly number[];
+  readonly logBytes: number;
+  readonly closes: number;
+  readonly wallSeconds: number;
+  readonly stopTookMs: number | null;
+  readonly resumeOrder: readonly ("recorder" | "context")[];
+  readonly maxPacketGapMs: number | null;
   readonly sliceBytesBeforeFailure: number | null;
   readonly slicesReadAfterFailure: number | null;
 }
@@ -48,6 +61,8 @@ interface Recorded {
 // About four seconds of tone fits the 20 s per-test budget.
 const RECORD_SECONDS = 4;
 const EXPECTED_ONSETS = 3;
+// Stopped in the pause, 1.5 s in: the tones at 0.5 s and 1.5 s.
+const STOPPED_ONSETS = 2;
 const DURATION_TOLERANCE_SECONDS = 0.1;
 const LOSSLESS_ONSET_TOLERANCE_MS = 0.1;
 const COMPRESSED_ONSET_SPREAD_MS = 2;
@@ -57,11 +72,36 @@ const COMPRESSED_RESIDUAL_MAX_MS = 11;
 const START_STALL_MS = 250;
 // The second, so the file still holds the first slice and its WebM header.
 const FAILED_SLICE = 2;
+// A pause in the middle: 1.5 s of music, 2 s held, then the rest of 4.5 s. The
+// context stays suspended for about what is left of the 2 s once the fade and
+// the drain are over.
+const PAUSE = { afterSeconds: 1.5, forSeconds: 2 };
+const PAUSED_RECORD_SECONDS = 4.5;
+const SUSPENDED_MIN_SECONDS = 1;
+// A packet is 60 ms; a hole as long as a pause is far past this.
+const PACKET_GAP_MAX_MS = 150;
+// Well under the capture's own 2 s grace for a stop it never hears back from.
+const STOP_WITHIN_MS = 1500;
+const HELD_SECONDS = 1;
 
 test.beforeEach(async ({ page }) => {
   await page.goto(fixture("soundtrack-recording"));
   await page.waitForFunction("window.__soundtrackRecordingProbe !== undefined");
 });
+
+/** A plain recording: the music plays throughout, nothing is held or stalled. */
+function plain(quality: Quality): RecordRequest {
+  return {
+    quality,
+    seconds: RECORD_SECONDS,
+    busy: null,
+    stallAfterStartMs: null,
+    failSliceRead: null,
+    pause: null,
+    startHeldForSeconds: null,
+    stop: "playing",
+  };
+}
 
 function record(page: Page, request: RecordRequest): Promise<Recorded> {
   return page.evaluate<Recorded>(
@@ -75,7 +115,11 @@ const AUDIO_OFFSET_SECONDS: Record<Quality, number> = {
   compressed: 0.0065,
 };
 
-function expectSavedAndDecoded(recorded: Recorded, quality: Quality): void {
+function expectSavedAndDecoded(
+  recorded: Recorded,
+  quality: Quality,
+  minOnsets: number,
+): void {
   const { outcome } = recorded;
   if (outcome.kind !== "saved") throw new Error(`Not saved: ${outcome.kind}`);
   expect(recorded.audioBytes).toBeGreaterThan(0);
@@ -89,9 +133,7 @@ function expectSavedAndDecoded(recorded: Recorded, quality: Quality): void {
     audioOffsetSeconds: AUDIO_OFFSET_SECONDS[quality],
   });
   expect(recorded.logLines.at(-1)).toMatchObject({ type: "recording-end" });
-  expect(recorded.onsetOffsetsMs.length).toBeGreaterThanOrEqual(
-    EXPECTED_ONSETS,
-  );
+  expect(recorded.onsetOffsetsMs.length).toBeGreaterThanOrEqual(minOnsets);
 }
 
 /** Each onset's distance from where the header says its log time falls. */
@@ -112,15 +154,9 @@ function expectLosslessTiming(recorded: Recorded): void {
 test("a lossless recording decodes, matches its length in frames, and lines up with its log", async ({
   page,
 }) => {
-  const recorded = await record(page, {
-    quality: "lossless",
-    seconds: RECORD_SECONDS,
-    busy: null,
-    stallAfterStartMs: null,
-    failSliceRead: null,
-  });
+  const recorded = await record(page, plain("lossless"));
 
-  expectSavedAndDecoded(recorded, "lossless");
+  expectSavedAndDecoded(recorded, "lossless", EXPECTED_ONSETS);
   expectLosslessTiming(recorded);
 });
 
@@ -128,14 +164,11 @@ test("a lossless recording keeps its frames and its timing while the page is bus
   page,
 }) => {
   const recorded = await record(page, {
-    quality: "lossless",
-    seconds: RECORD_SECONDS,
+    ...plain("lossless"),
     busy: { everyMs: 300, forMs: 250 },
-    stallAfterStartMs: null,
-    failSliceRead: null,
   });
 
-  expectSavedAndDecoded(recorded, "lossless");
+  expectSavedAndDecoded(recorded, "lossless", EXPECTED_ONSETS);
   expectLosslessTiming(recorded);
 });
 
@@ -154,15 +187,9 @@ function expectCompressedTiming(recorded: Recorded): void {
 test("a compressed recording decodes and its tones sit at one steady offset from the log", async ({
   page,
 }) => {
-  const recorded = await record(page, {
-    quality: "compressed",
-    seconds: RECORD_SECONDS,
-    busy: null,
-    stallAfterStartMs: null,
-    failSliceRead: null,
-  });
+  const recorded = await record(page, plain("compressed"));
 
-  expectSavedAndDecoded(recorded, "compressed");
+  expectSavedAndDecoded(recorded, "compressed", EXPECTED_ONSETS);
   expectCompressedTiming(recorded);
 });
 
@@ -170,14 +197,11 @@ test("a compressed recording keeps that offset when the page stalls as the recor
   page,
 }) => {
   const recorded = await record(page, {
-    quality: "compressed",
-    seconds: RECORD_SECONDS,
-    busy: null,
+    ...plain("compressed"),
     stallAfterStartMs: START_STALL_MS,
-    failSliceRead: null,
   });
 
-  expectSavedAndDecoded(recorded, "compressed");
+  expectSavedAndDecoded(recorded, "compressed", EXPECTED_ONSETS);
   expectCompressedTiming(recorded);
 });
 
@@ -185,10 +209,7 @@ test("a compressed recording whose slice cannot be read stops as failed, and kee
   page,
 }) => {
   const recorded = await record(page, {
-    quality: "compressed",
-    seconds: RECORD_SECONDS,
-    busy: null,
-    stallAfterStartMs: null,
+    ...plain("compressed"),
     failSliceRead: FAILED_SLICE,
   });
 
@@ -197,4 +218,165 @@ test("a compressed recording whose slice cannot be read stops as failed, and kee
   expect(recorded.slicesReadAfterFailure).toBeGreaterThan(0);
   // None of it reached the file: only the slices before the failed one did.
   expect(recorded.audioBytes).toBe(recorded.sliceBytesBeforeFailure);
+});
+
+const QUALITIES: readonly Quality[] = ["lossless", "compressed"];
+
+function paused(quality: Quality, stop: RecordRequest["stop"]): RecordRequest {
+  return {
+    ...plain(quality),
+    seconds: PAUSED_RECORD_SECONDS,
+    pause: PAUSE,
+    stop,
+  };
+}
+
+function lineOfType(
+  recorded: Recorded,
+  type: string,
+): Record<string, unknown> | undefined {
+  return recorded.logLines.find((line) => line.type === type);
+}
+
+function expectTiming(recorded: Recorded, quality: Quality): void {
+  if (quality === "lossless") expectLosslessTiming(recorded);
+  else expectCompressedTiming(recorded);
+}
+
+/** The recording's duration is shorter than the wall time by the suspension. */
+function expectShortBySuspension(recorded: Recorded): void {
+  if (recorded.outcome.kind !== "saved") throw new Error("Not saved");
+  const shortBy = recorded.wallSeconds - recorded.outcome.durationSeconds;
+  expect(shortBy).toBeGreaterThan(SUSPENDED_MIN_SECONDS);
+  expect(shortBy).toBeLessThan(PAUSE.forSeconds);
+}
+
+test("a lossless recording with a pause in the middle keeps its frames and its timing after the pause, and is shorter than the wall time by the suspension", async ({
+  page,
+}) => {
+  const recorded = await record(page, paused("lossless", "playing"));
+
+  expectSavedAndDecoded(recorded, "lossless", EXPECTED_ONSETS);
+  expectLosslessTiming(recorded);
+  const pauseAt = lineOfType(recorded, "pause")?.t;
+  if (typeof pauseAt !== "number") throw new Error("No pause in the log");
+  expect(
+    recorded.logLines
+      .map((line) => line.type)
+      .filter((type) => type === "pause" || type === "play"),
+  ).toEqual(["pause", "play"]);
+  expect(
+    recorded.onsetStarts.filter((start) => start > pauseAt).length,
+  ).toBeGreaterThanOrEqual(2);
+  expect(recorded.logLines.at(-1)?.frames).not.toBeNull();
+  expectShortBySuspension(recorded);
+});
+
+test("a compressed recording with a pause in the middle keeps its offset before and after it, has no hole in its packets, and starts its recorder ahead of the clock", async ({
+  page,
+}) => {
+  const recorded = await record(page, paused("compressed", "playing"));
+
+  expectSavedAndDecoded(recorded, "compressed", EXPECTED_ONSETS);
+  expectCompressedTiming(recorded);
+  const pauseAt = lineOfType(recorded, "pause")?.t;
+  if (typeof pauseAt !== "number") throw new Error("No pause in the log");
+  expect(
+    recorded.onsetStarts.filter((start) => start < pauseAt).length,
+  ).toBeGreaterThanOrEqual(1);
+  expect(
+    recorded.onsetStarts.filter((start) => start > pauseAt).length,
+  ).toBeGreaterThanOrEqual(2);
+  expect(recorded.maxPacketGapMs).toBeLessThan(PACKET_GAP_MAX_MS);
+  expectShortBySuspension(recorded);
+  // Ahead of the clock: a recorder resumed after it drops what the clock made
+  // in between.
+  expect(recorded.resumeOrder.slice(0, 2)).toEqual(["recorder", "context"]);
+});
+
+for (const quality of QUALITIES) {
+  test(`a ${quality} recording started during a pause decodes, with its tones at the same offset from the log`, async ({
+    page,
+  }) => {
+    const recorded = await record(page, {
+      ...plain(quality),
+      // 3 s of music after Play holds the tones at 0.5, 1.5 and 2.5 s; the
+      // extra half second keeps the last from being cut by the stop.
+      seconds: PAUSED_RECORD_SECONDS - PAUSE.afterSeconds + 0.5,
+      startHeldForSeconds: HELD_SECONDS,
+    });
+
+    expectSavedAndDecoded(recorded, quality, EXPECTED_ONSETS);
+    expectTiming(recorded, quality);
+    // Time starts at the clock the context stopped at, not one read when it ran.
+    expect(lineOfType(recorded, "play")).toMatchObject({ t: 0 });
+  });
+
+  test(`a ${quality} recording started during a pause and stopped before Play leaves nothing in either file`, async ({
+    page,
+  }) => {
+    const recorded = await record(page, {
+      ...plain(quality),
+      seconds: 0.5,
+      startHeldForSeconds: HELD_SECONDS,
+      stop: "paused",
+    });
+
+    expect(recorded.outcome).toEqual({ kind: "empty" });
+    expect(recorded.audioBytes).toBe(0);
+    expect(recorded.logBytes).toBe(0);
+    expect(recorded.closes).toBe(1);
+  });
+
+  test(`a ${quality} recording stopped during a pause is saved at once, decodes, and has the duration of what played`, async ({
+    page,
+  }) => {
+    const recorded = await record(page, paused(quality, "paused"));
+
+    expectSavedAndDecoded(recorded, quality, STOPPED_ONSETS);
+    expect(recorded.stopTookMs).toBeLessThan(STOP_WITHIN_MS);
+    if (quality === "lossless") {
+      expect(recorded.logLines.at(-1)?.frames).not.toBeNull();
+    }
+    if (recorded.outcome.kind !== "saved") throw new Error("Not saved");
+    // 1.5 s of music, then the fade and drain of the pause: not the 2 s held.
+    expect(recorded.outcome.durationSeconds).toBeGreaterThan(
+      PAUSE.afterSeconds,
+    );
+    expect(recorded.outcome.durationSeconds).toBeLessThan(
+      PAUSE.afterSeconds + PAUSE.forSeconds,
+    );
+  });
+
+  test(`a ${quality} recording whose Play the device refuses ends as music off with its files closed once`, async ({
+    page,
+  }) => {
+    const recorded = await record(page, paused(quality, "refused-resume"));
+
+    expect(recorded.outcome).toMatchObject({
+      kind: "saved",
+      reason: "music-off",
+    });
+    expect(recorded.closes).toBe(1);
+    expect(
+      recorded.logLines.filter((line) => line.type === "recording-end"),
+    ).toHaveLength(1);
+    expect(recorded.logLines.slice(-2)).toEqual([
+      expect.objectContaining({ type: "pause", cause: "refused-resume" }),
+      expect.objectContaining({ type: "recording-end" }),
+    ]);
+  });
+}
+
+test("a compressed recording goes on when the context is resumed behind the session, so that its length is the clock's", async ({
+  page,
+}) => {
+  const recorded = await record(page, paused("compressed", "context-resumed"));
+
+  expectSavedAndDecoded(recorded, "compressed", STOPPED_ONSETS);
+  if (recorded.outcome.kind !== "saved") throw new Error("Not saved");
+  // The clock ran on for the second after the pause's fade and drain.
+  expect(recorded.outcome.durationSeconds).toBeGreaterThan(
+    PAUSE.afterSeconds + 1,
+  );
 });

@@ -246,6 +246,7 @@ interface StoreViewState {
   readonly disable: () => void;
   readonly startRecording: (choices: RecordingChoices) => void;
   readonly setDirector: (director: MixDirectorId) => void;
+  readonly setPaused: (paused: boolean) => void;
 }
 
 interface StoreView {
@@ -262,6 +263,10 @@ interface Harness {
   readonly channel: FakeChannel;
   readonly close: Mock<(afterSeconds: number) => void>;
   readonly captureMix: Mock<SoundtrackPorts["captureMix"]>;
+  /** While `refuse` is set, a Play's resume is refused, the clock left stopped. */
+  readonly resumes: { refuse: boolean };
+  /** Starts a recording, and waits for its capture to start, with no first frame. */
+  readonly startHeld: () => Promise<void>;
   /** Starts a recording and takes its first frame at the clock now. */
   readonly record: () => Promise<void>;
   /** The wall clock when the first frame was handed over, as an ISO string. */
@@ -280,6 +285,7 @@ function harness(
   const channel = new FakeChannel();
   let firstFrameIso = "";
   let firstFrameClock = 0;
+  const resumes = { refuse: false };
   const close = vi.fn<(afterSeconds: number) => void>();
   const captureMix = vi.fn<SoundtrackPorts["captureMix"]>(() =>
     Promise.resolve(capture),
@@ -293,8 +299,13 @@ function harness(
     close,
     log: new SoundtrackLogRelay(),
     captureMix,
-    pause: () => undefined,
-    resume: () => undefined,
+    pause: () => {
+      output.freeze();
+    },
+    resume: (onRefused) => {
+      if (resumes.refuse) void Promise.resolve().then(onRefused);
+      else output.thaw();
+    },
   };
   const store = createSoundtrackStore({
     readManifest: () => manifest,
@@ -317,8 +328,15 @@ function harness(
     channel,
     close,
     captureMix,
+    resumes,
     firstFrameIso: () => firstFrameIso,
     firstFrameClock: () => firstFrameClock,
+    startHeld: async () => {
+      store.getState().startRecording({ limitSeconds, quality });
+      await vi.waitFor(() => {
+        expect(capture.handlers).not.toBeNull();
+      });
+    },
     record: async () => {
       store.getState().startRecording({ limitSeconds, quality });
       await vi.waitFor(() => {
@@ -663,9 +681,13 @@ describe("session recorder: the track set's digest", () => {
 });
 
 describe("session recorder: opening and the log's other events", () => {
-  it("writes a WAV placeholder with the streaming size in both fields as its first audio, so a crash leaves a file that opens", async () => {
+  it("writes the WAV placeholder, with the streaming size in both fields, with the first frame and not before, so a crash leaves a file that opens", async () => {
     const h = harness(100, "lossless", MANIFEST);
-    await h.record();
+    await h.startHeld();
+    await advance(3);
+    expect(h.channel.appends).toEqual([]);
+
+    h.capture.firstFrame(h.output.currentTime());
 
     const [first] = h.channel.appends.filter((call) => call.file === "audio");
     const view = new DataView(first.bytes.buffer, first.bytes.byteOffset);
@@ -936,6 +958,80 @@ describe("session recorder: a failure kept through the stop", () => {
     expect(h.store.getState().recording).toMatchObject({
       kind: "saved",
       problem,
+    });
+  });
+});
+
+describe("session recorder: started during a pause", () => {
+  it("leaves nothing on the disk when it is stopped before the first frame: back to off, no append, one close with no header", async () => {
+    const h = harness(100, "lossless", MANIFEST);
+    h.store.getState().setPaused(true);
+
+    await h.startHeld();
+    h.capture.chunk(400);
+    await advance(3);
+    h.store.getState().stopRecording();
+    await advance(1);
+
+    expect(h.channel.appends).toEqual([]);
+    expect(h.channel.closes).toEqual([
+      { recordingId: RECORDING_ID, audioHeader: null },
+    ]);
+    expect(h.store.getState().recording).toEqual({ kind: "off" });
+  });
+
+  it("keeps what a compressed capture delivered before the first frame, and sends it first when the frame comes", async () => {
+    const h = harness(100, "compressed", MANIFEST);
+    h.store.getState().setPaused(true);
+    await h.startHeld();
+
+    h.capture.chunk(400);
+    await advance(3);
+    expect(h.channel.appends).toEqual([]);
+    h.store.getState().setPaused(false);
+    h.capture.firstFrame(h.output.currentTime());
+    await advance(1);
+
+    const audio = h.channel.appends.filter((call) => call.file === "audio");
+    expect(audio.map((call) => call.bytes.length)).toEqual([400]);
+    expect(h.channel.logLines()[0]).toMatchObject({ type: "header" });
+    h.store.getState().stopRecording();
+    await advance(1);
+  });
+});
+
+describe("session recorder: a Play the device refuses", () => {
+  it("stops as music off and finishes both files once, with the refused pause in the log, and the recording saved", async () => {
+    const h = harness(100, "compressed", MANIFEST);
+    await h.record();
+    h.capture.chunk(400);
+    await advance(1);
+    h.store.getState().setPaused(true);
+    await advance(1);
+    h.resumes.refuse = true;
+
+    h.store.getState().setPaused(false);
+    await advance(1);
+
+    expect(h.channel.closes).toHaveLength(1);
+    const lines = h.channel.logLines();
+    expect(lines.filter((line) => line.type === "recording-end")).toEqual([
+      expect.objectContaining({ reason: "music-off" }),
+    ]);
+    const marks = lines.flatMap((line) =>
+      line.type === "pause" || line.type === "play"
+        ? [`${String(line.type)}:${String(line.cause)}`]
+        : [],
+    );
+    expect(marks).toEqual([
+      "pause:person",
+      "play:person",
+      "pause:refused-resume",
+    ]);
+    expect(lines.at(-1)).toMatchObject({ type: "recording-end" });
+    expect(h.store.getState().recording).toMatchObject({
+      kind: "saved",
+      problem: null,
     });
   });
 });

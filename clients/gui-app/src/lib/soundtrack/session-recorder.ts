@@ -131,7 +131,8 @@ async function describeTrackSet(
  *
  * Log times count from the first audio frame on the audio clock, so a
  * context the app suspends neither runs the limit down nor moves the log
- * against the audio.
+ * against the audio. A recording started during a pause simply has no first
+ * frame until the music plays.
  */
 export class SessionRecorder {
   private readonly options: SessionRecorderOptions;
@@ -205,9 +206,6 @@ export class SessionRecorder {
     if (asked !== null) {
       this.stop(asked);
       return;
-    }
-    if (quality === "lossless") {
-      this.send("audio", wavHeader(capture.sampleRate, CHANNELS, null), 0);
     }
     ports.log.listen(this.onEvent);
     capture.start({
@@ -327,6 +325,13 @@ export class SessionRecorder {
     if (opened === null || trackSet === null) return;
     this.firstFrameAt = clockSeconds;
     const { director, quality } = this.options;
+    if (quality === "lossless") {
+      this.send(
+        "audio",
+        wavHeader(opened.capture.sampleRate, CHANNELS, null),
+        0,
+      );
+    }
     this.sendLines([
       JSON.stringify({
         type: "header",
@@ -353,15 +358,20 @@ export class SessionRecorder {
     );
   }
 
-  /** What has been captured and logged since the last flush, to disk. */
+  /**
+   * What has been captured and logged since the last flush, to disk. Until the
+   * first frame, which a recording started during a pause waits for, a log time
+   * has nothing to count from and nothing need reach the disk: one stopped
+   * before it leaves no files.
+   */
   private flush(): void {
+    if (this.firstFrameAt === null) return;
     if (this.audio.length > 0) {
       const bytes = concat(this.audio);
       this.audio = [];
       this.send("audio", bytes, bytes.length);
     }
-    // Until the first frame, a log time would have nothing to count from.
-    if (this.firstFrameAt !== null && this.events.length > 0) {
+    if (this.events.length > 0) {
       const lines = this.events.map((event) => this.logLine(event));
       this.events = [];
       this.sendLines(lines);
@@ -465,7 +475,7 @@ export class SessionRecorder {
       ? this.sentDataBytes
       : this.writtenDataBytes;
     const header =
-      quality === "lossless"
+      quality === "lossless" && this.firstFrameAt !== null
         ? wavHeader(opened.capture.sampleRate, CHANNELS, dataBytes)
         : null;
     const reason = this.stopReason ?? "failed";

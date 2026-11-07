@@ -28,6 +28,33 @@ export type TrackGainCause = "start" | "fade-out" | "stop";
  */
 export type RunEnding = "outro" | "rang-out" | "cap";
 
+/** Why the music stopped where it was. */
+export type PauseCause =
+  /** The person's Pause, in this window or another. */
+  | "person"
+  /** The device would not start for a Play, so the music never went on. */
+  | "refused-resume";
+
+/** Why the music went on from a pause. */
+export type PlayCause =
+  /** The person's Play, in this window or another. */
+  | "person"
+  /** A Next or Previous, which plays. */
+  | "skip";
+
+export type SkipDirection = "next" | "previous";
+
+/** Why a Next or Previous went where it did. */
+export type SkipCause =
+  /** Along the tracks the view has been on. */
+  | "history"
+  /** On to a track picked from the view's pool. */
+  | "pick"
+  /** Nowhere else to go, so back to the top of the track. */
+  | "restart"
+  /** Out of the silence, to the track the run's end picked. */
+  | "silence";
+
 /** A sample sounding, or due to, as a snapshot lists it. */
 interface SoundingSample {
   readonly layer: string;
@@ -160,7 +187,28 @@ export type SoundtrackLogEvent =
       readonly type: "sounding";
       readonly t: number;
       readonly view: SoundtrackView | null;
+      /** Whether the session is held, so that no audio follows until a Play. */
+      readonly paused: boolean;
       readonly player: PlayerSnapshot | null;
+    }
+  | {
+      readonly type: "pause";
+      readonly t: number;
+      readonly cause: PauseCause;
+    }
+  | {
+      readonly type: "play";
+      readonly t: number;
+      readonly cause: PlayCause;
+    }
+  | {
+      /** A Next or Previous, ahead of the moves it makes. */
+      readonly type: "skip";
+      readonly t: number;
+      readonly direction: SkipDirection;
+      /** The track it goes to, which a restart leaves the same. */
+      readonly to: string;
+      readonly cause: SkipCause;
     };
 
 /** The keys whose values are audio clock times. */

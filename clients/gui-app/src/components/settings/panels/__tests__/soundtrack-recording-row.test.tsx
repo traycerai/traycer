@@ -4,7 +4,7 @@
  * device whose capture never answers and a fake desktop save channel.
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { cleanup, render, screen } from "@testing-library/react";
+import { act, cleanup, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import type { ReactNode } from "react";
@@ -51,8 +51,10 @@ const DEV_MANIFEST = {
   },
 };
 
-// Never answers, so a recording stays as started.
-const open = vi.fn<(quality: string) => Promise<never>>();
+type Opened = { readonly kind: "refused" };
+// Never answers until the test ends, so a recording stays as started.
+const unanswered: ((answer: Opened) => void)[] = [];
+const open = vi.fn<(quality: string) => Promise<Opened>>();
 const reveal = vi.fn<(recordingId: string) => Promise<boolean>>();
 const channel = {
   open,
@@ -64,11 +66,16 @@ const channel = {
 
 beforeEach(() => {
   resetFakePorts();
-  open.mockReset().mockReturnValue(new Promise<never>(() => undefined));
+  open.mockReset().mockImplementation(
+    () =>
+      new Promise<Opened>((resolve) => {
+        unanswered.push(resolve);
+      }),
+  );
   reveal.mockReset().mockResolvedValue(true);
   window.localStorage.clear();
   useSettingsStore.setState(useSettingsStore.getInitialState(), true);
-  useSoundtrackStore.setState({ recording: { kind: "off" } });
+  useSoundtrackStore.setState({ recording: { kind: "off" }, paused: false });
   vi.stubEnv("MODE", "development");
   vi.stubGlobal(
     "fetch",
@@ -77,10 +84,15 @@ beforeEach(() => {
   vi.stubGlobal("runnerHost", { soundtrackRecording: channel });
 });
 
-afterEach(() => {
+afterEach(async () => {
   cleanup();
   Reflect.deleteProperty(navigator, "locks");
   useSoundtrackStore.getState().disable();
+  // A recording still opening would stay the store's, and block the next one.
+  for (const answer of unanswered.splice(0)) answer({ kind: "refused" });
+  await vi.waitFor(() => {
+    expect(useSoundtrackStore.getState().recording.kind).not.toBe("saving");
+  });
   vi.unstubAllEnvs();
   vi.unstubAllGlobals();
 });
@@ -228,6 +240,84 @@ describe("the Record session row", () => {
         "Another window is playing the music. Record from that window.",
       ),
     ).toBeNull();
+  });
+
+  it("says Music is paused, with the switch held, when it launches paused with no session", async () => {
+    useSettingsStore.setState({ soundtrackEnabled: true });
+    useSettingsStore.setState({ soundtrackPaused: true });
+    renderSection();
+
+    expect(
+      await screen.findByText("Music is paused. Play it to record."),
+    ).toBeTruthy();
+    expect(disabledOf("Record session", "switch")).toBe(true);
+  });
+
+  it("shows the row's description, not the paused line, and offers the switch when a session is open and paused", async () => {
+    renderSection();
+    await openSession();
+
+    act(() => {
+      useSettingsStore.setState({ soundtrackPaused: true });
+      useSoundtrackStore.getState().setPaused(true);
+    });
+
+    expect(
+      screen.getByText(
+        "Saves the music, and why it changed, to this computer.",
+      ),
+    ).toBeTruthy();
+    expect(
+      screen.queryByText("Music is paused. Play it to record."),
+    ).toBeNull();
+    expect(disabledOf("Record session", "switch")).toBe(false);
+  });
+
+  it("says another window is playing, not that Music is paused, when both are so", async () => {
+    Object.defineProperty(navigator, "locks", {
+      configurable: true,
+      value: new FakeLockManager(),
+    });
+    // Held for the rest of the test: the window never gets its turn.
+    holdSoundtrackSessionLock();
+    useSettingsStore.setState({ soundtrackEnabled: true });
+    useSettingsStore.setState({ soundtrackPaused: true });
+    useSoundtrackStore.getState().enable();
+    renderSection();
+
+    expect(
+      await screen.findByText(
+        "Another window is playing the music. Record from that window.",
+      ),
+    ).toBeTruthy();
+    expect(
+      screen.queryByText("Music is paused. Play it to record."),
+    ).toBeNull();
+  });
+
+  it("starts a recording on a paused session, reads Recording paused, and reads Recording again after Play", async () => {
+    renderSection();
+    await openSession();
+    await userEvent.click(screen.getByRole("combobox", { name: "Stop after" }));
+    await userEvent.click(screen.getByRole("option", { name: "30 minutes" }));
+    act(() => {
+      useSettingsStore.setState({ soundtrackPaused: true });
+      useSoundtrackStore.getState().setPaused(true);
+    });
+    expect(disabledOf("Record session", "switch")).toBe(false);
+
+    await userEvent.click(
+      screen.getByRole("switch", { name: "Record session" }),
+    );
+
+    expect(
+      await screen.findByText("Recording paused, 0:00 of 30:00."),
+    ).toBeTruthy();
+    act(() => {
+      useSettingsStore.setState({ soundtrackPaused: false });
+      useSoundtrackStore.getState().setPaused(false);
+    });
+    expect(screen.getByText("Recording, 0:00 of 30:00.")).toBeTruthy();
   });
 
   it("rehydrates a quality and a limit the app does not know to the defaults", async () => {
