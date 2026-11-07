@@ -179,7 +179,7 @@ function AgentMemoriesRow(): ReactNode {
     // must re-read even inside the normal cache freshness window.
     invalidateMethods: [],
     captureContext: () => entryHash,
-    onSuccess: (_data, _variables, _hostId, capturedEntryHash) => {
+    onSettled: (_hostId, capturedEntryHash) => {
       void queryClient.invalidateQueries({
         predicate: (entry) => entry.queryHash === capturedEntryHash,
         refetchType: "none",
@@ -231,11 +231,23 @@ function AgentMemoriesRow(): ReactNode {
     let latestRead = read;
     let queryRead = query.data;
     function cacheRead(): void {
-      // These are host-confirmed snapshots, not optimistic switch values.
-      // Share them with later mounts while retaining the terminal status until
-      // a subsequent real query replaces the published snapshot.
+      const capturedEntry = {
+        predicate: (cached: { queryHash: string }) =>
+          cached.queryHash === entryHash,
+      };
+      // A real query that completed after submission owns the canonical value.
+      // Do not replace a later writer or a newly served environment with this
+      // write's terminal evidence.
+      if (
+        queryClient.getQueryCache().findAll(capturedEntry).at(0)?.state.data !==
+        queryRead
+      )
+        return;
+      // Fence a GET started before confirmation: cancellation happens
+      // synchronously, so its eventual response cannot overwrite this snapshot.
+      void queryClient.cancelQueries(capturedEntry);
       const entries = queryClient.setQueriesData<ConfigAgentMemoriesResponse>(
-        { predicate: (cached) => cached.queryHash === entryHash },
+        capturedEntry,
         latestRead,
       );
       queryRead = entries.at(0)?.[1] ?? queryRead;

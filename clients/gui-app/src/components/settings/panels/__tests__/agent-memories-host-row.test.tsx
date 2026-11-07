@@ -115,7 +115,9 @@ const script: {
   status: (() => Promise<EnvironmentStatusResponseV11>) | null;
   set: (request: {
     readonly enabled: boolean;
-  }) => ConfigAgentMemoriesSetResponse;
+  }) =>
+    | ConfigAgentMemoriesSetResponse
+    | Promise<ConfigAgentMemoriesSetResponse>;
 } = {
   reads: [read(false, 5)],
   get: null,
@@ -270,6 +272,158 @@ describe("Agent memories ▸ the host row's write", () => {
     );
     expect(harness.paramsOf("config.agentMemories.get").length).toBe(
       waitingReads + 1,
+    );
+  });
+
+  it.each([
+    { name: "newer revision", next: read(false, 7) },
+    { name: "new environment", next: readIn(OTHER_ENV, false, 7) },
+  ])(
+    "keeps a GET received before a held setter reply: $name",
+    async ({ next }) => {
+      let release: (value: ConfigAgentMemoriesSetResponse) => void = () => {
+        throw new Error("setter was not started");
+      };
+      script.set = () =>
+        new Promise((resolve) => {
+          release = resolve;
+        });
+      const harness = mountTeamPage({ kind: "host" }, handlers());
+      harness.queryClient.setDefaultOptions({
+        queries: { retry: false, staleTime: 60_000, gcTime: 300_000 },
+        mutations: { retry: false },
+      });
+      const view = render(<AgentMemoriesSettingsPanel />, {
+        wrapper: harness.Wrapper,
+      });
+      await flipOn();
+      await waitFor(() =>
+        expect(harness.paramsOf("config.agentMemories.set")).toHaveLength(1),
+      );
+      script.reads = [next];
+      await act(async () => {
+        await harness.queryClient.refetchQueries({ type: "active" });
+      });
+      act(() => {
+        release({
+          enabled: true,
+          state: "applied",
+          revision: 6,
+          environmentId: ENV,
+          uploadId: null,
+        });
+      });
+      await waitFor(() =>
+        expect(
+          screen
+            .getByRole("switch", { name: "Use Traycer memories for agents" })
+            .getAttribute("aria-checked"),
+        ).toBe("false"),
+      );
+      view.rerender(null);
+      view.rerender(<AgentMemoriesSettingsPanel />);
+      await waitFor(() =>
+        expect(
+          screen
+            .getByRole("switch", { name: "Use Traycer memories for agents" })
+            .getAttribute("aria-checked"),
+        ).toBe("false"),
+      );
+    },
+  );
+
+  it("keeps an applied write when an older GET arrives afterward", async () => {
+    let release: (value: ConfigAgentMemoriesResponse) => void = () => {
+      throw new Error("getter was not started");
+    };
+    const harness = mountTeamPage({ kind: "host" }, handlers());
+    harness.queryClient.setDefaultOptions({
+      queries: { retry: false, staleTime: 60_000, gcTime: 300_000 },
+      mutations: { retry: false },
+    });
+    const view = render(<AgentMemoriesSettingsPanel />, {
+      wrapper: harness.Wrapper,
+    });
+    await screen.findByRole("switch", {
+      name: "Use Traycer memories for agents",
+    });
+    script.get = () =>
+      new Promise((resolve) => {
+        release = resolve;
+      });
+    let refetch: Promise<void> = Promise.resolve();
+    act(() => {
+      refetch = harness.queryClient.refetchQueries({ type: "active" });
+    });
+    await waitFor(() =>
+      expect(harness.paramsOf("config.agentMemories.get")).toHaveLength(2),
+    );
+    script.set = () => ({
+      enabled: true,
+      state: "applied",
+      revision: 6,
+      environmentId: ENV,
+      uploadId: null,
+    });
+    await flipOn();
+    await waitFor(() =>
+      expect(
+        screen
+          .getByRole("switch", { name: "Use Traycer memories for agents" })
+          .getAttribute("aria-checked"),
+      ).toBe("true"),
+    );
+    await act(async () => {
+      release(read(false, 5));
+      await refetch;
+    });
+    await waitFor(() =>
+      expect(
+        screen
+          .getByRole("switch", { name: "Use Traycer memories for agents" })
+          .getAttribute("aria-checked"),
+      ).toBe("true"),
+    );
+    view.rerender(null);
+    view.rerender(<AgentMemoriesSettingsPanel />);
+    await waitFor(() =>
+      expect(
+        screen
+          .getByRole("switch", { name: "Use Traycer memories for agents" })
+          .getAttribute("aria-checked"),
+      ).toBe("true"),
+    );
+  });
+
+  it("refetches after a committed setter loses its response", async () => {
+    script.set = () => {
+      script.reads = [read(true, 6)];
+      throw new Error("response lost");
+    };
+    const harness = mountTeamPage({ kind: "host" }, handlers());
+    harness.queryClient.setDefaultOptions({
+      queries: { retry: false, staleTime: 60_000, gcTime: 300_000 },
+      mutations: { retry: false },
+    });
+    const view = render(<AgentMemoriesSettingsPanel />, {
+      wrapper: harness.Wrapper,
+    });
+    await flipOn();
+    await waitFor(async () =>
+      expect(await line()).toContain("Couldn't change this setting"),
+    );
+    const reads = harness.paramsOf("config.agentMemories.get").length;
+    view.rerender(null);
+    view.rerender(<AgentMemoriesSettingsPanel />);
+    await waitFor(() =>
+      expect(
+        screen
+          .getByRole("switch", { name: "Use Traycer memories for agents" })
+          .getAttribute("aria-checked"),
+      ).toBe("true"),
+    );
+    expect(harness.paramsOf("config.agentMemories.get").length).toBeGreaterThan(
+      reads,
     );
   });
 
