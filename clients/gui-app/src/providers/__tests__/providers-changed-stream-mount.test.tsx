@@ -1,5 +1,10 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { QueryClientProvider, type QueryClient } from "@tanstack/react-query";
+import {
+  QueryClientProvider,
+  QueryObserver,
+  type QueryClient,
+  type QueryKey,
+} from "@tanstack/react-query";
 import { act, cleanup, render, waitFor } from "@testing-library/react";
 import type { ProviderId } from "@traycer/protocol/host/provider-schemas";
 import type { StreamMethodSupport } from "@traycer-clients/shared/host-transport/ws-stream-client";
@@ -149,6 +154,23 @@ function seedCatalogScopes(
   );
 }
 
+/** The `agent.gui.listCommands` query key for one harness, as `useHostQuery` keys it. */
+function listCommandsQueryKey(
+  hostId: string,
+  harnessId: "claude" | "opencode",
+): QueryKey {
+  return hostQueryKeys.method<HostRpcRegistry, "agent.gui.listCommands">(
+    hostId,
+    "agent.gui.listCommands",
+    {
+      harnessId,
+      workingDirectory: null,
+      workingDirectories: [],
+      profileId: null,
+    },
+  );
+}
+
 function expectCatalogScopesInvalidated(
   queryClient: QueryClient,
   hostId: string,
@@ -213,6 +235,95 @@ describe("<ProvidersChangedStreamMount />", () => {
     // (whose cold read spawns a server) are left alone.
     expectCatalogScopesInvalidated(queryClient, "host-A", "claude", true);
     expectCatalogScopesInvalidated(queryClient, "host-A", "opencode", false);
+  });
+
+  it("a stale first-fetch response delivered after a changed event cannot overwrite the fresh refetch it triggered", async () => {
+    const queryClient = createAppQueryClient();
+    const claudeKey = listCommandsQueryKey("host-A", "claude");
+    const opencodeKey = listCommandsQueryKey("host-A", "opencode");
+
+    let claudeFetches = 0;
+    let resolveStaleClaudeFetch: (commands: readonly string[]) => void = () =>
+      undefined;
+    let resolveFreshClaudeFetch: (commands: readonly string[]) => void = () =>
+      undefined;
+    const claudeQueryFn = vi.fn(
+      (): Promise<readonly string[]> =>
+        new Promise((resolve) => {
+          claudeFetches += 1;
+          if (claudeFetches === 1) {
+            resolveStaleClaudeFetch = resolve;
+          } else {
+            resolveFreshClaudeFetch = resolve;
+          }
+        }),
+    );
+    // No cached data to join: the real race this guards, per the production
+    // comment ("Invalidation alone joins a first fetch with no cached data").
+    const claudeObserver = new QueryObserver(queryClient, {
+      queryKey: claudeKey,
+      queryFn: claudeQueryFn,
+    });
+    const unsubscribeClaude = claudeObserver.subscribe(() => undefined);
+
+    // A second harness's held first fetch, left running throughout, proving
+    // the claude-code event does not touch it.
+    let opencodeFetches = 0;
+    const opencodeQueryFn = vi.fn(
+      (): Promise<readonly string[]> =>
+        new Promise(() => {
+          opencodeFetches += 1;
+        }),
+    );
+    const opencodeObserver = new QueryObserver(queryClient, {
+      queryKey: opencodeKey,
+      queryFn: opencodeQueryFn,
+    });
+    const unsubscribeOpencode = opencodeObserver.subscribe(() => undefined);
+
+    try {
+      await waitFor(() => expect(claudeFetches).toBe(1));
+      await waitFor(() => expect(opencodeFetches).toBe(1));
+
+      renderProvidersChangedStreamMount(queryClient);
+
+      await act(async () => {
+        providersMountStreamState.opened[0]?.emitChanged("claude-code");
+        // `cancelQueries` runs first and its own `.then` schedules
+        // `invalidateQueries` - let that microtask chain settle before the
+        // fresh fetch is expected to have started.
+        await Promise.resolve();
+        await Promise.resolve();
+      });
+
+      await waitFor(() => expect(claudeFetches).toBe(2));
+      // Still only the one held fetch: claude-code's event never touched it.
+      expect(opencodeFetches).toBe(1);
+
+      act(() => {
+        // The fresh refetch (triggered by the event) settles first.
+        resolveFreshClaudeFetch(["new-skill"]);
+      });
+      await waitFor(() =>
+        expect(claudeObserver.getCurrentResult().data).toEqual(["new-skill"]),
+      );
+
+      act(() => {
+        // The stale first fetch's response finally arrives, well after the
+        // fresh one settled - the host-side race this test guards.
+        resolveStaleClaudeFetch(["stale"]);
+      });
+      // Flush whatever microtasks that late, cancelled settlement schedules.
+      await act(async () => {
+        await Promise.resolve();
+        await Promise.resolve();
+      });
+      expect(claudeObserver.getCurrentResult().data).toEqual(["new-skill"]);
+      expect(claudeFetches).toBe(2);
+    } finally {
+      unsubscribeClaude();
+      unsubscribeOpencode();
+    }
   });
 
   it("invalidates only the captured host's provider scopes, every harness's catalogs included, when it opens", async () => {
