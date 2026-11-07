@@ -1,3 +1,4 @@
+import { appLogger } from "@/lib/logger";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import type { OutputGain, OutputVoice } from "../output";
 import { StaticDirector } from "../directors";
@@ -16,6 +17,7 @@ interface RecordingCall {
 
 class RecordingOutput extends FakeOutput {
   readonly recordings: RecordingCall[] = [];
+  failPlayback = false;
 
   override createBus(): OutputGain {
     const wrap = (gain: OutputGain): OutputGain => ({
@@ -23,6 +25,7 @@ class RecordingOutput extends FakeOutput {
       createChild: (initial, pan) => wrap(gain.createChild(initial, pan)),
       play: (buffer, when, fade) => gain.play(buffer, when, fade),
       playRecording: (buffer, _when, offset, ended): OutputVoice => {
+        if (this.failPlayback) throw new Error("secret-token");
         const call: RecordingCall = {
           duration: buffer.duration,
           offset,
@@ -47,14 +50,16 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
-function openSession() {
+function openSession(options: { missingLoader?: boolean }) {
   const output = new RecordingOutput();
   const stems = new FakeStems(1);
   const loadRecording = vi.fn(() => Promise.resolve(makeAudioBuffer(10, 10)));
   const duck = vi.fn<(seconds: number) => void>();
   const ports: SoundtrackPorts = {
     output,
-    stems: { load: stems.load.bind(stems), loadRecording },
+    stems: options.missingLoader
+      ? { load: stems.load.bind(stems) }
+      : { load: stems.load.bind(stems), loadRecording },
     setDimmed: () => undefined,
     setVolume: () => undefined,
     duck,
@@ -91,7 +96,7 @@ function openSession() {
 }
 
 it("plays a complete recording through the session and preserves the heard position across a pause", async () => {
-  const { session, output, loadRecording, duck } = openSession();
+  const { session, output, loadRecording, duck } = openSession({});
   session.setSignals({
     view: "home",
     working: 0,
@@ -115,7 +120,7 @@ it("plays a complete recording through the session and preserves the heard posit
 });
 
 it("ignores a late completion from a recording replaced by Next", async () => {
-  const { session, output } = openSession();
+  const { session, output } = openSession({});
   session.setSignals({
     view: "home",
     working: 0,
@@ -138,7 +143,7 @@ it("ignores a late completion from a recording replaced by Next", async () => {
 });
 
 it("defers a held natural completion and its quiet gap until Play", async () => {
-  const { session, output } = openSession();
+  const { session, output } = openSession({});
   session.setSignals({
     view: "home",
     working: 0,
@@ -238,5 +243,110 @@ it("starts the manual-skip fade when the recording loads and clears the previous
   expect(output.ramps("bus1")).toContainEqual(
     expect.objectContaining({ target: 1, seconds: 2, at: 6 }),
   );
+  session.end();
+});
+
+const failureSignals = {
+  view: "home" as const,
+  working: 0,
+  blocking: 0,
+  failure: 0,
+  done: 0,
+};
+
+it("reports a current load rejection without leaking its error", async () => {
+  const warn = vi.spyOn(appLogger, "warn").mockReturnValue(undefined);
+  const { session, output, loadRecording } = openSession({});
+  loadRecording.mockRejectedValue(
+    new Error("https://example.test/file?token=secret-token"),
+  );
+  session.setSignals(failureSignals);
+  await vi.advanceTimersByTimeAsync(1000);
+  expect(output.recordings).toHaveLength(0);
+  expect(warn).toHaveBeenCalledWith("[soundtrack] could not play a recording", {
+    track: "piece",
+    recording: "master",
+    stage: "load",
+  });
+  expect(JSON.stringify(warn.mock.calls)).not.toContain("secret-token");
+  session.end();
+});
+
+it("ignores a stale load rejection after Next starts a replacement", async () => {
+  const warn = vi.spyOn(appLogger, "warn").mockReturnValue(undefined);
+  const { session, output, loadRecording } = openSession({});
+  let rejectOld: (reason: Error) => void = () => undefined;
+  loadRecording.mockImplementationOnce(
+    () =>
+      new Promise((_resolve, reject) => {
+        rejectOld = reject;
+      }),
+  );
+  session.setSignals(failureSignals);
+  await vi.advanceTimersByTimeAsync(1000);
+  session.next();
+  await vi.advanceTimersByTimeAsync(100);
+  expect(output.recordings).toHaveLength(1);
+  rejectOld(new Error("secret-token"));
+  await vi.advanceTimersByTimeAsync(0);
+  expect(output.recordings).toHaveLength(1);
+  expect(warn).not.toHaveBeenCalled();
+  session.end();
+});
+
+it("handles a synchronous loader throw and a missing loader quietly", async () => {
+  const warn = vi.spyOn(appLogger, "warn").mockReturnValue(undefined);
+  const first = openSession({});
+  first.loadRecording.mockImplementation(() => {
+    throw new Error("secret-token");
+  });
+  first.session.setSignals(failureSignals);
+  await vi.advanceTimersByTimeAsync(1000);
+  expect(first.output.recordings).toHaveLength(0);
+  expect(warn).toHaveBeenCalledWith("[soundtrack] could not play a recording", {
+    track: "piece",
+    recording: "master",
+    stage: "load",
+  });
+  first.session.end();
+  warn.mockClear();
+  const second = openSession({ missingLoader: true });
+  second.session.setSignals(failureSignals);
+  await vi.advanceTimersByTimeAsync(1000);
+  expect(second.output.recordings).toHaveLength(0);
+  expect(warn).toHaveBeenCalledWith("[soundtrack] could not play a recording", {
+    track: "piece",
+    recording: "master",
+    stage: "unavailable",
+  });
+  expect(JSON.stringify(warn.mock.calls)).not.toContain("secret-token");
+  second.session.end();
+});
+
+it("handles a playback failure when a held load is released", async () => {
+  const warn = vi.spyOn(appLogger, "warn").mockReturnValue(undefined);
+  const { session, output, loadRecording } = openSession({});
+  let resolveLoad: (buffer: AudioBuffer) => void = () => undefined;
+  loadRecording.mockImplementation(
+    () =>
+      new Promise((resolve) => {
+        resolveLoad = resolve;
+      }),
+  );
+  session.setSignals(failureSignals);
+  await vi.advanceTimersByTimeAsync(1000);
+  session.pause();
+  resolveLoad(makeAudioBuffer(10, 10));
+  await vi.advanceTimersByTimeAsync(0);
+  output.failPlayback = true;
+  session.play();
+  await vi.advanceTimersByTimeAsync(0);
+  expect(output.recordings).toHaveLength(0);
+  expect(warn).toHaveBeenCalledWith("[soundtrack] could not play a recording", {
+    track: "piece",
+    recording: "master",
+    stage: "play",
+  });
+  expect(JSON.stringify(warn.mock.calls)).not.toContain("secret-token");
   session.end();
 });

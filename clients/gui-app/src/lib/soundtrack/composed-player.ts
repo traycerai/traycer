@@ -1,3 +1,4 @@
+import { appLogger } from "@/lib/logger";
 import type { ComposedTrack } from "./manifest";
 import type { OutputGain, OutputVoice, SoundtrackOutput } from "./output";
 import type { StemSource } from "./stems";
@@ -46,17 +47,48 @@ export class ComposedPlayer {
     if (this.pending !== null) return;
     this.position = Math.max(0, from);
     const generation = ++this.generation;
-    if (this.stems.loadRecording === undefined) return;
-    void this.stems
-      .loadRecording(this.track.recording)
-      .then((buffer) => {
-        if (generation !== this.generation) return;
-        if (this.held) this.pending = { buffer, generation };
-        else this.playBuffer(buffer, generation);
-      })
-      .catch(() => {
-        /* A missing recording leaves the session quiet. */
-      });
+    void this.load(generation);
+  }
+
+  private async load(generation: number): Promise<void> {
+    if (this.stems.loadRecording === undefined) {
+      this.reportFailure(generation, "unavailable");
+      return;
+    }
+    let buffer: AudioBuffer;
+    try {
+      buffer = await this.stems.loadRecording(this.track.recording);
+    } catch {
+      this.reportFailure(generation, "load");
+      return;
+    }
+    if (generation !== this.generation) return;
+    if (this.held) this.pending = { buffer, generation };
+    else this.startBuffer(buffer, generation);
+  }
+
+  private reportFailure(
+    generation: number,
+    stage: "unavailable" | "load" | "play",
+  ): void {
+    if (generation !== this.generation) return;
+    // Error messages and stacks can contain signed URLs; do not log them.
+    appLogger.warn("[soundtrack] could not play a recording", {
+      track: this.track.name,
+      recording: this.track.recording,
+      stage,
+    });
+  }
+
+  private startBuffer(buffer: AudioBuffer, generation: number): void {
+    try {
+      this.playBuffer(buffer, generation);
+    } catch {
+      this.startedAt = null;
+      this.bus = null;
+      this.voice = null;
+      this.reportFailure(generation, "play");
+    }
   }
 
   private playBuffer(buffer: AudioBuffer, generation: number): void {
@@ -142,7 +174,7 @@ export class ComposedPlayer {
     const pending = this.pending;
     this.pending = null;
     if (pending !== null && pending.generation === this.generation)
-      this.playBuffer(pending.buffer, pending.generation);
+      this.startBuffer(pending.buffer, pending.generation);
   }
   describe() {
     return {
