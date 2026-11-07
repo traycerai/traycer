@@ -1200,11 +1200,6 @@ describe("a task id in a bot's row", () => {
     );
     expect(item?.contains(chip)).toBe(true);
     expect(row.textContent).not.toContain(prefix);
-    expect(
-      Array.from(row.querySelectorAll("strong")).some((node) =>
-        node.textContent.includes(prefix),
-      ),
-    ).toBe(false);
     await lookupsCompleted();
     expect(lookedUpIds()).toEqual([]);
   });

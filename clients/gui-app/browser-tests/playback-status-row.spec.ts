@@ -86,8 +86,6 @@ async function setContentRem(
 interface Box {
   readonly left: number;
   readonly right: number;
-  readonly top: number;
-  readonly bottom: number;
   readonly width: number;
   readonly height: number;
 }
@@ -98,8 +96,6 @@ async function boxOf(locator: Locator): Promise<Box> {
   return {
     left: box.x,
     right: box.x + box.width,
-    top: box.y,
-    bottom: box.y + box.height,
     width: box.width,
     height: box.height,
   };

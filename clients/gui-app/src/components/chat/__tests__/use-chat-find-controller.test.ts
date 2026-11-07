@@ -619,9 +619,9 @@ describe("useChatFindController - deferred settle gates reveal", () => {
 
   const NEEDLE = "deferred-settle-needle";
 
-  function transcriptWithOneOffscreenNeedle(
+  function transcriptWithOffscreenText(
     messageId: string,
-    needle: string,
+    markdown: string,
   ): ReadonlyArray<ChatMessageModel> {
     return [
       {
@@ -631,27 +631,7 @@ describe("useChatFindController - deferred settle gates reveal", () => {
           {
             id: `${messageId}-seg`,
             kind: "text",
-            markdown: needle,
-            isStreaming: false,
-          },
-        ],
-      },
-    ];
-  }
-
-  function transcriptWithRepeatedOffscreenNeedle(
-    messageId: string,
-    needle: string,
-  ): ReadonlyArray<ChatMessageModel> {
-    return [
-      {
-        ...makeMessage(0, "assistant"),
-        id: messageId,
-        segments: [
-          {
-            id: `${messageId}-seg`,
-            kind: "text",
-            markdown: `${needle} and again ${needle}`,
+            markdown,
             isStreaming: false,
           },
         ],
@@ -660,7 +640,7 @@ describe("useChatFindController - deferred settle gates reveal", () => {
   }
 
   it("holds the reveal pending through a rendered-data change and a mounted-highlight sync, then paints once settle fires", () => {
-    const messages = transcriptWithOneOffscreenNeedle("msg-deferred", NEEDLE);
+    const messages = transcriptWithOffscreenText("msg-deferred", NEEDLE);
     const capturedAfterSettles: Array<() => void> = [];
     scrollToLocation.mockImplementation(
       (
@@ -706,7 +686,7 @@ describe("useChatFindController - deferred settle gates reveal", () => {
   });
 
   it("ignores a stale settle completion after a newer search superseded it", () => {
-    const firstMessages = transcriptWithOneOffscreenNeedle(
+    const firstMessages = transcriptWithOffscreenText(
       "msg-stale-one",
       "stale-needle-one",
     );
@@ -735,8 +715,8 @@ describe("useChatFindController - deferred settle gates reveal", () => {
     expect(adapter.getSnapshot().exactHighlight).toBe("pending");
     const staleAfterSettle = capturedAfterSettles[0];
 
-    // A different, newer query takes over before the first navigation ever
-    // settled - the generation bump this depends on.
+    // A newer request for the same query takes over before the first
+    // navigation settles; the changed requestId bumps the generation.
     act(() => {
       void adapter.search({
         requestId: 2,
@@ -768,9 +748,9 @@ describe("useChatFindController - deferred settle gates reveal", () => {
   });
 
   it("still waits for row navigation on a same-unit hop requested while the first reveal's navigation is pending", () => {
-    const messages = transcriptWithRepeatedOffscreenNeedle(
+    const messages = transcriptWithOffscreenText(
       "msg-same-unit",
-      "same-unit-needle",
+      "same-unit-needle and again same-unit-needle",
     );
     const capturedAfterSettles: Array<() => void> = [];
     scrollToLocation.mockImplementation(
@@ -822,9 +802,9 @@ describe("useChatFindController - deferred settle gates reveal", () => {
   });
 
   it("retires the pending reveal without painting when the row navigation reports cancellation, leaves a later mount to a passive repaint only, and still fully navigates the next same-unit hop", () => {
-    const messages = transcriptWithRepeatedOffscreenNeedle(
+    const messages = transcriptWithOffscreenText(
       "msg-cancelled",
-      "cancelled-needle",
+      "cancelled-needle and again cancelled-needle",
     );
     const capturedAfterSettles: Array<() => void> = [];
     const capturedOnCancelleds: Array<() => void> = [];

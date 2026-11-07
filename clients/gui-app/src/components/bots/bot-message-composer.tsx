@@ -286,7 +286,7 @@ export function BotMessageComposer(props: {
   useEffect(() => {
     if (edit !== null) editorRef.current?.focusAtEnd("reveal-caret");
   }, [edit]);
-  const seedId = botSeedId(seed);
+  const seedId = seed?.id ?? null;
   useEffect(() => {
     if (seedId !== null) editorRef.current?.focusAtEnd("reveal-caret");
   }, [seedId]);
@@ -658,11 +658,6 @@ export function BotMessageComposerUnavailable(props: {
   );
 }
 
-/**
- * Whether the box is empty now, for a send that settles after the person may
- * have begun another draft: a newer draft is any text or image, or an edit
- * loaded.
- */
 function canSendBotBox(args: {
   readonly sendable: boolean;
   readonly wireLength: number;
@@ -679,10 +674,11 @@ function canSendBotBox(args: {
   );
 }
 
-function botSeedId(seed: BotComposerSeed | null): number | null {
-  return seed?.id ?? null;
-}
-
+/**
+ * Whether the box is empty now, for a send that settles after the person may
+ * have begun another draft: a newer draft is any text or image, or an edit
+ * loaded.
+ */
 function useBoxEmptyRef(
   text: string,
   imageCount: number,

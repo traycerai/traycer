@@ -379,9 +379,10 @@ function seedMissingLayoutRecord(): void {
  * record and 1 are the same translation: a missing record is a v1.4.0 record
  * with no layout data in it, and both take the values that shipped in the
  * settings and sidebar records alongside. 7 is this store's own record from
- * before `sidebarStartCollapsed`. Anything else - a pre-release 2 to 6, or a
- * newer build's record after a downgrade - resets to the defaults rather
- * than guessing at a shape this build never defined.
+ * before `sidebarStartCollapsed`, and 8 adds that field. Both use the earlier
+ * defaults when translating their records. Anything else - a pre-release 2 to
+ * 6, or a newer build's record after a downgrade - resets to the defaults
+ * rather than guessing at a shape this build never defined.
  */
 function migrateLayoutPersistedState(
   persistedState: unknown,
@@ -407,11 +408,11 @@ function migrateLayoutPersistedState(
 }
 
 /**
- * A desktop-v1.5.x record, field for field, read by the same resolvers a
- * rehydrate runs. The one field it could not have written,
- * `sidebarStartCollapsed`, reads as that build drew it, which is the shipped
- * default: the sidebar open in a new task. Its delta names only what it
- * changed, so File Tree comes from the earlier baseline.
+ * A version-7 or version-8 record, read by the same validating resolvers a
+ * rehydrate runs. Version 7 could not have written `sidebarStartCollapsed`,
+ * so it reads as that build drew it: the sidebar open in a new task. A valid
+ * version-8 choice is kept. File Tree starts from the earlier shown baseline,
+ * with the record's own override laid over it.
  */
 function fromEarlierDefaultsRecord(
   stored: Record<string, unknown>,
