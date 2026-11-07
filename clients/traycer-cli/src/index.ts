@@ -108,6 +108,7 @@ import { buildHostDownloadCommand } from "./commands/host-download";
 import { hostDoctorCommand } from "./commands/host-doctor";
 import { buildHostEnsureCommand } from "./commands/host-ensure";
 import { buildHostJoinCommand } from "./commands/host-join";
+import { readInstallToken } from "./commands/host-join-token";
 import { buildHostFreePortCommand } from "./commands/host-free-port";
 import { buildHostFreePortAndRestartCommand } from "./commands/host-free-port-and-restart";
 import { buildHostInstallCommand } from "./commands/host-install";
@@ -1675,12 +1676,12 @@ function registerHostCommands(program: Command): void {
     host
       .command("join")
       .description(
-        "Make this machine a team's host with the one-time install token from the app, then install and start the host. Refused on a machine that already has a Traycer host.",
-      )
-      .argument("<token>", "The install token shown in the app"),
-    (_opts, args) =>
+        "Make this machine a team's host with the one-time install token from the app, then install and start the host. Asks for the token, or reads it from stdin. Refused on a machine that already has a Traycer host.",
+      ),
+    () =>
       buildHostJoinCommand({
-        token: expectRequiredPositional(args[0], "token"),
+        readToken: (canPrompt) =>
+          readInstallToken(process.stdin, process.stderr, canPrompt),
       }),
   );
 
