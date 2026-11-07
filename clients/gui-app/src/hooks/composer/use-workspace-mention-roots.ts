@@ -1,4 +1,10 @@
-import { useMemo } from "react";
+import { useCallback, useMemo, useSyncExternalStore } from "react";
+import { useQueryClient } from "@tanstack/react-query";
+import type { HostRpcRegistry } from "@/lib/host";
+import { hostQueryKeys } from "@/lib/query-keys";
+import type { LandingDraftWorkspaceSnapshot } from "@/stores/home/landing-draft-store";
+import { readCachedDefaultWorktreeIntent } from "@/lib/worktree/cached-default-worktree-intent";
+import { effectiveWorktreeIntent } from "@/lib/worktree/effective-worktree-intent";
 import { resolvePrimaryPath } from "@/lib/worktree/resolve-primary-path";
 import type {
   WorktreeBinding,
@@ -53,8 +59,7 @@ export function useWorkspaceMentionRoots(
  * create on.
  */
 function useLandingFoldersAndIntent(draftId: string | null): {
-  readonly folders: ReadonlyArray<string>;
-  readonly primaryPath: string | null;
+  readonly workspace: LandingDraftWorkspaceSnapshot;
   readonly stagedIntent: WorktreeIntent | null;
   readonly activeHostId: string | null;
 } {
@@ -80,11 +85,7 @@ function useLandingFoldersAndIntent(draftId: string | null): {
     (state) => state.intentByKey[stagingKeyId] ?? null,
   );
   return {
-    folders: draftWorkspace?.folders ?? globalWorkspace.folders,
-    primaryPath:
-      draftWorkspace === null
-        ? globalWorkspace.primaryPath
-        : draftWorkspace.primaryPath,
+    workspace: draftWorkspace ?? globalWorkspace,
     stagedIntent,
     activeHostId,
   };
@@ -93,11 +94,11 @@ function useLandingFoldersAndIntent(draftId: string | null): {
 export function useLandingComposerMentionRoots(
   draftId: string | null,
 ): ReadonlyArray<string> {
-  const { folders, stagedIntent, activeHostId } =
+  const { workspace, stagedIntent, activeHostId } =
     useLandingFoldersAndIntent(draftId);
   const preferredRoots = useMemo(
-    () => mentionRootsFromWorktreeIntent(folders, stagedIntent),
-    [folders, stagedIntent],
+    () => mentionRootsFromWorktreeIntent(workspace.folders, stagedIntent),
+    [workspace.folders, stagedIntent],
   );
 
   // `preferredRoots` already resolves the global folders (intent-aware) in the
@@ -217,14 +218,48 @@ export function runDirectoryFromWorktreeBindingAndIntent(
 export function useLandingRunWorkingDirectory(
   draftId: string | null,
 ): string | null {
-  const { folders, primaryPath, stagedIntent } =
+  const { workspace, stagedIntent, activeHostId } =
     useLandingFoldersAndIntent(draftId);
-  const primary = resolvePrimaryPath(folders, primaryPath);
+  const queryClient = useQueryClient();
+  const summariesKey = useMemo(
+    () =>
+      hostQueryKeys.method<HostRpcRegistry, "worktree.listByWorkspacePaths">(
+        activeHostId,
+        "worktree.listByWorkspacePaths",
+        {
+          workspacePaths: [...workspace.folders],
+          scriptRefs: [],
+          forceRefresh: false,
+        },
+      ),
+    [activeHostId, workspace.folders],
+  );
+  const subscribe = useCallback(
+    (notify: () => void) => queryClient.getQueryCache().subscribe(notify),
+    [queryClient],
+  );
+  const snapshot = useCallback(
+    () => queryClient.getQueryData(summariesKey),
+    [queryClient, summariesKey],
+  );
+  // The picker can cache a new-worktree default before staging it. Re-evaluate
+  // when that cache changes, using the same fallback as the submit boundary.
+  useSyncExternalStore(subscribe, snapshot, snapshot);
+  const intent = effectiveWorktreeIntent({
+    workspace,
+    stagedIntent,
+    seedIntent: readCachedDefaultWorktreeIntent(
+      queryClient,
+      activeHostId,
+      workspace,
+    ),
+  });
+  const primary = resolvePrimaryPath(workspace.folders, workspace.primaryPath);
   if (primary === null) return null;
-  const staged = stagedIntent?.entries.find(
+  const entry = intent?.entries.find(
     (entry) => entry.workspacePath === primary,
   );
-  return staged === undefined ? primary : folderIntentRunDirectory(staged);
+  return entry === undefined ? primary : folderIntentRunDirectory(entry);
 }
 
 function folderIntentRoot(entry: WorktreeFolderIntent): string {
