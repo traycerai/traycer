@@ -19,6 +19,7 @@ import type {
   SlackAppInstallUrlResult,
   SlackAppManifestResult,
   SlackAppReadResult,
+  SlackAppDmsRequest,
   SlackAppRegisterRequest,
   SlackAppWriteResult,
   TeamHostInstallTokenResult,
@@ -207,6 +208,10 @@ export interface AuthBridgeSurface {
   disconnectSlackApp(
     bearerToken: string,
     botId: string,
+  ): Promise<SlackAppWriteResult>;
+  setSlackAppDms(
+    bearerToken: string,
+    request: SlackAppDmsRequest,
   ): Promise<SlackAppWriteResult>;
   mintTeamHostInstallToken(
     bearerToken: string,
@@ -460,6 +465,13 @@ export function buildAuthBridge(): AuthBridgeSurface {
         RunnerHostInvoke.disconnectSlackApp,
         bearerToken,
         botId,
+      ) as Promise<SlackAppWriteResult>,
+
+    setSlackAppDms: (bearerToken, request) =>
+      ipcRenderer.invoke(
+        RunnerHostInvoke.setSlackAppDms,
+        bearerToken,
+        request,
       ) as Promise<SlackAppWriteResult>,
 
     mintTeamHostInstallToken: (bearerToken, environmentId) =>

@@ -21,7 +21,13 @@ export function canvasBootstrap(config: CanvasBootstrapConfig): void {
   document.currentScript?.remove();
   const host = window.parent;
   let ready = false;
-  let mode: CanvasMode = config.canvasLinks === "native" ? "play" : "edit";
+  // An html page a reader comments on (`canvasLinks: "native"`) opens for
+  // reading, in Play, where this script keeps out of the page's way entirely.
+  // In Edit nothing covers that page, unlike a board: it keeps its own wheel,
+  // touch and pinch, and this script takes its presses instead.
+  const page = config.canvasLinks === "native";
+  let mode: CanvasMode = page ? "play" : "edit";
+  const reading = (): boolean => page && mode === "play";
   let textTarget: Element | null = null;
   let hasTextTarget = false;
   const record = (value: unknown): value is Record<string, unknown> =>
@@ -611,6 +617,7 @@ export function canvasBootstrap(config: CanvasBootstrapConfig): void {
     "traycer/canvas/set-mode": (params) => {
       if (params.mode !== "edit" && params.mode !== "play") return null;
       mode = params.mode;
+      if (page) pageModeChanged();
       return {};
     },
   };
@@ -643,16 +650,32 @@ export function canvasBootstrap(config: CanvasBootstrapConfig): void {
         "*",
       );
   });
-  // Click/submit activation never reaches authored handlers in Edit.
+  // The zoom script's scrollbar thumbs sit in their own root on a page; they
+  // stay draggable, and are not part of the page, while the reader comments.
+  const zoomControl = (target: EventTarget | null): boolean =>
+    target instanceof Element &&
+    target.closest("[data-traycer-html-scrollbars]") !== null;
+  // Click/submit activation never reaches authored handlers in Edit. A page
+  // has no shield over it, so its own click is the reader's pick; a click a
+  // key made (no pointer, so `detail` 0) picks nothing.
   const blockEdit = (event: Event): void => {
-    if (mode !== "edit") return;
+    if (mode !== "edit" || zoomControl(event.target)) return;
     event.preventDefault();
     event.stopImmediatePropagation();
+    if (
+      page &&
+      event.type === "click" &&
+      event instanceof MouseEvent &&
+      event.button === 0 &&
+      event.detail > 0
+    )
+      notify("traycer/canvas/pick", { x: event.clientX, y: event.clientY });
   };
   window.addEventListener(
     "dblclick",
     (event) => {
       if (
+        page ||
         mode !== "edit" ||
         textTarget === null ||
         !textTarget.isConnected ||
@@ -669,6 +692,109 @@ export function canvasBootstrap(config: CanvasBootstrapConfig): void {
   window.addEventListener("click", blockEdit, true);
   window.addEventListener("auxclick", blockEdit, true);
   window.addEventListener("submit", blockEdit, true);
+  // The rest of a press, which a board's shield keeps from it, is kept from
+  // a page's own handlers here. Mouse-down is cancelled too, so a press moves
+  // no focus, starts no text selection, opens no select and drags nothing.
+  // A touch's start and end are kept from the page but never cancelled:
+  // scrolling and pinching are the browser's own, and the zoom script's pinch
+  // listens ahead of this. A touch's moves pass, as no page control saw it
+  // begin.
+  const swallowPagePress = (event: Event): void => {
+    if (!page || mode !== "edit" || zoomControl(event.target)) return;
+    event.stopImmediatePropagation();
+    if (event.type === "mousedown") event.preventDefault();
+  };
+  for (const type of [
+    "pointerdown",
+    "pointerup",
+    "mousedown",
+    "mouseup",
+    "dblclick",
+    "contextmenu",
+  ])
+    window.addEventListener(type, swallowPagePress, true);
+  for (const type of ["touchstart", "touchend", "touchcancel"])
+    window.addEventListener(type, swallowPagePress, {
+      capture: true,
+      passive: true,
+    });
+  // What is under a page's pointer, for the app's hover outline, reported at
+  // most once a frame and only when it changed. Touch has no hover. A scroll
+  // moves the page under a still pointer, so it asks again; and it, a resize
+  // or a zoom moves every box, so the app measures its outlines and pins
+  // again on `layout`.
+  let pointer: { x: number; y: number } | null = null;
+  let hovered: { element: Element; box: CanvasBox } | null = null;
+  let hoverFrame = 0;
+  let layoutFrame = 0;
+  const sameBox = (a: CanvasBox, b: CanvasBox): boolean =>
+    a.x === b.x && a.y === b.y && a.width === b.width && a.height === b.height;
+  const reportHover = (): void => {
+    hoverFrame = 0;
+    if (!page || mode !== "edit") return;
+    const found =
+      pointer === null ? null : document.elementFromPoint(pointer.x, pointer.y);
+    const element = zoomControl(found) ? null : found;
+    if (element === null) {
+      if (hovered === null) return;
+      hovered = null;
+      notify("traycer/canvas/hover", { element: null });
+      return;
+    }
+    const box = boxOf(element.getBoundingClientRect());
+    if (hovered?.element === element && sameBox(hovered.box, box)) return;
+    hovered = { element, box };
+    notify("traycer/canvas/hover", { element: capture(element) });
+  };
+  const askHover = (): void => {
+    if (hoverFrame === 0) hoverFrame = requestAnimationFrame(reportHover);
+  };
+  const layoutMoved = (): void => {
+    if (!page || mode !== "edit") return;
+    askHover();
+    if (layoutFrame !== 0) return;
+    layoutFrame = requestAnimationFrame(() => {
+      layoutFrame = 0;
+      if (mode === "edit") notify("traycer/canvas/layout", {});
+    });
+  };
+  window.addEventListener(
+    "pointermove",
+    (event) => {
+      if (!page || mode !== "edit" || event.pointerType === "touch") return;
+      pointer = { x: event.clientX, y: event.clientY };
+      askHover();
+    },
+    { capture: true, passive: true },
+  );
+  document.addEventListener(
+    "pointerout",
+    (event) => {
+      if (!page || event.relatedTarget !== null) return;
+      pointer = null;
+      askHover();
+    },
+    { passive: true },
+  );
+  window.addEventListener("scroll", layoutMoved, {
+    capture: true,
+    passive: true,
+  });
+  window.addEventListener("resize", layoutMoved, { passive: true });
+  // The crosshair says a press picks rather than acts; the page's own cursors
+  // come back with Play.
+  const crosshair = document.createElement("style");
+  crosshair.textContent =
+    "*, *::before, *::after { cursor: crosshair !important; }";
+  const pageModeChanged = (): void => {
+    if (mode === "edit") {
+      document.head.appendChild(crosshair);
+      return;
+    }
+    crosshair.remove();
+    pointer = null;
+    hovered = null;
+  };
   const bare = (event: KeyboardEvent): boolean =>
     !event.ctrlKey && !event.metaKey && !event.altKey && !event.shiftKey;
   const forwardShortcut = (event: KeyboardEvent): void =>
@@ -680,12 +806,13 @@ export function canvasBootstrap(config: CanvasBootstrapConfig): void {
       alt: false,
       shift: false,
     });
-  // A bare Escape is the app's in both modes: it steps selection out while
-  // editing and leaves Play, so the page never keeps it.
+  // A bare Escape is a board's in both modes: it steps selection out while
+  // editing and leaves Play, so the page never keeps it. A page being read
+  // keeps its own; one being commented on gives it up to leave the mode.
   window.addEventListener(
     "keydown",
     (event) => {
-      if (event.code !== "Escape" || !bare(event)) return;
+      if (reading() || event.code !== "Escape" || !bare(event)) return;
       event.preventDefault();
       event.stopImmediatePropagation();
       forwardShortcut(event);
@@ -702,6 +829,7 @@ export function canvasBootstrap(config: CanvasBootstrapConfig): void {
     "input,textarea,select,[contenteditable]:not([contenteditable=false]),[role=textbox],[role=combobox],[role=slider],[role=spinbutton],[role=listbox],[role=option],[role=menu],[role=menubar],[role=menuitem],[role=radiogroup],[role=radio],[role=tablist],[role=tab],[role=grid],[role=tree]";
   window.addEventListener("keydown", (event) => {
     if (
+      page ||
       mode !== "play" ||
       (event.code !== "ArrowLeft" && event.code !== "ArrowRight") ||
       !bare(event) ||
@@ -888,8 +1016,9 @@ export function canvasBootstrap(config: CanvasBootstrapConfig): void {
   };
   let selectionQueued = false;
   let selectedElement: Element | null = null;
+  // A page being read keeps its text selection to itself.
   const reportSelection = (): void => {
-    if (selectionQueued) return;
+    if (selectionQueued || reading()) return;
     selectionQueued = true;
     requestAnimationFrame(() => {
       selectionQueued = false;
