@@ -6,21 +6,18 @@ export class FakeLockManager {
   private held = false;
   private readonly waiting: Array<() => void> = [];
 
-  request(
-    _name: string,
-    options: LockOptions,
-    granted: (lock: object | null) => Promise<void> | undefined,
-  ): Promise<void> {
+  query(): Promise<LockManagerSnapshot> {
+    return Promise.resolve({
+      held: this.held ? [{ name: "traycer:soundtrack-session" }] : [],
+      pending: [],
+    });
+  }
+
+  request(_name: string, granted: () => Promise<void>): Promise<void> {
     return new Promise((resolve) => {
-      if (this.held && options.ifAvailable === true) {
-        void Promise.resolve(granted(null)).then(() => {
-          resolve();
-        });
-        return;
-      }
       const grant = (): void => {
         this.held = true;
-        void Promise.resolve(granted({})).then(() => {
+        void granted().then(() => {
           this.held = false;
           this.waiting.shift()?.();
           resolve();
