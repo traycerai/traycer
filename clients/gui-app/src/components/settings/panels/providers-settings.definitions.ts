@@ -153,7 +153,7 @@ export const PROVIDERS = defineSettingsSection("providers", {
     search: { contributesTo: "nativeMemory" },
     label: "Use this provider's memories",
     description:
-      "When off, agents Traycer starts on this provider neither use nor save its memories.",
+      "When off, agents Traycer starts on this provider neither use nor save automatic memories.",
     availableWhen: alwaysAvailable,
     keywords: ["memory", "memories", "recall", "save"],
   },

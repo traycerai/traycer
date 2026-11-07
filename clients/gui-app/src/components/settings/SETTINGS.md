@@ -3099,9 +3099,9 @@ window`, recorded in the type as `coverage.browsersAreMountedOnly` -
     provider's memories", on by default. On applies NO override - the
     provider's memory behaves exactly as it does without this setting, which
     is why it is not a claim that the provider has memories switched on. Off
-    makes the host turn the provider's own memory off for the sessions Traycer
-    launches, both the recall of existing memories and the writing of new
-    ones: `CLAUDE_CODE_DISABLE_AUTO_MEMORY=1` in Claude Code's spawn
+    makes the host turn the provider's AUTOMATIC memory off for the sessions
+    Traycer launches, both the recall of existing memories and the writing of
+    new ones: `CLAUDE_CODE_DISABLE_AUTO_MEMORY=1` in Claude Code's spawn
     environment (GUI turns and terminal-agent PTYs alike, launch and resume),
     and `features.memories=false` plus `memories.use_memories=false` and
     `memories.generate_memories=false` on Codex's launch config args (the
@@ -3109,7 +3109,17 @@ window`, recorded in the type as `coverage.browsersAreMountedOnly` -
     the provider's own settings file is never written, and a `claude` or
     `codex` started outside Traycer is unaffected; `AGENTS.md`/`CLAUDE.md`,
     rules and skills are untouched - this is the provider's memory feature,
-    not project instructions. Persisted as `nativeMemory` in
+    not project instructions. "Automatic" is the exact scope, and the row's
+    copy says so: Claude Code's env var governs the memory DIRECTORY, personal
+    and team, read side and write side, main session and subagents alike
+    (one process-wide predicate). It does not reach Claude's separate
+    account-memory MCP surface, whose tools carry their own scopes. That
+    surface cannot be reached by configuration either: a server is stamped as
+    account memory only when it is CLI-owned, or an SDK-supplied `dynamic`
+    server of that exact name, or a `dynamic` server pointing at Anthropic's
+    own session-memory endpoint - so a user's own MCP server, which carries a
+    `user`/`project`/`local` scope, can never become one however it is named.
+    Traycer registers none of the three. Persisted as `nativeMemory` in
     `provider-overrides.json` via `providers.setNativeMemory`
     (`useProvidersSetNativeMemory`, invalidates only `providers.list`), read
     back as the row's `nativeMemory` from `providers.list@10.8`. Drawn only
