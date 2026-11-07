@@ -30,6 +30,7 @@ import {
   surfaceHostOpenedTab,
 } from "@/lib/browser-view/tiles/surface-host-opened-tab";
 import { TILE_KIND_BROWSER_SESSION } from "@/stores/epics/canvas/tile-kinds";
+import { useCloseCanvasTileWithNestedFocus } from "@/components/epic-canvas/renderers/use-close-canvas-tile-with-nested-focus";
 import { useSettingsStore } from "@/stores/settings/settings-store";
 
 /**
@@ -114,7 +115,10 @@ vi.mock("@tanstack/react-router", () => ({
   useNavigate: () => navigateMock,
   useRouter: () => ({
     history: {},
-    state: { location: { pathname: `/epics/${EPIC_ID}/${TAB_ID}` } },
+    navigate: navigateMock,
+    state: {
+      location: { pathname: `/epics/${EPIC_ID}/${TAB_ID}`, search: {} },
+    },
   }),
 }));
 
@@ -337,6 +341,44 @@ function prepareOpenArtifact(
     );
 }
 
+/**
+ * A `navigate` stand-in that APPLIES the search reducer the boundary emits to
+ * `initialSearch`, as the router does, and keeps the result. The other cases
+ * hand the boundary a bare mock and never look at what it would commit, which
+ * is how a committed target that interacts badly with a waiting request went
+ * unseen.
+ */
+function makeCommittingNavigate(initialSearch: Record<string, unknown>): {
+  readonly navigate: UseNavigateResult<string>;
+  readonly committed: { search: Record<string, unknown> | null };
+} {
+  const committed: { search: Record<string, unknown> | null } = {
+    search: null,
+  };
+  const navigate = vi.fn();
+  navigate.mockImplementation((options: NavigateCallOptions) => {
+    committed.search = options.search?.(initialSearch) ?? null;
+    return Promise.resolve();
+  });
+  return { navigate: navigate as UseNavigateResult<string>, committed };
+}
+
+/** The nested target a committed search names, or a failure if it names none. */
+function committedNestedFocus(search: Record<string, unknown> | null): {
+  readonly focusPaneId: string;
+  readonly focusTileInstanceId: string;
+} {
+  const focusPaneId = search?.focusPaneId;
+  const focusTileInstanceId = search?.focusTileInstanceId;
+  if (
+    typeof focusPaneId !== "string" ||
+    typeof focusTileInstanceId !== "string"
+  ) {
+    throw new Error("expected the committed search to name a nested target");
+  }
+  return { focusPaneId, focusTileInstanceId };
+}
+
 describe("route focus opens the requested artifact (T156)", () => {
   beforeEach(() => {
     useEpicCanvasStore.setState(useEpicCanvasStore.getInitialState(), true);
@@ -537,6 +579,7 @@ describe("route focus opens the requested artifact (T156)", () => {
           makeNestedFocusRouter(fakeNavigate(), true),
           { epicId: EPIC_ID, tabId: TAB_ID },
           prepareOpenArtifact(CHOSEN_ID, "inst-chosen-case1"),
+          "user",
         );
       });
       expect(activeArtifactId(TAB_ID)).toBe(CHOSEN_ID);
@@ -624,6 +667,7 @@ describe("route focus opens the requested artifact (T156)", () => {
         makeNestedFocusRouter(fakeNavigate(), true),
         { epicId: EPIC_ID, tabId: TAB_ID },
         prepareOpenArtifact(CHOSEN_ID, "inst-chosen-case4"),
+        "user",
       );
     });
 
@@ -665,6 +709,7 @@ describe("route focus opens the requested artifact (T156)", () => {
         makeNestedFocusRouter(fakeNavigate(), false),
         { epicId: EPIC_ID, tabId: TAB_ID },
         prepareOpenArtifact(CHOSEN_ID, "inst-chosen-case5"),
+        "user",
       );
     });
     expect(activeArtifactId(TAB_ID)).toBe(CHOSEN_ID);
@@ -707,6 +752,7 @@ describe("route focus opens the requested artifact (T156)", () => {
         makeNestedFocusRouter(fakeNavigate(), true),
         { epicId: EPIC_ID, tabId: TAB_ID },
         () => null,
+        "user",
       );
     });
 
@@ -740,6 +786,7 @@ describe("route focus opens the requested artifact (T156)", () => {
         makeNestedFocusRouter(fakeNavigate(), true),
         { epicId: EPIC_ID, tabId: TAB_ID },
         () => null,
+        "user",
       );
     });
 
@@ -775,6 +822,7 @@ describe("route focus opens the requested artifact (T156)", () => {
         makeNestedFocusRouter(fakeNavigate(), true),
         { epicId: EPIC_ID, tabId: TAB_ID },
         () => null,
+        "user",
       );
     });
 
@@ -794,6 +842,7 @@ describe("route focus opens the requested artifact (T156)", () => {
         makeNestedFocusRouter(fakeNavigate(), true),
         { epicId: EPIC_ID, tabId: TAB_ID },
         prepareOpenArtifact(CHOSEN_ID, "inst-strict-chosen"),
+        "user",
       );
     });
     expect(activeArtifactId(TAB_ID)).toBe(CHOSEN_ID);
@@ -843,11 +892,12 @@ describe("route focus opens the requested artifact (T156)", () => {
               sessionId: "session-push",
               tabId: "tab-push",
               source,
-              navigateNested: (epicId, tabId, prepare) =>
+              navigateNested: (epicId, tabId, prepare, provenance) =>
                 navigateNestedFocus(
                   makeNestedFocusRouter(fakeNavigate(), true),
                   { epicId, tabId },
                   prepare,
+                  provenance,
                 ),
             }),
           ).toBe(true);
@@ -874,6 +924,286 @@ describe("route focus opens the requested artifact (T156)", () => {
         useSettingsStore.setState({ agentTabSurfacing: priorSurfacing });
         setEpicSurfaceVisibility(EPIC_ID, TAB_ID, false);
       }
+    },
+  );
+  // The push cases above hand the boundary a bare navigate, so they never see
+  // the search the push commits. Here the real reducer runs against the URL
+  // the click landed on, and its output is fed back to the hook as the route.
+  it("a pushed browser tab's committed nested target does not defeat a waiting artifact request (nested history ON)", async () => {
+    persistentHistoryState.controller = {} as PersistentHistoryController;
+    const priorSurfacing = useSettingsStore.getState().agentTabSurfacing;
+    useSettingsStore.setState({ agentTabSurfacing: "surface" });
+    setEpicSurfaceVisibility(EPIC_ID, TAB_ID, true);
+    try {
+      const REQUESTED_ID = "artifact-push-outranked";
+      const FOCUSED_AT = 1600;
+      recordsStore.set([]);
+
+      const hook = mountHook(
+        baseIntent({ focusArtifactId: REQUESTED_ID, focusedAt: FOCUSED_AT }),
+      );
+
+      const { navigate, committed } = makeCommittingNavigate({
+        focusArtifactId: REQUESTED_ID,
+        focusedAt: FOCUSED_AT,
+      });
+      act(() => {
+        expect(
+          surfaceHostOpenedTab({
+            epicId: EPIC_ID,
+            viewTabId: TAB_ID,
+            hostId: HOST_ID,
+            sessionId: "session-outranked",
+            tabId: "tab-outranked",
+            source: "agent",
+            navigateNested: (epicId, tabId, prepare, provenance) =>
+              navigateNestedFocus(
+                makeNestedFocusRouter(navigate, true),
+                { epicId, tabId },
+                prepare,
+                provenance,
+              ),
+          }),
+        ).toBe(true);
+      });
+      expect(openTiles(TAB_ID).map((tile) => tile.type)).toContain(
+        TILE_KIND_BROWSER_SESSION,
+      );
+      // The commit keeps the pending request in the URL; that is the premise.
+      expect(committed.search?.focusArtifactId).toBe(REQUESTED_ID);
+      expect(committed.search?.focusedAt).toBe(FOCUSED_AT);
+      const nested = committedNestedFocus(committed.search);
+
+      // The route now carries the committed browser target AND the request.
+      hook.rerender(
+        baseIntent({
+          focusArtifactId: REQUESTED_ID,
+          focusedAt: FOCUSED_AT,
+          focusPaneId: nested.focusPaneId,
+          focusTileInstanceId: nested.focusTileInstanceId,
+        }),
+      );
+
+      act(() => {
+        recordsStore.set([
+          record({ id: REQUESTED_ID, type: "html", name: "Requested" }),
+        ]);
+      });
+
+      await waitFor(() => {
+        expect(openArtifactIds(TAB_ID)).toContain(REQUESTED_ID);
+      });
+      await waitFor(() => {
+        expect(activeArtifactId(TAB_ID)).toBe(REQUESTED_ID);
+      });
+      expect(openArtifactIds(TAB_ID)).toContain(REQUESTED_ID);
+    } finally {
+      useSettingsStore.setState({ agentTabSurfacing: priorSurfacing });
+      setEpicSurfaceVisibility(EPIC_ID, TAB_ID, false);
+    }
+  });
+
+  it("a nested target the person commits through the boundary still outranks a waiting artifact request (nested history ON)", async () => {
+    persistentHistoryState.controller = {} as PersistentHistoryController;
+    const REQUESTED_ID = "artifact-human-outranks";
+    const CHOSEN_ID = "artifact-human-chosen";
+    const FOCUSED_AT = 1700;
+    recordsStore.set([record({ id: CHOSEN_ID, type: "spec", name: "Chosen" })]);
+
+    const hook = mountHook(
+      baseIntent({ focusArtifactId: REQUESTED_ID, focusedAt: FOCUSED_AT }),
+    );
+
+    const { navigate, committed } = makeCommittingNavigate({
+      focusArtifactId: REQUESTED_ID,
+      focusedAt: FOCUSED_AT,
+    });
+    act(() => {
+      navigateNestedFocus(
+        makeNestedFocusRouter(navigate, true),
+        { epicId: EPIC_ID, tabId: TAB_ID },
+        prepareOpenArtifact(CHOSEN_ID, "inst-human-chosen"),
+        "user",
+      );
+    });
+    expect(activeArtifactId(TAB_ID)).toBe(CHOSEN_ID);
+    expect(committed.search?.focusArtifactId).toBe(REQUESTED_ID);
+    const nested = committedNestedFocus(committed.search);
+
+    hook.rerender(
+      baseIntent({
+        focusArtifactId: REQUESTED_ID,
+        focusedAt: FOCUSED_AT,
+        focusPaneId: nested.focusPaneId,
+        focusTileInstanceId: nested.focusTileInstanceId,
+      }),
+    );
+
+    act(() => {
+      recordsStore.set([
+        record({ id: CHOSEN_ID, type: "spec", name: "Chosen" }),
+        record({ id: REQUESTED_ID, type: "html", name: "Requested" }),
+      ]);
+    });
+
+    await waitFor(() => {
+      expect(activeArtifactId(TAB_ID)).toBe(CHOSEN_ID);
+    });
+    expect(openArtifactIds(TAB_ID)).not.toContain(REQUESTED_ID);
+  });
+
+  it("a request arriving to a route that already names a nested target does not outrank it (Back / cold load, nested history ON)", async () => {
+    persistentHistoryState.controller = {} as PersistentHistoryController;
+    const REQUESTED_ID = "artifact-stale-request";
+    const BYSTANDER_ID = "artifact-route-target";
+    recordsStore.set([
+      record({ id: BYSTANDER_ID, type: "spec", name: "Route target" }),
+    ]);
+    // The tile the route's nested target names, already on the canvas.
+    const target = useEpicCanvasStore
+      .getState()
+      .prepareOpenTileInTabFocusTarget(
+        TAB_ID,
+        makeOpenableNodeRef({
+          id: BYSTANDER_ID,
+          instanceId: "inst-route-target",
+          type: "spec",
+          name: "Route target",
+          hostId: HOST_ID,
+        }),
+      );
+    if (target === null) throw new Error("expected a focus target");
+    expect(activeArtifactId(TAB_ID)).toBe(BYSTANDER_ID);
+
+    mountHook(
+      baseIntent({
+        focusArtifactId: REQUESTED_ID,
+        focusedAt: 1800,
+        focusPaneId: target.paneId,
+        focusTileInstanceId: target.tileInstanceId,
+      }),
+    );
+
+    act(() => {
+      recordsStore.set([
+        record({ id: BYSTANDER_ID, type: "spec", name: "Route target" }),
+        record({ id: REQUESTED_ID, type: "html", name: "Requested" }),
+      ]);
+    });
+
+    // Negative: the request must stay unopened once the record has projected.
+    await act(async () => {
+      await Promise.resolve();
+    });
+    expect(activeArtifactId(TAB_ID)).toBe(BYSTANDER_ID);
+    expect(openArtifactIds(TAB_ID)).not.toContain(REQUESTED_ID);
+  });
+  // Drives the REAL close hook, which serves a close button and a lifecycle
+  // effect alike. A shell exiting by itself commits a close through the same
+  // boundary a person's click does, and must not read as them turning away.
+  describe.each([
+    ["the last tile on the canvas", false],
+    ["a tile with a sibling left behind", true],
+  ] as const)(
+    "closing %s while an artifact request waits",
+    (_shape, sibling) => {
+      const REQUESTED_ID = "artifact-close-waiting";
+      const CLOSED_ID = "artifact-close-closed";
+      const SIBLING_ID = "artifact-close-sibling";
+
+      function setUpWaitingRequest() {
+        persistentHistoryState.controller = {} as PersistentHistoryController;
+        const present = [
+          record({ id: CLOSED_ID, type: "spec", name: "Closed" }),
+          ...(sibling
+            ? [record({ id: SIBLING_ID, type: "spec", name: "Sibling" })]
+            : []),
+        ];
+        recordsStore.set(present);
+        if (sibling) {
+          useEpicCanvasStore.getState().openTileInTab(
+            TAB_ID,
+            makeOpenableNodeRef({
+              id: SIBLING_ID,
+              instanceId: "inst-close-sibling",
+              type: "spec",
+              name: "Sibling",
+              hostId: HOST_ID,
+            }),
+          );
+        }
+        useEpicCanvasStore.getState().openTileInTab(
+          TAB_ID,
+          makeOpenableNodeRef({
+            id: CLOSED_ID,
+            instanceId: "inst-close-closed",
+            type: "spec",
+            name: "Closed",
+            hostId: HOST_ID,
+          }),
+        );
+        const canvas = useEpicCanvasStore.getState().canvasByTabId[TAB_ID];
+        if (canvas === undefined) throw new Error("expected the canvas");
+        const pane = collectPanes(canvas.root).find((candidate) =>
+          candidate.tabInstanceIds.includes("inst-close-closed"),
+        );
+        if (pane === undefined)
+          throw new Error("expected the closed tile's pane");
+
+        mountHook(
+          baseIntent({ focusArtifactId: REQUESTED_ID, focusedAt: 1900 }),
+        );
+        return { present, paneId: pane.id };
+      }
+
+      it.each([
+        ["automatic", "does not retire", false],
+        ["user", "retires", true],
+      ] as const)(
+        "%s: a close %s a waiting request",
+        async (origin, _label, retires) => {
+          const { present, paneId } = setUpWaitingRequest();
+          const close = renderHook(() =>
+            useCloseCanvasTileWithNestedFocus(
+              TAB_ID,
+              paneId,
+              "inst-close-closed",
+            ),
+          );
+
+          act(() => {
+            // Provenance is stated by the INVOCATION now, not baked into the
+            // callback - which is the whole point of the contract: one closure
+            // serves a Close button and an exit effect alike.
+            close.result.current(origin);
+          });
+          expect(openArtifactIds(TAB_ID)).not.toContain(CLOSED_ID);
+          const focusAfterClose = activeArtifactId(TAB_ID);
+          expect(focusAfterClose).toBe(sibling ? SIBLING_ID : null);
+
+          act(() => {
+            recordsStore.set([
+              ...present.filter((r) => r.id !== CLOSED_ID),
+              record({ id: REQUESTED_ID, type: "html", name: "Requested" }),
+            ]);
+          });
+
+          if (retires) {
+            // The request is the person's to lose, so what their close left
+            // focused stands and the artifact never opens.
+            await act(async () => {
+              await Promise.resolve();
+            });
+            expect(openArtifactIds(TAB_ID)).not.toContain(REQUESTED_ID);
+            expect(activeArtifactId(TAB_ID)).toBe(focusAfterClose);
+          } else {
+            await waitFor(() => {
+              expect(activeArtifactId(TAB_ID)).toBe(REQUESTED_ID);
+            });
+            expect(openArtifactIds(TAB_ID)).toContain(REQUESTED_ID);
+          }
+        },
+      );
     },
   );
 });

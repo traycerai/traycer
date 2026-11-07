@@ -14,7 +14,6 @@ import { isMobileViewport } from "@/hooks/ui/use-mobile-viewport";
 import { Analytics, AnalyticsEvent } from "@/lib/analytics";
 import { openTileWithNavigation } from "@/lib/canvas/tile-open/open-tile";
 import type { NavigateNestedFocus } from "@/lib/epic-nested-focus-navigation";
-import { withoutHumanNestedFocusIntent } from "@/lib/nested-focus-navigation-intent";
 import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
 import { collectPanes } from "@/stores/epics/canvas/tile-tree";
 import { makeBrowserSessionTileRef } from "@/stores/epics/canvas/tile-schema/browser-tile";
@@ -263,45 +262,46 @@ export function surfaceHostOpenedTab(input: HostOpenedTabSurfacing): boolean {
 
   // Every source this function handles is a push - `agent` is the agent
   // driving the session, `page` is the page itself - so no call of it carries a
-  // human gesture, and the commit must not claim one. Without this, surfacing
-  // an automated tab retired the artifact the person had just clicked through
-  // to, because the push commits through the same nested-focus boundary a
-  // click does. The route write, the placement and the suppression gate above
-  // are all unchanged.
-  withoutHumanNestedFocusIntent(() =>
-    openTileWithNavigation(
-      {
-        node: makeBrowserSessionTileRef({
-          hostId: input.hostId,
-          sessionId: input.sessionId,
-          tabId: input.tabId,
-        }),
-        // The coordinator selected the presenting retained surface. Never
-        // re-resolve this through the legacy active/MRU compatibility fields:
-        // two top-level views of one Epic have independent canvases.
-        target: { tabId: input.viewTabId },
-        // Always `explicit`: the wire carries no disposition (a headless
-        // runtime cannot detect one, and Electron's real in-page disposition
-        // travels on `browserViewOpenTileRequest` instead - A5/B6), so a host
-        // push is a deliberate open, not a background one. It is a DISPOSITION,
-        // and says nothing about who asked - see the wrapper above.
-        gesture: "explicit",
-        modifiers: null,
-        placement:
-          groupedPaneId === null
-            ? null
-            : { kind: "tab", paneId: groupedPaneId, index: null },
-        dedupe: true,
-        // ponytail: `AnalyticsSource` has no host-push member and
-        // `analytics.ts` is out of this change's blast radius;
-        // `trackOpenedCanvasTile` emits nothing for `browser-session` tiles
-        // anyway, so this value is inert today. Add a real source when the
-        // analytics schema is next opened.
-        source: "direct_ui",
-      },
-      input.navigateNested,
-      { createTab: false, pipOrigin: "agent", mobileTarget: null },
-    ),
+  // human gesture, and `provenance` below says so. Claiming one retired the
+  // artifact the person had just clicked through to, because a push commits
+  // through the same nested-focus boundary a click does.
+  openTileWithNavigation(
+    {
+      node: makeBrowserSessionTileRef({
+        hostId: input.hostId,
+        sessionId: input.sessionId,
+        tabId: input.tabId,
+      }),
+      // The coordinator selected the presenting retained surface. Never
+      // re-resolve this through the legacy active/MRU compatibility fields:
+      // two top-level views of one Epic have independent canvases.
+      target: { tabId: input.viewTabId },
+      // Always `explicit`: the wire carries no disposition (a headless
+      // runtime cannot detect one, and Electron's real in-page disposition
+      // travels on `browserViewOpenTileRequest` instead - A5/B6), so a host
+      // push is a deliberate open, not a background one. It is a DISPOSITION,
+      // and says nothing about who asked - `provenance` below answers that.
+      gesture: "explicit",
+      modifiers: null,
+      placement:
+        groupedPaneId === null
+          ? null
+          : { kind: "tab", paneId: groupedPaneId, index: null },
+      dedupe: true,
+      // ponytail: `AnalyticsSource` has no host-push member and
+      // `analytics.ts` is out of this change's blast radius;
+      // `trackOpenedCanvasTile` emits nothing for `browser-session` tiles
+      // anyway, so this value is inert today. Add a real source when the
+      // analytics schema is next opened.
+      source: "direct_ui",
+    },
+    input.navigateNested,
+    {
+      createTab: false,
+      pipOrigin: "agent",
+      provenance: "automatic",
+      mobileTarget: null,
+    },
   );
   return true;
 }

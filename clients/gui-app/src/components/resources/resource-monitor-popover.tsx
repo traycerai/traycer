@@ -4743,8 +4743,11 @@ function commitOwnerFocus(args: {
     args.tabId === args.activeTabId
   ) {
     const tabId = args.tabId;
-    args.navigateNested(args.epicId, tabId, () =>
-      prepareResourceTarget(tabId, args.preparation),
+    args.navigateNested(
+      args.epicId,
+      tabId,
+      () => prepareResourceTarget(tabId, args.preparation),
+      "user",
     );
     return;
   }

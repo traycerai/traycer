@@ -28,34 +28,77 @@ export interface NestedFocusNavigationRouter {
 
 export type PrepareNestedFocusTarget = () => NestedFocusTarget | null;
 
+/**
+ * Who asked for a nested-focus commit.
+ *
+ * Required at every call, with no default, and that is the whole point of it.
+ * This boundary is shared: a click, a keypress, a drag, a host push surfacing
+ * an agent's browser tab, and a shell closing its own tile on exit all commit
+ * through it, and from inside it they are indistinguishable. The route's
+ * pending artifact focus reads a commit as the person turning away from a
+ * request it is still waiting on, so getting this wrong silently discards the
+ * artifact somebody just clicked.
+ *
+ * A default would have to be `"user"`, since that is the common case - which is
+ * exactly backwards, because the automatic callers are the ones nobody
+ * remembers. Two separate defects were already shipped that way, each an
+ * automatic caller inheriting a human's authority. Making it required turns
+ * "who asked?" into a question the compiler puts to every call site.
+ *
+ * Classify the INVOCATION, not the closure. One `onClose` callback can be
+ * wired to a Close button and to an exit effect at once, and the same bound
+ * navigator serves both a menu item and a lifecycle teardown; the actor is a
+ * property of the call, not of the function that was handed around.
+ */
+export type NestedFocusProvenance =
+  /** A person did this: a click, a key, a drag, a menu item, or a gesture
+   * whose completion they are waiting on. */
+  | "user"
+  /** Nobody did this: a host push, a session ending, a tile tearing itself
+   * down, any effect reacting to state rather than to a person. */
+  | "automatic";
+
 export type NavigateNestedFocus = (
   epicId: string,
   tabId: string,
   prepare: PrepareNestedFocusTarget,
+  provenance: NestedFocusProvenance,
 ) => NestedFocusTarget | null;
 
 export function navigateNestedFocus(
   router: NestedFocusNavigationRouter,
   tab: { readonly epicId: string; readonly tabId: string },
   prepare: PrepareNestedFocusTarget,
+  provenance: NestedFocusProvenance,
 ): NestedFocusTarget | null {
-  return navigateNestedFocusWithDomRestore(router, tab, prepare, false);
+  return navigateNestedFocusWithDomRestore(router, tab, prepare, {
+    restorePrimaryEditor: false,
+    provenance,
+  });
 }
 
 export function navigateNestedFocusToPrimaryEditor(
   router: NestedFocusNavigationRouter,
   tab: { readonly epicId: string; readonly tabId: string },
   prepare: PrepareNestedFocusTarget,
+  provenance: NestedFocusProvenance,
 ): NestedFocusTarget | null {
-  return navigateNestedFocusWithDomRestore(router, tab, prepare, true);
+  return navigateNestedFocusWithDomRestore(router, tab, prepare, {
+    restorePrimaryEditor: true,
+    provenance,
+  });
 }
 
 function navigateNestedFocusWithDomRestore(
   router: NestedFocusNavigationRouter,
   tab: { readonly epicId: string; readonly tabId: string },
   prepare: PrepareNestedFocusTarget,
-  restorePrimaryEditor: boolean,
+  options: {
+    readonly restorePrimaryEditor: boolean;
+    readonly provenance: NestedFocusProvenance;
+  },
 ): NestedFocusTarget | null {
+  const { restorePrimaryEditor, provenance } = options;
   const { epicId, tabId } = tab;
   // Recorded BEFORE the target is prepared, so every early return below still
   // stamps the gesture: closing the last tile prepares `null`, re-selecting
@@ -63,11 +106,11 @@ function navigateNestedFocusWithDomRestore(
   // history controller prepares one it never commits. The person acted in all
   // three, which is the only thing this stamp is about.
   //
-  // Not every commit through here IS a person, though - a host push surfacing
-  // an agent's or a page's tab comes through the same door. Such a caller wraps
-  // its commit in `withoutHumanNestedFocusIntent`, and this call then records
-  // nothing.
-  markExplicitNestedFocusIntent(epicId, tabId);
+  // Gated on what the CALLER declared, because not every commit through here is
+  // a person: see {@link NestedFocusProvenance}.
+  if (provenance === "user") {
+    markExplicitNestedFocusIntent(epicId, tabId);
+  }
   const target = prepare();
   if (target === null) {
     return null;

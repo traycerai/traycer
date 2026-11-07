@@ -228,7 +228,7 @@ export function SimulatorTile(props: SimulatorTileProps) {
       state={state}
       v11={v11}
       closesSession={v11 || openedHere}
-      onCloseTile={closeTile}
+      onCloseTile={() => closeTile("user")}
     />
   );
 }

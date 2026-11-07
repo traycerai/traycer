@@ -13,7 +13,10 @@ import {
 } from "@/components/epic-canvas/mobile/mobile-tile-selection";
 import { readMobileTwoTilesFit } from "@/hooks/ui/use-mobile-layout-form";
 import { isMobileViewport } from "@/hooks/ui/use-mobile-viewport";
-import type { NavigateNestedFocus } from "@/lib/epic-nested-focus-navigation";
+import type {
+  NavigateNestedFocus,
+  NestedFocusProvenance,
+} from "@/lib/epic-nested-focus-navigation";
 import type { NestedFocusTarget } from "@/lib/epic-nested-focus-route";
 import { createEmptyCanvas } from "@/stores/epics/canvas/canvas-state";
 import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
@@ -36,6 +39,7 @@ export const commitWithoutNavigation: NavigateNestedFocus = (
   _epicId,
   _tabId,
   prepare,
+  _provenance,
 ) => prepare();
 
 export interface OpenTileOptions {
@@ -52,6 +56,14 @@ export interface OpenTileOptions {
    */
   readonly pipOrigin: PipOrigin;
   /**
+   * Who asked for this open, for the nested-focus commit the plan goes through.
+   * Separate from `pipOrigin` on purpose: that one answers the pip gate's
+   * question about floats and is only consulted for a `pip` plan, while this
+   * decides whether the commit claims a person's authority over a pending
+   * artifact request. See `NestedFocusProvenance`.
+   */
+  readonly provenance: NestedFocusProvenance;
+  /**
    * Which of the phone shell's two tiles the open comes from wants it, for a
    * surface inside one of them; `null` from anywhere else.
    */
@@ -62,6 +74,7 @@ export interface OpenTileOptions {
 export const MANUAL_TILE_OPEN: OpenTileOptions = {
   createTab: true,
   pipOrigin: "manual",
+  provenance: "user",
   mobileTarget: null,
 };
 
@@ -150,6 +163,7 @@ export function openTileWithNavigation(
     navigateNested,
     epicId: store.tabsById[tabId]?.epicId ?? null,
     pipOrigin: options.pipOrigin,
+    provenance: options.provenance,
     adoptHtmlVersion: intent.adoptHtmlVersion === true,
   });
   // And again on the id it landed under: into a pane, the canvas mints one of

@@ -283,8 +283,12 @@ function reportChatProjectionWaitExpired(intent: CreatedChatOpenIntent): void {
   );
 }
 
-const rawNestedFocus: NavigateNestedFocus = (_epicId, _tabId, prepare) =>
-  prepare();
+const rawNestedFocus: NavigateNestedFocus = (
+  _epicId,
+  _tabId,
+  prepare,
+  _provenance,
+) => prepare();
 
 function buildCreateChatRequest(args: {
   readonly epicId: string;

@@ -60,6 +60,7 @@ import {
 } from "@/lib/epic-nested-focus-route";
 import { consumeNestedRoutePrimaryEditorFocus } from "@/lib/nested-route-dom-focus";
 import {
+  beginNestedFocusNavigation,
   forgetExplicitNestedFocusIntents,
   getNestedRouteApplicationDeferralMs,
   lastExplicitNestedFocusIntentSeq,
@@ -227,26 +228,29 @@ export function useEpicRouteSynchronization(
   // person acts, and a baseline taken once the snapshot had landed would read
   // their action as having happened before the request and never retire it.
   // React's documented "adjust state when a prop changes" shape, not an effect.
-  const [focusRequestBaseline, setFocusRequestBaseline] = useState<{
-    readonly key: string;
-    readonly lastIntentSeq: number;
-  } | null>(null);
+  const [focusRequestBaseline, setFocusRequestBaseline] =
+    useState<FocusRequestBaseline | null>(null);
   if ((focusRequestBaseline?.key ?? null) !== focusRequestKey) {
     // A later click on the same artifact carries a fresh `focusedAt`, so it is
     // a different key and therefore a new request, owed its own wait.
     setFocusRequestBaseline(
-      focusRequestKey === null ? null : { key: focusRequestKey, lastIntentSeq },
+      focusRequestKey === null
+        ? null
+        : {
+            key: focusRequestKey,
+            lastIntentSeq,
+            nestedTargetPresent: nestedRouteTarget !== null,
+          },
     );
   }
-  // Strictly NEWER, never merely different: this baseline outlives the stamp it
-  // was taken from, because the cleanup below drops that stamp on every root
-  // `StrictMode` replay while React retains the baseline. `>` reads the dropped
-  // stamp as what it is - no intent newer than the baseline - where `!==` read
-  // it as the person acting and retired a request nobody had touched.
-  const focusRequestRetired =
-    focusRequestBaseline !== null &&
-    focusRequestBaseline.key === focusRequestKey &&
-    lastIntentSeq > focusRequestBaseline.lastIntentSeq;
+  const {
+    retired: focusRequestRetired,
+    outranksNestedRoute: focusRequestOutrunsNestedRoute,
+  } = readFocusRequestState(
+    focusRequestBaseline,
+    focusRequestKey,
+    lastIntentSeq,
+  );
 
   // Dropped when this surface goes, so the per-tab stamps stay bounded by the
   // tabs actually mounted. Unconditional, and safe to run while this surface
@@ -469,6 +473,7 @@ export function useEpicRouteSynchronization(
         nestedRouteTarget,
         focusArtifactId,
         recordCount: records.length,
+        requestOutrunsNestedRoute: focusRequestOutrunsNestedRoute,
       })
     ) {
       return;
@@ -567,6 +572,22 @@ export function useEpicRouteSynchronization(
         ) {
           return focusTarget;
         }
+        // Armed for the same reason the navigation boundary arms it: the
+        // replace below is async, so until it commits the route still names
+        // the PREVIOUS target, and the nested-route sync effect would reapply
+        // it and bounce focus straight off the artifact just opened.
+        //
+        // Unnecessary until now, which is why this path never armed it: the
+        // auto-open only ever ran when the route named no nested target, so
+        // there was nothing stale to reapply. Letting a waiting request outrank
+        // a target committed during its wait is exactly what makes a stale
+        // target reachable here, so the guard stops being redundant.
+        //
+        // It matters most where the commit does not land at all:
+        // `replaceNestedFocusRoute` tolerates a rejected or superseded
+        // navigation by design, and without this the artifact would open and
+        // then sit unfocused behind the tile the route still named.
+        beginNestedFocusNavigation(targetEpicId, targetTabId, focusTarget);
         replaceNestedFocusRoute(
           navigate,
           { epicId: targetEpicId, tabId: targetTabId },
@@ -592,6 +613,7 @@ export function useEpicRouteSynchronization(
     nestedFocusEnabled,
     nestedRouteTarget,
     focusRequestRetired,
+    focusRequestOutrunsNestedRoute,
   ]);
 
   const lastSyncedFocus = useRef<string | null>(persistedFocus);
@@ -814,6 +836,76 @@ function gateLegacyAutoOpen(args: {
   return anyKeySpent ? "skip" : "resolve";
 }
 
+interface FocusRequestBaseline {
+  readonly key: string;
+  readonly lastIntentSeq: number;
+  /**
+   * Whether the route ALREADY named a nested target when this request arrived.
+   * See {@link readFocusRequestState}.
+   */
+  readonly nestedTargetPresent: boolean;
+}
+
+interface FocusRequestState {
+  /**
+   * The person acted after this request arrived, so it is theirs to lose rather
+   * than ours to honour over whatever they moved to.
+   *
+   * Strictly NEWER, never merely different: the baseline outlives the stamp it
+   * was taken from, because the sampling surface drops that stamp on every root
+   * `StrictMode` replay while React retains the baseline. `>` reads a dropped
+   * stamp as what it is - no intent newer than the baseline - where `!==` read
+   * it as the person acting and retired a request nobody had touched.
+   */
+  readonly retired: boolean;
+  /**
+   * Whether this still-waiting request outranks the nested target in the route.
+   *
+   * A committed nested target normally governs focus outright, and it has to:
+   * the route can carry a `focusArtifactId` long after that request was
+   * answered, so honouring the artifact again would re-open it on every Back to
+   * such a URL.
+   *
+   * But a target committed WHILE a request was waiting is a different thing
+   * from one the request arrived to find. The waiting case is reachable without
+   * the person doing anything - a host push surfacing an agent's or a page's
+   * browser tab commits a target, and that commit preserves the pending
+   * `focusArtifactId` in the URL exactly as it should - and precedence alone
+   * then defeated the request: the artifact the person clicked never opened,
+   * with nothing in the URL to show why.
+   *
+   * So only a request that arrived to a route naming NO target outranks one
+   * committed later. Back and a cold load are untouched, because in both the
+   * target is already there when the key is first seen.
+   *
+   * {@link retired} still wins over this, which is what keeps a PERSON's nested
+   * navigation authoritative: their gesture stamps the tab, the request is
+   * retired, and the target they chose governs. Only a commit nobody asked for
+   * leaves a request alive to outrank it.
+   */
+  readonly outranksNestedRoute: boolean;
+}
+
+/**
+ * Read a pending request's standing from its baseline. A baseline for a
+ * different key is a baseline for a different request, and answers neither
+ * question.
+ */
+function readFocusRequestState(
+  baseline: FocusRequestBaseline | null,
+  key: string | null,
+  lastIntentSeq: number,
+): FocusRequestState {
+  if (baseline === null || baseline.key !== key) {
+    return { retired: false, outranksNestedRoute: false };
+  }
+  const retired = lastIntentSeq > baseline.lastIntentSeq;
+  return {
+    retired,
+    outranksNestedRoute: !baseline.nestedTargetPresent && !retired,
+  };
+}
+
 /**
  * Whether the legacy auto-open effect should no-op: a committed nested route
  * target already governs focus, or there is nothing to auto-open yet.
@@ -823,14 +915,27 @@ function shouldSuppressLegacyAutoOpen(args: {
   readonly nestedRouteTarget: NestedFocusTarget | null;
   readonly focusArtifactId: string | undefined;
   readonly recordCount: number;
+  /**
+   * Whether a request that is still waiting outranks the committed nested
+   * target, because the route named no target when the request arrived. See
+   * `focusRequestOutrunsNestedRoute` - without this, a nested target committed
+   * during the wait by something nobody asked for defeated the request on
+   * precedence alone.
+   */
+  readonly requestOutrunsNestedRoute: boolean;
 }): boolean {
   const {
     nestedFocusEnabled,
     nestedRouteTarget,
     focusArtifactId,
     recordCount,
+    requestOutrunsNestedRoute,
   } = args;
-  if (nestedFocusEnabled && nestedRouteTarget !== null) {
+  if (
+    nestedFocusEnabled &&
+    nestedRouteTarget !== null &&
+    !requestOutrunsNestedRoute
+  ) {
     return true;
   }
   if (recordCount === 0 && focusArtifactId === undefined) {

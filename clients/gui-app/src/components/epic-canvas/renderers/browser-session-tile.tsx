@@ -64,7 +64,7 @@ export function BrowserSessionTile(props: BrowserSessionTileProps) {
     return (
       <PendingBrowserTabTile
         request={props.node.pending}
-        onRequestClose={closeCanvasTile}
+        onRequestClose={() => closeCanvasTile("user")}
       />
     );
   }
@@ -219,7 +219,7 @@ function ResolvedBrowserSessionTile(
       sessionId: props.node.sessionId,
       tabId: props.node.tabId,
       origin: "manual",
-      onReady: closeCanvasTile,
+      onReady: () => closeCanvasTile("user"),
       onError: (message) => toast.error(message),
     });
   }, [
@@ -236,7 +236,7 @@ function ResolvedBrowserSessionTile(
       node={node}
       visible={visible}
       pageSessionId={pageSessionIdForCanvasTile(props.node.id)}
-      onRequestClose={closeCanvasTile}
+      onRequestClose={() => closeCanvasTile("user")}
       persistViewportPreset={persistViewportPreset}
       onOpenLinkInNewTile={onOpenLinkInNewTile}
       // The canvas has no answer of its own to "new tab" beyond opening one

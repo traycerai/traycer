@@ -212,7 +212,7 @@ export function ManagedCommandOutputTile(props: ManagedCommandOutputTileProps) {
     return (
       <ShellOutputAvailabilityNotice
         availability={hostGate}
-        onClose={closeCanvasTile}
+        onClose={() => closeCanvasTile("user")}
         onReopen={null}
         className={undefined}
         testId={AVAILABILITY_NOTICE_TEST_ID}
@@ -238,7 +238,7 @@ export function ManagedCommandOutputTile(props: ManagedCommandOutputTileProps) {
       epicId={epicId}
       node={node}
       viewTabId={props.viewTabId}
-      onClose={closeCanvasTile}
+      onClose={() => closeCanvasTile("user")}
     />
   );
 }

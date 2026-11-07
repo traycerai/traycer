@@ -512,8 +512,16 @@ export function useEpicTerminalRowActions(args: {
       }),
     );
     if (found !== null) {
-      navigateNested(epicId, tabId, () =>
-        prepareCloseCanvasTabFocusTarget(tabId, found.paneId, found.instanceId),
+      navigateNested(
+        epicId,
+        tabId,
+        () =>
+          prepareCloseCanvasTabFocusTarget(
+            tabId,
+            found.paneId,
+            found.instanceId,
+          ),
+        "user",
       );
     }
     kill.mutate({ sessionId: session.sessionId });

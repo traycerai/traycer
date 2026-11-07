@@ -407,13 +407,20 @@ function commitArtifactTabDrop(
   if (preview.kind === "empty-shell") return false;
   const canvasStore = useEpicCanvasStore.getState();
   if (preview.kind === "artifact-tab-strip") {
-    navigateNested(source.epicId, source.viewTabId, () =>
-      canvasStore.prepareMoveActiveTabOnTabStripFocusTarget(source.viewTabId, {
-        sourcePaneId: source.sourceGroupId,
-        tabId: source.tabId,
-        targetPaneId: preview.groupId,
-        targetIndex: preview.index,
-      }),
+    navigateNested(
+      source.epicId,
+      source.viewTabId,
+      () =>
+        canvasStore.prepareMoveActiveTabOnTabStripFocusTarget(
+          source.viewTabId,
+          {
+            sourcePaneId: source.sourceGroupId,
+            tabId: source.tabId,
+            targetPaneId: preview.groupId,
+            targetIndex: preview.index,
+          },
+        ),
+      "user",
     );
     return true;
   }
@@ -421,14 +428,21 @@ function commitArtifactTabDrop(
     preview.kind === "artifact-tab-group-body" &&
     preview.position === "center"
   ) {
-    navigateNested(source.epicId, source.viewTabId, () =>
-      canvasStore.prepareMoveActiveTabOnTabStripFocusTarget(source.viewTabId, {
-        sourcePaneId: source.sourceGroupId,
-        tabId: source.tabId,
-        targetPaneId: preview.groupId,
-        targetIndex:
-          target.kind === "artifact-tab-group-body" ? target.tabCount : 0,
-      }),
+    navigateNested(
+      source.epicId,
+      source.viewTabId,
+      () =>
+        canvasStore.prepareMoveActiveTabOnTabStripFocusTarget(
+          source.viewTabId,
+          {
+            sourcePaneId: source.sourceGroupId,
+            tabId: source.tabId,
+            targetPaneId: preview.groupId,
+            targetIndex:
+              target.kind === "artifact-tab-group-body" ? target.tabCount : 0,
+          },
+        ),
+      "user",
     );
     return true;
   }
@@ -437,13 +451,17 @@ function commitArtifactTabDrop(
     preview.position !== "center"
   ) {
     const position = preview.position;
-    navigateNested(source.epicId, source.viewTabId, () =>
-      canvasStore.prepareSplitPaneWithTabFocusTarget(source.viewTabId, {
-        sourcePaneId: source.sourceGroupId,
-        tabId: source.tabId,
-        targetPaneId: preview.groupId,
-        position,
-      }),
+    navigateNested(
+      source.epicId,
+      source.viewTabId,
+      () =>
+        canvasStore.prepareSplitPaneWithTabFocusTarget(source.viewTabId, {
+          sourcePaneId: source.sourceGroupId,
+          tabId: source.tabId,
+          targetPaneId: preview.groupId,
+          position,
+        }),
+      "user",
     );
     return true;
   }
@@ -498,20 +516,27 @@ function placeResolvedCanvasTile(
       const existing = findOpenTileInTab(viewTabId, tile);
       if (existing !== null) {
         const canvasStore = useEpicCanvasStore.getState();
-        navigateNested(epicId, viewTabId, () =>
-          placement.kind === "tab"
-            ? canvasStore.prepareMoveActiveTabOnTabStripFocusTarget(viewTabId, {
-                sourcePaneId: existing.paneId,
-                tabId: existing.instanceId,
-                targetPaneId: placement.paneId,
-                targetIndex: placement.index ?? 0,
-              })
-            : canvasStore.prepareSplitPaneWithTabFocusTarget(viewTabId, {
-                sourcePaneId: existing.paneId,
-                tabId: existing.instanceId,
-                targetPaneId: placement.paneId,
-                position: placement.edge,
-              }),
+        navigateNested(
+          epicId,
+          viewTabId,
+          () =>
+            placement.kind === "tab"
+              ? canvasStore.prepareMoveActiveTabOnTabStripFocusTarget(
+                  viewTabId,
+                  {
+                    sourcePaneId: existing.paneId,
+                    tabId: existing.instanceId,
+                    targetPaneId: placement.paneId,
+                    targetIndex: placement.index ?? 0,
+                  },
+                )
+              : canvasStore.prepareSplitPaneWithTabFocusTarget(viewTabId, {
+                  sourcePaneId: existing.paneId,
+                  tabId: existing.instanceId,
+                  targetPaneId: placement.paneId,
+                  position: placement.edge,
+                }),
+          "user",
         );
         return true;
       }

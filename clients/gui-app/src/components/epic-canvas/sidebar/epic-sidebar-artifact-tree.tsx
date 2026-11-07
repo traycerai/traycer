@@ -1179,12 +1179,16 @@ const ArtifactNode = memo(function ArtifactNode(props: ArtifactNodeProps) {
       changeConfirmDeleteOpen(false);
       const found = findOpenArtifactInTab(tabId, nodeId);
       if (found !== null) {
-        navigateNested(epicId, tabId, () =>
-          prepareCloseCanvasTabFocusTarget(
-            tabId,
-            found.paneId,
-            found.instanceId,
-          ),
+        navigateNested(
+          epicId,
+          tabId,
+          () =>
+            prepareCloseCanvasTabFocusTarget(
+              tabId,
+              found.paneId,
+              found.instanceId,
+            ),
+          "user",
         );
       }
     };

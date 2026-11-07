@@ -150,42 +150,6 @@ const explicitIntentListeners = new Set<() => void>();
  */
 const MAX_TRACKED_TABS = 128;
 
-let humanIntentSuppressions = 0;
-
-/**
- * Run a nested-focus commit that NO person asked for: it writes its route and
- * moves its activation as usual, and does not claim the person turned away
- * from a pending artifact request.
- *
- * It exists because the boundary is shared. A host push - the browser
- * coordinator surfacing a tab an agent or a page opened - commits through
- * `navigateNestedFocus` exactly as a click does, and carries
- * `gesture: "explicit"` while doing it. That gesture is a PLACEMENT choice
- * (the wire carries no disposition, so a push is treated as a deliberate open
- * rather than a background one), not evidence of a human, and reading it as
- * one let an automated tab retire the artifact the person had just asked for.
- *
- * Scoped around the commit rather than configured on the navigator, because
- * the navigator is bound by a React consumer far from the push and threaded
- * through the coordinator as a plain function. The scope is exact despite
- * being dynamic: {@link markExplicitNestedFocusIntent} is the first statement
- * of the boundary and runs synchronously inside the commit, so nothing else
- * can land between the two. The router navigation it starts is async and marks
- * nothing.
- *
- * Suppression, not omission: the push still needs the boundary's route write,
- * its DOM restore and its optimistic guard. Only the claim about provenance is
- * withheld.
- */
-export function withoutHumanNestedFocusIntent<T>(commit: () => T): T {
-  humanIntentSuppressions += 1;
-  try {
-    return commit();
-  } finally {
-    humanIntentSuppressions -= 1;
-  }
-}
-
 /**
  * Watch for any explicit intent. Returns the unsubscribe.
  *
@@ -215,14 +179,15 @@ export function subscribeExplicitNestedFocusIntents(
  * target, re-selecting the tile already focused prepares an equal one, and a
  * window with no history controller prepares a target it never commits. The
  * gesture happened in all three.
+ *
+ * Only reached when the caller declared `provenance: "user"`. Whether a commit
+ * is a person's is the caller's to state and not this module's to infer - see
+ * `NestedFocusProvenance`.
  */
 export function markExplicitNestedFocusIntent(
   epicId: string,
   tabId: string,
 ): void {
-  // A commit nobody asked for still gets its route and its activation; what it
-  // does not get is a claim that the person acted.
-  if (humanIntentSuppressions > 0) return;
   explicitIntentSeq += 1;
   const key = pendingKey(epicId, tabId);
   // Re-inserted, not updated in place, so the map's iteration order is recency
