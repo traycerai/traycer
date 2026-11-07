@@ -5318,6 +5318,7 @@ describe("<ProvidersSettingsPanel />", () => {
     expect(awaitVariables.request).toEqual({
       providerId: "codex",
       profileId: "managed-1",
+      lastSeenReaderCount: null,
     });
     expect(awaitVariables.signal).toBeInstanceOf(AbortSignal);
     expect(typeof awaitOptions.onSuccess).toBe("function");
@@ -5987,6 +5988,7 @@ describe("<ProvidersSettingsPanel />", () => {
     expect(awaitVariables.request).toEqual({
       providerId: "codex",
       profileId: "ambient",
+      lastSeenReaderCount: null,
     });
     expect(awaitVariables.signal).toBeInstanceOf(AbortSignal);
     act(() => {
@@ -6008,6 +6010,7 @@ describe("<ProvidersSettingsPanel />", () => {
     expect(repollCall[0].request).toEqual({
       providerId: "codex",
       profileId: "ambient",
+      lastSeenReaderCount: null,
     });
     expect(repollCall[0].signal).toBeInstanceOf(AbortSignal);
     act(() => {
@@ -7193,6 +7196,7 @@ describe("<ProvidersSettingsPanel />", () => {
     expect(awaitVariables.request).toEqual({
       providerId: "codex",
       profileId: "managed-1",
+      lastSeenReaderCount: null,
     });
     expect(awaitVariables.signal).toBeInstanceOf(AbortSignal);
     act(() => {
