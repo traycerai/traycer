@@ -1,5 +1,6 @@
-import type { ReactNode } from "react";
+import { useEffect, type ReactNode } from "react";
 import {
+  act,
   cleanup,
   fireEvent,
   render,
@@ -18,9 +19,15 @@ import type {
   ResponseOfMethod,
 } from "@traycer-clients/shared/host-transport/host-messenger";
 import type { ProviderLoginRefusal } from "@traycer/protocol/host/provider-schemas";
+import { DEFAULT_PROVIDER_NATIVE_CAPABILITIES } from "@traycer/protocol/host/provider-native-schemas";
+import type {
+  ProviderCliState,
+  ProviderProfile,
+} from "@traycer/protocol/host/provider-schemas";
 import type { HostRpcRegistry } from "@/lib/host";
 import type { AwaitLoginVariables } from "@/hooks/providers/use-providers-await-login-mutation";
 import { appLogger } from "@/lib/logger";
+import { AddProfileWaitingStep } from "@/components/settings/panels/add-provider-profile-dialog";
 import {
   useProviderProfileLoginFlow,
   type AwaitLoginMutation,
@@ -144,7 +151,10 @@ function LoginFlowHarness(props: {
   readonly awaitLoginImpl: (
     variables: AwaitLoginVariables,
   ) => Promise<AwaitLoginResponse>;
+  readonly onCancel?: (request: CancelLoginRequest) => void;
+  readonly onSubmitCode?: (request: SubmitLoginCodeRequest) => void;
   readonly onFailed: (message: string) => void;
+  readonly onIdentity: () => void;
 }): ReactNode {
   const startLogin: StartLoginMutation = useMutation<
     StartLoginResponse,
@@ -170,7 +180,10 @@ function LoginFlowHarness(props: {
     CancelLoginRequest,
     { readonly hostId: string | null }
   >({
-    mutationFn: () => Promise.resolve({ cancelled: true }),
+    mutationFn: (request) => {
+      props.onCancel?.(request);
+      return Promise.resolve({ cancelled: true });
+    },
     onMutate: () => ({ hostId: null }),
   });
   const submitLoginCode: SubmitLoginCodeMutation = useMutation<
@@ -178,7 +191,10 @@ function LoginFlowHarness(props: {
     HostRpcError,
     SubmitLoginCodeRequest
   >({
-    mutationFn: () => Promise.resolve({ outcome: "accepted" }),
+    mutationFn: (request) => {
+      props.onSubmitCode?.(request);
+      return Promise.resolve({ outcome: "accepted" });
+    },
   });
   const touchLogin: TouchLoginMutation = useMutation<
     TouchLoginResponse,
@@ -213,6 +229,11 @@ function LoginFlowHarness(props: {
     failureMessages: { notStarted: NOT_STARTED, notFinished: NOT_FINISHED },
     onFailed: props.onFailed,
   });
+  const { onIdentity } = props;
+
+  useEffect(() => {
+    if (flow.state.kind === "identity") onIdentity();
+  }, [flow.state.kind, onIdentity]);
 
   return (
     <div>
@@ -225,6 +246,24 @@ function LoginFlowHarness(props: {
           ? JSON.stringify(flow.state.refusal)
           : "n/a"}
       </div>
+      {flow.state.kind === "waiting" && flow.state.readerCount !== undefined ? (
+        <AddProfileWaitingStep
+          loginUrl={flow.state.url}
+          userCode={flow.state.userCode}
+          loginCapability={null}
+          isLocalHost={false}
+          queuePending={false}
+          startingCopy={null}
+          cancelRequested={false}
+          cancelPending={flow.cancelPending}
+          cancelDisabled={flow.commitPending}
+          waiting
+          readerCount={flow.state.readerCount}
+          codePaste={flow.codePaste}
+          onOpenExternalLink={() => undefined}
+          onCancel={flow.cancel}
+        />
+      ) : null}
       <button
         type="button"
         onClick={() =>
@@ -232,6 +271,15 @@ function LoginFlowHarness(props: {
         }
       >
         start
+      </button>
+      <button
+        type="button"
+        onClick={() => flow.codePaste.submit("synthetic-code")}
+      >
+        Test submit code
+      </button>
+      <button type="button" onClick={() => flow.cancel()}>
+        Test cancel
       </button>
     </div>
   );
@@ -246,11 +294,21 @@ function renderFlow(options: {
   readonly awaitLoginImpl: (
     variables: AwaitLoginVariables,
   ) => Promise<AwaitLoginResponse>;
+  readonly onCancel?: (request: CancelLoginRequest) => void;
+  readonly onSubmitCode?: (request: SubmitLoginCodeRequest) => void;
+  readonly onIdentity?: () => void;
 }): { readonly onFailed: Mock<(message: string) => void> } {
   const onFailed = vi.fn<(message: string) => void>();
-  render(<LoginFlowHarness {...options} onFailed={onFailed} />, {
-    wrapper: queryClientWrapper(),
-  });
+  render(
+    <LoginFlowHarness
+      {...options}
+      onFailed={onFailed}
+      onIdentity={options.onIdentity ?? (() => undefined)}
+    />,
+    {
+      wrapper: queryClientWrapper(),
+    },
+  );
   fireEvent.click(screen.getByRole("button", { name: "start" }));
   return { onFailed };
 }
@@ -263,11 +321,184 @@ function failedRefusal(): unknown {
   return JSON.parse(screen.getByTestId("flow-refusal").textContent);
 }
 
+function deferred<T>(): {
+  readonly promise: Promise<T>;
+  readonly resolve: (value: T) => void;
+} {
+  let resolvePromise: (value: T) => void = () => undefined;
+  const promise = new Promise<T>((resolve) => {
+    resolvePromise = resolve;
+  });
+  return { promise, resolve: resolvePromise };
+}
+
+function authenticatedState(): ProviderCliState {
+  const profile: ProviderProfile = {
+    profileId: "p-1",
+    enabled: true,
+    kind: "managed",
+    authType: "oauth",
+    label: "Test profile",
+    auth: {
+      status: "authenticated",
+      badgeText: null,
+      label: null,
+      detail: null,
+    },
+    identity: { email: null, tier: null, accountUuid: null },
+    usageUpdatedAt: null,
+    rateLimitStatus: "unknown",
+    rateLimitLimitedScopes: null,
+    duplicateOfProfileId: null,
+    accentColor: null,
+    ambientDriftNotice: null,
+  };
+  return {
+    providerId: PROVIDER_ID,
+    enabled: true,
+    disabledBy: null,
+    nativeCapabilities: DEFAULT_PROVIDER_NATIVE_CAPABILITIES,
+    selected: { kind: "bundled" },
+    candidates: [],
+    auth: {
+      status: "authenticated",
+      badgeText: null,
+      label: null,
+      detail: null,
+    },
+    authPending: false,
+    checkedAt: null,
+    apiKey: { supported: false, configured: false, source: null },
+    terminalAgentArgs: "",
+    envOverrides: [],
+    loginCapability: null,
+    availabilityPending: false,
+    profiles: [profile],
+  };
+}
+
 afterEach(() => {
   cleanup();
 });
 
 describe("useProviderProfileLoginFlow - a provider that refuses the completed sign-in", () => {
+  it("shows the reader wait and Cancel control, then completes when the host reports authentication", async () => {
+    const secondAwaitStarted = deferred<void>();
+    const secondAwaitResult = deferred<AwaitLoginResponse>();
+    const identityReached = deferred<void>();
+    let awaitCount = 0;
+
+    renderFlow({
+      mode: "create",
+      existingProfileId: null,
+      startLoginImpl: () => Promise.resolve(startedAnswer({})),
+      onIdentity: () => identityReached.resolve(),
+      awaitLoginImpl: (variables) => {
+        awaitCount += 1;
+        if (awaitCount === 1) {
+          return Promise.resolve(
+            awaitAnswer({
+              installation: {
+                kind: "waiting-for-readers",
+                admissionId: "admission-reader-wait",
+                count: 2,
+              },
+            }),
+          );
+        }
+        expect(variables.request.profileId).toBe("admission-reader-wait");
+        expect(variables.request.lastSeenReaderCount).toBe(2);
+        secondAwaitStarted.resolve();
+        return secondAwaitResult.promise;
+      },
+    });
+
+    await act(async () => {
+      await secondAwaitStarted.promise;
+    });
+    expect(
+      screen.getByText("Waiting for 2 agents on this profile"),
+    ).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Cancel sign-in" })).toBeTruthy();
+
+    await act(async () => {
+      secondAwaitResult.resolve(awaitAnswer({ state: authenticatedState() }));
+      await identityReached.promise;
+    });
+    expect(flowState()).toBe("identity");
+    expect(
+      screen.queryByText("Waiting for 2 agents on this profile"),
+    ).toBeNull();
+  });
+
+  it("uses the waiting admission id for follow-up await, code submission, and cancellation", async () => {
+    const secondAwaitStarted = deferred<void>();
+    const secondAwaitResult = deferred<AwaitLoginResponse>();
+    const cancelCalls = vi.fn<(request: CancelLoginRequest) => void>();
+    const submitCalls = vi.fn<(request: SubmitLoginCodeRequest) => void>();
+    const cancelObserved = deferred<CancelLoginRequest>();
+    const submitObserved = deferred<SubmitLoginCodeRequest>();
+    let awaitCount = 0;
+
+    renderFlow({
+      mode: "create",
+      existingProfileId: null,
+      startLoginImpl: () => Promise.resolve(startedAnswer({})),
+      onCancel: (request) => {
+        cancelCalls(request);
+        cancelObserved.resolve(request);
+      },
+      onSubmitCode: (request) => {
+        submitCalls(request);
+        submitObserved.resolve(request);
+      },
+      awaitLoginImpl: (variables) => {
+        awaitCount += 1;
+        if (awaitCount === 1) {
+          return Promise.resolve(
+            awaitAnswer({
+              installation: {
+                kind: "waiting-for-readers",
+                admissionId: "admission-reader-wait",
+                count: 2,
+              },
+            }),
+          );
+        }
+        expect(variables.request.profileId).toBe("admission-reader-wait");
+        expect(variables.request.lastSeenReaderCount).toBe(2);
+        secondAwaitStarted.resolve();
+        return secondAwaitResult.promise;
+      },
+    });
+
+    await act(async () => {
+      await secondAwaitStarted.promise;
+    });
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "Test submit code" }));
+      await expect(submitObserved.promise).resolves.toEqual({
+        providerId: PROVIDER_ID,
+        profileId: "admission-reader-wait",
+        code: "synthetic-code",
+      });
+    });
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "Test cancel" }));
+      await expect(cancelObserved.promise).resolves.toEqual({
+        providerId: PROVIDER_ID,
+        profileId: "admission-reader-wait",
+        holderId: null,
+      });
+    });
+    expect(submitCalls).toHaveBeenCalledTimes(1);
+    expect(cancelCalls).toHaveBeenCalledTimes(1);
+    await act(async () => {
+      secondAwaitResult.resolve(awaitAnswer({ state: authenticatedState() }));
+      await secondAwaitResult.promise;
+    });
+  });
+
   it("lands a create-mode flow on `failed` carrying the refusal, with its reason as the message", async () => {
     const { onFailed } = renderFlow({
       mode: "create",
