@@ -62,6 +62,11 @@ export interface SettingsAvailabilityContext {
    * has anything to play, which is a fact of the build and not a preference.
    */
   readonly soundtrackOffered: boolean;
+  /**
+   * `desktopRecordingChannel() !== null`, read by the caller at call time:
+   * whether this shell can save a recording of the music.
+   */
+  readonly soundtrackRecordingOffered: boolean;
 }
 
 /** Rendered in every shell. */
@@ -111,6 +116,18 @@ export function isSoundtrackRowAvailable(
   context: SettingsAvailabilityContext,
 ): boolean {
   return !context.mobileApp && context.soundtrackOffered;
+}
+
+/**
+ * Sounds › Soundtrack › Record session — only a desktop build that is not
+ * production can save one, and says so through its bridge.
+ */
+export function isSoundtrackRecordingRowAvailable(
+  context: SettingsAvailabilityContext,
+): boolean {
+  return (
+    isSoundtrackRowAvailable(context) && context.soundtrackRecordingOffered
+  );
 }
 
 /**

@@ -31,6 +31,7 @@ function openWindow(
     readManifest,
     openPorts,
     random: () => 0.5,
+    recordingChannel: () => null,
   }).getState;
 }
 

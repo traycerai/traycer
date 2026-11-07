@@ -2,6 +2,7 @@ import { appLogger, describeLogError } from "@/lib/logger";
 import { reissueStemManifest } from "./manifest";
 import { WebAudioDimFilter, WebAudioLevel, WebAudioOutput } from "./output";
 import type { SoundtrackPorts } from "./session";
+import { SoundtrackLogRelay } from "./session-log";
 import { ManifestStemSource, type StemManifest } from "./stems";
 
 // Closing cuts what is still on its way to the speakers, which over Bluetooth
@@ -10,7 +11,7 @@ const CLOSE_AFTER_FADE_SECONDS = 0.5;
 
 /**
  * Opens the audio device: speakers ← volume ← a chime's duck ← low-pass ← the
- * mix. Only ever call this from a gesture of the person's, because the
+ * mix. A recording takes its copy where the low-pass hands over. Only ever call this from a gesture of the person's, because the
  * `AudioContext` constructor can block the thread for 20 seconds on a Mac with
  * no output (see `lib/notifications/notification-chime.ts`), and because a
  * context made without one starts suspended. It throws where there is no audio
@@ -42,6 +43,11 @@ export function openWebAudioPorts(
     },
     duck: (chimeSeconds) => {
       level.duck(chimeSeconds);
+    },
+    log: new SoundtrackLogRelay(),
+    captureMix: async (quality) => {
+      const { openMixCapture } = await import("./mix-capture");
+      return openMixCapture(context, (node) => dim.tap(node), quality);
     },
     close: (afterSeconds) => {
       window.setTimeout(

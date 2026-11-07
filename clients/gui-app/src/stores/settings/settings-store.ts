@@ -68,6 +68,14 @@ import {
   type MixDirectorId,
 } from "@/lib/soundtrack/directors";
 import { MIX_TUNING } from "@/lib/soundtrack/mix-tuning";
+import {
+  DEFAULT_RECORDING_LIMIT,
+  DEFAULT_RECORDING_QUALITY,
+  isRecordingLimitId,
+  isRecordingQuality,
+  type RecordingLimitId,
+  type RecordingQuality,
+} from "@/lib/soundtrack/recording";
 import type { DefaultOpenTarget } from "@/lib/editor/editor-menu-catalog";
 import type { TilePlacementCategory } from "@/lib/canvas/tile-open/intent";
 export type ThemeMode = "system" | "light" | "dark";
@@ -368,6 +376,9 @@ export interface SettingsState {
   soundtrackDirector: MixDirectorId;
   /** A gain from 0 to 1. */
   soundtrackVolume: number;
+  /** How long a music recording runs; the recording itself is never kept. */
+  soundtrackRecordingLimit: RecordingLimitId;
+  soundtrackRecordingQuality: RecordingQuality;
   setTheme: (theme: ThemeMode) => void;
   setThemePreset: (preset: ThemePreset) => void;
   /**
@@ -425,6 +436,8 @@ export interface SettingsState {
   setSoundtrackEnabled: (value: boolean) => void;
   setSoundtrackDirector: (value: MixDirectorId) => void;
   setSoundtrackVolume: (value: number) => void;
+  setSoundtrackRecordingLimit: (value: RecordingLimitId) => void;
+  setSoundtrackRecordingQuality: (value: RecordingQuality) => void;
 }
 
 type PersistedSettingsState = Pick<
@@ -472,6 +485,8 @@ type PersistedSettingsState = Pick<
   | "soundtrackEnabled"
   | "soundtrackDirector"
   | "soundtrackVolume"
+  | "soundtrackRecordingLimit"
+  | "soundtrackRecordingQuality"
 >;
 
 type SetFn = (
@@ -557,6 +572,8 @@ function partializeSettingsState(state: SettingsState): PersistedSettingsState {
     soundtrackEnabled: state.soundtrackEnabled,
     soundtrackDirector: state.soundtrackDirector,
     soundtrackVolume: state.soundtrackVolume,
+    soundtrackRecordingLimit: state.soundtrackRecordingLimit,
+    soundtrackRecordingQuality: state.soundtrackRecordingQuality,
   };
 }
 
@@ -610,6 +627,8 @@ export const useSettingsStore = create<SettingsState>()(
       soundtrackEnabled: false,
       soundtrackDirector: DEFAULT_MIX_DIRECTOR,
       soundtrackVolume: MIX_TUNING.volume.initial,
+      soundtrackRecordingLimit: DEFAULT_RECORDING_LIMIT,
+      soundtrackRecordingQuality: DEFAULT_RECORDING_QUALITY,
       setTheme: makeSetter(set, "theme"),
       setThemePreset: (themePreset) => {
         if (useThemeLibraryStore.getState().clearSelection())
@@ -752,6 +771,11 @@ export const useSettingsStore = create<SettingsState>()(
           s.soundtrackVolume === next ? s : { soundtrackVolume: next },
         );
       },
+      setSoundtrackRecordingLimit: makeSetter(set, "soundtrackRecordingLimit"),
+      setSoundtrackRecordingQuality: makeSetter(
+        set,
+        "soundtrackRecordingQuality",
+      ),
     }),
     {
       ...basePersistOptions(persistKey(STORE_KEYS.settings)),
@@ -847,6 +871,16 @@ export const useSettingsStore = create<SettingsState>()(
             Number.isFinite(persisted.soundtrackVolume)
               ? clampSoundtrackVolume(persisted.soundtrackVolume)
               : MIX_TUNING.volume.initial,
+          soundtrackRecordingLimit: isRecordingLimitId(
+            persisted.soundtrackRecordingLimit,
+          )
+            ? persisted.soundtrackRecordingLimit
+            : DEFAULT_RECORDING_LIMIT,
+          soundtrackRecordingQuality: isRecordingQuality(
+            persisted.soundtrackRecordingQuality,
+          )
+            ? persisted.soundtrackRecordingQuality
+            : DEFAULT_RECORDING_QUALITY,
         };
       },
     },

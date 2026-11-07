@@ -1,3 +1,4 @@
+import type { MixCapture } from "../recording";
 import type { RandomSource } from "../scheduler";
 import type { OutputGain, OutputVoice, SoundtrackOutput } from "../output";
 import type { StemSource } from "../stems";
@@ -26,6 +27,11 @@ interface RampCall {
   readonly at: number;
 }
 type PortCall = PlayCall | CutCall | RampCall;
+
+/** The ports' capture, for a fixture that never records. */
+export function captureNothing(): Promise<MixCapture> {
+  return Promise.reject(new Error("This fixture records nothing"));
+}
 
 /** mulberry32: the same draws on every run; each call owns its own state. */
 export function mulberry32(seed: number): RandomSource {

@@ -8,6 +8,14 @@ import {
   type RandomSource,
   type ScheduledPlay,
 } from "./scheduler";
+import type {
+  LayerGainCause,
+  LoggedRole,
+  PlayerSnapshot,
+  RunEnding,
+  SoundtrackLog,
+  TrackGainCause,
+} from "./session-log";
 import type { StemSource } from "./stems";
 import { spanOf } from "./variant-groups";
 import type {
@@ -34,6 +42,8 @@ export interface TrackPlayerOptions {
   readonly output: SoundtrackOutput;
   readonly stems: StemSource;
   readonly random: RandomSource;
+  /** Told what the player does, while anything listens. */
+  readonly log: SoundtrackLog;
   /** How long the silence between two plays of the track lasts. */
   readonly silenceSeconds: Range;
   /** What `elapsed` answers until the first start; 0 for a track from its top. */
@@ -104,12 +114,22 @@ type PlayerPhase =
   | { readonly kind: "silence"; readonly endsAt: number }
   | PlayingPhase;
 
+/** Where a sample plays, and what the log calls it. */
+interface VoiceSound {
+  readonly gain: OutputGain;
+  /** The layer it plays on; null for an intro or outro. */
+  readonly layerIndex: number | null;
+  /** The layer the stems know it by, an intro's or outro's included. */
+  readonly layer: Layer;
+  readonly role: LoggedRole;
+}
+
 interface ActiveVoice {
   readonly voice: OutputVoice;
   readonly startsAt: number;
   readonly endsAt: number;
-  /** The layer it plays on; null for an intro or outro. */
-  readonly layerIndex: number | null;
+  readonly sound: VoiceSound;
+  readonly variant: number;
 }
 
 /** A sample on a layer that a stop or a run's end is fading out. */
@@ -121,9 +141,10 @@ interface FadingVoice {
 }
 
 /** An intro or outro, as a layer the stems know by its name, and its gain. */
-interface BookendChannel {
+interface BookendChannel extends VoiceSound {
   readonly layer: PooledLayer;
-  readonly gain: OutputGain;
+  readonly layerIndex: null;
+  readonly role: "intro" | "outro";
 }
 
 /** A layer's last gain ramp, so that restating its target can tell. */
@@ -135,9 +156,12 @@ interface LayerRamp {
 function bookendChannel(
   bus: OutputGain,
   bookend: Bookend | null,
+  role: "intro" | "outro",
 ): BookendChannel | null {
   if (bookend === null) return null;
   return {
+    role,
+    layerIndex: null,
     layer: {
       name: bookend.name,
       role: null,
@@ -162,11 +186,14 @@ export class TrackPlayer {
   private readonly output: SoundtrackOutput;
   private readonly stems: StemSource;
   private readonly random: RandomSource;
+  private readonly log: SoundtrackLog;
   private readonly silenceSeconds: Range;
   private readonly onRunStart: (state: State) => void;
   private readonly onRunEnd: (silenceSeconds: number) => void;
   private readonly bus: OutputGain;
   private readonly layerGains: readonly OutputGain[];
+  /** By layer, built once so that placing a sample allocates no more. */
+  private readonly layerSounds: readonly VoiceSound[];
   private readonly layerTargets: number[];
   private readonly layerRamps: (LayerRamp | null)[];
   private readonly intro: BookendChannel | null;
@@ -195,6 +222,7 @@ export class TrackPlayer {
     this.output = options.output;
     this.stems = options.stems;
     this.random = options.random;
+    this.log = options.log;
     this.silenceSeconds = options.silenceSeconds;
     this.onRunStart = options.onRunStart;
     this.onRunEnd = options.onRunEnd;
@@ -203,10 +231,16 @@ export class TrackPlayer {
     this.layerGains = options.track.layers.map((layer) =>
       this.bus.createChild(0, layer.pan),
     );
+    this.layerSounds = options.track.layers.map((layer, layerIndex) => ({
+      gain: this.layerGains[layerIndex],
+      layerIndex,
+      layer,
+      role: layer.role,
+    }));
     this.layerTargets = options.track.layers.map(() => 1);
     this.layerRamps = options.track.layers.map(() => null);
-    this.intro = bookendChannel(this.bus, options.track.intro);
-    this.outro = bookendChannel(this.bus, options.track.outro);
+    this.intro = bookendChannel(this.bus, options.track.intro, "intro");
+    this.outro = bookendChannel(this.bus, options.track.outro, "outro");
     this.phases = options.track.phases.map((phase) => ({
       ...phase,
       state: this.stateNamed(phase.state),
@@ -220,7 +254,7 @@ export class TrackPlayer {
    */
   start(fromElapsed: number, fadeInSeconds: number): void {
     this.fadeOutEndsAt = null;
-    this.bus.ramp(1, fadeInSeconds);
+    this.rampBus(1, fadeInSeconds, "start");
     if (this.phase.kind !== "stopped") return;
     this.beginRun(fromElapsed, this.output.currentTime());
     this.timer = window.setInterval(() => {
@@ -246,6 +280,7 @@ export class TrackPlayer {
           .filter((placed) => placed.startAt >= position)
           .map((placed) => placed.play),
       );
+      this.logCancelled();
       // A phase due since the last tick belongs to the run a resume goes on with.
       this.takePhasesDue(this.phase, position);
     }
@@ -254,7 +289,7 @@ export class TrackPlayer {
     if (this.timer !== null) window.clearInterval(this.timer);
     this.timer = null;
     this.cutVoices(fade);
-    this.bus.ramp(0, fade);
+    this.rampBus(0, fade, "stop");
   }
 
   /**
@@ -274,7 +309,7 @@ export class TrackPlayer {
    */
   fadeOut(seconds: number): void {
     if (this.phase.kind === "stopped") return;
-    this.bus.ramp(0, seconds);
+    this.rampBus(0, seconds, "fade-out");
     this.fadeOutEndsAt = this.output.currentTime() + seconds;
   }
 
@@ -318,7 +353,7 @@ export class TrackPlayer {
       this.chosenState = state;
       return;
     }
-    this.moveTo(this.phase.scheduler, state, LAYER_RAMP_SECONDS);
+    this.moveTo(this.phase.scheduler, state, LAYER_RAMP_SECONDS, "director");
   }
 
   /** Per layer; empty when there is no state. */
@@ -347,7 +382,7 @@ export class TrackPlayer {
     if (this.scheduler === null) return;
     this.scheduler.setLayerEnabled(layerIndex, enabled);
     if (this.scheduler.enabledLayers()[layerIndex] !== enabled) return;
-    this.applyLayerGain(layerIndex, LAYER_RAMP_SECONDS);
+    this.applyLayerGain(layerIndex, LAYER_RAMP_SECONDS, "director");
   }
 
   /**
@@ -358,7 +393,7 @@ export class TrackPlayer {
     if (this.layerTargets[layerIndex] === target) return;
     this.layerTargets[layerIndex] = target;
     if (this.scheduler !== null) {
-      this.applyLayerGain(layerIndex, LAYER_RAMP_SECONDS);
+      this.applyLayerGain(layerIndex, LAYER_RAMP_SECONDS, "director");
     }
   }
 
@@ -366,6 +401,33 @@ export class TrackPlayer {
   setPauseMultiplier(multiplier: number): void {
     this.pauseMultiplier = multiplier;
     this.scheduler?.setPauseMultiplier(multiplier);
+  }
+
+  /** What it sounds now and has placed to come, and how its layers stand. */
+  describe(): PlayerSnapshot {
+    const now = this.output.currentTime();
+    const enabled = this.enabledLayers();
+    return {
+      track: this.track.name,
+      state: this.currentState()?.name ?? null,
+      trackTime: this.elapsed(),
+      layers: this.track.layers.map((layer, layerIndex) => ({
+        layer: layer.name,
+        role: layer.role,
+        enabled: enabled.at(layerIndex) ?? false,
+        target: this.layerTargets[layerIndex],
+      })),
+      samples: this.voices
+        .filter((active) => active.endsAt > now)
+        .map((active) => ({
+          layer: active.sound.layer.name,
+          role: active.sound.role,
+          variant: active.variant,
+          start: active.startsAt,
+          end: active.endsAt,
+          pan: active.sound.layer.pan,
+        })),
+    };
   }
 
   private stateNamed(name: string): State {
@@ -393,7 +455,7 @@ export class TrackPlayer {
       now >= this.phase.outroEndsAt
     ) {
       this.voices = this.voices.filter((active) => active.endsAt > now);
-      this.endRun(now, MIX_TUNING.outroRingOutSeconds);
+      this.endRun(now, MIX_TUNING.outroRingOutSeconds, "outro");
     }
     if (this.phase.kind === "playing") this.lookAhead(this.phase, now);
   }
@@ -423,10 +485,13 @@ export class TrackPlayer {
     // A state chosen while stopped moves the run on, keeping what it has played.
     if (this.chosenState !== null) {
       scheduler.enterState(this.chosenState, fromElapsed);
+      this.logState(this.chosenState, "director");
       this.chosenState = null;
     }
     scheduler.restartAt(fromElapsed);
     this.scheduler = scheduler;
+    // Ahead of the gains it restores, so the log reads in the order heard.
+    this.logRunStart(runStarts, now, scheduler.decidingState());
     // Due on a run's start, or again when a stop cut it short.
     const introDue =
       this.intro !== null &&
@@ -450,7 +515,7 @@ export class TrackPlayer {
     };
     this.phase = phase;
     this.layerGains.forEach((_, layerIndex) => {
-      this.applyLayerGain(layerIndex, SAMPLE_FADE_SECONDS);
+      this.applyLayerGain(layerIndex, SAMPLE_FADE_SECONDS, "restore");
     });
     if (introDue) void this.placeIntro(phase, this.intro);
     // Last, so the gains it moves are not set back by the ones above.
@@ -477,10 +542,12 @@ export class TrackPlayer {
     scheduler: TrackScheduler,
     state: State,
     rampSeconds: number,
+    cause: "director" | "phase",
   ): void {
     scheduler.enterState(state, this.elapsed());
+    this.logState(state, cause);
     this.layerGains.forEach((_, layerIndex) => {
-      this.applyLayerGain(layerIndex, rampSeconds);
+      this.applyLayerGain(layerIndex, rampSeconds, cause);
     });
   }
 
@@ -492,7 +559,7 @@ export class TrackPlayer {
       const [due, ...rest] = run.phases;
       run.phases = rest;
       if (phase.scheduler.decidingState() !== due.state) {
-        this.moveTo(phase.scheduler, due.state, due.fadeSeconds);
+        this.moveTo(phase.scheduler, due.state, due.fadeSeconds, "phase");
       }
     }
   }
@@ -531,20 +598,31 @@ export class TrackPlayer {
   private ringOut(capAt: number, now: number): void {
     const heard = this.voices.some(
       (active) =>
-        active.layerIndex === null || this.layerLevel(active.layerIndex) > 0,
+        active.sound.layerIndex === null ||
+        this.layerLevel(active.sound.layerIndex) > 0,
     );
     if (heard && now < capAt) return;
-    this.endRun(now, MIX_TUNING.ringOutFadeSeconds);
+    this.endRun(now, MIX_TUNING.ringOutFadeSeconds, heard ? "cap" : "rang-out");
   }
 
   /** The run is over: what still sounds fades out, and the silence begins. */
-  private endRun(now: number, fadeSeconds: number): void {
+  private endRun(now: number, fadeSeconds: number, ending: RunEnding): void {
     this.cutVoices(fadeSeconds);
     this.scheduler = null;
     this.run = null;
     this.position = 0;
     const silenceSeconds = drawSeconds(this.silenceSeconds, this.random);
     this.phase = { kind: "silence", endsAt: now + silenceSeconds };
+    if (this.log.listening()) {
+      this.log.write({
+        type: "run-end",
+        t: now,
+        track: this.track.name,
+        ending,
+        fade: fadeSeconds,
+        silence: silenceSeconds,
+      });
+    }
     // Last, so the owner may stop the player from it.
     this.onRunEnd(silenceSeconds);
   }
@@ -570,8 +648,8 @@ export class TrackPlayer {
       if (startAt !== null) {
         phase.placed.push({ play, startAt });
         this.startVoice(
-          this.layerGains[play.layerIndex],
-          play.layerIndex,
+          this.layerSounds[play.layerIndex],
+          play.variant,
           buffer,
           phase.trackStart + startAt,
         );
@@ -603,7 +681,7 @@ export class TrackPlayer {
       const startAt = this.bookendStartAt(phase, phase.fromElapsed);
       gridFrom = startAt;
       if (startAt < this.track.lengthSeconds) {
-        this.startVoice(intro.gain, null, buffer, phase.trackStart + startAt);
+        this.startVoice(intro, variant, buffer, phase.trackStart + startAt);
         gridFrom += buffer.duration;
       }
     } catch (error) {
@@ -634,7 +712,7 @@ export class TrackPlayer {
       if (this.phase !== phase) return;
       const when =
         phase.trackStart + this.bookendStartAt(phase, this.track.lengthSeconds);
-      this.startVoice(outro.gain, null, buffer, when);
+      this.startVoice(outro, variant, buffer, when);
       phase.outroEndsAt = when + buffer.duration;
       this.fadeLayersOut(phase.outroEndsAt);
     } catch (error) {
@@ -657,6 +735,7 @@ export class TrackPlayer {
     const seconds = endsAt - this.output.currentTime();
     this.layerGains.forEach((gain, layerIndex) => {
       gain.ramp(0, seconds);
+      this.logLayerGain(layerIndex, 0, seconds, "outro-fade");
       this.layerRamps[layerIndex] = { target: 0, endsAt };
     });
   }
@@ -675,17 +754,108 @@ export class TrackPlayer {
   }
 
   private startVoice(
-    gain: OutputGain,
-    layerIndex: number | null,
+    sound: VoiceSound,
+    variant: number,
     buffer: AudioBuffer,
     when: number,
   ): void {
     this.voices.push({
-      voice: gain.play(buffer, when, SAMPLE_FADE_SECONDS),
+      voice: sound.gain.play(buffer, when, SAMPLE_FADE_SECONDS),
       startsAt: when,
       endsAt: when + buffer.duration,
-      layerIndex,
+      sound,
+      variant,
     });
+    if (!this.log.listening()) return;
+    this.log.write({
+      type: "sample",
+      t: this.output.currentTime(),
+      track: this.track.name,
+      layer: sound.layer.name,
+      role: sound.role,
+      variant,
+      start: when,
+      pan: sound.layer.pan,
+    });
+  }
+
+  private rampBus(
+    target: number,
+    seconds: number,
+    cause: TrackGainCause,
+  ): void {
+    this.bus.ramp(target, seconds);
+    if (!this.log.listening()) return;
+    this.log.write({
+      type: "track-gain",
+      t: this.output.currentTime(),
+      track: this.track.name,
+      target,
+      ramp: seconds,
+      cause,
+    });
+  }
+
+  /** When this start opens a run, which a resume does not. */
+  private logRunStart(runStarts: boolean, now: number, state: State): void {
+    if (!runStarts || !this.log.listening()) return;
+    this.log.write({
+      type: "run-start",
+      t: now,
+      track: this.track.name,
+      state: state.name,
+    });
+  }
+
+  private logState(state: State, cause: "director" | "phase"): void {
+    if (!this.log.listening()) return;
+    this.log.write({
+      type: "state",
+      t: this.output.currentTime(),
+      track: this.track.name,
+      state: state.name,
+      cause,
+    });
+  }
+
+  /**
+   * Only a move: a ramp to where the gain was already going is not one. Called
+   * ahead of the ramp's record, which it compares with.
+   */
+  private logLayerGain(
+    layerIndex: number,
+    target: number,
+    seconds: number,
+    cause: LayerGainCause,
+  ): void {
+    if (!this.log.listening()) return;
+    if (this.layerRamps[layerIndex]?.target === target) return;
+    this.log.write({
+      type: "layer-gain",
+      t: this.output.currentTime(),
+      track: this.track.name,
+      layer: this.track.layers[layerIndex].name,
+      target,
+      ramp: seconds,
+      cause,
+    });
+  }
+
+  /** What a stop cuts before it started was never heard; called as it cuts. */
+  private logCancelled(): void {
+    if (!this.log.listening()) return;
+    const now = this.output.currentTime();
+    for (const active of this.voices) {
+      if (active.startsAt < now) continue;
+      this.log.write({
+        type: "sample-cancel",
+        t: now,
+        track: this.track.name,
+        layer: active.sound.layer.name,
+        variant: active.variant,
+        start: active.startsAt,
+      });
+    }
   }
 
   // Once per sample: a missing stem comes up again at every turn of its layer,
@@ -712,13 +882,13 @@ export class TrackPlayer {
       active.voice.cut(fadeSeconds);
       // One cut before it started stops there and then, with nothing to fade.
       if (
-        active.layerIndex !== null &&
+        active.sound.layerIndex !== null &&
         active.startsAt < now &&
         active.endsAt > now
       ) {
         this.fading.push({
           voice: active.voice,
-          layerIndex: active.layerIndex,
+          layerIndex: active.sound.layerIndex,
           silentAt: Math.min(active.endsAt, now + fadeSeconds),
         });
       }
@@ -751,7 +921,11 @@ export class TrackPlayer {
    * Under the outro, nothing but its fade moves a layer: a target or a switch
    * set meanwhile waits for the next start.
    */
-  private applyLayerGain(layerIndex: number, seconds: number): void {
+  private applyLayerGain(
+    layerIndex: number,
+    seconds: number,
+    cause: LayerGainCause,
+  ): void {
     if (this.phase.kind === "playing" && this.phase.outroEndsAt !== null) {
       return;
     }
@@ -778,6 +952,7 @@ export class TrackPlayer {
       length = Math.max(length, LAYER_RAMP_SECONDS);
     }
     this.layerGains[layerIndex].ramp(target, length);
+    this.logLayerGain(layerIndex, target, length, cause);
     this.layerRamps[layerIndex] = { target, endsAt: now + length };
   }
 }

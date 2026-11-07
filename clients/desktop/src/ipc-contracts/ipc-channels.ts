@@ -71,6 +71,12 @@ export const RunnerHostInvoke = {
   // The team's soundtrack set on a staging build, with its samples' links
   // signed: `electron-main/soundtrack/`. Only main holds the key.
   readSoundtrackSet: "runnerHost:soundtrack:readSet",
+  // A recording of the music, on a build that is not production: main owns
+  // the folder and the names (`electron-main/soundtrack/session-recordings.ts`).
+  openSoundtrackRecording: "runnerHost:soundtrack:recording:open",
+  appendSoundtrackRecording: "runnerHost:soundtrack:recording:append",
+  closeSoundtrackRecording: "runnerHost:soundtrack:recording:close",
+  revealSoundtrackRecording: "runnerHost:soundtrack:recording:reveal",
   // The sandbox control plane (traycer-server `/api/sandboxes`). Same CORS
   // reason as the registry calls above: traycer-server's allow-list is the web
   // dashboard origin, so the renderer cannot reach it directly.
@@ -654,6 +660,9 @@ export const RunnerHostSync = {
   // Whether this build can read the team's soundtrack set: the toggle is drawn
   // at render, before anything asynchronous could answer.
   soundtrackSourceAvailable: "runnerHost:sync:soundtrackSourceAvailable",
+  // Whether this build can save a recording of the music: false in production,
+  // where the recording channels are not registered at all.
+  soundtrackRecordingAvailable: "runnerHost:sync:soundtrackRecordingAvailable",
 } as const;
 
 type RunnerHostInvokeChannel =

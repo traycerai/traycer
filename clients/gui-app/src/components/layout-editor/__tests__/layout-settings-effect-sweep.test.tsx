@@ -86,6 +86,7 @@ const AVAILABILITY: SettingsAvailabilityContext = {
   // drawn, so the rows only it draws (the small-screen footer) have no control.
   phoneLayout: false,
   soundtrackOffered: false,
+  soundtrackRecordingOffered: false,
 };
 
 const WINDOWS: ReadonlyArray<SweepWindow> = ["sample", "epic"];

@@ -153,6 +153,7 @@ function currentAvailabilityContext(): SettingsAvailabilityContext {
     mobileApp: false,
     phoneLayout: false,
     soundtrackOffered: false,
+    soundtrackRecordingOffered: false,
   };
 }
 

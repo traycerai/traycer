@@ -3,7 +3,9 @@ import type { SoundtrackManifest } from "./manifest";
 import { MIX_TUNING } from "./mix-tuning";
 import type { SoundtrackOutput } from "./output";
 import { CROSSFADE_SECONDS, crossfadePlayers, TrackPlayer } from "./player";
+import type { MixCapture, RecordingQuality } from "./recording";
 import type { RandomSource } from "./scheduler";
+import type { SoundtrackLogRelay } from "./session-log";
 import {
   sameMixSignals,
   type MixSignals,
@@ -24,6 +26,15 @@ export interface SoundtrackPorts {
   duck(chimeSeconds: number): void;
   /** Lets go of the audio device once `afterSeconds` have gone by. */
   close(afterSeconds: number): void;
+  /** Where the engine says what it does; nothing listens until a recording. */
+  readonly log: SoundtrackLogRelay;
+  /**
+   * A copy of the mix as it leaves the low-pass, ahead of the volume and a
+   * chime's duck, encoded as `quality` asks. Nothing is added to the graph
+   * until this is called, and the speakers' path never changes. Rejects where
+   * the capture cannot be made.
+   */
+  captureMix(quality: RecordingQuality): Promise<MixCapture>;
 }
 
 /** Where a view's track had got to, so that it comes back there. */
@@ -157,7 +168,27 @@ export class SoundtrackSession {
     const previous = this.signals;
     if (previous !== null && sameMixSignals(previous, signals)) return;
     this.signals = signals;
+    this.logSignals(signals);
     if (previous?.view !== signals.view) this.bringToFront(signals.view);
+    this.replan();
+  }
+
+  /**
+   * Tells the log what drives the mix and what it is sounding, then restates
+   * the plan: for a recording starting now, whose first minute would otherwise
+   * be events about things it never saw begin.
+   */
+  logNow(): void {
+    const { log } = this.ports;
+    if (!log.listening()) return;
+    const { signals, inFront } = this;
+    if (signals !== null) this.logSignals(signals);
+    log.write({
+      type: "sounding",
+      t: this.ports.output.currentTime(),
+      view: signals?.view ?? null,
+      player: inFront?.player.describe() ?? null,
+    });
     this.replan();
   }
 
@@ -226,6 +257,7 @@ export class SoundtrackSession {
       output: this.ports.output,
       stems: this.ports.stems,
       random: this.random,
+      log: this.ports.log,
       silenceSeconds: MIX_TUNING.silenceSeconds,
       resumeAt,
       onRunStart: () => {
@@ -312,6 +344,7 @@ export class SoundtrackSession {
       track,
       state: player.currentState(),
     });
+    this.logPlan(view, track, plan);
     // First, because moving state rolls the layers the rest of the plan adjusts.
     if (plan.state !== null) player.enterState(plan.state);
     player.setPauseMultiplier(plan.pauseMultiplier);
@@ -321,5 +354,48 @@ export class SoundtrackSession {
     settleEnabledLayers(player, plan, this.random);
     this.ports.setDimmed(plan.dim);
     this.onSounding({ view, plan });
+  }
+
+  /** The five values a director reads, copied one by one and nothing else. */
+  private logSignals(signals: MixSignals): void {
+    const { log } = this.ports;
+    if (!log.listening()) return;
+    log.write({
+      type: "signals",
+      t: this.ports.output.currentTime(),
+      view: signals.view,
+      working: signals.working,
+      blocking: signals.blocking,
+      failure: signals.failure,
+      done: signals.done,
+    });
+  }
+
+  private logPlan(
+    view: SoundtrackView,
+    track: VariableTrack,
+    plan: MixPlan,
+  ): void {
+    const { log } = this.ports;
+    if (!log.listening()) return;
+    const layerName = (layerIndex: number): string =>
+      track.layers[layerIndex].name;
+    log.write({
+      type: "plan",
+      t: this.ports.output.currentTime(),
+      view,
+      track: track.name,
+      state: plan.state,
+      layerCount: plan.enabledLayerCount,
+      heldLayers: plan.heldLayers.map(layerName),
+      pauseMultiplier: plan.pauseMultiplier,
+      layerGains: Object.fromEntries(
+        plan.layerGains.map((gain, layerIndex) => [
+          layerName(layerIndex),
+          gain,
+        ]),
+      ),
+      dim: plan.dim,
+    });
   }
 }

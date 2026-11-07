@@ -153,6 +153,10 @@ export const isDevBuild = config.environment === "dev";
 // DevTools are available in dev + staging and disabled only for production.
 export const canOpenDevTools = config.environment !== "production";
 
+// Recording the music to disk is for the team's listening, so a production
+// build registers no channel for it.
+export const canRecordSoundtrack = config.environment !== "production";
+
 // The sign-in flow opens the Cloud UI's sign-in route.
 export const DESKTOP_SIGN_IN_BASE_URL = config.cloudUiBaseUrl;
 

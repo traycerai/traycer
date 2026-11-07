@@ -73,6 +73,7 @@ const NO_BRIDGES: SettingsAvailabilityContext = {
   mobileApp: false,
   phoneLayout: false,
   soundtrackOffered: false,
+  soundtrackRecordingOffered: false,
 };
 
 describe("settings search index", () => {

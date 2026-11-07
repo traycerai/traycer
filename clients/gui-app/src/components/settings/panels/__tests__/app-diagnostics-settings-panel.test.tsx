@@ -693,6 +693,7 @@ describe("<AppDiagnosticsSettingsPanel />", () => {
         mobileApp: false,
         phoneLayout: false,
         soundtrackOffered: false,
+        soundtrackRecordingOffered: false,
       },
       document.body,
     );
@@ -713,6 +714,7 @@ describe("<AppDiagnosticsSettingsPanel />", () => {
         mobileApp: false,
         phoneLayout: false,
         soundtrackOffered: false,
+        soundtrackRecordingOffered: false,
       },
       document.body,
     );

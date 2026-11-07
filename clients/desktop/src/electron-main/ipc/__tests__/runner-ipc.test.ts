@@ -800,6 +800,11 @@ describe("RunnerIpcBridge", () => {
       expect(channels).toEqual(
         [
           RunnerHostInvoke.readSoundtrackSet,
+          // A build that is not production records the music to disk.
+          RunnerHostInvoke.openSoundtrackRecording,
+          RunnerHostInvoke.appendSoundtrackRecording,
+          RunnerHostInvoke.closeSoundtrackRecording,
+          RunnerHostInvoke.revealSoundtrackRecording,
           RunnerHostInvoke.sandboxArtifactRegister,
           RunnerHostInvoke.sandboxArtifactUnregister,
           RunnerHostInvoke.sandboxArtifactRespond,
