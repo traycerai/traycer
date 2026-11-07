@@ -7,6 +7,7 @@
  * list, the account's host directory, and each host's `harnesses` and
  * `providers` answers, `epic.createChat` and the terminal create.
  */
+import type { NestedFocusProvenance } from "@/lib/epic-nested-focus-navigation";
 import type { TaskHostRow } from "@traycer/protocol/host/task-host-summary";
 import { useSyncExternalStore } from "react";
 import { installLegendListTestClock } from "@/components/chat/__tests__/legend-list-test-environment";
@@ -343,7 +344,8 @@ const mocks = vi.hoisted(() => ({
   createChatError: null as Error | null,
   createChatDeferred: null as Promise<CreateChatResponseV12> | null,
   createChatRefusal: null as CreateChatResponseV12["refusal"] | null,
-  openTile: vi.fn<(intent: unknown) => void>(),
+  openTile:
+    vi.fn<(intent: unknown, provenance: NestedFocusProvenance) => void>(),
   /** The control plane. */
   createSandbox:
     vi.fn<

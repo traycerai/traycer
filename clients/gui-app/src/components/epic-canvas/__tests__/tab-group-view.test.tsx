@@ -52,6 +52,10 @@ import { makeSimulatorTileRef } from "@/stores/epics/canvas/tile-schema/simulato
 import { useSidebarNodeRevealStore } from "@/stores/epics/sidebar-node-reveal-store";
 import { useEpicLeftPanelStore } from "@/stores/epics/left-panel-store";
 import {
+  DEFAULT_LAYOUT_SNAPSHOT,
+  useLayoutStore,
+} from "@/stores/layout/layout-store";
+import {
   tabSurfaceKey,
   useSurfaceHostSelectionStore,
 } from "@/stores/host/surface-host-selection-store";
@@ -2368,7 +2372,16 @@ describe("<TabGroupView /> Reveal in Sidebar", () => {
       useEpicLeftPanelStore.getInitialState(),
       true,
     );
+    useLayoutStore.setState({ ...DEFAULT_LAYOUT_SNAPSHOT });
   });
+
+  /** File Tree is off in the shipped layout, and a workspace file is only revealed in it. */
+  function showFileTree(): void {
+    useLayoutStore.setState({
+      ...DEFAULT_LAYOUT_SNAPSHOT,
+      overrides: { railFileTree: { shown: "shown" } },
+    });
+  }
 
   const WORKSPACE_FILE_TAB: WorkspaceFileRef = {
     id: "workspace-file:host-A:%2Frepo:src%2Flib%2Fa.ts",
@@ -2395,6 +2408,7 @@ describe("<TabGroupView /> Reveal in Sidebar", () => {
     // The spec tab stays ACTIVE so it is the one mounted body - the
     // workspace-file tab's own tile renderer is heavy and must not mount
     // just to exercise its tab-strip context menu.
+    showFileTree();
     const tabs = [SPEC, WORKSPACE_FILE_TAB];
     seedCanvas(tabs, SPEC.instanceId);
     render(groupView(tabs, SPEC.instanceId, true));
@@ -2417,6 +2431,26 @@ describe("<TabGroupView /> Reveal in Sidebar", () => {
     expect(
       useEpicLeftPanelStore.getState().activePanelIdByTabId[VIEW_TAB_ID],
     ).toBe("file-tree");
+  });
+
+  it("offers no Reveal in Sidebar on a workspace file tab while File Tree is off, and still does on an artifact tab", () => {
+    const tabs = [SPEC, WORKSPACE_FILE_TAB];
+    seedCanvas(tabs, SPEC.instanceId);
+    render(groupView(tabs, SPEC.instanceId, true));
+
+    fireEvent.contextMenu(
+      screen.getByTestId(`tab-item-${WORKSPACE_FILE_TAB.instanceId}`),
+    );
+    expect(screen.getByRole("menu")).toBeDefined();
+    expect(
+      screen.queryByRole("menuitem", { name: "Reveal in Sidebar" }),
+    ).toBeNull();
+    fireEvent.keyDown(screen.getByRole("menu"), { key: "Escape" });
+
+    fireEvent.contextMenu(screen.getByTestId(`tab-item-${SPEC.instanceId}`));
+    expect(
+      screen.getByRole("menuitem", { name: "Reveal in Sidebar" }),
+    ).toBeDefined();
   });
 
   it("writes a reveal request for an artifact tab and switches to its own panel", () => {

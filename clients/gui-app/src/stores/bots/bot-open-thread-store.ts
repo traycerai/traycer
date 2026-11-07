@@ -1,4 +1,5 @@
 import { create } from "zustand";
+import type { JsonContent } from "@traycer/protocol/common/registry";
 import type {
   BotConversationSendDelivery,
   BotTurnRef,
@@ -37,6 +38,8 @@ export interface BotSentPost {
   readonly threadId: string;
   readonly requestId: string;
   readonly text: string;
+  /** The sent document, including images, until the channel row arrives. */
+  readonly content?: JsonContent;
   /** The person who sent it; `null` when nobody was signed in. */
   readonly senderUserId: string | null;
   /** When the send was accepted. */

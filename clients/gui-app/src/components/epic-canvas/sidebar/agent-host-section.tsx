@@ -29,6 +29,7 @@ import {
 } from "@/hooks/sandboxes/use-sandbox-configurations";
 import { useSandboxCosts } from "@/hooks/sandboxes/use-sandbox-costs-query";
 import { tileIntent } from "@/lib/canvas/tile-open/intent";
+import { useRegionValue } from "@/lib/layout-overrides";
 import { useSampledNow } from "@/lib/relative-time";
 import {
   AGENT_SANDBOX,
@@ -339,6 +340,7 @@ function HostActions(props: {
               "explicit",
               "direct_ui",
             ),
+            "user",
           );
         }}
       >
@@ -449,6 +451,10 @@ function HostFilesAction(props: {
     (state) => state.setActivePanelIdAndExpand,
   );
   const setHost = useSurfaceHostSelectionStore((state) => state.setSelection);
+  const fileTreeShown = useRegionValue("railFileTree", "shown") === "shown";
+  // A host's files open in File Tree, so with that panel off the action would
+  // land on another panel and show none of them.
+  if (props.hostId !== null && !fileTreeShown) return null;
   return (
     <Button
       type="button"

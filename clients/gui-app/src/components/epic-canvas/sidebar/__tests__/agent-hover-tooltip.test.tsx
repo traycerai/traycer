@@ -7,7 +7,15 @@ import {
   within,
 } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { afterEach, describe, expect, it, vi, type Mock } from "vitest";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  expect,
+  it,
+  vi,
+  type Mock,
+} from "vitest";
 import type { RoleClaim } from "@traycer/protocol/persistence/epic/role-claims";
 import {
   sandboxSummarySchema,
@@ -261,6 +269,10 @@ vi.mock("@/components/worktree/worktree-owner-metadata", () => ({
 
 import { AgentHoverTooltip } from "@/components/epic-canvas/sidebar/agent-hover-tooltip";
 import { TooltipProvider } from "@/components/ui/tooltip";
+import {
+  DEFAULT_LAYOUT_SNAPSHOT,
+  useLayoutStore,
+} from "@/stores/layout/layout-store";
 import { hostSandboxStateWord } from "@traycer/protocol/host/host-status";
 
 const CLAIM: RoleClaim = {
@@ -334,6 +346,7 @@ afterEach(() => {
   h.setPanel.mockClear();
   h.openDetails.mockClear();
   h.openTile.mockClear();
+  useLayoutStore.setState({ ...DEFAULT_LAYOUT_SNAPSHOT });
 });
 
 /**
@@ -682,7 +695,17 @@ function openedSessionBody(details: HTMLDetailsElement): HTMLElement {
   return body;
 }
 
+/** A host's Files open in File Tree, which the shipped layout leaves off. */
+function showFileTree(): void {
+  useLayoutStore.setState({
+    ...DEFAULT_LAYOUT_SNAPSHOT,
+    overrides: { railFileTree: { shown: "shown" } },
+  });
+}
+
 describe("AgentHoverTooltip host section", () => {
+  beforeEach(showFileTree);
+
   it("shows host identity, cost, payer, shape and actions for a row in the viewer's sandbox list", async () => {
     h.sandboxes = [sandboxRow({})];
     h.cost = [{ sandboxId: "sbx-1", todayMillicredits: 2000 }];
@@ -737,6 +760,40 @@ describe("AgentHoverTooltip host section", () => {
     expect(
       screen.queryByRole("button", { name: KEEP_THIS_SANDBOX }),
     ).toBeNull();
+  });
+
+  describe("with File Tree off", () => {
+    beforeEach(() => {
+      useLayoutStore.setState({ ...DEFAULT_LAYOUT_SNAPSHOT });
+    });
+
+    it("leaves a sandbox host's Files button out, with the rest of its actions", () => {
+      h.sandboxes = [sandboxRow({})];
+      renderAgent({
+        hostId: "host-sbx",
+        ownerKind: "chat",
+        ownerHostUnreachable: false,
+      });
+
+      expect(screen.queryByRole("button", { name: "Files" })).toBeNull();
+      for (const name of ["Open terminal", "Details"]) {
+        expect(screen.getByRole("button", { name })).toBeDefined();
+      }
+    });
+
+    it("keeps a task-only host's task files button", async () => {
+      h.taskHosts = tasksView(taskHostRow({}));
+      renderAgent({
+        hostId: "host-t",
+        ownerKind: "chat",
+        ownerHostUnreachable: false,
+      });
+
+      await userEvent.hover(screen.getByRole("button", { name: "Reviewer" }));
+      await screen.findByRole("dialog", { name: "Reviewer" });
+
+      expect(screen.getByRole("button", { name: TASK_FILES })).toBeDefined();
+    });
   });
 
   describe("the configuration line under the name", () => {

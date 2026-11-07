@@ -55,6 +55,7 @@ export function MobileNewTerminalDialog(props: MobileNewTerminalDialogProps) {
           "explicit",
           "direct_ui",
         ),
+        "user",
       );
       onOpenChange(false);
       if (onLaunched !== null) onLaunched();

@@ -53,7 +53,10 @@ import type {
   SlackAppReadResult,
   SlackAppWriteResult,
 } from "../host-client/slack-app";
-import type { SlackAppRegisterRequest } from "@traycer/protocol/host/slack-app";
+import type {
+  SlackAppDmsRequest,
+  SlackAppRegisterRequest,
+} from "@traycer/protocol/host/slack-app";
 import type { TeamHostInstallTokenResult } from "../host-client/team-host";
 import type {
   EnvironmentProvidersFetchResult,
@@ -496,10 +499,10 @@ export interface IRunnerHost {
   /**
    * A bot's Slack app (traycer-server `/api/slack/apps/*`) with the person's
    * bearer, for its members: the app as they see it, the manifest it is
-   * created from, the credentials' registration, Slack's install URL and the
-   * disconnect. Same placement as the sandbox control plane above: desktop in
-   * Electron main, mobile through the native HTTP layer. See
-   * `host-client/slack-app.ts`. Never throw.
+   * created from, the credentials' registration, Slack's install URL, the
+   * disconnect and the DM setting. Same placement as the sandbox control
+   * plane above: desktop in Electron main, mobile through the native HTTP
+   * layer. See `host-client/slack-app.ts`. Never throw.
    */
   readSlackApp(bearerToken: string, botId: string): Promise<SlackAppReadResult>;
   getSlackAppManifest(
@@ -517,6 +520,10 @@ export interface IRunnerHost {
   disconnectSlackApp(
     bearerToken: string,
     botId: string,
+  ): Promise<SlackAppWriteResult>;
+  setSlackAppDms(
+    bearerToken: string,
+    request: SlackAppDmsRequest,
   ): Promise<SlackAppWriteResult>;
   /**
    * Mints the one-time install token for a team environment's bot host

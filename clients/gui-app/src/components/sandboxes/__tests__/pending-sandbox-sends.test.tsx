@@ -1125,6 +1125,7 @@ describe("a send waiting for the requested agent on its sandbox", () => {
     );
 
     expect(mocks.openTile).toHaveBeenCalledTimes(1);
+    expect(mocks.openTile.mock.calls[0]?.[1]).toBe("user");
     expect(JSON.stringify(mocks.openTile.mock.calls[0][0])).toContain(
       SANDBOX_HOST,
     );
@@ -3647,6 +3648,7 @@ describe("a terminal request handed to a staged sandbox", () => {
       expect(mocks.openTile).toHaveBeenCalledTimes(1);
     });
     expect(JSON.stringify(mocks.openTile.mock.calls[0][0])).toContain(sendId);
+    expect(mocks.openTile.mock.calls[0]?.[1]).toBe("automatic");
   });
 });
 

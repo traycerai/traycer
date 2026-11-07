@@ -126,6 +126,12 @@ interface BookendChannel {
   readonly gain: OutputGain;
 }
 
+/** A hold on the player, and how what waits on it goes on. */
+interface PlayerHold {
+  readonly over: Promise<void>;
+  readonly end: () => void;
+}
+
 /** A layer's last gain ramp, so that restating its target can tell. */
 interface LayerRamp {
   readonly target: number;
@@ -189,6 +195,7 @@ export class TrackPlayer {
   private fading: FadingVoice[] = [];
   private timer: number | null = null;
   private fadeOutEndsAt: number | null = null;
+  private holding: PlayerHold | null = null;
 
   constructor(options: TrackPlayerOptions) {
     this.track = options.track;
@@ -223,10 +230,7 @@ export class TrackPlayer {
     this.bus.ramp(1, fadeInSeconds);
     if (this.phase.kind !== "stopped") return;
     this.beginRun(fromElapsed, this.output.currentTime());
-    this.timer = window.setInterval(() => {
-      this.tick();
-    }, LOOKAHEAD_INTERVAL_MS);
-    this.tick();
+    this.startTicking();
   }
 
   /**
@@ -251,8 +255,7 @@ export class TrackPlayer {
     }
     this.phase = { kind: "stopped" };
     this.fadeOutEndsAt = null;
-    if (this.timer !== null) window.clearInterval(this.timer);
-    this.timer = null;
+    this.stopTicking();
     this.cutVoices(fade);
     this.bus.ramp(0, fade);
   }
@@ -276,6 +279,31 @@ export class TrackPlayer {
     if (this.phase.kind === "stopped") return;
     this.bus.ramp(0, seconds);
     this.fadeOutEndsAt = this.output.currentTime() + seconds;
+  }
+
+  /**
+   * Stops every wall-clock tick, and with them every move the player makes:
+   * nothing is placed, no run ends and no silence is over until `release`, and a
+   * load that lands meanwhile waits. All the times it keeps are on the output's
+   * clock, which its owner stops, so they stay true across the hold.
+   */
+  hold(): void {
+    if (this.holding !== null) return;
+    let end: () => void = () => undefined;
+    const over = new Promise<void>((resolve) => {
+      end = resolve;
+    });
+    this.holding = { over, end };
+    this.stopTicking();
+  }
+
+  /** Goes on from a hold with a tick, which catches up with what fell due. */
+  release(): void {
+    const { holding } = this;
+    if (holding === null) return;
+    this.holding = null;
+    holding.end();
+    if (this.phase.kind !== "stopped") this.startTicking();
   }
 
   /** Track time now; while not playing, where the next start would resume. */
@@ -376,6 +404,18 @@ export class TrackPlayer {
       throw new Error(`Track "${this.track.name}" has no state "${name}"`);
     }
     return state;
+  }
+
+  private startTicking(): void {
+    this.timer = window.setInterval(() => {
+      this.tick();
+    }, LOOKAHEAD_INTERVAL_MS);
+    this.tick();
+  }
+
+  private stopTicking(): void {
+    if (this.timer !== null) window.clearInterval(this.timer);
+    this.timer = null;
   }
 
   private tick(): void {
@@ -549,6 +589,18 @@ export class TrackPlayer {
     this.onRunEnd(silenceSeconds);
   }
 
+  /** What a load answers, failure included, once any hold is over. */
+  private async loadPastHold(
+    layer: Layer,
+    variant: number,
+  ): Promise<AudioBuffer> {
+    try {
+      return await this.stems.load(this.track, layer, variant);
+    } finally {
+      await this.holding?.over;
+    }
+  }
+
   /**
    * Each play waits for its own audio, so a slow decode holds back its sublayer,
    * and on a layer of two variants the layer's other sublayers too: a pending
@@ -560,7 +612,7 @@ export class TrackPlayer {
   private async place(phase: PlayingPhase, play: ScheduledPlay): Promise<void> {
     const layer = this.track.layers[play.layerIndex];
     try {
-      const buffer = await this.stems.load(this.track, layer, play.variant);
+      const buffer = await this.loadPastHold(layer, play.variant);
       if (this.phase !== phase) return;
       const startAt = phase.scheduler.confirm(
         play,
@@ -598,7 +650,7 @@ export class TrackPlayer {
     const variant = this.bookendVariant(intro);
     let gridFrom: number;
     try {
-      const buffer = await this.stems.load(this.track, intro.layer, variant);
+      const buffer = await this.loadPastHold(intro.layer, variant);
       if (this.phase !== phase) return;
       const startAt = this.bookendStartAt(phase, phase.fromElapsed);
       gridFrom = startAt;
@@ -630,7 +682,7 @@ export class TrackPlayer {
   ): Promise<void> {
     const variant = this.bookendVariant(outro);
     try {
-      const buffer = await this.stems.load(this.track, outro.layer, variant);
+      const buffer = await this.loadPastHold(outro.layer, variant);
       if (this.phase !== phase) return;
       const when =
         phase.trackStart + this.bookendStartAt(phase, this.track.lengthSeconds);

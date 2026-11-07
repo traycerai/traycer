@@ -2919,6 +2919,7 @@ describe("a call dialled from a message box", () => {
             threadId={threadId}
             announcementId={null}
             sendable
+            imageReach="none"
             placeholder="Message"
             label="Message"
             testId={testId}

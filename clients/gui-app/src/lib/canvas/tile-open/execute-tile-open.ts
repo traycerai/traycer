@@ -14,7 +14,10 @@ import {
   convertBrowserTabToPip,
   type PipOrigin,
 } from "@/lib/browser-view/pip/pip-store";
-import type { NavigateNestedFocus } from "@/lib/epic-nested-focus-navigation";
+import type {
+  NavigateNestedFocus,
+  NestedFocusProvenance,
+} from "@/lib/epic-nested-focus-navigation";
 import type { NestedFocusTarget } from "@/lib/epic-nested-focus-route";
 import {
   trackOpenedCanvasTile,
@@ -33,6 +36,8 @@ export interface ExecuteTileOpenArgs {
   readonly source: AnalyticsSource;
   readonly store: EpicCanvasStore;
   readonly navigateNested: NavigateNestedFocus;
+  /** {@link OpenTileOptions.provenance}, forwarded to every commit below. */
+  readonly provenance: NestedFocusProvenance;
   /**
    * The epic behind `plan.tabId` - the header tab may have just been created.
    * `null` for a tab id the store does not know: the canvas mutation still
@@ -168,7 +173,9 @@ export function executeTileOpen(
   const commit = (
     prepare: () => NestedFocusTarget | null,
   ): NestedFocusTarget | null =>
-    epicId === null ? prepare() : navigateNested(epicId, tabId, prepare);
+    epicId === null
+      ? prepare()
+      : navigateNested(epicId, tabId, prepare, args.provenance);
 
   if (plan.kind === "focus-existing") {
     adoptIntentHtmlVersion(args, tabId, plan.instanceId);

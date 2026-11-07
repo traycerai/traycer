@@ -159,6 +159,7 @@ export function Pane(): ReactElement {
             threadId={THREAD_ID}
             announcementId={null}
             sendable
+            imageReach="none"
             placeholder={THREAD_ID === null ? `Message ${BOT_TITLE}` : "Reply…"}
             label={
               THREAD_ID === null

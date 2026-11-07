@@ -1,4 +1,5 @@
 import { create } from "zustand";
+import type { JsonContent } from "@traycer/protocol/common/registry";
 
 /**
  * A member's answer to one question of a bot's question card (Tracy Bots,
@@ -24,6 +25,8 @@ export interface BotSentAnswer {
 /** What a thread's box holds unsent. */
 export interface BotThreadBoxDraft {
   readonly text: string;
+  /** The box's document, images and chips included; `null` for text put there from outside it. */
+  readonly content: JsonContent | null;
   /**
    * Bumped each time a draft is put in the box from outside it (Discuss on a
    * question card), never by typing, so the box loads each one once.
@@ -39,6 +42,8 @@ export interface BotUnsentMessage {
   readonly wire: string;
   /** The failed message it was to replace; `null` for a new message. */
   readonly supersedes: string | null;
+  /** The box's document as it was sent: its chips, and its images' bytes. */
+  readonly content: JsonContent;
 }
 
 /** A lookup misses for a bot or key with nothing kept. */
@@ -71,11 +76,12 @@ interface BotDraftsState {
     anchorMessageId: string,
     text: string,
   ) => void;
-  /** Keeps what the person typed in that box; an empty box keeps nothing. */
+  /** Keeps what the person put in that box; an empty box keeps nothing. */
   readonly typeThreadBox: (
     botId: string,
     anchorMessageId: string,
     text: string,
+    content: JsonContent | null,
   ) => void;
   /** Offers `unsent` back in that box; `null` takes the offer away. */
   readonly offerUnsent: (
@@ -127,22 +133,29 @@ export const useBotDraftsStore = create<BotDraftsState>()((set) => ({
     set((state) => ({
       threadBoxes: withEntry(state.threadBoxes, botId, anchorMessageId, {
         text,
+        content: null,
         seedId: (state.threadBoxes[botId]?.[anchorMessageId]?.seedId ?? 0) + 1,
       }),
     })),
-  typeThreadBox: (botId, anchorMessageId, text) =>
+  typeThreadBox: (botId, anchorMessageId, text, content) =>
     set((state) => {
       const current = state.threadBoxes[botId]?.[anchorMessageId];
-      if ((current?.text ?? "") === text) return state;
+      if (
+        (current?.text ?? "") === text &&
+        (current?.content ?? null) === content
+      ) {
+        return state;
+      }
       return {
         threadBoxes: withEntry(
           state.threadBoxes,
           botId,
           anchorMessageId,
-          text.length === 0
+          text.length === 0 && content === null
             ? null
             : {
                 text,
+                content,
                 seedId: current?.seedId ?? 0,
               },
         ),

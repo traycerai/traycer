@@ -62,6 +62,7 @@ export {
   providerAutoJudgeWriteScope,
 } from "@/lib/query-keys/auto-mode-write-scopes";
 export { providerNativeSubagentsWriteScope } from "@/lib/query-keys/providers-native-subagents-scope";
+export { providerNativeMemoryWriteScope } from "@/lib/query-keys/providers-native-memory-scope";
 export { sessionNamesWriteScope } from "@/lib/query-keys/config-session-names-scope";
 export { providersListQueryKey } from "@/lib/query-keys/providers-query-keys";
 export {

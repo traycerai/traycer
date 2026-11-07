@@ -4,6 +4,7 @@ import {
   slackAppReadResponseSchema,
   slackAppRefusalBodySchema,
   slackAppResponseSchema,
+  type SlackAppDmsRequest,
   type SlackAppRegisterRequest,
   type SlackAppView,
 } from "@traycer/protocol/host/slack-app";
@@ -13,10 +14,11 @@ import { composeRequestAbort, untilAborted } from "../auth/request-abort";
 /**
  * The raw calls to traycer-server's Slack app routes (`/api/slack/apps/*`)
  * with the person's bearer: a bot's members register its app, read it, take
- * its manifest, mint an install URL and disconnect it. A sibling of
- * `sandbox-control.ts`, and it runs where that runs: desktop calls it from
- * Electron main (traycer-server's CORS allow-list is the web dashboard
- * origin, not the app renderer), mobile through the native HTTP layer.
+ * its manifest, mint an install URL, disconnect it and set whether it takes
+ * DMs. A sibling of `sandbox-control.ts`, and it runs where that runs:
+ * desktop calls it from Electron main (traycer-server's CORS allow-list is
+ * the web dashboard origin, not the app renderer), mobile through the native
+ * HTTP layer.
  *
  * Every function here never throws: transport failures, non-2xx answers and
  * malformed bodies collapse into a discriminated, structured-clone-safe result
@@ -65,7 +67,7 @@ export type SlackAppReadResult =
   | { readonly kind: "ok"; readonly app: SlackAppView | null }
   | SlackAppFailure;
 
-/** `register` and `disconnect`: the app as the write left it. */
+/** `register`, `disconnect` and `dms`: the app as the write left it. */
 export type SlackAppWriteResult =
   | { readonly kind: "ok"; readonly app: SlackAppView }
   | SlackAppFailure;
@@ -83,7 +85,8 @@ type SlackAppRoute =
   | "read"
   | "manifest"
   | "install-url"
-  | "disconnect";
+  | "disconnect"
+  | "dms";
 
 function slackAppsUrl(serverBaseUrl: string, route: SlackAppRoute): string {
   const base = serverBaseUrl.endsWith("/")
@@ -270,6 +273,25 @@ export async function disconnectSlackAppViaHttp(
     serverBaseUrl,
     "disconnect",
     { botId },
+    bearerToken,
+    proxyToken,
+    SLACK_APP_WRITE_TIMEOUT_MS,
+    slackAppResponseSchema,
+  );
+  return result.kind === "ok" ? { kind: "ok", app: result.value.app } : result;
+}
+
+/** `POST /api/slack/apps/dms`: whether a person's DM to the bot is admitted. */
+export async function setSlackAppDmsViaHttp(
+  serverBaseUrl: string,
+  bearerToken: string,
+  proxyToken: string | null,
+  request: SlackAppDmsRequest,
+): Promise<SlackAppWriteResult> {
+  const result = await post(
+    serverBaseUrl,
+    "dms",
+    request,
     bearerToken,
     proxyToken,
     SLACK_APP_WRITE_TIMEOUT_MS,

@@ -1895,6 +1895,7 @@ function ChatTileSessionViewBody(props: ChatTileSessionViewProps) {
                 "single",
                 "direct_ui",
               ),
+              "user",
             ),
           onDoubleClick: () =>
             openTile(
@@ -1904,6 +1905,7 @@ function ChatTileSessionViewBody(props: ChatTileSessionViewProps) {
                 "double",
                 "direct_ui",
               ),
+              "user",
             ),
         };
       },
@@ -1922,6 +1924,7 @@ function ChatTileSessionViewBody(props: ChatTileSessionViewProps) {
                 "single",
                 "direct_ui",
               ),
+              "user",
             ),
           onDoubleClick: () =>
             openTile(
@@ -1931,6 +1934,7 @@ function ChatTileSessionViewBody(props: ChatTileSessionViewProps) {
                 "double",
                 "direct_ui",
               ),
+              "user",
             ),
         };
       },
@@ -1948,6 +1952,7 @@ function ChatTileSessionViewBody(props: ChatTileSessionViewProps) {
               "explicit",
               "direct_ui",
             ),
+            "user",
           );
       },
       hash: (request) => {
@@ -1968,6 +1973,7 @@ function ChatTileSessionViewBody(props: ChatTileSessionViewProps) {
                 "single",
                 "direct_ui",
               ),
+              "user",
             ),
           onDoubleClick: () =>
             openTile(
@@ -1977,6 +1983,7 @@ function ChatTileSessionViewBody(props: ChatTileSessionViewProps) {
                 "double",
                 "direct_ui",
               ),
+              "user",
             ),
         };
       },

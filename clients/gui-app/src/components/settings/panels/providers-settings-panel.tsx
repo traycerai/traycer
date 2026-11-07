@@ -124,6 +124,7 @@ import {
   type ProviderRailView,
 } from "./provider-rail-filter";
 import { TerminalAgentArgsSection } from "./terminal-agent-args-section";
+import { ProviderNativeMemoryGroup } from "./provider-native-memory-group";
 import { ProviderNativeSubagentsGroup } from "./provider-native-subagents-group";
 import { ClaudeSessionNameGroup } from "./claude-session-name-group";
 import { ProviderAutoJudgeSection } from "./provider-auto-judge-section";
@@ -2055,6 +2056,8 @@ function ProviderTabBody({
               flip while the host's read-back is in flight, and that echo
               belongs to one provider. */}
           <ProviderNativeSubagentsGroup key={state.providerId} state={state} />
+          {/* Keyed by provider for the same reason. */}
+          <ProviderNativeMemoryGroup key={state.providerId} state={state} />
           <ClaudeSessionNameGroup
             providerId={state.providerId}
             hostId={hostId}

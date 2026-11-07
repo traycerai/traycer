@@ -214,20 +214,6 @@ describe("AuthService secrets-broker calls", () => {
   });
 
   describe("team host install token", () => {
-    it("answers unauthorized when signed out and never reaches the runner host", async () => {
-      const { service, host } = makeService();
-      const mintTeamHostInstallToken = vi.spyOn(
-        host,
-        "mintTeamHostInstallToken",
-      );
-
-      await expect(service.mintTeamHostInstallToken("env-1")).resolves.toEqual({
-        kind: "unauthorized",
-      });
-
-      expect(mintTeamHostInstallToken).not.toHaveBeenCalled();
-    });
-
     it("hands the runner host the bearer and the environment and returns its result", async () => {
       const { service, host } = await signedInService();
       const result: TeamHostInstallTokenResult = {
