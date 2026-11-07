@@ -106,7 +106,6 @@ export interface ChatSandboxView {
 export interface ChatSandboxViewer {
   /** Whether the host answers this device right now. */
   readonly reachable: boolean;
-  readonly canEdit: boolean;
   readonly ownedByViewer: boolean;
   readonly environmentOwned: boolean;
 }
@@ -177,8 +176,7 @@ function restingView(
   const { configuration } = state;
   if (configuration === null) return slotLine(state, text);
   const known: RestingChatSandbox = { ...state, configuration };
-  const wakes =
-    viewer.canEdit && (viewer.ownedByViewer || viewer.environmentOwned);
+  const wakes = viewer.ownedByViewer || viewer.environmentOwned;
   return {
     line: { place: "footer", text, state: known },
     composer: wakes ? { kind: "wake", sandbox: known } : { kind: "ordinary" },

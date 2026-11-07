@@ -65,13 +65,11 @@ export type SharingAccessPermission = "owner" | "read_only";
 export interface TeamPendingState {
   readonly anyMutation: boolean;
   readonly shareTeamId: string | null;
-  readonly roleTeamId: string | null;
   readonly revokeTeamId: string | null;
 }
 
 export type SharingPendingAction =
   | { readonly kind: "role-user"; readonly userId: string }
-  | { readonly kind: "role-team"; readonly teamId: string }
   | { readonly kind: "share-team"; readonly teamId: string }
   | { readonly kind: "revoke-user"; readonly userId: string }
   | { readonly kind: "revoke-team"; readonly teamId: string };

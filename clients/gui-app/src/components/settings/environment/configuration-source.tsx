@@ -1,5 +1,9 @@
 import { createContext, useContext } from "react";
-import type { EnvironmentDescriptorV11 } from "@traycer/protocol/host/environment/contracts";
+import {
+  grantedEnvironmentRole,
+  type EnvironmentDescriptorV11,
+  type GrantedEnvironmentRole,
+} from "@traycer/protocol/host/environment/contracts";
 
 export type ConfigurationSource =
   | { readonly kind: "host" }
@@ -14,7 +18,9 @@ export type ConfigurationSource =
       readonly environmentId: string;
       readonly roomId: string;
       readonly providerHandle: string | null;
-      readonly effectiveRole: "owner" | "admin" | "editor" | "viewer";
+      /** `null` for a role that authorizes nothing - an older inventory's
+       *  unknown role, or a retired one. */
+      readonly effectiveRole: GrantedEnvironmentRole | null;
     };
 
 const HOST_SOURCE: ConfigurationSource = { kind: "host" };
@@ -45,7 +51,7 @@ export function useConfigurationIsPersonal(): boolean {
 
 export function useCanEditConfiguration(): boolean {
   const source = useConfigurationSource();
-  return source.kind === "host" || source.effectiveRole !== "viewer";
+  return source.kind === "host" || source.effectiveRole !== null;
 }
 
 export function useCanAdministerConfiguration(): boolean {
@@ -57,11 +63,11 @@ export function useCanAdministerConfiguration(): boolean {
   );
 }
 
-/** An older inventory cannot authorize edits to a team. */
+/** An older inventory cannot authorize edits to a team, and answers `null`. */
 export function configurationRoleOf(
   descriptor: EnvironmentDescriptorV11,
-): "owner" | "admin" | "editor" | "viewer" {
+): GrantedEnvironmentRole | null {
   if (descriptor.ownerKind === "user") return "owner";
-  const role = descriptor.effectiveRole;
-  return role === "admin" || role === "editor" ? role : "viewer";
+  const role = grantedEnvironmentRole(descriptor.effectiveRole);
+  return role === "admin" || role === "editor" ? role : null;
 }
