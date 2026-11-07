@@ -54,6 +54,13 @@ import type { ChatSessionStoreHandle } from "@/stores/chats/chat-session-store";
 import { useBotDraftsStore } from "@/stores/bots/bot-drafts-store";
 import { useBotOpenThreadStore } from "@/stores/bots/bot-open-thread-store";
 import { useSettingsStore } from "@/stores/settings/settings-store";
+import { Selection } from "@tiptap/pm/state";
+import {
+  editableIn,
+  editorOf,
+  textOf,
+  typeInto,
+} from "@/components/bots/__tests__/bot-box-test-support";
 
 const mocks = vi.hoisted(() => ({
   client: null as HostRequester<HostRpcRegistry> | null,
@@ -62,6 +69,9 @@ const mocks = vi.hoisted(() => ({
   activity: null as BotActivity | null,
 }));
 
+vi.mock("@/hooks/host/use-host-directory-entry", () => ({
+  useHostDirectoryEntry: () => null,
+}));
 vi.mock("@/lib/registries/chat-session-registry", async (importOriginal) => ({
   ...(await importOriginal<
     typeof import("@/lib/registries/chat-session-registry")
@@ -213,19 +223,21 @@ function threadPanel(): HTMLElement {
   return screen.getByTestId("bot-thread-panel");
 }
 
-function inputIn(scope: HTMLElement, testId: string): HTMLTextAreaElement {
-  const input = within(scope).getByTestId(testId);
-  if (!(input instanceof HTMLTextAreaElement)) {
-    throw new Error(`${testId} is not a textarea`);
-  }
-  return input;
+function inputIn(scope: HTMLElement, testId: string): HTMLElement {
+  return editableIn(within(scope).getByTestId(testId));
 }
 
-function channelBox(): HTMLTextAreaElement {
+/** Whether the box's caret sits at the end of what it holds. */
+function caretAtEnd(box: HTMLElement): boolean {
+  const { doc, selection } = editorOf(box).state;
+  return selection.empty && selection.to === Selection.atEnd(doc).to;
+}
+
+function channelBox(): HTMLElement {
   return inputIn(channelSection(), "bot-channel-composer-input");
 }
 
-function threadBox(): HTMLTextAreaElement {
+function threadBox(): HTMLElement {
   return inputIn(threadPanel(), "bot-thread-composer-input");
 }
 
@@ -257,7 +269,7 @@ describe("select-to-quote in a bot's channel with no thread open", () => {
   it("quotes a selection of the channel after what the channel's box holds, focuses the box with the caret after the quote and clears the selection", async () => {
     const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime });
     await mountChannel();
-    await user.type(channelBox(), TYPED);
+    typeInto(channelBox(), TYPED);
 
     await selectText(channelSection(), CHANNEL_TEXT);
     const button = quoteButton();
@@ -265,10 +277,9 @@ describe("select-to-quote in a bot's channel with no thread open", () => {
     await user.click(button);
 
     const box = channelBox();
-    expect(box.value).toBe(`${TYPED}\n\n> ${CHANNEL_TEXT}\n\n`);
+    expect(textOf(box)).toBe(`${TYPED}\n\n> ${CHANNEL_TEXT}`);
     expect(document.activeElement).toBe(box);
-    expect(box.selectionStart).toBe(box.value.length);
-    expect(box.selectionEnd).toBe(box.value.length);
+    expect(caretAtEnd(box)).toBe(true);
     expectSelectionCleared();
     expect(quoteButton()).toBeNull();
   });
@@ -282,7 +293,7 @@ describe("select-to-quote in a bot's channel with no thread open", () => {
     });
 
     const box = channelBox();
-    expect(box.value).toBe(`> ${CHANNEL_TEXT}\n\n`);
+    expect(textOf(box)).toBe(`> ${CHANNEL_TEXT}`);
     expect(document.activeElement).toBe(box);
     expectSelectionCleared();
   });
@@ -325,7 +336,7 @@ describe("select-to-quote in a bot's channel while its box edits a failed messag
         "bot-message-edit",
       ),
     );
-    const failedText = channelBox().value;
+    const failedText = textOf(channelBox());
     expect(failedText).toContain(POST_FIRST_LINE);
     expect(screen.getByTestId("bot-channel-composer-editing")).toBeTruthy();
 
@@ -335,10 +346,10 @@ describe("select-to-quote in a bot's channel while its box edits a failed messag
     await user.click(button);
 
     const box = channelBox();
-    expect(box.value).toBe(`${failedText}\n\n> ${CHANNEL_TEXT}\n\n`);
+    expect(textOf(box)).toBe(`${failedText}\n\n> ${CHANNEL_TEXT}`);
     expect(screen.getByTestId("bot-channel-composer-editing")).toBeTruthy();
     expect(document.activeElement).toBe(box);
-    expect(box.selectionStart).toBe(box.value.length);
+    expect(caretAtEnd(box)).toBe(true);
     expectSelectionCleared();
   });
 });
@@ -347,16 +358,16 @@ describe("select-to-quote with a thread open beside the channel", () => {
   it("quotes a selection of the channel into the thread's box, kept under the bot, and leaves the channel's box alone", async () => {
     const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime });
     await mountChannelWithThread();
-    await user.type(channelBox(), TYPED);
+    typeInto(channelBox(), TYPED);
 
     await selectText(channelSection(), CHANNEL_TEXT);
     const button = quoteButton();
     if (button === null) throw new Error("no Quote button");
     await user.click(button);
 
-    expect(threadBox().value).toBe(`> ${CHANNEL_TEXT}\n\n`);
-    expect(keptThreadText()).toBe(`> ${CHANNEL_TEXT}\n\n`);
-    expect(channelBox().value).toBe(TYPED);
+    expect(textOf(threadBox())).toBe(`> ${CHANNEL_TEXT}`);
+    expect(keptThreadText()).toBe(`> ${CHANNEL_TEXT}`);
+    expect(textOf(channelBox())).toBe(TYPED);
     expect(document.activeElement).toBe(threadBox());
     expectSelectionCleared();
   });
@@ -364,17 +375,17 @@ describe("select-to-quote with a thread open beside the channel", () => {
   it("quotes a selection of the thread's own transcript into the thread's box", async () => {
     const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime });
     await mountChannelWithThread();
-    await user.type(threadBox(), TYPED);
+    typeInto(threadBox(), TYPED);
 
     await selectText(threadPanel(), THREAD_TEXT);
     const button = quoteButton();
     if (button === null) throw new Error("no Quote button");
     await user.click(button);
 
-    const expected = `${TYPED}\n\n> ${THREAD_TEXT}\n\n`;
-    expect(threadBox().value).toBe(expected);
+    const expected = `${TYPED}\n\n> ${THREAD_TEXT}`;
+    expect(textOf(threadBox())).toBe(expected);
     expect(keptThreadText()).toBe(expected);
-    expect(channelBox().value).toBe("");
+    expect(textOf(channelBox())).toBe("");
     expectSelectionCleared();
   });
 });
@@ -410,7 +421,7 @@ describe("select-to-quote while the open thread's box is not drawn", () => {
 
     await quoteChannelText(user, CHANNEL_TEXT);
     await quoteChannelText(user, SECOND_CHANNEL_TEXT);
-    expect(channelBox().value).toBe("");
+    expect(textOf(channelBox())).toBe("");
 
     mocks.threads = [postThread()];
     act(() => {
@@ -420,10 +431,10 @@ describe("select-to-quote while the open thread's box is not drawn", () => {
         .setRail(BOT_ID, { kind: "thread", ...THREAD_OPEN });
     });
 
-    expect(threadBox().value).toBe(
-      `> ${CHANNEL_TEXT}\n\n> ${SECOND_CHANNEL_TEXT}\n\n`,
+    expect(textOf(threadBox())).toBe(
+      `> ${CHANNEL_TEXT}\n\n> ${SECOND_CHANNEL_TEXT}`,
     );
-    expect(channelBox().value).toBe("");
+    expect(textOf(channelBox())).toBe("");
   });
 
   it("keeps a quote for the thread's box when the thread is closed and the channel is quoted, each reaching its own box", async () => {
@@ -433,7 +444,7 @@ describe("select-to-quote while the open thread's box is not drawn", () => {
 
     act(() => useBotOpenThreadStore.getState().setRail(BOT_ID, null));
     await quoteChannelText(user, SECOND_CHANNEL_TEXT);
-    expect(channelBox().value).toBe(`> ${SECOND_CHANNEL_TEXT}\n\n`);
+    expect(textOf(channelBox())).toBe(`> ${SECOND_CHANNEL_TEXT}`);
 
     mocks.threads = [postThread()];
     act(() =>
@@ -442,8 +453,8 @@ describe("select-to-quote while the open thread's box is not drawn", () => {
         .setRail(BOT_ID, { kind: "thread", ...THREAD_OPEN }),
     );
 
-    expect(threadBox().value).toBe(`> ${CHANNEL_TEXT}\n\n`);
-    expect(channelBox().value).toBe(`> ${SECOND_CHANNEL_TEXT}\n\n`);
+    expect(textOf(threadBox())).toBe(`> ${CHANNEL_TEXT}`);
+    expect(textOf(channelBox())).toBe(`> ${SECOND_CHANNEL_TEXT}`);
   });
 });
 

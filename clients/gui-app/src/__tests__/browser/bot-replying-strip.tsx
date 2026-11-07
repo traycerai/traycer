@@ -142,6 +142,7 @@ export function Dock(props: {
         threadId={null}
         announcementId={null}
         sendable
+        imageReach="none"
         placeholder="Message Tracy"
         label="Message Tracy"
         testId={`composer-${props.id}`}

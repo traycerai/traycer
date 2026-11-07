@@ -1,17 +1,16 @@
 import {
+  useCallback,
   useContext,
   useEffect,
   useId,
-  useLayoutEffect,
   useMemo,
-  useRef,
   useState,
-  type KeyboardEvent,
   type ReactElement,
   type ReactNode,
   type RefObject,
 } from "react";
 import { useStore } from "zustand";
+import type { JsonContent } from "@traycer/protocol/common/registry";
 import { Bot, Layers, Users } from "lucide-react";
 import { NamedBotAvatar, PersonAvatar } from "@/components/bots/bot-avatars";
 import {
@@ -29,23 +28,19 @@ import { usePaneFocused } from "@/components/epic-tabs/pane-visibility-context";
 import {
   createComposerPickerStore,
   type ComposerPickerItem,
+  type ComposerPickerStore,
 } from "@/components/chat/composer/picker/composer-picker-store";
-import { composerPickerKeyDown } from "@/components/chat/composer/picker/suggestion-render";
 import { MENTION_RESULT_LIMIT } from "@/components/chat/composer/picker/use-mention-items";
 import {
   backEntry,
   mentionProviderRegistry,
-  ROOT_MENTION_STEP,
   scoreLabelAndId,
   type MentionFlowStep,
   type MentionMenuCopy,
   type MentionMenuEntry,
   type MentionProviderId,
 } from "@/lib/composer/mentions";
-import {
-  isDismissedMentionQuery,
-  shouldCloseMentionForNoMatches,
-} from "@/lib/composer/mentions/mention-dismissal";
+import { shouldCloseMentionForNoMatches } from "@/lib/composer/mentions/mention-dismissal";
 import {
   epicIcon,
   MENU_ICON_CLASS,
@@ -54,17 +49,11 @@ import {
   rankRootSearchEntries,
   type RankedRootSearch,
 } from "@/lib/composer/mentions/root-search-ranking";
+import { botBoxContentOf } from "@/lib/bots/bot-box-content";
 import {
-  activeMentionQuery,
-  mentionsToDisplay,
-  mentionsToWire,
-  shiftMentionPicks,
-  spliceMentionPicks,
+  botMentionToken,
   type BotMentionCandidate,
-  type BotMentionEdit,
   type BotMentionKind,
-  type BotMentionTextRange,
-  type BotMentionPick,
 } from "@/lib/bots/bot-mentions";
 import { useAuthStore } from "@/stores/auth/auth-store";
 
@@ -72,23 +61,14 @@ const NO_CANDIDATES: ReadonlyArray<BotMentionCandidate> = [];
 
 /** What a message box needs to complete `@` with what the environment can name. */
 export interface BotMentionCompletion {
+  /** The store the box's editor drives the menu through. */
+  readonly pickerStore: ComposerPickerStore;
   /** The agent composer's mention menu, open while an `@` is being typed. */
   readonly menu: ReactNode;
   /** What the box says about the menu: the listbox and its highlighted row while it shows. */
   readonly inputAria: BotMentionInputAria;
-  /** Handles a key the open menu takes (moving, picking, closing); `true` when it did. */
-  readonly onKeyDown: (event: KeyboardEvent<HTMLTextAreaElement>) => boolean;
-  /** The caret moved: what follows it decides the menu. */
-  readonly onCaret: (caret: number) => void;
-  /**
-   * The person edited the box, whether or not what it holds changed;
-   * `input` is the box after it.
-   */
-  readonly onInput: (input: HTMLTextAreaElement) => void;
-  /** The text as sent: each completed name as its token. */
-  readonly toWire: (text: string) => string;
-  /** A sent text as the box shows it: each token the box can name as its name. */
-  readonly toDisplay: (text: string) => string;
+  /** A sent text as the box holds it: each token the box can name, a chip. */
+  readonly contentOf: (text: string) => JsonContent;
 }
 
 /** The box's half of the menu's accessibility: it completes from a list. */
@@ -132,8 +112,6 @@ const CATEGORIES: ReadonlyArray<BotMentionCategory> = [
   },
 ];
 
-let lastSessionId = 0;
-
 /**
  * `@` completion for a bot channel's box (decisions 137, 177) with the agent
  * composer's two-level mention menu: its first level is a category for each
@@ -143,18 +121,15 @@ let lastSessionId = 0;
  * viewer, by name and picture, as the team's member directory lists them; a
  * personal environment's bot has no one else to name, and a member with no
  * name cannot be named. Typing after the `@` searches every category at once,
- * as the agent composer's first level does. Picking one writes `@Name` in the
- * box, which the send turns into its token, even where another has the same
- * name.
+ * as the agent composer's first level does. The box's editor runs the menu
+ * and publishes nothing of its own: these rows are its only source, and
+ * picking one inserts the name's chip.
  */
 export function useBotMentionCompletion(args: {
-  readonly text: string;
-  readonly setText: (text: string) => void;
-  readonly inputRef: RefObject<HTMLTextAreaElement | null>;
   /** The box on the one-row focus layout, which the menu ends above; `null` elsewhere. */
   readonly replyRow: RefObject<HTMLElement | null> | null;
 }): BotMentionCompletion {
-  const { text, setText, inputRef, replyRow } = args;
+  const { replyRow } = args;
   const identity = useBotIdentity();
   const directory = useContext(BotMentionsContext);
   const viewerUserId = useAuthStore((s) => s.profile?.userId ?? null);
@@ -167,6 +142,11 @@ export function useBotMentionCompletion(args: {
     [everyone, identity, viewerUserId],
   );
   const [pickerStore] = useState(createComposerPickerStore);
+  const sessionId = useStore(pickerStore, (state) =>
+    state.kind === "mention" ? state.sessionId : null,
+  );
+  const query = useStore(pickerStore, (state) => state.query);
+  const publishedQuery = useStore(pickerStore, (state) => state.itemsForQuery);
   const step = useStore(pickerStore, (state) => state.step);
   const listboxId = useId();
   // The menu draws while it is open in a focused pane (`ComposerMenu`).
@@ -175,55 +155,6 @@ export function useBotMentionCompletion(args: {
   const menuShown = menuOpen && paneFocused;
   const activeIndex = useStore(pickerStore, (state) => state.activeIndex);
   const rowCount = useStore(pickerStore, (state) => state.items.length);
-  const [caret, setCaret] = useState(0);
-  // Where the caret goes once a pick is in the box.
-  const placeCaret = useRef<number | null>(null);
-  // What was picked into the box, by where each `@Name` sits in the text it
-  // was read against: a name two share is sent as the one picked
-  // (`mentionsToWire`). Each change of the text moves them with it,
-  // and drops the ones it touched.
-  const [anchored, setAnchored] = useState<{
-    readonly text: string;
-    readonly picks: ReadonlyArray<BotMentionPick>;
-  }>({ text, picks: [] });
-  if (anchored.text !== text) {
-    setAnchored({
-      text,
-      picks: shiftMentionPicks(anchored.text, text, anchored.picks, null),
-    });
-  }
-  // The edit under way, as the box announces it: its kind, and the box's
-  // selection as it began, which says what a typed edit replaced
-  // (`shiftMentionPicks`). Spent by the edit.
-  const editing = useRef<{
-    readonly inputType: string;
-    readonly before: BotMentionTextRange;
-  } | null>(null);
-  useEffect(() => {
-    const input = inputRef.current;
-    if (input === null) return;
-    const record = (event: InputEvent): void => {
-      editing.current = {
-        inputType: event.inputType,
-        before: { start: input.selectionStart, end: input.selectionEnd },
-      };
-    };
-    input.addEventListener("beforeinput", record);
-    return () => input.removeEventListener("beforeinput", record);
-  }, [inputRef]);
-
-  // The `@` being typed, unless it starts a name already picked, or there is
-  // nothing to name.
-  const typed =
-    offered.length === 0
-      ? null
-      : activeMentionQuery(text, Math.min(caret, text.length));
-  const mention =
-    typed !== null && !anchored.picks.some((pick) => pick.start === typed.start)
-      ? typed
-      : null;
-  const mentionStart = mention?.start ?? null;
-  const query = mention?.query ?? "";
   const listed = useMemo(
     () => menuEntries(step, query, offered),
     [offered, query, step],
@@ -233,135 +164,33 @@ export function useBotMentionCompletion(args: {
       listed.entries.map((entry) => ({ id: entry.id, kind: "mention", entry })),
     [listed],
   );
-  // The agent composer's rules for an `@` that is prose, not a mention: what
-  // follows it reads as a sentence, or its search matched nothing once every
-  // name was read.
-  const prose = mention !== null && isDismissedMentionQuery(query, false);
-  const nothingMatched = shouldCloseMentionForNoMatches({
-    stepKind: step.kind,
-    query,
-    debouncedQuery: query,
-    matchedCount: listed.matchedCount,
-    // A name not seen yet is not a name that does not match.
-    loading: !namesAnswered(identity, directory),
-    fetching: false,
-    sourcesErrored: false,
-    referenceQuery: false,
-  });
-
-  useEffect(() => {
-    const next = placeCaret.current;
-    if (next === null) return;
-    placeCaret.current = null;
-    const input = inputRef.current;
-    input?.focus();
-    input?.setSelectionRange(next, next);
-  }, [inputRef, text]);
-
-  const pick = (candidate: BotMentionCandidate): void => {
-    if (mention === null) return;
-    const end = Math.min(caret, text.length);
-    const before = text.slice(0, mention.start);
-    const after = text.slice(end);
-    const inserted = `@${candidate.name} `;
-    const written = before + inserted + after;
-    setAnchored({
-      text: written,
-      picks: [
-        ...spliceMentionPicks(
-          shiftMentionPicks(anchored.text, text, anchored.picks, null),
-          mention.start,
-          end,
-          inserted.length,
-        ),
-        {
-          start: mention.start,
-          end: mention.start + 1 + candidate.name.length,
-          kind: candidate.kind,
-          id: candidate.id,
-        },
-      ],
+  const answered = namesAnswered(identity, directory);
+  // An `@` is prose once its search matched nothing with every name read, or
+  // where there is nothing to name.
+  const nothingToName =
+    (answered && offered.length === 0) ||
+    shouldCloseMentionForNoMatches({
+      stepKind: step.kind,
+      query,
+      debouncedQuery: query,
+      matchedCount: listed.matchedCount,
+      // A name not seen yet is not a name that does not match.
+      loading: !answered,
+      fetching: false,
+      sourcesErrored: false,
+      referenceQuery: false,
     });
-    setText(written);
-    const next = before.length + inserted.length;
-    setCaret(next);
-    placeCaret.current = next;
-  };
 
-  // What committing a row does, as the agent composer's mention commit:
-  // Back and a category move between levels, a name is picked. The store
-  // holds one commit for the menu's life, so it calls the current one.
-  const commitRow = useRef<(item: ComposerPickerItem) => void>(() => {});
-  useLayoutEffect(() => {
-    commitRow.current = (item) => {
-      if (item.kind !== "mention") return;
-      const action = item.entry.action;
-      if (action.kind === "back") {
-        pickerStore.getState().setStep(ROOT_MENTION_STEP);
-        return;
-      }
-      if (action.kind === "navigate") {
-        pickerStore.getState().setStep(action.step);
-        return;
-      }
-      const candidate = offered.find(
-        (offer) => candidateEntryId(offer) === item.id,
-      );
-      if (candidate !== undefined) pick(candidate);
-    };
-  });
-
-  // The menu's session: the `@` it opened for. A session the menu closed on
-  // (Escape, prose, nothing matched) holds it closed until the caret leaves
-  // that `@`.
-  const session = useRef<{
-    readonly id: number;
-    readonly start: number;
-  } | null>(null);
   useEffect(() => {
+    if (sessionId === null) return;
     const store = pickerStore.getState();
-    const current = session.current;
-    if (mentionStart === null) {
-      if (current !== null) store.closeSession(current.id);
-      session.current = null;
+    if (nothingToName) {
+      if (store.dismiss === null) store.closeSession(sessionId);
+      else store.dismiss();
       return;
-    }
-    const range = { from: mentionStart, to: mentionStart + 1 + query.length };
-    let id: number;
-    if (current?.start !== mentionStart) {
-      if (current !== null) store.closeSession(current.id);
-      lastSessionId += 1;
-      const opened = lastSessionId;
-      id = opened;
-      session.current = { id: opened, start: mentionStart };
-      if (prose) return;
-      store.openPicker({
-        sessionId: opened,
-        kind: "mention",
-        slashScope: null,
-        slashTrigger: null,
-        range,
-        query,
-        commit: (item) => commitRow.current(item),
-        dismiss: () => pickerStore.getState().closeSession(opened),
-        focusEditor: null,
-        clientRect: () => inputRef.current?.getBoundingClientRect() ?? null,
-      });
-    } else if (prose) {
-      store.closeSession(current.id);
-      return;
-    } else {
-      id = current.id;
-      store.updateRange({
-        sessionId: id,
-        range,
-        query,
-        slashScope: null,
-        clientRect: null,
-      });
     }
     store.setItems({
-      sessionId: id,
+      sessionId,
       kind: "mention",
       query,
       slashScope: null,
@@ -371,23 +200,30 @@ export function useBotMentionCompletion(args: {
       loadFailed: false,
       retryLoad: null,
     });
-    if (nothingMatched) store.closeSession(id);
   }, [
-    inputRef,
     items,
-    mentionStart,
-    nothingMatched,
+    nothingToName,
     pickerStore,
-    prose,
+    publishedQuery,
     query,
+    sessionId,
     step,
   ]);
 
-  const nameOf = (kind: BotMentionKind, id: string): string | null =>
-    everyone.find((candidate) => candidate.kind === kind && candidate.id === id)
-      ?.name ?? null;
+  const contentOf = useCallback(
+    (text: string): JsonContent =>
+      botBoxContentOf(
+        text,
+        (kind, id) =>
+          everyone.find(
+            (candidate) => candidate.kind === kind && candidate.id === id,
+          )?.name ?? null,
+      ),
+    [everyone],
+  );
 
   return {
+    pickerStore,
     menu: (
       <ComposerMenu
         pickerStore={pickerStore}
@@ -400,54 +236,11 @@ export function useBotMentionCompletion(args: {
       "aria-autocomplete": "list",
       "aria-controls": menuShown ? listboxId : undefined,
       "aria-activedescendant":
-        menuShown && activeIndex < rowCount
+        menuShown && activeIndex >= 0 && activeIndex < rowCount
           ? composerMenuOptionId(listboxId, activeIndex)
           : undefined,
     },
-    onKeyDown: (event) => {
-      const current = session.current;
-      if (current === null || event.nativeEvent.isComposing) return false;
-      if (!composerPickerKeyDown(pickerStore, current.id, event.nativeEvent)) {
-        return false;
-      }
-      event.preventDefault();
-      return true;
-    },
-    onCaret: setCaret,
-    onInput: (input) => {
-      const next = input.value;
-      const announced = editing.current;
-      editing.current = null;
-      const edit: BotMentionEdit | null =
-        announced === null
-          ? null
-          : {
-              ...announced,
-              after: { start: input.selectionStart, end: input.selectionEnd },
-            };
-      setAnchored((current) => ({
-        text: next,
-        picks: shiftMentionPicks(current.text, next, current.picks, edit),
-      }));
-      setCaret(input.selectionStart);
-    },
-    // The text sent is the box's trimmed, which starts where the box's
-    // leading space ends.
-    toWire: (sent) => {
-      const offset = anchored.text.indexOf(sent);
-      const picks =
-        offset === -1
-          ? shiftMentionPicks(anchored.text, sent, anchored.picks, null)
-          : spliceMentionPicks(anchored.picks, 0, offset, 0);
-      return mentionsToWire(sent, everyone, picks);
-    },
-    // A sent text's tokens are its picks again, so an edit sends each
-    // mention to what it named.
-    toDisplay: (sent) => {
-      const display = mentionsToDisplay(sent, nameOf);
-      setAnchored(display);
-      return display.text;
-    },
+    contentOf,
   };
 }
 
@@ -579,7 +372,11 @@ function candidateEntry(candidate: BotMentionCandidate): MentionMenuEntry {
     searchText: candidate.id,
     disabledReason: null,
     icon: mentionGlyph(candidate),
-    action: { kind: "select" },
+    action: {
+      kind: "complete-token",
+      token: botMentionToken(candidate.kind, candidate.id),
+      label: candidate.name,
+    },
     updatedAt: null,
     archived: false,
     dormant: false,
