@@ -916,12 +916,13 @@ Account; the rest is the app itself.
     it shows a disabled row rather than a flip that fails. Editing follows
     the configuration's own authority (`useCanEditConfiguration()`), which is
     what the item-write route enforces; a viewer reads On/Off as text.
-    `.set` answers `{enabled, state, revision, environmentId}`. `applied`
-    means this host has received that write and the switch shows it; `saved`
-    means the configuration holds it and this host has not read it back yet;
-    `queued` means this computer is still holding the edit to send, so it is
-    saved nowhere and has no revision. The row says which rather than letting
-    the switch snap back unexplained.
+    `.set` answers `{enabled, state, revision, environmentId, uploadId}`.
+    `applied` means this host has received that write and the switch shows it;
+    `saved` means the configuration holds it and this host has not read it
+    back yet; `queued` means this computer is still holding the edit to send,
+    so it is saved nowhere, has no revision, and carries the `uploadId` the
+    row recognises it by later. The row says which rather than letting the
+    switch snap back unexplained.
     Both halves carry the same correspondence, because the setting arrives by
     projection and a read taken right after a write can be behind it: `.get`
     answers `{enabled, revision, environmentId}`, where `revision` is how far
@@ -932,12 +933,18 @@ Account; the rest is the app itself.
     has not received yet overturns it - and neither is a revision from another
     configuration, which a rebind can serve without the host's id changing.
     The host applies the same test before it says `applied`.
-    The line is derived from the write's answer and the newest read, never
-    remembered, so a new write supersedes the old one by itself and nothing
-    can outlive the state it describes. `.get` is not polled: it is read on
-    mount and re-read on the write's own invalidation. A poll would re-ask
-    indefinitely on a host whose delta never comes, and the write's answer
-    already says where the change stands.
+    The host row observes each write for at most 60 seconds from submission.
+    One single-flight loop reads the getter, and while queued reads
+    `environment.status@1.1` for an exact upload id, environment and item
+    address. It rechecks the getter after status to reject a rebind during
+    the read. An accepted receipt latches its revision floor; missing receipts
+    keep waiting and never acknowledge a write. Confirmation requires the same
+    non-null environment, a revision at or above that floor, and the requested
+    value. A later opposite value is unconfirmed. Explicit queue refusals are
+    distinguished from transport failures. Terminal outcomes, supersession,
+    unmount and the independent deadline stop observation. Null environment
+    reads remain unavailable evidence; another environment silently ends it.
+
 - **Host** - headed by THE host picker (`host-scope/host-switcher.tsx`).
   Everything under it - Overview, Worktrees, Diagnostics - is scoped by that
   one selection.

@@ -1,5 +1,10 @@
-import type { ReactNode } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
+import type { ConfigAgentMemoriesResponse } from "@traycer/protocol/host/config/schemas";
 import { Switch } from "@/components/ui/switch";
+import {
+  agentMemoryWriteProgress,
+  type AgentMemoryWriteProgress,
+} from "@/components/settings/panels/agent-memories-write-progress";
 import { AGENT_MEMORIES } from "@/components/settings/panels/agent-memories.definitions";
 import { SettingsGroup } from "@/components/settings/settings-group";
 import { SettingsPanelShell } from "@/components/settings/settings-panel-shell";
@@ -110,75 +115,40 @@ function HostAgentMemoriesRow(props: {
 
 const SETTING_STATUS = `${AGENT_MEMORIES.definitions.useTraycerMemories.description} Running agents pick this up on their next turn.`;
 
-/** Where a write of this row's stands, as far as what this host READS can say. */
-type OutstandingWrite =
-  /** Held on this computer with no connection: saved nowhere, in force nowhere. */
-  | "queued"
-  /** The configuration holds it at a revision this host has not reached yet. */
-  | "waiting"
-  /**
-   * The configuration holds it and this host can never show that it arrived:
-   * the write was saved at no revision this host could read, so no read can
-   * be matched against it. Saved is certain; arrival here is not, and is not
-   * claimed.
-   */
-  | "unprovable";
-
 /**
- * Where the last write of this row's stands, read off the write's own answer
- * and the newest read - no stored copy of either, so there is nothing to keep
- * in step, and a new write supersedes the old one by itself.
- *
- * A `saved` write is recognised by its REVISION: the configuration saved it at
- * that revision, so this host has it once its own projection has reached that
- * revision FOR THAT CONFIGURATION, which is the correspondence the host
- * applies before it answers `applied`. A read carrying the value the write
- * asked for proves nothing on its own - an earlier revision can say the same
- * while a later one this host has not received overturns it.
- *
- * Three ways it stops being outstanding, and `null` is each of them: the host
- * answered `applied` (it already had it), its projection reached the revision
- * (it has it now), or the read is about a different configuration (this row
- * cannot speak for that write any more, and what it shows is the
- * configuration it is reading). No timer and no poll is involved in any of
- * them: each is a fact the next read settles.
+ * How long the row keeps re-reading for a write it has not been able to place.
+ * Past it the row says the change was not confirmed here and stops asking: a
+ * host whose delta never comes would otherwise be re-read for ever, and the
+ * extra reads promise the person nothing the line does not already say.
  */
-function outstandingWrite(input: {
-  readonly state: "applied" | "saved" | "queued" | undefined;
-  readonly savedRevision: number | null;
-  readonly savedIn: string | null;
-  readonly readRevision: number | null;
-  readonly readEnvironmentId: string | null;
-}): OutstandingWrite | null {
-  if (input.state === undefined || input.state === "applied") return null;
-  if (input.state === "queued") return "queued";
-  if (input.savedRevision === null || input.savedIn === null)
-    return "unprovable";
-  if (
-    input.readEnvironmentId !== null &&
-    input.readEnvironmentId !== input.savedIn
-  )
-    return null;
-  return input.readRevision !== null &&
-    input.readRevision >= input.savedRevision
-    ? null
-    : "waiting";
-}
+export const AGENT_MEMORY_CONFIRM_BOUND_MS = 60_000;
 
 /** The line under the host row, in the order the person needs it. */
 function hostRowStatus(input: {
   readonly readFailed: boolean;
-  readonly outstanding: OutstandingWrite | null;
+  readonly progress: AgentMemoryWriteProgress;
 }): string {
   if (input.readFailed)
     return "Couldn't read this host's agent memories setting. Check the host connection and reopen Settings.";
-  if (input.outstanding === "queued")
-    return "Waiting to reach your configuration. This computer will send the change when it is online.";
-  if (input.outstanding === "waiting")
-    return "Saved to your configuration. This host hasn't picked it up yet; it will when it does.";
-  if (input.outstanding === "unprovable")
-    return "Saved to your configuration. Whether this host has picked it up can't be shown here; reopen Settings to read it again.";
-  return SETTING_STATUS;
+  switch (input.progress.kind) {
+    case "queued":
+      return "Waiting to reach your configuration. This computer will send the change when it is online.";
+    case "waiting":
+      return "Saved to your configuration. This host hasn't picked it up yet; it will when it does.";
+    case "unconfirmed":
+      return "Whether this change took effect can't be shown here. Reopen Settings to read it again.";
+    case "refused":
+      return "Your configuration refused this change. Reopen Settings to read what it holds.";
+    case "stale":
+      return "Someone else changed this setting first. Reopen Settings to read what your configuration holds.";
+    case "failed":
+      // Deliberately says nothing about whether it was saved. A refusal from
+      // the configuration and a reply that never arrived are the same code
+      // here, so naming either would be a guess.
+      return "Couldn't change this setting. Reopen Settings to read what your configuration holds.";
+    case "settled":
+      return SETTING_STATUS;
+  }
 }
 
 /**
@@ -188,12 +158,12 @@ function hostRowStatus(input: {
  */
 function AgentMemoriesRow(): ReactNode {
   const client = useHostClient();
-  // Read once and re-read on the write's own invalidation, never polled. The
-  // setting is a configuration's row that arrives by projection, so a read
-  // taken right after a write can be behind it - but the WRITE's own answer
-  // already says where the change stands, so there is nothing the row must
-  // wait for a later read to learn. A poll would re-ask indefinitely on a host
-  // whose delta never comes, and promise no more than the line below.
+  const setEnabled = useHostScopedMutationForClient(client, {
+    method: AGENT_MEMORIES_SET,
+    mutationKey: configMutationKeys.agentMemoriesSet(),
+    errorMessage: "Couldn't update agent memories",
+    invalidateMethods: [],
+  });
   const query = useHostQuery<HostRpcRegistry, "config.agentMemories.get">({
     cacheKeyIdentity: undefined,
     client,
@@ -201,35 +171,194 @@ function AgentMemoriesRow(): ReactNode {
     params: {},
     options: { enabled: true },
   });
-  const setEnabled = useHostScopedMutationForClient(client, {
-    method: AGENT_MEMORIES_SET,
-    mutationKey: configMutationKeys.agentMemoriesSet(),
-    errorMessage: "Couldn't update agent memories",
-    invalidateMethods: [AGENT_MEMORIES_GET],
-  });
+  const hostId = client.getActiveHostId();
+  const [observation, setObservation] = useState<{
+    readonly hostId: string | null;
+    readonly read: ConfigAgentMemoriesResponse | undefined;
+    readonly progress: AgentMemoryWriteProgress;
+  } | null>(null);
+  const observer = useRef<{ stop: () => void } | null>(null);
+  useEffect(
+    () => () => {
+      observer.current?.stop();
+      observer.current = null;
+    },
+    [client],
+  );
+  const shown = observation?.hostId === hostId ? observation : null;
+  const read = shown?.read ?? query.data;
 
-  const answer = setEnabled.data;
+  function submit(asked: boolean): void {
+    observer.current?.stop();
+    const controller = new AbortController();
+    const expiresAt = Date.now() + AGENT_MEMORY_CONFIRM_BOUND_MS;
+    const environmentId = read?.environmentId ?? null;
+    let timer: number | null = null;
+    let deadline: number | null = null;
+    let latestRead = read;
+    function stop(): void {
+      controller.abort();
+      if (timer !== null) window.clearTimeout(timer);
+      if (deadline !== null) window.clearTimeout(deadline);
+    }
+    const current = { stop };
+    observer.current = current;
+    function live(): boolean {
+      return (
+        observer.current === current &&
+        !controller.signal.aborted &&
+        client.getActiveHostId() === hostId &&
+        Date.now() < expiresAt
+      );
+    }
+    function show(progress: AgentMemoryWriteProgress): void {
+      setObservation({ hostId, read: latestRead, progress });
+    }
+    function finish(progress: AgentMemoryWriteProgress): void {
+      show(progress);
+      stop();
+      if (observer.current === current) observer.current = null;
+    }
+    show({ kind: "settled" });
+    // Armed at submission, independently of mutation and read completion.
+    deadline = window.setTimeout(() => {
+      if (observer.current !== current) return;
+      finish({ kind: "unconfirmed" });
+    }, AGENT_MEMORY_CONFIRM_BOUND_MS);
+    setEnabled.mutate(
+      { enabled: asked },
+      {
+        onError: (error) => {
+          if (!live()) return;
+          finish({
+            kind: error.code === "ENVIRONMENT_WRITE_STALE" ? "stale" : "failed",
+          });
+        },
+        onSuccess: (response) => {
+          if (!live()) return;
+          if (
+            environmentId !== null &&
+            response.environmentId !== environmentId
+          ) {
+            finish({ kind: "settled" });
+            return;
+          }
+          let answer = response;
+          if (answer.state === "applied") {
+            latestRead = {
+              enabled: answer.enabled,
+              revision: answer.revision,
+              environmentId: answer.environmentId,
+            };
+            finish({ kind: "settled" });
+            return;
+          }
+          if (answer.state === "saved" && answer.revision === null) {
+            finish({ kind: "unconfirmed" });
+            return;
+          }
+          show({ kind: answer.state === "queued" ? "queued" : "waiting" });
+          async function tick(): Promise<void> {
+            if (!live()) return;
+            try {
+              latestRead = await client.requestWithSignal(
+                AGENT_MEMORIES_GET,
+                {},
+                controller.signal,
+              );
+              if (!live()) return;
+              if (
+                latestRead.environmentId !== null &&
+                latestRead.environmentId !== answer.environmentId
+              ) {
+                finish({ kind: "settled" });
+                return;
+              }
+              let queue;
+              if (answer.state === "queued") {
+                queue =
+                  await client.requestWithSignalRequiringHostMethodVersion(
+                    "environment.status",
+                    {},
+                    controller.signal,
+                    {
+                      method: "environment.status",
+                      version: { major: 1, minor: 1 },
+                    },
+                  );
+                if (!live()) return;
+                // The host can rebind during the status request. Read the binding
+                // again before accepting its receipt against the previous snapshot.
+                latestRead = await client.requestWithSignal(
+                  AGENT_MEMORIES_GET,
+                  {},
+                  controller.signal,
+                );
+                if (!live()) return;
+                if (
+                  latestRead.environmentId !== null &&
+                  latestRead.environmentId !== answer.environmentId
+                ) {
+                  finish({ kind: "settled" });
+                  return;
+                }
+                const receipt = queue.acceptedUploads.find(
+                  (entry) =>
+                    entry.uploadId === answer.uploadId &&
+                    entry.environmentId === answer.environmentId &&
+                    entry.kind === "agent_memory" &&
+                    entry.key === "memory" &&
+                    entry.os === "any",
+                );
+                // Keep the saved floor even if a later status omits this witness.
+                if (receipt !== undefined)
+                  answer = {
+                    ...answer,
+                    state: "saved",
+                    revision: receipt.revision,
+                  };
+              }
+              const progress = agentMemoryWriteProgress({
+                answer,
+                asked,
+                read: latestRead,
+                queue,
+              });
+              if (progress.kind !== "waiting" && progress.kind !== "queued") {
+                finish(progress);
+                return;
+              }
+              show(progress);
+            } catch {
+              // A failed read is unavailable evidence, not a write refusal.
+              if (!live()) return;
+            }
+            if (live())
+              timer = window.setTimeout(() => {
+                void tick();
+              }, 5_000);
+          }
+          void tick();
+        },
+      },
+    );
+  }
+
   return (
     <SettingsRow
       row={AGENT_MEMORIES.definitions.useTraycerMemories}
       status={hostRowStatus({
         readFailed: query.isError,
-        outstanding: outstandingWrite({
-          state: answer?.state,
-          savedRevision: answer?.revision ?? null,
-          savedIn: answer?.environmentId ?? null,
-          readRevision: query.data?.revision ?? null,
-          readEnvironmentId: query.data?.environmentId ?? null,
-        }),
+        progress: shown?.progress ?? { kind: "settled" },
       })}
       control={
         <Switch
-          checked={query.data?.enabled === true}
+          checked={read?.enabled === true}
           disabled={query.isPending || query.isError || setEnabled.isPending}
           aria-label="Use Traycer memories for agents"
           onCheckedChange={(next) => {
             trackSettingChanged("agent-memories", "useTraycerMemories");
-            setEnabled.mutate({ enabled: next });
+            submit(next);
           }}
         />
       }

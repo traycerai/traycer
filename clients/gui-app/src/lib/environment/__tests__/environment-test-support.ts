@@ -112,6 +112,7 @@ export function environmentStatusFixture(
     receiptAgeMs: 0,
     items: [],
     pendingUploads: [],
+    acceptedUploads: [],
     setup: null,
     remoteAccess: "off",
     ...overrides,

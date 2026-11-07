@@ -511,6 +511,15 @@ export const configAgentMemoriesSetResponseSchema = lazySchema(() =>
      * configuration's answer would resolve a write made to the old one.
      */
     environmentId: z.string().min(1),
+    /**
+     * The id this edit carries while it is held, so a caller can recognise it
+     * later in `environment.status` - as a refusal in `pendingUploads`, or as
+     * an `acceptedUploads` receipt naming the revision the configuration
+     * eventually saved it as. Only a `queued` write has one: a write already
+     * `saved` or `applied` carries its revision here instead, and nothing is
+     * waiting to be recognised.
+     */
+    uploadId: z.string().min(1).nullable(),
   }),
 );
 export type ConfigAgentMemoriesSetResponse = z.infer<
