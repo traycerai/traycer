@@ -2189,13 +2189,12 @@ describe("the task store floor", () => {
   });
 
   /**
-   * The format-5 era, through the CLI: a 1.5.0 host reads 4, so a
-   * format-5 task store blocks it. It is the one behaviour the new era row
-   * adds here - before it, 4 was the newest format the table knew and such
-   * a target opened no task store at all.
+   * The format-6 era, through the CLI: a 1.5.0 host reads 4, so a
+   * format-6 task store blocks it. This pins the format floor through the
+   * CLI for the replacement era row at 1.5.4-rc.1.
    */
-  it("refuses a format-4 era target over a format-5 task store", async () => {
-    await writeTaskStoreDb(5, false);
+  it("refuses a format-4 era target over a format-6 task store", async () => {
+    await writeTaskStoreDb(6, false);
     const logger = fakeLogger();
 
     const err = await refusalOf(
@@ -2204,6 +2203,6 @@ describe("the task store floor", () => {
 
     expect(err.details?.verdict).toBe("task-store-blocked");
     expect(err.details?.targetTaskStore).toBe(4);
-    expect(err.details?.onDiskTaskStore).toBe(5);
+    expect(err.details?.onDiskTaskStore).toBe(6);
   });
 });
