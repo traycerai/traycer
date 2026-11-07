@@ -13,8 +13,11 @@ import { act, cleanup, render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { HostNotificationsIndicatorStateResponse } from "@traycer/protocol/host/notifications/contracts";
+import { managedCommandSchema } from "@traycer/protocol/host/managed-command/unary-schemas";
+import type { BotTurnRef } from "@traycer/protocol/host/bot/conversation-schemas";
 import type {
   BotInputNeeded,
+  BotNotificationSubscription,
   BotTaskEntry,
 } from "@traycer/protocol/host/bot/schemas";
 import {
@@ -27,12 +30,14 @@ import {
   warmEpic,
 } from "@/components/layout/tabs/side-strip/__tests__/warm-epic-fixture";
 import type { AgentActivityTier } from "@/lib/agent-activity";
+import { formatAbsoluteDateTime } from "@/lib/relative-time";
 import { getOpenEpicRegistry } from "@/lib/registries/epic-session-registry";
 import {
   __resetAgentActivityStoreForTests,
   __setAgentActivityStateForTests,
 } from "@/stores/agent-activity-store";
 import { useAuthStore } from "@/stores/auth/auth-store";
+import { installManagedCommandChatSession } from "@/stores/managed-commands/test-support/managed-command-chat-session";
 import {
   EMPTY_NOTIFICATION_INDICATOR_STATE,
   type NotificationIndicatorState,
@@ -79,6 +84,10 @@ const mocks = vi.hoisted(() => {
     state,
     client: { stub: "tab-host-client" },
     navigateToTabIntent: vi.fn<(...args: unknown[]) => void>(),
+    openTurn: vi.fn(),
+    openSession: vi.fn(),
+    locateRequests: [] as Array<unknown>,
+    locatedTurns: [] as Array<BotTurnRef>,
     /** Each member action the page sent, by method. */
     actions: [] as Array<{ method: string; variables: unknown }>,
     asked,
@@ -143,6 +152,22 @@ vi.mock("@/hooks/host/use-host-supports-method", () => ({
   useHostMethodSupport: (_hostId: string | null, method: string) =>
     mocks.state.supported.has(method),
 }));
+vi.mock("@/hooks/bots/use-bot-activity", () => ({
+  useBotActivity: () => null,
+}));
+vi.mock("@/hooks/host/use-host-query", () => ({
+  useHostQuery: (args: {
+    method: string;
+    params: unknown;
+    options: { enabled: boolean };
+  }) => {
+    if (args.method === "bot.turn.locate" && args.options.enabled) {
+      mocks.locateRequests.push(args.params);
+      return { data: { turns: mocks.locatedTurns }, refetch: vi.fn() };
+    }
+    return { data: undefined, refetch: vi.fn() };
+  },
+}));
 vi.mock("@/hooks/agent/use-host-reachability", () => ({
   useHostReachability: (hostId: string) => ({
     status: mocks.state.unreachable.has(hostId) ? "unreachable" : "reachable",
@@ -206,6 +231,8 @@ vi.mock("@/hooks/host/use-host-queries", () => ({
   },
 }));
 
+import { postThread } from "@/components/bots/__tests__/bot-turn-test-support";
+import type { BotThreadSummary } from "@traycer/protocol/host/bot/conversation-schemas";
 import { BotActivityPage } from "@/components/bots/bot-activity-page";
 import { useBotActiveTasks } from "@/hooks/bots/use-bot-active-tasks";
 
@@ -314,7 +341,9 @@ function agentUnread(
 
 function Harness(props: {
   readonly tasks: ReadonlyArray<BotTaskEntry>;
+  readonly threads: ReadonlyArray<BotThreadSummary>;
   readonly boundHere: boolean;
+  readonly notificationSubscriptions: ReadonlyArray<BotNotificationSubscription> | null;
 }): ReactNode {
   const active = useBotActiveTasks(props.tasks);
   return (
@@ -324,8 +353,13 @@ function Harness(props: {
       botTitle={BOT_TITLE}
       boundHere={props.boundHere}
       active={active}
+      tasks={props.tasks}
+      notificationSubscriptions={props.notificationSubscriptions}
+      onOpenTurn={mocks.openTurn}
+      trunkChatId="bot-trunk"
+      onOpenSession={mocks.openSession}
       resolveMember={() => null}
-      threads={[]}
+      threads={props.threads}
     />
   );
 }
@@ -334,7 +368,14 @@ function mount(
   tasks: ReadonlyArray<BotTaskEntry>,
   options: { readonly boundHere: boolean },
 ): void {
-  render(<Harness tasks={tasks} boundHere={options.boundHere} />);
+  render(
+    <Harness
+      threads={[]}
+      tasks={tasks}
+      boundHere={options.boundHere}
+      notificationSubscriptions={null}
+    />,
+  );
 }
 
 function rows(): ReadonlyArray<HTMLElement> {
@@ -430,6 +471,8 @@ beforeEach(() => {
   mocks.state.chatFlagsByHost = {};
   mocks.state.unreachable = new Set();
   mocks.actions.length = 0;
+  mocks.locateRequests.length = 0;
+  mocks.locatedTurns.length = 0;
   mocks.forgetAnswers();
   __resetAgentActivityStoreForTests();
   useAuthStore.setState({
@@ -447,6 +490,376 @@ afterEach(() => {
     status: "signed-out",
     profile: null,
     contextMetadata: null,
+  });
+});
+
+describe("<BotActivityPage /> check-ins and subscriptions", () => {
+  it("shows the last received check-in when an older host has no history", () => {
+    const deliveredAt = NOW - 60_000;
+    mount(
+      [
+        completed("older-host-task", {
+          label: "Legacy audit",
+          checkins: null,
+          lastCheckin: {
+            deliveredAt,
+            since: deliveredAt - 60_000,
+            through: deliveredAt,
+            sections: {
+              agentsStarted: {
+                available: true,
+                rows: [],
+                omitted: 0,
+                creatorsBeyondCap: false,
+              },
+              backgroundEvents: { rows: [], omitted: 0 },
+              tickets: { rows: [], omitted: 0, firstCheckin: false },
+              cost: { available: false, window: null, total: null },
+              stillRunning: {
+                state: "idle",
+                reason: null,
+                agents: [],
+                agentsOmitted: 0,
+                shells: [],
+                shellsOmitted: 0,
+              },
+            },
+          },
+        }),
+      ],
+      { boundHere: true },
+    );
+    const section = screen.getByRole("region", {
+      name: "Tasks with check-ins",
+    });
+    expect(within(section).getByText("Legacy audit")).toBeTruthy();
+    expect(
+      within(section).getByText(
+        `Check-in received · ${formatAbsoluteDateTime(deliveredAt)}`,
+      ),
+    ).toBeTruthy();
+    expect(
+      within(section).queryByText("Check-in history unavailable"),
+    ).toBeNull();
+  });
+
+  it("keeps ended tasks with unavailable history visible without implying it is empty", () => {
+    mount(
+      [completed("dated", { label: "Dated legacy task", lastCheckinAt: NOW })],
+      { boundHere: true },
+    );
+    const section = screen.getByRole("region", {
+      name: "Tasks with check-ins",
+    });
+    expect(within(section).getByText("Dated legacy task")).toBeTruthy();
+    expect(
+      within(section).getAllByText("Check-in history unavailable").length,
+    ).toBeGreaterThan(0);
+    expect(within(section).queryByText("No tasks with check-ins")).toBeNull();
+  });
+
+  it("reports unknown history without claiming the task had a check-in", () => {
+    mount([completed("undated", { label: "Undated legacy task" })], {
+      boundHere: true,
+    });
+    const section = screen.getByRole("region", {
+      name: "Tasks with check-ins",
+    });
+    expect(
+      within(section).getByText("Check-in history unavailable"),
+    ).toBeTruthy();
+    expect(within(section).queryByText("No tasks with check-ins")).toBeNull();
+  });
+
+  it("shows received and missed history and opens the located reading turn", async () => {
+    const user = userEvent.setup();
+    mocks.state.supported.add("bot.turn.locate");
+    const turn: BotTurnRef = {
+      chatId: "bot-chat",
+      turnIds: ["turn-1"],
+      userMessageId: "checkin-message",
+      threadId: null,
+      startedAt: NOW - 1000,
+      endedAt: NOW,
+      summary: null,
+      messageIds: [],
+      requestIds: [],
+    };
+    mocks.locatedTurns.push(turn);
+    const received = {
+      kind: "received" as const,
+      receivedAt: NOW,
+      hostId: "host-agents",
+      hostName: "Studio Mac",
+      outcome: "idle" as const,
+      agentsStarted: 1,
+      ticketsOpened: 0,
+      ticketsClosed: 1,
+      backgroundEvents: 0,
+      turn: { chatId: "bot-chat", turnId: "turn-1" },
+      requestedByUserId: null,
+    };
+    const missed = {
+      kind: "missed" as const,
+      dueAt: NOW - 7_200_000,
+      missedThrough: NOW - 3_600_000,
+      reason: "no-host-reported" as const,
+      caughtUpAt: null,
+    };
+    mount(
+      [
+        periodic("tracked-checkin", {
+          label: "Tracked audit",
+          checkins: [received],
+        }),
+        completed("ended-checkin", {
+          label: "Finished audit",
+          checkins: [missed],
+        }),
+      ],
+      { boundHere: true },
+    );
+
+    expect(
+      screen.getByRole("heading", { name: "Tasks with check-ins" }),
+    ).toBeTruthy();
+    expect(screen.getAllByText("Tracked audit").length).toBeGreaterThan(0);
+    expect(screen.getAllByText("Finished audit").length).toBeGreaterThan(0);
+    expect(screen.getByText(/Check-in received/)).toBeTruthy();
+    expect(screen.getByText(/Check-in missed/)).toBeTruthy();
+    await user.click(screen.getByRole("button", { name: /Open check-in/ }));
+    expect(mocks.locateRequests).toContainEqual({
+      botId: BOT_ID,
+      messageIds: [],
+      requestIds: [],
+      turns: [{ chatId: "bot-chat", turnId: "turn-1" }],
+    });
+    expect(mocks.openTurn).toHaveBeenCalledWith(turn, null);
+  });
+
+  it("distinguishes unavailable subscriptions from a known empty list", () => {
+    const view = render(
+      <Harness
+        threads={[]}
+        tasks={[]}
+        boundHere
+        notificationSubscriptions={null}
+      />,
+    );
+    expect(screen.getByText("Subscriptions unavailable")).toBeTruthy();
+    expect(screen.queryByText("No notification subscriptions")).toBeNull();
+
+    view.rerender(
+      <Harness
+        threads={[]}
+        tasks={[]}
+        boundHere
+        notificationSubscriptions={[]}
+      />,
+    );
+    expect(screen.getByText("No notification subscriptions")).toBeTruthy();
+    expect(screen.queryByText("Subscriptions unavailable")).toBeNull();
+  });
+
+  it("describes each subscription's target, filter, and digest cadence", () => {
+    render(
+      <Harness
+        threads={[]}
+        tasks={[]}
+        boundHere
+        notificationSubscriptions={[
+          {
+            target: { kind: "trunk" },
+            attentionOnly: true,
+            everySeconds: 3600,
+            since: NOW,
+            digests: [],
+          },
+          {
+            target: { kind: "thread", threadId: "thread-1" },
+            attentionOnly: false,
+            everySeconds: null,
+            since: null,
+            digests: null,
+          },
+        ]}
+      />,
+    );
+    expect(
+      screen.getByRole("heading", { name: "Notification subscriptions" }),
+    ).toBeTruthy();
+    expect(screen.getByText("Trunk")).toBeTruthy();
+    expect(screen.getByText("Thread: thread-1")).toBeTruthy();
+    expect(screen.getByText("Attention only")).toBeTruthy();
+    expect(screen.getByText("All notifications")).toBeTruthy();
+    expect(screen.getByText("Every hour")).toBeTruthy();
+  });
+});
+
+describe("<BotActivityPage /> shells in open sessions", () => {
+  it("shows only loaded thread sessions and names thread subscriptions and shells", () => {
+    const first = postThread();
+    if (first.anchor === null) throw new Error("thread fixture has no anchor");
+    const named = {
+      ...first,
+      threadId: "thread-named",
+      sessionChatId: "chat-named",
+      anchor: { ...first.anchor, excerpt: "Release discussion" },
+    };
+    const unnamed = {
+      ...first,
+      threadId: "thread-fallback",
+      sessionChatId: "chat-fallback",
+    };
+    const unloaded = {
+      ...first,
+      threadId: "thread-unloaded",
+      sessionChatId: "chat-unloaded",
+    };
+    const session = installManagedCommandChatSession({
+      epicId: BOT_ID,
+      chatId: named.sessionChatId,
+      hostId: HOST_ID,
+    });
+    const fallback = installManagedCommandChatSession({
+      epicId: BOT_ID,
+      chatId: unnamed.sessionChatId,
+      hostId: HOST_ID,
+    });
+    const command = managedCommandSchema.parse({
+      id: "thread-shell",
+      monitoring: true,
+      description: "Thread watcher",
+      command: "watch",
+      cwd: "/work",
+      cadence: { debounceMs: 500, maxWaitMs: 15_000, throttleMs: 5_000 },
+      status: { state: "running", pid: 42, startedAtMs: NOW },
+      chatId: named.sessionChatId,
+      relaunchOnHostRestart: false,
+      createdAtMs: NOW,
+      updatedAtMs: NOW,
+    });
+    try {
+      session.setCommands([command]);
+      session.setConnectionStatus("open");
+      fallback.setCommands([]);
+      fallback.setConnectionStatus("open");
+      render(
+        <Harness
+          tasks={[]}
+          threads={[named, unnamed, unloaded]}
+          boundHere
+          notificationSubscriptions={[
+            {
+              target: { kind: "thread", threadId: named.threadId },
+              attentionOnly: true,
+              everySeconds: null,
+              since: null,
+              digests: null,
+            },
+            {
+              target: { kind: "thread", threadId: unnamed.threadId },
+              attentionOnly: false,
+              everySeconds: null,
+              since: null,
+              digests: null,
+            },
+          ]}
+        />,
+      );
+      const shells = screen.getByRole("region", {
+        name: "Shells and monitors",
+      });
+      const subscriptions = screen.getByRole("region", {
+        name: "Notification subscriptions",
+      });
+      expect(
+        within(shells).getByText("Thread: Release discussion"),
+      ).toBeTruthy();
+      expect(within(shells).getByText("Thread: thread-fallback")).toBeTruthy();
+      expect(within(shells).getByText("Thread watcher")).toBeTruthy();
+      expect(within(shells).getByText("No shells")).toBeTruthy();
+      expect(within(shells).queryByText("thread-unloaded")).toBeNull();
+      expect(within(shells).getAllByText("Shells unavailable")).toHaveLength(1);
+      expect(
+        within(shells).getByText(/Other sessions may have shells/),
+      ).toBeTruthy();
+      expect(
+        within(subscriptions).getByText("Thread: Release discussion"),
+      ).toBeTruthy();
+      expect(
+        within(subscriptions).getByText("Thread: thread-fallback"),
+      ).toBeTruthy();
+      act(() => fallback.setConnectionStatus("closed"));
+      expect(within(shells).getAllByText("Shells unavailable")).toHaveLength(2);
+    } finally {
+      cleanup();
+      session.dispose();
+      fallback.dispose();
+    }
+  });
+
+  it("tracks the existing host-scoped session and opens the owning transcript", async () => {
+    const user = userEvent.setup();
+    const otherHost = installManagedCommandChatSession({
+      epicId: BOT_ID,
+      chatId: "bot-trunk",
+      hostId: "other-host",
+    });
+    const session = installManagedCommandChatSession({
+      epicId: BOT_ID,
+      chatId: "bot-trunk",
+      hostId: HOST_ID,
+    });
+    try {
+      otherHost.setCommands([]);
+      otherHost.setConnectionStatus("open");
+      mount([], { boundHere: true });
+      expect(screen.getByText("Shells unavailable")).toBeTruthy();
+      expect(screen.queryByText("No shells")).toBeNull();
+
+      act(() => {
+        session.setCommands([]);
+        session.setConnectionStatus("open");
+      });
+      expect(screen.getByText("No shells")).toBeTruthy();
+
+      const command = managedCommandSchema.parse({
+        id: "shell-deploy",
+        monitoring: true,
+        description: "deploy watcher",
+        command: "tail -f deploy.log",
+        cwd: "/work/repo",
+        cadence: { debounceMs: 500, maxWaitMs: 15_000, throttleMs: 5_000 },
+        status: { state: "running", pid: 42, startedAtMs: NOW },
+        chatId: "bot-trunk",
+        relaunchOnHostRestart: false,
+        createdAtMs: NOW,
+        updatedAtMs: NOW,
+      });
+      act(() => session.setCommands([command]));
+      expect(screen.getByText("deploy watcher")).toBeTruthy();
+      expect(screen.getByText("running")).toBeTruthy();
+      expect(screen.getByText("Monitor on")).toBeTruthy();
+      await user.click(screen.getByRole("button", { name: "Open session" }));
+      expect(mocks.openSession).toHaveBeenCalledWith({
+        chatId: "bot-trunk",
+        threadId: null,
+        messageId: null,
+        sendPostId: null,
+      });
+
+      act(() => session.setCommands([{ ...command, monitoring: false }]));
+      expect(screen.getByText("Monitor off")).toBeTruthy();
+      expect(screen.queryByText("Monitor on")).toBeNull();
+      act(() => session.setConnectionStatus("closed"));
+      expect(screen.getByText("Shells unavailable")).toBeTruthy();
+      expect(screen.queryByText("deploy watcher")).toBeNull();
+    } finally {
+      cleanup();
+      session.dispose();
+      otherHost.dispose();
+    }
   });
 });
 

@@ -20,6 +20,8 @@ import userEvent from "@testing-library/user-event";
 import { act } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { managedCommandSchema } from "@traycer/protocol/host/managed-command/unary-schemas";
+import { installManagedCommandChatSession } from "@/stores/managed-commands/test-support/managed-command-chat-session";
 import type { BotThreadSummary } from "@traycer/protocol/host/bot/conversation-schemas";
 import type {
   BotQuestionSettlement,
@@ -52,11 +54,16 @@ vi.mock("@/lib/registries/chat-session-registry", async (importOriginal) => ({
       : null;
   },
 }));
+// The fallback announcer has no host reads to make in this transcript fixture.
+vi.mock("@/hooks/host/use-host-client-for-host-id", () => ({
+  useHostClientForHostId: () => null,
+}));
 vi.mock("@/hooks/host/use-tab-host-client", () => ({
   useTabHostClient: () => null,
 }));
 vi.mock("@/hooks/harnesses/use-gui-harness-catalog", () => ({
   useGuiHarnessCatalogForClient: () => ({ harnesses: [] }),
+  useGuiHarnessesQueryForClient: () => ({ data: undefined, isPending: false }),
 }));
 // A bot's own session draws no receipts: the transcript asks for none.
 vi.mock("@/hooks/bots/use-bot-turn-locate-query", () => ({
@@ -406,6 +413,82 @@ afterEach(() => {
 });
 
 describe("a bot's trunk session, read whole", () => {
+  it("renders a managed shell started in the bot transcript", async () => {
+    const call = sendCall({
+      blockId: "start-shell",
+      toolName: "mcp__traycer_a2a__traycer_run_shell",
+      fields: { command: "tail -f deploy.log" },
+      error: null,
+      at: 2_000,
+    });
+    mocks.sessions[TRUNK_ID] = scriptedSession(TRUNK_ID, [
+      checkinPrompt(),
+      botTurn({
+        messageId: "turn-shell-record",
+        turnId: "turn-shell",
+        at: 2_000,
+        blocks: [
+          {
+            ...call,
+            managedCommand: {
+              event: "started",
+              commandId: "shell-deploy",
+              description: "deploy watcher",
+              monitoring: true,
+              cwd: null,
+            },
+          },
+        ],
+      }),
+    ]).handle;
+    const session = installManagedCommandChatSession({
+      epicId: BOT_ID,
+      chatId: TRUNK_ID,
+      hostId: HOST_ID,
+    });
+    const command = managedCommandSchema.parse({
+      id: "shell-deploy",
+      monitoring: true,
+      description: "deploy watcher",
+      command: "tail -f deploy.log",
+      cwd: "/work/repo",
+      cadence: { debounceMs: 500, maxWaitMs: 15_000, throttleMs: 5_000 },
+      status: { state: "running", pid: 42, startedAtMs: 2_000 },
+      chatId: TRUNK_ID,
+      relaunchOnHostRestart: false,
+      createdAtMs: 2_000,
+      updatedAtMs: 2_000,
+    });
+    try {
+      session.setCommands([command]);
+      session.setConnectionStatus("open");
+      mountTrunk(null);
+      await settleLegendList();
+      expect(within(view()).getByText("Monitor · deploy watcher")).toBeTruthy();
+      expect(within(view()).getByText("Running")).toBeTruthy();
+      act(() =>
+        session.setCommands([
+          {
+            ...command,
+            monitoring: false,
+            status: {
+              state: "exited",
+              exitCode: 1,
+              signal: null,
+              exitedAtMs: 3_000,
+            },
+          },
+        ]),
+      );
+      expect(within(view()).getByText("Shell · deploy watcher")).toBeTruthy();
+      expect(within(view()).getByText("Exited · code 1")).toBeTruthy();
+      expect(within(view()).queryByText("Running")).toBeNull();
+    } finally {
+      cleanup();
+      session.dispose();
+    }
+  });
+
   it("reads every turn and what happened between them in time order: the check-in, the reply it posted as a send, the fallback, the next prompt and the question back", async () => {
     mountTrunk(null);
     await settleLegendList();

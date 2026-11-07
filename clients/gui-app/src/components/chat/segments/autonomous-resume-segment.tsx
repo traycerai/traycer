@@ -13,7 +13,7 @@ import { ManagedCommandMonitorIcon } from "@/components/managed-commands/managed
 import { useMaybeChatTranscript } from "@/components/chat/chat-transcript-context";
 import { managedCommandNoun } from "@/lib/managed-commands/managed-command-copy";
 import { useManagedCommandDoor } from "@/lib/managed-commands/use-managed-command-door";
-import { useMaybeOpenEpicHandle } from "@/providers/use-open-epic-handle";
+import { useChatContainerId } from "@/components/chat/chat-container-context";
 import { useManagedCommandPresence } from "@/stores/managed-commands/managed-commands-for-chat";
 import { useHostQuery } from "@/hooks/host/use-host-query";
 import { useTabHostClient } from "@/hooks/host/use-tab-host-client";
@@ -463,7 +463,7 @@ function ResumeManagedCommandDoor(props: {
   readonly variant: "card" | "row";
 }) {
   const managedCommand = props.trigger.managedCommand;
-  const epicId = useMaybeOpenEpicHandle()?.epicId ?? null;
+  const epicId = useChatContainerId();
   const transcript = useMaybeChatTranscript();
   // The host the digest named as the shell's, or null for a shell the chat's
   // own host produced. Normalized BEFORE anything reads it: a body that

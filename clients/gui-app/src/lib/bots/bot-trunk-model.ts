@@ -28,7 +28,7 @@ export function describeTaskInterval(task: BotTaskEntry): string | null {
   return `every ${describeSeconds(task.cadence.seconds)}`;
 }
 
-function describeSeconds(seconds: number): string {
+export function describeSeconds(seconds: number): string {
   if (seconds % DAY_S === 0) return plural(seconds / DAY_S, "day");
   if (seconds % HOUR_S === 0) return plural(seconds / HOUR_S, "hour");
   if (seconds % MINUTE_S === 0) return `${seconds / MINUTE_S} min`;
