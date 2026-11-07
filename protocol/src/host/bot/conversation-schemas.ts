@@ -453,6 +453,17 @@ export const botThreadSummarySchemaV10 = lazySchema(() =>
   }),
 );
 
+/** An author of a stored reply, not the thread's root or an attempted answer. */
+export const botThreadReplyParticipantSchema = lazySchema(() =>
+  z.discriminatedUnion("kind", [
+    z.object({ kind: z.literal("person"), userId: z.string().min(1) }),
+    z.object({ kind: z.literal("bot") }),
+  ]),
+);
+export type BotThreadReplyParticipant = z.infer<
+  typeof botThreadReplyParticipantSchema
+>;
+
 /**
  * One thread of a bot's channel: the thread record (`tenant_kind =
  * "thread"`) that holds its messages and replies, and the bot's thread
@@ -467,6 +478,11 @@ export const botThreadSummarySchema = lazySchema(() =>
     anchor: botThreadAnchorSchema.nullable(),
     /** Rows of the thread record: members' messages and the bot's replies. */
     replyCount: z.number().int().nonnegative(),
+    /**
+     * Distinct authors observed in the thread's stored replies. Absent from
+     * older hosts; a reply count alone does not identify its authors.
+     */
+    replyParticipants: z.array(botThreadReplyParticipantSchema).optional(),
     lastReplyAt: z.number().int().nullable(),
     /** Open requests of the thread, the anchor's included while it is open. */
     openRequestCount: z.number().int().nonnegative(),

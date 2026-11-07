@@ -973,6 +973,76 @@ describe("<BotChannelView tiles={null} /> Edit on a post the bot failed to answe
     expect(textOf(channelBox())).toBe("");
   });
 
+  it("shows a thread reply's timeout only on its request and retries that same request in the thread", async () => {
+    const user = userEvent.setup();
+    const requestId = "req-timed-out";
+    const summary =
+      "The provider did not start responding to this message. Please try again.";
+    mocks.threads = [postThread(VIEWER_USER_ID)];
+    const threadMessage = (id: string, request: string): Message => ({
+      role: "user",
+      messageId: id,
+      sender: { type: "user", userId: VIEWER_USER_ID },
+      sessionAnchor: null,
+      message: { kind: "user", content: textDoc(id), browserAnnotations: [] },
+      timestamp: 3_000,
+      conversationRequest: {
+        requestId: request,
+        resolvedAt: null,
+        resolvedByMessageId: null,
+      },
+    });
+    mocks.threadHandle = {
+      store: createChannelStore([
+        threadMessage("timed-out", requestId),
+        threadMessage("unrelated", "req-other"),
+      ]),
+    } as ChatSessionStoreHandle;
+    activityStore.setState({
+      activity: {
+        trunk: null,
+        threads: {
+          [THREAD_ID]: {
+            ...failedOn(requestId),
+            reason: {
+              summary,
+              code: "TURN_START_TIMEOUT",
+              harnessId: "codex",
+              action: "none",
+            },
+          },
+        },
+      },
+    });
+    mountChannelWith(
+      {
+        anchorMessageId: POST_ID,
+        announcement: false,
+        anchorKind: null,
+        sent: null,
+      },
+      [memberPost(VIEWER_USER_ID)],
+    );
+    const rows = within(screen.getByTestId("bot-thread-panel")).getAllByTestId(
+      "bot-member-row",
+    );
+    const timedOut = rows.find((row) => row.textContent.includes("timed-out"));
+    const other = rows.find((row) => row.textContent.includes("unrelated"));
+    if (timedOut === undefined || other === undefined)
+      throw new Error("thread replies missing");
+    expect(
+      within(timedOut).getByTestId("bot-message-unanswered").textContent,
+    ).toContain(summary);
+    expect(within(other).queryByTestId("bot-message-unanswered")).toBeNull();
+    await user.click(
+      within(timedOut).getByTestId("bot-message-unanswered-retry"),
+    );
+    expect(sent.at(-1)).toMatchObject({
+      threadId: THREAD_ID,
+      redeliver: { requestId },
+    });
+  });
+
   it("keeps an edit of a message in the open thread, its text and the message it replaces, while the channel's session goes and comes back", async () => {
     const user = userEvent.setup();
     const THREAD_REQUEST = "req-in-thread";

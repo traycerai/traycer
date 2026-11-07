@@ -222,3 +222,34 @@ test.describe("a pane shorter than the band's cap", () => {
     ).toBeFocused();
   });
 });
+
+test("a loaded thread scrolls its replies without a minimap and keeps a draft", async ({
+  page,
+}) => {
+  await page.goto(
+    `${fixture("bot-thread-tasks-bound")}?loaded=true&tasks=none&post=short`,
+  );
+  const scroll = page.getByTestId("chat-messages-scroll");
+  await expect(scroll).toBeVisible();
+  await expect(page.getByTestId("chat-turn-minimap")).toHaveCount(0);
+  const input = page.locator(COMPOSER_INPUT);
+  await input.fill("A draft reply");
+  await expect
+    .poll(async () =>
+      scroll.evaluate((el) => el.scrollHeight - el.clientHeight),
+    )
+    .toBeGreaterThan(0);
+  await scroll.evaluate((el) => {
+    el.scrollTop = el.scrollHeight;
+  });
+  await expect
+    .poll(async () => scroll.evaluate((el) => el.scrollTop))
+    .toBeGreaterThan(0);
+  await scroll.hover();
+  await page.mouse.wheel(0, -5000);
+  await expect.poll(async () => scroll.evaluate((el) => el.scrollTop)).toBe(0);
+  await expect(page.getByTestId("bot-thread-reply-count")).toContainText(
+    "30 replies",
+  );
+  await expect(input).toContainText("A draft reply");
+});
