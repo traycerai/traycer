@@ -423,9 +423,27 @@ export type ConfigAgentMemoriesGetRequest = z.infer<
   typeof configAgentMemoriesGetRequestSchema
 >;
 
+/**
+ * `revision` is the configuration revision this answer was read AT - how far
+ * the host's projection has got, not the item's own. A caller that has just
+ * written compares it with the revision its write was saved as: an `enabled`
+ * read below that revision is some earlier revision's answer, and matching
+ * what was asked for does not make it this write's. `null` before the host's
+ * first read of the configuration, and for a host serving none.
+ */
 export const configAgentMemoriesResponseSchema = lazySchema(() =>
   z.object({
     enabled: z.boolean(),
+    revision: z.number().int().nonnegative().nullable(),
+    /**
+     * The configuration the two above are ABOUT, read in the same snapshot
+     * as them. A host can rebind from one configuration to another
+     * without changing its id, so a caller comparing a read against its own
+     * write has to compare this too: a later configuration's revision and
+     * value say nothing about a write addressed to the one before it.
+     * `null` on a host serving none.
+     */
+    environmentId: z.string().min(1).nullable(),
   }),
 );
 export type ConfigAgentMemoriesResponse = z.infer<
@@ -453,17 +471,46 @@ export type ConfigAgentMemoriesSetRequest = z.infer<
  * another's: a host that has moved to a different configuration answers
  * `false`, the behaviour its agents have.
  *
- * `settled` says whether that read is yet the state the call asked for.
- * `true` means this host now reads what was asked and its agents behave
- * accordingly. `false` means the change is on its way but not here - queued
- * with no connection, or committed and not yet received - or the host moved
- * on; the caller reads back later rather than treating the write as in force.
- * It is a statement about what this host reads, not a receipt for the write.
+ * `state` says how far the change has got, which the caller needs told apart
+ * because the three are different promises to the person:
+ *
+ * - `applied` - the configuration holds this change and this host has
+ *   received it, so `enabled` is this write's own state and the
+ *   configuration's agents behave accordingly.
+ * - `saved` - the configuration holds it; this host has not received it yet,
+ *   so `enabled` is still the state from before. It arrives on its own, and
+ *   the caller reads back rather than treating it as in force here.
+ * - `queued` - this computer is holding the edit to send, with no connection
+ *   to the configuration: it is not saved anywhere yet and in force nowhere.
+ *
+ * `applied` is a claim about what this host READS, not a receipt for the
+ * write, and it is made only of the revision the configuration saved THIS
+ * write as: a host that reads the asked-for value at an older revision has
+ * not received this change and answers `saved`, because a later revision it
+ * has not received can still overturn what it reads. A host that has moved to
+ * another configuration answers `saved` too, rather than claiming a state it
+ * cannot see.
+ *
+ * `revision` is the configuration revision this write was saved as, for the
+ * caller to recognise it in a later read's `revision`. `null` when the write
+ * is only `queued`, which has been saved nowhere and so is no revision, and
+ * when the configuration's answer named none this host could read. A `null`
+ * revision is therefore not confirmable by a later read: the caller may say
+ * the change is waiting, and must not later claim it arrived.
  */
 export const configAgentMemoriesSetResponseSchema = lazySchema(() =>
   z.object({
     enabled: z.boolean(),
-    settled: z.boolean(),
+    state: z.enum(["applied", "saved", "queued"]),
+    revision: z.number().int().nonnegative().nullable(),
+    /**
+     * The configuration this write was ADDRESSED to, named before it was
+     * sent. Part of the correspondence, not decoration: a host can rebind
+     * without changing its id, so a caller must match this against the
+     * `environmentId` of the read it later compares, or a new
+     * configuration's answer would resolve a write made to the old one.
+     */
+    environmentId: z.string().min(1),
   }),
 );
 export type ConfigAgentMemoriesSetResponse = z.infer<

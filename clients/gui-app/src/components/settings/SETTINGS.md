@@ -916,9 +916,28 @@ Account; the rest is the app itself.
     it shows a disabled row rather than a flip that fails. Editing follows
     the configuration's own authority (`useCanEditConfiguration()`), which is
     what the item-write route enforces; a viewer reads On/Off as text.
-    `.set` answers `{enabled, settled}`, and `settled: false` means the write
-    reached the configuration but this host has not read it back yet - the
-    row says so rather than letting the switch snap back unexplained.
+    `.set` answers `{enabled, state, revision, environmentId}`. `applied`
+    means this host has received that write and the switch shows it; `saved`
+    means the configuration holds it and this host has not read it back yet;
+    `queued` means this computer is still holding the edit to send, so it is
+    saved nowhere and has no revision. The row says which rather than letting
+    the switch snap back unexplained.
+    Both halves carry the same correspondence, because the setting arrives by
+    projection and a read taken right after a write can be behind it: `.get`
+    answers `{enabled, revision, environmentId}`, where `revision` is how far
+    this host's projection has got, and the row keeps the line up until a
+    read's `revision` reaches the one the write was saved as FOR THE SAME
+    `environmentId`. Both halves matter. A value match is not proof - an
+    earlier revision can carry the asked-for value while a revision this host
+    has not received yet overturns it - and neither is a revision from another
+    configuration, which a rebind can serve without the host's id changing.
+    The host applies the same test before it says `applied`.
+    The line is derived from the write's answer and the newest read, never
+    remembered, so a new write supersedes the old one by itself and nothing
+    can outlive the state it describes. `.get` is not polled: it is read on
+    mount and re-read on the write's own invalidation. A poll would re-ask
+    indefinitely on a host whose delta never comes, and the write's answer
+    already says where the change stands.
 - **Host** - headed by THE host picker (`host-scope/host-switcher.tsx`).
   Everything under it - Overview, Worktrees, Diagnostics - is scoped by that
   one selection.

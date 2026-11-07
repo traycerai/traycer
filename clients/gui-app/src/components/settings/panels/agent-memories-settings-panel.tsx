@@ -110,19 +110,74 @@ function HostAgentMemoriesRow(props: {
 
 const SETTING_STATUS = `${AGENT_MEMORIES.definitions.useTraycerMemories.description} Running agents pick this up on their next turn.`;
 
+/** Where a write of this row's stands, as far as what this host READS can say. */
+type OutstandingWrite =
+  /** Held on this computer with no connection: saved nowhere, in force nowhere. */
+  | "queued"
+  /** The configuration holds it at a revision this host has not reached yet. */
+  | "waiting"
+  /**
+   * The configuration holds it and this host can never show that it arrived:
+   * the write was saved at no revision this host could read, so no read can
+   * be matched against it. Saved is certain; arrival here is not, and is not
+   * claimed.
+   */
+  | "unprovable";
+
 /**
- * The line under the host row: a read that failed, a write this host has not
- * caught up with (`settled: false` - it reached the configuration, and the
- * switch still shows what this host's agents do), or the setting itself.
+ * Where the last write of this row's stands, read off the write's own answer
+ * and the newest read - no stored copy of either, so there is nothing to keep
+ * in step, and a new write supersedes the old one by itself.
+ *
+ * A `saved` write is recognised by its REVISION: the configuration saved it at
+ * that revision, so this host has it once its own projection has reached that
+ * revision FOR THAT CONFIGURATION, which is the correspondence the host
+ * applies before it answers `applied`. A read carrying the value the write
+ * asked for proves nothing on its own - an earlier revision can say the same
+ * while a later one this host has not received overturns it.
+ *
+ * Three ways it stops being outstanding, and `null` is each of them: the host
+ * answered `applied` (it already had it), its projection reached the revision
+ * (it has it now), or the read is about a different configuration (this row
+ * cannot speak for that write any more, and what it shows is the
+ * configuration it is reading). No timer and no poll is involved in any of
+ * them: each is a fact the next read settles.
  */
+function outstandingWrite(input: {
+  readonly state: "applied" | "saved" | "queued" | undefined;
+  readonly savedRevision: number | null;
+  readonly savedIn: string | null;
+  readonly readRevision: number | null;
+  readonly readEnvironmentId: string | null;
+}): OutstandingWrite | null {
+  if (input.state === undefined || input.state === "applied") return null;
+  if (input.state === "queued") return "queued";
+  if (input.savedRevision === null || input.savedIn === null)
+    return "unprovable";
+  if (
+    input.readEnvironmentId !== null &&
+    input.readEnvironmentId !== input.savedIn
+  )
+    return null;
+  return input.readRevision !== null &&
+    input.readRevision >= input.savedRevision
+    ? null
+    : "waiting";
+}
+
+/** The line under the host row, in the order the person needs it. */
 function hostRowStatus(input: {
   readonly readFailed: boolean;
-  readonly settled: boolean | undefined;
+  readonly outstanding: OutstandingWrite | null;
 }): string {
   if (input.readFailed)
     return "Couldn't read this host's agent memories setting. Check the host connection and reopen Settings.";
-  if (input.settled === false)
+  if (input.outstanding === "queued")
+    return "Waiting to reach your configuration. This computer will send the change when it is online.";
+  if (input.outstanding === "waiting")
     return "Saved to your configuration. This host hasn't picked it up yet; it will when it does.";
+  if (input.outstanding === "unprovable")
+    return "Saved to your configuration. Whether this host has picked it up can't be shown here; reopen Settings to read it again.";
   return SETTING_STATUS;
 }
 
@@ -133,6 +188,12 @@ function hostRowStatus(input: {
  */
 function AgentMemoriesRow(): ReactNode {
   const client = useHostClient();
+  // Read once and re-read on the write's own invalidation, never polled. The
+  // setting is a configuration's row that arrives by projection, so a read
+  // taken right after a write can be behind it - but the WRITE's own answer
+  // already says where the change stands, so there is nothing the row must
+  // wait for a later read to learn. A poll would re-ask indefinitely on a host
+  // whose delta never comes, and promise no more than the line below.
   const query = useHostQuery<HostRpcRegistry, "config.agentMemories.get">({
     cacheKeyIdentity: undefined,
     client,
@@ -147,12 +208,19 @@ function AgentMemoriesRow(): ReactNode {
     invalidateMethods: [AGENT_MEMORIES_GET],
   });
 
+  const answer = setEnabled.data;
   return (
     <SettingsRow
       row={AGENT_MEMORIES.definitions.useTraycerMemories}
       status={hostRowStatus({
         readFailed: query.isError,
-        settled: setEnabled.data?.settled,
+        outstanding: outstandingWrite({
+          state: answer?.state,
+          savedRevision: answer?.revision ?? null,
+          savedIn: answer?.environmentId ?? null,
+          readRevision: query.data?.revision ?? null,
+          readEnvironmentId: query.data?.environmentId ?? null,
+        }),
       })}
       control={
         <Switch
