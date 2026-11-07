@@ -387,7 +387,7 @@ function canvasTabIds(tabId: string): ReadonlyArray<string> {
 
 function registerEpicHeader(
   tab: EpicTab,
-  permissionRole: PermissionRole,
+  permissionRole: PermissionRole | null,
 ): void {
   __getOpenEpicRegistryForTests().acquire(tab.id, () =>
     buildHeaderEpicHandle(tab, permissionRole, []),
@@ -486,7 +486,7 @@ function registerStaleActiveEpicHeader(
 
 function buildHeaderEpicHandle(
   tab: EpicTab,
-  permissionRole: PermissionRole,
+  permissionRole: PermissionRole | null,
   liveAgentIds: ReadonlyArray<string>,
 ): OpenEpicStoreHandle {
   const liveChatsById = Object.fromEntries(
@@ -2599,7 +2599,7 @@ describe("<TabStrip />", () => {
     ).toBeNull();
   });
 
-  it("hides the header epic edit-title menu item for viewer role", async () => {
+  it("hides the header epic edit-title menu item when the task grants no role", async () => {
     openEpicFixture(EPIC_A);
     registerEpicHeader(EPIC_A, "owner");
     const router = buildRouter("/epics/e-a/e-a");
@@ -2612,7 +2612,8 @@ describe("<TabStrip />", () => {
     resetStores();
 
     openEpicFixture(EPIC_A);
-    registerEpicHeader(EPIC_A, "viewer");
+    // A stored viewer seat is retired and decodes to no role at all.
+    registerEpicHeader(EPIC_A, null);
     const viewerRouter = buildRouter("/epics/e-a/e-a");
     render(<RouterProvider router={viewerRouter} />);
 

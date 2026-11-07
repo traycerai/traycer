@@ -58,8 +58,10 @@ export function EnvironmentPickerRow(props: {
       onSelect={props.onSelect}
       className={rowClassName(props.verb !== null, props.disabled)}
     >
-      <span className="flex min-w-0 items-center gap-1.5 font-medium">
-        <span className="truncate">{props.label}</span>
+      <span className="flex min-w-0 max-w-full flex-wrap items-center gap-1.5 font-medium">
+        <span className="min-w-0 whitespace-normal wrap-anywhere">
+          {props.label}
+        </span>
         {props.badge === null ? null : (
           <TooltipWrapper
             label={props.badgeTooltip}
@@ -73,7 +75,9 @@ export function EnvironmentPickerRow(props: {
           </TooltipWrapper>
         )}
       </span>
-      <span className="text-ui-xs text-muted-foreground">{props.subtitle}</span>
+      <span className="max-w-full text-ui-xs whitespace-normal wrap-anywhere text-muted-foreground">
+        {props.subtitle}
+      </span>
     </DropdownMenuRadioItem>
   );
   if (props.verb === null) return row;

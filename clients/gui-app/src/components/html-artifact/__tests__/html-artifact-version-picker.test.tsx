@@ -161,7 +161,6 @@ describe("<HtmlArtifactVersionPicker />", () => {
     );
 
     const rows = screen.getAllByRole("menuitemradio");
-    expect(rows.filter((row) => /Version 3/.test(textOf(row)))).toHaveLength(1);
     expect(rows.filter((row) => /Latest/.test(textOf(row)))).toHaveLength(1);
     expect(rows.map((row) => /Version (\d)/.exec(textOf(row))?.[1])).toEqual([
       "3",

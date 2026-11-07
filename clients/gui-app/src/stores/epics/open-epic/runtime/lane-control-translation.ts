@@ -49,6 +49,7 @@
  * pre-snapshot silence and an in-band "cannot answer yet" collapse onto the
  * consumer's `unknown` rather than onto a synthesised `false`.
  */
+import { grantedRole } from "@traycer/protocol/common/permission-role";
 import { LatestPermissionRoleSchema } from "@traycer/protocol/host/epic/unary-schemas";
 import type { PermissionRole } from "@traycer/protocol/host/epic/unary-schemas";
 import type { EpicCloudSyncStatus } from "@traycer/protocol/host/epic/subscribe";
@@ -62,15 +63,17 @@ import type {
 } from "./epic-runtime-events";
 
 /**
- * The wire's role, or `null` when it is not one this build recognises.
+ * The access the wire's role gives, or `null` when it gives none - an
+ * unrecognised role, or the retired view-only one.
  *
- * Parsed rather than cast. A cast would make an unrecognised role read as a
- * recognised one to every downstream consumer, including the write gate.
+ * Resolved rather than cast. A cast would make a role this build does not
+ * honour read as one it does to every downstream consumer, the write gate
+ * included.
  */
 function narrowPermissionRole(role: string | null): PermissionRole | null {
   if (role === null) return null;
   const parsed = LatestPermissionRoleSchema.safeParse(role);
-  return parsed.success ? parsed.data : null;
+  return parsed.success ? grantedRole(parsed.data) : null;
 }
 
 /**

@@ -49,6 +49,7 @@ describe("CommGraphOpenButton", () => {
           epicId: EPIC_ID,
         }) as EpicCanvasTileRef,
       }),
+      "user",
     );
   });
 
@@ -80,6 +81,7 @@ describe("CommGraphOpenButton", () => {
         dedupe: true,
         node: expect.objectContaining({ id: contentId }) as EpicCanvasTileRef,
       }),
+      "user",
     );
     expect(tileNavigationMocks.openTile).toHaveBeenNthCalledWith(
       2,
@@ -88,6 +90,7 @@ describe("CommGraphOpenButton", () => {
         dedupe: true,
         node: expect.objectContaining({ id: contentId }) as EpicCanvasTileRef,
       }),
+      "user",
     );
   });
 
@@ -125,6 +128,7 @@ describe("CommGraphOpenMenuItem", () => {
           epicId: EPIC_ID,
         }) as EpicCanvasTileRef,
       }),
+      "user",
     );
   });
 });

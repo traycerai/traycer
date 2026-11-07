@@ -93,7 +93,10 @@ function BrowsersPanelList(props: LeftPanelSlotProps) {
         sessionId: session.sessionId,
         tabId: tab.tabId,
       });
-      openTile(tileIntent(tile, { tabId: props.tabId }, "single", "direct_ui"));
+      openTile(
+        tileIntent(tile, { tabId: props.tabId }, "single", "direct_ui"),
+        "user",
+      );
     },
     [openTile, props.tabId],
   );
@@ -106,6 +109,7 @@ function BrowsersPanelList(props: LeftPanelSlotProps) {
       });
       openTile(
         tileIntent(tile, { tabId: props.tabId }, "explicit", "direct_ui"),
+        "user",
       );
     },
     [openTile, props.tabId],
@@ -130,6 +134,7 @@ function BrowsersPanelList(props: LeftPanelSlotProps) {
           "explicit",
           "direct_ui",
         ),
+        "user",
       );
     },
     [chatById, openTile, props.tabId],

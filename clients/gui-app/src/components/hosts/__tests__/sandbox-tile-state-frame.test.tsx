@@ -165,6 +165,27 @@ function renderFrame(withWake: boolean) {
   return { ...view, rerenderFrame: () => view.rerender(tree()) };
 }
 
+function renderClosedFrame(withWake: boolean) {
+  const queryClient = new QueryClient({
+    defaultOptions: { mutations: { retry: false } },
+  });
+  const tree = (): ReactNode => (
+    <QueryClientProvider client={queryClient}>
+      {withWake ? <WakeInFlight /> : null}
+      <SandboxTileStateFrame chat={null}>
+        <p data-testid="tile-closed-message">
+          This sandbox is permanently closed.
+        </p>
+        <button type="button" data-testid="tile-close-tab">
+          Close tab
+        </button>
+      </SandboxTileStateFrame>
+    </QueryClientProvider>
+  );
+  const view = render(tree());
+  return { ...view, rerenderFrame: () => view.rerender(tree()) };
+}
+
 /** A chat tile's frame: its own resolver and composer footer own its lifecycle. */
 function renderChatFrame() {
   const queryClient = new QueryClient({
@@ -439,6 +460,34 @@ describe("<SandboxTileStateFrame />", () => {
     }
   });
 
+  it("keeps closed terminal content mounted but invisible and inert during a directory move", () => {
+    setSandboxEntry("resuming", false);
+    const { rerenderFrame } = renderClosedFrame(false);
+    const message = screen.getByTestId("tile-closed-message");
+    const closeTab = screen.getByTestId("tile-close-tab");
+    const body = message.parentElement;
+    expect(body).not.toBeNull();
+    expect(message.closest(".invisible")).not.toBeNull();
+    expect(message.closest("[aria-hidden='true']")).not.toBeNull();
+    expect(message.closest("[inert]")).not.toBeNull();
+    expect(screen.queryByRole("button", { name: "Close tab" })).toBeNull();
+    expect(body?.contains(closeTab)).toBe(true);
+    expect(screen.getByTestId("sandbox-tile-overlay").textContent).toContain(
+      "Resuming",
+    );
+    expect(
+      screen.getByTestId("sandbox-tile-overlay").textContent,
+    ).not.toContain("permanently closed");
+
+    setSandboxEntry("awake", false);
+    rerenderFrame();
+    expect(screen.getByTestId("tile-closed-message")).toBe(message);
+    expect(message.closest(".invisible")).toBeNull();
+    expect(message.closest("[aria-hidden='true']")).toBeNull();
+    expect(message.closest("[inert]")).toBeNull();
+    expect(screen.getByRole("button", { name: "Close tab" })).toBe(closeTab);
+  });
+
   it("overlays a frozen sandbox with the frozen line and its destroy date, and offers no wake", () => {
     setSandboxEntry("suspended", true);
     mocks.list = {
@@ -533,6 +582,37 @@ describe("<SandboxTileStateFrame />", () => {
         "Starting",
       );
     });
+  });
+
+  it("keeps closed terminal content mounted but invisible and inert during a pending wake", async () => {
+    setSandboxEntry("suspended", false);
+    const { rerenderFrame } = renderClosedFrame(true);
+    const message = screen.getByTestId("tile-closed-message");
+    const closeTab = screen.getByTestId("tile-close-tab");
+    expect(screen.getByTestId("sandbox-tile-overlay-wake")).toBeDefined();
+
+    fireEvent.click(screen.getByTestId("start-wake"));
+    await waitFor(() => {
+      expect(
+        screen.getByTestId("sandbox-tile-overlay").getAttribute("data-kind"),
+      ).toBe("moving");
+    });
+    expect(screen.getByTestId("tile-closed-message")).toBe(message);
+    expect(message.closest(".invisible")).not.toBeNull();
+    expect(message.closest("[aria-hidden='true']")).not.toBeNull();
+    expect(message.closest("[inert]")).not.toBeNull();
+    expect(screen.queryByRole("button", { name: "Close tab" })).toBeNull();
+    expect(
+      screen.getByTestId("sandbox-tile-overlay").textContent,
+    ).not.toContain("permanently closed");
+
+    setSandboxEntry("awake", false);
+    rerenderFrame();
+    expect(screen.getByTestId("tile-closed-message")).toBe(message);
+    expect(message.closest(".invisible")).toBeNull();
+    expect(message.closest("[aria-hidden='true']")).toBeNull();
+    expect(message.closest("[inert]")).toBeNull();
+    expect(screen.getByRole("button", { name: "Close tab" })).toBe(closeTab);
   });
 
   it("does not swap a frozen overlay for a wake in flight", async () => {

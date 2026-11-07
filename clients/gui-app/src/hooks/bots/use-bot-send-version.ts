@@ -1,5 +1,9 @@
 import type { SchemaVersion } from "@traycer/protocol/framework/index";
-import { botConversationSendV13 } from "@traycer/protocol/host/bot/contracts";
+import {
+  botConversationSendV13,
+  botConversationSendV14,
+} from "@traycer/protocol/host/bot/contracts";
+import { BOT_HOST_TAKES_IMAGES } from "@traycer/protocol/host/bot/conversation-schemas";
 import { useHostMethodSchemaVersion } from "@/hooks/host/use-host-supports-method";
 
 /**
@@ -27,6 +31,13 @@ export const BOT_CONVERSATION_ANSWER_VERSION = {
 export const BOT_CONVERSATION_CALL_VERSION =
   botConversationSendV13.schemaVersion;
 
+/**
+ * The `bot.conversation.send` line that carries a member's images
+ * (`attachments`): an older host would drop them and take the text alone.
+ */
+export const BOT_CONVERSATION_IMAGES_VERSION =
+  botConversationSendV14.schemaVersion;
+
 /** Whether a host that negotiated `negotiated` for `bot.conversation.send` takes a send that needs `required`. */
 export function botSendTakes(
   negotiated: SchemaVersion | null,
@@ -49,4 +60,34 @@ export function useBotSendTakesAnswers(hostId: string): boolean {
     useHostMethodSchemaVersion(hostId, "bot.conversation.send"),
     BOT_CONVERSATION_ANSWER_VERSION,
   );
+}
+
+/**
+ * What a message box does with images:
+ * - `none`: the host serving the tab takes none, so the box takes no drop and
+ *   no paste, and says nothing;
+ * - `delivered`: they reach the bot;
+ * - `held-back`: the tab's host takes them, the bot's bound host has not said
+ *   it does. The box keeps them and says so, and Send carries the text alone.
+ */
+export type BotImageReach = "none" | "delivered" | "held-back";
+
+export function useBotImageReach(input: {
+  /** The host serving the tab. */
+  readonly hostId: string;
+  /** The host that runs the bot; `null` when none does. */
+  readonly boundHostId: string | null;
+  /** What that host said it takes, as its thread list reports it. */
+  readonly boundHostTakes: readonly string[];
+}): BotImageReach {
+  const { hostId, boundHostId, boundHostTakes } = input;
+  const taken = botSendTakes(
+    useHostMethodSchemaVersion(hostId, "bot.conversation.send"),
+    BOT_CONVERSATION_IMAGES_VERSION,
+  );
+  if (!taken) return "none";
+  return boundHostId === hostId ||
+    boundHostTakes.includes(BOT_HOST_TAKES_IMAGES)
+    ? "delivered"
+    : "held-back";
 }

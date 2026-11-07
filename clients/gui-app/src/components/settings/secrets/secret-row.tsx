@@ -67,10 +67,10 @@ function Spinner(props: { readonly busy: boolean }): ReactNode {
 /** If the secret leaked: the order that closes it fastest. */
 function RecoveryOrder(): ReactNode {
   return (
-    <div className="flex flex-col gap-1" data-testid="secret-recovery">
-      <p className="text-ui-xs font-medium text-foreground">
+    <details className="flex flex-col gap-1" data-testid="secret-recovery">
+      <summary className="cursor-pointer text-ui-xs font-medium text-foreground">
         {SECRET_RECOVERY_TITLE}
-      </p>
+      </summary>
       <ol className="flex list-decimal flex-col gap-0.5 pl-5 text-ui-xs text-muted-foreground">
         {SECRET_RECOVERY_STEPS.map((step) => (
           <li key={step} className="max-w-[72ch]">
@@ -81,7 +81,7 @@ function RecoveryOrder(): ReactNode {
       <p className="max-w-[72ch] text-ui-xs text-muted-foreground">
         {SECRET_RECOVERY_FALLBACK}
       </p>
-    </div>
+    </details>
   );
 }
 
@@ -131,7 +131,7 @@ function SecretRowIdentity(props: {
     <div className="flex min-w-0 flex-col gap-0.5">
       <span className="flex flex-wrap items-center gap-2">
         <span
-          className="min-w-0 text-ui-sm text-muted-foreground"
+          className="min-w-0 wrap-anywhere text-ui-sm text-muted-foreground"
           data-testid="secret-row-line"
         >
           <span className="font-mono text-foreground">{props.secret.name}</span>
@@ -259,6 +259,18 @@ function SecretDetailsControls(props: {
           )}
         </div>
       )}
+      {props.secret.destinations.length === 0 ? null : (
+        <div className="text-ui-xs">
+          <p className="font-medium">Destinations</p>
+          <ul className="space-y-1 text-muted-foreground">
+            {props.secret.destinations.map((destination) => (
+              <li key={destination} className="wrap-anywhere">
+                {destination}
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
       <SecretRotationStatus
         client={props.client}
         secretId={props.secret.secretId}
@@ -276,8 +288,7 @@ function SecretDetailsControls(props: {
 }
 
 /**
- * One secret on Settings ▸ Personal ▸ Secrets: "STRIPE_KEY · Set · sent to
- * api.stripe.com · added by you 24 Oct" with Replace, Remove and Details.
+ * One secret on Settings ▸ Personal ▸ Secrets: "STRIPE_KEY · Set · 1 destination · added by you 24 Oct" with Replace, Remove and Details.
  * Details holds Verify, the versions and the recovery order; a replacement's
  * progress stays on the row. No value is ever here. Verify and the versions
  * act on the secret by id, so they work for every kind, those already stored

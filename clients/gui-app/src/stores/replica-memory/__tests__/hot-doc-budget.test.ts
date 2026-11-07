@@ -112,8 +112,7 @@ function createFakeSession(): EpicSessionFacts & {
     transportStatus: () => state.transportStatus,
     permissionRole: () => state.permissionRole,
     writeGateRole: () => state.permissionRole,
-    isWritableRole: () =>
-      state.permissionRole !== "viewer" && state.permissionRole !== null,
+    isWritableRole: () => state.permissionRole !== null,
     hasFreshRootSnapshotForOpenCycle: () =>
       state.hasFreshRootSnapshotForOpenCycle,
     canSendBodyWrites: () => state.canSendBodyWrites,

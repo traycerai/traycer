@@ -130,6 +130,7 @@ export function useOpenBrowserUrl(): (input: OpenBrowserUrlInput) => void {
             target: currentTarget(input),
             modifiers: input.modifiers,
           }),
+          "user",
         );
       };
 

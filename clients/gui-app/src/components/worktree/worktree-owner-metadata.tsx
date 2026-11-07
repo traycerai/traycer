@@ -67,6 +67,7 @@ export function WorktreeOwnerMetadataTooltip(props: {
         "explicit",
         "direct_ui",
       ),
+      "user",
     );
   };
   const metadata = useWorktreeOwnerMetadata({

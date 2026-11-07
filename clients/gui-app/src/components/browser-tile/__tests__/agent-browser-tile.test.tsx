@@ -16,6 +16,7 @@ import {
   settleMatchesLatch,
 } from "@/components/browser-tile/agent-browser-tile";
 import { KeybindingProvider } from "@/providers/keybinding-provider";
+import type { NestedFocusProvenance } from "@/lib/epic-nested-focus-navigation";
 import type { KeybindingRouterSource } from "@/lib/keybindings/router-adapter";
 import { getDefaultBindings } from "@/lib/keybindings/actions";
 import { isMac } from "@/lib/keybindings/platform";
@@ -47,7 +48,13 @@ const state = vi.hoisted(() => ({
   chromeInputs: [] as Array<Record<string, unknown>>,
   sessions: null as BrowserSessionsState | null,
   onOpenLinkInNewTile:
-    vi.fn<(url: string, disposition: "foreground" | "background") => void>(),
+    vi.fn<
+      (
+        url: string,
+        disposition: "foreground" | "background",
+        provenance: NestedFocusProvenance,
+      ) => void
+    >(),
   onNativeTileFocused: vi.fn<() => void>(),
   /** Attach/detach in the order they actually happened. */
   events: [] as string[],
@@ -164,6 +171,8 @@ interface OpenTileRequest {
   readonly pageSessionId: string;
   readonly url: string;
   readonly disposition: "foreground" | "background";
+  /** Omitted entirely to simulate a main process older than this field. */
+  readonly openerHadUserGesture?: boolean;
 }
 
 interface NativeStatusChange {
@@ -627,31 +636,50 @@ describe("ElectronTabSurface", () => {
     expect(wrapper.inert).toBe(true);
   });
 
-  it("forwards an in-page popup open request to onOpenLinkInNewTile untouched", async () => {
-    const bridge = state.bridge;
-    if (bridge === null) throw new Error("bridge missing");
-    renderTile(
-      createBinding(() => Promise.resolve({ detach: () => Promise.resolve() })),
-    );
-
-    act(() => {
-      bridge.emitOpenTileRequest({
-        viewTabId: "view-1",
-        paneId: "pane-1",
-        tileInstanceId: "tile-1",
-        pageSessionId: "browser-session:session-1:tab-1",
-        url: "https://popup.example/",
-        disposition: "background",
-      });
-    });
-
-    await waitFor(() => {
-      expect(state.onOpenLinkInNewTile).toHaveBeenCalledExactlyOnceWith(
-        "https://popup.example/",
-        "background",
+  it.each<[string, boolean | undefined, NestedFocusProvenance]>([
+    ["openerHadUserGesture: true", true, "user"],
+    ["openerHadUserGesture: false", false, "automatic"],
+    // The important case: an older main process sends no field at all, and
+    // its absence must never be read as a person having clicked.
+    [
+      "openerHadUserGesture absent (older main process)",
+      undefined,
+      "automatic",
+    ],
+  ])(
+    "forwards an in-page popup open request to onOpenLinkInNewTile with %s",
+    async (_label, openerHadUserGesture, expectedProvenance) => {
+      const bridge = state.bridge;
+      if (bridge === null) throw new Error("bridge missing");
+      renderTile(
+        createBinding(() =>
+          Promise.resolve({ detach: () => Promise.resolve() }),
+        ),
       );
-    });
-  });
+
+      act(() => {
+        bridge.emitOpenTileRequest({
+          viewTabId: "view-1",
+          paneId: "pane-1",
+          tileInstanceId: "tile-1",
+          pageSessionId: "browser-session:session-1:tab-1",
+          url: "https://popup.example/",
+          disposition: "background",
+          ...(openerHadUserGesture === undefined
+            ? {}
+            : { openerHadUserGesture }),
+        });
+      });
+
+      await waitFor(() => {
+        expect(state.onOpenLinkInNewTile).toHaveBeenCalledExactlyOnceWith(
+          "https://popup.example/",
+          "background",
+          expectedProvenance,
+        );
+      });
+    },
+  );
 
   it("accepts status only for the exact host, session, and tab", async () => {
     const bridge = state.bridge;
@@ -799,6 +827,7 @@ describe("ElectronTabSurface browser-scoped chords", () => {
     expect(state.onOpenLinkInNewTile).toHaveBeenCalledExactlyOnceWith(
       "about:blank",
       "foreground",
+      "user",
     );
     expect(state.closeTab).not.toHaveBeenCalled();
   });
@@ -815,6 +844,7 @@ describe("ElectronTabSurface browser-scoped chords", () => {
     expect(state.onOpenLinkInNewTile).toHaveBeenCalledExactlyOnceWith(
       "about:blank",
       "foreground",
+      "user",
     );
   });
 

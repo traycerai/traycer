@@ -140,7 +140,7 @@ describe("The MCP servers page, viewing another host", () => {
 
     await userEvent.click(await screen.findByRole("button", { name: "Tools" }));
     await userEvent.click(
-      await screen.findByRole("switch", { name: "github Codex search" }),
+      await screen.findByRole("switch", { name: "github search" }),
     );
     await waitFor(() => {
       expect(
@@ -150,13 +150,11 @@ describe("The MCP servers page, viewing another host", () => {
     await waitFor(() => {
       expect(
         screen
-          .getByRole("switch", { name: "github Codex open" })
+          .getByRole("switch", { name: "github open" })
           .hasAttribute("disabled"),
       ).toBe(false);
     });
-    await userEvent.click(
-      screen.getByRole("switch", { name: "github Codex open" }),
-    );
+    await userEvent.click(screen.getByRole("switch", { name: "github open" }));
 
     await waitFor(() => {
       expect(sentRevisions).toHaveLength(2);

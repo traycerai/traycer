@@ -414,11 +414,7 @@ export function SandboxKeepDialog(props: SandboxDialogProps): ReactNode {
     props.sandbox.wakePayer === null
       ? "you"
       : sandboxMemberName(props.sandbox.wakePayer, viewerUserId);
-  const who = [
-    startedByLine("an agent"),
-    keptByLine("you"),
-    paidByLine(payer),
-  ].join(" · ");
+  const who = [startedByLine("an agent"), keptByLine("you")].join(" · ");
   const idle = [`Suspends after ${SANDBOX_DEFAULT_IDLE_MINUTES} idle min`, wake]
     .filter((part): part is string => part !== null)
     .join(" · ");
@@ -453,11 +449,14 @@ export function SandboxKeepDialog(props: SandboxDialogProps): ReactNode {
           <p className="text-ui-xs font-medium text-muted-foreground">
             After Keep
           </p>
-          <p data-testid="sandbox-confirm-keep-who">{who}</p>
+          <p className="wrap-anywhere" data-testid="sandbox-confirm-keep-who">
+            {who}
+          </p>
+          <p className="wrap-anywhere">{`${paidByLine(payer)} while awake.`}</p>
           <p>{idle}</p>
           <p>Listed under Sandboxes you started</p>
           <p className="text-ui-xs text-muted-foreground">
-            {`${configurationLabel(configurationCopy(configuration))}'s defaults; change them on the row afterwards. Who started it and who pays are unchanged.`}
+            {`${configurationLabel(configurationCopy(configuration))}'s defaults; change them on the row afterwards.`}
           </p>
           {lost ? (
             <p

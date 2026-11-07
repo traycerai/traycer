@@ -417,6 +417,7 @@ export function publishedChatSessionState(
     acceptedActions: {},
     pendingUserMessages: [],
     errorNotices: [],
+    evictedSendRefusal: null,
     deliveredNoticeActionIds: new Set<string>(),
     deliveredLastCopyActionIds: new Set<string>(),
     lastCopyPrompts: {},
