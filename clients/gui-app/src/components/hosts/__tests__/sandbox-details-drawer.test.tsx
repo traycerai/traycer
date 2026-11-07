@@ -110,9 +110,13 @@ describe("<SandboxDetailsDrawerHost />", () => {
     expect(screen.getByText("For task")).toBeTruthy();
     expect(screen.getByText("Sandbox setup")).toBeTruthy();
     expect(screen.getByRole("region", { name: "Sessions" })).toBeTruthy();
+    // The list row no longer shows the setup failure's reference, so Details
+    // names it even when the failure carries no code of its own.
     expect(
       screen.getByRole("region", { name: "Settings delivery" }).textContent,
-    ).toContain("Sandbox setup did not apply.");
+    ).toBe(
+      "Settings deliverySandbox setup did not apply.Support reference: SBX-0520",
+    );
 
     act(() => {
       openSandboxDetails(startedByAgent.id);

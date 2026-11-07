@@ -935,7 +935,11 @@ function SandboxListRow(props: {
   if (summary.frozen) clock = sandboxFrozenClock(summary.frozenAt);
   else
     clock = sandboxClockLine({
-      summary,
+      // A setting the host reports failed is a setup failure too, so its
+      // clock reads the same as a guest that was never configured.
+      summary: settingsFailed
+        ? { ...summary, guestConfigured: false }
+        : summary,
       configuration,
       cost: props.cost,
       wakeString: wake,

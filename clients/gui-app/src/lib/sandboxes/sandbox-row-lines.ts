@@ -3,7 +3,6 @@ import {
   hostSandboxStateWord,
   type HostSandboxState,
 } from "@traycer/protocol/host/host-status";
-import { sandboxSettingsFailureLine } from "@traycer/protocol/host/sandbox-settings";
 import type {
   HostStatusAgentSession,
   HostStatusSessions,
@@ -693,10 +692,8 @@ export function sandboxClockLine(input: SandboxClockInput): string {
         .filter((item): item is string => item !== null)
         .join(" ");
     case "failed":
-      return joinParts(
-        `Couldn't start at ${formatSandboxTime(summary.lastTransitionAt)}`,
-        sandboxSupportReference(summary.failureCode),
-      );
+      // Details names the failure's support reference.
+      return `Couldn't start at ${formatSandboxTime(summary.lastTransitionAt)}`;
     case "creating":
       return "Pending.";
     case "awake":
@@ -720,12 +717,10 @@ function awakeClockLine(input: SandboxClockInput): string {
       ? "Running, but Traycer can't connect"
       : `Running, but Traycer can't connect · last contact ${formatSandboxAge(contact, now)}`;
   }
+  // The row's name and its Awake · Setup failed pill sit just above, and the
+  // support reference is in Details: the line names only whose settings failed.
   if (summary.guestConfigured === false) {
-    return sandboxSettingsFailureLine(
-      summary.displayName,
-      configurationLabel(configurationCopy(input.configuration)),
-      sandboxSupportReference(summary.failureCode) ?? "SBX-0520",
-    );
+    return `${configurationLabel(configurationCopy(input.configuration))}'s settings didn't apply`;
   }
   const awakeMs = input.cost?.todayAwakeMs ?? null;
   const today = sandboxTodayCost(

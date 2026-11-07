@@ -457,7 +457,7 @@ describe("sandboxClockLine", () => {
     },
   );
 
-  it("reads an awake row whose settings did not apply as the one shared line", () => {
+  it("names only whose settings did not apply on an awake row, without its name, state or reference", () => {
     expect(
       sandboxClockLine({
         summary: sandboxSummaryFixture({
@@ -473,17 +473,15 @@ describe("sandboxClockLine", () => {
         reachability: { unreachable: false, lastContactAt: null },
         now: NOW,
       }),
-    ).toBe(
-      "Build box is awake, but Personal's settings didn't apply · SBX-0520",
-    );
+    ).toBe("Personal's settings didn't apply");
   });
 
-  describe("a failed row", () => {
-    const failedLine = (failureCode: string | null) =>
+  it("reads a failed row by its time alone, leaving a mapped support reference to Details", () => {
+    expect(
       sandboxClockLine({
         summary: sandboxSummaryFixture({
           state: "failed",
-          failureCode,
+          failureCode: "create:kube-create-service-account",
           lastTransitionAt: new Date(2026, 9, 25, 11, 1).getTime(),
         }),
         configuration: { kind: "personal" },
@@ -492,19 +490,8 @@ describe("sandboxClockLine", () => {
         viewerUserId: null,
         reachability: { unreachable: false, lastContactAt: null },
         now: NOW,
-      });
-
-    it("reads by its support reference, never its raw code", () => {
-      const line = failedLine("create:kube-create-service-account");
-      expect(line).toBe("Couldn't start at 11:01 · SBX-0412");
-    });
-
-    it.each(["zzz", null])(
-      "omits the support-reference segment cleanly for %s",
-      (code) => {
-        expect(failedLine(code)).toBe("Couldn't start at 11:01");
-      },
-    );
+      }),
+    ).toBe("Couldn't start at 11:01");
   });
 
   it("copies the support reference with the sandbox id, or the id alone with none", () => {

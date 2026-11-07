@@ -1023,24 +1023,33 @@ describe("<SandboxesSettingsPanel />", () => {
     expect(failed.getByTestId("row-primary").textContent).toBe("Stop");
   });
 
-  it("shows the setup failure reference and charge notice when guest setup failed", () => {
-    const sandbox = row("setup-failed", {
-      state: "awake",
-      guestConfigured: false,
-      failureCode: null,
-    });
-    mocks.sandboxes = [sandbox];
+  it.each([
+    { signal: "guest setup failed", guestConfigured: false, failed: false },
+    { signal: "a setting failed", guestConfigured: true, failed: true },
+  ])(
+    "names only whose settings failed, with the charge notice, when $signal",
+    ({ guestConfigured, failed: settingFailed }) => {
+      mocks.settingsItems = settingFailed
+        ? [{ kind: "setup_script", status: "failed" }]
+        : [];
+      const sandbox = row("setup-failed", {
+        state: "awake",
+        guestConfigured,
+        failureCode: null,
+      });
+      mocks.sandboxes = [sandbox];
 
-    renderUi(<SandboxesSettingsPanel />);
+      renderUi(<SandboxesSettingsPanel />);
 
-    const failed = within(rowOf(sandbox.id));
-    expect(failed.getByTestId("sandboxes-row-clock").textContent).toContain(
-      "SBX-0520",
-    );
-    expect(
-      failed.getAllByText("Compute is charged while it is awake."),
-    ).toHaveLength(1);
-  });
+      const failed = within(rowOf(sandbox.id));
+      expect(failed.getByTestId("sandboxes-row-clock").textContent).toBe(
+        "Personal's settings didn't apply",
+      );
+      expect(
+        failed.getAllByText("Compute is charged while it is awake."),
+      ).toHaveLength(1);
+    },
+  );
 
   it("does not show the setup charge notice for healthy or frozen sandboxes", () => {
     const healthy = row("healthy", { state: "awake", guestConfigured: true });
@@ -1074,7 +1083,7 @@ describe("<SandboxesSettingsPanel />", () => {
 
     const failed = within(rowOf("build-box"));
     expect(failed.getByTestId("sandboxes-row-clock").textContent).toBe(
-      "Couldn't start at 11:01 · SBX-0412",
+      "Couldn't start at 11:01",
     );
     expect(
       failed.getByRole("button", { name: "Retry" }).hasAttribute("disabled"),
