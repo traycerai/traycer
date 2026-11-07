@@ -33,7 +33,15 @@ vi.mock("@/components/settings/host-scope/use-host-scope", async () => {
   const { hostScopeFixture } =
     await import("@/components/settings/host-scope/host-scope-fixture");
   const scope = hostScopeFixture({ host: null });
-  return { useHostScope: () => scope };
+  const useHostScope = () => scope;
+  return {
+    useHostScope,
+    useHostScopeFor: useHostScope,
+    WINDOW_HOST_SELECTION: {
+      scopedHostId: null,
+      setScopedHostId: () => undefined,
+    },
+  };
 });
 vi.mock("@/lib/host", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/lib/host")>()),
@@ -232,7 +240,10 @@ describe("team pages on a build with a server pool", () => {
     removeSurfaceHost();
     render(<TeamVariablesAndShells />, { wrapper: harness.Wrapper });
 
-    const value = await screen.findByLabelText("NODE_ENV value");
+    await userEvent.click(
+      await screen.findByRole("button", { name: "Edit NODE_ENV value" }),
+    );
+    const value = screen.getByLabelText("NODE_ENV value");
     const listReadsBefore = hostIdsOf(harness, "environment.list").length;
     await userEvent.clear(value);
     await userEvent.type(value, "staging");

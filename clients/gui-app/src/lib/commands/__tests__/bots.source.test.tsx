@@ -99,7 +99,7 @@ function rows(items: ReadonlyArray<CommandItem>) {
   return items.map((item) => ({
     id: item.id,
     label: item.label,
-    description: item.description,
+    hint: item.hint ?? null,
     keywords: item.keywords,
     group: item.group,
   }));
@@ -191,28 +191,28 @@ describe("bots palette source", () => {
       {
         id: `bot:${PERSONAL_MAIN_BOT_ID}`,
         label: "Tracy",
-        description: "Personal",
+        hint: null,
         keywords: ["Tracy", "Personal", "tracy", "bot", "channel"],
         group: "bots",
       },
       {
         id: `bot:${TEAM_MAIN_BOT_ID}`,
         label: "Tracy · traycerai",
-        description: null,
+        hint: null,
         keywords: ["Tracy", "traycerai", "tracy", "bot", "channel"],
         group: "bots",
       },
     ]);
   });
 
-  it("gives the bare name and the environment beside it when one main bot is seen", () => {
+  it("gives the bare name and the team beside it when one main bot is seen", () => {
     setDirectory(ONE_TEAM_MAIN_BOT_DIRECTORY);
 
     expect(rows(captureItems(ctx("/", IDLE_ROUTER, null)))).toEqual([
       {
         id: `bot:${TEAM_MAIN_BOT_ID}`,
         label: "Tracy",
-        description: "traycerai",
+        hint: "traycerai",
         keywords: ["Tracy", "traycerai", "tracy", "bot", "channel"],
         group: "bots",
       },

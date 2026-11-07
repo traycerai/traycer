@@ -82,7 +82,11 @@ export type SandboxSource =
   | {
       readonly kind: "artifact";
       readonly canvas?: boolean;
-      /** Plain HTML keeps ordinary page links and starts with selection off. */
+      /**
+       * With `canvas`: an html page a reader can comment on, not a board. It
+       * keeps its links and opens for reading; the comment tool is a mode the
+       * loaded page is switched into.
+       */
       readonly canvasLinks?: "native";
       readonly artifactId: string;
       /** POSIX path from the artifacts tree root; empty for a top-level artifact. */

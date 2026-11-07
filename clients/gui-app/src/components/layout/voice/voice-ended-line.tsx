@@ -13,22 +13,26 @@ import {
 } from "@/stores/voice/voice-session-store";
 
 /**
- * Where the line is drawn: `row` in the window's top row in place of Talk, on
- * the row's own surface; `bar` as a band of its own under the phone's header.
+ * Where the line is drawn: `composer` in the message box the call was placed
+ * from, in place of its field; `bar` as a band of its own under the phone's
+ * header; `view` in the phone's call view, its ended state.
  */
-export type VoiceOutcomeLineSurface = "row" | "bar";
+export type VoiceOutcomeLineSurface = "composer" | "bar" | "view";
 
 /**
- * The one line about how the last Talk went, with Dismiss: why a session ended,
- * or that one never began, which is not an ending. What the person can do about
- * it sits beside the words. Drawn by the strip on desktop and the bar on the
- * phone, where a session that ended in the background says so on return.
+ * The one line about how the last call went, with Dismiss: why it ended, or
+ * that it never began, which is not an ending. What the person can do about
+ * it sits beside the words. Drawn by the message box's call bar on desktop and
+ * by the call view and the bar on the phone, where a call that ended in the background says so
+ * on return.
  */
 export function VoiceOutcomeLine(props: {
   readonly surface: VoiceOutcomeLineSurface;
 }): ReactNode {
   const refusal = useVoiceSessionStore((s) => s.refusal);
   const endReason = useVoiceSessionStore((s) => s.endReason);
+  const pausedCopy = useVoiceSessionStore((s) => s.pausedCopy);
+  const callTitle = useVoiceSessionStore((s) => s.callTitle);
   const clearRefusal = useVoiceSessionStore((s) => s.clearRefusal);
   const clearEndReason = useVoiceSessionStore((s) => s.clearEndReason);
   if (refusal !== null) {
@@ -36,7 +40,11 @@ export function VoiceOutcomeLine(props: {
       <OutcomeFrame
         state="refused"
         surface={props.surface}
-        line={refusalLine(refusal)}
+        line={
+          refusal === "paused" && pausedCopy !== null
+            ? pausedCopy
+            : refusalLine(refusal, callTitle ?? "the bot")
+        }
         onDismiss={clearRefusal}
       >
         {refusal === "credits" ? <GetCreditsButton /> : null}
@@ -49,7 +57,7 @@ export function VoiceOutcomeLine(props: {
     <OutcomeFrame
       state="ended"
       surface={props.surface}
-      line={endedLine(endReason)}
+      line={endedLine(endReason, callTitle ?? "The bot")}
       onDismiss={clearEndReason}
     >
       {endReason === "credits" ? <GetCreditsButton /> : null}
@@ -66,16 +74,20 @@ function OutcomeFrame(props: {
 }): ReactNode {
   return (
     <output
-      data-testid="voice-session-strip"
+      data-testid="voice-outcome"
       data-state={props.state}
       className={cn(
         "flex items-center gap-2 text-ui-xs text-muted-foreground",
-        props.surface === "row"
-          ? "min-w-0"
-          : "w-full border-b border-border bg-background px-3 py-1.5",
+        props.surface === "composer" && "w-full min-w-0",
+        props.surface === "bar" &&
+          "w-full border-b border-border bg-background px-3 py-1.5",
+        props.surface === "view" && "w-full text-ui-sm",
       )}
     >
-      <span className="min-w-0 flex-1 truncate" data-testid="voice-strip-state">
+      <span
+        className={cn("min-w-0 flex-1", props.surface !== "view" && "truncate")}
+        data-testid="voice-outcome-line"
+      >
         {props.line}
       </span>
       {props.children}
@@ -84,7 +96,7 @@ function OutcomeFrame(props: {
         variant="ghost"
         size="icon-xs"
         aria-label="Dismiss"
-        data-testid="voice-strip-dismiss"
+        data-testid="voice-outcome-dismiss"
         onClick={props.onDismiss}
       >
         <X aria-hidden="true" />
@@ -102,7 +114,7 @@ function GetCreditsButton(): ReactNode {
       type="button"
       variant="outline"
       size="xs"
-      data-testid="voice-strip-get-credits"
+      data-testid="voice-outcome-get-credits"
       onClick={(event) => void openLink(billingUrl, "account", event)}
     >
       Get credits
@@ -118,7 +130,7 @@ function MicrophoneSettingsButton(): ReactNode {
       type="button"
       variant="outline"
       size="xs"
-      data-testid="voice-strip-microphone-settings"
+      data-testid="voice-outcome-microphone-settings"
       disabled={openSettings.isPending}
       onClick={() => openSettings.mutate()}
     >
@@ -134,38 +146,44 @@ function MicrophoneSettingsButton(): ReactNode {
   );
 }
 
-function refusalLine(refusal: VoiceRefusal): string {
+function refusalLine(refusal: VoiceRefusal, botTitle: string): string {
   switch (refusal) {
     case "credits":
-      return "Voice needs credits.";
+      return "Calls need credits.";
     case "microphone":
-      return "Voice did not start: the microphone is not available.";
+      return "Call did not start: the microphone is not available.";
     case "microphone-denied":
-      return "Voice needs the microphone. Allow it in Settings.";
+      return "Calls need the microphone. Allow it in Settings.";
     case "playback":
-      return "Voice did not start: the sound could not be played.";
+      return "Call did not start: the sound could not be played.";
     case "unavailable":
-      return "Voice did not start. Try again in a moment.";
+      return "Call did not start. Try again in a moment.";
+    case "paused":
+      return "This bot is paused.";
+    case "update":
+      return `Calls need an update on ${botTitle}'s host.`;
   }
 }
 
-function endedLine(reason: VoiceEndReason): string {
+function endedLine(reason: VoiceEndReason, botTitle: string): string {
   switch (reason) {
     case "credits":
-      return "Voice ended: credits.";
+      return "Call ended: out of credits.";
     case "connection":
-      return "Voice ended: connection lost.";
+      return "Call ended: connection lost.";
     case "locked":
-      return "Voice ended: the screen locked.";
+      return "Call ended: the screen locked.";
     case "background":
-      return "Voice ended when you left the app.";
+      return "Call ended when you left the app.";
     case "interrupted":
-      return "Voice ended: a call or another app took the microphone.";
+      return "Call ended: a call or another app took the microphone.";
     case "playback":
-      return "Voice ended: the sound could not be played.";
+      return "Call ended: the sound could not be played.";
     case "account":
-      return "Voice ended when you switched accounts.";
+      return "Call ended when you switched accounts.";
+    case "unreachable":
+      return `Call ended: ${botTitle} can't be reached right now.`;
     case "ended":
-      return "Voice ended.";
+      return "Call ended.";
   }
 }

@@ -62,6 +62,10 @@ import {
   SECRETS_NEED_UPDATED_HOST,
 } from "@/lib/sandboxes/secrets-page-copy";
 import { useSettingsEnvironmentPickStore } from "@/stores/settings/settings-environment-pick-store";
+import {
+  RETIRED_PROVIDER_VARIABLES,
+  RETIRED_SECRET_ROW_FIELDS,
+} from "@traycer/protocol/host/released-wire-rows";
 
 /**
  * A team's Add a secret (Verify and Save) and Replace value go through the
@@ -77,18 +81,17 @@ const FLOOR = { major: 1, minor: 1 } as const;
 
 function secretFixture(): EnvironmentSecretV12 {
   return {
+    ...RETIRED_SECRET_ROW_FIELDS,
+    providerVariables: [...RETIRED_PROVIDER_VARIABLES],
     secretId: "sec-1",
     name: "STRIPE_KEY",
     kind: "api_key",
     protocol: null,
     destinations: [],
-    mode: "brokered",
-    state: "live",
     currentVersionId: "ver-2",
     revoked: false,
     updatedAt: AT,
     variables: [],
-    providerVariables: [],
   };
 }
 

@@ -35,7 +35,7 @@ import {
 import {
   providersListRequestSchema,
   providersListRequestSchemaBeforeV70,
-  providersListResponseSchemaV107Preimage,
+  providersListResponseSchemaV108Preimage,
   providersListResponseSchemaV100Preimage,
   providersListResponseSchemaV101Preimage,
   providersListResponseSchemaV102Preimage,
@@ -43,6 +43,7 @@ import {
   providersListResponseSchemaV104Preimage,
   providersListResponseSchemaV105Preimage,
   providersListResponseSchemaV106Preimage,
+  providersListResponseSchemaV107Preimage,
   providersUsePackVersionResponseSchema,
   providersUsePackVersionResponseSchemaV10,
   providersListResponseSchemaV70,
@@ -294,9 +295,12 @@ const LIVE_FROZEN_EXPORTS = {
   // 10.6 froze when `chatsFollow` opened 10.7. Its dump did not change by the
   // freeze.
   "providers.list@10.6": providersListResponseSchemaV106Preimage,
-  // 10.7 froze when credential identity and home facts opened 10.8. This row
-  // keeps the released preimage; the current line has its own registry binding.
+  // 10.7 froze when `nativeMemory` and `nativeMemorySupported` opened 10.8.
+  // Its dump did not change by the freeze.
   "providers.list@10.7": providersListResponseSchemaV107Preimage,
+  // 10.8 froze when credential projections opened 10.9; its released shape
+  // must stay byte-identical.
+  "providers.list@10.8": providersListResponseSchemaV108Preimage,
   // 1.0 is hand-frozen at the three-code failure arm when `macos-ineligible`
   // opened 1.1; its dump did not change by the freeze.
   "providers.usePackVersion@1.0": providersUsePackVersionResponseSchemaV10,

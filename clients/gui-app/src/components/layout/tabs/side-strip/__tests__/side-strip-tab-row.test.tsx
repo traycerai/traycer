@@ -484,7 +484,7 @@ describe("useSideTabJoin", () => {
         useLayoutStore.setState({
           arrangement: { ...DEFAULT_ARRANGEMENT, sidebarSide: "left" },
         });
-        // Expanded by hand: the shipped layout collapses a new tab.
+        // Explicit per-tab expansion; shipped sidebarStartCollapsed is false.
         useLeftPanelStore.setState({
           mainCollapsedByTabId: { [EPIC_TAB.id]: false },
         });

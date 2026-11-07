@@ -43,7 +43,8 @@ export type EdgeSide = "left" | "right";
 
 /**
  * Where the header task tabs draw: horizontal at the top, or a vertical strip
- * at either edge. A new install starts with the strip at the left edge.
+ * at either edge. A new install starts with the strip at the left edge, and
+ * the task sidebar on the other side of the canvas.
  */
 export type TabStripPlacement = "top" | EdgeSide;
 
@@ -250,8 +251,7 @@ export interface LayoutArrangement {
    * the left panel store (`mainCollapsedByTabId`); this is only what a tab
    * with no record of its own reads. Arrangement rather than a value: it says
    * how much of the window the canvas takes, not how much a region says.
-   * Shipped on; an install from before that default was off keeps it off
-   * (`layout-store.ts`).
+   * Shipped off: a new task opens with its sidebar expanded.
    */
   readonly sidebarStartCollapsed: boolean;
   /**
@@ -379,14 +379,14 @@ export const DEFAULT_ARRANGEMENT: LayoutArrangement = {
   usageSide: "left",
   resourceHost: "status-bar",
   resourceSide: "right",
-  minimapSide: "right",
+  minimapSide: "left",
   statusBarParked: [],
   pinnedContextFieldOrder: CONTEXT_USAGE_ROW_KEYS,
   mobileFooter: false,
   dividerSeq: DEFAULT_RAIL_DIVIDER_SEQ,
   tabStripPlacement: "left",
-  sidebarSide: "left",
-  sidebarStartCollapsed: true,
+  sidebarSide: "right",
+  sidebarStartCollapsed: false,
   sideStripView: "activity",
   taskTabLayout: "scroll",
   readingWidth: "comfortable",

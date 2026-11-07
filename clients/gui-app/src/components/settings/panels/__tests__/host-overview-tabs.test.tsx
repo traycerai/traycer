@@ -1,3 +1,4 @@
+import { useSettingsHostScopeStore } from "@/stores/settings/settings-host-scope-store";
 // The Overview re-provides a scoped STREAM binding beside its unary one (for
 // the Data & migration group), and the real hook reads `useAuthService` -
 // which this suite deliberately does not stand up. `null` keeps the panel on
@@ -104,6 +105,7 @@ import { environmentStatusFixture } from "@/lib/environment/__tests__/environmen
 import type { IRunnerHost } from "@traycer-clients/shared/platform/runner-host";
 import { useChatTileHostUpdate } from "@/components/epic-canvas/renderers/use-chat-tile-host-update";
 import { hostScopeOptionFixture } from "@/components/settings/host-scope/host-scope-fixture";
+import { sandboxSummaryFixture } from "@/hooks/sandboxes/__tests__/sandbox-fixtures";
 import type { HostRpcRegistry } from "@/lib/host";
 import { RunnerHostProvider } from "@/providers/runner-host-provider";
 import { HostSettingsPanel } from "@/components/settings/panels/host-settings-panel";
@@ -114,7 +116,7 @@ import {
   selectHostOverviewTab,
   type OverviewHostFixture,
 } from "@/components/settings/panels/__tests__/host-overview-test-support";
-import { useSettingsHostScopeStore } from "@/stores/settings/settings-host-scope-store";
+
 import { useSettingsSearchStore } from "@/stores/settings/settings-search-store";
 import {
   armSettingsOpenIntent,
@@ -315,7 +317,7 @@ afterEach(() => {
   resetNegotiatedManifests();
   resetSettingsOpenIntentForTests();
   useSettingsSearchStore.setState({ pendingReveal: null });
-  useSettingsHostScopeStore.setState({ scopedHostId: null });
+  useSettingsHostScopeStore.getState().reset();
   scopeOverrides.current = {};
   hostBindingMock.current = null;
   tabHostIdRef.current = "host-a";
@@ -323,11 +325,24 @@ afterEach(() => {
 });
 
 describe("<HostSettingsPanel /> Overview — tabbed shell", () => {
-  it("shows the settings card above the tabs, on the default tab", async () => {
+  it("shows the settings row above the tabs, on the default tab", async () => {
     const fixture = buildOverviewHostFixture({
       hostId: "host-a",
       isLocalMachine: true,
       overrideHandlers: {
+        "environment.host.read": () => ({
+          hostId: "host-a",
+          environment: {
+            environmentId: "personal",
+            ownerKind: "user",
+            ownerId: "user-a",
+            roomId: "room-a",
+            label: "Personal",
+          },
+          explicit: false,
+          enrolledByUserId: null,
+          canUnbind: false,
+        }),
         "environment.status": () =>
           environmentStatusFixture({
             planes: { records: "local", broker: "local", room: "local" },
@@ -337,19 +352,22 @@ describe("<HostSettingsPanel /> Overview — tabbed shell", () => {
     recordNegotiatedHostMethods("host-a", ALL_OVERVIEW_METHODS);
     recordNegotiatedHostManifest("host-a", {
       "environment.status": { major: 1, minor: 1 },
+      "environment.host.read": { major: 1, minor: 0 },
     });
     hostBindingMock.current = bindingWith(fixture.client);
     scopeOverrides.current = scopeFrom("host-a", fixture);
     renderPanel();
 
-    const card = await screen.findByTestId("host-settings-card");
-    expect(activeTabTestId()).toBe("host-overview-tab-installation");
+    const row = await screen.findByTestId("host-settings-source");
+    expect(row.textContent).toContain("Settings: This computer only");
     expect(
-      within(card).getByTestId("host-settings-card-local").textContent,
-    ).toBe("Settings on this computer only.");
+      screen.getByRole("button", { name: "Change settings source" }),
+    ).toBeTruthy();
+    expect(within(row).getByText("Details")).toBeTruthy();
+    expect(activeTabTestId()).toBe("host-overview-tab-installation");
     const tabList = screen.getAllByRole("tab")[0].closest("[role='tablist']");
     expect(
-      card.compareDocumentPosition(tabList ?? card) &
+      row.compareDocumentPosition(tabList ?? row) &
         Node.DOCUMENT_POSITION_FOLLOWING,
     ).not.toBe(0);
   });
@@ -363,6 +381,7 @@ describe("<HostSettingsPanel /> Overview — tabbed shell", () => {
 
     expect(activeTabTestId()).toBe("host-overview-tab-installation");
     expect(HOST_OVERVIEW_TABS).toEqual([
+      "sandbox",
       "installation",
       "updates",
       "access",
@@ -370,6 +389,31 @@ describe("<HostSettingsPanel /> Overview — tabbed shell", () => {
       "ports",
       "simulators",
     ]);
+  });
+
+  it("opens a sandbox host on its first Sandbox tab", async () => {
+    const fixture = buildFixture("host-a");
+    recordNegotiatedHostMethods("host-a", ALL_OVERVIEW_METHODS);
+    hostBindingMock.current = bindingWith(fixture.client);
+    scopeOverrides.current = {
+      ...scopeFrom("host-a", fixture),
+      host: hostScopeOptionFixture({
+        hostId: "host-a",
+        name: "Sandbox host",
+        kind: "sandbox",
+        sandbox: {
+          state: "awake",
+          frozen: false,
+          summary: sandboxSummaryFixture({ hostId: "host-a" }),
+          teamOwned: false,
+        },
+      }),
+    };
+    renderPanel();
+
+    expect(await screen.findByTestId("host-overview-tab-sandbox")).toBeTruthy();
+    expect(activeTabTestId()).toBe("host-overview-tab-sandbox");
+    expect(screen.getByTestId("host-overview-tab-panel-sandbox")).toBeTruthy();
   });
 
   it("a tab named in the open intent opens that tab, and spends the intent", () => {
@@ -441,7 +485,7 @@ describe("<HostSettingsPanel /> Overview — tabbed shell", () => {
       scopeOverrides.current = scopeFrom("host-b", fixtureB);
       fireEvent.click(screen.getByRole("button", { name: "Open host update" }));
 
-      expect(useSettingsHostScopeStore.getState().scopedHostId).toBe("host-b");
+      expect(useSettingsHostScopeStore.getState().pendingHostId).toBe("host-b");
       expect(activeTabTestId()).toBe("host-overview-tab-updates");
     });
   });
@@ -465,7 +509,9 @@ describe("<HostSettingsPanel /> Overview — tabbed shell", () => {
   });
 
   describe("a settings-search landing", () => {
-    for (const tab of HOST_OVERVIEW_TABS) {
+    for (const tab of HOST_OVERVIEW_TABS.filter(
+      (value) => value !== "sandbox",
+    )) {
       it(`selects ${tab} for its trigger's anchor`, () => {
         const fixture = buildFixture("host-a");
         recordNegotiatedHostMethods("host-a", ALL_OVERVIEW_METHODS);
@@ -543,7 +589,7 @@ describe("<HostSettingsPanel /> Overview — tabbed shell", () => {
   });
 
   describe("on a phone", () => {
-    it("carries the active tab's anchor on the Select, and puts Activate in the ⋯ menu", async () => {
+    it("carries the active tab's anchor on the Select and keeps Activate in the header", async () => {
       window.innerWidth = 500;
       const fixture = buildFixture("host-a");
       recordNegotiatedHostMethods("host-a", ALL_OVERVIEW_METHODS);
@@ -572,32 +618,29 @@ describe("<HostSettingsPanel /> Overview — tabbed shell", () => {
         "host-overview-tab-data",
       );
 
-      // No inline Activate button - it only exists inside the ⋯ menu on a
-      // phone, so the name row never wraps.
-      expect(screen.queryByRole("button", { name: "Activate" })).toBeNull();
+      expect(screen.getByRole("button", { name: "Activate" })).not.toBeNull();
 
       await openHostOverviewMenu();
-      expect(await screen.findByTestId("host-make-active")).not.toBeNull();
+      expect(screen.getAllByTestId("host-make-active")).toHaveLength(1);
     });
 
-    it("keeps a long name on one line with its pencil, its tag and the ⋯ menu", async () => {
+    it("gives the full long name its own row on a phone, with its pencil, and the ⋯ menu below it", async () => {
       window.innerWidth = 500;
       await renderLongNamedHost();
 
       const row = screen.getByTestId("host-identity-name-row");
-      // jsdom lays nothing out, so the line is asserted as the classes that
-      // make it one: a row that cannot wrap, and a name that can shrink below
-      // its text and truncates.
-      expect(row.classList.contains("flex-wrap")).toBe(false);
+      expect(row.classList.contains("w-full")).toBe(true);
       const name = within(row).getByRole("heading", { name: LONG_NAME });
       expect(name.classList.contains("min-w-0")).toBe(true);
-      expect(name.classList.contains("truncate")).toBe(true);
+      expect(name.classList.contains("wrap-anywhere")).toBe(true);
+      expect(name.classList.contains("truncate")).toBe(false);
       expect(within(row).getByTestId("host-overview-edit-name")).not.toBeNull();
-      expect(within(row).getByText("This computer")).not.toBeNull();
-      // The ⋯ menu shares the row's line: the header's one flex line holds the
-      // name row and the actions side by side.
+      // Below sm the header stacks: the ⋯ menu sits under the name row, in the
+      // same header block, never beside the name.
       const line = row.parentElement;
       if (line === null) throw new Error("the name row sits in no line");
+      expect(line.classList.contains("flex-col")).toBe(true);
+      expect(within(row).queryByTestId("host-overview-menu")).toBeNull();
       expect(within(line).getByTestId("host-overview-menu")).not.toBeNull();
     });
   });
@@ -608,16 +651,17 @@ describe("<HostSettingsPanel /> Overview — tabbed shell", () => {
     expect(
       screen
         .getByTestId("host-identity-name-row")
-        .classList.contains("flex-wrap"),
+        .classList.contains("sm:flex-wrap"),
     ).toBe(true);
   });
 
-  it("renders all six tab triggers under a connecting host", async () => {
+  it("renders the six personal-host tab triggers under a connecting host", async () => {
     scopeOverrides.current = coldConnectingScope();
     renderPanel();
 
-    expect(HOST_OVERVIEW_TABS).toHaveLength(6);
-    for (const tab of HOST_OVERVIEW_TABS) {
+    const tabs = HOST_OVERVIEW_TABS.filter((tab) => tab !== "sandbox");
+    expect(tabs).toHaveLength(6);
+    for (const tab of tabs) {
       expect(
         await screen.findByTestId(`host-overview-tab-${tab}`),
       ).not.toBeNull();
@@ -689,6 +733,7 @@ async function renderLongNamedHost(): Promise<void> {
     host: hostScopeOptionFixture({
       hostId: "host-a",
       name: LONG_NAME,
+      kind: "personal",
       isLocalMachine: true,
       connectable: true,
       isActive: true,

@@ -21,7 +21,8 @@ const TASKS = '[data-testid="bot-thread-tasks"]';
 const TASKS_SCROLL = '[data-testid="bot-thread-tasks-scroll"]';
 const REPLIES = '[data-testid="bot-thread-replies"]';
 const COMPOSER = '[data-testid="bot-thread-composer"]';
-const COMPOSER_INPUT = '[data-testid="bot-thread-composer-input"]';
+const COMPOSER_INPUT =
+  '[data-testid="bot-thread-composer-input"] [data-composer-editor]';
 const COMPOSER_SEND = '[data-testid="bot-thread-composer-send"]';
 const CLOSE = '[data-testid="bot-thread-close"]';
 

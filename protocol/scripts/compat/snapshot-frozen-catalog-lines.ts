@@ -64,6 +64,7 @@ import {
   providersListResponseSchemaV105Preimage,
   providersListResponseSchemaV106Preimage,
   providersListResponseSchemaV107Preimage,
+  providersListResponseSchemaV108Preimage,
   providersUsePackVersionResponseSchemaV10,
   providersUsePackVersionResponseSchema,
   providersListResponseSchemaV70,
@@ -228,9 +229,11 @@ const FIXTURES = {
   // 10.6 froze when `chatsFollow` opened 10.7. Its dump did not change by the
   // freeze.
   "providers.list@10.6": dump(providersListResponseSchemaV106Preimage),
-  // 10.7 froze when credential identity and home facts opened 10.8. Keep the
-  // released preimage here; the current line has its own registry binding.
+  // 10.7 froze when native-memory fields opened the released 10.8 line.
   "providers.list@10.7": dump(providersListResponseSchemaV107Preimage),
+  // 10.8 froze when credential projections opened 10.9. Dump the released
+  // preimage, so generation cannot copy the current credential-bearing shape.
+  "providers.list@10.8": dump(providersListResponseSchemaV108Preimage),
   "providers.usePackVersion@1.0": dump(providersUsePackVersionResponseSchemaV10),
   "providers.usePackVersion@1.1": dump(providersUsePackVersionResponseSchema),
   // The REQUEST lines carry their own freeze history (`native` grew the

@@ -65,21 +65,12 @@ export function inFlightUpdateKind(
 }
 
 /**
- * The offline notice: one sentence carrying what the page last knew.
- *
- * "Can't reach build-box — last seen 3h ago, while downloading update to
- * v1.5.1. Auto-update settings still apply at its next check-in; everything
- * else here needs a connection."
- *
- * The phase clause drops when no update was in flight. The last-seen half
- * drops when the account holds no check-in time. The auto-update half drops
- * when the account does not know this host, because then there is no setting
- * to still apply.
+ * The offline notice carries the retained update phase and what still works.
+ * The header owns the account's last-seen time. Auto-update guidance appears
+ * only for a host the account knows and can configure.
  */
 export function describeHostOfflineNotice(input: {
   readonly hostName: string;
-  /** "last seen 3h ago", or `null` when the account holds no check-in. */
-  readonly lastSeen: string | null;
   readonly view: FleetUpdateView | null;
   readonly accountKnowsHost: boolean;
 }): string {
@@ -88,12 +79,6 @@ export function describeHostOfflineNotice(input: {
   const tail = input.accountKnowsHost
     ? "Auto-update settings still apply at its next check-in; everything else here needs a connection."
     : "Everything here needs a connection.";
-  return `Can't reach ${input.hostName}${lastKnown(input.lastSeen, clause)}. ${tail}`;
-}
-
-function lastKnown(lastSeen: string | null, clause: string | null): string {
-  if (lastSeen !== null && clause !== null) return ` — ${lastSeen}, ${clause}`;
-  if (lastSeen !== null) return ` — ${lastSeen}`;
-  if (clause !== null) return ` — last seen ${clause}`;
-  return "";
+  const retainedPhase = clause === null ? "" : ` — last seen ${clause}`;
+  return `Can't reach ${input.hostName}${retainedPhase}. ${tail}`;
 }

@@ -44,7 +44,7 @@ export function SwitcherSimulatorsList(props: SwitcherListProps) {
   const { openTile } = useEpicTileNavigation();
   const place = useCallback(
     (ref: SimulatorTileRef) => {
-      openTile(tileIntent(ref, { tabId }, "single", "direct_ui"));
+      openTile(tileIntent(ref, { tabId }, "single", "direct_ui"), "user");
     },
     [openTile, tabId],
   );
@@ -92,7 +92,6 @@ export function SwitcherSimulatorsList(props: SwitcherListProps) {
                 <span className="min-w-0 flex-1 truncate font-medium">
                   {group.name}
                 </span>
-                {group.isLocal ? <span>Local</span> : null}
                 {group.offline ? <span>Offline</span> : null}
               </h3>
               <div className="flex flex-col gap-0.5">

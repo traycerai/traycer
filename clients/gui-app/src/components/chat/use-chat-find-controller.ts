@@ -108,7 +108,12 @@ interface ChatFindControllerArgs {
   readonly requestIndexRead: (read: ChatFindIndexRead | null) => void;
   readonly rowIndexByKeyRef: RefObject<ReadonlyMap<string, number>>;
   readonly getScroller: () => HTMLElement | null;
-  readonly scrollToLocation: (location: ChatTimelineNavigationLocation) => void;
+  /** Calls afterSettle only once row navigation can no longer correct the scroll. */
+  readonly scrollToLocation: (
+    location: ChatTimelineNavigationLocation,
+    afterSettle: () => void,
+    onCancelled: () => void,
+  ) => void;
   /** Manual-navigation cancel (find performs it first). */
   readonly cancelManualNavigation: () => void;
   /**
@@ -240,12 +245,18 @@ export function useChatFindController(
   const findRevealFrameRef = useRef<number | null>(null);
   const findRevealAnchorMissCountRef = useRef(0);
   const findRevealSkipUnitScrollRef = useRef(false);
+  const findRowNavigationPendingRef = useRef(false);
   const findOpenedChainRef = useRef<ReadonlyArray<ChatCollapsibleKey>>([]);
   const findOpenedTargetRef = useRef<FindOpenedTargetState | null>(null);
+  // Opening/reconciling a unit does not prove navigation ever reached it.
+  const findRevealedUnitRef = useRef<{
+    readonly messageId: string;
+    readonly unitId: string;
+  } | null>(null);
   const mountedHighlightSyncFrameRef = useRef<number | null>(null);
 
   const scrollToMessageForFindRef = useRef<
-    (messageId: string, rowKey: string) => void
+    (messageId: string, rowKey: string, afterSettle: () => void) => void
   >(() => undefined);
   const getMountedFindUnitRootRef = useRef<
     (messageId: string, unitId: string) => HTMLElement | null
@@ -295,10 +306,13 @@ export function useChatFindController(
   );
 
   const scrollToMessageForFind = useCallback(
-    (messageId: string, rowKey: string): void => {
+    (messageId: string, rowKey: string, afterSettle: () => void): void => {
       // The open conversation's one row is always mounted, and the timeline
       // under it is not what the reader is looking at: leave it where it is.
-      if (openSubagentIdRef.current !== null) return;
+      if (openSubagentIdRef.current !== null) {
+        afterSettle();
+        return;
+      }
       const generationBefore = getNavigationGenerationRef.current();
       cancelManualNavigation();
       // Find's own scroll is not the reader moving.
@@ -315,10 +329,27 @@ export function useChatFindController(
         rowIndexByKeyRef.current,
         false,
       );
-      if (location === null) return;
-      scrollToLocation(location);
+      if (location === null) {
+        afterSettle();
+        return;
+      }
+      const generation = findRevealGenerationRef.current;
+      scrollToLocation(location, afterSettle, () => {
+        if (findRevealGenerationRef.current !== generation) return;
+        // The reader owns the viewport now. Retire the scrolling reveal, but
+        // retain the active match so future mounts can paint it passively.
+        findRevealGenerationRef.current += 1;
+        findRowNavigationPendingRef.current = false;
+        activeFindRevealRef.current = null;
+        // A cancelled landing is not an already-revealed unit. The next Find
+        // hop must supersede any navigation that took the viewport from it.
+        findRevealedUnitRef.current = null;
+        cancelFindRevealFrame();
+        chatFindAdapterRef.current?.syncMountedHighlight();
+      });
     },
     [
+      cancelFindRevealFrame,
       cancelManualNavigation,
       rowIndexByKeyRef,
       messagesRef,
@@ -446,6 +477,8 @@ export function useChatFindController(
   const clearFindReveal = useCallback((): void => {
     findRevealGenerationRef.current += 1;
     activeFindRevealRef.current = null;
+    findRevealedUnitRef.current = null;
+    findRowNavigationPendingRef.current = false;
     findRevealAnchorMissCountRef.current = 0;
     cancelFindRevealFrame();
     releaseFindOpenedChain(true);
@@ -455,6 +488,8 @@ export function useChatFindController(
     if (activeTargetClearEpoch === 0) return;
     findRevealGenerationRef.current += 1;
     activeFindRevealRef.current = null;
+    findRevealedUnitRef.current = null;
+    findRowNavigationPendingRef.current = false;
     findRevealAnchorMissCountRef.current = 0;
     cancelFindRevealFrame();
     releaseFindOpenedChain(false);
@@ -463,6 +498,9 @@ export function useChatFindController(
 
   const scheduleFindRevealStep = useCallback(
     (generation: number, skipUnitScroll: boolean): void => {
+      // Row mounts and measurements also request reveal steps. They must not
+      // bypass the row landing or cancel the frame that starts it.
+      if (findRowNavigationPendingRef.current) return;
       cancelFindRevealFrame();
       findRevealFrameRef.current = window.requestAnimationFrame(() => {
         findRevealFrameRef.current = null;
@@ -474,23 +512,35 @@ export function useChatFindController(
           target.unitId,
         );
         if (unitRoot === null) {
-          scrollToMessageForFindRef.current(target.messageId, target.rowKey);
-          const messageRoot = getMountedMessageRootRef.current(
+          findRowNavigationPendingRef.current = true;
+          scrollToMessageForFindRef.current(
             target.messageId,
+            target.rowKey,
+            () => {
+              if (findRevealGenerationRef.current !== generation) return;
+              findRowNavigationPendingRef.current = false;
+              const messageRoot = getMountedMessageRootRef.current(
+                target.messageId,
+              );
+              if (messageRoot === null) return;
+              if (
+                findRevealAnchorMissCountRef.current <
+                FIND_REVEAL_ANCHOR_RETRY_LIMIT
+              ) {
+                findRevealAnchorMissCountRef.current += 1;
+                scheduleFindRevealStepRef.current(generation, skipUnitScroll);
+                return;
+              }
+              target.paintFallback();
+              if (activeFindRevealRef.current?.matchKey === target.matchKey) {
+                activeFindRevealRef.current = null;
+                findRevealedUnitRef.current = {
+                  messageId: target.messageId,
+                  unitId: target.unitId,
+                };
+              }
+            },
           );
-          if (messageRoot === null) return;
-          if (
-            findRevealAnchorMissCountRef.current <
-            FIND_REVEAL_ANCHOR_RETRY_LIMIT
-          ) {
-            findRevealAnchorMissCountRef.current += 1;
-            scheduleFindRevealStepRef.current(generation, skipUnitScroll);
-            return;
-          }
-          target.paintFallback();
-          if (activeFindRevealRef.current?.matchKey === target.matchKey) {
-            activeFindRevealRef.current = null;
-          }
           return;
         }
         findRevealAnchorMissCountRef.current = 0;
@@ -512,6 +562,10 @@ export function useChatFindController(
           target.paint();
           if (activeFindRevealRef.current.matchKey === target.matchKey) {
             activeFindRevealRef.current = null;
+            findRevealedUnitRef.current = {
+              messageId: target.messageId,
+              unitId: target.unitId,
+            };
           }
         });
       });
@@ -528,8 +582,8 @@ export function useChatFindController(
       // Consecutive matches inside the same already-revealed unit are an
       // in-place hop: the row is mounted and positioned, so scrolling the row
       // and re-centering the unit would visibly flicker. Detect it against the
-      // previous reveal target before applyFindOpenedTarget overwrites it.
-      const previousTarget = findOpenedTargetRef.current;
+      // last completed reveal, never the passively reconciled open chain.
+      const previousTarget = findRevealedUnitRef.current;
       const sameUnit =
         previousTarget !== null &&
         previousTarget.messageId === target.messageId &&
@@ -537,8 +591,10 @@ export function useChatFindController(
       const generation = findRevealGenerationRef.current + 1;
       findRevealGenerationRef.current = generation;
       activeFindRevealRef.current = target;
+      findRevealedUnitRef.current = null;
       findRevealAnchorMissCountRef.current = 0;
       findRevealSkipUnitScrollRef.current = sameUnit;
+      findRowNavigationPendingRef.current = !sameUnit;
       // LegendList remeasures a row's height via its own per-row
       // ResizeObserver, so the chain-open below picks up the target row's OWN
       // layout change without an explicit nudge. Content ABOVE the viewport
@@ -551,9 +607,14 @@ export function useChatFindController(
         findRevealFrameRef.current = null;
         if (findRevealGenerationRef.current !== generation) return;
         if (!sameUnit) {
-          scrollToMessageForFind(target.messageId, target.rowKey);
+          scrollToMessageForFind(target.messageId, target.rowKey, () => {
+            if (findRevealGenerationRef.current !== generation) return;
+            findRowNavigationPendingRef.current = false;
+            scheduleFindRevealStep(generation, false);
+          });
+          return;
         }
-        scheduleFindRevealStep(generation, sameUnit);
+        scheduleFindRevealStep(generation, true);
       });
     },
     [
