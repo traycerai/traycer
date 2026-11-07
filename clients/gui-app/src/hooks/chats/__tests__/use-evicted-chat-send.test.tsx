@@ -9,6 +9,10 @@ import {
 } from "@testing-library/react";
 import { toast } from "sonner";
 import { HostRpcError } from "@traycer-clients/shared/host-transport/host-messenger";
+import {
+  recordNegotiatedHostMethods,
+  resetNegotiatedManifests,
+} from "@traycer-clients/shared/host-transport/negotiated-manifest-registry";
 import type { HydrateChatResponse } from "@traycer/protocol/host/epic/chat-hydration";
 import type { RpcErrorCode } from "@traycer/protocol/framework/versioned-rpc-types";
 import type { UserMessageSender } from "@traycer/protocol/persistence/epic/schemas";
@@ -230,6 +234,7 @@ beforeEach(() => {
 afterEach(() => {
   cleanup();
   toast.dismiss();
+  resetNegotiatedManifests();
   __resetComposerContentImageRootsForTests();
 });
 
@@ -415,6 +420,24 @@ describe("useEvictedChatSend", () => {
     expect(await screen.findByText(SEND_FAILED)).toBeTruthy();
     expect(draftOf(CHAT.chatId)?.content).toEqual(INPUT.content);
     expect(send.result.current.parks).toBe(false);
+  });
+
+  it("restores a parked send when the host manifest lacks hydrateChat", async () => {
+    recordNegotiatedHostMethods(CHAT.hostId, []);
+    const { send } = mount({ served: false, held: false });
+
+    park(send, INPUT);
+
+    expect(
+      await screen.findByText(
+        "This needs a newer Traycer host. Update the host to continue.",
+      ),
+    ).toBeTruthy();
+    expect(send.result.current.parked).toHaveLength(0);
+    expect(hydrates).toHaveLength(0);
+    expect(draftOf(CHAT.chatId)?.content).toEqual(INPUT.content);
+    expect(draftOf(CHAT.chatId)?.browserAnnotations).toEqual([ANNOTATION]);
+    expect(imageRootHeld()).toBe(false);
   });
 
   it("puts every parked message back, the first in the composer, when the page goes away", async () => {

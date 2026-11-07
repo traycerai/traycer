@@ -4,8 +4,9 @@ import type {
   HydrateChatResponse,
 } from "@traycer/protocol/host/epic/chat-hydration";
 import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
-import type { HostRpcError } from "@traycer-clients/shared/host-transport/host-messenger";
+import { HostRpcError } from "@traycer-clients/shared/host-transport/host-messenger";
 import { useHostMutation } from "@/hooks/host/use-host-query";
+import { useHostMethodSupport } from "@/hooks/host/use-host-supports-method";
 import { EVICTED_SEND_FAILED_MESSAGE } from "@/lib/chats/evicted-chat-refusal";
 import type { HostRpcRegistry } from "@/lib/host";
 import { toastFromHostError } from "@/lib/host-error-toast";
@@ -21,10 +22,27 @@ export function useChatHydrateMutation(input: {
   readonly hostId: string;
   readonly chatId: string;
 }): UseMutationResult<HydrateChatResponse, HostRpcError, HydrateChatRequest> {
+  const supportsHydration = useHostMethodSupport(
+    input.hostId,
+    "epic.hydrateChat",
+  );
   return useHostMutation<HostRpcRegistry, "epic.hydrateChat">({
     client: input.client,
     method: "epic.hydrateChat",
-    mapVariables: (variables) => variables,
+    mapVariables: (variables) => {
+      if (supportsHydration === false) {
+        throw new HostRpcError({
+          code: "E_HOST_UNSUPPORTED",
+          message: EVICTED_SEND_FAILED_MESSAGE,
+          requestId: "client-hydrate-unsupported",
+          method: "epic.hydrateChat",
+          fatalDetails: null,
+        });
+      }
+      // An unknown host must be allowed to connect. The request's own
+      // handshake still refuses an absent method before sending its payload.
+      return variables;
+    },
     options: {
       mutationKey: chatHydrateMutationKeys.hydrate(input.hostId, input.chatId),
       onError: (error) => {
