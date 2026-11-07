@@ -1,8 +1,9 @@
 import { describe, expect, it } from "vitest";
 import { hostRpcRegistry } from "@traycer/protocol/host/registry";
-import { providersListResponseSchema } from "@traycer/protocol/host/provider-schemas";
 
 const providersList = hostRpcRegistry["providers.list"][10];
+const live109 = providersList.versions[9].contract.responseSchema;
+const providersListResponseSchema = live109;
 
 const profile = {
   profileId: "managed-1",
@@ -76,7 +77,7 @@ const provider = {
   ],
 };
 
-describe("providers.list@10.9 profile identity projection", () => {
+describe("providers.list@10.9 additive response projection", () => {
   it("keeps valid identity facts and surfaces one future row as unreadable", () => {
     const parsed = providersListResponseSchema.parse({ providers: [provider] });
     const profiles = parsed.providers[0]?.profiles;
@@ -114,5 +115,21 @@ describe("providers.list@10.9 profile identity projection", () => {
     expect(parsedProfile).not.toHaveProperty("recordVersion");
     expect(parsedProfile).not.toHaveProperty("credentialIdentity");
     expect(parsedProfile).not.toHaveProperty("credentialHome");
+  });
+
+  it("carries optional usage reporting in 10.9 and strips it for 10.8", () => {
+    expect(providersList.latestMinor).toBe(9);
+    const usageReporting = { ...provider, usageReporting: true };
+    const live = live109.parse({
+      providers: [usageReporting],
+    });
+    expect(live.providers[0]).toHaveProperty("usageReporting", true);
+
+    const frozen108 = providersList.versions[8].contract.responseSchema;
+    const downgraded = frozen108.parse({ providers: [usageReporting] });
+    expect(downgraded.providers[0]).not.toHaveProperty("usageReporting");
+
+    const olderHost = live109.parse({ providers: [provider] });
+    expect(olderHost.providers[0]).not.toHaveProperty("usageReporting");
   });
 });

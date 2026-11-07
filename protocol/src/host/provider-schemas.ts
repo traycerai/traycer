@@ -2637,6 +2637,8 @@ export const providersListResponseSchema = lazySchema(() =>
   providersListResponseSchemaV108Preimage.extend({
     providers: z.array(
       providerCliStateSchema.extend({
+        // Older hosts omit the key; current hosts report adapter capability.
+        usageReporting: z.boolean().optional(),
         profiles: z.array(providerProfileProjectionSchema).catch([]),
       }),
     ),
