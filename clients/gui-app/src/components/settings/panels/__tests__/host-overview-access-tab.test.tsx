@@ -531,13 +531,24 @@ describe("<HostOverviewAccessTab /> terminal accounts", () => {
     expect(screen.queryByTestId("terminal-accounts-section")).toBeNull();
   });
 
-  it("switches the ambient profile off with providers.setProfileEnabled", async () => {
-    const host = hostWith({}, { providers: [claudeAmbient(true)] });
+  it("names each terminal account switch and switches an ambient profile off", async () => {
+    const host = hostWith(
+      {},
+      {
+        providers: [
+          claudeAmbient(true),
+          provider("codex", [profile("ambient", "ambient")]),
+        ],
+      },
+    );
     renderTab(host, READY);
 
     const toggle = await screen.findByRole("switch", {
-      name: "Claude Code",
+      name: "Claude Code terminal account",
     });
+    expect(
+      screen.getByRole("switch", { name: "Codex terminal account" }),
+    ).toBeTruthy();
     expect(toggle.getAttribute("aria-checked")).toBe("true");
 
     fireEvent.click(toggle);
@@ -554,7 +565,7 @@ describe("<HostOverviewAccessTab /> terminal accounts", () => {
     renderTab(host, READY);
 
     const toggle = await screen.findByRole("switch", {
-      name: "Claude Code",
+      name: "Claude Code terminal account",
     });
     expect(toggle.getAttribute("aria-checked")).toBe("false");
 
