@@ -30,8 +30,8 @@ function within(work: Promise<void>, ms: number): Promise<void> {
 /**
  * The channels that save a recording of the music. The flag is read
  * synchronously at preload, because the renderer decides at render whether to
- * draw the switch. A production build answers false and registers nothing
- * else, so no path to a recording exists there at all.
+ * draw the switch. Any build but dev or staging answers false and registers
+ * nothing else, so no path to a recording exists there at all.
  *
  * Every recording belongs to the window that opened it and the document it
  * showed: another window cannot write to it, and a window that goes away or

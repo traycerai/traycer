@@ -109,6 +109,7 @@ describe("the Record session row", () => {
   it.each([
     ["no bridge at all", undefined],
     ["an older bridge without the member", {}],
+    ["a bridge whose build cannot record", { soundtrackRecording: null }],
   ])("is not drawn with %s", (_name, host) => {
     vi.stubGlobal("runnerHost", host);
     renderSection();

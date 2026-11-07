@@ -663,8 +663,8 @@ export const RunnerHostSync = {
   // Whether this build can read the team's soundtrack set: the toggle is drawn
   // at render, before anything asynchronous could answer.
   soundtrackSourceAvailable: "runnerHost:sync:soundtrackSourceAvailable",
-  // Whether this build can save a recording of the music: false in production,
-  // where the recording channels are not registered at all.
+  // Whether this build can save a recording of the music: true only in dev and
+  // staging. Elsewhere the recording channels are not registered at all.
   soundtrackRecordingAvailable: "runnerHost:sync:soundtrackRecordingAvailable",
 } as const;
 

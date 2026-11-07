@@ -14,8 +14,8 @@ import { readSyncBoolean } from "./sync-bootstrap";
 
 /**
  * The `soundtrackRecording` member: null where main says this build cannot
- * record, which is every production build. The renderer hands over a quality
- * and bytes, never a path.
+ * record, which is every build but dev and staging. The renderer hands over a
+ * quality and bytes, never a path.
  */
 export function buildSoundtrackRecordingBridge(): SoundtrackRecordingBridge | null {
   if (!readSyncBoolean(RunnerHostSync.soundtrackRecordingAvailable, false)) {

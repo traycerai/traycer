@@ -119,8 +119,8 @@ export function isSoundtrackRowAvailable(
 }
 
 /**
- * Sounds › Soundtrack › Record session — only a desktop build that is not
- * production can save one, and says so through its bridge.
+ * Sounds › Soundtrack › Record session — only a dev or staging desktop build
+ * can save one, and says so through its bridge.
  */
 export function isSoundtrackRecordingRowAvailable(
   context: SettingsAvailabilityContext,

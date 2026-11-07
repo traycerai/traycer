@@ -153,9 +153,20 @@ export const isDevBuild = config.environment === "dev";
 // DevTools are available in dev + staging and disabled only for production.
 export const canOpenDevTools = config.environment !== "production";
 
-// Recording the music to disk is for the team's listening, so a production
-// build registers no channel for it.
-export const canRecordSoundtrack = config.environment !== "production";
+/**
+ * Whether a build of `environment` may record the music to disk: only a dev or
+ * a staging build, which is where the team listens. Any other value, production
+ * or one this file does not know, records nothing.
+ */
+export function soundtrackRecordingAllowed(environment: Environment): boolean {
+  return environment === "dev" || environment === "staging";
+}
+
+// Read by main at startup: a build this answers false for registers no
+// recording channel at all.
+export const canRecordSoundtrack = soundtrackRecordingAllowed(
+  config.environment,
+);
 
 // The sign-in flow opens the Cloud UI's sign-in route.
 export const DESKTOP_SIGN_IN_BASE_URL = config.cloudUiBaseUrl;
