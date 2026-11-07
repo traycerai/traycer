@@ -522,7 +522,7 @@ describe("<SandboxCard /> per state", () => {
     // A provider serving two OSes is one catalogue entry per OS, each with
     // its own suspend: the card of one OS never says what the other keeps.
     const entry = {
-      provider: "daytona",
+      provider: "multi-os-test-provider",
       shape: {
         cpuMin: 1,
         cpuMax: 4,
@@ -560,13 +560,21 @@ describe("<SandboxCard /> per state", () => {
       ],
     };
     renderCard(
-      sandboxOf("awake", false, { provider: "daytona", os: "windows" }),
+      sandboxOf("awake", false, {
+        provider: "multi-os-test-provider",
+        os: "windows",
+      }),
     );
     expect(
       screen.getByTestId("sandbox-card-suspend-keeps").textContent,
     ).toContain("keeps memory");
     cleanup();
-    renderCard(sandboxOf("awake", false, { provider: "daytona", os: "linux" }));
+    renderCard(
+      sandboxOf("awake", false, {
+        provider: "multi-os-test-provider",
+        os: "linux",
+      }),
+    );
     expect(
       screen.getByTestId("sandbox-card-suspend-keeps").textContent,
     ).toContain("disk only");
