@@ -36,6 +36,17 @@ import { providerIdToGuiHarnessId } from "@/lib/provider-ordering";
  * All three hold the render until they can answer, and an absent
  * `nativeMemorySupported` - every host below 10.8 - reads as cannot.
  *
+ * That third answer is about the EXECUTABLE, not only the provider: the host
+ * judges the binary it would actually run and reports cannot for a version
+ * below its verified floor or one it cannot read at all. So this control can
+ * disappear for a provider that had it, when the user points it at another
+ * binary. A stored OFF survives that and is NOT stranded - the host refuses to
+ * start a session it cannot honour and says how to recover, and
+ * `providers.setNativeMemory` still accepts `true` while refusing an
+ * unenforceable `false`. Deliberately no disabled-but-visible switch here:
+ * rendering an off control that cannot act is the thing the third gate exists
+ * to prevent.
+ *
  * ON does not assert that the provider has memories switched on: it asserts
  * that Traycer applies no override, so a provider whose own default is off
  * stays off. The row's copy describes the OFF state for that reason.
