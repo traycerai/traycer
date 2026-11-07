@@ -6,6 +6,12 @@ export interface SoundtrackSessionLock {
    * when it holds the lock already.
    */
   readonly held: Promise<void> | null;
+  /**
+   * Settles if the lock is taken and this window has to wait, and never if it
+   * is free, so a free lock's short trip to the browser cannot read as a wait;
+   * null when it holds the lock already.
+   */
+  readonly queued: Promise<void> | null;
   /** Lets the lock go. Released while queued, its turn passes straight through. */
   readonly release: () => void;
 }
@@ -22,7 +28,7 @@ export function holdSoundtrackSessionLock(): SoundtrackSessionLock {
   const navigatorWithLocks: { readonly locks?: LockManager } = navigator;
   const locks = navigatorWithLocks.locks;
   if (locks === undefined) {
-    return { held: null, release: () => undefined };
+    return { held: null, queued: null, release: () => undefined };
   }
   let release: () => void = () => undefined;
   const hold = new Promise<void>((resolve) => {
@@ -30,13 +36,29 @@ export function holdSoundtrackSessionLock(): SoundtrackSessionLock {
       resolve();
     };
   });
+  let markQueued: () => void = () => undefined;
+  const queued = new Promise<void>((resolve) => {
+    markQueued = resolve;
+  });
   const held = new Promise<void>((resolve) => {
+    const granted = (): Promise<void> => {
+      resolve();
+      return hold;
+    };
     void locks
-      .request(SOUNDTRACK_SESSION_LOCK, () => {
-        resolve();
-        return hold;
-      })
+      .request(
+        SOUNDTRACK_SESSION_LOCK,
+        { ifAvailable: true },
+        (lock): Promise<void> | undefined => {
+          if (lock !== null) return granted();
+          markQueued();
+          void locks
+            .request(SOUNDTRACK_SESSION_LOCK, {}, granted)
+            .catch(() => undefined);
+          return undefined;
+        },
+      )
       .catch(() => undefined);
   });
-  return { held, release };
+  return { held, queued, release };
 }

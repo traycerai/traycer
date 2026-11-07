@@ -1250,6 +1250,7 @@ describe("Settings - Layout", () => {
           mobileApp: false,
           phoneLayout: false,
           soundtrackOffered: false,
+          soundtrackOn: false,
         }).map((result) => result.entry.anchor);
 
         expect(anchors).toContain("layout-tab-strip-placement");
@@ -1265,6 +1266,7 @@ describe("Settings - Layout", () => {
           mobileApp: false,
           phoneLayout: false,
           soundtrackOffered: false,
+          soundtrackOn: false,
         }).map((result) => result.entry.anchor);
 
         expect(anchors).toContain("layout-side-strip-view");

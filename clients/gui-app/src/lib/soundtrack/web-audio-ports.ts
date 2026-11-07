@@ -1,12 +1,14 @@
 import { appLogger, describeLogError } from "@/lib/logger";
 import { reissueStemManifest } from "./manifest";
+import { MIX_TUNING } from "./mix-tuning";
 import { WebAudioDimFilter, WebAudioLevel, WebAudioOutput } from "./output";
 import type { SoundtrackPorts } from "./session";
 import { ManifestStemSource, type StemManifest } from "./stems";
 
-// Closing cuts what is still on its way to the speakers, which over Bluetooth
-// is a few hundred milliseconds of a fade that has finished on the clock.
-const CLOSE_AFTER_FADE_SECONDS = 0.5;
+// Closing or suspending cuts what is still on its way to the speakers, which
+// over Bluetooth is a few hundred milliseconds of a fade that has finished on
+// the clock.
+const DRAIN_AFTER_FADE_SECONDS = 0.5;
 
 /**
  * Opens the audio device: speakers ← volume ← a chime's duck ← low-pass ← the
@@ -31,6 +33,11 @@ export function openWebAudioPorts(
       });
     });
   }
+  let suspending: number | null = null;
+  const cancelSuspending = (): void => {
+    if (suspending !== null) window.clearTimeout(suspending);
+    suspending = null;
+  };
   return {
     output,
     stems: new ManifestStemSource(stems, output, reissueStemManifest),
@@ -43,7 +50,31 @@ export function openWebAudioPorts(
     duck: (chimeSeconds) => {
       level.duck(chimeSeconds);
     },
+    pause: () => {
+      level.setAudible(false);
+      suspending = window.setTimeout(
+        () => {
+          suspending = null;
+          void context.suspend().catch((error: unknown) => {
+            appLogger.warn("[soundtrack] could not suspend the audio context", {
+              error: describeLogError(error),
+            });
+          });
+        },
+        (MIX_TUNING.pauseFadeSeconds + DRAIN_AFTER_FADE_SECONDS) * 1000,
+      );
+    },
+    resume: () => {
+      cancelSuspending();
+      void context.resume().catch((error: unknown) => {
+        appLogger.warn("[soundtrack] could not resume the audio context", {
+          error: describeLogError(error),
+        });
+      });
+      level.setAudible(true);
+    },
     close: (afterSeconds) => {
+      cancelSuspending();
       window.setTimeout(
         () => {
           void context.close().catch((error: unknown) => {
@@ -52,7 +83,7 @@ export function openWebAudioPorts(
             });
           });
         },
-        (afterSeconds + CLOSE_AFTER_FADE_SECONDS) * 1000,
+        (afterSeconds + DRAIN_AFTER_FADE_SECONDS) * 1000,
       );
     },
   };

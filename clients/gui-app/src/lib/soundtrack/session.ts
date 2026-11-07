@@ -24,6 +24,13 @@ export interface SoundtrackPorts {
   duck(chimeSeconds: number): void;
   /** Lets go of the audio device once `afterSeconds` have gone by. */
   close(afterSeconds: number): void;
+  /**
+   * Fades the mix out, then stops the output's clock, and every voice and ramp
+   * on it with it, until `resume`.
+   */
+  pause(): void;
+  /** Starts the clock again and fades the mix back up. */
+  resume(): void;
 }
 
 /** Where a view's track had got to, so that it comes back there. */
@@ -51,11 +58,47 @@ interface SoundtrackSessionOptions {
   readonly onSounding: (sounding: SoundingMix | null) => void;
 }
 
-/** The track a view is on, and the track's player. */
+/** The tracks a view has been on, as a browser keeps its pages. */
+interface TrackHistory {
+  readonly tracks: readonly VariableTrack[];
+  /** Where in `tracks` the view is. */
+  readonly at: number;
+}
+
+/** The track a view is on, the track's player, and how it got there. */
 interface ViewPlayer {
   readonly view: SoundtrackView;
   readonly track: VariableTrack;
   readonly player: TrackPlayer;
+  readonly history: TrackHistory;
+}
+
+/**
+ * The silence before the track a view moved on to, running down on a timer or
+ * held by a pause with what is left of it.
+ */
+type PendingStart =
+  | {
+      readonly player: TrackPlayer;
+      readonly timer: number;
+      readonly endsAt: number;
+    }
+  | {
+      readonly player: TrackPlayer;
+      readonly timer: null;
+      readonly secondsLeft: number;
+    };
+
+function startFromSilence(player: TrackPlayer): void {
+  player.start(player.elapsed(), MIX_TUNING.fadeInSeconds);
+}
+
+/** `track` next after where `history` is, which clears anything ahead of it. */
+function visited(history: TrackHistory, track: VariableTrack): TrackHistory {
+  const tracks = [...history.tracks.slice(0, history.at + 1), track].slice(
+    -MIX_TUNING.trackHistoryLength,
+  );
+  return { tracks, at: tracks.length - 1 };
 }
 
 function pickRandom<T>(
@@ -123,6 +166,10 @@ function settleEnabledLayers(
  * discards the layers a plan set, and the plan is restated as the next run
  * starts. At the end of a run in front, the view moves on to another track of
  * its pool, if it has one, which plays from its top after the silence.
+ *
+ * A pause holds all of it: the clock stops at the ports, and everything on a
+ * wall-clock timer stops here or in the players. Signals and a director arrive
+ * as ever and are first acted on at `play`.
  */
 export class SoundtrackSession {
   readonly ports: SoundtrackPorts;
@@ -134,12 +181,15 @@ export class SoundtrackSession {
   private readonly players = new Map<SoundtrackView, ViewPlayer>();
   /** By track name. */
   private readonly trackPlayers = new Map<string, TrackPlayer>();
-  private readonly timer: number;
+  private timer: number;
   private director: MixDirector;
   private signals: MixSignals | null = null;
+  /** The view last brought to front, which a pause leaves behind `signals`. */
+  private frontView: SoundtrackView | null = null;
   private inFront: ViewPlayer | null = null;
   /** Starts the track a view moved on to, once the silence is over. */
-  private pendingStart: number | null = null;
+  private pendingStart: PendingStart | null = null;
+  private paused = false;
 
   constructor(options: SoundtrackSessionOptions) {
     this.manifest = options.manifest;
@@ -148,22 +198,95 @@ export class SoundtrackSession {
     this.resumePositions = options.resumePositions;
     this.onSounding = options.onSounding;
     this.director = options.director;
-    this.timer = window.setInterval(() => {
-      this.replan();
-    }, MIX_TUNING.replanIntervalMs);
+    this.timer = this.startReplanning();
   }
 
   setSignals(signals: MixSignals): void {
     const previous = this.signals;
     if (previous !== null && sameMixSignals(previous, signals)) return;
     this.signals = signals;
-    if (previous?.view !== signals.view) this.bringToFront(signals.view);
-    this.replan();
+    if (!this.paused) this.followSignals();
   }
 
   setDirector(director: MixDirector): void {
     this.director = director;
-    this.replan();
+    if (!this.paused) this.replan();
+  }
+
+  /** A chime heard during a pause is over long before the music is back. */
+  duck(chimeSeconds: number): void {
+    if (!this.paused) this.ports.duck(chimeSeconds);
+  }
+
+  /** Holds everything where it is, the rest of a silence included, until `play`. */
+  pause(): void {
+    if (this.paused) return;
+    this.paused = true;
+    window.clearInterval(this.timer);
+    const pending = this.pendingStart;
+    if (pending !== null && pending.timer !== null) {
+      window.clearTimeout(pending.timer);
+      this.pendingStart = {
+        player: pending.player,
+        timer: null,
+        secondsLeft: pending.endsAt - this.ports.output.currentTime(),
+      };
+    }
+    for (const player of this.trackPlayers.values()) player.hold();
+    this.ports.pause();
+  }
+
+  /** Goes on from where a pause held it, with what arrived meanwhile. */
+  play(): void {
+    if (!this.paused) return;
+    this.paused = false;
+    this.ports.resume();
+    for (const player of this.trackPlayers.values()) player.release();
+    const pending = this.pendingStart;
+    if (pending !== null && pending.timer === null) {
+      this.waitOutSilence(pending.player, pending.secondsLeft);
+    }
+    this.timer = this.startReplanning();
+    this.followSignals();
+  }
+
+  /**
+   * Moves the view on now, and plays if it was paused: forward along its history
+   * if Previous left any, else to a track picked as a run's end picks one, else,
+   * with no other track, back to the top of this one. In the silence, the track
+   * the run's end picked is the one to go to, and it starts at once.
+   */
+  next(): void {
+    this.play();
+    const { inFront, pendingStart } = this;
+    if (inFront === null) return;
+    if (pendingStart !== null) {
+      this.cancelPendingStart();
+      startFromSilence(pendingStart.player);
+      return;
+    }
+    const { history } = inFront;
+    if (history.at + 1 < history.tracks.length) {
+      this.skipTo(inFront, { ...history, at: history.at + 1 });
+      return;
+    }
+    const track = this.anotherTrack(inFront);
+    this.skipTo(inFront, track === null ? history : visited(history, track));
+  }
+
+  /**
+   * Moves the view back to the track before this one, and plays if it was
+   * paused, or with none earlier goes back to the top of this one.
+   */
+  previous(): void {
+    this.play();
+    const { inFront } = this;
+    if (inFront === null) return;
+    const { history } = inFront;
+    this.skipTo(
+      inFront,
+      history.at > 0 ? { ...history, at: history.at - 1 } : history,
+    );
   }
 
   /** Stops every player and answers where each one got to. */
@@ -173,8 +296,11 @@ export class SoundtrackSession {
     const positions: Partial<Record<SoundtrackView, ResumePosition>> = {
       ...this.resumePositions,
     };
-    for (const { view, track, player } of this.players.values()) {
+    // Every player: one a skip left fading out is no view's any more.
+    for (const player of this.trackPlayers.values()) {
       player.stop(MIX_TUNING.stopFadeSeconds);
+    }
+    for (const { view, track, player } of this.players.values()) {
       positions[view] = {
         trackName: track.name,
         elapsedSeconds: player.elapsed(),
@@ -184,9 +310,23 @@ export class SoundtrackSession {
     return positions;
   }
 
+  private startReplanning(): number {
+    return window.setInterval(() => {
+      this.replan();
+    }, MIX_TUNING.replanIntervalMs);
+  }
+
+  private followSignals(): void {
+    const { signals } = this;
+    if (signals === null) return;
+    if (signals.view !== this.frontView) this.bringToFront(signals.view);
+    this.replan();
+  }
+
   private bringToFront(view: SoundtrackView): void {
     const previous = this.inFront;
     const next = this.playerFor(view);
+    this.frontView = view;
     this.inFront = next;
     // The track sounding goes on under the new view; only the plan moves.
     if (previous?.player === next?.player) return;
@@ -196,7 +336,26 @@ export class SoundtrackSession {
       return;
     }
     previous?.player.fadeOut(CROSSFADE_SECONDS);
-    next?.player.start(next.player.elapsed(), MIX_TUNING.fadeInSeconds);
+    if (next !== null) startFromSilence(next.player);
+  }
+
+  /** Moves the view to the track `history` is at, from its top, crossfading. */
+  private skipTo(from: ViewPlayer, history: TrackHistory): void {
+    this.cancelPendingStart();
+    const track = history.tracks[history.at];
+    const to: ViewPlayer = {
+      view: from.view,
+      track,
+      player: this.trackPlayer(track, 0),
+      history,
+    };
+    // A fresh run from the top, whatever it was doing: on the track in front it
+    // cuts the old run under the new one, and one still fading out stops here,
+    // so the run it was in cannot end and move on again.
+    to.player.rewind(CROSSFADE_SECONDS);
+    this.players.set(to.view, to);
+    this.inFront = to;
+    crossfadePlayers(from.player, to.player);
   }
 
   private playerFor(view: SoundtrackView): ViewPlayer | null {
@@ -212,6 +371,7 @@ export class SoundtrackSession {
         track,
         resume?.trackName === track.name ? resume.elapsedSeconds : 0,
       ),
+      history: { tracks: [track], at: 0 },
     };
     this.players.set(view, created);
     return created;
@@ -270,10 +430,7 @@ export class SoundtrackSession {
   private runEnded(player: TrackPlayer, silenceSeconds: number): void {
     const { inFront } = this;
     if (inFront?.player !== player) return;
-    const others = this.poolOf(inFront.view).filter(
-      (track) => track !== inFront.track,
-    );
-    const [track = null] = pickRandom(others, 1, this.random);
+    const track = this.anotherTrack(inFront);
     if (track === null) return;
     // Nothing new starts; what rings out past an outro keeps its fade.
     player.stop(MIX_TUNING.outroRingOutSeconds);
@@ -281,6 +438,7 @@ export class SoundtrackSession {
       view: inFront.view,
       track,
       player: this.trackPlayer(track, 0),
+      history: visited(inFront.history, track),
     };
     // A fresh run from the top, whatever another view left it at. One still
     // fading out stops here, so the run it was in cannot end and move on again.
@@ -288,15 +446,34 @@ export class SoundtrackSession {
     this.players.set(next.view, next);
     this.inFront = next;
     this.cancelPendingStart();
-    this.pendingStart = window.setTimeout(() => {
+    this.waitOutSilence(next.player, silenceSeconds);
+  }
+
+  /** Another track of the view's pool, picked at random; null if it has none. */
+  private anotherTrack(from: ViewPlayer): VariableTrack | null {
+    const others = this.poolOf(from.view).filter(
+      (track) => track !== from.track,
+    );
+    const [track = null] = pickRandom(others, 1, this.random);
+    return track;
+  }
+
+  private waitOutSilence(player: TrackPlayer, seconds: number): void {
+    const timer = window.setTimeout(() => {
       this.pendingStart = null;
-      next.player.start(next.player.elapsed(), MIX_TUNING.fadeInSeconds);
-    }, silenceSeconds * 1000);
+      startFromSilence(player);
+    }, seconds * 1000);
+    this.pendingStart = {
+      player,
+      timer,
+      endsAt: this.ports.output.currentTime() + seconds,
+    };
   }
 
   private cancelPendingStart(): void {
-    if (this.pendingStart === null) return;
-    window.clearTimeout(this.pendingStart);
+    const pending = this.pendingStart;
+    if (pending === null) return;
+    if (pending.timer !== null) window.clearTimeout(pending.timer);
     this.pendingStart = null;
   }
 

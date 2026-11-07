@@ -11,6 +11,7 @@ export interface OpenedFakePorts {
   readonly setVolume: Mock<(volume: number) => void>;
   readonly duck: Mock<(chimeSeconds: number) => void>;
   readonly close: Mock<(afterSeconds: number) => void>;
+  readonly output: FakeOutput;
 }
 
 /** Every device a store opened since the last reset, oldest first. */
@@ -22,15 +23,28 @@ export const openFakePorts = vi.fn(
     const setVolume = vi.fn<(volume: number) => void>();
     const duck = vi.fn<(chimeSeconds: number) => void>();
     const close = vi.fn<(afterSeconds: number) => void>();
+    const output = new FakeOutput();
     const ports: SoundtrackPorts = {
-      output: new FakeOutput(),
+      output,
       stems: new FakeStems(SAMPLE_SECONDS),
       setDimmed: vi.fn<(dimmed: boolean) => void>(),
       setVolume,
       duck,
       close,
+      pause: () => {
+        output.stopClock();
+      },
+      resume: () => {
+        output.startClock();
+      },
     };
-    openedFakePorts.push({ volumeAtOpen: volume, setVolume, duck, close });
+    openedFakePorts.push({
+      volumeAtOpen: volume,
+      setVolume,
+      duck,
+      close,
+      output,
+    });
     return ports;
   },
 );

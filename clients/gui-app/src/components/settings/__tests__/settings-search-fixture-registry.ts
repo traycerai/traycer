@@ -107,6 +107,7 @@ function notificationsHost(options: {
     mobileApp: false,
     phoneLayout: false,
     soundtrackOffered: false,
+    soundtrackOn: false,
   };
 }
 
@@ -116,6 +117,7 @@ const NO_BRIDGES: SettingsAvailabilityContext = {
   mobileApp: false,
   phoneLayout: false,
   soundtrackOffered: false,
+  soundtrackOn: false,
 };
 
 export const SETTINGS_SEARCH_FIXTURES = [
