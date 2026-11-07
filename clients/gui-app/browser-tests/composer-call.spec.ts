@@ -257,11 +257,19 @@ test("the captions hang above the box, inside the window", async ({ page }) => {
 
 test.describe("mobile Send touch target", () => {
   test.use({ hasTouch: true });
-  for (const box of ["channel", "thread"]) {
-    test(`${box} edge taps send once while Call and the draft stay separate`, async ({
+  for (const { box, fontSize } of [
+    { box: "channel", fontSize: 15 },
+    { box: "thread", fontSize: 15 },
+    { box: "channel", fontSize: 10 },
+    { box: "thread", fontSize: 10 },
+  ]) {
+    test(`${box} at ${fontSize}px edge taps send once while Call and the draft stay separate`, async ({
       page,
     }) => {
       await open(page, 390, `box=${box}`);
+      await page.evaluate((size) => {
+        document.documentElement.style.fontSize = `${size}px`;
+      }, fontSize);
       const id = `bot-${box}-composer`;
       const send = page.getByTestId(`${id}-send`);
       const field = page
@@ -282,14 +290,14 @@ test.describe("mobile Send touch target", () => {
       const call = await boxOf(page.getByTestId(`${id}-call`));
       expect(target.width).toBeGreaterThanOrEqual(44);
       expect(target.height).toBeGreaterThanOrEqual(44);
-      expect(target.x - rightOf(call)).toBeGreaterThanOrEqual(8);
+      expect(target.x - rightOf(call)).toBeGreaterThanOrEqual(fontSize / 2);
       expectInside(target, await boxOf(page.getByTestId(id)));
       const fieldBox = await boxOf(field);
       expect(rightOf(fieldBox) <= call.x || bottomOf(fieldBox) <= call.y).toBe(
         true,
       );
       const glyph = await boxOf(send.locator("svg"));
-      expect(glyph.width).toBe(16);
+      expect(glyph.width).toBe(fontSize);
       await page.touchscreen.tap(target.x + 2, target.y + target.height / 2);
       await expect
         .poll(() =>
