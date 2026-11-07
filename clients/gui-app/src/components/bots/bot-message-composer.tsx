@@ -330,6 +330,9 @@ export function BotMessageComposer(props: {
   // that message again, and a new message's text is the box's draft.
   const putBack = (unsent: BotUnsentMessage): void => {
     if (unsent.supersedes !== null) {
+      // The owner may immediately retire this edit if its request resumed
+      // while the failed send was offered back. Restore the draft either way.
+      loadBox(unsent.content);
       onEditResume({
         requestId: unsent.supersedes,
         text: unsent.wire,
@@ -730,7 +733,9 @@ function useBotBoxDocument(
     setLoadedEdit(edit);
     if (edit !== null) {
       const next = edit.content ?? contentOf(edit.text);
-      setEditContent(next);
+      // A refused replacement is unsent work, even before another keystroke.
+      // Only a fresh row load can be an untouched duplicate of the request.
+      setEditContent(edit.content === null ? next : null);
       setContent(next);
       setLoaded(next);
     } else {

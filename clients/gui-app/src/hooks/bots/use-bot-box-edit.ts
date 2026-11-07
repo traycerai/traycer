@@ -1,14 +1,13 @@
 import { useCallback, useState } from "react";
 import type { BotComposerEdit } from "@/components/bots/bot-message-composer";
 import {
-  failedOn,
   type BotActivity,
   type BotSessionActivity,
 } from "@/hooks/bots/use-bot-activity";
 
 type HeldEdit = {
   readonly edit: BotComposerEdit;
-  // null names the trunk; undefined means no failed session was observed.
+  // null names the trunk; undefined means no matching session was observed.
   readonly threadId: string | null | undefined;
 };
 
@@ -32,11 +31,13 @@ export function useBotBoxEdit(
         setHeld(null);
         return;
       }
+      // A failed send can be restored after the request has already resumed.
+      // Capture that replying session too; the render below retires the edit.
       const threadId =
-        failedOn(activity?.trunk ?? null, edit.requestId) !== null
+        activity?.trunk?.requestId === edit.requestId
           ? null
           : Object.entries(activity?.threads ?? {}).find(
-              ([, session]) => failedOn(session, edit.requestId) !== null,
+              ([, session]) => session.requestId === edit.requestId,
             )?.[0];
       setHeld({ edit, threadId });
     },

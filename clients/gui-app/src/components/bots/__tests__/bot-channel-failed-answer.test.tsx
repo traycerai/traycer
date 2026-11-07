@@ -1165,6 +1165,87 @@ describe("<BotChannelView tiles={null} /> Edit on a post the bot failed to answe
     expect(textOf(channelBox())).toBe("");
   });
 
+  it("preserves a modified replacement restored after a refused send when the request resumes", async () => {
+    const user = userEvent.setup();
+    activityStore.setState({ activity: trunkFailedOn(POST_REQUEST) });
+    mountChannel(null, memberPost(VIEWER_USER_ID));
+    await user.click(screen.getByTestId("bot-message-edit"));
+    const box = channelBox();
+    typeInto(box, " Check nightly too.");
+    refuseSends = true;
+    await user.click(screen.getByTestId("bot-channel-composer-send"));
+    await screen.findByTestId("bot-channel-composer-send-failed");
+    expect(screen.getByTestId("bot-channel-composer-editing")).toBeTruthy();
+    expect(textOf(box)).toBe(`${POST_TEXT} Check nightly too.`);
+
+    act(() => {
+      activityStore.setState({
+        activity: {
+          trunk: {
+            state: "replying",
+            startedAt: 3_000,
+            step: null,
+            requestId: POST_REQUEST,
+            reason: null,
+          },
+          threads: {},
+        },
+      });
+    });
+    expect(screen.queryByTestId("bot-channel-composer-editing")).toBeNull();
+    expect(textOf(box)).toBe(`${POST_TEXT} Check nightly too.`);
+    refuseSends = false;
+    await user.click(screen.getByTestId("bot-channel-composer-send"));
+    expect(sent.at(-1)).toMatchObject({
+      text: `${POST_TEXT} Check nightly too.`,
+      supersedes: null,
+    });
+  });
+
+  it("restores a rejected replacement as an ordinary draft after the request resumes", async () => {
+    const user = userEvent.setup();
+    activityStore.setState({ activity: trunkFailedOn(POST_REQUEST) });
+    mountChannel(null, memberPost(VIEWER_USER_ID));
+    await user.click(screen.getByTestId("bot-message-edit"));
+    const box = channelBox();
+    typeInto(box, " Check nightly too.");
+    const hold = Promise.withResolvers<void>();
+    heldSends = hold.promise;
+    await user.click(screen.getByTestId("bot-channel-composer-send"));
+    typeInto(box, "A newer draft.");
+    await act(async () => {
+      hold.reject(new Error("host refused replacement"));
+      await hold.promise.catch(() => undefined);
+    });
+    await screen.findByTestId("bot-channel-composer-send-failed-restore");
+    expect(textOf(box)).toBe("A newer draft.");
+    act(() =>
+      activityStore.setState({
+        activity: {
+          trunk: {
+            state: "replying",
+            startedAt: 3_000,
+            step: null,
+            requestId: POST_REQUEST,
+            reason: null,
+          },
+          threads: {},
+        },
+      }),
+    );
+    await user.click(
+      screen.getByTestId("bot-channel-composer-send-failed-restore"),
+    );
+    expect(screen.queryByTestId("bot-channel-composer-editing")).toBeNull();
+    expect(textOf(box)).toBe(`${POST_TEXT} Check nightly too.`);
+    heldSends = null;
+    await user.click(screen.getByTestId("bot-channel-composer-send"));
+    expect(sent.at(-1)).toMatchObject({
+      text: `${POST_TEXT} Check nightly too.`,
+      supersedes: null,
+    });
+  });
+
   it("keeps the draft of an edit opened while an earlier edit's send was in flight", async () => {
     const user = userEvent.setup();
     const hold = Promise.withResolvers<void>();
