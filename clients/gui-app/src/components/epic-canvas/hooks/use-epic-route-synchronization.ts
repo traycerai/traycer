@@ -161,6 +161,19 @@ export function useEpicRouteSynchronization(
   const activeArtifactId = useActiveEpicArtifactId(tabId);
   const canvas = useEpicCanvas(tabId);
   const hasRestoredCanvas = canvas.root !== null;
+  // Whether the canvas shows anything. A canvas whose only pane is the empty
+  // opener is NOT a layout to preserve: `EmptyEpicRoot` seeds that pane the
+  // moment the snapshot lands with no records, and on a task opened for the
+  // first time on this machine the chat records arrive later, from the
+  // polled record list. Gating auto-open on `root !== null` latched on that
+  // seeded pane and left the task on the opener with its chats one click
+  // away in the sidebar; a canvas with no tiles opens the auto-open target
+  // exactly as a canvas with no root does.
+  const canvasHoldsTiles = useMemo(
+    () =>
+      collectPanes(canvas.root).some((pane) => pane.tabInstanceIds.length > 0),
+    [canvas.root],
+  );
   const nestedRouteTarget = useMemo(
     () =>
       parseNestedFocusTargetFromSearch({
@@ -410,7 +423,7 @@ export function useEpicRouteSynchronization(
 
     const key = `${epicId}|${focusArtifactId ?? ""}|${focusedAt ?? ""}`;
     const hasExplicitFocus = focusArtifactId !== undefined;
-    if (!hasExplicitFocus && hasRestoredCanvas) {
+    if (!hasExplicitFocus && canvasHoldsTiles) {
       lastAutoOpenKey.current = key;
       return;
     }
@@ -488,7 +501,7 @@ export function useEpicRouteSynchronization(
     focusArtifactId,
     focusedAt,
     persistedFocus,
-    hasRestoredCanvas,
+    canvasHoldsTiles,
     navigate,
     router,
     activeArtifactId,
