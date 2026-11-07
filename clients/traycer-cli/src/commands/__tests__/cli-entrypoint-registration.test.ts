@@ -722,12 +722,10 @@ describe("traycer CLI entrypoint registration", () => {
     expect(flags).toContain("--no-service-register");
   });
 
-  it("host join takes one required <token> argument", () => {
+  it("host join takes no token argument", () => {
     const program = buildProgram();
     const cmd = expectCommand(program, ["host", "join"]);
-    expect(cmd.registeredArguments.map((a) => [a.name(), a.required])).toEqual([
-      ["token", true],
-    ]);
+    expect(cmd.registeredArguments).toEqual([]);
   });
 
   it("service lifecycle commands live under host service", () => {
