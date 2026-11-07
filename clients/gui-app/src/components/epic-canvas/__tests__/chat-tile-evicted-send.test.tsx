@@ -44,7 +44,10 @@ import {
 import { ChatTile } from "@/components/epic-canvas/renderers/chat-tile";
 import { TabHostProvider } from "@/components/epic-canvas/tab-host-provider";
 import { TooltipProvider } from "@/components/ui/tooltip";
-import { installLegendListViewportMetrics } from "@/components/chat/__tests__/legend-list-test-environment";
+import {
+  installLegendListTestClock,
+  installLegendListViewportMetrics,
+} from "@/components/chat/__tests__/legend-list-test-environment";
 import { composerDraftIsEmpty } from "@/hooks/chats/use-initial-chat-handoff-driver";
 import { setHostHeldImageHashes } from "@/lib/composer/host-held-image-hashes";
 import { createHostQueryInvalidator } from "@/lib/host/query-invalidator";
@@ -558,12 +561,18 @@ function rowsWithText(text: string): HTMLElement[] {
   return screen.queryAllByText(text);
 }
 
+function textInContent(content: JsonContent): string {
+  if (content.type === "text") return content.text ?? "";
+  return content.content?.map(textInContent).join("") ?? "";
+}
+
 beforeAll(() => {
   settleProcessHostRpcTierPlan(poolEntry);
 });
 
 beforeEach(() => {
   installLegendListViewportMetrics();
+  installLegendListTestClock();
   window.localStorage.clear();
   useAuthStore.setState({
     status: "signed-in",
@@ -639,7 +648,7 @@ describe("a message sent to a chat the pool serves because its host dropped the 
     });
     expect(sendFramesOf(streams[0])).toEqual([]);
     const frame = sendFramesOf(streams[1])[0];
-    expect(JSON.stringify(frame.content)).toContain(FIRST_TEXT);
+    expect(textInContent(frame.content)).toBe(FIRST_TEXT);
     expect(JSON.stringify(frame.content)).toContain(HASH);
 
     // 4. The parked row was swapped for the store's own.
@@ -685,9 +694,7 @@ describe("a message sent to a chat the pool serves because its host dropped the 
       expect(sendFramesOf(streams[1])).toHaveLength(2);
     });
     const texts = sendFramesOf(streams[1]).map((frame) =>
-      JSON.stringify(frame.content).includes(FIRST_TEXT)
-        ? FIRST_TEXT
-        : SECOND_TEXT,
+      textInContent(frame.content),
     );
     expect(texts).toEqual([FIRST_TEXT, SECOND_TEXT]);
     expect(sendFramesOf(streams[0])).toEqual([]);
