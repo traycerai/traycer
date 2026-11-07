@@ -21,7 +21,7 @@ export const AGENT_MEMORIES = defineSettingsSection("agent-memories", {
   // Its rendered sentence changes with the switch and with the scope it was
   // read at, so that sentence is a `status` and this static copy is what
   // search reads.
-  useTraycerMemories: {
+  traycerMemories: {
     kind: "row",
     group: "memories",
     search: { contributesTo: "page" },

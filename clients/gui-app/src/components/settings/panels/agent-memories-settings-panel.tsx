@@ -1,7 +1,8 @@
-import { useEffect, useRef, useState, type ReactNode } from "react";
+import { useEffect, useId, useRef, useState, type ReactNode } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
 import type { ConfigAgentMemoriesResponse } from "@traycer/protocol/host/config/schemas";
+import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
 import { Switch } from "@/components/ui/switch";
 import {
   agentMemoryWriteProgress,
@@ -14,9 +15,11 @@ import { SettingsRow } from "@/components/settings/settings-row";
 import { useAddressableHostId } from "@/hooks/host/use-addressable-host-id";
 import { useHostMethodSupport } from "@/hooks/host/use-host-supports-method";
 import {
+  hostClientUnavailableError,
   useHostQuery,
   useHostQueryEntryHash,
 } from "@/hooks/host/use-host-query";
+import { readHostReadiness } from "@/hooks/host/use-reactive-host-readiness";
 import { useHostScopedMutationForClient } from "@/hooks/host/use-host-scoped-mutation";
 import { trackSettingChanged } from "@/lib/analytics";
 import { configMutationKeys } from "@/lib/query-keys";
@@ -36,6 +39,12 @@ import { usePickedTeamLabel } from "@/components/settings/environment/team-pick-
 
 const AGENT_MEMORIES_GET = "config.agentMemories.get";
 const AGENT_MEMORIES_SET = "config.agentMemories.set";
+
+/** A cancelled query has no confirmation evidence and must follow the retry path. */
+function confirmationData<T>(data: T | undefined, method: string): T {
+  if (data === undefined) throw hostClientUnavailableError(method);
+  return data;
+}
 
 /**
  * Settings ▸ Agent memories: whether the configuration's agents are shown its
@@ -101,7 +110,7 @@ function HostAgentMemoriesRow(props: {
   if (props.supported === true) return <AgentMemoriesRow />;
   return (
     <SettingsRow
-      row={AGENT_MEMORIES.definitions.useTraycerMemories}
+      row={AGENT_MEMORIES.definitions.traycerMemories}
       status={
         props.supported === false
           ? "Update this host to change this setting."
@@ -118,7 +127,7 @@ function HostAgentMemoriesRow(props: {
   );
 }
 
-const SETTING_STATUS = `${AGENT_MEMORIES.definitions.useTraycerMemories.description} Running agents pick this up on their next turn.`;
+const SETTING_STATUS = `${AGENT_MEMORIES.definitions.traycerMemories.description} Running agents pick this up on their next turn.`;
 
 /**
  * How long the row keeps re-reading for a write it has not been able to place.
@@ -207,7 +216,62 @@ function AgentMemoriesRow(): ReactNode {
     readonly read: ConfigAgentMemoriesResponse | undefined;
     readonly progress: AgentMemoryWriteProgress;
   } | null>(null);
-  const observer = useRef<{ stop: () => void } | null>(null);
+  const observer = useRef<{
+    readonly client: HostClient<HostRpcRegistry>;
+    readonly live: () => boolean;
+    readonly stop: () => void;
+  } | null>(null);
+  // Confirmation snapshots are isolated from the canonical getter until the
+  // receipt and revision floor establish that this write has been applied.
+  const confirmationId = useId();
+  const confirmationIdentity = ["agent-memory-confirmation", confirmationId];
+  function preflightConfirmation(method: string): void {
+    const current = observer.current;
+    if (
+      current?.client !== client ||
+      !current.live() ||
+      !readHostReadiness(client).canExecute
+    )
+      throw hostClientUnavailableError(method);
+  }
+  const confirmationRead = useHostQuery<
+    HostRpcRegistry,
+    "config.agentMemories.get"
+  >({
+    cacheKeyIdentity: confirmationIdentity,
+    client,
+    method: AGENT_MEMORIES_GET,
+    params: {},
+    options: { enabled: false, poll: false, gcTime: 0, retry: false },
+    preflight: () => preflightConfirmation(AGENT_MEMORIES_GET),
+  });
+  const confirmationStatus = useHostQuery<
+    HostRpcRegistry,
+    "environment.status"
+  >({
+    cacheKeyIdentity: confirmationIdentity,
+    client,
+    method: "environment.status",
+    params: {},
+    options: { enabled: false, poll: false, gcTime: 0 },
+    preflight: () => preflightConfirmation("environment.status"),
+    requiredHostMethodVersion: () => ({
+      method: "environment.status",
+      version: { major: 1, minor: 1 },
+    }),
+  });
+  const confirmationReadHash = useHostQueryEntryHash({
+    cacheKeyIdentity: confirmationIdentity,
+    client,
+    method: AGENT_MEMORIES_GET,
+    params: {},
+  });
+  const confirmationStatusHash = useHostQueryEntryHash({
+    cacheKeyIdentity: confirmationIdentity,
+    client,
+    method: "environment.status",
+    params: {},
+  });
   useEffect(
     () => () => {
       observer.current?.stop();
@@ -241,12 +305,21 @@ function AgentMemoriesRow(): ReactNode {
         predicate: (cached: { queryHash: string }) =>
           cached.queryHash === entryHash,
       };
-      // A real query that completed after submission owns the canonical value.
-      // Do not replace a later writer or a newly served environment with this
-      // write's terminal evidence.
+      const canonicalRead = queryClient
+        .getQueriesData<ConfigAgentMemoriesResponse>(capturedEntry)
+        .at(0)?.[1];
+      // A changed query owns its environment and equal/newer revision. A
+      // confirmed newer revision of that same environment can still advance it.
       if (
-        queryClient.getQueryCache().findAll(capturedEntry).at(0)?.state.data !==
-        queryRead
+        canonicalRead !== queryRead &&
+        !(
+          latestRead?.environmentId !== null &&
+          latestRead?.environmentId !== undefined &&
+          canonicalRead?.environmentId === latestRead.environmentId &&
+          canonicalRead.revision !== null &&
+          latestRead.revision !== null &&
+          canonicalRead.revision < latestRead.revision
+        )
       )
         return;
       // Fence a GET started before confirmation: cancellation happens
@@ -261,6 +334,11 @@ function AgentMemoriesRow(): ReactNode {
     }
     function stop(): void {
       controller.abort();
+      void queryClient.cancelQueries({
+        predicate: (entry) =>
+          entry.queryHash === confirmationReadHash ||
+          entry.queryHash === confirmationStatusHash,
+      });
       if (timer !== null) window.clearTimeout(timer);
       if (deadline !== null) window.clearTimeout(deadline);
       if (!publishedConfirmation) {
@@ -278,7 +356,7 @@ function AgentMemoriesRow(): ReactNode {
         });
       }
     }
-    const current = { stop };
+    const current = { client, live, stop };
     observer.current = current;
     function live(): boolean {
       return (
@@ -352,10 +430,9 @@ function AgentMemoriesRow(): ReactNode {
           async function tick(): Promise<void> {
             if (!live()) return;
             try {
-              latestRead = await client.requestWithSignal(
+              latestRead = confirmationData(
+                (await confirmationRead.refetch({ throwOnError: true })).data,
                 AGENT_MEMORIES_GET,
-                {},
-                controller.signal,
               );
               if (!live()) return;
               if (
@@ -367,23 +444,17 @@ function AgentMemoriesRow(): ReactNode {
               }
               let queue;
               if (answer.state === "queued") {
-                queue =
-                  await client.requestWithSignalRequiringHostMethodVersion(
-                    "environment.status",
-                    {},
-                    controller.signal,
-                    {
-                      method: "environment.status",
-                      version: { major: 1, minor: 1 },
-                    },
-                  );
+                queue = confirmationData(
+                  (await confirmationStatus.refetch({ throwOnError: true }))
+                    .data,
+                  "environment.status",
+                );
                 if (!live()) return;
                 // The host can rebind during the status request. Read the binding
                 // again before accepting its receipt against the previous snapshot.
-                latestRead = await client.requestWithSignal(
+                latestRead = confirmationData(
+                  (await confirmationRead.refetch({ throwOnError: true })).data,
                   AGENT_MEMORIES_GET,
-                  {},
-                  controller.signal,
                 );
                 if (!live()) return;
                 if (
@@ -437,21 +508,30 @@ function AgentMemoriesRow(): ReactNode {
 
   return (
     <SettingsRow
-      row={AGENT_MEMORIES.definitions.useTraycerMemories}
+      row={AGENT_MEMORIES.definitions.traycerMemories}
       status={hostRowStatus({
         readFailed: query.isError,
         progress: shown?.progress ?? { kind: "settled" },
       })}
       control={
-        <Switch
-          checked={read?.enabled === true}
-          disabled={query.isPending || query.isError || setEnabled.isPending}
-          aria-label="Use Traycer memories for agents"
-          onCheckedChange={(next) => {
-            trackSettingChanged("agent-memories", "useTraycerMemories");
-            submit(next);
-          }}
-        />
+        <div className="flex items-center gap-2">
+          <Switch
+            checked={read?.enabled === true}
+            disabled={query.isPending || query.isError || setEnabled.isPending}
+            aria-label="Use Traycer memories for agents"
+            onCheckedChange={(next) => {
+              trackSettingChanged("agent-memories", "useTraycerMemories");
+              submit(next);
+            }}
+          />
+          {setEnabled.isPending ? (
+            <AgentSpinningDots
+              className={undefined}
+              testId={undefined}
+              variant={undefined}
+            />
+          ) : null}
+        </div>
       }
     />
   );
@@ -476,22 +556,31 @@ function TeamAgentMemoriesRow(): ReactNode {
   else if (query.data !== undefined) {
     const data = query.data;
     control = canEdit ? (
-      <Switch
-        checked={data.enabled}
-        disabled={put.isPending}
-        aria-label="Use Traycer memories for agents"
-        onCheckedChange={(enabled) => {
-          if (source.kind !== "pool") return;
-          put.mutate({
-            environmentId: source.environmentId,
-            kind: "agent_memory",
-            key: "memory",
-            os: null,
-            value: { enabled },
-            revision: data.revision,
-          });
-        }}
-      />
+      <div className="flex items-center gap-2">
+        <Switch
+          checked={data.enabled}
+          disabled={put.isPending}
+          aria-label="Use Traycer memories for agents"
+          onCheckedChange={(enabled) => {
+            if (source.kind !== "pool") return;
+            put.mutate({
+              environmentId: source.environmentId,
+              kind: "agent_memory",
+              key: "memory",
+              os: null,
+              value: { enabled },
+              revision: data.revision,
+            });
+          }}
+        />
+        {put.isPending ? (
+          <AgentSpinningDots
+            className={undefined}
+            testId={undefined}
+            variant={undefined}
+          />
+        ) : null}
+      </div>
     ) : (
       <span className="text-ui-sm text-muted-foreground">
         {data.enabled ? "On" : "Off"}
@@ -502,7 +591,7 @@ function TeamAgentMemoriesRow(): ReactNode {
   return (
     <div className="flex flex-col gap-2">
       <SettingsRow
-        row={AGENT_MEMORIES.definitions.useTraycerMemories}
+        row={AGENT_MEMORIES.definitions.traycerMemories}
         status={
           read.failed ? (
             <ConfigurationReadFailed

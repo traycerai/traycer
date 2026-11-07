@@ -521,6 +521,88 @@ describe("Agent memories ▸ the host row's write", () => {
     },
   );
 
+  it("publishes confirmed evidence newer than an intervening canonical read", async () => {
+    let release: (value: ConfigAgentMemoriesSetResponse) => void = () => {
+      throw new Error("setter was not started");
+    };
+    script.set = () =>
+      new Promise((resolve) => {
+        release = resolve;
+      });
+    const harness = mountTeamPage({ kind: "host" }, handlers());
+    harness.queryClient.setDefaultOptions({
+      queries: { retry: false, staleTime: 60_000, gcTime: 300_000 },
+      mutations: { retry: false },
+    });
+    const view = render(<AgentMemoriesSettingsPanel />, {
+      wrapper: harness.Wrapper,
+    });
+    await flipOn();
+    await waitFor(() =>
+      expect(harness.paramsOf("config.agentMemories.set")).toHaveLength(1),
+    );
+    script.reads = [read(false, 6)];
+    await act(async () => {
+      await harness.queryClient.refetchQueries({ type: "active" });
+    });
+    act(() => {
+      release({
+        enabled: true,
+        state: "applied",
+        revision: 7,
+        environmentId: ENV,
+        uploadId: null,
+      });
+    });
+    await waitFor(() =>
+      expect(
+        screen
+          .getByRole("switch", { name: "Use Traycer memories for agents" })
+          .getAttribute("aria-checked"),
+      ).toBe("true"),
+    );
+    view.rerender(null);
+    view.rerender(<AgentMemoriesSettingsPanel />);
+    await waitFor(() =>
+      expect(
+        screen
+          .getByRole("switch", { name: "Use Traycer memories for agents" })
+          .getAttribute("aria-checked"),
+      ).toBe("true"),
+    );
+  });
+
+  it("withholds confirmation dispatch while requester authority is unavailable", async () => {
+    const harness = mountTeamPage({ kind: "host" }, handlers());
+    render(<AgentMemoriesSettingsPanel />, { wrapper: harness.Wrapper });
+    await flipOn();
+    await waitFor(async () =>
+      expect(await line()).toContain("This host hasn't picked it up yet"),
+    );
+    await waitFor(() =>
+      expect(harness.paramsOf("config.agentMemories.get")).toHaveLength(2),
+    );
+    const authority = vi
+      .spyOn(requireTeamHostClient(), "getRequestContextUserId")
+      .mockReturnValue(null);
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(5_000);
+    });
+    expect(harness.paramsOf("config.agentMemories.get")).toHaveLength(2);
+    authority.mockRestore();
+    script.reads = [read(true, 6)];
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(5_000);
+    });
+    await waitFor(() =>
+      expect(
+        screen
+          .getByRole("switch", { name: "Use Traycer memories for agents" })
+          .getAttribute("aria-checked"),
+      ).toBe("true"),
+    );
+  });
+
   it("keeps an applied write when an older GET arrives afterward", async () => {
     let release: (value: ConfigAgentMemoriesResponse) => void = () => {
       throw new Error("getter was not started");
