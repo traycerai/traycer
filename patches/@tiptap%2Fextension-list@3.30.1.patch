@@ -1,5 +1,5 @@
 diff --git a/dist/index.cjs b/dist/index.cjs
-index 4c729511471466d470d01dae4ae2ab7393eb6e2d..0b44a05c4b00673872ef1d04c1a1cd20ff03309d 100644
+index 4c729511471466d470d01dae4ae2ab7393eb6e2d..8f49b498d6393308cadd5e274f403caa6e2a91c4 100644
 --- a/dist/index.cjs
 +++ b/dist/index.cjs
 @@ -430,6 +430,9 @@ function isSameLineOrderedListToken(token) {
@@ -332,7 +332,52 @@ index 4c729511471466d470d01dae4ae2ab7393eb6e2d..0b44a05c4b00673872ef1d04c1a1cd20
    switch (cssValue) {
      case "upper-roman":
        return "I";
-@@ -1251,10 +1154,12 @@ var OrderedList = import_core11.Node.create({
+@@ -1133,6 +1036,38 @@ function cssListStyleTypeToHtmlType(style) {
+       return null;
+   }
+ }
++// Fewer than `max` lines means `source` ended.
++function takeOrderedListLines(source, max) {
++  const lines = [];
++  let start = 0;
++  while (lines.length < max) {
++    const lineEnd = source.indexOf("\n", start);
++    if (lineEnd === -1) {
++      lines.push(source.slice(start));
++      return lines;
++    }
++    lines.push(source.slice(start, lineEnd));
++    start = lineEnd + 1;
++  }
++  return lines;
++}
++var ORDERED_LIST_SCAN_WINDOW = 64;
++function collectOrderedListItemsFromSource(source) {
++  const firstLineEnd = source.indexOf("\n");
++  const firstLine = firstLineEnd === -1 ? source : source.slice(0, firstLineEnd);
++  if (!ORDERED_LIST_ITEM_REGEX.test(firstLine)) {
++    return [[], 0, []];
++  }
++  let windowSize = ORDERED_LIST_SCAN_WINDOW;
++  let lines = takeOrderedListLines(source, windowSize);
++  let collected = collectOrderedListItems(lines);
++  while (collected[1] === lines.length && lines.length === windowSize) {
++    windowSize *= 2;
++    lines = takeOrderedListLines(source, windowSize);
++    collected = collectOrderedListItems(lines);
++  }
++  return [collected[0], collected[1], lines];
++}
+ var OrderedList = import_core11.Node.create({
+   name: "orderedList",
+   addOptions() {
+@@ -1246,15 +1181,16 @@ var OrderedList = import_core11.Node.create({
+     start: () => -1,
+     tokenize: (src, _tokens, lexer) => {
+       var _a, _b;
+-      const lines = src.split("\n");
+-      const [listItems, consumed] = collectOrderedListItems(lines);
++      const [listItems, consumed, lines] = collectOrderedListItemsFromSource(src);
        if (listItems.length === 0) {
          return void 0;
        }
@@ -349,7 +394,7 @@ index 4c729511471466d470d01dae4ae2ab7393eb6e2d..0b44a05c4b00673872ef1d04c1a1cd20
        const startValue = ((_a = listItems[0]) == null ? void 0 : _a.number) || 1;
        const typeMarker = (_b = listItems[0]) == null ? void 0 : _b.type;
        return {
-@@ -1263,7 +1168,7 @@ var OrderedList = import_core11.Node.create({
+@@ -1263,7 +1199,7 @@ var OrderedList = import_core11.Node.create({
          start: startValue,
          typeMarker,
          items,
@@ -358,7 +403,7 @@ index 4c729511471466d470d01dae4ae2ab7393eb6e2d..0b44a05c4b00673872ef1d04c1a1cd20
        };
      }
    },
-@@ -1292,7 +1197,7 @@ var OrderedList = import_core11.Node.create({
+@@ -1292,7 +1228,7 @@ var OrderedList = import_core11.Node.create({
            handlePaste: (view, event) => {
              var _a, _b;
              const html = (_a = event.clipboardData) == null ? void 0 : _a.getData("text/html");
@@ -367,7 +412,7 @@ index 4c729511471466d470d01dae4ae2ab7393eb6e2d..0b44a05c4b00673872ef1d04c1a1cd20
                return false;
              }
              const text = (_b = event.clipboardData) == null ? void 0 : _b.getData("text/plain");
-@@ -1601,57 +1506,18 @@ var TaskList = import_core13.Node.create({
+@@ -1601,57 +1537,18 @@ var TaskList = import_core13.Node.create({
      level: "block",
      start(src) {
        var _a;
@@ -429,7 +474,7 @@ index 4c729511471466d470d01dae4ae2ab7393eb6e2d..0b44a05c4b00673872ef1d04c1a1cd20
            }),
            createToken: (data, nestedTokens) => ({
              type: "taskItem",
-@@ -1663,17 +1529,37 @@ var TaskList = import_core13.Node.create({
+@@ -1663,17 +1560,37 @@ var TaskList = import_core13.Node.create({
              tokens: lexer.inlineTokens(data.mainContent),
              nestedTokens
            }),
@@ -471,7 +516,7 @@ index 4c729511471466d470d01dae4ae2ab7393eb6e2d..0b44a05c4b00673872ef1d04c1a1cd20
        };
      }
 diff --git a/dist/index.js b/dist/index.js
-index ef3bc656fac8359ebc0ba0bf0a4f36aa9f4ca413..656654cc9d3b09c554814a4013ea72bdbe3f362f 100644
+index ef3bc656fac8359ebc0ba0bf0a4f36aa9f4ca413..5e960f0c40ffecbece9b42e6ad1f12c1022dbc2d 100644
 --- a/dist/index.js
 +++ b/dist/index.js
 @@ -390,6 +390,9 @@ function isSameLineOrderedListToken(token) {
@@ -804,7 +849,52 @@ index ef3bc656fac8359ebc0ba0bf0a4f36aa9f4ca413..656654cc9d3b09c554814a4013ea72bd
    switch (cssValue) {
      case "upper-roman":
        return "I";
-@@ -1211,10 +1114,12 @@ var OrderedList = Node3.create({
+@@ -1093,6 +996,38 @@ function cssListStyleTypeToHtmlType(style) {
+       return null;
+   }
+ }
++// Fewer than `max` lines means `source` ended.
++function takeOrderedListLines(source, max) {
++  const lines = [];
++  let start = 0;
++  while (lines.length < max) {
++    const lineEnd = source.indexOf("\n", start);
++    if (lineEnd === -1) {
++      lines.push(source.slice(start));
++      return lines;
++    }
++    lines.push(source.slice(start, lineEnd));
++    start = lineEnd + 1;
++  }
++  return lines;
++}
++var ORDERED_LIST_SCAN_WINDOW = 64;
++function collectOrderedListItemsFromSource(source) {
++  const firstLineEnd = source.indexOf("\n");
++  const firstLine = firstLineEnd === -1 ? source : source.slice(0, firstLineEnd);
++  if (!ORDERED_LIST_ITEM_REGEX.test(firstLine)) {
++    return [[], 0, []];
++  }
++  let windowSize = ORDERED_LIST_SCAN_WINDOW;
++  let lines = takeOrderedListLines(source, windowSize);
++  let collected = collectOrderedListItems(lines);
++  while (collected[1] === lines.length && lines.length === windowSize) {
++    windowSize *= 2;
++    lines = takeOrderedListLines(source, windowSize);
++    collected = collectOrderedListItems(lines);
++  }
++  return [collected[0], collected[1], lines];
++}
+ var OrderedList = Node3.create({
+   name: "orderedList",
+   addOptions() {
+@@ -1206,15 +1141,16 @@ var OrderedList = Node3.create({
+     start: () => -1,
+     tokenize: (src, _tokens, lexer) => {
+       var _a, _b;
+-      const lines = src.split("\n");
+-      const [listItems, consumed] = collectOrderedListItems(lines);
++      const [listItems, consumed, lines] = collectOrderedListItemsFromSource(src);
        if (listItems.length === 0) {
          return void 0;
        }
@@ -821,7 +911,7 @@ index ef3bc656fac8359ebc0ba0bf0a4f36aa9f4ca413..656654cc9d3b09c554814a4013ea72bd
        const startValue = ((_a = listItems[0]) == null ? void 0 : _a.number) || 1;
        const typeMarker = (_b = listItems[0]) == null ? void 0 : _b.type;
        return {
-@@ -1223,7 +1128,7 @@ var OrderedList = Node3.create({
+@@ -1223,7 +1159,7 @@ var OrderedList = Node3.create({
          start: startValue,
          typeMarker,
          items,
@@ -830,7 +920,7 @@ index ef3bc656fac8359ebc0ba0bf0a4f36aa9f4ca413..656654cc9d3b09c554814a4013ea72bd
        };
      }
    },
-@@ -1252,7 +1157,7 @@ var OrderedList = Node3.create({
+@@ -1252,7 +1188,7 @@ var OrderedList = Node3.create({
            handlePaste: (view, event) => {
              var _a, _b;
              const html = (_a = event.clipboardData) == null ? void 0 : _a.getData("text/html");
@@ -839,7 +929,7 @@ index ef3bc656fac8359ebc0ba0bf0a4f36aa9f4ca413..656654cc9d3b09c554814a4013ea72bd
                return false;
              }
              const text = (_b = event.clipboardData) == null ? void 0 : _b.getData("text/plain");
-@@ -1567,57 +1472,18 @@ var TaskList = Node5.create({
+@@ -1567,57 +1503,18 @@ var TaskList = Node5.create({
      level: "block",
      start(src) {
        var _a;
@@ -901,7 +991,7 @@ index ef3bc656fac8359ebc0ba0bf0a4f36aa9f4ca413..656654cc9d3b09c554814a4013ea72bd
            }),
            createToken: (data, nestedTokens) => ({
              type: "taskItem",
-@@ -1629,17 +1495,37 @@ var TaskList = Node5.create({
+@@ -1629,17 +1526,37 @@ var TaskList = Node5.create({
              tokens: lexer.inlineTokens(data.mainContent),
              nestedTokens
            }),
@@ -1061,7 +1151,7 @@ index d5416b99b4bc59f801ea3ce6496fbc3793ca0a3f..59376f0588121596903ab1a5d8b2e2e4
      }
      return {
 diff --git a/dist/kit/index.cjs b/dist/kit/index.cjs
-index 1b3f64617adf858090a503bca2cbb567b7fb5e7a..0c5b60821a075761014e957db522e8fdefa14f25 100644
+index 1b3f64617adf858090a503bca2cbb567b7fb5e7a..0cf990bf353d090a30f2b0f09686f6dd726edd07 100644
 --- a/dist/kit/index.cjs
 +++ b/dist/kit/index.cjs
 @@ -411,6 +411,9 @@ function isSameLineOrderedListToken(token) {
@@ -1394,7 +1484,52 @@ index 1b3f64617adf858090a503bca2cbb567b7fb5e7a..0c5b60821a075761014e957db522e8fd
    switch (cssValue) {
      case "upper-roman":
        return "I";
-@@ -1229,10 +1132,12 @@ var OrderedList = import_core11.Node.create({
+@@ -1111,6 +1014,38 @@ function cssListStyleTypeToHtmlType(style) {
+       return null;
+   }
+ }
++// Fewer than `max` lines means `source` ended.
++function takeOrderedListLines(source, max) {
++  const lines = [];
++  let start = 0;
++  while (lines.length < max) {
++    const lineEnd = source.indexOf("\n", start);
++    if (lineEnd === -1) {
++      lines.push(source.slice(start));
++      return lines;
++    }
++    lines.push(source.slice(start, lineEnd));
++    start = lineEnd + 1;
++  }
++  return lines;
++}
++var ORDERED_LIST_SCAN_WINDOW = 64;
++function collectOrderedListItemsFromSource(source) {
++  const firstLineEnd = source.indexOf("\n");
++  const firstLine = firstLineEnd === -1 ? source : source.slice(0, firstLineEnd);
++  if (!ORDERED_LIST_ITEM_REGEX.test(firstLine)) {
++    return [[], 0, []];
++  }
++  let windowSize = ORDERED_LIST_SCAN_WINDOW;
++  let lines = takeOrderedListLines(source, windowSize);
++  let collected = collectOrderedListItems(lines);
++  while (collected[1] === lines.length && lines.length === windowSize) {
++    windowSize *= 2;
++    lines = takeOrderedListLines(source, windowSize);
++    collected = collectOrderedListItems(lines);
++  }
++  return [collected[0], collected[1], lines];
++}
+ var OrderedList = import_core11.Node.create({
+   name: "orderedList",
+   addOptions() {
+@@ -1224,15 +1159,16 @@ var OrderedList = import_core11.Node.create({
+     start: () => -1,
+     tokenize: (src, _tokens, lexer) => {
+       var _a, _b;
+-      const lines = src.split("\n");
+-      const [listItems, consumed] = collectOrderedListItems(lines);
++      const [listItems, consumed, lines] = collectOrderedListItemsFromSource(src);
        if (listItems.length === 0) {
          return void 0;
        }
@@ -1411,7 +1546,7 @@ index 1b3f64617adf858090a503bca2cbb567b7fb5e7a..0c5b60821a075761014e957db522e8fd
        const startValue = ((_a = listItems[0]) == null ? void 0 : _a.number) || 1;
        const typeMarker = (_b = listItems[0]) == null ? void 0 : _b.type;
        return {
-@@ -1241,7 +1146,7 @@ var OrderedList = import_core11.Node.create({
+@@ -1241,7 +1177,7 @@ var OrderedList = import_core11.Node.create({
          start: startValue,
          typeMarker,
          items,
@@ -1420,7 +1555,7 @@ index 1b3f64617adf858090a503bca2cbb567b7fb5e7a..0c5b60821a075761014e957db522e8fd
        };
      }
    },
-@@ -1270,7 +1175,7 @@ var OrderedList = import_core11.Node.create({
+@@ -1270,7 +1206,7 @@ var OrderedList = import_core11.Node.create({
            handlePaste: (view, event) => {
              var _a, _b;
              const html = (_a = event.clipboardData) == null ? void 0 : _a.getData("text/html");
@@ -1429,7 +1564,7 @@ index 1b3f64617adf858090a503bca2cbb567b7fb5e7a..0c5b60821a075761014e957db522e8fd
                return false;
              }
              const text = (_b = event.clipboardData) == null ? void 0 : _b.getData("text/plain");
-@@ -1579,57 +1484,18 @@ var TaskList = import_core13.Node.create({
+@@ -1579,57 +1515,18 @@ var TaskList = import_core13.Node.create({
      level: "block",
      start(src) {
        var _a;
@@ -1491,7 +1626,7 @@ index 1b3f64617adf858090a503bca2cbb567b7fb5e7a..0c5b60821a075761014e957db522e8fd
            }),
            createToken: (data, nestedTokens) => ({
              type: "taskItem",
-@@ -1641,17 +1507,37 @@ var TaskList = import_core13.Node.create({
+@@ -1641,17 +1538,37 @@ var TaskList = import_core13.Node.create({
              tokens: lexer.inlineTokens(data.mainContent),
              nestedTokens
            }),
@@ -1533,7 +1668,7 @@ index 1b3f64617adf858090a503bca2cbb567b7fb5e7a..0c5b60821a075761014e957db522e8fd
        };
      }
 diff --git a/dist/kit/index.js b/dist/kit/index.js
-index 4a488ae7c7bdacfe3b7fac3cb5c0ace143a8d4df..f966428f48f6e0272b283962a89381fe0e3d80d2 100644
+index 4a488ae7c7bdacfe3b7fac3cb5c0ace143a8d4df..536dd41f241c7502b8ac4e041f4184db74a0ceab 100644
 --- a/dist/kit/index.js
 +++ b/dist/kit/index.js
 @@ -393,6 +393,9 @@ function isSameLineOrderedListToken(token) {
@@ -1866,7 +2001,52 @@ index 4a488ae7c7bdacfe3b7fac3cb5c0ace143a8d4df..f966428f48f6e0272b283962a89381fe
    switch (cssValue) {
      case "upper-roman":
        return "I";
-@@ -1211,10 +1114,12 @@ var OrderedList = Node3.create({
+@@ -1093,6 +996,38 @@ function cssListStyleTypeToHtmlType(style) {
+       return null;
+   }
+ }
++// Fewer than `max` lines means `source` ended.
++function takeOrderedListLines(source, max) {
++  const lines = [];
++  let start = 0;
++  while (lines.length < max) {
++    const lineEnd = source.indexOf("\n", start);
++    if (lineEnd === -1) {
++      lines.push(source.slice(start));
++      return lines;
++    }
++    lines.push(source.slice(start, lineEnd));
++    start = lineEnd + 1;
++  }
++  return lines;
++}
++var ORDERED_LIST_SCAN_WINDOW = 64;
++function collectOrderedListItemsFromSource(source) {
++  const firstLineEnd = source.indexOf("\n");
++  const firstLine = firstLineEnd === -1 ? source : source.slice(0, firstLineEnd);
++  if (!ORDERED_LIST_ITEM_REGEX.test(firstLine)) {
++    return [[], 0, []];
++  }
++  let windowSize = ORDERED_LIST_SCAN_WINDOW;
++  let lines = takeOrderedListLines(source, windowSize);
++  let collected = collectOrderedListItems(lines);
++  while (collected[1] === lines.length && lines.length === windowSize) {
++    windowSize *= 2;
++    lines = takeOrderedListLines(source, windowSize);
++    collected = collectOrderedListItems(lines);
++  }
++  return [collected[0], collected[1], lines];
++}
+ var OrderedList = Node3.create({
+   name: "orderedList",
+   addOptions() {
+@@ -1206,15 +1141,16 @@ var OrderedList = Node3.create({
+     start: () => -1,
+     tokenize: (src, _tokens, lexer) => {
+       var _a, _b;
+-      const lines = src.split("\n");
+-      const [listItems, consumed] = collectOrderedListItems(lines);
++      const [listItems, consumed, lines] = collectOrderedListItemsFromSource(src);
        if (listItems.length === 0) {
          return void 0;
        }
@@ -1883,7 +2063,7 @@ index 4a488ae7c7bdacfe3b7fac3cb5c0ace143a8d4df..f966428f48f6e0272b283962a89381fe
        const startValue = ((_a = listItems[0]) == null ? void 0 : _a.number) || 1;
        const typeMarker = (_b = listItems[0]) == null ? void 0 : _b.type;
        return {
-@@ -1223,7 +1128,7 @@ var OrderedList = Node3.create({
+@@ -1223,7 +1159,7 @@ var OrderedList = Node3.create({
          start: startValue,
          typeMarker,
          items,
@@ -1892,7 +2072,7 @@ index 4a488ae7c7bdacfe3b7fac3cb5c0ace143a8d4df..f966428f48f6e0272b283962a89381fe
        };
      }
    },
-@@ -1252,7 +1157,7 @@ var OrderedList = Node3.create({
+@@ -1252,7 +1188,7 @@ var OrderedList = Node3.create({
            handlePaste: (view, event) => {
              var _a, _b;
              const html = (_a = event.clipboardData) == null ? void 0 : _a.getData("text/html");
@@ -1901,7 +2081,7 @@ index 4a488ae7c7bdacfe3b7fac3cb5c0ace143a8d4df..f966428f48f6e0272b283962a89381fe
                return false;
              }
              const text = (_b = event.clipboardData) == null ? void 0 : _b.getData("text/plain");
-@@ -1567,57 +1472,18 @@ var TaskList = Node5.create({
+@@ -1567,57 +1503,18 @@ var TaskList = Node5.create({
      level: "block",
      start(src) {
        var _a;
@@ -1963,7 +2143,7 @@ index 4a488ae7c7bdacfe3b7fac3cb5c0ace143a8d4df..f966428f48f6e0272b283962a89381fe
            }),
            createToken: (data, nestedTokens) => ({
              type: "taskItem",
-@@ -1629,17 +1495,37 @@ var TaskList = Node5.create({
+@@ -1629,17 +1526,37 @@ var TaskList = Node5.create({
              tokens: lexer.inlineTokens(data.mainContent),
              nestedTokens
            }),
@@ -2005,7 +2185,7 @@ index 4a488ae7c7bdacfe3b7fac3cb5c0ace143a8d4df..f966428f48f6e0272b283962a89381fe
        };
      }
 diff --git a/dist/ordered-list/index.cjs b/dist/ordered-list/index.cjs
-index 07719ef761bdc543488fcf637043115f5bb032fe..cc906bf31bb9f1f07ee0129e072035859b1ae4bc 100644
+index 07719ef761bdc543488fcf637043115f5bb032fe..aa00321bdda4c1d018388aba79a6231942239513 100644
 --- a/dist/ordered-list/index.cjs
 +++ b/dist/ordered-list/index.cjs
 @@ -228,131 +228,79 @@ function getListMarker(type, index, separator = ". ") {
@@ -2151,13 +2331,13 @@ index 07719ef761bdc543488fcf637043115f5bb032fe..cc906bf31bb9f1f07ee0129e07203585
 -    consumed = nextLineIndex;
 -    currentLineIndex = nextLineIndex;
 +    currentLineIndex = item.end;
-   }
--  return [listItems, consumed];
++  }
 +  const last = listItems[listItems.length - 1];
 +  if (last !== void 0) {
 +    last.text = last.text.replace(/([^ \t\n])[ \t\n]+$|^[ \t\n]+$/, "$1");
 +    last.raw = last.raw.replace(/([^ \t\n])[ \t\n]+$|^[ \t\n]+$/, "$1");
-+  }
+   }
+-  return [listItems, consumed];
 +  return [listItems, currentLineIndex];
  }
 -var PLAIN_TEXT_ORDERED_LIST_LINE_REGEX = new RegExp(
@@ -2283,7 +2463,52 @@ index 07719ef761bdc543488fcf637043115f5bb032fe..cc906bf31bb9f1f07ee0129e07203585
    switch (cssValue) {
      case "upper-roman":
        return "I";
-@@ -599,10 +495,12 @@ var OrderedList = import_core.Node.create({
+@@ -481,6 +377,38 @@ function cssListStyleTypeToHtmlType(style) {
+       return null;
+   }
+ }
++// Fewer than `max` lines means `source` ended.
++function takeOrderedListLines(source, max) {
++  const lines = [];
++  let start = 0;
++  while (lines.length < max) {
++    const lineEnd = source.indexOf("\n", start);
++    if (lineEnd === -1) {
++      lines.push(source.slice(start));
++      return lines;
++    }
++    lines.push(source.slice(start, lineEnd));
++    start = lineEnd + 1;
++  }
++  return lines;
++}
++var ORDERED_LIST_SCAN_WINDOW = 64;
++function collectOrderedListItemsFromSource(source) {
++  const firstLineEnd = source.indexOf("\n");
++  const firstLine = firstLineEnd === -1 ? source : source.slice(0, firstLineEnd);
++  if (!ORDERED_LIST_ITEM_REGEX.test(firstLine)) {
++    return [[], 0, []];
++  }
++  let windowSize = ORDERED_LIST_SCAN_WINDOW;
++  let lines = takeOrderedListLines(source, windowSize);
++  let collected = collectOrderedListItems(lines);
++  while (collected[1] === lines.length && lines.length === windowSize) {
++    windowSize *= 2;
++    lines = takeOrderedListLines(source, windowSize);
++    collected = collectOrderedListItems(lines);
++  }
++  return [collected[0], collected[1], lines];
++}
+ var OrderedList = import_core.Node.create({
+   name: "orderedList",
+   addOptions() {
+@@ -594,15 +522,16 @@ var OrderedList = import_core.Node.create({
+     start: () => -1,
+     tokenize: (src, _tokens, lexer) => {
+       var _a, _b;
+-      const lines = src.split("\n");
+-      const [listItems, consumed] = collectOrderedListItems(lines);
++      const [listItems, consumed, lines] = collectOrderedListItemsFromSource(src);
        if (listItems.length === 0) {
          return void 0;
        }
@@ -2300,7 +2525,7 @@ index 07719ef761bdc543488fcf637043115f5bb032fe..cc906bf31bb9f1f07ee0129e07203585
        const startValue = ((_a = listItems[0]) == null ? void 0 : _a.number) || 1;
        const typeMarker = (_b = listItems[0]) == null ? void 0 : _b.type;
        return {
-@@ -611,7 +509,7 @@ var OrderedList = import_core.Node.create({
+@@ -611,7 +540,7 @@ var OrderedList = import_core.Node.create({
          start: startValue,
          typeMarker,
          items,
@@ -2309,7 +2534,7 @@ index 07719ef761bdc543488fcf637043115f5bb032fe..cc906bf31bb9f1f07ee0129e07203585
        };
      }
    },
-@@ -640,7 +538,7 @@ var OrderedList = import_core.Node.create({
+@@ -640,7 +569,7 @@ var OrderedList = import_core.Node.create({
            handlePaste: (view, event) => {
              var _a, _b;
              const html = (_a = event.clipboardData) == null ? void 0 : _a.getData("text/html");
@@ -2319,7 +2544,7 @@ index 07719ef761bdc543488fcf637043115f5bb032fe..cc906bf31bb9f1f07ee0129e07203585
              }
              const text = (_b = event.clipboardData) == null ? void 0 : _b.getData("text/plain");
 diff --git a/dist/ordered-list/index.js b/dist/ordered-list/index.js
-index ecaf30387d3b89c25955a8faa5495c8d1032dfe9..cedc89b318991ad2c633a7c1ace4ca12c4b011d6 100644
+index ecaf30387d3b89c25955a8faa5495c8d1032dfe9..f7643d932f3c1b97864e4ffb4a54f2ac1677fdd6 100644
 --- a/dist/ordered-list/index.js
 +++ b/dist/ordered-list/index.js
 @@ -191,131 +191,79 @@ function getListMarker(type, index, separator = ". ") {
@@ -2465,13 +2690,13 @@ index ecaf30387d3b89c25955a8faa5495c8d1032dfe9..cedc89b318991ad2c633a7c1ace4ca12
 -    consumed = nextLineIndex;
 -    currentLineIndex = nextLineIndex;
 +    currentLineIndex = item.end;
-   }
--  return [listItems, consumed];
++  }
 +  const last = listItems[listItems.length - 1];
 +  if (last !== void 0) {
 +    last.text = last.text.replace(/([^ \t\n])[ \t\n]+$|^[ \t\n]+$/, "$1");
 +    last.raw = last.raw.replace(/([^ \t\n])[ \t\n]+$|^[ \t\n]+$/, "$1");
-+  }
+   }
+-  return [listItems, consumed];
 +  return [listItems, currentLineIndex];
  }
 -var PLAIN_TEXT_ORDERED_LIST_LINE_REGEX = new RegExp(
@@ -2597,7 +2822,52 @@ index ecaf30387d3b89c25955a8faa5495c8d1032dfe9..cedc89b318991ad2c633a7c1ace4ca12
    switch (cssValue) {
      case "upper-roman":
        return "I";
-@@ -562,10 +458,12 @@ var OrderedList = Node.create({
+@@ -444,6 +340,38 @@ function cssListStyleTypeToHtmlType(style) {
+       return null;
+   }
+ }
++// Fewer than `max` lines means `source` ended.
++function takeOrderedListLines(source, max) {
++  const lines = [];
++  let start = 0;
++  while (lines.length < max) {
++    const lineEnd = source.indexOf("\n", start);
++    if (lineEnd === -1) {
++      lines.push(source.slice(start));
++      return lines;
++    }
++    lines.push(source.slice(start, lineEnd));
++    start = lineEnd + 1;
++  }
++  return lines;
++}
++var ORDERED_LIST_SCAN_WINDOW = 64;
++function collectOrderedListItemsFromSource(source) {
++  const firstLineEnd = source.indexOf("\n");
++  const firstLine = firstLineEnd === -1 ? source : source.slice(0, firstLineEnd);
++  if (!ORDERED_LIST_ITEM_REGEX.test(firstLine)) {
++    return [[], 0, []];
++  }
++  let windowSize = ORDERED_LIST_SCAN_WINDOW;
++  let lines = takeOrderedListLines(source, windowSize);
++  let collected = collectOrderedListItems(lines);
++  while (collected[1] === lines.length && lines.length === windowSize) {
++    windowSize *= 2;
++    lines = takeOrderedListLines(source, windowSize);
++    collected = collectOrderedListItems(lines);
++  }
++  return [collected[0], collected[1], lines];
++}
+ var OrderedList = Node.create({
+   name: "orderedList",
+   addOptions() {
+@@ -557,15 +485,16 @@ var OrderedList = Node.create({
+     start: () => -1,
+     tokenize: (src, _tokens, lexer) => {
+       var _a, _b;
+-      const lines = src.split("\n");
+-      const [listItems, consumed] = collectOrderedListItems(lines);
++      const [listItems, consumed, lines] = collectOrderedListItemsFromSource(src);
        if (listItems.length === 0) {
          return void 0;
        }
@@ -2614,7 +2884,7 @@ index ecaf30387d3b89c25955a8faa5495c8d1032dfe9..cedc89b318991ad2c633a7c1ace4ca12
        const startValue = ((_a = listItems[0]) == null ? void 0 : _a.number) || 1;
        const typeMarker = (_b = listItems[0]) == null ? void 0 : _b.type;
        return {
-@@ -574,7 +472,7 @@ var OrderedList = Node.create({
+@@ -574,7 +503,7 @@ var OrderedList = Node.create({
          start: startValue,
          typeMarker,
          items,
@@ -2623,7 +2893,7 @@ index ecaf30387d3b89c25955a8faa5495c8d1032dfe9..cedc89b318991ad2c633a7c1ace4ca12
        };
      }
    },
-@@ -603,7 +501,7 @@ var OrderedList = Node.create({
+@@ -603,7 +532,7 @@ var OrderedList = Node.create({
            handlePaste: (view, event) => {
              var _a, _b;
              const html = (_a = event.clipboardData) == null ? void 0 : _a.getData("text/html");
@@ -2926,17 +3196,19 @@ index e1227a05262b8e337a1406e7f63685d4f4f00fea..0a6fe93dc0a9ce1cd87eda41e4817ef1
      }
 
 diff --git a/src/ordered-list/ordered-list.ts b/src/ordered-list/ordered-list.ts
-index 21c9c14b66d508552b934455c1d0d20799376e06..08a42cdb95a8d193e2f8f6c980f7bbf2a6e32469 100644
+index 21c9c14b66d508552b934455c1d0d20799376e06..3d29f583efe6b1e727c508fde2d091186917f814 100644
 --- a/src/ordered-list/ordered-list.ts
 +++ b/src/ordered-list/ordered-list.ts
-@@ -4,7 +4,6 @@ import { Plugin } from '@tiptap/pm/state'
+@@ -4,8 +4,7 @@ import { Plugin } from '@tiptap/pm/state'
  import { mergeAttributes, Node, wrappingInputRule } from '@tiptap/core'
 
  import {
 -  buildNestedStructure,
-   collectOrderedListItems,
+-  collectOrderedListItems,
++  collectOrderedListItemsFromSource,
    parseListItems,
    parsePlainTextOrderedListPaste,
+ } from './utils.js'
 @@ -65,12 +64,14 @@ export const orderedListInputRegex = /^(\d+)\.\s$/
   * Google Docs and Word often use CSS instead of the HTML type attribute.
   */
@@ -2954,7 +3226,15 @@ index 21c9c14b66d508552b934455c1d0d20799376e06..08a42cdb95a8d193e2f8f6c980f7bbf2
 
    switch (cssValue) {
      case 'upper-roman':
-@@ -243,16 +244,14 @@ export const OrderedList = Node.create<OrderedListOptions>({
+@@ -236,23 +237,20 @@ export const OrderedList = Node.create<OrderedListOptions>({
+     // `tokenize`, which would re-introduce the mid-line split.
+     start: () => -1,
+     tokenize: (src: string, _tokens, lexer) => {
+-      const lines = src.split('\n')
+-      const [listItems, consumed] = collectOrderedListItems(lines)
++      const [listItems, consumed, lines] = collectOrderedListItemsFromSource(src)
+
+       if (listItems.length === 0) {
          return undefined
        }
 
@@ -2979,7 +3259,7 @@ index 21c9c14b66d508552b934455c1d0d20799376e06..08a42cdb95a8d193e2f8f6c980f7bbf2
 
        const startValue = listItems[0]?.number || 1
        const typeMarker = listItems[0]?.type
-@@ -263,7 +262,7 @@ export const OrderedList = Node.create<OrderedListOptions>({
+@@ -263,7 +261,7 @@ export const OrderedList = Node.create<OrderedListOptions>({
          start: startValue,
          typeMarker,
          items,
@@ -2988,7 +3268,7 @@ index 21c9c14b66d508552b934455c1d0d20799376e06..08a42cdb95a8d193e2f8f6c980f7bbf2
        } as unknown as object
      },
    },
-@@ -301,7 +300,9 @@ export const OrderedList = Node.create<OrderedListOptions>({
+@@ -301,7 +299,9 @@ export const OrderedList = Node.create<OrderedListOptions>({
            handlePaste: (view, event) => {
              const html = event.clipboardData?.getData('text/html')
 
@@ -3000,7 +3280,7 @@ index 21c9c14b66d508552b934455c1d0d20799376e06..08a42cdb95a8d193e2f8f6c980f7bbf2
              }
 
 diff --git a/src/ordered-list/utils.ts b/src/ordered-list/utils.ts
-index d0a3b84aa4c0ccb7bae75384aef5897fae102c70..c1ba438007f73b40ed1c48e30338563f032cfd59 100644
+index d0a3b84aa4c0ccb7bae75384aef5897fae102c70..03e87dc1a2b2008bfd157b49ed53ccd5b2451e92 100644
 --- a/src/ordered-list/utils.ts
 +++ b/src/ordered-list/utils.ts
 @@ -1,9 +1,5 @@
@@ -3158,7 +3438,7 @@ index d0a3b84aa4c0ccb7bae75384aef5897fae102c70..c1ba438007f73b40ed1c48e30338563f
   *
   * @param lines - Array of source lines to parse
   * @returns Tuple of [listItems array, number of lines consumed]
-@@ -127,107 +69,90 @@ function splitItemContent(contentLines: string[]): {
+@@ -127,107 +69,146 @@ function splitItemContent(contentLines: string[]): {
  export function collectOrderedListItems(lines: string[]): [OrderedListItem[], number] {
    const listItems: OrderedListItem[] = []
    let currentLineIndex = 0
@@ -3261,10 +3541,8 @@ index d0a3b84aa4c0ccb7bae75384aef5897fae102c70..c1ba438007f73b40ed1c48e30338563f
 -    consumed = nextLineIndex
 -    currentLineIndex = nextLineIndex
 +    currentLineIndex = item.end
-   }
-
--  return [listItems, consumed]
--}
++  }
++
 +  // marked's list tokenizer: the list does not take the blank lines after its
 +  // last item, and that item's text loses its trailing spaces, tabs and line
 +  // breaks.
@@ -3272,12 +3550,69 @@ index d0a3b84aa4c0ccb7bae75384aef5897fae102c70..c1ba438007f73b40ed1c48e30338563f
 +  if (last !== undefined) {
 +    last.text = last.text.replace(/([^ \t\n])[ \t\n]+$|^[ \t\n]+$/, '$1')
 +    last.raw = last.raw.replace(/([^ \t\n])[ \t\n]+$|^[ \t\n]+$/, '$1')
-+  }
+   }
+
+-  return [listItems, consumed]
++  return [listItems, currentLineIndex]
+ }
 
 -const PLAIN_TEXT_ORDERED_LIST_LINE_REGEX = new RegExp(
 -  `^(${ORDERED_LIST_MARKER_PATTERN})([.)])\\s+(.+)$`,
 -)
-+  return [listItems, currentLineIndex]
++const ORDERED_LIST_SCAN_WINDOW = 64
++
++// Fewer than `max` lines means `source` ended.
++function takeLines(source: string, max: number): string[] {
++  const lines: string[] = []
++  let start = 0
++
++  while (lines.length < max) {
++    const lineEnd = source.indexOf('\n', start)
++
++    if (lineEnd === -1) {
++      lines.push(source.slice(start))
++      return lines
++    }
++
++    lines.push(source.slice(start, lineEnd))
++    start = lineEnd + 1
++  }
++
++  return lines
++}
++
++/**
++ * Collect ordered list items from the start of `source`, reading only the lines the list needs.
++ *
++ * @param source Markdown beginning at a block boundary.
++ * @returns The items, how many lines they consumed, and the lines that were read.
++ * @example
++ *   collectOrderedListItemsFromSource('1. one\n2. two\n\nAfter')
++ *   // → [[item, item], 3, ['1. one', '2. two', '', 'After']]
++ */
++export function collectOrderedListItemsFromSource(
++  source: string,
++): [OrderedListItem[], number, string[]] {
++  const firstLineEnd = source.indexOf('\n')
++  const firstLine = firstLineEnd === -1 ? source : source.slice(0, firstLineEnd)
++
++  // Every block start is offered here, so reject non-lists before reading further.
++  if (!ORDERED_LIST_ITEM_REGEX.test(firstLine)) {
++    return [[], 0, []]
++  }
++
++  let windowSize = ORDERED_LIST_SCAN_WINDOW
++  let lines = takeLines(source, windowSize)
++  let collected = collectOrderedListItems(lines)
++
++  // Consuming the whole window means the list may continue past it.
++  while (collected[1] === lines.length && lines.length === windowSize) {
++    windowSize *= 2
++    lines = takeLines(source, windowSize)
++    collected = collectOrderedListItems(lines)
++  }
++
++  return [collected[0], collected[1], lines]
 +}
 
  /**
@@ -3318,7 +3653,7 @@ index d0a3b84aa4c0ccb7bae75384aef5897fae102c70..c1ba438007f73b40ed1c48e30338563f
      })
    }
 
-@@ -254,96 +179,6 @@ export function parsePlainTextOrderedListPaste(text: string): JSONContent | null
+@@ -254,96 +235,6 @@ export function parsePlainTextOrderedListPaste(text: string): JSONContent | null
    }
  }
 
@@ -3415,7 +3750,7 @@ index d0a3b84aa4c0ccb7bae75384aef5897fae102c70..c1ba438007f73b40ed1c48e30338563f
  /**
   * Parses markdown list item tokens into Tiptap JSONContent structure,
   * ensuring text content is properly wrapped in paragraph nodes.
-@@ -375,12 +210,11 @@ export function parseListItems(
+@@ -375,12 +266,11 @@ export function parseListItems(
          ) {
            content.push(...helpers.parseChildren([itemToken]))
          } else if (itemToken.type === 'text' && itemToken.tokens) {
@@ -3433,7 +3768,7 @@ index d0a3b84aa4c0ccb7bae75384aef5897fae102c70..c1ba438007f73b40ed1c48e30338563f
          } else {
            // For any other content, try to parse it
            const parsed = helpers.parseChildren([itemToken])
-@@ -391,6 +225,13 @@ export function parseListItems(
+@@ -391,6 +281,13 @@ export function parseListItems(
        })
      }
 
