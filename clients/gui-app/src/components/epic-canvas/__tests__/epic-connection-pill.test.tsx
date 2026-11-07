@@ -215,8 +215,6 @@ describe("<EpicConnectionPill />", () => {
     renderPill("connecting");
 
     expect(screen.getByText("Connecting…")).not.toBeNull();
-    // The label is in the element that gives way in a short row.
-    expect(screen.getByText("Connecting…").className).toContain("truncate");
     expect(screen.queryByText("Reconnecting…")).toBeNull();
     expect(screen.getByTestId("epic-connection-pill").className).toContain(
       "bg-amber-500/10",

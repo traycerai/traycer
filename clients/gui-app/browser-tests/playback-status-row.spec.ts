@@ -18,6 +18,11 @@ declare global {
 // is what gives way. The row is hidden under 768px, so the window stays wide and
 // the row's parent is the thing narrowed. The row's container is its content
 // box, inside 0.75rem of padding either side.
+//
+// The row and all of its items are the real ones, over a real epic store set to
+// the state that shows each (see `src/__tests__/browser/playback-status-row.tsx`).
+// Only the host behind them is a mock: it answers an empty worktree list and
+// advertises `host.usage.summary`, and the epic's runtime has no stream.
 
 test.use({ viewport: { width: 1280, height: 600 }, deviceScaleFactor: 1 });
 
@@ -26,18 +31,28 @@ const BUTTONS = [
   "epic-playback-toggle",
   "epic-playback-next",
 ];
+const PILL = "epic-connection-pill";
 const NEIGHBOURS = [
-  "stand-in-pill",
-  "stand-in-write-commands",
-  "stand-in-usage",
-  "stand-in-export",
-  "stand-in-sweep",
+  PILL,
+  "epic-write-commands-entry-point",
+  "epic-usage-entry-point",
+  "epic-durability-export",
+  "epic-sweep-action",
 ];
+const LONGEST_LABEL = "Offline — new edits not backed up";
 
 async function open(page: Page): Promise<void> {
   await page.goto(fixture("playback-status-row"));
   await page.waitForFunction(() => window.__playbackRowProbe !== undefined);
   await page.getByTestId("epic-shell-status-row").waitFor();
+  // The items settle on their own hooks, and an item that fails to mount is
+  // swallowed by its boundary, so every one is waited for by what it shows, and
+  // widths are read only once all of them are there with the pill at its
+  // longest.
+  await expect(page.getByTestId(PILL)).toHaveText(LONGEST_LABEL);
+  for (const id of [...NEIGHBOURS, ...BUTTONS]) {
+    await expect(page.getByTestId(id)).toBeVisible();
+  }
 }
 
 /** Sets the row's content box (the width its container query reads), in rem. */
@@ -136,7 +151,7 @@ test("a wide row shows Previous, Pause and Next in order, at their neighbours' h
   expect(lefts).toEqual([...lefts].sort((a, b) => a - b));
   expect(new Set(lefts).size).toBe(3);
 
-  const usage = await boxOf(page.getByTestId("stand-in-usage"));
+  const usage = await boxOf(page.getByTestId("epic-usage-entry-point"));
   for (const id of BUTTONS) {
     const box = await boxOf(page.getByTestId(id));
     expect(box.height, id).toBeCloseTo(usage.height, 1);
@@ -215,8 +230,10 @@ test("paused in a 360px row Play and everything else are whole, and the pill's l
   expect(await heights(page, ["epic-playback-toggle", ...NEIGHBOURS])).toEqual(
     wide,
   );
+  // The label is the pill's last child: the element that truncates.
   const cut = await page
-    .getByTestId("stand-in-pill-label")
+    .getByTestId(PILL)
+    .locator(":scope > :last-child")
     .evaluate((label) => label.scrollWidth > label.clientWidth);
   expect(cut).toBe(true);
 });
