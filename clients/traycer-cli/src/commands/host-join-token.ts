@@ -32,9 +32,13 @@ function cancelled(): Error {
 /**
  * The first line of `input`. In raw mode a terminal hands over the keys that
  * a line discipline would have acted on, so they are acted on here. Input past
- * the cap is dropped, which leaves a line the token check refuses.
+ * the cap is dropped, which leaves a line the token check refuses. `onListening`
+ * runs once the input is being read.
  */
-function readTokenLine(input: InstallTokenInput): Promise<string> {
+function readTokenLine(
+  input: InstallTokenInput,
+  onListening: () => void,
+): Promise<string> {
   return new Promise((resolve, reject) => {
     let line = "";
     const stop = (): void => {
@@ -73,6 +77,11 @@ function readTokenLine(input: InstallTokenInput): Promise<string> {
     input.on("end", onEnd);
     input.on("error", onError);
     input.resume();
+    try {
+      onListening();
+    } catch (error) {
+      onError(error);
+    }
   });
 }
 
@@ -88,7 +97,7 @@ export async function readInstallToken(
   canPrompt: boolean,
 ): Promise<string> {
   if (input.isTTY !== true || input.setRawMode === undefined) {
-    return readTokenLine(input);
+    return readTokenLine(input, () => undefined);
   }
   if (!canPrompt) {
     throw cliError({
@@ -98,10 +107,13 @@ export async function readInstallToken(
       exitCode: 1,
     });
   }
-  prompt.write("Install token: ");
+  // Nothing may tell a person to paste until the terminal has stopped echoing
+  // and the reader is listening, or what they paste lands on the screen.
   input.setRawMode(true);
   try {
-    return await readTokenLine(input);
+    return await readTokenLine(input, () => {
+      prompt.write("Install token: ");
+    });
   } finally {
     input.setRawMode(false);
     prompt.write("\n");

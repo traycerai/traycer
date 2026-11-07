@@ -13,15 +13,33 @@ const CTRL_D = "\u0004";
 class FakeTerminal extends PassThrough {
   readonly isTTY = true;
   readonly rawModes: boolean[] = [];
+  /** Raw-mode switches and reader attachments, in the order they happened. */
+  readonly events: string[] = [];
+
+  constructor() {
+    super();
+    this.on("newListener", (event: string | symbol) => {
+      if (event === "data") this.events.push("listen:data");
+    });
+  }
 
   setRawMode(mode: boolean): this {
     this.rawModes.push(mode);
+    this.events.push(`raw:${mode}`);
     return this;
+  }
+
+  /** Input that reaches whoever is listening this instant, and no one else. */
+  typeNow(text: string): void {
+    this.emit("data", Buffer.from(text));
   }
 }
 
 class PromptSink extends Writable {
   text = "";
+
+  /** Runs inside the write of each prompt, before it is accepted. */
+  onPrompt(_text: string): void {}
 
   override _write(
     chunk: Buffer,
@@ -29,6 +47,7 @@ class PromptSink extends Writable {
     callback: () => void,
   ): void {
     this.text += chunk.toString();
+    this.onPrompt(chunk.toString());
     callback();
   }
 }
@@ -79,6 +98,60 @@ describe("readInstallToken on a terminal", () => {
     expect(terminal.rawModes).toEqual([true, false]);
     expect(prompt.text).toBe("Install token: \n");
     expect(prompt.text).not.toContain(TOKEN);
+  });
+
+  it("has stopped the echo and is listening before the prompt is written", async () => {
+    const terminal = new FakeTerminal();
+    const prompt = new PromptSink();
+    prompt.onPrompt = () => terminal.events.push("prompt");
+
+    const reading = readInstallToken(terminal, prompt, true);
+    terminal.write(`${TOKEN}\r`);
+    await reading;
+
+    expect(terminal.events.slice(0, 3)).toEqual([
+      "raw:true",
+      "listen:data",
+      "prompt",
+    ]);
+  });
+
+  it("reads input delivered from inside the prompt write itself", async () => {
+    const terminal = new FakeTerminal();
+    const prompt = new PromptSink();
+    prompt.onPrompt = () => terminal.typeNow(`${TOKEN}\r`);
+
+    expect(await readInstallToken(terminal, prompt, true)).toBe(TOKEN);
+    expect(terminal.rawModes).toEqual([true, false]);
+  });
+
+  it("cancels on Ctrl-C delivered from inside the prompt write itself", async () => {
+    const terminal = new FakeTerminal();
+    const prompt = new PromptSink();
+    prompt.onPrompt = () => terminal.typeNow(CTRL_C);
+
+    const error = await refusalOf(readInstallToken(terminal, prompt, true));
+
+    expect(error.code).toBe(CLI_ERROR_CODES.INVALID_ARGUMENT);
+    expect(terminal.rawModes).toEqual([true, false]);
+  });
+
+  it("rejects when the prompt cannot be written, leaving no reader attached and the terminal restored", async () => {
+    const terminal = new FakeTerminal();
+    const prompt = new PromptSink();
+    const failure = new Error("prompt stream is closed");
+    prompt.onPrompt = (text) => {
+      if (text.startsWith("Install token")) throw failure;
+    };
+
+    await expect(readInstallToken(terminal, prompt, true)).rejects.toBe(
+      failure,
+    );
+
+    expect(terminal.listenerCount("data")).toBe(0);
+    expect(terminal.listenerCount("end")).toBe(0);
+    expect(terminal.listenerCount("error")).toBe(0);
+    expect(terminal.rawModes).toEqual([true, false]);
   });
 
   it("cancels on Ctrl-C and still puts the terminal back", async () => {
