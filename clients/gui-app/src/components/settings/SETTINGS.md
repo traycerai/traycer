@@ -3133,7 +3133,21 @@ window`, recorded in the type as `coverage.browsersAreMountedOnly` -
     10.8, AND says it can enforce the switch for that provider
     (`nativeMemorySupported`) - there is no prompt-level fallback for memory,
     so a provider with no contract the host can drive shows no switch at all
-    rather than one that stores a preference nothing acts on. A change applies
+    rather than one that stores a preference nothing acts on. That answer is
+    VERSION-AWARE and fails closed: the host judges the executable it would
+    actually run (a selection degrading to bundled is judged as bundled), and a
+    version below the provider's verified floor, or one it cannot read at all,
+    reports unsupported. Codex's floor is a measured break - the keys were
+    renamed from `features.memory_tool`, so the switch is inert on an older
+    binary - and the `custom`/`path` CLI tiers run whatever the user points at,
+    so such a binary is reachable. Because the control then disappears while a
+    stored `off` remains stored, the host REFUSES to start a session rather than
+    run one with memory live under a setting that reads off; the error names the
+    required version and points back here. Recovery without a fake toggle:
+    choose a supported executable, or reset that provider's settings
+    (`providers.settingsFile.resetProvider`). `providers.setNativeMemory`
+    refuses an unenforceable `false` but always accepts `true`, so a stored off
+    can be cleared even once the switch is hidden. A change applies
     when a provider session next starts and never interrupts a running turn:
     Claude's next turn spawns a fresh subprocess because the value is in its
     options signature, and Codex retires the session's app-server between
