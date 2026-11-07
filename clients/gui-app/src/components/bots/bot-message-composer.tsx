@@ -337,6 +337,7 @@ export function BotMessageComposer(props: {
         requestId: unsent.supersedes,
         text: unsent.wire,
         content: unsent.content,
+        sessionThreadId: unsent.sessionThreadId,
       });
       return;
     }
@@ -352,6 +353,7 @@ export function BotMessageComposer(props: {
       wire,
       supersedes: edit?.requestId ?? null,
       content,
+      sessionThreadId: edit?.sessionThreadId,
     };
     // The box empties as the send starts, which drops the draft kept outside
     // it, and the edit it held ends: the row the host writes reaches the
@@ -719,7 +721,10 @@ function useBotBoxDocument(
   const { edit, seed, quote, contentOf } = incoming;
   const [content, setContent] = useState(EMPTY_BOT_BOX);
   const [loaded, setLoaded] = useState<JsonContent | null>(null);
+  const [editContent, setEditContent] = useState<JsonContent | null>(null);
   const loadBox = (next: JsonContent): void => {
+    // An explicit load replaces the row copy, even when its document matches.
+    setEditContent(null);
     setContent(next);
     // Each load must trigger the editor sync, including repeated clears with
     // EMPTY_BOT_BOX after consecutive sends on one mounted composer.
@@ -728,7 +733,6 @@ function useBotBoxDocument(
   // An edit or seed replaces the box's content once. A quote appends after
   // whichever document it currently holds, including an edit.
   const [loadedEdit, setLoadedEdit] = useState<BotComposerEdit | null>(null);
-  const [editContent, setEditContent] = useState<JsonContent | null>(null);
   if (edit !== loadedEdit) {
     setLoadedEdit(edit);
     if (edit !== null) {
@@ -859,6 +863,8 @@ export type BotComposerQuote = {
 
 /** A failed message loaded into the box to be edited and sent again. */
 export type BotComposerEdit = {
+  /** Captured by the edit owner; null is trunk, absent means not observed. */
+  readonly sessionThreadId?: string | null;
   /** The failed message's request, which the edit replaces. */
   readonly requestId: string;
   readonly text: string;
