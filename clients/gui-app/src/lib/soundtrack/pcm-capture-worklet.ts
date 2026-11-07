@@ -52,11 +52,18 @@ class PcmCaptureProcessor extends AudioWorkletProcessor {
 
   process(inputs: Float32Array[][]): boolean {
     if (this.finished) return false;
+    // A starved audio thread can hand over a quantum under the frame number of
+    // the one before it, and then skip one. Time goes on from the frames
+    // already written, so the file never runs ahead of the clock.
+    const frame =
+      this.nextFrame === null
+        ? currentFrame
+        : Math.max(currentFrame, this.nextFrame);
     if (this.nextFrame === null) {
       this.post({ type: "first-frame", time: currentTime });
-    } else if (currentFrame > this.nextFrame) {
+    } else if (frame > this.nextFrame) {
       // Frames the thread went past without calling here: silence keeps time.
-      const missed = currentFrame - this.nextFrame;
+      const missed = frame - this.nextFrame;
       this.droppedFrames += missed;
       this.writeSilence(missed);
     }
@@ -69,7 +76,7 @@ class PcmCaptureProcessor extends AudioWorkletProcessor {
     } else {
       this.writeFrames(left, input.at(1) ?? left);
     }
-    this.nextFrame = currentFrame + count;
+    this.nextFrame = frame + count;
     return true;
   }
 

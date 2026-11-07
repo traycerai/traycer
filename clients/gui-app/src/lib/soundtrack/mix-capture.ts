@@ -26,6 +26,13 @@ const OPUS_BITS_PER_SECOND = 128_000;
 // Each slice reaches the disk on the next flush, so a crash loses about this.
 const OPUS_TIMESLICE_MS = 1000;
 /**
+ * Measured, not derived: the recorder's file starts this long before the clock
+ * time read at its `start` event. Chromium gave the same 70.5 ms headless and
+ * in 7 of 8 recordings on a macOS desktop; the eighth was one 512-frame device
+ * callback (10.7 ms) further in.
+ */
+const OPUS_AUDIO_OFFSET_SECONDS = 0.0705;
+/**
  * How long `stop` waits for the last of the audio before letting go anyway:
  * a context closed or suspended under it would otherwise hold the recording
  * open for good.
@@ -34,6 +41,23 @@ const STOP_GRACE_MS = 2000;
 const CHANNELS = 2;
 
 const NOTHING_COUNTED: CaptureSummary = { frames: null, droppedFrames: null };
+
+/**
+ * Feeds `node` a silence that never stops, alongside the mix, until the answer
+ * is called. Without it a stream whose mix has gone quiet delivers no frames,
+ * and a WebM made of what does arrive comes out shorter than the time it
+ * covers, with the log's times drifting off it after every silence. The
+ * worklet needs none: it keeps itself running and fills any gap.
+ */
+function keepRendering(context: AudioContext, node: AudioNode): () => void {
+  const silence = new ConstantSourceNode(context, { offset: 0 });
+  silence.connect(node);
+  silence.start();
+  return () => {
+    silence.stop();
+    silence.disconnect();
+  };
+}
 
 /** Settles with `value` after `ms` unless `promise` settles first. */
 function withGrace<T>(promise: Promise<T>, value: T, ms: number): Promise<T> {
@@ -63,6 +87,7 @@ function withGrace<T>(promise: Promise<T>, value: T, ms: number): Promise<T> {
  */
 class OpusCapture implements MixCapture {
   readonly sampleRate: number;
+  readonly audioOffsetSeconds = OPUS_AUDIO_OFFSET_SECONDS;
   private readonly context: AudioContext;
   private readonly tap: MixTap;
   private readonly destination: MediaStreamAudioDestinationNode;
@@ -106,7 +131,12 @@ class OpusCapture implements MixCapture {
       },
       { once: true },
     );
-    this.disconnect = this.tap(this.destination);
+    const untap = this.tap(this.destination);
+    const unkeep = keepRendering(this.context, this.destination);
+    this.disconnect = () => {
+      untap();
+      unkeep();
+    };
     try {
       recorder.start(OPUS_TIMESLICE_MS);
     } catch (error) {
@@ -153,6 +183,7 @@ class OpusCapture implements MixCapture {
  */
 class PcmCapture implements MixCapture {
   readonly sampleRate: number;
+  readonly audioOffsetSeconds = 0;
   private readonly tap: MixTap;
   private readonly node: AudioWorkletNode;
   private disconnect: (() => void) | null = null;

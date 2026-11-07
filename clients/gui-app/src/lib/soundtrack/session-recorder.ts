@@ -136,7 +136,8 @@ export class SessionRecorder {
   private firstFrameAt: number | null = null;
   private audio: Uint8Array[] = [];
   private events: SoundtrackLogEvent[] = [];
-  /** Audio bytes the disk has taken, past a WAV's header. */
+  /** Audio bytes sent, and those the disk has taken, past a WAV's header. */
+  private sentDataBytes = 0;
   private writtenDataBytes = 0;
   private readonly writes = new Set<Promise<void>>();
   private timer: number | null = null;
@@ -288,6 +289,8 @@ export class SessionRecorder {
         director,
         quality,
         sampleRate: opened.capture.sampleRate,
+        // Add to a log time to find it in the audio file.
+        audioOffsetSeconds: opened.capture.audioOffsetSeconds,
         startedAt: new Date().toISOString(),
       }),
     ]);
@@ -330,6 +333,7 @@ export class SessionRecorder {
   ): void {
     const { opened } = this;
     if (opened === null) return;
+    if (file === "audio") this.sentDataBytes += dataBytes;
     const write = this.options.channel
       .append(opened.recordingId, file, bytes)
       .then(
@@ -370,8 +374,6 @@ export class SessionRecorder {
     reason: RecordingStopReason,
     summary: CaptureSummary | null,
   ): void {
-    // A disk that refused a write would refuse the rest of the audio too.
-    if (reason === "write-failed") this.audio = [];
     this.flush();
     if (this.firstFrameAt !== null) {
       this.sendLines([
@@ -402,9 +404,13 @@ export class SessionRecorder {
   ): void {
     this.state = "stopped";
     const { channel, quality, onStopped } = this.options;
+    // A page going away does not wait to hear back: what it sent is ahead of
+    // the close in the same queue, and almost always lands.
+    const dataBytes =
+      reason === "unload" ? this.sentDataBytes : this.writtenDataBytes;
     const header =
       quality === "lossless"
-        ? wavHeader(opened.capture.sampleRate, CHANNELS, this.writtenDataBytes)
+        ? wavHeader(opened.capture.sampleRate, CHANNELS, dataBytes)
         : null;
     const report = (closedReason: RecordingStopReason): void => {
       if (this.firstFrameAt !== null) {

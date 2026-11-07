@@ -46,6 +46,11 @@ export interface CaptureSummary {
 /** A copy of the mix being taken, from `start` until `stop`. */
 export interface MixCapture {
   readonly sampleRate: number;
+  /**
+   * Where the clock time `onFirstFrame` gives, which is log time 0, falls in
+   * the audio file, in seconds from its start.
+   */
+  readonly audioOffsetSeconds: number;
   start(handlers: MixCaptureHandlers): void;
   /** Delivers what is still on its way, then lets go of its audio nodes. */
   stop(): Promise<CaptureSummary>;
