@@ -933,7 +933,6 @@ function SandboxListRow(props: {
   );
   let clock: string | null;
   if (summary.frozen) clock = sandboxFrozenClock(summary.frozenAt);
-  else if (setupFailed) clock = "Compute is charged while it is awake.";
   else
     clock = sandboxClockLine({
       summary,
@@ -988,6 +987,11 @@ function SandboxListRow(props: {
               <span className="min-w-0">{clock}</span>
             </p>
           )}
+          {setupFailed ? (
+            <p className="text-ui-xs text-muted-foreground wrap-anywhere">
+              Compute is charged while it is awake.
+            </p>
+          ) : null}
           <SandboxRowWithdrawal summary={summary} />
           {payerConsequence === null ? null : (
             <p

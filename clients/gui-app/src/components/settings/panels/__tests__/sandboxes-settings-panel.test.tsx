@@ -127,6 +127,10 @@ const mocks = vi.hoisted(() => ({
   binding: null as FakeSandboxBinding | null,
   entry: null as HostDirectoryEntry | null,
   sandboxes: [] as readonly SandboxSummary[],
+  settingsItems: [] as readonly {
+    readonly kind: string;
+    readonly status: string;
+  }[],
   /** `false` while the list query has not answered. */
   listed: true,
   realActions: false,
@@ -212,6 +216,9 @@ vi.mock("@/hooks/sandboxes/use-sandbox-list-query", async (importOriginal) => {
     },
   };
 });
+vi.mock("@/hooks/sandboxes/use-sandbox-settings-status", () => ({
+  useSandboxSettingsStatus: () => ({ data: { items: mocks.settingsItems } }),
+}));
 vi.mock("@/hooks/sandboxes/use-sandbox-costs-query", () => ({
   useSandboxCosts: () => ({ data: mocks.costs }),
 }));
@@ -534,6 +541,7 @@ describe("<SandboxesSettingsPanel />", () => {
     recordNegotiatedHostMethods("auto-host", ["terminal.plain.create"]);
     useAuthStore.setState({ status: "signed-out", contextMetadata: null });
     mocks.sandboxes = [];
+    mocks.settingsItems = [];
     mocks.listed = true;
     mocks.realActions = false;
     mocks.configurations = [{ kind: "personal" }];
@@ -989,6 +997,68 @@ describe("<SandboxesSettingsPanel />", () => {
       if (id === "frozen-1") {
         expect(within(element).getByText("Out of credits")).toBeDefined();
       }
+    }
+  });
+
+  it("keeps the charge notice and Stop action when setup failed and the host is unreachable", () => {
+    useAuthStore.setState({
+      status: "signed-in",
+      contextMetadata: { userId: "u-viewer", username: "viewer" },
+    });
+    mocks.sessionFailed = true;
+    mocks.settingsItems = [{ kind: "setup_script", status: "failed" }];
+    const sandbox = row("setup-unreachable", { state: "awake" });
+    mocks.sandboxes = [sandbox];
+
+    const panel = renderUi(<SandboxesSettingsPanel />);
+    panel.rerender(<SandboxesSettingsPanel />);
+
+    const failed = within(rowOf(sandbox.id));
+    expect(failed.getByTestId("sandboxes-row-clock").textContent).toBe(
+      "Running, but Traycer can't connect",
+    );
+    expect(
+      failed.getAllByText("Compute is charged while it is awake."),
+    ).toHaveLength(1);
+    expect(failed.getByTestId("row-primary").textContent).toBe("Stop");
+  });
+
+  it("shows the setup failure reference and charge notice when guest setup failed", () => {
+    const sandbox = row("setup-failed", {
+      state: "awake",
+      guestConfigured: false,
+      failureCode: null,
+    });
+    mocks.sandboxes = [sandbox];
+
+    renderUi(<SandboxesSettingsPanel />);
+
+    const failed = within(rowOf(sandbox.id));
+    expect(failed.getByTestId("sandboxes-row-clock").textContent).toContain(
+      "SBX-0520",
+    );
+    expect(
+      failed.getAllByText("Compute is charged while it is awake."),
+    ).toHaveLength(1);
+  });
+
+  it("does not show the setup charge notice for healthy or frozen sandboxes", () => {
+    const healthy = row("healthy", { state: "awake", guestConfigured: true });
+    const frozen = row("frozen", {
+      state: "suspended",
+      frozen: true,
+      frozenAt: 1,
+    });
+    mocks.sandboxes = [healthy, frozen];
+
+    renderUi(<SandboxesSettingsPanel />);
+
+    for (const sandbox of [healthy, frozen]) {
+      expect(
+        within(rowOf(sandbox.id)).queryByText(
+          "Compute is charged while it is awake.",
+        ),
+      ).toBeNull();
     }
   });
 
