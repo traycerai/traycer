@@ -1,3 +1,4 @@
+import { resolve as resolveTestSetup } from "node:path";
 import path from "path";
 import os from "node:os";
 import babel from "@rolldown/plugin-babel";
@@ -228,6 +229,10 @@ export default defineConfig({
     },
     environment: "jsdom",
     setupFiles: [
+      resolveTestSetup(
+        import.meta.dirname,
+        "../../scripts/test-worker-environment.ts",
+      ),
       "./__tests__/test-file-reset.ts",
       "./__tests__/test-browser-apis.ts",
     ],

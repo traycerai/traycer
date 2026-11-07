@@ -28,6 +28,10 @@ import {
   resetTeamPageHarness,
   windowHostScopeMock,
 } from "./team-configuration-test-support";
+import {
+  RETIRED_PROVIDER_VARIABLES,
+  RETIRED_SECRET_ROW_FIELDS,
+} from "@traycer/protocol/host/released-wire-rows";
 
 vi.mock("@/lib/host", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/lib/host")>()),
@@ -85,18 +89,17 @@ function secret(
   overrides: Partial<EnvironmentSecretV12>,
 ): EnvironmentSecretV12 {
   return {
+    ...RETIRED_SECRET_ROW_FIELDS,
+    providerVariables: [...RETIRED_PROVIDER_VARIABLES],
     secretId,
     name: secretId,
     kind: "api_key",
     protocol: null,
     destinations: ["api.acme.test:443"],
-    mode: "brokered",
-    state: "live",
     currentVersionId: "v1",
     revoked: false,
     updatedAt: 1,
     variables: [],
-    providerVariables: [],
     ...overrides,
   };
 }
@@ -222,7 +225,7 @@ describe("The MCP server dialog", () => {
     });
   });
 
-  it("offers only the live, brokered, unrevoked secrets sent to the address, plus Add a secret, and binds the one picked", async () => {
+  it("offers only the unrevoked secrets sent to the address, plus Add a secret, and binds the one picked", async () => {
     negotiate(PUT_1_1);
     const harness = mountTeamPage(
       poolSource("editor"),
@@ -231,8 +234,6 @@ describe("The MCP server dialog", () => {
         secrets: [
           secret("acme-key", {}),
           secret("revoked-key", { revoked: true }),
-          secret("pending-key", { state: "pending_review" }),
-          secret("exposed-key", { mode: "exposed" }),
           secret("elsewhere-key", { destinations: ["other.test:443"] }),
         ],
         answer: SAVED,

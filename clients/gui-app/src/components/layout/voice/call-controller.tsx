@@ -100,8 +100,6 @@ import {
  * close, the end route) finishes on its own afterwards.
  */
 interface Attempt {
-  /** The store's engine generation this attempt is. */
-  readonly generation: number;
   readonly engine: VoiceEngine;
   /** The server's id, owned the moment the mint answers. */
   sessionId: string | null;
@@ -800,7 +798,6 @@ export function CallController(): ReactNode {
     const micTrack = stream?.getAudioTracks()[0] ?? null;
     if (micTrack === null) return false;
     const attempt: Attempt = {
-      generation: useVoiceSessionStore.getState().engineGeneration,
       engine: createBrowserGptLiveEngine(),
       sessionId: null,
       expiresAt: 0,

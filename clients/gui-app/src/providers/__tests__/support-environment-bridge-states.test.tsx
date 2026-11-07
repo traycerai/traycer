@@ -65,6 +65,10 @@ import {
 } from "@/lib/support-context-registry";
 import type { SupportEnvironmentSection } from "@/lib/support-environment-section";
 import { SupportEnvironmentBridge } from "@/providers/support-environment-bridge";
+import {
+  RETIRED_PROVIDER_VARIABLES,
+  RETIRED_SECRET_ROW_FIELDS,
+} from "@traycer/protocol/host/released-wire-rows";
 
 type Rotation = NonNullable<EnvironmentSecretsRotationResponse["rotation"]>;
 
@@ -87,18 +91,17 @@ const EARLIER_HOST_SECTION: SupportEnvironmentSection = {
 
 function secret(secretId: string, name: string): EnvironmentSecretV12 {
   return {
+    ...RETIRED_SECRET_ROW_FIELDS,
+    providerVariables: [...RETIRED_PROVIDER_VARIABLES],
     secretId,
     name,
     kind: "api_key",
     protocol: "https",
     destinations: ["api.stripe.com"],
-    mode: "brokered",
-    state: "live",
     currentVersionId: "ver-2",
     revoked: false,
     updatedAt: 1,
     variables: [],
-    providerVariables: [],
   };
 }
 

@@ -70,7 +70,7 @@ function reviewEntry(
 ): EnvironmentReviewEntry {
   return {
     entryId: "entry-1",
-    reason: "credential_like_value",
+    reason: "executable_entry",
     kind: "variable",
     key: "DATABASE_URL",
     os: "any",
@@ -607,10 +607,6 @@ describe("undoRefusalText", () => {
 
 describe("reviewText", () => {
   const cases: ReadonlyArray<[reason: string, text: string]> = [
-    [
-      "credential_like_value",
-      "DATABASE_URL looks like a key and is on hold until you choose",
-    ],
     [
       "executable_entry",
       "DATABASE_URL (variable) changes how programs start and is on hold until you choose",
