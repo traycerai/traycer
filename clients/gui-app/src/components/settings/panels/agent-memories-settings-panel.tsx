@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState, type ReactNode } from "react";
+import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
 import type { ConfigAgentMemoriesResponse } from "@traycer/protocol/host/config/schemas";
 import { Switch } from "@/components/ui/switch";
 import {
@@ -173,6 +174,7 @@ function AgentMemoriesRow(): ReactNode {
   });
   const hostId = client.getActiveHostId();
   const [observation, setObservation] = useState<{
+    readonly client: HostClient<HostRpcRegistry>;
     readonly hostId: string | null;
     readonly queryRead: ConfigAgentMemoriesResponse | undefined;
     readonly active: boolean;
@@ -187,10 +189,12 @@ function AgentMemoriesRow(): ReactNode {
     },
     [client],
   );
+  // Replacing the requester retires its observation, even for the same host.
   // A terminal observation bridges the cached read from before submission.
   // Once the real query receives another snapshot it owns the row again.
   const shown =
-    observation?.hostId === hostId &&
+    observation?.client === client &&
+    observation.hostId === hostId &&
     (observation.active || observation.queryRead === query.data)
       ? observation
       : null;
@@ -221,6 +225,7 @@ function AgentMemoriesRow(): ReactNode {
     }
     function show(progress: AgentMemoryWriteProgress, active: boolean): void {
       setObservation({
+        client,
         hostId,
         queryRead: query.data,
         active,

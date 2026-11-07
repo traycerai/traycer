@@ -212,6 +212,74 @@ describe("Agent memories ▸ the host row's write", () => {
     },
   );
 
+  it("retires an active observation when a new client serves the same host", async () => {
+    let resolveStatus: (value: EnvironmentStatusResponseV11) => void = () => {
+      throw new Error("status was not started");
+    };
+    script.set = () => queuedAnswer(UPLOAD);
+    script.status = () =>
+      new Promise((resolve) => {
+        resolveStatus = resolve;
+      });
+    const original = mountTeamPage({ kind: "host" }, handlers());
+    const view = render(<AgentMemoriesSettingsPanel />, {
+      wrapper: original.Wrapper,
+    });
+    const oldClient = requireTeamHostClient();
+    await flipOn();
+    await waitFor(() =>
+      expect(original.paramsOf("environment.status").length).toBe(1),
+    );
+    expect(await line()).toContain("Waiting to reach your configuration");
+
+    // Replace only the requester, preserving the host, mounted row and QueryClient.
+    const replacement = mountTeamPage({ kind: "host" }, handlers());
+    expect(requireTeamHostClient()).not.toBe(oldClient);
+    expect(requireTeamHostClient().getActiveHostId()).toBe(
+      oldClient.getActiveHostId(),
+    );
+    view.rerender(<AgentMemoriesSettingsPanel />);
+    script.reads = [read(true, 7)];
+    await act(async () => {
+      await original.queryClient.refetchQueries({ type: "active" });
+    });
+    const toggle = screen.getByRole("switch", {
+      name: "Use Traycer memories for agents",
+    });
+    await waitFor(() =>
+      expect(toggle.getAttribute("aria-checked")).toBe("true"),
+    );
+    expect(await line()).toContain("Running agents pick this up");
+
+    // A response from the abandoned observer cannot restore its queued state.
+    act(() => {
+      resolveStatus(
+        environmentStatusFixture({
+          acceptedUploads: [receipt({ revision: null })],
+        }),
+      );
+    });
+    script.reads = [readIn(OTHER_ENV, false, 2)];
+    await act(async () => {
+      await original.queryClient.refetchQueries({ type: "active" });
+    });
+    await waitFor(() =>
+      expect(toggle.getAttribute("aria-checked")).toBe("false"),
+    );
+    const oldReads = original.paramsOf("config.agentMemories.get").length;
+    const newReads = replacement.paramsOf("config.agentMemories.get").length;
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(AGENT_MEMORY_CONFIRM_BOUND_MS + 10_000);
+    });
+    expect(await line()).toContain("Running agents pick this up");
+    expect(original.paramsOf("config.agentMemories.get").length).toBe(oldReads);
+    expect(original.paramsOf("environment.status").length).toBe(1);
+    expect(replacement.paramsOf("config.agentMemories.get").length).toBe(
+      newReads,
+    );
+    expect(replacement.paramsOf("environment.status").length).toBe(0);
+  });
+
   it("says the change is saved until the host's own read reaches its revision, then stops saying anything", async () => {
     // Saved at 6; this host still reads 5, then 6 on its next read.
     script.reads = [read(false, 5), read(false, 5), read(true, 6)];
