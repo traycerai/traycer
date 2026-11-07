@@ -65,6 +65,7 @@ import {
 import { useBotSendFailure } from "@/hooks/bots/use-bot-send-failure";
 import { BotReadFailure } from "@/components/bots/bot-read-failure";
 import { BotReplyingStrip } from "@/components/bots/bot-replying-strip";
+import { useBotReplyingTurn } from "@/hooks/bots/use-bot-replying-turn";
 import { BotResizablePane } from "@/components/bots/bot-resizable-pane";
 import { BotExchangeLog } from "@/components/bots/bot-exchange-log";
 import {
@@ -667,6 +668,13 @@ export function BotChannelView(props: {
   });
 
   const trunkReply = channelTrunkReply(activity);
+  const trunkReplyTurn = useBotReplyingTurn({
+    client,
+    hostId,
+    botId,
+    activity: trunkReply,
+    onOpenTurn,
+  });
 
   const [channelSection, setChannelSection] = useState<HTMLElement | null>(
     null,
@@ -857,6 +865,7 @@ export function BotChannelView(props: {
               <BotReplyingStrip
                 botTitle={botTitle}
                 activity={trunkReply}
+                turn={trunkReplyTurn}
                 testId="bot-channel-replying"
               />
               <BotRoutingCard

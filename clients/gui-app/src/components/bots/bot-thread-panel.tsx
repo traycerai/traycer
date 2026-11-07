@@ -35,6 +35,7 @@ import {
 } from "@/components/bots/bot-channel-notices";
 import { BotReadFailure } from "@/components/bots/bot-read-failure";
 import { BotReplyingStrip } from "@/components/bots/bot-replying-strip";
+import { useBotReplyingTurn } from "@/hooks/bots/use-bot-replying-turn";
 import { BotTaskList } from "@/components/bots/bot-task-list";
 import { BotThreadFollowControl } from "@/components/bots/bot-thread-follow";
 import { ChannelPost } from "@/components/bots/bot-channel-post";
@@ -849,6 +850,13 @@ function KnownThread(
   // thread's typing line, and an answer it holds or fails is said on the
   // message, with Retry and Edit.
   const activity = useBotActivity(botId)?.threads[threadId] ?? null;
+  const replyingTurn = useBotReplyingTurn({
+    client,
+    hostId,
+    botId,
+    activity,
+    onOpenTurn,
+  });
   const failedInThread = useCallback(
     (requestId: string) => failedOn(activity, requestId),
     [activity],
@@ -1004,6 +1012,7 @@ function KnownThread(
       <BotReplyingStrip
         botTitle={botTitle}
         activity={activity}
+        turn={replyingTurn}
         testId="bot-thread-replying-strip"
       />
     </>
