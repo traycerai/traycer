@@ -902,8 +902,8 @@ Account; the rest is the app itself.
   Details. The icon keeps the client kind as its accessible name.
 - **Environment** (group id `personal`) - Providers, MCP servers, Skills,
   Permissions, Agents (id `agents`: tabs Selection guide and Definitions),
-  Model routing, Variables & shells (id `shell`), Secrets, Sandboxes, and
-  Members on a team; a Local row shows only Providers, Permissions, Agents,
+  Model routing, Variables & shells (id `shell`), Secrets, Sandboxes,
+  Storage, and Members on a team; a Local row shows only Providers, Permissions, Agents,
   Model routing, Variables & shells and Secrets. Browser agent access is the
   Browser tab of Permissions (a region below the policy on a team, whose page
   has no tabs). `agent-definitions`,
@@ -5788,6 +5788,66 @@ wrap`). Each row names the account its first usable match runs on, the
   - **No per-chat and no per-task control exists anywhere in the app**, by
     decision. The harness/model picker and the composer gain nothing from this
     feature; per-chat intervention is the actions on the cards themselves.
+- `Storage` (Environment, section id `storage`, route `/settings/storage`,
+  `environment/storage-settings-panel.tsx`): what the picked configuration's
+  hosts keep on disk. It is offered for Personal and teams, and not on a
+  Local row (`PAGES_HIDDEN_BY_PICK`), since its settings are an environment
+  item. Later storage rows go here too.
+  - **The storage policy** (`panels/storage-policy-section.tsx`,
+    `data-testid="storage-policy"`), two groups:
+    - **Tasks you haven't used lately**, a card of three rows:
+      - **Chats**, a switch: "Keep them in the cloud instead of on disk."
+      - **Artifacts**, a switch, with the same description.
+      - **When**, a select: "When to clean up a task nobody has used."
+        Options "When the disk is getting full" (no window), "After 7 days",
+        "After 14 days", "After 30 days", "After 90 days". Disabled only while
+        both switches are off, since the window cleans whichever kinds are on.
+    - **Archived chats**, a card of one row:
+      - **When**, a select: "Counted from the chat's last activity." Options
+        "Never", "After 4 hours", "After 1 day", "After 7 days", "After 30
+        days". It is independent of both switches, so no switch disables it.
+    - A stored window that is not one of the options is listed too, so the
+      select shows what is in force: "After N days" for idle tasks, and for
+      archived chats "After N hours" below 24 or when it is not a whole
+      number of days, else "After N days" ("After 1 hour", "After 1 day"
+      for one).
+    - Each select's accessible name adds its group ("Archived chats: When"),
+      since both rows read "When".
+    - A line under the groups says what applies. "Applies on every host in
+      this environment." shows while anything can be cleaned, and "A chat
+      comes back when an agent continues it." follows it only while Chats is
+      on or Archived chats is not Never. With nothing cleanable there is no
+      line.
+  - It is the configuration's `storage_policy` item (key `storage`, value
+    `{ chats, artifacts, idleTaskDays, archivedChatHours }`, the idle window
+    in whole days and the archived-chat window in whole hours, each or
+    `null`; `hooks/environment/use-storage-policy.ts`), read through the pool
+    tier like the sandbox defaults. The pick names the environment:
+    Personal's own, or the team's. **No item reads as the defaults**, both
+    switches on, no idle window and archived chats after 4 hours. An item
+    whose value does not parse reads as nothing cleanable, both switches off
+    and Archived chats Never, because the hosts then clean up nothing.
+  - Every control writes the whole value through
+    `environment.configuration.items.put` with the revision it read (`null`
+    creates the item), so a concurrent edit of one field cannot lose
+    another. While the write is pending, every control shows the value being
+    saved, is disabled, and the changed control has a spinner beside it. A
+    refused write drops back to the value read, and the shared mutation's
+    toast says why. A stale or refused outcome shows
+    `ConfigurationWriteFeedback` under the groups. A viewer of a team
+    configuration sees every control disabled. A failed read says so on the
+    Chats row, with Retry.
+  - The section draws nothing on a host that does not advertise the item
+    write (`useHostSupportsMethod`, asked of the host the write goes
+    through). It is keyed by the viewer, like the auto-archive row, so a
+    pending save never outlives an account switch.
+  - The item changes nothing a host reports (`UNREPORTED_ITEM_KINDS`), so
+    the page carries no status chip, like Sandboxes. Search folds both groups
+    and every row into the Storage page entry (`contributesTo: "page"`): they
+    are gated on the host, which no search shell can decide, so none is an
+    anchored entry and none has a search fixture. The two "When" rows share
+    that one entry, whose page shows both, and their keywords keep "idle" and
+    "archived" apart.
 - `Keybindings` Keyboard shortcut customization.
 - `Shell` Shell binary + args used for every terminal PTY
   (`TerminalSessionManager` reads the effective config per spawn, file-watched,

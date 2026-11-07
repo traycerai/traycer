@@ -162,6 +162,17 @@ describe("settings search", () => {
     expect(labelsFor("rate limit", DESKTOP)).toContain("Profiles & limits");
   });
 
+  it.each(["archived", "idle"])(
+    "reaches the Storage page for %s, which its two groups and their When rows fold into",
+    (query) => {
+      const storage = searchSettings(query, DESKTOP).filter(
+        (result) => result.entry.section === "storage",
+      );
+      expect(storage.map((result) => result.entry.label)).toEqual(["Storage"]);
+      expect(storage[0]?.entry.anchor).toBeNull();
+    },
+  );
+
   it("reaches the Appearance diff viewer rows by their own vocabulary", () => {
     expect(landingFor("line numbers", DESKTOP)).toBe(
       "appearance#appearance-diff-line-numbers",

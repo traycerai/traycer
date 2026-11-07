@@ -264,7 +264,12 @@ function TeamPageChip(props: {
 
 /** One delivery status for the page's configuration; Local has no delivery. */
 export function PageChip(props: PageChipProps): ReactNode {
-  if (props.pick.kind === "local" || props.section === "sandboxes") return null;
+  if (
+    props.pick.kind === "local" ||
+    props.section === "sandboxes" ||
+    props.section === "storage"
+  )
+    return null;
   if (props.pick.kind === "team")
     return (
       <TeamPageChip

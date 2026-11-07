@@ -31,7 +31,7 @@ import {
   hostRpcRegistry,
   type HostRpcRegistry,
 } from "@traycer/protocol/host/index";
-import type { ChatRecordSummaryV11 } from "@traycer/protocol/host/epic/chat-records";
+import type { ChatRecordSummaryV14 } from "@traycer/protocol/host/epic/chat-records";
 import type { SnapshotMetaEpic } from "@traycer/protocol/host/epic/snapshot-meta";
 import type { EpicStreamCallbacks } from "@traycer-clients/shared/host-transport/epic-stream-client";
 import type {
@@ -116,9 +116,9 @@ interface TuiAgentFixtureRow {
 interface RoutingFixture {
   readonly queryClient: QueryClient;
   readonly handle: OpenedStoreForTest;
-  readonly localRecords: ChatRecordSummaryV11[];
-  readonly remoteRecords: ChatRecordSummaryV11[];
-  readonly viewerForeign: ChatRecordSummaryV11[];
+  readonly localRecords: ChatRecordSummaryV14[];
+  readonly remoteRecords: ChatRecordSummaryV14[];
+  readonly viewerForeign: ChatRecordSummaryV14[];
   readonly localTuiAgents: TuiAgentFixtureRow[];
   readonly remoteTuiAgents: TuiAgentFixtureRow[];
   readonly renameChatCalls: MutationCall[];
@@ -138,8 +138,8 @@ interface RoutingFixture {
 }
 
 function record(
-  overrides: Partial<ChatRecordSummaryV11>,
-): ChatRecordSummaryV11 {
+  overrides: Partial<ChatRecordSummaryV14>,
+): ChatRecordSummaryV14 {
   return {
     chatId: "chat-1",
     ownerUserId: VIEWER_ID,
@@ -156,6 +156,7 @@ function record(
     visibility: "private",
     origin: "own",
     docResident: false,
+    evicted: false,
     ...overrides,
   };
 }
@@ -234,9 +235,9 @@ function createRoutingFixture(): RoutingFixture {
       mutations: { retry: false },
     },
   });
-  const localRecords: ChatRecordSummaryV11[] = [];
-  const remoteRecords: ChatRecordSummaryV11[] = [];
-  const viewerForeign: ChatRecordSummaryV11[] = [];
+  const localRecords: ChatRecordSummaryV14[] = [];
+  const remoteRecords: ChatRecordSummaryV14[] = [];
+  const viewerForeign: ChatRecordSummaryV14[] = [];
   const localTuiAgents: TuiAgentFixtureRow[] = [];
   const remoteTuiAgents: TuiAgentFixtureRow[] = [];
   const renameChatCalls: MutationCall[] = [];

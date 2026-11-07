@@ -136,6 +136,7 @@ export type AnalyticsSettingsSection =
   | "sandboxes"
   | "secrets"
   | "shell"
+  | "storage"
   | "usage"
   | "worktrees";
 
@@ -416,6 +417,10 @@ export type AnalyticsSetting =
   | "startPageWallpaperCurated"
   | "startPageWallpaperTint"
   | "steerOnModEnterEnabled"
+  | "storageArchivedChats"
+  | "storageArtifacts"
+  | "storageChats"
+  | "storageIdleTasks"
   | "summonHotkeyChord"
   | "summonHotkeyEnabled"
   | "terminalCursorBlink"
@@ -1517,6 +1522,7 @@ const ANALYTICS_SETTINGS_SECTIONS = new Set<string>(
     members: true,
     secrets: true,
     shell: true,
+    storage: true,
     usage: true,
     credits: true,
     worktrees: true,
@@ -1569,6 +1575,10 @@ const ANALYTICS_SETTINGS = new Set<string>(
     startPageWallpaperCurated: true,
     startPageWallpaperTint: true,
     steerOnModEnterEnabled: true,
+    storageArchivedChats: true,
+    storageArtifacts: true,
+    storageChats: true,
+    storageIdleTasks: true,
     summonHotkeyChord: true,
     summonHotkeyEnabled: true,
     terminalCursorBlink: true,
