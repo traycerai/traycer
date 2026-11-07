@@ -123,7 +123,6 @@ function setup(response: SandboxListResponse) {
         ...live,
         view: resolveChatSandbox(live.state, {
           reachable: live.reachable,
-          canEdit: true,
           ownedByViewer: true,
           environmentOwned: false,
         }),

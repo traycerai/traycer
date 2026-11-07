@@ -117,7 +117,6 @@ export function DemotionPreviewDialog(props: {
               <span data-testid="members-demotion-loss">
                 {demotionConfirmBody(
                   props.memberName,
-                  props.teamName,
                   props.currentRole,
                   props.nextRole,
                 )}

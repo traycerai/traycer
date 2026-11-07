@@ -293,6 +293,7 @@ describe("<TerminalTile /> close navigation", () => {
       EPIC_ID,
       fixture.viewTabId,
       expect.any(Function),
+      "user",
     );
     expect(testState.navigateResults[0]).not.toBeNull();
     expect(testState.navigateResults[0]?.tileInstanceId).toBeUndefined();
@@ -318,6 +319,7 @@ describe("<TerminalTile /> close navigation", () => {
         EPIC_ID,
         fixture.viewTabId,
         expect.any(Function),
+        "automatic",
       );
     });
     expect(testState.navigateResults[0]).not.toBeNull();
@@ -384,6 +386,7 @@ describe("<TerminalTile /> close navigation", () => {
       EPIC_ID,
       fixture.viewTabId,
       expect.any(Function),
+      "automatic",
     );
   });
 

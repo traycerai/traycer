@@ -11,6 +11,7 @@ import {
   HOST_UNARY_RPC_ROUTES,
   NO_POOL_HOST_RPC_TIER_PLAN,
   chatServingHostId,
+  isMachineHostDirectoryEntry,
   createHostRpcTierPlan,
   decideHostRpcDispatch,
   hostRpcRouteOf,
@@ -322,46 +323,29 @@ describe("chatServingHostId", () => {
     chatId: "chat-1",
   };
 
-  it("keeps the chat on its own host with no witness", () => {
-    expect(chatServingHostId(chat, teamSandboxEntry, null, POOL_PLAN)).toBe(
-      "chat-host",
-    );
+  it("keeps the chat on its own host when the witness is not asked", () => {
+    expect(chatServingHostId(chat, null, POOL_PLAN)).toBe("chat-host");
   });
 
   it("keeps the chat on its own host when the build has no pool", () => {
-    expect(
-      chatServingHostId(
-        chat,
-        teamSandboxEntry,
-        "at-rest",
-        NO_POOL_HOST_RPC_TIER_PLAN,
-      ),
-    ).toBe("chat-host");
-  });
-
-  it("never moves a personal host's chat, whatever the verdict", () => {
-    for (const host of [
-      localEntry,
-      personalRemoteEntry,
-      personalSandboxEntry,
-    ]) {
-      for (const verdict of ["live", "at-rest", "unknown"] as const) {
-        expect(chatServingHostId(chat, host, verdict, POOL_PLAN)).toBe(
-          "chat-host",
-        );
-      }
-    }
-  });
-
-  it("serves a team sandbox's chat from the sandbox while live and from the pool at rest or unknown", () => {
-    expect(chatServingHostId(chat, teamSandboxEntry, "live", POOL_PLAN)).toBe(
+    expect(chatServingHostId(chat, "at-rest", NO_POOL_HOST_RPC_TIER_PLAN)).toBe(
       "chat-host",
     );
-    expect(
-      chatServingHostId(chat, teamSandboxEntry, "at-rest", POOL_PLAN),
-    ).toBe(POOL_HOST_ID);
-    expect(
-      chatServingHostId(chat, teamSandboxEntry, "unknown", POOL_PLAN),
-    ).toBe(POOL_HOST_ID);
+  });
+
+  it("serves the chat from its host while live and from the pool at rest or unknown", () => {
+    expect(chatServingHostId(chat, "live", POOL_PLAN)).toBe("chat-host");
+    expect(chatServingHostId(chat, "at-rest", POOL_PLAN)).toBe(POOL_HOST_ID);
+    expect(chatServingHostId(chat, "unknown", POOL_PLAN)).toBe(POOL_HOST_ID);
+  });
+});
+
+describe("isMachineHostDirectoryEntry", () => {
+  it("is a local or remote host that is not a sandbox, and never the pool", () => {
+    expect(isMachineHostDirectoryEntry(localEntry)).toBe(true);
+    expect(isMachineHostDirectoryEntry(personalRemoteEntry)).toBe(true);
+    expect(isMachineHostDirectoryEntry(personalSandboxEntry)).toBe(false);
+    expect(isMachineHostDirectoryEntry(teamSandboxEntry)).toBe(false);
+    expect(isMachineHostDirectoryEntry(poolEntry)).toBe(false);
   });
 });

@@ -71,17 +71,18 @@ type PendingDemotion = {
 /**
  * The two roles the demotion confirm asks about. A closed dialog asks about
  * nothing, and the member it last named is already gone from the state, so it
- * reads the lowest role rather than claiming one it cannot see.
+ * reads the lowest role rather than claiming one it cannot see. A member whose
+ * seat carries no role cannot be demoted, so it reads the lowest role too.
  */
 function demotionRoles(demotion: PendingDemotion | null): {
   readonly currentRole: TeamRole;
   readonly nextRole: TeamRole;
 } {
-  if (demotion === null) return { currentRole: "viewer", nextRole: "viewer" };
-  return {
-    currentRole: demotion.member.effectiveRole,
-    nextRole: demotion.nextRole,
-  };
+  const currentRole = demotion?.member.effectiveRole ?? null;
+  if (demotion === null || currentRole === null) {
+    return { currentRole: "editor", nextRole: "editor" };
+  }
+  return { currentRole, nextRole: demotion.nextRole };
 }
 
 /**
@@ -302,7 +303,8 @@ export function MembersView(props: {
   readonly teamName: string;
   readonly teamHandle: string;
   readonly currentUserId: string;
-  readonly viewerRole: TeamRole;
+  /** `null` for a reader holding no seat authority. */
+  readonly viewerRole: TeamRole | null;
   readonly membersRead: MembersReadState;
   readonly members: readonly MembersListMember[];
   readonly legacyMembers: readonly string[];
@@ -494,10 +496,12 @@ export function MembersView(props: {
     // back — and without this its answer would open a question about a role
     // the person has already changed their mind about.
     closeDemotion();
-    if (role === member.effectiveRole) return;
+    const currentRole = member.effectiveRole;
+    if (role === currentRole) return;
     // Every demotion is confirmed, because it takes something away; a
-    // promotion gives, so it is written straight through.
-    if (isRoleDemotion(member.effectiveRole, role)) {
+    // promotion gives, so it is written straight through. A seat with no
+    // authority has nothing to take away, so naming a role for it promotes.
+    if (currentRole !== null && isRoleDemotion(currentRole, role)) {
       setDemotion({ member, nextRole: role });
       return;
     }

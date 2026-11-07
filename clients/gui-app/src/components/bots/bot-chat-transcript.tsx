@@ -44,10 +44,15 @@ import {
   type ChatBotTurnReceipt,
 } from "@/components/chat/chat-bot-presentation-context";
 import type { QuestionCardAnswer } from "@/components/chat/question-card";
+import {
+  ChatAttachmentScopeContext,
+  type ChatAttachmentScopeValue,
+} from "@/components/chat/chat-attachment-scope-context";
 import { ChatContainerContext } from "@/components/chat/chat-container-context";
 import { TasklessMarkdownLinkProvider } from "@/components/chat/chat-markdown-link-provider";
 import { useSubagentDrillIn } from "@/components/chat/segments/subagent-open-as-chat";
 import { TileErrorBoundary } from "@/components/epic-canvas/renderers/tile-error-boundary";
+import { useHostDirectoryEntry } from "@/hooks/host/use-host-directory-entry";
 import { useTabHostClient } from "@/hooks/host/use-tab-host-client";
 import { useChatSessionHandleForContainer } from "@/lib/registries/chat-session-registry";
 import { useAuthStore } from "@/stores/auth/auth-store";
@@ -329,19 +334,46 @@ export function BotChatTranscript(props: {
   }
   return (
     <TileErrorBoundary instanceId={instanceId} resetKey={chatId}>
-      <BotChatTranscriptBody
-        handle={handle}
-        botId={botId}
-        chatId={chatId}
-        hostId={hostId}
-        title={title}
-        instanceId={instanceId}
-        surface={surface}
-        resolveMember={resolveMember}
-        header={header}
-        landOn={props.landOn}
-      />
+      <BotTranscriptImageScope botId={botId} chatId={chatId} hostId={hostId}>
+        <BotChatTranscriptBody
+          minimapEnabled={surface?.kind !== "thread"}
+          handle={handle}
+          botId={botId}
+          chatId={chatId}
+          hostId={hostId}
+          title={title}
+          instanceId={instanceId}
+          surface={surface}
+          resolveMember={resolveMember}
+          header={header}
+          landOn={props.landOn}
+        />
+      </BotTranscriptImageScope>
     </TileErrorBoundary>
+  );
+}
+
+/**
+ * Where a row's images are read from: the bot's attachment store, under the bot
+ * id, on the host serving the tab.
+ */
+export function BotTranscriptImageScope(props: {
+  readonly botId: string;
+  readonly chatId: string;
+  readonly hostId: string;
+  readonly children: ReactNode;
+}): ReactNode {
+  const { botId, chatId, hostId, children } = props;
+  const client = useTabHostClient();
+  const hostVersion = useHostDirectoryEntry(hostId)?.version ?? null;
+  const scope = useMemo<ChatAttachmentScopeValue>(
+    () => ({ epicId: botId, chatId, hostId, hostVersion, client }),
+    [botId, chatId, client, hostId, hostVersion],
+  );
+  return (
+    <ChatAttachmentScopeContext value={scope}>
+      {children}
+    </ChatAttachmentScopeContext>
   );
 }
 
@@ -380,6 +412,7 @@ function channelIntro(
 }
 
 function BotChatTranscriptBody(props: {
+  readonly minimapEnabled: boolean;
   readonly handle: ChatSessionStoreHandle;
   readonly botId: string;
   readonly chatId: string;
@@ -632,6 +665,7 @@ function BotChatTranscriptBody(props: {
                 tabHostId={hostId}
               >
                 <ChatMessages
+                  minimapEnabled={props.minimapEnabled}
                   taskTitle={title}
                   taskId={chatId}
                   epicId={botId}

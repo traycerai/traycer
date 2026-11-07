@@ -1,9 +1,12 @@
 import { afterEach, describe, expect, it } from "vitest";
 import { cleanup, render, screen } from "@testing-library/react";
-import { HOST_FROZEN_WORD } from "@traycer/protocol/host/host-status";
+import userEvent from "@testing-library/user-event";
+import type { HostBusyBreakdown } from "@traycer/protocol/host/status/index";
+import { SandboxHeaderNotices } from "@/components/hosts/sandbox-card";
 import { HostIdentityCard } from "@/components/settings/host-scope/host-identity-card";
 import { hostScopeOptionFixture } from "@/components/settings/host-scope/host-scope-fixture";
 import type { HostScopeOption } from "@/components/settings/host-scope/host-scope-model";
+import { TooltipProvider } from "@/components/ui/tooltip";
 
 afterEach(cleanup);
 
@@ -42,10 +45,8 @@ function renderCard(host: HostScopeOption): void {
     <HostIdentityCard
       host={host}
       displayName={host.name}
-      version={null}
       nameAction={null}
       nameInput={null}
-      nameRowWraps={false}
       busy={false}
       busySessionCount={null}
       busyBreakdown={null}
@@ -53,7 +54,9 @@ function renderCard(host: HostScopeOption): void {
       healthAction={null}
       lifecycleLine={null}
     >
-      {null}
+      {host.sandbox === null ? null : (
+        <SandboxHeaderNotices sandbox={host.sandbox} teamName={null} />
+      )}
     </HostIdentityCard>,
   );
 }
@@ -92,6 +95,51 @@ describe("<HostIdentityCard /> a sandbox's state word against its health", () =>
     expect(screen.getByTestId("host-identity-sandbox-state").textContent).toBe(
       "Suspended",
     );
-    expect(screen.getByText(HOST_FROZEN_WORD, { exact: true })).toBeTruthy();
+    expect(screen.getByTestId("sandbox-card-state-line").textContent).toBe(
+      "Your credits ran out",
+    );
+  });
+
+  it("makes the full busy breakdown available by keyboard through its tooltip", async () => {
+    const user = userEvent.setup();
+    const breakdown: HostBusyBreakdown = {
+      workingAgents: 2,
+      activeTerminalAgents: 1,
+      busyTerminals: 3,
+    };
+    const label = "2 agents · 1 terminal agent · 3 terminals working";
+    const host = sandboxHost("awake", "online", false);
+
+    render(
+      <TooltipProvider delayDuration={0}>
+        <HostIdentityCard
+          host={host}
+          displayName={host.name}
+          nameAction={null}
+          nameInput={null}
+          busy
+          busySessionCount={6}
+          busyBreakdown={breakdown}
+          actions={null}
+          healthAction={null}
+          lifecycleLine={null}
+        >
+          {host.sandbox === null ? null : (
+            <SandboxHeaderNotices sandbox={host.sandbox} teamName={null} />
+          )}
+        </HostIdentityCard>
+      </TooltipProvider>,
+    );
+
+    const trigger = screen.getByRole("button", { name: "Busy" });
+    expect(screen.getByTestId("host-active-sessions").textContent).toBe("Busy");
+
+    await user.tab();
+
+    expect(document.activeElement).toBe(trigger);
+    expect((await screen.findByRole("tooltip")).textContent).toBe(label);
+    expect(
+      screen.getByRole("button", { name: "Busy", description: label }),
+    ).toBe(trigger);
   });
 });

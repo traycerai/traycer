@@ -46,6 +46,7 @@ import {
   useLandingDraftStore,
 } from "@/stores/home/landing-draft-store";
 import { tabRouteOptions } from "@/stores/tabs/registry";
+import { useLandingPanelStore } from "@/stores/home/landing-panel-store";
 import { HOME_TAB_REF, isHomePath } from "@/stores/tabs/kinds/home";
 import { isTracySurfaceOpen, TRACY_TAB_REF } from "@/stores/tabs/kinds/tracy";
 import { useTracySurfaceStore } from "@/stores/bots/tracy-surface-store";
@@ -1203,6 +1204,9 @@ export class TabNavigationController {
     }
     if (requested.kind === "new-draft") {
       if (ref.kind !== "draft") return null;
+      // New Task must expose the composer even when the inherited panel
+      // layout fills the Start Page. Existing-draft navigation keeps its layout.
+      useLandingPanelStore.getState().setPanelMaximized(ref.id, false);
       if (requested.groupId !== undefined)
         useTabsStore.getState().setTabGroup(ref, requested.groupId);
       return draftTabIntent(ref.id);
@@ -1276,7 +1280,9 @@ export class TabNavigationController {
           "direct_ui",
         ),
         commitWithoutNavigation,
-        MANUAL_TILE_OPEN,
+        // Tab activation is a gesture; the envelope being built here owns the
+        // route write, so this claim reaches no commit of its own.
+        { ...MANUAL_TILE_OPEN, provenance: "user" },
       );
     }
     return canvas.prepareSetActiveTileTabFocusTarget(

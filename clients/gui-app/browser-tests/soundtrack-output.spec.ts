@@ -1,6 +1,6 @@
 import { expect, test, type Page } from "@playwright/test";
 
-import { fixture } from "./support/fixtures.ts";
+import { fixture, nextFrames } from "./support/fixtures.ts";
 
 // What the soundtrack's Web Audio port renders when a voice or a gain is cut or
 // turned round: a click is one wrong sample, and jsdom renders none. Every
@@ -380,4 +380,82 @@ test("a volume moved during a chime's duck leaves the duck alone", async ({
   expect(duckedLouder).toBeCloseTo(0.9 * gain, 3);
   expect(released).toBeCloseTo(0.9, 3);
   expect(biggestStep).toBeLessThan(0.02);
+});
+
+interface LiveFrame {
+  readonly state: "running" | "suspended" | "closed";
+  readonly time: number;
+  readonly audible: number;
+}
+
+function live<T>(page: Page, call: string): Promise<T> {
+  return page.evaluate<T>(`window.__soundtrackOutputProbe.live.${call}`);
+}
+
+// A pause on a real, running AudioContext: the mix fades to nothing while the
+// clock still runs, then the context suspends and the clock stands still, and
+// resume starts it again and brings the mix back. The offline context the
+// tests above render with has no clock to stop. A real gesture lets the context
+// run without a flag.
+test("a pause fades the mix out, then suspends the clock, and resume goes on from there", async ({
+  page,
+}) => {
+  await page.mouse.click(10, 10);
+  await live(page, "open()");
+  await expect
+    .poll(async () => (await live<LiveFrame>(page, "read()")).time)
+    .toBeGreaterThan(0.2);
+  expect((await live<LiveFrame>(page, "read()")).audible).toBe(1);
+
+  await live(page, "startRecording()");
+  await live(page, "pause()");
+  await expect
+    .poll(async () => (await live<LiveFrame>(page, "read()")).state)
+    .toBe("suspended");
+  const frames = await live<LiveFrame[]>(page, "stopRecording()");
+
+  // The fade was heard on a running clock, and ended at nothing before the stop.
+  const running = frames.filter((frame) => frame.state === "running");
+  expect(running.some((frame) => frame.audible > 0 && frame.audible < 1)).toBe(
+    true,
+  );
+  expect(running.at(-1)?.audible).toBe(0);
+  const stopped = await live<LiveFrame>(page, "read()");
+  expect(stopped.audible).toBe(0);
+
+  // Frames pass and the clock does not.
+  await nextFrames(page, 10);
+  expect((await live<LiveFrame>(page, "read()")).time).toBe(stopped.time);
+
+  await live(page, "resume()");
+  await expect
+    .poll(async () => (await live<LiveFrame>(page, "read()")).time)
+    .toBeGreaterThan(stopped.time);
+  await expect
+    .poll(async () => (await live<LiveFrame>(page, "read()")).audible)
+    .toBe(1);
+});
+
+test("a recording starts at its offset and a cut never reports natural completion", async ({
+  page,
+}) => {
+  const result = await page.evaluate<{ readings: number[]; ended: string[] }>(
+    "window.__soundtrackOutputProbe.renderRecording()",
+  );
+  expect(result.readings[0]).toBeCloseTo(1, 2);
+  expect(result.readings[1]).toBeCloseTo(0.75, 2);
+  expect(result.readings[2]).toBeCloseTo(0, 2);
+  expect(result.ended).toEqual(["natural"]);
+});
+
+test("composed audio reaches the capture tap while volume and duck change the speakers", async ({
+  page,
+}) => {
+  const result = await page.evaluate<{ speaker: number[]; capture: number[] }>(
+    "window.__soundtrackOutputProbe.renderRecordingGraph()",
+  );
+  expect(result.speaker[0]).toBeCloseTo(1, 2);
+  expect(result.speaker[1]).toBeCloseTo(0.5, 2);
+  expect(result.speaker[2]).toBeCloseTo(0.5 * (await duckTuning(page)).gain, 2);
+  for (const sample of result.capture) expect(sample).toBeCloseTo(1, 2);
 });

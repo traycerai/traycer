@@ -1,4 +1,13 @@
-import { useLayoutEffect, useRef, useState, type ReactNode } from "react";
+import { useArtifactExpanded } from "@/components/artifacts/artifact-expanded-context";
+import { ArtifactExpandButton } from "@/components/artifacts/artifact-expand-button";
+import {
+  useEffect,
+  useEffectEvent,
+  useLayoutEffect,
+  useRef,
+  useState,
+  type ReactNode,
+} from "react";
 import { ArrowLeft, House, Minus, MoreHorizontal, Plus } from "lucide-react";
 import { ActualSizeGlyph } from "@/components/epic-canvas/zoom-controls/zoom-controls";
 import { useCoarsePointer } from "@/hooks/ui/use-coarse-pointer";
@@ -21,6 +30,7 @@ import { TooltipWrapper } from "@/components/ui/tooltip-wrapper";
 import type { ArtifactManifest } from "@/lib/sandbox/artifact-serving";
 import type {
   SandboxBridgeHost,
+  SandboxHtmlView,
   SandboxSize,
   SandboxStatus,
 } from "@/lib/sandbox/bridge-host";
@@ -247,6 +257,20 @@ function freshHistory(entryPath: string): PageHistory {
 }
 
 /**
+ * Comments anchor to the entry page's bytes, so only the entry page is
+ * commented on, and only once it is the page loaded: Back and Home name it at
+ * once, while the page they leave is still showing.
+ */
+function commentsOnLoadedEntryPage(
+  commenting: boolean,
+  onEntryPage: boolean,
+  provenPage: { readonly path: string } | null,
+  entryPath: string,
+): boolean {
+  return commenting && onEntryPage && provenPage?.path === entryPath;
+}
+
+/**
  * A served plain-html artifact: a folder of pages the reader moves between
  * inside one frame. The app keeps its own page stack, so Back and Home work
  * whatever the page does, and a link to a page the folder lacks says so
@@ -254,17 +278,19 @@ function freshHistory(entryPath: string): PageHistory {
  * artifact (the canvas tile, the chat row) renders it through here.
  */
 export function ArtifactPagesFrame(props: {
+  readonly initialHistory?: PageHistory;
   readonly source: Extract<SandboxSource, { kind: "artifact" }>;
   readonly title: string;
   readonly className: string;
   /** The page's height in px, or `null` to fill what the row leaves. */
   readonly height: number | null;
   /**
-   * Whether the zoom cluster is offered. A filling page zooms through its
-   * viewer script; a document served without that script has nothing to
-   * answer the buttons.
+   * Whether a press on the entry page picks an element to comment on instead
+   * of acting on the page. The page stays loaded either way - this is a mode
+   * the loaded page is told to take - so its scroll, zoom and own state
+   * outlast the switch. Other pages are read as usual.
    */
-  readonly pageZoom: boolean;
+  readonly commenting: boolean;
   readonly onSize: (size: SandboxSize) => void;
   readonly onStatus: (status: SandboxStatus) => void;
   readonly onBridge: ((bridge: SandboxBridgeHost | null) => void) | null;
@@ -296,7 +322,7 @@ export function ArtifactPagesFrame(props: {
     title,
     className,
     height,
-    pageZoom,
+    commenting,
     onSize,
     onStatus,
     onBridge,
@@ -305,6 +331,7 @@ export function ArtifactPagesFrame(props: {
     renderOverlay,
     sourceEquivalent,
   } = props;
+  const expanded = useArtifactExpanded();
   const entryPath = source.entryPath === "" ? "index.html" : source.entryPath;
   const bridgeRef = useRef<SandboxBridgeHost | null>(null);
   const [controlsElement, setControlsElement] = useState<HTMLDivElement | null>(
@@ -313,12 +340,17 @@ export function ArtifactPagesFrame(props: {
   const scaleRef = useRef(1);
   const [scale, setScale] = useState(1);
   const [ready, setReady] = useState(false);
+  // The page of the document that last proved itself, a fresh object for
+  // each proof. Back and Home move `currentPath` at once while the page they
+  // leave is still loaded, so the comment mode follows this, not the request.
+  const [provenPage, setProvenPage] = useState<{
+    readonly path: string;
+  } | null>(null);
   const coarsePointer = useCoarsePointer();
   const controlSize = coarsePointer ? "icon-touch" : "icon-sm";
-  const changeScale = (next: number): void => {
-    bridgeRef.current?.setHtmlView(height === null, next);
-  };
-  const [history, setHistory] = useState(() => freshHistory(entryPath));
+  const [history, setHistory] = useState(
+    () => props.initialHistory ?? freshHistory(entryPath),
+  );
   let current = history;
   if (history.entryPath !== entryPath) {
     current = freshHistory(entryPath);
@@ -330,6 +362,7 @@ export function ArtifactPagesFrame(props: {
     path: currentPath,
     visit: current.visit,
     onNavigate: (path) => {
+      setProvenPage({ path });
       setHistory((previous) =>
         path === previous.currentPath
           ? { ...previous, missing: false, unreachable: false }
@@ -395,18 +428,35 @@ export function ArtifactPagesFrame(props: {
 
   const standIn = pageStandIn(current, { goHome, readAgain });
   const fills = height === null;
-  const pages = pageNavigationFor(source.manifest, current);
-  const zoom = fills && pageZoom ? { ready, scale } : null;
-  const hasControls =
-    pages !== null ||
-    zoom !== null ||
-    props.toolbarControls !== undefined ||
-    props.menuItems !== undefined;
-  const pageInsetTop = useControlsInset(
-    controlsElement,
-    fills && hasControls,
-    coarsePointer,
+  const onEntryPage = currentPath === entryPath && standIn === null;
+  const commentingHere = commentsOnLoadedEntryPage(
+    commenting,
+    onEntryPage,
+    provenPage,
+    entryPath,
   );
+  const viewAt = (next: number): SandboxHtmlView => ({
+    enabled: fills,
+    scale: next,
+    commenting: commentingHere,
+  });
+  const changeScale = (next: number): void => {
+    bridgeRef.current?.setHtmlView(viewAt(next));
+  };
+  // Every load is a fresh document that opens for reading, so it is told its
+  // view and mode once its proof has rendered, and again on each change.
+  const tellReadyPage = useEffectEvent(() => {
+    const bridge = bridgeRef.current;
+    if (!ready || bridge === null) return;
+    bridge.setHtmlView(viewAt(scaleRef.current));
+    void bridge.setMode(commentingHere ? "edit" : "play");
+  });
+  useEffect(() => {
+    tellReadyPage();
+  }, [provenPage, commentingHere]);
+  const pages = pageNavigationFor(source.manifest, current);
+  const zoom = fills ? { ready, scale } : null;
+  const pageInsetTop = useControlsInset(controlsElement, fills, coarsePointer);
   return (
     <div
       className={cn(
@@ -414,20 +464,40 @@ export function ArtifactPagesFrame(props: {
         fills && "h-full",
       )}
     >
-      {hasControls ? (
-        <ArtifactPageControls
-          onElement={setControlsElement}
-          revealOnHover={!fills}
-          controlSize={controlSize}
-          pages={pages}
-          onBack={goBack}
-          onHome={goHome}
-          zoom={zoom}
-          onScale={changeScale}
-          toolbarControls={props.toolbarControls}
-          menuItems={props.menuItems}
-        />
-      ) : null}
+      <ArtifactPageControls
+        onElement={setControlsElement}
+        revealOnHover={!fills}
+        controlSize={controlSize}
+        pages={pages}
+        onBack={goBack}
+        onHome={goHome}
+        zoom={zoom}
+        onScale={changeScale}
+        toolbarControls={
+          <>
+            {props.toolbarControls}
+            <ArtifactExpandButton title={title}>
+              <ArtifactPagesFrame
+                source={source}
+                initialHistory={current}
+                title={title}
+                className="h-full w-full"
+                height={null}
+                commenting={false}
+                onSize={noop}
+                onStatus={noop}
+                onBridge={null}
+                onTextSelection={null}
+                onFrame={null}
+                renderOverlay={null}
+                sourceEquivalent={sourceEquivalent}
+                menuItems={props.menuItems}
+              />
+            </ArtifactExpandButton>
+          </>
+        }
+        menuItems={props.menuItems}
+      />
       <div className={cn("relative w-full", fills && "min-h-0 flex-1")}>
         <SandboxFrame
           pageInsetTop={pageInsetTop}
@@ -444,12 +514,10 @@ export function ArtifactPagesFrame(props: {
           onSize={onSize}
           onStatus={(status) => {
             setReady(status === "ready");
-            if (status === "ready")
-              bridgeRef.current?.setHtmlView(fills, scaleRef.current);
             onStatus(status);
           }}
           onRequestTeardown={noop}
-          displayMode="inline"
+          displayMode={expanded ? "fullscreen" : "inline"}
           onBridge={(bridge) => {
             bridgeRef.current = bridge;
             if (bridge === null) setReady(false);
@@ -464,7 +532,7 @@ export function ArtifactPagesFrame(props: {
           sourceEquivalent={sourceEquivalent}
           ref={onFrame}
         />
-        {renderOverlay?.(currentPath === entryPath && standIn === null)}
+        {renderOverlay?.(onEntryPage)}
         {standIn}
       </div>
     </div>

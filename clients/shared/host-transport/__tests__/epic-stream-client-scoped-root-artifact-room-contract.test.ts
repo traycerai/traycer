@@ -418,13 +418,35 @@ describe("EpicStreamClient scoped root/artifact-room contract (B6)", () => {
     sockets[0].fireText({
       kind: "permissionChanged",
       epicId: "epic-1",
-      permissionRole: "viewer",
+      permissionRole: "editor",
       hasBinaryPayload: false,
     });
 
     expect(recorder.updates).toHaveLength(1);
     expect(recorder.awareness).toHaveLength(1);
-    expect(recorder.permissionChanges).toEqual(["viewer"]);
+    expect(recorder.permissionChanges).toEqual(["editor"]);
+    client.close();
+  });
+
+  it("delivers a permission frame naming the retired viewer role as no role, never as a grant", () => {
+    const { factory, sockets } = makeFactory();
+    const recorder = makeRecorder();
+    const client = new EpicStreamClient({
+      wsStreamClient: makeWsStreamClient(factory),
+      epicId: "epic-1",
+      callbacks: recorder.callbacks,
+      seedOfferProvider: () => null,
+    });
+    completeHandshake(sockets[0]);
+
+    sockets[0].fireText({
+      kind: "permissionChanged",
+      epicId: "epic-1",
+      permissionRole: "viewer",
+      hasBinaryPayload: false,
+    });
+
+    expect(recorder.permissionChanges).toEqual([null]);
     client.close();
   });
 

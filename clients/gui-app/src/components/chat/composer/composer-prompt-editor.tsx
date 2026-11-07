@@ -32,7 +32,6 @@ import {
   registerComposerFocus,
 } from "@/lib/composer/composer-focus-registry";
 import { normalizeComposerContentWithSelection } from "@/lib/composer/composer-content-normalizer";
-import { hasClaimableFileTransfer } from "@/lib/files/file-transfer-paths";
 import { usePaneActivationFocusIntent } from "@/components/epic-canvas/pane-activation";
 import { usePaneFocusProbe } from "@/components/epic-tabs/pane-visibility-context";
 
@@ -222,7 +221,9 @@ export interface ComposerPromptEditorProps {
   readonly stabilizeImageAttachmentCaret: boolean;
   readonly isActive: boolean;
   readonly disabled: boolean;
-  readonly slashProviderId: GuiHarnessId;
+  /** `null` for a box with no slash commands. */
+  readonly slashProviderId: GuiHarnessId | null;
+  readonly preserveMessagePaste?: boolean;
   readonly hasPastedImageBytes: ((hash: string) => boolean) | null;
   /**
    * Landing-only: validates a paste's inline-base64 images + starts their
@@ -352,6 +353,7 @@ function ComposerPromptEditorImpl(props: ComposerPromptEditorProps) {
     isActive,
     disabled,
     slashProviderId,
+    preserveMessagePaste = false,
     hasPastedImageBytes,
     ingestPastedComposerImages,
     onDocumentChange,
@@ -426,6 +428,7 @@ function ComposerPromptEditorImpl(props: ComposerPromptEditorProps) {
         getPlaceholder,
         onSubmit: stableSubmitHolder,
         slashProviderId,
+        preserveMessagePaste,
         getHasPastedImageBytes,
         getIngestPastedComposerImages,
       }),
@@ -435,6 +438,7 @@ function ComposerPromptEditorImpl(props: ComposerPromptEditorProps) {
       getIngestPastedComposerImages,
       pickerStore,
       slashProviderId,
+      preserveMessagePaste,
       stableSubmitHolder,
     ],
   );
@@ -698,22 +702,6 @@ function ComposerPromptEditorImpl(props: ComposerPromptEditorProps) {
     [applyContent],
   );
 
-  const handleDrop = useCallback<DragEventHandler<HTMLElement>>(
-    (event) => {
-      if (editor !== null && hasClaimableFileTransfer(event.dataTransfer)) {
-        const dropPos = editor.view.posAtCoords({
-          left: event.clientX,
-          top: event.clientY,
-        });
-        if (dropPos !== null) {
-          editor.commands.setTextSelection(dropPos.pos);
-        }
-      }
-      onDrop(event);
-    },
-    [editor, onDrop],
-  );
-
   const insertImageAttachments = useCallback(
     (attrs: ReadonlyArray<ImageAttachmentAttrs>) => {
       if (editor === null) return;
@@ -885,7 +873,7 @@ function ComposerPromptEditorImpl(props: ComposerPromptEditorProps) {
       className="relative flex-1"
       onPaste={onPaste}
       onDragOver={onDragOver}
-      onDrop={handleDrop}
+      onDrop={onDrop}
       onKeyDown={onKeyDown}
       onFocus={onFocus}
       onBlur={onBlur}

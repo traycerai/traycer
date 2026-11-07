@@ -39,13 +39,9 @@ function renderTeamsError(): void {
         pending={{
           anyMutation: false,
           shareTeamId: null,
-          roleTeamId: null,
           revokeTeamId: null,
         }}
-        teamRolesById={{}}
-        onPendingTeamRoleChange={() => undefined}
         onShareTeam={() => undefined}
-        onRoleChange={() => undefined}
         onRevokeRequest={() => undefined}
       />
     </TooltipProvider>,

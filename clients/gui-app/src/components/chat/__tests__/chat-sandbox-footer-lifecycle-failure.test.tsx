@@ -61,7 +61,6 @@ function renderFooter(state: ChatSandboxState): void {
         line={
           resolveChatSandbox(state, {
             reachable: false,
-            canEdit: true,
             ownedByViewer: true,
             environmentOwned: false,
           }).line
@@ -198,7 +197,7 @@ describe("<ChatSandboxFooter /> lifecycle failures", () => {
 
       renderFooter(frozenTeam(state));
       const action = screen.getByRole("button", {
-        name: /resume using my acme credits/i,
+        name: "Resume",
       });
       await userEvent.click(action);
 

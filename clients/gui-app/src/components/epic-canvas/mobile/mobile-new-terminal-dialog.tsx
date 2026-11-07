@@ -55,6 +55,7 @@ export function MobileNewTerminalDialog(props: MobileNewTerminalDialogProps) {
           "explicit",
           "direct_ui",
         ),
+        "user",
       );
       onOpenChange(false);
       if (onLaunched !== null) onLaunched();
@@ -106,6 +107,7 @@ export function MobileNewTerminalDialog(props: MobileNewTerminalDialogProps) {
             epicId={epicId}
             surfaceKey={surfaceKey}
             autoFocusSearch={!coarsePointer}
+            showHeading={false}
             onLaunch={handleLaunch}
           />
         ) : null}

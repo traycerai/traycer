@@ -20,7 +20,6 @@ import type {
 import { SettingsPanelShell } from "@/components/settings/settings-panel-shell";
 import { SANDBOXES } from "@/components/settings/environment/sandboxes-page.definitions";
 import { SandboxDestroyAllIdleDialog } from "@/components/hosts/sandbox-confirm-dialogs";
-import { SandboxSessionPillBadge } from "@/components/hosts/sandbox-reported-sessions";
 import { SandboxRowActions } from "@/components/settings/panels/sandbox-row-actions";
 import { useOpenAutomationTerminal } from "@/components/settings/panels/use-open-automation-terminal";
 import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
@@ -53,11 +52,7 @@ import { useEnvironmentPick } from "@/stores/settings/settings-environment-pick-
 import { useRefreshSandboxCosts } from "@/hooks/sandboxes/use-refresh-sandbox-costs";
 import { useSandboxRowSessionReport } from "@/hooks/sandboxes/use-sandbox-session-report";
 import { useSandboxSettingsStatus } from "@/hooks/sandboxes/use-sandbox-settings-status";
-import {
-  sandboxSettingsFailed,
-  sandboxSettingsEvidence,
-  sandboxSettingsStepsLine,
-} from "@traycer/protocol/host/sandbox-settings";
+import { sandboxSettingsFailed } from "@traycer/protocol/host/sandbox-settings";
 import { useSandboxRowUnreachable } from "@/hooks/sandboxes/use-sandbox-row-unreachable";
 import { useOpenLink } from "@/lib/links/open-link";
 import { useSampledNow } from "@/lib/relative-time";
@@ -74,20 +69,16 @@ import {
   sandboxFilterCount,
   sandboxFilterSummary,
   sandboxFrozenNeedsOwnCredits,
-  sandboxKeptByLabel,
+  sandboxFrozenClock,
+  sandboxWakePayerConsequence,
   sandboxListHeader,
-  sandboxPaidByLabel,
   sandboxPublicState,
   sandboxRowKind,
   sandboxRowMatches,
-  sandboxSessionPills,
-  sandboxSessionsLine,
   sandboxShapeAndCostLine,
-  sandboxStartedByLabel,
   sandboxTeamUsageUrl,
   sortSandboxRows,
   unstartedAutomationsMatches,
-  type SandboxSessionReport,
   type SandboxKindFilter,
   type SandboxPageConfiguration,
   type SandboxPublicState,
@@ -131,15 +122,10 @@ export function SandboxesSettingsPanel(): ReactNode {
   const configuration = configurationForPick(configurations, pick);
   const runnerHost = useRunnerHost();
   const openLink = useOpenLink();
-  const team = configuration.kind === "team";
   return (
     <SettingsPanelShell
       title={SANDBOXES.page.label}
-      description={
-        team
-          ? `Every sandbox running on ${configuration.teamName}'s settings, whoever started it, and what each one costs. Start one from a task's host picker.`
-          : "Every sandbox running on your settings and what each one costs. Start one from a task's host picker."
-      }
+      bodyClassName="overflow-visible rounded-none border-0 bg-transparent"
       headerAction={
         <div className="flex flex-wrap items-center justify-end gap-2">
           {configuration.kind === "team" ? (
@@ -464,16 +450,19 @@ function SandboxListSection(props: SandboxListSectionProps): ReactNode {
   const destroyAllOffered = sandboxDestroyAllIdleOffered(filter);
   const idleTargets = shown.filter((row) => row.kind !== "automation");
   return (
-    <section aria-label="Sandboxes" data-testid="sandboxes-list">
+    <section
+      aria-label="Sandboxes"
+      className="rounded-xl border border-border/60 bg-card/40"
+      data-testid="sandboxes-list"
+    >
       <div className="flex flex-col gap-3 border-b border-border/60 px-5 py-4 sm:flex-row sm:items-center sm:justify-between">
         <SandboxListHeading
-          configuration={configuration}
           summary={summary}
           rows={configurationRows}
           unstartedAutomations={unstartedAutomations}
           figures={figures}
         />
-        <div className="flex min-w-0 items-center gap-2">
+        <div className="flex min-w-0 flex-wrap items-center gap-2">
           <div className="relative min-w-0 flex-1 sm:w-56 sm:flex-none">
             <Search
               className="pointer-events-none absolute top-1/2 left-2 size-3.5 -translate-y-1/2 text-muted-foreground"
@@ -532,11 +521,9 @@ function SandboxListSection(props: SandboxListSectionProps): ReactNode {
 }
 
 /**
- * The list's title, and the line under it: the filter's summary while one
- * applies, else the configuration's rows and today's spend.
+ * The filter summary while one applies, otherwise the count and today's spend.
  */
 function SandboxListHeading(props: {
-  readonly configuration: SandboxPageConfiguration;
   readonly summary: string | null;
   readonly rows: readonly SandboxSummary[];
   readonly unstartedAutomations: boolean;
@@ -545,25 +532,20 @@ function SandboxListHeading(props: {
     readonly yoursMc: number | null;
   };
 }): ReactNode {
-  const { configuration, figures } = props;
+  const { figures } = props;
   return (
     <div className="min-w-0 space-y-1">
-      <h2 className="text-ui font-medium">
-        {configuration.kind === "team"
-          ? `${configuration.teamName}'s sandboxes`
-          : "Your sandboxes"}
-      </h2>
       <p
         className="text-ui-xs text-muted-foreground"
         data-testid="sandboxes-list-header"
       >
         {props.summary ??
-          `${sandboxListHeader({
+          sandboxListHeader({
             rows: props.rows,
             unstartedAutomations: props.unstartedAutomations,
             todayMc: figures.todayMc,
             todayYoursMc: figures.yoursMc,
-          })}.`}
+          })}
       </p>
     </div>
   );
@@ -862,22 +844,23 @@ function UnstartedAutomationsRow(props: {
       data-testid="sandboxes-row-automations-unstarted"
       className="flex flex-col gap-4 px-5 py-4 sm:flex-row sm:items-center sm:justify-between"
     >
-      <div className="flex min-w-0 gap-3">
+      <div className="flex min-w-0 flex-1 gap-3">
         <div className="flex size-9 shrink-0 items-center justify-center rounded-md bg-foreground/8 text-muted-foreground">
           <Workflow className="size-4" aria-hidden />
         </div>
         <div className="min-w-0 space-y-1">
-          <div className="flex flex-wrap items-center gap-2">
-            <span
+          <div className="space-y-1">
+            <div
               className="text-ui-sm font-medium text-foreground wrap-anywhere"
               data-testid="sandboxes-row-name"
             >
               Automations
-            </span>
-            <Badge variant="muted" data-testid="sandboxes-row-state">
-              {hostSandboxStateWord("released")}
-            </Badge>
-            <Badge variant="muted">Automations</Badge>
+            </div>
+            <div className="flex flex-wrap items-center gap-2">
+              <Badge variant="muted" data-testid="sandboxes-row-state">
+                {hostSandboxStateWord("released")}
+              </Badge>
+            </div>
           </div>
           <p className="text-ui-sm text-muted-foreground wrap-anywhere">
             {automationsShapeLine(props.configuration)}
@@ -941,8 +924,31 @@ function SandboxListRow(props: {
     unreachable,
     lastContactAt: summary.lastActivityAt,
   };
-  const paidBy = sandboxPaidByLabel(summary, configuration, viewerUserId);
-  const keptBy = sandboxKeptByLabel(summary, viewerUserId);
+  const setupFailed =
+    awake && (settingsFailed || summary.guestConfigured === false);
+  const payerConsequence = sandboxWakePayerConsequence(
+    summary,
+    configuration,
+    viewerUserId,
+  );
+  let clock: string | null;
+  if (summary.frozen) clock = sandboxFrozenClock(summary.frozenAt);
+  else
+    clock = sandboxClockLine({
+      // A setting the host reports failed is a setup failure too, so its
+      // clock reads the same as a guest that was never configured.
+      summary: settingsFailed
+        ? { ...summary, guestConfigured: false }
+        : summary,
+      configuration,
+      cost: props.cost,
+      wakeString: wake,
+      viewerUserId,
+      reachability,
+      resumePending,
+      now,
+    });
+
   return (
     <li
       data-sandbox-row={summary.id}
@@ -950,73 +956,55 @@ function SandboxListRow(props: {
       data-testid="sandboxes-row"
       className="flex flex-col gap-4 px-5 py-4 sm:flex-row sm:items-center sm:justify-between"
     >
-      <div className="flex min-w-0 gap-3">
+      <div className="flex min-w-0 flex-1 gap-3">
         <div className="flex size-9 shrink-0 items-center justify-center rounded-md bg-foreground/8 text-muted-foreground">
           <KindTile summary={summary} />
         </div>
         <div className="min-w-0 space-y-1">
+          <div
+            className="text-ui-sm font-medium text-foreground wrap-anywhere"
+            data-testid="sandboxes-row-name"
+          >
+            {summary.displayName}
+          </div>
           <div className="flex flex-wrap items-center gap-2">
-            <span
-              className="text-ui-sm font-medium text-foreground wrap-anywhere"
-              data-testid="sandboxes-row-name"
-            >
-              {summary.displayName}
-            </span>
             <Badge
-              variant={STATE_BADGE[state]}
+              variant={setupFailed ? "warning" : STATE_BADGE[state]}
               data-testid="sandboxes-row-state"
             >
               {hostSandboxStateWord(summary.state)}
+              {setupFailed ? " · Setup failed" : ""}
             </Badge>
             {summary.frozen ? (
               <Badge variant="warning">{HOST_FROZEN_WORD}</Badge>
             ) : null}
-            <Badge variant="muted">
-              {sandboxStartedByLabel(summary, viewerUserId)}
-            </Badge>
-            {paidBy === null ? null : <Badge variant="muted">{paidBy}</Badge>}
-            {keptBy === null ? null : <Badge variant="muted">{keptBy}</Badge>}
           </div>
           <p className="text-ui-sm text-muted-foreground wrap-anywhere">
             {sandboxShapeAndCostLine(summary, configuration, viewerUserId)}
           </p>
-          <p
-            className="flex items-start gap-1.5 text-ui-xs text-muted-foreground wrap-anywhere"
-            data-testid="sandboxes-row-clock"
-          >
-            <Clock className="mt-0.5 size-3.5 shrink-0" aria-hidden />
-            <span>
-              {sandboxClockLine({
-                summary: settingsFailed
-                  ? { ...summary, guestConfigured: false }
-                  : summary,
-                configuration,
-                cost: props.cost,
-                wakeString: wake,
-                viewerUserId,
-                reachability,
-                resumePending,
-                now,
-              })}
-            </span>
-          </p>
+          {clock === null ? null : (
+            <p
+              className="flex items-start gap-1.5 text-ui-xs text-muted-foreground wrap-anywhere"
+              data-testid="sandboxes-row-clock"
+            >
+              <Clock className="mt-0.5 size-3.5 shrink-0" aria-hidden />
+              <span className="min-w-0">{clock}</span>
+            </p>
+          )}
+          {setupFailed ? (
+            <p className="text-ui-xs text-muted-foreground wrap-anywhere">
+              Compute is charged while it is awake.
+            </p>
+          ) : null}
           <SandboxRowWithdrawal summary={summary} />
-          {awake && (settingsFailed || summary.guestConfigured === false) ? (
-            <div className="text-ui-xs text-muted-foreground">
-              <p>Compute is charged while it is awake.</p>
-              <p>
-                {sandboxSettingsStepsLine(
-                  sandboxSettingsEvidence(
-                    settingsItems,
-                    props.summary.guestConfigured,
-                  ),
-                )}
-              </p>
-            </div>
-          ) : null}
-          {awake && !unreachable && !resumePending ? (
-            <SandboxRowSessions report={sessions.report} now={now} />
-          ) : null}
+          {payerConsequence === null ? null : (
+            <p
+              className="text-ui-xs text-muted-foreground wrap-anywhere"
+              data-testid="sandboxes-row-payer-consequence"
+            >
+              {payerConsequence}
+            </p>
+          )}
         </div>
       </div>
       <SandboxRowActions
@@ -1056,33 +1044,6 @@ function SandboxRowWithdrawal(props: {
       data-testid="sandboxes-row-withdrawal"
     >
       {line}
-    </p>
-  );
-}
-
-function SandboxRowSessions(props: {
-  readonly report: SandboxSessionReport;
-  readonly now: number;
-}): ReactNode {
-  return (
-    <p
-      className="flex items-center gap-1.5 text-ui-xs text-muted-foreground"
-      data-testid="sandboxes-row-sessions"
-    >
-      {props.report.kind === "live" && props.report.busy ? (
-        <span
-          aria-hidden
-          className="size-1.5 shrink-0 rounded-full bg-success"
-        />
-      ) : null}
-      {sandboxSessionsLine(props.report, props.now)}
-      {sandboxSessionPills(props.report).map((pill) => (
-        <SandboxSessionPillBadge
-          key={pill.key}
-          pill={pill}
-          testId="sandboxes-row-session-pill"
-        />
-      ))}
     </p>
   );
 }

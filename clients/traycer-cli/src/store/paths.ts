@@ -117,6 +117,10 @@ const HOST_NEEDS_REAUTH_FILENAME = "needs-reauth.json";
 // needs-reauth marker, which happens to share the auth marker's filename.
 // Spelled out here for the same reason: host-owned names, no import path.
 const HOST_IDENTITY_SUBDIR = "identity";
+// The host's enrollment record and a team computer's one-time install token
+// (`traycer-host/src/coordination/host-identity.ts`, `team-install-token.ts`).
+const HOST_ENROLLMENT_FILENAME = "enrollment.json";
+const HOST_TEAM_INSTALL_TOKEN_FILENAME = "team-install-token";
 // The dev identity pool's root (`~/.traycer/host/dev/identities/<name>`), the
 // ONLY thing that can make a host's identity home differ from its host home.
 const HOST_DEV_SUBDIR = "dev";
@@ -405,6 +409,32 @@ export function hostIdentityNeedsReauthPath(
     hostHomeDir(environment),
     HOST_IDENTITY_SUBDIR,
     HOST_NEEDS_REAUTH_FILENAME,
+  );
+}
+/**
+ * The host's enrollment record, in the default identity home: present once
+ * the host has registered with Traycer, as a person's host or a team's.
+ */
+export function hostEnrollmentRecordPath(
+  environment: Environment | undefined,
+): string {
+  return join(
+    hostHomeDir(environment),
+    HOST_IDENTITY_SUBDIR,
+    HOST_ENROLLMENT_FILENAME,
+  );
+}
+/**
+ * Where `traycer host join` leaves a team computer's one-time install token
+ * for the host to enroll with; the host deletes it once spent.
+ */
+export function hostTeamInstallTokenPath(
+  environment: Environment | undefined,
+): string {
+  return join(
+    hostHomeDir(environment),
+    HOST_IDENTITY_SUBDIR,
+    HOST_TEAM_INSTALL_TOKEN_FILENAME,
   );
 }
 /**

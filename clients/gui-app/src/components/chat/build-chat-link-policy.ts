@@ -1,3 +1,4 @@
+import type { NestedFocusProvenance } from "@/lib/epic-nested-focus-navigation";
 import type { QueryClient } from "@tanstack/react-query";
 import type { UseNavigateResult } from "@tanstack/react-router";
 import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
@@ -97,7 +98,10 @@ export interface ChatLinkPolicyDeps {
    * in `useEpicTileNavigation().openTile` - and every link open here is a
    * single-click gesture, so the placement setting decides where it lands.
    */
-  readonly openTile: (intent: TileOpenIntent) => void;
+  readonly openTile: (
+    intent: TileOpenIntent,
+    provenance: NestedFocusProvenance,
+  ) => void;
 }
 
 /**
@@ -263,7 +267,7 @@ export function openResolvedArtifact(
         nodeId: artifact.artifactId,
         fallbackHostId: resolveHostId,
         openNode: (node) => {
-          deps.openTile(chatLinkOpenIntent(deps.tabId, node));
+          deps.openTile(chatLinkOpenIntent(deps.tabId, node), "user");
         },
         onBeforeOpen: null,
         onOpened: () => {
@@ -416,7 +420,7 @@ function openWorkspaceFileRef(
   if (link.line !== null) {
     setWorkspaceFileRevealTarget(deps.tabId, ref.id, link.line, link.col);
   }
-  deps.openTile(chatLinkOpenIntent(deps.tabId, ref));
+  deps.openTile(chatLinkOpenIntent(deps.tabId, ref), "user");
 }
 
 /** The click's supersession token, checked when the existence probe settles. */

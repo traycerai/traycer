@@ -406,6 +406,78 @@ function startRenamingBoard(title: string): HTMLElement {
   return screen.getByRole("textbox", { name: "Board name" });
 }
 
+it("opens the current canvas page in the expanded view", async () => {
+  const user = userEvent.setup();
+  mountEditor();
+  openPageMenu();
+  fireEvent.click(screen.getByRole("button", { name: "Details" }));
+  await user.click(screen.getByRole("button", { name: "Expand" }));
+  const dialog = screen.getByRole("dialog", { name: "Canvas" });
+  expect(
+    within(dialog).getByRole("img", { name: "Specs preview" }),
+  ).toBeTruthy();
+  expect(within(dialog).queryByRole("button", { name: "Expand" })).toBeNull();
+  await user.click(within(dialog).getByRole("button", { name: "Close" }));
+  expect(screen.getByRole("img", { name: "Specs preview" })).toBeTruthy();
+});
+
+it("cancels the active tool before Escape closes the expanded canvas", async () => {
+  const user = userEvent.setup();
+  mountEditor();
+  await user.click(screen.getByRole("button", { name: "Expand" }));
+  const dialog = screen.getByRole("dialog", { name: "Canvas" });
+  await user.click(within(dialog).getByRole("button", { name: "Hand (H)" }));
+  expect(
+    within(dialog)
+      .getByRole("button", { name: "Hand (H)" })
+      .getAttribute("aria-pressed"),
+  ).toBe("true");
+
+  await user.keyboard("{Escape}");
+  expect(screen.getByRole("dialog", { name: "Canvas" })).toBeTruthy();
+  expect(
+    within(dialog)
+      .getByRole("button", { name: "Select (V)" })
+      .getAttribute("aria-pressed"),
+  ).toBe("true");
+
+  await user.keyboard("{Escape}");
+  expect(screen.queryByRole("dialog")).toBeNull();
+});
+
+it("clears a selected note before Escape closes the expanded canvas", async () => {
+  const user = userEvent.setup();
+  mountEditor();
+  await user.click(screen.getByRole("button", { name: "Expand" }));
+  streamChanges([{ type: "select", id: "note:note-1", selected: true }]);
+  expect(nodeNamed("note:note-1").selected).toBe(true);
+
+  await user.keyboard("{Escape}");
+  expect(screen.getByRole("dialog", { name: "Canvas" })).toBeTruthy();
+  expect(nodeNamed("note:note-1").selected).toBe(false);
+
+  await user.keyboard("{Escape}");
+  expect(screen.queryByRole("dialog")).toBeNull();
+});
+
+it("commits a sticky note on Escape without closing the expanded canvas", async () => {
+  const user = userEvent.setup();
+  const { store } = mountEditor();
+  await user.click(screen.getByRole("button", { name: "Expand" }));
+  const dialog = screen.getByRole("dialog", { name: "Canvas" });
+  fireEvent.doubleClick(
+    within(dialog).getByRole("button", { name: "Edit sticky note" }),
+  );
+  const textarea = within(dialog).getByRole("textbox", {
+    name: "Sticky note text",
+  });
+  await user.clear(textarea);
+  await user.type(textarea, "Saved note");
+  await user.keyboard("{Escape}");
+  expect(screen.getByRole("dialog", { name: "Canvas" })).toBeTruthy();
+  expect(store.getSnapshot().layout.notes["note-1"].text).toBe("Saved note");
+});
+
 describe("CanvasArtifactEditor pages and boards", () => {
   it("names the current page on the menu button and marks it in the list", () => {
     mountEditor();

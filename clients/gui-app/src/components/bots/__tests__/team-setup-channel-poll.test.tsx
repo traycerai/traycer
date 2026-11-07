@@ -66,6 +66,7 @@ function readWith(setup: BotOnboardingSetup): BotOnboardingReadResponse {
 
 type Rig = {
   readonly reads: () => number;
+  readonly machineJoins: () => void;
   readonly goLive: () => void;
   readonly mount: (visible: boolean) => {
     readonly unmount: () => void;
@@ -116,6 +117,9 @@ function rig(): Rig {
   );
   return {
     reads: () => reads,
+    machineJoins: () => {
+      setup = { ...setup, state: "host_joining", arrival: { kind: "machine" } };
+    },
     goLive: () => {
       setup = { ...setup, state: "live", arrival: { kind: "cloud" } };
     },
@@ -166,6 +170,28 @@ describe("TeamSetupChannel on-screen poll", () => {
 
     await elapse(ON_SCREEN_INTERVAL_MS * 3);
     expect(harness.reads()).toBe(3);
+  });
+
+  it("keeps re-reading while a machine of the team is joining, and stops once the bot is live", async () => {
+    const harness = rig();
+    harness.mount(true);
+    await elapse(0);
+    expect(harness.reads()).toBe(1);
+
+    // A teammate's machine holds the team's host: no bot yet, so the setup is
+    // not settled and the read goes on until the bot exists.
+    harness.machineJoins();
+    await elapse(ON_SCREEN_INTERVAL_MS);
+    expect(harness.reads()).toBe(2);
+    await elapse(ON_SCREEN_INTERVAL_MS * 3);
+    expect(harness.reads()).toBe(5);
+
+    harness.goLive();
+    await elapse(ON_SCREEN_INTERVAL_MS);
+    expect(harness.reads()).toBe(6);
+
+    await elapse(ON_SCREEN_INTERVAL_MS * 3);
+    expect(harness.reads()).toBe(6);
   });
 
   it("stops when the channel is unmounted", async () => {

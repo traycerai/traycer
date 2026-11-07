@@ -363,10 +363,12 @@ describe("dragging a selected surface to an edge writes the placement as one ges
     expect(historyDepth()).toBe(1);
 
     useLayoutEditorStore.getState().undo();
-    expect(useLayoutStore.getState().arrangement.tabStripPlacement).toBe("top");
+    expect(useLayoutStore.getState().arrangement.tabStripPlacement).toBe(
+      "left",
+    );
   });
 
-  it("drags the sidebar to the right edge, writing sidebarSide once, undoably", () => {
+  it("drags the sidebar to the left edge, writing sidebarSide once, undoably", () => {
     openSession();
     const view = render(<SurfaceCanvas />);
     view.getByTestId("content-wrap").getBoundingClientRect = () =>
@@ -375,7 +377,7 @@ describe("dragging a selected surface to an edge writes the placement as one ges
     fireEvent.pointerDown(view.getByTestId("sidebar-empty"), {
       button: 0,
       pointerId: 1,
-      clientX: 10,
+      clientX: 390,
       clientY: 300,
     });
     expect(useLayoutEditorStore.getState().selectedSurface).toBe("sidebar");
@@ -384,16 +386,16 @@ describe("dragging a selected surface to an edge writes the placement as one ges
       new PointerEvent("pointermove", {
         bubbles: true,
         pointerId: 1,
-        clientX: 16,
+        clientX: 384,
         clientY: 300,
       }),
     );
-    // Solidly inside the right band of a 400-wide content wrap.
+    // Solidly inside the left band of a 400-wide content wrap.
     window.dispatchEvent(
       new PointerEvent("pointermove", {
         bubbles: true,
         pointerId: 1,
-        clientX: 390,
+        clientX: 10,
         clientY: 300,
       }),
     );
@@ -401,11 +403,11 @@ describe("dragging a selected surface to an edge writes the placement as one ges
       new PointerEvent("pointerup", { bubbles: true, pointerId: 1 }),
     );
 
-    expect(useLayoutStore.getState().arrangement.sidebarSide).toBe("right");
+    expect(useLayoutStore.getState().arrangement.sidebarSide).toBe("left");
     expect(historyDepth()).toBe(1);
 
     useLayoutEditorStore.getState().undo();
-    expect(useLayoutStore.getState().arrangement.sidebarSide).toBe("left");
+    expect(useLayoutStore.getState().arrangement.sidebarSide).toBe("right");
   });
 });
 
@@ -437,6 +439,10 @@ describe("Side tab view's own part on the canvas (D9, item B)", () => {
   });
 
   it("with no part registered (top placement), the chip goes on the topBar surface and names the reason", () => {
+    useLayoutStore.getState().setArrangement({
+      ...useLayoutStore.getState().arrangement,
+      tabStripPlacement: "top",
+    });
     openSession();
     render(<SurfaceCanvas />);
 

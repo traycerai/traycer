@@ -206,6 +206,12 @@ describe("actionsSource", () => {
   // run while this window's tabs are at the top.
   describe("app.tabs.vertical.collapse row (gated on the tab strip placement)", () => {
     it("omits the row while the tabs are at the top", () => {
+      useLayoutStore.setState({
+        arrangement: {
+          ...useLayoutStore.getState().arrangement,
+          tabStripPlacement: "top",
+        },
+      });
       const ids = captureItems().map((item) => item.id);
       expect(ids).not.toContain("action:app.tabs.vertical.collapse");
     });

@@ -375,7 +375,12 @@ function environmentNotificationPresentation(
   }
 }
 
-/** A role read off a payload as a string; a role newer than this build reads as-is. */
+/**
+ * A role read off a payload as a string; a role newer than this build reads
+ * as-is. `viewer` is retired and no notice reports a move to or from it any
+ * more, but a notice written before the retirement still names it, and an old
+ * row renders the sentence it always did.
+ */
 function roleName(role: string): string {
   switch (role) {
     case "owner":

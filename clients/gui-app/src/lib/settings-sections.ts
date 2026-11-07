@@ -8,6 +8,7 @@ import {
   Coins,
   FileText,
   GitBranch,
+  HardDrive,
   ListChecks,
   Globe,
   Keyboard,
@@ -49,6 +50,7 @@ export type SettingsSectionId =
   | "providers"
   | "secrets"
   | "sandboxes"
+  | "storage"
   | "members"
   | "mcp-servers"
   | "skills"
@@ -410,6 +412,14 @@ export const SETTINGS_SECTIONS: ReadonlyArray<SettingsSection> = [
     id: "sandboxes",
     label: "Sandboxes",
     icon: Cloud,
+    group: "personal",
+  },
+  // What the picked configuration's hosts keep on disk. Not on a Local row:
+  // the switch is an environment item.
+  {
+    id: "storage",
+    label: "Storage",
+    icon: HardDrive,
     group: "personal",
   },
   // A team's members. Offered only while a team is picked

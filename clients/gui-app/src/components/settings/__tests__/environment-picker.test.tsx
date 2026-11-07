@@ -336,9 +336,9 @@ describe("<EnvironmentPicker />", () => {
     openMenu();
 
     const grey = screen.getByTestId("environment-picker-local-old");
-    expect(grey.textContent).toContain(
-      "Old laptop needs an update to show its settings here.",
-    );
+    expect(
+      within(grey).getByText("Update to view these settings."),
+    ).toBeTruthy();
     expect(grey.getAttribute("aria-disabled")).toBe("true");
     expect(screen.queryByTestId("environment-picker-local-tiny")).toBeNull();
   });

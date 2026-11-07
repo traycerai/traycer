@@ -4,7 +4,12 @@
  * can pass the wire through unchanged.
  */
 
-export type TeamRole = "admin" | "editor" | "viewer";
+/**
+ * A role a team member HOLDS. The view-only role is retired, so a wire value
+ * that still decodes to it is no seat authority at all: resolve one with
+ * `grantedTeamMemberRole` and carry the `null` rather than naming a role.
+ */
+export type TeamRole = "admin" | "editor";
 
 /** `null` is an accepted member on a host that has not yet filled inviteState. */
 export type MemberInviteState = "accepted" | "pending" | null;
@@ -45,7 +50,8 @@ export interface MembersListMember {
   readonly userId: string;
   readonly displayName: string | null;
   readonly email: string | null;
-  readonly effectiveRole: TeamRole;
+  /** `null` for a row holding no seat authority - see {@link TeamRole}. */
+  readonly effectiveRole: TeamRole | null;
   readonly linkedPlan: boolean;
   readonly inviteState: MemberInviteState;
   readonly invitedAddress: string | null;
@@ -121,5 +127,5 @@ export interface PendingRoleCheck {
 }
 
 export function isTeamRole(value: string): value is TeamRole {
-  return value === "admin" || value === "editor" || value === "viewer";
+  return value === "admin" || value === "editor";
 }

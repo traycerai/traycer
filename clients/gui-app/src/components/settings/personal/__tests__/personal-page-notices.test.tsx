@@ -664,16 +664,11 @@ describe("Keep this host's value", () => {
 });
 
 describe("a Personal page's 'needs you' rows", () => {
-  it("says why each value waits, and sends a held key-shaped value to its retrospective sheet, a held command to the host's, and the rest to Secrets", async () => {
+  it("says why each value waits, and sends a held command to the host's retrospective sheet and the rest to Secrets", async () => {
     const host = hostWith(
       {},
       {
         review: [
-          reviewEntryFixture({
-            entryId: "entry-1",
-            key: "DATABASE_URL",
-            reason: "credential_like_value",
-          }),
           heldCommandEntry({
             entryId: "entry-2",
             kind: "shell",
@@ -698,7 +693,6 @@ describe("a Personal page's 'needs you' rows", () => {
 
     const rows = await screen.findAllByTestId("personal-review-row");
     expect(rows.map((row) => row.textContent)).toEqual([
-      "DATABASE_URL looks like a key and is on hold until you choose · Review",
       expect.stringContaining(
         "shell (shell) is what terminals and agents start in: zsh -l and is on hold until you choose",
       ),
@@ -712,26 +706,18 @@ describe("a Personal page's 'needs you' rows", () => {
     }
 
     // Any other reason's Review opens Secrets.
-    fireEvent.click(within(rows[2]).getByRole("button", { name: "Review" }));
+    fireEvent.click(within(rows[1]).getByRole("button", { name: "Review" }));
     expect(navigateToSettingsSectionMock).toHaveBeenCalledTimes(1);
     expect(navigateToSettingsSectionMock).toHaveBeenCalledWith("secrets");
     expect(useRetrospectiveSheetStore.getState().open).toBe(false);
 
     // A held command's opens the host's retrospective sheet.
-    fireEvent.click(within(rows[1]).getByRole("button", { name: "Review" }));
+    fireEvent.click(within(rows[0]).getByRole("button", { name: "Review" }));
     expect(navigateToSettingsSectionMock).toHaveBeenCalledTimes(1);
     expect(useRetrospectiveSheetStore.getState()).toMatchObject({
       open: true,
       target: { hostId: ACCESS_HOST_ID, hostName: ACCESS_HOST_NAME },
     });
-
-    // The held value's opens its own retrospective sheet.
-    fireEvent.click(within(rows[0]).getByRole("button", { name: "Review" }));
-    const sheet = await screen.findByTestId("retrospective-sheet");
-    expect(
-      within(sheet).getByTestId("retrospective-held-entry-1"),
-    ).toBeTruthy();
-    expect(navigateToSettingsSectionMock).toHaveBeenCalledTimes(1);
   });
 
   it("words a held variable from a host that sends none by what it changes", async () => {

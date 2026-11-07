@@ -156,6 +156,12 @@ export interface ChatLowerAccessState {
    * one for it.
    */
   readonly restingSandbox?: RestingChatSandbox;
+  /**
+   * Whether a message is parked while the host brings the chat's records back
+   * (`useEvictedChatSend`), so the composer takes one even from the pool's
+   * session, which takes none itself.
+   */
+  readonly parksEvictedSend?: boolean;
   /** The serving host has a copy, not authority over the owner's workspace. */
   readonly isCopy: boolean;
   readonly isViewer: boolean;
@@ -864,7 +870,11 @@ function ComposerSurface(props: {
       </ComposerSlotShell>
     );
   }
-  if (model.access.isViewer && model.access.restingSandbox === undefined) {
+  if (
+    model.access.isViewer &&
+    model.access.restingSandbox === undefined &&
+    model.access.parksEvictedSend !== true
+  ) {
     return <ViewerComposerSurface model={model} layout={layout} />;
   }
   // The escape hatch stacks ABOVE the card/composer rather than replacing
@@ -979,6 +989,27 @@ function ViewerComposerSurface(props: {
   );
 }
 
+/**
+ * Whether the composer's send is blocked, and the tooltip saying why. A
+ * resting sandbox's message and an evicted chat's parked one are taken even
+ * though the serving session cannot act.
+ */
+function composerSendGate(model: ComposerSurfaceModel): {
+  readonly disabled: boolean;
+  readonly hint: string | null;
+} {
+  const editing = model.queue.editingItem !== null;
+  const restingMessage = model.access.restingSandbox !== undefined && !editing;
+  const evictedMessage = model.access.parksEvictedSend === true && !editing;
+  return {
+    disabled: !model.access.canAct && !restingMessage && !evictedMessage,
+    hint:
+      restingMessage || evictedMessage
+        ? null
+        : chatSendDisabledHint(model.access),
+  };
+}
+
 function LiveChatComposer(props: {
   readonly model: ComposerSurfaceModel;
   readonly topSpacing: ChatLowerSurfaceTopSpacing;
@@ -988,18 +1019,14 @@ function LiveChatComposer(props: {
   const tabHostId = useTabHostId();
   const sandboxSays = useContext(ChatSandboxLineContext);
   const focusLayout = useContext(ComposerFocusLayoutContext);
-  const restingMessage =
-    model.access.restingSandbox !== undefined &&
-    model.queue.editingItem === null;
+  const sendGate = composerSendGate(model);
   return (
     <ChatComposer
       key={model.queue.editingItem?.queueItemId}
       taskId={model.composer.nodeId}
       isActive={model.composer.isActive}
-      sendDisabled={!model.access.canAct && !restingMessage}
-      sendDisabledHint={
-        restingMessage ? null : chatSendDisabledHint(model.access)
-      }
+      sendDisabled={sendGate.disabled}
+      sendDisabledHint={sendGate.hint}
       mentionRoots={model.composer.mentionRoots}
       runWorkingDirectory={model.composer.runWorkingDirectory}
       fallbackToGlobalMentionRoots={model.composer.fallbackToGlobalMentionRoots}

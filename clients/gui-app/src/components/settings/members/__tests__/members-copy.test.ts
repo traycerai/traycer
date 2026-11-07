@@ -10,7 +10,8 @@ import {
   memberRemovedToastBody,
   memberRowTitle,
   removePreviewTitle,
-  viewerCanSeeLine,
+  roleLabelOf,
+  seeButNotChangeLine,
 } from "@/components/settings/members/copy";
 import type { MembersListMember } from "@/components/settings/members/types";
 
@@ -18,7 +19,6 @@ describe("inviteSentBody", () => {
   it.each([
     ["admin", "an admin"],
     ["editor", "an editor"],
-    ["viewer", "a viewer"],
   ] as const)("names a %s with its article", (role, phrase) => {
     expect(inviteSentBody("sam@acme.test", "Acme", role)).toBe(
       `We emailed sam@acme.test. They join Acme as ${phrase} when they accept.`,
@@ -110,17 +110,11 @@ describe("legacyRoleNotice", () => {
 
 /** NEW-154-23: a confirm on every demotion, and none on a promotion. */
 describe("role changes that need a confirm", () => {
-  it.each([
-    ["admin", "editor"],
-    ["admin", "viewer"],
-    ["editor", "viewer"],
-  ] as const)("treats %s to %s as a demotion", (from, to) => {
-    expect(isRoleDemotion(from, to)).toBe(true);
+  it("treats admin to editor as a demotion", () => {
+    expect(isRoleDemotion("admin", "editor")).toBe(true);
   });
 
   it.each([
-    ["viewer", "editor"],
-    ["viewer", "admin"],
     ["editor", "admin"],
     ["editor", "editor"],
   ] as const)("treats %s to %s as no demotion", (from, to) => {
@@ -131,33 +125,32 @@ describe("role changes that need a confirm", () => {
     expect(demotionConfirmTitle("Priya", "Acme", "editor")).toBe(
       "Change Priya's role in Acme to editor?",
     );
-    expect(demotionConfirmTitle("Priya", "Acme", "viewer")).toBe(
-      "Change Priya's role in Acme to viewer?",
-    );
   });
 
-  it("says what an admin loses, what an editor loses, and both for admin to viewer", () => {
-    expect(demotionConfirmBody("Priya", "Acme", "admin", "editor")).toBe(
+  it("says what an admin loses on the way to editor", () => {
+    expect(demotionConfirmBody("Priya", "admin", "editor")).toBe(
       "Priya can no longer invite people, change roles or edit the approval policy.",
-    );
-    expect(demotionConfirmBody("Priya", "Acme", "editor", "viewer")).toBe(
-      "Priya can no longer change Acme's settings. They can still see them.",
-    );
-    expect(demotionConfirmBody("Priya", "Acme", "admin", "viewer")).toBe(
-      "Priya can no longer invite people, change roles or edit the approval policy. Priya can no longer change Acme's settings. They can still see them.",
     );
   });
 
   it("names the role on the button", () => {
     expect(demotionConfirmLabel("editor")).toBe("Change to editor");
-    expect(demotionConfirmLabel("viewer")).toBe("Change to viewer");
   });
 });
 
-/** NEW-154-24: one standing line for a viewer, on every page. */
-describe("viewerCanSeeLine", () => {
-  it("says what a viewer can and cannot do", () => {
-    expect(viewerCanSeeLine("Acme")).toBe(
+/** A seat that holds no role is labelled for what it gives, never promoted. */
+describe("roleLabelOf", () => {
+  it("labels a seat with no role as no access", () => {
+    expect(roleLabelOf(null)).toBe("No access");
+    expect(roleLabelOf("editor")).toBe("Editor");
+    expect(roleLabelOf("admin")).toBe("Admin");
+  });
+});
+
+/** NEW-154-24: one standing line for a read-only configuration, on every page. */
+describe("seeButNotChangeLine", () => {
+  it("says what the reader can and cannot do", () => {
+    expect(seeButNotChangeLine("Acme")).toBe(
       "You can see Acme's settings but not change them.",
     );
   });

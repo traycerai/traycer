@@ -74,6 +74,9 @@ const mocks = vi.hoisted(() => ({
   locateSupported: true,
 }));
 
+vi.mock("@/hooks/host/use-host-directory-entry", () => ({
+  useHostDirectoryEntry: () => null,
+}));
 vi.mock("@/lib/registries/chat-session-registry", async (importOriginal) => ({
   ...(await importOriginal<
     typeof import("@/lib/registries/chat-session-registry")
@@ -102,6 +105,7 @@ vi.mock("@/hooks/host/use-host-supports-method", async (importOriginal) => ({
 vi.mock("@/components/epic-tabs/pane-visibility-context", () => ({
   usePaneVisible: () => true,
   usePaneFocused: () => true,
+  usePaneFocusProbe: () => () => true,
 }));
 vi.mock("@/hooks/bots/use-bot-conversation-list-query", () => ({
   useBotConversationListQuery: () => ({
@@ -496,7 +500,7 @@ describe("the receipt under the bot's own post a thread opens on", () => {
     mountChannel(ANNOUNCEMENT_RAIL);
 
     // Unopened: the box starts the thread.
-    await screen.findByRole("textbox", { name: "Reply in a new thread" });
+    await screen.findByRole("group", { name: "Reply in a new thread" });
     const receipt = await within(
       await screen.findByTestId("bot-thread-anchor"),
     ).findByTestId("bot-turn-receipt");

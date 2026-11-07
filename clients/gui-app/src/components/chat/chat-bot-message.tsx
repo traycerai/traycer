@@ -39,6 +39,7 @@ import {
   firstLineOf,
 } from "@/lib/bots/bot-trunk-model";
 import { turnReceiptLabel } from "@/lib/bots/bot-turn-receipt";
+import { collectAssistantReplyText } from "@/lib/chat/collect-assistant-reply-text";
 import { useElapsedSeconds } from "@/hooks/use-elapsed-seconds";
 import { useLongPress, type LongPress } from "@/hooks/ui/use-long-press";
 import { useResolvedTheme } from "@/providers/use-resolved-theme";
@@ -73,6 +74,7 @@ import {
   questionCardView,
 } from "./question-card-view";
 import { TextSegment } from "./segments/text-segment";
+import { UserMessageAttachmentGallery } from "./user-message-attachment-gallery";
 
 /**
  * One row of a bot's channel or thread, in Slack's message layout (Tracy
@@ -191,6 +193,11 @@ function MemberRow(props: {
       failed={failed}
       longPress={sheet.longPress}
     >
+      <UserMessageAttachmentGallery
+        align="start"
+        attachments={message.attachments}
+        browserAnnotations={message.browserAnnotations}
+      />
       {body}
       {failed === null ? null : (
         <UnansweredLine failed={failed} recovery={recovery} />
@@ -308,7 +315,11 @@ function failedActionsOf(
           message.senderUserId ?? null,
         );
   if (failed === null) return null;
-  const { retry, edit } = failed;
+  const { retry } = failed;
+  // Edit puts the text back in the box and its send replaces the row. The
+  // box holds an image's bytes, the row only its hash, so a row with images
+  // keeps Retry, which re-sends them, and offers no Edit that would drop them.
+  const edit = message.attachments.length === 0 ? failed.edit : null;
   const parked = failed.state === "parked";
   if (recovery !== null) {
     return {
@@ -479,7 +490,12 @@ function BotRowBody(props: {
   );
 }
 
-/** A row that asks: the card, under its text when that says more than its questions. */
+/**
+ * A row that asks: the card, under its text when that says more than its
+ * questions. The text is the row's whole text, as its segments carry it:
+ * `content` is the list's short, whitespace-folded preview, which stops
+ * matching the questions once they run long or over more than one line.
+ */
 function BotAskingBody(props: {
   readonly message: ChatMessageModel;
   readonly question: BotQuestion;
@@ -490,7 +506,10 @@ function BotAskingBody(props: {
   const { message, question, questions, botTitle, text } = props;
   return (
     <>
-      {message.content === botQuestionsText(question.questions) ? null : text}
+      {collectAssistantReplyText(message.segments) ===
+      botQuestionsText(question.questions).trim()
+        ? null
+        : text}
       <BotQuestionCard
         messageId={message.persistentMessageId}
         question={question}
@@ -922,7 +941,9 @@ function TurnReceiptLine(props: {
 }
 
 /** How long a running turn has been running, counting each second. */
-function RunningFor(props: { readonly startedAt: number }): ReactElement {
+export function RunningFor(props: {
+  readonly startedAt: number;
+}): ReactElement {
   const seconds = useElapsedSeconds(props.startedAt, 0, null);
   return <span className="tabular-nums">{formatClockDuration(seconds)}</span>;
 }

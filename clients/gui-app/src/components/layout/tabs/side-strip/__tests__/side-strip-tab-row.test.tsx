@@ -259,8 +259,13 @@ function joinedPane(): string | undefined {
 }
 
 function resetStores(): void {
+  // The sidebar open in a new tab: the pane a row joins is read off it.
   useLayoutStore.setState({
     ...DEFAULT_LAYOUT_SNAPSHOT,
+    arrangement: {
+      ...DEFAULT_LAYOUT_SNAPSHOT.arrangement,
+      sidebarStartCollapsed: false,
+    },
   });
   useEpicDndStore.setState(useEpicDndStore.getInitialState(), true);
   useLeftPanelStore.setState({
@@ -479,6 +484,10 @@ describe("useSideTabJoin", () => {
         useLayoutStore.setState({
           arrangement: { ...DEFAULT_ARRANGEMENT, sidebarSide: "left" },
         });
+        // Explicit per-tab expansion; shipped sidebarStartCollapsed is false.
+        useLeftPanelStore.setState({
+          mainCollapsedByTabId: { [EPIC_TAB.id]: false },
+        });
       });
 
       render(<Harness edge="left" tab={EPIC_TAB} />);
@@ -535,7 +544,7 @@ describe("useSideTabJoin", () => {
             arrangement: { ...DEFAULT_ARRANGEMENT, sidebarSide: sidebar },
           });
           useLeftPanelStore.setState({
-            mainCollapsedByTabId: collapsed ? { [EPIC_TAB.id]: true } : {},
+            mainCollapsedByTabId: { [EPIC_TAB.id]: collapsed },
           });
         });
 
