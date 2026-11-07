@@ -23,6 +23,7 @@ import {
   PERSONAL_MAIN_BOT_ID,
   TEAM_MAIN_BOT_ID,
   TWO_MAIN_BOTS_DIRECTORY,
+  tracyRecord,
 } from "@/lib/home-bots/__tests__/standalone-bots-fixtures";
 import type { StandaloneBotsDirectory } from "@/lib/home-bots/standalone-bot-name";
 import type { KeybindingRouter } from "@/lib/keybindings/dispatch";
@@ -224,14 +225,14 @@ describe("bots palette source", () => {
         label: "Tracy",
         hint: null,
         keywords: ["Tracy", "Personal", "tracy", "bot", "channel"],
-        group: "bots",
+        group: "mainBots",
       },
       {
         id: `bot:${TEAM_MAIN_BOT_ID}`,
         label: "Tracy · traycerai",
         hint: null,
         keywords: ["Tracy", "traycerai", "tracy", "bot", "channel"],
-        group: "bots",
+        group: "mainBots",
       },
     ]);
   });
@@ -245,7 +246,7 @@ describe("bots palette source", () => {
         label: "Tracy",
         hint: "traycerai",
         keywords: ["Tracy", "traycerai", "tracy", "bot", "channel"],
-        group: "bots",
+        group: "mainBots",
       },
     ]);
   });
@@ -277,8 +278,42 @@ describe("bots palette source", () => {
     });
 
     expect(
-      captureItems(ctx("/", IDLE_ROUTER, null)).map((item) => item.label),
-    ).toEqual(["Tracy · traycerai", "Tracy · acme"]);
+      captureItems(ctx("/", IDLE_ROUTER, null)).map((item) => [
+        item.label,
+        item.group,
+      ]),
+    ).toEqual([
+      ["Tracy · traycerai", "mainBots"],
+      ["Tracy · acme", "mainBots"],
+    ]);
+  });
+
+  it("keeps a team's bot that is not its main bot in the Tracy group, with its team beside it", () => {
+    const [teamGroup] = ONE_TEAM_MAIN_BOT_DIRECTORY.model.groups;
+    setDirectory({
+      model: {
+        groups: [
+          {
+            ...teamGroup,
+            bots: [
+              ...teamGroup.bots,
+              { ...tracyRecord("bot-side", "env-team"), title: "Triage" },
+            ],
+          },
+        ],
+        botCount: 2,
+      },
+      setups: [],
+    });
+
+    expect(
+      rows(captureItems(ctx("/", IDLE_ROUTER, null))).map(
+        ({ id, group, hint }) => ({ id, group, hint }),
+      ),
+    ).toEqual([
+      { id: `bot:${TEAM_MAIN_BOT_ID}`, group: "mainBots", hint: "traycerai" },
+      { id: "bot:bot-side", group: "bots", hint: "traycerai" },
+    ]);
   });
 
   it("leaves out the channel the palette is opened on", () => {
