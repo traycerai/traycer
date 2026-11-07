@@ -85,7 +85,6 @@ export function HostIdentityCard(props: {
                 >
                   <button
                     type="button"
-                    aria-label={busyCopy.label}
                     className="cursor-default rounded-sm outline-none focus-visible:ring-2 focus-visible:ring-ring"
                     data-testid="host-active-sessions"
                     data-count={props.busySessionCount ?? ""}

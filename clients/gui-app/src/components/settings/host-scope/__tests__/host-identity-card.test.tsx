@@ -131,7 +131,7 @@ describe("<HostIdentityCard /> a sandbox's state word against its health", () =>
       </TooltipProvider>,
     );
 
-    const trigger = screen.getByRole("button", { name: label });
+    const trigger = screen.getByRole("button", { name: "Busy" });
     expect(screen.getByTestId("host-active-sessions").textContent).toBe("Busy");
 
     await user.tab();
@@ -139,7 +139,7 @@ describe("<HostIdentityCard /> a sandbox's state word against its health", () =>
     expect(document.activeElement).toBe(trigger);
     expect((await screen.findByRole("tooltip")).textContent).toBe(label);
     expect(
-      screen.getByRole("button", { name: label, description: label }),
+      screen.getByRole("button", { name: "Busy", description: label }),
     ).toBe(trigger);
   });
 });
