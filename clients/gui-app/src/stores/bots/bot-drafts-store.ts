@@ -36,6 +36,8 @@ export interface BotThreadBoxDraft {
 
 /** A message a box sent that never reached the conversation. */
 export interface BotUnsentMessage {
+  /** The replacement's original session: null is trunk; absent is unknown. */
+  readonly sessionThreadId?: string | null;
   /** As the box showed it. */
   readonly text: string;
   /** As it was sent: each mention as its member's token. */
