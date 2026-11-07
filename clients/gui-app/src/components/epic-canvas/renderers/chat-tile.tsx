@@ -152,10 +152,8 @@ import { useAccountContextStore } from "@/stores/auth/account-context-store";
 import {
   useChatById,
   useEpicLiveArtifactTitle,
-  useEpicPermissionRole,
   useOpenEpicId,
 } from "@/lib/epic-selectors";
-import { isEditableRole } from "@/lib/epic-permissions";
 import type { EpicNodeRef } from "@/stores/epics/canvas/types";
 import {
   mentionRootsFromWorktreeBinding,
@@ -492,19 +490,6 @@ export function ChatTile(props: ChatTileProps) {
 }
 
 /**
- * Whether this viewer's epic role can create agents - the gate the dead-tile
- * banner draws Clone agent on. The live tile reads it once, into its
- * pre-content frame, and hands that one value to both its banner and the
- * body under it, so the two cannot disagree. `epic.createChat` is editor-gated host-side, and
- * an unresolved role (`null`) keeps the offer: the host gate is the backstop,
- * and withholding the way out of a dead tile needs evidence.
- */
-function useChatCloneAllowed(): boolean {
-  const permissionRole = useEpicPermissionRole();
-  return permissionRole === null || isEditableRole(permissionRole);
-}
-
-/**
  * The wait for this chat's first transcript, with what the pre-content body
  * needs from above the handle branch. See `ChatLoadWait` for why it lives
  * here and not in the body.
@@ -514,7 +499,6 @@ function useChatTilePreContentFrame(
   hasReadySession: boolean,
   sandboxFooter: boolean,
 ): ChatTilePreContentFrame {
-  const cloneAllowed = useChatCloneAllowed();
   const [wait, setWait] = useState<ChatLoadWait>(() => ({
     startedAt: Date.now(),
     attemptsBefore: 0,
@@ -532,18 +516,10 @@ function useChatTilePreContentFrame(
       wait,
       restartWait,
       reachability,
-      cloneAllowed,
       hasReadySession,
       sandboxFooter,
     }),
-    [
-      wait,
-      restartWait,
-      reachability,
-      cloneAllowed,
-      hasReadySession,
-      sandboxFooter,
-    ],
+    [wait, restartWait, reachability, hasReadySession, sandboxFooter],
   );
 }
 
@@ -692,11 +668,9 @@ function ChatTileForChat(props: ChatTileProps) {
     tabHostId,
     node.id,
   );
-  const canEdit = useChatCloneAllowed();
   const sandbox = resolveChatSandbox(sandboxState, {
     ...copyFacts,
     reachable: ownerReachable,
-    canEdit,
   });
   const sandboxAvailability = chatSandboxAvailability(sandbox, ownerReachable);
   const lease = useHostLease(servingHostId);
@@ -747,7 +721,7 @@ function ChatTileForChat(props: ChatTileProps) {
     );
     if (strip === "offline") {
       return (
-        <ChatDeadTileBannerWithOffer
+        <ChatDeadTileBannerContainer
           epicId={epicId}
           tabId={viewTabId}
           chatId={node.id}
@@ -758,8 +732,6 @@ function ChatTileForChat(props: ChatTileProps) {
           // never a published copy the banner could truthfully point at.
           showsPublishedCopy={false}
           testId={`chat-dead-tile-${node.id}`}
-          // The frame's value, which the body under this strip reads too.
-          cloneAllowed={preContentFrame.cloneAllowed}
         />
       );
     }
@@ -895,7 +867,6 @@ export function SubstitutedCatchingUpBanner(props: {
   const state = useChatSandboxState(props.epicId, props.ownerHostId, reachable);
   const view = resolveChatSandbox(state, {
     reachable,
-    canEdit: false,
     ownedByViewer: false,
     environmentOwned: false,
   });
@@ -943,17 +914,6 @@ interface ChatDeadTileBannerContainerProps {
   readonly sourceOwnerUserId?: string;
 }
 
-/**
- * The dead-tile banner for a surface with no role read of its own (the
- * published tile, the canvas substitution): it reads the viewer's role here.
- */
-export function ChatDeadTileBannerContainer(
-  props: ChatDeadTileBannerContainerProps,
-): ReactNode {
-  const cloneAllowed = useChatCloneAllowed();
-  return <ChatDeadTileBannerWithOffer {...props} cloneAllowed={cloneAllowed} />;
-}
-
 function useDeadTileSourceOwner(props: DeadTileOfferSource): string | null {
   // The EPIC SESSION's client, by intent: the cloud lookup below SHARES the
   // list the sidebar tree already fetched for this epic, and that fetch rides
@@ -993,14 +953,11 @@ function useDeadTileCloneOffer(props: DeadTileOfferSource) {
   const chatRecord = useChatById(props.chatId);
   const sourceOwnerUserId = useDeadTileSourceOwner(props);
   const sourceTitle = chatRecord?.title ?? "";
-  // The two facts the banner's copy and Clone offer vary on (shared-chat
-  // support). Ownership: only a POSITIVE mismatch against the signed-in user
-  // flips the foreign-owner copy - an unknown owner or identity stays on the
-  // own-chat sentences, which were this banner's whole vocabulary before
-  // collaborators existed. Role: `epic.createChat` is editor-gated host-side,
-  // so a known viewer gets the reason in the banner instead of a Clone button
-  // that dies on a bare "You don't have permission" toast (`useChatCloneAllowed`).
-  // A team sandbox's chat names its sandbox rather than a collaborator or a
+  // The facts the banner's copy varies on (shared-chat support). Ownership:
+  // only a POSITIVE mismatch against the signed-in user flips the
+  // foreign-owner copy - an unknown owner or identity stays on the own-chat
+  // sentences, which were this banner's whole vocabulary before collaborators
+  // existed. A team sandbox's chat names its sandbox rather than a collaborator or a
   // machine; an owner not yet told apart stays on the own-chat sentences.
   const { ownedByViewer, environmentOwned } = useChatOwnerCopyFacts(
     sourceOwnerUserId,
@@ -1027,15 +984,9 @@ function useDeadTileCloneOffer(props: DeadTileOfferSource) {
   };
 }
 
-/**
- * The banner and its Clone offer, for a mounting surface that already holds
- * the role gate - the live tile, whose body under the strip reads the same
- * value.
- */
-function ChatDeadTileBannerWithOffer(
-  props: ChatDeadTileBannerContainerProps & {
-    readonly cloneAllowed: boolean;
-  },
+/** The dead-tile banner and its Clone offer. */
+export function ChatDeadTileBannerContainer(
+  props: ChatDeadTileBannerContainerProps,
 ): ReactNode {
   const {
     sourceOwnerUserId,
@@ -1067,7 +1018,6 @@ function ChatDeadTileBannerWithOffer(
   );
   const sandbox = resolveChatSandbox(sandboxState, {
     reachable: hostAnswered,
-    canEdit: props.cloneAllowed,
     ownedByViewer,
     environmentOwned,
   });
@@ -1079,11 +1029,7 @@ function ChatDeadTileBannerWithOffer(
   const stateLine = chatSandboxStateLine(
     sandbox.line,
     sandboxState.kind === "destroyed" ? (
-      <SandboxEndActionButtons
-        ended={sandboxState.ended}
-        cloneAllowed={props.cloneAllowed}
-        offer={offer}
-      />
+      <SandboxEndActionButtons ended={sandboxState.ended} offer={offer} />
     ) : null,
   );
   if (stateLine !== null) {
@@ -1109,7 +1055,6 @@ function ChatDeadTileBannerWithOffer(
         ownerName={ownerName}
         cloneTargetLabel={cloneTargetLabel}
         environmentOwned={environmentOwned}
-        cloneAllowed={props.cloneAllowed}
         showsPublishedCopy={props.showsPublishedCopy}
         continueTargetLabel={continueOffer.targetLabel}
         onClone={continues ? continueOffer.continueHere : offer.clone}
@@ -1139,36 +1084,26 @@ function ChatDeadTileBannerWithOffer(
 export function SandboxEndActions(
   props: DeadTileOfferSource & { readonly ended: TaskSandboxEndedHost },
 ): ReactNode {
-  const cloneAllowed = useChatCloneAllowed();
   const { offer } = useDeadTileCloneOffer(props);
-  return (
-    <SandboxEndActionButtons
-      ended={props.ended}
-      cloneAllowed={cloneAllowed}
-      offer={offer}
-    />
-  );
+  return <SandboxEndActionButtons ended={props.ended} offer={offer} />;
 }
 
 function SandboxEndActionButtons(props: {
   readonly ended: TaskSandboxEndedHost;
-  readonly cloneAllowed: boolean;
   readonly offer: ChatCloneOnHostSwitch;
 }): ReactNode {
   const { offer } = props;
   return (
     <>
-      {props.cloneAllowed ? (
-        <Button
-          type="button"
-          variant="outline"
-          size="sm"
-          disabled={offer.cloning}
-          onClick={offer.clone}
-        >
-          Continue on another host
-        </Button>
-      ) : null}
+      <Button
+        type="button"
+        variant="outline"
+        size="sm"
+        disabled={offer.cloning}
+        onClick={offer.clone}
+      >
+        Continue on another host
+      </Button>
       <TaskSandboxEndDetails ended={props.ended} />
       {offer.profileRecovery !== null ? (
         <CloneProfileRecovery

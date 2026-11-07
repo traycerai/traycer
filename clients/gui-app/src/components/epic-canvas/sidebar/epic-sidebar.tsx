@@ -2286,7 +2286,6 @@ function TreePanelActions(props: TreePanelActionsProps) {
   const artifactsDisabledTooltip = mutationDisabledHint(
     permissionRole,
     isDisconnected,
-    "create artifacts",
   );
   const artifactsAddDisabled = !canMutate || addIsPending;
   const artifactsPresentation = resolveDisabledPresentation(
@@ -2309,11 +2308,7 @@ function TreePanelActions(props: TreePanelActionsProps) {
         parentId={null}
         size="icon-sm"
         disabled={!canMutate || addIsPending}
-        disabledTooltip={mutationDisabledHint(
-          permissionRole,
-          isDisconnected,
-          "create agents",
-        )}
+        disabledTooltip={mutationDisabledHint(permissionRole, isDisconnected)}
         triggerLabel={props.addLabel}
         triggerTestId={props.triggerTestId}
         actionRevealClassName=""

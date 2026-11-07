@@ -61,7 +61,6 @@ function renderFooter(state: ChatSandboxState): void {
         line={
           resolveChatSandbox(state, {
             reachable: false,
-            canEdit: true,
             ownedByViewer: true,
             environmentOwned: false,
           }).line

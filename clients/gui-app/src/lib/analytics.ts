@@ -375,7 +375,11 @@ export type AnalyticsProvider =
   | "reasonix"
   | "traycer";
 
-export type AnalyticsRole = "editor" | "owner" | "viewer";
+/**
+ * A role a share event reports. The retired view-only role is absent: no
+ * share can name it, so no event can carry it.
+ */
+export type AnalyticsRole = "editor" | "owner";
 
 export type AnalyticsSetting =
   | "allowPrereleaseUpdates"
@@ -2212,7 +2216,7 @@ const EXACT_PROPERTY_VALUES: {
   provider: ANALYTICS_PROVIDERS,
   source_kind: new Set(["managed", "ambient"]),
   region: ANALYTICS_LAYOUT_REGIONS,
-  role: new Set(["editor", "owner", "viewer"]),
+  role: new Set(["editor", "owner"]),
   session_duration_bucket: ANALYTICS_LAYOUT_DURATION_BUCKETS,
   section: ANALYTICS_SETTINGS_SECTIONS,
   session_age_bucket: ANALYTICS_SESSION_AGE_BUCKETS,

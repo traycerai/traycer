@@ -80,7 +80,6 @@ function resting(
 function lineOf(state: ChatSandboxState): ChatSandboxLine | null {
   return resolveChatSandbox(state, {
     reachable: false,
-    canEdit: true,
     ownedByViewer: true,
     environmentOwned: false,
   }).line;

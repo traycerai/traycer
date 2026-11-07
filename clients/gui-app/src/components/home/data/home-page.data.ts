@@ -13,6 +13,7 @@ import { formatDistanceToNow } from "date-fns";
 import { displayTitle } from "@/lib/display-title";
 import { taskOwningTeamId } from "@/lib/epics/team-task-owner";
 import { isEditableRole } from "@/lib/epic-permissions";
+import { grantedRole } from "@traycer/protocol/common/permission-role";
 
 export type HistoryRecencyBucket = "today" | "yesterday" | "earlier";
 export type HistoryItemTaskType = "epic" | "phase";
@@ -176,7 +177,7 @@ export function buildHistoryItemsFromTasks(
           index,
           userId,
           nowMs,
-          role: task.epic?.permission?.role ?? null,
+          role: grantedRole(task.epic?.permission?.role ?? null),
           isPinned: task.pinned ?? false,
           isLocalHome: isLocalHomedRow(task, epic.id, localHomedTaskIds),
           isPreservedOrphan: isPreservedOrphanRow(task),
@@ -199,7 +200,7 @@ export function buildHistoryItemsFromTasks(
         index,
         userId,
         nowMs,
-        role: task.phase?.permission?.role ?? null,
+        role: grantedRole(task.phase?.permission?.role ?? null),
         isPinned: false,
         isLocalHome: false,
         isPreservedOrphan: false,

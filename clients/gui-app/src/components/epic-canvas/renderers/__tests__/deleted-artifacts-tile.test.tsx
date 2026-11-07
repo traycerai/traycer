@@ -13,7 +13,7 @@ const state = vi.hoisted(() => ({
   previewError: false,
   pendingArtifactId: null as string | null,
   available: true,
-  permissionRole: "owner" as PermissionRole,
+  permissionRole: "owner" as PermissionRole | null,
   queryCalls: [] as Array<{
     readonly method: string;
     readonly params: Record<string, unknown>;
@@ -160,8 +160,9 @@ describe("<DeletedArtifactsTile />", () => {
     ]);
   });
 
-  it("keeps deleted artifacts browsable but disables restore for viewers", () => {
-    state.permissionRole = "viewer";
+  it("keeps deleted artifacts browsable but disables restore without a role", () => {
+    // A stored viewer seat is retired and decodes to no role at all.
+    state.permissionRole = null;
     state.entries = [
       {
         artifactId: "artifact-a",
