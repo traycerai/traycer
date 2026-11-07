@@ -162,16 +162,7 @@ export const GENERAL = defineSettingsSection("general", {
     description:
       "Let agents claim durable responsibilities and coordinate through role-aware tools and prompts.",
     availableWhen: isAgentRolesRowAvailable,
-    keywords: [
-      "roles",
-      "coordination",
-      "delegation",
-      "feature flag",
-      "experimental",
-      "beta",
-      "preview",
-      "labs",
-    ],
+    keywords: ["roles", "coordination", "delegation"],
   },
   agentFeedback: {
     kind: "row",

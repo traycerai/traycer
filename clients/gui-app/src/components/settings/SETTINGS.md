@@ -1493,9 +1493,8 @@ means the drain UI renders NOTHING - never a zero, which would offer to end
       Worktrees heading; with the heading gone the label names worktrees
       itself.
     - **Agent roles**: gated by `isAgentRolesRowAvailable` (the desktop
-      feature-settings bridge) and marked with the muted xs **Experimental**
-      badge the permission modes use, in place of an Experimental heading over
-      one row.
+      feature-settings bridge). A regular toggle, off by default; saved
+      preferences are preserved.
     - **Archive idle agents automatically** (`ChatAutoArchiveSettingsRow` in
       `panels/chat-auto-archive-settings-row.tsx`, definition
       `chatAutoArchive`): the ACCOUNT-wide chat auto-archive setting, read and
