@@ -427,6 +427,54 @@ describe("createOpenEpicStore", () => {
     opened.dispose();
   });
 
+  it("clears an editor's queued edits and stops writes when access is revoked", () => {
+    const { factory, handle } = fakeFactory();
+    const opened = openStoreForTest({
+      epicId: "epic-a",
+      userId: null,
+      factories: {
+        streamClientFactory: factory,
+        laneSelection: null,
+      },
+      writeCommand: null,
+    });
+
+    try {
+      handle().callbacks.onConnectionStatus("open", null, true, null);
+      handle().callbacks.onSnapshot(buildMeta("editor", null), emptySnapshot());
+      handle().callbacks.onConnectionStatus("reconnecting", null, true, "held");
+      opened.doc.getMap("epic").set("title", "Queued as editor");
+      expect(handle().applied).toHaveLength(0);
+      expect(opened.store.getState()).toMatchObject({
+        isDirty: true,
+        unsyncedQueueSize: 1,
+        dirtyWatermarkStateVectorBase64: stateVectorBase64(opened.doc),
+      });
+
+      handle().callbacks.onPermissionChanged(null);
+      expect(opened.store.getState()).toMatchObject({
+        permissionRole: null,
+        accessLost: true,
+        isDirty: false,
+        unsyncedQueueSize: 0,
+        dirtyWatermarkStateVectorBase64: null,
+      });
+
+      // A continued open keeps the snapshot; no new snapshot can mask the
+      // callback's revocation or discard the queued edit on its behalf.
+      handle().callbacks.onConnectionStatus("open", null, true, "continued");
+      opened.doc.getMap("epic").set("title", "Written after revocation");
+      expect(handle().applied).toHaveLength(0);
+      expect(opened.store.getState()).toMatchObject({
+        connectionStatus: "open",
+        snapshotLoaded: true,
+        unsyncedQueueSize: 0,
+      });
+    } finally {
+      opened.dispose();
+    }
+  });
+
   it("holds no role for a snapshot naming the retired viewer role, and writes nothing until a role arrives", () => {
     const { factory, handle } = fakeFactory();
     const opened = openStoreForTest({

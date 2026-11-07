@@ -195,6 +195,32 @@ describe("MembersPage members read", () => {
     expect(failure.textContent).toBe("Couldn't load Acme's members.Retry");
   });
 
+  it("keeps a listed retired role from regaining admin controls through the descriptor", async () => {
+    useAuthStore.setState({
+      profile: { userId: "u-admin", userName: "Ada", email: "ada@acme.test" },
+    });
+    const harness = mountTeamPage(
+      { kind: "host" },
+      {
+        "environment.list": () => ({ environments: [TEAM] }),
+        "environment.members": () =>
+          membersPage([{ ...ADA, effectiveRole: "viewer" }, PRIYA]),
+      },
+    );
+    render(<MembersPage environmentId="env-a" />, {
+      wrapper: harness.Wrapper,
+    });
+
+    await screen.findByText("Acme · 2 people");
+    expect(screen.queryByRole("button", { name: "Invite" })).toBeNull();
+    expect(
+      within(rowOf("u-priya")).queryByRole("button", { name: "Remove" }),
+    ).toBeNull();
+    expect(
+      screen.queryByRole("combobox", { name: "Role for Priya" }),
+    ).toBeNull();
+  });
+
   it("names members by name and email, you by name, and never by user id", async () => {
     useAuthStore.setState({
       profile: { userId: "u-admin", userName: "Ada", email: "ada@acme.test" },

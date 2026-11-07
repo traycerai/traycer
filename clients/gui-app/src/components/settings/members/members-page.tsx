@@ -171,10 +171,12 @@ export function MembersPage(props: MembersPageProps): ReactNode {
   const viewerFromList = members.find(
     (member) => member.userId === currentUserId,
   );
-  // The reader's own seat. `null` through every source means no seat
-  // authority, which the page reads as a non-admin: it offers nothing an
-  // admin does, and the team's own answers refuse the rest.
-  const viewerRole = viewerFromList?.effectiveRole ?? team.viewerRole ?? null;
+  // The listed seat is authoritative, including `null` for no seat authority.
+  // Fall back to the descriptor only when the members read has no own row.
+  const viewerRole =
+    viewerFromList === undefined
+      ? team.viewerRole
+      : viewerFromList.effectiveRole;
   const teamName = team.teamName ?? teamLabel ?? FALLBACK_TEAM_NAME;
 
   const onNoticeSeen = useCallback((): void => {
