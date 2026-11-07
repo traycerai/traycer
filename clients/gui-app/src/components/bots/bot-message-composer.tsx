@@ -725,12 +725,26 @@ function useBotBoxDocument(
   // An edit or seed replaces the box's content once. A quote appends after
   // whichever document it currently holds, including an edit.
   const [loadedEdit, setLoadedEdit] = useState<BotComposerEdit | null>(null);
+  const [editContent, setEditContent] = useState<JsonContent | null>(null);
   if (edit !== loadedEdit) {
     setLoadedEdit(edit);
     if (edit !== null) {
       const next = edit.content ?? contentOf(edit.text);
+      setEditContent(next);
       setContent(next);
       setLoaded(next);
+    } else {
+      // A retry outside this box ends replacement mode. Drop the duplicate
+      // only while it is still the document Edit loaded; a changed draft
+      // becomes an ordinary new message, including its images and quotes.
+      if (
+        editContent !== null &&
+        JSON.stringify(content) === JSON.stringify(editContent)
+      ) {
+        setContent(EMPTY_BOT_BOX);
+        setLoaded(EMPTY_BOT_BOX);
+      }
+      setEditContent(null);
     }
   }
   const seedId = seed?.id ?? null;
