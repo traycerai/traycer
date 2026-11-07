@@ -783,7 +783,7 @@ export function createEpicControlReplica(
       if (isDisposed()) return { kind: "ignored", reason: "disposed" };
       observedAtMs = environment.clock.now();
       switch (event.kind) {
-        case "early-meta":
+        case "early-meta": {
           // Legacy @1 metadata-only frame; lanes never apply this event.
           // The caller populates snapshot metadata on the records plane.
           // Here it moves only the DISPLAY role and mirrors the
@@ -800,14 +800,13 @@ export function createEpicControlReplica(
           // fail closed for a team-derived owner (writes silently dropped for
           // ~8s) or fail open for a stale-cached editor. Snapshot is
           // authoritative.
+          const role = grantedRole(event.meta.permissionRole);
           publish({
-            permissionRole: grantedRole(event.meta.permissionRole),
-            accessLost:
-              event.meta.permissionRole === null
-                ? sink.read().accessLost
-                : false,
+            permissionRole: role,
+            accessLost: role === null ? sink.read().accessLost : false,
           });
           break;
+        }
         case "permission-changed":
           applyPermissionChanged(event.role);
           break;

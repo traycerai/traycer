@@ -277,6 +277,34 @@ describe("createOpenEpicStore", () => {
     opened.dispose();
   });
 
+  it("keeps access lost for retired early metadata until a granted role returns", () => {
+    const { factory, handle } = fakeFactory();
+    const opened = openStoreForTest({
+      epicId: "epic-a",
+      userId: null,
+      factories: {
+        streamClientFactory: factory,
+        laneSelection: null,
+      },
+      writeCommand: null,
+    });
+
+    try {
+      handle().callbacks.onSnapshot(buildMeta("editor", null), emptySnapshot());
+      handle().callbacks.onPermissionChanged(null);
+      handle().callbacks.onEarlyMeta(buildMeta("viewer", null));
+
+      expect(opened.store.getState().permissionRole).toBeNull();
+      expect(opened.store.getState().accessLost).toBe(true);
+
+      handle().callbacks.onEarlyMeta(buildMeta("editor", null));
+      expect(opened.store.getState().permissionRole).toBe("editor");
+      expect(opened.store.getState().accessLost).toBe(false);
+    } finally {
+      opened.dispose();
+    }
+  });
+
   it("does not raise a close signal on a downgrade from owner to editor (downgrade != close)", () => {
     const { factory, handle } = fakeFactory();
     const opened = openStoreForTest({

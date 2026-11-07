@@ -368,19 +368,6 @@ interface ChatTreePanelBodyProps {
 
 type TreeFilterFn = (type: string | null | undefined) => boolean;
 
-/**
- * Epic-level viewer (read-only) role for the chat panel. Resolved once in
- * `ChatTreePanelBody` and read directly by the leaf status chip, rather than
- * drilled through four row layers or re-subscribed per row via
- * `useEpicPermissionRole()`. A row's OWN chat session access overrides it when
- * that chat is open.
- *
- * This saves the per-row subscription for the TRAILING chip only. The leading
- * `ChatProgressIcon` is deliberately status-aware, and it re-subscribes per row
- * through its own `useEpicPermissionRole()` call - a known, accepted cost of
- * keeping that icon, not an oversight this context still eliminates.
- */
-
 interface SidebarChatSharingValue {
   readonly visibilitySupported: boolean;
   readonly ownCloudChatByLocalId: ReadonlyMap<string, CloudChatSummary>;
