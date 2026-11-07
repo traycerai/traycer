@@ -563,6 +563,16 @@ export function CanvasArtifactEditor({
   }, [flow]);
   const centerBoard = useCallback(
     (path: string): void => {
+      console.warn(
+        "[DEBUG-canvasback]",
+        JSON.stringify({
+          kind: "center",
+          path,
+          at: performance.now(),
+          controlledZoom: viewport.zoom,
+          current: flow?.getViewport(),
+        }),
+      );
       const board = snapshot.boards[path];
       if (!Object.hasOwn(snapshot.boards, path)) return;
       const boardPage = board.page ?? snapshot.pages.at(0)?.id ?? "";
@@ -856,6 +866,10 @@ export function CanvasArtifactEditor({
         frameEvents?.onAddError?.(path, error);
       },
       onRelativeLink: (path, href) => {
+        console.warn(
+          "[DEBUG-canvasback]",
+          JSON.stringify({ kind: "link", path, href, at: performance.now() }),
+        );
         const target = resolveCanvasBoardLink(
           path,
           href,
@@ -1233,14 +1247,43 @@ export function CanvasArtifactEditor({
                     zoomOnDoubleClick={false}
                     deleteKeyCode={null}
                     onMoveStart={(event) => {
+                      console.warn(
+                        "[DEBUG-canvasback]",
+                        JSON.stringify({
+                          kind: "start",
+                          event,
+                          at: performance.now(),
+                          controlled: viewport,
+                          current: flow?.getViewport(),
+                        }),
+                      );
                       // xyflow also starts moves with a synthetic {sync:true}
                       // when controlled state catches up. Only input owns this.
                       if (event instanceof Event) cancelWheelSettlement();
                     }}
                     onMove={(_event, value) => {
+                      console.warn(
+                        "[DEBUG-canvasback]",
+                        JSON.stringify({
+                          kind: "move",
+                          event: _event,
+                          value,
+                          at: performance.now(),
+                        }),
+                      );
                       if (activeFullscreen === null) setViewport(value);
                     }}
                     onMoveEnd={(_event, value) => {
+                      console.warn(
+                        "[DEBUG-canvasback]",
+                        JSON.stringify({
+                          kind: "end",
+                          event: _event,
+                          value,
+                          at: performance.now(),
+                          current: flow?.getViewport(),
+                        }),
+                      );
                       if (activeFullscreen !== null) return;
                       setViewport(value);
                       // Programmatic wheel moves fire end on every tick.

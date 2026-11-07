@@ -1,5 +1,6 @@
 import { expect, test, type Page } from "@playwright/test";
 
+import { captureCanvasBack } from "./support/canvas-back-diagnostics.ts";
 import { fixture, nextFrames } from "./support/fixtures.ts";
 
 // Browser regressions for canvas Play and fullscreen: claims jsdom cannot
@@ -10,7 +11,11 @@ import { fixture, nextFrames } from "./support/fixtures.ts";
 // in Vitest (`components/canvas-artifact/__tests__/`); this file only proves
 // what a real browser session shows.
 
-test.use({ viewport: { width: 1400, height: 900 }, actionTimeout: 10_000 });
+test.use({
+  viewport: { width: 1400, height: 900 },
+  actionTimeout: 10_000,
+  trace: "on",
+});
 
 interface PlayProbe {
   readonly ready: boolean;
@@ -586,39 +591,47 @@ test.describe("relative links and the query-navigation reload", () => {
   // see canvas-bootstrap.ts's click listener.
   test("a query-carrying link reloads the target board in place, and the bridge still answers after it, and after the trip back", async ({
     page,
-  }) => {
-    await open(page);
-    await page.getByRole("button", { name: "Play A on canvas" }).click();
-    await expect(
-      page.getByRole("button", { name: "Stop A (Escape)" }),
-    ).toBeVisible();
+  }, testInfo) => {
+    const finishCapture = await captureCanvasBack(page, testInfo);
+    try {
+      await open(page);
+      await page.getByRole("button", { name: "Play A on canvas" }).click();
+      await expect(
+        page.getByRole("button", { name: "Stop A (Escape)" }),
+      ).toBeVisible();
 
-    // Keyboard activation avoids cross-frame pointer rounding at canvas zoom.
-    await board(page, "A").locator('[data-tid="link"]').press("Enter");
-    // The hop moves play to B and reveals it once.
-    await expect(
-      page.getByRole("button", { name: "Stop B (Escape)" }),
-    ).toBeVisible();
-    await waitForBoardCentred(page, "B");
-    // The reload lands with the query applied, not dropped.
-    await expect
-      .poll(() =>
-        board(page, "B")
-          .locator("body")
-          .evaluate(() => location.search),
-      )
-      .toBe("?step=2");
+      // Keyboard activation avoids cross-frame pointer rounding at canvas zoom.
+      await board(page, "A").locator('[data-tid="link"]').press("Enter");
+      // The hop moves play to B and reveals it once.
+      await expect(
+        page.getByRole("button", { name: "Stop B (Escape)" }),
+      ).toBeVisible();
+      await waitForBoardCentred(page, "B");
+      // The reload lands with the query applied, not dropped.
+      await expect
+        .poll(() =>
+          board(page, "B")
+            .locator("body")
+            .evaluate(() => location.search),
+        )
+        .toBe("?step=2");
 
-    // The trip back never needs a reload (B's query, A's none), but clicking
-    // it still exercises the bridge the reload just re-handshook: if that
-    // handshake left it rejecting requests, this click - and the relative
-    // link notification it depends on - would simply never land.
-    await board(page, "B").locator('[data-tid="link"]').press("Enter");
-    await waitForBoardCentred(page, "A");
+      // The trip back never needs a reload (B's query, A's none), but clicking
+      // it still exercises the bridge the reload just re-handshook: if that
+      // handshake left it rejecting requests, this click - and the relative
+      // link notification it depends on - would simply never land.
+      await board(page, "B").locator('[data-tid="link"]').press("Enter");
+      await waitForBoardCentred(page, "A");
 
-    // And the editor itself is still live, not stuck behind the reload.
-    await commentsToggle(page).click();
-    await expect(commentsToggle(page)).toHaveAttribute("aria-pressed", "true");
+      // And the editor itself is still live, not stuck behind the reload.
+      await commentsToggle(page).click();
+      await expect(commentsToggle(page)).toHaveAttribute(
+        "aria-pressed",
+        "true",
+      );
+    } finally {
+      await finishCapture();
+    }
   });
 });
 

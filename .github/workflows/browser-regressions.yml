@@ -1,4 +1,4 @@
-name: Browser regressions
+name: Browser regressions (NEVER MERGE canvas diagnostic)
 
 # The GUI's real-browser regressions: Playwright Test specs in
 # `clients/gui-app/browser-tests/`, run against the fixture pages in
@@ -137,7 +137,7 @@ jobs:
           fi
 
   browser:
-    name: browser (${{ matrix.shard }}/${{ strategy.job-total }})
+    name: browser (canvas Back diagnostic)
     needs: changes
     # A team PR into `main`, `integration/*` or `land/*` skips this job: the
     # merge to `main` runs it once. A fork PR, a bot PR and a PR into any
@@ -159,7 +159,7 @@ jobs:
       # One red shard must not cancel the others: each proves different claims.
       fail-fast: false
       matrix:
-        shard: [1, 2, 3, 4, 5, 6, 7, 8]
+        shard: [7]
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
         with:
@@ -178,21 +178,10 @@ jobs:
       - name: Browser regressions
         working-directory: clients/gui-app
         env:
-          SHARD: ${{ matrix.shard }}/${{ strategy.job-total }}
           # Serve the fixture pages bundled: `vite.browser-tests.config.ts`.
           BROWSER_TESTS_BUNDLE: "1"
-        # Whole files, cut by measured time (the script says why), not `--shard`.
-        run: |
-          set -euo pipefail
-          # Not `mapfile < <(...)`: a planner that fails there leaves an empty
-          # list, and an empty list runs every spec in every shard.
-          plan="$(node scripts/browser-test-shard-plan.ts "$SHARD")"
-          mapfile -t files <<< "$plan"
-          if [ -z "$plan" ] || [ "${#files[@]}" -eq 0 ]; then
-            echo "The shard plan gave shard $SHARD no spec files."
-            exit 1
-          fi
-          bun run test:browser "${files[@]}"
+        # NEVER MERGE: one bounded diagnostic dispatch; original assertions/timeouts.
+        run: bun run test:browser browser-tests/canvas-play.spec.ts --grep 'a query-carrying link' --workers=2 --repeat-each=10
       - name: Every test is within the per-test budget
         working-directory: clients/gui-app
         run: node scripts/browser-test-budget.ts test-results.json
@@ -203,12 +192,14 @@ jobs:
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: browser-results-${{ matrix.shard }}
-          path: clients/gui-app/test-results.json
+          path: |
+            clients/gui-app/test-results.json
+            clients/gui-app/test-results/
           retention-days: 14
       # The HTML report carries a screenshot of each red test: open it with
       # `bunx playwright show-report <dir>` after downloading.
       - name: Upload the Playwright report
-        if: failure()
+        if: always()
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: playwright-report-${{ matrix.shard }}
@@ -225,14 +216,7 @@ jobs:
     # A team PR into `main`, `integration/*` or `land/*` skips this job: the
     # merge to `main` runs it once. A fork PR, a bot PR and a PR into any
     # other branch run it in full.
-    if: >-
-      (
-        github.event_name != 'pull_request'
-        || (github.base_ref != 'main' && !startsWith(github.base_ref, 'integration/') && !startsWith(github.base_ref, 'land/'))
-        || github.event.pull_request.head.repo.full_name != github.repository
-        || github.event.pull_request.user.type == 'Bot'
-      )
-      && needs.changes.outputs.run == 'true'
+    if: false # NEVER MERGE: only the canvas browser job is part of this diagnostic.
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     steps:
@@ -280,7 +264,7 @@ jobs:
             exit 1
           fi
           if [ "$RUN" = "true" ]; then
-            if [ "$BROWSER" != "success" ] || [ "$CDP_CLIENT" != "success" ]; then
+            if [ "$BROWSER" != "success" ] || [ "$CDP_CLIENT" != "skipped" ]; then
               echo "The browser suite ran and did not pass."
               exit 1
             fi

@@ -3,6 +3,7 @@ import path from "node:path";
 import { mergeConfig, type Plugin } from "vite";
 
 import base from "./vitest.config.ts";
+import { canvasBackDiagnostics } from "./vite/canvas-back-diagnostics.ts";
 import { sandboxAssets } from "./vite/sandbox-assets.ts";
 
 /**
@@ -78,7 +79,11 @@ const fixturePages = readdirSync(path.join(GUI_APP_ROOT, FIXTURE_DIR))
   .map((name) => path.join(FIXTURE_DIR, name));
 
 export default mergeConfig(base, {
-  plugins: [sandboxAssets(), typescriptEntriesAreJavascript()],
+  plugins: [
+    canvasBackDiagnostics(),
+    sandboxAssets(),
+    typescriptEntriesAreJavascript(),
+  ],
   cacheDir: `node_modules/.vite/browser-tests-${port}`,
   optimizeDeps: { entries: ["src/__tests__/browser/*.html"] },
   server: {
