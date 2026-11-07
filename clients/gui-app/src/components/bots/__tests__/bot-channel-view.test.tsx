@@ -263,7 +263,11 @@ vi.mock("@/hooks/bots/use-bot-activity", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/hooks/bots/use-bot-activity")>()),
   useBotActivity: () => null,
 }));
-vi.mock("@/components/bots/bot-chat-transcript", () => ({
+vi.mock("@/components/bots/bot-chat-transcript", async (importOriginal) => ({
+  ...(await importOriginal<
+    typeof import("@/components/bots/bot-chat-transcript")
+  >()),
+  BotTranscriptImageScope: (props: { children: ReactNode }) => props.children,
   BotChatTranscript: (props: {
     chatId: string;
     surface: BotTranscriptSurface | null;
@@ -2390,6 +2394,15 @@ describe("<BotChannelView tiles={null} /> a post whose answer lands in a thread"
       threadId: "thread-new",
       requestId: "request-new",
       text: POSTED_TEXT,
+      content: {
+        type: "doc",
+        content: [
+          {
+            type: "paragraph",
+            content: [{ type: "text", text: POSTED_TEXT }],
+          },
+        ],
+      },
       senderUserId: null,
       sentAt: 5_000,
       delivery: "written",

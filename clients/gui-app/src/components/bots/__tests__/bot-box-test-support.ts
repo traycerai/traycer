@@ -21,9 +21,10 @@ export async function findBoxInput(label: string): Promise<HTMLElement> {
   return input;
 }
 
-/** The editable element of the box labelled `label`, for a box already mounted. */
+/** The editable element of a mounted box, or a plain textbox with that label. */
 export function boxInput(label: string): HTMLElement {
-  const group = screen.getByRole("group", { name: label });
+  const group = screen.queryByRole("group", { name: label });
+  if (group === null) return screen.getByRole("textbox", { name: label });
   const input = group.querySelector<HTMLElement>("[data-composer-editor]");
   if (input === null) throw new Error(`"${label}" has no editor`);
   return input;
