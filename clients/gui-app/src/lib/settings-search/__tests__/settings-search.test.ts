@@ -111,7 +111,7 @@ describe("settings search", () => {
         result.entry.section === "shell" && result.entry.anchor === null,
     );
     expect(shell?.entry.description).toBe(
-      "Plain values every computer and sandbox running Personal gets, and the shell agents run in.",
+      "Plain values every computer and sandbox running these settings gets, and the shell agents run in.",
     );
   });
 

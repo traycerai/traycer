@@ -190,7 +190,7 @@ describe("<HostSettingsPanel /> Overview identity card — rename affordance and
   });
 });
 
-describe("<HostSettingsPanel /> Overview identity card — busy chip", () => {
+describe("<HostSettingsPanel /> Overview identity card — Busy/Idle status", () => {
   it("reads 'Idle' with no live tone when the host reports no work", async () => {
     const fixture = buildOverviewHostFixture({
       hostId: "host-a",
@@ -217,7 +217,7 @@ describe("<HostSettingsPanel /> Overview identity card — busy chip", () => {
     expect(chip.className).not.toMatch(/emerald/);
   });
 
-  it("reads '1 agent working' for a {1,0,0} breakdown", async () => {
+  it("shows Busy for a working agent without exposing a session breakdown", async () => {
     const fixture = buildOverviewHostFixture({
       hostId: "host-a",
       isLocalMachine: true,
@@ -240,11 +240,11 @@ describe("<HostSettingsPanel /> Overview identity card — busy chip", () => {
     const chip = await screen.findByTestId("host-active-sessions");
     expect(chip.getAttribute("data-count")).toBe("1");
     expect(chip.getAttribute("data-live")).toBe("true");
-    expect(chip.textContent).toBe("1 agent working");
+    expect(chip.textContent).toBe("Busy");
     expect(chip.textContent).not.toMatch(/session/i);
   });
 
-  it("falls back to '2 sessions' for a @1.1 host with a count and no breakdown", async () => {
+  it("shows Busy when an older host reports only a session count", async () => {
     const fixture = buildOverviewHostFixture({
       hostId: "host-a",
       isLocalMachine: true,
@@ -260,7 +260,7 @@ describe("<HostSettingsPanel /> Overview identity card — busy chip", () => {
 
     const chip = await screen.findByTestId("host-active-sessions");
     expect(chip.getAttribute("data-count")).toBe("2");
-    expect(chip.textContent).toBe("2 sessions");
+    expect(chip.textContent).toBe("Busy");
   });
 
   it("is ABSENT entirely while host.status has not resolved — not the same as a known zero", async () => {
@@ -314,7 +314,9 @@ describe("<HostSettingsPanel /> Overview identity card — busy chip", () => {
       await gate;
     });
 
-    expect(await screen.findByTestId("host-active-sessions")).toBeTruthy();
+    expect(
+      (await screen.findByTestId("host-active-sessions")).textContent,
+    ).toBe("Busy");
   });
 
   it("keeps the busy chip on screen while host.status is refetching", async () => {
@@ -369,7 +371,7 @@ describe("<HostSettingsPanel /> Overview identity card — busy chip", () => {
     renderPanel(queryClient);
 
     const chip = await screen.findByTestId("host-active-sessions");
-    expect(chip.textContent).toBe("2 terminals working");
+    expect(chip.textContent).toBe("Busy");
 
     act(() => {
       void queryClient.invalidateQueries({
@@ -385,18 +387,14 @@ describe("<HostSettingsPanel /> Overview identity card — busy chip", () => {
       expect(statusCalls).toBe(2);
     });
 
-    expect(screen.getByTestId("host-active-sessions").textContent).toBe(
-      "2 terminals working",
-    );
+    expect(screen.getByTestId("host-active-sessions").textContent).toBe("Busy");
 
     await act(async () => {
       releaseRefetch?.();
       await refetchGate;
     });
 
-    expect(screen.getByTestId("host-active-sessions").textContent).toBe(
-      "2 terminals working",
-    );
+    expect(screen.getByTestId("host-active-sessions").textContent).toBe("Busy");
   });
 });
 
@@ -468,7 +466,10 @@ describe("<HostSettingsPanel /> Overview identity card — window binding", () =
       };
       renderPanel(undefined);
 
-      await screen.findByTestId("host-overview-menu");
+      fireEvent.pointerDown(await screen.findByTestId("host-overview-menu"), {
+        button: 0,
+      });
+      await screen.findByRole("menu");
       expect(screen.queryByTestId("host-make-active")).toBeNull();
     },
   );
@@ -500,11 +501,14 @@ describe("<HostSettingsPanel /> Overview identity card — window binding", () =
     };
     renderPanel(undefined);
 
-    await screen.findByTestId("host-overview-menu");
+    fireEvent.pointerDown(await screen.findByTestId("host-overview-menu"), {
+      button: 0,
+    });
+    await screen.findByRole("menu");
     expect(screen.queryByTestId("host-make-active")).toBeNull();
   });
 
-  it("offers Activate on an ordinary confirmed sandbox", async () => {
+  it("offers Activate in More on an ordinary confirmed sandbox", async () => {
     const fixture = buildOverviewHostFixture({
       hostId: "host-sbx",
       isLocalMachine: false,
@@ -535,7 +539,11 @@ describe("<HostSettingsPanel /> Overview identity card — window binding", () =
     };
     renderPanel(undefined);
 
-    expect(await screen.findByTestId("host-make-active")).not.toBeNull();
+    fireEvent.pointerDown(await screen.findByTestId("host-overview-menu"), {
+      button: 0,
+    });
+    const menu = await screen.findByRole("menu");
+    expect(within(menu).getByTestId("host-make-active")).not.toBeNull();
   });
 
   it("host.isActive: true renders no Activate button", async () => {
@@ -551,6 +559,10 @@ describe("<HostSettingsPanel /> Overview identity card — window binding", () =
     renderPanel(undefined);
 
     await screen.findByText("Studio Mac");
+    fireEvent.pointerDown(await screen.findByTestId("host-overview-menu"), {
+      button: 0,
+    });
+    await screen.findByRole("menu");
     expect(screen.queryByTestId("host-make-active")).toBeNull();
   });
 });

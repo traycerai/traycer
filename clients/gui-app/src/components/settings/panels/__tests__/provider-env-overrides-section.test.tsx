@@ -192,7 +192,7 @@ function renderSection(input: {
     withQueryClient(
       <ProviderEnvOverridesSection
         providerId={input.providerId}
-        onOpenAccount={null}
+        keyHome={null}
         overrides={[]}
         envOverrideScope={input.envOverrideScope}
       />,
@@ -284,7 +284,7 @@ describe("ProviderEnvOverridesSection on a host that takes no credentials", () =
       withQueryClient(
         <ProviderEnvOverridesSection
           providerId="cursor"
-          onOpenAccount={null}
+          keyHome={null}
           overrides={[
             { key: "CURSOR_BASE_URL", value: "https://example.invalid" },
           ]}
@@ -446,10 +446,13 @@ describe("ProviderEnvOverridesSection on a Personal page with a held value", () 
     );
   }
 
-  /** A provider's Env tab on the Personal page, with or without an Account tab. */
+  /** A provider's Env tab on the Personal page, with or without a key tab. */
   function renderProviderEnvTab(
     providerId: ProviderCliState["providerId"],
-    onOpenAccount: (() => void) | null,
+    keyHome: {
+      readonly label: "Account" | "Profiles & Limits";
+      readonly open: () => void;
+    } | null,
     overrides: readonly EnvOverrideValue[],
   ): RenderResult {
     return mountOnPersonalPage(
@@ -457,7 +460,7 @@ describe("ProviderEnvOverridesSection on a Personal page with a held value", () 
       NO_FACTS,
       <ProviderEnvOverridesSection
         providerId={providerId}
-        onOpenAccount={onOpenAccount}
+        keyHome={keyHome}
         overrides={overrides}
         envOverrideScope="harness-and-native-config"
       />,
@@ -479,44 +482,49 @@ describe("ProviderEnvOverridesSection on a Personal page with a held value", () 
 
   it.each([
     {
-      providerId: "claude-code",
-      name: "Claude Code",
-      variable: "ANTHROPIC_API_KEY",
+      providerId: "cursor",
+      name: "Cursor",
+      variable: "CURSOR_API_KEY",
+      label: "Profiles & Limits",
     },
-    { providerId: "kiro", name: "Kiro", variable: "KIRO_API_KEY" },
-    { providerId: "droid", name: "Droid", variable: "FACTORY_API_KEY" },
+    {
+      providerId: "amp",
+      name: "Amp",
+      variable: "AMP_API_KEY",
+      label: "Account",
+    },
   ] as const)(
-    "refuses $name's own key variable with a pointer to its Account tab, clears the value and stores nothing",
-    async ({ providerId, name, variable }) => {
-      const onOpenAccount = vi.fn<() => void>();
-      renderProviderEnvTab(providerId, onOpenAccount, []);
+    "refuses $name's own key variable with a pointer to $label, clears the value and stores nothing",
+    async ({ providerId, name, variable, label }) => {
+      const open = vi.fn<() => void>();
+      renderProviderEnvTab(providerId, { label, open }, []);
 
       await typeVariable(variable, HELD_VALUE);
 
       const line = await screen.findByTestId("env-key-refusal");
       expect(line.textContent).toBe(
-        `This is ${name}'s key. Set it on ${name}'s Account tab.`,
+        `This is ${name}'s key. Set it on ${name}'s ${label}.`,
       );
       expect(screen.getByLabelText("New variable value")).toBe(
         screen.getByDisplayValue(""),
       );
       expect(document.body.textContent).not.toContain(HELD_VALUE);
       expect(mocks.setOverrideMutate).not.toHaveBeenCalled();
-      expect(onOpenAccount).not.toHaveBeenCalled();
+      expect(open).not.toHaveBeenCalled();
 
       fireEvent.click(
-        within(line).getByRole("button", { name: `${name}'s Account tab` }),
+        within(line).getByRole("button", { name: `${name}'s ${label}` }),
       );
 
-      expect(onOpenAccount).toHaveBeenCalledTimes(1);
+      expect(open).toHaveBeenCalledTimes(1);
       expect(mocks.setOverrideMutate).not.toHaveBeenCalled();
       expect(screen.queryByLabelText("New variable name")).toBeNull();
     },
   );
 
   it("still sends any other key-shaped name to Add a secret, with the value kept", async () => {
-    const onOpenAccount = vi.fn<() => void>();
-    renderProviderEnvTab("kiro", onOpenAccount, []);
+    const open = vi.fn<() => void>();
+    renderProviderEnvTab("kiro", { label: "Profiles & Limits", open }, []);
 
     await typeVariable("NOTES", HELD_VALUE);
 
@@ -524,11 +532,11 @@ describe("ProviderEnvOverridesSection on a Personal page with a held value", () 
       "This looks like a key. Add it as a secret.",
     );
     expect(screen.getByDisplayValue(HELD_VALUE)).toBeTruthy();
-    expect(onOpenAccount).not.toHaveBeenCalled();
+    expect(open).not.toHaveBeenCalled();
     expect(mocks.setOverrideMutate).not.toHaveBeenCalled();
   });
 
-  it("uses the generic line for the provider's own key variable when it has no Account tab", async () => {
+  it("uses the generic line for the provider's own key variable when it has no key tab", async () => {
     renderProviderEnvTab("kiro", null, []);
 
     await typeVariable("KIRO_API_KEY", HELD_VALUE);
@@ -540,9 +548,9 @@ describe("ProviderEnvOverridesSection on a Personal page with a held value", () 
     expect(mocks.setOverrideMutate).not.toHaveBeenCalled();
   });
 
-  it("masks a saved key-shaped own key variable, points it at the Account tab, and leaves it saved", async () => {
-    const onOpenAccount = vi.fn<() => void>();
-    renderProviderEnvTab("kiro", onOpenAccount, [
+  it("masks a saved key-shaped own key variable, points it at the key tab, and leaves it saved", async () => {
+    const open = vi.fn<() => void>();
+    renderProviderEnvTab("kiro", { label: "Profiles & Limits", open }, [
       { key: "KIRO_API_KEY", value: HELD_VALUE },
     ]);
 
@@ -557,19 +565,19 @@ describe("ProviderEnvOverridesSection on a Personal page with a held value", () 
     expect(document.body.textContent).not.toContain(HELD_VALUE);
     const line = within(row).getByTestId("env-key-refusal");
     expect(line.textContent).toBe(
-      "This is Kiro's key. Set it on Kiro's Account tab.",
+      "This is Kiro's key. Set it on Kiro's Profiles & Limits.",
     );
 
     fireEvent.click(
-      within(line).getByRole("button", { name: "Kiro's Account tab" }),
+      within(line).getByRole("button", { name: "Kiro's Profiles & Limits" }),
     );
 
-    expect(onOpenAccount).toHaveBeenCalledTimes(1);
+    expect(open).toHaveBeenCalledTimes(1);
     expect(mocks.setOverrideMutate).not.toHaveBeenCalled();
     expect(mocks.deleteOverrideMutate).not.toHaveBeenCalled();
   });
 
-  it("masks a saved key-shaped value on a provider with no Account tab and carries it into Add a secret, deleting nothing", async () => {
+  it("masks a saved key-shaped value on a provider with no key tab and carries it into Add a secret, deleting nothing", async () => {
     renderProviderEnvTab("claude-code", null, [
       { key: "ANTHROPIC_API_KEY", value: HELD_VALUE },
     ]);
@@ -596,7 +604,7 @@ describe("ProviderEnvOverridesSection on a Personal page with a held value", () 
   });
 
   it("keeps an ordinary saved value editable, with no masked row", async () => {
-    renderProviderEnvTab("kiro", vi.fn<() => void>(), [
+    renderProviderEnvTab("kiro", null, [
       { key: "KIRO_BASE_URL", value: "https://example.invalid" },
     ]);
 
@@ -606,7 +614,7 @@ describe("ProviderEnvOverridesSection on a Personal page with a held value", () 
   });
 
   it("removes a masked row by its key", async () => {
-    renderProviderEnvTab("kiro", vi.fn<() => void>(), [
+    renderProviderEnvTab("kiro", null, [
       { key: "KIRO_API_KEY", value: HELD_VALUE },
     ]);
 
@@ -679,7 +687,7 @@ describe("ProviderEnvOverridesSection on a Personal page with a held value", () 
       facts,
       <ProviderEnvOverridesSection
         providerId="claude-code"
-        onOpenAccount={null}
+        keyHome={null}
         overrides={overrides}
         envOverrideScope="harness-and-native-config"
       />,

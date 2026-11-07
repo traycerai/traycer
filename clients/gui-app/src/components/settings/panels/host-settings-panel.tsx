@@ -152,11 +152,6 @@ function HostSettingsPanelInner(props: {
 
   const localRecoveryZone = useEmptyAccountLocalRecoveryZone(scope, management);
 
-  const description =
-    scope.host === null
-      ? "Status, updates and maintenance for the selected host."
-      : `Status, updates and maintenance for ${scope.host.name}.`;
-
   // Say NOTHING about a host the scope cannot resolve. This is the whole-panel
   // gate, and it is safe to use one: everything below describes the scoped
   // host, so there is no region that would be wrongly withheld by it.
@@ -209,7 +204,6 @@ function HostSettingsPanelInner(props: {
       // The card below names the host, in bigger type, next to its status and
       // its Edit name control. Repeating it as the page title printed the same
       // string twice, two lines apart, and made the header look like a bug.
-      description={description}
       fillHeight={pinned}
       bodyClassName={cn(
         "overflow-visible rounded-none border-none bg-transparent",

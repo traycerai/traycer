@@ -107,6 +107,7 @@ export function MobileNewTerminalDialog(props: MobileNewTerminalDialogProps) {
             epicId={epicId}
             surfaceKey={surfaceKey}
             autoFocusSearch={!coarsePointer}
+            showHeading={false}
             onLaunch={handleLaunch}
           />
         ) : null}

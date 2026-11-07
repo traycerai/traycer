@@ -1,6 +1,6 @@
 import type { ReactNode } from "react";
-import { usePersonalHostState } from "@/components/settings/personal/personal-page-context";
-import { ProviderRowDetails } from "@/components/settings/details/provider-row-details";
+import { SettingsDetailsButton } from "@/components/settings/details/settings-details-button";
+import { useAppliedProviderItemDetailsSubject } from "@/components/settings/details/use-provider-row-details-subject";
 
 /** Native-only rows have no configuration history address. */
 export function AppliedProviderItemDetails(props: {
@@ -8,17 +8,15 @@ export function AppliedProviderItemDetails(props: {
   readonly itemKey: string;
   readonly title: string;
 }): ReactNode {
-  const state = usePersonalHostState();
-  const recorded =
-    state?.kind === "ready" &&
-    state.status.items.some(
-      (item) => item.kind === props.kind && item.key === props.itemKey,
-    );
-  return recorded ? (
-    <ProviderRowDetails
-      kind={props.kind}
-      itemKey={props.itemKey}
+  const subject = useAppliedProviderItemDetailsSubject(
+    props.kind,
+    props.itemKey,
+  );
+  return subject === null ? null : (
+    <SettingsDetailsButton
+      subject={subject}
       title={props.title}
+      controls={null}
     />
-  ) : null;
+  );
 }

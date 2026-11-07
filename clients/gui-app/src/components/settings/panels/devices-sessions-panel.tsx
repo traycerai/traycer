@@ -15,7 +15,6 @@ import {
 } from "lucide-react";
 import { SettingsPanelShell } from "@/components/settings/settings-panel-shell";
 import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
-import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import {
@@ -65,16 +64,34 @@ function sessionClientLabel(session: UserSessionListItem): string {
   }
 }
 
-function sessionDisplayLine(session: UserSessionListItem): string {
-  const parts = [
-    session.displayLabel,
-    session.platform,
-    session.appVersion === null ? null : `App ${session.appVersion}`,
-    // Coarse (city/region-level) and the strongest "is this me?" signal on the
-    // row - a session in the wrong place is what a user actually scans for.
-    session.location,
-  ].filter((part): part is string => part !== null && part.trim().length > 0);
-  return parts.length === 0 ? "Session details unavailable" : parts.join(" / ");
+function presentText(value: string | null): string | null {
+  if (value === null) return null;
+  const trimmed = value.trim();
+  return trimmed.length === 0 ? null : trimmed;
+}
+
+function sessionName(session: UserSessionListItem): string {
+  return (
+    presentText(session.displayLabel) ??
+    // Nothing left to recognise the row by: platform, place and a name are
+    // all absent. Created time still lives in Details.
+    (sessionPlaceLine(session) === null ? "Session details unavailable" : "")
+  );
+}
+
+function sessionPlaceLine(session: UserSessionListItem): string | null {
+  const parts = [presentText(session.platform), presentText(session.location)];
+  const present = parts.filter((part): part is string => part !== null);
+  return present.length === 0 ? null : present.join(" · ");
+}
+
+function sessionDetailsLine(session: UserSessionListItem): string {
+  const created = `Created ${formatRelativeTime(session.createdAt)}`;
+  const version = presentText(session.appVersion);
+  const client = sessionClientLabel(session);
+  return version === null
+    ? `${client} · ${created}`
+    : `${client} · App ${version} · ${created}`;
 }
 
 function formatRelativeTime(value: string): string {
@@ -110,8 +127,13 @@ function sessionStatusLine(session: UserSessionListItem): string {
   return `Last seen ${formatRelativeTime(session.lastSeenAt)}`;
 }
 
-function sessionTimelineLine(session: UserSessionListItem): string {
-  return `Created ${formatRelativeTime(session.createdAt)} · ${sessionStatusLine(session)}`;
+function sessionStatusDisplay(
+  session: UserSessionListItem,
+  pending: boolean,
+): string {
+  if (pending) return "Signing out";
+  const status = sessionStatusLine(session);
+  return session.current ? `This session · ${status}` : status;
 }
 
 function sortSessions(
@@ -129,22 +151,22 @@ function sessionIcon(session: UserSessionListItem): ReactNode {
   const className = "size-4";
   switch (session.clientKind) {
     case "web":
-      return <Globe className={className} />;
+      return <Globe className={className} aria-hidden />;
     case "desktop":
-      return <Monitor className={className} />;
+      return <Monitor className={className} aria-hidden />;
     case "cli":
-      return <Terminal className={className} />;
+      return <Terminal className={className} aria-hidden />;
     case "extension":
-      return <Smartphone className={className} />;
+      return <Smartphone className={className} aria-hidden />;
     case "mobile":
       // Deliberately NOT `Smartphone`: the extension already owns that glyph,
       // and two client kinds sharing one icon in the same list is worse than
       // either choice on its own.
-      return <TabletSmartphone className={className} />;
+      return <TabletSmartphone className={className} aria-hidden />;
     case "host":
-      return <Server className={className} />;
+      return <Server className={className} aria-hidden />;
     default:
-      return <HelpCircle className={className} />;
+      return <HelpCircle className={className} aria-hidden />;
   }
 }
 
@@ -268,12 +290,8 @@ export function DevicesSessionsPanel() {
       >
         <div className="flex flex-col">
           <div className="flex flex-col gap-3 border-b border-border/60 px-5 py-4 sm:flex-row sm:items-center sm:justify-between">
-            <div className="min-w-0 space-y-1">
+            <div className="min-w-0">
               <h2 className="text-ui font-medium">Signed-in sessions</h2>
-              <p className="text-ui-xs text-muted-foreground">
-                Browser, desktop, CLI, extension, and host access for this
-                account.
-              </p>
             </div>
             <Button
               type="button"
@@ -405,35 +423,48 @@ function SessionRow(props: {
   return (
     <li
       className={cn(
-        "flex flex-col gap-4 px-5 py-4 sm:flex-row sm:items-center sm:justify-between",
+        "flex min-w-0 flex-col gap-4 px-5 py-4 sm:flex-row sm:flex-wrap sm:items-center sm:justify-between",
         session.revoked && "bg-foreground/3 text-muted-foreground",
       )}
     >
-      <div className="flex min-w-0 gap-3">
-        <div className="flex size-9 shrink-0 items-center justify-center rounded-md bg-foreground/8 text-muted-foreground">
+      <div className="flex min-w-0 flex-1 gap-3">
+        <div
+          className="flex size-9 shrink-0 items-center justify-center rounded-md bg-foreground/8 text-muted-foreground"
+          role="img"
+          aria-label={sessionClientLabel(session)}
+        >
           {sessionIcon(session)}
         </div>
         <div className="min-w-0 space-y-1">
-          <div className="flex flex-wrap items-center gap-2">
-            <span className="text-ui-sm font-medium text-foreground">
-              {session.current ? "This session" : "Session"}
-            </span>
-            <Badge variant="outline">{sessionClientLabel(session)}</Badge>
-            {session.revoked ? <Badge variant="muted">Signed out</Badge> : null}
-          </div>
-          <p className="text-ui-sm text-muted-foreground wrap-anywhere">
-            {sessionDisplayLine(session)}
+          {sessionName(session).length === 0 ? null : (
+            <p className="wrap-anywhere text-ui-sm font-medium text-foreground">
+              {sessionName(session)}
+            </p>
+          )}
+          {sessionPlaceLine(session) === null ? null : (
+            <p className="wrap-anywhere text-ui-sm text-muted-foreground">
+              {sessionPlaceLine(session)}
+            </p>
+          )}
+          <p className="flex min-w-0 items-center gap-1.5 break-words text-ui-xs text-muted-foreground">
+            <Clock className="size-3.5 shrink-0" />
+            {sessionStatusDisplay(session, pending)}
           </p>
-          <p className="flex items-center gap-1.5 text-ui-xs text-muted-foreground">
-            <Clock className="size-3.5" />
-            {pending ? "Signing out" : sessionTimelineLine(session)}
-          </p>
+          <details className="min-w-0">
+            <summary className="cursor-pointer text-ui-xs text-muted-foreground">
+              Details
+            </summary>
+            <p className="break-words text-ui-xs text-muted-foreground">
+              {sessionDetailsLine(session)}
+            </p>
+          </details>
         </div>
       </div>
       <Button
         type="button"
         variant="outline"
         size="sm"
+        className="max-w-full"
         disabled={disabled}
         onClick={() => void props.onRevokeSession(session, mutation)}
       >

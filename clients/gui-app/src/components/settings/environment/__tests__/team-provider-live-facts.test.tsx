@@ -1,4 +1,5 @@
-import { cleanup, render, screen } from "@testing-library/react";
+import { cleanup, render, screen, within } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import type { ReactNode } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { EnvironmentPlan } from "@traycer/protocol/host/environment/configuration-contracts";
@@ -25,17 +26,29 @@ const reads = vi.hoisted(
       readonly fetchEligible: boolean;
       readonly usageUpdatedAt: number | null;
     }>;
-  } => ({ providers: [], plans: [], cards: [] }),
+    bound: boolean;
+  } => ({ providers: [], plans: [], cards: [], bound: true }),
 );
 vi.mock("@/hooks/environment/team/use-team-viewing-host", () => ({
   useTeamViewingHost: () => ({
-    viewingHost: { hostId: "host-b", hostLabel: "Studio" },
-    client: {},
+    viewingHost: reads.bound ? { hostId: "host-b", hostLabel: "Studio" } : null,
+    client: reads.bound ? {} : null,
+    hosts: {
+      isError: false,
+      isPending: false,
+      data: { hosts: [] },
+      refetch: () => Promise.resolve(),
+    },
+    selectHost: () => undefined,
+    canSelectHost: () => false,
   }),
+  canSwitchViewingHost: () => false,
 }));
 vi.mock("@/components/settings/environment/team-viewing-host-binding", () => ({
-  TeamViewingHostBinding: (props: { readonly children: ReactNode }) =>
-    props.children,
+  TeamViewingHostBinding: (props: {
+    readonly children: ReactNode;
+    readonly unavailable: ReactNode;
+  }) => (reads.bound ? props.children : props.unavailable),
 }));
 vi.mock("@/components/settings/environment/team-viewing-host-picker", () => ({
   TeamViewingHostPicker: () => null,
@@ -152,7 +165,17 @@ beforeEach(() => {
   reads.providers = [];
   reads.plans = [];
   reads.cards = [];
+  reads.bound = true;
 });
+
+function rateCard(): HTMLElement {
+  const heading = screen.getByRole("heading", { name: "Rate limits" });
+  const section = heading.closest("section");
+  if (!(section instanceof HTMLElement)) {
+    throw new Error("rate limits section missing");
+  }
+  return section;
+}
 
 afterEach(() => {
   cleanup();
@@ -211,5 +234,96 @@ describe("TeamProviderLiveFacts", () => {
 
     expect(reads.cards).toEqual([]);
     expect(screen.queryByRole("status")).toBeNull();
+    expect(rateCard().textContent).not.toContain("uses:");
+    expect(rateCard().textContent).not.toContain("Executable");
+    expect(screen.queryByText("Details")).toBeNull();
+  });
+
+  it("discloses the binary the viewing host reported, outside the rate-limit card", async () => {
+    reads.providers = [
+      {
+        ...claude(
+          [profile("ambient", "ambient", "authenticated")],
+          "authenticated",
+        ),
+        nextRunBinary: {
+          kind: "path",
+          path: "/usr/local/bin/claude",
+          version: "1.2.3",
+        },
+      },
+    ];
+    renderFacts();
+
+    expect(rateCard().textContent).not.toContain("uses:");
+    expect(rateCard().textContent).not.toContain("Executable");
+    expect(rateCard().textContent).not.toContain("/usr/local/bin/claude");
+    await userEvent.click(screen.getByText("Details"));
+    const details = screen.getByText("Details").closest("details");
+    if (!(details instanceof HTMLElement)) {
+      throw new Error("binary details missing");
+    }
+    expect(
+      within(details).getByText("Executable: /usr/local/bin/claude"),
+    ).toBeTruthy();
+    expect(within(details).getByText("Version: 1.2.3")).toBeTruthy();
+    expect(within(details).getByText("as reported by Studio")).toBeTruthy();
+    expect(details.textContent).not.toContain("path");
+    expect(details.textContent).not.toContain("bundled");
+    expect(details.textContent).not.toContain("managed");
+    expect(details.textContent).not.toContain("custom");
+  });
+
+  it("names the included agent and omits a null version", async () => {
+    reads.providers = [
+      {
+        ...claude([], "unknown"),
+        nextRunBinary: { kind: "bundled", path: null, version: null },
+      },
+    ];
+    renderFacts();
+
+    await userEvent.click(screen.getByText("Details"));
+    const details = screen.getByText("Details").closest("details");
+    if (!(details instanceof HTMLElement)) {
+      throw new Error("binary details missing");
+    }
+    expect(
+      within(details).getByText("Executable: Included agent"),
+    ).toBeTruthy();
+    expect(within(details).queryByText(/^Version:/)).toBeNull();
+    expect(within(details).getByText("as reported by Studio")).toBeTruthy();
+  });
+
+  it("omits the disclosure when the host reported no binary", () => {
+    reads.providers = [
+      {
+        ...claude([], "unknown"),
+        nextRunBinary: null,
+      },
+    ];
+    renderFacts();
+
+    expect(screen.getByRole("heading", { name: "Rate limits" })).toBeTruthy();
+    expect(screen.queryByText("Details")).toBeNull();
+  });
+
+  it("omits the disclosure when no viewing host is bound", () => {
+    reads.bound = false;
+    reads.providers = [
+      {
+        ...claude([], "unknown"),
+        nextRunBinary: {
+          kind: "path",
+          path: "/usr/local/bin/claude",
+          version: "1.2.3",
+        },
+      },
+    ];
+    renderFacts();
+
+    expect(screen.getByRole("heading", { name: "Rate limits" })).toBeTruthy();
+    expect(screen.queryByText("Details")).toBeNull();
+    expect(screen.queryByText(/Executable/)).toBeNull();
   });
 });
