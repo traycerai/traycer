@@ -3922,7 +3922,7 @@ const chatSubscribeCommonServerFrameSchemasOpenHarnessV139 =
     },
   });
 
-// The live common frames (`chat.subscribe@1.40`): `1.39`'s with the steer
+// The common frames frozen at `chat.subscribe@1.40`: `1.39`'s with the steer
 // restart reasons on a rejected `actionAck`.
 const chatSubscribeCommonServerFrameSchemasOpenHarnessV140 =
   buildChatSubscribeCommonServerFrameSchemas({
@@ -4242,7 +4242,7 @@ const chatSubscribeSharedServerFrameSchemasOpenHarnessV139 = [
   blockDeltaServerFrameSchema(openRuntimeEventSchema),
 ];
 
-// The live shared frames (`chat.subscribe@1.40`): the live common set.
+// The shared frames frozen at `chat.subscribe@1.40`: its matching common set.
 const chatSubscribeSharedServerFrameSchemasOpenHarnessV140 = [
   messageDeliveryChangedServerFrameSchema,
   ...chatSubscribeCommonServerFrameSchemasOpenHarnessV140,
@@ -5043,7 +5043,7 @@ const [
   ...clientFrameOptionsAfterQueueSteerNow
 ] = chatSubscribeClientFrameSchemaOptionsPreSteerRestartConfirm;
 
-// Live client frames (`chat.subscribe@1.40`): `queueSteerNow` says whether the
+// Current client frames: `queueSteerNow` says whether the
 // person confirmed ending the running turn. A host on this line refuses a
 // steer that would restart the turn unless it is confirmed, and names why
 // (`steerRestartReasons` on the rejected ack); the client confirms and sends
@@ -6157,15 +6157,12 @@ export const chatSubscribeFullSnapshotSchemaVersion =
 //
 // **It is `1.7` plus windowing, not an alternative to it.** This line was
 // drafted as `1.7` while `1.7` was still free, and the number was taken in the
-// meantime by the interview-settlement + Reasonix line. Re-basing it was not a
-// renumber: everything below binds the LIVE schemas by reference - the chat
-// record through `chatRecordSchema`, the transcript through `messageSchema` /
-// `chatEventSchemaPreProviderSelection`, the aux frames through the shared frame lists - so a
-// windowed peer sees canonical interview outcomes, answer selection evidence,
-// saved drafts, the detached delivery projection, and the twentieth harness id
-// exactly as a `1.7` peer does. Binding by reference is what makes that
-// automatic, and it is the reason a released line must NOT do the same
-// (`chatSchemaV14`'s comment, and the `1.6` freeze above).
+// meantime by the interview-settlement + Reasonix line. The windowed contract
+// retained that line's interview outcomes, answer selection evidence, saved
+// drafts, detached delivery projection and harness vocabulary while changing
+// transcript delivery. Released bindings now retain their own frozen record,
+// message, event and auxiliary frame shapes. The separate current line carries
+// later additions; sharing a leaf must never grow a released contract.
 //
 // **Version implies behaviour.** There is no `windowed` flag and no
 // full-snapshot mode on this line. Two behaviours behind one version is the
@@ -6368,10 +6365,9 @@ const chatWindowedSnapshotSchemaV111 = lazySchema(() =>
 // that line's pre-shell-host `tail` and strip the shell host from the peer.
 //
 // Its queue is the pre-port-forward one and its approval card the pre-tier one.
-// Everything else it re-widens is still the live schema BY REFERENCE, which is
-// sound only while later lines leave those untouched: whoever next changes
-// `chatRecordSchema` or the tail freezes that axis here, the way the queue and
-// the card are frozen now.
+// The record, tail and fallback bindings retain the shapes this line shipped.
+// A shared leaf may remain shared only while its serialized shape is unchanged;
+// freeze it here before adding a field on the separate current line.
 const chatWindowedSnapshotSchemaV113 = lazySchema(() =>
   chatWindowedSnapshotSchemaV111.extend({
     chat: chatRecordSchemaPreRouting,
@@ -6925,10 +6921,9 @@ const chatSubscribeServerFrameSchemaV115 = lazySchema(() =>
  * `turnStateChanged` (no `waitResumesAt`, no `suggestedPrompt`, no cron item),
  * `range` (no notice `receipt`), the queue and approval frames, and
  * `blockDelta`'s `approval.requested` (no display facts, `cautious` or
- * `ruleForced`). There is no `thinkingTokens` arm. The arms no later line
- * touches are the live ones by reference - which is sound only while later
- * lines leave them untouched: whoever next changes one of them freezes that
- * axis here, the way these are frozen now.
+ * `ruleForced`). There is no `thinkingTokens` arm. Other arms retain their
+ * published shapes: freeze a shared arm here before extending it on the
+ * separate current line.
  */
 const chatSubscribeServerFrameSchemaV116 = lazySchema(() =>
   z.discriminatedUnion("kind", [
@@ -7393,7 +7388,7 @@ const chatSubscribeServerFrameSchemaV132 = lazySchema(() =>
  * open-harness copies. The frames a peer DRIVES through - `turnStateChanged`
  * (the active turn, the fallback tuples) and the snapshot's record head - keep
  * the closed enum; see `open-harness-wire.ts`. Every frame the writer builds
- * is assignable to this type; the client parses with this schema.
+ * on this line is assignable to this type; its client parses with this schema.
  */
 const chatSubscribeServerFrameSchemaV133 = lazySchema(() =>
   z.discriminatedUnion("kind", [
@@ -7502,13 +7497,13 @@ const chatSubscribeServerFrameSchemaV139 = lazySchema(() =>
 );
 
 /**
- * The live windowed union as a READER decodes it (`chat.subscribe@1.40`): the
- * union above with the snapshot, the `range` response, the three
+ * The windowed reader union frozen at `chat.subscribe@1.40`: the union
+ * above with the snapshot, the `range` response, the three
  * sender-bearing common frames and the `blockDelta` bound to their
  * open-harness copies. The frames a peer DRIVES through - `turnStateChanged`
  * (the active turn, the fallback tuples) and the snapshot's record head - keep
  * the closed enum; see `open-harness-wire.ts`. Every frame the writer builds
- * is assignable to this type; the client parses with this schema.
+ * on this line is assignable to this type; its client parses with this schema.
  */
 export const openChatSubscribeWindowedServerFrameSchemaPreUltracode =
   lazySchema(() =>
@@ -7542,8 +7537,8 @@ export type OpenChatSubscribeWindowedServerFrame = z.infer<
 // tail, on a `range` response, AND on a live `blockDelta` upsert. That is
 // round-4 finding F1, and it is why `chatTranscriptWindowSchemaPreFallback` /
 // `chatRangeResponseSchemaPreFallback` exist beside the frozen event union
-// rather than the upsert being frozen alone. Their `rowContext` stays live,
-// which is what lets an Antigravity anchor reach this line.
+// rather than the upsert being frozen alone. Their frozen `rowContext` keeps
+// the Antigravity anchor this line shipped.
 //
 // `chatRecordSchema` needs no FALLBACK freeze: it is `chatSchema` with
 // `messages` and `events` omitted, so no notice kind can reach a `1.9` peer
@@ -8065,8 +8060,8 @@ export const chatSubscribeV112 = defineStreamRpcContract({
  *
  * Unlike `1.9`, whose delta is one anchor arm, this line's delta is spread
  * across every frame that carries run settings or an approval card - so `1.8`
- * through `1.12` bind a `PreAuto` queue and approval card and only this line
- * binds live. The freezes compose: `1.8` is pre-Antigravity, pre-fallback,
+ * through `1.12` bind a `PreAuto` queue and approval card. `1.13` first carries
+ * auto through its own frozen bindings. The freezes compose: `1.8` is pre-Antigravity, pre-fallback,
  * pre-shell-host, pre-draft-cause AND pre-auto; `1.9` drops pre-Antigravity;
  * `1.10` is pre-shell-host, pre-draft-cause and pre-auto; `1.11` is
  * pre-draft-cause and pre-auto; `1.12` is pre-auto alone.

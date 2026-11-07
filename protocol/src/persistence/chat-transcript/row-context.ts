@@ -154,7 +154,8 @@ export type TranscriptRowContext = z.infer<typeof transcriptRowContextSchema>;
  * Frozen copy bound to `chat.subscribe@1.10` through `@1.20`, as the 1.5.0
  * tags shipped it: the live fields with `sessionAnchor` taking the anchor
  * union those peers strict-decode, without the Command Code arm
- * (`chatSessionAnchorSchemaPreCommandCode`). `@1.21` binds the live schema.
+ * (`chatSessionAnchorSchemaPreCommandCode`). `@1.21` first carries the Command
+ * Code arm; each released line retains its own row-context bindings.
  *
  * Hand-copied field-for-field, not `.extend()`ed off the live schema: a field
  * minted for a later line must not reach these. The two older copies below
