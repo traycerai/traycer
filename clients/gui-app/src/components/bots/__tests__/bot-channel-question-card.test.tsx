@@ -1051,7 +1051,9 @@ describe("<BotChannelView tiles={null} /> what a member has not sent, across the
       questionRow([deploy(null), hold(null)]),
     ]);
     const view = mountChannel(null);
-    await user.type(holdField(), typed);
+    // Seed the draft in one paste; these cases exercise its lifecycle after settlement.
+    await user.click(holdField());
+    await user.paste(typed);
     await user.click(
       within(cardQuestion(channelCard(), DEPLOY)).getByRole("button", {
         name: "Now",
