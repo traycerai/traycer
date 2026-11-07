@@ -1,5 +1,12 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { act, cleanup, render, waitFor } from "@testing-library/react";
+import {
+  act,
+  cleanup,
+  render,
+  screen,
+  waitFor,
+  within,
+} from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import {
   createMemoryHistory,
@@ -73,16 +80,16 @@ function buildRouter() {
   });
 }
 
-/** Each Tracy row's rendered name and the text beside it. */
-function renderedBotRows(): ReadonlyArray<readonly [string, string | null]> {
-  return Array.from(
-    document.querySelectorAll<HTMLElement>(
-      '[data-slot="command-item"][data-value^="bot:"]',
-    ),
-  ).map((row) => [
-    row.querySelector(".truncate")?.textContent ?? "",
-    row.querySelector('[data-slot="command-item-hint"]')?.textContent ?? null,
-  ]);
+/** The text each option of the Tracy group shows: its name, then any qualifier. */
+function renderedBotRows(): ReadonlyArray<ReadonlyArray<string | null>> {
+  const group = screen.getByRole("group", { name: "Tracy" });
+  return within(group)
+    .getAllByRole("option")
+    .map((option) =>
+      within(option)
+        .getAllByText(/.+/)
+        .map((node) => node.textContent),
+    );
 }
 
 async function openPalette(directory: StandaloneBotsDirectory): Promise<void> {
@@ -125,10 +132,7 @@ describe("CommandPalette Tracy rows", () => {
     await openPalette(ONE_MAIN_BOT_WITH_TEAM_BOT);
 
     await waitFor(() => {
-      expect(renderedBotRows()).toEqual([
-        ["Tracy", null],
-        ["Triage", "traycerai"],
-      ]);
+      expect(renderedBotRows()).toEqual([["Tracy"], ["Triage", "traycerai"]]);
     });
   });
 
@@ -136,10 +140,7 @@ describe("CommandPalette Tracy rows", () => {
     await openPalette(TWO_MAIN_BOTS_DIRECTORY);
 
     await waitFor(() => {
-      expect(renderedBotRows()).toEqual([
-        ["Tracy", null],
-        ["Tracy · traycerai", null],
-      ]);
+      expect(renderedBotRows()).toEqual([["Tracy"], ["Tracy · traycerai"]]);
     });
   });
 });

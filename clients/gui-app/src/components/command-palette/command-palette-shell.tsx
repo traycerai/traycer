@@ -335,9 +335,11 @@ function GroupBlock(props: GroupBlockProps) {
               onToggle={() => onTogglePin(item.id)}
             />
             {item.hint !== undefined ? (
+              // At most half the row, truncating, so a long team name never
+              // pushes the label it qualifies out of a narrow palette.
               <span
                 data-slot="command-item-hint"
-                className="ml-auto shrink-0 text-ui-xs text-muted-foreground"
+                className="ml-auto max-w-1/2 min-w-0 truncate text-ui-xs text-muted-foreground"
               >
                 {item.hint}
               </span>
