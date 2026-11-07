@@ -1057,7 +1057,8 @@ credential; if the server needs one, it stops working until you pick another
 secret on MCP servers." ("Used by <A> and <B>." or "<A>, <B> and <n> more",
 then "Removing it leaves them without a credential; any that need one stop
 working until you pick another secret on MCP servers."), whose "MCP servers"
-opens that page (`secretUsedByLine`).
+opens that page (`secretUsedByLine`). A held secret's
+row keeps its "Waiting for you" badge.
 
 **Environment ▸ Retrospective sheet and Stop using Personal.** On a 1.1
 host, Overview shows `Shared by an earlier version` / `This computer stopped
@@ -1074,9 +1075,10 @@ Local picker row's subtitle (`its own settings, not in Personal yet`,
 `partly in Personal`, `stopped using Personal`) and `Move to Personal` /
 `Finish moving` verb come from those planes (E4's slot); the row's `Local`
 badge reads "Settings on this computer only" on hover. The Secrets page's
-`N commands from {host} are on hold until you choose · Review them` line
-(`1 command … is on hold until you choose · Review it`) opens the same sheet
-for that host's held rows, where Approve and Discard answer one row through
+`N values from {host} are on hold until you choose · Review them` line
+(`1 value … is on hold until you choose · Review it`) opens the same sheet
+for that host's held rows. `Keep as a secret` collects Add-secret's binding (kind, protocol,
+hosts, port, swap sites, gateway consent) with no value field, then
 `environment.review.heldApply`. Stop using Personal opens the preview
 (`environment.move.stopPreview`) and confirm (`environment.move.stop`) after
 every needs-choice row has Keep locally, Remove from this computer, or
@@ -1089,7 +1091,11 @@ kinds the page edits: each convergence notice from `environment.notices`
 with Undo (`environment.undo`, with the grant) while `undoAvailable`, and each
 "needs you" row from `environment.review` ("LOG_LEVEL is waiting for you:
 runs a command / was changed without your confirmation.") with Review, which
-opens Secrets. A value typed there that looks like a key (`classifyCredential`) is
+opens Secrets. A value held because it looks like a key reads
+"LOG_LEVEL looks like a key and is on hold until you choose · Review", and
+its Variables or provider-variable row reads "LOG_LEVEL · on hold until you
+choose · Review" with no value; both Reviews open the retrospective sheet for
+that value. A value typed there that looks like a key (`classifyCredential`) is
 refused in its row with "This looks like a key. Add it as a secret.", whose
 link opens Add a secret with the name and value filled in; nothing is stored
 as a variable. A provider's own key variable typed on its Env tab
@@ -1099,10 +1105,10 @@ opens that provider's Account tab; the typed value is cleared and nothing is
 saved. That tab is the one the provider page shows (`apiKey.supported`), so a
 provider without one, such as Claude Code, keeps the first line. A name one
 of Personal's secrets is set under (`environment.secrets.list@1.2` rows'
-`variables`) reads "ENV_E2E_SERVICE_TOKEN · from the secret
-ENV_E2E_SERVICE_TOKEN · Secrets" on Variables, with no value and nothing to
-edit there. A provider's Env has no such name: nothing binds a secret to a
-name in one provider's env. A value
+`variables` and `providerVariables`: a moved key's secret is bound to the item
+it came from) reads "ENV_E2E_SERVICE_TOKEN · from the secret
+ENV_E2E_SERVICE_TOKEN · Secrets" on Variables or that provider's Env, with no
+value and nothing to edit there. A value
 already saved that looks like a key shows as dots with Remove, never in a
 field, on every Variables and Env list (Personal, a team, a Local row), with
 the same line beneath where the page has one; its link carries the saved
@@ -3100,6 +3106,61 @@ window`, recorded in the type as `coverage.browsersAreMountedOnly` -
     only when the surface's host advertises both (the method is optional), so
     an older host shows nothing here. Holds a local echo of a flip until the
     host's read-back lands, like the per-provider judge select.
+  - **Memories** (`provider-native-memory-group.tsx`), one switch, "Use this
+    provider's memories", on by default. On applies NO override - the
+    provider's memory behaves exactly as it does without this setting, which
+    is why it is not a claim that the provider has memories switched on. Off
+    makes the host turn the provider's AUTOMATIC memory off for the sessions
+    Traycer launches, both the recall of existing memories and the writing of
+    new ones: `CLAUDE_CODE_DISABLE_AUTO_MEMORY=1` in Claude Code's spawn
+    environment (GUI turns and terminal-agent PTYs alike, launch and resume),
+    and `features.memories=false` plus `memories.use_memories=false` and
+    `memories.generate_memories=false` on Codex's launch config args (the
+    app-server and the `--remote` client both). Saved memory files are kept,
+    the provider's own settings file is never written, and a `claude` or
+    `codex` started outside Traycer is unaffected; `AGENTS.md`/`CLAUDE.md`,
+    rules and skills are untouched - this is the provider's memory feature,
+    not project instructions. "Automatic" is the exact scope, and the row's
+    copy says so: Claude Code's env var governs the memory DIRECTORY, personal
+    and team, read side and write side, main session and subagents alike
+    (one process-wide predicate). It does not reach Claude's separate
+    account-memory MCP surface, whose tools carry their own scopes. That
+    surface cannot be reached by configuration either: a server is stamped as
+    account memory only when it is CLI-owned, or an SDK-supplied `dynamic`
+    server of that exact name, or a `dynamic` server pointing at Anthropic's
+    own session-memory endpoint - so a user's own MCP server, which carries a
+    `user`/`project`/`local` scope, can never become one however it is named.
+    Traycer registers none of the three. Persisted as `nativeMemory` in
+    `provider-overrides.json` via `providers.setNativeMemory`
+    (`useProvidersSetNativeMemory`, invalidates only `providers.list`), read
+    back as the row's `nativeMemory` from `providers.list@10.8`. Drawn only
+    when the surface's host advertises the method (it is optional), reports
+    10.8, AND says it can enforce the switch for that provider
+    (`nativeMemorySupported`) - there is no prompt-level fallback for memory,
+    so a provider with no contract the host can drive shows no switch at all
+    rather than one that stores a preference nothing acts on. That answer is
+    VERSION-AWARE and fails closed: the host judges the executable it would
+    actually run (a selection degrading to bundled is judged as bundled), and a
+    version below the provider's verified floor, or one it cannot read at all,
+    reports unsupported. Codex's floor is a measured break - the keys were
+    renamed from `features.memory_tool`, so the switch is inert on an older
+    binary - and the `custom`/`path` CLI tiers run whatever the user points at,
+    so such a binary is reachable. Because the control then disappears while a
+    stored `off` remains stored, the host REFUSES to start a session rather than
+    run one with memory live under a setting that reads off; the error names the
+    required version and points back here. Recovery without a fake toggle: in
+    that state the switch is replaced by an ENABLE-ONLY action ("Turn on",
+    `nativeMemoryUnenforceable`) that can only write `true`, which
+    `providers.setNativeMemory` accepts at any version while refusing an
+    unenforceable `false`. Choosing a supported executable is the other route.
+    Deliberately NOT `providers.settingsFile.resetProvider`: that resets a
+    malformed row and answers `readable` for a well-formed one, so it would
+    leave a stored off exactly where it is. A change applies
+    when a provider session next starts and never interrupts a running turn:
+    Claude's next turn spawns a fresh subprocess because the value is in its
+    options signature, and Codex retires the session's app-server between
+    turns so the next one relaunches with the new config. Holds a local echo
+    of a flip until the host's read-back lands, like the switch above.
   - **Session name** (`claude-session-name-group.tsx`), Claude Code only: one
     "Name template" field (saved on blur/Enter) for the name the scoped host
     gives a Claude Code session it starts on the Terminal interface, passed as
