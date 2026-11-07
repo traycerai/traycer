@@ -5,6 +5,8 @@ import type {
 } from "@traycer/protocol/host/epic/chat-hydration";
 import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
 import { HostRpcError } from "@traycer-clients/shared/host-transport/host-messenger";
+import { useHostCapabilityProbe } from "@/hooks/host/use-host-capability-probe";
+import { useHostDirectoryEntry } from "@/hooks/host/use-host-directory-entry";
 import { useHostMutation } from "@/hooks/host/use-host-query";
 import { useHostMethodSupport } from "@/hooks/host/use-host-supports-method";
 import { EVICTED_SEND_FAILED_MESSAGE } from "@/lib/chats/evicted-chat-refusal";
@@ -26,6 +28,19 @@ export function useChatHydrateMutation(input: {
     input.hostId,
     "epic.hydrateChat",
   );
+  const host = useHostDirectoryEntry(input.hostId);
+  // A recorded absence parks the very RPC that would refresh it. Keep one
+  // released-floor read alive, and re-ask when this host's process changes.
+  useHostCapabilityProbe({
+    client: input.client,
+    stale: supportsHydration === false,
+    incarnation: [
+      input.hostId,
+      host?.version ?? null,
+      host?.transportDialability ?? null,
+      host?.websocketUrl ?? null,
+    ],
+  });
   return useHostMutation<HostRpcRegistry, "epic.hydrateChat">({
     client: input.client,
     method: "epic.hydrateChat",
