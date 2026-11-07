@@ -1,16 +1,23 @@
-import type { ReactNode } from "react";
+import { useEffect, type ReactNode } from "react";
 import {
   act,
   cleanup,
   fireEvent,
   render,
   screen,
+  within,
+  waitFor,
 } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import {
+  disposeBridges,
+  realBridge,
+} from "@/components/canvas-artifact/__tests__/canvas-edit-test-support";
 import type { SandboxFrameProps } from "@/components/sandbox/sandbox-frame";
 import { DropdownMenuItem } from "@/components/ui/dropdown-menu";
 import type { ArtifactManifest } from "@/lib/sandbox/artifact-serving";
+import type { SandboxBridgeHost } from "@/lib/sandbox/bridge-host";
 
 /**
  * The page is a sandboxed iframe on a custom scheme, which jsdom will not
@@ -20,12 +27,26 @@ import type { ArtifactManifest } from "@/lib/sandbox/artifact-serving";
  * only way to see a retry, since the reader asks for the SAME page again and
  * the ask therefore shows up in `visit` rather than in `path`.
  */
-const frames = vi.hoisted(() => ({ latest: null as SandboxFrameProps | null }));
+const frames = vi.hoisted(() => ({
+  latest: null as SandboxFrameProps | null,
+  bridge: null as SandboxBridgeHost | null,
+}));
 
 vi.mock("@/components/sandbox/sandbox-frame", () => ({
   SandboxFrame: (props: SandboxFrameProps) => {
     frames.latest = props;
-    return <div data-testid="page-frame" />;
+    const { onBridge } = props;
+    // A test that wants the page told its mode installs a bridge first.
+    useEffect(() => {
+      if (frames.bridge !== null) onBridge?.(frames.bridge);
+    }, [onBridge]);
+    return (
+      <div
+        data-testid="page-frame"
+        data-path={props.pageNavigation?.path}
+        data-mode={props.displayMode}
+      />
+    );
   },
 }));
 
@@ -49,16 +70,17 @@ interface PagesOptions {
   readonly pages: readonly string[];
   /** `null` fills the tile; a number is a row in the chat. */
   readonly height: number | null;
-  readonly pageZoom: boolean;
   /** The caller's rows for the chip's "More actions" menu. */
   readonly menuItems: ReactNode;
+  /** The comment tool, which only the entry page is ever put into. */
+  readonly commenting: boolean;
 }
 
 const FILLING_ONE_PAGE: PagesOptions = {
   pages: ["index.html"],
   height: null,
-  pageZoom: false,
   menuItems: undefined,
+  commenting: false,
 };
 
 function renderPages(overrides: Partial<PagesOptions>) {
@@ -79,7 +101,7 @@ function renderPages(overrides: Partial<PagesOptions>) {
       title="Report"
       className=""
       height={options.height}
-      pageZoom={options.pageZoom}
+      commenting={options.commenting}
       onSize={() => undefined}
       onStatus={() => undefined}
       onBridge={null}
@@ -114,6 +136,8 @@ afterEach(() => {
   vi.restoreAllMocks();
   vi.unstubAllGlobals();
   frames.latest = null;
+  frames.bridge = null;
+  disposeBridges();
 });
 
 describe("a served page the host would not hand over", () => {
@@ -206,9 +230,47 @@ function frameProps(): SandboxFrameProps {
   return frames.latest;
 }
 
+it("opens the current page in a fullscreen dialog and restores the inline view on Escape", async () => {
+  const user = userEvent.setup();
+  const { report } = renderPages({ pages: TWO_PAGES });
+  report((page) => page.onNavigate("report.html"));
+  const trigger = button("Expand");
+  await user.click(trigger);
+  const dialog = screen.getByRole("dialog", { name: "Report" });
+  const expandedFrame = within(dialog).getByTestId("page-frame");
+  expect(expandedFrame.getAttribute("data-path")).toBe("report.html");
+  expect(expandedFrame.getAttribute("data-mode")).toBe("fullscreen");
+  expect(within(dialog).queryByRole("button", { name: "Expand" })).toBeNull();
+  const back = within(dialog).getByRole("button", { name: "Back" });
+  const home = within(dialog).getByRole("button", { name: "Home" });
+  expect(back.hasAttribute("disabled")).toBe(false);
+  expect(home.hasAttribute("disabled")).toBe(false);
+  await user.click(home);
+  expect(
+    within(dialog).getByTestId("page-frame").getAttribute("data-path"),
+  ).toBe("index.html");
+  fireEvent.keyDown(dialog, { key: "Escape" });
+  expect(screen.queryByRole("dialog")).toBeNull();
+  await waitFor(() => expect(document.activeElement).toBe(trigger));
+  const inlineFrame = screen.getByTestId("page-frame");
+  expect(inlineFrame.getAttribute("data-path")).toBe("report.html");
+  expect(inlineFrame.getAttribute("data-mode")).toBe("inline");
+});
+
+it("closes on the first Escape immediately after opening and restores focus", async () => {
+  const user = userEvent.setup();
+  renderPages({});
+  const trigger = button("Expand");
+  await user.click(trigger);
+  expect(screen.getByRole("dialog", { name: "Report" })).toBeTruthy();
+  await user.keyboard("{Escape}");
+  expect(screen.queryByRole("dialog")).toBeNull();
+  await waitFor(() => expect(document.activeElement).toBe(trigger));
+});
+
 describe("the floating controls chip", () => {
   it("offers no Back or Home on an artifact with one page", () => {
-    renderPages({ pageZoom: true });
+    renderPages({});
 
     expect(
       screen.getByRole("toolbar", { name: "HTML artifact controls" }),
@@ -253,7 +315,7 @@ describe("the floating controls chip", () => {
 
 describe("the More actions menu", () => {
   it("keeps Actual size for a page that fills its tile, enabled only once the page is ready and off 100%", () => {
-    renderPages({ pageZoom: true });
+    renderPages({});
     openMoreActions();
     const actualSize = (): string | null =>
       screen
@@ -274,7 +336,6 @@ describe("the More actions menu", () => {
 
   it("lists the caller's rows after Actual size", () => {
     renderPages({
-      pageZoom: true,
       menuItems: <DropdownMenuItem>Download</DropdownMenuItem>,
     });
 
@@ -288,13 +349,14 @@ describe("the More actions menu", () => {
   });
 
   it("offers neither zoom nor a menu in the chat, where the row has a fixed height", () => {
-    renderPages({ pages: TWO_PAGES, height: 240, pageZoom: true });
+    renderPages({ pages: TWO_PAGES, height: 240 });
 
     const toolbar = screen.getByRole("toolbar", {
       name: "HTML artifact controls",
     });
-    // Back and Home end the chip, with no divider left hanging after them.
-    expect(toolbar.querySelector('[data-slot="separator"]')).toBeNull();
+    expect(
+      within(toolbar).getByRole("button", { name: "Expand" }),
+    ).toBeTruthy();
     expect(screen.queryByRole("button", { name: "More actions" })).toBeNull();
     expect(screen.queryByRole("button", { name: "Zoom in" })).toBeNull();
     expect(screen.queryByRole("button", { name: "Zoom out" })).toBeNull();
@@ -304,7 +366,6 @@ describe("the More actions menu", () => {
     renderPages({
       pages: TWO_PAGES,
       height: 240,
-      pageZoom: true,
       menuItems: <DropdownMenuItem>Download</DropdownMenuItem>,
     });
 
@@ -358,30 +419,24 @@ describe("the room a filling page keeps for the controls", () => {
   it("is the chip's bottom edge, so the page opens clear of it", () => {
     layOutControlsChip();
 
-    renderPages({ pageZoom: true });
+    renderPages({});
 
     expect(frameProps().pageInsetTop).toBe(38);
   });
 
   it("follows the chip when its controls wrap onto another row", () => {
     const layout = layOutControlsChip();
-    renderPages({ pageZoom: true });
+    renderPages({});
 
     layout.growTo(66);
 
     expect(frameProps().pageInsetTop).toBe(74);
   });
 
-  it.each([
-    [
-      "in the chat, where the chip only comes up on hover",
-      { pages: TWO_PAGES, height: 240, pageZoom: true },
-    ],
-    ["where the page has no controls at all", { pageZoom: false }],
-  ])("is none %s", (_where, options) => {
+  it("is none in the chat, where the chip only comes up on hover", () => {
     layOutControlsChip();
 
-    renderPages(options);
+    renderPages({ pages: TWO_PAGES, height: 240 });
 
     expect(frameProps().pageInsetTop).toBe(0);
   });
@@ -392,8 +447,89 @@ describe("the room a filling page keeps for the controls", () => {
     vi.stubGlobal("innerWidth", 480);
     layOutControlsChip();
 
-    renderPages({ pageZoom: true });
+    renderPages({});
 
     expect(frameProps().pageInsetTop).toBe(0);
+  });
+});
+
+describe("commenting on the entry page", () => {
+  it("tells only the entry page to edit, and keeps the served source", async () => {
+    const user = userEvent.setup();
+    const bridge = realBridge();
+    frames.bridge = bridge;
+    const setHtmlView = vi.spyOn(bridge, "setHtmlView");
+    const setMode = vi.spyOn(bridge, "setMode");
+    const { report } = renderPages({ pages: TWO_PAGES, commenting: true });
+    const source = frameProps().source;
+
+    // A proven page names itself before it says ready, as the bridge does.
+    report((page) => {
+      page.onNavigate("index.html");
+      frameProps().onStatus("ready");
+    });
+
+    expect(screen.getByRole("button", { name: "Zoom in" })).toBeTruthy();
+    expect(setMode).toHaveBeenLastCalledWith("edit");
+    expect(setHtmlView).toHaveBeenLastCalledWith({
+      enabled: true,
+      scale: 1,
+      commenting: true,
+    });
+
+    report((page) => page.onNavigate("report.html"));
+
+    expect(frameProps().source).toBe(source);
+    expect(setMode).toHaveBeenLastCalledWith("play");
+    expect(setHtmlView).toHaveBeenLastCalledWith({
+      enabled: true,
+      scale: 1,
+      commenting: false,
+    });
+
+    setMode.mockClear();
+    await user.click(button("Back"));
+
+    // The page being left is still the one loaded: it is not put in Edit.
+    expect(setMode).not.toHaveBeenCalledWith("edit");
+
+    report((page) => {
+      page.onNavigate("index.html");
+      frameProps().onStatus("loading");
+      frameProps().onStatus("ready");
+    });
+
+    expect(frameProps().source).toBe(source);
+    expect(setMode).toHaveBeenLastCalledWith("edit");
+    expect(setHtmlView).toHaveBeenLastCalledWith({
+      enabled: true,
+      scale: 1,
+      commenting: true,
+    });
+  });
+
+  // A page's own link back to the entry page reports where it landed and that
+  // it is ready in one go. The new document is told the entry page's mode,
+  // with no stale word from the page it left.
+  it("tells a page reached by its own link that page's mode, and only that", () => {
+    const bridge = realBridge();
+    frames.bridge = bridge;
+    const setMode = vi.spyOn(bridge, "setMode");
+    const { report } = renderPages({ pages: TWO_PAGES, commenting: true });
+    report((page) => {
+      page.onNavigate("index.html");
+      frameProps().onStatus("ready");
+    });
+    report((page) => page.onNavigate("report.html"));
+    expect(setMode).toHaveBeenLastCalledWith("play");
+    setMode.mockClear();
+
+    report((page) => {
+      page.onNavigate("index.html");
+      frameProps().onStatus("loading");
+      frameProps().onStatus("ready");
+    });
+
+    expect(setMode.mock.calls).toEqual([["edit"]]);
   });
 });

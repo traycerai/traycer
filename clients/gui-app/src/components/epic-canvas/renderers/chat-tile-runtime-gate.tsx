@@ -120,7 +120,6 @@ export function ChatTilePreContent(props: {
       hostAppVersion: hostUpdate.hostAppVersion,
       clientAppVersion: hostUpdate.clientAppVersion,
     }),
-    cloneAllowed: frame.cloneAllowed,
     hasReadySession: frame.hasReadySession,
     elapsed: chatPreContentElapsed(slow, overdue),
   };

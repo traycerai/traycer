@@ -41,7 +41,7 @@ export function hostRunsPersonal(principal: ProviderKeyPrincipal): boolean {
   return principal?.kind === "personal";
 }
 
-/** A provider-level key kept on one host only: Account tab and the composer's key paste. */
+/** A provider-level key kept on one host only: the provider's key tab and the composer's key paste. */
 export function deviceKeyCustodyLine(
   hostName: string,
   providerLabel: string,

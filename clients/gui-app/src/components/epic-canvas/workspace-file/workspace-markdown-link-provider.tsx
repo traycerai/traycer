@@ -45,6 +45,7 @@ export function WorkspaceMarkdownLinkProvider(
         // anchor hands over the link, not the mouse event, so no modifiers.
         openTile(
           tileIntent(ref, { tabId: props.tabId }, "single", "direct_ui"),
+          "user",
         );
         return true;
       },

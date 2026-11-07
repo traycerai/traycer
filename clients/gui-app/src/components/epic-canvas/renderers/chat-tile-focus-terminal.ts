@@ -65,6 +65,7 @@ export function useFocusEpicTerminalSession(
           "explicit",
           "direct_ui",
         ),
+        "user",
       );
     },
     [activeHostId, openTile, viewTabId],

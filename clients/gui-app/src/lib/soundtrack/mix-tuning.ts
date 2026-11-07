@@ -53,6 +53,14 @@ export const MIX_TUNING = {
   ringOutFadeSeconds: 4,
   /** The first track of a session, or one after a view with none. */
   fadeInSeconds: 0.5,
+  /** The fade either side of a pause: long enough not to click, and no more. */
+  pauseFadeSeconds: 0.15,
+  /**
+   * How many tracks a view keeps for Previous and Next. An app left open can
+   * rotate for days, so this needs an end, and at a few minutes a track this is
+   * hours of listening, further back than anyone steps.
+   */
+  trackHistoryLength: 50,
   /** Turning the soundtrack off. */
   stopFadeSeconds: 0.4,
   /** The soundtrack's level as a gain, until the person moves it. */

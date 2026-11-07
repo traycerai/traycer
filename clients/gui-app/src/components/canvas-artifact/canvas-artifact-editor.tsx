@@ -1,3 +1,5 @@
+import { useArtifactEscape } from "@/components/artifacts/artifact-expanded-context";
+import { ArtifactExpandButton } from "@/components/artifacts/artifact-expand-button";
 import type { CanvasPageError } from "@/lib/sandbox/canvas-bridge";
 import { resolveCanvasBoardLink } from "./canvas-links";
 import {
@@ -109,6 +111,7 @@ const NODE_TYPES = {
   image: CanvasNoteNode,
 };
 const INITIAL_VIEW: Viewport = { x: 60, y: 100, zoom: 0.6 };
+const DEFAULT_VIEW = { page: null, viewport: INITIAL_VIEW };
 /** Shapes and placed text come back selected; the pen keeps drawing until Esc. */
 const SELECT_AFTER_CREATE: ReadonlySet<string> = new Set([
   "sticky",
@@ -127,6 +130,7 @@ interface NodeInteraction {
   readonly selected?: boolean;
 }
 export interface CanvasArtifactEditorProps {
+  readonly initialView?: { readonly page: string; readonly viewport: Viewport };
   readonly viewOnly?: boolean;
   readonly onAddError?: (path: string, error: CanvasPageError) => void;
   readonly artifactId: string;
@@ -316,6 +320,7 @@ function canvasCommentSurfaces(
 }
 
 export function CanvasArtifactEditor({
+  initialView,
   artifactId,
   store,
   awareness,
@@ -328,6 +333,7 @@ export function CanvasArtifactEditor({
   viewOnly,
   onAddError,
 }: CanvasArtifactEditorProps) {
+  const startingView = initialView ?? DEFAULT_VIEW;
   const readOnly = viewOnly === true;
   const activeStore = useRef<CanvasLayoutStore | null>(null);
   useLayoutEffect(() => {
@@ -338,7 +344,9 @@ export function CanvasArtifactEditor({
   }, [store]);
   const state = useCanvasLayoutState(store);
   const snapshot = state.layout;
-  const [chosenPage, setChosenPage] = useState<string | null>(null);
+  const [chosenPage, setChosenPage] = useState<string | null>(
+    startingView.page,
+  );
   const page = resolveCanvasPage(snapshot, chosenPage);
   const [tool, setTool] = useState<CanvasTool>("select");
   // One board plays in place at a time. The state is ephemeral by design:
@@ -366,8 +374,8 @@ export function CanvasArtifactEditor({
   const [flow, setFlow] = useState<ReactFlowInstance<CanvasFlowNode> | null>(
     null,
   );
-  const [viewport, setViewport] = useState(INITIAL_VIEW);
-  const [settledViewport, setSettledViewport] = useState(INITIAL_VIEW);
+  const [viewport, setViewport] = useState(startingView.viewport);
+  const [settledViewport, setSettledViewport] = useState(startingView.viewport);
   const [interactions, setInteractions] = useState<
     Readonly<Record<string, NodeInteraction | undefined>>
   >({});
@@ -1082,6 +1090,39 @@ export function CanvasArtifactEditor({
       stopPlay();
     }
   };
+  useArtifactEscape((event) => {
+    // Text fields own Escape: note text commits on blur, while names cancel.
+    // Keep the dialog open and let the target handle the original event.
+    if (
+      event.target instanceof Element &&
+      event.target.closest("input, textarea, [contenteditable=true]")
+    )
+      return true;
+    if (activeFullscreen !== null) {
+      closeFullscreen();
+      return true;
+    }
+    if (!readOnly && tool !== "select") {
+      chooseTool("select");
+      return true;
+    }
+    if (selectedNotes.length > 0 || selectedBoards.length > 0) {
+      setInteractions((previous) =>
+        Object.fromEntries(
+          Object.entries(previous).map(([key, value]) => [
+            key,
+            { ...value, selected: false },
+          ]),
+        ),
+      );
+      return true;
+    }
+    if (playingBoard !== null) {
+      stopPlay();
+      return true;
+    }
+    return false;
+  });
   const chooseToolForKey = (event: KeyboardEvent): void => {
     const next = canvasToolForKey(
       event.code.startsWith("Key") ? event.code.slice(3) : event.code,
@@ -1369,7 +1410,27 @@ export function CanvasArtifactEditor({
                         <CanvasViewControls
                           viewOnly={readOnly}
                           commenting={commenting}
-                          trailing={frameEvents?.renderToolbarControls?.()}
+                          trailing={
+                            <>
+                              {frameEvents?.renderToolbarControls?.()}
+                              <ArtifactExpandButton title="Canvas">
+                                <CanvasArtifactEditor
+                                  artifactId={artifactId}
+                                  store={store}
+                                  awareness={null}
+                                  user={user}
+                                  sourceForBoard={sourceForBoard}
+                                  boardFiles={boardFiles}
+                                  frameEvents={null}
+                                  liveSlotBudget={liveSlotBudget}
+                                  boardByteLengths={boardByteLengths}
+                                  viewOnly={viewOnly}
+                                  onAddError={onAddError}
+                                  initialView={{ page, viewport }}
+                                />
+                              </ArtifactExpandButton>
+                            </>
+                          }
                           undo={store.undo}
                           redo={store.redo}
                           canUndo={state.canUndo}

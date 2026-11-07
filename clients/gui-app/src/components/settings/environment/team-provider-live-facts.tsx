@@ -49,46 +49,70 @@ export function TeamProviderLiveFacts(props: {
     />
   );
   return (
-    <section className="flex flex-col gap-3 rounded-lg border border-border/60 p-3">
-      <div className="flex flex-wrap items-center justify-between gap-2">
-        <h3 className="text-ui-sm font-medium">Rate limits</h3>
-        <TeamViewingHostPicker open={picking} onOpenChange={setPicking} />
-      </div>
-      <TeamViewingHostBinding unavailable={noHost}>
-        {query.isError ? (
-          <TeamReadFailed
-            message="Couldn't read this host's providers."
-            onRetry={() => void query.refetch()}
-          />
-        ) : null}
-        {state === undefined ? null : (
-          <>
-            <NextRunBinaryLine state={state} hostName={hostName} />
+    <div className="flex flex-col gap-3">
+      <section className="flex flex-col gap-3 rounded-lg border border-border/60 p-3">
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          <h3 className="text-ui-sm font-medium">Rate limits</h3>
+          <TeamViewingHostPicker open={picking} onOpenChange={setPicking} />
+        </div>
+        <TeamViewingHostBinding unavailable={noHost}>
+          {query.isError ? (
+            <TeamReadFailed
+              message="Couldn't read this host's providers."
+              onRetry={() => void query.refetch()}
+            />
+          ) : null}
+          {state === undefined ? null : (
             <TeamPlanLimits
               providerId={props.providerId}
               state={state}
               linkedProfileIds={linkedProfileIds}
               teamName={name}
             />
-          </>
+          )}
+        </TeamViewingHostBinding>
+      </section>
+      {/* Same host gate as the card, so a missing viewing host does not
+          describe a binary this page cannot read. */}
+      <TeamViewingHostBinding unavailable={null}>
+        {state === undefined ? null : (
+          <NextRunBinaryDetails state={state} hostName={hostName} />
         )}
       </TeamViewingHostBinding>
-    </section>
+    </div>
   );
 }
 
-/** `Studio uses: <path> · <version>.`, when the host reports its next binary. */
-function NextRunBinaryLine(props: {
+/**
+ * Path and version of the binary the viewing host will run, outside the
+ * usage card. Omitted when the host has not reported one. A null path is the
+ * included agent; a null version is left off rather than printed.
+ */
+function NextRunBinaryDetails(props: {
   readonly state: ProviderCliState;
   readonly hostName: string;
 }): ReactNode {
   const binary = props.state.nextRunBinary;
   if (binary === undefined || binary === null) return null;
   return (
-    <p className="text-ui-xs text-muted-foreground">
-      {props.hostName} uses: {binary.path ?? "Included agent"}
-      {binary.version === null ? "" : ` · ${binary.version}`}.
-    </p>
+    <details className="min-w-0">
+      <summary className="cursor-pointer text-ui-sm font-medium">
+        Details
+      </summary>
+      <div className="mt-2 flex min-w-0 flex-col gap-1 text-ui-xs text-muted-foreground">
+        <p className="min-w-0 whitespace-normal break-words">
+          Executable: {binary.path ?? "Included agent"}
+        </p>
+        {binary.version === null ? null : (
+          <p className="min-w-0 whitespace-normal break-words">
+            Version: {binary.version}
+          </p>
+        )}
+        <p className="min-w-0 whitespace-normal break-words">
+          as reported by {props.hostName}
+        </p>
+      </div>
+    </details>
   );
 }
 

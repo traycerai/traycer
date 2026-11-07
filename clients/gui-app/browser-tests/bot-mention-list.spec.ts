@@ -14,7 +14,8 @@ import { fixture } from "./support/fixtures.ts";
 // something it can answer. This renders the production thread panel, its
 // post naming a bot, a task and a member, against the real stylesheet.
 
-const INPUT = '[data-testid="bot-thread-composer-input"]';
+const INPUT =
+  '[data-testid="bot-thread-composer-input"] [data-composer-editor]';
 const MENU = '[data-slot="composer-menu"]';
 const OPTION = `${MENU} [role="option"]`;
 const ANCHOR = '[data-testid="bot-thread-anchor"]';

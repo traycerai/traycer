@@ -4,8 +4,6 @@ import {
   type ChatSandboxState,
   type ChatSandboxView,
 } from "@/lib/sandboxes/chat-sandbox-state";
-import { useEpicPermissionRole } from "@/lib/epic-selectors";
-import { isEditableRole } from "@/lib/epic-permissions";
 import { PendingSandboxSendForChat } from "@/components/sandboxes/pending-sandbox-sends";
 import { ChatSandboxFooter } from "@/components/chat/chat-sandbox-footer";
 import { useChatSandboxState } from "@/hooks/sandboxes/use-chat-sandbox-state";
@@ -260,12 +258,9 @@ function usePublishedChatOwner(
     node.chatId,
   );
   const ownerName = useCollaboratorDisplayName(epicId, node.ownerUserId);
-  const role = useEpicPermissionRole();
-  const editable = role === null || isEditableRole(role);
   const sandbox = resolveChatSandbox(sandboxState, {
     ...ownership,
     reachable: reachability.status === "reachable",
-    canEdit: editable,
   });
   const ownerRefusesStore = useHostRefusesEpicStore(
     node.ownerHostId.length > 0 ? node.ownerHostId : null,

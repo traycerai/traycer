@@ -83,6 +83,7 @@ describe("describeHostBusy", () => {
       busySessionCount: 6,
       busy: true,
     });
+    expect(copy.kind).toBe("named");
     expect(copy.label).toBe(
       "2 agents · 3 terminal agents · 1 terminal working",
     );
@@ -97,6 +98,7 @@ describe("describeHostBusy", () => {
       busySessionCount: 0,
       busy: false,
     });
+    expect(copy.kind).toBe("idle");
     expect(copy.label).toBe("Idle");
     expect(copy.sentence).toBe(
       "It reports no work, so nothing should be interrupted.",
@@ -124,6 +126,7 @@ describe("describeHostBusy", () => {
       busySessionCount: 2,
       busy: true,
     });
+    expect(copy.kind).toBe("count");
     expect(copy.label).toBe("2 sessions");
     expect(copy.sentence).toBe(
       "It reports 2 sessions, and re-registering will end them.",
@@ -148,6 +151,7 @@ describe("describeHostBusy", () => {
         busy: true,
       }),
     ).toEqual({
+      kind: "busy",
       label: "Busy",
       sentence: "It reports it is busy, and re-registering will end that work.",
     });
@@ -180,7 +184,7 @@ describe("describeHostBusy", () => {
         busySessionCount: null,
         busy: false,
       }),
-    ).toEqual({ label: null, sentence: null });
+    ).toEqual({ kind: "none", label: null, sentence: null });
   });
 });
 

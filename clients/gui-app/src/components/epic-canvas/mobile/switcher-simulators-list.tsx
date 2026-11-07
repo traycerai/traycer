@@ -44,7 +44,7 @@ export function SwitcherSimulatorsList(props: SwitcherListProps) {
   const { openTile } = useEpicTileNavigation();
   const place = useCallback(
     (ref: SimulatorTileRef) => {
-      openTile(tileIntent(ref, { tabId }, "single", "direct_ui"));
+      openTile(tileIntent(ref, { tabId }, "single", "direct_ui"), "user");
     },
     [openTile, tabId],
   );

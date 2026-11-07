@@ -5,7 +5,7 @@
  * closure could silently break while every single-plane unit test still
  * passes.
  *
- * 1. A viewer-role snapshot tears down every artifact room AND republishes
+ * 1. A snapshot naming no writable role (the retired viewer role decodes to none) tears down every artifact room AND republishes
  *    divergence (`epic-replica-runtime.ts`'s `applyRootSnapshot`: `if
  *    (!control.facts.isWritableRole()) { rooms.dropAllOnViewerDowngrade();
  *    records.publishDivergence(); return; }`).
@@ -41,6 +41,7 @@
  */
 import { afterEach, describe, expect, it } from "vitest";
 import * as Y from "yjs";
+import type { WirePermissionRole } from "@traycer/protocol/host/epic/unary-schemas";
 import type { ChatRecordSummaryV11 } from "@traycer/protocol/host/epic/chat-records";
 import type { EpicStreamCallbacks } from "@traycer-clients/shared/host-transport/epic-stream-client";
 import type { SnapshotMetaEpic } from "@traycer/protocol/host/epic/snapshot-meta";
@@ -67,7 +68,7 @@ function emptySnapshot(): Uint8Array {
 }
 
 function buildMeta(
-  role: "owner" | "editor" | "viewer" | null,
+  role: WirePermissionRole | null,
   hostDoc: Y.Doc | null,
 ): SnapshotMetaEpic {
   const nextHostDoc = hostDoc === null ? new Y.Doc() : hostDoc;
@@ -285,7 +286,7 @@ describe("replica runtime behaviour identity - epic.subscribe@1 scripted sequenc
     useAuthStore.getState().setSignedOut();
   });
 
-  it("a viewer-role snapshot tears down every artifact room and republishes divergence", async () => {
+  it("a snapshot naming the retired viewer role tears down every artifact room and republishes divergence", async () => {
     const { factory, handle: streamHandle } = fakeFactory();
     handle = openStoreForTest({
       epicId: "epic-viewer-teardown",
@@ -338,7 +339,8 @@ describe("replica runtime behaviour identity - epic.subscribe@1 scripted sequenc
     });
     expect(opened.store.getState().isDirty).toBe(true);
 
-    // A reconnect snapshot that downgrades the role to viewer. Per
+    // A reconnect snapshot naming the retired viewer role, which decodes to no
+    // role. Per
     // `applyRootSnapshot`, an unwritable role fails closed: every room is
     // torn down (`rooms.dropAllOnViewerDowngrade()`), unconditionally, and
     // divergence is republished (`records.publishDivergence()`) - so the
@@ -348,7 +350,7 @@ describe("replica runtime behaviour identity - epic.subscribe@1 scripted sequenc
       Y.encodeStateAsUpdate(donor),
     );
 
-    expect(opened.store.getState().permissionRole).toBe("viewer");
+    expect(opened.store.getState().permissionRole).toBeNull();
     expect(opened.hotArtifactRoomIdsForTests()).toEqual([]);
     expect(opened.store.getState().isDirty).toBe(false);
     expect(opened.store.getState().unsyncedQueueSize).toBe(0);

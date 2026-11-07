@@ -126,7 +126,8 @@ export interface ChatTimelineInitialScrollAnchor {
  */
 interface ChatTimelineItemSizeInfo {
   readonly size: number;
-  readonly itemData: TranscriptListRow;
+  // A queued measurement may outlive the row removed from LegendList's data.
+  readonly itemData: TranscriptListRow | undefined;
 }
 
 /**
@@ -175,13 +176,21 @@ export interface ChatTimelineProps {
    *  scroll state. Not read by any production code. */
   readonly "data-scroll-mode"?: string;
   /**
-   * Whether the initial mount parks at the tail: `true` for a fresh,
-   * never-scrolled-in chat with no saved reading position. The controller
-   * passes `false` when restoring a tab whose saved reading position was NOT
-   * the tail, so the initial DOM position does not contradict the restored
-   * position; `initialScrollIndex` below carries the exact row-level restore.
+   * Whether the initial mount starts at the tail, following it: `true` for a
+   * fresh, never-scrolled-in chat with no saved reading position. The
+   * controller passes `false` when restoring a tab whose saved reading position
+   * was NOT the tail, so the initial DOM position does not contradict the
+   * restored position; `initialScrollIndex` below carries the exact row-level
+   * restore.
    */
   readonly initialScrollAtEnd?: boolean;
+  /**
+   * The initial mount parks at the tail with the reader NOT following: a saved
+   * reading position has no row to land on yet, and the restore waiting for it
+   * still owns the view. LegendList with neither initial prop sits at offset 0,
+   * the first message, which is nowhere the reader was.
+   */
+  readonly initialParkAtEnd?: boolean;
   /**
    * Restored row bootstrap, passed straight through as LegendList's own
    * `initialScrollIndex`: the saved pixel offset, self-correcting as
@@ -265,6 +274,7 @@ export const ChatTimeline = memo(function ChatTimeline({
   onScroll,
   className,
   initialScrollAtEnd = true,
+  initialParkAtEnd = false,
   initialScrollIndex = null,
   contentInsetEndAdjustment = 0,
   onFollowIntentChange,
@@ -413,7 +423,7 @@ export const ChatTimeline = memo(function ChatTimeline({
       // that row is. A placeholder measures at whatever height the memory just
       // told it to stand at, so recording one would be the memory reading its
       // own estimate back in as evidence for that estimate.
-      if (rowHeightMemory !== null && info.itemData.kind === "hydrated") {
+      if (rowHeightMemory !== null && info.itemData?.kind === "hydrated") {
         // `rowId` is the ROW and the part is the list item: a long turn is
         // drawn as several items, and the placeholder that later stands in for
         // that ordinal stands in for all of them at once.
@@ -615,7 +625,7 @@ export const ChatTimeline = memo(function ChatTimeline({
           // fresh DOM geometry inside the latch; this 10% band can never
           // re-attach a detached reader.
           onEndReachedThreshold={CHAT_TIMELINE_NEAR_END_THRESHOLD}
-          initialScrollAtEnd={initialScrollAtEnd}
+          initialScrollAtEnd={initialScrollAtEnd || initialParkAtEnd}
           initialScrollIndex={initialScrollIndex ?? undefined}
           contentInsetEndAdjustment={contentInsetEndAdjustment}
           // The library's own `maintainScrollAtEnd` is never passed - every

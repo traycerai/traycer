@@ -1,6 +1,6 @@
 ---
 title: "General"
-description: "Composer behavior, keeping the computer awake while agents run, the worktree branch prefix, experimental features, and resetting this device's app state."
+description: "Composer behavior, keeping the computer awake while agents run, the worktree branch prefix, agent roles, and resetting this device's app state."
 ---
 
 **General** holds app behavior that doesn't belong to a provider, a host, or one part of the app. It sits in the **Application** group of [Settings](/settings). Most settings apply to the app on this device, whichever host you are looking at; automatic chat archiving applies to your account across hosts.
@@ -59,9 +59,9 @@ You can also inspect or change the choice with the [host lifecycle CLI commands]
 
 A repository can set its own prefix in `<repo>/.traycer/environment.json`, which takes precedence over this one for that repository. See [Setup and teardown scripts](/concepts/worktrees/scripts).
 
-## Experimental
+## Agent Roles
 
-**Agent roles** lets agents claim durable responsibilities, called roles, and coordinate through role-aware tools and prompts. It is off by default. Agents claim, list, and release roles with `traycer agent role claim`, `traycer agent role list`, and `traycer agent role relinquish`; see [CLI commands](/cli/commands).
+In **General › Agents**, **Agent roles** lets agents claim durable responsibilities, called roles, and coordinate through role-aware tools and prompts. It is off by default. Agents claim, list, and release roles with `traycer agent role claim`, `traycer agent role list`, and `traycer agent role relinquish`; see [CLI commands](/cli/commands).
 
 ## Danger Zone
 
@@ -77,7 +77,7 @@ File edit snapshots are cleared per host, from **Host › Overview › Data**; s
 
 ## Desktop Only
 
-The mobile app doesn't show **Voice input**, **Prevent sleep while running**, or the **Experimental** group.
+The mobile app doesn't show **Voice input**, **Prevent sleep while running**, or **Agent roles**.
 
 ## Moved Settings
 

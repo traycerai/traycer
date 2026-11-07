@@ -208,7 +208,7 @@ export function TabStripPositionRow(props: AreaRowPlacement): ReactNode {
             }
           : null
       }
-      revertLabel="Reset tab placement to default: Top"
+      revertLabel="Reset tab placement to default: Left"
       description={TAB_STRIP_PLACEMENT_ROW.description}
       stacked={false}
       selected={false}

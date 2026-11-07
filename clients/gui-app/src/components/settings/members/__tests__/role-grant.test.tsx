@@ -7,7 +7,6 @@ import type { TeamRole } from "@/components/settings/members/types";
 
 afterEach(cleanup);
 
-const VIEWER: TeamRole = "viewer";
 const EDITOR: TeamRole = "editor";
 const ADMIN: TeamRole = "admin";
 
@@ -21,20 +20,13 @@ function grantText(): string {
 }
 
 describe("RoleGrant", () => {
-  it("opens with the viewer prefix and the common text", () => {
-    render(<RoleGrant role={VIEWER} teamName="Acme" noticeText={NOTICE} />);
-    expect(screen.getByTestId("role-grant-prefix").textContent).toBe(
-      "You can see Acme's settings but not change them.",
-    );
-    expect(screen.getByTestId("role-grant-common").textContent).toContain(
-      "Every member can interrupt or permanently delete any Acme sandbox",
-    );
-  });
-
-  it("opens with the editor prefix", () => {
+  it("opens with the editor prefix and the common text", () => {
     render(<RoleGrant role={EDITOR} teamName="Acme" noticeText={NOTICE} />);
     expect(screen.getByTestId("role-grant-prefix").textContent).toBe(
       EDITOR_PREFIX,
+    );
+    expect(screen.getByTestId("role-grant-common").textContent).toContain(
+      "Every member can interrupt or permanently delete any Acme sandbox",
     );
   });
 

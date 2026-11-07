@@ -1,7 +1,7 @@
 import type { ReactNode } from "react";
 import { MemberRow } from "@/components/settings/members/member-row";
 import {
-  ROLE_LABELS,
+  roleLabelOf,
   isLastAdminMember,
   memberGainedEditing,
   membersCardTitle,
@@ -63,7 +63,7 @@ export function MembersList(props: {
                 environmentId: props.environmentId,
                 kind: "member",
                 key: member.userId,
-                roleLabel: ROLE_LABELS[member.effectiveRole],
+                roleLabel: roleLabelOf(member.effectiveRole),
               })}
               onRoleChange={(role) => props.onRoleChange(member, role)}
               onRemove={() => props.onRemove(member)}
