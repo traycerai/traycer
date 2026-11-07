@@ -1,4 +1,4 @@
-import { createElement, type ReactNode } from "react";
+import { createElement, useEffect, type ReactNode } from "react";
 import { QueryClientProvider } from "@tanstack/react-query";
 import { act, cleanup, renderHook, waitFor } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -22,15 +22,6 @@ import { createAppQueryClient } from "@/lib/query-client";
 import { useAuthStore } from "@/stores/auth/auth-store";
 
 let hostClient: HostClient<HostRpcRegistry>;
-
-const flushQueryNotifications = async (): Promise<void> => {
-  await new Promise<void>((resolve) => {
-    setTimeout(resolve, 0);
-  });
-  await new Promise<void>((resolve) => {
-    setTimeout(resolve, 0);
-  });
-};
 
 // The indicator hook resolves its own client from a host id (so the surfaces
 // that mount it need no host plumbing of their own). This suite builds the
@@ -152,15 +143,25 @@ describe("useHostNotificationIndicators recovery", () => {
     queryClient.setDefaultOptions({
       queries: { ...queryClient.getDefaultOptions().queries, retry: false },
     });
+    const partitionedIndicatorArrived = Promise.withResolvers<void>();
+    const wholeOriginIndicatorArrived = Promise.withResolvers<void>();
     const messenger = new MockHostMessenger<HostRpcRegistry>({
       registry: hostRpcRegistry,
       requestId: () => "request-floor",
       handlers: {
-        "host.notifications.indicatorState": () => ({
-          epics: {},
-          chats: {},
-          complete: true,
-        }),
+        "host.notifications.indicatorState": ({ epicIds }) => {
+          if (epicIds.includes("epic-a")) {
+            partitionedIndicatorArrived.resolve();
+          }
+          if (epicIds.includes("epic-b")) {
+            wholeOriginIndicatorArrived.resolve();
+          }
+          return {
+            epics: {},
+            chats: {},
+            complete: true,
+          };
+        },
       },
     });
     const spine = new HostClient<HostRpcRegistry>({
@@ -199,7 +200,7 @@ describe("useHostNotificationIndicators recovery", () => {
       { wrapper },
     );
     await act(async () => {
-      await flushQueryNotifications();
+      await partitionedIndicatorArrived.promise;
     });
     expect(messenger.calls).toHaveLength(1);
     expect(messenger.calls[0]?.requiredHostMethodVersion).toEqual({
@@ -238,7 +239,7 @@ describe("useHostNotificationIndicators recovery", () => {
       { wrapper: wholeOriginWrapper },
     );
     await act(async () => {
-      await flushQueryNotifications();
+      await wholeOriginIndicatorArrived.promise;
     });
     expect(messenger.calls).toHaveLength(2);
     expect(messenger.calls[1]?.requiredHostMethodVersion).toBeNull();
@@ -276,6 +277,10 @@ describe("useHostNotificationIndicators recovery", () => {
       chats: {},
       complete: true,
     };
+    const initialSuccessProjected = Promise.withResolvers<void>();
+    const refetchErrorProjected = Promise.withResolvers<void>();
+    const retryErrorProjected = Promise.withResolvers<void>();
+    const clearedResponseProjected = Promise.withResolvers<void>();
     const spine = new HostClient<HostRpcRegistry>({
       registry: hostRpcRegistry,
       invalidator: createHostQueryInvalidator(queryClient),
@@ -321,20 +326,43 @@ describe("useHostNotificationIndicators recovery", () => {
         props.children,
       );
 
-    const { result } = renderHook(
-      () =>
-        useHostNotificationIndicators({
-          hostId: mockLocalHostEntry.hostId,
-          epicIds: ["epic-a"],
-          chatIds: [],
-          enabled: true,
-        }),
-      { wrapper },
-    );
+    const useObservedIndicators = () => {
+      const projection = useHostNotificationIndicators({
+        hostId: mockLocalHostEntry.hostId,
+        epicIds: ["epic-a"],
+        chatIds: [],
+        enabled: true,
+      });
+      const { data, error, isFetching } = projection;
+      useEffect(() => {
+        if (
+          requestCount.value === 1 &&
+          !isFetching &&
+          data.epics["epic-a"]?.unreadDone &&
+          data.complete === true
+        ) {
+          initialSuccessProjected.resolve();
+        }
+        if (requestCount.value === 2 && !isFetching && error !== null) {
+          refetchErrorProjected.resolve();
+        }
+        if (requestCount.value === 3 && !isFetching && error !== null) {
+          retryErrorProjected.resolve();
+        }
+        if (
+          requestCount.value === 4 &&
+          !isFetching &&
+          error === null &&
+          Object.keys(data.epics).length === 0
+        ) {
+          clearedResponseProjected.resolve();
+        }
+      }, [data, error, isFetching]);
+      return projection;
+    };
+    const { result } = renderHook(useObservedIndicators, { wrapper });
 
-    await act(async () => {
-      await flushQueryNotifications();
-    });
+    await waitFor(() => initialSuccessProjected.promise);
     expect(requestCount.value).toBe(1);
     expect(result.current.data.epics["epic-a"].unreadDone).toBe(true);
     expect(result.current.data.complete).toBe(true);
@@ -344,15 +372,14 @@ describe("useHostNotificationIndicators recovery", () => {
       await result.current.refetch();
     });
     expect(requestCount.value).toBe(2);
-    await waitFor(() => {
-      expect(result.current.error).not.toBeNull();
-    });
+    await waitFor(() => refetchErrorProjected.promise);
+    expect(result.current.error).not.toBeNull();
     expect(result.current.data.epics["epic-a"].unreadDone).toBe(true);
 
     await act(async () => {
       await vi.advanceTimersByTimeAsync(30_000);
-      await flushQueryNotifications();
     });
+    await waitFor(() => retryErrorProjected.promise);
     expect(requestCount.value).toBe(3);
     expect(result.current.error).not.toBeNull();
     expect(result.current.data.epics["epic-a"].unreadDone).toBe(true);
@@ -360,15 +387,14 @@ describe("useHostNotificationIndicators recovery", () => {
     responseMode.value = "clear";
     await act(async () => {
       await vi.advanceTimersByTimeAsync(30_000);
-      await flushQueryNotifications();
     });
+    await waitFor(() => clearedResponseProjected.promise);
     expect(requestCount.value).toBe(4);
     expect(result.current.error).toBeNull();
     expect(result.current.data.epics).toEqual({});
 
     await act(async () => {
       await vi.advanceTimersByTimeAsync(30_000);
-      await flushQueryNotifications();
     });
     expect(requestCount.value).toBe(4);
   });
