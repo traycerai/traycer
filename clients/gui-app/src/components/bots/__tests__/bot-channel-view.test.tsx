@@ -542,13 +542,7 @@ function mount(options: MountOptions): {
   const onOpenThread = vi.fn<(open: BotOpenThread | null) => void>();
   const queryClient = new QueryClient();
   const looks = new Map([
-    [
-      BOT_ID,
-      {
-        appearance: { mark: null, swatch: null, background: mountBackground },
-        trunkChatId: "trunk-chat",
-      },
-    ],
+    [BOT_ID, { mark: null, swatch: null, background: mountBackground }],
   ]);
   const tree = (openThread: BotOpenThread | null): ReactNode => (
     <BotLooksContext value={looks}>

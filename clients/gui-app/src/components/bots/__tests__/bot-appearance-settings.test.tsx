@@ -1,12 +1,13 @@
 /**
  * A bot's icon, colour and channel background (Tracy Bots T147): the real
  * section, hooks and HostClient over a mock messenger whose host records each
- * `bot.updateAppearance` and `drafts.putBlob` it is sent. Only the browser's
- * image decode and encode (`bitmap-codec`) are replaced.
+ * `bot.updateAppearance` it is sent and answers it with the row it would
+ * store. Nothing is faked but the tab's host binding and its method support.
  */
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { cleanup, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
+import type { ReactElement } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { HostClient } from "@traycer-clients/shared/host-client/host-client";
 import { MockHostMessenger } from "@traycer-clients/shared/host-client/mock/mock-host-messenger";
@@ -21,27 +22,23 @@ import type {
   BotDirectoryRecord,
   BotUpdateAppearanceRequest,
 } from "@traycer/protocol/host/bot/schemas";
-import type { DraftsPutBlobRequestV11 } from "@traycer/protocol/host/drafts/schemas";
-import { creatureSheet } from "@/lib/bots/creature-mark";
-
-const PNG_BYTES = new Uint8Array([137, 80, 78, 71, 1, 2, 3, 4]);
+import {
+  chosenCreatureMark,
+  creatureSheet,
+  drawCreatureMark,
+  nextCreatureSheet,
+  ownCreature,
+} from "@/lib/bots/creature-mark";
 
 const mocks = vi.hoisted(() => ({
   client: null as HostClient<HostRpcRegistry> | null,
   /** Methods the tab's host does not advertise. */
   unsupported: new Set<string>(),
   appearanceWrites: [] as BotUpdateAppearanceRequest[],
-  blobWrites: [] as DraftsPutBlobRequestV11[],
-  /** What the host answers `drafts.putBlob` with. */
-  blobAnswer: { ok: true } as
-    | { ok: true }
-    | { ok: false; reason: "digest-mismatch" },
-  /** While set, `drafts.putBlob` is not answered until it resolves. */
-  blobGate: null as Promise<void> | null,
-  /** Whether encoding the cropped picture fails. */
-  encodeFails: false,
-  /** Whether the next image decodes. */
-  decodes: true,
+  /** The appearance the host stored for the last write, as it answered it. */
+  stored: null as BotAppearance | null,
+  /** While set, `bot.updateAppearance` is not answered until it resolves. */
+  writeGate: null as Promise<void> | null,
 }));
 
 vi.mock("@/hooks/host/use-tab-host-client", () => ({
@@ -60,24 +57,9 @@ vi.mock("@/hooks/host/use-host-supports-method", () => ({
   useHostMethodSupport: (_hostId: string | null, method: string) =>
     !mocks.unsupported.has(method),
 }));
-vi.mock("@/lib/images/bitmap-codec", () => ({
-  decodeBitmap: () => {
-    if (!mocks.decodes) return Promise.reject(new Error("not an image"));
-    return Promise.resolve({
-      width: 300,
-      height: 200,
-      source: {},
-      close: () => {},
-    });
-  },
-  createBitmapCanvas: () => ({ getContext: () => ({ drawImage: () => {} }) }),
-  bitmapCanvasToBlob: () =>
-    mocks.encodeFails
-      ? Promise.reject(new Error("cannot encode"))
-      : Promise.resolve(new Blob([PNG_BYTES], { type: "image/png" })),
-}));
 
 import { BotAppearanceSettings } from "@/components/bots/bot-appearance-settings";
+import { NamedBotAvatar } from "@/components/bots/bot-avatars";
 import { BotLooksContext, botLooksOf } from "@/hooks/bots/use-bot-appearance";
 
 const BOT_ID = "bot_01ARZ3NDEKTSV4RRFFQ69G5FAV";
@@ -105,6 +87,24 @@ function botRow(appearance: BotAppearance): BotDirectoryRecord {
   };
 }
 
+/** What the host stores when `request` is applied to `appearance`. */
+function applied(
+  appearance: BotAppearance,
+  request: BotUpdateAppearanceRequest,
+): BotAppearance {
+  return {
+    mark: request.mark === undefined ? appearance.mark : request.mark,
+    swatch: request.swatch === undefined ? appearance.swatch : request.swatch,
+    background:
+      request.background === undefined
+        ? appearance.background
+        : request.background,
+  };
+}
+
+let rerenderWith: (appearance: BotAppearance) => void = () => {};
+
+/** The section and the bot's own avatar, over what the surface's list names. */
 function mount(appearance: BotAppearance): void {
   const queryClient = new QueryClient({
     defaultOptions: { mutations: { retry: false } },
@@ -120,14 +120,11 @@ function mount(appearance: BotAppearance): void {
       handlers: {
         "bot.updateAppearance": (params) => {
           mocks.appearanceWrites.push(params);
-          return { bot: botRow(appearance) };
-        },
-        "drafts.putBlob": (params) => {
-          mocks.blobWrites.push(params);
-          const answer = mocks.blobAnswer;
-          return mocks.blobGate === null
+          mocks.stored = applied(appearance, params);
+          const answer = { bot: botRow(mocks.stored) };
+          return mocks.writeGate === null
             ? answer
-            : mocks.blobGate.then(() => answer);
+            : mocks.writeGate.then(() => answer);
         },
       },
     }),
@@ -136,34 +133,45 @@ function mount(appearance: BotAppearance): void {
     createRequestContextFixture({ origin: "renderer", bearerToken: "tok-1" }),
   );
   mocks.client = spine.createRequester(mockLocalHostEntry);
-  render(
+  const tree = (looks: BotAppearance): ReactElement => (
     <QueryClientProvider client={queryClient}>
-      <BotLooksContext value={botLooksOf([botRow(appearance)])}>
+      <BotLooksContext value={botLooksOf([botRow(looks)])}>
+        <NamedBotAvatar botId={BOT_ID} size="sm" />
         <BotAppearanceSettings botId={BOT_ID} />
       </BotLooksContext>
-    </QueryClientProvider>,
+    </QueryClientProvider>
   );
+  const view = render(tree(appearance));
+  rerenderWith = (looks) => view.rerender(tree(looks));
 }
 
 beforeEach(() => {
   mocks.unsupported.clear();
   mocks.appearanceWrites = [];
-  mocks.blobWrites = [];
-  mocks.blobAnswer = { ok: true };
-  mocks.blobGate = null;
-  mocks.decodes = true;
-  mocks.encodeFails = false;
+  mocks.stored = null;
+  mocks.writeGate = null;
 });
 
 afterEach(() => {
   cleanup();
 });
 
-async function sha256Hex(bytes: Uint8Array<ArrayBuffer>): Promise<string> {
-  const digest = await crypto.subtle.digest("SHA-256", bytes);
-  return Array.from(new Uint8Array(digest), (byte) =>
-    byte.toString(16).padStart(2, "0"),
-  ).join("");
+/** The path a creature preview or avatar draws, which says which creature it is. */
+function pathIn(root: HTMLElement): string {
+  const path = root.querySelector('[data-slot="bot-creature"] path');
+  if (path === null) throw new Error("no creature drawn");
+  return path.getAttribute("d") ?? "";
+}
+
+/** The creature each candidate button draws, in order. */
+function candidatePaths(): string[] {
+  return screen
+    .getAllByRole("button", { name: /^Creature \d+$/ })
+    .map((button) => pathIn(button));
+}
+
+function currentPath(): string {
+  return pathIn(screen.getByTestId("bot-settings-icon-current"));
 }
 
 describe("<BotAppearanceSettings />", () => {
@@ -195,9 +203,7 @@ describe("<BotAppearanceSettings />", () => {
     const user = userEvent.setup();
     mount(BARE);
     const sheet = creatureSheet(BOT_ID);
-    expect(screen.getAllByTestId("bot-creature-preview")).toHaveLength(
-      sheet.length,
-    );
+    expect(candidatePaths()).toHaveLength(sheet.length);
 
     await user.click(screen.getByTestId("bot-settings-icon-creature-3"));
 
@@ -279,151 +285,136 @@ describe("<BotAppearanceSettings />", () => {
     ).toBe(true);
   });
 
-  it("puts an uploaded picture on the host, then names its digest", async () => {
-    const user = userEvent.setup();
+  it("offers no upload: neither a button nor a file input", () => {
     mount(BARE);
 
-    await user.upload(
-      screen.getByTestId("bot-settings-icon-file"),
-      new File(["x"], "me.jpg", { type: "image/jpeg" }),
-    );
-
-    const sha256 = await sha256Hex(PNG_BYTES);
-    await waitFor(() => {
-      expect(mocks.appearanceWrites).toEqual([
-        { botId: BOT_ID, mark: { kind: "picture", blobRef: sha256 } },
-      ]);
-    });
-    expect(mocks.blobWrites).toEqual([{ sha256, bytesBase64: "iVBORwECAwQ=" }]);
+    expect(screen.queryByText("Upload a picture")).toBeNull();
+    expect(screen.queryByTestId("bot-settings-icon-upload")).toBeNull();
+    expect(document.querySelector('input[type="file"]')).toBeNull();
   });
 
-  it("holds every other icon choice while an upload is on its way, so it cannot overwrite a newer one", async () => {
+  it("shows a different sheet on Regenerate patterns, writing nothing", async () => {
+    const user = userEvent.setup();
+    mount(BARE);
+    const before = candidatePaths();
+
+    await user.click(screen.getByTestId("bot-settings-icon-regenerate"));
+
+    const after = candidatePaths();
+    expect(after).toHaveLength(before.length);
+    for (const path of after) {
+      expect(before).not.toContain(path);
+    }
+    expect(new Set(after).size).toBe(after.length);
+    expect(mocks.appearanceWrites).toEqual([]);
+  });
+
+  it("keeps the current creature's preview through Regenerate patterns", async () => {
+    const user = userEvent.setup();
+    const stored = creatureSheet(BOT_ID)[4];
+    mount({
+      ...BARE,
+      mark: { kind: "creature", family: stored.family, seed: stored.seed },
+    });
+    const expected = drawCreatureMark(
+      chosenCreatureMark(BOT_ID, stored),
+      40,
+    ).path;
+    expect(currentPath()).toBe(expected);
+
+    await user.click(screen.getByTestId("bot-settings-icon-regenerate"));
+    await user.click(screen.getByTestId("bot-settings-icon-regenerate"));
+
+    expect(currentPath()).toBe(expected);
+    expect(candidatePaths()).not.toContain(
+      drawCreatureMark(chosenCreatureMark(BOT_ID, stored), 32).path,
+    );
+  });
+
+  it("writes a regenerated candidate's family and seed, and a reload shows that creature as the current one and on the avatar", async () => {
+    const user = userEvent.setup();
+    mount(BARE);
+    const regenerated = nextCreatureSheet(
+      BOT_ID,
+      creatureSheet(BOT_ID),
+      ownCreature(BOT_ID),
+    );
+    const choice = regenerated[2];
+
+    await user.click(screen.getByTestId("bot-settings-icon-regenerate"));
+    await user.click(screen.getByTestId("bot-settings-icon-creature-2"));
+
+    await waitFor(() => {
+      expect(mocks.appearanceWrites).toEqual([
+        {
+          botId: BOT_ID,
+          mark: { kind: "creature", family: choice.family, seed: choice.seed },
+        },
+      ]);
+    });
+    const returned = mocks.stored;
+    if (returned === null) throw new Error("the host stored nothing");
+    rerenderWith(returned);
+
+    const mask = chosenCreatureMark(BOT_ID, choice);
+    expect(currentPath()).toBe(drawCreatureMark(mask, 40).path);
+    expect(pathIn(screen.getByTestId("bot-avatar"))).toBe(
+      drawCreatureMark(mask, 24).path,
+    );
+  });
+
+  it("sends null for Use the default, and a reload shows the bot's own creature again", async () => {
+    const user = userEvent.setup();
+    const stored = creatureSheet(BOT_ID)[5];
+    mount({
+      ...BARE,
+      mark: { kind: "creature", family: stored.family, seed: stored.seed },
+    });
+    expect(currentPath()).not.toBe(
+      drawCreatureMark(chosenCreatureMark(BOT_ID, ownCreature(BOT_ID)), 40)
+        .path,
+    );
+
+    await user.click(screen.getByTestId("bot-settings-icon-default"));
+
+    await waitFor(() => {
+      expect(mocks.appearanceWrites).toEqual([{ botId: BOT_ID, mark: null }]);
+    });
+    const returned = mocks.stored;
+    if (returned === null) throw new Error("the host stored nothing");
+    rerenderWith(returned);
+
+    const own = drawCreatureMark(
+      chosenCreatureMark(BOT_ID, ownCreature(BOT_ID)),
+      40,
+    ).path;
+    expect(currentPath()).toBe(own);
+    expect(pathIn(screen.getByTestId("bot-avatar"))).toBe(
+      drawCreatureMark(chosenCreatureMark(BOT_ID, ownCreature(BOT_ID)), 24)
+        .path,
+    );
+  });
+
+  it("holds Regenerate patterns while a write is pending", async () => {
     let release: () => void = () => {};
-    mocks.blobGate = new Promise<void>((resolve) => {
+    mocks.writeGate = new Promise<void>((resolve) => {
       release = resolve;
     });
     const user = userEvent.setup();
-    const stored = creatureSheet(BOT_ID)[1];
-    mount({
-      ...BARE,
-      mark: { kind: "creature", family: stored.family, seed: stored.seed },
-    });
-    const useDefault = screen.getByTestId<HTMLButtonElement>(
-      "bot-settings-icon-default",
+    mount(BARE);
+    const regenerate = screen.getByTestId<HTMLButtonElement>(
+      "bot-settings-icon-regenerate",
     );
-    expect(useDefault.disabled).toBe(false);
+    expect(regenerate.disabled).toBe(false);
 
-    await user.upload(
-      screen.getByTestId("bot-settings-icon-file"),
-      new File(["x"], "me.jpg", { type: "image/jpeg" }),
-    );
+    await user.click(screen.getByTestId("bot-settings-icon-creature-3"));
 
-    const creature = screen.getByTestId<HTMLButtonElement>(
-      "bot-settings-icon-creature-3",
-    );
     await waitFor(() => {
-      expect(mocks.blobWrites).toHaveLength(1);
+      expect(regenerate.disabled).toBe(true);
     });
-    expect(creature.disabled).toBe(true);
-    expect(useDefault.disabled).toBe(true);
-    expect(
-      screen.getByTestId<HTMLButtonElement>("bot-settings-colour-1").disabled,
-    ).toBe(false);
-    await user.click(creature);
-    await user.click(useDefault);
-    expect(mocks.appearanceWrites).toEqual([]);
-
     release();
-    const sha256 = await sha256Hex(PNG_BYTES);
     await waitFor(() => {
-      expect(mocks.appearanceWrites).toEqual([
-        { botId: BOT_ID, mark: { kind: "picture", blobRef: sha256 } },
-      ]);
+      expect(regenerate.disabled).toBe(false);
     });
-    await waitFor(() => {
-      expect(creature.disabled).toBe(false);
-    });
-    expect(useDefault.disabled).toBe(false);
-  });
-
-  it("names no picture when the host refuses its bytes, and says so", async () => {
-    mocks.blobAnswer = { ok: false, reason: "digest-mismatch" };
-    const user = userEvent.setup();
-    mount(BARE);
-
-    await user.upload(
-      screen.getByTestId("bot-settings-icon-file"),
-      new File(["x"], "me.jpg", { type: "image/jpeg" }),
-    );
-
-    expect((await screen.findByRole("alert")).textContent).toBe(
-      "Couldn't read that image.",
-    );
-    expect(mocks.appearanceWrites).toEqual([]);
-  });
-
-  it("says so, frees every icon control and writes nothing when the picture cannot be prepared", async () => {
-    mocks.encodeFails = true;
-    const user = userEvent.setup();
-    const stored = creatureSheet(BOT_ID)[1];
-    mount({
-      ...BARE,
-      mark: { kind: "creature", family: stored.family, seed: stored.seed },
-    });
-    const file = screen.getByTestId("bot-settings-icon-file");
-
-    await user.upload(file, new File(["x"], "me.jpg", { type: "image/jpeg" }));
-
-    expect((await screen.findByRole("alert")).textContent).toBe(
-      "Couldn't read that image.",
-    );
-    for (const testId of [
-      "bot-settings-icon-creature-3",
-      "bot-settings-icon-default",
-      "bot-settings-icon-upload",
-    ]) {
-      await waitFor(() => {
-        expect(screen.getByTestId<HTMLButtonElement>(testId).disabled).toBe(
-          false,
-        );
-      });
-    }
-    expect(mocks.blobWrites).toEqual([]);
-    expect(mocks.appearanceWrites).toEqual([]);
-
-    mocks.encodeFails = false;
-    await user.upload(file, new File(["x"], "me.jpg", { type: "image/jpeg" }));
-    const sha256 = await sha256Hex(PNG_BYTES);
-    await waitFor(() => {
-      expect(mocks.appearanceWrites).toEqual([
-        { botId: BOT_ID, mark: { kind: "picture", blobRef: sha256 } },
-      ]);
-    });
-    expect(screen.queryByRole("alert")).toBeNull();
-  });
-
-  it("says so, and writes nothing, for a file that is not an image", async () => {
-    mocks.decodes = false;
-    const user = userEvent.setup({ applyAccept: false });
-    mount(BARE);
-
-    await user.upload(
-      screen.getByTestId("bot-settings-icon-file"),
-      new File(["x"], "notes.txt", { type: "text/plain" }),
-    );
-
-    expect((await screen.findByRole("alert")).textContent).toBe(
-      "Couldn't read that image.",
-    );
-    expect(mocks.blobWrites).toEqual([]);
-    expect(mocks.appearanceWrites).toEqual([]);
-  });
-
-  it("hides the upload when the host cannot put a blob", () => {
-    mocks.unsupported.add("drafts.putBlob");
-    mount(BARE);
-
-    expect(screen.queryByTestId("bot-settings-icon-upload")).toBeNull();
-    expect(screen.getByTestId("bot-settings-icon-creature-0")).toBeTruthy();
   });
 });

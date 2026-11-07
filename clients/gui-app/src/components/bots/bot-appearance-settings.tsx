@@ -1,7 +1,6 @@
 import {
   useId,
   useMemo,
-  useRef,
   useState,
   type CSSProperties,
   type ReactNode,
@@ -14,22 +13,19 @@ import {
 } from "@traycer/protocol/host/bot/schemas";
 import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
 import { Button } from "@/components/ui/button";
-import {
-  BotCreaturePreview,
-  NamedBotAvatar,
-} from "@/components/bots/bot-avatars";
+import { BotCreaturePreview } from "@/components/bots/bot-avatars";
 import { BotSettingsRefusal } from "@/components/bots/bot-settings-group";
 import { useTabHostClient } from "@/hooks/host/use-tab-host-client";
 import { useTabHostId } from "@/components/epic-canvas/hooks/use-tab-host-id";
 import { useHostMethodSupport } from "@/hooks/host/use-host-supports-method";
 import { useBotLook } from "@/hooks/bots/use-bot-appearance";
+import { useBotUpdateAppearanceMutation } from "@/hooks/bots/use-bot-mutations";
 import {
-  useBotPicturePutMutation,
-  useBotUpdateAppearanceMutation,
-} from "@/hooks/bots/use-bot-mutations";
-import { type CreatureChoice, creatureSheet } from "@/lib/bots/creature-mark";
-import { prepareBotPicture } from "@/lib/bots/bot-picture";
-import { bytesToBase64Async } from "@/lib/composer/image-base64";
+  type CreatureChoice,
+  creatureSheet,
+  nextCreatureSheet,
+  ownCreature,
+} from "@/lib/bots/creature-mark";
 import {
   botSwatchAt,
   derivedBotSwatchIndex,
@@ -71,21 +67,13 @@ function fieldOf(request: BotUpdateAppearanceRequest): AppearanceField | null {
   return null;
 }
 
-function sameChoice(
-  mark: BotAppearanceMark | null,
-  choice: CreatureChoice,
-): boolean {
-  return (
-    mark?.kind === "creature" &&
-    mark.family === choice.family &&
-    mark.seed === choice.seed
-  );
+function sameCreature(a: CreatureChoice, b: CreatureChoice): boolean {
+  return a.family === b.family && a.seed === b.seed;
 }
 
 /**
- * A bot's look, in its channel settings: its icon (a creature from its own
- * sheet, or a picture of the person's), the colour its icon sits on, and the
- * background of its channel. Each starts on the look the bot's id gives it,
+ * A bot's look, in its channel settings: its icon (a creature grown from its
+ * id), the colour its icon sits on, and the background of its channel. Each starts on the look the bot's id gives it,
  * and "Use the default" brings that back. Drawn where the tab's host can
  * change it; the rename authority decides who may.
  */
@@ -97,12 +85,10 @@ export function BotAppearanceSettings(props: {
   const hostId = useTabHostId();
   const supported =
     useHostMethodSupport(hostId, "bot.updateAppearance") === true;
-  const picturesSupported =
-    useHostMethodSupport(hostId, "drafts.putBlob") === true;
   const update = useBotUpdateAppearanceMutation(client);
   const look = useBotLook(botId);
   if (!supported) return null;
-  const appearance: BotAppearance = look?.appearance ?? {
+  const appearance: BotAppearance = look ?? {
     mark: null,
     swatch: null,
     background: null,
@@ -122,7 +108,6 @@ export function BotAppearanceSettings(props: {
         pending={pending === "mark"}
         disabled={update.isPending}
         refusal={refusal("mark")}
-        picturesSupported={picturesSupported}
         onChange={(mark) => change({ mark })}
       />
       <SwatchSection
@@ -193,6 +178,11 @@ function UseDefaultButton(props: {
 const CHOICE_CLASS =
   "rounded-md p-0.5 outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:opacity-60 aria-pressed:ring-2 aria-pressed:ring-foreground";
 
+/**
+ * The icon: the creature the bot shows now, a sheet of others to choose
+ * from, and "Regenerate patterns" for the next sheet. Regenerating changes
+ * only what is offered; choosing a creature is what writes.
+ */
 function BotIconSection(props: {
   readonly botId: string;
   readonly mark: BotAppearanceMark | null;
@@ -201,19 +191,22 @@ function BotIconSection(props: {
   readonly pending: boolean;
   readonly disabled: boolean;
   readonly refusal: string | null;
-  readonly picturesSupported: boolean;
   readonly onChange: (mark: BotAppearanceMark | null) => void;
 }): ReactNode {
   const { botId, mark, onChange } = props;
   const labelId = useId();
-  const sheet = useMemo(() => creatureSheet(botId), [botId]);
+  const firstSheet = useMemo(() => creatureSheet(botId), [botId]);
+  // The last regenerated sheet, kept for the bot it was drawn for.
+  const [regenerated, setRegenerated] = useState<{
+    readonly botId: string;
+    readonly sheet: readonly CreatureChoice[];
+  } | null>(null);
+  const sheet = regenerated?.botId === botId ? regenerated.sheet : firstSheet;
+  const current: CreatureChoice =
+    mark === null
+      ? ownCreature(botId)
+      : { family: mark.family, seed: mark.seed };
   const swatch = botSwatchAt(props.swatch);
-  const upload = usePictureUpload((blobRef) =>
-    onChange({ kind: "picture", blobRef }),
-  );
-  // An upload names its picture only once the host holds it, so every other
-  // icon choice waits for it: one made meanwhile would be overwritten.
-  const disabled = props.disabled || upload.busy;
   return (
     <section
       aria-labelledby={labelId}
@@ -222,33 +215,33 @@ function BotIconSection(props: {
     >
       <SectionLabel id={labelId} label="Icon" pending={props.pending} />
       <div
+        data-testid="bot-settings-icon-current"
+        className="flex items-center gap-2"
+      >
+        <BotCreaturePreview
+          botId={botId}
+          choice={current}
+          swatch={swatch}
+          size="lg"
+        />
+        <span className="text-ui-xs text-muted-foreground">
+          Current creature
+        </span>
+      </div>
+      <div
         role="group"
         aria-labelledby={labelId}
         className="flex flex-wrap gap-1.5"
       >
-        {mark?.kind === "picture" ? (
-          <button
-            type="button"
-            aria-label="Your picture"
-            aria-pressed
-            className={CHOICE_CLASS}
-            data-testid="bot-settings-icon-picture"
-            disabled={disabled}
-          >
-            <NamedBotAvatar botId={botId} size="default" />
-          </button>
-        ) : null}
         {sheet.map((choice, index) => (
           <button
             key={choice.seed}
             type="button"
             aria-label={`Creature ${String(index + 1)}`}
-            aria-pressed={
-              sameChoice(mark, choice) || (mark === null && index === 0)
-            }
+            aria-pressed={sameCreature(choice, current)}
             className={CHOICE_CLASS}
             data-testid={`bot-settings-icon-creature-${String(index)}`}
-            disabled={disabled}
+            disabled={props.disabled}
             onClick={() =>
               onChange({
                 kind: "creature",
@@ -267,144 +260,30 @@ function BotIconSection(props: {
         ))}
       </div>
       <div className="flex flex-wrap items-center gap-2">
-        {props.picturesSupported ? (
-          <BotPictureUpload upload={upload} disabled={disabled} />
-        ) : null}
+        <Button
+          type="button"
+          size="sm"
+          variant="outline"
+          data-testid="bot-settings-icon-regenerate"
+          disabled={props.disabled}
+          onClick={() =>
+            setRegenerated({
+              botId,
+              sheet: nextCreatureSheet(botId, sheet, current),
+            })
+          }
+        >
+          Regenerate patterns
+        </Button>
         <UseDefaultButton
           testId="bot-settings-icon-default"
-          disabled={disabled || mark === null}
+          disabled={props.disabled || mark === null}
           onClick={() => onChange(null)}
         />
       </div>
       <BotSettingsRefusal message={props.refusal} />
     </section>
   );
-}
-
-/** A picture on its way to the tab's host, from the file to the host's answer. */
-interface PictureUpload {
-  /** True from the moment a file is chosen until the host has answered. */
-  readonly busy: boolean;
-  readonly refusal: string | null;
-  readonly choose: (file: File) => void;
-}
-
-/** A chosen image as the tab's host takes it. */
-interface PreparedPicture {
-  readonly sha256: string;
-  readonly bytesBase64: string;
-}
-
-/**
- * The image cropped to a square, scaled to the largest avatar and encoded,
- * or `null` when it cannot be read. Kept out of the hook, so the hook holds
- * no `try` the React Compiler would skip it for.
- */
-async function preparePicture(file: File): Promise<PreparedPicture | null> {
-  try {
-    const picture = await prepareBotPicture(file);
-    if (picture === null) return null;
-    return {
-      sha256: picture.sha256,
-      bytesBase64: await bytesToBase64Async(picture.bytes),
-    };
-  } catch {
-    // Cropping or encoding it failed on this device: the image is as
-    // unusable as one that does not decode.
-    return null;
-  }
-}
-
-/**
- * The person's image put on the tab's host; `onUploaded` names it once the
- * host holds it.
- */
-function usePictureUpload(
-  onUploaded: (blobRef: string) => void,
-): PictureUpload {
-  const client = useTabHostClient();
-  const put = useBotPicturePutMutation(client);
-  const [preparing, setPreparing] = useState(false);
-  const [unreadable, setUnreadable] = useState(false);
-  const choose = async (file: File): Promise<void> => {
-    setUnreadable(false);
-    setPreparing(true);
-    const picture = await preparePicture(file);
-    // Rendered together with the put's pending state, so `busy` holds.
-    setPreparing(false);
-    if (picture === null) {
-      setUnreadable(true);
-      return;
-    }
-    put.mutate(picture, {
-      onSuccess: (response) => {
-        if (response.ok) onUploaded(picture.sha256);
-        else setUnreadable(true);
-      },
-    });
-  };
-  return {
-    busy: preparing || put.isPending,
-    refusal: pictureRefusal(unreadable, put.error),
-    choose: (file) => void choose(file),
-  };
-}
-
-/** "Upload a picture", and why the last one did not reach the host. */
-function BotPictureUpload(props: {
-  readonly upload: PictureUpload;
-  readonly disabled: boolean;
-}): ReactNode {
-  const { upload } = props;
-  const inputRef = useRef<HTMLInputElement | null>(null);
-  return (
-    <div className="flex flex-col gap-1">
-      <div className="flex flex-wrap items-center gap-2">
-        <Button
-          type="button"
-          size="sm"
-          variant="outline"
-          data-testid="bot-settings-icon-upload"
-          disabled={props.disabled}
-          onClick={() => inputRef.current?.click()}
-        >
-          Upload a picture
-          {upload.busy ? (
-            <AgentSpinningDots
-              className="ml-1"
-              testId={undefined}
-              variant={undefined}
-            />
-          ) : null}
-        </Button>
-        <span className="text-ui-xs text-muted-foreground">
-          Any image. It&apos;s cropped to a square.
-        </span>
-      </div>
-      <input
-        ref={inputRef}
-        type="file"
-        accept="image/*"
-        hidden
-        data-testid="bot-settings-icon-file"
-        onChange={(event) => {
-          const file = event.target.files?.[0];
-          event.target.value = "";
-          if (file !== undefined) upload.choose(file);
-        }}
-      />
-      <BotSettingsRefusal message={upload.refusal} />
-    </div>
-  );
-}
-
-/** Why the picture did not reach the host, when it did not. */
-function pictureRefusal(
-  unreadable: boolean,
-  error: Error | null,
-): string | null {
-  if (unreadable) return "Couldn't read that image.";
-  return error === null ? null : error.message;
 }
 
 /** A row of the swatches, the chosen one pressed, and "Use the default". */

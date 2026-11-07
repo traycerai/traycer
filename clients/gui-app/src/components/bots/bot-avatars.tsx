@@ -23,7 +23,6 @@ import {
   drawCreatureMark,
 } from "@/lib/bots/creature-mark";
 import { useBotLook } from "@/hooks/bots/use-bot-appearance";
-import { useBotPictureUrl } from "@/hooks/bots/use-bot-picture";
 
 type IdentityAvatarSize = "xs" | "sm" | "default" | "lg";
 
@@ -38,7 +37,7 @@ const CREATURE_SIZE: Readonly<Record<IdentityAvatarSize, CreatureMarkSize>> = {
  * Who a picture is of, in a bot's channel and everywhere a bot appears:
  * a person is a circle, a bot a squircle. A bot is its creature mark on a
  * swatch, both from its id alone, so a rename changes neither, unless a
- * person chose another creature, a picture or a swatch in its settings. A
+ * person chose another creature or swatch in its settings. A
  * person without a picture shows their initials on a colour hashed from who
  * they are; the smallest size has room for one letter. The picture is
  * decoration beside the name, which every surface shows or labels its
@@ -91,8 +90,7 @@ function IdentityAvatar(
 
 /**
  * A bot's picture: what its settings chose, each choice falling back to the
- * one derived from its id. An uploaded picture shows its creature on its
- * swatch until the image has loaded, and in its place if it cannot.
+ * one derived from its id.
  */
 function BotIdentityAvatar(props: {
   readonly botId: string;
@@ -101,12 +99,12 @@ function BotIdentityAvatar(props: {
 }): ReactElement {
   const { botId, size, testId } = props;
   const look = useBotLook(botId);
-  const mark = look?.appearance.mark ?? null;
-  const swatchIndex = look?.appearance.swatch ?? null;
+  const mark = look?.mark ?? null;
+  const swatchIndex = look?.swatch ?? null;
   const creature =
-    mark?.kind === "creature"
-      ? chosenCreatureMark(botId, { family: mark.family, seed: mark.seed })
-      : creatureMark(botId);
+    mark === null
+      ? creatureMark(botId)
+      : chosenCreatureMark(botId, { family: mark.family, seed: mark.seed });
   return (
     <AvatarFrame
       kind="bot"
@@ -117,29 +115,11 @@ function BotIdentityAvatar(props: {
           ? resolveBotSwatch(botId)
           : botSwatchAt(swatchIndex)
       }
-      image={
-        look !== null && mark?.kind === "picture" ? (
-          <BotPictureImage
-            botId={botId}
-            trunkChatId={look.trunkChatId}
-            hash={mark.blobRef}
-          />
-        ) : null
-      }
+      image={null}
     >
       <CreatureMarkSvg mark={creature} size={CREATURE_SIZE[size]} />
     </AvatarFrame>
   );
-}
-
-/** An uploaded picture, once its bytes have arrived. */
-function BotPictureImage(props: {
-  readonly botId: string;
-  readonly trunkChatId: string;
-  readonly hash: string;
-}): ReactNode {
-  const url = useBotPictureUrl(props.botId, props.trunkChatId, props.hash);
-  return url === null ? null : <AvatarImage src={url} alt="" />;
 }
 
 /** The clipped picture: an image when there is one, over its fallback. */

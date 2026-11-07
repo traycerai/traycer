@@ -137,7 +137,7 @@ export type BotRecord = z.infer<typeof botRecordSchema>;
 // ---- a bot's appearance ------------------------------------------------ //
 
 /**
- * How many swatches a bot's picture and its channel's background choose
+ * How many swatches a bot's icon and its channel's background choose
  * among: the GUI's twelve profile hues in two tones each.
  */
 export const BOT_SWATCH_COUNT = 24;
@@ -158,28 +158,16 @@ export type BotCreatureFamily = z.infer<typeof botCreatureFamilySchema>;
 /** The largest creature seed a bot's settings may store. */
 export const BOT_CREATURE_SEED_MAX = 65_535;
 
-/** An uploaded picture's bytes, named by their lowercase SHA-256. */
-const botPictureBlobRefSchema = lazySchema(() =>
-  z.string().regex(/^[0-9a-f]{64}$/),
-);
-
 /**
- * The bot's chosen picture: a creature the GUI grows again from its family
- * and seed (seed 0 is the bot's own body), or an image the person uploaded,
- * kept as a blob the bot's environment owns.
+ * The bot's chosen icon: a creature the GUI grows again from its family and
+ * seed (seed 0 is the bot's own body), never stored as pixels.
  */
 export const botAppearanceMarkSchema = lazySchema(() =>
-  z.discriminatedUnion("kind", [
-    z.object({
-      kind: z.literal("creature"),
-      family: botCreatureFamilySchema,
-      seed: z.number().int().min(0).max(BOT_CREATURE_SEED_MAX),
-    }),
-    z.object({
-      kind: z.literal("picture"),
-      blobRef: botPictureBlobRefSchema,
-    }),
-  ]),
+  z.object({
+    kind: z.literal("creature"),
+    family: botCreatureFamilySchema,
+    seed: z.number().int().min(0).max(BOT_CREATURE_SEED_MAX),
+  }),
 );
 export type BotAppearanceMark = z.infer<typeof botAppearanceMarkSchema>;
 
@@ -192,7 +180,7 @@ export type BotAppearanceMark = z.infer<typeof botAppearanceMarkSchema>;
 export const botAppearanceSchema = lazySchema(() =>
   z.object({
     mark: botAppearanceMarkSchema.nullable(),
-    /** The swatch the picture draws on, by index. */
+    /** The swatch the icon draws on, by index. */
     swatch: botSwatchIndexSchema.nullable(),
     /** The swatch the channel's background is tinted with, by index. */
     background: botSwatchIndexSchema.nullable(),
@@ -370,10 +358,7 @@ export type BotUpdateResponse = z.infer<typeof botUpdateResponseSchema>;
 /**
  * The bot's look, one choice at a time: a key left out keeps its choice, and
  * `null` clears it back to the default. Changing it takes the same authority
- * as renaming the bot. A picture names an `image-attachment` blob of the
- * bot's trunk chat, which must be stored before the write; the row and that
- * blob are the claim. Replacing or clearing a picture changes the row only:
- * nothing is released, and the bytes go when the bot's prefix is swept.
+ * as renaming the bot.
  */
 export const botUpdateAppearanceRequestSchema = lazySchema(() =>
   z.object({

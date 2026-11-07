@@ -218,11 +218,6 @@ vi.mock("@/hooks/bots/use-bot-mutations", () => ({
     error: null,
     mutate: vi.fn(),
   }),
-  useBotPicturePutMutation: () => ({
-    isPending: false,
-    error: null,
-    mutate: vi.fn(),
-  }),
 }));
 vi.mock("@/hooks/bots/use-bot-notification-level", () => ({
   useBotNotificationLevelsQuery: (

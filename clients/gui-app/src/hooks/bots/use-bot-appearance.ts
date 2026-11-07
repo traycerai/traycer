@@ -7,17 +7,8 @@ import type { HomeBotsModel } from "@/lib/home-bots/bots-model";
 import { botSwatchAt } from "@/lib/providers/profile-accent-color";
 import { useStandaloneBotsStore } from "@/stores/bots/standalone-bots-store";
 
-/**
- * What a bot's picture is drawn from: what was chosen for its look, and its
- * trunk chat, which holds an uploaded picture's bytes.
- */
-export interface BotLook {
-  readonly appearance: BotAppearance;
-  readonly trunkChatId: string;
-}
-
 /** Bots' looks by id, as a surface's own `bot.list` read names them. */
-export type BotLooks = ReadonlyMap<string, BotLook>;
+export type BotLooks = ReadonlyMap<string, BotAppearance>;
 
 /**
  * The looks of the bots a surface lists through its own host. Outside one, a
@@ -25,15 +16,13 @@ export type BotLooks = ReadonlyMap<string, BotLook>;
  */
 export const BotLooksContext = createContext<BotLooks | null>(null);
 
-function lookOf(bot: BotDirectoryRecord): BotLook | null {
-  return bot.appearance === undefined
-    ? null
-    : { appearance: bot.appearance, trunkChatId: bot.trunkChatId };
+function lookOf(bot: BotDirectoryRecord): BotAppearance | null {
+  return bot.appearance ?? null;
 }
 
 /** The looks a list's rows carry; a row without an appearance is left out. */
 export function botLooksOf(bots: ReadonlyArray<BotDirectoryRecord>): BotLooks {
-  const looks = new Map<string, BotLook>();
+  const looks = new Map<string, BotAppearance>();
   for (const bot of bots) {
     const look = lookOf(bot);
     if (look !== null) looks.set(bot.botId, look);
@@ -58,7 +47,7 @@ function directoryRow(
  * app's directory. `null` when neither names its look, which draws every
  * choice at its default.
  */
-export function useBotLook(botId: string): BotLook | null {
+export function useBotLook(botId: string): BotAppearance | null {
   const surface = use(BotLooksContext)?.get(botId) ?? null;
   const row = useStandaloneBotsStore((state) =>
     directoryRow(state.directory.model, botId),
@@ -92,7 +81,7 @@ const NO_CHANNEL_BACKGROUND: ChannelBackground = {
 
 /** The background chosen for a bot's channel, which its header and message area carry. */
 export function useChannelBackground(botId: string): ChannelBackground {
-  const swatch = useBotLook(botId)?.appearance.background ?? null;
+  const swatch = useBotLook(botId)?.background ?? null;
   if (swatch === null) return NO_CHANNEL_BACKGROUND;
   return {
     swatch,

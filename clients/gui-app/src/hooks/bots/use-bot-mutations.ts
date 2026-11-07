@@ -22,10 +22,6 @@ import type {
   BotConversationSendResponse,
 } from "@traycer/protocol/host/bot/conversation-schemas";
 import type {
-  DraftsPutBlobRequestV11,
-  DraftsPutBlobResponse,
-} from "@traycer/protocol/host/drafts/schemas";
-import type {
   HostRpcError,
   RequiredHostMethodVersion,
 } from "@traycer-clients/shared/host-transport/host-messenger";
@@ -158,7 +154,7 @@ export function useBotUpdateReplyModeMutation(
 }
 
 /**
- * The bot's picture, swatch or channel background, each key left out kept and
+ * The bot's icon, swatch or channel background, each key left out kept and
  * each `null` cleared. No toast: the panel states a refusal under the control.
  */
 export function useBotUpdateAppearanceMutation(
@@ -179,26 +175,6 @@ export function useBotUpdateAppearanceMutation(
         invalidateBotLists(queryClient);
       },
     },
-  });
-}
-
-/**
- * An uploaded picture's bytes, put on the host by their SHA-256 before
- * `bot.updateAppearance` names them; the host keeps them for the bot from
- * there. No toast: the panel states a refusal under the control.
- */
-export function useBotPicturePutMutation(
-  client: HostClient<HostRpcRegistry> | null,
-): UseMutationResult<
-  DraftsPutBlobResponse,
-  HostRpcError,
-  DraftsPutBlobRequestV11
-> {
-  return useHostMutation<HostRpcRegistry, "drafts.putBlob">({
-    client,
-    method: "drafts.putBlob",
-    mapVariables: (variables) => variables,
-    options: { mutationKey: botMutationKeys.putPicture() },
   });
 }
 

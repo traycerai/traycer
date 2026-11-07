@@ -188,7 +188,10 @@ describe("bot appearance on the wire", () => {
         ...APPEARANCE,
         mark: { kind: "creature", family: "ears", seed: 65_536 },
       },
-      { ...APPEARANCE, mark: { kind: "picture", blobRef: "XYZ" } },
+      {
+        ...APPEARANCE,
+        mark: { kind: "picture", blobRef: "a".repeat(64) },
+      },
     ]) {
       expect(
         botReadV11.responseSchema.safeParse({
@@ -201,7 +204,6 @@ describe("bot appearance on the wire", () => {
 
 describe("bot.updateAppearance request", () => {
   const request = botUpdateAppearanceV10.requestSchema;
-  const SHA = "a".repeat(64);
 
   it("keeps an absent field absent and a null field null", () => {
     expect(request.parse({ botId: BOT_A })).toEqual({ botId: BOT_A });
@@ -215,7 +217,7 @@ describe("bot.updateAppearance request", () => {
     ).toEqual({ botId: BOT_A, mark: null, swatch: null, background: null });
   });
 
-  it("accepts a creature, a picture and the swatch bounds", () => {
+  it("accepts a creature and the swatch bounds", () => {
     expect(
       request.parse({
         botId: BOT_A,
@@ -224,13 +226,9 @@ describe("bot.updateAppearance request", () => {
         background: 23,
       }).background,
     ).toBe(23);
-    expect(
-      request.parse({ botId: BOT_A, mark: { kind: "picture", blobRef: SHA } })
-        .mark,
-    ).toEqual({ kind: "picture", blobRef: SHA });
   });
 
-  it("refuses an out-of-range swatch or seed and a non-hex blob ref", () => {
+  it("refuses an out-of-range swatch or seed, an unknown family and a picture", () => {
     for (const bad of [
       { swatch: 24 },
       { background: 24 },
@@ -238,9 +236,7 @@ describe("bot.updateAppearance request", () => {
       { mark: { kind: "creature", family: "none", seed: 65_536 } },
       { mark: { kind: "creature", family: "none", seed: -1 } },
       { mark: { kind: "creature", family: "wings", seed: 1 } },
-      { mark: { kind: "picture", blobRef: "g".repeat(64) } },
-      { mark: { kind: "picture", blobRef: "A".repeat(64) } },
-      { mark: { kind: "picture", blobRef: "a".repeat(63) } },
+      { mark: { kind: "picture", blobRef: "a".repeat(64) } },
     ]) {
       expect(request.safeParse({ botId: BOT_A, ...bad }).success).toBe(false);
     }

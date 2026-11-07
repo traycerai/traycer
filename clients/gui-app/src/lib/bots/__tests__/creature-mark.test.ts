@@ -4,7 +4,9 @@
  * pixels at every avatar size.
  */
 import { describe, expect, it } from "vitest";
+import { BOT_CREATURE_SEED_MAX } from "@traycer/protocol/host/bot/schemas";
 import {
+  type CreatureChoice,
   type CreatureMark,
   type CreatureMarkSize,
   type CreatureSilhouette,
@@ -13,6 +15,8 @@ import {
   creatureMark,
   creatureSheet,
   drawCreatureMark,
+  nextCreatureSheet,
+  ownCreature,
 } from "@/lib/bots/creature-mark";
 
 const GRID = 5;
@@ -301,5 +305,124 @@ describe("the creature sheet", () => {
     expect(chosenCreatureMark(botId, second).rows).not.toEqual(
       chosenCreatureMark(botId, { ...own, family: second.family }).rows,
     );
+  });
+});
+
+describe("regenerating the sheet", () => {
+  const botIds = syntheticBotIds(40);
+
+  /** What a creature looks like: its silhouette and body rows. */
+  function lookOf(botId: string, choice: CreatureChoice): string {
+    const mark = chosenCreatureMark(botId, choice);
+    return `${mark.silhouette}:${mark.rows.join(",")}`;
+  }
+
+  /** A shown creature other than the sheet's first, as a person's choice. */
+  function currentOf(botId: string): CreatureChoice {
+    return creatureSheet(botId)[3];
+  }
+
+  it("names the bot's own creature, the sheet's first", () => {
+    for (const botId of botIds) {
+      expect(ownCreature(botId)).toEqual(creatureSheet(botId)[0]);
+    }
+  });
+
+  it("is the same for the same sheet and current creature every time", () => {
+    for (const botId of botIds) {
+      const first = creatureSheet(botId);
+      const current = currentOf(botId);
+      expect(nextCreatureSheet(botId, first, current)).toEqual(
+        nextCreatureSheet(botId, first, current),
+      );
+    }
+  });
+
+  it("offers twelve creatures, none drawn like another", () => {
+    for (const botId of botIds) {
+      const next = nextCreatureSheet(
+        botId,
+        creatureSheet(botId),
+        currentOf(botId),
+      );
+      expect(next).toHaveLength(CREATURE_SHEET_SIZE);
+      const looks = next.map((choice) => lookOf(botId, choice));
+      expect(new Set(looks).size).toBe(looks.length);
+    }
+  });
+
+  it("offers none drawn like one it replaces or like the creature shown now", () => {
+    for (const botId of botIds) {
+      const first = creatureSheet(botId);
+      const current = currentOf(botId);
+      const avoided = new Set(
+        [...first, current].map((choice) => lookOf(botId, choice)),
+      );
+      for (const choice of nextCreatureSheet(botId, first, current)) {
+        expect(avoided.has(lookOf(botId, choice)), botId).toBe(false);
+      }
+    }
+  });
+
+  it("starts after the last seed of the sheet it is given, however short it is", () => {
+    for (const botId of botIds) {
+      const previous: readonly CreatureChoice[] = [
+        { family: "none", seed: 100 },
+      ];
+      const next = nextCreatureSheet(botId, previous, currentOf(botId));
+      expect(next[0].seed).toBe(101);
+      for (const choice of next) {
+        expect(choice.seed).toBeGreaterThan(100);
+      }
+    }
+  });
+
+  it("offers each seed in the family its seed hashes to, so a choice regrows the same mask", () => {
+    for (const botId of botIds) {
+      for (const choice of nextCreatureSheet(
+        botId,
+        creatureSheet(botId),
+        currentOf(botId),
+      )) {
+        const stored = JSON.parse(JSON.stringify(choice)) as CreatureChoice;
+        expect(chosenCreatureMark(botId, stored)).toEqual(
+          chosenCreatureMark(botId, choice),
+        );
+        expect(chosenCreatureMark(botId, stored).silhouette).toBe(
+          choice.family,
+        );
+      }
+    }
+  });
+
+  it("never offers the same sheet twice in a row", () => {
+    for (const botId of botIds) {
+      const first = creatureSheet(botId);
+      const current = ownCreature(botId);
+      const second = nextCreatureSheet(botId, first, current);
+      const third = nextCreatureSheet(botId, second, current);
+      const seeds = (sheet: readonly CreatureChoice[]): number[] =>
+        sheet.map((choice) => choice.seed);
+      expect(seeds(second)).not.toEqual(seeds(first));
+      expect(seeds(third)).not.toEqual(seeds(second));
+      expect(seeds(third).some((seed) => seeds(second).includes(seed))).toBe(
+        false,
+      );
+    }
+  });
+
+  it("wraps past the largest seed to 1 and never offers the bot's own seed 0", () => {
+    for (const botId of botIds) {
+      const previous: readonly CreatureChoice[] = [
+        { family: "none", seed: BOT_CREATURE_SEED_MAX },
+      ];
+      // The shown creature is another one, so the bot's own is not avoided.
+      const next = nextCreatureSheet(botId, previous, currentOf(botId));
+      expect(next.length).toBeGreaterThan(0);
+      expect(next[0].seed).toBe(1);
+      for (const choice of next) {
+        expect(choice.seed).not.toBe(0);
+      }
+    }
   });
 });
