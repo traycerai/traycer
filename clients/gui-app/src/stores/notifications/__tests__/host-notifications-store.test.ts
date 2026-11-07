@@ -6,7 +6,7 @@ import {
 } from "@traycer/protocol/host/registry";
 import {
   hostNotificationsSubscribeClientFrameSchema,
-  type HostNotificationCloudEntryV27,
+  type HostNotificationCloudEntryV28,
   type HostNotificationsAttentionCursor,
   type HostNotificationsChronologicalCursor,
   type HostNotificationsSubscribeClientFrame,
@@ -55,7 +55,7 @@ function entry(
   id: string,
   updatedAt: number,
   readAt: number | null,
-): HostNotificationCloudEntryV27 {
+): HostNotificationCloudEntryV28 {
   return {
     id,
     updatedAt,
@@ -74,14 +74,14 @@ function entry(
   };
 }
 
-function promptEntry(id: string): HostNotificationCloudEntryV27 {
+function promptEntry(id: string): HostNotificationCloudEntryV28 {
   return promptOccurrence(id, 10);
 }
 
 function promptOccurrence(
   id: string,
   updatedAt: number,
-): HostNotificationCloudEntryV27 {
+): HostNotificationCloudEntryV28 {
   return {
     id,
     updatedAt,
@@ -112,7 +112,7 @@ function attentionCursor(
 }
 
 function defaultSummaryFor(
-  entries: ReadonlyArray<HostNotificationCloudEntryV27>,
+  entries: ReadonlyArray<HostNotificationCloudEntryV28>,
 ): HostNotificationsSummary {
   return {
     unreadCount: entries.filter((item) => item.readAt === null).length,
@@ -125,7 +125,7 @@ function defaultSummaryFor(
 }
 
 function applySimpleSnapshot(input: {
-  readonly entries: ReadonlyArray<HostNotificationCloudEntryV27>;
+  readonly entries: ReadonlyArray<HostNotificationCloudEntryV28>;
   readonly summary: HostNotificationsSummary;
   readonly recentCursor: HostNotificationsChronologicalCursor | null;
   readonly attentionNext: HostNotificationsAttentionCursor | null;
@@ -1620,7 +1620,7 @@ describe("host notifications store", () => {
 
   it("uses channelEmission as the only host-source display path", () => {
     const client = new MockWsStreamClient();
-    const displayed: Array<ReadonlyArray<HostNotificationCloudEntryV27>> = [];
+    const displayed: Array<ReadonlyArray<HostNotificationCloudEntryV28>> = [];
     const liveEntry = entry("live", 200, null);
 
     const close = openHostNotificationsStream(reconnectEngine, client, null, {
@@ -1664,12 +1664,12 @@ describe("host notifications store", () => {
 
   it("uses the latest feed copy for renderer channel emissions", () => {
     const client = new MockWsStreamClient();
-    const displayed: Array<ReadonlyArray<HostNotificationCloudEntryV27>> = [];
+    const displayed: Array<ReadonlyArray<HostNotificationCloudEntryV28>> = [];
     const staleEmissionEntry = entry("live", 200, null);
     if (staleEmissionEntry.kind !== "agent.stopped") {
       throw new Error("Expected an agent-stopped notification fixture");
     }
-    const richFeedEntry: HostNotificationCloudEntryV27 = {
+    const richFeedEntry: HostNotificationCloudEntryV28 = {
       ...staleEmissionEntry,
       updatedAt: 201,
       payload: {
@@ -1714,7 +1714,7 @@ describe("host notifications store", () => {
 
   it("ignores non-renderer channelEmission frames for in-app display", () => {
     const client = new MockWsStreamClient();
-    const displayed: Array<ReadonlyArray<HostNotificationCloudEntryV27>> = [];
+    const displayed: Array<ReadonlyArray<HostNotificationCloudEntryV28>> = [];
     const liveEntry = entry("webhook-live", 240, null);
 
     const close = openHostNotificationsStream(reconnectEngine, client, null, {

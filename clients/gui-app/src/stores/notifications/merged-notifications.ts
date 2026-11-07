@@ -98,7 +98,7 @@ import {
   type HostNotificationSeverity,
   type HostNotificationsAttentionCursor,
   type HostNotificationsChronologicalCursor,
-  type HostNotificationsCloudFeedRowV17,
+  type HostNotificationsCloudFeedRowV18,
   type HostNotificationsCloudFeedEntryRequest,
   type HostNotificationsEntityRef,
   type HostNotificationsSummary,
@@ -362,7 +362,7 @@ export function useMergedNotificationRows(): ReadonlyArray<MergedNotificationRow
         ...orderedGlobalEntries.map((entry) => rowFromGlobalEntry(entry)),
         ...Object.values(cloudRows)
           .filter(
-            (row): row is HostNotificationsCloudFeedRowV17 => row !== undefined,
+            (row): row is HostNotificationsCloudFeedRowV18 => row !== undefined,
           )
           .filter((row) => !isAutomaticAgentRecovery(row.entry))
           .map(rowFromCloudFeedRow),
@@ -582,7 +582,7 @@ function rowFromLocalFeedId(input: {
 
 function rowFromCloudFeedId(input: {
   readonly feedMode: "local" | "cloud" | "upgrade-required";
-  readonly cloudRow: HostNotificationsCloudFeedRowV17 | undefined;
+  readonly cloudRow: HostNotificationsCloudFeedRowV18 | undefined;
 }): MergedNotificationRow | null {
   if (
     input.feedMode !== "cloud" ||
@@ -1744,7 +1744,7 @@ export function useMergedNotificationsActions(): MergedNotificationsActions {
           if (cloudState.version !== cloudVersion) return;
           const fallbackEntryIds = Object.values(cloudState.rows)
             .filter(
-              (row): row is HostNotificationsCloudFeedRowV17 =>
+              (row): row is HostNotificationsCloudFeedRowV18 =>
                 row !== undefined && row.entry.readAt === null,
             )
             .map((row) => row.entryId);
@@ -2179,7 +2179,7 @@ export function rowFromGlobalEntry(
 }
 
 export function rowFromCloudFeedRow(
-  row: HostNotificationsCloudFeedRowV17,
+  row: HostNotificationsCloudFeedRowV18,
 ): MergedNotificationRow {
   const fallback = formatHostNotificationPresentation(row.entry);
   const title =
@@ -2389,6 +2389,7 @@ function isRowCompletePayload(
 /** Never shown: readers drop these rows. */
 const UNSHOWN_PAYLOAD_KINDS = [
   "notification_hooks_removed",
+  "readonly_access_retired",
   "worktree_deletion",
   "worktree_auto_cleanup",
   "secret_export_minted",
