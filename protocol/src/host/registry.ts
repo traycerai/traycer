@@ -798,6 +798,7 @@ import {
   hostGetRateLimitUsageDowngradeV6ToV4,
   hostGetRateLimitUsageDowngradeV6ToV5,
   providersConsumeRateLimitResetCreditV10,
+  providersReadModelRoutesV10,
   providersRefreshProfileStatusV10,
   providersRefreshProfileStatusV20,
   providersRefreshProfileStatusV30,
@@ -7431,6 +7432,19 @@ const HOST_RPC_REGISTRY_BASE_DEFINITION = {
       versions: {
         0: {
           contract: providersConsumeRateLimitResetCreditV10,
+          upgradeFromPreviousVersion: null,
+        },
+      },
+      downgradePathsFromLatest: {},
+    },
+  },
+  "providers.readModelRoutes": {
+    degrade: { kind: "unsupported" },
+    1: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: providersReadModelRoutesV10,
           upgradeFromPreviousVersion: null,
         },
       },

@@ -495,6 +495,7 @@ vi.mock("@/components/chat/composer/picker/use-composer-picker-items", () => ({
 }));
 vi.mock("@/hooks/composer/use-workspace-mention-roots", () => ({
   useLandingComposerMentionRoots: () => [],
+  useLandingRunWorkingDirectory: () => null,
 }));
 vi.mock("@/hooks/providers/use-provider-pack-gate", () => ({
   // Same treatment as `use-composer-dictation` above: a host-backed readiness

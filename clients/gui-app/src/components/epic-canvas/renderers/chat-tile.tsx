@@ -160,6 +160,7 @@ import type { EpicNodeRef } from "@/stores/epics/canvas/types";
 import {
   mentionRootsFromWorktreeBinding,
   mentionRootsFromWorktreeBindingAndIntent,
+  runDirectoryFromWorktreeBindingAndIntent,
   useWorkspaceMentionRoots,
   worktreeBindingIsFolderless,
 } from "@/hooks/composer/use-workspace-mention-roots";
@@ -2529,6 +2530,16 @@ function useChatTileSessionViewModel(
       ),
     [state.worktreeBinding, stagedChatWorktreeIntent],
   );
+  // The folder the next run starts its CLI in, for alias routes. The staged
+  // intent takes precedence over the binding, as for the roots above.
+  const composerRunWorkingDirectory = useMemo(
+    () =>
+      runDirectoryFromWorktreeBindingAndIntent(
+        state.worktreeBinding,
+        stagedChatWorktreeIntent ?? null,
+      ),
+    [state.worktreeBinding, stagedChatWorktreeIntent],
+  );
   const isFolderlessWorkspace = worktreeBindingIsFolderless(
     state.worktreeBinding,
   );
@@ -4283,6 +4294,7 @@ function useChatTileSessionViewModel(
       nodeId: node.id,
       isActive,
       mentionRoots: composerMentionRoots,
+      runWorkingDirectory: composerRunWorkingDirectory,
       fallbackToGlobalMentionRoots: !isFolderlessWorkspace,
       currentEpicId,
       onSubmitMessage: submitMessage,
@@ -4303,6 +4315,7 @@ function useChatTileSessionViewModel(
       node.id,
       isActive,
       composerMentionRoots,
+      composerRunWorkingDirectory,
       isFolderlessWorkspace,
       currentEpicId,
       submitMessage,

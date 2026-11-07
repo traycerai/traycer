@@ -623,6 +623,12 @@ export const HOST_METHOD_POLL_TABLE = {
     joinResponseTimeoutMs: RATE_LIMIT_USAGE_RESPONSE_TIMEOUT_MS,
     poll: null,
   },
+  // A cold answer waits on the same refresh-safe CLI handshake as a usage read.
+  "providers.readModelRoutes": {
+    ...LATEST_SCHEDULING,
+    joinResponseTimeoutMs: RATE_LIMIT_USAGE_RESPONSE_TIMEOUT_MS,
+    poll: null,
+  },
   "host.notifications.list": { ...LATEST_SCHEDULING, poll: null },
   "host.notificationHooks.status": { ...LATEST_SCHEDULING, poll: null },
   // Testing a hook sends a real notification.

@@ -6,6 +6,7 @@ import type {
   WorktreeIntent,
 } from "@traycer/protocol/host/worktree-schemas";
 import {
+  runDirectoryFromWorktreeBindingAndIntent,
   mentionRootsFromWorktreeIntent,
   mentionRootsFromWorktreeBinding,
   mentionRootsFromWorktreeBindingAndIntent,
@@ -465,5 +466,50 @@ describe("mentionRootsFromWorktreeBindingAndIntent", () => {
         worktreeIntent("/repo", "import", "/wt/feature"),
       ),
     ).toEqual([]);
+  });
+});
+
+describe("runDirectoryFromWorktreeBindingAndIntent", () => {
+  it("uses the primary binding and overlays staged intent", () => {
+    const local = binding([
+      bindingEntry({ workspacePath: "/other", isPrimary: false }),
+      bindingEntry({ workspacePath: "/repo" }),
+    ]);
+    const worktree = binding([bindingEntry({ worktreePath: "/checkout" })]);
+    expect(runDirectoryFromWorktreeBindingAndIntent(local, null)).toBe("/repo");
+    expect(runDirectoryFromWorktreeBindingAndIntent(worktree, null)).toBe(
+      "/checkout",
+    );
+    expect(
+      runDirectoryFromWorktreeBindingAndIntent(
+        worktree,
+        worktreeIntent("/repo", "local", null),
+      ),
+    ).toBe("/repo");
+    expect(
+      runDirectoryFromWorktreeBindingAndIntent(
+        local,
+        worktreeIntent("/repo", "import", "/imported"),
+      ),
+    ).toBe("/imported");
+    expect(
+      runDirectoryFromWorktreeBindingAndIntent(
+        local,
+        worktreeIntent("/repo", "create", null),
+      ),
+    ).toBeNull();
+  });
+
+  it("cannot determine a directory for empty or folderless bindings", () => {
+    expect(runDirectoryFromWorktreeBindingAndIntent(null, null)).toBeNull();
+    expect(
+      runDirectoryFromWorktreeBindingAndIntent(binding([]), null),
+    ).toBeNull();
+    expect(
+      runDirectoryFromWorktreeBindingAndIntent(
+        { ...binding([bindingEntry({})]), workspaceMode: "folderless" },
+        null,
+      ),
+    ).toBeNull();
   });
 });

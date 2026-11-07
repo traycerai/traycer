@@ -46,9 +46,16 @@ export function useWorkspaceMentionRoots(
   }, [fallbackToGlobalWhenEmpty, preferredRoots, workspaceFolders]);
 }
 
-export function useLandingComposerMentionRoots(
-  draftId: string | null,
-): ReadonlyArray<string> {
+/**
+ * The landing draft's folders (the host's registered folders when the draft
+ * names none) and the worktree intent staged for it, on the host it will
+ * create on.
+ */
+function useLandingFoldersAndIntent(draftId: string | null): {
+  readonly folders: ReadonlyArray<string>;
+  readonly stagedIntent: WorktreeIntent | null;
+  readonly activeHostId: string | null;
+} {
   const draftFolders = useLandingDraftStore((state) => {
     if (draftId === null) return null;
     return (
@@ -71,10 +78,22 @@ export function useLandingComposerMentionRoots(
   const stagedIntent = useWorktreeIntentStagingStore(
     (state) => state.intentByKey[stagingKeyId] ?? null,
   );
-  const preferredRoots = useMemo(() => {
-    const folders = draftFolders ?? globalFolders;
-    return mentionRootsFromWorktreeIntent(folders, stagedIntent);
-  }, [draftFolders, globalFolders, stagedIntent]);
+  return {
+    folders: draftFolders ?? globalFolders,
+    stagedIntent,
+    activeHostId,
+  };
+}
+
+export function useLandingComposerMentionRoots(
+  draftId: string | null,
+): ReadonlyArray<string> {
+  const { folders, stagedIntent, activeHostId } =
+    useLandingFoldersAndIntent(draftId);
+  const preferredRoots = useMemo(
+    () => mentionRootsFromWorktreeIntent(folders, stagedIntent),
+    [folders, stagedIntent],
+  );
 
   // `preferredRoots` already resolves the global folders (intent-aware) in the
   // base-landing case, so the global fallback inside `useWorkspaceMentionRoots`
@@ -145,6 +164,61 @@ export function mentionRootsFromWorktreeBindingAndIntent(
     folderIntentRoot,
   );
   return dedupeMentionRoots([...bindingRoots, ...stagedOnlyRoots]);
+}
+
+/**
+ * Where a folder's next run starts the CLI under its staged intent, or `null`
+ * for a worktree the send has not created yet.
+ */
+function folderIntentRunDirectory(entry: WorktreeFolderIntent): string | null {
+  if (entry.kind === "import") return entry.worktreePath;
+  return entry.kind === "local" ? entry.workspacePath : null;
+}
+
+/**
+ * The directory a chat's next run starts its CLI in: the host's run directory
+ * for the binding's declared primary entry (`entryRunDirectory`), after any
+ * staged intent for that folder. `null` when the client cannot know it - no
+ * binding entries yet (the host falls back to the task's folders), a
+ * folderless chat (the host's own task folder), or a primary staged onto a
+ * worktree not created yet.
+ */
+export function runDirectoryFromWorktreeBindingAndIntent(
+  binding: WorktreeBinding | null,
+  intent: WorktreeIntent | null,
+): string | null {
+  if (
+    binding === null ||
+    binding.workspaceMode === "folderless" ||
+    binding.entries.length === 0
+  ) {
+    return null;
+  }
+  const primary =
+    binding.entries.find((entry) => entry.isPrimary) ?? binding.entries[0];
+  const staged = intent?.entries.find(
+    (entry) => entry.workspacePath === primary.workspacePath,
+  );
+  if (staged !== undefined) return folderIntentRunDirectory(staged);
+  return primary.worktreePath !== null && primary.worktreePath.length > 0
+    ? primary.worktreePath
+    : primary.workspacePath;
+}
+
+/**
+ * {@link runDirectoryFromWorktreeBindingAndIntent} for a landing draft, whose
+ * new chat's binding takes the draft's first folder as its primary.
+ */
+export function useLandingRunWorkingDirectory(
+  draftId: string | null,
+): string | null {
+  const { folders, stagedIntent } = useLandingFoldersAndIntent(draftId);
+  if (folders.length === 0) return null;
+  const primary = folders[0];
+  const staged = stagedIntent?.entries.find(
+    (entry) => entry.workspacePath === primary,
+  );
+  return staged === undefined ? primary : folderIntentRunDirectory(staged);
 }
 
 function folderIntentRoot(entry: WorktreeFolderIntent): string {

@@ -30,6 +30,14 @@ vi.mock("@/hooks/providers/use-providers-list-query", () => ({
       ? { data: { providers: mocks.providers } }
       : { data: undefined },
 }));
+vi.mock("@/hooks/providers/use-providers-read-model-routes-query", () => ({
+  useProvidersReadModelRoutesQuery: () => ({
+    data: undefined,
+    dataUpdatedAt: 0,
+    refetch: () => Promise.resolve(undefined),
+  }),
+}));
+
 vi.mock("@/hooks/rate-limits/use-profile-usage-presentation", () => ({
   useProfileUsagePresentation: () => ({
     isHostReady: true,
@@ -133,6 +141,8 @@ function PreFeatureComposerHarness() {
     "authoritative",
   );
   const prompt = useProfileRateLimitSwitchPrompt({
+    workingDirectory: null,
+    hostId: null,
     harnessId: "claude",
     profileId,
     selectedModel: null,
@@ -191,6 +201,8 @@ describe("D6: pre-feature chat + multi-profile state", () => {
     ];
     const { result } = renderHook(() =>
       useProfileRateLimitSwitchPrompt({
+        workingDirectory: null,
+        hostId: null,
         harnessId: "claude",
         profileId: selectionFromChatRunSettings(legacyChatRunSettingsBlob())
           .profileId,
@@ -211,6 +223,8 @@ describe("D6: pre-feature chat + multi-profile state", () => {
     ];
     const { result } = renderHook(() =>
       useProfileRateLimitSwitchPrompt({
+        workingDirectory: null,
+        hostId: null,
         harnessId: "claude",
         profileId: selectionFromChatRunSettings(legacyChatRunSettingsBlob())
           .profileId,
