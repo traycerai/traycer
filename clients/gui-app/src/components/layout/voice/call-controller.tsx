@@ -308,6 +308,7 @@ export function CallController(): ReactNode {
         priority: "focused",
         text,
         delegationId: null,
+        retry: true,
         confirmWords: confirmationWords({
           botTitle: null,
           threadTitle: null,
@@ -1462,7 +1463,7 @@ function CallThreadWatch(props: {
   } | null>(null);
 
   const sayLine = useCallback(
-    (kind: string, text: string, onDelivered: (() => void) | null): string => {
+    (kind: string, text: string, onSettled: (() => void) | null): string => {
       lineSerialRef.current += 1;
       const id = `${kind}:${threadId}:${lineSerialRef.current}`;
       scheduler.enqueue({
@@ -1470,13 +1471,14 @@ function CallThreadWatch(props: {
         priority: "focused",
         text,
         delegationId: null,
+        retry: kind !== "hold",
         confirmWords: confirmationWords({
           botTitle: null,
           threadTitle: null,
           text,
         }),
-        onDelivered,
-        onGivenUp: null,
+        onDelivered: onSettled,
+        onGivenUp: onSettled,
       });
       return id;
     },
@@ -1604,6 +1606,7 @@ function CallThreadWatch(props: {
         priority: "focused",
         text,
         delegationId: null,
+        retry: true,
         confirmWords: confirmationWords({
           botTitle: null,
           threadTitle: null,

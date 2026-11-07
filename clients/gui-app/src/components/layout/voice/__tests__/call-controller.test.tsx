@@ -1523,6 +1523,28 @@ describe("holding the floor while the bot works", () => {
     expect(appends()).toEqual([[CALL_HOLD_LINE, null]]);
   });
 
+  it("does not retry a hold when the vendor says an unconfirmed acknowledgement (simulated time)", async () => {
+    const chat = await joinOpenThread([]);
+    hearVoiceWithLevelDetection();
+    act(() =>
+      fake.activity.set(threadActivity("t-open", "replying", "typed-request")),
+    );
+    await advance(CALL_HOLD_DELAY_MS);
+    expect(appends()).toEqual([[CALL_HOLD_LINE, null]]);
+    voiceSays("One moment.");
+    await advance(CONFIRM_WINDOW_MS);
+    expect(holds()).toBe(1);
+    voiceSays("One moment.");
+    await advance(CONFIRM_WINDOW_MS);
+    expect(holds()).toBe(1);
+    land(chat, [botRow("r1", "Build passed.", 200)]);
+    await settle();
+    expect(appendedTexts()).toEqual([CALL_HOLD_LINE, "Build passed."]);
+    voiceSays("Build passed.");
+    await advance(CONFIRM_WINDOW_MS * 2);
+    expect(appendedTexts()).toEqual([CALL_HOLD_LINE, "Build passed."]);
+  });
+
   it("keeps a spent hold across a lost activity reading for the same request (simulated time)", async () => {
     await joinOpenThread([]);
     act(() =>
