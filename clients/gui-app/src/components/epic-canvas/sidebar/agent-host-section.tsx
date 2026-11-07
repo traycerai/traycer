@@ -339,6 +339,7 @@ function HostActions(props: {
               "explicit",
               "direct_ui",
             ),
+            "user",
           );
         }}
       >

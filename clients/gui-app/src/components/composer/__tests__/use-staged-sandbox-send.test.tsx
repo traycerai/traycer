@@ -1,3 +1,4 @@
+import type { NestedFocusProvenance } from "@/lib/epic-nested-focus-navigation";
 import type { SandboxVerbOutcome } from "@/hooks/sandboxes/use-sandbox-verb-mutation";
 import type { SandboxLifecycleVerb } from "@traycer/protocol/host/sandbox-control";
 import { sandboxMutationKeys } from "@/lib/query-keys";
@@ -322,7 +323,10 @@ function listCreatedAwake(): void {
 }
 
 function Harness(props: {
-  readonly openTerminal: (target: TerminalLaunchTarget) => void;
+  readonly openTerminal: (
+    target: TerminalLaunchTarget,
+    provenance: NestedFocusProvenance,
+  ) => void;
 }) {
   const send = useStagedSandboxSend({
     surfaceKey: SURFACE,
@@ -345,7 +349,12 @@ function Harness(props: {
 let latestSend: StagedSandboxSend | null = null;
 let latestRunner: StagedSandboxRunner | null = null;
 
-function mount(openTerminal: (target: TerminalLaunchTarget) => void): void {
+function mount(
+  openTerminal: (
+    target: TerminalLaunchTarget,
+    provenance: NestedFocusProvenance,
+  ) => void,
+): void {
   render(
     <QueryClientProvider client={new QueryClient()}>
       <Harness openTerminal={openTerminal} />
@@ -409,16 +418,22 @@ afterEach(() => {
 describe("useStagedSandboxSend's setup line", () => {
   it("opens a folderless terminal on the new host from the Booting step", () => {
     stageCreated("booting", null);
-    const openTerminal = vi.fn<(target: TerminalLaunchTarget) => void>();
+    const openTerminal =
+      vi.fn<
+        (
+          target: TerminalLaunchTarget,
+          provenance: NestedFocusProvenance,
+        ) => void
+      >();
     mount(openTerminal);
 
     fireEvent.click(screen.getByTestId("sandbox-setup-line-toggle"));
     fireEvent.click(screen.getByTestId("sandbox-setup-booting-open-terminal"));
 
-    expect(openTerminal).toHaveBeenCalledWith({
-      hostId: NEW_HOST,
-      cwd: "/home/sandbox",
-    });
+    expect(openTerminal).toHaveBeenCalledWith(
+      { hostId: NEW_HOST, cwd: "/home/sandbox" },
+      "user",
+    );
   });
 
   it("repairs the settings on the new host, then resumes the wait", () => {
