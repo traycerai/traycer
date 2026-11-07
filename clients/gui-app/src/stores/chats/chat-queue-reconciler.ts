@@ -826,7 +826,9 @@ function worktreeEntryLabel(
  * full tuple every time is noise that buries the one field that moved, and a
  * send whose settings still match needs no clause at all.
  */
-const DRIFT_LABELS: Record<keyof ChatRunSettings | "accountContext", string> = {
+// Binding is provenance: its account key is never shown; the selector's typed refusal surfaces a mismatch.
+type VisibleRunSetting = Exclude<keyof ChatRunSettings, "profileBinding">;
+const DRIFT_LABELS: Record<VisibleRunSetting | "accountContext", string> = {
   harnessId: "harness",
   model: "model",
   permissionMode: "permission mode",
@@ -886,14 +888,9 @@ function runSettingsDrift(
   current: ChatRunSettings | null,
 ): ReadonlyArray<string> {
   if (sent === null || current === null) return [];
-  // Keyed by `keyof ChatRunSettings`, NOT `Record<string, ...>`. The earlier
-  // shape validated value TYPES only - it never required every field - so the
-  // comment claiming a new setting would be forced into the comparison was
-  // false, and a new field would have gone uncompared in silence. This shape
-  // fails to COMPILE when one is missing, which is what that claim was
-  // supposed to buy.
+  // Every visible run setting must be classified when the tuple grows.
   const values: Record<
-    keyof ChatRunSettings,
+    VisibleRunSetting,
     readonly [string | null, string | null]
   > = {
     harnessId: [sent.harnessId, current.harnessId],
@@ -932,7 +929,7 @@ function accountDrift(
 function namedDrift(
   values: Partial<
     Record<
-      keyof ChatRunSettings | "accountContext",
+      VisibleRunSetting | "accountContext",
       readonly [string | null, string | null]
     >
   >,

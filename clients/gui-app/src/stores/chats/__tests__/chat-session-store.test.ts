@@ -1378,6 +1378,39 @@ describe("createChatSessionStore", () => {
     );
   });
 
+  it("updates the current composer when only the carried profile binding changes", () => {
+    const harness = createHarness();
+    const first: ChatRunSettings = {
+      ...SETTINGS,
+      profileId: "work",
+      profileBinding: {
+        kind: "key",
+        key: {
+          providerId: "codex",
+          accountId: "first-synthetic-key",
+          organizationId: null,
+        },
+      },
+    };
+    const next: ChatRunSettings = {
+      ...first,
+      profileBinding: {
+        kind: "key",
+        key: {
+          providerId: "codex",
+          accountId: "second-synthetic-key",
+          organizationId: null,
+        },
+      },
+    };
+
+    harness.handle.store.getState().setCurrentComposerSettings(first);
+    harness.handle.store.getState().setCurrentComposerSettings(next);
+
+    expect(harness.handle.store.getState().currentComposerSettings).toBe(next);
+    harness.handle.dispose();
+  });
+
   it("threads deliveryPolicy onto the send frame (Cmd+Enter after_safe_point)", () => {
     const harness = createHarness();
     const callbacks = harness.callbacks();
