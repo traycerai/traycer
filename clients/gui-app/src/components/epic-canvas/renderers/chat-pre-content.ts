@@ -145,8 +145,6 @@ export interface ChatTilePreContentFrame {
    * offline.
    */
   readonly reachability: HostReachability;
-  /** See `ChatPreContentInput.cloneAllowed`. */
-  readonly cloneAllowed: boolean;
   /** See `ChatPreContentInput.hasReadySession`. */
   readonly hasReadySession: boolean;
   /**
@@ -281,12 +279,6 @@ export interface ChatPreContentInput {
   readonly hostLabel: string | null;
   /** `hostIsBehindClient` over the two app versions. */
   readonly hostBehindClient: boolean;
-  /**
-   * Whether the offline strip above this body offers Clone agent - the same
-   * role gate as `ChatDeadTileBanner`'s `cloneAllowed`, so the body never
-   * points at a button the strip does not draw.
-   */
-  readonly cloneAllowed: boolean;
   /**
    * Whether this client holds a ready live session to the host
    * (`useRemoteSessionPollReadiness`). It is firsthand proof the host is up,
@@ -697,7 +689,7 @@ function hostGoneDetail(
   // Says what to do on that machine and nothing about its power: a lease
   // reads offline whether the machine is off or only unreachable from here.
   const openThere = `Open Traycer on ${host}`;
-  return axes.strip === "offline" && input.cloneAllowed
+  return axes.strip === "offline"
     ? `${openThere}, or continue here as a new agent.`
     : `${openThere}.`;
 }

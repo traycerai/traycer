@@ -96,7 +96,6 @@ function FailedChatLine(props: { readonly summary: SandboxSummary }) {
     { kind: "failed", sandbox: props.summary },
     {
       reachable: false,
-      canEdit: true,
       ownedByViewer: true,
       environmentOwned: true,
     },

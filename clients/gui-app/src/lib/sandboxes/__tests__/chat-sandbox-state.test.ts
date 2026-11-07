@@ -12,13 +12,12 @@ const SANDBOX = sandboxSummaryFixture({
   displayName: "e2e-sbx-p1",
 });
 
-/** An owner, a team member, a collaborator and a viewer of the same chat. */
+/** An owner, a team member and a collaborator of the same chat. */
 const ROLES: ReadonlyArray<readonly [string, ChatSandboxViewer]> = [
   [
     "owner",
     {
       reachable: false,
-      canEdit: true,
       ownedByViewer: true,
       environmentOwned: false,
     },
@@ -27,7 +26,6 @@ const ROLES: ReadonlyArray<readonly [string, ChatSandboxViewer]> = [
     "team member",
     {
       reachable: false,
-      canEdit: true,
       ownedByViewer: false,
       environmentOwned: true,
     },
@@ -36,17 +34,7 @@ const ROLES: ReadonlyArray<readonly [string, ChatSandboxViewer]> = [
     "collaborator",
     {
       reachable: false,
-      canEdit: true,
       ownedByViewer: false,
-      environmentOwned: false,
-    },
-  ],
-  [
-    "viewer",
-    {
-      reachable: false,
-      canEdit: false,
-      ownedByViewer: true,
       environmentOwned: false,
     },
   ],
@@ -148,7 +136,6 @@ describe("resolveChatSandbox", () => {
     ["owner", "wake"],
     ["team member", "wake"],
     ["collaborator", "ordinary"],
-    ["viewer", "ordinary"],
   ] as const)(
     "puts a resting sandbox with its configuration in the footer, and gives the %s the %s composer",
     (role, composer) => {

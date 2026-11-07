@@ -302,14 +302,13 @@ vi.mock("@/hooks/agent/use-host-reachability", async (importOriginal) => {
 const sandboxSurface = vi.hoisted(
   (): {
     state: ChatSandboxState;
-    role: "owner" | "editor" | "viewer" | null;
     sources: {
       taskHosts: TaskHostsView;
       /** `null`: the list read failed, or is disabled, with nothing cached. */
       sandboxes: SandboxSummary[] | null;
       entry: HostDirectoryEntry | null;
     } | null;
-  } => ({ state: { kind: "none" }, role: null, sources: null }),
+  } => ({ state: { kind: "none" }, sources: null }),
 );
 vi.mock("@/hooks/sandboxes/use-chat-sandbox-state", async (importOriginal) => {
   const actual =
@@ -397,10 +396,6 @@ vi.mock("@/hooks/host/use-host-directory-entry", async (importOriginal) => {
 vi.mock("@/hooks/sandboxes/use-sandbox-verb-mutation", () => ({
   useSandboxVerb: () => ({ mutate: () => undefined, isPending: false }),
 }));
-vi.mock("@/lib/epic-selectors", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("@/lib/epic-selectors")>()),
-  useEpicPermissionRole: () => sandboxSurface.role,
-}));
 vi.mock("@/hooks/chats/use-cloud-chat-transcript", () => ({
   useCloudChatTranscript: () => mockUseCloudChatTranscript(),
 }));
@@ -484,7 +479,6 @@ vi.mock("@/components/epic-canvas/renderers/chat-tile", async () => {
           ownerName={ownerName}
           cloneTargetLabel={cloneTargetLabel}
           environmentOwned={ownership.environmentOwned}
-          cloneAllowed
           showsPublishedCopy={props.showsPublishedCopy}
           onClone={() => undefined}
           continueTargetLabel={null}
@@ -751,7 +745,6 @@ afterEach(() => {
   environments.pool = false;
   environments.list = undefined;
   sandboxSurface.state = { kind: "none" };
-  sandboxSurface.role = null;
   sandboxSurface.sources = null;
   resetHostConnectionRegistryForTest();
   useAuthStore.setState(useAuthStore.getInitialState(), true);
@@ -2325,7 +2318,6 @@ describe("PublishedChatTile - the sandbox's own state", () => {
 
   it("passes a resting sandbox to the session view so the composer can send, with no offline banner and no lock sentence", () => {
     sandboxSurface.state = RESTING;
-    sandboxSurface.role = "editor";
     signInAsOwner();
     mountCopy();
 
@@ -2333,17 +2325,6 @@ describe("PublishedChatTile - the sandbox's own state", () => {
     expect(call?.restingSandbox).toEqual(RESTING);
     expect(call?.readOnlyNotice).toBeNull();
     expect(screen.queryByTestId("published-chat-dead-tile-chat-1")).toBeNull();
-  });
-
-  it("withholds the resting send from a viewer role, who keeps the lock sentence", () => {
-    sandboxSurface.state = RESTING;
-    sandboxSurface.role = "viewer";
-    signInAsOwner();
-    mountCopy();
-
-    const call = chatTileSessionViewCalls.at(-1);
-    expect(call?.restingSandbox).toBeUndefined();
-    expect(call?.readOnlyNotice).not.toBeNull();
   });
 
   it("shows no clone banner for a sandbox that is awake but cannot be reached; its footer says so", () => {

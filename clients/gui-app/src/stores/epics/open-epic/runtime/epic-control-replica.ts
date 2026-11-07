@@ -25,6 +25,7 @@
  * runtime is what sequences planes against each other, which is exactly the
  * split the shared contract asks for.
  */
+import { grantedRole } from "@traycer/protocol/common/permission-role";
 import type { EpicArtifactSync } from "@traycer/protocol/host/epic/status-subscribe";
 import type { PermissionRole } from "@traycer/protocol/host/epic/unary-schemas";
 import type {
@@ -144,18 +145,6 @@ export interface EpicControlEffects {
    * reattach offer goes with it.
    */
   clearLocalWritePathsAndCoverage(): void;
-  /**
-   * Downgraded from a writable role to viewer: fail the local write paths
-   * closed, but KEEP coverage - the host still holds what it acknowledged, and
-   * under-reporting that would claim unsynced edits are safe.
-   */
-  clearLocalWritePaths(): void;
-  /**
-   * Re-seed after a viewer downgrade. The doc this client holds may contain
-   * writes the host will now refuse, so the authoritative state has to be
-   * re-fetched rather than reconciled against.
-   */
-  requestFreshSnapshot(): void;
   /**
    * A cloud-status frame landed: drain both write paths and re-emit root
    * awareness, but only once the transport is open AND this cycle has its root
@@ -725,14 +714,9 @@ export function createEpicControlReplica(
       publish({ permissionRole: null, accessLost: true });
       return;
     }
-    const previous = sink.read().permissionRole;
-    if (previous !== null && previous !== "viewer" && role === "viewer") {
-      effects.clearLocalWritePaths();
-      currentRole = role;
-      publish({ permissionRole: role });
-      effects.requestFreshSnapshot();
-      return;
-    }
+    // Every role that remains may write, so a role MOVE (owner to editor)
+    // keeps every local write path valid. Losing the role entirely is the only
+    // downgrade left, and it returned above.
     currentRole = role;
     publish({ permissionRole: role });
   }
@@ -817,7 +801,7 @@ export function createEpicControlReplica(
           // ~8s) or fail open for a stale-cached editor. Snapshot is
           // authoritative.
           publish({
-            permissionRole: event.meta.permissionRole,
+            permissionRole: grantedRole(event.meta.permissionRole),
             accessLost:
               event.meta.permissionRole === null
                 ? sink.read().accessLost
@@ -1110,8 +1094,8 @@ export function createEpicControlReplica(
         publish({ migration: ERROR_MIGRATION_SLICE });
         return;
       case "not-allowed":
-        // The epic needs a major migration this caller may not perform (viewer
-        // / sub-editor). The host did not start one and there is nothing to
+        // The epic needs a major migration this caller may not perform (a
+        // sub-editor role). The host did not start one and there is nothing to
         // retry, so this is a distinct terminal state from `error`: the modal
         // shows a fixed "ask an owner/editor" message.
         publish({ migration: NOT_ALLOWED_MIGRATION_SLICE });

@@ -123,7 +123,7 @@ function defaultsCardBody(
   const shape = configurationStageShape(catalogue, ready?.defaults ?? null);
   if (
     environment === null ||
-    environment.role === "viewer" ||
+    environment.role === null ||
     ready === null ||
     shape === null
   ) {
@@ -242,15 +242,15 @@ function DefaultsHeading(props: {
 }
 
 /**
- * Who can change a team's defaults: `editors can change them` for one who
- * can, and for a viewer the editors and admins by name once the roster has
- * answered.
+ * Who can change a team's defaults: `editors can change them` for a reader
+ * who can, and for one who cannot the editors and admins by name once the
+ * roster has answered.
  */
 function EditorsClause(props: {
   readonly environment: SandboxDefaultsEnvironment | null;
 }): ReactNode {
   const viewerEnvironmentId =
-    props.environment !== null && props.environment.role === "viewer"
+    props.environment !== null && props.environment.role === null
       ? props.environment.environmentId
       : null;
   const members = useEnvironmentMembersList(
@@ -262,7 +262,7 @@ function EditorsClause(props: {
     viewerEnvironmentId === null || members.isPending || members.isError
       ? []
       : members.members.flatMap((member) =>
-          member.effectiveRole !== "viewer" &&
+          member.effectiveRole !== null &&
           member.inviteState !== "pending" &&
           member.displayName !== null
             ? [member.displayName]
