@@ -69,7 +69,7 @@ export class ComposedPlayer {
 
   private reportFailure(
     generation: number,
-    stage: "unavailable" | "load" | "play",
+    stage: "unavailable" | "load" | "play" | "end",
   ): void {
     if (generation !== this.generation) return;
     // Error messages and stacks can contain signed URLs; do not log them.
@@ -84,6 +84,7 @@ export class ComposedPlayer {
     try {
       this.playBuffer(buffer, generation);
     } catch {
+      if (generation !== this.generation) return;
       this.startedAt = null;
       this.bus = null;
       this.voice = null;
@@ -91,11 +92,18 @@ export class ComposedPlayer {
     }
   }
 
+  private finish(generation: number): void {
+    try {
+      this.onEnd();
+    } catch {
+      this.reportFailure(generation, "end");
+    }
+  }
+
   private playBuffer(buffer: AudioBuffer, generation: number): void {
     if (this.position >= buffer.duration) {
       this.position = 0;
-      this.generation += 1;
-      this.onEnd();
+      this.finish(++this.generation);
       return;
     }
     this.startedAt = this.output.currentTime();
@@ -112,9 +120,9 @@ export class ComposedPlayer {
         this.bus = null;
         this.startedAt = null;
         this.position = 0;
-        this.generation += 1;
+        const endedGeneration = ++this.generation;
         if (this.held) this.endedWhileHeld = true;
-        else this.onEnd();
+        else this.finish(endedGeneration);
       },
     );
   }
@@ -163,7 +171,9 @@ export class ComposedPlayer {
     this.held = false;
     if (this.endedWhileHeld) {
       this.endedWhileHeld = false;
-      this.onEnd();
+      const generation = this.generation;
+      this.finish(generation);
+      if (generation !== this.generation) return;
     }
     if (this.fadeEndsAt !== null) {
       this.fadeTimer = window.setTimeout(

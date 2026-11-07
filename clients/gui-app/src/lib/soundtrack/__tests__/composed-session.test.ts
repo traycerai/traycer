@@ -50,11 +50,12 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
-function openSession(options: { missingLoader?: boolean }) {
+function openSession(options: { missingLoader?: boolean; resumeAt?: number }) {
   const output = new RecordingOutput();
   const stems = new FakeStems(1);
   const loadRecording = vi.fn(() => Promise.resolve(makeAudioBuffer(10, 10)));
   const duck = vi.fn<(seconds: number) => void>();
+  const random = vi.fn(() => 0);
   const ports: SoundtrackPorts = {
     output,
     stems: options.missingLoader
@@ -86,13 +87,16 @@ function openSession(options: { missingLoader?: boolean }) {
       },
     },
     ports,
-    random: () => 0,
+    random,
     director: new StaticDirector(),
-    resumePositions: {},
+    resumePositions:
+      options.resumeAt === undefined
+        ? {}
+        : { home: { trackName: "piece", elapsedSeconds: options.resumeAt } },
     onSounding: () => undefined,
     onResumeRefused: () => undefined,
   });
-  return { session, output, loadRecording, duck };
+  return { session, output, loadRecording, duck, random };
 }
 
 it("plays a complete recording through the session and preserves the heard position across a pause", async () => {
@@ -346,6 +350,79 @@ it("handles a playback failure when a held load is released", async () => {
     track: "piece",
     recording: "master",
     stage: "play",
+  });
+  expect(JSON.stringify(warn.mock.calls)).not.toContain("secret-token");
+  session.end();
+});
+
+it("isolates a completion failure and does not expose the error", async () => {
+  const warn = vi.spyOn(appLogger, "warn").mockReturnValue(undefined);
+  const { session, output, random } = openSession({});
+  session.setSignals(failureSignals);
+  await vi.advanceTimersByTimeAsync(1000);
+  const first = output.recordings[0];
+  random.mockImplementationOnce(() => {
+    throw new Error("https://example.test/audio?token=secret-token");
+  });
+  expect(() => first.ended()).not.toThrow();
+  expect(warn).toHaveBeenCalledWith("[soundtrack] could not play a recording", {
+    track: "piece",
+    recording: "master",
+    stage: "end",
+  });
+  expect(JSON.stringify(warn.mock.calls)).not.toContain("secret-token");
+  session.next();
+  await vi.advanceTimersByTimeAsync(100);
+  expect(output.recordings).toHaveLength(2);
+  first.ended();
+  expect(output.recordings[1].cancelled).toBe(false);
+  session.end();
+});
+
+it("isolates completion failure when the resumed position is past the recording", async () => {
+  const warn = vi.spyOn(appLogger, "warn").mockReturnValue(undefined);
+  const { session, output, loadRecording, random } = openSession({
+    resumeAt: 20,
+  });
+  let resolveLoad: (buffer: AudioBuffer) => void = () => undefined;
+  loadRecording.mockImplementation(
+    () =>
+      new Promise((resolve) => {
+        resolveLoad = resolve;
+      }),
+  );
+  session.setSignals(failureSignals);
+  await vi.advanceTimersByTimeAsync(1000);
+  random.mockImplementationOnce(() => {
+    throw new Error("secret-token");
+  });
+  resolveLoad(makeAudioBuffer(10, 10));
+  await vi.advanceTimersByTimeAsync(0);
+  expect(output.recordings).toHaveLength(0);
+  expect(warn).toHaveBeenCalledWith("[soundtrack] could not play a recording", {
+    track: "piece",
+    recording: "master",
+    stage: "end",
+  });
+  expect(JSON.stringify(warn.mock.calls)).not.toContain("secret-token");
+  session.end();
+});
+
+it("isolates a held completion failure when play releases it", async () => {
+  const warn = vi.spyOn(appLogger, "warn").mockReturnValue(undefined);
+  const { session, output, random } = openSession({});
+  session.setSignals(failureSignals);
+  await vi.advanceTimersByTimeAsync(1000);
+  session.pause();
+  output.recordings[0].ended();
+  random.mockImplementationOnce(() => {
+    throw new Error("secret-token");
+  });
+  expect(() => session.play()).not.toThrow();
+  expect(warn).toHaveBeenCalledWith("[soundtrack] could not play a recording", {
+    track: "piece",
+    recording: "master",
+    stage: "end",
   });
   expect(JSON.stringify(warn.mock.calls)).not.toContain("secret-token");
   session.end();
