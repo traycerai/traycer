@@ -159,6 +159,9 @@ describe("<ProviderNativeMemoryGroup />", () => {
       <ProviderNativeMemoryGroup state={providerState({})} />,
     );
     expect(nativeSwitch().getAttribute("aria-checked")).toBe("true");
+    expect(
+      screen.queryByTestId("provider-native-memory-enable-only"),
+    ).toBeNull();
 
     rerender(
       <ProviderNativeMemoryGroup
@@ -166,6 +169,11 @@ describe("<ProviderNativeMemoryGroup />", () => {
       />,
     );
     expect(nativeSwitch().getAttribute("aria-checked")).toBe("false");
+    // Still enforceable (nativeMemorySupported stays true via the fixture
+    // default) - the switch covers this, never the enable-only action.
+    expect(
+      screen.queryByTestId("provider-native-memory-enable-only"),
+    ).toBeNull();
   });
 
   it("labels the switch with the provider's display name", () => {
@@ -223,5 +231,110 @@ describe("<ProviderNativeMemoryGroup />", () => {
     expect(nativeSwitch().hasAttribute("disabled")).toBe(true);
     fireEvent.click(nativeSwitch());
     expect(mutateMock).not.toHaveBeenCalled();
+  });
+
+  // The regression: a stored OFF against an executable that cannot enforce it
+  // used to render NOTHING - `setSupported && readable && enforceable` was one
+  // gate - which trapped the user with no control at all and no route back
+  // (`providers.settingsFile.resetProvider` answers `readable` for a
+  // well-formed row, so it never clears this). The fix splits `!enforceable`
+  // into its own branch that renders an enable-only recovery action instead.
+  describe("the trapped state: nativeMemorySupported: false with a stored OFF", () => {
+    function enableOnlyButton(): HTMLElement {
+      return screen.getByTestId("provider-native-memory-enable-only");
+    }
+
+    it("renders the enable-only action, never the switch", () => {
+      render(
+        <ProviderNativeMemoryGroup
+          state={providerState({
+            nativeMemorySupported: false,
+            nativeMemory: false,
+          })}
+        />,
+      );
+
+      expect(enableOnlyButton()).toBeTruthy();
+      expect(screen.queryByTestId("provider-native-memory-switch")).toBeNull();
+    });
+
+    it("writes {harnessId, nativeMemory: true} on click, and only that", () => {
+      render(
+        <ProviderNativeMemoryGroup
+          state={providerState({
+            nativeMemorySupported: false,
+            nativeMemory: false,
+          })}
+        />,
+      );
+
+      fireEvent.click(enableOnlyButton());
+
+      expect(mutateMock.mock.calls.length).toBe(1);
+      const [variables] = mutateMock.mock.calls[0];
+      expect(variables).toEqual({
+        harnessId: CLAUDE_HARNESS_ID,
+        nativeMemory: true,
+      });
+    });
+
+    it("offers nothing when the stored value is already ON - there is no stored choice left to clear", () => {
+      render(
+        <ProviderNativeMemoryGroup
+          state={providerState({
+            nativeMemorySupported: false,
+            nativeMemory: true,
+          })}
+        />,
+      );
+
+      expect(screen.queryByTestId("provider-native-memory-group")).toBeNull();
+      expect(
+        screen.queryByTestId("provider-native-memory-enable-only"),
+      ).toBeNull();
+      expect(screen.queryByTestId("provider-native-memory-switch")).toBeNull();
+    });
+
+    it("clears the action immediately on click, through the same echo the switch uses, without waiting for a refetch", () => {
+      render(
+        <ProviderNativeMemoryGroup
+          state={providerState({
+            nativeMemorySupported: false,
+            nativeMemory: false,
+          })}
+        />,
+      );
+
+      fireEvent.click(enableOnlyButton());
+
+      // providersUpdatedAt never advanced - this is the pre-refetch instant -
+      // yet the trapped state is already gone because `value` reads the echo.
+      expect(screen.queryByTestId("provider-native-memory-group")).toBeNull();
+      expect(
+        screen.queryByTestId("provider-native-memory-enable-only"),
+      ).toBeNull();
+    });
+
+    it("restores the action when the write is refused", () => {
+      render(
+        <ProviderNativeMemoryGroup
+          state={providerState({
+            nativeMemorySupported: false,
+            nativeMemory: false,
+          })}
+        />,
+      );
+
+      fireEvent.click(enableOnlyButton());
+      expect(
+        screen.queryByTestId("provider-native-memory-enable-only"),
+      ).toBeNull();
+
+      act(() => {
+        mutateMock.mock.calls[0][1].onError();
+      });
+
+      expect(enableOnlyButton()).toBeTruthy();
+    });
   });
 });

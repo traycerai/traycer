@@ -157,6 +157,20 @@ export const PROVIDERS = defineSettingsSection("providers", {
     availableWhen: alwaysAvailable,
     keywords: ["memory", "memories", "recall", "save"],
   },
+  // Drawn in place of the switch above when memories are off and the selected
+  // executable cannot enforce that. The switch is gone in that state, so this
+  // is the only way left to clear the stored choice - see
+  // `provider-native-memory-group.tsx`.
+  nativeMemoryUnenforceable: {
+    kind: "row",
+    group: "nativeMemory",
+    search: { contributesTo: "nativeMemory" },
+    label: "Memories are off",
+    description:
+      "The selected executable cannot enforce this, so sessions will not start. Choose a supported executable, or turn memories on.",
+    availableWhen: alwaysAvailable,
+    keywords: ["memory", "memories", "recall", "save"],
+  },
   // Claude Code's General tab only: the name Traycer gives a Claude session it
   // starts on the Terminal interface. Host-gated (`config.sessionNames.*`).
   sessionName: {
