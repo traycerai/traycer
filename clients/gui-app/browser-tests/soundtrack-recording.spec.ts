@@ -24,11 +24,16 @@ interface RecordRequest {
     readonly forMs: number;
   } | null;
   readonly stallAfterStartMs: number | null;
+  readonly failSliceRead: number | null;
 }
 
 interface Recorded {
   readonly outcome:
-    | { readonly kind: "saved"; readonly durationSeconds: number }
+    | {
+        readonly kind: "saved";
+        readonly durationSeconds: number;
+        readonly reason: string;
+      }
     | { readonly kind: "failed" | "empty" };
   readonly audioBytes: number;
   readonly logLines: readonly Record<string, unknown>[];
@@ -36,6 +41,8 @@ interface Recorded {
   readonly decodedSeconds: number;
   readonly onsetOffsetsMs: readonly number[];
   readonly wavFrames: number | null;
+  readonly sliceBytesBeforeFailure: number | null;
+  readonly slicesReadAfterFailure: number | null;
 }
 
 // About four seconds of tone fits the 20 s per-test budget.
@@ -48,6 +55,8 @@ const COMPRESSED_RESIDUAL_MIN_MS = -0.5;
 const COMPRESSED_RESIDUAL_MAX_MS = 11;
 // Far past the residual bound, so a time origin taken after the stall fails.
 const START_STALL_MS = 250;
+// The second, so the file still holds the first slice and its WebM header.
+const FAILED_SLICE = 2;
 
 test.beforeEach(async ({ page }) => {
   await page.goto(fixture("soundtrack-recording"));
@@ -108,6 +117,7 @@ test("a lossless recording decodes, matches its length in frames, and lines up w
     seconds: RECORD_SECONDS,
     busy: null,
     stallAfterStartMs: null,
+    failSliceRead: null,
   });
 
   expectSavedAndDecoded(recorded, "lossless");
@@ -122,6 +132,7 @@ test("a lossless recording keeps its frames and its timing while the page is bus
     seconds: RECORD_SECONDS,
     busy: { everyMs: 300, forMs: 250 },
     stallAfterStartMs: null,
+    failSliceRead: null,
   });
 
   expectSavedAndDecoded(recorded, "lossless");
@@ -148,6 +159,7 @@ test("a compressed recording decodes and its tones sit at one steady offset from
     seconds: RECORD_SECONDS,
     busy: null,
     stallAfterStartMs: null,
+    failSliceRead: null,
   });
 
   expectSavedAndDecoded(recorded, "compressed");
@@ -162,8 +174,27 @@ test("a compressed recording keeps that offset when the page stalls as the recor
     seconds: RECORD_SECONDS,
     busy: null,
     stallAfterStartMs: START_STALL_MS,
+    failSliceRead: null,
   });
 
   expectSavedAndDecoded(recorded, "compressed");
   expectCompressedTiming(recorded);
+});
+
+test("a compressed recording whose slice cannot be read stops as failed, and keeps no audio from after the failure", async ({
+  page,
+}) => {
+  const recorded = await record(page, {
+    quality: "compressed",
+    seconds: RECORD_SECONDS,
+    busy: null,
+    stallAfterStartMs: null,
+    failSliceRead: FAILED_SLICE,
+  });
+
+  expect(recorded.outcome).toMatchObject({ kind: "saved", reason: "failed" });
+  // The recorder's last slice came after the failure, and was read.
+  expect(recorded.slicesReadAfterFailure).toBeGreaterThan(0);
+  // None of it reached the file: only the slices before the failed one did.
+  expect(recorded.audioBytes).toBe(recorded.sliceBytesBeforeFailure);
 });

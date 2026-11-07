@@ -92,8 +92,13 @@ class OpusCapture implements MixCapture {
   private readonly destination: MediaStreamAudioDestinationNode;
   private readonly recorder: MediaRecorder;
   private disconnect: (() => void) | null = null;
-  /** Each slice's bytes are read in turn, so they arrive in order. */
+  /**
+   * Each slice's bytes are read in turn, so they arrive in order. Every link
+   * settles: a slice that cannot be read fails the capture instead.
+   */
   private delivered: Promise<void> = Promise.resolve();
+  /** Set once `onError` is raised; no slice is delivered after it. */
+  private failed = false;
 
   constructor(context: AudioContext, tap: MixTap) {
     this.context = context;
@@ -109,17 +114,29 @@ class OpusCapture implements MixCapture {
 
   start(handlers: MixCaptureHandlers): void {
     const { recorder } = this;
+    const fail = (error: unknown): void => {
+      if (this.failed) return;
+      this.failed = true;
+      this.release();
+      handlers.onError(error);
+    };
     recorder.addEventListener("dataavailable", (event) => {
       const slice = event.data;
       this.delivered = this.delivered.then(async () => {
-        handlers.onChunk(new Uint8Array(await slice.arrayBuffer()));
+        try {
+          const bytes = new Uint8Array(await slice.arrayBuffer());
+          // Whether it waited in line or was being read, a slice after the
+          // failure goes nowhere.
+          if (!this.failed) handlers.onChunk(bytes);
+        } catch (error) {
+          fail(error);
+        }
       });
     });
     recorder.addEventListener(
       "error",
       (event) => {
-        this.release();
-        handlers.onError(Reflect.get(event, "error"));
+        fail(Reflect.get(event, "error"));
       },
       { once: true },
     );
@@ -132,8 +149,7 @@ class OpusCapture implements MixCapture {
     try {
       recorder.start(OPUS_TIMESLICE_MS);
     } catch (error) {
-      this.release();
-      handlers.onError(error);
+      fail(error);
       return;
     }
     // Read in the same task as the start, not at the `start` event: the event

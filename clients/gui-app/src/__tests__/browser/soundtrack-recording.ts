@@ -51,6 +51,11 @@ interface RecordRequest {
    * time origin from the start and not from the event; null holds nothing.
    */
   readonly stallAfterStartMs: number | null;
+  /**
+   * Which of the compressed recorder's slices, counting from 1, cannot be
+   * read, as a blob the browser has lost would be; null reads every one.
+   */
+  readonly failSliceRead: number | null;
 }
 
 interface Recorded {
@@ -63,6 +68,15 @@ interface Recorded {
   readonly onsetOffsetsMs: readonly number[];
   /** Interleaved 16-bit stereo frames the WAV holds; null for WebM. */
   readonly wavFrames: number | null;
+  /** With `failSliceRead`: the bytes of the slices read before the failed one. */
+  readonly sliceBytesBeforeFailure: number | null;
+  /** With `failSliceRead`: how many slices were read after the failed one. */
+  readonly slicesReadAfterFailure: number | null;
+}
+
+interface SliceReads {
+  readonly before: number[];
+  after: number;
 }
 
 const track: VariableTrack = {
@@ -193,6 +207,79 @@ function stallAfterRecorderStart(forMs: number): () => void {
   };
 }
 
+/**
+ * Until the answer is called, the `index`th blob read rejects; the reads before
+ * and after it are counted. Only the compressed capture reads blobs here.
+ */
+function failBlobRead(index: number): {
+  readonly reads: SliceReads;
+  readonly restore: () => void;
+} {
+  const { prototype } = Blob;
+  const read: unknown = Reflect.get(prototype, "arrayBuffer");
+  if (typeof read !== "function") throw new Error("No Blob.arrayBuffer");
+  const reads: SliceReads = { before: [], after: 0 };
+  let calls = 0;
+  Reflect.set(
+    prototype,
+    "arrayBuffer",
+    function failingRead(this: Blob): unknown {
+      calls += 1;
+      if (calls === index) {
+        return Promise.reject(new Error("The slice could not be read"));
+      }
+      if (calls < index) reads.before.push(this.size);
+      else reads.after += 1;
+      const bytes: unknown = Reflect.apply(read, this, []);
+      return bytes;
+    },
+  );
+  return {
+    reads,
+    restore: () => {
+      Reflect.set(prototype, "arrayBuffer", read);
+    },
+  };
+}
+
+interface Faults {
+  /** The blob reads counted, with `failSliceRead`; null without it. */
+  readonly reads: SliceReads | null;
+  /** Ends the stall after the recorder's start, once the recording listens. */
+  readonly unstall: () => void;
+  /** Ends the failing blob read, once the recording has stopped. */
+  readonly restore: () => void;
+}
+
+/** The stall and the failing read a request asks for, set up now. */
+function installFaults(request: RecordRequest): Faults {
+  const unstall =
+    request.stallAfterStartMs === null
+      ? () => undefined
+      : stallAfterRecorderStart(request.stallAfterStartMs);
+  if (request.failSliceRead === null) {
+    return { reads: null, unstall, restore: () => undefined };
+  }
+  const { reads, restore } = failBlobRead(request.failSliceRead);
+  return { reads, unstall, restore };
+}
+
+/** What `failSliceRead` asked for, counted; nulls when it asked for nothing. */
+function sliceCounts(
+  reads: SliceReads | null,
+): Pick<Recorded, "sliceBytesBeforeFailure" | "slicesReadAfterFailure"> {
+  if (reads === null) {
+    return { sliceBytesBeforeFailure: null, slicesReadAfterFailure: null };
+  }
+  return {
+    sliceBytesBeforeFailure: reads.before.reduce(
+      (sum, bytes) => sum + bytes,
+      0,
+    ),
+    slicesReadAfterFailure: reads.after,
+  };
+}
+
 function deviceSampleRate(): Promise<number> {
   const probe = new AudioContext();
   const { sampleRate } = probe;
@@ -228,13 +315,10 @@ async function record(request: RecordRequest): Promise<Recorded> {
     onProgress: () => undefined,
     onStopped: resolveStopped,
   });
-  const unstall =
-    request.stallAfterStartMs === null
-      ? null
-      : stallAfterRecorderStart(request.stallAfterStartMs);
+  const faults = installFaults(request);
   void recorder.start();
   await listening;
-  unstall?.();
+  faults.unstall();
   const player = new TrackPlayer({
     track,
     output: ports.output,
@@ -261,6 +345,7 @@ async function record(request: RecordRequest): Promise<Recorded> {
   if (busyTimer !== null) window.clearInterval(busyTimer);
   recorder.stop("switch");
   const outcome = await stopped;
+  faults.restore();
   player.stop(0.01);
   ports.close(0);
 
@@ -306,6 +391,7 @@ async function record(request: RecordRequest): Promise<Recorded> {
     decodedSeconds: decoded.duration,
     onsetOffsetsMs,
     wavFrames: request.quality === "lossless" ? (audio.length - 44) / 4 : null,
+    ...sliceCounts(faults.reads),
   };
 }
 
