@@ -3,6 +3,7 @@ import { reissueStemManifest } from "./manifest";
 import { MIX_TUNING } from "./mix-tuning";
 import { WebAudioDimFilter, WebAudioLevel, WebAudioOutput } from "./output";
 import type { SoundtrackPorts } from "./session";
+import { SoundtrackLogRelay } from "./session-log";
 import { ManifestStemSource, type StemManifest } from "./stems";
 
 // Closing or suspending cuts what is still on its way to the speakers, which
@@ -12,11 +13,11 @@ const DRAIN_AFTER_FADE_SECONDS = 0.5;
 
 /**
  * Opens the audio device: speakers ← volume ← a chime's duck ← low-pass ← the
- * mix. Only ever call this from a gesture of the person's, because the
- * `AudioContext` constructor can block the thread for 20 seconds on a Mac with
- * no output (see `lib/notifications/notification-chime.ts`), and because a
- * context made without one starts suspended. It throws where there is no audio
- * to open.
+ * mix. A recording takes its copy where the low-pass hands over. Only ever call
+ * this from a gesture of the person's, because the `AudioContext` constructor
+ * can block the thread for 20 seconds on a Mac with no output (see
+ * `lib/notifications/notification-chime.ts`), and because a context made without
+ * one starts suspended. It throws where there is no audio to open.
  */
 export function openWebAudioPorts(
   stems: StemManifest,
@@ -38,6 +39,19 @@ export function openWebAudioPorts(
     if (suspending !== null) window.clearTimeout(suspending);
     suspending = null;
   };
+  const clockStarting = new Set<() => void>();
+  const clockStopped = new Set<() => void>();
+  // Counts the starts asked for, so a stop that takes hold can tell whether one
+  // came after it.
+  let clockStarts = 0;
+  const listenTo =
+    (listeners: Set<() => void>) =>
+    (listener: () => void): (() => void) => {
+      listeners.add(listener);
+      return () => {
+        listeners.delete(listener);
+      };
+    };
   return {
     output,
     stems: new ManifestStemSource(stems, output, reissueStemManifest),
@@ -50,22 +64,45 @@ export function openWebAudioPorts(
     duck: (chimeSeconds) => {
       level.duck(chimeSeconds);
     },
+    log: new SoundtrackLogRelay(),
+    captureMix: async (quality) => {
+      const { openMixCapture } = await import("./mix-capture");
+      return openMixCapture(
+        context,
+        (node) => dim.tap(node),
+        {
+          onStart: listenTo(clockStarting),
+          onStop: listenTo(clockStopped),
+        },
+        quality,
+      );
+    },
     pause: () => {
       level.setAudible(false);
       suspending = window.setTimeout(
         () => {
           suspending = null;
-          void context.suspend().catch((error: unknown) => {
-            appLogger.warn("[soundtrack] could not suspend the audio context", {
-              error: describeLogError(error),
-            });
-          });
+          const starts = clockStarts;
+          void context.suspend().then(
+            () => {
+              if (starts !== clockStarts) return;
+              for (const listener of clockStopped) listener();
+            },
+            (error: unknown) => {
+              appLogger.warn(
+                "[soundtrack] could not suspend the audio context",
+                { error: describeLogError(error) },
+              );
+            },
+          );
         },
         (MIX_TUNING.pauseFadeSeconds + DRAIN_AFTER_FADE_SECONDS) * 1000,
       );
     },
     resume: (onRefused) => {
       cancelSuspending();
+      clockStarts += 1;
+      for (const listener of clockStarting) listener();
       void context.resume().catch((error: unknown) => {
         appLogger.warn("[soundtrack] could not resume the audio context", {
           error: describeLogError(error),

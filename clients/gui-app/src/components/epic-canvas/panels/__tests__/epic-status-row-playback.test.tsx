@@ -235,6 +235,7 @@ describe("the playback buttons in the status row", () => {
         readManifest: () => MANIFEST,
         openPorts: openFakePorts,
         random: () => 0,
+        recordingChannel: () => null,
       });
       other.getState().enable();
       await advance(0);

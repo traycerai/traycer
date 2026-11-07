@@ -835,6 +835,7 @@ describe("GeneralSettingsPanel", () => {
         mobileApp: false,
         phoneLayout: false,
         soundtrackOffered: false,
+        soundtrackRecordingOffered: false,
         soundtrackOn: false,
       };
       expect(isAgentRolesRowAvailable(context)).toBe(false);
@@ -864,6 +865,7 @@ describe("GeneralSettingsPanel", () => {
         mobileApp: false,
         phoneLayout: false,
         soundtrackOffered: false,
+        soundtrackRecordingOffered: false,
         soundtrackOn: false,
       };
       expect(isAgentRolesRowAvailable(context)).toBe(true);
@@ -880,6 +882,7 @@ describe("GeneralSettingsPanel", () => {
         mobileApp: true,
         phoneLayout: true,
         soundtrackOffered: false,
+        soundtrackRecordingOffered: false,
         soundtrackOn: false,
       };
       expect(isVoiceInputRowAvailable(context)).toBe(false);
