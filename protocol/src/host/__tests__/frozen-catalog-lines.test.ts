@@ -176,9 +176,8 @@ const LIVE_FROZEN_EXPORTS = {
   // records what a line served, so undoing the growth that triggered it does
   // not un-freeze it.
   "providers.list@7.0": providersListResponseSchemaV70,
-  // The head line holds v7.0's old job, and today that is `providers.list@10.0`
-  // below: it names the LIVE schema, so the next attempt to grow it fails there
-  // first.
+  // The current registry line has its own binding. Released rows below retain
+  // their preimages independently of additions to that current line.
   //
   // What that red means depends on whether the line has SHIPPED, and the two
   // answers are opposites - read this before reaching for either:
@@ -269,12 +268,8 @@ const LIVE_FROZEN_EXPORTS = {
   // 9.2 froze when `commandcode` opened 10.0 (`1.5.0` shipped 9.2); its dump
   // did not change by the freeze.
   "providers.list@9.2": providersListResponseSchemaV92,
-  // The head line, holding 9.2's old job: it names the LIVE schema, so the next
-  // attempt to grow the provider state fails here first. Note what that guard
-  // could NOT do while 9.1 held this job - it moves with the live schema by
-  // design, so the two markers landing on the live capability regenerated it
-  // without complaint. The rows above are the ones that refuse; a line earns
-  // one the moment a host advertising it is published.
+  // A published line keeps its preimage even after a later line opens. Shared
+  // nested leaves must be frozen before the current provider state grows.
   // 10.0 froze when MCP remedies and notices opened 10.1: its MCP rows, notices
   // and `applyRemedy` capability scopes are the pre-remedy shape, so a released
   // 10.0 reader never sees a field it cannot spell. Its dump did not change by
@@ -299,8 +294,8 @@ const LIVE_FROZEN_EXPORTS = {
   // 10.6 froze when `chatsFollow` opened 10.7. Its dump did not change by the
   // freeze.
   "providers.list@10.6": providersListResponseSchemaV106Preimage,
-  // The head line: it names the LIVE schema, so the next growth of the provider
-  // state fails here first.
+  // 10.7 froze when credential identity and home facts opened 10.8. This row
+  // keeps the released preimage; the current line has its own registry binding.
   "providers.list@10.7": providersListResponseSchemaV107Preimage,
   // 1.0 is hand-frozen at the three-code failure arm when `macos-ineligible`
   // opened 1.1; its dump did not change by the freeze.

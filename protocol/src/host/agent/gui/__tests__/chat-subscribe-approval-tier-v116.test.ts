@@ -118,7 +118,7 @@ describe("chat.subscribe registry: 1.16 installed below the 1.17 through 1.22 li
       openChatSubscribeWindowedServerFrameSchema,
     );
     // 1.32 froze when 1.33 widened the accumulated-change `artifact` tag's
-    // kind above it; 1.33 binds the live windowed schema.
+    // kind above it; 1.33 retains that widened tag in its frozen frames.
     expect(chatSubscribeV132.serverFrameSchema).not.toBe(
       openChatSubscribeWindowedServerFrameSchema,
     );
@@ -128,7 +128,7 @@ describe("chat.subscribe registry: 1.16 installed below the 1.17 through 1.22 li
     // 1.35's frozen frames; 1.37 froze when 1.38 added `opencodeLineHeld`
     // above it; 1.38 froze when 1.39 added the notification-digest queue
     // item; 1.39 froze when 1.40 added the steer restart reasons to
-    // `actionAck`; 1.40 binds the live windowed schema.
+    // `actionAck`; 1.40 retains those reasons in its frozen frames.
     expect(chatSubscribeV133.serverFrameSchema).not.toBe(
       openChatSubscribeWindowedServerFrameSchema,
     );
