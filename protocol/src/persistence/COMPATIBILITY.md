@@ -154,6 +154,15 @@ rebuilding a block from its known fields. A historical fork that rebuilt a
 block may already have lost the key in that copy, and this change does not
 repair that copy or change an older published renderer's label.
 
+### Logged change: provider dispatch provenance
+
+Chat-sync 1.14 and `chat.subscribe` 1.44 add optional `providerSelection` to a
+durable chat event. Existing records omit it and still parse. An older
+chat-sync reader keeps the complete event in its raw envelope even though its
+interpreted event lacks the key, so publication preserves the provenance. Both
+head and shard move together; no reader floor changes. Older stream subscribers
+receive the frozen event without the key through the negotiated-minor projection.
+
 ## Frozen epic-schema guard
 
 `epic-schema-surface-compat.test.ts` resolves the latest epic schema through the

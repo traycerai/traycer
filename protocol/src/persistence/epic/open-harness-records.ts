@@ -28,7 +28,10 @@
  * `openHarnessIdSchema`; its leaf table is wider (it reopens the run settings
  * and the notice kind too) because its reader never drives the chat.
  */
-import { chatEventSchema } from "@traycer/protocol/persistence/epic/chat-events";
+import {
+  chatEventSchema,
+  chatEventSchemaPreProviderSelection,
+} from "@traycer/protocol/persistence/epic/chat-events";
 import { chatSchema } from "@traycer/protocol/persistence/epic/chat";
 import {
   approvalBlockSchema,
@@ -471,6 +474,12 @@ export const openMessageSchemaPreDelivery = lazySchema(() =>
 
 export const openChatEventSchema = lazySchema(() =>
   chatEventSchema.extend({
+    actor: openUserMessageSenderSchema.nullable(),
+  }),
+);
+/** The pre-1.44 wire event, with the actor vocabulary used since 1.22. */
+export const openChatEventSchemaPreProviderSelection = lazySchema(() =>
+  chatEventSchemaPreProviderSelection.extend({
     actor: openUserMessageSenderSchema.nullable(),
   }),
 );
