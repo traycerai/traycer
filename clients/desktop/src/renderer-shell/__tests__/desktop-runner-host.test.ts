@@ -212,6 +212,10 @@ function buildFakeBridge(
       kind: "network-error" as const,
       detail: "test",
     }),
+    setSlackAppDms: async () => ({
+      kind: "network-error" as const,
+      detail: "test",
+    }),
     mintTeamHostInstallToken: async () => ({
       kind: "network-error" as const,
       detail: "test",

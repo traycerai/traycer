@@ -58,7 +58,10 @@ import {
   type SlackAppReadResult,
   type SlackAppWriteResult,
 } from "@traycer-clients/shared/host-client/slack-app";
-import type { SlackAppRegisterRequest } from "@traycer/protocol/host/slack-app";
+import type {
+  SlackAppDmsRequest,
+  SlackAppRegisterRequest,
+} from "@traycer/protocol/host/slack-app";
 import {
   TEAM_HOST_UNAVAILABLE_IN_STAGING,
   type TeamHostInstallTokenResult,
@@ -3404,6 +3407,16 @@ export class AuthService {
     const bearer = this.cloudBearer();
     if (bearer === null) return { kind: "unauthorized" };
     return this.runnerHost.disconnectSlackApp(bearer, botId);
+  }
+
+  async setSlackAppDms(
+    request: SlackAppDmsRequest,
+  ): Promise<SlackAppWriteResult> {
+    const refusal = this.slackAppRefusal();
+    if (refusal !== null) return refusal;
+    const bearer = this.cloudBearer();
+    if (bearer === null) return { kind: "unauthorized" };
+    return this.runnerHost.setSlackAppDms(bearer, request);
   }
 
   /**
