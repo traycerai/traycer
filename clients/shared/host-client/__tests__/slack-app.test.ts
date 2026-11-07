@@ -9,6 +9,7 @@ import {
 } from "vitest";
 import type {
   SlackAppRegisterRequest,
+  SlackAppDmsRequest,
   SlackAppView,
 } from "@traycer/protocol/host/slack-app";
 import {
@@ -17,6 +18,7 @@ import {
   mintSlackAppInstallUrlViaHttp,
   readSlackAppViaHttp,
   registerSlackAppViaHttp,
+  setSlackAppDmsViaHttp,
 } from "../slack-app";
 
 const BASE = "https://server.example.test";
@@ -34,6 +36,7 @@ const APP: SlackAppView = {
   teamName: "Acme",
   botUserId: "U01",
   installedAt: 1_791_000_000_000,
+  dmsEnabled: true,
 };
 
 const REGISTER_REQUEST: SlackAppRegisterRequest = {
@@ -43,6 +46,8 @@ const REGISTER_REQUEST: SlackAppRegisterRequest = {
   clientSecret: "client-secret-value",
   signingSecret: "signing-secret-value",
 };
+
+const DMS_REQUEST: SlackAppDmsRequest = { botId: BOT_ID, dmsEnabled: false };
 
 function jsonResponse(status: number, body: unknown): Response {
   return new Response(JSON.stringify(body), {
@@ -112,6 +117,12 @@ describe("Slack app transport requests", () => {
       body: { app: APP },
       sent: REGISTER_REQUEST,
     },
+    {
+      route: "dms",
+      call: () => setSlackAppDmsViaHttp(BASE, BEARER, null, DMS_REQUEST),
+      body: { app: { ...APP, dmsEnabled: false } },
+      sent: DMS_REQUEST,
+    },
   ])(
     "POSTs $route to its own path with the bearer and the JSON body",
     async ({ route, call, body, sent }) => {
@@ -170,6 +181,26 @@ describe("Slack app transport results", () => {
 
     await expect(
       registerSlackAppViaHttp(BASE, BEARER, null, REGISTER_REQUEST),
+    ).resolves.toEqual({ kind: "ok", app: APP });
+  });
+
+  it("returns the app the DM setting write left", async () => {
+    const app = { ...APP, dmsEnabled: false };
+    stubFetch(async () => jsonResponse(200, { app }));
+
+    await expect(
+      setSlackAppDmsViaHttp(BASE, BEARER, null, DMS_REQUEST),
+    ).resolves.toEqual({ kind: "ok", app });
+  });
+
+  it("defaults a released server's omitted DM setting and ignores a later field", async () => {
+    const { dmsEnabled: _dmsEnabled, ...legacyApp } = APP;
+    stubFetch(async () =>
+      jsonResponse(200, { app: { ...legacyApp, serverAddedMember: "later" } }),
+    );
+
+    await expect(
+      readSlackAppViaHttp(BASE, BEARER, null, BOT_ID),
     ).resolves.toEqual({ kind: "ok", app: APP });
   });
 
@@ -234,6 +265,29 @@ describe("Slack app transport results", () => {
 
     await expect(
       readSlackAppViaHttp(BASE, BEARER, null, BOT_ID),
+    ).resolves.toEqual({
+      kind: "network-error",
+      detail: "the request never completed (TypeError)",
+    });
+  });
+
+  it("maps a DM setting refusal and transport failure like the other writes", async () => {
+    stubFetch(async () =>
+      jsonResponse(404, {
+        statusCode: 404,
+        error: "Not found",
+        code: "NOT_FOUND",
+      }),
+    );
+    await expect(
+      setSlackAppDmsViaHttp(BASE, BEARER, null, DMS_REQUEST),
+    ).resolves.toEqual({ kind: "refused", status: 404, code: "NOT_FOUND" });
+
+    stubFetch(async () => {
+      throw new TypeError("Failed to fetch");
+    });
+    await expect(
+      setSlackAppDmsViaHttp(BASE, BEARER, null, DMS_REQUEST),
     ).resolves.toEqual({
       kind: "network-error",
       detail: "the request never completed (TypeError)",

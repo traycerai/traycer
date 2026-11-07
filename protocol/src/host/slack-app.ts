@@ -3,7 +3,7 @@ import { lazySchema } from "@traycer/protocol/framework/lazy-schema";
 
 /**
  * Client-side mirror of traycer-server's Slack app routes
- * (`POST /api/slack/apps/{register,read,manifest,install-url,disconnect}`),
+ * (`POST /api/slack/apps/{register,read,manifest,install-url,disconnect,dms}`),
  * the calls a bot's members make with their own bearer to connect the bot to
  * Slack from its settings.
  *
@@ -61,6 +61,15 @@ export interface SlackAppBotRequest {
 export const slackAppBotRequestSchema: z.ZodType<SlackAppBotRequest> =
   lazySchema(() => z.object({ botId: botIdSchema }));
 
+/** `POST /api/slack/apps/dms`: whether a person's DM to the bot is admitted. */
+export interface SlackAppDmsRequest {
+  readonly botId: string;
+  readonly dmsEnabled: boolean;
+}
+
+export const slackAppDmsRequestSchema: z.ZodType<SlackAppDmsRequest> =
+  lazySchema(() => z.object({ botId: botIdSchema, dmsEnabled: z.boolean() }));
+
 /**
  * `registered`: credentials stored, never installed. `installed`: a
  * workspace holds the app. `uninstalled`: it was installed and Slack or a
@@ -85,6 +94,11 @@ export interface SlackAppView {
   readonly botUserId: string | null;
   /** Epoch ms of the latest install; kept through an uninstall. */
   readonly installedAt: number | null;
+  /**
+   * Whether a person's DM to the bot is admitted. A server from before the
+   * setting sends none, and admits every DM.
+   */
+  readonly dmsEnabled: boolean;
 }
 
 export const slackAppViewSchema: z.ZodType<SlackAppView> = lazySchema(() =>
@@ -97,6 +111,7 @@ export const slackAppViewSchema: z.ZodType<SlackAppView> = lazySchema(() =>
     teamName: z.string().nullable(),
     botUserId: slackIdSchema.nullable(),
     installedAt: z.number().int().nullable(),
+    dmsEnabled: z.boolean().default(true),
   }),
 );
 
@@ -108,7 +123,7 @@ export interface SlackAppReadResponse {
 export const slackAppReadResponseSchema: z.ZodType<SlackAppReadResponse> =
   lazySchema(() => z.object({ app: slackAppViewSchema.nullable() }));
 
-/** `register` and `disconnect`: the app as the write left it. */
+/** `register`, `disconnect` and `dms`: the app as the write left it. */
 export interface SlackAppResponse {
   readonly app: SlackAppView;
 }
@@ -148,7 +163,7 @@ export const slackAppRefusalBodySchema: z.ZodType<SlackAppRefusalBody> =
 
 /** This deployment has no public base URL for Slack (`503`): manifest and install. */
 export const SLACK_APP_REFUSAL_NOT_CONFIGURED = "slack_not_configured";
-/** The bot has no Slack app registered (`404`): install URL and disconnect. */
+/** The bot has no Slack app registered (`404`): install URL, disconnect and the DM setting. */
 export const SLACK_APP_REFUSAL_APP_NOT_FOUND = "slack_app_not_found";
 /** The app id is registered to another bot (`409`): register. */
 export const SLACK_APP_REFUSAL_APP_TAKEN = "slack_app_taken";
