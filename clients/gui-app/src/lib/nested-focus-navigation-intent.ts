@@ -135,8 +135,37 @@ export function getNestedRouteApplicationDeferralMs(
  * one.
  */
 let explicitIntentSeq = 0;
-const lastExplicitIntentSeqByTab = new Map<string, number>();
+const tabSignalsByTab = new Map<string, TabFocusSignals>();
 const explicitIntentListeners = new Set<() => void>();
+
+/**
+ * The two things a tab can learn about a pending artifact-focus request,
+ * stamped from the one shared sequence so they can be ORDERED against each
+ * other: whichever is higher is what happened last.
+ *
+ * They are separate stamps rather than one tagged value because a consumer
+ * samples them through `useSyncExternalStore`, which needs a snapshot that is
+ * referentially stable between renders - two numbers are, a fresh object is
+ * not.
+ *
+ * Why the return needs a stamp of its own, rather than being the ABSENCE of a
+ * choice: an absent stamp is already what a dropped one looks like, and
+ * {@link forgetExplicitNestedFocusIntents} drops one on every root
+ * `StrictMode` replay. If returning to a request were read off absence, a
+ * dev-mode replay would revive a request the person had deliberately left -
+ * and the auto-open's spent key, which exists to stop exactly that, would
+ * also have to be undone on a signal that cannot tell the two apart.
+ */
+interface TabFocusSignals {
+  /** The person chose a tile in this tab. Retires a waiting request. */
+  readonly choseTileSeq: number;
+  /**
+   * The person navigated back to a waiting request's own entry. Reverses a
+   * retirement, so the artifact they asked for is not permanently cancelled by
+   * their own Back.
+   */
+  readonly returnedToRequestSeq: number;
+}
 
 /**
  * How many tabs' stamps are kept, most recently stamped first.
@@ -188,16 +217,47 @@ export function markExplicitNestedFocusIntent(
   epicId: string,
   tabId: string,
 ): void {
+  stampTabSignal(epicId, tabId, (seq, previous) => ({
+    choseTileSeq: seq,
+    returnedToRequestSeq: previous?.returnedToRequestSeq ?? 0,
+  }));
+}
+
+/**
+ * Record that a traversal landed back on a waiting request's OWN entry - the
+ * request's `focusArtifactId` with no tile named.
+ *
+ * Only `observeNestedFocusTraversals` calls this, because only a committed
+ * history destination proves it: the person moved, and where they moved to is
+ * the request itself. See {@link TabFocusSignals} for why this is its own
+ * stamp rather than the clearing of the other.
+ */
+export function markReturnedToNestedFocusRequest(
+  epicId: string,
+  tabId: string,
+): void {
+  stampTabSignal(epicId, tabId, (seq, previous) => ({
+    choseTileSeq: previous?.choseTileSeq ?? 0,
+    returnedToRequestSeq: seq,
+  }));
+}
+
+function stampTabSignal(
+  epicId: string,
+  tabId: string,
+  next: (seq: number, previous: TabFocusSignals | undefined) => TabFocusSignals,
+): void {
   explicitIntentSeq += 1;
   const key = pendingKey(epicId, tabId);
+  const previous = tabSignalsByTab.get(key);
   // Re-inserted, not updated in place, so the map's iteration order is recency
   // and the eviction below drops the tab stamped longest ago.
-  lastExplicitIntentSeqByTab.delete(key);
-  lastExplicitIntentSeqByTab.set(key, explicitIntentSeq);
-  while (lastExplicitIntentSeqByTab.size > MAX_TRACKED_TABS) {
-    const oldest = lastExplicitIntentSeqByTab.keys().next();
+  tabSignalsByTab.delete(key);
+  tabSignalsByTab.set(key, next(explicitIntentSeq, previous));
+  while (tabSignalsByTab.size > MAX_TRACKED_TABS) {
+    const oldest = tabSignalsByTab.keys().next();
     if (oldest.done === true) break;
-    lastExplicitIntentSeqByTab.delete(oldest.value);
+    tabSignalsByTab.delete(oldest.value);
   }
   notifyExplicitIntentListeners();
 }
@@ -220,7 +280,22 @@ export function lastExplicitNestedFocusIntentSeq(
   epicId: string,
   tabId: string,
 ): number {
-  return lastExplicitIntentSeqByTab.get(pendingKey(epicId, tabId)) ?? 0;
+  return tabSignalsByTab.get(pendingKey(epicId, tabId))?.choseTileSeq ?? 0;
+}
+
+/**
+ * Where this tab's most recent return to a waiting request sits in the same
+ * sequence. Compared against {@link lastExplicitNestedFocusIntentSeq} to order
+ * the two against each other, and against a baseline with `>` for the same
+ * reason that one is.
+ */
+export function lastReturnedToNestedFocusRequestSeq(
+  epicId: string,
+  tabId: string,
+): number {
+  return (
+    tabSignalsByTab.get(pendingKey(epicId, tabId))?.returnedToRequestSeq ?? 0
+  );
 }
 
 /**
@@ -241,12 +316,12 @@ export function forgetExplicitNestedFocusIntents(
   epicId: string,
   tabId: string,
 ): void {
-  if (!lastExplicitIntentSeqByTab.delete(pendingKey(epicId, tabId))) return;
+  if (!tabSignalsByTab.delete(pendingKey(epicId, tabId))) return;
   notifyExplicitIntentListeners();
 }
 
 export function resetNestedFocusNavigationIntentsForTests(): void {
   pendingByTab.clear();
-  lastExplicitIntentSeqByTab.clear();
+  tabSignalsByTab.clear();
   explicitIntentSeq = 0;
 }

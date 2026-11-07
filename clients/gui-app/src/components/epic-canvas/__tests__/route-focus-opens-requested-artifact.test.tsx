@@ -2,7 +2,11 @@ import { useSyncExternalStore } from "react";
 import { act, renderHook, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { CloudChatSummary } from "@traycer/protocol/host/epic/cloud-chat";
-import type { RouterHistory, UseNavigateResult } from "@tanstack/react-router";
+import {
+  createMemoryHistory,
+  type RouterHistory,
+  type UseNavigateResult,
+} from "@tanstack/react-router";
 import {
   type EpicRouteFocusIntent,
   useEpicRouteSynchronization,
@@ -23,6 +27,7 @@ import {
   type PrepareNestedFocusTarget,
 } from "@/lib/epic-nested-focus-navigation";
 import type { NestedFocusTarget } from "@/lib/epic-nested-focus-route";
+import { observeNestedFocusTraversals } from "@/lib/nested-focus-history-traversal";
 import { resetNestedFocusNavigationIntentsForTests } from "@/lib/nested-focus-navigation-intent";
 import type { PersistentHistoryController } from "@/lib/persistent-history";
 import {
@@ -111,16 +116,21 @@ const navigateMock = vi.hoisted(() =>
   ),
 );
 
-vi.mock("@tanstack/react-router", () => ({
-  useNavigate: () => navigateMock,
-  useRouter: () => ({
-    history: {},
-    navigate: navigateMock,
-    state: {
-      location: { pathname: `/epics/${EPIC_ID}/${TAB_ID}`, search: {} },
-    },
-  }),
-}));
+vi.mock("@tanstack/react-router", async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import("@tanstack/react-router")>();
+  return {
+    ...actual,
+    useNavigate: () => navigateMock,
+    useRouter: () => ({
+      history: {},
+      navigate: navigateMock,
+      state: {
+        location: { pathname: `/epics/${EPIC_ID}/${TAB_ID}`, search: {} },
+      },
+    }),
+  };
+});
 
 // Nested-focus route state is orthogonal to the original D1/D2 defect
 // (which lives entirely in the legacy auto-open effect), and keeping it off
@@ -1098,6 +1108,219 @@ describe("route focus opens the requested artifact (T156)", () => {
     expect(activeArtifactId(TAB_ID)).toBe(BYSTANDER_ID);
     expect(openArtifactIds(TAB_ID)).not.toContain(REQUESTED_ID);
   });
+
+  // T156 destination-level case A2. A history traversal (Back, the browser's
+  // own or this app's) that lands on an entry naming a tile must retire a
+  // pending artifact request exactly as an explicit tile click would, even
+  // though the mounted intent's OWN `focusPaneId`/`focusTileInstanceId` never
+  // changes: a history move keeps the request's key (same `focusArtifactId`,
+  // same `focusedAt`), so nothing here re-samples `nestedTargetPresent`. What
+  // retires the request is the traversal observer's stamp, read through the
+  // same `lastExplicitNestedFocusIntentSeq` baseline every other supersession
+  // case in this file relies on. The observer is driven against a REAL,
+  // standalone `createMemoryHistory` - independent of this suite's static
+  // `useRouter()` mock (`history: {}`), which has no working `subscribe` -
+  // because the observer writes into the shared (epicId, tabId) intent
+  // registry the mounted hook reads, not into whatever history object
+  // produced the call. That is what makes this a genuine destination-level
+  // traversal rather than a call into the module's internals.
+  it("a history traversal onto an entry naming a tile retires a pending artifact request (nested history ON)", async () => {
+    persistentHistoryState.controller = {} as PersistentHistoryController;
+    const PENDING_ID = "artifact-pending-traversal";
+    const CHOSEN_ID = "artifact-chosen-traversal";
+    recordsStore.set([record({ id: CHOSEN_ID, type: "spec", name: "Chosen" })]);
+
+    // The tile already open on the canvas that the traversal's landing entry
+    // names - standing in for "the tile the person came back to".
+    const target = useEpicCanvasStore
+      .getState()
+      .prepareOpenTileInTabFocusTarget(
+        TAB_ID,
+        makeOpenableNodeRef({
+          id: CHOSEN_ID,
+          instanceId: "inst-chosen-traversal",
+          type: "spec",
+          name: "Chosen",
+          hostId: HOST_ID,
+        }),
+      );
+    if (target === null) throw new Error("expected a focus target");
+    expect(activeArtifactId(TAB_ID)).toBe(CHOSEN_ID);
+
+    // Mounts with NO nested target of its own: the defect's exact shape.
+    mountHook(baseIntent({ focusArtifactId: PENDING_ID, focusedAt: 2000 }));
+
+    const tileHref = `/epics/${EPIC_ID}/${TAB_ID}?focusPaneId=${target.paneId}&focusTileInstanceId=${target.tileInstanceId}`;
+    const history = createMemoryHistory({
+      initialEntries: [tileHref, "/elsewhere"],
+      initialIndex: 1,
+    });
+    const unsubscribe = observeNestedFocusTraversals(history);
+    act(() => {
+      history.back();
+    });
+    unsubscribe();
+
+    act(() => {
+      recordsStore.set([
+        record({ id: CHOSEN_ID, type: "spec", name: "Chosen" }),
+        record({ id: PENDING_ID, type: "spec", name: "Pending" }),
+      ]);
+    });
+
+    // Negative: the retired request must never steal focus from the tile the
+    // person came back to, nor open at all.
+    await act(async () => {
+      await Promise.resolve();
+    });
+    expect(activeArtifactId(TAB_ID)).toBe(CHOSEN_ID);
+    expect(openArtifactIds(TAB_ID)).not.toContain(PENDING_ID);
+  });
+
+  // T156 destination-level case A1 - the headline sequence. A pending request
+  // with no tile of its own, superseded by two AUTOMATIC opens (never the
+  // person's gesture - `navigateNestedFocus(..., "automatic")`, the same
+  // provenance the auto-open effect's own commit uses), then a first Back
+  // lands on the nearer automatic tile (retiring the request) and a second
+  // Back lands on the request's OWN entry (restoring it). The artifact must
+  // open once restored: `lastAutoOpenKey` is the real ref inside the mounted
+  // hook, never a stand-in, so this is the one case that can actually tell
+  // "restored but the key was already burned on the way to retirement" apart
+  // from "restored and genuinely still openable".
+  //
+  // Each step's route search is applied with `hook.rerender`, mirroring what
+  // the router commits in production for that step - a push for each
+  // automatic open (captured off a REAL `navigateNestedFocus` call through a
+  // committing `navigate` stand-in), and the observer-driven retire/restore
+  // bookkeeping comes from a REAL traversal on a separate, real
+  // `createMemoryHistory`, exactly as case A2 above drives it.
+  it("restores a pending request on a Back to its own entry, and the artifact opens (nested history ON)", async () => {
+    persistentHistoryState.controller = {} as PersistentHistoryController;
+    const PENDING_ID = "artifact-pending-two-back";
+    const Y_ID = "artifact-two-back-y";
+    const Z_ID = "artifact-two-back-z";
+    const FOCUSED_AT = 2200;
+    // Y and Z need real records from the start: the sweep effect closes any
+    // tile whose backing record is absent and not pending-create, which
+    // would otherwise reap them the instant the hook re-renders. PENDING's
+    // own record stays absent until after both automatic opens.
+    recordsStore.set([
+      record({ id: Y_ID, type: "spec", name: "Y" }),
+      record({ id: Z_ID, type: "spec", name: "Z" }),
+    ]);
+
+    const hook = mountHook(
+      baseIntent({ focusArtifactId: PENDING_ID, focusedAt: FOCUSED_AT }),
+    );
+
+    const { navigate, committed } = makeCommittingNavigate({
+      focusArtifactId: PENDING_ID,
+      focusedAt: FOCUSED_AT,
+    });
+    const router = makeNestedFocusRouter(navigate, true);
+
+    // Two automatic opens over the waiting request - nobody's gesture, so
+    // neither retires it on its own.
+    const yTarget = navigateNestedFocus(
+      router,
+      { epicId: EPIC_ID, tabId: TAB_ID },
+      prepareOpenArtifact(Y_ID, "inst-two-back-y"),
+      "automatic",
+    );
+    const { focusPaneId: yPaneId, focusTileInstanceId: yTileId } =
+      committedNestedFocus(committed.search);
+    hook.rerender(
+      baseIntent({
+        focusArtifactId: PENDING_ID,
+        focusedAt: FOCUSED_AT,
+        focusPaneId: yPaneId,
+        focusTileInstanceId: yTileId,
+      }),
+    );
+
+    const zTarget = navigateNestedFocus(
+      router,
+      { epicId: EPIC_ID, tabId: TAB_ID },
+      prepareOpenArtifact(Z_ID, "inst-two-back-z"),
+      "automatic",
+    );
+    const { focusPaneId: zPaneId, focusTileInstanceId: zTileId } =
+      committedNestedFocus(committed.search);
+    hook.rerender(
+      baseIntent({
+        focusArtifactId: PENDING_ID,
+        focusedAt: FOCUSED_AT,
+        focusPaneId: zPaneId,
+        focusTileInstanceId: zTileId,
+      }),
+    );
+    expect(activeArtifactId(TAB_ID)).toBe(Z_ID);
+    if (yTarget === null || zTarget === null) {
+      throw new Error("expected both automatic opens to resolve a target");
+    }
+    // PENDING has no record yet. Nobody has retired the request, so by design
+    // it still OUTRANKS these automatic, nobody-asked-for targets
+    // (`focusRequestOutrunsNestedRoute`) - giving it a record now would open
+    // it immediately, regardless of Back/Forward. That is exactly why its
+    // record is withheld until after the first Back below: this test is about
+    // retirement blocking the open, not about the outranking rule (already
+    // covered elsewhere in this file).
+    expect(openArtifactIds(TAB_ID)).not.toContain(PENDING_ID);
+
+    const requestHref = `/epics/${EPIC_ID}/${TAB_ID}?focusArtifactId=${PENDING_ID}&focusedAt=${FOCUSED_AT}`;
+    const yHref = `${requestHref}&focusPaneId=${yTarget.paneId}&focusTileInstanceId=${yTarget.tileInstanceId}`;
+    const zHref = `${requestHref}&focusPaneId=${zTarget.paneId}&focusTileInstanceId=${zTarget.tileInstanceId}`;
+    const history = createMemoryHistory({
+      initialEntries: [requestHref, yHref, zHref],
+      initialIndex: 2,
+    });
+    const unsubscribe = observeNestedFocusTraversals(history);
+
+    // First Back: lands on Y's tile entry - retires the request.
+    act(() => {
+      history.back();
+    });
+    hook.rerender(
+      baseIntent({
+        focusArtifactId: PENDING_ID,
+        focusedAt: FOCUSED_AT,
+        focusPaneId: yTarget.paneId,
+        focusTileInstanceId: yTarget.tileInstanceId,
+      }),
+    );
+    await act(async () => {
+      await Promise.resolve();
+    });
+    expect(activeArtifactId(TAB_ID)).toBe(Y_ID);
+    expect(openArtifactIds(TAB_ID)).not.toContain(PENDING_ID);
+
+    // PENDING's record arrives NOW - resolvable, but the request is retired
+    // and a committed nested target (Y) governs, so it still must not open.
+    act(() => {
+      recordsStore.set([
+        record({ id: Y_ID, type: "spec", name: "Y" }),
+        record({ id: Z_ID, type: "spec", name: "Z" }),
+        record({ id: PENDING_ID, type: "spec", name: "Pending" }),
+      ]);
+    });
+    expect(activeArtifactId(TAB_ID)).toBe(Y_ID);
+    expect(openArtifactIds(TAB_ID)).not.toContain(PENDING_ID);
+
+    // Second Back: lands on the request's OWN entry - restores it.
+    act(() => {
+      history.back();
+    });
+    unsubscribe();
+    hook.rerender(
+      baseIntent({ focusArtifactId: PENDING_ID, focusedAt: FOCUSED_AT }),
+    );
+
+    await waitFor(() => {
+      expect(activeArtifactId(TAB_ID)).toBe(PENDING_ID);
+    });
+    expect(openArtifactIds(TAB_ID)).toContain(PENDING_ID);
+  });
+
   // Drives the REAL close hook, which serves a close button and a lifecycle
   // effect alike. A shell exiting by itself commits a close through the same
   // boundary a person's click does, and must not read as them turning away.

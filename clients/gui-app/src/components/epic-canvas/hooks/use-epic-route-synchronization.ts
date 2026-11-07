@@ -64,6 +64,7 @@ import {
   forgetExplicitNestedFocusIntents,
   getNestedRouteApplicationDeferralMs,
   lastExplicitNestedFocusIntentSeq,
+  lastReturnedToNestedFocusRequestSeq,
   subscribeExplicitNestedFocusIntents,
 } from "@/lib/nested-focus-navigation-intent";
 import { shouldYieldPaneActivationRouteFocus } from "@/components/epic-canvas/pane-activation";
@@ -223,6 +224,17 @@ export function useEpicRouteSynchronization(
       [epicId, tabId],
     ),
   );
+  // The other half of the same question, read the same way. Two numbers rather
+  // than one object because a snapshot has to be referentially stable between
+  // renders; stamped from one sequence so the higher of the two is simply what
+  // happened last.
+  const lastReturnSeq = useSyncExternalStore(
+    subscribeExplicitNestedFocusIntents,
+    useCallback(
+      () => lastReturnedToNestedFocusRequestSeq(epicId, tabId),
+      [epicId, tabId],
+    ),
+  );
   // Sampled the first time this key is RENDERED - before any effect, so before
   // the `snapshotLoaded` gate below: the task can still be loading when the
   // person acts, and a baseline taken once the snapshot had landed would read
@@ -239,18 +251,19 @@ export function useEpicRouteSynchronization(
         : {
             key: focusRequestKey,
             lastIntentSeq,
+            lastReturnSeq,
             nestedTargetPresent: nestedRouteTarget !== null,
           },
     );
   }
   const {
     retired: focusRequestRetired,
+    restored: focusRequestRestored,
     outranksNestedRoute: focusRequestOutrunsNestedRoute,
-  } = readFocusRequestState(
-    focusRequestBaseline,
-    focusRequestKey,
+  } = readFocusRequestState(focusRequestBaseline, focusRequestKey, {
     lastIntentSeq,
-  );
+    lastReturnSeq,
+  });
 
   // Dropped when this surface goes, so the per-tab stamps stay bounded by the
   // tabs actually mounted. Unconditional, and safe to run while this surface
@@ -465,6 +478,8 @@ export function useEpicRouteSynchronization(
   ]);
 
   const lastAutoOpenKey = useRef<string | null>(null);
+  /** The most recent return this effect has already released a key for. */
+  const honouredReturnSeq = useRef(0);
   useEffect(() => {
     if (!snapshotLoaded) return;
     if (
@@ -481,6 +496,16 @@ export function useEpicRouteSynchronization(
 
     const key = `${epicId}|${focusArtifactId ?? ""}|${focusedAt ?? ""}`;
     const hasExplicitFocus = focusArtifactId !== undefined;
+    // A retirement SPENT this key (below), which is what stops a late record
+    // reviving a request the person left. Coming back to the request's own
+    // entry is them asking for it again, so the spend is released - once per
+    // return, tracked by the stamp itself, because `restored` stays true for as
+    // long as that return is the latest signal and clearing on every run would
+    // reopen the artifact endlessly.
+    if (focusRequestRestored && lastReturnSeq > honouredReturnSeq.current) {
+      honouredReturnSeq.current = lastReturnSeq;
+      if (lastAutoOpenKey.current === key) lastAutoOpenKey.current = null;
+    }
     const gate = gateLegacyAutoOpen({
       hasExplicitFocus,
       hasRestoredCanvas,
@@ -618,6 +643,8 @@ export function useEpicRouteSynchronization(
     nestedFocusEnabled,
     nestedRouteTarget,
     focusRequestRetired,
+    focusRequestRestored,
+    lastReturnSeq,
     focusRequestOutrunsNestedRoute,
   ]);
 
@@ -844,6 +871,8 @@ function gateLegacyAutoOpen(args: {
 interface FocusRequestBaseline {
   readonly key: string;
   readonly lastIntentSeq: number;
+  /** The return stamp when this request arrived. See {@link FocusRequestState.restored}. */
+  readonly lastReturnSeq: number;
   /**
    * Whether the route ALREADY named a nested target when this request arrived.
    * See {@link readFocusRequestState}.
@@ -863,6 +892,22 @@ interface FocusRequestState {
    * it as the person acting and retired a request nobody had touched.
    */
   readonly retired: boolean;
+  /**
+   * The person navigated BACK to this request's own entry after something had
+   * retired it, so it is owed its wait again.
+   *
+   * Needed because retirement is otherwise permanent for the life of the key,
+   * in two reinforcing ways: the baseline it is measured against is never
+   * recut, and {@link lastAutoOpenKey} is SPENT on retirement so a late record
+   * cannot revive it. Together those mean a person who asks for an artifact,
+   * has tiles open automatically over it, and presses Back twice to get back to
+   * it would find their own first Back had cancelled it for good.
+   *
+   * Ordered against {@link retired} rather than replacing it: both stamps come
+   * from one sequence, so leaving and returning any number of times resolves to
+   * whichever happened last.
+   */
+  readonly restored: boolean;
   /**
    * Whether this still-waiting request outranks the nested target in the route.
    *
@@ -899,14 +944,22 @@ interface FocusRequestState {
 function readFocusRequestState(
   baseline: FocusRequestBaseline | null,
   key: string | null,
-  lastIntentSeq: number,
+  signals: { readonly lastIntentSeq: number; readonly lastReturnSeq: number },
 ): FocusRequestState {
   if (baseline === null || baseline.key !== key) {
-    return { retired: false, outranksNestedRoute: false };
+    return { retired: false, restored: false, outranksNestedRoute: false };
   }
-  const retired = lastIntentSeq > baseline.lastIntentSeq;
+  const { lastIntentSeq, lastReturnSeq } = signals;
+  // Newer than the baseline AND newer than the other signal: the first asks
+  // whether it happened during this request's wait, the second which of the two
+  // happened last.
+  const retired =
+    lastIntentSeq > baseline.lastIntentSeq && lastIntentSeq > lastReturnSeq;
+  const restored =
+    lastReturnSeq > baseline.lastReturnSeq && lastReturnSeq > lastIntentSeq;
   return {
     retired,
+    restored,
     outranksNestedRoute: !baseline.nestedTargetPresent && !retired,
   };
 }

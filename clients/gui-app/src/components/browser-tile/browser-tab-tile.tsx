@@ -76,7 +76,11 @@ export interface BrowserTabTileProps {
    * focus from the tab the reader is on.
    */
   readonly onOpenLinkInNewTile:
-    | ((url: string, disposition: "foreground" | "background") => void)
+    | ((
+        url: string,
+        disposition: "foreground" | "background",
+        provenance: NestedFocusProvenance,
+      ) => void)
     | null;
   /**
    * The guest's own "new tab" chord, which is a different request from a link

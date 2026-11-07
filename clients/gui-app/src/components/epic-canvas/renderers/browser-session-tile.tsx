@@ -10,6 +10,7 @@ import type {
   BrowserTileNode,
   BrowserTilePlacement,
 } from "@/components/browser-tile/browser-tile-placement";
+import type { NestedFocusProvenance } from "@/lib/epic-nested-focus-navigation";
 import { useCloseCanvasTileWithNestedFocus } from "./use-close-canvas-tile-with-nested-focus";
 import { useMaybeBrowserSessionsContext } from "./browser-sessions-context";
 import { useTileBodyVisible } from "@/components/epic-canvas/hooks/use-tile-body-visible";
@@ -161,7 +162,11 @@ function ResolvedBrowserSessionTile(
 
   /** Open a tab in this tile's session and place it beside this tile. */
   const onOpenLinkInNewTile = useCallback(
-    (url: string, disposition: "foreground" | "background") => {
+    (
+      url: string,
+      disposition: "foreground" | "background",
+      provenance: NestedFocusProvenance,
+    ) => {
       if (
         browserSessions === null ||
         browserSessions.lifecycle !== "live" ||
@@ -193,7 +198,10 @@ function ResolvedBrowserSessionTile(
               dedupe: true,
               source: "direct_ui",
             },
-            "user",
+            // The tile's own caller says who asked: a reader's click or chord
+            // is the person, while a page calling `window.open` on its own is
+            // not, and the two arrive on this one callback.
+            provenance,
           );
         })
         .catch((cause: unknown) => {
