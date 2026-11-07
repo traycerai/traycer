@@ -111,6 +111,22 @@ export function TeamVariablesAndShells(): ReactNode {
   );
 }
 
+interface ShellValue {
+  readonly path: string;
+  readonly args: string[];
+}
+
+/** The shell the editor shows: an accepted write, else the stored item's. */
+function shownShell(
+  item: ConfigurationItem | null,
+  accepted: ShellValue | null,
+): ShellValue {
+  if (accepted !== null) return accepted;
+  return item === null
+    ? { path: "", args: [] }
+    : configurationShellValueSchema.parse(item.value);
+}
+
 function TeamShellEditor(props: {
   readonly item: ConfigurationItem | null;
   readonly applied: {
@@ -125,16 +141,17 @@ function TeamShellEditor(props: {
   const source = useConfigurationSource();
   const canEdit = useCanEditConfiguration();
   const { put, remove } = useConfigurationItemMutations();
-  const saved =
-    props.item === null
-      ? { path: "", args: [] }
-      : configurationShellValueSchema.parse(props.item.value);
+  // A write the server accepted, held until the reread carries its revision
+  // and this editor re-keys: until then the item is the old one, so Cancel
+  // would restore it and Save would send its stale revision.
+  const [accepted, setAccepted] = useState<ShellValue | null>(null);
+  const saved = shownShell(props.item, accepted);
   const [editing, setEditing] = useState<"path" | "args" | null>(null);
   const [path, setPath] = useState(saved.path);
   const [args, setArgs] = useState(saved.args);
   const configured = props.item === null ? null : saved;
   const editingVisible = canEdit && editing !== null;
-  const busy = put.isPending || remove.isPending;
+  const busy = put.isPending || remove.isPending || accepted !== null;
   const changed =
     path !== saved.path || JSON.stringify(args) !== JSON.stringify(saved.args);
   return (
@@ -190,7 +207,16 @@ function TeamShellEditor(props: {
                         os: props.os,
                         revision: props.item.revision,
                       },
-                      { onSuccess: props.onOutcome },
+                      {
+                        onSuccess: (result) => {
+                          props.onOutcome(result);
+                          if (result.outcome !== "saved") return;
+                          setAccepted({ path: "", args: [] });
+                          setPath("");
+                          setArgs([]);
+                          setEditing(null);
+                        },
+                      },
                     );
                 }}
               >
@@ -248,7 +274,15 @@ function TeamShellEditor(props: {
                 value: { path, args },
                 revision: props.item?.revision ?? null,
               },
-              { onSuccess: props.onOutcome },
+              {
+                onSuccess: (result) => {
+                  props.onOutcome(result);
+                  // A refused write keeps its draft open for another try.
+                  if (result.outcome !== "saved") return;
+                  setAccepted({ path, args });
+                  setEditing(null);
+                },
+              },
             );
         }}
       />

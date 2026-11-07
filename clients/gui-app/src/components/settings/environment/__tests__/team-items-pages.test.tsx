@@ -5,9 +5,12 @@ import {
   waitFor,
   within,
 } from "@testing-library/react";
-import userEvent from "@testing-library/user-event";
+import userEvent, { type UserEvent } from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import type { EnvironmentConfigurationItem } from "@traycer/protocol/host/environment/configuration-contracts";
+import type {
+  EnvironmentConfigurationItem,
+  EnvironmentConfigurationItemWriteResponse,
+} from "@traycer/protocol/host/environment/configuration-contracts";
 import { TeamProviders } from "@/components/settings/environment/team-providers";
 import { TeamSkillsPage } from "@/components/settings/environment/team-skills";
 import { TeamPermissions } from "@/components/settings/environment/team-permissions";
@@ -25,6 +28,7 @@ import {
   poolSource,
   requireTeamHostClient,
   resetTeamPageHarness,
+  type TeamPageHarness,
 } from "./team-configuration-test-support";
 
 vi.mock("@/lib/host", async (importOriginal) => ({
@@ -382,6 +386,85 @@ describe("TeamVariablesAndShells", () => {
     await user.click(await screen.findByRole("option", { name: "Linux" }));
     expect(screen.queryByRole("region", { name: /API_URL/ })).toBeNull();
     expect(screen.getByText("No variables.")).toBeTruthy();
+  });
+
+  describe("a shell write", () => {
+    const shellItem = configurationItem({
+      kind: "shell",
+      key: "shell",
+      os: "any",
+      value: { path: "/bin/bash", args: [] },
+      revision: 3,
+    });
+
+    const mountShellPage = (
+      outcome: EnvironmentConfigurationItemWriteResponse,
+    ): TeamPageHarness =>
+      mountTeamPage(poolSource("editor"), {
+        // The reread lags: it keeps answering with the old item.
+        "environment.configuration.items": () => ({ items: [shellItem] }),
+        "environment.configuration.items.put": () => outcome,
+        "environment.host.list": () => ({ hosts: [] }),
+      });
+
+    const typeNewPath = async (user: UserEvent): Promise<void> => {
+      await user.click(
+        await screen.findByRole("button", { name: "Edit Shell path" }),
+      );
+      const field = await screen.findByLabelText("Shell path");
+      await user.clear(field);
+      await user.type(field, "/bin/zsh");
+      await user.click(screen.getByRole("button", { name: "Save" }));
+    };
+
+    it("holds an accepted value, closed and uneditable, until the reread brings its revision", async () => {
+      const harness = mountShellPage({ outcome: "saved", revision: 4 });
+      const user = userEvent.setup();
+      render(<TeamVariablesAndShells />, { wrapper: harness.Wrapper });
+
+      await typeNewPath(user);
+
+      const shown = await screen.findByRole("button", {
+        name: "Edit Shell path",
+      });
+      expect(shown.textContent).toBe("/bin/zsh");
+      expect(harness.paramsOf("environment.configuration.items.put")).toEqual([
+        {
+          environmentId: "env-a",
+          kind: "shell",
+          key: "shell",
+          os: "any",
+          value: { path: "/bin/zsh", args: [] },
+          revision: 3,
+        },
+      ]);
+      expect(screen.queryByRole("button", { name: "Save" })).toBeNull();
+      expect(screen.queryByRole("button", { name: "Cancel" })).toBeNull();
+      expect(shown).toHaveProperty("disabled", true);
+    });
+
+    it("keeps the typed draft open after a conflict", async () => {
+      const harness = mountShellPage({
+        outcome: "conflict",
+        current: { revision: 4, changedBy: "Grace", changedAt: 2 },
+      });
+      const user = userEvent.setup();
+      render(<TeamVariablesAndShells />, { wrapper: harness.Wrapper });
+
+      await typeNewPath(user);
+
+      expect(
+        await screen.findByText("Changed by Grace a moment ago"),
+      ).toBeTruthy();
+      expect(screen.getByLabelText("Shell path")).toHaveProperty(
+        "value",
+        "/bin/zsh",
+      );
+      expect(screen.getByRole("button", { name: "Save" })).toHaveProperty(
+        "disabled",
+        false,
+      );
+    });
   });
 
   it("says live values need a host while the team has none", async () => {
