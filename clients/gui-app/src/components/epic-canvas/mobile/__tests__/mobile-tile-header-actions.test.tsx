@@ -21,7 +21,10 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { MobileTileOriginCrumb } from "@/components/epic-canvas/mobile/mobile-tile-header-actions";
 import { TabNavigationRouteBridge } from "@/components/layout/bridges/tab-navigation-route-bridge";
 import * as TabNav from "@/lib/tab-navigation";
-import { openEpicTabIntent } from "@/lib/tab-navigation/intents";
+import {
+  fromTracyTranscript,
+  openEpicTabIntent,
+} from "@/lib/tab-navigation/intents";
 import { setPhoneLayoutOnly } from "@/lib/mobile-app";
 import { useTracySurfaceStore } from "@/stores/bots/tracy-surface-store";
 import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
@@ -88,7 +91,7 @@ function resetStores(): void {
     botId: null,
     visitedBotIds: [],
   });
-  useMobileTabOriginStore.setState({ botIdByTabId: {} });
+  useMobileTabOriginStore.setState({ origin: null });
   useSelectionAuthorityStore.setState({
     attached: true,
     effectiveHostId: WINDOW_HOST,
@@ -113,24 +116,31 @@ async function showChannel(app: Mounted, botId: string): Promise<void> {
   });
 }
 
-/** A task opened from the channel Tracy shows now. */
+/**
+ * A task opened from the channel Tracy shows now: by a transcript link when
+ * `byTranscriptLink`, by any other opener otherwise.
+ */
 async function openTaskFromChannel(
   app: Mounted,
   botId: string,
   epicId: string,
+  byTranscriptLink: boolean,
 ): Promise<string> {
   await showChannel(app, botId);
   act(() => {
     TabNav.navigateToTabIntent(
       app.navigate,
-      openEpicTabIntent({ epicId, focus: undefined }),
+      fromTracyTranscript(
+        openEpicTabIntent({ epicId, focus: undefined }),
+        byTranscriptLink ? { botId } : null,
+      ),
       undefined,
     );
   });
   await waitFor(() => {
-    expect(useEpicCanvasStore.getState().resolveTabIdForEpic(epicId)).not.toBe(
-      null,
-    );
+    const tabId = useEpicCanvasStore.getState().resolveTabIdForEpic(epicId);
+    expect(tabId).not.toBe(null);
+    expect(useTabsStore.getState().activeItemId).toBe(`tab:epic:${tabId}`);
   });
   const tabId = useEpicCanvasStore.getState().resolveTabIdForEpic(epicId);
   if (tabId === null) throw new Error("the task did not get a tab");
@@ -154,16 +164,22 @@ describe("<MobileTileOriginCrumb />", () => {
     resetStores();
   });
 
-  it("draws the way back to Tracy for a task opened from a channel", async () => {
+  it("draws the way back to Tracy only for a task a transcript link opened", async () => {
     const app = await mountApp();
-    const tabId = await openTaskFromChannel(app, "bot-1", "epic-1");
-    expect(crumbOf(tabId)).not.toBeNull();
+    const manual = await openTaskFromChannel(app, "bot-1", "epic-1", false);
+    expect(crumbOf(manual)).toBeNull();
+
+    const linked = await openTaskFromChannel(app, "bot-1", "epic-2", true);
+    expect(crumbOf(linked)).not.toBeNull();
+    expect(crumbOf(manual)).toBeNull();
   });
 
   it("goes back to the channel recorded at open, not the one the surface moved to, and spends the origin", async () => {
     const app = await mountApp();
-    const tabId = await openTaskFromChannel(app, "bot-1", "epic-1");
-    await showChannel(app, "bot-2");
+    const tabId = await openTaskFromChannel(app, "bot-1", "epic-1", true);
+    act(() => {
+      useTracySurfaceStore.setState({ botId: "bot-2" });
+    });
     const crumb = crumbOf(tabId);
     if (crumb === null) throw new Error("the crumb was not drawn");
 
@@ -173,27 +189,24 @@ describe("<MobileTileOriginCrumb />", () => {
       expect(app.pathname()).toBe("/bot/bot-1");
       expect(useTracySurfaceStore.getState().botId).toBe("bot-1");
     });
-    expect(useMobileTabOriginStore.getState().botIdByTabId).not.toHaveProperty(
-      tabId,
-    );
+    expect(useMobileTabOriginStore.getState().origin).toBeNull();
     expect(crumbOf(tabId)).toBeNull();
   });
 
-  it("goes when its channel's bot is forgotten, and leaves another channel's origin", async () => {
+  it("goes when its channel's bot is forgotten, and stays when another bot is", async () => {
     const app = await mountApp();
-    const forgotten = await openTaskFromChannel(app, "bot-1", "epic-1");
-    const kept = await openTaskFromChannel(app, "bot-2", "epic-2");
-    expect(crumbOf(forgotten)).not.toBeNull();
+    const tabId = await openTaskFromChannel(app, "bot-1", "epic-1", true);
+
+    act(() => useTracySurfaceStore.getState().forgetBot("bot-2"));
+    expect(crumbOf(tabId)).not.toBeNull();
 
     act(() => useTracySurfaceStore.getState().forgetBot("bot-1"));
-
-    expect(crumbOf(forgotten)).toBeNull();
-    expect(crumbOf(kept)).not.toBeNull();
+    expect(crumbOf(tabId)).toBeNull();
   });
 
   it("goes when the surface closes, and does not come back when it reopens", async () => {
     const app = await mountApp();
-    const tabId = await openTaskFromChannel(app, "bot-1", "epic-1");
+    const tabId = await openTaskFromChannel(app, "bot-1", "epic-1", true);
     expect(crumbOf(tabId)).not.toBeNull();
 
     act(() => useTracySurfaceStore.getState().closeSurface());

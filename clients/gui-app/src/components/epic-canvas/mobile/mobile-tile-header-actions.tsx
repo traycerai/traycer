@@ -9,17 +9,17 @@ import { useMobileTabOriginStore } from "@/stores/epics/mobile-tab-origin-store"
 import { TRACY_TAB_LABEL } from "@/stores/tabs/kinds/tracy";
 
 /**
- * The way back to the Tracy channel this task was opened from, in the current
- * tile's header. Nothing for a task opened any other way, or once that channel
- * or the surface is gone. It is spent by being used: the channel is where the
- * person is then.
+ * The way back to the Tracy channel whose transcript link opened this task, in
+ * the current tile's header. Nothing for a task opened any other way, once the
+ * task has left the front, or once that channel or the surface is gone. It is
+ * spent by being used: the channel is where the person is then.
  */
 export function MobileTileOriginCrumb(props: {
   readonly tabId: string;
 }): ReactNode {
   const { tabId } = props;
   const botId = useMobileTabOriginStore((s) =>
-    Object.hasOwn(s.botIdByTabId, tabId) ? s.botIdByTabId[tabId] : null,
+    s.origin?.tabId === tabId ? s.origin.botId : null,
   );
   if (botId === null) return null;
   return <OriginCrumbButton tabId={tabId} botId={botId} />;
