@@ -1937,13 +1937,63 @@ function projectFeedbackDraftFrame(
   return { ...frame, snapshot };
 }
 
+/** Dispatch provenance is served only on chat.subscribe@1.44 and newer. */
+const CHAT_SUBSCRIBE_PROVIDER_SELECTION_MINOR = 44;
+
+function stripProviderSelectionFromEvent(value: unknown): unknown {
+  if (!isRecord(value) || !("providerSelection" in value)) return value;
+  const { providerSelection: _providerSelection, ...event } = value;
+  return event;
+}
+
+function stripProviderSelectionFromContainer(value: unknown): unknown {
+  if (!isRecord(value) || !Array.isArray(value.events)) return value;
+  const original = value.events;
+  const events = original.map(stripProviderSelectionFromEvent);
+  return events.every((event, index) => event === original[index])
+    ? value
+    : { ...value, events };
+}
+
+function projectProviderSelectionFrame(
+  frame: ProjectedChatSubscribeServerFrame,
+  negotiated: SchemaVersion | null,
+): ProjectedChatSubscribeServerFrame {
+  if (
+    negotiated !== null &&
+    negotiated.major === 1 &&
+    negotiated.minor >= CHAT_SUBSCRIBE_PROVIDER_SELECTION_MINOR
+  )
+    return frame;
+  if (frame.kind === "eventAppended") {
+    const event = stripProviderSelectionFromEvent(frame.event);
+    return event === frame.event ? frame : { ...frame, event };
+  }
+  if (frame.kind === "range") {
+    const range = stripProviderSelectionFromContainer(frame.range);
+    return range === frame.range ? frame : { ...frame, range };
+  }
+  if (frame.kind !== "snapshot" || !isRecord(frame.snapshot)) return frame;
+  const original = frame.snapshot;
+  const chat = stripProviderSelectionFromContainer(original.chat);
+  const tail = stripProviderSelectionFromContainer(original.tail);
+  if (chat === original.chat && tail === original.tail) return frame;
+  const snapshot = { ...original };
+  if (chat !== original.chat) snapshot.chat = chat;
+  if (tail !== original.tail) snapshot.tail = tail;
+  return { ...frame, snapshot };
+}
+
 export function projectChatServerFrameForVersion(
   frame: ProjectedChatSubscribeServerFrame,
   negotiated: SchemaVersion | null,
 ): ProjectedChatSubscribeServerFrame {
   const projected = projectChatServerFrameBeforeUltracode(
     projectDeliveryWorktreeIntent(
-      projectFeedbackDraftFrame(frame, negotiated),
+      projectFeedbackDraftFrame(
+        projectProviderSelectionFrame(frame, negotiated),
+        negotiated,
+      ),
       negotiated,
     ),
     negotiated,

@@ -65,9 +65,9 @@ function approvalRequestedFrame(
 }
 
 describe("chat.subscribe registry: 1.16 installed below the 1.17 through 1.22 lines, 1.15 still installed", () => {
-  it("binds 1.16 and 1.15 to their own contracts - the head has since moved to 1.43", () => {
+  it("binds 1.16 and 1.15 to their own contracts - the head has since moved to 1.44", () => {
     const line = hostStreamRpcRegistry["chat.subscribe"][1];
-    expect(line.latestMinor).toBe(43);
+    expect(line.latestMinor).toBe(44);
     expect(line.versions[40].contract).toBe(chatSubscribeV140);
     expect(line.versions[39].contract).toBe(chatSubscribeV139);
     expect(line.versions[38].contract).toBe(chatSubscribeV138);
