@@ -15,6 +15,7 @@ import { useHostQueries } from "@/hooks/host/use-host-queries";
 import { useHostMethodSupport } from "@/hooks/host/use-host-supports-method";
 import { useCloudChatViewerId } from "@/hooks/chats/use-cloud-chat-queries";
 import { useBotThreadFollowSupported } from "@/hooks/bots/use-bot-thread-follow";
+import { botThreadListParams } from "@/hooks/bots/use-bot-thread-list-query";
 import { useBotReadCursorSupported } from "@/hooks/bots/use-bot-read-cursor";
 import {
   channelMuted,
@@ -68,6 +69,8 @@ export function useBotFollowedThreads(
   const supported = listSupported && followSupported;
   const viewerUserId = useCloudChatViewerId();
   const viewerKnown = viewerUserId.length > 0;
+  // The follow, read-cursor and level reads take `{ botId }` alone; only the
+  // thread list carries the page bound.
   const byBot = useMemo(
     () => bots.map((bot) => ({ botId: bot.botId })),
     [bots],
@@ -75,7 +78,11 @@ export function useBotFollowedThreads(
   const lists = useHostQueries<HostRpcRegistry, "bot.thread.list">({
     client,
     requests: useMemo(
-      () => byBot.map((params) => ({ method: "bot.thread.list", params })),
+      () =>
+        byBot.map(({ botId }) => ({
+          method: "bot.thread.list",
+          params: botThreadListParams(botId),
+        })),
       [byBot],
     ),
     cacheKeyIdentity: undefined,

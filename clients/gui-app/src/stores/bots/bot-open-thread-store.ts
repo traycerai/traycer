@@ -1,4 +1,5 @@
 import { create } from "zustand";
+import type { JsonContent } from "@traycer/protocol/common/registry";
 import type {
   BotConversationSendDelivery,
   BotTurnRef,
@@ -37,6 +38,8 @@ export interface BotSentPost {
   readonly threadId: string;
   readonly requestId: string;
   readonly text: string;
+  /** The sent document, including images, until the channel row arrives. */
+  readonly content?: JsonContent;
   /** The person who sent it; `null` when nobody was signed in. */
   readonly senderUserId: string | null;
   /** When the send was accepted. */
@@ -108,23 +111,46 @@ export interface BotExchangeRail {
 }
 
 /**
- * What the rail beside a bot's channel holds: one slot, a thread, the
- * bot's memory or a pair's log, the newer replacing the older.
+ * What a search holds the rail for: its results, a thread one of them opened
+ * in their place, or nothing while a pane too narrow for both shows the
+ * channel at a result. The last two offer the way back to the results.
+ */
+export type BotSearchShowing =
+  | { readonly kind: "results" }
+  | { readonly kind: "thread"; readonly thread: BotOpenThread }
+  | { readonly kind: "channel" };
+
+/**
+ * A search open in the rail, and what it displaced, which closing the results
+ * restores (`null` when it displaced nothing).
+ */
+export interface BotOpenSearch {
+  readonly back: BotRail | null;
+  readonly showing: BotSearchShowing;
+}
+
+/**
+ * What the rail beside a bot's channel holds: one slot, a thread, the bot's
+ * memory, a pair's log or a search, the newer replacing the older.
  */
 export type BotRail =
   | ({ readonly kind: "thread" } & BotOpenThread)
   | ({ readonly kind: "memory" } & BotOpenMemory)
-  | ({ readonly kind: "exchange" } & BotOpenExchange);
+  | ({ readonly kind: "exchange" } & BotOpenExchange)
+  | ({ readonly kind: "search" } & BotOpenSearch);
 
 /**
  * The memory opened over what the rail holds (the bot's profile card): it
  * takes the one slot and keeps for its back button the thread it displaces,
- * or the one the memory or a pair's log already open there displaced.
+ * or the one the memory, a pair's log or a search already there displaced.
  */
 export function memoryRailOver(rail: BotRail | null): BotRail {
   if (rail === null) return { kind: "memory", back: null };
   if (rail.kind === "thread") return { kind: "memory", back: threadOf(rail) };
   if (rail.kind === "memory") return { kind: "memory", back: rail.back };
+  if (rail.kind === "search" && rail.showing.kind === "thread") {
+    return { kind: "memory", back: rail.showing.thread };
+  }
   return memoryRailOver(rail.back);
 }
 
@@ -140,6 +166,28 @@ export function exchangeRailOver(
 ): BotRail {
   const back = rail?.kind === "exchange" ? rail.back : rail;
   return { kind: "exchange", peerBotId, back };
+}
+
+/**
+ * Search results opened over what the rail holds: they take the one slot and
+ * keep for closing what they displace, or what the search already open there
+ * displaced.
+ */
+export function searchRailOver(rail: BotRail | null): BotRail {
+  return {
+    kind: "search",
+    back: withoutSearch(rail),
+    showing: { kind: "results" },
+  };
+}
+
+/** `rail` past any search in it: a new search takes the place of an older one. */
+function withoutSearch(rail: BotRail | null): BotRail | null {
+  if (rail?.kind === "search") return withoutSearch(rail.back);
+  if (rail?.kind === "exchange") {
+    return { ...rail, back: withoutSearch(rail.back) };
+  }
+  return rail;
 }
 
 function threadOf(

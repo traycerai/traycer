@@ -2984,9 +2984,41 @@ describe("epic sidebar selection mode", () => {
       archiveTitle: null,
       artifacts: [{ id: "spec-root", title: "Root spec" }],
       format: "markdown",
+      includeNested: false,
     });
     expect(dropdownItem("rename-spec-root").matches(":disabled")).toBe(true);
     expect(dropdownItem("delete-spec-root").matches(":disabled")).toBe(true);
+  });
+
+  it("exports one artifact with everything nested under it from its row actions", () => {
+    seedArtifactTree();
+    testState.activePanelId = "artifacts";
+    testState.permissionRole = "viewer";
+
+    render(<EpicLeftPanelHost epicId={EPIC_ID} tabId={TAB_ID} />);
+    openRowMore("spec-root");
+
+    fireEvent.click(dropdownItem("export-nested-pdf-spec-root"));
+
+    expect(testState.exportArtifactsMutate).toHaveBeenCalledWith({
+      archive: true,
+      archiveTitle: "Root spec",
+      artifacts: [{ id: "spec-root", title: "Root spec" }],
+      format: "pdf",
+      includeNested: true,
+    });
+  });
+
+  it("offers no nested export on a row with nothing under it", () => {
+    seedArtifactTree();
+    testState.activePanelId = "artifacts";
+
+    render(<EpicLeftPanelHost epicId={EPIC_ID} tabId={TAB_ID} />);
+    openRowMore("ticket-child");
+
+    expect(
+      screen.queryByTestId("epic-sidebar-export-nested-pdf-ticket-child"),
+    ).toBeNull();
   });
 
   it("bulk-exports every selected visible artifact, including descendants", () => {
@@ -3021,6 +3053,7 @@ describe("epic sidebar selection mode", () => {
         { id: "ticket-child", title: "Child ticket" },
       ],
       format: "markdown",
+      includeNested: false,
     });
     expect(
       screen

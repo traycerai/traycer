@@ -14,6 +14,7 @@ const CONTEXT: SettingsAvailabilityContext = {
   mobileApp: false,
   phoneLayout: false,
   soundtrackOffered: false,
+  soundtrackOn: false,
 };
 
 /**

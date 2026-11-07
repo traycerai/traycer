@@ -14,6 +14,7 @@ import {
   type LucideIcon,
 } from "lucide-react";
 import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
+import { DropdownMenuItem } from "@/components/ui/dropdown-menu";
 import { Button } from "@/components/ui/button";
 import {
   describeOverviewDegrade,
@@ -325,9 +326,7 @@ function AnswerLine(props: {
 }
 
 /**
- * The card's one control, or `null`: the command-line-tools fix where a
- * floor applies, else Update now when there is a newer version this host can
- * install and no foreground run on this machine to refuse it.
+ * The command-line-tools fix stays beside the answer it remedies.
  */
 function answerCardActions(answer: HostOverviewVersionAnswer): ReactNode {
   const { summary } = answer;
@@ -340,12 +339,39 @@ function answerCardActions(answer: HostOverviewVersionAnswer): ReactNode {
       />
     );
   }
+  return null;
+}
+
+/** The header's Update now control, using the answer card's installation gate. */
+export function HostOverviewUpdateAction(
+  answer: HostOverviewVersionAnswer,
+  inFlight: boolean,
+  inMenu: boolean,
+): ReactNode {
+  const { summary } = answer;
+  if (
+    answer.degrade !== null ||
+    inFlight ||
+    summary.remedy !== null ||
+    ANSWER_CARD_LOOK[summary.answerKind] === null
+  )
+    return null;
   if (
     summary.updatableVersion === null ||
     answer.foregroundUpdateLine !== null
   ) {
     return null;
   }
+  if (inMenu)
+    return (
+      <DropdownMenuItem
+        disabled={summary.busy || summary.installing || summary.checking}
+        data-testid="host-overview-update-now"
+        onSelect={summary.onUpdateLatest}
+      >
+        Update now
+      </DropdownMenuItem>
+    );
   return (
     <Button
       type="button"

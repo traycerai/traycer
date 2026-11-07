@@ -5,8 +5,7 @@ import { HeldItemsLine } from "@/components/settings/secrets/held-items-line";
 import { buildEnvironmentClient } from "@/lib/environment/__tests__/environment-test-support";
 
 // The review read, the host's name and the retrospective sheet are the
-// boundary: the line's own split of entries into values and commands runs for
-// real.
+// boundary: the line's own grouping of held entries by host runs for real.
 const reads = vi.hoisted((): { entries: EnvironmentReviewEntry[] } => ({
   entries: [],
 }));
@@ -68,16 +67,16 @@ beforeEach(() => {
 afterEach(cleanup);
 
 describe("<HeldItemsLine />", () => {
-  it("counts a host's held values and commands apart", () => {
+  it("counts a host's held commands, leaving the rest of the review out", () => {
     reads.entries = [
-      entry("TOKEN", "credential_like_value", "mac"),
       entry("notify.sh", "executable_entry", "mac"),
+      entry("setup", "executable_entry", "mac"),
       entry("GRANT", "needs_grant", "mac"),
     ];
     renderLine();
 
     expect(screen.getByTestId("held-items-line-mac").textContent).toBe(
-      "1 value and 1 command from MacBook Pro are on hold until you choose · Review them",
+      "2 commands from MacBook Pro are on hold until you choose · Review them",
     );
   });
 
@@ -93,22 +92,22 @@ describe("<HeldItemsLine />", () => {
   it("names a host the directory does not list from the account's host list", () => {
     names.directory = null;
     names.options = [{ hostId: "studio", name: "Studio Mac" }];
-    reads.entries = [entry("TOKEN", "credential_like_value", "studio")];
+    reads.entries = [entry("notify.sh", "executable_entry", "studio")];
     renderLine();
 
     expect(screen.getByTestId("held-items-line-studio").textContent).toBe(
-      "1 value from Studio Mac is on hold until you choose · Review it",
+      "1 command from Studio Mac is on hold until you choose · Review it",
     );
   });
 
   it("calls a host nothing names another computer, never leaves the name blank", () => {
     names.directory = null;
     names.options = [{ hostId: "studio", name: "" }];
-    reads.entries = [entry("TOKEN", "credential_like_value", "studio")];
+    reads.entries = [entry("notify.sh", "executable_entry", "studio")];
     renderLine();
 
     expect(screen.getByTestId("held-items-line-studio").textContent).toBe(
-      "1 value from another computer is on hold until you choose · Review it",
+      "1 command from another computer is on hold until you choose · Review it",
     );
   });
 });

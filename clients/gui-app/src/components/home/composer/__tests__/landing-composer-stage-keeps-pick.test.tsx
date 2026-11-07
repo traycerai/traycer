@@ -957,7 +957,7 @@ describe("a landing composer with a sandbox staged", () => {
       ).toEqual([
         "Choose a model",
         "Open terminal instead",
-        "Use This computer",
+        "Use Hardiks-MacBook-Pro---Traycer.local",
       ]);
       expect(host.startTask).not.toHaveBeenCalled();
       expect(host.submit).not.toHaveBeenCalled();
@@ -973,7 +973,9 @@ describe("a landing composer with a sandbox staged", () => {
       const notice = within(await screen.findByRole("alert"));
 
       await userEvent.click(
-        notice.getByRole("button", { name: "Use This computer" }),
+        notice.getByRole("button", {
+          name: "Use Hardiks-MacBook-Pro---Traycer.local",
+        }),
       );
 
       expect(

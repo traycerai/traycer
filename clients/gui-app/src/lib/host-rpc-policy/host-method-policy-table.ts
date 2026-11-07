@@ -1770,6 +1770,8 @@ export const HOST_METHOD_POLL_TABLE = {
   // coalescing into one message - a post, or a reply whose `threadId` names
   // the thread; the same text into two threads is two params, never joined.
   "bot.conversation.list": { ...LATEST_SCHEDULING, poll: null },
+  // A search box's read: only the newest query's answer is shown.
+  "bot.conversation.search": { ...LATEST_SCHEDULING, poll: null },
   "bot.conversation.send": {
     mode: "fifo",
     joinResponseTimeoutMs: null,
@@ -2231,6 +2233,14 @@ export const HOST_METHOD_POLL_TABLE = {
   // Same shape and same ordering story as `providers.setAutoJudge`; the order
   // comes from `providerNativeSubagentsWriteScope` on the hook.
   "providers.setNativeSubagents": {
+    mode: "fifo",
+    joinResponseTimeoutMs: null,
+    poll: null,
+  },
+  // The native-memory switch, the same shape and ordering story as its
+  // neighbour: a per-provider write whose order matters, scoped by
+  // `providerNativeMemoryWriteScope` on the hook.
+  "providers.setNativeMemory": {
     mode: "fifo",
     joinResponseTimeoutMs: null,
     poll: null,

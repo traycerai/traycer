@@ -32,7 +32,13 @@ const SUMMARY = {
 };
 
 function listing(summary: Record<string, unknown>): Record<string, unknown> {
-  return { threads: [summary], trunkCostUsd: null, threadAnchors: null };
+  return {
+    threads: [summary],
+    trunkCostUsd: null,
+    threadAnchors: null,
+    nextCursor: null,
+    total: 1,
+  };
 }
 
 describe("bot.conversation.send@1.3", () => {

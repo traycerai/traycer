@@ -41,7 +41,7 @@ export interface EvictedChatSend {
   readonly parks: boolean;
   /** Whether the pool serves the chat; a parked message waits until it does not. */
   readonly served: boolean;
-  /** The messages waiting, oldest first. */
+  /** Messages awaiting dispatch or consent, oldest first, drawn until settled. */
   readonly parked: readonly ParkedEvictedSend[];
   /** Whether the host holds the chat again, so the parked messages may go. */
   readonly ready: boolean;
@@ -157,6 +157,9 @@ export function useEvictedChatSend(input: {
     chatId,
   });
   const parkedRef = useRef<readonly ParkedEvictedSend[]>([]);
+  // Taking a send may open consent before the live session accepts it.
+  // Keep its row visible and exclude it from subsequent takes until settled.
+  const takenRef = useRef(new Set<ParkedEvictedSend>());
   const releaseHoldRef = useRef<(() => void) | null>(null);
   const [parked, setParked] = useState<readonly ParkedEvictedSend[]>([]);
   const [ready, setReady] = useState(false);
@@ -211,17 +214,22 @@ export function useEvictedChatSend(input: {
   );
 
   const take = useCallback((): readonly ParkedEvictedSend[] => {
-    const sends = parkedRef.current;
-    replaceParked([]);
+    const sends = parkedRef.current.filter(
+      (send) => !takenRef.current.has(send),
+    );
+    for (const send of sends) takenRef.current.add(send);
     return sends;
-  }, [replaceParked]);
+  }, []);
 
   const settle = useCallback(
     (send: ParkedEvictedSend, accepted: boolean): void => {
+      // Cleanup may have restored it before a consent promise resolved.
+      if (!takenRef.current.delete(send)) return;
+      replaceParked(parkedRef.current.filter((waiting) => waiting !== send));
       if (accepted) releaseComposerContentImageRoots(imageRootsHolder(send));
       else failSend(chatId, send);
     },
-    [chatId],
+    [chatId, replaceParked],
   );
 
   // The hold ends once the witness alone no longer reads the chat at rest.
@@ -239,6 +247,7 @@ export function useEvictedChatSend(input: {
   useEffect(() => {
     const handBackParked = (): void => {
       const sends = parkedRef.current;
+      takenRef.current.clear();
       replaceParked([]);
       for (const failed of sends) failSend(chatId, failed);
     };

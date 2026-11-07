@@ -37,6 +37,8 @@ import type {
 } from "@traycer/protocol/host/agent/gui/subscribe";
 import type { ChatServing } from "@traycer/protocol/host/chat-serving/index";
 import type { HydrateChatResponse } from "@traycer/protocol/host/epic/chat-hydration";
+import type { ManagedCommand } from "@traycer/protocol/host/managed-command/unary-schemas";
+import type { WorktreeFolderIntent } from "@traycer/protocol/host/worktree-schemas";
 import {
   hostRpcRegistry,
   type HostRpcRegistry,
@@ -47,9 +49,15 @@ import { TooltipProvider } from "@/components/ui/tooltip";
 import {
   installLegendListTestClock,
   installLegendListViewportMetrics,
+  settleLegendList,
 } from "@/components/chat/__tests__/legend-list-test-environment";
 import { composerDraftIsEmpty } from "@/hooks/chats/use-initial-chat-handoff-driver";
 import { setHostHeldImageHashes } from "@/lib/composer/host-held-image-hashes";
+import { composerContentImageRootHashes } from "@/lib/composer/composer-content-image-roots";
+import {
+  subscribeSentChatMessages,
+  type SentChatMessage,
+} from "@/components/share-on-x/sent-messages";
 import { createHostQueryInvalidator } from "@/lib/host/query-invalidator";
 import { resetFocusedComposerControlsForTests } from "@/lib/commands/composer-controls-registry";
 import {
@@ -66,6 +74,7 @@ import { useComposerDraftStore } from "@/stores/composer/composer-draft-store";
 import { useComposerHarnessMemoryStore } from "@/stores/composer/composer-harness-memory-store";
 import { useComposerRunSettingsStore } from "@/stores/composer/composer-run-settings-store";
 import { useSettingsStore } from "@/stores/settings/settings-store";
+import { useWorktreeIntentStagingStore } from "@/stores/worktree/worktree-intent-staging-store";
 import { TestEpicSessionWrapper } from "./test-epic-session";
 import { createEpicSessionTestHarness } from "./test-epic-session-harness";
 
@@ -290,6 +299,7 @@ function sendFramesOf(stream: ChatStream): SendFrame[] {
 function openStream(
   stream: ChatStream,
   access: { readonly role: "owner" | "viewer"; readonly canAct: boolean },
+  managedCommands: readonly ManagedCommand[] | undefined,
 ): void {
   act(() => {
     stream.callbacks.onConnectionStatus("open", null, null, null);
@@ -370,7 +380,7 @@ function openStream(
         missingWorktreePaths: [],
         pendingFileEditApprovals: [],
         accumulatedFileChanges: [],
-        managedCommands: [],
+        managedCommands: [...(managedCommands ?? [])],
         heldUpdates: [],
         portForwards: [],
       },
@@ -407,6 +417,13 @@ interface Hydrate {
 }
 
 const hydrates: Hydrate[] = [];
+const sentMessageUnsubscribers: Array<() => void> = [];
+
+function observeSentMessages(messages: SentChatMessage[]): void {
+  sentMessageUnsubscribers.push(
+    subscribeSentChatMessages((message) => messages.push(message)),
+  );
+}
 
 function buildHydrateClient(
   queryClient: QueryClient,
@@ -519,7 +536,7 @@ async function mountOnThePool(): Promise<Mounted> {
   await waitFor(() => {
     expect(streams).toHaveLength(1);
   });
-  openStream(streams[0], { role: "viewer", canAct: false });
+  openStream(streams[0], { role: "viewer", canAct: false }, undefined);
   await waitFor(() => {
     expect(screen.getByText("An earlier message")).not.toBeNull();
   });
@@ -532,6 +549,42 @@ function putInComposer(text: string): void {
       .getState()
       .replaceDraft(CHAT_ARTIFACT.id, draftOf(text), null);
   });
+}
+
+function stageRebind(): void {
+  const entry: WorktreeFolderIntent = {
+    kind: "import",
+    workspacePath: "/Users/test/project",
+    repoIdentifier: null,
+    isPrimary: true,
+    worktreePath: "/worktrees/consent-test",
+  };
+  useWorktreeIntentStagingStore.getState().stageIntent(
+    {
+      surface: "owner",
+      hostId: HOST_ID,
+      epicId: EPIC_ID,
+      ownerKind: "chat",
+      ownerId: CHAT_ARTIFACT.id,
+    },
+    { entries: [entry] },
+  );
+}
+
+function runningShell(): ManagedCommand {
+  return {
+    id: "shell-consent-test",
+    monitoring: false,
+    description: "watch",
+    command: "npm run dev",
+    cwd: "/Users/test/project/apps",
+    cadence: null,
+    status: { state: "running", pid: 42, startedAtMs: 1 },
+    chatId: CHAT_ARTIFACT.id,
+    relaunchOnHostRestart: false,
+    createdAtMs: 1,
+    updatedAtMs: 1,
+  };
 }
 
 function clickSend(): void {
@@ -559,6 +612,10 @@ function pendingRows(): HTMLElement[] {
 
 function rowsWithText(text: string): HTMLElement[] {
   return screen.queryAllByText(text);
+}
+
+function imageRootHeld(): boolean {
+  return composerContentImageRootHashes().includes(HASH);
 }
 
 function textInContent(content: JsonContent): string {
@@ -603,6 +660,7 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  for (const unsubscribe of sentMessageUnsubscribers.splice(0)) unsubscribe();
   cleanup();
   toast.dismiss();
   __setChatStreamClientFactoryForTests(null);
@@ -616,6 +674,8 @@ afterEach(() => {
 
 describe("a message sent to a chat the pool serves because its host dropped the records", () => {
   it("is drawn as pending, sent once by the host after it answers, and read back as sent", async () => {
+    const reported: SentChatMessage[] = [];
+    observeSentMessages(reported);
     await mountOnThePool();
     putInComposer(FIRST_TEXT);
 
@@ -629,6 +689,7 @@ describe("a message sent to a chat the pool serves because its host dropped the 
     expect(rowsWithText(FIRST_TEXT)).toHaveLength(1);
     expect(streams[0].sent).toEqual([]);
     expect(toast.getToasts()).toHaveLength(0);
+    expect(reported).toEqual([]);
     await waitFor(() => {
       expect(hydrates).toHaveLength(1);
     });
@@ -642,7 +703,7 @@ describe("a message sent to a chat the pool serves because its host dropped the 
     await waitFor(() => {
       expect(streams).toHaveLength(2);
     });
-    openStream(streams[1], { role: "owner", canAct: true });
+    openStream(streams[1], { role: "owner", canAct: true }, undefined);
     await waitFor(() => {
       expect(sendFramesOf(streams[1])).toHaveLength(1);
     });
@@ -665,6 +726,9 @@ describe("a message sent to a chat the pool serves because its host dropped the 
     expect(toast.getToasts()).toHaveLength(0);
     expect(streams).toHaveLength(2);
     expect(sendFramesOf(streams[1])).toHaveLength(1);
+    expect(reported).toEqual([
+      { text: FIRST_TEXT, epicId: EPIC_ID, hostId: HOST_ID },
+    ]);
   });
 
   it("holds a second message behind the first and sends both once, in order", async () => {
@@ -689,7 +753,7 @@ describe("a message sent to a chat the pool serves because its host dropped the 
     await waitFor(() => {
       expect(streams).toHaveLength(2);
     });
-    openStream(streams[1], { role: "owner", canAct: true });
+    openStream(streams[1], { role: "owner", canAct: true }, undefined);
     await waitFor(() => {
       expect(sendFramesOf(streams[1])).toHaveLength(2);
     });
@@ -709,4 +773,71 @@ describe("a message sent to a chat the pool serves because its host dropped the 
     ).not.toBeNull();
     expect(toast.getToasts()).toHaveLength(0);
   });
+
+  it.each(["unmount", "pagehide", "confirm-close"] as const)(
+    "settles consent correctly during %s",
+    async (lifecycle) => {
+      const reported: SentChatMessage[] = [];
+      observeSentMessages(reported);
+      stageRebind();
+      await mountOnThePool();
+      putInComposer(FIRST_TEXT);
+      clickSend();
+      await waitFor(() => expect(pendingRows()).toHaveLength(1));
+      await settleLegendList();
+      await answerHydrate(0);
+      await settleLegendList();
+      await waitFor(() => expect(streams).toHaveLength(2));
+      await settleLegendList();
+      openStream(streams[1], { role: "owner", canAct: true }, [runningShell()]);
+      await settleLegendList();
+      expect(
+        await screen.findByTestId("teardown-commit-dialog"),
+      ).not.toBeNull();
+      expect(pendingRows()).toHaveLength(1);
+      expect(rowsWithText(FIRST_TEXT)).toHaveLength(1);
+      expect(reported).toEqual([]);
+
+      if (lifecycle === "confirm-close") {
+        const confirm = screen.getByTestId("teardown-commit-immediate");
+        act(() => {
+          fireEvent.click(confirm);
+          cleanup();
+        });
+        await waitFor(() => {
+          expect(sendFramesOf(streams[1])).toHaveLength(1);
+        });
+        await waitFor(() => {
+          expect(reported).toEqual([
+            { text: FIRST_TEXT, epicId: EPIC_ID, hostId: HOST_ID },
+          ]);
+        });
+        expect(sendFramesOf(streams[0])).toEqual([]);
+        expect(textInContent(sendFramesOf(streams[1])[0].content)).toBe(
+          FIRST_TEXT,
+        );
+        expect(composerDraftIsEmpty(CHAT_ARTIFACT.id)).toBe(true);
+        expect(imageRootHeld()).toBe(false);
+      } else if (lifecycle === "pagehide") {
+        act(() => {
+          window.dispatchEvent(new Event("pagehide"));
+        });
+      } else {
+        cleanup();
+      }
+
+      if (lifecycle !== "confirm-close") {
+        expect(composerDraftIsEmpty(CHAT_ARTIFACT.id)).toBe(false);
+        expect(
+          useComposerDraftStore.getState().drafts[CHAT_ARTIFACT.id]?.content,
+        ).toEqual(draftOf(FIRST_TEXT));
+        expect(imageRootHeld()).toBe(false);
+        expect(screen.queryByTestId("teardown-commit-dialog")).toBeNull();
+        expect(pendingRows()).toHaveLength(0);
+        expect(streams.flatMap(sendFramesOf)).toEqual([]);
+        expect(hydrates).toHaveLength(1);
+        expect(reported).toEqual([]);
+      }
+    },
+  );
 });

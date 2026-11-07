@@ -12,6 +12,7 @@ import {
   ChatStateLineContext,
 } from "./chat-state-line";
 import { ChatSandboxFooter } from "@/components/chat/chat-sandbox-footer";
+import { reportSentChatMessage } from "@/components/share-on-x/sent-messages";
 import { useChatSandboxState } from "@/hooks/sandboxes/use-chat-sandbox-state";
 import { useLiveChatSandboxState } from "@/hooks/sandboxes/use-live-chat-sandbox-state";
 import { TaskSandboxEndDetails } from "@/components/hosts/task-sandbox-end-details";
@@ -1915,6 +1916,7 @@ function ChatTileSessionViewBody(props: ChatTileSessionViewProps) {
                 "single",
                 "direct_ui",
               ),
+              "user",
             ),
           onDoubleClick: () =>
             openTile(
@@ -1924,6 +1926,7 @@ function ChatTileSessionViewBody(props: ChatTileSessionViewProps) {
                 "double",
                 "direct_ui",
               ),
+              "user",
             ),
         };
       },
@@ -1942,6 +1945,7 @@ function ChatTileSessionViewBody(props: ChatTileSessionViewProps) {
                 "single",
                 "direct_ui",
               ),
+              "user",
             ),
           onDoubleClick: () =>
             openTile(
@@ -1951,6 +1955,7 @@ function ChatTileSessionViewBody(props: ChatTileSessionViewProps) {
                 "double",
                 "direct_ui",
               ),
+              "user",
             ),
         };
       },
@@ -1968,6 +1973,7 @@ function ChatTileSessionViewBody(props: ChatTileSessionViewProps) {
               "explicit",
               "direct_ui",
             ),
+            "user",
           );
       },
       hash: (request) => {
@@ -1988,6 +1994,7 @@ function ChatTileSessionViewBody(props: ChatTileSessionViewProps) {
                 "single",
                 "direct_ui",
               ),
+              "user",
             ),
           onDoubleClick: () =>
             openTile(
@@ -1997,6 +2004,7 @@ function ChatTileSessionViewBody(props: ChatTileSessionViewProps) {
                 "double",
                 "direct_ui",
               ),
+              "user",
             ),
         };
       },
@@ -3359,10 +3367,21 @@ function useChatTileSessionViewModel(
     setTeardownDialog(null);
   }
   useEffect(() => {
-    // A send armed for the previous chat is dropped, and the composer that
-    // waits on it hears so, keeping its text.
-    pendingSubmitRef.current?.input.settle(false);
-    pendingSubmitRef.current = null;
+    // A send awaiting consent belongs to this mounted page and chat. Refuse
+    // it before either goes away, including a page retained in the back cache.
+    const cancelPending = (): void => {
+      pendingSubmitRef.current?.input.settle(false);
+      pendingSubmitRef.current = null;
+    };
+    const onPageHide = (): void => {
+      cancelPending();
+      setTeardownDialog(null);
+    };
+    window.addEventListener("pagehide", onPageHide);
+    return () => {
+      window.removeEventListener("pagehide", onPageHide);
+      cancelPending();
+    };
   }, [node.id]);
 
   const dispatchUserSend = useCallback(
@@ -3503,17 +3522,39 @@ function useChatTileSessionViewModel(
   // The ordinary road for a message on this session: the parked message of an
   // evicted chat takes it too, once the session is the host's.
   const submitLiveMessage = useCallback(
-    (input: ChatComposerSubmitInput): boolean | Promise<boolean> => {
+    (
+      input: ChatComposerSubmitInput,
+      onDispatch: ((accepted: boolean) => void) | null,
+    ): boolean | Promise<boolean> => {
       if (!canAct) return false;
       // Armed behind the folder dialog, the composer gets the promise and
       // clears its text only once "Send and switch" dispatches the send.
-      return submitThroughRebindGate({
-        submit: input,
-        dispatch: dispatchUserSend,
-        refusal: NO_LIVE_SEND_REFUSAL,
-      }).accepted;
+      return reportSentChatMessage(
+        submitThroughRebindGate({
+          submit: input,
+          dispatch: (message) => {
+            const accepted = dispatchUserSend(message);
+            // Transfer custody at dispatch, before a consent promise can
+            // resolve later than a tile close in this same turn.
+            onDispatch?.(accepted);
+            return accepted;
+          },
+          refusal: NO_LIVE_SEND_REFUSAL,
+        }).accepted,
+        {
+          text: input.contentText,
+          epicId: currentEpicId,
+          hostId: activeHostId,
+        },
+      );
     },
-    [canAct, dispatchUserSend, submitThroughRebindGate],
+    [
+      canAct,
+      dispatchUserSend,
+      submitThroughRebindGate,
+      currentEpicId,
+      activeHostId,
+    ],
   );
   const evictedSend = props.evictedSend ?? null;
   const submitMessage = useCallback(
@@ -3556,7 +3597,7 @@ function useChatTileSessionViewModel(
         evictedSend.park(input, { type: "user", userId: profile.userId });
         return true;
       }
-      return submitLiveMessage(input);
+      return submitLiveMessage(input, null);
     },
     [
       activeEditingQueueItemId,
@@ -3578,9 +3619,11 @@ function useChatTileSessionViewModel(
     if (evictedSend === null || !evictedSend.ready) return;
     if (evictedSend.served || !canAct) return;
     for (const send of evictedSend.take()) {
-      void Promise.resolve(submitLiveMessage(send.input)).then((accepted) => {
-        evictedSend.settle(send, accepted);
-      });
+      const accepted = submitLiveMessage(send.input, (result) =>
+        evictedSend.settle(send, result),
+      );
+      if (typeof accepted === "boolean") evictedSend.settle(send, accepted);
+      else void accepted.then((result) => evictedSend.settle(send, result));
     }
   }, [evictedSend, canAct, submitLiveMessage]);
   useEvictedSendAckRefusals(handle, evictedSend?.refuse ?? null);

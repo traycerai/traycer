@@ -61,6 +61,8 @@ const mocks = vi.hoisted(() => ({
   /** Unread notifications by thread id, as the indicators read them. */
   unread: {} as Record<string, number>,
   writes: [] as BotThreadFollowSetRequest[],
+  /** Every read the host answered: its method and the params it was sent. */
+  reads: [] as Array<{ method: string; params: unknown }>,
   client: null as HostClient<HostRpcRegistry> | null,
   activateTabIntent: vi.fn<(intent: unknown) => void>(),
   /** How `bot.list` stands: answered, still being read, or failed. */
@@ -184,6 +186,15 @@ function thread(
   };
 }
 
+/** A thread a call opened. */
+function callThread(
+  botId: string,
+  threadId: string,
+  lastReplyAt: number | null,
+): BotThreadSummary {
+  return { ...thread(botId, threadId, lastReplyAt), kind: "call" };
+}
+
 function script(
   threads: BotThreadSummary[],
   follows: Record<string, BotThreadFollow>,
@@ -220,14 +231,21 @@ function mount(): void {
       registry: hostRpcRegistry,
       requestId: () => "req-1",
       handlers: {
-        "bot.thread.list": ({ botId }) => ({
-          threads: mocks.hosted[botId].threads,
-          trunkCostUsd: null,
-          threadAnchors: null,
-        }),
-        "bot.threadFollow.read": ({ botId }) => ({
-          follows: { ...mocks.hosted[botId].follows },
-        }),
+        "bot.thread.list": (params) => {
+          mocks.reads.push({ method: "bot.thread.list", params });
+          const { threads } = mocks.hosted[params.botId];
+          return {
+            threads,
+            trunkCostUsd: null,
+            threadAnchors: null,
+            nextCursor: null,
+            total: threads.length,
+          };
+        },
+        "bot.threadFollow.read": (params) => {
+          mocks.reads.push({ method: "bot.threadFollow.read", params });
+          return { follows: { ...mocks.hosted[params.botId].follows } };
+        },
         "bot.threadFollow.set": (params) => {
           mocks.writes.push(params);
           const follow: BotThreadFollow = {
@@ -237,10 +255,14 @@ function mount(): void {
           mocks.hosted[params.botId].follows[params.threadId] = follow;
           return { follow };
         },
-        "bot.readCursor.read": ({ botId }) => mocks.hosted[botId].cursors,
-        "bot.notificationLevel.read": ({ botId }) => ({
-          levels: mocks.hosted[botId].levels,
-        }),
+        "bot.readCursor.read": (params) => {
+          mocks.reads.push({ method: "bot.readCursor.read", params });
+          return mocks.hosted[params.botId].cursors;
+        },
+        "bot.notificationLevel.read": (params) => {
+          mocks.reads.push({ method: "bot.notificationLevel.read", params });
+          return { levels: mocks.hosted[params.botId].levels };
+        },
       },
     }),
   });
@@ -286,6 +308,7 @@ beforeEach(() => {
   mocks.channels = {};
   mocks.unread = {};
   mocks.writes = [];
+  mocks.reads = [];
   useBotTabLandingStore.setState({ byBotId: {} });
   useSelectionAuthorityStore.setState({ effectiveHostId: "host-1" });
   useTracySurfaceStore.setState({
@@ -312,6 +335,39 @@ describe("<BotThreadsView />", () => {
     mocks.hosted[TEAM] = script(
       [thread(TEAM, "team-new", 3_000), thread(TEAM, "team-quiet", null)],
       { "team-new": FOLLOWING, "team-quiet": FOLLOWING },
+    );
+  });
+
+  it("asks for the whole thread list of each bot and for the follows, read cursors and levels by bot id alone", async () => {
+    mount();
+    await waitFor(() =>
+      expect(listed()).toEqual(["team-new", "tracy-old", "team-quiet"]),
+    );
+
+    // The distinct params each read was sent, exactly: a refetch repeats them.
+    const sentTo = (method: string): Set<string> =>
+      new Set(
+        mocks.reads
+          .filter((read) => read.method === method)
+          .map((read) => JSON.stringify(read.params)),
+      );
+    for (const method of [
+      "bot.threadFollow.read",
+      "bot.readCursor.read",
+      "bot.notificationLevel.read",
+    ]) {
+      expect(sentTo(method)).toEqual(
+        new Set([
+          JSON.stringify({ botId: TRACY }),
+          JSON.stringify({ botId: TEAM }),
+        ]),
+      );
+    }
+    expect(sentTo("bot.thread.list")).toEqual(
+      new Set([
+        JSON.stringify({ botId: TRACY, limit: null, cursor: null }),
+        JSON.stringify({ botId: TEAM, limit: null, cursor: null }),
+      ]),
     );
   });
 
@@ -360,6 +416,22 @@ describe("<BotThreadsView />", () => {
     ).toBeNull();
     expect(
       within(tracy).queryByTestId("bot-thread-row-unread-count"),
+    ).toBeNull();
+  });
+
+  it("marks a thread a call opened with a phone, and draws none on a plain thread", async () => {
+    mocks.hosted[TEAM] = script(
+      [callThread(TEAM, "team-call", 4_000), thread(TEAM, "team-new", 3_000)],
+      { "team-call": FOLLOWING, "team-new": FOLLOWING },
+    );
+    mount();
+    await waitFor(() => expect(listed()).toContain("team-call"));
+
+    const phone = within(item("team-call")).getByTestId("bot-thread-row-call");
+    expect(phone.getAttribute("role")).toBe("img");
+    expect(phone.getAttribute("aria-label")).toBe("Call");
+    expect(
+      within(item("team-new")).queryByTestId("bot-thread-row-call"),
     ).toBeNull();
   });
 

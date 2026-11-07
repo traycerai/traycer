@@ -84,7 +84,7 @@ describe("localPickerRow", () => {
       expect(localPickerRow(OLD_LAPTOP, status, version)).toEqual({
         hostId: "old",
         name: "Old laptop",
-        subtitle: "Old laptop needs an update to show its settings here.",
+        subtitle: "Update to view these settings.",
         verb: null,
         needsUpdate: true,
         defaultsToLocal: false,

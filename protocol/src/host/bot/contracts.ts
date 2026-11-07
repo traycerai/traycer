@@ -57,8 +57,12 @@ import {
   botConversationSendRequestSchemaV10,
   botConversationSendRequestSchemaV11,
   botConversationSendRequestSchemaV12,
+  botConversationSendRequestSchemaV13,
   botConversationSendResponseSchema,
+  botConversationSearchRequestSchema,
+  botConversationSearchResponseSchema,
   botThreadListRequestSchema,
+  botThreadListRequestSchemaV10,
   botTurnLocateRequestSchema,
   botTurnLocateResponseSchema,
   botThreadListResponseSchema,
@@ -72,6 +76,7 @@ import {
   botOnboardingCompleteResponseSchema,
   botOnboardingReadRequestSchema,
   botOnboardingReadResponseSchema,
+  botOnboardingReadResponseSchemaV12,
   botOnboardingReadResponseSchemaV10,
   botOnboardingReadResponseSchemaV11,
 } from "./onboarding-schemas";
@@ -318,6 +323,20 @@ export const botConversationSendUpgradeV11ToV12 = defineUpgradePath<
 });
 
 /**
+ * `bot.conversation.search@1.0` (T139): text search over a bot's channel and
+ * threads, or over those of every bot the caller can see. Its own method
+ * rather than a mode of `chat.search`, whose admission and scope are a
+ * task's: this one's are a bot's. Same optional posture as the namespace: a
+ * host without it offers no search.
+ */
+export const botConversationSearchV10 = defineRpcContract({
+  method: "bot.conversation.search",
+  schemaVersion: { major: 1, minor: 0 } as const,
+  requestSchema: botConversationSearchRequestSchema,
+  responseSchema: botConversationSearchResponseSchema,
+});
+
+/**
  * `bot.conversation.send@1.3` (Call Tracy VC1): a send may open a call's
  * thread (`origin`) and say its words were spoken (`spoken`). A 1.2 request
  * does neither.
@@ -325,7 +344,7 @@ export const botConversationSendUpgradeV11ToV12 = defineUpgradePath<
 export const botConversationSendV13 = defineRpcContract({
   method: "bot.conversation.send",
   schemaVersion: { major: 1, minor: 3 } as const,
-  requestSchema: botConversationSendRequestSchema,
+  requestSchema: botConversationSendRequestSchemaV13,
   responseSchema: botConversationSendResponseSchema,
 });
 export const botConversationSendUpgradeV12ToV13 = defineUpgradePath<
@@ -334,6 +353,26 @@ export const botConversationSendUpgradeV12ToV13 = defineUpgradePath<
 >({
   from: botConversationSendV12.schemaVersion,
   to: botConversationSendV13.schemaVersion,
+  upgradeRequest: (request) => request,
+  upgradeResponse: (response) => response,
+});
+
+/**
+ * `bot.conversation.send@1.4` (T123): a message may carry images
+ * (`attachments`), and with one needs no text. A 1.3 request carries none.
+ */
+export const botConversationSendV14 = defineRpcContract({
+  method: "bot.conversation.send",
+  schemaVersion: { major: 1, minor: 4 } as const,
+  requestSchema: botConversationSendRequestSchema,
+  responseSchema: botConversationSendResponseSchema,
+});
+export const botConversationSendUpgradeV13ToV14 = defineUpgradePath<
+  typeof botConversationSendV13,
+  typeof botConversationSendV14
+>({
+  from: botConversationSendV13.schemaVersion,
+  to: botConversationSendV14.schemaVersion,
   upgradeRequest: (request) => request,
   upgradeResponse: (response) => response,
 });
@@ -348,7 +387,7 @@ export const botConversationSendUpgradeV12ToV13 = defineUpgradePath<
 export const botThreadListV10 = defineRpcContract({
   method: "bot.thread.list",
   schemaVersion: { major: 1, minor: 0 } as const,
-  requestSchema: botThreadListRequestSchema,
+  requestSchema: botThreadListRequestSchemaV10,
   responseSchema: botThreadListResponseSchemaV10,
 });
 
@@ -360,7 +399,7 @@ export const botThreadListV10 = defineRpcContract({
 export const botThreadListV11 = defineRpcContract({
   method: "bot.thread.list",
   schemaVersion: { major: 1, minor: 1 } as const,
-  requestSchema: botThreadListRequestSchema,
+  requestSchema: botThreadListRequestSchemaV10,
   responseSchema: botThreadListResponseSchemaV11,
 });
 export const botThreadListUpgradeV10ToV11 = defineUpgradePath<
@@ -377,6 +416,9 @@ export const botThreadListUpgradeV10ToV11 = defineUpgradePath<
  * `bot.thread.list@1.2` (voice VT3b): each anchor carries its post's excerpt
  * (`anchor.excerpt`), so a client names a thread it has not loaded. A 1.1
  * host holds none. A thread a call opened says so (`kind`, Call Tracy VC1).
+ * The list is paged (T142): a request names a `limit` and a `cursor`, and the
+ * response the `nextCursor` and the `total`. A 1.1 request lists every
+ * thread, and a 1.1 host answers every thread on one page.
  */
 export const botThreadListV12 = defineRpcContract({
   method: "bot.thread.list",
@@ -390,7 +432,7 @@ export const botThreadListUpgradeV11ToV12 = defineUpgradePath<
 >({
   from: botThreadListV11.schemaVersion,
   to: botThreadListV12.schemaVersion,
-  upgradeRequest: (request) => request,
+  upgradeRequest: (request) => ({ ...request, limit: null, cursor: null }),
   upgradeResponse: (response) => ({
     ...response,
     threads: response.threads.map((thread) => ({
@@ -398,6 +440,8 @@ export const botThreadListUpgradeV11ToV12 = defineUpgradePath<
       anchor:
         thread.anchor === null ? null : { ...thread.anchor, excerpt: null },
     })),
+    nextCursor: null,
+    total: response.threads.length,
   }),
 });
 
@@ -493,7 +537,7 @@ export const botOnboardingReadV12 = defineRpcContract({
   method: "bot.onboarding.read",
   schemaVersion: { major: 1, minor: 2 } as const,
   requestSchema: botOnboardingReadRequestSchema,
-  responseSchema: botOnboardingReadResponseSchema,
+  responseSchema: botOnboardingReadResponseSchemaV12,
 });
 export const botOnboardingReadUpgradeV11ToV12 = defineUpgradePath<
   typeof botOnboardingReadV11,
@@ -509,6 +553,29 @@ export const botOnboardingReadUpgradeV11ToV12 = defineUpgradePath<
         ? null
         : { ...response.setup, state: "needs_host", arrival: null },
   }),
+});
+
+/**
+ * `bot.onboarding.read@1.3` (T141): a live setup's arrival may be `machine`,
+ * a computer of the team's own, and a setup whose machine holds the team's
+ * host before the bot exists is `host_joining`. A `1.2` caller is served a
+ * machine's arrival as `null` and `host_joining` as `needs_host`
+ * (`WITHIN_MAJOR_RESPONSE_PROJECTIONS` on the host).
+ */
+export const botOnboardingReadV13 = defineRpcContract({
+  method: "bot.onboarding.read",
+  schemaVersion: { major: 1, minor: 3 } as const,
+  requestSchema: botOnboardingReadRequestSchema,
+  responseSchema: botOnboardingReadResponseSchema,
+});
+export const botOnboardingReadUpgradeV12ToV13 = defineUpgradePath<
+  typeof botOnboardingReadV12,
+  typeof botOnboardingReadV13
+>({
+  from: botOnboardingReadV12.schemaVersion,
+  to: botOnboardingReadV13.schemaVersion,
+  upgradeRequest: (request) => request,
+  upgradeResponse: (response) => response,
 });
 
 export const botOnboardingChooseV10 = defineRpcContract({

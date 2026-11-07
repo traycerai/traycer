@@ -312,7 +312,7 @@ describe("useEvictedSendAckRefusals", () => {
     expect(refuse.mock.calls).toEqual([[]]);
   });
 
-  it("refuses nothing for a send displaced into SEND_NOT_RECORDED", () => {
+  it("refuses once when an evicted send is displaced into SEND_NOT_RECORDED", () => {
     const harness = createHarness();
     render(<Refusals handle={harness.handle} />);
     const first = send(harness);
@@ -322,7 +322,7 @@ describe("useEvictedSendAckRefusals", () => {
 
     hostNotice(harness, second, "CHAT_EVICTED_UNREACHABLE");
 
-    expect(refuse).not.toHaveBeenCalled();
+    expect(refuse.mock.calls).toEqual([[]]);
   });
 });
 

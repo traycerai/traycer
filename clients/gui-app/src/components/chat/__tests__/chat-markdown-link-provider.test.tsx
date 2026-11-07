@@ -273,6 +273,7 @@ describe("ChatMarkdownLinkProvider", () => {
               id: workspaceFileTabId(HOST_ID, "/repo", "src/app.ts"),
             }) as EpicCanvasTileRef,
           }),
+          "user",
         );
       });
     } finally {
@@ -415,13 +416,15 @@ describe("ChatMarkdownLinkProvider", () => {
     // percent-encoded destination (`C:%5CUsers…`). The bypass missed and
     // `defaultUrlTransform` emptied the href as an unsafe `C:` scheme - and
     // `<a href="">` points at the current document, so the click navigated for
-    // real and unloaded the whole renderer.
+    // real and unloaded the whole renderer. The path now renders as a chip
+    // button that opens it through the link policy, so the drive prefix is
+    // asserted on the path the policy resolves (the exact `filePath` below).
     mocks.resolveArtifactByPath.mockResolvedValue({
       artifactId: "artifact-dummy-alpha",
       kind: "spec",
     });
     const tabId = useEpicCanvasStore.getState().openEpicTab("epic-1", "Epic 1");
-    const { container } = renderProvider(
+    renderProvider(
       tabId,
       <AgentReferenceMarkdown
         isStreaming={false}
@@ -432,17 +435,11 @@ describe("ChatMarkdownLinkProvider", () => {
       />,
     );
 
-    // Addressed as an element, not by role: an anchor whose href was emptied
-    // (and therefore dropped) has no `link` role, and that href is the bug.
-    // Asserting the drive prefix specifically - a bare "not empty" check would
-    // pass on the dropped-attribute form the anchor falls back to.
-    const link = container.querySelector("a");
-    if (link === null) throw new Error("Expected a rendered anchor.");
-    expect(link.getAttribute("href")).toMatch(/^C:(%5C|\\)Users/i);
+    const chip = screen.getByRole("button", { name: "Dummy Alpha" });
 
     // `fireEvent.click` returns false when the handler called `preventDefault`.
     // True means the browser owns the navigation - the renderer reload.
-    expect(fireEvent.click(link)).toBe(false);
+    expect(fireEvent.click(chip)).toBe(false);
 
     await waitFor(() => {
       expect(mocks.resolveArtifactByPath).toHaveBeenCalledTimes(1);
@@ -492,7 +489,7 @@ describe("ChatMarkdownLinkProvider", () => {
 
     for (const name of ["Encoded", "Bracketed"]) {
       mocks.resolveArtifactByPath.mockClear();
-      expect(fireEvent.click(screen.getByRole("link", { name }))).toBe(false);
+      expect(fireEvent.click(screen.getByRole("button", { name }))).toBe(false);
       await waitFor(() => {
         expect(mocks.resolveArtifactByPath).toHaveBeenCalledWith(
           expect.objectContaining({
@@ -525,7 +522,7 @@ describe("ChatMarkdownLinkProvider", () => {
       />,
     );
 
-    fireEvent.click(screen.getByRole("link", { name: "Artifact" }));
+    fireEvent.click(screen.getByRole("button", { name: "Artifact" }));
     await waitFor(() =>
       expect(mocks.resolveArtifactByPath).toHaveBeenCalledTimes(1),
     );

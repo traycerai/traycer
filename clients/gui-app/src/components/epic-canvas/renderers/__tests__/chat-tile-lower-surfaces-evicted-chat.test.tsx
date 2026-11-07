@@ -12,6 +12,10 @@ import {
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { domAnimation, LazyMotion } from "motion/react";
 import type { ReactElement, ReactNode } from "react";
+import type {
+  ChatRunSettings,
+  OpenChatQueuedPromptItem,
+} from "@traycer/protocol/host/agent/gui/subscribe";
 
 const composerProps = vi.hoisted(
   () => [] as Array<{ sendDisabled: boolean | undefined }>,
@@ -64,6 +68,37 @@ import { TooltipProvider } from "@/components/ui/tooltip";
 import { TabHostProvider } from "@/components/epic-canvas/tab-host-provider";
 
 const EMPTY_BACKGROUND_STOP_TASK_IDS: ReadonlySet<string> = new Set();
+const EDIT_SETTINGS: ChatRunSettings = {
+  ultracode: false,
+  harnessId: "claude",
+  model: "claude-sonnet",
+  permissionMode: "supervised",
+  reasoningEffort: "medium",
+  serviceTier: null,
+  agentMode: "regular",
+  profileId: null,
+};
+const EDITING_ITEM: OpenChatQueuedPromptItem = {
+  kind: "prompt",
+  queueItemId: "queue-editing",
+  messageId: "message-editing",
+  message: {
+    kind: "user",
+    content: { type: "doc", content: [] },
+    browserAnnotations: [],
+  },
+  sender: { type: "user", userId: "owner-1" },
+  settings: EDIT_SETTINGS,
+  accountContext: { type: "PERSONAL" },
+  sentFromHostId: null,
+  delivery: "next_turn",
+  status: "pending",
+  targetTurnId: null,
+  steerRequest: null,
+  fallbackReason: null,
+  createdAt: 1,
+  updatedAt: 1,
+};
 
 const RESTORE_CONTEXT: ChatRestoreContextValue = {
   accessRole: "owner",
@@ -234,6 +269,24 @@ describe("the composer of an evicted chat the pool serves", () => {
     );
 
     expect(composerProps.at(-1)).toEqual({ sendDisabled: false });
+  });
+
+  it("disables send while editing a queued item, even when a send is parked", () => {
+    const base = props({
+      isViewer: false,
+      isCopy: false,
+      canAct: false,
+      readOnlyNotice: null,
+      parksEvictedSend: true,
+    });
+    render(
+      <ChatLowerInteractionSurfaces
+        {...base}
+        queue={{ ...base.queue, editingItem: EDITING_ITEM }}
+      />,
+    );
+
+    expect(composerProps.at(-1)).toEqual({ sendDisabled: true });
   });
 
   it("keeps a viewer's read-only surface when no message is parked", () => {

@@ -8,6 +8,7 @@ import {
   type ProviderPackPreparing,
 } from "@/components/providers/provider-pack-readiness";
 import { providerDisplayName } from "@/lib/provider-ordering";
+import { providerKeyTab } from "@/components/settings/panels/provider-settings-tabs";
 
 /**
  * Why the host could not act on a sign-in for this provider right now.
@@ -370,6 +371,17 @@ type ProviderSignInUnavailableReason =
   | { readonly kind: "other"; readonly hint: string }
   | { readonly kind: "host"; readonly block: ProviderHostBlock };
 
+/** The tab name that holds this provider's key, or null when it has none. */
+function keyTabLabel(
+  state: ProviderCliState,
+): "Account" | "Profiles & Limits" | null {
+  const tab = providerKeyTab({
+    apiKeySupported: state.apiKey.supported,
+    usageAdvertised: state.nativeCapabilities.supportedTabs.includes("usage"),
+  });
+  return tab === null ? null : tab.label;
+}
+
 /**
  * The reason itself rather than its sentence, for a surface that does
  * something with the KIND: Profiles links a missing or preparing CLI to the
@@ -389,11 +401,10 @@ export function providerSignInUnavailableReason(
     // It is also FALSE for the host check: a device flow needs no loopback,
     // so terminal login works on a remote host.
     const hint = `${providerDisplayName(state.providerId)} is signed in from a terminal. Open its model picker in a chat or on the start page and use the terminal sign-in there.`;
+    const keyTab = keyTabLabel(state);
     return {
       kind: "other",
-      hint: state.apiKey.supported
-        ? `${hint} Or set an API key on the Account tab.`
-        : hint,
+      hint: keyTab === null ? hint : `${hint} Or set an API key on ${keyTab}.`,
     };
   }
   const oauthArgs = state.loginCapability?.oauthArgs ?? null;
@@ -415,8 +426,8 @@ export function providerSignInUnavailableReason(
     // Unreachable today for profile-capable providers (they all ship
     // oauthArgs) and for zero-profile hosts the profile section returns null
     // before calling this — kept accurate so a future call site is not wrong.
-    // "Above" is intentionally gone: the API key field lives on the Account
-    // tab after the providers tab split, not above this hint.
+    // "Above" is intentionally gone: the API key field lives on the tab
+    // {@link keyTabLabel} names, not above this hint.
     const name = providerDisplayName(state.providerId);
     if (state.providerId === "traycer") {
       return {
@@ -424,9 +435,11 @@ export function providerSignInUnavailableReason(
         hint: `${name} does not support browser sign-in.`,
       };
     }
+    const keyTab = keyTabLabel(state);
+    const keyClause = keyTab === null ? "" : `, or set an API key on ${keyTab}`;
     return {
       kind: "other",
-      hint: `${name} does not support browser sign-in. Authenticate with its own CLI, or set an API key on the Account tab.`,
+      hint: `${name} does not support browser sign-in. Authenticate with its own CLI${keyClause}.`,
     };
   }
   if (

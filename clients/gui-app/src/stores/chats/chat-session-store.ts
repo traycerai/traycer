@@ -1384,12 +1384,6 @@ export interface ChatSessionState {
    */
   readonly runStatus: ChatRunStatus;
   readonly activeTurn: ChatActiveTurn | null;
-  /**
-   * What a running turn's earlier ids became, while it runs: the host renames a
-   * turn in place on a steer restart, a provider id backfill or a recovery.
-   * Emptied when the turn settles.
-   */
-  readonly renamedTurnIds: ReadonlyMap<string, string>;
   /** Counts observed turn boundaries, including separate ID-less activations. */
   readonly turnLifecycleRevision: number;
   /**
@@ -1817,6 +1811,8 @@ export interface ChatSessionState {
   readonly acceptedActions: Readonly<Record<string, AcceptedChatAction>>;
   readonly pendingUserMessages: ReadonlyArray<PendingUserMessage>;
   readonly errorNotices: ReadonlyArray<ChatErrorNotice>;
+  /** Last evicted-send refusal, independent of the prompt restoration slot. */
+  readonly evictedSendRefusal: { readonly clientActionId: string } | null;
   /**
    * Notices the toast layer has actually SHOWN, by `clientActionId`.
    *
@@ -5054,11 +5050,6 @@ export function createChatSessionStoreWithNotificationDependencies(
           lastSendSnapshotRevision: (state.sendHostFrameRevision ?? 0) + 1,
           runStatus: frame.snapshot.runStatus,
           activeTurn: frame.snapshot.activeTurn,
-          renamedTurnIds: nextRenamedTurnIds(
-            state.renamedTurnIds,
-            state.activeTurn,
-            frame.snapshot.activeTurn,
-          ),
           turnInProgress: frame.snapshot.turnInProgress,
           turnLifecycleRevision: nextTurnLifecycleRevision(state, {
             activeTurn: frame.snapshot.activeTurn,
@@ -9266,6 +9257,10 @@ export function createChatSessionStoreWithNotificationDependencies(
               connectionEpoch,
             ),
             unconfirmedSendActionIds: nextUnconfirmedSends,
+            evictedSendRefusal:
+              pending?.action === "send" && isEvictedChatRefusal(frame.code)
+                ? { clientActionId: frame.clientActionId }
+                : state.evictedSendRefusal,
             // The rejection's own surfaces first, then whatever this refusal
             // settles of a queue-edit submission laid over them - one slot,
             // one contest, in the order the two were decided.
@@ -9588,11 +9583,6 @@ export function createChatSessionStoreWithNotificationDependencies(
             sendHostFrameRevision: (state.sendHostFrameRevision ?? 0) + 1,
             runStatus: frame.runStatus,
             activeTurn: frame.activeTurn,
-            renamedTurnIds: nextRenamedTurnIds(
-              state.renamedTurnIds,
-              state.activeTurn,
-              frame.activeTurn,
-            ),
             turnInProgress: frame.turnInProgress ?? state.turnInProgress,
             turnLifecycleRevision: nextTurnLifecycleRevision(state, {
               activeTurn: frame.activeTurn,
@@ -10306,8 +10296,6 @@ export function createChatSessionStoreWithNotificationDependencies(
             connectionStatus: status,
             runStatus: status === "closed" ? "idle" : state.runStatus,
             activeTurn: status === "closed" ? null : state.activeTurn,
-            renamedTurnIds:
-              status === "closed" ? NO_RENAMED_TURN_IDS : state.renamedTurnIds,
             turnLifecycleRevision: nextTurnLifecycleRevision(state, {
               activeTurn: status === "closed" ? null : state.activeTurn,
               turnInProgress: state.turnInProgress,
@@ -10586,7 +10574,6 @@ export function createChatSessionStoreWithNotificationDependencies(
           : { ...inheritedDeliveryRestoreAck, clientActionId: null },
       runStatus: "idle",
       activeTurn: null,
-      renamedTurnIds: NO_RENAMED_TURN_IDS,
       turnLifecycleRevision: 0,
       steerProtocolSupported: false,
       draftBlobBridgeSupported: false,
@@ -10648,6 +10635,7 @@ export function createChatSessionStoreWithNotificationDependencies(
       acceptedActions: {},
       pendingUserMessages: [],
       errorNotices: [],
+      evictedSendRefusal: null,
       deliveredNoticeActionIds: new Set<string>(),
       deliveredLastCopyActionIds: new Set<string>(),
       lastCopyPrompts: {},
@@ -16054,50 +16042,6 @@ function turnRemapFor(turnIds: {
     message.role === "assistant" && message.turnId === previousTurnId
       ? { ...message, turnId: nextTurnId }
       : message;
-}
-
-const NO_RENAMED_TURN_IDS: ReadonlyMap<string, string> = new Map();
-
-/**
- * The older ids of the turn still running, kept for a caller holding one. The
- * same start and the same user message mean the same execution under a new id,
- * whether a frame names the change or a snapshot reports only where the turn
- * ended up; anything else is another turn, and the old ids go with the old turn.
- * The turn's current id never has an entry of its own, so every chain ends at it.
- */
-function nextRenamedTurnIds(
-  renamed: ReadonlyMap<string, string>,
-  previousTurn: ChatActiveTurn | null,
-  nextTurn: ChatActiveTurn | null,
-): ReadonlyMap<string, string> {
-  if (
-    previousTurn === null ||
-    nextTurn === null ||
-    previousTurn.startedAt !== nextTurn.startedAt ||
-    previousTurn.userMessageId !== nextTurn.userMessageId
-  ) {
-    return NO_RENAMED_TURN_IDS;
-  }
-  if (previousTurn.turnId === nextTurn.turnId) return renamed;
-  const next = new Map(renamed);
-  next.delete(nextTurn.turnId);
-  return next.set(previousTurn.turnId, nextTurn.turnId);
-}
-
-/** The id `turnId` goes by now, following the renames of the turn still running. */
-export function currentTurnIdOf(
-  state: Pick<ChatSessionState, "renamedTurnIds">,
-  turnId: string,
-): string {
-  let current = turnId;
-  for (
-    let next = state.renamedTurnIds.get(current);
-    next !== undefined;
-    next = state.renamedTurnIds.get(current)
-  ) {
-    current = next;
-  }
-  return current;
 }
 
 function messagesForTurnStateChange(

@@ -278,8 +278,11 @@ describe("useEvictedChatSend", () => {
     expect(hold.result.current).toBe(true);
     const taken = take(send);
     expect(taken.map((entry) => entry.input)).toEqual([INPUT, SECOND_INPUT]);
-    expect(send.result.current.parked).toEqual([]);
-    expect(send.result.current.ready).toBe(false);
+    expect(send.result.current.parked.map((entry) => entry.input)).toEqual([
+      INPUT,
+      SECOND_INPUT,
+    ]);
+    expect(send.result.current.ready).toBe(true);
   });
 
   it("roots a parked message's images until it is accepted", async () => {
@@ -292,6 +295,7 @@ describe("useEvictedChatSend", () => {
     expect(imageRootHeld()).toBe(true);
     settle(send, sent, true);
 
+    expect(send.result.current.parked).toEqual([]);
     expect(imageRootHeld()).toBe(false);
     expect(landingLiveImageRootHashes().has(HASH)).toBe(false);
     expect(draftOf(CHAT.chatId)).toBeUndefined();
@@ -304,6 +308,7 @@ describe("useEvictedChatSend", () => {
 
     settle(send, sent, false);
 
+    expect(send.result.current.parked).toEqual([]);
     expect(draftOf(CHAT.chatId)?.content).toEqual(INPUT.content);
     expect(draftOf(CHAT.chatId)?.browserAnnotations).toEqual([ANNOTATION]);
     expect(await screen.findByText(SEND_FAILED)).toBeTruthy();
@@ -321,6 +326,7 @@ describe("useEvictedChatSend", () => {
 
     settle(send, sent, false);
 
+    expect(send.result.current.parked).toEqual([]);
     expect(draftOf(CHAT.chatId)?.content).toEqual(newer);
     expect(draftOf(CHAT.chatId)?.browserAnnotations).toEqual([]);
     expect(
@@ -344,6 +350,7 @@ describe("useEvictedChatSend", () => {
     settle(send, first, false);
     settle(send, second, false);
 
+    expect(send.result.current.parked).toEqual([]);
     expect(draftOf(CHAT.chatId)?.content).toEqual(INPUT.content);
     expect(
       await screen.findByText(/It was not put back in the composer/),
@@ -377,7 +384,9 @@ describe("useEvictedChatSend", () => {
         answer(1, (d) => d.resolve({ outcome: "hydrated" }));
         await Promise.resolve();
       });
-      take(send);
+      const [sent] = take(send);
+      expect(send.result.current.parks).toBe(true);
+      settle(send, sent, true);
       expect(send.result.current.parks).toBe(false);
     },
   );
@@ -426,6 +435,25 @@ describe("useEvictedChatSend", () => {
     expect(await screen.findByText(SEND_FAILED)).toBeTruthy();
     expect(imageRootHeld()).toBe(false);
     expect(hold.result.current).toBe(false);
+  });
+
+  it("restores a taken send when the tile closes before rebind consent settles", async () => {
+    const { send, hold } = mount({ served: true, held: true });
+    await parkAndHydrate(send, INPUT);
+    const taken = take(send);
+    const settleLate = send.result.current.settle;
+
+    send.unmount();
+
+    expect(draftOf(CHAT.chatId)?.content).toEqual(INPUT.content);
+    expect(await screen.findByText(SEND_FAILED)).toBeTruthy();
+    expect(imageRootHeld()).toBe(false);
+    expect(hold.result.current).toBe(false);
+
+    act(() => settleLate(taken[0], true));
+
+    expect(draftOf(CHAT.chatId)?.content).toEqual(INPUT.content);
+    expect(imageRootHeld()).toBe(false);
   });
 
   it("releases the hold once the witness no longer reads the chat at rest", async () => {

@@ -43,12 +43,23 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 const scopeOverrides = vi.hoisted((): { current: Record<string, unknown> } => ({
   current: { client: null },
 }));
+const globalScopeOverrides = vi.hoisted(
+  (): { current: Record<string, unknown> } => ({
+    current: { client: null },
+  }),
+);
 vi.mock("@/components/settings/host-scope/use-host-scope", async () => {
   const { hostScopeFixture } =
     await import("@/components/settings/host-scope/host-scope-fixture");
   const useHostScope = () => hostScopeFixture(scopeOverrides.current);
+  const useHostScopeFor = () => hostScopeFixture(globalScopeOverrides.current);
   return {
     useHostScope,
+    useHostScopeFor,
+    WINDOW_HOST_SELECTION: {
+      scopedHostId: null,
+      setScopedHostId: () => undefined,
+    },
     usePersonalHostScope: useHostScope,
   };
 });
@@ -656,24 +667,14 @@ describe("<SettingsSidebar /> new sandbox entry", () => {
     expect(screen.queryByTestId("settings-new-sandbox")).toBeNull();
   });
 
-  it("says why on a build that cannot reach the control plane", async () => {
+  it("keeps the Sandboxes availability message off the rail", async () => {
     sandboxControl.reason = SANDBOXES_UNAVAILABLE_IN_STAGING;
-    useAuthStore.setState({ status: "signed-in" });
-    renderSidebar();
-
-    const line = await screen.findByTestId("settings-sandboxes-unavailable");
-    expect(line.textContent).toBe(
-      "Sandboxes aren't available in staging builds.",
-    );
-    expect(screen.queryByTestId("settings-new-sandbox")).toBeNull();
-  });
-
-  it("shows no unavailable line when the control plane is reachable", async () => {
     useAuthStore.setState({ status: "signed-in" });
     renderSidebar();
 
     expect(await screen.findByRole("link", { name: "General" })).toBeDefined();
     expect(screen.queryByTestId("settings-sandboxes-unavailable")).toBeNull();
+    expect(screen.queryByTestId("settings-new-sandbox")).toBeNull();
   });
 
   it("shows neither the entry nor the line when signed out, whatever the build", async () => {
@@ -761,7 +762,7 @@ const GROUP_HEADING_BY_ID: Readonly<Record<SettingsSectionGroupId, string>> = {
   app: "Application",
   personal: "Environment",
   account: "Account",
-  host: "Host",
+  host: "Hosts",
 };
 
 describe("<SettingsSidebar /> scope groups", () => {
@@ -775,6 +776,7 @@ describe("<SettingsSidebar /> scope groups", () => {
   afterEach(() => {
     cleanup();
     scopeOverrides.current = { client: null };
+    globalScopeOverrides.current = { client: null };
     setMobileApp(false);
   });
 
@@ -793,7 +795,7 @@ describe("<SettingsSidebar /> scope groups", () => {
     return aside;
   }
 
-  it("orders the groups Guide, Application, Account, Environment, Host", () => {
+  it("orders the groups Guide, Application, Account, Environment, Hosts", () => {
     expect(SETTINGS_SECTION_GROUPS.map((group) => group.id)).toEqual([
       "guide",
       "app",
@@ -831,7 +833,12 @@ describe("<SettingsSidebar /> scope groups", () => {
     const headings = Array.from(aside.querySelectorAll("h2")).map(
       (heading) => heading.textContent,
     );
-    expect(headings).toEqual(["Application", "Account", "Environment", "Host"]);
+    expect(headings).toEqual([
+      "Application",
+      "Account",
+      "Environment",
+      "Hosts",
+    ]);
   });
 
   it("files each rendered row under its group's heading", async () => {
@@ -885,6 +892,7 @@ describe("<SettingsSidebar /> scope groups", () => {
     const pickers = screen.getAllByTestId("settings-host-switcher");
     expect(pickers).toHaveLength(1);
     const picker = pickers[0];
+    expect(picker.textContent).toBe("host-a");
     const follows = (earlier: HTMLElement, later: HTMLElement): boolean =>
       (earlier.compareDocumentPosition(later) &
         Node.DOCUMENT_POSITION_FOLLOWING) !==
@@ -903,6 +911,48 @@ describe("<SettingsSidebar /> scope groups", () => {
       ).toBe(true);
     }
     expect(aside.contains(picker)).toBe(true);
+  });
+
+  it("keeps the Hosts group and titles the rail picker View host without an introduction", async () => {
+    const { hostScopeOptionFixture } =
+      await import("@/components/settings/host-scope/host-scope-fixture");
+    const member = hostScopeOptionFixture({
+      hostId: "host-member",
+      name: "Member computer",
+      isLocalMachine: false,
+      isActive: true,
+    });
+    const outside = hostScopeOptionFixture({
+      hostId: "host-outside",
+      name: "Other environment",
+      isLocalMachine: false,
+      isActive: false,
+    });
+    scopeOverrides.current = {
+      hosts: [member],
+      host: member,
+      hostId: member.hostId,
+    };
+    globalScopeOverrides.current = {
+      hosts: [member, outside],
+      host: member,
+      hostId: member.hostId,
+    };
+    await renderRail();
+
+    expect(screen.getByRole("heading", { name: "Hosts" })).not.toBeNull();
+    fireEvent.click(screen.getByTestId("settings-host-switcher"));
+    expect(screen.getByText("View host")).not.toBeNull();
+    expect(screen.queryByText("Look at another machine")).toBeNull();
+    expect(
+      screen.queryByText("Changes what this window shows. Nothing is created."),
+    ).toBeNull();
+    expect(
+      screen.getByTestId("settings-host-switcher-option-host-member"),
+    ).not.toBeNull();
+    expect(
+      screen.queryByTestId("settings-host-switcher-option-host-outside"),
+    ).toBeNull();
   });
 
   it("indents only the host rows under the picker, never Environment or Account", async () => {
@@ -985,7 +1035,7 @@ describe("<SettingsSidebar /> Environment pick", () => {
       (node) => node.textContent === "Environment",
     );
     const next = Array.from(document.querySelectorAll("h2")).find(
-      (node) => node.textContent === "Host",
+      (node) => node.textContent === "Hosts",
     );
     if (heading === undefined || next === undefined) {
       throw new Error("the Environment group did not render");

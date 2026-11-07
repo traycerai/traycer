@@ -256,10 +256,10 @@ function ProviderPluginsTabBody({
       })
       .catch(() => {
         reportableErrorToast("Couldn't open the folder picker.", undefined, {
-          title: "Could not add workspace folders",
+          title: "Could not add folders",
           message: "The folder picker failed to open.",
           code: null,
-          source: "Workspace folders",
+          source: "Folders",
         });
       });
   }, [browseForWorkspace, setScope, setWorkspaceRoot]);

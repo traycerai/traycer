@@ -84,9 +84,6 @@ export const RunnerHostInvoke = {
   getVoiceAvailability: "runnerHost:voice:availability",
   mintVoiceSession: "runnerHost:voice:sessions:mint",
   endVoiceSession: "runnerHost:voice:sessions:end",
-  // The voice router's model call (traycer-server `/inference`), same CORS
-  // reason.
-  routeVoiceUtterance: "runnerHost:voice:route",
   // Whether the sender window holds a live voice session: such a window is
   // hidden, not destroyed, when the person closes it.
   setVoiceSessionLive: "runnerHost:voice:setLive",
@@ -107,6 +104,9 @@ export const RunnerHostInvoke = {
   registerSlackApp: "runnerHost:slackApps:register",
   mintSlackAppInstallUrl: "runnerHost:slackApps:installUrl",
   disconnectSlackApp: "runnerHost:slackApps:disconnect",
+  setSlackAppDms: "runnerHost:slackApps:dms",
+  // A team environment's bot-host install token (traycer-server), likewise.
+  mintTeamHostInstallToken: "runnerHost:teamHost:installToken",
   // The secrets broker (authn), from Electron main for the same reason.
   getSandboxGrants: "runnerHost:sandboxSecrets:grants",
   getTeamEnvironment: "runnerHost:environments:team",
@@ -504,7 +504,8 @@ export const RunnerHostEvent = {
   // OS wake pulse (powerMonitor `resume` / `unlock-screen`) bridged to the
   // renderer so it force-reconnects its host streams - re-registering the
   // live request context within seconds of wake instead of waiting out the
-  // ~60s heartbeat. No payload: it is a pure "the machine just woke" signal.
+  // ~60s heartbeat. Payload: `DesktopSystemWake`, which says whether the
+  // screen is still locked.
   systemResumed: "runnerHost:event:systemResumed",
   // The person is leaving the machine (powerMonitor `suspend` /
   // `lock-screen`), bridged so a live voice session ends and its microphone

@@ -79,6 +79,7 @@ export function TracyEntryIcon(props: {
           size="xs"
           testId="tracy-entry-unread-count"
           corner={COUNT_SEAT_CLASS[ground]}
+          noun="unread"
         />
       )}
     </span>

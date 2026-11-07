@@ -128,13 +128,21 @@ import {
   fetchSlackAppManifestViaHttp,
   mintSlackAppInstallUrlViaHttp,
   readSlackAppViaHttp,
+  setSlackAppDmsViaHttp,
   registerSlackAppViaHttp,
   type SlackAppInstallUrlResult,
   type SlackAppManifestResult,
   type SlackAppReadResult,
   type SlackAppWriteResult,
 } from "@traycer-clients/shared/host-client/slack-app";
-import type { SlackAppRegisterRequest } from "@traycer/protocol/host/slack-app";
+import type {
+  SlackAppDmsRequest,
+  SlackAppRegisterRequest,
+} from "@traycer/protocol/host/slack-app";
+import {
+  mintTeamHostInstallTokenViaHttp,
+  type TeamHostInstallTokenResult,
+} from "@traycer-clients/shared/host-client/team-host";
 import {
   createSandboxViaHttp,
   destroySandboxViaHttp,
@@ -168,10 +176,6 @@ import {
   type VoiceSessionMintRequest,
   type VoiceTrayAction,
 } from "@traycer-clients/shared/host-client/voice-sessions";
-import {
-  voiceRouteViaHttp,
-  type VoiceRouteFetchResult,
-} from "@traycer-clients/shared/host-client/voice-router";
 import {
   decideSecretRequestViaHttp,
   fetchEnvironmentProvidersViaHttp,
@@ -810,18 +814,6 @@ export class MobileRunnerHost implements IRunnerHost {
     );
   }
 
-  routeVoiceUtterance(
-    bearerToken: string,
-    requestBody: string,
-  ): Promise<VoiceRouteFetchResult> {
-    return voiceRouteViaHttp(
-      this.serverBaseUrl,
-      bearerToken,
-      null,
-      requestBody,
-    );
-  }
-
   setVoiceSessionLive(live: boolean): Promise<void> {
     // The phone has one window and no close, so nothing keeps a live session
     // alive here; its background edge ends one (`onSystemSuspended`). Live is
@@ -971,6 +963,30 @@ export class MobileRunnerHost implements IRunnerHost {
       bearerToken,
       null,
       botId,
+    );
+  }
+
+  setSlackAppDms(
+    bearerToken: string,
+    request: SlackAppDmsRequest,
+  ): Promise<SlackAppWriteResult> {
+    return setSlackAppDmsViaHttp(
+      this.serverBaseUrl,
+      bearerToken,
+      null,
+      request,
+    );
+  }
+
+  mintTeamHostInstallToken(
+    bearerToken: string,
+    environmentId: string,
+  ): Promise<TeamHostInstallTokenResult> {
+    return mintTeamHostInstallTokenViaHttp(
+      this.serverBaseUrl,
+      bearerToken,
+      null,
+      environmentId,
     );
   }
 
@@ -1966,6 +1982,7 @@ class MobileSystemResume {
     const event: SystemResumeEvent = {
       backgroundedForMs:
         enteredAt === null ? null : Math.max(0, Date.now() - enteredAt),
+      screenLocked: false,
     };
     for (const handler of Array.from(this.handlers)) {
       try {

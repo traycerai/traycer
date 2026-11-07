@@ -137,13 +137,10 @@ vi.mock(
   }),
 );
 
-/**
- * The shipped arrangement with the sidebar open in a new tab: every case here
- * is about where the column draws, which a collapsed rail would not show.
- */
-const OPEN_SIDEBAR_ARRANGEMENT = {
+/** The shipped sidebar is on the right; most cases here are about the other edge. */
+const LEFT_SIDEBAR_ARRANGEMENT = {
   ...DEFAULT_ARRANGEMENT,
-  sidebarStartCollapsed: false,
+  sidebarSide: "left" as const,
 };
 
 function resetStores() {
@@ -152,7 +149,7 @@ function resetStores() {
     mainCollapsedByTabId: {},
     sidebarWidthPx: DEFAULT_SIDEBAR_WIDTH_PX,
   });
-  useLayoutStore.setState({ arrangement: OPEN_SIDEBAR_ARRANGEMENT });
+  useLayoutStore.setState({ arrangement: LEFT_SIDEBAR_ARRANGEMENT });
 }
 
 beforeEach(resetStores);
@@ -374,7 +371,7 @@ describe("<EpicSurface /> sidebar side (S-06)", () => {
     });
   }
 
-  it("puts the sidebar column before the body with the default (left) side", () => {
+  it("puts the sidebar column before the body with the left side", () => {
     renderSurface(TAB_ID, EPIC_ID);
 
     expect(surfaceChildTestIds(TAB_ID)).toEqual([
@@ -387,7 +384,7 @@ describe("<EpicSurface /> sidebar side (S-06)", () => {
   it("puts the sidebar column after the body when sidebarSide is right", () => {
     act(() => {
       useLayoutStore.setState({
-        arrangement: { ...OPEN_SIDEBAR_ARRANGEMENT, sidebarSide: "right" },
+        arrangement: { ...DEFAULT_ARRANGEMENT, sidebarSide: "right" },
       });
     });
 
@@ -429,7 +426,6 @@ describe("<EpicSurface /> sidebar side (S-06)", () => {
           {...appColumnChrome({ placement, platform: null, frameless: false })}
           columnRef={() => undefined}
           header={<header />}
-          voiceTopRow={null}
           strip={<nav />}
           banners={<div />}
           surface={
@@ -463,7 +459,7 @@ describe("<EpicSurface /> sidebar side (S-06)", () => {
   it("agrees across two split panes, since the side is global", () => {
     act(() => {
       useLayoutStore.setState({
-        arrangement: { ...OPEN_SIDEBAR_ARRANGEMENT, sidebarSide: "right" },
+        arrangement: { ...DEFAULT_ARRANGEMENT, sidebarSide: "right" },
       });
     });
 

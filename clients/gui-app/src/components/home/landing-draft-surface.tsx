@@ -164,16 +164,15 @@ export function LandingDraftSurface() {
           split (desktop, where the epics list fills row 3) centres it; below md
           the list is gone, so row 3 is weighted heavier to lift the pair just
           above the midpoint, where it reads better on a tall phone. Both rows
-          stay fractional on purpose - an intrinsic row 3 would let a grown
-          composer (attachments, several folders, keyboard open) squeeze row 2
-          to zero and then clip against this container's overflow-hidden.
+          have an intrinsic minimum so a grown composer (attachments, several
+          folders, keyboard open) extends the scrolling body instead of clipping.
           With both the greeting and the recent list off there is no pair to
           balance, so row 2 collapses outright and the composer centres itself
           inside the whole remainder. */}
       <div
         ref={appearanceSurfaceRef}
         className={cn(
-          "landing-appearance-surface relative isolate grid min-h-0 min-w-0 flex-1 grid-cols-[minmax(0,1fr)] overflow-hidden max-md:short-landscape:content-start max-md:short-landscape:overflow-y-auto",
+          "landing-appearance-surface relative isolate grid min-h-0 min-w-0 flex-1 grid-cols-[minmax(0,1fr)] overflow-y-auto max-md:short-landscape:content-start",
           layout.rows,
         )}
       >
@@ -198,7 +197,7 @@ export function LandingDraftSurface() {
         <div
           data-composer-placement={layout.placement}
           className={cn(
-            "relative mx-auto flex min-h-0 w-full max-w-3xl flex-col px-6 max-md:px-4",
+            "relative mx-auto flex w-full max-w-3xl flex-col px-6 max-md:px-4",
             layout.composer,
           )}
         >
@@ -298,13 +297,13 @@ function startPageLayout(
 } {
   return showGreeting || showRecentHistory
     ? {
-        rows: "grid-rows-[auto_minmax(0,1fr)_minmax(0,1fr)] max-md:grid-rows-[auto_minmax(0,1fr)_minmax(0,1.4fr)] max-md:short-landscape:grid-rows-[auto_0_auto]",
+        rows: "grid-rows-[auto_minmax(min-content,1fr)_minmax(min-content,1fr)] max-md:grid-rows-[auto_minmax(min-content,1fr)_minmax(min-content,1.4fr)] max-md:short-landscape:grid-rows-[auto_0_auto]",
         hero: "",
         composer: "",
         placement: "top",
       }
     : {
-        rows: "grid-rows-[auto_minmax(0,0fr)_minmax(0,1fr)] max-md:short-landscape:grid-rows-[auto_0_auto]",
+        rows: "grid-rows-[auto_0_minmax(min-content,1fr)] max-md:short-landscape:grid-rows-[auto_0_auto]",
         hero: "h-0 overflow-hidden",
         composer: "justify-center",
         placement: "centered",

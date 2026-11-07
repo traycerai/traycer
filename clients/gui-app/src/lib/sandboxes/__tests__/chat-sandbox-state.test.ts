@@ -84,7 +84,7 @@ describe("resolveChatSandbox", () => {
   });
 
   it.each([
-    ["creating", "Starting e2e-sbx-p1 · pending"],
+    ["creating", "Creating e2e-sbx-p1 · pending"],
     ["starting", "Starting e2e-sbx-p1 · pending"],
     ["resuming", "Resuming e2e-sbx-p1 · pending"],
     ["suspending", "Suspending e2e-sbx-p1 · pending"],

@@ -487,6 +487,7 @@ describe("ArtifactSearchBox", () => {
     // an "explicit" gesture - a keyboard activation, not a click.
     expect(harness.openMock).toHaveBeenCalledWith(
       openTileIntent("tab-1", { id: "a1", type: "ticket" }, "explicit"),
+      "user",
     );
   });
 
@@ -521,6 +522,7 @@ describe("ArtifactSearchBox", () => {
     // A row CLICK is a "single" gesture, distinct from the Enter case above.
     expect(harness.openMock).toHaveBeenCalledWith(
       openTileIntent("tab-1", { id: "a1", type: "ticket" }, "single"),
+      "user",
     );
   });
 
@@ -1290,6 +1292,7 @@ describe("ArtifactPanelSearchShell dual-surface isolation", () => {
     expect(harness.openMock).toHaveBeenCalledTimes(1);
     expect(harness.openMock).toHaveBeenCalledWith(
       openTileIntent(TAB_A, { id: "a1", type: "ticket" }, "single"),
+      "user",
     );
   });
 });

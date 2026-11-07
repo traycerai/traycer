@@ -47,14 +47,17 @@ import type {
   VoiceSessionMintRequest,
   VoiceTrayAction,
 } from "../host-client/voice-sessions";
-import type { VoiceRouteFetchResult } from "../host-client/voice-router";
 import type {
   SlackAppInstallUrlResult,
   SlackAppManifestResult,
   SlackAppReadResult,
   SlackAppWriteResult,
 } from "../host-client/slack-app";
-import type { SlackAppRegisterRequest } from "@traycer/protocol/host/slack-app";
+import type {
+  SlackAppDmsRequest,
+  SlackAppRegisterRequest,
+} from "@traycer/protocol/host/slack-app";
+import type { TeamHostInstallTokenResult } from "../host-client/team-host";
 import type {
   EnvironmentProvidersFetchResult,
   SandboxGrantsFetchResult,
@@ -125,6 +128,13 @@ export type SystemResumeEvent = {
    * conservative desktop-calibrated behavior.
    */
   readonly backgroundedForMs: number | null;
+  /**
+   * The machine woke behind its lock screen: the shell is running again, but
+   * the person is not back until the unlock, which the shell reports as a wake
+   * of its own. Only the desktop sees a lock screen; a mobile app is not in
+   * the foreground behind one.
+   */
+  readonly screenLocked: boolean;
 };
 
 /**
@@ -438,17 +448,6 @@ export interface IRunnerHost {
     voiceSessionId: string,
   ): Promise<VoiceSessionEndFetchResult>;
   /**
-   * The voice router's one model call (traycer-server's inference
-   * passthrough, `host-client/voice-router.ts`) with the user bearer, billed
-   * to the person's own account. `requestBody` is the JSON the app built; the
-   * answer comes back opaque for the app's structured-output parser. Same
-   * placement as the voice session routes above. Never throws.
-   */
-  routeVoiceUtterance(
-    bearerToken: string,
-    requestBody: string,
-  ): Promise<VoiceRouteFetchResult>;
-  /**
    * Tells the shell whether this window holds a live voice session. A
    * desktop window whose voice is live is hidden rather than destroyed when
    * the person closes it (the microphone and the session live in its
@@ -500,10 +499,10 @@ export interface IRunnerHost {
   /**
    * A bot's Slack app (traycer-server `/api/slack/apps/*`) with the person's
    * bearer, for its members: the app as they see it, the manifest it is
-   * created from, the credentials' registration, Slack's install URL and the
-   * disconnect. Same placement as the sandbox control plane above: desktop in
-   * Electron main, mobile through the native HTTP layer. See
-   * `host-client/slack-app.ts`. Never throw.
+   * created from, the credentials' registration, Slack's install URL, the
+   * disconnect and the DM setting. Same placement as the sandbox control
+   * plane above: desktop in Electron main, mobile through the native HTTP
+   * layer. See `host-client/slack-app.ts`. Never throw.
    */
   readSlackApp(bearerToken: string, botId: string): Promise<SlackAppReadResult>;
   getSlackAppManifest(
@@ -522,6 +521,20 @@ export interface IRunnerHost {
     bearerToken: string,
     botId: string,
   ): Promise<SlackAppWriteResult>;
+  setSlackAppDms(
+    bearerToken: string,
+    request: SlackAppDmsRequest,
+  ): Promise<SlackAppWriteResult>;
+  /**
+   * Mints the one-time install token for a team environment's bot host
+   * (traycer-server `/api/environments/{id}/team-host/install-token`) with the
+   * person's bearer. Same placement as the Slack calls above; see
+   * `host-client/team-host.ts`. Never throws.
+   */
+  mintTeamHostInstallToken(
+    bearerToken: string,
+    environmentId: string,
+  ): Promise<TeamHostInstallTokenResult>;
   /**
    * The secrets broker (authn), with the user's bearer: the grants one
    * sandbox host holds, and the answer to an agent's grant request. See

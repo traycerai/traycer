@@ -6,7 +6,6 @@ import {
   useEffect,
   useMemo,
   useRef,
-  type ReactNode,
 } from "react";
 import { Tabs, TabsContent } from "@/components/ui/tabs";
 import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
@@ -57,8 +56,6 @@ interface TileSwitcherListProps {
    * no-op.
    */
   readonly onClose: () => void;
-  /** What ends the category row, else nothing. */
-  readonly trailing: ReactNode;
 }
 
 /**
@@ -109,7 +106,7 @@ function isEmbedOriginatedTileRef(ref: EpicCanvasTileRef): boolean {
  * takes supplies one: `TabSwitcherSheet`, `MobileTileChooserPane`.
  */
 export function TileSwitcherList(props: TileSwitcherListProps) {
-  const { epicId, tabId, onClose, trailing } = props;
+  const { epicId, tabId, onClose } = props;
   // Every panel is reachable (a chip or under More), so the rail-shared
   // selection is always one the list can show.
   const activeCategory = useActiveLeftPanelId(tabId);
@@ -184,7 +181,7 @@ export function TileSwitcherList(props: TileSwitcherListProps) {
           categories={categories}
           activeCategory={activeCategory}
           onSelect={handleCategoryChange}
-          trailing={trailing}
+          trailing={null}
         />
       </div>
       <div className="flex min-h-0 flex-1 flex-col">

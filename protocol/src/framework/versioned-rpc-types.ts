@@ -244,10 +244,11 @@ export const RPC_ERROR_CODES = [
   // shortly, and NOT a missing grant - nothing is to be asked of the user.
   "authorization_stale",
   // The destination's protocol has no worker class, so a secret bound to it
-  // cannot be brokered; the alternative is an exposed binding.
+  // cannot be brokered, and brokering is the only way a sandbox holds one: no
+  // secret can be stored for that protocol.
   "protocol_not_brokered",
   // A request signed in a shape no signing worker reproduces (a presigned URL,
-  // a credential set handed to a third party); the alternative is an export.
+  // a credential set handed to a third party). Such a shape is unsupported.
   "signing_shape_unsupported",
   // The route's pre-issued leaf certificate is missing or expired, so its
   // TLS-terminated endpoint cannot answer.
@@ -263,9 +264,6 @@ export const RPC_ERROR_CODES = [
   "endpoint_unavailable",
   // The destination answers HTTP/3 only, which the bound class cannot carry.
   "h3_only_destination",
-  // A team's secrets are brokered only: a tool that needs a plain value needs
-  // a personal sandbox.
-  "team_secrets_are_brokered",
   // Undo named a version whose value was destroyed.
   "version_destroyed",
   // Destroy named the current version: replace or revoke the secret first.

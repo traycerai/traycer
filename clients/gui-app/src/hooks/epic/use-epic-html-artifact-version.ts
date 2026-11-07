@@ -52,8 +52,8 @@ export function useEpicHtmlArtifactVersion(props: {
     "epic.listHtmlArtifactVersions",
   );
   const [before, setBefore] = useState<string | undefined>(undefined);
-  const selectedVersion = props.node.htmlVersion ?? null;
   const liveSelection = liveHtmlArtifactSelection(props.artifact);
+  const selectedVersion = selectedHtmlVersion(props.node, props.artifact);
   const history = useHostQuery({
     client,
     method: "epic.listHtmlArtifactVersions",
@@ -111,6 +111,33 @@ export function useEpicHtmlArtifactVersion(props: {
         setBefore(nextCursor);
     },
   };
+}
+
+/**
+ * The tab's pin, or `null` for Latest. A pin on the bundle the artifact serves
+ * right now IS Latest, whatever put it there, so the tile never tints the
+ * current version, locks its comments or lists it twice in the menu.
+ */
+function selectedHtmlVersion(
+  node: EpicArtifactRef,
+  artifact: ArtifactProjection | null,
+): HtmlArtifactVersionSelection | null {
+  const pinned = node.htmlVersion;
+  if (pinned === undefined || isLiveHtmlArtifactVersion(pinned, artifact))
+    return null;
+  return pinned;
+}
+
+/** Whether `version` is exactly the bundle the artifact serves right now. */
+export function isLiveHtmlArtifactVersion(
+  version: HtmlArtifactVersionSelection,
+  artifact: ArtifactProjection | null,
+): boolean {
+  const live = liveHtmlArtifactSelection(artifact);
+  return (
+    live !== null &&
+    htmlArtifactVersionIdentity(version) === htmlArtifactVersionIdentity(live)
+  );
 }
 
 function liveHtmlArtifactSelection(
