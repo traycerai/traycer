@@ -1,4 +1,3 @@
-import { z } from "zod";
 import { useState, type ReactNode } from "react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -6,69 +5,12 @@ import { Switch } from "@/components/ui/switch";
 import { MutedAgentSpinner } from "@/components/ui/agent-spinning-dots";
 import type { EnvironmentConfigurationItemWriteResponse } from "@traycer/protocol/host/environment/configuration-contracts";
 import { useConfigurationItemMutations } from "@/hooks/environment/team/use-configuration-item-mutations";
-import {
-  configurationProfileValueSchema,
-  configurationPackValueSchema,
-} from "@/hooks/environment/team/configuration-item-values";
+import { configurationPackValueSchema } from "@/hooks/environment/team/configuration-item-values";
 import type { ConfigurationItem } from "@/hooks/environment/team/use-configuration-items-query";
 import {
   useCanEditConfiguration,
   useConfigurationSource,
 } from "./configuration-source";
-
-export function TeamProfileItem(props: {
-  readonly item: ConfigurationItem;
-  readonly onOutcome: (
-    result: EnvironmentConfigurationItemWriteResponse,
-  ) => void;
-  readonly details: ReactNode;
-}): ReactNode {
-  const source = useConfigurationSource();
-  const canEdit = useCanEditConfiguration();
-  const { put } = useConfigurationItemMutations();
-  const profile = configurationProfileValueSchema.parse(props.item.value);
-  return (
-    <div className="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-border/60 p-3">
-      <div>
-        <p className="text-ui-sm font-medium">{profile.name}</p>
-        <p className="text-ui-xs text-muted-foreground">
-          {profile.accountIdentity}
-        </p>
-      </div>
-      <div className="flex items-center gap-2">
-        {props.details}
-        {canEdit ? (
-          <Switch
-            aria-label={`Use ${profile.name}`}
-            checked={profile.enabled}
-            disabled={put.isPending}
-            onCheckedChange={(enabled) => {
-              if (source.kind === "pool")
-                put.mutate(
-                  {
-                    environmentId: source.environmentId,
-                    kind: "managed_profile",
-                    key: props.item.key,
-                    os: null,
-                    value: {
-                      ...z.record(z.string(), z.json()).parse(props.item.value),
-                      enabled,
-                    },
-                    revision: props.item.revision,
-                  },
-                  { onSuccess: props.onOutcome },
-                );
-            }}
-          />
-        ) : (
-          <span className="text-ui-xs text-muted-foreground">
-            {profile.enabled ? "On" : "Off"}
-          </span>
-        )}
-      </div>
-    </div>
-  );
-}
 
 export function TeamPackItem(props: {
   readonly packId: string;

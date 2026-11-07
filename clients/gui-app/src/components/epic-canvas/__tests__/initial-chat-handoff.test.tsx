@@ -467,6 +467,10 @@ describe("initial chat handoff route coordinator", () => {
       EPIC_ID,
       EPIC_ID,
       expect.any(Function),
+      // `"automatic"`, not the person: this effect re-runs on a reload, so a
+      // handoff that opens its tile again on the next page load must not
+      // retire an artifact request the route is waiting on in THAT load.
+      "automatic",
     );
     expect(canvasChatTabs().filter((tab) => tab.id === CHAT_ID)).toHaveLength(
       1,

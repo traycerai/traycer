@@ -273,6 +273,7 @@ describe("ChatMarkdownLinkProvider", () => {
               id: workspaceFileTabId(HOST_ID, "/repo", "src/app.ts"),
             }) as EpicCanvasTileRef,
           }),
+          "user",
         );
       });
     } finally {

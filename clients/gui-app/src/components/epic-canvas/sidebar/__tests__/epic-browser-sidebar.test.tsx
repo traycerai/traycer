@@ -891,6 +891,7 @@ describe("BrowsersPanelBody", () => {
       "epic-1",
       "view-tab-1",
       expect.any(Function),
+      "user",
     );
     const opened = findOpenArtifactInTab("view-tab-1", "chat-driver");
     expect(opened).not.toBeNull();
@@ -1621,6 +1622,7 @@ describe("BrowsersPanelActions", () => {
         "epic-1",
         "view-tab-1",
         expect.any(Function),
+        "user",
       );
     });
     expect(browserHostPinState.setSelection).not.toHaveBeenCalled();

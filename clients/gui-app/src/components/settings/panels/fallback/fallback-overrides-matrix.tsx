@@ -29,7 +29,6 @@ import {
   overrideRungAfterNotify,
   OVERRIDE_ACTION_LABELS,
   OVERRIDE_ACTION_HELP,
-  OVERRIDE_STEP_LABELS,
 } from "./fallback-overrides-presentation";
 import type { OverrideResetUndo } from "./fallback-overrides-reset";
 import { FALLBACK } from "../fallback-settings.definitions";
@@ -78,7 +77,10 @@ export function FallbackOverridesMatrix(
   const excludedNeedsAttention =
     attentionReason !== null &&
     EXCLUDED_MATRIX_REASONS.includes(attentionReason);
-  const customCount = Object.keys(policy.reasonOverrides ?? {}).length;
+  const customCount = EDITABLE_REASONS.filter(
+    (reason) => policy.reasonOverrides?.[reason] !== undefined,
+  ).length;
+  const inheritedCount = EDITABLE_REASONS.length - customCount;
   return (
     <SettingsGroup
       group={FALLBACK.definitions.advanced}
@@ -101,23 +103,15 @@ export function FallbackOverridesMatrix(
             problem.
           </p>
         </div>
-        <div className="flex min-w-0 flex-wrap items-baseline gap-x-3 gap-y-1 rounded-md border border-border bg-foreground/3 px-3 py-2.5 text-ui-xs">
-          <span className="font-medium">Your main plan</span>
-          <span className="min-w-0 text-muted-foreground">
-            {policy.ladder.length === 0
-              ? "No recovery actions configured"
-              : policy.ladder
-                  .map((rung) => OVERRIDE_STEP_LABELS[rung])
-                  .join(" → ")}
-          </span>
-        </div>
         <div className="flex flex-wrap items-center justify-between gap-x-3 gap-y-1">
-          <p className="text-ui-xs text-muted-foreground">
-            {EDITABLE_REASONS.length} problems ·{" "}
-            {customCount === 0
-              ? "All follow main plan"
-              : `${customCount} custom`}
-          </p>
+          <div className="flex min-w-0 flex-wrap items-center gap-1.5 text-ui-xs text-muted-foreground">
+            <span>
+              {inheritedCount === 1
+                ? "1 problem follows the main plan"
+                : `${inheritedCount} problems follow the main plan`}
+            </span>
+            {customCount > 0 ? <span>· {customCount} custom</span> : null}
+          </div>
           <Button
             size="touch"
             variant="link"
@@ -151,7 +145,7 @@ export function FallbackOverridesMatrix(
           </div>
         )}
         <div
-          className="min-w-0 divide-y divide-border overflow-hidden rounded-lg border border-border"
+          className="min-w-0 divide-y divide-border rounded-lg border border-border"
           data-testid="fallback-overrides-list"
         >
           {EDITABLE_REASONS.map((reason) => (
@@ -300,9 +294,7 @@ function OverrideRow(props: {
           <span className="min-w-0 flex-1 space-y-1 text-left">
             <span className="flex flex-wrap items-center gap-2">
               <span>{label}</span>
-              <Badge variant={custom ? "info" : "muted"}>
-                {custom ? "Custom" : "Main plan"}
-              </Badge>
+              {custom ? <Badge variant="info">Custom</Badge> : null}
               {needsAttention ? (
                 <Badge variant="warning">Check save</Badge>
               ) : null}
@@ -355,7 +347,7 @@ function OverrideRow(props: {
         </p>
         <div className="grid min-w-0 grid-cols-1 items-start gap-4 @2xl:grid-cols-[minmax(0,1.5fr)_minmax(0,1fr)]">
           <div className="min-w-0 space-y-2">
-            <fieldset className="min-w-0 divide-y divide-border overflow-hidden rounded-md border border-border">
+            <fieldset className="min-w-0 divide-y divide-border rounded-md border border-border">
               <legend className="sr-only">Recovery actions for {label}</legend>
               {overrideActionOrder(policy, reason, rungOrder).map((rung) => (
                 <OverrideAction

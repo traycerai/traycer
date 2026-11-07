@@ -46,6 +46,9 @@ function resetSettingsStore(): void {
     startPageWallpaper: null,
     showGreeting: true,
     showRecentHistory: true,
+    soundtrackEnabled: false,
+    soundtrackPlaybackControls: false,
+    soundtrackPaused: false,
   });
 }
 
@@ -1240,5 +1243,74 @@ describe("soundtrack settings", () => {
   it("clamps a volume set in the app", () => {
     useSettingsStore.getState().setSoundtrackVolume(4);
     expect(useSettingsStore.getState().soundtrackVolume).toBe(1);
+  });
+
+  it("starts with the playback controls off and the music not paused", () => {
+    expect(useSettingsStore.getInitialState()).toMatchObject({
+      soundtrackPlaybackControls: false,
+      soundtrackPaused: false,
+    });
+  });
+
+  it("round-trips the playback controls and the pause through storage", async () => {
+    const settings = useSettingsStore.getState();
+    settings.setSoundtrackPlaybackControls(true);
+    settings.setSoundtrackPaused(true);
+    const stored = window.localStorage.getItem("traycer-gui-app:settings");
+    useSettingsStore.setState(useSettingsStore.getInitialState(), true);
+    if (stored !== null) {
+      window.localStorage.setItem("traycer-gui-app:settings", stored);
+    }
+
+    await useSettingsStore.persist.rehydrate();
+
+    expect(useSettingsStore.getState()).toMatchObject({
+      soundtrackPlaybackControls: true,
+      soundtrackPaused: true,
+    });
+  });
+
+  it("reads a stored pause as not paused when the playback controls are off", async () => {
+    await rehydrateFrom({
+      soundtrackPlaybackControls: false,
+      soundtrackPaused: true,
+    });
+    expect(useSettingsStore.getState().soundtrackPaused).toBe(false);
+
+    await rehydrateFrom({ soundtrackPaused: true });
+    expect(useSettingsStore.getState().soundtrackPaused).toBe(false);
+  });
+
+  it.each(["soundtrackPlaybackControls", "soundtrackPaused"] as const)(
+    "reads a persisted %s that is not a boolean as off",
+    async (key) => {
+      useSettingsStore.setState({ [key]: true });
+      await rehydrateFrom({ soundtrackPlaybackControls: true, [key]: "true" });
+      expect(useSettingsStore.getState()[key]).toBe(false);
+    },
+  );
+
+  it("clears a pause when Music is turned on, and keeps it when Music is turned off", () => {
+    useSettingsStore.setState({
+      soundtrackEnabled: true,
+      soundtrackPaused: true,
+    });
+    useSettingsStore.getState().setSoundtrackEnabled(false);
+    expect(useSettingsStore.getState().soundtrackPaused).toBe(true);
+
+    useSettingsStore.getState().setSoundtrackEnabled(true);
+    expect(useSettingsStore.getState().soundtrackPaused).toBe(false);
+  });
+
+  it("clears a pause when the playback controls are turned off, and keeps it when they are turned on", () => {
+    useSettingsStore.setState({
+      soundtrackPlaybackControls: false,
+      soundtrackPaused: true,
+    });
+    useSettingsStore.getState().setSoundtrackPlaybackControls(true);
+    expect(useSettingsStore.getState().soundtrackPaused).toBe(true);
+
+    useSettingsStore.getState().setSoundtrackPlaybackControls(false);
+    expect(useSettingsStore.getState().soundtrackPaused).toBe(false);
   });
 });

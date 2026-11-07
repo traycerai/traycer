@@ -226,6 +226,7 @@ describe("<SnapshotBundleDiffTileContent /> file navigation", () => {
       "epic-1",
       viewTabId,
       expect.any(Function),
+      "user",
     );
     const canvas = useEpicCanvasStore.getState().canvasByTabId[viewTabId];
     if (canvas?.root?.kind !== "pane") throw new Error("expected pane");

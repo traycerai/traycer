@@ -18,7 +18,7 @@ const LINK = '[data-testid="link-turn"]';
 const COMPOSER = '[data-testid="composer-turn"]';
 const DOCK = '[data-testid="dock-turn"]';
 const BUTTON = `${STRIP} button`;
-const COMPOSER_INPUT = '[data-testid="composer-turn-input"]';
+const COMPOSER_INPUT = '[data-testid="composer-turn-input"] [role="textbox"]';
 
 const REPLYING = "Tracy is replying…";
 const VIEW_TURN = /^View turn · \d+m \d+s$/;

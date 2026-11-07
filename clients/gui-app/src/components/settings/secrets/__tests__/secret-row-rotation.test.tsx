@@ -612,12 +612,15 @@ describe("a secret's versions", () => {
     await openVersions();
 
     const recovery = screen.getByTestId("secret-recovery");
+    expect(within(recovery).getByText("Secret leaked?")).toBeTruthy();
+    expect(recovery).toHaveProperty("open", false);
+    fireEvent.click(within(recovery).getByText("Secret leaked?"));
     const steps = within(recovery).getAllByRole("listitem");
     expect(steps.map((step) => step.textContent)).toEqual([
       ...SECRET_RECOVERY_STEPS,
     ]);
     expect(steps).toHaveLength(4);
-    expect(recovery.textContent).toContain("If this secret leaked");
+    expect(recovery).toHaveProperty("open", true);
   });
 
   it("undoes a replaced version without re-granting, and re-reads the list and versions", async () => {

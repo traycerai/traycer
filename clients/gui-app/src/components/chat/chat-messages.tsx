@@ -525,6 +525,19 @@ function isTranscriptWindowRecovering(
   );
 }
 
+/**
+ * Whether the host served this row whole. A fresh span seats only rows served
+ * complete (`incompleteRowIds` are withheld), so its body is every record of
+ * the row. A drawn row proves nothing: a live record or a stale body can draw
+ * part of one, and the legacy line's backfill delivers a turn in pieces.
+ */
+function isRowServedWhole(
+  window: TranscriptWindow | null,
+  rowId: string,
+): boolean {
+  return window?.spans.some((span) => span.rowIds.includes(rowId)) === true;
+}
+
 /** LegendList's web implementation can return null before its scroll element
  * attaches even though the cross-platform public type is non-null. Keep that
  * runtime boundary explicit for mount-time restoration reads. */
@@ -2271,8 +2284,9 @@ function ChatMessagesInner(props: ChatMessagesInnerProps) {
   // A restored row becomes LegendList's own `initialScrollIndex`
   // measurement bootstrap - the same self-correcting path
   // `initialScrollAtEnd` uses, carrying the saved pixel offset. `null` for a
-  // fresh open or a saved bottom-following view (LegendList's own
-  // `initialScrollAtEnd` covers those).
+  // fresh open, a saved bottom-following view (LegendList's own
+  // `initialScrollAtEnd` covers those), or a saved row the list cannot name yet
+  // (`initialParkAtEnd` covers that).
   const [initialScrollIndexAnchor] =
     useState<ChatTimelineInitialScrollAnchor | null>(() => {
       if (
@@ -2568,6 +2582,12 @@ function ChatMessagesInner(props: ChatMessagesInnerProps) {
   // explicit-navigation ownership live only inside that latch.
   const initialIsAtEnd = restoredTabState.mode === "following-end";
   const [initialScrollAtEnd] = useState(initialIsAtEnd);
+  // A saved position with no row to land on yet (a part of a turn the tail
+  // snapshot no longer reaches) parks at the tail until the catch-up below
+  // answers for it: the row arrives and the restore lands, or the transcript
+  // proves the row gone and the reader follows the latest.
+  const initialParkAtEnd =
+    !initialIsAtEnd && restoredTabState.anchorMessageId === null;
   const initialScrollMode: ChatTimelineScrollMode = initialIsAtEnd
     ? "following-end"
     : "free-scrolling";
@@ -4595,16 +4615,29 @@ function ChatMessagesInner(props: ChatMessagesInnerProps) {
     settleScrollRequest,
   ]);
 
-  // The split's gone outcome retires the pending coordinate and publishes
-  // following-end through `scrollToEnd`, which sets state: a microtask, as an
-  // effect body may not set state itself. An effect event rather than a
-  // dependency: the effect re-runs on `listRows`, and must not also re-run
-  // because the callback's identity moved.
-  const followLatestAfterSplit = useEffectEvent((): void => {
+  // A saved coordinate found to be gone retires and the reader follows the
+  // latest, through `scrollToEnd`, which sets state: a microtask, as an effect
+  // body may not set state itself. An effect event rather than a dependency:
+  // the effect re-runs on `listRows`, and must not also re-run because the
+  // callback's identity moved.
+  const followLatestOverGoneAnchor = useEffectEvent((): void => {
     queueMicrotask(() => {
       scrollToEnd(false);
     });
   });
+  // A whole-row anchor clamped to a nearby row keeps that landing. A mount
+  // parked at the tail has landed nowhere, and a part of a turn has no neighbour
+  // to settle for, so those follow the latest once the saved row is proved gone.
+  const retireGoneAnchor = useEffectEvent((): void => {
+    if (initialParkAtEnd || isSavedTurnPart) followLatestOverGoneAnchor();
+  });
+  // Whether a row missing from the list is gone rather than late. A skeleton
+  // mid-stream has not named every row, and a window recovering from a void is
+  // being renamed. The legacy line has no such signal, so its restore waits.
+  const everyRowIsNamed =
+    transcriptWindow !== null &&
+    transcriptWindow.skeletonComplete &&
+    !isTranscriptWindowRecovering(transcriptWindow);
 
   // `restoredTabState`/
   // `initialScrollIndexAnchor` are computed ONCE at mount against whatever
@@ -4627,13 +4660,12 @@ function ChatMessagesInner(props: ChatMessagesInnerProps) {
   // transition as an "attempt" - a live reopen can replay dozens of
   // incremental `messages` reference changes before the anchor's own
   // commit lands, exhausting a small counter and disarming the retry
-  // before it ever got the chance to see the anchor arrive. A genuinely
-  // branch-deleted anchor simply never disarms; that is harmless (nothing
-  // is displayed for it - round-1's own clamp stays whatever it already
-  // was) for the lifetime of the tile, the same tradeoff the transcript-jump
-  // precedent already accepts. Disarms permanently the first time it
-  // lands - a NEW live message arriving afterward can never re-trigger a
-  // jump back here.
+  // before it ever got the chance to see the anchor arrive. A whole-row anchor
+  // that landed on a nearby row keeps it for a genuinely branch-deleted anchor,
+  // which simply never disarms, the same tradeoff the transcript-jump precedent
+  // accepts; anything else follows the latest once the transcript proves the
+  // row gone (`retireGoneAnchor`). Disarms permanently the first time it lands -
+  // a NEW live message arriving afterward can never re-trigger a jump back here.
   // Route the catch-up through the same bounded validate/retry operation
   // restoration convergence uses, and only clear the pending id/session
   // fallback from the VALIDATED-success path (`onValidated` below) - never
@@ -4676,7 +4708,7 @@ function ChatMessagesInner(props: ChatMessagesInnerProps) {
           return;
         }
         if (split.state.anchorMessageId === null) {
-          followLatestAfterSplit();
+          followLatestOverGoneAnchor();
           return;
         }
         restorePersistedTimelineLocation(
@@ -4696,9 +4728,18 @@ function ChatMessagesInner(props: ChatMessagesInnerProps) {
       const owner = savedChatTabAnchorRowKey(rawSavedTabState, rowKeys);
       const ownerIndex =
         owner === null ? undefined : rowIndexByKeyRef.current.get(owner);
-      if (ownerIndex === undefined) return;
+      if (ownerIndex === undefined) {
+        if (everyRowIsNamed) retireGoneAnchor();
+        return;
+      }
       const ownerRow = listRows[ownerIndex];
-      if (ownerRow.kind !== "placeholder") return;
+      if (ownerRow.kind !== "placeholder") {
+        // Served whole, its body proves no part carries the saved segment.
+        if (isRowServedWhole(transcriptWindowRef.current, ownerRow.key)) {
+          retireGoneAnchor();
+        }
+        return;
+      }
       // The saved index used the expanded list. Demand the owning ordinal
       // directly, then replay the original part key and offset after hydration.
       onVisibleOrdinalRangeChange({
@@ -4723,6 +4764,7 @@ function ChatMessagesInner(props: ChatMessagesInnerProps) {
       onExhausted: () => undefined,
     });
   }, [
+    everyRowIsNamed,
     identity,
     listRows,
     onVisibleOrdinalRangeChange,
@@ -5070,6 +5112,7 @@ function ChatMessagesInner(props: ChatMessagesInnerProps) {
                   listRef={chatTimelineRef}
                   onScroll={handleScroll}
                   initialScrollAtEnd={initialScrollAtEnd}
+                  initialParkAtEnd={initialParkAtEnd}
                   initialScrollIndex={initialScrollIndexAnchor}
                   contentInsetEndAdjustment={endInset}
                   onFollowIntentChange={onFollowIntentChange}

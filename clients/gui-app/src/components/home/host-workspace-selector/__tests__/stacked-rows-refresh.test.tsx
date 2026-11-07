@@ -9,7 +9,13 @@
  */
 import type { ReactNode } from "react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { cleanup, render, waitFor } from "@testing-library/react";
+import {
+  cleanup,
+  render,
+  screen,
+  waitFor,
+  within,
+} from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { WorktreeWorkspaceSummaryV15 } from "@traycer/protocol/host/worktree-schemas";
 import type { ResolvedFolder } from "@/lib/workspace/resolved-folder";
@@ -372,6 +378,27 @@ describe("stacked rows refresh-on-mount", () => {
   });
 });
 
+describe("stacked host heading", () => {
+  it("heads the host block with Host on a surface without its own heading", () => {
+    renderControls("stacked");
+
+    const section = screen.getByTestId("host-workspace-selector-host-section");
+    expect(within(section).getByText("Host")).toBeDefined();
+  });
+
+  it("draws no Host heading under a caller's own heading, and keeps Workspaces", () => {
+    renderControls("stacked-caller-heading");
+
+    const section = screen.getByTestId("host-workspace-selector-host-section");
+    expect(within(section).queryByText("Host")).toBeNull();
+    expect(
+      within(
+        screen.getByTestId("host-workspace-selector-folders-section"),
+      ).getByText("Workspaces"),
+    ).toBeDefined();
+  });
+});
+
 function forcedRefreshCalls(): Array<Record<string, unknown>> {
   return mocks.request.mock.calls.flatMap(([method, payload]) => {
     if (method !== "worktree.listByWorkspacePaths") return [];
@@ -381,7 +408,9 @@ function forcedRefreshCalls(): Array<Record<string, unknown>> {
   });
 }
 
-function renderControls(layout: "inline" | "stacked"): {
+function renderControls(
+  layout: "inline" | "stacked" | "stacked-caller-heading",
+): {
   /** Re-renders from a FRESH element - React bails out on an identical one. */
   readonly rerenderFresh: () => void;
   /** Explicit, because `cleanup` only runs in `afterEach`. */

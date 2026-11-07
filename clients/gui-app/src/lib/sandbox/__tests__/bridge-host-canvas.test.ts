@@ -1432,6 +1432,11 @@ describe("page activity from a commentable html page", () => {
     const harness = commentable(true);
     const heard = listen(harness);
 
+    harness.host.receive(hover(6));
+    vi.advanceTimersToNextFrame();
+    expect(heard).toEqual([]);
+
+    edit(harness);
     harness.host.receive(hover(7));
     void harness.host.setMode("play");
     vi.advanceTimersToNextFrame();

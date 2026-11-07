@@ -3,7 +3,7 @@ import { Badge } from "@/components/ui/badge";
 import { useState, type ReactNode } from "react";
 import {
   HOST_FROZEN_WORD,
-  HOST_KIND_WORDS,
+  hostSandboxStateWord,
 } from "@traycer/protocol/host/host-status";
 import {
   ChevronDown,
@@ -39,12 +39,10 @@ import {
   composerComputerSubLine,
   groupComposerHostOptions,
   groupHostOptions,
-  hostOptionKindLabel,
   hostRowSurfaceState,
   hostOptionStatusWord,
   isHostOptionSelectable,
   type HostPickIntent,
-  type HostRowSurfaceState,
 } from "@/components/settings/host-scope/host-option-model";
 import { HOST_SWITCHER_LIST_ATTRIBUTE } from "@/components/settings/host-scope/host-switcher-portal";
 import {
@@ -146,9 +144,9 @@ export interface HostSwitcherComposerMode {
    * `In this task`; `null` on the landing composer.
    */
   readonly inThisTask: readonly HostScopeOption[] | null;
-  /** Lines under a host row (the Local sub-line, the reach sentence). */
+  /** Supplemental facts disclosed in a host row's Details. */
   readonly subLinesFor: (hostId: string) => readonly string[];
-  /** The configuration tag beside an agent sandbox's title, else `null`. */
+  /** The configuration mark below an agent sandbox's name, else `null`. */
   readonly tagFor: (hostId: string) => string | null;
   readonly newRows: readonly HostSwitcherNewRow[];
   /** The configuration that heads the New group past two configurations. */
@@ -244,7 +242,7 @@ const HOST_SWITCHER_SURFACES: Record<
   },
   inline: {
     trigger:
-      "h-7 w-fit max-w-full gap-1.5 rounded-lg px-1.5 py-0 text-muted-foreground hover:bg-foreground/5 hover:text-foreground",
+      "h-auto w-fit max-w-full gap-1.5 rounded-lg px-1.5 py-1 text-muted-foreground hover:bg-foreground/5 hover:text-foreground",
     list: "",
     sideOffsetPx: 4,
   },
@@ -448,6 +446,11 @@ export function HostSwitcher(props: {
           <Command
             filter={props.composer === null ? undefined : composerSearchFilter}
           >
+            {props.surface === "rail" ? (
+              <div className="border-b px-3 py-2 text-ui-sm font-semibold">
+                View host
+              </div>
+            ) : null}
             {props.consequence === null ? null : (
               <div className="border-b px-3 py-2">
                 <p className="text-ui-sm font-semibold">
@@ -1137,6 +1140,7 @@ function hostSwitcherTriggerText(
   intent: HostPickIntent,
   selected: HostScopeOption | null,
   composer: HostSwitcherComposerMode | null,
+  surface: HostSwitcherSurface,
 ): {
   readonly label: string;
   readonly ariaLabel: string;
@@ -1150,10 +1154,17 @@ function hostSwitcherTriggerText(
       status: null,
     };
   }
-  const status =
+  const selectedStatus =
     selected === null
       ? null
       : hostOptionStatusWord(selected, AVAILABLE_HOST_ROW_SURFACE_STATE);
+  // The host header owns the healthy lifecycle word in Settings.
+  const status =
+    surface === "rail" &&
+    selected?.sandbox?.frozen !== true &&
+    selectedStatus === hostSandboxStateWord("awake")
+      ? null
+      : selectedStatus;
   const name = selected?.name ?? null;
   const spokenStatus =
     status !== null && selected?.sandbox?.frozen
@@ -1191,10 +1202,13 @@ function HostSwitcherTrigger(props: {
   readonly composer: HostSwitcherComposerMode | null;
 }): ReactNode {
   const { selected } = props;
-  const text = hostSwitcherTriggerText(props.intent, selected, props.composer);
+  const text = hostSwitcherTriggerText(
+    props.intent,
+    selected,
+    props.composer,
+    props.surfaceKind,
+  );
   const triggerStatus = text.status;
-  const showKind = ["rail", "panel-header"].includes(props.surfaceKind);
-  const kind = selected === null ? null : selected.kind;
   const keepFocusableWhenDisabled =
     props.disabled && props.keepFocusableWhenDisabled === true;
 
@@ -1224,139 +1238,72 @@ function HostSwitcherTrigger(props: {
           "group/host-switcher h-auto w-full justify-start gap-3 px-3 py-2 text-start",
           "aria-disabled:cursor-not-allowed aria-disabled:opacity-60 aria-disabled:hover:bg-transparent",
           props.surface.trigger,
+          props.surfaceKind === "rail" && "flex-wrap justify-between gap-y-1",
         )}
       >
         <HostSwitcherStagedBusy composer={props.composer} />
-        {/* Healthy is the default and stays silent. Only an exception status
-          earns space in this compact trigger. */}
+        {props.surfaceKind !== "rail" || selected === null ? null : (
+          <HostGlyph
+            host={selected}
+            className="size-4 shrink-0 text-muted-foreground"
+          />
+        )}
         <span
           className={cn(
-            "min-w-0 flex-1 truncate text-ui-sm font-medium",
-            selected === null || props.surfaceKind === "inline"
-              ? "text-muted-foreground"
-              : "text-foreground",
-            !props.disabled && "group-hover/host-switcher:text-foreground",
+            "flex min-w-0 flex-1 flex-col gap-0.5",
+            props.surfaceKind === "rail" && "order-1 basis-full",
           )}
         >
-          {text.label}
-        </span>
-        {triggerStatus === null ? null : (
           <span
-            className="shrink-0 text-ui-xs text-muted-foreground"
-            data-testid="settings-host-switcher-status"
+            className={cn(
+              "text-ui-sm font-medium whitespace-normal wrap-anywhere",
+              selected === null || props.surfaceKind === "inline"
+                ? "text-muted-foreground"
+                : "text-foreground",
+              !props.disabled && "group-hover/host-switcher:text-foreground",
+            )}
           >
-            {triggerStatus}
+            {text.label}
           </span>
-        )}
-        {triggerStatus !== null && selected?.sandbox?.frozen ? (
-          <Badge variant="warning">{HOST_FROZEN_WORD}</Badge>
-        ) : null}
-        {showKind && kind !== null ? (
-          <span className="shrink-0 text-ui-xs font-normal text-muted-foreground">
-            {" "}
-            {HOST_KIND_WORDS[kind]}
-          </span>
-        ) : null}
+          {triggerStatus === null ? null : (
+            <span className="flex min-w-0 flex-wrap items-center gap-2 text-ui-xs whitespace-normal wrap-anywhere text-muted-foreground">
+              <span data-testid="settings-host-switcher-status">
+                {triggerStatus}
+              </span>
+              {selected?.sandbox?.frozen ? (
+                <Badge variant="warning">{HOST_FROZEN_WORD}</Badge>
+              ) : null}
+            </span>
+          )}
+        </span>
         <ChevronDown className="size-3.5 shrink-0 text-muted-foreground" />
       </Button>
     </PopoverTrigger>
   );
 }
 
-/** The shared row, with any lines the surface puts under it. */
-function HostSwitcherOptionRow(props: {
-  readonly host: HostScopeOption;
-  readonly picked: boolean;
-  readonly active: boolean;
-  readonly intent: HostPickIntent;
-  readonly surfaceState: HostRowSurfaceState;
-  readonly updateView: FleetUpdateView | null;
-  readonly environmentLabel: string | null;
-  /** The composer and in-task pickers: the title wraps, never cut. */
-  readonly composer: boolean;
-  readonly subLines: readonly string[];
-  readonly tag: string | null;
+/** Supplemental facts remain available without selecting or waking the host. */
+function HostSwitcherRowDetails(props: {
+  readonly lines: readonly string[];
 }): ReactNode {
-  const tag =
-    props.tag === null ? null : (
-      <Badge size="xs" variant="muted" data-testid="host-switcher-row-tag">
-        {props.tag}
-      </Badge>
-    );
-  const row = (
-    <HostOptionRow
-      host={props.host}
-      picked={props.picked}
-      active={props.active}
-      intent={props.intent}
-      surfaceState={props.surfaceState}
-      updateView={props.updateView}
-      nameRef={null}
-      nameWraps={props.composer}
-      environmentLabel={props.environmentLabel}
-    />
-  );
-  if (props.subLines.length === 0) {
-    return (
-      <>
-        {row}
-        {tag}
-      </>
-    );
-  }
+  if (props.lines.length === 0) return null;
   return (
-    <span className="flex min-w-0 flex-1 flex-col gap-0.5">
-      <span className="flex min-w-0 items-center gap-2">
-        {row}
-        {tag}
-      </span>
-      {props.subLines.map((line) => (
-        <span
-          key={line}
-          className="ps-6 text-ui-xs whitespace-normal text-muted-foreground"
-        >
-          {line}
-        </span>
-      ))}
-    </span>
-  );
-}
-
-/**
- * A computer in the composer and in-task pickers: its title, then what it is
- * and whether it answers on the line below, which is where its status is
- * said (so the title carries no status word beside it).
- */
-function ComposerComputerRow(props: {
-  readonly host: HostScopeOption;
-  readonly title: string;
-  readonly subLines: readonly string[];
-}): ReactNode {
-  return (
-    <span className="flex min-w-0 flex-1 flex-col gap-0.5">
-      <span className="flex min-w-0 items-center gap-2">
-        <HostGlyph
-          host={props.host}
-          className="size-4 shrink-0 text-muted-foreground"
-        />
-        {/* A title that already says what it is (`This computer`) is not
-            announced twice. */}
-        {props.title === hostOptionKindLabel(props.host) ? null : (
-          <span className="sr-only">{hostOptionKindLabel(props.host)}</span>
-        )}
-        <span className="min-w-0 flex-1 text-start wrap-break-word">
-          {props.title}
-        </span>
-      </span>
-      {props.subLines.map((line) => (
-        <span
-          key={line}
-          className="ps-6 text-ui-xs whitespace-normal text-muted-foreground"
-        >
-          {line}
-        </span>
-      ))}
-    </span>
+    <details className="min-w-0 px-2 pb-1.5 ps-8 text-ui-xs whitespace-normal wrap-anywhere text-muted-foreground">
+      <summary
+        className="w-fit max-w-full cursor-pointer rounded-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+        onKeyDown={(event) => {
+          if (event.key === "Enter" || event.key === " ")
+            event.stopPropagation();
+        }}
+      >
+        Details
+      </summary>
+      <div className="flex min-w-0 flex-col gap-1 pt-1">
+        {props.lines.map((line) => (
+          <p key={line}>{line}</p>
+        ))}
+      </div>
+    </details>
   );
 }
 
@@ -1364,8 +1311,8 @@ function ComposerComputerRow(props: {
  * The combobox's interaction shell around the shared row: a cmdk item, its
  * search keywords, and the assistive-tech mark for "this is the one you are
  * viewing". Everything the row SAYS lives in `HostOptionRow`, which the
- * embedded sections and the Select host dialog draw too, except a computer's
- * in the composer and in-task pickers (`ComposerComputerRow`).
+ * embedded sections and the Select host dialog draw too. Supplemental facts
+ * sit in Details outside the option, so even an unavailable host can explain itself.
  */
 function HostSwitcherRow(props: {
   readonly host: HostScopeOption;
@@ -1380,11 +1327,11 @@ function HostSwitcherRow(props: {
   readonly updateView: FleetUpdateView | null;
   /** This row's environment label, or `null` for a picker that does not say. */
   readonly environmentLabel: string | null;
-  /** The composer and in-task pickers: a computer row says what it is below its title. */
+  /** Composer and in-task pickers also disclose computer facts in Details. */
   readonly composer: boolean;
-  /** Lines under the row (the composer's Local sub-line, the reach sentence). */
+  /** Supplemental facts (the composer's Local sub-line, the reach sentence). */
   readonly subLines: readonly string[];
-  /** The composer's configuration tag beside the title, or `null`. */
+  /** The composer's configuration mark below the name, or `null`. */
   readonly tag: string | null;
   readonly onSelect: () => void;
 }): ReactNode {
@@ -1398,50 +1345,47 @@ function HostSwitcherRow(props: {
   const selectable = isHostOptionSelectable(host, props.intent, surfaceState);
   const title = host.name;
   return (
-    <CommandItem
-      value={host.hostId}
-      // One predicate, asked here exactly as the button list asks it, so a row
-      // that explains why it cannot be picked is also a row that cannot be
-      // picked — on both kinds of container.
-      disabled={!selectable}
-      keywords={[
-        title,
-        host.name,
-        formatPlatform(host.platform) ?? "",
-        formatHostVersion(host.version) ?? "",
-      ]}
-      onSelect={props.onSelect}
-      data-testid={`settings-host-switcher-option-${host.hostId}`}
-      data-scoped={props.scoped ? "true" : "false"}
-      data-checked={props.scoped ? "true" : undefined}
-      // The check mark inside the row is aria-hidden and `data-scoped` reaches
-      // no assistive tech, so without this a screen reader heard the scoped row
-      // and every other row as the same text.
-      aria-current={props.scoped ? "true" : undefined}
-    >
-      {props.composer && host.sandbox === null ? (
-        <ComposerComputerRow
-          host={host}
-          title={title}
-          subLines={[
-            composerComputerSubLine(host, selectable),
-            ...props.subLines,
-          ]}
-        />
-      ) : (
-        <HostSwitcherOptionRow
+    <div className="min-w-0 not-has-[[cmdk-item]]:hidden">
+      <CommandItem
+        className="items-end"
+        value={host.hostId}
+        // One predicate, asked here exactly as the button list asks it, so a row
+        // that explains why it cannot be picked is also a row that cannot be
+        // picked — on both kinds of container.
+        disabled={!selectable}
+        keywords={[
+          title,
+          host.name,
+          formatPlatform(host.platform) ?? "",
+          formatHostVersion(host.version) ?? "",
+        ]}
+        onSelect={props.onSelect}
+        data-testid={`settings-host-switcher-option-${host.hostId}`}
+        data-scoped={props.scoped ? "true" : "false"}
+        data-checked={props.scoped ? "true" : undefined}
+        // The check mark inside the row is aria-hidden and `data-scoped` reaches
+        // no assistive tech, so without this a screen reader heard the scoped row
+        // and every other row as the same text.
+        aria-current={props.scoped ? "true" : undefined}
+      >
+        <HostOptionRow
           host={host}
           picked={props.scoped}
           active={props.active}
           intent={props.intent}
           surfaceState={surfaceState}
           updateView={props.updateView}
-          environmentLabel={props.environmentLabel}
-          composer={props.composer}
-          subLines={props.subLines}
-          tag={props.tag}
+          environmentLabel={props.environmentLabel ?? props.tag}
+          nameRef={null}
         />
-      )}
-    </CommandItem>
+      </CommandItem>
+      <HostSwitcherRowDetails
+        lines={
+          props.composer && host.sandbox === null
+            ? [composerComputerSubLine(host, selectable), ...props.subLines]
+            : props.subLines
+        }
+      />
+    </div>
   );
 }

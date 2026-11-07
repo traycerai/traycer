@@ -71,8 +71,8 @@ interface Draft {
 
 /**
  * What a row says when its value looks like a key, and where its link takes
- * the name and value: Add a secret, or a provider's Account tab for that
- * provider's own key.
+ * the name and value: Add a secret, or the tab that holds that provider's
+ * own key.
  */
 export interface KeyRefusal {
   /** The line, with its link between `before` and `after`. */

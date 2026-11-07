@@ -228,7 +228,7 @@ describe("Find (item 2, item 6)", () => {
     expect(result.textContent).toContain("Chat");
     // No detail matched the query itself, so the second line falls back to
     // Minimap's own current state (its side, under the default arrangement).
-    expect(result.textContent).toContain("Right");
+    expect(result.textContent).toContain("Left");
   });
 
   it("shows the empty-state copy once nothing matches", () => {
@@ -337,15 +337,16 @@ describe("Find (item 2, item 6)", () => {
 
 describe("layoutAreaSummary (L-91)", () => {
   it("reads the tab placement word for Task tabs", () => {
-    expect(layoutAreaSummary("topBar", DEFAULT_LAYOUT_SNAPSHOT)).toBe("Top");
+    expect(layoutAreaSummary("topBar", DEFAULT_LAYOUT_SNAPSHOT)).toBe("Left");
   });
 
   it("counts the Sidebar's panels, and how many are hidden", () => {
     const panelCount = DEFAULT_ARRANGEMENT.rail.filter(
       (entry) => entry.kind === "panel",
     ).length;
+    // File Tree is off in the shipped layout, so it counts as hidden already.
     expect(layoutAreaSummary("sidebar", DEFAULT_LAYOUT_SNAPSHOT)).toBe(
-      `${String(panelCount)} panels`,
+      `${String(panelCount)} panels · 1 hidden`,
     );
 
     const snapshot = {
@@ -356,7 +357,7 @@ describe("layoutAreaSummary (L-91)", () => {
       },
     };
     expect(layoutAreaSummary("sidebar", snapshot)).toBe(
-      `${String(panelCount)} panels · 1 hidden`,
+      `${String(panelCount)} panels · 2 hidden`,
     );
   });
 
@@ -445,7 +446,7 @@ describe("layoutAreaChanged (L-91)", () => {
     act(() => {
       useLayoutStore.getState().setArrangement({
         ...DEFAULT_ARRANGEMENT,
-        tabStripPlacement: "left",
+        tabStripPlacement: "top",
       });
     });
     expect(layoutAreaChanged("presets", useLayoutStore.getState())).toBe(false);
