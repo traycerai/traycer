@@ -443,6 +443,49 @@ export function findCachedTaskContext(
 }
 
 /**
+ * The ids `prefix` begins (ignoring case) among the tasks the cached task
+ * lists and the cached `epic.getTaskContexts` batches found for `scope`. An
+ * answer that did not find its task (gone, out of reach, unknown) names no
+ * task the person can open, so it is not a candidate.
+ */
+export function findCachedTaskIdsByPrefix(
+  queryClient: QueryClient,
+  scope: CloudEpicTasksCacheScope,
+  prefix: string,
+): ReadonlySet<string> {
+  const normalizedPrefix = prefix.toLowerCase();
+  const matches = new Set<string>();
+  const consider = (taskId: string): void => {
+    if (taskId.toLowerCase().startsWith(normalizedPrefix)) matches.add(taskId);
+  };
+  for (const [, response] of queryClient.getQueriesData<ListTasksResponse>({
+    predicate: (query) =>
+      cloudEpicTasksQueryKeyMatchesScope(query.queryKey, scope) ||
+      epicPinReadingQueryKeyMatchesScope(query.queryKey, scope) ||
+      currentTasksPinTailQueryKeyMatchesScope(query.queryKey, scope),
+  })) {
+    if (response === undefined) continue;
+    for (const task of response.tasks) {
+      const taskId = task.epic?.light?.id;
+      if (taskId !== undefined) consider(taskId);
+    }
+  }
+  for (const [
+    ,
+    response,
+  ] of queryClient.getQueriesData<GetTaskContextsResponse>({
+    predicate: (query) =>
+      epicTaskContextsQueryKeyMatchesScope(query.queryKey, scope),
+  })) {
+    if (response === undefined) continue;
+    for (const [taskId, resolution] of Object.entries(response.tasks)) {
+      if (isFoundTaskContext(resolution)) consider(taskId);
+    }
+  }
+  return matches;
+}
+
+/**
  * Calls `onChange` for a cache event on an `epic.getTaskContexts` batch
  * `findCachedTaskContext` reads for `scope`, and for no other.
  */
