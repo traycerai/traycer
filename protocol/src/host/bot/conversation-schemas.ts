@@ -53,6 +53,45 @@ export type BotConversationListResponse = z.infer<
   typeof botConversationListResponseSchema
 >;
 
+/** The image types a bot's attachment store takes from a member. */
+export const BOT_CONVERSATION_ATTACHMENT_MEDIA_TYPES = [
+  "image/png",
+  "image/jpeg",
+  "image/gif",
+  "image/webp",
+] as const;
+
+/** The most bytes one image a member attaches may be, once prepared. */
+export const BOT_CONVERSATION_ATTACHMENT_MAX_BYTES = 5 * 1024 * 1024;
+
+/** The most images one message carries. */
+export const BOT_CONVERSATION_ATTACHMENTS_MAX = 20;
+
+/** The most characters of an attached image's name. */
+const BOT_CONVERSATION_ATTACHMENT_FILE_NAME_MAX = 255;
+
+/** One image a member attached to a message, by value. */
+export const botConversationAttachmentSchema = lazySchema(() =>
+  z.object({
+    /** The prepared bytes, base64. */
+    b64content: z
+      .string()
+      .min(1)
+      .max(Math.ceil(BOT_CONVERSATION_ATTACHMENT_MAX_BYTES / 3) * 4),
+    mediaType: z.enum(BOT_CONVERSATION_ATTACHMENT_MEDIA_TYPES),
+    fileName: z.string().min(1).max(BOT_CONVERSATION_ATTACHMENT_FILE_NAME_MAX),
+    /** The prepared bytes' length. */
+    size: z
+      .number()
+      .int()
+      .positive()
+      .max(BOT_CONVERSATION_ATTACHMENT_MAX_BYTES),
+  }),
+);
+export type BotConversationAttachment = z.infer<
+  typeof botConversationAttachmentSchema
+>;
+
 /**
  * One human message into a conversation. The host mints the message id and
  * the request id and writes the user row with `conversationRequest` open.
@@ -65,7 +104,7 @@ export type BotConversationListResponse = z.infer<
  * send either way, so the caller can show it and a redelivery after a crash
  * between write and acknowledgement writes no second row.
  */
-export const botConversationSendRequestSchema = lazySchema(() =>
+export const botConversationSendRequestSchemaV13 = lazySchema(() =>
   z.object({
     botId: botIdSchema,
     /** The bot's channel: the conversation record the post or its thread hangs off. */
@@ -148,6 +187,29 @@ export const botConversationSendRequestSchema = lazySchema(() =>
      * `origin: "call"`, or it is refused. Absent or `false` for a typed message.
      */
     spoken: z.boolean().optional(),
+  }),
+);
+
+/**
+ * The `text` of a message that is images alone: `text` keeps the floor it has
+ * had since 1.0, and the host trims a message's text before it reads it.
+ */
+export const BOT_CONVERSATION_IMAGES_ONLY_TEXT = " ";
+
+/**
+ * `bot.conversation.send@1.4`: the images a member attached, each its bytes
+ * and the fields an `imageAttachment` node keeps of it. A new post, or a reply
+ * in a thread or under a row; refused with `redeliver`, which re-sends the
+ * post with the images it has, and with `answer`. Absent for a message that
+ * carries none.
+ */
+export const botConversationSendRequestSchema = lazySchema(() =>
+  botConversationSendRequestSchemaV13.extend({
+    attachments: z
+      .array(botConversationAttachmentSchema)
+      .min(1)
+      .max(BOT_CONVERSATION_ATTACHMENTS_MAX)
+      .optional(),
   }),
 );
 export type BotConversationSendRequest = z.infer<
@@ -477,11 +539,20 @@ export const BOT_THREAD_ANCHOR_ANSWER = "answer";
 export const BOT_THREAD_ANCHOR_MESSAGE = "message";
 
 /**
+ * The `threadAnchors` value saying the bot's bound host takes a message's
+ * images (`bot.conversation.send@1.4`), staged for it by another host. No
+ * row: the list is what one binding of the bot says about itself, and a value
+ * a client does not know is ignored.
+ */
+export const BOT_HOST_TAKES_IMAGES = "images";
+
+/**
  * The channel rows, beyond a member's post, a question, a proposal and a
  * direct post, under which one binding of the bot opens a thread when a
- * member replies. They hold for that binding only: a client compares
- * `hostId` and `epoch` with the bot's binding as it knows it, and reads
- * none while they differ.
+ * member replies, and what else that binding takes
+ * ({@link BOT_HOST_TAKES_IMAGES}). They hold for that binding only: a client
+ * compares `hostId` and `epoch` with the bot's binding as it knows it, and
+ * reads none while they differ.
  */
 export const botThreadAnchorsSchema = lazySchema(() =>
   z.object({

@@ -27,6 +27,10 @@ import {
 } from "vitest";
 import { WithTestQueryClient } from "@/__tests__/with-test-query-client";
 import { BotMessageComposer } from "@/components/bots/bot-message-composer";
+import {
+  boxInput,
+  boxText,
+} from "@/components/bots/__tests__/bot-box-test-support";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import type { BotSendFailure } from "@/hooks/bots/use-bot-send-failure";
 import { KeyboardOwnerContext } from "@/hooks/use-primary-action-shortcut";
@@ -161,6 +165,7 @@ function box(kind: BoxKind): ReactNode {
       threadId={kind.threadId}
       announcementId={kind.announcementId}
       sendable
+      imageReach="none"
       placeholder="Message"
       label={kind.label}
       testId={kind.testId}
@@ -200,10 +205,8 @@ function barOf(kind: BoxKind): HTMLElement | null {
   return screen.queryByTestId(`${kind.testId}-call-bar`);
 }
 
-function field(kind: BoxKind): HTMLTextAreaElement {
-  const element = screen.getByRole("textbox", { name: kind.label });
-  if (!(element instanceof HTMLTextAreaElement)) throw new Error("no field");
-  return element;
+function field(kind: BoxKind): HTMLElement {
+  return boxInput(kind.label);
 }
 
 function stateWord(kind: BoxKind): string | null {
@@ -344,19 +347,15 @@ describe("the call bar", () => {
     await userEvent.click(callButton(CHANNEL_BOX));
 
     expect(bar(CHANNEL_BOX).getAttribute("data-state")).toBe("connecting");
-    expect(
-      screen.queryByRole("textbox", { name: CHANNEL_BOX.label }),
-    ).toBeNull();
+    expect(screen.queryByRole("group", { name: CHANNEL_BOX.label })).toBeNull();
     expect(screen.queryByTestId(`${CHANNEL_BOX.testId}-send`)).toBeNull();
     expect(screen.queryByTestId(`${CHANNEL_BOX.testId}-call`)).toBeNull();
 
     act(() => useVoiceSessionStore.getState().sessionEnded("ended"));
-    expect(
-      screen.queryByRole("textbox", { name: CHANNEL_BOX.label }),
-    ).toBeNull();
+    expect(screen.queryByRole("group", { name: CHANNEL_BOX.label })).toBeNull();
     await userEvent.click(screen.getByRole("button", { name: "Dismiss" }));
 
-    expect(field(CHANNEL_BOX).value).toBe("Is CI green?");
+    expect(boxText(CHANNEL_BOX.label)).toBe("Is CI green?");
     expect(screen.getByTestId(`${CHANNEL_BOX.testId}-send`)).toBeTruthy();
     expect(barOf(CHANNEL_BOX)).toBeNull();
     expect(driver.start).toHaveBeenCalledTimes(1);
@@ -591,9 +590,7 @@ describe("the line about a call that did not run", () => {
       "Call ended: out of credits.",
     );
     expect(screen.getAllByTestId("voice-outcome")).toHaveLength(1);
-    expect(
-      screen.queryByRole("textbox", { name: THREAD_BOX.label }),
-    ).toBeNull();
+    expect(screen.queryByRole("group", { name: THREAD_BOX.label })).toBeNull();
     expect(field(CHANNEL_BOX)).toBeTruthy();
 
     await userEvent.click(screen.getByRole("button", { name: "Dismiss" }));
