@@ -317,11 +317,6 @@ describe("the Context usage row carries the pinned breakdown's order (C2)", () =
   });
 });
 
-/**
- * T4: two values live in another region's bag but are rows of another area.
- * Their area's dot counts them and the owning region's row does not, so a
- * revert on that row cannot undo a setting it does not show.
- */
 describe("a rail row's revert", () => {
   it("still clears its shown override, though a preset keeps it", () => {
     const snapshot: LayoutSnapshot = {
@@ -334,6 +329,11 @@ describe("a rail row's revert", () => {
   });
 });
 
+/**
+ * T4: two values live in another region's bag but are rows of another area.
+ * Their area's dot counts them and the owning region's row does not, so a
+ * revert on that row cannot undo a setting it does not show.
+ */
 describe("a value another area's row sets is not its owner's (T4)", () => {
   const agentRowsOn: LayoutSnapshot = {
     ...DEFAULT_LAYOUT_SNAPSHOT,
