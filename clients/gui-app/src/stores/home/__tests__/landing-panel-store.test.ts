@@ -339,6 +339,81 @@ describe("placeholder", () => {
   });
 });
 
+describe("layout of a start page with no record of its own", () => {
+  it("opens at the width the user last dragged another page to, across a reload", () => {
+    useLandingPanelStore.getState().setPanelWidthFraction("page-a", 0.5);
+    expect(
+      landingPanelLayoutFor(useLandingPanelStore.getState(), "page-new")
+        .panelWidthFraction,
+    ).toBe(0.5);
+
+    const persisted: unknown = JSON.parse(
+      JSON.stringify(useLandingPanelStore.getState()),
+    );
+    const reloaded = parsePersistedLandingPanelState(persisted);
+    expect(
+      landingPanelLayoutFor(reloaded, "page-after-reload").panelWidthFraction,
+    ).toBe(0.5);
+  });
+
+  it("seeds the preferred width from a v1 global layout that has no preference yet", () => {
+    const reloaded = parsePersistedLandingPanelState({
+      panelOpen: true,
+      panelWidthFraction: 0.6,
+      maximized: false,
+    });
+    expect(landingPanelLayoutFor(reloaded, "page-new")).toEqual({
+      panelOpen: true,
+      panelWidthFraction: 0.6,
+      maximized: false,
+    });
+  });
+
+  it("fills the window only for the first page after an Automations open, not every page after it", () => {
+    const store = useLandingPanelStore.getState();
+    expect(
+      store.openAutomationTerminal(
+        {
+          userId: null,
+          terminalId: "term-1",
+          startedAt: 0,
+          existing: null,
+          teamEnvironmentId: null,
+        },
+        "placeholder-automation",
+      ),
+    ).toBe(true);
+    const opened = useLandingPanelStore.getState();
+    expect(landingPanelLayoutFor(opened, "page-opened").maximized).toBe(true);
+
+    // The opened page restores the panel: its first own record spends the bit.
+    opened.setPanelMaximized("page-opened", false);
+    const later = useLandingPanelStore.getState();
+    expect(landingPanelLayoutFor(later, "page-created-later")).toMatchObject({
+      panelOpen: true,
+      maximized: false,
+    });
+  });
+
+  it("drops the Automations full-screen bit when the panel empties before any page recorded a layout", () => {
+    const store = useLandingPanelStore.getState();
+    store.openAutomationTerminal(
+      {
+        userId: null,
+        terminalId: "term-1",
+        startedAt: 0,
+        existing: null,
+        teamEnvironmentId: null,
+      },
+      "placeholder-automation",
+    );
+    useLandingPanelStore.getState().dismissPlaceholder();
+    expect(
+      landingPanelLayoutFor(useLandingPanelStore.getState(), "page-new"),
+    ).toMatchObject({ panelOpen: false, maximized: false });
+  });
+});
+
 describe("fulfillPlaceholder", () => {
   it("puts the picked tab at the placeholder's position and activates it", () => {
     const store = useLandingPanelStore.getState();

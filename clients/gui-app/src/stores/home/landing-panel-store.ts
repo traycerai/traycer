@@ -451,8 +451,19 @@ export interface LandingPanelStoreState {
   /**
    * Retains the v1 global layout only for pages that have not yet recorded
    * their own layout. New layout writes always target one landing page.
+   *
+   * Its `maximized` bit is one-shot: {@link openAutomationTerminal} sets it so
+   * the start page it opens NEXT fills the window, and the first page to
+   * record a layout of its own retires it. Left standing, every start page
+   * created afterwards would open full screen too.
    */
   readonly fallbackLayout: LandingPanelLayout | null;
+  /**
+   * The width the user last dragged ANY start page's panel to. A page that
+   * has not recorded a layout of its own opens at this width rather than the
+   * default, so a new start page keeps the width the previous one was left at.
+   */
+  readonly preferredPanelWidthFraction: number;
   readonly pendingKills: ReadonlyArray<LandingPanelPendingKill>;
   /**
    * The tab a programmatic panel open was made to SHOW, or `null`. Not
@@ -625,6 +636,7 @@ interface PersistedLandingPanelState {
     Partial<Record<string, LandingPanelLayout>>
   >;
   readonly fallbackLayout: LandingPanelLayout | null;
+  readonly preferredPanelWidthFraction: number;
   readonly pendingKills: ReadonlyArray<LandingPanelPendingKill>;
 }
 
@@ -634,6 +646,7 @@ function initialPersistedLandingPanelState(): PersistedLandingPanelState {
     activeInstanceId: null,
     layoutsByLandingPageId: {},
     fallbackLayout: null,
+    preferredPanelWidthFraction: DEFAULT_LANDING_PANEL_WIDTH_FRACTION,
     pendingKills: [],
   };
 }
@@ -649,19 +662,30 @@ function initialLandingPanelState(): PersistedLandingPanelState & {
   };
 }
 
+/**
+ * The layout a start page shows.
+ *
+ * A page that has recorded none opens at the width the user last chose on
+ * any page, not at the fallback's or the default's: the v1 fallback width is
+ * seeded into `preferredPanelWidthFraction` at parse time, so it is never
+ * read from here.
+ */
 export function landingPanelLayoutFor(
-  state: Pick<
-    LandingPanelStoreState,
-    "layoutsByLandingPageId" | "fallbackLayout"
-  >,
+  state: LandingPanelLayoutSource,
   landingPageId: string,
 ): LandingPanelLayout {
-  return (
-    state.layoutsByLandingPageId[landingPageId] ??
-    state.fallbackLayout ??
-    DEFAULT_LANDING_PANEL_LAYOUT
-  );
+  const own = state.layoutsByLandingPageId[landingPageId];
+  if (own !== undefined) return own;
+  return {
+    ...(state.fallbackLayout ?? DEFAULT_LANDING_PANEL_LAYOUT),
+    panelWidthFraction: state.preferredPanelWidthFraction,
+  };
 }
+
+type LandingPanelLayoutSource = Pick<
+  LandingPanelStoreState,
+  "layoutsByLandingPageId" | "fallbackLayout" | "preferredPanelWidthFraction"
+>;
 
 export function clampLandingPanelWidthFraction(value: number): number {
   if (!Number.isFinite(value)) {
@@ -768,13 +792,21 @@ export function parsePersistedLandingPanelState(
   const initial = initialPersistedLandingPanelState();
   if (!isRecord(value)) return initial;
   const tabs = parseTabs(value.tabs);
+  const fallbackLayout = parseFallbackLayout(value);
   return {
     tabs,
     activeInstanceId: parseActiveInstanceId(value.activeInstanceId, tabs),
     layoutsByLandingPageId: parseLandingPanelLayouts(
       value.layoutsByLandingPageId,
     ),
-    fallbackLayout: parseFallbackLayout(value),
+    fallbackLayout,
+    // A store written before the preference existed keeps the width its v1
+    // global layout had, which is the only width it ever showed a new page.
+    preferredPanelWidthFraction:
+      typeof value.preferredPanelWidthFraction === "number"
+        ? clampLandingPanelWidthFraction(value.preferredPanelWidthFraction)
+        : (fallbackLayout?.panelWidthFraction ??
+          DEFAULT_LANDING_PANEL_WIDTH_FRACTION),
     pendingKills: parsePendingKills(value.pendingKills),
   };
 }
@@ -867,13 +899,16 @@ export const useLandingPanelStore = create<LandingPanelStoreState>()(
           state.panelReveal === null ? state : { panelReveal: null },
         ),
       setPanelWidthFraction: (landingPageId, panelWidthFraction) =>
-        set((state) =>
-          updateLandingPanelLayout(state, landingPageId, {
-            ...landingPanelLayoutFor(state, landingPageId),
-            panelWidthFraction:
-              clampLandingPanelWidthFraction(panelWidthFraction),
-          }),
-        ),
+        set((state) => {
+          const fraction = clampLandingPanelWidthFraction(panelWidthFraction);
+          return {
+            ...updateLandingPanelLayout(state, landingPageId, {
+              ...landingPanelLayoutFor(state, landingPageId),
+              panelWidthFraction: fraction,
+            }),
+            preferredPanelWidthFraction: fraction,
+          };
+        }),
       setPanelMaximized: (landingPageId, maximized) =>
         set((state) =>
           updateLandingPanelLayout(state, landingPageId, {
@@ -1199,6 +1234,7 @@ export const useLandingPanelStore = create<LandingPanelStoreState>()(
         activeInstanceId: state.activeInstanceId,
         layoutsByLandingPageId: state.layoutsByLandingPageId,
         fallbackLayout: state.fallbackLayout,
+        preferredPanelWidthFraction: state.preferredPanelWidthFraction,
         pendingKills: state.pendingKills,
       }),
       merge: (persistedState, currentState) => ({
@@ -1210,12 +1246,9 @@ export const useLandingPanelStore = create<LandingPanelStoreState>()(
 );
 
 function openPageLayouts(
-  state: Pick<
-    LandingPanelStoreState,
-    "layoutsByLandingPageId" | "fallbackLayout"
-  >,
+  state: LandingPanelLayoutSource,
   landingPageIds: ReadonlyArray<string>,
-): Pick<LandingPanelStoreState, "layoutsByLandingPageId"> {
+): Pick<LandingPanelStoreState, "layoutsByLandingPageId" | "fallbackLayout"> {
   let next = state;
   for (const landingPageId of landingPageIds) {
     next = {
@@ -1226,7 +1259,10 @@ function openPageLayouts(
       }),
     };
   }
-  return { layoutsByLandingPageId: next.layoutsByLandingPageId };
+  return {
+    layoutsByLandingPageId: next.layoutsByLandingPageId,
+    fallbackLayout: next.fallbackLayout,
+  };
 }
 
 function openEveryPageLayout(
@@ -1390,16 +1426,31 @@ function retitledTab(
   return { ...tab, name, titleSource };
 }
 
+/**
+ * Records one page's layout.
+ *
+ * A page's FIRST own record is where it adopts the fallback, and that is when
+ * the fallback's one-shot `maximized` bit is spent: the page it was written
+ * for has shown it, and no page created later should inherit it.
+ */
 function updateLandingPanelLayout(
-  state: Pick<LandingPanelStoreState, "layoutsByLandingPageId">,
+  state: Pick<
+    LandingPanelStoreState,
+    "layoutsByLandingPageId" | "fallbackLayout"
+  >,
   landingPageId: string,
   layout: LandingPanelLayout,
-): Pick<LandingPanelStoreState, "layoutsByLandingPageId"> {
+): Pick<LandingPanelStoreState, "layoutsByLandingPageId" | "fallbackLayout"> {
+  const adopting = state.layoutsByLandingPageId[landingPageId] === undefined;
   return {
     layoutsByLandingPageId: {
       ...state.layoutsByLandingPageId,
       [landingPageId]: layout,
     },
+    fallbackLayout:
+      adopting && state.fallbackLayout?.maximized === true
+        ? { ...state.fallbackLayout, maximized: false }
+        : state.fallbackLayout,
   };
 }
 
@@ -1408,6 +1459,9 @@ function updateLandingPanelLayout(
  * open panel: that would display a permanently empty surface whose prior
  * opening gesture cannot settle. This is intentionally narrower than a user
  * collapse, width adjustment, or fullscreen toggle, which remain scoped.
+ *
+ * The fallback's one-shot `maximized` goes with it: the shell it was written
+ * for is gone, so no page that mounts afterwards is owed a full-screen panel.
  */
 function collapseLayoutsForEmptyPanel(
   state: Pick<
@@ -1430,7 +1484,7 @@ function collapseLayoutsForEmptyPanel(
     fallbackLayout:
       state.fallbackLayout === null
         ? null
-        : { ...state.fallbackLayout, panelOpen: false },
+        : { ...state.fallbackLayout, panelOpen: false, maximized: false },
   };
 }
 
