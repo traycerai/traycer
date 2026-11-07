@@ -39,8 +39,19 @@ export function openWebAudioPorts(
     if (suspending !== null) window.clearTimeout(suspending);
     suspending = null;
   };
-  let clockStopAsked = false;
   const clockStarting = new Set<() => void>();
+  const clockStopped = new Set<() => void>();
+  // Counts the starts asked for, so a stop that takes hold can tell whether one
+  // came after it.
+  let clockStarts = 0;
+  const listenTo =
+    (listeners: Set<() => void>) =>
+    (listener: () => void): (() => void) => {
+      listeners.add(listener);
+      return () => {
+        listeners.delete(listener);
+      };
+    };
   return {
     output,
     stems: new ManifestStemSource(stems, output, reissueStemManifest),
@@ -60,13 +71,8 @@ export function openWebAudioPorts(
         context,
         (node) => dim.tap(node),
         {
-          stopAsked: () => clockStopAsked,
-          onStart: (listener) => {
-            clockStarting.add(listener);
-            return () => {
-              clockStarting.delete(listener);
-            };
-          },
+          onStart: listenTo(clockStarting),
+          onStop: listenTo(clockStopped),
         },
         quality,
       );
@@ -76,19 +82,26 @@ export function openWebAudioPorts(
       suspending = window.setTimeout(
         () => {
           suspending = null;
-          clockStopAsked = true;
-          void context.suspend().catch((error: unknown) => {
-            appLogger.warn("[soundtrack] could not suspend the audio context", {
-              error: describeLogError(error),
-            });
-          });
+          const starts = clockStarts;
+          void context.suspend().then(
+            () => {
+              if (starts !== clockStarts) return;
+              for (const listener of clockStopped) listener();
+            },
+            (error: unknown) => {
+              appLogger.warn(
+                "[soundtrack] could not suspend the audio context",
+                { error: describeLogError(error) },
+              );
+            },
+          );
         },
         (MIX_TUNING.pauseFadeSeconds + DRAIN_AFTER_FADE_SECONDS) * 1000,
       );
     },
     resume: (onRefused) => {
       cancelSuspending();
-      clockStopAsked = false;
+      clockStarts += 1;
       for (const listener of clockStarting) listener();
       void context.resume().catch((error: unknown) => {
         appLogger.warn("[soundtrack] could not resume the audio context", {

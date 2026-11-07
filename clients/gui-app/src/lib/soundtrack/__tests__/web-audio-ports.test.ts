@@ -254,20 +254,42 @@ describe("openWebAudioPorts clock requests", () => {
     expect(context.resume).toHaveBeenCalledTimes(2);
   });
 
-  it("asks for a stop only from the moment the suspend is issued until the resume", async () => {
+  it("runs a capture's stop listeners once the suspend has taken hold, and not after it unlistens", async () => {
     capture.opened.mockResolvedValue(NO_CAPTURE);
     const { ports, context } = openPorts();
     await ports.captureMix("compressed");
     const clock = capture.opened.mock.calls[0][2];
-    expect(clock.stopAsked()).toBe(false);
+    const listener = vi.fn<() => void>();
+    const unlisten = clock.onStop(listener);
 
     ports.pause();
-    expect(clock.stopAsked()).toBe(false);
     await advance(SUSPEND_AFTER_MS);
-    expect(context.suspend).toHaveBeenCalledTimes(1);
-    expect(clock.stopAsked()).toBe(true);
+    expect(listener).toHaveBeenCalledTimes(1);
 
+    unlisten();
     ports.resume(() => undefined);
-    expect(clock.stopAsked()).toBe(false);
+    ports.pause();
+    await advance(SUSPEND_AFTER_MS);
+    expect(context.suspend).toHaveBeenCalledTimes(2);
+    expect(listener).toHaveBeenCalledTimes(1);
+  });
+
+  it("runs no stop listener, and logs it, when the context will not suspend", async () => {
+    const warn = vi.spyOn(appLogger, "warn").mockReturnValue(undefined);
+    capture.opened.mockResolvedValue(NO_CAPTURE);
+    const { ports, context } = openPorts();
+    await ports.captureMix("compressed");
+    const listener = vi.fn<() => void>();
+    capture.opened.mock.calls[0][2].onStop(listener);
+    context.suspend.mockImplementationOnce(() =>
+      Promise.reject(new Error("the context is closed")),
+    );
+
+    ports.pause();
+    await advance(SUSPEND_AFTER_MS);
+
+    expect(listener).not.toHaveBeenCalled();
+    expect(warn).toHaveBeenCalledTimes(1);
+    warn.mockRestore();
   });
 });

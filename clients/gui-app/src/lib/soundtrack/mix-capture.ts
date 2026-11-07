@@ -21,16 +21,19 @@ import type {
 /** Sends the mix to `node` as well, until the answer is called. */
 export type MixTap = (node: AudioNode) => () => void;
 
-/** What the ports have asked of the clock, which the context reports late. */
+/**
+ * When the ports start and stop the clock, which the context's `statechange`
+ * cannot tell: it can come after a newer Play, and a stop while a start is
+ * still pending changes no state and fires none.
+ */
 export interface ClockRequests {
-  /**
-   * Whether the clock was last asked to stop. A `suspended` reported after a
-   * Play is out of date, though the state reads so until the device has
-   * started, by when frames are on their way.
-   */
-  stopAsked(): boolean;
   /** Calls `listener` just ahead of each start, until the answer is called. */
   onStart(listener: () => void): () => void;
+  /**
+   * Calls `listener` once each stop has taken hold, unless a start was asked
+   * for since, until the answer is called.
+   */
+  onStop(listener: () => void): () => void;
 }
 
 const OPUS_MIME_TYPE = "audio/webm;codecs=opus";
@@ -166,12 +169,14 @@ class OpusCapture implements MixCapture {
     );
     const untap = this.tap(this.destination);
     const unkeep = keepRendering(this.context, this.destination);
-    const unlisten = this.clock.onStart(this.resumeRecorder);
+    const unlistenStart = this.clock.onStart(this.resumeRecorder);
+    const unlistenStop = this.clock.onStop(this.pauseRecorder);
     this.context.addEventListener("statechange", this.followContext);
     this.disconnect = () => {
       untap();
       unkeep();
-      unlisten();
+      unlistenStart();
+      unlistenStop();
       this.context.removeEventListener("statechange", this.followContext);
     };
     try {
@@ -219,15 +224,12 @@ class OpusCapture implements MixCapture {
     if (this.recorder.state === "paused") this.recorder.resume();
   };
 
+  private readonly pauseRecorder = (): void => {
+    if (this.recorder.state === "recording") this.recorder.pause();
+  };
+
   private readonly followContext = (): void => {
-    const { state } = this.context;
-    if (state === "suspended") {
-      if (this.clock.stopAsked() && this.recorder.state === "recording") {
-        this.recorder.pause();
-      }
-      return;
-    }
-    if (state !== "running") return;
+    if (this.context.state !== "running") return;
     this.whenRunning?.();
     this.whenRunning = null;
   };

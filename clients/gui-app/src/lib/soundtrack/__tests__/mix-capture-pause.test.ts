@@ -1,8 +1,9 @@
 /**
  * When the compressed capture pauses its recorder, over the real
  * `openWebAudioPorts` and the real `captureMix("compressed")`, with a context
- * whose state and `statechange` this test drives. The context reports a
- * suspension late, which is what is under test; the real clock is
+ * whose suspends this test lets take hold and whose `statechange` it reports.
+ * A suspension that takes hold after a newer Play, or with no report at all, is
+ * what is under test; the real clock is
  * `browser-tests/soundtrack-recording.spec.ts`.
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -38,13 +39,23 @@ class FakeNode {
 
 type ContextState = "running" | "suspended";
 
+/**
+ * Its state moves only when the test reports it, so a resume nothing has
+ * reported is one still pending, and the context reads suspended through it.
+ */
 class FakeAudioContext extends EventTarget {
   static readonly instances: FakeAudioContext[] = [];
   readonly currentTime = 0;
   readonly sampleRate = 48_000;
   state: ContextState = "running";
   readonly destination = {};
-  readonly suspend = vi.fn<() => Promise<void>>(() => Promise.resolve());
+  private readonly suspensions: (() => void)[] = [];
+  readonly suspend = vi.fn<() => Promise<void>>(
+    () =>
+      new Promise((resolve) => {
+        this.suspensions.push(resolve);
+      }),
+  );
   readonly resume = vi.fn<() => Promise<void>>(() => Promise.resolve());
 
   constructor() {
@@ -62,6 +73,14 @@ class FakeAudioContext extends EventTarget {
 
   createMediaStreamDestination(): FakeNode {
     return new FakeNode();
+  }
+
+  /** The oldest suspend still waiting takes hold, and reports nothing. */
+  async takeHold(): Promise<void> {
+    const resolve = this.suspensions.shift();
+    if (resolve === undefined) throw new Error("No suspend is waiting");
+    resolve();
+    await advance(0);
   }
 
   /** What the browser does some time after a suspend or a resume. */
@@ -159,12 +178,28 @@ afterEach(() => {
 });
 
 describe("the compressed capture's recorder across a pause", () => {
-  it("is not paused by a suspended report that comes after a Play, then or when the context runs", async () => {
+  it("pauses once a Pause's suspension takes hold, and a Play resumes it ahead of the context", async () => {
+    const opened = await openCapturing();
+    const { ports, context, recorder } = opened;
+    await pauseUntilSuspendIssued(opened, 1);
+
+    await context.takeHold();
+    expect(recorder.pause).toHaveBeenCalledTimes(1);
+
+    ports.resume(() => undefined);
+    expect(recorder.resume).toHaveBeenCalledTimes(1);
+    expect(recorder.resume.mock.invocationCallOrder[0]).toBeLessThan(
+      context.resume.mock.invocationCallOrder[0],
+    );
+  });
+
+  it("is not paused by a suspension that takes hold after a Play, nor by its late report", async () => {
     const opened = await openCapturing();
     const { ports, context, recorder } = opened;
     await pauseUntilSuspendIssued(opened, 1);
 
     ports.resume(() => undefined);
+    await context.takeHold();
     // Late: the Play is out, and the state has not left suspended yet.
     context.report("suspended");
     context.report("running");
@@ -172,35 +207,35 @@ describe("the compressed capture's recorder across a pause", () => {
     expect(recorder.pause).not.toHaveBeenCalled();
   });
 
-  it("is still paused by a newer Pause, after it ignored that stale report", async () => {
+  it("is paused by a newer Pause's suspension, and not by an older one that takes hold first", async () => {
     const opened = await openCapturing();
     const { ports, context, recorder } = opened;
     await pauseUntilSuspendIssued(opened, 1);
     ports.resume(() => undefined);
-    context.report("suspended");
-    context.report("running");
-
     await pauseUntilSuspendIssued(opened, 2);
-    context.report("suspended");
 
+    await context.takeHold();
+    expect(recorder.pause).not.toHaveBeenCalled();
+
+    await context.takeHold();
     expect(recorder.pause).toHaveBeenCalledTimes(1);
   });
 
-  it("ignores a stale report until the newer Pause's suspend is issued and reported", async () => {
+  it("is paused by a Pause whose suspension takes hold while the Play's resume is pending, with no statechange", async () => {
     const opened = await openCapturing();
     const { ports, context, recorder } = opened;
     await pauseUntilSuspendIssued(opened, 1);
+    await context.takeHold();
+    context.report("suspended");
+    // The Play resumes the recorder at once; the context still reads suspended.
     ports.resume(() => undefined);
+    expect(recorder.state).toBe("recording");
 
-    // A Pause inside the window: its suspend waits out the fade.
-    ports.pause();
-    context.report("suspended");
-    expect(recorder.pause).not.toHaveBeenCalled();
+    await pauseUntilSuspendIssued(opened, 2);
+    await context.takeHold();
 
-    await advance(SUSPEND_AFTER_MS);
-    expect(context.suspend).toHaveBeenCalledTimes(2);
-    context.report("suspended");
-    expect(recorder.pause).toHaveBeenCalledTimes(1);
+    expect(recorder.pause).toHaveBeenCalledTimes(2);
+    expect(recorder.state).toBe("paused");
   });
 
   it("leaves a recorder told to stop alone, so that a Play still reaches the context", async () => {
@@ -210,26 +245,11 @@ describe("the compressed capture's recorder across a pause", () => {
     void capture.stop();
 
     await pauseUntilSuspendIssued(opened, 1);
-    context.report("suspended");
+    await context.takeHold();
     ports.resume(() => undefined);
 
     expect(recorder.pause).not.toHaveBeenCalled();
     expect(recorder.resume).not.toHaveBeenCalled();
     expect(context.resume).toHaveBeenCalledOnce();
-  });
-
-  it("pauses on the suspended report of an ordinary Pause, and a Play resumes it ahead of the context", async () => {
-    const opened = await openCapturing();
-    const { ports, context, recorder } = opened;
-    await pauseUntilSuspendIssued(opened, 1);
-
-    context.report("suspended");
-    expect(recorder.pause).toHaveBeenCalledTimes(1);
-
-    ports.resume(() => undefined);
-    expect(recorder.resume).toHaveBeenCalledTimes(1);
-    expect(recorder.resume.mock.invocationCallOrder[0]).toBeLessThan(
-      context.resume.mock.invocationCallOrder[0],
-    );
   });
 });
