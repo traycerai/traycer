@@ -17,6 +17,28 @@ const TARGET_CHIP_CLASS = cn(
 const MUTED_CHIP_CLASS = cn(CHIP_CLASS, "text-muted-foreground");
 
 /**
+ * A mention in a message box: the chip the posted row draws, with nothing to
+ * open, since a click there places the caret.
+ */
+export function BotBoxMentionChip(props: {
+  readonly token: string;
+  readonly children: ReactNode;
+}): ReactNode {
+  return (
+    <span
+      data-testid="bot-box-mention"
+      data-token={props.token}
+      className={cn(
+        CHIP_CLASS,
+        "inline-block max-w-full truncate bg-info/10 align-bottom text-info-foreground",
+      )}
+    >
+      {props.children}
+    </span>
+  );
+}
+
+/**
  * A mention in a message: the member's name as a chip, highlighted when it
  * is the viewer; the token as written where it names no member.
  */

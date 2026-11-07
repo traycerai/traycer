@@ -1731,15 +1731,20 @@ function SidebarBulkDeleteController(props: {
           return found === null ? [] : [found];
         });
         if (openTargets.length > 0) {
-          navigateNested(props.epicId, props.tabId, () => {
-            openTargets.forEach((found) => {
-              closeCanvasTab(props.tabId, found.paneId, found.instanceId);
-            });
-            const canvas =
-              useEpicCanvasStore.getState().canvasByTabId[props.tabId] ??
-              EMPTY_CANVAS;
-            return getCurrentNestedFocusTarget(canvas);
-          });
+          navigateNested(
+            props.epicId,
+            props.tabId,
+            () => {
+              openTargets.forEach((found) => {
+                closeCanvasTab(props.tabId, found.paneId, found.instanceId);
+              });
+              const canvas =
+                useEpicCanvasStore.getState().canvasByTabId[props.tabId] ??
+                EMPTY_CANVAS;
+              return getCurrentNestedFocusTarget(canvas);
+            },
+            "user",
+          );
         }
         targets.forEach((target, index) => {
           if (
@@ -2189,6 +2194,7 @@ function TreePanelActions(props: TreePanelActionsProps) {
               "explicit",
               "direct_ui",
             ),
+            "user",
           );
         },
         onBeforeOpen,

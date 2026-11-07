@@ -148,6 +148,27 @@ describe("<HtmlArtifactVersionPicker />", () => {
     expect(rows[0].getAttribute("aria-checked")).toBe("true");
   });
 
+  it("does not list the current version as its own row when that version is selected", async () => {
+    const { user } = renderPicker({
+      selected: V3,
+      selectedVersionNumber: 3,
+      selectionAvailable: true,
+      currentVersionNumber: 3,
+    });
+
+    await user.click(
+      screen.getByRole("button", { name: /HTML version history/ }),
+    );
+
+    const rows = screen.getAllByRole("menuitemradio");
+    expect(rows.filter((row) => /Latest/.test(textOf(row)))).toHaveLength(1);
+    expect(rows.map((row) => /Version (\d)/.exec(textOf(row))?.[1])).toEqual([
+      "3",
+      "2",
+      "1",
+    ]);
+  });
+
   it("pins the chosen version with its number, and returns to Latest from the live row", async () => {
     const pinned = renderPicker({
       selected: V2,

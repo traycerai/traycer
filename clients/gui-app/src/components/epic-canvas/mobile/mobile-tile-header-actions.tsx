@@ -124,12 +124,16 @@ export function MobilePrimaryTileClose(props: {
         // The second tile is the shown one before its slot clears, so the
         // clear keeps it: a transient slot is evicted only while it is not
         // what the first tile shows.
-        navigateNested(epicId, tabId, () =>
-          store.prepareSetActiveTileTabFocusTarget(
-            tabId,
-            secondary.paneId,
-            secondary.ref.instanceId,
-          ),
+        navigateNested(
+          epicId,
+          tabId,
+          () =>
+            store.prepareSetActiveTileTabFocusTarget(
+              tabId,
+              secondary.paneId,
+              secondary.ref.instanceId,
+            ),
+          "user",
         );
         store.setMobileSecondaryTile(tabId, null);
       }}

@@ -122,16 +122,24 @@ export function WorkspaceHostSwitcher(
  * heads below the fold on exactly the accounts that own several machines.
  *
  * What stays local to this surface is only its framing: the "Host" heading that
- * pairs with "Workspaces" below it.
+ * pairs with "Workspaces" below it, which a surface with its own heading omits.
  */
-export function HostSection(props: HostSectionProps): ReactNode {
+export function HostSection(
+  props: HostSectionProps & {
+    /** The section's heading, or `null` where the surface heads it itself. */
+    readonly heading: string | null;
+  },
+): ReactNode {
+  const { heading, ...section } = props;
   return (
     <section
       data-testid="host-workspace-selector-host-section"
       className="w-full max-w-full min-w-0"
     >
-      <DropdownMenuLabel>Host</DropdownMenuLabel>
-      <WorkspaceHostSwitcher {...props} surface="field" />
+      {heading === null ? null : (
+        <DropdownMenuLabel>{heading}</DropdownMenuLabel>
+      )}
+      <WorkspaceHostSwitcher {...section} surface="field" />
     </section>
   );
 }

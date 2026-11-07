@@ -73,6 +73,7 @@ export function useAddBrowserAction(
           "explicit",
           "direct_ui",
         ),
+        "user",
       );
       onOpened?.();
     },
@@ -103,7 +104,10 @@ export function useAddBrowserAction(
     );
     // Commit pending chrome before sending a request that may resolve immediately.
     flushSync(() => {
-      openTile(tileIntent(pending.node, { tabId }, "explicit", "direct_ui"));
+      openTile(
+        tileIntent(pending.node, { tabId }, "explicit", "direct_ui"),
+        "user",
+      );
     });
     if (!pending.observe()) return;
     mutate(pending.request);

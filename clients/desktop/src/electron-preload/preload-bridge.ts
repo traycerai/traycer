@@ -38,6 +38,7 @@ import {
   buildHostLifecycleBridge,
   readLocalHostCapability,
 } from "./host-lifecycle-bridge";
+import { buildSoundtrackRecordingBridge } from "./soundtrack-recording-bridge";
 import { readSyncBoolean, readSyncString } from "./sync-bootstrap";
 
 /**
@@ -105,6 +106,7 @@ contextBridge.exposeInMainWorld("runnerHost", {
     RunnerHostSync.soundtrackSourceAvailable,
     false,
   ),
+  soundtrackRecording: buildSoundtrackRecordingBridge(),
   hostTray: buildHostTrayCommandSubscriber(),
   hostControllerStatus: buildHostControllerStatusSubscriber(),
 });

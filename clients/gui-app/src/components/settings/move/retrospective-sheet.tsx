@@ -11,7 +11,6 @@ import {
   RETROSPECTIVE_DISCLOSURE,
   RETROSPECTIVE_GOT_IT,
   RETROSPECTIVE_HELD_COMMANDS,
-  RETROSPECTIVE_HELD_NOT_IN_USE,
   RETROSPECTIVE_MOVE_TO_PERSONAL,
   RETROSPECTIVE_RECORD_LINE,
   RETROSPECTIVE_SHARED_FROM_ROOM,
@@ -19,7 +18,6 @@ import {
   RETROSPECTIVE_STILL_ON_THIS_COMPUTER,
   RETROSPECTIVE_STOP_SHARING,
   HELD_COMMAND_CHOICES,
-  HELD_VALUE_CHOICES,
   NO_MOVE_SHEET_ACCEPTANCE,
   retrospectiveEvidenceLine,
   retrospectiveTitle,
@@ -68,7 +66,6 @@ export interface SharedInUseItem {
 export interface HeldRow {
   readonly heldId: string;
   readonly name: string;
-  readonly kind: "value" | "command";
   readonly detail: string;
 }
 
@@ -115,9 +112,6 @@ export function RetrospectiveSheet(props: {
     shownForOpen.current = true;
     onShown();
   }, [open, inventoryReady, onShown]);
-
-  const valueHeld = props.held.filter((row) => row.kind === "value");
-  const commandHeld = props.held.filter((row) => row.kind === "command");
 
   return (
     <Dialog open={props.open} onOpenChange={props.onOpenChange}>
@@ -171,26 +165,13 @@ export function RetrospectiveSheet(props: {
                 {props.appliedOn.join(" · ")}
               </InventoryRow>
             ) : null}
-            {valueHeld.length > 0 ? (
-              <InventoryRow
-                term={RETROSPECTIVE_HELD_NOT_IN_USE}
-                testId="retrospective-held-values"
-              >
-                <HeldList
-                  rows={valueHeld}
-                  actions={HELD_VALUE_CHOICES}
-                  pendingId={props.heldPendingId}
-                  onHeldApply={props.onHeldApply}
-                />
-              </InventoryRow>
-            ) : null}
-            {commandHeld.length > 0 ? (
+            {props.held.length > 0 ? (
               <InventoryRow
                 term={RETROSPECTIVE_HELD_COMMANDS}
                 testId="retrospective-held-commands"
               >
                 <HeldList
-                  rows={commandHeld}
+                  rows={props.held}
                   actions={HELD_COMMAND_CHOICES}
                   pendingId={props.heldPendingId}
                   onHeldApply={props.onHeldApply}

@@ -108,10 +108,14 @@ export type MentionMenuAction =
   | { readonly kind: "back" }
   | { readonly kind: "complete"; readonly mention: MentionAttachment }
   /**
-   * A row whose picker resolves it by its id: what it inserts is no prompt
-   * attachment. A bot channel's box lists its names this way.
+   * A name of a bot's message box: what it inserts is no prompt attachment
+   * but a chip of the wire token it stands for.
    */
-  | { readonly kind: "select" }
+  | {
+      readonly kind: "complete-token";
+      readonly token: string;
+      readonly label: string;
+    }
   /**
    * A tab on another host: attach snapshot context (text line + screenshot)
    * rather than a mention the agent could try to drive.

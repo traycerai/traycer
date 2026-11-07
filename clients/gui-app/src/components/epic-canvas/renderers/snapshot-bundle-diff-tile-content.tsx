@@ -223,6 +223,7 @@ function SnapshotBundleFileSection(props: {
     });
     openTile(
       tileIntent(tile, { tabId: props.viewTabId }, "explicit", "direct_ui"),
+      "user",
     );
   }, [
     openTile,

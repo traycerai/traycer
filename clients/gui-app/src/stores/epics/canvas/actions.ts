@@ -719,7 +719,7 @@ export function openTileInBackgroundTab(
  * `mode` mirrors the three whole-canvas openers so one pane-scoped call
  * covers all of them: `permanent` is a pinned tab, `preview` also claims the
  * pane's preview slot (evicting and GC-ing the previous preview, like
- * `openTile(..., preview: true)`), and `background` only adds membership -
+ * `openTile(..., preview: true, "user")`), and `background` only adds membership -
  * `activeTabId` / `activePaneId` are untouched, like
  * {@link openTileInBackgroundTab}.
  *

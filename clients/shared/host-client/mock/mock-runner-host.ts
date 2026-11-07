@@ -26,9 +26,11 @@ import type {
   SlackAppReadResult,
   SlackAppWriteResult,
 } from "../slack-app";
+import type { TeamHostInstallTokenResult } from "../team-host";
 import {
   SLACK_APP_REFUSAL_APP_NOT_FOUND,
   SLACK_APP_REFUSAL_APP_TAKEN,
+  type SlackAppDmsRequest,
   type SlackAppRegisterRequest,
   type SlackAppView,
 } from "@traycer/protocol/host/slack-app";
@@ -209,6 +211,10 @@ const MOCK_TOKEN_STORE_KEY = "traycer.token";
 const MOCK_SLACK_INSTALL_URL = "https://slack.mock.invalid/oauth/v2/authorize";
 /** The server's install-state life (`SLACK_INSTALL_STATE_TTL_MS`). */
 const MOCK_SLACK_INSTALL_TTL_MS = 600_000;
+/** The mock's team-host install token and the host it enrolls: fixed, so a dev walk reads the same every time. */
+const MOCK_TEAM_HOST_ID = "00000000-0000-4000-8000-000000000001";
+const MOCK_TEAM_HOST_INSTALL_TOKEN = "mock-team-host-install-token";
+const MOCK_TEAM_HOST_INSTALL_TTL_MS = 600_000;
 const STEP_UP_EXPIRY_SKEW_MS = 5_000;
 
 interface RetainedStepUpCredential {
@@ -890,6 +896,7 @@ export class MockRunnerHost implements IRunnerHost {
       teamName: null,
       botUserId: null,
       installedAt: null,
+      dmsEnabled: this.slackApps.get(request.botId)?.dmsEnabled ?? true,
     };
     this.slackApps.set(request.botId, app);
     this.slackInstallStates.delete(request.botId);
@@ -934,6 +941,35 @@ export class MockRunnerHost implements IRunnerHost {
         : app;
     this.slackApps.set(botId, next);
     return { kind: "ok", app: next };
+  }
+
+  async setSlackAppDms(
+    _bearerToken: string,
+    request: SlackAppDmsRequest,
+  ): Promise<SlackAppWriteResult> {
+    const app = this.slackApps.get(request.botId);
+    if (app === undefined) {
+      return {
+        kind: "refused",
+        status: 404,
+        code: SLACK_APP_REFUSAL_APP_NOT_FOUND,
+      };
+    }
+    const next: SlackAppView = { ...app, dmsEnabled: request.dmsEnabled };
+    this.slackApps.set(request.botId, next);
+    return { kind: "ok", app: next };
+  }
+
+  async mintTeamHostInstallToken(
+    _bearerToken: string,
+    _environmentId: string,
+  ): Promise<TeamHostInstallTokenResult> {
+    return {
+      kind: "ok",
+      hostId: MOCK_TEAM_HOST_ID,
+      installToken: MOCK_TEAM_HOST_INSTALL_TOKEN,
+      expiresAt: Date.now() + MOCK_TEAM_HOST_INSTALL_TTL_MS,
+    };
   }
 
   /** Test/dev hook: Slack removed the bot's app (`app_uninstalled`). */

@@ -9,9 +9,9 @@ import {
   REMOTE_ACCESS_TEXT,
   shownRemoteAccess,
 } from "@/components/settings/host-scope/host-access-model";
+import { RemoteAccessQuestion } from "@/components/settings/host-scope/remote-access-question";
 import { HOST_OVERVIEW } from "@/components/settings/panels/host-overview.definitions";
 import { SettingsGroup } from "@/components/settings/settings-group";
-import { SettingsRow } from "@/components/settings/settings-row";
 import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
 import { Button } from "@/components/ui/button";
 import { useRemoteAccessSetMutation } from "@/hooks/environment/use-remote-access-set-mutation";
@@ -50,23 +50,24 @@ export function RemoteAccessSection(props: {
       dataTestId="remote-access-section"
       fill={false}
     >
-      <SettingsRow
-        row={HOST_OVERVIEW.definitions.remoteAccessRow}
-        status={
-          <span data-testid="remote-access-state" data-state={shown}>
+      <RemoteAccessQuestion client={props.client} hostId={props.hostId} enabled>
+        <div className="flex flex-wrap items-center justify-between gap-3 px-5 py-3 text-ui-sm">
+          <span
+            className="min-w-0 flex-1 text-muted-foreground"
+            data-testid="remote-access-state"
+            data-state={shown}
+          >
             {REMOTE_ACCESS_TEXT[shown]}
           </span>
-        }
-        control={
-          !writable ? null : (
+          {!writable ? null : (
             <RemoteAccessControl
               shown={shown}
               pending={set.isPending}
               onSet={(enabled) => set.mutate({ enabled })}
             />
-          )
-        }
-      />
+          )}
+        </div>
+      </RemoteAccessQuestion>
     </SettingsGroup>
   );
 }

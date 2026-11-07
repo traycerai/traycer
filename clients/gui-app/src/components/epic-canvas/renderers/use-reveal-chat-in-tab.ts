@@ -46,6 +46,7 @@ export function useRevealChatInTab(args: {
           "explicit",
           "direct_ui",
         ),
+        "user",
       );
     },
     [handle, openTile, tabHostId, viewTabId],

@@ -131,3 +131,23 @@ export function useBotSlackDisconnectMutation(
     },
   });
 }
+
+/** `POST /api/slack/apps/dms`: whether a person's DM to the bot is admitted. */
+export function useBotSlackDmsMutation(
+  botId: string,
+): UseMutationResult<SlackAppView, Error, boolean> {
+  const binding = useHostBinding();
+  const invalidate = useInvalidateBotSlackApp(botId);
+  return useMutation({
+    mutationKey: botSlackMutationKeys.dms(botId),
+    mutationFn: async (dmsEnabled) => {
+      if (binding === null) {
+        throw new BotSlackAppError(SIGNED_OUT, WRITE_FAILED_LINE);
+      }
+      const result = await binding.auth.setSlackAppDms({ botId, dmsEnabled });
+      if (result.kind === "ok") return result.app;
+      throw new BotSlackAppError(result, WRITE_FAILED_LINE);
+    },
+    onSuccess: () => invalidate(),
+  });
+}
