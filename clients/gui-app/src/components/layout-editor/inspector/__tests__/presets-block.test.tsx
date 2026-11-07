@@ -68,7 +68,7 @@ describe("applying a preset offers an Undo (L-133 overturned)", () => {
         };
       },
     ];
-    expect(message).toBe("Compact applied. Placement and order kept.");
+    expect(message).toBe("Compact applied. Placement, order and panels kept.");
     expect(options.action.label).toBe("Undo");
     expect(useLayoutStore.getState().basePreset).toBe("compact");
 
@@ -288,6 +288,59 @@ describe("View changes (L-89 overturned: no separate level)", () => {
     expect(useLayoutStore.getState().arrangement.tabStripPlacement).toBe(
       DEFAULT_ARRANGEMENT.tabStripPlacement,
     );
+  });
+});
+
+describe("panels the rail shows are not a preset's to change", () => {
+  function showFileTree(): void {
+    act(() => {
+      useLayoutStore
+        .getState()
+        .setRegionValues("railFileTree", { shown: "shown" });
+    });
+  }
+
+  it("reads Default, not Modified, with File Tree shown", () => {
+    showFileTree();
+    render(<PresetsBlock reveal={vi.fn()} />);
+
+    expect(screen.getByTestId("preset-status-line").textContent).toBe(
+      "Default",
+    );
+    expect(screen.queryAllByTestId("preset-card-modified")).toHaveLength(0);
+  });
+
+  it("lists File Tree under Arrangement against Default, even with Compact applied, and its revert clears it", () => {
+    act(() => {
+      useLayoutStore.getState().applyPreset("compact");
+    });
+    showFileTree();
+    render(<PresetsBlock reveal={vi.fn()} />);
+    const toggle = screen.queryByRole("button", { name: "View changes" });
+    if (toggle !== null) fireEvent.click(toggle);
+
+    const arrangement = within(
+      screen.getByTestId("layout-change-list"),
+    ).getByRole("region", { name: "Arrangement" });
+    expect(arrangement.textContent).toContain("File Tree");
+    expect(arrangement.textContent).toContain("Default: ");
+    expect(arrangement.textContent).not.toContain("Compact: ");
+
+    fireEvent.click(screen.getByRole("button", { name: "Revert File Tree" }));
+
+    expect(useLayoutStore.getState().overrides.railFileTree).toBeUndefined();
+  });
+
+  it("is left shown by applying Compact", () => {
+    showFileTree();
+    render(<PresetsBlock reveal={vi.fn()} />);
+
+    fireEvent.click(screen.getByRole("button", { name: "Apply Compact" }));
+
+    expect(useLayoutStore.getState().basePreset).toBe("compact");
+    expect(useLayoutStore.getState().overrides).toEqual({
+      railFileTree: { shown: "shown" },
+    });
   });
 });
 
@@ -547,7 +600,9 @@ describe("keyboard applies a preset exactly like a click, as one undo step (R2-B
           readonly cancel: { readonly label: string };
         },
       ];
-      expect(message).toBe("Compact applied. Placement and order kept.");
+      expect(message).toBe(
+        "Compact applied. Placement, order and panels kept.",
+      );
       expect(options.action.label).toBe("Undo");
       expect(options.cancel.label).toBe("View changes");
     },

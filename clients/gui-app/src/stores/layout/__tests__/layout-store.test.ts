@@ -239,6 +239,38 @@ describe("useLayoutStore", () => {
     );
   });
 
+  describe("applying a preset keeps the panels the rail shows", () => {
+    it("keeps a hidden panel and a shown File Tree while clearing a display override", () => {
+      const store = useLayoutStore.getState();
+      store.setRegionValues("railFileTree", { shown: "shown" });
+      store.setRegionValues("railBrowsers", { shown: "hidden" });
+      store.setRegionValues("mic", { shown: "hidden" });
+
+      useLayoutStore.getState().applyPreset("compact");
+
+      expect(getLayoutSnapshot().basePreset).toBe("compact");
+      expect(getLayoutSnapshot().overrides).toEqual({
+        railFileTree: { shown: "shown" },
+        railBrowsers: { shown: "hidden" },
+      });
+    });
+
+    it("writes nothing when the current preset is re-applied over rail overrides alone", () => {
+      useLayoutStore
+        .getState()
+        .setRegionValues("railFileTree", { shown: "shown" });
+      const listener = vi.fn();
+      const unsubscribe = useLayoutStore.subscribe(listener);
+      window.localStorage.clear();
+
+      useLayoutStore.getState().applyPreset(getLayoutSnapshot().basePreset);
+      unsubscribe();
+
+      expect(listener).not.toHaveBeenCalled();
+      expect(window.localStorage.getItem(LAYOUT_KEY)).toBeNull();
+    });
+  });
+
   describe("applying a preset that changes nothing", () => {
     it("neither notifies subscribers nor writes storage when the current preset is applied over no overrides", () => {
       const listener = vi.fn();

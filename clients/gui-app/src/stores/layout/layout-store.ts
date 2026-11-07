@@ -14,6 +14,7 @@ import {
   GIT_DIFF_PULL_REQUESTS_STACK_ID,
   normalizeRail,
   RAIL_REGION_BY_PANEL,
+  RAIL_REGION_IDS,
   railPanelEntriesFromIds,
   railStackId,
   railVisibilityFor,
@@ -64,8 +65,9 @@ import {
  */
 export interface LayoutStoreState extends LayoutSnapshot {
   /**
-   * Every value replaced by the preset's, the arrangement untouched: the
-   * delta is cleared and `basePreset` becomes the last-applied preset.
+   * Every display value replaced by the preset's, the arrangement and the
+   * panels the rail shows untouched: the rest of the delta is cleared and
+   * `basePreset` becomes the last-applied preset.
    */
   readonly applyPreset: (preset: LayoutPresetId) => void;
   readonly setRegionValues: <K extends RegionId>(
@@ -82,6 +84,16 @@ export interface LayoutStoreState extends LayoutSnapshot {
   ) => void;
   readonly setArrangement: (arrangement: LayoutArrangement) => void;
   readonly replaceAll: (next: LayoutSnapshot) => void;
+}
+
+/** The panels the user has shown or hidden, which no preset decides. */
+function railOverrides(overrides: LayoutOverrides): LayoutOverrides {
+  return Object.fromEntries(
+    RAIL_REGION_IDS.flatMap((region) => {
+      const patch = overrides[region];
+      return patch === undefined ? [] : [[region, patch]];
+    }),
+  );
 }
 
 export const DEFAULT_LAYOUT_SNAPSHOT: LayoutSnapshot = {
@@ -164,12 +176,14 @@ export const useLayoutStore = create<LayoutStoreState>()(
         // Re-applying the untouched current preset writes nothing: a set here
         // would still persist and rehydrate every other window.
         const current = get();
+        const overrides = railOverrides(current.overrides);
         if (
           current.basePreset === basePreset &&
-          Object.keys(current.overrides).length === 0
+          Object.keys(current.overrides).length ===
+            Object.keys(overrides).length
         )
           return;
-        set({ basePreset, overrides: {} });
+        set({ basePreset, overrides });
       },
       setRegionValues: (region, patch) => {
         set(nextOverrides(get(), { [region]: patch }));

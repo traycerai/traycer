@@ -317,6 +317,18 @@ describe("the Context usage row carries the pinned breakdown's order (C2)", () =
   });
 });
 
+describe("a rail row's revert", () => {
+  it("still clears its shown override, though a preset keeps it", () => {
+    const snapshot: LayoutSnapshot = {
+      ...DEFAULT_LAYOUT_SNAPSHOT,
+      overrides: { railFileTree: { shown: "shown" } },
+    };
+
+    expect(regionRowChanged(snapshot, "railFileTree")).toBe(true);
+    expect(revertedRegionRow(snapshot, "railFileTree").overrides).toEqual({});
+  });
+});
+
 /**
  * T4: two values live in another region's bag but are rows of another area.
  * Their area's dot counts them and the owning region's row does not, so a
