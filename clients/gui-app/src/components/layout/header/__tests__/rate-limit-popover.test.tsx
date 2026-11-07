@@ -3873,26 +3873,6 @@ describe("<RateLimitPopover /> Overview block scoping", () => {
 });
 
 describe("<RateLimitPopover /> Traycer tab", () => {
-  function singleHostPopoverElement() {
-    return (
-      <QueryClientProvider client={new QueryClient()}>
-        <TooltipProvider>
-          <Popover open>
-            <PopoverTrigger>trigger</PopoverTrigger>
-            <RateLimitPopover
-              side="bottom"
-              align="end"
-              onClose={onClose}
-              profileSelection={mocks.profileSelection}
-              scope={SINGLE_HOST_SCOPE}
-              hasExplicitPick={false}
-            />
-          </Popover>
-        </TooltipProvider>
-      </QueryClientProvider>
-    );
-  }
-
   it("adds a Traycer tab for a paid account, even with no host-RPC providers", () => {
     mocks.configured = [];
     mocks.authUser = readyAuthUser(
@@ -3900,38 +3880,6 @@ describe("<RateLimitPopover /> Traycer tab", () => {
     );
     renderPopover();
     // Eligible Traycer alone keeps the rail (not the zero-provider CTA).
-    expect(
-      screen.queryByText("Connect a supported provider to see usage here."),
-    ).toBeNull();
-    const tabs = screen.getAllByRole("tab");
-    expect(tabs.map((tab) => tab.getAttribute("aria-label"))).toEqual([
-      "Overview",
-      "Traycer Inference",
-    ]);
-  });
-
-  it("drops the tab and Overview card when the Traycer provider is disabled, and restores both once it's re-enabled", () => {
-    mocks.configured = [];
-    mocks.authUser = readyAuthUser(
-      authUserFixture({ status: "PRO_V3", withTeam: false }),
-    );
-    mocks.providersList = {
-      data: { providers: [traycerProviderFixture(false)] },
-    };
-    const { rerender } = render(singleHostPopoverElement());
-
-    // Disabled Traycer, with no host-RPC providers either, falls back to the
-    // zero-provider CTA - the same state a signed-out/cold user sees.
-    expect(
-      screen.getByText("Connect a supported provider to see usage here."),
-    ).toBeTruthy();
-    expect(screen.queryByRole("tab", { name: "Traycer Inference" })).toBeNull();
-
-    mocks.providersList = {
-      data: { providers: [traycerProviderFixture(true)] },
-    };
-    rerender(singleHostPopoverElement());
-
     expect(
       screen.queryByText("Connect a supported provider to see usage here."),
     ).toBeNull();

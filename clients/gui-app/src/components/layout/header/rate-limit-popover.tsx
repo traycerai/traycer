@@ -355,6 +355,10 @@ function railTabProviderId(tab: RailTabDescriptor): ProviderId {
   return tab.kind === "traycer" ? "traycer" : tab.providerId;
 }
 
+/**
+ * Resolves account usage and gates its visibility on the scoped host's
+ * Traycer provider setting, even when the account has a paid subscription.
+ */
 function useTraycerSubscription() {
   const query = useAuthUser();
   const providersQuery = useProvidersList({ enabled: true, subscribed: true });
