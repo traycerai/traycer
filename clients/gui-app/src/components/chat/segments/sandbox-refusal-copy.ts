@@ -45,7 +45,7 @@ const SANDBOX_REFUSAL_COPY: Readonly<Record<string, SandboxRefusalRow>> = {
   SANDBOX_FROZEN: {
     headline: "Paused: account out of credits",
     description:
-      "This sandbox froze when your credits ran out, which ended the turn. Add credits, then send a message to pick up where it stopped.",
+      "This sandbox ran out of credits, which ended the turn. Add credits, then send a message to pick up where it stopped.",
     showsHostDetail: false,
   },
   SANDBOX_GUEST_NOT_CONFIGURED: {

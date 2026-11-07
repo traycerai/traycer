@@ -135,6 +135,10 @@ vi.mock("@/stores/tabs/system-tab-modal-bridge", () => ({
 }));
 
 import { GettingStartedSettingsPanel } from "@/components/settings/panels/getting-started-settings-panel";
+import {
+  RETIRED_PROVIDER_VARIABLES,
+  RETIRED_SECRET_ROW_FIELDS,
+} from "@traycer/protocol/host/released-wire-rows";
 
 function storedKeyProvider(): ProviderCliState {
   return {
@@ -145,18 +149,17 @@ function storedKeyProvider(): ProviderCliState {
 
 function secret(): EnvironmentSecretV12 {
   return {
+    ...RETIRED_SECRET_ROW_FIELDS,
+    providerVariables: [...RETIRED_PROVIDER_VARIABLES],
     secretId: "secret-1",
     name: "DEPLOY_KEY",
     kind: "api_key",
     protocol: null,
     destinations: [],
-    mode: "brokered",
-    state: "live",
     currentVersionId: "v1",
     revoked: false,
     updatedAt: 1,
     variables: [],
-    providerVariables: [],
   };
 }
 
@@ -306,7 +309,7 @@ describe("GettingStartedSettingsPanel", () => {
     expect(screen.getByRole("status").textContent).toBe("0 of 5 complete");
     expect(
       screen.getByTestId("getting-started-card-credits").textContent,
-    ).toContain("Credits pay for your sandboxes, awake or resting.");
+    ).toContain("Credits pay for your sandboxes.");
   });
 
   it("completes a step by the fact it names, never by a click", () => {

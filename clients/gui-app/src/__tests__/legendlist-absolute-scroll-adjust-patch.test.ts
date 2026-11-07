@@ -536,13 +536,6 @@ describe("@legendapp/list web patch", () => {
       );
     });
 
-    // The latch records the list's last row by key to tell a moved end from a
-    // grown tail.
-    it(`${file} exposes the row key at an index in its state`, () => {
-      const source = readFileSync(join(packageDir, file), "utf8");
-      expect(source).toContain("keyAtIndex: (index) => getId(state, index),");
-    });
-
     // A placeholder row and the hydrated row that replaces it share a key and
     // differ in item type. The list averaged the hydrated measurement against
     // the placeholder's, in a type that never counted the key: measuring `k`

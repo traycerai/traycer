@@ -11,6 +11,7 @@ import {
   type StatusBarProviderLimitSelection,
   type TabStripPlacement,
 } from "@/lib/layout/layout-arrangement";
+import { isRailRegionId } from "@/lib/layout/rail";
 import {
   overrideKeys,
   sameFieldList,
@@ -32,12 +33,14 @@ import type { RateLimitProviderId } from "@/lib/rate-limit-providers";
 /**
  * What is different from the last-applied preset, and the way back.
  *
- * `basePreset` is the preset last APPLIED, and an apply replaces every value
- * with that preset's (`applyPreset`), so a value is a change exactly when it
- * differs from it. Where things live has no preset, so the arrangement is
- * measured against the shipped one. The two together are the change list
- * (`layoutChanges`), grouped Styles and Arrangement, and `<Preset> · Modified`
- * reads whether its Styles half has anything in it (`layoutModified`).
+ * `basePreset` is the preset last APPLIED, and an apply replaces every display
+ * value with that preset's (`applyPreset`), so a value is a change exactly when
+ * it differs from it. Where things live has no preset, so the arrangement is
+ * measured against the shipped one. Which panels the rail shows is stored as a
+ * value but belongs to no preset: an apply keeps it, so it is listed with the
+ * arrangement. Together these are the change list (`layoutChanges`), grouped
+ * Styles and Arrangement, and `<Preset> · Modified` reads whether its Styles
+ * half has anything in it (`layoutModified`).
  */
 
 /** Which keys of one region differ from the last-applied preset, in the patch's order. */
@@ -266,6 +269,8 @@ export type LayoutChange = StyleChange | ArrangementChange;
 
 export interface LayoutChanges {
   readonly styles: ReadonlyArray<StyleChange>;
+  /** Panels shown or hidden, which an apply keeps. No preset differs on them. */
+  readonly panels: ReadonlyArray<StyleChange>;
   readonly arrangement: ReadonlyArray<ArrangementChange>;
 }
 
@@ -281,10 +286,14 @@ export interface LayoutChanges {
 export function layoutChanges(snapshot: LayoutSnapshot): LayoutChanges {
   const values = effectiveLayoutValues(snapshot.basePreset, snapshot.overrides);
   const arrangement = snapshot.arrangement;
+  const regions = layoutRegionIds();
   return {
-    styles: layoutRegionIds().flatMap((region) =>
-      regionStyleChanges(snapshot, values, region),
-    ),
+    styles: regions
+      .filter((region) => !isRailRegionId(region))
+      .flatMap((region) => regionStyleChanges(snapshot, values, region)),
+    panels: regions
+      .filter(isRailRegionId)
+      .flatMap((region) => regionStyleChanges(snapshot, values, region)),
     arrangement: [
       ...ARRANGEMENT_FIELDS.filter(
         (field) => arrangement[field] !== DEFAULT_ARRANGEMENT[field],
@@ -327,10 +336,10 @@ export function pinnedFieldOrderChanged(
  * Whether the status reads `<Preset> · Modified` rather than the name alone,
  * which is also what the Presets area's dot draws.
  *
- * VALUES only (T5): applying a preset never touches the arrangement, so a
- * placement or order change counted here offered the applied card as the way
- * back, and pressing it changed nothing. Those changes stay on View changes
- * and on their own area's dot.
+ * Display VALUES only (T5): applying a preset never touches the arrangement or
+ * the panels shown, so a change to either counted here would offer the applied
+ * card as the way back, and pressing it would change nothing. Those changes
+ * stay on View changes and on their own area's dot.
  */
 export function layoutModified(snapshot: LayoutSnapshot): boolean {
   return layoutChanges(snapshot).styles.length > 0;
@@ -963,7 +972,7 @@ export interface LayoutEditorSessionChangeSummary {
 
 /**
  * `layout_editor_session`'s value-change facts (L-46, L-54, L-57):
- * `changedCount` is the number of Styles lines on the change list at exit,
+ * `changedCount` is the number of value changes on the change list at exit,
  * and `regionsTouchedCount` is the distinct regions that
  * moved between the session's entry snapshot and its exit snapshot.
  */
@@ -971,8 +980,9 @@ export function layoutEditorSessionChangeSummary(
   entrySnapshot: LayoutSnapshot,
   exitSnapshot: LayoutSnapshot,
 ): LayoutEditorSessionChangeSummary {
+  const changes = layoutChanges(exitSnapshot);
   return {
-    changedCount: layoutChanges(exitSnapshot).styles.length,
+    changedCount: changes.styles.length + changes.panels.length,
     regionsTouchedCount: touchedRegionIds(entrySnapshot, exitSnapshot).length,
   };
 }

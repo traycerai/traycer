@@ -16,6 +16,7 @@ import type {
   SandboxCataloguePricing,
   SandboxOs,
 } from "@traycer/protocol/host/sandbox-control";
+import { sandboxCatalogueSchema } from "@traycer/protocol/host/sandbox-control";
 
 const PERSONAL = { kind: "personal" } as const;
 const ACME = { kind: "team", teamId: "team-acme", teamName: "Acme" } as const;
@@ -25,6 +26,7 @@ function input(overrides: Partial<ConsequencesInput>): ConsequencesInput {
     configuration: PERSONAL,
     price: { awakeMcPerHour: 120, exact: true },
     needsCredits: false,
+    billingStarted: false,
     shortfallMc: 120,
     audience: "private",
     reachHost: null,
@@ -112,15 +114,10 @@ describe("consequenceClauses", () => {
     expect(clauses[1].text).toContain("Build box");
   });
 
-  it("adds the team, resting-storage and shared-use clauses on a team", () => {
+  it("adds the team and resting-storage clauses on a team", () => {
     const clauses = consequenceClauses(input({ configuration: ACME }));
-    expect(kinds(clauses)).toEqual([
-      "price",
-      "team",
-      "resting-storage",
-      "shared-use",
-    ]);
-    expect(clauses[1].text).toContain("Acme");
+    expect(kinds(clauses)).toEqual(["price", "team", "resting-storage"]);
+    expect(clauses[1].text).toContain("Everyone in the team can use it");
   });
 
   it("adds the move clause when a computer's settings have not moved, naming it", () => {
@@ -149,7 +146,6 @@ describe("consequenceClauses", () => {
       "reach",
       "team",
       "resting-storage",
-      "shared-use",
       "move",
     ]);
   });
@@ -159,7 +155,7 @@ describe("consequenceClauses", () => {
       input({ configuration: ACME, needsCredits: true }),
     );
     expect(clauses[0].text).toMatch(/^Your Acme allowance is short/);
-    expect(clauses).toHaveLength(4);
+    expect(clauses).toHaveLength(3);
   });
 });
 
@@ -336,6 +332,18 @@ describe("listed shapes", () => {
   const LARGE = { cpus: 4, memoryMb: 8192, diskMb: 40960, default: false };
   const MIDDLE = { cpus: 2, memoryMb: 8192, diskMb: 20480, default: false };
   const SMALLEST = { cpus: 2, memoryMb: 4096, diskMb: 20480, default: true };
+  const CPU_SIBLING = {
+    cpus: 4,
+    memoryMb: 4096,
+    diskMb: 20480,
+    default: false,
+  };
+  const DISK_SIBLING = {
+    cpus: 2,
+    memoryMb: 4096,
+    diskMb: 40960,
+    default: false,
+  };
   const STAGED = {
     os: "linux",
     region: "us-east",
@@ -346,11 +354,131 @@ describe("listed shapes", () => {
     destroyAfterRestingMinutes: null,
   } as const;
 
+  it("uses the exact price of a non-smallest staged rung over conflicting unit rates", () => {
+    const parsed = exactCatalogue(RATES);
+
+    expect(
+      stagePrice(parsed, {
+        ...STAGED,
+        cpus: MIDDLE.cpus,
+        memoryMb: MIDDLE.memoryMb,
+        diskMb: MIDDLE.diskMb,
+      }),
+    ).toEqual({
+      awakeMcPerHour: 1000,
+      exact: true,
+    });
+  });
+
+  it("matches all dimensions for stagePrice and preserves a zero exact price", () => {
+    const parsed = exactCatalogue(RATES);
+
+    expect(stagePrice(parsed, STAGED)).toEqual({
+      awakeMcPerHour: 0,
+      exact: true,
+    });
+  });
+
+  it("matches all dimensions for stageSmallestShape and preserves a zero exact price", () => {
+    const parsed = exactCatalogue(RATES);
+
+    expect(stageSmallestShape(parsed, STAGED)).toEqual({
+      isStaged: true,
+      awakeMcPerHour: 0,
+    });
+  });
+
+  it("uses exact shape prices when the region has no unit rates", () => {
+    const parsed = exactCatalogue(null);
+
+    expect(
+      stagePrice(parsed, {
+        ...STAGED,
+        cpus: MIDDLE.cpus,
+        memoryMb: MIDDLE.memoryMb,
+        diskMb: MIDDLE.diskMb,
+      }),
+    ).toEqual({
+      awakeMcPerHour: 1000,
+      exact: true,
+    });
+    expect(stageSmallestShape(parsed, STAGED)).toEqual({
+      isStaged: true,
+      awakeMcPerHour: 0,
+    });
+  });
+
+  it("keeps older parsed catalogues on their existing unit-price fallback", () => {
+    const legacy = sandboxCatalogueSchema.parse(listed(RATES));
+
+    expect(stagePrice(legacy, STAGED)).toEqual({
+      awakeMcPerHour: 40,
+      exact: true,
+    });
+    expect(stageSmallestShape(legacy, STAGED)).toEqual({
+      isStaged: true,
+      awakeMcPerHour: 40,
+    });
+  });
+
   function listed(pricing: SandboxCataloguePricing | null): SandboxCatalogue {
     const [provider] = catalogue(pricing, "linux").providers;
     return {
-      providers: [{ ...provider, shapes: [LARGE, MIDDLE, SMALLEST] }],
+      providers: [
+        {
+          ...provider,
+          shapes: [LARGE, MIDDLE, CPU_SIBLING, DISK_SIBLING, SMALLEST],
+        },
+      ],
     };
+  }
+
+  function exactCatalogue(
+    pricing: SandboxCataloguePricing | null,
+  ): SandboxCatalogue {
+    const shapePrices = [
+      {
+        cpus: LARGE.cpus,
+        memoryMb: LARGE.memoryMb,
+        diskMb: LARGE.diskMb,
+        priceMcPerHour: { awakeMc: 1200, suspendedMc: 7, stoppedMc: 3 },
+      },
+      {
+        cpus: MIDDLE.cpus,
+        memoryMb: MIDDLE.memoryMb,
+        diskMb: MIDDLE.diskMb,
+        priceMcPerHour: { awakeMc: 1000, suspendedMc: 6, stoppedMc: 2 },
+      },
+      {
+        cpus: CPU_SIBLING.cpus,
+        memoryMb: CPU_SIBLING.memoryMb,
+        diskMb: CPU_SIBLING.diskMb,
+        priceMcPerHour: { awakeMc: 700, suspendedMc: 5, stoppedMc: 2 },
+      },
+      {
+        cpus: DISK_SIBLING.cpus,
+        memoryMb: DISK_SIBLING.memoryMb,
+        diskMb: DISK_SIBLING.diskMb,
+        priceMcPerHour: { awakeMc: 777, suspendedMc: 8, stoppedMc: 4 },
+      },
+      {
+        cpus: SMALLEST.cpus,
+        memoryMb: SMALLEST.memoryMb,
+        diskMb: SMALLEST.diskMb,
+        priceMcPerHour: { awakeMc: 0, suspendedMc: 5, stoppedMc: 1 },
+      },
+    ];
+    const base = listed(pricing);
+    return sandboxCatalogueSchema.parse({
+      ...base,
+      providers: base.providers.map((provider) => ({
+        ...provider,
+        regions: provider.regions.map((region) => ({
+          ...region,
+          shapePrices,
+        })),
+      })),
+    });
   }
 
   // The bounds (3 vCPU, 6 GB, 30 GB) admit the unlisted size, so only the list rejects it.

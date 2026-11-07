@@ -1,7 +1,10 @@
 import type { BotThreadAnchor } from "@traycer/protocol/host/bot/conversation-schemas";
 import type { ConversationRequest } from "@traycer/protocol/persistence/epic/messages";
 import type { OpenMessage } from "@traycer/protocol/persistence/epic/open-harness-records";
-import { extractPlainTextFromComposerJSONContent } from "@/lib/composer/tiptap-json-content";
+import {
+  buildAttachmentsFromJSONContent,
+  extractPlainTextFromComposerJSONContent,
+} from "@/lib/composer/tiptap-json-content";
 import type { BotSentPost } from "@/stores/bots/bot-open-thread-store";
 import type { ChatMessage } from "@/stores/composer/chat-store";
 
@@ -103,7 +106,13 @@ export function threadOriginRow(input: {
   }
   if (sent !== null) {
     const row = memberOriginRow(
-      originRowBase(input.messageId, "user", sent.sentAt, sent.text),
+      {
+        ...originRowBase(input.messageId, "user", sent.sentAt, sent.text),
+        attachments:
+          sent.content === undefined
+            ? []
+            : buildAttachmentsFromJSONContent(sent.content),
+      },
       sent.senderUserId,
       {
         requestId: sent.requestId,
@@ -157,7 +166,10 @@ function loadedOriginRow(
   }
   const userId = post.sender.type === "user" ? post.sender.userId : null;
   return memberOriginRow(
-    originRowBase(post.messageId, "user", post.timestamp, text),
+    {
+      ...originRowBase(post.messageId, "user", post.timestamp, text),
+      attachments: buildAttachmentsFromJSONContent(post.message.content),
+    },
     userId,
     post.conversationRequest ?? null,
     names,

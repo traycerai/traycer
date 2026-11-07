@@ -85,6 +85,13 @@ export interface TileOpenIntent {
   /** `false` only for the PaneOpener's "open a second view". */
   readonly dedupe: boolean;
   readonly source: AnalyticsSource;
+  /**
+   * Set by an opener that names the HTML version to show (the chat's inline
+   * Expand): a tile already open on the artifact switches to the node's
+   * `htmlVersion`, or back to Latest when the node has none. Every other
+   * opener leaves an open tile on the version its reader picked.
+   */
+  readonly adoptHtmlVersion?: boolean;
 }
 
 /**
@@ -147,7 +154,7 @@ export type TileOpenPlan =
       /**
        * `promote` clears the pane's preview slot: a permanent re-open of the
        * tile that currently holds it pins the tile, exactly as the old
-       * `openTile(preview: false)` dedupe hit did. `false` for a preview
+       * `openTile(preview: false, "user")` dedupe hit did. `false` for a preview
        * gesture and for a hit that is not the pane's preview - promoting
        * there would pin a tile this gesture never touched.
        */

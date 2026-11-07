@@ -1691,8 +1691,9 @@ describe("<LandingTerminalPanel />", () => {
         .getAttribute("aria-label"),
     ).toBe("Host title, /host/live");
     expect(
-      screen.getByTestId("landing-terminal-dormant-dormant-instance"),
-    ).toBeTruthy();
+      screen.getByTestId("landing-terminal-dormant-dormant-instance")
+        .textContent,
+    ).toContain("No running shell");
   });
 
   it("renders unknown runtime state as unavailable, not dormant", async () => {

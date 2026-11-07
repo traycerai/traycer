@@ -49,6 +49,10 @@ import {
 } from "@/lib/support-context-registry";
 import type { SupportEnvironmentSection } from "@/lib/support-environment-section";
 import { SupportEnvironmentBridge } from "@/providers/support-environment-bridge";
+import {
+  RETIRED_PROVIDER_VARIABLES,
+  RETIRED_SECRET_ROW_FIELDS,
+} from "@traycer/protocol/host/released-wire-rows";
 
 const HOST_ID = "host-env";
 const TEAM_NAME = "Acme Robotics ZZ_TEAM_NAME";
@@ -73,18 +77,17 @@ const STALE_SECTION: SupportEnvironmentSection = {
 };
 
 const SECRET: EnvironmentSecretV12 = {
+  ...RETIRED_SECRET_ROW_FIELDS,
+  providerVariables: [...RETIRED_PROVIDER_VARIABLES],
   secretId: "sec-1",
   name: "STRIPE_KEY",
   kind: "api_key",
   protocol: "https",
   destinations: ["api.stripe.com"],
-  mode: "brokered",
-  state: "live",
   currentVersionId: "ver-2",
   revoked: false,
   updatedAt: 1,
   variables: [],
-  providerVariables: [],
 };
 
 // Settled (enforced, every producer proven), so the bridge stops re-reading it.

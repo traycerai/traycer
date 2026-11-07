@@ -22,6 +22,11 @@ vi.mock("@/components/settings/host-scope/use-host-scope", async () => {
   const useHostScope = () => hostScopeFixture(scopeOverrides.current);
   return {
     useHostScope,
+    useHostScopeFor: useHostScope,
+    WINDOW_HOST_SELECTION: {
+      scopedHostId: null,
+      setScopedHostId: () => undefined,
+    },
     usePersonalHostScope: useHostScope,
   };
 });

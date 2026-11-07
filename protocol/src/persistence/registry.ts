@@ -6,8 +6,8 @@ import {
   type RecordValue,
 } from "@traycer/protocol/framework/index";
 import {
-  chatHeadRecordV1130,
-  chatShardRecordV1130,
+  chatHeadRecordV1140,
+  chatShardRecordV1140,
 } from "@traycer/protocol/persistence/chat-sync-registry";
 import { draftHeadRecordSchema } from "@traycer/protocol/persistence/_internal/draft-schemas";
 import { DRAFT_HEAD_SCHEMA_VERSION } from "@traycer/protocol/persistence/draft/version";
@@ -160,7 +160,7 @@ export const roomMetadataRecordV100 = defineRecordContract({
 // The chat-sync contracts are owned by `chat-sync-registry.ts`, which registers
 // them on their own for consumers that encode nothing else; re-exported here so
 // this registry keeps offering every contract it registers.
-export { chatHeadRecordV1130, chatShardRecordV1130 };
+export { chatHeadRecordV1140, chatShardRecordV1140 };
 
 export const draftHeadRecordV100 = defineRecordContract({
   name: "draft-head",
@@ -215,19 +215,19 @@ export const persistenceRecordRegistry = defineVersionedRecordRegistry({
   },
   "chat-head": {
     1: {
-      latestMinor: 13,
+      latestMinor: 14,
       versions: {
-        13: { contract: chatHeadRecordV1130, upgradeFromPreviousVersion: null },
+        14: { contract: chatHeadRecordV1140, upgradeFromPreviousVersion: null },
       },
       downgradePathsFromLatest: {},
     },
   },
   "chat-shard": {
     1: {
-      latestMinor: 13,
+      latestMinor: 14,
       versions: {
-        13: {
-          contract: chatShardRecordV1130,
+        14: {
+          contract: chatShardRecordV1140,
           upgradeFromPreviousVersion: null,
         },
       },

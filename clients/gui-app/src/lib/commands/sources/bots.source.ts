@@ -3,7 +3,8 @@
  * Tracy surface on that bot's channel. Read from the standalone bots
  * directory, the list Home's bots band and the notifications read, so a
  * row's name agrees with theirs: "Tracy · traycerai" for a team's main bot
- * only while the bare name could mean more than one main bot. A team's main
+ * only while the bare name could mean more than one main bot; a team's bot
+ * whose label does not name its team shows the team beside it. A team's main
  * bot still to be set up has a channel too, and a row.
  *
  * Rendered in the "Tracy" group, right after Tasks; no scope prefix of its
@@ -28,6 +29,8 @@ interface BotChannel {
   readonly botId: string;
   readonly name: string;
   readonly environmentName: string;
+  /** A team's bot; a personal bot is never qualified by its environment. */
+  readonly team: boolean;
 }
 
 function botChannels(
@@ -40,6 +43,7 @@ function botChannels(
         botId: bot.botId,
         name: bot.title,
         environmentName: group.label,
+        team: group.ownerKind === "organization",
       });
     }
   }
@@ -48,6 +52,7 @@ function botChannels(
       botId: setup.botId,
       name: setup.title,
       environmentName: setup.teamName,
+      team: true,
     });
   }
   return channels;
@@ -57,12 +62,14 @@ function buildBotItem(
   directory: StandaloneBotsDirectory,
   channel: BotChannel,
 ): CommandItem {
-  const { botId, name, environmentName } = channel;
+  const { botId, name, environmentName, team } = channel;
   const label = standaloneBotName(directory, botId, name);
   return {
     id: `bot:${botId}`,
     label,
-    description: label === name ? environmentName : null,
+    description: null,
+    // The team beside a team's bot whose label does not already name it.
+    ...(team && label === name ? { hint: environmentName } : {}),
     keywords: [name, environmentName, "tracy", "bot", "channel"],
     group: "bots",
     scope: "bots",

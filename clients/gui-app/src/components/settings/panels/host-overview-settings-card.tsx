@@ -1,121 +1,188 @@
-import type { ReactNode } from "react";
+import { useState, type ReactNode } from "react";
 import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
+import type { EnvironmentHostBinding } from "@traycer/protocol/host/environment/contracts";
 import type { EnvironmentStatusResponseV11 } from "@traycer/protocol/host/environment-schemas";
 import { OverviewCardDetailsLine } from "@/components/settings/details/overview-card-details-line";
-import { OverviewCardDatedLines } from "@/components/settings/environment/overview-card-dated-lines";
-import { onSettingsDate } from "@/lib/settings/settings-date";
 import { MoveProgressLine } from "@/components/settings/move/move-progress-line";
-import { hostSettingsCardState } from "@/components/settings/panels/host-overview-settings-card-model";
+import { StopSharingSession } from "@/components/settings/move/stop-sharing-session";
+import { hostSettingsRowModel } from "@/components/settings/panels/host-overview-settings-card-model";
 import { Button } from "@/components/ui/button";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuRadioGroup,
+  DropdownMenuRadioItem,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
+import { Skeleton } from "@/components/ui/skeleton";
+import { useEnvironmentHostReadQuery } from "@/hooks/bots/use-environment-host-read-query";
+import { readsHostBindingsFromPool } from "@/hooks/bots/use-host-environment-bindings-query";
 import { useEnvironmentStatusRead } from "@/hooks/environment/use-environment-reads";
+import { useHostMethodSupport } from "@/hooks/host/use-host-supports-method";
 import type { HostRpcRegistry } from "@/lib/host";
 import { useMoveSheetStore } from "@/stores/settings/move-sheet-store";
 
-/**
- * The Overview's settings card: whether this computer's settings are its
- * own, moving, or moved, and the lines other tickets draw from their own
- * files: the dated lines (`OverviewCardDatedLines`) and the `Details` line
- * (`OverviewCardDetailsLine`). Drawn above the Overview's tabs, so it reads
- * on whichever tab is showing (`HostOverviewSettingsCardSlot`).
- */
+/** The named host's settings place, above the Overview's tabs. */
 export function HostOverviewSettingsCard(props: {
   readonly client: HostClient<HostRpcRegistry>;
   readonly hostId: string;
   readonly hostName: string;
-  readonly status: EnvironmentStatusResponseV11;
+  readonly status: EnvironmentStatusResponseV11 | null;
+  readonly binding: EnvironmentHostBinding | null;
 }): ReactNode {
+  const openMoveSheet = useMoveSheetStore((state) => state.openSheet);
+  const [stopOpen, setStopOpen] = useState(false);
+  const model = hostSettingsRowModel(props.status, props.binding);
+  if (model.kind === "loading" || props.status === null) {
+    return (
+      <div className="shrink-0 px-5 pb-3 text-ui-xs text-muted-foreground">
+        Settings:{" "}
+        <Skeleton
+          className="inline-block h-4 w-[12ch]"
+          role="status"
+          aria-label="Reading"
+        />
+      </div>
+    );
+  }
+  if (model.kind === "team") {
+    return (
+      <p className="shrink-0 px-5 pb-3 text-ui-xs text-muted-foreground">
+        Settings: <span className="wrap-anywhere">{model.label}</span>
+      </p>
+    );
+  }
   const lineProps = {
     client: props.client,
     hostId: props.hostId,
     hostName: props.hostName,
     status: props.status,
   };
-  const openMoveSheet = useMoveSheetStore((state) => state.openSheet);
-  const state = hostSettingsCardState(props.status);
+  if (model.kind === "progress") {
+    return (
+      <div className="flex shrink-0 flex-wrap items-center gap-1 px-5 pb-3 text-ui-xs text-muted-foreground">
+        <span>Settings:</span>
+        <MoveProgressLine {...lineProps} progress={model.progress} />
+        {model.progress.kind === "move_stopped" ? (
+          <OverviewCardDetailsLine {...lineProps} />
+        ) : null}
+      </div>
+    );
+  }
   return (
-    <div
-      className="flex flex-col gap-2 rounded-md border border-border/60 px-3 py-2 text-ui-sm empty:hidden"
-      data-testid="host-settings-card"
-    >
-      {/* One line: `Settings on this computer only. · Details · Move to
-          Personal`. */}
-      {state.kind === "local" ? (
-        <div className="flex flex-wrap items-center gap-1">
-          <span data-testid="host-settings-card-local">
-            Settings on this computer only.
-          </span>
-          <OverviewCardDetailsLine {...lineProps} />
-          <Button
-            type="button"
-            size="sm"
-            variant="outline"
-            data-testid="host-settings-card-move"
-            onClick={() =>
-              openMoveSheet({ hostId: props.hostId, hostName: props.hostName })
-            }
-          >
-            {state.verb === "finish_moving"
-              ? "Finish moving"
-              : "Move to Personal"}
-          </Button>
-        </div>
-      ) : null}
-      {state.kind === "moving" || state.kind === "move_stopped" ? (
-        <MoveProgressLine {...lineProps} progress={state} />
-      ) : null}
-      {/* While moving the progress line carries the card's `Details`, and
-          after a move the dated line does: `Moved to Personal on 12 Oct ·
-          Details`. */}
-      {state.kind === "moved" ? (
-        <div className="flex flex-wrap items-center gap-1">
-          <p data-testid="host-settings-card-moved">
-            Moved to Personal {onSettingsDate(state.acceptedAt)}
-          </p>
-          <OverviewCardDetailsLine {...lineProps} />
-        </div>
-      ) : null}
-      <OverviewCardDatedLines {...lineProps} />
-      {state.kind === "moved" ||
-      state.kind === "moving" ||
-      state.kind === "move_stopped" ||
-      state.kind === "local" ? null : (
+    <>
+      <div
+        className="flex shrink-0 flex-wrap items-center gap-1 px-5 pb-3 text-ui-xs text-muted-foreground"
+        data-testid="host-settings-source"
+      >
+        <span>
+          Settings:{" "}
+          {model.options.find((option) => option.value === model.value)?.label}
+        </span>
+        <span aria-hidden>·</span>
+        <DropdownMenu>
+          <DropdownMenuTrigger asChild>
+            <Button
+              type="button"
+              variant="link"
+              size="inline"
+              aria-label="Change settings source"
+            >
+              Change
+            </Button>
+          </DropdownMenuTrigger>
+          <DropdownMenuContent align="start">
+            <DropdownMenuRadioGroup
+              value={model.value}
+              onValueChange={(value) => {
+                const option = model.options.find(
+                  (item) => item.value === value,
+                );
+                if (option === undefined || value === model.value) return;
+                if (option.action === "move") {
+                  openMoveSheet({
+                    hostId: props.hostId,
+                    hostName: props.hostName,
+                  });
+                } else {
+                  setStopOpen(true);
+                }
+              }}
+            >
+              {model.options.map((option) => (
+                <DropdownMenuRadioItem key={option.value} value={option.value}>
+                  <div className="flex flex-col">
+                    <span>{option.label}</span>
+                    <span className="text-ui-xs text-muted-foreground">
+                      {option.description}
+                    </span>
+                  </div>
+                </DropdownMenuRadioItem>
+              ))}
+            </DropdownMenuRadioGroup>
+          </DropdownMenuContent>
+        </DropdownMenu>
         <OverviewCardDetailsLine {...lineProps} />
-      )}
-    </div>
+      </div>
+      <StopSharingSession
+        client={props.client}
+        hostId={props.hostId}
+        hostName={props.hostName}
+        open={stopOpen}
+        onOpenChange={setStopOpen}
+      />
+    </>
   );
 }
 
-/**
- * The settings card where the Overview draws it, above the tabs: read through
- * the picked host, and nothing while the host cannot be read, predates
- * `environment.status`, or is a team's (whose own lines `Access and setup`
- * names under the team).
- */
+/** Unavailable reads hide the row; pending reads reserve its control. */
 export function HostOverviewSettingsCardSlot(props: {
   readonly client: HostClient<HostRpcRegistry> | null;
   readonly hostId: string | null;
   readonly hostName: string;
   readonly usable: boolean;
+  readonly fallbackSource?: string | null;
 }): ReactNode {
   const status = useEnvironmentStatusRead(
     props.client,
     props.hostId,
     props.usable,
   );
+  const bindingSupport = useHostMethodSupport(
+    props.hostId,
+    readsHostBindingsFromPool()
+      ? "environment.binding.read"
+      : "environment.host.read",
+  );
+  const binding = useEnvironmentHostReadQuery(
+    props.client,
+    props.hostId,
+    props.usable && bindingSupport === true,
+  );
   if (
+    !props.usable ||
     props.client === null ||
     props.hostId === null ||
-    status.data === null ||
-    status.data.principal?.kind === "team"
+    status.supported === false ||
+    status.isError ||
+    bindingSupport === false ||
+    binding.isError
   ) {
-    return null;
+    return props.fallbackSource === null ||
+      props.fallbackSource === undefined ? null : (
+      <p className="shrink-0 px-5 pb-3 text-ui-xs text-muted-foreground">
+        Settings: <span className="wrap-anywhere">{props.fallbackSource}</span>
+      </p>
+    );
   }
   return (
     <HostOverviewSettingsCard
+      key={props.hostId}
       client={props.client}
       hostId={props.hostId}
       hostName={props.hostName}
       status={status.data}
+      binding={binding.data ?? null}
     />
   );
 }

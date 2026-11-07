@@ -72,7 +72,7 @@ export interface RepeatedWord {
   readonly beyond: number;
 }
 
-/** The three facts, as the strip and the store read them. */
+/** The three facts, as the call bar and the store read them. */
 export interface SpeechActivity {
   /** Until when the person counts as speaking; `null` when they are not. */
   readonly inputActiveUntil: number | null;

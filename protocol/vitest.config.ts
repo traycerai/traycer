@@ -1,3 +1,4 @@
+import { resolve as resolveTestSetup } from "node:path";
 import { configDefaults, defineConfig } from "vitest/config";
 import os from "node:os";
 import path from "path";
@@ -83,6 +84,13 @@ export default defineConfig({
     ],
   },
   test: {
+    sequence: { setupFiles: "list" },
+    setupFiles: [
+      resolveTestSetup(
+        import.meta.dirname,
+        "../scripts/test-worker-environment.ts",
+      ),
+    ],
     // Vitest 5 flipped clearMocks to true; keep the v4 behavior (mock call history persists across tests).
     clearMocks: false,
     // Anchored to the package directory so siblings whose names merely

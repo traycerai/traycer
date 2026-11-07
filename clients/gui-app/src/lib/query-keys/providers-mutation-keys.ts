@@ -24,6 +24,7 @@ export const providersMutationKeys = {
   setTerminalAgentArgs: () => ["providers.setTerminalAgentArgs"] as const,
   setAutoJudge: () => ["providers.setAutoJudge"] as const,
   setNativeSubagents: () => ["providers.setNativeSubagents"] as const,
+  setNativeMemory: () => ["providers.setNativeMemory"] as const,
   resetSettingsFile: () => ["providers.settingsFile.reset"] as const,
   resetProviderSettings: () =>
     ["providers.settingsFile.resetProvider"] as const,

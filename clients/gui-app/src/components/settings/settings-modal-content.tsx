@@ -42,6 +42,7 @@ import { SandboxesSettingsPanel } from "@/components/settings/environment/sandbo
 import { MembersSettingsPanel } from "@/components/settings/environment/members-settings-panel";
 import { useSystemTabModalActions } from "@/stores/tabs/use-system-tab-modal";
 import { useSettingsAnchorReveal } from "@/components/settings/use-settings-anchor-reveal";
+import { SettingsSectionContext } from "@/components/settings/settings-section-context";
 import { PersonalPageFrame } from "@/components/settings/personal/personal-page-frame";
 import "./settings-search.css";
 
@@ -147,8 +148,10 @@ export function SettingsPanelForSection(props: {
   useSettingsAnchorReveal(section);
   const Panel = SETTINGS_PANELS[section];
   return (
-    <PersonalPageFrame section={section}>
-      <Panel />
-    </PersonalPageFrame>
+    <SettingsSectionContext value={section}>
+      <PersonalPageFrame section={section}>
+        <Panel />
+      </PersonalPageFrame>
+    </SettingsSectionContext>
   );
 }

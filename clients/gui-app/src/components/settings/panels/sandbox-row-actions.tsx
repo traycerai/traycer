@@ -122,8 +122,8 @@ function useRowDialog(
 }
 
 /**
- * One row's actions: the primary button, `Give it another
- * <period>` inside the warning lead, `Details` on every row, and the ⋯ menu.
+ * One primary button and a More menu, including Details and, inside the
+ * warning lead, Give it another <period>.
  * Interrupting and ending actions confirm in their dialogs; a wake is one click
  * after the row says who pays.
  */
@@ -139,7 +139,7 @@ export function SandboxRowActions(props: SandboxRowActionsProps): ReactNode {
   return (
     <SandboxLifecycleRowActions
       {...props}
-      inlineDetails={
+      settingsFailure={
         props.settingsFailed || props.summary.guestConfigured === false
       }
     />
@@ -147,9 +147,10 @@ export function SandboxRowActions(props: SandboxRowActionsProps): ReactNode {
 }
 
 function SandboxLifecycleRowActions(
-  props: SandboxRowActionsProps & { readonly inlineDetails: boolean },
+  props: SandboxRowActionsProps & { readonly settingsFailure: boolean },
 ): ReactNode {
   const { summary, configuration } = props;
+  const chooseAnother = useChooseAnotherHost();
   const verb = useSandboxVerb(summary.id);
   const destroy = useSandboxDestroy(summary);
   const operation = useSandboxOperation(summary.id);
@@ -204,7 +205,7 @@ function SandboxLifecycleRowActions(
   const immediate: Partial<Record<SandboxRowAction, () => void>> = {
     resume: () => wake("resume"),
     start: () => wake("start"),
-    // The person chose to pay; the button said so.
+    // The row states the payer consequence before this action.
     "resume-paying": () => wake("resume"),
     "add-credits": () =>
       void openLink(
@@ -233,7 +234,7 @@ function SandboxLifecycleRowActions(
   };
 
   return (
-    <div className="flex shrink-0 flex-wrap items-center gap-2">
+    <div className="flex max-w-full min-w-0 shrink-0 flex-wrap items-center gap-2">
       {openAutomationTerminal.failure ? (
         <p role="alert" className="text-ui-xs text-destructive">
           {openAutomationTerminal.failure}
@@ -243,55 +244,11 @@ function SandboxLifecycleRowActions(
         operation={applyingOperation}
         name={summary.displayName}
       />
-      {giveAnother === null ? null : (
-        <Button
-          type="button"
-          variant="outline"
-          size="sm"
-          disabled={busy}
-          data-testid="sandbox-row-give-another"
-          onClick={() =>
-            patch.mutate(
-              {
-                displayName: null,
-                idleMinutes: null,
-                destroyAfterRestingMinutes: summary.destroyAfterRestingMinutes,
-              },
-              {
-                onSuccess: (outcome) => {
-                  if (outcome === "gone") {
-                    toast.info(alreadyDestroyedLine(summary.displayName));
-                  }
-                },
-              },
-            )
-          }
-        >
-          {patch.isPending ? (
-            <AgentSpinningDots
-              className={undefined}
-              testId={undefined}
-              variant={undefined}
-            />
-          ) : null}
-          {giveAnother}
-        </Button>
-      )}
       <SandboxRowPrimaryAction
         primary={primary}
         pendingVerb={pendingVerb}
-        configuration={configuration}
         busy={busy}
         dialogOpen={dialog !== null}
-        run={run}
-      />
-      <SandboxRowSettingsFailureActions
-        summary={summary}
-        configuration={configuration}
-        visible={props.inlineDetails}
-        menu={actions.menu}
-        pendingVerb={pendingVerb}
-        busy={busy}
         run={run}
       />
       <DropdownMenu>
@@ -307,6 +264,38 @@ function SandboxLifecycleRowActions(
           </Button>
         </DropdownMenuTrigger>
         <DropdownMenuContent align="end" data-testid="sandbox-row-menu-content">
+          {giveAnother === null ? null : (
+            <DropdownMenuItem
+              disabled={busy}
+              data-testid="sandbox-row-give-another"
+              onSelect={() =>
+                patch.mutate(
+                  {
+                    displayName: null,
+                    idleMinutes: null,
+                    destroyAfterRestingMinutes:
+                      summary.destroyAfterRestingMinutes,
+                  },
+                  {
+                    onSuccess: (outcome) => {
+                      if (outcome === "gone") {
+                        toast.info(alreadyDestroyedLine(summary.displayName));
+                      }
+                    },
+                  },
+                )
+              }
+            >
+              {patch.isPending ? (
+                <AgentSpinningDots
+                  className={undefined}
+                  testId={undefined}
+                  variant={undefined}
+                />
+              ) : null}
+              {giveAnother}
+            </DropdownMenuItem>
+          )}
           {actions.menu
             .filter((action) => pendingVerb === null && action !== "destroy")
             .map((action) => (
@@ -316,17 +305,20 @@ function SandboxLifecycleRowActions(
                 data-testid={`sandbox-row-menu-${action}`}
                 onSelect={() => run(action)}
               >
-                {sandboxRowActionLabel(action, configuration)}
+                {sandboxRowActionLabel(action)}
               </DropdownMenuItem>
             ))}
-          {props.inlineDetails ? null : (
-            <DropdownMenuItem
-              data-testid="sandbox-row-menu-details"
-              onSelect={() => openSandboxDetails(summary.id)}
-            >
-              {DETAILS}
+          {props.settingsFailure ? (
+            <DropdownMenuItem onSelect={chooseAnother}>
+              Choose another host
             </DropdownMenuItem>
-          )}
+          ) : null}
+          <DropdownMenuItem
+            data-testid="sandbox-row-menu-details"
+            onSelect={() => openSandboxDetails(summary.id)}
+          >
+            {DETAILS}
+          </DropdownMenuItem>
           {pendingVerb === null && actions.menu.includes("destroy") ? (
             <>
               <DropdownMenuSeparator />
@@ -335,7 +327,7 @@ function SandboxLifecycleRowActions(
                 data-testid="sandbox-row-menu-destroy"
                 onSelect={() => run("destroy")}
               >
-                {sandboxRowActionLabel("destroy", configuration)}
+                {sandboxRowActionLabel("destroy")}
               </DropdownMenuItem>
             </>
           ) : null}
@@ -408,56 +400,9 @@ function useSandboxSettingsPrimaryAction(
     : null;
 }
 
-function SandboxRowSettingsFailureActions(props: {
-  readonly summary: SandboxSummary;
-  readonly configuration: SandboxPageConfiguration;
-  readonly visible: boolean;
-  readonly menu: readonly SandboxRowAction[];
-  readonly pendingVerb: SandboxRowVerb | null;
-  readonly busy: boolean;
-  readonly run: (action: SandboxRowAction) => void;
-}): ReactNode {
-  const chooseAnother = useChooseAnotherHost();
-  if (!props.visible) return null;
-  const actions =
-    props.pendingVerb === null
-      ? props.menu.filter(
-          (action) => action === "open-terminal" || action === "stop",
-        )
-      : [];
-  return (
-    <>
-      {actions.map((action) => (
-        <Button
-          key={action}
-          type="button"
-          variant="outline"
-          size="sm"
-          disabled={props.busy}
-          onClick={() => props.run(action)}
-        >
-          {sandboxRowActionLabel(action, props.configuration)}
-        </Button>
-      ))}
-      <Button type="button" variant="outline" size="sm" onClick={chooseAnother}>
-        Choose another host
-      </Button>
-      <Button
-        type="button"
-        variant="outline"
-        size="sm"
-        onClick={() => openSandboxDetails(props.summary.id)}
-      >
-        Details
-      </Button>
-    </>
-  );
-}
-
 function SandboxRowPrimaryAction(props: {
   readonly primary: SandboxRowAction | null;
   readonly pendingVerb: SandboxRowVerb | null;
-  readonly configuration: SandboxPageConfiguration;
   readonly busy: boolean;
   readonly dialogOpen: boolean;
   readonly run: (action: SandboxRowAction) => void;
@@ -492,7 +437,7 @@ function SandboxRowPrimaryAction(props: {
           variant={undefined}
         />
       ) : null}
-      {sandboxRowActionLabel(primary, props.configuration)}
+      {sandboxRowActionLabel(primary)}
     </Button>
   );
 }

@@ -71,7 +71,6 @@ export function TabSwitcherSheet(props: TabSwitcherSheetProps) {
             epicId={epicId}
             tabId={tabId}
             onClose={handleClose}
-            trailing={null}
           />
         </MobileTileOpenTargetContext>
       </DrawerContent>

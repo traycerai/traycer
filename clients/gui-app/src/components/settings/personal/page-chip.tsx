@@ -1,7 +1,10 @@
 import { useEffect, useMemo, useState, type ReactNode } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { useHostClient, type HostRpcRegistry } from "@/lib/host";
-import { useHostScope } from "@/components/settings/host-scope/use-host-scope";
+import {
+  useHostScopeFor,
+  WINDOW_HOST_SELECTION,
+} from "@/components/settings/host-scope/use-host-scope";
 import { useHostNegotiatedMethodVersions } from "@/hooks/host/use-host-negotiated-method-version";
 import { usePersonalComputers } from "@/components/settings/personal/use-personal-computers";
 import { ConfigurationStatusChip } from "@/components/settings/environment/status-chip";
@@ -163,7 +166,7 @@ function useRereadWhilePending(
 function PersonalPageChip(props: {
   readonly section: SettingsSectionId;
 }): ReactNode {
-  const scope = useHostScope();
+  const scope = useHostScopeFor(WINDOW_HOST_SELECTION);
   const client = useHostClient();
   const environmentId = useDetailsEnvironmentId(client);
   const queryClient = useQueryClient();

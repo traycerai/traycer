@@ -2097,6 +2097,32 @@ const providerCliStateBaseShape = {
   // A Settings Managed row is checked only when this is true. Absent reads as
   // false, which is every host below `providers.list@10.7`.
   chatsFollow: lazySchema(() => z.boolean().optional()),
+  // Whether this provider's own memory feature is left as the provider ships
+  // it for sessions Traycer launches. `false` is the user's choice that
+  // Traycer turns the provider's memory off at launch - both the recall of
+  // existing memories and the writing of new ones - for the sessions it
+  // starts; written by `providers.setNativeMemory`, first published by
+  // `providers.list@10.8`. `.optional()` for the reasons `autoJudge` gives:
+  // absent is "host too old to say", and readers spell the `true` default
+  // themselves (`nativeMemory ?? true`).
+  //
+  // `true` means Traycer applies NO memory override, not that the provider
+  // has memories switched on: a provider whose own default is off stays off.
+  // Nothing here is a statement about saved memory files, which both values
+  // leave alone.
+  nativeMemory: lazySchema(() => z.boolean().optional()),
+  // Whether this host can actually enforce the switch above for this
+  // provider. The client renders the control only when this is true, so a
+  // provider with no memory contract Traycer can drive shows no switch at all
+  // rather than one that would silently do nothing.
+  //
+  // A separate key rather than a `null` arm on `nativeMemory`, because the two
+  // facts fail in opposite directions and a reader must not have to guess
+  // which an absent value meant: absent `nativeMemory` is "host too old to
+  // say what the user chose", absent `nativeMemorySupported` is "host too old
+  // to say whether it can be enforced" - and the second is the one that must
+  // hide the control.
+  nativeMemorySupported: lazySchema(() => z.boolean().optional()),
 };
 
 const providerCliStateBaseShapeV10 = {
@@ -2142,7 +2168,7 @@ const providerCliStateBaseShapeV20 = {
 };
 
 /**
- * Latest provider CLI state (providers.list@10.7). Mutation echoes use their
+ * Latest provider CLI state (providers.list@10.8). Mutation echoes use their
  * own frozen shape. Includes `nativeCapabilities` — per-capability facts the UI
  * renders MCP/plugins/skills tabs from. `.catch(DEFAULT)` tolerates old host
  * builds that omit the field when an old-host response is parsed on a new
@@ -2161,12 +2187,28 @@ export const providerCliStateSchema = lazySchema(() =>
 export type ProviderCliState = z.infer<typeof providerCliStateSchema>;
 
 /**
+ * The provider row `providers.list@10.7` published: without the native-memory
+ * pair, which 10.8 added. Every older row derives from this one, so neither
+ * key reaches an older reader.
+ */
+const providerCliStateSchemaV107 = lazySchema(() =>
+  providerCliStateSchema.omit({
+    nativeMemory: true,
+    nativeMemorySupported: true,
+  }),
+);
+
+/**
  * The provider row `providers.list@10.6` published: without `chatsFollow`,
  * which 10.7 added. Every older row derives from this one, so the key reaches
  * no older reader.
+ *
+ * Derived from the 10.7 row rather than the live one: a field added to the
+ * live shape must reach this line only through an explicit freeze above, or
+ * every older line silently widens with it.
  */
 const providerCliStateSchemaV106 = lazySchema(() =>
-  providerCliStateSchema.omit({ chatsFollow: true }),
+  providerCliStateSchemaV107.omit({ chatsFollow: true }),
 );
 
 /**
@@ -2549,8 +2591,8 @@ export type ProvidersListRequestV70 = z.infer<
   typeof providersListRequestSchemaV70
 >;
 
-/** Frozen `providers.list@10.7` response, before credential home projections. */
-export const providersListResponseSchemaV107Preimage = lazySchema(() =>
+/** Frozen `providers.list@10.8` response, before credential home projections. */
+export const providersListResponseSchemaV108Preimage = lazySchema(() =>
   z.object({
     providers: z.array(providerCliStateSchema),
     native: nativeListResultSchema.nullable().default(null),
@@ -2592,7 +2634,7 @@ export const providersListResponseSchemaV107Preimage = lazySchema(() =>
  * Home facts are additive keys; earlier lines retain their frozen decoders.
  */
 export const providersListResponseSchema = lazySchema(() =>
-  providersListResponseSchemaV107Preimage.extend({
+  providersListResponseSchemaV108Preimage.extend({
     providers: z.array(
       providerCliStateSchema.extend({
         profiles: z.array(providerProfileProjectionSchema).catch([]),
@@ -2601,6 +2643,30 @@ export const providersListResponseSchema = lazySchema(() =>
   }),
 );
 export type ProvidersListResponse = z.infer<typeof providersListResponseSchema>;
+
+/**
+ * Frozen `providers.list@10.7` response: the live envelope over the 10.7 row
+ * (`providerCliStateSchemaV107`), before 10.8 added the native-memory pair.
+ * 10.8 grew the ROW only, so the envelope here is the live one key for key - a
+ * hand copy all the same, for the reason the 10.4 one gives: an `.omit()` of
+ * the live envelope would let the next envelope key reach this line unseen.
+ */
+export const providersListResponseSchemaV107Preimage = lazySchema(() =>
+  z.object({
+    providers: z.array(providerCliStateSchemaV107),
+    native: nativeListResultSchema.nullable().default(null),
+    credentialsManagedInAccount: z.boolean().optional(),
+    scope: z.literal("personal").nullable().optional(),
+    onHostOnly: z
+      .array(
+        z.object({
+          providerId: z.string().min(1),
+          profileId: z.string().min(1),
+        }),
+      )
+      .optional(),
+  }),
+);
 
 /**
  * Frozen `providers.list@10.6` response: the live envelope over the 10.6 row
@@ -5147,6 +5213,38 @@ export type ProvidersSetNativeSubagentsResponse = z.infer<
   typeof providersSetNativeSubagentsResponseSchema
 >;
 
+// ── Native memory ──────────────────────────────────────────────────────────
+//
+// `providers.setNativeMemory` writes the per-provider `nativeMemory` switch
+// (the row field above) - a brand-new method at `@1.0`, registered
+// `degrade: unsupported` like `providers.setNativeSubagents`, whose shape it
+// copies: keyed by HARNESS on the wire (the live GUI enum; the host
+// re-validates against its own roster), stored per provider, and echoing the
+// persisted value so the settings row can settle on truth.
+//
+// There is deliberately no "and also tell me whether it applied" field: a
+// provider this host cannot enforce the switch for is refused outright rather
+// than answered with a value, because a successful-looking response carrying
+// an unenforced `false` is exactly the cosmetic switch this must not be.
+export const providersSetNativeMemoryRequestSchema = lazySchema(() =>
+  z.object({
+    harnessId: guiHarnessIdSchema,
+    nativeMemory: z.boolean(),
+  }),
+);
+export type ProvidersSetNativeMemoryRequest = z.infer<
+  typeof providersSetNativeMemoryRequestSchema
+>;
+
+export const providersSetNativeMemoryResponseSchema = lazySchema(() =>
+  z.object({
+    nativeMemory: z.boolean(),
+  }),
+);
+export type ProvidersSetNativeMemoryResponse = z.infer<
+  typeof providersSetNativeMemoryResponseSchema
+>;
+
 // ── On-demand pack discovery refresh ───────────────────────────────────────
 //
 // Another BRAND-NEW method name at `@1.0`, riding the same
@@ -5361,6 +5459,10 @@ export type DowngradableToV10ProviderState = (
   managedLines?: ProviderCliState["managedLines"];
   // (v10.7) whether existing chats follow the selection, absent from earlier rows.
   chatsFollow?: ProviderCliState["chatsFollow"];
+  // (v10.8) the per-provider native-memory switch and whether this host can
+  // enforce it, absent from earlier rows.
+  nativeMemory?: ProviderCliState["nativeMemory"];
+  nativeMemorySupported?: ProviderCliState["nativeMemorySupported"];
   // `V70` is named explicitly rather than left to ride the `V10` arm on the
   // strength of structural width: the v7.0 and v8.0 list lines are pinned to
   // `providerLoginCapabilitySchemaV70`, so that is the concrete shape those
@@ -5395,6 +5497,8 @@ export function downgradeProviderCliStateToV10(
   // - `nativeSubagents` (v10.5) — the per-provider native subagent setting.
   // - `managedLines` (v10.6) — OpenCode's per-line managed packs.
   // - `chatsFollow` (v10.7) — whether existing chats follow the selection.
+  // - `nativeMemory` / `nativeMemorySupported` (v10.8) — the per-provider
+  //   native-memory switch and its enforceability.
   // - `packId` / `managedVersions` / `managedVersionsUnavailable` /
   //   `nextRunBinary` (v7.0) — the version manager. Same trap, and it is worth
   //   restating rather than assuming the list above covers it: this parse is
@@ -5438,6 +5542,9 @@ export function downgradeProviderCliStateToV10(
     managedLines: _managedLines,
     // (v10.7) whether existing chats follow the selection.
     chatsFollow: _chatsFollow,
+    // (v10.8) the native-memory switch and its enforceability.
+    nativeMemory: _nativeMemory,
+    nativeMemorySupported: _nativeMemorySupported,
     ...rest
   } = state;
   const parsed = providerCliStateSchemaV10.safeParse({

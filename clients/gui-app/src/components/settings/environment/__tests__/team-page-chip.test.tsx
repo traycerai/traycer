@@ -28,7 +28,15 @@ vi.mock("@/components/settings/host-scope/use-host-scope", async () => {
   const { hostScopeFixture } =
     await import("@/components/settings/host-scope/host-scope-fixture");
   const scope = hostScopeFixture({ host: null });
-  return { useHostScope: () => scope };
+  const useHostScope = () => scope;
+  return {
+    useHostScope,
+    useHostScopeFor: useHostScope,
+    WINDOW_HOST_SELECTION: {
+      scopedHostId: null,
+      setScopedHostId: () => undefined,
+    },
+  };
 });
 vi.mock("@/lib/host", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/lib/host")>()),
@@ -199,7 +207,10 @@ describe("the team page chip", () => {
     await waitFor(() => {
       expect(chipText()).toBe("✓ On Mac mini");
     });
-    await userEvent.type(await screen.findByLabelText("NODE_ENV value"), "!");
+    await userEvent.click(
+      await screen.findByRole("button", { name: "Edit NODE_ENV value" }),
+    );
+    await userEvent.type(screen.getByLabelText("NODE_ENV value"), "!");
     await userEvent.click(
       within(screen.getByRole("region", { name: "NODE_ENV" })).getByRole(
         "button",

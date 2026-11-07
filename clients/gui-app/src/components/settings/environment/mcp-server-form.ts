@@ -70,7 +70,7 @@ function secretHosts(secret: EnvironmentSecret): readonly string[] {
   return [...new Set(hosts.filter((host) => host.length > 0))];
 }
 
-/** The secrets a server at `url` can be bound to: live, brokered, sent there. */
+/** The secrets a server at `url` can be bound to: live, and sent there. */
 export function pickableSecrets(
   secrets: readonly EnvironmentSecret[],
   url: string,
@@ -78,11 +78,7 @@ export function pickableSecrets(
   const host = urlHost(url);
   if (host === null) return [];
   return secrets.filter(
-    (secret) =>
-      !secret.revoked &&
-      secret.state === "live" &&
-      secret.mode === "brokered" &&
-      secretHosts(secret).includes(host),
+    (secret) => !secret.revoked && secretHosts(secret).includes(host),
   );
 }
 

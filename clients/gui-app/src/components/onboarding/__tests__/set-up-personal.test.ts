@@ -24,6 +24,10 @@ import {
   environmentStatusFixture,
   itemStatusFixture,
 } from "@/lib/environment/__tests__/environment-test-support";
+import {
+  RETIRED_PROVIDER_VARIABLES,
+  RETIRED_SECRET_ROW_FIELDS,
+} from "@traycer/protocol/host/released-wire-rows";
 
 function withProfile(
   kind: ProviderProfile["kind"],
@@ -50,18 +54,17 @@ function secret(
   overrides: Partial<EnvironmentSecretV12>,
 ): EnvironmentSecretV12 {
   return {
+    ...RETIRED_SECRET_ROW_FIELDS,
+    providerVariables: [...RETIRED_PROVIDER_VARIABLES],
     secretId: "secret-1",
     name: "DEPLOY_KEY",
     kind: "api_key",
     protocol: null,
     destinations: [],
-    mode: "brokered",
-    state: "live",
     currentVersionId: "v1",
     revoked: false,
     updatedAt: 1,
     variables: [],
-    providerVariables: [],
     ...overrides,
   };
 }
@@ -183,11 +186,6 @@ describe("the secret step", () => {
         secret({ secretId: "s1", revoked: true }),
         secret({ secretId: "s2", revoked: false }),
       ],
-      true,
-    ],
-    [
-      "a secret still waiting for review",
-      [secret({ state: "pending_review" })],
       true,
     ],
     ["only revoked secrets", [secret({ revoked: true })], false],

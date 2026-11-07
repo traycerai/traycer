@@ -294,6 +294,7 @@
       },
       "test": {
         "inputs": [
+          "{workspaceRoot}/scripts/test-worker-environment.ts",
           "default",
           "^production",
           "sharedGlobals",
