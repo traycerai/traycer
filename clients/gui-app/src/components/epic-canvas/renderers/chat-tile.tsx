@@ -3529,24 +3529,22 @@ function useChatTileSessionViewModel(
       if (!canAct) return false;
       // Armed behind the folder dialog, the composer gets the promise and
       // clears its text only once "Send and switch" dispatches the send.
-      return reportSentChatMessage(
-        submitThroughRebindGate({
-          submit: input,
-          dispatch: (message) => {
-            const accepted = dispatchUserSend(message);
-            // Transfer custody at dispatch, before a consent promise can
-            // resolve later than a tile close in this same turn.
-            onDispatch?.(accepted);
-            return accepted;
-          },
-          refusal: NO_LIVE_SEND_REFUSAL,
-        }).accepted,
-        {
-          text: input.contentText,
-          epicId: currentEpicId,
-          hostId: activeHostId,
+      return submitThroughRebindGate({
+        submit: input,
+        dispatch: (message) => {
+          const accepted = dispatchUserSend(message);
+          // Transfer custody and report at dispatch, before a consent promise
+          // continuation or the next parked send can run.
+          onDispatch?.(accepted);
+          void reportSentChatMessage(accepted, {
+            text: input.contentText,
+            epicId: currentEpicId,
+            hostId: activeHostId,
+          });
+          return accepted;
         },
-      );
+        refusal: NO_LIVE_SEND_REFUSAL,
+      }).accepted;
     },
     [
       canAct,
@@ -3618,12 +3616,20 @@ function useChatTileSessionViewModel(
   useEffect(() => {
     if (evictedSend === null || !evictedSend.ready) return;
     if (evictedSend.served || !canAct) return;
-    for (const send of evictedSend.take()) {
+    for (;;) {
+      const send = evictedSend.take().at(0);
+      if (send === undefined) break;
       const accepted = submitLiveMessage(send.input, (result) =>
         evictedSend.settle(send, result),
       );
-      if (typeof accepted === "boolean") evictedSend.settle(send, accepted);
-      else void accepted.then((result) => evictedSend.settle(send, result));
+      if (typeof accepted === "boolean") {
+        evictedSend.settle(send, accepted);
+      } else {
+        // Consent owns this send until it settles. Later messages stay parked;
+        // settlement schedules the next pass without retaining a stale batch.
+        void accepted.then((result) => evictedSend.settle(send, result));
+        break;
+      }
     }
   }, [evictedSend, canAct, submitLiveMessage]);
   useEvictedSendAckRefusals(handle, evictedSend?.refuse ?? null);

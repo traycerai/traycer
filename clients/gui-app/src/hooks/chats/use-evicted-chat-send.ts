@@ -54,7 +54,7 @@ export interface EvictedChatSend {
     input: ChatComposerSubmitInput,
     sender: UserMessageSender,
   ) => void;
-  /** Takes the parked messages to send them; each is answered by `settle`. */
+  /** Takes the oldest message only when no earlier send awaits `settle`. */
   readonly take: () => readonly ParkedEvictedSend[];
   /** How a taken message went: one that was not accepted comes back. */
   readonly settle: (send: ParkedEvictedSend, accepted: boolean) => void;
@@ -214,11 +214,13 @@ export function useEvictedChatSend(input: {
   );
 
   const take = useCallback((): readonly ParkedEvictedSend[] => {
-    const sends = parkedRef.current.filter(
-      (send) => !takenRef.current.has(send),
-    );
-    for (const send of sends) takenRef.current.add(send);
-    return sends;
+    // The live session can arm only one folder-consent submit. Keep later
+    // messages parked until that send has dispatched or been handed back.
+    if (takenRef.current.size > 0) return [];
+    const send = parkedRef.current.at(0);
+    if (send === undefined) return [];
+    takenRef.current.add(send);
+    return [send];
   }, []);
 
   const settle = useCallback(

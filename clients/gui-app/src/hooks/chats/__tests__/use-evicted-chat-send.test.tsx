@@ -263,7 +263,7 @@ describe("useEvictedChatSend", () => {
     expect(hydrates).toHaveLength(1);
   });
 
-  it("holds the chat on its host once the host answers, and take hands every message over and resets", async () => {
+  it("hands parked sends over one at a time and keeps the next ready while one is unsettled", async () => {
     const { send, hold } = mount({ served: true, held: true });
     park(send, INPUT, SECOND_INPUT);
     await vi.waitFor(() => expect(hydrates).toHaveLength(1));
@@ -276,13 +276,21 @@ describe("useEvictedChatSend", () => {
 
     expect(send.result.current.ready).toBe(true);
     expect(hold.result.current).toBe(true);
-    const taken = take(send);
-    expect(taken.map((entry) => entry.input)).toEqual([INPUT, SECOND_INPUT]);
+    const [first] = take(send);
+    expect(first.input).toEqual(INPUT);
+    expect(send.result.current.take()).toEqual([]);
     expect(send.result.current.parked.map((entry) => entry.input)).toEqual([
       INPUT,
       SECOND_INPUT,
     ]);
     expect(send.result.current.ready).toBe(true);
+
+    settle(send, first, true);
+    const [second] = take(send);
+    expect(second.input).toEqual(SECOND_INPUT);
+    expect(send.result.current.take()).toEqual([]);
+    settle(send, second, true);
+    expect(send.result.current.parked).toEqual([]);
   });
 
   it("roots a parked message's images until it is accepted", async () => {
@@ -345,9 +353,12 @@ describe("useEvictedChatSend", () => {
   it("puts the first of two failed messages back and quotes the second", async () => {
     const { send } = mount({ served: true, held: true });
     await parkAndHydrate(send, INPUT, SECOND_INPUT);
-    const [first, second] = take(send);
+    const [first] = take(send);
+    expect(send.result.current.take()).toEqual([]);
 
     settle(send, first, false);
+    const [second] = take(send);
+    expect(second.input).toEqual(SECOND_INPUT);
     settle(send, second, false);
 
     expect(send.result.current.parked).toEqual([]);

@@ -19,7 +19,7 @@ import {
 } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import * as Y from "yjs";
-import { useState, type ReactNode } from "react";
+import { isValidElement, useState, type ReactNode } from "react";
 import { toast } from "sonner";
 import { HostClient } from "@traycer-clients/shared/host-client/host-client";
 import { settleProcessHostRpcTierPlan } from "@traycer-clients/shared/host-client/host-rpc-routing";
@@ -242,6 +242,23 @@ function draftOf(text: string): JsonContent {
       },
     ],
   };
+}
+
+function expectRetainedDraftToast(content: string): void {
+  const retained = toast
+    .getToasts()
+    .find(
+      (entry) =>
+        "title" in entry &&
+        "duration" in entry &&
+        entry.duration === Number.POSITIVE_INFINITY,
+    );
+  const title: unknown =
+    retained !== undefined && "title" in retained ? retained.title : null;
+  if (!isValidElement<{ children: unknown }>(title)) {
+    throw new Error("expected retained draft notice content");
+  }
+  expect(title.props.children).toContain(content);
 }
 
 const epicHarness = createEpicSessionTestHarness(EPIC_ID);
@@ -757,6 +774,7 @@ describe("a message sent to a chat the pool serves because its host dropped the 
     await waitFor(() => {
       expect(sendFramesOf(streams[1])).toHaveLength(2);
     });
+    await settleLegendList();
     const texts = sendFramesOf(streams[1]).map((frame) =>
       textInContent(frame.content),
     );
@@ -765,12 +783,16 @@ describe("a message sent to a chat the pool serves because its host dropped the 
     expect(hydrates).toHaveLength(1);
     // The first send started the turn, so the second is the host's queued
     // message: each text is on screen once, the second in the queue.
-    expect(pendingRows()).toHaveLength(1);
-    expect(rowsWithText(FIRST_TEXT)).toHaveLength(1);
-    expect(rowsWithText(SECOND_TEXT)).toHaveLength(1);
-    expect(
-      within(screen.getByTestId("queued-message-rows")).getByText(SECOND_TEXT),
-    ).not.toBeNull();
+    await waitFor(() => {
+      expect(pendingRows()).toHaveLength(1);
+      expect(rowsWithText(FIRST_TEXT)).toHaveLength(1);
+      expect(rowsWithText(SECOND_TEXT)).toHaveLength(1);
+      expect(
+        within(screen.getByTestId("queued-message-rows")).getByText(
+          SECOND_TEXT,
+        ),
+      ).not.toBeNull();
+    });
     expect(toast.getToasts()).toHaveLength(0);
   });
 
@@ -784,6 +806,11 @@ describe("a message sent to a chat the pool serves because its host dropped the 
       putInComposer(FIRST_TEXT);
       clickSend();
       await waitFor(() => expect(pendingRows()).toHaveLength(1));
+      putInComposer(SECOND_TEXT);
+      clickSend();
+      await waitFor(() => expect(pendingRows()).toHaveLength(2));
+      expect(rowsWithText(FIRST_TEXT)).toHaveLength(1);
+      expect(rowsWithText(SECOND_TEXT)).toHaveLength(1);
       await settleLegendList();
       await answerHydrate(0);
       await settleLegendList();
@@ -794,8 +821,9 @@ describe("a message sent to a chat the pool serves because its host dropped the 
       expect(
         await screen.findByTestId("teardown-commit-dialog"),
       ).not.toBeNull();
-      expect(pendingRows()).toHaveLength(1);
+      expect(pendingRows()).toHaveLength(2);
       expect(rowsWithText(FIRST_TEXT)).toHaveLength(1);
+      expect(rowsWithText(SECOND_TEXT)).toHaveLength(1);
       expect(reported).toEqual([]);
 
       if (lifecycle === "confirm-close") {
@@ -816,7 +844,20 @@ describe("a message sent to a chat the pool serves because its host dropped the 
         expect(textInContent(sendFramesOf(streams[1])[0].content)).toBe(
           FIRST_TEXT,
         );
-        expect(composerDraftIsEmpty(CHAT_ARTIFACT.id)).toBe(true);
+        expect(composerDraftIsEmpty(CHAT_ARTIFACT.id)).toBe(false);
+        expect(
+          useComposerDraftStore.getState().drafts[CHAT_ARTIFACT.id]?.content,
+        ).toEqual(draftOf(SECOND_TEXT));
+        expect(
+          toast
+            .getToasts()
+            .filter(
+              (entry) =>
+                "duration" in entry &&
+                entry.duration === Number.POSITIVE_INFINITY,
+            ),
+        ).toEqual([]);
+        expect(pendingRows()).toHaveLength(0);
         expect(imageRootHeld()).toBe(false);
       } else if (lifecycle === "pagehide") {
         act(() => {
@@ -831,6 +872,7 @@ describe("a message sent to a chat the pool serves because its host dropped the 
         expect(
           useComposerDraftStore.getState().drafts[CHAT_ARTIFACT.id]?.content,
         ).toEqual(draftOf(FIRST_TEXT));
+        expectRetainedDraftToast(SECOND_TEXT);
         expect(imageRootHeld()).toBe(false);
         expect(screen.queryByTestId("teardown-commit-dialog")).toBeNull();
         expect(pendingRows()).toHaveLength(0);
@@ -840,4 +882,85 @@ describe("a message sent to a chat the pool serves because its host dropped the 
       }
     },
   );
+
+  it("serializes consent for two parked sends and dispatches them in order", async () => {
+    const reported: SentChatMessage[] = [];
+    observeSentMessages(reported);
+    stageRebind();
+    await mountOnThePool();
+    putInComposer(FIRST_TEXT);
+    clickSend();
+    await waitFor(() => expect(pendingRows()).toHaveLength(1));
+    putInComposer(SECOND_TEXT);
+    clickSend();
+    await waitFor(() => expect(pendingRows()).toHaveLength(2));
+    await settleLegendList();
+    await answerHydrate(0);
+    await settleLegendList();
+    await waitFor(() => expect(streams).toHaveLength(2));
+    await settleLegendList();
+    openStream(streams[1], { role: "owner", canAct: true }, [runningShell()]);
+    await settleLegendList();
+
+    expect(await screen.findByTestId("teardown-commit-dialog")).not.toBeNull();
+    expect(pendingRows()).toHaveLength(2);
+    expect(rowsWithText(FIRST_TEXT)).toHaveLength(1);
+    expect(rowsWithText(SECOND_TEXT)).toHaveLength(1);
+    expect(sendFramesOf(streams[1])).toEqual([]);
+    expect(reported).toEqual([]);
+
+    fireEvent.click(screen.getByTestId("teardown-commit-immediate"));
+    await waitFor(() => expect(sendFramesOf(streams[1])).toHaveLength(2));
+    await waitFor(() => expect(reported).toHaveLength(2));
+    expect(
+      sendFramesOf(streams[1]).map((frame) => textInContent(frame.content)),
+    ).toEqual([FIRST_TEXT, SECOND_TEXT]);
+    expect(reported).toEqual([
+      { text: FIRST_TEXT, epicId: EPIC_ID, hostId: HOST_ID },
+      { text: SECOND_TEXT, epicId: EPIC_ID, hostId: HOST_ID },
+    ]);
+    expect(composerDraftIsEmpty(CHAT_ARTIFACT.id)).toBe(true);
+    const [first, second] = sendFramesOf(streams[1]);
+    acceptMessage(streams[1], first);
+    acceptMessage(streams[1], second);
+    await waitFor(() => expect(pendingRows()).toHaveLength(0));
+  });
+
+  it("restores both parked sends when each consent is cancelled", async () => {
+    const reported: SentChatMessage[] = [];
+    observeSentMessages(reported);
+    stageRebind();
+    await mountOnThePool();
+    putInComposer(FIRST_TEXT);
+    clickSend();
+    await waitFor(() => expect(pendingRows()).toHaveLength(1));
+    putInComposer(SECOND_TEXT);
+    clickSend();
+    await waitFor(() => expect(pendingRows()).toHaveLength(2));
+    await settleLegendList();
+    await answerHydrate(0);
+    await settleLegendList();
+    await waitFor(() => expect(streams).toHaveLength(2));
+    await settleLegendList();
+    openStream(streams[1], { role: "owner", canAct: true }, [runningShell()]);
+    await settleLegendList();
+
+    expect(await screen.findByTestId("teardown-commit-dialog")).not.toBeNull();
+    expect(pendingRows()).toHaveLength(2);
+    fireEvent.click(screen.getByTestId("teardown-commit-cancel"));
+    await waitFor(() => expect(pendingRows()).toHaveLength(1));
+    expect(sendFramesOf(streams[1])).toEqual([]);
+    expect(reported).toEqual([]);
+
+    expect(await screen.findByTestId("teardown-commit-dialog")).not.toBeNull();
+    fireEvent.click(screen.getByTestId("teardown-commit-cancel"));
+    await waitFor(() => expect(pendingRows()).toHaveLength(0));
+    expect(sendFramesOf(streams[1])).toEqual([]);
+    expect(streams[0].sent).toEqual([]);
+    expect(reported).toEqual([]);
+    expect(
+      useComposerDraftStore.getState().drafts[CHAT_ARTIFACT.id]?.content,
+    ).toEqual(draftOf(FIRST_TEXT));
+    expectRetainedDraftToast(SECOND_TEXT);
+  });
 });
