@@ -30,6 +30,7 @@ import type { TeamHostInstallTokenResult } from "../team-host";
 import {
   SLACK_APP_REFUSAL_APP_NOT_FOUND,
   SLACK_APP_REFUSAL_APP_TAKEN,
+  type SlackAppDmsRequest,
   type SlackAppRegisterRequest,
   type SlackAppView,
 } from "@traycer/protocol/host/slack-app";
@@ -895,6 +896,7 @@ export class MockRunnerHost implements IRunnerHost {
       teamName: null,
       botUserId: null,
       installedAt: null,
+      dmsEnabled: this.slackApps.get(request.botId)?.dmsEnabled ?? true,
     };
     this.slackApps.set(request.botId, app);
     this.slackInstallStates.delete(request.botId);
@@ -938,6 +940,23 @@ export class MockRunnerHost implements IRunnerHost {
         ? { ...app, installState: "uninstalled" }
         : app;
     this.slackApps.set(botId, next);
+    return { kind: "ok", app: next };
+  }
+
+  async setSlackAppDms(
+    _bearerToken: string,
+    request: SlackAppDmsRequest,
+  ): Promise<SlackAppWriteResult> {
+    const app = this.slackApps.get(request.botId);
+    if (app === undefined) {
+      return {
+        kind: "refused",
+        status: 404,
+        code: SLACK_APP_REFUSAL_APP_NOT_FOUND,
+      };
+    }
+    const next: SlackAppView = { ...app, dmsEnabled: request.dmsEnabled };
+    this.slackApps.set(request.botId, next);
     return { kind: "ok", app: next };
   }
 
