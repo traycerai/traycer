@@ -6,6 +6,9 @@ import {
 import {
   hostRpcRegistry,
   providersClearProfileApiKeyV10,
+  providersSetApiKeyV10,
+  providersSetApiKeyV20,
+  providersSetApiKeyV21,
   providersSetProfileApiKeyV10,
 } from "@traycer/protocol/host/registry";
 import { RELEASED_FLOOR_METHOD_NAMES } from "@traycer/protocol/host/released-floor";
@@ -13,7 +16,6 @@ import { releasedMethodNames } from "@traycer/protocol/host/__tests__/__fixtures
 import {
   providerProfileSchema,
   providersClearProfileApiKeyRequestSchema,
-  providersSetApiKeyRequestSchema,
   providersSetProfileApiKeyRequestSchema,
   providersSetProfileApiKeyResponseSchema,
 } from "@traycer/protocol/host/provider-schemas";
@@ -111,20 +113,44 @@ describe("per-profile API-key methods are optional, not floor", () => {
  * remains.
  */
 describe("a profile scope cannot ride providers.setApiKey", () => {
-  it("providers.setApiKey SILENTLY DROPS a profileId rather than refusing it", () => {
-    const parsed = providersSetApiKeyRequestSchema.parse({
-      providerId: "antigravity",
+  it.each(
+    [providersSetApiKeyV20, providersSetApiKeyV21].map((contract) => ({
+      version: `${contract.schemaVersion.major}.${contract.schemaVersion.minor}`,
+      contract,
+    })),
+  )(
+    "released providers.setApiKey@$version strips an unknown profileId",
+    ({ contract }) => {
+      const parsed = contract.requestSchema.parse({
+        providerId: "antigravity",
+        apiKey: "key-for-one-profile",
+        profileId: "profile-managed",
+      });
+      // Not a rejection the caller could notice and not a preserved value: the
+      // key survives, its scope does not. A host reading this request stores the
+      // secret provider-wide and authenticates every OTHER profile with it.
+      expect(Object.hasOwn(parsed, "profileId")).toBe(false);
+      expect(parsed.apiKey).toBe("key-for-one-profile");
+    },
+  );
+
+  it("released providers.setApiKey@1.0 keeps its strict request and refuses profileId", () => {
+    const request = {
+      providerId: "claude-code",
       apiKey: "key-for-one-profile",
-      profileId: "profile-managed",
-    });
-    // Not a rejection the caller could notice and not a preserved value: the
-    // key survives, its scope does not. A host reading this request stores the
-    // secret provider-wide and authenticates every OTHER profile with it.
-    expect(Object.hasOwn(parsed, "profileId")).toBe(false);
-    expect(parsed.apiKey).toBe("key-for-one-profile");
+    };
+    expect(providersSetApiKeyV10.requestSchema.safeParse(request).success).toBe(
+      true,
+    );
+    expect(
+      providersSetApiKeyV10.requestSchema.safeParse({
+        ...request,
+        profileId: "profile-managed",
+      }).success,
+    ).toBe(false);
   });
 
-  it("CONTROL: the profile-scoped request PRESERVES the same profileId", () => {
+  it("providers.setProfileApiKey@1.0 preserves the requested profileId", () => {
     // Same input shape, same field name, different method - so the arm above
     // is about where the field rides, not about the field being unparseable.
     const parsed = providersSetProfileApiKeyRequestSchema.parse({
