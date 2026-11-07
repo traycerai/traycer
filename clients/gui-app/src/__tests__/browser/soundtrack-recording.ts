@@ -108,6 +108,16 @@ interface Recorded {
   readonly suspendedSeconds: number;
   /** How far the audio clock moved while the context was reported suspended. */
   readonly clockDuringSuspensionSeconds: number;
+  /**
+   * Audio-clock seconds to the first suspension the context reported after the
+   * recording began listening, from the capture being asked for and from the
+   * listening; a recording's time starts at its first frame, between the two.
+   * Null with no such suspension.
+   */
+  readonly clockToSuspension: {
+    readonly fromCapture: number;
+    readonly fromListening: number;
+  } | null;
   /** How many times the compressed recorder was paused. */
   readonly recorderPauses: number;
   /** Wall-clock ms the stop took, when the fixture asked for it; else null. */
@@ -369,22 +379,32 @@ function countRecorderPauses(): { count: number } {
   return pauses;
 }
 
-interface StateChange {
-  readonly state: AudioContextState;
-  /** `performance.now` ms when the change was reported. */
+/** A moment on both clocks. */
+interface Moment {
+  /** `performance.now` ms. */
   readonly ms: number;
-  /** The audio clock when it was reported. */
+  /** The audio clock. */
   readonly clock: number;
+}
+
+/** A state the context reported, and the moment it was reported. */
+interface StateChange extends Moment {
+  readonly state: AudioContextState;
 }
 
 interface ContextWatch {
   context: AudioContext | null;
   readonly changes: StateChange[];
+  /** When the recording last asked for its capture; null before it does. */
+  captureAskedAt: Moment | null;
   /** Runs in the task that calls `suspend`, once; null runs nothing. */
   onSuspend: (() => void) | null;
 }
 
-/** The ports over a context that this watch sees: its changes and suspends. */
+/**
+ * The ports over a context that this watch sees: its changes and suspends, and
+ * when a capture is asked for.
+ */
 function openWatchedPorts(
   watch: ContextWatch,
   volume: number,
@@ -413,7 +433,17 @@ function openWatchedPorts(
   }
   window.AudioContext = WatchedContext;
   try {
-    return openWebAudioPorts({ tracks: [] }, volume);
+    const ports = openWebAudioPorts({ tracks: [] }, volume);
+    return {
+      ...ports,
+      captureMix: (quality) => {
+        watch.captureAskedAt = {
+          ms: performance.now(),
+          clock: ports.output.currentTime(),
+        };
+        return ports.captureMix(quality);
+      },
+    };
   } finally {
     window.AudioContext = Real;
   }
@@ -422,7 +452,7 @@ function openWatchedPorts(
 /** What the context's reported suspensions came to, up to the stop. */
 function suspension(
   changes: readonly StateChange[],
-  end: { readonly ms: number; readonly clock: number },
+  end: Moment,
 ): { readonly seconds: number; readonly clockSeconds: number } {
   let seconds = 0;
   let clockSeconds = 0;
@@ -662,12 +692,12 @@ async function pauseInMiddle(
  * music, any pause and Play, and the wait. Every wait is on the audio clock or
  * on a state the context reported, but the holds, which are wall time from the
  * moment the context said suspended. Answers when the recording began
- * listening, in `performance.now` ms.
+ * listening.
  */
 async function runTimeline(
   request: RecordRequest,
   timeline: Timeline,
-): Promise<number> {
+): Promise<Moment> {
   const { session, clock, watch, start, unstall } = timeline;
   if (request.startHeldForSeconds !== null) {
     session.setSignals(HOME_SIGNALS);
@@ -677,7 +707,7 @@ async function runTimeline(
   }
   const heldAtMs = performance.now();
   await start();
-  const listeningAtMs = performance.now();
+  const listening: Moment = { ms: performance.now(), clock: clock() };
   unstall();
   if (request.startHeldForSeconds === null) session.setSignals(HOME_SIGNALS);
   else {
@@ -698,14 +728,19 @@ async function runTimeline(
     await musicFor(clock, request.seconds);
   }
   if (busyTimer !== null) window.clearInterval(busyTimer);
-  return listeningAtMs;
+  return listening;
 }
 
 async function record(request: RecordRequest): Promise<Recorded> {
   const sampleRate = await deviceSampleRate();
   const tone = toneBuffer(sampleRate);
   const stems: StemSource = { load: () => Promise.resolve(tone) };
-  const watch: ContextWatch = { context: null, changes: [], onSuspend: null };
+  const watch: ContextWatch = {
+    context: null,
+    changes: [],
+    captureAskedAt: null,
+    onSuspend: null,
+  };
   const ports: SoundtrackPorts = {
     ...openWatchedPorts(watch, 0.5),
     stems,
@@ -750,7 +785,7 @@ async function record(request: RecordRequest): Promise<Recorded> {
     },
   });
   const faults = installFaults(request);
-  const listeningAtMs = await runTimeline(request, {
+  const listenedAt = await runTimeline(request, {
     session,
     start: () => {
       void recorder.start();
@@ -766,8 +801,11 @@ async function record(request: RecordRequest): Promise<Recorded> {
   const outcome = await stopped;
   const stopTookMs =
     request.stop === "refused-resume" ? null : performance.now() - stopAtMs;
-  const wallSeconds = (stopAtMs - listeningAtMs) / 1000;
+  const wallSeconds = (stopAtMs - listenedAt.ms) / 1000;
   const held = suspension(watch.changes, { ms: stopAtMs, clock: stopClock });
+  const suspendedAfterStart = watch.changes.find(
+    (change) => change.state === "suspended" && change.ms >= listenedAt.ms,
+  );
   faults.restore();
   if (request.stop !== "refused-resume") session.end();
 
@@ -781,6 +819,13 @@ async function record(request: RecordRequest): Promise<Recorded> {
     wallSeconds,
     suspendedSeconds: held.seconds,
     clockDuringSuspensionSeconds: held.clockSeconds,
+    clockToSuspension:
+      suspendedAfterStart === undefined || watch.captureAskedAt === null
+        ? null
+        : {
+            fromCapture: suspendedAfterStart.clock - watch.captureAskedAt.clock,
+            fromListening: suspendedAfterStart.clock - listenedAt.clock,
+          },
     recorderPauses: recorderPauses.count,
     stopTookMs,
     resumeOrder,

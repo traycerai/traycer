@@ -54,6 +54,10 @@ interface Recorded {
   readonly wallSeconds: number;
   readonly suspendedSeconds: number;
   readonly clockDuringSuspensionSeconds: number;
+  readonly clockToSuspension: {
+    readonly fromCapture: number;
+    readonly fromListening: number;
+  } | null;
   readonly recorderPauses: number;
   readonly stopTookMs: number | null;
   readonly resumeOrder: readonly ("recorder" | "context")[];
@@ -86,6 +90,9 @@ const AFTER_PLAY_SECONDS = 1.3;
 const SUSPENSION_TOLERANCE_SECONDS = 0.3;
 // The audio clock stands still while the context is suspended.
 const CLOCK_DURING_SUSPENSION_MAX_SECONDS = 0.1;
+// The clock moves a render quantum at a time, 2.7 ms at 48 kHz, so a reading
+// can sit a quantum or two off one made beside it.
+const CLOCK_READ_TOLERANCE_SECONDS = 0.01;
 // Well under the capture's own 2 s grace for a stop it never hears back from,
 // with room for a loaded machine.
 const STOP_WITHIN_MS = 1500;
@@ -359,12 +366,19 @@ for (const quality of QUALITIES) {
       expect(recorded.logLines.at(-1)?.frames).not.toBeNull();
     }
     if (recorded.outcome.kind !== "saved") throw new Error("Not saved");
-    // 1 s of music, then the fade and drain of the pause, up to the stop.
-    expect(recorded.outcome.durationSeconds).toBeGreaterThan(
-      PAUSE.afterSeconds,
+    const { durationSeconds } = recorded.outcome;
+    // 1 s of music, then the fade and drain of the pause, up to the suspension
+    // and however long a loaded page takes to get there.
+    expect(durationSeconds).toBeGreaterThan(PAUSE.afterSeconds);
+    const span = recorded.clockToSuspension;
+    if (span === null) throw new Error("No suspension after the start");
+    // From the first frame, which comes between the capture being asked for and
+    // the recording listening, to the suspension.
+    expect(durationSeconds).toBeGreaterThan(
+      span.fromListening - CLOCK_READ_TOLERANCE_SECONDS,
     );
-    expect(recorded.outcome.durationSeconds).toBeLessThan(
-      PAUSE.afterSeconds + 1,
+    expect(durationSeconds).toBeLessThan(
+      span.fromCapture + CLOCK_READ_TOLERANCE_SECONDS,
     );
   });
 
