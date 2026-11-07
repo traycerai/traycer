@@ -1,7 +1,8 @@
 import { vi, type Mock } from "vitest";
 import type { SoundtrackPorts } from "../session";
 import type { StemManifest } from "../stems";
-import { FakeOutput, FakeStems } from "./fakes";
+import { SoundtrackLogRelay } from "../session-log";
+import { captureNothing, FakeOutput, FakeStems } from "./fakes";
 
 const SAMPLE_SECONDS = 2.2;
 
@@ -48,6 +49,8 @@ export const openFakePorts = vi.fn(
       setVolume,
       duck,
       close,
+      log: new SoundtrackLogRelay(),
+      captureMix: captureNothing,
       pause: () => {
         output.stopClock();
       },

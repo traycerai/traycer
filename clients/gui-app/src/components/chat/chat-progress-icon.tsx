@@ -3,10 +3,7 @@ import { useStore } from "zustand";
 import { MessageSquareLock } from "lucide-react";
 import { NotificationIndicatorIcon } from "@/components/notifications/notification-indicator-icon";
 import { useSurfaceNotificationIndicatorState } from "@/components/notifications/notification-indicator-context";
-import {
-  useRegisteredEpicAgentActivityTiers,
-  useRegisteredEpicPermissionRole,
-} from "@/lib/epic-selectors";
+import { useRegisteredEpicAgentActivityTiers } from "@/lib/epic-selectors";
 import { useExistingChatSessionHandle } from "@/lib/registries/chat-session-registry";
 import { chatActivityIndicator } from "@/components/epic-canvas/renderers/chat-tile-session-state";
 import type { IndicatorRunningKind } from "@/components/notifications/notification-indicator-icon";
@@ -75,8 +72,6 @@ export function ChatProgressIcon(props: ChatProgressIconProps) {
   // whose projection carries no host: unable to name the machine, unable to
   // detect exclusion.
   const awarenessCoverage = useAgentActivityCoverage(props.hostId);
-  const fallbackReadOnly =
-    useRegisteredEpicPermissionRole(props.epicId) === "viewer";
   const handle = useExistingChatSessionHandle(
     props.epicId,
     props.chatId,
@@ -95,7 +90,10 @@ export function ChatProgressIcon(props: ChatProgressIconProps) {
         indicatorState={indicatorState}
         running={awarenessRunning}
         activityCoverage={awarenessCoverage}
-        isReadOnly={fallbackReadOnly}
+        // An unopened row claims nothing: every task role may write, and
+        // whether this particular chat is somebody else's is the session's own
+        // access snapshot to say, which this arm does not have.
+        isReadOnly={false}
         subjectId={props.chatId}
         className={props.className}
         mutedClassName={props.mutedClassName}

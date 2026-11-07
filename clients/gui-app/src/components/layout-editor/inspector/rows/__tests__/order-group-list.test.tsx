@@ -84,6 +84,7 @@ function formContext(
       runnerHost: null,
       featureSettings: null,
       soundtrackOffered: false,
+      soundtrackRecordingOffered: false,
       soundtrackOn: false,
       ...shell,
     },

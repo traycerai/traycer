@@ -427,10 +427,7 @@ function epicReady(
   permissionRole: PermissionRole | null,
 ): boolean {
   return (
-    snapshotLoaded &&
-    connectionStatus === "open" &&
-    permissionRole !== null &&
-    permissionRole !== "viewer"
+    snapshotLoaded && connectionStatus === "open" && permissionRole !== null
   );
 }
 

@@ -98,6 +98,7 @@ import {
   type BotSurfaceCards,
 } from "@/components/bots/bot-surface-card-context";
 import { useBotSendTakesAnswers } from "@/hooks/bots/use-bot-send-version";
+import { useBotBoxEdit } from "@/hooks/bots/use-bot-box-edit";
 import { useBotFailedRequest } from "@/hooks/bots/use-bot-failed-request";
 import { useBotImageReach } from "@/hooks/bots/use-bot-send-version";
 import {
@@ -143,27 +144,6 @@ import { cn } from "@/lib/utils";
 const EMPTY_THREADS: ReadonlyArray<BotThreadSummary> = [];
 const NO_EXCHANGES: ReadonlyArray<BotExchange> = [];
 const NO_EPIC_IDS: ReadonlyArray<string> = [];
-
-/**
- * The failed message the channel's box is editing, which belongs to the
- * channel's conversation: a channel the view resolves to anew (a host that
- * names it late, or names none and lists an earlier one) starts the box
- * without it.
- */
-function useChannelBoxEdit(channelId: string | null): {
-  readonly edit: BotComposerEdit | null;
-  readonly setEdit: (edit: BotComposerEdit | null) => void;
-  readonly endEdit: () => void;
-} {
-  const [edit, setEdit] = useState<BotComposerEdit | null>(null);
-  const endEdit = useCallback(() => setEdit(null), []);
-  const [editChannelId, setEditChannelId] = useState(channelId);
-  if (channelId !== editChannelId) {
-    setEditChannelId(channelId);
-    setEdit(null);
-  }
-  return { edit, setEdit, endEdit };
-}
 
 /**
  * The bot's channel among its conversations: the one the bot record names.
@@ -473,7 +453,7 @@ export function BotChannelView(props: {
   // A post the bot failed to answer, in a thread or at the top level, is
   // retried as it is or edited in the channel's box, which posts its
   // replacement.
-  const { edit, setEdit, endEdit } = useChannelBoxEdit(channelId);
+  const { edit, setEdit, endEdit } = useBotBoxEdit(activity, channelId);
   const failedOnChannel = useCallback(
     (requestId: string) => failedOnRequest(activity, requestId),
     [activity],

@@ -1407,7 +1407,7 @@ export function NewConversationModalBody(props: {
     chooseAnotherHostLabel,
   });
   const composerDisabledHint =
-    mutationDisabledHint(permissionRole, isDisconnected, "make changes") ??
+    mutationDisabledHint(permissionRole, isDisconnected) ??
     workspaceGate.disabledHint ??
     agentHint;
   const epicImagePresence = useEpicAttachmentBytesPresence();

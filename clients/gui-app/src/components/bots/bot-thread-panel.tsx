@@ -47,6 +47,7 @@ import {
   failedOnRequest,
   useBotActivity,
 } from "@/hooks/bots/use-bot-activity";
+import { useBotBoxEdit } from "@/hooks/bots/use-bot-box-edit";
 import { useBotFailedRequest } from "@/hooks/bots/use-bot-failed-request";
 import type { BotImageReach } from "@/hooks/bots/use-bot-send-version";
 import type {
@@ -657,8 +658,11 @@ function ThreadPanelBody(props: ThreadPanelBodyProps): ReactNode {
   // stays the box's edit while the list drops the thread and lists it again,
   // so what is sent still replaces that message: the host takes the
   // replacement under the post as it does in the thread.
-  const [edit, setEdit] = useState<BotComposerEdit | null>(null);
-  const endEdit = useCallback(() => setEdit(null), []);
+  const activity = useBotActivity(props.botId);
+  const { edit, setEdit, endEdit } = useBotBoxEdit(
+    activity,
+    props.originMessageId,
+  );
   // What the box holds unsent, kept under the bot: what the person typed,
   // or a draft Discuss put there, from the channel's card or this thread's.
   const { botId, originMessageId } = props;

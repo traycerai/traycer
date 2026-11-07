@@ -4,8 +4,6 @@ import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { TooltipWrapper } from "@/components/ui/tooltip-wrapper";
-import { RoleDropdown } from "./role-control";
-import type { AssignableCollaboratorRole } from "@/lib/epic-collaborator-roles";
 import {
   formatInviteLabel,
   inviteKey,
@@ -15,12 +13,10 @@ import {
 export interface InviteCardProps {
   readonly inviteInput: string;
   readonly inputError: string | null;
-  readonly selectedRole: AssignableCollaboratorRole;
   readonly queuedInvites: ReadonlyArray<QueuedInvite>;
   readonly isPending: boolean;
   readonly canAddInvite: boolean;
   readonly onInputChange: (value: string) => void;
-  readonly onRoleChange: (value: AssignableCollaboratorRole) => void;
   readonly onAddToQueue: () => void;
   readonly onRemoveFromQueue: (invite: QueuedInvite) => void;
   readonly onSendInvites: () => void;
@@ -31,12 +27,10 @@ export function InviteCard(props: InviteCardProps) {
   const {
     inviteInput,
     inputError,
-    selectedRole,
     queuedInvites,
     isPending,
     canAddInvite,
     onInputChange,
-    onRoleChange,
     onAddToQueue,
     onRemoveFromQueue,
     onSendInvites,
@@ -117,18 +111,8 @@ export function InviteCard(props: InviteCardProps) {
         </ul>
       ) : null}
 
-      <div className="grid grid-cols-[minmax(0,0.8fr)_minmax(0,1.2fr)] gap-2">
-        <RoleDropdown
-          value={selectedRole}
-          onChange={onRoleChange}
-          disabled={isPending}
-          isPending={false}
-          variant="outline"
-          size="lg"
-          className="min-w-0"
-          aria-label="Role for new invites"
-          data-testid="invite-role-select"
-        />
+      {/* Everyone invited can edit the task, so the form names no role. */}
+      <div className="flex">
         <Button
           type="button"
           size="lg"

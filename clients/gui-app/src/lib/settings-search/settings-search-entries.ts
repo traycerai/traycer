@@ -37,6 +37,7 @@ import { SHELL } from "@/components/settings/panels/shell-settings.definitions";
 import { USAGE } from "@/components/settings/panels/usage-settings.definitions";
 import { CREDITS } from "@/components/settings/environment/credits-page.definitions";
 import { SANDBOXES } from "@/components/settings/environment/sandboxes-page.definitions";
+import { STORAGE } from "@/components/settings/environment/storage-page.definitions";
 import { MEMBERS } from "@/components/settings/environment/members-page.definitions";
 import { WORKTREES } from "@/components/settings/panels/worktrees-settings.definitions";
 import { LAYOUT_LAUNCH_ENTRIES } from "@/components/layout-editor/layout-search.definitions";
@@ -71,6 +72,7 @@ export const SETTINGS_SEARCH_COLLECTIONS: ReadonlyArray<AnySettingsSectionCollec
     SECRETS,
     AGENT_DEFINITIONS,
     SANDBOXES,
+    STORAGE,
     MEMBERS,
     MACHINE_SETUP,
     DEVICES,

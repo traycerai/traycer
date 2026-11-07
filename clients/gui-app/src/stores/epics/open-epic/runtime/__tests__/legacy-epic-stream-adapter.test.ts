@@ -257,10 +257,10 @@ describe("createLegacyEpicStreamAdapter - decode into plane/event", () => {
     {
       name: "onPermissionChanged -> control plane, permission-changed",
       invoke: (callbacks: EpicStreamCallbacks) => {
-        callbacks.onPermissionChanged("viewer");
+        callbacks.onPermissionChanged("editor");
         return {
           plane: "control",
-          event: { kind: "permission-changed", role: "viewer" },
+          event: { kind: "permission-changed", role: "editor" },
         };
       },
     },

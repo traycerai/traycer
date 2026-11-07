@@ -323,7 +323,13 @@ export type AttachmentMentionNode = RecordValue<
   CommonRecordRegistry,
   "attachment-mention-node"
 >;
-export type PermissionRole = RecordValue<
+/**
+ * Every role the `permission-role` record decodes, the retired `viewer`
+ * among them. A decoder's type: `grantedRole`
+ * (`protocol/common/permission-role`) turns one of these into the access it
+ * gives, and `PermissionRole` is that narrower result.
+ */
+export type WirePermissionRole = RecordValue<
   CommonRecordRegistry,
   "permission-role"
 >;

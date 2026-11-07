@@ -255,6 +255,17 @@ export class WebAudioDimFilter {
     this.input = this.filter;
   }
 
+  /**
+   * Sends what leaves the filter to `node` too, which is what the volume and
+   * a chime's duck take in, until the answer is called.
+   */
+  tap(node: AudioNode): () => void {
+    this.filter.connect(node);
+    return () => {
+      this.filter.disconnect(node);
+    };
+  }
+
   /** A plan restates this every few seconds; only a change moves the filter. */
   setDimmed(dimmed: boolean): void {
     if (dimmed === this.dimmed) return;
