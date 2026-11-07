@@ -3,9 +3,18 @@ import type { SoundtrackView } from "./signals";
 import type { StemManifest } from "./stems";
 import type { VariableTrack } from "./variable-sound";
 
+export interface ComposedTrack {
+  readonly kind: "composed";
+  readonly name: string;
+  readonly title: string;
+  readonly recording: string;
+}
+
+export type SoundtrackTrack = VariableTrack | ComposedTrack;
+
 /** What can sound, and where. */
 export interface SoundtrackManifest {
-  readonly tracks: readonly VariableTrack[];
+  readonly tracks: readonly SoundtrackTrack[];
   /** By view, the names of the tracks it may play. */
   readonly views: Readonly<Record<SoundtrackView, readonly string[]>>;
   /** Where each track's samples are. */
