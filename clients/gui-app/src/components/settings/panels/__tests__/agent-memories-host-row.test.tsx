@@ -12,6 +12,12 @@ vi.mock("@/hooks/host/use-host-supports-method", () => ({
 vi.mock("@/hooks/host/use-addressable-host-id", () => ({
   useAddressableHostId: () => "host-local",
 }));
+vi.mock("@/hooks/chats/use-cloud-chat-queries", async (importOriginal) => ({
+  ...(await importOriginal<
+    typeof import("@/hooks/chats/use-cloud-chat-queries")
+  >()),
+  useCloudChatViewerId: () => "user-me",
+}));
 vi.mock("@/lib/analytics", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/lib/analytics")>()),
   trackSettingChanged: () => undefined,
@@ -37,6 +43,8 @@ import {
   resetTeamPageHarness,
   type TeamPageHarness,
 } from "@/components/settings/environment/__tests__/team-configuration-test-support";
+import { useEnvironmentStatusRead } from "@/hooks/environment/use-environment-reads";
+import { hostQueryKeys } from "@/lib/query-keys";
 import { useRereadHostReadsOnFocus } from "@/hooks/environment/use-reread-host-reads-on-focus";
 import { AgentMemoriesSettingsPanel } from "@/components/settings/panels/agent-memories-settings-panel";
 import { AGENT_MEMORY_CONFIRM_BOUND_MS } from "@/components/settings/panels/agent-memories-settings-panel";
@@ -143,6 +151,16 @@ function handlers(): MockHandlerMap<HostRpcRegistry> {
   };
 }
 
+function PersonalRevision() {
+  const client = requireTeamHostClient();
+  const status = useEnvironmentStatusRead(
+    client,
+    client.getActiveHostId(),
+    true,
+  );
+  return <p data-testid="personal-revision">{status.data?.receivedRevision}</p>;
+}
+
 function mount(): TeamPageHarness {
   const harness = mountTeamPage({ kind: "host" }, handlers());
   render(<AgentMemoriesSettingsPanel />, { wrapper: harness.Wrapper });
@@ -184,6 +202,89 @@ afterEach(() => {
 });
 
 describe("Agent memories ▸ the host row's write", () => {
+  it("refreshes the Personal switch when a revision changes elsewhere", async () => {
+    script.statuses = [
+      environmentStatusFixture({
+        principal: { kind: "personal" },
+        receivedRevision: 5,
+        appliedRevision: 5,
+      }),
+    ];
+    const harness = mountTeamPage(
+      { kind: "host" },
+      {
+        ...handlers(),
+        "environment.list": () => ({
+          environments: [
+            {
+              environmentId: ENV,
+              ownerKind: "user",
+              ownerId: "user-me",
+              roomId: "room-personal",
+              label: "Personal",
+              effectiveRole: "owner",
+              kind: "personal",
+              hostCount: 1,
+              providerHandle: null,
+            },
+          ],
+        }),
+      },
+    );
+    harness.queryClient.setDefaultOptions({
+      queries: {
+        retry: false,
+        staleTime: 60_000,
+        gcTime: 300_000,
+      },
+    });
+    render(
+      <>
+        <PersonalRevision />
+        <AgentMemoriesSettingsPanel />
+      </>,
+      { wrapper: harness.Wrapper },
+    );
+    await waitFor(() => {
+      expect(screen.getByTestId("personal-revision").textContent).toBe("5");
+      expect(
+        screen
+          .getByRole("switch", { name: "Use Traycer memories for agents" })
+          .getAttribute("aria-checked"),
+      ).toBe("false");
+      expect(harness.paramsOf("environment.list")).toHaveLength(1);
+    });
+    script.reads = [read(true, 6)];
+    script.statuses = [
+      environmentStatusFixture({
+        principal: { kind: "personal" },
+        receivedRevision: 6,
+        appliedRevision: 6,
+      }),
+    ];
+    await act(async () => {
+      await harness.queryClient.invalidateQueries({
+        queryKey: hostQueryKeys.methodScope(
+          requireTeamHostClient().getActiveHostId(),
+          "environment.status",
+        ),
+      });
+    });
+    await waitFor(() =>
+      expect(screen.getByTestId("personal-revision").textContent).toBe("6"),
+    );
+    await waitFor(() =>
+      expect(
+        screen
+          .getByRole("switch", {
+            name: "Use Traycer memories for agents",
+          })
+          .getAttribute("aria-checked"),
+      ).toBe("true"),
+    );
+    expect(harness.paramsOf("config.agentMemories.set")).toHaveLength(0);
+  });
+
   it.each(["applied", "saved", "queued"] as const)(
     "keeps the confirmed %s read when Settings reopens inside cache freshness",
     async (state) => {
