@@ -27,11 +27,10 @@ const OPUS_BITS_PER_SECOND = 128_000;
 const OPUS_TIMESLICE_MS = 1000;
 /**
  * Measured, not derived: the recorder's file starts this long before the clock
- * time read at its `start` event. Chromium gave the same 70.5 ms headless and
- * in 7 of 8 recordings on a macOS desktop; the eighth was one 512-frame device
- * callback (10.7 ms) further in.
+ * time read as it is started. Chromium gave 6.5 ms headless, with or without
+ * the page stalled after the start, and 6.48 to 6.50 ms on a macOS desktop.
  */
-const OPUS_AUDIO_OFFSET_SECONDS = 0.0705;
+const OPUS_AUDIO_OFFSET_SECONDS = 0.0065;
 /**
  * How long `stop` waits for the last of the audio before letting go anyway:
  * a context closed or suspended under it would otherwise hold the recording
@@ -83,7 +82,7 @@ function withGrace<T>(promise: Promise<T>, value: T, ms: number): Promise<T> {
 
 /**
  * Opus in WebM at 128 kbps, a slice a second. Its first frame is taken as the
- * clock time `MediaRecorder` reports starting at.
+ * clock time as `MediaRecorder` is started.
  */
 class OpusCapture implements MixCapture {
   readonly sampleRate: number;
@@ -110,13 +109,6 @@ class OpusCapture implements MixCapture {
 
   start(handlers: MixCaptureHandlers): void {
     const { recorder } = this;
-    recorder.addEventListener(
-      "start",
-      () => {
-        handlers.onFirstFrame(this.context.currentTime);
-      },
-      { once: true },
-    );
     recorder.addEventListener("dataavailable", (event) => {
       const slice = event.data;
       this.delivered = this.delivered.then(async () => {
@@ -142,7 +134,11 @@ class OpusCapture implements MixCapture {
     } catch (error) {
       this.release();
       handlers.onError(error);
+      return;
     }
+    // Read in the same task as the start, not at the `start` event: the event
+    // waits behind whatever else the page is doing, and the file does not.
+    handlers.onFirstFrame(this.context.currentTime);
   }
 
   stop(): Promise<CaptureSummary> {

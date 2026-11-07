@@ -1,5 +1,6 @@
 import { ipcRenderer } from "electron";
 import {
+  RunnerHostEvent,
   RunnerHostInvoke,
   RunnerHostSync,
 } from "../ipc-contracts/ipc-channels";
@@ -8,6 +9,7 @@ import type {
   SoundtrackRecordingOpenResult,
   SoundtrackRecordingWriteResult,
 } from "../ipc-contracts/soundtrack-recording-types";
+import { subscribe } from "./subscribe";
 import { readSyncBoolean } from "./sync-bootstrap";
 
 /**
@@ -42,5 +44,16 @@ export function buildSoundtrackRecordingBridge(): SoundtrackRecordingBridge | nu
         RunnerHostInvoke.revealSoundtrackRecording,
         recordingId,
       ) as Promise<boolean>,
+    onFinishRequested: (listener) => {
+      const subscription = subscribe<null>(
+        RunnerHostEvent.soundtrackRecordingFinish,
+        () => {
+          listener();
+        },
+      );
+      return () => {
+        subscription.dispose();
+      };
+    },
   };
 }

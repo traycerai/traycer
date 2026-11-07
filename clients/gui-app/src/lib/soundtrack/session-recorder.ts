@@ -33,6 +33,8 @@ export type RecordingStopReason =
   | "music-off"
   /** The page going away, with no time to wait for the last of the audio. */
   | "unload"
+  /** The app quitting, which waits a moment for the files to finish. */
+  | "quit"
   /** The disk would not take more. */
   | "write-failed"
   /** The capture stopped, or the files could not be reached. */
@@ -69,6 +71,9 @@ interface SessionRecorderOptions {
 }
 
 type RecorderState = "opening" | "recording" | "stopping" | "stopped";
+
+/** A write or a close that did not land, which the outcome says over the reason. */
+type IoFailure = "write-failed" | "failed";
 
 interface TrackSetSummary {
   readonly tracks: readonly string[];
@@ -131,6 +136,8 @@ async function describeTrackSet(
 export class SessionRecorder {
   private readonly options: SessionRecorderOptions;
   private state: RecorderState = "opening";
+  /** Once `open` answers; the files can be closed from then on. */
+  private recordingId: string | null = null;
   private opened: OpenedRecording | null = null;
   /** The audio clock time of the first frame; null until it is known. */
   private firstFrameAt: number | null = null;
@@ -144,6 +151,17 @@ export class SessionRecorder {
   /** A stop asked for while the files were still opening. */
   private stopWhenOpen: RecordingStopReason | null = null;
   private trackSet: TrackSetSummary | null = null;
+  private stopReason: RecordingStopReason | null = null;
+  private stopElapsedSeconds = 0;
+  /** The first write or capture that failed, kept through the stop. */
+  private failure: IoFailure | null = null;
+  /** The page is going: nothing more waits, and the close goes now. */
+  private unloading = false;
+  private endSent = false;
+  private closeAsked = false;
+  /** The one close sent, answering what failed in it, or null. */
+  private closing: Promise<IoFailure | null> | null = null;
+  private unsubscribeFinish: (() => void) | null = null;
 
   constructor(options: SessionRecorderOptions) {
     this.options = options;
@@ -151,39 +169,47 @@ export class SessionRecorder {
 
   async start(): Promise<void> {
     const { channel, ports, quality, manifest } = this.options;
+    // From the first wait on: a page going away or the app quitting while the
+    // files open still closes what did open.
+    window.addEventListener("pagehide", this.onPageHide);
+    this.unsubscribeFinish = channel.onFinishRequested(this.onFinishRequested);
     let opened: RecordingOpenResult;
     try {
       // Ahead of the files, so that the header can go the moment time starts.
       this.trackSet = await describeTrackSet(manifest);
       opened = await channel.open(quality);
     } catch (error) {
-      this.fail("could not open its files", error, null);
+      this.fail("could not open its files", error);
       return;
     }
     if (opened.kind !== "opened") {
-      this.fail("could not open its files", null, null);
+      this.fail("could not open its files", null);
       return;
     }
     const { recordingId, name } = opened;
+    this.recordingId = recordingId;
+    if (this.stopAsked() !== null) {
+      this.abandon();
+      return;
+    }
     let capture: MixCapture;
     try {
       capture = await ports.captureMix(quality);
     } catch (error) {
-      this.fail("could not capture the mix", error, recordingId);
+      this.fail("could not capture the mix", error);
       return;
     }
     this.opened = { recordingId, name, capture };
-    if (this.stopWhenOpen !== null) {
-      this.state = "recording";
-      this.stop(this.stopWhenOpen);
+    this.state = "recording";
+    const asked = this.stopAsked();
+    if (asked !== null) {
+      this.stop(asked);
       return;
     }
-    this.state = "recording";
     if (quality === "lossless") {
       this.send("audio", wavHeader(capture.sampleRate, CHANNELS, null), 0);
     }
     ports.log.listen(this.onEvent);
-    window.addEventListener("pagehide", this.onPageHide);
     capture.start({
       onFirstFrame: (clockSeconds) => {
         this.writeHeader(clockSeconds);
@@ -196,7 +222,7 @@ export class SessionRecorder {
         appLogger.warn("[soundtrack] a recording's capture stopped", {
           error: describeLogError(error),
         });
-        this.stop("failed");
+        this.ioFailed("failed");
       },
     });
     // A capture that could not start has stopped the recording already.
@@ -205,30 +231,47 @@ export class SessionRecorder {
     this.timer = window.setTimeout(this.tick, TICK_MS);
   }
 
-  /** Finishes both files once; later calls, and a stop already under way, do nothing. */
+  /**
+   * Finishes both files once; later calls, and a stop already under way, do
+   * nothing, except that a page going away cuts short the wait for the last
+   * of the audio and the writes.
+   */
   stop(reason: RecordingStopReason): void {
-    if (this.state === "stopping" || this.state === "stopped") return;
+    if (this.state === "stopped") return;
+    if (this.state === "stopping") {
+      if (reason === "unload") this.finishNow();
+      return;
+    }
     if (this.state === "opening") {
       this.stopWhenOpen ??= reason;
+      // The page can be gone before the capture answers; what is known to be
+      // open is closed now.
+      if (reason === "unload" && this.recordingId !== null) {
+        void this.closeFiles(null);
+      }
       return;
     }
     this.state = "stopping";
+    this.stopReason = reason;
+    this.stopElapsedSeconds = this.elapsed();
     if (this.timer !== null) window.clearTimeout(this.timer);
     this.timer = null;
-    window.removeEventListener("pagehide", this.onPageHide);
     this.options.ports.log.unlisten(this.onEvent);
-    const elapsedSeconds = this.elapsed();
-    const opened = this.opened;
+    const { opened } = this;
     if (opened === null) return;
     const stopping = opened.capture.stop();
-    // The page is going: what has arrived goes now, behind no wait.
     if (reason === "unload") {
-      this.finish(opened, elapsedSeconds, reason, null);
+      this.finishNow();
       return;
     }
     void stopping.then((summary) => {
-      this.finish(opened, elapsedSeconds, reason, summary);
+      this.finish(summary);
     });
+  }
+
+  /** A stop asked for while the files opened, which any wait there can bring. */
+  private stopAsked(): RecordingStopReason | null {
+    return this.stopWhenOpen;
   }
 
   private stopped(): boolean {
@@ -250,6 +293,10 @@ export class SessionRecorder {
 
   private readonly onPageHide = (): void => {
     this.stop("unload");
+  };
+
+  private readonly onFinishRequested = (): void => {
+    this.stop("quit");
   };
 
   private readonly tick = (): void => {
@@ -348,7 +395,7 @@ export class SessionRecorder {
           appLogger.warn("[soundtrack] a recording's write did not arrive", {
             error: describeLogError(error),
           });
-          this.stop("failed");
+          this.ioFailed("failed");
         },
       );
     this.writes.add(write);
@@ -361,64 +408,78 @@ export class SessionRecorder {
     appLogger.warn("[soundtrack] a recording's write was refused", {
       result: result.kind,
     });
-    this.stop(result.kind === "write-failed" ? "write-failed" : "failed");
+    this.ioFailed(result.kind === "write-failed" ? "write-failed" : "failed");
+  }
+
+  /** Stops the recording, and keeps the failure for the outcome if it is stopping already. */
+  private ioFailed(failure: IoFailure): void {
+    this.failure ??= failure;
+    this.stop(failure);
+  }
+
+  /** The page is going: what has arrived, the end line and the close go now. */
+  private finishNow(): void {
+    this.unloading = true;
+    this.finish(null);
   }
 
   /**
    * The last of the audio and the log, an end line saying why, and the WAV's
    * sizes over its placeholder, behind every write still on its way.
    */
-  private finish(
-    opened: OpenedRecording,
-    elapsedSeconds: number,
-    reason: RecordingStopReason,
-    summary: CaptureSummary | null,
-  ): void {
-    this.flush();
-    if (this.firstFrameAt !== null) {
-      this.sendLines([
-        this.logLine({
-          type: "recording-end",
-          t: this.options.ports.output.currentTime(),
-          reason,
-          frames: summary?.frames ?? null,
-          droppedFrames: summary?.droppedFrames ?? null,
-        }),
-      ]);
+  private finish(summary: CaptureSummary | null): void {
+    if (!this.endSent) {
+      this.endSent = true;
+      this.flush();
+      if (this.firstFrameAt !== null) {
+        this.sendLines([
+          this.logLine({
+            type: "recording-end",
+            t: this.options.ports.output.currentTime(),
+            reason: this.stopReason,
+            frames: summary?.frames ?? null,
+            droppedFrames: summary?.droppedFrames ?? null,
+          }),
+        ]);
+      }
     }
-    if (reason === "unload") {
+    if (this.unloading) {
       // Nothing waits on a page that is going: the writes are on their way in
       // order, and the close goes behind them.
-      this.close(opened, elapsedSeconds, reason);
+      this.close();
       return;
     }
     void Promise.allSettled([...this.writes]).then(() => {
-      this.close(opened, elapsedSeconds, reason);
+      this.close();
     });
   }
 
-  private close(
-    opened: OpenedRecording,
-    elapsedSeconds: number,
-    reason: RecordingStopReason,
-  ): void {
-    this.state = "stopped";
-    const { channel, quality, onStopped } = this.options;
+  private close(): void {
+    const { opened } = this;
+    if (this.closeAsked || opened === null) return;
+    this.closeAsked = true;
+    const { quality, onStopped } = this.options;
     // A page going away does not wait to hear back: what it sent is ahead of
     // the close in the same queue, and almost always lands.
-    const dataBytes =
-      reason === "unload" ? this.sentDataBytes : this.writtenDataBytes;
+    const dataBytes = this.unloading
+      ? this.sentDataBytes
+      : this.writtenDataBytes;
     const header =
       quality === "lossless"
         ? wavHeader(opened.capture.sampleRate, CHANNELS, dataBytes)
         : null;
-    const report = (closedReason: RecordingStopReason): void => {
+    const reason = this.stopReason ?? "failed";
+    void this.closeFiles(header).then((closeFailure) => {
+      this.state = "stopped";
+      // A write that failed while stopping, or a close that did not land,
+      // says more about the files than why the recording stopped.
+      const closedReason = this.failure ?? closeFailure ?? reason;
       if (this.firstFrameAt !== null) {
         onStopped({
           kind: "saved",
           recordingId: opened.recordingId,
           name: opened.name,
-          durationSeconds: elapsedSeconds,
+          durationSeconds: this.stopElapsedSeconds,
           reason: closedReason,
         });
         return;
@@ -426,38 +487,63 @@ export class SessionRecorder {
       const failed =
         closedReason === "failed" || closedReason === "write-failed";
       onStopped({ kind: failed ? "failed" : "empty" });
-    };
-    void channel.close(opened.recordingId, header).then(
+    });
+  }
+
+  /**
+   * Closes both files, once: a later call answers the first close. Nothing is
+   * left for a page going away or a quit to do after it.
+   */
+  private closeFiles(header: Uint8Array | null): Promise<IoFailure | null> {
+    if (this.closing !== null) return this.closing;
+    const { recordingId } = this;
+    this.release();
+    if (recordingId === null) {
+      this.closing = Promise.resolve("failed");
+      return this.closing;
+    }
+    this.closing = this.options.channel.close(recordingId, header).then(
       (result) => {
-        report(
-          result.kind === "write-failed" && reason !== "failed"
-            ? "write-failed"
-            : reason,
-        );
+        if (result.kind === "ok") return null;
+        appLogger.warn("[soundtrack] a recording's close was refused", {
+          result: result.kind,
+        });
+        return result.kind === "write-failed" ? "write-failed" : "failed";
       },
       (error: unknown) => {
         appLogger.warn("[soundtrack] a recording's files did not close", {
           error: describeLogError(error),
         });
-        report(reason);
+        return "failed";
       },
     );
+    return this.closing;
+  }
+
+  private release(): void {
+    window.removeEventListener("pagehide", this.onPageHide);
+    this.unsubscribeFinish?.();
+    this.unsubscribeFinish = null;
+  }
+
+  /** Stopped before the capture began: what opened is closed, and nothing kept. */
+  private abandon(): void {
+    void this.closeFiles(null).then(() => {
+      this.state = "stopped";
+      this.options.onStopped({ kind: "empty" });
+    });
   }
 
   /** A start that got no further: what did open is closed, and nothing kept. */
-  private fail(what: string, error: unknown, recordingId: string | null): void {
+  private fail(what: string, error: unknown): void {
     appLogger.warn(`[soundtrack] a recording ${what}`, {
       error: error === null ? null : describeLogError(error),
     });
     this.state = "stopped";
-    if (recordingId !== null) {
-      void this.options.channel
-        .close(recordingId, null)
-        .catch((closeError: unknown) => {
-          appLogger.warn("[soundtrack] a recording's files did not close", {
-            error: describeLogError(closeError),
-          });
-        });
+    if (this.recordingId === null) {
+      this.release();
+    } else {
+      void this.closeFiles(null);
     }
     this.options.onStopped({ kind: "failed" });
   }

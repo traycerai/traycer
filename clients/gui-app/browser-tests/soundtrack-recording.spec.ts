@@ -23,6 +23,7 @@ interface RecordRequest {
     readonly everyMs: number;
     readonly forMs: number;
   } | null;
+  readonly stallAfterStartMs: number | null;
 }
 
 interface Recorded {
@@ -45,6 +46,8 @@ const LOSSLESS_ONSET_TOLERANCE_MS = 0.1;
 const COMPRESSED_ONSET_SPREAD_MS = 2;
 const COMPRESSED_RESIDUAL_MIN_MS = -0.5;
 const COMPRESSED_RESIDUAL_MAX_MS = 11;
+// Far past the residual bound, so a time origin taken after the stall fails.
+const START_STALL_MS = 250;
 
 test.beforeEach(async ({ page }) => {
   await page.goto(fixture("soundtrack-recording"));
@@ -60,7 +63,7 @@ function record(page: Page, request: RecordRequest): Promise<Recorded> {
 // Where log time 0 falls in the audio file, which the header says.
 const AUDIO_OFFSET_SECONDS: Record<Quality, number> = {
   lossless: 0,
-  compressed: 0.0705,
+  compressed: 0.0065,
 };
 
 function expectSavedAndDecoded(recorded: Recorded, quality: Quality): void {
@@ -104,6 +107,7 @@ test("a lossless recording decodes, matches its length in frames, and lines up w
     quality: "lossless",
     seconds: RECORD_SECONDS,
     busy: null,
+    stallAfterStartMs: null,
   });
 
   expectSavedAndDecoded(recorded, "lossless");
@@ -117,22 +121,14 @@ test("a lossless recording keeps its frames and its timing while the page is bus
     quality: "lossless",
     seconds: RECORD_SECONDS,
     busy: { everyMs: 300, forMs: 250 },
+    stallAfterStartMs: null,
   });
 
   expectSavedAndDecoded(recorded, "lossless");
   expectLosslessTiming(recorded);
 });
 
-test("a compressed recording decodes and its tones sit at one steady offset from the log", async ({
-  page,
-}) => {
-  const recorded = await record(page, {
-    quality: "compressed",
-    seconds: RECORD_SECONDS,
-    busy: null,
-  });
-
-  expectSavedAndDecoded(recorded, "compressed");
+function expectCompressedTiming(recorded: Recorded): void {
   const residuals = residualsMs(recorded, "compressed");
   // Between the offset the header gives and one more device callback of it.
   for (const residual of residuals) {
@@ -142,4 +138,32 @@ test("a compressed recording decodes and its tones sit at one steady offset from
   expect(Math.max(...residuals) - Math.min(...residuals)).toBeLessThan(
     COMPRESSED_ONSET_SPREAD_MS,
   );
+}
+
+test("a compressed recording decodes and its tones sit at one steady offset from the log", async ({
+  page,
+}) => {
+  const recorded = await record(page, {
+    quality: "compressed",
+    seconds: RECORD_SECONDS,
+    busy: null,
+    stallAfterStartMs: null,
+  });
+
+  expectSavedAndDecoded(recorded, "compressed");
+  expectCompressedTiming(recorded);
+});
+
+test("a compressed recording keeps that offset when the page stalls as the recorder starts", async ({
+  page,
+}) => {
+  const recorded = await record(page, {
+    quality: "compressed",
+    seconds: RECORD_SECONDS,
+    busy: null,
+    stallAfterStartMs: START_STALL_MS,
+  });
+
+  expectSavedAndDecoded(recorded, "compressed");
+  expectCompressedTiming(recorded);
 });

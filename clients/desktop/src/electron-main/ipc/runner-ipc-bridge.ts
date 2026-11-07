@@ -121,7 +121,10 @@ import {
 import type { LocalHostCapability } from "../../ipc-contracts/host-lifecycle-types";
 import { registerPowerIpc } from "./power-ipc";
 import { registerSoundtrackIpc } from "./soundtrack-ipc";
-import { registerSoundtrackRecordingIpc } from "./soundtrack-recording-ipc";
+import {
+  registerSoundtrackRecordingIpc,
+  type FinishSoundtrackRecordings,
+} from "./soundtrack-recording-ipc";
 import { SessionRecordings } from "../soundtrack/session-recordings";
 import { registerAppUpdateIpc } from "./app-update-ipc";
 import { registerGlobalShortcutsIpc } from "./global-shortcuts-ipc";
@@ -700,6 +703,7 @@ export class RunnerIpcBridge {
   private browserViewManager: BrowserViewManager | null = null;
   private browserSessions: BrowserSessionsRegistry | null = null;
   private browserPreparation: BrowserDesktopControl | null = null;
+  private finishRecordings: FinishSoundtrackRecordings | null = null;
 
   readonly sandboxArtifacts: SandboxArtifactServer;
 
@@ -792,7 +796,7 @@ export class RunnerIpcBridge {
       now: Date.now,
       warn: (message) => log.warn(message),
     });
-    registerSoundtrackRecordingIpc(
+    this.finishRecordings = registerSoundtrackRecordingIpc(
       this,
       canRecordSoundtrack
         ? new SessionRecordings({
@@ -1057,6 +1061,14 @@ export class RunnerIpcBridge {
    */
   async captureFinalBrowserState(): Promise<void> {
     await this.browserSessions?.captureFinalPrimaryProfiles(null);
+  }
+
+  /**
+   * Finishes every recording of the music before the quit takes its channels
+   * down, waiting no longer than `deadlineMs`.
+   */
+  finishSoundtrackRecordings(deadlineMs: number): Promise<void> {
+    return this.finishRecordings?.(deadlineMs) ?? Promise.resolve();
   }
 
   notifySystemResumed(): void {

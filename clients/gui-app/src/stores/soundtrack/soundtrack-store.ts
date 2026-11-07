@@ -101,6 +101,8 @@ function recordingAfter(outcome: RecordingOutcome): SoundtrackRecording {
 interface SoundtrackState {
   /** Whether a session is open; the person's wish is `soundtrackEnabled`. */
   readonly enabled: boolean;
+  /** Turned on here while another window's session plays, until it ends. */
+  readonly waitingForTurn: boolean;
   readonly directorId: MixDirectorId;
   readonly volume: number;
   /** The view whose track is in front; null while off, or it has no track. */
@@ -219,6 +221,7 @@ export function createSoundtrackStore(
     };
     return {
       enabled: false,
+      waitingForTurn: false,
       recording: { kind: "off" },
       directorId: DEFAULT_MIX_DIRECTOR,
       volume: MIX_TUNING.volume.initial,
@@ -233,13 +236,17 @@ export function createSoundtrackStore(
           start();
           return;
         }
+        set({ waitingForTurn: true });
         void taken.held.then(() => {
-          if (lock === taken) start();
+          if (lock !== taken) return;
+          set({ waitingForTurn: false });
+          start();
         });
       },
       disable: () => {
         reading = null;
         releaseLock();
+        if (get().waitingForTurn) set({ waitingForTurn: false });
         if (session === null) return;
         // Ahead of the end, so that its files finish while the context is open.
         stopRecorder("music-off");

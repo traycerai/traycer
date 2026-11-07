@@ -1,10 +1,14 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { MIX_DIRECTORS, DEFAULT_MIX_DIRECTOR } from "../directors";
+import {
+  MIX_DIRECTORS,
+  DEFAULT_MIX_DIRECTOR,
+  type MixDirector,
+} from "../directors";
 import type { SoundtrackManifest } from "../manifest";
 import { SoundtrackSession, type SoundtrackPorts } from "../session";
 import { SoundtrackLogRelay, type SoundtrackLogEvent } from "../session-log";
 import type { MixSignals } from "../signals";
-import type { VariableTrack } from "../variable-sound";
+import type { Range, VariableTrack } from "../variable-sound";
 import { captureNothing, FakeOutput, FakeStems, mulberry32 } from "./fakes";
 
 const TRACK: VariableTrack = {
@@ -150,5 +154,137 @@ describe("SoundtrackSession's decision log", () => {
       sounding.type === "sounding" ? sounding.player?.samples.length : 0,
     ).toBeGreaterThan(0);
     session.end();
+  });
+});
+
+// Two layers of four on in the first state, and a phase at 7 s that moves the
+// run to a state of one to four, which the rules director then narrows by what
+// the signals say. The director's own look comes at 5 s and 10 s, so 7.6 s is
+// after the phase and before the next.
+const PHASED_TRACK: VariableTrack = {
+  ...TRACK,
+  name: "phased",
+  layers: ["A", "B", "C", "D"].map((name) => ({
+    name,
+    variants: 1,
+    role: null,
+    sublayers: 1,
+    sublayerStartingOffset: null,
+    pan: null,
+  })),
+  states: (
+    [
+      { name: "calm", numberOfEnabledLayers: [2, 2] },
+      { name: "busy", numberOfEnabledLayers: [1, 4] },
+    ] satisfies readonly { name: string; numberOfEnabledLayers: Range }[]
+  ).map((state) => ({
+    ...state,
+    layersProperties: ["A", "B", "C", "D"].map(() => ({
+      enabled: null,
+      startPause: [0, 0],
+      sequenceLength: [1, 1],
+      pauseBetweenSamples: [0, 0],
+      pauseBetweenRepetitions: [4, 4],
+      playsPerRun: null,
+    })),
+  })),
+  phases: [{ afterSeconds: [7, 7], state: "busy", fadeSeconds: 1 }],
+};
+
+interface PhasedRun {
+  readonly session: SoundtrackSession;
+  readonly output: FakeOutput;
+  readonly events: SoundtrackLogEvent[];
+  /** Times the director was asked for a plan. */
+  readonly plans: { count: number };
+  /** Times the session drew a random number. */
+  readonly draws: { count: number };
+}
+
+/** A rules-director session on the phased track, its log listening or not. */
+function phasedRun(listening: boolean): PhasedRun {
+  const relay = new SoundtrackLogRelay();
+  const events: SoundtrackLogEvent[] = [];
+  if (listening) relay.listen((event) => events.push(event));
+  const output = new FakeOutput();
+  const ports: SoundtrackPorts = {
+    output,
+    stems: new FakeStems(2.2),
+    setDimmed: () => undefined,
+    setVolume: () => undefined,
+    duck: () => undefined,
+    close: () => undefined,
+    log: relay,
+    captureMix: captureNothing,
+  };
+  const plans = { count: 0 };
+  const draws = { count: 0 };
+  const drawn = mulberry32(2);
+  const director: MixDirector = {
+    plan: (signals, context) => {
+      plans.count += 1;
+      return MIX_DIRECTORS.rules.plan(signals, context);
+    },
+  };
+  const session = new SoundtrackSession({
+    manifest: {
+      tracks: [PHASED_TRACK],
+      views: { home: ["phased"], task: [], bot: [], settings: [] },
+      stems: { tracks: [] },
+    },
+    ports,
+    random: () => {
+      draws.count += 1;
+      return drawn();
+    },
+    director,
+    resumePositions: {},
+    onSounding: () => undefined,
+  });
+  session.setSignals({
+    view: "home",
+    working: 0,
+    blocking: 0,
+    failure: 0,
+    done: 0,
+  });
+  return { session, output, events, plans, draws };
+}
+
+describe("SoundtrackSession.logNow", () => {
+  it("only reads: across a phase it asks the director for nothing, draws nothing, and leaves what plays as it would have been", async () => {
+    const recorded = phasedRun(true);
+    const plain = phasedRun(false);
+
+    await vi.advanceTimersByTimeAsync(7600);
+    const plansBefore = recorded.plans.count;
+    const drawsBefore = recorded.draws.count;
+    recorded.session.logNow();
+    expect(recorded.plans.count).toBe(plansBefore);
+    expect(recorded.draws.count).toBe(drawsBefore);
+    await vi.advanceTimersByTimeAsync(12_000);
+
+    expect(recorded.output.calls).toEqual(plain.output.calls);
+    expect(recorded.draws.count).toBe(plain.draws.count);
+    recorded.session.end();
+    plain.session.end();
+  });
+
+  it("logs the plan last applied, as it was, after signals and what is sounding", async () => {
+    const run = phasedRun(true);
+    await vi.advanceTimersByTimeAsync(7600);
+    const applied = run.events.filter((event) => event.type === "plan").at(-1);
+    run.events.length = 0;
+
+    run.session.logNow();
+
+    expect(run.events.map((event) => event.type)).toEqual([
+      "signals",
+      "sounding",
+      "plan",
+    ]);
+    expect(applied).toBeDefined();
+    expect(run.events[2]).toEqual({ ...applied, t: run.events[2].t });
+    run.session.end();
   });
 });

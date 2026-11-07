@@ -98,4 +98,10 @@ export interface RecordingSaveChannel {
   ): Promise<RecordingWriteResult>;
   /** Shows the recording's files in the system's file manager. */
   reveal(recordingId: string): Promise<boolean>;
+  /**
+   * Calls `listener` when the app is about to quit and asks a recording to
+   * finish while the writer can still take its last writes. Answers how to
+   * stop listening.
+   */
+  onFinishRequested(listener: () => void): () => void;
 }

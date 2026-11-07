@@ -1,10 +1,12 @@
 import type { IpcMainEvent, IpcMainInvokeEvent } from "electron";
 import { EventEmitter } from "node:events";
-import { mkdtemp, readdir, rm } from "node:fs/promises";
+import { mkdtemp, readdir, readFile, rm } from "node:fs/promises";
+import type * as FsPromises from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
+  RunnerHostEvent,
   RunnerHostInvoke,
   RunnerHostSync,
 } from "../../../ipc-contracts/ipc-channels";
@@ -12,9 +14,27 @@ import { SessionRecordings } from "../../soundtrack/session-recordings";
 import type { RunnerIpcBridge } from "../runner-ipc-bridge";
 import { registerSoundtrackRecordingIpc } from "../soundtrack-recording-ipc";
 
+// `openGate`: every file open waits for it, as an open still on its way does.
+const disk = vi.hoisted(() => ({ openGate: null as Promise<void> | null }));
+
+vi.mock("node:fs/promises", async (importOriginal) => {
+  const actual = await importOriginal<typeof FsPromises>();
+  return {
+    ...actual,
+    open: async (...args: Parameters<typeof actual.open>) => {
+      await disk.openGate;
+      return actual.open(...args);
+    },
+  };
+});
+
 type InvokeHandler = (event: IpcMainInvokeEvent, ...args: unknown[]) => unknown;
 
-/** A window's contents: what the channels read of the sender, and its end. */
+/**
+ * A window's contents: what the channels read of the sender, and its end. An
+ * event main sends it is emitted as `sent`, so it carries no member a real
+ * window's contents lacks.
+ */
 class FakeWindow extends EventEmitter {
   readonly id: number;
 
@@ -22,6 +42,23 @@ class FakeWindow extends EventEmitter {
     super();
     this.id = id;
   }
+
+  send(channel: string): void {
+    this.emit("sent", channel);
+  }
+
+  isDestroyed(): boolean {
+    return false;
+  }
+}
+
+/** The channels main sends `window` an event on from now. */
+function sentTo(window: FakeWindow): string[] {
+  const sent: string[] = [];
+  window.on("sent", (channel: string) => {
+    sent.push(channel);
+  });
+  return sent;
 }
 
 let folder: string;
@@ -33,9 +70,11 @@ beforeEach(async () => {
   root = await mkdtemp(join(tmpdir(), "traycer-recording-ipc-"));
   folder = join(root, "soundtrack-sessions");
   stores = [];
+  disk.openGate = null;
 });
 
 afterEach(async () => {
+  vi.useRealTimers();
   await Promise.all(stores.map((store) => store.closeAll()));
   await rm(root, { recursive: true, force: true });
 });
@@ -72,7 +111,7 @@ function register(store: SessionRecordings | null) {
       syncs.set(channel, () => compute({} as IpcMainEvent));
     },
   };
-  registerSoundtrackRecordingIpc(bridge, store);
+  const finish = registerSoundtrackRecordingIpc(bridge, store);
   const call = (
     channel: string,
     window: FakeWindow,
@@ -83,6 +122,10 @@ function register(store: SessionRecordings | null) {
     return handler({ sender: window } as IpcMainInvokeEvent, ...args);
   };
   return {
+    finish: (deadlineMs: number) => {
+      if (finish === null) throw new Error("Nothing records");
+      return finish(deadlineMs);
+    },
     flag: () => syncs.get(RunnerHostSync.soundtrackRecordingAvailable)?.(),
     channels: [...invokes.keys()].toSorted(),
     disposeFns,
@@ -162,6 +205,7 @@ describe("registerSoundtrackRecordingIpc", () => {
       const staying = new FakeWindow(2);
       await ipc.open(gone, { quality: "compressed" });
       await ipc.open(staying, { quality: "compressed" });
+      await ipc.append(gone, "rec-1", "audio", new Uint8Array([1]));
 
       gone.emit(event);
 
@@ -186,5 +230,101 @@ describe("registerSoundtrackRecordingIpc", () => {
     await expect(
       ipc.append(window, "rec-1", "audio", new Uint8Array([1])),
     ).resolves.toEqual({ kind: "refused" });
+  });
+});
+
+const FINISHED_HEADER = new Uint8Array(44).fill(7);
+
+describe("registerSoundtrackRecordingIpc: finishing at quit", () => {
+  it("asks only the windows that record to finish, and resolves once their close has landed", async () => {
+    const ipc = register(recordings());
+    const recording = new FakeWindow(1);
+    const idle = new FakeWindow(2);
+    await ipc.open(idle, { quality: "compressed" });
+    await ipc.append(idle, "rec-1", "audio", new Uint8Array(1));
+    await ipc.close(idle, "rec-1", null);
+    await ipc.open(recording, { quality: "lossless" });
+    await ipc.append(recording, "rec-2", "audio", new Uint8Array(44).fill(1));
+    const sentToRecording = sentTo(recording);
+    const sentToIdle = sentTo(idle);
+    // As a renderer does on hearing it: flush, then close with the sizes.
+    recording.on("sent", () => {
+      void ipc.close(recording, "rec-2", FINISHED_HEADER);
+    });
+
+    await ipc.finish(5000);
+
+    expect(sentToRecording).toEqual([
+      RunnerHostEvent.soundtrackRecordingFinish,
+    ]);
+    expect(sentToIdle).toEqual([]);
+    const wav = await readFile(join(folder, "session-2026-11-06-1722-2.wav"));
+    expect(Array.from(wav)).toEqual(Array(44).fill(7));
+  });
+
+  it("closes what a renderer never closed once the deadline passes", async () => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    const ipc = register(recordings());
+    const silent = new FakeWindow(1);
+    await ipc.open(silent, { quality: "compressed" });
+    await ipc.append(silent, "rec-1", "audio", new Uint8Array(1));
+    const sentToSilent = sentTo(silent);
+
+    const finishing = ipc.finish(5000);
+    await vi.advanceTimersByTimeAsync(5000);
+    await finishing;
+
+    expect(sentToSilent).toEqual([RunnerHostEvent.soundtrackRecordingFinish]);
+    await expect(
+      ipc.append(silent, "rec-1", "audio", new Uint8Array(1)),
+    ).resolves.toEqual({ kind: "refused" });
+  });
+});
+
+describe("registerSoundtrackRecordingIpc: a window's new document", () => {
+  const GRACE_MS = 2000;
+
+  it("lets the old document's recording stay open for the grace, then closes it and only it", async () => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    const ipc = register(recordings());
+    const window = new FakeWindow(1);
+    await ipc.open(window, { quality: "compressed" });
+    await ipc.append(window, "rec-1", "audio", new Uint8Array(1));
+
+    window.emit("did-navigate");
+    // The new document records at once; the old one's recording is not yet
+    // closed, so its own close, sent as it unloaded, can land.
+    await expect(
+      ipc.open(window, { quality: "compressed" }),
+    ).resolves.toMatchObject({ recordingId: "rec-2" });
+    await ipc.append(window, "rec-2", "audio", new Uint8Array(1));
+    await vi.advanceTimersByTimeAsync(GRACE_MS - 1);
+    await expect(
+      ipc.append(window, "rec-1", "audio", new Uint8Array(1)),
+    ).resolves.toEqual({ kind: "ok" });
+
+    await vi.advanceTimersByTimeAsync(1);
+
+    await expect(
+      ipc.append(window, "rec-1", "audio", new Uint8Array(1)),
+    ).resolves.toEqual({ kind: "refused" });
+    await expect(
+      ipc.append(window, "rec-2", "audio", new Uint8Array(1)),
+    ).resolves.toEqual({ kind: "ok" });
+  });
+
+  it("abandons an open still on its way the moment the window navigates", async () => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    const gate = Promise.withResolvers<void>();
+    disk.openGate = gate.promise;
+    const ipc = register(recordings());
+    const window = new FakeWindow(1);
+
+    const opening = ipc.open(window, { quality: "compressed" });
+    window.emit("did-navigate");
+    gate.resolve();
+
+    await expect(opening).resolves.toEqual({ kind: "refused" });
+    await expect(readdir(folder)).resolves.toEqual([]);
   });
 });

@@ -44,4 +44,10 @@ export interface SoundtrackRecordingBridge {
     audioHeader: Uint8Array | null,
   ): Promise<SoundtrackRecordingWriteResult>;
   reveal(recordingId: string): Promise<boolean>;
+  /**
+   * Calls `listener` when the app is about to quit and asks a recording to
+   * finish while main can still take its last writes. Answers how to stop
+   * listening.
+   */
+  onFinishRequested(listener: () => void): () => void;
 }

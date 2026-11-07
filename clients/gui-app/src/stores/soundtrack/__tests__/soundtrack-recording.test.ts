@@ -111,14 +111,17 @@ class FakeCapture implements MixCapture {
   readonly audioOffsetSeconds = AUDIO_OFFSET_SECONDS;
   handlers: MixCaptureHandlers | null = null;
   stops = 0;
+  /** While set, `stop` answers only once this resolves. */
+  stopGate: Promise<void> | null = null;
 
   start(handlers: MixCaptureHandlers): void {
     this.handlers = handlers;
   }
 
-  stop(): Promise<CaptureSummary> {
+  async stop(): Promise<CaptureSummary> {
     this.stops += 1;
-    return Promise.resolve({ frames: null, droppedFrames: null });
+    await this.stopGate;
+    return { frames: null, droppedFrames: null };
   }
 
   firstFrame(clockSeconds: number): void {
@@ -153,6 +156,10 @@ class FakeChannel implements RecordingSaveChannel {
 
   /** While set, `open` answers only once this resolves. */
   openGate: Promise<void> | null = null;
+  /** While set, an append answers only once this resolves. */
+  appendGate: Promise<void> | null = null;
+  /** What a close answers. */
+  closeAnswer: () => AppendAnswer = () => ({ kind: "ok" });
 
   async open(): Promise<{
     kind: "opened";
@@ -174,9 +181,12 @@ class FakeChannel implements RecordingSaveChannel {
     ).length;
     const answer = this.answer(file, audioIndex);
     this.appends.push({ file, bytes, answer });
-    return answer === "reject"
-      ? Promise.reject(new Error("the channel is gone"))
-      : Promise.resolve(answer);
+    const gate = this.appendGate;
+    const settle = (): Promise<RecordingWriteResult> =>
+      answer === "reject"
+        ? Promise.reject(new Error("the channel is gone"))
+        : Promise.resolve(answer);
+    return gate === null ? settle() : gate.then(settle);
   }
 
   close(
@@ -184,11 +194,23 @@ class FakeChannel implements RecordingSaveChannel {
     audioHeader: Uint8Array | null,
   ): Promise<RecordingWriteResult> {
     this.closes.push({ recordingId, audioHeader });
-    return Promise.resolve({ kind: "ok" });
+    const answer = this.closeAnswer();
+    return answer === "reject"
+      ? Promise.reject(new Error("the channel is gone"))
+      : Promise.resolve(answer);
   }
 
   reveal(): Promise<boolean> {
     return Promise.resolve(true);
+  }
+
+  readonly finishListeners = new Set<() => void>();
+
+  onFinishRequested(listener: () => void): () => void {
+    this.finishListeners.add(listener);
+    return () => {
+      this.finishListeners.delete(listener);
+    };
   }
 
   /** The log's lines, as written, parsed. */
@@ -217,15 +239,20 @@ function dataSizeOf(header: Uint8Array): number {
 }
 
 /** What the tests read of the store and ask of it. */
+interface StoreViewState {
+  readonly enabled: boolean;
+  readonly recording: SoundtrackRecording;
+  readonly stopRecording: () => void;
+  readonly disable: () => void;
+  readonly startRecording: (choices: RecordingChoices) => void;
+  readonly setDirector: (director: MixDirectorId) => void;
+}
+
 interface StoreView {
-  readonly getState: () => {
-    readonly enabled: boolean;
-    readonly recording: SoundtrackRecording;
-    readonly stopRecording: () => void;
-    readonly disable: () => void;
-    readonly startRecording: (choices: RecordingChoices) => void;
-    readonly setDirector: (director: MixDirectorId) => void;
-  };
+  readonly subscribe: (
+    listener: (state: StoreViewState, previous: StoreViewState) => void,
+  ) => () => void;
+  readonly getState: () => StoreViewState;
 }
 
 interface Harness {
@@ -234,6 +261,7 @@ interface Harness {
   readonly capture: FakeCapture;
   readonly channel: FakeChannel;
   readonly close: Mock<(afterSeconds: number) => void>;
+  readonly captureMix: Mock<SoundtrackPorts["captureMix"]>;
   /** Starts a recording and takes its first frame at the clock now. */
   readonly record: () => Promise<void>;
   /** The wall clock when the first frame was handed over, as an ISO string. */
@@ -253,6 +281,9 @@ function harness(
   let firstFrameIso = "";
   let firstFrameClock = 0;
   const close = vi.fn<(afterSeconds: number) => void>();
+  const captureMix = vi.fn<SoundtrackPorts["captureMix"]>(() =>
+    Promise.resolve(capture),
+  );
   const ports: SoundtrackPorts = {
     output,
     stems: new FakeStems(2.2),
@@ -261,7 +292,7 @@ function harness(
     duck: () => undefined,
     close,
     log: new SoundtrackLogRelay(),
-    captureMix: () => Promise.resolve(capture),
+    captureMix,
   };
   const store = createSoundtrackStore({
     readManifest: () => manifest,
@@ -283,6 +314,7 @@ function harness(
     capture,
     channel,
     close,
+    captureMix,
     firstFrameIso: () => firstFrameIso,
     firstFrameClock: () => firstFrameClock,
     record: async () => {
@@ -640,7 +672,7 @@ describe("session recorder: opening and the log's other events", () => {
     expect(view.getUint32(40, true)).toBe(0xff_ff_ff_ff);
   });
 
-  it("stops a recording whose switch went off while its files were opening, starting no capture and leaving the store off", async () => {
+  it("closes a recording whose switch went off while its files were opening, opening no capture and leaving the store off", async () => {
     const h = harness(100, "lossless", MANIFEST);
     const gate = Promise.withResolvers<void>();
     h.channel.openGate = gate.promise;
@@ -655,15 +687,12 @@ describe("session recorder: opening and the log's other events", () => {
     });
     await advance(1);
 
-    expect(h.capture.handlers).toBeNull();
-    expect(h.capture.stops).toBe(1);
+    expect(h.captureMix).not.toHaveBeenCalled();
     expect(h.channel.appends).toEqual([]);
-    const [closed] = h.channel.closes;
-    expect(closed.recordingId).toBe(RECORDING_ID);
-    // Nothing was recorded, so the sizes it writes are 0.
-    expect(
-      closed.audioHeader === null ? null : dataSizeOf(closed.audioHeader),
-    ).toBe(0);
+    // Nothing was written, so there are no sizes to put over a header.
+    expect(h.channel.closes).toEqual([
+      { recordingId: RECORDING_ID, audioHeader: null },
+    ]);
     expect(h.store.getState().recording).toEqual({ kind: "off" });
   });
 
@@ -684,5 +713,227 @@ describe("session recorder: opening and the log's other events", () => {
     expect(written).toHaveLength(1);
     expect(written[0].director).toBe("rules");
     expect(written[0].t).toBeCloseTo(changedAt - h.firstFrameClock(), 4);
+  });
+});
+
+/** How often the store is told a recording was saved, counting repeats. */
+function savedReports(h: Harness): { count: number } {
+  const reports = { count: 0 };
+  h.store.subscribe((state, previous) => {
+    if (state.recording === previous.recording) return;
+    if (state.recording.kind === "saved") reports.count += 1;
+  });
+  return reports;
+}
+
+describe("session recorder: the app quitting", () => {
+  it("finishes on the channel's ask: one close with the WAV sizes, an end line saying quit, saved with no problem, and the listener gone", async () => {
+    const h = harness(100, "lossless", MANIFEST);
+    await h.record();
+    h.capture.chunk(400);
+    await advance(1);
+    h.capture.chunk(200);
+    expect(h.channel.finishListeners.size).toBe(1);
+
+    for (const listener of h.channel.finishListeners) listener();
+    await advance(1);
+
+    expect(h.channel.closes).toHaveLength(1);
+    const [closed] = h.channel.closes;
+    expect(
+      closed.audioHeader === null ? null : dataSizeOf(closed.audioHeader),
+    ).toBe(600);
+    expect(h.channel.logLines().at(-1)).toMatchObject({
+      type: "recording-end",
+      reason: "quit",
+    });
+    expect(h.store.getState().recording).toMatchObject({
+      kind: "saved",
+      problem: null,
+    });
+    expect(h.channel.finishListeners.size).toBe(0);
+  });
+});
+
+describe("session recorder: the page going while it saves", () => {
+  it("closes at once with the bytes sent when it is still waiting on the capture, and neither closes nor reports again when the capture answers", async () => {
+    const h = harness(100, "lossless", MANIFEST);
+    const gate = Promise.withResolvers<void>();
+    h.capture.stopGate = gate.promise;
+    await h.record();
+    h.capture.chunk(400);
+    await advance(1);
+    h.capture.chunk(200);
+    const saved = savedReports(h);
+    h.store.getState().stopRecording();
+    expect(h.channel.closes).toHaveLength(0);
+
+    window.dispatchEvent(new Event("pagehide"));
+
+    expect(h.channel.closes).toHaveLength(1);
+    const [closed] = h.channel.closes;
+    expect(
+      closed.audioHeader === null ? null : dataSizeOf(closed.audioHeader),
+    ).toBe(600);
+    gate.resolve();
+    await advance(1);
+
+    expect(h.channel.closes).toHaveLength(1);
+    const ends = h.channel
+      .logLines()
+      .filter((line) => line.type === "recording-end");
+    expect(ends).toEqual([
+      expect.objectContaining({
+        reason: "switch",
+        frames: null,
+        droppedFrames: null,
+      }),
+    ]);
+    expect(saved.count).toBe(1);
+    expect(h.store.getState().recording).toMatchObject({
+      kind: "saved",
+      problem: null,
+    });
+  });
+
+  it("closes at once counting the bytes sent when it is still waiting on a write, and does not close again when the write answers", async () => {
+    const h = harness(100, "lossless", MANIFEST);
+    await h.record();
+    h.capture.chunk(400);
+    await advance(1);
+    const gate = Promise.withResolvers<void>();
+    h.channel.appendGate = gate.promise;
+    h.capture.chunk(200);
+    h.store.getState().stopRecording();
+    await advance(0.1);
+    expect(h.channel.closes).toHaveLength(0);
+
+    window.dispatchEvent(new Event("pagehide"));
+
+    expect(h.channel.closes).toHaveLength(1);
+    const [closed] = h.channel.closes;
+    // The 200 bytes are sent, though the channel has not answered them.
+    expect(
+      closed.audioHeader === null ? null : dataSizeOf(closed.audioHeader),
+    ).toBe(600);
+    gate.resolve();
+    await advance(1);
+
+    expect(h.channel.closes).toHaveLength(1);
+    expect(h.store.getState().recording).toMatchObject({ kind: "saved" });
+  });
+});
+
+describe("session recorder: the page going while it opens", () => {
+  it("closes at once with no header when the files are open and the capture is still on its way, and ends off when the capture arrives", async () => {
+    const h = harness(100, "lossless", MANIFEST);
+    const arrival = Promise.withResolvers<FakeCapture>();
+    h.captureMix.mockImplementation(() => arrival.promise);
+
+    h.store
+      .getState()
+      .startRecording({ limitSeconds: 100, quality: "lossless" });
+    await vi.waitFor(() => {
+      expect(h.captureMix).toHaveBeenCalled();
+    });
+    window.dispatchEvent(new Event("pagehide"));
+
+    expect(h.channel.closes).toEqual([
+      { recordingId: RECORDING_ID, audioHeader: null },
+    ]);
+    arrival.resolve(h.capture);
+    await advance(1);
+
+    expect(h.channel.closes).toHaveLength(1);
+    expect(h.capture.handlers).toBeNull();
+    expect(h.store.getState().recording).toEqual({ kind: "off" });
+  });
+
+  it("waits for the files to open, then closes them once and never asks for the capture", async () => {
+    const h = harness(100, "lossless", MANIFEST);
+    const gate = Promise.withResolvers<void>();
+    h.channel.openGate = gate.promise;
+
+    h.store
+      .getState()
+      .startRecording({ limitSeconds: 100, quality: "lossless" });
+    window.dispatchEvent(new Event("pagehide"));
+    await advance(1);
+    expect(h.channel.closes).toHaveLength(0);
+
+    gate.resolve();
+    await vi.waitFor(() => {
+      expect(h.channel.closes).toHaveLength(1);
+    });
+    await advance(1);
+
+    expect(h.channel.closes).toEqual([
+      { recordingId: RECORDING_ID, audioHeader: null },
+    ]);
+    expect(h.captureMix).not.toHaveBeenCalled();
+    expect(h.store.getState().recording).toEqual({ kind: "off" });
+  });
+});
+
+describe("session recorder: a failure kept through the stop", () => {
+  it("reports a write that failed only after the switch went off, over the reason it stopped", async () => {
+    const h = harness(100, "compressed", MANIFEST);
+    h.channel.answer = (file) =>
+      file === "audio" ? { kind: "write-failed" } : OK;
+    await h.record();
+    const gate = Promise.withResolvers<void>();
+    h.channel.appendGate = gate.promise;
+    h.capture.chunk(400);
+    await advance(1);
+
+    h.store.getState().stopRecording();
+    gate.resolve();
+    await advance(1);
+
+    expect(h.store.getState().recording).toMatchObject({
+      kind: "saved",
+      problem: "disk",
+    });
+  });
+
+  it("reports a write that fails in the stop's own last flush", async () => {
+    const h = harness(100, "compressed", MANIFEST);
+    h.channel.answer = (file, audioIndex) =>
+      file === "audio" && audioIndex === 1 ? { kind: "write-failed" } : OK;
+    await h.record();
+    h.capture.chunk(400);
+    await advance(1);
+    h.capture.chunk(200);
+
+    h.store.getState().stopRecording();
+    await advance(1);
+
+    // The second audio append is the one the stop itself sent.
+    expect(
+      h.channel.appends.filter((call) => call.file === "audio"),
+    ).toHaveLength(2);
+    expect(h.store.getState().recording).toMatchObject({
+      kind: "saved",
+      problem: "disk",
+    });
+  });
+
+  it.each([
+    ["answers write-failed", () => ({ kind: "write-failed" }) as const, "disk"],
+    ["answers refused", () => ({ kind: "refused" }) as const, "error"],
+    ["rejects", () => "reject" as const, "error"],
+  ])("reports a close that %s as %s", async (_, answer, problem) => {
+    const h = harness(100, "compressed", MANIFEST);
+    h.channel.closeAnswer = answer;
+    await h.record();
+    h.capture.chunk(400);
+
+    h.store.getState().stopRecording();
+    await advance(1);
+
+    expect(h.store.getState().recording).toMatchObject({
+      kind: "saved",
+      problem,
+    });
   });
 });

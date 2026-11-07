@@ -9,6 +9,8 @@ import userEvent from "@testing-library/user-event";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import type { ReactNode } from "react";
 import { SoundtrackSettingsSection } from "@/components/settings/panels/soundtrack-settings-section";
+import { FakeLockManager } from "@/lib/soundtrack/__tests__/fake-locks";
+import { holdSoundtrackSessionLock } from "@/lib/soundtrack/session-lock";
 import { AQUILO_1 } from "@/lib/soundtrack/__tests__/aquilo-1";
 import {
   openedFakePorts,
@@ -57,6 +59,7 @@ const channel = {
   append: () => Promise.resolve({ kind: "ok" }),
   close: () => Promise.resolve({ kind: "ok" }),
   reveal,
+  onFinishRequested: () => () => undefined,
 };
 
 beforeEach(() => {
@@ -76,6 +79,7 @@ beforeEach(() => {
 
 afterEach(() => {
   cleanup();
+  Reflect.deleteProperty(navigator, "locks");
   useSoundtrackStore.getState().disable();
   vi.unstubAllEnvs();
   vi.unstubAllGlobals();
@@ -195,11 +199,34 @@ describe("the Record session row", () => {
     });
   });
 
-  it("holds the switch when Music is on but this window has no session, as when another window holds the music", () => {
+  it("says another window is playing while this window waits for its turn, and offers the switch once the turn comes", async () => {
+    Object.defineProperty(navigator, "locks", {
+      configurable: true,
+      value: new FakeLockManager(),
+    });
+    // Another window holds the session.
+    const other = holdSoundtrackSessionLock();
     useSettingsStore.setState({ soundtrackEnabled: true });
+    useSoundtrackStore.getState().enable();
     renderSection();
 
+    expect(
+      await screen.findByText(
+        "Another window is playing the music. Record from that window.",
+      ),
+    ).toBeTruthy();
     expect(disabledOf("Record session", "switch")).toBe(true);
+
+    other.release();
+
+    await vi.waitFor(() => {
+      expect(disabledOf("Record session", "switch")).toBe(false);
+    });
+    expect(
+      screen.queryByText(
+        "Another window is playing the music. Record from that window.",
+      ),
+    ).toBeNull();
   });
 
   it("rehydrates a quality and a limit the app does not know to the defaults", async () => {

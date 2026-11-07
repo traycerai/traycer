@@ -7,7 +7,8 @@ function isSaveChannel(value: unknown): value is RecordingSaveChannel {
     typeof Reflect.get(value, "open") === "function" &&
     typeof Reflect.get(value, "append") === "function" &&
     typeof Reflect.get(value, "close") === "function" &&
-    typeof Reflect.get(value, "reveal") === "function"
+    typeof Reflect.get(value, "reveal") === "function" &&
+    typeof Reflect.get(value, "onFinishRequested") === "function"
   );
 }
 

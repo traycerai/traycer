@@ -202,3 +202,40 @@ describe("the soundtrack across windows", () => {
     queued().disable();
   });
 });
+
+describe("waiting for a turn", () => {
+  it("is true from enable while another window plays, false once the turn comes", async () => {
+    const first = openWindow(openFakePorts, readBundled);
+    const second = openWindow(openFakePorts, readBundled);
+    first().enable();
+    await settle();
+    expect(first().waitingForTurn).toBe(false);
+
+    second().enable();
+    await settle();
+    expect(second().waitingForTurn).toBe(true);
+    expect(second().enabled).toBe(false);
+
+    first().disable();
+    await settle();
+
+    expect(second().waitingForTurn).toBe(false);
+    expect(second().enabled).toBe(true);
+  });
+
+  it("is false again when the window turns the music off while it waits", async () => {
+    const first = openWindow(openFakePorts, readBundled);
+    const second = openWindow(openFakePorts, readBundled);
+    first().enable();
+    await settle();
+    second().enable();
+    await settle();
+    expect(second().waitingForTurn).toBe(true);
+
+    second().disable();
+    await settle();
+
+    expect(second().waitingForTurn).toBe(false);
+    first().disable();
+  });
+});

@@ -45,6 +45,12 @@ interface RecordRequest {
    * idle.
    */
   readonly busy: { readonly everyMs: number; readonly forMs: number } | null;
+  /**
+   * Holds the main thread for this long once `MediaRecorder.start` returns,
+   * ahead of its `start` event, so the compressed capture is shown to take its
+   * time origin from the start and not from the event; null holds nothing.
+   */
+  readonly stallAfterStartMs: number | null;
 }
 
 interface Recorded {
@@ -144,6 +150,7 @@ function memoryChannel(): {
         return Promise.resolve({ kind: "ok" });
       },
       reveal: () => Promise.resolve(true),
+      onFinishRequested: () => () => undefined,
     },
   };
 }
@@ -163,6 +170,27 @@ function holdMainThread(forMs: number): void {
   while (performance.now() < until) {
     // Busy on purpose: the claim is about a page that is.
   }
+}
+
+/** Until the answer is called, every recorder start stalls the page after it. */
+function stallAfterRecorderStart(forMs: number): () => void {
+  const { prototype } = MediaRecorder;
+  const start: unknown = Reflect.get(prototype, "start");
+  if (typeof start !== "function") throw new Error("No MediaRecorder.start");
+  Reflect.set(
+    prototype,
+    "start",
+    function stalledStart(this: MediaRecorder, timeslice: number): void {
+      Reflect.apply(start, this, [timeslice]);
+      // After the caller's task, and ahead of the task the event comes in.
+      queueMicrotask(() => {
+        holdMainThread(forMs);
+      });
+    },
+  );
+  return () => {
+    Reflect.set(prototype, "start", start);
+  };
 }
 
 function deviceSampleRate(): Promise<number> {
@@ -200,8 +228,13 @@ async function record(request: RecordRequest): Promise<Recorded> {
     onProgress: () => undefined,
     onStopped: resolveStopped,
   });
+  const unstall =
+    request.stallAfterStartMs === null
+      ? null
+      : stallAfterRecorderStart(request.stallAfterStartMs);
   void recorder.start();
   await listening;
+  unstall?.();
   const player = new TrackPlayer({
     track,
     output: ports.output,

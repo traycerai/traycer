@@ -69,6 +69,12 @@ interface ViewPlayer {
   readonly player: TrackPlayer;
 }
 
+interface AppliedPlan {
+  readonly view: SoundtrackView;
+  readonly track: VariableTrack;
+  readonly plan: MixPlan;
+}
+
 function pickRandom<T>(
   items: readonly T[],
   count: number,
@@ -151,6 +157,8 @@ export class SoundtrackSession {
   private inFront: ViewPlayer | null = null;
   /** Starts the track a view moved on to, once the silence is over. */
   private pendingStart: number | null = null;
+  /** The plan last applied, and the view and track it was for. */
+  private applied: AppliedPlan | null = null;
 
   constructor(options: SoundtrackSessionOptions) {
     this.manifest = options.manifest;
@@ -174,14 +182,15 @@ export class SoundtrackSession {
   }
 
   /**
-   * Tells the log what drives the mix and what it is sounding, then restates
-   * the plan: for a recording starting now, whose first minute would otherwise
-   * be events about things it never saw begin.
+   * Tells the log what drives the mix, what it is sounding and the plan last
+   * applied: for a recording starting now, whose first minute would otherwise
+   * be events about things it never saw begin. It only reads, so the music
+   * goes on exactly as it would have without a recording.
    */
   logNow(): void {
     const { log } = this.ports;
     if (!log.listening()) return;
-    const { signals, inFront } = this;
+    const { signals, inFront, applied } = this;
     if (signals !== null) this.logSignals(signals);
     log.write({
       type: "sounding",
@@ -189,7 +198,9 @@ export class SoundtrackSession {
       view: signals?.view ?? null,
       player: inFront?.player.describe() ?? null,
     });
-    this.replan();
+    if (applied !== null) {
+      this.logPlan(applied.view, applied.track, applied.plan);
+    }
   }
 
   setDirector(director: MixDirector): void {
@@ -336,6 +347,7 @@ export class SoundtrackSession {
     const { signals, inFront } = this;
     if (signals === null) return;
     if (inFront === null) {
+      this.applied = null;
       this.onSounding(null);
       return;
     }
@@ -344,6 +356,7 @@ export class SoundtrackSession {
       track,
       state: player.currentState(),
     });
+    this.applied = { view, track, plan };
     this.logPlan(view, track, plan);
     // First, because moving state rolls the layers the rest of the plan adjusts.
     if (plan.state !== null) player.enterState(plan.state);

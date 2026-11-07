@@ -638,6 +638,9 @@ export const RunnerHostEvent = {
   // (`HostQuitStateEvent`, fanned to every window).
   hostQuitRequest: "runnerHost:event:hostQuit:request",
   hostQuitState: "runnerHost:event:hostQuit:state",
+  // A quit asking each recording window to finish its recording while the
+  // save channels are still up (`soundtrack-recording-ipc.ts`).
+  soundtrackRecordingFinish: "runnerHost:event:soundtrack:recording:finish",
 } as const;
 
 /**
