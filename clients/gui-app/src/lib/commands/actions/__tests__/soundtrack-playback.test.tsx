@@ -244,3 +244,58 @@ describe("with a session open", () => {
     expect(openedFakePorts[1].output.allPlays()).not.toEqual([]);
   });
 });
+
+describe("a Play the audio device refuses", () => {
+  /** Opens a session and pauses it, then makes `unpause` meet a refusal. */
+  async function refused(unpause: () => void): Promise<number> {
+    render(<SoundtrackWarmupBridge />);
+    useSettingsStore.setState({ soundtrackPlaybackControls: true });
+    setSoundtrackOn(true);
+    await listen();
+    pauseMusic();
+    openedFakePorts[0].refuseResumes();
+
+    unpause();
+    await advance(0);
+    return (
+      useSoundtrackStore.getState().resumePositions.home?.elapsedSeconds ?? 0
+    );
+  }
+
+  /** The next gesture, and a second at the music after it. */
+  async function gestureAndListen(): Promise<void> {
+    firstGesture();
+    await listen();
+  }
+
+  const WAYS_TO_PLAY: ReadonlyArray<readonly [string, () => void]> = [
+    ["Play", playMusic],
+    ["turning the playback controls off", () => setPlaybackControlsOn(false)],
+  ];
+
+  it.each(WAYS_TO_PLAY)(
+    "ends the session after %s, leaving the wish to hear it, and the next gesture alone plays from where it got to",
+    async (_label, unpause) => {
+      const gotTo = await refused(unpause);
+
+      expect(useSoundtrackStore.getState().enabled).toBe(false);
+      expect(openedFakePorts[0].close).toHaveBeenCalledTimes(1);
+      expect(vi.getTimerCount()).toBe(0);
+      expect(useSettingsStore.getState()).toMatchObject({
+        soundtrackEnabled: true,
+        soundtrackPaused: false,
+      });
+      expect(gotTo).toBeGreaterThan(0.5);
+
+      await gestureAndListen();
+      expect(openedFakePorts).toHaveLength(2);
+      expect(useSoundtrackStore.getState().enabled).toBe(true);
+      expect(openedFakePorts[1].output.allPlays()).not.toEqual([]);
+      useSoundtrackStore.getState().disable();
+      const resumedAt =
+        useSoundtrackStore.getState().resumePositions.home?.elapsedSeconds ?? 0;
+      expect(resumedAt).toBeGreaterThan(gotTo + 0.5);
+      expect(resumedAt).toBeLessThan(gotTo + 2);
+    },
+  );
+});

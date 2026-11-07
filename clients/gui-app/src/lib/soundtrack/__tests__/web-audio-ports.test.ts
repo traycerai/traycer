@@ -4,6 +4,7 @@
  * clock does when suspended is `browser-tests/soundtrack-output.spec.ts`.
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { appLogger } from "@/lib/logger";
 import { MIX_TUNING } from "../mix-tuning";
 import type { SoundtrackPorts } from "../session";
 import { openWebAudioPorts } from "../web-audio-ports";
@@ -47,13 +48,22 @@ class FakeFilterNode {
 class FakeAudioContext {
   static readonly instances: FakeAudioContext[] = [];
   readonly currentTime = 0;
-  readonly state = "running";
+  state: "running" | "suspended" | "closed" = "running";
   readonly destination = {};
   /** In the order made: the pause's own gain is the first. */
   readonly gains: FakeGainNode[] = [];
-  readonly suspend = vi.fn<() => Promise<void>>(() => Promise.resolve());
-  readonly resume = vi.fn<() => Promise<void>>(() => Promise.resolve());
-  readonly close = vi.fn<() => Promise<void>>(() => Promise.resolve());
+  readonly suspend = vi.fn<() => Promise<void>>(() => {
+    this.state = "suspended";
+    return Promise.resolve();
+  });
+  readonly resume = vi.fn<() => Promise<void>>(() => {
+    this.state = "running";
+    return Promise.resolve();
+  });
+  readonly close = vi.fn<() => Promise<void>>(() => {
+    this.state = "closed";
+    return Promise.resolve();
+  });
 
   constructor() {
     FakeAudioContext.instances.push(this);
@@ -79,6 +89,9 @@ function openPorts(): {
   return { ports, context };
 }
 
+/** What a port's owner passes to `resume`; it is only ever read for its calls. */
+const onRefused = vi.fn<() => void>();
+
 async function advance(ms: number): Promise<void> {
   await vi.advanceTimersByTimeAsync(ms);
 }
@@ -87,6 +100,7 @@ beforeEach(() => {
   vi.useFakeTimers();
   FakeAudioContext.instances.length = 0;
   vi.stubGlobal("AudioContext", FakeAudioContext);
+  onRefused.mockClear();
 });
 
 afterEach(() => {
@@ -157,5 +171,35 @@ describe("openWebAudioPorts pause", () => {
       value: 1,
       endTime: MIX_TUNING.pauseFadeSeconds,
     });
+  });
+
+  it("does not report a refusal when the context resumes", async () => {
+    const { ports, context } = openPorts();
+    ports.pause();
+    await advance(SUSPEND_AFTER_MS);
+
+    ports.resume(onRefused);
+    await advance(0);
+
+    expect(context.state).toBe("running");
+    expect(onRefused).not.toHaveBeenCalled();
+  });
+
+  it("reports a refusal once, and logs it, when the context will not resume", async () => {
+    const warn = vi.spyOn(appLogger, "warn").mockReturnValue(undefined);
+    const { ports, context } = openPorts();
+    ports.pause();
+    await advance(SUSPEND_AFTER_MS);
+    context.resume.mockImplementationOnce(() =>
+      Promise.reject(new Error("blocked by autoplay")),
+    );
+
+    ports.resume(onRefused);
+    await advance(0);
+
+    expect(context.state).toBe("suspended");
+    expect(onRefused).toHaveBeenCalledTimes(1);
+    expect(warn).toHaveBeenCalledTimes(1);
+    warn.mockRestore();
   });
 });

@@ -209,6 +209,25 @@ describe("the playback buttons in the status row", () => {
     expect(output.calls).toHaveLength(calls);
   });
 
+  it("keeps the buttons drawn, reading Pause, when the device refuses a Play and the session ends", async () => {
+    wishForControls();
+    renderRow();
+    fireEvent.click(screen.getByRole("button", { name: "Next track" }));
+    await advance(0);
+    act(() => {
+      useSoundtrackStore.getState().setSignals(HOME);
+    });
+    await advance(1);
+    fireEvent.click(screen.getByRole("button", { name: "Pause" }));
+    openedFakePorts[0].refuseResumes();
+
+    fireEvent.click(screen.getByRole("button", { name: "Play" }));
+    await advance(0);
+
+    expect(useSoundtrackStore.getState().enabled).toBe(false);
+    expect(buttonNames()).toEqual(NAMES);
+  });
+
   describe("with another window holding the session", () => {
     it("draws none for a window waiting on the lock, and draws them again when it takes it", async () => {
       wishForControls();

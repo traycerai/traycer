@@ -37,19 +37,17 @@ export function holdSoundtrackSessionLock(): SoundtrackSessionLock {
     };
   });
   let turnCame = false;
-  // Asked just ahead of the request, in the order the browser takes them, so the
-  // answer is who stands before this window and never the window itself. The
-  // request does not wait for it: the place in the queue is taken here and now.
+  // Asked just ahead of the request, in the order the browser takes them, so a
+  // holder in the answer is another window, and never this one. Anyone queued is
+  // queued behind a holder, so the holder is all there is to read. The request
+  // does not wait for this: the place in the queue is taken here and now.
   const queued = new Promise<void>((resolve) => {
     void locks.query().then(
       (state) => {
-        const ahead = [...(state.held ?? []), ...(state.pending ?? [])];
-        if (
-          !turnCame &&
-          ahead.some((lock) => lock.name === SOUNDTRACK_SESSION_LOCK)
-        ) {
-          resolve();
-        }
+        const taken = state.held?.some(
+          (lock) => lock.name === SOUNDTRACK_SESSION_LOCK,
+        );
+        if (taken === true && !turnCame) resolve();
       },
       () => undefined,
     );

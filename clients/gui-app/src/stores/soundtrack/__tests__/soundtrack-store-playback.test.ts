@@ -119,6 +119,70 @@ describe("soundtrack store: pause", () => {
   });
 });
 
+describe("soundtrack store: a refused resume", () => {
+  async function playing() {
+    const store = newWindow();
+    store.getState().enable();
+    await advance(0);
+    store.getState().setSignals(HOME);
+    await advance(1);
+    return store;
+  }
+
+  it("ends the session when the latest Play is refused", async () => {
+    const store = await playing();
+    store.getState().setPaused(true);
+    openedFakePorts[0].refuseResumes();
+
+    store.getState().setPaused(false);
+    await advance(0);
+
+    expect(store.getState().enabled).toBe(false);
+    expect(openedFakePorts[0].close).toHaveBeenCalledTimes(1);
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it("changes nothing when the refusal arrives after a newer pause, and a later Play goes through", async () => {
+    const store = await playing();
+    store.getState().setPaused(true);
+    const [{ output, holdResumes, refuseHeld, grantHeld }] = openedFakePorts;
+    holdResumes();
+    store.getState().setPaused(false);
+    store.getState().setPaused(true);
+
+    refuseHeld();
+    await advance(0);
+    expect(store.getState().enabled).toBe(true);
+    expect(store.getState().paused).toBe(true);
+    expect(openedFakePorts[0].close).not.toHaveBeenCalled();
+
+    store.getState().setPaused(false);
+    grantHeld();
+    const clock = output.currentTime();
+    await advance(5);
+    expect(output.currentTime()).toBeCloseTo(clock + 5, 2);
+    expect(store.getState().enabled).toBe(true);
+  });
+
+  it("leaves a newer session alone when the refusal arrives after its session ended", async () => {
+    const store = await playing();
+    store.getState().setPaused(true);
+    openedFakePorts[0].holdResumes();
+    store.getState().setPaused(false);
+
+    store.getState().disable();
+    store.getState().enable();
+    await advance(0);
+    openedFakePorts[0].refuseHeld();
+    await advance(0);
+
+    expect(store.getState().enabled).toBe(true);
+    expect(openedFakePorts).toHaveLength(2);
+    expect(openedFakePorts[1].close).not.toHaveBeenCalled();
+    store.getState().disable();
+  });
+});
+
 describe("soundtrack store: the lock across windows", () => {
   it("never reads a free lock as a wait", async () => {
     const store = newWindow();
