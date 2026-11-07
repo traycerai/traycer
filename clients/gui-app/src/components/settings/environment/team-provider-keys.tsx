@@ -17,20 +17,7 @@ import { hostQueryKeys } from "@/lib/query-keys";
 import { useCanEditConfiguration } from "./configuration-source";
 import { ConfigurationReadFailed } from "./team-read-failed";
 import { TeamSecretNames } from "./team-secret-names";
-
-/**
- * The variable a team's `provider` secret is named for, per provider. The
- * same names `teamProviderStateWord` matches: authn refuses any other name,
- * and only these providers take a team key. Claude Code and Codex do not.
- */
-const PROVIDER_KEY_SECRET_NAMES: Partial<Record<ProviderId, string>> = {
-  cursor: "CURSOR_API_KEY",
-  kiro: "KIRO_API_KEY",
-  droid: "FACTORY_API_KEY",
-  openrouter: "OPENROUTER_API_KEY",
-  huggingface: "HF_TOKEN",
-  amp: "AMP_API_KEY",
-};
+import { PROVIDER_KEY_SECRET_NAMES } from "./team-provider-state-word";
 
 /**
  * The selected provider's key. A provider that does not take one renders
