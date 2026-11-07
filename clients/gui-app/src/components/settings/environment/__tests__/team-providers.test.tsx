@@ -616,6 +616,47 @@ describe("TeamProviders items", () => {
     ]);
   });
 
+  it("shows a provider override's awaiting-readback line and Retry only on the provider it belongs to", async () => {
+    const harness = mountTeamPage(poolSource("editor"), {
+      ...handlers(() => [
+        envOverride("https://old.example", 7),
+        profile(true, 1),
+        cursorProfile("Work", 1),
+      ]),
+      "environment.configuration.items.put": () => ({
+        outcome: "saved",
+        revision: 8,
+      }),
+    });
+    render(<TeamProviders />, { wrapper: harness.Wrapper });
+
+    await waitFor(() => expect(railButton("Claude Code")).toBeTruthy());
+    await userEvent.click(railButton("Claude Code"));
+    await userEvent.click(await screen.findByRole("tab", { name: "Env" }));
+    await userEvent.click(
+      await screen.findByRole("button", {
+        name: "Edit claude:ANTHROPIC_BASE_URL value",
+      }),
+    );
+    const field = await screen.findByLabelText(
+      "claude:ANTHROPIC_BASE_URL value",
+    );
+    await userEvent.clear(field);
+    await userEvent.type(field, "https://new.example");
+    await userEvent.click(screen.getByRole("button", { name: "Save" }));
+    const refreshed = "Saved, but latest settings haven't refreshed.";
+    expect(await screen.findByText(refreshed)).toBeTruthy();
+
+    await userEvent.click(railButton("Cursor"));
+    await userEvent.click(await screen.findByRole("tab", { name: "Env" }));
+    expect(screen.queryByText(refreshed)).toBeNull();
+    expect(screen.queryByRole("button", { name: "Retry" })).toBeNull();
+
+    await userEvent.click(railButton("Claude Code"));
+    await userEvent.click(await screen.findByRole("tab", { name: "Env" }));
+    expect(screen.getByText(refreshed)).toBeTruthy();
+  });
+
   it("says on its Env tab that the team's variables reach every host running the team", async () => {
     const harness = mountTeamPage(poolSource("editor"), {
       ...handlers(() => [envOverride("https://old.example", 7)]),

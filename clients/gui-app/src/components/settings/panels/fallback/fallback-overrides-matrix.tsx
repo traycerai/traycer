@@ -80,6 +80,7 @@ export function FallbackOverridesMatrix(
   const customCount = EDITABLE_REASONS.filter(
     (reason) => policy.reasonOverrides?.[reason] !== undefined,
   ).length;
+  const inheritedCount = EDITABLE_REASONS.length - customCount;
   return (
     <SettingsGroup
       group={FALLBACK.definitions.advanced}
@@ -105,8 +106,9 @@ export function FallbackOverridesMatrix(
         <div className="flex flex-wrap items-center justify-between gap-x-3 gap-y-1">
           <div className="flex min-w-0 flex-wrap items-center gap-1.5 text-ui-xs text-muted-foreground">
             <span>
-              {EDITABLE_REASONS.length - customCount} problems follow the main
-              plan
+              {inheritedCount === 1
+                ? "1 problem follows the main plan"
+                : `${inheritedCount} problems follow the main plan`}
             </span>
             {customCount > 0 ? <span>· {customCount} custom</span> : null}
           </div>

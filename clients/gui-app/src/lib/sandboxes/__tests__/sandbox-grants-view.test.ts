@@ -352,6 +352,55 @@ describe("sandboxSecretsSummary", () => {
       sandboxSecretsSummary(summary([grant({ routes: [] })]), [], "ready"),
     ).toBe("1 secret");
   });
+
+  it("names the failing secret in the singular when it is the only one", () => {
+    expect(
+      sandboxSecretsSummary(
+        summary([grant({})]),
+        [readiness("route-1", "unavailable", "grant_missing")],
+        "degraded",
+      ),
+    ).toBe("1 of 1 secret not working");
+  });
+
+  it("agrees the noun with the total, not the failure count", () => {
+    const grants = [
+      grant({ secretName: "A" }),
+      grant({
+        secretName: "B",
+        routes: [
+          {
+            route: "route-b",
+            destination: "b.internal",
+            port: 1,
+            unready: null,
+          },
+        ],
+      }),
+      grant({
+        secretName: "C",
+        routes: [
+          {
+            route: "route-c",
+            destination: "c.internal",
+            port: 2,
+            unready: null,
+          },
+        ],
+      }),
+    ];
+    expect(
+      sandboxSecretsSummary(
+        summary(grants),
+        [
+          readiness("route-1", "unavailable", "grant_missing"),
+          readiness("route-b", "ready", null),
+          readiness("route-c", "ready", null),
+        ],
+        "degraded",
+      ),
+    ).toBe("1 of 3 secrets not working");
+  });
 });
 
 describe("a grant's rotation", () => {

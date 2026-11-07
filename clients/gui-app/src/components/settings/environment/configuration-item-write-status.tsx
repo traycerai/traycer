@@ -1,20 +1,23 @@
 import type { ReactNode } from "react";
 import { Button } from "@/components/ui/button";
-import type {
-  ConfigurationItemWrite,
-  ConfigurationItemWriteFailure,
-  ConfigurationItemWrites,
+import {
+  pendingWriteInScope,
+  type ConfigurationItemWrite,
+  type ConfigurationItemWriteFailure,
+  type ConfigurationItemWrites,
+  type ConfigurationWriteScope,
 } from "./configuration-item-writes";
 
 export function ConfigurationItemWriteStatus(props: {
   readonly writes: ConfigurationItemWrites;
-  readonly kind: ConfigurationItemWrite["kind"];
+  readonly scope: ConfigurationWriteScope;
 }): ReactNode {
-  const { pending, changedAgain, checking, retry } = props.writes;
-  if (pending?.write.kind !== props.kind)
-    return changedAgain?.kind !== props.kind ? null : (
+  const { changedAgain, checking, retry } = props.writes;
+  const pending = pendingWriteInScope(props.writes, props.scope);
+  if (pending === null)
+    return changedAgain === null || !props.scope(changedAgain) ? null : (
       <p role="status" className="text-ui-xs text-muted-foreground">
-        Saved. These settings changed again.
+        {changedAgainMessage(changedAgain.action)}
       </p>
     );
   if (pending.accepted === null) return null;
@@ -29,6 +32,12 @@ export function ConfigurationItemWriteStatus(props: {
       ) : null}
     </p>
   );
+}
+
+function changedAgainMessage(action: "put" | "remove"): string {
+  return action === "remove"
+    ? "Removed. These settings changed again."
+    : "Saved. These settings changed again.";
 }
 
 function acceptedWriteMessage(

@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import type { UseQueryResult } from "@tanstack/react-query";
 import type { HostRpcError } from "@traycer-clients/shared/host-transport/host-messenger";
+import type { EnvironmentOs } from "@traycer/protocol/host/environment-schemas";
 import type { EnvironmentConfigurationItemWriteResponse } from "@traycer/protocol/host/environment/configuration-contracts";
 import { useBoundedRead } from "@/hooks/environment/team/use-bounded-read";
 import { useConfigurationItemMutations } from "@/hooks/environment/team/use-configuration-item-mutations";
@@ -32,7 +33,7 @@ interface AcceptedWrite {
   readonly readSucceeded: boolean;
 }
 
-interface PendingItemWrite {
+export interface PendingItemWrite {
   readonly write: ConfigurationItemWrite;
   readonly accepted: AcceptedWrite | null;
 }
@@ -71,6 +72,51 @@ export function sameConfigurationItemAddress(
   return (
     left.kind === right.kind && left.key === right.key && left.os === right.os
   );
+}
+
+/** The addresses one editor shows. Write state outside it is another editor's. */
+export type ConfigurationWriteScope = (
+  address: Pick<ConfigurationItem, "kind" | "key" | "os">,
+) => boolean;
+
+/** Text items of one kind: every OS under `any`, else one; one provider's keys when `providerId` is set. */
+export function textWriteScope(
+  kind: "variable" | "env_override",
+  os: EnvironmentOs,
+  providerId: string | null,
+): ConfigurationWriteScope {
+  return (address) =>
+    address.kind === kind &&
+    (os === "any" || address.os === os) &&
+    (providerId === null || address.key.startsWith(`${providerId}:`));
+}
+
+/** The one shell item of one OS. */
+export function shellWriteScope(os: EnvironmentOs): ConfigurationWriteScope {
+  return (address) =>
+    sameConfigurationItemAddress(address, {
+      kind: "shell",
+      key: "shell",
+      os,
+    });
+}
+
+export function pendingWriteInScope(
+  writes: ConfigurationItemWrites,
+  scope: ConfigurationWriteScope,
+): PendingItemWrite | null {
+  return writes.pending !== null && scope(writes.pending.write)
+    ? writes.pending
+    : null;
+}
+
+export function failureInScope(
+  writes: ConfigurationItemWrites,
+  scope: ConfigurationWriteScope,
+): ConfigurationItemWriteFailure | null {
+  return writes.failure !== null && scope(writes.failure.write)
+    ? writes.failure
+    : null;
 }
 
 export function configurationItemDraft(

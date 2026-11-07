@@ -19,6 +19,10 @@ import type {
   SandboxSummary,
   UserSandboxCost,
 } from "@traycer/protocol/host/sandbox-control";
+import {
+  HOST_SANDBOX_STATES,
+  type HostSandboxState,
+} from "@traycer/protocol/host/host-status";
 import type { SandboxGrantsSummary } from "@traycer/protocol/host/sandbox-secrets";
 import {
   createFakeSandboxBinding,
@@ -396,6 +400,70 @@ describe("<SandboxCard /> team cost view", () => {
 
     expect(screen.getAllByText("Not billing")).toHaveLength(1);
     expect(screen.queryByText("under $0.01 an hour")).toBeNull();
+  });
+
+  describe("with no ledger, each state's own rate", () => {
+    const PRICE = { awakeMc: 120, suspendedMc: 40, stoppedMc: 20 };
+    const HEADER_RATE: Record<HostSandboxState, string> = {
+      creating: "Not billing",
+      awake: "$0.12 an hour",
+      suspending: "$0.04 an hour",
+      suspended: "$0.04 an hour",
+      resuming: "$0.12 an hour",
+      stopping: "$0.02 an hour",
+      stopped: "$0.02 an hour",
+      starting: "$0.12 an hour",
+      released: "Not billing",
+      destroying: "Not billing",
+      destroyed: "Not billing",
+      failed: "Not billing",
+    };
+
+    function headerRate(sandbox: HostScopeSandbox): string {
+      render(
+        <div data-testid="header-rate">
+          <SandboxHeaderCost sandbox={{ ...sandbox, teamOwned: true }} />
+        </div>,
+      );
+      return text("header-rate").replace("·", "");
+    }
+
+    it.each(HOST_SANDBOX_STATES)("reads %s from its own tier", (state) => {
+      const sandbox = sandboxOf(state, false, { priceMcPerHour: PRICE });
+      expect(headerRate(sandbox)).toBe(HEADER_RATE[state]);
+    });
+
+    it("reads the summary's state when the host list has none yet", () => {
+      const sandbox = sandboxOf(null, false, {
+        state: "destroyed",
+        priceMcPerHour: PRICE,
+      });
+      expect(headerRate(sandbox)).toBe("Not billing");
+    });
+
+    it.each([
+      ["suspending", "Awake rate", "$0.12 an hour"],
+      ["stopping", "Awake rate", "$0.12 an hour"],
+      ["resuming", "Storage rate", "$0.04 an hour"],
+      ["starting", "Storage rate", "$0.04 an hour"],
+    ] as const)(
+      "labels the other rate of a %s card as %s",
+      (state, label, rate) => {
+        renderCard(sandboxOf(state, false, { priceMcPerHour: PRICE }), true);
+        expect(screen.getByText(label)).toBeTruthy();
+        expect(text("sandbox-card-other-rate")).toBe(rate);
+      },
+    );
+
+    it.each(["destroying", "destroyed"] as const)(
+      "states no other rate on a %s card, which accrues nothing",
+      (state) => {
+        renderCard(sandboxOf(state, false, { priceMcPerHour: PRICE }), true);
+        expect(screen.queryByTestId("sandbox-card-other-rate")).toBeNull();
+        expect(screen.queryByText("Storage rate")).toBeNull();
+        expect(screen.queryByText("Awake rate")).toBeNull();
+      },
+    );
   });
 
   it("mounts no cost view on a team card, and the personal view on a personal one", () => {

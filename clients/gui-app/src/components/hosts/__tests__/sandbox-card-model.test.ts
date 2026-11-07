@@ -10,6 +10,7 @@ import {
   sandboxFrozenLine,
   sandboxGuestConfigFailure,
   sandboxIdleLine,
+  sandboxBilledPriceField,
   sandboxOperationalLine,
   sandboxSecretsReadiness,
   sandboxStateLine,
@@ -17,6 +18,7 @@ import {
   sandboxTileOverlay,
   sandboxWithdrawalLine,
   type SandboxCardAction,
+  type SandboxPriceField,
 } from "@/components/hosts/sandbox-card-model";
 import {
   HOST_HEALTH_TONE,
@@ -693,5 +695,26 @@ describe("sandboxSecretsReadiness", () => {
     expect(readiness?.tone).toBe("degraded");
     expect(readiness?.text).not.toContain("at :");
     expect(readiness?.text).not.toContain("  ");
+  });
+});
+
+describe("sandboxBilledPriceField", () => {
+  const BILLED: Record<HostSandboxState, SandboxPriceField | null> = {
+    creating: null,
+    awake: "awakeMc",
+    suspending: "suspendedMc",
+    suspended: "suspendedMc",
+    resuming: "awakeMc",
+    stopping: "stoppedMc",
+    stopped: "stoppedMc",
+    starting: "awakeMc",
+    destroying: null,
+    destroyed: null,
+    failed: null,
+    released: null,
+  };
+
+  it.each(HOST_SANDBOX_STATES)("names the price %s accrues", (state) => {
+    expect(sandboxBilledPriceField(state)).toBe(BILLED[state]);
   });
 });

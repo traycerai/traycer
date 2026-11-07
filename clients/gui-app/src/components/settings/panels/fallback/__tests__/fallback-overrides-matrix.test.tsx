@@ -332,6 +332,21 @@ describe("FallbackOverridesMatrix - editing", () => {
     expect(screen.queryByText("Main plan")).toBeNull();
   });
 
+  it("counts the one problem still on the main plan in the singular", () => {
+    renderMatrix(
+      policy({
+        reasonOverrides: {
+          auth: "off",
+          rate_limit: ["profile", "notify"],
+          billing: "off",
+          model_unavailable: "off",
+        },
+      }),
+    );
+    expect(screen.getByText("1 problem follows the main plan")).toBeTruthy();
+    expect(screen.getByText("· 4 custom")).toBeTruthy();
+  });
+
   it("keeps recovery-disabled and routing-disabled context in a collapsed row summary", () => {
     renderMatrix(policy({ enabled: false, reasonOverrides: { auth: "off" } }));
     const summary = rowButton("auth");

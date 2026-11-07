@@ -386,6 +386,40 @@ export function sandboxOperationalLine(
   }
 }
 
+/** The list price a state accrues: the awake rate, or one of the two storage rates. */
+export type SandboxPriceField = "awakeMc" | "suspendedMc" | "stoppedMc";
+
+/**
+ * The list price a sandbox in `state` accrues, or `null` when it accrues
+ * nothing. The meter bills only awake (compute) and suspended or stopped
+ * (storage); a move in flight is billed as where it is going, the way the
+ * rows read it. A sandbox that has not started, has failed to start or has
+ * been or is being destroyed accrues nothing. Only the Automations row rests
+ * `released`, and it is never metered.
+ */
+export function sandboxBilledPriceField(
+  state: HostSandboxState,
+): SandboxPriceField | null {
+  switch (state) {
+    case "awake":
+    case "resuming":
+    case "starting":
+      return "awakeMc";
+    case "suspending":
+    case "suspended":
+      return "suspendedMc";
+    case "stopping":
+    case "stopped":
+      return "stoppedMc";
+    case "creating":
+    case "released":
+    case "destroying":
+    case "destroyed":
+    case "failed":
+      return null;
+  }
+}
+
 /** The idle period the control plane applies when a row sets none. */
 export const SANDBOX_DEFAULT_IDLE_MINUTES = 30;
 

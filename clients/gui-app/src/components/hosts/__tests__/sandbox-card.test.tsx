@@ -1741,7 +1741,7 @@ describe("<SandboxCard /> condensed secrets and network", () => {
     );
 
     const row = screen.getByTestId("sandbox-card-secrets");
-    expect(row.textContent).toContain("1 of 1 secrets not working");
+    expect(row.textContent).toContain("1 of 1 secret not working");
     expect(row.textContent).toContain("See why");
     expect(row.textContent).toContain("Manage");
     fireEvent.click(within(row).getByRole("button", { name: "See why" }));
@@ -1838,7 +1838,7 @@ describe("<SandboxCard /> condensed secrets and network", () => {
     );
 
     const row = screen.getByTestId("sandbox-card-secrets");
-    expect(row.textContent).toContain("1 of 1 secrets not working");
+    expect(row.textContent).toContain("1 of 1 secret not working");
     fireEvent.click(within(row).getByRole("button", { name: "See why" }));
     const details = screen.getByTestId("sandbox-card-secret-details");
     await waitFor(() => expect(details.hasAttribute("open")).toBe(true));

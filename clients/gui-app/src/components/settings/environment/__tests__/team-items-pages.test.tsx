@@ -66,6 +66,11 @@ const variable = (
     revision,
   });
 
+async function selectOs(user: UserEvent, name: string): Promise<void> {
+  await user.click(screen.getByRole("combobox", { name: "Operating system" }));
+  await user.click(await screen.findByRole("option", { name }));
+}
+
 describe("TeamVariablesAndShells", () => {
   it("keeps values compact until edited and opens a draft row from Add variable", async () => {
     const harness = mountTeamPage(poolSource("editor"), {
@@ -427,6 +432,37 @@ describe("TeamVariablesAndShells", () => {
     expect(screen.getByText("No variables.")).toBeTruthy();
   });
 
+  it("shows an added variable's awaiting-readback line, Retry and row only under the operating system it was added to", async () => {
+    const harness = mountTeamPage(poolSource("editor"), {
+      "environment.configuration.items": () => ({ items: [] }),
+      "environment.configuration.items.put": () => ({
+        outcome: "saved",
+        revision: 1,
+      }),
+      "environment.host.list": () => ({ hosts: [] }),
+    });
+    const user = userEvent.setup();
+    render(<TeamVariablesAndShells />, { wrapper: harness.Wrapper });
+    await selectOs(user, "Linux");
+    await user.click(
+      await screen.findByRole("button", { name: "Add variable" }),
+    );
+    await user.type(screen.getByLabelText("Variable name"), "API_URL");
+    await user.click(screen.getByRole("button", { name: "Add a variable" }));
+    const refreshed = "Saved, but latest settings haven't refreshed.";
+    expect(await screen.findByText(refreshed)).toBeTruthy();
+    expect(screen.getByText("API_URL")).toBeTruthy();
+    expect(screen.queryByText("No variables.")).toBeNull();
+
+    await selectOs(user, "macOS");
+    expect(screen.queryByText(refreshed)).toBeNull();
+    expect(screen.queryByRole("button", { name: "Retry" })).toBeNull();
+    expect(screen.queryByText("API_URL")).toBeNull();
+    expect(screen.getByText("No variables.")).toBeTruthy();
+    await selectOs(user, "Linux");
+    expect(screen.getByText(refreshed)).toBeTruthy();
+  });
+
   describe("a shell write", () => {
     const shellItem = configurationItem({
       kind: "shell",
@@ -530,6 +566,50 @@ describe("TeamVariablesAndShells", () => {
         },
       ]);
       expect(screen.queryByText(/(?:Saved|Removed)[.,]/)).toBeNull();
+    });
+
+    it("shows a shell write's pending line only on the operating system it addresses", async () => {
+      const put = Promise.withResolvers<{
+        outcome: "saved";
+        revision: number;
+      }>();
+      const harness = mountTeamPage(poolSource("editor"), {
+        "environment.configuration.items": () => ({ items: [shellItem] }),
+        "environment.configuration.items.put": () => put.promise,
+        "environment.host.list": () => ({ hosts: [] }),
+      });
+      const user = userEvent.setup();
+      render(<TeamVariablesAndShells />, { wrapper: harness.Wrapper });
+      await typeNewPath(user);
+      expect(await screen.findByText("shell · Saving")).toBeTruthy();
+
+      await selectOs(user, "Linux");
+      expect(screen.queryByText("shell · Saving")).toBeNull();
+      await selectOs(user, "All operating systems");
+      expect(screen.getByText("shell · Saving")).toBeTruthy();
+    });
+
+    it("shows a shell write's awaiting-readback line and Retry only on the operating system it addresses", async () => {
+      const harness = mountTeamPage(poolSource("editor"), {
+        "environment.configuration.items": () => ({ items: [shellItem] }),
+        "environment.configuration.items.put": () => ({
+          outcome: "saved",
+          revision: 4,
+        }),
+        "environment.host.list": () => ({ hosts: [] }),
+      });
+      const user = userEvent.setup();
+      render(<TeamVariablesAndShells />, { wrapper: harness.Wrapper });
+      await typeNewPath(user);
+      const refreshed = "Saved, but latest settings haven't refreshed.";
+      expect(await screen.findByText(refreshed)).toBeTruthy();
+
+      await selectOs(user, "Linux");
+      expect(screen.queryByText(refreshed)).toBeNull();
+      expect(screen.queryByRole("button", { name: "Retry" })).toBeNull();
+      await selectOs(user, "All operating systems");
+      expect(screen.getByText(refreshed)).toBeTruthy();
+      expect(screen.getByRole("button", { name: "Retry" })).toBeTruthy();
     });
 
     it("keeps a revisionless accepted Remove pending until a read confirms absence, then allows a fresh create", async () => {

@@ -35,6 +35,9 @@ import {
   useConfigurationItemWrites,
   sameConfigurationItemAddress,
   configurationItemDraft,
+  failureInScope,
+  pendingWriteInScope,
+  shellWriteScope,
   type ConfigurationItemWrites,
   type ConfigurationItemWrite,
 } from "./configuration-item-writes";
@@ -191,7 +194,7 @@ function TeamShellEditor(props: {
   readonly writes: ConfigurationItemWrites;
 }): ReactNode {
   const canEdit = useCanEditConfiguration();
-  const pending = props.writes.pending;
+  const pending = pendingWriteInScope(props.writes, shellWriteScope(props.os));
   const saved = shownShell(props.item, acceptedShell(props.writes, props.os));
   const draft = shellDraft(props.writes, props.os);
   const initial = shellDraftState(draft, saved);
@@ -291,7 +294,7 @@ function TeamShellEditor(props: {
         changed={changed}
         path={path}
         busy={busy}
-        saving={pending?.write.kind === "shell" && pending.accepted === null}
+        saving={pending?.accepted === null}
         onCancel={() => {
           if (draft !== null) props.writes.discardDraft(draft);
           setPath(saved.path);
@@ -361,28 +364,17 @@ function ShellWriteStatus(props: {
   readonly writes: ConfigurationItemWrites;
   readonly os: EnvironmentOs;
 }): ReactNode {
-  const pending = props.writes.pending;
-  const failure = props.writes.failure;
-  const addressedFailure =
-    failure !== null &&
-    sameConfigurationItemAddress(failure.write, {
-      kind: "shell",
-      key: "shell",
-      os: props.os,
-    })
-      ? failure
-      : null;
+  const scope = shellWriteScope(props.os);
+  const pending = pendingWriteInScope(props.writes, scope);
   return (
     <>
       <ConfigurationPendingWriteStatus
-        write={
-          pending?.write.kind === "shell" && pending.accepted === null
-            ? pending.write
-            : null
-        }
+        write={pending?.accepted === null ? pending.write : null}
       />
-      <ConfigurationItemWriteStatus writes={props.writes} kind="shell" />
-      <ConfigurationItemWriteError failure={addressedFailure} />
+      <ConfigurationItemWriteStatus writes={props.writes} scope={scope} />
+      <ConfigurationItemWriteError
+        failure={failureInScope(props.writes, scope)}
+      />
     </>
   );
 }

@@ -294,7 +294,7 @@ describe("TeamTextItems accepted writes", () => {
     );
     await userEvent.click(screen.getByRole("menuitem", { name: "Delete" }));
     expect(
-      await screen.findByText("Saved. These settings changed again."),
+      await screen.findByText("Removed. These settings changed again."),
     ).toBeTruthy();
     await userEvent.click(
       screen.getByRole("button", { name: "Edit NODE_ENV value" }),

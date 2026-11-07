@@ -219,9 +219,10 @@ export function sandboxSecretsSummary(
   const github = summary.github;
   const gitHubFailure =
     github !== null && (!github.linked || github.installations.length === 0);
-  const secrets = `${count} ${count === 1 ? "secret" : "secrets"}`;
+  const noun = count === 1 ? "secret" : "secrets";
+  const secrets = `${count} ${noun}`;
   if (failed > 0)
-    return `${failed} of ${count} secrets not working${gitHubFailure ? " · GitHub not working" : ""}`;
+    return `${failed} of ${secrets} not working${gitHubFailure ? " · GitHub not working" : ""}`;
   if (gitHubFailure) return `${secrets} · GitHub not working`;
   if (count === 0) return secrets;
   if (tone === "degraded") return `${secrets} · not working`;

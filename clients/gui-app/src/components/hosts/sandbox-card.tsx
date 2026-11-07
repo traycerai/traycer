@@ -15,6 +15,7 @@ import { toastSandboxVerbOutcome } from "@/components/hosts/sandbox-confirm-mode
 import {
   formatSandboxDay,
   SANDBOX_CARD_ACTION_LABEL,
+  sandboxBilledPriceField,
   sandboxCardActions,
   sandboxHeaderPrimaryAction,
   sandboxCardShowsCostView,
@@ -199,14 +200,16 @@ function formatHeaderRate(
     return cost.currentRateMillicreditsPerHour === 0
       ? "Not billing"
       : hourlyRate(cost.currentRateMillicreditsPerHour);
-  // Without a ledger (a team's sandbox, or a personal ledger not read yet), a
-  // frozen sandbox still accrues nothing: the list price is not its rate.
+  // Without a ledger (a team's sandbox, or a personal ledger not read yet),
+  // the list price of the state's own tier is the rate. A frozen sandbox and
+  // a state that accrues nothing are not billing: the list price is not
+  // their rate.
   if (frozen) return "Not billing";
+  const field = sandboxBilledPriceField(state ?? summary.state);
+  if (field === null) return "Not billing";
   const price = summary.priceMcPerHour;
   if (price === null) return "Not priced here";
-  if (state === "suspended") return hourlyRate(price.suspendedMc);
-  if (state === "stopped") return hourlyRate(price.stoppedMc);
-  return hourlyRate(price.awakeMc);
+  return hourlyRate(price[field]);
 }
 
 function SandboxPersonalHeaderCost(props: {
@@ -424,7 +427,10 @@ function SandboxOtherRate(props: {
 }): ReactNode {
   const price = props.summary.priceMcPerHour;
   if (price === null || props.summary.kind === "automation") return null;
-  const resting = props.state === "suspended" || props.state === "stopped";
+  const state = props.state ?? props.summary.state;
+  if (state === "destroying" || state === "destroyed") return null;
+  const field = sandboxBilledPriceField(state);
+  const resting = field === "suspendedMc" || field === "stoppedMc";
   const rate = resting
     ? price.awakeMc
     : Math.max(price.suspendedMc, price.stoppedMc);
