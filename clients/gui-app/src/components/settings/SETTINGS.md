@@ -1057,7 +1057,8 @@ credential; if the server needs one, it stops working until you pick another
 secret on MCP servers." ("Used by <A> and <B>." or "<A>, <B> and <n> more",
 then "Removing it leaves them without a credential; any that need one stop
 working until you pick another secret on MCP servers."), whose "MCP servers"
-opens that page (`secretUsedByLine`).
+opens that page (`secretUsedByLine`). A held secret's
+row keeps its "Waiting for you" badge.
 
 **Environment ▸ Retrospective sheet and Stop using Personal.** On a 1.1
 host, Overview shows `Shared by an earlier version` / `This computer stopped
@@ -1074,9 +1075,10 @@ Local picker row's subtitle (`its own settings, not in Personal yet`,
 `partly in Personal`, `stopped using Personal`) and `Move to Personal` /
 `Finish moving` verb come from those planes (E4's slot); the row's `Local`
 badge reads "Settings on this computer only" on hover. The Secrets page's
-`N commands from {host} are on hold until you choose · Review them` line
-(`1 command … is on hold until you choose · Review it`) opens the same sheet
-for that host's held rows, where Approve and Discard answer one row through
+`N values from {host} are on hold until you choose · Review them` line
+(`1 value … is on hold until you choose · Review it`) opens the same sheet
+for that host's held rows. `Keep as a secret` collects Add-secret's binding (kind, protocol,
+hosts, port, swap sites, gateway consent) with no value field, then
 `environment.review.heldApply`. Stop using Personal opens the preview
 (`environment.move.stopPreview`) and confirm (`environment.move.stop`) after
 every needs-choice row has Keep locally, Remove from this computer, or
@@ -1089,7 +1091,11 @@ kinds the page edits: each convergence notice from `environment.notices`
 with Undo (`environment.undo`, with the grant) while `undoAvailable`, and each
 "needs you" row from `environment.review` ("LOG_LEVEL is waiting for you:
 runs a command / was changed without your confirmation.") with Review, which
-opens Secrets. A value typed there that looks like a key (`classifyCredential`) is
+opens Secrets. A value held because it looks like a key reads
+"LOG_LEVEL looks like a key and is on hold until you choose · Review", and
+its Variables or provider-variable row reads "LOG_LEVEL · on hold until you
+choose · Review" with no value; both Reviews open the retrospective sheet for
+that value. A value typed there that looks like a key (`classifyCredential`) is
 refused in its row with "This looks like a key. Add it as a secret.", whose
 link opens Add a secret with the name and value filled in; nothing is stored
 as a variable. A provider's own key variable typed on its Env tab
@@ -1099,10 +1105,10 @@ opens that provider's Account tab; the typed value is cleared and nothing is
 saved. That tab is the one the provider page shows (`apiKey.supported`), so a
 provider without one, such as Claude Code, keeps the first line. A name one
 of Personal's secrets is set under (`environment.secrets.list@1.2` rows'
-`variables`) reads "ENV_E2E_SERVICE_TOKEN · from the secret
-ENV_E2E_SERVICE_TOKEN · Secrets" on Variables, with no value and nothing to
-edit there. A provider's Env has no such name: nothing binds a secret to a
-name in one provider's env. A value
+`variables` and `providerVariables`: a moved key's secret is bound to the item
+it came from) reads "ENV_E2E_SERVICE_TOKEN · from the secret
+ENV_E2E_SERVICE_TOKEN · Secrets" on Variables or that provider's Env, with no
+value and nothing to edit there. A value
 already saved that looks like a key shows as dots with Remove, never in a
 field, on every Variables and Env list (Personal, a team, a Local row), with
 the same line beneath where the page has one; its link carries the saved
@@ -3127,7 +3133,21 @@ window`, recorded in the type as `coverage.browsersAreMountedOnly` -
     10.8, AND says it can enforce the switch for that provider
     (`nativeMemorySupported`) - there is no prompt-level fallback for memory,
     so a provider with no contract the host can drive shows no switch at all
-    rather than one that stores a preference nothing acts on. A change applies
+    rather than one that stores a preference nothing acts on. That answer is
+    VERSION-AWARE and fails closed: the host judges the executable it would
+    actually run (a selection degrading to bundled is judged as bundled), and a
+    version below the provider's verified floor, or one it cannot read at all,
+    reports unsupported. Codex's floor is a measured break - the keys were
+    renamed from `features.memory_tool`, so the switch is inert on an older
+    binary - and the `custom`/`path` CLI tiers run whatever the user points at,
+    so such a binary is reachable. Because the control then disappears while a
+    stored `off` remains stored, the host REFUSES to start a session rather than
+    run one with memory live under a setting that reads off; the error names the
+    required version and points back here. Recovery without a fake toggle:
+    choose a supported executable, or reset that provider's settings
+    (`providers.settingsFile.resetProvider`). `providers.setNativeMemory`
+    refuses an unenforceable `false` but always accepts `true`, so a stored off
+    can be cleared even once the switch is hidden. A change applies
     when a provider session next starts and never interrupts a running turn:
     Claude's next turn spawns a fresh subprocess because the value is in its
     options signature, and Codex retires the session's app-server between
