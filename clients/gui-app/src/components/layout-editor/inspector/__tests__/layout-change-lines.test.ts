@@ -398,7 +398,7 @@ describe("sessionChangeLines", () => {
         {},
         {
           ...DEFAULT_ARRANGEMENT,
-          sidebarSide: "right",
+          sidebarSide: "left",
         },
       );
 
@@ -407,16 +407,16 @@ describe("sessionChangeLines", () => {
       expect(lines.arrangement).toContainEqual({
         key: "sidebarSide",
         label: "Sidebar side",
-        before: "Left",
-        after: "Right",
+        before: "Right",
+        after: "Left",
         revert: {
           kind: "changes",
           changes: [
             {
               kind: "field",
               field: "sidebarSide",
-              current: "right",
-              baseline: "left",
+              current: "left",
+              baseline: "right",
             },
           ],
         },
@@ -484,7 +484,7 @@ describe("sessionChangeLines", () => {
       const entry = sessionSnapshot("default", {}, DEFAULT_ARRANGEMENT);
       const changed: LayoutArrangement = {
         ...DEFAULT_ARRANGEMENT,
-        sidebarSide: "right",
+        sidebarSide: "left",
       };
       const reverted: LayoutArrangement = {
         ...changed,
@@ -596,8 +596,8 @@ describe("revertSessionLine", () => {
         {},
         {
           ...DEFAULT_ARRANGEMENT,
-          sidebarSide: "right",
-          minimapSide: "left",
+          sidebarSide: "left",
+          minimapSide: "right",
         },
       );
       const lines = sessionChangeLines(entry, current);
@@ -611,7 +611,7 @@ describe("revertSessionLine", () => {
       expect(result.arrangement.sidebarSide).toBe(
         DEFAULT_ARRANGEMENT.sidebarSide,
       );
-      expect(result.arrangement.minimapSide).toBe("left");
+      expect(result.arrangement.minimapSide).toBe("right");
       expect(arrangementKeys(result, entry)).toEqual(["minimapSide"]);
     });
   });
@@ -706,7 +706,7 @@ describe("revertSessionLine", () => {
         {},
         {
           ...DEFAULT_ARRANGEMENT,
-          sidebarSide: "right",
+          sidebarSide: "left",
         },
       );
       const lines = sessionChangeLines(entry, current);
@@ -717,7 +717,7 @@ describe("revertSessionLine", () => {
 
       expect(result.basePreset).toBe(entry.basePreset);
       expect(result.overrides).toEqual(entry.overrides);
-      expect(result.arrangement.sidebarSide).toBe("right");
+      expect(result.arrangement.sidebarSide).toBe("left");
 
       expect(styleKeys(result, entry)).toEqual([]);
       expect(arrangementKeys(result, entry)).toEqual(["sidebarSide"]);
@@ -733,7 +733,7 @@ describe("revertSession", () => {
       {},
       {
         ...DEFAULT_ARRANGEMENT,
-        sidebarSide: "right",
+        sidebarSide: "left",
         hiddenProviders: [USAGE_PROVIDER_IDS[0]],
       },
     );

@@ -615,6 +615,7 @@ describe("useArtifactLinkOpener", () => {
     });
     expect(mocks.openTile).toHaveBeenCalledWith(
       expect.objectContaining({ target: { tabId: "tab-1" } }),
+      "user",
     );
   });
 
@@ -841,6 +842,7 @@ describe("useArtifactLinkOpener", () => {
         gesture: "single",
         placement: null,
       }),
+      "user",
     );
     expect(
       mocks.openProjectedSidebarNodeInTabWhenAvailable,

@@ -547,10 +547,14 @@ function stagedForkTarget(
 function renderStaged(
   stagedSandbox: Extract<StagedSandboxTarget, { kind: "new" }>,
 ): void {
+  renderStagedTarget(stagedForkTarget(stagedSandbox));
+}
+
+function renderStagedTarget(target: ChatForkDialogTarget): void {
   render(
     <ChatForkDialog
       open
-      target={stagedForkTarget(stagedSandbox)}
+      target={target}
       epicId="epic-test"
       tabId="tab-test"
       onOpenChange={dialogMocks.onOpenChange}
@@ -654,6 +658,35 @@ describe("ChatForkDialog on a New sandbox the chip picked", () => {
 
     expect(readStagedSandbox(FORK_SURFACE)?.target).toEqual(NEW_SANDBOX);
     expect(dialogMocks.stagingSeen.at(-1)).not.toBeNull();
+  });
+
+  it("describes a new sandbox fork with its saved transcript and no files", () => {
+    dialogMocks.directoryHosts = [
+      directoryEntry(TAB_HOST_ID, "Tab host"),
+      directoryEntry(OLD_HOST_ID, "Old host"),
+    ];
+    dialogMocks.clientsByHostId.set(OLD_HOST_ID, buildHostClient(OLD_HOST_ID));
+    recordNegotiatedHostManifest(TAB_HOST_ID, {
+      "epic.createChat": { major: 1, minor: 1 },
+    });
+    recordNegotiatedHostManifest(OLD_HOST_ID, {
+      "epic.createChat": { major: 1, minor: 1 },
+    });
+    renderStagedTarget({
+      ...forkTarget(),
+      assistantMessageId: null,
+      stagedSandbox: NEW_SANDBOX,
+    });
+
+    act(() => {
+      dialogMocks.selectHost?.(OLD_HOST_ID);
+    });
+
+    const result = screen.getByTestId("chat-fork-result").textContent;
+    expect(result).toContain(
+      "Starts from this chat's latest saved transcript in an empty sandbox, with no files; work still in progress may not be included.",
+    );
+    expect(result).toContain("The original agent continues working.");
   });
 
   it("stages nothing and skips the publication read for a single-host fork", () => {

@@ -201,7 +201,8 @@ export interface SandboxSummary {
   readonly priceMcPerHour: SandboxHourlyPrice | null;
   /**
    * The environment the sandbox belongs to; `null` from a server that
-   * predates environments, which reads as the person's Personal one.
+   * predates environments. An absent id does not establish Personal
+   * membership; the sandbox's environment is unknown.
    */
   readonly environmentId: string | null;
   /**
@@ -691,16 +692,34 @@ export const sandboxCataloguePricingSchema: z.ZodType<SandboxCataloguePricing> =
     }),
   );
 
+export interface SandboxShapePrice {
+  readonly cpus: number;
+  readonly memoryMb: number;
+  readonly diskMb: number;
+  readonly priceMcPerHour: SandboxHourlyPrice;
+}
+
+const sandboxShapePriceSchema: z.ZodType<SandboxShapePrice> = lazySchema(() =>
+  z.object({
+    cpus: z.number().positive(),
+    memoryMb: z.number().int().positive(),
+    diskMb: z.number().int().positive(),
+    priceMcPerHour: sandboxHourlyPriceSchema,
+  }),
+);
+
 export interface SandboxCatalogueRegion {
   readonly id: string;
   readonly label: string;
   /** The price of the provider's SMALLEST shape here, for a "from" line. */
   readonly fromPriceMcPerHour: SandboxHourlyPrice;
   /**
-   * The per-unit rates any shape here is priced from; `null` from a server
-   * that predates them, which leaves only the "from" price.
+   * The fallback per-unit rates; `null` when a server supplies none or prices
+   * whole shapes instead. Exact {@link shapePrices} take precedence.
    */
   readonly pricing: SandboxCataloguePricing | null;
+  /** Exact rung prices; absent from servers that publish only unit rates. */
+  readonly shapePrices?: readonly SandboxShapePrice[];
 }
 
 export const sandboxCatalogueRegionSchema: z.ZodType<SandboxCatalogueRegion> =
@@ -710,6 +729,7 @@ export const sandboxCatalogueRegionSchema: z.ZodType<SandboxCatalogueRegion> =
       label: z.string(),
       fromPriceMcPerHour: sandboxHourlyPriceSchema,
       pricing: sandboxCataloguePricingSchema.nullable().default(null),
+      shapePrices: z.array(sandboxShapePriceSchema).optional(),
     }),
   );
 
@@ -967,6 +987,11 @@ export const SANDBOX_REFUSAL_CODE_ENVIRONMENT_UNAVAILABLE =
  * old name, so trying again is safe.
  */
 export const SANDBOX_REFUSAL_CODE_RENAME_UNAVAILABLE = "rename_unavailable";
+/**
+ * A kept team sandbox (a create or a Keep) whose environment already has its
+ * bot host: a kept sandbox or a team machine (Tracy Bots T141).
+ */
+export const SANDBOX_REFUSAL_CODE_TEAM_HOST_EXISTS = "team_host_exists";
 
 // -----------------------------------------------------------------------------
 // Lifecycle verbs

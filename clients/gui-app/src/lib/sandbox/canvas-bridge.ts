@@ -48,6 +48,18 @@ export type CanvasElementLocator =
   | { readonly tid: string };
 export type CanvasMode = "edit" | "play";
 
+/**
+ * What an html page reports while its reader comments on it. Nothing covers
+ * that page, so its wheel, touch and pinch stay its own; it reports instead
+ * the element under the pointer, the point a click picked, and that its
+ * layout moved (a scroll, a resize or a zoom), so outlines and pins can be
+ * measured again. Points are the frame's own CSS pixels.
+ */
+export type CanvasPageActivity =
+  | { readonly kind: "hover"; readonly element: CanvasElement | null }
+  | { readonly kind: "pick"; readonly x: number; readonly y: number }
+  | { readonly kind: "layout" };
+
 /** The browser annotation's curated set plus border, padding and margin shorthand (cap 48). */
 export const CANVAS_STYLE_PROPERTIES = [
   "display",
@@ -295,6 +307,20 @@ export function parseCanvasPageError(value: unknown): CanvasPageError | null {
   )
     return null;
   return { message: value.message, stack: value.stack };
+}
+export function parseCanvasPageActivity(
+  method: string,
+  params: Record<string, unknown>,
+): CanvasPageActivity | null {
+  if (method === "traycer/canvas/layout") return { kind: "layout" };
+  if (method === "traycer/canvas/pick")
+    return coordinate(params.x) && coordinate(params.y)
+      ? { kind: "pick", x: params.x, y: params.y }
+      : null;
+  if (method !== "traycer/canvas/hover") return null;
+  if (params.element === null) return { kind: "hover", element: null };
+  const element = parseCanvasElement(params.element);
+  return element === null ? null : { kind: "hover", element };
 }
 export function parseCanvasRelativeLink(value: unknown): string | null {
   return canvasRecord(value) && text(value.href, 8192) ? value.href : null;

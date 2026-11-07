@@ -26,7 +26,9 @@ export function SoundtrackSignalsBridge() {
  *
  * The wish is read at these two moments and not subscribed to. Another window
  * turning the soundtrack on must not arm a second one here, and another window
- * turning it off must disarm this one, which reading it at the gesture does.
+ * turning it off must disarm this one, which reading it at the gesture does. A
+ * pause the person left set stays silent: the gesture opens nothing, and Play
+ * opens the session from its own.
  */
 export function SoundtrackWarmupBridge(): null {
   const enabled = useSoundtrackStore((state) => state.enabled);
@@ -39,7 +41,9 @@ export function SoundtrackWarmupBridge(): null {
       return undefined;
     }
     return onNextAudioGesture(() => {
-      if (useSettingsStore.getState().soundtrackEnabled) {
+      const { soundtrackEnabled, soundtrackPaused } =
+        useSettingsStore.getState();
+      if (soundtrackEnabled && !soundtrackPaused) {
         useSoundtrackStore.getState().enable();
       }
     });

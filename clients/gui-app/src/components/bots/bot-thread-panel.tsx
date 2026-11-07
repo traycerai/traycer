@@ -12,7 +12,10 @@ import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
 import { Button } from "@/components/ui/button";
 import { ChatBotMessage } from "@/components/chat/chat-bot-message";
 import { BotAvatar } from "@/components/bots/bot-avatars";
-import { BotChatTranscript } from "@/components/bots/bot-chat-transcript";
+import {
+  BotChatTranscript,
+  BotTranscriptImageScope,
+} from "@/components/bots/bot-chat-transcript";
 import { useBotFailedRecovery } from "@/components/bots/bot-failed-recovery";
 import { BotRoutingCard } from "@/components/bots/bot-routing-card";
 import { useBotTurnLocateQuery } from "@/hooks/bots/use-bot-turn-locate-query";
@@ -32,6 +35,7 @@ import {
 } from "@/components/bots/bot-channel-notices";
 import { BotReadFailure } from "@/components/bots/bot-read-failure";
 import { BotReplyingStrip } from "@/components/bots/bot-replying-strip";
+import { useBotReplyingTurn } from "@/hooks/bots/use-bot-replying-turn";
 import { BotTaskList } from "@/components/bots/bot-task-list";
 import { BotThreadFollowControl } from "@/components/bots/bot-thread-follow";
 import { ChannelPost } from "@/components/bots/bot-channel-post";
@@ -44,6 +48,7 @@ import {
   useBotActivity,
 } from "@/hooks/bots/use-bot-activity";
 import { useBotFailedRequest } from "@/hooks/bots/use-bot-failed-request";
+import type { BotImageReach } from "@/hooks/bots/use-bot-send-version";
 import type {
   BotTranscriptLanding,
   QuestionAnswerSend,
@@ -139,6 +144,8 @@ export function BotThreadPanel(props: {
   readonly hostId: string;
   /** The host that runs the bot, where a signed-out provider is signed in again; `null` when none does. */
   readonly boundHostId: string | null;
+  /** What the panel's box does with images. */
+  readonly imageReach: BotImageReach;
   readonly botTitle: string;
   /** The channel the thread's post is in. */
   readonly conversationId: string;
@@ -153,7 +160,6 @@ export function BotThreadPanel(props: {
   readonly anchorSenderLabel: (senderUserId: string | null) => string;
   readonly resolveMember: BotMemberResolver;
   readonly onClose: () => void;
-  readonly onOpenActivity: () => void;
   readonly onEditPost: (edit: BotComposerEdit) => void;
   /** Opens a turn of the bot: its session, in place of the channel. */
   readonly onOpenTurn: BotTurnOpen;
@@ -164,7 +170,7 @@ export function BotThreadPanel(props: {
   /** A quote for the panel's box to add to what it shows; `null` for none. */
   readonly quote: BotComposerQuote | null;
 }): ReactNode {
-  const { botTitle, onClose, onOpenActivity, onOpenSession } = props;
+  const { botTitle, onClose, onOpenSession } = props;
   const thread = props.thread.kind === "listed" ? props.thread.thread : null;
   const threadId =
     props.thread.kind === "posted"
@@ -238,15 +244,6 @@ export function BotThreadPanel(props: {
               Thread session
             </Button>
           )}
-          <Button
-            type="button"
-            variant="ghost"
-            size="xs"
-            data-testid="bot-thread-activity"
-            onClick={onOpenActivity}
-          >
-            Activity
-          </Button>
         </div>
         <Button
           type="button"
@@ -279,6 +276,7 @@ type ThreadPanelBodyProps = {
   readonly botId: string;
   readonly hostId: string;
   readonly boundHostId: string | null;
+  readonly imageReach: BotImageReach;
   readonly botTitle: string;
   readonly conversationId: string;
   readonly originMessageId: string;
@@ -492,11 +490,19 @@ function ThreadOriginPost(
       data-testid="bot-thread-anchor"
       data-loaded={origin.loaded ? "true" : "false"}
     >
-      <ChatBotMessage
-        message={origin.row}
-        presentation={origin.loaded ? loadedPresentation : unloadedPresentation}
-        hoverActions={false}
-      />
+      <BotTranscriptImageScope
+        botId={botId}
+        chatId={conversationId}
+        hostId={hostId}
+      >
+        <ChatBotMessage
+          message={origin.row}
+          presentation={
+            origin.loaded ? loadedPresentation : unloadedPresentation
+          }
+          hoverActions={false}
+        />
+      </BotTranscriptImageScope>
       {queued ? (
         <div className="px-3">
           <BotQueuedNotice testId="bot-thread-queued" />
@@ -547,10 +553,6 @@ function ThreadTasks(props: {
     [tasks, threadId],
   );
   const threads = useMemo(() => (thread === null ? [] : [thread]), [thread]);
-  const place = useMemo(
-    () => ({ kind: "thread" as const, threadId }),
-    [threadId],
-  );
   const [band, setBand] = useState<HTMLDivElement | null>(null);
   const collapsed = useCollapsed(band);
   if (own.length === 0) return null;
@@ -575,7 +577,7 @@ function ThreadTasks(props: {
           hostId={hostId}
           tasks={own}
           threads={threads}
-          place={place}
+          threadId={threadId}
         />
       </div>
     </section>
@@ -716,10 +718,12 @@ function ThreadPanelBody(props: ThreadPanelBodyProps): ReactNode {
       />
       <BotMessageComposer
         botId={props.botId}
+        botTitle={props.botTitle}
         conversationId={box.conversationId}
         threadId={box.threadId}
         announcementId={box.announcementId}
         sendable={thread.sendable}
+        imageReach={props.imageReach}
         placeholder="Reply…"
         label={edit === null ? box.label : IN_THREAD_LABEL}
         testId="bot-thread-composer"
@@ -846,6 +850,13 @@ function KnownThread(
   // thread's typing line, and an answer it holds or fails is said on the
   // message, with Retry and Edit.
   const activity = useBotActivity(botId)?.threads[threadId] ?? null;
+  const replyingTurn = useBotReplyingTurn({
+    client,
+    hostId,
+    botId,
+    activity,
+    onOpenTurn,
+  });
   const failedInThread = useCallback(
     (requestId: string) => failedOn(activity, requestId),
     [activity],
@@ -1001,6 +1012,7 @@ function KnownThread(
       <BotReplyingStrip
         botTitle={botTitle}
         activity={activity}
+        turn={replyingTurn}
         testId="bot-thread-replying-strip"
       />
     </>

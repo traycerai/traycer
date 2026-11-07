@@ -84,6 +84,7 @@ function formContext(
       runnerHost: null,
       featureSettings: null,
       soundtrackOffered: false,
+      soundtrackOn: false,
       ...shell,
     },
     facts: { voiceInputEnabled: true },

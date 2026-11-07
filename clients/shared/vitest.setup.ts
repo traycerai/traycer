@@ -13,9 +13,13 @@ import { afterAll, afterEach } from "vitest";
 // `os.homedir()`. That answers from HOME (USERPROFILE on Windows) on every
 // call, so setting both here redirects every module, mocked or not; a
 // suite's own per-test isolation nests inside this one.
-const ORIGINAL_HOME_ENV = "TRAYCER_VITEST_ORIGINAL_HOME";
-const originalHome = process.env[ORIGINAL_HOME_ENV] ?? homedir();
-process.env[ORIGINAL_HOME_ENV] = originalHome;
+// Keep the first home across file/module resets without trusting an inherited
+// environment marker or exposing it to children and assertion diffs.
+const originalHomeKey = Symbol.for("traycer.vitest.originalHome");
+const previousHome: unknown = Reflect.get(process, originalHomeKey);
+const originalHome =
+  typeof previousHome === "string" ? previousHome : homedir();
+Reflect.set(process, originalHomeKey, originalHome);
 const testHome = mkdtempSync(join(tmpdir(), "traycer-shared-test-home-"));
 process.env.HOME = testHome;
 process.env.USERPROFILE = testHome;

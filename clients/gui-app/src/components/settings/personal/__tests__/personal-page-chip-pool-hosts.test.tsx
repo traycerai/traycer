@@ -47,6 +47,11 @@ const reads = vi.hoisted(
 
 vi.mock("@/components/settings/host-scope/use-host-scope", () => ({
   useHostScope: () => reads.scope,
+  useHostScopeFor: () => reads.scope,
+  WINDOW_HOST_SELECTION: {
+    scopedHostId: null,
+    setScopedHostId: () => undefined,
+  },
 }));
 vi.mock("@/hooks/environment/use-registered-host-environment-statuses", () => ({
   useRegisteredHostEnvironmentStatuses: () => reads.statuses,

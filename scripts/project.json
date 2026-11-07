@@ -24,7 +24,9 @@
         "{workspaceRoot}/**/package.json",
         "{workspaceRoot}/**/project.json",
         "{workspaceRoot}/clients/gui-app/scripts/lint-files.mjs",
-        "sharedGlobals"
+        "sharedGlobals",
+        "{projectRoot}/**/*.ts",
+        "{workspaceRoot}/**/*vitest*config*.ts"
       ]
     }
   }

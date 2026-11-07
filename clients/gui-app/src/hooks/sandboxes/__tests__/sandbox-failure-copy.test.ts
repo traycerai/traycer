@@ -56,9 +56,9 @@ describe("sandboxFailureMessage", () => {
   });
 
   it("words the frozen and busy refusals the card and the tile surface", () => {
-    expect(
-      sandboxFailureMessage(refused("sandbox_frozen", NO_DETAIL)),
-    ).toContain("credits ran out");
+    expect(sandboxFailureMessage(refused("sandbox_frozen", NO_DETAIL))).toBe(
+      "This sandbox is out of credits. Add credits to wake it.",
+    );
     expect(sandboxFailureMessage(refused("sandbox_busy", NO_DETAIL))).toContain(
       "stays awake",
     );
@@ -181,7 +181,7 @@ describe("sandboxFailureMessage", () => {
       }),
     ).toBe(sentence);
     expect(sandboxFailureMessage(refused("team_pods_full", NO_DETAIL))).toBe(
-      "Every team pod is full; ask an admin to add one.",
+      "Every team sandbox is full; ask an admin to add one.",
     );
   });
 
@@ -197,7 +197,7 @@ describe("sandboxFailureMessage", () => {
         currentAwakeBurnMcPerHour: null,
         message: "",
       }),
-    ).toBe("Every team pod is full; ask an admin to add one.");
+    ).toBe("Every team sandbox is full; ask an admin to add one.");
   });
 
   it("treats a code that is an Object.prototype name as unknown, not as a lookup hit", () => {

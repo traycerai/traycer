@@ -36,7 +36,7 @@ export function useOpenA2AMessagePeer(): (
         hostId: peer.hostId,
       };
       if (peer.epicId === epicId) {
-        openTile(tileIntent(node, { epicId }, "explicit", "direct_ui"));
+        openTile(tileIntent(node, { epicId }, "explicit", "direct_ui"), "user");
         return;
       }
       // Tile placement alone does not activate another task's header tab.
