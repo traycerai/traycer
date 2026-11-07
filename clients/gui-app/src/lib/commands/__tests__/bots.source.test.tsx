@@ -9,6 +9,7 @@ import {
   RouterProvider,
 } from "@tanstack/react-router";
 import type { HostDirectoryEntry } from "@traycer-clients/shared/host-client/host-directory";
+import { hostListItemToDirectoryEntry } from "@traycer-clients/shared/host-client/remote-fetcher";
 import { TabNavigationRouteBridge } from "@/components/layout/bridges/tab-navigation-route-bridge";
 import { registerHostPickerDirectory } from "@/hooks/host/use-host-picker-list";
 import { filterByScope } from "@/lib/commands/grouping";
@@ -33,6 +34,9 @@ import { useBotTabLandingStore } from "@/stores/bots/bot-tab-landing-store";
 import { useStandaloneBotsStore } from "@/stores/bots/standalone-bots-store";
 import { useTracySurfaceStore } from "@/stores/bots/tracy-surface-store";
 import { useSelectionAuthorityStore } from "@/stores/host/selection-authority-store";
+import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
+import { paneTabRefs } from "@/stores/epics/canvas/actions";
+import { collectPanes } from "@/stores/epics/canvas/tile-tree";
 import { emptyTabStripLayout } from "@/stores/tabs/layout";
 import { useTabsStore } from "@/stores/tabs/store";
 import { tabCommandCoordinator } from "@/stores/tabs/tab-command-coordinator";
@@ -150,6 +154,32 @@ function dialableEntry(hostId: string): HostDirectoryEntry {
   };
 }
 
+function remoteEntry(
+  hostId: string,
+  kind: "personal" | "sandbox",
+): HostDirectoryEntry {
+  return hostListItemToDirectoryEntry(
+    {
+      hostId,
+      displayName: hostId,
+      platform: "Linux",
+      kind,
+      publicKey: "key",
+      createdAt: "2026-07-01T12:00:00.000Z",
+      updatePolicy: "manual",
+      status: {
+        connectivity: "connectable",
+        viewerReachability: "unknown",
+        clientCloud: "ok",
+        updateState: "current",
+        appVersion: "1.0.0",
+        lastSeenAt: null,
+      },
+    },
+    "wss://relay.example.test/rpc",
+  );
+}
+
 function answerDirectory(entries: readonly HostDirectoryEntry[]): void {
   queryClient.setQueryData(
     uiQueryKeys.hostPicker(registerHostPickerDirectory(HOST_DIRECTORY)),
@@ -168,6 +198,7 @@ function resetStores(): void {
     visitedBotIds: [],
   });
   useBotTabLandingStore.setState(useBotTabLandingStore.getInitialState(), true);
+  useEpicCanvasStore.setState(useEpicCanvasStore.getInitialState(), true);
   useSelectionAuthorityStore.setState({
     attached: true,
     effectiveHostId: WINDOW_HOST,
@@ -306,6 +337,61 @@ describe("bots palette source", () => {
     });
     expect(useTracySurfaceStore.getState().hostId).toBe(WINDOW_HOST);
   });
+
+  it("opens Tracy on a reachable personal host when the selected host has no endpoint", async () => {
+    const tabId = useEpicCanvasStore.getState().openEpicTab("task-1", "Task");
+    useEpicCanvasStore.getState().openTileInTab(tabId, {
+      id: "chat-1",
+      instanceId: "instance-1",
+      type: "chat",
+      name: "Chat",
+      hostId: WINDOW_HOST,
+    });
+    answerDirectory([
+      { ...dialableEntry(WINDOW_HOST), websocketUrl: null },
+      remoteEntry(SURFACE_HOST, "personal"),
+    ]);
+    const router = await mountRouter();
+
+    act(() => {
+      routerAdapterFor(router).openBotChannel?.(PERSONAL_MAIN_BOT_ID);
+    });
+
+    await waitFor(() => {
+      expect(useTracySurfaceStore.getState().botId).toBe(PERSONAL_MAIN_BOT_ID);
+    });
+    const canvas = useEpicCanvasStore.getState().canvasByTabId[tabId];
+    if (canvas === undefined) throw new Error("expected task canvas");
+    const chat = collectPanes(canvas.root)
+      .flatMap((pane) => paneTabRefs(canvas, pane))
+      .find((tile) => tile.id === "chat-1");
+    expect(chat?.hostId).toBe(WINDOW_HOST);
+    expect(useTracySurfaceStore.getState().hostId).toBe(SURFACE_HOST);
+  });
+
+  it.each(["no eligible host", "unresolved directory"])(
+    "keeps the selected host when there is %s",
+    async (scenario) => {
+      if (scenario === "no eligible host") {
+        answerDirectory([
+          { ...dialableEntry(WINDOW_HOST), websocketUrl: null },
+          { ...dialableEntry("pool"), kind: "pool" },
+          { ...dialableEntry("unknown"), kind: "remote" },
+          remoteEntry("sandbox", "sandbox"),
+        ]);
+      }
+      const router = await mountRouter();
+      act(() => {
+        routerAdapterFor(router).openBotChannel?.(PERSONAL_MAIN_BOT_ID);
+      });
+      await waitFor(() => {
+        expect(useTracySurfaceStore.getState().botId).toBe(
+          PERSONAL_MAIN_BOT_ID,
+        );
+      });
+      expect(useTracySurfaceStore.getState().hostId).toBe(WINDOW_HOST);
+    },
+  );
 
   it("moves an open surface to the window's host when the directory says its host cannot be dialed", async () => {
     setDirectory(TWO_MAIN_BOTS_DIRECTORY);
