@@ -62,7 +62,7 @@ const LIT_CASES: ReadonlyArray<LitCase> = [
   {
     name: "topBar: the Position field (tab strip placement)",
     surface: "topBar",
-    snapshot: withArrangement({ tabStripPlacement: "left" }),
+    snapshot: withArrangement({ tabStripPlacement: "top" }),
   },
   {
     name: "topBar: the View field (side strip view)",
@@ -84,7 +84,7 @@ const LIT_CASES: ReadonlyArray<LitCase> = [
   {
     name: "sidebar: the Side field",
     surface: "sidebar",
-    snapshot: withArrangement({ sidebarSide: "right" }),
+    snapshot: withArrangement({ sidebarSide: "left" }),
   },
   {
     name: "chat: a value change on Context usage (no Position row)",
@@ -94,7 +94,7 @@ const LIT_CASES: ReadonlyArray<LitCase> = [
   {
     name: "chat: moving the minimap's side, both as the region's Position row and as the surface's own field",
     surface: "chat",
-    snapshot: withArrangement({ minimapSide: "left" }),
+    snapshot: withArrangement({ minimapSide: "right" }),
   },
   {
     name: "chat: the wide column width (C5)",

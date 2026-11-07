@@ -117,13 +117,13 @@ describe("what the page can see as changed", () => {
     ).toEqual([]);
     const eachOne: ReadonlyArray<Partial<LayoutArrangement>> = [
       { usageHost: "header" },
-      { minimapSide: "left" },
+      { minimapSide: "right" },
       { resourceSide: "left" },
       { mobileFooter: true },
       { hiddenProviders: [PROVIDER] },
       { dock: [...DEFAULT_ARRANGEMENT.dock].reverse() },
-      { tabStripPlacement: "left" },
-      { sidebarSide: "right" },
+      { tabStripPlacement: "top" },
+      { sidebarSide: "left" },
       { sideStripView: "layered" },
       { taskTabLayout: "shrink" },
       { readingWidth: "wide" },
@@ -204,7 +204,7 @@ describe("Reset layout (L-20)", () => {
       arrangement: {
         ...DEFAULT_ARRANGEMENT,
         usageHost: "header",
-        minimapSide: "left",
+        minimapSide: "right",
         resourceSide: "left",
         mobileFooter: true,
         hiddenProviders: [PROVIDER],
@@ -214,7 +214,7 @@ describe("Reset layout (L-20)", () => {
         // "Reset layout" restores the tab strip placement and the
         // sidebar side too.
         tabStripPlacement: "right",
-        sidebarSide: "right",
+        sidebarSide: "left",
         // And the vertical strip's view.
         sideStripView: "layered",
         wideReadingWidthPx: 1600,
@@ -227,8 +227,8 @@ describe("Reset layout (L-20)", () => {
     expect(after.overrides).toEqual({});
     expect(layoutModified(after)).toBe(false);
     expect(resetWouldChange(after)).toBe(false);
-    expect(after.arrangement.tabStripPlacement).toBe("top");
-    expect(after.arrangement.sidebarSide).toBe("left");
+    expect(after.arrangement.tabStripPlacement).toBe("left");
+    expect(after.arrangement.sidebarSide).toBe("right");
     expect(after.arrangement.sideStripView).toBe("activity");
     expect(after.arrangement.wideReadingWidthPx).toBe(
       DEFAULT_ARRANGEMENT.wideReadingWidthPx,
