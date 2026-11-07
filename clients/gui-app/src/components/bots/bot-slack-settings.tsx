@@ -7,6 +7,7 @@ import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { Switch } from "@/components/ui/switch";
 import {
   BotSettingsRefusal,
   SettingsGroup,
@@ -21,6 +22,7 @@ import {
 } from "@/hooks/bots/use-bot-slack-app-query";
 import {
   useBotSlackDisconnectMutation,
+  useBotSlackDmsMutation,
   useBotSlackInstallUrlMutation,
   useBotSlackRegisterMutation,
 } from "@/hooks/bots/use-bot-slack-mutations";
@@ -38,7 +40,8 @@ const COPIED_RESET_MS = 2_000;
  *   credentials;
  * - registered (or uninstalled, which keeps the credentials): install it to a
  *   workspace, or register other credentials;
- * - installed: the workspace and app, install again, disconnect.
+ * - installed: the workspace and app, whether it takes DMs, install again,
+ *   disconnect.
  *
  * Rendered from the server's app read alone; every write refreshes that read.
  * Each refusal is shown in place, under the control that made it.
@@ -336,6 +339,7 @@ function BotSlackConnected(props: { readonly app: SlackAppView }): ReactNode {
       <p className="text-ui-xs text-muted-foreground">
         Mention the app in a channel it is in to ask the bot something.
       </p>
+      <BotSlackDirectMessages app={app} />
       <div className="flex flex-wrap items-start gap-2">
         <BotSlackInstall app={app} label="Install again" />
         <Button
@@ -357,6 +361,41 @@ function BotSlackConnected(props: { readonly app: SlackAppView }): ReactNode {
       </div>
       <BotSettingsRefusal
         message={disconnect.error === null ? null : disconnect.error.message}
+      />
+    </div>
+  );
+}
+
+/** Whether a person's DM to the bot is admitted, as the app read says. */
+function BotSlackDirectMessages(props: {
+  readonly app: SlackAppView;
+}): ReactNode {
+  const { app } = props;
+  const update = useBotSlackDmsMutation(app.botId);
+  const id = useId();
+  const descriptionId = `${id}-description`;
+  return (
+    <div className="flex flex-col gap-2">
+      <div
+        className="flex items-start gap-3 py-1"
+        data-testid="bot-settings-slack-dms"
+      >
+        <div className="flex min-w-0 flex-1 flex-col gap-1">
+          <Label htmlFor={id}>Direct messages</Label>
+          <p id={descriptionId} className="text-ui-xs text-muted-foreground">
+            Anyone in the workspace can message this bot directly.
+          </p>
+        </div>
+        <Switch
+          id={id}
+          checked={app.dmsEnabled}
+          disabled={update.isPending}
+          aria-describedby={descriptionId}
+          onCheckedChange={(dmsEnabled) => update.mutate(dmsEnabled)}
+        />
+      </div>
+      <BotSettingsRefusal
+        message={update.error === null ? null : update.error.message}
       />
     </div>
   );

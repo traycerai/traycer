@@ -35,6 +35,9 @@ const mocks = vi.hoisted(() => ({
   sessionReads: [] as string[],
 }));
 
+vi.mock("@/hooks/host/use-host-directory-entry", () => ({
+  useHostDirectoryEntry: () => null,
+}));
 vi.mock("@/lib/registries/chat-session-registry", async (importOriginal) => ({
   ...(await importOriginal<
     typeof import("@/lib/registries/chat-session-registry")

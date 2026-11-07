@@ -48,6 +48,7 @@ import {
   mintSlackAppInstallUrlViaHttp,
   readSlackAppViaHttp,
   registerSlackAppViaHttp,
+  setSlackAppDmsViaHttp,
 } from "@traycer-clients/shared/host-client/slack-app";
 import { mintTeamHostInstallTokenViaHttp } from "@traycer-clients/shared/host-client/team-host";
 import { mintExecutableWriteGrantViaHttp } from "@traycer-clients/shared/host-client/executable-write-grant";
@@ -78,6 +79,7 @@ import {
   parseSandboxPatchRequest,
   parseSecretRequestDecision,
   parseSlackAppBotId,
+  parseSlackAppDmsRequest,
   parseSlackAppRegisterRequest,
   parseStoredAuthTokens,
   parseStoredCredentialsIdentity,
@@ -435,6 +437,20 @@ function registerSandboxControlPlaneIpc(bridge: RunnerIpcBridge): void {
       assertString(bearerToken, "registerSlackApp.bearerToken");
       const parsedRequest = parseSlackAppRegisterRequest(request);
       return registerSlackAppViaHttp(
+        config.serverBaseUrl,
+        bearerToken,
+        await iapProxyToken(),
+        parsedRequest,
+      );
+    },
+  );
+
+  bridge.handleInvoke(
+    RunnerHostInvoke.setSlackAppDms,
+    async (_event, bearerToken: unknown, request: unknown) => {
+      assertString(bearerToken, "setSlackAppDms.bearerToken");
+      const parsedRequest = parseSlackAppDmsRequest(request);
+      return setSlackAppDmsViaHttp(
         config.serverBaseUrl,
         bearerToken,
         await iapProxyToken(),
