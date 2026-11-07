@@ -3143,11 +3143,14 @@ window`, recorded in the type as `coverage.browsersAreMountedOnly` -
     so such a binary is reachable. Because the control then disappears while a
     stored `off` remains stored, the host REFUSES to start a session rather than
     run one with memory live under a setting that reads off; the error names the
-    required version and points back here. Recovery without a fake toggle:
-    choose a supported executable, or reset that provider's settings
-    (`providers.settingsFile.resetProvider`). `providers.setNativeMemory`
-    refuses an unenforceable `false` but always accepts `true`, so a stored off
-    can be cleared even once the switch is hidden. A change applies
+    required version and points back here. Recovery without a fake toggle: in
+    that state the switch is replaced by an ENABLE-ONLY action ("Turn on",
+    `nativeMemoryUnenforceable`) that can only write `true`, which
+    `providers.setNativeMemory` accepts at any version while refusing an
+    unenforceable `false`. Choosing a supported executable is the other route.
+    Deliberately NOT `providers.settingsFile.resetProvider`: that resets a
+    malformed row and answers `readable` for a well-formed one, so it would
+    leave a stored off exactly where it is. A change applies
     when a provider session next starts and never interrupts a running turn:
     Claude's next turn spawns a fresh subprocess because the value is in its
     options signature, and Codex retires the session's app-server between
