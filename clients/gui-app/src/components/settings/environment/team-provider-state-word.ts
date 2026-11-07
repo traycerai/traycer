@@ -50,3 +50,28 @@ export function teamProviderStateWord(input: {
   if (keyed) return "key";
   return "no plan";
 }
+
+export type CloudProviderStanding = "configured" | "absent" | "unknown";
+
+/**
+ * Whether a cloud-backed provider (Personal or a team) is set up: it has a
+ * managed profile, a linked plan, or a live provider key. `unknown` while an
+ * inventory that could still change the answer is unread, so a provider is
+ * never folded away as absent on a guess. `profileCount` is `null` while the
+ * profile inventory is unread.
+ */
+export function cloudProviderStanding(input: {
+  readonly providerId: ProviderId;
+  readonly harnessId: string;
+  readonly profileCount: number | null;
+  readonly plans: readonly EnvironmentPlan[] | null;
+  readonly secrets: readonly EnvironmentSecret[] | null;
+}): CloudProviderStanding {
+  if (input.profileCount !== null && input.profileCount > 0) {
+    return "configured";
+  }
+  const word = teamProviderStateWord(input);
+  if (word === "plan" || word === "key") return "configured";
+  if (input.profileCount === null || word === null) return "unknown";
+  return "absent";
+}

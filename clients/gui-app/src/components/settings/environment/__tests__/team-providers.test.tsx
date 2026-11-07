@@ -250,7 +250,7 @@ describe("TeamProviders items", () => {
     const setSection = vi.fn<(section: SettingsSectionId) => void>();
     publishSettingsApi(setSection);
     const harness = mountTeamPage(poolSource("editor"), {
-      ...handlers(() => [profile(true, 4)]),
+      ...handlers(() => []),
       "environment.plans.list": () => ({
         plans: [
           {
@@ -299,7 +299,7 @@ describe("TeamProviders items", () => {
     expect(add.getAttribute("aria-expanded")).toBe("true");
     expect(railPieces("Claude Code")).toEqual({
       title: "Claude Code",
-      subtitle: "1 profile",
+      subtitle: null,
     });
     await userEvent.click(railButton("Claude Code"));
     expect(railButton("Claude Code").getAttribute("aria-current")).toBe("true");
@@ -346,7 +346,7 @@ describe("TeamProviders items", () => {
     );
   });
 
-  it("configures a Personal provider only when it has a managed profile", async () => {
+  it("puts a Personal provider with managed profiles in the configured group", async () => {
     const harness = mountTeamPage(personalPoolSource(), {
       ...handlers(() => [
         cursorProfile("Cursor Work", 1),
@@ -380,6 +380,88 @@ describe("TeamProviders items", () => {
     expect(harness.paramsOf("environment.configuration.items")[0]).toEqual({
       environmentId: "env-personal",
     });
+  });
+
+  it("puts a Personal provider with a live key and no profiles in the configured group", async () => {
+    const harness = mountTeamPage(personalPoolSource(), {
+      ...handlers(() => []),
+      "environment.secrets.list": () => ({
+        secrets: [cursorKey],
+        removed: [],
+      }),
+    });
+    render(<TeamProviders />, { wrapper: harness.Wrapper });
+
+    const rail = await screen.findByRole("navigation", {
+      name: "Configured providers",
+    });
+    await waitFor(() => {
+      expect(railButton("Cursor").getAttribute("aria-current")).toBe("true");
+    });
+    expect(railPieces("Cursor")).toEqual({ title: "Cursor", subtitle: null });
+    expect(
+      within(rail).queryByRole("button", { name: /^Claude Code/ }),
+    ).toBeNull();
+    await userEvent.click(
+      within(rail).getByRole("button", { name: "Add provider" }),
+    );
+    expect(railButton("Claude Code").getAttribute("aria-current")).toBeNull();
+  });
+
+  it("puts a Personal provider with a linked plan and no profiles in the configured group", async () => {
+    const harness = mountTeamPage(personalPoolSource(), {
+      ...handlers(() => []),
+      "environment.plans.list": () => ({
+        plans: [
+          {
+            profileId: "plan-codex",
+            harness: "codex",
+            status: "linked" as const,
+            linkedBy: { name: "Ada", you: true },
+          },
+        ],
+      }),
+    });
+    render(<TeamProviders />, { wrapper: harness.Wrapper });
+
+    const rail = await screen.findByRole("navigation", {
+      name: "Configured providers",
+    });
+    await waitFor(() => {
+      expect(railButton("Codex").getAttribute("aria-current")).toBe("true");
+    });
+    expect(railPieces("Codex")).toEqual({ title: "Codex", subtitle: null });
+    expect(within(rail).queryByRole("button", { name: /^Cursor/ })).toBeNull();
+    expect(
+      within(rail).queryByRole("button", { name: /^Claude Code/ }),
+    ).toBeNull();
+  });
+
+  it("keeps every Personal provider on the rail while its secrets read is out, then folds the empty ones", async () => {
+    const secrets = Promise.withResolvers<{ secrets: []; removed: [] }>();
+    const harness = mountTeamPage(personalPoolSource(), {
+      ...handlers(() => []),
+      "environment.secrets.list": () => secrets.promise,
+    });
+    render(<TeamProviders />, { wrapper: harness.Wrapper });
+
+    const rail = await screen.findByRole("navigation", {
+      name: "Configured providers",
+    });
+    expect(
+      within(rail).queryByRole("button", { name: "Add provider" }),
+    ).toBeNull();
+    expect(
+      within(rail).getByRole("button", { name: "Command Code" }),
+    ).toBeTruthy();
+
+    secrets.resolve({ secrets: [], removed: [] });
+
+    await within(rail).findByRole("button", { name: "Add provider" });
+    expect(
+      within(rail).queryByRole("button", { name: "Command Code" }),
+    ).toBeNull();
+    expect(railButton("Claude Code").getAttribute("aria-current")).toBe("true");
   });
 
   it("orders Plans & limits as Key, Plans, Profiles, then rate limits", async () => {

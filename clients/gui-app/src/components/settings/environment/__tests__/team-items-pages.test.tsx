@@ -1,4 +1,5 @@
 import {
+  act,
   cleanup,
   render,
   screen,
@@ -7,10 +8,7 @@ import {
 } from "@testing-library/react";
 import userEvent, { type UserEvent } from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import type {
-  EnvironmentConfigurationItem,
-  EnvironmentConfigurationItemWriteResponse,
-} from "@traycer/protocol/host/environment/configuration-contracts";
+import type { EnvironmentConfigurationItem } from "@traycer/protocol/host/environment/configuration-contracts";
 import { TeamProviders } from "@/components/settings/environment/team-providers";
 import { TeamSkillsPage } from "@/components/settings/environment/team-skills";
 import { TeamPermissions } from "@/components/settings/environment/team-permissions";
@@ -28,7 +26,6 @@ import {
   poolSource,
   requireTeamHostClient,
   resetTeamPageHarness,
-  type TeamPageHarness,
 } from "./team-configuration-test-support";
 
 vi.mock("@/lib/host", async (importOriginal) => ({
@@ -336,22 +333,25 @@ describe("TeamVariablesAndShells", () => {
   });
 
   it("lists every operating system's variables under All, labels the ones scoped to one, and saves each under its own", async () => {
+    let items = [
+      configurationItem({
+        kind: "variable",
+        key: "API_URL",
+        os: "macos",
+        value: { value: "mac-value" },
+        revision: 2,
+      }),
+    ];
     const harness = mountTeamPage(poolSource("editor"), {
-      "environment.configuration.items": () => ({
-        items: [
-          configurationItem({
-            kind: "variable",
-            key: "API_URL",
-            os: "macos",
-            value: { value: "mac-value" },
-            revision: 2,
-          }),
-        ],
-      }),
-      "environment.configuration.items.put": () => ({
-        outcome: "saved",
-        revision: 3,
-      }),
+      "environment.configuration.items": () => ({ items }),
+      "environment.configuration.items.put": () => {
+        items = items.map((item) => ({
+          ...item,
+          value: { value: "mac-value!" },
+          revision: 3,
+        }));
+        return { outcome: "saved", revision: 3 };
+      },
       "environment.host.list": () => ({ hosts: [] }),
     });
     const user = userEvent.setup();
@@ -380,6 +380,11 @@ describe("TeamVariablesAndShells", () => {
       },
     ]);
 
+    await waitFor(() => {
+      expect(
+        screen.getByRole("button", { name: "Edit API_URL · macOS value" }),
+      ).toHaveProperty("disabled", false);
+    });
     await user.click(
       screen.getByRole("combobox", { name: "Operating system" }),
     );
@@ -397,16 +402,6 @@ describe("TeamVariablesAndShells", () => {
       revision: 3,
     });
 
-    const mountShellPage = (
-      outcome: EnvironmentConfigurationItemWriteResponse,
-    ): TeamPageHarness =>
-      mountTeamPage(poolSource("editor"), {
-        // The reread lags: it keeps answering with the old item.
-        "environment.configuration.items": () => ({ items: [shellItem] }),
-        "environment.configuration.items.put": () => outcome,
-        "environment.host.list": () => ({ hosts: [] }),
-      });
-
     const typeNewPath = async (user: UserEvent): Promise<void> => {
       await user.click(
         await screen.findByRole("button", { name: "Edit Shell path" }),
@@ -417,17 +412,71 @@ describe("TeamVariablesAndShells", () => {
       await user.click(screen.getByRole("button", { name: "Save" }));
     };
 
-    it("holds an accepted value, closed and uneditable, until the reread brings its revision", async () => {
-      const harness = mountShellPage({ outcome: "saved", revision: 4 });
+    it("keeps an accepted shell through stale read retries, then uses the confirmed revision on its next save", async () => {
+      let current = shellItem;
+      let puts = 0;
+      const harness = mountTeamPage(poolSource("editor"), {
+        "environment.configuration.items": () => ({ items: [current] }),
+        "environment.configuration.items.put": () => {
+          puts += 1;
+          if (puts === 2)
+            current = {
+              ...shellItem,
+              revision: 5,
+              value: { path: "/bin/fish", args: [] },
+            };
+          return { outcome: "saved", revision: puts === 1 ? 4 : 5 };
+        },
+        "environment.host.list": () => ({ hosts: [] }),
+      });
       const user = userEvent.setup();
       render(<TeamVariablesAndShells />, { wrapper: harness.Wrapper });
-
       await typeNewPath(user);
-
-      const shown = await screen.findByRole("button", {
-        name: "Edit Shell path",
+      expect(
+        await screen.findByText(
+          "Saved, but latest settings haven't refreshed.",
+        ),
+      ).toBeTruthy();
+      expect(
+        screen.getByRole("button", { name: "Edit Shell path" }),
+      ).toHaveProperty("textContent", "/bin/zsh");
+      expect(screen.queryByRole("button", { name: "Cancel" })).toBeNull();
+      const reads = harness.paramsOf("environment.configuration.items").length;
+      await user.click(screen.getByRole("button", { name: "Retry" }));
+      expect(
+        await screen.findByText(
+          "Saved, but latest settings haven't refreshed.",
+        ),
+      ).toBeTruthy();
+      expect(harness.paramsOf("environment.configuration.items")).toHaveLength(
+        reads + 1,
+      );
+      expect(
+        harness.paramsOf("environment.configuration.items.put"),
+      ).toHaveLength(1);
+      expect(
+        screen.getByRole("button", { name: "Edit Shell path" }),
+      ).toHaveProperty("disabled", true);
+      current = {
+        ...shellItem,
+        revision: 4,
+        value: { path: "/bin/zsh", args: [] },
+      };
+      await user.click(screen.getByRole("button", { name: "Retry" }));
+      await waitFor(() => {
+        expect(
+          screen.getByRole("button", { name: "Edit Shell path" }),
+        ).toHaveProperty("disabled", false);
       });
-      expect(shown.textContent).toBe("/bin/zsh");
+      await user.click(screen.getByRole("button", { name: "Edit Shell path" }));
+      await user.clear(screen.getByLabelText("Shell path"));
+      await user.type(screen.getByLabelText("Shell path"), "/bin/fish");
+      await user.click(screen.getByRole("button", { name: "Save" }));
+      await waitFor(() => {
+        expect(
+          screen.getByRole("button", { name: "Edit Shell path" }),
+        ).toHaveProperty("disabled", false);
+      });
       expect(harness.paramsOf("environment.configuration.items.put")).toEqual([
         {
           environmentId: "env-a",
@@ -437,22 +486,124 @@ describe("TeamVariablesAndShells", () => {
           value: { path: "/bin/zsh", args: [] },
           revision: 3,
         },
+        {
+          environmentId: "env-a",
+          kind: "shell",
+          key: "shell",
+          os: "any",
+          value: { path: "/bin/fish", args: [] },
+          revision: 4,
+        },
       ]);
-      expect(screen.queryByRole("button", { name: "Save" })).toBeNull();
-      expect(screen.queryByRole("button", { name: "Cancel" })).toBeNull();
-      expect(shown).toHaveProperty("disabled", true);
+      expect(screen.queryByText(/(?:Saved|Removed)[.,]/)).toBeNull();
     });
 
-    it("keeps the typed draft open after a conflict", async () => {
-      const harness = mountShellPage({
-        outcome: "conflict",
-        current: { revision: 4, changedBy: "Grace", changedAt: 2 },
+    it("keeps a revisionless accepted Remove pending until a read confirms absence, then allows a fresh create", async () => {
+      let items = [shellItem];
+      const harness = mountTeamPage(poolSource("editor"), {
+        "environment.configuration.items": () => ({ items }),
+        "environment.configuration.items.delete": () => ({
+          outcome: "saved",
+          revision: null,
+        }),
+        "environment.configuration.items.put": () => {
+          items = [
+            {
+              ...shellItem,
+              revision: 5,
+              value: { path: "/bin/zsh", args: [] },
+            },
+          ];
+          return { outcome: "saved", revision: 5 };
+        },
+        "environment.host.list": () => ({ hosts: [] }),
       });
       const user = userEvent.setup();
       render(<TeamVariablesAndShells />, { wrapper: harness.Wrapper });
-
+      await user.click(
+        await screen.findByRole("button", { name: "More for shell" }),
+      );
+      await user.click(screen.getByRole("menuitem", { name: "Remove" }));
+      expect(
+        await screen.findByText(
+          "Removed, but latest settings haven't refreshed.",
+        ),
+      ).toBeTruthy();
+      expect(
+        screen.getByRole("button", { name: "Edit Shell path" }),
+      ).toHaveProperty("textContent", "No shell set.");
+      expect(
+        screen.getByRole("button", { name: "Edit Shell path" }),
+      ).toHaveProperty("disabled", true);
+      const reads = harness.paramsOf("environment.configuration.items").length;
+      items = [{ ...shellItem, revision: 4 }];
+      await user.click(screen.getByRole("button", { name: "Retry" }));
+      expect(
+        await screen.findByText(
+          "Removed, but latest settings haven't refreshed.",
+        ),
+      ).toBeTruthy();
+      expect(
+        screen.getByRole("button", { name: "Edit Shell path" }),
+      ).toHaveProperty("disabled", true);
+      items = [];
+      await user.click(screen.getByRole("button", { name: "Retry" }));
+      await waitFor(() => {
+        expect(
+          screen.getByRole("button", { name: "Edit Shell path" }),
+        ).toHaveProperty("disabled", false);
+      });
+      expect(harness.paramsOf("environment.configuration.items")).toHaveLength(
+        reads + 2,
+      );
+      expect(
+        harness.paramsOf("environment.configuration.items.delete"),
+      ).toEqual([
+        {
+          environmentId: "env-a",
+          kind: "shell",
+          key: "shell",
+          os: "any",
+          revision: 3,
+        },
+      ]);
       await typeNewPath(user);
+      await waitFor(() => {
+        expect(
+          screen.getByRole("button", { name: "Edit Shell path" }),
+        ).toHaveProperty("disabled", false);
+      });
+      expect(
+        harness.paramsOf("environment.configuration.items.put")[0],
+      ).toMatchObject({ revision: null });
+      expect(screen.queryByText(/(?:Saved|Removed)[.,]/)).toBeNull();
+    });
 
+    it("keeps a refused draft open after conflict, then recovers on the current revision", async () => {
+      let current = shellItem;
+      let conflicted = false;
+      const harness = mountTeamPage(poolSource("editor"), {
+        "environment.configuration.items": () => ({ items: [current] }),
+        "environment.configuration.items.put": () => {
+          if (!conflicted) {
+            conflicted = true;
+            return {
+              outcome: "conflict",
+              current: { revision: 4, changedBy: "Grace", changedAt: 2 },
+            };
+          }
+          current = {
+            ...shellItem,
+            revision: 5,
+            value: { path: "/bin/zsh", args: [] },
+          };
+          return { outcome: "saved", revision: 5 };
+        },
+        "environment.host.list": () => ({ hosts: [] }),
+      });
+      const user = userEvent.setup();
+      render(<TeamVariablesAndShells />, { wrapper: harness.Wrapper });
+      await typeNewPath(user);
       expect(
         await screen.findByText("Changed by Grace a moment ago"),
       ).toBeTruthy();
@@ -460,10 +611,30 @@ describe("TeamVariablesAndShells", () => {
         "value",
         "/bin/zsh",
       );
-      expect(screen.getByRole("button", { name: "Save" })).toHaveProperty(
-        "disabled",
-        false,
-      );
+      await user.click(screen.getByRole("button", { name: "Cancel" }));
+      current = {
+        ...shellItem,
+        revision: 4,
+        value: { path: "/bin/sh", args: [] },
+      };
+      await act(async () => {
+        await harness.queryClient.refetchQueries();
+      });
+      await waitFor(() => {
+        expect(
+          screen.getByRole("button", { name: "Edit Shell path" }),
+        ).toHaveProperty("textContent", "/bin/sh");
+      });
+      await typeNewPath(user);
+      await waitFor(() => {
+        expect(
+          screen.getByRole("button", { name: "Edit Shell path" }),
+        ).toHaveProperty("disabled", false);
+      });
+      expect(
+        harness.paramsOf("environment.configuration.items.put")[1],
+      ).toMatchObject({ revision: 4 });
+      expect(screen.queryByText(/(?:Saved|Removed)[.,]/)).toBeNull();
     });
   });
 

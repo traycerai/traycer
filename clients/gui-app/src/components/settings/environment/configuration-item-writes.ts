@@ -1,0 +1,274 @@
+import { useEffect, useRef, useState } from "react";
+import type { UseQueryResult } from "@tanstack/react-query";
+import type { HostRpcError } from "@traycer-clients/shared/host-transport/host-messenger";
+import type { EnvironmentConfigurationItemWriteResponse } from "@traycer/protocol/host/environment/configuration-contracts";
+import { useBoundedRead } from "@/hooks/environment/team/use-bounded-read";
+import { useConfigurationItemMutations } from "@/hooks/environment/team/use-configuration-item-mutations";
+import type { ConfigurationItem } from "@/hooks/environment/team/use-configuration-items-query";
+import {
+  configurationShellValueSchema,
+  configurationTextValueSchema,
+} from "@/hooks/environment/team/configuration-item-values";
+import { useConfigurationSource } from "./configuration-source";
+
+export interface ConfigurationItemWrite {
+  readonly kind: "variable" | "env_override" | "shell";
+  readonly key: string;
+  readonly os: ConfigurationItem["os"];
+  readonly action: "put" | "remove";
+  readonly value: ConfigurationItem["value"];
+  readonly original: ConfigurationItem | null;
+}
+
+export interface ConfigurationItemWriteFailure {
+  readonly write: ConfigurationItemWrite;
+  readonly message: string;
+}
+
+interface AcceptedWrite {
+  readonly revision: number | null;
+  readonly checking: boolean;
+  readonly readSucceeded: boolean;
+}
+
+interface PendingItemWrite {
+  readonly write: ConfigurationItemWrite;
+  readonly accepted: AcceptedWrite | null;
+}
+
+interface ItemWriteState {
+  readonly scope: string | null;
+  readonly pending: PendingItemWrite | null;
+  readonly changedAgain: ConfigurationItemWrite | null;
+  readonly failure: ConfigurationItemWriteFailure | null;
+}
+
+export interface ConfigurationItemWrites {
+  readonly pending: PendingItemWrite | null;
+  readonly changedAgain: ConfigurationItemWrite | null;
+  readonly failure: ConfigurationItemWriteFailure | null;
+  readonly checking: boolean;
+  readonly write: (write: ConfigurationItemWrite) => Promise<void>;
+  readonly retry: () => void;
+}
+
+type ItemsRead = Pick<
+  UseQueryResult<readonly ConfigurationItem[], HostRpcError>,
+  "data" | "isError" | "refetch"
+>;
+
+export function sameConfigurationItemAddress(
+  left: Pick<ConfigurationItem, "kind" | "key" | "os">,
+  right: Pick<ConfigurationItem, "kind" | "key" | "os">,
+): boolean {
+  return (
+    left.kind === right.kind && left.key === right.key && left.os === right.os
+  );
+}
+
+function acceptedValueMatches(
+  write: ConfigurationItemWrite,
+  row: ConfigurationItem,
+): boolean {
+  if (write.kind === "shell") {
+    const accepted = configurationShellValueSchema.parse(write.value);
+    const read = configurationShellValueSchema.parse(row.value);
+    return (
+      accepted.path === read.path &&
+      JSON.stringify(accepted.args) === JSON.stringify(read.args)
+    );
+  }
+  return (
+    configurationTextValueSchema.parse(write.value).value ===
+    configurationTextValueSchema.parse(row.value).value
+  );
+}
+
+function reconciliation(
+  pending: PendingItemWrite,
+  items: readonly ConfigurationItem[],
+): "waiting" | "confirmed" | "changed" {
+  const receipt = pending.accepted;
+  if (receipt === null) return "waiting";
+  const row = items.find((item) =>
+    sameConfigurationItemAddress(item, pending.write),
+  );
+  if (row === undefined)
+    return pending.write.action === "remove" && receipt.readSucceeded
+      ? "confirmed"
+      : "waiting";
+  if (receipt.revision === null) {
+    if (
+      pending.write.action === "remove" ||
+      !receipt.readSucceeded ||
+      row.revision <= (pending.write.original?.revision ?? -1)
+    )
+      return "waiting";
+    return acceptedValueMatches(pending.write, row) ? "confirmed" : "changed";
+  }
+  if (row.revision < receipt.revision) return "waiting";
+  if (pending.write.action === "remove")
+    return row.revision > receipt.revision ? "changed" : "waiting";
+  return acceptedValueMatches(pending.write, row) ? "confirmed" : "changed";
+}
+
+/** Receipts outlive drafts; only the addressed row or a successful removal read releases them. */
+export function useConfigurationItemWrites(
+  query: ItemsRead,
+  onOutcome: (result: EnvironmentConfigurationItemWriteResponse) => void,
+): ConfigurationItemWrites {
+  const source = useConfigurationSource();
+  const scope = source.kind === "pool" ? source.environmentId : null;
+  const { put, remove } = useConfigurationItemMutations();
+  const [state, setState] = useState<ItemWriteState>({
+    scope,
+    pending: null,
+    changedAgain: null,
+    failure: null,
+  });
+  const active = useRef<ConfigurationItemWrite | null>(null);
+  const attempt = useRef(0);
+  if (state.scope !== scope) {
+    setState({ scope, pending: null, changedAgain: null, failure: null });
+  }
+  const pending = state.scope === scope ? state.pending : null;
+  if (
+    pending?.accepted !== null &&
+    pending !== null &&
+    !query.isError &&
+    query.data !== undefined
+  ) {
+    const result = reconciliation(pending, query.data);
+    if (result !== "waiting") {
+      setState({
+        ...state,
+        pending: null,
+        changedAgain: result === "changed" ? pending.write : null,
+      });
+    }
+  }
+  useEffect(() => {
+    if (pending === null) active.current = null;
+  }, [pending]);
+  useEffect(
+    () => () => {
+      active.current = null;
+      attempt.current += 1;
+    },
+    [scope],
+  );
+  const readLatest = async (
+    write: ConfigurationItemWrite,
+    cancelRefetch: boolean,
+  ): Promise<void> => {
+    const currentAttempt = ++attempt.current;
+    const updateRead = (checking: boolean, readSucceeded: boolean): void => {
+      if (currentAttempt !== attempt.current) return;
+      setState((current) => {
+        const pending = current.pending;
+        if (
+          current.scope !== scope ||
+          pending?.write !== write ||
+          pending.accepted === null
+        )
+          return current;
+        return {
+          ...current,
+          pending: {
+            write,
+            accepted: { ...pending.accepted, checking, readSucceeded },
+          },
+        };
+      });
+    };
+    updateRead(true, false);
+    try {
+      const result = await query.refetch({ cancelRefetch });
+      updateRead(false, !result.isError);
+    } catch {
+      updateRead(false, false);
+    }
+  };
+
+  const retry = (): void => {
+    if (pending?.accepted !== null && pending !== null)
+      void readLatest(pending.write, true);
+  };
+  const bounded = useBoundedRead({
+    isPending: pending?.accepted?.checking === true,
+    isError: false,
+    refetch: () => {
+      retry();
+      return Promise.resolve();
+    },
+  });
+  const write = async (write: ConfigurationItemWrite): Promise<void> => {
+    if (source.kind !== "pool" || active.current !== null) return;
+    active.current = write;
+    setState({
+      scope,
+      pending: { write, accepted: null },
+      changedAgain: null,
+      failure: null,
+    });
+    const request = {
+      environmentId: source.environmentId,
+      kind: write.kind,
+      key: write.key,
+      os: write.os,
+      revision: write.original?.revision ?? null,
+    };
+    let result: EnvironmentConfigurationItemWriteResponse;
+    try {
+      result = await (write.action === "put"
+        ? put.mutateAsync({ ...request, value: write.value })
+        : remove.mutateAsync(request));
+    } catch (error) {
+      setState((current) =>
+        current.scope !== scope || current.pending?.write !== write
+          ? current
+          : {
+              ...current,
+              pending: null,
+              failure: {
+                write,
+                message: error instanceof Error ? error.message : String(error),
+              },
+            },
+      );
+      if (active.current === write) active.current = null;
+      return;
+    }
+    if (active.current !== write) return;
+    onOutcome(result);
+    if (result.outcome !== "saved") {
+      active.current = null;
+      setState((current) =>
+        current.scope !== scope ? current : { ...current, pending: null },
+      );
+      return;
+    }
+    setState({
+      scope,
+      pending: {
+        write,
+        accepted: {
+          revision: result.revision,
+          checking: true,
+          readSucceeded: false,
+        },
+      },
+      changedAgain: null,
+      failure: null,
+    });
+    void readLatest(write, false);
+  };
+  return {
+    pending,
+    changedAgain: state.changedAgain,
+    failure: state.failure,
+    checking: bounded.pending,
+    write,
+    retry: bounded.retry,
+  };
+}

@@ -49,6 +49,10 @@ import {
   type ConfigurationWriteIssue,
 } from "./configuration-write-issue";
 import { TeamTextItems } from "./team-text-items";
+import {
+  useConfigurationItemWrites,
+  type ConfigurationItemWrites,
+} from "./configuration-item-writes";
 import { TeamPackItem } from "./team-provider-items";
 import { EnvironmentProviderMcpTab } from "./environment-provider-mcp-tab";
 import { TeamProviderLiveFacts } from "./team-provider-live-facts";
@@ -59,7 +63,10 @@ import { SettingsDetailsDialog } from "@/components/settings/details/settings-de
 import { useProviderRowDetailsSubject } from "@/components/settings/details/use-provider-row-details-subject";
 import { useConfigurationAdminNames } from "@/hooks/environment/team/use-admin-names";
 import { EnvironmentProviderSkillsTab } from "./environment-skills";
-import { teamProviderStateWord } from "./team-provider-state-word";
+import {
+  cloudProviderStanding,
+  type CloudProviderStanding,
+} from "./team-provider-state-word";
 import { ConfigurationReadFailed } from "./team-read-failed";
 import { usePickedTeamLabel } from "./team-pick-label";
 import {
@@ -106,11 +113,13 @@ export function TeamProviders(): ReactNode {
   const [addProviderOpen, setAddProviderOpen] = useState(false);
   const [os, setOs] = useState<EnvironmentOs>("any");
   const [issue, setIssue] = useState<ConfigurationWriteIssue>(null);
+  const writes = useConfigurationItemWrites(query, (result) =>
+    setIssue(configurationWriteIssue(result)),
+  );
   const [userPicked, setUserPicked] = useState(false);
   const [seenRailKey, setSeenRailKey] = useState<string | null>(null);
   const rows = providerRailRows({
-    personal,
-    items,
+    items: query.data,
     plans: plansQuery.data?.plans ?? null,
     secrets: secretsQuery.data?.secrets ?? null,
   });
@@ -190,6 +199,7 @@ export function TeamProviders(): ReactNode {
       packIds={packIds}
       packs={packs}
       items={items}
+      writes={writes}
       harness={harness}
       envSubtitleScope={envSubtitleScope}
       onOutcome={(result) => setIssue(configurationWriteIssue(result))}
@@ -219,6 +229,7 @@ function TeamProvidersView(props: {
   readonly packIds: readonly string[];
   readonly packs: readonly ConfigurationItem[];
   readonly items: readonly ConfigurationItem[];
+  readonly writes: ConfigurationItemWrites;
   readonly harness: string;
   readonly envSubtitleScope: EnvSubtitleScope;
   readonly onOutcome: (
@@ -247,6 +258,7 @@ function TeamProvidersView(props: {
     packIds,
     packs,
     items,
+    writes,
     harness,
     envSubtitleScope,
     onOutcome,
@@ -354,12 +366,11 @@ function TeamProvidersView(props: {
               </p>
               <ConfigurationOsPicker value={os} onChange={onOsChange} />
               <TeamTextItems
-                key={JSON.stringify([os, harness])}
                 items={items}
                 kind="env_override"
                 os={os}
                 providerId={harness}
-                onOutcome={onOutcome}
+                writes={writes}
                 renderDetails={(item) => (
                   <ProviderRowDetails
                     kind={item.kind}
@@ -602,44 +613,41 @@ function providerRailAdjustment(input: {
 }
 
 function providerRailRows(input: {
-  readonly personal: boolean;
-  readonly items: readonly ConfigurationItem[];
+  readonly items: readonly ConfigurationItem[] | undefined;
   readonly plans: readonly EnvironmentPlan[] | null;
   readonly secrets: readonly EnvironmentSecret[] | null;
 }): readonly ProviderRailRow[] {
   return ORDERED_PROVIDERS.map((provider) => {
-    const count = managedProfileCount(input.items, provider.harnessId);
-    const word = input.personal
-      ? null
-      : teamProviderStateWord({
-          providerId: provider.providerId,
-          harnessId: provider.harnessId,
-          plans: input.plans,
-          secrets: input.secrets,
-        });
+    const count =
+      input.items === undefined
+        ? null
+        : managedProfileCount(input.items, provider.harnessId);
     return {
       providerId: provider.providerId,
       harnessId: provider.harnessId,
-      railClass: providerRailClass(input.personal, count, word),
-      subtitle: profileCountLabel(count),
+      railClass: providerRailClass(
+        cloudProviderStanding({
+          providerId: provider.providerId,
+          harnessId: provider.harnessId,
+          profileCount: count,
+          plans: input.plans,
+          secrets: input.secrets,
+        }),
+      ),
+      subtitle: count === null ? null : profileCountLabel(count),
     };
   });
 }
 
-/**
- * Personal is configured once it has a profile. A team provider is
- * configured once a plan or a key is known; `null` is still unread, so it
- * stays on the rail rather than being folded away on a guess.
- */
-function providerRailClass(
-  personal: boolean,
-  count: number,
-  word: string | null,
-): RailClass {
-  if (personal) return count > 0 ? "configured" : "unconfigured";
-  if (word === null) return "unknown";
-  if (word === "no plan") return "unconfigured";
-  return "configured";
+function providerRailClass(standing: CloudProviderStanding): RailClass {
+  switch (standing) {
+    case "configured":
+      return "configured";
+    case "absent":
+      return "unconfigured";
+    case "unknown":
+      return "unknown";
+  }
 }
 
 function managedProfileCount(

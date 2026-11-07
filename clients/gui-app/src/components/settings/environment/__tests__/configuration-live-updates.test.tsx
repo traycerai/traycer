@@ -637,7 +637,7 @@ describe("a Variables page while its own write is in flight", () => {
     return answer;
   }
 
-  it("shows Adding on a disabled draft from Add until the read lists the variable, never 'No variables'", async () => {
+  it("closes an accepted Add and confirms it through the live revision poll before the next write", async () => {
     const world = freshWorld();
     const harness = mountVariables(world, TEAM_ENV);
     await screen.findByText("No variables.");
@@ -678,14 +678,16 @@ describe("a Variables page while its own write is in flight", () => {
     }
     expect(screen.queryByText("No variables.")).toBeNull();
 
-    // Accepted, but the host's read does not list it yet: still Adding.
     await act(async () => {
       answer.resolve({ outcome: "saved", revision: 3 });
-      await Promise.resolve();
+      await answer.promise;
     });
-    expect(within(pendingDraft()).getByRole("status").textContent).toContain(
-      "NEW_VAR · Adding",
+    const status = await screen.findByText(
+      "Saved, but latest settings haven't refreshed.",
     );
+    expect(within(status).getByRole("button", { name: "Retry" })).toBeTruthy();
+    expect(screen.queryByRole("region", { name: "New variable" })).toBeNull();
+    expect(screen.getByText("one")).toBeTruthy();
     expect(screen.queryByText("No variables.")).toBeNull();
 
     // Another read observes it: a real row replaces the draft, which empties.
@@ -699,9 +701,36 @@ describe("a Variables page while its own write is in flight", () => {
       expect(screen.queryByText(/Adding/)).toBeNull();
     });
     expect(screen.queryByRole("region", { name: "New variable" })).toBeNull();
+    expect(screen.queryByText(/Saved[.,]/)).toBeNull();
+    harness.messenger.setHandlers({
+      ...handlersOf(world, TEAM_ENV),
+      "environment.configuration.items.put": () => {
+        world.items = [{ ...variable("NEW_VAR", 4), value: { value: "two" } }];
+        return { outcome: "saved", revision: 4 };
+      },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Edit NEW_VAR value" }));
+    fireEvent.change(screen.getByLabelText("NEW_VAR value"), {
+      target: { value: "two" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Save" }));
+    await vi.waitFor(() => {
+      expect(
+        harness.paramsOf("environment.configuration.items.put"),
+      ).toHaveLength(2);
+      expect(
+        screen.getByRole("button", { name: "Edit NEW_VAR value" }),
+      ).toHaveProperty("disabled", false);
+    });
+    expect(
+      harness.paramsOf("environment.configuration.items.put")[1],
+    ).toMatchObject({ revision: 3 });
+    expect(
+      screen.getByRole("button", { name: "Edit NEW_VAR value" }),
+    ).toHaveProperty("textContent", "two");
   });
 
-  it("keeps a removed variable's row as Removing, its Delete disabled and sent once, until the read drops it", async () => {
+  it("keeps Delete in flight once, then confirms the accepted removal through the live revision poll", async () => {
     const world = freshWorld();
     world.items = [variable("OLD_VAR", 1)];
     const harness = mountVariables(world, TEAM_ENV);
@@ -738,17 +767,17 @@ describe("a Variables page while its own write is in flight", () => {
       harness.paramsOf("environment.configuration.items.delete"),
     ).toHaveLength(1);
 
-    // Accepted, the read still lists it: the row is retained, still Removing.
     await act(async () => {
       answer.resolve({ outcome: "saved", revision: 2 });
-      await Promise.resolve();
+      await answer.promise;
     });
+    const status = await screen.findByText(
+      "Removed, but latest settings haven't refreshed.",
+    );
+    expect(within(status).getByRole("button", { name: "Retry" })).toBeTruthy();
     expect(
       screen.getByRole("button", { name: "Edit OLD_VAR value" }),
-    ).toBeTruthy();
-    expect(within(row()).getByRole("status").textContent).toContain(
-      "OLD_VAR · Removing",
-    );
+    ).toHaveProperty("disabled", true);
     expect(screen.queryByText("No variables.")).toBeNull();
 
     world.items = [];
@@ -760,5 +789,10 @@ describe("a Variables page while its own write is in flight", () => {
       ).toBeNull();
     });
     expect(await screen.findByText("No variables.")).toBeTruthy();
+    expect(screen.queryByText(/Removed[.,]/)).toBeNull();
+    expect(screen.getByRole("button", { name: "Add variable" })).toHaveProperty(
+      "disabled",
+      false,
+    );
   });
 });

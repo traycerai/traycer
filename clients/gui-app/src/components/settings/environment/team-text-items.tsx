@@ -1,6 +1,5 @@
 import { useState, type ReactNode } from "react";
 import type { EnvironmentOs } from "@traycer/protocol/host/environment-schemas";
-import type { EnvironmentConfigurationItemWriteResponse } from "@traycer/protocol/host/environment/configuration-contracts";
 import { MoreHorizontal } from "lucide-react";
 import {
   DropdownMenu,
@@ -12,28 +11,22 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { MutedAgentSpinner } from "@/components/ui/agent-spinning-dots";
-import { useConfigurationItemMutations } from "@/hooks/environment/team/use-configuration-item-mutations";
 import { configurationTextValueSchema } from "@/hooks/environment/team/configuration-item-values";
 import type { ConfigurationItem } from "@/hooks/environment/team/use-configuration-items-query";
+import { useCanEditConfiguration } from "./configuration-source";
+
 import {
-  useCanEditConfiguration,
-  useConfigurationSource,
-} from "./configuration-source";
+  sameConfigurationItemAddress,
+  type ConfigurationItemWrite,
+  type ConfigurationItemWriteFailure,
+  type ConfigurationItemWrites,
+} from "./configuration-item-writes";
 
-interface PendingTextWrite {
-  readonly kind: "variable" | "env_override";
-  readonly key: string;
-  readonly os: EnvironmentOs | null;
-  readonly action: "put" | "remove";
-  readonly value: string;
-  readonly original: ConfigurationItem | null;
-  readonly accepted: boolean;
-}
-
-interface TextWriteFailure {
-  readonly write: PendingTextWrite;
-  readonly message: string;
-}
+import {
+  ConfigurationItemWriteStatus,
+  ConfigurationItemWriteError,
+  ConfigurationPendingWriteStatus,
+} from "./configuration-item-write-status";
 
 const OS_LABELS: Readonly<Record<Exclude<EnvironmentOs, "any">, string>> = {
   linux: "Linux",
@@ -53,79 +46,13 @@ export function TeamTextItems(props: {
   readonly kind: "variable" | "env_override";
   readonly os: EnvironmentOs;
   readonly providerId: string | null;
-  readonly onOutcome: (
-    result: EnvironmentConfigurationItemWriteResponse,
-  ) => void;
+  readonly writes: ConfigurationItemWrites;
   readonly renderDetails: (item: ConfigurationItem) => ReactNode;
 }): ReactNode {
-  const source = useConfigurationSource();
   const canEdit = useCanEditConfiguration();
-  const { put, remove } = useConfigurationItemMutations();
-  const [pending, setPending] = useState<PendingTextWrite | null>(null);
-  const [failure, setFailure] = useState<TextWriteFailure | null>(null);
-  // Revision-keyed editors may remount while a write is in flight. Its
-  // settlement belongs to the parent that owns the pending inventory.
-  const writeItem = async (write: PendingTextWrite): Promise<boolean> => {
-    if (source.kind !== "pool") return false;
-    setPending(write);
-    setFailure(null);
-    const request = {
-      environmentId: source.environmentId,
-      kind: write.kind,
-      key: write.key,
-      os: write.os,
-      revision: write.original?.revision ?? null,
-    };
-    let result: EnvironmentConfigurationItemWriteResponse;
-    try {
-      result = await (write.action === "put"
-        ? put.mutateAsync({ ...request, value: { value: write.value } })
-        : remove.mutateAsync(request));
-    } catch (error) {
-      setPending(null);
-      setFailure({
-        write,
-        message: error instanceof Error ? error.message : String(error),
-      });
-      return false;
-    }
-    props.onOutcome(result);
-    const accepted = result.outcome === "saved";
-    setPending(accepted ? { ...write, accepted } : null);
-    return accepted;
-  };
-  const observed =
-    pending !== null &&
-    pending.accepted &&
-    (pending.action === "remove"
-      ? !props.items.some(
-          (item) =>
-            item.kind === pending.kind &&
-            item.key === pending.key &&
-            item.os === pending.os,
-        )
-      : props.items.some(
-          (item) =>
-            item.kind === pending.kind &&
-            item.key === pending.key &&
-            item.os === pending.os &&
-            configurationTextValueSchema.parse(item.value).value ===
-              pending.value,
-        ));
-  if (observed) setPending(null);
-  const inventory = [...props.items];
-  if (
-    pending?.original !== null &&
-    pending?.original !== undefined &&
-    !inventory.some(
-      (item) =>
-        item.kind === pending.kind &&
-        item.key === pending.key &&
-        item.os === pending.os,
-    )
-  ) {
-    inventory.push(pending.original);
-  }
+  const pending = props.writes.pending?.write ?? null;
+  const accepted = props.writes.pending?.accepted !== null && pending !== null;
+  const inventory = textInventory(props.items, pending);
   const rows = inventory.filter(
     (item) =>
       item.kind === props.kind &&
@@ -133,21 +60,29 @@ export function TeamTextItems(props: {
       (props.providerId === null ||
         item.key.startsWith(`${props.providerId}:`)),
   );
-  const savingWrite = put.isPending ? pending : null;
+
   return (
     <div className="flex flex-col gap-3">
+      <ConfigurationItemWriteStatus writes={props.writes} kind={props.kind} />
+      <AcceptedNewTextItem
+        write={accepted ? pending : null}
+        kind={props.kind}
+        os={props.os}
+        providerId={props.providerId}
+      />
       {rows.length === 0 ? null : (
         <div className="rounded-lg border border-border/60">
           {rows.map((item) => (
             <TeamTextItemEditor
               // A row is kind+key+os, and its key carries any provider prefix;
               // the draft seeds from it once, so a new address must remount.
-              key={`${item.os}:${item.key}:${item.revision}`}
+              key={`${item.os}:${item.key}:${item.revision}:${accepted && textRowWrite(item, pending) !== null}`}
               item={item}
+              failure={textRowFailure(item, props.kind, props.writes.failure)}
               pending={pending}
-              onWrite={writeItem}
-              saving={textRowWrite(item, savingWrite) !== null}
-              failure={failure}
+              onWrite={props.writes.write}
+              saving={!accepted && textRowWrite(item, pending) !== null}
+              accepted={accepted ? textRowWrite(item, pending) !== null : false}
               kind={props.kind}
               os={props.os}
               osLabel={
@@ -166,12 +101,13 @@ export function TeamTextItems(props: {
       ) : null}
       {canEdit ? (
         <TeamTextItemEditor
-          key={`new:${props.kind}:${props.os}:${props.providerId}`}
+          key={`new:${props.kind}:${props.os}:${props.providerId}:${accepted}`}
           item={null}
+          failure={textRowFailure(null, props.kind, props.writes.failure)}
           pending={pending}
-          onWrite={writeItem}
-          saving={textRowWrite(null, savingWrite) !== null}
-          failure={failure}
+          onWrite={props.writes.write}
+          saving={!accepted && textRowWrite(null, pending) !== null}
+          accepted={false}
           kind={props.kind}
           os={props.os}
           osLabel={null}
@@ -183,12 +119,50 @@ export function TeamTextItems(props: {
   );
 }
 
+function AcceptedNewTextItem(props: {
+  readonly write: ConfigurationItemWrite | null;
+  readonly kind: "variable" | "env_override";
+  readonly os: EnvironmentOs;
+  readonly providerId: string | null;
+}): ReactNode {
+  const write = props.write;
+  if (
+    write === null ||
+    write.original !== null ||
+    write.action !== "put" ||
+    write.kind !== props.kind ||
+    (props.os !== "any" && write.os !== props.os) ||
+    (props.providerId !== null && !write.key.startsWith(`${props.providerId}:`))
+  )
+    return null;
+  return (
+    <div className="flex min-w-0 flex-wrap gap-3 rounded-lg border border-border/60 p-3 font-mono text-ui-sm wrap-anywhere">
+      <span>{write.key}</span>
+      <span>{configurationTextValueSchema.parse(write.value).value}</span>
+    </div>
+  );
+}
+
+function textInventory(
+  items: readonly ConfigurationItem[],
+  pending: ConfigurationItemWrite | null,
+): readonly ConfigurationItem[] {
+  if (
+    pending?.original === null ||
+    pending?.original === undefined ||
+    items.some((item) => sameConfigurationItemAddress(item, pending))
+  )
+    return items;
+  return [...items, pending.original];
+}
+
 function TeamTextItemEditor(props: {
+  readonly failure: ConfigurationItemWriteFailure | null;
   readonly item: ConfigurationItem | null;
-  readonly pending: PendingTextWrite | null;
-  readonly onWrite: (write: PendingTextWrite) => Promise<boolean>;
+  readonly pending: ConfigurationItemWrite | null;
+  readonly onWrite: (write: ConfigurationItemWrite) => Promise<void>;
   readonly saving: boolean;
-  readonly failure: TextWriteFailure | null;
+  readonly accepted: boolean;
   readonly kind: "variable" | "env_override";
   readonly os: EnvironmentOs;
   /** The single OS a row listed under `any` is scoped to, else `null`. */
@@ -197,27 +171,17 @@ function TeamTextItemEditor(props: {
   readonly details: ReactNode;
 }): ReactNode {
   const canEdit = useCanEditConfiguration();
+  const shownValue =
+    props.accepted && props.pending?.action === "put"
+      ? props.pending.value
+      : props.item?.value;
   const saved =
-    props.item === null
+    shownValue === undefined
       ? ""
-      : configurationTextValueSchema.parse(props.item.value).value;
+      : configurationTextValueSchema.parse(shownValue).value;
   const [name, setName] = useState("");
   const [value, setValue] = useState(saved);
-  const [accepted, setAccepted] = useState(false);
   const [editing, setEditing] = useState(false);
-  const writeError =
-    props.failure !== null &&
-    textRowWrite(props.item, props.failure.write) !== null
-      ? props.failure.message
-      : null;
-  if (accepted && props.pending === null) {
-    if (props.item === null) {
-      setName("");
-      setValue("");
-    }
-    setAccepted(false);
-    setEditing(false);
-  }
   const title = props.item?.key ?? "New variable";
   const label = props.osLabel === null ? title : `${title} · ${props.osLabel}`;
   const validName = /^[A-Za-z_][A-Za-z0-9_]*$/.test(name.trim());
@@ -227,28 +191,26 @@ function TeamTextItemEditor(props: {
       (props.providerId === null
         ? name.trim()
         : `${props.providerId}:${name.trim()}`);
-    const write: PendingTextWrite = {
+    const write: ConfigurationItemWrite = {
       kind: props.kind,
       key,
       // An item keeps its own scope; only a new one takes the picker's.
       os: props.item === null ? props.os : props.item.os,
       action: "put",
-      value,
+      value: { value },
       original: props.item,
-      accepted: false,
     };
-    void props.onWrite(write).then(setAccepted);
+    void props.onWrite(write);
   };
   const deleteItem = (): void => {
     if (props.item === null) return;
-    const write: PendingTextWrite = {
+    const write: ConfigurationItemWrite = {
       kind: props.kind,
       key: props.item.key,
       os: props.item.os,
       action: "remove",
-      value: saved,
+      value: { value: saved },
       original: props.item,
-      accepted: false,
     };
     void props.onWrite(write);
   };
@@ -286,12 +248,10 @@ function TeamTextItemEditor(props: {
         onDelete={deleteItem}
         details={props.details}
       />
-      <TeamTextWriteStatus item={props.item} pending={props.pending} />
-      {writeError === null ? null : (
-        <p role="alert" className="text-ui-xs text-destructive">
-          {writeError}
-        </p>
-      )}
+      <ConfigurationPendingWriteStatus
+        write={props.saving ? props.pending : null}
+      />
+      <ConfigurationItemWriteError failure={props.failure} />
       {canEdit && editing ? (
         <TeamTextActions
           isNew={props.item === null}
@@ -309,18 +269,28 @@ function TeamTextItemEditor(props: {
   );
 }
 
+function textRowFailure(
+  item: ConfigurationItem | null,
+  kind: "variable" | "env_override",
+  failure: ConfigurationItemWriteFailure | null,
+): ConfigurationItemWriteFailure | null {
+  if (
+    failure === null ||
+    failure.write.kind !== kind ||
+    textRowWrite(item, failure.write) === null
+  )
+    return null;
+  return failure;
+}
+
 /** A status belongs to the complete row address: kind, key and OS. */
 function textRowWrite(
   item: ConfigurationItem | null,
-  pending: PendingTextWrite | null,
-): PendingTextWrite | null {
+  pending: ConfigurationItemWrite | null,
+): ConfigurationItemWrite | null {
   if (pending === null) return null;
   if (item === null) return pending.original === null ? pending : null;
-  return pending.original?.kind === item.kind &&
-    pending.original.key === item.key &&
-    pending.original.os === item.os
-    ? pending
-    : null;
+  return sameConfigurationItemAddress(pending, item) ? pending : null;
 }
 
 function TeamTextActions(props: {
@@ -352,21 +322,6 @@ function TeamTextActions(props: {
         {props.saving ? <MutedAgentSpinner /> : null}
       </Button>
     </div>
-  );
-}
-
-function TeamTextWriteStatus(props: {
-  readonly item: ConfigurationItem | null;
-  readonly pending: PendingTextWrite | null;
-}): ReactNode {
-  const write = textRowWrite(props.item, props.pending);
-  if (write === null) return null;
-  let action = props.item === null ? "Adding" : "Saving";
-  if (write.action === "remove") action = "Removing";
-  return (
-    <p role="status" className="text-ui-xs text-muted-foreground">
-      {write.key} · {action}
-    </p>
   );
 }
 

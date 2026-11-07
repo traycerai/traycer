@@ -15,13 +15,11 @@ import { Input } from "@/components/ui/input";
 import { MutedAgentSpinner } from "@/components/ui/agent-spinning-dots";
 import { useBoundedRead } from "@/hooks/environment/team/use-bounded-read";
 import { useConfigurationVariablesQuery } from "@/hooks/environment/team/use-variables-query";
-import { useConfigurationItemMutations } from "@/hooks/environment/team/use-configuration-item-mutations";
 import { configurationTextValueSchema } from "@/hooks/environment/team/configuration-item-values";
 import { configurationShellValueSchema } from "@/hooks/environment/team/configuration-item-values";
 import type { ConfigurationItem } from "@/hooks/environment/team/use-configuration-items-query";
 import {
   useCanEditConfiguration,
-  useConfigurationSource,
   useConfigurationIsPersonal,
 } from "./configuration-source";
 import { ConfigurationOsPicker } from "./configuration-os-picker";
@@ -33,6 +31,17 @@ import {
 import { TeamVariableLiveFacts } from "./team-variable-live-facts";
 import { TeamTextItems } from "./team-text-items";
 import { ConfigurationReadFailed } from "./team-read-failed";
+import {
+  useConfigurationItemWrites,
+  sameConfigurationItemAddress,
+  type ConfigurationItemWrites,
+  type ConfigurationItemWrite,
+} from "./configuration-item-writes";
+import {
+  ConfigurationItemWriteStatus,
+  ConfigurationItemWriteError,
+  ConfigurationPendingWriteStatus,
+} from "./configuration-item-write-status";
 
 export function TeamVariablesAndShells(): ReactNode {
   const personal = useConfigurationIsPersonal();
@@ -43,6 +52,7 @@ export function TeamVariablesAndShells(): ReactNode {
   const [issue, setIssue] = useState<ConfigurationWriteIssue>(null);
   const outcome = (result: EnvironmentConfigurationItemWriteResponse): void =>
     setIssue(configurationWriteIssue(result));
+  const writes = useConfigurationItemWrites(query, outcome);
   const shell =
     items?.find(
       (item) => item.kind === "shell" && item.key === "shell" && item.os === os,
@@ -71,12 +81,11 @@ export function TeamVariablesAndShells(): ReactNode {
           {(applied) => (
             <>
               <TeamTextItems
-                key={os}
                 items={items}
                 kind="variable"
                 os={os}
                 providerId={null}
-                onOutcome={outcome}
+                writes={writes}
                 renderDetails={(item) => {
                   const entry = applied.variables?.entries.find(
                     (entry) => entry.key === item.key,
@@ -93,7 +102,7 @@ export function TeamVariablesAndShells(): ReactNode {
               />
               <h2 className="text-ui-sm font-medium">Shell</h2>
               <TeamShellEditor
-                key={`${os}:${shell?.revision ?? "new"}`}
+                key={`${os}:${shell?.revision ?? "new"}:${acceptedShell(writes, os) !== null}`}
                 item={shell}
                 applied={
                   applied.shell === undefined
@@ -101,7 +110,7 @@ export function TeamVariablesAndShells(): ReactNode {
                     : { path: applied.shell.path, args: applied.shell.args }
                 }
                 os={os}
-                onOutcome={outcome}
+                writes={writes}
               />
             </>
           )}
@@ -116,15 +125,38 @@ interface ShellValue {
   readonly args: string[];
 }
 
-/** The shell the editor shows: an accepted write, else the stored item's. */
+/**
+ * The shell the editor shows: an accepted write's value (none after an
+ * accepted remove), else the stored item's.
+ */
 function shownShell(
   item: ConfigurationItem | null,
-  accepted: ShellValue | null,
+  accepted: ConfigurationItemWrite | null,
 ): ShellValue {
-  if (accepted !== null) return accepted;
+  if (accepted?.action === "remove") return { path: "", args: [] };
+  if (accepted !== null)
+    return configurationShellValueSchema.parse(accepted.value);
   return item === null
     ? { path: "", args: [] }
     : configurationShellValueSchema.parse(item.value);
+}
+
+function acceptedShell(
+  writes: ConfigurationItemWrites,
+  os: EnvironmentOs,
+): ConfigurationItemWrite | null {
+  const pending = writes.pending;
+  if (
+    pending === null ||
+    pending.accepted === null ||
+    !sameConfigurationItemAddress(pending.write, {
+      kind: "shell",
+      key: "shell",
+      os,
+    })
+  )
+    return null;
+  return pending.write;
 }
 
 function TeamShellEditor(props: {
@@ -134,24 +166,17 @@ function TeamShellEditor(props: {
     readonly args: readonly string[];
   } | null;
   readonly os: EnvironmentOs;
-  readonly onOutcome: (
-    result: EnvironmentConfigurationItemWriteResponse,
-  ) => void;
+  readonly writes: ConfigurationItemWrites;
 }): ReactNode {
-  const source = useConfigurationSource();
   const canEdit = useCanEditConfiguration();
-  const { put, remove } = useConfigurationItemMutations();
-  // A write the server accepted, held until the reread carries its revision
-  // and this editor re-keys: until then the item is the old one, so Cancel
-  // would restore it and Save would send its stale revision.
-  const [accepted, setAccepted] = useState<ShellValue | null>(null);
-  const saved = shownShell(props.item, accepted);
+  const pending = props.writes.pending;
+  const saved = shownShell(props.item, acceptedShell(props.writes, props.os));
   const [editing, setEditing] = useState<"path" | "args" | null>(null);
   const [path, setPath] = useState(saved.path);
   const [args, setArgs] = useState(saved.args);
   const configured = props.item === null ? null : saved;
   const editingVisible = canEdit && editing !== null;
-  const busy = put.isPending || remove.isPending || accepted !== null;
+  const busy = props.writes.pending !== null;
   const changed =
     path !== saved.path || JSON.stringify(args) !== JSON.stringify(saved.args);
   return (
@@ -173,6 +198,7 @@ function TeamShellEditor(props: {
                 aria-label="Shell path"
                 placeholder="/bin/zsh"
                 value={path}
+                disabled={busy}
                 onChange={(event) => setPath(event.target.value)}
               />
             }
@@ -198,26 +224,15 @@ function TeamShellEditor(props: {
             <DropdownMenuContent align="end">
               <DropdownMenuItem
                 onSelect={() => {
-                  if (source.kind === "pool" && props.item !== null)
-                    remove.mutate(
-                      {
-                        environmentId: source.environmentId,
-                        kind: "shell",
-                        key: "shell",
-                        os: props.os,
-                        revision: props.item.revision,
-                      },
-                      {
-                        onSuccess: (result) => {
-                          props.onOutcome(result);
-                          if (result.outcome !== "saved") return;
-                          setAccepted({ path: "", args: [] });
-                          setPath("");
-                          setArgs([]);
-                          setEditing(null);
-                        },
-                      },
-                    );
+                  if (props.item !== null)
+                    void props.writes.write({
+                      kind: "shell",
+                      key: "shell",
+                      os: props.os,
+                      action: "remove",
+                      value: { path: "", args: [] },
+                      original: props.item,
+                    });
                 }}
               >
                 Remove
@@ -252,41 +267,60 @@ function TeamShellEditor(props: {
           />
         </div>
       </div>
+      <ShellWriteStatus writes={props.writes} os={props.os} />
       <ShellEditActions
         visible={editingVisible}
         changed={changed}
         path={path}
         busy={busy}
-        saving={put.isPending}
+        saving={pending?.write.kind === "shell" && pending.accepted === null}
         onCancel={() => {
           setPath(saved.path);
           setArgs(saved.args);
           setEditing(null);
         }}
         onSave={() => {
-          if (source.kind === "pool")
-            put.mutate(
-              {
-                environmentId: source.environmentId,
-                kind: "shell",
-                key: "shell",
-                os: props.os,
-                value: { path, args },
-                revision: props.item?.revision ?? null,
-              },
-              {
-                onSuccess: (result) => {
-                  props.onOutcome(result);
-                  // A refused write keeps its draft open for another try.
-                  if (result.outcome !== "saved") return;
-                  setAccepted({ path, args });
-                  setEditing(null);
-                },
-              },
-            );
+          void props.writes.write({
+            kind: "shell",
+            key: "shell",
+            os: props.os,
+            action: "put",
+            value: { path, args },
+            original: props.item,
+          });
         }}
       />
     </section>
+  );
+}
+
+function ShellWriteStatus(props: {
+  readonly writes: ConfigurationItemWrites;
+  readonly os: EnvironmentOs;
+}): ReactNode {
+  const pending = props.writes.pending;
+  const failure = props.writes.failure;
+  const addressedFailure =
+    failure !== null &&
+    sameConfigurationItemAddress(failure.write, {
+      kind: "shell",
+      key: "shell",
+      os: props.os,
+    })
+      ? failure
+      : null;
+  return (
+    <>
+      <ConfigurationPendingWriteStatus
+        write={
+          pending?.write.kind === "shell" && pending.accepted === null
+            ? pending.write
+            : null
+        }
+      />
+      <ConfigurationItemWriteStatus writes={props.writes} kind="shell" />
+      <ConfigurationItemWriteError failure={addressedFailure} />
+    </>
   );
 }
 
