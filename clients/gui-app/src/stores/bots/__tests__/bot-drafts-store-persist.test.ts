@@ -382,10 +382,8 @@ describe("a write a newer one overtakes while it stores an image", () => {
       release: async () => {
         open();
         await Promise.all(puts);
-        // A write does nothing but microtasks after its puts: one turn of the event loop sees it done.
-        await new Promise<void>((resolve) => {
-          setImmediate(resolve);
-        });
+        // A write does nothing but microtasks after its puts: an async advance of the fake clock flushes them.
+        await vi.advanceTimersByTimeAsync(0);
       },
     };
   }
