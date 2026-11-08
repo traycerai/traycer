@@ -84,6 +84,7 @@ const {
   isStopIntentFresh,
   readStopIntent,
   readStopIntentIdentity,
+  stopIntentState,
   writeStopIntent,
 } = await import("../stop-intent");
 
@@ -255,6 +256,44 @@ describe("hasActionableStopIntent - file round trip", () => {
     await expect(
       hasActionableStopIntent("production", Date.now(), null),
     ).resolves.toBe(false);
+  });
+});
+
+describe("stopIntentState", () => {
+  it("is none with no record, and none for a torn one", async () => {
+    await expect(stopIntentState("production", Date.now(), null)).resolves.toBe(
+      "none",
+    );
+    await writeFile(intentPath(), "{not json", "utf8");
+    await expect(stopIntentState("production", Date.now(), null)).resolves.toBe(
+      "none",
+    );
+  });
+
+  it("is actionable for a fresh record this supervisor has not served", async () => {
+    await writeStopIntent("production", "restart");
+    await expect(stopIntentState("production", Date.now(), null)).resolves.toBe(
+      "actionable",
+    );
+  });
+
+  it("is fresh-served for the fresh record it saw at startup", async () => {
+    await writeStopIntent("production", "restart");
+    const served = await readStopIntentIdentity("production");
+    await expect(
+      stopIntentState("production", Date.now(), served),
+    ).resolves.toBe("fresh-served");
+  });
+
+  it("is stale once the record is older than the window", async () => {
+    await writeStopIntent("production", "restart");
+    await expect(
+      stopIntentState(
+        "production",
+        Date.now() + STOP_INTENT_STALE_MS + 60_000,
+        null,
+      ),
+    ).resolves.toBe("stale");
   });
 });
 

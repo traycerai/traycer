@@ -497,6 +497,8 @@ function makeRunStubs(
     // from a real `traycer host stop` would then be remembered as "served at
     // startup", silently changing what every intent assertion below means.
     readStopIntentIdentity: async () => null,
+    // Same hazard again: unset, it reads the real stop-intent file.
+    stopIntentState: async () => "none",
     // Same hazard class once more: a child that yields to an incumbent makes
     // the supervisor poll THAT pid, and unset this falls through to the real
     // `isProcessAlive`, which would probe whatever process happens to hold
@@ -1883,6 +1885,54 @@ describe("runHostStart - signal/exit propagation", () => {
       );
       expect(recorded.crashReports).toHaveLength(1);
       expect(recorded.crashReports[0]?.stderrFatal).toBe(expected);
+    });
+
+    it("carries the closed-set evidence of a Node uncaught-error exit", async () => {
+      const exec = "/opt/traycer/host/install/traycer-host";
+      const { child, recorded, deps } = makeRunStubs(sampleRecord(exec), null);
+      const stderr = new PassThrough();
+      Object.assign(child, { stderr });
+      const originalSpawn = deps.spawn;
+      if (originalSpawn === undefined) {
+        throw new Error("test spawn dependency missing");
+      }
+      await runUntilExit(
+        () =>
+          runHostStart(
+            { environment: "production", cwd: null },
+            {
+              ...deps,
+              stopIntentState: async () => "stale",
+              spawn: (command, args, options) => {
+                const spawned = originalSpawn(command, args, options);
+                setImmediate(() => {
+                  stderr.write(
+                    Buffer.from(
+                      "[host] layer0-acquired attempt=a fs-type=NTFS\n",
+                    ),
+                  );
+                  stderr.write(
+                    Buffer.from(
+                      "node:internal/process/promises:394\n    triggerUncaughtException(err, true);\n    ^\n\nTypeError: boom\n    at run (file.js:1:1) {\n  code: 'ERR_INVALID_ARG_TYPE'\n}\n\nNode.js v24.20.0\n",
+                    ),
+                  );
+                  stderr.end();
+                  child.emit("exit", 1, null);
+                });
+                return spawned;
+              },
+            },
+          ),
+        recorded,
+      );
+      expect(recorded.crashReports).toHaveLength(1);
+      const report = recorded.crashReports[0];
+      expect(report?.stderrFatal).toBe("node-uncaught");
+      expect(report?.hostLastLine).toBe("layer0-acquired");
+      expect(report?.errorClass).toBe("TypeError");
+      expect(report?.errorCode).toBe("ERR_INVALID_ARG_TYPE");
+      expect(report?.stopIntentState).toBe("stale");
+      expect(report?.stopRequested).toBe(false);
     });
 
     it("tags a SIGABRT death the same way", async () => {

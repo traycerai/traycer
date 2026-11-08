@@ -16,9 +16,11 @@ import {
   type CrashReportMemory,
   type HeapSpaceName,
   type HeapSpaceUsedBytes,
+  type HostStderrLastLine,
   type StderrFatalKind,
 } from "./crash-diagnostics";
 import { readHostPidMetadata } from "./pid-metadata";
+import type { StopIntentState } from "./stop-intent";
 
 // Fleet visibility for host crashes.
 //
@@ -85,6 +87,25 @@ export interface HostCrashTelemetry {
    * (`crash-diagnostics.ts`): never the text, which stays on the machine.
    */
   readonly stderrFatal: StderrFatalKind;
+  /**
+   * The host-authored raw line the capture ends on (`crash-diagnostics.ts`):
+   * a closed set, never the line.
+   */
+  readonly hostLastLine: HostStderrLastLine;
+  /**
+   * The error class of a Node uncaught-error block, kept only in the shape of
+   * a JavaScript error class name; `none` without such a block,
+   * `unclassified` for anything outside the shape. Never the message.
+   */
+  readonly errorClass: string;
+  /** The block's `code`, kept only in the shape of an error code; as above. */
+  readonly errorCode: string;
+  /**
+   * What the stop-intent file said when the child ended: a closed set, never
+   * the record, so a stop that existed but was not actionable shows apart
+   * from no stop at all.
+   */
+  readonly stopIntentState: StopIntentState;
   /**
    * The memory numbers the diagnostic report states, in bytes; a field is
    * `null` when there was no report or the report did not carry it.
@@ -247,6 +268,14 @@ export function buildHostCrashEvent(
       // CHECK block, a native assertion, ...): the closed set that splits one
       // exit status, 0xC0000409 above all, into its causes.
       host_fatal: telemetry.stderrFatal,
+      // What the stderr capture ended on and what a Node uncaught block named
+      // (closed sets and shape-gated tokens, never text), and whether a stop
+      // intent existed that the supervisor did not act on. They split the
+      // "wrote, no recognised fatal, no stop asked" exit 1 into its causes.
+      host_last_line: telemetry.hostLastLine,
+      host_error_class: telemetry.errorClass,
+      host_error_code: telemetry.errorCode,
+      stop_intent_state: telemetry.stopIntentState,
       host_phase: hostCrashPhase(identity, telemetry.childPid),
       uptime_bucket: uptimeBucket(telemetry.uptimeMs),
     },

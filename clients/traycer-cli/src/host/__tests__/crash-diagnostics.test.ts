@@ -146,6 +146,12 @@ describe("StderrCaptureBuffer", () => {
         "assertion",
       ],
       ["Error: spawn EBUSY\n", "other"],
+      // Node's own uncaught-error block ends in the `Node.js v<version>`
+      // trailer; a stack alone (a logged error) does not.
+      [
+        "node:internal/process/promises:394\n    triggerUncaughtException(err, true /* fromPromise */);\n    ^\n\nError: boom\n    at run (file.js:1:1)\n\nNode.js v24.20.0\n",
+        "node-uncaught",
+      ],
       // `console.assert` writes this bare phrase; it is not a native abort.
       ["Assertion failed: config ok\nError: boom\n", "other"],
     ])("sorts %j as %s", (text, expected) => {
@@ -231,6 +237,98 @@ describe("StderrCaptureBuffer", () => {
     expect(escaped.length).toBe(STDERR_MARKER_MAX_CHARS);
     expect(escaped.endsWith("…")).toBe(true);
     expect(escaped.slice(0, -1)).toBe("A".repeat(STDERR_MARKER_MAX_CHARS - 1));
+  });
+
+  describe("closed-set evidence beyond the fatal kind", () => {
+    const capture = (
+      ...chunks: string[]
+    ): InstanceType<typeof StderrCaptureBuffer> => {
+      const buf = new StderrCaptureBuffer(2048, 2048);
+      for (const chunk of chunks) buf.append(Buffer.from(chunk));
+      return buf;
+    };
+    const uncaught = (header: string, extra: string): string =>
+      `node:internal/modules/run_main:1\n    throw err;\n    ^\n\n${header}\n    at run (file.js:1:1)\n    at next (file.js:2:2)${extra}\n\nNode.js v24.20.0\n`;
+
+    it.each([
+      ["[host] layer0-acquired attempt=a fs-type=NTFS\n", "layer0-acquired"],
+      ["[host] layer0-degraded attempt=a cause={}\n", "layer0-degraded"],
+      ["[host] layer0-declined attempt=a evidence={}\n", "layer0-declined"],
+      [
+        "[host] runtime-load-failed sibling=x (the host runtime directory is incomplete)\n",
+        "runtime-load-failed",
+      ],
+      [
+        "[host] unhandledRejection during bootstrap (fatal, pre-safety-net) Error: x\n",
+        "bootstrap-unhandled-rejection",
+      ],
+      ["[host] dev-identity-refused: nope\n", "dev-identity-refused"],
+      [
+        "host-shutdown-forced reason=watchdog pending=close\n",
+        "forced-shutdown",
+      ],
+      ["Error: spawn EBUSY\n", "none"],
+    ])("names the last host-authored line in %j as %s", (text, expected) => {
+      expect(capture(text).lastHostLine()).toBe(expected);
+    });
+
+    it("reports the LATEST host-authored line, not the first", () => {
+      expect(
+        capture(
+          "[host] layer0-acquired attempt=a fs-type=NTFS\n",
+          "(node:1) Warning: noisy\n",
+          "[host] layer0-degraded attempt=a cause={}\n",
+        ).lastHostLine(),
+      ).toBe("layer0-degraded");
+    });
+
+    it("carries no text of an unrecognised line", () => {
+      const buf = capture("[host] something-new C:\\Users\\someone\\x\n");
+      expect(buf.lastHostLine()).toBe("none");
+    });
+
+    it("names the error class and code of a Node uncaught block", () => {
+      const buf = capture(
+        uncaught(
+          "SqliteHoldBoundError: unit exceeded its bound",
+          " {\n  errno: -4048,\n  code: 'EPERM',\n  syscall: 'rename'\n}",
+        ),
+      );
+      expect(buf.classifyFatal(true)).toBe("node-uncaught");
+      expect(buf.uncaughtErrorClass()).toBe("SqliteHoldBoundError");
+      expect(buf.uncaughtErrorCode()).toBe("EPERM");
+    });
+
+    it("names a bare Error with an ERR_ code", () => {
+      const buf = capture(
+        uncaught("Error: nope", " {\n  code: 'ERR_INVALID_ARG_TYPE'\n}"),
+      );
+      expect(buf.uncaughtErrorClass()).toBe("Error");
+      expect(buf.uncaughtErrorCode()).toBe("ERR_INVALID_ARG_TYPE");
+    });
+
+    it.each([
+      ["a class not ending in Error", "Whatever: x"],
+      ["a lowercase token", "someError: x"],
+      ["a multi-line message ending in a user word", "Tom Smith"],
+      ["a token longer than the bound", `E${"a".repeat(60)}Error: x`],
+    ])("says unclassified for %s", (_name, header) => {
+      const buf = capture(uncaught(header, ""));
+      expect(buf.classifyFatal(true)).toBe("node-uncaught");
+      expect(buf.uncaughtErrorClass()).toBe("unclassified");
+      expect(buf.uncaughtErrorCode()).toBe("none");
+    });
+
+    it("says unclassified for a code outside the closed shape", () => {
+      const buf = capture(uncaught("Error: x", " {\n  code: 'my code!'\n}"));
+      expect(buf.uncaughtErrorCode()).toBe("unclassified");
+    });
+
+    it("says none for both when the capture holds no Node trailer", () => {
+      const buf = capture("Error: boom\n    at run (file.js:1:1)\n");
+      expect(buf.uncaughtErrorClass()).toBe("none");
+      expect(buf.uncaughtErrorCode()).toBe("none");
+    });
   });
 
   describe("toSingleLine (shared escaper)", () => {

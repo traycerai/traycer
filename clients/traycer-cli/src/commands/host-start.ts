@@ -126,7 +126,9 @@ import { resolveCliVersion } from "../cli-version";
 import {
   actionableStopIntentReason,
   readStopIntentIdentity,
+  stopIntentState,
   type StopIntentIdentity,
+  type StopIntentState,
   type StopIntentReason,
 } from "../host/stop-intent";
 import {
@@ -764,6 +766,13 @@ export interface RunHostStartDeps extends ResolveHostStartTargetDeps {
   readonly readStopIntentIdentity: (
     environment: Environment,
   ) => Promise<StopIntentIdentity | null>;
+  // What the stop-intent file says, as a closed set, for the crash event's
+  // `stop_intent_state` tag. Evidence only: nothing decides from it.
+  readonly stopIntentState: (
+    environment: Environment,
+    nowMs: number,
+    servedAtStartup: StopIntentIdentity | null,
+  ) => Promise<StopIntentState>;
   // Liveness of the pid a child's Layer 0 decline named. Injected so the
   // yielded-incumbent wait can be scripted without a real process to watch.
   readonly isProcessAlive: (pid: number) => boolean;
@@ -969,6 +978,7 @@ const defaultRunDeps: RunHostStartDeps = {
   },
   hasStopIntent: actionableStopIntentReason,
   readStopIntentIdentity,
+  stopIntentState,
   isProcessAlive,
   // On Windows `process.kill` with either name is TerminateProcess; the grace
   // between the two then costs a wait and nothing else.
@@ -3132,6 +3142,11 @@ export async function runHostStart(
       signal: ending.signal,
       platform: deps.lifecycle.teardown.platform,
       stopRequested,
+      stopIntentState: await readStopIntentStateBestEffort(
+        deps,
+        opts.environment,
+        servedStopIntentAtStartup,
+      ),
       deps,
       logger,
       environment: opts.environment,
@@ -4216,6 +4231,9 @@ async function persistChildExit(input: {
    * stop intent. Only the Windows requested-kill arm reads it.
    */
   readonly stopRequested: boolean;
+  // What the stop-intent file said when the child ended; evidence for the
+  // crash event only (`stopRequested` above is what decides).
+  readonly stopIntentState: StopIntentState;
   readonly deps: RunHostStartDeps;
   readonly logger: ILogger;
   readonly environment: Environment;
@@ -4397,6 +4415,8 @@ async function persistChildExit(input: {
         stderrFatal: input.stderrTee.capture.classifyFatal(
           input.stderrSettle.drained === true,
         ),
+        ...stderrEvidence(input.stderrTee.capture),
+        stopIntentState: input.stopIntentState,
       });
     }
     return outcome;
@@ -4633,8 +4653,37 @@ async function persistChildExit(input: {
     stderrFatal: input.stderrTee.capture.classifyFatal(
       input.stderrSettle.drained === true,
     ),
+    ...stderrEvidence(input.stderrTee.capture),
+    stopIntentState: input.stopIntentState,
   });
   return outcome;
+}
+
+/** The closed-set stderr evidence of a capture, for the crash event's tags. */
+function stderrEvidence(
+  capture: StderrCaptureBuffer,
+): Pick<HostCrashTelemetry, "hostLastLine" | "errorClass" | "errorCode"> {
+  return {
+    hostLastLine: capture.lastHostLine(),
+    errorClass: capture.uncaughtErrorClass(),
+    errorCode: capture.uncaughtErrorCode(),
+  };
+}
+
+/**
+ * The stop-intent state for the crash event. Evidence only, so a read that
+ * fails is `none` and never delays or fails the exit handling.
+ */
+async function readStopIntentStateBestEffort(
+  deps: RunHostStartDeps,
+  environment: Environment,
+  servedAtStartup: StopIntentIdentity | null,
+): Promise<StopIntentState> {
+  try {
+    return await deps.stopIntentState(environment, Date.now(), servedAtStartup);
+  } catch {
+    return "none";
+  }
 }
 
 /**

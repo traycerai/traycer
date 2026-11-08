@@ -279,6 +279,44 @@ export async function actionableStopIntentReason(
 }
 
 /**
+ * The closed set of answers to "what did the stop-intent file say when this
+ * child ended?", the only thing about it that leaves the machine (as the
+ * crash event's `stop_intent_state` tag).
+ *
+ * - `none`: no record, or one that did not parse.
+ * - `fresh-served`: a fresh record this supervisor saw at startup, so it was
+ *   answered by the start and is not a request for this child's death.
+ * - `stale`: a record older than {@link STOP_INTENT_STALE_MS}.
+ * - `actionable`: a fresh record this supervisor has not served.
+ */
+export const STOP_INTENT_STATES = [
+  "none",
+  "fresh-served",
+  "stale",
+  "actionable",
+] as const;
+
+export type StopIntentState = (typeof STOP_INTENT_STATES)[number];
+
+/**
+ * {@link actionableStopIntentReason}'s question, answered as one of
+ * {@link STOP_INTENT_STATES} instead of the reason: it tells a stop that
+ * existed but was not actionable from no stop at all. Reads the file once.
+ */
+export async function stopIntentState(
+  environment: Environment | undefined,
+  nowMs: number,
+  servedAtStartup: StopIntentIdentity | null,
+): Promise<StopIntentState> {
+  const intent = await readStopIntent(environment);
+  if (intent === null) return "none";
+  if (!isStopIntentFresh(intent, nowMs)) return "stale";
+  return isSameStopIntent(intent, servedAtStartup)
+    ? "fresh-served"
+    : "actionable";
+}
+
+/**
  * Whether `intent` is recent enough for the SUPERVISOR to still act on - the
  * shared symmetric window, bound here to `STOP_INTENT_STALE_MS`.
  *
