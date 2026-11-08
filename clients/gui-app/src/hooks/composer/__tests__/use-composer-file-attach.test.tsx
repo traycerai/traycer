@@ -83,7 +83,7 @@ interface Rig {
   readonly fileAttach: ComposerFileAttachArgs;
 }
 
-function makeRig(): Rig {
+function makeRig(attachedFileCount: number): Rig {
   const put = vi.fn<PutBlob>().mockResolvedValue({ ok: true });
   const inserted: ComposerFileAttachmentAttrs[] = [];
   return {
@@ -95,7 +95,7 @@ function makeRig(): Rig {
         inserted.push(attrs);
         return true;
       },
-      attachedFileCount: () => 0,
+      attachedFileCount: () => attachedFileCount,
     },
   };
 }
@@ -117,7 +117,7 @@ afterEach(() => {
 
 describe("attachFiles", () => {
   it("refuses an over-cap file before upload: toast names the size, no node, no putBlob", () => {
-    const rig = makeRig();
+    const rig = makeRig(0);
     const { result } = renderHook(() => useRig(rig.fileAttach));
 
     act(() => {
@@ -135,7 +135,7 @@ describe("attachFiles", () => {
   });
 
   it("admits the files in a pick that fit and refuses only the oversized one", async () => {
-    const rig = makeRig();
+    const rig = makeRig(0);
     const { result } = renderHook(() => useRig(rig.fileAttach));
 
     act(() => {
@@ -154,7 +154,7 @@ describe("attachFiles", () => {
   });
 
   it("holds the composer while picked files are being hashed, then releases it", async () => {
-    const rig = makeRig();
+    const rig = makeRig(0);
     const { result } = renderHook(() => useRig(rig.fileAttach));
 
     act(() => {
@@ -168,7 +168,7 @@ describe("attachFiles", () => {
   });
 
   it("says there is no host and uploads nothing when the route has no target", () => {
-    const rig = makeRig();
+    const rig = makeRig(0);
     const { result } = renderHook(() =>
       useRig({
         target: null,
@@ -197,6 +197,73 @@ describe("attachFiles", () => {
 
     expect(toasts.error).not.toHaveBeenCalled();
     expect(result.current.isAttachingFiles).toBe(false);
+  });
+});
+
+describe("the per-message file cap", () => {
+  function files(...names: string[]): File[] {
+    return names.map((name) => textFile(name, name, "text/plain"));
+  }
+
+  it("with 19 attached, a pick of 2 admits the first and refuses the second by name", async () => {
+    const rig = makeRig(19);
+    const { result } = renderHook(() => useRig(rig.fileAttach));
+
+    act(() => {
+      result.current.attachFiles(files("one.txt", "two.txt"));
+    });
+
+    await waitFor(() => expect(rig.put).toHaveBeenCalledTimes(1));
+    expect(rig.inserted.map((attrs) => attrs.fileName)).toEqual(["one.txt"]);
+    expect(toasts.error).toHaveBeenCalledTimes(1);
+    expect(toasts.error.mock.calls[0][0]).toBe("Couldn't attach two.txt.");
+    expect(toasts.error.mock.calls[0][1]).toMatchObject({
+      description: "A message can carry up to 20 files.",
+    });
+  });
+
+  it("with 20 attached, a pick is refused whole: no node, no upload", () => {
+    const rig = makeRig(20);
+    const { result } = renderHook(() => useRig(rig.fileAttach));
+
+    act(() => {
+      result.current.attachFiles(files("one.txt", "two.txt"));
+    });
+
+    expect(rig.inserted).toEqual([]);
+    expect(rig.put).not.toHaveBeenCalled();
+    expect(toasts.error).toHaveBeenCalledTimes(1);
+    expect(toasts.error.mock.calls[0][0]).toBe("Couldn't attach 2 files.");
+    expect(result.current.isAttachingFiles).toBe(false);
+  });
+
+  it("two back-to-back picks at 19 admit one file in total, the first still hashing", async () => {
+    const rig = makeRig(19);
+    const { result } = renderHook(() => useRig(rig.fileAttach));
+
+    act(() => {
+      result.current.attachFiles(files("first.txt"));
+      result.current.attachFiles(files("second.txt"));
+    });
+
+    await waitFor(() => expect(rig.put).toHaveBeenCalledTimes(1));
+    expect(rig.inserted.map((attrs) => attrs.fileName)).toEqual(["first.txt"]);
+    expect(toasts.error).toHaveBeenCalledTimes(1);
+    expect(toasts.error.mock.calls[0][0]).toBe("Couldn't attach second.txt.");
+  });
+
+  it("a too-large file does not use up a slot", async () => {
+    const rig = makeRig(19);
+    const { result } = renderHook(() => useRig(rig.fileAttach));
+
+    act(() => {
+      result.current.attachFiles([oversizedFile(), ...files("fits.txt")]);
+    });
+
+    await waitFor(() => expect(rig.put).toHaveBeenCalledTimes(1));
+    expect(rig.inserted.map((attrs) => attrs.fileName)).toEqual(["fits.txt"]);
+    expect(toasts.error).toHaveBeenCalledTimes(1);
+    expect(toasts.error.mock.calls[0][0]).toBe("huge.mov is 16.0 MiB");
   });
 });
 
@@ -233,7 +300,7 @@ describe("paste and drop of a non-image file", () => {
   }
 
   it("a pasted file with no resolvable path goes to the file route, with no path-failure toast", async () => {
-    const rig = makeRig();
+    const rig = makeRig(0);
     render(<Zone fileAttach={rig.fileAttach} />);
 
     fireEvent.paste(screen.getByTestId("zone"), {
@@ -253,7 +320,7 @@ describe("paste and drop of a non-image file", () => {
   });
 
   it("a dropped file with no resolvable path goes to the file route", async () => {
-    const rig = makeRig();
+    const rig = makeRig(0);
     render(<Zone fileAttach={rig.fileAttach} />);
 
     fireEvent.drop(screen.getByTestId("zone"), {
@@ -267,7 +334,7 @@ describe("paste and drop of a non-image file", () => {
 
   it("a file that resolves to a path keeps the path route and uploads nothing", async () => {
     resolveDroppedFilePaths.mockResolvedValue(["/home/me/a.txt"]);
-    const rig = makeRig();
+    const rig = makeRig(0);
     render(<Zone fileAttach={rig.fileAttach} />);
 
     fireEvent.paste(screen.getByTestId("zone"), {

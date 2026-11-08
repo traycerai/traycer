@@ -6,6 +6,7 @@ import { contentIsSubmittable } from "@/lib/composer/composer-content";
 import {
   containsFileAttachments,
   containsPendingFileAttachment,
+  countFileAttachments,
   fileAttachmentAttrsOf,
   fileAttachmentFamily,
 } from "@/lib/composer/file-attachments";
@@ -99,5 +100,42 @@ describe("fileAttachmentFamily", () => {
     ["", "noextension", "other"],
   ])("%s %s is %s", (mediaType, fileName, family) => {
     expect(fileAttachmentFamily(mediaType, fileName)).toBe(family);
+  });
+});
+
+describe("countFileAttachments", () => {
+  function node(hash: string, fileName: string): JsonContent {
+    return {
+      type: "fileAttachment",
+      attrs: { id: `${hash}-${fileName}`, hash, fileName },
+    };
+  }
+  const A = "a".repeat(64);
+  const B = "b".repeat(64);
+
+  it.each([
+    ["the same hash and name twice", [node(A, "x.txt"), node(A, "x.txt")], 1],
+    ["the same hash under two names", [node(A, "x.txt"), node(A, "y.txt")], 2],
+    ["two hashes under one name", [node(A, "x.txt"), node(B, "x.txt")], 2],
+    [
+      "images beside a file",
+      [
+        {
+          type: "imageAttachment",
+          attrs: { id: "i", hash: A, fileName: "x.txt" },
+        },
+        node(A, "x.txt"),
+      ],
+      1,
+    ],
+  ])("%s", (_label, nodes, expected) => {
+    const doc: JsonContent = {
+      type: "doc",
+      content: [
+        { type: "paragraph", content: nodes },
+        { type: "paragraph", content: nodes },
+      ],
+    };
+    expect(countFileAttachments(doc)).toBe(expected);
   });
 });
