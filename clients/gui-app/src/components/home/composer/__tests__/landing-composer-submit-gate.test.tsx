@@ -602,14 +602,20 @@ vi.mock("@/hooks/host/use-composer-placement", () => ({
 vi.mock("@/hooks/auth/use-auth-user-query", () => ({
   useAuthUser: () => ({ data: null, refetch: testState.refetchAuthUser }),
 }));
-vi.mock("@/hooks/sandboxes/use-sandbox-catalogue-query", () => ({
-  useSandboxCatalogue: () => ({
-    data: testState.catalogue,
-    isFetching: testState.catalogueFetching,
-    isError: false,
-    refetch: testState.refetchCatalogue,
+vi.mock(
+  "@/hooks/sandboxes/use-sandbox-catalogue-query",
+  async (importOriginal) => ({
+    ...(await importOriginal<
+      typeof import("@/hooks/sandboxes/use-sandbox-catalogue-query")
+    >()),
+    useSandboxCatalogue: () => ({
+      data: testState.catalogue,
+      isFetching: testState.catalogueFetching,
+      isError: false,
+      refetch: testState.refetchCatalogue,
+    }),
   }),
-}));
+);
 vi.mock("@/hooks/sandboxes/use-sandbox-defaults", () => ({
   useSandboxDefaultsLookup: () => () => null,
 }));
