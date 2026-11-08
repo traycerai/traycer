@@ -6,39 +6,33 @@
  */
 
 /** The grant's proof file at its fixed discovery path. */
-export const SPAWN_ACK_PROOF_STATES = [
+export type SpawnAckProofState =
   // Our own proof is still there: no supervisor claimed it.
-  "pending-ours",
+  | "pending-ours"
   // No proof at the path: a supervisor claimed it (and then died or was slow
   // before it acknowledged), or another party removed it.
-  "absent",
+  | "absent"
   // A different publisher's proof holds the path.
-  "other-nonce",
-  "unreadable",
-] as const;
-export type SpawnAckProofState = (typeof SPAWN_ACK_PROOF_STATES)[number];
+  | "other-nonce"
+  | "unreadable";
 
 /** Whether the service's supervisor is provably alive. */
-export const SPAWN_ACK_SUPERVISOR_STATES = ["live", "none", "unknown"] as const;
-export type SpawnAckSupervisorState =
-  (typeof SPAWN_ACK_SUPERVISOR_STATES)[number];
+export type SpawnAckSupervisorState = "live" | "none" | "unknown";
 
 /**
  * The phase of the newest supervisor marker written after the grant was
  * published: the `BootstrapPhase` set (`host/bootstrap-log.ts`), `other` for a
  * phase outside it, `none` for no marker since the publish.
  */
-export const SPAWN_ACK_MARKER_STATES = [
-  "none",
-  "starting",
-  "exited",
-  "crashed",
-  "killed",
-  "failed-to-spawn",
-  "other",
-  "unknown",
-] as const;
-export type SpawnAckMarkerState = (typeof SPAWN_ACK_MARKER_STATES)[number];
+export type SpawnAckMarkerState =
+  | "none"
+  | "starting"
+  | "exited"
+  | "crashed"
+  | "killed"
+  | "failed-to-spawn"
+  | "other"
+  | "unknown";
 
 export interface SpawnAcknowledgementEvidence {
   readonly proof: SpawnAckProofState;

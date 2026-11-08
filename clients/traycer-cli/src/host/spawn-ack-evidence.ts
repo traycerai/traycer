@@ -5,7 +5,7 @@ import {
   type SpawnAckSupervisorState,
 } from "@traycer-clients/shared/host-start-adoption/spawn-acknowledgement-error";
 import type { Environment } from "../runner/environment";
-import { readBootstrapMarkers } from "./bootstrap-log";
+import { readBootstrapMarkersStrict } from "./bootstrap-log";
 import { findLiveServiceSupervisor } from "./service-supervisor-relaunch";
 
 // Newest-first scan window over the supervisor's marker log; a grant's own
@@ -42,7 +42,7 @@ function readMarker(
   publishedAtMs: number,
 ): Promise<SpawnAckMarkerState> {
   return readSpawnAckEvidenceWithin(async (): Promise<SpawnAckMarkerState> => {
-    const entries = await readBootstrapMarkers(
+    const entries = await readBootstrapMarkersStrict(
       environment,
       MARKER_SCAN_ENTRIES,
     );

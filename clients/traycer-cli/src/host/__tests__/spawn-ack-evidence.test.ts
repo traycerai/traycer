@@ -11,11 +11,9 @@ import {
   vi,
 } from "vitest";
 import {
-  SPAWN_ACK_MARKER_STATES,
-  SPAWN_ACK_PROOF_STATES,
-  SPAWN_ACK_SUPERVISOR_STATES,
   SpawnAcknowledgementTimeoutError,
   readSpawnAckEvidenceWithin,
+  type SpawnAckMarkerState,
   type SpawnAckProofState,
   type SpawnAckSupervisorState,
 } from "@traycer-clients/shared/host-start-adoption/spawn-acknowledgement-error";
@@ -171,8 +169,28 @@ async function timeoutAfter(
   });
 }
 
-const PROOF_STATES = SPAWN_ACK_PROOF_STATES;
+const PROOF_STATES: readonly SpawnAckProofState[] = [
+  "pending-ours",
+  "absent",
+  "other-nonce",
+  "unreadable",
+];
 const SUPERVISORS: readonly SpawnAckSupervisorState[] = ["live", "none"];
+const SUPERVISOR_STATES: readonly SpawnAckSupervisorState[] = [
+  "live",
+  "none",
+  "unknown",
+];
+const MARKER_STATES: readonly SpawnAckMarkerState[] = [
+  "none",
+  "starting",
+  "exited",
+  "crashed",
+  "killed",
+  "failed-to-spawn",
+  "other",
+  "unknown",
+];
 
 describe("host-start acknowledgement timeout evidence", () => {
   it.each(
@@ -224,6 +242,16 @@ describe("host-start acknowledgement timeout evidence", () => {
     expect(error.evidence?.marker).toBe("none");
   });
 
+  it("reads a marker log it cannot read as unknown, not as no marker", async () => {
+    // A directory where the log should be: the read fails with something other
+    // than "not found", which must not read as an affirmative `none`.
+    await mkdir(bootstrapLogPath("production"), { recursive: true });
+
+    const error = await timeoutAfter(async () => undefined);
+
+    expect(error.evidence?.marker).toBe("unknown");
+  });
+
   it("carries only closed-set words under exactly three tag keys", async () => {
     const error = await timeoutAfter(async () => {
       await writeSupervisor();
@@ -238,8 +266,8 @@ describe("host-start acknowledgement timeout evidence", () => {
       "spawn_ack_supervisor",
     ]);
     expect(PROOF_STATES).toContain(tags?.spawn_ack_proof);
-    expect(SPAWN_ACK_SUPERVISOR_STATES).toContain(tags?.spawn_ack_supervisor);
-    expect(SPAWN_ACK_MARKER_STATES).toContain(tags?.spawn_ack_marker);
+    expect(SUPERVISOR_STATES).toContain(tags?.spawn_ack_supervisor);
+    expect(MARKER_STATES).toContain(tags?.spawn_ack_marker);
     // Nothing a person or machine chose: no path, id or nonce can be in them.
     expect(JSON.stringify(tags)).not.toContain(osHome.current);
     expect(JSON.stringify(tags)).not.toMatch(/[0-9a-f]{8}-[0-9a-f]{4}/i);
