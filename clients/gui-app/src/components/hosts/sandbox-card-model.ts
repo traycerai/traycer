@@ -27,11 +27,7 @@ import {
 
 /** An action the card offers. `destroy` always asks for confirmation. */
 export type SandboxCardAction =
-  | "suspend"
-  | "resume"
-  | "stop"
-  | "start"
-  | "destroy";
+  "suspend" | "resume" | "stop" | "start" | "destroy";
 
 const NO_ACTIONS: readonly SandboxCardAction[] = [];
 const FROZEN_ACTIONS: readonly SandboxCardAction[] = ["destroy"];
@@ -676,4 +672,56 @@ export function sandboxHeaderCreditsLine(
   return destroyAt === null
     ? credits
     : `${credits} · Will be removed on ${formatSandboxDate(destroyAt, true)}`;
+}
+
+export function sandboxSessionNotice(
+  summary: SandboxSummary,
+  state: HostSandboxState | null,
+  now: number,
+  filesOutcomeStated: boolean,
+): string | null {
+  const detail = summary.operation?.outcomeDetail ?? "";
+  const converting =
+    "Your paused session has expired. Your sandbox is being stopped.";
+  switch (state) {
+    case "starting":
+    case "resuming":
+      if (detail === "wake-retry") return "Restarting your sandbox";
+      return detail === "suspended-session-expiry" ? converting : null;
+    case "stopping":
+      return detail === "suspended-session-lost" ? converting : null;
+    case "awake":
+      return detail === "wake-retried"
+        ? "Your paused session was lost when your sandbox restarted. Your files are unchanged."
+        : null;
+    case "stopped":
+      if (
+        detail !== "suspended-session-lost" &&
+        !isStoppedWakeRetryDetail(detail)
+      )
+        return null;
+      return filesOutcomeStated
+        ? "Your paused session was lost when your sandbox stopped."
+        : "Your paused session was lost when your sandbox stopped. Your files are unchanged.";
+    case "suspended":
+      return suspendedSessionWarning(summary.suspendedSessionEndsAt, now);
+    default:
+      return null;
+  }
+}
+
+function suspendedSessionWarning(
+  at: number | null | undefined,
+  now: number,
+): string | null {
+  if (at === undefined || at === null || at - now > 7 * 86_400_000) return null;
+  return `Your paused session will be lost on ${formatSandboxDay(at)}. Resume your sandbox before then to keep it.`;
+}
+
+function isStoppedWakeRetryDetail(detail: string): boolean {
+  return (
+    detail === "wake-retry" ||
+    detail === "wake-retry-failed" ||
+    detail.startsWith("wake-retry:")
+  );
 }

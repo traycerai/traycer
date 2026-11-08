@@ -1,3 +1,4 @@
+import { SandboxSessionNotice } from "@/components/hosts/sandbox-session-notice";
 import { useState, type ReactNode } from "react";
 import { toast } from "sonner";
 import type { SandboxGrantsSummary } from "@traycer/protocol/host/sandbox-secrets";
@@ -250,7 +251,7 @@ export function SandboxHeaderNotices(props: {
   readonly sandbox: HostScopeSandbox;
   readonly teamName: string | null;
 }): ReactNode {
-  const { summary, frozen, teamOwned } = props.sandbox;
+  const { summary, state, frozen, teamOwned } = props.sandbox;
   const viewerUserId = useAuthStore((s) => s.contextMetadata?.userId ?? null);
   const credits = sandboxHeaderCreditsLine(
     summary,
@@ -279,6 +280,12 @@ export function SandboxHeaderNotices(props: {
       )}
       {summary === null ? null : (
         <>
+          <SandboxSessionNotice
+            summary={summary}
+            state={state}
+            filesOutcomeStated={state === "stopped" && !frozen}
+            testId="sandbox-card-session-notice"
+          />
           <SandboxWithdrawalNotice summary={summary} />
           <SandboxGuestConfigFailure summary={summary} />
         </>
@@ -1000,8 +1007,7 @@ export function SandboxHeaderActions(props: {
   readonly sandbox: HostScopeSandbox;
   readonly onDestroyed: (() => void) | null;
   readonly renderActions:
-    | ((primary: ReactNode, menuItems: ReactNode) => ReactNode)
-    | null;
+    ((primary: ReactNode, menuItems: ReactNode) => ReactNode) | null;
 }): ReactNode {
   const summary = props.sandbox.summary;
   if (summary === null) return props.renderActions?.(null, null) ?? null;
@@ -1022,8 +1028,7 @@ function SandboxHeaderActionSet(props: {
   readonly hostName: string;
   readonly onDestroyed: (() => void) | null;
   readonly renderActions:
-    | ((primary: ReactNode, menuItems: ReactNode) => ReactNode)
-    | null;
+    ((primary: ReactNode, menuItems: ReactNode) => ReactNode) | null;
 }): ReactNode {
   const { summary, sandbox } = props;
   const actions = sandboxCardActions(
