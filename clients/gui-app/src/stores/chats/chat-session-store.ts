@@ -1,3 +1,4 @@
+import { profileBindingsEqual } from "@traycer/protocol/host/provider-profile-inheritance";
 import { SendTimings } from "@traycer/protocol/host/agent/gui/send-timing";
 import {
   sendPlacement,
@@ -2588,6 +2589,7 @@ function chatRunSettingsEqual(a: ChatRunSettings, b: ChatRunSettings): boolean {
     // `null`, on an old serialized `ChatRunSettings`) so it still compares
     // equal to a fresh ambient commit instead of spuriously restamping.
     profileId: (a.profileId ?? null) === (b.profileId ?? null),
+    profileBinding: profileBindingsEqual(a.profileBinding, b.profileBinding),
   } satisfies Record<keyof ChatRunSettings, boolean>;
   return Object.values(fieldsEqual).every((equal) => equal);
 }

@@ -1,3 +1,10 @@
+import {
+  providerSupportsManagedProfiles,
+  profileBindingsEqual,
+  type ProfileBinding,
+  resolveInheritedProfile,
+} from "@traycer/protocol/host/provider-profile-inheritance";
+import type { SpendScopeKey } from "@traycer/protocol/host/provider-credential-home-schemas";
 import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
 import type { ChatRunSettings } from "@traycer/protocol/host/agent/gui/subscribe";
 import type { HostRpcRegistry } from "@traycer/protocol/host/index";
@@ -17,10 +24,7 @@ import {
 export interface ResolvedClonedChatSettings {
   readonly status: "ready";
   readonly settings: ChatRunSettings;
-  /** True when the source profile could not be mapped to an equivalent
-   *  profile on the target host, so `settings.profileId` was reset to the
-   *  ambient login instead. Never automatic beyond this notice - the caller
-   *  surfaces it (toast) so the switch is never silent. */
+  /** Retained for callers that also clone harnesses without profiles. */
   readonly fallenBackToAmbient: boolean;
 }
 
@@ -29,7 +33,8 @@ export interface ClonedChatProfileSelectionRequired {
   readonly providerId: ProviderId;
   readonly reason:
     | "matching-profile-disabled"
-    | "no-enabled-terminal-fallback"
+    | "not-on-destination"
+    | "source-unidentified"
     | "explicit-profile-missing";
   readonly matchedProfileId: string | null;
   readonly targetProfiles: ReadonlyArray<ProviderProfile>;
@@ -80,31 +85,10 @@ function normalizedProfileId(profile: ProviderProfile): string | null {
   return profile.kind === "ambient" ? null : profile.profileId;
 }
 
-function findAccountUuid(
-  profiles: ReadonlyArray<ProviderProfile>,
-  profileId: string | null,
-): string | null {
-  const profile = profiles.find(
-    (candidate) => normalizedProfileId(candidate) === profileId,
-  );
-  return profile?.identity?.accountUuid ?? null;
-}
-
 /**
- * Resolves the `ChatRunSettings` a cloned chat should start with on
- * `targetClient`'s host, given the source chat's own settings. Harness/model/
- * reasoning/tier carry over verbatim (unlike today's clone, which drops them
- * entirely); `profileId` needs host-aware remapping, and `permissionMode` needs
- * host-aware CLAMPING - see {@link permissionModeForTarget}, which is what
- * stops an `auto` chat failing the create on a target below that line.
- *
- * `sourceClient: null` means the source host is unreachable (e.g. cloning off
- * a dead tile) - there is then no way to read the source profile's identity,
- * so a non-ambient profile may fall back only to an enabled target Terminal
- * account. A disabled identity match or missing enabled Terminal fallback
- * returns the explicit-selection state instead of silently changing identity.
- * Never throws: a target catalog failure is a distinct retryable outcome;
- * source identity failure still follows the explicit Terminal fallback rules.
+ * Resolve the clone's account on the target from its carried binding. Legacy
+ * settings may read the source's live admitted identity; absence requires the
+ * existing profile picker instead of substituting the target's ambient login.
  */
 export async function resolveClonedChatSettings(input: {
   readonly sourceSettings: ChatRunSettings;
@@ -140,20 +124,31 @@ export async function resolveClonedChatSettings(input: {
   if (targetProfiles === null) {
     return { status: "catalog-unavailable", providerId };
   }
-  const sourceProfiles =
-    input.sourceClient === null
-      ? null
-      : await readProviderProfiles(input.sourceClient, providerId);
-  const sourceAccountUuid = findAccountUuid(
-    sourceProfiles ?? [],
-    sourceSettings.profileId,
-  );
+  let sourceKey =
+    sourceSettings.profileBinding?.kind === "key"
+      ? sourceSettings.profileBinding.key
+      : null;
+  if (
+    providerSupportsManagedProfiles(providerId) &&
+    sourceSettings.profileBinding === undefined &&
+    input.explicitTargetProfileId === null &&
+    input.sourceClient !== null
+  ) {
+    const sourceProfiles = await readProviderProfiles(
+      input.sourceClient,
+      providerId,
+    );
+    const identity = sourceProfiles?.find(
+      (profile) => normalizedProfileId(profile) === sourceSettings.profileId,
+    )?.credentialIdentity;
+    if (identity?.kind === "spend-scoped") sourceKey = identity.spendScopeKey;
+  }
 
   return resolveTargetProfile({
     sourceSettings,
     providerId,
     targetProfiles,
-    sourceAccountUuid,
+    sourceKey,
     explicitTargetProfileId: input.explicitTargetProfileId,
   });
 }
@@ -301,7 +296,7 @@ function resolveTargetProfile(input: {
   readonly sourceSettings: ChatRunSettings;
   readonly providerId: ProviderId;
   readonly targetProfiles: ReadonlyArray<ProviderProfile>;
-  readonly sourceAccountUuid: string | null;
+  readonly sourceKey: SpendScopeKey | null;
   readonly explicitTargetProfileId: {
     readonly profileId: string | null;
   } | null;
@@ -315,10 +310,16 @@ function resolveTargetProfile(input: {
     if (explicitProfile?.enabled === true) {
       return {
         status: "ready",
-        settings: {
-          ...sourceSettings,
-          profileId: normalizedProfileId(explicitProfile),
-        },
+        settings: settingsForProfile(
+          sourceSettings,
+          normalizedProfileId(explicitProfile),
+          explicitProfile.credentialIdentity?.kind === "spend-scoped"
+            ? {
+                kind: "key",
+                key: explicitProfile.credentialIdentity.spendScopeKey,
+              }
+            : undefined,
+        ),
         fallenBackToAmbient: false,
       };
     }
@@ -333,64 +334,64 @@ function resolveTargetProfile(input: {
     });
   }
 
-  const terminalProfile = targetProfiles.find(
-    (profile) => profile.kind === "ambient",
-  );
-  if (sourceSettings.profileId === null) {
-    if (terminalProfile?.enabled === true) {
+  if (!providerSupportsManagedProfiles(providerId)) {
+    const terminal = targetProfiles.find(
+      (profile) => profile.kind === "ambient",
+    );
+    if (terminal?.enabled === true) {
       return {
         status: "ready",
-        settings: sourceSettings,
-        fallenBackToAmbient: false,
-      };
-    }
-    return profileSelectionRequired({
-      providerId,
-      reason:
-        terminalProfile === undefined
-          ? "no-enabled-terminal-fallback"
-          : "matching-profile-disabled",
-      matchedProfileId: null,
-      targetProfiles,
-    });
-  }
-
-  const matchingProfile =
-    input.sourceAccountUuid === null
-      ? undefined
-      : targetProfiles.find(
-          (profile) =>
-            profile.identity?.accountUuid === input.sourceAccountUuid,
-        );
-  if (matchingProfile !== undefined) {
-    const mappedProfileId = normalizedProfileId(matchingProfile);
-    if (matchingProfile.enabled) {
-      return {
-        status: "ready",
-        settings: { ...sourceSettings, profileId: mappedProfileId },
-        fallenBackToAmbient: false,
+        settings: settingsForProfile(sourceSettings, null, undefined),
+        fallenBackToAmbient: sourceSettings.profileId !== null,
       };
     }
     return profileSelectionRequired({
       providerId,
       reason: "matching-profile-disabled",
-      matchedProfileId: mappedProfileId,
+      matchedProfileId: null,
       targetProfiles,
     });
   }
 
-  if (terminalProfile?.enabled !== true) {
+  const resolution = resolveInheritedProfile(
+    input.sourceKey,
+    targetProfiles.map((profile) => ({
+      profileId: normalizedProfileId(profile),
+      spendScopeKey:
+        profile.credentialIdentity?.kind === "spend-scoped"
+          ? profile.credentialIdentity.spendScopeKey
+          : null,
+    })),
+  );
+  if (resolution.kind !== "match") {
     return profileSelectionRequired({
       providerId,
-      reason: "no-enabled-terminal-fallback",
+      reason: resolution.kind,
       matchedProfileId: null,
+      targetProfiles,
+    });
+  }
+  const matchingProfile = targetProfiles.find(
+    (profile) => normalizedProfileId(profile) === resolution.profileId,
+  );
+  if (matchingProfile?.enabled !== true) {
+    return profileSelectionRequired({
+      providerId,
+      reason: "matching-profile-disabled",
+      matchedProfileId: resolution.profileId,
       targetProfiles,
     });
   }
   return {
     status: "ready",
-    settings: { ...sourceSettings, profileId: null },
-    fallenBackToAmbient: true,
+    settings: settingsForProfile(
+      sourceSettings,
+      resolution.profileId,
+      input.sourceKey === null
+        ? { kind: "source-unidentified" }
+        : { kind: "key", key: input.sourceKey },
+    ),
+    fallenBackToAmbient: false,
   };
 }
 
@@ -401,4 +402,16 @@ function profileSelectionRequired(input: {
   readonly targetProfiles: ReadonlyArray<ProviderProfile>;
 }): ClonedChatProfileSelectionRequired {
   return { status: "profile-selection-required", ...input };
+}
+
+/** Preserve the tuple's identity when a selection changes none of its fields. */
+function settingsForProfile(
+  settings: ChatRunSettings,
+  profileId: string | null,
+  profileBinding: ProfileBinding | undefined,
+): ChatRunSettings {
+  return settings.profileId === profileId &&
+    profileBindingsEqual(settings.profileBinding, profileBinding)
+    ? settings
+    : { ...settings, profileId, profileBinding };
 }

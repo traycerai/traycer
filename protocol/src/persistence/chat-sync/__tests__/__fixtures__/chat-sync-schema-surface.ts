@@ -237,6 +237,89 @@ export const chatSyncSchemaSurfaceBaseline = {
                         }
                       ]
                     },
+                    "profileBinding": {
+                      "oneOf": [
+                        {
+                          "type": "object",
+                          "properties": {
+                            "kind": {
+                              "type": "string",
+                              "const": "key"
+                            },
+                            "key": {
+                              "anyOf": [
+                                {
+                                  "type": "object",
+                                  "properties": {
+                                    "providerId": {
+                                      "type": "string",
+                                      "minLength": 1
+                                    },
+                                    "accountId": {
+                                      "type": "string",
+                                      "minLength": 1
+                                    },
+                                    "organizationId": {
+                                      "anyOf": [
+                                        {
+                                          "type": "string",
+                                          "minLength": 1
+                                        },
+                                        {
+                                          "type": "null"
+                                        }
+                                      ]
+                                    }
+                                  },
+                                  "required": [
+                                    "providerId",
+                                    "accountId",
+                                    "organizationId"
+                                  ],
+                                  "additionalProperties": false
+                                },
+                                {
+                                  "type": "object",
+                                  "properties": {
+                                    "providerId": {
+                                      "type": "string",
+                                      "minLength": 1
+                                    },
+                                    "email": {
+                                      "type": "string",
+                                      "minLength": 1
+                                    }
+                                  },
+                                  "required": [
+                                    "providerId",
+                                    "email"
+                                  ],
+                                  "additionalProperties": false
+                                }
+                              ]
+                            }
+                          },
+                          "required": [
+                            "kind",
+                            "key"
+                          ],
+                          "additionalProperties": false
+                        },
+                        {
+                          "type": "object",
+                          "properties": {
+                            "kind": {
+                              "type": "string",
+                              "const": "source-unidentified"
+                            }
+                          },
+                          "required": [
+                            "kind"
+                          ],
+                          "additionalProperties": false
+                        }
+                      ]
+                    },
                     "ultracode": {
                       "default": false,
                       "type": "boolean"
@@ -681,6 +764,89 @@ export const chatSyncSchemaSurfaceBaseline = {
                         },
                         {
                           "type": "null"
+                        }
+                      ]
+                    },
+                    "profileBinding": {
+                      "oneOf": [
+                        {
+                          "type": "object",
+                          "properties": {
+                            "kind": {
+                              "type": "string",
+                              "const": "key"
+                            },
+                            "key": {
+                              "anyOf": [
+                                {
+                                  "type": "object",
+                                  "properties": {
+                                    "providerId": {
+                                      "type": "string",
+                                      "minLength": 1
+                                    },
+                                    "accountId": {
+                                      "type": "string",
+                                      "minLength": 1
+                                    },
+                                    "organizationId": {
+                                      "anyOf": [
+                                        {
+                                          "type": "string",
+                                          "minLength": 1
+                                        },
+                                        {
+                                          "type": "null"
+                                        }
+                                      ]
+                                    }
+                                  },
+                                  "required": [
+                                    "providerId",
+                                    "accountId",
+                                    "organizationId"
+                                  ],
+                                  "additionalProperties": false
+                                },
+                                {
+                                  "type": "object",
+                                  "properties": {
+                                    "providerId": {
+                                      "type": "string",
+                                      "minLength": 1
+                                    },
+                                    "email": {
+                                      "type": "string",
+                                      "minLength": 1
+                                    }
+                                  },
+                                  "required": [
+                                    "providerId",
+                                    "email"
+                                  ],
+                                  "additionalProperties": false
+                                }
+                              ]
+                            }
+                          },
+                          "required": [
+                            "kind",
+                            "key"
+                          ],
+                          "additionalProperties": false
+                        },
+                        {
+                          "type": "object",
+                          "properties": {
+                            "kind": {
+                              "type": "string",
+                              "const": "source-unidentified"
+                            }
+                          },
+                          "required": [
+                            "kind"
+                          ],
+                          "additionalProperties": false
                         }
                       ]
                     },

@@ -54587,6 +54587,122 @@ export const FROZEN_CATALOG_LINE_SNAPSHOTS = {
       ],
       "additionalProperties": false
     },
+    "epic.getChatRunSettings@4.1": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "type": "object",
+      "properties": {
+        "settings": {
+          "anyOf": [
+            {
+              "type": "object",
+              "properties": {
+                "harnessId": {
+                  "type": "string",
+                  "enum": [
+                    "claude",
+                    "codex",
+                    "opencode",
+                    "traycer",
+                    "cursor",
+                    "grok",
+                    "qwen",
+                    "kiro",
+                    "droid",
+                    "kimi",
+                    "copilot",
+                    "kilocode",
+                    "openrouter",
+                    "amp",
+                    "devin",
+                    "pi",
+                    "hermes",
+                    "omp",
+                    "huggingface",
+                    "reasonix",
+                    "antigravity",
+                    "commandcode"
+                  ]
+                },
+                "model": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "permissionMode": {
+                  "type": "string",
+                  "enum": [
+                    "supervised",
+                    "auto_accept_edits",
+                    "auto",
+                    "full_access"
+                  ]
+                },
+                "reasoningEffort": {
+                  "anyOf": [
+                    {
+                      "type": "string"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "serviceTier": {
+                  "default": null,
+                  "anyOf": [
+                    {
+                      "type": "string"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "agentMode": {
+                  "type": "string",
+                  "enum": [
+                    "regular",
+                    "epic"
+                  ]
+                },
+                "profileId": {
+                  "default": null,
+                  "anyOf": [
+                    {
+                      "type": "string"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "ultracode": {
+                  "default": false,
+                  "type": "boolean"
+                }
+              },
+              "required": [
+                "harnessId",
+                "model",
+                "permissionMode",
+                "reasoningEffort",
+                "serviceTier",
+                "agentMode",
+                "profileId",
+                "ultracode"
+              ],
+              "additionalProperties": false
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "settings"
+      ],
+      "additionalProperties": false
+    },
     "epic.getChatRunSettingsBatch@1.0": {
       "$schema": "https://json-schema.org/draft/2020-12/schema",
       "type": "object",
@@ -54820,6 +54936,139 @@ export const FROZEN_CATALOG_LINE_SNAPSHOTS = {
                       "serviceTier",
                       "agentMode",
                       "profileId"
+                    ],
+                    "additionalProperties": false
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              }
+            },
+            "required": [
+              "chatId",
+              "settings"
+            ],
+            "additionalProperties": false
+          }
+        }
+      },
+      "required": [
+        "entries"
+      ],
+      "additionalProperties": false
+    },
+    "epic.getChatRunSettingsBatch@2.1": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "type": "object",
+      "properties": {
+        "entries": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "chatId": {
+                "type": "string",
+                "minLength": 1
+              },
+              "settings": {
+                "anyOf": [
+                  {
+                    "type": "object",
+                    "properties": {
+                      "harnessId": {
+                        "type": "string",
+                        "enum": [
+                          "claude",
+                          "codex",
+                          "opencode",
+                          "traycer",
+                          "cursor",
+                          "grok",
+                          "qwen",
+                          "kiro",
+                          "droid",
+                          "kimi",
+                          "copilot",
+                          "kilocode",
+                          "openrouter",
+                          "amp",
+                          "devin",
+                          "pi",
+                          "hermes",
+                          "omp",
+                          "huggingface",
+                          "reasonix",
+                          "antigravity",
+                          "commandcode"
+                        ]
+                      },
+                      "model": {
+                        "type": "string",
+                        "minLength": 1
+                      },
+                      "permissionMode": {
+                        "type": "string",
+                        "enum": [
+                          "supervised",
+                          "auto_accept_edits",
+                          "auto",
+                          "full_access"
+                        ]
+                      },
+                      "reasoningEffort": {
+                        "anyOf": [
+                          {
+                            "type": "string"
+                          },
+                          {
+                            "type": "null"
+                          }
+                        ]
+                      },
+                      "serviceTier": {
+                        "default": null,
+                        "anyOf": [
+                          {
+                            "type": "string"
+                          },
+                          {
+                            "type": "null"
+                          }
+                        ]
+                      },
+                      "agentMode": {
+                        "type": "string",
+                        "enum": [
+                          "regular",
+                          "epic"
+                        ]
+                      },
+                      "profileId": {
+                        "default": null,
+                        "anyOf": [
+                          {
+                            "type": "string"
+                          },
+                          {
+                            "type": "null"
+                          }
+                        ]
+                      },
+                      "ultracode": {
+                        "default": false,
+                        "type": "boolean"
+                      }
+                    },
+                    "required": [
+                      "harnessId",
+                      "model",
+                      "permissionMode",
+                      "reasoningEffort",
+                      "serviceTier",
+                      "agentMode",
+                      "profileId",
+                      "ultracode"
                     ],
                     "additionalProperties": false
                   },

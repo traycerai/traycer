@@ -11,11 +11,11 @@ import {
   epicCreateChatUpgradeV13ToV14,
   epicCreateChatV13,
   epicCreateChatV14,
-  epicGetChatRunSettingsBatchDowngradeV21ToV10,
+  epicGetChatRunSettingsBatchDowngradeV22ToV10,
   epicGetChatRunSettingsBatchV21,
-  epicGetChatRunSettingsDowngradeV41ToV10,
-  epicGetChatRunSettingsDowngradeV41ToV20,
-  epicGetChatRunSettingsDowngradeV41ToV30,
+  epicGetChatRunSettingsDowngradeV42ToV10,
+  epicGetChatRunSettingsDowngradeV42ToV20,
+  epicGetChatRunSettingsDowngradeV42ToV30,
   epicGetChatRunSettingsUpgradeV40ToV41,
   epicGetChatRunSettingsV40,
   epicGetChatRunSettingsV41,
@@ -441,9 +441,9 @@ describe("P8: reads of a chat's settings", () => {
   });
 
   it.each([
-    ["3.0", epicGetChatRunSettingsDowngradeV41ToV30],
-    ["2.0", epicGetChatRunSettingsDowngradeV41ToV20],
-    ["1.0", epicGetChatRunSettingsDowngradeV41ToV10],
+    ["3.0", epicGetChatRunSettingsDowngradeV42ToV30],
+    ["2.0", epicGetChatRunSettingsDowngradeV42ToV20],
+    ["1.0", epicGetChatRunSettingsDowngradeV42ToV10],
   ] as const)(
     "downgrades a 4.1 answer to %s without the key",
     (_label, downgrade) => {
@@ -462,7 +462,7 @@ describe("P8: reads of a chat's settings", () => {
       entries: [{ chatId: "chat-1", settings: stored }],
     });
     const result =
-      epicGetChatRunSettingsBatchDowngradeV21ToV10.downgradeResponse(answer);
+      epicGetChatRunSettingsBatchDowngradeV22ToV10.downgradeResponse(answer);
     expect(result.ok).toBe(true);
     if (!result.ok) return;
     expect(result.value.entries).toHaveLength(1);

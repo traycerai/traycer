@@ -4,10 +4,13 @@ import {
   createEpicRequestSchemaV14,
   createEpicRequestSchemaV15,
   updateChatRunSettingsRequestSchemaV12,
+  updateChatRunSettingsRequestSchemaV13,
 } from "./unary-schemas";
 import {
   getChatRunSettingsResponseSchemaV41,
+  getChatRunSettingsResponseSchemaV42,
   getChatRunSettingsBatchResponseSchemaV21,
+  getChatRunSettingsBatchResponseSchemaV22,
 } from "./chat-records";
 import {
   defineDowngradePath,
@@ -2567,11 +2570,58 @@ export const epicGetChatRunSettingsBatchUpgradeV20ToV21 = defineUpgradePath<
     getChatRunSettingsBatchResponseSchemaV21.parse(response),
 });
 
-export const epicGetChatRunSettingsDowngradeV41ToV30 = defineDowngradePath<
+/** Portable account provenance is absent on all earlier wire slots. */
+export const epicUpdateChatRunSettingsV13 = defineRpcContract({
+  method: "epic.updateChatRunSettings",
+  schemaVersion: { major: 1, minor: 3 } as const,
+  requestSchema: updateChatRunSettingsRequestSchemaV13,
+  responseSchema: updateChatRunSettingsResponseSchema,
+});
+export const epicUpdateChatRunSettingsUpgradeV12ToV13 = defineUpgradePath<
+  typeof epicUpdateChatRunSettingsV12,
+  typeof epicUpdateChatRunSettingsV13
+>({
+  from: epicUpdateChatRunSettingsV12.schemaVersion,
+  to: epicUpdateChatRunSettingsV13.schemaVersion,
+  upgradeRequest: (request) => request,
+  upgradeResponse: (response) => response,
+});
+export const epicGetChatRunSettingsV42 = defineRpcContract({
+  method: "epic.getChatRunSettings",
+  schemaVersion: { major: 4, minor: 2 } as const,
+  requestSchema: getChatRunSettingsRequestSchema,
+  responseSchema: getChatRunSettingsResponseSchemaV42,
+});
+export const epicGetChatRunSettingsUpgradeV41ToV42 = defineUpgradePath<
   typeof epicGetChatRunSettingsV41,
+  typeof epicGetChatRunSettingsV42
+>({
+  from: epicGetChatRunSettingsV41.schemaVersion,
+  to: epicGetChatRunSettingsV42.schemaVersion,
+  upgradeRequest: (request) => request,
+  upgradeResponse: (response) => response,
+});
+export const epicGetChatRunSettingsBatchV22 = defineRpcContract({
+  method: "epic.getChatRunSettingsBatch",
+  schemaVersion: { major: 2, minor: 2 } as const,
+  requestSchema: getChatRunSettingsBatchRequestSchema,
+  responseSchema: getChatRunSettingsBatchResponseSchemaV22,
+});
+export const epicGetChatRunSettingsBatchUpgradeV21ToV22 = defineUpgradePath<
+  typeof epicGetChatRunSettingsBatchV21,
+  typeof epicGetChatRunSettingsBatchV22
+>({
+  from: epicGetChatRunSettingsBatchV21.schemaVersion,
+  to: epicGetChatRunSettingsBatchV22.schemaVersion,
+  upgradeRequest: (request) => request,
+  upgradeResponse: (response) => response,
+});
+
+export const epicGetChatRunSettingsDowngradeV42ToV30 = defineDowngradePath<
+  typeof epicGetChatRunSettingsV42,
   typeof epicGetChatRunSettingsV30
 >({
-  from: { major: 4, minor: 1 },
+  from: { major: 4, minor: 2 },
   to: { major: 3, minor: 0 },
   downgradeRequest: (request) => ({ ok: true, value: request }),
   downgradeResponse: (response) => {
@@ -2592,11 +2642,11 @@ export const epicGetChatRunSettingsDowngradeV41ToV30 = defineDowngradePath<
   },
 });
 
-export const epicGetChatRunSettingsDowngradeV41ToV20 = defineDowngradePath<
-  typeof epicGetChatRunSettingsV41,
+export const epicGetChatRunSettingsDowngradeV42ToV20 = defineDowngradePath<
+  typeof epicGetChatRunSettingsV42,
   typeof epicGetChatRunSettingsV20
 >({
-  from: { major: 4, minor: 1 },
+  from: { major: 4, minor: 2 },
   to: { major: 2, minor: 0 },
   downgradeRequest: (request) => ({ ok: true, value: request }),
   downgradeResponse: (response) => {
@@ -2615,11 +2665,11 @@ export const epicGetChatRunSettingsDowngradeV41ToV20 = defineDowngradePath<
   },
 });
 
-export const epicGetChatRunSettingsDowngradeV41ToV10 = defineDowngradePath<
-  typeof epicGetChatRunSettingsV41,
+export const epicGetChatRunSettingsDowngradeV42ToV10 = defineDowngradePath<
+  typeof epicGetChatRunSettingsV42,
   typeof epicGetChatRunSettingsV10
 >({
-  from: { major: 4, minor: 1 },
+  from: { major: 4, minor: 2 },
   to: { major: 1, minor: 0 },
   downgradeRequest: (request) => ({ ok: true, value: request }),
   downgradeResponse: (response) => {
@@ -2638,11 +2688,11 @@ export const epicGetChatRunSettingsDowngradeV41ToV10 = defineDowngradePath<
   },
 });
 
-export const epicGetChatRunSettingsBatchDowngradeV21ToV10 = defineDowngradePath<
-  typeof epicGetChatRunSettingsBatchV21,
+export const epicGetChatRunSettingsBatchDowngradeV22ToV10 = defineDowngradePath<
+  typeof epicGetChatRunSettingsBatchV22,
   typeof epicGetChatRunSettingsBatchV10
 >({
-  from: { major: 2, minor: 1 },
+  from: { major: 2, minor: 2 },
   to: { major: 1, minor: 0 },
   downgradeRequest: (request) => ({ ok: true, value: request }),
   // Omits each entry the 1.0 line cannot represent and keeps the rest. The

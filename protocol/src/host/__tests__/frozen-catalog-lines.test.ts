@@ -63,8 +63,10 @@ import {
   getChatRunSettingsResponseSchemaV10,
   getChatRunSettingsResponseSchemaV20,
   getChatRunSettingsResponseSchemaV30,
+  getChatRunSettingsResponseSchemaV41,
   getChatRunSettingsBatchResponseSchema,
   getChatRunSettingsBatchResponseSchemaV10,
+  getChatRunSettingsBatchResponseSchemaV21,
 } from "@traycer/protocol/host/epic/chat-records";
 import { FROZEN_CATALOG_LINE_SNAPSHOTS } from "./__fixtures__/frozen-catalog-lines";
 import { toCanonicalJsonSchema } from "@traycer/protocol/framework/json-schema-fingerprint";
@@ -326,12 +328,19 @@ const LIVE_FROZEN_EXPORTS = {
   // The head line: it names the LIVE response, so the next attempt to grow the
   // settings tuple fails here first.
   "epic.getChatRunSettings@4.0": getChatRunSettingsResponseSchema,
+  // 4.1 froze when the portable profile binding opened 4.2: its tuple carries
+  // the Ultracode request and no binding, so a released 4.1 reader never sees a
+  // key it cannot spell.
+  "epic.getChatRunSettings@4.1": getChatRunSettingsResponseSchemaV41,
   // 1.0 froze when `commandcode` opened 2.0 (`1.5.0` shipped 1.0); its dump did
   // not change by the freeze.
   "epic.getChatRunSettingsBatch@1.0": getChatRunSettingsBatchResponseSchemaV10,
   // The head line: it names the LIVE response, so the next attempt to grow a
   // batch entry fails here first.
   "epic.getChatRunSettingsBatch@2.0": getChatRunSettingsBatchResponseSchema,
+  // 2.1 froze when the portable profile binding opened 2.2, for the reason 4.1
+  // did above.
+  "epic.getChatRunSettingsBatch@2.1": getChatRunSettingsBatchResponseSchemaV21,
   "providers.list@1.0..6.0 request": providersListRequestSchemaBeforeV70,
   "providers.list@7.0 request": providersListRequestSchema,
 } as const;
