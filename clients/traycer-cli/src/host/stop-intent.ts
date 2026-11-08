@@ -289,18 +289,11 @@ export async function actionableStopIntentReason(
  * - `stale`: a record older than {@link STOP_INTENT_STALE_MS}.
  * - `actionable`: a fresh record this supervisor has not served.
  */
-export const STOP_INTENT_STATES = [
-  "none",
-  "fresh-served",
-  "stale",
-  "actionable",
-] as const;
-
-export type StopIntentState = (typeof STOP_INTENT_STATES)[number];
+export type StopIntentState = "none" | "fresh-served" | "stale" | "actionable";
 
 /**
  * {@link actionableStopIntentReason}'s question, answered as one of
- * {@link STOP_INTENT_STATES} instead of the reason: it tells a stop that
+ * {@link StopIntentState} instead of the reason: it tells a stop that
  * existed but was not actionable from no stop at all. Reads the file once.
  */
 export async function stopIntentState(

@@ -110,6 +110,9 @@ export type StderrFatalKind = (typeof STDERR_FATAL_KINDS)[number];
  */
 const NODE_UNCAUGHT_TRAILER = /^Node\.js v\d+\.\d+\.\d+[^\n]*$/m;
 
+/** The same line, global, to find the LAST one. */
+const NODE_UNCAUGHT_TRAILER_LINES = /^Node\.js v\d+\.\d+\.\d+[^\n]*$/gm;
+
 /**
  * The closed set of host-authored raw stderr lines a capture can end on, the
  * only thing about them that leaves the machine (as the crash event's
@@ -118,20 +121,17 @@ const NODE_UNCAUGHT_TRAILER = /^Node\.js v\d+\.\d+\.\d+[^\n]*$/m;
  * rejection guard, `main-bootstrap.ts`, `reportForcedHostExit`), so no
  * user-controlled text is ever read into it. `none`: no such line.
  */
-export const HOST_STDERR_LAST_LINES = [
-  "layer0-acquired",
-  "layer0-degraded",
-  "layer0-declined",
-  "runtime-load-failed",
-  "bootstrap-unhandled-rejection",
-  "dev-identity-refused",
-  "forced-shutdown",
-  "none",
-] as const;
+export type HostStderrLastLine =
+  | "layer0-acquired"
+  | "layer0-degraded"
+  | "layer0-declined"
+  | "runtime-load-failed"
+  | "bootstrap-unhandled-rejection"
+  | "dev-identity-refused"
+  | "forced-shutdown"
+  | "none";
 
-export type HostStderrLastLine = (typeof HOST_STDERR_LAST_LINES)[number];
-
-/** Line-start prefix of each host-authored line, in {@link HOST_STDERR_LAST_LINES} order. */
+/** Line-start prefix of each host-authored line. */
 const HOST_LINE_PREFIXES: ReadonlyArray<
   readonly [Exclude<HostStderrLastLine, "none">, string]
 > = [
@@ -147,28 +147,87 @@ const HOST_LINE_PREFIXES: ReadonlyArray<
   ["forced-shutdown", "host-shutdown-forced"],
 ];
 
-/** The tag value for an uncaught block that names no error the shape admits. */
+/** The tag value for an uncaught block that names no class. */
 const EVIDENCE_UNCLASSIFIED = "unclassified";
 /** The tag value when the capture holds no Node uncaught-error block. */
 const EVIDENCE_NONE = "none";
 
 /**
- * An error class kept only when it has the shape of a JavaScript error class
- * name: `Error` or a capitalised identifier ending in `Error`, at most 63 characters. A
- * multi-line message can put a user's own capitalised word on the line before
- * the first frame, so anything outside this shape is `unclassified`, never
- * carried.
+ * The closed set an uncaught error's class is sorted into (the crash event's
+ * `host_error_class` tag): the standard JavaScript and Node error classes.
+ * Anything else with the shape of a class name (`Error` or a capitalised
+ * identifier ending in `Error`, at most 63 characters) is `custom`, so a
+ * name a user or a library chose is never carried. `unclassified`: no header
+ * line, or one that is no class name. `none`: no uncaught-error block.
  */
+const STANDARD_ERROR_CLASSES = [
+  "Error",
+  "TypeError",
+  "RangeError",
+  "SyntaxError",
+  "ReferenceError",
+  "EvalError",
+  "URIError",
+  "AggregateError",
+  "SystemError",
+  "AssertionError",
+  "AbortError",
+] as const;
+
+export type HostErrorClass =
+  | (typeof STANDARD_ERROR_CLASSES)[number]
+  | "custom"
+  | "unclassified"
+  | "none";
+
 const ERROR_CLASS_SHAPE = /^(?:[A-Z][A-Za-z0-9]{0,58})?Error$/;
 
-/** A Node or libuv error code: `ERR_*` or a POSIX/Windows `E*` name. */
-const ERROR_CODE_SHAPE = /^(ERR_[A-Z0-9_]{1,48}|E[A-Z]{2,12})$/;
+/**
+ * The closed set an uncaught error's code is sorted into (the crash event's
+ * `host_error_code` tag): Node's own `ERR_*` namespace, plus the errno names
+ * below. Any other code is `other`, so a code a user or a library chose is
+ * never carried. `none`: no uncaught-error block, or it prints no code.
+ */
+const NODE_ERROR_CODE = /^ERR_[A-Z0-9_]{1,48}$/;
+
+const ERRNO_CODES: ReadonlySet<string> = new Set([
+  "ENOENT",
+  "EACCES",
+  "EPERM",
+  "EBUSY",
+  "ENOSPC",
+  "EEXIST",
+  "EMFILE",
+  "ENFILE",
+  "ENOTDIR",
+  "EISDIR",
+  "ENOTEMPTY",
+  "EPIPE",
+  "ECONNREFUSED",
+  "ECONNRESET",
+  "ETIMEDOUT",
+  "EADDRINUSE",
+  "EADDRNOTAVAIL",
+  "EAI_AGAIN",
+  "ENOTFOUND",
+  "EHOSTUNREACH",
+  "ENETUNREACH",
+  "EAGAIN",
+  "EINVAL",
+  "EIO",
+  "ENOMEM",
+  "ELOOP",
+  "ENAMETOOLONG",
+  "EROFS",
+  "EXDEV",
+  "ECANCELED",
+]);
 
 /** The `code: 'X'` line Node's error inspector prints under a stack. */
 const INSPECTED_CODE_LINE = /^[ \t]+code: '([^'\n]{1,64})',?[ \t\r]*$/m;
 
 /** Node's source-position caret line, which precedes an uncaught error. */
-const UNCAUGHT_CARET_LINE = /^[ \t]*\^[ \t\r]*$/gm;
+const UNCAUGHT_CARET_LINE = /^[ \t]*\^[ \t\r]*$/m;
 
 /**
  * The head of Node's error header line: the name, then Node's optional
@@ -177,8 +236,14 @@ const UNCAUGHT_CARET_LINE = /^[ \t]*\^[ \t\r]*$/gm;
  */
 const ERROR_HEADER_NAME = /^([A-Za-z0-9_$]+)(?: \[[A-Z0-9_]{1,64}\])?(?::|$)/;
 
-/** Every stack-frame line, whole. */
-const STACK_FRAME_LINES = /^[ \t]+at [^\n]*$/gm;
+/** The first run of stack-frame lines: the outer error's own stack. */
+const OUTER_STACK_FRAMES = /(?:^[ \t]+at [^\n]*(?:\n|$))+/m;
+
+/**
+ * An error-valued entry inside the inspected properties (`[cause]: Error: ...`,
+ * `[errors]: [...]`), where another error's stack and code begin.
+ */
+const NESTED_ERROR_ENTRY = /^[ \t]*\[(?:cause|errors)\]:/m;
 
 /** Heap-exhaustion wording in a `FATAL ERROR:` line (V8 and Node's own). */
 const HEAP_OOM_LINE = /heap out of memory|heap limit/;
@@ -500,7 +565,7 @@ export class StderrCaptureBuffer {
 
   /**
    * Which host-authored raw line the capture holds last (see
-   * {@link HOST_STDERR_LAST_LINES}). Reads only what is already held, matches
+   * {@link HostStderrLastLine}). Reads only what is already held, matches
    * line-start prefixes against a fixed list and carries none of the line.
    * Never throws.
    */
@@ -528,16 +593,17 @@ export class StderrCaptureBuffer {
   }
 
   /**
-   * The error class of a Node uncaught-error block: the name on Node's header
-   * line, which is the FIRST non-empty line after the caret line and reads
-   * `Name: message` (a coded error reads `Name [CODE]: message`). Kept only in
-   * the shape of {@link ERROR_CLASS_SHAPE}; a later message line is message
-   * text and is never read. `none` when the capture holds no Node trailer,
-   * `unclassified` when it does and no caret line survives (an elided capture
-   * cannot say which error the header belongs to), the header is missing, or
-   * its name is outside the shape. Never the message. Never throws.
+   * The error class of a Node uncaught-error block, as a member of
+   * {@link HostErrorClass}: the name on Node's header line, which is the FIRST
+   * non-empty line after the first caret line and reads `Name: message` (a
+   * coded error reads `Name [CODE]: message`). A standard class is kept by
+   * name, any other class-shaped name is `custom`. A later message line is
+   * message text and is never read. `none` when the capture holds no Node
+   * trailer, `unclassified` when it does and no caret line survives (an
+   * elided capture cannot say which error the header belongs to), the header
+   * is missing, or its name is no class name. Never the message. Never throws.
    */
-  uncaughtErrorClass(): string {
+  uncaughtErrorClass(): HostErrorClass {
     try {
       if (!NODE_UNCAUGHT_TRAILER.test(this.heldText())) return EVIDENCE_NONE;
       const block = this.uncaughtBlock();
@@ -547,55 +613,68 @@ export class StderrCaptureBuffer {
         .map((line) => line.replace(/\r$/, ""))
         .find((line) => line.trim() !== "");
       const name = header?.match(ERROR_HEADER_NAME)?.[1];
-      return name !== undefined && ERROR_CLASS_SHAPE.test(name)
-        ? name
-        : EVIDENCE_UNCLASSIFIED;
+      if (name === undefined) return EVIDENCE_UNCLASSIFIED;
+      const standard = STANDARD_ERROR_CLASSES.find((known) => known === name);
+      if (standard !== undefined) return standard;
+      return ERROR_CLASS_SHAPE.test(name) ? "custom" : EVIDENCE_UNCLASSIFIED;
     } catch {
       return EVIDENCE_UNCLASSIFIED;
     }
   }
 
   /**
-   * The `code` Node's inspector printed in the properties block that follows
-   * an uncaught error's last stack frame, kept only in the shape of
-   * {@link ERROR_CODE_SHAPE}. A `code:` line anywhere earlier is message text
-   * and is never read. `none` when the capture holds no uncaught-error block,
-   * no caret anchors it, or the properties block prints no code;
-   * `unclassified` when it prints one outside the shape. Never throws.
+   * The `code` Node's inspector printed in the OUTER error's properties block:
+   * the lines that follow its stack (the first run of stack-frame lines after
+   * the header) up to an error-valued `[cause]` or `[errors]` entry, whose own
+   * stack and properties belong to another error. Kept only as a member of
+   * the closed set above: an `ERR_*` code or an allowlisted errno name, any
+   * other code being `other`. A `code:` line anywhere else is message text or
+   * another error's and is never read. `none` when the capture holds no
+   * uncaught-error block, no caret anchors it, it has no stack, or the
+   * properties block prints no code. Never throws.
    */
   uncaughtErrorCode(): string {
     try {
       const block = this.uncaughtBlock();
       if (block === null) return EVIDENCE_NONE;
-      let lastFrameEnd = -1;
-      for (const frame of block.matchAll(STACK_FRAME_LINES)) {
-        lastFrameEnd = frame.index + frame[0].length;
-      }
-      if (lastFrameEnd === -1) return EVIDENCE_NONE;
-      const code = block.slice(lastFrameEnd).match(INSPECTED_CODE_LINE)?.[1];
+      const frames = OUTER_STACK_FRAMES.exec(block);
+      if (frames === null) return EVIDENCE_NONE;
+      const afterStack = block.slice(frames.index + frames[0].length);
+      const nested = afterStack.search(NESTED_ERROR_ENTRY);
+      const properties =
+        nested === -1 ? afterStack : afterStack.slice(0, nested);
+      const code = properties.match(INSPECTED_CODE_LINE)?.[1];
       if (code === undefined) return EVIDENCE_NONE;
-      return ERROR_CODE_SHAPE.test(code) ? code : EVIDENCE_UNCLASSIFIED;
+      return NODE_ERROR_CODE.test(code) || ERRNO_CODES.has(code)
+        ? code
+        : "other";
     } catch {
-      return EVIDENCE_UNCLASSIFIED;
+      return "other";
     }
   }
 
   /**
-   * The text after Node's source-position caret line (`    ^`) up to the
-   * trailer, or `null` when the capture has no trailer or no caret line (an
-   * elided capture, or a thrown non-error): without the caret nothing says
-   * where the block begins, so earlier output is never read as part of it.
+   * The text after the FIRST source-position caret line (`    ^`) up to the
+   * last trailer, or `null` when the capture has no trailer or no caret line
+   * (an elided capture, or no block at all). The first caret line opens the
+   * real block: everything after Node's header is the error's message, which
+   * can hold caret lines and whole embedded crashes of its own. Without a
+   * caret nothing says where the block begins, so earlier output is never read
+   * as part of it. A caret line from earlier output can still pick another
+   * header; the result is then a member of the closed sets, never text.
    */
   private uncaughtBlock(): string | null {
     const held = this.heldText();
-    const trailer = held.search(NODE_UNCAUGHT_TRAILER);
+    let trailer = -1;
+    for (const match of held.matchAll(NODE_UNCAUGHT_TRAILER_LINES)) {
+      trailer = match.index;
+    }
     if (trailer === -1) return null;
     const upToTrailer = held.slice(0, trailer);
-    let start = -1;
-    for (const caret of upToTrailer.matchAll(UNCAUGHT_CARET_LINE)) {
-      start = caret.index + caret[0].length;
-    }
-    return start === -1 ? null : upToTrailer.slice(start);
+    const caret = UNCAUGHT_CARET_LINE.exec(upToTrailer);
+    return caret === null
+      ? null
+      : upToTrailer.slice(caret.index + caret[0].length);
   }
 
   /**

@@ -16,6 +16,7 @@ import {
   type CrashReportMemory,
   type HeapSpaceName,
   type HeapSpaceUsedBytes,
+  type HostErrorClass,
   type HostStderrLastLine,
   type StderrFatalKind,
 } from "./crash-diagnostics";
@@ -93,12 +94,15 @@ export interface HostCrashTelemetry {
    */
   readonly hostLastLine: HostStderrLastLine;
   /**
-   * The error class of a Node uncaught-error block, kept only in the shape of
-   * a JavaScript error class name; `none` without such a block,
-   * `unclassified` for anything outside the shape. Never the message.
+   * The error class of a Node uncaught-error block, as a member of a closed
+   * set: a standard class, `custom`, `unclassified` or `none`
+   * (`crash-diagnostics.ts`). Never a name a user or a library chose.
    */
-  readonly errorClass: string;
-  /** The block's `code`, kept only in the shape of an error code; as above. */
+  readonly errorClass: HostErrorClass;
+  /**
+   * The block's `code`: an `ERR_*` code or an allowlisted errno name, `other`
+   * for any other, `none` without one. Never a code a user chose.
+   */
   readonly errorCode: string;
   /**
    * What the stop-intent file said when the child ended: a closed set, never
