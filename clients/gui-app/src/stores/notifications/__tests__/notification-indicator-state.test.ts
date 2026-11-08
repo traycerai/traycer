@@ -271,6 +271,45 @@ describe("cloud notification indicator derivation", () => {
     return Object.fromEntries(rows.map((entry) => [entry.entryId, entry]));
   }
 
+  it("keeps a feedback draft out of task and chat indicators", () => {
+    const row: HostNotificationsCloudFeedRowV17 = {
+      entryId: "draft-1",
+      originHostId: "host-b",
+      coalesceKey: "feedback.drafted:chat-1",
+      entry: {
+        id: "draft-1",
+        updatedAt: 1,
+        readAt: null,
+        kind: "feedback.drafted",
+        sourceRef: "draft-1",
+        severity: "needs_action",
+        outcome: null,
+        resolvedAt: null,
+        epicId: "epic-1",
+        chatId: "chat-1",
+        payload: {
+          kind: "feedback_draft",
+          epicId: "epic-1",
+          chatId: "chat-1",
+          chatTitle: "Chat",
+          taskTitle: "Epic",
+          blockId: "draft-1",
+        },
+      },
+      presentation: { epicTitle: null, chatTitle: null },
+    };
+    expect(
+      selectCloudNotificationIndicators(
+        rowsById([row]),
+        ["epic-1"],
+        ["chat-1"],
+      ),
+    ).toEqual({
+      epics: {},
+      chats: {},
+    });
+  });
+
   it("does not light the chat's approval glyph for an unresolved browser prompt, though its unread row is counted", () => {
     const browserRow: HostNotificationsCloudFeedRowV17 = {
       entryId: "browser-1",

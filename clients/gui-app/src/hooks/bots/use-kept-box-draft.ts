@@ -37,10 +37,10 @@ export function useKeptBoxDraft(
       key === null
         ? null
         : {
-            keep: (text) => typeThreadBox(botId, key, text),
-            revision: () =>
-              useBotDraftsStore.getState().threadBoxes[botId]?.[key]
-                ?.revision ?? null,
+            keep: (text, content) => typeThreadBox(botId, key, text, content),
+            hasDraft: () =>
+              useBotDraftsStore.getState().threadBoxes[botId]?.[key] !==
+              undefined,
             unsent,
             offer: (message) => offerUnsent(botId, key, message),
           },
@@ -48,7 +48,10 @@ export function useKeptBoxDraft(
   );
   return {
     kept,
-    seed: kept === null ? null : { id: kept.seedId, text: kept.text },
+    seed:
+      kept === null
+        ? null
+        : { id: kept.seedId, text: kept.text, content: kept.content },
     keptDraft,
   };
 }

@@ -187,7 +187,7 @@ interface TestState {
     readonly kind: "ambient" | "managed";
     readonly label: string;
   }>;
-  permissionRole: "owner" | "editor" | "viewer" | null;
+  permissionRole: "owner" | "editor" | null;
   /**
    * The host's `epic.setChatArchived` support, as the registry reports it:
    * `true` advertised, `false` known absent, `null` no handshake yet. One knob
@@ -2526,9 +2526,9 @@ describe("epic sidebar selection mode", () => {
     expect(screen.queryByText("No artifacts yet.")).toBeNull();
   });
 
-  it("hides sidebar bulk selection for viewer roles", () => {
+  it("hides sidebar bulk selection while the role is not known", () => {
     seedChatTree();
-    testState.permissionRole = "viewer";
+    testState.permissionRole = null;
 
     render(<EpicLeftPanelHost epicId={EPIC_ID} tabId={TAB_ID} />);
 
@@ -2969,10 +2969,10 @@ describe("epic sidebar selection mode", () => {
     expect(markRead).toHaveBeenCalledWith(EPIC_ID, "ticket-child", 2);
   });
 
-  it("exports one artifact from its row actions for viewers", () => {
+  it("exports one artifact from its row actions without a role", () => {
     seedArtifactTree();
     testState.activePanelId = "artifacts";
-    testState.permissionRole = "viewer";
+    testState.permissionRole = null;
 
     render(<EpicLeftPanelHost epicId={EPIC_ID} tabId={TAB_ID} />);
     openRowMore("spec-root");
@@ -2984,15 +2984,47 @@ describe("epic sidebar selection mode", () => {
       archiveTitle: null,
       artifacts: [{ id: "spec-root", title: "Root spec" }],
       format: "markdown",
+      includeNested: false,
     });
     expect(dropdownItem("rename-spec-root").matches(":disabled")).toBe(true);
     expect(dropdownItem("delete-spec-root").matches(":disabled")).toBe(true);
   });
 
+  it("exports one artifact with everything nested under it from its row actions", () => {
+    seedArtifactTree();
+    testState.activePanelId = "artifacts";
+    testState.permissionRole = null;
+
+    render(<EpicLeftPanelHost epicId={EPIC_ID} tabId={TAB_ID} />);
+    openRowMore("spec-root");
+
+    fireEvent.click(dropdownItem("export-nested-pdf-spec-root"));
+
+    expect(testState.exportArtifactsMutate).toHaveBeenCalledWith({
+      archive: true,
+      archiveTitle: "Root spec",
+      artifacts: [{ id: "spec-root", title: "Root spec" }],
+      format: "pdf",
+      includeNested: true,
+    });
+  });
+
+  it("offers no nested export on a row with nothing under it", () => {
+    seedArtifactTree();
+    testState.activePanelId = "artifacts";
+
+    render(<EpicLeftPanelHost epicId={EPIC_ID} tabId={TAB_ID} />);
+    openRowMore("ticket-child");
+
+    expect(
+      screen.queryByTestId("epic-sidebar-export-nested-pdf-ticket-child"),
+    ).toBeNull();
+  });
+
   it("bulk-exports every selected visible artifact, including descendants", () => {
     seedArtifactTree();
     testState.activePanelId = "artifacts";
-    testState.permissionRole = "viewer";
+    testState.permissionRole = null;
 
     render(<EpicLeftPanelHost epicId={EPIC_ID} tabId={TAB_ID} />);
 
@@ -3021,6 +3053,7 @@ describe("epic sidebar selection mode", () => {
         { id: "ticket-child", title: "Child ticket" },
       ],
       format: "markdown",
+      includeNested: false,
     });
     expect(
       screen
@@ -4297,74 +4330,18 @@ describe("chat row read-only arm", () => {
     testState.permissionRole = "owner";
   });
 
-  function indicator(
-    overrides: Partial<TestIndicatorState>,
-  ): TestIndicatorState {
-    return {
-      unreadFailure: false,
-      pendingFork: false,
-      pendingApproval: false,
-      pendingInterview: false,
-      unreadDone: false,
-      ...overrides,
-    };
-  }
-
-  it("shows the read-only lock in place of the chat glyph for a viewer's otherwise-idle chat row", () => {
+  // The task's role no longer locks a row: every task role may write, so the
+  // lock is the chat's own (its session's access snapshot) and nothing else.
+  it("shows the idle glyph, not a read-only lock, for a chat row when the task grants no role", () => {
     seedChatTree();
-    testState.permissionRole = "viewer";
+    testState.permissionRole = null;
 
     render(<EpicLeftPanelHost epicId={EPIC_ID} tabId={TAB_ID} />);
 
-    const lock = readOnlyLock("chat-child");
-    expect(lock).toBeTruthy();
-    expect(lock === null ? null : tooltipTextIn(lock)).toBe("Read-only agent");
-    // It replaces the IDLE GLYPH, not the trailing time: a viewer still sees
-    // when the row last moved.
+    expect(readOnlyLock("chat-child")).toBeNull();
     const row = screen.getByTestId("epic-sidebar-item-chat-child");
-    expect(row.querySelector(".lucide-message-square")).toBeNull();
+    expect(row.querySelector(".lucide-message-square")).not.toBeNull();
     expect(idleTime("chat-child")).toBeTruthy();
-  });
-
-  it("keeps Working / Needs attention / Done ahead of the read-only lock for a viewer row", () => {
-    seedChatTree();
-    testState.permissionRole = "viewer";
-
-    // A running turn outranks read-only.
-    testState.activeAgentIds = new Set(["chat-child"]);
-    const view = render(<EpicLeftPanelHost epicId={EPIC_ID} tabId={TAB_ID} />);
-    expect(leadingStatusKinds("chat-child")).toEqual(["activity"]);
-    expect(readOnlyLock("chat-child")).toBeNull();
-
-    // Needs attention outranks read-only.
-    testState.activeAgentIds = new Set<string>();
-    act(() => {
-      seedLocalChatFailure("chat-child");
-    });
-    view.rerender(<EpicLeftPanelHost epicId={EPIC_ID} tabId={TAB_ID} />);
-    expect(leadingStatusKinds("chat-child")).toEqual(["failure"]);
-    expect(readOnlyLock("chat-child")).toBeNull();
-
-    // Done outranks read-only.
-    act(() => {
-      clearLocalChatFailure("chat-child");
-    });
-    testState.indicatorChats = {
-      "chat-child": indicator({ unreadDone: true }),
-    };
-    view.rerender(<EpicLeftPanelHost epicId={EPIC_ID} tabId={TAB_ID} />);
-    expect(leadingStatusKinds("chat-child")).toEqual(["done"]);
-    expect(readOnlyLock("chat-child")).toBeNull();
-  });
-
-  it("never locks a TUI terminal-agent row for a viewer - terminal agents carry no chat session lock", () => {
-    seedChatTree();
-    testState.permissionRole = "viewer";
-
-    render(<EpicLeftPanelHost epicId={EPIC_ID} tabId={TAB_ID} />);
-
-    expect(idleTime("agent-root")).toBeTruthy();
-    expect(readOnlyLock("agent-root")).toBeNull();
   });
 });
 
@@ -5600,15 +5577,15 @@ describe("chat row archive", () => {
 
   // --- B7: viewer role ----------------------------------------------------
 
-  it("gives a viewer no archive shortcut, a disabled Archive/Rename menu, working Copy ID, and the read-only lock (B7)", () => {
+  it("gives a row without a role no archive shortcut, a disabled Archive/Rename menu and a working Copy ID (B7)", () => {
     seedChatTree();
-    testState.permissionRole = "viewer";
+    testState.permissionRole = null;
 
     render(<EpicLeftPanelHost epicId={EPIC_ID} tabId={TAB_ID} />);
 
-    // Hover button absent for viewers (requires canMutate).
+    // Hover button absent without a role (requires canMutate).
     expect(screen.queryByTestId("epic-sidebar-archive-chat-child")).toBeNull();
-    // Chat row ⋯ menu is open to a viewer - only its mutating entries
+    // Chat row ⋯ menu stays open - only its mutating entries
     // (Archive, Rename) are hard-disabled; the read-only Copy ID entry works.
     expect(screen.getByTestId("epic-sidebar-more-chat-child")).toBeTruthy();
     expect(isMenuItemUnavailable(dropdownItem("archive-item-chat-child"))).toBe(
@@ -5624,12 +5601,6 @@ describe("chat row archive", () => {
     });
     fireEvent.click(copyItem);
     expect(writeText).toHaveBeenCalledWith("chat-child");
-
-    // The read-only lock must still render - do not let the menu change become
-    // "no status". Scoped to the row, since several rows carry the same label.
-    const lock = readOnlyLock("chat-child");
-    expect(lock).toBeTruthy();
-    expect(lock === null ? null : tooltipTextIn(lock)).toBe("Read-only agent");
   });
 
   // --- B8: status survives selection mode and rename (archive must not blank it)

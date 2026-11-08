@@ -230,7 +230,6 @@ function SweepHostOption(props: {
           surfaceState={surfaceState}
           updateView={null}
           nameRef={null}
-          nameWraps={false}
           environmentLabel={null}
         />
         {row.isDefault ? (

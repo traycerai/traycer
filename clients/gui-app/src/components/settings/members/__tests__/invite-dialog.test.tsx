@@ -69,12 +69,7 @@ describe("InviteDialog", () => {
     );
 
     await user.click(picker);
-    await user.click(await screen.findByRole("option", { name: "Viewer" }));
-    expect(line.textContent).toBe(
-      "Can see Acme's settings but not change them.",
-    );
-
-    await user.click(picker);
+    expect(screen.queryByRole("option", { name: "Viewer" })).toBeNull();
     await user.click(await screen.findByRole("option", { name: "Admin" }));
     expect(line.textContent).toBe(
       "Can change Acme's settings, invite and remove people, and change roles.",

@@ -678,6 +678,7 @@ export function Fixture(): ReactElement {
               sendDisabled={false}
               sendDisabledHint={null}
               mentionRoots={[]}
+              runWorkingDirectory={null}
               fallbackToGlobalMentionRoots={false}
               currentEpicId={EPIC_ID}
               viewTabId="view-tab"

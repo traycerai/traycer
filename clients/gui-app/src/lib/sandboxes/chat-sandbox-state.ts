@@ -1,4 +1,5 @@
 import type { SandboxSummary } from "@traycer/protocol/host/sandbox-control";
+import { hostSandboxStateWord } from "@traycer/protocol/host/host-status";
 import type { TaskSandboxEndedHost } from "@/hooks/epic/use-task-sandbox-end";
 import type { StageConfiguration } from "@/lib/sandboxes/sandbox-stage-model";
 import {
@@ -7,14 +8,15 @@ import {
 } from "@/lib/sandboxes/sandbox-row-lines";
 import { taskSandboxEndLine } from "@/lib/sandboxes/task-sandbox-end";
 
-/** A sandbox between two states. */
+/** A sandbox between states, or destroyed before the task records its end. */
 export type SandboxMovingState =
   | "creating"
   | "resuming"
   | "starting"
   | "suspending"
   | "stopping"
-  | "destroying";
+  | "destroying"
+  | "destroyed";
 
 /**
  * A chat's host as a sandbox, by one precedence: the task's end record, then
@@ -104,7 +106,6 @@ export interface ChatSandboxView {
 export interface ChatSandboxViewer {
   /** Whether the host answers this device right now. */
   readonly reachable: boolean;
-  readonly canEdit: boolean;
   readonly ownedByViewer: boolean;
   readonly environmentOwned: boolean;
 }
@@ -175,8 +176,7 @@ function restingView(
   const { configuration } = state;
   if (configuration === null) return slotLine(state, text);
   const known: RestingChatSandbox = { ...state, configuration };
-  const wakes =
-    viewer.canEdit && (viewer.ownedByViewer || viewer.environmentOwned);
+  const wakes = viewer.ownedByViewer || viewer.environmentOwned;
   return {
     line: { place: "footer", text, state: known },
     composer: wakes ? { kind: "wake", sandbox: known } : { kind: "ordinary" },
@@ -188,15 +188,6 @@ export function wakeOf(view: ChatSandboxView): RestingChatSandbox | undefined {
   return view.composer.kind === "wake" ? view.composer.sandbox : undefined;
 }
 
-const MOVING_VERB: Record<SandboxMovingState, string> = {
-  creating: "Starting",
-  starting: "Starting",
-  resuming: "Resuming",
-  suspending: "Suspending",
-  stopping: "Stopping",
-  destroying: "Destroying",
-};
-
 /** A sandbox whose state this device cannot tell yet. */
 function unknownSandboxLine(name: string): string {
   return `${name} isn't available — this chat stays readable.`;
@@ -206,5 +197,5 @@ function unknownSandboxLine(name: string): string {
 function movingSandboxLine(
   state: Extract<ChatSandboxState, { readonly kind: "moving" }>,
 ): string {
-  return `${MOVING_VERB[state.state]} ${state.sandbox.displayName} · pending`;
+  return `${hostSandboxStateWord(state.state)} ${state.sandbox.displayName} · pending`;
 }

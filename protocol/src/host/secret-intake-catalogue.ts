@@ -152,16 +152,6 @@ export const SANDBOX_SECRET_FORM_KINDS = [
 ] as const satisfies readonly SandboxSecretKind[];
 export type SandboxSecretFormKind = (typeof SANDBOX_SECRET_FORM_KINDS)[number];
 
-export const SANDBOX_SECRET_MODES = ["brokered", "exposed"] as const;
-export type SandboxSecretMode = (typeof SANDBOX_SECRET_MODES)[number];
-
-export const SANDBOX_EXPORT_POLICIES = [
-  "none",
-  "presigned_url",
-  "short_lived_credentials",
-] as const;
-export type SandboxExportPolicy = (typeof SANDBOX_EXPORT_POLICIES)[number];
-
 /** Where a key may appear in an HTTP request. */
 export const SANDBOX_SECRET_SWAP_SITES = ["header", "query", "body"] as const;
 export type SandboxSecretSwapSite = (typeof SANDBOX_SECRET_SWAP_SITES)[number];

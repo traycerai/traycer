@@ -20,21 +20,24 @@ export function ForkedChatLinkSegment(props: ForkedChatLinkSegmentProps) {
   const openSourceConversation = (
     event: MouseEvent<HTMLButtonElement>,
   ): void => {
-    openTile({
-      node: {
-        id: sourceChatId,
-        instanceId: uuidv4(),
-        type: "chat",
-        name: sourceChatTitle,
-        hostId: sourceHostId,
+    openTile(
+      {
+        node: {
+          id: sourceChatId,
+          instanceId: uuidv4(),
+          type: "chat",
+          name: sourceChatTitle,
+          hostId: sourceHostId,
+        },
+        target: { tabId: viewTabId },
+        gesture: "explicit",
+        modifiers: modifiersFromMouseEvent(event),
+        placement: null,
+        dedupe: true,
+        source: "direct_ui",
       },
-      target: { tabId: viewTabId },
-      gesture: "explicit",
-      modifiers: modifiersFromMouseEvent(event),
-      placement: null,
-      dedupe: true,
-      source: "direct_ui",
-    });
+      "user",
+    );
   };
 
   return (

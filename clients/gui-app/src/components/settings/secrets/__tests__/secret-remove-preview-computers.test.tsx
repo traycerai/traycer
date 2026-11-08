@@ -26,6 +26,11 @@ vi.mock("@/lib/settings-navigation", () => ({
 }));
 vi.mock("@/components/settings/host-scope/use-host-scope", () => ({
   useHostScope: () => reads.scope,
+  useHostScopeFor: () => reads.scope,
+  WINDOW_HOST_SELECTION: {
+    scopedHostId: null,
+    setScopedHostId: () => undefined,
+  },
 }));
 vi.mock("@/hooks/environment/use-registered-host-environment-statuses", () => ({
   useRegisteredHostEnvironmentStatuses: () => reads.statuses,
@@ -65,6 +70,10 @@ import {
 import { useAuthStore } from "@/stores/auth/auth-store";
 import type { EnvironmentPick } from "@/lib/settings-environment-pages";
 import { useSettingsEnvironmentPickStore } from "@/stores/settings/settings-environment-pick-store";
+import {
+  RETIRED_PROVIDER_VARIABLES,
+  RETIRED_SECRET_ROW_FIELDS,
+} from "@traycer/protocol/host/released-wire-rows";
 
 const ADDED = Date.UTC(2026, 9, 24, 9, 30);
 const RESTART = "Tools already running keep it until they restart.";
@@ -87,18 +96,17 @@ const AWAITING_MOVE = environmentStatusFixture({
 });
 
 const secret: EnvironmentSecretV12 = {
+  ...RETIRED_SECRET_ROW_FIELDS,
+  providerVariables: [...RETIRED_PROVIDER_VARIABLES],
   secretId: "sec-1",
   name: "STRIPE_KEY",
   kind: "api_key",
   protocol: "https",
   destinations: ["api.stripe.com"],
-  mode: "brokered",
-  state: "live",
   currentVersionId: "ver-1",
   revoked: false,
   updatedAt: 1,
   variables: [],
-  providerVariables: [],
 };
 
 function computer(name: string): HostScopeOption {

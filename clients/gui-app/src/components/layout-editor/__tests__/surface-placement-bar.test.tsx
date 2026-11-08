@@ -165,7 +165,7 @@ describe("<SurfacePlacementBar />", () => {
     expect(
       Array.from(options).map((option) => option.getAttribute("aria-label")),
     ).toEqual(["Left", "Right"]);
-    expect(pictogram("Left").getAttribute("aria-checked")).toBe("true");
+    expect(pictogram("Right").getAttribute("aria-checked")).toBe("true");
   });
 
   describe.each([
@@ -185,10 +185,10 @@ describe("<SurfacePlacementBar />", () => {
     },
     {
       surface: "sidebar" as const,
-      label: "Right",
+      label: "Left",
       field: "sidebarSide" as const,
-      value: "right" as const,
-      revert: "left" as const,
+      value: "left" as const,
+      revert: "right" as const,
     },
   ])(
     "clicking $label on the $surface bar",
@@ -211,7 +211,7 @@ describe("<SurfacePlacementBar />", () => {
 
   describe.each([
     { surface: "topBar" as const, label: "Left" },
-    { surface: "sidebar" as const, label: "Left" },
+    { surface: "sidebar" as const, label: "Right" },
   ])(
     "clicking the already-checked $label on the $surface bar",
     ({ surface, label }) => {

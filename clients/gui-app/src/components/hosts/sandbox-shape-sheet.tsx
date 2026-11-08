@@ -58,7 +58,6 @@ import {
   idleAndRestingLine,
   newSandboxRowLabel,
   sandboxShapeLabel,
-  shortPriceLabel,
   wakeString,
 } from "@/lib/sandboxes/sandbox-strings";
 
@@ -338,7 +337,9 @@ function shapeOfForm(
   if (form.restingAmount.trim().length > 0) {
     const amount = Number(form.restingAmount);
     if (!Number.isInteger(amount) || amount <= 0) {
-      return { problem: "Resting period must be a whole number, or empty." };
+      return {
+        problem: '"Destroyed after idle for" must be a whole number, or empty.',
+      };
     }
     destroyAfterRestingMinutes = amount * UNIT_MINUTES[form.restingUnit];
   }
@@ -394,6 +395,7 @@ function ShapeSheetForm(props: {
     configuration: props.configuration,
     price,
     needsCredits,
+    billingStarted: false,
     shortfallMc:
       balance === null || price === null
         ? null
@@ -494,7 +496,7 @@ function ShapeSheetForm(props: {
               value={sizeValue(form, provider.shapes, provider)}
               options={provider.shapes.map((rung) => ({
                 value: rungKey(rung),
-                label: rungLabel(props.catalogue, form, rung),
+                label: rungLabel(rung),
               }))}
               onChange={(value) => {
                 const rung = provider.shapes?.find(
@@ -549,7 +551,7 @@ function ShapeSheetForm(props: {
             onChange={(value) => setForm({ ...form, idleMinutes: value })}
           />
           <div className="flex flex-col gap-1.5">
-            <Label htmlFor={`${ids}-resting`}>Destroyed after resting</Label>
+            <Label htmlFor={`${ids}-resting`}>Destroyed after idle for</Label>
             <div className="flex gap-2">
               <Input
                 id={`${ids}-resting`}
@@ -575,7 +577,7 @@ function ShapeSheetForm(props: {
                   }
                 }}
               >
-                <SelectTrigger aria-label="Resting period unit">
+                <SelectTrigger aria-label="Idle period unit">
                   <SelectValue />
                 </SelectTrigger>
                 <SelectContent>
@@ -647,23 +649,9 @@ function sizeValue(
   return rung === null ? "" : rungKey(rung);
 }
 
-/** `2 vCPU · 4 GB · 20 GB · $0.12/h`, priced in the form's region. */
-function rungLabel(
-  catalogue: SandboxCatalogue,
-  form: ShapeForm,
-  rung: SandboxShapeRung,
-): string {
-  const size = `${sandboxShapeLabel(rung.cpus, rung.memoryMb)} · ${formatMemory(rung.diskMb)}`;
-  const price = stagePrice(catalogue, {
-    os: form.os,
-    region: form.region,
-    cpus: rung.cpus,
-    memoryMb: rung.memoryMb,
-    diskMb: rung.diskMb,
-  });
-  if (price === null) return size;
-  const label = shortPriceLabel(price.awakeMcPerHour);
-  return `${size} · ${price.exact ? label : `from ${label}`}`;
+/** The resources only; the consequences line states the price. */
+function rungLabel(rung: SandboxShapeRung): string {
+  return `${sandboxShapeLabel(rung.cpus, rung.memoryMb)} · ${formatMemory(rung.diskMb)}`;
 }
 
 function ShapeNumber(props: {

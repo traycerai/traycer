@@ -2,6 +2,7 @@ import type { AuthenticatedUser } from "@traycer/protocol/auth";
 import type {
   SandboxCatalogue,
   SandboxCataloguePricing,
+  SandboxCatalogueRegion,
   SandboxCatalogueProvider,
   SandboxOs,
   SandboxShapeRung,
@@ -21,11 +22,11 @@ import {
   teamAllowanceShortLine,
   audienceClause,
   costLine,
+  fundedRowPrice,
   moveClause,
   reachSentence,
   restingStorageClause,
-  sharedUseClause,
-  teamClause,
+  TEAM_USE_AND_ACCESS_CLAUSE,
   unpricedCostLine,
   type SandboxConfigurationCopy,
 } from "@/lib/sandboxes/sandbox-strings";
@@ -324,8 +325,9 @@ export function rememberedOrConfigurationStageShape(
 }
 
 /**
- * The hourly price a stage is shown at: the shape's own, computed from the
- * region's per-unit rates. A server without them prices only each region's
+ * The hourly price a stage is shown at: the exact shape price when supplied,
+ * otherwise computed from the region's per-unit rates. A server without
+ * either prices only each region's
  * SMALLEST shape, so the figure is then exact for that shape and a lower
  * bound (`exact: false`, read as "from") for any larger one.
  */
@@ -350,6 +352,24 @@ function ratedAwakeMcPerHour(
   );
 }
 
+function exactShapePrice(
+  region: SandboxCatalogueRegion,
+  shape: {
+    readonly cpus: number;
+    readonly memoryMb: number;
+    readonly diskMb: number;
+  },
+): number | null {
+  return (
+    region.shapePrices?.find(
+      (entry) =>
+        entry.cpus === shape.cpus &&
+        entry.memoryMb === shape.memoryMb &&
+        entry.diskMb === shape.diskMb,
+    )?.priceMcPerHour.awakeMc ?? null
+  );
+}
+
 /** A provider's smallest listed shape: fewest vCPU, then memory, then disk. */
 function smallestShapeRung(
   shapes: readonly SandboxShapeRung[],
@@ -366,9 +386,8 @@ function smallestShapeRung(
 
 /**
  * The region's smallest shape: its price, and whether `shape` is it, by its
- * cpus, memory and disk (an unset disk is the provider's default). Of a
- * provider that lists its shapes, the smallest listed one, priced from the
- * region's rates when it has them.
+ * cpus, memory and disk (an unset disk is the provider's default). A listed
+ * smallest rung uses its exact price before the region's unit rates.
  */
 export function stageSmallestShape(
   catalogue: SandboxCatalogue,
@@ -385,9 +404,10 @@ export function stageSmallestShape(
     return {
       isStaged: stageSizeIsRung(provider, smallestRung, shape),
       awakeMcPerHour:
-        region.pricing === null
+        exactShapePrice(region, smallestRung) ??
+        (region.pricing === null
           ? region.fromPriceMcPerHour.awakeMc
-          : ratedAwakeMcPerHour(region.pricing, smallestRung),
+          : ratedAwakeMcPerHour(region.pricing, smallestRung)),
     };
   }
   const bounds = provider.shape;
@@ -414,6 +434,12 @@ export function stagePrice(
     null;
   const smallest = stageSmallestShape(catalogue, shape);
   if (provider === null || region === null || smallest === null) return null;
+  const exact = exactShapePrice(region, {
+    cpus: shape.cpus,
+    memoryMb: shape.memoryMb,
+    diskMb: shape.diskMb ?? provider.shape.diskDefaultMb,
+  });
+  if (exact !== null) return { awakeMcPerHour: exact, exact: true };
   const rates = region.pricing;
   if (rates === null) {
     return {
@@ -465,6 +491,8 @@ export interface ConsequencesInput {
   readonly configuration: StageConfiguration;
   readonly price: StagePrice | null;
   readonly needsCredits: boolean;
+  /** Ongoing billing stays visible even when the balance needs replenishing. */
+  readonly billingStarted: boolean;
   readonly shortfallMc?: number | null;
   /** A team sandbox this action wakes, before the viewer takes over payment. */
   readonly wakingName?: string | null;
@@ -485,7 +513,6 @@ export type ConsequenceClauseKind =
   | "reach"
   | "team"
   | "resting-storage"
-  | "shared-use"
   | "move";
 
 export interface ConsequenceClause {
@@ -496,7 +523,7 @@ export interface ConsequenceClause {
 /** The price clause, never collapsed: a price is not a disclosure. */
 export function priceClause(input: ConsequencesInput): ConsequenceClause {
   const copy = stageConfigurationCopy(input.configuration);
-  if (input.needsCredits) {
+  if (input.needsCredits && !input.billingStarted) {
     return {
       kind: "price",
       text:
@@ -521,14 +548,28 @@ export function priceClause(input: ConsequencesInput): ConsequenceClause {
 /**
  * Every clause the block shows in full, in order: the price
  * always; the audience when the task has or may gain readers; the reach when
- * it holds a host of another configuration; the team, resting-storage and
- * shared-use clauses on a team; the move clause on an unmoved computer.
+ * it holds a host of another configuration; shared use, payment, access and
+ * resting storage on a team; the move clause on an unmoved computer.
  */
 export function consequenceClauses(
   input: ConsequencesInput,
 ): readonly ConsequenceClause[] {
   const copy = stageConfigurationCopy(input.configuration);
-  const clauses: ConsequenceClause[] = [priceClause(input)];
+  const price = priceClause(input);
+  // Expanded team copy puts the payer beside shared use. The summary keeps
+  // price and payer together when those consequences are collapsed.
+  let priceText = price.text;
+  if (
+    copy.kind === "team" &&
+    (!input.needsCredits || input.billingStarted) &&
+    !input.wakingName
+  ) {
+    priceText =
+      input.price === null
+        ? "Billed by the hour while awake"
+        : fundedRowPrice(input.price.awakeMcPerHour, input.price.exact);
+  }
+  const clauses: ConsequenceClause[] = [{ kind: "price", text: priceText }];
   if (input.audience === "shared") {
     clauses.push({ kind: "audience", text: audienceClause(copy) });
   }
@@ -537,9 +578,13 @@ export function consequenceClauses(
   }
   if (input.configuration.kind === "team") {
     clauses.push(
-      { kind: "team", text: teamClause(input.configuration.teamName) },
+      {
+        kind: "team",
+        text: input.wakingName
+          ? "Everyone in the team can use it; another member's agent can read what yours can."
+          : TEAM_USE_AND_ACCESS_CLAUSE,
+      },
       { kind: "resting-storage", text: restingStorageClause() },
-      { kind: "shared-use", text: sharedUseClause() },
     );
   }
   if (input.unmovedComputer !== null) {

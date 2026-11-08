@@ -13,6 +13,7 @@ import {
   RoutePendingScreen,
 } from "@/components/loading/route-pending-screen";
 import { RouteErrorComponent } from "@/components/errors/route-error-component";
+import { observeNestedFocusTraversals } from "@/lib/nested-focus-history-traversal";
 import { warmRouteChunks } from "@/lib/warm-route-chunks";
 import { routeTree } from "@/routeTree.gen";
 import type { QueryClient } from "@tanstack/react-query";
@@ -63,6 +64,10 @@ export function createAppRouter(
     ...(history === undefined ? {} : { history }),
   });
   bindAuthInvalidation(router);
+  // Installed on `router.history` rather than the local `history`, because the
+  // browser web app passes none and lets TanStack build its own: this is the
+  // one place every backend's history is in hand.
+  observeNestedFocusTraversals(router.history);
   warmRouteChunks();
   return router;
 }

@@ -23,7 +23,7 @@ import {
 } from "@/stores/epics/open-epic/projection-helpers";
 import type { EpicStreamCallbacks } from "@traycer-clients/shared/host-transport/epic-stream-client";
 import type { SnapshotMetaEpic } from "@traycer/protocol/host/epic/snapshot-meta";
-import type { PermissionRole } from "@traycer/protocol/host/epic/unary-schemas";
+import type { WirePermissionRole } from "@traycer/protocol/host/epic/unary-schemas";
 import type { ChatRecordSummaryV11 } from "@traycer/protocol/host/epic/chat-records";
 import {
   createMetadataOverlayStore,
@@ -118,7 +118,7 @@ function encodeBase64(bytes: Uint8Array): string {
   return btoa(String.fromCharCode(...bytes));
 }
 
-function makeMeta(permissionRole: PermissionRole): SnapshotMetaEpic {
+function makeMeta(permissionRole: WirePermissionRole): SnapshotMetaEpic {
   return {
     schemaVersion: "1.0",
     epicLight: {
@@ -145,7 +145,7 @@ function makeMeta(permissionRole: PermissionRole): SnapshotMetaEpic {
   };
 }
 
-function newSession(permissionRole: PermissionRole): {
+function newSession(permissionRole: WirePermissionRole): {
   handle: OpenedStoreForTest;
   callbacks: EpicStreamCallbacks;
 } {
@@ -440,7 +440,7 @@ describe("beginRenameMutation", () => {
     handle.dispose();
   });
 
-  it("returns null for a viewer role", async () => {
+  it("returns null for the retired viewer role - it decodes to no role", async () => {
     const { handle } = newSession("viewer");
     const id = createArtifactInDocForTests(handle.doc, "spec", null);
 
@@ -581,7 +581,7 @@ describe("beginReparentMutation", () => {
     handle.dispose();
   });
 
-  it("returns null for a viewer role", async () => {
+  it("returns null for the retired viewer role - it decodes to no role", async () => {
     const { handle } = newSession("viewer");
     const parent = createArtifactInDocForTests(handle.doc, "spec", null);
     const child = createArtifactInDocForTests(handle.doc, "ticket", null);

@@ -1212,7 +1212,7 @@ describe("<LandingTerminalPanel />", () => {
     );
   });
 
-  it("isolates resized width between landing pages", () => {
+  it("opens a new landing page at the last width, then keeps each page's own width", () => {
     mocks.activeHostId = "host-a";
     mocks.clientActiveHostId = "host-a";
     mocks.primaryWorkspacePath = "/workspace/project";
@@ -1221,21 +1221,30 @@ describe("<LandingTerminalPanel />", () => {
     const view = render(panelUiForDraft("draft-b"));
 
     fireEvent.click(screen.getByTestId("landing-terminal-toggle"));
-    const resizeHandle = screen.getByTestId("landing-terminal-resize-handle");
-    fireEvent.keyDown(resizeHandle, { key: "ArrowLeft" });
+    fireEvent.keyDown(screen.getByTestId("landing-terminal-resize-handle"), {
+      key: "ArrowLeft",
+    });
     expect(screen.getByTestId("landing-terminal-panel").style.width).toBe(
       "39%",
     );
 
+    // A page that never recorded a layout opens at the width just chosen.
     view.rerender(panelUiForDraft("draft-a"));
     expect(screen.getByTestId("landing-terminal-panel").style.marginRight).toBe(
-      "-36%",
+      "-39%",
     );
     fireEvent.click(screen.getByTestId("landing-terminal-toggle"));
+    expect(screen.getByTestId("landing-terminal-panel").style.width).toBe(
+      "39%",
+    );
+    fireEvent.keyDown(screen.getByTestId("landing-terminal-resize-handle"), {
+      key: "ArrowRight",
+    });
     expect(screen.getByTestId("landing-terminal-panel").style.width).toBe(
       "36%",
     );
 
+    // Resizing that page leaves the other page's recorded width alone.
     view.rerender(panelUiForDraft("draft-b"));
     expect(screen.getByTestId("landing-terminal-panel").style.width).toBe(
       "39%",
@@ -1691,8 +1700,9 @@ describe("<LandingTerminalPanel />", () => {
         .getAttribute("aria-label"),
     ).toBe("Host title, /host/live");
     expect(
-      screen.getByTestId("landing-terminal-dormant-dormant-instance"),
-    ).toBeTruthy();
+      screen.getByTestId("landing-terminal-dormant-dormant-instance")
+        .textContent,
+    ).toContain("No running shell");
   });
 
   it("renders unknown runtime state as unavailable, not dormant", async () => {

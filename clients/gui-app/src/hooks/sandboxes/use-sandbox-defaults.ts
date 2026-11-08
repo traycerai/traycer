@@ -2,7 +2,10 @@ import { useCallback, useMemo } from "react";
 import type { UseQueryResult } from "@tanstack/react-query";
 import { z } from "zod";
 import type { HostRpcError } from "@traycer-clients/shared/host-transport/host-messenger";
-import type { EnvironmentDescriptorV11 } from "@traycer/protocol/host/environment/contracts";
+import type {
+  EnvironmentDescriptorV11,
+  GrantedEnvironmentRole,
+} from "@traycer/protocol/host/environment/contracts";
 import { configurationRoleOf } from "@/components/settings/environment/configuration-source";
 import { useEnvironmentListQuery } from "@/hooks/bots/use-environment-list-query";
 import { useCloudChatViewerId } from "@/hooks/chats/use-cloud-chat-queries";
@@ -137,10 +140,11 @@ export function useSandboxDefaults(
   });
 }
 
-/** A configuration's environment as the account's list names it, with the viewer's role. */
+/** A configuration's environment as the account's list names it, with the reader's role. */
 export interface SandboxDefaultsEnvironment {
   readonly environmentId: string;
-  readonly role: "owner" | "admin" | "editor" | "viewer";
+  /** `null` for a role that authorizes nothing. */
+  readonly role: GrantedEnvironmentRole | null;
 }
 
 /**

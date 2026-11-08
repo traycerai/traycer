@@ -8,6 +8,7 @@ import {
   type ReactNode,
 } from "react";
 import type { UseQueryResult } from "@tanstack/react-query";
+import type { JsonContent } from "@traycer/protocol/common/registry";
 import type {
   BotConversationRecord,
   BotConversationSendResponse,
@@ -64,6 +65,7 @@ import {
 import { useBotSendFailure } from "@/hooks/bots/use-bot-send-failure";
 import { BotReadFailure } from "@/components/bots/bot-read-failure";
 import { BotReplyingStrip } from "@/components/bots/bot-replying-strip";
+import { useBotReplyingTurn } from "@/hooks/bots/use-bot-replying-turn";
 import { BotResizablePane } from "@/components/bots/bot-resizable-pane";
 import { BotExchangeLog } from "@/components/bots/bot-exchange-log";
 import {
@@ -96,7 +98,9 @@ import {
   type BotSurfaceCards,
 } from "@/components/bots/bot-surface-card-context";
 import { useBotSendTakesAnswers } from "@/hooks/bots/use-bot-send-version";
+import { useBotBoxEdit } from "@/hooks/bots/use-bot-box-edit";
 import { useBotFailedRequest } from "@/hooks/bots/use-bot-failed-request";
+import { useBotImageReach } from "@/hooks/bots/use-bot-send-version";
 import {
   failedOnRequest,
   useBotActivity,
@@ -140,27 +144,6 @@ import { cn } from "@/lib/utils";
 const EMPTY_THREADS: ReadonlyArray<BotThreadSummary> = [];
 const NO_EXCHANGES: ReadonlyArray<BotExchange> = [];
 const NO_EPIC_IDS: ReadonlyArray<string> = [];
-
-/**
- * The failed message the channel's box is editing, which belongs to the
- * channel's conversation: a channel the view resolves to anew (a host that
- * names it late, or names none and lists an earlier one) starts the box
- * without it.
- */
-function useChannelBoxEdit(channelId: string | null): {
-  readonly edit: BotComposerEdit | null;
-  readonly setEdit: (edit: BotComposerEdit | null) => void;
-  readonly endEdit: () => void;
-} {
-  const [edit, setEdit] = useState<BotComposerEdit | null>(null);
-  const endEdit = useCallback(() => setEdit(null), []);
-  const [editChannelId, setEditChannelId] = useState(channelId);
-  if (channelId !== editChannelId) {
-    setEditChannelId(channelId);
-    setEdit(null);
-  }
-  return { edit, setEdit, endEdit };
-}
 
 /**
  * The bot's channel among its conversations: the one the bot record names.
@@ -331,8 +314,6 @@ export function BotChannelView(props: {
   readonly openExchange: BotOpenExchange | null;
   /** Opens a pair's log in the rail, and closes it back to what it displaced. */
   readonly exchangeRail: BotExchangeRail;
-  /** Opens the bot's Activity tab, from the open thread's header. */
-  readonly onOpenActivity: () => void;
   /** A live team main bot's setup history at the top of the channel (T67b); `null` for none. */
   readonly setupHistory: ReactNode;
   /** How many tiles the installed app shows; `null` where the container decides. */
@@ -361,7 +342,6 @@ export function BotChannelView(props: {
     environmentBots,
     openExchange,
     exchangeRail,
-    onOpenActivity,
     setupHistory,
     tiles,
   } = props;
@@ -401,6 +381,11 @@ export function BotChannelView(props: {
     hostId,
     boundHostId,
     boundHostEpoch,
+  });
+  const imageReach = useBotImageReach({
+    hostId,
+    boundHostId,
+    boundHostTakes: threadAnchorKinds,
   });
   const activity = useBotActivity(botId);
   const viewer = useAuthStore((s) => s.profile);
@@ -468,7 +453,7 @@ export function BotChannelView(props: {
   // A post the bot failed to answer, in a thread or at the top level, is
   // retried as it is or edited in the channel's box, which posts its
   // replacement.
-  const { edit, setEdit, endEdit } = useChannelBoxEdit(channelId);
+  const { edit, setEdit, endEdit } = useBotBoxEdit(activity, channelId);
   const failedOnChannel = useCallback(
     (requestId: string) => failedOnRequest(activity, requestId),
     [activity],
@@ -526,7 +511,11 @@ export function BotChannelView(props: {
   // thread's panel says the send's delivery; one the bot answers in the
   // channel opens nothing, and the channel's box says it.
   const openPostedThread = useCallback(
-    (response: BotConversationSendResponse, text: string): boolean => {
+    (
+      response: BotConversationSendResponse,
+      text: string,
+      content: JsonContent,
+    ): boolean => {
       if (response.threadId === null || !threadListSupported) return false;
       onOpenThread({
         anchorMessageId: response.messageId,
@@ -536,6 +525,7 @@ export function BotChannelView(props: {
           threadId: response.threadId,
           requestId: response.requestId,
           text,
+          content,
           senderUserId: viewer?.userId ?? null,
           sentAt: Date.now(),
           delivery: response.delivery,
@@ -658,6 +648,13 @@ export function BotChannelView(props: {
   });
 
   const trunkReply = channelTrunkReply(activity);
+  const trunkReplyTurn = useBotReplyingTurn({
+    client,
+    hostId,
+    botId,
+    activity: trunkReply,
+    onOpenTurn,
+  });
 
   const [channelSection, setChannelSection] = useState<HTMLElement | null>(
     null,
@@ -848,6 +845,7 @@ export function BotChannelView(props: {
               <BotReplyingStrip
                 botTitle={botTitle}
                 activity={trunkReply}
+                turn={trunkReplyTurn}
                 testId="bot-channel-replying"
               />
               <BotRoutingCard
@@ -859,10 +857,12 @@ export function BotChannelView(props: {
                 // Its draft is the conversation's, kept by it (`channelKeptDraft`).
                 key={channel.conversationId}
                 botId={botId}
+                botTitle={botTitle}
                 conversationId={channel.conversationId}
                 threadId={null}
                 announcementId={null}
                 sendable
+                imageReach={imageReach}
                 placeholder={`Message ${botTitle}`}
                 label={`Message ${botTitle}`}
                 testId="bot-channel-composer"
@@ -931,6 +931,7 @@ export function BotChannelView(props: {
                     hostId={hostId}
                     boundHostId={boundHostId}
                     botTitle={botTitle}
+                    imageReach={imageReach}
                     conversationId={channel.conversationId}
                     originMessageId={postId}
                     sent={open?.sent ?? null}
@@ -945,7 +946,6 @@ export function BotChannelView(props: {
                       threadLanding.spend();
                       onOpenThread(null);
                     }}
-                    onOpenActivity={onOpenActivity}
                     onEditPost={editPostFromThread}
                     onOpenTurn={onOpenTurn}
                     onOpenSession={onOpenSession}
@@ -1349,28 +1349,22 @@ function useChannelSearch(args: {
   };
 }
 
-/**
- * Who is in a thread, as its line under the post stacks them: the post's
- * writer, and the bot once the thread has a reply.
- */
+/** Reply authors supplied by the host; older summaries identify nobody. */
 function threadParticipants(
   thread: BotThreadSummary,
   viewer: AuthProfile | null,
   resolveMember: BotMemberResolver,
 ): ReadonlyArray<StackedIdentity> {
-  const writerId = thread.anchor?.senderUserId ?? null;
-  const writer: ReadonlyArray<StackedIdentity> =
-    writerId === null
-      ? []
-      : [
-          {
-            kind: "person",
-            userId: writerId,
-            name: botMemberName(writerId, viewer, resolveMember),
-            avatarUrl: resolveMember(writerId)?.avatarUrl ?? null,
-          },
-        ];
-  return thread.replyCount > 0 ? [...writer, { kind: "bot" }] : writer;
+  return (thread.replyParticipants ?? []).map((participant) =>
+    participant.kind === "bot"
+      ? participant
+      : {
+          kind: "person",
+          userId: participant.userId,
+          name: botMemberName(participant.userId, viewer, resolveMember),
+          avatarUrl: resolveMember(participant.userId)?.avatarUrl ?? null,
+        },
+  );
 }
 
 /**

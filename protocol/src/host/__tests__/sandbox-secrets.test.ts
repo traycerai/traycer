@@ -1,7 +1,5 @@
 import { describe, expect, it } from "vitest";
 import {
-  SANDBOX_GRANT_MODE_BROKERED,
-  SANDBOX_GRANT_MODE_EXPOSED,
   SECRET_REQUEST_CODE_SECRET_REQUIRED,
   SECRET_REQUEST_DECISIONS,
   SECRET_REQUEST_STATUSES,
@@ -24,18 +22,17 @@ const BROKERED_GRANT = {
   secretName: "DB_PASSWORD",
   kind: "password",
   protocol: "mysql",
-  mode: "brokered",
   source: "approved",
   connectorName: "office-vpn",
   rotation: null,
   routes: [ROUTE],
 };
 
-const EXPOSED_GRANT = {
+/** A kind this build has no word for: read tolerantly, routes as the broker sent them. */
+const UNKNOWN_KIND_GRANT = {
   secretName: "STRIPE_KEY",
-  kind: "api_key",
+  kind: "a-kind-this-build-does-not-know",
   protocol: "https",
-  mode: "exposed",
   source: "default",
   connectorName: null,
   rotation: null,
@@ -44,7 +41,7 @@ const EXPOSED_GRANT = {
 
 const SUMMARY = {
   version: 7,
-  grants: [BROKERED_GRANT, EXPOSED_GRANT],
+  grants: [BROKERED_GRANT, UNKNOWN_KIND_GRANT],
   github: {
     linked: true,
     installations: [
@@ -128,13 +125,12 @@ describe("sandboxGrantsSummarySchema", () => {
     });
   });
 
-  it("accepts a mode, source, kind, protocol and repositorySelection it does not know", () => {
+  it("accepts a source, kind, protocol and repositorySelection it does not know", () => {
     const parsed = sandboxGrantsSummarySchema.parse({
       ...SUMMARY,
       grants: [
         {
           ...BROKERED_GRANT,
-          mode: "tunnelled",
           source: "delegated",
           kind: "client_certificate",
           protocol: "rdp",
@@ -146,7 +142,6 @@ describe("sandboxGrantsSummarySchema", () => {
       },
     });
     expect(parsed.grants[0]).toMatchObject({
-      mode: "tunnelled",
       source: "delegated",
       kind: "client_certificate",
       protocol: "rdp",
@@ -154,9 +149,12 @@ describe("sandboxGrantsSummarySchema", () => {
     expect(parsed.github?.installations[0].repositorySelection).toBe("none");
   });
 
-  it("keeps the two known modes as the strings the broker sends", () => {
-    expect(SANDBOX_GRANT_MODE_BROKERED).toBe("brokered");
-    expect(SANDBOX_GRANT_MODE_EXPOSED).toBe("exposed");
+  it("keeps a kind this build has no word for as the broker sent it", () => {
+    const parsed = sandboxGrantsSummarySchema.parse(SUMMARY);
+    expect(parsed.grants.map((grant) => grant.kind)).toEqual([
+      "password",
+      "a-kind-this-build-does-not-know",
+    ]);
   });
 
   it("rejects a summary without a grants list", () => {
@@ -206,7 +204,6 @@ describe("sandboxGrantSchema", () => {
       secretName: "TOKEN",
       kind: "token",
       protocol: "https",
-      mode: "exposed",
       source: "inherited",
     });
     expect(parsed.connectorName).toBeNull();
@@ -227,11 +224,6 @@ describe("sandboxGrantSchema", () => {
 
   it("rejects a grant missing protocol", () => {
     const { protocol: _protocol, ...rest } = BROKERED_GRANT;
-    expect(sandboxGrantSchema.safeParse(rest).success).toBe(false);
-  });
-
-  it("rejects a grant missing mode", () => {
-    const { mode: _mode, ...rest } = BROKERED_GRANT;
     expect(sandboxGrantSchema.safeParse(rest).success).toBe(false);
   });
 

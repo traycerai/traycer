@@ -18,6 +18,7 @@ import type { SoundtrackManifest } from "@/lib/soundtrack/manifest";
 import { MIX_TUNING } from "@/lib/soundtrack/mix-tuning";
 import { CROSSFADE_SECONDS } from "@/lib/soundtrack/player";
 import type { SoundtrackPorts } from "@/lib/soundtrack/session";
+import { SoundtrackLogRelay } from "@/lib/soundtrack/session-log";
 import type { MixSignals } from "@/lib/soundtrack/signals";
 import type { VariableTrack } from "@/lib/soundtrack/variable-sound";
 import {
@@ -25,6 +26,7 @@ import {
   resetFakePorts,
 } from "@/lib/soundtrack/__tests__/fake-ports";
 import {
+  captureNothing,
   FakeOutput,
   FakeStems,
   isRamp,
@@ -54,6 +56,10 @@ function makeTrack(name: string, lengthSeconds: number): VariableTrack {
     layers: LAYER_NAMES.map((layerName) => ({
       name: layerName,
       variants: 1,
+      // As aquilo-1 has them, so the rules director holds B.
+      role: ({ A: null, B: "pad", C: "motif", D: "texture" } as const)[
+        layerName
+      ],
       sublayers: 1,
       sublayerStartingOffset: null,
       pan: null,
@@ -121,6 +127,14 @@ function harness(manifest: SoundtrackManifest, random: () => number) {
       setVolume,
       duck,
       close,
+      log: new SoundtrackLogRelay(),
+      captureMix: captureNothing,
+      pause: () => {
+        output.stopClock();
+      },
+      resume: () => {
+        output.startClock();
+      },
     };
     opened.push({ output, setDimmed, close, setVolume, duck });
     return ports;
@@ -129,6 +143,7 @@ function harness(manifest: SoundtrackManifest, random: () => number) {
     readManifest: () => manifest,
     openPorts,
     random,
+    recordingChannel: () => null,
   });
   return { store, openPorts, opened };
 }
@@ -500,6 +515,7 @@ describe("soundtrack store: reading the manifest and the volume", () => {
       readManifest,
       openPorts: openFakePorts,
       random: mulberry32(1),
+      recordingChannel: () => null,
     });
     return {
       store,

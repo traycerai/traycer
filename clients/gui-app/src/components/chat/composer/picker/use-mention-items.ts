@@ -95,7 +95,7 @@ import type {
   ComposerPickerStore,
 } from "./composer-picker-store";
 
-const MENTION_RESULT_LIMIT = 25;
+export const MENTION_RESULT_LIMIT = 25;
 const MENTION_QUERY_DEBOUNCE_MS = 250;
 // Artifacts answer from local epic state behind a cloud list; a refetch that
 // has not settled in ten seconds is not going to.

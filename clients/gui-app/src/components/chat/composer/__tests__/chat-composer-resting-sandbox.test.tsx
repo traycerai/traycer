@@ -504,6 +504,7 @@ function mountComposerOn(
         sendDisabled={false}
         sendDisabledHint={null}
         mentionRoots={[]}
+        runWorkingDirectory={null}
         fallbackToGlobalMentionRoots={false}
         currentEpicId="epic-1"
         viewTabId="tab-1"

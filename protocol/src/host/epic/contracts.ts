@@ -10,6 +10,10 @@ import {
   getChatRunSettingsBatchResponseSchemaV21,
 } from "./chat-records";
 import {
+  hydrateChatRequestSchema,
+  hydrateChatResponseSchema,
+} from "./chat-hydration";
+import {
   defineDowngradePath,
   defineRpcContract,
   defineUpgradePath,
@@ -207,6 +211,7 @@ import {
   listChatRecordsResponseV11Schema,
   listChatRecordsResponseV12Schema,
   listChatRecordsResponseV13Schema,
+  listChatRecordsResponseV14Schema,
   getChatRunSettingsRequestSchema,
   getChatRunSettingsResponseSchema,
   getChatRunSettingsResponseSchemaV10,
@@ -1994,6 +1999,50 @@ export const epicListChatRecordsUpgradeV12ToV13 = defineUpgradePath<
     listStamp: null,
     chats: response.chats,
   }),
+});
+
+// `@1.4` says on each row whether the serving host has dropped the chat's
+// records (`evicted`), so a client routes the chat's tile to the server pool
+// without a witness round trip. Request unchanged from `@1.3`; the row gains
+// one key, which an older peer's schema strips.
+export const epicListChatRecordsV14 = defineRpcContract({
+  method: "epic.listChatRecords",
+  schemaVersion: { major: 1, minor: 4 } as const,
+  requestSchema: listChatRecordsRequestV13Schema,
+  responseSchema: listChatRecordsResponseV14Schema,
+});
+
+/**
+ * REQUEST: the identity; `@1.4` takes `@1.3`'s request unchanged.
+ *
+ * RESPONSE, `evicted: false` on every snapshot row: a FACT about a `@1.3`
+ * host, which predates eviction and holds every chat it lists. The
+ * `unchanged` arm carries no rows and passes through.
+ */
+export const epicListChatRecordsUpgradeV13ToV14 = defineUpgradePath<
+  typeof epicListChatRecordsV13,
+  typeof epicListChatRecordsV14
+>({
+  from: epicListChatRecordsV13.schemaVersion,
+  to: epicListChatRecordsV14.schemaVersion,
+  upgradeRequest: (request) => request,
+  upgradeResponse: (response) =>
+    response.kind === "unchanged"
+      ? response
+      : {
+          ...response,
+          chats: response.chats.map((row) => ({ ...row, evicted: false })),
+        },
+});
+
+// Brings an evicted chat's records back onto its host before a message is
+// sent to it (`chat-hydration.ts`). Optional and off the released floor: a
+// host that predates it does not evict chats.
+export const epicHydrateChatV10 = defineRpcContract({
+  method: "epic.hydrateChat",
+  schemaVersion: { major: 1, minor: 0 } as const,
+  requestSchema: hydrateChatRequestSchema,
+  responseSchema: hydrateChatResponseSchema,
 });
 
 // One chat image attachment's bytes, resolved by the VIEWER's tab host (local

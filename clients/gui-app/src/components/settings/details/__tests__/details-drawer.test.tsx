@@ -64,6 +64,10 @@ import {
 import { sandboxQueryKeys } from "@/lib/query-keys";
 import { sandboxSummaryFixture } from "@/hooks/sandboxes/__tests__/sandbox-fixtures";
 import { formatSettingsDate } from "@/lib/settings/settings-date";
+import {
+  RETIRED_PROVIDER_VARIABLES,
+  RETIRED_SECRET_ROW_FIELDS,
+} from "@traycer/protocol/host/released-wire-rows";
 
 const AT = Date.UTC(2026, 9, 20, 9, 30);
 const DAY = 24 * 60 * 60 * 1_000;
@@ -584,32 +588,30 @@ describe("the Secrets header's Details", () => {
   const secretsList: EnvironmentSecretsListResponseV12 = {
     secrets: [
       {
+        ...RETIRED_SECRET_ROW_FIELDS,
+        providerVariables: [...RETIRED_PROVIDER_VARIABLES],
         secretId: "sec-live",
         name: "STRIPE_KEY",
         kind: "api_key",
         protocol: null,
         destinations: [],
-        mode: "brokered",
-        state: "live",
         currentVersionId: "ver-1",
         revoked: false,
         updatedAt: AT,
         variables: [],
-        providerVariables: [],
       },
       {
+        ...RETIRED_SECRET_ROW_FIELDS,
+        providerVariables: [...RETIRED_PROVIDER_VARIABLES],
         secretId: "sec-revoked",
         name: "REVOKED_KEY",
         kind: "api_key",
         protocol: null,
         destinations: [],
-        mode: "brokered",
-        state: "live",
         currentVersionId: null,
         revoked: true,
         updatedAt: AT,
         variables: [],
-        providerVariables: [],
       },
     ],
     removed: [

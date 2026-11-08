@@ -128,7 +128,7 @@ export function routerAdapterFor(
         onRejected: null,
       });
     },
-    navigateNestedFocus: (epicId, tabId, prepare) =>
+    navigateNestedFocus: (epicId, tabId, prepare, provenance) =>
       navigateNestedFocus(
         {
           history: router.history,
@@ -140,8 +140,9 @@ export function routerAdapterFor(
         },
         { epicId, tabId },
         prepare,
+        provenance,
       ),
-    navigateNestedFocusToPrimaryEditor: (epicId, tabId, prepare) =>
+    navigateNestedFocusToPrimaryEditor: (epicId, tabId, prepare, provenance) =>
       navigateNestedFocusToPrimaryEditor(
         {
           history: router.history,
@@ -153,6 +154,7 @@ export function routerAdapterFor(
         },
         { epicId, tabId },
         prepare,
+        provenance,
       ),
     // Walk the CURRENT router's persistent history; the shared actions no-op
     // when the history carries no controller brand (browser/web build).

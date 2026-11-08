@@ -134,7 +134,7 @@ export function useWorkspaceFolderActionsForClient(
             description: readWorkspaceActionErrorMessage(error),
           },
           {
-            title: "Could not add workspace folders",
+            title: "Could not add folders",
             message: null,
             code: null,
             source: "Workspace folders",
@@ -196,7 +196,7 @@ export function useWorkspaceFolderActionsForClient(
       const dispatchHost = client?.getActiveHost() ?? null;
       if (client === null || dispatchHost === null) {
         reportableErrorToast("Select a host to add folders.", undefined, {
-          title: "Could not add workspace folders",
+          title: "Could not add folders",
           message: "No host was selected.",
           code: null,
           source: "Workspace folders",
@@ -221,7 +221,7 @@ export function useWorkspaceFolderActionsForClient(
           "Host changed while choosing folders. Try again.",
           undefined,
           {
-            title: "Could not add workspace folders",
+            title: "Could not add folders",
             message: "The active host changed while choosing folders.",
             code: null,
             source: "Workspace folders",
@@ -258,7 +258,7 @@ export function useWorkspaceFolderActionsForClient(
           "Host changed while adding folders. Try again.",
           undefined,
           {
-            title: "Could not add workspace folders",
+            title: "Could not add folders",
             message: "The active host changed while adding folders.",
             code: null,
             source: "Workspace folders",

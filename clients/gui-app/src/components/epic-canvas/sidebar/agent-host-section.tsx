@@ -1,17 +1,19 @@
 import { useEffect, type ReactNode } from "react";
 import type { HostRpcRegistry } from "@traycer/protocol/host/index";
+import {
+  HOST_FROZEN_WORD,
+  hostSandboxStateWord,
+} from "@traycer/protocol/host/host-status";
 import type {
   SandboxMember,
   SandboxSummary,
 } from "@traycer/protocol/host/sandbox-control";
-import type { HostOwnerPrincipal } from "@traycer/protocol/host/host-status";
 import type { TaskHostRow } from "@traycer/protocol/host/task-host-summary";
 import { TaskSandboxEndDetails } from "@/components/hosts/task-sandbox-end-details";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { mintNewEpicTerminalTile } from "@/components/epic-canvas/sidebar/new-terminal-tile-ref";
 import { useEpicViewTabId } from "@/components/epic-canvas/view-tab-context";
-import { useRegisteredHosts } from "@/hooks/auth/use-registered-hosts-query";
 import type { AgentHostProjection } from "@/hooks/epic/use-agent-host-projection";
 import { useEpicTileNavigation } from "@/hooks/epic/use-epic-tile-navigation";
 import { useHostClientForHostId } from "@/hooks/host/use-host-client-for-host-id";
@@ -27,6 +29,7 @@ import {
 } from "@/hooks/sandboxes/use-sandbox-configurations";
 import { useSandboxCosts } from "@/hooks/sandboxes/use-sandbox-costs-query";
 import { tileIntent } from "@/lib/canvas/tile-open/intent";
+import { useRegionValue } from "@/lib/layout-overrides";
 import { useSampledNow } from "@/lib/relative-time";
 import {
   AGENT_SANDBOX,
@@ -38,6 +41,7 @@ import {
   hoverAwakeMinutes,
   hoverMoreSessions,
   hoverSandboxIdentity,
+  hoverSessionCount,
   hoverTaskConfiguration,
   hoverTodayCost,
   KEEP_THIS_SANDBOX,
@@ -50,10 +54,8 @@ import {
   wakeString,
 } from "@/lib/sandboxes/sandbox-strings";
 import {
-  SANDBOX_PUBLIC_STATE_LABEL,
   sandboxMemberName,
   sandboxHostActivityLine,
-  sandboxPublicState,
   sandboxIdlePolicyLine,
   sandboxSessionKinds,
   sandboxShapeLine,
@@ -93,11 +95,10 @@ function TaskHostSection(props: {
 }): ReactNode {
   const teams = useAuthStore((state) => state.shareableTeams);
   const principal = props.host.principal;
-  let configuration: string | null = "Personal";
-  if (principal.kind === "team") {
-    configuration =
-      teams.find((team) => team.teamId === principal.id)?.slug ?? null;
-  }
+  const configuration =
+    principal.kind === "team"
+      ? (teams.find((team) => team.teamId === principal.id)?.slug ?? null)
+      : null;
   const others = useMaybeEpicStore(
     (state) =>
       [
@@ -168,12 +169,8 @@ function AuthorizedHostSection(props: {
   readonly onKeep: (sandbox: SandboxSummary) => void;
 }): ReactNode {
   const { sandbox } = props;
-  const registry = useRegisteredHosts();
-  const owner = registry.data?.hosts.find(
-    (host) => host.hostId === sandbox.hostId,
-  )?.owner;
   const configurations = useSandboxConfigurations();
-  const configuration = hoverConfiguration(sandbox, owner, configurations);
+  const configuration = hoverConfiguration(sandbox, configurations);
   const awake = sandbox.state === "awake" && !sandbox.frozen;
   return (
     <section className="space-y-1 px-3 py-2 text-ui-xs" aria-label={HOST_LABEL}>
@@ -215,19 +212,16 @@ function AuthorizedHostSection(props: {
 
 /**
  * The configuration the sandbox runs under, the line under its name: the
- * account's record of the host's owner, else the sandbox's own environment,
- * read against the person's teams (Personal once every team has answered and
- * none is its). `null` only while that is still unread.
+ * sandbox's bound environment, read against the person's teams (Personal
+ * once every team has answered and none is its). An absent environment is
+ * unknown; `null` only while its name is still unread. The summary keeps this
+ * available while the sandbox is suspended or stopped.
  */
 function hoverConfiguration(
   sandbox: SandboxSummary,
-  owner: HostOwnerPrincipal | undefined,
   configurations: SandboxConfigurations,
 ): string | null {
-  if (owner?.kind === "team") return owner.name;
-  if (owner?.kind === "user" || sandbox.environmentId === null) {
-    return "Personal";
-  }
+  if (sandbox.environmentId === null) return "unknown";
   const configuration = sandboxConfigurationOf(
     sandbox,
     configurations.configurations,
@@ -255,7 +249,8 @@ function HostHeading(props: {
       />
       <span className="font-medium break-words">{sandbox.displayName}</span>
       <span className="text-muted-foreground">
-        {SANDBOX_PUBLIC_STATE_LABEL[sandboxPublicState(sandbox)]}
+        {hostSandboxStateWord(sandbox.state)}
+        {sandbox.frozen ? ` · ${HOST_FROZEN_WORD}` : ""}
         {props.awake && sandbox.priceMcPerHour !== null
           ? ` · ${shortPriceLabel(sandbox.priceMcPerHour.awakeMc)}`
           : ""}
@@ -345,6 +340,7 @@ function HostActions(props: {
               "explicit",
               "direct_ui",
             ),
+            "user",
           );
         }}
       >
@@ -455,6 +451,10 @@ function HostFilesAction(props: {
     (state) => state.setActivePanelIdAndExpand,
   );
   const setHost = useSurfaceHostSelectionStore((state) => state.setSelection);
+  const fileTreeShown = useRegionValue("railFileTree", "shown") === "shown";
+  // A host's files open in File Tree, so with that panel off the action would
+  // land on another panel and show none of them.
+  if (props.hostId !== null && !fileTreeShown) return null;
   return (
     <Button
       type="button"
@@ -542,13 +542,72 @@ function HostActivity(props: {
   const hostWide = sandboxHostActivityLine(
     sandboxSessionKinds(status.data?.sessions ?? null),
   );
+  const listed = status.data?.sessions ?? null;
   return (
-    <div className="text-muted-foreground">
-      {hostWide === null ? null : (
-        <p data-testid="agent-host-activity">{hostWide}</p>
-      )}
-      {names.length === 0 ? null : <p>{names.join(", ")}</p>}
-      {more > 0 ? <p>{hoverMoreSessions(more)}</p> : null}
-    </div>
+    <HostSessionDisclosure
+      names={names}
+      more={more}
+      hostWide={hostWide}
+      total={hoverReportedSessionCount({
+        listedOnHost:
+          listed === null
+            ? null
+            : listed.agents.length + listed.terminals.length,
+        busySessionCount: count,
+        taskSessions: here.length + runningTerminals.length,
+      })}
+    />
   );
+}
+
+/**
+ * The hover's session summary. Closed, it is only the count. Open, it is the
+ * lines the hover used to show flat: kinds, this task's names, and sessions
+ * the busy count places in other tasks. Nothing, when every one of those
+ * lines would be empty.
+ */
+function HostSessionDisclosure(props: {
+  readonly names: readonly string[];
+  readonly more: number;
+  readonly hostWide: string | null;
+  readonly total: number;
+}): ReactNode {
+  if (props.hostWide === null && props.names.length === 0 && props.more === 0) {
+    return null;
+  }
+  return (
+    <details
+      data-testid="agent-host-sessions"
+      className="min-w-0 max-w-full break-words"
+    >
+      <summary className="w-fit max-w-full cursor-pointer text-start break-words">
+        {hoverSessionCount(props.total)}
+      </summary>
+      <div className="text-muted-foreground">
+        {props.hostWide === null ? null : (
+          <p data-testid="agent-host-activity">{props.hostWide}</p>
+        )}
+        {props.names.length === 0 ? null : <p>{props.names.join(", ")}</p>}
+        {props.more > 0 ? <p>{hoverMoreSessions(props.more)}</p> : null}
+      </div>
+    </details>
+  );
+}
+
+/**
+ * Sessions the hover can account for. The host's own list is the full count.
+ * Without one, the task's sessions plus those the busy count places in other
+ * tasks. A missing report never becomes a zero; that path says so above.
+ */
+function hoverReportedSessionCount(input: {
+  readonly listedOnHost: number | null;
+  readonly busySessionCount: number;
+  readonly taskSessions: number;
+}): number {
+  const accounted =
+    input.taskSessions +
+    Math.max(0, input.busySessionCount - input.taskSessions);
+  return input.listedOnHost === null
+    ? accounted
+    : Math.max(input.listedOnHost, accounted);
 }

@@ -2136,6 +2136,14 @@ describe("<HomeFocusView /> browsers", () => {
         .getAllByTestId("home-focus-task-group-browser")
         .map((element) => element.getAttribute("data-status")),
     ).toEqual(["dormant", "crashed"]);
+    expect(
+      screen
+        .getAllByTestId("home-focus-task-group-browser")
+        .map(
+          (element) =>
+            within(element).getByTestId("home-focus-row-status").textContent,
+        ),
+    ).toEqual(["Browser asleep", "crashed"]);
   });
 
   it("names the page and its site, and never the task it is already under", () => {

@@ -7,6 +7,7 @@
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
+  act,
   cleanup,
   fireEvent,
   render,
@@ -61,9 +62,11 @@ const hostOptionsRef = vi.hoisted((): { value: HostOptions } => ({
     nowMs: 0,
   },
 }));
-const makeActiveRef = vi.hoisted((): { fn: (hostId: string) => void } => ({
-  fn: () => undefined,
-}));
+const makeActiveRef = vi.hoisted(
+  (): { fn: (hostId: string) => Promise<boolean> } => ({
+    fn: () => Promise.resolve(false),
+  }),
+);
 /** The write in flight from ANY surface (R1-A2's module-level latch), mocked
  * here as a plain mutable ref so a test can put a switch in flight without
  * standing up the real authority/selection machinery. */
@@ -296,7 +299,7 @@ describe("<UserMenu /> host section", () => {
     restoreFetch = installFetch();
     useTitleBarDragStore.setState({ suppressors: new Set() });
     useDesktopDialogStore.getState().close();
-    makeActiveRef.fn = () => undefined;
+    makeActiveRef.fn = () => Promise.resolve(false);
     activatingHostRef.value = null;
   });
 
@@ -310,7 +313,7 @@ describe("<UserMenu /> host section", () => {
     activatingHostRef.value = null;
   });
 
-  it("lists every host under the Host label, checking the active one and disabling the offline one", async () => {
+  it("lists every host, checks the active one, and disables an offline host", async () => {
     const active = hostScopeOptionFixture({
       hostId: "host-active",
       name: "Ada's Mac",
@@ -343,7 +346,12 @@ describe("<UserMenu /> host section", () => {
 
     await openMenu();
 
-    expect(screen.getByText("Host")).toBeTruthy();
+    expect(screen.getByText("Set the app's machine")).toBeTruthy();
+    expect(
+      screen.getByText(
+        "Every window follows, and the choice outlives this one.",
+      ),
+    ).toBeTruthy();
     expect(screen.getByTestId("user-menu-host-section")).toBeTruthy();
 
     const activeRow = screen.getByTestId("user-menu-host-option-host-active");
@@ -433,15 +441,53 @@ describe("<UserMenu /> host section", () => {
       hosts: [active, otherOnline],
       activeHostId: active.hostId,
     });
-    const makeActive = vi.fn();
+    const makeActive = vi.fn(() => Promise.resolve(true));
     makeActiveRef.fn = makeActive;
 
     await openMenu();
 
     fireEvent.click(screen.getByTestId("user-menu-host-option-host-other"));
 
+    await waitFor(() =>
+      expect(screen.queryByTestId("user-menu-content")).toBeNull(),
+    );
     expect(makeActive).toHaveBeenCalledTimes(1);
     expect(makeActive).toHaveBeenCalledWith("host-other");
+  });
+
+  it("keeps the menu open when the host activation is refused", async () => {
+    const active = hostScopeOptionFixture({
+      hostId: "host-active",
+      isActive: true,
+      connectable: true,
+    });
+    const other = hostScopeOptionFixture({
+      hostId: "host-other",
+      isActive: false,
+      connectable: true,
+    });
+    hostOptionsRef.value = hostOptionsFixture({
+      hosts: [active, other],
+      activeHostId: active.hostId,
+    });
+    let finishActivation: (landed: boolean) => void = () => {
+      throw new Error("activation has not started");
+    };
+    const activation = new Promise<boolean>((resolve) => {
+      finishActivation = resolve;
+    });
+    const makeActive = vi.fn(() => activation);
+    makeActiveRef.fn = makeActive;
+
+    await openMenu();
+    await act(async () => {
+      fireEvent.click(screen.getByTestId("user-menu-host-option-host-other"));
+      finishActivation(false);
+      await activation;
+    });
+
+    expect(makeActive).toHaveBeenCalledWith("host-other");
+    expect(screen.getByTestId("user-menu-content")).toBeTruthy();
   });
 
   it("does nothing when clicking the already-active host", async () => {
@@ -454,7 +500,7 @@ describe("<UserMenu /> host section", () => {
       hosts: [active],
       activeHostId: active.hostId,
     });
-    const makeActive = vi.fn();
+    const makeActive = vi.fn(() => Promise.resolve(false));
     makeActiveRef.fn = makeActive;
 
     await openMenu();
@@ -582,7 +628,7 @@ describe("<UserMenu /> host section", () => {
     // pick this same menu made before it was reopened) - the module-level
     // latch means every mount of the hook sees it, this menu's included.
     activatingHostRef.value = "host-pending";
-    const makeActive = vi.fn();
+    const makeActive = vi.fn(() => Promise.resolve(false));
     makeActiveRef.fn = makeActive;
 
     await openMenu();
@@ -611,7 +657,7 @@ describe("<UserMenu /> host section", () => {
   });
 
   describe("host row tooltip (G4)", () => {
-    it("shows the full name and the activate hint when the row's name is truncated", async () => {
+    it("shows only the full name when an account-menu row's name is truncated", async () => {
       const active = hostScopeOptionFixture({
         hostId: "host-active",
         isActive: true,
@@ -633,15 +679,19 @@ describe("<UserMenu /> host section", () => {
       });
 
       await openMenu();
+      const name = screen.getByText("Office Linux Workstation");
+      expect(name.classList.contains("whitespace-normal")).toBe(true);
+      expect(name.classList.contains("wrap-anywhere")).toBe(true);
+      expect(name.classList.contains("truncate")).toBe(false);
       fireEvent.focus(screen.getByTestId("user-menu-host-option-host-other"));
       const tooltip = await screen.findByRole("tooltip");
 
-      expect(tooltip.textContent).toContain("Office Linux Workstation");
-      expect(tooltip.textContent).toContain(ACTIVATE_HOST_HINT);
+      expect(tooltip.textContent).toBe("Office Linux Workstation");
+      expect(screen.getAllByText(ACTIVATE_HOST_HINT)).toHaveLength(1);
       restore();
     });
 
-    it("shows only the activate hint - no host name - when the row's name fits", async () => {
+    it("shows no row tooltip when the account-menu name fits and keeps the activation hint in the header once", async () => {
       const active = hostScopeOptionFixture({
         hostId: "host-active",
         isActive: true,
@@ -663,11 +713,22 @@ describe("<UserMenu /> host section", () => {
       });
 
       await openMenu();
-      fireEvent.focus(screen.getByTestId("user-menu-host-option-host-other"));
-      const tooltip = await screen.findByRole("tooltip");
-
-      expect(tooltip.textContent).toBe(ACTIVATE_HOST_HINT);
-      restore();
+      const row = screen.getByTestId("user-menu-host-option-host-other");
+      expect(
+        screen.getByText("Short").classList.contains("wrap-anywhere"),
+      ).toBe(true);
+      vi.useFakeTimers();
+      try {
+        fireEvent.pointerMove(row, { pointerType: "mouse" });
+        await act(async () => {
+          await vi.advanceTimersByTimeAsync(501);
+        });
+        expect(screen.queryByRole("tooltip")).toBeNull();
+        expect(screen.getAllByText(ACTIVATE_HOST_HINT)).toHaveLength(1);
+      } finally {
+        vi.useRealTimers();
+        restore();
+      }
     });
 
     it("shows no tooltip at all on the active row when its name fits", async () => {
@@ -770,7 +831,7 @@ describe("<UserMenu /> host section", () => {
         hosts: [active, offline],
         activeHostId: active.hostId,
       });
-      const makeActive = vi.fn();
+      const makeActive = vi.fn(() => Promise.resolve(false));
       makeActiveRef.fn = makeActive;
 
       await openMenu();

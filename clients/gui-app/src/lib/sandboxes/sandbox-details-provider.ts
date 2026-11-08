@@ -6,6 +6,10 @@ import type {
   SandboxSummary,
   UserSandboxCost,
 } from "@traycer/protocol/host/sandbox-control";
+import {
+  HOST_FROZEN_WORD,
+  hostSandboxStateWord,
+} from "@traycer/protocol/host/host-status";
 import { sandboxQueryKeys } from "@/lib/query-keys";
 import type {
   DetailsEntry,
@@ -17,14 +21,12 @@ import type {
 import { frozenDestroyAt } from "@/lib/sandboxes/sandbox-balance";
 import {
   SANDBOX_DEFAULT_IDLE_MINUTES,
-  SANDBOX_PUBLIC_STATE_LABEL,
   formatSandboxAge,
   formatSandboxDate,
   formatSandboxUtcDay,
   sandboxFailedToStart,
   sandboxMemberName,
   sandboxPeriodLabel,
-  sandboxPublicState,
   sandboxRegionLabel,
   sandboxReportedAt,
   sandboxRetentionIsWithdrawn,
@@ -118,9 +120,25 @@ function creatorName(input: SandboxDetailsInput): string | null {
 /** What starts Automations: its row is made by the first shell opened on it. */
 const AUTOMATIONS_STARTER = "the first shell";
 
-function starter(input: SandboxDetailsInput): string | null {
-  if (input.summary.kind === "automation") return AUTOMATIONS_STARTER;
-  if (input.summary.burst) return "An agent";
+/**
+ * Who started the sandbox. The shown row names the agent that started a kept
+ * sandbox; the export keeps the agent's name out, like the rest of what an
+ * agent authored.
+ */
+function starter(
+  input: SandboxDetailsInput,
+  audience: "shown" | "exported",
+): string | null {
+  const { summary } = input;
+  if (
+    audience === "shown" &&
+    !summary.burst &&
+    summary.createdByAgentId !== null
+  ) {
+    return summary.createdByAgentName ?? "an agent";
+  }
+  if (summary.kind === "automation") return AUTOMATIONS_STARTER;
+  if (summary.burst) return "An agent";
   return creatorName(input);
 }
 
@@ -149,7 +167,7 @@ function idleRows(summary: SandboxSummary): SandboxDetailsRow[] {
   return [
     idleRow,
     {
-      label: "Resting",
+      label: "Idle for",
       value:
         summary.destroyAfterRestingMinutes === null ||
         summary.destroyAfterRestingMinutes === 0
@@ -159,13 +177,16 @@ function idleRows(summary: SandboxSummary): SandboxDetailsRow[] {
   ];
 }
 
-function statusRows(input: SandboxDetailsInput): SandboxDetailsRow[] {
+function statusRows(
+  input: SandboxDetailsInput,
+  audience: "shown" | "exported",
+): SandboxDetailsRow[] {
   const { summary, now, viewerUserId } = input;
   const reportedAt = sandboxReportedAt(summary.lastActivityAt);
   const rows: SandboxDetailsRow[] = [
     {
       label: "State",
-      value: SANDBOX_PUBLIC_STATE_LABEL[sandboxPublicState(summary)],
+      value: hostSandboxStateWord(summary.state),
     },
     {
       label: "Last report",
@@ -189,7 +210,7 @@ function statusRows(input: SandboxDetailsInput): SandboxDetailsRow[] {
       value: sandboxMemberName(summary.wakePayer, viewerUserId),
     });
   }
-  const startedBy = starter(input);
+  const startedBy = starter(input, audience);
   if (startedBy !== null) rows.push({ label: "Started by", value: startedBy });
   if (summary.keptBy !== null) {
     rows.push({
@@ -237,7 +258,7 @@ function statusRows(input: SandboxDetailsInput): SandboxDetailsRow[] {
   }
   if (summary.frozen && summary.frozenAt !== null) {
     rows.push({
-      label: "Frozen",
+      label: HOST_FROZEN_WORD,
       value: `out of credits since ${formatSandboxDate(summary.frozenAt, true)}; destroyed on ${formatSandboxDate(frozenDestroyAt(summary.frozenAt), true)}`,
     });
   }
@@ -284,7 +305,7 @@ function operationVerb(entry: SandboxHistoryEntry): string {
     return sandboxFailedToStart(entry.outcomeDetail);
   }
   if (entry.fromState === "creating") return "Created";
-  if (entry.cause === "freeze") return "Frozen";
+  if (entry.cause === "freeze") return HOST_FROZEN_WORD;
   switch (entry.state) {
     case "suspending":
     case "suspended":
@@ -337,7 +358,7 @@ function operationCause(
 /**
  * One History line: `Suspended by you until Oct 25 at 09:55 · under $0.01`,
  * `Resumed by you (Open terminal) · awake until Oct 25 at 10:01 · $0.02`, or
- * on the current operation `· resting from then` / `· awake from then`.
+ * on the current operation `· idle from then` / `· awake from then`.
  */
 function historyEntryEvent(
   entry: SandboxHistoryEntry,
@@ -351,7 +372,7 @@ function historyEntryEvent(
   if (entry.state === "failed" || ended) {
     span = [cause];
   } else if (entry.untilAt === null) {
-    span = [cause, resting ? "resting from then" : "awake from then"];
+    span = [cause, resting ? "idle from then" : "awake from then"];
   } else if (resting) {
     const until = `until ${formatSandboxDate(entry.untilAt, true)}`;
     span = [cause === null ? until : `${cause} ${until}`, cost];
@@ -402,14 +423,14 @@ function historyEvents(input: SandboxDetailsInput): SandboxDetailsEvent[] {
   if (summary.restingSince !== null) {
     events.push({
       at: summary.restingSince,
-      label: "Resting",
-      value: "the resting clock started",
+      label: "Idle",
+      value: "it went idle",
     });
   }
   if (summary.frozenAt !== null) {
     events.push({
       at: summary.frozenAt,
-      label: "Frozen",
+      label: HOST_FROZEN_WORD,
       value: "out of credits",
     });
   }
@@ -438,7 +459,7 @@ function byTime(a: SandboxDetailsEvent, b: SandboxDetailsEvent): number {
 export function sandboxDetailsEntry(
   input: SandboxDetailsInput,
 ): SandboxDetailsEntry {
-  const status = statusRows(input);
+  const status = statusRows(input, "shown");
   const history = historyEvents(input);
   return {
     kind: "sandbox",
@@ -448,7 +469,9 @@ export function sandboxDetailsEntry(
       kind: "sandbox",
       sandboxId: input.summary.id,
       exportedAt: input.now,
-      status: Object.fromEntries(exportStatusEntries(status, input.summary)),
+      status: Object.fromEntries(
+        exportStatusEntries(statusRows(input, "exported"), input.summary),
+      ),
       history: history.map((event) => ({
         at: event.at === null ? null : new Date(event.at).toISOString(),
         event: event.label,
@@ -516,13 +539,13 @@ function sandboxReason(summary: SandboxSummary): string | null {
   if (summary.state === "failed") {
     return sandboxFailedToStart(summary.failureCode);
   }
-  if (summary.frozen) return "Out of credits";
+  if (summary.frozen) return HOST_FROZEN_WORD;
   if (summary.guestConfigured === false) return "Settings didn't apply";
   return null;
 }
 
 function detailsStatus(summary: SandboxSummary): DetailsStatus {
-  const state = SANDBOX_PUBLIC_STATE_LABEL[sandboxPublicState(summary)];
+  const state = hostSandboxStateWord(summary.state);
   const reason = sandboxReason(summary);
   return {
     summary: [state, sandboxShapeLine(summary), sandboxRegionLabel(summary)]

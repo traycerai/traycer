@@ -50,14 +50,6 @@ const badgeVariants = cva(
         // as a button beside the text it sits in.
         accent: "bg-primary/15 text-primary active:press-scrim",
       },
-      // A badge is one line by default (`whitespace-nowrap`), which is right
-      // for a tag and wrong for a sentence-length verdict pill: at phone width
-      // the host's longest skip label is wider than the row it sits in. `wrap`
-      // lets the text wrap inside the pill and caps the pill at its container.
-      wrap: {
-        true: "h-auto max-w-full whitespace-normal text-left",
-        false: "",
-      },
       // One height, three type steps - the same shape `Input` takes. `xs` is
       // the dense metadata chip the settings panels and the pickers are full
       // of (and squares its corners, because a 16px pill reads as a button);
@@ -66,6 +58,16 @@ const badgeVariants = cva(
         default: "h-5 px-2 py-0.5 text-ui-xs",
         sm: "h-5 px-1.5 py-0 text-overline",
         xs: "h-4 rounded-sm px-1.5 py-0 text-micro leading-none",
+      },
+      // A badge is one line by default (`whitespace-nowrap`), which is right
+      // for a tag and wrong for a sentence-length verdict pill: at phone width
+      // the host's longest skip label is wider than the row it sits in. `wrap`
+      // lets the text wrap inside the pill and caps the pill at its container.
+      // Declared after `size`: cva emits classes in this order, so `h-auto`
+      // outranks the size's fixed height and every wrapped line stays visible.
+      wrap: {
+        true: "h-auto max-w-full whitespace-normal text-left",
+        false: "",
       },
     },
     defaultVariants: {

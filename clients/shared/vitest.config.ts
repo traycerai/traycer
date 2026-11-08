@@ -1,3 +1,4 @@
+import { resolve as resolveTestSetup } from "node:path";
 import { defineConfig } from "vitest/config";
 import path from "path";
 
@@ -19,6 +20,7 @@ export default defineConfig({
     ],
   },
   test: {
+    sequence: { setupFiles: "list" },
     // Vitest 5 flipped clearMocks to true; keep the v4 behavior (mock call history persists across tests).
     clearMocks: false,
     // Anchored to the package directory so siblings whose names merely
@@ -28,10 +30,14 @@ export default defineConfig({
     server: { deps: { inline: [/[\\/]node_modules[\\/]zod[\\/]/] } },
     include: ["**/__tests__/**/*.test.ts"],
     // Pins the home directory to a temp dir per test file - see the file.
-    setupFiles: ["./vitest.setup.ts"],
+    setupFiles: [
+      resolveTestSetup(
+        import.meta.dirname,
+        "../../scripts/test-worker-environment.ts",
+      ),
+      resolveTestSetup(import.meta.dirname, "./vitest.env.ts"),
+      "./vitest.setup.ts",
+    ],
     globals: false,
-    env: {
-      VITE_TRAYCER_OSS_REPO: "https://github.com/traycerai/traycer",
-    },
   },
 });

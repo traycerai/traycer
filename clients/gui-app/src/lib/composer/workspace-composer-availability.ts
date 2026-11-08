@@ -52,10 +52,9 @@ export const NO_BOUND_WORKSPACE_FOLDER_HINT =
   "Link at least one workspace folder to continue.";
 export const UNRESOLVED_WORKSPACE_FOLDER_HINT =
   "Locate the selected workspace folder on this host to continue.";
-export const CHECKING_WORKSPACE_FOLDER_HINT =
-  "Checking workspace folders on this host.";
+export const CHECKING_WORKSPACE_FOLDER_HINT = "Checking folders on this host.";
 export const WORKSPACE_FOLDER_CHECK_FAILED_HINT =
-  "Couldn't check workspace folders on this host. Return to the app to retry.";
+  "Couldn't check folders on this host. Return to the app to retry.";
 
 /**
  * The disabled-send hint shown when one or more bound folders are missing on

@@ -36,6 +36,7 @@ import type {
 } from "@/components/browser-tile/browser-tile-placement";
 import type { BrowserSessionTileRef } from "@/stores/epics/canvas/types";
 import type { TileOpenIntent } from "@/lib/canvas/tile-open/intent";
+import type { NestedFocusProvenance } from "@/lib/epic-nested-focus-navigation";
 import { registerHostedPaneActivationClaim } from "@/components/epic-canvas/pane-activation";
 import {
   acquireBrowserSessionsCoordinator,
@@ -114,7 +115,10 @@ const desktopWindowIdHarness = vi.hoisted(() => ({
  */
 const canvasState = vi.hoisted(() => ({
   tabsById: {} as Record<string, unknown>,
-  openTile: vi.fn<(intent: TileOpenIntent) => void>(),
+  openTile:
+    vi.fn<
+      (intent: TileOpenIntent, provenance: NestedFocusProvenance) => void
+    >(),
   updateBrowserTileViewportPresetInTab:
     vi.fn<
       (viewTabId: string, tileInstanceId: string, preset: string) => void
@@ -124,7 +128,11 @@ const canvasState = vi.hoisted(() => ({
 /** Props `ElectronTabSurface` was actually handed on its latest render. */
 const surfaceCapture = vi.hoisted(() => ({
   onOpenLinkInNewTile: null as
-    | ((url: string, disposition: "foreground" | "background") => void)
+    | ((
+        url: string,
+        disposition: "foreground" | "background",
+        provenance: NestedFocusProvenance,
+      ) => void)
     | null,
   onRequestClose: null as (() => void) | null,
   onConvertToPip: null as (() => void) | null,
@@ -285,7 +293,11 @@ vi.mock("@/components/browser-tile/agent-browser-tile", () => ({
     readonly onNativeTileFocused: (() => void) | null;
     readonly persistViewportPreset: ((preset: string) => void) | null;
     readonly onOpenLinkInNewTile:
-      | ((url: string, disposition: "foreground" | "background") => void)
+      | ((
+          url: string,
+          disposition: "foreground" | "background",
+          provenance: NestedFocusProvenance,
+        ) => void)
       | null;
   }) => {
     surfaceCapture.onOpenLinkInNewTile = props.onOpenLinkInNewTile;
@@ -1787,6 +1799,7 @@ describe("BrowserSessionTile open-link routing", () => {
       surfaceCapture.onOpenLinkInNewTile?.(
         "https://popup.example/",
         "foreground",
+        "automatic",
       );
     });
 
@@ -1802,6 +1815,36 @@ describe("BrowserSessionTile open-link routing", () => {
       node: { type: "browser-session", sessionId: "session-1", tabId: "tab-2" },
     });
   });
+
+  /**
+   * The defect this suite pins: the adapter used to hand `openTile` a
+   * hardcoded `"user"` no matter what called it, so a page's own scripted
+   * `window.open` could retire an artifact request the route was still
+   * waiting on with a human's authority. The provenance handed to
+   * `onOpenLinkInNewTile` must be the exact value `openTile` receives.
+   */
+  it.each<[string, NestedFocusProvenance]>([
+    ["a reader's open", "user"],
+    ["a scripted open", "automatic"],
+  ])(
+    "hands openTile the exact provenance it was given, for %s",
+    async (_label, provenance) => {
+      renderTile();
+
+      act(() => {
+        surfaceCapture.onOpenLinkInNewTile?.(
+          "https://popup.example/",
+          "foreground",
+          provenance,
+        );
+      });
+
+      await waitFor(() => {
+        expect(canvasState.openTile).toHaveBeenCalledTimes(1);
+      });
+      expect(canvasState.openTile.mock.calls[0]?.[1]).toBe(provenance);
+    },
+  );
 
   it("falls back to the epic when the view tab closed mid-open", async () => {
     // Held open so the tab is still there when the request arrives and gone
@@ -1822,6 +1865,7 @@ describe("BrowserSessionTile open-link routing", () => {
       surfaceCapture.onOpenLinkInNewTile?.(
         "https://popup.example/",
         "foreground",
+        "automatic",
       );
     });
     await waitFor(() => {
@@ -1855,6 +1899,7 @@ describe("BrowserSessionTile open-link routing", () => {
       surfaceCapture.onOpenLinkInNewTile?.(
         "https://popup.example/",
         "background",
+        "automatic",
       );
     });
 
@@ -1871,7 +1916,7 @@ describe("BrowserSessionTile open-link routing", () => {
     renderTile();
 
     act(() => {
-      surfaceCapture.onOpenLinkInNewTile?.("about:blank", "foreground");
+      surfaceCapture.onOpenLinkInNewTile?.("about:blank", "foreground", "user");
     });
 
     await waitFor(() => {

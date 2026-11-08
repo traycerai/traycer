@@ -139,12 +139,7 @@ function describeCompatHealth(
     busySessionCount: hostStatus.busySessionCount,
     busy: hostStatus.busy,
   });
-  if (
-    hostStatus.busyBreakdown !== null &&
-    copy.label !== null &&
-    copy.label !== "Idle" &&
-    copy.label !== "Busy"
-  ) {
+  if (copy.kind === "named") {
     return `${verdict}, busy ${copy.label}`;
   }
   const count = hostStatus.busySessionCount;

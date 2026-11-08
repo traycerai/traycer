@@ -61,15 +61,18 @@ export function BundleOpenButton(props: BundleOpenButtonProps): ReactNode {
   });
   const openBundle = useCallback(
     (event: MouseEvent<HTMLButtonElement>) => {
-      openTile({
-        node: tile,
-        target: { tabId: props.viewTabId },
-        gesture: "explicit",
-        modifiers: modifiersFromMouseEvent(event),
-        placement: null,
-        dedupe: true,
-        source: "direct_ui",
-      });
+      openTile(
+        {
+          node: tile,
+          target: { tabId: props.viewTabId },
+          gesture: "explicit",
+          modifiers: modifiersFromMouseEvent(event),
+          placement: null,
+          dedupe: true,
+          source: "direct_ui",
+        },
+        "user",
+      );
     },
     [openTile, props.viewTabId, tile],
   );

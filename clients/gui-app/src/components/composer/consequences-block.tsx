@@ -92,7 +92,7 @@ function ConsequencesBlockBody(props: {
   }, [expanded, markSeen, props.subject, props.viewerUserId]);
 
   const clauses = consequenceClauses(props.input);
-  const price = priceClause(props.input);
+  const price = expanded ? clauses[0] : priceClause(props.input);
   const rest = clauses.filter((clause) => clause.kind !== "price");
   return (
     <div
