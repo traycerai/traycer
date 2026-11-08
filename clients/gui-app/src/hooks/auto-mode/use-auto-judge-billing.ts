@@ -9,7 +9,10 @@ import {
 } from "@traycer/protocol/host/index";
 import type { GuiAgentModelOption } from "@traycer/protocol/host/agent/gui/unary-schemas";
 import { effectiveJudgeReasoningEffort } from "@traycer/protocol/host/agent/gui/reasoning-effort-order";
-import type { AutoJudgeGetResponse } from "@traycer/protocol/host/auto-mode/contracts";
+import type {
+  AutoJudgeGetResponse,
+  AutoJudgeSelection,
+} from "@traycer/protocol/host/auto-mode/contracts";
 import type { ProviderCliState } from "@traycer/protocol/host/provider-schemas";
 import { useHostClientForHostId } from "@/hooks/host/use-host-client-for-host-id";
 import { useAutoJudgeVerdictForClient } from "@/hooks/auto-mode/use-auto-judge-query";
@@ -273,6 +276,36 @@ function storedJudgeModelSlug(
 }
 
 /**
+ * The account whose catalog the judge's model is read from. A provider's
+ * models and their tiers are the account's, so the ambient list can report a
+ * managed judge's model as gone, or label it wrong.
+ *
+ *  - The stored judge, when the target is it: its own profile, unless the
+ *    provider no longer offers that profile - the ambient list stands in then
+ *    and the missing-profile read beside it carries the verdict.
+ *  - Automatic's fallback (the run's own harness): the composer's account.
+ *  - Anything else, Traycer's default judge included: ambient.
+ */
+function judgeModelsProfileId(input: {
+  readonly selection: AutoJudgeSelection | null;
+  readonly target: AutoJudgeTarget;
+  readonly storedProfileUnavailable: boolean;
+  readonly runHarnessId: GuiHarnessId | null;
+  readonly runProfileId: string | null;
+}): string | null {
+  const { selection, target } = input;
+  if (target.kind !== "judge") return null;
+  if (
+    selection !== null &&
+    selection.harnessId === target.harnessId &&
+    selection.model === target.modelSlug
+  ) {
+    return input.storedProfileUnavailable ? null : selection.profileId;
+  }
+  return target.harnessId === input.runHarnessId ? input.runProfileId : null;
+}
+
+/**
  * The composer's half of the profile-availability read.
  *
  * Extracted rather than inlined because `useAutoJudgeBilling` is at gui-app's
@@ -339,6 +372,11 @@ export function useAutoJudgeBilling(
    * its `judgeDefaultModel` or else on this model, so the row names it.
    */
   runModelSlug: string,
+  /**
+   * The account this composer runs on; `null` is ambient. Under Automatic's
+   * fallback the judge runs on it too, so its catalog is the one read.
+   */
+  runProfileId: string | null,
 ): AutoJudgeBilling | null {
   const client = useHostClientForHostId(hostId);
   // Only the FALLBACK moved, and deliberately so: a named target still gates on
@@ -509,7 +547,13 @@ export function useAutoJudgeBilling(
     judgeModelsTarget.harnessId,
     null,
     {
-      profileId: null,
+      profileId: judgeModelsProfileId({
+        selection,
+        target,
+        storedProfileUnavailable,
+        runHarnessId: harnessId,
+        runProfileId,
+      }),
       ...judgeModelsActivity({
         autoModeHost,
         applicable: judgeModelsTarget.applicable,

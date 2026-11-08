@@ -648,6 +648,47 @@ describe("useGuiHarnessModelsQuery (interval removal regression)", () => {
       expect.objectContaining({ profileId: "pro" }),
     ]);
   });
+
+  it("follows a profile switch on one model query", async () => {
+    const fixture = createCatalogFixture({
+      "agent.gui.listModels": (params) => ({
+        harnessId: "claude",
+        models: modelsResponse(1).models.map((model) => ({
+          ...model,
+          harnessId: "claude",
+          slug: `model-of-${params.profileId ?? "ambient"}`,
+        })),
+      }),
+    });
+
+    const initialProps: { readonly profileId: string | null } = {
+      profileId: "pro",
+    };
+    const hook = renderHook(
+      (props: { readonly profileId: string | null }) =>
+        useGuiHarnessModelsQueryForClient(fixture.client, "claude", null, {
+          profileId: props.profileId,
+          enabled: true,
+          subscribed: true,
+        }),
+      { wrapper: fixture.Wrapper, initialProps },
+    );
+    await waitFor(() => {
+      expect(hook.result.current.data?.models[0]?.slug).toBe("model-of-pro");
+    });
+
+    hook.rerender({ profileId: "team" });
+    await waitFor(() => {
+      expect(hook.result.current.data?.models[0]?.slug).toBe("model-of-team");
+    });
+
+    hook.rerender({ profileId: null });
+    await waitFor(() => {
+      expect(hook.result.current.data?.models[0]?.slug).toBe(
+        "model-of-ambient",
+      );
+    });
+  });
 });
 
 describe("useGuiHarnessCatalog (batched interval removal regression)", () => {
