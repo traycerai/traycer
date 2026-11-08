@@ -11,12 +11,18 @@ import { lazySchema } from "@traycer/protocol/framework/lazy-schema";
  *
  * That method's media type is HOST-AUTHORITATIVE: the host sniffs the bytes and
  * answers only for a supported image, on the disk leg and the cloud leg alike,
- * and its response is the frozen image enum. A file's media type is the one its
- * author's client declared, and the file carries a name. Answering both from one
- * method would put a trust-the-declaration branch beside that guarantee, so a
- * file is read here and that method keeps refusing non-images. A new minor of
- * it would have cost the same as a new method: an older host answers
- * unsupported either way.
+ * and its response is the frozen image enum. A file is not an image, so serving
+ * it there would mean a branch that skips that guarantee. A file is read here
+ * and that method keeps refusing non-images. A new minor of it would have cost
+ * the same as a new method: an older host answers unsupported either way.
+ *
+ * ## Bytes only
+ *
+ * The found arm names no type and no file name. A download starts from a chip,
+ * and the chip already holds the node's `fileName` and `mediaType`, which are
+ * the one source for both. The cloud copy of a file is its raw bytes under
+ * their digest, so a cloud-leg answer could only have restated the node or
+ * invented a value.
  *
  * ## Same request, same gate, same single reason
  *
@@ -57,9 +63,6 @@ export const readChatFileResponseSchema = lazySchema(() =>
       ok: z.literal(true),
       /** Base64 of the RAW file bytes - what `hash` is over. */
       bytesBase64: z.string().max(FILE_ATTACHMENT_MAX_BASE64_LENGTH),
-      /** As the author's client declared it; never sniffed. */
-      mediaType: z.string().min(1),
-      fileName: z.string().min(1),
     }),
     z.object({
       ok: z.literal(false),

@@ -2075,10 +2075,10 @@ export const epicReadChatAttachmentV11 = defineRpcContract({
   responseSchema: readChatAttachmentResponseSchema,
 });
 
-// One chat FILE attachment's bytes, with the media type and name its author
-// declared. A sibling of the image read rather than a minor of it, because
-// that read's media type is sniffed and it refuses non-images; see
-// `chat-file.ts`.
+// One chat FILE attachment's bytes, and nothing else: the referencing node
+// carries the name and media type. A sibling of the image read rather than a
+// minor of it, because that read's media type is sniffed and it refuses
+// non-images; see `chat-file.ts`.
 export const epicReadChatFileV10 = defineRpcContract({
   method: "epic.readChatFile",
   schemaVersion: { major: 1, minor: 0 } as const,

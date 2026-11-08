@@ -485,7 +485,9 @@ export type DraftsPutBlobResponse = z.infer<typeof draftsPutBlobResponseSchema>;
  *
  * `kind: "file"` is a non-image attachment, capped at
  * {@link FILE_ATTACHMENT_MAX_BASE64_LENGTH} and carrying the name and media
- * type its author's client declared, which the host stores beside the bytes.
+ * type its author's client declared. The message's `fileAttachment` node
+ * carries the same two values, and it is what every later reader uses: a
+ * download (`epic.readChatFile`) returns the bytes alone.
  *
  * A `file` put is only meaningful to a host that negotiated `>= 1.2`. Sent to an
  * older host, it projects through that line's stripping schema and loses
