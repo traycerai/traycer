@@ -89,6 +89,7 @@ function useAdapterUnderTest(
   const editorRef = useRef<ComposerPasteEditorHandle>({
     isReady: () => true,
     insertFileAttachment: () => false,
+    getJSON: () => ({ type: "doc", content: [] }),
     insertImageAttachments: (attrs) => {
       insertRef.current(attrs);
     },

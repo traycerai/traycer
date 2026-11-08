@@ -8,6 +8,17 @@ import { numberValue, stringValue } from "./tiptap-json-content";
 
 export const FILE_ATTACHMENT_NODE_TYPE = "fileAttachment";
 
+/**
+ * The most files one message may carry, counted one per `(hash, fileName)` as
+ * the agent's "Attached files" block lists them. Images are not counted. The
+ * host refuses a send or a queued message over it with
+ * {@link TOO_MANY_FILE_ATTACHMENTS_CODE}; the composer stops at it first.
+ */
+export const MAX_FILE_ATTACHMENTS_PER_MESSAGE = 20;
+
+/** The host's refusal code for a message over the per-message file cap. */
+export const TOO_MANY_FILE_ATTACHMENTS_CODE = "TOO_MANY_ATTACHMENTS";
+
 /** What a picked file with no declared type is uploaded and stored as. */
 export const FILE_ATTACHMENT_FALLBACK_MEDIA_TYPE = "application/octet-stream";
 
@@ -68,6 +79,25 @@ function someNode(
 ): boolean {
   if (predicate(node)) return true;
   return (node.content ?? []).some((child) => someNode(child, predicate));
+}
+
+/**
+ * How many files the draft carries, by the host's count: one per distinct
+ * `(hash, fileName)`, pending nodes included.
+ */
+export function countFileAttachments(content: JsonContent): number {
+  const keys = new Set<string>();
+  const visit = (node: JsonContent): void => {
+    if (node.type === FILE_ATTACHMENT_NODE_TYPE) {
+      const hash = stringValue(node.attrs?.hash) ?? "";
+      const fileName = stringValue(node.attrs?.fileName) ?? "";
+      keys.add(`${hash}\u0000${fileName}`);
+      return;
+    }
+    node.content?.forEach(visit);
+  };
+  visit(content);
+  return keys.size;
 }
 
 export function containsFileAttachments(content: JsonContent): boolean {

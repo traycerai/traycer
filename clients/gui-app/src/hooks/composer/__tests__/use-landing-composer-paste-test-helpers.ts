@@ -28,6 +28,7 @@ export function makeHandle(
   const handle: ComposerPasteEditorHandle = {
     isReady: () => true,
     insertFileAttachment: () => false,
+    getJSON: () => ({ type: "doc", content: [] }),
     insertImageAttachments: (attrs) => inserted.push([...attrs]),
     // Paths commit independently of image insertion (A1: mixed may be 2 undo steps).
     beginPathInsertion: () => (paths) => {

@@ -12,6 +12,7 @@ import {
   rememberRetainedDraftToast,
 } from "@/lib/toast/retained-draft-toasts";
 import { noticeCarriesOnlyCopy } from "@/stores/chats/chat-queue-reconciler";
+import { TOO_MANY_FILE_ATTACHMENTS_CODE } from "@/lib/composer/file-attachments";
 
 export const CHAT_ACTION_REPORT_CONTEXT = createReportIssueContext({
   title: "Agent action failed",
@@ -51,6 +52,13 @@ export function showErrorNoticeToast(notice: ChatErrorNotice): void {
   // id is registered so the identity boundary can take it down, and dropped
   // again when the toast goes on its own.
   const retained = noticeCarriesOnlyCopy(notice);
+  // A send or a queued message over the per-message file cap. The person's
+  // message is over a limit, not something broken, so it is said plainly and
+  // offers no report; the host's text says how many and what to do.
+  if (notice.code === TOO_MANY_FILE_ATTACHMENTS_CODE && !retained) {
+    toast.warning("Too many files attached", { description: text });
+    return;
+  }
   const options: ExternalToast | undefined = retained
     ? {
         duration: Number.POSITIVE_INFINITY,

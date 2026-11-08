@@ -18,6 +18,7 @@ import { reportableErrorToast } from "@/lib/reportable-error-toast";
 
 import {
   FILE_ATTACHMENT_FALLBACK_MEDIA_TYPE,
+  MAX_FILE_ATTACHMENTS_PER_MESSAGE,
   type ComposerFileAttachmentAttrs,
 } from "./file-attachments";
 
@@ -152,6 +153,26 @@ export function showFileTooLargeToast(file: File): void {
     },
     {
       title: "File exceeded the size limit",
+      message: null,
+      code: null,
+      source: TOAST_SOURCE,
+    },
+  );
+}
+
+/** One toast per pick, naming the file when only one was turned away. */
+export function showTooManyFilesToast(refused: ReadonlyArray<File>): void {
+  const first = refused.at(0);
+  if (first === undefined) return;
+  reportableErrorToast(
+    refused.length === 1
+      ? `Couldn't attach ${displayName(first)}.`
+      : `Couldn't attach ${String(refused.length)} files.`,
+    {
+      description: `A message can carry up to ${String(MAX_FILE_ATTACHMENTS_PER_MESSAGE)} files.`,
+    },
+    {
+      title: "File attachment count exceeded the limit",
       message: null,
       code: null,
       source: TOAST_SOURCE,

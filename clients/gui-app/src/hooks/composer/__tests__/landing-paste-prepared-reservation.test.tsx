@@ -283,6 +283,7 @@ describe("useLandingComposerPaste - reservation charges the PREPARED byte length
       current: {
         isReady: () => true,
         insertFileAttachment: () => false,
+        getJSON: () => ({ type: "doc", content: [] }),
         insertImageAttachments: (
           _attrs: ReadonlyArray<ImageAttachmentAttrs>,
         ) => {
@@ -330,6 +331,7 @@ describe("useLandingComposerPaste - reservation charges the PREPARED byte length
       current: {
         isReady: () => true,
         insertFileAttachment: () => false,
+        getJSON: () => ({ type: "doc", content: [] }),
         insertImageAttachments: (
           _attrs: ReadonlyArray<ImageAttachmentAttrs>,
         ) => {

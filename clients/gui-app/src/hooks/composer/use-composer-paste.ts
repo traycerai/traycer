@@ -11,6 +11,7 @@ import type { Editor } from "@tiptap/core";
 import { closeHistory } from "@tiptap/pm/history";
 import { v4 as uuidv4 } from "uuid";
 import type { IFileDropHost } from "@traycer-clients/shared/platform/runner-host";
+import type { JsonContent } from "@traycer/protocol/common/registry";
 
 import type { ImageAttachmentAttrs } from "@/components/chat/composer/editor/extensions/image-attachment-extension";
 import { reportableErrorToast } from "@/lib/reportable-error-toast";
@@ -52,13 +53,18 @@ import {
   getBasename,
   relativizeToWorkspaceRoot,
 } from "@/lib/path/cross-platform-path";
-import type { ComposerFileAttachmentAttrs } from "@/lib/composer/file-attachments";
+import {
+  countFileAttachments,
+  MAX_FILE_ATTACHMENTS_PER_MESSAGE,
+  type ComposerFileAttachmentAttrs,
+} from "@/lib/composer/file-attachments";
 import {
   attachFileAttachment,
   refuseFileAttachment,
   showFileTooLargeToast,
   showHostOutdatedForFilesToast,
   showNoHostForFilesToast,
+  showTooManyFilesToast,
   type FileAttachmentUploadClient,
   type FileAttachmentUploadTarget,
 } from "@/lib/composer/file-attachment-upload";
@@ -511,6 +517,8 @@ export interface ComposerFileAttachArgs {
   /** The composer's send host; `null` while it has none to upload to. */
   readonly target: FileAttachmentUploadTarget | null;
   readonly insert: (attrs: ComposerFileAttachmentAttrs) => boolean;
+  /** Files already in the draft, by `countFileAttachments`. */
+  readonly attachedFileCount: () => number;
 }
 
 /**
@@ -746,6 +754,10 @@ export function useComposerPasteEvents<Attrs>(args: {
   const [pendingImageCount, setPendingImageCount] = useState(0);
   const [pendingPathCount, setPendingPathCount] = useState(0);
   const [pendingFileCount, setPendingFileCount] = useState(0);
+  // Files admitted by a pick but not yet in the document: they are being read
+  // and hashed. Counted against the per-message cap with the document's own,
+  // so two quick picks cannot both fit in the last slot.
+  const unplacedFileCountRef = useRef(0);
   const activeRef = useRef(true);
   const controllersRef = useRef(new Set<AbortController>());
 
@@ -793,28 +805,41 @@ export function useComposerPasteEvents<Attrs>(args: {
     (files: ReadonlyArray<File>) => {
       if (files.length === 0 || fileAttach === null) return;
       const admitted: File[] = [];
+      const overCap: File[] = [];
       let hostRefusal: "no-host" | "host-outdated" | null = null;
+      let slots =
+        MAX_FILE_ATTACHMENTS_PER_MESSAGE -
+        fileAttach.attachedFileCount() -
+        unplacedFileCountRef.current;
       for (const file of files) {
         const refusal = refuseFileAttachment(file, fileAttach.target);
         if (refusal === "too-large") showFileTooLargeToast(file);
         else if (refusal !== null) hostRefusal = refusal;
-        else admitted.push(file);
+        else if (slots <= 0) overCap.push(file);
+        else {
+          admitted.push(file);
+          slots -= 1;
+        }
       }
       // Once per pick: every file in it was refused for the same reason.
       if (hostRefusal === "no-host") showNoHostForFilesToast();
       if (hostRefusal === "host-outdated") showHostOutdatedForFilesToast();
+      showTooManyFilesToast(overCap);
       const target = fileAttach.target;
       if (admitted.length === 0 || target === null) return;
+      unplacedFileCountRef.current += admitted.length;
       setPendingFileCount((count) => count + 1);
       void (async () => {
         // In pick order, so the chips land in the order the files were
         // chosen, and so only one file's bytes are read for hashing at once.
         for (const file of admitted) {
-          await attachFileAttachment({
-            file,
-            target,
-            insert: fileAttach.insert,
-          }).catch(() => {
+          try {
+            await attachFileAttachment({
+              file,
+              target,
+              insert: fileAttach.insert,
+            });
+          } catch {
             reportableErrorToast(
               "Couldn't attach the file.",
               { description: "Please try adding it again." },
@@ -825,7 +850,11 @@ export function useComposerPasteEvents<Attrs>(args: {
                 source: "Chat composer",
               },
             );
-          });
+          } finally {
+            // Placed in the document now, or never will be: either way the
+            // document's own count is the one that speaks for it from here.
+            unplacedFileCountRef.current -= 1;
+          }
         }
       })().finally(() => {
         if (!activeRef.current) return;
@@ -1338,6 +1367,8 @@ export interface ComposerPasteEditorHandle {
   ) => boolean;
   readonly beginPathInsertion: () => PathInsertionCommit | null;
   readonly focus: () => void;
+  /** Read once per file pick, for the per-message file count. */
+  readonly getJSON: () => JsonContent;
 }
 
 export function useComposerPaste(
@@ -1409,11 +1440,16 @@ export function useComposerFileAttachArgs(
     },
     [editorRef],
   );
+  const attachedFileCount = useCallback((): number => {
+    const handle = editorRef.current;
+    if (handle === null || !handle.isReady()) return 0;
+    return countFileAttachments(handle.getJSON());
+  }, [editorRef]);
   const target = fileRoute?.target ?? null;
   const hasRoute = fileRoute !== null;
   return useMemo(
-    () => (hasRoute ? { target, insert } : null),
-    [hasRoute, insert, target],
+    () => (hasRoute ? { target, insert, attachedFileCount } : null),
+    [attachedFileCount, hasRoute, insert, target],
   );
 }
 

@@ -95,6 +95,7 @@ function makeRig(): Rig {
         inserted.push(attrs);
         return true;
       },
+      attachedFileCount: () => 0,
     },
   };
 }
@@ -169,7 +170,11 @@ describe("attachFiles", () => {
   it("says there is no host and uploads nothing when the route has no target", () => {
     const rig = makeRig();
     const { result } = renderHook(() =>
-      useRig({ target: null, insert: rig.fileAttach.insert }),
+      useRig({
+        target: null,
+        insert: rig.fileAttach.insert,
+        attachedFileCount: () => 0,
+      }),
     );
 
     act(() => {

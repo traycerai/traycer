@@ -218,6 +218,7 @@ describe("useLandingComposerPaste - reservation handoff (B2)", () => {
       current: {
         isReady: () => true,
         insertFileAttachment: () => false,
+        getJSON: () => ({ type: "doc", content: [] }),
         insertImageAttachments: (
           attrs: ReadonlyArray<ImageAttachmentAttrs>,
         ) => {
@@ -358,6 +359,7 @@ describe("useLandingComposerPaste - reservation handoff (B2)", () => {
       current: {
         isReady: () => true,
         insertFileAttachment: () => false,
+        getJSON: () => ({ type: "doc", content: [] }),
         insertImageAttachments: (
           _attrs: ReadonlyArray<ImageAttachmentAttrs>,
         ) => {
@@ -519,6 +521,7 @@ describe("useLandingComposerPaste - reservation handoff (B2)", () => {
       current: {
         isReady: () => true,
         insertFileAttachment: () => false,
+        getJSON: () => ({ type: "doc", content: [] }),
         insertImageAttachments: (
           attrs: ReadonlyArray<ImageAttachmentAttrs>,
         ) => {
