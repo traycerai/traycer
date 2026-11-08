@@ -150,6 +150,7 @@ export const credentialHomeSchema = lazySchema(() =>
       .object({ identity: credentialIdentitySchema, capturedAt: z.number() })
       .nullable(),
     materialMatchesBinding: z.enum(["yes", "no", "unknown"]),
+    // A future retirement format must not discard the admitted home beside it.
     runtimeRetirement: credentialRuntimeRetirementSchema
       .optional()
       .catch(undefined),
