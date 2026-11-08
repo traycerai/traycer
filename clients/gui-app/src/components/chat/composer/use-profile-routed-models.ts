@@ -4,14 +4,12 @@ import type {
   ProviderId,
   ProviderProfile,
 } from "@traycer/protocol/host/provider-schemas";
+import type { ProvidersReadModelRoutesRequest } from "@traycer/protocol/host/rate-limit";
 import { rateLimitModelSlugIsAlias } from "@traycer/protocol/host/rate-limit/semantics";
 import type { ModelOption } from "@/components/home/data/landing-options";
 import { profileCommitId } from "@/components/providers/provider-profile-model";
 import { useHostSupportsMethod } from "@/hooks/host/use-host-supports-method";
-import {
-  useProvidersReadModelRoutesQuery,
-  type ProvidersReadModelRoutesRequest,
-} from "@/hooks/providers/use-providers-read-model-routes-query";
+import { useProvidersReadModelRoutesQuery } from "@/hooks/providers/use-providers-read-model-routes-query";
 import type { HostRpcRegistry } from "@/lib/host";
 
 /** The composer's selected model as it would run on `profile`. */

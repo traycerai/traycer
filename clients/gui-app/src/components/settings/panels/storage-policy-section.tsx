@@ -82,7 +82,7 @@ function afterHours(hours: number): string {
  * page over instead of showing the outgoing account's save.
  */
 export function StoragePolicySection(props: {
-  readonly pick: EnvironmentPick;
+  readonly pick: Exclude<EnvironmentPick, { readonly kind: "local" }>;
 }): ReactNode {
   const writeSupported = useHostSupportsMethod(
     useReactiveHostReadiness(useHostClient()).hostId,
@@ -94,7 +94,7 @@ export function StoragePolicySection(props: {
 }
 
 function StoragePolicySectionBody(props: {
-  readonly pick: EnvironmentPick;
+  readonly pick: Exclude<EnvironmentPick, { readonly kind: "local" }>;
 }): ReactNode {
   const { environment, read } = useConfigurationStoragePolicy(props.pick);
   const { put } = useConfigurationItemMutations();

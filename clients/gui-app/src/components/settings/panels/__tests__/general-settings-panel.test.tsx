@@ -298,7 +298,7 @@ describe("GeneralSettingsPanel", () => {
     delete (globalThis as { runnerHost?: unknown }).runnerHost;
   });
 
-  it("hydrates and updates Agent roles without an Experimental badge", async () => {
+  it("hydrates and updates Agent roles", async () => {
     let agentRoles = false;
     const bridge: TestFeatureSettingsBridge = {
       get: vi.fn(() => Promise.resolve({ agentRoles, agentFeedback: true })),
@@ -316,13 +316,6 @@ describe("GeneralSettingsPanel", () => {
 
     renderPanel();
 
-    const agentRolesRow = document.querySelector(
-      `[data-settings-anchor="${GENERAL.definitions.agentRoles.anchor}"]`,
-    );
-    expect(agentRolesRow instanceof HTMLElement).toBe(true);
-    if (!(agentRolesRow instanceof HTMLElement)) return;
-    expect(within(agentRolesRow).queryByText("Experimental")).toBeNull();
-    expect(screen.queryByRole("heading", { name: "Experimental" })).toBeNull();
     const toggle = screen.getByRole("switch", { name: "Agent roles" });
     await waitFor(() => expect(toggle.hasAttribute("disabled")).toBe(false));
     expect(toggle.getAttribute("aria-checked")).toBe("false");

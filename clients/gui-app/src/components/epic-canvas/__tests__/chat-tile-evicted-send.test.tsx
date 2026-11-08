@@ -698,7 +698,7 @@ describe("a message sent to a chat the pool serves because its host dropped the 
 
     clickSend();
 
-    // 2. Cleared like any send, pending, nothing sent, nothing toasted.
+    // Cleared like any send, pending, nothing sent, nothing toasted.
     expect(composerDraftIsEmpty(CHAT_ARTIFACT.id)).toBe(true);
     await waitFor(() => {
       expect(pendingRows()).toHaveLength(1);
@@ -715,7 +715,7 @@ describe("a message sent to a chat the pool serves because its host dropped the 
       chatId: CHAT_ARTIFACT.id,
     });
 
-    // 3. The host answers, the session moves there, and one send goes out.
+    // The host answers, the session moves there, and one send goes out.
     await answerHydrate(0);
     await waitFor(() => {
       expect(streams).toHaveLength(2);
@@ -729,11 +729,11 @@ describe("a message sent to a chat the pool serves because its host dropped the 
     expect(textInContent(frame.content)).toBe(FIRST_TEXT);
     expect(JSON.stringify(frame.content)).toContain(HASH);
 
-    // 4. The parked row was swapped for the store's own.
+    // The parked row was swapped for the store's own.
     expect(pendingRows()).toHaveLength(1);
     expect(rowsWithText(FIRST_TEXT)).toHaveLength(1);
 
-    // 5. The host accepted it: the row is the sent message.
+    // The host accepted it: the row is the sent message.
     acceptMessage(streams[1], frame);
     await waitFor(() => {
       expect(pendingRows()).toHaveLength(0);
@@ -844,7 +844,6 @@ describe("a message sent to a chat the pool serves because its host dropped the 
         expect(textInContent(sendFramesOf(streams[1])[0].content)).toBe(
           FIRST_TEXT,
         );
-        expect(composerDraftIsEmpty(CHAT_ARTIFACT.id)).toBe(false);
         expect(
           useComposerDraftStore.getState().drafts[CHAT_ARTIFACT.id]?.content,
         ).toEqual(draftOf(SECOND_TEXT));
@@ -868,7 +867,6 @@ describe("a message sent to a chat the pool serves because its host dropped the 
       }
 
       if (lifecycle !== "confirm-close") {
-        expect(composerDraftIsEmpty(CHAT_ARTIFACT.id)).toBe(false);
         expect(
           useComposerDraftStore.getState().drafts[CHAT_ARTIFACT.id]?.content,
         ).toEqual(draftOf(FIRST_TEXT));

@@ -154,7 +154,7 @@ export type TileOpenPlan =
       /**
        * `promote` clears the pane's preview slot: a permanent re-open of the
        * tile that currently holds it pins the tile, exactly as the old
-       * `openTile(preview: false, "user")` dedupe hit did. `false` for a preview
+       * `openTile(preview: false)` dedupe hit did. `false` for a preview
        * gesture and for a hit that is not the pane's preview - promoting
        * there would pin a tile this gesture never touched.
        */

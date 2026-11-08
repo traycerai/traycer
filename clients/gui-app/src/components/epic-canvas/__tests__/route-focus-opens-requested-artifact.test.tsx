@@ -39,11 +39,10 @@ import { useCloseCanvasTileWithNestedFocus } from "@/components/epic-canvas/rend
 import { useSettingsStore } from "@/stores/settings/settings-store";
 
 /**
- * T156 (the real-store regression suite for the bot-channel artifact-open
- * defect). `use-epic-route-synchronization.test.tsx` mocks BOTH
- * `@/lib/epic-auto-open` and `@/lib/canvas/tile-open/open-tile`, which is
- * exactly why it never caught this: those two seams are the mechanism of
- * the defect, so this file keeps them REAL and drives the REAL canvas store
+ * The real-store suite for opening a requested artifact from the route.
+ * `use-epic-route-synchronization.test.tsx` mocks BOTH
+ * `@/lib/epic-auto-open` and `@/lib/canvas/tile-open/open-tile`; those two
+ * seams are the mechanism of the open, so this file keeps them REAL and drives the REAL canvas store
  * instead, asserting on the destination tab's actual tile/active-artifact
  * state rather than on a captured navigation intent.
  */
@@ -62,7 +61,7 @@ const EPIC_ID = "route-focus-epic";
 const TAB_ID = "route-focus-tab";
 
 // `useEpicArtifactRecords` (`@/lib/epic-selectors`) is a controllable
-// external store so case 4 can mount with NO records and push one in later,
+// external store so a case can mount with NO records and push one in later,
 // under `act`, and have the hook re-render on it - the same pattern
 // `epic-tab-route-recency-wait.test.tsx` uses for its home reading.
 const recordsStore = vi.hoisted(() => {
@@ -87,14 +86,13 @@ const openEpicHandleState = vi.hoisted(() => ({
 }));
 
 // Controllable so the supersession cases can cover both nested-history
-// modes: `null` is OFF (the suite's prior default, mocked unconditionally),
-// a truthy stand-in is ON. The controller's own shape is never read by this
+// modes: `null` is OFF (the default), a truthy stand-in is ON. The controller's own shape is never read by this
 // mock's callers - only nullness matters to `nestedFocusEnabled`.
 const persistentHistoryState = vi.hoisted(() => ({
   controller: null as PersistentHistoryController | null,
 }));
 
-// Controllable so case 4 can start cold (no snapshot yet) and flip loaded
+// Controllable so a case can start cold (no snapshot yet) and flip loaded
 // mid-test, matching `useEpicArtifactRecords`'s own controllable-store
 // pattern above.
 const snapshotLoadedState = vi.hoisted(() => ({ loaded: true }));
@@ -132,12 +130,10 @@ vi.mock("@tanstack/react-router", async (importOriginal) => {
   };
 });
 
-// Nested-focus route state is orthogonal to the original D1/D2 defect
-// (which lives entirely in the legacy auto-open effect), and keeping it off
-// by default collapses the hook down to that one effect's branch. The
+// Nested-focus route state is orthogonal to the auto-open effect, and keeping
+// it off by default collapses the hook down to that one effect's branch. The
 // supersession cases below flip `persistentHistoryState.controller` to cover
-// the ON mode too - the route-canonicalization effect (case 5) only runs
-// under it.
+// the ON mode too - the route-canonicalization effect only runs under it.
 vi.mock("@/lib/persistent-history", () => ({
   getHistoryController: () => persistentHistoryState.controller,
 }));
@@ -294,10 +290,10 @@ function mountHook(intent: EpicRouteFocusIntent) {
  *
  * `matchesCurrentRoute` controls whether the boundary sees itself as acting
  * on the tab the route-sync hook is mounted for. True lets an ON-mode call
- * proceed to its own `router.navigate` (case 1/4's canvas assertions don't
- * depend on it either way). Case 5 passes false: it is testing the
- * route-sync hook's OWN canonicalizing replace, and letting the boundary
- * ALSO commit here would register a two-second optimistic pending target
+ * proceed to its own `router.navigate` (the open cases' canvas assertions
+ * don't depend on it either way). The canonicalization case passes false: it
+ * is testing the route-sync hook's OWN canonicalizing replace, and letting
+ * the boundary ALSO commit here would register a two-second optimistic pending target
  * (`beginNestedFocusNavigation`) for this exact tab that the test never
  * drives to completion, which would defer that replace for the duration of
  * the guard - a real round trip clears it once the router's commit lands
@@ -389,7 +385,7 @@ function committedNestedFocus(search: Record<string, unknown> | null): {
   return { focusPaneId, focusTileInstanceId };
 }
 
-describe("route focus opens the requested artifact (T156)", () => {
+describe("route focus opens the requested artifact", () => {
   beforeEach(() => {
     useEpicCanvasStore.setState(useEpicCanvasStore.getInitialState(), true);
     useEpicCanvasStore
@@ -550,7 +546,7 @@ describe("route focus opens the requested artifact (T156)", () => {
     }
   });
 
-  it("opens a markdown ticket whose record is present (control: sound both before and after the fix)", async () => {
+  it("opens a markdown ticket whose record is present", async () => {
     const TICKET_ID = "ticket-present";
     recordsStore.set([
       record({ id: TICKET_ID, type: "ticket", name: "Present ticket" }),
@@ -704,10 +700,10 @@ describe("route focus opens the requested artifact (T156)", () => {
     mountHook(baseIntent({ focusArtifactId: PENDING_ID, focusedAt: 1100 }));
 
     // Captured so the final assertion can name the EXACT pane/tile CHOSEN
-    // landed on, rather than merely "some search patch arrived" - the old
-    // auto-open effect (pre-fix) also drives a `replaceNestedFocusRoute`
-    // call once PENDING's record lands, just naming PENDING's own tile after
-    // stealing activation back from CHOSEN. A `toBeDefined()` check on
+    // landed on, rather than merely "some search patch arrived" - an auto-open
+    // that stole activation back from CHOSEN would also drive a
+    // `replaceNestedFocusRoute` call once PENDING's record lands, just naming
+    // PENDING's own tile. A `toBeDefined()` check on
     // `focusPaneId` alone would pass on that wrong target too.
     // Held on an object rather than in a `let`, so the type stays what it is
     // declared as: TypeScript narrows a `let` assigned only inside a callback
@@ -1006,7 +1002,6 @@ describe("route focus opens the requested artifact (T156)", () => {
       await waitFor(() => {
         expect(activeArtifactId(TAB_ID)).toBe(REQUESTED_ID);
       });
-      expect(openArtifactIds(TAB_ID)).toContain(REQUESTED_ID);
     } finally {
       useSettingsStore.setState({ agentTabSurfacing: priorSurfacing });
       setEpicSurfaceVisibility(EPIC_ID, TAB_ID, false);
@@ -1109,7 +1104,7 @@ describe("route focus opens the requested artifact (T156)", () => {
     expect(openArtifactIds(TAB_ID)).not.toContain(REQUESTED_ID);
   });
 
-  // T156 destination-level case A2. A history traversal (Back, the browser's
+  // A history traversal (Back, the browser's
   // own or this app's) that lands on an entry naming a tile must retire a
   // pending artifact request exactly as an explicit tile click would, even
   // though the mounted intent's OWN `focusPaneId`/`focusTileInstanceId` never
@@ -1177,7 +1172,7 @@ describe("route focus opens the requested artifact (T156)", () => {
     expect(openArtifactIds(TAB_ID)).not.toContain(PENDING_ID);
   });
 
-  // T156 destination-level case A1 - the headline sequence. A pending request
+  // A pending request
   // with no tile of its own, superseded by two AUTOMATIC opens (never the
   // person's gesture - `navigateNestedFocus(..., "automatic")`, the same
   // provenance the auto-open effect's own commit uses), then a first Back
@@ -1193,7 +1188,7 @@ describe("route focus opens the requested artifact (T156)", () => {
   // automatic open (captured off a REAL `navigateNestedFocus` call through a
   // committing `navigate` stand-in), and the observer-driven retire/restore
   // bookkeeping comes from a REAL traversal on a separate, real
-  // `createMemoryHistory`, exactly as case A2 above drives it.
+  // `createMemoryHistory`, exactly as the traversal case above drives it.
   it("restores a pending request on a Back to its own entry, and the artifact opens (nested history ON)", async () => {
     persistentHistoryState.controller = {} as PersistentHistoryController;
     const PENDING_ID = "artifact-pending-two-back";

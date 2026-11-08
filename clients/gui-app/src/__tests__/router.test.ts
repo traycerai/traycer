@@ -12,7 +12,7 @@ describe("createAppRouter", () => {
     expect(router.state.location.pathname).toBe("/epics/epic-a");
   });
 
-  // T156: pins that `createAppRouter` actually wires
+  // Pins that `createAppRouter` actually wires
   // `observeNestedFocusTraversals` onto the live `router.history`, rather than
   // asserting the source merely contains the call. `createAppRouter` is cheap
   // to construct directly (as the case above already does, with no

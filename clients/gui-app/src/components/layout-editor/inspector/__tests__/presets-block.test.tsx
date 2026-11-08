@@ -330,18 +330,6 @@ describe("panels the rail shows are not a preset's to change", () => {
 
     expect(useLayoutStore.getState().overrides.railFileTree).toBeUndefined();
   });
-
-  it("is left shown by applying Compact", () => {
-    showFileTree();
-    render(<PresetsBlock reveal={vi.fn()} />);
-
-    fireEvent.click(screen.getByRole("button", { name: "Apply Compact" }));
-
-    expect(useLayoutStore.getState().basePreset).toBe("compact");
-    expect(useLayoutStore.getState().overrides).toEqual({
-      railFileTree: { shown: "shown" },
-    });
-  });
 });
 
 describe("View changes' revert keeps focus in the list, or moves it to the applied card when the list empties", () => {

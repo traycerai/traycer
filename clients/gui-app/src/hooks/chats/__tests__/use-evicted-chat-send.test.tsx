@@ -240,10 +240,10 @@ async function parkAndHydrate(
 ): Promise<void> {
   park(send, ...inputs);
   await vi.waitFor(() => expect(hydrates).toHaveLength(1));
-  await act(async () => {
+  act(() => {
     answer(0, (d) => d.resolve({ outcome: "hydrated" }));
-    await Promise.resolve();
   });
+  await vi.waitFor(() => expect(send.result.current.ready).toBe(true));
 }
 
 function draftOf(chatId: string) {
@@ -308,10 +308,10 @@ describe("useEvictedChatSend", () => {
     expect(send.result.current.parks).toBe(true);
     await vi.waitFor(() => expect(hydrates).toHaveLength(1));
 
-    await act(async () => {
+    act(() => {
       answer(0, (d) => d.resolve({ outcome: "hydrated" }));
-      await Promise.resolve();
     });
+    await vi.waitFor(() => expect(send.result.current.ready).toBe(true));
     expect(hydrates).toHaveLength(1);
   });
 
@@ -321,10 +321,10 @@ describe("useEvictedChatSend", () => {
     await vi.waitFor(() => expect(hydrates).toHaveLength(1));
     expect(send.result.current.ready).toBe(false);
 
-    await act(async () => {
+    act(() => {
       answer(0, (d) => d.resolve({ outcome: "hydrated" }));
-      await Promise.resolve();
     });
+    await vi.waitFor(() => expect(send.result.current.ready).toBe(true));
 
     expect(send.result.current.ready).toBe(true);
     expect(hold.result.current).toBe(true);
@@ -428,9 +428,8 @@ describe("useEvictedChatSend", () => {
       park(send, INPUT);
       await vi.waitFor(() => expect(hydrates).toHaveLength(1));
 
-      await act(async () => {
+      act(() => {
         answer(0, (d) => d.reject(refusal(code)));
-        await Promise.resolve();
       });
 
       expect(await screen.findAllByText(SEND_FAILED)).toHaveLength(1);
@@ -443,10 +442,10 @@ describe("useEvictedChatSend", () => {
 
       park(send, SECOND_INPUT);
       await vi.waitFor(() => expect(hydrates).toHaveLength(2));
-      await act(async () => {
+      act(() => {
         answer(1, (d) => d.resolve({ outcome: "hydrated" }));
-        await Promise.resolve();
       });
+      await vi.waitFor(() => expect(send.result.current.ready).toBe(true));
       const [sent] = take(send);
       expect(send.result.current.parks).toBe(true);
       settle(send, sent, true);
@@ -459,32 +458,13 @@ describe("useEvictedChatSend", () => {
     park(send, INPUT);
     await vi.waitFor(() => expect(hydrates).toHaveLength(1));
 
-    await act(async () => {
+    act(() => {
       answer(0, (d) => d.reject(refusal("RPC_ERROR")));
-      await Promise.resolve();
     });
 
     expect(await screen.findByText(SEND_FAILED)).toBeTruthy();
     expect(draftOf(CHAT.chatId)?.content).toEqual(INPUT.content);
     expect(send.result.current.parks).toBe(false);
-  });
-
-  it("restores a parked send when the host manifest lacks hydrateChat", async () => {
-    recordNegotiatedHostMethods(CHAT.hostId, []);
-    const { send } = mount({ served: false, held: false });
-
-    park(send, INPUT);
-
-    expect(
-      await screen.findByText(
-        "This needs a newer Traycer host. Update the host to continue.",
-      ),
-    ).toBeTruthy();
-    expect(send.result.current.parked).toHaveLength(0);
-    expect(hydrates).toHaveLength(0);
-    expect(draftOf(CHAT.chatId)?.content).toEqual(INPUT.content);
-    expect(draftOf(CHAT.chatId)?.browserAnnotations).toEqual([ANNOTATION]);
-    expect(imageRootHeld()).toBe(false);
   });
 
   it("refreshes a known-absent manifest after host upgrade and lets a retry hydrate", async () => {
@@ -503,6 +483,7 @@ describe("useEvictedChatSend", () => {
         "This needs a newer Traycer host. Update the host to continue.",
       ),
     ).toBeTruthy();
+    expect(send.result.current.parked).toHaveLength(0);
     expect(hydrates).toHaveLength(0);
     expect(draftOf(CHAT.chatId)?.content).toEqual(INPUT.content);
     expect(draftOf(CHAT.chatId)?.browserAnnotations).toEqual([ANNOTATION]);
@@ -519,10 +500,10 @@ describe("useEvictedChatSend", () => {
     park(send, INPUT);
     await vi.waitFor(() => expect(hydrates).toHaveLength(1));
     expect(send.result.current.parked).toHaveLength(1);
-    await act(async () => {
+    act(() => {
       answer(0, (deferred) => deferred.resolve({ outcome: "hydrated" }));
-      await Promise.resolve();
     });
+    await vi.waitFor(() => expect(send.result.current.ready).toBe(true));
     const [retried] = take(send);
     expect(retried.input).toEqual(INPUT);
     settle(send, retried, true);

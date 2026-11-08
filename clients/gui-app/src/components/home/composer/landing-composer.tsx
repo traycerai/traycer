@@ -508,12 +508,12 @@ export function LandingComposer(props: LandingComposerProps) {
       state.drafts.find((draft) => draft.id === draftId)?.workspace ?? null
     );
   });
+  const runWorkingDirectory = useLandingRunWorkingDirectory(draftId);
   // Rate-limit switch prompt for the landing composer's own toolbar
   // selection, scoped to this composer's RESOLVED host (landing has no tab of
   // its own) - the same shared hook the chat composer uses, mirroring its
   // wiring in `chat-composer.tsx`. Purely informational: it never blocks
   // epic creation.
-  const runWorkingDirectory = useLandingRunWorkingDirectory(draftId);
   const rateLimitPrompt = useProfileRateLimitSwitchPrompt({
     harnessId,
     profileId,

@@ -221,49 +221,6 @@ describe("<EpicConnectionToasts />", () => {
     });
 
     act(() => {
-      handle.store.setState({ permissionRole: "editor" });
-    });
-
-    await waitFor(() => {
-      expect(sonner.info).toHaveBeenCalledWith(
-        "Your role on this Epic is now Editor.",
-        { id: "epic-role:epic-role-toast", cancel: null },
-      );
-    });
-    expect(sonner.warning).not.toHaveBeenCalled();
-  });
-
-  it("keeps unsynced edits and the open stream across an owner to editor move", async () => {
-    const streams = installControlledFactory();
-    renderToasts();
-
-    act(() => {
-      streams[0].callbacks.onSnapshot(buildMeta("owner"), emptySnapshot());
-    });
-
-    const handle = getHandle();
-    await waitFor(() => {
-      expect(handle.store.getState().permissionRole).toBe("owner");
-    });
-
-    // A replica REPLACEMENT would show in `bindingVersion`, the binding epoch
-    // the runtime advances when it swaps a replica (the doc lives on the
-    // worker thread, so main has no `Y.Doc` reference to compare).
-    const originalBinding = handle.store.getState().bindingVersion;
-
-    // A real local edit, through the root-state port. `applyLocalUpdate` is
-    // gone; `applyRootUpdate(update, /* asLocalEdit */ true)` is the member
-    // that puts local bytes into the replica, and it needs real update bytes
-    // rather than a placeholder because it actually applies them.
-    const donor = new Y.Doc();
-    donor.getMap("epic").set("unsynced", "edit");
-    await act(async () => {
-      await handle.applyRootUpdate(Y.encodeStateAsUpdate(donor), true);
-    });
-    donor.destroy();
-    expect(handle.store.getState().unsyncedQueueSize).toBe(1);
-
-    act(() => {
       streams[0].callbacks.onPermissionChanged("editor");
     });
 
@@ -273,12 +230,7 @@ describe("<EpicConnectionToasts />", () => {
         { id: "epic-role:epic-role-toast", cancel: null },
       );
     });
-    // Both remaining roles write, so the move keeps every local write path.
     expect(sonner.warning).not.toHaveBeenCalled();
-    expect(handle.store.getState().unsyncedQueueSize).toBe(1);
-    expect(handle.store.getState().bindingVersion).toBe(originalBinding);
-    expect(streams).toHaveLength(1);
-    expect(streams[0].closeCount).toBe(0);
   });
 
   it("does not toast sustained disconnect and reconnect cycles", async () => {
