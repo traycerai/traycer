@@ -228,6 +228,10 @@ import {
   readChatAttachmentResponseSchema,
 } from "@traycer/protocol/host/epic/chat-attachment";
 import {
+  readChatFileRequestSchema,
+  readChatFileResponseSchema,
+} from "@traycer/protocol/host/epic/chat-file";
+import {
   artifactVersionsGetBlobRequestSchema,
   artifactVersionsGetBlobResponseSchema,
   artifactVersionsListRequestSchema,
@@ -2069,6 +2073,17 @@ export const epicReadChatAttachmentV11 = defineRpcContract({
   schemaVersion: { major: 1, minor: 1 } as const,
   requestSchema: readChatAttachmentRequestSchema,
   responseSchema: readChatAttachmentResponseSchema,
+});
+
+// One chat FILE attachment's bytes, with the media type and name its author
+// declared. A sibling of the image read rather than a minor of it, because
+// that read's media type is sniffed and it refuses non-images; see
+// `chat-file.ts`.
+export const epicReadChatFileV10 = defineRpcContract({
+  method: "epic.readChatFile",
+  schemaVersion: { major: 1, minor: 0 } as const,
+  requestSchema: readChatFileRequestSchema,
+  responseSchema: readChatFileResponseSchema,
 });
 
 // Host-local artifact history. Every method is optional/non-floor: a client

@@ -1585,6 +1585,9 @@ export const HOST_METHOD_POLL_TABLE = {
   // cache's own retry ladder (`use-image-blob-url.ts`), not by a cadence. An
   // interval here would re-fetch megabytes to re-learn a constant.
   "epic.readChatAttachment": { ...LATEST_SCHEDULING, poll: null },
+  // A file attachment's bytes, fetched when its chip is opened. Content-addressed
+  // like the image read, so nothing polls it.
+  "epic.readChatFile": { ...LATEST_SCHEDULING, poll: null },
   // Like the chat attachment read, artifact attachment bytes are addressed by
   // their content hash and the image cache owns retry after a transient miss.
   // Polling this unary method would only re-fetch immutable bytes.
