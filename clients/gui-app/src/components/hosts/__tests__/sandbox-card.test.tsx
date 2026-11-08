@@ -30,7 +30,10 @@ import {
   refusal,
   type FakeSandboxBinding,
 } from "@/hooks/sandboxes/__tests__/sandbox-binding-fixture";
-import { sandboxSummaryFixture } from "@/hooks/sandboxes/__tests__/sandbox-fixtures";
+import {
+  sandboxOperationFixture,
+  sandboxSummaryFixture,
+} from "@/hooks/sandboxes/__tests__/sandbox-fixtures";
 import { useAuthStore } from "@/stores/auth/auth-store";
 import { SANDBOX_VERB_FETCH_TIMEOUT_MS } from "@traycer-clients/shared/host-client/sandbox-control";
 
@@ -674,6 +677,105 @@ function resolvedSandbox(input: {
   }
   return sandbox;
 }
+
+describe("<SandboxCard /> session notice", () => {
+  const SESSION_LOST_ON_STOP =
+    "Your paused session was lost when your sandbox stopped.";
+
+  function withDetail(
+    state: HostScopeSandbox["state"],
+    frozen: boolean,
+    detail: string | null,
+    overrides: Parameters<typeof sandboxSummaryFixture>[0],
+  ): HostScopeSandbox {
+    if (state === null) throw new Error("a session notice needs a state");
+    return sandboxOf(state, frozen, {
+      operation: sandboxOperationFixture({
+        fromState: "suspended",
+        state,
+        outcomeDetail: detail,
+      }),
+      ...overrides,
+    });
+  }
+
+  /** The day an instant falls on, spelled as a person reads it in their zone. */
+  function dayOf(at: number): string {
+    return new Date(at).toLocaleDateString(undefined, {
+      month: "short",
+      day: "numeric",
+      year: "numeric",
+    });
+  }
+
+  it.each([
+    ["starting", "Starting"],
+    ["resuming", "Resuming"],
+  ] as const)(
+    "says the sandbox is restarting beside its own %s badge after a wake that never answered",
+    (state, badge) => {
+      renderCard(withDetail(state, false, "wake-retry", {}));
+
+      expect(screen.getByTestId("sandbox-card-state").textContent).toBe(badge);
+      expect(
+        screen.getByTestId("sandbox-card-session-notice").textContent,
+      ).toBe("Restarting your sandbox");
+    },
+  );
+
+  it("tells an awake sandbox its paused session was lost in the restart and its files are unchanged", () => {
+    renderCard(withDetail("awake", false, "wake-retried", {}));
+
+    expect(screen.getByTestId("sandbox-card-session-notice").textContent).toBe(
+      "Your paused session was lost when your sandbox restarted. Your files are unchanged.",
+    );
+  });
+
+  it.each(["suspended-session-lost", "wake-retry-failed"])(
+    "tells a stopped sandbox whose last operation ended %s its paused session was lost, without repeating what the state line says of its files",
+    (detail) => {
+      renderCard(withDetail("stopped", false, detail, {}));
+
+      expect(
+        screen.getByTestId("sandbox-card-session-notice").textContent,
+      ).toBe(SESSION_LOST_ON_STOP);
+      expect(
+        screen.getByTestId("sandbox-card-state-line").textContent,
+      ).toContain("Disk kept, processes ended");
+    },
+  );
+
+  it("adds that the files are unchanged on a frozen stopped sandbox, whose state line says nothing of them", () => {
+    renderCard(
+      withDetail("stopped", true, "suspended-session-lost", {
+        frozenAt: new Date(2026, 9, 9, 12).getTime(),
+      }),
+    );
+
+    expect(screen.getByTestId("sandbox-card-session-notice").textContent).toBe(
+      `${SESSION_LOST_ON_STOP} Your files are unchanged.`,
+    );
+  });
+
+  it("names the day a suspended session will be lost when that is within a week", () => {
+    const endsAt = Date.now() + 3 * 24 * 60 * 60 * 1000;
+    renderCard(
+      withDetail("suspended", false, null, { suspendedSessionEndsAt: endsAt }),
+    );
+
+    expect(screen.getByTestId("sandbox-card-session-notice").textContent).toBe(
+      `Your paused session will be lost on ${dayOf(endsAt)}. Resume your sandbox before then to keep it.`,
+    );
+  });
+
+  it("says an expired paused session is being stopped with its sandbox", () => {
+    renderCard(withDetail("stopping", false, "suspended-session-lost", {}));
+
+    expect(screen.getByTestId("sandbox-card-session-notice").textContent).toBe(
+      "Your paused session has expired. Your sandbox is being stopped.",
+    );
+  });
+});
 
 describe("<SandboxCard /> facts as the scope resolves them", () => {
   it("shows the host list's thaw, not the stale summary's frozen flag", () => {

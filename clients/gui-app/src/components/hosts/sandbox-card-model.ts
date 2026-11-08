@@ -530,3 +530,46 @@ export function sandboxTileOverlay(
       return null;
   }
 }
+
+export function sandboxSessionNotice(
+  summary: SandboxSummary,
+  now: number,
+  filesOutcomeStated: boolean,
+): string | null {
+  const detail = summary.operation?.outcomeDetail ?? "";
+  const converting =
+    "Your paused session has expired. Your sandbox is being stopped.";
+  switch (summary.state) {
+    case "starting":
+    case "resuming":
+      if (detail === "wake-retry") return "Restarting your sandbox";
+      return detail === "suspended-session-expiry" ? converting : null;
+    case "stopping":
+      return detail === "suspended-session-lost" ? converting : null;
+    case "awake":
+      return detail === "wake-retried"
+        ? "Your paused session was lost when your sandbox restarted. Your files are unchanged."
+        : null;
+    case "stopped":
+      if (
+        detail !== "suspended-session-lost" &&
+        !detail.startsWith("wake-retry")
+      )
+        return null;
+      return filesOutcomeStated
+        ? "Your paused session was lost when your sandbox stopped."
+        : "Your paused session was lost when your sandbox stopped. Your files are unchanged.";
+    case "suspended":
+      return suspendedSessionWarning(summary.suspendedSessionEndsAt, now);
+    default:
+      return null;
+  }
+}
+
+function suspendedSessionWarning(
+  at: number | null | undefined,
+  now: number,
+): string | null {
+  if (at === undefined || at === null || at - now > 7 * 86_400_000) return null;
+  return `Your paused session will be lost on ${formatSandboxDay(at)}. Resume your sandbox before then to keep it.`;
+}

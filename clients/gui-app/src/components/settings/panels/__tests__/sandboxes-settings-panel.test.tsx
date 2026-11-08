@@ -59,6 +59,7 @@ import { useSurfaceHostSelectionStore } from "@/stores/host/surface-host-selecti
 import {
   agentSessionFixture,
   liveSessionReport,
+  sandboxOperationFixture,
   sandboxSummaryFixture,
   terminalSessionFixture,
 } from "@/hooks/sandboxes/__tests__/sandbox-fixtures";
@@ -1204,6 +1205,55 @@ describe("<SandboxesSettingsPanel />", () => {
     expect(
       within(rowOf("frozen")).getByTestId("sandboxes-row-clock").textContent,
     ).toContain("destroyed on");
+  });
+
+  it("says a row is restarting beside its own Starting or Resuming badge after a wake that never answered", () => {
+    const retrying = (id: string, state: "starting" | "resuming") =>
+      row(id, {
+        state,
+        operation: sandboxOperationFixture({
+          fromState: state === "starting" ? "stopped" : "suspended",
+          state,
+          outcomeDetail: "wake-retry",
+        }),
+      });
+    renderPanel([
+      retrying("starting-1", "starting"),
+      retrying("resuming-1", "resuming"),
+    ]);
+
+    for (const [id, badge] of [
+      ["starting-1", "Starting"],
+      ["resuming-1", "Resuming"],
+    ]) {
+      expect(
+        within(rowOf(id)).getByTestId("sandboxes-row-state").textContent,
+      ).toBe(badge);
+      expect(
+        within(rowOf(id)).getByTestId("sandboxes-row-session-notice")
+          .textContent,
+      ).toBe("Restarting your sandbox");
+    }
+  });
+
+  it("tells a stopped row its paused session was lost and that its files are unchanged, since the list says nothing else of them", () => {
+    renderPanel([
+      row("stopped-lost", {
+        state: "stopped",
+        operation: sandboxOperationFixture({
+          fromState: "suspended",
+          state: "stopped",
+          outcomeDetail: "suspended-session-lost",
+        }),
+      }),
+    ]);
+
+    expect(
+      within(rowOf("stopped-lost")).getByTestId("sandboxes-row-session-notice")
+        .textContent,
+    ).toBe(
+      "Your paused session was lost when your sandbox stopped. Your files are unchanged.",
+    );
   });
 
   it("narrows the list by the search and by the state filter, with a count badge", () => {
