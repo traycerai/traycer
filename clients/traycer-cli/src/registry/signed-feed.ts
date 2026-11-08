@@ -12,7 +12,7 @@ import { CLI_ERROR_CODES, cliError } from "../runner/errors";
 import { cliSharedHomeDir, ensurePrivateDir } from "../store/paths";
 import { fetchTextFromOrigins, type FetchOptions } from "./fetch-resource";
 import { verifyMinisignPayload } from "./minisign";
-import { loadTrustedKeys, type ParsedMinisignPublicKey } from "./trusted-keys";
+import type { ParsedMinisignPublicKey, TrustedKeySet } from "./trusted-keys";
 
 interface FeedPolicy {
   readonly policyRevision: number;
@@ -21,6 +21,7 @@ interface FeedPolicy {
 
 export interface ReadSignedFeedOptions extends FetchOptions {
   readonly feed: ReleaseFeed;
+  readonly trustedKeySet: TrustedKeySet;
   readonly validatePayload?: (
     payload: Record<string, unknown>,
     source: string,
@@ -34,7 +35,7 @@ export interface ReadSignedFeedOptions extends FetchOptions {
 export async function readSignedFeed(
   opts: ReadSignedFeedOptions,
 ): Promise<Record<string, unknown>> {
-  const trusted = await loadTrustedKeys();
+  const trusted = opts.trustedKeySet;
   const target = releaseFeedTarget();
   const floorText =
     opts.feed === "host" ? config.hostFeedFloor : config.cliFeedFloor;
@@ -91,7 +92,12 @@ function verifyEnvelope(
     throw feedError("FEED_INVALID_ENVELOPE");
   }
   if (
-    !isObject(envelope) ||
+    envelope === null ||
+    typeof envelope !== "object" ||
+    Array.isArray(envelope) ||
+    !("payload" in envelope) ||
+    !("signature" in envelope) ||
+    !("keyId" in envelope) ||
     typeof envelope.payload !== "string" ||
     typeof envelope.signature !== "string" ||
     typeof envelope.keyId !== "string" ||
@@ -118,8 +124,9 @@ function verifyEnvelope(
   } catch {
     throw feedError("FEED_INVALID_PAYLOAD");
   }
-  if (!isObject(payload)) throw feedError("FEED_INVALID_PAYLOAD");
-  return payload;
+  if (payload === null || typeof payload !== "object" || Array.isArray(payload))
+    throw feedError("FEED_INVALID_PAYLOAD");
+  return payload as Record<string, unknown>;
 }
 
 function parsePolicy(value: Record<string, unknown>): FeedPolicy {
@@ -159,8 +166,9 @@ async function advanceWatermark(
       let current: FeedPolicy | null = null;
       try {
         const raw: unknown = JSON.parse(await readFile(path, "utf8"));
-        if (!isObject(raw)) throw feedError("FEED_WATERMARK_INVALID");
-        current = parsePolicy(raw);
+        if (raw === null || typeof raw !== "object" || Array.isArray(raw))
+          throw feedError("FEED_WATERMARK_INVALID");
+        current = parsePolicy(raw as Record<string, unknown>);
       } catch (cause) {
         if (
           !(
@@ -205,10 +213,6 @@ async function advanceWatermark(
     },
   );
   if (outcome.kind === "busy") throw feedError("FEED_WATERMARK_BUSY");
-}
-
-function isObject(value: unknown): value is Record<string, unknown> {
-  return value !== null && typeof value === "object" && !Array.isArray(value);
 }
 
 function feedError(reason: string): Error {

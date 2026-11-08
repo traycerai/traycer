@@ -154,6 +154,7 @@ export async function createRegistryClient(
       });
       const parsedJson = await readSignedFeed({
         feed: "host",
+        trustedKeySet,
         validatePayload: (payload, url) => {
           parseHostVersionsManifestWithWarnings(payload, url);
         },
@@ -399,15 +400,16 @@ export async function createRegistryClient(
             onHeartbeat: (heartbeat) =>
               emitRegistryHeartbeat(opts.onProgress, "signature", heartbeat),
           },
-          async (signatureText, signatureSourceLabel) => verifyLocalAsset({
-            archivePath,
-            sizeBytes: asset.sizeBytes,
-            sha256: asset.sha256,
-            publicKeyId: asset.publicKeyId,
-            signatureText,
-            signatureSourceLabel,
-            trustedKeys: trustedKeySet.keys,
-          }),
+          async (signatureText, signatureSourceLabel) =>
+            verifyLocalAsset({
+              archivePath,
+              sizeBytes: asset.sizeBytes,
+              sha256: asset.sha256,
+              publicKeyId: asset.publicKeyId,
+              signatureText,
+              signatureSourceLabel,
+              trustedKeys: trustedKeySet.keys,
+            }),
           opts.transport === null
             ? null
             : (url, options) =>
@@ -512,6 +514,7 @@ export function createRegistryYankLookup(
     try {
       const parsed = await readSignedFeed({
         feed: "host",
+        trustedKeySet: await loadTrustedKeys(),
         urls: manifestUrlInfo.urls ?? [manifestUrl],
         fetchDocument: null,
         validatePayload: (payload, url) => {

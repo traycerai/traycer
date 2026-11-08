@@ -2,6 +2,7 @@ import { isValidCompatibilityEpoch } from "@traycer/protocol/framework/index";
 import { CLI_ERROR_CODES, cliError } from "../runner/errors";
 import { signedFeedUrls } from "../config";
 import { readSignedFeed } from "./signed-feed";
+import { loadTrustedKeys } from "./trusted-keys";
 import { parsePlatformAsset } from "./manifest-schema";
 import { currentHostPlatformKey } from "./platform-key";
 import type { HostPlatformAsset, HostPlatformKey } from "./types";
@@ -46,6 +47,7 @@ async function fetchCliVersionsWithSignal(
   const urls = signedFeedUrls("cli");
   const parsed = await readSignedFeed({
     feed: "cli",
+    trustedKeySet: await loadTrustedKeys(),
     urls,
     fetchDocument: null,
     signal,
