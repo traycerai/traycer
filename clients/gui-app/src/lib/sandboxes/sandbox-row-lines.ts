@@ -143,8 +143,13 @@ const PUBLIC_STATE: Record<HostSandboxState, SandboxPublicState> = {
   failed: "failed",
 };
 
-export const SANDBOX_PUBLIC_STATE_LABEL: Record<SandboxPublicState, string> = {
+export const SANDBOX_PUBLIC_STATE_LABEL: Record<
+  SandboxPublicState | "starting" | "resuming",
+  string
+> = {
   creating: "Creating",
+  starting: "Starting",
+  resuming: "Resuming",
   awake: "Awake",
   suspended: "Suspended",
   stopped: "Stopped",

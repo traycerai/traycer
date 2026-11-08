@@ -1,3 +1,4 @@
+import { SandboxSessionNotice } from "@/components/hosts/sandbox-session-notice";
 import { useState, type ReactNode } from "react";
 import { toast } from "sonner";
 import type { HostSandboxState } from "@traycer/protocol/host/host-status";
@@ -167,6 +168,13 @@ export function SandboxCard(props: {
               viewerUserId={viewerUserId}
             />
             <SandboxPodRoom summary={summary} teamOwned={teamOwned} />
+            <SandboxSessionNotice
+              summary={summary}
+              filesOutcomeStated={
+                summary.state === "stopped" && !summary.frozen
+              }
+              testId="sandbox-card-session-notice"
+            />
             <SandboxWithdrawalNotice summary={summary} />
             <SandboxGuestConfigFailure summary={summary} />
             <SandboxSecretsSection

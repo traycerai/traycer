@@ -1,3 +1,4 @@
+import { SandboxSessionNotice } from "@/components/hosts/sandbox-session-notice";
 import { useMemo, useState, type ReactNode } from "react";
 import { useNavigate } from "@tanstack/react-router";
 import type { UseQueryResult } from "@tanstack/react-query";
@@ -962,12 +963,7 @@ function SandboxListRow(props: {
             >
               {summary.displayName}
             </span>
-            <Badge
-              variant={STATE_BADGE[state]}
-              data-testid="sandboxes-row-state"
-            >
-              {SANDBOX_PUBLIC_STATE_LABEL[state]}
-            </Badge>
+            <SandboxRowStateBadge summary={summary} state={state} />
             <Badge variant="muted">
               {sandboxStartedByLabel(summary, viewerUserId)}
             </Badge>
@@ -997,6 +993,11 @@ function SandboxListRow(props: {
               })}
             </span>
           </p>
+          <SandboxSessionNotice
+            summary={summary}
+            filesOutcomeStated={false}
+            testId="sandboxes-row-session-notice"
+          />
           <SandboxRowWithdrawal summary={summary} />
           {awake && (settingsFailed || summary.guestConfigured === false) ? (
             <div className="text-ui-xs text-muted-foreground">
@@ -1081,5 +1082,18 @@ function SandboxRowSessions(props: {
         />
       ))}
     </p>
+  );
+}
+
+function SandboxRowStateBadge(props: {
+  readonly summary: SandboxSummary;
+  readonly state: SandboxPublicState;
+}): ReactNode {
+  const raw = props.summary.state;
+  const word = raw === "starting" || raw === "resuming" ? raw : props.state;
+  return (
+    <Badge variant={STATE_BADGE[props.state]} data-testid="sandboxes-row-state">
+      {SANDBOX_PUBLIC_STATE_LABEL[word]}
+    </Badge>
   );
 }
