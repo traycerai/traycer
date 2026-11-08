@@ -15,6 +15,7 @@ import { EpicDurabilityRemedies } from "@/components/epic-canvas/panels/epic-dur
 import { EpicWriteCommandsEntryPoint } from "@/components/epic-canvas/panels/epic-write-commands-entry-point";
 import { EpicUsageEntryPoint } from "@/components/epic-canvas/panels/epic-usage-entry-point";
 import { EpicSweepAction } from "@/components/epic-canvas/panels/epic-sweep-action";
+import { EpicStatusRow } from "@/components/epic-canvas/panels/epic-status-row";
 import { EpicConnectionToasts } from "@/components/epic-canvas/panels/epic-connection-toasts";
 import { CanvasSkeleton } from "@/components/epic-canvas/skeletons/canvas-skeleton";
 import {
@@ -228,12 +229,7 @@ interface EpicShellStatusRowProps {
  */
 function EpicShellStatusRow(props: EpicShellStatusRowProps) {
   return (
-    <output
-      data-testid="epic-shell-status-row"
-      // The phone single-tile design has no status row; the global mobile
-      // header carries app-wide status instead. Desktop (>=768px) is unchanged.
-      className="flex h-10 shrink-0 items-center justify-end gap-1.5 px-3 text-foreground max-md:hidden"
-    >
+    <EpicStatusRow>
       {props.sessionReady ? (
         <EpicShellSessionStatus
           epicId={props.epicId}
@@ -249,7 +245,7 @@ function EpicShellStatusRow(props: EpicShellStatusRowProps) {
           <EpicSweepAction epicId={props.epicId} tabId={props.tabId} />
         </>
       ) : null}
-    </output>
+    </EpicStatusRow>
   );
 }
 

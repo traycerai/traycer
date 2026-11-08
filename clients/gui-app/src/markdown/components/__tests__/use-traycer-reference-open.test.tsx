@@ -9,6 +9,7 @@ import {
   MANUAL_TILE_OPEN,
   openTileWithNavigation,
 } from "@/lib/canvas/tile-open/open-tile";
+import type { NestedFocusProvenance } from "@/lib/epic-nested-focus-navigation";
 import type { NestedFocusTarget } from "@/lib/epic-nested-focus-route";
 
 const testState = vi.hoisted(() => ({
@@ -19,7 +20,12 @@ const testState = vi.hoisted(() => ({
     name: "Spec One",
     hostId: "host-1",
   } satisfies EpicNodeRef,
-  openTile: vi.fn((_intent: TileOpenIntent): NestedFocusTarget | null => null),
+  openTile: vi.fn(
+    (
+      _intent: TileOpenIntent,
+      _provenance: NestedFocusProvenance,
+    ): NestedFocusTarget | null => null,
+  ),
   openEpicHandle: {
     epicId: "epic-1",
     store: {
@@ -55,11 +61,16 @@ describe("useTraycerReferenceOpenHandler", () => {
     // The spy runs the REAL seam, so the store still transitions and the
     // recorded intent is the thing under test.
     testState.openTile.mockImplementation(
-      (intent: TileOpenIntent): NestedFocusTarget | null =>
+      (
+        intent: TileOpenIntent,
+        provenance: NestedFocusProvenance,
+      ): NestedFocusTarget | null =>
         openTileWithNavigation(
           intent,
           (_epicId, _tabId, prepare) => prepare(),
-          MANUAL_TILE_OPEN,
+          // Forwarded, never hardcoded: a double that supplied its own claim
+          // would pass whatever the caller got wrong.
+          { ...MANUAL_TILE_OPEN, provenance },
         ),
     );
     testState.openTile.mockClear();
@@ -81,15 +92,18 @@ describe("useTraycerReferenceOpenHandler", () => {
     // A click on a reference is a SINGLE gesture on the epic, de-duped, with
     // the click's modifier triple attached: preview-vs-permanent is then the
     // resolver's call, not this hook's.
-    expect(testState.openTile).toHaveBeenCalledWith({
-      node: testState.testRef,
-      target: { epicId: "epic-1" },
-      gesture: "single",
-      modifiers: { shift: false, alt: false, middle: false },
-      placement: null,
-      dedupe: true,
-      source: "direct_ui",
-    });
+    expect(testState.openTile).toHaveBeenCalledWith(
+      {
+        node: testState.testRef,
+        target: { epicId: "epic-1" },
+        gesture: "single",
+        modifiers: { shift: false, alt: false, middle: false },
+        placement: null,
+        dedupe: true,
+        source: "direct_ui",
+      },
+      "user",
+    );
     const canvas = useEpicCanvasStore.getState().canvasByTabId[viewTabId];
     if (canvas?.root?.kind !== "pane") throw new Error("expected pane");
     const activeTile =

@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it } from "vitest";
 import { cleanup, render } from "@testing-library/react";
+import { HOST_FROZEN_WORD } from "@traycer/protocol/host/host-status";
 import { hostScopeOptionFixture } from "@/components/settings/host-scope/host-scope-fixture";
 import { HostOptionRow } from "@/components/settings/host-scope/host-option-row";
 import { AVAILABLE_HOST_ROW_SURFACE_STATE } from "@/components/settings/host-scope/host-option-model";
@@ -58,7 +59,6 @@ describe("HostOptionRow — per-host update badge isolation (Ticket 06 subject F
           surfaceState={AVAILABLE_HOST_ROW_SURFACE_STATE}
           updateView={viewA}
           nameRef={null}
-          nameWraps={false}
           environmentLabel={null}
         />
         <HostOptionRow
@@ -69,7 +69,6 @@ describe("HostOptionRow — per-host update badge isolation (Ticket 06 subject F
           surfaceState={AVAILABLE_HOST_ROW_SURFACE_STATE}
           updateView={viewB}
           nameRef={null}
-          nameWraps={false}
           environmentLabel={null}
         />
       </>,
@@ -97,7 +96,6 @@ describe("HostOptionRow — per-host update badge isolation (Ticket 06 subject F
           surfaceState={AVAILABLE_HOST_ROW_SURFACE_STATE}
           updateView={fleetView({ kind: "idle" })}
           nameRef={null}
-          nameWraps={false}
           environmentLabel={null}
         />
         <HostOptionRow
@@ -108,7 +106,6 @@ describe("HostOptionRow — per-host update badge isolation (Ticket 06 subject F
           surfaceState={AVAILABLE_HOST_ROW_SURFACE_STATE}
           updateView={fleetView({ kind: "failed" })}
           nameRef={null}
-          nameWraps={false}
           environmentLabel={null}
         />
       </>,
@@ -128,7 +125,6 @@ describe("HostOptionRow — per-host update badge isolation (Ticket 06 subject F
           surfaceState={AVAILABLE_HOST_ROW_SURFACE_STATE}
           updateView={fleetView({ kind: "failed" })}
           nameRef={null}
-          nameWraps={false}
           environmentLabel={null}
         />
         <HostOptionRow
@@ -139,7 +135,6 @@ describe("HostOptionRow — per-host update badge isolation (Ticket 06 subject F
           surfaceState={AVAILABLE_HOST_ROW_SURFACE_STATE}
           updateView={fleetView({ kind: "idle" })}
           nameRef={null}
-          nameWraps={false}
           environmentLabel={null}
         />
       </>,
@@ -161,7 +156,6 @@ describe("HostOptionRow — per-host update badge isolation (Ticket 06 subject F
         surfaceState={AVAILABLE_HOST_ROW_SURFACE_STATE}
         updateView={null}
         nameRef={null}
-        nameWraps={false}
         environmentLabel={null}
       />,
     );
@@ -182,7 +176,6 @@ describe("HostOptionRow — per-host update badge isolation (Ticket 06 subject F
           blockingSessionCount: 3,
         })}
         nameRef={null}
-        nameWraps={false}
         environmentLabel={null}
       />,
     );
@@ -212,7 +205,6 @@ describe("HostOptionRow — environment label (Tracy Bots)", () => {
         surfaceState={AVAILABLE_HOST_ROW_SURFACE_STATE}
         updateView={null}
         nameRef={null}
-        nameWraps={false}
         environmentLabel="acme"
       />,
     );
@@ -232,7 +224,6 @@ describe("HostOptionRow — environment label (Tracy Bots)", () => {
         surfaceState={AVAILABLE_HOST_ROW_SURFACE_STATE}
         updateView={null}
         nameRef={null}
-        nameWraps={false}
         environmentLabel={null}
       />,
     );
@@ -252,7 +243,6 @@ describe("HostOptionRow — environment label (Tracy Bots)", () => {
           surfaceState={AVAILABLE_HOST_ROW_SURFACE_STATE}
           updateView={null}
           nameRef={null}
-          nameWraps={false}
           environmentLabel="acme"
         />
         <HostOptionRow
@@ -263,7 +253,6 @@ describe("HostOptionRow — environment label (Tracy Bots)", () => {
           surfaceState={AVAILABLE_HOST_ROW_SURFACE_STATE}
           updateView={null}
           nameRef={null}
-          nameWraps={false}
           environmentLabel={null}
         />
       </>,
@@ -272,6 +261,72 @@ describe("HostOptionRow — environment label (Tracy Bots)", () => {
       "acme",
     );
     expect(queryByTestId("host-option-environment-host-b")).toBeNull();
+  });
+});
+
+describe("HostOptionRow — wrapping names and marks", () => {
+  afterEach(cleanup);
+
+  it("wraps the complete name and places a refusal below it even when the caller opts out of wrapping", () => {
+    const name = "A very long host name that must remain readable";
+    const host = hostScopeOptionFixture({
+      hostId: "host-long",
+      name,
+    });
+    const { getByText } = render(
+      <HostOptionRow
+        host={host}
+        picked={false}
+        active={false}
+        intent="pin"
+        surfaceState={{ kind: "refused", word: "needs update" }}
+        updateView={null}
+        nameRef={null}
+        environmentLabel={null}
+      />,
+    );
+
+    const title = getByText(name);
+    expect(title.classList.contains("whitespace-normal")).toBe(true);
+    expect(title.classList.contains("wrap-anywhere")).toBe(true);
+    const nameColumn = title.parentElement;
+    const marks = getByText("needs update");
+    expect(nameColumn?.contains(marks)).toBe(true);
+    expect(
+      title.compareDocumentPosition(marks) & Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy();
+  });
+});
+
+describe("HostOptionRow — frozen sandbox state", () => {
+  afterEach(cleanup);
+
+  it("shows Out of credits beside the sandbox's lifecycle word", () => {
+    const host = hostScopeOptionFixture({
+      hostId: "sandbox-host",
+      kind: "sandbox",
+      sandbox: {
+        state: "suspended",
+        frozen: true,
+        summary: null,
+        teamOwned: false,
+      },
+    });
+    const { getByText } = render(
+      <HostOptionRow
+        host={host}
+        picked={false}
+        active={false}
+        intent="view"
+        surfaceState={AVAILABLE_HOST_ROW_SURFACE_STATE}
+        updateView={null}
+        nameRef={null}
+        environmentLabel={null}
+      />,
+    );
+
+    expect(getByText("Suspended", { exact: true })).toBeTruthy();
+    expect(getByText(HOST_FROZEN_WORD, { exact: true })).toBeTruthy();
   });
 });
 
@@ -292,7 +347,6 @@ describe("HostOptionRow — terminal-run note", () => {
         surfaceState={AVAILABLE_HOST_ROW_SURFACE_STATE}
         updateView={UNKNOWN_FLEET_UPDATE_VIEW}
         nameRef={null}
-        nameWraps={false}
         environmentLabel={null}
       />,
     );

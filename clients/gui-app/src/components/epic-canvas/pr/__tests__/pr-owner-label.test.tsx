@@ -215,6 +215,7 @@ describe("PrOwnerBadges overflow", () => {
           type: "chat",
         }) as EpicCanvasTileRef,
       }),
+      "user",
     );
   });
 

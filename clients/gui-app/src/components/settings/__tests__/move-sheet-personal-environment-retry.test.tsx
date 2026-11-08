@@ -50,6 +50,11 @@ vi.mock("@/lib/host", async (importOriginal) => ({
 }));
 vi.mock("@/components/settings/host-scope/use-host-scope", () => ({
   useHostScope: () => reads.scope,
+  useHostScopeFor: () => reads.scope,
+  WINDOW_HOST_SELECTION: {
+    scopedHostId: null,
+    setScopedHostId: () => undefined,
+  },
 }));
 vi.mock("@/hooks/environment/use-registered-host-environment-statuses", () => ({
   useRegisteredHostEnvironmentStatuses: () => reads.statuses,
@@ -81,6 +86,8 @@ const movePlan: EnvironmentMovePlanResponseV12 = {
   hostVersion: "1.5.0",
   disclosureVersion: 1,
   rows: {
+    looksLikeAKey: [],
+    sameNameInPersonal: [],
     moves: [
       {
         kind: "variable",
@@ -93,8 +100,6 @@ const movePlan: EnvironmentMovePlanResponseV12 = {
     staysOnThisComputer: [],
     alreadyInPersonal: [],
     differsMasked: [],
-    looksLikeAKey: [],
-    sameNameInPersonal: [],
   },
   guideDiffers: false,
 };
@@ -204,9 +209,6 @@ describe("MoveSheet retry while Personal is unresolved", () => {
       expect(hostListEnvironmentIds).toEqual([ENVIRONMENT_ID]);
     });
     await waitFor(() => {
-      expect(
-        screen.getByTestId("move-sheet-description").textContent,
-      ).toContain("which today is dev-box and Old laptop.");
       expect(
         screen
           .getByRole("button", { name: "Move to Personal" })

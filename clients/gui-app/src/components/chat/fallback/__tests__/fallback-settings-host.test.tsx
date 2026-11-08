@@ -1,3 +1,4 @@
+import { useSettingsHostScopeStore } from "@/stores/settings/settings-host-scope-store";
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { TabHostProvider } from "@/components/epic-canvas/tab-host-provider";
@@ -5,7 +6,7 @@ import { TooltipProvider } from "@/components/ui/tooltip";
 import { RoutingCard } from "@/components/chat/fallback/routing-card";
 import { ProviderNoticeSegment } from "@/components/chat/segments/provider-notice-segment";
 import { FALLBACK_SETTINGS_SECTION_ID } from "@/lib/settings-sections";
-import { useSettingsHostScopeStore } from "@/stores/settings/settings-host-scope-store";
+import { setSettingsHostSelection } from "@/stores/settings/__tests__/settings-host-scope-test-support";
 import {
   FAILED_CLAUDE_TUPLE,
   TARGET_CODEX_TUPLE,
@@ -66,8 +67,8 @@ const DETAILS = [
 
 function assertSettingsLandedOnTabHost(): void {
   // Falsification: delete the carryViewedHostIntoSettingsScope call in open-fallback-settings.ts and THIS assertion must go red.
-  expect(useSettingsHostScopeStore.getState().scopedHostId).toBe(TAB_HOST);
-  expect(useSettingsHostScopeStore.getState().scopedHostId).not.toBe(APP_HOST);
+  expect(useSettingsHostScopeStore.getState().pendingHostId).toBe(TAB_HOST);
+  expect(useSettingsHostScopeStore.getState().pendingHostId).not.toBe(APP_HOST);
   expect(mocks.openSettings).toHaveBeenCalledWith({
     section: FALLBACK_SETTINGS_SECTION_ID,
     resetToGeneral: false,
@@ -82,12 +83,12 @@ describe("fallback settings links carry the tab host", () => {
   beforeEach(() => {
     mocks.mutate.mockReset();
     mocks.openSettings.mockReset();
-    useSettingsHostScopeStore.getState().setScopedHostId(APP_HOST);
+    setSettingsHostSelection(APP_HOST);
   });
 
   afterEach(() => {
     cleanup();
-    useSettingsHostScopeStore.getState().setScopedHostId(null);
+    useSettingsHostScopeStore.getState().reset();
   });
 
   it("opens Fallback settings on the tab host from the routing card's gear (countdown)", () => {

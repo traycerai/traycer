@@ -143,7 +143,7 @@ export function WorkspaceSummaryTrigger(
             }
             content={<WorkspaceFolderHoverList items={items} />}
             appearance="preview"
-            semantics={{ role: "dialog", label: "Workspace folders" }}
+            semantics={{ role: "dialog", label: "Folders" }}
             side="bottom"
             sideOffset={4}
             align="start"

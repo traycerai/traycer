@@ -55,6 +55,15 @@ vi.mock("sonner", () => ({
  * becomes necessary to render this page, something host-varying has moved back
  * onto it.
  */
+function expectAppLogDetailWithoutHostCapture(): void {
+  expect(screen.getByRole("heading", { name: "Log detail" })).toBeTruthy();
+  expect(screen.queryByTestId("diagnostics-verbosity-guidance")).toBeNull();
+  expect(screen.queryByTestId("diagnostics-capture-steps")).toBeNull();
+  expect(
+    screen.queryByRole("button", { name: "How to capture a problem" }),
+  ).toBeNull();
+}
+
 function renderPanel(host: IRunnerHost): QueryClient {
   const queryClient = new QueryClient({
     defaultOptions: { queries: { retry: false, gcTime: 0 } },
@@ -100,6 +109,7 @@ describe("<AppDiagnosticsSettingsPanel />", () => {
       screen.getByTestId("diagnostics-capture-heap-snapshot"),
     ).toBeTruthy();
     expect(await screen.findByText("Desktop Log")).toBeTruthy();
+    expectAppLogDetailWithoutHostCapture();
   });
 
   it("carries no host-scoped rows or logs, whatever the bridges return", async () => {
@@ -121,7 +131,7 @@ describe("<AppDiagnosticsSettingsPanel />", () => {
   it("states each unavailable surface independently when both bridges are absent", () => {
     renderPanel(makeHost(null));
 
-    expect(screen.getByRole("heading", { name: "Log detail" })).toBeTruthy();
+    expectAppLogDetailWithoutHostCapture();
     expect(
       screen.getByText(
         "Log level controls are only available on the desktop app.",
@@ -693,6 +703,7 @@ describe("<AppDiagnosticsSettingsPanel />", () => {
         mobileApp: false,
         phoneLayout: false,
         soundtrackOffered: false,
+        soundtrackOn: false,
       },
       document.body,
     );
@@ -713,6 +724,7 @@ describe("<AppDiagnosticsSettingsPanel />", () => {
         mobileApp: false,
         phoneLayout: false,
         soundtrackOffered: false,
+        soundtrackOn: false,
       },
       document.body,
     );

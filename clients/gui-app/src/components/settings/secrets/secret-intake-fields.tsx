@@ -1,6 +1,5 @@
 import type { ReactNode } from "react";
 import {
-  SANDBOX_SECRET_MODES,
   SANDBOX_SECRET_SWAP_SITES,
   isSandboxDatabaseEngine,
   sandboxDatabaseConsentCopy,
@@ -12,7 +11,6 @@ import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
 import {
   Select,
   SelectContent,
@@ -24,8 +22,6 @@ import { Switch } from "@/components/ui/switch";
 import {
   SECRET_DATABASE_LOGIN_ADVICE,
   SECRET_DIALECT_LABEL,
-  SECRET_MODE_CONSEQUENCE,
-  SECRET_MODE_LABEL,
   SECRET_PROTOCOL_LABEL,
   secretKindProtocols,
   secretVariableDialects,
@@ -353,7 +349,7 @@ function VariableFields(props: {
   );
 }
 
-function ModeFields(props: {
+function SandboxFields(props: {
   readonly state: SecretFormState;
   readonly onChange: FormChange;
 }): ReactNode {
@@ -361,35 +357,10 @@ function ModeFields(props: {
   return (
     <fieldset className="flex flex-col gap-2">
       <legend className="text-ui-sm font-medium">On a sandbox</legend>
-      <RadioGroup
-        value={state.mode}
-        onValueChange={(value) => {
-          const mode = SANDBOX_SECRET_MODES.find((entry) => entry === value);
-          if (mode !== undefined) {
-            onChange({ ...state, mode, plaintextConsent: false });
-          }
-        }}
-      >
-        {SANDBOX_SECRET_MODES.map((mode) => (
-          <div key={mode} className="flex items-start gap-2 text-ui-sm">
-            <RadioGroupItem
-              id={`secret-mode-${mode}`}
-              value={mode}
-              data-testid={`secret-form-mode-${mode}`}
-            />
-            <div className="flex flex-col">
-              <Label htmlFor={`secret-mode-${mode}`}>
-                {SECRET_MODE_LABEL[mode]}
-              </Label>
-              {SECRET_MODE_CONSEQUENCE[mode] === null ? null : (
-                <span className="text-ui-xs text-muted-foreground">
-                  {SECRET_MODE_CONSEQUENCE[mode]}
-                </span>
-              )}
-            </div>
-          </div>
-        ))}
-      </RadioGroup>
+      <p className="text-ui-xs text-muted-foreground">
+        Agents use it without seeing it: the sandbox holds a stand-in and the
+        real value is attached as a request leaves it.
+      </p>
       <div className="flex items-center gap-2 text-ui-sm">
         <Switch
           id="secret-sandboxes-by-default"
@@ -413,7 +384,7 @@ function ConsentField(props: {
 }): ReactNode {
   const { state, onChange } = props;
   const engine: SandboxRouteProtocol = state.protocol;
-  if (state.mode !== "brokered" || !isSandboxDatabaseEngine(engine)) {
+  if (!isSandboxDatabaseEngine(engine)) {
     return null;
   }
   return (
@@ -471,7 +442,7 @@ export function SecretIntakeFields(props: {
       <ValueField state={state} onChange={onChange} />
       <SwapSiteFields state={state} onChange={onChange} />
       <VariableFields state={state} onChange={onChange} />
-      <ModeFields state={state} onChange={onChange} />
+      <SandboxFields state={state} onChange={onChange} />
       <ConsentField state={state} onChange={onChange} />
     </div>
   );

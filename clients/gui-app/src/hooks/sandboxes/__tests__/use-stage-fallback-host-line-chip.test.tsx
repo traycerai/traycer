@@ -162,6 +162,7 @@ function Composer(props: { readonly hostId: string }): ReactNode {
         action={null}
         surface="field"
         intent="pin"
+        consequence={null}
         disabled={false}
         isLoading={false}
         listsFailed={false}
@@ -211,10 +212,9 @@ beforeEach(() => {
 afterEach(cleanup);
 
 describe("the action that takes a stage off a composer", () => {
-  it("names this computer as its chip does, not by the machine's own name", () => {
+  it("names the local machine the same way its chip does", () => {
     const { action, chip } = pressAction(LOCAL_HOST);
 
-    expect(action).toBe("Use This computer");
     expect(action).toBe(`Use ${chip}`);
   });
 

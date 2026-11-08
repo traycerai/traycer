@@ -67,6 +67,7 @@ export function openTileIntoTargetGroup(
       source: "command_palette",
     },
     args.navigateNestedFocus ?? commitWithoutNavigation,
-    MANUAL_TILE_OPEN,
+    // The palette only runs when the person ran it.
+    { ...MANUAL_TILE_OPEN, provenance: "user" },
   );
 }

@@ -17,6 +17,7 @@ import {
 } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import { BotTestRunnerHost } from "@/components/bots/__tests__/bot-test-runner-host";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { HostRequester } from "@traycer-clients/shared/host-client/host-client";
 import type { HostCommunicationGraphCloudFeedEvent } from "@traycer/protocol/host/epic/communication-graph";
@@ -49,6 +50,9 @@ const mocks = vi.hoisted(() => ({
   threads: [] as BotThreadSummary[],
 }));
 
+vi.mock("@/hooks/host/use-host-directory-entry", () => ({
+  useHostDirectoryEntry: () => null,
+}));
 vi.mock("@/lib/registries/chat-session-registry", async (importOriginal) => ({
   ...(await importOriginal<
     typeof import("@/lib/registries/chat-session-registry")
@@ -390,40 +394,41 @@ function Channel(
 ) {
   return (
     <QueryClientProvider client={props.queryClient}>
-      <TooltipProvider>
-        <BotIdentityContext
-          value={{ botId: BOT_ID, title: "Release Bot", owner: null }}
-        >
-          <BotChannelView
-            botId={BOT_ID}
-            hostId={HOST_ID}
-            boundHostId={BOUND_HOST_ID}
-            boundHostEpoch={1}
-            tiles={null}
-            botTitle="Release Bot"
-            directive={null}
-            appConversationChatId={CHANNEL_ID}
-            trunkChatId={TRUNK_ID}
-            resolveMember={resolveMember}
-            tasks={[]}
-            surfaceActions={null}
-            openThread={props.openThread}
-            onOpenThread={() => undefined}
-            onOpenTurn={() => undefined}
-            onOpenSession={() => undefined}
-            landOn={null}
-            openMemory={null}
-            onOpenMemory={() => undefined}
-            environmentId="env-1"
-            botNameOf={() => null}
-            environmentBots={props.environmentBots}
-            openExchange={props.openExchange}
-            exchangeRail={props.rail}
-            onOpenActivity={() => undefined}
-            setupHistory={null}
-          />
-        </BotIdentityContext>
-      </TooltipProvider>
+      <BotTestRunnerHost>
+        <TooltipProvider>
+          <BotIdentityContext
+            value={{ botId: BOT_ID, title: "Release Bot", owner: null }}
+          >
+            <BotChannelView
+              botId={BOT_ID}
+              hostId={HOST_ID}
+              boundHostId={BOUND_HOST_ID}
+              boundHostEpoch={1}
+              tiles={null}
+              botTitle="Release Bot"
+              directive={null}
+              appConversationChatId={CHANNEL_ID}
+              trunkChatId={TRUNK_ID}
+              resolveMember={resolveMember}
+              tasks={[]}
+              surfaceActions={null}
+              openThread={props.openThread}
+              onOpenThread={() => undefined}
+              onOpenTurn={() => undefined}
+              onOpenSession={() => undefined}
+              landOn={null}
+              openMemory={null}
+              onOpenMemory={() => undefined}
+              environmentId="env-1"
+              botNameOf={() => null}
+              environmentBots={props.environmentBots}
+              openExchange={props.openExchange}
+              exchangeRail={props.rail}
+              setupHistory={null}
+            />
+          </BotIdentityContext>
+        </TooltipProvider>
+      </BotTestRunnerHost>
     </QueryClientProvider>
   );
 }

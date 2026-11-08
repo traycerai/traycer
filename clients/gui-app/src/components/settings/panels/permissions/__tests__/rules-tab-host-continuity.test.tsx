@@ -1,3 +1,4 @@
+import { useSettingsHostScopeStore } from "@/stores/settings/settings-host-scope-store";
 /**
  * The Rules editor's unsaved text across a change of host scope, through the
  * REAL panel, `RulesTab`, `AutoModeHostGate` and `HostScopeGate`. Judge and
@@ -26,7 +27,7 @@ import {
   joinAutoPolicySections,
 } from "@/components/settings/panels/auto-policy-document";
 import { PermissionsSettingsPanel } from "@/components/settings/panels/permissions-settings-panel";
-import { useSettingsHostScopeStore } from "@/stores/settings/settings-host-scope-store";
+
 import { useSettingsSearchStore } from "@/stores/settings/settings-search-store";
 import {
   armSettingsOpenIntent,
@@ -217,7 +218,7 @@ beforeEach(() => {
     refetchedFor.current.push(scopeStore.get().hostId);
     return Promise.resolve({ isError: false });
   });
-  useSettingsHostScopeStore.setState({ scopedHostId: null });
+  useSettingsHostScopeStore.getState().reset();
   useSettingsSearchStore.setState({ pendingReveal: null });
   resetSettingsOpenIntentForTests();
   resetRulesEditForTests();

@@ -1,9 +1,6 @@
-/**
- * The Overview's one line naming the configuration a host runs: `Runs
- * Personal`, or `Runs <team label>` for a host an earlier build bound to a
- * team. A sandbox shows nothing.
- */
-import { cleanup, render, screen } from "@testing-library/react";
+/** The Overview's settings source row, including the legacy team state. */
+import { cleanup, render, screen, within } from "@testing-library/react";
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { HostClient } from "@traycer-clients/shared/host-client/host-client";
 import { mockLocalHostEntry } from "@traycer-clients/shared/host-client/mock/mock-host-directory";
@@ -83,26 +80,32 @@ function makeClient(): HostClient<HostRpcRegistry> {
 }
 
 function renderSection(kind: "personal" | "sandbox"): void {
+  const queryClient = new QueryClient({
+    defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
+  });
   render(
-    <HostEnvironmentSection
-      scope={hostScopeFixture({
-        host: hostScopeOptionFixture({
-          hostId: "host-a",
-          name: "Mac mini",
-          kind,
-          sandbox:
-            kind === "sandbox"
-              ? {
-                  state: "awake",
-                  frozen: false,
-                  summary: sandboxSummaryFixture({ hostId: "host-a" }),
-                  teamOwned: false,
-                }
-              : null,
-        }),
-        client: makeClient(),
-      })}
-    />,
+    <QueryClientProvider client={queryClient}>
+      <HostEnvironmentSection
+        hostName="Mac mini"
+        scope={hostScopeFixture({
+          host: hostScopeOptionFixture({
+            hostId: "host-a",
+            name: "Mac mini",
+            kind,
+            sandbox:
+              kind === "sandbox"
+                ? {
+                    state: "awake",
+                    frozen: false,
+                    summary: sandboxSummaryFixture({ hostId: "host-a" }),
+                    teamOwned: false,
+                  }
+                : null,
+          }),
+          client: makeClient(),
+        })}
+      />
+    </QueryClientProvider>,
   );
 }
 
@@ -134,51 +137,48 @@ afterEach(() => {
 });
 
 describe("HostEnvironmentSection", () => {
-  it("says Runs Personal for a host on the personal environment, with nothing to pick", () => {
+  it("shows the current personal source and Change control", () => {
     renderSection("personal");
 
-    expect(screen.getByTestId("host-environment-section").textContent).toBe(
-      "Runs Personal",
-    );
-    expect(screen.queryAllByRole("button")).toHaveLength(0);
+    const row = screen.getByTestId("host-settings-source");
+    expect(row.textContent).toContain("Settings: Personal");
+    expect(
+      screen.getByRole("button", { name: "Change settings source" }),
+    ).toBeTruthy();
+    expect(within(row).getByText("Details")).toBeTruthy();
     expect(screen.queryByText(/team's bots run/)).toBeNull();
     expect(screen.queryByText(/Machines in/)).toBeNull();
   });
 
-  it("names the team a host an earlier build bound to one runs", () => {
+  it("shows a legacy team source without a Change control", () => {
     mocks.state.binding = teamBinding(false);
 
     renderSection("personal");
 
-    expect(screen.getByTestId("host-environment-section").textContent).toBe(
-      "Runs Acme",
+    expect(screen.getByText("Acme").parentElement?.textContent).toBe(
+      "Settings: Acme",
     );
+    expect(
+      screen.queryByRole("button", { name: "Change settings source" }),
+    ).toBeNull();
   });
 
-  it("says a computer with a Local row runs its own settings, and a moved one keeps Runs Personal", () => {
+  it("shows move progress instead of another source line while settings move", () => {
     mocks.state.status = environmentStatusFixture({
       principal: null,
       planes: { records: "local", broker: "local", room: "local" },
       setup: { stage: "moving_settings", state: "awaiting_consent" },
     });
     renderSection("personal");
-    expect(screen.getByTestId("host-environment-section").textContent).toBe(
-      "Runs its own settings, not in Personal yet",
-    );
-    cleanup();
-
-    mocks.state.status = environmentStatusFixture({
-      principal: { kind: "personal" },
-    });
-    renderSection("personal");
-    expect(screen.getByTestId("host-environment-section").textContent).toBe(
-      "Runs Personal",
-    );
+    expect(screen.getByText(/Settings:/)).toBeTruthy();
+    expect(screen.queryByText(/Runs /)).toBeNull();
   });
 
-  it("shows nothing on a sandbox host", () => {
+  it("shows nothing on a sandbox when no settings status or binding is available", () => {
+    mocks.state.status = null;
+    mocks.state.binding = null;
     renderSection("sandbox");
 
-    expect(screen.queryByTestId("host-environment-section")).toBeNull();
+    expect(screen.queryByTestId("host-settings-source")).toBeNull();
   });
 });

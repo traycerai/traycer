@@ -1091,6 +1091,9 @@ describe("<HomePage />", () => {
       expect(
         screen.getByTestId("landing-draft-surface").contains(terminal),
       ).toBe(true);
+      const landingBody = document.querySelector(".landing-appearance-surface");
+      expect(landingBody?.classList.contains("overflow-y-auto")).toBe(true);
+      expect(landingBody?.classList.contains("overflow-hidden")).toBe(false);
       terminal.focus();
       expect(document.activeElement).toBe(terminal);
 

@@ -4,6 +4,7 @@ import { lazySchema } from "@traycer/protocol/framework/lazy-schema";
 import {
   hostListItemSchema,
   hostListItemSchemaV10,
+  hostListItemSchemaV11,
 } from "@traycer/protocol/host/host-status";
 
 const textFrameFields = {
@@ -78,6 +79,8 @@ const textFrameFields = {
  * include `kind: sandbox` rows. The serving host gates on the negotiated
  * minor: a 1.0 subscriber receives rows rebuilt without those fields and with
  * the sandbox rows removed, so a released client sees the fleet it always saw.
+ * @1.2 carries rows of a team's own computer (`kind: machine`), which a 1.1
+ * subscriber does not receive.
  */
 export const hostInventorySubscribeOpenRequestSchemaV10 = lazySchema(() =>
   z.object({}),
@@ -138,16 +141,17 @@ export const hostInventorySubscribeV10 = defineStreamRpcContract({
 });
 
 /**
- * @1.1: the same two frame kinds, with the snapshot's rows on the live
- * registry row, so they may carry the sandbox fields and include `kind:
- * sandbox` rows. Everything else is @1.0's, field for field.
+ * @1.1: the same two frame kinds, with the snapshot's rows on the registry
+ * row as it stood before a team's own computer
+ * ({@link hostListItemSchemaV11}), so they may carry the sandbox fields and
+ * include `kind: sandbox` rows. Everything else is @1.0's, field for field.
  */
 export const hostInventorySubscribeServerFrameSchemaV11 = lazySchema(() =>
   z.discriminatedUnion("kind", [
     z.object({
       kind: z.literal("snapshot"),
       ...textFrameFields,
-      hosts: z.array(hostListItemSchema),
+      hosts: z.array(hostListItemSchemaV11),
       /** The host's clock at the read these rows came from. */
       fetchedAtMs: z.number().int().nonnegative(),
       /** These are the last good rows; the most recent read did not refresh them. */
@@ -168,5 +172,40 @@ export const hostInventorySubscribeV11 = defineStreamRpcContract({
   schemaVersion: { major: 1, minor: 1 } as const,
   openRequestSchema: hostInventorySubscribeOpenRequestSchemaV10,
   serverFrameSchema: hostInventorySubscribeServerFrameSchemaV11,
+  clientFrameSchema: hostInventorySubscribeClientFrameSchemaV10,
+});
+
+/**
+ * @1.2 (Tracy Bots T141): the snapshot's rows on the live registry row, so
+ * the set may include a team's own computer (`kind: machine`). Everything
+ * else is @1.1's, field for field. The serving host drops `machine` rows for
+ * a 1.1 subscriber.
+ */
+export const hostInventorySubscribeServerFrameSchemaV12 = lazySchema(() =>
+  z.discriminatedUnion("kind", [
+    z.object({
+      kind: z.literal("snapshot"),
+      ...textFrameFields,
+      hosts: z.array(hostListItemSchema),
+      /** The host's clock at the read these rows came from. */
+      fetchedAtMs: z.number().int().nonnegative(),
+      /** These are the last good rows; the most recent read did not refresh them. */
+      stale: z.boolean(),
+    }),
+    z.object({
+      kind: z.literal("pong"),
+      ...textFrameFields,
+    }),
+  ]),
+);
+export type HostInventorySubscribeServerFrameV12 = z.infer<
+  typeof hostInventorySubscribeServerFrameSchemaV12
+>;
+
+export const hostInventorySubscribeV12 = defineStreamRpcContract({
+  method: "host.hostInventory.subscribe",
+  schemaVersion: { major: 1, minor: 2 } as const,
+  openRequestSchema: hostInventorySubscribeOpenRequestSchemaV10,
+  serverFrameSchema: hostInventorySubscribeServerFrameSchemaV12,
   clientFrameSchema: hostInventorySubscribeClientFrameSchemaV10,
 });

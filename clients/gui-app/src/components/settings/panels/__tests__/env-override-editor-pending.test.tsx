@@ -81,7 +81,6 @@ function Parent(props: {
       credentialRefusal={null}
       rowNotes={new Map()}
       claimedBy={new Map()}
-      onHold={new Map()}
       keyRefusal={null}
       staleRefusal={null}
       namePlaceholder="OPENAI_API_KEY"

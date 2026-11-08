@@ -47,6 +47,7 @@ vi.mock("../canvas-editing-overlay", () => ({
       scope={props.scope}
       boardPath={props.boardPath}
       registry={props.registry}
+      pointerInPage={props.pointerInPage}
       onPick={props.onPick}
       onRetire={props.onRetire}
       onEscape={props.onEscape}

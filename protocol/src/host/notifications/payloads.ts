@@ -684,14 +684,6 @@ export type HostNotificationSecretGrantRequestPayload = z.infer<
   typeof hostNotificationSecretGrantRequestPayloadSchema
 >;
 
-/** What `traycer_secret_export` can mint. */
-export const HOST_NOTIFICATION_SECRET_EXPORT_KINDS = [
-  "presigned_url",
-  "short_lived_credentials",
-] as const;
-export type HostNotificationSecretExportKind =
-  (typeof HOST_NOTIFICATION_SECRET_EXPORT_KINDS)[number];
-
 /**
  * `secret.export.minted`: The server no longer writes this kind; readers drop
  * it.

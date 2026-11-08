@@ -743,6 +743,14 @@ describe("<HostSettingsPanel /> Overview updates — version picker", () => {
         ),
       ).toBeTruthy();
     });
+    expect(screen.getByText("Install a different version")).toBeTruthy();
+    expect(screen.queryByText(/Install a specific host version/)).toBeNull();
+    expect(
+      screen.queryByText("Show RC host versions when choosing a version."),
+    ).toBeNull();
+    expect(
+      screen.getByRole("checkbox", { name: "Include release candidates" }),
+    ).toBeTruthy();
   });
 
   it("Check now renders one row per manifest version, Install on a non-latest row sends host.update.install with THAT row's version, and freezes every other row's Install button while it is in flight", async () => {

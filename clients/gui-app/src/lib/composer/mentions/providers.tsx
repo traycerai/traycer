@@ -83,7 +83,11 @@ export type MentionProviderId =
   | "bots"
   | "browser-tab"
   | "terminals"
-  | "artifacts";
+  | "artifacts"
+  // A bot channel's box (`bot-mention-completion.tsx`) lists the people of
+  // the bot's environment in this step, which the registry has no provider
+  // for; its bots and tasks in `bots` and `epic` steps.
+  | "members";
 
 export interface MentionMenuCopy {
   readonly header: string;
@@ -103,6 +107,15 @@ export type MentionMenuAction =
   | { readonly kind: "navigate"; readonly step: MentionFlowStep }
   | { readonly kind: "back" }
   | { readonly kind: "complete"; readonly mention: MentionAttachment }
+  /**
+   * A name of a bot's message box: what it inserts is no prompt attachment
+   * but a chip of the wire token it stands for.
+   */
+  | {
+      readonly kind: "complete-token";
+      readonly token: string;
+      readonly label: string;
+    }
   /**
    * A tab on another host: attach snapshot context (text line + screenshot)
    * rather than a mention the agent could try to drive.
@@ -1401,12 +1414,13 @@ class MentionProviderRegistry {
     return this.provider(step.providerId).epicRequests(step, context);
   }
 
-  menuCopy(step: MentionFlowStep): MentionMenuCopy {
+  // A property, so the menu can take it as its copy unbound.
+  readonly menuCopy = (step: MentionFlowStep): MentionMenuCopy => {
     if (step.kind === "root") {
       return { header: "Mentions", empty: "No matching mentions" };
     }
     return this.provider(step.providerId).menuCopy(step);
-  }
+  };
 
   stepChromeCapability(step: MentionFlowStep): MentionStepChromeCapability {
     if (step.kind === "root") return NO_STEP_CHROME_CAPABILITY;
@@ -1471,7 +1485,7 @@ function navigateEntry(args: NavigateEntryArgs): MentionMenuEntry {
   };
 }
 
-function backEntry(description: string): MentionMenuEntry {
+export function backEntry(description: string): MentionMenuEntry {
   return {
     id: "mention-back",
     labelPrefix: null,
@@ -1771,7 +1785,11 @@ function rankByLabelAndId<Entry extends RankableMentionEntry>(
     .slice(0, limit);
 }
 
-function scoreLabelAndId(
+/**
+ * How well `normalizedQuery` (trimmed, lower case) names a row by its label
+ * or durable id, lower being better; `null` when it does not.
+ */
+export function scoreLabelAndId(
   rawLabel: string,
   rawId: string,
   normalizedQuery: string,

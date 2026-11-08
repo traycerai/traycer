@@ -679,10 +679,15 @@ function registryItem(input: {
 }
 
 function renderFrame(): void {
+  const queryClient = new QueryClient({
+    defaultOptions: { mutations: { retry: false } },
+  });
   render(
-    <SandboxTileStateFrame chat={null}>
-      <textarea data-testid="tile-body" />
-    </SandboxTileStateFrame>,
+    <QueryClientProvider client={queryClient}>
+      <SandboxTileStateFrame chat={null}>
+        <textarea data-testid="tile-body" />
+      </SandboxTileStateFrame>
+    </QueryClientProvider>,
   );
 }
 

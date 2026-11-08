@@ -39,10 +39,9 @@ vi.mock("@/lib/links/open-link", () => ({
 
 import { ChatSandboxFooter } from "@/components/chat/chat-sandbox-footer";
 import {
-  sandboxFrozenLine,
-  sandboxTeamFrozenStateLine,
-} from "@/components/hosts/sandbox-card-model";
-import { sandboxRowActionLabel } from "@/lib/sandboxes/sandbox-row-lines";
+  sandboxFrozenCause,
+  sandboxFrozenClock,
+} from "@/lib/sandboxes/sandbox-row-lines";
 import { useAuthStore } from "@/stores/auth/auth-store";
 
 function render(ui: ReactNode) {
@@ -147,7 +146,7 @@ describe("<ChatSandboxFooter /> a resting sandbox", () => {
     const paying = document.body.textContent;
     expect(paying).toContain("uses your Acme credits");
     expect(paying).toContain(
-      "Storage while it rests, on the same credits until another member wakes it.",
+      "Storage while it's suspended or stopped, on the same credits until another member wakes it.",
     );
     expect(paying).toContain("Other members can use it while you pay.");
     unmount();
@@ -161,7 +160,7 @@ describe("<ChatSandboxFooter /> a resting sandbox", () => {
     );
     const same = document.body.textContent;
     expect(same).toContain("uses your Acme credits");
-    expect(same).not.toContain("Storage while it rests");
+    expect(same).not.toContain("Storage while it's suspended or stopped");
     expect(same).not.toContain("Other members can use it");
   });
 
@@ -197,7 +196,9 @@ describe("<ChatSandboxFooter /> a frozen sandbox", () => {
     render(<ChatSandboxFooter line={lineOf(frozen(false))} />);
 
     const text = document.body.textContent;
-    expect(text).toContain(sandboxFrozenLine(FROZEN_AT));
+    const consequence = screen.getByText("Your credits ran out.");
+    expect(consequence.className).toContain("wrap-anywhere");
+    expect(text).toContain(sandboxFrozenClock(FROZEN_AT));
     expect(text).not.toContain("your next message resumes it");
     expect(
       screen.queryByRole("link", { name: /add credits/i }) ??
@@ -205,29 +206,42 @@ describe("<ChatSandboxFooter /> a frozen sandbox", () => {
     ).not.toBeNull();
   });
 
-  it("names whose bundle is out on a team sandbox and offers Resume using my team credits", () => {
+  it("shows the actual payer consequence on its own wrapping line and offers a short Resume", () => {
     useAuthStore.setState({
       status: "signed-in",
       profile: { userId: "viewer", userName: "V", email: "v@example.com" },
       contextMetadata: { userId: "viewer", username: "V" },
     });
-    const state = frozen(true);
-    if (state.kind !== "resting") throw new Error("expected a resting state");
+    const base = frozen(true);
+    if (base.kind !== "resting") throw new Error("expected a resting state");
+    const state = {
+      ...base,
+      sandbox: {
+        ...base.sandbox,
+        wakePayer: { userId: "priya", displayName: "Priya" },
+      },
+    };
     render(<ChatSandboxFooter line={lineOf(state)} />);
 
-    expect(document.body.textContent).toContain(
-      sandboxTeamFrozenStateLine(state.sandbox, "viewer"),
+    const payerLine = sandboxFrozenCause(
+      state.sandbox,
+      {
+        kind: "team",
+        teamId: "team-a",
+        teamName: "Acme",
+        environmentId: "team-a",
+      },
+      "viewer",
+    );
+    const paragraph = screen.getByText(payerLine);
+    expect(paragraph.className).toContain("wrap-anywhere");
+    expect(paragraph.parentElement?.className).toContain("flex-col");
+    expect(screen.getByRole("button", { name: "Resume" }).textContent).toBe(
+      "Resume",
     );
     expect(
-      screen.getByRole("button", {
-        name: sandboxRowActionLabel("resume-paying", {
-          kind: "team",
-          teamId: "team-a",
-          teamName: "Acme",
-          environmentId: null,
-        }),
-      }),
-    ).toBeTruthy();
+      document.body.textContent.match(/Resuming changes the payer to you\./gu),
+    ).toHaveLength(1);
   });
 });
 
