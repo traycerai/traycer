@@ -1483,8 +1483,7 @@ function registerHostCommands(program: Command): void {
 
   host
     .command("pin")
-    .description("Print the host version pinned by this CLI build")
-    .requiredOption("--json", "Print JSON")
+    .description("Print the host version pinned by this CLI build as JSON")
     .action(() => {
       process.stdout.write(
         `${JSON.stringify({ supportedHostVersion: config.supportedHostVersion })}\n`,
@@ -1623,7 +1622,12 @@ function registerHostCommands(program: Command): void {
         "--from <path>",
         "Ensure from a local archive. Mutually exclusive with --release.",
       )
-      .option("--bundled <path>", "Ensure from a signed bundled host archive.")
+      .addOption(
+        new Option(
+          "--bundled <path>",
+          "Ensure from a signed bundled host archive.",
+        ).conflicts(["release", "from"]),
+      )
       .option(
         "--no-linger",
         "Linux only (ignored on macOS/Windows): skip 'loginctl enable-linger'",
