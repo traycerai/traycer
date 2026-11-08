@@ -65,6 +65,14 @@ function setViewportWidth(width: number): void {
   });
 }
 
+function appearanceGrid(): Element {
+  const grid = document.querySelector(".landing-appearance-surface");
+  if (grid === null) {
+    throw new Error("landing appearance surface is missing");
+  }
+  return grid;
+}
+
 function desktopTrack(grid: Element): string | undefined {
   return [...grid.classList].find((name) => name.startsWith("grid-rows-"));
 }
@@ -78,27 +86,67 @@ describe("LandingDraftSurface grid", () => {
   it("keeps the task list inside a desktop fraction of the page", () => {
     setViewportWidth(1280);
     useSettingsStore.setState({ showGreeting: true, showRecentHistory: true });
-    render(<LandingDraftSurface />);
+    const view = render(<LandingDraftSurface />);
 
-    const grid = document.querySelector(".landing-appearance-surface");
-    expect(grid).not.toBeNull();
-    expect(desktopTrack(grid as Element)).toBe(
-      "grid-rows-[auto_minmax(0,1fr)_minmax(0,1fr)]",
+    const grid = appearanceGrid();
+    // The last desktop track is the task list, floored at 12.5rem. The auto
+    // track before it is the composer's own row, so a tall draft cannot spend
+    // the list's floor. Below md that floor is not the track that applies.
+    expect(desktopTrack(grid)).toBe(
+      "grid-rows-[auto_minmax(0,1fr)_auto_minmax(12.5rem,1fr)]",
     );
-    expect(desktopTrack(grid as Element)).not.toContain(
-      "minmax(min-content,1fr)",
-    );
-    expect(grid?.classList.contains("overflow-y-auto")).toBe(true);
-    expect(grid?.classList.contains("overflow-hidden")).toBe(false);
+    expect(
+      grid.classList.contains(
+        "max-md:grid-rows-[auto_minmax(0,1fr)_minmax(min-content,1.4fr)]",
+      ),
+    ).toBe(true);
+    expect(
+      [...grid.classList].some(
+        (name) => name.startsWith("max-md:") && name.includes("12.5rem"),
+      ),
+    ).toBe(false);
+    expect(grid.classList.contains("overflow-y-auto")).toBe(true);
+    expect(grid.classList.contains("overflow-hidden")).toBe(false);
 
-    const composer = document.querySelector("[data-composer-placement]");
-    expect(composer?.className.split(/\s+/)).toContain("md:min-h-0");
+    const composer = grid.querySelector("[data-composer-placement]");
+    if (composer === null) {
+      throw new Error("composer track is missing");
+    }
+    expect(composer.className.split(/\s+/)).toContain("md:min-h-0");
 
     const tasks = screen.getByTestId("current-tasks-section");
     const wrapper = tasks.parentElement;
-    expect(wrapper?.className.split(/\s+/)).toEqual(
-      expect.arrayContaining(["overflow-hidden", "min-h-0"]),
+    if (wrapper === null) {
+      throw new Error("task list wrapper is missing");
+    }
+    expect(wrapper.parentElement).toBe(grid);
+    expect(composer.parentElement).toBe(grid);
+    expect(composer.contains(tasks)).toBe(false);
+    expect(composer.nextElementSibling).toBe(wrapper);
+    expect(wrapper.className.split(/\s+/)).toEqual(
+      expect.arrayContaining([
+        "mx-auto",
+        "w-full",
+        "max-w-3xl",
+        "px-6",
+        "min-h-0",
+        "overflow-hidden",
+        "pb-6",
+      ]),
     );
+
+    // Same row tokens at every width. Below md the section is not mounted;
+    // recent tasks are the history control in the composer column.
+    view.unmount();
+    setViewportWidth(390);
+    render(<LandingDraftSurface />);
+    const phoneComposer = appearanceGrid().querySelector(
+      "[data-composer-placement]",
+    );
+    expect(screen.queryByTestId("current-tasks-section")).toBeNull();
+    expect(
+      phoneComposer?.contains(screen.getByTestId("home-view-history")),
+    ).toBe(true);
   });
 
   it("keeps the empty start page centred on the composer's own height", () => {
@@ -109,9 +157,15 @@ describe("LandingDraftSurface grid", () => {
     });
     render(<LandingDraftSurface />);
 
-    const grid = document.querySelector(".landing-appearance-surface");
-    expect(desktopTrack(grid as Element)).toBe(
+    const grid = appearanceGrid();
+    expect(desktopTrack(grid)).toBe(
       "grid-rows-[auto_0_minmax(min-content,1fr)]",
+    );
+    expect(
+      grid.classList.contains("max-md:short-landscape:grid-rows-[auto_0_auto]"),
+    ).toBe(true);
+    expect([...grid.classList].some((name) => name.includes("12.5rem"))).toBe(
+      false,
     );
     expect(screen.queryByTestId("current-tasks-section")).toBeNull();
   });

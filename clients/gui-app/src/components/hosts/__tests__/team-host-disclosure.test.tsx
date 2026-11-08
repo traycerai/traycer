@@ -488,6 +488,30 @@ describe("<TeamHostDisclosure />", () => {
     );
   });
 
+  it("scrolls the access facts and keeps Got it and outside readers outside that scroller", () => {
+    mocks.collaborators.current = view({
+      ownerTeam: null,
+      direct: [VIEWER, "user-stranger"],
+      teams: [team(TEAM_ID, [VIEWER])],
+    });
+    renderDisclosure("host-1");
+
+    const details = screen.getByText("How access works").closest("details");
+    if (details === null) throw new Error("Expected access details");
+    const body = details.querySelector("div");
+    if (body === null) throw new Error("Expected the details body");
+    expect(body.parentElement).toBe(details);
+    expect(body.className).toContain("max-h-40");
+    expect(body.className).toContain("overflow-y-auto");
+    expect(body.className).toContain("overscroll-contain");
+    expect(
+      body.contains(screen.getByTestId("team-host-disclosure-dismiss")),
+    ).toBe(false);
+    expect(
+      body.contains(screen.getByTestId("team-host-disclosure-outside")),
+    ).toBe(false);
+  });
+
   it("treats collaborators as null without an open task", () => {
     mocks.openEpicId.current = null;
     mocks.collaborators.current = view({

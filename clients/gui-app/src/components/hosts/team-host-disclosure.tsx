@@ -73,7 +73,7 @@ export function TeamHostDisclosure(props: {
           <summary className="cursor-pointer text-muted-foreground">
             How access works
           </summary>
-          <div className="flex flex-col gap-1 pt-1">
+          <div className="flex max-h-40 flex-col gap-1 overflow-y-auto overscroll-contain pt-1">
             {TEAM_HOST_DISCLOSURE_DETAILS.map((sentence) => (
               <p key={sentence} className="m-0">
                 {sentence}

@@ -17,6 +17,7 @@ import {
   formatSandboxDate,
   formatSandboxUtcDay,
   sandboxFailedToStart,
+  sandboxFrozenClock,
 } from "@/lib/sandboxes/sandbox-row-lines";
 
 /**
@@ -163,9 +164,10 @@ export function formatSandboxDay(at: number): string {
  */
 export function sandboxFrozenLine(frozenAt: number | null): string {
   const base = `${HOST_FROZEN_WORD}. Top up to resume.`;
-  return frozenAt === null
-    ? base
-    : `${base} Will be removed on ${formatSandboxDate(frozenDestroyAt(frozenAt), false)}.`;
+  const clock = sandboxFrozenClock(frozenAt);
+  // The clock is the removal clause. This banner is a sentence, so it
+  // closes that clause with a period the clause itself does not carry.
+  return clock === null ? base : `${base} ${clock}.`;
 }
 
 /**
@@ -236,10 +238,10 @@ export function sandboxWakePayerName(
 
 /** A frozen team sandbox: the paying member's bundle ran out. */
 export function sandboxTeamFrozenLine(
-  summary: SandboxSummary,
+  summary: SandboxSummary | null,
   viewerUserId: string | null,
 ): string {
-  const payer = summary.wakePayer;
+  const payer = summary === null ? null : summary.wakePayer;
   if (payer === null) return `${HOST_FROZEN_WORD}: its payer's bundle is out.`;
   if (viewerUserId !== null && payer.userId === viewerUserId) {
     return `${HOST_FROZEN_WORD}: your bundle is out.`;
@@ -317,10 +319,8 @@ function stoppedFailureLine(failureCode: string): string {
 /** The card's one-line description of where the sandbox is. */
 export function sandboxStateLine(
   state: HostSandboxState | null,
-  frozen: boolean,
   summary: SandboxSummary | null,
 ): string {
-  if (frozen) return sandboxFrozenLine(summary?.frozenAt ?? null);
   if (state === null) return "Sandbox";
   if (state === "failed" && summary !== null && summary.failureCode !== null) {
     return `${sandboxFailedToStart(summary.failureCode)}.`;
@@ -609,13 +609,13 @@ export function sandboxHeaderFailureLine(sandbox: {
 }): string | null {
   if (sandbox.frozen) return null;
   if (sandbox.state === "failed")
-    return sandboxStateLine(sandbox.state, false, sandbox.summary);
+    return sandboxStateLine(sandbox.state, sandbox.summary);
   if (
     sandbox.state === "stopped" &&
     sandbox.summary !== null &&
     sandbox.summary.failureCode !== null
   )
-    return sandboxStateLine(sandbox.state, false, sandbox.summary);
+    return sandboxStateLine(sandbox.state, sandbox.summary);
   return null;
 }
 

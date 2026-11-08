@@ -166,6 +166,7 @@ vi.mock("@/stores/tabs/use-system-tab-modal", () => ({
   useSystemTabModalActions: () => ({ openHistory: testState.openHistory }),
 }));
 
+import userEvent from "@testing-library/user-event";
 import {
   act,
   cleanup,
@@ -1437,7 +1438,7 @@ describe("<CurrentTasksSection />", () => {
       expect(within(group("Pinned")).getAllByRole("listitem")).toHaveLength(3);
     });
 
-    it("collapses an expanded group back to five rows", () => {
+    it("collapses an expanded group back to five rows", async () => {
       setGroups({ open: tasks("o", 9), inProgress: tasks("i", 7) });
       renderSection();
 
@@ -1445,20 +1446,29 @@ describe("<CurrentTasksSection />", () => {
 
       fireEvent.click(screen.getByRole("button", { name: "Show 4 more" }));
 
+      const showLess = screen.getByRole("button", { name: "Show less" });
+      expect(showLess.getAttribute("aria-expanded")).toBe("true");
       expect(within(group("Open")).getAllByRole("listitem")).toHaveLength(9);
-      expect(screen.getByRole("button", { name: "Show less" })).not.toBeNull();
       expect(screen.queryByRole("button", { name: "Show 4 more" })).toBeNull();
 
-      fireEvent.click(screen.getByRole("button", { name: "Show less" }));
+      // One button changes its label. Keyboard activation has to leave focus
+      // on that same control, which a remounted replacement would drop.
+      act(() => {
+        showLess.focus();
+      });
+      expect(document.activeElement).toBe(showLess);
+      await userEvent.keyboard("{Enter}");
 
+      expect(document.activeElement).toBe(showLess);
+      expect(showLess.getAttribute("aria-expanded")).toBe("false");
       expect(within(group("Open")).getAllByRole("listitem")).toHaveLength(5);
       expect(
         within(group("In progress")).getAllByRole("listitem"),
       ).toHaveLength(5);
       expect(screen.queryByRole("button", { name: "Show less" })).toBeNull();
-      expect(
-        screen.getByRole("button", { name: "Show 4 more" }),
-      ).not.toBeNull();
+      expect(screen.getByRole("button", { name: "Show 4 more" })).toBe(
+        showLess,
+      );
       expect(
         screen.getByRole("button", { name: "Show 2 more" }),
       ).not.toBeNull();

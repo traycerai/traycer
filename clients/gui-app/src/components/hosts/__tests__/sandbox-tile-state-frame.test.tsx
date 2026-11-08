@@ -81,7 +81,10 @@ vi.mock("@/lib/host/fleet-refresh", () => ({ requestFleetRefresh: vi.fn() }));
 vi.mock("@/lib/links/open-link", () => ({ useOpenLink: () => vi.fn() }));
 vi.mock("@/lib/auth-error-toast", () => ({ toastFromAuthError: vi.fn() }));
 
+import { sandboxFrozenLine } from "@/components/hosts/sandbox-card-model";
 import { SandboxTileStateFrame } from "@/components/hosts/sandbox-tile-state-frame";
+import { sandboxFrozenClock } from "@/lib/sandboxes/sandbox-row-lines";
+import { hostSandboxStateWord } from "@traycer/protocol/host/host-status";
 
 function registryItem(kind: "personal" | "sandbox"): HostListItem {
   return {
@@ -204,6 +207,17 @@ function bodyWrapper(): HTMLElement {
   const wrapper = screen.getByTestId("tile-body").parentElement;
   if (wrapper === null) throw new Error("the tile body has no wrapper");
   return wrapper;
+}
+
+function overlayParagraph(
+  overlay: HTMLElement,
+  index: number,
+): HTMLParagraphElement {
+  const paragraphs = overlay.querySelectorAll("p");
+  if (index < 0 || index >= paragraphs.length) {
+    throw new Error("expected an overlay paragraph");
+  }
+  return paragraphs[index];
 }
 
 beforeEach(() => {
@@ -496,6 +510,7 @@ describe("<SandboxTileStateFrame />", () => {
   );
 
   it("overlays a frozen sandbox with the frozen line and its destroy date, and offers no wake", () => {
+    const frozenAt = new Date(2026, 9, 9, 12).getTime();
     setSandboxEntry("suspended", true);
     mocks.list = {
       sandboxes: [
@@ -504,19 +519,19 @@ describe("<SandboxTileStateFrame />", () => {
           hostId: HOST_ID,
           state: "suspended",
           frozen: true,
-          frozenAt: new Date(2026, 9, 9, 12).getTime(),
+          frozenAt,
         }),
       ],
     };
     renderFrame(false);
     const overlay = screen.getByTestId("sandbox-tile-overlay");
     expect(overlay.getAttribute("data-kind")).toBe("frozen");
-    expect(overlay.querySelectorAll("p")[0]?.textContent).toBe(
-      "Suspended · Out of credits. Top up to resume.",
+    expect(overlayParagraph(overlay, 0).textContent).toBe(
+      `${hostSandboxStateWord("suspended")} · ${sandboxFrozenLine(null)}`,
     );
-    expect(overlay.querySelectorAll("p")[1]?.textContent).toMatch(
-      /^Will be removed on /,
-    );
+    const clock = sandboxFrozenClock(frozenAt);
+    if (clock === null) throw new Error("expected a removal clock");
+    expect(overlayParagraph(overlay, 1).textContent).toBe(clock);
     expect(screen.queryByTestId("sandbox-tile-overlay-wake")).toBeNull();
     expect(bodyWrapper().hasAttribute("inert")).toBe(true);
   });
@@ -524,9 +539,11 @@ describe("<SandboxTileStateFrame />", () => {
   it("frames a frozen row without a destroy date when the server sent no frozenAt", () => {
     setSandboxEntry("stopped", true);
     renderFrame(false);
-    expect(screen.getByTestId("sandbox-tile-overlay").textContent).toBe(
-      "Stopped · Out of credits. Top up to resume.",
+    const overlay = screen.getByTestId("sandbox-tile-overlay");
+    expect(overlay.textContent).toBe(
+      `${hostSandboxStateWord("stopped")} · ${sandboxFrozenLine(null)}`,
     );
+    expect(overlay.querySelectorAll("p")).toHaveLength(1);
   });
 
   it("puts the body out of the tab order and Resume in it: Tab can reach Resume, not the terminal", () => {

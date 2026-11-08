@@ -1,5 +1,8 @@
 import type { ReactNode } from "react";
-import { hostSandboxStateWord } from "@traycer/protocol/host/host-status";
+import {
+  HOST_FROZEN_WORD,
+  hostSandboxStateWord,
+} from "@traycer/protocol/host/host-status";
 import { SandboxOperationFailure } from "@/components/hosts/sandbox-operation-failure";
 import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
 import { Button } from "@/components/ui/button";
@@ -17,10 +20,9 @@ import {
   SHARED_USE_CLAUSE,
 } from "@/lib/sandboxes/sandbox-strings";
 import { openSandboxDetails } from "@/stores/sandboxes/sandbox-details-store";
-import { frozenDestroyAt } from "@/lib/sandboxes/sandbox-balance";
 import {
-  formatSandboxDate,
   sandboxFrozenCause,
+  sandboxFrozenClock,
 } from "@/lib/sandboxes/sandbox-row-lines";
 import { useConfigurationBillingUrl } from "@/hooks/sandboxes/use-configuration-billing-url";
 import { useOpenLink } from "@/lib/links/open-link";
@@ -78,14 +80,11 @@ function FrozenSandboxFooter(props: {
     ...configuration,
     environmentId: sandbox.environmentId,
   };
-  const removal =
-    sandbox.frozenAt === null
-      ? null
-      : `Will be removed on ${formatSandboxDate(frozenDestroyAt(sandbox.frozenAt), false)}`;
+  const removal = sandboxFrozenClock(sandbox.frozenAt);
   return (
     <div className="flex min-w-0 shrink-0 flex-col items-start gap-2 border-t border-border px-4 py-2 text-ui-sm text-muted-foreground">
       <p className="min-w-0 w-full wrap-anywhere font-medium">
-        {hostSandboxStateWord(sandbox.state)} · Out of credits
+        {hostSandboxStateWord(sandbox.state)} · {HOST_FROZEN_WORD}
       </p>
       <p className="min-w-0 w-full wrap-anywhere">
         {sandboxFrozenCause(sandbox, pageConfiguration, viewer)}

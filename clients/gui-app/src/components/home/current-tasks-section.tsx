@@ -237,22 +237,14 @@ function CurrentTaskGroup(props: {
           />
         ))}
       </ul>
-      {!expanded && remaining > 0 ? (
+      {remaining > 0 ? (
         <button
           type="button"
           className={MORE_CLASS_NAME}
-          onClick={() => setExpanded(true)}
+          aria-expanded={expanded}
+          onClick={() => setExpanded(!expanded)}
         >
-          Show {remaining} more
-        </button>
-      ) : null}
-      {expanded && props.items.length > GROUP_PREVIEW_COUNT ? (
-        <button
-          type="button"
-          className={MORE_CLASS_NAME}
-          onClick={() => setExpanded(false)}
-        >
-          Show less
+          {expanded ? "Show less" : `Show ${remaining} more`}
         </button>
       ) : null}
       {props.notice === null ? null : (

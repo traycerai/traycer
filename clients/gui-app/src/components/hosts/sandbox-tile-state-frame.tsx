@@ -11,6 +11,7 @@ import type { SandboxLifecycleVerb } from "@traycer/protocol/host/sandbox-contro
 import { isRemoteHostDirectoryEntry } from "@traycer-clients/shared/host-client/remote-fetcher";
 import { useTabHostId } from "@/components/epic-canvas/hooks/use-tab-host-id";
 import {
+  sandboxFrozenLine,
   sandboxTeamFrozenLine,
   sandboxTileOverlay,
   type SandboxTileOverlay,
@@ -25,8 +26,7 @@ import { useSandboxOperation } from "@/hooks/sandboxes/use-sandbox-operation";
 import { useHostBinding } from "@/lib/host";
 import { sandboxMutationKeys } from "@/lib/query-keys";
 import { useAuthStore } from "@/stores/auth/auth-store";
-import { frozenDestroyAt } from "@/lib/sandboxes/sandbox-balance";
-import { formatSandboxDate } from "@/lib/sandboxes/sandbox-row-lines";
+import { sandboxFrozenClock } from "@/lib/sandboxes/sandbox-row-lines";
 import { TeamHostDisclosure } from "@/components/hosts/team-host-disclosure";
 
 /**
@@ -141,13 +141,9 @@ function SandboxTileOverlayLayer(props: {
   const summary =
     list.data?.sandboxes.find((s) => s.hostId === props.hostId) ?? null;
   const { overlay } = props;
-  let frozenCause = "Out of credits. Top up to resume.";
-  if (props.teamOwned) {
-    frozenCause =
-      summary === null
-        ? "Out of credits: its payer's bundle is out."
-        : sandboxTeamFrozenLine(summary, viewerUserId);
-  }
+  const frozenCause = tileFrozenCause(props.teamOwned, summary, viewerUserId);
+  const removal =
+    summary === null ? null : sandboxFrozenClock(summary.frozenAt);
   return (
     <div
       data-testid="sandbox-tile-overlay"
@@ -166,11 +162,8 @@ function SandboxTileOverlayLayer(props: {
                 : `${hostSandboxStateWord(props.state)} · `}
               {frozenCause}
             </p>
-            {summary === null || summary.frozenAt === null ? null : (
-              <p className="text-muted-foreground">
-                Will be removed on{" "}
-                {formatSandboxDate(frozenDestroyAt(summary.frozenAt), false)}
-              </p>
+            {removal === null ? null : (
+              <p className="text-muted-foreground">{removal}</p>
             )}
           </>
         ) : null}
@@ -246,6 +239,16 @@ function SandboxTileRowMissing(): ReactNode {
       </Button>
     </>
   );
+}
+
+/** Personal rows use the frozen banner; a team row names whose bundle is out. */
+function tileFrozenCause(
+  teamOwned: boolean,
+  summary: SandboxSummary | null,
+  viewerUserId: string | null,
+): string {
+  if (!teamOwned) return sandboxFrozenLine(null);
+  return sandboxTeamFrozenLine(summary, viewerUserId);
 }
 
 function SandboxTileWakeButton(props: {
