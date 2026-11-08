@@ -952,6 +952,7 @@ function useDefaultModelOnHost(
 ): PendingDefaultModel {
   const opencodeLine = useChatOpencodeLine();
   const models = useGuiHarnessModelsQueryForClient(client, harnessId, null, {
+    profileId: null,
     // Observe the shared cache; only the kernel's fetch-model effect reads it.
     enabled: false,
     subscribed: client !== null,

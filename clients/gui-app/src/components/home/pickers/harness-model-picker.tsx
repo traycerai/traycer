@@ -673,6 +673,7 @@ function HarnessModelPickerImpl(props: HarnessModelPickerProps) {
     selection.harnessId,
     null,
     {
+      profileId: selection.profileId,
       enabled: selectedHarnessRefetchGate,
       subscribed: activityEnabled,
     },
@@ -910,13 +911,6 @@ function HarnessModelPickerImpl(props: HarnessModelPickerProps) {
     createProfileHostIsLocal,
     createProfileStateByHarnessId.get(resolvedActiveProviderId),
   );
-  const activeProvider = useBrowsedProviderCatalogEntry({
-    runTargetClient,
-    browsedProviderId: resolvedActiveProviderId,
-    catalogHarnesses,
-    catalogActive,
-    cloudTraycer,
-  });
   // The profile browsed/selected within the active provider: prefer the
   // reducer's `activeProfileId` (a strip click or ⌘-digit rail switch) if it
   // belongs to this harness, else the committed selection's profile if it
@@ -939,6 +933,14 @@ function HarnessModelPickerImpl(props: HarnessModelPickerProps) {
       selection.profileId,
     ],
   );
+  const activeProvider = useBrowsedProviderCatalogEntry({
+    runTargetClient,
+    browsedProviderId: resolvedActiveProviderId,
+    browsedProfileId: activePanelProfileId,
+    catalogHarnesses,
+    catalogActive,
+    cloudTraycer,
+  });
   // `focusTab` is the caller's, not this function's: a CTA that promises a
   // specific destination ("Set up CLI" -> the CLI candidates on General) has to
   // be able to name it. This used to end with an unconditional
@@ -1841,10 +1843,18 @@ function modelPickerSelectionSummary(
  * (`isPending` behind the gate covers that optimistic pre-dispatch render),
  * so the panel's spinner shows from the first frame instead of flashing "No
  * models available".
+ *
+ * The models are the browsed PROFILE's: the catalog entry holds the ambient
+ * account's list (the fan-out and the prefetch fill that slot), and a managed
+ * profile can advertise a different one - Codex offers a speed tier per plan.
+ * So a managed profile's rows and footer come from this hook's own query on
+ * that profile's slot, which the entry's ambient list never stands in for.
  */
 function useBrowsedProviderCatalogEntry(input: {
   readonly runTargetClient: HostClient<HostRpcRegistry> | null;
   readonly browsedProviderId: ProviderId;
+  /** The account browsed within the provider; `null` is the ambient one. */
+  readonly browsedProfileId: string | null;
   readonly catalogHarnesses: ReadonlyArray<GuiHarnessCatalogEntry>;
   readonly catalogActive: boolean;
   /** Traycer's cloud rows, which no host is asked for; `null` off a sandbox. */
@@ -1858,25 +1868,31 @@ function useBrowsedProviderCatalogEntry(input: {
     input.cloudTraycer === null || input.browsedProviderId !== "traycer";
   // A pending entry promoted by cached models needs no fetch. A known-positive
   // host verdict with no models still needs this targeted cold-cache load.
+  const managedProfile = input.browsedProfileId !== null;
   const fetchGate =
     input.catalogActive &&
     hostListsModels &&
     entry?.available === true &&
-    (!entry.availabilityPending || entry.models.length === 0);
+    (!entry.availabilityPending || entry.models.length === 0 || managedProfile);
   const modelsQuery = useGuiHarnessModelsQueryForClient(
     input.runTargetClient,
     input.browsedProviderId,
     null,
     {
+      profileId: input.browsedProfileId,
       enabled: fetchGate,
       subscribed: input.catalogActive,
     },
   );
   const modelsLoading = fetchGate && modelsQuery.isPending;
+  const profileModels = managedProfile ? modelsQuery.data?.models : undefined;
   return useMemo(() => {
     if (entry === null) return null;
-    return hostListsModels ? { ...entry, modelsLoading } : entry;
-  }, [entry, hostListsModels, modelsLoading]);
+    if (!hostListsModels) return entry;
+    return profileModels === undefined
+      ? { ...entry, modelsLoading }
+      : { ...entry, models: profileModels, modelsLoading };
+  }, [entry, hostListsModels, modelsLoading, profileModels]);
 }
 
 // Restrict to harnesses whose adapter advertises a TUI surface. Runtime
