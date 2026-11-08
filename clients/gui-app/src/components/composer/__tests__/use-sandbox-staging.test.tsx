@@ -64,6 +64,7 @@ import type {
 import {
   idleAndRestingLine,
   SANDBOXES_CANT_BE_CREATED,
+  USE_THIS_SHAPE,
   WAKE_STRING_MEMORY,
 } from "@/lib/sandboxes/sandbox-strings";
 import { useSandboxShapeMemoryStore } from "@/stores/composer/sandbox-shape-memory-store";
@@ -78,6 +79,9 @@ import {
 } from "@/stores/home/landing-draft-store";
 import { useLandingReturnedSandbox } from "@/hooks/sandboxes/use-returned-sandbox-stage";
 import type { ReturnedSandbox } from "@/lib/sandboxes/returned-sandbox";
+
+const WINDOWS_SANDBOX_LIMITATION =
+  "Windows sandboxes have no desktop or Computer Use.";
 
 const mocks = vi.hoisted(() => ({
   user: null as AuthenticatedUser | null,
@@ -182,6 +186,26 @@ const PROVIDER: SandboxCatalogueProvider = {
 };
 
 const CATALOGUE: SandboxCatalogue = { providers: [PROVIDER] };
+
+/** A provider that creates Windows in the same region, on the same bounds. */
+const WINDOWS_PROVIDER: SandboxCatalogueProvider = {
+  ...PROVIDER,
+  provider: "gce-windows",
+  os: ["windows"],
+};
+
+function renderStagedConsequences(): void {
+  const { consequences, chooseAnotherHostLabel } = staging();
+  if (consequences === null) throw new Error("nothing was staged");
+  render(
+    <ConsequencesBlock
+      input={consequences}
+      onMoveFirst={null}
+      onOpenTerminalInstead={null}
+      chooseAnotherHostLabel={chooseAnotherHostLabel}
+    />,
+  );
+}
 
 const DEFAULT_SHAPE: StageShape = {
   os: "linux",
@@ -541,6 +565,52 @@ describe("useSandboxStaging New rows", () => {
       ],
     ).toBe("personal");
     expect(staging().composer.stagedConfigurationKey).toBe("personal");
+  });
+
+  it("hands the block a Linux OS, and no Windows limitation, for a new Linux stage", () => {
+    mocks.catalogue = { providers: [PROVIDER, WINDOWS_PROVIDER] };
+    const { composer } = mount([LAPTOP]);
+
+    act(() => composer.onPickNew("personal"));
+
+    expect(staging().consequences?.os).toBe("linux");
+    renderStagedConsequences();
+    expect(screen.queryByText(WINDOWS_SANDBOX_LIMITATION)).toBeNull();
+  });
+
+  it("hands the block the Windows OS of a new stage the catalogue can only create on Windows", () => {
+    mocks.catalogue = { providers: [WINDOWS_PROVIDER] };
+    const { composer } = mount([LAPTOP]);
+
+    act(() => composer.onPickNew("personal"));
+
+    expect(readStagedSandbox(SURFACE)?.target).toMatchObject({
+      kind: "new",
+      shape: { os: "windows" },
+    });
+    expect(staging().consequences?.os).toBe("windows");
+    renderStagedConsequences();
+    expect(screen.getByText(WINDOWS_SANDBOX_LIMITATION)).toBeDefined();
+  });
+
+  it("hands the block the Windows OS of the person's remembered pick once they use it from the gear", () => {
+    mocks.catalogue = { providers: [PROVIDER, WINDOWS_PROVIDER] };
+    useSandboxShapeMemoryStore.getState().remember(MEMORY_HOST, "personal", {
+      ...DEFAULT_SHAPE,
+      os: "windows",
+    });
+    const { composer } = mount([LAPTOP]);
+
+    act(() => composer.onOpenShape("personal"));
+    fireEvent.click(screen.getByRole("button", { name: USE_THIS_SHAPE }));
+
+    expect(readStagedSandbox(SURFACE)?.target).toMatchObject({
+      kind: "new",
+      shape: { os: "windows" },
+    });
+    expect(staging().consequences?.os).toBe("windows");
+    renderStagedConsequences();
+    expect(screen.getByText(WINDOWS_SANDBOX_LIMITATION)).toBeDefined();
   });
 
   it("stages the configuration's defaults, shape and periods, for everyone who picks a New row", () => {

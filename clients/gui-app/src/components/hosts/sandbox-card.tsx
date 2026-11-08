@@ -73,6 +73,7 @@ import {
   formatSandboxDollars,
   hourlyRate,
   sandboxVerbPendingLine,
+  WINDOWS_SANDBOX_LIMITATION,
 } from "@/lib/sandboxes/sandbox-strings";
 import { useSandboxControlUnavailableReason } from "@/hooks/sandboxes/use-sandbox-control-unavailable-reason";
 import { useHostSupportsMethod } from "@/hooks/host/use-host-supports-method";
@@ -166,6 +167,11 @@ export function SandboxCard(props: {
               frozen={frozen}
               viewerUserId={viewerUserId}
             />
+            {summary.os === "windows" ? (
+              <p className="text-ui-xs text-muted-foreground">
+                {WINDOWS_SANDBOX_LIMITATION}
+              </p>
+            ) : null}
             <SandboxPodRoom summary={summary} teamOwned={teamOwned} />
             <SandboxWithdrawalNotice summary={summary} />
             <SandboxGuestConfigFailure summary={summary} />

@@ -321,6 +321,7 @@ export function useSandboxStaging(input: {
     const payer = existingHost?.sandbox?.summary?.wakePayer;
     return {
       configuration: stagedConfiguration,
+      os: stage.target.kind === "new" ? stage.target.shape.os : undefined,
       price,
       needsCredits: stagedFacts !== null && stagedFacts.needsCredits,
       shortfallMc:

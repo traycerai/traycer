@@ -17,6 +17,7 @@ import {
   OPEN_TERMINAL_INSTEAD,
   SHOW_LESS,
   WHAT_THIS_MEANS,
+  WINDOWS_SANDBOX_LIMITATION,
 } from "@/lib/sandboxes/sandbox-strings";
 import {
   consequencesShown,
@@ -142,6 +143,9 @@ function ConsequencesBlockBody(props: {
           </Button>
         )}
       </p>
+      {props.input.os === "windows" ? (
+        <p className="m-0">{WINDOWS_SANDBOX_LIMITATION}</p>
+      ) : null}
       {expanded
         ? rest.map((clause) => (
             <p

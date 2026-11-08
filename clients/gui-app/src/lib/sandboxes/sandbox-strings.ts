@@ -24,6 +24,9 @@ import {
  */
 export const CONSEQUENCES_WORDING_VERSION = 1;
 
+export const WINDOWS_SANDBOX_LIMITATION =
+  "Windows sandboxes have no desktop or Computer Use.";
+
 /** A configuration as copy reads it: Personal, or a team by its name. */
 export type SandboxConfigurationCopy =
   | { readonly kind: "personal" }

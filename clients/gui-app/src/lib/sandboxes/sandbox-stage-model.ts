@@ -461,6 +461,7 @@ export type StageAudience = "private" | "shared";
 
 /** What the consequences block is composed from. */
 export interface ConsequencesInput {
+  readonly os?: SandboxOs;
   readonly configuration: StageConfiguration;
   readonly price: StagePrice | null;
   readonly needsCredits: boolean;
