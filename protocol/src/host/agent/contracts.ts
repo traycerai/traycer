@@ -5,10 +5,12 @@ import {
 } from "@traycer/protocol/framework/index";
 import { UNKNOWN_CONNECTIVITY } from "@traycer/protocol/host/last-known-connectivity";
 import {
+  AMBIENT_PROFILE_ID_SENTINEL,
   createAgentRequestSchema,
   createAgentRequestSchemaV20,
   createAgentRequestSchemaV30,
   createAgentRequestSchemaV31,
+  createAgentRequestSchemaV32,
   createAgentResponseSchema,
   agentSelectionGuideRequestSchema,
   agentSelectionGuideResponseSchema,
@@ -24,6 +26,8 @@ import {
   getAgentTranscriptResponseSchema,
   listHarnessModelsRequestSchemaV10,
   listHarnessModelsRequestSchemaV20,
+  listHarnessModelsRequestSchema,
+  listHarnessModelsResponseSchemaV20,
   listHarnessModelsResponseSchema,
   listAgentsRequestSchema,
   listAgentsResponseSchema,
@@ -40,6 +44,7 @@ import {
   listAgentsResponseSchemaV92,
   listAgentsResponseSchemaV100,
   listAgentsResponseSchemaV101,
+  listAgentsResponseSchemaV102,
   agentSummarySchemaV10,
   agentSummarySchemaV20,
   agentSummarySchemaV30,
@@ -56,6 +61,7 @@ import {
   stopAgentRequestSchema,
   stopAgentResponseSchema,
   forkAgentRequestSchema,
+  forkAgentRequestSchemaV10,
   forkAgentResponseSchema,
 } from "@traycer/protocol/host/agent/shared";
 
@@ -97,6 +103,23 @@ export const agentCreateV31 = defineRpcContract({
   schemaVersion: { major: 3, minor: 1 } as const,
   requestSchema: createAgentRequestSchemaV31,
   responseSchema: createAgentResponseSchema,
+});
+
+export const agentCreateV32 = defineRpcContract({
+  method: "agent.create",
+  schemaVersion: { major: 3, minor: 2 } as const,
+  requestSchema: createAgentRequestSchemaV32,
+  responseSchema: createAgentResponseSchema,
+});
+
+export const agentCreateUpgradeV31ToV32 = defineUpgradePath<
+  typeof agentCreateV31,
+  typeof agentCreateV32
+>({
+  from: agentCreateV31.schemaVersion,
+  to: agentCreateV32.schemaVersion,
+  upgradeRequest: (request) => request,
+  upgradeResponse: (response) => response,
 });
 
 /**
@@ -215,11 +238,11 @@ export const agentCreateUpgradeV30ToV31 = defineUpgradePath<
   upgradeResponse: (response) => response,
 });
 
-export const agentCreateDowngradeV31ToV20 = defineDowngradePath<
-  typeof agentCreateV31,
+export const agentCreateDowngradeV32ToV20 = defineDowngradePath<
+  typeof agentCreateV32,
   typeof agentCreateV20
 >({
-  from: { major: 3, minor: 1 },
+  from: { major: 3, minor: 2 },
   to: { major: 2, minor: 0 },
   downgradeRequest: () => ({
     ok: false,
@@ -232,11 +255,11 @@ export const agentCreateDowngradeV31ToV20 = defineDowngradePath<
   downgradeResponse: (response) => ({ ok: true, value: response }),
 });
 
-export const agentCreateDowngradeV31ToV10 = defineDowngradePath<
-  typeof agentCreateV31,
+export const agentCreateDowngradeV32ToV10 = defineDowngradePath<
+  typeof agentCreateV32,
   typeof agentCreateV10
 >({
-  from: { major: 3, minor: 1 },
+  from: { major: 3, minor: 2 },
   to: { major: 1, minor: 0 },
   downgradeRequest: () => ({
     ok: false,
@@ -290,14 +313,35 @@ export const agentListHarnessModelsV10 = defineRpcContract({
   method: "agent.listHarnessModels",
   schemaVersion: { major: 1, minor: 0 } as const,
   requestSchema: listHarnessModelsRequestSchemaV10,
-  responseSchema: listHarnessModelsResponseSchema,
+  responseSchema: listHarnessModelsResponseSchemaV20,
 });
 
 export const agentListHarnessModelsV20 = defineRpcContract({
   method: "agent.listHarnessModels",
   schemaVersion: { major: 2, minor: 0 } as const,
   requestSchema: listHarnessModelsRequestSchemaV20,
+  responseSchema: listHarnessModelsResponseSchemaV20,
+});
+
+export const agentListHarnessModelsV21 = defineRpcContract({
+  method: "agent.listHarnessModels",
+  schemaVersion: { major: 2, minor: 1 } as const,
+  requestSchema: listHarnessModelsRequestSchema,
   responseSchema: listHarnessModelsResponseSchema,
+});
+
+export const agentListHarnessModelsUpgradeV20ToV21 = defineUpgradePath<
+  typeof agentListHarnessModelsV20,
+  typeof agentListHarnessModelsV21
+>({
+  from: agentListHarnessModelsV20.schemaVersion,
+  to: agentListHarnessModelsV21.schemaVersion,
+  upgradeRequest: (request) => request,
+  upgradeResponse: (response) => ({
+    ...response,
+    profileId: null,
+    models: response.models.map((model) => ({ ...model, serviceTiers: [] })),
+  }),
 });
 
 export const agentListHarnessModelsUpgradeV1ToV2 = defineUpgradePath<
@@ -311,12 +355,26 @@ export const agentListHarnessModelsUpgradeV1ToV2 = defineUpgradePath<
 });
 
 export const agentListHarnessModelsDowngradeV2ToV1 = defineDowngradePath<
-  typeof agentListHarnessModelsV20,
+  typeof agentListHarnessModelsV21,
   typeof agentListHarnessModelsV10
 >({
-  from: { major: 2, minor: 0 },
+  from: { major: 2, minor: 1 },
   to: { major: 1, minor: 0 },
   downgradeRequest: (request) => {
+    if (
+      request.profileId !== undefined &&
+      request.profileId !== null &&
+      request.profileId !== AMBIENT_PROFILE_ID_SENTINEL
+    ) {
+      return {
+        ok: false,
+        error: {
+          code: "DOWNGRADE_UNSUPPORTED",
+          message:
+            "Listing models for a selected profile requires a newer Traycer host.",
+        },
+      };
+    }
     if (request.epicId === null || request.senderAgentId === null) {
       return {
         ok: false,
@@ -336,7 +394,10 @@ export const agentListHarnessModelsDowngradeV2ToV1 = defineDowngradePath<
       },
     };
   },
-  downgradeResponse: (response) => ({ ok: true, value: response }),
+  downgradeResponse: (response) => ({
+    ok: true,
+    value: listHarnessModelsResponseSchemaV20.parse(response),
+  }),
 });
 
 export const agentListV10 = defineRpcContract({
@@ -1366,10 +1427,8 @@ export const agentListV102 = defineRpcContract({
   method: "agent.list",
   schemaVersion: { major: 10, minor: 2 } as const,
   requestSchema: listAgentsRequestSchema,
-  // The CANONICAL alias, which this head must name - see
-  // `head-names-canonical-alias.test.ts`. The older lines hold the suffixed
-  // copies.
-  responseSchema: listAgentsResponseSchema,
+  // Frozen before service tiers entered the run config.
+  responseSchema: listAgentsResponseSchemaV102,
 });
 
 /**
@@ -1397,11 +1456,37 @@ export const agentListUpgradeV101ToV102 = defineUpgradePath<
   }),
 });
 
-export const agentListDowngradeV10ToV9 = defineDowngradePath<
+export const agentListV103 = defineRpcContract({
+  method: "agent.list",
+  schemaVersion: { major: 10, minor: 3 } as const,
+  requestSchema: listAgentsRequestSchema,
+  responseSchema: listAgentsResponseSchema,
+});
+
+export const agentListUpgradeV102ToV103 = defineUpgradePath<
   typeof agentListV102,
+  typeof agentListV103
+>({
+  from: agentListV102.schemaVersion,
+  to: agentListV103.schemaVersion,
+  upgradeRequest: (request) => request,
+  upgradeResponse: (response) => ({
+    ...response,
+    agents: response.agents.map((agent) => ({
+      ...agent,
+      runConfig:
+        agent.runConfig === null
+          ? null
+          : { ...agent.runConfig, serviceTier: null },
+    })),
+  }),
+});
+
+export const agentListDowngradeV10ToV9 = defineDowngradePath<
+  typeof agentListV103,
   typeof agentListV92
 >({
-  from: { major: 10, minor: 2 },
+  from: { major: 10, minor: 3 },
   // Lands on 9.2, major 9's latest installed minor, so `archived` survives; a
   // 9.1 or 9.0 caller's own contract parse then strips what its minor lacks.
   to: { major: 9, minor: 2 },
@@ -1420,10 +1505,10 @@ export const agentListDowngradeV10ToV9 = defineDowngradePath<
 });
 
 export const agentListDowngradeV10ToV8 = defineDowngradePath<
-  typeof agentListV102,
+  typeof agentListV103,
   typeof agentListV80
 >({
-  from: { major: 10, minor: 2 },
+  from: { major: 10, minor: 3 },
   to: { major: 8, minor: 0 },
   downgradeRequest: (request) => ({ ok: true, value: request }),
   downgradeResponse: (response) => ({
@@ -1438,10 +1523,10 @@ export const agentListDowngradeV10ToV8 = defineDowngradePath<
 });
 
 export const agentListDowngradeV10ToV7 = defineDowngradePath<
-  typeof agentListV102,
+  typeof agentListV103,
   typeof agentListV70
 >({
-  from: { major: 10, minor: 2 },
+  from: { major: 10, minor: 3 },
   to: { major: 7, minor: 0 },
   downgradeRequest: (request) => ({ ok: true, value: request }),
   downgradeResponse: (response) => ({
@@ -1456,10 +1541,10 @@ export const agentListDowngradeV10ToV7 = defineDowngradePath<
 });
 
 export const agentListDowngradeV10ToV6 = defineDowngradePath<
-  typeof agentListV102,
+  typeof agentListV103,
   typeof agentListV60
 >({
-  from: { major: 10, minor: 2 },
+  from: { major: 10, minor: 3 },
   to: { major: 6, minor: 0 },
   downgradeRequest: (request) => ({ ok: true, value: request }),
   downgradeResponse: (response) => ({
@@ -1474,10 +1559,10 @@ export const agentListDowngradeV10ToV6 = defineDowngradePath<
 });
 
 export const agentListDowngradeV10ToV5 = defineDowngradePath<
-  typeof agentListV102,
+  typeof agentListV103,
   typeof agentListV50
 >({
-  from: { major: 10, minor: 2 },
+  from: { major: 10, minor: 3 },
   to: { major: 5, minor: 0 },
   downgradeRequest: (request) => ({ ok: true, value: request }),
   downgradeResponse: (response) => ({
@@ -1492,10 +1577,10 @@ export const agentListDowngradeV10ToV5 = defineDowngradePath<
 });
 
 export const agentListDowngradeV10ToV4 = defineDowngradePath<
-  typeof agentListV102,
+  typeof agentListV103,
   typeof agentListV40
 >({
-  from: { major: 10, minor: 2 },
+  from: { major: 10, minor: 3 },
   to: { major: 4, minor: 0 },
   downgradeRequest: (request) => ({ ok: true, value: request }),
   downgradeResponse: (response) => ({
@@ -1510,10 +1595,10 @@ export const agentListDowngradeV10ToV4 = defineDowngradePath<
 });
 
 export const agentListDowngradeV10ToV3 = defineDowngradePath<
-  typeof agentListV102,
+  typeof agentListV103,
   typeof agentListV30
 >({
-  from: { major: 10, minor: 2 },
+  from: { major: 10, minor: 3 },
   to: { major: 3, minor: 0 },
   downgradeRequest: (request) => ({ ok: true, value: request }),
   downgradeResponse: (response) => ({
@@ -1528,10 +1613,10 @@ export const agentListDowngradeV10ToV3 = defineDowngradePath<
 });
 
 export const agentListDowngradeV10ToV2 = defineDowngradePath<
-  typeof agentListV102,
+  typeof agentListV103,
   typeof agentListV20
 >({
-  from: { major: 10, minor: 2 },
+  from: { major: 10, minor: 3 },
   to: { major: 2, minor: 0 },
   downgradeRequest: (request) => ({ ok: true, value: request }),
   downgradeResponse: (response) => ({
@@ -1546,10 +1631,10 @@ export const agentListDowngradeV10ToV2 = defineDowngradePath<
 });
 
 export const agentListDowngradeV10ToV1 = defineDowngradePath<
-  typeof agentListV102,
+  typeof agentListV103,
   typeof agentListV10
 >({
-  from: { major: 10, minor: 2 },
+  from: { major: 10, minor: 3 },
   to: { major: 1, minor: 0 },
   downgradeRequest: (request) => ({ ok: true, value: request }),
   downgradeResponse: (response) => ({
@@ -1641,6 +1726,23 @@ export const agentStopV10 = defineRpcContract({
 export const agentForkV10 = defineRpcContract({
   method: "agent.fork",
   schemaVersion: { major: 1, minor: 0 } as const,
+  requestSchema: forkAgentRequestSchemaV10,
+  responseSchema: forkAgentResponseSchema,
+});
+
+export const agentForkV11 = defineRpcContract({
+  method: "agent.fork",
+  schemaVersion: { major: 1, minor: 1 } as const,
   requestSchema: forkAgentRequestSchema,
   responseSchema: forkAgentResponseSchema,
+});
+
+export const agentForkUpgradeV10ToV11 = defineUpgradePath<
+  typeof agentForkV10,
+  typeof agentForkV11
+>({
+  from: agentForkV10.schemaVersion,
+  to: agentForkV11.schemaVersion,
+  upgradeRequest: (request) => request,
+  upgradeResponse: (response) => response,
 });

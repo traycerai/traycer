@@ -1,10 +1,13 @@
 import { formatAgentConfigureResponse } from "@traycer/protocol/agent/agent-profile-format";
 import {
-  agentConfigureRequestSchemaV71,
+  agentConfigureRequestSchemaV72,
   agentConfigureResponseSchema,
 } from "@traycer/protocol/host/agent/profiles";
+import { AGENT_CONFIGURE_SERVICE_TIER_REQUIRED_HOST_VERSION } from "@traycer/protocol/host/registry";
 import {
   callHostRpc,
+  callHostRpcWithDispatch,
+  PLAIN_DISPATCH,
   parseCanonicalHostResponse,
   parseUserInput,
   toAgentCliError,
@@ -25,7 +28,8 @@ import type { CommandFn } from "../runner/runner";
  * no reasoning effort, disables fast mode, and selects full access rather than
  * preserving whatever the agent had. An unsupported effort / fast-mode
  * combination normalizes host-side and returns a warning; an unknown model or
- * unusable profile is a hard failure.
+ * unusable profile is a hard failure. `--service-tier` names the tier directly
+ * and takes precedence over `--fast`; requests naming it require `7.2`.
  */
 export function buildAgentConfigureCommand(opts: {
   readonly epicId: string | null;
@@ -36,10 +40,11 @@ export function buildAgentConfigureCommand(opts: {
   readonly profile: string;
   readonly reasoningEffort: string | null;
   readonly fast: boolean;
+  readonly serviceTier: string | null;
   readonly permissionMode: string | null;
 }): CommandFn {
   return async () => {
-    const request = parseUserInput(agentConfigureRequestSchemaV71, {
+    const request = parseUserInput(agentConfigureRequestSchemaV72, {
       epicId: resolveEpicId(opts.epicId),
       senderAgentId: resolveSenderAgentId(opts.senderAgentId),
       agentId: opts.agentId,
@@ -48,12 +53,19 @@ export function buildAgentConfigureCommand(opts: {
       profileSelection: parseConcreteProfileSelection(opts.profile),
       reasoningEffort: opts.reasoningEffort,
       fastMode: opts.fast,
+      serviceTier: opts.serviceTier ?? undefined,
       permissionMode: opts.permissionMode ?? "full_access",
       // The command does not choose routing: the agent keeps what it has.
       routing: null,
     });
     const result = await toAgentCliError(
-      callHostRpc("agent.configure", request),
+      request.serviceTier === undefined
+        ? callHostRpc("agent.configure", request)
+        : callHostRpcWithDispatch("agent.configure", request, {
+            ...PLAIN_DISPATCH,
+            requiredHostMethodVersion:
+              AGENT_CONFIGURE_SERVICE_TIER_REQUIRED_HOST_VERSION,
+          }),
     );
     const response = parseCanonicalHostResponse(
       "agent.configure",

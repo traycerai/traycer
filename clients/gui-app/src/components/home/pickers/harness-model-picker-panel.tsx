@@ -98,6 +98,7 @@ export interface HarnessModelPickerPanelBodyProps {
   readonly onRefreshCatalog: () => Promise<void>;
   readonly hostUnavailableLabel: string | null;
   readonly onOpenProviderSettings: (focusTab: string) => void;
+  readonly onOpenHostUpdates: () => void;
   /** Closes the picker popover without opening Settings - used by the profile
    *  dropdown's "Create new profile" row, which opens the add-profile flow in
    *  its own global host, not Settings. */
@@ -283,6 +284,7 @@ export function HarnessModelPickerPanelBody(
     onRefreshCatalog,
     hostUnavailableLabel,
     onOpenProviderSettings,
+    onOpenHostUpdates,
     onClosePicker,
     listRef,
     listKey,
@@ -447,6 +449,7 @@ export function HarnessModelPickerPanelBody(
               onActive={onActiveRow}
               onSelect={onSelectRow}
               onOpenProviderSettings={onOpenProviderSettings}
+              onOpenHostUpdates={onOpenHostUpdates}
               terminalLoginSurface={terminalLoginSurface}
               runTargetHostId={runTargetHostId}
               onClosePicker={onClosePicker}

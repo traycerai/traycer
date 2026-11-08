@@ -1,11 +1,14 @@
 import path from "node:path";
 import {
-  createAgentRequestSchemaV31,
+  createAgentRequestSchemaV32,
   createAgentResponseSchema,
   type CreateAgentWorkspace,
 } from "@traycer/protocol/host/agent/shared";
+import { AGENT_CREATE_SERVICE_TIER_REQUIRED_HOST_VERSION } from "@traycer/protocol/host/registry";
 import {
   callHostRpc,
+  callHostRpcWithDispatch,
+  PLAIN_DISPATCH,
   parseCanonicalHostResponse,
   parseUserInput,
   toAgentCliError,
@@ -44,6 +47,9 @@ import type { CommandFn } from "../runner/runner";
  * guide explicitly directs them to do so. The choice is carried by
  * `agent.create@3.0`; transport downgrade to released v1/v2 hosts fails with
  * upgrade guidance rather than discarding it.
+ *
+ * `--service-tier` names a tier advertised for the selected profile/model and
+ * takes precedence over `--fast`; requests naming it require `3.2`.
  */
 export function buildAgentCreateCommand(opts: {
   readonly epicId: string | null;
@@ -54,6 +60,7 @@ export function buildAgentCreateCommand(opts: {
   readonly model: string | null;
   readonly reasoningEffort: string | null;
   readonly fast: boolean;
+  readonly serviceTier: string | null;
   readonly permissionMode: string | null;
   readonly profile: string | null;
   readonly cwd: string | null;
@@ -67,7 +74,7 @@ export function buildAgentCreateCommand(opts: {
     // Validate the full request locally so a bad --surface / --harness
     // fails fast with a clear E_INVALID_ARGUMENT (listing the allowed harness
     // values) instead of round-tripping or leaking a raw ZodError stack.
-    const request = parseUserInput(createAgentRequestSchemaV31, {
+    const request = parseUserInput(createAgentRequestSchemaV32, {
       senderAgentId,
       epicId,
       name: opts.name,
@@ -79,6 +86,7 @@ export function buildAgentCreateCommand(opts: {
       agentMode: "regular",
       reasoningEffort: opts.reasoningEffort,
       fastMode: opts.fast ? true : null,
+      serviceTier: opts.serviceTier ?? undefined,
       permissionMode: opts.permissionMode ?? "full_access",
       workspace: parseAgentCreateWorkspace({
         cwd: opts.cwd,
@@ -89,7 +97,15 @@ export function buildAgentCreateCommand(opts: {
       // The CLI has no routing flag: the agent follows the device's routing.
       routing: null,
     });
-    const result = await toAgentCliError(callHostRpc("agent.create", request));
+    const result = await toAgentCliError(
+      request.serviceTier === undefined
+        ? callHostRpc("agent.create", request)
+        : callHostRpcWithDispatch("agent.create", request, {
+            ...PLAIN_DISPATCH,
+            requiredHostMethodVersion:
+              AGENT_CREATE_SERVICE_TIER_REQUIRED_HOST_VERSION,
+          }),
+    );
     const { agentId, warnings } = parseCanonicalHostResponse(
       "agent.create",
       createAgentResponseSchema,

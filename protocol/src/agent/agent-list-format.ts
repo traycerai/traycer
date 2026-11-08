@@ -771,7 +771,7 @@ function formatAgentListLegend(
     ? "\nowner: <@handle>: the person who owns an agent that is not yours (another user when the host cannot name them); a row without it is yours"
     : "";
   const runConfig = showRunConfig
-    ? "\nmodel: <slug>: the configured model (provider default means the TUI provider resolves it)\neffort: <level>: the configured reasoning effort; omitted when absent\nfast: fast mode is enabled"
+    ? "\nmodel: <slug>: the configured model (provider default means the TUI provider resolves it)\neffort: <level>: the configured reasoning effort; omitted when absent\nserviceTier: <id>: the configured service tier; omitted when none is reported\nfast: fast mode is enabled"
     : "";
   const runTuple = showRunTuple
     ? "\nprofile: <id> / mode: <word>: the provider profile (ambient is the provider's own login) and permission mode the agent's future turns use, in the form traycer_configure_agent takes back. Shown only for your own GUI agents on the host that answered; a row without them is one that host cannot answer for"
@@ -855,7 +855,11 @@ function formatRunConfigToken(agent: AgentSummary): string {
   if (agent.runConfig.reasoningEffort !== null) {
     parts.push(`effort: ${agent.runConfig.reasoningEffort}`);
   }
-  if (agent.runConfig.fastMode === true) parts.push("fast");
+  if (agent.runConfig.serviceTier !== null) {
+    parts.push(`serviceTier: ${agent.runConfig.serviceTier}`);
+  } else if (agent.runConfig.fastMode === true) {
+    parts.push("fast");
+  }
   return parts.join(" ");
 }
 
@@ -865,7 +869,11 @@ function formatRunConfigSelfLines(agent: AgentSummary): string[] {
   if (agent.runConfig.reasoningEffort !== null) {
     lines.push(`effort: ${agent.runConfig.reasoningEffort}`);
   }
-  if (agent.runConfig.fastMode !== null) {
+  lines.push(`serviceTier: ${agent.runConfig.serviceTier ?? "-"}`);
+  if (
+    agent.runConfig.serviceTier === null &&
+    agent.runConfig.fastMode !== null
+  ) {
     lines.push(`fast: ${agent.runConfig.fastMode ? "yes" : "no"}`);
   }
   return lines;
