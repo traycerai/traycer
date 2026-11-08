@@ -146,6 +146,12 @@ describe("StderrCaptureBuffer", () => {
         "assertion",
       ],
       ["Error: spawn EBUSY\n", "other"],
+      // Node's own uncaught-error block ends in the `Node.js v<version>`
+      // trailer; a stack alone (a logged error) does not.
+      [
+        "node:internal/process/promises:394\n    triggerUncaughtException(err, true /* fromPromise */);\n    ^\n\nError: boom\n    at run (file.js:1:1)\n\nNode.js v24.20.0\n",
+        "node-uncaught",
+      ],
       // `console.assert` writes this bare phrase; it is not a native abort.
       ["Assertion failed: config ok\nError: boom\n", "other"],
     ])("sorts %j as %s", (text, expected) => {
@@ -231,6 +237,288 @@ describe("StderrCaptureBuffer", () => {
     expect(escaped.length).toBe(STDERR_MARKER_MAX_CHARS);
     expect(escaped.endsWith("…")).toBe(true);
     expect(escaped.slice(0, -1)).toBe("A".repeat(STDERR_MARKER_MAX_CHARS - 1));
+  });
+
+  describe("closed-set evidence beyond the fatal kind", () => {
+    const capture = (
+      ...chunks: string[]
+    ): InstanceType<typeof StderrCaptureBuffer> => {
+      const buf = new StderrCaptureBuffer(2048, 2048);
+      for (const chunk of chunks) buf.append(Buffer.from(chunk));
+      return buf;
+    };
+    const uncaught = (header: string, extra: string): string =>
+      `node:internal/modules/run_main:1\n    throw err;\n    ^\n\n${header}\n    at run (file.js:1:1)\n    at next (file.js:2:2)${extra}\n\nNode.js v24.20.0\n`;
+
+    it.each([
+      ["[host] layer0-acquired attempt=a fs-type=NTFS\n", "layer0-acquired"],
+      ["[host] layer0-degraded attempt=a cause={}\n", "layer0-degraded"],
+      ["[host] layer0-declined attempt=a evidence={}\n", "layer0-declined"],
+      [
+        "[host] runtime-load-failed sibling=x (the host runtime directory is incomplete)\n",
+        "runtime-load-failed",
+      ],
+      [
+        "[host] unhandledRejection during bootstrap (fatal, pre-safety-net) Error: x\n",
+        "bootstrap-unhandled-rejection",
+      ],
+      ["[host] dev-identity-refused: nope\n", "dev-identity-refused"],
+      [
+        "host-shutdown-forced reason=watchdog pending=close\n",
+        "forced-shutdown",
+      ],
+      ["Error: spawn EBUSY\n", "none"],
+    ])("names the last host-authored line in %j as %s", (text, expected) => {
+      expect(capture(text).lastHostLine()).toBe(expected);
+    });
+
+    it("reports the LATEST host-authored line, not the first", () => {
+      expect(
+        capture(
+          "[host] layer0-acquired attempt=a fs-type=NTFS\n",
+          "(node:1) Warning: noisy\n",
+          "[host] layer0-degraded attempt=a cause={}\n",
+        ).lastHostLine(),
+      ).toBe("layer0-degraded");
+    });
+
+    it("carries no text of an unrecognised line", () => {
+      const buf = capture("[host] something-new C:\\Users\\someone\\x\n");
+      expect(buf.lastHostLine()).toBe("none");
+    });
+
+    it("names the error class and code of a Node uncaught block", () => {
+      const buf = capture(
+        uncaught(
+          "SqliteHoldBoundError: unit exceeded its bound",
+          " {\n  errno: -4048,\n  code: 'EPERM',\n  syscall: 'rename'\n}",
+        ),
+      );
+      expect(buf.classifyFatal(true)).toBe("node-uncaught");
+      expect(buf.uncaughtErrorClass()).toBe("custom");
+      expect(buf.uncaughtErrorCode()).toBe("EPERM");
+    });
+
+    it("names a bare Error with an ERR_ code", () => {
+      const buf = capture(
+        uncaught("Error: nope", " {\n  code: 'ERR_INVALID_ARG_TYPE'\n}"),
+      );
+      expect(buf.uncaughtErrorClass()).toBe("Error");
+      expect(buf.uncaughtErrorCode()).toBe("ERR_INVALID_ARG_TYPE");
+    });
+
+    it.each([
+      // Node prints a coded error's code in the header, between the class and
+      // the colon (`fs.readFileSync(null)`, `new URL("x")`).
+      [
+        "a TypeError with its code in the header",
+        "TypeError [ERR_INVALID_ARG_TYPE]: The path argument must be of type string",
+        "TypeError",
+      ],
+      [
+        "a bare Error with its code in the header",
+        "Error [ERR_STREAM_WRITE_AFTER_END]: write after end",
+        "Error",
+      ],
+      [
+        "a coded error with no message",
+        "SystemError [ERR_SYSTEM_ERROR]",
+        "SystemError",
+      ],
+    ])("keeps the class of %s", (_name, header, expected) => {
+      const buf = capture(uncaught(header, ""));
+      expect(buf.classifyFatal(true)).toBe("node-uncaught");
+      expect(buf.uncaughtErrorClass()).toBe(expected);
+    });
+
+    it.each([
+      ["a class not ending in Error", "Whatever: x"],
+      ["a user word before a bracketed code", "Tom [ERR_X]: x"],
+      ["a lowercase bracket", "TypeError [oops]: x"],
+      ["a lowercase token", "someError: x"],
+      ["a multi-line message ending in a user word", "Tom Smith"],
+      ["a token longer than the bound", `E${"a".repeat(60)}Error: x`],
+    ])("says unclassified for %s", (_name, header) => {
+      const buf = capture(uncaught(header, ""));
+      expect(buf.classifyFatal(true)).toBe("node-uncaught");
+      expect(buf.uncaughtErrorClass()).toBe("unclassified");
+      expect(buf.uncaughtErrorCode()).toBe("none");
+    });
+
+    // The header is Node's first line after the caret: `Name: message`. A
+    // multi-line message is the message, never a class.
+    it.each([
+      [
+        "a second message line shaped like a class",
+        "Error: spawn failed\nAcmeCorpPaymentError: card 4111 for bob",
+      ],
+      [
+        "a traceback line inside the message",
+        "Error: Command failed: py x.py\nTraceback (most recent call last):\nValueError: bad",
+      ],
+    ])(
+      "takes the class from the first header line, not %s",
+      (_name, header) => {
+        const buf = capture(uncaught(header, ""));
+        expect(buf.uncaughtErrorClass()).toBe("Error");
+      },
+    );
+
+    it("reads a code only from the inspected properties after the last frame", () => {
+      const buf = capture(uncaught("Error: x\n  code: 'EVIL',", ""));
+      expect(buf.classifyFatal(true)).toBe("node-uncaught");
+      expect(buf.uncaughtErrorCode()).toBe("none");
+    });
+
+    it("says unclassified for a block with no caret line, even when an earlier logged error is held", () => {
+      // An elided capture: the head holds an earlier logged error, the tail
+      // holds the last frames and the trailer, and no caret line survives.
+      const buf = new StderrCaptureBuffer(80, 80);
+      buf.append(Buffer.from("RangeError: earlier\n    at f (a.js:1:1)\n"));
+      buf.append(Buffer.from("x".repeat(400)));
+      buf.append(
+        Buffer.from("\n    at run (file.js:1:1)\n\nNode.js v24.20.0\n"),
+      );
+      expect(buf.classifyFatal(true)).toBe("node-uncaught");
+      expect(buf.uncaughtErrorClass()).toBe("unclassified");
+      expect(buf.uncaughtErrorCode()).toBe("none");
+    });
+
+    it("reads a CRLF block (Windows) the same way", () => {
+      const crlf = uncaught(
+        "TypeError [ERR_INVALID_ARG_TYPE]: bad",
+        " {\n  code: 'ERR_INVALID_ARG_TYPE'\n}",
+      ).replaceAll("\n", "\r\n");
+      const buf = capture(crlf);
+      expect(buf.classifyFatal(true)).toBe("node-uncaught");
+      expect(buf.uncaughtErrorClass()).toBe("TypeError");
+      expect(buf.uncaughtErrorCode()).toBe("ERR_INVALID_ARG_TYPE");
+    });
+
+    // Node prints an error-valued `cause` inside the outer error's inspected
+    // properties, after the outer's own `code`: the outer error's code is the
+    // one that counts, and the cause's stack is not the outer's.
+    const withCause = (outerProps: string, causeProps: string): string =>
+      `node:internal/modules/run_main:1\n    throw err;\n    ^\n\nError: wrapper\n    at run (file.js:1:1)\n    at next (file.js:2:2) {\n${outerProps}  [cause]: Error: inner\n      at inner (x.js:1:1)\n      at more (x.js:2:2) {\n${causeProps}  }\n}\n\nNode.js v24.20.0\n`;
+
+    it("reads the outer error's code, not its cause's", () => {
+      const buf = capture(
+        withCause("  code: 'ERR_WRAPPED',\n", "    code: 'ENOENT'\n"),
+      );
+      expect(buf.classifyFatal(true)).toBe("node-uncaught");
+      expect(buf.uncaughtErrorClass()).toBe("Error");
+      expect(buf.uncaughtErrorCode()).toBe("ERR_WRAPPED");
+    });
+
+    it("says none when only the cause carries a code", () => {
+      const buf = capture(withCause("", "    code: 'ENOENT'\n"));
+      expect(buf.uncaughtErrorCode()).toBe("none");
+    });
+
+    // Node underlines a whole token with a run of carets.
+    it("reads the header after a multi-caret source marker", () => {
+      const syntax =
+        "/tmp/t.js:1\nconst foo bar = 1;\n      ^^^\n\nSyntaxError: Missing initializer in const declaration\n    at wrapSafe (node:internal/modules/cjs/loader:1:1)\n\nNode.js v24.20.0\n";
+      const buf = capture(syntax);
+      expect(buf.classifyFatal(true)).toBe("node-uncaught");
+      expect(buf.uncaughtErrorClass()).toBe("SyntaxError");
+    });
+
+    // An ordinary nested object in the properties holds a `code` of its own,
+    // at a deeper indent; only the outer error's own properties count.
+    it("reads the outer error's own code, not a nested object's", () => {
+      const nested = (outer: string): string =>
+        uncaught(
+          "Error: outer",
+          ` {\n  details: {\n    message: '${"x".repeat(100)}',\n    code: 'ENOENT'\n  },\n${outer}}`,
+        );
+      expect(
+        capture(nested("  code: 'ERR_WRAPPED'\n")).uncaughtErrorCode(),
+      ).toBe("ERR_WRAPPED");
+      expect(capture(nested("")).uncaughtErrorCode()).toBe("none");
+    });
+
+    // An execFile error embeds the child's whole crash, frames and properties
+    // included, in its message; the outer error's own stack comes after it.
+    it("reads the outer error's code, not an embedded child crash's", () => {
+      const embedded = (outerCode: string): string =>
+        `/tmp/t.js:1\n    ^\n\nError: Command failed: node child.js\n/tmp/child.js:1\n    ^\n\nError: inner\n    at run (child.js:1:1) {\n  code: 'ENOENT'\n}\n\nNode.js v24.20.0\n\n    at genericNodeError (node:internal/errors:1:1)\n    at exithandler (node:child_process:1:1) {\n  ${outerCode},\n  killed: false\n}\n\nNode.js v24.20.0\n`;
+      expect(capture(embedded("code: 1")).uncaughtErrorCode()).toBe("none");
+      expect(capture(embedded("code: 'ERR_OUTER'")).uncaughtErrorCode()).toBe(
+        "ERR_OUTER",
+      );
+    });
+
+    it.each([
+      ["a code outside every shape", "my code!"],
+      ["an errno name outside the allowlist", "EVIL"],
+    ])("says other for %s", (_name, code) => {
+      const buf = capture(uncaught("Error: x", ` {\n  code: '${code}'\n}`));
+      expect(buf.uncaughtErrorCode()).toBe("other");
+    });
+
+    it.each(["ENOENT", "EPERM", "ECONNRESET", "EAI_AGAIN", "ECANCELED"])(
+      "keeps the allowlisted errno %s",
+      (code) => {
+        const buf = capture(uncaught("Error: x", ` {\n  code: '${code}'\n}`));
+        expect(buf.uncaughtErrorCode()).toBe(code);
+      },
+    );
+
+    it.each([
+      "Error",
+      "TypeError",
+      "RangeError",
+      "SyntaxError",
+      "ReferenceError",
+      "EvalError",
+      "URIError",
+      "AggregateError",
+      "SystemError",
+      "AssertionError",
+      "AbortError",
+    ])("keeps the standard class %s", (name) => {
+      const buf = capture(uncaught(`${name}: x`, ""));
+      expect(buf.uncaughtErrorClass()).toBe(name);
+    });
+
+    it("says custom for a class-shaped name outside the standard set, and for a thrown string", () => {
+      expect(
+        capture(
+          uncaught("AcmeCorpPaymentError: card", ""),
+        ).uncaughtErrorClass(),
+      ).toBe("custom");
+      const thrown =
+        "/tmp/t.js:1\nthrow 'AcmeCorpPaymentError';\n^\nAcmeCorpPaymentError\n(Use `node --trace-uncaught ...` to show where the exception was thrown)\n\nNode.js v24.20.0\n";
+      const buf = capture(thrown);
+      expect(buf.classifyFatal(true)).toBe("node-uncaught");
+      expect(buf.uncaughtErrorClass()).toBe("custom");
+    });
+
+    // The caret line that opens the real block is the FIRST one: the message
+    // that follows the header can hold caret lines and whole embedded crashes
+    // of its own.
+    it("takes the header after the first caret line, not a caret inside the message", () => {
+      const sql =
+        "node:internal/process/promises:394\n    triggerUncaughtException(err, true);\n    ^\n\nError: sql failed\nselect 1 from t\n       ^\nAcmeCorpPaymentError: card 4111\n    at run (file.js:1:1)\n\nNode.js v24.20.0\n";
+      const buf = capture(sql);
+      expect(buf.classifyFatal(true)).toBe("node-uncaught");
+      expect(buf.uncaughtErrorClass()).toBe("Error");
+    });
+
+    it("takes the header of the outer block when an execFile message embeds a child Node crash", () => {
+      const embedded =
+        "node:internal/process/promises:394\n    triggerUncaughtException(err, true);\n    ^\n\nError: Command failed: node child.js\nnode:internal/process/promises:394\n    triggerUncaughtException(err, true);\n    ^\n\nAcmeCorpPaymentError: card 4111\n    at run (child.js:1:1)\n\nNode.js v24.20.0\n\n    at genericNodeError (node:internal/errors:1:1)\n    at exithandler (node:child_process:1:1) {\n  code: 1,\n  killed: false\n}\n\nNode.js v24.20.0\n";
+      const buf = capture(embedded);
+      expect(buf.classifyFatal(true)).toBe("node-uncaught");
+      expect(buf.uncaughtErrorClass()).toBe("Error");
+    });
+
+    it("says none for both when the capture holds no Node trailer", () => {
+      const buf = capture("Error: boom\n    at run (file.js:1:1)\n");
+      expect(buf.uncaughtErrorClass()).toBe("none");
+      expect(buf.uncaughtErrorCode()).toBe("none");
+    });
   });
 
   describe("toSingleLine (shared escaper)", () => {
