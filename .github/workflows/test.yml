@@ -51,12 +51,11 @@ jobs:
   bootstrap-proof:
     name: cold bootstrap (${{ matrix.platform }}, ${{ matrix.origin }})
     if: >-
-      github.event_name == 'workflow_dispatch' && inputs.bootstrap_matrix && (
-        github.event_name != 'pull_request'
+      (github.event_name != 'pull_request'
         || (github.base_ref != 'main' && !startsWith(github.base_ref, 'integration/') && !startsWith(github.base_ref, 'land/'))
         || github.event.pull_request.head.repo.full_name != github.repository
         || github.event.pull_request.user.type == 'Bot'
-      )
+      ) && github.event_name == 'workflow_dispatch' && inputs.bootstrap_matrix
     runs-on: ${{ matrix.runner }}
     strategy:
       fail-fast: false
@@ -591,6 +590,7 @@ jobs:
       # more than three minutes, while cache restore on this runner took 3m27
       # plus a 32s install versus 3m51 for the uncached install below.
       - id: ci_acquisition_1
+        shell: bash
         run: |
           bun install --frozen-lockfile
           echo "executed=true" >> "$GITHUB_OUTPUT"
