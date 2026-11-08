@@ -491,7 +491,7 @@ describe("formatAgentListResponse categorization", () => {
     expect(output).not.toContain("You:");
   });
 
-  it("renders model, effort, tier and fast on a GUI row", () => {
+  it("renders model, effort and tier without a redundant fast token on a GUI row", () => {
     const caller = agent({ id: "caller", isSelf: true });
     const configured = agent({
       id: "done",
@@ -508,8 +508,9 @@ describe("formatAgentListResponse categorization", () => {
     );
 
     expect(output).toContain(
-      "done gui/claude model: gpt-5.6-sol effort: high serviceTier: priority fast",
+      "done gui/claude model: gpt-5.6-sol effort: high serviceTier: priority",
     );
+    expect(agentLine(output, "done gui/claude")).not.toContain(" fast");
   });
 
   it("omits null effort and disabled fast tokens", () => {
@@ -1501,6 +1502,24 @@ describe("formatAgentSelf", () => {
     expect(output).toContain("model: gpt-5.6-sol");
     expect(output).toContain("effort: high");
     expect(output).toContain("fast: yes");
+  });
+
+  it("reports a selected tier without a redundant GUI fast line", () => {
+    const output = formatAgentSelf(
+      agent({
+        id: "self",
+        isSelf: true,
+        runConfig: {
+          model: { kind: "concrete", slug: "gpt-6.1-sol" },
+          reasoningEffort: "high",
+          fastMode: true,
+          serviceTier: "priority",
+        },
+      }),
+    );
+
+    expect(output).toContain("serviceTier: priority");
+    expect(output).not.toContain("fast:");
   });
 
   it("omits null effort and reports disabled GUI fast mode as no", () => {

@@ -977,6 +977,18 @@ function HarnessModelPickerImpl(props: HarnessModelPickerProps) {
       hostId: null,
     });
   }
+
+  function openHostUpdates(): void {
+    closeOnly();
+    openSettings({
+      section: "host",
+      resetToGeneral: false,
+      tab: "updates",
+      draft: null,
+      hostId: runTargetClient?.getActiveHostId() ?? runTargetHostId,
+    });
+  }
+
   // Falls back to the fallback harness list's label while the catalog hasn't
   // resolved the active provider yet (e.g. still loading).
   const activePanelLabel = useMemo(
@@ -1440,6 +1452,7 @@ function HarnessModelPickerImpl(props: HarnessModelPickerProps) {
         onRefreshCatalog={handleRefreshCatalog}
         hostUnavailableLabel={hostUnavailableLabel}
         onOpenProviderSettings={openProviderSettings}
+        onOpenHostUpdates={openHostUpdates}
         onClosePicker={closeOnly}
         listRef={listRef}
         listKey={listKey}
@@ -1893,6 +1906,9 @@ function useBrowsedProviderCatalogEntry(input: {
             modelsQuery.data?.models ??
             (input.profileId === null ? entry.models : []),
           modelsLoading,
+          modelsError:
+            modelsQuery.error ??
+            (input.profileId === null ? entry.modelsError : null),
         }
       : entry;
   }, [
@@ -1901,6 +1917,7 @@ function useBrowsedProviderCatalogEntry(input: {
     input.profileId,
     modelsLoading,
     modelsQuery.data?.models,
+    modelsQuery.error,
   ]);
 }
 

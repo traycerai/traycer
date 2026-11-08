@@ -857,8 +857,9 @@ function formatRunConfigToken(agent: AgentSummary): string {
   }
   if (agent.runConfig.serviceTier !== null) {
     parts.push(`serviceTier: ${agent.runConfig.serviceTier}`);
+  } else if (agent.runConfig.fastMode === true) {
+    parts.push("fast");
   }
-  if (agent.runConfig.fastMode === true) parts.push("fast");
   return parts.join(" ");
 }
 
@@ -869,7 +870,10 @@ function formatRunConfigSelfLines(agent: AgentSummary): string[] {
     lines.push(`effort: ${agent.runConfig.reasoningEffort}`);
   }
   lines.push(`serviceTier: ${agent.runConfig.serviceTier ?? "-"}`);
-  if (agent.runConfig.fastMode !== null) {
+  if (
+    agent.runConfig.serviceTier === null &&
+    agent.runConfig.fastMode !== null
+  ) {
     lines.push(`fast: ${agent.runConfig.fastMode ? "yes" : "no"}`);
   }
   return lines;
