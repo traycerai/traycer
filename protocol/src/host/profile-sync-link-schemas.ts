@@ -133,6 +133,44 @@ export const profileSyncAcceptAccountRequestSchema = lazySchema(() =>
 const providerDocumentSchema = lazySchema(() =>
   z.record(z.string(), z.unknown()),
 );
+/** Frozen credential variants for the retired peer-transfer @1.0 methods. */
+const profileSyncCredentialSchemaV10 = lazySchema(() =>
+  z
+    .discriminatedUnion("kind", [
+      z.strictObject({
+        kind: z.literal("claude-oauth"),
+        /** The `claudeAiOauth` object only; MCP sign-ins never travel. */
+        document: providerDocumentSchema,
+        /** The `oauthAccount` block of the profile's `.claude.json`, which is
+         * where the CLI keeps who the sign-in belongs to. `null` when the
+         * source has none yet. */
+        account: providerDocumentSchema.nullable(),
+      }),
+      z.strictObject({
+        kind: z.literal("codex-auth-file"),
+        document: providerDocumentSchema,
+      }),
+      z.strictObject({
+        kind: z.literal("grok-auth-file"),
+        document: providerDocumentSchema,
+      }),
+      z.strictObject({
+        kind: z.literal("antigravity-oauth"),
+        document: providerDocumentSchema,
+      }),
+      z.strictObject({
+        kind: z.literal("antigravity-api-key"),
+        apiKey: z.string().min(1).max(PROFILE_SYNC_MAX_CREDENTIAL_BYTES),
+      }),
+    ])
+    .refine(
+      (value) =>
+        new TextEncoder().encode(JSON.stringify(value)).byteLength <=
+        PROFILE_SYNC_MAX_CREDENTIAL_BYTES,
+      { message: "Sign-in exceeds byte limit" },
+    ),
+);
+
 export const profileSyncCredentialSchema = lazySchema(() =>
   z
     .discriminatedUnion("kind", [
@@ -222,7 +260,7 @@ export const hostProfileSyncApplyRequestSchema = lazySchema(() =>
       profile: profileSyncProfileSettingsSchema,
       accountId: accountIdSchema,
       generation: generationSchema,
-      credential: profileSyncCredentialSchema,
+      credential: profileSyncCredentialSchemaV10,
       /** Set only by the explicit accept-account action. */
       acceptAccountChange: z.boolean(),
       /** Set until the source has had this link confirmed once. A destination
@@ -259,7 +297,7 @@ export const hostProfileSyncOfferRequestSchema = lazySchema(() =>
       providerId: profileSyncProviderSchema,
       accountId: accountIdSchema,
       generation: generationSchema,
-      credential: profileSyncCredentialSchema,
+      credential: profileSyncCredentialSchemaV10,
     })
     .refine(
       (value) =>
@@ -297,7 +335,7 @@ export const hostProfileSyncFetchResponseSchema = lazySchema(() =>
       result: z.literal("current"),
       accountId: accountIdSchema,
       generation: generationSchema,
-      credential: profileSyncCredentialSchema,
+      credential: profileSyncCredentialSchemaV10,
     }),
     /** The link exists but its store holds no sign-in right now. */
     z.strictObject({
