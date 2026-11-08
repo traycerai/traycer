@@ -260,6 +260,44 @@ describe("agent create profile selection", () => {
   });
 });
 
+describe("agent create surface and harness validation", () => {
+  async function expectInvalidArgument(
+    opts: Parameters<typeof buildAgentCreateCommand>[0],
+  ): Promise<CliError> {
+    const error = await buildAgentCreateCommand(opts)(makeCtx()).then(
+      () => null,
+      (rejection: unknown) => rejection,
+    );
+    expect(error).toBeInstanceOf(CliError);
+    if (!(error instanceof CliError)) throw new Error("unreachable");
+    expect(error.code).toBe(CLI_ERROR_CODES.INVALID_ARGUMENT);
+    expect(rpcMock).not.toHaveBeenCalled();
+    expect(dispatchMock).not.toHaveBeenCalled();
+    return error;
+  }
+
+  it("rejects --surface without --harness locally", async () => {
+    const error = await expectInvalidArgument({
+      ...createOpts(null),
+      surface: "gui",
+      harness: null,
+    });
+    expect(error.message).toContain("--harness");
+    expect(error.message).toContain("codex");
+  });
+
+  it("rejects a harness the chosen surface does not support, naming the supported ones", async () => {
+    const error = await expectInvalidArgument({
+      ...createOpts(null),
+      surface: "tui",
+      harness: "kimi",
+    });
+    expect(error.message).toContain("kimi");
+    expect(error.message).toContain("tui");
+    expect(error.message).toContain("claude, codex, opencode");
+  });
+});
+
 describe("agent list-profiles", () => {
   const response = {
     providerId: "codex",
