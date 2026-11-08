@@ -228,13 +228,19 @@ vi.mock(
   },
 );
 
-vi.mock("@/hooks/sandboxes/use-sandbox-catalogue-query", () => ({
-  useSandboxCatalogue: () => ({
-    isPending: false,
-    isError: false,
-    data: sandboxCatalogueState.data,
+vi.mock(
+  "@/hooks/sandboxes/use-sandbox-catalogue-query",
+  async (importOriginal) => ({
+    ...(await importOriginal<
+      typeof import("@/hooks/sandboxes/use-sandbox-catalogue-query")
+    >()),
+    useSandboxCatalogue: () => ({
+      isPending: false,
+      isError: false,
+      data: sandboxCatalogueState.data,
+    }),
   }),
-}));
+);
 
 vi.mock("@/hooks/auth/use-auth-user-query", () => ({
   useAuthUser: () => ({ data: null }),
@@ -539,6 +545,7 @@ describe("overlay cap and scroll classes", () => {
   });
 
   it("SandboxShapeSheet content carries the dialog cap and the form body carries the scroll classes", () => {
+    const harness = mountTeamPage(personalPoolSource(), {});
     render(
       <SandboxShapeSheet
         open
@@ -562,6 +569,7 @@ describe("overlay cap and scroll classes", () => {
         }}
         onUseShape={() => undefined}
       />,
+      { wrapper: harness.Wrapper },
     );
     const dialog = screen.getByTestId("sandbox-shape-sheet");
     assertCapClass(dialog, DIALOG_CAP);
