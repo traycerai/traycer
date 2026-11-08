@@ -16,6 +16,7 @@ import {
   onTestFinished,
   vi,
 } from "vitest";
+import type { JsonContent } from "@traycer/protocol/common/registry";
 import type { ImageBytes } from "@/lib/attachments/image-bytes";
 import type * as LandingImageStore from "@/lib/composer/landing-image-store";
 import {
@@ -266,21 +267,53 @@ describe("the image hashes the stored drafts keep alive", () => {
 
     expect(app.imageRoots().has(hash ?? "")).toBe(true);
   });
+
+  it("leave out the image of a box cleared and written at once by a page hide", async () => {
+    const hash = await storeImageBytes();
+    app.drafts
+      .getState()
+      .typeThreadBox(BOT_ID, "channel", "pic", boxDoc("pic", [INLINE_IMAGE]));
+    await waitForStore(app, (stored) =>
+      JSON.stringify(stored?.[BOT_ID]?.channel).includes(hash),
+    );
+    expect(app.imageRoots().has(hash)).toBe(true);
+
+    app.drafts.getState().typeThreadBox(BOT_ID, "channel", "", null);
+    window.dispatchEvent(new Event("pagehide"));
+
+    expect(storedDrafts(app)?.[BOT_ID]).toBeUndefined();
+    expect(app.imageRoots().has(hash)).toBe(false);
+  });
 });
 
 describe("a write a newer one overtakes while it stores an image", () => {
   const IMAGE_STORE = "@/lib/composer/landing-image-store";
 
+  /** A second image, told apart from the PNG by its first byte. */
+  const GIF_IMAGE: JsonContent = {
+    type: "imageAttachment",
+    attrs: {
+      id: "image-2",
+      fileName: "dot.gif",
+      mimeType: "image/gif",
+      b64content: "R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7",
+    },
+  };
+  const isGif = (bytes: ImageBytes): boolean => bytes[0] === 0x47;
+  const everyImage = (): boolean => true;
+
   interface HeldPuts {
     readonly app: App;
-    /** Resolves once a write has asked for an image's bytes to be stored. */
+    /** Resolves once a write has asked for a held image's bytes to be stored. */
     readonly entered: Promise<void>;
     /** Lets the held puts store their bytes; resolves once the writes that wait on them are done. */
     readonly release: () => Promise<void>;
   }
 
-  /** The app restarted with every image put held until `release`. */
-  async function restartWithImagePutsHeld(): Promise<HeldPuts> {
+  /** The app restarted with the puts of the images `holds` picks held until `release`. */
+  async function restartWithImagePutsHeld(
+    holds: (bytes: ImageBytes) => boolean,
+  ): Promise<HeldPuts> {
     let open = (): void => {};
     const gate = new Promise<void>((resolve) => {
       open = resolve;
@@ -295,6 +328,7 @@ describe("a write a newer one overtakes while it stores an image", () => {
       return {
         ...real,
         putImage: (bytes: ImageBytes): Promise<string> => {
+          if (!holds(bytes)) return real.putImage(bytes);
           const put = gate.then(() => real.putImage(bytes));
           puts.push(put);
           enter();
@@ -331,7 +365,7 @@ describe("a write a newer one overtakes while it stores an image", () => {
 
   it("keeps none of its images alive once a cleared box overtook it", async () => {
     const hash = await storeImageBytes();
-    const held = await restartWithImagePutsHeld();
+    const held = await restartWithImagePutsHeld(everyImage);
     app = held.app;
     await storingTypedImage(held);
 
@@ -346,7 +380,7 @@ describe("a write a newer one overtakes while it stores an image", () => {
   });
 
   it("is not written by a second page hide over the newer draft the first one wrote", async () => {
-    const held = await restartWithImagePutsHeld();
+    const held = await restartWithImagePutsHeld(everyImage);
     app = held.app;
     await storingTypedImage(held);
 
@@ -357,6 +391,33 @@ describe("a write a newer one overtakes while it stores an image", () => {
     expect(storedDrafts(app)?.[BOT_ID]?.channel?.text).toBe("newer");
     await held.release();
     expect(storedDrafts(app)?.[BOT_ID]?.channel?.text).toBe("newer");
+  });
+
+  it("hands an image it had stored to the page hide that overtook it, and on to the next one", async () => {
+    const pngHash = await storeImageBytes();
+    const held = await restartWithImagePutsHeld(isGif);
+    app = held.app;
+    const content = boxDoc("two", [INLINE_IMAGE, GIF_IMAGE]);
+    app.drafts.getState().typeThreadBox(BOT_ID, "channel", "two", content);
+    await vi.advanceTimersByTimeAsync(
+      app.storage.BOT_BOX_DRAFT_WRITE_DEBOUNCE_MS,
+    );
+    await held.entered;
+    await vi.waitFor(() => {
+      expect(app.imageRoots().has(pngHash)).toBe(true);
+    });
+
+    app.drafts.getState().typeThreadBox(BOT_ID, "channel", "two more", content);
+    window.dispatchEvent(new Event("pagehide"));
+    app.drafts
+      .getState()
+      .typeThreadBox(BOT_ID, "channel", "two again", content);
+    window.dispatchEvent(new Event("pagehide"));
+
+    const stored = storedDrafts(app)?.[BOT_ID]?.channel;
+    expect(stored?.text).toBe("two again");
+    expect(JSON.stringify(stored?.content)).toContain(pngHash);
+    await held.release();
   });
 });
 

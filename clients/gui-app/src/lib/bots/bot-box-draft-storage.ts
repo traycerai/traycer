@@ -118,7 +118,8 @@ export function stopBotBoxDraftWrites(): void {
 
 /**
  * Writes now what is waiting, else what is being written, keeping only the
- * images already stored. Written from what was being written, that write
+ * images already stored, whose hashes it keeps for the writes after it, the
+ * next page hide's included. Written from what was being written, that write
  * still lands after it, with all its images, where the page is still there;
  * written from what was waiting, the older write being stored never lands.
  */
@@ -133,15 +134,10 @@ export function flushPendingBotBoxDraftWrite(): void {
     writer.inFlight = null;
     writer.inFlightHashByInline = new Map();
   }
-  store(
+  land(
     write,
-    storedState(
-      write.value.state,
-      (b64content) =>
-        hashByInline.get(b64content) ??
-        inFlightHashByInline.get(b64content) ??
-        null,
-    ),
+    (b64content) =>
+      hashByInline.get(b64content) ?? inFlightHashByInline.get(b64content),
   );
 }
 
@@ -226,14 +222,8 @@ async function writePending(): Promise<void> {
   const stored = new Map<string, string>();
   writer.inFlight = pending;
   writer.inFlightHashByInline = stored;
-  const images = new Set<string>();
-  for (const draft of eachDraft(pending.value.state.threadBoxes)) {
-    if (draft.content === null) continue;
-    for (const b64content of inlineImages(draft.content))
-      images.add(b64content);
-  }
   await Promise.all(
-    [...images]
+    [...draftImages(pending.value.state)]
       .filter((b64content) => !writer.hashByInline.has(b64content))
       .map(async (b64content) => {
         const hash = await storeImage(b64content);
@@ -247,27 +237,47 @@ async function writePending(): Promise<void> {
   // A newer write, or a wipe, came while the images were stored: the images
   // this one stored are kept only by what still names them.
   if (generation !== writer.generation || wiped()) return;
-  const hashByInline = new Map<string, string>();
-  for (const b64content of images) {
-    const hash = writer.hashByInline.get(b64content) ?? stored.get(b64content);
-    if (hash !== undefined) hashByInline.set(b64content, hash);
-  }
-  writer.hashByInline = hashByInline;
-  store(
+  const { hashByInline } = writer;
+  land(
     pending,
-    storedState(
-      pending.value.state,
-      (b64content) => hashByInline.get(b64content) ?? null,
-    ),
+    (b64content) => hashByInline.get(b64content) ?? stored.get(b64content),
   );
 }
 
-function store(pending: PendingWrite, state: PersistedBotBoxDrafts): void {
+/**
+ * Writes `write`, each inline image named by the hash `hashOf` has for it and
+ * left out where it has none; from here on, the hashes of the images it
+ * names are the ones this window's boxes hold.
+ */
+function land(
+  write: PendingWrite,
+  hashOf: (b64content: string) => string | undefined,
+): void {
+  const hashByInline = new Map<string, string>();
+  for (const b64content of draftImages(write.value.state)) {
+    const hash = hashOf(b64content);
+    if (hash !== undefined) hashByInline.set(b64content, hash);
+  }
+  writer.hashByInline = hashByInline;
   const value: StorageValue<PersistedBotBoxDrafts> = {
-    ...pending.value,
-    state,
+    ...write.value,
+    state: storedState(
+      write.value.state,
+      (b64content) => hashByInline.get(b64content) ?? null,
+    ),
   };
-  localStorage.setItem(pending.name, JSON.stringify(value));
+  localStorage.setItem(write.name, JSON.stringify(value));
+}
+
+/** The bytes of every inline image the drafts hold. */
+function draftImages(state: PersistedBotBoxDrafts): Set<string> {
+  const images = new Set<string>();
+  for (const draft of eachDraft(state.threadBoxes)) {
+    if (draft.content === null) continue;
+    for (const b64content of inlineImages(draft.content))
+      images.add(b64content);
+  }
+  return images;
 }
 
 /** The image's bytes stored under their hash; `null` where they cannot be. */
