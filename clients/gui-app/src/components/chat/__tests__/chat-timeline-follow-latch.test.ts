@@ -282,6 +282,7 @@ function makeFakeListState(list: {
     positionAtIndex: (index) => rowTops.get(keys[index]),
     positionByKey: (key) => rowTops.get(key),
     scroll: 0,
+    scrollAdjustPending: 0,
     scrollLength: 0,
     scrollVelocity: 0,
     // The list answers `sizesKnown.get(...)`, so a row it has never
