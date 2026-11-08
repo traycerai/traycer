@@ -115,13 +115,16 @@ import { UserMessageAttachmentGallery } from "./user-message-attachment-gallery"
  *
  * Without `hoverActions` the row is drawn as the post a thread opens on, at
  * the top of the thread panel: the same row, with nothing on hover.
+ * `timeLink` makes its time a link that shows the post in its channel, as a
+ * Threads card's post does (Tracy Bots T137); `null` leaves the time a label.
  */
 export function ChatBotMessage(props: {
   readonly message: ChatMessageModel;
   readonly presentation: ChatBotPresentation;
   readonly hoverActions: boolean;
+  readonly timeLink: (() => void) | null;
 }): ReactElement {
-  const { message, presentation, hoverActions } = props;
+  const { message, presentation, hoverActions, timeLink } = props;
   const sentAt = message.sentAt ?? message.createdAt;
   const body = <BotMessageText message={message} />;
   if (message.role === "assistant") {
@@ -132,6 +135,7 @@ export function ChatBotMessage(props: {
         sentAt={sentAt}
         body={body}
         hoverActions={hoverActions}
+        timeLink={timeLink}
       />
     );
   }
@@ -142,6 +146,7 @@ export function ChatBotMessage(props: {
       sentAt={sentAt}
       body={body}
       hoverActions={hoverActions}
+      timeLink={timeLink}
     />
   );
 }
@@ -156,8 +161,9 @@ function MemberRow(props: {
   readonly sentAt: number;
   readonly body: ReactNode;
   readonly hoverActions: boolean;
+  readonly timeLink: (() => void) | null;
 }): ReactElement {
-  const { message, presentation, sentAt, body, hoverActions } = props;
+  const { message, presentation, sentAt, body, hoverActions, timeLink } = props;
   const name = message.senderLabel ?? "Member";
   const postId = message.persistentMessageId;
   const threadLine =
@@ -192,6 +198,7 @@ function MemberRow(props: {
       replyInThread={replyInThread}
       failed={failed}
       longPress={sheet.longPress}
+      timeLink={timeLink}
     >
       <UserMessageAttachmentGallery
         align="start"
@@ -260,6 +267,7 @@ export function ChatBotAppPost(props: {
       replyInThread={null}
       failed={null}
       longPress={null}
+      timeLink={null}
     >
       {props.children}
     </BotMessageFrame>
@@ -358,8 +366,9 @@ function BotRow(props: {
   readonly sentAt: number;
   readonly body: ReactNode;
   readonly hoverActions: boolean;
+  readonly timeLink: (() => void) | null;
 }): ReactElement {
-  const { message, presentation, sentAt, body, hoverActions } = props;
+  const { message, presentation, sentAt, body, hoverActions, timeLink } = props;
   const announcement = message.announcement ?? null;
   const question = message.question ?? null;
   const questions = question === null ? null : presentation.questions;
@@ -380,6 +389,7 @@ function BotRow(props: {
       replyInThread={replyInThread}
       failed={null}
       longPress={sheet.longPress}
+      timeLink={timeLink}
     >
       {question !== null && questions !== null ? (
         <BotAskingBody
@@ -697,6 +707,8 @@ function BotMessageFrame(props: {
   readonly failed: FailedMessageActions | null;
   /** A long press that opens the row's sheet on a touch screen; `null` for a row with none. */
   readonly longPress: LongPress | null;
+  /** Shows the row in its channel, from its time; `null` leaves the time a label. */
+  readonly timeLink: (() => void) | null;
   readonly children: ReactNode;
 }): ReactElement {
   const nameClassName = "truncate text-ui-sm font-semibold text-foreground";
@@ -753,10 +765,10 @@ function BotMessageFrame(props: {
             <span className={nameClassName}>{props.name}</span>
           )}
           {props.sentAt === null ? null : (
-            <ChatMessageTimestamp
-              timestamp={props.sentAt}
-              separated={false}
+            <RowTime
+              sentAt={props.sentAt}
               instanceId={props.instanceId}
+              link={props.timeLink}
             />
           )}
         </div>
@@ -771,6 +783,32 @@ function BotMessageFrame(props: {
         />
       )}
     </div>
+  );
+}
+
+/** A row's time; a link where it shows the row in its channel (`link`). */
+function RowTime(props: {
+  readonly sentAt: number;
+  readonly instanceId: string;
+  readonly link: (() => void) | null;
+}): ReactElement {
+  const time = (
+    <ChatMessageTimestamp
+      timestamp={props.sentAt}
+      separated={false}
+      instanceId={props.instanceId}
+    />
+  );
+  if (props.link === null) return time;
+  return (
+    <button
+      type="button"
+      className="rounded-sm text-muted-foreground hover:text-foreground hover:underline focus-visible:outline-2 focus-visible:outline-ring"
+      data-testid="bot-row-time-link"
+      onClick={props.link}
+    >
+      {time}
+    </button>
   );
 }
 
