@@ -598,12 +598,12 @@ async function configureAutoUpdater(deps: AppUpdaterDeps): Promise<void> {
       // failing while Squirrel still works, so only this native event releases
       // preparation ownership and allows a retry.
       pendingMacUpdate = null;
-      handleUpdaterError(err);
+      handleUpdaterError(err, false);
     });
   }
   autoUpdater.on("error", (err) => {
     log.error("[updater] error", credentialSafeLogValue(err));
-    if (!originOperation) handleUpdaterError(err);
+    if (!originOperation) handleUpdaterError(err, false);
   });
 }
 
@@ -1669,6 +1669,7 @@ export function startUpdateDownload(): DesktopAppUpdateSnapshot {
   // call in an async IIFE funnels both a synchronous throw and an async rejection
   // into the one `.catch`, so either way the download takes the single
   // reset/error transition in `handleUpdaterError`.
+  const managedOrigins = selectedDesktopRelease?.origins !== undefined;
   void (async () => {
     const release = selectedDesktopRelease;
     originOperation = release?.origins !== undefined;
@@ -1700,7 +1701,7 @@ export function startUpdateDownload(): DesktopAppUpdateSnapshot {
     }
   })().catch((err: unknown) => {
     log.warn("[updater] download failed", credentialSafeLogValue(err));
-    handleUpdaterError(err);
+    handleUpdaterError(err, managedOrigins);
   });
   return currentSnapshot;
 }
@@ -1748,7 +1749,7 @@ export function installDownloadedUpdate(): DesktopAppUpdateSnapshot {
     // emits the error. Call it BEFORE clearing the flag; that branch is
     // selected by it.
     log.warn("[updater] install handoff threw", credentialSafeLogValue(err));
-    handleUpdaterError(err);
+    handleUpdaterError(err, false);
   }
   return currentSnapshot;
 }
@@ -2638,7 +2639,7 @@ function emitSnapshot(patch: AppUpdateSnapshotPatch): DesktopAppUpdateSnapshot {
   return currentSnapshot;
 }
 
-function handleUpdaterError(error: unknown): void {
+function handleUpdaterError(error: unknown, originErrorSettled: boolean): void {
   // MacUpdater resolves downloadUpdate after serving the ZIP, before Squirrel
   // finishes preparing it. A later wrapper failure (such as copying the cached
   // blockmap) does not cancel that native work. Keep its ownership until native
@@ -2709,7 +2710,7 @@ function handleUpdaterError(error: unknown): void {
   // mid-flight all 404 with a perfectly good token, and only the probe
   // distinguishes those from a revoked one. Costs one request, on the 404
   // path only, and only when a staging token is actually configured.
-  if (isStagingMasked404Candidate(error)) {
+  if (!originErrorSettled && isStagingMasked404Candidate(error)) {
     // The only asynchronous branch in this handler, so it is also the only one
     // that can turn a throwing listener into an unhandled rejection instead of
     // propagating to the emitter. Terminate the chain here.
