@@ -1109,6 +1109,35 @@ describe("JudgeTab", () => {
       ]);
       expectNoEmptyModelWrite();
     });
+
+    it("a named default provider switch commits while its model query is pending", async () => {
+      judgeCatalog.harnesses = [
+        harness({
+          id: "claude",
+          label: "Claude Code",
+          nativeAutoJudge: true,
+          judgeDefaultModel: "claude-named-default",
+        }),
+        harness({ id: "codex", label: "Codex" }),
+      ];
+      setModels("claude", { kind: "pending" });
+
+      const user = await switchToCodex();
+      expect(pendingLine().textContent).toContain("Waiting for Codex's models");
+
+      await user.click(await screen.findByRole("tab", { name: /Claude/ }));
+
+      await waitFor(() => expect(setJudgeMutate).toHaveBeenCalledTimes(1));
+      expect(writes()).toEqual([
+        {
+          harnessId: "claude",
+          model: "claude-named-default",
+          profileId: null,
+          reasoningEffort: null,
+        },
+      ]);
+      expectNoEmptyModelWrite();
+    });
   });
 
   describe("composer memory", () => {
