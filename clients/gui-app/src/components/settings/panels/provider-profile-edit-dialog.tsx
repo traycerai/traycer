@@ -1,5 +1,3 @@
-import { useSignOutProviderProfile } from "@/hooks/providers/use-sign-out-provider-profile-mutation";
-import { useHostSupportsMethod } from "@/hooks/host/use-host-supports-method";
 import { useId, useState, type ReactNode } from "react";
 import { toast } from "sonner";
 import { ChevronRight, RefreshCw, Trash2 } from "lucide-react";
@@ -44,7 +42,6 @@ import { useHostCredentialRefusal } from "@/hooks/host/use-host-credential-refus
 import {
   usePersonalHostName,
   usePersonalHostState,
-  usePersonalPageHost,
 } from "@/components/settings/personal/personal-page-context";
 import {
   deviceProfileKeyCustodyLine,
@@ -486,72 +483,6 @@ function ProfileEditAccountSection(props: {
   );
 }
 
-function ProfileSignOutAction(props: {
-  readonly providerId: ProviderId;
-  readonly profile: ProviderProfile;
-  readonly disabled: boolean;
-  readonly onSignedOut: () => void;
-}): ReactNode {
-  const signOut = useSignOutProviderProfile();
-  const [confirmOpen, setConfirmOpen] = useState(false);
-  const host = usePersonalPageHost();
-  const supported = useHostSupportsMethod(
-    host.hostId,
-    "providers.signOutProfile",
-  );
-  const custodyClass = props.profile.credentialHome?.custodyClass;
-  if (
-    !supported ||
-    props.profile.kind !== "managed" ||
-    props.profile.presence?.kind !== "admitted" ||
-    (custodyClass !== "self-sufficient" && custodyClass !== "brokered")
-  )
-    return null;
-  const everyHost = custodyClass === "brokered";
-  const label = everyHost ? "Sign out on every host" : "Sign out";
-  const submit = (): void =>
-    signOut.mutate(
-      { providerId: props.providerId, profileId: props.profile.profileId },
-      {
-        onSuccess: () => {
-          setConfirmOpen(false);
-          props.onSignedOut();
-        },
-      },
-    );
-  return (
-    <>
-      <Button
-        type="button"
-        size="sm"
-        variant="ghost"
-        disabled={props.disabled || signOut.isPending}
-        onClick={() => (everyHost ? setConfirmOpen(true) : submit())}
-      >
-        {signOut.isPending ? <MutedAgentSpinner /> : null}
-        {label}
-      </Button>
-      {everyHost ? (
-        <ConfirmDestructiveDialog
-          open={confirmOpen}
-          onOpenChange={setConfirmOpen}
-          title="Sign this account out on every host?"
-          description="You’ll need to sign in again to use this account on any host."
-          cascadeSummary={null}
-          actionLabel={label}
-          isPending={signOut.isPending}
-          blockedReason={
-            props.disabled
-              ? "This profile is busy. Try again when it finishes."
-              : null
-          }
-          onConfirm={submit}
-        />
-      ) : null}
-    </>
-  );
-}
-
 export function ProfileEditDialog(props: {
   readonly state: ProviderCliState;
   readonly profile: ProviderProfile;
@@ -780,12 +711,6 @@ export function ProfileEditDialog(props: {
                   </Button>
                 </span>
               </TooltipWrapper>
-              <ProfileSignOutAction
-                providerId={providerId}
-                profile={props.profile}
-                disabled={savePending}
-                onSignedOut={() => props.onOpenChange(false)}
-              />
               <div className="flex items-center gap-2">
                 <Button
                   type="button"

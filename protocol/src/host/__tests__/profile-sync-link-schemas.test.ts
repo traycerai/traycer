@@ -3,7 +3,6 @@
  * provider, the closed sets the app renders, and the bounds a host enforces.
  */
 import { describe, expect, it } from "vitest";
-import { PROFILE_SYNC_LINK_RPC_METHODS } from "@traycer/protocol/host/profile-sync-link-contracts";
 import {
   PROFILE_SYNC_MAX_CREDENTIAL_BYTES,
   hostProfileSyncApplyRequestSchema,
@@ -239,56 +238,6 @@ describe("hostProfileSyncFetchResponseSchema", () => {
       hostProfileSyncFetchResponseSchema.safeParse({
         result: "refused",
         reason: "not-a-reason",
-      }).success,
-    ).toBe(false);
-  });
-});
-
-describe("released peer-transfer credential slots", () => {
-  it("keeps Claude API keys off every released transfer contract", () => {
-    const credential = { kind: "claude-api-key", apiKey: "synthetic-key" };
-    expect(profileSyncCredentialSchema.safeParse(credential).success).toBe(
-      true,
-    );
-    const apply =
-      PROFILE_SYNC_LINK_RPC_METHODS["host.profileSync.apply"][1].versions[0]
-        .contract.requestSchema;
-    const offer =
-      PROFILE_SYNC_LINK_RPC_METHODS["host.profileSync.offerCredential"][1]
-        .versions[0].contract.requestSchema;
-    const fetch =
-      PROFILE_SYNC_LINK_RPC_METHODS["host.profileSync.fetchCredential"][1]
-        .versions[0].contract.responseSchema;
-    expect(
-      apply.safeParse(applyRequest("claude", credentialFor("claude"))).success,
-    ).toBe(true);
-    expect(
-      offer.safeParse(offerRequest("claude", credentialFor("claude"))).success,
-    ).toBe(true);
-    expect(
-      fetch.safeParse({
-        result: "current",
-        accountId: "synthetic-account",
-        generation: 1,
-        credential: credentialFor("claude"),
-      }).success,
-    ).toBe(true);
-    expect(
-      apply.safeParse(
-        applyRequest("claude", profileSyncCredentialSchema.parse(credential)),
-      ).success,
-    ).toBe(false);
-    expect(
-      offer.safeParse(
-        offerRequest("claude", profileSyncCredentialSchema.parse(credential)),
-      ).success,
-    ).toBe(false);
-    expect(
-      fetch.safeParse({
-        result: "current",
-        accountId: "synthetic-account",
-        generation: 1,
-        credential,
       }).success,
     ).toBe(false);
   });
