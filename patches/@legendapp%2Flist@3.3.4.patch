@@ -1,7 +1,16 @@
 diff --git a/react-native.web.d.ts b/react-native.web.d.ts
-index b6c7481603f4119495551b3e4c1c071984c144af..ff554d24a517b75aa89f6a8da4f40214f6ca7d8f 100644
+index b6c7481..4d9ccd8 100644
 --- a/react-native.web.d.ts
 +++ b/react-native.web.d.ts
+@@ -32,7 +32,7 @@ interface MaintainVisibleContentPositionNormalized<ItemT = any> {
+ }
+
+ type ListenerType = "activeStickyIndex" | "alignItemsAtEndPadding" | "anchoredEndSpaceSize" | "containerLayoutEpoch" | "debugComputedScroll" | "debugRawScroll" | "extraData" | "footerSize" | "headerSize" | "lastItemKeys" | "lastPositionUpdate" | "maintainVisibleContentPosition" | "numColumns" | "numContainers" | "numContainersPooled" | "otherAxisSize" | "readyToRender" | "scrollAdjust" | "scrollAdjustPending" | "scrollAdjustUserOffset" | "scrollSize" | "snapToOffsets" | "stylePaddingTop" | "totalSize" | "isAtEnd" | "isAtStart" | "isNearEnd" | "isNearStart" | "isWithinMaintainScrollAtEndThreshold" | "adaptiveRender" | `containerColumn${number}` | `containerSpan${number}` | `containerItemData${number}` | `containerItemIndex${number}` | `containerItemKey${number}` | `containerPosition${number}` | `containerSticky${number}`;
+-type LegendListListenerType = Extract<ListenerType, "activeStickyIndex" | "anchoredEndSpaceSize" | "footerSize" | "headerSize" | "isAtEnd" | "isAtStart" | "isNearEnd" | "isNearStart" | "isWithinMaintainScrollAtEndThreshold" | "adaptiveRender" | "lastItemKeys" | "lastPositionUpdate" | "numContainers" | "numContainersPooled" | "otherAxisSize" | "readyToRender" | "snapToOffsets" | "totalSize">;
++type LegendListListenerType = Extract<ListenerType, "activeStickyIndex" | "anchoredEndSpaceSize" | "footerSize" | "headerSize" | "isAtEnd" | "isAtStart" | "isNearEnd" | "isNearStart" | "isWithinMaintainScrollAtEndThreshold" | "adaptiveRender" | "lastItemKeys" | "lastPositionUpdate" | "numContainers" | "numContainersPooled" | "otherAxisSize" | "readyToRender" | "scrollAdjustPending" | "snapToOffsets" | "totalSize">;
+ type ListenerTypeValueMap = {
+     activeStickyIndex: number;
+     alignItemsAtEndPadding: number;
 @@ -348,6 +348,20 @@ interface LegendListSpecificProps<ItemT, TItemType extends string | undefined> {
          itemKey: string;
          itemData: ItemT;
@@ -60,7 +69,7 @@ index b6c7481603f4119495551b3e4c1c071984c144af..ff554d24a517b75aa89f6a8da4f40214
       * Sets whether scroll processing is enabled.
       * @param enabled - If true, scroll processing is enabled.
 diff --git a/react-native.web.js b/react-native.web.js
-index ea0348877ff08eb9962ff97efebf2cc19cffad11..f92b39704c23e95dac36ba0e0443b65ed4a7b478 100644
+index ea03488..6013acb 100644
 --- a/react-native.web.js
 +++ b/react-native.web.js
 @@ -789,7 +789,15 @@ function recalculateSettledScroll(ctx) {
@@ -572,7 +581,152 @@ index ea0348877ff08eb9962ff97efebf2cc19cffad11..f92b39704c23e95dac36ba0e0443b65e
        },
        scrollTo: (options) => {
          const { x = 0, y = 0, animated = true } = options;
-@@ -6389,8 +6720,68 @@ function getScrollAdjustTarget(ctx, contentNode) {
+@@ -6170,6 +6501,38 @@ var ListComponentScrollView = React3.forwardRef(function ListComponentScrollView
+     onScroll2(scrollEvent);
+   }, [getCurrentScrollOffset, horizontal, isWindowScroll, onScroll2]);
+   const scrollEventCoalescer = useRafCoalescer(emitScroll);
++  // Patched: the touch scroll that owns the scroller, for the adjusts that
++  // wait in the layout while it does (`shouldAbsorbAdjustInLayout`). A finger
++  // owns it from touchstart to the last touchend; the fling after the lift
++  // owns it until the scroller has been quiet for the scroll-end fallback
++  // (iOS reports no touch for a contact that lands on a fling, so quiet is
++  // the only end a fling has). The end commits what accrued in one frame:
++  // the containers take their positions back and the offset moves by as much.
++  const touchScrollRestRef = React3.useRef(void 0);
++  const touchScrollOffsetRef = React3.useRef(void 0);
++  const settleTouchScroll = React3.useCallback(() => {
++    const timeout = touchScrollRestRef.current;
++    if (timeout !== void 0) {
++      clearTimeout(timeout);
++      touchScrollRestRef.current = void 0;
++    }
++    const state = ctx.state;
++    const touchScroll = state == null ? void 0 : state.touchScroll;
++    if (!touchScroll || touchScroll.touching || !touchScroll.momentum) {
++      return;
++    }
++    touchScroll.momentum = false;
++    const scrollingTo = state.scrollingTo;
++    if (!(scrollingTo && scrollingTo.animated && !scrollingTo.isInitialScroll)) {
++      state.scrollAdjustHandler.commitPendingAdjust(void 0);
++    }
++  }, [ctx.state]);
++  const armTouchScrollRest = React3.useCallback(() => {
++    if (touchScrollRestRef.current !== void 0) {
++      clearTimeout(touchScrollRestRef.current);
++    }
++    touchScrollRestRef.current = setTimeout(settleTouchScroll, SCROLL_END_FALLBACK_MS);
++  }, [settleTouchScroll]);
+   const scrollEndFallbackRef = React3.useRef(void 0);
+   const emitScrollEnd = React3.useCallback(() => {
+     const timeout = scrollEndFallbackRef.current;
+@@ -6179,13 +6542,41 @@ var ListComponentScrollView = React3.forwardRef(function ListComponentScrollView
+     }
+     scrollEventCoalescer.flush();
+     onInternalScrollEnd == null ? void 0 : onInternalScrollEnd();
+-  }, [onInternalScrollEnd, scrollEventCoalescer]);
++    settleTouchScroll();
++  }, [onInternalScrollEnd, scrollEventCoalescer, settleTouchScroll]);
+   const handleScroll = React3.useCallback(
+     (_event) => {
+       if (!onScroll2) {
+         return;
+       }
+       const state = ctx.state;
++      const touchScroll = state == null ? void 0 : state.touchScroll;
++      if (touchScroll && (touchScroll.touching || touchScroll.momentum)) {
++        // Patched: the fling keeps moving the offset after an adjust was
++        // taken into the layout, and the commit at rest is clean only while
++        // `offset + pending` is still reachable. Each report checks the
++        // offset it brings and the one the fling's step says comes next;
++        // once either would clamp, the pending term is committed now, from
++        // an offset it still lands at. That ends the fling a step before the
++        // edge, where the edge would have stopped it anyway, instead of
++        // closing a gap there with a visible jump.
++        const offset = getCurrentScrollOffset();
++        const previous = touchScrollOffsetRef.current;
++        touchScrollOffsetRef.current = offset;
++        if (touchScroll.momentum) {
++          armTouchScrollRest();
++          const pending = state.scrollAdjustHandler.pendingAdjust;
++          const next = previous === void 0 ? offset : offset + (offset - previous);
++          if (pending !== 0 && !(pendingAdjustLandsAt(ctx, offset, pending) && pendingAdjustLandsAt(ctx, next, pending))) {
++            // Committed, not settled: the fling may go on (a write ends it
++            // on iOS through 26, not elsewhere), and what it measures next
++            // waits in the layout again until it ends.
++            state.scrollAdjustHandler.commitPendingAdjust(void 0);
++          }
++        }
++      } else {
++        touchScrollOffsetRef.current = void 0;
++      }
+       const shouldFlushImmediately = !!(state == null ? void 0 : state.scrollingTo) || !!(state == null ? void 0 : state.initialScrollSession) && !state.didFinishInitialScroll || !!(state == null ? void 0 : state.initialScroll) && !state.didFinishInitialScroll || !!state && isInMVCPActiveMode(state);
+       if (shouldFlushImmediately) {
+         scrollEventCoalescer.flush();
+@@ -6200,7 +6591,7 @@ var ListComponentScrollView = React3.forwardRef(function ListComponentScrollView
+         scrollEndFallbackRef.current = setTimeout(emitScrollEnd, SCROLL_END_FALLBACK_MS);
+       }
+     },
+-    [ctx.state, emitScrollEnd, onInternalScrollEnd, onScroll2, scrollEventCoalescer]
++    [armTouchScrollRest, ctx.state, emitScrollEnd, getCurrentScrollOffset, onInternalScrollEnd, onScroll2, scrollEventCoalescer]
+   );
+   React3.useLayoutEffect(() => {
+     const target = getScrollTarget();
+@@ -6209,19 +6600,52 @@ var ListComponentScrollView = React3.forwardRef(function ListComponentScrollView
+     if ("onscrollend" in target) {
+       target.addEventListener("scrollend", emitScrollEnd);
+     }
++    const onTouchStart = () => {
++      const state = ctx.state;
++      if (!state) return;
++      const timeout = touchScrollRestRef.current;
++      if (timeout !== void 0) {
++        clearTimeout(timeout);
++        touchScrollRestRef.current = void 0;
++      }
++      touchScrollOffsetRef.current = void 0;
++      state.touchScroll = { momentum: false, touching: true };
++    };
++    const onTouchEnd = (event) => {
++      const state = ctx.state;
++      if (!state || event.touches && event.touches.length > 0) return;
++      state.touchScroll = { momentum: true, touching: false };
++      armTouchScrollRest();
++    };
++    const tracksTouch = !isWindowScroll;
++    if (tracksTouch) {
++      target.addEventListener("touchstart", onTouchStart, { passive: true });
++      target.addEventListener("touchend", onTouchEnd, { passive: true });
++      target.addEventListener("touchcancel", onTouchEnd, { passive: true });
++    }
+     return () => {
+       target.removeEventListener("scroll", handleScroll);
+       if ("onscrollend" in target) {
+         target.removeEventListener("scrollend", emitScrollEnd);
+       }
++      if (tracksTouch) {
++        target.removeEventListener("touchstart", onTouchStart);
++        target.removeEventListener("touchend", onTouchEnd);
++        target.removeEventListener("touchcancel", onTouchEnd);
++      }
+       const timeout = scrollEndFallbackRef.current;
+       if (timeout !== void 0) {
+         clearTimeout(timeout);
+         scrollEndFallbackRef.current = void 0;
+       }
++      const restTimeout = touchScrollRestRef.current;
++      if (restTimeout !== void 0) {
++        clearTimeout(restTimeout);
++        touchScrollRestRef.current = void 0;
++      }
+       scrollEventCoalescer.cancel();
+     };
+-  }, [emitScrollEnd, getScrollTarget, handleScroll, scrollEventCoalescer]);
++  }, [armTouchScrollRest, ctx.state, emitScrollEnd, getScrollTarget, handleScroll, isWindowScroll, scrollEventCoalescer]);
+   React3.useEffect(() => {
+     const doScroll = () => {
+       if (contentOffset) {
+@@ -6389,8 +6813,68 @@ function getScrollAdjustTarget(ctx, contentNode) {
    }
    return scrollElement ? { contentNode: resolvedContentNode, scrollElement } : null;
  }
@@ -642,7 +796,7 @@ index ea0348877ff08eb9962ff97efebf2cc19cffad11..f92b39704c23e95dac36ba0e0443b65e
  }
  function ScrollAdjust() {
    const ctx = useStateContext();
-@@ -6426,7 +6817,10 @@ function ScrollAdjust() {
+@@ -6426,7 +6910,10 @@ function ScrollAdjust() {
            if (needsTemporaryPadding) {
              const previousPaddingEnd = (_a3 = resetPaddingBaselineRef.current) != null ? _a3 : contentNode.style[axis.paddingEndProp];
              resetPaddingBaselineRef.current = previousPaddingEnd;
@@ -654,7 +808,7 @@ index ea0348877ff08eb9962ff97efebf2cc19cffad11..f92b39704c23e95dac36ba0e0443b65e
              contentNode.style[axis.paddingEndProp] = `${pad}px`;
              void contentNode.offsetHeight;
              scrollBy();
-@@ -6436,7 +6830,13 @@ function ScrollAdjust() {
+@@ -6436,7 +6923,13 @@ function ScrollAdjust() {
              resetPaddingRafRef.current = requestAnimationFrame(() => {
                resetPaddingRafRef.current = void 0;
                resetPaddingBaselineRef.current = void 0;
@@ -669,7 +823,7 @@ index ea0348877ff08eb9962ff97efebf2cc19cffad11..f92b39704c23e95dac36ba0e0443b65e
              });
            } else {
              scrollBy();
-@@ -6757,6 +7157,7 @@ function checkResetContainers(ctx, dataProp, { didColumnsChange = false } = {})
+@@ -6757,6 +7250,7 @@ function checkResetContainers(ctx, dataProp, { didColumnsChange = false } = {})
      for (const key in state.averageSizes) {
        delete state.averageSizes[key];
      }
@@ -677,7 +831,7 @@ index ea0348877ff08eb9962ff97efebf2cc19cffad11..f92b39704c23e95dac36ba0e0443b65e
      state.minIndexSizeChanged = 0;
      state.scrollForNextCalculateItemsInView = void 0;
    }
-@@ -7001,6 +7402,7 @@ function onScroll(ctx, event) {
+@@ -7001,6 +7495,7 @@ function onScroll(ctx, event) {
    }
    state.scrollPending = newScroll;
    updateScroll(ctx, newScroll, insetChanged, { fromNativeScrollEvent: true });
@@ -685,7 +839,63 @@ index ea0348877ff08eb9962ff97efebf2cc19cffad11..f92b39704c23e95dac36ba0e0443b65e
    trackInitialScrollNativeProgress(state, newScroll);
    clearFinishedBootstrapInitialScrollTargetIfMovedAway(ctx);
    if (state.scrollingTo) {
-@@ -7103,7 +7505,15 @@ var ScrollAdjustHandler = class {
+@@ -7069,6 +7564,32 @@ var ScheduledWork = class {
+ };
+
+ // src/core/ScrollAdjustHandler.ts
++// Patched: whether an adjust can wait in the layout until the touch scroll
++// that owns the scroller ends. Not before the list has rendered, when the
++// adjusts place the first view; and not when the commit at the end would be
++// clamped: near the start or the end of the content, the pending term would
++// hold a gap on screen that the clamped commit then closes with a visible
++// step, where a write now moves the view by the adjust alone.
++function shouldAbsorbAdjustInLayout(ctx, nextPending) {
++  const state = ctx.state;
++  const touchScroll = state.touchScroll;
++  if (!touchScroll || !(touchScroll.touching || touchScroll.momentum)) {
++    return false;
++  }
++  if (state.adjustingFromInitialMount || !peek$(ctx, "readyToRender")) {
++    return false;
++  }
++  const scroller = state.refScroller.current;
++  const observed = scroller && scroller.getCurrentScrollOffset ? scroller.getCurrentScrollOffset() : void 0;
++  const held = typeof observed === "number" && Number.isFinite(observed) ? observed : state.scroll;
++  return pendingAdjustLandsAt(ctx, held, nextPending);
++}
++// Patched: whether a commit of `pending` from `offset` lands where it asks,
++// that is, inside what the scroller can reach.
++function pendingAdjustLandsAt(ctx, offset, pending) {
++  const target = offset + pending;
++  return Math.abs(clampScrollOffset(ctx, target) - target) <= 1;
++}
+ var ScrollAdjustHandler = class {
+   constructor(ctx) {
+     this.appliedAdjust = 0;
+@@ -7080,6 +7601,22 @@ var ScrollAdjustHandler = class {
+     if ((scrollingTo == null ? void 0 : scrollingTo.animated) && !scrollingTo.isInitialScroll) {
+       this.pendingAdjust += add;
+       set$(this.ctx, "scrollAdjustPending", this.pendingAdjust);
++    } else if (shouldAbsorbAdjustInLayout(this.ctx, this.pendingAdjust + add)) {
++      // Patched: while a touch scroll owns the scroller - a finger on it, or
++      // the fling after the lift - a write of the offset is refused under the
++      // finger and ends the fling (iOS WebKit through 26), and a chat issues
++      // one for every row measured above the view. The adjust waits in the
++      // layout instead, in the pending term an animated scroll already defers
++      // its adjusts to: every container is placed `pending` short of its
++      // position and the view is read `pending` further along, so nothing on
++      // screen moves and the scroller is not written. The offset the scroller
++      // holds has not moved either, so the step `requestAdjust` took
++      // `state.scroll` by is given back: the pending term carries it, and
++      // keeping both counts it twice in the next calculation of the view. The
++      // end of the touch scroll commits what accrued, in one frame.
++      this.ctx.state.scroll -= add;
++      this.pendingAdjust += add;
++      set$(this.ctx, "scrollAdjustPending", this.pendingAdjust);
+     } else {
+       this.appliedAdjust += add;
+       set$(this.ctx, "scrollAdjust", this.appliedAdjust);
+@@ -7103,7 +7640,15 @@ var ScrollAdjustHandler = class {
            targetScroll = calculateOffsetWithOffsetPosition(this.ctx, currentOffset, scrollTarget);
            targetScroll = clampScrollOffset(this.ctx, targetScroll, scrollTarget);
          } else {
@@ -702,7 +912,7 @@ index ea0348877ff08eb9962ff97efebf2cc19cffad11..f92b39704c23e95dac36ba0e0443b65e
          }
          const adjustment = targetScroll - state.scroll;
          if (Math.abs(adjustment) > 0.1 || Math.abs(pending) > 0.1) {
-@@ -7283,6 +7693,12 @@ function createImperativeHandle(ctx, scheduleImperativeScrollCommit) {
+@@ -7283,6 +7828,12 @@ function createImperativeHandle(ctx, scheduleImperativeScrollCommit) {
      }
    };
    const startImperativeScroll = (resolve) => {
@@ -715,7 +925,7 @@ index ea0348877ff08eb9962ff97efebf2cc19cffad11..f92b39704c23e95dac36ba0e0443b65e
      state.scheduledWork.cancel("imperativeScrollReady");
      const token = ++imperativeScrollToken;
      settlePendingImperativeScroll(state);
-@@ -7333,6 +7749,7 @@ function createImperativeHandle(ctx, scheduleImperativeScrollCommit) {
+@@ -7333,6 +7884,7 @@ function createImperativeHandle(ctx, scheduleImperativeScrollCommit) {
      for (const key in state.averageSizes) {
        delete state.averageSizes[key];
      }
@@ -723,7 +933,7 @@ index ea0348877ff08eb9962ff97efebf2cc19cffad11..f92b39704c23e95dac36ba0e0443b65e
      state.minIndexSizeChanged = 0;
      state.scrollForNextCalculateItemsInView = void 0;
      state.pendingTotalSize = void 0;
-@@ -7370,6 +7787,8 @@ function createImperativeHandle(ctx, scheduleImperativeScrollCommit) {
+@@ -7370,6 +7922,8 @@ function createImperativeHandle(ctx, scheduleImperativeScrollCommit) {
        endBuffered: state.endBuffered,
        getAverageItemSizes: () => getAverageItemSizes(state),
        indexByKey: (key) => state.indexByKey.get(key),
@@ -732,7 +942,7 @@ index ea0348877ff08eb9962ff97efebf2cc19cffad11..f92b39704c23e95dac36ba0e0443b65e
        isAtEnd: peek$(ctx, "isAtEnd"),
        isAtStart: peek$(ctx, "isAtStart"),
        isEndReached: state.isEndReached,
-@@ -7448,6 +7867,35 @@ function createImperativeHandle(ctx, scheduleImperativeScrollCommit) {
+@@ -7448,6 +8002,35 @@ function createImperativeHandle(ctx, scheduleImperativeScrollCommit) {
      setItemSize: (itemKey, size) => {
        updateItemSizes(ctx, { itemKey, size });
      },
@@ -768,7 +978,7 @@ index ea0348877ff08eb9962ff97efebf2cc19cffad11..f92b39704c23e95dac36ba0e0443b65e
      setScrollProcessingEnabled: (enabled) => {
        state.scrollProcessingEnabled = enabled;
      },
-@@ -7720,6 +8168,7 @@ var LegendListInner = typedForwardRef(function LegendListInner2(props, forwarded
+@@ -7720,6 +8303,7 @@ var LegendListInner = typedForwardRef(function LegendListInner2(props, forwarded
      onEndReached,
      onEndReachedThreshold = 0.5,
      onItemSizeChanged,
@@ -776,7 +986,7 @@ index ea0348877ff08eb9962ff97efebf2cc19cffad11..f92b39704c23e95dac36ba0e0443b65e
      onMetricsChange,
      onLayout: onLayoutProp,
      onLoad,
-@@ -7845,6 +8294,9 @@ var LegendListInner = typedForwardRef(function LegendListInner2(props, forwarded
+@@ -7845,6 +8429,9 @@ var LegendListInner = typedForwardRef(function LegendListInner2(props, forwarded
        ctx.values.set("adaptiveRender", (_m = experimental_adaptiveRender == null ? void 0 : experimental_adaptiveRender.initialMode) != null ? _m : "normal");
        ctx.state = {
          averageSizes: {},
@@ -786,7 +996,7 @@ index ea0348877ff08eb9962ff97efebf2cc19cffad11..f92b39704c23e95dac36ba0e0443b65e
          columnSpans: [],
          columns: [],
          containerItemGenerations: [],
-@@ -7978,6 +8430,7 @@ var LegendListInner = typedForwardRef(function LegendListInner2(props, forwarded
+@@ -7978,6 +8565,7 @@ var LegendListInner = typedForwardRef(function LegendListInner2(props, forwarded
      onEndReachedThreshold,
      onFirstVisibleItemChanged,
      onItemSizeChanged,
@@ -795,7 +1005,7 @@ index ea0348877ff08eb9962ff97efebf2cc19cffad11..f92b39704c23e95dac36ba0e0443b65e
      onMomentumScrollEnd,
      onScroll: throttleScrollFn,
 diff --git a/react-native.web.mjs b/react-native.web.mjs
-index c96345be154d77f66c26ea42cea15a18e22f5dfa..19fe93871fa9c1d55d4cbc08f3b0d65a9eeda545 100644
+index c96345b..104368c 100644
 --- a/react-native.web.mjs
 +++ b/react-native.web.mjs
 @@ -768,7 +768,15 @@ function recalculateSettledScroll(ctx) {
@@ -1307,7 +1517,152 @@ index c96345be154d77f66c26ea42cea15a18e22f5dfa..19fe93871fa9c1d55d4cbc08f3b0d65a
        },
        scrollTo: (options) => {
          const { x = 0, y = 0, animated = true } = options;
-@@ -6368,8 +6699,68 @@ function getScrollAdjustTarget(ctx, contentNode) {
+@@ -6149,6 +6480,38 @@ var ListComponentScrollView = forwardRef(function ListComponentScrollView2({
+     onScroll2(scrollEvent);
+   }, [getCurrentScrollOffset, horizontal, isWindowScroll, onScroll2]);
+   const scrollEventCoalescer = useRafCoalescer(emitScroll);
++  // Patched: the touch scroll that owns the scroller, for the adjusts that
++  // wait in the layout while it does (`shouldAbsorbAdjustInLayout`). A finger
++  // owns it from touchstart to the last touchend; the fling after the lift
++  // owns it until the scroller has been quiet for the scroll-end fallback
++  // (iOS reports no touch for a contact that lands on a fling, so quiet is
++  // the only end a fling has). The end commits what accrued in one frame:
++  // the containers take their positions back and the offset moves by as much.
++  const touchScrollRestRef = useRef(void 0);
++  const touchScrollOffsetRef = useRef(void 0);
++  const settleTouchScroll = useCallback(() => {
++    const timeout = touchScrollRestRef.current;
++    if (timeout !== void 0) {
++      clearTimeout(timeout);
++      touchScrollRestRef.current = void 0;
++    }
++    const state = ctx.state;
++    const touchScroll = state == null ? void 0 : state.touchScroll;
++    if (!touchScroll || touchScroll.touching || !touchScroll.momentum) {
++      return;
++    }
++    touchScroll.momentum = false;
++    const scrollingTo = state.scrollingTo;
++    if (!(scrollingTo && scrollingTo.animated && !scrollingTo.isInitialScroll)) {
++      state.scrollAdjustHandler.commitPendingAdjust(void 0);
++    }
++  }, [ctx.state]);
++  const armTouchScrollRest = useCallback(() => {
++    if (touchScrollRestRef.current !== void 0) {
++      clearTimeout(touchScrollRestRef.current);
++    }
++    touchScrollRestRef.current = setTimeout(settleTouchScroll, SCROLL_END_FALLBACK_MS);
++  }, [settleTouchScroll]);
+   const scrollEndFallbackRef = useRef(void 0);
+   const emitScrollEnd = useCallback(() => {
+     const timeout = scrollEndFallbackRef.current;
+@@ -6158,13 +6521,41 @@ var ListComponentScrollView = forwardRef(function ListComponentScrollView2({
+     }
+     scrollEventCoalescer.flush();
+     onInternalScrollEnd == null ? void 0 : onInternalScrollEnd();
+-  }, [onInternalScrollEnd, scrollEventCoalescer]);
++    settleTouchScroll();
++  }, [onInternalScrollEnd, scrollEventCoalescer, settleTouchScroll]);
+   const handleScroll = useCallback(
+     (_event) => {
+       if (!onScroll2) {
+         return;
+       }
+       const state = ctx.state;
++      const touchScroll = state == null ? void 0 : state.touchScroll;
++      if (touchScroll && (touchScroll.touching || touchScroll.momentum)) {
++        // Patched: the fling keeps moving the offset after an adjust was
++        // taken into the layout, and the commit at rest is clean only while
++        // `offset + pending` is still reachable. Each report checks the
++        // offset it brings and the one the fling's step says comes next;
++        // once either would clamp, the pending term is committed now, from
++        // an offset it still lands at. That ends the fling a step before the
++        // edge, where the edge would have stopped it anyway, instead of
++        // closing a gap there with a visible jump.
++        const offset = getCurrentScrollOffset();
++        const previous = touchScrollOffsetRef.current;
++        touchScrollOffsetRef.current = offset;
++        if (touchScroll.momentum) {
++          armTouchScrollRest();
++          const pending = state.scrollAdjustHandler.pendingAdjust;
++          const next = previous === void 0 ? offset : offset + (offset - previous);
++          if (pending !== 0 && !(pendingAdjustLandsAt(ctx, offset, pending) && pendingAdjustLandsAt(ctx, next, pending))) {
++            // Committed, not settled: the fling may go on (a write ends it
++            // on iOS through 26, not elsewhere), and what it measures next
++            // waits in the layout again until it ends.
++            state.scrollAdjustHandler.commitPendingAdjust(void 0);
++          }
++        }
++      } else {
++        touchScrollOffsetRef.current = void 0;
++      }
+       const shouldFlushImmediately = !!(state == null ? void 0 : state.scrollingTo) || !!(state == null ? void 0 : state.initialScrollSession) && !state.didFinishInitialScroll || !!(state == null ? void 0 : state.initialScroll) && !state.didFinishInitialScroll || !!state && isInMVCPActiveMode(state);
+       if (shouldFlushImmediately) {
+         scrollEventCoalescer.flush();
+@@ -6179,7 +6570,7 @@ var ListComponentScrollView = forwardRef(function ListComponentScrollView2({
+         scrollEndFallbackRef.current = setTimeout(emitScrollEnd, SCROLL_END_FALLBACK_MS);
+       }
+     },
+-    [ctx.state, emitScrollEnd, onInternalScrollEnd, onScroll2, scrollEventCoalescer]
++    [armTouchScrollRest, ctx.state, emitScrollEnd, getCurrentScrollOffset, onInternalScrollEnd, onScroll2, scrollEventCoalescer]
+   );
+   useLayoutEffect(() => {
+     const target = getScrollTarget();
+@@ -6188,19 +6579,52 @@ var ListComponentScrollView = forwardRef(function ListComponentScrollView2({
+     if ("onscrollend" in target) {
+       target.addEventListener("scrollend", emitScrollEnd);
+     }
++    const onTouchStart = () => {
++      const state = ctx.state;
++      if (!state) return;
++      const timeout = touchScrollRestRef.current;
++      if (timeout !== void 0) {
++        clearTimeout(timeout);
++        touchScrollRestRef.current = void 0;
++      }
++      touchScrollOffsetRef.current = void 0;
++      state.touchScroll = { momentum: false, touching: true };
++    };
++    const onTouchEnd = (event) => {
++      const state = ctx.state;
++      if (!state || event.touches && event.touches.length > 0) return;
++      state.touchScroll = { momentum: true, touching: false };
++      armTouchScrollRest();
++    };
++    const tracksTouch = !isWindowScroll;
++    if (tracksTouch) {
++      target.addEventListener("touchstart", onTouchStart, { passive: true });
++      target.addEventListener("touchend", onTouchEnd, { passive: true });
++      target.addEventListener("touchcancel", onTouchEnd, { passive: true });
++    }
+     return () => {
+       target.removeEventListener("scroll", handleScroll);
+       if ("onscrollend" in target) {
+         target.removeEventListener("scrollend", emitScrollEnd);
+       }
++      if (tracksTouch) {
++        target.removeEventListener("touchstart", onTouchStart);
++        target.removeEventListener("touchend", onTouchEnd);
++        target.removeEventListener("touchcancel", onTouchEnd);
++      }
+       const timeout = scrollEndFallbackRef.current;
+       if (timeout !== void 0) {
+         clearTimeout(timeout);
+         scrollEndFallbackRef.current = void 0;
+       }
++      const restTimeout = touchScrollRestRef.current;
++      if (restTimeout !== void 0) {
++        clearTimeout(restTimeout);
++        touchScrollRestRef.current = void 0;
++      }
+       scrollEventCoalescer.cancel();
+     };
+-  }, [emitScrollEnd, getScrollTarget, handleScroll, scrollEventCoalescer]);
++  }, [armTouchScrollRest, ctx.state, emitScrollEnd, getScrollTarget, handleScroll, isWindowScroll, scrollEventCoalescer]);
+   useEffect(() => {
+     const doScroll = () => {
+       if (contentOffset) {
+@@ -6368,8 +6792,68 @@ function getScrollAdjustTarget(ctx, contentNode) {
    }
    return scrollElement ? { contentNode: resolvedContentNode, scrollElement } : null;
  }
@@ -1377,7 +1732,7 @@ index c96345be154d77f66c26ea42cea15a18e22f5dfa..19fe93871fa9c1d55d4cbc08f3b0d65a
  }
  function ScrollAdjust() {
    const ctx = useStateContext();
-@@ -6405,7 +6796,10 @@ function ScrollAdjust() {
+@@ -6405,7 +6889,10 @@ function ScrollAdjust() {
            if (needsTemporaryPadding) {
              const previousPaddingEnd = (_a3 = resetPaddingBaselineRef.current) != null ? _a3 : contentNode.style[axis.paddingEndProp];
              resetPaddingBaselineRef.current = previousPaddingEnd;
@@ -1389,7 +1744,7 @@ index c96345be154d77f66c26ea42cea15a18e22f5dfa..19fe93871fa9c1d55d4cbc08f3b0d65a
              contentNode.style[axis.paddingEndProp] = `${pad}px`;
              void contentNode.offsetHeight;
              scrollBy();
-@@ -6415,7 +6809,13 @@ function ScrollAdjust() {
+@@ -6415,7 +6902,13 @@ function ScrollAdjust() {
              resetPaddingRafRef.current = requestAnimationFrame(() => {
                resetPaddingRafRef.current = void 0;
                resetPaddingBaselineRef.current = void 0;
@@ -1404,7 +1759,7 @@ index c96345be154d77f66c26ea42cea15a18e22f5dfa..19fe93871fa9c1d55d4cbc08f3b0d65a
              });
            } else {
              scrollBy();
-@@ -6736,6 +7136,7 @@ function checkResetContainers(ctx, dataProp, { didColumnsChange = false } = {})
+@@ -6736,6 +7229,7 @@ function checkResetContainers(ctx, dataProp, { didColumnsChange = false } = {})
      for (const key in state.averageSizes) {
        delete state.averageSizes[key];
      }
@@ -1412,7 +1767,7 @@ index c96345be154d77f66c26ea42cea15a18e22f5dfa..19fe93871fa9c1d55d4cbc08f3b0d65a
      state.minIndexSizeChanged = 0;
      state.scrollForNextCalculateItemsInView = void 0;
    }
-@@ -6980,6 +7381,7 @@ function onScroll(ctx, event) {
+@@ -6980,6 +7474,7 @@ function onScroll(ctx, event) {
    }
    state.scrollPending = newScroll;
    updateScroll(ctx, newScroll, insetChanged, { fromNativeScrollEvent: true });
@@ -1420,7 +1775,63 @@ index c96345be154d77f66c26ea42cea15a18e22f5dfa..19fe93871fa9c1d55d4cbc08f3b0d65a
    trackInitialScrollNativeProgress(state, newScroll);
    clearFinishedBootstrapInitialScrollTargetIfMovedAway(ctx);
    if (state.scrollingTo) {
-@@ -7082,7 +7484,15 @@ var ScrollAdjustHandler = class {
+@@ -7048,6 +7543,32 @@ var ScheduledWork = class {
+ };
+
+ // src/core/ScrollAdjustHandler.ts
++// Patched: whether an adjust can wait in the layout until the touch scroll
++// that owns the scroller ends. Not before the list has rendered, when the
++// adjusts place the first view; and not when the commit at the end would be
++// clamped: near the start or the end of the content, the pending term would
++// hold a gap on screen that the clamped commit then closes with a visible
++// step, where a write now moves the view by the adjust alone.
++function shouldAbsorbAdjustInLayout(ctx, nextPending) {
++  const state = ctx.state;
++  const touchScroll = state.touchScroll;
++  if (!touchScroll || !(touchScroll.touching || touchScroll.momentum)) {
++    return false;
++  }
++  if (state.adjustingFromInitialMount || !peek$(ctx, "readyToRender")) {
++    return false;
++  }
++  const scroller = state.refScroller.current;
++  const observed = scroller && scroller.getCurrentScrollOffset ? scroller.getCurrentScrollOffset() : void 0;
++  const held = typeof observed === "number" && Number.isFinite(observed) ? observed : state.scroll;
++  return pendingAdjustLandsAt(ctx, held, nextPending);
++}
++// Patched: whether a commit of `pending` from `offset` lands where it asks,
++// that is, inside what the scroller can reach.
++function pendingAdjustLandsAt(ctx, offset, pending) {
++  const target = offset + pending;
++  return Math.abs(clampScrollOffset(ctx, target) - target) <= 1;
++}
+ var ScrollAdjustHandler = class {
+   constructor(ctx) {
+     this.appliedAdjust = 0;
+@@ -7059,6 +7580,22 @@ var ScrollAdjustHandler = class {
+     if ((scrollingTo == null ? void 0 : scrollingTo.animated) && !scrollingTo.isInitialScroll) {
+       this.pendingAdjust += add;
+       set$(this.ctx, "scrollAdjustPending", this.pendingAdjust);
++    } else if (shouldAbsorbAdjustInLayout(this.ctx, this.pendingAdjust + add)) {
++      // Patched: while a touch scroll owns the scroller - a finger on it, or
++      // the fling after the lift - a write of the offset is refused under the
++      // finger and ends the fling (iOS WebKit through 26), and a chat issues
++      // one for every row measured above the view. The adjust waits in the
++      // layout instead, in the pending term an animated scroll already defers
++      // its adjusts to: every container is placed `pending` short of its
++      // position and the view is read `pending` further along, so nothing on
++      // screen moves and the scroller is not written. The offset the scroller
++      // holds has not moved either, so the step `requestAdjust` took
++      // `state.scroll` by is given back: the pending term carries it, and
++      // keeping both counts it twice in the next calculation of the view. The
++      // end of the touch scroll commits what accrued, in one frame.
++      this.ctx.state.scroll -= add;
++      this.pendingAdjust += add;
++      set$(this.ctx, "scrollAdjustPending", this.pendingAdjust);
+     } else {
+       this.appliedAdjust += add;
+       set$(this.ctx, "scrollAdjust", this.appliedAdjust);
+@@ -7082,7 +7619,15 @@ var ScrollAdjustHandler = class {
            targetScroll = calculateOffsetWithOffsetPosition(this.ctx, currentOffset, scrollTarget);
            targetScroll = clampScrollOffset(this.ctx, targetScroll, scrollTarget);
          } else {
@@ -1437,7 +1848,7 @@ index c96345be154d77f66c26ea42cea15a18e22f5dfa..19fe93871fa9c1d55d4cbc08f3b0d65a
          }
          const adjustment = targetScroll - state.scroll;
          if (Math.abs(adjustment) > 0.1 || Math.abs(pending) > 0.1) {
-@@ -7262,6 +7672,12 @@ function createImperativeHandle(ctx, scheduleImperativeScrollCommit) {
+@@ -7262,6 +7807,12 @@ function createImperativeHandle(ctx, scheduleImperativeScrollCommit) {
      }
    };
    const startImperativeScroll = (resolve) => {
@@ -1450,7 +1861,7 @@ index c96345be154d77f66c26ea42cea15a18e22f5dfa..19fe93871fa9c1d55d4cbc08f3b0d65a
      state.scheduledWork.cancel("imperativeScrollReady");
      const token = ++imperativeScrollToken;
      settlePendingImperativeScroll(state);
-@@ -7312,6 +7728,7 @@ function createImperativeHandle(ctx, scheduleImperativeScrollCommit) {
+@@ -7312,6 +7863,7 @@ function createImperativeHandle(ctx, scheduleImperativeScrollCommit) {
      for (const key in state.averageSizes) {
        delete state.averageSizes[key];
      }
@@ -1458,7 +1869,7 @@ index c96345be154d77f66c26ea42cea15a18e22f5dfa..19fe93871fa9c1d55d4cbc08f3b0d65a
      state.minIndexSizeChanged = 0;
      state.scrollForNextCalculateItemsInView = void 0;
      state.pendingTotalSize = void 0;
-@@ -7349,6 +7766,8 @@ function createImperativeHandle(ctx, scheduleImperativeScrollCommit) {
+@@ -7349,6 +7901,8 @@ function createImperativeHandle(ctx, scheduleImperativeScrollCommit) {
        endBuffered: state.endBuffered,
        getAverageItemSizes: () => getAverageItemSizes(state),
        indexByKey: (key) => state.indexByKey.get(key),
@@ -1467,7 +1878,7 @@ index c96345be154d77f66c26ea42cea15a18e22f5dfa..19fe93871fa9c1d55d4cbc08f3b0d65a
        isAtEnd: peek$(ctx, "isAtEnd"),
        isAtStart: peek$(ctx, "isAtStart"),
        isEndReached: state.isEndReached,
-@@ -7427,6 +7846,35 @@ function createImperativeHandle(ctx, scheduleImperativeScrollCommit) {
+@@ -7427,6 +7981,35 @@ function createImperativeHandle(ctx, scheduleImperativeScrollCommit) {
      setItemSize: (itemKey, size) => {
        updateItemSizes(ctx, { itemKey, size });
      },
@@ -1503,7 +1914,7 @@ index c96345be154d77f66c26ea42cea15a18e22f5dfa..19fe93871fa9c1d55d4cbc08f3b0d65a
      setScrollProcessingEnabled: (enabled) => {
        state.scrollProcessingEnabled = enabled;
      },
-@@ -7699,6 +8147,7 @@ var LegendListInner = typedForwardRef(function LegendListInner2(props, forwarded
+@@ -7699,6 +8282,7 @@ var LegendListInner = typedForwardRef(function LegendListInner2(props, forwarded
      onEndReached,
      onEndReachedThreshold = 0.5,
      onItemSizeChanged,
@@ -1511,7 +1922,7 @@ index c96345be154d77f66c26ea42cea15a18e22f5dfa..19fe93871fa9c1d55d4cbc08f3b0d65a
      onMetricsChange,
      onLayout: onLayoutProp,
      onLoad,
-@@ -7824,6 +8273,9 @@ var LegendListInner = typedForwardRef(function LegendListInner2(props, forwarded
+@@ -7824,6 +8408,9 @@ var LegendListInner = typedForwardRef(function LegendListInner2(props, forwarded
        ctx.values.set("adaptiveRender", (_m = experimental_adaptiveRender == null ? void 0 : experimental_adaptiveRender.initialMode) != null ? _m : "normal");
        ctx.state = {
          averageSizes: {},
@@ -1521,7 +1932,7 @@ index c96345be154d77f66c26ea42cea15a18e22f5dfa..19fe93871fa9c1d55d4cbc08f3b0d65a
          columnSpans: [],
          columns: [],
          containerItemGenerations: [],
-@@ -7957,6 +8409,7 @@ var LegendListInner = typedForwardRef(function LegendListInner2(props, forwarded
+@@ -7957,6 +8544,7 @@ var LegendListInner = typedForwardRef(function LegendListInner2(props, forwarded
      onEndReachedThreshold,
      onFirstVisibleItemChanged,
      onItemSizeChanged,
@@ -1530,9 +1941,18 @@ index c96345be154d77f66c26ea42cea15a18e22f5dfa..19fe93871fa9c1d55d4cbc08f3b0d65a
      onMomentumScrollEnd,
      onScroll: throttleScrollFn,
 diff --git a/react.d.ts b/react.d.ts
-index b6c7481603f4119495551b3e4c1c071984c144af..ff554d24a517b75aa89f6a8da4f40214f6ca7d8f 100644
+index b6c7481..4d9ccd8 100644
 --- a/react.d.ts
 +++ b/react.d.ts
+@@ -32,7 +32,7 @@ interface MaintainVisibleContentPositionNormalized<ItemT = any> {
+ }
+
+ type ListenerType = "activeStickyIndex" | "alignItemsAtEndPadding" | "anchoredEndSpaceSize" | "containerLayoutEpoch" | "debugComputedScroll" | "debugRawScroll" | "extraData" | "footerSize" | "headerSize" | "lastItemKeys" | "lastPositionUpdate" | "maintainVisibleContentPosition" | "numColumns" | "numContainers" | "numContainersPooled" | "otherAxisSize" | "readyToRender" | "scrollAdjust" | "scrollAdjustPending" | "scrollAdjustUserOffset" | "scrollSize" | "snapToOffsets" | "stylePaddingTop" | "totalSize" | "isAtEnd" | "isAtStart" | "isNearEnd" | "isNearStart" | "isWithinMaintainScrollAtEndThreshold" | "adaptiveRender" | `containerColumn${number}` | `containerSpan${number}` | `containerItemData${number}` | `containerItemIndex${number}` | `containerItemKey${number}` | `containerPosition${number}` | `containerSticky${number}`;
+-type LegendListListenerType = Extract<ListenerType, "activeStickyIndex" | "anchoredEndSpaceSize" | "footerSize" | "headerSize" | "isAtEnd" | "isAtStart" | "isNearEnd" | "isNearStart" | "isWithinMaintainScrollAtEndThreshold" | "adaptiveRender" | "lastItemKeys" | "lastPositionUpdate" | "numContainers" | "numContainersPooled" | "otherAxisSize" | "readyToRender" | "snapToOffsets" | "totalSize">;
++type LegendListListenerType = Extract<ListenerType, "activeStickyIndex" | "anchoredEndSpaceSize" | "footerSize" | "headerSize" | "isAtEnd" | "isAtStart" | "isNearEnd" | "isNearStart" | "isWithinMaintainScrollAtEndThreshold" | "adaptiveRender" | "lastItemKeys" | "lastPositionUpdate" | "numContainers" | "numContainersPooled" | "otherAxisSize" | "readyToRender" | "scrollAdjustPending" | "snapToOffsets" | "totalSize">;
+ type ListenerTypeValueMap = {
+     activeStickyIndex: number;
+     alignItemsAtEndPadding: number;
 @@ -348,6 +348,20 @@ interface LegendListSpecificProps<ItemT, TItemType extends string | undefined> {
          itemKey: string;
          itemData: ItemT;
@@ -1591,7 +2011,7 @@ index b6c7481603f4119495551b3e4c1c071984c144af..ff554d24a517b75aa89f6a8da4f40214
       * Sets whether scroll processing is enabled.
       * @param enabled - If true, scroll processing is enabled.
 diff --git a/react.js b/react.js
-index ea0348877ff08eb9962ff97efebf2cc19cffad11..85db0a8ed67228caa857261f6f3ed66028bde3c7 100644
+index ea03488..1d7e3b5 100644
 --- a/react.js
 +++ b/react.js
 @@ -785,11 +785,31 @@ function checkThresholds(ctx, allowedEdge) {
@@ -2312,7 +2732,152 @@ index ea0348877ff08eb9962ff97efebf2cc19cffad11..85db0a8ed67228caa857261f6f3ed660
        },
        scrollTo: (options) => {
          const { x = 0, y = 0, animated = true } = options;
-@@ -6389,8 +6806,68 @@ function getScrollAdjustTarget(ctx, contentNode) {
+@@ -6170,6 +6587,38 @@ var ListComponentScrollView = React3.forwardRef(function ListComponentScrollView
+     onScroll2(scrollEvent);
+   }, [getCurrentScrollOffset, horizontal, isWindowScroll, onScroll2]);
+   const scrollEventCoalescer = useRafCoalescer(emitScroll);
++  // Patched: the touch scroll that owns the scroller, for the adjusts that
++  // wait in the layout while it does (`shouldAbsorbAdjustInLayout`). A finger
++  // owns it from touchstart to the last touchend; the fling after the lift
++  // owns it until the scroller has been quiet for the scroll-end fallback
++  // (iOS reports no touch for a contact that lands on a fling, so quiet is
++  // the only end a fling has). The end commits what accrued in one frame:
++  // the containers take their positions back and the offset moves by as much.
++  const touchScrollRestRef = React3.useRef(void 0);
++  const touchScrollOffsetRef = React3.useRef(void 0);
++  const settleTouchScroll = React3.useCallback(() => {
++    const timeout = touchScrollRestRef.current;
++    if (timeout !== void 0) {
++      clearTimeout(timeout);
++      touchScrollRestRef.current = void 0;
++    }
++    const state = ctx.state;
++    const touchScroll = state == null ? void 0 : state.touchScroll;
++    if (!touchScroll || touchScroll.touching || !touchScroll.momentum) {
++      return;
++    }
++    touchScroll.momentum = false;
++    const scrollingTo = state.scrollingTo;
++    if (!(scrollingTo && scrollingTo.animated && !scrollingTo.isInitialScroll)) {
++      state.scrollAdjustHandler.commitPendingAdjust(void 0);
++    }
++  }, [ctx.state]);
++  const armTouchScrollRest = React3.useCallback(() => {
++    if (touchScrollRestRef.current !== void 0) {
++      clearTimeout(touchScrollRestRef.current);
++    }
++    touchScrollRestRef.current = setTimeout(settleTouchScroll, SCROLL_END_FALLBACK_MS);
++  }, [settleTouchScroll]);
+   const scrollEndFallbackRef = React3.useRef(void 0);
+   const emitScrollEnd = React3.useCallback(() => {
+     const timeout = scrollEndFallbackRef.current;
+@@ -6179,13 +6628,41 @@ var ListComponentScrollView = React3.forwardRef(function ListComponentScrollView
+     }
+     scrollEventCoalescer.flush();
+     onInternalScrollEnd == null ? void 0 : onInternalScrollEnd();
+-  }, [onInternalScrollEnd, scrollEventCoalescer]);
++    settleTouchScroll();
++  }, [onInternalScrollEnd, scrollEventCoalescer, settleTouchScroll]);
+   const handleScroll = React3.useCallback(
+     (_event) => {
+       if (!onScroll2) {
+         return;
+       }
+       const state = ctx.state;
++      const touchScroll = state == null ? void 0 : state.touchScroll;
++      if (touchScroll && (touchScroll.touching || touchScroll.momentum)) {
++        // Patched: the fling keeps moving the offset after an adjust was
++        // taken into the layout, and the commit at rest is clean only while
++        // `offset + pending` is still reachable. Each report checks the
++        // offset it brings and the one the fling's step says comes next;
++        // once either would clamp, the pending term is committed now, from
++        // an offset it still lands at. That ends the fling a step before the
++        // edge, where the edge would have stopped it anyway, instead of
++        // closing a gap there with a visible jump.
++        const offset = getCurrentScrollOffset();
++        const previous = touchScrollOffsetRef.current;
++        touchScrollOffsetRef.current = offset;
++        if (touchScroll.momentum) {
++          armTouchScrollRest();
++          const pending = state.scrollAdjustHandler.pendingAdjust;
++          const next = previous === void 0 ? offset : offset + (offset - previous);
++          if (pending !== 0 && !(pendingAdjustLandsAt(ctx, offset, pending) && pendingAdjustLandsAt(ctx, next, pending))) {
++            // Committed, not settled: the fling may go on (a write ends it
++            // on iOS through 26, not elsewhere), and what it measures next
++            // waits in the layout again until it ends.
++            state.scrollAdjustHandler.commitPendingAdjust(void 0);
++          }
++        }
++      } else {
++        touchScrollOffsetRef.current = void 0;
++      }
+       const shouldFlushImmediately = !!(state == null ? void 0 : state.scrollingTo) || !!(state == null ? void 0 : state.initialScrollSession) && !state.didFinishInitialScroll || !!(state == null ? void 0 : state.initialScroll) && !state.didFinishInitialScroll || !!state && isInMVCPActiveMode(state);
+       if (shouldFlushImmediately) {
+         scrollEventCoalescer.flush();
+@@ -6200,7 +6677,7 @@ var ListComponentScrollView = React3.forwardRef(function ListComponentScrollView
+         scrollEndFallbackRef.current = setTimeout(emitScrollEnd, SCROLL_END_FALLBACK_MS);
+       }
+     },
+-    [ctx.state, emitScrollEnd, onInternalScrollEnd, onScroll2, scrollEventCoalescer]
++    [armTouchScrollRest, ctx.state, emitScrollEnd, getCurrentScrollOffset, onInternalScrollEnd, onScroll2, scrollEventCoalescer]
+   );
+   React3.useLayoutEffect(() => {
+     const target = getScrollTarget();
+@@ -6209,19 +6686,52 @@ var ListComponentScrollView = React3.forwardRef(function ListComponentScrollView
+     if ("onscrollend" in target) {
+       target.addEventListener("scrollend", emitScrollEnd);
+     }
++    const onTouchStart = () => {
++      const state = ctx.state;
++      if (!state) return;
++      const timeout = touchScrollRestRef.current;
++      if (timeout !== void 0) {
++        clearTimeout(timeout);
++        touchScrollRestRef.current = void 0;
++      }
++      touchScrollOffsetRef.current = void 0;
++      state.touchScroll = { momentum: false, touching: true };
++    };
++    const onTouchEnd = (event) => {
++      const state = ctx.state;
++      if (!state || event.touches && event.touches.length > 0) return;
++      state.touchScroll = { momentum: true, touching: false };
++      armTouchScrollRest();
++    };
++    const tracksTouch = !isWindowScroll;
++    if (tracksTouch) {
++      target.addEventListener("touchstart", onTouchStart, { passive: true });
++      target.addEventListener("touchend", onTouchEnd, { passive: true });
++      target.addEventListener("touchcancel", onTouchEnd, { passive: true });
++    }
+     return () => {
+       target.removeEventListener("scroll", handleScroll);
+       if ("onscrollend" in target) {
+         target.removeEventListener("scrollend", emitScrollEnd);
+       }
++      if (tracksTouch) {
++        target.removeEventListener("touchstart", onTouchStart);
++        target.removeEventListener("touchend", onTouchEnd);
++        target.removeEventListener("touchcancel", onTouchEnd);
++      }
+       const timeout = scrollEndFallbackRef.current;
+       if (timeout !== void 0) {
+         clearTimeout(timeout);
+         scrollEndFallbackRef.current = void 0;
+       }
++      const restTimeout = touchScrollRestRef.current;
++      if (restTimeout !== void 0) {
++        clearTimeout(restTimeout);
++        touchScrollRestRef.current = void 0;
++      }
+       scrollEventCoalescer.cancel();
+     };
+-  }, [emitScrollEnd, getScrollTarget, handleScroll, scrollEventCoalescer]);
++  }, [armTouchScrollRest, ctx.state, emitScrollEnd, getScrollTarget, handleScroll, isWindowScroll, scrollEventCoalescer]);
+   React3.useEffect(() => {
+     const doScroll = () => {
+       if (contentOffset) {
+@@ -6389,8 +6899,68 @@ function getScrollAdjustTarget(ctx, contentNode) {
    }
    return scrollElement ? { contentNode: resolvedContentNode, scrollElement } : null;
  }
@@ -2382,7 +2947,7 @@ index ea0348877ff08eb9962ff97efebf2cc19cffad11..85db0a8ed67228caa857261f6f3ed660
  }
  function ScrollAdjust() {
    const ctx = useStateContext();
-@@ -6426,7 +6903,10 @@ function ScrollAdjust() {
+@@ -6426,7 +6996,10 @@ function ScrollAdjust() {
            if (needsTemporaryPadding) {
              const previousPaddingEnd = (_a3 = resetPaddingBaselineRef.current) != null ? _a3 : contentNode.style[axis.paddingEndProp];
              resetPaddingBaselineRef.current = previousPaddingEnd;
@@ -2394,7 +2959,7 @@ index ea0348877ff08eb9962ff97efebf2cc19cffad11..85db0a8ed67228caa857261f6f3ed660
              contentNode.style[axis.paddingEndProp] = `${pad}px`;
              void contentNode.offsetHeight;
              scrollBy();
-@@ -6436,7 +6916,13 @@ function ScrollAdjust() {
+@@ -6436,7 +7009,13 @@ function ScrollAdjust() {
              resetPaddingRafRef.current = requestAnimationFrame(() => {
                resetPaddingRafRef.current = void 0;
                resetPaddingBaselineRef.current = void 0;
@@ -2409,7 +2974,7 @@ index ea0348877ff08eb9962ff97efebf2cc19cffad11..85db0a8ed67228caa857261f6f3ed660
              });
            } else {
              scrollBy();
-@@ -6757,6 +7243,7 @@ function checkResetContainers(ctx, dataProp, { didColumnsChange = false } = {})
+@@ -6757,6 +7336,7 @@ function checkResetContainers(ctx, dataProp, { didColumnsChange = false } = {})
      for (const key in state.averageSizes) {
        delete state.averageSizes[key];
      }
@@ -2417,7 +2982,7 @@ index ea0348877ff08eb9962ff97efebf2cc19cffad11..85db0a8ed67228caa857261f6f3ed660
      state.minIndexSizeChanged = 0;
      state.scrollForNextCalculateItemsInView = void 0;
    }
-@@ -7001,6 +7488,7 @@ function onScroll(ctx, event) {
+@@ -7001,6 +7581,7 @@ function onScroll(ctx, event) {
    }
    state.scrollPending = newScroll;
    updateScroll(ctx, newScroll, insetChanged, { fromNativeScrollEvent: true });
@@ -2425,7 +2990,7 @@ index ea0348877ff08eb9962ff97efebf2cc19cffad11..85db0a8ed67228caa857261f6f3ed660
    trackInitialScrollNativeProgress(state, newScroll);
    clearFinishedBootstrapInitialScrollTargetIfMovedAway(ctx);
    if (state.scrollingTo) {
-@@ -7054,7 +7542,8 @@ var ScheduledWork = class {
+@@ -7054,7 +7635,8 @@ var ScheduledWork = class {
      const work = this.work.get(key);
      if (work) {
        this.work.delete(key);
@@ -2435,7 +3000,63 @@ index ea0348877ff08eb9962ff97efebf2cc19cffad11..85db0a8ed67228caa857261f6f3ed660
      }
    }
    has(key) {
-@@ -7103,7 +7592,15 @@ var ScrollAdjustHandler = class {
+@@ -7069,6 +7651,32 @@ var ScheduledWork = class {
+ };
+
+ // src/core/ScrollAdjustHandler.ts
++// Patched: whether an adjust can wait in the layout until the touch scroll
++// that owns the scroller ends. Not before the list has rendered, when the
++// adjusts place the first view; and not when the commit at the end would be
++// clamped: near the start or the end of the content, the pending term would
++// hold a gap on screen that the clamped commit then closes with a visible
++// step, where a write now moves the view by the adjust alone.
++function shouldAbsorbAdjustInLayout(ctx, nextPending) {
++  const state = ctx.state;
++  const touchScroll = state.touchScroll;
++  if (!touchScroll || !(touchScroll.touching || touchScroll.momentum)) {
++    return false;
++  }
++  if (state.adjustingFromInitialMount || !peek$(ctx, "readyToRender")) {
++    return false;
++  }
++  const scroller = state.refScroller.current;
++  const observed = scroller && scroller.getCurrentScrollOffset ? scroller.getCurrentScrollOffset() : void 0;
++  const held = typeof observed === "number" && Number.isFinite(observed) ? observed : state.scroll;
++  return pendingAdjustLandsAt(ctx, held, nextPending);
++}
++// Patched: whether a commit of `pending` from `offset` lands where it asks,
++// that is, inside what the scroller can reach.
++function pendingAdjustLandsAt(ctx, offset, pending) {
++  const target = offset + pending;
++  return Math.abs(clampScrollOffset(ctx, target) - target) <= 1;
++}
+ var ScrollAdjustHandler = class {
+   constructor(ctx) {
+     this.appliedAdjust = 0;
+@@ -7080,6 +7688,22 @@ var ScrollAdjustHandler = class {
+     if ((scrollingTo == null ? void 0 : scrollingTo.animated) && !scrollingTo.isInitialScroll) {
+       this.pendingAdjust += add;
+       set$(this.ctx, "scrollAdjustPending", this.pendingAdjust);
++    } else if (shouldAbsorbAdjustInLayout(this.ctx, this.pendingAdjust + add)) {
++      // Patched: while a touch scroll owns the scroller - a finger on it, or
++      // the fling after the lift - a write of the offset is refused under the
++      // finger and ends the fling (iOS WebKit through 26), and a chat issues
++      // one for every row measured above the view. The adjust waits in the
++      // layout instead, in the pending term an animated scroll already defers
++      // its adjusts to: every container is placed `pending` short of its
++      // position and the view is read `pending` further along, so nothing on
++      // screen moves and the scroller is not written. The offset the scroller
++      // holds has not moved either, so the step `requestAdjust` took
++      // `state.scroll` by is given back: the pending term carries it, and
++      // keeping both counts it twice in the next calculation of the view. The
++      // end of the touch scroll commits what accrued, in one frame.
++      this.ctx.state.scroll -= add;
++      this.pendingAdjust += add;
++      set$(this.ctx, "scrollAdjustPending", this.pendingAdjust);
+     } else {
+       this.appliedAdjust += add;
+       set$(this.ctx, "scrollAdjust", this.appliedAdjust);
+@@ -7103,7 +7727,15 @@ var ScrollAdjustHandler = class {
            targetScroll = calculateOffsetWithOffsetPosition(this.ctx, currentOffset, scrollTarget);
            targetScroll = clampScrollOffset(this.ctx, targetScroll, scrollTarget);
          } else {
@@ -2452,7 +3073,7 @@ index ea0348877ff08eb9962ff97efebf2cc19cffad11..85db0a8ed67228caa857261f6f3ed660
          }
          const adjustment = targetScroll - state.scroll;
          if (Math.abs(adjustment) > 0.1 || Math.abs(pending) > 0.1) {
-@@ -7283,6 +7780,12 @@ function createImperativeHandle(ctx, scheduleImperativeScrollCommit) {
+@@ -7283,6 +7915,12 @@ function createImperativeHandle(ctx, scheduleImperativeScrollCommit) {
      }
    };
    const startImperativeScroll = (resolve) => {
@@ -2465,7 +3086,7 @@ index ea0348877ff08eb9962ff97efebf2cc19cffad11..85db0a8ed67228caa857261f6f3ed660
      state.scheduledWork.cancel("imperativeScrollReady");
      const token = ++imperativeScrollToken;
      settlePendingImperativeScroll(state);
-@@ -7333,6 +7836,7 @@ function createImperativeHandle(ctx, scheduleImperativeScrollCommit) {
+@@ -7333,6 +7971,7 @@ function createImperativeHandle(ctx, scheduleImperativeScrollCommit) {
      for (const key in state.averageSizes) {
        delete state.averageSizes[key];
      }
@@ -2473,7 +3094,7 @@ index ea0348877ff08eb9962ff97efebf2cc19cffad11..85db0a8ed67228caa857261f6f3ed660
      state.minIndexSizeChanged = 0;
      state.scrollForNextCalculateItemsInView = void 0;
      state.pendingTotalSize = void 0;
-@@ -7370,6 +7874,8 @@ function createImperativeHandle(ctx, scheduleImperativeScrollCommit) {
+@@ -7370,6 +8009,8 @@ function createImperativeHandle(ctx, scheduleImperativeScrollCommit) {
        endBuffered: state.endBuffered,
        getAverageItemSizes: () => getAverageItemSizes(state),
        indexByKey: (key) => state.indexByKey.get(key),
@@ -2482,7 +3103,7 @@ index ea0348877ff08eb9962ff97efebf2cc19cffad11..85db0a8ed67228caa857261f6f3ed660
        isAtEnd: peek$(ctx, "isAtEnd"),
        isAtStart: peek$(ctx, "isAtStart"),
        isEndReached: state.isEndReached,
-@@ -7448,6 +7954,35 @@ function createImperativeHandle(ctx, scheduleImperativeScrollCommit) {
+@@ -7448,6 +8089,35 @@ function createImperativeHandle(ctx, scheduleImperativeScrollCommit) {
      setItemSize: (itemKey, size) => {
        updateItemSizes(ctx, { itemKey, size });
      },
@@ -2518,7 +3139,7 @@ index ea0348877ff08eb9962ff97efebf2cc19cffad11..85db0a8ed67228caa857261f6f3ed660
      setScrollProcessingEnabled: (enabled) => {
        state.scrollProcessingEnabled = enabled;
      },
-@@ -7720,6 +8255,7 @@ var LegendListInner = typedForwardRef(function LegendListInner2(props, forwarded
+@@ -7720,6 +8390,7 @@ var LegendListInner = typedForwardRef(function LegendListInner2(props, forwarded
      onEndReached,
      onEndReachedThreshold = 0.5,
      onItemSizeChanged,
@@ -2526,7 +3147,7 @@ index ea0348877ff08eb9962ff97efebf2cc19cffad11..85db0a8ed67228caa857261f6f3ed660
      onMetricsChange,
      onLayout: onLayoutProp,
      onLoad,
-@@ -7845,6 +8381,9 @@ var LegendListInner = typedForwardRef(function LegendListInner2(props, forwarded
+@@ -7845,6 +8516,9 @@ var LegendListInner = typedForwardRef(function LegendListInner2(props, forwarded
        ctx.values.set("adaptiveRender", (_m = experimental_adaptiveRender == null ? void 0 : experimental_adaptiveRender.initialMode) != null ? _m : "normal");
        ctx.state = {
          averageSizes: {},
@@ -2536,7 +3157,7 @@ index ea0348877ff08eb9962ff97efebf2cc19cffad11..85db0a8ed67228caa857261f6f3ed660
          columnSpans: [],
          columns: [],
          containerItemGenerations: [],
-@@ -7978,6 +8517,7 @@ var LegendListInner = typedForwardRef(function LegendListInner2(props, forwarded
+@@ -7978,6 +8652,7 @@ var LegendListInner = typedForwardRef(function LegendListInner2(props, forwarded
      onEndReachedThreshold,
      onFirstVisibleItemChanged,
      onItemSizeChanged,
@@ -2545,7 +3166,7 @@ index ea0348877ff08eb9962ff97efebf2cc19cffad11..85db0a8ed67228caa857261f6f3ed660
      onMomentumScrollEnd,
      onScroll: throttleScrollFn,
 diff --git a/react.mjs b/react.mjs
-index c96345be154d77f66c26ea42cea15a18e22f5dfa..bf0abf2a3895f16dd785ef3891f392f2c3bcb186 100644
+index c96345b..0cb0796 100644
 --- a/react.mjs
 +++ b/react.mjs
 @@ -764,11 +764,31 @@ function checkThresholds(ctx, allowedEdge) {
@@ -3266,7 +3887,152 @@ index c96345be154d77f66c26ea42cea15a18e22f5dfa..bf0abf2a3895f16dd785ef3891f392f2
        },
        scrollTo: (options) => {
          const { x = 0, y = 0, animated = true } = options;
-@@ -6368,8 +6785,68 @@ function getScrollAdjustTarget(ctx, contentNode) {
+@@ -6149,6 +6566,38 @@ var ListComponentScrollView = forwardRef(function ListComponentScrollView2({
+     onScroll2(scrollEvent);
+   }, [getCurrentScrollOffset, horizontal, isWindowScroll, onScroll2]);
+   const scrollEventCoalescer = useRafCoalescer(emitScroll);
++  // Patched: the touch scroll that owns the scroller, for the adjusts that
++  // wait in the layout while it does (`shouldAbsorbAdjustInLayout`). A finger
++  // owns it from touchstart to the last touchend; the fling after the lift
++  // owns it until the scroller has been quiet for the scroll-end fallback
++  // (iOS reports no touch for a contact that lands on a fling, so quiet is
++  // the only end a fling has). The end commits what accrued in one frame:
++  // the containers take their positions back and the offset moves by as much.
++  const touchScrollRestRef = useRef(void 0);
++  const touchScrollOffsetRef = useRef(void 0);
++  const settleTouchScroll = useCallback(() => {
++    const timeout = touchScrollRestRef.current;
++    if (timeout !== void 0) {
++      clearTimeout(timeout);
++      touchScrollRestRef.current = void 0;
++    }
++    const state = ctx.state;
++    const touchScroll = state == null ? void 0 : state.touchScroll;
++    if (!touchScroll || touchScroll.touching || !touchScroll.momentum) {
++      return;
++    }
++    touchScroll.momentum = false;
++    const scrollingTo = state.scrollingTo;
++    if (!(scrollingTo && scrollingTo.animated && !scrollingTo.isInitialScroll)) {
++      state.scrollAdjustHandler.commitPendingAdjust(void 0);
++    }
++  }, [ctx.state]);
++  const armTouchScrollRest = useCallback(() => {
++    if (touchScrollRestRef.current !== void 0) {
++      clearTimeout(touchScrollRestRef.current);
++    }
++    touchScrollRestRef.current = setTimeout(settleTouchScroll, SCROLL_END_FALLBACK_MS);
++  }, [settleTouchScroll]);
+   const scrollEndFallbackRef = useRef(void 0);
+   const emitScrollEnd = useCallback(() => {
+     const timeout = scrollEndFallbackRef.current;
+@@ -6158,13 +6607,41 @@ var ListComponentScrollView = forwardRef(function ListComponentScrollView2({
+     }
+     scrollEventCoalescer.flush();
+     onInternalScrollEnd == null ? void 0 : onInternalScrollEnd();
+-  }, [onInternalScrollEnd, scrollEventCoalescer]);
++    settleTouchScroll();
++  }, [onInternalScrollEnd, scrollEventCoalescer, settleTouchScroll]);
+   const handleScroll = useCallback(
+     (_event) => {
+       if (!onScroll2) {
+         return;
+       }
+       const state = ctx.state;
++      const touchScroll = state == null ? void 0 : state.touchScroll;
++      if (touchScroll && (touchScroll.touching || touchScroll.momentum)) {
++        // Patched: the fling keeps moving the offset after an adjust was
++        // taken into the layout, and the commit at rest is clean only while
++        // `offset + pending` is still reachable. Each report checks the
++        // offset it brings and the one the fling's step says comes next;
++        // once either would clamp, the pending term is committed now, from
++        // an offset it still lands at. That ends the fling a step before the
++        // edge, where the edge would have stopped it anyway, instead of
++        // closing a gap there with a visible jump.
++        const offset = getCurrentScrollOffset();
++        const previous = touchScrollOffsetRef.current;
++        touchScrollOffsetRef.current = offset;
++        if (touchScroll.momentum) {
++          armTouchScrollRest();
++          const pending = state.scrollAdjustHandler.pendingAdjust;
++          const next = previous === void 0 ? offset : offset + (offset - previous);
++          if (pending !== 0 && !(pendingAdjustLandsAt(ctx, offset, pending) && pendingAdjustLandsAt(ctx, next, pending))) {
++            // Committed, not settled: the fling may go on (a write ends it
++            // on iOS through 26, not elsewhere), and what it measures next
++            // waits in the layout again until it ends.
++            state.scrollAdjustHandler.commitPendingAdjust(void 0);
++          }
++        }
++      } else {
++        touchScrollOffsetRef.current = void 0;
++      }
+       const shouldFlushImmediately = !!(state == null ? void 0 : state.scrollingTo) || !!(state == null ? void 0 : state.initialScrollSession) && !state.didFinishInitialScroll || !!(state == null ? void 0 : state.initialScroll) && !state.didFinishInitialScroll || !!state && isInMVCPActiveMode(state);
+       if (shouldFlushImmediately) {
+         scrollEventCoalescer.flush();
+@@ -6179,7 +6656,7 @@ var ListComponentScrollView = forwardRef(function ListComponentScrollView2({
+         scrollEndFallbackRef.current = setTimeout(emitScrollEnd, SCROLL_END_FALLBACK_MS);
+       }
+     },
+-    [ctx.state, emitScrollEnd, onInternalScrollEnd, onScroll2, scrollEventCoalescer]
++    [armTouchScrollRest, ctx.state, emitScrollEnd, getCurrentScrollOffset, onInternalScrollEnd, onScroll2, scrollEventCoalescer]
+   );
+   useLayoutEffect(() => {
+     const target = getScrollTarget();
+@@ -6188,19 +6665,52 @@ var ListComponentScrollView = forwardRef(function ListComponentScrollView2({
+     if ("onscrollend" in target) {
+       target.addEventListener("scrollend", emitScrollEnd);
+     }
++    const onTouchStart = () => {
++      const state = ctx.state;
++      if (!state) return;
++      const timeout = touchScrollRestRef.current;
++      if (timeout !== void 0) {
++        clearTimeout(timeout);
++        touchScrollRestRef.current = void 0;
++      }
++      touchScrollOffsetRef.current = void 0;
++      state.touchScroll = { momentum: false, touching: true };
++    };
++    const onTouchEnd = (event) => {
++      const state = ctx.state;
++      if (!state || event.touches && event.touches.length > 0) return;
++      state.touchScroll = { momentum: true, touching: false };
++      armTouchScrollRest();
++    };
++    const tracksTouch = !isWindowScroll;
++    if (tracksTouch) {
++      target.addEventListener("touchstart", onTouchStart, { passive: true });
++      target.addEventListener("touchend", onTouchEnd, { passive: true });
++      target.addEventListener("touchcancel", onTouchEnd, { passive: true });
++    }
+     return () => {
+       target.removeEventListener("scroll", handleScroll);
+       if ("onscrollend" in target) {
+         target.removeEventListener("scrollend", emitScrollEnd);
+       }
++      if (tracksTouch) {
++        target.removeEventListener("touchstart", onTouchStart);
++        target.removeEventListener("touchend", onTouchEnd);
++        target.removeEventListener("touchcancel", onTouchEnd);
++      }
+       const timeout = scrollEndFallbackRef.current;
+       if (timeout !== void 0) {
+         clearTimeout(timeout);
+         scrollEndFallbackRef.current = void 0;
+       }
++      const restTimeout = touchScrollRestRef.current;
++      if (restTimeout !== void 0) {
++        clearTimeout(restTimeout);
++        touchScrollRestRef.current = void 0;
++      }
+       scrollEventCoalescer.cancel();
+     };
+-  }, [emitScrollEnd, getScrollTarget, handleScroll, scrollEventCoalescer]);
++  }, [armTouchScrollRest, ctx.state, emitScrollEnd, getScrollTarget, handleScroll, isWindowScroll, scrollEventCoalescer]);
+   useEffect(() => {
+     const doScroll = () => {
+       if (contentOffset) {
+@@ -6368,8 +6878,68 @@ function getScrollAdjustTarget(ctx, contentNode) {
    }
    return scrollElement ? { contentNode: resolvedContentNode, scrollElement } : null;
  }
@@ -3336,7 +4102,7 @@ index c96345be154d77f66c26ea42cea15a18e22f5dfa..bf0abf2a3895f16dd785ef3891f392f2
  }
  function ScrollAdjust() {
    const ctx = useStateContext();
-@@ -6405,7 +6882,10 @@ function ScrollAdjust() {
+@@ -6405,7 +6975,10 @@ function ScrollAdjust() {
            if (needsTemporaryPadding) {
              const previousPaddingEnd = (_a3 = resetPaddingBaselineRef.current) != null ? _a3 : contentNode.style[axis.paddingEndProp];
              resetPaddingBaselineRef.current = previousPaddingEnd;
@@ -3348,7 +4114,7 @@ index c96345be154d77f66c26ea42cea15a18e22f5dfa..bf0abf2a3895f16dd785ef3891f392f2
              contentNode.style[axis.paddingEndProp] = `${pad}px`;
              void contentNode.offsetHeight;
              scrollBy();
-@@ -6415,7 +6895,13 @@ function ScrollAdjust() {
+@@ -6415,7 +6988,13 @@ function ScrollAdjust() {
              resetPaddingRafRef.current = requestAnimationFrame(() => {
                resetPaddingRafRef.current = void 0;
                resetPaddingBaselineRef.current = void 0;
@@ -3363,7 +4129,7 @@ index c96345be154d77f66c26ea42cea15a18e22f5dfa..bf0abf2a3895f16dd785ef3891f392f2
              });
            } else {
              scrollBy();
-@@ -6736,6 +7222,7 @@ function checkResetContainers(ctx, dataProp, { didColumnsChange = false } = {})
+@@ -6736,6 +7315,7 @@ function checkResetContainers(ctx, dataProp, { didColumnsChange = false } = {})
      for (const key in state.averageSizes) {
        delete state.averageSizes[key];
      }
@@ -3371,7 +4137,7 @@ index c96345be154d77f66c26ea42cea15a18e22f5dfa..bf0abf2a3895f16dd785ef3891f392f2
      state.minIndexSizeChanged = 0;
      state.scrollForNextCalculateItemsInView = void 0;
    }
-@@ -6980,6 +7467,7 @@ function onScroll(ctx, event) {
+@@ -6980,6 +7560,7 @@ function onScroll(ctx, event) {
    }
    state.scrollPending = newScroll;
    updateScroll(ctx, newScroll, insetChanged, { fromNativeScrollEvent: true });
@@ -3379,7 +4145,7 @@ index c96345be154d77f66c26ea42cea15a18e22f5dfa..bf0abf2a3895f16dd785ef3891f392f2
    trackInitialScrollNativeProgress(state, newScroll);
    clearFinishedBootstrapInitialScrollTargetIfMovedAway(ctx);
    if (state.scrollingTo) {
-@@ -7033,7 +7521,8 @@ var ScheduledWork = class {
+@@ -7033,7 +7614,8 @@ var ScheduledWork = class {
      const work = this.work.get(key);
      if (work) {
        this.work.delete(key);
@@ -3389,7 +4155,63 @@ index c96345be154d77f66c26ea42cea15a18e22f5dfa..bf0abf2a3895f16dd785ef3891f392f2
      }
    }
    has(key) {
-@@ -7082,7 +7571,15 @@ var ScrollAdjustHandler = class {
+@@ -7048,6 +7630,32 @@ var ScheduledWork = class {
+ };
+
+ // src/core/ScrollAdjustHandler.ts
++// Patched: whether an adjust can wait in the layout until the touch scroll
++// that owns the scroller ends. Not before the list has rendered, when the
++// adjusts place the first view; and not when the commit at the end would be
++// clamped: near the start or the end of the content, the pending term would
++// hold a gap on screen that the clamped commit then closes with a visible
++// step, where a write now moves the view by the adjust alone.
++function shouldAbsorbAdjustInLayout(ctx, nextPending) {
++  const state = ctx.state;
++  const touchScroll = state.touchScroll;
++  if (!touchScroll || !(touchScroll.touching || touchScroll.momentum)) {
++    return false;
++  }
++  if (state.adjustingFromInitialMount || !peek$(ctx, "readyToRender")) {
++    return false;
++  }
++  const scroller = state.refScroller.current;
++  const observed = scroller && scroller.getCurrentScrollOffset ? scroller.getCurrentScrollOffset() : void 0;
++  const held = typeof observed === "number" && Number.isFinite(observed) ? observed : state.scroll;
++  return pendingAdjustLandsAt(ctx, held, nextPending);
++}
++// Patched: whether a commit of `pending` from `offset` lands where it asks,
++// that is, inside what the scroller can reach.
++function pendingAdjustLandsAt(ctx, offset, pending) {
++  const target = offset + pending;
++  return Math.abs(clampScrollOffset(ctx, target) - target) <= 1;
++}
+ var ScrollAdjustHandler = class {
+   constructor(ctx) {
+     this.appliedAdjust = 0;
+@@ -7059,6 +7667,22 @@ var ScrollAdjustHandler = class {
+     if ((scrollingTo == null ? void 0 : scrollingTo.animated) && !scrollingTo.isInitialScroll) {
+       this.pendingAdjust += add;
+       set$(this.ctx, "scrollAdjustPending", this.pendingAdjust);
++    } else if (shouldAbsorbAdjustInLayout(this.ctx, this.pendingAdjust + add)) {
++      // Patched: while a touch scroll owns the scroller - a finger on it, or
++      // the fling after the lift - a write of the offset is refused under the
++      // finger and ends the fling (iOS WebKit through 26), and a chat issues
++      // one for every row measured above the view. The adjust waits in the
++      // layout instead, in the pending term an animated scroll already defers
++      // its adjusts to: every container is placed `pending` short of its
++      // position and the view is read `pending` further along, so nothing on
++      // screen moves and the scroller is not written. The offset the scroller
++      // holds has not moved either, so the step `requestAdjust` took
++      // `state.scroll` by is given back: the pending term carries it, and
++      // keeping both counts it twice in the next calculation of the view. The
++      // end of the touch scroll commits what accrued, in one frame.
++      this.ctx.state.scroll -= add;
++      this.pendingAdjust += add;
++      set$(this.ctx, "scrollAdjustPending", this.pendingAdjust);
+     } else {
+       this.appliedAdjust += add;
+       set$(this.ctx, "scrollAdjust", this.appliedAdjust);
+@@ -7082,7 +7706,15 @@ var ScrollAdjustHandler = class {
            targetScroll = calculateOffsetWithOffsetPosition(this.ctx, currentOffset, scrollTarget);
            targetScroll = clampScrollOffset(this.ctx, targetScroll, scrollTarget);
          } else {
@@ -3406,7 +4228,7 @@ index c96345be154d77f66c26ea42cea15a18e22f5dfa..bf0abf2a3895f16dd785ef3891f392f2
          }
          const adjustment = targetScroll - state.scroll;
          if (Math.abs(adjustment) > 0.1 || Math.abs(pending) > 0.1) {
-@@ -7262,6 +7759,12 @@ function createImperativeHandle(ctx, scheduleImperativeScrollCommit) {
+@@ -7262,6 +7894,12 @@ function createImperativeHandle(ctx, scheduleImperativeScrollCommit) {
      }
    };
    const startImperativeScroll = (resolve) => {
@@ -3419,7 +4241,7 @@ index c96345be154d77f66c26ea42cea15a18e22f5dfa..bf0abf2a3895f16dd785ef3891f392f2
      state.scheduledWork.cancel("imperativeScrollReady");
      const token = ++imperativeScrollToken;
      settlePendingImperativeScroll(state);
-@@ -7312,6 +7815,7 @@ function createImperativeHandle(ctx, scheduleImperativeScrollCommit) {
+@@ -7312,6 +7950,7 @@ function createImperativeHandle(ctx, scheduleImperativeScrollCommit) {
      for (const key in state.averageSizes) {
        delete state.averageSizes[key];
      }
@@ -3427,7 +4249,7 @@ index c96345be154d77f66c26ea42cea15a18e22f5dfa..bf0abf2a3895f16dd785ef3891f392f2
      state.minIndexSizeChanged = 0;
      state.scrollForNextCalculateItemsInView = void 0;
      state.pendingTotalSize = void 0;
-@@ -7349,6 +7853,8 @@ function createImperativeHandle(ctx, scheduleImperativeScrollCommit) {
+@@ -7349,6 +7988,8 @@ function createImperativeHandle(ctx, scheduleImperativeScrollCommit) {
        endBuffered: state.endBuffered,
        getAverageItemSizes: () => getAverageItemSizes(state),
        indexByKey: (key) => state.indexByKey.get(key),
@@ -3436,7 +4258,7 @@ index c96345be154d77f66c26ea42cea15a18e22f5dfa..bf0abf2a3895f16dd785ef3891f392f2
        isAtEnd: peek$(ctx, "isAtEnd"),
        isAtStart: peek$(ctx, "isAtStart"),
        isEndReached: state.isEndReached,
-@@ -7427,6 +7933,35 @@ function createImperativeHandle(ctx, scheduleImperativeScrollCommit) {
+@@ -7427,6 +8068,35 @@ function createImperativeHandle(ctx, scheduleImperativeScrollCommit) {
      setItemSize: (itemKey, size) => {
        updateItemSizes(ctx, { itemKey, size });
      },
@@ -3472,7 +4294,7 @@ index c96345be154d77f66c26ea42cea15a18e22f5dfa..bf0abf2a3895f16dd785ef3891f392f2
      setScrollProcessingEnabled: (enabled) => {
        state.scrollProcessingEnabled = enabled;
      },
-@@ -7699,6 +8234,7 @@ var LegendListInner = typedForwardRef(function LegendListInner2(props, forwarded
+@@ -7699,6 +8369,7 @@ var LegendListInner = typedForwardRef(function LegendListInner2(props, forwarded
      onEndReached,
      onEndReachedThreshold = 0.5,
      onItemSizeChanged,
@@ -3480,7 +4302,7 @@ index c96345be154d77f66c26ea42cea15a18e22f5dfa..bf0abf2a3895f16dd785ef3891f392f2
      onMetricsChange,
      onLayout: onLayoutProp,
      onLoad,
-@@ -7824,6 +8360,9 @@ var LegendListInner = typedForwardRef(function LegendListInner2(props, forwarded
+@@ -7824,6 +8495,9 @@ var LegendListInner = typedForwardRef(function LegendListInner2(props, forwarded
        ctx.values.set("adaptiveRender", (_m = experimental_adaptiveRender == null ? void 0 : experimental_adaptiveRender.initialMode) != null ? _m : "normal");
        ctx.state = {
          averageSizes: {},
@@ -3490,7 +4312,7 @@ index c96345be154d77f66c26ea42cea15a18e22f5dfa..bf0abf2a3895f16dd785ef3891f392f2
          columnSpans: [],
          columns: [],
          containerItemGenerations: [],
-@@ -7957,6 +8496,7 @@ var LegendListInner = typedForwardRef(function LegendListInner2(props, forwarded
+@@ -7957,6 +8631,7 @@ var LegendListInner = typedForwardRef(function LegendListInner2(props, forwarded
      onEndReachedThreshold,
      onFirstVisibleItemChanged,
      onItemSizeChanged,
