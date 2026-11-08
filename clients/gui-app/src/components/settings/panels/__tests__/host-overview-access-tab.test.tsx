@@ -440,10 +440,10 @@ describe("<HostOverviewAccessTab /> terminal accounts", () => {
     ).toBeTruthy();
     expect(
       within(section).getByTestId("remote-access-question").textContent,
-    ).toBe("Not set");
-    expect(
-      within(section).getByRole("button", { name: "Turn on" }),
-    ).toBeTruthy();
+    ).toBe(
+      "Allow other devices and agents on your account to reach this computer?",
+    );
+    expect(within(section).getByRole("button", { name: "On" })).toBeTruthy();
     expect(
       within(section).getByRole("button", { name: "Not now" }),
     ).toBeTruthy();
@@ -495,7 +495,11 @@ describe("<HostOverviewAccessTab /> terminal accounts", () => {
     const rows = await screen.findAllByTestId("terminal-account-row");
     expect(rows).toHaveLength(1);
     expect(within(rows[0]).getByText("Claude Code")).toBeTruthy();
-    expect(within(rows[0]).queryByText("Terminal account")).toBeNull();
+    expect(
+      within(rows[0])
+        .getByText("Terminal account")
+        .closest("details:not([open])"),
+    ).toBeNull();
     expect(
       screen.getByText(
         "dev-box's own sign-in, which stays on dev-box. Sign in on Providers to use one everywhere.",

@@ -3,6 +3,15 @@ import { createRoot } from "react-dom/client";
 import { MoreHorizontal, Pencil } from "lucide-react";
 import { HostIdentityCard } from "@/components/settings/host-scope/host-identity-card";
 import { hostScopeOptionFixture } from "@/components/settings/host-scope/host-scope-fixture";
+import {
+  HostOverviewFact,
+  HostOverviewFacts,
+} from "@/components/settings/panels/host-overview-facts";
+import {
+  deriveInstallationDetails,
+  deriveInstallRecordRows,
+} from "@/components/settings/panels/host-overview-installation-model";
+import type { InstallationDetailsRecord } from "@/components/settings/panels/host-settings-installation-details";
 import { Button } from "@/components/ui/button";
 import "@/lib/theme-applier";
 import "@/index.css";
@@ -70,12 +79,46 @@ export function HostCard(props: { readonly failed: boolean }): ReactElement {
   );
 }
 
+function InstallationFacts(): ReactElement {
+  const record: InstallationDetailsRecord = {
+    version:
+      "local-runtime-2026-11-08-release-integration-with-a-long-build-identifier",
+    runtimeVersion: "1.5.0",
+    installedAt: "2026-11-08T00:00:00Z",
+    source: { kind: "registry", value: "1.5.0" },
+    archiveSha256: "a".repeat(64),
+    signatureVerifiedAt: null,
+    signatureKeyId: "local-file:unsigned",
+    platform: "darwin",
+    arch: "arm64",
+  };
+  const rows = [
+    ...deriveInstallationDetails({
+      about: null,
+      live: true,
+      runningVersion: "1.5.0",
+      record,
+    }),
+    ...deriveInstallRecordRows(record, "1.5.0"),
+  ];
+  return (
+    <section aria-label="Installation facts" data-testid="fixture-installation">
+      <HostOverviewFacts testId="fixture-installation-facts">
+        {rows.map((row) => (
+          <HostOverviewFact key={row.testId} {...row} />
+        ))}
+      </HostOverviewFacts>
+    </section>
+  );
+}
+
 const container = document.getElementById("root");
 if (container !== null) {
   createRoot(container).render(
     <main className="w-full space-y-4">
       <HostCard failed={false} />
       <HostCard failed />
+      <InstallationFacts />
     </main>,
   );
 }

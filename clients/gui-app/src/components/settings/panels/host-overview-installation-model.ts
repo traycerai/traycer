@@ -49,7 +49,7 @@ export interface InstallationDetailRow {
 }
 
 /**
- * What Installation ▸ Details is drawn from.
+ * What the inline Installation facts are drawn from.
  *
  * `runningVersion` is the header's own value, `view.hostVersion ?? host.version`.
  * The registry's `appVersion` is a second line only when that display differs,
@@ -106,10 +106,13 @@ export function deriveInstallationDetails(
   const rows: InstallationDetailRow[] = [];
   const accountFreshness = accountFreshnessSuffix(source.about);
   const place = describePlace(source);
-  if (place.platform !== null) {
+  if (place.platform !== null || source.about !== null) {
     rows.push({
       label: "Platform",
-      value: withFreshness(place.platform, place.live, accountFreshness),
+      value:
+        place.platform === null
+          ? "Not reported to the account"
+          : withFreshness(place.platform, place.live, accountFreshness),
       kind: "text",
       tone: "default",
       copy: null,
@@ -168,9 +171,9 @@ export function deriveInstallationDetails(
 }
 
 /**
- * The install record's facts that did not move into Details: the install id
+ * The install record's facts: the install id
  * when it is not the version above it, then source, installed, verification
- * and SHA-256. Version and platform are not here — Details already shows them.
+ * and SHA-256. Version and platform are not here — the account facts already show them.
  *
  * `runningVersion` is that version above it. On the CLI-bridge path
  * `runtimeVersion` is null and `version` is the only install id the record

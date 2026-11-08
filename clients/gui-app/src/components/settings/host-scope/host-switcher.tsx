@@ -146,7 +146,7 @@ export interface HostSwitcherComposerMode {
    * `In this task`; `null` on the landing composer.
    */
   readonly inThisTask: readonly HostScopeOption[] | null;
-  /** Supplemental facts disclosed in a host row's Details. */
+  /** Lines under a host row (shape, rate, payer, the reach sentence). */
   readonly subLinesFor: (hostId: string) => readonly string[];
   /** The configuration mark below an agent sandbox's name, else `null`. */
   readonly tagFor: (hostId: string) => string | null;
@@ -454,17 +454,12 @@ export function HostSwitcher(props: {
                 props.composer === null ? undefined : composerSearchFilter
               }
             >
-              {props.surface === "rail" ? (
-                <div className="border-b px-3 py-2 text-ui-sm font-semibold">
-                  View host
-                </div>
-              ) : null}
               {props.consequence === null ? null : (
-                <div className="border-b px-3 py-2">
-                  <p className="text-ui-sm font-semibold">
+                <div className="min-w-0 border-b px-3 py-2">
+                  <p className="min-w-0 text-ui-sm font-semibold wrap-break-word">
                     {props.consequence.heading}
                   </p>
-                  <p className="text-ui-xs text-muted-foreground">
+                  <p className="min-w-0 text-ui-xs text-muted-foreground wrap-break-word">
                     {props.consequence.hint}
                   </p>
                 </div>
@@ -672,6 +667,21 @@ function hostSubLines(
   hostId: string,
 ): readonly string[] {
   return composer === null ? [] : composer.subLinesFor(hostId);
+}
+
+/**
+ * Facts under the shared row. A computer in the composer also says its
+ * platform and whether it answers. An empty computer line is omitted.
+ */
+function hostRowFactLines(
+  composer: boolean,
+  host: HostScopeOption,
+  selectable: boolean,
+  subLines: readonly string[],
+): readonly string[] {
+  if (!composer || host.sandbox !== null) return subLines;
+  const computer = composerComputerSubLine(host, selectable);
+  return computer.length === 0 ? subLines : [computer, ...subLines];
 }
 
 /**
@@ -1321,28 +1331,22 @@ function HostSwitcherTrigger(props: {
   );
 }
 
-/** Supplemental facts remain available without selecting or waking the host. */
-function HostSwitcherRowDetails(props: {
+/** Supplemental facts under the name. They wrap; they are not a disclosure. */
+function HostSwitcherRowFacts(props: {
   readonly lines: readonly string[];
 }): ReactNode {
   if (props.lines.length === 0) return null;
   return (
-    <details className="min-w-0 px-2 pb-1.5 ps-8 text-ui-xs whitespace-normal wrap-anywhere text-muted-foreground">
-      <summary
-        className="w-fit max-w-full cursor-pointer rounded-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-        onKeyDown={(event) => {
-          if (event.key === "Enter" || event.key === " ")
-            event.stopPropagation();
-        }}
-      >
-        Details
-      </summary>
-      <div className="flex min-w-0 flex-col gap-1 pt-1">
-        {props.lines.map((line) => (
-          <p key={line}>{line}</p>
-        ))}
-      </div>
-    </details>
+    <>
+      {props.lines.map((line) => (
+        <span
+          key={line}
+          className="min-w-0 ps-6 text-ui-xs whitespace-normal wrap-anywhere text-muted-foreground"
+        >
+          {line}
+        </span>
+      ))}
+    </>
   );
 }
 
@@ -1351,7 +1355,7 @@ function HostSwitcherRowDetails(props: {
  * search keywords, and the assistive-tech mark for "this is the one you are
  * viewing". Everything the row SAYS lives in `HostOptionRow`, which the
  * embedded sections and the Select host dialog draw too. Supplemental facts
- * sit in Details outside the option, so even an unavailable host can explain itself.
+ * sit under that row, including when the option cannot be picked.
  */
 function HostSwitcherRow(props: {
   readonly host: HostScopeOption;
@@ -1366,11 +1370,11 @@ function HostSwitcherRow(props: {
   readonly updateView: FleetUpdateView | null;
   /** This row's environment label, or `null` for a picker that does not say. */
   readonly environmentLabel: string | null;
-  /** Composer and in-task pickers also disclose computer facts in Details. */
+  /** Composer and in-task pickers also show a computer's platform and status. */
   readonly composer: boolean;
-  /** Supplemental facts (the composer's Local sub-line, the reach sentence). */
+  /** Supplemental facts under the name (the Local sub-line, the reach sentence). */
   readonly subLines: readonly string[];
-  /** The composer's configuration mark below the name, or `null`. */
+  /** The composer's configuration mark beside the name, or `null`. */
   readonly tag: string | null;
   readonly onSelect: () => void;
 }): ReactNode {
@@ -1383,48 +1387,55 @@ function HostSwitcherRow(props: {
   });
   const selectable = isHostOptionSelectable(host, props.intent, surfaceState);
   const title = host.name;
+  const lines = hostRowFactLines(
+    props.composer,
+    host,
+    selectable,
+    props.subLines,
+  );
+  const row = (
+    <HostOptionRow
+      host={host}
+      picked={props.scoped}
+      active={props.active}
+      intent={props.intent}
+      surfaceState={surfaceState}
+      updateView={props.updateView}
+      environmentLabel={props.environmentLabel ?? props.tag}
+      nameRef={null}
+    />
+  );
   return (
-    <div className="min-w-0 not-has-[[cmdk-item]]:hidden">
-      <CommandItem
-        className="items-end"
-        value={host.hostId}
-        // One predicate, asked here exactly as the button list asks it, so a row
-        // that explains why it cannot be picked is also a row that cannot be
-        // picked — on both kinds of container.
-        disabled={!selectable}
-        keywords={[
-          title,
-          host.name,
-          formatPlatform(host.platform) ?? "",
-          formatHostVersion(host.version) ?? "",
-        ]}
-        onSelect={props.onSelect}
-        data-testid={`settings-host-switcher-option-${host.hostId}`}
-        data-scoped={props.scoped ? "true" : "false"}
-        data-checked={props.scoped ? "true" : undefined}
-        // The check mark inside the row is aria-hidden and `data-scoped` reaches
-        // no assistive tech, so without this a screen reader heard the scoped row
-        // and every other row as the same text.
-        aria-current={props.scoped ? "true" : undefined}
-      >
-        <HostOptionRow
-          host={host}
-          picked={props.scoped}
-          active={props.active}
-          intent={props.intent}
-          surfaceState={surfaceState}
-          updateView={props.updateView}
-          environmentLabel={props.environmentLabel ?? props.tag}
-          nameRef={null}
-        />
-      </CommandItem>
-      <HostSwitcherRowDetails
-        lines={
-          props.composer && host.sandbox === null
-            ? [composerComputerSubLine(host, selectable), ...props.subLines]
-            : props.subLines
-        }
-      />
-    </div>
+    <CommandItem
+      className={lines.length === 0 ? "items-end" : "items-start"}
+      value={host.hostId}
+      // One predicate, asked here exactly as the button list asks it, so a row
+      // that explains why it cannot be picked is also a row that cannot be
+      // picked — on both kinds of container.
+      disabled={!selectable}
+      keywords={[
+        title,
+        host.name,
+        formatPlatform(host.platform) ?? "",
+        formatHostVersion(host.version) ?? "",
+      ]}
+      onSelect={props.onSelect}
+      data-testid={`settings-host-switcher-option-${host.hostId}`}
+      data-scoped={props.scoped ? "true" : "false"}
+      data-checked={props.scoped ? "true" : undefined}
+      // The check mark inside the row is aria-hidden and `data-scoped` reaches
+      // no assistive tech, so without this a screen reader heard the scoped row
+      // and every other row as the same text.
+      aria-current={props.scoped ? "true" : undefined}
+    >
+      {lines.length === 0 ? (
+        row
+      ) : (
+        <span className="flex min-w-0 flex-1 flex-col gap-0.5">
+          <span className="flex min-w-0">{row}</span>
+          <HostSwitcherRowFacts lines={lines} />
+        </span>
+      )}
+    </CommandItem>
   );
 }

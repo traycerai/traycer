@@ -432,12 +432,7 @@ describe("The MCP server dialog", () => {
     );
     render(<EnvironmentMcpServersPage />, { wrapper: harness.Wrapper });
 
-    await userEvent.click(
-      await screen.findByRole("button", { name: "More for local" }),
-    );
-    await userEvent.click(
-      await screen.findByRole("menuitem", { name: "Edit" }),
-    );
+    await userEvent.click(await screen.findByRole("button", { name: "Edit" }));
     const dialog = await screen.findByRole("dialog");
     await userEvent.type(within(dialog).getByLabelText("Name"), "2");
     await userEvent.click(within(dialog).getByRole("button", { name: "Save" }));
@@ -470,12 +465,7 @@ describe("The MCP server dialog", () => {
     );
     render(<EnvironmentMcpServersPage />, { wrapper: harness.Wrapper });
 
-    await userEvent.click(
-      await screen.findByRole("button", { name: "More for github" }),
-    );
-    await userEvent.click(
-      await screen.findByRole("menuitem", { name: "Edit" }),
-    );
+    await userEvent.click(await screen.findByRole("button", { name: "Edit" }));
     const dialog = await screen.findByRole("dialog");
     await userEvent.type(within(dialog).getByLabelText("Name"), "2");
     await userEvent.click(within(dialog).getByRole("button", { name: "Save" }));
@@ -528,12 +518,7 @@ describe("The MCP server dialog", () => {
     );
     render(<EnvironmentMcpServersPage />, { wrapper: harness.Wrapper });
 
-    await userEvent.click(
-      await screen.findByRole("button", { name: "More for github" }),
-    );
-    await userEvent.click(
-      await screen.findByRole("menuitem", { name: "Edit" }),
-    );
+    await userEvent.click(await screen.findByRole("button", { name: "Edit" }));
     const dialog = await screen.findByRole("dialog");
     expect(within(dialog).getByText("Edit github")).toBeTruthy();
     await userEvent.click(within(dialog).getByRole("button", { name: "Save" }));

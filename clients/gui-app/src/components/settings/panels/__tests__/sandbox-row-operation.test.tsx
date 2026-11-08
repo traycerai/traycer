@@ -884,13 +884,16 @@ describe("sandbox row operations", () => {
           .getByRole("button", { name: testCase.pending })
           .hasAttribute("disabled"),
       ).toBe(true);
-      await userEvent.click(
-        within(row).getByRole("button", { name: "More actions for build-box" }),
-      );
       expect(
-        screen.getAllByRole("menuitem").map((item) => item.textContent),
-      ).toEqual(["Details"]);
-      await userEvent.keyboard("{Escape}");
+        within(row)
+          .getByRole("button", { name: "Details" })
+          .hasAttribute("disabled"),
+      ).toBe(false);
+      expect(
+        within(row).queryByRole("button", {
+          name: "More actions for build-box",
+        }),
+      ).toBeNull();
       const otherRow = screen.getByRole("region", { name: "other-box" });
       expect(within(otherRow).queryByRole("status")).toBeNull();
       expect(
