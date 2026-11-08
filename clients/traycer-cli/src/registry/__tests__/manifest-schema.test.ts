@@ -28,6 +28,8 @@ const VALID_MANIFEST = {
             "https://example.com/host-1.5.0-darwin-arm64.tar.gz.minisig",
           signatureAlgorithm: "minisign",
           publicKeyId: "deadbeefdeadbeef",
+          descriptorUrl:
+            "https://example.com/host-1.5.0-darwin-arm64.descriptor.json",
         },
         "linux-x64": {
           available: false,
@@ -53,6 +55,9 @@ describe("parseHostVersionsManifest", () => {
     const entry = parsed.versions[0];
     expect(entry?.platforms["darwin-arm64"]?.available).toBe(true);
     expect(entry?.platforms["linux-x64"]?.available).toBe(false);
+    expect(entry?.platforms["darwin-arm64"]).not.toHaveProperty(
+      "descriptorUrl",
+    );
   });
 
   it("rejects an unsupported schemaVersion", () => {
