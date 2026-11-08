@@ -1,7 +1,9 @@
 import { isDocumentAssetPath } from "@/lib/assets/image-extension-allowlist";
 import { Activity, AlarmClockCheck, CheckCheck, XCircle } from "lucide-react";
-import { useState, type ReactNode } from "react";
+import { use, useState, type ReactNode } from "react";
 import type { AutonomousResumeTrigger } from "@traycer/protocol/persistence/epic/content-blocks";
+import { BotDeliveredMessage } from "@/components/bots/bot-delivered-message";
+import { BotSessionContext } from "@/components/bots/bot-session-context";
 import { formatWorkedFor } from "@/lib/format-duration";
 import type {
   BackgroundEventEnding,
@@ -74,21 +76,38 @@ function triggerKey(trigger: AutonomousResumeTrigger): string {
   return `${trigger.kind}:${trigger.managedCommand?.commandId ?? "none"}:${trigger.blockId}:${trigger.title}:${trigger.status}`;
 }
 
+/**
+ * In one of a bot's sessions, a trigger that carried a member's message draws
+ * that message (Tracy Bots T159) in place of its card; every other trigger,
+ * and every trigger outside a bot's session, draws its card.
+ */
 export function AutonomousResumeSegment(props: AutonomousResumeSegmentProps) {
   const { triggers } = props;
+  const session = use(BotSessionContext);
   const lastIndex = triggers.length - 1;
 
   return (
     <div className="flex flex-col gap-2">
-      {triggers.map((trigger, index) => (
-        <ResumeCompletionCard
-          key={triggerKey(trigger)}
-          trigger={trigger}
-          variant={props.variant}
-          ending={index === lastIndex ? props.ending : null}
-          folded={index === lastIndex ? props.folded : NO_FOLDED_EVENTS}
-        />
-      ))}
+      {triggers.map((trigger, index) => {
+        // Defaulted key: a row validated structurally off an older host's
+        // line never wrote it.
+        const delivered = trigger.conversationMessage ?? null;
+        return session === null || delivered === null ? (
+          <ResumeCompletionCard
+            key={triggerKey(trigger)}
+            trigger={trigger}
+            variant={props.variant}
+            ending={index === lastIndex ? props.ending : null}
+            folded={index === lastIndex ? props.folded : NO_FOLDED_EVENTS}
+          />
+        ) : (
+          <BotDeliveredMessage
+            key={triggerKey(trigger)}
+            delivered={delivered}
+            access={session}
+          />
+        );
+      })}
     </div>
   );
 }

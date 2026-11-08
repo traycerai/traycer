@@ -35,6 +35,7 @@ import {
   artifactOperationBlockSchema,
   artifactOperationBlockSchemaPreHtml,
   autonomousResumeBlockSchema,
+  autonomousResumeBlockSchemaPreConversationMessage,
   commandBlockSchema,
   compactionBlockSchema,
   compactionBlockSchemaPreNotApplied,
@@ -162,7 +163,7 @@ export const openContentBlockSchemaPreHtml = lazySchema(() =>
     openPlanBlockSchema,
     errorBlockSchema,
     compactionBlockSchemaPreNotApplied,
-    autonomousResumeBlockSchema,
+    autonomousResumeBlockSchemaPreConversationMessage,
     openSteerBlockSchema,
     interviewBlockSchema,
     artifactOperationBlockSchemaPreHtml,
@@ -182,7 +183,7 @@ export const openContentBlockSchemaPreArtifact = lazySchema(() =>
     openPlanBlockSchema,
     errorBlockSchema,
     compactionBlockSchemaPreNotApplied,
-    autonomousResumeBlockSchema,
+    autonomousResumeBlockSchemaPreConversationMessage,
     openSteerBlockSchema,
     interviewBlockSchema,
     artifactOperationBlockSchema,
@@ -202,7 +203,7 @@ export const openContentBlockSchemaPreNotApplied = lazySchema(() =>
     openPlanBlockSchema,
     errorBlockSchema,
     compactionBlockSchemaPreNotApplied,
-    autonomousResumeBlockSchema,
+    autonomousResumeBlockSchemaPreConversationMessage,
     openSteerBlockSchema,
     interviewBlockSchema,
     artifactOperationBlockSchema,
@@ -235,6 +236,30 @@ export const openContentBlockSchema = lazySchema(() =>
 );
 export type OpenContentBlock = z.infer<typeof openContentBlockSchema>;
 
+/**
+ * Open blocks `chat.subscribe@1.42` ships: the live union with the resume
+ * divider before `1.43`'s member's message on a trigger.
+ */
+export const openContentBlockSchemaPreConversationMessage = lazySchema(() =>
+  z.discriminatedUnion("type", [
+    openTextBlockSchema,
+    reasoningBlockSchema,
+    toolCallBlockSchema,
+    fileChangeBlockSchema,
+    commandBlockSchema,
+    subAgentBlockSchema,
+    approvalBlockSchema,
+    todoBlockSchema,
+    openPlanBlockSchema,
+    errorBlockSchema,
+    compactionBlockSchema,
+    autonomousResumeBlockSchemaPreConversationMessage,
+    openSteerBlockSchema,
+    interviewBlockSchema,
+    artifactOperationBlockSchema,
+  ]),
+);
+
 /** Open blocks through `chat.subscribe@1.41`, before the feedback-draft stamp. */
 export const openContentBlockSchemaPreFeedbackDraft = lazySchema(() =>
   z.discriminatedUnion("type", [
@@ -249,7 +274,7 @@ export const openContentBlockSchemaPreFeedbackDraft = lazySchema(() =>
     openPlanBlockSchema,
     errorBlockSchema,
     compactionBlockSchema,
-    autonomousResumeBlockSchema,
+    autonomousResumeBlockSchemaPreConversationMessage,
     openSteerBlockSchema,
     interviewBlockSchema,
     artifactOperationBlockSchema,
@@ -275,7 +300,7 @@ export const openContentBlockSchemaPreDelivery = lazySchema(() =>
     openPlanBlockSchema,
     errorBlockSchema,
     compactionBlockSchemaPreNotApplied,
-    autonomousResumeBlockSchema,
+    autonomousResumeBlockSchemaPreConversationMessage,
     openSteerBlockSchema,
     interviewBlockSchema,
     artifactOperationBlockSchemaPreHtml,
@@ -374,6 +399,14 @@ export const openAssistantMessageSchema = lazySchema(() =>
 );
 export type OpenAssistantMessage = z.infer<typeof openAssistantMessageSchema>;
 
+/** The open assistant row `chat.subscribe@1.42` ships. */
+export const openAssistantMessageSchemaPreConversationMessage = lazySchema(() =>
+  assistantMessageSchema.extend({
+    sender: openAgentSenderSchema,
+    blocks: z.array(openContentBlockSchemaPreConversationMessage),
+  }),
+);
+
 /** The open assistant row `chat.subscribe@1.37` through `@1.41` ship. */
 export const openAssistantMessageSchemaPreFeedbackDraft = lazySchema(() =>
   assistantMessageSchema.extend({
@@ -415,7 +448,7 @@ export const openMessageSchemaPreFeedbackDraft = lazySchema(() =>
 export const openMessageSchemaPreSlack = lazySchema(() =>
   z.discriminatedUnion("role", [
     openUserMessageSchemaPreSlack,
-    openAssistantMessageSchema,
+    openAssistantMessageSchemaPreConversationMessage,
   ]),
 );
 export const openMessageSchemaPreCanvas = lazySchema(() =>

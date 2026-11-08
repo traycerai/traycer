@@ -86,6 +86,7 @@ describe("<AutonomousResumeSegment />", () => {
             outputFile: null,
             mcp: null,
             managedCommand: null,
+            conversationMessage: null,
           },
         ]}
       />,
@@ -113,6 +114,7 @@ describe("<AutonomousResumeSegment />", () => {
             outputFile: null,
             mcp: null,
             managedCommand: null,
+            conversationMessage: null,
           },
         ]}
       />,
@@ -141,6 +143,7 @@ describe("<AutonomousResumeSegment />", () => {
             outputFile: null,
             mcp: { serverName: "probe", toolName: "slow_op" },
             managedCommand: null,
+            conversationMessage: null,
             live: false,
           },
         ]}
@@ -171,6 +174,7 @@ describe("<AutonomousResumeSegment />", () => {
             },
             mcp: null,
             managedCommand: null,
+            conversationMessage: null,
             live: false,
           },
         ]}
@@ -231,6 +235,7 @@ describe("<AutonomousResumeSegment />", () => {
             },
             mcp: null,
             managedCommand: null,
+            conversationMessage: null,
             live: false,
           },
         ]}
@@ -277,6 +282,7 @@ describe("<AutonomousResumeSegment />", () => {
             },
             mcp: null,
             managedCommand: null,
+            conversationMessage: null,
             live: false,
           },
         ]}
@@ -310,6 +316,7 @@ describe("<AutonomousResumeSegment />", () => {
             outputFile: null,
             mcp: null,
             managedCommand: null,
+            conversationMessage: null,
             live: false,
           },
         ]}
@@ -344,6 +351,7 @@ describe("<AutonomousResumeSegment />", () => {
             outputFile: null,
             mcp: null,
             managedCommand: null,
+            conversationMessage: null,
             live: false,
           },
         ]}
@@ -383,6 +391,7 @@ describe("<AutonomousResumeSegment />", () => {
             },
             mcp: null,
             managedCommand: null,
+            conversationMessage: null,
             live: false,
           },
         ]}
@@ -417,6 +426,7 @@ describe("<AutonomousResumeSegment />", () => {
             },
             mcp: null,
             managedCommand: null,
+            conversationMessage: null,
             live: true,
           },
         ]}
@@ -448,6 +458,7 @@ describe("<AutonomousResumeSegment />", () => {
               monitoring: true,
               hostId: null,
             },
+            conversationMessage: null,
             live: true,
           },
           {
@@ -463,6 +474,7 @@ describe("<AutonomousResumeSegment />", () => {
               monitoring: false,
               hostId: null,
             },
+            conversationMessage: null,
             live: true,
           },
         ]}
@@ -496,6 +508,7 @@ describe("<AutonomousResumeSegment />", () => {
           monitoring: false,
           hostId: null,
         },
+        conversationMessage: null,
         live: false,
       },
       {
@@ -514,6 +527,7 @@ describe("<AutonomousResumeSegment />", () => {
           monitoring: false,
           hostId: null,
         },
+        conversationMessage: null,
         live: false,
       },
     ];
@@ -570,6 +584,7 @@ describe("<AutonomousResumeSegment />", () => {
             outputFile: null,
             mcp: null,
             managedCommand: null,
+            conversationMessage: null,
             live: false,
           },
         ]}
@@ -597,6 +612,7 @@ describe("<AutonomousResumeSegment />", () => {
     outputFile: null,
     mcp: { serverName: "probe", toolName: "slow_op" },
     managedCommand: null,
+    conversationMessage: null,
     live: false,
   };
 
@@ -609,6 +625,7 @@ describe("<AutonomousResumeSegment />", () => {
     outputFile: null,
     mcp: null,
     managedCommand: null,
+    conversationMessage: null,
     live: false,
   };
 
@@ -625,6 +642,7 @@ describe("<AutonomousResumeSegment />", () => {
       monitoring: true,
       hostId: null,
     },
+    conversationMessage: null,
     live: true,
   };
 
@@ -774,6 +792,7 @@ describe("<AutonomousResumeSegment />", () => {
         outputFile: null,
         mcp: null,
         managedCommand: null,
+        conversationMessage: null,
         live: false,
       };
       renderFoot(null, [
@@ -828,6 +847,7 @@ describe("<AutonomousResumeSegment />", () => {
         outputFile: null,
         mcp: null,
         managedCommand: null,
+        conversationMessage: null,
         live: false,
       });
       renderFoot(null, [

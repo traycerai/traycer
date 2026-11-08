@@ -2501,6 +2501,7 @@ describe("ChatMessages scroll policy", () => {
         outputFile: null,
         mcp: null,
         managedCommand: null,
+        conversationMessage: null,
       };
       const userMsg = makeMessage(0, "user");
       const notificationRow: ChatMessageModel = {
@@ -2570,6 +2571,7 @@ describe("ChatMessages scroll policy", () => {
         outputFile: null,
         mcp: null,
         managedCommand: null,
+        conversationMessage: null,
       };
       const knownUser = makeMessage(0, "user");
       const knownAssistant: ChatMessageModel = {
@@ -2625,6 +2627,7 @@ describe("ChatMessages scroll policy", () => {
         outputFile: null,
         mcp: null,
         managedCommand: null,
+        conversationMessage: null,
       };
       const userMsg = makeMessage(0, "user");
       const notificationRow: ChatMessageModel = {

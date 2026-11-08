@@ -228,6 +228,73 @@ function MemberRow(props: {
   );
 }
 
+/**
+ * A member's message drawn outside its own channel or thread - the message a
+ * delivery brought into one of the bot's sessions (Tracy Bots T159): the
+ * member's row with nothing on hover, `place` under its text, and `standIn`
+ * in place of the text where the message cannot be read.
+ */
+export function ChatBotDeliveredPost(props: {
+  readonly message: ChatMessageModel;
+  /** What the row says in place of its text; `null` draws the text. */
+  readonly standIn: string | null;
+  /** Where the message was written, under it. */
+  readonly place: ReactNode;
+}): ReactElement {
+  const { message, standIn, place } = props;
+  const name = message.senderLabel ?? "Member";
+  return (
+    <BotMessageFrame
+      avatar={
+        <PersonAvatar
+          userId={message.senderUserId ?? null}
+          name={name}
+          avatarUrl={message.senderAvatarUrl ?? null}
+          size="lg"
+        />
+      }
+      name={name}
+      bot={false}
+      sentAt={message.sentAt ?? message.createdAt}
+      instanceId={message.id}
+      testId="bot-delivered-post"
+      hoverActions={false}
+      replyInThread={null}
+      failed={null}
+      longPress={null}
+    >
+      <UserMessageAttachmentGallery
+        align="start"
+        attachments={message.attachments}
+        browserAnnotations={message.browserAnnotations}
+      />
+      {standIn === null ? (
+        <div className="flex min-w-0 flex-col gap-1">
+          {message.segments.map((segment) =>
+            segment.kind === "text" ? (
+              <TextSegment
+                key={segment.id}
+                findUnitId={null}
+                markdown={segment.markdown}
+                isStreaming={false}
+                nextStepActions={null}
+              />
+            ) : null,
+          )}
+        </div>
+      ) : (
+        <p
+          className="text-ui-sm text-muted-foreground"
+          data-testid="bot-delivered-post-stand-in"
+        >
+          {standIn}
+        </p>
+      )}
+      {place}
+    </BotMessageFrame>
+  );
+}
+
 /** Whether a member's row has anything for its long-press sheet to offer. */
 function memberRowHasAction(
   replyInThread: (() => void) | null,

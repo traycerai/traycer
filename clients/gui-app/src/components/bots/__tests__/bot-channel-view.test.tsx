@@ -263,11 +263,13 @@ vi.mock("@/hooks/bots/use-bot-activity", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/hooks/bots/use-bot-activity")>()),
   useBotActivity: () => null,
 }));
+vi.mock("@/components/bots/bot-transcript-image-scope", () => ({
+  BotTranscriptImageScope: (props: { children: ReactNode }) => props.children,
+}));
 vi.mock("@/components/bots/bot-chat-transcript", async (importOriginal) => ({
   ...(await importOriginal<
     typeof import("@/components/bots/bot-chat-transcript")
   >()),
-  BotTranscriptImageScope: (props: { children: ReactNode }) => props.children,
   BotChatTranscript: (props: {
     chatId: string;
     surface: BotTranscriptSurface | null;

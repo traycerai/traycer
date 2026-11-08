@@ -44,16 +44,12 @@ import {
   type ChatBotTurnReceipt,
 } from "@/components/chat/chat-bot-presentation-context";
 import type { QuestionCardAnswer } from "@/components/chat/question-card";
-import {
-  ChatAttachmentScopeContext,
-  type ChatAttachmentScopeValue,
-} from "@/components/chat/chat-attachment-scope-context";
 import { ChatContainerContext } from "@/components/chat/chat-container-context";
 import { TasklessMarkdownLinkProvider } from "@/components/chat/chat-markdown-link-provider";
 import { TracyTranscriptOriginScope } from "@/components/bots/tracy-transcript-origin-scope";
+import { BotTranscriptImageScope } from "@/components/bots/bot-transcript-image-scope";
 import { useSubagentDrillIn } from "@/components/chat/segments/subagent-open-as-chat";
 import { TileErrorBoundary } from "@/components/epic-canvas/renderers/tile-error-boundary";
-import { useHostDirectoryEntry } from "@/hooks/host/use-host-directory-entry";
 import { useTabHostClient } from "@/hooks/host/use-tab-host-client";
 import { useChatSessionHandleForContainer } from "@/lib/registries/chat-session-registry";
 import { useAuthStore } from "@/stores/auth/auth-store";
@@ -353,30 +349,6 @@ export function BotChatTranscript(props: {
         </TracyTranscriptOriginScope>
       </BotTranscriptImageScope>
     </TileErrorBoundary>
-  );
-}
-
-/**
- * Where a row's images are read from: the bot's attachment store, under the bot
- * id, on the host serving the tab.
- */
-export function BotTranscriptImageScope(props: {
-  readonly botId: string;
-  readonly chatId: string;
-  readonly hostId: string;
-  readonly children: ReactNode;
-}): ReactNode {
-  const { botId, chatId, hostId, children } = props;
-  const client = useTabHostClient();
-  const hostVersion = useHostDirectoryEntry(hostId)?.version ?? null;
-  const scope = useMemo<ChatAttachmentScopeValue>(
-    () => ({ epicId: botId, chatId, hostId, hostVersion, client }),
-    [botId, chatId, client, hostId, hostVersion],
-  );
-  return (
-    <ChatAttachmentScopeContext value={scope}>
-      {children}
-    </ChatAttachmentScopeContext>
   );
 }
 
