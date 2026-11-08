@@ -1,3 +1,4 @@
+import type { RequiredHostMethodVersion } from "@traycer-clients/shared/host-transport/host-messenger";
 import {
   useQueryClient,
   type MutationScope,
@@ -42,6 +43,9 @@ interface UseHostScopedMutationArgs<
   Captured,
 > {
   readonly method: Method;
+  readonly requiredHostMethodVersion?: (
+    request: RequestOfMethod<HostRpcRegistry, Method>,
+  ) => RequiredHostMethodVersion | null;
   readonly mutationKey: ReadonlyArray<unknown>;
   /**
    * The failure toast's words. Null when they name what the call was for,
@@ -189,6 +193,7 @@ export function useHostScopedMutationForClient<
   >({
     client,
     method: args.method,
+    requiredHostMethodVersion: args.requiredHostMethodVersion,
     mapVariables: (variables) => variables,
     prepareRequest: args.prepareRequest,
     options: {

@@ -11,6 +11,7 @@ import {
   agentListDowngradeV9ToV8,
   agentListHarnessModelsDowngradeV2ToV1,
   agentListDowngradeV10ToV9,
+  agentListUpgradeV102ToV103,
   agentListUpgradeV91ToV92,
   agentListUpgradeV92ToV100,
   agentListUpgradeV100ToV101,
@@ -25,10 +26,13 @@ import {
   agentListV92,
   agentListV100,
   agentListV101,
+  agentListV102,
+  agentListV103,
 } from "@traycer/protocol/host/agent/contracts";
 import {
   AGENT_FACING_HARNESS_IDS,
   agentSummarySchema,
+  agentSummarySchemaV102,
   agentSummarySchemaV90,
   agentSummarySchemaV91,
   agentSummarySchemaV92,
@@ -38,6 +42,7 @@ import {
   guiHarnessIdSchema,
   listAgentsResponseSchemaV91,
   listAgentsResponseSchemaV92,
+  listAgentsResponseSchemaV102,
   type AgentSummary,
   type AgentSummaryV92,
   type AgentSummaryV101,
@@ -403,6 +408,7 @@ describe("agent host schemas", () => {
             model: { kind: "concrete", slug: "gpt-5.6-codex" },
             reasoningEffort: "high",
             fastMode: true,
+            serviceTier: null,
             profileSelection: { kind: "profile", profileId: "secret" },
             provenance: { model: "explicit" },
           },
@@ -414,6 +420,7 @@ describe("agent host schemas", () => {
       model: { kind: "concrete", slug: "gpt-5.6-codex" },
       reasoningEffort: "high",
       fastMode: true,
+      serviceTier: null,
     });
   });
 
@@ -482,16 +489,19 @@ describe("agent host schemas", () => {
     expect(
       listHarnessModelsResponseSchema.parse({
         harnessId: "codex",
+        profileId: null,
         models: [
           {
             id: "opus-4.7",
             reasoningEfforts: ["low", "medium", "high"],
             fastModeAvailable: false,
+            serviceTiers: [],
           },
           {
             id: "gpt-5.5",
             reasoningEfforts: ["low", "medium", "high"],
             fastModeAvailable: true,
+            serviceTiers: ["priority"],
           },
         ],
       }),
@@ -585,12 +595,25 @@ const V101_ROW: AgentSummaryV101 = {
   permissionMode: "supervised",
 };
 
-// The canonical (`@10.2`) row: the 10.1 row plus the reach pair.
-const V102_ROW: AgentSummary = {
+// The frozen `@10.2` row: the 10.1 row plus the reach pair.
+const V102_ROW = agentSummarySchemaV102.parse({
   ...V101_ROW,
   reach: null,
   hostConnectivity: { kind: "unknown" },
-};
+});
+
+const V102_RESPONSE = listAgentsResponseSchemaV102.parse({
+  caller: { agentId: "agent-1", canSendMessages: true },
+  scope: "user",
+  agents: [
+    V102_ROW,
+    { ...V102_ROW, id: "agent-2", isSelf: false, archived: null },
+  ],
+});
+
+const V103_RESPONSE: ListAgentsResponse =
+  agentListUpgradeV102ToV103.upgradeResponse(V102_RESPONSE);
+const V103_ROW = V103_RESPONSE.agents[0];
 
 describe("agent.list@9.2 archived flag", () => {
   it("upgrades a @9.1 response by filling archived: null on every row and nothing else", () => {
@@ -666,12 +689,12 @@ describe("agent.list@9.2 archived flag", () => {
   });
 
   it("requires archived on the canonical row and accepts true, false and null", () => {
-    const { archived: _omitted, ...keyless } = V102_ROW;
+    const { archived: _omitted, ...keyless } = V103_ROW;
 
     expect(agentSummarySchema.safeParse(keyless).success).toBe(false);
     for (const archived of [true, false, null]) {
       expect(
-        agentSummarySchema.safeParse({ ...V102_ROW, archived }).success,
+        agentSummarySchema.safeParse({ ...V103_ROW, archived }).success,
       ).toBe(true);
     }
   });
@@ -688,10 +711,10 @@ describe("agent.list@10.x against the frozen 9.2 line", () => {
     caller: { agentId: "agent-1", canSendMessages: true },
     scope: "user",
     agents: [
-      V102_ROW,
-      { ...V102_ROW, id: "agent-2", isSelf: false, archived: null },
+      V103_ROW,
+      { ...V103_ROW, id: "agent-2", isSelf: false, archived: null },
       {
-        ...V102_ROW,
+        ...V103_ROW,
         id: "agent-commandcode",
         isSelf: false,
         harnessId: "commandcode",
@@ -707,8 +730,8 @@ describe("agent.list@10.x against the frozen 9.2 line", () => {
     );
   });
 
-  it("downgrades from @10.2 to @9.2 by dropping the commandcode row alone, archived kept", () => {
-    expect(agentListDowngradeV10ToV9.from).toEqual({ major: 10, minor: 2 });
+  it("downgrades from @10.3 to @9.2 by dropping the commandcode row alone, archived kept", () => {
+    expect(agentListDowngradeV10ToV9.from).toEqual({ major: 10, minor: 3 });
     expect(agentListDowngradeV10ToV9.to).toEqual({ major: 9, minor: 2 });
     const downgraded =
       agentListDowngradeV10ToV9.downgradeResponse(V100_RESPONSE);
@@ -730,16 +753,16 @@ describe("agent.list@10.x against the frozen 9.2 line", () => {
 
 // `@10.1` put the run tuple on the row: the profile and permission mode
 // `agent.configure` requires a caller to restate.
-describe("agent.list@10.1 run tuple", () => {
+describe("agent.list@10.x run tuple and service tier", () => {
   const V100_ROW = agentSummarySchemaV100.parse(V92_ROW);
   const V100_WIRE_RESPONSE = listAgentsResponseSchemaV100.parse(V92_RESPONSE);
-  const V102_RESPONSE: ListAgentsResponse = {
+  const LATEST_RESPONSE: ListAgentsResponse = {
     caller: { agentId: "agent-1", canSendMessages: true },
     scope: "user",
     agents: [
-      V102_ROW,
+      V103_ROW,
       {
-        ...V102_ROW,
+        ...V103_ROW,
         id: "agent-2",
         isSelf: false,
         profile: null,
@@ -781,33 +804,76 @@ describe("agent.list@10.1 run tuple", () => {
     expect(agentListUpgradeV100ToV101.upgradeRequest(request)).toEqual(request);
   });
 
+  it("fills serviceTier with null when a frozen @10.2 row has a run tuple", () => {
+    const response = listAgentsResponseSchemaV102.parse({
+      ...V102_RESPONSE,
+      agents: [
+        {
+          ...V102_ROW,
+          runConfig: {
+            model: { kind: "concrete", slug: "gpt-5.6-codex" },
+            reasoningEffort: "high",
+            fastMode: true,
+          },
+        },
+      ],
+    });
+
+    expect(
+      agentListUpgradeV102ToV103.upgradeResponse(response).agents[0].runConfig,
+    ).toEqual({
+      model: { kind: "concrete", slug: "gpt-5.6-codex" },
+      reasoningEffort: "high",
+      fastMode: true,
+      serviceTier: null,
+    });
+  });
+
+  it("keeps service tiers out of the frozen @10.2 row", () => {
+    const runConfig = {
+      model: { kind: "concrete", slug: "gpt-5.6-codex" },
+      reasoningEffort: "high",
+      fastMode: true,
+      serviceTier: "priority",
+    } as const;
+    expect(
+      agentSummarySchemaV102.parse({ ...V103_ROW, runConfig }).runConfig,
+    ).toEqual({
+      model: runConfig.model,
+      reasoningEffort: runConfig.reasoningEffort,
+      fastMode: runConfig.fastMode,
+    });
+  });
+
   it("strips the run tuple from a row parsed through the frozen @10.0 and @9.2 summaries", () => {
     for (const parsed of [
-      agentSummarySchemaV100.parse(V102_ROW),
-      agentSummarySchemaV92.parse(V102_ROW),
+      agentSummarySchemaV100.parse(V103_ROW),
+      agentSummarySchemaV92.parse(V103_ROW),
       V100_ROW,
     ]) {
       expect(Object.hasOwn(parsed, "profile")).toBe(false);
       expect(Object.hasOwn(parsed, "permissionMode")).toBe(false);
     }
     // `@10.0` keeps everything `@9.2` carried.
-    expect(agentSummarySchemaV100.parse(V102_ROW)).toHaveProperty(
+    expect(agentSummarySchemaV100.parse(V103_ROW)).toHaveProperty(
       "archived",
       true,
     );
-    for (const row of listAgentsResponseSchemaV100.parse(V102_RESPONSE)
+    for (const row of listAgentsResponseSchemaV100.parse(LATEST_RESPONSE)
       .agents) {
       expect(Object.hasOwn(row, "profile")).toBe(false);
       expect(Object.hasOwn(row, "permissionMode")).toBe(false);
     }
   });
 
-  it("registers @10.1 on agent.list major 10 with @10.0 frozen, and froze @10.1 when @10.2 opened", () => {
+  it("keeps @10.0, @10.1, and @10.2 frozen while registering @10.3", () => {
     const line = hostRpcRegistry["agent.list"][10];
 
-    expect(line.latestMinor).toBe(2);
+    expect(line.latestMinor).toBe(3);
     expect(line.versions[1].contract).toBe(agentListV101);
     expect(line.versions[0].contract).toBe(agentListV100);
+    expect(line.versions[2].contract).toBe(agentListV102);
+    expect(line.versions[3].contract).toBe(agentListV103);
     expect(line.versions[0].contract.responseSchema).toBe(
       listAgentsResponseSchemaV100,
     );
@@ -817,9 +883,12 @@ describe("agent.list@10.1 run tuple", () => {
     expect(line.versions[1].upgradeFromPreviousVersion).toBe(
       agentListUpgradeV100ToV101,
     );
+    expect(line.versions[3].upgradeFromPreviousVersion).toBe(
+      agentListUpgradeV102ToV103,
+    );
   });
 
-  it("starts every major-10 downgrade bridge at @10.2 and drops the run tuple on the way out", () => {
+  it("starts every major-10 downgrade bridge at @10.3 and drops the run tuple on the way out", () => {
     const bridges = [
       agentListDowngradeV10ToV1,
       agentListDowngradeV10ToV2,
@@ -835,8 +904,8 @@ describe("agent.list@10.1 run tuple", () => {
 
     for (const bridge of bridges) {
       const label = `to ${String(bridge.to.major)}`;
-      expect(bridge.from, label).toEqual({ major: 10, minor: 2 });
-      const downgraded = bridge.downgradeResponse(V102_RESPONSE);
+      expect(bridge.from, label).toEqual({ major: 10, minor: 3 });
+      const downgraded = bridge.downgradeResponse(LATEST_RESPONSE);
       expect(downgraded.ok, label).toBe(true);
       if (!downgraded.ok) throw new Error("expected the downgrade to succeed");
       expect(downgraded.value.agents.length, label).toBeGreaterThan(0);
@@ -848,8 +917,8 @@ describe("agent.list@10.1 run tuple", () => {
   });
 
   it("requires both keys on the canonical row", () => {
-    const { profile: _profile, ...noProfile } = V102_ROW;
-    const { permissionMode: _mode, ...noMode } = V102_ROW;
+    const { profile: _profile, ...noProfile } = V103_ROW;
+    const { permissionMode: _mode, ...noMode } = V103_ROW;
 
     expect(agentSummarySchema.safeParse(noProfile).success).toBe(false);
     expect(agentSummarySchema.safeParse(noMode).success).toBe(false);
@@ -858,7 +927,7 @@ describe("agent.list@10.1 run tuple", () => {
   it("accepts a string or null profile and every permission mode or null", () => {
     for (const profile of ["ambient", "work", null]) {
       expect(
-        agentSummarySchema.safeParse({ ...V102_ROW, profile }).success,
+        agentSummarySchema.safeParse({ ...V103_ROW, profile }).success,
       ).toBe(true);
     }
     for (const permissionMode of [
@@ -869,14 +938,14 @@ describe("agent.list@10.1 run tuple", () => {
       null,
     ]) {
       expect(
-        agentSummarySchema.safeParse({ ...V102_ROW, permissionMode }).success,
+        agentSummarySchema.safeParse({ ...V103_ROW, permissionMode }).success,
       ).toBe(true);
     }
   });
 
   it("rejects an unknown permission mode word", () => {
     expect(
-      agentSummarySchema.safeParse({ ...V102_ROW, permissionMode: "yolo" })
+      agentSummarySchema.safeParse({ ...V103_ROW, permissionMode: "yolo" })
         .success,
     ).toBe(false);
   });

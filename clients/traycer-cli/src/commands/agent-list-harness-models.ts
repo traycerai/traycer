@@ -2,9 +2,13 @@ import { formatListHarnessModelsResponse } from "@traycer/protocol/agent/agent-h
 import {
   listHarnessModelsRequestSchema,
   listHarnessModelsResponseSchema,
+  type ListHarnessModelsResponse,
 } from "@traycer/protocol/host/agent/shared";
+import { AGENT_LIST_HARNESS_MODELS_PROFILE_REQUIRED_HOST_VERSION } from "@traycer/protocol/host/registry";
 import {
   callHostRpc,
+  callHostRpcWithDispatch,
+  PLAIN_DISPATCH,
   parseCanonicalHostResponse,
   parseUserInput,
   toAgentCliError,
@@ -16,6 +20,7 @@ export function buildAgentListHarnessModelsCommand(opts: {
   readonly epicId: string | null;
   readonly senderAgentId: string | null;
   readonly harnessId: string;
+  readonly profileId: string | null;
 }): CommandFn {
   return async () => {
     const epicId = readEpicId(opts.epicId);
@@ -24,6 +29,7 @@ export function buildAgentListHarnessModelsCommand(opts: {
       opts.harnessId,
       epicId,
       senderAgentId,
+      opts.profileId === "ambient" ? null : opts.profileId,
     );
     return {
       data: response,
@@ -37,14 +43,22 @@ async function listSingleHarnessModels(
   harnessId: string,
   epicId: string | null,
   senderAgentId: string | null,
-) {
+  profileId: string | null,
+): Promise<ListHarnessModelsResponse> {
   const request = parseUserInput(listHarnessModelsRequestSchema, {
     epicId,
     senderAgentId,
     harnessId,
+    profileId: profileId ?? undefined,
   });
   const result = await toAgentCliError(
-    callHostRpc("agent.listHarnessModels", request),
+    request.profileId === undefined
+      ? callHostRpc("agent.listHarnessModels", request)
+      : callHostRpcWithDispatch("agent.listHarnessModels", request, {
+          ...PLAIN_DISPATCH,
+          requiredHostMethodVersion:
+            AGENT_LIST_HARNESS_MODELS_PROFILE_REQUIRED_HOST_VERSION,
+        }),
   );
   return parseCanonicalHostResponse(
     "agent.listHarnessModels",

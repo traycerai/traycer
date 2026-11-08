@@ -1,8 +1,12 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { Command } from "commander";
 import { A2A_PERMISSION_MODE_INSTRUCTION } from "@traycer/protocol/agent/agent-selection-guide-format";
-import { agentCreateDowngradeV31ToV20 } from "@traycer/protocol/host/agent/contracts";
-import { createAgentRequestSchemaV31 } from "@traycer/protocol/host/agent/shared";
+import { agentCreateDowngradeV32ToV20 } from "@traycer/protocol/host/agent/contracts";
+import {
+  AGENT_CONFIGURE_SERVICE_TIER_REQUIRED_HOST_VERSION,
+  AGENT_CREATE_SERVICE_TIER_REQUIRED_HOST_VERSION,
+} from "@traycer/protocol/host/registry";
+import { createAgentRequestSchemaV32 } from "@traycer/protocol/host/agent/shared";
 import { buildProgram } from "../../index";
 import { buildAgentConfigureCommand } from "../agent-configure";
 import { buildAgentCreateCommand } from "../agent-create";
@@ -12,7 +16,7 @@ import {
   parseConcreteProfileSelection,
   parseCreateProfileSelection,
 } from "../../internal/profile-selection";
-import { callHostRpc } from "../../internal/host-rpc";
+import { callHostRpc, callHostRpcWithDispatch } from "../../internal/host-rpc";
 import { HostRpcError } from "../../../../shared/host-transport/host-messenger";
 import { noopLogger } from "../../logger";
 import { CLI_ERROR_CODES, CliError } from "../../runner/errors";
@@ -40,10 +44,12 @@ vi.mock("../../internal/host-rpc", async () => {
   return {
     ...actual,
     callHostRpc: vi.fn(),
+    callHostRpcWithDispatch: vi.fn(),
   };
 });
 
 const rpcMock = vi.mocked(callHostRpc);
+const dispatchMock = vi.mocked(callHostRpcWithDispatch);
 const PREV_ENV = {
   epic: process.env.TRAYCER_EPIC_ID,
   agent: process.env.TRAYCER_AGENT_ID,
@@ -85,6 +91,7 @@ function createOpts(profile: string | null) {
     model: null,
     reasoningEffort: null,
     fast: false,
+    serviceTier: null,
     permissionMode: null,
     profile,
     cwd: null,
@@ -227,6 +234,23 @@ describe("agent create profile selection", () => {
     );
   });
 
+  it("sends a named service tier and requires create@3.2", async () => {
+    dispatchMock.mockResolvedValue({ agentId: "agent_child", warnings: [] });
+    await buildAgentCreateCommand({
+      ...createOpts(null),
+      serviceTier: "priority",
+    })(makeCtx());
+    expect(dispatchMock).toHaveBeenCalledWith(
+      "agent.create",
+      expect.objectContaining({ serviceTier: "priority" }),
+      expect.objectContaining({
+        requiredHostMethodVersion:
+          AGENT_CREATE_SERVICE_TIER_REQUIRED_HOST_VERSION,
+      }),
+    );
+    expect(rpcMock).not.toHaveBeenCalled();
+  });
+
   it("never sends the legacy profileId field", async () => {
     rpcMock.mockResolvedValue({ agentId: "agent_child", warnings: [] });
 
@@ -346,6 +370,7 @@ describe("agent configure", () => {
       profileSelection: { kind: "ambient" },
       reasoningEffort: "high",
       fastMode: false,
+      serviceTier: null,
       permissionMode: "supervised",
       // `agent.configure@3.0` is released and its baseline requires this on the
       // response, so the CLI still has to decode it - see the schema comment in
@@ -367,6 +392,7 @@ describe("agent configure", () => {
       profile: "ambient",
       reasoningEffort: "high",
       fast: false,
+      serviceTier: null,
       permissionMode: "supervised",
     })(makeCtx());
 
@@ -389,6 +415,31 @@ describe("agent configure", () => {
     );
   });
 
+  it("sends a named service tier and requires configure@7.2", async () => {
+    dispatchMock.mockResolvedValue(response);
+    await buildAgentConfigureCommand({
+      epicId: "epic_1",
+      senderAgentId: "agent_1",
+      agentId: "agent_target",
+      harness: "codex",
+      model: "gpt-5.6-codex",
+      profile: "ambient",
+      reasoningEffort: null,
+      fast: false,
+      serviceTier: "priority",
+      permissionMode: null,
+    })(makeCtx());
+    expect(dispatchMock).toHaveBeenCalledWith(
+      "agent.configure",
+      expect.objectContaining({ serviceTier: "priority", fastMode: false }),
+      expect.objectContaining({
+        requiredHostMethodVersion:
+          AGENT_CONFIGURE_SERVICE_TIER_REQUIRED_HOST_VERSION,
+      }),
+    );
+    expect(rpcMock).not.toHaveBeenCalled();
+  });
+
   it("sends the omitted reasoning-effort and fast-mode inputs explicitly", async () => {
     rpcMock.mockResolvedValue(response);
 
@@ -401,6 +452,7 @@ describe("agent configure", () => {
       profile: "prof_work",
       reasoningEffort: null,
       fast: false,
+      serviceTier: null,
       permissionMode: null,
     })(makeCtx());
 
@@ -425,6 +477,7 @@ describe("agent configure", () => {
         profile: "ambient",
         reasoningEffort: null,
         fast: false,
+        serviceTier: null,
         permissionMode: null,
       })(makeCtx()),
     ).rejects.toBeInstanceOf(CliError);
@@ -484,6 +537,7 @@ describe("version skew", () => {
       profile: "ambient",
       reasoningEffort: null,
       fast: false,
+      serviceTier: null,
       permissionMode: null,
     })(makeCtx()).catch((err: unknown) => err);
 
@@ -496,7 +550,7 @@ describe("version skew", () => {
   // downgrade a host-v1.1.7 manifest triggers in the transport. Every profile
   // selection must fail because released v2.0 cannot carry permission intent.
   function cliCreateRequest(profile: string | null) {
-    return createAgentRequestSchemaV31.parse({
+    return createAgentRequestSchemaV32.parse({
       senderAgentId: "agent_parent",
       epicId: "epic_1",
       name: null,
@@ -515,7 +569,7 @@ describe("version skew", () => {
   }
 
   it("refuses to downgrade an omitted --profile onto an old host", () => {
-    const downgraded = agentCreateDowngradeV31ToV20.downgradeRequest(
+    const downgraded = agentCreateDowngradeV32ToV20.downgradeRequest(
       cliCreateRequest(null),
     );
 
@@ -526,7 +580,7 @@ describe("version skew", () => {
   });
 
   it("refuses to downgrade an explicit --profile ambient onto an old host", () => {
-    const downgraded = agentCreateDowngradeV31ToV20.downgradeRequest(
+    const downgraded = agentCreateDowngradeV32ToV20.downgradeRequest(
       cliCreateRequest("ambient"),
     );
 
@@ -536,7 +590,7 @@ describe("version skew", () => {
   });
 
   it("refuses to drop full-access permissions on an old host even for a managed profile", () => {
-    const downgraded = agentCreateDowngradeV31ToV20.downgradeRequest(
+    const downgraded = agentCreateDowngradeV32ToV20.downgradeRequest(
       cliCreateRequest("prof_work"),
     );
 
@@ -549,6 +603,9 @@ describe("version skew", () => {
 describe("command registration", () => {
   it("registers the profile-aware agent commands alongside the existing family", () => {
     expect(optionFlags(expectAgentCommand("create"))).toContain("--profile");
+    expect(optionFlags(expectAgentCommand("create"))).toContain(
+      "--service-tier",
+    );
     expect(optionFlags(expectAgentCommand("create"))).toContain(
       "--permission-mode",
     );
@@ -570,6 +627,7 @@ describe("command registration", () => {
       expect.arrayContaining([
         "--reasoning-effort",
         "--fast",
+        "--service-tier",
         "--permission-mode",
         "--json",
       ]),

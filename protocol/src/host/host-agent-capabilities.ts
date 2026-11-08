@@ -22,7 +22,10 @@
  * for a future copy verb that moves bytes host-to-host without the agent
  * ever holding them. Do not reintroduce a byte-carrying file RPC.
  */
-import { defineRpcContract } from "@traycer/protocol/framework/index";
+import {
+  defineRpcContract,
+  defineUpgradePath,
+} from "@traycer/protocol/framework/index";
 import { agentModeSchema } from "@traycer/protocol/common/schemas";
 import { browserSessionReferenceSchema } from "@traycer/protocol/persistence/epic/content-blocks";
 import {
@@ -635,8 +638,9 @@ export type HostAgentRemoteSenderFacts = z.infer<
 
 /**
  * Dial-only create. `agent.create@3.0` is a RELEASED client contract and
- * cannot grow a field, so the sender-facts envelope lives here, on the
- * host-agent optional channel, where it is free to change in place.
+ * cannot grow a field, so the sender-facts envelope uses a separate host-agent
+ * RPC. That RPC is versioned too: v1.0 is frozen, and v1.1 carries a named
+ * service tier without letting an older peer silently drop the choice.
  *
  * The v3.0 request is EXTENDED rather than nested for two reasons, both
  * load-bearing:
@@ -654,6 +658,10 @@ export type HostAgentRemoteSenderFacts = z.infer<
  * cross-host folderless create would silently reach the target as
  * inherit-from-parent — and the parent it would try to inherit from is the
  * record the target does not have.
+ *
+ * `host.agent.createFromRemoteSender@1.0` is frozen. Its `@1.1` extension adds
+ * the optional nullable service tier; callers pin named tiers to that host
+ * method version so a 1.0 peer cannot silently strip the choice.
  */
 export const hostAgentCreateFromRemoteSenderRequestSchema = lazySchema(() =>
   createAgentRequestSchemaV30.extend({
@@ -661,8 +669,17 @@ export const hostAgentCreateFromRemoteSenderRequestSchema = lazySchema(() =>
     workspaceIntent: z.literal("folderless").nullable(),
   }),
 );
-export type HostAgentCreateFromRemoteSenderRequest = z.infer<
+export type HostAgentCreateFromRemoteSenderRequestV10 = z.infer<
   typeof hostAgentCreateFromRemoteSenderRequestSchema
+>;
+
+export const hostAgentCreateFromRemoteSenderRequestSchemaV11 = lazySchema(() =>
+  hostAgentCreateFromRemoteSenderRequestSchema.extend({
+    serviceTier: z.string().nullable().optional(),
+  }),
+);
+export type HostAgentCreateFromRemoteSenderRequest = z.infer<
+  typeof hostAgentCreateFromRemoteSenderRequestSchemaV11
 >;
 
 export const hostAgentCreateFromRemoteSenderV10 = defineRpcContract({
@@ -673,6 +690,23 @@ export const hostAgentCreateFromRemoteSenderV10 = defineRpcContract({
   // warnings. The caller briefs it with `agent.sendMessage`, which already
   // routes cross-host.
   responseSchema: createAgentResponseSchema,
+});
+
+export const hostAgentCreateFromRemoteSenderV11 = defineRpcContract({
+  method: "host.agent.createFromRemoteSender",
+  schemaVersion: { major: 1, minor: 1 } as const,
+  requestSchema: hostAgentCreateFromRemoteSenderRequestSchemaV11,
+  responseSchema: createAgentResponseSchema,
+});
+
+export const hostAgentCreateFromRemoteSenderUpgradeV10ToV11 = defineUpgradePath<
+  typeof hostAgentCreateFromRemoteSenderV10,
+  typeof hostAgentCreateFromRemoteSenderV11
+>({
+  from: { major: 1, minor: 0 },
+  to: { major: 1, minor: 1 },
+  upgradeRequest: (request) => request,
+  upgradeResponse: (response) => response,
 });
 
 /**

@@ -64,9 +64,11 @@ import {
   agentCreateV20,
   agentCreateV30,
   agentCreateV31,
+  agentCreateV32,
+  agentCreateUpgradeV31ToV32,
   agentCreateDowngradeV20ToV10,
-  agentCreateDowngradeV31ToV10,
-  agentCreateDowngradeV31ToV20,
+  agentCreateDowngradeV32ToV10,
+  agentCreateDowngradeV32ToV20,
   agentCreateUpgradeV10ToV20,
   agentCreateUpgradeV20ToV30,
   agentCreateUpgradeV30ToV31,
@@ -74,6 +76,8 @@ import {
   agentListHarnessModelsDowngradeV2ToV1,
   agentListHarnessModelsV10,
   agentListHarnessModelsV20,
+  agentListHarnessModelsV21,
+  agentListHarnessModelsUpgradeV20ToV21,
   agentListHarnessModelsUpgradeV1ToV2,
   agentListDowngradeV2ToV1,
   agentListDowngradeV3ToV1,
@@ -146,6 +150,8 @@ import {
   agentListV100,
   agentListV101,
   agentListV102,
+  agentListV103,
+  agentListUpgradeV102ToV103,
   agentListUpgradeV101ToV102,
   agentSelectionGuideV10,
   agentSelectionGuideGlobalGetV10,
@@ -159,6 +165,8 @@ import {
   agentSendMessageV12,
   agentStopV10,
   agentForkV10,
+  agentForkV11,
+  agentForkUpgradeV10ToV11,
 } from "@traycer/protocol/host/agent/contracts";
 import {
   agentArchiveUpgradeV10ToV11,
@@ -194,14 +202,16 @@ import {
   agentConfigureV60,
   agentConfigureV70,
   agentConfigureV71,
+  agentConfigureV72,
+  agentConfigureUpgradeV71ToV72,
   agentConfigureUpgradeV60ToV70,
   agentConfigureUpgradeV70ToV71,
-  agentConfigureDowngradeV71ToV60,
-  agentConfigureDowngradeV71ToV50,
-  agentConfigureDowngradeV71ToV40,
-  agentConfigureDowngradeV71ToV30,
-  agentConfigureDowngradeV71ToV20,
-  agentConfigureDowngradeV71ToV10,
+  agentConfigureDowngradeV72ToV60,
+  agentConfigureDowngradeV72ToV50,
+  agentConfigureDowngradeV72ToV40,
+  agentConfigureDowngradeV72ToV30,
+  agentConfigureDowngradeV72ToV20,
+  agentConfigureDowngradeV72ToV10,
   agentConfigureUpgradeV10ToV20,
   agentConfigureUpgradeV20ToV30,
   agentConfigureUpgradeV30ToV40,
@@ -650,6 +660,8 @@ import {
 } from "@traycer/protocol/host/managed-command/contracts";
 import {
   hostAgentCreateFromRemoteSenderV10,
+  hostAgentCreateFromRemoteSenderV11,
+  hostAgentCreateFromRemoteSenderUpgradeV10ToV11,
   hostFileCopyCancelV10,
   hostFileCopyStartV10,
   hostFileCopyStatusV10,
@@ -5102,6 +5114,43 @@ export const PROMOTE_TO_PERSONAL_REQUIRED_HOST_VERSION: RequiredHostMethodVersio
     version: { major: 1, minor: 3 },
   };
 
+/** Pin feature floors to the minor that introduced each request field. */
+export const AGENT_GUI_LIST_MODELS_PROFILE_REQUIRED_HOST_VERSION: RequiredHostMethodVersion =
+  {
+    method: "agent.gui.listModels",
+    version: { major: 1, minor: 2 },
+  };
+
+export const AGENT_LIST_HARNESS_MODELS_PROFILE_REQUIRED_HOST_VERSION: RequiredHostMethodVersion =
+  {
+    method: "agent.listHarnessModels",
+    version: { major: 2, minor: 1 },
+  };
+
+export const AGENT_CREATE_SERVICE_TIER_REQUIRED_HOST_VERSION: RequiredHostMethodVersion =
+  {
+    method: "agent.create",
+    version: { major: 3, minor: 2 },
+  };
+
+export const AGENT_CONFIGURE_SERVICE_TIER_REQUIRED_HOST_VERSION: RequiredHostMethodVersion =
+  {
+    method: "agent.configure",
+    version: { major: 7, minor: 2 },
+  };
+
+export const AGENT_FORK_SPEED_REQUIRED_HOST_VERSION: RequiredHostMethodVersion =
+  {
+    method: "agent.fork",
+    version: { major: 1, minor: 1 },
+  };
+
+export const HOST_AGENT_CREATE_SERVICE_TIER_REQUIRED_HOST_VERSION: RequiredHostMethodVersion =
+  {
+    method: "host.agent.createFromRemoteSender",
+    version: { major: 1, minor: 1 },
+  };
+
 // ── Per-pack version-manager methods + the on-demand discovery refresh ─────
 //
 // BRAND-NEW method names, each at `@1.0`, all registered below with
@@ -8222,7 +8271,7 @@ const HOST_RPC_REGISTRY_BASE_DEFINITION = {
       downgradePathsFromLatest: { 1: agentCreateDowngradeV20ToV10 },
     },
     3: {
-      latestMinor: 1,
+      latestMinor: 2,
       versions: {
         0: {
           contract: agentCreateV30,
@@ -8232,10 +8281,14 @@ const HOST_RPC_REGISTRY_BASE_DEFINITION = {
           contract: agentCreateV31,
           upgradeFromPreviousVersion: agentCreateUpgradeV30ToV31,
         },
+        2: {
+          contract: agentCreateV32,
+          upgradeFromPreviousVersion: agentCreateUpgradeV31ToV32,
+        },
       },
       downgradePathsFromLatest: {
-        1: agentCreateDowngradeV31ToV10,
-        2: agentCreateDowngradeV31ToV20,
+        1: agentCreateDowngradeV32ToV10,
+        2: agentCreateDowngradeV32ToV20,
       },
     },
   },
@@ -8311,11 +8364,15 @@ const HOST_RPC_REGISTRY_BASE_DEFINITION = {
       downgradePathsFromLatest: {},
     },
     2: {
-      latestMinor: 0,
+      latestMinor: 1,
       versions: {
         0: {
           contract: agentListHarnessModelsV20,
           upgradeFromPreviousVersion: agentListHarnessModelsUpgradeV1ToV2,
+        },
+        1: {
+          contract: agentListHarnessModelsV21,
+          upgradeFromPreviousVersion: agentListHarnessModelsUpgradeV20ToV21,
         },
       },
       downgradePathsFromLatest: {
@@ -8487,11 +8544,15 @@ const HOST_RPC_REGISTRY_BASE_DEFINITION = {
   "agent.fork": {
     degrade: { kind: "unsupported" },
     1: {
-      latestMinor: 0,
+      latestMinor: 1,
       versions: {
         0: {
           contract: agentForkV10,
           upgradeFromPreviousVersion: null,
+        },
+        1: {
+          contract: agentForkV11,
+          upgradeFromPreviousVersion: agentForkUpgradeV10ToV11,
         },
       },
       downgradePathsFromLatest: {},
@@ -11695,11 +11756,16 @@ const HOST_RPC_REGISTRY_BASE_TAIL_DEFINITION = {
   "host.agent.createFromRemoteSender": {
     degrade: { kind: "unsupported" },
     1: {
-      latestMinor: 0,
+      latestMinor: 1,
       versions: {
         0: {
           contract: hostAgentCreateFromRemoteSenderV10,
           upgradeFromPreviousVersion: null,
+        },
+        1: {
+          contract: hostAgentCreateFromRemoteSenderV11,
+          upgradeFromPreviousVersion:
+            hostAgentCreateFromRemoteSenderUpgradeV10ToV11,
         },
       },
       downgradePathsFromLatest: {},
@@ -12393,7 +12459,7 @@ const HOST_RPC_REGISTRY_BASE_TAIL_DEFINITION = {
       },
     },
     7: {
-      latestMinor: 1,
+      latestMinor: 2,
       versions: {
         0: {
           contract: agentConfigureV70,
@@ -12403,14 +12469,18 @@ const HOST_RPC_REGISTRY_BASE_TAIL_DEFINITION = {
           contract: agentConfigureV71,
           upgradeFromPreviousVersion: agentConfigureUpgradeV70ToV71,
         },
+        2: {
+          contract: agentConfigureV72,
+          upgradeFromPreviousVersion: agentConfigureUpgradeV71ToV72,
+        },
       },
       downgradePathsFromLatest: {
-        1: agentConfigureDowngradeV71ToV10,
-        2: agentConfigureDowngradeV71ToV20,
-        3: agentConfigureDowngradeV71ToV30,
-        4: agentConfigureDowngradeV71ToV40,
-        5: agentConfigureDowngradeV71ToV50,
-        6: agentConfigureDowngradeV71ToV60,
+        1: agentConfigureDowngradeV72ToV10,
+        2: agentConfigureDowngradeV72ToV20,
+        3: agentConfigureDowngradeV72ToV30,
+        4: agentConfigureDowngradeV72ToV40,
+        5: agentConfigureDowngradeV72ToV50,
+        6: agentConfigureDowngradeV72ToV60,
       },
     },
   },
@@ -13952,8 +14022,11 @@ const HOST_RPC_ID_CARRYING_REGISTRY_DEFINITION = {
     // both, an older host is upgraded to `null` and `unknown` ("never asked",
     // not "unreachable" or "offline"), and the nine bridges move their origin
     // to 10.2.
+    //
+    // @10.3 adds the concrete service tier inside `runConfig`; the upgrade
+    // fills null for older hosts and the nine downgrade origins move with it.
     10: {
-      latestMinor: 2,
+      latestMinor: 3,
       versions: {
         0: {
           contract: agentListV100,
@@ -13966,6 +14039,10 @@ const HOST_RPC_ID_CARRYING_REGISTRY_DEFINITION = {
         2: {
           contract: agentListV102,
           upgradeFromPreviousVersion: agentListUpgradeV101ToV102,
+        },
+        3: {
+          contract: agentListV103,
+          upgradeFromPreviousVersion: agentListUpgradeV102ToV103,
         },
       },
       downgradePathsFromLatest: {
