@@ -111,7 +111,7 @@ export function CurrentTasksSection(): ReactNode {
           ref={sectionRef}
           data-testid="current-tasks-section"
           aria-labelledby={headingId}
-          className="mt-7 flex min-h-0 flex-col"
+          className="mt-7 flex min-h-0 flex-1 flex-col"
         >
           <div className="mb-3 flex shrink-0 items-center justify-between gap-3 px-1">
             <h2
@@ -134,7 +134,7 @@ export function CurrentTasksSection(): ReactNode {
               )}
             </button>
           </div>
-          <div className="min-h-0 overflow-y-auto">
+          <div className="min-h-0 flex-1 overflow-y-auto">
             {confirmedEmpty ? (
               <div className="flex flex-col items-center gap-1.5 px-4 py-9 text-center">
                 <p className="text-ui-sm font-medium">No current tasks</p>
@@ -244,6 +244,15 @@ function CurrentTaskGroup(props: {
           onClick={() => setExpanded(true)}
         >
           Show {remaining} more
+        </button>
+      ) : null}
+      {expanded && props.items.length > GROUP_PREVIEW_COUNT ? (
+        <button
+          type="button"
+          className={MORE_CLASS_NAME}
+          onClick={() => setExpanded(false)}
+        >
+          Show less
         </button>
       ) : null}
       {props.notice === null ? null : (
@@ -363,7 +372,8 @@ function CurrentTaskRow(props: {
 // Current tasks spans every host, so each row reads its own task's worktrees
 // (where its PRs come from) from the host that owns the task, falling back to
 // the window's host for a cloud task. Reading per row also means a row hidden
-// behind "Show more" probes nothing until it is shown.
+// behind "Show more" probes nothing until it is shown. "Show less" puts those
+// rows back behind the cap.
 function useCurrentTaskWorktrees(
   item: HistoryItem,
 ): readonly WorktreeHostEntryV12[] {

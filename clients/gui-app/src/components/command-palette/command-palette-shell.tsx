@@ -38,6 +38,7 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
+import { TooltipWrapper } from "@/components/ui/tooltip-wrapper";
 import { PaletteItemRow } from "@/components/command-palette/palette-item-row";
 import { PinToggle } from "@/components/command-palette/pin-toggle";
 import { SubpageView } from "@/components/command-palette/palette-cmdk";
@@ -144,7 +145,7 @@ export function CommandPaletteShell(props: CommandPaletteShellProps) {
     <Dialog open={open} onOpenChange={handleOpenChange}>
       <DialogContent
         layout="banded"
-        className="top-[15vh] w-full max-w-[min(90vw,40rem)] translate-y-0 overflow-hidden"
+        className="top-[15vh] w-full max-w-[min(90vw,40rem)] translate-y-0 overflow-hidden sm:max-w-[min(90vw,40rem)]"
         showCloseButton={false}
         // Radix's document-level Esc listener can't be reached via React
         // propagation; `onEscapeKeyDown` + `preventDefault` is the first-party
@@ -328,7 +329,14 @@ function GroupBlock(props: GroupBlockProps) {
             keywords={[...item.keywords]}
             onSelect={() => onSelect(item)}
           >
-            <span className="truncate">{item.label}</span>
+            <TooltipWrapper
+              label={item.label}
+              side="bottom"
+              sideOffset={undefined}
+              align={undefined}
+            >
+              <span className="truncate">{item.label}</span>
+            </TooltipWrapper>
             <PinToggle
               itemId={item.id}
               pinned={pinnedIdSet.has(item.id)}
@@ -336,13 +344,21 @@ function GroupBlock(props: GroupBlockProps) {
             />
             {item.hint !== undefined ? (
               // At most half the row, truncating, so a long team name never
-              // pushes the label it qualifies out of a narrow palette.
-              <span
-                data-slot="command-item-hint"
-                className="ml-auto max-w-1/2 min-w-0 truncate text-ui-xs text-muted-foreground"
+              // pushes the label it qualifies out of a narrow palette. The
+              // tooltip is the rest of that name once the row cuts it.
+              <TooltipWrapper
+                label={item.hint}
+                side="bottom"
+                sideOffset={undefined}
+                align={undefined}
               >
-                {item.hint}
-              </span>
+                <span
+                  data-slot="command-item-hint"
+                  className="ml-auto max-w-1/2 min-w-0 truncate text-ui-xs text-muted-foreground"
+                >
+                  {item.hint}
+                </span>
+              </TooltipWrapper>
             ) : null}
             {item.shortcut !== null ? (
               <CommandShortcut>
