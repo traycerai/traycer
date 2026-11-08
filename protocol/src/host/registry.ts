@@ -394,7 +394,9 @@ import {
   agentGuiListHarnessesV101,
   agentGuiListModelsV10,
   agentGuiListModelsV11,
+  agentGuiListModelsV12,
   agentGuiListModelsUpgradeV10ToV11,
+  agentGuiListModelsUpgradeV11ToV12,
   chatSubscribeV10,
   chatSubscribeV11,
   chatSubscribeV12,
@@ -804,6 +806,7 @@ import {
   hostGetRateLimitUsageDowngradeV6ToV4,
   hostGetRateLimitUsageDowngradeV6ToV5,
   providersConsumeRateLimitResetCreditV10,
+  providersReadModelRoutesV10,
   providersRefreshProfileStatusV10,
   providersRefreshProfileStatusV20,
   providersRefreshProfileStatusV30,
@@ -1265,6 +1268,7 @@ import {
   hostNotificationsCloudFeedSubscribeV15,
   hostNotificationsCloudFeedSubscribeV16,
   hostNotificationsCloudFeedSubscribeV17,
+  hostNotificationsCloudFeedSubscribeV18,
   hostNotificationsCloudFeedMarkRead,
   hostNotificationsCloudFeedMarkAllRead,
   hostNotificationsCloudFeedResolve,
@@ -7524,6 +7528,19 @@ const HOST_RPC_REGISTRY_BASE_DEFINITION = {
       downgradePathsFromLatest: {},
     },
   },
+  "providers.readModelRoutes": {
+    degrade: { kind: "unsupported" },
+    1: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: providersReadModelRoutesV10,
+          upgradeFromPreviousVersion: null,
+        },
+      },
+      downgradePathsFromLatest: {},
+    },
+  },
   "host.notificationHooks.status": {
     degrade: { kind: "unsupported" },
     1: {
@@ -8038,7 +8055,7 @@ const HOST_RPC_REGISTRY_BASE_DEFINITION = {
   },
   "agent.gui.listModels": {
     1: {
-      latestMinor: 1,
+      latestMinor: 2,
       versions: {
         0: {
           contract: agentGuiListModelsV10,
@@ -8047,6 +8064,10 @@ const HOST_RPC_REGISTRY_BASE_DEFINITION = {
         1: {
           contract: agentGuiListModelsV11,
           upgradeFromPreviousVersion: agentGuiListModelsUpgradeV10ToV11,
+        },
+        2: {
+          contract: agentGuiListModelsV12,
+          upgradeFromPreviousVersion: agentGuiListModelsUpgradeV11ToV12,
         },
       },
       downgradePathsFromLatest: {},
@@ -15211,7 +15232,7 @@ const HOST_STREAM_RPC_REGISTRY_NOTIFICATIONS_DEFINITION = {
   },
   "host.notifications.cloudFeed.subscribe": {
     1: {
-      latestMinor: 7,
+      latestMinor: 8,
       versions: {
         0: {
           contract: hostNotificationsCloudFeedSubscribeV10,
@@ -15237,6 +15258,7 @@ const HOST_STREAM_RPC_REGISTRY_NOTIFICATIONS_DEFINITION = {
         },
         6: { contract: hostNotificationsCloudFeedSubscribeV16 },
         7: { contract: hostNotificationsCloudFeedSubscribeV17 },
+        8: { contract: hostNotificationsCloudFeedSubscribeV18 },
       },
     },
   },

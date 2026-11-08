@@ -732,6 +732,7 @@ export const HOST_UNARY_RPC_ROUTES = {
   "providers.profileSync.overview": "target-host",
   "providers.profileSync.setKeepInSync": "target-host",
   "providers.profileSync.syncNow": "target-host",
+  "providers.readModelRoutes": "target-host",
   "providers.refreshPackDiscovery": "target-host",
   "providers.refreshProfileStatus": "target-host",
   "providers.removeCustomPath": "target-host",

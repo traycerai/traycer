@@ -53,12 +53,21 @@ export function ProvidersChangedStreamMount(): ReactNode {
       }
       for (const method of PROVIDER_CATALOG_INVALIDATIONS) {
         const scope = hostQueryKeys.methodScope(hostId, method);
-        void queryClient.invalidateQueries({
+        const filters = {
           queryKey:
             changed === null
               ? scope
               : [...scope, { harnessId: providerIdToGuiHarnessId(changed) }],
-        });
+        };
+        if (method === "agent.gui.listCommands") {
+          // Invalidation alone joins a first fetch with no cached data. Its
+          // old response may still be in transit when the change arrives.
+          void queryClient.cancelQueries(filters).then(() => {
+            if (!disposed) return queryClient.invalidateQueries(filters);
+          });
+        } else {
+          void queryClient.invalidateQueries(filters);
+        }
       }
     };
 

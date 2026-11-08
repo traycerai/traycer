@@ -20,6 +20,7 @@ import {
 } from "@traycer/protocol/host/epic/unary-schemas";
 import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
 import { TooltipWrapper } from "@/components/ui/tooltip-wrapper";
+import { useTracyTranscriptOrigin } from "@/components/bots/tracy-transcript-origin-context";
 import { useHostQueryWithResponseMap } from "@/hooks/host/use-host-query";
 import {
   findCachedTaskContext,
@@ -183,6 +184,7 @@ function TaskReferenceButton(props: {
   const { taskId, title } = props;
   const navigate = useNavigate();
   const router = useRouter();
+  const tracyOrigin = useTracyTranscriptOrigin();
   const openTask = useCallback(
     (event: MouseEvent<HTMLButtonElement>) => {
       // Cmd/Ctrl-click and the middle button open the task in a background
@@ -194,9 +196,10 @@ function TaskReferenceButton(props: {
       openEpicFromList(navigate, taskId, router.state.location.pathname, {
         title,
         source: "message_task_chip",
+        tracyOrigin,
       });
     },
-    [navigate, router, taskId, title],
+    [navigate, router, taskId, title, tracyOrigin],
   );
   return (
     <button

@@ -227,6 +227,8 @@ export function useArtifactLinkOpener(args: {
       client: tabHostClient,
       workspaceClient: tabHostClient,
       navigate,
+      // An artifact tile is a task's own, never a Tracy transcript.
+      tracyOrigin: null,
       openTile,
     };
   }, [

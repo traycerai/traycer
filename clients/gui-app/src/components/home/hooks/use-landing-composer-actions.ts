@@ -14,7 +14,6 @@ import type {
   WorktreeBindingSelectorRowV12,
   WorktreeBindingWorkspaceMode,
   WorktreeIntent,
-  WorktreeWorkspaceSummaryV14,
 } from "@traycer/protocol/host/worktree-schemas";
 import type { JsonContent } from "@traycer/protocol/common/registry";
 import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
@@ -128,10 +127,7 @@ import {
 import { scheduleLandingImageReconcile } from "@/lib/composer/landing-image-gc";
 import { buildChatRunSettings } from "@/lib/composer/chat-run-settings";
 import { useAccountContextStore } from "@/stores/auth/account-context-store";
-import {
-  orderFoldersPrimaryFirst,
-  resolvePrimaryPath,
-} from "@/lib/worktree/resolve-primary-path";
+import { orderFoldersPrimaryFirst } from "@/lib/worktree/resolve-primary-path";
 import {
   armEpicCreateSeedHoldTimer,
   clearEpicCreateSeedPending,
@@ -166,15 +162,7 @@ import { selectHostFocusedRef } from "@/stores/tabs/selectors";
 import { getSystemTabModalApi } from "@/stores/tabs/system-tab-modal-bridge";
 import { toast } from "sonner";
 import { returnedSandboxMessageLine } from "@/lib/sandboxes/sandbox-strings";
-import {
-  buildDefaultBranchByPath,
-  EMPTY_DEFAULT_BRANCH,
-} from "@/lib/worktree/default-branch-name";
-import {
-  defaultFolderIntent,
-  mainCheckoutHasCommit,
-} from "@/lib/worktree/worktree-intent-seeding";
-import { useSettingsStore } from "@/stores/settings/settings-store";
+import { readCachedDefaultWorktreeIntent } from "@/lib/worktree/cached-default-worktree-intent";
 import type {
   LandingGiveBack,
   LandingSandboxSendHandoff,
@@ -2129,78 +2117,6 @@ function canonicalLaunchWorkspace(
       worktreeIntent,
     ),
   };
-}
-
-function readCachedDefaultWorktreeIntent(
-  queryClient: QueryClient,
-  hostId: string | null,
-  workspace: LandingDraftWorkspaceSnapshot,
-): WorktreeIntent | null {
-  const response = queryClient.getQueryData<{
-    readonly workspaces: ReadonlyArray<WorktreeWorkspaceSummaryV14>;
-  }>(
-    hostQueryKeys.method<HostRpcRegistry, "worktree.listByWorkspacePaths">(
-      hostId,
-      "worktree.listByWorkspacePaths",
-      {
-        workspacePaths: [...workspace.folders],
-        scriptRefs: [],
-        forceRefresh: false,
-      },
-    ),
-  );
-  const summariesByPath = new Map(
-    response?.workspaces.map((summary) => [summary.workspacePath, summary]) ??
-      [],
-  );
-  const worktreeDefaults = workspace.folders.flatMap((workspacePath) => {
-    const summary = summariesByPath.get(workspacePath);
-    if (
-      summary === undefined ||
-      summary.resolvedAt === null ||
-      !summary.isGitRepo
-    ) {
-      return [];
-    }
-    const currentBranch = branchForCachedSummary(summary);
-    // A detached HEAD or a branch with no commit has no fork source: no default.
-    return currentBranch === null || !mainCheckoutHasCommit(summary)
-      ? []
-      : [{ summary, currentBranch }];
-  });
-  if (worktreeDefaults.length === 0) return null;
-
-  const defaultBranchByPath = buildDefaultBranchByPath(
-    worktreeDefaults.map((entry) => entry.summary),
-    worktreeDefaults.length > 1,
-    useSettingsStore.getState().worktreeBranchPrefix,
-  );
-  const primaryPath = resolvePrimaryPath(
-    workspace.folders,
-    workspace.primaryPath,
-  );
-  return {
-    entries: worktreeDefaults.map(({ summary, currentBranch }) =>
-      defaultFolderIntent({
-        workspacePath: summary.workspacePath,
-        repoIdentifier: summary.repoIdentifier,
-        isPrimary: summary.workspacePath === primaryPath,
-        isGitRepo: true,
-        hasCommit: true,
-        currentBranch,
-        defaultNewBranchName: (
-          defaultBranchByPath[summary.workspacePath] ?? EMPTY_DEFAULT_BRANCH
-        ).name,
-      }),
-    ),
-  };
-}
-
-function branchForCachedSummary(
-  summary: WorktreeWorkspaceSummaryV14,
-): string | null {
-  const mainEntry = summary.worktrees.find((worktree) => worktree.isMain);
-  return mainEntry?.branch ?? summary.mainBranch ?? null;
 }
 
 function rememberLandingWorktreeIntent(

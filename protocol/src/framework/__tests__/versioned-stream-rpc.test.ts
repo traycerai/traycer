@@ -153,15 +153,15 @@ describe("validateVersionedStreamRpcRegistry", () => {
     expect(
       hostStreamRpcRegistry["notifications.subscribe"][1].latestMinor,
     ).toBe(1);
-    // @1.8 / @1.7 widen the entry union with `feedback.drafted`; cloudFeed
-    // @1.5 stays the last minor that carries `sandbox.notice` only.
+    // The host feed stays on @1.8; cloudFeed @1.8 adds read-only retirement
+    // notices while @1.7 keeps its released feedback-only widening.
     expect(
       hostStreamRpcRegistry["host.notifications.feed.subscribe"][1].latestMinor,
     ).toBe(8);
     expect(
       hostStreamRpcRegistry["host.notifications.cloudFeed.subscribe"][1]
         .latestMinor,
-    ).toBe(7);
+    ).toBe(8);
     // @1.1 carries the in-flight `opening` list and the session identity;
     // `simulator.stream` is still on the @1.0 it opened with.
     expect(hostStreamRpcRegistry["simulator.sessions"][1].latestMinor).toBe(1);
