@@ -2386,7 +2386,7 @@ function isRowCompletePayload(
   return ROW_COMPLETE_PAYLOAD_KIND_SET.has(known.kind);
 }
 
-/** Never shown: readers drop these rows. */
+/** Payload kinds with no navigation target. */
 const UNSHOWN_PAYLOAD_KINDS = [
   "notification_hooks_removed",
   "readonly_access_retired",
