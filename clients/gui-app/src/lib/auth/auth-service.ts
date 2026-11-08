@@ -59,14 +59,20 @@ import {
   type SlackAppReadResult,
   type SlackAppWriteResult,
 } from "@traycer-clients/shared/host-client/slack-app";
-import type { SlackAppRegisterRequest } from "@traycer/protocol/host/slack-app";
+import type {
+  SlackAppDmsRequest,
+  SlackAppRegisterRequest,
+} from "@traycer/protocol/host/slack-app";
+import {
+  TEAM_HOST_UNAVAILABLE_IN_STAGING,
+  type TeamHostInstallTokenResult,
+} from "@traycer-clients/shared/host-client/team-host";
 import type {
   VoiceAvailabilityFetchResult,
   VoiceSessionEndFetchResult,
   VoiceSessionMintFetchResult,
   VoiceSessionMintRequest,
 } from "@traycer-clients/shared/host-client/voice-sessions";
-import type { VoiceRouteFetchResult } from "@traycer-clients/shared/host-client/voice-router";
 import type {
   EnvironmentProvidersFetchResult,
   SandboxGrantsFetchResult,
@@ -3239,27 +3245,6 @@ export class AuthService {
     return this.runnerHost.endVoiceSession(bearer, voiceSessionId);
   }
 
-  /**
-   * The voice router's one model call, with the cloud bearer, billed to the
-   * person's own account. A shell that cannot reach traycer-server reads as
-   * a transport failure: the voice asks the person to repeat.
-   */
-  async routeVoiceUtterance(
-    requestBody: string,
-  ): Promise<VoiceRouteFetchResult> {
-    if (this.sandboxControlUnavailableReason() !== null) {
-      return {
-        kind: "network-error",
-        detail: "no server for the voice router",
-      };
-    }
-    const bearer = this.cloudBearer();
-    if (bearer === null) {
-      return { kind: "unauthorized" };
-    }
-    return this.runnerHost.routeVoiceUtterance(bearer, requestBody);
-  }
-
   async createSandbox(
     request: SandboxCreateRequest,
   ): Promise<SandboxCreateFetchResult> {
@@ -3425,6 +3410,36 @@ export class AuthService {
     const bearer = this.cloudBearer();
     if (bearer === null) return { kind: "unauthorized" };
     return this.runnerHost.disconnectSlackApp(bearer, botId);
+  }
+
+  async setSlackAppDms(
+    request: SlackAppDmsRequest,
+  ): Promise<SlackAppWriteResult> {
+    const refusal = this.slackAppRefusal();
+    if (refusal !== null) return refusal;
+    const bearer = this.cloudBearer();
+    if (bearer === null) return { kind: "unauthorized" };
+    return this.runnerHost.setSlackAppDms(bearer, request);
+  }
+
+  /**
+   * The one-time install token for a team environment's bot host, on
+   * traycer-server with the person's bearer. A build that cannot reach
+   * traycer-server at all (the Slack floor's signal) answers `unavailable`
+   * without a request; signed out, `unauthorized`.
+   */
+  async mintTeamHostInstallToken(
+    environmentId: string,
+  ): Promise<TeamHostInstallTokenResult> {
+    if (this.runnerHost.sandboxControlUnavailableReason !== null) {
+      return {
+        kind: "unavailable",
+        reason: TEAM_HOST_UNAVAILABLE_IN_STAGING,
+      };
+    }
+    const bearer = this.cloudBearer();
+    if (bearer === null) return { kind: "unauthorized" };
+    return this.runnerHost.mintTeamHostInstallToken(bearer, environmentId);
   }
 
   /** Explicit invitation access when the serving tier predates the host methods. */

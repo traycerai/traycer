@@ -3,6 +3,10 @@ import {
   activateTabIntent,
   openEpicFromListIntent,
 } from "@/lib/tab-navigation";
+import {
+  fromTracyTranscript,
+  type TracyTranscriptOrigin,
+} from "@/lib/tab-navigation/intents";
 import { useLandingDraftStore } from "@/stores/home/landing-draft-store";
 import { isEmptyLandingDraftContent } from "@/lib/composer/landing-draft-empty";
 import {
@@ -39,6 +43,8 @@ export function openEpicFromList(
   options: {
     readonly title: string | undefined;
     readonly source: AnalyticsSource;
+    /** The Tracy transcript the opening link sat in; `null` for a list row. */
+    readonly tracyOrigin: TracyTranscriptOrigin | null;
   },
 ): void {
   Analytics.getInstance().track(AnalyticsEvent.TaskOpened, {
@@ -46,12 +52,15 @@ export function openEpicFromList(
   });
   activateTabIntent(
     navigate,
-    openEpicFromListIntent({
-      epicId,
-      focus: undefined,
-      name: options.title,
-      replaceEmptyDraftId: readActiveEmptyDraftId(currentPathname),
-    }),
+    fromTracyTranscript(
+      openEpicFromListIntent({
+        epicId,
+        focus: undefined,
+        name: options.title,
+        replaceEmptyDraftId: readActiveEmptyDraftId(currentPathname),
+      }),
+      options.tracyOrigin,
+    ),
     undefined,
   );
 }

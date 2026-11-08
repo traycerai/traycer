@@ -139,6 +139,7 @@ describe("TeamRows", () => {
               pick={{ kind: "personal" }}
               onPick={props.onPick}
               onReview={() => undefined}
+              onConnectComputer={() => undefined}
             />
           </DropdownMenuRadioGroup>
         </DropdownMenuContent>
@@ -167,9 +168,9 @@ describe("TeamRows", () => {
     });
     expect(screen.queryByText("Personal")).toBeNull();
     expect(row("admin").textContent).toContain("Acme");
-    expect(row("admin").textContent).toContain("team · you edit");
-    expect(row("editor").textContent).toContain("team · you edit");
-    expect(row("viewer").textContent).toContain("team · read-only");
+    expect(row("admin").textContent).toContain("You edit");
+    expect(row("editor").textContent).toContain("You edit");
+    expect(row("viewer").textContent).toContain("Read-only settings");
 
     await userEvent.click(row("editor"));
     expect(onPick).toHaveBeenCalledExactlyOnceWith({
@@ -178,14 +179,14 @@ describe("TeamRows", () => {
     });
   });
 
-  it("reads a team from an @1.0 host as read-only", async () => {
+  it("shows the read-only settings subtitle for a team from an @1.0 host", async () => {
     const { Wrapper } = mountClient(() =>
       Promise.resolve(legacyTeamList("old", "Hooli")),
     );
     render(<PickerHarness onPick={vi.fn()} />, { wrapper: Wrapper });
 
     const row = await screen.findByTestId("environment-team-env-old");
-    expect(row.textContent).toContain("team · read-only");
+    expect(row.textContent).toContain("Read-only settings");
   });
 
   it("renders no team rows when the user is in no team", async () => {
@@ -290,7 +291,7 @@ describe("ConfigurationSourceBoundary", () => {
     expect(screen.queryByTestId("probe")).toBeNull();
   });
 
-  it.each(["admin", "editor", "viewer"] as const)(
+  it.each(["admin", "editor"] as const)(
     "gives the child the pool context for a resolved team (role %s)",
     async (role) => {
       const { Wrapper } = mountClient(() =>
@@ -311,7 +312,27 @@ describe("ConfigurationSourceBoundary", () => {
     },
   );
 
-  it("gives an @1.0 host's team the viewer role", async () => {
+  it("gives a team naming the retired viewer role no role", async () => {
+    const { Wrapper } = mountClient(() =>
+      Promise.resolve({
+        environments: [personal, team("a", "Acme", "viewer")],
+      }),
+    );
+    render(
+      <ConfigurationSourceBoundary
+        section={null}
+        target={{ kind: "team", environmentId: "env-a" }}
+      >
+        <Probe />
+      </ConfigurationSourceBoundary>,
+      { wrapper: Wrapper },
+    );
+    expect((await screen.findByTestId("probe")).textContent).toBe(
+      "env-a|room-a|handle-a|null|team",
+    );
+  });
+
+  it("gives an @1.0 host's team no role", async () => {
     const { Wrapper } = mountClient(() =>
       Promise.resolve(legacyTeamList("a", "Acme")),
     );
@@ -325,7 +346,7 @@ describe("ConfigurationSourceBoundary", () => {
       { wrapper: Wrapper },
     );
     expect((await screen.findByTestId("probe")).textContent).toBe(
-      "env-a|room-a|null|viewer|team",
+      "env-a|room-a|null|null|team",
     );
   });
 

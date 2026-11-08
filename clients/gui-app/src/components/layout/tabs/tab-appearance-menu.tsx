@@ -15,6 +15,7 @@ import {
 import { TaskOrganizationMenu } from "@/components/organization/task-organization-menu";
 import { useEpicGetTaskContexts } from "@/hooks/epic/use-epic-get-task-contexts-query";
 import { isEditableRole } from "@/lib/epic-permissions";
+import { grantedRole } from "@traycer/protocol/common/permission-role";
 import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
 import type { CSSProperties } from "react";
 import { useCallback, useId, useSyncExternalStore } from "react";
@@ -184,7 +185,7 @@ function EpicOrganizationMenu(props: {
         // the cloud's call.
         context.localHomed ||
         task?.epic?.light?.createdBy === organization.userId ||
-        isEditableRole(task?.epic?.permission?.role ?? null)
+        isEditableRole(grantedRole(task?.epic?.permission?.role ?? null))
       }
       onEditGroup={(anchorId) =>
         useGroupEditorStore.getState().request(anchorId)

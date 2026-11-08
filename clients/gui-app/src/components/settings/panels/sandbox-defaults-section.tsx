@@ -14,7 +14,6 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { useConfigurationItemMutations } from "@/hooks/environment/team/use-configuration-item-mutations";
-import { useEnvironmentMembersList } from "@/hooks/environment/use-environment-members-list";
 import { useSandboxCatalogue } from "@/hooks/sandboxes/use-sandbox-catalogue-query";
 import {
   SANDBOX_DEFAULTS_KEY,
@@ -23,7 +22,7 @@ import {
   type SandboxDefaultsEnvironment,
   type SandboxDefaultsRead,
 } from "@/hooks/sandboxes/use-sandbox-defaults";
-import { useHostClient } from "@/lib/host";
+import { navigateToSettingsSection } from "@/lib/settings-navigation";
 import {
   sandboxPeriodLabel,
   type SandboxPageConfiguration,
@@ -125,7 +124,7 @@ function defaultsCardBody(
   const shape = configurationStageShape(catalogue, ready?.defaults ?? null);
   if (
     environment === null ||
-    environment.role === "viewer" ||
+    environment.role === null ||
     ready === null ||
     shape === null
   ) {
@@ -143,7 +142,7 @@ function defaultsCardBody(
 /**
  * The configuration's defaults for new sandboxes: its shared
  * `sandbox_defaults` item, the built-in defaults while none is set. Editors and
- * admins change them here; a viewer reads them with the people who can. The
+ * admins reveal the form here; readers without edit access can open Members. The
  * gear on a New row changes one sandbox only and never shows here.
  */
 export function SandboxDefaultsSection(props: {
@@ -154,6 +153,7 @@ export function SandboxDefaultsSection(props: {
     configurationEnvironmentKey(props.configuration),
   );
   const body = defaultsCardBody(catalogue, environment, read);
+  const [editing, setEditing] = useState(false);
   // Held here, not in the form: a conflict rereads the item, and the form
   // reopened on its new revision still shows why the save did not land.
   const { put } = useConfigurationItemMutations();
@@ -162,13 +162,42 @@ export function SandboxDefaultsSection(props: {
   return (
     <section
       aria-label="Defaults for new sandboxes"
-      className="flex flex-col gap-3 border-b border-border/60 px-5 py-4"
+      className="mb-6 flex flex-col gap-3"
       data-testid="sandboxes-defaults"
     >
-      <DefaultsHeading
-        configuration={props.configuration}
-        environment={environment}
-      />
+      <h2 className="text-ui font-medium">Defaults</h2>
+      {body.kind === "unread" ? null : (
+        <div className="flex min-w-0 flex-wrap items-center gap-2">
+          <SandboxDefaultsList catalogue={body.catalogue} shape={body.shape} />
+          {body.kind === "form" ? (
+            <Button
+              type="button"
+              variant="ghost"
+              size="sm"
+              aria-expanded={editing}
+              onClick={() => setEditing(!editing)}
+            >
+              Edit defaults
+            </Button>
+          ) : null}
+        </div>
+      )}
+      {environment !== null && environment.role === null ? (
+        <p
+          className="text-ui-xs text-muted-foreground wrap-anywhere"
+          data-testid="sandboxes-defaults-editors"
+        >
+          Editors and admins can change defaults ·{" "}
+          <Button
+            type="button"
+            variant="link"
+            size="sm"
+            onClick={() => navigateToSettingsSection("members")}
+          >
+            Members
+          </Button>
+        </p>
+      ) : null}
       {read !== null && read.kind === "failed" ? (
         <div className="flex flex-wrap items-center gap-2">
           <p role="status" className="text-ui-sm text-muted-foreground">
@@ -184,7 +213,7 @@ export function SandboxDefaultsSection(props: {
           </Button>
         </div>
       ) : null}
-      {body.kind === "form" ? (
+      {body.kind === "form" && editing ? (
         <SandboxDefaultsForm
           // A save, or a change made elsewhere, reopens the form on the value read.
           key={`${body.revision ?? "none"}`}
@@ -203,115 +232,45 @@ export function SandboxDefaultsSection(props: {
           }}
         />
       ) : null}
-      {body.kind === "list" ? (
-        <SandboxDefaultsList catalogue={body.catalogue} shape={body.shape} />
-      ) : null}
       <ConfigurationWriteFeedback issue={issue} />
     </section>
   );
 }
 
 const KEPT_UNTIL_IDLE_CHANGED =
-  "Sandboxes you already have aren't destroyed after resting until you change their Idle settings.";
+  "Sandboxes you already have aren't destroyed when idle until you change their Idle settings.";
 
-function DefaultsHeading(props: {
-  readonly configuration: SandboxPageConfiguration;
-  readonly environment: SandboxDefaultsEnvironment | null;
-}): ReactNode {
-  const { configuration } = props;
-  if (configuration.kind === "personal") {
-    return (
-      <div className="min-w-0 space-y-1">
-        <h2 className="text-ui font-medium">Your defaults for new sandboxes</h2>
-        <p className="text-ui-xs text-muted-foreground">
-          {`Each new Personal sandbox starts with these. ${KEPT_UNTIL_IDLE_CHANGED}`}
-        </p>
-      </div>
-    );
-  }
-  return (
-    <div className="min-w-0 space-y-1">
-      <h2 className="text-ui font-medium">
-        {`${configuration.teamName}'s defaults for new sandboxes`}
-      </h2>
-      <p className="text-ui-xs text-muted-foreground">
-        {`Shared by ${configuration.teamName} · `}
-        <EditorsClause environment={props.environment} />
-        {` · not a spending limit. Each new ${configuration.teamName} sandbox starts with these. ${KEPT_UNTIL_IDLE_CHANGED}`}
-      </p>
-    </div>
-  );
-}
-
-/**
- * Who can change a team's defaults: `editors can change them` for one who
- * can, and for a viewer the editors and admins by name once the roster has
- * answered.
- */
-function EditorsClause(props: {
-  readonly environment: SandboxDefaultsEnvironment | null;
-}): ReactNode {
-  const viewerEnvironmentId =
-    props.environment !== null && props.environment.role === "viewer"
-      ? props.environment.environmentId
-      : null;
-  const members = useEnvironmentMembersList(
-    useHostClient(),
-    viewerEnvironmentId,
-    viewerEnvironmentId !== null,
-  );
-  const names =
-    viewerEnvironmentId === null || members.isPending || members.isError
-      ? []
-      : members.members.flatMap((member) =>
-          member.effectiveRole !== "viewer" &&
-          member.inviteState !== "pending" &&
-          member.displayName !== null
-            ? [member.displayName]
-            : [],
-        );
-  return (
-    <span data-testid="sandboxes-defaults-editors">
-      {names.length === 0
-        ? "editors can change them"
-        : `${names.join(", ")} can change them`}
-    </span>
-  );
-}
-
-/** The defaults as text: a viewer's, and anyone's while they are read (`catalogue` null). */
+/** The defaults as text, including while the catalogue is loading. */
 function SandboxDefaultsList(props: {
   readonly catalogue: SandboxCatalogue | null;
   readonly shape: StageShape | null;
 }): ReactNode {
   const { catalogue, shape } = props;
-  let shapeText = "…";
-  if (catalogue !== null) {
-    shapeText =
-      shape === null ? SANDBOXES_CANT_BE_CREATED : shapeLine(catalogue, shape);
+  if (catalogue === null) {
+    return (
+      <p className="text-ui-sm text-muted-foreground">Loading defaults…</p>
+    );
   }
-  let idleText = "…";
-  let restingText = "…";
-  if (shape !== null) {
-    idleText = sandboxPeriodLabel(shape.idleMinutes);
-    restingText =
-      shape.destroyAfterRestingMinutes === null
-        ? KEPT_UNTIL_YOU_DESTROY_IT
-        : sandboxPeriodLabel(shape.destroyAfterRestingMinutes);
+  if (shape === null) {
+    return (
+      <p className="text-ui-sm text-muted-foreground">
+        {SANDBOXES_CANT_BE_CREATED}
+      </p>
+    );
   }
+  const resting = shape.destroyAfterRestingMinutes;
   return (
-    <dl className="grid grid-cols-1 gap-x-4 gap-y-1 text-ui-sm sm:grid-cols-[auto_1fr]">
-      <dt className="text-muted-foreground">Shape</dt>
-      <dd data-testid="sandboxes-defaults-shape">{shapeText}</dd>
-      <dt className="text-muted-foreground">
-        Suspend when idle for (at least 2 minutes)
-      </dt>
-      <dd data-testid="sandboxes-defaults-idle">{idleText}</dd>
-      <dt className="text-muted-foreground">
-        Destroy after resting for (empty: never)
-      </dt>
-      <dd data-testid="sandboxes-defaults-resting">{restingText}</dd>
-    </dl>
+    <p
+      className="min-w-0 text-ui-sm text-muted-foreground wrap-anywhere"
+      data-testid="sandboxes-defaults-summary"
+    >
+      {shape.os === "linux" ? "Linux" : "Windows"} ·{" "}
+      {sandboxShapeLabel(shape.cpus, shape.memoryMb)}
+      {` · suspends after ${sandboxPeriodLabel(shape.idleMinutes)} · `}
+      {resting === null || resting === 0
+        ? KEPT_UNTIL_YOU_DESTROY_IT
+        : `removed after ${sandboxPeriodLabel(resting)}`}
+    </p>
   );
 }
 
@@ -361,7 +320,9 @@ function defaultsOfForm(
   }
   const restingMinutes = periodMinutes(resting);
   if (restingMinutes !== null && Number.isNaN(restingMinutes)) {
-    return { problem: "Resting period must be a whole number, or empty." };
+    return {
+      problem: '"Destroy after idle for" must be a whole number, or empty.',
+    };
   }
   const defaults = stageShapeDefaults(catalogue, {
     ...picked,
@@ -403,6 +364,9 @@ function SandboxDefaultsForm(props: {
         if ("defaults" in result) props.onSave(result.defaults);
       }}
     >
+      <p className="text-ui-xs text-muted-foreground wrap-anywhere">
+        {`Each new sandbox starts with these. These defaults are not a spending limit. ${KEPT_UNTIL_IDLE_CHANGED}`}
+      </p>
       <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
         <div className="flex flex-col gap-1.5 sm:col-span-2">
           <Label htmlFor={`${ids}-shape`}>Shape</Label>
@@ -436,7 +400,7 @@ function SandboxDefaultsForm(props: {
         />
         <PeriodInput
           id={`${ids}-resting`}
-          label="Destroy after resting for (empty: never)"
+          label="Destroy after idle for (empty: never)"
           placeholder="Never"
           field={resting}
           testId="sandboxes-defaults-resting-input"

@@ -238,6 +238,7 @@ function surfacesProps(): ChatLowerInteractionSurfacesProps {
       nodeId: CHAT_ID,
       isActive: true,
       mentionRoots: [],
+      runWorkingDirectory: null,
       fallbackToGlobalMentionRoots: true,
       currentEpicId: EPIC_ID,
       onSubmitMessage: () => false,

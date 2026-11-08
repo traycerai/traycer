@@ -107,6 +107,8 @@ function notificationsHost(options: {
     mobileApp: false,
     phoneLayout: false,
     soundtrackOffered: false,
+    soundtrackRecordingOffered: false,
+    soundtrackOn: false,
   };
 }
 
@@ -116,6 +118,8 @@ const NO_BRIDGES: SettingsAvailabilityContext = {
   mobileApp: false,
   phoneLayout: false,
   soundtrackOffered: false,
+  soundtrackRecordingOffered: false,
+  soundtrackOn: false,
 };
 
 export const SETTINGS_SEARCH_FIXTURES = [
@@ -267,6 +271,18 @@ export const SETTINGS_SEARCH_FIXTURES = [
       {
         name: "a build with something to play",
         context: { ...NO_BRIDGES, soundtrackOffered: true },
+      },
+      {
+        name: "a build with something to play, with Music on",
+        context: { ...NO_BRIDGES, soundtrackOffered: true, soundtrackOn: true },
+      },
+      {
+        name: "a desktop that can save a recording",
+        context: {
+          ...NO_BRIDGES,
+          soundtrackOffered: true,
+          soundtrackRecordingOffered: true,
+        },
       },
       {
         name: "the installed app, in a build with something to play",

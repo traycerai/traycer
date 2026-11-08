@@ -212,7 +212,6 @@ export function BrowserHostFilterChoices(props: {
               surfaceState={AVAILABLE_HOST_ROW_SURFACE_STATE}
               updateView={null}
               nameRef={null}
-              nameWraps={false}
               environmentLabel={null}
             />
           </DropdownMenuRadioItem>

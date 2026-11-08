@@ -36,7 +36,6 @@ import {
   type VoiceSessionIndicator,
   type VoiceSessionMintRequest,
 } from "@traycer-clients/shared/host-client/voice-sessions";
-import { voiceRouteViaHttp } from "@traycer-clients/shared/host-client/voice-router";
 import { voiceLiveWindows } from "../windows/voice-live-windows";
 import {
   decideSecretRequestViaHttp,
@@ -50,7 +49,9 @@ import {
   mintSlackAppInstallUrlViaHttp,
   readSlackAppViaHttp,
   registerSlackAppViaHttp,
+  setSlackAppDmsViaHttp,
 } from "@traycer-clients/shared/host-client/slack-app";
+import { mintTeamHostInstallTokenViaHttp } from "@traycer-clients/shared/host-client/team-host";
 import { mintExecutableWriteGrantViaHttp } from "@traycer-clients/shared/host-client/executable-write-grant";
 import { config } from "../../config";
 import type {
@@ -79,6 +80,7 @@ import {
   parseSandboxPatchRequest,
   parseSecretRequestDecision,
   parseSlackAppBotId,
+  parseSlackAppDmsRequest,
   parseSlackAppRegisterRequest,
   parseStoredAuthTokens,
   parseStoredCredentialsIdentity,
@@ -273,22 +275,6 @@ function registerSandboxControlPlaneIpc(bridge: RunnerIpcBridge): void {
     },
   );
 
-  // The voice router's model call: the body is the renderer's JSON, relayed
-  // unread; the answer goes back opaque for the renderer's parser.
-  bridge.handleInvoke(
-    RunnerHostInvoke.routeVoiceUtterance,
-    async (_event, bearerToken: unknown, requestBody: unknown) => {
-      assertString(bearerToken, "routeVoiceUtterance.bearerToken");
-      assertString(requestBody, "routeVoiceUtterance.requestBody");
-      return voiceRouteViaHttp(
-        config.serverBaseUrl,
-        bearerToken,
-        await iapProxyToken(),
-        requestBody,
-      );
-    },
-  );
-
   bridge.handleInvoke(
     RunnerHostInvoke.getTraycerModels,
     async (_event, bearerToken: unknown) => {
@@ -461,6 +447,36 @@ function registerSandboxControlPlaneIpc(bridge: RunnerIpcBridge): void {
         bearerToken,
         await iapProxyToken(),
         parsedRequest,
+      );
+    },
+  );
+
+  bridge.handleInvoke(
+    RunnerHostInvoke.setSlackAppDms,
+    async (_event, bearerToken: unknown, request: unknown) => {
+      assertString(bearerToken, "setSlackAppDms.bearerToken");
+      const parsedRequest = parseSlackAppDmsRequest(request);
+      return setSlackAppDmsViaHttp(
+        config.serverBaseUrl,
+        bearerToken,
+        await iapProxyToken(),
+        parsedRequest,
+      );
+    },
+  );
+
+  bridge.handleInvoke(
+    RunnerHostInvoke.mintTeamHostInstallToken,
+    async (_event, bearerToken: unknown, environmentId: unknown) => {
+      assertString(bearerToken, "mintTeamHostInstallToken.bearerToken");
+      return mintTeamHostInstallTokenViaHttp(
+        config.serverBaseUrl,
+        bearerToken,
+        await iapProxyToken(),
+        parseRequiredId(
+          environmentId,
+          "mintTeamHostInstallToken.environmentId",
+        ),
       );
     },
   );

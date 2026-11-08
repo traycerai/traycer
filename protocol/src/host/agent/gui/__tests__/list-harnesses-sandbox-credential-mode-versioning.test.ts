@@ -46,7 +46,6 @@ describe("agent.gui.listHarnesses@10.1 registry binding", () => {
 describe("agent.gui.listHarnesses@10.1 keeps the sandbox credential fields", () => {
   const MODES: readonly GuiHarnessSandboxCredentialMode[] = [
     "placeholder",
-    "process-scoped",
     "unsupported",
   ];
 

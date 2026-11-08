@@ -1,3 +1,4 @@
+import type { NestedFocusProvenance } from "@/lib/epic-nested-focus-navigation";
 import { useUltracodeCarrierSupported } from "@/components/home/data/model-ultracode";
 import { signedInUserId } from "@/lib/sandboxes/sandbox-account-fence";
 import {
@@ -1331,7 +1332,10 @@ export function NewConversationModalBody(props: {
   const stagedTerminal = useMemo(
     () => ({
       epicId,
-      open: (target: TerminalLaunchTarget) => {
+      open: (
+        target: TerminalLaunchTarget,
+        provenance: NestedFocusProvenance,
+      ) => {
         openTile(
           tileIntent(
             mintNewEpicTerminalTile({ ...target, epicId }),
@@ -1339,6 +1343,7 @@ export function NewConversationModalBody(props: {
             "explicit",
             "direct_ui",
           ),
+          provenance,
         );
       },
     }),
@@ -1402,7 +1407,7 @@ export function NewConversationModalBody(props: {
     chooseAnotherHostLabel,
   });
   const composerDisabledHint =
-    mutationDisabledHint(permissionRole, isDisconnected, "make changes") ??
+    mutationDisabledHint(permissionRole, isDisconnected) ??
     workspaceGate.disabledHint ??
     agentHint;
   const epicImagePresence = useEpicAttachmentBytesPresence();

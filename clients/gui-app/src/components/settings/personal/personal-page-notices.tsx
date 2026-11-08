@@ -17,7 +17,6 @@ import {
   reviewText,
   undoRefusalText,
 } from "@/components/settings/host-scope/host-access-model";
-import { HeldValueReview } from "@/components/settings/personal/held-value-review";
 import { PersonalPageContext } from "@/components/settings/personal/personal-page-context";
 import { itemLabel } from "@/components/settings/personal/personal-page-status";
 import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
@@ -268,10 +267,9 @@ function useCurrentValue(
 }
 
 /**
- * A "needs you" row. A held key-shaped value's `Review` opens the
- * retrospective sheet for that value; a held command's opens it for the host
- * this page reads, where its Approve and Discard are; any other row's opens
- * Secrets.
+ * A "needs you" row. A held command's `Review` opens the retrospective sheet
+ * for the host this page reads, where its Approve and Discard are; any other
+ * row's opens Secrets.
  */
 function ReviewRow(props: {
   readonly entry: EnvironmentReviewEntry;
@@ -282,17 +280,6 @@ function ReviewRow(props: {
     (state) => state.openSheet,
   );
   const { hostId } = props;
-  if (props.entry.reason === "credential_like_value") {
-    return (
-      <li className={ROW_CLASS} data-testid="personal-review-row">
-        <span className="min-w-0 text-foreground">
-          {reviewText(props.entry)}
-          {" · "}
-          <HeldValueReview entry={props.entry} />
-        </span>
-      </li>
-    );
-  }
   return (
     <li className={ROW_CLASS} data-testid="personal-review-row">
       <span className="min-w-0 text-foreground">{reviewText(props.entry)}</span>

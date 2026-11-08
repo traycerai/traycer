@@ -17,6 +17,7 @@ import { normalizeSliceSoftBreaks } from "@/lib/composer/normalize-soft-breaks";
 import {
   parseLeadingSlashCommand,
   slashCommandParagraph,
+  slashCommandPlainTextFromAttrs,
   stringValue,
   type SlashCommandCatalog,
 } from "@/lib/composer/tiptap-json-content";
@@ -54,6 +55,10 @@ export type PastedComposerImageOutcome =
 
 export interface ChatPasteHandlerDeps {
   readonly pickerStore: ComposerPickerStore;
+  /** Keep text/plain as written in a bot message, including Markdown escapes. */
+  readonly preserveMessagePaste: boolean;
+  /** Boxes without a slash provider keep copied slash chips as literal text. */
+  readonly preserveSlashAsText: boolean;
   readonly getHasPastedImageBytes: () => ((hash: string) => boolean) | null;
   /**
    * Landing-only: validate a paste's inline-base64 images synchronously (decode,
@@ -125,8 +130,16 @@ export function createChatPasteHandler(deps: ChatPasteHandlerDeps) {
           const images = collectPastedB64Images(content);
           if (images.length > 0) {
             const outcomes = ingest(images);
-            workingContent = applyPastedB64ImageOutcomes(content, outcomes);
+            workingContent = applyPastedB64ImageOutcomes(
+              workingContent,
+              outcomes,
+            );
           }
+        }
+        if (deps.preserveSlashAsText) {
+          const plain = plainSlashContent(workingContent);
+          if (plain === null) return false;
+          workingContent = plain;
         }
         return validateAndPasteComposerContent(view, workingContent);
       };
@@ -151,11 +164,21 @@ export function createChatPasteHandler(deps: ChatPasteHandlerDeps) {
           if (images.length > 0) {
             const outcomes = ingest(images);
             workingSlice = new Slice(
-              applyPastedB64ImageOutcomesToFragment(slice.content, outcomes),
+              applyPastedB64ImageOutcomesToFragment(
+                workingSlice.content,
+                outcomes,
+              ),
               slice.openStart,
               slice.openEnd,
             );
           }
+        }
+        if (deps.preserveSlashAsText) {
+          workingSlice = new Slice(
+            plainSlashFragment(workingSlice.content, view.state.schema),
+            workingSlice.openStart,
+            workingSlice.openEnd,
+          );
         }
         const hashes = hashOnlyImageFragmentHashes(workingSlice.content);
         const hasPastedImageBytes = deps.getHasPastedImageBytes();
@@ -244,6 +267,14 @@ export function createChatPasteHandler(deps: ChatPasteHandlerDeps) {
 
               const text = clipboardData.getData("text/plain");
               if (text.length === 0) return false;
+              if (deps.preserveMessagePaste) {
+                view.dispatch(
+                  view.state.tr
+                    .insertText(text.replace(/\r\n?/g, "\n"))
+                    .scrollIntoView(),
+                );
+                return true;
+              }
 
               // A `/command …` pasted at the start of the composer (e.g. a copied
               // next-step prompt) becomes a slashCommand chip, mirroring the
@@ -303,6 +334,43 @@ export function createChatPasteHandler(deps: ChatPasteHandlerDeps) {
       ];
     },
   });
+}
+
+function plainSlashContent(node: JsonContent): JsonContent | null {
+  if (node.type === "slashCommand") {
+    const text = slashCommandPlainTextFromAttrs(node.attrs);
+    if (text.length === 0) return null;
+    return {
+      type: "text",
+      text,
+      ...(node.marks === undefined ? {} : { marks: node.marks }),
+    };
+  }
+  if (node.content === undefined) return node;
+  return {
+    ...node,
+    content: node.content.flatMap((child) => {
+      const plain = plainSlashContent(child);
+      return plain === null ? [] : [plain];
+    }),
+  };
+}
+
+function plainSlashFragment(fragment: Fragment, schema: Schema): Fragment {
+  const nodes: ProseMirrorNode[] = [];
+  fragment.forEach((node) => {
+    if (node.type.name === "slashCommand") {
+      const text = slashCommandPlainTextFromAttrs(node.attrs);
+      if (text.length > 0) nodes.push(schema.text(text, node.marks));
+    } else {
+      nodes.push(
+        node.content.size === 0
+          ? node
+          : node.copy(plainSlashFragment(node.content, schema)),
+      );
+    }
+  });
+  return Fragment.fromArray(nodes);
 }
 
 function pasteComposerContent(view: EditorView, content: JsonContent): boolean {

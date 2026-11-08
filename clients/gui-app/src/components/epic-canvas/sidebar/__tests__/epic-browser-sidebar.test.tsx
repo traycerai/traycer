@@ -891,6 +891,7 @@ describe("BrowsersPanelBody", () => {
       "epic-1",
       "view-tab-1",
       expect.any(Function),
+      "user",
     );
     const opened = findOpenArtifactInTab("view-tab-1", "chat-driver");
     expect(opened).not.toBeNull();
@@ -1621,6 +1622,7 @@ describe("BrowsersPanelActions", () => {
         "epic-1",
         "view-tab-1",
         expect.any(Function),
+        "user",
       );
     });
     expect(browserHostPinState.setSelection).not.toHaveBeenCalled();
@@ -1822,13 +1824,13 @@ describe("grouped catalog list", () => {
     useEpicCanvasStore.setState(useEpicCanvasStore.getInitialState(), true);
   });
 
-  it("groups tabs under their device, labels the local one, counts tabs and hides the offline device", () => {
+  it("groups tabs under their named device, counts tabs and hides the offline device", () => {
     render(catalogPanel());
 
     const home = screen.getByTestId("browser-device-group-host-1");
     const work = screen.getByTestId("browser-device-group-host-2");
     expect(home.textContent).toContain("Home Mac");
-    expect(home.textContent).toContain("Local");
+    expect(home.textContent).not.toContain("Local");
     expect(work.textContent).toContain("Work Mac");
     expect(work.textContent).not.toContain("Local");
     expect(screen.getByLabelText("2 tabs")).toBeTruthy();

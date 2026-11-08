@@ -365,7 +365,7 @@ export function SidebarStartCollapsedRow(props: AreaRowPlacement): ReactNode {
               );
             }
       }
-      revertLabel="Reset sidebar collapsed in new tasks to default: On"
+      revertLabel="Reset sidebar collapsed in new tasks to default: Off"
       description={SIDEBAR_START_COLLAPSED_ROW.description}
       stacked={false}
       selected={false}

@@ -30,7 +30,7 @@ const MANIFEST: StemManifest = {
 const BIG_STEM_FRAMES = 32 * 1024 * 1024;
 
 function stubFetch(status: (call: number) => number) {
-  const fetchMock = vi.fn((_url: string, _init: RequestInit) =>
+  const fetchMock = vi.fn((_url: string) =>
     Promise.resolve(
       new Response(new ArrayBuffer(4), {
         status: status(fetchMock.mock.calls.length),
@@ -40,7 +40,6 @@ function stubFetch(status: (call: number) => number) {
   vi.stubGlobal("fetch", fetchMock);
   return {
     urls: () => fetchMock.mock.calls.map(([url]) => url),
-    inits: () => fetchMock.mock.calls.map(([, init]) => init),
   };
 }
 
@@ -186,6 +185,7 @@ describe("ManifestStemSource", () => {
         { name: "EA2", variants: 2 },
       ],
       sequence: ["EA1", "EA2"],
+      role: null,
       sublayers: 1,
       sublayerStartingOffset: null,
       pan: null,
@@ -436,7 +436,12 @@ describe("a refusal that lands after another stem's re-ask", () => {
 });
 
 describe("distinct stems", () => {
-  const base = { sublayers: 1, sublayerStartingOffset: null, pan: null };
+  const base = {
+    role: null,
+    sublayers: 1,
+    sublayerStartingOffset: null,
+    pan: null,
+  };
 
   it("do not share a cache entry across the groups of a layer", async () => {
     const fetched = stubFetch(() => 200);

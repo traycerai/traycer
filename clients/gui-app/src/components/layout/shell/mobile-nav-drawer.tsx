@@ -573,6 +573,7 @@ function DrawerTaskList(props: DrawerTaskListProps): ReactNode {
     openEpicFromList(navigate, item.epicId, pathname, {
       title: item.title,
       source: "direct_ui",
+      tracyOrigin: null,
     });
   };
 

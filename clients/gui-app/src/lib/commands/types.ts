@@ -29,6 +29,8 @@ export type CommandGroupId =
   | "actions"
   | "navigation"
   | "epics"
+  // An environment's main bot (the starred one), which leads the root list.
+  | "mainBots"
   | "bots"
   | "theme"
   | "help"
@@ -93,8 +95,11 @@ export interface CommandItem {
    * `CommandItem` literals don't need a no-op `hostBadge: null` added.
    */
   readonly hostBadge?: string;
-  /** The host of the tile this row opens, on an opener row for an existing tile. */
-  readonly tileHostId?: string;
+  /**
+   * Trailing muted text on a root row: the qualifier its label leaves out
+   * (the team a bot is in). Optional for the same reason as `hostBadge`.
+   */
+  readonly hint?: string;
   /**
    * Trailing context text, rendered by sub-pages as a badge.
    *

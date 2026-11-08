@@ -40,7 +40,7 @@ import { worktreeListAllForHostResponseSchemaV16 } from "@traycer/protocol/host"
 import { listTerminalsResponseSchemaV23 } from "@traycer/protocol/host/terminal/unary-schemas";
 import { worktreeDeleteByPathServerFrameSchemaV13 } from "@traycer/protocol/host/worktree-delete-stream";
 import {
-  hostNotificationsCloudFeedSubscribeServerFrameSchemaV17,
+  hostNotificationsCloudFeedSubscribeServerFrameSchemaV18,
   hostNotificationsSubscribeServerFrameSchemaV18,
 } from "@traycer/protocol/host/notifications/host-notifications";
 import {
@@ -1006,11 +1006,11 @@ describe("canonical stream frame pairing (notification feeds)", () => {
     ).toBe(hostNotificationsSubscribeServerFrameSchemaV18);
   });
 
-  it("hostNotificationsCloudFeedSubscribeServerFrameSchemaV17 is the canonical serverFrameSchema for host.notifications.cloudFeed.subscribe", () => {
+  it("hostNotificationsCloudFeedSubscribeServerFrameSchemaV18 is the canonical serverFrameSchema for host.notifications.cloudFeed.subscribe", () => {
     expect(
       latestStreamServerFrameSchema(
         hostStreamRpcRegistry["host.notifications.cloudFeed.subscribe"],
       ),
-    ).toBe(hostNotificationsCloudFeedSubscribeServerFrameSchemaV17);
+    ).toBe(hostNotificationsCloudFeedSubscribeServerFrameSchemaV18);
   });
 });

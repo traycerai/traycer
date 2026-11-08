@@ -1,3 +1,4 @@
+import { useSettingsHostScopeStore } from "@/stores/settings/settings-host-scope-store";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   isNotificationPayloadRoutable,
@@ -21,7 +22,10 @@ import {
   useChatTranscriptJumpStore,
 } from "@/stores/chats/chat-transcript-jump-store";
 import { useWorktreeCleanupViewStore } from "@/stores/settings/worktree-cleanup-view-store";
-import { useSettingsHostScopeStore } from "@/stores/settings/settings-host-scope-store";
+import {
+  setSettingsHostSelection,
+  settingsHostSelection,
+} from "@/stores/settings/__tests__/settings-host-scope-test-support";
 
 /**
  * The `hostSurface` destination family: a notification about a host-managed
@@ -45,7 +49,7 @@ describe("host surface notification routing", () => {
       view: "settings",
       focusedRunId: null,
     });
-    useSettingsHostScopeStore.setState({ scopedHostId: null });
+    useSettingsHostScopeStore.getState().reset();
   });
 
   it("opens Settings → Worktrees and remembers the section on the tab", () => {
@@ -84,7 +88,7 @@ describe("host surface notification routing", () => {
     expect(navigate).toHaveBeenCalledWith(
       expect.objectContaining({ to: "/settings/notifications" }),
     );
-    expect(useSettingsHostScopeStore.getState().scopedHostId).toBe(
+    expect(useSettingsHostScopeStore.getState().pendingHostId).toBe(
       "host-work-laptop",
     );
     expect(useTabsStore.getState().systemTabs.settings?.lastPath).toBe(
@@ -282,7 +286,7 @@ describe("host surface notification routing", () => {
     });
     // History is host-local, so the destination is only well defined once
     // Settings is administering the host the run happened on.
-    expect(useSettingsHostScopeStore.getState().scopedHostId).toBe("host-b");
+    expect(useSettingsHostScopeStore.getState().pendingHostId).toBe("host-b");
   });
 
   it("still opens history when the run id cannot be resolved", () => {
@@ -313,7 +317,7 @@ describe("host surface notification routing", () => {
    */
   it("leaves a manual worktree-deletion row's behavior exactly as it was", () => {
     useWorktreeCleanupViewStore.getState().openHistory("run-42");
-    useSettingsHostScopeStore.getState().setScopedHostId("host-a");
+    setSettingsHostSelection("host-a");
     const navigate = vi.fn();
 
     const payload = parseNotificationPayload({
@@ -336,7 +340,7 @@ describe("host surface notification routing", () => {
     );
     // No `hostId` on the row means no retarget: the user keeps administering
     // whichever host they were already on.
-    expect(useSettingsHostScopeStore.getState().scopedHostId).toBe("host-a");
+    expect(settingsHostSelection()?.hostId ?? null).toBe("host-a");
     expect(useWorktreeCleanupViewStore.getState()).toMatchObject({
       view: "settings",
       focusedRunId: null,

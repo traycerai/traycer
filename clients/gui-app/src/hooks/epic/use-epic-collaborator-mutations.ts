@@ -1,3 +1,4 @@
+import { grantedRole } from "@traycer/protocol/common/permission-role";
 import { useQueryClient } from "@tanstack/react-query";
 import type { HostRpcRegistry } from "@traycer/protocol/host/index";
 import { useHostMutation } from "@/hooks/host/use-host-query";
@@ -42,13 +43,18 @@ export function useEpicGrantAccess() {
         const collaborators = projectCollaborators(data.collaborators);
         if (variables.input.kind === "team") {
           const input = variables.input;
-          const wasGranted = collaborators.teams.some(
-            (team) => team.teamId === input.teamId && team.role === input.role,
-          );
-          if (wasGranted) {
+          // The list the host answered with is what proves the grant landed,
+          // and it only ever reports a role somebody holds.
+          const role = grantedRole(input.role);
+          if (
+            role !== null &&
+            collaborators.teams.some(
+              (team) => team.teamId === input.teamId && team.role === role,
+            )
+          ) {
             Analytics.getInstance().track(AnalyticsEvent.ShareInviteSent, {
               target: "team",
-              role: input.role,
+              role,
             });
           }
         }
@@ -89,22 +95,21 @@ export function useEpicBatchUpdateRoles() {
         if (variables.input.intent !== "invite") {
           const collaborators = projectCollaborators(data.collaborators);
           variables.input.changes.forEach((change) => {
+            const newRole = grantedRole(change.newRole);
             const wasChanged =
               change.teamId !== undefined
                 ? collaborators.teams.some(
                     (team) =>
-                      team.teamId === change.teamId &&
-                      team.role === change.newRole,
+                      team.teamId === change.teamId && team.role === newRole,
                   )
                 : collaborators.directUsers.some(
                     (user) =>
-                      user.userId === change.userId &&
-                      user.role === change.newRole,
+                      user.userId === change.userId && user.role === newRole,
                   );
-            if (!wasChanged) return;
+            if (newRole === null || !wasChanged) return;
             Analytics.getInstance().track(AnalyticsEvent.ShareRoleChanged, {
               target: change.teamId === undefined ? "person" : "team",
-              role: change.newRole,
+              role: newRole,
             });
           });
         }

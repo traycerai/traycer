@@ -36,6 +36,7 @@ export type HostOverviewTabBadges = Readonly<
 >;
 
 export const NO_HOST_OVERVIEW_TAB_BADGES: HostOverviewTabBadges = {
+  sandbox: null,
   installation: null,
   updates: null,
   access: null,
@@ -67,7 +68,8 @@ export interface HostOverviewTabSelection {
  * which is what lets a switch of host in the sidebar picker keep the tab while
  * the remount still closes whatever was open for the previous host - a
  * confirmation, the rename field, the Doctor panel. The page opens on
- * Installation, and nothing here switches tabs by itself: only the reader, an
+ * Sandbox for a sandbox host, otherwise Installation. An explicit selection
+ * carries across hosts when that host offers it; otherwise only the reader, an
  * open intent naming a tab (a retired name selects its replacement), and a
  * settings-search landing on a tab's anchor move it.
  *
@@ -82,7 +84,8 @@ export function useHostOverviewTabSelection(
 ): HostOverviewTabSelection {
   const intent = useSettingsOpenIntent("host");
   const pendingReveal = useSettingsSearchStore((state) => state.pendingReveal);
-  const [tab, setTab] = useState<HostOverviewTab>(DEFAULT_HOST_OVERVIEW_TAB);
+  const [selectedTab, setTab] = useState<HostOverviewTab | null>(null);
+  const tab = resolvedOverviewTab(scope, selectedTab);
   const [appliedIntentId, setAppliedIntentId] = useState<number | null>(null);
   const [appliedRevealAt, setAppliedRevealAt] = useState<number | null>(null);
 
@@ -117,4 +120,14 @@ export function useHostOverviewTabSelection(
   const scopePending =
     intent !== null && intent.hostId !== null && intent.hostId !== scope.hostId;
   return { tab, selectTab: setTab, scopePending };
+}
+
+function resolvedOverviewTab(
+  scope: HostScope,
+  selectedTab: HostOverviewTab | null,
+): HostOverviewTab {
+  const sandbox = scope.host !== null && scope.host.sandbox !== null;
+  if (selectedTab !== null && (selectedTab !== "sandbox" || sandbox))
+    return selectedTab;
+  return sandbox ? "sandbox" : DEFAULT_HOST_OVERVIEW_TAB;
 }

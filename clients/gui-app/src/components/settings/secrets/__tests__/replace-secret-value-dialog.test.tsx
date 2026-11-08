@@ -16,6 +16,7 @@ import {
   requireTeamHostClient,
   resetTeamPageHarness,
 } from "@/components/settings/environment/__tests__/team-configuration-test-support";
+import { RETIRED_SECRET_ROW_FIELDS } from "@traycer/protocol/host/released-wire-rows";
 
 vi.mock("@/lib/host", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/lib/host")>()),
@@ -39,13 +40,12 @@ const HANDLERS: MockHandlerMap<HostRpcRegistry> = {
 };
 
 const SECRET: EnvironmentSecret = {
+  ...RETIRED_SECRET_ROW_FIELDS,
   secretId: "secret-a",
   name: "secret-a",
   kind: "api_key",
   protocol: null,
   destinations: ["api.acme.test:443"],
-  mode: "brokered",
-  state: "live",
   currentVersionId: "v1",
   revoked: false,
   updatedAt: 1,

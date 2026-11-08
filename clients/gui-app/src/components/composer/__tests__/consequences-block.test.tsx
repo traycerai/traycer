@@ -45,6 +45,7 @@ function input(overrides: Partial<ConsequencesInput>): ConsequencesInput {
       exact: true,
     },
     needsCredits: false,
+    billingStarted: false,
     audience: "shared",
     reachHost: null,
     unmovedComputer: null,
@@ -92,15 +93,9 @@ describe("<ConsequencesBlock />", () => {
     render(block(value));
 
     expect(screen.getByTestId("consequences-price").textContent).toBe(
-      "$0.12 an hour while awake · uses your Acme credits",
+      "$0.12 an hour while awake",
     );
-    for (const kind of [
-      "audience",
-      "reach",
-      "team",
-      "resting-storage",
-      "shared-use",
-    ]) {
+    for (const kind of ["audience", "reach", "team", "resting-storage"]) {
       expect(screen.getByTestId(`consequences-clause-${kind}`)).toBeDefined();
     }
     expect(screen.queryByTestId("consequences-what-this-means")).toBeNull();
@@ -131,6 +126,66 @@ describe("<ConsequencesBlock />", () => {
     expect(screen.queryByTestId("consequences-clause-team")).toBeNull();
   });
 
+  it("keeps team price and payer once in the summary, then shows rate, use, payer, access and storage once in full", () => {
+    const value = input({});
+    const first = render(block(value));
+    first.unmount();
+
+    render(block(value));
+    const summaryPrice = screen.getByTestId("consequences-price").textContent;
+    expect(summaryPrice).toBe(
+      "$0.12 an hour while awake · uses your Acme credits",
+    );
+    const summaryText = screen.getByTestId("consequences-block").textContent;
+    expect(summaryText.match(/\$0\.12 an hour/g)).toHaveLength(1);
+    expect(summaryText.match(/Acme credits/g)).toHaveLength(1);
+
+    fireEvent.click(screen.getByTestId("consequences-what-this-means"));
+    expect(screen.getByTestId("consequences-price").textContent).toBe(
+      "$0.12 an hour while awake",
+    );
+    const fullText = screen.getByTestId("consequences-block").textContent;
+    const team = screen.getByTestId("consequences-clause-team").textContent;
+    expect(team).toBe(
+      "Everyone in the team can use it while you pay from your team credits; another member's agent can read what yours can.",
+    );
+    expect(fullText.match(/\$0\.12 an hour/g)).toHaveLength(1);
+    expect(fullText.match(/Everyone in the team can use it/g)).toHaveLength(1);
+    expect(fullText.match(/pay from your team credits/g)).toHaveLength(1);
+    expect(fullText.match(/another member's agent can read/g)).toHaveLength(1);
+    const storage = screen.getByTestId(
+      "consequences-clause-resting-storage",
+    ).textContent;
+    expect(storage).toBe(
+      "Storage while it's suspended or stopped, on the same credits until another member wakes it.",
+    );
+    expect(
+      fullText.match(/Storage while it's suspended or stopped/g),
+    ).toHaveLength(1);
+  });
+
+  it("keeps the Personal rate and payer once in both full and summary copy", () => {
+    const value = input({
+      configuration: { kind: "personal" },
+      audience: "shared",
+    });
+    const full = render(block(value));
+
+    expect(screen.getByTestId("consequences-price").textContent).toBe(
+      "$0.12 an hour while awake · uses your credits",
+    );
+    const fullText = screen.getByTestId("consequences-block").textContent;
+    expect(fullText.match(/\$0\.12 an hour/g)).toHaveLength(1);
+    expect(fullText.match(/uses your credits/g)).toHaveLength(1);
+    full.unmount();
+    render(block(value));
+    const summaryPrice = screen.getByTestId("consequences-price").textContent;
+    expect(summaryPrice).toBe("$0.12 an hour while awake · uses your credits");
+    const summaryText = screen.getByTestId("consequences-block").textContent;
+    expect(summaryText.match(/\$0\.12 an hour/g)).toHaveLength(1);
+    expect(summaryText.match(/uses your credits/g)).toHaveLength(1);
+  });
+
   it("renders in full again for a different audience", () => {
     render(block(input({ audience: "private" }))).unmount();
     expect(
@@ -150,21 +205,33 @@ describe("<ConsequencesBlock />", () => {
   it("renders in full again for a different configuration", () => {
     render(block(input({}))).unmount();
 
-    render(
-      block(
-        input({
-          configuration: {
-            kind: "team",
-            teamId: "team-globex",
-            teamName: "Globex",
-          },
-        }),
-      ),
-    );
-
+    const globex = input({
+      configuration: {
+        kind: "team",
+        teamId: "team-globex",
+        teamName: "Globex",
+      },
+    });
     expect(
-      screen.getByTestId("consequences-clause-team").textContent,
-    ).toContain("Globex");
+      consequencesShown(
+        useTeamHostDisclosureSeenStore.getState().seen,
+        VIEWER,
+        subjectOf(globex),
+      ),
+    ).toBe(false);
+
+    render(block(globex));
+
+    expect(screen.getByTestId("consequences-clause-team").textContent).toBe(
+      "Everyone in the team can use it while you pay from your team credits; another member's agent can read what yours can.",
+    );
+    expect(
+      consequencesShown(
+        useTeamHostDisclosureSeenStore.getState().seen,
+        VIEWER,
+        subjectOf(globex),
+      ),
+    ).toBe(true);
   });
 
   it("renders in full and collapses nothing for a signed-out viewer, recording nothing", () => {
@@ -268,7 +335,7 @@ describe("<ConsequencesBlock />", () => {
       ),
     );
     expect(screen.getByTestId("consequences-price").textContent).toBe(
-      "from $0.12 an hour while awake · uses your Acme credits",
+      "from $0.12 an hour while awake",
     );
   });
 

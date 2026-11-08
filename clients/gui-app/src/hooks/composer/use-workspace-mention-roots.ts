@@ -1,4 +1,11 @@
-import { useMemo } from "react";
+import { useCallback, useMemo, useSyncExternalStore } from "react";
+import { useQueryClient } from "@tanstack/react-query";
+import type { HostRpcRegistry } from "@/lib/host";
+import { hostQueryKeys } from "@/lib/query-keys";
+import type { LandingDraftWorkspaceSnapshot } from "@/stores/home/landing-draft-store";
+import { readCachedDefaultWorktreeIntent } from "@/lib/worktree/cached-default-worktree-intent";
+import { effectiveWorktreeIntent } from "@/lib/worktree/effective-worktree-intent";
+import { resolvePrimaryPath } from "@/lib/worktree/resolve-primary-path";
 import type {
   WorktreeBinding,
   WorktreeBindingEntry,
@@ -46,22 +53,28 @@ export function useWorkspaceMentionRoots(
   }, [fallbackToGlobalWhenEmpty, preferredRoots, workspaceFolders]);
 }
 
-export function useLandingComposerMentionRoots(
-  draftId: string | null,
-): ReadonlyArray<string> {
-  const draftFolders = useLandingDraftStore((state) => {
+/**
+ * The landing draft's folders (the host's registered folders when the draft
+ * names none) and the worktree intent staged for it, on the host it will
+ * create on.
+ */
+function useLandingFoldersAndIntent(draftId: string | null): {
+  readonly workspace: LandingDraftWorkspaceSnapshot;
+  readonly stagedIntent: WorktreeIntent | null;
+  readonly activeHostId: string | null;
+} {
+  const draftWorkspace = useLandingDraftStore((state) => {
     if (draftId === null) return null;
     return (
-      state.drafts.find((draft) => draft.id === draftId)?.workspace.folders ??
-      null
+      state.drafts.find((draft) => draft.id === draftId)?.workspace ?? null
     );
   });
   // The landing composer's placement is its surface pin (pin ?? effective),
   // so the global folder fallback reads the bucket of the host it will
   // actually create on.
   const activeHostId = useComposerSurfaceHostPin().resolvedHostId;
-  const globalFolders = useWorkspaceFoldersStore(
-    (state) => selectWorkspaceFoldersBucket(state, activeHostId).folders,
+  const globalWorkspace = useWorkspaceFoldersStore((state) =>
+    selectWorkspaceFoldersBucket(state, activeHostId),
   );
   const stagingKeyId = worktreeStagingKeyString({
     surface: "landing",
@@ -71,10 +84,22 @@ export function useLandingComposerMentionRoots(
   const stagedIntent = useWorktreeIntentStagingStore(
     (state) => state.intentByKey[stagingKeyId] ?? null,
   );
-  const preferredRoots = useMemo(() => {
-    const folders = draftFolders ?? globalFolders;
-    return mentionRootsFromWorktreeIntent(folders, stagedIntent);
-  }, [draftFolders, globalFolders, stagedIntent]);
+  return {
+    workspace: draftWorkspace ?? globalWorkspace,
+    stagedIntent,
+    activeHostId,
+  };
+}
+
+export function useLandingComposerMentionRoots(
+  draftId: string | null,
+): ReadonlyArray<string> {
+  const { workspace, stagedIntent, activeHostId } =
+    useLandingFoldersAndIntent(draftId);
+  const preferredRoots = useMemo(
+    () => mentionRootsFromWorktreeIntent(workspace.folders, stagedIntent),
+    [workspace.folders, stagedIntent],
+  );
 
   // `preferredRoots` already resolves the global folders (intent-aware) in the
   // base-landing case, so the global fallback inside `useWorkspaceMentionRoots`
@@ -145,6 +170,96 @@ export function mentionRootsFromWorktreeBindingAndIntent(
     folderIntentRoot,
   );
   return dedupeMentionRoots([...bindingRoots, ...stagedOnlyRoots]);
+}
+
+/**
+ * Where a folder's next run starts the CLI under its staged intent, or `null`
+ * for a worktree the send has not created yet.
+ */
+function folderIntentRunDirectory(entry: WorktreeFolderIntent): string | null {
+  if (entry.kind === "import") return entry.worktreePath;
+  return entry.kind === "local" ? entry.workspacePath : null;
+}
+
+/**
+ * The directory a chat's next run starts its CLI in: the host's run directory
+ * for the binding's declared primary entry (`entryRunDirectory`), after any
+ * staged intent for that folder. `null` when the client cannot know it - no
+ * binding entries yet (the host falls back to the task's folders), a
+ * folderless chat (the host's own task folder), or a primary staged onto a
+ * worktree not created yet.
+ */
+export function runDirectoryFromWorktreeBindingAndIntent(
+  binding: WorktreeBinding | null,
+  intent: WorktreeIntent | null,
+): string | null {
+  if (
+    binding === null ||
+    binding.workspaceMode === "folderless" ||
+    binding.entries.length === 0
+  ) {
+    return null;
+  }
+  const primary =
+    binding.entries.find((entry) => entry.isPrimary) ?? binding.entries[0];
+  const staged = intent?.entries.find(
+    (entry) => entry.workspacePath === primary.workspacePath,
+  );
+  if (staged !== undefined) return folderIntentRunDirectory(staged);
+  return primary.worktreePath !== null && primary.worktreePath.length > 0
+    ? primary.worktreePath
+    : primary.workspacePath;
+}
+
+/**
+ * {@link runDirectoryFromWorktreeBindingAndIntent} for a landing draft, whose
+ * new chat's binding uses the workspace's selected primary folder.
+ */
+export function useLandingRunWorkingDirectory(
+  draftId: string | null,
+): string | null {
+  const { workspace, stagedIntent, activeHostId } =
+    useLandingFoldersAndIntent(draftId);
+  const queryClient = useQueryClient();
+  const summariesKey = useMemo(
+    () =>
+      hostQueryKeys.method<HostRpcRegistry, "worktree.listByWorkspacePaths">(
+        activeHostId,
+        "worktree.listByWorkspacePaths",
+        {
+          workspacePaths: [...workspace.folders],
+          scriptRefs: [],
+          forceRefresh: false,
+        },
+      ),
+    [activeHostId, workspace.folders],
+  );
+  const subscribe = useCallback(
+    (notify: () => void) => queryClient.getQueryCache().subscribe(notify),
+    [queryClient],
+  );
+  const snapshot = useCallback(
+    () => queryClient.getQueryData(summariesKey),
+    [queryClient, summariesKey],
+  );
+  // The picker can cache a new-worktree default before staging it. Re-evaluate
+  // when that cache changes, using the same fallback as the submit boundary.
+  useSyncExternalStore(subscribe, snapshot, snapshot);
+  const intent = effectiveWorktreeIntent({
+    workspace,
+    stagedIntent,
+    seedIntent: readCachedDefaultWorktreeIntent(
+      queryClient,
+      activeHostId,
+      workspace,
+    ),
+  });
+  const primary = resolvePrimaryPath(workspace.folders, workspace.primaryPath);
+  if (primary === null) return null;
+  const entry = intent?.entries.find(
+    (entry) => entry.workspacePath === primary,
+  );
+  return entry === undefined ? primary : folderIntentRunDirectory(entry);
 }
 
 function folderIntentRoot(entry: WorktreeFolderIntent): string {

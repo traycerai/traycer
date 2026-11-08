@@ -293,9 +293,9 @@ describe("<SandboxShapeSheet />", () => {
     expect(screen.queryByTestId("sandbox-shape-sheet-cpus")).toBeNull();
     expect(screen.queryByTestId("sandbox-shape-sheet-memory")).toBeNull();
     expect(screen.queryByTestId("sandbox-shape-sheet-disk")).toBeNull();
-    expect(
-      screen.getByRole("combobox", { name: "Size" }).textContent,
-    ).toContain("2 vCPU · 4 GB · 20 GB");
+    const size = screen.getByRole("combobox", { name: "Size" });
+    expect(size.textContent).toContain("2 vCPU · 4 GB · 20 GB");
+    expect(size.textContent).not.toContain("$");
   });
 
   it("opens on the configuration's defaults, shape and periods, when the person has no pick", () => {
@@ -497,15 +497,16 @@ describe("<SandboxShapeSheet />", () => {
       expect(
         screen.getByTestId("sandbox-shape-sheet-price").textContent,
       ).toContain("$0.50 an hour while awake · uses your credits");
+      expect(document.body.textContent.match(/\$0\.50/gu)).toHaveLength(1);
       fireEvent.click(size);
       expect(
         screen.getByRole("option", { name: /1 vCPU · 4 GB · 10 GB/ })
           .textContent,
-      ).toContain("$0.25/h");
+      ).not.toContain("$");
       expect(
         screen.getByRole("option", { name: /2 vCPU · 8 GB · 20 GB/ })
           .textContent,
-      ).toContain("$0.50/h");
+      ).not.toContain("$");
     });
   });
 

@@ -1,53 +1,37 @@
 ---
 title: "Sharing"
-description: "Invite people to a Task, manage their roles, share with a team, and choose which of your agents collaborators see."
+description: "Invite people to a Task, share it with a team, and choose which of your agents collaborators see."
 ---
 
-The **Sharing** panel shows who has access to the Task and lets you invite people, change roles, and share the Task with a team.
+The **Sharing** panel shows who has access to the Task and lets you invite people and share the Task with a team.
 
 The top of the panel reads "Updated" with the time the list was last loaded. Click **Refresh** to load it again.
 
 ## Roles
 
-Everyone with access to a Task has one of three roles:
+Everyone with access to a Task has one of two roles:
 
 - **Owner**: the person who created the Task. The Owner role can't be given to someone else from the panel.
-- **Editor**: can change the Task's artifacts and invite people.
-- **Viewer**: can read and comment, but can't change artifacts.
+- **Editor**: everyone else with access, whether invited directly or through a team.
 
-| Action                                                    | Owner | Editor | Viewer |
-| --------------------------------------------------------- | :---: | :----: | :----: |
-| Read artifacts, comments, and shared agent chats          | ✓     | ✓      | ✓      |
-| Create, edit, rename, move, and delete artifacts          | ✓     | ✓      |        |
-| Change a ticket's or story's status                       | ✓     | ✓      |        |
-| Start comment threads and reply                           | ✓     | ✓      | ✓      |
-| Resolve, reopen, or delete any thread                     | ✓     | ✓      | Own threads only |
-| View version history                                      | ✓     | ✓      | ✓      |
-| Restore versions and deleted artifacts                    | ✓     | ✓      |        |
-| Export artifacts                                          | ✓     | ✓      | ✓      |
-| Search artifacts                                          | ✓     | ✓      |        |
-| Keep the artifacts as files on disk                       | ✓     | ✓      |        |
-| Invite people                                             | ✓     | ✓      |        |
-| Change roles and remove people                            | ✓     |        |        |
-| Share with a team                                         | ✓     |        |        |
+Anyone who can open a Task can work in it, including keeping its artifacts as files on disk and inviting more people. Only the Owner can remove people and share the Task with a team.
 
 For the files on disk, see [Artifacts on Disk](/panels/artifacts#artifacts-on-disk).
 
 ## Invite People
 
-Owners and Editors see an invite box at the top of the panel.
+Everyone with access sees an invite box at the top of the panel.
 
 <Steps>
   <Step title="Add people">
     Type an email address or GitHub handle into "Enter email or GitHub handle" and click **Add**, or press Enter. Repeat to queue several people.
   </Step>
-  <Step title="Choose a role">
-    Pick **Editor** (the default) or **Viewer**. The role applies to everyone in the queue.
-  </Step>
   <Step title="Send">
     Click **Invite 1 person**, or **Invite N people** for several.
   </Step>
 </Steps>
+
+Everyone you invite becomes an Editor.
 
 People invited by GitHub handle may not get an email about it.
 
@@ -55,24 +39,20 @@ People invited by GitHub handle may not get an email about it.
 
 **People with access** lists everyone who has direct access to the Task, with each person's role.
 
-Owners can:
+The Owner can remove a person with the remove button on their row. Removing someone ends their access right away and closes any sessions they have open on the Task.
 
-- Change a person between **Editor** and **Viewer** with the role menu on their row.
-- Remove a person with the remove button on their row. Removing someone ends their access right away and closes any sessions they have open on the Task.
+A Task always keeps an Owner: the last Owner can't be removed.
 
-A Task always keeps an Owner: the last Owner's role can't be changed, and they can't be removed.
-
-Editors and Viewers see the list and each person's role, but can't change them.
+Editors see the list and each person's role.
 
 ## Teams
 
 The **Teams** section lists the teams the Task is shared with, and, for the Owner, the teams it could be shared with. Only the Owner can share with a team.
 
 1. Find the team under **Teams**.
-2. Pick **Editor** or **Viewer** for the team.
-3. Click **Share**.
+2. Click **Share**.
 
-Everyone on the team gets that role. The Owner can later change the team's role, or remove the team, which ends access for everyone who had it through the team.
+Everyone on the team becomes an Editor. The Owner can later remove the team, which ends access for everyone who had it through the team.
 
 The team must be on the Sync plan. See [Share Tasks With a Team](/account/teams#share-tasks-with-a-team).
 

@@ -73,7 +73,7 @@ import { carryViewedHostIntoSettingsScope } from "@/components/settings/host-sco
 import { useScopedStreamBinding } from "@/components/settings/host-scope/use-scoped-stream-binding";
 import type { HostScope } from "@/components/settings/host-scope/use-host-scope";
 import { useCoarsePointer } from "@/hooks/ui/use-coarse-pointer";
-import { useResourceMonitorHostScope } from "@/hooks/resources/use-resource-monitor-host-scope";
+import { useWatchHostScope } from "@/hooks/host-scope/use-watch-host-scope";
 import { useDesktopAppResourceUsage } from "@/hooks/resources/use-desktop-app-resource-usage";
 import { useRegisteredHostsPollLiveness } from "@/hooks/auth/use-registered-hosts-query";
 import { useSystemTabModalActions } from "@/stores/tabs/use-system-tab-modal";
@@ -522,7 +522,9 @@ function armResourceRowAction(
  * closing the panel the instant a host was chosen from the picker inside it.
  */
 export function ResourceMonitorPopover(props: ResourceMonitorPopoverProps) {
-  const { scope, hasExplicitPick } = useResourceMonitorHostScope();
+  // The resource stream mounts next to the trigger, so resolve its host here
+  // rather than inside PopoverContent: the pick must follow while it is closed.
+  const { scope, hasExplicitPick } = useWatchHostScope();
   const scopedStreamBinding = useScopedStreamBinding(scope);
   const ambientStreamBinding = use(StreamRuntimeContext);
   return (
@@ -1075,6 +1077,7 @@ function ResourceMonitorHostPickerRow(props: {
         }}
         surface="panel-header"
         intent="view"
+        consequence={null}
         disabled={false}
         isLoading={scope.isLoading}
         listsFailed={scope.listsFailed}
@@ -4740,8 +4743,11 @@ function commitOwnerFocus(args: {
     args.tabId === args.activeTabId
   ) {
     const tabId = args.tabId;
-    args.navigateNested(args.epicId, tabId, () =>
-      prepareResourceTarget(tabId, args.preparation),
+    args.navigateNested(
+      args.epicId,
+      tabId,
+      () => prepareResourceTarget(tabId, args.preparation),
+      "user",
     );
     return;
   }
@@ -4770,7 +4776,10 @@ function prepareResourceTarget(
     return openTileWithNavigation(
       tileIntent(preparation.node, { tabId }, preparation.gesture, "direct_ui"),
       commitWithoutNavigation,
-      MANUAL_TILE_OPEN,
+      // A person picked this row out of the resource popover. The navigator
+      // above claims nothing either way, so this says who asked in case the
+      // caller's wrapping `navigateNested` ever becomes this one's.
+      { ...MANUAL_TILE_OPEN, provenance: "user" },
     );
   }
   return canvas.prepareSetActiveTileTabFocusTarget(

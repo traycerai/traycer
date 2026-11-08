@@ -299,8 +299,6 @@ export function useSandboxStaging(input: {
     [task],
   );
 
-  const stagedConfiguration =
-    stage === null ? null : stage.target.configuration;
   const stagedFacts = useMemo(
     () =>
       stage === null || stage.target.kind !== "new" || catalogue === null
@@ -309,7 +307,8 @@ export function useSandboxStaging(input: {
     [catalogue, stage, user],
   );
   const consequences = useMemo<ConsequencesInput | null>(() => {
-    if (stage === null || stagedConfiguration === null) return null;
+    if (stage === null) return null;
+    const stagedConfiguration = stage.target.configuration;
     const principal = configurationPrincipal(stagedConfiguration, viewerUserId);
     const price = stagedTargetPrice(stage.target, input.hosts, stagedFacts);
     const balance = stageBalanceMc(user, stagedConfiguration);
@@ -318,11 +317,18 @@ export function useSandboxStaging(input: {
     const existingHost = input.hosts.find(
       (host) => host.hostId === existingHostId,
     );
+    const stagedHost = input.hosts.find(
+      (host) => host.hostId === (stage.createdHostId ?? existingHostId),
+    );
     const payer = existingHost?.sandbox?.summary?.wakePayer;
     return {
       configuration: stagedConfiguration,
       price,
       needsCredits: stagedFacts !== null && stagedFacts.needsCredits,
+      billingStarted: stagedSandboxBillingStarted(
+        stage,
+        stagedHost?.sandbox ?? null,
+      ),
       shortfallMc:
         balance === null || price === null
           ? null
@@ -344,7 +350,6 @@ export function useSandboxStaging(input: {
     input.hosts,
     reachFor,
     stage,
-    stagedConfiguration,
     stagedFacts,
     user,
     viewerUserId,
@@ -490,8 +495,7 @@ export function useSandboxStaging(input: {
         stage === null || stage.target.kind !== "new"
           ? null
           : stageConfigurationKey(stage.target.configuration),
-      stagedLabel:
-        stage === null ? null : stagedLabel(stage, stagedFacts, input.hosts),
+      stagedLabel: stage === null ? null : stagedLabel(stage, input.hosts),
       // Running, not settled: a refusal or a failure ends the wait.
       stagedBusy:
         stage !== null && stage.phase !== "staged" && stage.failure === null,
@@ -549,7 +553,6 @@ export function useSandboxStaging(input: {
     setSheetKey,
     stage,
     stageNew,
-    stagedFacts,
     surfaceKey,
     task,
     viewerUserId,
@@ -730,7 +733,6 @@ export function restingVerb(
 
 function stagedLabel(
   stage: StagedSandbox,
-  facts: NewRowFacts | null,
   hosts: readonly HostScopeOption[],
 ): string {
   const { target } = stage;
@@ -757,11 +759,6 @@ function stagedLabel(
     configuration: stageConfigurationCopy(target.configuration),
     cpus: target.shape.cpus,
     memoryMb: target.shape.memoryMb,
-    priceMcPerHour:
-      facts === null || facts.price === null
-        ? null
-        : facts.price.awakeMcPerHour,
-    priceIsFrom: facts !== null && facts.price !== null && !facts.price.exact,
   });
 }
 
@@ -969,6 +966,35 @@ function stagedTargetPrice(
     return existingTargetPrice(hosts, target.hostId);
   }
   return stagedFacts === null ? null : stagedFacts.price;
+}
+
+/** Current lifecycle facts override a stage's last proof that it was awake. */
+function stagedSandboxBillingStarted(
+  stage: StagedSandbox,
+  sandbox: HostScopeSandbox | null,
+): boolean {
+  if (sandbox !== null) {
+    if (sandbox.frozen) return false;
+    if (sandbox.state !== null) return sandbox.state === "awake";
+  }
+  switch (stage.failure?.kind) {
+    case "settings":
+    case "no-provider":
+    case "traycer-off":
+    case "agent-not-offered":
+    case "agent-setup-failed":
+    case "not-sent":
+      return true;
+    case undefined:
+    case "timed-out":
+      return (
+        stage.phase === "handoff" ||
+        stage.step === "applying" ||
+        stage.step === "delivering"
+      );
+    default:
+      return false;
+  }
 }
 
 /** The New row of `configurationKey`; `null` for none, or no key. */

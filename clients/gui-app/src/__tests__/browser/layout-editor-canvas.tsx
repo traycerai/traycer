@@ -553,8 +553,7 @@ const FIXTURE_LOCAL_HOST: LocalHostSnapshot = {
 const FIXTURE_REMOTE_HOSTS: readonly HostDirectoryEntry[] = [
   {
     hostId: "fixture-host-builder",
-    // Long enough to overrun the account menu's width: it truncates in
-    // its row and reads in full from the row's tooltip.
+    // Long enough to wrap across lines inside the account menu's width cap.
     label: "build-vm-01.asia-south2-b.c.example-project.internal (staging)",
     kind: "remote",
     websocketUrl: "ws://127.0.0.1:9/builder",
@@ -563,7 +562,7 @@ const FIXTURE_REMOTE_HOSTS: readonly HostDirectoryEntry[] = [
   },
   {
     hostId: "fixture-host-mini",
-    // Offline and long: an inert row still reveals a truncated name.
+    // Offline and long: an inert row still shows its full name.
     label: "gpu-runner-02.us-central1-a.c.example-project.internal (nightly)",
     kind: "remote",
     websocketUrl: null,
@@ -1632,7 +1631,6 @@ export function CanvasFixture(): ReactNode {
           columnRef={setColumn}
           {...chrome}
           header={<FixtureHeader />}
-          voiceTopRow={null}
           strip={
             stripEdge === null ? null : (
               <SideTabStrip

@@ -164,7 +164,6 @@ import type {
   VoiceSessionMintRequest,
   VoiceTrayAction,
 } from "@traycer-clients/shared/host-client/voice-sessions";
-import type { VoiceRouteFetchResult } from "@traycer-clients/shared/host-client/voice-router";
 import type {
   EnvironmentProvidersFetchResult,
   SandboxGrantsFetchResult,
@@ -178,7 +177,11 @@ import type {
   SlackAppReadResult,
   SlackAppWriteResult,
 } from "@traycer-clients/shared/host-client/slack-app";
-import type { SlackAppRegisterRequest } from "@traycer/protocol/host/slack-app";
+import type {
+  SlackAppDmsRequest,
+  SlackAppRegisterRequest,
+} from "@traycer/protocol/host/slack-app";
+import type { TeamHostInstallTokenResult } from "@traycer-clients/shared/host-client/team-host";
 import type { ExecutableWriteGrantFetchResult } from "@traycer-clients/shared/host-client/executable-write-grant";
 import type {
   SandboxAutomationOpenTarget,
@@ -269,11 +272,6 @@ export interface DesktopPreloadBridge {
     bearerToken: string,
     voiceSessionId: string,
   ): Promise<VoiceSessionEndFetchResult>;
-  // The voice router's model call, opaque JSON in and out.
-  routeVoiceUtterance(
-    bearerToken: string,
-    requestBody: string,
-  ): Promise<VoiceRouteFetchResult>;
   setVoiceSessionLive(live: boolean): Promise<void>;
   setVoiceSessionIndicator(indicator: VoiceSessionIndicator): Promise<void>;
   createSandbox(
@@ -326,6 +324,14 @@ export interface DesktopPreloadBridge {
     bearerToken: string,
     botId: string,
   ): Promise<SlackAppWriteResult>;
+  setSlackAppDms(
+    bearerToken: string,
+    request: SlackAppDmsRequest,
+  ): Promise<SlackAppWriteResult>;
+  mintTeamHostInstallToken(
+    bearerToken: string,
+    environmentId: string,
+  ): Promise<TeamHostInstallTokenResult>;
   getSandboxGrants(
     bearerToken: string,
     environmentId: string | null,
@@ -1318,13 +1324,6 @@ export class DesktopRunnerHost implements IRunnerHost {
     return this.bridge.endVoiceSession(bearerToken, voiceSessionId);
   }
 
-  routeVoiceUtterance(
-    bearerToken: string,
-    requestBody: string,
-  ): Promise<VoiceRouteFetchResult> {
-    return this.bridge.routeVoiceUtterance(bearerToken, requestBody);
-  }
-
   setVoiceSessionLive(live: boolean): Promise<void> {
     return this.bridge.setVoiceSessionLive(live);
   }
@@ -1430,6 +1429,20 @@ export class DesktopRunnerHost implements IRunnerHost {
     botId: string,
   ): Promise<SlackAppWriteResult> {
     return this.bridge.disconnectSlackApp(bearerToken, botId);
+  }
+
+  setSlackAppDms(
+    bearerToken: string,
+    request: SlackAppDmsRequest,
+  ): Promise<SlackAppWriteResult> {
+    return this.bridge.setSlackAppDms(bearerToken, request);
+  }
+
+  mintTeamHostInstallToken(
+    bearerToken: string,
+    environmentId: string,
+  ): Promise<TeamHostInstallTokenResult> {
+    return this.bridge.mintTeamHostInstallToken(bearerToken, environmentId);
   }
 
   getSandboxGrants(

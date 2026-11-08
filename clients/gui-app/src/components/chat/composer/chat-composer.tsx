@@ -186,6 +186,11 @@ interface ChatComposerProps {
    */
   readonly sendDisabledHint: string | null | undefined;
   readonly mentionRoots: ReadonlyArray<string> | null;
+  /**
+   * The folder this chat's next run starts its CLI in, or `null` when it cannot
+   * be known before the send (see `runDirectoryFromWorktreeBindingAndIntent`).
+   */
+  readonly runWorkingDirectory: string | null;
   readonly fallbackToGlobalMentionRoots: boolean;
   readonly currentEpicId: string | null;
   /**
@@ -481,6 +486,7 @@ function ChatComposerImpl(props: ChatComposerProps) {
     sendDisabled,
     sendDisabledHint,
     mentionRoots,
+    runWorkingDirectory,
     fallbackToGlobalMentionRoots,
     currentEpicId,
     viewTabId,
@@ -753,7 +759,9 @@ function ChatComposerImpl(props: ChatComposerProps) {
     harnessId,
     profileId,
     selectedModel,
+    workingDirectory: runWorkingDirectory,
     active: focused,
+    hostId: tabHostId,
     client: runHostClient,
   });
   // ONE value for both readers: the chain's `rateLimitVisible` below and the
@@ -917,7 +925,6 @@ function ChatComposerImpl(props: ChatComposerProps) {
       onSubmitMessage: submitWithGuide,
       onSideChat,
       targetHostId: tabHostId,
-      restingSandbox,
       // The queued prompt this composer is pointed at, which is also what the
       // tile's `onSubmitMessage` chooses its destination from - so it is part
       // of the submit intent a preparation has to re-check before delivering.

@@ -118,7 +118,7 @@ function ContentMinimapDrawer(props: {
         {/* The card renders its own visible heading; this is the a11y name. */}
         <DrawerTitle className="sr-only">{adapter.title}</DrawerTitle>
         {/* Mounted with the drawer, not with the bar: the card scrolls its
-            current row into view on every change of it, and a closed drawer
+            current row into view when it opens, and a closed drawer
             still lives in a portal - so leaving it mounted forces a document
             layout from a surface nobody is looking at, in the frames the
             content behind it is measuring itself. */}

@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import * as Y from "yjs";
+import type { WirePermissionRole } from "@traycer/protocol/host/epic/unary-schemas";
 import type { Awareness } from "y-protocols/awareness";
 import { NO_CLOUD_SYNC_DURABILITY } from "@traycer-clients/shared/host-transport/epic-stream-client";
 import type { EpicStreamCallbacks } from "@traycer-clients/shared/host-transport/epic-stream-client";
@@ -85,7 +86,7 @@ function stateVectorBase64(doc: Y.Doc): string {
 }
 
 function buildMeta(
-  role: "owner" | "editor" | "viewer" | null,
+  role: WirePermissionRole | null,
   hostDoc: Y.Doc | null,
 ): SnapshotMetaEpic {
   const nextHostDoc = hostDoc === null ? new Y.Doc() : hostDoc;
@@ -276,7 +277,7 @@ describe("createOpenEpicStore", () => {
     opened.dispose();
   });
 
-  it("does not raise a close signal on a downgrade to viewer (downgrade != close)", () => {
+  it("keeps access lost for retired early metadata until a granted role returns", () => {
     const { factory, handle } = fakeFactory();
     const opened = openStoreForTest({
       epicId: "epic-a",
@@ -288,13 +289,41 @@ describe("createOpenEpicStore", () => {
       writeCommand: null,
     });
 
-    handle().callbacks.onSnapshot(buildMeta("editor", null), emptySnapshot());
-    handle().callbacks.onPermissionChanged("viewer");
+    try {
+      handle().callbacks.onSnapshot(buildMeta("editor", null), emptySnapshot());
+      handle().callbacks.onPermissionChanged(null);
+      handle().callbacks.onEarlyMeta(buildMeta("viewer", null));
+
+      expect(opened.store.getState().permissionRole).toBeNull();
+      expect(opened.store.getState().accessLost).toBe(true);
+
+      handle().callbacks.onEarlyMeta(buildMeta("editor", null));
+      expect(opened.store.getState().permissionRole).toBe("editor");
+      expect(opened.store.getState().accessLost).toBe(false);
+    } finally {
+      opened.dispose();
+    }
+  });
+
+  it("does not raise a close signal on a downgrade from owner to editor (downgrade != close)", () => {
+    const { factory, handle } = fakeFactory();
+    const opened = openStoreForTest({
+      epicId: "epic-a",
+      userId: null,
+      factories: {
+        streamClientFactory: factory,
+        laneSelection: null,
+      },
+      writeCommand: null,
+    });
+
+    handle().callbacks.onSnapshot(buildMeta("owner", null), emptySnapshot());
+    handle().callbacks.onPermissionChanged("editor");
 
     const state = opened.store.getState();
-    expect(state.permissionRole).toBe("viewer");
-    // A downgrade keeps the tab open read-only - neither terminal close signal
-    // the coordinator reacts to may be set.
+    expect(state.permissionRole).toBe("editor");
+    // A downgrade keeps the tab open - neither terminal close signal the
+    // coordinator reacts to may be set.
     expect(state.accessLost).toBe(false);
     expect(state.epicDeleted).toBeNull();
 
@@ -357,7 +386,7 @@ describe("createOpenEpicStore", () => {
     opened.dispose();
   });
 
-  it("handles permission downgrade, upgrade, and full revoke", () => {
+  it("keeps the stream and local edits across a role move, then fails closed on a full revoke", () => {
     const { factory, handle, handles } = fakeFactory();
     const opened = openStoreForTest({
       epicId: "epic-a",
@@ -370,46 +399,105 @@ describe("createOpenEpicStore", () => {
     });
 
     handle().callbacks.onConnectionStatus("open", null, true, null);
-    handle().callbacks.onSnapshot(buildMeta("editor", null), emptySnapshot());
+    handle().callbacks.onSnapshot(buildMeta("owner", null), emptySnapshot());
     opened.doc.getMap("epic").set("title", "Locally renamed");
 
-    const initialStream = handles()[0];
-    handle().callbacks.onPermissionChanged("viewer");
-    expect(opened.store.getState().permissionRole).toBe("viewer");
-    expect(opened.store.getState().snapshotLoaded).toBe(false);
-    expect(opened.store.getState().connectionStatus).toBe("connecting");
-    expect(opened.store.getState().isDirty).toBe(false);
-    expect(opened.store.getState().dirtyWatermarkStateVectorBase64).toBeNull();
-    expect(opened.store.getState().latestHostStateVectorBase64).toBeNull();
-    expect(opened.doc.getMap("epic").get("title")).toBeUndefined();
-    expect(initialStream.closeCount).toBe(1);
-    expect(handles().length).toBe(2);
+    const stream = handles()[0];
+    expect(stream.applied.length).toBe(1);
 
-    const rebound = handles()[1];
-    rebound.callbacks.onConnectionStatus("open", null, true, null);
-    rebound.callbacks.onSnapshot(buildMeta("viewer", null), emptySnapshot());
+    // Both remaining roles write, so a move between them re-seeds nothing.
+    handle().callbacks.onPermissionChanged("editor");
+    expect(opened.store.getState().permissionRole).toBe("editor");
+    expect(opened.store.getState().snapshotLoaded).toBe(true);
+    expect(opened.store.getState().isDirty).toBe(true);
+    expect(opened.doc.getMap("epic").get("title")).toBe("Locally renamed");
+    expect(stream.closeCount).toBe(0);
+    expect(handles().length).toBe(1);
 
-    // A local write while viewer should be dropped after the refresh.
-    //
-    // Driven through the DOC rather than through `applyLocalUpdate`, which was
-    // deleted: it had zero production callers, and raw bytes were never how a
-    // real edit reaches the send path. An edit on the doc the runtime observes
-    // is what production does, so this now gates the property on the real
-    // path instead of on a member nothing used.
-    opened.doc.getMap("epic").set("title", "while-viewer");
-    expect(rebound.applied.length).toBe(0);
-
-    // Upgrade back to editor re-enables writes.
-    rebound.callbacks.onPermissionChanged("editor");
     opened.doc.getMap("epic").set("title", "while-editor");
-    expect(rebound.applied.length).toBe(1);
+    expect(stream.applied.length).toBe(2);
 
     // Full revoke → accessLost flips true.
-    rebound.callbacks.onPermissionChanged(null);
+    handle().callbacks.onPermissionChanged(null);
     const after = opened.store.getState();
     expect(after.accessLost).toBe(true);
     expect(after.permissionRole).toBe(null);
     expect(after.isDirty).toBe(false);
+
+    opened.dispose();
+  });
+
+  it("clears an editor's queued edits and stops writes when access is revoked", () => {
+    const { factory, handle } = fakeFactory();
+    const opened = openStoreForTest({
+      epicId: "epic-a",
+      userId: null,
+      factories: {
+        streamClientFactory: factory,
+        laneSelection: null,
+      },
+      writeCommand: null,
+    });
+
+    try {
+      handle().callbacks.onConnectionStatus("open", null, true, null);
+      handle().callbacks.onSnapshot(buildMeta("editor", null), emptySnapshot());
+      handle().callbacks.onConnectionStatus("reconnecting", null, true, "held");
+      opened.doc.getMap("epic").set("title", "Queued as editor");
+      expect(handle().applied).toHaveLength(0);
+      expect(opened.store.getState()).toMatchObject({
+        isDirty: true,
+        unsyncedQueueSize: 1,
+        dirtyWatermarkStateVectorBase64: stateVectorBase64(opened.doc),
+      });
+
+      handle().callbacks.onPermissionChanged(null);
+      expect(opened.store.getState()).toMatchObject({
+        permissionRole: null,
+        accessLost: true,
+        isDirty: false,
+        unsyncedQueueSize: 0,
+        dirtyWatermarkStateVectorBase64: null,
+      });
+
+      // A continued open keeps the snapshot; no new snapshot can mask the
+      // callback's revocation or discard the queued edit on its behalf.
+      handle().callbacks.onConnectionStatus("open", null, true, "continued");
+      opened.doc.getMap("epic").set("title", "Written after revocation");
+      expect(handle().applied).toHaveLength(0);
+      expect(opened.store.getState()).toMatchObject({
+        connectionStatus: "open",
+        snapshotLoaded: true,
+        unsyncedQueueSize: 0,
+      });
+    } finally {
+      opened.dispose();
+    }
+  });
+
+  it("holds no role for a snapshot naming the retired viewer role, and writes nothing until a role arrives", () => {
+    const { factory, handle } = fakeFactory();
+    const opened = openStoreForTest({
+      epicId: "epic-a",
+      userId: null,
+      factories: {
+        streamClientFactory: factory,
+        laneSelection: null,
+      },
+      writeCommand: null,
+    });
+
+    handle().callbacks.onConnectionStatus("open", null, true, null);
+    handle().callbacks.onSnapshot(buildMeta("viewer", null), emptySnapshot());
+
+    expect(opened.store.getState().permissionRole).toBeNull();
+    // A local write with no role is dropped, never sent.
+    opened.doc.getMap("epic").set("title", "while-no-role");
+    expect(handle().applied.length).toBe(0);
+
+    handle().callbacks.onPermissionChanged("editor");
+    opened.doc.getMap("epic").set("title", "while-editor");
+    expect(handle().applied.length).toBe(1);
 
     opened.dispose();
   });
@@ -1965,7 +2053,7 @@ describe("createOpenEpicStore", () => {
     opened.dispose();
   });
 
-  it("does not flush queued artifact-room-body edits with a stale editor role when the reconnect snapshot downgrades to viewer", async () => {
+  it("does not flush queued artifact-room-body edits with a stale editor role when the reconnect snapshot names the retired viewer role", async () => {
     const { factory, handle } = fakeFactory();
     const opened = openStoreForTest({
       epicId: "epic-artifact-rooms",
@@ -2008,7 +2096,7 @@ describe("createOpenEpicStore", () => {
       buildMeta("viewer", donor),
       Y.encodeStateAsUpdate(donor),
     );
-    expect(opened.store.getState().permissionRole).toBe("viewer");
+    expect(opened.store.getState().permissionRole).toBeNull();
     expect(handle().artifactRoomApplied.length).toBe(0);
 
     handle().callbacks.onSnapshot(
@@ -2033,7 +2121,7 @@ describe("createOpenEpicStore", () => {
     opened.dispose();
   });
 
-  it("clears queued artifact-room-body edits on viewer downgrade (fail-closed)", async () => {
+  it("clears queued artifact-room-body edits on access loss (fail-closed)", async () => {
     const { factory, handle } = fakeFactory();
     const opened = openStoreForTest({
       epicId: "epic-artifact-rooms",
@@ -2068,12 +2156,11 @@ describe("createOpenEpicStore", () => {
       fragmentDoc.getMap("offline").set("k", "v");
     });
 
-    // Downgrade to viewer - any queued local artifactRoom edits must be dropped.
-    handle().callbacks.onPermissionChanged("viewer");
+    // Access lost - any queued local artifactRoom edits must be dropped.
+    handle().callbacks.onPermissionChanged(null);
 
-    // Even after reopen no queued edit should be sent (the viewer
-    // downgrade also triggers a fresh-snapshot path; what matters is
-    // that no stale artifactRoomApplyUpdate is emitted for the queued edit).
+    // Even after reopen no queued edit should be sent: what matters is that no
+    // stale artifactRoomApplyUpdate is emitted for the queued edit.
     handle().artifactRoomApplied.length = 0;
 
     opened.dispose();
@@ -2332,83 +2419,12 @@ describe("createOpenEpicStore", () => {
     opened.dispose();
   });
 
-  it("does not send a stale reconcile after viewer downgrade between snapshot-while-not-open and reopen", async () => {
-    // Fail-closed contract: if a `artifactRoomSnapshot` arrives while the
-    // stream is not open and the role then drops to viewer before
-    // the stream reopens, the deferred reconcile MUST be discarded.
-    const { factory, handle } = fakeFactory();
-    const opened = openStoreForTest({
-      epicId: "epic-artifact-rooms",
-      userId: null,
-      factories: {
-        streamClientFactory: factory,
-        laneSelection: null,
-      },
-      writeCommand: null,
-    });
-
-    const donor = new Y.Doc();
-    seedRootArtifactWithArtifactRoom(donor, "art-1", "artifact-room-0");
-    handle().callbacks.onConnectionStatus("open", null, true, null);
-    handle().callbacks.onSnapshot(
-      buildMeta("editor", null),
-      Y.encodeStateAsUpdate(donor),
-    );
-    const seedArtifactRoomDoc = new Y.Doc();
-    seedArtifactRoomDoc.getXmlFragment("artifact-body:art-1").insert(0, []);
-    handle().callbacks.onArtifactRoomSnapshot(
-      "artifact-room-0",
-      Y.encodeStateAsUpdate(seedArtifactRoomDoc),
-      stateVectorBase64(seedArtifactRoomDoc),
-    );
-
-    const fragment = await leasedFragment(opened, "art-1");
-    if (fragment === null) throw new Error("missing fragment");
-    const fragmentDoc = fragment.doc;
-    if (fragmentDoc === null) throw new Error("missing fragment doc");
-
-    // Reconnecting → local edit → snapshot-while-not-open stashes a
-    // deferred reconcile.
-    handle().callbacks.onConnectionStatus("reconnecting", null, true, null);
-    fragmentDoc.transact(() => {
-      fragmentDoc.getMap("offline").set("k", "v");
-    });
-    handle().artifactRoomApplied.length = 0;
-    const refreshedArtifactRoomDoc = new Y.Doc();
-    refreshedArtifactRoomDoc
-      .getXmlFragment("artifact-body:art-1")
-      .insert(0, []);
-    handle().callbacks.onArtifactRoomSnapshot(
-      "artifact-room-0",
-      Y.encodeStateAsUpdate(refreshedArtifactRoomDoc),
-      stateVectorBase64(refreshedArtifactRoomDoc),
-    );
-    expect(handle().artifactRoomApplied.length).toBe(0);
-
-    // Downgrade to viewer mid-reconnect. The viewer-downgrade path
-    // also rebinds the stream via `requestFreshSnapshot`, so the
-    // reopen we observe below is on the rebound handle. The original
-    // handle's pending reconcile must NOT be sent on reopen of any
-    // future stream.
-    handle().callbacks.onPermissionChanged("viewer");
-
-    // Even after a follow-up open + artifactRoom snapshot, no stale reconcile
-    // bytes should ship on the original handle.
-    const originalApplied = handle().artifactRoomApplied.length;
-    handle().callbacks.onConnectionStatus("open", null, true, null);
-    expect(handle().artifactRoomApplied.length).toBe(originalApplied);
-
-    opened.dispose();
-  });
-
   it("does not send a stale reconcile after a null permission revoke between snapshot-while-not-open and reopen", async () => {
-    // Companion to the viewer fail-closed case: a full revoke
-    // (`permissionRole === null`) follows a different code path -
-    // it does not call `requestFreshSnapshot` but goes straight
-    // through `clearAllPendingArtifactRoomUpdates`. The deferred reconcile
-    // stashed during the reconnect window MUST still be discarded so
-    // a subsequent `onConnectionStatus("open")` on the same handle
-    // does not emit stale `artifactRoomApplyUpdate` bytes.
+    // A full revoke (`permissionRole === null`) goes straight through
+    // `clearAllPendingArtifactRoomUpdates`. The deferred reconcile stashed
+    // during the reconnect window MUST be discarded so a subsequent
+    // `onConnectionStatus("open")` on the same handle does not emit stale
+    // `artifactRoomApplyUpdate` bytes.
     const { factory, handle } = fakeFactory();
     const opened = openStoreForTest({
       epicId: "epic-artifact-rooms",
@@ -2458,9 +2474,8 @@ describe("createOpenEpicStore", () => {
     );
     expect(handle().artifactRoomApplied.length).toBe(0);
 
-    // Full revoke. Unlike the viewer downgrade, this path does NOT
-    // tear down the stream handle - `accessLost` flips and the queue
-    // / pending reconcile must be cleared in place.
+    // Full revoke: the stream handle stays up - `accessLost` flips and the
+    // queue / pending reconcile must be cleared in place.
     handle().callbacks.onPermissionChanged(null);
     expect(opened.store.getState().accessLost).toBe(true);
     expect(opened.store.getState().permissionRole).toBeNull();
@@ -2760,7 +2775,7 @@ describe("createOpenEpicStore", () => {
     opened.dispose();
   });
 
-  it("clears the per-artifact-room dirty watermark on viewer downgrade (fail-closed)", async () => {
+  it("clears the per-artifact-room dirty watermark on access loss (fail-closed)", async () => {
     const { factory, handle } = fakeFactory();
     const opened = openStoreForTest({
       epicId: "epic-artifact-rooms",
@@ -2801,14 +2816,13 @@ describe("createOpenEpicStore", () => {
 
     handle().artifactRoomApplied.length = 0;
 
-    // Downgrade to viewer - fail-closed: the queue and the dirty
-    // watermark are dropped before the resolver re-snapshots.
-    handle().callbacks.onPermissionChanged("viewer");
+    // Access lost - fail-closed: the queue and the dirty watermark are
+    // dropped before the resolver re-snapshots.
+    handle().callbacks.onPermissionChanged(null);
 
-    // Reconnect + resnapshot from the viewer-downgrade path. Even if
-    // the new snapshot's state vector trails the prior watermark, we
-    // must not ship a stale local update - the store dropped the
-    // watermark on the downgrade.
+    // Reconnect + resnapshot naming the retired viewer role. Even if the new
+    // snapshot's state vector trails the prior watermark, we must not ship a
+    // stale local update - the store dropped the watermark on the loss.
     const refreshed = handle().callbacks;
     refreshed.onConnectionStatus("open", null, true, null);
     refreshed.onSnapshot(buildMeta("viewer", null), emptySnapshot());
