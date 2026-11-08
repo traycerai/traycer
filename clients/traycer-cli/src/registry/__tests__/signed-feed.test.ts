@@ -4,7 +4,13 @@ import { createServer, type Server } from "node:http";
 import { tmpdir } from "node:os";
 import type { Readable } from "node:stream";
 import { join } from "node:path";
-import { spawn, type ChildProcessByStdio } from "node:child_process";
+import {
+  fork,
+  spawn,
+  type ChildProcess,
+  type ChildProcessByStdio,
+} from "node:child_process";
+import { fileURLToPath } from "node:url";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { config } from "../../config";
 import { readSignedFeed } from "../signed-feed";
@@ -175,7 +181,100 @@ function runReaderProcess(
   });
 }
 
+interface FixtureReadyMessage {
+  readonly url: string;
+  readonly publicKey: string;
+}
+
+function isFixtureReadyMessage(
+  message: unknown,
+): message is FixtureReadyMessage {
+  return (
+    message !== null &&
+    typeof message === "object" &&
+    "url" in message &&
+    typeof message.url === "string" &&
+    "publicKey" in message &&
+    typeof message.publicKey === "string"
+  );
+}
+
+function waitForFixtureReady(
+  child: ChildProcess,
+): Promise<FixtureReadyMessage> {
+  return new Promise((resolve, reject) => {
+    const cleanup = (): void => {
+      child.off("message", onMessage);
+      child.off("error", onError);
+      child.off("exit", onExit);
+    };
+    const onMessage = (message: unknown): void => {
+      cleanup();
+      if (!isFixtureReadyMessage(message)) {
+        reject(
+          new Error("signed feed fixture sent invalid IPC readiness data"),
+        );
+        return;
+      }
+      resolve(message);
+    };
+    const onError = (error: Error): void => {
+      cleanup();
+      reject(error);
+    };
+    const onExit = (code: number | null): void => {
+      cleanup();
+      reject(
+        new Error(`signed feed fixture exited before readiness (${code})`),
+      );
+    };
+    child.once("message", onMessage);
+    child.once("error", onError);
+    child.once("exit", onExit);
+  });
+}
+
+function waitForChildExit(child: ChildProcess): Promise<void> {
+  if (child.exitCode !== null || child.signalCode !== null)
+    return Promise.resolve();
+  return new Promise((resolve) => {
+    child.once("exit", () => resolve());
+  });
+}
+
 describe("readSignedFeed", () => {
+  it("serves an IPC fixture accepted by the production feed verifier", async () => {
+    const scriptPath = fileURLToPath(
+      new URL("../../../scripts/smoke-cli-exit-code.cjs", import.meta.url),
+    );
+    const child = fork(scriptPath, ["--serve-fixture"], {
+      env: {},
+      stdio: ["ignore", "ignore", "ignore", "ipc"],
+    });
+    try {
+      const ready = await waitForFixtureReady(child);
+      writeFileSync(
+        join(cliHome, "host-trusted-pubkeys"),
+        `${ready.publicKey}\n`,
+      );
+
+      const payload = await readSignedFeed({
+        feed: "host",
+        trustedKeySet: await loadTrustedKeys(),
+        urls: [`${ready.url}/host/versions.signed.json`],
+        fetchDocument: null,
+        signal: null,
+        onHeartbeat: null,
+      });
+
+      expect(payload.latest).toBe("1.0.0");
+      expect(payload.target).toBe("production");
+    } finally {
+      if (child.connected) child.disconnect();
+      await waitForChildExit(child);
+    }
+  });
+
   it.each(["production", "staging"] as const)(
     "accepts an 8 MiB signed envelope and rejects 8 MiB plus one byte for %s",
     async (target) => {

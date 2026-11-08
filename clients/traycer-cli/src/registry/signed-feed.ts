@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { readFile, rename, rm, open } from "node:fs/promises";
 import { join } from "node:path";
-import { withLock } from "@traycer-clients/shared/host-lock/cross-process-lock";
+import { withCliScopedFileLock } from "../store/cli-lock";
 import {
   config,
   releaseFeedTarget,
@@ -154,7 +154,7 @@ async function advanceWatermark(
   const dir = join(cliSharedHomeDir(), "feed-watermarks");
   await ensurePrivateDir(dir);
   const path = join(dir, `${target}-${feed}.json`);
-  const outcome = await withLock(
+  const outcome = await withCliScopedFileLock(
     {
       lockPath: `${path}.lock`,
       reason: "accept-release-feed",
