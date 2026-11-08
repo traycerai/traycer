@@ -126,10 +126,13 @@ export function botBoxDraftCleared(botId: string, key: string): void {
 /**
  * The bot is gone: the next write drops all its boxes, another window's
  * included, and the images its boxes kept that this window could not show.
+ * Called before the drafts store's change that forgets it, which is then
+ * written even where this window held none of the bot's boxes.
  */
 export function botBoxDraftsForgotten(botId: string): void {
   if (!writer.read) writer.droppedDuringRead.bots.add(botId);
   writer.forgotten.add(botId);
+  writer.lastThreadBoxes = null;
   for (const [box, unresolved] of writer.unresolved) {
     if (unresolved.botId === botId) writer.unresolved.delete(box);
   }

@@ -250,6 +250,18 @@ describe("two windows over one device's storage", () => {
     );
   });
 
+  it("drops a box holding only the other window's image once this window forgets its bot", async () => {
+    await storedByAThenStartB("");
+    expect(app.drafts.getState().threadBoxes[BOT_ID]).toBeUndefined();
+
+    app.drafts.getState().forgetBot(BOT_ID);
+
+    await waitForStore(
+      app,
+      (stored) => stored !== null && stored[BOT_ID] === undefined,
+    );
+  });
+
   it("carries that image in one paragraph however often the other window reads and edits the draft", async () => {
     await storedByAThenStartB("pic");
 
@@ -367,6 +379,35 @@ describe("two windows open at once over one device's storage", () => {
       expect(storedDrafts(a)?.[BOT_ID]?.x).toBeUndefined();
     },
   );
+
+  it("drops a bot's boxes another window saved, and their images' roots, when this window forgets the bot holding none of them", async () => {
+    const a = app;
+    const b = await windowBeside();
+    b.drafts
+      .getState()
+      .typeThreadBox(
+        BOT_ID,
+        "channel",
+        "from B",
+        boxDoc("from B", [INLINE_IMAGE]),
+      );
+    await waitForStore(b, (stored) =>
+      JSON.stringify(stored?.[BOT_ID]?.channel ?? null).includes('"hash"'),
+    );
+    const hash =
+      /"hash":"([0-9a-f]{64})"/.exec(JSON.stringify(storedDrafts(a)))?.[1] ??
+      "";
+    expect(a.imageRoots().has(hash)).toBe(true);
+    expect(a.drafts.getState().threadBoxes[BOT_ID]).toBeUndefined();
+
+    a.drafts.getState().forgetBot(BOT_ID);
+    await waitForStore(
+      a,
+      (stored) => stored !== null && stored[BOT_ID] === undefined,
+    );
+
+    expect(a.imageRoots().has(hash)).toBe(false);
+  });
 
   it("leaves a box another window wrote ahead of its only image for that window to finish, when this one takes its own gone image out of storage", async () => {
     storeDraftsAsLeft({
