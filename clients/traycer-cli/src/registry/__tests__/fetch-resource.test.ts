@@ -186,6 +186,66 @@ describe("downloadToFile resume and integrity policy", () => {
     SETTLE_RETRY_TEST_TIMEOUT_MS,
   );
 
+  it(
+    "resumes a partial archive on a mirror without carrying the first origin validator",
+    async () => {
+      vi.useRealTimers();
+      const expected = "abcdef";
+      const destPath = join(workDir, "mirrored-archive.tar.gz");
+      const firstOriginRequests: Array<{
+        range: string | undefined;
+        ifRange: string | undefined;
+      }> = [];
+      const mirrorRequests: Array<{
+        range: string | undefined;
+        ifRange: string | undefined;
+      }> = [];
+      let firstOriginCalls = 0;
+      const firstOrigin = await startFaultServer((request, response) => {
+        firstOriginRequests.push({
+          range: firstRequestHeaderValue(request.headers.range),
+          ifRange: firstRequestHeaderValue(request.headers["if-range"]),
+        });
+        firstOriginCalls += 1;
+        if (firstOriginCalls === 1) {
+          response.writeHead(200, {
+            etag: '"cdn-version"',
+            "content-length": "6",
+          });
+          response.end("abc");
+          return;
+        }
+        response.writeHead(503);
+        response.end("temporarily unavailable");
+      }, faultServers);
+      const mirrorOrigin = await startFaultServer((request, response) => {
+        mirrorRequests.push({
+          range: firstRequestHeaderValue(request.headers.range),
+          ifRange: firstRequestHeaderValue(request.headers["if-range"]),
+        });
+        response.writeHead(206, { "content-range": "bytes 3-5/6" });
+        response.end("def");
+      }, faultServers);
+
+      const pending = downloadToFile({
+        ...downloadOptions(destPath, expected),
+        url: `${firstOrigin}/host.tar.gz`,
+        mirrorUrls: [`${mirrorOrigin}/host.tar.gz`],
+      });
+      const result = await pending;
+
+      expect(result).toEqual({ downloadedBytes: 6, sha256: sha256(expected) });
+      expect(readFileSync(destPath, "utf8")).toBe(expected);
+      expect(firstOriginCalls).toBe(3);
+      expect(firstOriginRequests[1]?.range).toBe("bytes=3-");
+      expect(firstOriginRequests[1]?.ifRange).toBe('"cdn-version"');
+      expect(mirrorRequests).toEqual([
+        { range: "bytes=3-", ifRange: undefined },
+      ]);
+    },
+    SETTLE_RETRY_TEST_TIMEOUT_MS,
+  );
+
   it.each([
     ["strong ETag", { etag: '"etag-1"' }, '"etag-1"'],
     [

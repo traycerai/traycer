@@ -10,6 +10,7 @@ import {
 import {
   downloadToFile,
   fetchText,
+  fetchTextFromOrigins,
   type NetworkHeartbeat,
   type NetworkHeartbeatListener,
 } from "./fetch-resource";
@@ -22,6 +23,7 @@ import {
 import { parseHostVersionsManifestWithWarnings } from "./manifest-schema";
 import { resolveManifestUrl } from "./manifest-url";
 import { verifyLocalAsset } from "./verify-local-asset";
+import { readSignedFeed } from "./signed-feed";
 import { loadTrustedKeys } from "./trusted-keys";
 import type {
   HostPlatformAsset,
@@ -39,9 +41,8 @@ export interface RegistryYankLookup {
   isVersionYanked(version: string): Promise<boolean>;
 }
 
-// Real registry client. Replaces the NP-2 stub now that NP-4 ships the
-// hosted versions.json fetcher, asset resolver, and minisign + sha256
-// verification chain.
+// Registry policy is accepted only from a signed envelope. Archive trust
+// remains independent: size, sha256 and minisign are checked before install.
 //
 // Lifecycle is unchanged for callers:
 //
@@ -71,6 +72,7 @@ export interface RegistryTransport {
   fetchText(opts: RegistryFetchTextOptions): Promise<string>;
   downloadToFile(opts: {
     readonly url: string;
+    readonly mirrorUrls?: readonly string[];
     readonly destPath: string;
     readonly expectedSizeBytes: number;
     readonly expectedSha256: string;
@@ -146,41 +148,26 @@ export async function createRegistryClient(
 
   return {
     async fetchManifest(): Promise<HostVersionsManifest> {
-      if (cachedManifest !== null) {
-        logger.debug("Registry manifest cache hit", {
-          environment: opts.environment,
-          versionCount: cachedManifest.versions.length,
-        });
-        return cachedManifest;
-      }
       logger.debug("Registry manifest fetch started", {
         environment: opts.environment,
         manifestUrl: manifestUrlInfo.url,
       });
-      const body = await transport.fetchText({
-        url: manifestUrlInfo.url,
+      const parsedJson = await readSignedFeed({
+        feed: "host",
+        trustedKeySet,
+        validatePayload: (payload, url) => {
+          parseHostVersionsManifestWithWarnings(payload, url);
+        },
+        urls: manifestUrlInfo.urls ?? [manifestUrlInfo.url],
+        fetchDocument:
+          opts.transport === null
+            ? null
+            : (url, options) =>
+                transport.fetchText({ url, onHeartbeat: options.onHeartbeat }),
+        signal: null,
         onHeartbeat: (heartbeat) =>
           emitRegistryHeartbeat(opts.onProgress, "manifest", heartbeat),
       });
-      let parsedJson: unknown;
-      try {
-        parsedJson = JSON.parse(body);
-      } catch (err) {
-        logger.error(
-          "Registry manifest JSON parse failed",
-          {
-            environment: opts.environment,
-            manifestUrl: manifestUrlInfo.url,
-          },
-          errorFromUnknown(err),
-        );
-        throw cliError({
-          code: CLI_ERROR_CODES.REGISTRY_UNAVAILABLE,
-          message: `host registry: manifest at ${manifestUrlInfo.url} is not valid JSON: ${err instanceof Error ? err.message : String(err)}`,
-          details: { url: manifestUrlInfo.url },
-          exitCode: 1,
-        });
-      }
       const parseResult = parseHostVersionsManifestWithWarnings(
         parsedJson,
         manifestUrlInfo.url,
@@ -394,6 +381,7 @@ export async function createRegistryClient(
       try {
         const download = await transport.downloadToFile({
           url: asset.url,
+          mirrorUrls: asset.mirrors?.map((mirror) => mirror.url),
           destPath: archivePath,
           expectedSizeBytes: asset.sizeBytes,
           expectedSha256: asset.sha256,
@@ -402,20 +390,32 @@ export async function createRegistryClient(
             emitRegistryHeartbeat(opts.onProgress, "archive", heartbeat),
         });
         transferred = true;
-        const signatureText = await transport.fetchText({
-          url: asset.signatureUrl,
-          onHeartbeat: (heartbeat) =>
-            emitRegistryHeartbeat(opts.onProgress, "signature", heartbeat),
-        });
-        const verified = await verifyLocalAsset({
-          archivePath,
-          sizeBytes: asset.sizeBytes,
-          sha256: asset.sha256,
-          publicKeyId: asset.publicKeyId,
-          signatureText,
-          signatureSourceLabel: asset.signatureUrl,
-          trustedKeys: trustedKeySet.keys,
-        });
+        const verified = await fetchTextFromOrigins(
+          [
+            asset.signatureUrl,
+            ...(asset.mirrors ?? []).map((mirror) => mirror.signatureUrl),
+          ],
+          {
+            signal: null,
+            resource: "metadata",
+            onHeartbeat: (heartbeat) =>
+              emitRegistryHeartbeat(opts.onProgress, "signature", heartbeat),
+          },
+          async (signatureText, signatureSourceLabel) =>
+            verifyLocalAsset({
+              archivePath,
+              sizeBytes: asset.sizeBytes,
+              sha256: asset.sha256,
+              publicKeyId: asset.publicKeyId,
+              signatureText,
+              signatureSourceLabel,
+              trustedKeys: trustedKeySet.keys,
+            }),
+          opts.transport === null
+            ? null
+            : (url, options) =>
+                transport.fetchText({ url, onHeartbeat: options.onHeartbeat }),
+        );
         succeeded = true;
         logger.info("Registry download and verification completed", {
           environment: opts.environment,
@@ -501,7 +501,8 @@ export function createRegistryYankLookup(
   environment: Environment,
 ): RegistryYankLookup {
   const logger = createCliLogger(environment);
-  const manifestUrl = resolveManifestUrl().url;
+  const manifestUrlInfo = resolveManifestUrl();
+  const manifestUrl = manifestUrlInfo.url;
   let manifestPromise: Promise<HostVersionsManifest | null> | null = null;
 
   const fetchManifest = async (): Promise<HostVersionsManifest | null> => {
@@ -512,11 +513,17 @@ export function createRegistryYankLookup(
       controller.abort();
     }, YANK_LOOKUP_TIMEOUT_MS);
     try {
-      const body = await fetchText(manifestUrl, {
+      const parsed = await readSignedFeed({
+        feed: "host",
+        trustedKeySet: await loadTrustedKeys(),
+        urls: manifestUrlInfo.urls ?? [manifestUrl],
+        fetchDocument: null,
+        validatePayload: (payload, url) => {
+          parseHostVersionsManifestWithWarnings(payload, url);
+        },
         signal: controller.signal,
         onHeartbeat: null,
       });
-      const parsed: unknown = JSON.parse(body);
       return parseHostVersionsManifestWithWarnings(parsed, manifestUrl)
         .manifest;
     } catch (err) {

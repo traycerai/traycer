@@ -1,13 +1,12 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const mocks = vi.hoisted(() => ({
-  fetchTextMock: vi.fn(),
+  readSignedFeedMock: vi.fn(),
   createCliLoggerMock: vi.fn(),
 }));
 
-vi.mock("../fetch-resource", () => ({
-  fetchText: mocks.fetchTextMock,
-  downloadToFile: vi.fn(),
+vi.mock("../signed-feed", () => ({
+  readSignedFeed: mocks.readSignedFeedMock,
 }));
 
 vi.mock("../../logger", () => ({
@@ -16,13 +15,19 @@ vi.mock("../../logger", () => ({
     value instanceof Error ? value : new Error(String(value)),
 }));
 
-const { fetchTextMock, createCliLoggerMock } = mocks;
+const { readSignedFeedMock, createCliLoggerMock } = mocks;
 
 import { createRegistryYankLookup } from "../client";
 
+const feedGeneratedAt = Date.now();
 const VALID_MANIFEST = {
-  schemaVersion: 1,
-  generatedAt: "2026-05-15T12:00:00Z",
+  schemaVersion: 2,
+  feed: "host",
+  target: "production",
+  policyRevision: 1,
+  policyDigest: "a".repeat(64),
+  generatedAt: new Date(feedGeneratedAt).toISOString(),
+  expiresAt: new Date(feedGeneratedAt + 90 * 24 * 60 * 60 * 1000).toISOString(),
   latest: "2.0.0",
   versions: [
     {
@@ -55,7 +60,7 @@ beforeEach(() => {
     info: vi.fn(),
     warn: vi.fn(),
   });
-  fetchTextMock.mockResolvedValue(JSON.stringify(VALID_MANIFEST));
+  readSignedFeedMock.mockResolvedValue(VALID_MANIFEST);
 });
 
 describe("createRegistryYankLookup", () => {
@@ -64,25 +69,18 @@ describe("createRegistryYankLookup", () => {
 
     await expect(lookup.isVersionYanked("2.0.0")).resolves.toBe(true);
     await expect(lookup.isVersionYanked("9.9.9")).resolves.toBe(false);
-    expect(fetchTextMock).toHaveBeenCalledTimes(1);
+    expect(readSignedFeedMock).toHaveBeenCalledTimes(1);
   });
 
   it("fails open on network failure", async () => {
-    fetchTextMock.mockRejectedValue(new Error("offline"));
-    const lookup = createRegistryYankLookup("production");
-
-    await expect(lookup.isVersionYanked("2.0.0")).resolves.toBe(false);
-  });
-
-  it("fails open on invalid JSON", async () => {
-    fetchTextMock.mockResolvedValue("not-json");
+    readSignedFeedMock.mockRejectedValue(new Error("offline"));
     const lookup = createRegistryYankLookup("production");
 
     await expect(lookup.isVersionYanked("2.0.0")).resolves.toBe(false);
   });
 
   it("fails open on invalid manifest", async () => {
-    fetchTextMock.mockResolvedValue(JSON.stringify({ schemaVersion: 2 }));
+    readSignedFeedMock.mockResolvedValue({ schemaVersion: 3 });
     const lookup = createRegistryYankLookup("production");
 
     await expect(lookup.isVersionYanked("2.0.0")).resolves.toBe(false);
@@ -91,9 +89,14 @@ describe("createRegistryYankLookup", () => {
   it("fails open when a blackholed request is ended by the lookup watchdog", async () => {
     vi.useFakeTimers();
     let signalAborted = false;
-    fetchTextMock.mockImplementation(
-      (_url: string, opts: { readonly signal: AbortSignal }) => {
-        return new Promise<string>((_resolve, reject) => {
+    readSignedFeedMock.mockImplementation(
+      (opts: { readonly signal: AbortSignal }) => {
+        return new Promise<Record<string, unknown>>((_resolve, reject) => {
+          if (opts.signal.aborted) {
+            signalAborted = true;
+            reject(new Error("aborted"));
+            return;
+          }
           opts.signal.addEventListener(
             "abort",
             () => {
