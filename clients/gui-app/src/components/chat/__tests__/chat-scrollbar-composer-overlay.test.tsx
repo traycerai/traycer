@@ -628,6 +628,7 @@ function viewerSurfacesProps(): ChatLowerInteractionSurfacesProps {
     nodeId: "chat-1",
     isActive: false,
     mentionRoots: [],
+    runWorkingDirectory: null,
     fallbackToGlobalMentionRoots: true,
     currentEpicId: "epic-1",
     onSubmitMessage: () => false,

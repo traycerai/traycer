@@ -231,13 +231,19 @@ export function RootView(props: RootViewProps) {
     [items, effectiveScope],
   );
   const defaultBuckets = useMemo(() => bucketItems(scopedItems), [scopedItems]);
+  // The main bots lead the list and show only there: one that is pinned or
+  // recent is not repeated in those groups.
+  const belowMainBots = useMemo(
+    () => scopedItems.filter((item) => item.group !== "mainBots"),
+    [scopedItems],
+  );
   const pinned = useMemo(
-    () => buildPinnedBucket(pinnedIds, scopedItems),
-    [pinnedIds, scopedItems],
+    () => buildPinnedBucket(pinnedIds, belowMainBots),
+    [pinnedIds, belowMainBots],
   );
   const recents = useMemo(
-    () => buildRecentsBucket(recentIds, scopedItems),
-    [recentIds, scopedItems],
+    () => buildRecentsBucket(recentIds, belowMainBots),
+    [recentIds, belowMainBots],
   );
 
   const pinnedIdSet = useMemo(() => new Set(pinnedIds), [pinnedIds]);
@@ -249,10 +255,13 @@ export function RootView(props: RootViewProps) {
     pinnedIdSet.forEach((id) => hidden.add(id));
     if (showRecents) recentIdSet.forEach((id) => hidden.add(id));
     const trimmed = defaultBuckets.flatMap((bucket): CommandGroupBucket[] => {
+      if (bucket.id === "mainBots") return [];
       const items = bucket.items.filter((item) => !hidden.has(item.id));
       return items.length > 0 ? [{ ...bucket, items }] : [];
     });
     const buckets: Array<CommandGroupBucket> = [];
+    const mainBots = defaultBuckets.find((bucket) => bucket.id === "mainBots");
+    if (mainBots !== undefined) buckets.push(mainBots);
     if (pinned !== null) buckets.push(pinned);
     if (showRecents && recents !== null) buckets.push(recents);
     const ordered = [...buckets, ...trimmed];

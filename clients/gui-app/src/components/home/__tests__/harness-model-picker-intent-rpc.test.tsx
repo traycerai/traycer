@@ -393,7 +393,6 @@ function modelsResponseFor(
 ): ListGuiAgentModelsResponse {
   return {
     harnessId,
-    profileId: null,
     models: [
       {
         harnessId,
@@ -423,6 +422,9 @@ interface RpcCallLog {
 
 interface PickerRpcFixture {
   readonly calls: RpcCallLog;
+  readonly requiredModelFloors: Array<
+    HostRequestOptions["requiredHostMethodVersion"]
+  >;
   readonly Wrapper: (props: { readonly children: ReactNode }) => ReactNode;
 }
 
@@ -430,6 +432,9 @@ class PickerMockHostMessenger extends MockHostMessenger<HostRpcRegistry> {
   constructor(
     options: MockHostMessengerOptions<HostRpcRegistry>,
     private readonly refuseProfileModels: boolean,
+    private readonly requiredModelFloors: Array<
+      HostRequestOptions["requiredHostMethodVersion"]
+    >,
   ) {
     super(options);
   }
@@ -439,14 +444,22 @@ class PickerMockHostMessenger extends MockHostMessenger<HostRpcRegistry> {
     params: RequestOfMethod<HostRpcRegistry, Method>,
     options: HostRequestOptions,
   ): Promise<ResponseOfMethod<HostRpcRegistry, Method>> {
+    if (method === "agent.gui.listModels") {
+      this.requiredModelFloors.push(options.requiredHostMethodVersion);
+    }
+    const requiredVersion = options.requiredHostMethodVersion;
     if (
       this.refuseProfileModels &&
       method === "agent.gui.listModels" &&
-      options.requiredHostMethodVersion !== null &&
-      options.requiredHostMethodVersion.method === "agent.gui.listModels"
+      requiredVersion !== null &&
+      requiredVersion.method ===
+        AGENT_GUI_LIST_MODELS_PROFILE_REQUIRED_HOST_VERSION.method &&
+      (requiredVersion.version.major > 1 ||
+        (requiredVersion.version.major === 1 &&
+          requiredVersion.version.minor > 1))
     ) {
       throw new HostMethodVersionUnsatisfiedError({
-        requirement: AGENT_GUI_LIST_MODELS_PROFILE_REQUIRED_HOST_VERSION,
+        requirement: requiredVersion,
         negotiated: { major: 1, minor: 1 },
         requestId: "req-old-host-profile-models",
         method,
@@ -473,6 +486,9 @@ function createPickerRpcFixture(
   },
 ): PickerRpcFixture {
   const calls: RpcCallLog = { listModels: [], listCommands: [] };
+  const requiredModelFloors: Array<
+    HostRequestOptions["requiredHostMethodVersion"]
+  > = [];
   const queryClient = createAppQueryClient();
   let requestCounter = 0;
   const spine = new HostClient<HostRpcRegistry>({
@@ -514,6 +530,7 @@ function createPickerRpcFixture(
         },
       },
       options.refuseProfileModels ?? false,
+      requiredModelFloors,
     ),
   });
   spine.setRequestContext(
@@ -526,7 +543,7 @@ function createPickerRpcFixture(
       {props.children}
     </QueryClientProvider>
   );
-  return { calls, Wrapper };
+  return { calls, requiredModelFloors, Wrapper };
 }
 
 function countFor(
@@ -1022,6 +1039,9 @@ describe("<HarnessModelPicker /> real-RPC intent edges", () => {
     await screen.findByText(
       "Update this host to load models for this account.",
     );
+    expect(fixture.requiredModelFloors).toEqual([
+      AGENT_GUI_LIST_MODELS_PROFILE_REQUIRED_HOST_VERSION,
+    ]);
 
     expect(screen.queryByText("Loading models")).toBeNull();
     expect(screen.queryByTestId("virtuoso-scroller")).toBeNull();

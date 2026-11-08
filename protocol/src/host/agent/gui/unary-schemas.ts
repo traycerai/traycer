@@ -807,7 +807,7 @@ export const listGuiAgentModelsRequestSchema = lazySchema(() =>
   }),
 );
 export type ListGuiAgentModelsRequest = z.infer<
-  typeof listGuiAgentModelsRequestSchemaV12
+  typeof listGuiAgentModelsRequestSchema
 >;
 
 /**
@@ -822,22 +822,25 @@ export const listGuiAgentModelsRequestSchemaV11 = lazySchema(() =>
   }),
 );
 
-/** `agent.gui.listModels@1.2`: null selects the ambient login. */
+/**
+ * 1.2 carries the account whose model list is wanted, as
+ * `listGuiAgentCommandsRequestSchemaV11` does for commands: a provider's
+ * models and their speed tiers are the account's (Codex advertises a tier
+ * per plan), so a picker on a managed profile asks for that profile's list.
+ * Absent or `null` (and every 1.1 caller) is the ambient account; absent
+ * rather than defaulted so an ambient request's bytes, and the cache slot the
+ * client keys on them, are the 1.1 ones.
+ */
 export const listGuiAgentModelsRequestSchemaV12 = lazySchema(() =>
   listGuiAgentModelsRequestSchemaV11.extend({
     profileId: z.string().nullable().optional(),
   }),
 );
 
-export const listGuiAgentModelsResponseSchemaV11 = lazySchema(() =>
+export const listGuiAgentModelsResponseSchema = lazySchema(() =>
   z.object({
     harnessId: guiHarnessIdSchema,
     models: z.array(guiAgentModelOptionSchema),
-  }),
-);
-export const listGuiAgentModelsResponseSchema = lazySchema(() =>
-  listGuiAgentModelsResponseSchemaV11.extend({
-    profileId: z.string().nullable(),
   }),
 );
 export type ListGuiAgentModelsResponse = z.infer<

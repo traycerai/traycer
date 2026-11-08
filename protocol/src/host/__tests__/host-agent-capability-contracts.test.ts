@@ -1,5 +1,8 @@
 import { describe, expect, it } from "vitest";
-import { hostRpcRegistry } from "@traycer/protocol/host/index";
+import {
+  hostRpcRegistry,
+  HOST_AGENT_CREATE_SERVICE_TIER_REQUIRED_HOST_VERSION,
+} from "@traycer/protocol/host/index";
 import { RELEASED_FLOOR_METHOD_NAMES } from "@traycer/protocol/host/released-floor";
 import { agentArchiveV10 } from "@traycer/protocol/host/agent/archive";
 import {
@@ -8,6 +11,8 @@ import {
   HOST_FILE_TRANSFER_MAX_CHUNK_BYTES,
   HOST_FILE_TRANSFER_UNREADABLE_MESSAGE_MAX_LENGTH,
   hostAgentCreateFromRemoteSenderV10,
+  hostAgentCreateFromRemoteSenderV11,
+  hostAgentCreateFromRemoteSenderUpgradeV10ToV11,
   hostFileCopyCancelV10,
   hostFileCopyFailureSchema,
   hostFileCopyManifestSchema,
@@ -485,6 +490,59 @@ describe("host-agent capability contracts", () => {
           workspaceIntent: null,
         }).success,
       ).toBe(false);
+    });
+
+    it("keeps v1.0 frozen and carries a named service tier on v1.1", () => {
+      const baseRequest = {
+        ...CREATE_FIELDS,
+        senderFacts: GUI_SENDER_FACTS,
+        workspaceIntent: null,
+      } as const;
+      const v10Request =
+        hostAgentCreateFromRemoteSenderV10.requestSchema.parse(baseRequest);
+
+      expect(
+        hostAgentCreateFromRemoteSenderV10.requestSchema.parse({
+          ...baseRequest,
+          serviceTier: "ultrafast",
+        }),
+      ).not.toHaveProperty("serviceTier");
+      expect(
+        hostAgentCreateFromRemoteSenderV11.requestSchema.parse({
+          ...baseRequest,
+          serviceTier: "ultrafast",
+        }).serviceTier,
+      ).toBe("ultrafast");
+      expect(
+        hostAgentCreateFromRemoteSenderV11.requestSchema.parse({
+          ...baseRequest,
+          serviceTier: null,
+        }).serviceTier,
+      ).toBeNull();
+      expect(
+        hostAgentCreateFromRemoteSenderUpgradeV10ToV11.upgradeRequest(
+          v10Request,
+        ),
+      ).toEqual(v10Request);
+      expect(
+        hostRpcRegistry["host.agent.createFromRemoteSender"][1].latestMinor,
+      ).toBe(1);
+      expect(
+        hostRpcRegistry["host.agent.createFromRemoteSender"][1].versions[1]
+          .contract,
+      ).toBe(hostAgentCreateFromRemoteSenderV11);
+      expect(HOST_AGENT_CREATE_SERVICE_TIER_REQUIRED_HOST_VERSION).toEqual({
+        method: "host.agent.createFromRemoteSender",
+        version: { major: 1, minor: 1 },
+      });
+      expect(
+        Object.isFrozen(HOST_AGENT_CREATE_SERVICE_TIER_REQUIRED_HOST_VERSION),
+      ).toBe(true);
+      expect(
+        Object.isFrozen(
+          HOST_AGENT_CREATE_SERVICE_TIER_REQUIRED_HOST_VERSION.version,
+        ),
+      ).toBe(true);
     });
 
     it("takes a TUI sender's launch tuple and refuses a GUI-only harness there", () => {

@@ -30,8 +30,10 @@ function catalog(
       keepsUnavailablePick: false,
       harnesses,
       modelsHarnessId: "codex",
+      modelsProfileId: null,
       models: [],
       modelsLoaded: true,
+      modelsFailed: false,
       tuiOnly: false,
     },
   };

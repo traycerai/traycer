@@ -14,7 +14,6 @@ import {
   listGuiAgentModelsRequestSchemaV11,
   listGuiAgentModelsRequestSchemaV12,
   listGuiAgentModelsResponseSchema,
-  listGuiAgentModelsResponseSchemaV11,
   listGuiHarnessesRequestSchema,
   listGuiHarnessesResponseSchema,
   listGuiHarnessesResponseSchemaV10,
@@ -1401,7 +1400,7 @@ export const agentGuiListModelsV10 = defineRpcContract({
   method: "agent.gui.listModels",
   schemaVersion: { major: 1, minor: 0 } as const,
   requestSchema: listGuiAgentModelsRequestSchema,
-  responseSchema: listGuiAgentModelsResponseSchemaV11,
+  responseSchema: listGuiAgentModelsResponseSchema,
 });
 
 /**
@@ -1412,7 +1411,7 @@ export const agentGuiListModelsV11 = defineRpcContract({
   method: "agent.gui.listModels",
   schemaVersion: { major: 1, minor: 1 } as const,
   requestSchema: listGuiAgentModelsRequestSchemaV11,
-  responseSchema: listGuiAgentModelsResponseSchemaV11,
+  responseSchema: listGuiAgentModelsResponseSchema,
 });
 
 export const agentGuiListModelsUpgradeV10ToV11 = defineUpgradePath<
@@ -1425,6 +1424,11 @@ export const agentGuiListModelsUpgradeV10ToV11 = defineUpgradePath<
   upgradeResponse: (response) => response,
 });
 
+/**
+ * `agent.gui.listModels@1.2`: the account whose models are listed, like
+ * `agent.gui.listCommands@1.1`'s. A 1.1 request is the ambient account's; a
+ * host below 1.2 lists the ambient account's whatever the client asked.
+ */
 export const agentGuiListModelsV12 = defineRpcContract({
   method: "agent.gui.listModels",
   schemaVersion: { major: 1, minor: 2 } as const,
@@ -1436,10 +1440,10 @@ export const agentGuiListModelsUpgradeV11ToV12 = defineUpgradePath<
   typeof agentGuiListModelsV11,
   typeof agentGuiListModelsV12
 >({
-  from: agentGuiListModelsV11.schemaVersion,
-  to: agentGuiListModelsV12.schemaVersion,
+  from: { major: 1, minor: 1 },
+  to: { major: 1, minor: 2 },
   upgradeRequest: (request) => request,
-  upgradeResponse: (response) => ({ ...response, profileId: null }),
+  upgradeResponse: (response) => response,
 });
 
 export const agentGuiListCommandsV10 = defineRpcContract({

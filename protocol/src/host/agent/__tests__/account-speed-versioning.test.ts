@@ -33,7 +33,6 @@ import {
   listGuiAgentModelsRequestSchemaV11,
   listGuiAgentModelsRequestSchemaV12,
   listGuiAgentModelsResponseSchema,
-  listGuiAgentModelsResponseSchemaV11,
 } from "../gui/unary-schemas";
 
 const createRequest = {
@@ -225,35 +224,28 @@ describe("per-account speed protocol versions", () => {
     ).toMatchObject({ ok: false, error: { code: "DOWNGRADE_UNSUPPORTED" } });
   });
 
-  it("echoes the selected account on GUI model catalogs and fills null for older hosts", () => {
+  it("adds profile selection to GUI model catalog requests at 1.2", () => {
+    const request = {
+      harnessId: "codex",
+      workingDirectory: null,
+    } as const;
     expect(
       listGuiAgentModelsRequestSchemaV11.parse({
-        harnessId: "codex",
-        workingDirectory: null,
+        ...request,
         profileId: "profile-work",
       }),
     ).not.toHaveProperty("profileId");
     expect(
       listGuiAgentModelsRequestSchemaV12.parse({
-        harnessId: "codex",
-        workingDirectory: null,
+        ...request,
         profileId: "profile-work",
       }).profileId,
     ).toBe("profile-work");
-    expect(
-      listGuiAgentModelsResponseSchemaV11.parse(guiModelsResponse),
-    ).not.toHaveProperty("profileId");
     expect(
       agentGuiListModelsUpgradeV11ToV12.upgradeResponse(
-        listGuiAgentModelsResponseSchemaV11.parse(guiModelsResponse),
+        listGuiAgentModelsResponseSchema.parse(guiModelsResponse),
       ),
-    ).toEqual({ ...guiModelsResponse, profileId: null });
-    expect(
-      listGuiAgentModelsResponseSchema.parse({
-        ...guiModelsResponse,
-        profileId: "profile-work",
-      }).profileId,
-    ).toBe("profile-work");
+    ).toEqual(guiModelsResponse);
   });
 
   it("adds nullable serviceTier to current run configuration while preserving the released line", () => {

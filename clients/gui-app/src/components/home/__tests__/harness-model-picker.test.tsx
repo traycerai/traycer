@@ -236,7 +236,7 @@ const queryMock = vi.hoisted(() => ({
     modelClients: [] as Array<string | null>,
     modelProfiles: [] as Array<{
       readonly harnessId: string;
-      readonly profileId: string | null;
+      readonly profileId?: string | null;
       readonly enabled: boolean;
     }>,
     providers: [] as Array<{
@@ -600,7 +600,7 @@ vi.mock("@/hooks/harnesses/use-gui-harness-catalog", () => ({
   ) => {
     queryMock.calls.modelProfiles.push({
       harnessId,
-      profileId: activity.profileId ?? null,
+      profileId: activity.profileId,
       enabled: activity.enabled,
     });
     queryMock.calls.models.push({
@@ -1071,6 +1071,8 @@ interface RenderPickerInput {
    * query catalog above, which drives the rows/rail/trigger.
    */
   readonly storeModels?: ReadonlyArray<ModelOption>;
+  /** Account the injected store catalog actually came from; defaults ambient. */
+  readonly storeModelsProfileId?: string | null;
   readonly withServiceTier?: boolean;
   readonly withReasoning?: boolean;
   readonly tuiOnly?: boolean;
@@ -1147,8 +1149,10 @@ function pickerHarnessWith(
       hostId,
       harnesses: undefined,
       modelsHarnessId: selection.harnessId,
+      modelsProfileId: resolvedInput.storeModelsProfileId ?? null,
       models: resolvedInput.storeModels,
       modelsLoaded: true,
+      modelsFailed: false,
       tuiOnly: resolvedInput.tuiOnly ?? false,
       chatLineCarriesAutoMode: null,
       ultracodeCarried: surface.carried,
@@ -1599,14 +1603,17 @@ describe("<HarnessModelPicker />", () => {
     store: ComposerToolbarStore,
     modelsHarnessId: ProviderId,
     models: ReadonlyArray<ModelOption>,
+    modelsProfileId: string | null,
   ): void {
     act(() => {
       store.getState().setCatalog({
         hostId: TEST_HOST_ID,
         harnesses: undefined,
         modelsHarnessId,
+        modelsProfileId,
         models,
         modelsLoaded: true,
+        modelsFailed: false,
         tuiOnly: false,
         chatLineCarriesAutoMode: null,
         ultracodeCarried: false,
@@ -4714,18 +4721,23 @@ describe("<HarnessModelPicker />", () => {
     fireEvent.click(screen.getByRole("tab", { name: "Claude" }));
     // Hook reloads Claude's catalog post-switch; the committed (empty) slug
     // resolves to the first Claude model, which exposes thinking levels.
-    pushStoreCatalog(store, "claude", [
-      model({
-        harnessId: "claude",
-        slug: "claude-opus-4-7",
-        label: "Claude Opus 4.7",
-        defaultReasoningEffort: "low",
-        supportedReasoningEfforts: [
-          { id: "low", label: "Low", description: null },
-          { id: "high", label: "High", description: null },
-        ],
-      }),
-    ]);
+    pushStoreCatalog(
+      store,
+      "claude",
+      [
+        model({
+          harnessId: "claude",
+          slug: "claude-opus-4-7",
+          label: "Claude Opus 4.7",
+          defaultReasoningEffort: "low",
+          supportedReasoningEfforts: [
+            { id: "low", label: "Low", description: null },
+            { id: "high", label: "High", description: null },
+          ],
+        }),
+      ],
+      null,
+    );
     act(() => {
       fireLeaderDigit(2, "alt", false);
     });
@@ -5063,13 +5075,18 @@ describe("<HarnessModelPicker />", () => {
       profileId: null,
     });
 
-    pushStoreCatalog(store, "claude", [
-      model({
-        harnessId: "claude",
-        slug: "claude-opus-4-7",
-        label: "Claude Opus 4.7",
-      }),
-    ]);
+    pushStoreCatalog(
+      store,
+      "claude",
+      [
+        model({
+          harnessId: "claude",
+          slug: "claude-opus-4-7",
+          label: "Claude Opus 4.7",
+        }),
+      ],
+      null,
+    );
 
     // Catalog loaded WITHOUT the stale slug -> resolves to the first model.
     expect(store.getState().selection).toEqual({
@@ -5899,8 +5916,10 @@ describe("<HarnessModelPicker />", () => {
             hostId: TEST_HOST_ID,
             harnesses: catalogHarnesses,
             modelsHarnessId: "claude",
+            modelsProfileId: null,
             models: CLAUDE_MODELS,
             modelsLoaded: true,
+            modelsFailed: false,
             tuiOnly: false,
             chatLineCarriesAutoMode: null,
             ultracodeCarried: true,

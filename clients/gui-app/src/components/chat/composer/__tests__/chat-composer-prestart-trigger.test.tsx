@@ -363,6 +363,7 @@ function composerElement() {
       sendDisabled={false}
       sendDisabledHint={null}
       mentionRoots={["/repo"]}
+      runWorkingDirectory={null}
       fallbackToGlobalMentionRoots={false}
       currentEpicId="epic-1"
       viewTabId={null}

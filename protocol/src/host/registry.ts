@@ -405,8 +405,8 @@ import {
   agentGuiListModelsV10,
   agentGuiListModelsV11,
   agentGuiListModelsV12,
-  agentGuiListModelsUpgradeV11ToV12,
   agentGuiListModelsUpgradeV10ToV11,
+  agentGuiListModelsUpgradeV11ToV12,
   chatSubscribeV10,
   chatSubscribeV11,
   chatSubscribeV12,
@@ -660,6 +660,8 @@ import {
 } from "@traycer/protocol/host/managed-command/contracts";
 import {
   hostAgentCreateFromRemoteSenderV10,
+  hostAgentCreateFromRemoteSenderV11,
+  hostAgentCreateFromRemoteSenderUpgradeV10ToV11,
   hostFileCopyCancelV10,
   hostFileCopyStartV10,
   hostFileCopyStatusV10,
@@ -814,6 +816,7 @@ import {
   hostGetRateLimitUsageDowngradeV6ToV4,
   hostGetRateLimitUsageDowngradeV6ToV5,
   providersConsumeRateLimitResetCreditV10,
+  providersReadModelRoutesV10,
   providersRefreshProfileStatusV10,
   providersRefreshProfileStatusV20,
   providersRefreshProfileStatusV30,
@@ -1275,6 +1278,7 @@ import {
   hostNotificationsCloudFeedSubscribeV15,
   hostNotificationsCloudFeedSubscribeV16,
   hostNotificationsCloudFeedSubscribeV17,
+  hostNotificationsCloudFeedSubscribeV18,
   hostNotificationsCloudFeedMarkRead,
   hostNotificationsCloudFeedMarkAllRead,
   hostNotificationsCloudFeedResolve,
@@ -5140,6 +5144,12 @@ export const AGENT_FORK_SPEED_REQUIRED_HOST_VERSION: RequiredHostMethodVersion =
     version: { major: 1, minor: 1 },
   };
 
+export const HOST_AGENT_CREATE_SERVICE_TIER_REQUIRED_HOST_VERSION =
+  Object.freeze({
+    method: "host.agent.createFromRemoteSender",
+    version: Object.freeze({ major: 1, minor: 1 }),
+  }) satisfies RequiredHostMethodVersion;
+
 // ── Per-pack version-manager methods + the on-demand discovery refresh ─────
 //
 // BRAND-NEW method names, each at `@1.0`, all registered below with
@@ -7533,6 +7543,19 @@ const HOST_RPC_REGISTRY_BASE_DEFINITION = {
       versions: {
         0: {
           contract: providersConsumeRateLimitResetCreditV10,
+          upgradeFromPreviousVersion: null,
+        },
+      },
+      downgradePathsFromLatest: {},
+    },
+  },
+  "providers.readModelRoutes": {
+    degrade: { kind: "unsupported" },
+    1: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: providersReadModelRoutesV10,
           upgradeFromPreviousVersion: null,
         },
       },
@@ -11732,11 +11755,16 @@ const HOST_RPC_REGISTRY_BASE_TAIL_DEFINITION = {
   "host.agent.createFromRemoteSender": {
     degrade: { kind: "unsupported" },
     1: {
-      latestMinor: 0,
+      latestMinor: 1,
       versions: {
         0: {
           contract: hostAgentCreateFromRemoteSenderV10,
           upgradeFromPreviousVersion: null,
+        },
+        1: {
+          contract: hostAgentCreateFromRemoteSenderV11,
+          upgradeFromPreviousVersion:
+            hostAgentCreateFromRemoteSenderUpgradeV10ToV11,
         },
       },
       downgradePathsFromLatest: {},
@@ -15253,7 +15281,7 @@ const HOST_STREAM_RPC_REGISTRY_NOTIFICATIONS_DEFINITION = {
   },
   "host.notifications.cloudFeed.subscribe": {
     1: {
-      latestMinor: 7,
+      latestMinor: 8,
       versions: {
         0: {
           contract: hostNotificationsCloudFeedSubscribeV10,
@@ -15279,6 +15307,7 @@ const HOST_STREAM_RPC_REGISTRY_NOTIFICATIONS_DEFINITION = {
         },
         6: { contract: hostNotificationsCloudFeedSubscribeV16 },
         7: { contract: hostNotificationsCloudFeedSubscribeV17 },
+        8: { contract: hostNotificationsCloudFeedSubscribeV18 },
       },
     },
   },

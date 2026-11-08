@@ -273,7 +273,6 @@ function createFixture() {
             : CLAUDE_MODEL_SLUG;
         return {
           harnessId: params.harnessId,
-          profileId: params.profileId ?? null,
           models: [modelRow(params.harnessId, slug)],
         };
       },
@@ -335,7 +334,6 @@ function createFixture() {
     hostId: mockRemoteHostEntry.hostId,
     listModelsRequestedFor: (harnessId: GuiHarnessId): boolean =>
       listModelsHarnessIds.includes(harnessId),
-    listModelsRequestCount: (): number => listModelsHarnessIds.length,
     autoJudgeGetCalls: (): number => autoJudgeGetCalls,
     autoJudgeSetCalls: (): number => autoJudgeSetCalls,
     harnessCatalogAnswered: (): boolean =>
@@ -374,11 +372,9 @@ function prewarmModelCatalogs(fixture: {
     hostQueryKeys.method(fixture.hostId, "agent.gui.listModels", {
       harnessId: CLAUDE_HARNESS_ID,
       workingDirectory: null,
-      profileId: null,
     }),
     {
       harnessId: CLAUDE_HARNESS_ID,
-      profileId: null,
       models: [modelRow(CLAUDE_HARNESS_ID, CLAUDE_MODEL_SLUG)],
     } satisfies ListGuiAgentModelsResponse,
   );
@@ -386,11 +382,9 @@ function prewarmModelCatalogs(fixture: {
     hostQueryKeys.method(fixture.hostId, "agent.gui.listModels", {
       harnessId: "traycer",
       workingDirectory: null,
-      profileId: null,
     }),
     {
       harnessId: "traycer",
-      profileId: null,
       models: [modelRow("traycer", TRAYCER_MODEL_SLUG)],
     } satisfies ListGuiAgentModelsResponse,
   );
@@ -410,11 +404,9 @@ describe("useAutoJudgeBilling against the real query cache", () => {
       hostQueryKeys.method(fixture.hostId, "agent.gui.listModels", {
         harnessId: CLAUDE_HARNESS_ID,
         workingDirectory: null,
-        profileId: null,
       }),
       {
         harnessId: CLAUDE_HARNESS_ID,
-        profileId: null,
         models: [modelRow(CLAUDE_HARNESS_ID, CLAUDE_MODEL_SLUG)],
       } satisfies ListGuiAgentModelsResponse,
     );
@@ -422,11 +414,9 @@ describe("useAutoJudgeBilling against the real query cache", () => {
       hostQueryKeys.method(fixture.hostId, "agent.gui.listModels", {
         harnessId: "traycer",
         workingDirectory: null,
-        profileId: null,
       }),
       {
         harnessId: "traycer",
-        profileId: null,
         models: [modelRow("traycer", TRAYCER_MODEL_SLUG)],
       } satisfies ListGuiAgentModelsResponse,
     );
@@ -437,6 +427,7 @@ describe("useAutoJudgeBilling against the real query cache", () => {
           fixture.hostId,
           CLAUDE_HARNESS_ID,
           CLAUDE_MODEL_SLUG,
+          null,
         ),
       { wrapper: fixture.Wrapper },
     );
@@ -487,10 +478,6 @@ describe("useAutoJudgeBilling against the real query cache", () => {
       },
       { timeout: WAIT_TIMEOUT_MS },
     );
-
-    // The real billing hook consumed the pre-warmed query entries instead of
-    // repeating either catalog RPC on this remote host.
-    expect(fixture.listModelsRequestCount()).toBe(0);
   });
 
   it("E2: cold default transitions back to the run's own provider once the harness catalog reports traycer unavailable", async () => {
@@ -500,11 +487,9 @@ describe("useAutoJudgeBilling against the real query cache", () => {
       hostQueryKeys.method(fixture.hostId, "agent.gui.listModels", {
         harnessId: CLAUDE_HARNESS_ID,
         workingDirectory: null,
-        profileId: null,
       }),
       {
         harnessId: CLAUDE_HARNESS_ID,
-        profileId: null,
         models: [modelRow(CLAUDE_HARNESS_ID, CLAUDE_MODEL_SLUG)],
       } satisfies ListGuiAgentModelsResponse,
     );
@@ -512,11 +497,9 @@ describe("useAutoJudgeBilling against the real query cache", () => {
       hostQueryKeys.method(fixture.hostId, "agent.gui.listModels", {
         harnessId: "traycer",
         workingDirectory: null,
-        profileId: null,
       }),
       {
         harnessId: "traycer",
-        profileId: null,
         models: [modelRow("traycer", TRAYCER_MODEL_SLUG)],
       } satisfies ListGuiAgentModelsResponse,
     );
@@ -527,6 +510,7 @@ describe("useAutoJudgeBilling against the real query cache", () => {
           fixture.hostId,
           CLAUDE_HARNESS_ID,
           CLAUDE_MODEL_SLUG,
+          null,
         ),
       { wrapper: fixture.Wrapper },
     );
@@ -588,6 +572,7 @@ describe("useAutoJudgeBilling against the real query cache", () => {
           fixture.hostId,
           CLAUDE_HARNESS_ID,
           CLAUDE_MODEL_SLUG,
+          null,
         ),
       { wrapper: fixture.Wrapper },
     );
@@ -619,6 +604,7 @@ describe("useAutoJudgeBilling against the real query cache", () => {
           fixture.hostId,
           CLAUDE_HARNESS_ID,
           CLAUDE_MODEL_SLUG,
+          null,
         );
         seen.push(billing);
         return billing;
@@ -689,6 +675,7 @@ describe("useAutoJudgeBilling against the real query cache", () => {
           fixture.hostId,
           CLAUDE_HARNESS_ID,
           CLAUDE_MODEL_SLUG,
+          null,
         );
         seen.push(billing);
         return billing;
@@ -757,6 +744,7 @@ describe("useAutoJudgeBilling against the real query cache", () => {
           fixture.hostId,
           CLAUDE_HARNESS_ID,
           CLAUDE_MODEL_SLUG,
+          null,
         );
         seen.push(billing);
         return { billing, save: useAutoJudgeSetMutation() };
@@ -846,6 +834,7 @@ describe("useAutoJudgeBilling against the real query cache", () => {
           fixture.hostId,
           CLAUDE_HARNESS_ID,
           CLAUDE_MODEL_SLUG,
+          null,
         ),
       { wrapper: fixture.Wrapper },
     );

@@ -1025,9 +1025,10 @@ function RoutingCatalogSync({
     client,
     harnessId,
     null,
-    { enabled: open && available, subscribed: open, profileId },
+    { profileId, enabled: open && available, subscribed: open },
   );
   const models = modelsQuery.data?.models;
+  const modelsFailed = modelsQuery.isError && models === undefined;
   useEffect(() => {
     store.getState().setCatalog({
       hostId: null,
@@ -1035,13 +1036,15 @@ function RoutingCatalogSync({
       ultracodeCarried: false,
       harnesses,
       modelsHarnessId: harnessId,
+      modelsProfileId: profileId,
       models: models ?? [],
       modelsLoaded: models !== undefined,
+      modelsFailed,
       tuiOnly: false,
       // A setting, not a run: nothing is swapped here in the first place.
       keepsUnavailablePick: false,
     });
-  }, [store, harnesses, harnessId, models]);
+  }, [store, harnesses, harnessId, profileId, models, modelsFailed]);
   return null;
 }
 

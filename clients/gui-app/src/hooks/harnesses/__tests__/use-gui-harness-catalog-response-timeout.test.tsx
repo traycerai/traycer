@@ -68,11 +68,7 @@ function createFixture(): {
       requestId: () => `req-${Math.random().toString(36).slice(2)}`,
       handlers: {
         "agent.gui.listHarnesses": () => ({ harnesses: harnesses() }),
-        "agent.gui.listModels": () => ({
-          harnessId: "claude",
-          profileId: null,
-          models: [],
-        }),
+        "agent.gui.listModels": () => ({ harnessId: "claude", models: [] }),
         "agent.gui.listCommands": () => ({
           harnessId: "claude",
           commands: [],
@@ -117,12 +113,10 @@ describe("catalog hooks carry the catalog response allowance", () => {
     const fixture = createFixture();
     renderHook(
       () =>
-        useGuiHarnessModelsQueryForClient(
-          fixture.client,
-          "claude",
-          null,
-          ACTIVE,
-        ),
+        useGuiHarnessModelsQueryForClient(fixture.client, "claude", null, {
+          profileId: null,
+          ...ACTIVE,
+        }),
       { wrapper: fixture.Wrapper },
     );
     await waitFor(() => {

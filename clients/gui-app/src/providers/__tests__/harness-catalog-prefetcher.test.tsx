@@ -54,13 +54,9 @@ function harnesses(
   }));
 }
 
-function modelsResponse(
-  harnessId: GuiHarnessId,
-  profileId: string | null,
-): ListGuiAgentModelsResponse {
+function modelsResponse(harnessId: GuiHarnessId): ListGuiAgentModelsResponse {
   return {
     harnessId,
-    profileId,
     models: [
       {
         harnessId,
@@ -111,7 +107,7 @@ describe("HarnessCatalogPrefetcher", () => {
           },
           "agent.gui.listModels": (params) => {
             calls.listModels.push(params.harnessId);
-            return modelsResponse(params.harnessId, params.profileId ?? null);
+            return modelsResponse(params.harnessId);
           },
         },
       }),
@@ -169,7 +165,7 @@ describe("HarnessCatalogPrefetcher", () => {
           }),
           "agent.gui.listModels": (params) => {
             calls.listModels.push(params.harnessId);
-            return modelsResponse(params.harnessId, params.profileId ?? null);
+            return modelsResponse(params.harnessId);
           },
         },
       }),
@@ -195,6 +191,7 @@ describe("HarnessCatalogPrefetcher", () => {
 
     function BootSurface(): ReactNode {
       useGuiHarnessModelsQueryForClient(client, "claude", null, {
+        profileId: null,
         enabled: true,
         subscribed: true,
       });

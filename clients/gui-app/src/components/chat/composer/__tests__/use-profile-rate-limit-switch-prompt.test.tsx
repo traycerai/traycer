@@ -22,6 +22,18 @@ vi.mock("@/hooks/providers/use-providers-list-query", () => ({
       : { data: undefined },
 }));
 
+vi.mock("@/hooks/host/use-host-supports-method", () => ({
+  useHostSupportsMethod: () => false,
+}));
+
+vi.mock("@/hooks/providers/use-providers-read-model-routes-query", () => ({
+  useProvidersReadModelRoutesQuery: () => ({
+    data: undefined,
+    dataUpdatedAt: 0,
+    refetch: vi.fn(),
+  }),
+}));
+
 import {
   type ProfileRateLimitSwitchPrompt,
   useProfileRateLimitSwitchPrompt,
@@ -132,6 +144,8 @@ function claudeState(
 function currentPrompt(profileId: string | null) {
   return renderHook(() =>
     useProfileRateLimitSwitchPrompt({
+      workingDirectory: null,
+      hostId: null,
       harnessId: "claude",
       profileId,
       selectedModel: null,
@@ -148,6 +162,8 @@ function currentPromptForModel(
   return renderHook(
     (props: { readonly selectedModel: ModelOption | null }) =>
       useProfileRateLimitSwitchPrompt({
+        workingDirectory: null,
+        hostId: null,
         harnessId: "claude",
         profileId,
         selectedModel: props.selectedModel,
@@ -233,6 +249,8 @@ describe("useProfileRateLimitSwitchPrompt", () => {
     mocks.providers = profiles === null ? [] : [claudeState(profiles)];
     const { result } = renderHook(() =>
       useProfileRateLimitSwitchPrompt({
+        workingDirectory: null,
+        hostId: null,
         harnessId: "claude",
         profileId,
         selectedModel: null,

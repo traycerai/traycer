@@ -143,8 +143,10 @@ function publishCatalog(
     ultracodeCarried: carried,
     harnesses: HARNESS_OPTIONS,
     modelsHarnessId: harnessId,
+    modelsProfileId: null,
     models: [fixtureModel(harnessId, offered)],
     modelsLoaded: true,
+    modelsFailed: false,
     tuiOnly: false,
     keepsUnavailablePick: false,
   });
@@ -226,10 +228,9 @@ const messengerFactory: MessengerFactory<HostRpcRegistry> = ({ registry }) =>
         previousExit: null,
       }),
       "agent.gui.listHarnesses": () => ({ harnesses: HARNESS_OPTIONS }),
-      "agent.gui.listModels": (params) => ({
-        harnessId: params.harnessId,
-        profileId: params.profileId ?? null,
-        models: [fixtureModel(params.harnessId, catalogState.offered)],
+      "agent.gui.listModels": ({ harnessId }) => ({
+        harnessId,
+        models: [fixtureModel(harnessId, catalogState.offered)],
       }),
       "agent.gui.listCommands": ({ harnessId }) => ({
         harnessId,
