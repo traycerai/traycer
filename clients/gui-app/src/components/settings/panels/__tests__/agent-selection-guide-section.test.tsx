@@ -398,22 +398,21 @@ describe("AgentSelectionGuideSection", () => {
     expect(screen.queryByTestId("host-environment-section")).toBeNull();
   });
 
-  it("shows the editor purpose once without rendering a repeated heading", () => {
+  // Regression: the scope refactor wrapped the loaded state in a frame that
+  // printed the title, while `AgentSelectionGuideEditorSurface` was already
+  // printing its own - so the panel showed the heading twice.
+  it("prints the guide heading exactly once in each state", () => {
     const { rerender, unmount } = renderPanel();
-    const purpose =
-      "The guide agents read when they pick a coding agent, model and effort for work they hand off.";
-    expect(screen.getAllByText(purpose)).toHaveLength(1);
     expect(
-      screen.queryByRole("heading", { name: "Agent selection guide" }),
-    ).toBeNull();
+      screen.getAllByRole("heading", { name: "Agent selection guide" }),
+    ).toHaveLength(1);
 
     guideMocks.queryData = undefined;
     guideMocks.queryIsError = true;
     rerender(strictPanel());
-    expect(screen.queryByText(purpose)).toBeNull();
     expect(
-      screen.queryByRole("heading", { name: "Agent selection guide" }),
-    ).toBeTruthy();
+      screen.getAllByRole("heading", { name: "Agent selection guide" }),
+    ).toHaveLength(1);
     unmount();
   });
 
@@ -548,20 +547,25 @@ describe("AgentSelectionGuideSection", () => {
     ).toBeNull();
   });
 
-  it("shows one purpose sentence in the editor without a separate caption", () => {
+  it("shows the page purpose, guide caption and editor heading with no extra click", () => {
     render(<AgentsSettingsPanel />);
 
     expect(
       screen.getByText(
-        "The guide agents read when they pick a coding agent, model and effort for work they hand off.",
+        "How agents are picked, and the agents each coding agent can start.",
       ),
     ).toBeTruthy();
+    expect(screen.getByTestId("agents-guide-caption").textContent).toBe(
+      "The guide agents read when they pick a coding agent, model and effort for work they hand off.",
+    );
     expect(
       screen.getAllByText(
         "The guide agents read when they pick a coding agent, model and effort for work they hand off.",
       ),
     ).toHaveLength(1);
-    expect(screen.queryByTestId("agents-guide-caption")).toBeNull();
+    expect(
+      screen.getAllByRole("heading", { name: "Agent selection guide" }),
+    ).toHaveLength(1);
     expect(screen.queryByText(/Instructions for choosing Traycer/)).toBeNull();
     expect(screen.queryByText(/Provider-native subagents/)).toBeNull();
     expect(

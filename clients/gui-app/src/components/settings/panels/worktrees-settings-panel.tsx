@@ -76,15 +76,8 @@ import {
   DropdownMenuCheckboxItem,
   DropdownMenuContent,
   DropdownMenuItem,
-  DropdownMenuLabel,
-  DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
-import {
-  Popover,
-  PopoverContent,
-  PopoverTrigger,
-} from "@/components/ui/popover";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -116,7 +109,6 @@ import { useClipboardCopy } from "@/hooks/ui/use-clipboard-copy";
 import { useWorktreeDeleteStreamTransportFactory } from "@/lib/host/use-worktree-delete-stream-transport";
 import type { DurableStreamTransport } from "@/lib/host/durable-stream-transport";
 import { useRefreshSpinner } from "@/hooks/use-refresh-spinner";
-import { useIsMobileViewport } from "@/hooks/ui/use-mobile-viewport";
 import { useRelativeTimestamp } from "@/lib/relative-time";
 import { useWorktreeTaskTitles } from "./use-worktree-task-titles";
 import { invalidateWorktreeListingAndBindingCaches } from "@/hooks/worktree/invalidations";
@@ -347,45 +339,19 @@ function WorktreesToolbar(props: {
     externalRefreshing: refreshing,
     timeoutMs: WORKTREES_REFRESH_TIMEOUT_MS,
   });
-  const phoneListLayout = useIsMobileViewport();
 
-  // A narrow window has no room for the policy chips, select-all, expand,
-  // freshness, and refresh beside search. Those stay available from the list's
-  // More menu; search and one Filter and sort control stay on the row. The
-  // standalone toolbar (no list) keeps the wide layout at every width.
-  if (phoneListLayout && filters !== null) {
-    return (
-      <div className="@container/worktrees-toolbar flex min-w-0 flex-col gap-2 border-b border-border/40 px-5 py-2.5">
-        <div className="flex min-w-0 items-center gap-2">
-          <WorktreesSearchField
-            searchText={filters.searchText}
-            onSearchChange={filters.onSearchChange}
-            className="relative min-w-0 flex-1"
-          />
-          <WorktreeFilterAndSortMenu filters={filters} />
-          <WorktreesListActionsMenu
-            policies={policies}
-            selectionControls={selectionControls}
-            canRefresh={canRefresh}
-            refreshing={refresh.refreshing}
-            onRefresh={refresh.trigger}
-            lastUpdatedAt={lastUpdatedAt}
-          />
-        </div>
-      </div>
-    );
-  }
-
+  // One toolbar at every width, including a phone. Policy chips, selection,
+  // refresh, search, filter, and sort stay inline and wrap onto extra lines.
   return (
-    <div className="@container/worktrees-toolbar flex flex-col gap-2 border-b border-border/40 px-5 py-2.5">
+    <div className="@container/worktrees-toolbar flex min-w-0 max-w-full flex-col gap-2 border-b border-border/40 px-5 py-2.5">
       {/* The slot on the left held first a host `<Select>`, then a readout of
           the scoped host. Both are gone - the sidebar names that host one row
           away and never scrolls - and it now carries the host's policy chips,
           which wrap onto their own line with the row at narrow widths. */}
-      <div className="flex flex-wrap items-center gap-2">
+      <div className="flex max-w-full flex-wrap items-center gap-2">
         {policies}
         <div
-          className="ml-auto flex min-w-0 flex-wrap items-center justify-end gap-2"
+          className="ml-auto flex max-w-full min-w-0 flex-wrap items-center justify-end gap-2"
           data-testid="worktrees-toolbar-actions"
         >
           {selectionControls}
@@ -474,12 +440,15 @@ function WorktreesFilterControls(props: {
   readonly filters: WorktreesFilterState;
 }): ReactNode {
   const { filters } = props;
+  // Search takes its own line until the toolbar is wide enough to share a
+  // row with filter and sort. Those two keep their label width and wrap
+  // onto the next line instead of truncating.
   return (
-    <div className="grid min-w-0 grid-cols-1 items-center gap-2 @xs/worktrees-toolbar:grid-cols-2 @lg/worktrees-toolbar:grid-cols-[minmax(0,1fr)_auto_auto]">
+    <div className="flex min-w-0 max-w-full flex-wrap items-center gap-2">
       <WorktreesSearchField
         searchText={filters.searchText}
         onSearchChange={filters.onSearchChange}
-        className="relative min-w-0 @xs/worktrees-toolbar:col-span-2 @lg/worktrees-toolbar:col-span-1"
+        className="relative min-w-0 basis-full @lg/worktrees-toolbar:basis-0 @lg/worktrees-toolbar:flex-1"
       />
       <WorktreeFilterMenu
         tierFilters={filters.tierFilters}
@@ -535,7 +504,7 @@ function WorktreeFilterMenu(props: {
           type="button"
           variant="outline"
           size="sm"
-          className="min-w-0"
+          className="max-w-full"
           data-testid="worktrees-filter-trigger"
           aria-label={`Filter: ${label}`}
         >
@@ -604,7 +573,7 @@ function WorktreeSortMenu(props: {
           type="button"
           variant="outline"
           size="sm"
-          className="min-w-0"
+          className="max-w-full"
           data-testid="worktrees-sort-trigger"
           aria-label={`Sort: ${WORKTREE_SORT_LABEL[props.sortMode]}`}
         >
@@ -642,128 +611,6 @@ function WorktreeSortMenu(props: {
         </DropdownMenuCheckboxItem>
       </DropdownMenuContent>
     </DropdownMenu>
-  );
-}
-
-function WorktreeFilterAndSortMenu(props: {
-  readonly filters: WorktreesFilterState;
-}): ReactNode {
-  const { filters } = props;
-  const filterLabel = worktreeTierFilterLabel(
-    filters.tierFilters,
-    filters.availableTiers,
-  );
-  const sortLabel = WORKTREE_SORT_LABEL[filters.sortMode];
-  const noneSelected = filters.availableTiers.every(
-    (tier) => !filters.tierFilters.has(tier),
-  );
-  return (
-    <DropdownMenu>
-      <DropdownMenuTrigger asChild>
-        <Button
-          type="button"
-          variant="outline"
-          size="sm"
-          className="shrink-0"
-          data-testid="worktrees-filter-sort-trigger"
-          aria-label={`Filter and sort: ${filterLabel}, ${sortLabel}`}
-        >
-          <ListFilter className="size-4" />
-          <span>Filter and sort</span>
-        </Button>
-      </DropdownMenuTrigger>
-      <DropdownMenuContent align="end">
-        <DropdownMenuLabel>Filter</DropdownMenuLabel>
-        <DropdownMenuCheckboxItem
-          checked={noneSelected}
-          onSelect={(event) => {
-            event.preventDefault();
-            filters.onClearTierFilters();
-          }}
-          data-testid="worktrees-filter-all"
-        >
-          All
-        </DropdownMenuCheckboxItem>
-        {filters.availableTiers.map((tier) => (
-          <DropdownMenuCheckboxItem
-            key={tier}
-            checked={filters.tierFilters.has(tier)}
-            onSelect={(event) => {
-              event.preventDefault();
-              filters.onToggleTier(tier);
-            }}
-            data-testid={`worktrees-filter-${tier}`}
-          >
-            {WORKTREE_TIER_LABEL[tier]}
-          </DropdownMenuCheckboxItem>
-        ))}
-        <DropdownMenuSeparator />
-        <DropdownMenuLabel>Sort</DropdownMenuLabel>
-        <DropdownMenuCheckboxItem
-          checked={filters.sortMode === "newest"}
-          onSelect={() => filters.onSortModeChange("newest")}
-          data-testid="worktrees-sort-newest"
-        >
-          Newest
-        </DropdownMenuCheckboxItem>
-        <DropdownMenuCheckboxItem
-          checked={filters.sortMode === "oldest"}
-          onSelect={() => filters.onSortModeChange("oldest")}
-          data-testid="worktrees-sort-oldest"
-        >
-          Oldest
-        </DropdownMenuCheckboxItem>
-      </DropdownMenuContent>
-    </DropdownMenu>
-  );
-}
-
-function WorktreesListActionsMenu(props: {
-  readonly policies: ReactNode;
-  readonly selectionControls: ReactNode | null;
-  readonly canRefresh: boolean;
-  readonly refreshing: boolean;
-  readonly onRefresh: () => void;
-  readonly lastUpdatedAt: number | null;
-}): ReactNode {
-  return (
-    <Popover>
-      <PopoverTrigger asChild>
-        <Button
-          type="button"
-          variant="muted"
-          size="icon-sm"
-          className="shrink-0"
-          aria-label="List actions"
-          data-testid="worktrees-list-actions"
-        >
-          <MoreHorizontal className="size-4" />
-        </Button>
-      </PopoverTrigger>
-      <PopoverContent
-        align="end"
-        layout="padded"
-        className="flex w-72 max-w-[calc(100vw-2rem)] flex-col items-stretch"
-      >
-        {props.selectionControls}
-        <WorktreesUpdatedAgoLabel updatedAt={props.lastUpdatedAt} />
-        <Button
-          type="button"
-          variant="outline"
-          size="sm"
-          className="justify-start"
-          disabled={!props.canRefresh || props.refreshing}
-          onClick={props.onRefresh}
-          aria-label="Refresh worktrees"
-        >
-          <RefreshCw
-            className={cn("size-4", props.refreshing && "animate-spin")}
-          />
-          <span>Refresh</span>
-        </Button>
-        {props.policies}
-      </PopoverContent>
-    </Popover>
   );
 }
 

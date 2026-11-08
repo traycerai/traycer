@@ -18,6 +18,11 @@ const AGENTS_TAB_LABELS: Readonly<Record<AgentsTab, string>> = {
   definitions: "Definitions",
 };
 
+// The guide reaches only the agents Traycer creates; a coding agent's own
+// native subagents never read it (traycerai/traycer#1090).
+const AGENTS_GUIDE_CAPTION =
+  "The guide agents read when they pick a coding agent, model and effort for work they hand off.";
+
 function isAgentsTab(value: string): value is AgentsTab {
   return AGENTS_TABS.some((tab) => tab === value);
 }
@@ -31,7 +36,11 @@ function isAgentsTab(value: string): value is AgentsTab {
 export function AgentsSettingsPanel(): ReactNode {
   const [tab, setTab] = useState<AgentsTab>("guide");
   return (
-    <SettingsPanelShell title={AGENT_SELECTION.page.label} fillHeight>
+    <SettingsPanelShell
+      title={AGENT_SELECTION.page.label}
+      description={AGENT_SELECTION.page.description}
+      fillHeight
+    >
       <Tabs
         value={tab}
         onValueChange={(next) => {
@@ -58,6 +67,12 @@ export function AgentsSettingsPanel(): ReactNode {
           value="guide"
           className="flex min-h-0 flex-1 flex-col gap-3 pt-5"
         >
+          <p
+            className="min-w-0 text-ui-xs text-muted-foreground"
+            data-testid="agents-guide-caption"
+          >
+            {AGENTS_GUIDE_CAPTION}
+          </p>
           <AgentSelectionGuideSection />
         </TabsContent>
         <TabsContent value="definitions" className="pt-5">

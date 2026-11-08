@@ -307,7 +307,7 @@ describe("<ProviderProfileScopedSection /> profile summary email reveal", () => 
     expect(screen.queryByText("Signed out")).toBeNull();
   });
 
-  it("shows standing text only when the profile is not usable, and keeps the verbs in More", async () => {
+  it("shows standing text only when the profile is not usable, and keeps the verbs inline", async () => {
     const profile = managedProfile();
     const onAddProfile = vi.fn();
     renderSection({
@@ -335,33 +335,20 @@ describe("<ProviderProfileScopedSection /> profile summary email reveal", () => 
     expect(standing.className).not.toContain("truncate");
     expect(screen.queryByText("Signed in")).toBeNull();
 
-    const trigger = screen.getByRole("button", {
-      name: "More for Work account",
-    });
-    trigger.focus();
-    await userEvent.keyboard("{Enter}");
-    const menu = screen.getByRole("menu");
-    expect(
-      within(menu).getByRole("menuitem", { name: "Sign in" }),
-    ).toBeTruthy();
-    expect(
-      within(menu).getByRole("menuitem", { name: "Manage profile" }),
-    ).toBeTruthy();
-    expect(within(menu).queryByRole("switch")).toBeNull();
-
-    await userEvent.keyboard("{ArrowDown}{Enter}");
+    expect(screen.getByRole("button", { name: "Sign in" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Manage profile" })).toBeTruthy();
+    expect(screen.queryByRole("button", { name: /^More for / })).toBeNull();
+    await userEvent.click(
+      screen.getByRole("button", { name: "Manage profile" }),
+    );
     expect(screen.getByRole("dialog", { name: "Profile editor" })).toBeTruthy();
-    expect(screen.queryByRole("menu")).toBeNull();
     await userEvent.click(screen.getByRole("button", { name: "Close editor" }));
-
-    trigger.focus();
-    await userEvent.keyboard("{Enter}{Enter}");
+    await userEvent.click(screen.getByRole("button", { name: "Sign in" }));
     expect(screen.getByRole("dialog", { name: "Sign in editor" })).toBeTruthy();
     expect(onAddProfile).not.toHaveBeenCalled();
-    expect(screen.queryByRole("menu")).toBeNull();
   });
 
-  it("opens recorded managed-profile Details from More and keeps the drawer after menu close", async () => {
+  it("opens recorded managed-profile Details from its inline button", async () => {
     useSettingsEnvironmentPickStore.setState({ pick: PERSONAL_PICK });
     const provider = vi.fn<DetailsProvider>(() =>
       Promise.reject(new Error("no evidence")),
@@ -369,14 +356,7 @@ describe("<ProviderProfileScopedSection /> profile summary email reveal", () => 
     const unregister = registerDetailsProvider("managed_profile", provider);
     try {
       renderSectionWithRecordedProfile();
-      const trigger = screen.getByRole("button", {
-        name: "More for Work account",
-      });
-      trigger.focus();
-      await userEvent.keyboard("{Enter}");
-      await screen.findByRole("menu");
-      expect(screen.getByRole("menuitem", { name: "Details" })).toBeTruthy();
-      await userEvent.keyboard("{Enter}");
+      await userEvent.click(screen.getByRole("button", { name: "Details" }));
 
       const drawer = await screen.findByRole("dialog");
       expect(

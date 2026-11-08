@@ -41,7 +41,6 @@ import {
   hoverAwakeMinutes,
   hoverMoreSessions,
   hoverSandboxIdentity,
-  hoverSessionCount,
   hoverTaskConfiguration,
   hoverTodayCost,
   KEEP_THIS_SANDBOX,
@@ -151,8 +150,6 @@ function TaskHostSection(props: {
       {otherCount === 0 ? null : (
         <HostSessionDisclosure
           names={others}
-          more={0}
-          hostWide={null}
           summary={hoverAlsoInTask(otherCount)}
         />
       )}
@@ -555,44 +552,50 @@ function HostActivity(props: {
     ),
   ];
   const more = Math.max(0, count - here.length - runningTerminals.length);
-  const hostWide = sandboxHostActivityLine(
-    sandboxSessionKinds(status.data?.sessions ?? null),
-  );
-  const listed = status.data?.sessions ?? null;
   return (
-    <HostSessionDisclosure
+    <HostActivityLines
+      hostWide={sandboxHostActivityLine(
+        sandboxSessionKinds(status.data?.sessions ?? null),
+      )}
       names={names.join(", ")}
       more={more}
-      hostWide={hostWide}
-      summary={hoverSessionCount(
-        hoverReportedSessionCount({
-          listedOnHost:
-            listed === null
-              ? null
-              : listed.agents.length + listed.terminals.length,
-          busySessionCount: count,
-          taskSessions: here.length + runningTerminals.length,
-        }),
-      )}
     />
   );
 }
 
 /**
- * The hover's session summary. Closed, it is only the count. Open, it is the
- * lines the hover used to show flat: kinds, this task's names, and sessions
- * the busy count places in other tasks. Nothing, when every one of those
- * lines would be empty.
+ * What a held sandbox report says is running, in the card: kinds, this task's
+ * titles, and sessions the busy count places in other tasks. A long list
+ * wraps and scrolls. An empty report draws nothing.
  */
-function HostSessionDisclosure(props: {
+function HostActivityLines(props: {
+  readonly hostWide: string | null;
   readonly names: string;
   readonly more: number;
-  readonly hostWide: string | null;
-  readonly summary: string;
 }): ReactNode {
   if (props.hostWide === null && props.names.length === 0 && props.more === 0) {
     return null;
   }
+  return (
+    <div className="max-h-40 min-w-0 max-w-full space-y-1 overflow-y-auto overscroll-contain break-words text-muted-foreground">
+      {props.hostWide === null ? null : (
+        <p data-testid="agent-host-activity">{props.hostWide}</p>
+      )}
+      {props.names.length === 0 ? null : <p>{props.names}</p>}
+      {props.more > 0 ? <p>{hoverMoreSessions(props.more)}</p> : null}
+    </div>
+  );
+}
+
+/**
+ * Other agents on a computer host. Closed, the line is only how many. Open,
+ * their names, in a list that scrolls instead of growing the card.
+ */
+function HostSessionDisclosure(props: {
+  readonly names: string;
+  readonly summary: string;
+}): ReactNode {
+  if (props.names.length === 0) return null;
   return (
     <details
       data-testid="agent-host-sessions"
@@ -601,31 +604,9 @@ function HostSessionDisclosure(props: {
       <summary className="w-fit max-w-full cursor-pointer text-start break-words">
         {props.summary}
       </summary>
-      <div className="max-h-40 space-y-1 overflow-y-auto overscroll-contain text-muted-foreground">
-        {props.hostWide === null ? null : (
-          <p data-testid="agent-host-activity">{props.hostWide}</p>
-        )}
-        {props.names.length === 0 ? null : <p>{props.names}</p>}
-        {props.more > 0 ? <p>{hoverMoreSessions(props.more)}</p> : null}
+      <div className="max-h-40 space-y-1 overflow-y-auto overscroll-contain break-words text-muted-foreground">
+        <p>{props.names}</p>
       </div>
     </details>
   );
-}
-
-/**
- * Sessions the hover can account for. The host's own list is the full count.
- * Without one, the task's sessions plus those the busy count places in other
- * tasks. A missing report never becomes a zero; that path says so above.
- */
-function hoverReportedSessionCount(input: {
-  readonly listedOnHost: number | null;
-  readonly busySessionCount: number;
-  readonly taskSessions: number;
-}): number {
-  const accounted =
-    input.taskSessions +
-    Math.max(0, input.busySessionCount - input.taskSessions);
-  return input.listedOnHost === null
-    ? accounted
-    : Math.max(input.listedOnHost, accounted);
 }

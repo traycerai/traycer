@@ -245,14 +245,16 @@ describe("deriveInstallationDetails", () => {
     );
   });
 
-  it("omits platform and architecture when neither source knows them", () => {
+  it("shows missing platform context and omits unknown architecture", () => {
     const rows = details({
       about: about(null, { platform: null }),
       live: false,
       runningVersion: null,
       record: null,
     });
-    absent(rows, "host-overview-about-platform");
+    expect(detail(rows, "host-overview-about-platform").value).toBe(
+      "Not reported to the account",
+    );
     absent(rows, "host-overview-about-architecture");
     absent(rows, "settings-host-install-version");
   });
@@ -291,7 +293,7 @@ describe("deriveInstallationDetails", () => {
     );
   });
 
-  it("abbreviates the host id inside Details and keeps the full id on the copy button", () => {
+  it("abbreviates the host id in inline facts and keeps the full id on the copy button", () => {
     const rows = details({
       about: about("2026-09-24T09:00:00Z", { hostId: LONG_HOST_ID }),
       live: true,

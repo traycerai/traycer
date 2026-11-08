@@ -71,27 +71,33 @@ function presentText(value: string | null): string | null {
 }
 
 function sessionName(session: UserSessionListItem): string {
-  return (
-    presentText(session.displayLabel) ??
-    // Nothing left to recognise the row by: platform, place and a name are
-    // all absent. Created time still lives in Details.
-    (sessionPlaceLine(session) === null ? "Session details unavailable" : "")
-  );
+  const label = presentText(session.displayLabel);
+  if (label !== null) {
+    return label;
+  }
+  // Nothing left to recognise the row by: platform, place, version and a
+  // name are all absent. Client kind still renders under the name, and the
+  // created time stays on the timeline.
+  if (
+    presentText(session.platform) === null &&
+    presentText(session.appVersion) === null &&
+    presentText(session.location) === null
+  ) {
+    return "Session details unavailable";
+  }
+  return "";
 }
 
-function sessionPlaceLine(session: UserSessionListItem): string | null {
-  const parts = [presentText(session.platform), presentText(session.location)];
-  const present = parts.filter((part): part is string => part !== null);
-  return present.length === 0 ? null : present.join(" · ");
-}
-
-function sessionDetailsLine(session: UserSessionListItem): string {
-  const created = `Created ${formatRelativeTime(session.createdAt)}`;
+function sessionFactsLine(session: UserSessionListItem): string {
   const version = presentText(session.appVersion);
-  const client = sessionClientLabel(session);
-  return version === null
-    ? `${client} · ${created}`
-    : `${client} · App ${version} · ${created}`;
+  const parts = [
+    sessionClientLabel(session),
+    presentText(session.platform),
+    version === null ? null : `App ${version}`,
+    // Coarse place is the strongest "is this me?" signal on the row.
+    presentText(session.location),
+  ].filter((part): part is string => part !== null);
+  return parts.join(" · ");
 }
 
 function formatRelativeTime(value: string): string {
@@ -134,6 +140,14 @@ function sessionStatusDisplay(
   if (pending) return "Signing out";
   const status = sessionStatusLine(session);
   return session.current ? `This session · ${status}` : status;
+}
+
+function sessionTimelineLine(
+  session: UserSessionListItem,
+  pending: boolean,
+): string {
+  const created = `Created ${formatRelativeTime(session.createdAt)}`;
+  return `${created} · ${sessionStatusDisplay(session, pending)}`;
 }
 
 function sortSessions(
@@ -441,23 +455,13 @@ function SessionRow(props: {
               {sessionName(session)}
             </p>
           )}
-          {sessionPlaceLine(session) === null ? null : (
-            <p className="wrap-anywhere text-ui-sm text-muted-foreground">
-              {sessionPlaceLine(session)}
-            </p>
-          )}
-          <p className="flex min-w-0 items-center gap-1.5 break-words text-ui-xs text-muted-foreground">
-            <Clock className="size-3.5 shrink-0" />
-            {sessionStatusDisplay(session, pending)}
+          <p className="wrap-anywhere text-ui-sm text-muted-foreground">
+            {sessionFactsLine(session)}
           </p>
-          <details className="min-w-0">
-            <summary className="cursor-pointer text-ui-xs text-muted-foreground">
-              Details
-            </summary>
-            <p className="break-words text-ui-xs text-muted-foreground">
-              {sessionDetailsLine(session)}
-            </p>
-          </details>
+          <p className="min-w-0 wrap-anywhere text-ui-xs text-muted-foreground">
+            <Clock className="mr-1.5 inline size-3.5 align-text-bottom" />
+            {sessionTimelineLine(session, pending)}
+          </p>
         </div>
       </div>
       <Button

@@ -7,9 +7,7 @@ import {
   render,
   screen,
   waitFor,
-  within,
 } from "@testing-library/react";
-import userEvent from "@testing-library/user-event";
 import type { ReactNode } from "react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { HostClient } from "@traycer-clients/shared/host-client/host-client";
@@ -587,66 +585,56 @@ describe("WorktreesSettingsPanel host-scoped states", () => {
     assertBranchPrefixStripAbsent();
   });
 
-  it("keeps search and one Filter and sort control above a populated list on a phone, and moves the policies into List actions", async () => {
+  it("shows policy, selection, and refresh inline above a populated list on a phone", async () => {
     window.innerWidth = 390;
     await renderPopulatedWorktreeList();
 
-    expect(screen.queryByTestId("worktrees-filter-trigger")).toBeNull();
-    expect(screen.queryByTestId("worktrees-sort-trigger")).toBeNull();
-    expect(screen.queryByTestId("worktrees-toolbar-actions")).toBeNull();
+    expect(screen.queryByRole("button", { name: "List actions" })).toBeNull();
+    expect(
+      screen.queryByRole("button", { name: /Filter and sort/ }),
+    ).toBeNull();
     expect(screen.queryByRole("button", { name: "Copy paths" })).toBeNull();
     expect(screen.queryByText("Copy paths")).toBeNull();
 
-    const trigger = screen.getByTestId("worktrees-filter-sort-trigger");
-    expect(trigger.textContent).toBe("Filter and sort");
-    expect(trigger.getAttribute("aria-label")).toBe(
-      "Filter and sort: All, Newest",
-    );
     const search = screen.getByRole("searchbox", { name: "Search worktrees" });
-    const toolbar = trigger.closest('[class*="worktrees-toolbar"]');
+    const filter = screen.getByRole("button", { name: "Filter: All" });
+    const sort = screen.getByRole("button", { name: "Sort: Newest" });
+    const refresh = screen.getByRole("button", { name: "Refresh worktrees" });
+    const selectAll = screen.getByRole("checkbox", {
+      name: "Select all visible worktrees",
+    });
+    const collapse = screen.getByRole("button", { name: "Collapse all" });
+    const cleanupChip = screen.getByTestId("worktree-auto-cleanup-chip");
+    const agentChip = screen.getByTestId("worktree-agent-create-chip");
+    let toolbar: HTMLElement | null = filter;
+    while (
+      toolbar !== null &&
+      !toolbar.classList.contains("@container/worktrees-toolbar")
+    ) {
+      toolbar = toolbar.parentElement;
+    }
     if (!(toolbar instanceof HTMLElement)) {
       throw new Error("expected the worktrees toolbar");
     }
-    expect(toolbar.childElementCount).toBe(1);
-    const phoneRow = toolbar.firstElementChild;
-    if (!(phoneRow instanceof HTMLElement)) {
-      throw new Error("expected the phone toolbar row");
+    for (const control of [
+      search,
+      filter,
+      sort,
+      refresh,
+      selectAll,
+      collapse,
+      cleanupChip,
+      agentChip,
+    ]) {
+      expect(toolbar.contains(control)).toBe(true);
+      expect(control.closest("[data-slot='popover-content']")).toBeNull();
     }
-    expect(phoneRow.contains(search)).toBe(true);
-    expect(phoneRow.contains(trigger)).toBe(true);
-    const listActions = screen.getByRole("button", { name: "List actions" });
-    expect(listActions.getAttribute("data-testid")).toBe(
-      "worktrees-list-actions",
-    );
-    expect(phoneRow.contains(listActions)).toBe(true);
-    expect(screen.queryByTestId("worktrees-select-all")).toBeNull();
-    expect(screen.queryByTestId("worktree-auto-cleanup-chip")).toBeNull();
-    expect(screen.queryByTestId("worktree-agent-create-chip")).toBeNull();
-    expect(
-      screen.queryByRole("button", { name: "Refresh worktrees" }),
-    ).toBeNull();
-
-    await userEvent.setup().click(listActions);
-
-    const menu = screen
-      .getByTestId("worktree-auto-cleanup-chip")
-      .closest("[data-slot='popover-content']");
-    if (!(menu instanceof HTMLElement)) {
-      throw new Error("expected the list actions menu");
-    }
-    expect(phoneRow.contains(menu)).toBe(false);
-    within(menu).getByTestId("worktrees-select-all");
-    within(menu).getByText("Select all");
-    within(menu).getByRole("button", { name: "Collapse all" });
-    within(menu).getByRole("button", { name: "Refresh worktrees" });
-    const cleanupChip = within(menu).getByTestId("worktree-auto-cleanup-chip");
-    const agentChip = within(menu).getByTestId("worktree-agent-create-chip");
     expect(
       cleanupChip.compareDocumentPosition(agentChip) &
         Node.DOCUMENT_POSITION_FOLLOWING,
     ).toBeGreaterThan(0);
     expect(agentChip.parentElement).toBe(cleanupChip.parentElement);
-    expect(screen.queryByRole("button", { name: "Copy paths" })).toBeNull();
+    expect(screen.queryByTestId("worktree-auto-cleanup-section")).toBeNull();
     // The row keeps its own actions trigger. Its "Copy path" item is asserted
     // in the list suite, whose menu is mounted open; this file leaves the real
     // menu closed.

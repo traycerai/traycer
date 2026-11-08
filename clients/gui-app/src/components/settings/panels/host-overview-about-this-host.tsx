@@ -5,7 +5,7 @@ import {
   type HostOverviewAboutSource,
 } from "@/components/settings/panels/host-overview-installation-model";
 
-/** Account facts in Installation Details remain available while the host is offline. */
+/** Inline account facts in Installation remain available while the host is offline. */
 export function HostOverviewAboutThisHost(
   props: HostOverviewAboutSource,
 ): ReactNode {

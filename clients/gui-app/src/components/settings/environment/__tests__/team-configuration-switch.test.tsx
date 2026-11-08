@@ -91,26 +91,17 @@ describe("Variables and shells moving between two teams", () => {
       }
       return input;
     };
-    fireEvent.click(
-      await screen.findByRole("button", { name: "Edit NODE_ENV value" }),
-    );
     await waitFor(() => {
       expect(field().value).toBe("production");
     });
     fireEvent.change(field(), { target: { value: "a draft nobody saved" } });
 
     view.rerender(page("env-b"));
-    fireEvent.click(
-      await screen.findByRole("button", { name: "Edit NODE_ENV value" }),
-    );
     await waitFor(() => {
       expect(field().value).toBe("staging");
     });
 
     view.rerender(page("env-a"));
-    fireEvent.click(
-      await screen.findByRole("button", { name: "Edit NODE_ENV value" }),
-    );
     await waitFor(() => {
       expect(field().value).toBe("production");
     });

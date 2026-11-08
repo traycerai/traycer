@@ -10,7 +10,6 @@ import {
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuItem,
-  DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { useEnvironmentListQuery } from "@/hooks/bots/use-environment-list-query";
@@ -114,7 +113,7 @@ export function SandboxFailedRowActions(props: {
   };
 
   return (
-    <div className="flex shrink-0 flex-wrap items-center gap-2">
+    <div className="flex max-w-full min-w-0 shrink-0 flex-wrap items-center gap-2">
       {pendingVerb !== null || actions.primary === "retry" ? (
         <Button
           type="button"
@@ -138,40 +137,42 @@ export function SandboxFailedRowActions(props: {
           )}
         </Button>
       ) : null}
-      <DropdownMenu>
-        <DropdownMenuTrigger asChild>
-          <Button
-            type="button"
-            variant="ghost"
-            size="icon-sm"
-            aria-label={`More actions for ${summary.displayName}`}
-            data-testid="sandbox-row-menu"
+      <Button
+        type="button"
+        variant="outline"
+        size="sm"
+        onClick={() => openSandboxDetails(summary.id)}
+      >
+        Details
+      </Button>
+      {pendingVerb === null && actions.menu.includes("destroy") ? (
+        <DropdownMenu>
+          <DropdownMenuTrigger asChild>
+            <Button
+              type="button"
+              variant="ghost"
+              size="icon-sm"
+              aria-label={`More actions for ${summary.displayName}`}
+              data-testid="sandbox-row-menu"
+            >
+              <MoreHorizontal className="size-3.5" aria-hidden />
+            </Button>
+          </DropdownMenuTrigger>
+          <DropdownMenuContent
+            align="end"
+            data-testid="sandbox-row-menu-content"
           >
-            <MoreHorizontal className="size-3.5" aria-hidden />
-          </Button>
-        </DropdownMenuTrigger>
-        <DropdownMenuContent align="end" data-testid="sandbox-row-menu-content">
-          <DropdownMenuItem
-            data-testid="sandbox-row-menu-details"
-            onSelect={() => openSandboxDetails(summary.id)}
-          >
-            Details
-          </DropdownMenuItem>
-          {pendingVerb === null && actions.menu.includes("destroy") ? (
-            <>
-              <DropdownMenuSeparator />
-              <DropdownMenuItem
-                variant="destructive"
-                disabled={busy}
-                data-testid="sandbox-row-menu-destroy"
-                onSelect={() => setDestroyOpen(true)}
-              >
-                Destroy
-              </DropdownMenuItem>
-            </>
-          ) : null}
-        </DropdownMenuContent>
-      </DropdownMenu>
+            <DropdownMenuItem
+              variant="destructive"
+              disabled={busy}
+              data-testid="sandbox-row-menu-destroy"
+              onSelect={() => setDestroyOpen(true)}
+            >
+              Destroy
+            </DropdownMenuItem>
+          </DropdownMenuContent>
+        </DropdownMenu>
+      ) : null}
       <SandboxOperationFailure
         sandboxId={summary.id}
         name={summary.displayName}

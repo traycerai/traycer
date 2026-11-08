@@ -64,13 +64,13 @@ function Spinner(props: { readonly busy: boolean }): ReactNode {
   ) : null;
 }
 
-/** If the secret leaked: the order that closes it fastest. */
+/** If the secret leaked: the order that closes it fastest, open beside the versions. */
 function RecoveryOrder(): ReactNode {
   return (
-    <details className="flex flex-col gap-1" data-testid="secret-recovery">
-      <summary className="cursor-pointer text-ui-xs font-medium text-foreground">
+    <div className="flex flex-col gap-1" data-testid="secret-recovery">
+      <p className="text-ui-xs font-medium text-foreground">
         {SECRET_RECOVERY_TITLE}
-      </summary>
+      </p>
       <ol className="flex list-decimal flex-col gap-0.5 pl-5 text-ui-xs text-muted-foreground">
         {SECRET_RECOVERY_STEPS.map((step) => (
           <li key={step} className="max-w-[72ch]">
@@ -81,7 +81,7 @@ function RecoveryOrder(): ReactNode {
       <p className="max-w-[72ch] text-ui-xs text-muted-foreground">
         {SECRET_RECOVERY_FALLBACK}
       </p>
-    </details>
+    </div>
   );
 }
 
@@ -259,18 +259,6 @@ function SecretDetailsControls(props: {
           )}
         </div>
       )}
-      {props.secret.destinations.length === 0 ? null : (
-        <div className="text-ui-xs">
-          <p className="font-medium">Destinations</p>
-          <ul className="space-y-1 text-muted-foreground">
-            {props.secret.destinations.map((destination) => (
-              <li key={destination} className="wrap-anywhere">
-                {destination}
-              </li>
-            ))}
-          </ul>
-        </div>
-      )}
       <SecretRotationStatus
         client={props.client}
         secretId={props.secret.secretId}
@@ -288,8 +276,10 @@ function SecretDetailsControls(props: {
 }
 
 /**
- * One secret on Settings ▸ Personal ▸ Secrets: "STRIPE_KEY · Set · 1 destination · added by you 24 Oct" with Replace, Remove and Details.
- * Details holds Verify, the versions and the recovery order; a replacement's
+ * One secret on Settings ▸ Personal ▸ Secrets: "STRIPE_KEY · Set · sent to
+ * api.stripe.com · added by you 24 Oct" with Replace, Remove and Details.
+ * The addresses stay on that line and wrap. Details holds Verify, the
+ * versions and the recovery order, open with the versions; a replacement's
  * progress stays on the row. No value is ever here. Verify and the versions
  * act on the secret by id, so they work for every kind, those already stored
  * included. A held secret's pending-review badge stays.

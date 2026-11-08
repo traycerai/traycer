@@ -77,10 +77,13 @@ import {
 } from "@/stores/composer/composer-toolbar-store";
 import type { ChatForkMode } from "@/components/chat/chat-message";
 import {
+  chatForkCrossHostExplanations,
   chatForkHostRefusals,
+  chatForkLatestDescription,
   chatForkTargetSupport,
   chatForkRemoteClassState,
   chatForkTargetVerdict,
+  CHAT_FORK_SECOND_CHAT_NOTICE,
   remoteClassIsUnreachable,
   remoteClassNotice,
   verdictAllowsSubmit,
@@ -1267,9 +1270,10 @@ function ChatForkDialogBody(props: ChatForkDialogProps) {
         ))}
         <DialogHeader>
           <DialogTitle>Fork agent</DialogTitle>
-          <DialogDescription className="sr-only">
-            Choose the title, harness and run location for the fork.
-          </DialogDescription>
+          <ChatForkOpenDescription
+            latest={target !== null && target.assistantMessageId === null}
+            crossHost={isCrossHost}
+          />
         </DialogHeader>
         <div
           className="flex min-h-0 min-w-0 flex-col gap-2 overflow-y-auto px-4 pb-2"
@@ -1307,6 +1311,9 @@ function ChatForkDialogBody(props: ChatForkDialogProps) {
               </ComposerStagedSurfaceKeyProvider>
             </div>
           </section>
+          <p className="min-w-0 break-words text-ui-xs text-muted-foreground">
+            {CHAT_FORK_SECOND_CHAT_NOTICE}
+          </p>
           <div
             className="flex min-w-0 flex-col gap-1"
             aria-label="Run location"
@@ -1314,18 +1321,6 @@ function ChatForkDialogBody(props: ChatForkDialogProps) {
             <div className="font-sans text-overline font-medium uppercase text-muted-foreground/70">
               Run location
             </div>
-            <p
-              className="text-ui-xs text-muted-foreground"
-              data-testid="chat-fork-result"
-            >
-              {forkResultLine({
-                crossHost: isCrossHost,
-                emptySandbox: forkStage?.target.kind === "new",
-                latest: target?.assistantMessageId === null,
-                carriesChanges:
-                  target !== null && target.seedIntentOverride !== null,
-              })}
-            </p>
           </div>
           <ActiveHostWorkspaceControls
             sandboxStaging={sandboxStaging}
@@ -1358,6 +1353,11 @@ function ChatForkDialogBody(props: ChatForkDialogProps) {
             </p>
           ) : null}
           <ChatForkTargetNotices
+            isCrossHost={isCrossHost}
+            emptySandbox={forkStage !== null && forkStage.target.kind === "new"}
+            carriesChanges={
+              target !== null && target.seedIntentOverride !== null
+            }
             support={selectedHostSupport}
             boundaryNotPublished={boundaryNotPublished}
             publicationNotice={publicationNotice}
@@ -1397,46 +1397,38 @@ function ChatForkDialogBody(props: ChatForkDialogProps) {
   );
 }
 
-/** The result of this pick, without repeating it in the header or host rows. */
-function forkResultLine(input: {
-  readonly crossHost: boolean;
-  readonly emptySandbox: boolean;
+/**
+ * The latest-point sentence is the dialog description when it applies. A fork
+ * from one turn has no snapshot sentence, and keeps the accessible description
+ * that names the form.
+ */
+function ChatForkOpenDescription(props: {
   readonly latest: boolean;
-  readonly carriesChanges: boolean;
-}): string {
-  let result: string;
-  if (input.crossHost) {
-    const transcript = input.latest
-      ? "this chat's latest saved transcript"
-      : "this chat's transcript through this turn";
-    const workspace = input.emptySandbox
-      ? "in an empty sandbox, with no files"
-      : "and the folder you pick here";
-    result = `Starts from ${transcript} ${workspace}`;
-    result += input.latest
-      ? "; work still in progress may not be included."
-      : ".";
-    if (input.carriesChanges) {
-      result += " Uncommitted changes stay on the source computer.";
-    }
-  } else {
-    const checkpoint = input.latest
-      ? "this chat's latest saved checkpoint"
-      : "this chat through this turn";
-    result = `Starts from ${checkpoint} and the folder you pick here.`;
+  readonly crossHost: boolean;
+}) {
+  if (!props.latest) {
+    return (
+      <DialogDescription className="sr-only">
+        Choose the title, harness and run location for the fork.
+      </DialogDescription>
+    );
   }
-  return `${result} The original agent continues working.`;
+  return (
+    <DialogDescription className="min-w-0 break-words">
+      {chatForkLatestDescription({ crossHost: props.crossHost })}
+    </DialogDescription>
+  );
 }
 
 /**
- * Publication and target refusals live below Run location, separate from the
- * result line that describes what a successful fork starts with.
- *
- * Grouped in one place under the workspace section because they are all answers
- * to the same question — what happens if I press Fork now — and because a
- * cross-host fork can legitimately show several at once.
+ * Publication, target refusals, and the cross-host explanations live below
+ * the chooser. They are visible at rest. A cross-host fork can show several
+ * at once, and each fact is stated once.
  */
 function ChatForkTargetNotices(props: {
+  readonly isCrossHost: boolean;
+  readonly emptySandbox: boolean;
+  readonly carriesChanges: boolean;
   /**
    * The Layer-1 sentence about the SOURCE CHAT, rendered once for the whole
    * dialog rather than per host row — see `chatForkTargetVerdict`.
@@ -1446,7 +1438,13 @@ function ChatForkTargetNotices(props: {
   readonly boundaryNotPublished: boolean;
 }) {
   const { support } = props;
+  const explanations = chatForkCrossHostExplanations({
+    isCrossHost: props.isCrossHost,
+    emptySandbox: props.emptySandbox,
+    carriesChanges: props.carriesChanges,
+  });
   if (
+    !props.isCrossHost &&
     !props.boundaryNotPublished &&
     props.publicationNotice === null &&
     support.kind !== "refused"
@@ -1460,7 +1458,7 @@ function ChatForkTargetNotices(props: {
     >
       {props.publicationNotice === null ? null : (
         <p
-          className="text-ui-xs text-foreground/80"
+          className="min-w-0 break-words text-ui-xs text-foreground/80"
           data-testid="chat-fork-publication-notice"
         >
           {props.publicationNotice}
@@ -1468,7 +1466,7 @@ function ChatForkTargetNotices(props: {
       )}
       {props.boundaryNotPublished ? (
         <p
-          className="text-ui-xs text-foreground/80"
+          className="min-w-0 break-words text-ui-xs text-foreground/80"
           data-testid="chat-fork-boundary-not-published"
         >
           Still syncing this turn to the cloud — retry shortly.
@@ -1476,12 +1474,21 @@ function ChatForkTargetNotices(props: {
       ) : null}
       {support.kind === "refused" ? (
         <p
-          className="text-ui-xs text-foreground/80"
+          className="min-w-0 break-words text-ui-xs text-foreground/80"
           data-testid="chat-fork-target-refused"
         >
           {support.detail}
         </p>
       ) : null}
+      {explanations.map((line) => (
+        <p
+          key={line.id}
+          className="min-w-0 break-words text-ui-xs text-muted-foreground"
+          data-testid={line.id}
+        >
+          {line.text}
+        </p>
+      ))}
     </div>
   );
 }
