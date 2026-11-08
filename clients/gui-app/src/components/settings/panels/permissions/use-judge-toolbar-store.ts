@@ -205,6 +205,7 @@ export function useJudgeToolbarStore(input: {
   const available =
     harnesses?.find((row) => row.id === harnessId)?.available === true;
   const modelsQuery = useGuiHarnessModelsQuery(harnessId, null, {
+    profileId: null,
     enabled: available,
     subscribed: true,
   });

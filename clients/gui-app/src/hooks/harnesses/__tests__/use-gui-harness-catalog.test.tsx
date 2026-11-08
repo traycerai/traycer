@@ -215,6 +215,7 @@ function modelsResponse(count: number): ListGuiAgentModelsResponse {
 }
 
 interface CatalogFixture {
+  readonly client: HostClient<HostRpcRegistry>;
   readonly Wrapper: (props: { readonly children: ReactNode }) => ReactNode;
   readonly queryClient: QueryClient;
 }
@@ -259,7 +260,7 @@ function createCatalogFixture(
       {props.children}
     </QueryClientProvider>
   );
-  return { Wrapper, queryClient };
+  return { Wrapper, queryClient, client };
 }
 
 describe("useGuiHarnessesQuery table cadence", () => {
@@ -497,6 +498,7 @@ describe("useGuiHarnessModelsQuery (interval removal regression)", () => {
     renderHook(
       () =>
         useGuiHarnessModelsQuery("opencode", null, {
+          profileId: null,
           enabled: true,
           subscribed: true,
         }),
@@ -524,6 +526,7 @@ describe("useGuiHarnessModelsQuery (interval removal regression)", () => {
     const hook = renderHook(
       () =>
         useGuiHarnessModelsQuery("opencode", null, {
+          profileId: null,
           enabled: true,
           subscribed: true,
         }),
@@ -570,6 +573,7 @@ describe("useGuiHarnessModelsQuery (interval removal regression)", () => {
     const { result } = renderHook(
       () =>
         useGuiHarnessModelsQuery("opencode", null, {
+          profileId: null,
           enabled: true,
           subscribed: true,
         }),
@@ -592,6 +596,57 @@ describe("useGuiHarnessModelsQuery (interval removal regression)", () => {
       await vi.advanceTimersByTimeAsync(20 * 60 * 1000);
     });
     expect(callCount).toBe(callsAfterInitialFailure);
+  });
+
+  it("lists a managed profile's models from its own slot and leaves the ambient slot alone", async () => {
+    const calls: Array<
+      RequestOfMethod<HostRpcRegistry, "agent.gui.listModels">
+    > = [];
+    const fixture = createCatalogFixture({
+      "agent.gui.listModels": (params) => {
+        calls.push(params);
+        const response = modelsResponse(1);
+        return {
+          harnessId: "claude",
+          models: response.models.map((model) => ({
+            ...model,
+            harnessId: "claude",
+            slug: `model-of-${params.profileId ?? "ambient"}`,
+          })),
+        };
+      },
+    });
+
+    const hook = renderHook(
+      () => ({
+        ambient: useGuiHarnessModelsQueryForClient(
+          fixture.client,
+          "claude",
+          null,
+          { profileId: null, enabled: true, subscribed: true },
+        ),
+        managed: useGuiHarnessModelsQueryForClient(
+          fixture.client,
+          "claude",
+          null,
+          { profileId: "pro", enabled: true, subscribed: true },
+        ),
+      }),
+      { wrapper: fixture.Wrapper },
+    );
+
+    await waitFor(() => {
+      expect(hook.result.current.ambient.data?.models[0]?.slug).toBe(
+        "model-of-ambient",
+      );
+      expect(hook.result.current.managed.data?.models[0]?.slug).toBe(
+        "model-of-pro",
+      );
+    });
+    expect(calls).toHaveLength(2);
+    expect(calls.filter((params) => "profileId" in params)).toEqual([
+      expect.objectContaining({ profileId: "pro" }),
+    ]);
   });
 });
 
@@ -973,6 +1028,7 @@ describe("…ForClient catalog hooks are scoped to the client argument, not the 
           subscribed: true,
         });
         useGuiHarnessModelsQueryForClient(clientA, "opencode", null, {
+          profileId: null,
           enabled: true,
           subscribed: true,
         });
@@ -991,6 +1047,7 @@ describe("…ForClient catalog hooks are scoped to the client argument, not the 
           subscribed: true,
         });
         useGuiHarnessModelsQueryForClient(clientB, "opencode", null, {
+          profileId: null,
           enabled: true,
           subscribed: true,
         });
@@ -1111,6 +1168,7 @@ describe("…ForClient catalog hooks are scoped to the client argument, not the 
           subscribed: true,
         });
         useGuiHarnessModelsQueryForClient(clientB, "opencode", null, {
+          profileId: null,
           enabled: true,
           subscribed: true,
         });
@@ -1616,7 +1674,7 @@ describe('useGuiHarnessCatalogForClient modelsFetch: "cached-only"', () => {
           fixture.client,
           "opencode",
           null,
-          { enabled: true, subscribed: true },
+          { profileId: null, enabled: true, subscribed: true },
         ),
       }),
       { wrapper: fixture.Wrapper },
@@ -1659,7 +1717,7 @@ describe('useGuiHarnessCatalogForClient modelsFetch: "cached-only"', () => {
           fixture.client,
           "opencode",
           null,
-          { enabled: true, subscribed: true },
+          { profileId: null, enabled: true, subscribed: true },
         ),
       }),
       { wrapper: fixture.Wrapper },
@@ -2442,7 +2500,10 @@ describe("catalog hooks inside a ChatOpencodeLineContext", () => {
     const fixture = lineFixture();
     renderHook(
       () => {
-        useGuiHarnessModelsQuery("opencode", null, ACTIVE);
+        useGuiHarnessModelsQuery("opencode", null, {
+          profileId: null,
+          ...ACTIVE,
+        });
         useGuiHarnessCommandsQuery(fixture.client, "opencode", [], {
           ...ACTIVE,
           profileId: null,
@@ -2464,7 +2525,10 @@ describe("catalog hooks inside a ChatOpencodeLineContext", () => {
       const fixture = lineFixture();
       renderHook(
         () => {
-          useGuiHarnessModelsQuery(harnessId, null, ACTIVE);
+          useGuiHarnessModelsQuery(harnessId, null, {
+            profileId: null,
+            ...ACTIVE,
+          });
           useGuiHarnessCommandsQuery(fixture.client, harnessId, [], {
             ...ACTIVE,
             profileId: null,
@@ -2485,7 +2549,10 @@ describe("catalog hooks inside a ChatOpencodeLineContext", () => {
     const fixture = lineFixture();
     renderHook(
       () => {
-        useGuiHarnessModelsQuery("claude", null, ACTIVE);
+        useGuiHarnessModelsQuery("claude", null, {
+          profileId: null,
+          ...ACTIVE,
+        });
         useGuiHarnessCommandsQuery(fixture.client, "claude", [], {
           ...ACTIVE,
           profileId: null,
@@ -2515,9 +2582,16 @@ describe("catalog hooks inside a ChatOpencodeLineContext", () => {
         return modelsResponse(1);
       },
     });
-    renderHook(() => useGuiHarnessModelsQuery("opencode", null, ACTIVE), {
-      wrapper: fixture.Wrapper,
-    });
+    renderHook(
+      () =>
+        useGuiHarnessModelsQuery("opencode", null, {
+          profileId: null,
+          ...ACTIVE,
+        }),
+      {
+        wrapper: fixture.Wrapper,
+      },
+    );
     await waitFor(() => {
       expect(modelParams).toHaveLength(1);
     });

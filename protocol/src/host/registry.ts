@@ -394,7 +394,9 @@ import {
   agentGuiListHarnessesV101,
   agentGuiListModelsV10,
   agentGuiListModelsV11,
+  agentGuiListModelsV12,
   agentGuiListModelsUpgradeV10ToV11,
+  agentGuiListModelsUpgradeV11ToV12,
   chatSubscribeV10,
   chatSubscribeV11,
   chatSubscribeV12,
@@ -8025,7 +8027,7 @@ const HOST_RPC_REGISTRY_BASE_DEFINITION = {
   },
   "agent.gui.listModels": {
     1: {
-      latestMinor: 1,
+      latestMinor: 2,
       versions: {
         0: {
           contract: agentGuiListModelsV10,
@@ -8034,6 +8036,10 @@ const HOST_RPC_REGISTRY_BASE_DEFINITION = {
         1: {
           contract: agentGuiListModelsV11,
           upgradeFromPreviousVersion: agentGuiListModelsUpgradeV10ToV11,
+        },
+        2: {
+          contract: agentGuiListModelsV12,
+          upgradeFromPreviousVersion: agentGuiListModelsUpgradeV11ToV12,
         },
       },
       downgradePathsFromLatest: {},

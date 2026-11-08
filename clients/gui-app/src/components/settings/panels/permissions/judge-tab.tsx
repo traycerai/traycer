@@ -243,7 +243,7 @@ function useShownPickModels(
   const models = useGuiHarnessModelsQuery(
     row?.id ?? IDLE_MODELS_HARNESS_ID,
     null,
-    { enabled: available, subscribed: available },
+    { profileId: null, enabled: available, subscribed: available },
   ).data?.models;
   return row === undefined ? undefined : models;
 }
