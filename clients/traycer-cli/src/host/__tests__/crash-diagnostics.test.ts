@@ -438,6 +438,17 @@ describe("StderrCaptureBuffer", () => {
       expect(capture(nested("")).uncaughtErrorCode()).toBe("none");
     });
 
+    // An execFile error embeds the child's whole crash, frames and properties
+    // included, in its message; the outer error's own stack comes after it.
+    it("reads the outer error's code, not an embedded child crash's", () => {
+      const embedded = (outerCode: string): string =>
+        `/tmp/t.js:1\n    ^\n\nError: Command failed: node child.js\n/tmp/child.js:1\n    ^\n\nError: inner\n    at run (child.js:1:1) {\n  code: 'ENOENT'\n}\n\nNode.js v24.20.0\n\n    at genericNodeError (node:internal/errors:1:1)\n    at exithandler (node:child_process:1:1) {\n  ${outerCode},\n  killed: false\n}\n\nNode.js v24.20.0\n`;
+      expect(capture(embedded("code: 1")).uncaughtErrorCode()).toBe("none");
+      expect(capture(embedded("code: 'ERR_OUTER'")).uncaughtErrorCode()).toBe(
+        "ERR_OUTER",
+      );
+    });
+
     it.each([
       ["a code outside every shape", "my code!"],
       ["an errno name outside the allowlist", "EVIL"],

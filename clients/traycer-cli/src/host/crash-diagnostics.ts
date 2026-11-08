@@ -243,8 +243,13 @@ const UNCAUGHT_CARET_LINE = /^[ \t]*\^+[ \t\r]*$/m;
  */
 const ERROR_HEADER_NAME = /^([A-Za-z0-9_$]+)(?: \[[A-Z0-9_]{1,64}\])?(?::|$)/;
 
-/** The first run of stack-frame lines: the outer error's own stack. */
-const OUTER_STACK_FRAMES = /(?:^[ \t]+at [^\n]*(?:\n|$))+/m;
+/**
+ * A run of stack-frame lines at the indent Node prints the OUTER error's own
+ * stack at (four spaces). A cause's frames sit deeper, inside its entry, and a
+ * child crash embedded in the message comes BEFORE the outer stack, so the
+ * outer stack is the last such run.
+ */
+const OUTER_STACK_FRAME_RUNS = /(?:^ {4}at [^\n]*(?:\n|$))+/gm;
 
 /**
  * An error-valued entry inside the inspected properties (`[cause]: Error: ...`,
@@ -631,9 +636,10 @@ export class StderrCaptureBuffer {
 
   /**
    * The `code` Node's inspector printed in the OUTER error's properties block:
-   * the lines that follow its stack (the first run of stack-frame lines after
-   * the header) up to an error-valued `[cause]` or `[errors]` entry, whose own
-   * stack and properties belong to another error. Kept only as a member of
+   * the lines that follow its stack (the last run of four-space stack frames:
+   * a child crash embedded in the message comes before it, and a cause's
+   * frames sit deeper) up to an error-valued `[cause]` or `[errors]` entry,
+   * whose own stack and properties belong to another error. Kept only as a member of
    * the closed set above: an `ERR_*` code or an allowlisted errno name, any
    * other code being `other`. A `code:` line anywhere else is message text or
    * another error's and is never read. `none` when the capture holds no
@@ -644,9 +650,12 @@ export class StderrCaptureBuffer {
     try {
       const block = this.uncaughtBlock();
       if (block === null) return EVIDENCE_NONE;
-      const frames = OUTER_STACK_FRAMES.exec(block);
-      if (frames === null) return EVIDENCE_NONE;
-      const afterStack = block.slice(frames.index + frames[0].length);
+      let outerStackEnd = -1;
+      for (const run of block.matchAll(OUTER_STACK_FRAME_RUNS)) {
+        outerStackEnd = run.index + run[0].length;
+      }
+      if (outerStackEnd === -1) return EVIDENCE_NONE;
+      const afterStack = block.slice(outerStackEnd);
       const nested = afterStack.search(NESTED_ERROR_ENTRY);
       const properties =
         nested === -1 ? afterStack : afterStack.slice(0, nested);
