@@ -1,0 +1,519 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Expanded artifact parity — screens</title>
+    <style>
+      *,
+      *::before,
+      *::after {
+        box-sizing: border-box;
+      }
+      body {
+        margin: 0;
+        padding: 16px;
+        font-family: var(--font-sans, system-ui, sans-serif);
+        color: var(--color-text-primary, #16181d);
+        background: var(--color-background-primary, #fff);
+        line-height: 1.55;
+        font-size: 15px;
+      }
+      main {
+        display: flex;
+        flex-direction: column;
+        gap: 28px;
+        max-width: 1100px;
+        margin: 0 auto;
+      }
+      header h1 {
+        margin: 0 0 6px;
+        font-size: 1.45rem;
+        line-height: 1.25;
+      }
+      .lede {
+        margin: 0;
+        color: var(--color-text-secondary, #5a616e);
+      }
+      .facts {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 8px;
+        margin-top: 14px;
+      }
+      .fact {
+        display: flex;
+        flex-direction: column;
+        gap: 1px;
+        min-width: 0;
+        padding: 7px 11px;
+        border: 1px solid var(--color-border-primary, #dfe2e8);
+        border-radius: var(--border-radius-md, 8px);
+        background: var(--color-background-secondary, #f6f7f9);
+      }
+      .fact dt {
+        font-size: 0.72rem;
+        letter-spacing: 0.04em;
+        text-transform: uppercase;
+        color: var(--color-text-tertiary, #818896);
+      }
+      .fact dd {
+        margin: 0;
+        font-family: var(--font-mono, ui-monospace, monospace);
+        font-size: 0.84rem;
+      }
+      section h2 {
+        margin: 0 0 10px;
+        font-size: 1.08rem;
+      }
+      section > p:first-of-type {
+        margin-top: 0;
+      }
+      p {
+        margin: 0 0 10px;
+      }
+      .table-wrap {
+        overflow-x: auto;
+        border: 1px solid var(--color-border-primary, #dfe2e8);
+        border-radius: var(--border-radius-md, 8px);
+      }
+      table {
+        border-collapse: collapse;
+        width: 100%;
+        min-width: 520px;
+        font-size: 0.92rem;
+      }
+      th,
+      td {
+        text-align: left;
+        padding: 9px 12px;
+        border-bottom: 1px solid var(--color-border-secondary, #eceef2);
+        vertical-align: top;
+      }
+      th {
+        font-size: 0.74rem;
+        letter-spacing: 0.04em;
+        text-transform: uppercase;
+        color: var(--color-text-tertiary, #818896);
+        font-weight: 600;
+      }
+      tbody tr:last-child td {
+        border-bottom: 0;
+      }
+      code {
+        font-family: var(--font-mono, ui-monospace, monospace);
+        font-size: 0.86em;
+        background: var(--color-background-secondary, #f6f7f9);
+        border-radius: var(--border-radius-sm, 4px);
+        padding: 1px 4px;
+      }
+      .shots {
+        display: flex;
+        flex-direction: column;
+        gap: 20px;
+      }
+      figure {
+        margin: 0;
+        min-width: 0;
+      }
+      figure img {
+        display: block;
+        width: 100%;
+        max-width: 100%;
+        height: auto;
+        border: 1px solid var(--color-border-primary, #dfe2e8);
+        border-radius: var(--border-radius-md, 8px);
+        background: var(--color-background-secondary, #f6f7f9);
+      }
+      figcaption {
+        margin-top: 7px;
+        font-size: 0.9rem;
+        color: var(--color-text-secondary, #5a616e);
+      }
+      figcaption b {
+        color: var(--color-text-primary, #16181d);
+        font-weight: 600;
+      }
+      .note {
+        padding: 10px 13px;
+        border: 1px solid var(--color-border-primary, #dfe2e8);
+        border-left-width: 1px;
+        border-radius: var(--border-radius-md, 8px);
+        background: var(--color-background-info, #eaf2fd);
+        color: var(--color-text-info, #1d4f91);
+        font-size: 0.92rem;
+      }
+      ul {
+        margin: 0 0 10px;
+        padding-left: 20px;
+      }
+      li {
+        margin-bottom: 6px;
+      }
+      details {
+        border: 1px solid var(--color-border-primary, #dfe2e8);
+        border-radius: var(--border-radius-md, 8px);
+        padding: 10px 13px;
+        background: var(--color-background-secondary, #f6f7f9);
+      }
+      summary {
+        cursor: pointer;
+        font-weight: 600;
+        font-size: 0.94rem;
+      }
+      details > *:not(summary) {
+        margin-top: 10px;
+      }
+      .files {
+        display: flex;
+        flex-direction: column;
+        gap: 4px;
+        font-family: var(--font-mono, ui-monospace, monospace);
+        font-size: 0.84rem;
+      }
+      footer {
+        color: var(--color-text-tertiary, #818896);
+        font-size: 0.86rem;
+        border-top: 1px solid var(--color-border-secondary, #eceef2);
+        padding-top: 12px;
+      }
+    </style>
+  </head>
+  <body>
+    <main>
+      <header>
+        <h1>Expanded artifact parity — screens</h1>
+        <p class="lede">
+          The visual review for PR 3565. Expanding an artifact used to mount a
+          second copy of the surface with its wiring cut; it now promotes the
+          one live surface in place. These are the real surfaces, rendered from
+          their real callers' composition, with the controls that used to be
+          lost.
+        </p>
+        <dl class="facts">
+          <div class="fact"><dt>Head</dt><dd>9f1f4e9a7</dd></div>
+          <div class="fact"><dt>Captured</dt><dd>8 Nov 2026, 16:45 UTC</dd></div>
+          <div class="fact"><dt>Viewport</dt><dd>1440 × 900</dd></div>
+          <div class="fact"><dt>Browser</dt><dd>Chrome (Playwright)</dd></div>
+        </dl>
+      </header>
+
+      <section>
+        <h2>What each control is, and where it is in the shot</h2>
+        <div class="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th>Control</th>
+                <th>Where it is</th>
+                <th>Shot</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td>Version picker</td>
+                <td>Toolbar, reading <code>Latest</code> with the history glyph</td>
+                <td>HTML light / dark, version menu</td>
+              </tr>
+              <tr>
+                <td>Comments</td>
+                <td>Toolbar, the speech-bubble toggle</td>
+                <td>HTML light / dark, comment draft</td>
+              </tr>
+              <tr>
+                <td>Download</td>
+                <td>“More actions” ▸ <code>Download ZIP</code></td>
+                <td>More actions</td>
+              </tr>
+              <tr>
+                <td>Zoom</td>
+                <td>Toolbar, <code>−&nbsp;100%&nbsp;+</code>, with “Actual size” in the menu</td>
+                <td>HTML light / dark, more actions</td>
+              </tr>
+              <tr>
+                <td>Comment composer</td>
+                <td>Anchored under the element, inside the raised surface</td>
+                <td>Comment draft</td>
+              </tr>
+              <tr>
+                <td>Canvas tools, Pages, zoom, comments</td>
+                <td>Canvas toolbar and the board's own Play / fullscreen controls</td>
+                <td>Canvas light / dark</td>
+              </tr>
+              <tr>
+                <td>Close</td>
+                <td>Title bar, right</td>
+                <td>Every shot</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+        <p class="note">
+          <b>Expand is deliberately absent</b> in every shot: the button stands
+          down while the surface is raised, because Close in the title bar is
+          then the way out.
+        </p>
+      </section>
+
+      <section>
+        <h2>The four required screens</h2>
+        <div class="shots">
+          <figure>
+            <img
+              src="shots/html-expanded-light.png"
+              alt="An expanded HTML artifact in the light theme: title bar with Close, toolbar with zoom, version picker, Comments and More actions, and the served document filling the panel."
+            />
+            <figcaption>
+              <b>HTML artifact, expanded, light.</b> The tile's own toolbar rides
+              up with the surface: zoom, the version picker reading Latest,
+              Comments, More actions — over the real served document.
+            </figcaption>
+          </figure>
+          <figure>
+            <img
+              src="shots/html-expanded-dark.png"
+              alt="The same expanded HTML artifact in the dark theme, with the identical toolbar controls."
+            />
+            <figcaption>
+              <b>HTML artifact, expanded, dark.</b> The same surface under the
+              shipped dark theme; the document keeps its author's own light page
+              and the page canvas around it follows the theme.
+            </figcaption>
+          </figure>
+          <figure>
+            <img
+              src="shots/canvas-expanded-light.png"
+              alt="An expanded canvas artifact in the light theme: Pages menu, tool strip, the Home board with Play and fullscreen controls, and comments and zoom at top right."
+            />
+            <figcaption>
+              <b>Canvas artifact, expanded, light.</b> Pages, the tool strip, the
+              board with its Play and fullscreen controls, and comments and zoom
+              at the top right — the editor itself, not a view-only copy.
+            </figcaption>
+          </figure>
+          <figure>
+            <img
+              src="shots/canvas-expanded-dark.png"
+              alt="The same expanded canvas artifact in the dark theme, with the identical toolbar and board controls."
+            />
+            <figcaption>
+              <b>Canvas artifact, expanded, dark.</b> The same editor in dark; the
+              board's own fields take the theme the canvas injects into it.
+            </figcaption>
+          </figure>
+        </div>
+      </section>
+
+      <section>
+        <h2>Supplementary screens</h2>
+        <p>
+          Three controls can only be seen once opened, so each is photographed
+          open inside the raised surface.
+        </p>
+        <div class="shots">
+          <figure>
+            <img
+              src="shots/html-expanded-more-actions.png"
+              alt="The More actions menu open over the expanded artifact, showing a disabled Actual size row and a Download ZIP row."
+            />
+            <figcaption>
+              <b>More actions, open.</b> <code>Download ZIP</code> is the real
+              download row; “Actual size” is disabled because the zoom is already
+              100%. The menu paints above the raised surface rather than under
+              it.
+            </figcaption>
+          </figure>
+          <figure>
+            <img
+              src="shots/html-expanded-version-menu.png"
+              alt="The version history menu open over the expanded artifact, listing Version 2 (Latest, checked) and Version 1 with their capture times."
+            />
+            <figcaption>
+              <b>Version history, open.</b> Driven by the real
+              <code>useEpicHtmlArtifactVersion</code> hook: Version 2 · Latest is
+              checked, Version 1 is offered beneath it.
+            </figcaption>
+          </figure>
+          <figure>
+            <img
+              src="shots/html-expanded-comment-draft.png"
+              alt="Comment mode on in the expanded artifact: the Numbers heading is outlined as the anchor and a composer reading h2 Numbers with a Start a thread field is open beneath it."
+            />
+            <figcaption>
+              <b>Comment draft, open.</b> Comments is pressed, the
+              <code>h2 "Numbers"</code> anchor is outlined in the page, and the
+              composer is open inside the raised surface — the thing the second
+              copy used to drop.
+            </figcaption>
+          </figure>
+        </div>
+      </section>
+
+      <section>
+        <h2>Capture source and fidelity</h2>
+        <p>
+          A temporary capture fixture mounted the two surfaces with the
+          composition their real callers give them. It has been removed from the
+          checkout; its source is kept here. Nothing reached a real host or the
+          cloud.
+        </p>
+        <div class="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th>Part</th>
+                <th>What it was in these shots</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td>HTML surface</td>
+                <td>
+                  The real <code>HtmlArtifactCommentSurface</code>, given the
+                  <code>toolbarControls</code> and <code>menuItems</code>
+                  <code>ObjectArtifactTile</code> gives it: the real
+                  <code>HtmlArtifactVersionPicker</code> and the real
+                  <code>HtmlArtifactDownloadMenuItem</code>.
+                </td>
+              </tr>
+              <tr>
+                <td>Version picker state</td>
+                <td>
+                  The real <code>useEpicHtmlArtifactVersion</code> hook, over a
+                  host that advertises <code>epic.listHtmlArtifactVersions</code>
+                  and answers it — not a hand-built state object.
+                </td>
+              </tr>
+              <tr>
+                <td>Canvas surface</td>
+                <td>
+                  The real <code>CanvasArtifactSurface</code> on its fixture
+                  document, which is the real <code>CanvasArtifactEditor</code>
+                  with a real Y.Doc and <code>Awareness</code> — the same way
+                  <code>canvas-selection.tsx</code> mounts it.
+                </td>
+              </tr>
+              <tr>
+                <td>The document in the frame</td>
+                <td>
+                  Really served: composed by <code>ArtifactServer</code> from a
+                  manifest and a <code>readSpan</code>, fetched by the frame over
+                  the artifact origin, and rendered in the sandboxed frame.
+                </td>
+              </tr>
+              <tr>
+                <td>Theme</td>
+                <td>
+                  The app's own <code>setTheme</code> and
+                  <code>theme-applier</code> — the shipped dark theme, not a
+                  filter.
+                </td>
+              </tr>
+              <tr>
+                <td>Transport</td>
+                <td>
+                  <b>Mocked.</b> <code>MockHostMessenger</code> and
+                  <code>MockRunnerHost</code> answer the host RPCs, and the
+                  artifact origin's requests are fulfilled from the page. This is
+                  not live host or cloud integration.
+                </td>
+              </tr>
+              <tr>
+                <td>Download and Open-in-panel transport</td>
+                <td>
+                  <b>Not exercised.</b> The Download row is the real control and
+                  is enabled, but no ZIP was built and nothing was written to
+                  disk.
+                </td>
+              </tr>
+              <tr>
+                <td>Artifact content</td>
+                <td>
+                  Written for the capture. The numbers in the report page are
+                  illustrative, not measurements.
+                </td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </section>
+
+      <section>
+        <h2>Visible defects</h2>
+        <p>
+          <b>No defect found in the expanded surface.</b> In both themes and on
+          both surfaces the captured controls are legible and correctly placed,
+          menus paint above the raised surface rather than under it, and the
+          comment composer opens inside it. Four things a reader will notice are
+          not defects:
+        </p>
+        <ul>
+          <li>
+            <b>A strip of the page behind shows at the top edge of every shot.</b>
+            The surface insets itself by the safe-area gutter (1rem on a desktop
+            viewport) and dims what is behind it, so the capture harness's own
+            buttons are visible, blurred, above the title bar.
+          </li>
+          <li>
+            <b>A band below the document in the HTML shots.</b> The report page is
+            shorter than the panel; below its white body is the served page's own
+            canvas, which takes the app theme — hence light in one shot and black
+            in the other.
+          </li>
+          <li>
+            <b>The canvas board stays white in the dark shot while its fields go
+            dark.</b> That is the canvas injecting the theme into the board
+            document, and is how the board renders unexpanded too.
+          </li>
+          <li>
+            <b>The comment composer overlaps the rows beneath its anchor.</b> It is
+            anchored under the element it belongs to; this is the composer's
+            existing behaviour and not introduced by the promotion.
+          </li>
+        </ul>
+        <p class="note">
+          Two things these stills cannot show, and do not claim: the surface's
+          <b>modality</b> — top-layer promotion, inertness behind it, the Tab
+          cycle, Escape ordering — which the Playwright regressions in
+          <code>browser-tests/artifact-expansion.spec.ts</code> assert instead;
+          and <b>Open in panel</b>, which is a chat-row control
+          (<code>artifact-row.tsx</code>), not one the tile's toolbar renders.
+        </p>
+      </section>
+
+      <section>
+        <h2>The capture fixture</h2>
+        <p>
+          Three temporary files, uniquely named, added to this worktree for the
+          capture and removed afterwards. The tree is back to a clean
+          <code>9f1f4e9a7</code> with no production edit, no install and no
+          commit. Their source is kept here as evidence:
+        </p>
+        <div class="files">
+          <span>capture-fixture/artifact-modal-parity-capture.tsx.txt</span>
+          <span>capture-fixture/artifact-modal-parity-capture.html.txt</span>
+          <span>capture-fixture/artifact-modal-parity-capture.spec.ts.txt</span>
+        </div>
+        <details>
+          <summary>Why a driver spec was needed, not just the fixture</summary>
+          <p>
+            An artifact's bytes are served to its frame from an origin the
+            <em>native</em> layer answers — the desktop scheme handler, or the
+            mobile app. In a plain browser tab nothing answers it, which is why
+            every artifact spec in <code>browser-tests/</code> fulfils that
+            request itself. The in-app browser has no request routing, so it
+            could mount the surface but never load a real document. The capture
+            therefore ran under the same Playwright driver the regressions use,
+            against the same Vite fixture server, on an isolated port.
+          </p>
+        </details>
+      </section>
+
+      <footer>
+        Captured from head 9f1f4e9a7 on 8 November 2026. Screenshots live beside
+        this page under <code>shots/</code>; nothing here is committed to the
+        code branch.
+      </footer>
+    </main>
+  </body>
+</html>

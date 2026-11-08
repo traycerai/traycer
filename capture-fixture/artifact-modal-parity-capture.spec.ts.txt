@@ -1,0 +1,141 @@
+import { expect, test, type Page } from "@playwright/test";
+
+import { fixture, nextFrames } from "./support/fixtures.ts";
+
+// CAPTURE-ONLY SPEC - not a regression test, and not committed. It drives the
+// temporary `artifact-modal-parity-capture` fixture and writes the visual
+// review's screenshots outside the repository. It exists because the artifact
+// origin is served by the native layer, so only a driver that can fulfil that
+// request (as every artifact spec here does) can photograph a real served
+// document.
+
+const SHOTS =
+  "/Users/tgill/.traycer/epics/9299cf1d-db8e-4d8b-9737-2a09ac2ca9df/artifacts/tracy-bots-plan/artifact-modal-parity-screens/shots";
+
+test.use({ viewport: { width: 1440, height: 900 }, actionTimeout: 20_000 });
+
+interface ProbeWindow extends Window {
+  __parityCapture?: {
+    readonly serve: (url: string) => Promise<{
+      readonly status: number;
+      readonly mediaType: string;
+      readonly base64: string;
+    }>;
+  };
+}
+
+async function serveArtifactFromPage(page: Page): Promise<void> {
+  await page.route(
+    /^https:\/\/artifact-[^/]+\.traycer-artifact\.invalid\//,
+    async (route) => {
+      const served = await page.evaluate(
+        (url) => (window as ProbeWindow).__parityCapture?.serve(url),
+        route.request().url(),
+      );
+      if (served === undefined) {
+        await route.abort();
+        return;
+      }
+      await route.fulfill({
+        status: served.status,
+        contentType: served.mediaType,
+        body: Buffer.from(served.base64, "base64"),
+      });
+    },
+  );
+}
+
+async function setTheme(page: Page, theme: "Light" | "Dark"): Promise<void> {
+  await page.locator("#capture-controls").getByRole("button", { name: theme }).click();
+  await nextFrames(page, 3);
+}
+
+async function expand(page: Page): Promise<void> {
+  await page.getByRole("button", { name: "Expand" }).click();
+  await expect(page.getByRole("button", { name: "Close" })).toBeVisible();
+  await nextFrames(page, 4);
+}
+
+async function collapse(page: Page): Promise<void> {
+  await page.keyboard.press("Escape");
+  await expect(page.getByRole("button", { name: "Expand" })).toBeVisible();
+  await nextFrames(page, 3);
+}
+
+test("html artifact expanded, light and dark", async ({ page }) => {
+  await serveArtifactFromPage(page);
+  await page.goto(fixture("artifact-modal-parity-capture"));
+
+  const pageFrame = page.frameLocator('iframe[title="Quarterly report"]');
+  await expect(pageFrame.locator("#summary")).toHaveText("Summary");
+  await expect(page.getByRole("status", { name: "Zoom level" })).toHaveText(
+    "100%",
+  );
+  await expect(
+    page.getByRole("button", { name: "HTML version history: Latest" }),
+  ).toBeVisible();
+
+  // The four required shots come first, from a clean surface, so nothing a
+  // supplementary step leaves behind (a comment anchor's highlight) shows up
+  // in them.
+  await setTheme(page, "Light");
+  await expand(page);
+  await page.screenshot({ path: `${SHOTS}/html-expanded-light.png` });
+  await collapse(page);
+
+  await setTheme(page, "Dark");
+  await expand(page);
+  await page.screenshot({ path: `${SHOTS}/html-expanded-dark.png` });
+  await collapse(page);
+
+  await setTheme(page, "Light");
+  await expand(page);
+
+  // Supplementary: the two controls that are only reachable once opened.
+  await page.getByRole("button", { name: "More actions" }).click();
+  await expect(page.getByRole("menuitem", { name: /Download/ })).toBeVisible();
+  await nextFrames(page, 6);
+  await page.screenshot({ path: `${SHOTS}/html-expanded-more-actions.png` });
+  await page.keyboard.press("Escape");
+
+  await page
+    .getByRole("button", { name: "HTML version history: Latest" })
+    .click();
+  await expect(page.getByRole("menu")).toBeVisible();
+  await nextFrames(page, 2);
+  await page.screenshot({ path: `${SHOTS}/html-expanded-version-menu.png` });
+  await page.keyboard.press("Escape");
+
+  // Supplementary: comment mode and a draft, inside the raised surface.
+  await page.getByRole("button", { name: "Comments" }).click();
+  await expect(page.getByRole("button", { name: "Comments" })).toHaveAttribute(
+    "aria-pressed",
+    "true",
+  );
+  await nextFrames(page, 3);
+  await pageFrame.locator("#numbers").click();
+  await nextFrames(page, 4);
+  await page.screenshot({ path: `${SHOTS}/html-expanded-comment-draft.png` });
+});
+
+test("canvas artifact expanded, light and dark", async ({ page }) => {
+  await serveArtifactFromPage(page);
+  await page.goto(fixture("artifact-modal-parity-capture"));
+  await page
+    .locator("#capture-controls")
+    .getByRole("button", { name: "Canvas artifact" })
+    .click();
+
+  const board = page.frameLocator('iframe[title="Home"]');
+  await expect(board.locator("h1")).toHaveText("Create your workspace");
+  await nextFrames(page, 4);
+
+  await setTheme(page, "Light");
+  await expand(page);
+  await page.screenshot({ path: `${SHOTS}/canvas-expanded-light.png` });
+
+  await collapse(page);
+  await setTheme(page, "Dark");
+  await expand(page);
+  await page.screenshot({ path: `${SHOTS}/canvas-expanded-dark.png` });
+});

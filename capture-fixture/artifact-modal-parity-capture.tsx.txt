@@ -1,0 +1,714 @@
+import { useState, useEffect, type ReactNode } from "react";
+import { createRoot } from "react-dom/client";
+import { QueryClientProvider } from "@tanstack/react-query";
+import * as Y from "yjs";
+import { Awareness } from "y-protocols/awareness";
+import { MockHostMessenger } from "@traycer-clients/shared/host-client/mock/mock-host-messenger";
+import { MockRunnerHost } from "@traycer-clients/shared/host-client/mock/mock-runner-host";
+import { createRendererContextFixture } from "@traycer-clients/shared/test-fixtures/request-context";
+import type { ArtifactObjectRef } from "@traycer/protocol/persistence/epic/artifacts";
+import {
+  applyCanvasJson,
+  openCanvasLayout,
+} from "@traycer/protocol/persistence/epic/canvas-layout";
+import type { EpicReadArtifactObjectRequest } from "@traycer/protocol/host/epic/artifact-objects";
+import type {
+  CommentThreadWire,
+  CreateCommentThreadRequest,
+  ListCommentThreadsRequest,
+} from "@traycer/protocol/host/epic/unary-schemas";
+import { recordNegotiatedHostManifest } from "@traycer-clients/shared/host-transport/negotiated-manifest-registry";
+import type { IRunnerHost } from "@traycer-clients/shared/platform/runner-host";
+import type {
+  SandboxArtifactBridge,
+  SandboxArtifactCancel,
+  SandboxArtifactOriginParts,
+  SandboxArtifactReply,
+  SandboxArtifactRequest,
+} from "@traycer-clients/shared/platform/sandbox-artifacts";
+import type { Disposable } from "@traycer-clients/shared/platform/uri-callback";
+import { CanvasArtifactSurface } from "@/components/canvas-artifact/canvas-artifact-surface";
+import { CanvasSelectionProvider } from "@/components/canvas-artifact/canvas-selection-provider";
+import { CanvasArtifactFixtureProvider } from "@/components/canvas-artifact/canvas-surface-context";
+import { HtmlArtifactCommentSurface } from "@/components/html-artifact/html-artifact-comment-surface";
+import { HtmlArtifactVersionPicker } from "@/components/html-artifact/html-artifact-version-picker";
+import { HtmlArtifactDownloadMenuItem } from "@/components/html-artifact/html-artifact-download-button";
+import { useEpicHtmlArtifactVersion } from "@/hooks/epic/use-epic-html-artifact-version";
+import { TabHostContext } from "@/components/epic-canvas/hooks/use-tab-host-id";
+import { EpicViewTabContext } from "@/components/epic-canvas/view-tab-context";
+import { TooltipProvider } from "@/components/ui/tooltip";
+import { Button } from "@/components/ui/button";
+import {
+  NO_OUTSIDE_REFERENCE,
+  type ArtifactManifest,
+  type ArtifactReadSpan,
+} from "@/lib/sandbox/artifact-serving";
+import { parseArtifactAddress } from "@/lib/sandbox/artifact-serving/artifact-address";
+import {
+  HostRuntimeProvider,
+  hostRpcRegistry,
+  useHostBinding,
+  type HostRpcRegistry,
+  type MessengerFactory,
+} from "@/lib/host";
+import { createAppQueryClient } from "@/lib/query-client";
+import {
+  EpicSessionContext,
+  EpicSessionHostClientContext,
+} from "@/lib/registries/epic-session-registry";
+import { RunnerHostProvider } from "@/providers/runner-host-provider";
+import { useAuthStore } from "@/stores/auth/auth-store";
+import { useSettingsStore } from "@/stores/settings/settings-store";
+import type { ArtifactProjection } from "@/stores/epics/open-epic/types";
+import type { EpicStreamClientFactory } from "@/stores/epics/open-epic/store";
+import { openStoreForTest } from "@/stores/epics/open-epic/test-support/open-store-for-test";
+import type { EpicArtifactRef } from "@/stores/epics/canvas/types";
+import "@/lib/theme-applier";
+import "@/index.css";
+
+/**
+ * CAPTURE-ONLY FIXTURE - not a test, and not committed.
+ *
+ * Mounts the two real expandable artifact surfaces with the composition their
+ * real callers give them, so the expanded view can be photographed for the
+ * visual review of the control-parity change:
+ *
+ *   - `html`   - `HtmlArtifactCommentSurface` with the toolbar and menu
+ *                `ObjectArtifactTile` passes it: the real
+ *                `HtmlArtifactVersionPicker` driven by the real
+ *                `useEpicHtmlArtifactVersion` hook, and the real
+ *                `HtmlArtifactDownloadMenuItem` in "More actions".
+ *   - `canvas` - `CanvasArtifactSurface` on its fixture document, which is the
+ *                real `CanvasArtifactEditor` with a real Y.Doc and awareness,
+ *                the same way `canvas-selection.tsx` mounts it.
+ *
+ * The transport is the mock host messenger of `html-artifact-comment-mode.tsx`
+ * and `canvas-selection.tsx`: the document bytes travel the real artifact
+ * bridge and the real `readSpan`, and the host RPCs (version list, comment
+ * threads, object reads) are answered locally. Nothing talks to a real host or
+ * to the cloud.
+ */
+const EPIC_ID = "parity-capture-epic";
+const HTML_ARTIFACT_ID = "parity-capture-html";
+const CANVAS_ARTIFACT_ID = "parity-capture-canvas";
+const VIEW_TAB_ID = "parity-capture-view";
+const HOST_ID = "parity-capture-host";
+const HTML_TITLE = "Quarterly report";
+const ENTRY_PATH = "index.html";
+const PAGE_SHA = "a".repeat(64);
+const BOARD_PATH = "boards/home.html";
+const BOARD_TITLE = "Home";
+const BOARD_SHA = "d".repeat(64);
+const CANVAS_TITLE = "Onboarding flow";
+/** Fixed, realistic capture times, so the version menu reads as it would live. */
+const CAPTURED_AT_V2 = Date.UTC(2026, 10, 6, 14, 12);
+const CAPTURED_AT_V1 = Date.UTC(2026, 10, 3, 9, 40);
+
+const PAGE_HTML = `<!doctype html><html lang="en"><head><meta charset="utf-8"><style>
+html,body{margin:0}
+body{font:16px/1.5 -apple-system,system-ui,sans-serif;color:#1f2328;background:#fff}
+header{padding:28px 32px 20px;border-bottom:1px solid #e6e8eb}
+h1{margin:0 0 6px;font-size:26px}
+.sub{color:#636c76;font-size:14px}
+main{padding:24px 32px 40px;max-width:760px}
+h2{font-size:18px;margin:28px 0 10px}
+p{margin:0 0 12px}
+table{border-collapse:collapse;width:100%;font-size:14px;margin:8px 0 4px}
+th,td{text-align:left;padding:8px 10px;border-bottom:1px solid #e6e8eb}
+th{color:#636c76;font-weight:600}
+.bar{height:10px;border-radius:5px;background:#dbe5f1}
+.bar>span{display:block;height:100%;border-radius:5px;background:#3b74c4}
+</style></head><body>
+<header>
+  <h1>Quarterly report</h1>
+  <div class="sub">Prepared for the review of the artifact surface</div>
+</header>
+<main>
+  <h2 id="summary">Summary</h2>
+  <p>Readers open an artifact from a tile and expand it to fill the window. The
+  expanded view is the same surface, promoted in place, so everything the
+  collapsed toolbar offered is still there.</p>
+  <h2 id="numbers">Numbers</h2>
+  <table>
+    <thead><tr><th>Surface</th><th>Reads</th><th>Share</th></tr></thead>
+    <tbody>
+      <tr><td>Tile</td><td>1,284</td><td><div class="bar"><span style="width:62%"></span></div></td></tr>
+      <tr><td>Expanded</td><td>742</td><td><div class="bar"><span style="width:36%"></span></div></td></tr>
+      <tr><td>Chat row</td><td>96</td><td><div class="bar"><span style="width:5%"></span></div></td></tr>
+    </tbody>
+  </table>
+  <h2 id="notes">Notes</h2>
+  <p>A comment anchored to this section is listed below the page, and the
+  composer opens in place rather than on a second copy of the surface.</p>
+  <p id="deep">The reader can keep reading after expanding, at the same scroll
+  position, because the frame was never re-created.</p>
+</main>
+</body></html>`;
+
+const BOARD_HTML = `<!doctype html><html lang="en"><head><meta charset="utf-8"><style>
+html,body{margin:0}
+body{font:14px -apple-system,system-ui,sans-serif;color:#1f2328;background:#fff;padding:20px}
+h1{font-size:18px;margin:0 0 4px}
+.muted{color:#636c76;font-size:12px;margin:0 0 16px}
+.field{margin:0 0 12px}
+label{display:block;font-size:12px;color:#636c76;margin-bottom:4px}
+input{width:260px;padding:7px 9px;border:1px solid #d0d7de;border-radius:6px;font:inherit}
+button{padding:8px 14px;border-radius:6px;border:0;background:#3b74c4;color:#fff;font:inherit}
+</style></head><body>
+<h1>Create your workspace</h1>
+<p class="muted">Step 1 of 3</p>
+<div class="field"><label for="n">Workspace name</label><input id="n" value="Acme"></div>
+<div class="field"><label for="e">Invite a teammate</label><input id="e" placeholder="name@acme.com"></div>
+<button type="button">Continue</button>
+</body></html>`;
+
+const pageBytes = new TextEncoder().encode(PAGE_HTML);
+const boardBytes = new TextEncoder().encode(BOARD_HTML);
+
+const htmlManifest: ArtifactManifest = {
+  files: {
+    [ENTRY_PATH]: {
+      sha256: PAGE_SHA,
+      byteLength: pageBytes.length,
+      mediaType: "text/html",
+      status: "local-only",
+    },
+  },
+};
+const readSpan: ArtifactReadSpan = (hash, offset, length, signal) => {
+  signal.throwIfAborted();
+  const bytes =
+    hash === PAGE_SHA ? pageBytes : hash === BOARD_SHA ? boardBytes : null;
+  if (bytes === null) return Promise.resolve({ unavailable: "missing" });
+  return Promise.resolve({
+    bytes: bytes.slice(offset, offset + length),
+    totalBytes: bytes.length,
+    mediaType: "text/html",
+  });
+};
+
+const SPAN_BYTES = 4 * 1024 * 1024;
+
+/** Native handlers reach a page through requests; this bridge answers them. */
+class FixtureArtifactBridge implements SandboxArtifactBridge {
+  readonly policySource = null;
+  private readonly handlers = new Set<
+    (request: SandboxArtifactRequest) => void
+  >();
+  private readonly replies = new Map<
+    string,
+    (reply: SandboxArtifactReply) => void
+  >();
+  private requestCounter = 0;
+
+  artifactOrigin({ artifactId, mountId }: SandboxArtifactOriginParts): string {
+    return `https://artifact-${artifactId}--${mountId}.traycer-artifact.invalid`;
+  }
+  register(): Promise<void> {
+    return Promise.resolve();
+  }
+  unregister(): Promise<void> {
+    return Promise.resolve();
+  }
+  onRequest(handler: (request: SandboxArtifactRequest) => void): Disposable {
+    this.handlers.add(handler);
+    return { dispose: () => this.handlers.delete(handler) };
+  }
+  onCancel(_handler: (cancel: SandboxArtifactCancel) => void): Disposable {
+    return { dispose: () => undefined };
+  }
+  respond(reply: SandboxArtifactReply): Promise<void> {
+    this.replies.get(reply.requestId)?.(reply);
+    this.replies.delete(reply.requestId);
+    return Promise.resolve();
+  }
+
+  private ask(mountId: string, path: string, offset: number) {
+    const requestId = `parity-capture-${String((this.requestCounter += 1))}`;
+    return new Promise<SandboxArtifactReply>((resolve) => {
+      this.replies.set(requestId, resolve);
+      for (const handler of this.handlers)
+        handler({ requestId, mountId, path, offset, length: SPAN_BYTES });
+    });
+  }
+
+  async serve(
+    url: string,
+  ): Promise<{ status: number; mediaType: string; base64: string }> {
+    const address = parseArtifactAddress(url);
+    if (address === null)
+      return { status: 404, mediaType: "text/plain", base64: "" };
+    const chunks: Uint8Array[] = [];
+    let offset = 0;
+    for (;;) {
+      const reply = await this.ask(address.mountId, address.path, offset);
+      if (reply.kind === "unavailable")
+        return { status: reply.status, mediaType: "text/plain", base64: "" };
+      chunks.push(reply.bytes);
+      offset += reply.bytes.length;
+      if (offset >= reply.totalBytes || reply.bytes.length === 0) {
+        const whole = new Uint8Array(offset);
+        let at = 0;
+        for (const chunk of chunks) {
+          whole.set(chunk, at);
+          at += chunk.length;
+        }
+        let binary = "";
+        for (const byte of whole) binary += String.fromCharCode(byte);
+        return {
+          status: 200,
+          mediaType: reply.mediaType,
+          base64: btoa(binary),
+        };
+      }
+    }
+  }
+}
+const artifactBridge = new FixtureArtifactBridge();
+interface ProbeWindow extends Window {
+  __parityCapture?: {
+    readonly serve: (url: string) => Promise<{
+      status: number;
+      mediaType: string;
+      base64: string;
+    }>;
+  };
+}
+const probeWindow: ProbeWindow = window;
+probeWindow.__parityCapture = { serve: (url) => artifactBridge.serve(url) };
+
+const htmlFiles: Record<string, ArtifactObjectRef> = {
+  [ENTRY_PATH]: {
+    sha256: PAGE_SHA,
+    byteLength: pageBytes.length,
+    mediaType: "text/html",
+    status: "local-only",
+  },
+};
+const boardFiles: Record<string, ArtifactObjectRef> = {
+  [BOARD_PATH]: {
+    sha256: BOARD_SHA,
+    byteLength: boardBytes.length,
+    mediaType: "text/html",
+    status: "local-only",
+  },
+};
+const htmlArtifact: ArtifactProjection = {
+  id: HTML_ARTIFACT_ID,
+  kind: "html",
+  title: HTML_TITLE,
+  layout: "folder",
+  folderName: "quarterly-report",
+  parentId: null,
+  artifactRoomId: "parity-capture-html-room",
+  createdAt: 0,
+  updatedAt: 0,
+  status: null,
+  createdManually: false,
+  head: { files: htmlFiles, capturedAt: CAPTURED_AT_V2 },
+};
+const canvasArtifact: ArtifactProjection = {
+  id: CANVAS_ARTIFACT_ID,
+  kind: "canvas",
+  title: CANVAS_TITLE,
+  layout: "folder",
+  folderName: "onboarding-flow",
+  parentId: null,
+  artifactRoomId: "parity-capture-canvas-room",
+  createdAt: 0,
+  updatedAt: 0,
+  status: null,
+  createdManually: false,
+  head: { files: boardFiles, capturedAt: 0 },
+};
+
+const doc = new Y.Doc();
+const awareness = new Awareness(doc);
+applyCanvasJson(
+  openCanvasLayout(doc, CANVAS_ARTIFACT_ID),
+  {
+    v: 1,
+    title: CANVAS_TITLE,
+    pages: [{ id: "page", name: "Page" }],
+    boards: {
+      [BOARD_PATH]: {
+        x: 0,
+        y: 0,
+        w: 640,
+        h: 420,
+        title: BOARD_TITLE,
+        page: "page",
+        is_interactive: false,
+      },
+    },
+    notes: {},
+    order: [BOARD_PATH],
+  },
+  { baseline: null, protectedBoardPaths: [] },
+);
+
+const THREAD: CommentThreadWire = {
+  threadId: "parity-capture-thread",
+  resolved: false,
+  createdAt: 1,
+  comments: [
+    {
+      commentId: "parity-capture-thread-c1",
+      content: {
+        type: "doc",
+        content: [
+          {
+            type: "paragraph",
+            content: [
+              { type: "text", text: "Can this table carry last quarter too?" },
+            ],
+          },
+        ],
+      },
+      createdAt: 1,
+      updatedAt: null,
+      author: { userId: "user-1", fallbackHandle: "You" },
+    },
+  ],
+  data: {
+    createdByUserId: "user-1",
+    anchorKind: "element",
+    artboard: ENTRY_PATH,
+    elementId: "numbers",
+    label: "Numbers",
+  },
+};
+
+useAuthStore
+  .getState()
+  .setSignedIn(
+    { userId: "user-1", userName: "You", email: "you@example.invalid" },
+    { userId: "user-1", username: "You" },
+    [],
+  );
+const noopEpicStreamClientFactory: EpicStreamClientFactory = () => ({
+  applyUpdate: () => undefined,
+  awareness: () => undefined,
+  applyArtifactRoomUpdate: () => undefined,
+  artifactRoomAwareness: () => undefined,
+  retryMigration: () => undefined,
+  close: () => undefined,
+});
+const epicHandle = openStoreForTest({
+  epicId: EPIC_ID,
+  userId: "user-1",
+  factories: {
+    streamClientFactory: noopEpicStreamClientFactory,
+    laneSelection: null,
+  },
+  writeCommand: null,
+});
+epicHandle.store.setState({
+  durabilityStatus: "local",
+  recordsTransportStatus: "open",
+  artifacts: {
+    byId: {
+      [HTML_ARTIFACT_ID]: htmlArtifact,
+      [CANVAS_ARTIFACT_ID]: canvasArtifact,
+    },
+    allIds: [HTML_ARTIFACT_ID, CANVAS_ARTIFACT_ID],
+  },
+  commentThreads: { byArtifactId: { [HTML_ARTIFACT_ID]: [THREAD] } },
+});
+recordNegotiatedHostManifest(HOST_ID, {
+  "epic.createCommentThread": { major: 1, minor: 3 },
+  "epic.listHtmlArtifactVersions": { major: 1, minor: 0 },
+});
+
+const queryClient = createAppQueryClient();
+const mockRunnerHost = new MockRunnerHost({
+  signInUrl: "http://127.0.0.1:9/sign-in",
+  authnBaseUrl: "http://127.0.0.1:9",
+  localHost: {
+    hostId: HOST_ID,
+    websocketUrl: "ws://127.0.0.1:9/parity-capture",
+    version: "0.0.0-fixture",
+    pid: 1,
+    systemHostName: "fixture",
+    displayName: "fixture",
+    availability: "available",
+  },
+  hosts: [],
+  workspaceFolderPickerPaths: undefined,
+  hasLocalHost: undefined,
+  traycerCli: undefined,
+});
+const runnerHost: IRunnerHost = Object.assign(
+  Object.create(MockRunnerHost.prototype) as IRunnerHost,
+  mockRunnerHost,
+  { sandboxArtifacts: artifactBridge },
+);
+
+let requestCounter = 0;
+const messengerFactory: MessengerFactory<HostRpcRegistry> = ({ registry }) =>
+  new MockHostMessenger<HostRpcRegistry>({
+    registry,
+    requestId: () => `parity-capture-${String((requestCounter += 1))}`,
+    handlers: {
+      "host.status": () => ({
+        ready: true,
+        hostVersion: "1.2.3",
+        protocolVersion: { major: 1, minor: 2 },
+        busy: false,
+        busySessionCount: 0,
+        updateProgress: null,
+        busyBreakdown: null,
+        updateOperation: null,
+        updateTransaction: null,
+        storeFormats: null,
+        install: null,
+        processMemory: null,
+        crossHostMessaging: null,
+        sessions: null,
+        updatesExternallyManaged: null,
+        previousExit: null,
+      }),
+      "host.notifications.indicatorState": () => ({
+        epics: {},
+        chats: {},
+        complete: true,
+      }),
+      "epic.getTaskContexts": () => ({ tasks: {} }),
+      "epic.readArtifactObject": (request: EpicReadArtifactObjectRequest) => {
+        if (request.sha256 === PAGE_SHA)
+          return {
+            kind: "text",
+            text: PAGE_HTML,
+            mediaType: "text/html",
+            networkPolicy: "https-only",
+          };
+        if (request.sha256 === BOARD_SHA)
+          return {
+            kind: "text",
+            text: BOARD_HTML,
+            mediaType: "text/html",
+            networkPolicy: "https-only",
+          };
+        return { kind: "unavailable", reason: "missing" };
+      },
+      "epic.listHtmlArtifactVersions": () => ({
+        versions: [
+          {
+            id: "b".repeat(64),
+            versionNumber: 2,
+            entryPath: ENTRY_PATH,
+            manifest: {
+              files: {
+                [ENTRY_PATH]: {
+                  sha256: PAGE_SHA,
+                  byteLength: pageBytes.length,
+                  mediaType: "text/html",
+                },
+              },
+              capturedAt: CAPTURED_AT_V2,
+            },
+          },
+          {
+            id: "c".repeat(64),
+            versionNumber: 1,
+            entryPath: ENTRY_PATH,
+            manifest: {
+              files: {
+                [ENTRY_PATH]: {
+                  sha256: PAGE_SHA,
+                  byteLength: pageBytes.length,
+                  mediaType: "text/html",
+                },
+              },
+              capturedAt: CAPTURED_AT_V1,
+            },
+          },
+        ],
+        nextCursor: null,
+        currentVersionNumber: 2,
+      }),
+      "epic.listCommentThreads": (_request: ListCommentThreadsRequest) => ({
+        threads: [THREAD],
+      }),
+      "epic.createCommentThread": (_request: CreateCommentThreadRequest) => ({
+        threadId: "parity-capture-thread-posted",
+      }),
+    },
+  });
+
+/** Holds the surfaces back until the host client has its request context. */
+function RequestContext(props: { readonly children: ReactNode }): ReactNode {
+  const binding = useHostBinding();
+  const [ready, setReady] = useState(false);
+  useEffect(() => {
+    if (ready || binding === null) return;
+    const unsubscribe = binding.hostClient.onChange(() => setReady(true));
+    binding.hostClient.setRequestContext(
+      createRendererContextFixture({ bearerToken: "fixture" }),
+    );
+    return unsubscribe;
+  }, [binding, ready]);
+  return ready && binding !== null ? (
+    <EpicSessionHostClientContext value={binding.hostClient}>
+      {props.children}
+    </EpicSessionHostClientContext>
+  ) : null;
+}
+
+const HTML_NODE: EpicArtifactRef = {
+  id: HTML_ARTIFACT_ID,
+  instanceId: "parity-capture-html-instance",
+  type: "html",
+  name: HTML_TITLE,
+  hostId: HOST_ID,
+};
+
+/** The HTML tile's own composition, from `ObjectArtifactTile`. */
+function HtmlTileSurface(): ReactNode {
+  const version = useEpicHtmlArtifactVersion({
+    epicId: EPIC_ID,
+    node: HTML_NODE,
+    artifact: htmlArtifact,
+  });
+  if (version.manifest === null) return null;
+  const source = {
+    kind: "artifact",
+    artifactId: HTML_ARTIFACT_ID,
+    treePath: "quarterly-report",
+    entryPath: version.entryPath ?? ENTRY_PATH,
+    manifest: version.manifest,
+    readSpan,
+    resolveOutsideReference: NO_OUTSIDE_REFERENCE,
+  } as const;
+  return (
+    <HtmlArtifactCommentSurface
+      epicId={EPIC_ID}
+      artifactId={HTML_ARTIFACT_ID}
+      artifactTitle={HTML_TITLE}
+      hostId={HOST_ID}
+      viewTabId={VIEW_TAB_ID}
+      source={source}
+      toolbarControls={<HtmlArtifactVersionPicker version={version} />}
+      menuItems={
+        <HtmlArtifactDownloadMenuItem
+          source={source}
+          title={HTML_TITLE}
+          hostId={HOST_ID}
+        />
+      }
+    />
+  );
+}
+
+function CanvasTileSurface(): ReactNode {
+  return (
+    <CanvasArtifactFixtureProvider
+      value={{
+        doc,
+        awareness,
+        treePath: "onboarding-flow",
+        user: { name: "You", color: "#14b8a6" },
+        resolveOutsideReference: () => null,
+        readSpan,
+      }}
+    >
+      <CanvasSelectionProvider
+        epicId={EPIC_ID}
+        artifactId={CANVAS_ARTIFACT_ID}
+        artifactTitle={CANVAS_TITLE}
+        artifactType="canvas"
+        hostId={HOST_ID}
+        viewTabId={VIEW_TAB_ID}
+      >
+        <CanvasArtifactSurface
+          epicId={EPIC_ID}
+          artifactId={CANVAS_ARTIFACT_ID}
+          artifact={canvasArtifact}
+        />
+      </CanvasSelectionProvider>
+    </CanvasArtifactFixtureProvider>
+  );
+}
+
+/**
+ * The capture harness: which surface is mounted, and the app's own theme
+ * switch (`setTheme` through the real settings store and theme applier), so a
+ * dark shot is the shipped dark theme rather than a filter over a light one.
+ */
+function CaptureHarness(): ReactNode {
+  const [view, setView] = useState<"html" | "canvas">(
+    window.location.hash === "#canvas" ? "canvas" : "html",
+  );
+  const theme = useSettingsStore((state) => state.theme);
+  const setTheme = useSettingsStore((state) => state.setTheme);
+  return (
+    <div className="flex h-full min-h-0 w-full flex-col">
+      <div
+        id="capture-controls"
+        className="flex shrink-0 items-center gap-2 border-b border-border px-3 py-2"
+      >
+        <Button
+          variant={view === "html" ? "default" : "outline"}
+          size="sm"
+          onClick={() => setView("html")}
+        >
+          HTML artifact
+        </Button>
+        <Button
+          variant={view === "canvas" ? "default" : "outline"}
+          size="sm"
+          onClick={() => setView("canvas")}
+        >
+          Canvas artifact
+        </Button>
+        <span className="ml-4 text-ui-xs text-muted-foreground">Theme</span>
+        <Button
+          variant={theme === "light" ? "default" : "outline"}
+          size="sm"
+          onClick={() => setTheme("light")}
+        >
+          Light
+        </Button>
+        <Button
+          variant={theme === "dark" ? "default" : "outline"}
+          size="sm"
+          onClick={() => setTheme("dark")}
+        >
+          Dark
+        </Button>
+      </div>
+      <div className="min-h-0 flex-1">
+        {view === "html" ? <HtmlTileSurface /> : <CanvasTileSurface />}
+      </div>
+    </div>
+  );
+}
+
+const container = document.getElementById("root");
+if (container === null) throw new Error("fixture root missing");
+createRoot(container).render(
+  <QueryClientProvider client={queryClient}>
+    <RunnerHostProvider runnerHost={runnerHost}>
+      <HostRuntimeProvider
+        registry={hostRpcRegistry}
+        messengerFactory={messengerFactory}
+        invalidator={null}
+        requestId={null}
+        remoteFetcher={() => Promise.resolve({ kind: "hosts", entries: [] })}
+        fallback={<div data-fixture-runtime-fallback />}
+      >
+        <RequestContext>
+          <EpicSessionContext.Provider value={epicHandle}>
+            <EpicViewTabContext.Provider value={VIEW_TAB_ID}>
+              <TabHostContext.Provider value={HOST_ID}>
+                <TooltipProvider>
+                  <CaptureHarness />
+                </TooltipProvider>
+              </TabHostContext.Provider>
+            </EpicViewTabContext.Provider>
+          </EpicSessionContext.Provider>
+        </RequestContext>
+      </HostRuntimeProvider>
+    </RunnerHostProvider>
+  </QueryClientProvider>,
+);
