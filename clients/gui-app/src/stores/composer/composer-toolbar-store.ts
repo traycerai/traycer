@@ -184,8 +184,8 @@ export interface ComposerToolbarState extends ComposerToolbarDerived {
   readonly catalog: ComposerToolbarCatalog;
   readonly onSettingsChange: ((settings: ChatRunSettings) => void) | null;
   /**
-   * Any edit waits for a concrete model slug. A run edit also waits for its
-   * account's catalog, so another account's tier never reaches persistence.
+   * Any edit waits for a concrete model slug. Run edits and retained setting
+   * effort also wait for their account's catalog before reaching persistence.
    */
   readonly pendingSettingsEmit: boolean;
   /**
@@ -377,8 +377,12 @@ export function createComposerToolbarStore(
         state.catalog,
         derived.selection,
       );
-      // A run's profile change waits for its own catalog. Other edits defer when
-      // the slug is still unresolved (catalog loading), the
+      const needsAccountCatalog =
+        purpose === "run" || values.reasoning.length > 0;
+      // A run's account change, or a setting's retained effort, waits for that
+      // account's catalog. A setting's named-default provider switch carries no
+      // effort and commits at once. Other edits defer when the slug is still
+      // unresolved (catalog loading), the
       // harness was surface-rerouted, or the slug is a display-only heal - the
       // surface emit (live-settings/last-run) is NOT gated on catalog
       // confirmation. Memory integrity is enforced at the write site (the
@@ -392,11 +396,11 @@ export function createComposerToolbarStore(
         settings.model.length === 0 ||
         rerouted ||
         derived.selectionHealedForDisplay ||
-        (purpose === "run" &&
+        (needsAccountCatalog &&
           (!catalogMatchesAccount ||
             (state.pendingSettingsEmit &&
               !state.catalog.modelsLoaded &&
-              !state.catalog.modelsFailed)))
+              (purpose === "setting" || !state.catalog.modelsFailed))))
       ) {
         set({ values, ...derived, pendingSettingsEmit: true });
         return;
