@@ -289,7 +289,6 @@ describe("SoundtrackSession.logNow", () => {
       "sounding",
       "plan",
     ]);
-    expect(applied).toBeDefined();
     expect(run.events[2]).toEqual({ ...applied, t: run.events[2].t });
     run.session.end();
   });

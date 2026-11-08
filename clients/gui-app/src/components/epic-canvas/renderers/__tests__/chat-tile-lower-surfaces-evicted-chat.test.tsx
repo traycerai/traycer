@@ -127,7 +127,7 @@ function render(ui: ReactElement) {
 function props(
   access: ChatLowerAccessState,
 ): ChatLowerInteractionSurfacesProps {
-  const interview = interviewState({});
+  const interview = interviewState();
   return {
     epicId: "epic-1",
     viewTabId: "tab-1",
@@ -143,8 +143,7 @@ function props(
       ultracodeProtocolSupported: false,
       getDraftBlobBridgeSupported: () => false,
       getActiveTurnForSteer: () => null,
-      // Unused by this suite - it covers the unanswerable-interview escape
-      // hatch, not Stop.
+      // Unused by this suite - it covers the send gate, not Stop.
       getStopConfirmationTarget: () => ({
         turnId: null,
         revision: 0,
@@ -210,9 +209,7 @@ function props(
   };
 }
 
-function interviewState(
-  overrides: Partial<ChatLowerInterviewState>,
-): ChatLowerInterviewState {
+function interviewState(): ChatLowerInterviewState {
   return {
     pending: null,
     isBusy: false,
@@ -222,7 +219,6 @@ function interviewState(
     onSkip: () => null,
     onFork: null,
     highlightedBlockId: null,
-    ...overrides,
   };
 }
 
@@ -248,7 +244,6 @@ describe("the composer of an evicted chat the pool serves", () => {
       <ChatLowerInteractionSurfaces {...props(evictedAccess(true))} />,
     );
 
-    expect(screen.getByTestId("composer-stub")).toBeTruthy();
     expect(composerProps.at(-1)).toEqual({ sendDisabled: false });
     expect(screen.getByTestId("composer-stub").textContent).toBe("");
     expect(

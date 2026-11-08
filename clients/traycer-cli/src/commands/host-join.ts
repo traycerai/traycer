@@ -23,12 +23,12 @@ import {
 } from "../store/paths";
 import { MAX_INSTALL_TOKEN_LENGTH } from "./host-join-token";
 
-// `traycer host join` - makes this machine a team's host (Tracy Bots T141). A
-// team member mints the one-time install token in the app; this command takes
-// it from a prompt or stdin (`host-join-token.ts`), never the command line,
-// leaves it where the host enrolls from, then installs, registers and starts
-// the host like `host ensure`. The host reads the token at boot, which is what
-// makes it a team machine, enrolls as the team's, and deletes it.
+// `traycer host join` - makes this machine a team's host. A team member mints
+// the one-time install token in the app; this command takes it from a prompt
+// or stdin (`host-join-token.ts`), never the command line, leaves it where
+// the host enrolls from, then installs, registers and starts the host like
+// `host ensure`. The host reads the token at boot, which is what makes it a
+// team machine, enrolls as the team's, and deletes it.
 //
 // A team machine that lost its credential joins again the same way: it is
 // paused until a new token arrives, and the coordination loop takes it there.

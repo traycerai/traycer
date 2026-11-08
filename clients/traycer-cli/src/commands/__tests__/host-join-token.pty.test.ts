@@ -30,9 +30,7 @@ const CTRL_D = "\u0004";
 const TerminalModes = z.object({ echo: z.boolean(), icanon: z.boolean() });
 const PtyRuns = z.array(
   z.object({
-    prompt_seen: z.boolean(),
     at_prompt: TerminalModes.nullable(),
-    reported: z.boolean(),
     after_read: TerminalModes.nullable(),
     exit_code: z.number().nullable(),
     after_exit: TerminalModes.nullable(),

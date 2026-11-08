@@ -350,7 +350,10 @@ function DropdownMenuSubContent({
         data-layout={layout}
         collisionPadding={collisionPadding ?? safeAreaInsets}
         className={cn(
-          "z-50 max-w-safe-dvw min-w-24 origin-(--radix-dropdown-menu-content-transform-origin) overflow-hidden rounded-lg bg-popover text-popover-foreground shadow-lg ring-1 ring-foreground/10 duration-100 data-[side=bottom]:slide-in-from-top-2 data-[side=left]:slide-in-from-right-2 data-[side=right]:slide-in-from-left-2 data-[side=top]:slide-in-from-bottom-2 data-open:animate-in data-open:fade-in-0 data-open:zoom-in-95 data-closed:animate-out data-closed:fade-out-0 data-closed:zoom-out-95",
+          // Same available-height cap as `DropdownMenuContent`. SubContent sets
+          // the same custom property. The closed-state overflow matches the
+          // parent so the exit animation does not flash a scrollbar.
+          "z-50 max-h-(--radix-dropdown-menu-content-available-height) max-w-safe-dvw min-h-0 min-w-24 origin-(--radix-dropdown-menu-content-transform-origin) overflow-x-hidden overflow-y-auto rounded-lg bg-popover text-popover-foreground shadow-lg ring-1 ring-foreground/10 duration-100 data-[side=bottom]:slide-in-from-top-2 data-[side=left]:slide-in-from-right-2 data-[side=right]:slide-in-from-left-2 data-[side=top]:slide-in-from-bottom-2 data-[state=closed]:overflow-hidden data-open:animate-in data-open:fade-in-0 data-open:zoom-in-95 data-closed:animate-out data-closed:fade-out-0 data-closed:zoom-out-95",
           layout === "panel" ? "p-3 text-ui-sm" : "p-1",
           className,
         )}

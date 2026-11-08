@@ -219,10 +219,10 @@ export function WorkspaceFileDeadTileBanner(
       </p>
       <ReportIssueAction
         context={createReportIssueContext({
-          title: "Workspace file is unavailable",
-          message: "The workspace file's bound host is unavailable.",
+          title: "Folder file is unavailable",
+          message: "The folder file's bound host is unavailable.",
           code: null,
-          source: "Workspace file",
+          source: "Folder file",
         })}
         presentation="text"
         className={undefined}

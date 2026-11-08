@@ -34,7 +34,6 @@ import {
   __getOpenEpicRegistryForTests,
   EpicSessionHostClientContext,
 } from "@/lib/registries/epic-session-registry";
-import type { WirePermissionRole } from "@traycer/protocol/host/epic/unary-schemas";
 import type { EnvironmentListResponse } from "@traycer/protocol/host/environment/contracts";
 import {
   installHostConnectionRegistrySource,
@@ -327,14 +326,13 @@ function renderContainer(input: {
    * passes `undefined` and exercises exactly that local tier.
    */
   readonly providedOwnerUserId: string | undefined;
-  readonly permissionRole: WirePermissionRole | null;
   readonly showsPublishedCopy: boolean;
   readonly reason: ChatDeadTileBannerReason;
 }) {
   const epicId = `epic-banner-container-${++epicSeq}`;
   const harness = createEpicSessionTestHarness(epicId);
   activeHarness = harness;
-  harness.install(seedChatOwnedBy(input.ownerUserId), input.permissionRole);
+  harness.install(seedChatOwnedBy(input.ownerUserId), "editor");
   const queryClient = new QueryClient({
     defaultOptions: { queries: { retry: false, gcTime: 0 } },
   });
@@ -430,7 +428,6 @@ describe("ChatDeadTileBannerContainer - ownership resolution", () => {
     renderContainer({
       ownerUserId: COLLABORATOR_USER_ID,
       providedOwnerUserId: COLLABORATOR_USER_ID,
-      permissionRole: "editor",
       showsPublishedCopy: true,
       reason: "host-offline",
     });
@@ -449,7 +446,6 @@ describe("ChatDeadTileBannerContainer - ownership resolution", () => {
     renderContainer({
       ownerUserId: VIEWER_USER_ID,
       providedOwnerUserId: undefined,
-      permissionRole: "editor",
       showsPublishedCopy: false,
       reason: "host-offline",
     });
@@ -466,7 +462,6 @@ describe("ChatDeadTileBannerContainer - ownership resolution", () => {
     renderContainer({
       ownerUserId: COLLABORATOR_USER_ID,
       providedOwnerUserId: COLLABORATOR_USER_ID,
-      permissionRole: "editor",
       showsPublishedCopy: true,
       reason: "host-offline",
     });
@@ -482,7 +477,6 @@ describe("ChatDeadTileBannerContainer - ownership resolution", () => {
     renderContainer({
       ownerUserId: COLLABORATOR_USER_ID,
       providedOwnerUserId: COLLABORATOR_USER_ID,
-      permissionRole: "editor",
       showsPublishedCopy: true,
       reason: "host-offline",
     });
@@ -516,7 +510,6 @@ describe("ChatDeadTileBannerContainer - ownership resolution", () => {
     renderContainer({
       ownerUserId: COLLABORATOR_USER_ID,
       providedOwnerUserId: COLLABORATOR_USER_ID,
-      permissionRole: "editor",
       showsPublishedCopy: true,
       reason: "host-offline",
     });
@@ -533,7 +526,6 @@ describe("ChatDeadTileBannerContainer - ownership resolution", () => {
     renderContainer({
       ownerUserId: COLLABORATOR_USER_ID,
       providedOwnerUserId: COLLABORATOR_USER_ID,
-      permissionRole: "editor",
       showsPublishedCopy: false,
       reason: "host-offline",
     });
@@ -554,7 +546,6 @@ describe("ChatDeadTileBannerContainer - an owner not yet told apart", () => {
     renderContainer({
       ownerUserId: COLLABORATOR_USER_ID,
       providedOwnerUserId: COLLABORATOR_USER_ID,
-      permissionRole: "editor",
       showsPublishedCopy: false,
       reason: "host-offline",
     });
@@ -573,7 +564,6 @@ describe("ChatDeadTileBannerContainer - an owner not yet told apart", () => {
     renderContainer({
       ownerUserId: COLLABORATOR_USER_ID,
       providedOwnerUserId: COLLABORATOR_USER_ID,
-      permissionRole: "editor",
       showsPublishedCopy: false,
       reason: "host-offline",
     });
@@ -598,7 +588,6 @@ describe("ChatDeadTileBannerContainer - an owner not yet told apart", () => {
     renderContainer({
       ownerUserId: COLLABORATOR_USER_ID,
       providedOwnerUserId: COLLABORATOR_USER_ID,
-      permissionRole: "editor",
       showsPublishedCopy: true,
       reason: "host-offline",
     });
@@ -621,7 +610,6 @@ describe("ChatDeadTileBannerContainer - the sandbox's own state", () => {
     renderContainer({
       ownerUserId: VIEWER_USER_ID,
       providedOwnerUserId: undefined,
-      permissionRole: "editor",
       showsPublishedCopy,
       reason: "host-offline",
     });
@@ -698,7 +686,6 @@ describe("ChatDeadTileBannerContainer - answered-host reasons", () => {
       renderContainer({
         ownerUserId: VIEWER_USER_ID,
         providedOwnerUserId: undefined,
-        permissionRole: "editor",
         showsPublishedCopy: true,
         reason,
       });

@@ -3,15 +3,21 @@
  * `resources.subscribe`. Shared by every owner chip and the epic aggregate so a
  * CPU / memory / process reading reads the same everywhere.
  *
- * `cpuPercent` is host-local instantaneous CPU over the sampling interval and
- * may exceed 100 on a multi-core host - it is rendered verbatim, never clamped.
+ * CPU is the share of the watched machine over the sampling interval.
  * `rssBytes` is summed resident set across the owner's process tree.
  */
 
 export function formatCpuPercent(cpuPercent: number): string {
   if (!Number.isFinite(cpuPercent) || cpuPercent <= 0) return "0%";
   if (cpuPercent >= 10) return `${Math.round(cpuPercent)}%`;
-  return `${cpuPercent.toFixed(1)}%`;
+  return `${cpuPercent.toFixed(cpuPercent < 1 ? 2 : 1)}%`;
+}
+
+/** RAM shares keep their existing precision, independently of CPU's tiers. */
+export function formatRamSharePercent(percent: number): string {
+  if (!Number.isFinite(percent) || percent <= 0) return "0%";
+  if (percent >= 10) return `${Math.round(percent)}%`;
+  return `${percent.toFixed(1)}%`;
 }
 
 const MEMORY_UNITS = ["B", "KB", "MB", "GB", "TB"] as const;

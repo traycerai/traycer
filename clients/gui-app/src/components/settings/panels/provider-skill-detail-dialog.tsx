@@ -845,21 +845,23 @@ function UnsavedSkillChangesDialog(props: {
       <DialogContent
         layout="banded"
         showCloseButton={false}
-        className="w-[min(92vw,28rem)] overflow-hidden sm:max-w-md"
+        className="flex w-[min(92vw,28rem)] flex-col overflow-hidden sm:max-w-md"
         data-testid="skill-unsaved-changes-dialog"
       >
-        <div className="flex min-w-0 items-start gap-3 p-5">
+        <div className="flex min-w-0 shrink-0 items-start gap-3 p-5">
           <div className="flex size-9 shrink-0 items-center justify-center rounded-full bg-destructive/10 text-destructive">
             <AlertTriangle className="size-4" aria-hidden />
           </div>
           <div className="min-w-0 flex-1 space-y-1.5">
             <DialogTitle>Discard unsaved changes?</DialogTitle>
-            <DialogDescription>
-              Your edits to this skill will be lost.
-            </DialogDescription>
           </div>
         </div>
-        <div className="flex justify-end gap-2 border-t border-border/60 bg-foreground/3 px-5 py-3">
+        <div className="min-h-0 overflow-y-auto px-5 pb-5">
+          <DialogDescription>
+            Your edits to this skill will be lost.
+          </DialogDescription>
+        </div>
+        <div className="flex shrink-0 justify-end gap-2 border-t border-border/60 bg-foreground/3 px-5 py-3">
           <Button
             type="button"
             variant="ghost"

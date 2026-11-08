@@ -14,6 +14,7 @@ import { MockRunnerHost } from "@traycer-clients/shared/host-client/mock/mock-ru
 import { AppUpdateToastController } from "@/components/layout/bridges/app-update-toast-controller";
 import { AppUpdateHeaderButton } from "@/components/layout/header/app-update-button";
 import { InstallGuidanceDialog } from "@/components/layout/dialogs/install-guidance-dialog";
+import { expectScrollableDialogLayout } from "@/components/ui/__tests__/dialog-scroll-layout-assertions";
 import {
   HostReadinessControllerContext,
   type DefaultHostReadinessPresentation,
@@ -662,6 +663,7 @@ describe("desktop app update UI", () => {
       </RunnerHostProvider>,
     );
 
+    expectScrollableDialogLayout(screen.getByTestId("install-guidance-dialog"));
     screen.getByText(READY_GUIDANCE.summary);
     for (const step of READY_GUIDANCE.steps) {
       screen.getByText(step);

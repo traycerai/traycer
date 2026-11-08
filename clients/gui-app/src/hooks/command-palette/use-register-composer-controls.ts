@@ -15,6 +15,7 @@ import type { HostRpcRegistry } from "@/lib/host";
 import {
   registerFocusedComposerControls,
   type ComposerControls,
+  type FocusedComposerEntry,
 } from "@/lib/commands/composer-controls-registry";
 import type { FocusedComposerKind } from "@/lib/commands/types";
 import { useChatOpencodeLine } from "@/hooks/harnesses/chat-opencode-line-context";
@@ -33,6 +34,7 @@ export function useRegisterFocusedComposerControls(
   kind: FocusedComposerKind | null,
   controls: ComposerControls,
   hostClient: HostClient<HostRpcRegistry> | null,
+  catalogSelection: FocusedComposerEntry["catalogSelection"],
 ): void {
   const controlsRef = useRef<ComposerControls>(controls);
   const opencodeLine = useChatOpencodeLine();
@@ -43,9 +45,9 @@ export function useRegisterFocusedComposerControls(
 
   useEffect(() => {
     if (kind === null) return;
-    const dispose = registerFocusedComposerControls(
+    const dispose = registerFocusedComposerControls({
       kind,
-      {
+      controls: {
         setReasoning: (level) => {
           controlsRef.current.setReasoning(level);
         },
@@ -64,7 +66,8 @@ export function useRegisterFocusedComposerControls(
       },
       hostClient,
       opencodeLine,
-    );
+      catalogSelection,
+    });
     return dispose;
-  }, [hostClient, kind, opencodeLine]);
+  }, [hostClient, kind, opencodeLine, catalogSelection]);
 }

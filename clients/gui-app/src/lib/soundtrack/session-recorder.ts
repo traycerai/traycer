@@ -15,7 +15,7 @@ import { LOG_CLOCK_KEYS, type SoundtrackLogEvent } from "./session-log";
 import { wavHeader } from "./wav";
 
 /** What the log's header line looks like, for a reader to check. */
-export const RECORDING_LOG_FORMAT = 1;
+const RECORDING_LOG_FORMAT = 1;
 
 // Each second, what was captured and logged goes to disk, and the readout and
 // the limit are checked.

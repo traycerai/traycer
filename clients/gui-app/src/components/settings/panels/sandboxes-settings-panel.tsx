@@ -1,3 +1,4 @@
+import { SandboxSessionNotice } from "@/components/hosts/sandbox-session-notice";
 import { useMemo, useState, type ReactNode } from "react";
 import { useNavigate } from "@tanstack/react-router";
 import type { UseQueryResult } from "@tanstack/react-query";
@@ -908,8 +909,9 @@ function SandboxListRow(props: {
   const settings = useSandboxSettingsStatus(summary);
   const settingsItems = settings.data?.items ?? [];
   const settingsFailed = sandboxSettingsFailed(settingsItems);
-  const state = sandboxPublicState(summary);
-  const awake = state === "awake";
+  const publicState = sandboxPublicState(summary);
+  const state = summary.state;
+  const awake = publicState === "awake";
   const sessions = useSandboxRowSessionReport(summary);
   const wake = useSandboxWakeString(summary);
   const now = useSampledNow();
@@ -952,7 +954,7 @@ function SandboxListRow(props: {
   return (
     <li
       data-sandbox-row={summary.id}
-      data-state={state}
+      data-state={publicState}
       data-testid="sandboxes-row"
       className="flex flex-col gap-4 px-5 py-4 sm:flex-row sm:items-center sm:justify-between"
     >
@@ -969,10 +971,10 @@ function SandboxListRow(props: {
           </div>
           <div className="flex flex-wrap items-center gap-2">
             <Badge
-              variant={setupFailed ? "warning" : STATE_BADGE[state]}
+              variant={setupFailed ? "warning" : STATE_BADGE[publicState]}
               data-testid="sandboxes-row-state"
             >
-              {hostSandboxStateWord(summary.state)}
+              {hostSandboxStateWord(state)}
               {setupFailed ? " · Setup failed" : ""}
             </Badge>
             {summary.frozen ? (
@@ -996,6 +998,12 @@ function SandboxListRow(props: {
               Compute is charged while it is awake.
             </p>
           ) : null}
+          <SandboxSessionNotice
+            summary={summary}
+            state={state}
+            filesOutcomeStated={false}
+            testId="sandboxes-row-session-notice"
+          />
           <SandboxRowWithdrawal summary={summary} />
           {payerConsequence === null ? null : (
             <p

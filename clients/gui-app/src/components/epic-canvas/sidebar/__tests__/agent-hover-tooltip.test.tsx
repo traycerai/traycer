@@ -996,6 +996,10 @@ describe("AgentHoverTooltip host section", () => {
 
       const section = screen.getByTestId("worktree-host-section");
       const sessions = closedSessionDisclosure("2 sessions");
+      const bodyElement = sessions.querySelector(":scope > div");
+      expect(bodyElement?.classList.contains("max-h-40")).toBe(true);
+      expect(bodyElement?.classList.contains("overflow-y-auto")).toBe(true);
+      expect(bodyElement?.classList.contains("overscroll-contain")).toBe(true);
       const idle = within(section).getByText("Suspends after 30 idle min", {
         exact: false,
       });
@@ -1128,9 +1132,14 @@ describe("AgentHoverTooltip host section", () => {
     expect(text).toContain("team-box");
     expect(text).toContain(hoverTaskConfiguration("acme"));
     expect(text).toContain(reachSentence(REACH_UNNAMED_HOSTS));
-    // Other agents the task shows on that host; never the viewing agent.
-    expect(text).toContain(hoverAlsoInTask("Planner"));
-    expect(text).not.toContain("Reviewer,");
+    // Closed, the count is visible but agent names stay inside the disclosure.
+    const sessions = closedSessionDisclosure(hoverAlsoInTask(1));
+    expect(card.contains(sessions)).toBe(true);
+    const otherAgents = openedSessionBody(sessions);
+    expect(otherAgents.textContent).toBe("Planner");
+    expect(otherAgents.classList.contains("max-h-40")).toBe(true);
+    expect(otherAgents.classList.contains("overflow-y-auto")).toBe(true);
+    expect(otherAgents.classList.contains("overscroll-contain")).toBe(true);
 
     expect(screen.getByRole("button", { name: TASK_FILES })).toBeDefined();
     for (const name of ["Open terminal", "Details", KEEP_THIS_SANDBOX]) {

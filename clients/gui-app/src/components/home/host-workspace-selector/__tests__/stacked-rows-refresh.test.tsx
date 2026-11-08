@@ -386,7 +386,7 @@ describe("stacked host heading", () => {
     expect(within(section).getByText("Host")).toBeDefined();
   });
 
-  it("draws no Host heading under a caller's own heading, and keeps Workspaces", () => {
+  it("draws no Host heading under a caller's own heading, and shows Folders", () => {
     renderControls("stacked-caller-heading");
 
     const section = screen.getByTestId("host-workspace-selector-host-section");
@@ -394,7 +394,7 @@ describe("stacked host heading", () => {
     expect(
       within(
         screen.getByTestId("host-workspace-selector-folders-section"),
-      ).getByText("Workspaces"),
+      ).getByText("Folders"),
     ).toBeDefined();
   });
 });

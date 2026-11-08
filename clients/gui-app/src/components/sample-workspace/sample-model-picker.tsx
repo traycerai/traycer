@@ -104,6 +104,7 @@ function SampleModelPickerBody(): ReactNode {
       onRefreshCatalog={async () => {}}
       hostUnavailableLabel={null}
       onOpenProviderSettings={sampleNoop}
+      onOpenHostUpdates={sampleNoop}
       onClosePicker={sampleNoop}
       listRef={listRef}
       listKey="sample"

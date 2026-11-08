@@ -13,6 +13,7 @@ import {
   render,
   screen,
   waitFor,
+  within,
 } from "@testing-library/react";
 import type { ReactNode } from "react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
@@ -47,7 +48,6 @@ import {
   remoteEntry,
   sandboxFacts,
 } from "@traycer-clients/shared/host-client/__tests__/routing-entry-fixtures";
-import { ACTIVATE_HOST_HINT } from "@/components/settings/host-scope/host-option-model";
 
 const hostOptionsRef = vi.hoisted((): { value: HostOptions } => ({
   value: {
@@ -256,6 +256,8 @@ function stubHostNameOverflow(
         "scrollWidth",
         originalScrollWidth,
       );
+    } else {
+      Reflect.deleteProperty(HTMLElement.prototype, "scrollWidth");
     }
     if (originalClientWidth !== undefined) {
       Object.defineProperty(
@@ -263,6 +265,8 @@ function stubHostNameOverflow(
         "clientWidth",
         originalClientWidth,
       );
+    } else {
+      Reflect.deleteProperty(HTMLElement.prototype, "clientWidth");
     }
   };
 }
@@ -346,13 +350,15 @@ describe("<UserMenu /> host section", () => {
 
     await openMenu();
 
-    expect(screen.getByText("Set the app's machine")).toBeTruthy();
+    expect(screen.getByText("Host", { exact: true })).toBeTruthy();
+    expect(screen.queryByText("Set the app's machine")).toBeNull();
     expect(
-      screen.getByText(
+      screen.queryByText(
         "Every window follows, and the choice outlives this one.",
       ),
-    ).toBeTruthy();
-    expect(screen.getByTestId("user-menu-host-section")).toBeTruthy();
+    ).toBeNull();
+    const hostSection = screen.getByTestId("user-menu-host-section");
+    expect(hostSection).toBeTruthy();
 
     const activeRow = screen.getByTestId("user-menu-host-option-host-active");
     expect(activeRow.getAttribute("aria-checked")).toBe("true");
@@ -366,6 +372,59 @@ describe("<UserMenu /> host section", () => {
     expect(offlineRow.getAttribute("aria-checked")).toBe("false");
     expect(offlineRow.getAttribute("aria-disabled")).toBe("true");
     expect(offlineRow.textContent).toContain("offline");
+    const offlineName = screen.getByText("Old Laptop");
+    const nameAndStatus = offlineName.parentElement;
+    expect(nameAndStatus?.classList.contains("items-center")).toBe(true);
+    expect(nameAndStatus?.contains(screen.getByText("offline"))).toBe(true);
+  });
+
+  it("bounds the host list while keeping account actions after it", async () => {
+    const hosts = Array.from({ length: 15 }, (_, index) =>
+      hostScopeOptionFixture({
+        hostId: `host-${index}`,
+        name: `Host ${index}`,
+        isActive: index === 0,
+        connectable: index !== 2,
+        ...(index === 2
+          ? {
+              health: {
+                state: "offline",
+                label: "Offline",
+                detail: null,
+                tone: "idle",
+                live: false,
+              },
+            }
+          : {}),
+      }),
+    );
+    hostOptionsRef.value = hostOptionsFixture({
+      hosts,
+      activeHostId: "host-0",
+    });
+
+    await openMenu();
+
+    const menu = screen.getByTestId("user-menu-content");
+    const hostSection = screen.getByTestId("user-menu-host-section");
+    const actions = screen.getByTestId("user-menu-account-actions");
+    expect(
+      hostSection.classList.contains(
+        "max-h-(--radix-dropdown-menu-content-available-height)",
+      ),
+    ).toBe(true);
+    expect(hostSection.classList.contains("overflow-y-auto")).toBe(true);
+    expect(menu.classList.contains("overflow-y-hidden")).toBe(true);
+    expect(actions.classList.contains("shrink-0")).toBe(true);
+    expect(
+      hostSection.querySelectorAll('[data-testid^="user-menu-host-option-"]'),
+    ).toHaveLength(15);
+    expect(within(actions).getByText("Drafts")).toBeTruthy();
+    expect(within(actions).getByText("Sign out")).toBeTruthy();
+    expect(
+      hostSection.compareDocumentPosition(actions) &
+        Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy();
   });
 
   it("leaves a team's sandbox out of the list, which activate would refuse, and keeps personal hosts and personal sandboxes", async () => {
@@ -657,7 +716,7 @@ describe("<UserMenu /> host section", () => {
   });
 
   describe("host row tooltip (G4)", () => {
-    it("shows only the full name when an account-menu row's name is truncated", async () => {
+    it("shows the full name and app-wide choice when a pickable row is truncated", async () => {
       const active = hostScopeOptionFixture({
         hostId: "host-active",
         isActive: true,
@@ -680,18 +739,22 @@ describe("<UserMenu /> host section", () => {
 
       await openMenu();
       const name = screen.getByText("Office Linux Workstation");
-      expect(name.classList.contains("whitespace-normal")).toBe(true);
-      expect(name.classList.contains("wrap-anywhere")).toBe(true);
-      expect(name.classList.contains("truncate")).toBe(false);
+      expect(name.classList.contains("truncate")).toBe(true);
       fireEvent.focus(screen.getByTestId("user-menu-host-option-host-other"));
       const tooltip = await screen.findByRole("tooltip");
 
-      expect(tooltip.textContent).toBe("Office Linux Workstation");
-      expect(screen.getAllByText(ACTIVATE_HOST_HINT)).toHaveLength(1);
+      expect(tooltip.textContent).toBe(
+        "Office Linux Workstation · Use for every window, including future windows.",
+      );
+      expect(
+        screen.queryByText(
+          "Every window follows, and the choice outlives this one.",
+        ),
+      ).toBeNull();
       restore();
     });
 
-    it("shows no row tooltip when the account-menu name fits and keeps the activation hint in the header once", async () => {
+    it("shows the app-wide choice in a pickable row tooltip even when its name fits", async () => {
       const active = hostScopeOptionFixture({
         hostId: "host-active",
         isActive: true,
@@ -714,17 +777,23 @@ describe("<UserMenu /> host section", () => {
 
       await openMenu();
       const row = screen.getByTestId("user-menu-host-option-host-other");
-      expect(
-        screen.getByText("Short").classList.contains("wrap-anywhere"),
-      ).toBe(true);
+      expect(screen.getByText("Short").classList.contains("truncate")).toBe(
+        true,
+      );
       vi.useFakeTimers();
       try {
         fireEvent.pointerMove(row, { pointerType: "mouse" });
         await act(async () => {
           await vi.advanceTimersByTimeAsync(501);
         });
-        expect(screen.queryByRole("tooltip")).toBeNull();
-        expect(screen.getAllByText(ACTIVATE_HOST_HINT)).toHaveLength(1);
+        expect(screen.getByRole("tooltip").textContent).toBe(
+          "Short · Use for every window, including future windows.",
+        );
+        expect(
+          screen.queryByText(
+            "Every window follows, and the choice outlives this one.",
+          ),
+        ).toBeNull();
       } finally {
         vi.useRealTimers();
         restore();

@@ -59,6 +59,7 @@ import { useSurfaceHostSelectionStore } from "@/stores/host/surface-host-selecti
 import {
   agentSessionFixture,
   liveSessionReport,
+  sandboxOperationFixture,
   sandboxSummaryFixture,
   terminalSessionFixture,
 } from "@/hooks/sandboxes/__tests__/sandbox-fixtures";
@@ -1896,6 +1897,75 @@ describe("<SandboxesSettingsPanel />", () => {
       expect(
         within(rowOf("sbx-awake")).queryByText(/Sessions unknown/u),
       ).toBeNull();
+    });
+  });
+
+  describe("a row's session notice follows its own state, not the public grouping", () => {
+    const NOTICE = "sandboxes-row-session-notice";
+
+    it("says Restarting for a resuming row the public grouping files under awake", () => {
+      renderPanel([
+        row("sbx-retry", {
+          state: "resuming",
+          operation: sandboxOperationFixture({
+            state: "resuming",
+            outcomeDetail: "wake-retry",
+          }),
+        }),
+      ]);
+
+      const line = within(rowOf("sbx-retry")).getByTestId(NOTICE);
+      expect(line.textContent).toBe("Restarting your sandbox");
+    });
+
+    it("says the session expired for a resuming row that a conversion is stopping", () => {
+      renderPanel([
+        row("sbx-converting", {
+          state: "resuming",
+          operation: sandboxOperationFixture({
+            state: "resuming",
+            outcomeDetail: "suspended-session-expiry",
+          }),
+        }),
+      ]);
+
+      expect(
+        within(rowOf("sbx-converting")).getByTestId(NOTICE).textContent,
+      ).toBe("Your paused session has expired. Your sandbox is being stopped.");
+    });
+
+    it("says the session was lost, and that the files are unchanged, for a stopped row that is also frozen", () => {
+      renderPanel([
+        row("sbx-lost-frozen", {
+          state: "stopped",
+          frozen: true,
+          frozenAt: 1,
+          operation: sandboxOperationFixture({
+            state: "stopped",
+            outcomeDetail: "suspended-session-lost",
+          }),
+        }),
+      ]);
+
+      expect(
+        within(rowOf("sbx-lost-frozen")).getByTestId(NOTICE).textContent,
+      ).toBe(
+        "Your paused session was lost when your sandbox stopped. Your files are unchanged.",
+      );
+    });
+
+    it("says nothing for a stopped row whose last operation was an ordinary stop", () => {
+      renderPanel([
+        row("sbx-plain-stop", {
+          state: "stopped",
+          operation: sandboxOperationFixture({
+            state: "stopped",
+            outcomeDetail: null,
+          }),
+        }),
+      ]);
+
+      expect(within(rowOf("sbx-plain-stop")).queryByTestId(NOTICE)).toBeNull();
     });
   });
 

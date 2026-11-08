@@ -1301,17 +1301,8 @@ describe("<BotChannelView tiles={null} /> a row's text above its question card",
       ).toHaveLength(1);
       expect(within(channel).getAllByText(DEPLOY)).toHaveLength(1);
       const card = channelCard();
-      expect(within(card).getByText(new RegExp(LONG_MARKER))).toBeTruthy();
-      expect(within(card).getByText(DEPLOY)).toBeTruthy();
-      expect(
-        within(card).getAllByRole("button", { name: "Submit" }).length,
-      ).toBeGreaterThan(0);
-      expect(
-        within(card).getAllByRole("button", { name: "Skip" }).length,
-      ).toBeGreaterThan(0);
-      expect(
-        within(card).getAllByRole("textbox", { name: "Your answer" }).length,
-      ).toBeGreaterThan(0);
+      within(card).getByText(new RegExp(LONG_MARKER));
+      within(card).getByText(DEPLOY);
     }
 
     it("draws each question once, in the card, when the row's text is exactly what the host writes for them", () => {

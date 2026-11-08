@@ -2,8 +2,11 @@ import {
   forkAgentRequestSchema,
   forkAgentResponseSchema,
 } from "@traycer/protocol/host/agent/shared";
+import { AGENT_FORK_SPEED_REQUIRED_HOST_VERSION } from "@traycer/protocol/host/registry";
 import {
   callHostRpc,
+  callHostRpcWithDispatch,
+  PLAIN_DISPATCH,
   parseCanonicalHostResponse,
   parseUserInput,
   toAgentCliError,
@@ -33,6 +36,10 @@ import type { CommandFn } from "../runner/runner";
  * three inherits the SOURCE agent's workspace binding, exactly as omitting
  * `workspace` on the wire does.
  *
+ * `--service-tier` names the speed tier directly and takes precedence over
+ * `--fast`/`--no-fast`. Omitting all speed flags inherits the source's speed;
+ * any speed override requires `agent.fork@1.1`.
+ *
  * The response echoes `effectiveProfileId`/`profileOverrideApplied` rather
  * than the caller's own request, so a caller that cares whether its
  * `--profile` override actually took effect must check those echoed fields -
@@ -45,6 +52,8 @@ export function buildAgentForkCommand(opts: {
   readonly name: string | null;
   readonly permissionMode: string | null;
   readonly profile: string | null;
+  readonly serviceTier: string | null;
+  readonly fast: boolean | null;
   readonly cwd: string | null;
   readonly workspacePaths: readonly string[];
   readonly workspaceEntries: readonly string[];
@@ -62,8 +71,19 @@ export function buildAgentForkCommand(opts: {
         workspaceEntries: opts.workspaceEntries,
       }),
       profileSelection: parseForkProfileSelection(opts.profile),
+      ...(typeof opts.serviceTier === "string"
+        ? { serviceTier: opts.serviceTier }
+        : {}),
+      ...(typeof opts.fast === "boolean" ? { fastMode: opts.fast } : {}),
     });
-    const result = await toAgentCliError(callHostRpc("agent.fork", request));
+    const result = await toAgentCliError(
+      request.serviceTier === undefined && request.fastMode === undefined
+        ? callHostRpc("agent.fork", request)
+        : callHostRpcWithDispatch("agent.fork", request, {
+            ...PLAIN_DISPATCH,
+            requiredHostMethodVersion: AGENT_FORK_SPEED_REQUIRED_HOST_VERSION,
+          }),
+    );
     const response = parseCanonicalHostResponse(
       "agent.fork",
       forkAgentResponseSchema,

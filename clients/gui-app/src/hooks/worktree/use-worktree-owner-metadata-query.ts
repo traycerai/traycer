@@ -91,7 +91,7 @@ function bindingRunPaths(binding: WorktreeBinding | null): {
  * moment ANY answer has been stored - including a `{ binding: null }` cached
  * before the host had written the owner's binding row. Every later open then
  * served that null as a settled fact while the refetch that would replace it
- * was still running, and the card printed "No workspace linked" for a chat that
+ * was still running, and the card printed "No folder linked" for a chat that
  * had a workspace. `isFetching` is the question this actually needs to ask: is
  * a read in flight right now, whatever is in the cache behind it.
  *
@@ -149,7 +149,7 @@ export interface WorktreeOwnerMetadata {
    * lives on another machine (it is the same condition the sidebar draws its
    * unreachable padlock from). Callers must not render it as either "loading"
    * (nothing is in flight and nothing ever will be) or as an empty binding
-   * ("no workspace linked" is a claim about the OWNER, and this says only that
+   * ("no folder linked" is a claim about the OWNER, and this says only that
    * we could not ask).
    */
   readonly hostUnavailable: boolean;
@@ -256,7 +256,7 @@ export function useWorktreeOwnerMetadata(args: {
       // The card can be gone by the time this lands (the pointer left), so the
       // toast is the only place a failure can surface.
       onError: (error) =>
-        toastFromHostError(error, "Couldn't refresh workspace details."),
+        toastFromHostError(error, "Couldn't refresh folder details."),
       // Lands in the SAME per-path cache entries the card renders from.
       // Reissuing the query with `forceRefresh: true` in its params instead
       // would fork keys that no observer reads, so the fresh facts would never
@@ -313,7 +313,7 @@ export function useWorktreeOwnerMetadata(args: {
         workspacePaths: variables.workspacePaths,
       }),
       onError: (error) =>
-        toastFromHostError(error, "Couldn't refresh workspace details."),
+        toastFromHostError(error, "Couldn't refresh folder details."),
       onSuccess: (response, _variables, context) => {
         queryClient.setQueryData<WorktreeListByWorkspacePathsResponse>(
           queryKeys.hostMethod<

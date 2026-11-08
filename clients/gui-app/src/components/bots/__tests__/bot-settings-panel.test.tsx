@@ -787,8 +787,10 @@ describe("<BotChannelSettingsPanel /> Max Mode label", () => {
           keepsUnavailablePick: false,
           harnesses: undefined,
           modelsHarnessId: "cursor",
+          modelsProfileId: null,
           models: [],
           modelsLoaded: false,
+          modelsFailed: false,
           tuiOnly: false,
         });
       });

@@ -32,6 +32,7 @@ import {
 } from "@/stores/replica-memory/memory-telemetry";
 import { readProcessMemoryRuntime } from "@/stores/replica-memory/process-memory-accountant";
 import { getLogLevelsBridge } from "@/lib/desktop-log-levels";
+import { isMobileApp } from "@/lib/mobile-app";
 import { runnerMutationKeys } from "@/lib/query-keys/runner-mutation-keys";
 import { toastFromRunnerError } from "@/lib/runner-error-toast";
 import { resolveDesktopSupportBridge } from "@/lib/windows/desktop-capabilities";
@@ -59,8 +60,16 @@ const PANEL_DESCRIPTION =
  *
  * No `HostScopeGate` and no `useHostScope`: there is nothing here a host could
  * be too old for, unreachable for, or answer differently about. The page's only
- * capability question is whether it is running inside the desktop shell at all,
- * asked twice — once per bridge — so a shell missing one still gets the other.
+ * capability question is which desktop bridges this shell actually has, asked
+ * once per bridge, so a shell missing one still gets the others.
+ *
+ * The installed mobile app has none of them. Its offered list drops the
+ * section (`MOBILE_APP_OMITTED_SECTION_IDS`); this route does not redirect, so
+ * a direct link still lands here. With nothing to do, that landing is one
+ * sentence and no cards. A bridge that does exist still draws its group, and
+ * the groups it lacks stay off the page. Desktop and a browser keep every
+ * group, including the "only on the desktop app" line, because those shells
+ * still offer the page and its search anchors have to land on a card.
  */
 export function AppDiagnosticsSettingsPanel(): ReactNode {
   const compact = useSettingsDensity() === "compact";
@@ -77,6 +86,31 @@ export function AppDiagnosticsSettingsPanel(): ReactNode {
     (): readonly LogLevelControl[] => (levelsAvailable ? [desktopControl] : []),
     [levelsAvailable, desktopControl],
   );
+  const memoryAvailable =
+    getDesktopHeapSnapshotBridge() !== null ||
+    getDesktopJsHeapBridge() !== null;
+  const nativeShell = isMobileApp();
+  // Desktop and the browser still draw a group whose bridge is missing, so
+  // search can land on it. The native shell draws only a group it can act on.
+  const showLogDetail = !nativeShell || levelsAvailable;
+  const showMemory = !nativeShell || memoryAvailable;
+  const showRecentLogs = !nativeShell || support !== null;
+
+  if (nativeShell && !showLogDetail && !showMemory && !showRecentLogs) {
+    return (
+      <SettingsPanelShell
+        title="Diagnostics"
+        bodyClassName="overflow-visible rounded-none border-none bg-transparent"
+      >
+        <p
+          className="text-ui-sm text-muted-foreground"
+          data-testid="app-diagnostics-unavailable"
+        >
+          App diagnostics are available on the desktop app.
+        </p>
+      </SettingsPanelShell>
+    );
+  }
 
   return (
     <SettingsPanelShell
@@ -91,25 +125,29 @@ export function AppDiagnosticsSettingsPanel(): ReactNode {
           compact ? "gap-2.5" : "gap-3",
         )}
       >
-        <LogDetailGroup
-          group={APP_DIAGNOSTICS.definitions.logDetail}
-          controls={controls}
-          emptyState={
-            <LogInfoLine>
-              Log level controls are only available on the desktop app.
-            </LogInfoLine>
-          }
-        />
-        <MemoryDiagnosticsGroup />
-        <RecentLogsFrame>
-          {support === null ? (
-            <LogInfoLine>
-              Recent logs are only available on the desktop app.
-            </LogInfoLine>
-          ) : (
-            <DesktopAppLogEntry support={support} />
-          )}
-        </RecentLogsFrame>
+        {showLogDetail ? (
+          <LogDetailGroup
+            group={APP_DIAGNOSTICS.definitions.logDetail}
+            controls={controls}
+            emptyState={
+              <LogInfoLine>
+                Log level controls are only available on the desktop app.
+              </LogInfoLine>
+            }
+          />
+        ) : null}
+        {showMemory ? <MemoryDiagnosticsGroup /> : null}
+        {showRecentLogs ? (
+          <RecentLogsFrame>
+            {support === null ? (
+              <LogInfoLine>
+                Recent logs are only available on the desktop app.
+              </LogInfoLine>
+            ) : (
+              <DesktopAppLogEntry support={support} />
+            )}
+          </RecentLogsFrame>
+        ) : null}
       </div>
     </SettingsPanelShell>
   );

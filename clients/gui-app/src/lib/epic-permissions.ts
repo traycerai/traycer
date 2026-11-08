@@ -19,9 +19,9 @@ export function isEditableRole(role: PermissionRole | null): boolean {
  * Conversation modal). Disconnect takes precedence over an unresolved role: it
  * is the more actionable condition (reconnecting fixes it).
  *
- * It no longer names the action. A role that may open the task may change it,
- * so the only two reasons left are about the connection and about not knowing
- * the role yet - neither of which varies by what the control does.
+ * A role that may open the task may change it, so the only two reasons are
+ * about the connection and about not knowing the role yet - neither of which
+ * varies by what the control does.
  */
 export function mutationDisabledHint(
   role: PermissionRole | null,

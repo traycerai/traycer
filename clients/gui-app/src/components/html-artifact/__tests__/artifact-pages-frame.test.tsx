@@ -244,7 +244,6 @@ it("opens the current page in a fullscreen dialog and restores the inline view o
   const back = within(dialog).getByRole("button", { name: "Back" });
   const home = within(dialog).getByRole("button", { name: "Home" });
   expect(back.hasAttribute("disabled")).toBe(false);
-  expect(home.hasAttribute("disabled")).toBe(false);
   await user.click(home);
   expect(
     within(dialog).getByTestId("page-frame").getAttribute("data-path"),

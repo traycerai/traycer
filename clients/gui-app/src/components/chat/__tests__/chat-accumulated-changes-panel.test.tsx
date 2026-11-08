@@ -10,6 +10,10 @@ import {
 } from "@/components/chat/chat-diff-target";
 import type { ChatRestoreContextValue } from "@/components/chat/chat-restore-context-core";
 import { TooltipProvider } from "@/components/ui/tooltip";
+import {
+  expectFocusRingInset,
+  expectScrollableDialogLayout,
+} from "@/components/ui/__tests__/dialog-scroll-layout-assertions";
 
 /**
  * The header's summary, read as text off its own marker.
@@ -354,6 +358,8 @@ describe("<ChatAccumulatedChangesPanel /> partial summary set", () => {
 
     fireEvent.click(screen.getByTestId("accumulated-undo-all"));
     const dialog = screen.getByTestId("undo-all-dialog");
+    const body = expectScrollableDialogLayout(dialog);
+    expectFocusRingInset(body, ["-m-1", "px-6", "pt-1", "pb-6"]);
     // The opt-out still appears - it defaults to CHECKED, so hiding it would
     // revert artifacts with nothing having offered the choice - but without a
     // number, which would be counted off one row out of four.

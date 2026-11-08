@@ -6,15 +6,17 @@ import { OverviewCardDetailsLine } from "@/components/settings/details/overview-
 import { MoveProgressLine } from "@/components/settings/move/move-progress-line";
 import { StopSharingSession } from "@/components/settings/move/stop-sharing-session";
 import { hostSettingsRowModel } from "@/components/settings/panels/host-overview-settings-card-model";
-import { Button } from "@/components/ui/button";
+import { HOST_OVERVIEW } from "@/components/settings/panels/host-overview.definitions";
+import { SettingsRow } from "@/components/settings/settings-row";
 import {
-  DropdownMenu,
-  DropdownMenuContent,
-  DropdownMenuRadioGroup,
-  DropdownMenuRadioItem,
-  DropdownMenuTrigger,
-} from "@/components/ui/dropdown-menu";
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 import { Skeleton } from "@/components/ui/skeleton";
+import { TooltipWrapper } from "@/components/ui/tooltip-wrapper";
 import { useEnvironmentHostReadQuery } from "@/hooks/bots/use-environment-host-read-query";
 import { readsHostBindingsFromPool } from "@/hooks/bots/use-host-environment-bindings-query";
 import { useEnvironmentStatusRead } from "@/hooks/environment/use-environment-reads";
@@ -35,21 +37,16 @@ export function HostOverviewSettingsCard(props: {
   const model = hostSettingsRowModel(props.status, props.binding);
   if (model.kind === "loading" || props.status === null) {
     return (
-      <div className="shrink-0 px-5 pb-3 text-ui-xs text-muted-foreground">
-        Settings:{" "}
-        <Skeleton
-          className="inline-block h-4 w-[12ch]"
-          role="status"
-          aria-label="Reading"
-        />
-      </div>
-    );
-  }
-  if (model.kind === "team") {
-    return (
-      <p className="shrink-0 px-5 pb-3 text-ui-xs text-muted-foreground">
-        Settings: <span className="wrap-anywhere">{model.label}</span>
-      </p>
+      <SettingsRow
+        row={HOST_OVERVIEW.definitions.settingsRow}
+        control={
+          <Skeleton
+            className="h-7 w-[18ch]"
+            role="status"
+            aria-label="Reading"
+          />
+        }
+      />
     );
   }
   const lineProps = {
@@ -58,41 +55,57 @@ export function HostOverviewSettingsCard(props: {
     hostName: props.hostName,
     status: props.status,
   };
+  if (model.kind === "team") {
+    return (
+      <SettingsRow
+        row={HOST_OVERVIEW.definitions.settingsRow}
+        status={
+          <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
+            <span>{model.description}</span>
+            <OverviewCardDetailsLine {...lineProps} />
+          </div>
+        }
+        control={<FixedSettingsSource value={model.label} />}
+      />
+    );
+  }
   if (model.kind === "progress") {
     return (
-      <div className="flex shrink-0 flex-wrap items-center gap-1 px-5 pb-3 text-ui-xs text-muted-foreground">
-        <span>Settings:</span>
-        <MoveProgressLine {...lineProps} progress={model.progress} />
-        {model.progress.kind === "move_stopped" ? (
-          <OverviewCardDetailsLine {...lineProps} />
-        ) : null}
-      </div>
+      <SettingsRow
+        row={HOST_OVERVIEW.definitions.settingsRow}
+        status={
+          <div className="flex flex-wrap items-center gap-1">
+            <MoveProgressLine {...lineProps} progress={model.progress} />
+            {model.progress.kind === "move_stopped" ? (
+              <OverviewCardDetailsLine {...lineProps} />
+            ) : null}
+          </div>
+        }
+        control={
+          <FixedSettingsSource
+            value={
+              model.progress.kind === "moving"
+                ? "Personal"
+                : "This computer only"
+            }
+          />
+        }
+      />
     );
   }
   return (
     <>
-      <div
-        className="flex shrink-0 flex-wrap items-center gap-1 px-5 pb-3 text-ui-xs text-muted-foreground"
-        data-testid="host-settings-source"
-      >
-        <span>
-          Settings:{" "}
-          {model.options.find((option) => option.value === model.value)?.label}
-        </span>
-        <span aria-hidden>·</span>
-        <DropdownMenu>
-          <DropdownMenuTrigger asChild>
-            <Button
-              type="button"
-              variant="link"
-              size="inline"
-              aria-label="Change settings source"
-            >
-              Change
-            </Button>
-          </DropdownMenuTrigger>
-          <DropdownMenuContent align="start">
-            <DropdownMenuRadioGroup
+      <div className="shrink-0" data-testid="host-settings-source">
+        <SettingsRow
+          row={HOST_OVERVIEW.definitions.settingsRow}
+          status={
+            <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
+              <span>{model.description}</span>
+              <OverviewCardDetailsLine {...lineProps} />
+            </div>
+          }
+          control={
+            <Select
               value={model.value}
               onValueChange={(value) => {
                 const option = model.options.find(
@@ -109,20 +122,23 @@ export function HostOverviewSettingsCard(props: {
                 }
               }}
             >
-              {model.options.map((option) => (
-                <DropdownMenuRadioItem key={option.value} value={option.value}>
-                  <div className="flex flex-col">
-                    <span>{option.label}</span>
-                    <span className="text-ui-xs text-muted-foreground">
-                      {option.description}
-                    </span>
-                  </div>
-                </DropdownMenuRadioItem>
-              ))}
-            </DropdownMenuRadioGroup>
-          </DropdownMenuContent>
-        </DropdownMenu>
-        <OverviewCardDetailsLine {...lineProps} />
+              <SelectTrigger
+                size="sm"
+                aria-label="Settings source"
+                className="max-w-[40vw] sm:max-w-64"
+              >
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent align="end">
+                {model.options.map((option) => (
+                  <SelectItem key={option.value} value={option.value}>
+                    {option.label}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          }
+        />
       </div>
       <StopSharingSession
         client={props.client}
@@ -135,13 +151,59 @@ export function HostOverviewSettingsCard(props: {
   );
 }
 
-/** Unavailable reads hide the row; pending reads reserve its control. */
+/** Keep the settings value in the same control while it cannot be changed. */
+function FixedSettingsSource(props: { readonly value: string }): ReactNode {
+  return (
+    <Select value={props.value} disabled>
+      <TooltipWrapper
+        label={props.value}
+        side="top"
+        sideOffset={undefined}
+        align="end"
+      >
+        <span className="max-w-full">
+          <SelectTrigger
+            size="sm"
+            aria-label="Settings source"
+            className="max-w-[40vw] sm:max-w-64"
+          >
+            <SelectValue />
+          </SelectTrigger>
+        </span>
+      </TooltipWrapper>
+      <SelectContent align="end">
+        <SelectItem value={props.value}>{props.value}</SelectItem>
+      </SelectContent>
+    </Select>
+  );
+}
+
+/**
+ * The settings source an unreachable sandbox is known to run: the person's
+ * own settings, or a team's, named for the control.
+ */
+export type KnownSettingsSource =
+  | { readonly kind: "personal" }
+  | { readonly kind: "team"; readonly name: string };
+
+/** The control shows the source by name; the sentence never repeats a team's. */
+function knownSourceValue(source: KnownSettingsSource): string {
+  return source.kind === "personal" ? "Personal" : source.name;
+}
+
+function offlineSourceStatus(source: KnownSettingsSource): string {
+  return source.kind === "personal"
+    ? "Runs Personal settings."
+    : "Runs the team's settings.";
+}
+
+/** Unavailable reads retain a known source; pending reads reserve its control. */
 export function HostOverviewSettingsCardSlot(props: {
   readonly client: HostClient<HostRpcRegistry> | null;
   readonly hostId: string | null;
   readonly hostName: string;
   readonly usable: boolean;
-  readonly fallbackSource?: string | null;
+  readonly fallbackSource: KnownSettingsSource | null;
 }): ReactNode {
   const status = useEnvironmentStatusRead(
     props.client,
@@ -168,11 +230,14 @@ export function HostOverviewSettingsCardSlot(props: {
     bindingSupport === false ||
     binding.isError
   ) {
-    return props.fallbackSource === null ||
-      props.fallbackSource === undefined ? null : (
-      <p className="shrink-0 px-5 pb-3 text-ui-xs text-muted-foreground">
-        Settings: <span className="wrap-anywhere">{props.fallbackSource}</span>
-      </p>
+    return props.fallbackSource === null ? null : (
+      <SettingsRow
+        row={HOST_OVERVIEW.definitions.settingsRow}
+        status={offlineSourceStatus(props.fallbackSource)}
+        control={
+          <FixedSettingsSource value={knownSourceValue(props.fallbackSource)} />
+        }
+      />
     );
   }
   return (

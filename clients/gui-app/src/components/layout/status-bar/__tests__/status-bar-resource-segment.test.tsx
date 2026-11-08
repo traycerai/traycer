@@ -65,12 +65,12 @@ const GIB = 1024 * 1024 * 1024;
 
 const DESKTOP_APP: DesktopAppResourceUsage = {
   sampledAt: 1,
-  cpuPercent: 3,
+  cpuSharePercent: 3,
   rssBytes: GIB / 2,
   processCount: 6,
-  main: { cpuPercent: 1, rssBytes: GIB / 8, processCount: 1 },
-  renderer: { cpuPercent: 2, rssBytes: GIB / 4, processCount: 2 },
-  other: { cpuPercent: 0, rssBytes: GIB / 8, processCount: 3 },
+  main: { cpuSharePercent: 1, rssBytes: GIB / 8, processCount: 1 },
+  renderer: { cpuSharePercent: 2, rssBytes: GIB / 4, processCount: 2 },
+  other: { cpuSharePercent: 0, rssBytes: GIB / 8, processCount: 3 },
 };
 
 function liveProjection(hostId: string | null): GlobalResourceProjection {
@@ -89,6 +89,7 @@ function liveProjection(hostId: string | null): GlobalResourceProjection {
     app: {
       sampledAt: 1,
       hostTotalMemoryBytes: 16 * GIB,
+      hostCpuCount: 16,
       process: null,
       processCount: 3,
       cpuPercent: 4,
@@ -139,7 +140,7 @@ describe("<StatusBarResourceSegment />", () => {
 
     renderSegment({ hasExplicitPick: true });
 
-    expect(metricText("cpu")).toContain("12%");
+    expect(metricText("cpu")).toContain("0.75%");
     expect(metricText("processes")).toContain("14");
   });
 
@@ -159,7 +160,7 @@ describe("<StatusBarResourceSegment />", () => {
       renderSegment({ hasExplicitPick: true, watchesThisMachine: true });
 
       expect(metricText("memory")).toBe("mem1.5 GB");
-      expect(metricText("cpu")).toBe("cpu15%");
+      expect(metricText("cpu")).toBe("cpu3.8%");
       expect(metricText("processes")).toBe("procs20");
       expect(metricText("ramShare")).toBe("ram9.4%");
     });
@@ -193,12 +194,15 @@ describe("<StatusBarResourceSegment />", () => {
   });
 
   describe("density", () => {
-    function projectionWithCpu(cpuPercent: number): GlobalResourceProjection {
+    /** A host tree burning `perCore` percent of one core, on 16 processors. */
+    function projectionWithCpu(perCore: number): GlobalResourceProjection {
       const live = liveProjection("host-b");
       return {
         ...live,
         hostTree:
-          live.hostTree === null ? null : { ...live.hostTree, cpuPercent },
+          live.hostTree === null
+            ? null
+            : { ...live.hostTree, cpuPercent: perCore },
       };
     }
 
@@ -222,7 +226,7 @@ describe("<StatusBarResourceSegment />", () => {
       expect(screen.queryByTestId("status-bar-resource-metric-cpu")).toBeNull();
     });
 
-    it("carries the compact CPU value in the icon's tooltip", async () => {
+    it("carries the compact CPU share and the cores behind it in the icon's tooltip", async () => {
       registry.projection = liveProjection("host-b");
       useLayoutStore
         .getState()
@@ -232,7 +236,7 @@ describe("<StatusBarResourceSegment />", () => {
       fireEvent.focus(screen.getByTestId("status-bar-resource-cpu-icon"));
 
       expect((await screen.findByRole("tooltip")).textContent).toContain(
-        "CPU 12%",
+        "CPU 0.75% (0.1 of 16 cores)",
       );
     });
 
@@ -252,25 +256,31 @@ describe("<StatusBarResourceSegment />", () => {
     });
 
     it.each([
-      { cpuPercent: 84, warns: false },
-      { cpuPercent: 85, warns: true },
-      { cpuPercent: 97, warns: true },
+      // One saturated core is 6.25% of the machine, not a machine in trouble.
+      { perCore: 100, share: "6.3%", warns: false },
+      { perCore: 1344, share: "84%", warns: false },
+      { perCore: 1360, share: "85%", warns: true },
+      { perCore: 1552, share: "97%", warns: true },
     ])(
-      "colours CPU $cpuPercent% as a warning: $warns",
-      ({ cpuPercent, warns }) => {
-        registry.projection = projectionWithCpu(cpuPercent);
+      "reads $perCore% of one core as $share of the machine and warns: $warns",
+      ({ perCore, share, warns }) => {
+        registry.projection = projectionWithCpu(perCore);
 
         renderSegment({ hasExplicitPick: true });
 
         // The value, not its label, which keeps its own muted tone.
-        const value = screen.getByTestId("status-bar-resource-metric-cpu")
-          .lastElementChild?.className;
-        expect(value?.includes(RUNNING_LOW_TEXT_CLASS_NAME)).toBe(warns);
+        const value = screen.getByTestId(
+          "status-bar-resource-metric-cpu",
+        ).lastElementChild;
+        expect(value?.textContent).toBe(share);
+        expect(value?.className.includes(RUNNING_LOW_TEXT_CLASS_NAME)).toBe(
+          warns,
+        );
       },
     );
 
     it("warns on the compact icon too", () => {
-      registry.projection = projectionWithCpu(92);
+      registry.projection = projectionWithCpu(1472);
       useLayoutStore
         .getState()
         .setRegionValues("resourceMonitor", { density: "compact" });
@@ -282,8 +292,21 @@ describe("<StatusBarResourceSegment />", () => {
       ).toContain(RUNNING_LOW_TEXT_CLASS_NAME);
     });
 
+    it("does not warn on the compact icon for one saturated core", () => {
+      registry.projection = projectionWithCpu(100);
+      useLayoutStore
+        .getState()
+        .setRegionValues("resourceMonitor", { density: "compact" });
+
+      renderSegment({ hasExplicitPick: true });
+
+      expect(
+        screen.getByTestId("status-bar-resource-cpu-icon").className,
+      ).not.toContain(RUNNING_LOW_TEXT_CLASS_NAME);
+    });
+
     it("never warns on the other metrics", () => {
-      registry.projection = projectionWithCpu(99);
+      registry.projection = projectionWithCpu(1584);
 
       renderSegment({ hasExplicitPick: true });
 
@@ -302,7 +325,7 @@ describe("<StatusBarResourceSegment />", () => {
 
     renderSegment({ hasExplicitPick: true });
 
-    expect(metricText("cpu")).toBe("cpu12%");
+    expect(metricText("cpu")).toBe("cpu0.75%");
     expect(metricText("processes")).toBe("procs14");
     expect(
       screen.getByTestId("status-bar-resource-segment").className,
@@ -318,7 +341,7 @@ describe("<StatusBarResourceSegment />", () => {
 
     renderSegment({ hasExplicitPick: true });
 
-    expect(metricText("cpu")).not.toContain("12%");
+    expect(metricText("cpu")).not.toContain("0.75%");
     expect(screen.getAllByText("cpu: unavailable")).toHaveLength(1);
   });
 
@@ -342,7 +365,7 @@ describe("<StatusBarResourceSegment />", () => {
 
     renderSegment({ hasExplicitPick: false });
 
-    expect(metricText("cpu")).toContain("12%");
+    expect(metricText("cpu")).toContain("0.75%");
   });
 
   it("says so when every metric is switched off", () => {
@@ -380,8 +403,137 @@ describe("<StatusBarResourceSegment />", () => {
       .getByTestId("status-bar-resource-segment")
       .getAttribute("aria-label");
     expect(name).toContain("Resources:");
-    expect(name).toContain("cpu 12%");
+    expect(name).toContain("cpu 0.75% (0.1 of 16 cores)");
     expect(name).toContain("procs 14");
+  });
+
+  it("carries the cores figure in the accessible name", () => {
+    registry.projection = {
+      ...liveProjection("host-b"),
+      hostTree: {
+        sampledAt: 1,
+        processCount: 14,
+        cpuPercent: 100,
+        rssBytes: GIB,
+        pssBytes: null,
+        privateBytes: null,
+      },
+    };
+
+    renderSegment({ hasExplicitPick: true });
+
+    expect(
+      screen
+        .getByTestId("status-bar-resource-segment")
+        .getAttribute("aria-label"),
+    ).toContain("cpu 6.3% (1.0 of 16 cores)");
+  });
+
+  it("adds Electron's native CPU share to the host share and names both in cores", () => {
+    registry.projection = {
+      ...liveProjection("host-b"),
+      hostTree: {
+        sampledAt: 1,
+        processCount: 14,
+        cpuPercent: 100,
+        rssBytes: GIB,
+        pssBytes: null,
+        privateBytes: null,
+      },
+    };
+    desktopSampler.usage = { ...DESKTOP_APP, cpuSharePercent: 6.25 };
+
+    renderSegment({ hasExplicitPick: true, watchesThisMachine: true });
+
+    const segment = screen.getByTestId("status-bar-resource-segment");
+    expect(
+      screen.getByTestId("status-bar-resource-metric-cpu").lastElementChild
+        ?.textContent,
+    ).toBe("13%");
+    expect(segment.getAttribute("aria-label")).toContain(
+      "cpu 13% (2.0 of 16 cores)",
+    );
+  });
+
+  it("names the cores behind the CPU share on hover", async () => {
+    registry.projection = {
+      ...liveProjection("host-b"),
+      hostTree: {
+        sampledAt: 1,
+        processCount: 14,
+        cpuPercent: 100,
+        rssBytes: GIB,
+        pssBytes: null,
+        privateBytes: null,
+      },
+    };
+
+    renderSegment({ hasExplicitPick: true });
+    fireEvent.focus(screen.getByTestId("status-bar-resource-metric-cpu"));
+
+    expect((await screen.findByRole("tooltip")).textContent).toContain(
+      "1.0 of 16 cores",
+    );
+  });
+
+  describe("a host that sends no processor count", () => {
+    function projectionWithoutCount(): GlobalResourceProjection {
+      const live = liveProjection("host-b");
+      return {
+        ...live,
+        hostTree:
+          live.hostTree === null
+            ? null
+            : { ...live.hostTree, cpuPercent: 1600 },
+        app:
+          live.app === null ? null : { ...live.app, hostCpuCount: undefined },
+      };
+    }
+
+    it("prints a dash, never the per-core figure, and never warns", () => {
+      registry.projection = projectionWithoutCount();
+
+      renderSegment({ hasExplicitPick: true });
+
+      const metric = screen.getByTestId("status-bar-resource-metric-cpu");
+      expect(metric.textContent).not.toContain("1600");
+      expect(metric.textContent).not.toContain("%");
+      expect(metric.lastElementChild?.className ?? "").not.toContain(
+        RUNNING_LOW_TEXT_CLASS_NAME,
+      );
+      // The other readings of the same sample still show.
+      expect(metricText("processes")).toBe("procs14");
+      expect(
+        screen
+          .getByTestId("status-bar-resource-segment")
+          .getAttribute("aria-label"),
+      ).toContain("cpu unavailable");
+    });
+
+    it("says the host doesn't report its processors, in its own sentence", async () => {
+      registry.projection = projectionWithoutCount();
+
+      renderSegment({ hasExplicitPick: true });
+      fireEvent.focus(screen.getByTestId("status-bar-resource-metric-cpu"));
+
+      expect((await screen.findByRole("tooltip")).textContent).toContain(
+        "Office Linux doesn't report how many processors it has, so there is no total to take a CPU share of.",
+      );
+    });
+
+    it("says it on the compact icon's tooltip too", async () => {
+      registry.projection = projectionWithoutCount();
+      useLayoutStore
+        .getState()
+        .setRegionValues("resourceMonitor", { density: "compact" });
+
+      renderSegment({ hasExplicitPick: true });
+      fireEvent.focus(screen.getByTestId("status-bar-resource-cpu-icon"));
+
+      expect((await screen.findByRole("tooltip")).textContent).toContain(
+        "Office Linux doesn't report how many processors it has",
+      );
+    });
   });
 
   it("names a metric it cannot read as unavailable rather than dropping it", () => {

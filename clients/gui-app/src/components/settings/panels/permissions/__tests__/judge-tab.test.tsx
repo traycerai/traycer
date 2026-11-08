@@ -35,6 +35,7 @@ import {
   provider,
   resetModels,
   setModels,
+  setProfileModels,
 } from "@/components/settings/panels/permissions/__tests__/judge-test-support";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { useComposerHarnessMemoryStore } from "@/stores/composer/composer-harness-memory-store";
@@ -72,6 +73,9 @@ vi.mock("@/hooks/host/use-host-capability-probe", () => ({
 }));
 vi.mock("@/hooks/chats/use-cloud-chat-queries", () => ({
   useCloudChatViewerId: () => "viewer-a",
+}));
+vi.mock("@/components/home/pickers/terminal-account-first-mention", () => ({
+  TerminalAccountFirstMention: () => null,
 }));
 
 // Whether the host advertises `autoJudge.get` (tri-state, as the real hook is)
@@ -1103,6 +1107,35 @@ describe("JudgeTab", () => {
         {
           harnessId: "codex",
           model: "gpt-mini",
+          profileId: null,
+          reasoningEffort: null,
+        },
+      ]);
+      expectNoEmptyModelWrite();
+    });
+
+    it("a named default provider switch commits while its model query is pending", async () => {
+      judgeCatalog.harnesses = [
+        harness({
+          id: "claude",
+          label: "Claude Code",
+          nativeAutoJudge: true,
+          judgeDefaultModel: "claude-named-default",
+        }),
+        harness({ id: "codex", label: "Codex" }),
+      ];
+      setModels("claude", { kind: "pending" });
+
+      const user = await switchToCodex();
+      expect(pendingLine().textContent).toContain("Waiting for Codex's models");
+
+      await user.click(await screen.findByRole("tab", { name: /Claude/ }));
+
+      await waitFor(() => expect(setJudgeMutate).toHaveBeenCalledTimes(1));
+      expect(writes()).toEqual([
+        {
+          harnessId: "claude",
+          model: "claude-named-default",
           profileId: null,
           reasoningEffort: null,
         },
@@ -2649,6 +2682,71 @@ describe("JudgeTab", () => {
         expect(thinkingEffortSlider().getAttribute("aria-valuetext")).toBe(
           "Low",
         );
+      });
+
+      it("holds a retained effort until the selected account catalog settles, then clamps against that account", async () => {
+        judgeCatalog.providers = [
+          provider("claude-code", [
+            profile("ambient", "ambient"),
+            profile("account-a", "managed"),
+            profile("account-b", "managed"),
+          ]),
+          provider("codex", [profile("ambient", "ambient")]),
+        ];
+        judgeRecord.current = {
+          selection: {
+            harnessId: "claude",
+            model: "opus",
+            profileId: "account-a",
+            reasoningEffort: "high",
+          },
+        };
+        setProfileModels("claude", "account-a", {
+          kind: "ready",
+          models: [EFFORT_MODEL],
+        });
+        setProfileModels("claude", "account-b", { kind: "pending" });
+        autoJudgeSetVersion.current = { major: 1, minor: 3 };
+
+        renderTab();
+        const user = userEvent.setup();
+        await user.click(face());
+        await screen.findByRole("dialog", { name: "Select model" });
+        expect(thinkingEffortSlider().getAttribute("aria-valuetext")).toBe(
+          "High",
+        );
+        await user.click(
+          screen.getByRole("button", { name: /profile: account-a/ }),
+        );
+        await user.click(
+          await screen.findByRole("menuitem", { name: "account-b" }),
+        );
+
+        expect(setJudgeMutate).not.toHaveBeenCalled();
+
+        act(() => {
+          setProfileModels("claude", "account-b", {
+            kind: "ready",
+            models: [
+              model("claude", "opus", "Claude Opus", {
+                supportedReasoningEfforts: [
+                  { id: "medium", label: "Medium", description: null },
+                  { id: "low", label: "Low", description: null },
+                ],
+              }),
+            ],
+          });
+        });
+
+        await waitFor(() => expect(setJudgeMutate).toHaveBeenCalledTimes(1));
+        expect(writes()).toEqual([
+          {
+            harnessId: "claude",
+            model: "opus",
+            profileId: "account-b",
+            reasoningEffort: "low",
+          },
+        ]);
       });
 
       it("a same-provider model change from a non-empty effort lands on the new model's lowest, even when the new model still advertises the old level", async () => {

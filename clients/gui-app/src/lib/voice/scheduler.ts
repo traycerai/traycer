@@ -92,8 +92,6 @@ export interface SpeechSchedulerDeps {
 
 export interface SpeechScheduler {
   enqueue(item: SpeechItem): void;
-  /** Drops a queued item that has not been appended; a no-op otherwise. */
-  remove(itemId: string): void;
   /**
    * Takes an item back whatever its stage: a queued one is dropped; one in
    * flight runs neither of its callbacks and is never retried, but keeps the
@@ -426,10 +424,6 @@ export function createSpeechScheduler(
       if (disposed) return;
       queue.push({ item, attempts: 0, appended: false });
       dispatch();
-    },
-    remove(itemId) {
-      const index = queue.findIndex((entry) => entry.item.id === itemId);
-      if (index !== -1) queue.splice(index, 1);
     },
     withdraw(itemId) {
       const index = queue.findIndex((entry) => entry.item.id === itemId);

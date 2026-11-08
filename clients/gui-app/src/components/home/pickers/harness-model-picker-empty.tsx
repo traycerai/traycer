@@ -1,8 +1,12 @@
 import { MutedAgentSpinner } from "@/components/ui/agent-spinning-dots";
+import { HostMethodVersionUnsatisfiedError } from "@traycer-clients/shared/host-transport/host-messenger";
 import { Button } from "@/components/ui/button";
 import { ReportIssueAction } from "@/components/report-issue/report-issue-action";
 import { createReportIssueContext } from "@/lib/report-issue-context";
-import type { GuiHarnessCatalogEntry } from "@/hooks/harnesses/use-gui-harness-catalog";
+import type {
+  CatalogModelsError,
+  GuiHarnessCatalogEntry,
+} from "@/hooks/harnesses/use-gui-harness-catalog";
 import { useProvidersFocusStore } from "@/stores/settings/providers-focus-store";
 import { guiHarnessIdToProviderId } from "@/lib/provider-ordering";
 import { ProviderSetupManualCommand } from "@/components/home/pickers/harness-model-picker-auth-line";
@@ -64,6 +68,7 @@ interface ModelRowsStateProps {
   readonly activeProviderState: ProviderCliState | null;
   readonly rowsCount: number;
   readonly onOpenProviderSettings: (focusTab: string) => void;
+  readonly onOpenHostUpdates: () => void;
   /** Where a provider's setup terminal lands - see the type's doc. */
   readonly terminalLoginSurface: ProviderTerminalLoginSurface | null;
   /** The picker's run-target host, which that terminal is minted on. */
@@ -79,12 +84,8 @@ export function ModelRowsState(props: ModelRowsStateProps): ReactNode | null {
     hostUnavailableLabel,
     hasQuery,
     activeProvider,
-    activeProviderState,
     rowsCount,
     onOpenProviderSettings,
-    terminalLoginSurface,
-    runTargetHostId,
-    onClosePicker,
   } = props;
 
   if (hostUnavailableLabel !== null && rowsCount === 0) {
@@ -146,45 +147,10 @@ export function ModelRowsState(props: ModelRowsStateProps): ReactNode | null {
   }
 
   if (activeProvider !== null && activeProvider.modelsError !== null) {
-    // A signed-out verdict for a provider whose sign-in runs in a terminal
-    // gets the action that fixes it, in the space the model rows would occupy
-    // - the host's "signed out, reconnect" sentence is true but names no
-    // action, and the report-issue icon beside it invites a bug report for a
-    // missing key.
-    const setup = providerSetupCta(activeProvider, activeProviderState);
-    if (setup !== null) {
-      return (
-        <ProviderSetupCta
-          providerId={setup.providerId}
-          label={activeProvider.label}
-          setup={setup.setup}
-          terminalLoginSurface={terminalLoginSurface}
-          runTargetHostId={runTargetHostId}
-          onClosePicker={onClosePicker}
-        />
-      );
-    }
-    // Surface the host's specific reason for API-key providers and packaged SDK
-    // failures instead of a generic catch-all. Fall back when the message is
-    // empty.
-    const reason = activeProvider.modelsError.message.trim();
-    return (
-      <PickerStateRow
-        label={reason.length > 0 ? reason : "Couldn't load models"}
-        icon={undefined}
-        action={
-          <ReportIssueAction
-            context={createReportIssueContext({
-              title: "Couldn't load models",
-              message: "Models for the selected provider could not be loaded.",
-              code: null,
-              source: "Model picker",
-            })}
-            presentation="icon"
-            className={undefined}
-          />
-        }
-      />
+    return modelCatalogErrorState(
+      activeProvider,
+      activeProvider.modelsError,
+      props,
     );
   }
 
@@ -199,6 +165,77 @@ export function ModelRowsState(props: ModelRowsStateProps): ReactNode | null {
   }
 
   return null;
+}
+
+function modelCatalogErrorState(
+  provider: GuiHarnessCatalogEntry,
+  error: CatalogModelsError,
+  props: Pick<
+    ModelRowsStateProps,
+    | "activeProviderState"
+    | "onOpenHostUpdates"
+    | "terminalLoginSurface"
+    | "runTargetHostId"
+    | "onClosePicker"
+  >,
+): ReactNode {
+  if (error instanceof HostMethodVersionUnsatisfiedError) {
+    return (
+      <PickerStateRow
+        label="Update this host to load models for this account."
+        icon={undefined}
+        action={
+          <Button
+            size="sm"
+            variant="secondary"
+            onClick={props.onOpenHostUpdates}
+          >
+            Host updates
+          </Button>
+        }
+      />
+    );
+  }
+  // A signed-out verdict for a provider whose sign-in runs in a terminal
+  // gets the action that fixes it, in the space the model rows would occupy
+  // - the host's "signed out, reconnect" sentence is true but names no
+  // action, and the report-issue icon beside it invites a bug report for a
+  // missing key.
+  const setup = providerSetupCta(provider, props.activeProviderState);
+  if (setup !== null) {
+    return (
+      <ProviderSetupCta
+        providerId={setup.providerId}
+        label={provider.label}
+        setup={setup.setup}
+        terminalLoginSurface={props.terminalLoginSurface}
+        runTargetHostId={props.runTargetHostId}
+        onClosePicker={props.onClosePicker}
+      />
+    );
+  }
+  // Surface the host's specific reason for API-key providers and packaged SDK
+  // failures instead of a generic catch-all. Fall back when the message is
+  // empty.
+  const reason = error.message.trim();
+  return (
+    <PickerStateRow
+      label={reason.length > 0 ? reason : "Couldn't load models"}
+      icon={undefined}
+      action={
+        <ReportIssueAction
+          context={createReportIssueContext({
+            title: "Couldn't load models",
+            message: "Models for the selected provider could not be loaded.",
+            code: null,
+            source: "Model picker",
+          })}
+          presentation="icon"
+          className={undefined}
+        />
+      }
+    />
+  );
 }
 
 // Scope-aware empty copy. A query that matches nothing names the harness it

@@ -1,17 +1,10 @@
 import type { UseQueryResult } from "@tanstack/react-query";
 import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
-import type {
-  HostRpcError,
-  RequestOfMethod,
-} from "@traycer-clients/shared/host-transport/host-messenger";
+import type { ProvidersReadModelRoutesRequest } from "@traycer/protocol/host/rate-limit";
+import type { HostRpcError } from "@traycer-clients/shared/host-transport/host-messenger";
 import type { HostRpcRegistry } from "@/lib/host";
 import { useHostQueryWithResponseMap } from "@/hooks/host/use-host-query";
 import { RATE_LIMIT_USAGE_RESPONSE_TIMEOUT_MS } from "@/lib/rate-limits/rate-limit-timing";
-
-export type ProvidersReadModelRoutesRequest = RequestOfMethod<
-  HostRpcRegistry,
-  "providers.readModelRoutes"
->;
 
 interface ModelRoutesData {
   readonly routes: ReadonlyArray<{

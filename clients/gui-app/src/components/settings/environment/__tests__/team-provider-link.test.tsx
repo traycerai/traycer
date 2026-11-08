@@ -108,10 +108,16 @@ describe("ProviderLinkDialog", () => {
       "environment.list": () => TEAM_LIST,
     });
     render(<ProviderLinkDialog />, { wrapper: team.Wrapper });
+    expect(
+      await screen.findByRole("heading", { name: "Link a plan to Acme" }),
+    ).toBeTruthy();
+    expect(screen.getByRole("dialog").textContent.match(/Acme/g)).toHaveLength(
+      1,
+    );
     await waitFor(() => {
       expect(
         screen.getByText(
-          "This signs Traycer in to your plan once. Acme's agents use it on every host running Acme; it counts as a device on your plan.",
+          "This signs Traycer in to your plan once. The team's agents use it on every host running this environment; it counts as a device on your plan.",
         ),
       ).toBeTruthy();
     });

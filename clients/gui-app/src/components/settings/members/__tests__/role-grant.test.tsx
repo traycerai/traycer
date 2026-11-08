@@ -13,7 +13,7 @@ const ADMIN: TeamRole = "admin";
 const NOTICE =
   "Prompts go to the provider you pick; nothing else leaves the host.";
 const EDITOR_PREFIX =
-  "You can change Acme's settings; every change reaches every Acme sandbox.";
+  "You can change the team's settings; every change reaches every team sandbox.";
 
 function grantText(): string {
   return screen.getByTestId("role-grant").textContent;
@@ -21,17 +21,17 @@ function grantText(): string {
 
 describe("RoleGrant", () => {
   it("opens with the editor prefix and the common text", () => {
-    render(<RoleGrant role={EDITOR} teamName="Acme" noticeText={NOTICE} />);
+    render(<RoleGrant role={EDITOR} noticeText={NOTICE} />);
     expect(screen.getByTestId("role-grant-prefix").textContent).toBe(
       EDITOR_PREFIX,
     );
     expect(screen.getByTestId("role-grant-common").textContent).toContain(
-      "Every member can interrupt or permanently delete any Acme sandbox",
+      "Every member can interrupt or permanently delete any team sandbox",
     );
   });
 
   it("extends the editor prefix with invite, remove and role changes for an admin", () => {
-    render(<RoleGrant role={ADMIN} teamName="Acme" noticeText={NOTICE} />);
+    render(<RoleGrant role={ADMIN} noticeText={NOTICE} />);
     expect(screen.getByTestId("role-grant-prefix").textContent).toBe(
       `${EDITOR_PREFIX} You can invite and remove people and change roles.`,
     );
@@ -39,7 +39,7 @@ describe("RoleGrant", () => {
 
   it("keeps the data-handling notice closed until How Traycer handles this is opened", async () => {
     const user = userEvent.setup();
-    render(<RoleGrant role={EDITOR} teamName="Acme" noticeText={NOTICE} />);
+    render(<RoleGrant role={EDITOR} noticeText={NOTICE} />);
     expect(grantText()).not.toContain(NOTICE);
     await user.click(
       screen.getByRole("button", { name: "How Traycer handles this" }),
@@ -53,7 +53,6 @@ describe("InviteAcceptGrant", () => {
     render(
       <InviteAcceptGrant
         role={EDITOR}
-        teamName="Acme"
         noticeText={NOTICE}
         paidPlan={paidPlan}
         accepting={false}
@@ -66,7 +65,7 @@ describe("InviteAcceptGrant", () => {
     renderAccept(true, () => undefined);
     const seats = screen.getByTestId("invite-accept-seats").textContent;
     expect(seats).toBe(
-      "Your seat already counts toward Acme's seats; accepting does not add another.",
+      "Your seat already counts toward the team's seats; accepting does not add another.",
     );
   });
 
@@ -74,7 +73,7 @@ describe("InviteAcceptGrant", () => {
     renderAccept(false, () => undefined);
     const seats = screen.getByTestId("invite-accept-seats").textContent;
     expect(seats).toBe(
-      "An admin sets how much of Acme's credits you can spend.",
+      "An admin sets how much of the team's credits you can spend.",
     );
   });
 

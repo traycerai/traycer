@@ -95,8 +95,8 @@ export interface SoundtrackSourceOptions {
   readonly audience: string;
   /** The folder under `sets/` in the bucket. */
   readonly set: string;
-  /** Explicit opt-in keeps the published v1 catalog as the default. */
-  readonly manifestVersion?: 1 | 2;
+  /** Which published catalog to read: `v1.json` or `v2.json`. */
+  readonly manifestVersion: 1 | 2;
   readonly fetch: typeof fetch;
   readonly now: () => number;
   /** Told why a read failed, never with the key, a token or a link. */

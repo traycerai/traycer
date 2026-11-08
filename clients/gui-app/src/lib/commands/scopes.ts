@@ -45,7 +45,7 @@ export const SCOPE_DESCRIPTORS: ReadonlyArray<ScopeDescriptor> = [
   {
     scope: "workspaces",
     prefix: "@",
-    label: "Workspaces",
+    label: "Folders",
     keywordHint: "workspace",
   },
   {

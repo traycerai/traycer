@@ -510,7 +510,7 @@ function useRemoteFolderPickerNative(args: {
           title: "Could not add folders",
           message: "The folder picker failed to open.",
           code: null,
-          source: "Workspace folders",
+          source: "Folders",
         });
       }
     } finally {
