@@ -18,8 +18,6 @@ const REQUEST = {
 const FOUND = {
   ok: true as const,
   bytesBase64: "AQID",
-  mediaType: "application/pdf",
-  fileName: "report.pdf",
 };
 
 describe("epic.readChatFile@1.0", () => {

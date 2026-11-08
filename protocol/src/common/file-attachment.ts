@@ -16,8 +16,9 @@ import { lazySchema } from "@traycer/protocol/framework/lazy-schema";
  * and draws nothing for it, with the surrounding text intact.
  *
  * `mediaType` and `fileName` are what the author's client DECLARED, never
- * sniffed. Nothing executes the bytes, and the declared type is what a
- * download hands back (`epic.readChatFile`). Unknown keys strip, so a composer
+ * sniffed, and nothing executes the bytes. A download (`epic.readChatFile`)
+ * returns the bytes alone, so these attrs are the one source of a file's name
+ * and type. Unknown keys strip, so a composer
  * may carry its own transient attrs (an upload state) on the same node.
  */
 export const fileAttachmentAttrsSchema = lazySchema(() =>

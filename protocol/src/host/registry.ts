@@ -10808,9 +10808,9 @@ const HOST_RPC_REGISTRY_BASE_TAIL_DEFINITION = {
     degrade: { kind: "unsupported" },
   },
   // One chat FILE attachment's bytes, the non-image sibling of the read above:
-  // same request, same chat gate, same `missing` arm, but the media type and
-  // name it returns are the ones the author declared. Optional and off the
-  // floor because a new method name is handshake-fatal against a released
+  // same request, same chat gate, same `missing` arm, but it returns the bytes
+  // alone and sniffs nothing; the node carries the name and media type.
+  // Optional and off the floor because a new method name is handshake-fatal against a released
   // peer; a host without it has no file attachments to serve.
   "epic.readChatFile": {
     1: {
