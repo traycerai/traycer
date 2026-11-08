@@ -1,0 +1,326 @@
+#!/usr/bin/env node
+"use strict";
+
+// Deliberately dependency-free: this runs before Bun, Python or npm install.
+const crypto = require("node:crypto");
+const fs = require("node:fs");
+const os = require("node:os");
+const path = require("node:path");
+const { execFileSync } = require("node:child_process");
+
+function readLock(lockPath) {
+  const lock = JSON.parse(fs.readFileSync(lockPath, "utf8"));
+  if (lock.schemaVersion !== 1 || !Array.isArray(lock.artifacts)) {
+    throw new Error("Unsupported CI tools lock");
+  }
+  const keys = new Set();
+  for (const entry of lock.artifacts) {
+    if (
+      !/^[a-z0-9][a-z0-9-]*$/.test(entry.name) ||
+      !/^[a-zA-Z0-9._+-]+$/.test(entry.version) ||
+      !/^[a-f0-9]{64}$/.test(entry.sha256) ||
+      !secureOrigin(entry.upstreamUrl) ||
+      !["linux", "darwin", "win32", "any"].includes(entry.os) ||
+      !["x64", "arm64", "any"].includes(entry.arch)
+    ) {
+      throw new Error("Malformed CI tools lock entry");
+    }
+    const filename = decodeURIComponent(
+      new URL(entry.upstreamUrl).pathname.split("/").at(-1),
+    );
+    if (!/^[a-zA-Z0-9._+-]+$/.test(filename)) {
+      throw new Error(`Unsafe CI tool filename: ${entry.name}`);
+    }
+    const key = objectKey(entry);
+    if (keys.has(key)) throw new Error(`Duplicate mirror object: ${key}`);
+    keys.add(key);
+  }
+  return lock;
+}
+
+function secureOrigin(url) {
+  const parsed = new URL(url);
+  return (
+    !parsed.username &&
+    !parsed.password &&
+    (parsed.protocol === "https:" ||
+      (parsed.protocol === "http:" &&
+        ["localhost", "127.0.0.1", "[::1]"].includes(parsed.hostname)))
+  );
+}
+
+function objectKey(entry) {
+  return `tools/${entry.name}/${entry.version}/${decodeURIComponent(new URL(entry.upstreamUrl).pathname.split("/").at(-1))}`;
+}
+
+function sha256(filename) {
+  return crypto
+    .createHash("sha256")
+    .update(fs.readFileSync(filename))
+    .digest("hex");
+}
+
+function download(entry, destination, mirror) {
+  if (mirror !== null && !secureOrigin(mirror))
+    throw new Error("Unsafe CI mirror origin");
+  const stage = `${destination}.partial`;
+  fs.mkdirSync(path.dirname(destination), { recursive: true });
+  for (const [origin, url, seconds] of [
+    ...(mirror === null
+      ? []
+      : [["mirror", `${mirror.replace(/\/$/, "")}/${objectKey(entry)}`, 30]]),
+    ["upstream", entry.upstreamUrl, 180],
+  ]) {
+    try {
+      execFileSync(
+        "curl",
+        [
+          "--fail",
+          "--silent",
+          "--show-error",
+          "--location",
+          "--connect-timeout",
+          "10",
+          "--max-time",
+          String(seconds),
+          "--output",
+          stage,
+          url,
+        ],
+        { stdio: ["ignore", "ignore", "pipe"], timeout: (seconds + 5) * 1000 },
+      );
+      if (sha256(stage) !== entry.sha256) throw new Error("SHA-256 mismatch");
+      fs.renameSync(stage, destination);
+      console.log(
+        `[ci-tools] ${entry.name} ${entry.version} verified (${origin})`,
+      );
+      return url;
+    } catch (error) {
+      fs.rmSync(stage, { force: true });
+      // Never forward curl stderr: a transport's response may include credentials.
+      console.log(
+        `[ci-tools] ${entry.name}: ${origin} failed verification or transport`,
+      );
+      if (origin === "upstream") {
+        throw new Error(`Both origins failed for ${objectKey(entry)}`, {
+          cause: error,
+        });
+      }
+    }
+  }
+}
+
+function select(lock, name, platform, arch) {
+  const entries = lock.artifacts.filter(
+    (entry) =>
+      entry.name === name &&
+      entry.role !== "metadata" &&
+      (entry.os === platform || entry.os === "any") &&
+      (entry.arch === arch || entry.arch === "any"),
+  );
+  if (entries.length !== 1) {
+    throw new Error(
+      `Expected one locked ${name} for ${platform}/${arch}, found ${entries.length}`,
+    );
+  }
+  return entries[0];
+}
+
+function downloadLockedUrl(lock, url, destination) {
+  const entry = lock.artifacts.find(
+    (candidate) => decodeURI(candidate.upstreamUrl) === decodeURI(url),
+  );
+  if (!entry)
+    throw new Error(
+      `GitHub acquisition is absent from tools-mirror.lock.json: ${url}`,
+    );
+  download(entry, destination, lock.mirror);
+}
+
+function append(filename, value) {
+  if (filename) fs.appendFileSync(filename, `${value}\n`);
+}
+
+function install(entry, archive, root) {
+  const python = entry.name === "python-311" || entry.name === "python-312";
+  const destination = python
+    ? "/opt/traycer-ci/python"
+    : path.join(root, entry.name, entry.sha256);
+  if (python) {
+    execFileSync("sudo", ["mkdir", "-p", "/opt/traycer-ci"], {
+      stdio: "inherit",
+    });
+    execFileSync(
+      "sudo",
+      ["chown", `${process.getuid()}:${process.getgid()}`, "/opt/traycer-ci"],
+      { stdio: "inherit" },
+    );
+  }
+  fs.rmSync(destination, { recursive: true, force: true });
+  fs.mkdirSync(destination, { recursive: true });
+  if (entry.kind === "zip") {
+    // tar on Windows is bsdtar, which also reads ZIP; macOS/Linux use unzip.
+    if (process.platform === "win32") {
+      execFileSync("tar", ["-xf", archive, "-C", destination], {
+        stdio: "inherit",
+      });
+    } else {
+      execFileSync("unzip", ["-q", archive, "-d", destination], {
+        stdio: "inherit",
+      });
+    }
+  } else if (entry.kind === "tar.gz") {
+    execFileSync(
+      "tar",
+      [
+        "-xzf",
+        archive,
+        "-C",
+        destination,
+        ...(python ? ["--strip-components=1"] : []),
+      ],
+      { stdio: "inherit" },
+    );
+  } else if (entry.kind === "file") {
+    fs.copyFileSync(archive, path.join(destination, entry.executable));
+    fs.chmodSync(path.join(destination, entry.executable), 0o755);
+  } else {
+    throw new Error(`Unsupported archive: ${entry.name}`);
+  }
+  if (entry.bin) {
+    const bin = path.resolve(
+      destination,
+      python
+        ? "bin"
+        : entry.bin.replace(
+            "{arch}",
+            process.arch === "x64" ? "x86_64" : "aarch64",
+          ),
+    );
+    if (bin !== destination && !bin.startsWith(`${destination}${path.sep}`)) {
+      throw new Error(`Unsafe tool bin path: ${entry.name}`);
+    }
+    append(process.env.GITHUB_PATH, bin);
+  }
+  return destination;
+}
+
+function main(args) {
+  const [command, lockPath, ...names] = args;
+  const lock = readLock(lockPath);
+  if (command === "list") {
+    for (const entry of lock.artifacts)
+      console.log(`${objectKey(entry)}\t${entry.sha256}\t${entry.upstreamUrl}`);
+    return;
+  }
+  if (command !== "install")
+    throw new Error(`Unknown CI tools command: ${command}`);
+  const cache =
+    process.env.CI_TOOLS_CACHE || path.join(os.tmpdir(), "traycer-ci-tools");
+  const mirror = process.env.CI_TOOLS_MIRROR || lock.mirror;
+  for (const name of names) {
+    if (name === "hooks") {
+      const configSha256 = sha256(".pre-commit-config.yaml");
+      const home = `/opt/traycer-ci/hooks/${configSha256}`;
+      append(process.env.GITHUB_ENV, `PRE_COMMIT_HOME=${home}`);
+      const hook = (lock.hookEnvironments || []).find(
+        (candidate) =>
+          candidate.configSha256 === configSha256 &&
+          candidate.os === process.platform &&
+          candidate.arch === process.arch,
+      );
+      let source = "fallback";
+      if (hook) {
+        const archive = path.join(cache, `${hook.sha256}-hooks.tar.gz`);
+        try {
+          fs.mkdirSync(cache, { recursive: true });
+          execFileSync(
+            "curl",
+            [
+              "--fail",
+              "--silent",
+              "--show-error",
+              "--location",
+              "--connect-timeout",
+              "10",
+              "--max-time",
+              "60",
+              "--output",
+              archive,
+              `${mirror}/${hook.objectKey}`,
+            ],
+            { stdio: ["ignore", "ignore", "pipe"], timeout: 65000 },
+          );
+          if (sha256(archive) !== hook.sha256)
+            throw new Error("Hook archive SHA-256 mismatch");
+          execFileSync("tar", ["-xzf", archive, "-C", "/opt/traycer-ci"], {
+            stdio: "inherit",
+          });
+          source = "mirror";
+        } catch {
+          fs.rmSync(archive, { force: true });
+          // pre-commit builds environments at the config's pinned revisions.
+          fs.rmSync(home, { recursive: true, force: true });
+        }
+      }
+      console.log(`[ci-tools] hooks executed (${source})`);
+      append(process.env.GITHUB_OUTPUT, `hooks=${source}`);
+      continue;
+    }
+    const entry = select(lock, name, process.platform, process.arch);
+    const archive = path.join(
+      cache,
+      `${entry.sha256}-${path.basename(objectKey(entry))}`,
+    );
+    // A restored archive is untrusted until its digest is checked again.
+    if (!fs.existsSync(archive) || sha256(archive) !== entry.sha256) {
+      download(entry, archive, mirror);
+    } else {
+      console.log(`[ci-tools] ${name} verified (cache)`);
+    }
+    if (entry.kind === "electron") {
+      const metadata = lock.artifacts.find(
+        (candidate) =>
+          candidate.name === "electron" &&
+          candidate.version === entry.version &&
+          candidate.role === "metadata",
+      );
+      if (!metadata)
+        throw new Error("Electron checksum metadata is missing from the lock");
+      const metadataPath = path.join(
+        cache,
+        `${metadata.sha256}-SHASUMS256.txt`,
+      );
+      const source = download(metadata, metadataPath, mirror);
+      const remote = new URL(source);
+      remote.pathname = path.posix.dirname(remote.pathname);
+      const cacheKey = crypto
+        .createHash("sha256")
+        .update(remote.toString())
+        .digest("hex");
+      const electronCache = path.join(cache, "electron");
+      fs.mkdirSync(path.join(electronCache, cacheKey), { recursive: true });
+      fs.copyFileSync(
+        archive,
+        path.join(electronCache, cacheKey, path.basename(objectKey(entry))),
+      );
+      append(process.env.GITHUB_ENV, `electron_config_cache=${electronCache}`);
+      append(process.env.GITHUB_ENV, `ELECTRON_CACHE=${electronCache}`);
+      append(
+        process.env.GITHUB_ENV,
+        `ELECTRON_MIRROR=${remote.origin}${path.posix.dirname(remote.pathname)}/`,
+      );
+      append(
+        process.env.GITHUB_ENV,
+        `ELECTRON_CUSTOM_DIR=${path.posix.basename(remote.pathname)}`,
+      );
+    } else {
+      install(entry, archive, path.join(cache, "installed"));
+    }
+    append(process.env.GITHUB_OUTPUT, `${name}=executed`);
+  }
+  append(process.env.GITHUB_OUTPUT, "executed=true");
+}
+
+module.exports = { readLock, objectKey, download, downloadLockedUrl, sha256 };
+if (require.main === module) main(process.argv.slice(2));
