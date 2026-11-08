@@ -1,5 +1,6 @@
 import {
   desktopReleaseTag,
+  isRecord,
   projectDesktopRelease,
   type DesktopReleaseAsset,
   type DesktopReleaseCandidate,
@@ -175,10 +176,6 @@ function parseDesktopReleaseIndex(
       origins: desktopReleaseOrigins(owner, repo, release, versions, false),
     })),
   };
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return value !== null && typeof value === "object";
 }
 
 function isTimestamp(value: unknown): boolean {
