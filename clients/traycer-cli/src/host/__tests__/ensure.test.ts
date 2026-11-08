@@ -58,6 +58,9 @@ const mocks = vi.hoisted(() => ({
   assertHostNotBusyMock: vi.fn(),
   gateStoreFormatFloorMock: vi.fn(),
   isVersionYankedMock: vi.fn(),
+  readBundledHostDescriptorMock: vi.fn(),
+  createDefaultRegistryClientMock: vi.fn(),
+  fetchManifestMock: vi.fn(),
   publishHostStartAdoptionMock: vi.fn(),
   readServiceRegistrationDisabledMock: vi.fn(),
 }));
@@ -109,6 +112,18 @@ vi.mock("../../installer/install", () => ({
 vi.mock("../../installer/bundled-host", () => ({
   resolveBundledHostArchive: mocks.resolveBundledHostArchiveMock,
 }));
+
+vi.mock("../../installer/bundled-descriptor", () => ({
+  readBundledHostDescriptor: mocks.readBundledHostDescriptorMock,
+}));
+
+vi.mock("../../registry", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../registry")>();
+  return {
+    ...actual,
+    createDefaultRegistryClient: mocks.createDefaultRegistryClientMock,
+  };
+});
 
 vi.mock("../../manifest/host-install", () => ({
   readHostInstallRecord: mocks.readHostInstallRecordMock,
@@ -192,6 +207,7 @@ const {
   discardStagedHostInstallSourceMock,
   resolveBundledHostArchiveMock,
   readHostInstallRecordMock,
+  readBundledHostDescriptorMock,
   resolveServiceCliInvocationMock,
   createServiceControllerMock,
   serviceLabelForMock,
@@ -210,6 +226,7 @@ import { cliError, CLI_ERROR_CODES } from "../../runner/errors";
 import type { ServiceController } from "../../service";
 import { hostHomeDir } from "../../store/paths";
 import { atServiceSpawnEdge } from "../../service/spawn-edge";
+import { currentHostPlatformKey } from "../../registry/platform-key";
 
 beforeAll(() => {
   expect(osHome.current).not.toBe("");
@@ -306,6 +323,21 @@ beforeEach(() => {
   vi.clearAllMocks();
   mocks.callOrder = [];
   config.supportedHostVersion = null;
+  readBundledHostDescriptorMock.mockResolvedValue({
+    version: "1.7.2",
+    platformKey: "darwin-arm64",
+    sha256: "a".repeat(64),
+    sizeBytes: 1024,
+    publicKeyId: "0123456789abcdef",
+    requiredCliVersion: null,
+    minimumEpoch: 2,
+    storeFormats: { chatDb: 22 },
+    canonicalUrl: "https://releases.example.invalid/host/1.7.2/runtime.tar.gz",
+  });
+  mocks.createDefaultRegistryClientMock.mockResolvedValue({
+    fetchManifest: mocks.fetchManifestMock,
+  });
+  mocks.fetchManifestMock.mockResolvedValue({ versions: [] });
   serviceLabelForMock.mockImplementation(
     (environment: "production" | "dev") => ({
       id: environment === "dev" ? "ai.traycer.host.dev" : "ai.traycer.host",
@@ -836,7 +868,7 @@ describe("ensureHost", () => {
     expect(controller.install).not.toHaveBeenCalled();
   });
 
-  it("prefers the packaged host archive over the registry for latest", async () => {
+  it("uses the signed packaged descriptor as an implicit minimum for latest", async () => {
     config.supportedHostVersion = "1.7.2";
     readHostInstallRecordMock.mockResolvedValue(null);
     resolveBundledHostArchiveMock.mockResolvedValue("/bundle/host.tar.gz");
@@ -847,27 +879,189 @@ describe("ensureHost", () => {
 
     expect(stageHostInstallSourceMock).toHaveBeenCalledWith(
       expect.objectContaining({
+        source: {
+          kind: "bundled",
+          path: "/bundle/host.tar.gz",
+          descriptor: expect.objectContaining({ version: "1.7.2" }),
+        },
+      }),
+    );
+    expect(readBundledHostDescriptorMock).toHaveBeenCalledWith(
+      "/bundle/host.tar.gz",
+    );
+    expect(mocks.gateStoreFormatFloorMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        targetVersion: "1.7.2",
+        consultRegistry: false,
+        publishedEntry: {
+          storeFormats: { chatDb: 22 },
+          archiveSha256: "a".repeat(64),
+        },
+      }),
+    );
+    expect(isVersionYankedMock).not.toHaveBeenCalled();
+  });
+
+  it("keeps an explicit --release on the registry route when a bundle is present", async () => {
+    config.supportedHostVersion = "1.7.2";
+    readHostInstallRecordMock.mockResolvedValue(null);
+    resolveBundledHostArchiveMock.mockResolvedValue("/bundle/host.tar.gz");
+    createServiceControllerMock.mockReturnValue(
+      makeController("not-installed"),
+    );
+
+    await ensureHost(makeOpts({ versionRequest: "1.6.0" }));
+
+    expect(readBundledHostDescriptorMock).not.toHaveBeenCalled();
+    expect(stageHostInstallSourceMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        source: { kind: "registry", versionRequest: "1.6.0" },
+      }),
+    );
+  });
+
+  it("keeps the descriptor-free own-build route for an unpinned bundle", async () => {
+    readHostInstallRecordMock.mockResolvedValue(null);
+    resolveBundledHostArchiveMock.mockResolvedValue("/bundle/host.tar.gz");
+    createServiceControllerMock.mockReturnValue(
+      makeController("not-installed"),
+    );
+
+    await ensureHost(makeOpts({}));
+
+    expect(readBundledHostDescriptorMock).not.toHaveBeenCalled();
+    expect(stageHostInstallSourceMock).toHaveBeenCalledWith(
+      expect.objectContaining({
         source: { kind: "local-file", path: "/bundle/host.tar.gz" },
       }),
     );
   });
 
-  // Q7 wiring. The core's own rows (`provision.test.ts`, "own-build-minimum
-  // satisfaction") prove what that policy DOES with a newer install; this is
-  // the half they cannot see - that an own-build source still asks for it.
-  // Reverting this mapping to `exact` reinstates the revert with every core
-  // row still green, which is exactly how the churn survived review the first
-  // time. Asserted on the target-computed line, before any install decision,
-  // so no yank lookup is reached and the pin costs one log read.
+  it("fails a pinned bundle ensure when the adjacent descriptor is missing", async () => {
+    config.supportedHostVersion = "1.7.2";
+    resolveBundledHostArchiveMock.mockResolvedValue("/bundle/host.tar.gz");
+    readBundledHostDescriptorMock.mockRejectedValue(
+      cliError({
+        code: CLI_ERROR_CODES.HOST_VERIFY_FAILED,
+        message: "bundled host descriptor: file is missing",
+        details: null,
+        exitCode: 1,
+      }),
+    );
+
+    await expect(ensureHost(makeOpts({}))).rejects.toMatchObject({
+      code: CLI_ERROR_CODES.HOST_VERIFY_FAILED,
+      message: expect.stringContaining("bundled host descriptor"),
+    });
+    expect(stageHostInstallSourceMock).not.toHaveBeenCalled();
+  });
+
+  describe("yanked installed bundle repair", () => {
+    function prepareWithdrawnInstalledBundle(): void {
+      config.supportedHostVersion = "1.7.2";
+      readHostInstallRecordMock.mockResolvedValue({
+        version: "1.7.2",
+        source: { kind: "registry", value: "1.7.2" },
+      });
+      resolveBundledHostArchiveMock.mockResolvedValue("/bundle/host.tar.gz");
+      isVersionYankedMock.mockResolvedValue(true);
+      createServiceControllerMock.mockReturnValue(makeController("running"));
+      const platformKey = currentHostPlatformKey();
+      mocks.fetchManifestMock.mockResolvedValue({
+        versions: [
+          {
+            version: "1.7.1",
+            yanked: false,
+            platforms: { [platformKey]: { available: true } },
+          },
+          {
+            version: "1.7.2",
+            yanked: true,
+            platforms: { [platformKey]: { available: true } },
+          },
+          {
+            version: "1.8.0",
+            yanked: false,
+            platforms: { [platformKey]: { available: true } },
+          },
+          {
+            version: "1.9.0",
+            yanked: true,
+            platforms: { [platformKey]: { available: true } },
+          },
+        ],
+      });
+    }
+
+    it("repairs only from the newest available non-yanked registry version at or above the descriptor pin", async () => {
+      prepareWithdrawnInstalledBundle();
+
+      await ensureHost(makeOpts({}));
+
+      expect(mocks.createDefaultRegistryClientMock).toHaveBeenCalledTimes(1);
+      expect(stageHostInstallSourceMock).toHaveBeenCalledWith(
+        expect.objectContaining({
+          source: { kind: "registry", versionRequest: "1.8.0" },
+        }),
+      );
+    });
+
+    it("keeps the running host when the registry cannot provide a repair", async () => {
+      prepareWithdrawnInstalledBundle();
+      mocks.fetchManifestMock.mockRejectedValue(
+        new Error("registry unavailable"),
+      );
+
+      const result = await ensureHost(makeOpts({}));
+
+      expect(result.action).toBe("noop");
+      expect(stageHostInstallSourceMock).not.toHaveBeenCalled();
+      expect(commitHostInstallSourceMock).not.toHaveBeenCalled();
+    });
+
+    it("keeps the running host when downloading the registry repair fails", async () => {
+      prepareWithdrawnInstalledBundle();
+      stageHostInstallSourceMock.mockRejectedValueOnce(
+        cliError({
+          code: CLI_ERROR_CODES.HOST_VERIFY_FAILED,
+          message: "registry repair failed verification",
+          details: null,
+          exitCode: 1,
+        }),
+      );
+
+      const result = await ensureHost(makeOpts({}));
+
+      expect(result.action).toBe("noop");
+      expect(stageHostInstallSourceMock).toHaveBeenCalledTimes(1);
+      expect(commitHostInstallSourceMock).not.toHaveBeenCalled();
+    });
+  });
+
+  // The descriptor pin drives the bundled route's registry-minimum policy;
+  // only an explicit operator `--from` remains an own-build source.
   it.each([
-    ["the packaged archive", { fromPath: null }],
-    // The Windows desktop passes its bundled archive as `--from`, so the two
-    // platforms would otherwise disagree about whether a user's newer host
-    // survives a convergence.
-    ["an explicit --from", { fromPath: "/elsewhere/host.tar.gz" }],
-  ])(
-    "asks for `own-build-minimum` for %s, never `exact`",
-    async (_label, overrides) => {
+    [
+      "the packaged archive",
+      { fromPath: null },
+      "bundled",
+      "implicit-registry-minimum",
+    ],
+    [
+      "an explicit --bundled archive",
+      { fromPath: null, bundledPath: "/elsewhere/host.tar.gz" },
+      "bundled",
+      "implicit-registry-minimum",
+    ],
+    [
+      "an explicit --from archive",
+      { fromPath: "/elsewhere/host.tar.gz" },
+      "local-file",
+      "own-build-minimum",
+    ],
+  ] as const)(
+    "resolves %s with source %s and satisfaction %s",
+    async (_label, overrides, sourceKind, satisfactionKind) => {
       config.supportedHostVersion = "1.7.2";
       readHostInstallRecordMock.mockResolvedValue(null);
       resolveBundledHostArchiveMock.mockResolvedValue("/bundle/host.tar.gz");
@@ -886,11 +1080,83 @@ describe("ensureHost", () => {
       expect(debug).toHaveBeenCalledWith(
         "Host ensure provisioning target computed",
         expect.objectContaining({
-          sourceKind: "local-file",
-          satisfactionKind: "own-build-minimum",
-          satisfactionVersion: config.version,
+          sourceKind,
+          satisfactionKind,
+          satisfactionVersion:
+            satisfactionKind === "own-build-minimum" ? config.version : "1.7.2",
         }),
       );
+    },
+  );
+
+  it.each(
+    [
+      {
+        route: "implicit discovery",
+        bundledPath: null,
+        expectedPath: "/bundle/host.tar.gz",
+      },
+      {
+        route: "explicit --bundled path",
+        bundledPath: "/explicit/host-runtime.tar.gz",
+        expectedPath: "/explicit/host-runtime.tar.gz",
+      },
+    ].flatMap((route) =>
+      [
+        { state: "absent", version: null, expectedAction: "installed" },
+        { state: "older", version: "1.7.1", expectedAction: "installed" },
+        {
+          state: "incomparable",
+          version: "dogfood-build",
+          expectedAction: "installed",
+        },
+        { state: "equal", version: "1.7.2", expectedAction: "noop" },
+        { state: "newer", version: "1.8.0", expectedAction: "noop" },
+        {
+          state: "same-release other build",
+          version: "1.7.2+other",
+          expectedAction: "noop",
+        },
+      ].map((installed) => ({ ...route, ...installed })),
+    ),
+  )(
+    "$route: $state install follows the signed descriptor minimum",
+    async ({ bundledPath, expectedPath, version, expectedAction }) => {
+      config.supportedHostVersion = "1.7.2";
+      readHostInstallRecordMock.mockResolvedValue(
+        version === null
+          ? null
+          : {
+              version,
+              source: { kind: "registry", value: version },
+            },
+      );
+      resolveBundledHostArchiveMock.mockResolvedValue("/bundle/host.tar.gz");
+      createServiceControllerMock.mockReturnValue(
+        makeController(version === null ? "not-installed" : "running"),
+      );
+      isVersionYankedMock.mockResolvedValue(false);
+
+      const result = await ensureHost(makeOpts({ bundledPath }));
+
+      expect(result.action).toBe(expectedAction);
+      if (expectedAction === "installed") {
+        expect(stageHostInstallSourceMock).toHaveBeenCalledWith(
+          expect.objectContaining({
+            source: {
+              kind: "bundled",
+              path: expectedPath,
+              descriptor: expect.objectContaining({ version: "1.7.2" }),
+            },
+          }),
+        );
+      } else {
+        expect(stageHostInstallSourceMock).not.toHaveBeenCalled();
+        expect(commitHostInstallSourceMock).not.toHaveBeenCalled();
+      }
+      if (version === null) {
+        expect(isVersionYankedMock).not.toHaveBeenCalled();
+      }
     },
   );
 
@@ -932,6 +1198,19 @@ describe("ensureHost", () => {
   // because `--keep-installed` is threaded all the way through `ensureHost`.
   it("regression: installed 1.2.0, pin 1.3.0-rc.4, --keep-installed - no-op, no reinstall", async () => {
     config.supportedHostVersion = "1.3.0-rc.4";
+    readBundledHostDescriptorMock.mockResolvedValue({
+      version: "1.3.0-rc.4",
+      platformKey: "darwin-arm64",
+      sha256: "a".repeat(64),
+      sizeBytes: 1024,
+      publicKeyId: "0123456789abcdef",
+      requiredCliVersion: null,
+      minimumEpoch: 2,
+      storeFormats: { chatDb: 22 },
+      canonicalUrl:
+        "https://releases.example.invalid/host/1.3.0-rc.4/runtime.tar.gz",
+    });
+    resolveBundledHostArchiveMock.mockResolvedValue("/bundle/host.tar.gz");
     readHostInstallRecordMock.mockResolvedValue({
       version: "1.2.0",
       source: { kind: "registry", value: "1.2.0" },
@@ -945,6 +1224,26 @@ describe("ensureHost", () => {
     expect(stageHostInstallSourceMock).not.toHaveBeenCalled();
     expect(commitHostInstallSourceMock).not.toHaveBeenCalled();
     expect(controller.install).not.toHaveBeenCalled();
+  });
+
+  it("uses the signed bundle for a first install even with --keep-installed", async () => {
+    config.supportedHostVersion = "1.7.2";
+    readHostInstallRecordMock.mockResolvedValue(null);
+    resolveBundledHostArchiveMock.mockResolvedValue("/bundle/host.tar.gz");
+    createServiceControllerMock.mockReturnValue(
+      makeController("not-installed"),
+    );
+
+    await ensureHost(makeOpts({ keepInstalled: true }));
+
+    expect(stageHostInstallSourceMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        source: expect.objectContaining({
+          kind: "bundled",
+          path: "/bundle/host.tar.gz",
+        }),
+      }),
+    );
   });
 
   it("a lost race (locked recheck finds the host already provisioned by another actor) discards the pre-staged temp and never commits", async () => {
