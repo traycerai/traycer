@@ -80,13 +80,6 @@ source of evidence.
   or other credential contents. For Hermes provider selection, ask at most
   for the non-secret `model.provider` value.
 
-Claude's stored OAuth takes precedence over its stored API key. Without OAuth,
-a configured `apiKeyHelper` takes precedence over the stored key and is never
-executed by a passive probe. Otherwise a stored key gives `configured` with an
-Anthropic API Key badge and no account identity. The key is read from the
-config-dir-scoped Keychain item on macOS and `primaryApiKey` in `.claude.json`
-on Linux and Windows.
-
 ### Enablement and explicit login are separate decisions
 
 A passive result does not authorize first-launch enablement. Neither

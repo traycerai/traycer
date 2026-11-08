@@ -30,12 +30,8 @@ import {
   environmentConfigurationSkillsUploadV10,
   environmentHistoryV10,
   environmentPlansListV10,
-  environmentPlansListV11,
-  environmentPlansListUpgradeV10ToV11,
   environmentPlansUnlinkPreviewV10,
   environmentPlansUnlinkV10,
-  environmentPlansUnlinkV11,
-  environmentPlansUnlinkUpgradeV10ToV11,
 } from "@traycer/protocol/host/environment/configuration-contracts";
 import {
   environmentReviewHeldApplyRequestSchema,
@@ -567,15 +563,11 @@ export const ENVIRONMENT_REDESIGN_RPC_METHODS = {
   "environment.plans.list": {
     degrade: { kind: "unsupported" },
     1: {
-      latestMinor: 1,
+      latestMinor: 0,
       versions: {
         0: {
           contract: environmentPlansListV10,
           upgradeFromPreviousVersion: null,
-        },
-        1: {
-          contract: environmentPlansListV11,
-          upgradeFromPreviousVersion: environmentPlansListUpgradeV10ToV11,
         },
       },
       downgradePathsFromLatest: {},
@@ -597,15 +589,11 @@ export const ENVIRONMENT_REDESIGN_RPC_METHODS = {
   "environment.plans.unlink": {
     degrade: { kind: "unsupported" },
     1: {
-      latestMinor: 1,
+      latestMinor: 0,
       versions: {
         0: {
           contract: environmentPlansUnlinkV10,
           upgradeFromPreviousVersion: null,
-        },
-        1: {
-          contract: environmentPlansUnlinkV11,
-          upgradeFromPreviousVersion: environmentPlansUnlinkUpgradeV10ToV11,
         },
       },
       downgradePathsFromLatest: {},
