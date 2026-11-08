@@ -1377,7 +1377,15 @@ describe("useEpicRouteSynchronization", () => {
     testState.records = [];
     setSinglePaneCanvas(
       "pane-current",
-      [specTile("artifact-current", "tile-current", "Current artifact")],
+      [
+        {
+          id: "current",
+          instanceId: "tile-current",
+          type: "blank",
+          name: "New tab",
+          hostId: "host-1",
+        },
+      ],
       "tile-current",
     );
     const intent: EpicRouteFocusIntent = {
@@ -1394,13 +1402,18 @@ describe("useEpicRouteSynchronization", () => {
       { initialProps: intent },
     );
 
-    testState.records = [{ id: "artifact-1" }, { id: "artifact-current" }];
+    testState.records = [{ id: "artifact-1" }];
     hook.rerender(intent);
 
     await act(async () => {
       await Promise.resolve();
     });
     expect(tileNavigationMocks.openTile).not.toHaveBeenCalled();
+    expect(testState.canvasStore.closeCanvasTab).not.toHaveBeenCalledWith(
+      TAB_ID,
+      "pane-current",
+      "tile-current",
+    );
   });
 
   it("closes removed record-backed tiles by tab instance id while preserving local git diff tiles", async () => {
