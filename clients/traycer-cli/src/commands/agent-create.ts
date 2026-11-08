@@ -2,6 +2,7 @@ import path from "node:path";
 import {
   createAgentRequestSchemaV32,
   createAgentResponseSchema,
+  canReceiveA2AMessages,
   type CreateAgentWorkspace,
   guiHarnessIdSchema,
   tuiHarnessIdSchema,
@@ -124,14 +125,21 @@ export function buildAgentCreateCommand(opts: {
 
 // The host refuses these requests with an untyped error, which a caller sees
 // (and Sentry records) as an unexpected failure. They are a mistake in the
-// flags, so they fail here with the allowed values instead.
+// flags, so they fail here with the allowed values instead. The terminal set
+// is the host's own admission rule: a terminal child must be able to receive
+// agent messages, which leaves the other ids in `tuiHarnessIdSchema` (kept for
+// persisted records) unusable here.
 function assertSurfaceHarnessPair(
   surface: "gui" | "tui" | null,
   harnessId: string | null,
 ): void {
   if (surface === null) return;
   const supported: readonly string[] =
-    surface === "gui" ? guiHarnessIdSchema.options : tuiHarnessIdSchema.options;
+    surface === "gui"
+      ? guiHarnessIdSchema.options
+      : tuiHarnessIdSchema.options.filter((id) =>
+          canReceiveA2AMessages({ surface: "tui", harnessId: id }),
+        );
   if (harnessId === null) {
     throw cliError({
       code: CLI_ERROR_CODES.INVALID_ARGUMENT,

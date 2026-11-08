@@ -293,8 +293,47 @@ describe("agent create surface and harness validation", () => {
       harness: "kimi",
     });
     expect(error.message).toContain("kimi");
-    expect(error.message).toContain("tui");
-    expect(error.message).toContain("claude, codex, opencode");
+    expect(error.message).toContain("(one of: claude)");
+  });
+
+  // The host only admits a terminal child it can message (`claude`), so the
+  // other terminal ids in the protocol schema are refused by the host with an
+  // untyped error. The CLI offers and accepts exactly the host's set.
+  it.each(["codex", "opencode", "cursor"])(
+    "rejects --surface tui --harness %s locally",
+    async (harness) => {
+      const error = await expectInvalidArgument({
+        ...createOpts(null),
+        surface: "tui",
+        harness,
+      });
+      expect(error.message).toContain(`'${harness}'`);
+      expect(error.message).toContain("(one of: claude)");
+    },
+  );
+
+  it("lists only the host-admitted terminal harness when --harness is missing", async () => {
+    const error = await expectInvalidArgument({
+      ...createOpts(null),
+      surface: "tui",
+      harness: null,
+    });
+    expect(error.message).toContain("(one of: claude)");
+  });
+
+  it("still sends --surface tui --harness claude to the host", async () => {
+    rpcMock.mockResolvedValue({ agentId: "agent_child", warnings: [] });
+
+    await buildAgentCreateCommand({
+      ...createOpts(null),
+      surface: "tui",
+      harness: "claude",
+    })(makeCtx());
+
+    expect(rpcMock).toHaveBeenCalledWith(
+      "agent.create",
+      expect.objectContaining({ surface: "tui", harnessId: "claude" }),
+    );
   });
 });
 
