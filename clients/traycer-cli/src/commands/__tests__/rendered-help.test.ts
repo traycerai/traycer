@@ -361,6 +361,11 @@ const EXPECTED_PUBLIC_SURFACE: readonly ExpectedSurfaceEntry[] = [
     args: [],
   },
   {
+    path: "host pin",
+    options: [],
+    args: [],
+  },
+  {
     path: "host status",
     options: [
       { flags: "--json", mandatory: false },
@@ -490,6 +495,7 @@ const EXPECTED_PUBLIC_SURFACE: readonly ExpectedSurfaceEntry[] = [
     options: [
       { flags: "--accept-store-format-loss", mandatory: false },
       { flags: "--allow-self-invocation", mandatory: false },
+      { flags: "--bundled <path>", mandatory: false },
       { flags: "--force", mandatory: false },
       { flags: "--from <path>", mandatory: false },
       { flags: "--json", mandatory: false },
