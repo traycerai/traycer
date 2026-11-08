@@ -490,6 +490,15 @@ function createPickerRpcFixture(
     HostRequestOptions["requiredHostMethodVersion"]
   > = [];
   const queryClient = createAppQueryClient();
+  if (options.refuseProfileModels === true) {
+    // Host-version refusal is terminal for this assertion. Avoid the app's
+    // single generic query retry so the test records exactly one preflight.
+    const defaults = queryClient.getDefaultOptions();
+    queryClient.setDefaultOptions({
+      ...defaults,
+      queries: { ...defaults.queries, retry: false },
+    });
+  }
   let requestCounter = 0;
   const spine = new HostClient<HostRpcRegistry>({
     registry: hostRpcRegistry,

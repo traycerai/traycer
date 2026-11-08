@@ -1909,28 +1909,40 @@ describe('useGuiHarnessCatalogForClient modelsFetch: "cached-only"', () => {
       ]);
     });
     ambientOpenCode.unmount();
+    // This case is about the per-request host floor. App queries retry one
+    // generic failure after a delay, which would hide the terminal old-host
+    // rejection beyond waitFor's default window. Keep the tested request path
+    // intact and disable only query-level retries for this focused fixture.
+    const queryDefaults = fixture.queryClient.getDefaultOptions();
+    fixture.queryClient.setDefaultOptions({
+      ...queryDefaults,
+      queries: { ...queryDefaults.queries, retry: false },
+    });
 
     const { result } = renderHook(
-      () => ({
-        catalog: useGuiHarnessCatalogForClient(fixture.client, null, {
-          enabled: true,
-          subscribed: true,
-          modelsFetch: "cached-only",
-          modelProfile: { harnessId: "opencode", profileId: "profile-b" },
-        }),
-        managedOpenCode: useGuiHarnessModelsQueryForClient(
+      () => {
+        const managedOpenCode = useGuiHarnessModelsQueryForClient(
           fixture.client,
           "opencode",
           null,
           { profileId: "profile-b", enabled: true, subscribed: true },
-        ),
-        ambientClaude: useGuiHarnessModelsQueryForClient(
+        );
+        const ambientClaude = useGuiHarnessModelsQueryForClient(
           fixture.client,
           "claude",
           null,
           { profileId: null, enabled: true, subscribed: true },
-        ),
-      }),
+        );
+        // Mount the cached-only catalog last so its disabled pending observer
+        // owns the shared query's final refetch options for the managed slot.
+        const catalog = useGuiHarnessCatalogForClient(fixture.client, null, {
+          enabled: true,
+          subscribed: true,
+          modelsFetch: "cached-only",
+          modelProfile: { harnessId: "opencode", profileId: "profile-b" },
+        });
+        return { managedOpenCode, ambientClaude, catalog };
+      },
       { wrapper: fixture.Wrapper },
     );
 
@@ -1942,6 +1954,20 @@ describe('useGuiHarnessCatalogForClient modelsFetch: "cached-only"', () => {
         { slug: "ambient-claude" },
       ]);
     });
+    expect(
+      fixture.requiredModelFloors.filter(
+        (floor) =>
+          floor?.method ===
+            AGENT_GUI_LIST_MODELS_PROFILE_REQUIRED_HOST_VERSION.method &&
+          floor.version.major ===
+            AGENT_GUI_LIST_MODELS_PROFILE_REQUIRED_HOST_VERSION.version.major &&
+          floor.version.minor ===
+            AGENT_GUI_LIST_MODELS_PROFILE_REQUIRED_HOST_VERSION.version.minor,
+      ),
+    ).toHaveLength(1);
+    expect(
+      fixture.modelCalls.filter((harnessId) => harnessId === "opencode"),
+    ).toHaveLength(1);
     const pendingEntry = result.current.catalog.harnesses.find(
       (entry) => entry.id === "opencode",
     );
@@ -1970,6 +1996,9 @@ describe('useGuiHarnessCatalogForClient modelsFetch: "cached-only"', () => {
       expect(
         fixture.modelCalls.filter((harnessId) => harnessId === "claude"),
       ).toHaveLength(2);
+      expect(
+        fixture.modelCalls.filter((harnessId) => harnessId === "opencode"),
+      ).toHaveLength(1);
     });
     expect(
       result.current.catalog.harnesses.find((entry) => entry.id === "opencode")

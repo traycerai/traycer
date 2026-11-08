@@ -1902,6 +1902,7 @@ describe("useComposerToolbarStore selection reconciliation", () => {
     });
     expect(modelQueryCalls.at(-1)).toEqual({
       harnessId: "codex",
+      profileId: null,
       workingDirectory: null,
       enabled: false,
       subscribed: false,

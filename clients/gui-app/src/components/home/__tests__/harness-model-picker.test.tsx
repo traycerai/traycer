@@ -1463,6 +1463,7 @@ describe("<HarnessModelPicker />", () => {
       reasoning: "high",
       serviceTier: "fast",
       withServiceTier: true,
+      storeModelsProfileId: "work-profile",
       storeModels: [
         model({
           slug: "gpt-5.5",
