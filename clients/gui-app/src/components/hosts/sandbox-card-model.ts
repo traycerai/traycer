@@ -17,6 +17,7 @@ import {
   formatSandboxDate,
   formatSandboxUtcDay,
   sandboxFailedToStart,
+  sandboxFrozenClock,
 } from "@/lib/sandboxes/sandbox-row-lines";
 
 /**
@@ -153,15 +154,16 @@ export function formatSandboxDay(at: number): string {
 }
 
 /**
- * The frozen banner's sentence. The destroy date shows only when the server
+ * The frozen banner's sentence. The removal date shows only when the server
  * says when the row froze (`frozenAt`); a server from before that field gets
  * the sentence without it.
  */
 export function sandboxFrozenLine(frozenAt: number | null): string {
   const base = `${HOST_FROZEN_WORD}. Top up to resume.`;
-  return frozenAt === null
-    ? base
-    : `${base} Destroyed on ${formatSandboxDate(frozenDestroyAt(frozenAt), true)}.`;
+  const clock = sandboxFrozenClock(frozenAt);
+  // The clock is the removal clause. This banner is a sentence, so it
+  // closes that clause with a period the clause itself does not carry.
+  return clock === null ? base : `${base} ${clock}.`;
 }
 
 /**
@@ -232,10 +234,10 @@ export function sandboxWakePayerName(
 
 /** A frozen team sandbox: the paying member's bundle ran out. */
 export function sandboxTeamFrozenLine(
-  summary: SandboxSummary,
+  summary: SandboxSummary | null,
   viewerUserId: string | null,
 ): string {
-  const payer = summary.wakePayer;
+  const payer = summary === null ? null : summary.wakePayer;
   if (payer === null) return `${HOST_FROZEN_WORD}: its payer's bundle is out.`;
   if (viewerUserId !== null && payer.userId === viewerUserId) {
     return `${HOST_FROZEN_WORD}: your bundle is out.`;
@@ -243,24 +245,6 @@ export function sandboxTeamFrozenLine(
   return payer.displayName === null
     ? `${HOST_FROZEN_WORD}: its payer's bundle is out.`
     : `${HOST_FROZEN_WORD}: ${payer.displayName}'s bundle is out.`;
-}
-
-/**
- * A frozen team sandbox's state line: whose bundle is out, then the destroy
- * date when the server sends `frozenAt`, as the personal line has it. Before
- * the sandbox list answers (`summary` null) it names no one, and still never
- * says "your credits".
- */
-export function sandboxTeamFrozenStateLine(
-  summary: SandboxSummary | null,
-  viewerUserId: string | null,
-): string {
-  if (summary === null)
-    return `${HOST_FROZEN_WORD}: its payer's bundle is out.`;
-  const line = sandboxTeamFrozenLine(summary, viewerUserId);
-  return summary.frozenAt === null
-    ? line
-    : `${line} Destroyed on ${formatSandboxDate(frozenDestroyAt(summary.frozenAt), true)}.`;
 }
 
 /** A team pod's room, from the pod list's `headroom` and `liveShells`. */
@@ -331,10 +315,8 @@ function stoppedFailureLine(failureCode: string): string {
 /** The card's one-line description of where the sandbox is. */
 export function sandboxStateLine(
   state: HostSandboxState | null,
-  frozen: boolean,
   summary: SandboxSummary | null,
 ): string {
-  if (frozen) return sandboxFrozenLine(summary?.frozenAt ?? null);
   if (state === null) return "Sandbox";
   if (state === "failed" && summary !== null && summary.failureCode !== null) {
     return `${sandboxFailedToStart(summary.failureCode)}.`;
@@ -623,13 +605,13 @@ export function sandboxHeaderFailureLine(sandbox: {
 }): string | null {
   if (sandbox.frozen) return null;
   if (sandbox.state === "failed")
-    return sandboxStateLine(sandbox.state, false, sandbox.summary);
+    return sandboxStateLine(sandbox.state, sandbox.summary);
   if (
     sandbox.state === "stopped" &&
     sandbox.summary !== null &&
     sandbox.summary.failureCode !== null
   )
-    return sandboxStateLine(sandbox.state, false, sandbox.summary);
+    return sandboxStateLine(sandbox.state, sandbox.summary);
   return null;
 }
 

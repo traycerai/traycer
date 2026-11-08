@@ -619,7 +619,6 @@ export function MembersView(props: {
           <InviteSeatLine
             client={client}
             environmentId={environmentId}
-            teamName={teamName}
             supported={seatsSupported}
           />
         }

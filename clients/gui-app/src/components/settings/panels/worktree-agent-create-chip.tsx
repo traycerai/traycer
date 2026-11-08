@@ -56,7 +56,7 @@ const POLICY_OPTIONS: ReadonlyArray<{
   {
     value: "never",
     label: "Never",
-    description: "Agents keep working in the workspace they were given.",
+    description: "Agents keep working in the folder they were given.",
   },
 ];
 

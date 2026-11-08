@@ -9,7 +9,6 @@ import {
   useRef,
   useState,
   useSyncExternalStore,
-  type MouseEvent,
   type ReactNode,
   type RefCallback,
 } from "react";
@@ -26,7 +25,6 @@ import {
   Copy,
   CopyMinus,
   CopyPlus,
-  ExternalLink,
   FileSliders,
   FolderGit2,
   GitCommitHorizontal,
@@ -45,7 +43,6 @@ import type {
 } from "@traycer/protocol/host/index";
 import type {
   WorktreeEntryScripts,
-  WorktreePrState,
   WorktreeSubmoduleMergeFactV12,
 } from "@traycer/protocol/host/worktree-schemas";
 import {
@@ -103,6 +100,7 @@ import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
 import { TooltipWrapper } from "@/components/ui/tooltip-wrapper";
 import { ScriptsReviewDialog } from "@/components/workspaces/scripts-review-dialog";
 import { TeardownForceDeleteDialog } from "@/components/worktree/teardown-force-delete-dialog";
+import { WorktreePrPills } from "@/components/worktree/worktree-pr-metadata";
 import { type RepoScriptsSeed } from "@/components/workspaces/repo-scripts-form";
 import {
   hostLabelAtSentenceStart,
@@ -145,7 +143,6 @@ import {
   navigateToTabIntent,
   openOrFocusEpicIntent,
 } from "@/lib/tab-navigation";
-import { useOpenLink } from "@/lib/links/open-link";
 import { reportableErrorToast } from "@/lib/reportable-error-toast";
 import { ReportIssueAction } from "@/components/report-issue/report-issue-action";
 import { createReportIssueContext } from "@/lib/report-issue-context";
@@ -162,7 +159,6 @@ import {
   useWorktreesSettingsSelectionStore,
   type SelectedWorktreePathsUpdate,
 } from "@/stores/settings/worktrees-settings-selection-store";
-import { onMiddleClick } from "@/lib/dom/on-middle-click";
 
 type WorktreeRowDeleteStatus = "deleting";
 // Per-row activity-enrichment state, driving ONLY the tier pill's presentation:
@@ -1993,6 +1989,8 @@ export function WorktreesList(props: {
               >
                 {virtualItems.map((virtualItem) => {
                   const item = flatItems[virtualItem.index];
+                  const isTaskHeader =
+                    item.kind === "header" && item.group.taskEpicId !== null;
                   const isStickyHeader =
                     item.kind === "header" &&
                     virtualItem.index === activeStickyHeaderIndexRef.current;
@@ -2003,9 +2001,13 @@ export function WorktreesList(props: {
                       ref={virtualizer.measureElement}
                       className={cn(
                         "left-0 w-full",
-                        isStickyHeader
-                          ? "sticky top-0 z-30 bg-background"
-                          : "absolute top-0",
+                        isStickyHeader ? "sticky top-0 z-30" : "absolute top-0",
+                        // The opaque mix matches the panel's card/40 over
+                        // background without letting rows show through it.
+                        isStickyHeader &&
+                          (isTaskHeader
+                            ? "bg-[color-mix(in_srgb,var(--card)_40%,var(--background))]"
+                            : "bg-background"),
                       )}
                       style={
                         isStickyHeader
@@ -2018,7 +2020,7 @@ export function WorktreesList(props: {
                       {item.kind === "header" ? (
                         <div
                           className={cn(
-                            "bg-background",
+                            item.group.taskEpicId === null && "bg-background",
                             item.showDivider && "border-t border-border/40",
                           )}
                         >
@@ -2386,12 +2388,12 @@ function WorktreeBulkDeleteDialog(props: {
       <DialogContent
         layout="banded"
         showCloseButton={false}
-        className="w-[min(92vw,32rem)] overflow-hidden sm:max-w-lg"
+        className="flex w-[min(92vw,32rem)] flex-col overflow-hidden sm:max-w-lg"
         data-testid="worktree-bulk-delete-dialog"
       >
         {summary !== null ? (
           <>
-            <div className="flex min-w-0 items-start gap-3 p-5">
+            <div className="flex min-w-0 shrink-0 items-start gap-3 p-5">
               <div className="flex size-9 shrink-0 items-center justify-center rounded-full bg-destructive/10 text-destructive">
                 <AlertTriangle className="size-4" aria-hidden />
               </div>
@@ -2403,6 +2405,10 @@ function WorktreeBulkDeleteDialog(props: {
                   Deleting {summary.classSummary}. Traycer runs each repo's
                   teardown script, then removes the worktree.
                 </DialogDescription>
+              </div>
+            </div>
+            <div className="min-h-0 min-w-0 overflow-y-auto">
+              <div className="space-y-2 px-5 pb-4">
                 {summary.dirtyLoss !== null ? (
                   <p
                     className="text-ui-sm leading-relaxed text-warning-foreground"
@@ -2438,23 +2444,23 @@ function WorktreeBulkDeleteDialog(props: {
                   </p>
                 ) : null}
               </div>
+              <ul className="max-h-[min(30vh,12rem)] overflow-y-auto border-t border-border/60 px-5 py-2">
+                {summary.paths.map((path) => (
+                  <TooltipWrapper
+                    key={path}
+                    label={path}
+                    side="top"
+                    sideOffset={undefined}
+                    align={undefined}
+                  >
+                    <li className="truncate py-0.5 text-ui-xs text-muted-foreground">
+                      {path}
+                    </li>
+                  </TooltipWrapper>
+                ))}
+              </ul>
             </div>
-            <ul className="max-h-[min(30vh,12rem)] overflow-y-auto border-t border-border/60 px-5 py-2">
-              {summary.paths.map((path) => (
-                <TooltipWrapper
-                  key={path}
-                  label={path}
-                  side="top"
-                  sideOffset={undefined}
-                  align={undefined}
-                >
-                  <li className="truncate py-0.5 text-ui-xs text-muted-foreground">
-                    {path}
-                  </li>
-                </TooltipWrapper>
-              ))}
-            </ul>
-            <div className="flex justify-end gap-2 border-t border-border/60 bg-foreground/3 px-5 py-3">
+            <div className="flex shrink-0 justify-end gap-2 border-t border-border/60 bg-foreground/3 px-5 py-3">
               <Button
                 type="button"
                 variant="ghost"
@@ -2489,8 +2495,8 @@ type WorktreeScriptReviewDraft = {
 
 /**
  * Repo or Task group header - a quiet sticky divider, not a second status row:
- * no filled high-emphasis background, and muted/regular-weight text so it never
- * competes with a row's bold branch name or colored tier pill. A repo whose
+ * Task headers share the panel's surface; repository dividers keep their fill.
+ * Muted/regular-weight text ensures neither competes with a row's bold branch name or colored tier pill. A repo whose
  * worktrees each belong to one Task splits into one header per Task: the Task
  * title (a button when the title is known) lives here, and its merge caption
  * appears only on the Task's first header across repositories. The rows
@@ -2559,7 +2565,7 @@ const WorktreeRepoHeader = memo(function WorktreeRepoHeader(props: {
     <div
       data-testid="worktree-repo-header"
       data-task-epic-id={taskEpicId}
-      className="flex w-full min-w-0 items-start gap-2 border-b border-border/40 bg-background px-5 py-1.5"
+      className="flex w-full min-w-0 items-start gap-2 border-b border-border/40 px-5 py-1.5"
     >
       <button
         type="button"
@@ -3034,14 +3040,6 @@ const WORKTREE_TIER_PILL_STYLE: Record<
   },
 };
 
-interface WorktreePrChipModel {
-  readonly key: string;
-  readonly label: string;
-  readonly ariaLabel: string;
-  readonly prState: WorktreeDisplayedPrState;
-  readonly prUrl: string;
-}
-
 interface WorktreeMutedPrChipModel {
   readonly key: string;
   readonly label: string;
@@ -3051,68 +3049,21 @@ interface WorktreeMutedPrChipModel {
 function WorktreePrChips(props: {
   readonly entry: WorktreeHostEntryV14;
 }): ReactNode {
-  const chips = worktreePrChips(props.entry);
-  if (chips.length === 0) return null;
-  return chips.map((chip) =>
-    "prUrl" in chip ? (
-      <WorktreePrChip key={chip.key} chip={chip} />
-    ) : (
-      <WorktreeMutedPrChip key={chip.key} chip={chip} />
-    ),
+  return (
+    <>
+      <WorktreePrPills
+        worktrees={[props.entry]}
+        detailOnHover
+        maximumVisible={1}
+        className={undefined}
+        testId="worktree-pr-chips"
+        openPrInApp={null}
+      />
+      {props.entry.submodules.flatMap(submoduleUnmergedChip).map((chip) => (
+        <WorktreeMutedPrChip key={chip.key} chip={chip} />
+      ))}
+    </>
   );
-}
-
-function worktreePrChips(
-  entry: WorktreeHostEntryV14,
-): readonly (WorktreePrChipModel | WorktreeMutedPrChipModel)[] {
-  return [
-    ...superprojectPrChip(entry),
-    ...entry.submodules.flatMap((submodule) => [
-      ...submodulePrChip(submodule),
-      ...submoduleUnmergedChip(submodule),
-    ]),
-  ];
-}
-
-function superprojectPrChip(
-  entry: WorktreeHostEntryV14,
-): readonly WorktreePrChipModel[] {
-  const prState = displayedPrState(entry.prState);
-  if (prState === null || entry.prNumber === null || entry.prUrl === null) {
-    return [];
-  }
-  return [
-    {
-      key: `superproject:${entry.prNumber}:${entry.prUrl}`,
-      label: `#${entry.prNumber} ${WORKTREE_PR_STATE_LABEL[prState]}`,
-      ariaLabel: `Open PR #${entry.prNumber} ${WORKTREE_PR_STATE_LABEL[prState]}`,
-      prState,
-      prUrl: entry.prUrl,
-    },
-  ];
-}
-
-function submodulePrChip(
-  submodule: WorktreeSubmoduleMergeFactV12,
-): readonly WorktreePrChipModel[] {
-  const prState = displayedPrState(submodule.prState);
-  if (
-    prState === null ||
-    submodule.prNumber === null ||
-    submodule.prUrl === null
-  ) {
-    return [];
-  }
-  const repoName = submodule.repoIdentifier.repo;
-  return [
-    {
-      key: `submodule:${submodule.repoIdentifier.owner}/${repoName}:${submodule.branch}:${submodule.prNumber}:${submodule.prUrl}`,
-      label: `${repoName} #${submodule.prNumber} ${WORKTREE_PR_STATE_LABEL[prState]}`,
-      ariaLabel: `Open ${repoName} PR #${submodule.prNumber} ${WORKTREE_PR_STATE_LABEL[prState]}`,
-      prState,
-      prUrl: submodule.prUrl,
-    },
-  ];
 }
 
 function submoduleUnmergedChip(
@@ -3169,66 +3120,6 @@ function submoduleUnmergedChip(
   ];
 }
 
-type WorktreeDisplayedPrState = "open" | "closed" | "merged";
-
-const WORKTREE_PR_STATE_LABEL: Record<WorktreeDisplayedPrState, string> = {
-  open: "Open",
-  closed: "Closed",
-  merged: "Merged",
-};
-
-function WorktreePrChip(props: {
-  readonly chip: WorktreePrChipModel;
-}): ReactNode {
-  const style = WORKTREE_PR_PILL_STYLE[props.chip.prState];
-  return (
-    <Badge
-      asChild
-      variant="outline"
-      wrap
-      className={cn(style.className, "max-w-full min-w-0 shrink")}
-    >
-      <WorktreePrAnchor
-        href={props.chip.prUrl}
-        ariaLabel={props.chip.ariaLabel}
-        className="max-w-full min-w-0 wrap-anywhere whitespace-normal"
-        testId="worktree-pr-chip"
-        prState={props.chip.prState}
-      >
-        <span className="wrap-anywhere">{props.chip.label}</span>
-        <ExternalLink className="size-3" aria-hidden />
-      </WorktreePrAnchor>
-    </Badge>
-  );
-}
-
-function displayedPrState(
-  prState: WorktreePrState | null,
-): WorktreeDisplayedPrState | null {
-  if (prState === "open" || prState === "closed" || prState === "merged") {
-    return prState;
-  }
-  return null;
-}
-
-const WORKTREE_PR_PILL_STYLE: Record<
-  WorktreeDisplayedPrState,
-  { readonly className: string }
-> = {
-  open: {
-    className:
-      "border-green-600/30 bg-green-500/10 text-green-700 dark:border-green-400/30 dark:text-green-300",
-  },
-  closed: {
-    className:
-      "border-red-600/25 bg-red-500/10 text-red-700 dark:border-red-400/25 dark:text-red-300",
-  },
-  merged: {
-    className:
-      "border-purple-600/30 bg-purple-500/10 text-purple-700 dark:border-purple-400/30 dark:text-purple-300",
-  },
-};
-
 function WorktreeMutedPrChip(props: {
   readonly chip: WorktreeMutedPrChipModel;
 }): ReactNode {
@@ -3249,38 +3140,6 @@ function WorktreeMutedPrChip(props: {
         <span className="wrap-anywhere">{props.chip.label}</span>
       </Badge>
     </TooltipWrapper>
-  );
-}
-
-function WorktreePrAnchor(props: {
-  readonly href: string;
-  readonly ariaLabel: string;
-  readonly className: string | undefined;
-  readonly testId: string | undefined;
-  readonly prState: WorktreeDisplayedPrState | undefined;
-  readonly children: ReactNode;
-}): ReactNode {
-  const openLink = useOpenLink();
-  const openExternal = useCallback(
-    (event: MouseEvent<HTMLAnchorElement>): void => {
-      event.stopPropagation();
-      event.preventDefault();
-      void openLink(props.href, "github", event);
-    },
-    [openLink, props.href],
-  );
-  return (
-    <a
-      href={props.href}
-      aria-label={props.ariaLabel}
-      className={props.className}
-      data-testid={props.testId}
-      data-pr-state={props.prState}
-      onClick={openExternal}
-      onAuxClick={onMiddleClick(openExternal)}
-    >
-      {props.children}
-    </a>
   );
 }
 

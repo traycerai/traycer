@@ -376,15 +376,17 @@ function UndoAllDialogContent(props: UndoAllDialogProps) {
       <DialogContent
         layout="banded"
         showCloseButton={false}
-        className="w-[min(92vw,28rem)] overflow-hidden sm:max-w-md"
+        className="flex w-[min(92vw,28rem)] flex-col overflow-hidden sm:max-w-md"
         data-testid="undo-all-dialog"
       >
-        <div className="min-w-0 space-y-3 p-5">
+        <div className="min-w-0 shrink-0 space-y-3 p-5">
           <DialogTitle>Undo all changes?</DialogTitle>
           <DialogDescription>
             This reverts every changed file to the snapshot from the first time
             it was edited by this agent.
           </DialogDescription>
+        </div>
+        <div className="-m-1 min-h-0 min-w-0 overflow-y-auto px-6 pt-1 pb-6">
           <RevertArtifactsCheckbox
             count={props.artifactCount}
             checked={revertArtifacts}
@@ -392,7 +394,7 @@ function UndoAllDialogContent(props: UndoAllDialogProps) {
             disabled={props.isPending}
           />
         </div>
-        <div className="flex justify-end gap-2 border-t border-border/60 bg-foreground/3 px-5 py-3">
+        <div className="flex shrink-0 justify-end gap-2 border-t border-border/60 bg-foreground/3 px-5 py-3">
           <Button
             type="button"
             variant="ghost"

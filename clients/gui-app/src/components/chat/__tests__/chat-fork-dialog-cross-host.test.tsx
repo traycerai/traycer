@@ -916,7 +916,7 @@ describe("ChatForkDialog cross-host routing", () => {
     expect(dialogMocks.lastWorkspace?.seedIntent).toBeNull();
     expect(dialogMocks.lastWorkspace?.seedIntentOverride).toBeNull();
     expect(screen.getByTestId("chat-fork-result").textContent).toContain(
-      "Starts from this chat's transcript through this turn and the workspace you pick here.",
+      "Starts from this chat's transcript through this turn and the folder you pick here.",
     );
     expect(screen.getByTestId("chat-fork-result").textContent).toContain(
       "Uncommitted changes stay on the source computer.",
@@ -1669,7 +1669,7 @@ describe("ChatForkDialog cross-host routing", () => {
 
     expect(selectedHostScopeHostId()).toBe(OTHER_HOST_ID);
     expect(screen.getByTestId("chat-fork-result").textContent).toContain(
-      "Starts from this chat's transcript through this turn and the workspace you pick here.",
+      "Starts from this chat's transcript through this turn and the folder you pick here.",
     );
   });
 
@@ -1755,7 +1755,7 @@ describe("ChatForkDialog cross-host routing", () => {
     renderDialog(forkTarget({ assistantMessageId: null }), ignoreOpenChange);
 
     expect(screen.getByTestId("chat-fork-result").textContent).toContain(
-      "Starts from this chat's latest saved checkpoint and the workspace you pick here.",
+      "Starts from this chat's latest saved checkpoint and the folder you pick here.",
     );
     expect(screen.getByTestId("chat-fork-result").textContent).not.toContain(
       "work still in progress may not be included",
@@ -1764,7 +1764,7 @@ describe("ChatForkDialog cross-host routing", () => {
     fireEvent.click(screen.getByTestId(`fork-host-${OTHER_HOST_ID}`));
 
     expect(screen.getByTestId("chat-fork-result").textContent).toContain(
-      "Starts from this chat's latest saved transcript and the workspace you pick here; work still in progress may not be included.",
+      "Starts from this chat's latest saved transcript and the folder you pick here; work still in progress may not be included.",
     );
     expect(screen.getByTestId("chat-fork-result").textContent).not.toContain(
       "latest saved checkpoint",
@@ -1786,7 +1786,7 @@ describe("ChatForkDialog cross-host routing", () => {
 
     expect(selectedHostScopeHostId()).toBe(OTHER_HOST_ID);
     expect(screen.getByTestId("chat-fork-result").textContent).toContain(
-      "Starts from this chat's transcript through this turn and the workspace you pick here.",
+      "Starts from this chat's transcript through this turn and the folder you pick here.",
     );
 
     const request = await submitFork();

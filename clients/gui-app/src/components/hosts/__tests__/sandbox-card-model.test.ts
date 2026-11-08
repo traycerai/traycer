@@ -185,81 +185,60 @@ describe("sandboxCardActions", () => {
 describe("sandboxStateLine", () => {
   it("speaks a distinct, non-empty sentence for every state", () => {
     const lines = HOST_SANDBOX_STATES.map((state) =>
-      sandboxStateLine(state, false, null),
+      sandboxStateLine(state, null),
     );
     for (const line of lines) expect(line.length).toBeGreaterThan(0);
     expect(new Set(lines).size).toBe(HOST_SANDBOX_STATES.length);
   });
 
   it("the suspending line claims no saved state", () => {
-    expect(sandboxStateLine("suspending", false, null)).not.toContain("Saving");
-    expect(sandboxStateLine("suspending", false, null)).toBe(
+    expect(sandboxStateLine("suspending", null)).not.toContain("Saving");
+    expect(sandboxStateLine("suspending", null)).toBe(
       "Suspending. Billing moves to storage.",
     );
   });
 
   it("states what awake and suspended are billed at", () => {
-    expect(sandboxStateLine("awake", false, null)).toContain("awake rate");
-    expect(sandboxStateLine("suspended", false, null)).toContain(
-      "storage rate",
-    );
+    expect(sandboxStateLine("awake", null)).toContain("awake rate");
+    expect(sandboxStateLine("suspended", null)).toContain("storage rate");
   });
 
   it("says a released row's files are kept and the next shell starts it", () => {
-    expect(sandboxStateLine("released", false, null)).toBe(
+    expect(sandboxStateLine("released", null)).toBe(
       "Not running, files kept. The next shell starts it.",
     );
   });
 
   it("says an awake Automations row is not billed, and only that row", () => {
-    expect(
-      sandboxStateLine("awake", false, summaryOf({ kind: "automation" })),
-    ).toBe("Running. Automations aren't billed.");
-    expect(
-      sandboxStateLine("awake", false, summaryOf({ kind: "agent" })),
-    ).toContain("awake rate");
-  });
-
-  it("leads with the frozen line over every state when frozen", () => {
-    for (const state of HOST_SANDBOX_STATES) {
-      expect(sandboxStateLine(state, true, null)).toBe(sandboxFrozenLine(null));
-    }
-  });
-
-  it("carries the frozen row's destroy date through its summary", () => {
-    const frozenAt = 1_791_000_000_000;
-    expect(
-      sandboxStateLine(
-        "suspended",
-        true,
-        summaryOf({ frozenAt, frozen: true }),
-      ),
-    ).toBe(sandboxFrozenLine(frozenAt));
+    expect(sandboxStateLine("awake", summaryOf({ kind: "automation" }))).toBe(
+      "Running. Automations aren't billed.",
+    );
+    expect(sandboxStateLine("awake", summaryOf({ kind: "agent" }))).toContain(
+      "awake rate",
+    );
   });
 
   it("names the failure's support reference on a failed row, never its raw code, and falls back without one", () => {
     const failed = sandboxStateLine(
       "failed",
-      false,
       summaryOf({ failureCode: "create:kube-create-service-account" }),
     );
     expect(failed).toBe("Failed to start (SBX-0412).");
     expect(failed).not.toContain("create:");
     expect(
-      sandboxStateLine("failed", false, summaryOf({ failureCode: "OOM_BOOT" })),
+      sandboxStateLine("failed", summaryOf({ failureCode: "OOM_BOOT" })),
     ).toBe("Failed to start.");
-    expect(
-      sandboxStateLine("failed", false, summaryOf({ failureCode: null })),
-    ).toBe("Failed to start.");
-    expect(sandboxStateLine("failed", false, null)).toBe("Failed to start.");
-    expect(sandboxStateLine("failed", false, null)).not.toContain("(");
+    expect(sandboxStateLine("failed", summaryOf({ failureCode: null }))).toBe(
+      "Failed to start.",
+    );
+    expect(sandboxStateLine("failed", null)).toBe("Failed to start.");
+    expect(sandboxStateLine("failed", null)).not.toContain("(");
   });
 
   it("says a newer-saved sandbox can't start until the next Traycer update", () => {
     expect(
       sandboxStateLine(
         "stopped",
-        false,
         summaryOf({ failureCode: "chat-store-newer" }),
       ),
     ).toBe(
@@ -269,35 +248,34 @@ describe("sandboxStateLine", () => {
 
   it("names the support reference of a start that did not finish on a stopped row", () => {
     expect(
-      sandboxStateLine("stopped", false, summaryOf({ failureCode: "start:x" })),
+      sandboxStateLine("stopped", summaryOf({ failureCode: "start:x" })),
     ).toBe("The last start didn't finish (SBX-0508). Start tries again.");
-    expect(
-      sandboxStateLine("stopped", false, summaryOf({ failureCode: "zzz" })),
-    ).toBe("The last start didn't finish. Start tries again.");
+    expect(sandboxStateLine("stopped", summaryOf({ failureCode: "zzz" }))).toBe(
+      "The last start didn't finish. Start tries again.",
+    );
   });
 
   it("keeps the plain stopped line for a stopped row with no failure code", () => {
-    const plain = sandboxStateLine("stopped", false, null);
+    const plain = sandboxStateLine("stopped", null);
     expect(plain).toBe(
       "Stopped. Disk kept, processes ended. Start boots it again; shells marked relaunch-on-restart come back.",
     );
-    expect(
-      sandboxStateLine("stopped", false, summaryOf({ failureCode: null })),
-    ).toBe(plain);
+    expect(sandboxStateLine("stopped", summaryOf({ failureCode: null }))).toBe(
+      plain,
+    );
   });
 
   it("keeps the failed-to-start sentence for a failed row with a code", () => {
     expect(
       sandboxStateLine(
         "failed",
-        false,
         summaryOf({ failureCode: "chat-store-newer" }),
       ),
     ).toBe("Failed to start (SBX-0430).");
   });
 
   it("says just Sandbox for a state it does not know", () => {
-    expect(sandboxStateLine(null, false, null)).toBe("Sandbox");
+    expect(sandboxStateLine(null, null)).toBe("Sandbox");
   });
 });
 
@@ -341,11 +319,11 @@ describe("sandboxFrozenLine", () => {
     const frozenAt = new Date(2026, 9, 9, 12, 0, 0).getTime();
     const line = sandboxFrozenLine(frozenAt);
     expect(line).toBe(
-      `${BASE} Destroyed on ${formatSandboxDate(frozenDestroyAt(frozenAt), true)}.`,
+      `${BASE} Will be removed on ${formatSandboxDate(frozenDestroyAt(frozenAt), false)}.`,
     );
-    // Thirty days on, to the minute: the date carries its time.
-    expect(formatSandboxDate(frozenDestroyAt(frozenAt), true)).toBe(
-      formatSandboxDate(new Date(2026, 10, 8, 12, 0, 0).getTime(), true),
+    // The line names the removal day without a time.
+    expect(formatSandboxDate(frozenDestroyAt(frozenAt), false)).toBe(
+      formatSandboxDate(new Date(2026, 10, 8, 12, 0, 0).getTime(), false),
     );
   });
 });

@@ -317,6 +317,42 @@ describe("<SettingsSidebar /> leader hints", () => {
     ).toBeDefined();
   });
 
+  // Application Diagnostics needs a desktop bridge. The host group's
+  // Diagnostics row is a different section and stays; the two links share
+  // the accessible name, so the row is the app-diagnostics test id.
+  it("omits the Application Diagnostics entry in the installed mobile app", async () => {
+    setMobileApp(true);
+    const router = buildRouter("/settings/general");
+    render(
+      <KeybindingProvider router={router}>
+        <RouterProvider router={router} />
+      </KeybindingProvider>,
+    );
+
+    expect(await screen.findByRole("link", { name: "General" })).toBeDefined();
+    const diagnostics = screen.getAllByRole("link", { name: "Diagnostics" });
+    expect(diagnostics.map((link) => link.getAttribute("href"))).toEqual([
+      "/settings/diagnostics",
+    ]);
+  });
+
+  it("renders the Application Diagnostics entry on other builds", async () => {
+    setMobileApp(false);
+    const router = buildRouter("/settings/general");
+    render(
+      <KeybindingProvider router={router}>
+        <RouterProvider router={router} />
+      </KeybindingProvider>,
+    );
+
+    expect(await screen.findByRole("link", { name: "General" })).toBeDefined();
+    const diagnostics = screen.getAllByRole("link", { name: "Diagnostics" });
+    expect(diagnostics.map((link) => link.getAttribute("href"))).toEqual([
+      "/settings/app-diagnostics",
+      "/settings/diagnostics",
+    ]);
+  });
+
   // The machine console is labelled "Overview" now - it sits under the host
   // switcher, which supplies the machine's name, so repeating "Host" in the
   // entry would name the container twice. Its `id` and route are unchanged.

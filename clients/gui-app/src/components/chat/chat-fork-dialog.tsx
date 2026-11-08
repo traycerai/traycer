@@ -1411,7 +1411,7 @@ function forkResultLine(input: {
       : "this chat's transcript through this turn";
     const workspace = input.emptySandbox
       ? "in an empty sandbox, with no files"
-      : "and the workspace you pick here";
+      : "and the folder you pick here";
     result = `Starts from ${transcript} ${workspace}`;
     result += input.latest
       ? "; work still in progress may not be included."
@@ -1423,7 +1423,7 @@ function forkResultLine(input: {
     const checkpoint = input.latest
       ? "this chat's latest saved checkpoint"
       : "this chat through this turn";
-    result = `Starts from ${checkpoint} and the workspace you pick here.`;
+    result = `Starts from ${checkpoint} and the folder you pick here.`;
   }
   return `${result} The original agent continues working.`;
 }

@@ -307,7 +307,7 @@ describe("deriveWorktreeBindingWorkspaceAvailability", () => {
     );
 
     expect(availability.disabledHint).toBe(
-      "A bound folder is missing on disk: /Users/me/worktrees/feature (the worktree bound to /Users/me/project). Restore it, or pick another folder in the workspace picker, to send.",
+      "A bound folder is missing on disk: /Users/me/worktrees/feature (the worktree bound to /Users/me/project). Restore it, or pick another folder in the folder picker, to send.",
     );
     // Still keyed by entry: the picker chip matches its row by workspacePath.
     expect(availability).toMatchObject({
@@ -349,7 +349,7 @@ describe("deriveWorktreeBindingWorkspaceAvailability", () => {
         binding([bindingEntry("/Users/me/local")]),
       ),
     ).toBe(
-      "Bound folders are missing on disk: /Users/me/local, /Users/me/dropped. Restore them, or pick others in the workspace picker, to send.",
+      "Bound folders are missing on disk: /Users/me/local, /Users/me/dropped. Restore them, or pick others in the folder picker, to send.",
     );
     expect(worktreeMissingComposerHint(["/Users/me/local"], null)).toContain(
       "/Users/me/local",

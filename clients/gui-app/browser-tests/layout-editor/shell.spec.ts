@@ -2378,26 +2378,32 @@ test.describe("the shell with the panel loaded on the left", () => {
     await assertDividerRowDrags(getPage());
   });
 
-  test("the account menu opens on one click toward the content, inside the window and no wider than 256px, and a long offline host name wraps in full", async () => {
+  test("the account menu opens on one click toward the content, inside the window and no wider than 256px, and a long offline host name is readable in full from its tooltip", async () => {
     const page = getPage();
     await openHostMenu(page);
     expect(
       await hostMenuProblems(page, "right"),
       "G4: the account menu on a left strip",
     ).toEqual([]);
-    // The offline row's full name stays readable without a tooltip or a pick.
+    // The disabled offline row still exposes its truncated name on hover.
     const offline = HOST_ROWS[1];
     const row = page.getByTestId(`user-menu-host-option-${offline.hostId}`);
     await expect(row).toHaveAttribute("aria-disabled", "true");
-    await expect(
-      row.getByText(offline.fullName, { exact: true }),
-    ).toBeVisible();
     await expect(row.getByText("offline", { exact: true })).toBeVisible();
     await row.hover();
     await expect(
-      row.getByText(offline.fullName, { exact: true }),
-    ).toBeVisible();
+      page.getByRole("tooltip").filter({ hasText: offline.fullName }),
+    ).toHaveText(offline.fullName);
+    const online = HOST_ROWS[0];
+    await page.getByTestId(`user-menu-host-option-${online.hostId}`).hover();
+    await expect(
+      page.getByRole("tooltip").filter({ hasText: online.fullName }),
+    ).toContainText(online.fullName);
     await moveTo(page, 1, 1);
+    await waitUntil(
+      page,
+      `document.querySelector('[role="tooltip"]') === null`,
+    );
     await pressKey(page, "Escape");
     await waitUntil(
       page,
@@ -2540,6 +2546,10 @@ test.describe("the shell with the panel loaded on the right", () => {
       await hostMenuProblems(page, "left"),
       "G4: the account menu on a right strip",
     ).toEqual([]);
+    await waitUntil(
+      page,
+      `document.querySelector('[role="tooltip"]') === null`,
+    );
     await pressKey(page, "Escape");
     await waitUntil(
       page,

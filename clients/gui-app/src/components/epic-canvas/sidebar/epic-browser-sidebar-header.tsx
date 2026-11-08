@@ -141,12 +141,12 @@ export function BrowserOfflineFilter(props: {
           checked={preferences.showOffline}
           onCheckedChange={preferences.setShowOffline}
         >
-          Show offline devices
+          Show offline hosts
         </DropdownMenuCheckboxItem>
         <DropdownMenuSeparator />
         <DropdownMenuSub>
           <DropdownMenuSubTrigger>Open links on</DropdownMenuSubTrigger>
-          <DropdownMenuSubContent className="w-[min(90vw,20rem)]">
+          <DropdownMenuSubContent className="flex w-[min(90vw,20rem)] flex-col overflow-hidden">
             <BrowserHostFilterChoices surfaceKey={surfaceKey} />
           </DropdownMenuSubContent>
         </DropdownMenuSub>
@@ -174,83 +174,87 @@ export function BrowserHostFilterChoices(props: {
       ?.name ?? "Task host";
   return (
     <>
-      <DropdownMenuLabel>Open links on</DropdownMenuLabel>
-      <DropdownMenuRadioGroup value={value}>
-        <DropdownMenuRadioItem
-          value={FOLLOW_TASK_HOST_VALUE}
-          onSelect={(event) => {
-            event.preventDefault();
-            hostPin.setSelection(null);
-          }}
-        >
-          <span className="min-w-0 flex-1 truncate">Follow task device</span>
-          <DropdownMenuShortcut>{followingHostName}</DropdownMenuShortcut>
-        </DropdownMenuRadioItem>
-        {pickableHosts.length > 0 ? <DropdownMenuSeparator /> : null}
-        {pickableHosts.map((host) => (
+      <DropdownMenuLabel className="shrink-0">Open links on</DropdownMenuLabel>
+      <div className="min-h-0 overflow-y-auto">
+        <DropdownMenuRadioGroup value={value}>
           <DropdownMenuRadioItem
-            key={host.hostId}
-            value={host.hostId}
-            disabled={
-              !isHostOptionSelectable(
-                host,
-                "pin",
-                AVAILABLE_HOST_ROW_SURFACE_STATE,
-              )
-            }
+            value={FOLLOW_TASK_HOST_VALUE}
             onSelect={(event) => {
               event.preventDefault();
-              wakeSandboxOnPick(host, null);
-              hostPin.setSelection(host.hostId);
+              hostPin.setSelection(null);
             }}
           >
-            <HostOptionRow
-              host={host}
-              picked={hostPin.selection === host.hostId}
-              active={host.hostId === options.activeHostId}
-              intent="pin"
-              surfaceState={AVAILABLE_HOST_ROW_SURFACE_STATE}
-              updateView={null}
-              nameRef={null}
-              environmentLabel={null}
-            />
+            <span className="shrink-0">Follow task host</span>
+            <DropdownMenuShortcut className="min-w-0">
+              <span className="block truncate">{followingHostName}</span>
+            </DropdownMenuShortcut>
           </DropdownMenuRadioItem>
-        ))}
-      </DropdownMenuRadioGroup>
-      {options.isLoading ? (
-        <DropdownMenuItem disabled>
-          <AgentSpinningDots
-            className={undefined}
-            testId={undefined}
-            variant={undefined}
-            tone="muted"
-          />
-          {options.hosts.length === 0
-            ? "Loading hosts…"
-            : "Loading more hosts…"}
-        </DropdownMenuItem>
-      ) : null}
-      {!options.isLoading &&
-      options.hosts.length === 0 &&
-      !options.listsFailed ? (
-        <DropdownMenuItem disabled>No hosts available</DropdownMenuItem>
-      ) : null}
-      {options.listsFailed && !options.isLoading ? (
-        <>
-          <DropdownMenuSeparator />
-          <DropdownMenuItem
-            onSelect={(event) => {
-              event.preventDefault();
-              options.retryLists();
-            }}
-          >
-            <RotateCcw className="size-4" aria-hidden />
+          {pickableHosts.length > 0 ? <DropdownMenuSeparator /> : null}
+          {pickableHosts.map((host) => (
+            <DropdownMenuRadioItem
+              key={host.hostId}
+              value={host.hostId}
+              disabled={
+                !isHostOptionSelectable(
+                  host,
+                  "pin",
+                  AVAILABLE_HOST_ROW_SURFACE_STATE,
+                )
+              }
+              onSelect={(event) => {
+                event.preventDefault();
+                wakeSandboxOnPick(host, null);
+                hostPin.setSelection(host.hostId);
+              }}
+            >
+              <HostOptionRow
+                host={host}
+                picked={hostPin.selection === host.hostId}
+                active={host.hostId === options.activeHostId}
+                intent="pin"
+                surfaceState={AVAILABLE_HOST_ROW_SURFACE_STATE}
+                updateView={null}
+                nameRef={null}
+                environmentLabel={null}
+              />
+            </DropdownMenuRadioItem>
+          ))}
+        </DropdownMenuRadioGroup>
+        {options.isLoading ? (
+          <DropdownMenuItem disabled>
+            <AgentSpinningDots
+              className={undefined}
+              testId={undefined}
+              variant={undefined}
+              tone="muted"
+            />
             {options.hosts.length === 0
-              ? "Try loading hosts again"
-              : "Some hosts may be missing"}
+              ? "Loading hosts…"
+              : "Loading more hosts…"}
           </DropdownMenuItem>
-        </>
-      ) : null}
+        ) : null}
+        {!options.isLoading &&
+        options.hosts.length === 0 &&
+        !options.listsFailed ? (
+          <DropdownMenuItem disabled>No hosts available</DropdownMenuItem>
+        ) : null}
+        {options.listsFailed && !options.isLoading ? (
+          <>
+            <DropdownMenuSeparator />
+            <DropdownMenuItem
+              onSelect={(event) => {
+                event.preventDefault();
+                options.retryLists();
+              }}
+            >
+              <RotateCcw className="size-4" aria-hidden />
+              {options.hosts.length === 0
+                ? "Try loading hosts again"
+                : "Some hosts may be missing"}
+            </DropdownMenuItem>
+          </>
+        ) : null}
+      </div>
     </>
   );
 }

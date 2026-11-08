@@ -19,6 +19,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { toast } from "sonner";
 import { PortalConcealmentProvider } from "@/components/ui/portal-concealment-context";
 import { ProviderSkillsTab } from "@/components/settings/panels/provider-skills-tab";
+import { expectScrollableDialogLayout } from "@/components/ui/__tests__/dialog-scroll-layout-assertions";
 import { ProviderNativeRpcError } from "@/hooks/providers/native-response-map";
 import { fileContentRevision } from "@/lib/workspace/file-content-revision";
 
@@ -847,6 +848,7 @@ describe("<ProviderSkillsTab /> skill detail", () => {
     await user.click(screen.getByRole("button", { name: "Cancel" }));
 
     const warning = screen.getByTestId("skill-unsaved-changes-dialog");
+    expectScrollableDialogLayout(warning);
     await user.click(
       within(warning).getByRole("button", { name: "Keep editing" }),
     );

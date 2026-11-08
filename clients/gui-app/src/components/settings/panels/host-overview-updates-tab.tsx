@@ -17,7 +17,7 @@ import {
 /**
  * Overview ▸ Updates, top to bottom: the answer card (only when the update
  * answer has news or an action - an update to install, a fix, a failure),
- * where the desktop app stands on its own update (this machine's host, in
+ * the desktop app's available, running or failed update (this machine's host, in
  * the desktop app, only), the auto-update policy, and installing one specific
  * version, whose heading carries Check now.
  *
@@ -37,8 +37,8 @@ export interface HostOverviewUpdatesTabProps {
   /**
    * The desktop app's own update, or `null` when this window is not the
    * desktop app or the page is another machine's host. The app's updater
-   * needs no route to the host, so the row stays while the host cannot be
-   * reached.
+   * needs no route to the host, so an update waiting here stays visible while
+   * the host cannot be reached. A quiet updater draws no row.
    */
   readonly desktopApp: HostOverviewDesktopAppRowProps | null;
   /**

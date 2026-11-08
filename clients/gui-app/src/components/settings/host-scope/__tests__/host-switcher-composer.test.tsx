@@ -9,6 +9,7 @@ import {
 } from "@testing-library/react";
 import { HostSwitcher } from "@/components/settings/host-scope/host-switcher";
 import type { HostSwitcherComposerMode } from "@/components/settings/host-scope/host-switcher";
+import { TooltipProvider } from "@/components/ui/tooltip";
 import type { HostPickIntent } from "@/components/settings/host-scope/host-option-model";
 import { NO_HOST_OPTION_REFUSALS } from "@/components/settings/host-scope/host-option-model";
 import { hostScopeOptionFixture } from "@/components/settings/host-scope/host-scope-fixture";
@@ -165,6 +166,48 @@ function renderSwitcher(input: {
 
 function row(hostId: string): HTMLElement {
   return screen.getByTestId(`settings-host-switcher-option-${hostId}`);
+}
+
+/**
+ * jsdom paints no layout. Report one label as cut off so the trigger's
+ * tooltip opens, and put the prototype back for the tests that follow.
+ */
+function stubStagedLabelOverflow(label: string): () => void {
+  const originalScrollWidth = Object.getOwnPropertyDescriptor(
+    HTMLElement.prototype,
+    "scrollWidth",
+  );
+  const originalClientWidth = Object.getOwnPropertyDescriptor(
+    HTMLElement.prototype,
+    "clientWidth",
+  );
+  Object.defineProperty(HTMLElement.prototype, "scrollWidth", {
+    configurable: true,
+    get(this: HTMLElement) {
+      return this.textContent === label ? 240 : 0;
+    },
+  });
+  Object.defineProperty(HTMLElement.prototype, "clientWidth", {
+    configurable: true,
+    get(this: HTMLElement) {
+      return this.textContent === label ? 100 : 0;
+    },
+  });
+  return () => {
+    restoreMeasuredProperty("scrollWidth", originalScrollWidth);
+    restoreMeasuredProperty("clientWidth", originalClientWidth);
+  };
+}
+
+function restoreMeasuredProperty(
+  name: "scrollWidth" | "clientWidth",
+  descriptor: PropertyDescriptor | undefined,
+): void {
+  if (descriptor === undefined) {
+    Reflect.deleteProperty(HTMLElement.prototype, name);
+    return;
+  }
+  Object.defineProperty(HTMLElement.prototype, name, descriptor);
 }
 
 describe("<HostSwitcher /> composer mode picks", () => {
@@ -478,6 +521,68 @@ describe("<HostSwitcher /> composer mode New rows", () => {
     expect(onPickNew).not.toHaveBeenCalled();
     expect(onSelect).not.toHaveBeenCalled();
     expect(wakeSandboxOnPick).not.toHaveBeenCalled();
+  });
+
+  // Inline and field share this row. Whether the gear stays inside a
+  // narrow container, and whether the label actually truncates, is layout:
+  // browser-tests/host-switcher-staged-gear.spec.ts.
+  it("keeps the staged shape gear beside the named trigger", async () => {
+    const stagedLabel = "New Personal sandbox";
+    const restore = stubStagedLabelOverflow(stagedLabel);
+    try {
+      render(
+        <TooltipProvider delayDuration={0}>
+          <HostSwitcher
+            refusalByHostId={NO_HOST_OPTION_REFUSALS}
+            inertExceptHostId={null}
+            hosts={[LAPTOP]}
+            selected={LAPTOP}
+            activeHostId={LAPTOP.hostId}
+            onSelect={onSelect}
+            action={null}
+            surface="inline"
+            intent="pin"
+            consequence={null}
+            disabled={false}
+            isLoading={false}
+            listsFailed={false}
+            onRetryLists={() => undefined}
+            updateViewForHost={null}
+            environmentLabelForHost={null}
+            composer={composerMode({
+              stagedConfigurationKey: "personal",
+              stagedLabel,
+            })}
+          />
+        </TooltipProvider>,
+      );
+
+      const trigger = screen.getByRole("button", {
+        name: `Host: ${stagedLabel}`,
+      });
+      const gear = screen.getByTestId("host-switcher-staged-gear");
+      const triggerWrapper = trigger.parentElement;
+      const row = triggerWrapper?.parentElement ?? null;
+      expect(row).not.toBeNull();
+      expect(row).toBe(gear.parentElement);
+      expect(triggerWrapper?.nextElementSibling).toBe(gear);
+      expect(trigger.getAttribute("aria-label")).toBe(`Host: ${stagedLabel}`);
+      expect(gear.getAttribute("aria-label")).toBe(
+        "Change the staged sandbox's shape",
+      );
+
+      fireEvent.focus(trigger);
+      expect((await screen.findByRole("tooltip")).textContent).toBe(
+        stagedLabel,
+      );
+
+      fireEvent.click(gear);
+      expect(onOpenShape).toHaveBeenCalledWith("personal");
+      expect(onPickNew).not.toHaveBeenCalled();
+      expect(onSelect).not.toHaveBeenCalled();
+    } finally {
+      restore();
+    }
   });
 
   it("marks the staged row picked", () => {
@@ -930,7 +1035,7 @@ describe("<HostSwitcher /> composer Details follow search results", () => {
   });
 });
 
-describe("<HostSwitcher /> composer mode row titles wrap", () => {
+describe("<HostSwitcher /> composer mode host names truncate", () => {
   const LOCAL = hostScopeOptionFixture({
     hostId: "local-win",
     name: "windows-test-machine",
@@ -942,12 +1047,12 @@ describe("<HostSwitcher /> composer mode row titles wrap", () => {
   const LONG_NAMED = sandboxHost("sbx-long", "awake", {});
   const NAMED = { ...LONG_NAMED, name: ROW_TITLE };
 
-  // jsdom paints no layout, so this checks the classes the title carries for
-  // wrapping and for the absence of truncation.
-  function expectWraps(title: HTMLElement): void {
-    expect(title.classList.contains("truncate")).toBe(false);
-    expect(title.classList.contains("whitespace-normal")).toBe(true);
-    expect(title.classList.contains("wrap-anywhere")).toBe(true);
+  // jsdom paints no layout, so assert the merged utility classes that express
+  // the compact row behavior instead of trying to measure rendered geometry.
+  function expectTruncates(name: HTMLElement): void {
+    expect(name.classList.contains("truncate")).toBe(true);
+    expect(name.classList.contains("whitespace-normal")).toBe(false);
+    expect(name.classList.contains("wrap-anywhere")).toBe(false);
   }
 
   it("wraps the New row's label in full", () => {
@@ -975,31 +1080,33 @@ describe("<HostSwitcher /> composer mode row titles wrap", () => {
     expect(title.classList.contains("wrap-break-word")).toBe(true);
   });
 
-  it("wraps the computer row's title", () => {
+  it("truncates the computer row's name without losing its text", () => {
     renderSwitcher({
       hosts: [LOCAL],
       composer: composerMode({}),
       intent: "pin",
     });
 
-    expectWraps(within(row("local-win")).getByText("windows-test-machine"));
+    const name = within(row("local-win")).getByText("windows-test-machine");
+    expectTruncates(name);
+    expect(name.textContent).toBe("windows-test-machine");
   });
 
-  it("wraps a sandbox row's name", () => {
+  it("truncates a sandbox row's name", () => {
     renderSwitcher({
       hosts: [LAPTOP, NAMED],
       composer: composerMode({ inThisTask: [NAMED] }),
       intent: "pin",
     });
 
-    expectWraps(within(row("sbx-long")).getByText(ROW_TITLE));
+    expectTruncates(within(row("sbx-long")).getByText(ROW_TITLE));
   });
 
-  it("wraps a sandbox's name in a list that is not the composer's", () => {
+  it("truncates a sandbox name in a list that is not the composer's", () => {
     renderSwitcher({ hosts: [LAPTOP, NAMED], composer: null, intent: "pin" });
 
     const title = within(row("sbx-long")).getByText(ROW_TITLE);
-    expectWraps(title);
+    expectTruncates(title);
   });
 });
 

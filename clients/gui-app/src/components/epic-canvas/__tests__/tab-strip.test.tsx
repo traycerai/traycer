@@ -1116,7 +1116,7 @@ describe("<TabStrip />", () => {
     );
     const tooltip = within(tooltips[0]);
     expect(tooltip.getByTestId("git-diff-tooltip-workspace").textContent).toBe(
-      "Workspacetraycer-internal",
+      "Foldertraycer-internal",
     );
     expect(tooltip.getByTestId("git-diff-tooltip-repository").textContent).toBe(
       "Repositorytraycer",

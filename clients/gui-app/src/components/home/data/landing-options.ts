@@ -170,7 +170,7 @@ export const PERMISSION_MODE_DETAILS: Readonly<
     runsWithoutAsking: [
       { text: "Reads and searches", exception: null },
       {
-        text: "File edits in the workspace",
+        text: "File edits in the folder",
         exception: "config, scripts and git internals still ask",
       },
     ],

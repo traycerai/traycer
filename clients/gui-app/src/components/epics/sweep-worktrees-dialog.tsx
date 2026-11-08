@@ -1292,7 +1292,7 @@ function SweepWorktreesCheckedAtText(props: {
       className="text-ui-xs whitespace-nowrap text-muted-foreground"
       data-testid="sweep-worktrees-checked-at"
     >
-      Workspace snapshot · {relative}
+      Folder snapshot · {relative}
     </span>
   );
 }

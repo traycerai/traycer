@@ -1,22 +1,19 @@
 import type { EpicCollaboratorsView } from "@/hooks/epics/use-epic-collaborators-query";
 
-/**
- * The first tab a member opens on a team host: what running there means, then
- * the two residual sentences the disclosure must carry.
- */
-export function teamHostDisclosureSentences(
-  teamName: string,
-): readonly [string, string, string] {
-  return [
-    `Agents here run as the host. Anything another member's agent does on it can read what yours can, browser sign-ins included. Agents here work with ${teamName}'s hosts only. A browser-using agent here runs its browser in the sandbox, never on your computer.`,
-    "Another member's agent here can act and be charged as you while you are attached.",
-    `A copy of your sign-in to this host, taken by anyone who was root here, keeps working against ${teamName}'s hosts until this host sleeps.`,
-  ];
+/** The shared-access and billing consequence shown before the details. */
+export function teamHostDisclosureSummary(teamName: string): string {
+  return `${teamName}: other members' agents can read your data and act and be charged as you while you are attached.`;
 }
 
-export function teamHostOutsideReadersLine(teamName: string): string {
-  return `People outside ${teamName} can read chats in this task.`;
-}
+/** Host access, browser placement and sign-in lifetime remain available on demand. */
+export const TEAM_HOST_DISCLOSURE_DETAILS = [
+  "Agents here run as the host and can read what yours can, browser sign-ins included. They work with this team's hosts only.",
+  "A browser-using agent here runs its browser in the sandbox, never on your computer.",
+  "A copy of your sign-in to this host, taken by anyone who was root here, keeps working against this team's hosts until this host sleeps.",
+];
+
+export const TEAM_HOST_OUTSIDE_READERS_LINE =
+  "People outside the team can read chats in this task.";
 
 /**
  * Whether the task has readers outside the owning team. Any other team is
