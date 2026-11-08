@@ -103,14 +103,6 @@ export function fileAttachmentIdentities(
   return keys;
 }
 
-/**
- * How many files the draft carries, by the host's count: one per distinct
- * `(hash, fileName)`, pending nodes included.
- */
-export function countFileAttachments(content: JsonContent): number {
-  return fileAttachmentIdentities(content).size;
-}
-
 /** What an upload's outcome does to a file node: stored, or gone. */
 export type FileNodeSettlement =
   | { readonly kind: "stored" }

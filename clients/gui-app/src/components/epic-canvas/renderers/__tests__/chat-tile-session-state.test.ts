@@ -190,7 +190,6 @@ describe("chatMessageEditingForInlineEdit", () => {
                 mediaType: "application/pdf",
                 size: 10,
                 uploadState: null,
-                uploadHostId: null,
               },
             },
           ],

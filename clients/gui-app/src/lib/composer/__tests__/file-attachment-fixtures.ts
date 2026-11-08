@@ -38,9 +38,8 @@ export function targetFor(hostId: string): FileAttachmentUploadTarget {
 }
 
 /**
- * The upload registry, the picked-file map and the per-host confirmations are
- * module state: a fresh host id and fresh bytes per test keep one test's
- * uploads from being another's.
+ * The upload registry and its serial queue are module state: a fresh host id
+ * and fresh bytes per test keep one test's uploads from being another's.
  */
 export function freshHostId(label: string): string {
   return `${label}-${uuidv4()}`;
