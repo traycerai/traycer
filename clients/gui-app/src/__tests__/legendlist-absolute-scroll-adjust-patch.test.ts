@@ -760,27 +760,14 @@ describe("@legendapp/list web patch", () => {
       expect(fixture.ctx.state.scroll).toBe(4500);
     });
 
-    // The scroller shim is where the touch scroll is known: a finger owns it
-    // from touchstart to the last touchend, and the fling after the lift
-    // until the scroller has been quiet for the scroll-end fallback. The
-    // handler above cannot be exercised through a real fling here (jsdom has
-    // no momentum), so the wiring is pinned: the listeners, the quiet timer
-    // re-armed by every scroll report while a fling owns the scroller, and
-    // the settle at scroll end, which is what commits the pending term.
-    it(`${file} tracks the touch scroll on the scroller and settles it at scroll end`, () => {
+    // The scroller shim is where the touch scroll is known, and its behaviour
+    // (touch input, scroll reports, the quiet timer, the commit at rest and
+    // the early commit before an edge) runs through the real list in
+    // `browser-tests/legend-list-touch-fling-adjust.spec.ts`. What is pinned
+    // here is the one piece the browser spec cannot tell apart: that the
+    // shim's settle is the handler's commit, not a write of its own.
+    it(`${file} settles a touch scroll through the handler's commit`, () => {
       const source = readFileSync(join(packageDir, file), "utf8");
-      expect(source).toContain(
-        'target.addEventListener("touchstart", onTouchStart, { passive: true });\n      target.addEventListener("touchend", onTouchEnd, { passive: true });\n      target.addEventListener("touchcancel", onTouchEnd, { passive: true });',
-      );
-      expect(source).toContain(
-        "if (!state || event.touches && event.touches.length > 0) return;\n      state.touchScroll = { momentum: true, touching: false };\n      armTouchScrollRest();",
-      );
-      expect(source).toContain(
-        "if (state && state.touchScroll && state.touchScroll.momentum) {\n        armTouchScrollRest();\n      }\n      const shouldFlushImmediately = ",
-      );
-      expect(source).toContain(
-        "onInternalScrollEnd == null ? void 0 : onInternalScrollEnd();\n    settleTouchScroll();",
-      );
       expect(source).toContain(
         "touchScroll.momentum = false;\n    const scrollingTo = state.scrollingTo;\n    if (!(scrollingTo && scrollingTo.animated && !scrollingTo.isInitialScroll)) {\n      state.scrollAdjustHandler.commitPendingAdjust(void 0);\n    }",
       );
