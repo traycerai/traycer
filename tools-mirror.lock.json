@@ -1,6 +1,5 @@
 {
   "schemaVersion": 1,
-  "mirror": "https://releases.traycer.ai",
   "artifacts": [
     {
       "name": "bun",
@@ -937,6 +936,116 @@
       "sha256": "551f6fc83ea457d62a0d98237cbad105af8d557003051f41f3e7ca7b3f2470eb",
       "kind": "tar.gz",
       "bin": "."
+    },
+    {
+      "name": "tla2tools",
+      "version": "1.7.4",
+      "upstreamUrl": "https://github.com/tlaplus/tlaplus/releases/download/v1.7.4/tla2tools.jar",
+      "sha256": "936a262061c914694dfd669a543be24573c45d5aa0ff20a8b96b23d01e050e88",
+      "os": "any",
+      "arch": "any",
+      "kind": "file",
+      "bin": null
+    },
+    {
+      "name": "minisign",
+      "version": "0.11",
+      "upstreamUrl": "https://github.com/jedisct1/minisign/releases/download/0.11/minisign-0.11-win64.zip",
+      "sha256": "b9c31c2c3034f81f0e5f5d92cbcc20e67a9671b6e5455661588638848dc58031",
+      "os": "win32",
+      "arch": "x64",
+      "kind": "file",
+      "bin": null
+    },
+    {
+      "name": "esigner-cka",
+      "version": "1.0.8",
+      "upstreamUrl": "https://github.com/SSLcom/eSignerCKA/releases/download/v1.0.8/SSL.COM-eSigner-CKA_1.0.8.zip",
+      "sha256": "c45bcd520a2a77acda150c12a1c233ca2408b3c10c2016b8d0dc8b9aefc0cadb",
+      "os": "win32",
+      "arch": "x64",
+      "kind": "file",
+      "bin": null
+    },
+    {
+      "name": "winget-cli",
+      "version": "1.29.380",
+      "upstreamUrl": "https://github.com/microsoft/winget-cli/releases/download/v1.29.380/Microsoft.DesktopAppInstaller_8wekyb3d8bbwe.msixbundle",
+      "sha256": "65dea9c01ce08ee7b763366b27c0e651f97db857c11ca9b9c301826c10092f2e",
+      "os": "win32",
+      "arch": "x64",
+      "kind": "file",
+      "bin": null
+    },
+    {
+      "name": "wingetcreate",
+      "version": "1.12.13.0",
+      "upstreamUrl": "https://github.com/microsoft/winget-create/releases/download/v1.12.13.0/wingetcreate.exe",
+      "sha256": "24042bd37915805615e6cf969ac57c6439124c3fe85823327f5f3fb24bd9ffea",
+      "os": "win32",
+      "arch": "x64",
+      "kind": "file",
+      "bin": null
+    },
+    {
+      "name": "simulator-datachannel",
+      "version": "0.32.3",
+      "os": "any",
+      "arch": "any",
+      "upstreamUrl": "https://github.com/murat-dogan/node-datachannel/releases/download/v0.32.3/node-datachannel-v0.32.3-napi-v8-darwin-arm64.tar.gz",
+      "sha256": "69fbffdacb9abda2a76809693443328b6aad71af25947e0733913340365f4da8",
+      "kind": "file",
+      "bin": null
+    },
+    {
+      "name": "simulator-datachannel",
+      "version": "0.32.3",
+      "os": "any",
+      "arch": "any",
+      "upstreamUrl": "https://github.com/murat-dogan/node-datachannel/releases/download/v0.32.3/node-datachannel-v0.32.3-napi-v8-darwin-x64.tar.gz",
+      "sha256": "4f79b7ff0fe035db8d2006842537aca2a2def957569aae6ff578107b56adec38",
+      "kind": "file",
+      "bin": null
+    },
+    {
+      "name": "simulator-datachannel",
+      "version": "0.32.3",
+      "os": "any",
+      "arch": "any",
+      "upstreamUrl": "https://github.com/murat-dogan/node-datachannel/releases/download/v0.32.3/node-datachannel-v0.32.3-napi-v8-linux-arm64.tar.gz",
+      "sha256": "4bdbd80aeb11fb0a903318defe663a833a1f0af2615450fe10dab75c81723445",
+      "kind": "file",
+      "bin": null
+    },
+    {
+      "name": "simulator-datachannel",
+      "version": "0.32.3",
+      "os": "any",
+      "arch": "any",
+      "upstreamUrl": "https://github.com/murat-dogan/node-datachannel/releases/download/v0.32.3/node-datachannel-v0.32.3-napi-v8-linux-x64.tar.gz",
+      "sha256": "4092afc9cd594a3326eb1bd823da452b227b742ea8222689b2cea6f7344cf67a",
+      "kind": "file",
+      "bin": null
+    },
+    {
+      "name": "simulator-datachannel",
+      "version": "0.32.3",
+      "os": "any",
+      "arch": "any",
+      "upstreamUrl": "https://github.com/murat-dogan/node-datachannel/releases/download/v0.32.3/node-datachannel-v0.32.3-napi-v8-win32-arm64.tar.gz",
+      "sha256": "64fe160b953f6dfd44ae3e1f75da0d654e7d23c75c976a2e6a94102fbbc08bb0",
+      "kind": "file",
+      "bin": null
+    },
+    {
+      "name": "simulator-datachannel",
+      "version": "0.32.3",
+      "os": "any",
+      "arch": "any",
+      "upstreamUrl": "https://github.com/murat-dogan/node-datachannel/releases/download/v0.32.3/node-datachannel-v0.32.3-napi-v8-win32-x64.tar.gz",
+      "sha256": "3bfacc4125b296197fe9e22ebd9a52f05321c50aca9d80b92897507f898c12c3",
+      "kind": "file",
+      "bin": null
     }
   ]
 }
