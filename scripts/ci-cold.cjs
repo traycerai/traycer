@@ -6,6 +6,7 @@ const os = require("node:os");
 const path = require("node:path");
 const dns = require("node:dns/promises");
 const { execFileSync } = require("node:child_process");
+const { readLock, download, install, objectKey } = require("./ci-tools.cjs");
 
 const domains = [
   "github.com",
@@ -31,10 +32,35 @@ function command(program, args) {
   });
 }
 
+function bootstrapNode(mirror) {
+  const lock = readLock(path.resolve(__dirname, "../tools-mirror.lock.json"));
+  const entries = lock.artifacts.filter(
+    (entry) =>
+      entry.name === "node" &&
+      entry.os === process.platform &&
+      entry.arch === process.arch,
+  );
+  if (entries.length !== 1)
+    throw new Error("Expected one official Node archive for this runner");
+  const entry = entries[0];
+  const cache = path.join(process.env.RUNNER_TEMP, "traycer-ci-tools");
+  const archive = path.join(
+    cache,
+    "archives/node",
+    `${entry.sha256}-${path.basename(objectKey(entry))}`,
+  );
+  const source = download(entry, archive, mirror || null);
+  install(entry, archive, path.join(cache, "installed"));
+  fs.appendFileSync(
+    process.env.GITHUB_OUTPUT,
+    `node=executed\nnode-origin=${source === entry.upstreamUrl ? "upstream" : "mirror"}\n`,
+  );
+}
+
 async function main() {
   if (process.env.GITHUB_ACTIONS !== "true")
     throw new Error("Cold setup is restricted to GitHub Actions runners");
-  const [operation, cold, blackhole] = process.argv.slice(2);
+  const [operation, cold, blackhole, mirror] = process.argv.slice(2);
   if (operation === "restore") {
     if (!fs.existsSync(stateFile)) return;
     const state = JSON.parse(fs.readFileSync(stateFile, "utf8"));
@@ -64,20 +90,6 @@ async function main() {
   }
   if (operation !== "prepare") throw new Error("Expected prepare or restore");
   if (cold === "true") {
-    // Keep the image's Node available for the dependency-free bootstrap after
-    // emptying setup-node's tool cache; the pinned setup-node still downloads.
-    const bootstrap = path.join(
-      process.env.RUNNER_TEMP,
-      "ci-bootstrap-runtime",
-    );
-    fs.mkdirSync(bootstrap, { recursive: true });
-    const node = path.join(
-      bootstrap,
-      process.platform === "win32" ? "node.exe" : "node",
-    );
-    fs.copyFileSync(process.execPath, node);
-    fs.chmodSync(node, 0o755);
-    fs.appendFileSync(process.env.GITHUB_PATH, `${bootstrap}\n`);
     for (const directory of [
       ".nx",
       "node_modules",
@@ -108,7 +120,10 @@ async function main() {
     );
     console.log("[ci-tools] cold caches emptied; Nx caching disabled");
   }
-  if (blackhole !== "true") return;
+  if (blackhole !== "true") {
+    if (cold === "true") bootstrapNode(mirror);
+    return;
+  }
   const addresses = [
     ...new Set(
       (
@@ -175,6 +190,7 @@ async function main() {
   console.log(
     "[ci-tools] GitHub firewall and DNS blackhole active before tool setup",
   );
+  if (cold === "true") bootstrapNode(mirror);
 }
 
 main().catch((error) => {

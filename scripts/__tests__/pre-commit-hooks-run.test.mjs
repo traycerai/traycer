@@ -181,6 +181,8 @@ describe("every pre-commit hook runs in a pre-commit.yml job that can execute it
     const variableSource = "${{ vars.CI_TOOLS_MIRROR_BASE_URL }}";
     const dispatchSource =
       "${{ inputs.mirror_base_url || vars.CI_TOOLS_MIRROR_BASE_URL }}";
+    const matrixSource =
+      "${{ matrix.origin == 'mirror' && (inputs.mirror_base_url || vars.CI_TOOLS_MIRROR_BASE_URL) || '' }}";
     const callers = readdirSync(workflowDir)
       .filter((fileName) => /\.ya?ml$/u.test(fileName))
       .flatMap((fileName) => {
@@ -194,20 +196,28 @@ describe("every pre-commit hook runs in a pre-commit.yml job that can execute it
           Object.hasOwn(dispatchInputs, "mirror_base_url")
             ? dispatchSource
             : variableSource;
-        return Object.values(document.jobs ?? {}).flatMap((job) =>
+        return Object.entries(document.jobs ?? {}).flatMap(([jobId, job]) =>
           (job.steps ?? [])
             .filter(
               ({ uses }) => uses === "./.github/actions/bootstrap-ci-tools",
             )
-            .map((step) => ({ fileName, step, source })),
+            .map((step) => ({
+              fileName,
+              jobId,
+              step,
+              source:
+                fileName === "test.yml" && jobId === "bootstrap-proof"
+                  ? matrixSource
+                  : source,
+            })),
         );
       });
 
     expect(callers.length).toBeGreaterThan(0);
-    for (const { fileName, step, source } of callers) {
+    for (const { fileName, jobId, step, source } of callers) {
       expect(
         step.with?.["mirror-base-url"],
-        `${fileName} bootstrap caller`,
+        `${fileName}:${jobId} bootstrap caller`,
       ).toBe(source);
     }
 
@@ -226,6 +236,92 @@ describe("every pre-commit hook runs in a pre-commit.yml job that can execute it
     expect(bootstrap.inputs["mirror-base-url"].default).toBe("");
     const install = bootstrap.runs.steps.find(({ id }) => id === "install");
     expect(install.env.CI_TOOLS_MIRROR).toBe("${{ inputs.mirror-base-url }}");
+  });
+
+  it("limits the cold bootstrap proof to explicit dispatch across every platform and origin", () => {
+    const testWorkflow = parse(
+      readFileSync(join(REPO_ROOT, ".github", "workflows", "test.yml"), "utf8"),
+    );
+    const dispatchInputs = testWorkflow.on.workflow_dispatch.inputs;
+    expect(dispatchInputs.bootstrap_matrix).toMatchObject({
+      type: "boolean",
+      default: false,
+    });
+    expect(dispatchInputs.mirror_base_url).toMatchObject({
+      type: "string",
+      default: "",
+    });
+
+    const proof = testWorkflow.jobs["bootstrap-proof"];
+    expect(normalize(proof.if)).toBe(
+      "github.event_name == 'workflow_dispatch' && inputs.bootstrap_matrix && ( github.event_name != 'pull_request' || (github.base_ref != 'main' && !startsWith(github.base_ref, 'integration/') && !startsWith(github.base_ref, 'land/')) || github.event.pull_request.head.repo.full_name != github.repository || github.event.pull_request.user.type == 'Bot' )",
+    );
+    expect(proof.strategy.matrix.platform).toEqual([
+      "linux-x64",
+      "linux-arm64",
+      "darwin-x64",
+      "darwin-arm64",
+      "win32-x64",
+    ]);
+    expect(proof.strategy.matrix.origin).toEqual(["mirror", "upstream"]);
+    expect(proof.strategy.matrix.include).toEqual([
+      { platform: "linux-x64", runner: "ubuntu-24.04" },
+      { platform: "linux-arm64", runner: "ubuntu-24.04-arm" },
+      { platform: "darwin-x64", runner: "macos-15-intel" },
+      { platform: "darwin-arm64", runner: "macos-latest" },
+      { platform: "win32-x64", runner: "windows-latest" },
+    ]);
+
+    const cold = proof.steps.find(({ id }) => id === "ci_cold");
+    const bootstrap = proof.steps.find(({ id }) => id === "bootstrap");
+    const originAssertion = proof.steps.find(
+      ({ name }) =>
+        typeof name === "string" &&
+        name.startsWith("Assert the acquired runtimes execute"),
+    );
+    expect(cold.env.COLD_BLACKHOLE).toBe("${{ matrix.origin == 'mirror' }}");
+    expect(cold.env.COLD_MIRROR_BASE_URL).toBe(
+      "${{ matrix.origin == 'mirror' && (inputs.mirror_base_url || vars.CI_TOOLS_MIRROR_BASE_URL) || '' }}",
+    );
+    expect(cold.run).toBe(
+      'node scripts/ci-cold.cjs prepare true "$COLD_BLACKHOLE" "$COLD_MIRROR_BASE_URL"',
+    );
+    expect(bootstrap.uses).toBe(TOOL_BOOTSTRAP_ACTION);
+    expect(bootstrap.with).toMatchObject({
+      tools: "node bun buf electron",
+      "mirror-base-url":
+        "${{ matrix.origin == 'mirror' && (inputs.mirror_base_url || vars.CI_TOOLS_MIRROR_BASE_URL) || '' }}",
+      cold: "true",
+    });
+    expect(
+      Object.entries(testWorkflow.jobs).some(
+        ([jobId, job]) =>
+          jobId !== "bootstrap-proof" &&
+          (job.steps ?? []).some(({ uses }) => uses === TOOL_BOOTSTRAP_ACTION),
+      ),
+    ).toBe(true);
+    expect(originAssertion.env.NODE_ORIGIN).toBe(
+      "${{ steps.ci_cold.outputs.node-origin }}",
+    );
+    expect(originAssertion.env.BUN_ORIGIN).toBe(
+      "${{ steps.bootstrap.outputs.bun-origin }}",
+    );
+    expect(originAssertion.run).toContain(
+      'test "$NODE_ORIGIN" = "$EXPECTED_ORIGIN"',
+    );
+    expect(originAssertion.run).toContain(
+      'test "$BUN_ORIGIN" = "$EXPECTED_ORIGIN"',
+    );
+
+    const aggregate = testWorkflow.jobs.tests;
+    expect(aggregate.needs).toContain("bootstrap-proof");
+    const aggregateStep = aggregate.steps.find(
+      ({ name }) => name === "Every test leg passed",
+    );
+    expect(aggregateStep.env.PROOF_REQUESTED).toContain(
+      "inputs.bootstrap_matrix",
+    );
+    expect(aggregateStep.run).toContain('test "$PROOF_RESULT" = success');
   });
 
   // This executes the Ubuntu runner's shell; native Windows has no /bin/bash.

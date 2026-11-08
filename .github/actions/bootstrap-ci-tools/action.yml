@@ -23,6 +23,9 @@ outputs:
   hooks:
     description: Hook environment source (mirror or fallback)
     value: ${{ steps.install.outputs.hooks }}
+  bun-origin:
+    description: Source of verified Bun archive bytes (mirror, upstream or cache)
+    value: ${{ steps.install.outputs.bun-origin }}
 runs:
   using: composite
   steps:
@@ -34,7 +37,7 @@ runs:
         CI_TOOLS_REQUESTED: ${{ inputs.tools }}
         CI_TOOLS_ROOT: ${{ github.action_path }}/../../..
         CI_TOOLS_BUN_VERSION: ${{ inputs.bun-version }}
-        CI_TOOLS_BYPASS_CACHE: ${{ inputs.cold == 'true' || inputs.no-cache == 'true' }}
+        CI_TOOLS_BYPASS_CACHE: ${{ inputs.no-cache == 'true' }}
       run: |
         read -ra tools <<< "$CI_TOOLS_REQUESTED"
         node "$CI_TOOLS_ROOT/scripts/ci-tools.cjs" cache-paths "$CI_TOOLS_ROOT/tools-mirror.lock.json" "${tools[@]}"

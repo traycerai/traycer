@@ -1046,6 +1046,71 @@
       "sha256": "3bfacc4125b296197fe9e22ebd9a52f05321c50aca9d80b92897507f898c12c3",
       "kind": "file",
       "bin": null
+    },
+    {
+      "name": "node",
+      "version": "24.20.0",
+      "os": "linux",
+      "arch": "x64",
+      "upstreamUrl": "https://nodejs.org/dist/v24.20.0/node-v24.20.0-linux-x64.tar.gz",
+      "sha256": "855d581f8a4eb1a8117e3426de25fe02770592febcfb31369aee1ffbfee9e8ec",
+      "kind": "tar.gz",
+      "bin": "node-v24.20.0-linux-x64/bin",
+      "executable": "node"
+    },
+    {
+      "name": "node",
+      "version": "24.20.0",
+      "os": "linux",
+      "arch": "arm64",
+      "upstreamUrl": "https://nodejs.org/dist/v24.20.0/node-v24.20.0-linux-arm64.tar.gz",
+      "sha256": "3515603e2487879a39bc75716f1a2affd027500c64ba50e845cf72cb33219013",
+      "kind": "tar.gz",
+      "bin": "node-v24.20.0-linux-arm64/bin",
+      "executable": "node"
+    },
+    {
+      "name": "node",
+      "version": "24.20.0",
+      "os": "darwin",
+      "arch": "x64",
+      "upstreamUrl": "https://nodejs.org/dist/v24.20.0/node-v24.20.0-darwin-x64.tar.gz",
+      "sha256": "9e5b2644cf107befb6aefca676b96d3296bc10138096f022ed378d6233ed81f4",
+      "kind": "tar.gz",
+      "bin": "node-v24.20.0-darwin-x64/bin",
+      "executable": "node"
+    },
+    {
+      "name": "node",
+      "version": "24.20.0",
+      "os": "darwin",
+      "arch": "arm64",
+      "upstreamUrl": "https://nodejs.org/dist/v24.20.0/node-v24.20.0-darwin-arm64.tar.gz",
+      "sha256": "40e5607e5ecb3db9192723776da2d75d966260fc74a7a9e731c1bd67dda96bc8",
+      "kind": "tar.gz",
+      "bin": "node-v24.20.0-darwin-arm64/bin",
+      "executable": "node"
+    },
+    {
+      "name": "node",
+      "version": "24.20.0",
+      "os": "win32",
+      "arch": "x64",
+      "upstreamUrl": "https://nodejs.org/dist/v24.20.0/node-v24.20.0-win-x64.zip",
+      "sha256": "6cac9ffbca8f6a47091e4b5c772e0606049c3871cb67d900c0cedde630e545ba",
+      "kind": "zip",
+      "bin": "node-v24.20.0-win-x64",
+      "executable": "node.exe"
+    },
+    {
+      "name": "node-checksums",
+      "version": "24.20.0",
+      "os": "any",
+      "arch": "any",
+      "upstreamUrl": "https://nodejs.org/dist/v24.20.0/SHASUMS256.txt",
+      "sha256": "c614a913a302d35d1c3a1348d07d84c52e28dceb0b97fd91e4ade05906ca2bd7",
+      "kind": "file",
+      "bin": null
     }
   ]
 }

@@ -160,6 +160,33 @@ function install(entry, archive, root) {
   const destination = python
     ? "/opt/traycer-ci/python"
     : path.join(root, entry.name, entry.sha256);
+  const bin = entry.bin
+    ? path.resolve(
+        destination,
+        python
+          ? "bin"
+          : entry.bin.replace(
+              "{arch}",
+              process.arch === "x64" ? "x86_64" : "aarch64",
+            ),
+      )
+    : null;
+  if (
+    bin !== null &&
+    bin !== destination &&
+    !bin.startsWith(`${destination}${path.sep}`)
+  ) {
+    throw new Error(`Unsafe tool bin path: ${entry.name}`);
+  }
+  if (
+    entry.name === "node" &&
+    bin !== null &&
+    path.resolve(process.execPath) === path.join(bin, entry.executable)
+  ) {
+    // Windows cannot replace the interpreter currently executing this action.
+    append(process.env.GITHUB_PATH, bin);
+    return destination;
+  }
   if (python) {
     execFileSync("sudo", ["mkdir", "-p", "/opt/traycer-ci"], {
       stdio: "inherit",
@@ -175,7 +202,10 @@ function install(entry, archive, root) {
   if (entry.kind === "zip") {
     // tar on Windows is bsdtar, which also reads ZIP; macOS/Linux use unzip.
     if (process.platform === "win32") {
-      execFileSync("tar", ["-xf", archive, "-C", destination], {
+      if (!process.env.SystemRoot)
+        throw new Error("Windows system directory is missing");
+      const tar = path.join(process.env.SystemRoot, "System32", "tar.exe");
+      execFileSync(tar, ["-xf", archive, "-C", destination], {
         stdio: "inherit",
       });
     } else {
@@ -201,18 +231,20 @@ function install(entry, archive, root) {
   } else {
     throw new Error(`Unsupported archive: ${entry.name}`);
   }
-  if (entry.bin) {
-    const bin = path.resolve(
-      destination,
-      python
-        ? "bin"
-        : entry.bin.replace(
-            "{arch}",
-            process.arch === "x64" ? "x86_64" : "aarch64",
-          ),
-    );
-    if (bin !== destination && !bin.startsWith(`${destination}${path.sep}`)) {
-      throw new Error(`Unsafe tool bin path: ${entry.name}`);
+  if (bin !== null) {
+    if (entry.name === "bun") {
+      const binary = path.join(
+        bin,
+        process.platform === "win32" ? "bun.exe" : "bun",
+      );
+      const alias = path.join(
+        bin,
+        process.platform === "win32" ? "bunx.exe" : "bunx",
+      );
+      fs.accessSync(binary, fs.constants.X_OK);
+      fs.rmSync(alias, { force: true });
+      if (process.platform === "win32") fs.linkSync(binary, alias);
+      else fs.symlinkSync("bun", alias);
     }
     append(process.env.GITHUB_PATH, bin);
   }
@@ -352,8 +384,10 @@ function main(args) {
       `${entry.sha256}-${path.basename(objectKey(entry))}`,
     );
     // A restored archive is untrusted until its digest is checked again.
+    let archiveOrigin = "cache";
     if (!fs.existsSync(archive) || sha256(archive) !== entry.sha256) {
-      download(entry, archive, mirror);
+      const source = download(entry, archive, mirror);
+      archiveOrigin = source === entry.upstreamUrl ? "upstream" : "mirror";
     } else {
       console.log(`[ci-tools] ${name} verified (cache)`);
     }
@@ -397,9 +431,18 @@ function main(args) {
       install(entry, archive, path.join(cache, "installed"));
     }
     append(process.env.GITHUB_OUTPUT, `${name}=executed`);
+    if (name === "bun")
+      append(process.env.GITHUB_OUTPUT, `bun-origin=${archiveOrigin}`);
   }
   append(process.env.GITHUB_OUTPUT, "executed=true");
 }
 
-module.exports = { readLock, objectKey, download, downloadLockedUrl, sha256 };
+module.exports = {
+  readLock,
+  objectKey,
+  download,
+  downloadLockedUrl,
+  sha256,
+  install,
+};
 if (require.main === module) main(process.argv.slice(2));

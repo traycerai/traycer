@@ -90,6 +90,17 @@
   {
     "workflow": ".github/workflows/pre-commit.yml",
     "job": "static",
+    "step": "Prepare cold tools and optional GitHub blackhole",
+    "index": 2,
+    "gate": true,
+    "fetches": "whole official Node 24.20.0 archive",
+    "coldOrigin": "nodejs.org; explicit tools mirror",
+    "decision": "clear caches, apply requested firewall first, then verify and extract the complete locked official archive; node-origin output proves mirror or upstream",
+    "mirrorSource": "${{ inputs.mirror_base_url || vars.CI_TOOLS_MIRROR_BASE_URL }}"
+  },
+  {
+    "workflow": ".github/workflows/pre-commit.yml",
+    "job": "static",
     "step": "./.github/actions/bootstrap-ci-tools",
     "index": 3,
     "gate": true,
@@ -101,13 +112,13 @@
   {
     "workflow": ".github/workflows/pre-commit.yml",
     "job": "static",
-    "step": "actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1",
+    "step": "./.github/actions/bootstrap-ci-tools",
     "index": 4,
     "gate": true,
-    "fetches": "Node.js 24",
-    "coldOrigin": "GitHub manifest; nodejs.org distributions",
-    "decision": "independent fallback: keep only after blackhole run proves job budget (pending)",
-    "mirrorSource": "independent origin / explicit workflow CI_TOOLS_MIRROR for direct script consumers"
+    "fetches": "node",
+    "coldOrigin": "GitHub release assets; optional prepared hook mirror",
+    "decision": "lock: verify mirror first and bounded upstream second; hooks restore from digest-verified mirror archive, else build from config-pinned repositories (output mirror/cache/fallback). No consumer reads prepare-run artifacts.",
+    "mirrorSource": "${{ inputs.mirror_base_url || vars.CI_TOOLS_MIRROR_BASE_URL }}"
   },
   {
     "workflow": ".github/workflows/pre-commit.yml",
@@ -134,6 +145,17 @@
   {
     "workflow": ".github/workflows/pre-commit.yml",
     "job": "format",
+    "step": "Prepare cold tools and optional GitHub blackhole",
+    "index": 2,
+    "gate": true,
+    "fetches": "whole official Node 24.20.0 archive",
+    "coldOrigin": "nodejs.org; explicit tools mirror",
+    "decision": "clear caches, apply requested firewall first, then verify and extract the complete locked official archive; node-origin output proves mirror or upstream",
+    "mirrorSource": "${{ inputs.mirror_base_url || vars.CI_TOOLS_MIRROR_BASE_URL }}"
+  },
+  {
+    "workflow": ".github/workflows/pre-commit.yml",
+    "job": "format",
     "step": "./.github/actions/bootstrap-ci-tools",
     "index": 3,
     "gate": true,
@@ -145,13 +167,13 @@
   {
     "workflow": ".github/workflows/pre-commit.yml",
     "job": "format",
-    "step": "actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1",
+    "step": "./.github/actions/bootstrap-ci-tools",
     "index": 4,
     "gate": true,
-    "fetches": "Node.js 24",
-    "coldOrigin": "GitHub manifest; nodejs.org distributions",
-    "decision": "independent fallback: keep only after blackhole run proves job budget (pending)",
-    "mirrorSource": "independent origin / explicit workflow CI_TOOLS_MIRROR for direct script consumers"
+    "fetches": "node",
+    "coldOrigin": "GitHub release assets; optional prepared hook mirror",
+    "decision": "lock: verify mirror first and bounded upstream second; hooks restore from digest-verified mirror archive, else build from config-pinned repositories (output mirror/cache/fallback). No consumer reads prepare-run artifacts.",
+    "mirrorSource": "${{ inputs.mirror_base_url || vars.CI_TOOLS_MIRROR_BASE_URL }}"
   },
   {
     "workflow": ".github/workflows/pre-commit.yml",
@@ -167,6 +189,17 @@
   {
     "workflow": ".github/workflows/pre-commit.yml",
     "job": "workspace-checks",
+    "step": "Prepare cold tools and optional GitHub blackhole",
+    "index": 3,
+    "gate": true,
+    "fetches": "whole official Node 24.20.0 archive",
+    "coldOrigin": "nodejs.org; explicit tools mirror",
+    "decision": "clear caches, apply requested firewall first, then verify and extract the complete locked official archive; node-origin output proves mirror or upstream",
+    "mirrorSource": "${{ inputs.mirror_base_url || vars.CI_TOOLS_MIRROR_BASE_URL }}"
+  },
+  {
+    "workflow": ".github/workflows/pre-commit.yml",
+    "job": "workspace-checks",
     "step": "./.github/actions/bootstrap-ci-tools",
     "index": 4,
     "gate": true,
@@ -178,13 +211,13 @@
   {
     "workflow": ".github/workflows/pre-commit.yml",
     "job": "workspace-checks",
-    "step": "actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1",
+    "step": "./.github/actions/bootstrap-ci-tools",
     "index": 5,
     "gate": true,
-    "fetches": "Node.js 24",
-    "coldOrigin": "GitHub manifest; nodejs.org distributions",
-    "decision": "independent fallback: keep only after blackhole run proves job budget (pending)",
-    "mirrorSource": "independent origin / explicit workflow CI_TOOLS_MIRROR for direct script consumers"
+    "fetches": "node",
+    "coldOrigin": "GitHub release assets; optional prepared hook mirror",
+    "decision": "lock: verify mirror first and bounded upstream second; hooks restore from digest-verified mirror archive, else build from config-pinned repositories (output mirror/cache/fallback). No consumer reads prepare-run artifacts.",
+    "mirrorSource": "${{ inputs.mirror_base_url || vars.CI_TOOLS_MIRROR_BASE_URL }}"
   },
   {
     "workflow": ".github/workflows/pre-commit.yml",
@@ -375,6 +408,28 @@
   },
   {
     "workflow": ".github/workflows/test.yml",
+    "job": "bootstrap-proof",
+    "step": "Empty caches and blackhole GitHub before mirror acquisition",
+    "index": 3,
+    "gate": true,
+    "fetches": "whole official Node 24.20.0 archive",
+    "coldOrigin": "nodejs.org; explicit tools mirror",
+    "decision": "clear caches, apply requested firewall first, then verify and extract the complete locked official archive; node-origin output proves mirror or upstream",
+    "mirrorSource": "${{ matrix.origin == 'mirror' && (inputs.mirror_base_url || vars.CI_TOOLS_MIRROR_BASE_URL) || '' }}"
+  },
+  {
+    "workflow": ".github/workflows/test.yml",
+    "job": "bootstrap-proof",
+    "step": "Run the gates' checked-in bootstrap",
+    "index": 4,
+    "gate": true,
+    "fetches": "node bun buf electron",
+    "coldOrigin": "GitHub release assets; optional prepared hook mirror",
+    "decision": "lock: verify mirror first and bounded upstream second; hooks restore from digest-verified mirror archive, else build from config-pinned repositories (output mirror/cache/fallback). No consumer reads prepare-run artifacts.",
+    "mirrorSource": "${{ matrix.origin == 'mirror' && (inputs.mirror_base_url || vars.CI_TOOLS_MIRROR_BASE_URL) || '' }}"
+  },
+  {
+    "workflow": ".github/workflows/test.yml",
     "job": "test",
     "step": "Fetch the host-v1.1.5 tag the schema oracle regenerates from",
     "index": 2,
@@ -387,6 +442,17 @@
   {
     "workflow": ".github/workflows/test.yml",
     "job": "test",
+    "step": "Prepare cold tools and optional GitHub blackhole",
+    "index": 3,
+    "gate": true,
+    "fetches": "whole official Node 24.20.0 archive",
+    "coldOrigin": "nodejs.org; explicit tools mirror",
+    "decision": "clear caches, apply requested firewall first, then verify and extract the complete locked official archive; node-origin output proves mirror or upstream",
+    "mirrorSource": "${{ inputs.mirror_base_url || vars.CI_TOOLS_MIRROR_BASE_URL }}"
+  },
+  {
+    "workflow": ".github/workflows/test.yml",
+    "job": "test",
     "step": "./.github/actions/bootstrap-ci-tools",
     "index": 4,
     "gate": true,
@@ -398,13 +464,24 @@
   {
     "workflow": ".github/workflows/test.yml",
     "job": "test",
-    "step": "actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1",
+    "step": "./.github/actions/bootstrap-ci-tools",
     "index": 5,
     "gate": true,
-    "fetches": "Node.js 24",
-    "coldOrigin": "GitHub manifest; nodejs.org distributions",
-    "decision": "independent fallback: keep only after blackhole run proves job budget (pending)",
-    "mirrorSource": "independent origin / explicit workflow CI_TOOLS_MIRROR for direct script consumers"
+    "fetches": "node",
+    "coldOrigin": "GitHub release assets; optional prepared hook mirror",
+    "decision": "lock: verify mirror first and bounded upstream second; hooks restore from digest-verified mirror archive, else build from config-pinned repositories (output mirror/cache/fallback). No consumer reads prepare-run artifacts.",
+    "mirrorSource": "${{ inputs.mirror_base_url || vars.CI_TOOLS_MIRROR_BASE_URL }}"
+  },
+  {
+    "workflow": ".github/workflows/test.yml",
+    "job": "test-windows-cli-exit",
+    "step": "Prepare cold tools and optional GitHub blackhole",
+    "index": 2,
+    "gate": true,
+    "fetches": "whole official Node 24.20.0 archive",
+    "coldOrigin": "nodejs.org; explicit tools mirror",
+    "decision": "clear caches, apply requested firewall first, then verify and extract the complete locked official archive; node-origin output proves mirror or upstream",
+    "mirrorSource": "${{ inputs.mirror_base_url || vars.CI_TOOLS_MIRROR_BASE_URL }}"
   },
   {
     "workflow": ".github/workflows/test.yml",
@@ -420,13 +497,24 @@
   {
     "workflow": ".github/workflows/test.yml",
     "job": "test-windows-cli-exit",
-    "step": "actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1",
+    "step": "./.github/actions/bootstrap-ci-tools",
     "index": 4,
     "gate": true,
-    "fetches": "Node.js 24",
-    "coldOrigin": "GitHub manifest; nodejs.org distributions",
-    "decision": "independent fallback: keep only after blackhole run proves job budget (pending)",
-    "mirrorSource": "independent origin / explicit workflow CI_TOOLS_MIRROR for direct script consumers"
+    "fetches": "node",
+    "coldOrigin": "GitHub release assets; optional prepared hook mirror",
+    "decision": "lock: verify mirror first and bounded upstream second; hooks restore from digest-verified mirror archive, else build from config-pinned repositories (output mirror/cache/fallback). No consumer reads prepare-run artifacts.",
+    "mirrorSource": "${{ inputs.mirror_base_url || vars.CI_TOOLS_MIRROR_BASE_URL }}"
+  },
+  {
+    "workflow": ".github/workflows/test.yml",
+    "job": "test-macos-packaging",
+    "step": "Prepare cold tools and optional GitHub blackhole",
+    "index": 2,
+    "gate": true,
+    "fetches": "whole official Node 24.20.0 archive",
+    "coldOrigin": "nodejs.org; explicit tools mirror",
+    "decision": "clear caches, apply requested firewall first, then verify and extract the complete locked official archive; node-origin output proves mirror or upstream",
+    "mirrorSource": "${{ inputs.mirror_base_url || vars.CI_TOOLS_MIRROR_BASE_URL }}"
   },
   {
     "workflow": ".github/workflows/test.yml",
@@ -442,12 +530,12 @@
   {
     "workflow": ".github/workflows/test.yml",
     "job": "test-macos-packaging",
-    "step": "actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1",
+    "step": "./.github/actions/bootstrap-ci-tools",
     "index": 4,
     "gate": true,
-    "fetches": "Node.js 24",
-    "coldOrigin": "GitHub manifest; nodejs.org distributions",
-    "decision": "independent fallback: keep only after blackhole run proves job budget (pending)",
-    "mirrorSource": "independent origin / explicit workflow CI_TOOLS_MIRROR for direct script consumers"
+    "fetches": "node",
+    "coldOrigin": "GitHub release assets; optional prepared hook mirror",
+    "decision": "lock: verify mirror first and bounded upstream second; hooks restore from digest-verified mirror archive, else build from config-pinned repositories (output mirror/cache/fallback). No consumer reads prepare-run artifacts.",
+    "mirrorSource": "${{ inputs.mirror_base_url || vars.CI_TOOLS_MIRROR_BASE_URL }}"
   }
 ]
