@@ -517,6 +517,7 @@ function ProfileSignOutAction(props: {
         )
       }
     >
+      {signOut.isPending ? <MutedAgentSpinner /> : null}
       Sign out
     </Button>
   );
