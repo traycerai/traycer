@@ -347,7 +347,9 @@ function collectCloudIndicatorEntry(
   const { entry, originHostId } = row;
   const contribution = mergeOptionalIndicatorFlags(
     indicatorContribution(entry),
-    countsTowardEntityUnread(entry) ? UNREAD_ROW_CONTRIBUTION : null,
+    entry.kind !== "feedback.drafted" && countsTowardEntityUnread(entry)
+      ? UNREAD_ROW_CONTRIBUTION
+      : null,
   );
   const { epicId, chatId } = entry;
   if (epicId !== null && accumulator.wantedEpicIds.has(epicId)) {
@@ -411,6 +413,7 @@ function indicatorContribution(
   entry: HostNotificationCloudEntryV27,
 ): HostNotificationsIndicatorState | null {
   if (
+    entry.kind === "feedback.drafted" ||
     entry.kind === "browser.human.needed" ||
     !("resolvedAt" in entry) ||
     entry.resolvedAt !== null ||
