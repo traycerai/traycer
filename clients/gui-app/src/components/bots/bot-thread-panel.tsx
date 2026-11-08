@@ -37,6 +37,7 @@ import { BotReadFailure } from "@/components/bots/bot-read-failure";
 import { BotReplyingStrip } from "@/components/bots/bot-replying-strip";
 import { useBotReplyingTurn } from "@/hooks/bots/use-bot-replying-turn";
 import { BotTaskList } from "@/components/bots/bot-task-list";
+import { TracyTranscriptOriginScope } from "@/components/bots/tracy-transcript-origin-scope";
 import { BotThreadFollowControl } from "@/components/bots/bot-thread-follow";
 import { ChannelPost } from "@/components/bots/bot-channel-post";
 import { useTabHostClient } from "@/hooks/host/use-tab-host-client";
@@ -47,6 +48,7 @@ import {
   failedOnRequest,
   useBotActivity,
 } from "@/hooks/bots/use-bot-activity";
+import { useBotBoxEdit } from "@/hooks/bots/use-bot-box-edit";
 import { useBotFailedRequest } from "@/hooks/bots/use-bot-failed-request";
 import type { BotImageReach } from "@/hooks/bots/use-bot-send-version";
 import type {
@@ -495,13 +497,15 @@ function ThreadOriginPost(
         chatId={conversationId}
         hostId={hostId}
       >
-        <ChatBotMessage
-          message={origin.row}
-          presentation={
-            origin.loaded ? loadedPresentation : unloadedPresentation
-          }
-          hoverActions={false}
-        />
+        <TracyTranscriptOriginScope botId={botId}>
+          <ChatBotMessage
+            message={origin.row}
+            presentation={
+              origin.loaded ? loadedPresentation : unloadedPresentation
+            }
+            hoverActions={false}
+          />
+        </TracyTranscriptOriginScope>
       </BotTranscriptImageScope>
       {queued ? (
         <div className="px-3">
@@ -657,8 +661,11 @@ function ThreadPanelBody(props: ThreadPanelBodyProps): ReactNode {
   // stays the box's edit while the list drops the thread and lists it again,
   // so what is sent still replaces that message: the host takes the
   // replacement under the post as it does in the thread.
-  const [edit, setEdit] = useState<BotComposerEdit | null>(null);
-  const endEdit = useCallback(() => setEdit(null), []);
+  const activity = useBotActivity(props.botId);
+  const { edit, setEdit, endEdit } = useBotBoxEdit(
+    activity,
+    props.originMessageId,
+  );
   // What the box holds unsent, kept under the bot: what the person typed,
   // or a draft Discuss put there, from the channel's card or this thread's.
   const { botId, originMessageId } = props;

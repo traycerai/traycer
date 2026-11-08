@@ -1,4 +1,6 @@
 import { useEffect, type ReactElement, type ReactNode } from "react";
+import { __setChatStreamClientFactoryForTests } from "@/lib/registries/chat-session-registry";
+import type { Message } from "@traycer/protocol/persistence/epic/schemas";
 import { createRoot } from "react-dom/client";
 import {
   createMemoryHistory,
@@ -183,6 +185,89 @@ function noop(): void {}
 
 const params = new URLSearchParams(window.location.search);
 
+// An opt-in host snapshot exercises the production transcript and list.
+if (params.get("loaded") === "true") {
+  const messages: Message[] = Array.from({ length: 30 }, (_, index) => ({
+    role: "user" as const,
+    messageId: `reply-${String(index)}`,
+    sender: { type: "user" as const, userId: VIEWER_ID },
+    sessionAnchor: null,
+    message: {
+      kind: "user" as const,
+      content: {
+        type: "doc",
+        content: [
+          {
+            type: "paragraph",
+            content: [
+              {
+                type: "text",
+                text: `Thread reply ${String(index)} — the release needs a careful review.`,
+              },
+            ],
+          },
+        ],
+      },
+      browserAnnotations: [],
+    },
+    timestamp: 2_000 + index,
+  }));
+  __setChatStreamClientFactoryForTests((_epicId, chatId, callbacks) => {
+    queueMicrotask(() => {
+      callbacks.onConnectionStatus("open", null, null, null);
+      callbacks.onSnapshot({
+        kind: "snapshot",
+        hasBinaryPayload: false,
+        epicId: "bot-1",
+        chatId,
+        snapshot: {
+          chat: {
+            id: chatId,
+            parentId: null,
+            userId: VIEWER_ID,
+            hostId: HOST_ID,
+            title: "Thread",
+            createdAt: 1,
+            updatedAt: 1,
+            isTitleEditedByUser: false,
+            settings: null,
+            activeSessionChain: null,
+            claudePendingWakes: [],
+            messages,
+            events: [],
+            archivedAt: null,
+            pinnedUserProviderHandle: null,
+            lastDeliveredRolesDigest: null,
+          },
+          access: { role: "owner", ownerUserId: VIEWER_ID, canAct: true },
+          queue: { status: "idle", items: [] },
+          runStatus: "idle",
+          turnInProgress: false,
+          sendWouldQueue: false,
+          activeTurn: null,
+          pendingApprovals: [],
+          pendingInterviews: [],
+          worktreeBinding: null,
+          missingWorktreePaths: [],
+          pendingFileEditApprovals: [],
+          accumulatedFileChanges: [],
+          managedCommands: [],
+          heldUpdates: [],
+          portForwards: [],
+        },
+      });
+    });
+    return {
+      sendAction: () => undefined,
+      sameTurnSteeringProtocolSupported: () => true,
+      draftBlobBridgeSupported: () => false,
+      requestTranscriptRange: () => undefined,
+      requestResnapshot: () => undefined,
+      close: () => undefined,
+    };
+  });
+}
+
 const keyboardInset = params.get("keyboard");
 if (keyboardInset !== null) {
   setPhoneLayoutOnly(true);
@@ -238,7 +323,15 @@ function panelThread(): BotThreadPanelThread {
         sendable: true,
       };
     default:
-      return { kind: "listed", thread, retry: null, sendable: true };
+      return {
+        kind: "listed",
+        thread:
+          params.get("loaded") === "true"
+            ? { ...thread, replyCount: 30 }
+            : thread,
+        retry: null,
+        sendable: true,
+      };
   }
 }
 

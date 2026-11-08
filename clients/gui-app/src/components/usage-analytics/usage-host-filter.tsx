@@ -53,38 +53,57 @@ export function UsageHostFilter(props: UsageHostFilterProps): ReactNode {
       </span>
     );
   }
+  const selected =
+    props.hostId === null
+      ? null
+      : (props.options.find((option) => option.hostId === props.hostId) ??
+        null);
   return (
-    <Select
-      value={usageHostFilterValue(props.hostId)}
-      onValueChange={(value) => {
-        props.onChange(usageHostFilterHostId(value));
-      }}
-    >
-      <SelectTrigger
-        size="sm"
-        aria-label="Host"
-        className="max-w-48"
-        data-testid="usage-host-filter"
+    <div className="flex min-w-0 max-w-sm flex-col items-start gap-1">
+      <Select
+        value={usageHostFilterValue(props.hostId)}
+        onValueChange={(value) => {
+          props.onChange(usageHostFilterHostId(value));
+        }}
       >
-        <SelectValue />
-      </SelectTrigger>
-      <SelectContent>
-        <SelectItem
-          value={USAGE_ALL_HOSTS_VALUE}
-          data-testid="usage-host-filter-all"
+        <SelectTrigger
+          size="sm"
+          aria-label={selected === null ? "Host" : selected.name}
+          className="max-w-48"
+          data-testid="usage-host-filter"
         >
-          {ALL_HOSTS_LABEL}
-        </SelectItem>
-        {props.options.map((option) => (
+          <SelectValue />
+        </SelectTrigger>
+        <SelectContent>
           <SelectItem
-            key={option.hostId}
-            value={option.hostId}
-            data-testid={`usage-host-filter-option-${option.hostId}`}
+            value={USAGE_ALL_HOSTS_VALUE}
+            data-testid="usage-host-filter-all"
           >
-            {option.name}
+            {ALL_HOSTS_LABEL}
           </SelectItem>
-        ))}
-      </SelectContent>
-    </Select>
+          {props.options.map((option) => (
+            <SelectItem
+              key={option.hostId}
+              value={option.hostId}
+              data-testid={`usage-host-filter-option-${option.hostId}`}
+            >
+              {option.name}
+            </SelectItem>
+          ))}
+        </SelectContent>
+      </Select>
+      {selected === null ? null : (
+        // The trigger keeps Select's one-line clamp. This line is the name
+        // in full, and it wraps. It is hidden from the accessibility tree
+        // because the trigger's accessible name is already that host.
+        <p
+          className="w-full text-pretty text-ui-xs whitespace-normal text-muted-foreground"
+          data-testid="usage-host-filter-selected-name"
+          aria-hidden="true"
+        >
+          {selected.name}
+        </p>
+      )}
+    </div>
   );
 }

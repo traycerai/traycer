@@ -14,16 +14,15 @@ import type { TeamRole } from "@/components/settings/members/types";
  */
 export function RoleGrant(props: {
   readonly role: TeamRole;
-  readonly teamName: string;
   readonly noticeText: string;
 }): ReactNode {
   return (
     <div className="flex flex-col gap-2" data-testid="role-grant">
       <p className="max-w-[72ch] text-ui-sm" data-testid="role-grant-prefix">
-        {roleGrantPrefix(props.role, props.teamName)}
+        {roleGrantPrefix(props.role)}
       </p>
       <p className="max-w-[72ch] text-ui-sm" data-testid="role-grant-common">
-        {roleGrantCommon(props.teamName)}
+        {roleGrantCommon()}
       </p>
       <HowTraycerHandlesThis noticeText={props.noticeText} />
     </div>

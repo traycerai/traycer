@@ -113,12 +113,10 @@ describe("catalog hooks carry the catalog response allowance", () => {
     const fixture = createFixture();
     renderHook(
       () =>
-        useGuiHarnessModelsQueryForClient(
-          fixture.client,
-          "claude",
-          null,
-          ACTIVE,
-        ),
+        useGuiHarnessModelsQueryForClient(fixture.client, "claude", null, {
+          profileId: null,
+          ...ACTIVE,
+        }),
       { wrapper: fixture.Wrapper },
     );
     await waitFor(() => {

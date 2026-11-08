@@ -213,28 +213,18 @@ describe("DemotionPreviewDialog", () => {
     ).toBe("Couldn't load what changing Priya's role interrupts.");
   });
 
-  it("still lets an editor go to viewer when the plan check cannot be read", () => {
-    renderFailedCheck({ currentRole: "editor", nextRole: "viewer" });
-    expect(
-      screen.getByTestId("members-demotion-confirm").hasAttribute("disabled"),
-    ).toBe(false);
-    expect(screen.getByTestId("members-demotion-loss").textContent).toBe(
-      "Priya can no longer change Acme's settings. They can still see them.",
-    );
-  });
-
   // What the role loses is the dialog's own description, so a screen reader is
   // read the question AND the thing it is about. Most demotions unlink no plan
   // and so have no plan lead to describe them; without this they would be
   // announced as the question alone.
   it("describes the dialog with what the role loses, plan or no plan", () => {
-    renderFailedCheck({ currentRole: "editor", nextRole: "viewer" });
+    renderFailedCheck({ currentRole: "admin", nextRole: "editor" });
 
     const dialog = screen.getByTestId("members-demotion-preview");
     const describedBy = dialog.getAttribute("aria-describedby");
     expect(describedBy).toBeTruthy();
     expect(document.getElementById(describedBy ?? "")?.textContent).toBe(
-      "Priya can no longer change Acme's settings. They can still see them.",
+      "Priya can no longer invite people, change roles or edit the approval policy.",
     );
   });
 
@@ -311,34 +301,6 @@ describe("DemotionPreviewDialog", () => {
     expect(text).not.toContain("Change role · ");
     expect(text).not.toContain("within a minute");
     expect(text).not.toContain("next turn");
-  });
-
-  it("gives an editor going to viewer its own question, loss line and button", () => {
-    renderDemotion({
-      currentRole: "editor",
-      nextRole: "viewer",
-      planLabel: "",
-    });
-    expect(
-      screen.getByText("Change Priya's role in Acme to viewer?"),
-    ).toBeTruthy();
-    expect(screen.getByTestId("members-demotion-loss").textContent).toBe(
-      "Priya can no longer change Acme's settings. They can still see them.",
-    );
-    expect(screen.getByTestId("members-demotion-confirm").textContent).toBe(
-      "Change to viewer",
-    );
-  });
-
-  it("says both losses when an admin goes straight to viewer", () => {
-    renderDemotion({
-      currentRole: "admin",
-      nextRole: "viewer",
-      planLabel: "",
-    });
-    expect(screen.getByTestId("members-demotion-loss").textContent).toBe(
-      "Priya can no longer invite people, change roles or edit the approval policy. Priya can no longer change Acme's settings. They can still see them.",
-    );
   });
 
   it("shows the plan rows only for a demotion that unlinks a plan", () => {

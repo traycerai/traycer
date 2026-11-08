@@ -32,6 +32,7 @@ import type {
 } from "@/lib/windows/types";
 import type { DesktopJsHeapBreakdown } from "@/lib/resources/desktop-app-resource-usage";
 import { formatMemoryBytes } from "@/lib/resources/format-resource-usage";
+import { setMobileApp } from "@/lib/mobile-app";
 import { RunnerHostProvider } from "@/providers/runner-host-provider";
 import type { IRunnerHost } from "@traycer-clients/shared/platform/runner-host";
 import { toast } from "sonner";
@@ -82,6 +83,7 @@ describe("<AppDiagnosticsSettingsPanel />", () => {
   const writeTextMock = vi.fn(() => Promise.resolve());
 
   beforeEach(() => {
+    setMobileApp(false);
     clearRunnerHostBridges();
     writeTextMock.mockClear();
     Object.defineProperty(navigator, "clipboard", {
@@ -93,6 +95,7 @@ describe("<AppDiagnosticsSettingsPanel />", () => {
   afterEach(() => {
     cleanup();
     clearRunnerHostBridges();
+    setMobileApp(false);
   });
 
   it("renders the app's three surfaces: the App log level row, Memory, and the Desktop Log entry", async () => {
@@ -184,6 +187,86 @@ describe("<AppDiagnosticsSettingsPanel />", () => {
     expect(
       screen.getByText("Recent logs are only available on the desktop app."),
     ).toBeTruthy();
+  });
+
+  describe("installed mobile app", () => {
+    const DESKTOP_ONLY = [
+      "Log level controls are only available on the desktop app.",
+      "Memory snapshots are only available on the desktop app.",
+      "Recent logs are only available on the desktop app.",
+    ] as const;
+
+    beforeEach(() => {
+      setMobileApp(true);
+    });
+
+    it("shows one explanation and no groups when no bridge is present", () => {
+      renderPanel(makeHost(null));
+
+      expect(
+        screen.getByTestId("app-diagnostics-unavailable").textContent,
+      ).toBe("App diagnostics are available on the desktop app.");
+      expect(
+        screen.getAllByText(
+          "App diagnostics are available on the desktop app.",
+        ),
+      ).toHaveLength(1);
+      expect(screen.queryByRole("heading", { name: "Log detail" })).toBeNull();
+      expect(screen.queryByRole("heading", { name: "Memory" })).toBeNull();
+      expect(screen.queryByRole("heading", { name: /Recent logs/ })).toBeNull();
+      for (const sentence of DESKTOP_ONLY) {
+        expect(screen.queryByText(sentence)).toBeNull();
+      }
+    });
+
+    it("shows Desktop Log when only the support bridge is present", async () => {
+      renderPanel(makeHost(makeSupportBridge({})));
+
+      expect(await screen.findByText("Desktop Log")).toBeTruthy();
+      expect(
+        screen.queryByText(
+          "Log level controls are only available on the desktop app.",
+        ),
+      ).toBeNull();
+      expect(screen.queryByRole("heading", { name: "Memory" })).toBeNull();
+    });
+
+    it("shows the App log level row when only the log-levels bridge is present", async () => {
+      installLogLevelsBridge(defaultSnapshot());
+      renderPanel(makeHost(null));
+
+      expect(
+        await screen.findByTestId("settings-log-level-desktop"),
+      ).toBeTruthy();
+      expect(screen.getByText("App log level")).toBeTruthy();
+      expect(
+        screen.queryByText(
+          "Recent logs are only available on the desktop app.",
+        ),
+      ).toBeNull();
+      expect(screen.queryByRole("heading", { name: "Memory" })).toBeNull();
+    });
+
+    it("shows Memory's capture control when only a heap bridge is present", () => {
+      installHeapSnapshotBridge(() => Promise.resolve(null));
+      renderPanel(makeHost(null));
+
+      expect(
+        screen.getByTestId("diagnostics-capture-heap-snapshot"),
+      ).toBeTruthy();
+      expect(screen.queryByRole("heading", { name: "Log detail" })).toBeNull();
+      expect(screen.queryByRole("heading", { name: /Recent logs/ })).toBeNull();
+      expect(
+        screen.queryByText(
+          "Log level controls are only available on the desktop app.",
+        ),
+      ).toBeNull();
+      expect(
+        screen.queryByText(
+          "Recent logs are only available on the desktop app.",
+        ),
+      ).toBeNull();
+    });
   });
 
   it("loads the log tail, copies it, and reveals the file", async () => {
@@ -703,6 +786,7 @@ describe("<AppDiagnosticsSettingsPanel />", () => {
         mobileApp: false,
         phoneLayout: false,
         soundtrackOffered: false,
+        soundtrackRecordingOffered: false,
         soundtrackOn: false,
       },
       document.body,
@@ -724,6 +808,7 @@ describe("<AppDiagnosticsSettingsPanel />", () => {
         mobileApp: false,
         phoneLayout: false,
         soundtrackOffered: false,
+        soundtrackRecordingOffered: false,
         soundtrackOn: false,
       },
       document.body,

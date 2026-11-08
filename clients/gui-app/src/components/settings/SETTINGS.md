@@ -645,18 +645,23 @@ resolving one that is not offered. Three surfaces present a choice and so read
 the offered list: the sidebar, the palette's settings sub-page
 (`navigation.source.ts`), and the leader digits (`keybindings/dispatch.ts`,
 which indexes positionally and must walk the same list the sidebar badges).
-Three more can arrive holding an id and each resolves it: the route (each
-unoffered section's own `beforeLoad` redirects to `/settings/general` with
-`replace` - `settings.keybindings.tsx`, `settings.link-phone.tsx`,
-`settings.delete-account.tsx`), the modal (falls back to General for any
-section the build does not offer, since its section is persisted across
-launches), and the palette's `help:keybindings` row, which is dropped rather
-than left as the one entry point that routes around the rest. Only Keybindings
-needs that last one; nothing navigates directly to Link mobile app or Delete
-account, so neither gets machinery it does not need.
+Three more can arrive holding an id and each resolves it: the route, the modal,
+and the palette. Keybindings, Link mobile app and Delete account each redirect
+in `beforeLoad` to `/settings/general` with `replace`
+(`settings.keybindings.tsx`, `settings.link-phone.tsx`,
+`settings.delete-account.tsx`). Application Diagnostics does not. The phone's
+offered list drops it, and `/settings/app-diagnostics` still renders the panel:
+one sentence when this shell has none of the desktop bridges, and only the
+groups whose bridges exist when one does. The modal falls back to General for
+any section the build does not offer, since its section is persisted across
+launches. The palette's `help:keybindings` row is dropped rather than left as
+the one entry point that routes around the rest. Only Keybindings needs that
+last one; nothing navigates directly to Link mobile app or Delete account, so
+neither gets machinery it does not need.
 
 **The list differs in both directions.** `MOBILE_APP_OMITTED_SECTION_IDS` names
-what the phone drops; `MOBILE_APP_ONLY_SECTION_IDS` names what only the phone
+what the phone drops (Keybindings, Link mobile app, and Application
+Diagnostics); `MOBILE_APP_ONLY_SECTION_IDS` names what only the phone
 has, which today is Delete account (see its entry under § Sections). Both lists
 are applied once at module load, so each build's offered list keeps ONE identity
 for the process's life - consumers memoize on it. That guarantee used to come
@@ -902,8 +907,8 @@ Account; the rest is the app itself.
   Details. The icon keeps the client kind as its accessible name.
 - **Environment** (group id `personal`) - Providers, MCP servers, Skills,
   Permissions, Agents (id `agents`: tabs Selection guide and Definitions),
-  Model routing, Variables & shells (id `shell`), Secrets, Sandboxes, and
-  Members on a team; a Local row shows only Providers, Permissions, Agents,
+  Model routing, Variables & shells (id `shell`), Secrets, Sandboxes,
+  Storage, and Members on a team; a Local row shows only Providers, Permissions, Agents,
   Model routing, Variables & shells and Secrets. Browser agent access is the
   Browser tab of Permissions (a region below the policy on a team, whose page
   has no tabs). `agent-definitions`,
@@ -933,7 +938,23 @@ other action lives once in **More**, including **Details**; a setup failure
 leads with **Retry setup**. Details holds the starter, agent/task purpose,
 sessions and setup evidence. Keep states the actual wake payer once, and the
 Size picker leaves pricing to its consequences line. The out-of-credits chat
-footer uses the list's payer sentence on a wrapping line above **Resume**.
+footer keeps the lifecycle state beside **Out of credits**, then the list's payer
+sentence and a dated **Will be removed on** line above **Resume** or **Add
+credits**. Blocking lifecycle overlays on other tiles hide the underlying body
+without unmounting it, so its status and buttons do not show through and terminal
+history returns on wake. Their frozen state also keeps the lifecycle word beside
+**Out of credits** and gives a future removal date.
+
+Folder groups in the fork, terminal, file-tree, Git Diff and History pickers are
+**Folders**, including accessible names, search and empty states, and the sentences
+that name the pick: **Select folder**, **Choose a bound folder**, **Choose a folder**,
+**No git folders available**, **Add folders to the agent to get started**, and
+**the folder you pick here**. Code identifiers remain workspace-based. Invitation review, Invite, Link a plan and Add an MCP
+server name the team or environment once in the heading; subsequent copy uses
+the team or this environment and keeps every grant, seat and sharing consequence.
+The team-host notice keeps shared access and billing in its resting line, names
+the team once, and puts host authority, browser placement and sign-in lifetime
+under **How access works**. Outside-team task readers remain visible at rest.
 
 MCP servers (`mcp-servers`) and Skills (`skills`) are pages of the
 configuration, read from the cloud on Personal and on a team alike, whatever
@@ -1217,14 +1238,17 @@ footer adds one, and everything else about a host lives on that host's Overview
 beside the local controller's own region in the SAME card).
 
 **Every host picker shares one row anatomy** (`host-scope/host-option-row.tsx`):
-a kind glyph and a full wrapping name, with state and environment marks below
-it. Supplemental composer and in-task facts (shape, rate, payer and
-compatibility) sit in Details; opening it never picks or wakes the host.
-The selected-host trigger also wraps its full name, with exceptional status
-below and no kind label. The rail keeps the “Viewing — the active host is …”
-note. The account menu states the activation consequence once in its section
-header; its rows only offer a tooltip if a name is cut off. Search appears
-from six hosts up; below that it is one more thing to skip past.
+a kind glyph and a one-line name beside its state and environment marks; a
+cut-off name remains available in full. Supplemental composer and in-task
+facts (shape, rate, payer and compatibility) sit in Details; opening it never
+picks or wakes the host. The rail trigger keeps icon, name, status and chevron
+on one row. Its name stays one line, and the full name is in a tooltip, the
+same as every other trigger. A staged sandbox's shape gear stays beside its
+trigger. The rail keeps the “Viewing — the active host is …” note. The account
+menu's Host list scrolls within the available menu height, keeping account
+actions visible; a pickable row's tooltip explains the activation consequence,
+and an unavailable row's tooltip reveals a cut-off name. Search appears from
+six hosts up; below that it is one more thing to skip past.
 
 Environment picker names also wrap in full. An outdated computer's row reads
 “Update to view these settings.” Its disabled state and Move sheet are unchanged.
@@ -1793,8 +1817,17 @@ means the drain UI renders NOTHING - never a zero, which would offer to end
   chrome carries the soundtrack; then its volume and what it follows, which stay
   editable while it is off. Pause is a setting (`soundtrackPaused`), so it holds
   across windows and restarts. Music cannot be left silent with no way back:
-  turning Music on, or these controls off, clears it. The id still says
-  notifications: the OS and push rows moved to Alerts, and ids do not change.
+  turning Music on, or these controls off, clears it. Last, on a dev or staging
+  desktop build (its bridge carries `soundtrackRecording`), **Record session**
+  (`panels/soundtrack-recording-row.tsx`): a switch that saves this window's
+  music and a log of what the engine decided into the desktop's own folder, with
+  **Stop after** and **Quality** under it. Those two persist and lock while it
+  records; the recording itself never persists, so every start of the app finds
+  it off. The switch is disabled until this window holds a session, which a
+  launch that kept the pause does not until Play, and the line under it counts
+  the audio time, holding through a pause, then names the saved session with
+  **Show in folder**. The id still says notifications: the OS and push rows moved
+  to Alerts, and ids do not change.
 - `Alerts` (`panels/alerts-settings-panel.tsx`, `/settings/alerts`): one
   group, **Notifications** (anchor `alerts-notifications`), where the alerts
   themselves are configured. **OS notifications** on a desktop with the
@@ -3468,7 +3501,7 @@ window`, recorded in the type as `coverage.browsersAreMountedOnly` -
       STATIC TEXT, so the most common case never looked like a choice. And both
       labelled folders by basename only, which cannot distinguish two worktrees
       of one repo.
-    - **Rows.** `Global` ("Every workspace on this host") sits above one row
+    - **Rows.** `Global` ("Every folder on this host") sits above one row
       per target. Targets come from `useMcpScope`: the resolved workspace
       folders, PLUS every worktree the host reports for them
       (`useWorktreeListByWorkspacePathsForClient`), deduped by path since a repo
@@ -3492,8 +3525,8 @@ window`, recorded in the type as `coverage.browsersAreMountedOnly` -
       legitimately empty on a fresh install or a host whose work happens
       elsewhere - and then the picker offered Global and nothing else, with no
       way to reach a project config at all. The list now says
-      "No workspaces added on this host yet." and carries an **Add a workspace
-      folder…** row driving the same `pickAndPrepareFolders` the Home workspace
+      "No folders added on this host yet." and carries an **Add a folder…**
+      row driving the same `pickAndPrepareFolders` the Home workspace
       selector uses, bound to the SETTINGS-selected client so a folder picked
       while viewing host B is prepared on B. The added folder becomes the
       selection; a cancelled pick changes nothing.
@@ -3507,7 +3540,7 @@ window`, recorded in the type as `coverage.browsersAreMountedOnly` -
       renders as a selected control that can be changed, rather than a
       sentence. With more than one candidate there is still no auto-pick.
     - A provider advertising only one `list` scope gets a plain "Applies to
-      every workspace on this host." line instead of a picker holding one dead
+      every folder on this host." line instead of a picker holding one dead
       option; the wording matches the Global row so the two never disagree.
       Plugins and Skills remain hardcoded global-scope and get no picker.
     - The OAuth resume key is `{providerId, scope, workspaceRoot, hostId}`
@@ -5779,6 +5812,66 @@ wrap`). Each row names the account its first usable match runs on, the
   - **No per-chat and no per-task control exists anywhere in the app**, by
     decision. The harness/model picker and the composer gain nothing from this
     feature; per-chat intervention is the actions on the cards themselves.
+- `Storage` (Environment, section id `storage`, route `/settings/storage`,
+  `environment/storage-settings-panel.tsx`): what the picked configuration's
+  hosts keep on disk. It is offered for Personal and teams, and not on a
+  Local row (`PAGES_HIDDEN_BY_PICK`), since its settings are an environment
+  item. Later storage rows go here too.
+  - **The storage policy** (`panels/storage-policy-section.tsx`,
+    `data-testid="storage-policy"`), two groups:
+    - **Tasks you haven't used lately**, a card of three rows:
+      - **Chats**, a switch: "Keep them in the cloud instead of on disk."
+      - **Artifacts**, a switch, with the same description.
+      - **When**, a select: "When to clean up a task nobody has used."
+        Options "When the disk is getting full" (no window), "After 7 days",
+        "After 14 days", "After 30 days", "After 90 days". Disabled only while
+        both switches are off, since the window cleans whichever kinds are on.
+    - **Archived chats**, a card of one row:
+      - **When**, a select: "Counted from the chat's last activity." Options
+        "Never", "After 4 hours", "After 1 day", "After 7 days", "After 30
+        days". It is independent of both switches, so no switch disables it.
+    - A stored window that is not one of the options is listed too, so the
+      select shows what is in force: "After N days" for idle tasks, and for
+      archived chats "After N hours" below 24 or when it is not a whole
+      number of days, else "After N days" ("After 1 hour", "After 1 day"
+      for one).
+    - Each select's accessible name adds its group ("Archived chats: When"),
+      since both rows read "When".
+    - A line under the groups says what applies. "Applies on every host in
+      this environment." shows while anything can be cleaned, and "A chat
+      comes back when an agent continues it." follows it only while Chats is
+      on or Archived chats is not Never. With nothing cleanable there is no
+      line.
+  - It is the configuration's `storage_policy` item (key `storage`, value
+    `{ chats, artifacts, idleTaskDays, archivedChatHours }`, the idle window
+    in whole days and the archived-chat window in whole hours, each or
+    `null`; `hooks/environment/use-storage-policy.ts`), read through the pool
+    tier like the sandbox defaults. The pick names the environment:
+    Personal's own, or the team's. **No item reads as the defaults**, both
+    switches on, no idle window and archived chats after 4 hours. An item
+    whose value does not parse reads as nothing cleanable, both switches off
+    and Archived chats Never, because the hosts then clean up nothing.
+  - Every control writes the whole value through
+    `environment.configuration.items.put` with the revision it read (`null`
+    creates the item), so a concurrent edit of one field cannot lose
+    another. While the write is pending, every control shows the value being
+    saved, is disabled, and the changed control has a spinner beside it. A
+    refused write drops back to the value read, and the shared mutation's
+    toast says why. A stale or refused outcome shows
+    `ConfigurationWriteFeedback` under the groups. A viewer of a team
+    configuration sees every control disabled. A failed read says so on the
+    Chats row, with Retry.
+  - The section draws nothing on a host that does not advertise the item
+    write (`useHostSupportsMethod`, asked of the host the write goes
+    through). It is keyed by the viewer, like the auto-archive row, so a
+    pending save never outlives an account switch.
+  - The item changes nothing a host reports (`UNREPORTED_ITEM_KINDS`), so
+    the page carries no status chip, like Sandboxes. Search folds both groups
+    and every row into the Storage page entry (`contributesTo: "page"`): they
+    are gated on the host, which no search shell can decide, so none is an
+    anchored entry and none has a search fixture. The two "When" rows share
+    that one entry, whose page shows both, and their keywords keep "idle" and
+    "archived" apart.
 - `Keybindings` Keyboard shortcut customization.
 - `Shell` Shell binary + args used for every terminal PTY
   (`TerminalSessionManager` reads the effective config per spawn, file-watched,
@@ -6208,8 +6301,11 @@ set-state-in-effect` forbids the effect form, and an effect would also
     grouped by repo under quiet, collapsible headers (`WorktreeRepoHeader`).
     A worktree owned by exactly one Task joins a Task group of that repo:
     the header names the Task (wrapping, and a button when the title is
-    known) with the repo under it, and that Task's merge caption once. Rows
-    in the group keep their own PR state and drop the Task title. A worktree
+    known) with the repo under it, and that Task's merge caption once. Task
+    headers share the panel surface with a thin divider; repository headers
+    keep their background fill. Rows
+    in the group keep the primary PR inline and other PRs in the bounded,
+    scrollable **More pull requests** popover, and drop the Task title. A worktree
     with no Task, or with more than one, stays in the repo's other group and
     keeps one Task label. Names wrap rather than truncating. On a narrow
     window (under 768px, and in the installed phone app) the list toolbar
@@ -6327,9 +6423,12 @@ set-state-in-effect` forbids the effect form, and an effect would also
 
   Exceptions sit below the state: offline, update required, settings failure,
   out of credits with the payer and removal date, withdrawal and update progress.
-  One line states `Settings: <source>`, with Change opening the existing choices
-  where available and the existing Details link. Team sources remain read-only.
-  The separate Runs line is gone.
+  The standard Settings row has a one-line description and a compact source
+  select at the far right. Personal and This computer only open the existing
+  confirmations where available; a team source uses the same select, disabled
+  until the host supports changing it. Details retains the configuration facts.
+  Out of credits sits beside a frozen sandbox's lifecycle state. The separate
+  Runs line is gone.
 
   Tabs follow immediately: **Sandbox** (only for sandbox hosts), then
   **Installation · Updates · Access and setup · Data · Ports · Mobile simulators**.
@@ -6475,12 +6574,14 @@ set-state-in-effect` forbids the effect form, and an effect would also
        Remote access row: Not set, Turn on and Not now. Its capability and ownership
        gates, mutation and per-host remembered choice are unchanged. Once answered,
        the same row shows On, Off or Turning off. It no longer occupies the header.
-       `HostEnvironmentSection` mounts the single Settings source line described above.
+       `HostEnvironmentSection` mounts the standard Settings row described above.
        The settings source (`panels/host-overview-settings-card.tsx`) uses the
        existing personal/local choices, move sheet and stop-sharing confirmation.
-       Progress replaces the source while a move runs or has stopped. The existing
-       Details link retains dates and the sharing history. A team's source is
-       read-only. A sandbox retains its known source while its host is unreachable.
+       Progress replaces the description while a move runs or has stopped, with
+       the select disabled. Details retains dates and the sharing history. A team
+       source stays visible in the disabled select and the row says "Runs the team's settings."; the team's name is that select's value. Transfer choices appear only
+       when a host supports them. A sandbox retains its known source in the same
+       disabled control while its host is unreachable, with that same sentence when the source is a team.
        The create-bot form's "Set one up in Settings" link opens this
        page. The sidebar's host list shows each host's environment label
        beside its name (`HostOptionRow`'s `environmentLabel`, resolved by
@@ -6606,27 +6707,27 @@ set-state-in-effect` forbids the effect form, and an effect would also
       remote host's page says nothing about the app in this window, and a
       browser has no app to update. It needs no route to the host, so it
       stays while the host cannot be reached. Nothing is drawn until the
-      updater's first snapshot names a version.
+      updater's first snapshot names a version. Quiet states (idle, checking,
+      up to date and unavailable) draw no row.
     - **One snapshot, no machinery.** It reads the snapshot the header's
       update button and the update toast read, and runs the same download
       (`bridge.downloadUpdate()`) and the same guarded restart
       (`requestAppUpdateInstall`), so the three cannot disagree.
 
-      | Updater state                                         | State line            | Control                             |
-      | ----------------------------------------------------- | --------------------- | ----------------------------------- |
-      | a finished check found nothing                        | `Up to date (vX)`     | none                                |
-      | `available`                                           | `vY available`        | Download                            |
-      | `downloading`                                         | `Downloading N%`      | Download, waiting, with a spinner   |
-      | `ready`                                               | `vY ready`            | Restart                             |
-      | `ready` with `installGuidance`                        | `vY ready`            | Finish update (the guidance dialog) |
-      | `error` with `installGuidance`                        | `Update not finished` | Finish update (the guidance dialog) |
-      | anything else (checking, a plain error, no check yet) | `vX`                  | none                                |
+      | Updater state                           | State line            | Control                             |
+      | --------------------------------------- | --------------------- | ----------------------------------- |
+      | `available`                             | `vY available`        | Download                            |
+      | `downloading`                           | `Downloading N%`      | Download, waiting, with a spinner   |
+      | `ready`                                 | `vY ready`            | Restart                             |
+      | `ready` with `installGuidance`          | `vY ready`            | Finish update (the guidance dialog) |
+      | `error` with `installGuidance`          | `Update not finished` | Finish update (the guidance dialog) |
+      | `error` without guidance                | `Update failed`       | none                                |
+      | idle, checking, up to date, unavailable | no row                | none                                |
 
-    - **"Up to date" is a claim about a check.** The updater publishes
-      `up-to-date` only for a check the user asked for; an automatic check
-      that finds nothing returns to `idle` with the check time and the feed's
-      latest version set. Both read "Up to date". An `idle` without them, and
-      every other state, shows the version and claims nothing.
+    - **Failures stay visible.** An error without install guidance shows
+      the failure message without an action. Available and downloading updates
+      keep the running version as their detail; no row explains the relationship
+      between the app and host updates.
     - **An `error` carrying `installGuidance` keeps Finish update, and
       names no version.** A Linux deb/rpm install whose privilege prompt
       failed reports the failure AND the steps that finish the downloaded
@@ -6648,12 +6749,12 @@ set-state-in-effect` forbids the effect form, and an effect would also
       return it (measured in the app's engine; jsdom keeps it, so no Vitest
       case can see the difference). Native `disabled` is only the blocked
       install. When the control does go (a failed download, a withdrawn
-      candidate) while it holds the focus, the row itself takes it. The
-      row's `role="status"` region is always mounted and empty when quiet,
+      candidate) while it holds the focus, the row takes it if still present.
+      The row's `role="status"` region stays mounted while an update is present,
       for the reason the answer card's is; it says the download began (never
       its percentage), that the update is ready (and, when it is, that
-      finishing needs a manual step), and that the restart began. A failure
-      is the update toast's to report, here as everywhere.
+      finishing needs a manual step), and that the restart began. Failures
+      remain visible in the row as well as the update toast.
   - **The restart offer** that opens by itself (`deriveActivationAutoOpen`)
     stays at panel level, so it opens over whichever tab is showing.
   - **One component per tab**, each drawing what the panel hands it; the
@@ -6669,8 +6770,8 @@ set-state-in-effect` forbids the effect form, and an effect would also
 
     | Tab               | File                                 | What lives there                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                  |
     | ----------------- | ------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-    | Installation      | `host-overview-installation-tab.tsx` | About this host (`host-overview-about-this-host.tsx`, known account facts only, so it reads offline), a compact line when there is no install record or the record's remaining facts, Details (platform, architecture, the running build version, the registry version only when it differs, Host ID, service identifier and manifest path), OS service (`host-overview-os-service-section.tsx`) - both replaced by one needs-a-connection line when unreachable - then Command-line tools (this computer only, `host-settings-package-manager-upgrade-hint.tsx`, which also draws the trigger's dot), the Danger zone last                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                       |
-    | Updates           | `host-overview-updates-tab.tsx`      | The answer card, only when the answer has news or an action (`host-overview-updates.tsx`: icon, title, the update answer, Update now or the command-line-tools fix, the failed-attempt footer), the Traycer Desktop row (`host-overview-desktop-app-row.tsx`: the app's own update, desktop app and this machine's host only), a single-row auto-update group without a drawn label, then Install a different version (`host-overview-version-picker.tsx`) with Check now on its heading, its release-candidate choice, version list and inline refusal                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                           |
+    | Installation      | `host-overview-installation-tab.tsx` | A compact line when there is no install record or the record's remaining facts, Details (Added to account and the unseen-host note from `host-overview-about-this-host.tsx`, platform, architecture, the running build version, the registry version only when it differs, Host ID, service identifier and manifest path), OS service (`host-overview-os-service-section.tsx`) - both replaced by one needs-a-connection line when unreachable - then Command-line tools (this computer only, `host-settings-package-manager-upgrade-hint.tsx`, which also draws the trigger's dot), the Danger zone last                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                         |
+    | Updates           | `host-overview-updates-tab.tsx`      | The answer card, only when the answer has news or an action (`host-overview-updates.tsx`: icon, title, the update answer, Update now or the command-line-tools fix, the failed-attempt footer), the Traycer Desktop row (`host-overview-desktop-app-row.tsx`: the app's available, downloading, ready or failed update, desktop app and this machine's host only), a single-row auto-update group without a drawn label, then Install a different version (`host-overview-version-picker.tsx`) with Check now on its heading, its release-candidate choice, version list and inline refusal                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                       |
     | Data              | `host-overview-data-tab.tsx`         | Import & migration (`HostImportMigrationSection`), Version history (`ArtifactVersionSettingsSection`), then an unlabeled File edit snapshots group (`HostFileEditSnapshotsSection`); one disk connection line replaces all groups when unreachable                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                |
     | Ports             | `host-overview-ports-tab.tsx`        | `HostPortForwardsCard`, on every host: one sentence when there is no list (connecting, unreachable, older host, failed read, nothing forwarded), else Forwards on this host and Ports other machines hold here, then Refresh; the trigger's count                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 |
     | Mobile simulators | `host-overview-simulators-tab.tsx`   | One card: the **Use mobile simulators** switch (`config.simulator.get`/`.set`; one sentence in its place while the host has not advertised them or cannot), with the platform status folded into its description while off; **Platforms** only while on; **Check again** (`useSimulatorRecheck`: asks this host's `simulator.status`, `simulator.list` and `simulator.instances` (which holds the palette's inventory) again, and the host probes for Xcode and the Android SDK on each read) whenever a platform is unavailable, beside the switch while off and on Platforms while on, so a toolchain installed after the first read shows without a restart; **Simulator tools** while on (Installing with a bar, Installed with the version, Failed with Try again, Not needed), and while off only when the tools are still downloaded ("Downloaded, N MB. Mobile simulators are off." with Remove, behind a confirm). No agent row: the one switch grants agents the device too. On a `@1.1` host, while on: **Running now** (`host-overview-simulator-instances.tsx`, `simulator.instances` polled every 10 s while shown): every instance booted on the machine, with its OS version, "Copy of …" for a clone, a link to each task holding it that the viewer can see (its title from the app's task lists, else the short id) and "+N other" for the rest, the Agent badge while an agent drives it and the idle countdown; **Power off** (`simulator.powerOff`, first with `confirm: false`; a `confirm-required` answer, a mid-turn agent on it, asks before sending `confirm: true`) and, for an instance Traycer booted, **Keep running** (`simulator.setKeepRunning`); and **Power off when idle**, the idle window in minutes, written as `{ enabled: null, idleMinutes }` so it never flips the switch. The tab trigger carries the running count (`HostOverviewSimulatorsCount`) |
@@ -7329,17 +7430,17 @@ set-state-in-effect` forbids the effect form, and an effect would also
       than disabled, since the card reports the park and the header's menu
       item carries the reason - and an open confirm closes when its method
       is withdrawn or its region retires.
-  - **Installation**, top to bottom: About this host, the install line or
-    record, Details, OS service, Command-line tools, Danger zone.
-    - **About this host** (`host-overview-about-this-host.tsx`) reads the
+  - **Installation**, top to bottom: the install line or record, Details,
+    OS service, Command-line tools, Danger zone.
+    - **Account facts in Details** (`host-overview-about-this-host.tsx`) read the
       ACCOUNT's host record - the `HostListItem` the panel already holds
       (`scope.host.item`), never a host RPC - so it reads the same while the
-      host connects or cannot be reached. It shows only facts the account has:
-      Added to account (`createdAt`), and, when `lastSeenAt` is null,
+      host connects or cannot be reached. Plain rows show only facts the account
+      has: Added to account (`createdAt`), and, when `lastSeenAt` is null,
       "Not seen since it was added". The header owns the last-seen time.
-      A host the account has no record of gets no group, as it gets no Danger
-      zone.
-    - **Details** holds platform, architecture, build version, the registry's
+      A host the account has no record of gets no account facts, as it gets no
+      Danger zone.
+    - **Details** holds the account facts above, platform, architecture, build version, the registry's
       last-reported version when that display differs from the build version,
       and Host ID (shortened, with copy; Copy host ID stays in the `⋯` menu
       too). Build version is `view.hostVersion ?? host.version`, labelled
@@ -7364,8 +7465,8 @@ set-state-in-effect` forbids the effect form, and an effect would also
     - The install record and the OS service are the tab's host reads. While
       the host connects they are the loading shape; when it cannot be reached
       one line replaces both - "The install record and OS service are read
-      from <host>, so they need a connection." - and About this host, Details
-      (from the account, not labelled live), Command-line tools and the Danger
+      from <host>, so they need a connection." - and Details
+      (including the account facts, not labelled live), Command-line tools and the Danger
       zone stay.
     - **Command-line tools** (this computer only, behind the panel's
       `hasLocalBridge`) is the package-manager upgrade hint with its command
@@ -7501,9 +7602,15 @@ level`, `Host log level` and the host's log tails described the selected host.
   own `App log level` row, the **Memory** heap capture, and the **Desktop Log**
   entry. Takes no host scope, mounts no `HostScopeGate`, and stands up no
   `HostClient` - if any of that becomes necessary to render it, something
-  host-varying has moved back on. Its two bridges are independent
-  (`platform.logLevels` and `platform.diagnostics`), so each states its own
-  unavailability and a shell missing one still gets the other.
+  host-varying has moved back on. Its bridges are independent
+  (`platform.logLevels`, the heap bridges, and `platform.diagnostics`), so a
+  shell that has one still draws that one. On the desktop and in a browser the
+  page stays in the rail, and a missing bridge is stated inside its own group
+  so the search anchors stay on the page. The installed mobile app drops the
+  rail, search and palette entry, because that shell has none of those bridges.
+  The route does not redirect. A direct link renders one sentence, "App
+  diagnostics are available on the desktop app.", and no placeholder cards. A
+  bridge that is present still draws only its own group.
 
 - `Diagnostics` (Host, `diagnostics-settings-panel.tsx`) `CLI log level`,
   `Host log level` and that host's own log files, over its
@@ -7553,9 +7660,12 @@ level`, `Host log level` and the host's log tails described the selected host.
     ("Log level controls are only available on the desktop app") was a claim
     about the SHELL, and after the split it would have been the host page's only
     empty state - telling someone whose host is merely too old to install an app
-    they are already running. The app page keeps that copy, because there it is
-    the real reason; the host page states the host's version instead, or renders
-    no card when the logs region is already stating it. A zero-log response is
+    they are already running. The desktop app page keeps that copy inside the
+    group, because there it is the real reason and the search anchor has to land
+    on the card. The installed mobile app does not draw those cards at all (see
+    the Application entry above). The host page states the host's version
+    instead, or renders no card when the logs region is already stating it. A
+    zero-log response is
     likewise explicit ("No log files on &lt;host&gt;.") rather than an empty card.
 - `Usage` (`usage-settings-panel.tsx`, in the **Account** group beside
   Sessions - see "Scope: the organising idea" above for why it is not under

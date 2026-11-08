@@ -38,6 +38,7 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
+import { TooltipWrapper } from "@/components/ui/tooltip-wrapper";
 import { PaletteItemRow } from "@/components/command-palette/palette-item-row";
 import { PinToggle } from "@/components/command-palette/pin-toggle";
 import { SubpageView } from "@/components/command-palette/palette-cmdk";
@@ -144,7 +145,9 @@ export function CommandPaletteShell(props: CommandPaletteShellProps) {
     <Dialog open={open} onOpenChange={handleOpenChange}>
       <DialogContent
         layout="banded"
-        className="top-[15vh] w-full max-w-[min(90vw,40rem)] translate-y-0 overflow-hidden"
+        // Anchored high; the height cap is the primitive's safe-viewport cap
+        // less that anchor, so the list ends above the bottom inset.
+        className="top-[15vh] flex max-h-[calc(var(--spacing-safe-dvh)-var(--spacing-safe-bottom)-15vh)] w-full max-w-[min(90vw,40rem,var(--safe-area-width))] translate-y-0 flex-col overflow-hidden sm:max-w-[min(90vw,40rem,var(--safe-area-width))]"
         showCloseButton={false}
         // Radix's document-level Esc listener can't be reached via React
         // propagation; `onEscapeKeyDown` + `preventDefault` is the first-party
@@ -161,6 +164,7 @@ export function CommandPaletteShell(props: CommandPaletteShellProps) {
           <DialogDescription>Search for a command to run.</DialogDescription>
         </DialogHeader>
         <Command
+          className="min-h-0"
           filter={paletteFilter}
           label="Search commands"
           onKeyDown={handleKeyDown}
@@ -176,7 +180,7 @@ export function CommandPaletteShell(props: CommandPaletteShellProps) {
             />
             <CommandList
               ref={listRef}
-              className="min-h-[min(50vh,20rem)] max-h-[60vh]"
+              className="max-h-[60vh] min-h-0"
               data-testid="command-palette-list"
             >
               {activeSubpage !== null ? (
@@ -231,13 +235,19 @@ export function RootView(props: RootViewProps) {
     [items, effectiveScope],
   );
   const defaultBuckets = useMemo(() => bucketItems(scopedItems), [scopedItems]);
+  // The main bots lead the list and show only there: one that is pinned or
+  // recent is not repeated in those groups.
+  const belowMainBots = useMemo(
+    () => scopedItems.filter((item) => item.group !== "mainBots"),
+    [scopedItems],
+  );
   const pinned = useMemo(
-    () => buildPinnedBucket(pinnedIds, scopedItems),
-    [pinnedIds, scopedItems],
+    () => buildPinnedBucket(pinnedIds, belowMainBots),
+    [pinnedIds, belowMainBots],
   );
   const recents = useMemo(
-    () => buildRecentsBucket(recentIds, scopedItems),
-    [recentIds, scopedItems],
+    () => buildRecentsBucket(recentIds, belowMainBots),
+    [recentIds, belowMainBots],
   );
 
   const pinnedIdSet = useMemo(() => new Set(pinnedIds), [pinnedIds]);
@@ -249,10 +259,13 @@ export function RootView(props: RootViewProps) {
     pinnedIdSet.forEach((id) => hidden.add(id));
     if (showRecents) recentIdSet.forEach((id) => hidden.add(id));
     const trimmed = defaultBuckets.flatMap((bucket): CommandGroupBucket[] => {
+      if (bucket.id === "mainBots") return [];
       const items = bucket.items.filter((item) => !hidden.has(item.id));
       return items.length > 0 ? [{ ...bucket, items }] : [];
     });
     const buckets: Array<CommandGroupBucket> = [];
+    const mainBots = defaultBuckets.find((bucket) => bucket.id === "mainBots");
+    if (mainBots !== undefined) buckets.push(mainBots);
     if (pinned !== null) buckets.push(pinned);
     if (showRecents && recents !== null) buckets.push(recents);
     const ordered = [...buckets, ...trimmed];
@@ -328,7 +341,14 @@ function GroupBlock(props: GroupBlockProps) {
             keywords={[...item.keywords]}
             onSelect={() => onSelect(item)}
           >
-            <span className="truncate">{item.label}</span>
+            <TooltipWrapper
+              label={item.label}
+              side="bottom"
+              sideOffset={undefined}
+              align={undefined}
+            >
+              <span className="truncate">{item.label}</span>
+            </TooltipWrapper>
             <PinToggle
               itemId={item.id}
               pinned={pinnedIdSet.has(item.id)}
@@ -336,13 +356,21 @@ function GroupBlock(props: GroupBlockProps) {
             />
             {item.hint !== undefined ? (
               // At most half the row, truncating, so a long team name never
-              // pushes the label it qualifies out of a narrow palette.
-              <span
-                data-slot="command-item-hint"
-                className="ml-auto max-w-1/2 min-w-0 truncate text-ui-xs text-muted-foreground"
+              // pushes the label it qualifies out of a narrow palette. The
+              // tooltip is the rest of that name once the row cuts it.
+              <TooltipWrapper
+                label={item.hint}
+                side="bottom"
+                sideOffset={undefined}
+                align={undefined}
               >
-                {item.hint}
-              </span>
+                <span
+                  data-slot="command-item-hint"
+                  className="ml-auto max-w-1/2 min-w-0 truncate text-ui-xs text-muted-foreground"
+                >
+                  {item.hint}
+                </span>
+              </TooltipWrapper>
             ) : null}
             {item.shortcut !== null ? (
               <CommandShortcut>

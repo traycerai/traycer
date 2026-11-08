@@ -284,6 +284,7 @@ function mountComposer() {
         sendDisabled={false}
         sendDisabledHint={null}
         mentionRoots={["/repo"]}
+        runWorkingDirectory={null}
         fallbackToGlobalMentionRoots={false}
         currentEpicId={null}
         viewTabId={null}

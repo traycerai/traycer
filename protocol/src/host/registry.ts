@@ -394,7 +394,9 @@ import {
   agentGuiListHarnessesV101,
   agentGuiListModelsV10,
   agentGuiListModelsV11,
+  agentGuiListModelsV12,
   agentGuiListModelsUpgradeV10ToV11,
+  agentGuiListModelsUpgradeV11ToV12,
   chatSubscribeV10,
   chatSubscribeV11,
   chatSubscribeV12,
@@ -807,6 +809,7 @@ import {
   hostGetRateLimitUsageDowngradeV6ToV4,
   hostGetRateLimitUsageDowngradeV6ToV5,
   providersConsumeRateLimitResetCreditV10,
+  providersReadModelRoutesV10,
   providersRefreshProfileStatusV10,
   providersRefreshProfileStatusV20,
   providersRefreshProfileStatusV30,
@@ -901,14 +904,17 @@ import {
   epicGrantAccessUpgradeV10ToV11,
   epicChatBackupStatusV10,
   epicChatReplicaReadV10,
+  epicHydrateChatV10,
   epicFetchArtifactAttachmentV10,
   epicListChatRecordsUpgradeV10ToV11,
   epicListChatRecordsUpgradeV11ToV12,
   epicListChatRecordsUpgradeV12ToV13,
+  epicListChatRecordsUpgradeV13ToV14,
   epicListChatRecordsV10,
   epicListChatRecordsV11,
   epicListChatRecordsV12,
   epicListChatRecordsV13,
+  epicListChatRecordsV14,
   epicGetChatRunSettingsDowngradeV20ToV10,
   epicGetChatRunSettingsDowngradeV30ToV10,
   epicGetChatRunSettingsDowngradeV30ToV20,
@@ -1265,6 +1271,7 @@ import {
   hostNotificationsCloudFeedSubscribeV15,
   hostNotificationsCloudFeedSubscribeV16,
   hostNotificationsCloudFeedSubscribeV17,
+  hostNotificationsCloudFeedSubscribeV18,
   hostNotificationsCloudFeedMarkRead,
   hostNotificationsCloudFeedMarkAllRead,
   hostNotificationsCloudFeedResolve,
@@ -1282,6 +1289,7 @@ import {
   resourcesSubscribeV13,
   resourcesSubscribeV14,
   resourcesSubscribeV15,
+  resourcesSubscribeV16,
   resourcesKillV10,
   resourcesListLocalServersDowngradeV20ToV10,
   resourcesListLocalServersUpgradeV10ToV20,
@@ -7498,6 +7506,19 @@ const HOST_RPC_REGISTRY_BASE_DEFINITION = {
       downgradePathsFromLatest: {},
     },
   },
+  "providers.readModelRoutes": {
+    degrade: { kind: "unsupported" },
+    1: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: providersReadModelRoutesV10,
+          upgradeFromPreviousVersion: null,
+        },
+      },
+      downgradePathsFromLatest: {},
+    },
+  },
   "host.notificationHooks.status": {
     degrade: { kind: "unsupported" },
     1: {
@@ -8012,7 +8033,7 @@ const HOST_RPC_REGISTRY_BASE_DEFINITION = {
   },
   "agent.gui.listModels": {
     1: {
-      latestMinor: 1,
+      latestMinor: 2,
       versions: {
         0: {
           contract: agentGuiListModelsV10,
@@ -8021,6 +8042,10 @@ const HOST_RPC_REGISTRY_BASE_DEFINITION = {
         1: {
           contract: agentGuiListModelsV11,
           upgradeFromPreviousVersion: agentGuiListModelsUpgradeV10ToV11,
+        },
+        2: {
+          contract: agentGuiListModelsV12,
+          upgradeFromPreviousVersion: agentGuiListModelsUpgradeV11ToV12,
         },
       },
       downgradePathsFromLatest: {},
@@ -10571,9 +10596,12 @@ const HOST_RPC_REGISTRY_BASE_TAIL_DEFINITION = {
   // poll that has nothing to report costs a few hundred bytes instead of the
   // re-encoded registry. @1.2 stays installed and its callers keep receiving
   // the unconditional snapshot.
+  // @1.4 says on each row whether this host has dropped the chat's records
+  // (`evicted`). One added key under the snapshot's `chats[]`; a @1.3 peer's
+  // rows upgrade with `false`, which is what every older host's chats are.
   "epic.listChatRecords": {
     1: {
-      latestMinor: 3,
+      latestMinor: 4,
       versions: {
         0: {
           contract: epicListChatRecordsV10,
@@ -10641,6 +10669,28 @@ const HOST_RPC_REGISTRY_BASE_TAIL_DEFINITION = {
           // sends `null` is served a snapshot too - and neither replaces the
           // other.
           responseGrowthProjectionGated: true,
+        },
+        4: {
+          contract: epicListChatRecordsV14,
+          upgradeFromPreviousVersion: epicListChatRecordsUpgradeV13ToV14,
+          // No `responseGrowthProjectionGated`: `evicted` is a plain added
+          // key on the `snapshot` arm's rows, which zod strips for a 1.3
+          // peer, and the root union is 1.3's unchanged.
+        },
+      },
+      downgradePathsFromLatest: {},
+    },
+    degrade: { kind: "unsupported" },
+  },
+  // Brings an evicted chat (`evicted` on the row above) back onto its host
+  // before a message is sent to it. A host without it evicts no chat.
+  "epic.hydrateChat": {
+    1: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: epicHydrateChatV10,
+          upgradeFromPreviousVersion: null,
         },
       },
       downgradePathsFromLatest: {},
@@ -15184,7 +15234,7 @@ const HOST_STREAM_RPC_REGISTRY_NOTIFICATIONS_DEFINITION = {
   },
   "host.notifications.cloudFeed.subscribe": {
     1: {
-      latestMinor: 7,
+      latestMinor: 8,
       versions: {
         0: {
           contract: hostNotificationsCloudFeedSubscribeV10,
@@ -15210,6 +15260,7 @@ const HOST_STREAM_RPC_REGISTRY_NOTIFICATIONS_DEFINITION = {
         },
         6: { contract: hostNotificationsCloudFeedSubscribeV16 },
         7: { contract: hostNotificationsCloudFeedSubscribeV17 },
+        8: { contract: hostNotificationsCloudFeedSubscribeV18 },
       },
     },
   },
@@ -15703,7 +15754,7 @@ const HOST_STREAM_RPC_REGISTRY_CORE_DEFINITION = {
 const HOST_STREAM_RPC_REGISTRY_FEATURE_DEFINITION = {
   "resources.subscribe": {
     1: {
-      latestMinor: 5,
+      latestMinor: 6,
       versions: {
         0: {
           contract: resourcesSubscribeV10,
@@ -15728,6 +15779,11 @@ const HOST_STREAM_RPC_REGISTRY_FEATURE_DEFINITION = {
         // only a visible resource monitor asks for interactive refresh.
         5: {
           contract: resourcesSubscribeV15,
+        },
+        // @1.6 adds the host's processor count without changing the per-core
+        // CPU readings that every earlier negotiated minor still receives.
+        6: {
+          contract: resourcesSubscribeV16,
         },
       },
     },

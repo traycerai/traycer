@@ -171,12 +171,12 @@ export function EpicsFilterPopover(props: EpicsFilterPopoverProps): ReactNode {
           onSearchChange={props.onSearchChange}
         />
         <FilterSection
-          label="Workspaces"
+          label="Folders"
           trailing={
             props.search.workspaces.length > 1 ? (
               <MatchModeToggle
                 value={props.search.workspaceMode}
-                selectedLabel="workspaces"
+                selectedLabel="folders"
                 onChange={(workspaceMode) => {
                   props.onSearchChange({ workspaceMode });
                 }}
@@ -186,7 +186,7 @@ export function EpicsFilterPopover(props: EpicsFilterPopoverProps): ReactNode {
         >
           {workspaceOptions.length === 0 ? (
             <p className="px-1 py-1.5 text-ui-xs text-muted-foreground">
-              No workspaces yet
+              No folders yet
             </p>
           ) : (
             workspaceOptions.map((workspace) => {

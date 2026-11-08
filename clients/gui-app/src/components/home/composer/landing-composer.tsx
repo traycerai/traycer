@@ -47,12 +47,16 @@ import { useRefreshProvidersListOnTurn } from "@/hooks/providers/use-refresh-pro
 import { commitProfileSelection } from "@/stores/composer/commit-selection";
 import { ComposerBody } from "@/components/home/composer/composer-body";
 import { LANDING_COMPOSER_EDITOR_CLASSNAME } from "@/components/home/composer/composer-editor-classnames";
+import { cn } from "@/lib/utils";
 import { useSurfaceActivity } from "@/components/home/composer/surface-activity-hooks";
 import { useComposerDictation } from "@/hooks/composer/use-composer-dictation";
 import { useSettingsStore } from "@/stores/settings/settings-store";
 import { useLandingComposerPaste } from "@/hooks/composer/use-landing-composer-paste";
 import { isAttachmentIngestPending } from "@/hooks/composer/use-composer-paste";
-import { useLandingComposerMentionRoots } from "@/hooks/composer/use-workspace-mention-roots";
+import {
+  useLandingComposerMentionRoots,
+  useLandingRunWorkingDirectory,
+} from "@/hooks/composer/use-workspace-mention-roots";
 import { useRunnerHost } from "@/providers/use-runner-host";
 import { useComposerToolbarStore } from "@/components/home/hooks/use-composer-toolbar-store";
 import {
@@ -510,11 +514,14 @@ export function LandingComposer(props: LandingComposerProps) {
   // its own) - the same shared hook the chat composer uses, mirroring its
   // wiring in `chat-composer.tsx`. Purely informational: it never blocks
   // epic creation.
+  const runWorkingDirectory = useLandingRunWorkingDirectory(draftId);
   const rateLimitPrompt = useProfileRateLimitSwitchPrompt({
     harnessId,
     profileId,
     selectedModel,
+    workingDirectory: runWorkingDirectory,
     active: activityEnabled,
+    hostId: resolvedHostId,
     client: hostClient,
   });
   // Keeps the banner's `providers.list` read converging with a turn's
@@ -1193,7 +1200,11 @@ export function LandingComposer(props: LandingComposerProps) {
         toolbarStore={toolbarStore}
         composerMode={composerMode}
         chatEditorIsActive={chatComposerActive}
-        editorClassName={LANDING_COMPOSER_EDITOR_CLASSNAME}
+        // Leave room for Current tasks while long prompts scroll in the editor.
+        editorClassName={cn(
+          LANDING_COMPOSER_EDITOR_CLASSNAME,
+          "md:max-h-[40dvh]",
+        )}
         initialContent={initialContent}
         initialSelection={initialSelection}
         canSubmit={canSubmit}

@@ -359,10 +359,10 @@ describe("<HostSettingsPanel /> Overview — tabbed shell", () => {
     renderPanel();
 
     const row = await screen.findByTestId("host-settings-source");
-    expect(row.textContent).toContain("Settings: This computer only");
+    expect(row.textContent).toContain("Settings");
     expect(
-      screen.getByRole("button", { name: "Change settings source" }),
-    ).toBeTruthy();
+      screen.getByRole("combobox", { name: "Settings source" }).textContent,
+    ).toBe("This computer only");
     expect(within(row).getByText("Details")).toBeTruthy();
     expect(activeTabTestId()).toBe("host-overview-tab-installation");
     const tabList = screen.getAllByRole("tab")[0].closest("[role='tablist']");

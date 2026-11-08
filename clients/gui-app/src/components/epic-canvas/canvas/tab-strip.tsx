@@ -1152,7 +1152,7 @@ function tabTooltipContent(
       <div className="truncate font-medium">{heading}</div>
       {context === null ? null : (
         <GitDiffTooltipSummaryRow
-          label="Workspace"
+          label="Folder"
           value={context.workspaceLabel}
           testId="git-diff-tooltip-workspace"
           wrap={false}

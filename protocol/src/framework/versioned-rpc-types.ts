@@ -299,6 +299,18 @@ export const RPC_ERROR_CODES = [
   // deleted since. Nothing was created; the bot the key made, if live, is in
   // the person's list. Additive, as above.
   "E_BOT_REQUEST_KEY_REUSED",
+  // ─── Evicted chats ──────────────────────────────────────────────────────
+  //
+  // A host dropped a chat's records once the cloud held them, and could not
+  // bring them back for a write (`epic.hydrateChat`, or a send that reached
+  // the host first). The chat stays as it was and nothing was written; each
+  // has its own line on the chat's composer. Additive, as above.
+  //
+  // The host could not reach the cloud copy. Retryable once it can.
+  "CHAT_EVICTED_UNREACHABLE",
+  // The cloud copy is no longer the one the host dropped: the chat was
+  // continued on another host, whose copy is the latest.
+  "CHAT_EVICTED_HEAD_MOVED",
 ] as const;
 
 export type RpcErrorCode = (typeof RPC_ERROR_CODES)[number];

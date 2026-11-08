@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo } from "react";
 import type { QueryClient } from "@tanstack/react-query";
 import type { HostRpcRegistry } from "@traycer/protocol/host/index";
-import type { ChatRecordSummaryV12 } from "@traycer/protocol/host/epic/chat-records";
+import type { ChatRecordSummaryV14 } from "@traycer/protocol/host/epic/chat-records";
 import type {
   RecordListRecencyPatch,
   RecordListStamp,
@@ -29,9 +29,9 @@ import { GUI_PROJECTS_EPIC_DOC_REPLICA } from "@/stores/epics/open-epic/projecti
  */
 interface ChatRecordListAnswer {
   /**
-   * The `@1.2` row, NOT the base one and not `@1.1`'s. A narrower row is
-   * assignable to this in the wrong direction, so typing it down is a silent
-   * narrowing rather than a type error, and each dropped field fails
+   * The `@1.4` row, NOT the base one and not an older minor's. A narrower row
+   * is assignable to this in the wrong direction, so typing it down is a
+   * silent narrowing rather than a type error, and each dropped field fails
    * somewhere different:
    *
    *  - without `docResident` (the `@1.1` field), the request asks for the
@@ -42,6 +42,9 @@ interface ChatRecordListAnswer {
    *  - without `head` (the `@1.2` field), a host that serves the cloud
    *    publication stamp never reaches the store with it, and the
    *    published-copy tile is back to one read per mount.
+   *  - without `evicted` (the `@1.4` field), a chat whose records the host
+   *    dropped opens its tile on that host, which no longer holds them,
+   *    instead of on the server pool.
    *
    * A host on an older minor upgrades with `head` absent, which the head
    * plane treats as "nothing to say about the head" rather than as a
@@ -51,7 +54,7 @@ interface ChatRecordListAnswer {
    * `unchanged` arm. Distinct from `[]`, which is the positive claim that
    * this epic has no chats and retracts everything the fence allows.
    */
-  readonly chats: readonly ChatRecordSummaryV12[] | null;
+  readonly chats: readonly ChatRecordSummaryV14[] | null;
   /**
    * What the `unchanged` arm carried instead of rows: the recency facts a
    * QUIET write moved since the stamp this request sent. Empty on the
@@ -326,6 +329,9 @@ export function useEpicSyncChatRecords(epicId: string): void {
         // The fence is used as captured. It was read from THIS store, because
         // the generation is in the cache key - see `ChatRecordListAnswer`.
         store.getState().applyChatRecords(answer.chats, answer.issuedAtSeq);
+        // `evicted` rides beside the record table, restated by every
+        // snapshot and kept across the `unchanged` arm below.
+        store.getState().applyChatRecordEvictions(answer.chats);
       } else if (answer.touched.length > 0) {
         // The `unchanged` arm. No fence: this answer carried no rows, so it
         // authorizes no omission and the snapshot watermark stays where the

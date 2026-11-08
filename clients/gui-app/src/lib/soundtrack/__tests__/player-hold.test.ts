@@ -5,6 +5,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { appLogger } from "@/lib/logger";
 import { TrackPlayer } from "../player";
+import { SoundtrackLogRelay } from "../session-log";
 import type { VariableTrack } from "../variable-sound";
 import type { StemSource } from "../stems";
 import { FakeOutput, FakeStems } from "./fakes";
@@ -57,6 +58,7 @@ function playerOver(output: FakeOutput, stems: StemSource) {
     output,
     stems,
     random: () => 0,
+    log: new SoundtrackLogRelay(),
     silenceSeconds: [5, 5],
     resumeAt: 0,
     onRunStart: () => undefined,

@@ -52,6 +52,7 @@ function contextFor(shell: Shell): LayoutFormContext {
       runnerHost: null,
       featureSettings: null,
       soundtrackOffered: false,
+      soundtrackRecordingOffered: false,
       soundtrackOn: false,
       ...shell,
     },

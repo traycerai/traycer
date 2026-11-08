@@ -623,6 +623,12 @@ export const HOST_METHOD_POLL_TABLE = {
     joinResponseTimeoutMs: RATE_LIMIT_USAGE_RESPONSE_TIMEOUT_MS,
     poll: null,
   },
+  // A cold answer waits on the same refresh-safe CLI handshake as a usage read.
+  "providers.readModelRoutes": {
+    ...LATEST_SCHEDULING,
+    joinResponseTimeoutMs: RATE_LIMIT_USAGE_RESPONSE_TIMEOUT_MS,
+    poll: null,
+  },
   "host.notifications.list": { ...LATEST_SCHEDULING, poll: null },
   "host.notificationHooks.status": { ...LATEST_SCHEDULING, poll: null },
   // Testing a hook sends a real notification.
@@ -1624,6 +1630,13 @@ export const HOST_METHOD_POLL_TABLE = {
   // One-shot read: the doc content of an unreachable owner's chat cannot
   // change while its owner is away.
   "epic.chatReplicaRead": { ...LATEST_SCHEDULING, poll: null },
+  // A write the person's send waits on: each call runs, in order, and a
+  // second one for a chat already back answers `not-evicted` at once.
+  "epic.hydrateChat": {
+    mode: "fifo",
+    joinResponseTimeoutMs: null,
+    poll: null,
+  },
   // The store-backed chat RECORD channel.
   //
   // POLLED, at a cadence, and the reason is that there is no invalidation edge

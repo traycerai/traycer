@@ -1461,7 +1461,7 @@ describe("<MobileHistoryList /> (via <EpicsListPanel /> at a mobile viewport)", 
           id: "history-epic-viewer",
           epicId: "epic-viewer",
           title: "Viewer only row",
-          permissionRole: "viewer",
+          permissionRole: null,
         }),
       ];
       renderPanel("page", "/");

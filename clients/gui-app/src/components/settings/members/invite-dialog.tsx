@@ -57,13 +57,12 @@ function emailLooksValid(value: string): boolean {
 }
 
 function refusalMessage(
-  teamName: string,
   outcome: Extract<
     MembersInviteOutcome,
     { outcome: "forbidden" } | { outcome: "seat_limit" } | { outcome: "failed" }
   >,
 ): string {
-  if (outcome.outcome === "seat_limit") return seatLimitRefusal(teamName);
+  if (outcome.outcome === "seat_limit") return seatLimitRefusal();
   if (outcome.outcome === "failed") return INVITE_FAILED;
   return inviteForbiddenRefusal();
 }
@@ -76,7 +75,7 @@ function inviteDialogDescription(
   phase: InviteDialogPhase,
   teamName: string,
 ): string | null {
-  if (phase.kind === "form") return inviteDialogLead(teamName);
+  if (phase.kind === "form") return inviteDialogLead();
   if (phase.kind === "sent") {
     return inviteSentBody(phase.email, teamName, phase.role);
   }
@@ -127,7 +126,7 @@ export function InviteDialog(props: {
       }
       setPhase({
         kind: "refused",
-        message: refusalMessage(props.teamName, outcome),
+        message: refusalMessage(outcome),
       });
     });
   };
@@ -140,7 +139,9 @@ export function InviteDialog(props: {
       >
         <DialogHeader>
           <DialogTitle>
-            {phase.kind === "sent" ? inviteSentLabel() : INVITE_LABEL}
+            {phase.kind === "sent"
+              ? inviteSentLabel()
+              : `Invite to ${props.teamName}`}
           </DialogTitle>
           <DialogDescription data-testid="members-invite-description">
             {inviteDialogDescription(phase, props.teamName)}
@@ -184,7 +185,7 @@ export function InviteDialog(props: {
                 className="max-w-[72ch] text-ui-xs text-muted-foreground"
                 data-testid="members-invite-role-line"
               >
-                {inviteRoleLine(phase.role, props.teamName)}
+                {inviteRoleLine(phase.role)}
               </p>
             </div>
           </div>

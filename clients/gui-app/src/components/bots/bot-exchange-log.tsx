@@ -3,6 +3,7 @@ import { CornerDownRight, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
 import { NamedBotAvatar } from "@/components/bots/bot-avatars";
+import { TracyTranscriptOriginScope } from "@/components/bots/tracy-transcript-origin-scope";
 import { REMOVED_BOT_NAME } from "@/components/chat/bot-exchange-lines-context";
 import { ChatMessageTimestamp } from "@/components/chat/chat-message-timestamp";
 import { AgentReferenceMarkdown } from "@/components/chat/segments/agent-reference-markdown";
@@ -107,13 +108,15 @@ export function BotExchangeLog(props: {
                     />
                   </div>
                   <div className="min-w-0 text-ui-sm">
-                    <AgentReferenceMarkdown
-                      isStreaming={false}
-                      markdown={exchange.text}
-                      proseSize="compact"
-                      quotable={false}
-                      components={null}
-                    />
+                    <TracyTranscriptOriginScope botId={botId}>
+                      <AgentReferenceMarkdown
+                        isStreaming={false}
+                        markdown={exchange.text}
+                        proseSize="compact"
+                        quotable={false}
+                        components={null}
+                      />
+                    </TracyTranscriptOriginScope>
                   </div>
                 </div>
               </li>

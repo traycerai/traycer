@@ -227,7 +227,7 @@ export function isSilentHostError(error: HostRpcError): boolean {
  * The outcome stays unknown: the poll's `absent` is only its last look at the
  * end of its budget, and an earlier send still in flight can apply after it.
  * So this never says the write failed. The refusal ended only the retry, and
- * its guidance (update the host, view-only access) is said beside the
+ * its guidance (update the host, no access to the task) is said beside the
  * uncertainty, labelled as the retry's, through the same mapper every
  * refusal goes through - never the host's own text. A refusal with no
  * guidance of its own, or one that is itself an unknown outcome, adds no
@@ -444,7 +444,7 @@ export function toastSendRefusal(error: unknown, line: string): void {
  * Advice about one agent ("This agent is still working …") would have no
  * referent in a plural notice, so those causes are counted and reworded with
  * their own count ("2 are still working: …"). Advice that is not about one
- * agent (view-only access, a newer host, a host's own verdict) reads the same
+ * agent (no access to the task, a newer host, a host's own verdict) reads the same
  * for any number and is kept verbatim. A refusal whose copy is only the
  * write's generic `fallback` adds nothing.
  */
@@ -672,13 +672,21 @@ export const HOST_UNSUPPORTED_MESSAGE =
  * state the missing role in a fixed phrase, so - like the AGENT_BUSY branches
  * below - the phrase is what we branch on. The copy is rewritten rather than
  * passed through: the raw host text names user and epic ids, which mean
- * nothing in a toast. Without this, a viewer clicking anything editor-gated
+ * nothing in a toast. Without this, someone clicking anything editor-gated
  * (cloning a shared agent, for one) got the bare generic, indistinguishable
  * from a bug.
+ *
+ * The editor line no longer names a role. With view-only access retired, the
+ * editor gate's only remaining refusal is a caller who holds NO role on the
+ * task, so the old line ("You have view-only access to this task") told them
+ * they held one they do not - which is the same mistake the host's own gate
+ * contract keeps the task-access refusal clear of. What the person needs is
+ * that it is this TASK they cannot change, which is what distinguishes it from
+ * the generic sentence below.
  */
 function forbiddenToastMessage(message: string): string {
   if (message.includes(EDITOR_ACCESS_DENIED_PHRASE)) {
-    return "You have view-only access to this task, so you can't make changes to it.";
+    return "You can't make changes to this task.";
   }
   if (message.includes(OWNER_ACCESS_DENIED_PHRASE)) {
     return "Only this task's owner can do that.";
@@ -761,7 +769,7 @@ function codeKeyedMessage(error: HostRpcError, fallback: string): string {
     return "A bound folder is missing on disk. Restore it, re-bind, or remove it to continue.";
   }
   if (error.code === "WORKTREE_REMOVE_LAST_ENTRY") {
-    return "Keep at least one workspace folder linked — add another before removing this one.";
+    return "Keep at least one folder linked — add another before removing this one.";
   }
   return hostErrorToastForSimpleCode(error.code) ?? fallback;
 }

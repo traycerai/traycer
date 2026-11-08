@@ -41,7 +41,10 @@ function makeItem(
     worktreeBranches: overrides.worktreeBranches ?? [],
     worktreePaths: overrides.worktreePaths ?? [],
     ownership: overrides.ownership ?? "mine",
-    permissionRole: overrides.permissionRole ?? "owner",
+    permissionRole:
+      overrides.permissionRole === undefined
+        ? "owner"
+        : overrides.permissionRole,
     isPinned: overrides.isPinned ?? false,
     isLocalHome: overrides.isLocalHome,
     isPreservedOrphan: overrides.isPreservedOrphan,
@@ -436,6 +439,64 @@ describe("home-page history helpers", () => {
     });
   });
 
+  it("projects a shared task granted the retired viewer role as holding no role", () => {
+    const sharedTask = (
+      id: string,
+      role: "viewer" | "editor",
+    ): ListTaskLightPre15 => ({
+      epic: {
+        light: {
+          id,
+          title: id,
+          initialUserPrompt: "",
+          ticketCount: 0,
+          specCount: 0,
+          storyCount: 0,
+          reviewCount: 0,
+          status: "active",
+          createdAt: 1,
+          updatedAt: 1,
+          createdBy: "user-2",
+          version: "1",
+        },
+        permission: {
+          role,
+          accessType: "direct" as const,
+          userId: "user-1",
+          grantedBy: "user-2",
+          grantedAt: 1,
+        },
+        repos: [],
+        workspaces: [],
+        roomInfo: null,
+      },
+      phase: null,
+      pinned: false,
+    });
+
+    const items = buildHistoryItemsFromTasks(
+      [
+        sharedTask("epic-retired", "viewer"),
+        sharedTask("epic-editor", "editor"),
+      ],
+      Date.parse("2026-04-22T12:00:00.000Z"),
+      "user-1",
+      EMPTY_LOCAL_HOMED_TASK_IDS,
+    );
+
+    const byId = new Map(items.map((item) => [item.epicId, item]));
+    const retired = byId.get("epic-retired");
+    const editor = byId.get("epic-editor");
+    if (retired === undefined || editor === undefined) {
+      throw new Error("expected both shared tasks to project");
+    }
+    expect(retired.permissionRole).toBeNull();
+    expect(canDeleteHistoryItem(retired, true)).toBe(false);
+    expect(canEditHistoryItemTitle(retired, true)).toBe(false);
+    expect(editor.permissionRole).toBe("editor");
+    expect(canEditHistoryItemTitle(editor, true)).toBe(true);
+  });
+
   it("labels a task updated under a minute ago as just now", () => {
     const nowMs = Date.now();
     const taskUpdatedAt = (
@@ -595,14 +656,14 @@ describe("home-page history helpers", () => {
         title: "Editor row",
         permissionRole: "editor",
       });
-      const viewer = makeItem({
-        id: "viewer-row",
-        title: "Viewer row",
-        permissionRole: "viewer",
+      const noRole = makeItem({
+        id: "no-role-row",
+        title: "No role row",
+        permissionRole: null,
       });
       expect(canDeleteHistoryItem(owner, true)).toBe(true);
       expect(canDeleteHistoryItem(editor, true)).toBe(true);
-      expect(canDeleteHistoryItem(viewer, true)).toBe(false);
+      expect(canDeleteHistoryItem(noRole, true)).toBe(false);
     });
   });
 
@@ -634,10 +695,10 @@ describe("home-page history helpers", () => {
     });
 
     it("still refuses by role and by task type whatever the verdict", () => {
-      const viewer = makeItem({
-        id: "viewer-row",
-        title: "Viewer row",
-        permissionRole: "viewer",
+      const noRole = makeItem({
+        id: "no-role-row",
+        title: "No role row",
+        permissionRole: null,
       });
       const phase = makeItem({
         id: "phase-row",
@@ -645,7 +706,7 @@ describe("home-page history helpers", () => {
         taskType: "phase",
         permissionRole: "owner",
       });
-      expect(canEditHistoryItemTitle(viewer, true)).toBe(false);
+      expect(canEditHistoryItemTitle(noRole, true)).toBe(false);
       expect(canEditHistoryItemTitle(phase, true)).toBe(false);
     });
   });

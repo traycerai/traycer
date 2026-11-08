@@ -1,4 +1,5 @@
 import type { ReactNode } from "react";
+import { HOST_FROZEN_WORD } from "@traycer/protocol/host/host-status";
 import type { HostBusyBreakdown } from "@traycer/protocol/host/status/index";
 import { describeHostBusy } from "@/components/host/host-restart-copy";
 import {
@@ -72,6 +73,11 @@ export function HostIdentityCard(props: {
                 {sandboxStateWord(host.sandbox)}
               </span>
             )}
+            {host.sandbox?.frozen === true ? (
+              <span className="text-warning-foreground">
+                {HOST_FROZEN_WORD}
+              </span>
+            ) : null}
             <span aria-hidden>·</span>
             <span>{hostOptionKindLabel(host)}</span>
             {busyCopy.label === null ? null : (

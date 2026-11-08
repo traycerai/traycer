@@ -1434,13 +1434,16 @@ async function renderUpdatesTabFor(
 }
 
 describe("<HostSettingsPanel /> Overview ▸ Updates tab, desktop app row", () => {
-  it("shows the desktop app row for the local host when the desktop bridge is present", async () => {
-    await renderUpdatesTabFor(
-      true,
-      makeDesktopRunnerHost(new StubAppUpdatesBridge()),
-    );
-    const state = await screen.findByTestId("host-overview-desktop-app-state");
-    expect(state.textContent).toBe("Up to date (v1.4.0)");
+  it("omits the desktop app row for the local host when the updater is idle", async () => {
+    const bridge = new StubAppUpdatesBridge();
+    await renderUpdatesTabFor(true, makeDesktopRunnerHost(bridge));
+    await waitFor(() => {
+      expect(bridge.getSnapshot).toHaveBeenCalled();
+    });
+    await act(async () => {
+      await Promise.all(bridge.snapshotLoads);
+    });
+    expect(screen.queryByTestId("host-overview-desktop-app-row")).toBeNull();
   });
 
   it("omits the desktop app row for a remote host even with the desktop bridge", async () => {

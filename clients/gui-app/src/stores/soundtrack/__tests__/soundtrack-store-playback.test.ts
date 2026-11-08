@@ -34,6 +34,7 @@ function newWindow() {
     readManifest: () => MANIFEST,
     openPorts: openFakePorts,
     random: () => 0,
+    recordingChannel: () => null,
   });
 }
 

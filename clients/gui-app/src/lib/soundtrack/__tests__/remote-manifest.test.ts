@@ -137,11 +137,22 @@ function issueMessages(value: unknown): readonly string[] {
   return [];
 }
 
+function generative(value: unknown): VariableTrack {
+  const [first] = parseRemoteManifest(value).tracks;
+  if (first.kind !== "generative") {
+    throw new Error("Expected a generative track");
+  }
+  return first;
+}
+
 describe("parseRemoteManifest", () => {
   it("accepts the dev manifest in v1 form, without its version", () => {
     const { version: _version, ...expected } = aquiloManifest();
 
-    expect(parseRemoteManifest(aquiloManifest())).toEqual(expected);
+    expect(parseRemoteManifest(aquiloManifest())).toEqual({
+      ...expected,
+      tracks: [{ ...AQUILO_1, kind: "generative" }],
+    });
   });
 
   // A role a layer names comes through in the exact check above.
@@ -156,15 +167,21 @@ describe("parseRemoteManifest", () => {
       ],
     };
 
-    expect(
-      parseRemoteManifest(unroled).tracks[0].layers.map((layer) => layer.role),
-    ).toEqual([null, null, null, null]);
+    expect(generative(unroled).layers.map((layer) => layer.role)).toEqual([
+      null,
+      null,
+      null,
+      null,
+    ]);
   });
 
   it("accepts a track using groups, an intro, an outro and phases", () => {
     const { version: _version, ...expected } = suiteManifest();
 
-    expect(parseRemoteManifest(suiteManifest())).toEqual(expected);
+    expect(parseRemoteManifest(suiteManifest())).toEqual({
+      ...expected,
+      tracks: [{ ...SUITE, kind: "generative" }],
+    });
   });
 
   it("accepts dots, underscores and dashes in a track and a layer name", () => {
@@ -193,9 +210,7 @@ describe("parseRemoteManifest", () => {
       },
     };
 
-    expect(parseRemoteManifest(renamed).tracks[0].layers[0].name).toBe(
-      "L.b_c-1",
-    );
+    expect(generative(renamed).layers[0].name).toBe("L.b_c-1");
   });
 
   it("accepts a space in a state name, which no stem path carries", () => {
@@ -209,9 +224,7 @@ describe("parseRemoteManifest", () => {
       ],
     };
 
-    expect(parseRemoteManifest(manifest).tracks[0].states[0].name).toBe(
-      "late night",
-    );
+    expect(generative(manifest).states[0].name).toBe("late night");
   });
 
   const refused: readonly (readonly [string, string, () => unknown])[] = [
@@ -455,7 +468,7 @@ describe("parseRemoteManifest", () => {
     ],
     [
       "version 2",
-      "Invalid input: expected 1",
+      "A v2 track needs a kind",
       () => ({ ...aquiloManifest(), version: 2 }),
     ],
   ];

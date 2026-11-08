@@ -192,6 +192,7 @@ export const CHAT_STATE_FIELD_ACCOUNTING = {
   acceptedActions: true,
   pendingUserMessages: true,
   errorNotices: true,
+  evictedSendRefusal: true,
   deliveredNoticeActionIds: true,
   deliveredLastCopyActionIds: true,
   lastCopyPrompts: true,

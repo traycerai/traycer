@@ -20,6 +20,7 @@ import {
 } from "@traycer/protocol/host/index";
 import { stopAgentRequestSchema } from "@traycer/protocol/host/agent/shared";
 import type { BackgroundItem } from "@traycer/protocol/host/agent/gui/subscribe";
+import { expectScrollableDialogLayout } from "@/components/ui/__tests__/dialog-scroll-layout-assertions";
 
 /**
  * The composer's cascade-stop dialog must send "Stop all" to the tab's own
@@ -310,6 +311,7 @@ function surfacesProps(
       nodeId: CHAT_ID,
       isActive: true,
       mentionRoots: [],
+      runWorkingDirectory: null,
       fallbackToGlobalMentionRoots: true,
       currentEpicId: EPIC_ID,
       onSubmitMessage: () => false,
@@ -416,6 +418,7 @@ describe("composer cascade-stop dialog host routing", () => {
     );
 
     const dialog = await openStopChildrenDialog();
+    expectScrollableDialogLayout(dialog);
     fireEvent.click(within(dialog).getByTestId("stop-children-stop-all"));
 
     await waitFor(() => {

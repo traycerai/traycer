@@ -122,7 +122,7 @@ function defaultsCardBody(
   const shape = configurationStageShape(catalogue, ready?.defaults ?? null);
   if (
     environment === null ||
-    environment.role === "viewer" ||
+    environment.role === null ||
     ready === null ||
     shape === null
   ) {
@@ -140,7 +140,7 @@ function defaultsCardBody(
 /**
  * The configuration's defaults for new sandboxes: its shared
  * `sandbox_defaults` item, the built-in defaults while none is set. Editors and
- * admins reveal the form here; viewers can open Members. The
+ * admins reveal the form here; readers without edit access can open Members. The
  * gear on a New row changes one sandbox only and never shows here.
  */
 export function SandboxDefaultsSection(props: {
@@ -180,7 +180,7 @@ export function SandboxDefaultsSection(props: {
           ) : null}
         </div>
       )}
-      {environment?.role === "viewer" ? (
+      {environment !== null && environment.role === null ? (
         <p
           className="text-ui-xs text-muted-foreground wrap-anywhere"
           data-testid="sandboxes-defaults-editors"
@@ -238,7 +238,7 @@ export function SandboxDefaultsSection(props: {
 const KEPT_UNTIL_IDLE_CHANGED =
   "Sandboxes you already have aren't destroyed when idle until you change their Idle settings.";
 
-/** The defaults as text: a viewer's, and anyone's while they are read (`catalogue` null). */
+/** The defaults as text, including while the catalogue is loading. */
 function SandboxDefaultsList(props: {
   readonly catalogue: SandboxCatalogue | null;
   readonly shape: StageShape | null;

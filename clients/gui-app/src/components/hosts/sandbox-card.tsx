@@ -1,3 +1,4 @@
+import { SandboxSessionNotice } from "@/components/hosts/sandbox-session-notice";
 import { useState, type ReactNode } from "react";
 import { toast } from "sonner";
 import type { SandboxGrantsSummary } from "@traycer/protocol/host/sandbox-secrets";
@@ -64,6 +65,7 @@ import {
   formatSandboxDollars,
   hourlyRate,
   sandboxVerbPendingLine,
+  WINDOWS_SANDBOX_LIMITATION,
 } from "@/lib/sandboxes/sandbox-strings";
 import { useSandboxControlUnavailableReason } from "@/hooks/sandboxes/use-sandbox-control-unavailable-reason";
 import { useHostSupportsMethod } from "@/hooks/host/use-host-supports-method";
@@ -130,6 +132,11 @@ export function SandboxCard(props: {
             frozen={frozen}
             viewerUserId={viewerUserId}
           />
+          {summary.os === "windows" ? (
+            <p className="text-ui-xs text-muted-foreground">
+              {WINDOWS_SANDBOX_LIMITATION}
+            </p>
+          ) : null}
           <SandboxPodRoom summary={summary} teamOwned={teamOwned} />
           <SandboxSecretsSection
             summary={summary}
@@ -250,7 +257,7 @@ export function SandboxHeaderNotices(props: {
   readonly sandbox: HostScopeSandbox;
   readonly teamName: string | null;
 }): ReactNode {
-  const { summary, frozen, teamOwned } = props.sandbox;
+  const { summary, state, frozen, teamOwned } = props.sandbox;
   const viewerUserId = useAuthStore((s) => s.contextMetadata?.userId ?? null);
   const credits = sandboxHeaderCreditsLine(
     summary,
@@ -279,6 +286,12 @@ export function SandboxHeaderNotices(props: {
       )}
       {summary === null ? null : (
         <>
+          <SandboxSessionNotice
+            summary={summary}
+            state={state}
+            filesOutcomeStated={state === "stopped" && !frozen}
+            testId="sandbox-card-session-notice"
+          />
           <SandboxWithdrawalNotice summary={summary} />
           <SandboxGuestConfigFailure summary={summary} />
         </>

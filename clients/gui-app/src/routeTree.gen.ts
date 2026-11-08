@@ -55,6 +55,7 @@ import { Route as SettingsSecretsRouteImport } from "./routes/settings.secrets";
 import { Route as SettingsServiceRouteImport } from "./routes/settings.service";
 import { Route as SettingsShellRouteImport } from "./routes/settings.shell";
 import { Route as SettingsSkillsRouteImport } from "./routes/settings.skills";
+import { Route as SettingsStorageRouteImport } from "./routes/settings.storage";
 import { Route as SettingsUsageRouteImport } from "./routes/settings.usage";
 import { Route as SettingsWorktreesRouteImport } from "./routes/settings.worktrees";
 import { Route as EpicsEpicIdTabIdRouteImport } from "./routes/epics.$epicId.$tabId";
@@ -293,6 +294,11 @@ const SettingsSkillsRoute = SettingsSkillsRouteImport.update({
   path: "/skills",
   getParentRoute: () => SettingsRoute,
 } as any);
+const SettingsStorageRoute = SettingsStorageRouteImport.update({
+  id: "/storage",
+  path: "/storage",
+  getParentRoute: () => SettingsRoute,
+} as any);
 const SettingsUsageRoute = SettingsUsageRouteImport.update({
   id: "/usage",
   path: "/usage",
@@ -353,6 +359,7 @@ export interface FileRoutesByFullPath {
   "/settings/service": typeof SettingsServiceRoute;
   "/settings/shell": typeof SettingsShellRoute;
   "/settings/skills": typeof SettingsSkillsRoute;
+  "/settings/storage": typeof SettingsStorageRoute;
   "/settings/usage": typeof SettingsUsageRoute;
   "/settings/worktrees": typeof SettingsWorktreesRoute;
   "/bot/": typeof BotIndexRoute;
@@ -402,6 +409,7 @@ export interface FileRoutesByTo {
   "/settings/service": typeof SettingsServiceRoute;
   "/settings/shell": typeof SettingsShellRoute;
   "/settings/skills": typeof SettingsSkillsRoute;
+  "/settings/storage": typeof SettingsStorageRoute;
   "/settings/usage": typeof SettingsUsageRoute;
   "/settings/worktrees": typeof SettingsWorktreesRoute;
   "/bot": typeof BotIndexRoute;
@@ -454,6 +462,7 @@ export interface FileRoutesById {
   "/settings/service": typeof SettingsServiceRoute;
   "/settings/shell": typeof SettingsShellRoute;
   "/settings/skills": typeof SettingsSkillsRoute;
+  "/settings/storage": typeof SettingsStorageRoute;
   "/settings/usage": typeof SettingsUsageRoute;
   "/settings/worktrees": typeof SettingsWorktreesRoute;
   "/bot/": typeof BotIndexRoute;
@@ -507,6 +516,7 @@ export interface FileRouteTypes {
     | "/settings/service"
     | "/settings/shell"
     | "/settings/skills"
+    | "/settings/storage"
     | "/settings/usage"
     | "/settings/worktrees"
     | "/bot/"
@@ -556,6 +566,7 @@ export interface FileRouteTypes {
     | "/settings/service"
     | "/settings/shell"
     | "/settings/skills"
+    | "/settings/storage"
     | "/settings/usage"
     | "/settings/worktrees"
     | "/bot"
@@ -607,6 +618,7 @@ export interface FileRouteTypes {
     | "/settings/service"
     | "/settings/shell"
     | "/settings/skills"
+    | "/settings/storage"
     | "/settings/usage"
     | "/settings/worktrees"
     | "/bot/"
@@ -953,6 +965,13 @@ declare module "@tanstack/react-router" {
       preLoaderRoute: typeof SettingsSkillsRouteImport;
       parentRoute: typeof SettingsRoute;
     };
+    "/settings/storage": {
+      id: "/settings/storage";
+      path: "/storage";
+      fullPath: "/settings/storage";
+      preLoaderRoute: typeof SettingsStorageRouteImport;
+      parentRoute: typeof SettingsRoute;
+    };
     "/settings/usage": {
       id: "/settings/usage";
       path: "/usage";
@@ -1023,6 +1042,7 @@ interface SettingsRouteChildren {
   SettingsServiceRoute: typeof SettingsServiceRoute;
   SettingsShellRoute: typeof SettingsShellRoute;
   SettingsSkillsRoute: typeof SettingsSkillsRoute;
+  SettingsStorageRoute: typeof SettingsStorageRoute;
   SettingsUsageRoute: typeof SettingsUsageRoute;
   SettingsWorktreesRoute: typeof SettingsWorktreesRoute;
   SettingsIndexRoute: typeof SettingsIndexRoute;
@@ -1062,6 +1082,7 @@ const SettingsRouteChildren: SettingsRouteChildren = {
   SettingsServiceRoute: SettingsServiceRoute,
   SettingsShellRoute: SettingsShellRoute,
   SettingsSkillsRoute: SettingsSkillsRoute,
+  SettingsStorageRoute: SettingsStorageRoute,
   SettingsUsageRoute: SettingsUsageRoute,
   SettingsWorktreesRoute: SettingsWorktreesRoute,
   SettingsIndexRoute: SettingsIndexRoute,

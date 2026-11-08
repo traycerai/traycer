@@ -17,10 +17,11 @@ import type {
 import type { PermissionRole } from "@/lib/epic-collaborator-roles";
 import { stubImmediateImage } from "@/__tests__/immediate-avatar-image";
 import { TooltipProvider } from "@/components/ui/tooltip";
+import { expectScrollableDialogLayout } from "@/components/ui/__tests__/dialog-scroll-layout-assertions";
 import { useAuthStore } from "@/stores/auth/auth-store";
 
 interface TestState {
-  role: PermissionRole;
+  role: PermissionRole | null;
   collaborators: EpicCollaboratorsView;
   shareableTeams: ReadonlyArray<{
     readonly teamId: string;
@@ -227,7 +228,7 @@ const SHARED_TEAM: EpicTeamCollaboratorView = {
   key: "team-team-1",
   teamId: "team-1",
   teamName: "traycerai",
-  role: "viewer",
+  role: "editor",
   members: [
     {
       accessSource: "team",
@@ -238,7 +239,7 @@ const SHARED_TEAM: EpicTeamCollaboratorView = {
       key: "team-team-1-user-2",
       teamId: "team-1",
       teamName: "traycerai",
-      role: "viewer",
+      role: "editor",
       userId: "user-2",
     },
   ],
@@ -348,7 +349,7 @@ describe("SharingPanel invite parsing", () => {
           {
             identifier: "asjnfakjsnf",
             identifierType: "github_handle",
-            role: "viewer",
+            role: "editor",
           },
         ],
         isInvitePending: false,
@@ -497,8 +498,8 @@ describe("<SharingPanel />", () => {
     expect(screen.getAllByTestId("team-revoke-button")).toHaveLength(1);
   });
 
-  it("shows team access read-only for viewers", () => {
-    testState.role = "viewer";
+  it("shows team access read-only when the reader holds no role", () => {
+    testState.role = null;
     testState.collaborators = {
       directUsers: [DIRECT_USER],
       ownerTeam: null,
@@ -515,8 +516,8 @@ describe("<SharingPanel />", () => {
     expect(screen.queryByTestId("invite-card")).toBeNull();
     expect(screen.queryByTestId("team-share-button")).toBeNull();
     expect(screen.queryByTestId("team-revoke-button")).toBeNull();
-    expect(screen.getByTestId("team-role-select-badge").textContent).toContain(
-      "Viewer",
+    expect(screen.getByTestId("team-role-badge").textContent).toContain(
+      "Editor",
     );
     expect(
       screen.getByTestId("epic-sharing-teams-list").textContent,
@@ -524,7 +525,7 @@ describe("<SharingPanel />", () => {
   });
 
   it("hides the teams section when non-owners have no shared teams", () => {
-    testState.role = "viewer";
+    testState.role = null;
     testState.shareableTeams = [
       { teamId: "team-2", slug: "platform", avatarUrl: null },
     ];
@@ -548,7 +549,7 @@ describe("<SharingPanel />", () => {
     expect(screen.queryByTestId("team-share-button")).toBeNull();
   });
 
-  it.each(["owner", "viewer"] as const)(
+  it.each(["owner", null] as const)(
     "shows a team-owned task's owning team as a control-free Owner row for the %s role",
     (role) => {
       testState.role = role;
@@ -688,7 +689,7 @@ describe("<SharingPanel />", () => {
     ).toContain("font-mono");
   });
 
-  it("keeps role triggers visible for teams and direct collaborators", () => {
+  it("shows a shared team's role as a fixed badge, with no role control", () => {
     testState.collaborators = {
       directUsers: [DIRECT_USER, DIRECT_EDITOR],
       ownerTeam: null,
@@ -697,16 +698,21 @@ describe("<SharingPanel />", () => {
     };
     testState.shareableTeams = [
       { teamId: "team-1", slug: "traycerai", avatarUrl: null },
+      { teamId: "team-2", slug: "platform", avatarUrl: null },
     ];
 
     renderSharingPanel();
 
-    expect(screen.getByTestId("team-role-select").textContent).toContain(
-      "Viewer",
+    const teams = screen.getByTestId("epic-sharing-teams-list");
+    expect(within(teams).getByTestId("team-role-badge").textContent).toBe(
+      "Editor",
     );
+    expect(within(teams).queryAllByRole("combobox")).toEqual([]);
+    expect(screen.queryByTestId("team-role-select")).toBeNull();
+    expect(screen.queryByTestId("team-pending-role-select")).toBeNull();
+  });
 
-    cleanup();
-    resetTestState();
+  it("shows an editor row as a badge, since there is no second role to move it to", () => {
     testState.collaborators = {
       directUsers: [DIRECT_USER, DIRECT_EDITOR],
       ownerTeam: null,
@@ -716,9 +722,48 @@ describe("<SharingPanel />", () => {
 
     renderSharingPanel();
 
-    expect(
-      screen.getByTestId("collaborator-role-select").textContent,
-    ).toContain("Editor");
+    expect(screen.getByTestId("collaborator-role-badge").textContent).toBe(
+      "Editor",
+    );
+    expect(screen.queryByTestId("collaborator-role-select")).toBeNull();
+  });
+
+  it("offers an owner row only the editor role to move to, and no view-only role", () => {
+    const secondOwner: EpicCollaboratorView = {
+      ...DIRECT_USER,
+      displayName: "Second Owner",
+      email: "second@example.com",
+      handle: "second",
+      key: "user-4",
+      userId: "user-4",
+    };
+    testState.collaborators = {
+      directUsers: [DIRECT_USER, secondOwner],
+      ownerTeam: null,
+      teams: [],
+      flatRows: [DIRECT_USER, secondOwner],
+    };
+
+    renderSharingPanel();
+
+    fireEvent.pointerDown(
+      screen.getAllByTestId("collaborator-role-select")[0],
+      {
+        button: 0,
+      },
+    );
+
+    const options = screen.getAllByRole("menuitemradio");
+    expect(options.map((option) => option.textContent)).toEqual(["Editor"]);
+    expect(screen.queryByRole("menuitemradio", { name: /view/i })).toBeNull();
+  });
+
+  it("offers no role choice in the invite form", () => {
+    renderSharingPanel();
+
+    expect(screen.getByTestId("invite-card")).toBeTruthy();
+    expect(screen.queryByTestId("invite-role-select")).toBeNull();
+    expect(screen.queryByRole("combobox")).toBeNull();
   });
 
   // `isOwner` and `canInvitePeople` now AND the role with the cloud
@@ -891,8 +936,8 @@ describe("<SharingPanel /> My agents", () => {
     expect(testState.setSharingDefault.mutate).not.toHaveBeenCalled();
   });
 
-  it("shows the section to a viewer and derives on from any task-visible own row", () => {
-    testState.role = "viewer";
+  it("shows the section to a reader holding no role and derives on from any task-visible own row", () => {
+    testState.role = null;
     testState.sharingDefaultSupported = true;
     testState.ownCloudChats = [
       { visibility: "private", isOwnedByViewer: true },
@@ -921,9 +966,9 @@ describe("<SharingPanel /> My agents", () => {
     renderSharingPanel();
 
     fireEvent.click(screen.getByTestId("epic-sharing-my-agents-switch"));
-    expect(
-      screen.getByTestId("epic-sharing-my-agents-confirm").textContent,
-    ).toContain("2 of your agent chats");
+    const confirm = screen.getByTestId("epic-sharing-my-agents-confirm");
+    expectScrollableDialogLayout(confirm);
+    expect(confirm.textContent).toContain("2 of your agent chats");
 
     fireEvent.click(
       screen.getByTestId("epic-sharing-my-agents-confirm-action"),

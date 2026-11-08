@@ -21,7 +21,7 @@ afterEach(() => {
  * `hideOpener` is required, not optional - the lane's type-safety rule bans
  * optional props, and every call site states it explicitly (mirrors the
  * component under test's own `className={undefined}` style at
- * `confirm-destructive-dialog.tsx:173-177`). A SEPARATE "Remove opener"
+ * `confirm-destructive-dialog.tsx:223`). A SEPARATE "Remove opener"
  * button - not a side effect of opening - is what lets a test detach the
  * opener AFTER the dialog has already captured it, which is the only way to
  * actually reach the `isConnected` branch (see the detached-opener test

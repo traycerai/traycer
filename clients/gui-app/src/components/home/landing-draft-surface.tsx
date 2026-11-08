@@ -159,16 +159,17 @@ export function LandingDraftSurface() {
           narrow viewport (or the space left beside the terminal panel) and
           the outer overflow-clip would clip the right edge instead of
           letting content reflow. */}
-      {/* Row 2 bottom-aligns the hero and row 3 top-anchors the composer, so
-          the boundary between them is where the pair sits. An even 1fr/1fr
-          split (desktop, where the epics list fills row 3) centres it; below md
-          the list is gone, so row 3 is weighted heavier to lift the pair just
-          above the midpoint, where it reads better on a tall phone. Both rows
-          have an intrinsic minimum so a grown composer (attachments, several
-          folders, keyboard open) extends the scrolling body instead of clipping.
+      {/* Desktop balances the space above the composer with the task track
+          below it. The task track's 12.5rem floor reserves its 1.75rem top
+          margin, 1.75rem header, .75rem header gap, 1.125rem group heading,
+          two 2.75rem task rows with a .125rem gap, and 1.5rem bottom padding.
+          Task count cannot grow that track; only the composer's own height
+          can make the tracks exceed the viewport and scroll this body.
+          Below md the list is gone, so row 3 is weighted heavier to lift the
+          hero/composer pair just above the midpoint on a tall phone.
           With both the greeting and the recent list off there is no pair to
           balance, so row 2 collapses outright and the composer centres itself
-          inside the whole remainder. */}
+          inside the whole remainder, whose minimum is the composer's height. */}
       <div
         ref={appearanceSurfaceRef}
         className={cn(
@@ -191,9 +192,8 @@ export function LandingDraftSurface() {
           <HomeHero workspaceFolders={workspaceFolders} />
         </section>
 
-        {/* Composer + recent epics share one row so the composer is top-anchored:
-            adding a folder grows it downward into the (scrollable) epics list
-            below instead of recentering and shoving the hero up. */}
+        {/* The composer has its own desktop track: attachments cannot consume
+            the task list's minimum height in the next track. */}
         <div
           data-composer-placement={layout.placement}
           className={cn(
@@ -238,14 +238,14 @@ export function LandingDraftSurface() {
               View history
             </button>
           ) : null}
-          {showRecentHistory && !isMobile ? (
-            <div className="flex min-h-0 flex-1 flex-col pb-6">
-              {!systemModalOpen && activity.visible ? (
-                <CurrentTasksSection />
-              ) : null}
-            </div>
-          ) : null}
         </div>
+        {showRecentHistory && !isMobile ? (
+          <div className="relative mx-auto flex min-h-0 w-full max-w-3xl flex-col overflow-hidden px-6 pb-6">
+            {!systemModalOpen && activity.visible ? (
+              <CurrentTasksSection />
+            ) : null}
+          </div>
+        ) : null}
         <CustomizeStartPageButton />
       </div>
       {draftId === null ? null : (
@@ -284,7 +284,11 @@ function usePendingDraftId(draftId: string | null): string {
  * so the hero row collapses outright (the hero stays MOUNTED - unmounting it
  * would reconcile the composer against its slot and remount the editor) and
  * the composer centres itself in the whole remainder. Any other combination
- * keeps the fractional two-row split described at the grid itself.
+ * keeps the fractional space described at the grid itself.
+ *
+ * The desktop task list gets a separate bounded track. Below md there is no
+ * list, and the composer's row keeps its own height so a grown composer is
+ * not clipped.
  */
 function startPageLayout(
   showGreeting: boolean,
@@ -297,9 +301,14 @@ function startPageLayout(
 } {
   return showGreeting || showRecentHistory
     ? {
-        rows: "grid-rows-[auto_minmax(min-content,1fr)_minmax(min-content,1fr)] max-md:grid-rows-[auto_minmax(min-content,1fr)_minmax(min-content,1.4fr)] max-md:short-landscape:grid-rows-[auto_0_auto]",
+        rows: cn(
+          showRecentHistory
+            ? "grid-rows-[auto_minmax(0,1fr)_auto_minmax(12.5rem,1fr)]"
+            : "grid-rows-[auto_minmax(0,1fr)_minmax(0,1fr)]",
+          "max-md:grid-rows-[auto_minmax(0,1fr)_minmax(min-content,1.4fr)] max-md:short-landscape:grid-rows-[auto_0_auto]",
+        ),
         hero: "",
-        composer: "",
+        composer: "md:min-h-0",
         placement: "top",
       }
     : {

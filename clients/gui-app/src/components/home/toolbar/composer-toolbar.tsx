@@ -81,10 +81,15 @@ function ComposerToolbarLive(props: ComposerToolbarProps) {
     props.store,
     (state) => state.selection.modelSlug,
   );
+  const runProfileId = useStore(
+    props.store,
+    (state) => state.selection.profileId,
+  );
   const judgeBilling = useAutoJudgeBilling(
     props.runTargetHostId,
     runHarnessId,
     runModelSlug,
+    runProfileId,
   );
   const openPermissionSettings = useOpenPermissionSettings(
     props.runTargetHostId,
