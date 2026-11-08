@@ -45,7 +45,7 @@ import {
 } from "./desktop-release-feed";
 import {
   fetchDesktopReleaseIndex,
-  publicDesktopReleaseOrigins,
+  desktopReleaseOrigins,
 } from "./desktop-release-index";
 import { isCanonicalReleaseCandidate } from "@traycer-clients/shared/host-version/release-line";
 import {
@@ -174,9 +174,9 @@ function discardStagingUpdateTokenForLog(): string {
   return rejectedToken;
 }
 
-function usesPublicDesktopUpdates(): boolean {
+function usesCdnDesktopUpdates(): boolean {
   return (
-    DESKTOP_RELEASE_CHANNEL !== "staging" &&
+    DESKTOP_RELEASE_CHANNEL === "staging" ||
     currentPrivateUpdateToken().trim().length === 0
   );
 }
@@ -261,7 +261,7 @@ let downloadInProgress = false;
 let downloadIntent: DesktopAppUpdateCheckIntent | null = null;
 let selectedDesktopRelease: DesktopReleaseCandidate | null = null;
 // Public origin attempts report one terminal outcome after recovery is exhausted.
-let publicOriginOperation = false;
+let originOperation = false;
 // On macOS the ZIP download completes before Squirrel.Mac has validated and
 // staged the app. Only its native completion makes a restart installable.
 let pendingMacUpdate: UpdateDownloadedEvent | null = null;
@@ -522,7 +522,7 @@ async function configureAutoUpdater(deps: AppUpdaterDeps): Promise<void> {
   // startup check below is refused by the same guard, so we must not leave a
   // partially-configured or packaged public feed in place (review amendment 2).
   if (
-    !usesPublicDesktopUpdates() &&
+    !usesCdnDesktopUpdates() &&
     !autoUpdater.allowPrerelease &&
     !invalidPrivateConfig()
   ) {
@@ -533,10 +533,10 @@ async function configureAutoUpdater(deps: AppUpdaterDeps): Promise<void> {
     log.debug("[updater] checking for updates"),
   );
   autoUpdater.on("update-available", (info) => {
-    if (!publicOriginOperation) handleUpdateAvailable(info);
+    if (!originOperation) handleUpdateAvailable(info);
   });
   autoUpdater.on("update-not-available", (info) => {
-    if (!publicOriginOperation) handleUpdateNotAvailable(info);
+    if (!originOperation) handleUpdateNotAvailable(info);
   });
   autoUpdater.on("download-progress", (progress) => {
     log.debug("[updater] download progress", progress);
@@ -603,7 +603,7 @@ async function configureAutoUpdater(deps: AppUpdaterDeps): Promise<void> {
   }
   autoUpdater.on("error", (err) => {
     log.error("[updater] error", credentialSafeLogValue(err));
-    if (!publicOriginOperation) handleUpdaterError(err);
+    if (!originOperation) handleUpdaterError(err);
   });
 }
 
@@ -791,19 +791,6 @@ export async function checkForUpdatesNow(
     }
     return currentSnapshot;
   }
-  if (stagingReleaseAuthRequired()) {
-    const token = await prepareStagingUpdateToken();
-    if (token === null) {
-      emitStagingAuthUnavailable(
-        intent,
-        AUTHENTICATION_REQUIRED_MESSAGE,
-        "",
-        null,
-      );
-      return currentSnapshot;
-    }
-    stagingUpdateToken = token;
-  }
   if (checkInFlight) {
     // A check is already running. If it belongs to an older channel generation
     // it will abort without publishing, so queue a fresh check for the newest
@@ -839,7 +826,7 @@ export async function checkForUpdatesNow(
     });
   }
   try {
-    if (usesPublicDesktopUpdates() || modeAllowsPrerelease(activeChannelMode)) {
+    if (usesCdnDesktopUpdates() || modeAllowsPrerelease(activeChannelMode)) {
       const feed = await resolveDesktopReleaseFeed(activeChannelMode);
       if (checkGeneration !== channelGeneration) {
         return currentSnapshot;
@@ -858,11 +845,11 @@ export async function checkForUpdatesNow(
       applyDesktopReleaseFeed(feed);
     }
     if (selectedDesktopRelease?.origins !== undefined) {
-      publicOriginOperation = true;
+      originOperation = true;
       try {
         await checkSelectedDesktopRelease();
       } finally {
-        publicOriginOperation = false;
+        originOperation = false;
       }
     } else {
       await autoUpdater.checkForUpdates();
@@ -1147,7 +1134,7 @@ async function performChannelChange(
   activeChannelMode = requestedMode;
   autoUpdater.allowPrerelease = modeAllowsPrerelease(activeChannelMode);
   selectedDesktopRelease = null;
-  if (!usesPublicDesktopUpdates() && !autoUpdater.allowPrerelease) {
+  if (!usesCdnDesktopUpdates() && !autoUpdater.allowPrerelease) {
     configurePrivateGitHubUpdateFeed();
   }
 
@@ -1684,7 +1671,7 @@ export function startUpdateDownload(): DesktopAppUpdateSnapshot {
   // reset/error transition in `handleUpdaterError`.
   void (async () => {
     const release = selectedDesktopRelease;
-    publicOriginOperation = release?.origins !== undefined;
+    originOperation = release?.origins !== undefined;
     try {
       try {
         await autoUpdater.downloadUpdate();
@@ -1693,21 +1680,23 @@ export function startUpdateDownload(): DesktopAppUpdateSnapshot {
         if (
           pendingMacUpdate !== null ||
           currentSnapshot.status === "ready" ||
-          release === null ||
-          !advanceDesktopReleaseOrigin()
+          release === null
         ) {
           throw originalError;
         }
         try {
+          if (!(await advanceDesktopReleaseOrigin())) throw originalError;
           const retry = await checkCurrentDesktopOrigin();
           if (!retry.isUpdateAvailable) throw originalError;
           await autoUpdater.downloadUpdate();
-        } catch {
+        } catch (alternateError) {
+          if (isStagingAuthFailure(alternateError))
+            discardStagingUpdateTokenForLog();
           throw originalError;
         }
       }
     } finally {
-      publicOriginOperation = false;
+      originOperation = false;
     }
   })().catch((err: unknown) => {
     log.warn("[updater] download failed", credentialSafeLogValue(err));
@@ -1849,7 +1838,10 @@ function configurePrivateGitHubUpdateFeed(): void {
 // feed (review finding 2).
 function resolveUpdateRepo(): GitHubRepoCoordinate | null {
   const parsed = parseGitHubRepoCoordinate(PRIVATE_UPDATE_REPO);
-  if (currentPrivateUpdateToken().trim().length > 0) {
+  if (
+    DESKTOP_RELEASE_CHANNEL === "staging" ||
+    currentPrivateUpdateToken().trim().length > 0
+  ) {
     return parsed;
   }
   return parsed ?? { owner: "traycerai", repo: "traycer" };
@@ -1861,7 +1853,8 @@ function resolveUpdateRepo(): GitHubRepoCoordinate | null {
 // public feed.
 function invalidPrivateConfig(): boolean {
   return (
-    currentPrivateUpdateToken().trim().length > 0 &&
+    (DESKTOP_RELEASE_CHANNEL === "staging" ||
+      currentPrivateUpdateToken().trim().length > 0) &&
     parseGitHubRepoCoordinate(PRIVATE_UPDATE_REPO) === null
   );
 }
@@ -1924,16 +1917,20 @@ async function findNewestDesktopRelease(
   coordinate: GitHubRepoCoordinate,
   mode: DesktopUpdateChannelMode,
 ): Promise<DesktopReleaseCandidate | null> {
-  const signal = usesPublicDesktopUpdates()
+  const signal = usesCdnDesktopUpdates()
     ? AbortSignal.timeout(120_000)
     : undefined;
   let candidates: readonly DesktopReleaseCandidate[];
-  if (!usesPublicDesktopUpdates()) {
+  if (!usesCdnDesktopUpdates()) {
     candidates = await collectDesktopReleaseCandidates(coordinate, undefined);
   } else {
     try {
       const index = await fetchDesktopReleaseIndex(
-        mode === "stable-only" ? "stable" : "rc",
+        DESKTOP_RELEASE_CHANNEL === "staging"
+          ? "staging"
+          : mode === "stable-only"
+            ? "stable"
+            : "rc",
         coordinate.owner,
         coordinate.repo,
         signal,
@@ -1983,7 +1980,6 @@ async function findNewestDesktopRelease(
       candidates: ordered.map((candidate) => candidate.version),
     });
   }
-  const token = currentPrivateUpdateToken().trim();
   const channelFile = platformChannelFile();
   const currentOsRelease = osRelease();
   // Resolved consistently with MacUpdater so discovery filters manifests by the
@@ -2000,15 +1996,25 @@ async function findNewestDesktopRelease(
     const origins = candidate.origins;
     let firstError: unknown = null;
     for (let index = 0; index < (origins?.length ?? 1); index += 1) {
-      const attempt =
+      let attempt =
         origins === undefined
           ? candidate
           : { ...candidate, origins: origins.slice(index) };
+      try {
+        attempt = await materializeDesktopReleaseOrigin(
+          attempt,
+          coordinate,
+          signal,
+        );
+      } catch (error) {
+        firstError ??= error;
+        continue;
+      }
       const request = resolveDesktopManifestRequest(
         coordinate.owner,
         coordinate.repo,
         attempt,
-        token,
+        currentPrivateUpdateToken().trim(),
       );
       if (request === null) continue;
       try {
@@ -2053,6 +2059,66 @@ async function findNewestDesktopRelease(
   return null;
 }
 
+async function ensureStagingDesktopToken(): Promise<void> {
+  if (!stagingReleaseAuthRequired()) return;
+  const token = await prepareStagingUpdateToken();
+  if (token === null)
+    throw new AuthenticationRequiredError(AUTHENTICATION_REQUIRED_MESSAGE);
+  stagingUpdateToken = token;
+}
+
+async function materializeDesktopReleaseOrigin(
+  release: DesktopReleaseCandidate,
+  coordinate: GitHubRepoCoordinate,
+  signal: AbortSignal | undefined,
+): Promise<DesktopReleaseCandidate> {
+  const origin = release.origins?.[0];
+  if (DESKTOP_RELEASE_CHANNEL !== "staging" || origin?.blockMapAssets !== null)
+    return release;
+  await ensureStagingDesktopToken();
+  let assets = origin.assets;
+  if (assets === undefined) {
+    const response = await fetchStagingGitHubRelease(
+      `https://api.github.com/repos/${coordinate.owner}/${coordinate.repo}/releases/tags/${encodeURIComponent(release.tag)}`,
+      {
+        headers: {
+          accept: "application/vnd.github+json",
+          authorization: `token ${currentPrivateUpdateToken().trim()}`,
+        },
+        signal,
+      },
+    );
+    if (!response.ok) {
+      await cancelResponseBody(response);
+      if (response.status === 404)
+        await assertStagingRepositoryVisible(
+          coordinate,
+          {
+            accept: "application/vnd.github+json",
+            authorization: `token ${currentPrivateUpdateToken().trim()}`,
+          },
+          signal,
+        );
+      throw new Error(
+        `GitHub exact desktop release failed with HTTP ${response.status}`,
+      );
+    }
+    const raw: unknown = await response.json();
+    const [candidate] = projectDesktopRelease(raw, "staging");
+    if (candidate === undefined || candidate.tag !== release.tag)
+      throw new Error(
+        "GitHub retry did not identify the selected staging release",
+      );
+    assets = candidate.assets;
+  }
+  const prefix = `https://api.github.com/repos/${coordinate.owner}/${coordinate.repo}/releases/assets/`;
+  if (assets.some((asset) => !asset.url.startsWith(prefix)))
+    throw new Error(
+      "Staging release assets must use the exact GitHub asset origin",
+    );
+  return { ...release, assets };
+}
+
 async function checkCurrentDesktopOrigin(): Promise<UpdateCheckResult> {
   const result = await autoUpdater.checkForUpdates();
   const release = selectedDesktopRelease;
@@ -2074,10 +2140,12 @@ async function checkSelectedDesktopRelease(): Promise<void> {
   try {
     result = await checkCurrentDesktopOrigin();
   } catch (originalError) {
-    if (!advanceDesktopReleaseOrigin()) throw originalError;
     try {
+      if (!(await advanceDesktopReleaseOrigin())) throw originalError;
       result = await checkCurrentDesktopOrigin();
-    } catch {
+    } catch (alternateError) {
+      if (isStagingAuthFailure(alternateError))
+        discardStagingUpdateTokenForLog();
       throw originalError;
     }
   }
@@ -2085,7 +2153,7 @@ async function checkSelectedDesktopRelease(): Promise<void> {
   else handleUpdateNotAvailable(result.updateInfo);
 }
 
-function advanceDesktopReleaseOrigin(): boolean {
+async function advanceDesktopReleaseOrigin(): Promise<boolean> {
   const release = selectedDesktopRelease;
   const coordinate = resolveUpdateRepo();
   if (
@@ -2095,14 +2163,19 @@ function advanceDesktopReleaseOrigin(): boolean {
     (release.origins?.length ?? 0) < 2
   )
     return false;
-  const next = { ...release, origins: release.origins?.slice(1) };
+  const next = await materializeDesktopReleaseOrigin(
+    { ...release, origins: release.origins?.slice(1) },
+    coordinate,
+    undefined,
+  );
+  if (isSupersededCheckGeneration()) return false;
   selectedDesktopRelease = next;
   applyDesktopReleaseFeed(
     buildDesktopReleaseFeed(
       coordinate.owner,
       coordinate.repo,
       next,
-      "",
+      currentPrivateUpdateToken().trim(),
       linuxPackageType,
       process.platform === "darwin" ? isArm64MacTarget() : false,
     ),
@@ -2140,7 +2213,7 @@ async function fetchLatestDesktopRelease(
   }
   return {
     ...release,
-    origins: publicDesktopReleaseOrigins(
+    origins: desktopReleaseOrigins(
       coordinate.owner,
       coordinate.repo,
       release,
@@ -2154,10 +2227,10 @@ async function collectDesktopReleaseCandidates(
   coordinate: GitHubRepoCoordinate,
   signal: AbortSignal | undefined,
 ): Promise<DesktopReleaseCandidate[]> {
-  if (usesPublicDesktopUpdates()) {
+  if (usesCdnDesktopUpdates()) {
     try {
       const index = await fetchDesktopReleaseIndex(
-        "rc",
+        DESKTOP_RELEASE_CHANNEL === "staging" ? "staging" : "rc",
         coordinate.owner,
         coordinate.repo,
         signal,
@@ -2183,6 +2256,7 @@ async function collectGitHubDesktopReleaseCandidates(
   coordinate: GitHubRepoCoordinate,
   signal: AbortSignal | undefined,
 ): Promise<DesktopReleaseCandidate[]> {
+  await ensureStagingDesktopToken();
   const token = currentPrivateUpdateToken().trim();
   const headers: Record<string, string> = {
     accept: "application/vnd.github+json",
@@ -2229,11 +2303,11 @@ async function collectGitHubDesktopReleaseCandidates(
     );
     // A short page is GitHub's signal that no releases remain.
     if (raw.length < 100)
-      return !usesPublicDesktopUpdates()
+      return !usesCdnDesktopUpdates()
         ? candidates
         : candidates.map((release) => ({
             ...release,
-            origins: publicDesktopReleaseOrigins(
+            origins: desktopReleaseOrigins(
               coordinate.owner,
               coordinate.repo,
               release,
@@ -2290,7 +2364,11 @@ async function fetchDesktopReleaseManifest(
   },
   signal: AbortSignal | undefined,
 ): Promise<string | null> {
-  const response = await fetchStagingGitHubRelease(request.url, {
+  const fetchManifest =
+    new URL(request.url).hostname === "api.github.com"
+      ? fetchStagingGitHubRelease
+      : fetch;
+  const response = await fetchManifest(request.url, {
     headers: request.headers,
     signal,
   });

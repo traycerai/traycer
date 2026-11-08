@@ -64,6 +64,7 @@ export interface DesktopReleaseOrigin {
   readonly url: string;
   // null denotes GitHub's exact-tag layout; [] denotes a missing CDN index.
   readonly blockMapAssets: readonly DesktopVersionAssets[] | null;
+  readonly assets?: readonly DesktopReleaseAsset[];
 }
 
 // electron-updater derives the platform channel manifest name the same way in
@@ -624,8 +625,11 @@ export function buildDesktopReleaseFeed(
   linuxPackageType: LinuxPackageType | null,
   isArm64Mac: boolean,
 ): DesktopUpdateFeed {
-  if (token.length === 0) {
-    const origin = release.origins?.[0];
+  const origin = release.origins?.[0];
+  if (
+    token.length === 0 ||
+    (origin !== undefined && origin.blockMapAssets !== null)
+  ) {
     if (origin !== undefined) {
       return {
         provider: "custom",
@@ -662,7 +666,11 @@ export function resolveDesktopManifestRequest(
   token: string,
 ): { readonly url: string; readonly headers: Record<string, string> } | null {
   const channelFile = platformChannelFile();
-  if (token.length === 0) {
+  const origin = release.origins?.[0];
+  if (
+    token.length === 0 ||
+    (origin !== undefined && origin.blockMapAssets !== null)
+  ) {
     return {
       url: new URL(
         channelFile,

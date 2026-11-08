@@ -7,14 +7,20 @@ import {
   type DesktopVersionAssets,
 } from "./desktop-release-feed";
 
-const DESKTOP_CDN_BASE = "https://releases.traycer.ai/desktop/";
+import { config } from "../../config";
+
+function desktopCdnBase(): string {
+  return config.environment === "staging"
+    ? "https://releases.dev.traycer.ai/desktop/"
+    : "https://releases.traycer.ai/desktop/";
+}
 
 export interface DesktopReleaseIndex {
-  readonly stableHead: string;
+  readonly stableHead: string | null;
   readonly versions: readonly DesktopReleaseCandidate[];
 }
 
-export function publicDesktopReleaseOrigins(
+export function desktopReleaseOrigins(
   owner: string,
   repo: string,
   release: DesktopReleaseCandidate,
@@ -22,24 +28,25 @@ export function publicDesktopReleaseOrigins(
   githubFirst: boolean,
 ): readonly DesktopReleaseOrigin[] {
   const cdn: DesktopReleaseOrigin = {
-    url: `${DESKTOP_CDN_BASE}${encodeURIComponent(release.version)}/`,
+    url: `${desktopCdnBase()}${encodeURIComponent(release.version)}/`,
     blockMapAssets: versions ?? [],
   };
   const github: DesktopReleaseOrigin = {
     url: `https://github.com/${owner}/${repo}/releases/download/${encodeURIComponent(release.tag)}/`,
     blockMapAssets: null,
+    assets: githubFirst ? release.assets : undefined,
   };
   return githubFirst ? [github, cdn] : [cdn, github];
 }
 
 export async function fetchDesktopReleaseIndex(
-  channel: "stable" | "rc",
+  channel: "stable" | "rc" | "staging",
   owner: string,
   repo: string,
   signal: AbortSignal | undefined,
 ): Promise<DesktopReleaseIndex> {
   const timeout = AbortSignal.timeout(20_000);
-  const response = await fetch(`${DESKTOP_CDN_BASE}${channel}/index.json`, {
+  const response = await fetch(`${desktopCdnBase()}${channel}/index.json`, {
     headers: { accept: "application/json" },
     signal: signal === undefined ? timeout : AbortSignal.any([signal, timeout]),
   });
@@ -75,7 +82,7 @@ export async function fetchDesktopReleaseIndex(
 
 function parseDesktopReleaseIndex(
   value: unknown,
-  channel: "stable" | "rc",
+  channel: "stable" | "rc" | "staging",
   owner: string,
   repo: string,
 ): DesktopReleaseIndex {
@@ -84,9 +91,11 @@ function parseDesktopReleaseIndex(
     value.schemaVersion !== 1 ||
     value.channel !== channel ||
     !isTimestamp(value.generatedAt) ||
-    typeof value.stableHead !== "string" ||
+    (channel === "staging"
+      ? value.stableHead !== null
+      : typeof value.stableHead !== "string") ||
     !Array.isArray(value.versions) ||
-    value.versions.length > 21
+    value.versions.length > (channel === "staging" ? 20 : 21)
   ) {
     throw new Error("Desktop release index is malformed");
   }
@@ -95,7 +104,9 @@ function parseDesktopReleaseIndex(
     if (
       !isRecord(entry) ||
       !isTimestamp(entry.publishedAt) ||
-      (entry.channel !== "stable" && entry.channel !== "rc") ||
+      (channel === "staging"
+        ? entry.channel !== "staging"
+        : entry.channel !== "stable" && entry.channel !== "rc") ||
       !Array.isArray(entry.assets) ||
       entry.draft === true
     ) {
@@ -119,7 +130,7 @@ function parseDesktopReleaseIndex(
         asset.url !==
           new URL(
             encodeURIComponent(asset.name),
-            `${DESKTOP_CDN_BASE}${encodeURIComponent(String(entry.version))}/`,
+            `${desktopCdnBase()}${encodeURIComponent(String(entry.version))}/`,
           ).href
       ) {
         throw new Error("Desktop release index contains a malformed asset");
@@ -129,11 +140,11 @@ function parseDesktopReleaseIndex(
     const [release] = projectDesktopRelease(
       {
         tag_name: entry.tag,
-        prerelease: entry.channel === "rc",
+        prerelease: entry.channel !== "stable",
         draft: false,
         assets,
       },
-      "production",
+      channel === "staging" ? "staging" : "production",
     );
     if (
       release === undefined ||
@@ -147,26 +158,21 @@ function parseDesktopReleaseIndex(
     versions.push({ ...release, assets });
   }
   if (
+    channel !== "staging" &&
     !versions.some(
       (it) =>
         it.version === value.stableHead &&
-        it.tag === desktopReleaseTag(value.stableHead) &&
+        it.tag === desktopReleaseTag(it.version) &&
         !it.version.includes("-"),
     )
   ) {
     throw new Error("Desktop release index does not retain its stable head");
   }
   return {
-    stableHead: value.stableHead,
+    stableHead: typeof value.stableHead === "string" ? value.stableHead : null,
     versions: versions.map((release) => ({
       ...release,
-      origins: publicDesktopReleaseOrigins(
-        owner,
-        repo,
-        release,
-        versions,
-        false,
-      ),
+      origins: desktopReleaseOrigins(owner, repo, release, versions, false),
     })),
   };
 }
