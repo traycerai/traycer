@@ -179,12 +179,22 @@ function FixedSettingsSource(props: { readonly value: string }): ReactNode {
 }
 
 /**
- * An unreachable sandbox's known source is the word Personal, or the team's
- * name. The name stays in the control; the sentence does not repeat it.
+ * The settings source an unreachable sandbox is known to run: the person's
+ * own settings, or a team's, named for the control.
  */
-function offlineSourceStatus(source: string): string {
-  if (source === "Personal") return "Runs Personal settings.";
-  return "Runs the team's settings.";
+export type KnownSettingsSource =
+  | { readonly kind: "personal" }
+  | { readonly kind: "team"; readonly name: string };
+
+/** The control shows the source by name; the sentence never repeats a team's. */
+function knownSourceValue(source: KnownSettingsSource): string {
+  return source.kind === "personal" ? "Personal" : source.name;
+}
+
+function offlineSourceStatus(source: KnownSettingsSource): string {
+  return source.kind === "personal"
+    ? "Runs Personal settings."
+    : "Runs the team's settings.";
 }
 
 /** Unavailable reads retain a known source; pending reads reserve its control. */
@@ -193,7 +203,7 @@ export function HostOverviewSettingsCardSlot(props: {
   readonly hostId: string | null;
   readonly hostName: string;
   readonly usable: boolean;
-  readonly fallbackSource?: string | null;
+  readonly fallbackSource: KnownSettingsSource | null;
 }): ReactNode {
   const status = useEnvironmentStatusRead(
     props.client,
@@ -220,12 +230,13 @@ export function HostOverviewSettingsCardSlot(props: {
     bindingSupport === false ||
     binding.isError
   ) {
-    return props.fallbackSource === null ||
-      props.fallbackSource === undefined ? null : (
+    return props.fallbackSource === null ? null : (
       <SettingsRow
         row={HOST_OVERVIEW.definitions.settingsRow}
         status={offlineSourceStatus(props.fallbackSource)}
-        control={<FixedSettingsSource value={props.fallbackSource} />}
+        control={
+          <FixedSettingsSource value={knownSourceValue(props.fallbackSource)} />
+        }
       />
     );
   }

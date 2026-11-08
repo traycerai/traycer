@@ -301,7 +301,7 @@ function OwnerMetadataCheckedAtText(props: {
       className="text-ui-xs whitespace-nowrap text-muted-foreground"
       data-testid="owner-workspace-checked-at"
     >
-      Workspace snapshot · {relative}
+      Folder snapshot · {relative}
     </span>
   );
 }

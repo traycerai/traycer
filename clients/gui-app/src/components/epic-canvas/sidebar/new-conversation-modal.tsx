@@ -790,7 +790,7 @@ function NewConversationModalDialog(props: {
         // popovers portal into THIS node (see `DialogOverlayBoundaryContext`)
         // and an overflow container that is also their containing block - this
         // one is, it carries a transform - would clip them.
-        className="flex max-h-[calc(var(--spacing-safe-dvh)-2rem)] w-[min(92vw,48rem)] max-w-[min(92vw,48rem)] flex-col overflow-visible sm:max-w-[min(92vw,48rem)]"
+        className="flex max-h-[calc(var(--spacing-safe-dvh)-2rem)] w-[min(92vw,48rem)] max-w-[min(92vw,48rem,var(--safe-area-width))] flex-col overflow-visible sm:max-w-[min(92vw,48rem)]"
         data-testid="epic-sidebar-new-conversation-modal"
         data-leader-scope={LEADER_SCOPE_NEW_CONVERSATION_MODAL}
         // A pointer-down the body's React tree already saw is the body's own

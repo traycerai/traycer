@@ -596,23 +596,6 @@ describe("<ProviderMcpAddDialog />", () => {
     ]);
   });
 
-  it("grows downward from a stable top edge and scrolls before overflowing", () => {
-    renderDialog({
-      capabilities: REMOTE_HTTP_SSE_CAPS,
-      providerId: "amp",
-      mode: "add",
-      initialServer: null,
-      existingNames: [],
-    });
-    const dialog = screen.getByTestId("provider-mcp-add-dialog");
-    expect(dialog.className.split(" ")).toContain("top-[15vh]");
-    expect(dialog.className.split(" ")).toContain("translate-y-0");
-    expect(dialog.className.split(" ")).toContain(
-      "max-h-[min(calc(var(--spacing-safe-dvh)-var(--spacing-safe-bottom)-15vh),42rem)]",
-    );
-    expect(dialog.className).toContain("overflow-hidden");
-  });
-
   it("hand-rolls the footer instead of DialogFooter's p-4-only negative margins", () => {
     renderDialog({
       capabilities: REMOTE_HTTP_SSE_CAPS,

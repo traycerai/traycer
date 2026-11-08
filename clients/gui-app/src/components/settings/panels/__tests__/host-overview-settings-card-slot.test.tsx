@@ -3,7 +3,10 @@ import { cleanup, render, screen } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { EnvironmentStatusResponseV11 } from "@traycer/protocol/host/environment-schemas";
 import type { EnvironmentHostBinding } from "@traycer/protocol/host/environment/contracts";
-import { HostOverviewSettingsCardSlot } from "@/components/settings/panels/host-overview-settings-card";
+import {
+  HostOverviewSettingsCardSlot,
+  type KnownSettingsSource,
+} from "@/components/settings/panels/host-overview-settings-card";
 import {
   buildEnvironmentClient,
   environmentStatusFixture,
@@ -54,7 +57,7 @@ const { client } = buildEnvironmentClient({ hostId: "host-a", handlers: {} });
 function mount(
   usable: boolean,
   hostId: string | null,
-  fallbackSource: string | null,
+  fallbackSource: KnownSettingsSource | null,
 ): void {
   const queryClient = new QueryClient();
   render(
@@ -122,13 +125,23 @@ describe("<HostOverviewSettingsCardSlot />", () => {
   });
 
   it("keeps the offline fallback in the same disabled settings row", () => {
-    mount(false, "host-a", "Personal");
+    mount(false, "host-a", { kind: "personal" });
 
     expect(screen.getByText("Settings")).toBeTruthy();
     expect(screen.getByText("Runs Personal settings.")).toBeTruthy();
     const selector = screen.getByRole("combobox", { name: "Settings source" });
     expect(selector.textContent).toBe("Personal");
     expect(selector.hasAttribute("disabled")).toBe(true);
+  });
+
+  it("names a team source by its kind, not by its display text", () => {
+    mount(false, "host-a", { kind: "team", name: "Personal" });
+
+    expect(screen.getByText("Runs the team's settings.")).toBeTruthy();
+    expect(screen.queryByText("Runs Personal settings.")).toBeNull();
+    expect(
+      screen.getByRole("combobox", { name: "Settings source" }).textContent,
+    ).toBe("Personal");
   });
 
   it("keeps a skeleton while either supported read is pending", () => {

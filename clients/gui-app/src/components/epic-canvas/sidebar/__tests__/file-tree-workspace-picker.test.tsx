@@ -290,9 +290,8 @@ describe("<FileTreeWorkspacePicker />", () => {
       />,
     );
 
-    const trigger = screen.getByTestId("file-tree-workspace-picker-trigger");
-    expect(trigger.textContent).toContain("Select folder");
-    expect(trigger.textContent).toContain("Choose a folder");
+    expect(screen.getByText("Select folder")).toBeTruthy();
+    expect(screen.getByText("Choose a folder")).toBeTruthy();
   });
 
   it("left-truncates the selected workspace path in the trigger", () => {

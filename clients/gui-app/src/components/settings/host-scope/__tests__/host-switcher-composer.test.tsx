@@ -523,80 +523,67 @@ describe("<HostSwitcher /> composer mode New rows", () => {
     expect(wakeSandboxOnPick).not.toHaveBeenCalled();
   });
 
-  it.each(["inline", "field"] as const)(
-    "keeps the staged shape gear beside the named trigger in the merged %s row",
-    async (surface) => {
-      const stagedLabel = "New Personal sandbox";
-      const restore = stubStagedLabelOverflow(stagedLabel);
-      try {
-        render(
-          <TooltipProvider delayDuration={0}>
-            <HostSwitcher
-              refusalByHostId={NO_HOST_OPTION_REFUSALS}
-              inertExceptHostId={null}
-              hosts={[LAPTOP]}
-              selected={LAPTOP}
-              activeHostId={LAPTOP.hostId}
-              onSelect={onSelect}
-              action={null}
-              surface={surface}
-              intent="pin"
-              consequence={null}
-              disabled={false}
-              isLoading={false}
-              listsFailed={false}
-              onRetryLists={() => undefined}
-              updateViewForHost={null}
-              environmentLabelForHost={null}
-              composer={composerMode({
-                stagedConfigurationKey: "personal",
-                stagedLabel,
-              })}
-            />
-          </TooltipProvider>,
-        );
+  // Inline and field share this row. Whether the gear stays inside a
+  // narrow container, and whether the label actually truncates, is layout:
+  // browser-tests/host-switcher-staged-gear.spec.ts.
+  it("keeps the staged shape gear beside the named trigger", async () => {
+    const stagedLabel = "New Personal sandbox";
+    const restore = stubStagedLabelOverflow(stagedLabel);
+    try {
+      render(
+        <TooltipProvider delayDuration={0}>
+          <HostSwitcher
+            refusalByHostId={NO_HOST_OPTION_REFUSALS}
+            inertExceptHostId={null}
+            hosts={[LAPTOP]}
+            selected={LAPTOP}
+            activeHostId={LAPTOP.hostId}
+            onSelect={onSelect}
+            action={null}
+            surface="inline"
+            intent="pin"
+            consequence={null}
+            disabled={false}
+            isLoading={false}
+            listsFailed={false}
+            onRetryLists={() => undefined}
+            updateViewForHost={null}
+            environmentLabelForHost={null}
+            composer={composerMode({
+              stagedConfigurationKey: "personal",
+              stagedLabel,
+            })}
+          />
+        </TooltipProvider>,
+      );
 
-        const trigger = screen.getByRole("button", {
-          name: `Host: ${stagedLabel}`,
-        });
-        const gear = screen.getByTestId("host-switcher-staged-gear");
-        const triggerWrapper = trigger.parentElement;
-        const row = triggerWrapper?.parentElement ?? null;
-        expect(row).not.toBeNull();
-        expect(row).toBe(gear.parentElement);
-        expect(triggerWrapper?.nextElementSibling).toBe(gear);
-        expect(row?.classList.contains("flex")).toBe(true);
-        expect(row?.classList.contains("items-center")).toBe(true);
-        expect(row?.classList.contains("gap-1")).toBe(true);
-        expect(row?.classList.contains("w-full")).toBe(true);
-        expect(row?.classList.contains("flex-wrap")).toBe(false);
-        expect(row?.classList.contains("flex-col")).toBe(false);
-        expect(triggerWrapper?.classList.contains("min-w-0")).toBe(true);
-        expect(triggerWrapper?.classList.contains("flex-1")).toBe(true);
-        expect(gear.classList.contains("shrink-0")).toBe(true);
-        expect(trigger.getAttribute("aria-label")).toBe(`Host: ${stagedLabel}`);
-        expect(gear.getAttribute("aria-label")).toBe(
-          "Change the staged sandbox's shape",
-        );
+      const trigger = screen.getByRole("button", {
+        name: `Host: ${stagedLabel}`,
+      });
+      const gear = screen.getByTestId("host-switcher-staged-gear");
+      const triggerWrapper = trigger.parentElement;
+      const row = triggerWrapper?.parentElement ?? null;
+      expect(row).not.toBeNull();
+      expect(row).toBe(gear.parentElement);
+      expect(triggerWrapper?.nextElementSibling).toBe(gear);
+      expect(trigger.getAttribute("aria-label")).toBe(`Host: ${stagedLabel}`);
+      expect(gear.getAttribute("aria-label")).toBe(
+        "Change the staged sandbox's shape",
+      );
 
-        const label = screen.getByText(stagedLabel);
-        expect(label.className).toContain("truncate");
-        expect(label.className).not.toContain("whitespace-normal");
-        expect(label.className).not.toContain("wrap-anywhere");
-        fireEvent.focus(trigger);
-        expect((await screen.findByRole("tooltip")).textContent).toBe(
-          stagedLabel,
-        );
+      fireEvent.focus(trigger);
+      expect((await screen.findByRole("tooltip")).textContent).toBe(
+        stagedLabel,
+      );
 
-        fireEvent.click(gear);
-        expect(onOpenShape).toHaveBeenCalledWith("personal");
-        expect(onPickNew).not.toHaveBeenCalled();
-        expect(onSelect).not.toHaveBeenCalled();
-      } finally {
-        restore();
-      }
-    },
-  );
+      fireEvent.click(gear);
+      expect(onOpenShape).toHaveBeenCalledWith("personal");
+      expect(onPickNew).not.toHaveBeenCalled();
+      expect(onSelect).not.toHaveBeenCalled();
+    } finally {
+      restore();
+    }
+  });
 
   it("marks the staged row picked", () => {
     renderSwitcher({

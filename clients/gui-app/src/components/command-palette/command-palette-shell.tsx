@@ -147,7 +147,7 @@ export function CommandPaletteShell(props: CommandPaletteShellProps) {
         layout="banded"
         // Anchored high; the height cap is the primitive's safe-viewport cap
         // less that anchor, so the list ends above the bottom inset.
-        className="top-[15vh] flex max-h-[calc(var(--spacing-safe-dvh)-var(--spacing-safe-bottom)-15vh)] w-full max-w-[min(90vw,40rem)] translate-y-0 flex-col overflow-hidden sm:max-w-[min(90vw,40rem)]"
+        className="top-[15vh] flex max-h-[calc(var(--spacing-safe-dvh)-var(--spacing-safe-bottom)-15vh)] w-full max-w-[min(90vw,40rem,var(--safe-area-width))] translate-y-0 flex-col overflow-hidden sm:max-w-[min(90vw,40rem,var(--safe-area-width))]"
         showCloseButton={false}
         // Radix's document-level Esc listener can't be reached via React
         // propagation; `onEscapeKeyDown` + `preventDefault` is the first-party

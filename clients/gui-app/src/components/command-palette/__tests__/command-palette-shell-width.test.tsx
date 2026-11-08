@@ -115,7 +115,9 @@ describe("CommandPaletteShell", () => {
     const dialogClasses = dialog?.className.split(" ") ?? [];
     expect(dialogClasses).toContain("flex");
     expect(dialogClasses).toContain("flex-col");
-    expect(dialogClasses).toContain("sm:max-w-[min(90vw,40rem)]");
+    expect(dialogClasses).toContain(
+      "sm:max-w-[min(90vw,40rem,var(--safe-area-width))]",
+    );
     expect(dialogClasses).not.toContain("sm:max-w-sm");
     const command = dialog?.querySelector("[cmdk-root]");
     expect(command?.classList.contains("min-h-0")).toBe(true);
