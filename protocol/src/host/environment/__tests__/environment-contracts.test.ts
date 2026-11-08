@@ -37,6 +37,8 @@ import {
   environmentConfigurationSkillsUploadV10,
   environmentHistoryV10,
   environmentPlansListV10,
+  environmentPlansListV11,
+  environmentPlansUnlinkV11,
   environmentPlansUnlinkPreviewV10,
   environmentPlansUnlinkV10,
   ENVIRONMENT_POLICY_MAX_BYTES,
@@ -1284,7 +1286,9 @@ describe("the environments redesign's new @1.0 methods", () => {
           : wire.method === "environment.move.stopPreview" ||
               wire.method === "environment.configuration.mcpServers.put" ||
               wire.method === "environment.configuration.guide.get" ||
-              wire.method === "environment.configuration.skills.list"
+              wire.method === "environment.configuration.skills.list" ||
+              wire.method === "environment.plans.list" ||
+              wire.method === "environment.plans.unlink"
             ? 1
             : 0,
       );
@@ -1310,6 +1314,51 @@ describe("the environments redesign's new @1.0 methods", () => {
       ).toBe(false);
     },
   );
+
+  it("carries a held plan binding only on the negotiated 1.1 line", () => {
+    const request = {
+      environmentId: TEAM.environmentId,
+      profileId: "p1",
+      expectedBindingVersion: 7,
+    };
+    expect(environmentPlansUnlinkV11.requestSchema.parse(request)).toEqual(
+      request,
+    );
+    expect(
+      environmentPlansUnlinkV11.requestSchema.safeParse({
+        environmentId: TEAM.environmentId,
+        profileId: "p1",
+      }).success,
+    ).toBe(false);
+    expect(environmentPlansUnlinkV10.requestSchema.parse(request)).toEqual({
+      environmentId: TEAM.environmentId,
+      profileId: "p1",
+    });
+    const answer = {
+      plans: [
+        {
+          profileId: "p1",
+          harness: "claude",
+          status: "linked",
+          linkedBy: null,
+          bindingVersion: 7,
+        },
+      ],
+    };
+    expect(environmentPlansListV11.responseSchema.parse(answer)).toEqual(
+      answer,
+    );
+    expect(environmentPlansListV10.responseSchema.parse(answer)).toEqual({
+      plans: [
+        {
+          profileId: "p1",
+          harness: "claude",
+          status: "linked",
+          linkedBy: null,
+        },
+      ],
+    });
+  });
 
   it("skills.state answers forbidden to a caller who may not refresh", () => {
     expect(

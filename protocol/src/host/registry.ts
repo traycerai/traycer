@@ -1662,6 +1662,8 @@ import {
   providersSetProfileApiKeyRequestSchema,
   providersSetProfileApiKeyResponseSchema,
   providersSetProfileEnabledRequestSchema,
+  providersSignOutProfileRequestSchema,
+  providersSignOutProfileResponseSchema,
   providersSetProfileEnabledResponseSchema,
   providersSetEnvOverrideRequestSchema,
   providersSetEnvOverrideRequestSchemaV10,
@@ -5485,6 +5487,13 @@ export const providersSetEnabledV21 = defineRpcContract({
   schemaVersion: { major: 2, minor: 1 } as const,
   requestSchema: providersSetEnabledRequestSchemaV21,
   responseSchema: providersSetEnabledResponseSchema,
+});
+
+export const providersSignOutProfileV10 = defineRpcContract({
+  method: "providers.signOutProfile",
+  schemaVersion: { major: 1, minor: 0 } as const,
+  requestSchema: providersSignOutProfileRequestSchema,
+  responseSchema: providersSignOutProfileResponseSchema,
 });
 
 export const providersSetProfileEnabledV10 = defineRpcContract({
@@ -12883,6 +12892,19 @@ const HOST_RPC_PROVIDERS_REGISTRY_DEFINITION = {
         2: {
           contract: providersCancelLoginV12,
           upgradeFromPreviousVersion: providersCancelLoginUpgradeV11ToV12,
+        },
+      },
+      downgradePathsFromLatest: {},
+    },
+  },
+  "providers.signOutProfile": {
+    degrade: { kind: "unsupported" },
+    1: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: providersSignOutProfileV10,
+          upgradeFromPreviousVersion: null,
         },
       },
       downgradePathsFromLatest: {},
