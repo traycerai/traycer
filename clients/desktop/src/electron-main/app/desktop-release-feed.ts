@@ -715,6 +715,7 @@ export class PublicDesktopReleaseProvider extends GenericProvider {
     newVersion: string,
   ): Promise<URL[]> {
     const name = `${decodeURIComponent(posix.basename(baseUrl.pathname))}.blockmap`;
+    const oldName = name.split(newVersion).join(oldVersion);
     const versions = this.options.origin.blockMapAssets;
     if (versions === null) {
       const oldBase = new URL(this.options.origin.url);
@@ -723,18 +724,21 @@ export class PublicDesktopReleaseProvider extends GenericProvider {
         `/${encodeURIComponent(desktopReleaseTag(oldVersion))}/`,
       );
       return [
-        new URL(encodeURIComponent(name), oldBase),
+        new URL(encodeURIComponent(oldName), oldBase),
         new URL(encodeURIComponent(name), this.options.origin.url),
       ];
     }
-    return [oldVersion, newVersion].map((version) => {
+    return [
+      [oldVersion, oldName],
+      [newVersion, name],
+    ].map(([version, blockMapName]) => {
       const asset = versions
         .find((it) => it.version === version)
-        ?.assets.find((it) => it.name === name);
+        ?.assets.find((it) => it.name === blockMapName);
       if (asset === undefined) {
         // electron-updater catches this and downloads the full installer.
         throw new Error(
-          `Blockmap "${name}" is not indexed for desktop ${version}`,
+          `Blockmap "${blockMapName}" is not indexed for desktop ${version}`,
         );
       }
       return new URL(asset.url);
