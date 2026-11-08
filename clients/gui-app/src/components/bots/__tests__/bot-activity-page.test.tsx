@@ -883,6 +883,8 @@ describe("<BotActivityPage /> actions", () => {
       expect(mocks.navigateToTabIntent.mock.calls[0][1]).toMatchObject({
         kind: "open-epic",
         epicId: taskId,
+        // A list of the bot's tasks is a manual open: no way back to Tracy.
+        tracyOrigin: null,
       });
     }
   });

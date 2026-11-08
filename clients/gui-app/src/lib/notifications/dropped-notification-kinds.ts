@@ -10,8 +10,8 @@ import {
 } from "@traycer/protocol/host/notifications/payloads";
 
 /**
- * The notification center carries agent states only. Sandbox, environment,
- * team, secret and notification-hook state is read on its own page. A host on
+ * The notification center carries agent states and access-change notices.
+ * Sandbox, environment, secret and notification-hook state is read on its own page. A host on
  * this protocol already leaves the retired kinds out; a row of them that an
  * older host or the cloud feed still holds is dropped wherever rows enter the
  * merged list.
@@ -22,15 +22,12 @@ const DROPPED_NOTIFICATION_KINDS: ReadonlySet<HostNotificationKind> = new Set(
 
 /**
  * Kinds the center holds and shows without announcing: no toast, no chime.
- * `team.role.changed` is the one — a member is told their own role moved the
- * way a task's collaborators are, and that tell has never had a live surface
- * or a push either. Mirrored by the server's own push set, which keeps the
- * same kind out of the phone push. A notification hook is not a surface this
- * set has to cover: hooks observe the host's own origin store, and this kind
- * is written only server-side, so no hook ever sees a row of it.
+ * Role changes and retired read-only access stay readable here. The server's
+ * push policy excludes the same kinds. Notification hooks observe the host's
+ * origin store; these notices are written only by the server.
  */
 const NO_LIVE_ANNOUNCE_NOTIFICATION_KINDS: ReadonlySet<HostNotificationKind> =
-  new Set(["team.role.changed"]);
+  new Set(["team.role.changed", "access.readonly.retired"]);
 
 /**
  * The `host.operation.finished` operations no agent produces: a session

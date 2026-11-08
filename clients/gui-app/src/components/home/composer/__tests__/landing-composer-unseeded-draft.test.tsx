@@ -177,6 +177,7 @@ vi.mock("@/components/chat/composer/picker/use-composer-picker-items", () => ({
 }));
 vi.mock("@/hooks/composer/use-workspace-mention-roots", () => ({
   useLandingComposerMentionRoots: () => [],
+  useLandingRunWorkingDirectory: () => null,
 }));
 vi.mock("@/hooks/providers/use-provider-pack-gate", () => ({
   useProviderPackGate: () => ({ blocked: false, hint: null, preparing: null }),

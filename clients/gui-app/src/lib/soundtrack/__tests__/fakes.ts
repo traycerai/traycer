@@ -128,6 +128,15 @@ class FakeGain implements OutputGain {
     return new FakeGain(name, this.output);
   }
 
+  playRecording(
+    buffer: AudioBuffer,
+    when: number,
+    _offset: number,
+    _ended: () => void,
+  ): OutputVoice {
+    return this.play(buffer, when, 0.01);
+  }
+
   play(buffer: AudioBuffer, when: number, fadeInSeconds: number): OutputVoice {
     this.output.calls.push({
       kind: "play",

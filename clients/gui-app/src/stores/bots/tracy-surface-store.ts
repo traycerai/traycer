@@ -423,7 +423,7 @@ export function tracySurfaceHostId(): string | null {
 /**
  * Before the surface is opened from a list or the fixed entry: an open
  * surface keeps its host unless this client can no longer dial it (a restored
- * surface, a host gone since), and then it moves to `hostId`, this window's
+ * surface, a host gone since), and then it moves to the supplied serving
  * host. `isConnectable` is `null` while the directory has not answered, which
  * says nothing about the surface's host, so it keeps it.
  */

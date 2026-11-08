@@ -50,6 +50,7 @@ import {
 } from "@/components/chat/chat-attachment-scope-context";
 import { ChatContainerContext } from "@/components/chat/chat-container-context";
 import { TasklessMarkdownLinkProvider } from "@/components/chat/chat-markdown-link-provider";
+import { TracyTranscriptOriginScope } from "@/components/bots/tracy-transcript-origin-scope";
 import { useSubagentDrillIn } from "@/components/chat/segments/subagent-open-as-chat";
 import { TileErrorBoundary } from "@/components/epic-canvas/renderers/tile-error-boundary";
 import { useHostDirectoryEntry } from "@/hooks/host/use-host-directory-entry";
@@ -335,19 +336,21 @@ export function BotChatTranscript(props: {
   return (
     <TileErrorBoundary instanceId={instanceId} resetKey={chatId}>
       <BotTranscriptImageScope botId={botId} chatId={chatId} hostId={hostId}>
-        <BotChatTranscriptBody
-          minimapEnabled={surface?.kind !== "thread"}
-          handle={handle}
-          botId={botId}
-          chatId={chatId}
-          hostId={hostId}
-          title={title}
-          instanceId={instanceId}
-          surface={surface}
-          resolveMember={resolveMember}
-          header={header}
-          landOn={props.landOn}
-        />
+        <TracyTranscriptOriginScope botId={botId}>
+          <BotChatTranscriptBody
+            minimapEnabled={surface?.kind !== "thread"}
+            handle={handle}
+            botId={botId}
+            chatId={chatId}
+            hostId={hostId}
+            title={title}
+            instanceId={instanceId}
+            surface={surface}
+            resolveMember={resolveMember}
+            header={header}
+            landOn={props.landOn}
+          />
+        </TracyTranscriptOriginScope>
       </BotTranscriptImageScope>
     </TileErrorBoundary>
   );

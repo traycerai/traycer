@@ -1,10 +1,16 @@
 import type { MixDirector, MixPlan } from "./directors";
-import type { SoundtrackManifest } from "./manifest";
+import type { SoundtrackManifest, SoundtrackTrack } from "./manifest";
+import { ComposedPlayer } from "./composed-player";
 import { MIX_TUNING } from "./mix-tuning";
 import type { SoundtrackOutput } from "./output";
-import { CROSSFADE_SECONDS, crossfadePlayers, TrackPlayer } from "./player";
+import {
+  CROSSFADE_SECONDS,
+  crossfadePlayers,
+  TrackPlayer,
+  type PlaybackLifecycle,
+} from "./player";
 import type { MixCapture, RecordingQuality } from "./recording";
-import type { RandomSource } from "./scheduler";
+import { drawSeconds, type RandomSource } from "./scheduler";
 import type {
   PauseCause,
   PlayCause,
@@ -66,7 +72,7 @@ export type ResumePositions = Readonly<
 /** What is sounding now; null while the view in front has no track. */
 interface SoundingMix {
   readonly view: SoundtrackView;
-  readonly plan: MixPlan;
+  readonly plan: MixPlan | null;
 }
 
 interface SoundtrackSessionOptions {
@@ -82,7 +88,7 @@ interface SoundtrackSessionOptions {
 
 /** The tracks a view has been on, as a browser keeps its pages. */
 interface TrackHistory {
-  readonly tracks: readonly VariableTrack[];
+  readonly tracks: readonly SoundtrackTrack[];
   /** Where in `tracks` the view is. */
   readonly at: number;
 }
@@ -90,8 +96,8 @@ interface TrackHistory {
 /** The track a view is on, the track's player, and how it got there. */
 interface ViewPlayer {
   readonly view: SoundtrackView;
-  readonly track: VariableTrack;
-  readonly player: TrackPlayer;
+  readonly track: SoundtrackTrack;
+  readonly player: PlaybackLifecycle;
   readonly history: TrackHistory;
 }
 
@@ -101,22 +107,25 @@ interface ViewPlayer {
  */
 type PendingStart =
   | {
-      readonly player: TrackPlayer;
+      readonly player: PlaybackLifecycle;
       readonly timer: number;
       readonly endsAt: number;
     }
   | {
-      readonly player: TrackPlayer;
+      readonly player: PlaybackLifecycle;
       readonly timer: null;
       readonly secondsLeft: number;
     };
 
-function startFromSilence(player: TrackPlayer): void {
-  player.start(player.elapsed(), MIX_TUNING.fadeInSeconds);
+function startFromSilence(player: PlaybackLifecycle): void {
+  player.start(
+    player.elapsed(),
+    player instanceof ComposedPlayer ? 0.01 : MIX_TUNING.fadeInSeconds,
+  );
 }
 
 /** `track` next after where `history` is, which clears anything ahead of it. */
-function visited(history: TrackHistory, track: VariableTrack): TrackHistory {
+function visited(history: TrackHistory, track: SoundtrackTrack): TrackHistory {
   const tracks = [...history.tracks.slice(0, history.at + 1), track].slice(
     -MIX_TUNING.trackHistoryLength,
   );
@@ -209,7 +218,7 @@ export class SoundtrackSession {
   /** The track each view is on. */
   private readonly players = new Map<SoundtrackView, ViewPlayer>();
   /** By track name. */
-  private readonly trackPlayers = new Map<string, TrackPlayer>();
+  private readonly trackPlayers = new Map<string, PlaybackLifecycle>();
   private timer: number;
   private director: MixDirector;
   private signals: MixSignals | null = null;
@@ -470,9 +479,36 @@ export class SoundtrackSession {
   }
 
   /** The track's player, or a new one from `resumeAt` if it has none yet. */
-  private trackPlayer(track: VariableTrack, resumeAt: number): TrackPlayer {
+  private trackPlayer(
+    track: SoundtrackTrack,
+    resumeAt: number,
+  ): PlaybackLifecycle {
     const existing = this.trackPlayers.get(track.name);
     if (existing !== undefined) return existing;
+    if (track.kind === "composed") {
+      const player = new ComposedPlayer({
+        track,
+        output: this.ports.output,
+        stems: this.ports.stems,
+        position: resumeAt,
+        onEnd: () => {
+          if (this.inFront?.player !== player) return;
+          const next = this.anotherTrack(this.inFront);
+          if (next !== null)
+            this.runEnded(
+              player,
+              drawSeconds(MIX_TUNING.silenceSeconds, this.random),
+            );
+          else
+            this.waitOutSilence(
+              player,
+              drawSeconds(MIX_TUNING.silenceSeconds, this.random),
+            );
+        },
+      });
+      this.trackPlayers.set(track.name, player);
+      return player;
+    }
     const player: TrackPlayer = new TrackPlayer({
       track,
       output: this.ports.output,
@@ -492,13 +528,13 @@ export class SoundtrackSession {
     return player;
   }
 
-  private poolOf(view: SoundtrackView): readonly VariableTrack[] {
+  private poolOf(view: SoundtrackView): readonly SoundtrackTrack[] {
     const names = this.manifest.views[view];
     return this.manifest.tracks.filter((track) => names.includes(track.name));
   }
 
   /** The track it was on if the view is resuming, else one from its pool. */
-  private trackFor(view: SoundtrackView): VariableTrack | null {
+  private trackFor(view: SoundtrackView): SoundtrackTrack | null {
     const pool = this.poolOf(view);
     const resumed = pool.find(
       (track) => track.name === this.resumePositions[view]?.trackName,
@@ -520,7 +556,7 @@ export class SoundtrackSession {
    * A view whose pool has another track moves on to it, from its top once the
    * silence is over; one with a single track plays it again after the silence.
    */
-  private runEnded(player: TrackPlayer, silenceSeconds: number): void {
+  private runEnded(player: PlaybackLifecycle, silenceSeconds: number): void {
     const { inFront } = this;
     if (inFront?.player !== player) return;
     const track = this.anotherTrack(inFront);
@@ -543,7 +579,7 @@ export class SoundtrackSession {
   }
 
   /** Another track of the view's pool, picked at random; null if it has none. */
-  private anotherTrack(from: ViewPlayer): VariableTrack | null {
+  private anotherTrack(from: ViewPlayer): SoundtrackTrack | null {
     const others = this.poolOf(from.view).filter(
       (track) => track !== from.track,
     );
@@ -551,7 +587,7 @@ export class SoundtrackSession {
     return track;
   }
 
-  private waitOutSilence(player: TrackPlayer, seconds: number): void {
+  private waitOutSilence(player: PlaybackLifecycle, seconds: number): void {
     const timer = window.setTimeout(() => {
       this.pendingStart = null;
       startFromSilence(player);
@@ -579,6 +615,12 @@ export class SoundtrackSession {
       return;
     }
     const { player, track, view } = inFront;
+    if (track.kind === "composed" || !(player instanceof TrackPlayer)) {
+      this.applied = null;
+      this.ports.setDimmed(false);
+      this.onSounding({ view, plan: null });
+      return;
+    }
     const plan = this.director.plan(signals, {
       track,
       state: player.currentState(),
@@ -610,7 +652,7 @@ export class SoundtrackSession {
 
   private logSkip(
     direction: SkipDirection,
-    to: VariableTrack,
+    to: SoundtrackTrack,
     cause: SkipCause,
   ): void {
     const { log, output } = this.ports;
