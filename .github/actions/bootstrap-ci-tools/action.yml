@@ -1,0 +1,44 @@
+name: Bootstrap CI tools
+description: Install locked, verified tools from the release mirror with bounded upstream fallback
+inputs:
+  tools:
+    description: Space-separated tool names in tools-mirror.lock.json
+    default: bun
+  bun-version:
+    description: Bun version asserted against the checked-in lock
+    default: "1.3.14"
+  cold:
+    description: Skip the archive cache for the cold acceptance run
+    default: "false"
+outputs:
+  executed:
+    description: True only after every requested tool was verified and installed
+    value: ${{ steps.install.outputs.executed }}
+  hooks:
+    description: Hook environment source (mirror or fallback)
+    value: ${{ steps.install.outputs.hooks }}
+runs:
+  using: composite
+  steps:
+    - name: Empty the tool archive cache for a cold run
+      if: inputs.cold == 'true'
+      shell: bash
+      run: rm -rf "$RUNNER_TEMP/traycer-ci-tools"
+    - name: Restore verified tool archives
+      if: inputs.cold != 'true'
+      uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+      with:
+        path: ${{ runner.temp }}/traycer-ci-tools
+        key: ci-tools-${{ runner.os }}-${{ runner.arch }}-${{ inputs.tools }}-${{ hashFiles('tools-mirror.lock.json') }}
+    - name: Verify and install locked tools
+      id: install
+      shell: bash
+      env:
+        CI_TOOLS_CACHE: ${{ runner.temp }}/traycer-ci-tools
+        CI_TOOLS_REQUESTED: ${{ inputs.tools }}
+        CI_TOOLS_BUN_VERSION: ${{ inputs.bun-version }}
+      run: |
+        set -euo pipefail
+        node -e 'const lock = require("./tools-mirror.lock.json"); if (!lock.artifacts.some(e => e.name === "bun" && e.version === process.env.CI_TOOLS_BUN_VERSION)) throw new Error("Bun version does not match CI tool lock")'
+        read -ra tools <<< "$CI_TOOLS_REQUESTED"
+        node scripts/ci-tools.cjs install tools-mirror.lock.json "${tools[@]}"
