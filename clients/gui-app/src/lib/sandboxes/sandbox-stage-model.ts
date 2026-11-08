@@ -171,9 +171,13 @@ export function stageQuotedSize(
   requestedSize: Pick<StageShape, "cpus" | "memoryMb" | "diskMb">,
 ): QuotedStageSize | null {
   if (provider.shapes !== null) {
-    const rung = provider.shapes.find((candidate) =>
+    const matching = provider.shapes.filter((candidate) =>
       stageSizeIsRung(candidate, requestedSize),
     );
+    const rung =
+      (requestedSize.diskMb === null
+        ? matching.find((candidate) => candidate.default)
+        : undefined) ?? matching.at(0);
     return rung === undefined
       ? null
       : {

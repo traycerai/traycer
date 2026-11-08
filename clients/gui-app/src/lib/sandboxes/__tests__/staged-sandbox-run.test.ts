@@ -12,7 +12,10 @@ import {
 } from "vitest";
 import { environmentStatusResponseSchemaV11 } from "@traycer/protocol/host/environment-schemas";
 import type { SandboxSummary } from "@traycer/protocol/host/sandbox-control";
-import type { SandboxListFetchResult } from "@traycer-clients/shared/host-client/sandbox-control";
+import type {
+  SandboxCatalogueFetchResult,
+  SandboxListFetchResult,
+} from "@traycer-clients/shared/host-client/sandbox-control";
 import {
   SANDBOX_REFUSAL_CODE_INSUFFICIENT_CREDIT,
   SANDBOX_REFUSAL_CODE_PROVIDER_UNAVAILABLE,
@@ -782,6 +785,67 @@ describe("runStagedSandbox settling", () => {
         startedAt: 1_000_000,
       });
       expect(stageOf().failure).toEqual({ kind: "timed-out", step: "booting" });
+    },
+  );
+
+  it.each([
+    [
+      "accepts a late catalogue",
+      (release: (result: SandboxCatalogueFetchResult) => void) =>
+        release({ kind: "ok", catalogue: budgetCatalogue(600_000) }),
+      "success",
+    ],
+    [
+      "accepts a late rejection",
+      (release: (result: SandboxCatalogueFetchResult) => void) =>
+        release({ kind: "network-error", detail: "offline" }),
+      "error",
+    ],
+  ] as const)(
+    "bounds a stalled catalogue preflight at 2000 ms, then creates on the 360 second floor while the shared query still %s",
+    async (_name, settle, queryStatus) => {
+      vi.useFakeTimers();
+      const unhandled: unknown[] = [];
+      const onUnhandled = (reason: unknown) => unhandled.push(reason);
+      process.on("unhandledRejection", onUnhandled);
+      try {
+        useStagedSandboxStore.getState().stage(surfaceKey, PERSONAL_NEW);
+        const { auth, deps, clock } = harness(
+          { lists: [listOf(row({ state: "creating" }))] },
+          true,
+        );
+        let release: (result: SandboxCatalogueFetchResult) => void = () =>
+          undefined;
+        const preflight = vi.spyOn(auth, "getSandboxCatalogue").mockReturnValue(
+          new Promise((resolve) => {
+            release = resolve;
+          }),
+        );
+
+        const running = run(false, deps);
+        await vi.advanceTimersByTimeAsync(1_999);
+        expect(preflight).toHaveBeenCalledTimes(1);
+        expect(auth.requests).toEqual([]);
+        await vi.advanceTimersByTimeAsync(1);
+        expect(auth.requests).toHaveLength(1);
+        await running;
+
+        expect(clock.now - 1_000_000).toBe(STAGED_CREATE_BUDGET_MS);
+        expect(stageOf().createAttempt).toEqual({
+          budgetMs: STAGED_CREATE_BUDGET_MS,
+          startedAt: 1_000_000,
+        });
+
+        // The query was not cancelled: the late answer still lands in it.
+        settle(release);
+        await vi.advanceTimersByTimeAsync(0);
+        const [query] = deps.queryClient.getQueryCache().getAll();
+        expect(query.state.status).toBe(queryStatus);
+        expect(unhandled).toEqual([]);
+      } finally {
+        process.off("unhandledRejection", onUnhandled);
+        vi.useRealTimers();
+      }
     },
   );
 

@@ -896,6 +896,121 @@ describe("served exact per-shape prices", () => {
   });
 });
 
+describe("a request with no disk among sibling rungs of the same cpu and memory", () => {
+  const GIB = 1024;
+  const SMALL_DISK = { cpus: 2, memoryMb: 4 * GIB, diskMb: 10 * GIB };
+  const DEFAULT_DISK = { cpus: 2, memoryMb: 4 * GIB, diskMb: 20 * GIB };
+  const LATER_DISK = { cpus: 2, memoryMb: 4 * GIB, diskMb: 30 * GIB };
+  const OTHER_DEFAULT = { cpus: 4, memoryMb: 8 * GIB, diskMb: 20 * GIB };
+  const NO_DISK = {
+    os: "linux" as const,
+    cpus: 2,
+    memoryMb: 4 * GIB,
+    diskMb: null,
+    region: "us-east",
+  };
+  // Prices that tell the siblings apart: each rung's awake price is its disk in GiB.
+  const priced = (geometry: typeof SMALL_DISK) => ({
+    ...geometry,
+    priceMcPerHour: {
+      awakeMc: geometry.diskMb / GIB,
+      suspendedMc: 1,
+      stoppedMc: 1,
+    },
+  });
+
+  function served(
+    rungs: ReadonlyArray<{
+      readonly geometry: typeof SMALL_DISK;
+      readonly default: boolean;
+    }>,
+    readinessOf: typeof SMALL_DISK | null,
+  ): SandboxCatalogue {
+    const [provider] = catalogue(null, "linux").providers;
+    return sandboxCatalogueSchema.parse({
+      providers: [
+        {
+          ...provider,
+          shapes: rungs.map((rung) => ({
+            ...rung.geometry,
+            default: rung.default,
+          })),
+          regions: [
+            {
+              ...provider.regions[0],
+              shapePrices: rungs.map((rung) => priced(rung.geometry)),
+            },
+          ],
+          ...(readinessOf === null
+            ? {}
+            : {
+                readiness: {
+                  request: {
+                    os: "linux",
+                    shape: readinessOf,
+                    region: "us-east",
+                    generationId: "gen-one",
+                    launchForm: null,
+                  },
+                  result: { warm: 2 },
+                },
+              }),
+        },
+      ],
+    });
+  }
+
+  const SIBLINGS_DEFAULT_LAST = [
+    { geometry: SMALL_DISK, default: false },
+    { geometry: DEFAULT_DISK, default: true },
+    { geometry: LATER_DISK, default: false },
+  ];
+
+  it("prices the default rung's geometry, not a nondefault sibling listed before it", () => {
+    expect(
+      stagePrice(served(SIBLINGS_DEFAULT_LAST, null), NO_DISK)?.awakeMcPerHour,
+    ).toBe(DEFAULT_DISK.diskMb / GIB);
+  });
+
+  it("matches readiness to the default rung's geometry, not the sibling listed before it", () => {
+    expect(
+      sandboxReadinessLine(
+        served(SIBLINGS_DEFAULT_LAST, DEFAULT_DISK),
+        NO_DISK,
+      ),
+    ).toBe(READY_SENTENCE);
+    expect(
+      sandboxReadinessLine(served(SIBLINGS_DEFAULT_LAST, SMALL_DISK), NO_DISK),
+    ).toBeNull();
+  });
+
+  it("keeps the first exact match when the disk is named", () => {
+    const sibling = served(SIBLINGS_DEFAULT_LAST, null);
+    expect(
+      stagePrice(sibling, { ...NO_DISK, diskMb: SMALL_DISK.diskMb })
+        ?.awakeMcPerHour,
+    ).toBe(SMALL_DISK.diskMb / GIB);
+    expect(
+      stagePrice(sibling, { ...NO_DISK, diskMb: LATER_DISK.diskMb })
+        ?.awakeMcPerHour,
+    ).toBe(LATER_DISK.diskMb / GIB);
+  });
+
+  it("takes the first matching rung when no matching rung is the default", () => {
+    const noMatchingDefault = [
+      { geometry: SMALL_DISK, default: false },
+      { geometry: LATER_DISK, default: false },
+      { geometry: OTHER_DEFAULT, default: true },
+    ];
+    expect(
+      stagePrice(served(noMatchingDefault, null), NO_DISK)?.awakeMcPerHour,
+    ).toBe(SMALL_DISK.diskMb / GIB);
+    expect(
+      sandboxReadinessLine(served(noMatchingDefault, SMALL_DISK), NO_DISK),
+    ).toBe(READY_SENTENCE);
+  });
+});
+
 describe("served source geometry without unit rates", () => {
   const SIZE = {
     os: "linux" as const,

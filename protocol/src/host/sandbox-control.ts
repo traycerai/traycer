@@ -652,7 +652,7 @@ export const sandboxShapeBoundsSchema: z.ZodType<SandboxShapeBounds> =
       diskMinMb: z.number().int().positive(),
       diskMaxMb: z.number().int().positive(),
       diskDefaultMb: z.number().int().positive(),
-      diskStepMb: z.number().int().positive().optional(),
+      diskStepMb: z.number().int().positive().optional().catch(undefined),
     }),
   );
 
@@ -705,12 +705,14 @@ export const sandboxCataloguePricingSchema: z.ZodType<SandboxCataloguePricing> =
         .number()
         .nonnegative()
         .nullable()
-        .optional(),
+        .optional()
+        .catch(undefined),
       awakeDiskGbHourMillicredits: z
         .number()
         .nonnegative()
         .nullable()
-        .optional(),
+        .optional()
+        .catch(undefined),
       multiplier: z.number().positive(),
     }),
   );
@@ -832,8 +834,11 @@ export const sandboxCatalogueRegionSchema: z.ZodType<SandboxCatalogueRegion> =
       id: z.string().min(1),
       label: z.string(),
       fromPriceMcPerHour: sandboxHourlyPriceSchema,
-      pricing: sandboxCataloguePricingSchema.nullable().default(null),
-      shapePrices: z.array(sandboxShapePriceSchema).optional(),
+      pricing: sandboxCataloguePricingSchema
+        .nullable()
+        .default(null)
+        .catch(null),
+      shapePrices: z.array(sandboxShapePriceSchema).optional().catch(undefined),
     }),
   );
 
@@ -886,9 +891,16 @@ export const sandboxCatalogueProviderSchema: z.ZodType<SandboxCatalogueProvider>
   lazySchema(() =>
     z.object({
       provider: z.string().min(1),
-      createBudgetMs: z.number().positive().optional(),
-      coldCreateMeasuredMs: z.number().nonnegative().nullable().optional(),
-      readiness: sandboxCatalogueReadinessSchema.optional(),
+      // Optional enrichments may be newer than this reader; malformed values
+      // leave the core catalogue and its older-server fallbacks usable.
+      createBudgetMs: z.number().positive().optional().catch(undefined),
+      coldCreateMeasuredMs: z
+        .number()
+        .nonnegative()
+        .nullable()
+        .optional()
+        .catch(undefined),
+      readiness: sandboxCatalogueReadinessSchema.optional().catch(undefined),
       os: z.array(sandboxOsSchema),
       shape: sandboxShapeBoundsSchema,
       // Absent, unparseable, or without exactly one default reads as `null`,
@@ -906,7 +918,7 @@ export const sandboxCatalogueProviderSchema: z.ZodType<SandboxCatalogueProvider>
       wakeClass: z.string(),
       dockerInGuest: z.boolean(),
       creatable: z.boolean().default(true),
-      notCreatableReason: z.string().nullable().default(null),
+      notCreatableReason: z.string().nullable().default(null).catch(null),
       regions: z.array(sandboxCatalogueRegionSchema),
     }),
   );
@@ -922,7 +934,7 @@ export const sandboxCatalogueSchema: z.ZodType<SandboxCatalogue> = lazySchema(
   () =>
     z.object({
       providers: z.array(sandboxCatalogueProviderSchema),
-      offeredAgents: z.array(z.string()).optional(),
+      offeredAgents: z.array(z.string()).optional().catch(undefined),
     }),
 );
 

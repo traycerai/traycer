@@ -381,6 +381,7 @@ function ShapeSheetForm(props: {
       : formOf(props.initialShape, name, provider);
   });
   const [periodsOpen, setPeriodsOpen] = useState(false);
+  const [sizeCommitted, setSizeCommitted] = useState(true);
   const provider = stageProviderFor(props.catalogue, form.os);
   if (provider === null) {
     return (
@@ -440,6 +441,7 @@ function ShapeSheetForm(props: {
               const next = stageProviderFor(props.catalogue, os);
               if (next === null) return;
               const rung = defaultShapeRung(next);
+              setSizeCommitted(true);
               setForm({
                 ...form,
                 os,
@@ -458,7 +460,10 @@ function ShapeSheetForm(props: {
               value: region.id,
               label: region.label,
             }))}
-            onChange={(value) => setForm({ ...form, region: value })}
+            onChange={(value) => {
+              setSizeCommitted(true);
+              setForm({ ...form, region: value });
+            }}
           />
           {provider.shapes === null ? (
             <>
@@ -470,7 +475,11 @@ function ShapeSheetForm(props: {
                 max={provider.shape.cpuMax}
                 step={provider.shape.cpuStep}
                 testId="sandbox-shape-sheet-cpus"
-                onChange={(value) => setForm({ ...form, cpus: value })}
+                onChange={(value) => {
+                  setSizeCommitted(false);
+                  setForm({ ...form, cpus: value });
+                }}
+                onCommit={() => setSizeCommitted(true)}
               />
               <ShapeNumber
                 id={`${ids}-memory`}
@@ -480,7 +489,11 @@ function ShapeSheetForm(props: {
                 max={provider.shape.memoryMaxMb / MB_PER_GIB}
                 step={provider.shape.memoryStepMb / MB_PER_GIB}
                 testId="sandbox-shape-sheet-memory"
-                onChange={(value) => setForm({ ...form, memoryGb: value })}
+                onChange={(value) => {
+                  setSizeCommitted(false);
+                  setForm({ ...form, memoryGb: value });
+                }}
+                onCommit={() => setSizeCommitted(true)}
               />
               <ShapeNumber
                 id={`${ids}-disk`}
@@ -490,7 +503,11 @@ function ShapeSheetForm(props: {
                 max={provider.shape.diskMaxMb / MB_PER_GIB}
                 step={1}
                 testId="sandbox-shape-sheet-disk"
-                onChange={(value) => setForm({ ...form, diskGb: value })}
+                onChange={(value) => {
+                  setSizeCommitted(false);
+                  setForm({ ...form, diskGb: value });
+                }}
+                onCommit={() => setSizeCommitted(true)}
               />
             </>
           ) : (
@@ -508,6 +525,7 @@ function ShapeSheetForm(props: {
                     (candidate) => rungKey(candidate) === value,
                   );
                   if (rung === undefined) return;
+                  setSizeCommitted(true);
                   setForm({ ...form, ...rungFields(rung) });
                 }}
               />
@@ -521,7 +539,7 @@ function ShapeSheetForm(props: {
         ) : null}
         <ShapeStartupPreview
           configuration={props.configuration}
-          shape={shape}
+          shape={sizeCommitted ? shape : null}
           wake={wake}
         />
         <div className="flex flex-wrap items-baseline gap-x-1.5 text-ui-xs text-muted-foreground">
@@ -556,6 +574,7 @@ function ShapeSheetForm(props: {
               step={1}
               testId="sandbox-shape-sheet-idle"
               onChange={(value) => setForm({ ...form, idleMinutes: value })}
+              onCommit={null}
             />
             <div className="flex flex-col gap-1.5">
               <Label htmlFor={`${ids}-resting`}>Destroyed after idle for</Label>
@@ -703,6 +722,7 @@ function ShapeNumber(props: {
   readonly step: number;
   readonly testId: string;
   readonly onChange: (value: string) => void;
+  readonly onCommit: (() => void) | null;
 }): ReactNode {
   return (
     <div className="flex flex-col gap-1.5">
@@ -717,6 +737,10 @@ function ShapeNumber(props: {
         value={props.value}
         data-testid={props.testId}
         onChange={(event) => props.onChange(event.target.value)}
+        onBlur={props.onCommit ?? undefined}
+        onKeyDown={(event) => {
+          if (event.key === "Enter") props.onCommit?.();
+        }}
       />
     </div>
   );

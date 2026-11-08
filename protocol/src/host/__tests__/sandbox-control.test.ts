@@ -382,9 +382,17 @@ describe("sandbox control plane mirror", () => {
           { warm: 1.5 },
         ),
       ],
-    ])("rejects %s", (_name, readiness) => {
-      expect(parseReadiness(readiness).success).toBe(false);
-    });
+    ])(
+      "drops %s to an undefined readiness while the provider and its create budget survive",
+      (_name, readiness) => {
+        const parsed = parseReadiness(readiness);
+        expect(parsed.success).toBe(true);
+        const row = parsed.success ? parsed.data.providers[0] : undefined;
+        expect(row?.readiness).toBeUndefined();
+        expect(row?.createBudgetMs).toBe(480_000);
+        expect(row?.provider).toBe(OLDER_ROW.provider);
+      },
+    );
 
     it.each([73_000, 0, null])(
       "preserves the catalogue entry's measured create duration %s and accepts older entries without it",
@@ -422,21 +430,134 @@ describe("sandbox control plane mirror", () => {
       }).providers[0];
       expect(parsed?.regions[0]?.shapePrices).toEqual(shapePrices);
       expect(parsed?.regions[1]?.shapePrices).toBeUndefined();
-      expect(
-        sandboxCatalogueSchema.safeParse({
-          providers: [
+    });
+
+    describe("an invalid optional enrichment never fails the catalogue", () => {
+      const PRICING = {
+        vcpuHourMillicredits: 50,
+        memoryGbHourMillicredits: 25,
+        diskGbHourMillicredits: 0.5,
+        suspendedMemoryGbHourMillicredits: 30,
+        awakeDiskGbHourMillicredits: 2,
+        multiplier: 1.25,
+      };
+      const PRICED_REGION = { ...OLDER_ROW.regions[0], pricing: PRICING };
+      const parseProvider = (overrides: object) => {
+        const parsed = sandboxCatalogueSchema.safeParse({
+          providers: [{ ...OLDER_ROW, ...overrides }],
+        });
+        expect(parsed.success).toBe(true);
+        return parsed.success ? parsed.data.providers[0] : undefined;
+      };
+
+      it.each([-1, 0, "480000"])(
+        "reads create budget %j as absent",
+        (createBudgetMs) => {
+          expect(parseProvider({ createBudgetMs })?.createBudgetMs).toBe(
+            undefined,
+          );
+        },
+      );
+
+      it.each([-5, "73000"])(
+        "reads measured create duration %j as absent",
+        (coldCreateMeasuredMs) => {
+          expect(
+            parseProvider({ coldCreateMeasuredMs })?.coldCreateMeasuredMs,
+          ).toBe(undefined);
+        },
+      );
+
+      it("reads a malformed disk step as absent and keeps the bounds", () => {
+        const shape = parseProvider({
+          shape: { ...OLDER_ROW.shape, diskStepMb: 0 },
+        })?.shape;
+        expect(shape).toEqual(OLDER_ROW.shape);
+      });
+
+      it.each([
+        ["suspendedMemoryGbHourMillicredits", "awakeDiskGbHourMillicredits"],
+        ["awakeDiskGbHourMillicredits", "suspendedMemoryGbHourMillicredits"],
+      ] as const)(
+        "reads a malformed %s as absent and keeps %s and the required rates",
+        (broken, kept) => {
+          const pricing = parseProvider({
+            regions: [
+              { ...PRICED_REGION, pricing: { ...PRICING, [broken]: -1 } },
+            ],
+          })?.regions[0]?.pricing;
+          const { [broken]: _dropped, ...expected } = PRICING;
+          expect(pricing).toEqual(expected);
+          expect(pricing?.[kept]).toBe(PRICING[kept]);
+        },
+      );
+
+      it("reads malformed required unit rates as no region pricing", () => {
+        const region = parseProvider({
+          regions: [
             {
-              ...OLDER_ROW,
-              regions: [
+              ...PRICED_REGION,
+              pricing: { ...PRICING, vcpuHourMillicredits: -1 },
+            },
+          ],
+        })?.regions[0];
+        expect(region?.pricing).toBeNull();
+        expect(region?.fromPriceMcPerHour).toEqual(
+          OLDER_ROW.regions[0].fromPriceMcPerHour,
+        );
+      });
+
+      it("reads malformed exact shape prices as absent and keeps the region", () => {
+        const region = parseProvider({
+          regions: [
+            {
+              ...OLDER_ROW.regions[0],
+              shapePrices: [
                 {
-                  ...OLDER_ROW.regions[0],
-                  shapePrices: [{ ...shapePrices[0], cpus: 0 }],
+                  cpus: 0,
+                  memoryMb: 4096,
+                  diskMb: 20480,
+                  priceMcPerHour: { awakeMc: 1, suspendedMc: 1, stoppedMc: 1 },
                 },
               ],
             },
           ],
-        }).success,
-      ).toBe(false);
+        })?.regions[0];
+        expect(region?.shapePrices).toBeUndefined();
+        expect(region?.id).toBe(OLDER_ROW.regions[0].id);
+      });
+
+      it("reads malformed offered agents as absent and keeps the providers", () => {
+        const parsed = sandboxCatalogueSchema.safeParse({
+          providers: [OLDER_ROW],
+          offeredAgents: [1, 2],
+        });
+        expect(parsed.success).toBe(true);
+        expect(parsed.success ? parsed.data.offeredAgents : []).toBeUndefined();
+        expect(parsed.success ? parsed.data.providers : []).toHaveLength(1);
+      });
+
+      it("reads a malformed not-creatable reason as null", () => {
+        expect(
+          parseProvider({ notCreatableReason: 7 })?.notCreatableReason,
+        ).toBeNull();
+      });
+
+      it.each([
+        ["suspend fidelity", { suspendFidelity: 5 }],
+        ["bounds", { shape: { ...OLDER_ROW.shape, cpuMin: -1 } }],
+        ["os list", { os: "linux" }],
+        ["region id", { regions: [{ ...OLDER_ROW.regions[0], id: "" }] }],
+      ])(
+        "still fails the catalogue for malformed core %s",
+        (_name, overrides) => {
+          expect(
+            sandboxCatalogueSchema.safeParse({
+              providers: [{ ...OLDER_ROW, ...overrides }],
+            }).success,
+          ).toBe(false);
+        },
+      );
     });
 
     it("preserves the disk rounding step while accepting older bounds without it", () => {

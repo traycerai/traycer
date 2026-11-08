@@ -80,6 +80,8 @@ const CATALOGUE: SandboxCatalogue = {
 let catalogueInUse: SandboxCatalogue = CATALOGUE;
 const SETTLED = { isSuccess: true, isFetching: false };
 let readinessState = SETTLED;
+/** Every shape the sheet has asked the readiness query about, in render order. */
+let readinessAsked: (StageSize | null)[] = [];
 let authUser: AuthenticatedUser | null = null;
 
 const GIB = 1024;
@@ -108,11 +110,14 @@ vi.mock("@/hooks/sandboxes/use-sandbox-get-readiness-query", () => ({
   useSandboxGetReadiness: (
     _configuration: StageConfiguration | null,
     shape: StageSize | null,
-  ) => ({
-    isSuccess: readinessState.isSuccess,
-    isFetching: readinessState.isFetching,
-    data: sandboxReadinessLine(catalogueInUse, shape),
-  }),
+  ) => {
+    readinessAsked.push(shape);
+    return {
+      isSuccess: readinessState.isSuccess,
+      isFetching: readinessState.isFetching,
+      data: sandboxReadinessLine(catalogueInUse, shape),
+    };
+  },
 }));
 vi.mock("@/hooks/auth/use-auth-user-query", () => ({
   useAuthUser: () => ({ data: authUser }),
@@ -128,6 +133,7 @@ afterEach(() => {
   cleanup();
   catalogueInUse = CATALOGUE;
   readinessState = SETTLED;
+  readinessAsked = [];
   authUser = null;
 });
 
@@ -791,6 +797,106 @@ describe("<SandboxShapeSheet />", () => {
       expect(
         screen.queryByTestId("sandbox-shape-sheet-add-credits"),
       ).toBeNull();
+    });
+  });
+
+  describe("the shape the readiness query is asked about", () => {
+    /**
+     * The distinct sizes asked about in order; a repeat of the last is one
+     * question. The sheet hands over its whole shape, of which only the size
+     * is what the query keys on.
+     */
+    function questions(): StageSize[] {
+      const asked: StageSize[] = [];
+      for (const shape of readinessAsked) {
+        if (shape === null) continue;
+        const size: StageSize = {
+          os: shape.os,
+          region: shape.region,
+          cpus: shape.cpus,
+          memoryMb: shape.memoryMb,
+          diskMb: shape.diskMb,
+        };
+        const last = asked.at(-1);
+        if (last !== undefined && JSON.stringify(last) === JSON.stringify(size))
+          continue;
+        asked.push(size);
+      }
+      return asked;
+    }
+
+    function type(testId: string, value: string): HTMLElement {
+      const input = screen.getByTestId(testId);
+      fireEvent.change(input, { target: { value } });
+      return input;
+    }
+
+    it("asks nothing new while a number is typed, then asks once about the last valid value on blur", () => {
+      renderSheet(vi.fn());
+      expect(questions().map((shape) => shape.cpus)).toEqual([2]);
+
+      type("sandbox-shape-sheet-cpus", "3");
+      const input = type("sandbox-shape-sheet-cpus", "4");
+
+      expect(questions().map((shape) => shape.cpus)).toEqual([2]);
+      expect(screen.queryByTestId("sandbox-shape-sheet-readiness")).toBeNull();
+
+      fireEvent.blur(input);
+
+      expect(questions().map((shape) => shape.cpus)).toEqual([2, 4]);
+    });
+
+    it("asks about a typed number on Enter without a blur", () => {
+      renderSheet(vi.fn());
+
+      const input = type("sandbox-shape-sheet-memory", "8");
+      expect(questions().map((shape) => shape.memoryMb)).toEqual([4096]);
+
+      fireEvent.keyDown(input, { key: "Enter" });
+
+      expect(questions().map((shape) => shape.memoryMb)).toEqual([4096, 8192]);
+    });
+
+    it("asks about a picked region at once", () => {
+      const [provider] = CATALOGUE.providers;
+      const [us] = provider.regions;
+      catalogueInUse = {
+        providers: [
+          { ...provider, regions: [us, { ...us, id: "eu", label: "Europe" }] },
+        ],
+      };
+      renderSheet(vi.fn());
+
+      fireEvent.click(screen.getByRole("combobox", { name: "Sandbox region" }));
+      fireEvent.click(screen.getByRole("option", { name: "Europe" }));
+
+      expect(questions().map((shape) => shape.region)).toEqual([
+        "us-east",
+        "eu",
+      ]);
+    });
+
+    it("asks about a picked size at once", () => {
+      catalogueInUse = catalogueWithShapes();
+      renderSheet(vi.fn());
+
+      fireEvent.click(screen.getByRole("combobox", { name: "Size" }));
+      fireEvent.click(
+        screen.getByRole("option", { name: /4 vCPU · 8 GB · 40 GB/ }),
+      );
+
+      expect(questions().map((shape) => shape.cpus)).toEqual([2, 4]);
+    });
+
+    it("asks nothing new when the name or an idle period is edited", () => {
+      renderSheet(vi.fn());
+
+      type("sandbox-shape-sheet-name", "My sandbox");
+      fireEvent.click(screen.getByRole("button", { name: CHANGE_LABEL }));
+      const resting = type("sandbox-shape-sheet-resting", "5");
+      fireEvent.blur(resting);
+
+      expect(questions().map((shape) => shape.cpus)).toEqual([2]);
     });
   });
 });

@@ -74,6 +74,8 @@ export const STAGED_CREATE_BUDGET_MS = 360_000;
 /** Past this the line reads "taking longer than usual". */
 export const STAGED_TAKING_LONGER_MS = 90_000;
 const POLL_INTERVAL_MS = 2_000;
+/** An optional quote must not hold up the create if its shared read stalls. */
+const CATALOGUE_PREFLIGHT_BUDGET_MS = 2_000;
 
 export interface StagedSandboxRunDeps {
   readonly readSettings: (
@@ -269,16 +271,27 @@ async function prepareCreate(
   if (environmentId === undefined) return null;
   if (retainedBudgetMs !== null)
     return { environmentId, budgetMs: retainedBudgetMs };
-  const catalogue = await deps.queryClient
-    .fetchQuery(
+  let timer: number | null = null;
+  const catalogue = await Promise.race([
+    deps.queryClient.fetchQuery(
       sandboxCatalogueQueryOptions(
         deps.auth,
         deps.userId,
         true,
         sandboxReadinessContext(environmentId, target.shape),
       ),
-    )
-    .catch(() => null);
+    ),
+    new Promise<null>((resolve) => {
+      timer = window.setTimeout(
+        () => resolve(null),
+        CATALOGUE_PREFLIGHT_BUDGET_MS,
+      );
+    }),
+  ])
+    .catch(() => null)
+    .finally(() => {
+      if (timer !== null) window.clearTimeout(timer);
+    });
   const entry =
     catalogue === null ? null : stageProviderForShape(catalogue, target.shape);
   return {
