@@ -430,11 +430,23 @@ vi.mock("@/components/home/hooks/use-composer-toolbar-store", async () => {
     agentMode: "regular",
     get catalog() {
       return testState.catalogHostId === null
-        ? { hostId: null, harnesses: undefined, modelsLoaded: false }
+        ? {
+            hostId: null,
+            harnesses: undefined,
+            modelsHarnessId: "claude",
+            modelsProfileId: null,
+            models: [],
+            modelsLoaded: false,
+            modelsFailed: false,
+          }
         : {
             hostId: testState.catalogHostId,
             harnesses: [],
+            modelsHarnessId: "claude",
+            modelsProfileId: null,
+            models: [],
             modelsLoaded: true,
+            modelsFailed: false,
           };
     },
   }));
@@ -1456,7 +1468,11 @@ describe("new-conversation modal's terminal Start on a staged sandbox", () => {
         catalog: {
           hostId: "host-a",
           harnesses: [{ id: "claude", available: true, modes: ["gui", "tui"] }],
+          modelsHarnessId: "claude",
+          modelsProfileId: null,
+          models: [],
           modelsLoaded: true,
+          modelsFailed: false,
         },
       });
     });
@@ -1633,7 +1649,11 @@ describe("new-conversation modal host while a staged sandbox boots a terminal ag
         catalog: {
           hostId: "host-a",
           harnesses: [{ id: "claude", available: true, modes: ["gui", "tui"] }],
+          modelsHarnessId: "claude",
+          modelsProfileId: null,
+          models: [],
           modelsLoaded: true,
+          modelsFailed: false,
         },
       });
     });
