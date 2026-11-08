@@ -1,8 +1,5 @@
 import { describe, expect, it } from "vitest";
-import {
-  hostRpcRegistry,
-  HOST_AGENT_CREATE_SERVICE_TIER_REQUIRED_HOST_VERSION,
-} from "@traycer/protocol/host/index";
+import { hostRpcRegistry } from "@traycer/protocol/host/index";
 import { RELEASED_FLOOR_METHOD_NAMES } from "@traycer/protocol/host/released-floor";
 import { agentArchiveV10 } from "@traycer/protocol/host/agent/archive";
 import {
@@ -531,18 +528,6 @@ describe("host-agent capability contracts", () => {
         hostRpcRegistry["host.agent.createFromRemoteSender"][1].versions[1]
           .contract,
       ).toBe(hostAgentCreateFromRemoteSenderV11);
-      expect(HOST_AGENT_CREATE_SERVICE_TIER_REQUIRED_HOST_VERSION).toEqual({
-        method: "host.agent.createFromRemoteSender",
-        version: { major: 1, minor: 1 },
-      });
-      expect(
-        Object.isFrozen(HOST_AGENT_CREATE_SERVICE_TIER_REQUIRED_HOST_VERSION),
-      ).toBe(true);
-      expect(
-        Object.isFrozen(
-          HOST_AGENT_CREATE_SERVICE_TIER_REQUIRED_HOST_VERSION.version,
-        ),
-      ).toBe(true);
     });
 
     it("takes a TUI sender's launch tuple and refuses a GUI-only harness there", () => {

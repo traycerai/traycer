@@ -5144,11 +5144,11 @@ export const AGENT_FORK_SPEED_REQUIRED_HOST_VERSION: RequiredHostMethodVersion =
     version: { major: 1, minor: 1 },
   };
 
-export const HOST_AGENT_CREATE_SERVICE_TIER_REQUIRED_HOST_VERSION =
-  Object.freeze({
+export const HOST_AGENT_CREATE_SERVICE_TIER_REQUIRED_HOST_VERSION: RequiredHostMethodVersion =
+  {
     method: "host.agent.createFromRemoteSender",
-    version: Object.freeze({ major: 1, minor: 1 }),
-  }) satisfies RequiredHostMethodVersion;
+    version: { major: 1, minor: 1 },
+  };
 
 // ── Per-pack version-manager methods + the on-demand discovery refresh ─────
 //
