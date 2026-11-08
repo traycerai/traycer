@@ -52,7 +52,10 @@ import { useComposerDictation } from "@/hooks/composer/use-composer-dictation";
 import { useSettingsStore } from "@/stores/settings/settings-store";
 import { useLandingComposerPaste } from "@/hooks/composer/use-landing-composer-paste";
 import { isAttachmentIngestPending } from "@/hooks/composer/use-composer-paste";
-import { useLandingComposerMentionRoots } from "@/hooks/composer/use-workspace-mention-roots";
+import {
+  useLandingComposerMentionRoots,
+  useLandingRunWorkingDirectory,
+} from "@/hooks/composer/use-workspace-mention-roots";
 import { useRunnerHost } from "@/providers/use-runner-host";
 import { useComposerToolbarStore } from "@/components/home/hooks/use-composer-toolbar-store";
 import {
@@ -510,11 +513,14 @@ export function LandingComposer(props: LandingComposerProps) {
   // its own) - the same shared hook the chat composer uses, mirroring its
   // wiring in `chat-composer.tsx`. Purely informational: it never blocks
   // epic creation.
+  const runWorkingDirectory = useLandingRunWorkingDirectory(draftId);
   const rateLimitPrompt = useProfileRateLimitSwitchPrompt({
     harnessId,
     profileId,
     selectedModel,
+    workingDirectory: runWorkingDirectory,
     active: activityEnabled,
+    hostId: resolvedHostId,
     client: hostClient,
   });
   // Keeps the banner's `providers.list` read converging with a turn's
