@@ -493,6 +493,7 @@ function ProfileSignOutAction(props: {
   readonly onSignedOut: () => void;
 }): ReactNode {
   const signOut = useSignOutProviderProfile();
+  const [confirmOpen, setConfirmOpen] = useState(false);
   const host = usePersonalPageHost();
   const supported = useHostSupportsMethod(
     host.hostId,
@@ -504,21 +505,48 @@ function ProfileSignOutAction(props: {
     props.profile.presence?.kind !== "admitted"
   )
     return null;
+  const everyHost = props.profile.credentialHome?.custodyClass === "brokered";
+  const label = everyHost ? "Sign out on every host" : "Sign out";
+  const submit = (): void =>
+    signOut.mutate(
+      { providerId: props.providerId, profileId: props.profile.profileId },
+      {
+        onSuccess: () => {
+          setConfirmOpen(false);
+          props.onSignedOut();
+        },
+      },
+    );
   return (
-    <Button
-      type="button"
-      size="sm"
-      variant="ghost"
-      disabled={props.disabled || signOut.isPending}
-      onClick={() =>
-        signOut.mutate(
-          { providerId: props.providerId, profileId: props.profile.profileId },
-          { onSuccess: props.onSignedOut },
-        )
-      }
-    >
-      Sign out
-    </Button>
+    <>
+      <Button
+        type="button"
+        size="sm"
+        variant="ghost"
+        disabled={props.disabled || signOut.isPending}
+        onClick={() => (everyHost ? setConfirmOpen(true) : submit())}
+      >
+        {signOut.isPending ? <MutedAgentSpinner /> : null}
+        {label}
+      </Button>
+      {everyHost ? (
+        <ConfirmDestructiveDialog
+          open={confirmOpen}
+          onOpenChange={setConfirmOpen}
+          title="Sign this account out on every host?"
+          description="You’ll need to sign in again to use this account on any host."
+          cascadeSummary={null}
+          actionLabel={label}
+          isPending={signOut.isPending}
+          blockedReason={
+            props.disabled
+              ? "This profile is busy. Try again when it finishes."
+              : null
+          }
+          onConfirm={submit}
+        />
+      ) : null}
+    </>
   );
 }
 
