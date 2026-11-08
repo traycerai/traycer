@@ -32,7 +32,7 @@ import { WorkingShimmerText } from "@/components/ui/working-shimmer-text";
 import { retrospectiveSheetLinkHostId } from "@/components/settings/move/retrospective-sheet-link-host";
 import { SHARED_BY_EARLIER_VERSION_LINE } from "@/components/settings/move/overview-dated-lines";
 import { useOpenLink } from "@/lib/links/open-link";
-import { useRelativeTimestamp } from "@/lib/relative-time";
+import { useMessageTime, useRelativeTimestamp } from "@/lib/relative-time";
 import { formatClockDuration } from "@/lib/format-duration";
 import {
   botRowThreadAnchorKind,
@@ -63,6 +63,7 @@ import type {
 } from "./chat-bot-presentation-context";
 import { chatFindSegmentUnitId } from "./chat-find";
 import { ChatMessageTimestamp } from "./chat-message-timestamp";
+import { useTimestampDrawn } from "./use-timestamp-drawn";
 import {
   answerDraftKey,
   useBotDraftsStore,
@@ -786,12 +787,16 @@ function BotMessageFrame(props: {
   );
 }
 
-/** A row's time; a link where it shows the row in its channel (`link`). */
+/**
+ * A row's time; a link where it shows the row in its channel (`link`), and
+ * only while the time is drawn, so a hidden stamp leaves no empty tab stop.
+ */
 function RowTime(props: {
   readonly sentAt: number;
   readonly instanceId: string;
   readonly link: (() => void) | null;
 }): ReactElement {
+  const drawn = useTimestampDrawn(props.sentAt);
   const time = (
     <ChatMessageTimestamp
       timestamp={props.sentAt}
@@ -799,15 +804,34 @@ function RowTime(props: {
       instanceId={props.instanceId}
     />
   );
-  if (props.link === null) return time;
+  if (props.link === null || !drawn) return time;
+  return (
+    <RowTimeLink sentAt={props.sentAt} onClick={props.link}>
+      {time}
+    </RowTimeLink>
+  );
+}
+
+/**
+ * The time as a link, named for the time it shows and for what it does. Its
+ * own leaf, as the stamp is, so the minute tick the name reads repaints only
+ * this link.
+ */
+function RowTimeLink(props: {
+  readonly sentAt: number;
+  readonly onClick: () => void;
+  readonly children: ReactNode;
+}): ReactElement {
+  const time = useMessageTime(props.sentAt);
   return (
     <button
       type="button"
+      aria-label={`${time}, show in channel`}
       className="rounded-sm text-muted-foreground hover:text-foreground hover:underline focus-visible:outline-2 focus-visible:outline-ring"
       data-testid="bot-row-time-link"
-      onClick={props.link}
+      onClick={props.onClick}
     >
-      {time}
+      {props.children}
     </button>
   );
 }

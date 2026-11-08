@@ -209,6 +209,10 @@ vi.mock("@/hooks/host/use-connectable-host-ids", () => ({
 import { BotThreadsView } from "@/components/bots/bot-threads-view";
 import { useBotThreadFoldStore } from "@/stores/bots/bot-thread-fold-store";
 import { useBotTabLandingStore } from "@/stores/bots/bot-tab-landing-store";
+import {
+  DEFAULT_LAYOUT_SNAPSHOT,
+  useLayoutStore,
+} from "@/stores/layout/layout-store";
 import { useSelectionAuthorityStore } from "@/stores/host/selection-authority-store";
 import { useTracySurfaceStore } from "@/stores/bots/tracy-surface-store";
 
@@ -525,6 +529,7 @@ beforeEach(() => {
   signInViewer("user-1");
   useBotThreadFoldStore.setState({ unfolded: {} });
   useBotTabLandingStore.setState({ byBotId: {} });
+  useLayoutStore.setState({ ...DEFAULT_LAYOUT_SNAPSHOT });
   useSelectionAuthorityStore.setState({ effectiveHostId: "host-1" });
   useTracySurfaceStore.setState({
     open: false,
@@ -743,6 +748,44 @@ describe("<BotThreadsView />", () => {
       kind: "tracy",
       botId: TEAM,
     });
+  });
+
+  it("opens the bot's channel landed on the origin post from the post's time, a link named for the time it shows and for what it does", async () => {
+    const user = userEvent.setup();
+    mount();
+    await waitFor(() => expect(listed()).toContain("team-new"));
+    const anchor = within(
+      within(await revealFull("team-new")).getByTestId("bot-thread-anchor"),
+    );
+
+    const link = anchor.getByRole("button", { name: /, show in channel$/ });
+    expect(link.getAttribute("aria-label")).toBe(
+      `${String(anchor.getByTestId("chat-message-timestamp").textContent)}, show in channel`,
+    );
+    await user.click(link);
+
+    expect(useBotTabLandingStore.getState().byBotId).toEqual({
+      [TEAM]: {
+        kind: "thread",
+        threadId: null,
+        messageId: conversationRequestMessageId("req-team-new"),
+      },
+    });
+  });
+
+  it("leaves the origin post's time out of the tab order while timestamps are hidden: no link is drawn around the missing time", async () => {
+    useLayoutStore.getState().setRegionValues("timestamps", {
+      shown: "hidden",
+    });
+    mount();
+    await waitFor(() => expect(listed()).toContain("team-new"));
+
+    const anchor = within(
+      within(await revealFull("team-new")).getByTestId("bot-thread-anchor"),
+    );
+
+    expect(anchor.queryByTestId("chat-message-timestamp")).toBeNull();
+    expect(anchor.queryByTestId("bot-row-time-link")).toBeNull();
   });
 
   it("opens the bot's channel with the thread's panel beside it from the menu's Open thread", async () => {
