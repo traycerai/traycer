@@ -7,7 +7,8 @@
     "gate": false,
     "fetches": "bun electron",
     "coldOrigin": "GitHub release assets; optional prepared hook mirror",
-    "decision": "lock: verify mirror first and bounded upstream second; hooks restore from digest-verified mirror archive, else build from config-pinned repositories (output mirror/cache/fallback). No consumer reads prepare-run artifacts."
+    "decision": "lock: verify mirror first and bounded upstream second; hooks restore from digest-verified mirror archive, else build from config-pinned repositories (output mirror/cache/fallback). No consumer reads prepare-run artifacts.",
+    "mirrorSource": "${{ vars.CI_TOOLS_MIRROR_BASE_URL }}"
   },
   {
     "workflow": ".github/workflows/browser-regressions.yml",
@@ -17,7 +18,8 @@
     "gate": false,
     "fetches": "Node.js 24",
     "coldOrigin": "GitHub manifest; nodejs.org distributions",
-    "decision": "independent fallback: keep only after blackhole run proves job budget (pending)"
+    "decision": "independent fallback: keep only after blackhole run proves job budget (pending)",
+    "mirrorSource": "independent origin / explicit workflow CI_TOOLS_MIRROR for direct script consumers"
   },
   {
     "workflow": ".github/workflows/browser-regressions.yml",
@@ -27,7 +29,8 @@
     "gate": false,
     "fetches": "bun",
     "coldOrigin": "GitHub release assets; optional prepared hook mirror",
-    "decision": "lock: verify mirror first and bounded upstream second; hooks restore from digest-verified mirror archive, else build from config-pinned repositories (output mirror/cache/fallback). No consumer reads prepare-run artifacts."
+    "decision": "lock: verify mirror first and bounded upstream second; hooks restore from digest-verified mirror archive, else build from config-pinned repositories (output mirror/cache/fallback). No consumer reads prepare-run artifacts.",
+    "mirrorSource": "${{ vars.CI_TOOLS_MIRROR_BASE_URL }}"
   },
   {
     "workflow": ".github/workflows/formal-regressions.yml",
@@ -37,7 +40,8 @@
     "gate": false,
     "fetches": "tla2tools 1.7.4",
     "coldOrigin": "GitHub release assets",
-    "decision": "lock: direct locked fetch"
+    "decision": "lock: direct locked fetch",
+    "mirrorSource": "independent origin / explicit workflow CI_TOOLS_MIRROR for direct script consumers"
   },
   {
     "workflow": ".github/workflows/measurements.yml",
@@ -47,7 +51,8 @@
     "gate": false,
     "fetches": "bun electron",
     "coldOrigin": "GitHub release assets; optional prepared hook mirror",
-    "decision": "lock: verify mirror first and bounded upstream second; hooks restore from digest-verified mirror archive, else build from config-pinned repositories (output mirror/cache/fallback). No consumer reads prepare-run artifacts."
+    "decision": "lock: verify mirror first and bounded upstream second; hooks restore from digest-verified mirror archive, else build from config-pinned repositories (output mirror/cache/fallback). No consumer reads prepare-run artifacts.",
+    "mirrorSource": "${{ vars.CI_TOOLS_MIRROR_BASE_URL }}"
   },
   {
     "workflow": ".github/workflows/measurements.yml",
@@ -57,7 +62,8 @@
     "gate": false,
     "fetches": "Node.js 24",
     "coldOrigin": "GitHub manifest; nodejs.org distributions",
-    "decision": "independent fallback: keep only after blackhole run proves job budget (pending)"
+    "decision": "independent fallback: keep only after blackhole run proves job budget (pending)",
+    "mirrorSource": "independent origin / explicit workflow CI_TOOLS_MIRROR for direct script consumers"
   },
   {
     "workflow": ".github/workflows/measurements.yml",
@@ -67,7 +73,8 @@
     "gate": false,
     "fetches": "bun electron",
     "coldOrigin": "GitHub release assets; optional prepared hook mirror",
-    "decision": "lock: verify mirror first and bounded upstream second; hooks restore from digest-verified mirror archive, else build from config-pinned repositories (output mirror/cache/fallback). No consumer reads prepare-run artifacts."
+    "decision": "lock: verify mirror first and bounded upstream second; hooks restore from digest-verified mirror archive, else build from config-pinned repositories (output mirror/cache/fallback). No consumer reads prepare-run artifacts.",
+    "mirrorSource": "${{ vars.CI_TOOLS_MIRROR_BASE_URL }}"
   },
   {
     "workflow": ".github/workflows/measurements.yml",
@@ -77,7 +84,8 @@
     "gate": false,
     "fetches": "Node.js 24",
     "coldOrigin": "GitHub manifest; nodejs.org distributions",
-    "decision": "independent fallback: keep only after blackhole run proves job budget (pending)"
+    "decision": "independent fallback: keep only after blackhole run proves job budget (pending)",
+    "mirrorSource": "independent origin / explicit workflow CI_TOOLS_MIRROR for direct script consumers"
   },
   {
     "workflow": ".github/workflows/pre-commit.yml",
@@ -87,7 +95,8 @@
     "gate": true,
     "fetches": "python-312 hooks",
     "coldOrigin": "GitHub release assets; optional prepared hook mirror",
-    "decision": "lock: verify mirror first and bounded upstream second; hooks restore from digest-verified mirror archive, else build from config-pinned repositories (output mirror/cache/fallback). No consumer reads prepare-run artifacts."
+    "decision": "lock: verify mirror first and bounded upstream second; hooks restore from digest-verified mirror archive, else build from config-pinned repositories (output mirror/cache/fallback). No consumer reads prepare-run artifacts.",
+    "mirrorSource": "${{ inputs.mirror_base_url || vars.CI_TOOLS_MIRROR_BASE_URL }}"
   },
   {
     "workflow": ".github/workflows/pre-commit.yml",
@@ -97,7 +106,8 @@
     "gate": true,
     "fetches": "Node.js 24",
     "coldOrigin": "GitHub manifest; nodejs.org distributions",
-    "decision": "independent fallback: keep only after blackhole run proves job budget (pending)"
+    "decision": "independent fallback: keep only after blackhole run proves job budget (pending)",
+    "mirrorSource": "independent origin / explicit workflow CI_TOOLS_MIRROR for direct script consumers"
   },
   {
     "workflow": ".github/workflows/pre-commit.yml",
@@ -107,7 +117,8 @@
     "gate": true,
     "fetches": "pre-commit and pinned hook repositories",
     "coldOrigin": "PyPI; github.com",
-    "decision": "hook archive: verify mirror digest; if absent/invalid pre-commit builds from revisions in .pre-commit-config.yaml. No consumer reads prepare-run artifacts; output names mirror or fallback."
+    "decision": "hook archive: verify mirror digest; if absent/invalid pre-commit builds from revisions in .pre-commit-config.yaml. No consumer reads prepare-run artifacts; output names mirror or fallback.",
+    "mirrorSource": "independent origin / explicit workflow CI_TOOLS_MIRROR for direct script consumers"
   },
   {
     "workflow": ".github/workflows/pre-commit.yml",
@@ -117,7 +128,8 @@
     "gate": true,
     "fetches": "pre-commit and pinned hook repositories",
     "coldOrigin": "PyPI; github.com",
-    "decision": "hook archive: verify mirror digest; if absent/invalid pre-commit builds from revisions in .pre-commit-config.yaml. No consumer reads prepare-run artifacts; output names mirror or fallback."
+    "decision": "hook archive: verify mirror digest; if absent/invalid pre-commit builds from revisions in .pre-commit-config.yaml. No consumer reads prepare-run artifacts; output names mirror or fallback.",
+    "mirrorSource": "independent origin / explicit workflow CI_TOOLS_MIRROR for direct script consumers"
   },
   {
     "workflow": ".github/workflows/pre-commit.yml",
@@ -127,7 +139,8 @@
     "gate": true,
     "fetches": "bun electron",
     "coldOrigin": "GitHub release assets; optional prepared hook mirror",
-    "decision": "lock: verify mirror first and bounded upstream second; hooks restore from digest-verified mirror archive, else build from config-pinned repositories (output mirror/cache/fallback). No consumer reads prepare-run artifacts."
+    "decision": "lock: verify mirror first and bounded upstream second; hooks restore from digest-verified mirror archive, else build from config-pinned repositories (output mirror/cache/fallback). No consumer reads prepare-run artifacts.",
+    "mirrorSource": "${{ inputs.mirror_base_url || vars.CI_TOOLS_MIRROR_BASE_URL }}"
   },
   {
     "workflow": ".github/workflows/pre-commit.yml",
@@ -137,7 +150,8 @@
     "gate": true,
     "fetches": "Node.js 24",
     "coldOrigin": "GitHub manifest; nodejs.org distributions",
-    "decision": "independent fallback: keep only after blackhole run proves job budget (pending)"
+    "decision": "independent fallback: keep only after blackhole run proves job budget (pending)",
+    "mirrorSource": "independent origin / explicit workflow CI_TOOLS_MIRROR for direct script consumers"
   },
   {
     "workflow": ".github/workflows/pre-commit.yml",
@@ -147,7 +161,8 @@
     "gate": true,
     "fetches": "workspace packages and Electron postinstall",
     "coldOrigin": "npm registry; GitHub Electron release assets; native package registries",
-    "decision": "registry packages keep integrity from bun.lock; bootstrap Electron + checksum metadata through lock before dependency install"
+    "decision": "registry packages keep integrity from bun.lock; bootstrap Electron + checksum metadata through lock before dependency install",
+    "mirrorSource": "independent origin / explicit workflow CI_TOOLS_MIRROR for direct script consumers"
   },
   {
     "workflow": ".github/workflows/pre-commit.yml",
@@ -157,7 +172,8 @@
     "gate": true,
     "fetches": "bun electron",
     "coldOrigin": "GitHub release assets; optional prepared hook mirror",
-    "decision": "lock: verify mirror first and bounded upstream second; hooks restore from digest-verified mirror archive, else build from config-pinned repositories (output mirror/cache/fallback). No consumer reads prepare-run artifacts."
+    "decision": "lock: verify mirror first and bounded upstream second; hooks restore from digest-verified mirror archive, else build from config-pinned repositories (output mirror/cache/fallback). No consumer reads prepare-run artifacts.",
+    "mirrorSource": "${{ inputs.mirror_base_url || vars.CI_TOOLS_MIRROR_BASE_URL }}"
   },
   {
     "workflow": ".github/workflows/pre-commit.yml",
@@ -167,7 +183,8 @@
     "gate": true,
     "fetches": "Node.js 24",
     "coldOrigin": "GitHub manifest; nodejs.org distributions",
-    "decision": "independent fallback: keep only after blackhole run proves job budget (pending)"
+    "decision": "independent fallback: keep only after blackhole run proves job budget (pending)",
+    "mirrorSource": "independent origin / explicit workflow CI_TOOLS_MIRROR for direct script consumers"
   },
   {
     "workflow": ".github/workflows/pre-commit.yml",
@@ -177,7 +194,8 @@
     "gate": true,
     "fetches": "workspace packages and Electron postinstall",
     "coldOrigin": "npm registry; GitHub Electron release assets; native package registries",
-    "decision": "registry packages keep integrity from bun.lock; bootstrap Electron + checksum metadata through lock before dependency install"
+    "decision": "registry packages keep integrity from bun.lock; bootstrap Electron + checksum metadata through lock before dependency install",
+    "mirrorSource": "independent origin / explicit workflow CI_TOOLS_MIRROR for direct script consumers"
   },
   {
     "workflow": ".github/workflows/protocol-compat.yml",
@@ -187,7 +205,8 @@
     "gate": false,
     "fetches": "bun electron",
     "coldOrigin": "GitHub release assets; optional prepared hook mirror",
-    "decision": "lock: verify mirror first and bounded upstream second; hooks restore from digest-verified mirror archive, else build from config-pinned repositories (output mirror/cache/fallback). No consumer reads prepare-run artifacts."
+    "decision": "lock: verify mirror first and bounded upstream second; hooks restore from digest-verified mirror archive, else build from config-pinned repositories (output mirror/cache/fallback). No consumer reads prepare-run artifacts.",
+    "mirrorSource": "${{ vars.CI_TOOLS_MIRROR_BASE_URL }}"
   },
   {
     "workflow": ".github/workflows/protocol-compat.yml",
@@ -197,7 +216,8 @@
     "gate": false,
     "fetches": "workspace packages and Electron postinstall",
     "coldOrigin": "npm registry; GitHub Electron release assets; native package registries",
-    "decision": "registry packages keep integrity from bun.lock; bootstrap Electron + checksum metadata through lock before dependency install"
+    "decision": "registry packages keep integrity from bun.lock; bootstrap Electron + checksum metadata through lock before dependency install",
+    "mirrorSource": "independent origin / explicit workflow CI_TOOLS_MIRROR for direct script consumers"
   },
   {
     "workflow": ".github/workflows/publish-cli-package-managers.yml",
@@ -207,7 +227,8 @@
     "gate": false,
     "fetches": "bun electron",
     "coldOrigin": "GitHub release assets; optional prepared hook mirror",
-    "decision": "lock: verify mirror first and bounded upstream second; hooks restore from digest-verified mirror archive, else build from config-pinned repositories (output mirror/cache/fallback). No consumer reads prepare-run artifacts."
+    "decision": "lock: verify mirror first and bounded upstream second; hooks restore from digest-verified mirror archive, else build from config-pinned repositories (output mirror/cache/fallback). No consumer reads prepare-run artifacts.",
+    "mirrorSource": "${{ vars.CI_TOOLS_MIRROR_BASE_URL }}"
   },
   {
     "workflow": ".github/workflows/publish-cli-package-managers.yml",
@@ -217,7 +238,8 @@
     "gate": false,
     "fetches": "Node.js 24",
     "coldOrigin": "GitHub manifest; nodejs.org distributions",
-    "decision": "independent fallback: keep only after blackhole run proves job budget (pending)"
+    "decision": "independent fallback: keep only after blackhole run proves job budget (pending)",
+    "mirrorSource": "independent origin / explicit workflow CI_TOOLS_MIRROR for direct script consumers"
   },
   {
     "workflow": ".github/workflows/publish-cli-package-managers.yml",
@@ -227,7 +249,8 @@
     "gate": false,
     "fetches": "workspace packages and Electron postinstall",
     "coldOrigin": "npm registry; GitHub Electron release assets; native package registries",
-    "decision": "registry packages keep integrity from bun.lock; bootstrap Electron + checksum metadata through lock before dependency install"
+    "decision": "registry packages keep integrity from bun.lock; bootstrap Electron + checksum metadata through lock before dependency install",
+    "mirrorSource": "independent origin / explicit workflow CI_TOOLS_MIRROR for direct script consumers"
   },
   {
     "workflow": ".github/workflows/publish-cli-package-managers.yml",
@@ -237,7 +260,8 @@
     "gate": false,
     "fetches": "Node.js 24",
     "coldOrigin": "GitHub manifest; nodejs.org distributions",
-    "decision": "independent fallback: keep only after blackhole run proves job budget (pending)"
+    "decision": "independent fallback: keep only after blackhole run proves job budget (pending)",
+    "mirrorSource": "independent origin / explicit workflow CI_TOOLS_MIRROR for direct script consumers"
   },
   {
     "workflow": ".github/workflows/publish-desktop-cask.yml",
@@ -247,7 +271,8 @@
     "gate": false,
     "fetches": "Node.js 24",
     "coldOrigin": "GitHub manifest; nodejs.org distributions",
-    "decision": "independent fallback: keep only after blackhole run proves job budget (pending)"
+    "decision": "independent fallback: keep only after blackhole run proves job budget (pending)",
+    "mirrorSource": "independent origin / explicit workflow CI_TOOLS_MIRROR for direct script consumers"
   },
   {
     "workflow": ".github/workflows/publish-desktop-windows-package-managers.yml",
@@ -257,7 +282,8 @@
     "gate": false,
     "fetches": "Node.js 24",
     "coldOrigin": "GitHub manifest; nodejs.org distributions",
-    "decision": "independent fallback: keep only after blackhole run proves job budget (pending)"
+    "decision": "independent fallback: keep only after blackhole run proves job budget (pending)",
+    "mirrorSource": "independent origin / explicit workflow CI_TOOLS_MIRROR for direct script consumers"
   },
   {
     "workflow": ".github/workflows/publish-desktop-windows-package-managers.yml",
@@ -267,7 +293,8 @@
     "gate": false,
     "fetches": "winget-cli / wingetcreate",
     "coldOrigin": "GitHub release assets",
-    "decision": "lock: direct locked fetch"
+    "decision": "lock: direct locked fetch",
+    "mirrorSource": "independent origin / explicit workflow CI_TOOLS_MIRROR for direct script consumers"
   },
   {
     "workflow": ".github/workflows/publish-desktop-windows-package-managers.yml",
@@ -277,7 +304,8 @@
     "gate": false,
     "fetches": "winget-cli / wingetcreate",
     "coldOrigin": "GitHub release assets",
-    "decision": "lock: direct locked fetch"
+    "decision": "lock: direct locked fetch",
+    "mirrorSource": "independent origin / explicit workflow CI_TOOLS_MIRROR for direct script consumers"
   },
   {
     "workflow": ".github/workflows/publish-docs.yml",
@@ -287,7 +315,8 @@
     "gate": false,
     "fetches": "bun",
     "coldOrigin": "GitHub release assets; optional prepared hook mirror",
-    "decision": "lock: verify mirror first and bounded upstream second; hooks restore from digest-verified mirror archive, else build from config-pinned repositories (output mirror/cache/fallback). No consumer reads prepare-run artifacts."
+    "decision": "lock: verify mirror first and bounded upstream second; hooks restore from digest-verified mirror archive, else build from config-pinned repositories (output mirror/cache/fallback). No consumer reads prepare-run artifacts.",
+    "mirrorSource": "${{ vars.CI_TOOLS_MIRROR_BASE_URL }}"
   },
   {
     "workflow": ".github/workflows/real-supervisor.yml",
@@ -297,7 +326,8 @@
     "gate": false,
     "fetches": "bun electron",
     "coldOrigin": "GitHub release assets; optional prepared hook mirror",
-    "decision": "lock: verify mirror first and bounded upstream second; hooks restore from digest-verified mirror archive, else build from config-pinned repositories (output mirror/cache/fallback). No consumer reads prepare-run artifacts."
+    "decision": "lock: verify mirror first and bounded upstream second; hooks restore from digest-verified mirror archive, else build from config-pinned repositories (output mirror/cache/fallback). No consumer reads prepare-run artifacts.",
+    "mirrorSource": "${{ vars.CI_TOOLS_MIRROR_BASE_URL }}"
   },
   {
     "workflow": ".github/workflows/real-supervisor.yml",
@@ -307,7 +337,8 @@
     "gate": false,
     "fetches": "Node.js 24",
     "coldOrigin": "GitHub manifest; nodejs.org distributions",
-    "decision": "independent fallback: keep only after blackhole run proves job budget (pending)"
+    "decision": "independent fallback: keep only after blackhole run proves job budget (pending)",
+    "mirrorSource": "independent origin / explicit workflow CI_TOOLS_MIRROR for direct script consumers"
   },
   {
     "workflow": ".github/workflows/secret-scan.yml",
@@ -317,7 +348,8 @@
     "gate": false,
     "fetches": "gitleaks",
     "coldOrigin": "GitHub release assets; optional prepared hook mirror",
-    "decision": "lock: verify mirror first and bounded upstream second; hooks restore from digest-verified mirror archive, else build from config-pinned repositories (output mirror/cache/fallback). No consumer reads prepare-run artifacts."
+    "decision": "lock: verify mirror first and bounded upstream second; hooks restore from digest-verified mirror archive, else build from config-pinned repositories (output mirror/cache/fallback). No consumer reads prepare-run artifacts.",
+    "mirrorSource": "${{ vars.CI_TOOLS_MIRROR_BASE_URL }}"
   },
   {
     "workflow": ".github/workflows/secret-scan.yml",
@@ -327,7 +359,8 @@
     "gate": false,
     "fetches": "gitleaks 8.30.1",
     "coldOrigin": "GitHub release assets",
-    "decision": "lock: bootstrap-ci-tools"
+    "decision": "lock: bootstrap-ci-tools",
+    "mirrorSource": "independent origin / explicit workflow CI_TOOLS_MIRROR for direct script consumers"
   },
   {
     "workflow": ".github/workflows/sync-released-baseline.yml",
@@ -337,7 +370,8 @@
     "gate": false,
     "fetches": "bun electron",
     "coldOrigin": "GitHub release assets; optional prepared hook mirror",
-    "decision": "lock: verify mirror first and bounded upstream second; hooks restore from digest-verified mirror archive, else build from config-pinned repositories (output mirror/cache/fallback). No consumer reads prepare-run artifacts."
+    "decision": "lock: verify mirror first and bounded upstream second; hooks restore from digest-verified mirror archive, else build from config-pinned repositories (output mirror/cache/fallback). No consumer reads prepare-run artifacts.",
+    "mirrorSource": "${{ vars.CI_TOOLS_MIRROR_BASE_URL }}"
   },
   {
     "workflow": ".github/workflows/test.yml",
@@ -347,7 +381,8 @@
     "gate": true,
     "fetches": "protocol oracle source checkout",
     "coldOrigin": "github.com git",
-    "decision": "source checkout exception: fetch before firewall, before first setup"
+    "decision": "source checkout exception: fetch before firewall, before first setup",
+    "mirrorSource": "independent origin / explicit workflow CI_TOOLS_MIRROR for direct script consumers"
   },
   {
     "workflow": ".github/workflows/test.yml",
@@ -357,7 +392,8 @@
     "gate": true,
     "fetches": "bun electron",
     "coldOrigin": "GitHub release assets; optional prepared hook mirror",
-    "decision": "lock: verify mirror first and bounded upstream second; hooks restore from digest-verified mirror archive, else build from config-pinned repositories (output mirror/cache/fallback). No consumer reads prepare-run artifacts."
+    "decision": "lock: verify mirror first and bounded upstream second; hooks restore from digest-verified mirror archive, else build from config-pinned repositories (output mirror/cache/fallback). No consumer reads prepare-run artifacts.",
+    "mirrorSource": "${{ inputs.mirror_base_url || vars.CI_TOOLS_MIRROR_BASE_URL }}"
   },
   {
     "workflow": ".github/workflows/test.yml",
@@ -367,7 +403,8 @@
     "gate": true,
     "fetches": "Node.js 24",
     "coldOrigin": "GitHub manifest; nodejs.org distributions",
-    "decision": "independent fallback: keep only after blackhole run proves job budget (pending)"
+    "decision": "independent fallback: keep only after blackhole run proves job budget (pending)",
+    "mirrorSource": "independent origin / explicit workflow CI_TOOLS_MIRROR for direct script consumers"
   },
   {
     "workflow": ".github/workflows/test.yml",
@@ -377,7 +414,8 @@
     "gate": true,
     "fetches": "bun electron",
     "coldOrigin": "GitHub release assets; optional prepared hook mirror",
-    "decision": "lock: verify mirror first and bounded upstream second; hooks restore from digest-verified mirror archive, else build from config-pinned repositories (output mirror/cache/fallback). No consumer reads prepare-run artifacts."
+    "decision": "lock: verify mirror first and bounded upstream second; hooks restore from digest-verified mirror archive, else build from config-pinned repositories (output mirror/cache/fallback). No consumer reads prepare-run artifacts.",
+    "mirrorSource": "${{ inputs.mirror_base_url || vars.CI_TOOLS_MIRROR_BASE_URL }}"
   },
   {
     "workflow": ".github/workflows/test.yml",
@@ -387,7 +425,8 @@
     "gate": true,
     "fetches": "Node.js 24",
     "coldOrigin": "GitHub manifest; nodejs.org distributions",
-    "decision": "independent fallback: keep only after blackhole run proves job budget (pending)"
+    "decision": "independent fallback: keep only after blackhole run proves job budget (pending)",
+    "mirrorSource": "independent origin / explicit workflow CI_TOOLS_MIRROR for direct script consumers"
   },
   {
     "workflow": ".github/workflows/test.yml",
@@ -397,7 +436,8 @@
     "gate": true,
     "fetches": "bun electron",
     "coldOrigin": "GitHub release assets; optional prepared hook mirror",
-    "decision": "lock: verify mirror first and bounded upstream second; hooks restore from digest-verified mirror archive, else build from config-pinned repositories (output mirror/cache/fallback). No consumer reads prepare-run artifacts."
+    "decision": "lock: verify mirror first and bounded upstream second; hooks restore from digest-verified mirror archive, else build from config-pinned repositories (output mirror/cache/fallback). No consumer reads prepare-run artifacts.",
+    "mirrorSource": "${{ inputs.mirror_base_url || vars.CI_TOOLS_MIRROR_BASE_URL }}"
   },
   {
     "workflow": ".github/workflows/test.yml",
@@ -407,6 +447,7 @@
     "gate": true,
     "fetches": "Node.js 24",
     "coldOrigin": "GitHub manifest; nodejs.org distributions",
-    "decision": "independent fallback: keep only after blackhole run proves job budget (pending)"
+    "decision": "independent fallback: keep only after blackhole run proves job budget (pending)",
+    "mirrorSource": "independent origin / explicit workflow CI_TOOLS_MIRROR for direct script consumers"
   }
 ]
