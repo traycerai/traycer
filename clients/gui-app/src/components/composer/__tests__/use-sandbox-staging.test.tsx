@@ -1614,6 +1614,48 @@ describe("useSandboxStaging a staged resting sandbox's block", () => {
       stagedPrice(pricedHost("team-box", "suspended", teamOwnedItem())),
     ).toBe("Waking team-box uses your acme allowance and makes you the payer.");
   });
+
+  it.each([
+    { state: "suspended", os: "windows", limited: true },
+    { state: "stopped", os: "windows", limited: true },
+    { state: "suspended", os: "linux", limited: false },
+    { state: "stopped", os: "linux", limited: false },
+  ] as const)(
+    "hands the block the $os OS of a staged $state sandbox's own row, so the limitation reads as $limited before anything is sent",
+    ({ state, os, limited }) => {
+      const hostId = `box-${os}-${state}`;
+      const host = sandboxHost(
+        hostId,
+        {
+          state,
+          summary: sandboxSummaryFixture({
+            id: `sbx-${hostId}`,
+            hostId,
+            state,
+            os,
+            priceMcPerHour: PRICED,
+          }),
+        },
+        null,
+      );
+      const { composer } = mount([LAPTOP, host]);
+
+      act(() => composer.onPickHost(host));
+
+      expect(readStagedSandbox(SURFACE)).toMatchObject({
+        phase: "staged",
+        clientRequestId: null,
+        target: { kind: "existing", hostId },
+      });
+      renderStagedConsequences();
+      if (limited) {
+        expect(screen.getByText(WINDOWS_SANDBOX_LIMITATION)).toBeDefined();
+      } else {
+        expect(screen.queryByText(WINDOWS_SANDBOX_LIMITATION)).toBeNull();
+      }
+      expect(staging().consequences?.os).toBe(os);
+    },
+  );
 });
 
 describe("the allowance block under a stage", () => {
