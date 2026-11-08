@@ -330,12 +330,10 @@ describe("<SettingsSidebar /> leader hints", () => {
     );
 
     expect(await screen.findByRole("link", { name: "General" })).toBeDefined();
-    expect(
-      screen.queryByTestId("settings-sidebar-item-app-diagnostics"),
-    ).toBeNull();
-    expect(
-      screen.getByTestId("settings-sidebar-item-diagnostics"),
-    ).toBeDefined();
+    const diagnostics = screen.getAllByRole("link", { name: "Diagnostics" });
+    expect(diagnostics.map((link) => link.getAttribute("href"))).toEqual([
+      "/settings/diagnostics",
+    ]);
   });
 
   it("renders the Application Diagnostics entry on other builds", async () => {
@@ -347,9 +345,12 @@ describe("<SettingsSidebar /> leader hints", () => {
       </KeybindingProvider>,
     );
 
-    expect(
-      await screen.findByTestId("settings-sidebar-item-app-diagnostics"),
-    ).toBeDefined();
+    expect(await screen.findByRole("link", { name: "General" })).toBeDefined();
+    const diagnostics = screen.getAllByRole("link", { name: "Diagnostics" });
+    expect(diagnostics.map((link) => link.getAttribute("href"))).toEqual([
+      "/settings/app-diagnostics",
+      "/settings/diagnostics",
+    ]);
   });
 
   // The machine console is labelled "Overview" now - it sits under the host

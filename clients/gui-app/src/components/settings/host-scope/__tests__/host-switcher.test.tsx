@@ -1,5 +1,11 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import {
+  act,
+  cleanup,
+  fireEvent,
+  render,
+  screen,
+} from "@testing-library/react";
 import { HostSwitcher } from "@/components/settings/host-scope/host-switcher";
 import { NO_HOST_OPTION_REFUSALS } from "@/components/settings/host-scope/host-option-model";
 import { TooltipProvider } from "@/components/ui/tooltip";
@@ -57,6 +63,14 @@ function renderSelectedHost(
 }
 
 function stubTextOverflow(name: string): () => void {
+  return stubMeasuredOverflow(name, () => true);
+}
+
+/** `overflows` is read on each measurement, so a test can flip truncation. */
+function stubMeasuredOverflow(
+  name: string,
+  overflows: () => boolean,
+): () => void {
   const originalScrollWidth = Object.getOwnPropertyDescriptor(
     HTMLElement.prototype,
     "scrollWidth",
@@ -68,13 +82,15 @@ function stubTextOverflow(name: string): () => void {
   Object.defineProperty(HTMLElement.prototype, "scrollWidth", {
     configurable: true,
     get(this: HTMLElement) {
-      return this.textContent === name ? 240 : 0;
+      if (this.textContent !== name) return 0;
+      return overflows() ? 240 : 80;
     },
   });
   Object.defineProperty(HTMLElement.prototype, "clientWidth", {
     configurable: true,
     get(this: HTMLElement) {
-      return this.textContent === name ? 100 : 0;
+      if (this.textContent !== name) return 0;
+      return overflows() ? 100 : 80;
     },
   });
   return () => {
@@ -486,8 +502,6 @@ describe("<HostSwitcher /> trigger layout", () => {
     expect(trigger.classList.contains("flex-wrap")).toBe(false);
     expect(trigger.querySelector("svg.lucide-laptop")).not.toBeNull();
     expect(trigger.querySelector("svg.lucide-chevron-down")).not.toBeNull();
-    expect(nameElement.classList.contains("whitespace-normal")).toBe(true);
-    expect(nameElement.classList.contains("wrap-anywhere")).toBe(true);
     expect(nameElement.parentElement?.classList.contains("items-center")).toBe(
       true,
     );
@@ -497,7 +511,7 @@ describe("<HostSwitcher /> trigger layout", () => {
     );
   });
 
-  it.each(["inline", "field"] as const)(
+  it.each(["inline", "field", "rail"] as const)(
     "truncates the %s trigger label and exposes its full text in a tooltip",
     async (surface) => {
       const name = "A long host name that does not fit in this trigger";
@@ -508,8 +522,9 @@ describe("<HostSwitcher /> trigger layout", () => {
 
         const trigger = screen.getByTestId("settings-host-switcher");
         const nameElement = screen.getByText(name);
-        expect(nameElement.classList.contains("truncate")).toBe(true);
-        expect(nameElement.classList.contains("whitespace-normal")).toBe(false);
+        expect(nameElement.className).toContain("truncate");
+        expect(nameElement.className).not.toContain("whitespace-normal");
+        expect(nameElement.className).not.toContain("wrap-anywhere");
         expect(trigger.getAttribute("aria-label")).toBe(
           `Settings host: ${name}`,
         );
@@ -521,6 +536,65 @@ describe("<HostSwitcher /> trigger layout", () => {
       }
     },
   );
+
+  it("keeps the same trigger button when truncation toggles", () => {
+    const name = "A long host name that does not fit in this trigger";
+    let overflows = true;
+    const observers: RecordingResizeObserver[] = [];
+
+    class RecordingResizeObserver implements ResizeObserver {
+      private readonly callback: ResizeObserverCallback;
+
+      constructor(callback: ResizeObserverCallback) {
+        this.callback = callback;
+        observers.push(this);
+      }
+
+      observe(): void {}
+
+      unobserve(): void {}
+
+      disconnect(): void {
+        const index = observers.indexOf(this);
+        if (index >= 0) observers.splice(index, 1);
+      }
+
+      notify(): void {
+        this.callback([], this);
+      }
+    }
+
+    const previousObserver = globalThis.ResizeObserver;
+    globalThis.ResizeObserver = RecordingResizeObserver;
+    const restore = stubMeasuredOverflow(name, () => overflows);
+    try {
+      const host = hostScopeOptionFixture({ hostId: "host-long", name });
+      renderSelectedHost(host, "rail");
+      const button = screen.getByTestId("settings-host-switcher");
+      act(() => {
+        button.focus();
+      });
+      expect(document.activeElement).toBe(button);
+
+      overflows = false;
+      act(() => {
+        for (const observer of observers) observer.notify();
+      });
+      expect(screen.getByTestId("settings-host-switcher")).toBe(button);
+      expect(document.activeElement).toBe(button);
+      expect(screen.queryByRole("tooltip")).toBeNull();
+
+      overflows = true;
+      act(() => {
+        for (const observer of observers) observer.notify();
+      });
+      expect(screen.getByTestId("settings-host-switcher")).toBe(button);
+      expect(document.activeElement).toBe(button);
+    } finally {
+      restore();
+      globalThis.ResizeObserver = previousObserver;
+    }
+  });
 });
 
 describe("<HostSwitcher /> trigger status", () => {

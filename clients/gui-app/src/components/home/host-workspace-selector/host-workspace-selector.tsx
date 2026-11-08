@@ -1444,7 +1444,10 @@ function HomeWorkspaceSummaryControl(props: {
       data-testid="home-workspace-summary-control"
     >
       {props.hostSlot === null ? null : (
-        <div className="w-fit min-w-0 flex-[0_1_auto] max-w-[min(50%,50vw)] overflow-hidden">
+        <div
+          data-testid="host-workspace-selector-host-slot"
+          className="w-fit min-w-0 flex-[0_1_auto] max-w-[min(50%,50vw)] overflow-hidden"
+        >
           {props.hostSlot}
         </div>
       )}
@@ -3424,7 +3427,10 @@ function InEpicSurface(props: InEpicSurfaceProps) {
         data-layout-passive
         className="flex w-full max-w-full min-w-0 flex-nowrap items-center gap-2 overflow-hidden"
       >
-        <div className="w-fit min-w-0 flex-[0_1_auto] max-w-[min(50%,50vw)] overflow-hidden">
+        <div
+          data-testid="host-workspace-selector-host-slot"
+          className="w-fit min-w-0 flex-[0_1_auto] max-w-[min(50%,50vw)] overflow-hidden"
+        >
           <TooltipWrapper
             label={
               surface.kind === "terminal-agent"

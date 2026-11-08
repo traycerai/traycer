@@ -172,8 +172,9 @@ export interface HostSwitcherComposerMode {
  * thing that cannot be one constant for both surfaces.
  *
  * - `rail`: a control among navigation (Settings' sidebar). The trigger is a
- *   filled, rounded row and the list floats below it at its own comfortable
- *   width, because the rail is far too narrow to read host names in.
+ *   filled, rounded row whose name stays one line; the full name is in a
+ *   tooltip. The list floats below it at its own comfortable width, because
+ *   the rail is far too narrow to read host names in.
  * - `field`: one control among other controls, inside a panel that is already
  *   open (the workspace and worktree pickers, where a search field sits right
  *   under it). A quiet fill is not enough there: everything around it is flat,
@@ -1195,6 +1196,25 @@ function HostSwitcherStagedBusy(props: {
   );
 }
 
+/**
+ * The trigger's tooltip. An empty label renders a Slot instead of a Tooltip,
+ * which remounts the trigger and drops keyboard focus, so the name is always
+ * the label and the tooltip opens only while that name is cut off.
+ */
+function useHostSwitcherTriggerTooltip(isTruncated: boolean): {
+  readonly open: boolean;
+  readonly onOpenChange: (next: boolean) => void;
+} {
+  const [tooltipOpen, setTooltipOpen] = useState(false);
+  if (!isTruncated && tooltipOpen) setTooltipOpen(false);
+  return {
+    open: isTruncated && tooltipOpen,
+    onOpenChange: (next) => {
+      if (isTruncated) setTooltipOpen(next);
+    },
+  };
+}
+
 function HostSwitcherTrigger(props: {
   readonly intent: HostPickIntent;
   readonly selected: HostScopeOption | null;
@@ -1215,15 +1235,18 @@ function HostSwitcherTrigger(props: {
   const { ref: nameRef, isTruncated } = useIsTextTruncated<HTMLSpanElement>(
     text.label,
   );
+  const tooltip = useHostSwitcherTriggerTooltip(isTruncated);
   const keepFocusableWhenDisabled =
     props.disabled && props.keepFocusableWhenDisabled === true;
 
   return (
     <TooltipWrapper
-      label={isTruncated ? text.label : null}
+      label={text.label}
       side="top"
       sideOffset={6}
       align={undefined}
+      open={tooltip.open}
+      onOpenChange={tooltip.onOpenChange}
     >
       <PopoverTrigger asChild>
         <Button
@@ -1263,10 +1286,7 @@ function HostSwitcherTrigger(props: {
             <span
               ref={nameRef}
               className={cn(
-                "min-w-0 flex-1 text-ui-sm font-medium",
-                props.surfaceKind === "rail"
-                  ? "whitespace-normal wrap-anywhere"
-                  : "truncate",
+                "min-w-0 flex-1 truncate text-ui-sm font-medium",
                 selected === null || props.surfaceKind === "inline"
                   ? "text-muted-foreground"
                   : "text-foreground",

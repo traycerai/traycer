@@ -4,6 +4,7 @@ import { HOST_FROZEN_WORD } from "@traycer/protocol/host/host-status";
 import { hostScopeOptionFixture } from "@/components/settings/host-scope/host-scope-fixture";
 import { HostOptionRow } from "@/components/settings/host-scope/host-option-row";
 import { AVAILABLE_HOST_ROW_SURFACE_STATE } from "@/components/settings/host-scope/host-option-model";
+import { tooltipTextNear } from "@/components/ui/__tests__/tooltip-probe";
 import {
   UNKNOWN_FLEET_UPDATE_VIEW,
   type FleetUpdateView,
@@ -287,20 +288,51 @@ describe("HostOptionRow — compact names and marks", () => {
     );
 
     const nameElement = getByText(name);
-    expect(nameElement.classList.contains("truncate")).toBe(true);
+    expect(nameElement.className.split(/\s+/)).toContain("truncate");
+    expect(nameElement.className.split(/\s+/)).toContain("min-w-[8ch]");
     expect(nameElement.getAttribute("title")).toBeNull();
     const nameRow = nameElement.parentElement;
     expect(nameRow?.classList.contains("items-center")).toBe(true);
     const marks = getByText("needs update");
     expect(nameRow?.contains(marks)).toBe(true);
-    expect(marks.parentElement?.classList.contains("shrink-0")).toBe(true);
-    expect(marks.parentElement?.classList.contains("whitespace-nowrap")).toBe(
-      true,
-    );
+    const marksGroup = marks.parentElement;
+    expect(marksGroup?.className.split(/\s+/)).not.toContain("shrink-0");
+    expect(marksGroup?.className.split(/\s+/)).toContain("min-w-0");
+    expect(marksGroup?.className.split(/\s+/)).toContain("whitespace-nowrap");
     expect(
       nameElement.compareDocumentPosition(marks) &
         Node.DOCUMENT_POSITION_FOLLOWING,
     ).toBeTruthy();
+  });
+
+  it("caps a long environment label and the update badge, with each full text in its tooltip", () => {
+    const environmentLabel =
+      "A very long environment name that overflows the host list";
+    const host = hostScopeOptionFixture({ hostId: "host-a", name: "Host A" });
+    const { getByTestId } = render(
+      <HostOptionRow
+        host={host}
+        picked={false}
+        active={false}
+        intent="view"
+        surfaceState={AVAILABLE_HOST_ROW_SURFACE_STATE}
+        updateView={fleetView({ kind: "waiting-to-activate" })}
+        nameRef={null}
+        environmentLabel={environmentLabel}
+      />,
+    );
+
+    const label = getByTestId("host-option-environment-host-a");
+    expect(label.textContent).toBe(environmentLabel);
+    expect(label.className.split(/\s+/)).toContain("truncate");
+    expect(label.className.split(/\s+/)).toContain("max-w-32");
+    expect(tooltipTextNear(label)).toBe(environmentLabel);
+
+    const badge = getByTestId("host-option-update-badge-host-a");
+    expect(badge.textContent).toBe("restart to finish");
+    expect(badge.className.split(/\s+/)).toContain("truncate");
+    expect(badge.className.split(/\s+/)).toContain("max-w-32");
+    expect(tooltipTextNear(badge)).toBe("restart to finish");
   });
 });
 

@@ -1240,8 +1240,8 @@ a kind glyph and a one-line name beside its state and environment marks; a
 cut-off name remains available in full. Supplemental composer and in-task
 facts (shape, rate, payer and compatibility) sit in Details; opening it never
 picks or wakes the host. The rail trigger keeps icon, name, status and chevron
-on one row, allowing only the name to wrap when long. Other triggers truncate
-the label with a tooltip. A staged sandbox's shape gear stays beside its
+on one row. Its name stays one line, and the full name is in a tooltip, the
+same as every other trigger. A staged sandbox's shape gear stays beside its
 trigger. The rail keeps the “Viewing — the active host is …” note. The account
 menu's Host list scrolls within the available menu height, keeping account
 actions visible; a pickable row's tooltip explains the activation consequence,
