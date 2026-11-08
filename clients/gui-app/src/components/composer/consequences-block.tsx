@@ -18,6 +18,7 @@ import {
   SHOW_LESS,
   WHAT_THIS_MEANS,
   WINDOWS_SANDBOX_LIMITATION,
+  SANDBOX_SETUP_CHARGES,
 } from "@/lib/sandboxes/sandbox-strings";
 import {
   consequencesShown,
@@ -142,6 +143,9 @@ function ConsequencesBlockBody(props: {
             {OPEN_TERMINAL_INSTEAD}
           </Button>
         )}
+      </p>
+      <p className="m-0" data-testid="consequences-setup-charges">
+        {SANDBOX_SETUP_CHARGES}
       </p>
       {props.input.os === "windows" ? (
         <p className="m-0">{WINDOWS_SANDBOX_LIMITATION}</p>

@@ -159,4 +159,21 @@ describe("the staged New setup line's readiness", () => {
       expect(screen.queryByTestId("sandbox-staged-readiness")).toBeNull();
     },
   );
+  it.each([119_000, 89_000, 1_000])(
+    "rounds a cold create served as %i ms to the nearest minute, never below one, through the facts",
+    (servedMs) => {
+      catalogueInUse = readinessCatalogue({
+        warm: 0,
+        coldCreateMeasuredMs: servedMs,
+      });
+      const minutes = Math.max(1, Math.round(servedMs / 60_000));
+      const unit = minutes === 1 ? "minute" : "minutes";
+
+      render(<StagedLine />);
+
+      expect(screen.getByTestId("sandbox-staged-readiness").textContent).toBe(
+        `This create takes about ${minutes} ${unit}.`,
+      );
+    },
+  );
 });

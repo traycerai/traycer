@@ -189,6 +189,30 @@ describe("<ConsequencesBlock />", () => {
     expect(summaryText.match(/uses your credits/g)).toHaveLength(1);
   });
 
+  it("states what a setup is charged for in full on the first render and on a collapsed repeat, beside the price rather than instead of it", () => {
+    const value = input({});
+    const expected =
+      "Running the sandbox is charged separately from build work. Build work is charged once, even if the build fails. Keeping the result is charged as storage for as long as you keep it.";
+    const first = render(block(value));
+    expect(screen.getByTestId("consequences-setup-charges").textContent).toBe(
+      expected,
+    );
+    expect(screen.getByTestId("consequences-price").textContent).toBe(
+      "$0.12 an hour while awake",
+    );
+    first.unmount();
+
+    render(block(value));
+    expect(screen.getByTestId("consequences-what-this-means")).toBeDefined();
+    expect(screen.queryByTestId("consequences-clause-team")).toBeNull();
+    expect(screen.getByTestId("consequences-setup-charges").textContent).toBe(
+      expected,
+    );
+    expect(screen.getByTestId("consequences-price").textContent).toBe(
+      "$0.12 an hour while awake · uses your Acme credits",
+    );
+  });
+
   it("keeps the Windows limitation in view on a collapsed repeat, and says nothing of it for Linux", () => {
     const windows = input({ os: "windows" });
     const first = render(block(windows));
