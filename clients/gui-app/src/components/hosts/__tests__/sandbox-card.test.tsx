@@ -36,7 +36,10 @@ import {
   refusal,
   type FakeSandboxBinding,
 } from "@/hooks/sandboxes/__tests__/sandbox-binding-fixture";
-import { sandboxSummaryFixture } from "@/hooks/sandboxes/__tests__/sandbox-fixtures";
+import {
+  sandboxOperationFixture,
+  sandboxSummaryFixture,
+} from "@/hooks/sandboxes/__tests__/sandbox-fixtures";
 import { useAuthStore } from "@/stores/auth/auth-store";
 import { SANDBOX_VERB_FETCH_TIMEOUT_MS } from "@traycer-clients/shared/host-client/sandbox-control";
 
@@ -916,6 +919,112 @@ describe("<SandboxCard /> facts as the scope resolves them", () => {
       /^Your credits ran out/,
     );
     expect(actionTestIds()).toEqual(["sandbox-card-destroy"]);
+  });
+});
+
+describe("<SandboxHeaderNotices /> session notice follows the resolved state and frozen flag", () => {
+  const NOTICE = "sandbox-card-session-notice";
+  const DAY = 24 * 60 * 60 * 1000;
+
+  it("shows no resume warning for a row resolved stopped whose stale summary still says suspended", () => {
+    renderCard(
+      sandboxOf("stopped", false, {
+        state: "suspended",
+        suspendedSessionEndsAt: Date.now() + DAY,
+      }),
+    );
+
+    expect(screen.queryByTestId(NOTICE)).toBeNull();
+  });
+
+  it("control: shows the resume warning for a row resolved suspended whose summary says stopped", () => {
+    renderCard(
+      sandboxOf("suspended", false, {
+        state: "stopped",
+        suspendedSessionEndsAt: Date.now() + DAY,
+      }),
+    );
+
+    expect(screen.getByTestId(NOTICE).textContent).toMatch(
+      /^Your paused session will be lost on /,
+    );
+  });
+
+  it("says restarting for a row resolved resuming whose summary has not caught up, and nothing for one resolved awake", () => {
+    const operation = sandboxOperationFixture({
+      state: "starting",
+      outcomeDetail: "wake-retry",
+    });
+    renderCard(sandboxOf("resuming", false, { state: "awake", operation }));
+    expect(screen.getByTestId(NOTICE).textContent).toBe(
+      "Restarting your sandbox",
+    );
+
+    cleanup();
+    renderCard(sandboxOf("awake", false, { state: "starting", operation }));
+    expect(screen.queryByTestId(NOTICE)).toBeNull();
+  });
+
+  it("says nothing while the state is unresolved, whatever the summary carries", () => {
+    renderCard(
+      sandboxOf(null, false, {
+        state: "stopped",
+        operation: sandboxOperationFixture({
+          state: "stopped",
+          outcomeDetail: "suspended-session-lost",
+        }),
+      }),
+    );
+
+    expect(screen.queryByTestId(NOTICE)).toBeNull();
+  });
+
+  it("adds the files clause for a row resolved stopped and frozen, though its summary says not frozen", () => {
+    renderCard(
+      sandboxOf("stopped", true, {
+        frozen: false,
+        operation: sandboxOperationFixture({
+          state: "stopped",
+          outcomeDetail: "suspended-session-lost",
+        }),
+      }),
+    );
+
+    expect(screen.getByTestId(NOTICE).textContent).toBe(
+      "Your paused session was lost when your sandbox stopped. Your files are unchanged.",
+    );
+  });
+
+  it("leaves the files clause out for a row resolved stopped whose stale summary does not yet say stopped", () => {
+    renderCard(
+      sandboxOf("stopped", false, {
+        state: "suspended",
+        operation: sandboxOperationFixture({
+          state: "stopped",
+          outcomeDetail: "suspended-session-lost",
+        }),
+      }),
+    );
+
+    expect(screen.getByTestId(NOTICE).textContent).toBe(
+      "Your paused session was lost when your sandbox stopped.",
+    );
+  });
+
+  it("leaves the files clause out for a row resolved stopped and not frozen, though its summary says frozen", () => {
+    renderCard(
+      sandboxOf("stopped", false, {
+        frozen: true,
+        operation: sandboxOperationFixture({
+          state: "stopped",
+          outcomeDetail: "suspended-session-lost",
+        }),
+      }),
+    );
+
+    expect(screen.getByTestId(NOTICE).textContent).toBe(
+      "Your paused session was lost when your sandbox stopped.",
+    );
   });
 });
 

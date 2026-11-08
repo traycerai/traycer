@@ -7,11 +7,12 @@ import {
   waitFor,
 } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import type {
-  HostListItem,
-  HostOwnerPrincipal,
-  HostProfile,
-  HostSandboxState,
+import {
+  hostSandboxStateWord,
+  type HostListItem,
+  type HostOwnerPrincipal,
+  type HostProfile,
+  type HostSandboxState,
 } from "@traycer/protocol/host/host-status";
 import type { SandboxSummary } from "@traycer/protocol/host/sandbox-control";
 import {
@@ -60,7 +61,12 @@ vi.mock("@/providers/use-runner-host", () => ({
 vi.mock("@/lib/host/fleet-refresh", () => ({ requestFleetRefresh: vi.fn() }));
 vi.mock("@/lib/auth-error-toast", () => ({ toastFromAuthError: vi.fn() }));
 
+import {
+  sandboxFrozenLine,
+  sandboxTeamFrozenLine,
+} from "@/components/hosts/sandbox-card-model";
 import { SandboxTileStateFrame } from "@/components/hosts/sandbox-tile-state-frame";
+import { sandboxFrozenClock } from "@/lib/sandboxes/sandbox-row-lines";
 
 /**
  * The tile overlay's Resume or Start on a TEAM sandbox asks before it bills
@@ -122,6 +128,23 @@ function renderFrame(): void {
       </SandboxTileStateFrame>
     </QueryClientProvider>,
   );
+}
+
+function listedSummary(): SandboxSummary {
+  const listed = mocks.list?.sandboxes[0];
+  if (listed === undefined) throw new Error("expected the listed sandbox");
+  return listed;
+}
+
+function overlayParagraph(
+  overlay: HTMLElement,
+  index: number,
+): HTMLParagraphElement {
+  const paragraphs = overlay.querySelectorAll("p");
+  if (index < 0 || index >= paragraphs.length) {
+    throw new Error("expected an overlay paragraph");
+  }
+  return paragraphs[index];
 }
 
 beforeEach(() => {
@@ -206,24 +229,48 @@ describe("<SandboxTileStateFrame /> frozen team sandbox", () => {
 
     const overlay = screen.getByTestId("sandbox-tile-overlay");
     expect(overlay.getAttribute("data-kind")).toBe("frozen");
-    expect(overlay.textContent).toBe(
-      "Out of credits: Ada Lovelace's bundle is out.",
-    );
+    const cause = `${hostSandboxStateWord("suspended")} · ${sandboxTeamFrozenLine(listedSummary(), VIEWER)}`;
+    expect(overlayParagraph(overlay, 0).textContent).toBe(cause);
+    expect(overlay.textContent).toBe(cause);
+    expect(overlay.querySelectorAll("p")).toHaveLength(1);
     expect(screen.queryByTestId("sandbox-tile-overlay-wake")).toBeNull();
   });
 
   it("adds the destroy day when the server sends frozenAt", () => {
+    const frozenAt = new Date(2026, 8, 1, 12).getTime();
     setEntry({
       state: "suspended",
       frozen: true,
       owner: TEAM,
       profile: "agent",
-      summary: { wakePayer: ADA, frozenAt: new Date(2026, 8, 1, 12).getTime() },
+      summary: { wakePayer: ADA, frozenAt },
     });
     renderFrame();
-    expect(screen.getByTestId("sandbox-tile-overlay").textContent).toMatch(
-      /^Out of credits: Ada Lovelace's bundle is out\. Destroyed on /,
+    const overlay = screen.getByTestId("sandbox-tile-overlay");
+    expect(overlayParagraph(overlay, 0).textContent).toBe(
+      `${hostSandboxStateWord("suspended")} · ${sandboxTeamFrozenLine(listedSummary(), VIEWER)}`,
     );
+    const clock = sandboxFrozenClock(frozenAt);
+    if (clock === null) throw new Error("expected a removal clock");
+    expect(overlayParagraph(overlay, 1).textContent).toBe(clock);
+  });
+
+  it("names the missing payer when the sandbox list has no row for the host", () => {
+    const state: HostSandboxState = "suspended";
+    setEntry({
+      state,
+      frozen: true,
+      owner: TEAM,
+      profile: "agent",
+      summary: { wakePayer: ADA },
+    });
+    mocks.list = { sandboxes: [] };
+    renderFrame();
+    const overlay = screen.getByTestId("sandbox-tile-overlay");
+    expect(overlayParagraph(overlay, 0).textContent).toBe(
+      `${hostSandboxStateWord(state)} · ${sandboxTeamFrozenLine(null, VIEWER)}`,
+    );
+    expect(overlay.querySelectorAll("p")).toHaveLength(1);
   });
 
   it("keeps the personal credits line on a personal frozen sandbox", () => {
@@ -235,8 +282,10 @@ describe("<SandboxTileStateFrame /> frozen team sandbox", () => {
       summary: { wakePayer: ADA },
     });
     renderFrame();
-    expect(screen.getByTestId("sandbox-tile-overlay").textContent).toBe(
-      "Out of credits. Top up to resume.",
-    );
+    const overlay = screen.getByTestId("sandbox-tile-overlay");
+    const cause = `${hostSandboxStateWord("suspended")} · ${sandboxFrozenLine(null)}`;
+    expect(overlayParagraph(overlay, 0).textContent).toBe(cause);
+    expect(overlay.textContent).toBe(cause);
+    expect(overlay.querySelectorAll("p")).toHaveLength(1);
   });
 });

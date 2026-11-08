@@ -769,7 +769,7 @@ function codeKeyedMessage(error: HostRpcError, fallback: string): string {
     return "A bound folder is missing on disk. Restore it, re-bind, or remove it to continue.";
   }
   if (error.code === "WORKTREE_REMOVE_LAST_ENTRY") {
-    return "Keep at least one workspace folder linked — add another before removing this one.";
+    return "Keep at least one folder linked — add another before removing this one.";
   }
   return hostErrorToastForSimpleCode(error.code) ?? fallback;
 }

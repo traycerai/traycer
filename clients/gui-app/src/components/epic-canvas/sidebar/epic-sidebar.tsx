@@ -1452,7 +1452,7 @@ function FileTreePanelBodyLive(props: LeftPanelBodyProps) {
  *
  * A FAILED bindings read is checked first, because it also leaves
  * `selectedWorkspacePath` null and would otherwise fall through to "No
- * workspace linked." That sentence is a claim about the agent ("you have not
+ * folder linked." That sentence is a claim about the agent ("you have not
  * linked one"), and here the truth is a fact about the connection ("we could
  * not ask") - the same wrong-remedy conflation the git-diff panel's empty
  * state had. It is also the only branch that offers a way out: host-scoped
@@ -1481,7 +1481,7 @@ function fileTreePanelBody(input: {
     return (
       <SidebarPanelEmptyState
         icon={FolderOpen}
-        title="No workspace linked."
+        title="No folder linked."
         description={null}
         action={null}
         testId="epic-file-tree-empty"

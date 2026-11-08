@@ -89,6 +89,10 @@ import {
   type HostQuitDialogProps,
 } from "@/components/host/host-quit-dialog";
 import { RunnerHostProvider } from "@/providers/runner-host-provider";
+import {
+  expectFocusRingInset,
+  expectScrollableDialogLayout,
+} from "@/components/ui/__tests__/dialog-scroll-layout-assertions";
 import { createFakeRunnerHost } from "../../../../__tests__/create-fake-runner-host";
 import {
   HOST_QUIT_HOST_CHANGED_DESCRIPTION,
@@ -231,7 +235,10 @@ describe("<HostQuitDialog /> - Stop must never force a stop the person never saw
     localHostQuitStatusMock.current = idleStatus();
     const req = request("ask", "initial");
     const { rerenderDialog } = renderDialog(baseProps(req, {}), quit);
-    await screen.findByTestId("host-quit-dialog");
+    const body = expectScrollableDialogLayout(
+      await screen.findByTestId("host-quit-dialog"),
+    );
+    expectFocusRingInset(body, ["-m-1", "p-1"]);
 
     // The 10s status poll lands here, turning the SAME request's list busy
     // without the person having re-opened or re-confirmed anything.

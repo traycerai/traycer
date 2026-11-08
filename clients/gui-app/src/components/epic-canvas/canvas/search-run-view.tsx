@@ -300,7 +300,7 @@ function SearchRun({
         <StatusRow>
           {target.kind === "artifact"
             ? "Artifacts aren’t available yet."
-            : "This workspace is no longer available."}
+            : "This folder is no longer available."}
         </StatusRow>
       );
     }

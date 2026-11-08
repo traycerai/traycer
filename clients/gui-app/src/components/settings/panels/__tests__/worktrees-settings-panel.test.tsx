@@ -32,6 +32,7 @@ import {
   type HostStreamRpcRegistry,
 } from "@traycer/protocol/host/registry";
 import { WorktreesList } from "@/components/settings/panels/worktrees-settings-panel";
+import { expectScrollableDialogLayout } from "@/components/ui/__tests__/dialog-scroll-layout-assertions";
 import { useWorktreeListing } from "@/components/settings/panels/worktrees-listing-query";
 import { hostRpcRegistry, type HostRpcRegistry } from "@/lib/host";
 import {
@@ -1568,6 +1569,12 @@ describe("WorktreesList delete flow", () => {
     const headerWrappers = screen
       .getAllByTestId("worktree-repo-header")
       .map((header) => header.closest("[data-index]"));
+    const stickyRepoHeader = headerWrappers.find((wrapper) =>
+      wrapper?.className.includes("sticky"),
+    );
+    expect(stickyRepoHeader).toBeTruthy();
+    expect(stickyRepoHeader?.className).toContain("bg-background");
+    expect(stickyRepoHeader?.className).not.toContain("bg-[color-mix(");
     expect(
       headerWrappers.filter((wrapper) => wrapper?.className.includes("sticky")),
     ).toHaveLength(1);
@@ -1834,6 +1841,9 @@ describe("WorktreesList delete flow", () => {
     // Aggregate-by-class confirmation names the dirty loss and the neutral
     // unverified caveat instead of a single stacked warning.
     screen.getByText("Delete 2 worktrees?");
+    expectScrollableDialogLayout(
+      screen.getByTestId("worktree-bulk-delete-dialog"),
+    );
     screen.getByTestId("worktree-bulk-delete-dirty-loss");
     screen.getByText("1 not selected: 1 in use");
     fireEvent.click(screen.getByTestId("confirm-action"));
@@ -3759,7 +3769,7 @@ describe("WorktreesList v1.2 signals", () => {
     });
   });
 
-  it("renders linked PR chips for the superproject and every displayable submodule PR", () => {
+  it("renders the superproject PR inline and other displayable PRs in the overflow", () => {
     renderList({
       hostId: "host-a",
       queryClient: new QueryClient(),
@@ -3832,18 +3842,17 @@ describe("WorktreesList v1.2 signals", () => {
       onVisiblePathsChange: undefined,
     });
 
-    const prChips = screen.getAllByTestId("worktree-pr-chip");
-    expect(prChips.map((chip) => chip.getAttribute("data-pr-state"))).toEqual([
-      "merged",
-      "open",
-      "closed",
-      "merged",
-      "unmerged",
-    ]);
-    expect(prChips[0]?.className).toContain("text-purple-700");
-    expect(prChips[1]?.className).toContain("text-green-700");
-    expect(prChips[2]?.className).toContain("text-red-700");
-    expect(prChips[4]?.className).toContain("text-muted-foreground");
+    const primaryPr = screen.getByTestId("worktree-context-pr-pill");
+    expect(primaryPr.getAttribute("href")).toBe(
+      "https://github.com/acme/app/pull/10",
+    );
+    expect(
+      screen.queryByRole("link", { name: "Open open-sub PR #11 Open" }),
+    ).toBeNull();
+    const overflow = screen.getByRole("button", {
+      name: "Show 3 more pull requests",
+    });
+    fireEvent.click(overflow);
     expect(
       screen
         .getByRole("link", { name: "Open PR #10 Merged" })
@@ -3871,6 +3880,140 @@ describe("WorktreesList v1.2 signals", () => {
       screen.queryByRole("link", { name: "Open cold-sub PR #15" }),
     ).toBeNull();
     screen.getByText("none-sub · unmerged commits");
+  });
+
+  it("keeps one of seven valid PRs inline and makes the other six reachable from overflow", () => {
+    renderList({
+      hostId: "host-a",
+      queryClient: new QueryClient(),
+      worktrees: [
+        entry({
+          worktreePath: "/wt/dense-prs",
+          branch: "feat-dense-prs",
+          prState: "open",
+          prNumber: 100,
+          prUrl: "https://github.com/acme/app/pull/100",
+          mergedHeadShaMatches: false,
+          submodules: [
+            {
+              repoIdentifier: { owner: "acme", repo: "sub-one" },
+              branch: "feat-dense-prs",
+              prState: "open",
+              prNumber: 101,
+              prUrl: "https://github.com/acme/sub-one/pull/101",
+              mergedHeadShaMatches: false,
+              mergedIntoDefault: false,
+              atPinnedCommit: false,
+            },
+            {
+              repoIdentifier: { owner: "acme", repo: "sub-two" },
+              branch: "feat-dense-prs",
+              prState: "closed",
+              prNumber: 102,
+              prUrl: "https://github.com/acme/sub-two/pull/102",
+              mergedHeadShaMatches: false,
+              mergedIntoDefault: false,
+              atPinnedCommit: false,
+            },
+            {
+              repoIdentifier: { owner: "acme", repo: "sub-three" },
+              branch: "feat-dense-prs",
+              prState: "merged",
+              prNumber: 103,
+              prUrl: "https://github.com/acme/sub-three/pull/103",
+              mergedHeadShaMatches: true,
+              mergedIntoDefault: true,
+              atPinnedCommit: false,
+            },
+            {
+              repoIdentifier: { owner: "acme", repo: "sub-four" },
+              branch: "feat-dense-prs",
+              prState: "open",
+              prNumber: 104,
+              prUrl: "https://github.com/acme/sub-four/pull/104",
+              mergedHeadShaMatches: false,
+              mergedIntoDefault: false,
+              atPinnedCommit: false,
+            },
+            {
+              repoIdentifier: { owner: "acme", repo: "sub-five" },
+              branch: "feat-dense-prs",
+              prState: "closed",
+              prNumber: 105,
+              prUrl: "https://github.com/acme/sub-five/pull/105",
+              mergedHeadShaMatches: false,
+              mergedIntoDefault: false,
+              atPinnedCommit: false,
+            },
+            {
+              repoIdentifier: { owner: "acme", repo: "sub-six" },
+              branch: "feat-dense-prs",
+              prState: "merged",
+              prNumber: 106,
+              prUrl: "https://github.com/acme/sub-six/pull/106",
+              mergedHeadShaMatches: true,
+              mergedIntoDefault: true,
+              atPinnedCommit: false,
+            },
+          ],
+        }),
+      ],
+      taskTitlesByEpicId: undefined,
+      enrichedByPath: undefined,
+      erroredPaths: undefined,
+      seededPaths: undefined,
+      onVisiblePathsChange: undefined,
+    });
+
+    const inlinePr = screen.getByTestId("worktree-context-pr-pill");
+    expect(inlinePr.getAttribute("href")).toBe(
+      "https://github.com/acme/app/pull/100",
+    );
+    expect(screen.getAllByTestId("worktree-context-pr-pill")).toHaveLength(1);
+    const overflow = screen.getByRole("button", {
+      name: "Show 6 more pull requests",
+    });
+    fireEvent.click(overflow);
+    screen.getByTestId("worktree-pr-overflow-content");
+
+    const expectedLinks = [
+      {
+        name: "Open PR #100 Open",
+        destination: "https://github.com/acme/app/pull/100",
+      },
+      {
+        name: "Open sub-one PR #101 Open",
+        destination: "https://github.com/acme/sub-one/pull/101",
+      },
+      {
+        name: "Open sub-two PR #102 Closed",
+        destination: "https://github.com/acme/sub-two/pull/102",
+      },
+      {
+        name: "Open sub-three PR #103 Merged",
+        destination: "https://github.com/acme/sub-three/pull/103",
+      },
+      {
+        name: "Open sub-four PR #104 Open",
+        destination: "https://github.com/acme/sub-four/pull/104",
+      },
+      {
+        name: "Open sub-five PR #105 Closed",
+        destination: "https://github.com/acme/sub-five/pull/105",
+      },
+      {
+        name: "Open sub-six PR #106 Merged",
+        destination: "https://github.com/acme/sub-six/pull/106",
+      },
+    ];
+    for (const expectedLink of expectedLinks) {
+      expect(
+        screen
+          .getByRole("link", { name: expectedLink.name })
+          .getAttribute("href"),
+      ).toBe(expectedLink.destination);
+    }
+    expect(screen.getAllByTestId("worktree-context-pr-pill")).toHaveLength(7);
   });
 
   it("explains unmerged submodule commits with a count and newest subjects", async () => {
@@ -4322,11 +4465,24 @@ describe("WorktreesList v1.2 signals", () => {
     expect(within(row).getByTestId("worktree-tier-pill").textContent).toBe(
       "Landed",
     );
+    expect(within(row).getAllByTestId("worktree-context-pr-pill")).toHaveLength(
+      1,
+    );
+    fireEvent.click(
+      within(row).getByRole("button", {
+        name: "Show 1 more pull request",
+      }),
+    );
     expect(
       within(row)
-        .getAllByTestId("worktree-pr-chip")
-        .map((chip) => chip.getAttribute("data-pr-state")),
-    ).toEqual(["merged", "merged"]);
+        .getByRole("link", { name: "Open PR #20 Merged" })
+        .getAttribute("href"),
+    ).toBe("https://github.com/acme/app/pull/20");
+    expect(
+      within(screen.getByTestId("worktree-pr-overflow-content"))
+        .getByRole("link", { name: "Open sub PR #21 Merged" })
+        .getAttribute("href"),
+    ).toBe("https://github.com/acme/sub/pull/21");
   });
 
   it("Task chip shows no merge rollup when there is no PR anywhere (pre-M4 / gh absent degrade)", () => {
@@ -4734,9 +4890,9 @@ describe("WorktreesList v1.2 signals", () => {
     );
     expect(
       within(landed)
-        .getByTestId("worktree-pr-chip")
-        .getAttribute("data-pr-state"),
-    ).toBe("merged");
+        .getByRole("link", { name: "Open PR #30 Merged" })
+        .getAttribute("href"),
+    ).toBe("https://github.com/acme/app/pull/30");
     expect(within(landed).queryByText("Payments revamp")).toBeNull();
     expect(within(landed).queryByTestId("task-merge-rollup")).toBeNull();
 
@@ -4744,9 +4900,9 @@ describe("WorktreesList v1.2 signals", () => {
     within(open).getByTestId("worktree-tier-pill");
     expect(
       within(open)
-        .getByTestId("worktree-pr-chip")
-        .getAttribute("data-pr-state"),
-    ).toBe("open");
+        .getByRole("link", { name: "Open PR #31 Open" })
+        .getAttribute("href"),
+    ).toBe("https://github.com/acme/app/pull/31");
     expect(within(open).queryByText("Payments revamp")).toBeNull();
     expect(within(open).queryByTestId("task-merge-rollup")).toBeNull();
   });
@@ -4806,6 +4962,20 @@ describe("WorktreesList v1.2 signals", () => {
     expect(headers).toHaveLength(2);
     const firstHeader = headers[0];
     const secondHeader = headers[1];
+    let stickyTaskHeaderCount = 0;
+    for (const header of headers) {
+      expect(header.className).not.toContain("bg-background");
+      expect(header.parentElement?.className).not.toContain("bg-background");
+      const virtualItem = header.closest("[data-index]");
+      expect(virtualItem?.className).not.toContain("bg-background");
+      if (virtualItem?.className.includes("sticky")) {
+        stickyTaskHeaderCount += 1;
+        expect(virtualItem.className).toContain(
+          "bg-[color-mix(in_srgb,var(--card)_40%,var(--background))]",
+        );
+      }
+    }
+    expect(stickyTaskHeaderCount).toBeGreaterThan(0);
     expect(within(firstHeader).getByText("acme/zeta")).toBeTruthy();
     expect(within(secondHeader).getByText("acme/alpha")).toBeTruthy();
     for (const header of headers) {

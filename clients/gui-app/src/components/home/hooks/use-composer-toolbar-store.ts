@@ -267,6 +267,7 @@ export function useComposerToolbarStore(
   // (availability rerouting included); `modelsHarnessId` rides along so a
   // stale response can never resolve a slug for the wrong harness.
   const harnessId = useStore(store, (s) => s.selection.harnessId);
+  const profileId = useStore(store, (s) => s.selection.profileId);
   const staged = useStagedSandboxStore(
     (s) =>
       stagedSurfaceKey !== null && s.bySurface[stagedSurfaceKey] !== undefined,
@@ -279,6 +280,7 @@ export function useComposerToolbarStore(
   const modelsData = useToolbarModelsData({
     hostClient,
     harnessId,
+    profileId,
     activityEnabled,
     cloudTraycer: sandboxRunTarget !== null && harnessId === "traycer",
   });
@@ -397,16 +399,18 @@ interface ComposerToolbarDefaults {
 function useToolbarModelsData(input: {
   readonly hostClient: HostClient<HostRpcRegistry> | null;
   readonly harnessId: ProviderId;
+  readonly profileId: string | null;
   readonly activityEnabled: boolean;
   readonly cloudTraycer: boolean;
 }): ReadonlyArray<ModelOption> | undefined {
-  const { hostClient, harnessId, activityEnabled, cloudTraycer } = input;
+  const { hostClient, harnessId, profileId, activityEnabled, cloudTraycer } =
+    input;
   const hostActive = activityEnabled && !cloudTraycer;
   const modelsQuery = useGuiHarnessModelsQueryForClient(
     hostClient,
     harnessId,
     null,
-    { enabled: hostActive, subscribed: hostActive },
+    { profileId, enabled: hostActive, subscribed: hostActive },
   );
   const cloudModelsQuery = useSandboxTraycerModels(
     activityEnabled && cloudTraycer,

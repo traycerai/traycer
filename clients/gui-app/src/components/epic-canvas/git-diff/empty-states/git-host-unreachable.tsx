@@ -14,8 +14,8 @@ const GIT_HOST_RETRY_TIMEOUT_MS = 10_000;
  * was pinned to it.
  *
  * It exists because the branch that produced this screen used to render
- * `NoGitWorktrees`, which says "Add workspaces to the agent to get started".
- * That is the right nudge for a host that answered and has no git workspaces,
+ * `NoGitWorktrees`, which says "Add folders to the agent to get started".
+ * That is the right nudge for a host that answered and has no git folders,
  * and the wrong one for a host that never answered: it names a remedy on the
  * wrong machine, and it is indistinguishable from the genuinely-empty case, so
  * a user cannot tell "you have nothing here" from "we could not ask".
@@ -71,8 +71,7 @@ export function GitHostUnreachable(props: {
           </p>
           <p className="text-ui-xs text-muted-foreground/50">
             This panel is pointed at a host that isn't responding, so its
-            workspaces couldn't be loaded. Pick another host above, or try
-            again.
+            folders couldn't be loaded. Pick another host above, or try again.
           </p>
         </div>
       </div>
@@ -109,7 +108,7 @@ export function GitHostUnreachable(props: {
           context={createReportIssueContext({
             title: "Can't reach host",
             message:
-              "The workspaces for this agent could not be loaded from the selected host.",
+              "The folders for this agent could not be loaded from the selected host.",
             code: null,
             source: "Git changes",
           })}

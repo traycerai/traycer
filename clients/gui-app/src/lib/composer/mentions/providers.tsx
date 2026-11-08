@@ -483,7 +483,7 @@ class FileMentionProvider extends ComposerMentionProvider {
   readonly id = "files" as const;
   readonly rootOrder = 10;
   protected readonly label = "Files";
-  protected readonly description = "Workspace files";
+  protected readonly description = "Files in a folder";
 
   rootEntry(context: ComposerMentionProviderContext): MentionMenuEntry | null {
     if (context.roots.length === 0) return null;
@@ -542,7 +542,7 @@ class FolderMentionProvider extends ComposerMentionProvider {
   readonly id = "folders" as const;
   readonly rootOrder = 20;
   protected readonly label = "Folders";
-  protected readonly description = "Workspace folders";
+  protected readonly description = "Linked folders";
 
   rootEntry(context: ComposerMentionProviderContext): MentionMenuEntry | null {
     if (context.roots.length === 0) return null;

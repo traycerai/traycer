@@ -12,6 +12,7 @@ import type {
   SandboxShapeRung,
 } from "@traycer/protocol/host/sandbox-control";
 import { SandboxShapeSheet } from "@/components/hosts/sandbox-shape-sheet";
+import { expectFocusRingInset } from "@/components/ui/__tests__/dialog-scroll-layout-assertions";
 import {
   teamSubscription,
   userSubscription,
@@ -125,6 +126,16 @@ function renderSheet(onUseShape: Mock) {
 }
 
 describe("<SandboxShapeSheet />", () => {
+  it("insets focusable controls inside the shape form scroll area", () => {
+    renderSheet(vi.fn());
+
+    const scroller = screen
+      .getByTestId("sandbox-shape-sheet")
+      .querySelector("div.overflow-y-auto");
+    if (scroller === null) throw new Error("expected the shape form scroller");
+    expectFocusRingInset(scroller, ["-m-1", "p-1"]);
+  });
+
   it("says a cleared resting period keeps the sandbox, not the period it opened with", () => {
     render(
       <SandboxShapeSheet

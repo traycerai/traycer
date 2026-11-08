@@ -42,7 +42,7 @@ export function DetailsHostRows(props: {
 }): ReactNode {
   const occurrences = new Map<string, number>();
   return (
-    <ul className="flex flex-col divide-y divide-border/60">
+    <ul className="-m-1 flex min-h-0 flex-col divide-y divide-border/60 overflow-y-auto p-1">
       {props.hosts.map((host) => {
         const identity = `${host.hostId}:${host.item ?? ""}:${host.state}:${host.at}`;
         // Different unused settings can share the same agent label.

@@ -82,7 +82,6 @@ export function InviteAcceptDialog(props: {
           ) : (
             <InviteAcceptGrant
               role={invitedRole}
-              teamName={invitation.teamName}
               noticeText={dataHandlingNoticeText()}
               paidPlan={invitation.paidPlan}
               accepting={accept.isPending}

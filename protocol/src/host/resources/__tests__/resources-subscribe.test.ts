@@ -16,12 +16,14 @@ import {
   resourcesSubscribeServerFrameSchemaV13,
   resourcesSubscribeServerFrameSchemaV14,
   resourcesSubscribeServerFrameSchemaV15,
+  resourcesSubscribeServerFrameSchemaV16,
   resourcesSubscribeV10,
   resourcesSubscribeV11,
   resourcesSubscribeV12,
   resourcesSubscribeV13,
   resourcesSubscribeV14,
   resourcesSubscribeV15,
+  resourcesSubscribeV16,
 } from "@traycer/protocol/host/resources/subscribe";
 
 /**
@@ -314,17 +316,19 @@ describe("resources.subscribe@1.0 registry membership", () => {
   it("is registered on the stream registry at major 1 / minor 0", () => {
     const entry = hostStreamRpcRegistry["resources.subscribe"];
     expect(entry).toBeDefined();
-    expect(entry[1].latestMinor).toBe(5);
+    expect(entry[1].latestMinor).toBe(6);
     expect(entry[1].versions[0].contract).toBe(resourcesSubscribeV10);
     expect(entry[1].versions[1].contract).toBe(resourcesSubscribeV11);
     expect(entry[1].versions[2].contract).toBe(resourcesSubscribeV12);
     expect(entry[1].versions[3].contract).toBe(resourcesSubscribeV13);
     expect(entry[1].versions[4].contract).toBe(resourcesSubscribeV14);
     expect(entry[1].versions[5].contract).toBe(resourcesSubscribeV15);
+    expect(entry[1].versions[6].contract).toBe(resourcesSubscribeV16);
     expect(resourcesSubscribeV10.schemaVersion).toEqual({ major: 1, minor: 0 });
     expect(resourcesSubscribeV11.schemaVersion).toEqual({ major: 1, minor: 1 });
     expect(resourcesSubscribeV12.schemaVersion).toEqual({ major: 1, minor: 2 });
     expect(resourcesSubscribeV13.schemaVersion).toEqual({ major: 1, minor: 3 });
+    expect(resourcesSubscribeV16.schemaVersion).toEqual({ major: 1, minor: 6 });
   });
 });
 
@@ -511,9 +515,9 @@ describe("resources.subscribe@1.4 managed-command owners", () => {
     expect(framedV13.owners[0]).not.toHaveProperty("managedCommand");
   });
 
-  it("keeps @1.4 registered after @1.5 becomes latest", () => {
+  it("keeps @1.4 registered after later minors become latest", () => {
     const entry = hostStreamRpcRegistry["resources.subscribe"];
-    expect(entry[1].latestMinor).toBe(5);
+    expect(entry[1].latestMinor).toBe(6);
     expect(entry[1].versions[4].contract).toBe(resourcesSubscribeV14);
     expect(resourcesSubscribeV14.schemaVersion).toEqual({ major: 1, minor: 4 });
   });
@@ -757,5 +761,82 @@ describe("resources.kill@1.0 registry membership", () => {
     expect(resourcesKillResponseSchema.parse({ killed: [1] }).killed).toEqual([
       1,
     ]);
+  });
+});
+
+describe("resources.subscribe@1.6 host CPU count", () => {
+  const process = {
+    ...PROCESS_FIXTURE,
+    pssBytes: null,
+    privateBytes: null,
+    descriptor: null,
+  };
+  const ownerV15 = {
+    ...OWNER_FIXTURE,
+    pssBytes: null,
+    privateBytes: null,
+    processes: [process],
+    harnessId: null,
+    managedCommand: null,
+  };
+  const appV15 = {
+    ...APP_FIXTURE,
+    pssBytes: null,
+    privateBytes: null,
+    process: { ...process, pid: 10, rootPid: 10 },
+    // Per-core scale: one busy core of an 8-core host reads 100, and a
+    // multithreaded app can exceed it.
+    cpuPercent: 250,
+  };
+  const frameFieldsV15 = {
+    epicId: "epic-1",
+    sampledAt: 1_000,
+    app: appV15,
+    owners: [ownerV15],
+    epic: null,
+    hostTree: null,
+    other: null,
+    restricted: null,
+    hasBinaryPayload: false as const,
+  };
+
+  it("round-trips hostCpuCount on a snapshot and an update with existing data intact", () => {
+    const frameFieldsV16 = {
+      ...frameFieldsV15,
+      app: { ...appV15, hostCpuCount: 8 },
+    };
+    for (const kind of ["snapshot", "update"] as const) {
+      const frame = { kind, ...frameFieldsV16 };
+      expect(resourcesSubscribeServerFrameSchemaV16.parse(frame)).toEqual(
+        frame,
+      );
+    }
+  });
+
+  it.each([0, 4.5])("rejects hostCpuCount %s", (hostCpuCount) => {
+    expect(
+      resourcesSubscribeServerFrameSchemaV16.safeParse({
+        kind: "snapshot",
+        ...frameFieldsV15,
+        app: { ...appV15, hostCpuCount },
+      }).success,
+    ).toBe(false);
+  });
+
+  it("requires hostCpuCount on a non-null app, with no default invented", () => {
+    expect(
+      resourcesSubscribeServerFrameSchemaV16.safeParse({
+        kind: "snapshot",
+        ...frameFieldsV15,
+      }).success,
+    ).toBe(false);
+  });
+
+  it("is dropped by the frozen @1.5 decoder without changing anything else", () => {
+    const v15Frame = { kind: "snapshot" as const, ...frameFieldsV15 };
+    const v16Frame = { ...v15Frame, app: { ...appV15, hostCpuCount: 8 } };
+    expect(resourcesSubscribeServerFrameSchemaV15.parse(v16Frame)).toEqual(
+      v15Frame,
+    );
   });
 });

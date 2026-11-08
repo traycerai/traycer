@@ -672,7 +672,7 @@ function WorkspaceFileTileLive(props: {
           title: "Could not start editing this file",
           message: null,
           code: null,
-          source: "Workspace file edit",
+          source: "Folder file edit",
         }),
       );
     },
@@ -1250,7 +1250,7 @@ function readFileReportContext(
 ): ReportIssueContext {
   if (payloadError === null && isTransportError) {
     return createReportIssueContext({
-      title: "Workspace file preview failed to load from the host",
+      title: "Folder file preview failed to load from the host",
       message:
         "The app could not reach the Traycer host to load the file preview.",
       // Narrowed, never asserted: TanStack's error generic is an unchecked
@@ -1260,10 +1260,10 @@ function readFileReportContext(
     });
   }
   return createReportIssueContext({
-    title: "Workspace file could not be read",
-    message: "The workspace file preview could not be loaded.",
+    title: "Folder file could not be read",
+    message: "The folder file preview could not be loaded.",
     code: null,
-    source: "Workspace file",
+    source: "Folder file",
   });
 }
 

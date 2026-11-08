@@ -644,9 +644,9 @@ it("uses the shared host switcher for a live chat", () => {
   renderBoundSurface("chat", true, null, BINDING);
 
   const switcher = screen.getByRole("button", { name: "Host: Test host" });
-  const switcherSlot = switcher.parentElement?.parentElement;
-  expect(switcherSlot?.className).toContain("flex-[0_1_auto]");
-  expect(switcherSlot?.className).toContain("max-w-[min(50%,50vw)]");
+  const switcherSlot = screen.getByTestId("host-workspace-selector-host-slot");
+  expect(switcherSlot.className).toContain("flex-[0_1_auto]");
+  expect(switcherSlot.className).toContain("max-w-[min(50%,50vw)]");
   expect(switcher.className).toContain("w-fit");
   expect(switcher.className).toContain("max-w-full");
 
@@ -1682,7 +1682,7 @@ it("settles and keeps both staged removals when the first folder rejects", async
   const firstToast = toastMocks.reportableErrorToast.mock.calls[0];
   expect(String(firstToast[0])).toContain("alpha");
   expect(firstToast[2]).toMatchObject({
-    title: "Workspace update incomplete",
+    title: "Folder update incomplete",
   });
   fireEvent.click(screen.getByRole("button", { name: /^beta/ }));
   const discard = await screen.findByTestId("folder-discard-staged");

@@ -888,7 +888,7 @@ describe("Terminals opener sub-page", () => {
     const newTerminal = items[0];
     expect(newTerminal.id).toBe("open:terminals:new");
     expect(newTerminal.label).toBe("Create new terminal");
-    expect(newTerminal.subpage?.title).toBe("Create terminal in workspace");
+    expect(newTerminal.subpage?.title).toBe("Create terminal in folder");
     if (newTerminal.subpage === null) {
       throw new Error("expected terminal workspace subpage");
     }
@@ -1242,7 +1242,7 @@ describe("Terminals opener sub-page", () => {
     terminalBindingsMock.remote.isPending = true;
     const remoteWorkspaces = renderItems(remoteHost.subpage.useItems);
     expect(remoteWorkspaces.map((item) => item.label)).toEqual([
-      "Loading workspaces…",
+      "Loading folders…",
     ]);
   });
 
@@ -1262,11 +1262,11 @@ describe("Terminals opener sub-page", () => {
     terminalBindingsMock.remote.isError = true;
     const remoteWorkspaces = renderItems(remoteHost.subpage.useItems);
     expect(remoteWorkspaces.map((item) => item.label)).toEqual([
-      "Couldn't load workspaces",
-      "Retry workspace check",
+      "Couldn't load folders",
+      "Retry folder check",
     ]);
     const retry = remoteWorkspaces.find(
-      (item) => item.label === "Retry workspace check",
+      (item) => item.label === "Retry folder check",
     );
     if (retry === undefined) throw new Error("expected workspace retry item");
     void retry.run(CTX);
@@ -1300,13 +1300,13 @@ describe("Terminals opener sub-page", () => {
     expect(workspaceLabels).toEqual(
       expect.arrayContaining([
         "/work/active-repo",
-        "Retry workspace check",
+        "Retry folder check",
         "Remote Terminal Mac",
       ]),
     );
     expect(workspaceLabels).not.toContain("/work/unverified");
     const retry = workspaceItems.find(
-      (item) => item.label === "Retry workspace check",
+      (item) => item.label === "Retry folder check",
     );
     expect(retry?.id).toBe("workspace-check:terminal:default-host:retry");
     expect(retry?.disabled).toBe(false);
@@ -1328,9 +1328,9 @@ describe("Terminals opener sub-page", () => {
       throw new Error("expected remote-host workspace subpage");
     }
     const retry = renderItems(remoteHost.subpage.useItems).find(
-      (item) => item.label === "Retry workspace check",
+      (item) => item.label === "Retry folder check",
     );
-    expect(retry?.label).toBe("Retry workspace check");
+    expect(retry?.label).toBe("Retry folder check");
     expect(retry?.disabled).toBe(true);
     expect(retry?.id).toBe("workspace-check:terminal:terminal-host:retry");
     expect(retry?.id.startsWith("open:terminals:")).toBe(false);
@@ -1372,8 +1372,8 @@ describe("Terminals opener sub-page", () => {
     if (checking === undefined) {
       throw new Error("expected checking workspace row");
     }
-    expect(checking.description).toBe("Checking workspace…");
-    expect(checking.statusBadge).toBe("Checking workspace…");
+    expect(checking.description).toBe("Checking folder…");
+    expect(checking.statusBadge).toBe("Checking folder…");
     expect(checking.disabled).toBe(true);
     void checking.run(CTX);
     expect(spies.openTileIntoTargetGroup).not.toHaveBeenCalled();

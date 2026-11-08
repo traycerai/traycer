@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import { cleanup, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import type { HostBusyBreakdown } from "@traycer/protocol/host/status/index";
+import { HOST_FROZEN_WORD } from "@traycer/protocol/host/host-status";
 import { SandboxHeaderNotices } from "@/components/hosts/sandbox-card";
 import { HostIdentityCard } from "@/components/settings/host-scope/host-identity-card";
 import { hostScopeOptionFixture } from "@/components/settings/host-scope/host-scope-fixture";
@@ -38,6 +39,19 @@ function sandboxHost(
           },
     sandbox: { state, frozen, summary: null, teamOwned: false },
   });
+}
+
+function teamSandboxHost(
+  state: "awake" | "suspended",
+  health: "offline" | "online",
+  frozen: boolean,
+): HostScopeOption {
+  const host = sandboxHost(state, health, frozen);
+  return {
+    ...host,
+    sandbox:
+      host.sandbox === null ? null : { ...host.sandbox, teamOwned: true },
+  };
 }
 
 function renderCard(host: HostScopeOption): void {
@@ -95,9 +109,21 @@ describe("<HostIdentityCard /> a sandbox's state word against its health", () =>
     expect(screen.getByTestId("host-identity-sandbox-state").textContent).toBe(
       "Suspended",
     );
+    expect(
+      screen.getByTestId("host-identity-sandbox-state").parentElement
+        ?.textContent,
+    ).toContain(HOST_FROZEN_WORD);
     expect(screen.getByTestId("sandbox-card-state-line").textContent).toBe(
       "Your credits ran out",
     );
+  });
+
+  it("shows the frozen word beside the state for a team sandbox", () => {
+    const host = teamSandboxHost("suspended", "online", true);
+    renderCard(host);
+
+    const state = screen.getByTestId("host-identity-sandbox-state");
+    expect(state.parentElement?.textContent).toContain(HOST_FROZEN_WORD);
   });
 
   it("makes the full busy breakdown available by keyboard through its tooltip", async () => {
