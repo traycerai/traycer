@@ -1,5 +1,11 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import {
+  cleanup,
+  fireEvent,
+  render,
+  screen,
+  within,
+} from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import type {
   HostListItem,
@@ -125,11 +131,7 @@ vi.mock("@/providers/use-runner-host", () => ({
 vi.mock("@/lib/host/fleet-refresh", () => ({ requestFleetRefresh: vi.fn() }));
 vi.mock("@/lib/auth-error-toast", () => ({ toastFromAuthError: vi.fn() }));
 
-import {
-  taskHasReadersOutsideTeam,
-  teamHostDisclosureSentences,
-  teamHostOutsideReadersLine,
-} from "@/components/hosts/team-host-disclosure-model";
+import { taskHasReadersOutsideTeam } from "@/components/hosts/team-host-disclosure-model";
 import { TeamHostDisclosure } from "@/components/hosts/team-host-disclosure";
 import { SandboxTileStateFrame } from "@/components/hosts/sandbox-tile-state-frame";
 import {
@@ -143,28 +145,6 @@ const VIEWER = "user-viewer";
 const HOST_ID = "host-sbx-1";
 const TEAM_ID = "team-a";
 const TEAM_NAME = "Alpha";
-
-describe("teamHostDisclosureSentences", () => {
-  it("names the team in the first and third sentences, word for word", () => {
-    expect(teamHostDisclosureSentences("Alpha")).toEqual([
-      "Agents here run as the host. Anything another member's agent does on it can read what yours can, browser sign-ins included. Agents here work with Alpha's hosts only. A browser-using agent here runs its browser in the sandbox, never on your computer.",
-      "Another member's agent here can act and be charged as you while you are attached.",
-      "A copy of your sign-in to this host, taken by anyone who was root here, keeps working against Alpha's hosts until this host sleeps.",
-    ]);
-  });
-
-  it("carries the team name it is given, not a fixed one", () => {
-    const [first, , third] = teamHostDisclosureSentences("Platform Crew");
-    expect(first).toContain("Platform Crew's hosts only");
-    expect(third).toContain("against Platform Crew's hosts until");
-  });
-
-  it("names the outside readers line", () => {
-    expect(teamHostOutsideReadersLine("Alpha")).toBe(
-      "People outside Alpha can read chats in this task.",
-    );
-  });
-});
 
 function person(
   userId: string | null,
@@ -453,14 +433,35 @@ describe("<TeamHostDisclosure />", () => {
     resetSeenStore();
   });
 
-  it("shows the three sentences verbatim as a status", () => {
+  it("shows the access consequence once and keeps technical facts behind details", () => {
     renderDisclosure("host-1");
 
     const card = screen.getByTestId("team-host-disclosure");
     expect(card.getAttribute("role")).toBe("status");
-    for (const sentence of teamHostDisclosureSentences(TEAM_NAME)) {
-      expect(card.textContent).toContain(sentence);
-    }
+    expect(card.textContent).toContain(
+      "Alpha: other members' agents can read your data and act and be charged as you while you are attached.",
+    );
+    expect(card.textContent.match(/Alpha/g)).toHaveLength(1);
+    const details = screen.getByText("How access works").closest("details");
+    if (details === null) throw new Error("Expected access details");
+    expect(details.open).toBe(false);
+    fireEvent.click(screen.getByText("How access works"));
+    expect(details.open).toBe(true);
+    expect(
+      within(details).getByText(
+        "Agents here run as the host and can read what yours can, browser sign-ins included. They work with this team's hosts only.",
+      ),
+    ).toBeTruthy();
+    expect(
+      within(details).getByText(
+        "A browser-using agent here runs its browser in the sandbox, never on your computer.",
+      ),
+    ).toBeTruthy();
+    expect(
+      within(details).getByText(
+        "A copy of your sign-in to this host, taken by anyone who was root here, keeps working against this team's hosts until this host sleeps.",
+      ),
+    ).toBeTruthy();
   });
 
   it("omits the outside-readers line when no one outside the team reads the task", () => {
@@ -483,7 +484,7 @@ describe("<TeamHostDisclosure />", () => {
     renderDisclosure("host-1");
 
     expect(screen.getByTestId("team-host-disclosure-outside").textContent).toBe(
-      teamHostOutsideReadersLine(TEAM_NAME),
+      "People outside the team can read chats in this task.",
     );
   });
 
@@ -514,7 +515,7 @@ describe("<TeamHostDisclosure />", () => {
 
     expect(screen.getByTestId("team-host-disclosure")).toBeTruthy();
     expect(screen.getByTestId("team-host-disclosure-outside").textContent).toBe(
-      teamHostOutsideReadersLine(TEAM_NAME),
+      "People outside the team can read chats in this task.",
     );
   });
 
@@ -603,7 +604,7 @@ describe("<TeamHostDisclosure /> unknown readers", () => {
 
     expect(screen.getByTestId("team-host-disclosure")).toBeTruthy();
     expect(screen.getByTestId("team-host-disclosure-outside").textContent).toBe(
-      teamHostOutsideReadersLine(TEAM_NAME),
+      "People outside the team can read chats in this task.",
     );
   });
 
@@ -614,7 +615,7 @@ describe("<TeamHostDisclosure /> unknown readers", () => {
 
     expect(screen.getByTestId("team-host-disclosure")).toBeTruthy();
     expect(screen.getByTestId("team-host-disclosure-outside").textContent).toBe(
-      teamHostOutsideReadersLine(TEAM_NAME),
+      "People outside the team can read chats in this task.",
     );
   });
 
@@ -771,7 +772,9 @@ describe("<SandboxTileStateFrame /> team host disclosure", () => {
     renderFrame();
 
     const card = screen.getByTestId("team-host-disclosure");
-    expect(card.textContent).toContain("Alpha's hosts only");
+    expect(card.textContent).toContain(
+      "Alpha: other members' agents can read your data and act and be charged as you while you are attached.",
+    );
     expect(screen.getByTestId("tile-body")).toBeTruthy();
   });
 
@@ -821,8 +824,9 @@ describe("<SandboxTileStateFrame /> team host disclosure", () => {
 
     const cards = screen.getAllByTestId("team-host-disclosure");
     expect(cards).toHaveLength(1);
-    const [first] = teamHostDisclosureSentences(TEAM_NAME);
-    expect(cards[0]?.textContent).toContain(first);
+    expect(cards[0]?.textContent).toContain(
+      "Alpha: other members' agents can read your data and act and be charged as you while you are attached.",
+    );
     expectChatTileLive();
   });
 

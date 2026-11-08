@@ -4703,6 +4703,7 @@ describe("<EpicsListPanel />", () => {
 
     fireEvent.click(await screen.findByRole("button", { name: /filter/i }));
     expect(await screen.findByTestId("epics-filter-popover")).not.toBeNull();
+    expect(screen.getByText("Folders")).toBeTruthy();
 
     fireEvent.click(screen.getByRole("checkbox", { name: /shared/i }));
     await waitFor(() => {

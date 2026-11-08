@@ -207,7 +207,7 @@ describe("<SandboxTileStateFrame /> frozen team sandbox", () => {
     const overlay = screen.getByTestId("sandbox-tile-overlay");
     expect(overlay.getAttribute("data-kind")).toBe("frozen");
     expect(overlay.textContent).toBe(
-      "Out of credits: Ada Lovelace's bundle is out.",
+      "Suspended · Out of credits: Ada Lovelace's bundle is out.",
     );
     expect(screen.queryByTestId("sandbox-tile-overlay-wake")).toBeNull();
   });
@@ -221,8 +221,12 @@ describe("<SandboxTileStateFrame /> frozen team sandbox", () => {
       summary: { wakePayer: ADA, frozenAt: new Date(2026, 8, 1, 12).getTime() },
     });
     renderFrame();
-    expect(screen.getByTestId("sandbox-tile-overlay").textContent).toMatch(
-      /^Out of credits: Ada Lovelace's bundle is out\. Destroyed on /,
+    const overlay = screen.getByTestId("sandbox-tile-overlay");
+    expect(overlay.querySelectorAll("p")[0]?.textContent).toBe(
+      "Suspended · Out of credits: Ada Lovelace's bundle is out.",
+    );
+    expect(overlay.querySelectorAll("p")[1]?.textContent).toMatch(
+      /^Will be removed on /,
     );
   });
 
@@ -236,7 +240,7 @@ describe("<SandboxTileStateFrame /> frozen team sandbox", () => {
     });
     renderFrame();
     expect(screen.getByTestId("sandbox-tile-overlay").textContent).toBe(
-      "Out of credits. Top up to resume.",
+      "Suspended · Out of credits. Top up to resume.",
     );
   });
 });

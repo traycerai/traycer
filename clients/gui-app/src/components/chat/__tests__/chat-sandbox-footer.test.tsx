@@ -195,9 +195,13 @@ describe("<ChatSandboxFooter /> a frozen sandbox", () => {
     render(<ChatSandboxFooter line={lineOf(frozen(false))} />);
 
     const text = document.body.textContent;
+    expect(text).toContain("Suspended · Out of credits");
     const consequence = screen.getByText("Your credits ran out.");
     expect(consequence.className).toContain("wrap-anywhere");
     expect(text).toContain(sandboxFrozenClock(FROZEN_AT));
+    expect(screen.getByText(/^Will be removed on /).textContent).not.toContain(
+      " at ",
+    );
     expect(text).not.toContain("your next message resumes it");
     expect(
       screen.queryByRole("link", { name: /add credits/i }) ??

@@ -1,4 +1,5 @@
 import type { ReactNode } from "react";
+import { hostSandboxStateWord } from "@traycer/protocol/host/host-status";
 import { SandboxOperationFailure } from "@/components/hosts/sandbox-operation-failure";
 import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
 import { Button } from "@/components/ui/button";
@@ -80,9 +81,12 @@ function FrozenSandboxFooter(props: {
   const removal =
     sandbox.frozenAt === null
       ? null
-      : `Will be removed on ${formatSandboxDate(frozenDestroyAt(sandbox.frozenAt), true)}`;
+      : `Will be removed on ${formatSandboxDate(frozenDestroyAt(sandbox.frozenAt), false)}`;
   return (
     <div className="flex min-w-0 shrink-0 flex-col items-start gap-2 border-t border-border px-4 py-2 text-ui-sm text-muted-foreground">
+      <p className="min-w-0 w-full wrap-anywhere font-medium">
+        {hostSandboxStateWord(sandbox.state)} · Out of credits
+      </p>
       <p className="min-w-0 w-full wrap-anywhere">
         {sandboxFrozenCause(sandbox, pageConfiguration, viewer)}
       </p>

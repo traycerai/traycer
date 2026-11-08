@@ -61,7 +61,7 @@ export interface NewTerminalPickerBodyProps {
   readonly epicId: string;
   readonly surfaceKey: string;
   /**
-   * Focus the workspace search input once the list mounts. The caller owns
+   * Focus the folder search input once the list mounts. The caller owns
    * this because focusing a text field is a request for a keyboard, and
    * whether that keyboard costs anything depends on the shell the surface is
    * rendered in, which this body cannot see.
@@ -212,7 +212,7 @@ export function NewTerminalPickerBody(props: NewTerminalPickerBodyProps) {
             secondaryLabel={(row) => row.runningDir}
             onSelect={setExplicitRow}
             autoFocusSearch={autoFocusSearch}
-            emptyMessage="No directories available. Open a workspace in the epic first."
+            emptyMessage="No folders available. Add a folder to this task first."
           />
         ) : (
           <div className="flex flex-col gap-2 p-2.5">

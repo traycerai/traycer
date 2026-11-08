@@ -719,10 +719,9 @@ describe("<GitDiffPanelBodyLive /> workspace switcher integration", () => {
     renderPanel(rootSelected);
     openSwitcher();
 
-    fireEvent.change(
-      screen.getByRole("textbox", { name: "Search workspaces" }),
-      { target: { value: "/repo/traycer" } },
-    );
+    fireEvent.change(screen.getByRole("textbox", { name: "Search folders" }), {
+      target: { value: "/repo/traycer" },
+    });
 
     expect(
       screen.getByTestId("git-diff-repo-switcher-root-traycer-internal"),

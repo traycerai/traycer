@@ -17,8 +17,9 @@ import {
 } from "@/stores/hosts/team-host-disclosure-seen-store";
 import {
   taskHasReadersOutsideTeam,
-  teamHostDisclosureSentences,
-  teamHostOutsideReadersLine,
+  teamHostDisclosureSummary,
+  TEAM_HOST_DISCLOSURE_DETAILS,
+  TEAM_HOST_OUTSIDE_READERS_LINE,
 } from "./team-host-disclosure-model";
 
 /**
@@ -59,7 +60,6 @@ export function TeamHostDisclosure(props: {
   // The card waits for the reader list rather than showing first and growing
   // a line later.
   if (outside === "loading") return null;
-  const sentences = teamHostDisclosureSentences(props.teamName);
   return (
     <div
       role="status"
@@ -68,14 +68,22 @@ export function TeamHostDisclosure(props: {
     >
       <Info className="mt-0.5 size-4 shrink-0 text-muted-foreground" />
       <div className="flex min-w-0 flex-1 flex-col gap-1 text-foreground">
-        {sentences.map((sentence) => (
-          <p key={sentence} className="m-0">
-            {sentence}
-          </p>
-        ))}
+        <p className="m-0">{teamHostDisclosureSummary(props.teamName)}</p>
+        <details>
+          <summary className="cursor-pointer text-muted-foreground">
+            How access works
+          </summary>
+          <div className="flex flex-col gap-1 pt-1">
+            {TEAM_HOST_DISCLOSURE_DETAILS.map((sentence) => (
+              <p key={sentence} className="m-0">
+                {sentence}
+              </p>
+            ))}
+          </div>
+        </details>
         {outside ? (
           <p className="m-0" data-testid="team-host-disclosure-outside">
-            {teamHostOutsideReadersLine(props.teamName)}
+            {TEAM_HOST_OUTSIDE_READERS_LINE}
           </p>
         ) : null}
       </div>

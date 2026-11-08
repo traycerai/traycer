@@ -105,7 +105,7 @@ export function GitDiffRepoSwitcher(
       <PopoverContent
         id={contentId}
         role="dialog"
-        aria-label="Git workspace selector"
+        aria-label="Git folder selector"
         align="start"
         layout="bare"
         className={cn("w-[min(90vw,30rem)]", props.contentClassName)}
@@ -137,7 +137,7 @@ function triggerAccessibleName(model: GitDiffRepoSwitcherModel): string {
   const moduleLabel = changedSubmoduleLabel(model.trigger.moduleChangeCount);
   const fileLabel = changedFileLabel(model.trigger.fileChangeCount);
   const stateLabel = model.trigger.unavailable ? "unavailable" : null;
-  return ["Git workspace", model.trigger.label, model.trigger.secondaryLabel]
+  return ["Git folder", model.trigger.label, model.trigger.secondaryLabel]
     .concat(moduleLabel === null ? [] : [moduleLabel])
     .concat(fileLabel === null ? [] : [fileLabel])
     .concat(stateLabel === null ? [] : [stateLabel])
@@ -148,7 +148,7 @@ function triggerTooltip(model: GitDiffRepoSwitcherModel): string {
   const moduleLabel = changedSubmoduleLabel(model.trigger.moduleChangeCount);
   const fileLabel = changedFileLabel(model.trigger.fileChangeCount);
   return [
-    `Workspace: ${model.trigger.label}`,
+    `Folder: ${model.trigger.label}`,
     `Path: ${model.trigger.secondaryLabel}`,
     moduleLabel === null ? null : moduleLabel,
     fileLabel === null ? null : fileLabel,
@@ -183,12 +183,12 @@ export function GitDiffRepoSwitcherDropdown(
 
   return (
     <section
-      aria-label="Workspaces"
+      aria-label="Folders"
       className="p-2.5"
       data-testid="git-diff-repo-switcher-dropdown"
     >
       <div className="px-1 text-ui-xs font-medium tracking-wide text-muted-foreground/70 uppercase">
-        Workspaces
+        Folders
       </div>
       <div className="pt-2 pb-2">
         <InputGroup className="h-8!" variant="search">
@@ -196,8 +196,8 @@ export function GitDiffRepoSwitcherDropdown(
             ref={searchInputRef}
             value={props.searchQuery}
             onChange={handleSearchChange}
-            placeholder="Search branch, workspace, submodule, or path..."
-            aria-label="Search workspaces"
+            placeholder="Search branch, folder, submodule, or path..."
+            aria-label="Search folders"
           />
           <InputGroupAddon>
             <Search className="size-4" aria-hidden />
@@ -206,12 +206,12 @@ export function GitDiffRepoSwitcherDropdown(
       </div>
       <div
         role="listbox"
-        aria-label="Workspaces"
+        aria-label="Folders"
         className="no-scrollbar max-h-[min(45vh,20rem)] overflow-y-auto"
       >
         {props.model.visibleRows.length === 0 ? (
           <div className="px-2 py-6 text-center text-ui-sm text-muted-foreground">
-            No workspaces found.
+            No folders found.
           </div>
         ) : (
           props.model.visibleRows.map((row) => (
@@ -354,7 +354,7 @@ function RepoSwitcherRowMarker(props: {
         label={row.disabledLabel}
         pending={row.pending}
         tone={status?.tone ?? "error"}
-        detail={status?.detail ?? "This workspace is unavailable."}
+        detail={status?.detail ?? "This folder is unavailable."}
       />
     );
   }

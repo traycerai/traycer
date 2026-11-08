@@ -341,11 +341,11 @@ describe("sandboxFrozenLine", () => {
     const frozenAt = new Date(2026, 9, 9, 12, 0, 0).getTime();
     const line = sandboxFrozenLine(frozenAt);
     expect(line).toBe(
-      `${BASE} Destroyed on ${formatSandboxDate(frozenDestroyAt(frozenAt), true)}.`,
+      `${BASE} Will be removed on ${formatSandboxDate(frozenDestroyAt(frozenAt), false)}.`,
     );
-    // Thirty days on, to the minute: the date carries its time.
-    expect(formatSandboxDate(frozenDestroyAt(frozenAt), true)).toBe(
-      formatSandboxDate(new Date(2026, 10, 8, 12, 0, 0).getTime(), true),
+    // The line names the removal day without a time.
+    expect(formatSandboxDate(frozenDestroyAt(frozenAt), false)).toBe(
+      formatSandboxDate(new Date(2026, 10, 8, 12, 0, 0).getTime(), false),
     );
   });
 });

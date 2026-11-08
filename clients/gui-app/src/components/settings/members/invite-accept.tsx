@@ -14,7 +14,6 @@ import { Button } from "@/components/ui/button";
  */
 export function InviteAcceptGrant(props: {
   readonly role: TeamRole;
-  readonly teamName: string;
   readonly noticeText: string;
   readonly paidPlan: boolean;
   readonly accepting: boolean;
@@ -22,16 +21,12 @@ export function InviteAcceptGrant(props: {
 }): ReactNode {
   return (
     <div className="flex flex-col gap-3" data-testid="invite-accept-grant">
-      <RoleGrant
-        role={props.role}
-        teamName={props.teamName}
-        noticeText={props.noticeText}
-      />
+      <RoleGrant role={props.role} noticeText={props.noticeText} />
       <p
         className="max-w-[72ch] text-ui-sm text-muted-foreground"
         data-testid="invite-accept-seats"
       >
-        {acceptSeatCopy(props.teamName, props.paidPlan)}
+        {acceptSeatCopy(props.paidPlan)}
       </p>
       <Button
         type="button"

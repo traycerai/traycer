@@ -532,7 +532,7 @@ interface GitDiffPanelDegradedProps {
  * loaded header renders do not exist here - there is no selected root, so no
  * change counts, no submodule tree and no watcher status to qualify. The
  * switcher already models exactly this: `selected: null` renders "Select
- * workspace", and an empty `roots` renders "No workspaces found." in its list.
+ * workspace", and an empty `roots` renders "No folders found." in its list.
  * What survives is the part that matters - the host section, and any rows the
  * host DID return, so a pick can move the panel out of this state.
  *

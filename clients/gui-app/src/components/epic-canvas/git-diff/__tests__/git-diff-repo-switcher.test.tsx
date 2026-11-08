@@ -208,7 +208,7 @@ describe("<GitDiffRepoSwitcherDropdown />", () => {
     ).toContain("6 changed files");
     expect(
       screen.getByRole("button", {
-        name: /Git workspace,\s*traycer-internal,.*1 changed submodule, 6 changed files/,
+        name: /Git folder,\s*traycer-internal,.*1 changed submodule, 6 changed files/,
       }),
     ).toBeDefined();
     expect(screen.getByLabelText("1 changed submodule")).toBeDefined();
@@ -235,10 +235,10 @@ describe("<GitDiffRepoSwitcherDropdown />", () => {
 
     const trigger = screen.getByTestId("repo-switcher-trigger");
     const dialog = screen.getByRole("dialog", {
-      name: "Git workspace selector",
+      name: "Git folder selector",
     });
     const search = screen.getByRole("textbox", {
-      name: "Search workspaces",
+      name: "Search folders",
     });
     expect(trigger.getAttribute("aria-haspopup")).toBe("dialog");
     expect(trigger.getAttribute("aria-expanded")).toBe("true");
@@ -431,12 +431,9 @@ describe("<GitDiffRepoSwitcherDropdown />", () => {
       />,
     );
 
-    fireEvent.change(
-      screen.getByRole("textbox", { name: "Search workspaces" }),
-      {
-        target: { value: "feature/submodule-ui" },
-      },
-    );
+    fireEvent.change(screen.getByRole("textbox", { name: "Search folders" }), {
+      target: { value: "feature/submodule-ui" },
+    });
 
     expect(screen.getAllByRole("option")).toHaveLength(1);
     expect(

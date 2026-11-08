@@ -157,7 +157,7 @@ export function formatSandboxDay(at: number): string {
 }
 
 /**
- * The frozen banner's sentence. The destroy date shows only when the server
+ * The frozen banner's sentence. The removal date shows only when the server
  * says when the row froze (`frozenAt`); a server from before that field gets
  * the sentence without it.
  */
@@ -165,7 +165,7 @@ export function sandboxFrozenLine(frozenAt: number | null): string {
   const base = `${HOST_FROZEN_WORD}. Top up to resume.`;
   return frozenAt === null
     ? base
-    : `${base} Destroyed on ${formatSandboxDate(frozenDestroyAt(frozenAt), true)}.`;
+    : `${base} Will be removed on ${formatSandboxDate(frozenDestroyAt(frozenAt), false)}.`;
 }
 
 /**
@@ -247,24 +247,6 @@ export function sandboxTeamFrozenLine(
   return payer.displayName === null
     ? `${HOST_FROZEN_WORD}: its payer's bundle is out.`
     : `${HOST_FROZEN_WORD}: ${payer.displayName}'s bundle is out.`;
-}
-
-/**
- * A frozen team sandbox's state line: whose bundle is out, then the destroy
- * date when the server sends `frozenAt`, as the personal line has it. Before
- * the sandbox list answers (`summary` null) it names no one, and still never
- * says "your credits".
- */
-export function sandboxTeamFrozenStateLine(
-  summary: SandboxSummary | null,
-  viewerUserId: string | null,
-): string {
-  if (summary === null)
-    return `${HOST_FROZEN_WORD}: its payer's bundle is out.`;
-  const line = sandboxTeamFrozenLine(summary, viewerUserId);
-  return summary.frozenAt === null
-    ? line
-    : `${line} Destroyed on ${formatSandboxDate(frozenDestroyAt(summary.frozenAt), true)}.`;
 }
 
 /** A team pod's room, from the pod list's `headroom` and `liveShells`. */
