@@ -1263,6 +1263,7 @@ import {
   hostNotificationsCloudFeedSubscribeV15,
   hostNotificationsCloudFeedSubscribeV16,
   hostNotificationsCloudFeedSubscribeV17,
+  hostNotificationsCloudFeedSubscribeV18,
   hostNotificationsCloudFeedMarkRead,
   hostNotificationsCloudFeedMarkAllRead,
   hostNotificationsCloudFeedResolve,
@@ -15183,7 +15184,7 @@ const HOST_STREAM_RPC_REGISTRY_NOTIFICATIONS_DEFINITION = {
   },
   "host.notifications.cloudFeed.subscribe": {
     1: {
-      latestMinor: 7,
+      latestMinor: 8,
       versions: {
         0: {
           contract: hostNotificationsCloudFeedSubscribeV10,
@@ -15209,6 +15210,7 @@ const HOST_STREAM_RPC_REGISTRY_NOTIFICATIONS_DEFINITION = {
         },
         6: { contract: hostNotificationsCloudFeedSubscribeV16 },
         7: { contract: hostNotificationsCloudFeedSubscribeV17 },
+        8: { contract: hostNotificationsCloudFeedSubscribeV18 },
       },
     },
   },
